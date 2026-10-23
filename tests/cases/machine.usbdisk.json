@@ -1056,7 +1056,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["dd"], "features": {}},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
       "execution": {"program": "usbdisk_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"},
       "steps": [
         {
@@ -1219,7 +1219,7 @@
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["vfs-unmount"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "cc", "awk"], "features": {}},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
       "execution": {
         "program": "usbchecks",
         "stdin": null,
@@ -1253,7 +1253,7 @@
         "ports": 0,
         "loop_devices": 0
       },
-      "prepare": [{"name": "usbchecks", "node": "tests/cases/host/usbchecks", "per_architecture": false}],
+      "prepare": [{"name": "usbchecks", "node": "tests/cases/host/usbchecks", "per_architecture": false}, {"name": "usb-check-fixture", "node": "tests/host-suite/vfs_unmount", "per_architecture": false}],
       "timing": [],
       "native": {"plan": "host"}
     }

@@ -15,7 +15,7 @@
       "steps": [
         {"step_id": "set", "stage": "execute", "does": "check the recovery image for growroot's measures, copy the volume's first group out of the base disk and compute the grow set with growset"},
         {"step_id": "grow", "stage": "execute", "machine": "recovery", "does": "boot recovery on overlay one, wrap e2fsck and resize2fs in the counters' wrapper, run growroot --measure and e2fsck -fn"},
-        {"step_id": "writes", "stage": "execute", "does": "map the overlay's written clusters with qemu-img, judge them with growset against the set, and judge the console's measures with grow_measure.awk"},
+        {"step_id": "writes", "stage": "execute", "does": "map the overlay's written clusters with qemu-img, judge them with growset against the set, and judge the console's measures with the C counter checker"},
         {"step_id": "end", "stage": "execute", "machine": "recovery", "does": "boot overlay one again, mount the grown volume, write and read back a file 40 blocks before its end, unmount it and run e2fsck -fn"},
         {"step_id": "descriptor", "stage": "execute", "does": "read the grown volume's descriptor of the first added group out of overlay one with qemu-img dd"},
         {"step_id": "stopped", "stage": "execute", "machine": "recovery", "does": "boot recovery on overlay two, run growroot with the test I/O manager stopping resize2fs at that group's inode table, run resize2fs alone, then growroot again and e2fsck -fn"}
@@ -29,7 +29,7 @@
         {"assertion_id": "entry", "checks": "growroot records the entry rewritten from 2097152 to 33552384 sectors", "source": "scenario"},
         {"assertion_id": "clean", "checks": "e2fsck -fn finds the grown volume clean", "source": "scenario"},
         {"assertion_id": "inside-set", "checks": "every cluster the grow wrote, as qemu-img map lists the overlay, lies inside the grow set growset computed from the volume before the grow", "source": "scenario"},
-        {"assertion_id": "measures", "checks": "grow_measure.awk finds growroot's eight phase measures in order, each phase issuing a disk command, and equal to the wrapper's readings of the disk's counters", "source": "scenario"},
+        {"assertion_id": "measures", "checks": "the C counter checker finds growroot's eight phase measures in order, each phase issuing a disk command, and equal to the wrapper's readings of the disk's counters", "source": "scenario"},
         {"assertion_id": "end-file", "checks": "the grown volume mounts, a file written 40 blocks before its end reads back with the checksum it was written with, two checksums and one value, and the volume unmounts", "source": "scenario"},
         {"assertion_id": "end-clean", "checks": "e2fsck -fn finds the volume clean after the file near its end", "source": "scenario"},
         {"assertion_id": "descriptor", "checks": "the grown volume's descriptor of the first added group puts its inode table inside that group", "source": "scenario"},
@@ -52,7 +52,6 @@
         {"name": "image", "node": "images/cases/recovery.krffs", "per_architecture": true},
         {"name": "base", "node": "images/cases/grow-base.disk", "per_architecture": true},
         {"name": "grow_tool", "node": "tests/cases/grow/grow_tool.sh", "per_architecture": false},
-        {"name": "grow_measure", "node": "tests/cases/grow/grow_measure.awk", "per_architecture": false},
         {"name": "growset", "node": "tools/inspect/growset", "per_architecture": false},
         {"name": "grow_measured", "node": "tests/cases/machine/grow_measured", "per_architecture": false}
       ],

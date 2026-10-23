@@ -1407,11 +1407,11 @@
     {
       "case_id": "machine.usb.latency-spin",
       "behavior": "with `rach2.usblatency`, eight keys typed one at a time to keylatprobe beside a spinning child each leave a record of the keystroke's path from the controller's interrupt to the reader's dispatch",
-      "units": ["usb", "keylatprobe", "`tests/system/checkers/usblatency.awk`"],
+      "units": ["usb", "keylatprobe", "`tests/system/checkers/records.c`"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["awk"], "features": {}},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
       "execution": {
         "program": "usb_scenario",
         "stdin": null,
@@ -1434,7 +1434,7 @@
           "does": "run `keylatprobe spin 8` and type a key each time the kernel says the reader waits",
           "machine": "usb"
         },
-        {"step_id": "judge", "stage": "execute", "does": "run usblatency.awk on the console"}
+        {"step_id": "judge", "stage": "execute", "does": "judge the console with check_usb_records"}
       ],
       "machines": [
         {
@@ -1480,7 +1480,7 @@
         },
         {
           "assertion_id": "records",
-          "checks": "`awk -v random=0 -v keys=8 -f usblatency.awk` exits 0 on the console: eight records, each with its eight fields once as integers, one tracked event and one dispatch, no pumps and no work, and at least one with `msi 1`",
+          "checks": "check_usb_records accepts the spinner console on the console: eight records, each with its eight fields once as integers, one tracked event and one dispatch, no pumps and no work, and at least one with `msi 1`",
           "source": "scenario"
         }
       ],
@@ -1507,8 +1507,7 @@
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
-        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false},
-        {"name": "usblatency.awk", "node": "tests/cases/machine/usblatency.awk", "per_architecture": false}
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
       ],
       "timing": [],
       "native": {
@@ -1520,11 +1519,11 @@
     {
       "case_id": "machine.usb.latency-random",
       "behavior": "with `rach2.usblatency`, eight keys typed one at a time to keylatprobe beside a child inside getrandom each leave a record of the keystroke's path from the controller's interrupt to the reader's dispatch",
-      "units": ["usb", "keylatprobe", "`tests/system/checkers/usblatency.awk`"],
+      "units": ["usb", "keylatprobe", "`tests/system/checkers/records.c`"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["awk"], "features": {}},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
       "execution": {
         "program": "usb_scenario",
         "stdin": null,
@@ -1547,7 +1546,7 @@
           "does": "run `keylatprobe random 8` and type a key each time the kernel says the reader waits",
           "machine": "usb"
         },
-        {"step_id": "judge", "stage": "execute", "does": "run usblatency.awk on the console"}
+        {"step_id": "judge", "stage": "execute", "does": "judge the console with check_usb_records"}
       ],
       "machines": [
         {
@@ -1593,7 +1592,7 @@
         },
         {
           "assertion_id": "records",
-          "checks": "`awk -v random=1 -v keys=8 -f usblatency.awk` exits 0 on the console: eight records, each with its eight fields once as integers, one tracked event and one dispatch, and at most 4096 bytes of work",
+          "checks": "check_usb_records accepts the getrandom console on the console: eight records, each with its eight fields once as integers, one tracked event and one dispatch, and at most 4096 bytes of work",
           "source": "scenario"
         }
       ],
@@ -1620,8 +1619,7 @@
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
-        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false},
-        {"name": "usblatency.awk", "node": "tests/cases/machine/usblatency.awk", "per_architecture": false}
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
       ],
       "timing": [],
       "native": {
@@ -2943,12 +2941,12 @@
     },
     {
       "case_id": "machine.usb.latency-checker",
-      "behavior": "usblatency.awk, the judge of the latency cases' records, accepts and refuses the records of a host test built with the kernel's recorder as tests/system/usb_latency_test.sh requires",
+      "behavior": "records.c, the judge of the latency cases' records, accepts and refuses the records of a host test built with the kernel's recorder as tests/system/usb_latency_test.sh requires",
       "units": ["usb", "`tests/system/usb_latency_test.sh`"],
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["latency-checker"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "cc", "awk"], "features": {}},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
       "execution": {
         "program": "usbchecks",
         "stdin": null,
@@ -2982,7 +2980,7 @@
         "ports": 0,
         "loop_devices": 0
       },
-      "prepare": [{"name": "usbchecks", "node": "tests/cases/host/usbchecks", "per_architecture": false}],
+      "prepare": [{"name": "usbchecks", "node": "tests/cases/host/usbchecks", "per_architecture": false}, {"name": "usb-check-fixture", "node": "tests/host-suite/tests/usbstamp_hosttest", "per_architecture": false}],
       "timing": [],
       "native": {"plan": "host"}
     }

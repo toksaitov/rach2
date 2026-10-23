@@ -43,7 +43,7 @@ struct state {
 
 /**
  * Read file `path` off the stick image `stick`'s volume with
- * installer_volume.sh into the evidence `name`, give its SHA-256 in `hex`,
+ * mkexfatfixture into the evidence `name`, give its SHA-256 in `hex`,
  * and remove it.
  *
  * @return 0, or -1 when the volume does not check clean or lacks the file.
@@ -52,21 +52,15 @@ static int volume_digest(struct etude_case *c, const struct state *s, const char
                          const char *path, const char *name, char hex[65])
 {
     char out[4096];
-    char *argv[] = {"sh",
-                    (char *)etude_artifact(c, "installer_volume"),
-                    (char *)etude_artifact(c, "mkexfatfixture"),
-                    (char *)stick,
-                    (char *)s->start,
-                    (char *)path,
-                    out,
-                    NULL};
-    char *text;
-    int status, got;
+    char *argv[] = {"mkexfatfixture", "--check", (char *)stick, (char *)s->start,
+                    "--read", (char *)path, NULL};
+    struct etude_termination end;
+    int got;
 
     snprintf(out, sizeof(out), "%s", etude_evidence(c, name));
-    text = inst_host_text(c, argv, "volume.read", &status);
-    free(text);
-    got = status == 0 ? file_digest(out, 0, UINT64_MAX, hex) : -1;
+    got = etude_host(c, argv, name, &end) == ETUDE_OK &&
+          end.end == ETUDE_END_EXITED && end.value == 0
+              ? file_digest(out, 0, UINT64_MAX, hex) : -1;
     unlink(out);
     return got;
 }

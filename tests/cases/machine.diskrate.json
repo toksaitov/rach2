@@ -10,7 +10,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"raw_mib": 256, "exfat_mib": 256, "fat_mib": 256, "stick_mib": 16, "ahci_mib": 64}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["dd"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "diskrate_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machines and removes the five empty disks, which it keeps after a failure; the scenario removes the exFAT volume it copies into its disk"},
       "steps": [
         {"step_id": "volumes", "stage": "prepare",

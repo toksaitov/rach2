@@ -91,7 +91,6 @@
         {"name": "root", "node": "images/rach2-metal-disk.ext2", "per_architecture": true},
         {"name": "mkexfatfixture", "node": "tests/host/mkexfatfixture", "per_architecture": false},
         {"name": "mkgpt", "node": "tools/image/mkgpt", "per_architecture": false},
-        {"name": "installer_volume", "node": "tests/cases/machine/installer_volume", "per_architecture": false},
         {"name": "installer_stick_update", "node": "tests/cases/machine/installer_stick_update", "per_architecture": false}
       ],
       "timing": [],

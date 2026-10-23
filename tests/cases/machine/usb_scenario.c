@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../../system/checkers/records.h"
 #include "usbcase.h"
 
 /* The family's cases begin with this, and their scenarios are named by the
@@ -311,42 +312,27 @@ static int line_counts(struct usb_case *u)
     return usb_end(u);
 }
 
-/**
- * Run usblatency.awk on the console of `b` for the mode `random`, and
- * report assertion `records`: held when it exits 0. Print the records for
- * a person, as plain lines.
- */
+/** Judge every USB record's fields and counts, then print its timings. */
 static void judge_latency(struct usb_case *u, struct usb_boot *b, int random)
 {
-    struct etude_termination end;
-    char awk[PATH_MAX_LEN], line[200];
-    char *argv[] = {"awk", "-v", "random=0", "-v", "keys=8", "-f", awk, b->console, NULL};
-    enum etude_status st;
+    char line[200];
     char *text;
     const char *p;
+    int ok;
 
-    if (random)
-        argv[2] = "random=1";
     usb_step(u, "judge");
     if (!usb_ok(u)) {
         usb_assert(u, "records", 0, "");
         return;
     }
-    keep_path(awk, etude_artifact(u->c, "usblatency.awk"));
-    st = etude_host(u->c, argv, "usblatency", &end);
-    if (st != ETUDE_OK) {
-        usb_fail(u, "awk: %s", st == ETUDE_BOUND ? "the step's bound expired" : "did not run");
-        usb_assert(u, "records", 0, "");
-        return;
-    }
     text = usb_text(b, 0, b->at);
+    ok = check_usb_records(text, random, 8);
     for (p = usb_find(text, "usb: latency: msi"); p != NULL;
          p = usb_find(p + strcspn(p, "\r\n"), "usb: latency: msi"))
         printf("usb: latency: %s: %s\n", random ? "random" : "spin",
                usb_copy_line(strstr(p, "msi"), line, sizeof(line)));
     free(text);
-    usb_assert(u, "records", end.end == ETUDE_END_EXITED && end.value == 0, "usblatency.awk %s %d",
-               end.end == ETUDE_END_EXITED ? "exited with status" : "ended by signal", end.value);
+    usb_assert(u, "records", ok, "the eight USB records must have valid fields and counts");
 }
 
 /**

@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "fileio.h"
 #include "etude/scenario.h"
 
 /* The most of a console that is read back to be judged. */
@@ -402,15 +403,14 @@ static int volumes(struct etude_case *c)
 {
     const char *exfat = etude_private_copy(c, "exfat"), *fat = etude_private_copy(c, "fat");
     const char *kept = etude_evidence(c, "exfat.vol");
-    char vol[4096], of[4200], at[4200], in[4200];
+    char vol[4096], at[4200];
     char *make[] = {"mkexfatfixture", "--make",   vol,    "--sectors",
                     "522240",         "--offset", "2048", NULL};
-    char *place[] = {"dd", in, of, "bs=1048576", "seek=1", "conv=notrunc", NULL};
     char *extable[] = {"mkmbr", "--lba", (char *)exfat, "2048:522240:07", NULL};
     char *fattable[] = {"mkmbr", "--lba", (char *)fat, "2048:520192:0c", NULL};
     char *format[] = {"mformat", "-i", at, "-F", "-T", "520192", "-v", "RATEFAT", "::", NULL};
-    char *const *steps[] = {make, place, extable, fattable, format};
-    const char *names[] = {"mkexfatfixture", "dd", "mkmbr-exfat", "mkmbr-fat", "mformat"};
+    char *const *steps[] = {make, extable, fattable, format};
+    const char *names[] = {"mkexfatfixture", "mkmbr-exfat", "mkmbr-fat", "mformat"};
     struct etude_termination end;
     size_t i;
     int rc = 0;
@@ -418,15 +418,18 @@ static int volumes(struct etude_case *c)
     if (exfat == NULL || fat == NULL || kept == NULL)
         return -1;
     snprintf(vol, sizeof(vol), "%s", kept);
-    snprintf(in, sizeof(in), "if=%s", vol);
-    snprintf(of, sizeof(of), "of=%s", exfat);
     snprintf(at, sizeof(at), "%s@@1048576", fat);
-    for (i = 0; i < sizeof(steps) / sizeof(steps[0]) && rc == 0; i++)
+    for (i = 0; i < sizeof(steps) / sizeof(steps[0]) && rc == 0; i++) {
+        if (i == 1 && case_copy_range(vol, 0, UINT64_MAX, exfat, 1048576, 0) != 0) {
+            rc = -1;
+            break;
+        }
         if (etude_host(c, steps[i], names[i], &end) != ETUDE_OK || end.end != ETUDE_END_EXITED ||
             end.value != 0) {
             fprintf(stderr, "diskrate: %s did not end with status 0\n", names[i]);
             rc = -1;
         }
+    }
     remove(vol);
     return rc;
 }

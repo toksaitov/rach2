@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../../system/checkers/records.h"
 #include "lib_grow.h"
 
 /* The disk, its one entry and the volume's groups, as grow_fixture.sh
@@ -248,10 +249,13 @@ int etude_scenario(struct etude_case *c)
     free(text);
     text = NULL;
     if (ok) {
-        char *const argv[] = {"awk", "-f", (char *)etude_artifact(c, "grow_measure"), measures,
-                              NULL};
-
-        ok = drive_host(c, argv, "measures.txt") == 0;
+        FILE *report = fopen(etude_evidence(c, "measures.txt"), "w");
+        text = read_file(measures, &len);
+        ok = report != NULL && text != NULL && check_grow_records(text, report);
+        if (report != NULL && fclose(report) != 0)
+            ok = 0;
+        free(text);
+        text = NULL;
     }
     grow_assert(c, "measures", ok,
                 "growroot's phase measures do not match the wrapper's counters or show no work");

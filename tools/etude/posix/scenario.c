@@ -24,6 +24,7 @@
 
 #include "../history_json.h"
 #include "../serial.h"
+#include "../volume/volume.h"
 #include "etude/artifact.h"
 #include "etude/qemu.h"
 #include "etude/report.h"
@@ -3135,7 +3136,8 @@ static int image_tool(const char *name)
     static const char *const names[] = {"mattrib", "mcopy",    "mdel",    "mdeltree",  "mdir",
                                         "mformat", "minfo",    "mlabel",  "mmd",       "mmove",
                                         "mrd",     "mren",     "mtype",   "debugfs",   "e2fsck",
-                                        "mke2fs",  "dumpe2fs", "tune2fs", "resize2fs", NULL};
+                                        "mke2fs",  "dumpe2fs", "tune2fs", "resize2fs",
+                                        "image-channel-fixture", NULL};
     size_t i;
 
     for (i = 0; name != NULL && names[i] != NULL; i++)
@@ -3231,7 +3233,7 @@ done:
 
 /* The translated command and the storage of its pathname arguments. */
 struct image_invocation {
-    const char *args[68], *input, *destination;
+    const char *args[68], *input, *directory, *destination;
     char disk[4096], device[4096], program[80], request[8192], parsed[4096];
 };
 
@@ -3278,19 +3280,22 @@ static enum etude_status image_arguments(struct etude_case *c, char *const argv[
 {
     const char *suffix;
     size_t count = 0, prefix, i, disk_at = 0;
-    int mt, request_at = -1;
+    int mt, copy, request_at = -1;
 
     while (count < 64 && argv[count] != NULL)
         count++;
     if (count < 2 || count == 64 || c->cur < 0 || !file_name(output))
         return ETUDE_REFUSED;
     mt = argv[0][0] == 'm' && strcmp(argv[0], "mke2fs") != 0;
+    copy = strcmp(argv[0], "mcopy") == 0 || strcmp(argv[0], "image-channel-fixture") == 0;
     prefix = mt ? 3 : 1;
     snprintf(v->program, sizeof(v->program), "/bin/%s", mt ? "mtools" : argv[0]);
     v->args[0] = v->program;
     if (mt) {
         v->args[1] = "-c";
         v->args[2] = argv[0];
+    }
+    if (mt || copy) {
         for (i = 1; i + 1 < count; i++)
             if (strcmp(argv[i], "-i") == 0)
                 disk_at = i + 1;
@@ -3313,12 +3318,15 @@ static enum etude_status image_arguments(struct etude_case *c, char *const argv[
         v->args[prefix + i - 1] = i == disk_at ? v->device : argv[i];
         if (strcmp(argv[i], "-R") == 0 && i + 1 < count)
             request_at = (int)i + 1;
-        /* Directory staging belongs to artifact preparation. */
-        if (strcmp(argv[0], "mke2fs") == 0 && strcmp(argv[i], "-d") == 0)
-            return ETUDE_REFUSED;
+        if (strcmp(argv[0], "mke2fs") == 0 && strcmp(argv[i], "-d") == 0) {
+            if (i + 1 == count || v->directory != NULL)
+                return ETUDE_REFUSED;
+            v->directory = argv[++i];
+            v->args[prefix + i - 1] = "/tmp/image-directory";
+        }
     }
     v->args[prefix + count - 1] = NULL;
-    if (strcmp(argv[0], "mcopy") == 0) {
+    if (copy) {
         if (count < 5)
             return ETUDE_REFUSED;
         for (i = count - 2; i < count; i++) {
@@ -3336,6 +3344,68 @@ static enum etude_status image_arguments(struct etude_case *c, char *const argv[
     return image_request(argv, request_at, prefix, v);
 }
 
+/** Stage a directory as a native archive for mke2fs's -d operand. */
+static enum etude_status image_directory(struct etude_case *c, struct etude_case_machine *m,
+                                          const char *directory, const char *output)
+{
+    const char *args[] = {"/bin/busybox", "tar", "-xf", "/tmp/image-directory.tar", "-C", "/tmp",
+                          NULL};
+    char path[4096], why[256], name[200];
+    struct etude_volume *v;
+    struct etude_guest_result result;
+    enum etude_status st;
+    int added, closed;
+
+    if ((size_t)snprintf(path, sizeof(path), "%s/image-directory.tar", c->scratch) >= sizeof(path))
+        return ETUDE_FAILED;
+    v = etude_volume_create(path, 0, why, sizeof(why));
+    if (v == NULL)
+        return ETUDE_FAILED;
+    made(c, path, 0);
+    added = etude_volume_add(v, "image-directory", directory);
+    closed = etude_volume_close(v);
+    if (added != 0 || closed != 0) {
+        diag("image directory: %s", why);
+        return ETUDE_FAILED;
+    }
+    st = etude_guest_put(m, path, "/tmp/image-directory.tar", "0600");
+    if (st != ETUDE_OK)
+        return st;
+    snprintf(name, sizeof(name), "image-directory.%s", output);
+    st = etude_guest_command(m, args, NULL, NULL, name, &result);
+    if (st == ETUDE_OK && (!result.complete || result.cleanup != ETUDE_CLEANUP_CONFIRMED ||
+                           result.termination.end != ETUDE_END_EXITED || result.termination.value))
+        st = ETUDE_FAILED;
+    return st;
+}
+
+/** Keep a file an image command wrote, even when the command failed. */
+static enum etude_status image_fetch(struct etude_case *c, struct etude_case_machine *m,
+                                      const char *destination, const char *output, int succeeded)
+{
+    const char *args[] = {"/bin/busybox", "test", "-f", "/tmp/image-file", NULL};
+    struct etude_guest_result result;
+    char name[200];
+    const char *path;
+    enum etude_status st;
+
+    snprintf(name, sizeof(name), "image-exists.%s", output);
+    st = etude_guest_command(m, args, NULL, NULL, name, &result);
+    if (st != ETUDE_OK)
+        return st;
+    if (!result.complete || result.cleanup != ETUDE_CLEANUP_CONFIRMED ||
+        result.termination.end != ETUDE_END_EXITED)
+        return ETUDE_LOST;
+    if (result.termination.value != 0)
+        return result.termination.value == 1 && !succeeded ? ETUDE_OK : ETUDE_FAILED;
+    snprintf(name, sizeof(name), "image-file.%s", output);
+    st = etude_guest_get(m, "/tmp/image-file", name);
+    if (st != ETUDE_OK)
+        return st;
+    path = etude_evidence(c, name);
+    return path != NULL && image_output(c, path, destination) == 0 ? ETUDE_OK : ETUDE_FAILED;
+}
+
 /** Run one image command; the helper has no mounted volume from its disk. */
 static enum etude_status image_host(struct etude_case *c, char *const argv[], const char *output,
                                     struct etude_termination *end)
@@ -3343,7 +3413,7 @@ static enum etude_status image_host(struct etude_case *c, char *const argv[], co
     struct image_invocation v;
     const char *sync_args[] = {"/bin/busybox", "sync", NULL};
     const char *disks[] = {"image-disk", NULL};
-    char fetched[200], fetched_path[4096], sync_output[200], *reply = NULL;
+    char sync_output[200], *reply = NULL;
     struct etude_case_machine *m = NULL;
     struct etude_termination stopped;
     struct etude_guest_result result, synced;
@@ -3361,6 +3431,9 @@ static enum etude_status image_host(struct etude_case *c, char *const argv[], co
     if (v.input != NULL &&
         (st = etude_guest_put(m, v.input, "/tmp/image-file", "0600")) != ETUDE_OK)
         goto done;
+    if (v.directory != NULL &&
+        (st = image_directory(c, m, v.directory, output)) != ETUDE_OK)
+        goto done;
     st = etude_guest_command(m, v.args, NULL, NULL, output, &result);
     *end = result.termination;
     if (st != ETUDE_OK || !result.complete)
@@ -3370,18 +3443,11 @@ static enum etude_status image_host(struct etude_case *c, char *const argv[], co
         st = ETUDE_LOST;
         goto done;
     }
-    if (v.destination != NULL && result.termination.end == ETUDE_END_EXITED &&
-        result.termination.value == 0) {
-        snprintf(fetched, sizeof(fetched), "image-file.%s", output);
-        st = etude_guest_get(m, "/tmp/image-file", fetched);
-        if (st != ETUDE_OK)
-            goto done;
-        snprintf(fetched_path, sizeof(fetched_path), "%s", etude_evidence(c, fetched));
-        if (image_output(c, fetched_path, v.destination) != 0) {
-            st = ETUDE_FAILED;
-            goto done;
-        }
-    }
+    if (v.destination != NULL &&
+        (st = image_fetch(c, m, v.destination, output,
+                           result.termination.end == ETUDE_END_EXITED &&
+                               result.termination.value == 0)) != ETUDE_OK)
+        goto done;
     snprintf(sync_output, sizeof(sync_output), "image-sync.%s", output);
     st = etude_guest_command(m, sync_args, NULL, NULL, sync_output, &synced);
     if (st == ETUDE_OK &&
@@ -3404,7 +3470,7 @@ enum etude_status etude_host(struct etude_case *c, char *const argv[], const cha
     const struct etude_exec_result *r;
     const char *program;
     enum etude_status st;
-    char attempt[300], err_name[160];
+    char attempt[300], err_name[160], out_path[4096], err_path[4096];
     char **args;
 
     end->end = ETUDE_END_LOST;
@@ -3433,6 +3499,12 @@ enum etude_status etude_host(struct etude_case *c, char *const argv[], const cha
     spec.cwd = c->scratch;
     spec.output_max = (size_t)c->output_max;
     spec.grace_us = c->grace_us;
+    snprintf(out_path, sizeof(out_path), "%s", etude_evidence(c, output));
+    snprintf(err_path, sizeof(err_path), "%s", etude_evidence(c, err_name));
+    spec.stdout_path = out_path;
+    spec.stderr_path = err_path;
+    made(c, out_path, 0);
+    made(c, err_path, 0);
     if (etude_exec_start(etude_qemu_exec(c->q), &spec, &p) != 0) {
         diag("%s did not start: %s", argv[0], strerror(errno));
         free(args);
@@ -3447,8 +3519,6 @@ enum etude_status etude_host(struct etude_case *c, char *const argv[], const cha
         serve_until(c, host_done, &running, &running, UINT64_MAX, 0);
     }
     r = etude_proc_result(p);
-    keep_evidence(c, output, r->out.data, r->out.kept);
-    keep_evidence(c, err_name, r->err.data, r->err.kept);
     end->end = r->end;
     end->value = r->value;
     if (r->cleanup != ETUDE_CLEANUP_CONFIRMED)

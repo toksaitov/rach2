@@ -35,7 +35,8 @@ struct etude_volume;
  * Begin a job volume: `img`, made anew, a raw disk of `size` bytes. The
  * archive is ustar, with a pax header for a name of more than 100 bytes or a
  * file of 8 GiB or more. `why` is kept, and every later call that fails
- * writes its reason there.
+ * writes its reason there. A size of zero writes an archive without padding
+ * it to a disk size.
  *
  * @return the volume, or NULL with `why` set.
  */

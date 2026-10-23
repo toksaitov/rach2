@@ -314,7 +314,7 @@ static int put(struct etude_volume *v, const void *data, size_t n)
 {
     if (v->failed)
         return -1;
-    if (v->used + n + 2 * BLOCK > v->size)
+    if (v->size && v->used + n + 2 * BLOCK > v->size)
         return vfail(v, "the job's files do not fit in its volume of %llu MiB",
                      (unsigned long long)(v->size >> 20));
     if (fwrite(data, 1, n, v->f) != n)
@@ -522,10 +522,11 @@ int etude_volume_close(struct etude_volume *v)
     if (!v->failed && fwrite(zero, 1, sizeof(zero), v->f) != sizeof(zero))
         vfail(v, "the job volume cannot be written");
 #ifdef _WIN32
-    if (!v->failed &&
+    if (!v->failed && v->size &&
         (_fseeki64(v->f, (long long)v->size - 1, SEEK_SET) != 0 || fputc(0, v->f) == EOF))
 #else
-    if (!v->failed && (fseeko(v->f, (off_t)v->size - 1, SEEK_SET) != 0 || fputc(0, v->f) == EOF))
+    if (!v->failed && v->size &&
+        (fseeko(v->f, (off_t)v->size - 1, SEEK_SET) != 0 || fputc(0, v->f) == EOF))
 #endif
         vfail(v, "the job volume cannot be extended to %llu bytes", (unsigned long long)v->size);
     if (fclose(v->f) != 0)

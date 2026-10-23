@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "fileio.h"
 #include "usbcase.h"
 
 /* The family's cases begin with this, and their scenarios are named by the
@@ -449,7 +450,6 @@ static int three(struct usb_case *u)
 static int far(struct usb_case *u)
 {
     char image[PATH_MAX_LEN], volume[PATH_MAX_LEN], out[PATH_MAX_LEN], txt[PATH_MAX_LEN];
-    char in_arg[PATH_MAX_LEN + 8], of_arg[PATH_MAX_LEN + 8];
     char *argv[8];
     struct usb_boot b;
     char *text;
@@ -462,31 +462,17 @@ static int far(struct usb_case *u)
     argv[2] = FAR_START ":" FAR_SECTORS ":fat=FARAWAY";
     argv[3] = NULL;
     usb_host(u, argv, "mkgpt.out");
-    snprintf(in_arg, sizeof(in_arg), "if=%s", volume);
-    snprintf(of_arg, sizeof(of_arg), "of=%s", image);
-    argv[0] = "dd";
-    argv[1] = in_arg;
-    argv[2] = of_arg;
-    argv[3] = "bs=512";
-    argv[4] = "seek=" FAR_START;
-    argv[5] = "conv=notrunc";
-    argv[6] = NULL;
-    usb_host(u, argv, "dd-in.out");
+    if (usb_ok(u) && case_copy_range(volume, 0, UINT64_MAX, image,
+                                     strtoull(FAR_START, NULL, 10) * 512, 0) != 0)
+        usb_fail(u, "the far volume could not be copied to its partition");
     boot(u, &b, USB_SHELL);
     probe(u, &b, "probe", "/usbdiskprobe big", "big");
     no_fail(u, &b);
     usb_step(u, "read");
     keep_path(u, out, etude_evidence(u->c, "far-out.vol"), "the far volume read back");
-    snprintf(in_arg, sizeof(in_arg), "if=%s", image);
-    snprintf(of_arg, sizeof(of_arg), "of=%s", out);
-    argv[0] = "dd";
-    argv[1] = in_arg;
-    argv[2] = of_arg;
-    argv[3] = "bs=512";
-    argv[4] = "skip=" FAR_START;
-    argv[5] = "count=" FAR_SECTORS;
-    argv[6] = NULL;
-    usb_host(u, argv, "dd-out.out");
+    if (usb_ok(u) && case_copy_range(image, strtoull(FAR_START, NULL, 10) * 512,
+                                     strtoull(FAR_SECTORS, NULL, 10) * 512, out, 0, 1) != 0)
+        usb_fail(u, "the far partition could not be read back");
     argv[0] = "mtype";
     argv[1] = "-i";
     argv[2] = out;

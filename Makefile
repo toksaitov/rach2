@@ -679,6 +679,7 @@ $(ETUDEGUEST_SCENARIO): build/tests/cases/machine/%: tests/cases/machine/%.c \
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils
 $(DISK_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
+                   tests/cases/machine/fileio.c tests/cases/machine/fileio.h \
                    $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
 	@mkdir -p $(@D)
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
@@ -746,11 +747,23 @@ build/tests/cases/machine/credpersist_scenario: tests/creddisk_rows.h
 # The USB scenarios share usbcase.c.
 USB_SCENARIOS = build/tests/cases/machine/usb_scenario build/tests/cases/machine/usbdisk_scenario
 $(USB_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
+                  tests/cases/machine/fileio.c tests/cases/machine/fileio.h \
+                  tests/system/checkers/records.c tests/system/checkers/records.h \
                   tests/cases/machine/usbcase.c tests/cases/machine/usbcase.h \
                   $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
 	@mkdir -p $(@D)
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils
+
+build/tests/cases/machine/grow_measured: tests/system/checkers/records.c \
+    tests/system/checkers/records.h
+
+build/tests/cases/host/usbchecks: tests/cases/host/usbchecks.c \
+    tests/system/checkers/records.c tests/system/checkers/records.h \
+    $(filter-out tests/cases/host/host.c tools/etude/json.c utils/sha256.c,$(ETUDE_HOSTCASE_SRC))
+	@mkdir -p $(@D)
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	    $(ETUDE_PLATFORM_FLAGS) $(ETUDE_PLATFORM_LIBS)
 
 # The host's side of the network cases' connections that are not logins: a
 # wait for the guest's SSH server, and the ssh cases' flood.
