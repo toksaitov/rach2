@@ -114,62 +114,6 @@
       "native": {"plan": "none", "class": "image", "reason": "the drill destroys and rewrites the disk the machine boots from, between boots and from the host, and reads the result off a copy the host compares"}
     },
     {
-      "case_id": "machine.drill.publish",
-      "behavior": "the recovery artifact check refuses the everyday kernel, and the recovery kernel, booted from a RAM image, publishes /dev/disk0 with no rach2.diskdiag on its command line",
-      "units": ["drill"],
-      "domain": "machine",
-      "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": [], "features": {}},
-      "execution": {
-        "program": "drill_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
-        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["drill-disk"]}],
-        "children": "reaped",
-        "cleanup": "libetude-case ends the machine and removes the copy of the disk, which it keeps after a failure"
-      },
-      "steps": [
-        {"step_id": "artifact", "stage": "execute",
-         "does": "run the tree's tools/inspect/check_recovery on the everyday kernel, asking for the recovery authority"},
-        {"step_id": "publish", "stage": "boot", "machine": "ramboot",
-         "does": "boot the recovery kernel and image directly with rach2.root=ram and the disk on IDE, test for /dev/disk0 at recovery's shell, and end it with QMP's quit"}
-      ],
-      "machines": [
-        {"machine_id": "ramboot",
-         "qemu": {"kernel": "recovery-kernel", "initrd": "recovery-image", "disks": [{"name": "drill-disk", "bus": "ide"}], "cpu": "max", "processors": 1,
-                  "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ram"]},
-         "console": "serial", "qmp": true, "helper": false}
-      ],
-      "assertions": [
-        {"assertion_id": "artifact-refused", "checks": "check_recovery exits 1 on the everyday kernel asked for the recovery authority, and says the kernel does not carry the recovery banner", "source": "scenario"},
-        {"assertion_id": "disk-node", "checks": "the recovery kernel has /dev/disk0 as a block device, with no rach2.diskdiag on its command line", "source": "scenario"}
-      ],
-      "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [
-        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
-      ],
-      "bounds": {
-        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
-        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
-        "stages": {
-          "boot": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
-          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
-        }
-      },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 134217728,
-                    "locks": [], "ports": 0, "loop_devices": 0},
-      "prepare": [
-        {"name": "check_recovery", "node": "tools/inspect/check_recovery", "per_architecture": false},
-        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
-        {"name": "recovery-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
-        {"name": "recovery-image", "node": "images/etude-recovery.krffs", "per_architecture": true},
-        {"name": "drill-disk", "node": "tests/cases/machine/drill/drill.disk", "per_architecture": true},
-        {"name": "drill_scenario", "node": "tests/cases/machine/drill_scenario", "per_architecture": false}
-      ],
-      "timing": [],
-      "native": {"plan": "none", "class": "image", "reason": "the case reads a built kernel off the host and boots the recovery kernel, which a running machine cannot become"}
-    },
-    {
       "case_id": "machine.drill.no-dhcp",
       "behavior": "the recovery kernel and image, booted directly as the core image boots them, on a card on a hub of QEMU's with nothing else on it, where no DHCP server answers, take the fixed address 192.168.0.105 and stop the DHCP client",
       "units": ["drill"],

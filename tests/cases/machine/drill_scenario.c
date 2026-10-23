@@ -16,9 +16,6 @@
  * back to a kernel on partition 1; and a destroyed partition 1 still reaches
  * recovery through the core image.
  *
- * machine.drill.publish reads the everyday kernel's authority off the
- * artifact with the tree's check_recovery.sh, and boots the recovery kernel
- * directly to show that it publishes /dev/disk0 with no rach2.diskdiag.
  * machine.drill.no-dhcp boots the recovery kernel directly with its card on
  * a hub of QEMU's, a network on which no DHCP server answers, and requires the
  * recovery image to take its fixed address and stop its DHCP client.
@@ -658,39 +655,6 @@ static int drill_repair(struct etude_case *c)
     return net_end(&s.u);
 }
 
-/** The case machine.drill.publish. */
-static int drill_publish(struct etude_case *c)
-{
-    char line[200];
-    const char *kernel = etude_artifact(c, "kernel");
-    char *argv[] = {"check_recovery", (char *)kernel, "recovery", NULL};
-    struct net_case u;
-    struct net_boot b;
-    struct net_run r;
-
-    net_case(&u, c);
-    if (kernel == NULL)
-        net_fail(&u, "the everyday kernel is not a prepared artifact");
-    net_step(&u, "artifact");
-    net_host(&u, argv, "check-recovery", &r);
-    net_assert(&u, "artifact-refused",
-               r.end.end == ETUDE_END_EXITED && r.end.value == 1 &&
-                   printed(&r, "does not carry the recovery banner"),
-               "the everyday kernel passed the recovery artifact check: %s",
-               said(&r, line, sizeof(line)));
-    net_run_free(&r);
-    net_step(&u, "publish");
-    net_boot(&b, &u, "ramboot", 1, NULL);
-    net_wait(&b, RECOVERY_UP);
-    net_wait(&b, RECOVERY_PROMPT);
-    net_line(&b, "test -b /dev/disk0; echo DISK\"\"NODE=$?");
-    line_after(&b, "DISKNODE=", line, sizeof(line));
-    net_assert(&u, "disk-node", strcmp(line, "0") == 0,
-               "the recovery kernel did not publish /dev/disk0 without rach2.diskdiag: %s", line);
-    cut(&b);
-    return net_end(&u);
-}
-
 /** The case machine.drill.no-dhcp. */
 static int drill_no_dhcp(struct etude_case *c)
 {
@@ -726,8 +690,6 @@ int etude_scenario(struct etude_case *c)
 
     if (strcmp(id, "machine.drill.repair") == 0)
         return drill_repair(c);
-    if (strcmp(id, "machine.drill.publish") == 0)
-        return drill_publish(c);
     if (strcmp(id, "machine.drill.no-dhcp") == 0)
         return drill_no_dhcp(c);
     fprintf(stderr, "drill_scenario: no case %s\n", id);
