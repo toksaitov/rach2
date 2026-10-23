@@ -76,6 +76,8 @@ The host test of `etude-guest` closed its pipes before killing it. The helper co
 * The coordinating session told the owner that the Windows port would take a day or more, a guess in a person's time. The workers had written the Unix QEMU starter in about two hours and the test driver's first version in an evening; the owner had to point it out again.
 * From 04:15 to 10:45 on the 23rd the coordinating session waited on a question in the interactive question tool, which stops the whole session, so none of its five-minute checks ran. The five host loops and Codex finished their tasks between 05:25 and 09:20 and stood idle until 10:52, some 27 hours of loop time, while #888, and with it #679 and #682, waited from 06:04 on #928, a repair of two minutes that only the owner's accounts can make.
 * The maintenance of 22 October upgraded the testing host's Codex to 0.163.0 without raising the version the `codexapi` cases pin, so both failed in #888's run on x86_64 (#928). The pinned 0.162.1 was put back at 10:50 on the 23rd.
+* The board went out of step with the work a third time. At about 11:45 on the 23rd the owner asked whether it was right: it showed #682, which a helper had run for an hour, as Ready, the takeover incident #798 in Backlog, #875 free for any worker to take once its prerequisites closed, and 35 closed issues with nobody assigned. The rule of setting the Status at each hand-out covered the loops but not a helper, and nothing compared the board with the work.
+* The five-minute checks watched whether each worker wrote output, not whether its task landed, though `AGENTS.md` makes a member that others wait on late after six hours or three sessions without landing. #680, which #683 waits on, had been assigned since 15:01 on the 22nd and had taken five sessions when the owner raised the checks' failure at 11:55 on the 23rd; no check had called it late.
 
 ## GitHub
 
@@ -105,3 +107,4 @@ The host test of `etude-guest` closed its pipes before killing it. The helper co
 * #914 removes the proofs, #915 the scripts' fixed time limits, and #918 the board's dependence on GitHub's item list.
 * `AGENTS.md`, Work: a plan checks that each environment a task runs in has every part the task needs, and a time given for a task comes from how long similar work took the agents.
 * `CLAUDE.md`: while the coordinating session runs the manager's checks, it asks the owner in the reply's text, not with the interactive question tool.
+* `AGENTS.md`, The manager: each check corrects a card whose Status or assignee differs from the loop or helper that has its issue. The coordinating session's checks also report each task's start, its sessions and whether it is late.
