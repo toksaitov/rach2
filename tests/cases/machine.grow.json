@@ -97,7 +97,7 @@
     {
       "case_id": "machine.grow.machine-mbr",
       "behavior": "on a disk of the installed machine's layout on an MBR, booted from the recovery stick, tools/dev/machine_grow.sh saves the target without changing it and refuses a grow the host has not checked; the backup the host reads back has its checksums and the boot partition; the grow takes an 8 MiB seed to 64 MiB, and the restore brings back every byte but the boot environment's, every write in the saved sectors or the boot partition",
-      "units": ["grow", "`tests/system/grow_machine.sh` on the MBR fixture"],
+      "units": ["grow", "the save, grow and restore of `tools/dev/machine_grow.sh` on the MBR fixture"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"table": "mbr", "disk_sectors": 397312, "disk_id": "1acef00d", "root_start": 266240, "seed_sectors": 16384, "root_sectors": 131072}, "repetitions": 1, "seed": null},
@@ -153,7 +153,7 @@
     {
       "case_id": "machine.grow.machine-gpt",
       "behavior": "on a disk of the installed machine's layout on a GUID partition table, with the table's backup after the root, booted from the recovery stick, tools/dev/machine_grow.sh saves the target without changing it and refuses a grow the host has not checked; the backup the host reads back has its checksums and the boot partition; the grow takes an 8 MiB seed to 64 MiB, and the restore brings back every byte but the boot environment's, every write in the saved sectors or the boot partition",
-      "units": ["grow", "`tests/system/grow_machine.sh` with `RACH2_GROW_TABLE=gpt` on the GUID fixture"],
+      "units": ["grow", "the save, grow and restore of `tools/dev/machine_grow.sh` on the GUID fixture"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"table": "gpt", "disk_sectors": 397345, "disk_id": "1acef00d-0f1e-4d2c-8b3a-c0ffee000001", "root_start": 266240, "seed_sectors": 16384, "root_sectors": 131072}, "repetitions": 1, "seed": null},
@@ -202,6 +202,215 @@
         {"name": "mkexfatfixture", "node": "tests/host/mkexfatfixture", "per_architecture": false},
         {"name": "grow_read", "node": "tests/cases/machine/grow_read", "per_architecture": false},
         {"name": "grow_machine_gpt", "node": "tests/cases/machine/grow_machine_gpt", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the case boots the recovery stick by the firmware, a system image other than the installed one, and reads the target's writes through a qcow2 overlay"}
+    },
+    {
+      "case_id": "machine.grow.interrupted-mbr",
+      "behavior": "on the disk of the installed machine's layout on an MBR, booted from the recovery stick, tools/dev/machine_grow.sh refuses a plan with a range moved and a boot copy changed before its checksum, writing nothing; then each of save, grow, restore and the repair of the boot environment, cut at a completed transfer while it still has work to do, is finished by a save or a restore run again, which writes only saved sectors and leaves every byte of the target as it was, and the target then boots recovery without the stick",
+      "units": ["grow", "the interruptions of `tools/dev/machine_grow.sh` on the MBR fixture"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"table": "mbr", "disk_sectors": 397312, "disk_id": "1acef00d", "root_start": 266240, "seed_sectors": 16384, "root_sectors": 131072, "cuts": "save grow restore repair"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["sh", "qemu-img", "tar"], "features": {}},
+      "execution": {"program": "grow_interrupted", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "store"]}], "children": "none", "cleanup": "libetude-case ends each machine and removes the stick's and the store's copies and the target's overlay, and the scenario removes the raw images converted from the overlay as each is judged, and the copies of the overlay and the store it keeps between steps and the files read from the store at its end; both keep them after a failure"},
+      "steps": [
+        {"step_id": "rejected", "stage": "execute", "machine": "recovery", "does": "boot the stick, run save on the plan with its last range of the grow moved and then through corrupt-boot.sh, compare the target with the disk, and put the store's copy back as it was"},
+        {"step_id": "save", "stage": "execute", "machine": "recovery", "does": "boot the stick, run save, read the backup and the plan off the store and check the backup's checksums"},
+        {"step_id": "grow", "stage": "execute", "machine": "recovery", "does": "boot the stick, write the host's checksums to the store, run grow, zero the target's first sector, and keep copies of the overlay and the store"},
+        {"step_id": "save-cut", "stage": "execute", "machine": "recovery", "does": "put back the empty overlay and the store as it was made, boot the stick, run save through machine-cut.sh until it stops after its second range, and compare the target with the disk"},
+        {"step_id": "save-retry", "stage": "execute", "machine": "recovery", "does": "boot the stick, move saved.pending aside, run save, compare the backup the host reads with the first save's, and compare the target with the disk"},
+        {"step_id": "save-boot", "stage": "execute", "machine": "target", "does": "boot the target alone and read its boot status and owner's file, then compare it with the disk"},
+        {"step_id": "grow-cut", "stage": "execute", "machine": "recovery", "does": "put back the empty overlay and the store after the grow, boot the stick, run grow through machine-cut.sh until it stops after the seed's first mebibyte, and compare the target with the disk"},
+        {"step_id": "grow-retry", "stage": "execute", "machine": "recovery", "does": "boot the stick, run restore, judge the target's written clusters, and compare the target with the disk"},
+        {"step_id": "grow-boot", "stage": "execute", "machine": "target", "does": "boot the target alone and read its boot status and owner's file, then compare it with the disk"},
+        {"step_id": "restore-cut", "stage": "execute", "machine": "recovery", "does": "put back the overlay and the store after the grow, boot the stick, run restore through machine-cut.sh until it stops after its second range, and compare the target with the disk"},
+        {"step_id": "restore-retry", "stage": "execute", "machine": "recovery", "does": "boot the stick, run restore, judge the target's written clusters, and compare the target with the disk"},
+        {"step_id": "restore-boot", "stage": "execute", "machine": "target", "does": "boot the target alone and read its boot status and owner's file, then compare it with the disk"},
+        {"step_id": "repair-cut", "stage": "execute", "machine": "recovery", "does": "put back the overlay and the store after the grow, boot the stick, write the saved MBR back, zero the boot environment, run bootctl on it, run restore through machine-cut.sh until it stops after the environment's first sector, and compare the target with the disk"},
+        {"step_id": "repair-retry", "stage": "execute", "machine": "recovery", "does": "boot the stick, run restore, judge the target's written clusters, and compare the target with the disk"},
+        {"step_id": "repair-boot", "stage": "execute", "machine": "target", "does": "boot the target alone and read its boot status and owner's file, then compare it with the disk"}
+      ],
+      "machines": [
+        {"machine_id": "recovery", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick", "bus": "device", "id": "stick"}, {"name": "target", "base": "disk", "cluster_bytes": 4096, "serial": "GROWTEST"}, "store"], "cpu": "max", "processors": 2, "memory_bytes": 536870912, "firmware": "seabios", "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-kbd", "bus": "xhci.0"}, {"model": "usb-storage", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "target", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "target", "base": "disk", "cluster_bytes": 4096, "serial": "GROWTEST", "boot": true}], "cpu": "max", "processors": 2, "memory_bytes": 536870912, "firmware": "seabios", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "bad-ranges", "checks": "save with the last range of the grow moved by its own length ends with status 1, saying the ranges differ from the seed and target geometry, and leaves no saved.pending on the store", "source": "scenario"},
+        {"assertion_id": "bad-boot", "checks": "save through corrupt-boot.sh, which changes the boot copy's last byte before its checksum is made, ends with status 1, saying the boot backup differs from the disk, and publishes no saved directory", "source": "scenario"},
+        {"assertion_id": "rejected-unchanged", "checks": "the two refused saves leave every byte of the target as it was", "source": "scenario"},
+        {"assertion_id": "save", "checks": "save ends with status 0 without a machine-grow failure, and every saved file the host reads off the store has the digest SHA256SUMS gives it", "source": "scenario"},
+        {"assertion_id": "grown", "checks": "grow ends with status 0, saying that the measured grow and read-only check passed, without a machine-grow failure, and the target's first sector is then zeroed", "source": "scenario"},
+        {"assertion_id": "save-cut", "checks": "save stops at its cut, after its second range is read, without a machine-grow failure, and the target is as it was", "source": "scenario"},
+        {"assertion_id": "save-retried", "checks": "with saved.pending moved aside, save ends with status 0 without a machine-grow failure, and its backup.bin, boot.img, grow.plan, ranges.txt and SHA256SUMS are the first save's, each of its digest", "source": "scenario"},
+        {"assertion_id": "save-bytes", "checks": "after the save run again the target is the disk as it was in every byte", "source": "scenario"},
+        {"assertion_id": "save-boots", "checks": "the target booted alone starts recovery, with recovery saved and no next entry, its root has the owner's file, and the boot leaves every byte as it was", "source": "scenario"},
+        {"assertion_id": "grow-cut", "checks": "grow stops at its cut, after it writes the seed's first mebibyte, without a machine-grow failure, and the target differs from the disk", "source": "scenario"},
+        {"assertion_id": "grow-restored", "checks": "restore ends with status 0, saying every saved range matches and the restored root checks clean and that the boot environment is unchanged, without a machine-grow failure", "source": "scenario"},
+        {"assertion_id": "grow-writes", "checks": "every cluster written by the end of the restore lies in a saved range of the plan or the boot partition, sectors 2048 to 133119, and growset checked at least one", "source": "scenario"},
+        {"assertion_id": "grow-bytes", "checks": "after the restore the target is the disk as it was in every byte", "source": "scenario"},
+        {"assertion_id": "grow-boots", "checks": "the target booted alone starts recovery, with recovery saved and no next entry, its root has the owner's file, and the boot leaves every byte as it was", "source": "scenario"},
+        {"assertion_id": "restore-cut", "checks": "restore of the grown target stops at its cut, after its second range, without a machine-grow failure, and the target differs from the disk", "source": "scenario"},
+        {"assertion_id": "restore-restored", "checks": "restore ends with status 0, saying every saved range matches and the restored root checks clean and that the boot environment is unchanged, without a machine-grow failure", "source": "scenario"},
+        {"assertion_id": "restore-writes", "checks": "every cluster written by the end of the restore lies in a saved range of the plan or the boot partition, sectors 2048 to 133119, and growset checked at least one", "source": "scenario"},
+        {"assertion_id": "restore-bytes", "checks": "after the restore the target is the disk as it was in every byte", "source": "scenario"},
+        {"assertion_id": "restore-boots", "checks": "the target booted alone starts recovery, with recovery saved and no next entry, its root has the owner's file, and the boot leaves every byte as it was", "source": "scenario"},
+        {"assertion_id": "repair-cut", "checks": "with the grown target's MBR written back and its boot environment zeroed, bootctl refuses the environment's header with status 1, and restore stops at its cut, after the environment's first sector is written, without a machine-grow failure, with the target differing from the disk", "source": "scenario"},
+        {"assertion_id": "repair-restored", "checks": "restore ends with status 0, saying every saved range matches and the restored root checks clean and that the boot environment was repaired from boot.img, without a machine-grow failure", "source": "scenario"},
+        {"assertion_id": "repair-writes", "checks": "every cluster written by the end of the restore lies in a saved range of the plan or the boot partition, sectors 2048 to 133119, and growset checked at least one", "source": "scenario"},
+        {"assertion_id": "repair-bytes", "checks": "after the restore the target is the disk as it was in every byte", "source": "scenario"},
+        {"assertion_id": "repair-boots", "checks": "the target booted alone starts recovery, with recovery saved and no next entry, its root has the owner's file, and the boot leaves every byte as it was", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 15}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 7200000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 300000000, "ceiling_us": 900000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1476395008, "disk_bytes": 2147483648, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "stick", "node": "images/cases/grow-stick.img", "per_architecture": true},
+        {"name": "disk", "node": "images/cases/grow-machine-mbr.disk", "per_architecture": true},
+        {"name": "store", "node": "images/cases/grow-machine-mbr.store", "per_architecture": true},
+        {"name": "growset", "node": "tools/inspect/growset", "per_architecture": false},
+        {"name": "mkexfatfixture", "node": "tests/host/mkexfatfixture", "per_architecture": false},
+        {"name": "grow_read", "node": "tests/cases/machine/grow_read", "per_architecture": false},
+        {"name": "grow_interrupted", "node": "tests/cases/machine/grow_interrupted", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the case boots the recovery stick by the firmware, a system image other than the installed one, and reads the target's writes through a qcow2 overlay"}
+    },
+    {
+      "case_id": "machine.grow.interrupted-gpt",
+      "behavior": "on the disk of the installed machine's layout on a GUID partition table, with the table's backup after the root, booted from the recovery stick, tools/dev/machine_grow.sh refuses a plan with a range moved and a boot copy changed before its checksum, writing nothing; then each of save, grow, restore and the repair of the boot environment, cut at a completed transfer while it still has work to do, is finished by a save or a restore run again, which writes only saved sectors and leaves every byte of the target as it was, and the target then boots recovery without the stick",
+      "units": ["grow", "the interruptions of `tools/dev/machine_grow.sh` on the GUID fixture"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"table": "gpt", "disk_sectors": 397345, "disk_id": "1acef00d-0f1e-4d2c-8b3a-c0ffee000001", "root_start": 266240, "seed_sectors": 16384, "root_sectors": 131072, "cuts": "save grow restore repair"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["sh", "qemu-img", "tar"], "features": {}},
+      "execution": {"program": "grow_interrupted", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "store"]}], "children": "none", "cleanup": "libetude-case ends each machine and removes the stick's and the store's copies and the target's overlay, and the scenario removes the raw images converted from the overlay as each is judged, and the copies of the overlay and the store it keeps between steps and the files read from the store at its end; both keep them after a failure"},
+      "steps": [
+        {"step_id": "rejected", "stage": "execute", "machine": "recovery", "does": "boot the stick, run save on the plan with its last range of the grow moved and then through corrupt-boot.sh, compare the target with the disk, and put the store's copy back as it was"},
+        {"step_id": "save", "stage": "execute", "machine": "recovery", "does": "boot the stick, run save, read the backup and the plan off the store and check the backup's checksums"},
+        {"step_id": "grow", "stage": "execute", "machine": "recovery", "does": "boot the stick, write the host's checksums to the store, run grow, zero the target's first sector, and keep copies of the overlay and the store"},
+        {"step_id": "save-cut", "stage": "execute", "machine": "recovery", "does": "put back the empty overlay and the store as it was made, boot the stick, run save through machine-cut.sh until it stops after its second range, and compare the target with the disk"},
+        {"step_id": "save-retry", "stage": "execute", "machine": "recovery", "does": "boot the stick, move saved.pending aside, run save, compare the backup the host reads with the first save's, and compare the target with the disk"},
+        {"step_id": "save-boot", "stage": "execute", "machine": "target", "does": "boot the target alone and read its boot status and owner's file, then compare it with the disk"},
+        {"step_id": "grow-cut", "stage": "execute", "machine": "recovery", "does": "put back the empty overlay and the store after the grow, boot the stick, run grow through machine-cut.sh until it stops after the seed's first mebibyte, and compare the target with the disk"},
+        {"step_id": "grow-retry", "stage": "execute", "machine": "recovery", "does": "boot the stick, run restore, judge the target's written clusters, and compare the target with the disk"},
+        {"step_id": "grow-boot", "stage": "execute", "machine": "target", "does": "boot the target alone and read its boot status and owner's file, then compare it with the disk"},
+        {"step_id": "restore-cut", "stage": "execute", "machine": "recovery", "does": "put back the overlay and the store after the grow, boot the stick, run restore through machine-cut.sh until it stops after its second range, and compare the target with the disk"},
+        {"step_id": "restore-retry", "stage": "execute", "machine": "recovery", "does": "boot the stick, run restore, judge the target's written clusters, and compare the target with the disk"},
+        {"step_id": "restore-boot", "stage": "execute", "machine": "target", "does": "boot the target alone and read its boot status and owner's file, then compare it with the disk"},
+        {"step_id": "repair-cut", "stage": "execute", "machine": "recovery", "does": "put back the overlay and the store after the grow, boot the stick, write the saved MBR back, zero the boot environment, run bootctl on it, run restore through machine-cut.sh until it stops after the environment's first sector, and compare the target with the disk"},
+        {"step_id": "repair-retry", "stage": "execute", "machine": "recovery", "does": "boot the stick, run restore, judge the target's written clusters, and compare the target with the disk"},
+        {"step_id": "repair-boot", "stage": "execute", "machine": "target", "does": "boot the target alone and read its boot status and owner's file, then compare it with the disk"}
+      ],
+      "machines": [
+        {"machine_id": "recovery", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick", "bus": "device", "id": "stick"}, {"name": "target", "base": "disk", "cluster_bytes": 4096, "serial": "GROWTEST"}, "store"], "cpu": "max", "processors": 2, "memory_bytes": 536870912, "firmware": "seabios", "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-kbd", "bus": "xhci.0"}, {"model": "usb-storage", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "target", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "target", "base": "disk", "cluster_bytes": 4096, "serial": "GROWTEST", "boot": true}], "cpu": "max", "processors": 2, "memory_bytes": 536870912, "firmware": "seabios", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "bad-ranges", "checks": "save with the last range of the grow moved by its own length ends with status 1, saying the ranges differ from the seed and target geometry, and leaves no saved.pending on the store", "source": "scenario"},
+        {"assertion_id": "bad-boot", "checks": "save through corrupt-boot.sh, which changes the boot copy's last byte before its checksum is made, ends with status 1, saying the boot backup differs from the disk, and publishes no saved directory", "source": "scenario"},
+        {"assertion_id": "rejected-unchanged", "checks": "the two refused saves leave every byte of the target as it was", "source": "scenario"},
+        {"assertion_id": "save", "checks": "save ends with status 0 without a machine-grow failure, and every saved file the host reads off the store has the digest SHA256SUMS gives it", "source": "scenario"},
+        {"assertion_id": "grown", "checks": "grow ends with status 0, saying that the measured grow and read-only check passed, without a machine-grow failure, and the target's first sector is then zeroed", "source": "scenario"},
+        {"assertion_id": "save-cut", "checks": "save stops at its cut, after its second range is read, without a machine-grow failure, and the target is as it was", "source": "scenario"},
+        {"assertion_id": "save-retried", "checks": "with saved.pending moved aside, save ends with status 0 without a machine-grow failure, and its backup.bin, boot.img, grow.plan, ranges.txt and SHA256SUMS are the first save's, each of its digest", "source": "scenario"},
+        {"assertion_id": "save-bytes", "checks": "after the save run again the target is the disk as it was in every byte", "source": "scenario"},
+        {"assertion_id": "save-boots", "checks": "the target booted alone starts recovery, with recovery saved and no next entry, its root has the owner's file, and the boot leaves every byte as it was", "source": "scenario"},
+        {"assertion_id": "grow-cut", "checks": "grow stops at its cut, after it writes the seed's first mebibyte, without a machine-grow failure, and the target differs from the disk", "source": "scenario"},
+        {"assertion_id": "grow-restored", "checks": "restore ends with status 0, saying every saved range matches and the restored root checks clean and that the boot environment is unchanged, without a machine-grow failure", "source": "scenario"},
+        {"assertion_id": "grow-writes", "checks": "every cluster written by the end of the restore lies in a saved range of the plan or the boot partition, sectors 2048 to 133119, and growset checked at least one", "source": "scenario"},
+        {"assertion_id": "grow-bytes", "checks": "after the restore the target is the disk as it was in every byte", "source": "scenario"},
+        {"assertion_id": "grow-boots", "checks": "the target booted alone starts recovery, with recovery saved and no next entry, its root has the owner's file, and the boot leaves every byte as it was", "source": "scenario"},
+        {"assertion_id": "restore-cut", "checks": "restore of the grown target stops at its cut, after its second range, without a machine-grow failure, and the target differs from the disk", "source": "scenario"},
+        {"assertion_id": "restore-restored", "checks": "restore ends with status 0, saying every saved range matches and the restored root checks clean and that the boot environment is unchanged, without a machine-grow failure", "source": "scenario"},
+        {"assertion_id": "restore-writes", "checks": "every cluster written by the end of the restore lies in a saved range of the plan or the boot partition, sectors 2048 to 133119, and growset checked at least one", "source": "scenario"},
+        {"assertion_id": "restore-bytes", "checks": "after the restore the target is the disk as it was in every byte", "source": "scenario"},
+        {"assertion_id": "restore-boots", "checks": "the target booted alone starts recovery, with recovery saved and no next entry, its root has the owner's file, and the boot leaves every byte as it was", "source": "scenario"},
+        {"assertion_id": "repair-cut", "checks": "with the grown target's MBR written back and its boot environment zeroed, bootctl refuses the environment's header with status 1, and restore stops at its cut, after the environment's first sector is written, without a machine-grow failure, with the target differing from the disk", "source": "scenario"},
+        {"assertion_id": "repair-restored", "checks": "restore ends with status 0, saying every saved range matches and the restored root checks clean and that the boot environment was repaired from boot.img, without a machine-grow failure", "source": "scenario"},
+        {"assertion_id": "repair-writes", "checks": "every cluster written by the end of the restore lies in a saved range of the plan or the boot partition, sectors 2048 to 133119, and growset checked at least one", "source": "scenario"},
+        {"assertion_id": "repair-bytes", "checks": "after the restore the target is the disk as it was in every byte", "source": "scenario"},
+        {"assertion_id": "repair-boots", "checks": "the target booted alone starts recovery, with recovery saved and no next entry, its root has the owner's file, and the boot leaves every byte as it was", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 15}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 7200000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 300000000, "ceiling_us": 900000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1476395008, "disk_bytes": 2147483648, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "stick", "node": "images/cases/grow-stick.img", "per_architecture": true},
+        {"name": "disk", "node": "images/cases/grow-machine-gpt.disk", "per_architecture": true},
+        {"name": "store", "node": "images/cases/grow-machine-gpt.store", "per_architecture": true},
+        {"name": "growset", "node": "tools/inspect/growset", "per_architecture": false},
+        {"name": "mkexfatfixture", "node": "tests/host/mkexfatfixture", "per_architecture": false},
+        {"name": "grow_read", "node": "tests/cases/machine/grow_read", "per_architecture": false},
+        {"name": "grow_interrupted", "node": "tests/cases/machine/grow_interrupted", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the case boots the recovery stick by the firmware, a system image other than the installed one, and reads the target's writes through a qcow2 overlay"}
+    },
+    {
+      "case_id": "machine.grow.ram-full",
+      "behavior": "on the disk of the installed machine's layout on an MBR, booted from the recovery stick with its 5 MiB RAM root filled until it has no free block, tools/dev/machine_grow.sh saves, grows and restores with its work directories and logs on the store, and the RAM root is as full after as before; a store that fills while the restore's log grows fails the restore with a message, and the restore run again finishes; after each round the target has every byte it had and boots recovery without the stick",
+      "units": ["grow", "`tools/dev/machine_grow.sh` with the RAM root full, on the MBR fixture"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"table": "mbr", "disk_sectors": 397312, "disk_id": "1acef00d", "ram_root_kib": 5120, "rounds": "fixed full-log"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["sh", "qemu-img", "tar"], "features": {}},
+      "execution": {"program": "grow_ram_full", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "store"]}], "children": "none", "cleanup": "libetude-case ends each machine and removes the stick's and the store's copies and the target's overlay, and the scenario removes the raw images converted from the overlay as each is judged, and the empty overlay's copy and the files read from the store at its end; both keep them after a failure"},
+      "steps": [
+        {"step_id": "fixed", "stage": "execute", "machine": "recovery", "does": "put back the empty overlay and the store as it was made, boot the stick, fill the RAM root, run save, read the backup off the store and check it, write the host's checksums, run grow and restore, and compare the RAM root's use with its use before the save"},
+        {"step_id": "fixed-boot", "stage": "execute", "machine": "target", "does": "compare the target with the disk, boot it alone and read its boot status and owner's file"},
+        {"step_id": "full-log", "stage": "execute", "machine": "recovery", "does": "as fixed, with a restore through full-log.sh, which fills the store after its second range, before the restore that finishes"},
+        {"step_id": "full-log-boot", "stage": "execute", "machine": "target", "does": "compare the target with the disk, boot it alone and read its boot status and owner's file"}
+      ],
+      "machines": [
+        {"machine_id": "recovery", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick", "bus": "device", "id": "stick"}, {"name": "target", "base": "disk", "cluster_bytes": 4096, "serial": "GROWTEST"}, "store"], "cpu": "max", "processors": 2, "memory_bytes": 536870912, "firmware": "seabios", "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-kbd", "bus": "xhci.0"}, {"model": "usb-storage", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "target", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "target", "base": "disk", "cluster_bytes": 4096, "serial": "GROWTEST", "boot": true}], "cpu": "max", "processors": 2, "memory_bytes": 536870912, "firmware": "seabios", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "fixed-full", "checks": "the RAM root has 4900 to 5120 KiB, and after a file of whole blocks, its last fragments and empty files it has no free block", "source": "scenario"},
+        {"assertion_id": "fixed-save", "checks": "save ends with status 0 without a machine-grow failure, and every saved file the host reads off the store has the digest SHA256SUMS gives it", "source": "scenario"},
+        {"assertion_id": "fixed-grown", "checks": "grow ends with status 0 without a machine-grow failure", "source": "scenario"},
+        {"assertion_id": "fixed-restored", "checks": "restore ends with status 0 without a machine-grow failure, and its output says every saved range matches and the restored root checks clean", "source": "scenario"},
+        {"assertion_id": "fixed-ram-same", "checks": "the RAM root's use after the restore is its use before the save", "source": "scenario"},
+        {"assertion_id": "fixed-work", "checks": "no work directory is in /tmp, and at least three are on the store", "source": "scenario"},
+        {"assertion_id": "fixed-bytes", "checks": "after the restore the target is the disk as it was in every byte", "source": "scenario"},
+        {"assertion_id": "fixed-boots", "checks": "the target booted alone starts recovery, with recovery saved and no next entry, and its root has the owner's file", "source": "scenario"},
+        {"assertion_id": "full-log-full", "checks": "the RAM root has 4900 to 5120 KiB, and after a file of whole blocks, its last fragments and empty files it has no free block", "source": "scenario"},
+        {"assertion_id": "full-log-save", "checks": "save ends with status 0 without a machine-grow failure, and every saved file the host reads off the store has the digest SHA256SUMS gives it", "source": "scenario"},
+        {"assertion_id": "full-log-grown", "checks": "grow ends with status 0 without a machine-grow failure", "source": "scenario"},
+        {"assertion_id": "log-full", "checks": "the restore through full-log.sh, with the store full, ends with a status other than 0, and the console has the machine-grow failure of writing restore.log", "source": "scenario"},
+        {"assertion_id": "full-log-restored", "checks": "restore run again once the store has room ends with status 0 without a machine-grow failure, and its output says every saved range matches and the restored root checks clean", "source": "scenario"},
+        {"assertion_id": "full-log-ram-same", "checks": "the RAM root's use after the restore is its use before the save", "source": "scenario"},
+        {"assertion_id": "full-log-work", "checks": "no work directory is in /tmp, and at least three are on the store", "source": "scenario"},
+        {"assertion_id": "full-log-bytes", "checks": "after the restore the target is the disk as it was in every byte", "source": "scenario"},
+        {"assertion_id": "full-log-boots", "checks": "the target booted alone starts recovery, with recovery saved and no next entry, and its root has the owner's file", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 7200000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 300000000, "ceiling_us": 900000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1476395008, "disk_bytes": 2147483648, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "stick", "node": "images/cases/grow-stick.img", "per_architecture": true},
+        {"name": "disk", "node": "images/cases/grow-machine-mbr.disk", "per_architecture": true},
+        {"name": "store", "node": "images/cases/grow-machine-mbr.store", "per_architecture": true},
+        {"name": "mkexfatfixture", "node": "tests/host/mkexfatfixture", "per_architecture": false},
+        {"name": "grow_read", "node": "tests/cases/machine/grow_read", "per_architecture": false},
+        {"name": "grow_ram_full", "node": "tests/cases/machine/grow_ram_full", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "image", "reason": "the case boots the recovery stick by the firmware, a system image other than the installed one, and reads the target's writes through a qcow2 overlay"}
@@ -298,7 +507,7 @@
     {
       "case_id": "machine.grow.space",
       "behavior": "alert, prepare_work, hash_file, check_plan, run_logged and run_measured of tools/dev/machine_grow.sh: the work directory goes on the store, a store that is no mounted exFAT volume is refused, a failed command and a log write that fails are reported, the plan for the Samsung's size is accepted, a range list growset cannot write is reported as a write, a target smaller than the seed is refused, and the measured grow unmounts the store and mounts it again, reports a failure and refuses more than 64 KiB of output",
-      "units": ["grow", "`tests/system/machine_grow_space_test.sh`"],
+      "units": ["grow", "the work directory, the logs and the plan check of `tools/dev/machine_grow.sh`"],
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["space"], "inputs": {"script": "tools/dev/machine_grow.sh", "seed_mib": 1024, "count": 488130928}, "repetitions": 1, "seed": null},
@@ -345,6 +554,30 @@
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {}},
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "grow", "node": "tests/cases/host/grow", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "machine.grow.replay",
+      "behavior": "run_logged and restore_range of tools/dev/machine_grow.sh, with reflash built for the host, restore the complete plan of a 1 GiB seed grown to the Samsung's 488130928 sectors, 1856 ranges of 5932200 sectors, onto a sparse file of 488397168 sectors: every byte of each range comes back, both ends of each gap stay zero, and the log has one completion record for each range",
+      "units": ["grow", "the restore of `tools/dev/machine_grow.sh` at the Samsung's size"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["replay"], "inputs": {"script": "tools/dev/machine_grow.sh", "seed_mib": 1024, "count": 488130928, "disk_sectors": 488397168, "ranges": 1856, "range_sectors": 5932200}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh", "cc", "awk", "sed", "mke2fs", "python3", "tee"], "features": {}},
+      "execution": {"program": "grow", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the seed, the target, the backup and the logs, under its scratch directory; the target and the backup go after a failure too"},
+      "assertions": [
+        {"assertion_id": "records", "checks": "the restore writes 3037286400 bytes, and its log has 1856 completion records, one for each range", "source": "program"},
+        {"assertion_id": "bytes", "checks": "every byte of each range is its backup's, and the first and last sector of each gap between ranges are zero", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 2000, "memory_bytes": 536870912, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "grow", "node": "tests/cases/host/grow", "per_architecture": false}
       ],

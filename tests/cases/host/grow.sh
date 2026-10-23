@@ -16,8 +16,11 @@
 #            script, through its own functions.
 #   memory   growroot built for the host with a requirement no machine
 #            meets, which must refuse the grow by name.
+#   replay   the restore of the complete range plan for the Samsung disk,
+#            through the script's run_logged and restore_range, on a sparse
+#            file of that disk's size.
 #
-# check, boot and space each copy the functions they test out of
+# check, boot, space and replay each copy the functions they test out of
 # tools/dev/machine_grow.sh and replace only the guest's paths and the disk's
 # reads and writes, so the decisions tested are the script's own.
 #
@@ -723,6 +726,138 @@ case_memory() {
     judge refused "growroot said: $(head -1 "$W/memory.log")" [ "$?" = 0 ]
 }
 
+# growset plans the ranges that a 1 GiB seed grown to 488130928 sectors at
+# LBA 266240 writes: 1856 ranges of 5932200 sectors in all. Each range of the
+# target, a sparse file of the Samsung's 488397168 sectors, is filled with
+# 0xa5 and its backup with a pattern of its own, and restore_range puts the
+# backup back a range at a time through reflash built here, as the restore
+# does. Every byte must come back, both ends of each gap must stay zero, and
+# the log must have one completion record for each range.
+case_replay() {
+    _ids="records bytes"
+    # shellcheck disable=SC2086
+    if ! cp "$SCRIPT" "$W/source.sh"; then
+        broken "cannot read $SCRIPT" $_ids
+        return
+    fi
+    # shellcheck disable=SC2086
+    if ! cc -O2 -Wall -Wextra -o "$W/growset" tools/inspect/growset.c > "$W/cc.log" 2>&1 ||
+        ! cc -O2 -Wall -Wextra -I utils -o "$W/reflash" utils/reflash.c utils/sectorcopy.c \
+            utils/sha256.c >> "$W/cc.log" 2>&1; then
+        broken "growset or reflash does not build on the host; see $W/cc.log" $_ids
+        return
+    fi
+    # shellcheck disable=SC2086
+    if ! dd if=/dev/zero of="$W/seed.ext2" bs=1048576 count=0 seek=1024 2>"$W/seed.log" ||
+        ! E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -g 32768 -I 128 \
+            -O sparse_super,large_file,filetype,resize_inode,^dir_index,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize \
+            "$W/seed.ext2" > "$W/mkfs.log" 2>&1 ||
+        ! "$W/growset" --save --ranges --lba 266240 "$W/seed.ext2" 488130928 > "$W/ranges.txt"; then
+        broken "the seed or its ranges cannot be made; see $W/mkfs.log" $_ids
+        return
+    fi
+    rm -f "$W/seed.ext2"
+    cat > "$W/fill.py" <<'EOF'
+import pathlib
+import struct
+import sys
+p = pathlib.Path(sys.argv[1])
+ranges = [tuple(map(int, r.split())) for r in (p / 'ranges.txt').read_text().splitlines()]
+assert len(ranges) == 1856, len(ranges)
+assert sum(n for _, n in ranges) == 5932200
+with (p / 'backup.bin').open('wb') as backup, (p / 'target').open('w+b') as target:
+    target.truncate(488397168 * 512)
+    for first, length in ranges:
+        data = struct.pack('<QQ', first, length) * 65536
+        target.seek(first * 512)
+        left = length * 512
+        while left:
+            n = min(left, len(data))
+            backup.write(data[:n])
+            target.write(b'\xa5' * n)
+            left -= n
+EOF
+    cat > "$W/judge.py" <<'EOF'
+import pathlib
+import struct
+import sys
+p = pathlib.Path(sys.argv[1])
+ranges = [tuple(map(int, r.split())) for r in (p / 'ranges.txt').read_text().splitlines()]
+with (p / 'target').open('rb') as target:
+    for first, length in ranges:
+        data = struct.pack('<QQ', first, length) * 65536
+        target.seek(first * 512)
+        left = length * 512
+        while left:
+            n = min(left, len(data))
+            if target.read(n) != data[:n]:
+                sys.exit('range %d+%d differs %d bytes before its end' % (first, length, left))
+            left -= n
+    for (first, length), (following, _) in zip(ranges, ranges[1:]):
+        if first + length < following:
+            for sector in (first + length, following - 1):
+                target.seek(sector * 512)
+                if target.read(512) != bytes(512):
+                    sys.exit('sector %d of a gap is not zero' % sector)
+EOF
+    # A dd that reads by bytes, GNU dd's iflag=skip_bytes,count_bytes, is
+    # the only adapter besides the native reflash: gdd, the host's dd, or a
+    # bounded reader in Python.
+    cat > "$W/read.py" <<'EOF'
+import sys
+args = dict(arg.split('=', 1) for arg in sys.argv[1:])
+with open(args['if'], 'rb') as src:
+    src.seek(int(args['skip']))
+    left = int(args['count'])
+    while left:
+        data = src.read(min(left, 1048576))
+        if not data:
+            sys.exit(1)
+        sys.stdout.buffer.write(data)
+        left -= len(data)
+EOF
+    if command -v gdd > /dev/null 2>&1; then
+        GROW_DD=gdd
+    elif dd --version > /dev/null 2>&1; then
+        GROW_DD='dd'
+    else
+        GROW_DD=python
+    fi
+    export GROW_DD
+    extract 'run_logged|restore_range' "$W/functions.sh" -e ''
+    cat > "$W/rows.sh" <<'EOF'
+dd() {
+    if [ "$GROW_DD" = python ]; then python3 "$W/read.py" "$@"; else command "$GROW_DD" "$@"; fi
+}
+reflash() { "$W/reflash" "$@"; }
+. "$W/functions.sh"
+python3 "$W/fill.py" "$W" || fail 'the target and its backup cannot be made'
+work=$W
+saved=$W
+disk="$W/target"
+offset=0
+begin records
+while read -r first length; do
+    amount=$((length * 512))
+    run_logged restore.log restore_range
+    offset=$((offset + amount))
+done < "$W/ranges.txt"
+[ "$offset" = 3037286400 ] || fail "the restore wrote $offset bytes, not 3037286400"
+records=$(wc -l < "$W/restore.log" | tr -d ' ')
+[ "$records" = 1856 ] || fail "the log has $records completion records, not 1856"
+passed records
+begin bytes
+python3 "$W/judge.py" "$W" 2> "$W/judge.log" || fail "$(tail -1 "$W/judge.log")"
+passed bytes
+EOF
+    rows_run replay "$W/rows.sh"
+    rm -f "$W/target" "$W/backup.bin"
+    for _id in $_ids; do
+        _why=$(row_result replay "$_id")
+        judge "$_id" "$_why" [ -z "$_why" ]
+    done
+}
+
 # ---- The run. ----
 
 ID=machine.grow.$CASE
@@ -731,7 +866,7 @@ if [ -n "${ETUDE_CASE:-}" ] && [ "$ETUDE_CASE" != "$ID" ]; then
     exit 2
 fi
 case "$CASE" in
-    measure | check | boot | space | memory) ;;
+    measure | check | boot | space | memory | replay) ;;
     *) echo "grow: no case $CASE" >&2; exit 2 ;;
 esac
 record "begin $ID"

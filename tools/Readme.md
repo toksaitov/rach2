@@ -391,7 +391,7 @@ SEED is a clean ext2 root such as `build/images/rach2-metal-disk.ext2`. DISK-ID 
 
 STORE is an exFAT volume on another disk with the seed as `seed.ext2`; each action logs to a new `machine-grow.*` directory there, and recomputes the ranges before it writes. `save` copies the ranges and the 64 MiB boot partition to `STORE/saved`; check its `SHA256SUMS` on the host and return that file as `saved/host.sha256`, which `grow` and `restore` require. `grow` unmounts the store while it measures, so close every file on it first. `restore` puts everything back, repeatable after an interruption or power loss.
 
-The install stick's 256 MiB of free space is too little for a full grow. Build the grow's stick with [mkinstallstick.sh](image/mkinstallstick.sh), a tar of the plan as EXTRA, and room for the seed and the saved copy as FREE-MIB, at most 8192; the builder makes the whole volume in host memory. `tests/run grow` rehearses the procedure on a 64 MiB root, on an MBR and on a GUID table, and with `RACH2_GROW_SMALL=1` also its interruptions and a full RAM root; run that before a large build.
+The install stick's 256 MiB of free space is too little for a full grow. Build the grow's stick with [mkinstallstick.sh](image/mkinstallstick.sh), a tar of the plan as EXTRA, and room for the seed and the saved copy as FREE-MIB, at most 8192; the builder makes the whole volume in host memory. `tests/run grow` rehearses the procedure on a 64 MiB root, on an MBR and on a GUID table, with each action cut part way and run again, and with a full RAM root; run that before a large build.
 
 ## Building
 

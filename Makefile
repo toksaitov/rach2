@@ -866,9 +866,11 @@ build/tests/cases/machine/clockpeer: tests/cases/machine/clockpeer.c
 # console, each linked with the console driver, drive.c, and the code that
 # the scenarios of each suite share, lib_SUITE.c.
 CONSOLE_SCENARIOS = build/tests/cases/machine/grow_entry_at_end \
+                    build/tests/cases/machine/grow_interrupted \
                     build/tests/cases/machine/grow_machine_gpt \
                     build/tests/cases/machine/grow_machine_mbr \
                     build/tests/cases/machine/grow_measured \
+                    build/tests/cases/machine/grow_ram_full \
                     build/tests/cases/machine/installer_alone \
                     build/tests/cases/machine/installer_install \
                     build/tests/cases/machine/installer_mounted \

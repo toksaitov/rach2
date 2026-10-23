@@ -23,8 +23,9 @@
 #       the 8 MiB seed and grow-tools.tar, the plan that
 #       tools/dev/machine_grow_plan.sh makes for TARGET's geometry with the
 #       recovery programs of the architecture RACH2_ARCH names, and
-#       grow-tests.tar, the faults of the plan the manual runs of the grow
-#       inject (tests/system/grow_machine.sh with RACH2_GROW_SMALL=1).
+#       grow-tests.tar, the copies of the script and the plan with faults in
+#       them that the cases machine.grow.interrupted-* and
+#       machine.grow.ram-full run.
 #
 # Usage: grow_fixture.sh KIND ARGS..., from the root of a built tree. The
 # file is written beside OUT and renamed to it once it is whole; the
@@ -178,7 +179,29 @@ case "$kind" in
         # checksum is made.
         awk '/    sync$/ && !done {print "    printf x | dd of=\"$saved/boot.img\" bs=1 seek=67108863 conv=notrunc"; done=1} {print}' \
             "$parts/plan/machine_grow.sh" > "$parts/plan/corrupt-boot.sh"
-        tar -C "$parts/plan" -cf "$parts/grow-tests.tar" machine-cut.sh bad-ranges.txt corrupt-boot.sh
+        # full-log.sh fills the store after the first range it restores,
+        # with the restore's log ending on a cluster boundary, so that the
+        # next completion record needs a new cluster.
+        awk '
+            /run_logged restore.log restore_range/ {
+                print "            if [ \"$row\" = 2 ]; then"
+                print "                dd if=/dev/zero of=\"$work/restore.log\" bs=1048576 count=1 || fail fixture"
+                print "                capture=$(wc -c < \"$store/failed.capture\")"
+                print "                dd if=/dev/zero bs=1048576 count=\"$((1048576 - capture % 1048576))\" iflag=count_bytes 2>/dev/null || fail fixture"
+                print "                rm -f \"$work/command.status\" \"$work/restore-read.status\" || fail fixture"
+                print "                dd if=/dev/zero of=\"$store/full.fixture\" bs=1048576 2>/dev/null || :"
+                print "                dd if=/dev/zero bs=512 2>/dev/null >>\"$store/full.fixture\" || :"
+                print "                df -k \"$store\" | awk \"NR == 2 {exit !(\\\$4 == 0)}\" || fail fixture-space"
+                print "            fi"
+            }
+            { print }
+        ' "$parts/plan/machine_grow.sh" > "$parts/plan/full-log.sh"
+        for script in corrupt-boot.sh full-log.sh; do
+            sh -n "$parts/plan/$script"
+        done
+        grep -q 'fixture-space' "$parts/plan/full-log.sh" || fail 'missing the full store injection'
+        tar -C "$parts/plan" -cf "$parts/grow-tests.tar" machine-cut.sh bad-ranges.txt corrupt-boot.sh \
+            full-log.sh
         "$mkexfat" --make "$parts/store.vol" --sectors 262144 --offset 2048 \
             --add "seed.ext2=$parts/seed.ext2" --add "grow-tools.tar=$parts/grow-tools.tar" \
             --add "grow-tests.tar=$parts/grow-tests.tar" > "$parts/store.make.log"

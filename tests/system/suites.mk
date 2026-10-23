@@ -1451,9 +1451,11 @@ $(BUS_ROOTS): $(ARCH_CASE_DIR)/bus/%.disk: krffs/manifests/disk-test.manifest \
 # writes checked against the grow set, a grow stopped in resize2fs and
 # finished, one whose entry is already at the end, and the memory it needs;
 # the machine's save, grow and restore on a small root, on an MBR and on a
-# GUID table; and on the host, the grow script's checks and its measures'
-# checker. They are the cases of tests/cases/machine.grow.json, which etude
-# runs, and have no target here.
+# GUID table, each also cut at a completed transfer and run again, and with
+# the recovery system's RAM root full; and on the host, the grow script's
+# checks, its restore at the Samsung's size and its measures' checker. They
+# are the cases of tests/cases/machine.grow.json, which etude runs, and have
+# no target here.
 # `tests/run queue`: real AHCI reads, interrupts and fallback root faults
 # beside raw reads; controlled host models test deadlines. It is the cases of
 # tests/cases/guest.queue.json, which etude runs, and has no target here.

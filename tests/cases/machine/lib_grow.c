@@ -11,14 +11,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "lib_grow.h"
 
-/* The installed machine's boot partition, sectors 2048 to 133119, whose
- * environment the grow writes beside the seed. */
-#define BOOT_FIRST 2048
-#define BOOT_END   133120
+/* The end of the installed machine's boot partition, which starts at
+ * GROW_BOOT_FIRST. */
+#define BOOT_END 133120
 
 int grow_boot(struct drive *d, struct etude_case *c, const char *machine, const char *const disks[],
               const char *prompt)
@@ -167,16 +167,34 @@ int grow_console_has(const struct drive *d, const char *text)
     return has;
 }
 
-/* The files grow_made noted, and the assertions that failed. */
+/* The files grow_made noted, the assertions reported, and the number of
+ * them that failed. */
 static char *made_files[32];
 static size_t made_count;
+static char *reported[64];
+static size_t reported_count;
 static int failures;
 
 void grow_assert(struct etude_case *c, const char *id, int held, const char *detail)
 {
     if (!held)
         failures++;
+    if (reported_count < sizeof(reported) / sizeof(reported[0]) &&
+        (reported[reported_count] = strdup(id)) != NULL)
+        reported_count++;
     etude_assert(c, id, held, detail);
+}
+
+void grow_fail_rest(struct etude_case *c, const char *const ids[], const char *why)
+{
+    size_t i;
+
+    for (; *ids != NULL; ids++) {
+        for (i = 0; i < reported_count && strcmp(reported[i], *ids) != 0; i++)
+            ;
+        if (i == reported_count)
+            grow_assert(c, *ids, 0, why);
+    }
 }
 
 void grow_made(const char *path)
@@ -251,6 +269,15 @@ int grow_copy_range(const char *from, uint64_t off, uint64_t len, const char *to
 done:
     close(in);
     return close(out) == 0 && ok ? 0 : -1;
+}
+
+int grow_copy_file(const char *from, const char *to)
+{
+    struct stat st;
+
+    if (from == NULL || stat(from, &st) != 0)
+        return -1;
+    return grow_copy_range(from, 0, (uint64_t)st.st_size, to);
 }
 
 int grow_write_text(const char *path, const char *text)
@@ -329,6 +356,33 @@ done:
     return same;
 }
 
+int grow_raw_same(struct etude_case *c, const char *name, uint64_t env, char *why, size_t size)
+{
+    const char *disk = etude_private_copy(c, "target"), *base = etude_artifact(c, "disk");
+    char raw_name[64], out_name[64], raw[1024];
+    int same;
+
+    snprintf(raw_name, sizeof(raw_name), "%s.raw", name);
+    snprintf(out_name, sizeof(out_name), "%s.convert", name);
+    if (grow_evidence(c, raw_name, raw, sizeof(raw)) == NULL) {
+        snprintf(why, size, "no evidence %s", raw_name);
+        return 0;
+    }
+    {
+        char *const argv[] = {"qemu-img", "convert",    "-f", "qcow2", "-O",
+                              "raw",      (char *)disk, raw,  NULL};
+
+        if (drive_host(c, argv, out_name) != 0) {
+            snprintf(why, size, "qemu-img could not convert the target to %s", raw_name);
+            return 0;
+        }
+    }
+    same = grow_same(base, raw, env, env != 0 ? 1024 : 0, why, size);
+    if (same)
+        unlink(raw);
+    return same;
+}
+
 int grow_writes_inside(struct etude_case *c, const char *name, const char *disk, const char *seed,
                        const char *ranges, char *why, size_t size)
 {
@@ -379,7 +433,7 @@ int grow_writes_inside(struct etude_case *c, const char *name, const char *disk,
             continue;
         if (sscanf(line, "outside %llu %llu", &a, &n) != 2)
             continue;
-        covered = a >= BOOT_FIRST && a + n <= BOOT_END;
+        covered = a >= GROW_BOOT_FIRST && a + n <= BOOT_END;
         for (k = 0; k < count && !covered; k++)
             covered = a >= first[k] && a + n <= end[k];
         if (!covered && inside) {
@@ -405,20 +459,18 @@ int grow_writes_inside(struct etude_case *c, const char *name, const char *disk,
 
 /* The files that `save` writes under the store's saved/, which the host reads
  * back. */
-static const char *const saved_files[] = {"backup.bin", "boot.img",   "grow.plan",
-                                          "ranges.txt", "SHA256SUMS", "boot.status"};
+static const char *const saved_files[] = {"backup.bin", "boot.img",    "grow.plan", "ranges.txt",
+                                          "SHA256SUMS", "boot.status", NULL};
 
-/**
- * Boot the recovery stick with the target and the store, mount the store and
- * unpack the plan from it, as each boot of grow_machine begins.
- */
-static void machine_boot(struct drive *d, struct etude_case *c)
+void grow_recovery_boot(struct drive *d, struct etude_case *c, const char *mount)
 {
     grow_boot(d, c, "recovery", NULL, "# ");
-    grow_run(d, "test ! -e /tmp/grow-plan && mkdir -p /mnt/grow /tmp/grow-plan && "
-                "mount -t exfat /dev/disk1p1 /mnt/grow && "
-                "tar -C /tmp/grow-plan -xf /mnt/grow/grow-tools.tar && "
-                "tar -C /tmp/grow-plan -xf /mnt/grow/grow-tests.tar");
+    grow_run(d,
+             "test ! -e /tmp/grow-plan && mkdir -p /mnt/grow /tmp/grow-plan && "
+             "mount %s -t exfat /dev/disk1p1 /mnt/grow && "
+             "tar -C /tmp/grow-plan -xf /mnt/grow/grow-tools.tar && "
+             "tar -C /tmp/grow-plan -xf /mnt/grow/grow-tests.tar",
+             mount);
 }
 
 /** Say why the boot of `d` failed, or that the command ended with `status`. */
@@ -471,12 +523,9 @@ static int sums_form(const char *sums, char *why, size_t wsize)
     return lines > 0;
 }
 
-/**
- * Write the checksums `sums`, which sums_form accepted, as the store's
- * saved/host.sha256 in the machine of `d`, a line typed for each, since the
- * shell takes typed lines of at most 255 bytes.
- */
-static void type_sums(struct drive *d, const char *sums)
+/* The checksums are typed a line for each, since the shell takes typed lines
+ * of at most 255 bytes. */
+void grow_type_sums(struct drive *d, const char *sums)
 {
     char hex[80], file[64];
     const char *line, *eol;
@@ -489,44 +538,54 @@ static void type_sums(struct drive *d, const char *sums)
     }
 }
 
-/**
- * Check each file that `sums` lists against its digest, reading it as the
- * evidence `saved-NAME`, as `shasum -c` would.
- *
- * @return 1 when every file has its digest, 0 otherwise.
- */
-static int sums_hold(struct etude_case *c, const char *sums, char *why, size_t size)
+int grow_sums_hold(struct etude_case *c, const char *sums, const char *prefix, char *why,
+                   size_t size)
 {
     char hex[80], file[64], ev[96], got[65];
     const char *line, *eol;
-    int lines = 0;
 
+    if (!sums_form(sums, why, size))
+        return 0;
     for (line = sums; line != NULL && *line != '\0'; line = eol != NULL ? eol + 1 : NULL) {
         eol = strchr(line, '\n');
         if (sscanf(line, "%79s %63s", hex, file) != 2)
             continue;
-        snprintf(ev, sizeof(ev), "saved-%s", file);
+        snprintf(ev, sizeof(ev), "%s%s", prefix, file);
         if (file_digest(etude_evidence(c, ev), 0, UINT64_MAX, got) != 0 || strcmp(got, hex) != 0) {
             snprintf(why, size, "the host's copy of saved/%s does not have its saved checksum",
                      file);
             return 0;
         }
-        lines++;
     }
-    if (lines == 0)
-        snprintf(why, size, "the saved checksums are empty");
-    return lines > 0;
+    return 1;
 }
 
-/**
- * Find the boot environment's sector in the boot partition from the saved
- * bootctl status, `status`: its `grubenv:` line names one cluster on an MBR
- * disk's boot partition, or two of one sector, which growboot has found
- * consecutive, on a GUID table's, of 1024 bytes.
- *
- * @return the sector, or -1 when no line or more than one names it.
- */
-static long env_sector(const char *status)
+int grow_read_saved(struct etude_case *c, const char *store, const char *prefix,
+                    const char *const names[])
+{
+    char *argv[16], path[1024], ev[96], out[96], files[8][32];
+    size_t i, n = 0;
+
+    if (names == NULL)
+        names = saved_files;
+    if (grow_evidence(c, prefix, path, sizeof(path)) == NULL)
+        return -1;
+    argv[n++] = "grow_read";
+    argv[n++] = (char *)etude_artifact(c, "mkexfatfixture");
+    argv[n++] = (char *)store;
+    argv[n++] = path;
+    for (i = 0; names[i] != NULL && i < 8; i++) {
+        snprintf(files[i], sizeof(files[i]), "saved/%s", names[i]);
+        argv[n++] = files[i];
+        snprintf(ev, sizeof(ev), "%s%s", prefix, names[i]);
+        grow_made(etude_evidence(c, ev));
+    }
+    argv[n] = NULL;
+    snprintf(out, sizeof(out), "%sread.out", prefix);
+    return argv[1] != NULL && drive_host(c, argv, out) == 0 ? 0 : -1;
+}
+
+long grow_env_sector(const char *status)
 {
     char f[16][64], *p;
     const char *line, *eol;
@@ -553,16 +612,64 @@ static long env_sector(const char *status)
     return sector;
 }
 
-/** Note for grow_clean the host's copies of the saved files, `saved-NAME`. */
-static void note_saved(struct etude_case *c)
+int grow_read_plan(struct etude_case *c, char *seed, size_t size)
 {
-    char ev[96], path[1024];
-    size_t i;
+    char plan[1024], tools[1024];
 
-    for (i = 0; i < sizeof(saved_files) / sizeof(saved_files[0]); i++) {
-        snprintf(ev, sizeof(ev), "saved-%s", saved_files[i]);
-        grow_made(grow_evidence(c, ev, path, sizeof(path)));
+    if (grow_evidence(c, "plan-seed.ext2", seed, size) == NULL ||
+        grow_evidence(c, "plan-", plan, sizeof(plan)) == NULL ||
+        grow_evidence(c, "plan-grow-tools.tar", tools, sizeof(tools)) == NULL)
+        return -1;
+    grow_made(seed);
+    grow_made(tools);
+    {
+        char *const plan_argv[] = {"grow_read",
+                                   (char *)etude_artifact(c, "mkexfatfixture"),
+                                   (char *)etude_artifact(c, "store"),
+                                   plan,
+                                   "seed.ext2",
+                                   "grow-tools.tar",
+                                   NULL};
+        char *const ranges_argv[] = {"tar", "-xOf", tools, "ranges.txt", NULL};
+
+        return drive_host(c, plan_argv, "plan-read.out") == 0 &&
+                       drive_host(c, ranges_argv, "plan-ranges.txt") == 0
+                   ? 0
+                   : -1;
     }
+}
+
+int grow_target_boots(struct etude_case *c, char *why, size_t size)
+{
+    char *cmdline = NULL, *owner = NULL;
+    struct drive d;
+    int st, owner_st, ok;
+
+    grow_boot(&d, c, "target", NULL, "# ");
+    st = grow_shell(&d, "BOOTED", &cmdline,
+                    "cat /proc/cmdline; bootctl --target /dev/disk0p1 status");
+    owner_st = grow_shell(&d, "OWNER", &owner,
+                          "mkdir -p /mnt/root && mount -t ext2 -o ro /dev/disk0p3 /mnt/root && "
+                          "cat /mnt/root/owner.txt && umount /mnt/root");
+    drive_stop(&d);
+    if (d.failed) {
+        snprintf(why, size, "%s", d.why);
+        ok = 0;
+    } else if (st != 0 || strstr(cmdline, "rach2.slot=recovery") == NULL ||
+               strstr(cmdline, "bootctl: saved_entry: recovery") == NULL ||
+               strstr(cmdline, "bootctl: next_entry: absent") == NULL) {
+        snprintf(why, size,
+                 "the target did not start recovery with recovery saved and no next entry");
+        ok = 0;
+    } else if (owner_st != 0 || strstr(owner, "preserve the installed root") == NULL) {
+        snprintf(why, size, "the target's root has no owner's file");
+        ok = 0;
+    } else {
+        ok = 1;
+    }
+    free(cmdline);
+    free(owner);
+    return ok;
 }
 
 void grow_fail_all(struct etude_case *c, const char *const ids[], const char *why)
@@ -573,16 +680,13 @@ void grow_fail_all(struct etude_case *c, const char *const ids[], const char *wh
 
 int grow_machine(struct etude_case *c)
 {
-    static const char *const from_saved[] = {"save-unchanged", "sums-form", "host-copy",
-                                             "boot-copy", NULL};
     static const char *const after_save[] = {"grown",       "small-seed", "measured",
                                              "grow-writes", "restored",   "restore-writes",
                                              "env-found",   "bytes",      NULL};
-    const char *base = etude_artifact(c, "disk"), *store_image = etude_artifact(c, "store");
-    const char *program = etude_artifact(c, "mkexfatfixture");
+    const char *base = etude_artifact(c, "disk");
     const char *target, *store;
     char why[300], buf[200], hb[65], hs[65], *out = NULL, *sums = NULL, *status = NULL;
-    char seed[1024], raw[1024], plan[1024], tools[1024], saved[1024];
+    char seed[1024];
     int saved_st, refused_st, grow_st, restore_st, plan_ok, read_ok, form_ok, ok;
     struct drive d;
     long env;
@@ -591,7 +695,7 @@ int grow_machine(struct etude_case *c)
         return 1;
     target = etude_private_copy(c, "target");
     store = etude_private_copy(c, "store");
-    machine_boot(&d, c);
+    grow_recovery_boot(&d, c, "");
     saved_st =
         grow_shell(&d, "SAVED", NULL,
                    "sh /tmp/grow-plan/machine_grow.sh save /dev/disk0 /mnt/grow /tmp/grow-plan");
@@ -614,61 +718,15 @@ int grow_machine(struct etude_case *c)
 
     if (etude_step(c, "saved") != ETUDE_OK)
         return 1;
-    if (grow_evidence(c, "plan-seed.ext2", seed, sizeof(seed)) == NULL ||
-        grow_evidence(c, "plan-", plan, sizeof(plan)) == NULL ||
-        grow_evidence(c, "plan-grow-tools.tar", tools, sizeof(tools)) == NULL ||
-        grow_evidence(c, "saved-", saved, sizeof(saved)) == NULL) {
-        grow_fail_all(c, from_saved, "the evidence's paths are too long");
-        grow_fail_all(c, after_save, "the evidence's paths are too long");
-        return 1;
-    }
-    grow_made(seed);
-    grow_made(tools);
-    note_saved(c);
-    {
-        char *const argv[] = {"qemu-img",
-                              "convert",
-                              "-f",
-                              "qcow2",
-                              "-O",
-                              "raw",
-                              (char *)target,
-                              grow_evidence(c, "after-save.raw", raw, sizeof(raw)),
-                              NULL};
-
-        grow_made(argv[7]);
-        if (argv[7] == NULL || drive_host(c, argv, "after-save.out") != 0)
-            snprintf(why, sizeof(why), "qemu-img could not convert the target");
-        else
-            grow_same(base, raw, 0, 0, why, sizeof(why));
-        grow_assert(c, "save-unchanged", why[0] == '\0', why);
-    }
-    {
-        char *const plan_argv[] = {"grow_read", (char *)program, (char *)store_image,
-                                   plan,        "seed.ext2",     "grow-tools.tar",
-                                   NULL};
-        char *const ranges_argv[] = {"tar", "-xOf", tools, "ranges.txt", NULL};
-        char *const saved_argv[] = {"grow_read",
-                                    (char *)program,
-                                    (char *)store,
-                                    saved,
-                                    "saved/backup.bin",
-                                    "saved/boot.img",
-                                    "saved/grow.plan",
-                                    "saved/ranges.txt",
-                                    "saved/SHA256SUMS",
-                                    "saved/boot.status",
-                                    NULL};
-
-        plan_ok = drive_host(c, plan_argv, "plan-read.out") == 0 &&
-                  drive_host(c, ranges_argv, "plan-ranges.txt") == 0;
-        read_ok = drive_host(c, saved_argv, "saved-read.out") == 0;
-    }
+    ok = grow_raw_same(c, "after-save", 0, why, sizeof(why));
+    grow_assert(c, "save-unchanged", ok, why);
+    plan_ok = grow_read_plan(c, seed, sizeof(seed)) == 0;
+    read_ok = grow_read_saved(c, store, "saved-", NULL) == 0;
     sums = read_ok ? evidence_text(c, "saved-SHA256SUMS") : NULL;
     form_ok = sums != NULL && sums_form(sums, why, sizeof(why));
     grow_assert(c, "sums-form", form_ok,
                 sums == NULL ? "the saved files cannot be read on the host" : why);
-    ok = sums != NULL && sums_hold(c, sums, why, sizeof(why));
+    ok = sums != NULL && grow_sums_hold(c, sums, "saved-", why, sizeof(why));
     grow_assert(c, "host-copy", ok,
                 sums == NULL ? "the saved files cannot be read on the host" : why);
     ok = read_ok && file_digest(base, 1048576, 67108864, hb) == 0 &&
@@ -685,8 +743,8 @@ int grow_machine(struct etude_case *c)
 
     if (etude_step(c, "grow") != ETUDE_OK)
         return 1;
-    machine_boot(&d, c);
-    type_sums(&d, sums);
+    grow_recovery_boot(&d, c, "");
+    grow_type_sums(&d, sums);
     free(sums);
     grow_st =
         grow_shell(&d, "FINISHED", &out,
@@ -722,7 +780,7 @@ int grow_machine(struct etude_case *c)
 
     if (etude_step(c, "restore") != ETUDE_OK)
         return 1;
-    machine_boot(&d, c);
+    grow_recovery_boot(&d, c, "");
     restore_st =
         grow_shell(&d, "RESTORED", &out,
                    "sh /tmp/grow-plan/machine_grow.sh restore /dev/disk0 /mnt/grow /tmp/grow-plan");
@@ -747,30 +805,18 @@ int grow_machine(struct etude_case *c)
     grow_assert(c, "restore-writes", plan_ok && ok,
                 plan_ok ? why : "the plan cannot be read from the store");
     status = read_ok ? evidence_text(c, "saved-boot.status") : NULL;
-    env = status != NULL ? env_sector(status) : -1;
+    env = status != NULL ? grow_env_sector(status) : -1;
     free(status);
     grow_assert(c, "env-found", env >= 0,
                 "the saved boot status puts the environment in no two consecutive sectors");
-    {
-        char *const argv[] = {"qemu-img",
-                              "convert",
-                              "-f",
-                              "qcow2",
-                              "-O",
-                              "raw",
-                              (char *)target,
-                              grow_evidence(c, "restored.raw", raw, sizeof(raw)),
-                              NULL};
-
-        grow_made(argv[7]);
-        if (env < 0)
-            snprintf(why, sizeof(why), "the environment's sector is not known");
-        else if (argv[7] == NULL || drive_host(c, argv, "restored.out") != 0)
-            snprintf(why, sizeof(why), "qemu-img could not convert the target");
-        else
-            grow_same(base, raw, (uint64_t)(BOOT_FIRST + env) * 512, 1024, why, sizeof(why));
-        grow_assert(c, "bytes", why[0] == '\0', why);
+    if (env < 0) {
+        snprintf(why, sizeof(why), "the environment's sector is not known");
+        ok = 0;
+    } else {
+        ok =
+            grow_raw_same(c, "restored", (uint64_t)(GROW_BOOT_FIRST + env) * 512, why, sizeof(why));
     }
+    grow_assert(c, "bytes", ok, why);
     grow_clean();
     return 0;
 }
