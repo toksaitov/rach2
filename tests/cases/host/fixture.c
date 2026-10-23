@@ -1,7 +1,7 @@
 /* fixture.c: private files, child groups and complete command evidence. */
 #define _DARWIN_C_SOURCE 1
-#define _DEFAULT_SOURCE 1
-#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE  1
+#define _POSIX_C_SOURCE  200809L
 #include "fixture.h"
 #include <dirent.h>
 #include <errno.h>
@@ -339,8 +339,9 @@ void fx_pause(void)
     nanosleep(&t, NULL);
 }
 int fx_start_io(struct fixture *f, struct fx_child *p, const char *const args[], const char *cwd,
-                const char *const env[], const char *input, const char *output)
+                const char *const env[], const struct fx_io *io)
 {
+    const char *input = io ? io->input : NULL, *output = io ? io->output : NULL;
     int i;
     pid_t child;
     interrupted();
@@ -391,7 +392,8 @@ int fx_start_io(struct fixture *f, struct fx_child *p, const char *const args[],
 int fx_start(struct fixture *f, struct fx_child *p, const char *const a[], const char *cwd,
              const char *const env[], const char *input)
 {
-    return fx_start_io(f, p, a, cwd, env, input, NULL);
+    struct fx_io io = {input, NULL};
+    return fx_start_io(f, p, a, cwd, env, &io);
 }
 int fx_poll(struct fx_child *p)
 {

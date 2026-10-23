@@ -189,10 +189,12 @@ int flow_agents_guest(struct fixture *f)
                 return 0;
         if (i == 4)
             fx_env("GUEST_TEST_MARK", flow_path(f, "mark"));
-        if (!fx_start_io(f, &p, a, f->work, NULL,
-                         i == 0 || i == 3 || i == 5 ? flow_path(f, "input") : NULL,
-                         i == 5 ? flow_path(f, "output") : NULL))
-            return 0;
+        {
+            struct fx_io io = {i == 0 || i == 3 || i == 5 ? flow_path(f, "input") : NULL,
+                               i == 5 ? flow_path(f, "output") : NULL};
+            if (!fx_start_io(f, &p, a, f->work, NULL, &io))
+                return 0;
+        }
         fx_env("GUEST_TEST_MARK", NULL);
         if (i == 3 || i == 5) {
             in = open(flow_path(f, "input"), O_WRONLY);

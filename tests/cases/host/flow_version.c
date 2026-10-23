@@ -66,130 +66,144 @@ static int digest(const char *p, char out[65])
     sha256_hex(b, out);
     return 1;
 }
+static int version_ssh_mock(int argc, char **argv)
+{
+    char log[16000];
+    arguments(log, sizeof(log), argc, argv);
+    char *shell = fx_read(vp("shell")), *prefix = fx_read(vp("path")), path[18000], *home;
+    const char *command;
+    append(vp("ssh.log"), log);
+    if (argc != 7 || strcmp(argv[1], "-T") || strcmp(argv[2], "-o") ||
+        strcmp(argv[3], "BatchMode=yes") || strcmp(argv[4], "--")) {
+        free(shell);
+        free(prefix);
+        return 255;
+    }
+    command = argv[6];
+    if (!*shell) {
+        free(shell);
+        shell = strdup("sh");
+    }
+    shell[strcspn(shell, "\r\n")] = 0;
+    prefix[strcspn(prefix, "\r\n")] = 0;
+    if (!strcmp(command, "C:\\msys64\\usr\\bin\\env.exe PATH=/usr/bin:/ucrt64/bin sh -s")) {
+        command = "sh -s";
+        snprintf(path, sizeof(path), "%s/windows:%s%s%s", ev("FLOW_WORK"), prefix,
+                 *prefix ? ":" : "", ev("PATH"));
+        fx_env("LOCALAPPDATA", "C:\\Users\\fix\\AppData\\Local");
+    } else
+        snprintf(path, sizeof(path), "%s%s%s", prefix, *prefix ? ":" : "", ev("PATH"));
+    home = strdup(vp("home"));
+    fx_env("HOME", home);
+    snprintf(log, sizeof(log), "%s/.bashrc", home);
+    fx_env("BASH_ENV", log);
+    fx_env("PATH", path);
+    setpgid(0, 0);
+    {
+        char *a[] = {shell, "-c", (char *)command, NULL};
+        execvp(shell, a);
+    }
+    free(home);
+    free(shell);
+    free(prefix);
+    return 127;
+}
+static int version_fakecc_mock(int argc, char **argv)
+{
+    char log[16000];
+    arguments(log, sizeof(log), argc, argv);
+    char *version = fx_read(vp("ccversion")), *out = NULL, hex[65];
+    struct sha256 h;
+    unsigned char bytes[32];
+    int i;
+    version[strcspn(version, "\r\n")] = 0;
+    if (argc == 2 && !strcmp(argv[1], "-v")) {
+        fprintf(stderr, "fakecc version %s\n", *version ? version : "1");
+        free(version);
+        return 0;
+    }
+    free(version);
+    append(vp("cc.log"), log);
+    snprintf(log, sizeof(log), "%s\n", ev("MAKEFLAGS"));
+    append(vp("flags.log"), log);
+    if (fx_exists(vp("fail"))) {
+        fprintf(stderr, "fakecc: error: planted failure\n");
+        return 1;
+    }
+    if (fx_exists(vp("interrupt"))) {
+        char *sig = fx_read(vp("interrupt"));
+        unlink(vp("interrupt"));
+        kill(0, !strncmp(sig, "KILL", 4) ? SIGKILL : SIGTERM);
+        free(sig);
+        return 1;
+    }
+    if (fx_exists(vp("race"))) {
+        struct fixture f;
+        char script[4096];
+        const char *a[] = {"/bin/sh", script, "-c", "fakecc", "-C", vp("cache"), "machine", NULL};
+        unlink(vp("race"));
+        memset(&f, 0, sizeof(f));
+        snprintf(f.work, sizeof(f.work), "%s/race-commands", ev("FLOW_WORK"));
+        fx_mkdir(f.work);
+        snprintf(script, sizeof(script), "%s/tools/etude/provision_version.sh", ev("TREE"));
+        if (fx_run(&f, a, ev("TREE"), NULL, NULL))
+            return 1;
+        fx_text(vp("race.out"), f.out);
+        fx_text(vp("race.err"), f.err);
+        fx_destroy(&f);
+    }
+    sha256_init(&h);
+    for (i = 1; i < argc; i++) {
+        size_t n = strlen(argv[i]);
+        if (!strcmp(argv[i], "-o") && i + 1 < argc)
+            out = argv[++i];
+        else if (n >= 2 && !strcmp(argv[i] + n - 2, ".c"))
+            if (!hash_file(&h, argv[i]))
+                return 1;
+    }
+    if (!out)
+        return 1;
+    sha256_final(&h, bytes);
+    sha256_hex(bytes, hex);
+    snprintf(log, sizeof(log), "fakecc\n%s\n", hex);
+    return fx_text(out, log) ? 0 : 1;
+}
+static int version_uname_mock(int argc, char **argv)
+{
+    if (argc != 2)
+        return 1;
+    if (!strcmp(argv[1], "-s"))
+        puts("MINGW64_NT-10.0-26100");
+    else if (!strcmp(argv[1], "-m"))
+        puts("x86_64");
+    else if (!strcmp(argv[1], "-r"))
+        puts("3.6.1-1.x86_64");
+    else
+        return 1;
+    return 0;
+}
+static int version_cygpath_mock(int argc, char **argv)
+{
+    if (argc != 3 || strcmp(argv[1], "-u") || strcmp(argv[2], "C:\\Users\\fix\\AppData\\Local"))
+        return 1;
+    puts(vp("appdata"));
+    return 0;
+}
 int flow_version_mock(int argc, char **argv)
 {
     const char *name = strrchr(argv[0], '/');
-    char log[16000];
     name = name ? name + 1 : argv[0];
-    arguments(log, sizeof(log), argc, argv);
-    if (!strcmp(name, "ssh")) {
-        char *shell = fx_read(vp("shell")), *prefix = fx_read(vp("path")), path[18000], *home;
-        const char *command;
-        append(vp("ssh.log"), log);
-        if (argc != 7 || strcmp(argv[1], "-T") || strcmp(argv[2], "-o") ||
-            strcmp(argv[3], "BatchMode=yes") || strcmp(argv[4], "--")) {
-            free(shell);
-            free(prefix);
-            return 255;
-        }
-        command = argv[6];
-        if (!*shell) {
-            free(shell);
-            shell = strdup("sh");
-        }
-        shell[strcspn(shell, "\r\n")] = 0;
-        prefix[strcspn(prefix, "\r\n")] = 0;
-        if (!strcmp(command, "C:\\msys64\\usr\\bin\\env.exe PATH=/usr/bin:/ucrt64/bin sh -s")) {
-            command = "sh -s";
-            snprintf(path, sizeof(path), "%s/windows:%s%s%s", ev("FLOW_WORK"), prefix,
-                     *prefix ? ":" : "", ev("PATH"));
-            fx_env("LOCALAPPDATA", "C:\\Users\\fix\\AppData\\Local");
-        } else
-            snprintf(path, sizeof(path), "%s%s%s", prefix, *prefix ? ":" : "", ev("PATH"));
-        home = strdup(vp("home"));
-        fx_env("HOME", home);
-        snprintf(log, sizeof(log), "%s/.bashrc", home);
-        fx_env("BASH_ENV", log);
-        fx_env("PATH", path);
-        setpgid(0, 0);
-        {
-            char *a[] = {shell, "-c", (char *)command, NULL};
-            execvp(shell, a);
-        }
-        free(home);
-        free(shell);
-        free(prefix);
-        return 127;
-    }
-    if (!strcmp(name, "fakecc")) {
-        char *version = fx_read(vp("ccversion")), *out = NULL, hex[65];
-        struct sha256 h;
-        unsigned char bytes[32];
-        int i;
-        version[strcspn(version, "\r\n")] = 0;
-        if (argc == 2 && !strcmp(argv[1], "-v")) {
-            fprintf(stderr, "fakecc version %s\n", *version ? version : "1");
-            free(version);
-            return 0;
-        }
-        free(version);
-        append(vp("cc.log"), log);
-        snprintf(log, sizeof(log), "%s\n", ev("MAKEFLAGS"));
-        append(vp("flags.log"), log);
-        if (fx_exists(vp("fail"))) {
-            fprintf(stderr, "fakecc: error: planted failure\n");
-            return 1;
-        }
-        if (fx_exists(vp("interrupt"))) {
-            char *sig = fx_read(vp("interrupt"));
-            unlink(vp("interrupt"));
-            kill(0, !strncmp(sig, "KILL", 4) ? SIGKILL : SIGTERM);
-            free(sig);
-            return 1;
-        }
-        if (fx_exists(vp("race"))) {
-            struct fixture f;
-            char script[4096];
-            const char *a[] = {"/bin/sh", script,      "-c",      "fakecc",
-                               "-C",      vp("cache"), "machine", NULL};
-            unlink(vp("race"));
-            memset(&f, 0, sizeof(f));
-            snprintf(f.work, sizeof(f.work), "%s/race-commands", ev("FLOW_WORK"));
-            fx_mkdir(f.work);
-            snprintf(script, sizeof(script), "%s/tools/etude/provision_version.sh", ev("TREE"));
-            if (fx_run(&f, a, ev("TREE"), NULL, NULL))
-                return 1;
-            fx_text(vp("race.out"), f.out);
-            fx_text(vp("race.err"), f.err);
-            fx_destroy(&f);
-        }
-        sha256_init(&h);
-        for (i = 1; i < argc; i++) {
-            size_t n = strlen(argv[i]);
-            if (!strcmp(argv[i], "-o") && i + 1 < argc)
-                out = argv[++i];
-            else if (n >= 2 && !strcmp(argv[i] + n - 2, ".c"))
-                if (!hash_file(&h, argv[i]))
-                    return 1;
-        }
-        if (!out)
-            return 1;
-        sha256_final(&h, bytes);
-        sha256_hex(bytes, hex);
-        snprintf(log, sizeof(log), "fakecc\n%s\n", hex);
-        return fx_text(out, log) ? 0 : 1;
-    }
-    if (!strcmp(name, "uname")) {
-        if (argc != 2)
-            return 1;
-        if (!strcmp(argv[1], "-s"))
-            puts("MINGW64_NT-10.0-26100");
-        else if (!strcmp(argv[1], "-m"))
-            puts("x86_64");
-        else if (!strcmp(argv[1], "-r"))
-            puts("3.6.1-1.x86_64");
-        else
-            return 1;
-        return 0;
-    }
-    if (!strcmp(name, "cygpath")) {
-        if (argc != 3 || strcmp(argv[1], "-u") || strcmp(argv[2], "C:\\Users\\fix\\AppData\\Local"))
-            return 1;
-        puts(vp("appdata"));
-        return 0;
-    }
+    if (!strcmp(name, "ssh"))
+        return version_ssh_mock(argc, argv);
+    if (!strcmp(name, "fakecc"))
+        return version_fakecc_mock(argc, argv);
+    if (!strcmp(name, "uname"))
+        return version_uname_mock(argc, argv);
+    if (!strcmp(name, "cygpath"))
+        return version_cygpath_mock(argc, argv);
     return 97;
 }
+
 struct version {
     struct fixture *f;
     char tree[4096], fix[4096], key[100], dir[4096], script[4096];
@@ -329,12 +343,10 @@ static int snapshots(struct version *v, char hex[65])
     sha256_hex(bytes, hex);
     return 1;
 }
-int flow_version(struct fixture *f)
+static int version_setup(struct version *value, struct fixture *f)
 {
     struct version v;
-    char source[4096], target[4096], first[5000], second[100], before[65], after[65], *saved;
-    int ok = 1;
-    unsigned i;
+    char target[4096];
     memset(&v, 0, sizeof(v));
     v.f = f;
     snprintf(v.tree, sizeof(v.tree), "%s/tree", f->work);
@@ -364,6 +376,21 @@ int flow_version(struct fixture *f)
     snprintf(target, sizeof(target), "%s/windows/cygpath", f->work);
     if (!fx_copy(f->self, target))
         return 0;
+    *value = v;
+    return 1;
+}
+static int version_publication_identity(struct version *value)
+{
+    struct version v = *value;
+    struct fixture *f = v.f;
+    int ok = 1;
+    char source[4096];
+    char target[4096];
+    char first[5000];
+    char second[100];
+    char before[65];
+    char after[65];
+    char *saved;
     if (!state(&v))
         return 0;
     run(&v);
@@ -420,6 +447,16 @@ int flow_version(struct fixture *f)
                       fx_count(vp("cache/builds")) == 3,
                   "side by side and first version unchanged") &&
          ok;
+    return ok;
+}
+static int version_account_shells(struct version *value)
+{
+    struct version v = *value;
+    struct fixture *f = v.f;
+    int ok = 1;
+    char source[4096];
+    char target[4096];
+    unsigned i;
     {
         const char *shells[] = {"sh",   "bash", "dash", "zsh",  "ksh",
                                 "mksh", "yash", "fish", "tcsh", "csh"};
@@ -450,6 +487,15 @@ int flow_version(struct fixture *f)
                       "BusyBox shell and applets") &&
              ok;
     }
+    return ok;
+}
+static int version_interruption(struct version *value)
+{
+    struct version v = *value;
+    struct fixture *f = v.f;
+    int ok = 1;
+    char target[4096];
+    unsigned i;
     for (i = 0; i < 2; i++) {
         char killed[4096] = "";
         DIR *d;
@@ -494,6 +540,15 @@ int flow_version(struct fixture *f)
                       empty(vp("cache/builds")) && empty(vp("cache/versions")),
                   "failed compile publishes nothing") &&
          ok;
+    return ok;
+}
+static int version_truncation(struct version *value)
+{
+    struct version v = *value;
+    struct fixture *f = v.f;
+    int ok = 1;
+    char *saved;
+    unsigned i;
     if (!state(&v))
         return 0;
     {
@@ -532,6 +587,14 @@ int flow_version(struct fixture *f)
         }
     }
     free(saved);
+    return ok;
+}
+static int version_source_damage(struct version *value)
+{
+    struct version v = *value;
+    struct fixture *f = v.f;
+    int ok = 1;
+    char *saved;
     if (!state(&v))
         return 0;
     {
@@ -564,6 +627,13 @@ int flow_version(struct fixture *f)
             ok;
     }
     free(saved);
+    return ok;
+}
+static int version_racing_publication(struct version *value)
+{
+    struct version v = *value;
+    struct fixture *f = v.f;
+    int ok = 1;
     if (!state(&v))
         return 0;
     fx_text(vp("race"), "");
@@ -578,6 +648,14 @@ int flow_version(struct fixture *f)
                       "racing request publishes selected build") &&
              ok;
     }
+    return ok;
+}
+static int version_make_settings(struct version *value)
+{
+    struct version v = *value;
+    struct fixture *f = v.f;
+    int ok = 1;
+    char *saved;
     if (!state(&v))
         return 0;
     fx_env("MAKEFLAGS", "-j4 -- ETUDE_PLANTED=1");
@@ -593,6 +671,14 @@ int flow_version(struct fixture *f)
                   "local make settings isolated") &&
          ok;
     free(saved);
+    return ok;
+}
+static int version_windows_version(struct version *value)
+{
+    struct version v = *value;
+    struct fixture *f = v.f;
+    int ok = 1;
+    char target[4096];
     if (!state(&v))
         return 0;
     {
@@ -611,6 +697,16 @@ int flow_version(struct fixture *f)
              f, fx_has(target, "platform windows x86_64\n") && fx_has(target, "program etude.exe "),
              "Windows program and platform") &&
          ok;
+    return ok;
+}
+static int version_revision(struct version *value)
+{
+    struct version v = *value;
+    struct fixture *f = v.f;
+    int ok = 1;
+    char source[4096];
+    char first[5000];
+    char *saved;
     /* A selected revision must use committed source even after the tree changes. */
     if (!state(&v))
         return 0;
@@ -663,6 +759,15 @@ int flow_version(struct fixture *f)
                       !strcmp(first + 65, v.dir) && compiles() == 2,
                   "working source restored to revision") &&
          ok;
+    return ok;
+}
+static int version_real_build(struct version *value)
+{
+    struct version v = *value;
+    struct fixture *f = v.f;
+    int ok = 1;
+    char target[4096];
+    unsigned i;
     /* Compile the product with the GNU compiler, then invoke its real verbs. */
     if (!state(&v))
         return 0;
@@ -713,6 +818,24 @@ int flow_version(struct fixture *f)
             ok = fx_check(f, f->status == 2 && strstr(f->err, wanted), wanted) && ok;
         }
     }
+    return ok;
+}
+int flow_version(struct fixture *f)
+{
+    struct version v;
+    int ok = 1;
+    if (!version_setup(&v, f))
+        return 0;
+    ok = version_publication_identity(&v) && ok;
+    ok = version_account_shells(&v) && ok;
+    ok = version_interruption(&v) && ok;
+    ok = version_truncation(&v) && ok;
+    ok = version_source_damage(&v) && ok;
+    ok = version_racing_publication(&v) && ok;
+    ok = version_make_settings(&v) && ok;
+    ok = version_windows_version(&v) && ok;
+    ok = version_revision(&v) && ok;
+    ok = version_real_build(&v) && ok;
     fx_env("FLOW_VERSION", NULL);
     return ok;
 }
