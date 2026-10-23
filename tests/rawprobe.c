@@ -142,6 +142,7 @@ static void nap_ms(int ms)
 
     ts[0] = ms / 1000;
     ts[1] = (ms % 1000) * 1000000;
+    /* interval: the ICMP count every 10 ms, and time for each reply */
     syscall3(SYS_NANOSLEEP, (long)ts, 0, 0);
 }
 
@@ -429,15 +430,15 @@ static uint32_t icmp_in_msgs(void)
 
 /**
  * Wait until the machine has counted `count` ICMP messages received since it
- * counted `base`, looking every 10 ms; 30 seconds end a wait for messages
- * lost. Returns 1 once they have arrived, and 0 otherwise.
+ * counted `base`, looking every 10 ms. Returns 1 once they have arrived, and
+ * 0 when the count cannot be read. Messages lost leave it waiting, and the
+ * case's watchdog ends it.
  */
 static int icmp_arrived(uint32_t base, uint32_t count)
 {
     uint32_t arrived = base;
-    int naps;
 
-    for (naps = 0; naps < 3000 && arrived != 0xFFFFFFFFu && arrived - base < count; naps++) {
+    while (arrived != 0xFFFFFFFFu && arrived - base < count) {
         nap_ms(10);
         arrived = icmp_in_msgs();
     }
@@ -905,7 +906,6 @@ void probe_main(unsigned long *sp)
             args[4] = (unsigned long)sa;
             args[5] = 16;
             check(socketcall(SC_SENDTO, args) == 8, "an echo request leaves");
-            nap_ms(30);
         }
         check(icmp_arrived(base, 9), "nine ICMP messages reach the socket's queue");
         for (i = 0; i < 12; i++) {
