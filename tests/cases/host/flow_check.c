@@ -39,6 +39,10 @@ int main(int argc, char **argv)
     char value[8200];
     int ok;
     name = name ? name + 1 : argv[0];
+    if (argc == 2 && !strcmp(argv[1], "--hold")) {
+        for (;;)
+            pause();
+    }
     if (argc == 2 && !strcmp(argv[1], "--check"))
         return flow_check_workload(argc, argv);
     if (strcmp(name, "host-flow-check")) {
@@ -68,6 +72,10 @@ int main(int argc, char **argv)
     fx_env("FLOW_SELF", f.self);
     if (!strcmp(id, "progress"))
         ok = flow_progress(&f);
+    else if (!strcmp(id, "tidy"))
+        ok = flow_tidy(&f);
+    else if (!strcmp(id, "leftovers"))
+        ok = flow_leftovers(&f);
     else if (!strcmp(id, "worker_park"))
         ok = flow_worker(&f);
     else if (!strcmp(id, "space"))

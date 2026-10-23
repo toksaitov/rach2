@@ -126,9 +126,10 @@ static int prepare(struct etude_case *c, struct etude_case_machine *m)
                            "-C",
                            "/tmp/etude-host-scripts/tree",
                            NULL};
+    const char *readable[] = {"/bin/chmod", "-R", "a+rX", "/tmp/etude-host-scripts/tree", NULL};
     return archive && execute(m, mkdir, "products-workspace") &&
            etude_guest_put(m, archive, "/tmp/etude-host-scripts/assets.tar", "0600") == ETUDE_OK &&
-           execute(m, untar, "products-assets");
+           execute(m, untar, "products-assets") && execute(m, readable, "products-source-modes");
 }
 static int native(struct etude_case *c, const char *id)
 {
