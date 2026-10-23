@@ -7,11 +7,11 @@
 #   tools/ci/run.sh full DIR    the build from clean and every suite of ARCH
 #
 # DIR receives `log`, the whole output; `err`, the standard error of each
-# run of tests/run in turn, which has the lines of the runner's own results
-# and none from the runs that the runner suite starts; `failed`, one line for
-# each step that failed: `build`, a suite's name, the set's own name when the
-# runner failed without naming a suite of the registry, or `runner` when its
-# history cannot show what ran; `kept/`, the serial logs that tests/run kept
+# run of tests/run in turn, which has the lines of the runner's own results;
+# `failed`, one line for each step that failed: `build`, a suite's name,
+# `runner` for a fault of the runner, the set's own name when the runner
+# failed without naming a suite of the registry or `runner`, or `runner` when
+# its history cannot show what ran; `kept/`, the serial logs that tests/run kept
 # for the failed suites; and `done`, written last, without which a reader
 # takes the run as unfinished. A full run first runs `make clean`, which
 # removes ARCH's in-house objects and images but keeps the vendored builds,
@@ -183,14 +183,13 @@ run_history() { # run_history NAME ARGS...
     return 1
 }
 
-# Run tests/run with ARGS, and append to DIR/failed the suites it failed, or
-# NAME when it failed without naming a suite of the registry; return 0 when it
-# passed and 1 when it failed. The suites are on the runner's
-# `run: result: failed: SUITE...` line, the last line of its standard error
-# that begins `run: `. The launcher passes standard output and standard error
-# through pipes of their own, so the two are not in order in the log; and the
-# runner suite's output, printed before the summary, has lines of the same
-# form from the runs it drives.
+# Run tests/run with ARGS, and append to DIR/failed the suites it failed, with
+# `runner` for a fault of its own, or NAME when it failed without naming a
+# suite of the registry or `runner`; return 0 when it passed and 1 when it
+# failed. The suites are on the runner's `run: result: failed: SUITE...` line,
+# the last line of its standard error that begins `run: `. The launcher passes
+# standard output and standard error through pipes of their own, so the two
+# are not in order in the log.
 run_set() { # run_set NAME ARGS...
     name=$1; shift
     : > "$out/set.log"
@@ -202,7 +201,7 @@ run_set() { # run_set NAME ARGS...
     [ "$rc" = 0 ] && return 0
     failed=$(grep '^run: ' "$out/set.err" | tail -n 1 |
         sed -n 's/^run: result: failed: *//p' | tr ' ' '\n' | sed '/^$/d')
-    known=$(awk -F'|' '/^[a-z]/ { print $1 }' tests/registry)
+    known=$(awk -F'|' '/^[a-z]/ { print $1 } END { print "runner" }' tests/registry)
     for f in $failed; do
         echo "$known" | grep -qx "$f" || failed=""
     done
