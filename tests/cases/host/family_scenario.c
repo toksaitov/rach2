@@ -1,6 +1,8 @@
 /* family_scenario.c: native ownership of one prepared product-family check. */
 #include "etude/scenario.h"
 #include "family_rows.h"
+/* The shared library supplies the selected architecture, including none. */
+extern const char *etude_case_architecture(const struct etude_case *c);
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,9 +73,12 @@ int etude_scenario(struct etude_case *c)
     struct etude_guest_result r;
     const char *id = etude_case_id(c), *ids[40], *rows = family_rows(id);
     const char *args[] = {"/host-products/host-family-check", id, "/host-work", NULL};
+    char arch[80];
+    const char *env[] = {arch, NULL};
     char names[1024], *at;
     size_t n = 0, i;
     int ready = 0, whole = 0, failed = 0, held[40] = {0};
+    snprintf(arch, sizeof(arch), "ARCH=%s", etude_case_architecture(c));
     if (!rows || strlen(rows) >= sizeof(names))
         return 1;
     strcpy(names, rows);
@@ -84,7 +89,7 @@ int etude_scenario(struct etude_case *c)
         etude_step(c, "prepare") == ETUDE_OK)
         ready = prepare(c, m);
     if (etude_step(c, "check") == ETUDE_OK && ready &&
-        etude_guest_command(m, args, NULL, NULL, "family-report", &r) == ETUDE_OK && r.complete &&
+        etude_guest_command(m, args, env, NULL, "family-report", &r) == ETUDE_OK && r.complete &&
         r.cleanup == ETUDE_CLEANUP_CONFIRMED && r.termination.end == ETUDE_END_EXITED &&
         (r.termination.value == 0 || r.termination.value == 1)) {
         whole = report(c, id, ids, held, n);

@@ -1,6 +1,7 @@
 /* family_check.c: fixture ownership and the existing etude report format. */
 #define _POSIX_C_SOURCE 200809L
 #include "family_check.h"
+#include "family_image.h"
 #include "sha256.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,6 +42,30 @@ int family_sparse(const char *path, uint64_t bytes)
         return 0;
     ok = ftruncate(fd, (off_t)bytes) == 0;
     return close(fd) == 0 && ok;
+}
+int family_contains(const char *path, const char *text)
+{
+    FILE *fp = fopen(path, "rb");
+    unsigned char data[65536];
+    size_t n = strlen(text), kept = 0, got, i;
+    int found = 0;
+    if (!fp || !n || n > sizeof(data) / 2) {
+        if (fp)
+            fclose(fp);
+        return 0;
+    }
+    while (!found && (got = fread(data + kept, 1, sizeof(data) - kept, fp))) {
+        got += kept;
+        for (i = 0; i + n <= got; i++)
+            if (!memcmp(data + i, text, n)) {
+                found = 1;
+                break;
+            }
+        kept = got < n - 1 ? got : n - 1;
+        memmove(data, data + got - kept, kept);
+    }
+    fclose(fp);
+    return found;
 }
 int family_digest(const char *path, char hex[65])
 {
@@ -147,8 +172,11 @@ int main(int argc, char **argv)
     char path[8192];
     int ok;
     name = name ? name + 1 : argv[0];
-    if (strcmp(name, "host-family-check"))
+    if (strcmp(name, "host-family-check")) {
+        if (getenv("FAMILY_IMAGE"))
+            return family_image_mock(argc, argv);
         return family_grow_mock(argc, argv);
+    }
     if (argc != 3 || !fx_init(&f, argv[2], argv[1], argv[0]))
         return 2;
     snprintf(path, sizeof(path), "%s:/host-products:/usr/bin:/bin:/usr/sbin:/sbin", f.bin);
@@ -160,7 +188,8 @@ int main(int argc, char **argv)
     fx_mkdir(getenv("TMPDIR"));
     printf("@etude 1 begin %s\n", argv[1]);
     fflush(stdout);
-    ok = family_grow(&f, argv[1]);
+    ok = !strncmp(argv[1], "host.imagerace.", 15) ? family_image(&f, argv[1])
+                                                  : family_grow(&f, argv[1]);
     if (!ok)
         f.failed = 1;
     printf("@etude 1 end %u\n", records);

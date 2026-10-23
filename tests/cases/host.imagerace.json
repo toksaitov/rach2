@@ -1,152 +1,857 @@
 {
   "schema_version": 1,
   "family_id": "host.imagerace",
-  "summary": "How krffs/mkimage.sh publishes an image when two builds of it run at once or one is stopped, and the prerequisites that keep an image current, booting nothing; the program is tests/cases/host/imagerace.sh",
+  "summary": "The image builder and root make dependency rules run as actual products in a declared GNU helper; C controls the race, interruption, prerequisite and probe fixtures.",
   "cases": [
     {
       "case_id": "host.imagerace.concurrent",
       "behavior": "two builds of one image by krffs/mkimage.sh at once, each held before it publishes until the other has made its temporary image, both finish and leave the image whole",
-      "units": ["imagerace", "`tests/system/imagerace.sh`, two builds of one image at once"],
+      "units": [
+        "imagerace",
+        "`tests/system/imagerace.sh`, two builds of one image at once"
+      ],
       "domain": "host",
       "architectures": "none",
-      "workload": {"arguments": ["concurrent"], "inputs": {"manifest": "krffs/manifests/imagerace-tree.manifest", "size_mib": 2, "builds": 2}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "make", "cc"], "features": {}},
-      "execution": {"program": "imagerace", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the private tree, its images and the shims, under its scratch directory"},
+      "workload": {
+        "arguments": [
+          "concurrent"
+        ],
+        "inputs": {
+          "manifest": "krffs/manifests/imagerace-tree.manifest",
+          "size_mib": 2,
+          "builds": 2
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "family_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "reaped",
+        "cleanup": "libetude-case ends the declared helper and removes its private disk; the C controller removes its fixture after a pass and exports failure evidence"
+      },
       "assertions": [
-        {"assertion_id": "met", "checks": "each build reached the touch of its temporary image while the other's temporary image existed", "source": "program"},
-        {"assertion_id": "first", "checks": "the first build ends with status 0", "source": "program"},
-        {"assertion_id": "second", "checks": "the second build ends with status 0", "source": "program"},
-        {"assertion_id": "image", "checks": "the image is left, with the staged program's words", "source": "program"},
-        {"assertion_id": "deps", "checks": "the dependency file is left, and names the staged program", "source": "program"},
-        {"assertion_id": "temporaries", "checks": "no temporary file of either build is left beside the image", "source": "program"}
+        {
+          "assertion_id": "met",
+          "checks": "each build reached the touch of its temporary image while the other's temporary image existed",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "first",
+          "checks": "the first build ends with status 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "second",
+          "checks": "the second build ends with status 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "image",
+          "checks": "the image is left, with the staged program's words",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "deps",
+          "checks": "the dependency file is left, and names the staged program",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "temporaries",
+          "checks": "no temporary file of either build is left beside the image",
+          "source": "scenario"
+        }
       ],
       "branches": [],
-      "termination": {"end": "exited", "value": 0},
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
       "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1200000000}, "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1200000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1200000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1200000000
+        },
+        "stages": {}
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 1610612736,
+        "disk_bytes": 12884901888,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
       "prepare": [
-        {"name": "imagerace", "node": "tests/cases/host/imagerace", "per_architecture": false},
-        {"name": "mkfs", "node": "krffs/mkfs.krffs", "per_architecture": false},
-        {"name": "stageimage", "node": "krffs/stageimage.krffs", "per_architecture": false},
-        {"name": "setidcheck", "node": "tools/inspect/setidcheck", "per_architecture": false}
+        {
+          "name": "family_scenario",
+          "node": "tests/cases/host/family_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "scripts-assets",
+          "node": "tests/host-suite/scripts-assets.tar",
+          "per_architecture": false
+        },
+        {
+          "name": "products-kernel",
+          "node": "x86_64/rach2/kernel",
+          "per_architecture": false
+        },
+        {
+          "name": "products-image",
+          "node": "x86_64/images/gnu-test.disk",
+          "per_architecture": false
+        }
       ],
       "timing": [],
-      "native": {"plan": "host"}
+      "native": {
+        "plan": "scenario"
+      },
+      "steps": [
+        {
+          "step_id": "products",
+          "stage": "execute",
+          "machine": "products",
+          "does": "boot the prepared GNU products helper on its private disk"
+        },
+        {
+          "step_id": "prepare",
+          "stage": "execute",
+          "does": "unpack the immutable source assets on the private disk"
+        },
+        {
+          "step_id": "check",
+          "stage": "execute",
+          "does": "run the C controller and adopt its complete report"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "products",
+          "qemu": {
+            "architecture": "x86_64",
+            "kernel": "products-kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "products-disk",
+                "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 1073741824,
+            "firmware": "direct",
+            "devices": [
+              "rtl8139"
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": true
+        }
+      ]
     },
     {
       "case_id": "host.imagerace.interrupted",
       "behavior": "a rebuild of an image by krffs/mkimage.sh that adds a second program, stopped by SIGTERM at each step of its publication in turn, fails, leaves no temporary and no new image beside old lists, and one make then gives what an uninterrupted build gives",
-      "units": ["imagerace"],
+      "units": [
+        "imagerace"
+      ],
       "domain": "host",
       "architectures": "none",
-      "workload": {"arguments": ["interrupted"], "inputs": {"manifest": "krffs/manifests/imagerace-tree.manifest", "size_mib": 2, "signal": "SIGTERM"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "make", "cc"], "features": {}},
-      "execution": {"program": "imagerace", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the private tree, its images and the shims, under its scratch directory"},
+      "workload": {
+        "arguments": [
+          "interrupted"
+        ],
+        "inputs": {
+          "manifest": "krffs/manifests/imagerace-tree.manifest",
+          "size_mib": 2,
+          "signal": "SIGTERM"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "family_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "reaped",
+        "cleanup": "libetude-case ends the declared helper and removes its private disk; the C controller removes its fixture after a pass and exports failure evidence"
+      },
       "assertions": [
-        {"assertion_id": "counted", "checks": "an uninterrupted rebuild passes through the steps the stops are put at, the write of the temporary image, the touch and the moves of the list of programs, the dependency file and the image among them", "source": "program"},
-        {"assertion_id": "status", "checks": "the rebuild stopped at each step was stopped there, and ends with a status other than 0", "source": "program"},
-        {"assertion_id": "temporaries", "checks": "no stopped rebuild leaves a temporary file beside the image", "source": "program"},
-        {"assertion_id": "matched", "checks": "no stopped rebuild leaves an image with the second program beside a dependency file or a list of programs that lacks it", "source": "program"},
-        {"assertion_id": "current", "checks": "after each stopped rebuild, one make leaves the image with both programs, and the dependency file and the list of programs of an uninterrupted build", "source": "program"}
+        {
+          "assertion_id": "counted",
+          "checks": "an uninterrupted rebuild passes through the steps the stops are put at, the write of the temporary image, the touch and the moves of the list of programs, the dependency file and the image among them",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "status",
+          "checks": "the rebuild stopped at each step was stopped there, and ends with a status other than 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "temporaries",
+          "checks": "no stopped rebuild leaves a temporary file beside the image",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "matched",
+          "checks": "no stopped rebuild leaves an image with the second program beside a dependency file or a list of programs that lacks it",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "current",
+          "checks": "after each stopped rebuild, one make leaves the image with both programs, and the dependency file and the list of programs of an uninterrupted build",
+          "source": "scenario"
+        }
       ],
       "branches": [],
-      "termination": {"end": "exited", "value": 0},
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
       "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 900000000,
+          "ceiling_us": 1800000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 900000000,
+          "ceiling_us": 1800000000
+        },
+        "stages": {}
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 1610612736,
+        "disk_bytes": 12884901888,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
       "prepare": [
-        {"name": "imagerace", "node": "tests/cases/host/imagerace", "per_architecture": false},
-        {"name": "mkfs", "node": "krffs/mkfs.krffs", "per_architecture": false},
-        {"name": "stageimage", "node": "krffs/stageimage.krffs", "per_architecture": false},
-        {"name": "setidcheck", "node": "tools/inspect/setidcheck", "per_architecture": false}
+        {
+          "name": "family_scenario",
+          "node": "tests/cases/host/family_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "scripts-assets",
+          "node": "tests/host-suite/scripts-assets.tar",
+          "per_architecture": false
+        },
+        {
+          "name": "products-kernel",
+          "node": "x86_64/rach2/kernel",
+          "per_architecture": false
+        },
+        {
+          "name": "products-image",
+          "node": "x86_64/images/gnu-test.disk",
+          "per_architecture": false
+        }
       ],
       "timing": [],
-      "native": {"plan": "host"}
+      "native": {
+        "plan": "scenario"
+      },
+      "steps": [
+        {
+          "step_id": "products",
+          "stage": "execute",
+          "machine": "products",
+          "does": "boot the prepared GNU products helper on its private disk"
+        },
+        {
+          "step_id": "prepare",
+          "stage": "execute",
+          "does": "unpack the immutable source assets on the private disk"
+        },
+        {
+          "step_id": "check",
+          "stage": "execute",
+          "does": "run the C controller and adopt its complete report"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "products",
+          "qemu": {
+            "architecture": "x86_64",
+            "kernel": "products-kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "products-disk",
+                "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 1073741824,
+            "firmware": "direct",
+            "devices": [
+              "rtl8139"
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": true
+        }
+      ]
     },
     {
       "case_id": "host.imagerace.prerequisites",
       "behavior": "the prerequisites that keep the shared images current: no manifest stages a directory as a prerequisite, an image just built is not out of date, a file below a staged directory does not put it out of date, and a staged program is a prerequisite that waits for its component",
-      "units": ["imagerace", "`tests/system/imagerace.sh`, the prerequisites of the shared images"],
+      "units": [
+        "imagerace",
+        "`tests/system/imagerace.sh`, the prerequisites of the shared images"
+      ],
       "domain": "host",
-      "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": ["prerequisites"], "inputs": {"test_image": "images/test.krffs", "os_real_image": "images/os-real.krffs", "program": "tests/vmprobe"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "make", "awk"], "features": {}},
-      "execution": {"program": "imagerace", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and the marker it writes below the build tree's tests/system"},
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [
+          "prerequisites"
+        ],
+        "inputs": {
+          "test_image": "images/test.krffs",
+          "os_real_image": "images/os-real.krffs",
+          "program": "tests/vmprobe"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "family_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "reaped",
+        "cleanup": "libetude-case ends the declared helper and removes its private disk; the C controller removes its fixture after a pass and exports failure evidence"
+      },
       "assertions": [
-        {"assertion_id": "files", "checks": "no path that the root Makefile's MANIFEST_DEPS prints for a manifest of krffs/manifests is a directory", "source": "program"},
-        {"assertion_id": "current", "checks": "make -n runs no image builder for the architecture's test image or os-real image just after the preparation built them", "source": "program"},
-        {"assertion_id": "beneath", "checks": "a file written in a directory below the test image's staged exec-dir directory does not put the test image out of date", "source": "program"},
-        {"assertion_id": "named", "checks": "the test image names tests/vmprobe, a program it stages, among its prerequisites", "source": "program"},
-        {"assertion_id": "waits", "checks": "tests/vmprobe waits for the tests component, which builds it", "source": "program"}
+        {
+          "assertion_id": "files",
+          "checks": "no path that the root Makefile's MANIFEST_DEPS prints for a manifest of krffs/manifests is a directory",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "current",
+          "checks": "make -n runs no image builder for the architecture's test image or os-real image just after the preparation built them",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "beneath",
+          "checks": "a file written in a directory below the test image's staged exec-dir directory does not put the test image out of date",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "named",
+          "checks": "the test image names tests/vmprobe, a program it stages, among its prerequisites",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "waits",
+          "checks": "tests/vmprobe waits for the tests component, which builds it",
+          "source": "scenario"
+        }
       ],
       "branches": [],
-      "termination": {"end": "exited", "value": 0},
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
       "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1200000000}, "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1200000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1200000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1200000000
+        },
+        "stages": {}
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 1610612736,
+        "disk_bytes": 12884901888,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
       "prepare": [
-        {"name": "imagerace", "node": "tests/cases/host/imagerace", "per_architecture": false},
-        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
-        {"name": "os-real-image", "node": "images/os-real.krffs", "per_architecture": true}
+        {
+          "name": "family_scenario",
+          "node": "tests/cases/host/family_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "scripts-assets",
+          "node": "tests/host-suite/scripts-assets.tar",
+          "per_architecture": false
+        },
+        {
+          "name": "products-kernel",
+          "node": "x86_64/rach2/kernel",
+          "per_architecture": false
+        },
+        {
+          "name": "products-image",
+          "node": "x86_64/images/gnu-test.disk",
+          "per_architecture": false
+        }
       ],
       "timing": [],
-      "native": {"plan": "host"}
+      "native": {
+        "plan": "scenario"
+      },
+      "steps": [
+        {
+          "step_id": "products",
+          "stage": "execute",
+          "machine": "products",
+          "does": "boot the prepared GNU products helper on its private disk"
+        },
+        {
+          "step_id": "prepare",
+          "stage": "execute",
+          "does": "unpack the immutable source assets on the private disk"
+        },
+        {
+          "step_id": "check",
+          "stage": "execute",
+          "does": "run the C controller and adopt its complete report"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "products",
+          "qemu": {
+            "architecture": "x86_64",
+            "kernel": "products-kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "products-disk",
+                "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 1073741824,
+            "firmware": "direct",
+            "devices": [
+              "rtl8139"
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": true
+        }
+      ]
     },
     {
       "case_id": "host.imagerace.restage",
       "behavior": "in a private tree whose makefile has the shape of the root Makefile's image rule, a changed source reaches the image through exactly its target, nothing changed rebuilds nothing, and the staged directory is judged by its programs",
-      "units": ["imagerace", "`tests/system/imagerace.sh`, the private tree"],
+      "units": [
+        "imagerace",
+        "`tests/system/imagerace.sh`, the private tree"
+      ],
       "domain": "host",
       "architectures": "none",
-      "workload": {"arguments": ["restage"], "inputs": {"manifest": "krffs/manifests/imagerace-tree.manifest", "size_mib": 2}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "make", "cc"], "features": {}},
-      "execution": {"program": "imagerace", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the private tree, its images and the shims, under its scratch directory"},
+      "workload": {
+        "arguments": [
+          "restage"
+        ],
+        "inputs": {
+          "manifest": "krffs/manifests/imagerace-tree.manifest",
+          "size_mib": 2
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "family_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "reaped",
+        "cleanup": "libetude-case ends the declared helper and removes its private disk; the C controller removes its fixture after a pass and exports failure evidence"
+      },
       "assertions": [
-        {"assertion_id": "first", "checks": "the first image has the program's words", "source": "program"},
-        {"assertion_id": "changed", "checks": "after the program's source changes, one make of the image's target gives an image with the new words and not the old", "source": "program"},
-        {"assertion_id": "unchanged", "checks": "a make with nothing changed does not rebuild the image", "source": "program"},
-        {"assertion_id": "beside", "checks": "a work directory and a log made beside the program do not rebuild the image", "source": "program"},
-        {"assertion_id": "added", "checks": "a second program made beside the first rebuilds the image", "source": "program"},
-        {"assertion_id": "removed", "checks": "the second program's removal rebuilds the image", "source": "program"},
-        {"assertion_id": "settled", "checks": "a make after that, with nothing changed, does not rebuild the image", "source": "program"}
+        {
+          "assertion_id": "first",
+          "checks": "the first image has the program's words",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "changed",
+          "checks": "after the program's source changes, one make of the image's target gives an image with the new words and not the old",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "unchanged",
+          "checks": "a make with nothing changed does not rebuild the image",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "beside",
+          "checks": "a work directory and a log made beside the program do not rebuild the image",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "added",
+          "checks": "a second program made beside the first rebuilds the image",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "removed",
+          "checks": "the second program's removal rebuilds the image",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "settled",
+          "checks": "a make after that, with nothing changed, does not rebuild the image",
+          "source": "scenario"
+        }
       ],
       "branches": [],
-      "termination": {"end": "exited", "value": 0},
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
       "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1200000000}, "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1200000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1200000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1200000000
+        },
+        "stages": {}
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 1610612736,
+        "disk_bytes": 12884901888,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
       "prepare": [
-        {"name": "imagerace", "node": "tests/cases/host/imagerace", "per_architecture": false},
-        {"name": "mkfs", "node": "krffs/mkfs.krffs", "per_architecture": false},
-        {"name": "stageimage", "node": "krffs/stageimage.krffs", "per_architecture": false},
-        {"name": "setidcheck", "node": "tools/inspect/setidcheck", "per_architecture": false}
+        {
+          "name": "family_scenario",
+          "node": "tests/cases/host/family_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "scripts-assets",
+          "node": "tests/host-suite/scripts-assets.tar",
+          "per_architecture": false
+        },
+        {
+          "name": "products-kernel",
+          "node": "x86_64/rach2/kernel",
+          "per_architecture": false
+        },
+        {
+          "name": "products-image",
+          "node": "x86_64/images/gnu-test.disk",
+          "per_architecture": false
+        }
       ],
       "timing": [],
-      "native": {"plan": "host"}
+      "native": {
+        "plan": "scenario"
+      },
+      "steps": [
+        {
+          "step_id": "products",
+          "stage": "execute",
+          "machine": "products",
+          "does": "boot the prepared GNU products helper on its private disk"
+        },
+        {
+          "step_id": "prepare",
+          "stage": "execute",
+          "does": "unpack the immutable source assets on the private disk"
+        },
+        {
+          "step_id": "check",
+          "stage": "execute",
+          "does": "run the C controller and adopt its complete report"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "products",
+          "qemu": {
+            "architecture": "x86_64",
+            "kernel": "products-kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "products-disk",
+                "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 1073741824,
+            "firmware": "direct",
+            "devices": [
+              "rtl8139"
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": true
+        }
+      ]
     },
     {
       "case_id": "host.imagerace.probe",
       "behavior": "in a private copy of the root Makefile and the makefiles it reads, an edited probe reaches the test image in one make, and later makes rebuild nothing",
-      "units": ["imagerace", "`tests/system/imagerace_probe.sh`"],
+      "units": [
+        "imagerace",
+        "`tests/system/imagerace_probe.sh`"
+      ],
       "domain": "host",
       "architectures": "none",
-      "workload": {"arguments": ["probe"], "inputs": {"script": "tests/system/imagerace_probe.sh", "probe": "tests/conloadprobe.c"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "make", "cc", "i686-elf-gcc"], "features": {}},
-      "execution": {"program": "imagerace", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the private copy, which imagerace_probe.sh makes under build/tests/system and removes; its log under its scratch directory"},
+      "workload": {
+        "arguments": [
+          "probe"
+        ],
+        "inputs": {
+          "script": "tests/system/imagerace_probe.sh",
+          "probe": "tests/conloadprobe.c"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "family_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "reaped",
+        "cleanup": "libetude-case ends the declared helper and removes its private disk; the C controller removes its fixture after a pass and exports failure evidence"
+      },
       "assertions": [
-        {"assertion_id": "staged", "checks": "imagerace_probe.sh passes: after an edit of the probe one make stages the new probe, and a third make and a dry run rebuild nothing", "source": "program"}
+        {
+          "assertion_id": "staged",
+          "checks": "imagerace_probe.sh passes: after an edit of the probe one make stages the new probe, and a third make and a dry run rebuild nothing",
+          "source": "scenario"
+        }
       ],
       "branches": [],
-      "termination": {"end": "exited", "value": 0},
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
       "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "stages": {}
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 4000,
+        "memory_bytes": 1610612736,
+        "disk_bytes": 12884901888,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
       "prepare": [
-        {"name": "imagerace", "node": "tests/cases/host/imagerace", "per_architecture": false}
+        {
+          "name": "family_scenario",
+          "node": "tests/cases/host/family_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "scripts-assets",
+          "node": "tests/host-suite/scripts-assets.tar",
+          "per_architecture": false
+        },
+        {
+          "name": "products-kernel",
+          "node": "x86_64/rach2/kernel",
+          "per_architecture": false
+        },
+        {
+          "name": "products-image",
+          "node": "x86_64/images/gnu-test.disk",
+          "per_architecture": false
+        }
       ],
       "timing": [],
-      "native": {"plan": "host"}
+      "native": {
+        "plan": "scenario"
+      },
+      "steps": [
+        {
+          "step_id": "products",
+          "stage": "execute",
+          "machine": "products",
+          "does": "boot the prepared GNU products helper on its private disk"
+        },
+        {
+          "step_id": "prepare",
+          "stage": "execute",
+          "does": "unpack the immutable source assets on the private disk"
+        },
+        {
+          "step_id": "check",
+          "stage": "execute",
+          "does": "run the C controller and adopt its complete report"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "products",
+          "qemu": {
+            "architecture": "x86_64",
+            "kernel": "products-kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "products-disk",
+                "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 1073741824,
+            "firmware": "direct",
+            "devices": [
+              "rtl8139"
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": true
+        }
+      ]
     }
   ]
 }

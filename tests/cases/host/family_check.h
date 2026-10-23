@@ -7,6 +7,7 @@ const char *family_path(struct fixture *f, const char *name);
 const char *family_source(struct fixture *f, const char *name);
 int family_row(struct fixture *f, const char *id, int held);
 int family_sparse(const char *path, uint64_t bytes);
+int family_contains(const char *path, const char *text);
 int family_digest(const char *path, char hex[65]);
 int family_extract(struct fixture *f, const char *names);
 int family_run(struct fixture *f, const char *const argv[], const char *cwd,

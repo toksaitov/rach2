@@ -17,6 +17,16 @@ static const char *family_rows(const char *id)
         return "status refused";
     if (!strcmp(id, "machine.grow.replay"))
         return "records bytes";
+    if (!strcmp(id, "host.imagerace.concurrent"))
+        return "met first second image deps temporaries";
+    if (!strcmp(id, "host.imagerace.interrupted"))
+        return "counted status temporaries matched current";
+    if (!strcmp(id, "host.imagerace.prerequisites"))
+        return "files current beneath named waits";
+    if (!strcmp(id, "host.imagerace.restage"))
+        return "first changed unchanged beside added removed settled";
+    if (!strcmp(id, "host.imagerace.probe"))
+        return "staged";
     return NULL;
 }
 #endif
