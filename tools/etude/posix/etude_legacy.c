@@ -293,6 +293,7 @@ static int set_main(int argc, char **argv, const char *self)
     struct etude_legacy_set_opts o;
     char program[PATH_MAX], account[64];
     const char *cpus = getenv("RACH2_CPUS");
+    const char *separator = strrchr(self, '/');
 #ifndef _WIN32
     struct passwd *pw = getpwuid(getuid());
 #endif
@@ -307,7 +308,11 @@ static int set_main(int argc, char **argv, const char *self)
     o.stop = &stop_signal;
     if (set_options(argc, argv, &o) != 0)
         return 2;
-    if (strchr(self, '/') == NULL || realpath(self, program) == NULL) {
+#ifdef _WIN32
+    if (separator == NULL)
+        separator = strrchr(self, '\\');
+#endif
+    if (separator == NULL || realpath(self, program) == NULL) {
         fprintf(stderr, "etude-legacy: set: run etude-legacy by its path\n");
         return 2;
     }

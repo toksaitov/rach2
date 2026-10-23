@@ -40,6 +40,13 @@ set -u
 
 CASE=${1-}
 [ "$#" -eq 1 ] && [ -n "$CASE" ] || { echo "style: usage: style.sh CASE" >&2; exit 2; }
+case $(uname -s) in
+    MINGW*|MSYS*|UCRT*|CLANG*)
+        style_tree=${ETUDE_TREE:-$(pwd)}
+        style_tree=$(cygpath -u "$style_tree") || exit 2
+        exec python3 "$style_tree/tools/etude/collection_tools.py" style "$style_tree" \
+            "${ETUDE_COLLECTION_ARCH:-${ARCH:-i686}}" "$CASE" ;;
+esac
 if [ -n "${ETUDE_TREE-}" ]; then
     cd "$ETUDE_TREE" || exit 2
 fi

@@ -99,7 +99,7 @@ extern char **environ;
 #define RESULT "etude-legacy: result: "
 
 /* The most variables a case's program is given by its item. */
-#define CASE_VARS 5
+#define CASE_VARS 7
 
 /* The memory profile of the 72 GiB boundary boot, and the line of the site
  * policy that permits its lazy backing, which the owner adds once the
@@ -1963,13 +1963,19 @@ static int open_objects(struct set *x, char *why, size_t size)
 /** Write into `out` the path of the program `name`: `name` itself when it
  * has a slash, or the first executable file of that name in a directory of
  * PATH; 0, or -1 when there is none. */
-static int on_path(const char *name, char *out, size_t size)
+static int on_path(const struct set *x, const char *name, char *out, size_t size)
 {
 #ifdef _WIN32
-    return etude_win_program(name, out, size);
+    if (etude_win_program(name, out, size) == 0)
+        return 0;
+    return fit(out, size, "%s/build/tools/etude/commands/%s.exe", x->tree, name) == 0 &&
+                   access(out, X_OK) == 0
+               ? 0
+               : -1;
 #else
     const char *dir = getenv("PATH"), *end;
 
+    (void)x;
     if (strchr(name, '/') != NULL)
         return fit(out, size, "%s", name) == 0 && access(out, X_OK) == 0 ? 0 : -1;
     for (; dir != NULL && *dir != '\0'; dir = *end == ':' ? end + 1 : end) {
@@ -2027,7 +2033,7 @@ static int write_invocation(const struct set *x, const struct member *m, char qe
     cmp_printf(&d, "},\"tools\":{");
     for (i = 0; tools != NULL && tools->type == JSON_ARRAY && i < tools->count; i++) {
         if (tools->item[i]->type != JSON_STRING ||
-            on_path(tools->item[i]->string, path, sizeof(path)) != 0) {
+            on_path(x, tools->item[i]->string, path, sizeof(path)) != 0) {
             fit(why, size, "its tool %s is not on PATH",
                 tools->item[i]->type == JSON_STRING ? tools->item[i]->string : "?");
             free(d.data);
@@ -2182,7 +2188,7 @@ static void publish(struct set *x)
         if (strcmp(x->o->accel, "whpx") == 0)
             name = emulators[1];
 #endif
-        if (on_path(name, qemu[i], PATH_LEN) != 0)
+        if (on_path(x, name, qemu[i], PATH_LEN) != 0)
             snprintf(qemu[i], PATH_LEN, "%s", name);
     }
     opened = open_objects(x, why, sizeof(why)) == 0;
@@ -2769,6 +2775,12 @@ static int case_paths(struct set *x, struct member *m)
         snprintf(m->vars[v++], sizeof(m->vars[0]), "TMPDIR=%s", m->work);
     if (!k->guest)
         snprintf(m->vars[v++], sizeof(m->vars[0]), "ETUDE_TREE=%s", x->tree);
+#ifdef _WIN32
+    snprintf(m->vars[v++], sizeof(m->vars[0]), "ETUDE_COLLECTION_ARCH=%s", x->o->arch);
+    if (fit(m->vars[v++], sizeof(m->vars[0]), "PATH=%s/build/tools/etude/commands;%s", x->tree,
+            getenv("PATH") != NULL ? getenv("PATH") : "") != 0)
+        return -1;
+#endif
     return 0;
 }
 

@@ -22,7 +22,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
       ],
@@ -50,7 +50,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
       ],
@@ -74,7 +74,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
       ],
@@ -102,7 +102,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
         {"name": "asciiscan", "node": "tools/verify/asciiscan", "per_architecture": false}
@@ -128,7 +128,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
       ],
@@ -151,7 +151,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
       ],
@@ -175,7 +175,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
       ],
@@ -202,7 +202,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
         {"name": "guestcheck", "node": "tools/verify/guestcheck", "per_architecture": false}
@@ -229,7 +229,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
         {"name": "prosecheck", "node": "tools/verify/prosecheck", "per_architecture": false}
@@ -253,7 +253,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
       ],
@@ -277,7 +277,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
       ],
@@ -311,7 +311,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
         {"name": "elfcheck", "node": "tools/inspect/elfcheck", "per_architecture": false},
@@ -339,7 +339,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
         {"name": "prosecheck", "node": "tools/verify/prosecheck", "per_architecture": false}
@@ -368,7 +368,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
         {"name": "casecheck", "node": "tools/etude/casecheck", "per_architecture": false}
@@ -392,7 +392,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
         {"name": "casecheck", "node": "tools/etude/casecheck", "per_architecture": false}
@@ -416,7 +416,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
       ],
@@ -441,7 +441,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
       ],
@@ -467,7 +467,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
       ],
@@ -492,7 +492,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
         {"name": "sizecheck", "node": "tools/verify/sizecheck", "per_architecture": false}
@@ -517,7 +517,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
       ],

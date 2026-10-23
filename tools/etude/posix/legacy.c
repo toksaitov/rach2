@@ -886,6 +886,37 @@ static int prepare(struct prep *p)
 
     if (status == 0)
         status = keys(p);
+#ifdef _WIN32
+    if (status == 0) {
+        struct step s;
+        char **args = calloc(p->o->ngoals + 7, sizeof(*args));
+        size_t i;
+
+        if (args == NULL)
+            return failed(p, "tooling: memory ran out");
+        args[0] = "python3";
+        args[1] = "tools/etude/collection_tools.py";
+        args[2] = "prepare";
+        args[3] = p->tree;
+        args[4] = p->arch_var + 5;
+        args[5] = (char *)(p->o->kernel != NULL ? p->o->kernel : "");
+        for (i = 0; i < p->o->ngoals; i++)
+            args[i + 6] = (char *)p->o->goals[i];
+        memset(&s, 0, sizeof(s));
+        s.name = "tooling";
+        s.script = "exec >\"$1\" 2>&1; shift; REPO=$PWD; "
+                   ". tools/etude/collection-windows.sh && "
+                   "collection_windows && exec \"$@\"";
+        s.cmd = args;
+        status = run_step(p, &s);
+        free(args);
+    }
+    if (status == 0)
+        status = find_artifacts(p);
+    if (status == 0)
+        status = write_record(p);
+    return status;
+#endif
     if (status == 0)
         status = build_step(p, "components", "-j", "components");
     if (status == 0 && p->o->kernel != NULL) {

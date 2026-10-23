@@ -88,7 +88,8 @@ copy() {
     cp "$src"/guest/wire.c "$src"/guest/wire.h "$e/guest/"
     cp "$src"/win/bridge.c "$e/win/"
     cp "$src"/posix/qemu.c "$src"/posix/posix.h "$src"/posix/store.c "$src"/posix/store.h "$e/posix/"
-    cp "$src"/win/files.c "$src"/win/files.h "$src"/win/sockets.h "$src"/win/wincollectionfix.c "$e/win/"
+    cp "$src"/win/files.c "$src"/win/files.h "$src"/win/sockets.h "$src"/win/wincollectionfix.c \
+        "$src"/win/image_command.c "$e/win/"
     cp "$src"/volume/volume.h "$src"/volume/volume.c "$src"/volume/etude_volume.c "$e/volume/"
     cp "$src"/include/etude/*.h "$e/include/etude/"
     cp "$src"/schemas/history.schema.json "$e/schemas/"
@@ -115,6 +116,8 @@ compile() {
         "$cc" $2 -municode -o wintarget.exe wintarget.c -lws2_32 -lbcrypt
         # shellcheck disable=SC2086
         "$cc" $2 -I ../volume -o winstand.exe winstand.c ../volume/volume.c
+        # shellcheck disable=SC2086
+        "$cc" $2 -o image-command.exe image_command.c hold.c winfmt.c
         # shellcheck disable=SC2086
         "$cc" $2 -I ../include -o etude-tooling.exe ../etude_tooling.c ../tooling.c $executor \
             $history -lws2_32 -lbcrypt
@@ -153,7 +156,8 @@ compile "$work/ok" "$flags -Wall -Wextra -Werror"
 w=$work/ok/tools/etude/win
 "$pecheck" "$w/winfixture.exe" "$w/wintarget.exe" "$w/winstand.exe" "$w/etude-tooling.exe" \
     "$w/etude-volume.exe" "$w/etude-hold.exe" "$w/etude-ports.exe" "$w/etude-legacy.exe" \
-    "$w/etude-bridge.exe" "$w/casecheck.exe" "$w/history_check.exe" "$w/history_lines.exe"
+    "$w/etude-bridge.exe" "$w/casecheck.exe" "$w/history_check.exe" "$w/history_lines.exe" \
+    "$w/image-command.exe"
 if fixtures "$work/ok" "$work/ok.log" "$@"; then
     cat "$work/ok.log"
     finished=1

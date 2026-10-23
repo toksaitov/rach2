@@ -43,14 +43,9 @@ The compiler is wrapped, not linked. A GCC that targets Linux defines `__linux__
 
 #### Windows
 
-The Windows section prepares a machine for etude: QEMU for Windows, whose accelerator there is WHPX, the Windows Hypervisor Platform, and MSYS2, which supplies the shell, make and the other POSIX programs the build and the suites call; its UCRT64 environment has the MinGW-w64 compiler, whose programs need no MSYS2 runtime. `etude-legacy set` runs natively with the Windows executor and QEMU launcher; request `RACH2_QEMU_ACCEL=whpx` explicitly. `tests/run` still bootstraps its POSIX runner helper. The native entry points and their check are in [the etude Readme](etude/Readme.md#use). `prereq.sh --platform windows` probes the Windows side through PowerShell: run in WSL, it reaches the Windows of the same machine, and with `RACH2_PREREQ_POWERSHELL` set to `ssh HOST powershell -NoProfile -NonInteractive -EncodedCommand` it reaches another over SSH. MSYS2 and its packages install as the account; QEMU, which installs for every user, and the OpenSSH server need an administrator; and the Hypervisor Platform takes effect after a restart, which a person makes. MSYS2 has no package of the cross toolchains, e2fsprogs or mandoc, so [build_host_tool.sh](setup/build_host_tool.sh) builds each from pinned sources, in MSYS2's shell, in a clone of this tree:
+The Windows comparison uses the supporting programs already on the machine: MSYS2's shell, make, Python and POSIX utilities, and UCRT64's MinGW-w64 compiler for native programs. Only QEMU may be installed. QEMU's Windows accelerator is WHPX, the Windows Hypervisor Platform; request `RACH2_QEMU_ACCEL=whpx` explicitly.
 
-    sh tools/setup/build_host_tool.sh i686-elf /usr/local
-    sh tools/setup/build_host_tool.sh x86_64-elf /usr/local
-    sh tools/setup/build_host_tool.sh e2fsprogs /usr/local
-    sh tools/setup/build_host_tool.sh mandoc /usr/local
-
-`unshare` and `ip`, which make the network namespaces of `tests/run codexapi` and `tests/run museapi`, and exfatprogs, which `tests/run large` uses, have no Windows port; macOS lacks the first two as well.
+The collection builds its guest artifacts in the local Linux tooling machine, including both cross toolchains, e2fsprogs, mandoc and the image builders. Native scenario programs are compiled on Windows. Missing mtools and file-system commands are native entry points to jobs in the same tooling machine; the Rach2 guests remain Windows QEMU processes. [The etude Readme](etude/Readme.md#the-tooling-machine) describes the cache, transfers and accounting. `sh tools/setup/prereq.sh --platform windows` checks the existing supporting programs and prints an installation command only for QEMU. A missing supporting program needs the owner's decision.
 
 #### Rach2
 

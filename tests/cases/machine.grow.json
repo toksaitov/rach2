@@ -466,7 +466,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 2000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 2000, "memory_bytes": 1073741824, "tooling_memory_bytes": 1879048192, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "grow", "node": "tests/cases/host/grow", "per_architecture": false},
         {"name": "growset", "node": "tools/inspect/growset", "per_architecture": false},
@@ -529,7 +529,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 2000, "memory_bytes": 1073741824, "disk_bytes": 536870912, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 2000, "memory_bytes": 1073741824, "tooling_memory_bytes": 1879048192, "disk_bytes": 536870912, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "grow", "node": "tests/cases/host/grow", "per_architecture": false}
       ],

@@ -273,6 +273,8 @@ static const char *find_volume(const char *self)
     while (n > 0 && self[n - 1] != '/' && self[n - 1] != '\\' && self[n - 1] != ':')
         n--;
     snprintf(volume, sizeof(volume), "%.*setude-volume%s", (int)n, self, n > 0 ? ".exe" : "");
+    if (n > 0 && _access(volume, 0) != 0)
+        snprintf(volume, sizeof(volume), "%.*setude-volume", (int)n, self);
 #else
     while (n > 0 && self[n - 1] != '/')
         n--;

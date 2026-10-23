@@ -49,7 +49,7 @@ export FIX
 # (tools/etude/tooling/tools), and the commands it runs on the host are named
 # in their recipes.
 linux_only_macos='unshare ip codex'
-linux_only_windows='unshare ip codex mkfs.exfat fsck.exfat'
+linux_only_windows='unshare ip codex mkfs.exfat fsck.exfat mformat mmd mcopy mdir mtype mdel mdeltree minfo xorriso mke2fs debugfs e2fsck mandoc cppcheck shellcheck clang clang-format'
 tooling_needs='qemu-system-x86_64 qemu-img curl'
 
 # Stand-ins: `id` answers as the account `fixuser`, uid 0 when FIX/root
@@ -397,6 +397,13 @@ coverage()
             done
         fi
         while read -r need; do
+            case "$p:$need" in
+                windows:i686-elf-*|windows:x86_64-elf-*)
+                    target=${need%%-elf-*}
+                    grep -qx "$target-linux-gnu-gcc" "$repo/tools/etude/tooling/tools" ||
+                        echo "coverage: the tooling machine lacks $target's compiler" >> "$work/why"
+                    continue ;;
+            esac
             case " $skip " in *" $need "*) continue ;; esac
             # An entry of choices is met by every command of one of them.
             met=0

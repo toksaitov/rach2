@@ -28,7 +28,9 @@ CHAN=/dev/ttyS1
 CODEX_VERSION=0.162.1
 PACKAGES='util-linux iproute2 exfatprogs dosfstools e2fsprogs python3 openssl git
 curl wget ca-certificates nodejs npm build-essential gawk bison flex m4 perl
-texinfo xz-utils patch gzip bzip2 tar gnupg gpgv binutils mandoc'
+texinfo xz-utils patch gzip bzip2 tar gnupg gpgv binutils mandoc mtools xorriso
+openssh-client rsync cppcheck shellcheck clang clang-format gcc-i686-linux-gnu binutils-i686-linux-gnu
+gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu'
 X86=
 if [ "$(uname -m)" = aarch64 ]; then
     X86='qemu-i386 qemu-x86_64'
@@ -47,18 +49,48 @@ say()
 
 fail()
 {
+    if [ -f /var/log/etude-provision.log ]; then
+        tail -n 30 /var/log/etude-provision.log | while IFS= read -r line; do
+            say "provision log: $line"
+        done
+    fi
     say "provision: failed: $*"
     exit 1
 }
 
+# Keep a command's output and relay it without interpreting it as a report.
+run_logged()
+{
+    { "$@"; echo "$?" > /run/etude-provision-status; } 2>&1 |
+        while IFS= read -r line; do
+            printf '%s\n' "$line" >> /var/log/etude-provision.log
+            say "packages: $line"
+        done
+    status=$(cat /run/etude-provision-status) || return 1
+    rm -f /run/etude-provision-status
+    return "$status"
+}
+
 export DEBIAN_FRONTEND=noninteractive
+: > /var/log/etude-provision.log
 say 'provision: packages'
-apt-get update -q > /var/log/etude-provision.log 2>&1 || fail 'apt-get update'
+for source in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources \
+    /etc/apt/sources.list.d/*.list; do
+    [ ! -f "$source" ] || sed -i \
+        -e 's|http://archive.ubuntu.com/|https://archive.ubuntu.com/|g' \
+        -e 's|http://security.ubuntu.com/|https://security.ubuntu.com/|g' \
+        -e 's|http://ports.ubuntu.com/|https://ports.ubuntu.com/|g' "$source" ||
+        fail 'the apt sources'
+done
+run_logged apt-get update -q || fail 'apt-get update'
 # shellcheck disable=SC2086 # the list is words
-apt-get install -y -q --no-install-recommends $PACKAGES >> /var/log/etude-provision.log 2>&1 ||
+run_logged apt-get install -y -q --no-install-recommends $PACKAGES ||
     fail 'apt-get install'
+run_logged /usr/lib/systemd/systemd-networkd-wait-online --any ||
+    fail 'the network after package service restarts'
 say "provision: codex $CODEX_VERSION"
-npm install -g "@openai/codex@$CODEX_VERSION" >> /var/log/etude-provision.log 2>&1 ||
+run_logged env NODE_OPTIONS=--dns-result-order=ipv4first npm install -g --loglevel=http \
+    "@openai/codex@$CODEX_VERSION" ||
     fail "npm install codex $CODEX_VERSION"
 
 say 'provision: the job runner'

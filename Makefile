@@ -662,6 +662,10 @@ $(ETUDEHOLD): $(ETUDE_HOLD_SRC) tools/etude/hold.h
 # flags, with etude-volume beside it, which makes and reads its volumes.
 ETUDETOOLING = build/tools/etude/etude-tooling
 ETUDEVOLUME = build/tools/etude/etude-volume
+build/tools/etude/image-command: tools/etude/win/image_command.c tools/etude/win/hold.c \
+                               tools/etude/win/winfmt.c tools/etude/hold.h tools/etude/win/winfmt.h
+	@mkdir -p $(@D)
+	$(ETUDE_LINK) -std=c99
 $(ETUDETOOLING): $(ETUDE_TOOLING_SRC) tools/etude/include/etude/tooling.h \
                  tools/etude/include/etude/exec.h tools/etude/include/etude/history.h \
                  tools/etude/posix/posix.h tools/etude/capture.h tools/etude/history_json.h \

@@ -378,7 +378,7 @@
       "resources": {
         "cpu_millis": 1000,
         "cpu_ceiling_millis": 1000,
-        "memory_bytes": 268435456,
+        "memory_bytes": 268435456, "tooling_memory_bytes": 1073741824,
         "disk_bytes": 134217728,
         "locks": [],
         "ports": 0,
@@ -1169,7 +1169,7 @@
       "resources": {
         "cpu_millis": 1000,
         "cpu_ceiling_millis": 1000,
-        "memory_bytes": 268435456,
+        "memory_bytes": 268435456, "tooling_memory_bytes": 1073741824,
         "disk_bytes": 201326592,
         "locks": [],
         "ports": 0,

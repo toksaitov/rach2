@@ -222,102 +222,21 @@ manual # part of macOS: install the system again or repair it
 
 platform windows
 
-# winget comes with App Installer; MSYS2 supplies the shell, make and the
-# other POSIX tools, and its UCRT64 environment the MinGW-w64 compiler,
-# whose programs need no MSYS2 runtime.
-need winget
-probe Runs "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe"
-user Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe
-
+# The comparison uses the supporting programs already present on Windows.
+# Only QEMU may be installed; guest builds and absent image tools run in
+# the local Linux tooling machine.
 need msys2
 probe Runs C:\msys64\usr\bin\bash.exe
-user winget install --exact --id MSYS2.MSYS2 --scope user --silent --accept-package-agreements --accept-source-agreements
+manual # MSYS2 must already be present; do not install supporting tools
 
-need gcc
+need cc gcc
 probe Runs C:\msys64\ucrt64\bin\gcc.exe
-user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-gcc'
+manual # the existing UCRT64 compiler builds native Windows programs
 
-# MSYS2's own GCC builds the build's host tools as POSIX programs.
-need cc
-probe Runs C:\msys64\usr\bin\cc.exe
-user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm gcc'
-
-need make
-probe Runs C:\msys64\usr\bin\make.exe
-user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm make'
-
-need awk sed tar gzip bzip2 patch
+need make awk sed tar gzip bzip2 patch ssh ssh-keygen scp sftp openssl git curl python3 nc shasum tmux
 probe Has C:\msys64\usr\bin\@TOOL@.exe
-user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm gawk sed tar gzip bzip2 patch'
+manual # use the supporting programs already present in MSYS2
 
-need ssh ssh-keygen scp sftp
-probe Has C:\msys64\usr\bin\@TOOL@.exe
-user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm openssh'
-
-need mformat mmd mcopy mdir mtype mdel mdeltree minfo
-probe Has C:\msys64\ucrt64\bin\@TOOL@.exe
-user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-mtools'
-
-need xorriso
-probe Has C:\msys64\usr\bin\xorriso.exe
-user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm xorriso'
-
-need python3
-probe Runs C:\msys64\ucrt64\bin\python3.exe
-user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-python'
-
-need openssl git tmux curl
-probe Has C:\msys64\usr\bin\@TOOL@.exe
-user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm openssl git tmux curl'
-
-need nc
-probe Has C:\msys64\usr\bin\nc.exe
-user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm openbsd-netcat'
-
-need shasum
-probe Has C:\msys64\usr\bin\core_perl\shasum
-user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm perl'
-
-need cppcheck
-probe Has C:\msys64\ucrt64\bin\cppcheck.exe
-user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-cppcheck'
-
-need clang clang-format
-probe Has C:\msys64\ucrt64\bin\@TOOL@.exe
-user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-clang'
-
-need shellcheck
-probe Runs "$env:LOCALAPPDATA\Microsoft\WinGet\Links\shellcheck.exe"
-user winget install --exact --id koalaman.shellcheck --scope user --silent --accept-package-agreements --accept-source-agreements
-
-# MSYS2 has no package of these, so build_host_tool.sh builds them from
-# pinned sources in MSYS2's shell, in a clone of this tree, into its
-# /usr/local.
-need i686-elf-gcc i686-elf-ld i686-elf-ar i686-elf-strip i686-elf-objcopy i686-elf-readelf i686-elf-ranlib i686-elf-nm
-probe Has C:\msys64\usr\local\bin\@TOOL@.exe
-user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm gcc make curl tar gzip xz bzip2 m4 diffutils patch'
-manual # in MSYS2's shell (C:\msys64\msys2.exe), in a clone of this tree:
-manual sh tools/setup/build_host_tool.sh i686-elf /usr/local
-
-need x86_64-elf-gcc x86_64-elf-ld x86_64-elf-ar x86_64-elf-strip x86_64-elf-objcopy x86_64-elf-readelf x86_64-elf-ranlib x86_64-elf-nm
-probe Has C:\msys64\usr\local\bin\@TOOL@.exe
-user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm gcc make curl tar gzip xz bzip2 m4 diffutils patch'
-manual # in MSYS2's shell (C:\msys64\msys2.exe), in a clone of this tree:
-manual sh tools/setup/build_host_tool.sh x86_64-elf /usr/local
-
-need mke2fs debugfs e2fsck
-probe Has C:\msys64\usr\local\bin\@TOOL@.exe
-user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm gcc make curl tar gzip xz bzip2 m4 diffutils patch'
-manual # in MSYS2's shell (C:\msys64\msys2.exe), in a clone of this tree:
-manual sh tools/setup/build_host_tool.sh e2fsprogs /usr/local
-
-need mandoc
-probe Has C:\msys64\usr\local\bin\mandoc.exe
-user C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm gcc make curl tar gzip xz bzip2 m4 diffutils patch'
-manual # in MSYS2's shell (C:\msys64\msys2.exe), in a clone of this tree:
-manual sh tools/setup/build_host_tool.sh mandoc /usr/local
-
-# QEMU for Windows installs for every user, with OVMF in its share.
 need qemu-system-i386 qemu-system-x86_64 qemu-img
 probe Runs "$env:ProgramFiles\qemu\@TOOL@.exe"
 admin winget install --exact --id SoftwareFreedomConservancy.QEMU --scope machine --silent --accept-package-agreements --accept-source-agreements
@@ -326,20 +245,13 @@ need OVMF
 probe Has "$env:ProgramFiles\qemu\share\edk2-x86_64-code.fd"
 admin winget install --exact --id SoftwareFreedomConservancy.QEMU --scope machine --silent --accept-package-agreements --accept-source-agreements
 
-# WHPX, QEMU's accelerator on Windows, is the Windows Hypervisor Platform,
-# which takes effect after a restart.
 need whpx
 probe (Get-CimInstance Win32_OptionalFeature -Filter "Name='HypervisorPlatform'").InstallState -eq 1
-manual # in an elevated PowerShell:
-manual Enable-WindowsOptionalFeature -Online -FeatureName HypervisorPlatform -All -NoRestart
-manual Restart-Computer
+manual # the Windows Hypervisor Platform must already be enabled
 
-# The owner's Mac reaches the machine over SSH.
 need sshd
 probe (Get-Service sshd).Status -eq 'Running'
-admin Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
-admin Set-Service sshd -StartupType Automatic
-admin Start-Service sshd
+manual # the existing OpenSSH server supplies the owner's access
 
 platform rach2
 

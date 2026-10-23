@@ -85,6 +85,10 @@ LC_ALL=C; export LC_ALL
 # e2fsprogs, where a package manager keeps it off the path, so that the suites
 # that name mke2fs or e2fsck find them where the build does.
 . "$REPO/tools/setup/e2fsprogs_path.sh"
+case $(uname -s) in
+    MINGW*|MSYS*|UCRT*|CLANG*)
+        . "$REPO/tools/etude/collection-windows.sh" || exit 1 ;;
+esac
 # On macOS, Homebrew's mtools 4.0.49 appends `_` to some of the names it copies
 # out of a volume under LC_ALL=C, so each mtools program on the path is put
 # first in it as a wrapper in the run's scratch that runs it under C.UTF-8.
@@ -427,7 +431,7 @@ check_space() {
 # etude's tooling machine runs on (tools/etude/Readme.md, The tooling machine).
 tooling_host() {
     [ "$(uname -s)" != Linux ] || return 1
-    for tool in qemu-system-x86_64 qemu-img mformat mmd mcopy tar; do
+    for tool in qemu-system-x86_64 qemu-img curl tar; do
         command -v "$tool" >/dev/null 2>&1 || return 1
     done
 }
@@ -448,7 +452,13 @@ check_tools() { # check_tools NAME
                     qemu) tool=$RACH2_QEMU ;;
                     tooling) tooling_host && continue; has=""; break ;;
                 esac
-                command -v "$tool" >/dev/null 2>&1 || { has=""; break; }
+                if ! command -v "$tool" >/dev/null 2>&1; then
+                    case $(uname -s) in
+                        MINGW*|MSYS*|UCRT*|CLANG*)
+                            collection_windows_tool "$tool" "$1" && continue ;;
+                    esac
+                    has=""; break
+                fi
             done
             [ -n "$has" ] && { met=1; break; }
         done
@@ -778,6 +788,9 @@ export RACH2_QEMU_ACCEL
 # The line that says this run began. Everything below it belongs to this run,
 # and a log without it is a run that never started.
 echo "run: starting: $* (pid $$, $(date '+%Y-%m-%d %H:%M:%S'), architecture $ARCH, workers $WORKERS, memory $MEMORY_MIB MiB, accelerator $RACH2_QEMU_ACCEL, processors $RACH2_CPUS$selection)"
+case $(uname -s) in
+    MINGW*|MSYS*|UCRT*|CLANG*) collection_windows || exit 1 ;;
+esac
 # The recovery system starts an SSH server only where a key was built into it,
 # and the suites that repair or update a machine do that work through recovery
 # over SSH. The key is minted here: after the names are checked and the tree is

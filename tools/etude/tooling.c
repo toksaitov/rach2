@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 
 #ifdef _WIN32
+#include <windows.h>
 #include <direct.h>
 #include <io.h>
 #include <process.h>
@@ -204,21 +205,31 @@ static int file_sha256(const char *path, char hex[65])
 /** Say whether `path` exists. */
 static int exists(const char *path)
 {
+#ifdef _WIN32
+    return _access(path, 0) == 0;
+#else
     struct stat st;
 
     return stat(path, &st) == 0;
+#endif
 }
 
 /** Give the bytes of storage `path` uses, or its size where that is unknown. */
 static uint64_t used_bytes(const char *path)
 {
+#ifdef _WIN32
+    DWORD high, low;
+
+    SetLastError(NO_ERROR);
+    low = GetCompressedFileSizeA(path, &high);
+    if (low == INVALID_FILE_SIZE && GetLastError() != NO_ERROR)
+        return 0;
+    return ((uint64_t)high << 32) | low;
+#else
     struct stat st;
 
     if (stat(path, &st) != 0)
         return 0;
-#ifdef _WIN32
-    return (uint64_t)st.st_size;
-#else
     return (uint64_t)st.st_blocks * 512u;
 #endif
 }
