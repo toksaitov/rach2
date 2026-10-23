@@ -517,6 +517,7 @@ ETUDEVOLUME = build/tools/etude/etude-volume
 ETUDE_HDRS = $(wildcard tools/etude/*.h tools/etude/include/etude/*.h tools/etude/posix/*.h \
                         tools/etude/guest/*.h tools/etude/volume/*.h) utils/sha256.h
 include tests/cases/host/scripts.mk
+include tests/cases/host/family.mk
 $(ETUDE): $(ETUDE_SRC) $(ETUDE_HDRS) | $(ETUDEVOLUME)
 	@mkdir -p $(dir $@)
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \

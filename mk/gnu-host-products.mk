@@ -17,7 +17,7 @@ GNU_STEP_STAMPS += $(GNU_HOST_PRODUCTS_STAMP)
 gnu-host-products: $(GNU_HOST_PRODUCTS_STAMP)
 
 $(GNU_HOST_PRODUCTS_STAMP): $(GNU_HOST_PRODUCTS_SOURCES) $(GNU_PORTS_STAMP) \
-    $(GNU_SANITIZERS_STAMP) $(E2FSPROGS_STAMP) | $(ETUDE)
+    $(GNU_SANITIZERS_STAMP) $(E2FSPROGS_STAMP) $(MTOOLS_STAMP) | $(ETUDE)
 	@rm -f $@
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else \
 	    $(GNU_STEP) -n gnu-host-products -t $@ $(STEP_INPUTS) \

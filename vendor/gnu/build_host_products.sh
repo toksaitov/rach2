@@ -18,8 +18,12 @@ compiler=$GNU_OUT/cross/bin/$GNU_TARGET-gcc
 make --no-print-directory -f tests/cases/host/products.mk \
     CC="$compiler --sysroot=$GNU_OUT/root" PREFIX="$out" \
     SANITIZER_CC="$compiler --sysroot=$GNU_OUT/root -B$GNU_OUT/sanitizers/compiler/ -L$GNU_OUT/sanitizers/root/usr/lib"
-for tool in mke2fs debugfs e2fsck resize2fs; do
+for tool in mke2fs debugfs e2fsck resize2fs dumpe2fs tune2fs; do
     cp "$ARCH_BUILD/vendor/e2fsprogs/$tool" "$out/$tool"
+done
+cp "$ARCH_BUILD/vendor/mtools/mtools" "$out/mtools"
+for tool in mcopy mdir minfo mtype mformat mmd mdel mdeltree; do
+    ln -sf mtools "$out/$tool"
 done
 
 # Build both TinyCC assemblers for this helper's execution architecture.

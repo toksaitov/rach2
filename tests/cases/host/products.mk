@@ -9,7 +9,9 @@ PRODUCT_KRFFS = krffs/krffs_file_system.c krffs/krffs_node.c \
 PRODUCT_FLOW = $(wildcard tests/cases/host/flow_*.c) tests/cases/host/fixture.c utils/sha256.c \
     tools/etude/volume/volume.c
 PRODUCT_BUILD = $(wildcard tests/cases/host/build_*.c) tests/cases/host/fixture.c utils/sha256.c
-PRODUCT_PROGRAMS = host-flow-check host-build-check drive stageimage.krffs mkfs.krffs \
+PRODUCT_FAMILY = $(filter-out tests/cases/host/family_scenario.c,\
+    $(wildcard tests/cases/host/family_*.c)) tests/cases/host/fixture.c utils/sha256.c
+PRODUCT_PROGRAMS = host-flow-check host-build-check host-family-check drive stageimage.krffs mkfs.krffs \
     setidcheck sha256 etude etude-volume host host-suite-probe doom_libc-i686 doom_libc-x86_64 \
     growset growboot growroot growroot-memory reflash diskctl bootctl mkfatfixture \
     readfile.krffs binfind pty-secret
@@ -21,6 +23,9 @@ $(PREFIX)/host-flow-check: $(PRODUCT_FLOW)
 	@mkdir -p $(@D)
 	$(CC) $(PRODUCT_CFLAGS) -Itools/etude/volume -o $@ $^
 $(PREFIX)/host-build-check: $(PRODUCT_BUILD)
+	@mkdir -p $(@D)
+	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
+$(PREFIX)/host-family-check: $(PRODUCT_FAMILY)
 	@mkdir -p $(@D)
 	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
 $(PREFIX)/drive: tests/cases/host/host_products_drive.c
