@@ -31,13 +31,15 @@
 # /usr/sbin, puts the CA bundle in /etc/ssl, puts /etc/services,
 # /etc/protocols, /etc/networks, /etc/localtime and /etc/timezone in place,
 # compiles the console's terminfo entry, rach2.ti, renders the ports' manual
-# pages with render_man.sh, takes the set-id bit off OpenSSH's ssh-keysign,
-# gives /etc/shadow a locked line for each system account of /etc/passwd, and
-# has the root's own ldconfig write /etc/ld.so.cache from the /etc/ld.so.conf
-# the manifest staged. A file the tree already has is refused rather than
-# replaced, so that what the manifest staged is what the image has; the one
-# file replaced and the one added to are named where they are, and /bin/sh,
-# which the manifest does not stage, is a name of bash's file.
+# pages with render_man.sh, gives every node its owner's write permission,
+# takes the set-id bit off OpenSSH's ssh-keysign, sets the modes of the ports
+# that are narrower than the store keeps, gives /etc/shadow a locked line for
+# each system account of /etc/passwd, and has the root's own ldconfig write
+# /etc/ld.so.cache from the /etc/ld.so.conf the manifest staged. A file the
+# tree already has is refused rather than replaced, so that what the manifest
+# staged is what the image has; the one file replaced and the one added to are
+# named where they are, and /bin/sh, which the manifest does not stage, is a
+# name of bash's file.
 #
 
 set -e
@@ -120,6 +122,16 @@ fresh()
     fi
 }
 
+# writable: give the owner write permission on every node of the tree. A
+# part that comes from the host's store of step outputs is read-only, and the
+# volume must not depend on where the layer was built, so every node is
+# root's to write, whatever mode the build gave it, and the few narrower
+# modes are set below.
+writable()
+{
+    chmod -R u+w "$TREE"
+}
+
 # install_part PART: copy PART of the build tree over the tree. The Info
 # directory index lists only the manuals of the part that wrote it, so none
 # is kept, as build_port.sh keeps none.
@@ -128,6 +140,7 @@ install_part()
     nodes "$OUT/$1" > "$WORK/new"
     fresh "$WORK/new"
     cp -a "$OUT/$1/." "$TREE/"
+    writable
     rm -f "$TREE/usr/share/info/dir"
     echo "gnu: install: $1: $(wc -l < "$WORK/new" | tr -d ' ') files"
 }
@@ -145,7 +158,10 @@ install_part js
 # where /bin, /lib and /sbin were links into /usr, as trixie has them; here
 # they are directories of the musl system, so those paths are taken under
 # /usr, where the unpack put their files. The archive is written whole
-# before it is read, so that a failure to write it stops the install.
+# before it is read, so that a failure to write it stops the install. Its list
+# has each directory's whole contents right after it, sorted with the slash
+# below every other byte, since tar gives a directory its mode once it has
+# left it, and a mode from the store has no write permission.
 : > "$WORK/debian"
 while read -r name _; do
     skipped "$name" && continue
@@ -156,8 +172,10 @@ grep -v '^\.$' "$WORK/debian" | LC_ALL=C sort -u > "$WORK/debian.list"
 nodes "$OUT/chromium" > "$WORK/debian.have"
 LC_ALL=C comm -12 "$WORK/debian.list" "$WORK/debian.have" > "$WORK/new"
 fresh "$WORK/new"
-tar -cf "$WORK/debian.tar" -C "$OUT/chromium" --no-recursion -T "$WORK/debian.list"
+tr / '\001' < "$WORK/debian.list" | LC_ALL=C sort | tr '\001' / > "$WORK/debian.order"
+tar -cf "$WORK/debian.tar" -C "$OUT/chromium" --no-recursion -T "$WORK/debian.order"
 tar -xpf "$WORK/debian.tar" -C "$TREE"
+writable
 echo "gnu: install: chromium: $(wc -l < "$WORK/new" | tr -d ' ') files"
 
 for name in ${GNU_AGENTS:-}; do
@@ -287,7 +305,10 @@ sh "$DIR/render_man.sh" "$TREE/usr/share/man"
 # ssh-keysign is set-id root so that host-based authentication can read the
 # host keys. The system uses no host-based authentication, and a set-id file
 # the manifest does not declare fails the set-id guard, so it has no bit.
-chmod u-s "$TREE/usr/libexec/ssh-keysign"
+# It and sudo's directories have the modes their ports install, which the
+# store, readable by every account, does not keep.
+chmod 0711 "$TREE/usr/libexec/ssh-keysign" "$TREE/var/lib/sudo"
+chmod 0700 "$TREE/var/lib/sudo/lectured"
 
 # The shadow file the manifest stages, krffs/shadow, has the lines of the
 # accounts that log in, root's and test's, which every image shares. shadow's

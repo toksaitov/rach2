@@ -406,6 +406,7 @@ run_browser()
     rm -rf "$run"
     mkdir -p "$run"
     cp -a "$ROOT" "$run/root"
+    chmod -R u+w "$run/root"
     mkdir -p "$run/root/dev" "$run/root/proc" "$run/root/sys" "$run/root/tmp"
     cat > "$run/root/tmp/page.html" <<'EOF'
 <!DOCTYPE html>

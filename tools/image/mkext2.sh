@@ -110,8 +110,10 @@ mkdir -p "$(dirname "$OUT")"
 # Every intermediate lives in a directory of this run's own, so that two
 # builds of one output never share a path and nothing here follows a name
 # somebody else made; the image reaches its name by one rename at the end.
+# An overlay may leave a directory there that its owner cannot write, so the
+# cleanup makes the directory writable before it removes it.
 WORK=
-trap 'rm -rf ${WORK:+"$WORK"}' EXIT
+trap '[ -z "$WORK" ] || { chmod -R u+w "$WORK"; rm -rf "$WORK"; }' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM

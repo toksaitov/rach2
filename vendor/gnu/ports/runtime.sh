@@ -9,7 +9,8 @@
 # libgcc_s.so.1 in /lib and libstdc++.so.6 in /usr/lib, and a locale archive
 # with C.UTF-8 and en_US.UTF-8. The archive is written by the target's own
 # localedef, run here through the staged loader, since its format is the one
-# the glibc that reads it expects.
+# the glibc that reads it expects. The copy of the sysroot is made writable,
+# since the sysroot may be the host's store's, which is read-only.
 VERSION=2.44
 SOURCE=
 
@@ -21,6 +22,7 @@ port_build()
 port_install()
 {
     cp -a "$SYSROOT/." "$DEST/"
+    chmod -R u+w "$DEST"
     cp -L "$CROSS/$TARGET/lib/libgcc_s.so.1" "$DEST/lib/"
     cp -L "$CROSS/$TARGET/lib/libstdc++.so.6" "$DEST/usr/lib/"
     mkdir -p "$DEST/usr/lib/locale"

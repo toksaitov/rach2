@@ -135,7 +135,9 @@ step_check()
     r="$(fresh check)/root"
     mkdir -p "$r/tmp" "$r/check"
     cp -a "$SYSROOT/." "$r/"
+    chmod -R u+w "$r"
     cp -a "$ROOT/." "$r/"
+    chmod -R u+w "$r"
     cat > "$r/check/hello.c" <<'EOF'
 #include <stdio.h>
 

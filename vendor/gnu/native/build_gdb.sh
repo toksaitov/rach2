@@ -190,7 +190,9 @@ step_check()
     r="$(fresh check)/root"
     mkdir -p "$r/tmp" "$r/proc" "$r/check" "$r/usr/lib"
     cp -a "$SYSROOT/." "$r/"
+    chmod -R u+w "$r"
     cp -a "$ROOT/." "$r/"
+    chmod -R u+w "$r"
     cp -a "$CROSS/$TARGET/lib/libstdc++.so"* "$CROSS/$TARGET/lib/libgcc_s.so"* \
         "$CROSS/$TARGET/lib/libatomic.so"* "$r/usr/lib/"
     "$TARGET-readelf" -d "$ROOT/usr/bin/gdb" | grep NEEDED
