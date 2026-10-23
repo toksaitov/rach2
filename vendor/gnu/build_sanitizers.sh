@@ -36,16 +36,35 @@ tar -tf "$ARCHIVE" | awk -v p="$PREFIX/" '
     index($0, p) == 1 {
         n = substr($0, length(p) + 1)
         if (n ~ /^(libsanitizer|libbacktrace|include|config)\// ||
-            n == "gcc/BASE-VER" ||
+            n == "gcc/BASE-VER" || n ~ /^libiberty\/cp-demangle\.(c|h)$/ ||
+            n ~ /^(libtool|ltoptions|ltsugar|ltversion|lt~obsolete)\.m4$/ ||
             n ~ /^(config-ml.in|config.guess|config.sub|install-sh|mkinstalldirs|missing|compile|depcomp|ar-lib|ltmain.sh|multilib.am)$/)
             print
     }' > "$WORK/source.list"
-tar -xf "$ARCHIVE" -C "$WORK/source" -T "$WORK/source.list"
+# The list contains directory entries as well as their children. Extract
+# each member once; recursive matching consumes the later explicit entries.
+tar --no-recursion --verbatim-files-from -xf "$ARCHIVE" \
+    -C "$WORK/source" -T "$WORK/source.list"
 SOURCE=$WORK/source/$PREFIX
-[ -f "$SOURCE/libsanitizer/configure" ] && [ -f "$SOURCE/gcc/BASE-VER" ] || {
-    echo 'gnu: sanitizers: the pinned archive lacks standalone build inputs' >&2
-    exit 1
-}
+for input in libsanitizer/configure libsanitizer/Makefile.in gcc/BASE-VER \
+    libbacktrace/filetype.awk libiberty/cp-demangle.c libiberty/cp-demangle.h \
+    config-ml.in config.guess config.sub install-sh multilib.am \
+    libtool.m4 ltoptions.m4 ltsugar.m4 ltversion.m4 lt~obsolete.m4; do
+    [ -f "$SOURCE/$input" ] || {
+        echo "gnu: sanitizers: the pinned archive lacks $input" >&2
+        exit 1
+    }
+done
+# Standalone configure assumes an unbuilt sibling libstdc++ tree. Use the
+# installed cross compiler's C++ headers and library in every generated
+# Makefile: upstream clears MAKEOVERRIDES, losing command-line replacements
+# when make recurses from the top directory or into its install rules.
+for template in "$SOURCE/libsanitizer/Makefile.in" "$SOURCE/libsanitizer/"*/Makefile.in; do
+    sed -e 's/^LIBSTDCXX_RAW_CXX_CXXFLAGS =.*/LIBSTDCXX_RAW_CXX_CXXFLAGS =/' \
+        -e 's/^LIBSTDCXX_RAW_CXX_LDFLAGS =.*/LIBSTDCXX_RAW_CXX_LDFLAGS = -lstdc++/' \
+        "$template" > "$template.tmp"
+    mv "$template.tmp" "$template"
+done
 # BUILD describes programs run by configure; HOST is the runtime's target.
 BUILD=$(cc -dumpmachine)
 cd "$WORK/build"
@@ -56,16 +75,13 @@ env CC="$CC --sysroot=$SYSROOT" CXX="$CXX --sysroot=$SYSROOT" \
         --target="$GNU_TARGET" --prefix=/usr --libdir=/usr/lib \
         --with-toolexeclibdir=/usr/lib --disable-multilib --enable-shared --enable-static \
         --disable-werror
-# Standalone libsanitizer otherwise points at an unbuilt sibling libstdc++.
-# The installed cross compiler already provides its headers and library.
 SUBDIRS='sanitizer_common interception libbacktrace'
 if [ "$RACH2_ARCH" = x86_64 ]; then
     SUBDIRS="$SUBDIRS lsan"
 fi
 SUBDIRS="$SUBDIRS asan ubsan"
-make SUBDIRS="$SUBDIRS" LIBSTDCXX_RAW_CXX_CXXFLAGS='' LIBSTDCXX_RAW_CXX_LDFLAGS=-lstdc++
-make SUBDIRS="$SUBDIRS" LIBSTDCXX_RAW_CXX_CXXFLAGS='' LIBSTDCXX_RAW_CXX_LDFLAGS=-lstdc++ \
-    DESTDIR="$WORK/install" install
+make SUBDIRS="$SUBDIRS"
+make SUBDIRS="$SUBDIRS" DESTDIR="$WORK/install" install
 
 LIB=$WORK/install/usr/lib
 [ -f "$LIB/libasan_preinit.o" ] && [ -f "$LIB/libsanitizer.spec" ] && \
