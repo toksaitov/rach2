@@ -95,6 +95,8 @@ static char *in_copy(const char *copy, const char *name, char *buf, size_t size)
     return get(p, buf, size);
 }
 
+#include "compat/step_roles_host.c"
+
 /** Start the program's main in a child, in `dir`, with the arguments
  * `argv` and the environment the caller set, its output into `out`. */
 static pid_t start(const char *dir, char **argv, const char *out)
@@ -207,29 +209,9 @@ static void test_key(void)
 static void test_copy(void)
 {
     char buf[512], p[1200], want[1200];
-    char *argv[] = {"etude",
-                    "-s",
-                    store,
-                    "-n",
-                    "demo",
-                    "-t",
-                    "st/demo.stamp",
-                    "-a",
-                    "i686",
-                    "-i",
-                    "src",
-                    "-o",
-                    "out",
-                    "-o",
-                    "flag",
-                    "-x",
-                    "*.o",
-                    "--",
-                    "sh",
-                    "-c",
-                    "mkdir -p out/sub && echo built >> ran && echo object > out/sub/a.o && "
-                    "echo header > out/sub/a.h && echo yes > flag",
-                    NULL};
+    char *argv[] = {"etude", "-s", store,     "-n",          "demo", "-t", "st/demo.stamp", "-a",
+                    "i686",  "-i", "src",     "-o",          "out",  "-o", "flag",          "-x",
+                    "*.o",   "--", step_self, "--step-role", "copy", NULL};
     struct ran r;
     struct stat st;
 
@@ -279,50 +261,12 @@ static void entry_path(const char *copy, const char *stamp, const char *rel, cha
 static void test_link(void)
 {
     char buf[PATH_LEN], p[1200], q[1200];
-    char *tc[] = {"etude",
-                  "-s",
-                  store,
-                  "-n",
-                  "tc",
-                  "-t",
-                  "r/tc.stamp",
-                  "-r",
-                  "r",
-                  "-i",
-                  "src",
-                  "-o",
-                  "cross",
-                  "--",
-                  "sh",
-                  "-c",
-                  "mkdir -p \"$ETUDE_STEP_ROOT/cross\" \"$ETUDE_STEP_ROOT/work/x\" && "
-                  "echo \"$ETUDE_STEP_ROOT\" > \"$ETUDE_STEP_ROOT/cross/where\" && "
-                  "echo built >> ../ran-tc",
-                  NULL};
-    char *ports[] = {"etude",
-                     "-s",
-                     store,
-                     "-n",
-                     "ports",
-                     "-t",
-                     "r/ports.stamp",
-                     "-r",
-                     "r",
-                     "-d",
-                     "r/tc.stamp",
-                     "-u",
-                     "cross",
-                     "-o",
-                     "root",
-                     "-o",
-                     "work/keep",
-                     "--",
-                     "sh",
-                     "-c",
-                     "mkdir -p \"$ETUDE_STEP_ROOT/root\" \"$ETUDE_STEP_ROOT/work/keep\" "
-                     "\"$ETUDE_STEP_ROOT/work/drop\" && "
-                     "cat \"$ETUDE_STEP_ROOT/cross/where\" > \"$ETUDE_STEP_ROOT/root/w\"",
-                     NULL};
+    char *tc[] = {"etude", "-s",  store, "-n",    "tc", "-t",      "r/tc.stamp",  "-r", "r",
+                  "-i",    "src", "-o",  "cross", "--", step_self, "--step-role", "tc", NULL};
+    char *ports[] = {"etude",         "-s",          store,   "-n", "ports",      "-t",
+                     "r/ports.stamp", "-r",          "r",     "-d", "r/tc.stamp", "-u",
+                     "cross",         "-o",          "root",  "-o", "work/keep",  "--",
+                     step_self,       "--step-role", "ports", NULL};
     struct ran r;
     struct stat st;
 
@@ -367,64 +311,17 @@ static void test_link(void)
 static void test_here(void)
 {
     char buf[1200], p[1200];
-    char *off[] = {
-        "etude",
-        "-s",
-        "",
-        "-n",
-        "tc",
-        "-t",
-        "r/tc.stamp",
-        "-r",
-        "r",
-        "-i",
-        "src",
-        "-o",
-        "cross",
-        "--",
-        "sh",
-        "-c",
-        "mkdir -p \"$ETUDE_STEP_ROOT/cross\" && echo here > \"$ETUDE_STEP_ROOT/cross/where\"",
-        NULL};
-    char *ports[] = {
-        "etude",
-        "-s",
-        store,
-        "-n",
-        "ports",
-        "-t",
-        "r/ports.stamp",
-        "-r",
-        "r",
-        "-d",
-        "r/tc.stamp",
-        "-u",
-        "cross",
-        "-o",
-        "root",
-        "--",
-        "sh",
-        "-c",
-        "mkdir -p \"$ETUDE_STEP_ROOT/root\" && echo local > \"$ETUDE_STEP_ROOT/root/w\"",
-        NULL};
-    char *nokey[] = {"etude",     "-s", store, "-n", "nokey", "-t", "st/nokey.stamp", "-d",
-                     "old.stamp", "-o", "nk",  "--", "sh",    "-c", "echo x > nk",    NULL};
-    char *leak[] = {"etude",
-                    "-s",
-                    store,
-                    "-n",
-                    "leak",
-                    "-t",
-                    "st/leak.stamp",
-                    "-i",
-                    "src",
-                    "-o",
-                    "lk",
-                    "--",
-                    "sh",
-                    "-c",
-                    "mkdir lk && echo \"$PWD/vendor\" > lk/p",
-                    NULL};
+    char *off[] = {"etude", "-s",  "",   "-n",    "tc", "-t",      "r/tc.stamp",  "-r",      "r",
+                   "-i",    "src", "-o", "cross", "--", step_self, "--step-role", "here-tc", NULL};
+    char *ports[] = {"etude",         "-s", store,  "-n", "ports",      "-t",
+                     "r/ports.stamp", "-r", "r",    "-d", "r/tc.stamp", "-u",
+                     "cross",         "-o", "root", "--", step_self,    "--step-role",
+                     "here-ports",    NULL};
+    char *nokey[] = {"etude",          "-s",          store,       "-n", "nokey", "-t",
+                     "st/nokey.stamp", "-d",          "old.stamp", "-o", "nk",    "--",
+                     step_self,        "--step-role", "nokey",     NULL};
+    char *leak[] = {"etude", "-s", store, "-n", "leak",    "-t",          "st/leak.stamp", "-i",
+                    "src",   "-o", "lk",  "--", step_self, "--step-role", "leak",          NULL};
     struct ran r;
 
     run(copy_a, off, &r);
@@ -460,27 +357,11 @@ static void test_here(void)
 static void test_key_env(void)
 {
     char buf[512], stamp[512];
-    char *keyed[] = {
-        "etude", "-s",           "",   "-n",  "env",
-        "-t",    "st/env.stamp", "-i", "src", "-o",
-        "ek",    "--",           "sh", "-c",  "echo \"etude-step 1 $ETUDE_STEP_KEY here\" > ek",
-        NULL};
-    char *unkeyed[] = {"etude",
-                       "-s",
-                       "",
-                       "-n",
-                       "unkeyed",
-                       "-t",
-                       "st/unkeyed.stamp",
-                       "-d",
-                       "none.stamp",
-                       "-o",
-                       "uk",
-                       "--",
-                       "sh",
-                       "-c",
-                       "echo \"${ETUDE_STEP_KEY-none}\" > uk",
-                       NULL};
+    char *keyed[] = {"etude", "-s", "",   "-n", "env",     "-t",          "st/env.stamp", "-i",
+                     "src",   "-o", "ek", "--", step_self, "--step-role", "key",          NULL};
+    char *unkeyed[] = {
+        "etude",      "-s", "",   "-n", "unkeyed", "-t",          "st/unkeyed.stamp", "-d",
+        "none.stamp", "-o", "uk", "--", step_self, "--step-role", "unkeyed",          NULL};
     struct ran r;
 
     run(copy_a, keyed, &r);
@@ -498,10 +379,11 @@ static void test_key_env(void)
 static void test_failures(void)
 {
     char buf[256], p[1200];
-    char *fail[] = {"etude", "-s", store, "-n", "fail", "-t", "st/fail.stamp",      "-i",
-                    "src",   "-o", "f",   "--", "sh",   "-c", "echo x > f; exit 3", NULL};
-    char *none[] = {"etude", "-s",  store, "-n",      "none", "-t",   "st/none.stamp",
-                    "-i",    "src", "-o",  "missing", "--",   "true", NULL};
+    char *fail[] = {"etude", "-s", store, "-n", "fail",    "-t",          "st/fail.stamp", "-i",
+                    "src",   "-o", "f",   "--", step_self, "--step-role", "fail",          NULL};
+    char *none[] = {"etude",         "-s",          store,  "-n", "none",    "-t",
+                    "st/none.stamp", "-i",          "src",  "-o", "missing", "--",
+                    step_self,       "--step-role", "none", NULL};
     char *lost[] = {"etude",
                     "-s",
                     "",
@@ -514,25 +396,8 @@ static void test_failures(void)
                     "--",
                     "/nonexistent/command",
                     NULL};
-    char *cut[] = {
-        "etude",
-        "-s",
-        store,
-        "-n",
-        "cut",
-        "-t",
-        "r/cut.stamp",
-        "-r",
-        "r",
-        "-i",
-        "src",
-        "-o",
-        "c",
-        "--",
-        "sh",
-        "-c",
-        "mkdir -p \"$ETUDE_STEP_ROOT/c\"; test -f ../go && echo ok > \"$ETUDE_STEP_ROOT/c/f\"",
-        NULL};
+    char *cut[] = {"etude", "-s",  store, "-n", "cut", "-t",      "r/cut.stamp", "-r",  "r",
+                   "-i",    "src", "-o",  "c",  "--",  step_self, "--step-role", "cut", NULL};
     struct ran r;
 
     run(copy_a, fail, &r);
@@ -566,7 +431,7 @@ static void test_failures(void)
  * command's path, and the variables the command gets. */
 static void test_ccache(void)
 {
-    char buf[4096], fake[1200], cmd[2400];
+    char buf[4096], fake[1200];
     char *argv[] = {"etude",
                     "-s",
                     store,
@@ -575,7 +440,7 @@ static void test_ccache(void)
                     "-t",
                     "st/cc.stamp",
                     "-c",
-                    "echo",
+                    step_self,
                     "-w",
                     "/opt/x/bin/i686-linux-gnu-gcc",
                     "-i",
@@ -583,33 +448,17 @@ static void test_ccache(void)
                     "-o",
                     "seen",
                     "--",
-                    "sh",
-                    "-c",
-                    cmd,
+                    step_self,
+                    "--step-role",
+                    "ccache",
                     NULL};
-    char *off[] = {"etude",
-                   "-s",
-                   "",
-                   "-n",
-                   "cc",
-                   "-t",
-                   "st/cc2.stamp",
-                   "-o",
-                   "seen2",
-                   "--",
-                   "sh",
-                   "-c",
-                   "env | grep -c '^ETUDE_STEP_CCACHE=' > seen2; :",
-                   NULL};
+    char *off[] = {"etude", "-s",    "",   "-n",      "cc",          "-t",         "st/cc2.stamp",
+                   "-o",    "seen2", "--", step_self, "--step-role", "ccache-off", NULL};
     struct ran r;
 
     fix_format(fake, sizeof fake, "%s/fake-ccache", fix_dir());
-    put(fake, "#!/bin/sh\necho \"ccache as $(basename \"$0\")\"\n");
-    chmod(fake, 0755);
-    fix_format(
-        cmd, sizeof cmd,
-        "{ cc; i686-linux-gnu-gcc; echo \"path ${PATH%%%%:*}\"; echo \"cc $ETUDE_STEP_CCACHE\"; "
-        "echo \"base $CCACHE_BASEDIR\"; echo \"hash $CCACHE_NOHASHDIR\"; } > seen");
+    if (symlink(step_self, fake))
+        exit(1);
     setenv("RACH2_CCACHE", fake, 1);
     run(copy_a, argv, &r);
     in_copy(copy_a, "seen", buf, sizeof buf);
@@ -633,17 +482,14 @@ static void test_ccache(void)
 static void test_together(void)
 {
     char buf[4096], cmd[1200], started[1200], go[1200];
-    char *argv[] = {"etude", "-s", store, "-n", "two", "-t", "st/two.stamp", "-i", "src", "-o",
-                    "t",     "--", "sh",  "-c", cmd,   NULL};
+    char *argv[] = {"etude", "-s", store, "-n", "two",     "-t",          "st/two.stamp", "-i",
+                    "src",   "-o", "t",   "--", step_self, "--step-role", "together",     NULL};
     const char *first = fix_path("first.out"), *second = fix_path("second.out");
     pid_t a, b;
     int sa, sb, n;
 
     fix_format(started, sizeof started, "%s/started", fix_dir());
     fix_format(go, sizeof go, "%s/go-two", fix_dir());
-    fix_format(cmd, sizeof cmd,
-               "touch %s; while [ ! -f %s ]; do sleep 0.01; done; echo run >> %s/runs; echo t > t",
-               started, go, fix_dir());
     a = start(copy_a, argv, first);
     for (n = 0; n < 3000 && !exists(started); n++)
         /* interval: a fixture's file is looked at again every 10 ms */
@@ -720,46 +566,15 @@ static void key_path(const char *shelf, const char *stamp, const char *what, cha
 
 /* The store of the removal's rows, its entries, and the commands they run. */
 static char shelf[PATH_LEN], tc_e[1200], ports_e[1200], demo_e[1200];
-static char *ex_tc[] = {"etude",
-                        "-s",
-                        shelf,
-                        "-n",
-                        "tc",
-                        "-t",
-                        "e/tc.stamp",
-                        "-r",
-                        "e",
-                        "-i",
-                        "src",
-                        "-o",
-                        "cross",
-                        "--",
-                        "sh",
-                        "-c",
-                        "mkdir -p \"$ETUDE_STEP_ROOT/cross\"",
-                        NULL};
-static char *ex_ports[] = {"etude",
-                           "-s",
-                           shelf,
-                           "-n",
-                           "ports",
-                           "-t",
-                           "e/ports.stamp",
-                           "-r",
-                           "e",
-                           "-d",
-                           "e/tc.stamp",
-                           "-u",
-                           "cross",
-                           "-o",
-                           "root",
-                           "--",
-                           "sh",
-                           "-c",
-                           "mkdir -p \"$ETUDE_STEP_ROOT/root\"",
-                           NULL};
-static char *ex_demo[] = {"etude", "-s", shelf, "-n", "demo", "-t",          "e/demo.stamp",
-                          "-o",    "dm", "--",  "sh", "-c",   "echo d > dm", NULL};
+static char *ex_tc[] = {"etude",      "-s", shelf,     "-n",          "tc",        "-t",
+                        "e/tc.stamp", "-r", "e",       "-i",          "src",       "-o",
+                        "cross",      "--", step_self, "--step-role", "expire-tc", NULL};
+static char *ex_ports[] = {"etude",         "-s", shelf,  "-n", "ports",      "-t",
+                           "e/ports.stamp", "-r", "e",    "-d", "e/tc.stamp", "-u",
+                           "cross",         "-o", "root", "--", step_self,    "--step-role",
+                           "expire-ports",  NULL};
+static char *ex_demo[] = {"etude", "-s", shelf, "-n",      "demo",        "-t",   "e/demo.stamp",
+                          "-o",    "dm", "--",  step_self, "--step-role", "demo", NULL};
 static char *ex_go[] = {"etude", "-s", shelf, "-e", "2", NULL};
 static char *ex_list[] = {"etude", "-p", "-s", shelf, "-e", "2", NULL};
 static char *ex_named[] = {"etude", "-s", shelf, "-e", "2", "-n", "x", NULL};
@@ -867,12 +682,15 @@ static void test_expire_removal(void)
 /** The usage errors. */
 static void test_refusals(void)
 {
-    char *noname[] = {"etude", "-t", "s", "-o", "x", "--", "true", NULL};
-    char *nested[] = {"etude", "-n", "x", "-t", "s", "-o", "a", "-o", "a/b", "--", "true", NULL};
-    char *dots[] = {"etude", "-n", "x", "-t", "s", "-o", "../a", "--", "true", NULL};
-    char *useless[] = {"etude", "-n", "x", "-t", "s", "-u", "c", "-o", "a", "--", "true", NULL};
-    char *nostore[] = {"etude", "-s", "/nonexistent/store", "-n", "x", "-t", "s", "-o", "a", "--",
-                       "true",  NULL};
+    char *noname[] = {"etude", "-t", "s", "-o", "x", "--", step_self, "--step-role", "none", NULL};
+    char *nested[] = {"etude", "-n",  "x",  "-t",      "s",           "-o",   "a",
+                      "-o",    "a/b", "--", step_self, "--step-role", "none", NULL};
+    char *dots[] = {"etude", "-n", "x",       "-t",          "s",    "-o",
+                    "../a",  "--", step_self, "--step-role", "none", NULL};
+    char *useless[] = {"etude", "-n", "x",  "-t",      "s",           "-u",   "c",
+                       "-o",    "a",  "--", step_self, "--step-role", "none", NULL};
+    char *nostore[] = {"etude", "-s",      "/nonexistent/store", "-n",   "x", "-t", "s", "-o", "a",
+                       "--",    step_self, "--step-role",        "none", NULL};
     struct ran r;
 
     run(copy_a, noname, &r);
@@ -888,9 +706,24 @@ static void test_refusals(void)
           "refusals: a store that is not there");
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     char p[1200];
+    const char *name = strrchr(argv[0], '/');
+    name = name ? name + 1 : argv[0];
+    if (!strcmp(name, "cc") || !strcmp(name, "i686-linux-gnu-gcc")) {
+        printf("ccache as %s\n", name);
+        return 0;
+    }
+    if (argc == 3 && !strcmp(argv[1], "--step-role"))
+        return step_role_main(argv[2]);
+    if (argc == 2 && !strcmp(argv[1], "-v")) {
+        puts("etude step fixture compiler 1");
+        return 0;
+    }
+    if (!realpath(argv[0], step_self))
+        return 1;
+    setenv("ETUDE_STEP_FIXTURE", fix_dir(), 1);
 
     unsetenv("ETUDE_STEP_SHIMS");
     unsetenv("ETUDE_STEP_CCACHE");
