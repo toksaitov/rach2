@@ -200,8 +200,8 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
 # tests/cases/guest.noentropy.json, which etude runs, and have no target here.
 # `tests/run fpu`: the floating-point state of a process is its own, by each
 # path the kernel saves it with: XSAVE under QEMU's `max`, FXSAVE under
-# `rach2.noxsave` and on `qemu64`, where `xsaveprobe` must find OSXSAVE clear
-# and no NT_X86_XSTATE, and the x87 state alone by `fnsave` under
+# `rach2.noxsave`, where `xsaveprobe` must find OSXSAVE clear and no
+# NT_X86_XSTATE, and on `qemu64`, and the x87 state alone by `fnsave` under
 # `rach2.nofxsr`, which only the i686 kernel takes, since every x86-64
 # processor has FXSR. They are the cases of tests/cases/guest.fpu.json, which
 # etude runs, and have no target here.
