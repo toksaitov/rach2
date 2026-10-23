@@ -785,10 +785,41 @@
           "per_architecture": false
         }
       ],
-      "timing": [],
+      "timing": [
+        {
+          "kind": "injected_delay",
+          "where": "tests/cases/host/fixture.c",
+          "assumes": "A short pause yields between reads of a fixture state. Completion is decided by published state and the case watchdog.",
+          "uncertainty_us": null
+        },
+        {
+          "kind": "injected_delay",
+          "where": "tests/cases/host/flow_status.c",
+          "assumes": "The wait fixture crosses one retry before comparing the stored start. The assertion compares records, not elapsed time.",
+          "uncertainty_us": null
+        },
+        {
+          "kind": "injected_delay",
+          "where": "tests/cases/host/build_ports.c:157",
+          "assumes": "A one-second job workload allows concurrent jobs to overlap. The assertion counts jobs.",
+          "uncertainty_us": null
+        },
+        {
+          "kind": "injected_delay",
+          "where": "tests/cases/host/host_suite_probe.c:102",
+          "assumes": "The child lingers so the driver can observe and cancel it.",
+          "uncertainty_us": null
+        },
+        {
+          "kind": "injected_delay",
+          "where": "tests/cases/host/host_suite_probe.c:133",
+          "assumes": "A short pause yields between reads of the meeting directory.",
+          "uncertainty_us": null
+        }
+      ],
       "native": {
         "plan": "none",
-        "class": "host-products",
+        "class": "system",
         "reason": "native C controls the prepared GNU products and their POSIX process fixtures on each supported host"
       },
       "steps": [

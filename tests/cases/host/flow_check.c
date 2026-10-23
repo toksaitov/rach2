@@ -52,6 +52,14 @@ int main(int argc, char **argv)
     if (strcmp(name, "host-flow-check")) {
         if (getenv("FLOW_PROGRESS"))
             return flow_progress_mock(argc, argv);
+        if (getenv("FLOW_CI_RUN"))
+            return flow_ci_run_mock(argc, argv);
+        if (getenv("FLOW_CI"))
+            return flow_ci_mock(argc, argv);
+        if (getenv("FLOW_BOARD"))
+            return flow_board_mock(argc, argv);
+        if (getenv("FLOW_MEASURE"))
+            return flow_measure_mock(argc, argv);
         if (getenv("FLOW_TESTING"))
             return flow_testing_mock(argc, argv);
         if (getenv("FLOW_DEPLOY"))
@@ -82,6 +90,14 @@ int main(int argc, char **argv)
     fx_env("FLOW_SELF", f.self);
     if (!strcmp(id, "progress"))
         ok = flow_progress(&f);
+    else if (!strcmp(id, "ci_run"))
+        ok = flow_ci_run(&f);
+    else if (!strcmp(id, "ci"))
+        ok = flow_ci(&f);
+    else if (!strcmp(id, "board"))
+        ok = flow_board(&f);
+    else if (!strcmp(id, "machine_measure"))
+        ok = flow_measure(&f);
     else if (!strcmp(id, "test_status"))
         ok = flow_status(&f);
     else if (!strcmp(id, "testing_run"))

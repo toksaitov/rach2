@@ -23,6 +23,8 @@ static pid_t groups[1024];
 static size_t ngroups;
 static volatile sig_atomic_t stopped;
 static struct fixture *owner;
+static char *external[256];
+static size_t nexternal;
 static void signal_children(int sig)
 {
     size_t i;
@@ -42,6 +44,17 @@ static void children_cleanup(void)
         if (groups[i] > 0)
             while (waitpid(groups[i], &status, 0) < 0 && errno == EINTR) {
             }
+    for (i = 0; i < nexternal; i++) {
+        if (owner && (stopped || owner->failed)) {
+            char saved[4096];
+            snprintf(saved, sizeof(saved), "%s/external-%u", owner->work, (unsigned)i);
+            if (!fx_tree(external[i], saved))
+                fprintf(stderr, "fixture: extra evidence could not be copied: %s\n", external[i]);
+        }
+        fx_remove(external[i]);
+        free(external[i]);
+    }
+    nexternal = 0;
     if (stopped && owner)
         fprintf(stderr, "fixture: interrupted; evidence: %s\n", owner->work);
     ngroups = 0;
@@ -53,6 +66,21 @@ static void interrupted(void)
         children_cleanup();
         exit(128 + sig);
     }
+}
+int fx_external(const char *template, char *path, size_t size)
+{
+    if (nexternal == sizeof(external) / sizeof(external[0]) || strlen(template) >= size)
+        return 0;
+    strcpy(path, template);
+    if (!mkdtemp(path))
+        return 0;
+    external[nexternal] = strdup(path);
+    if (!external[nexternal]) {
+        rmdir(path);
+        return 0;
+    }
+    nexternal++;
+    return 1;
 }
 int fx_exists(const char *p)
 {
