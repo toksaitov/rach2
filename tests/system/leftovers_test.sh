@@ -71,7 +71,7 @@ setup()
 {
     rm -rf "$work/origin.git" "$work/seed" "$h"
     mkdir -p "$h"
-    git init -q --bare "$work/origin.git"
+    git init -q --bare -b master "$work/origin.git"
     git init -q "$work/seed"
     cd "$work/seed" || return 1
     git config user.email leftovers@test
