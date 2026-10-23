@@ -9,6 +9,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dirent.h>
+#include <errno.h>
+#include <sys/stat.h>
+#endif
 
 #include "fixdir_host.h"
 
@@ -30,8 +37,14 @@ static int passed;             /* set by fix_passed */
  * of at most FIX_TMP_MAX characters, each one a shell passes unchanged. */
 static int fix_plain(const char *tmp)
 {
+#ifdef _WIN32
+    return tmp != NULL && strlen(tmp) <= FIX_TMP_MAX &&
+           ((tmp[0] && tmp[1] == ':' && (tmp[2] == '/' || tmp[2] == '\\')) || tmp[0] == '/') &&
+           tmp[strspn(tmp, FIX_PLAIN ":\\")] == '\0';
+#else
     return tmp != NULL && tmp[0] == '/' && strlen(tmp) <= FIX_TMP_MAX &&
            tmp[strspn(tmp, FIX_PLAIN)] == '\0';
+#endif
 }
 
 /* LeakSanitizer's check, when the test is built with it; the reference is
@@ -45,22 +58,94 @@ static int fix_leaks(void)
     return __lsan_do_recoverable_leak_check != NULL && __lsan_do_recoverable_leak_check() != 0;
 }
 
-/** At exit, remove the test's own directory if it passed and leaks nothing,
- * or else keep it and say where, so that a failed test's fixtures can be
- * read. */
+/* Remove our own fixture tree without starting a shell. */
+static int fix_remove_tree(const char *path)
+{
+    char child[FIX_PATH_MAX + 64];
+    int failed = 0;
+#ifdef _WIN32
+    WIN32_FIND_DATAA entry;
+    DWORD attributes = GetFileAttributesA(path);
+    HANDLE search;
+    if (attributes == INVALID_FILE_ATTRIBUTES)
+        return GetLastError() == ERROR_FILE_NOT_FOUND ? 0 : -1;
+    if (!(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+        SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+        return DeleteFileA(path) ? 0 : -1;
+    }
+    /* Reparse points are removed as entries; their targets are never visited. */
+    if (attributes & FILE_ATTRIBUTE_REPARSE_POINT)
+        return RemoveDirectoryA(path) ? 0 : -1;
+    if (snprintf(child, sizeof(child), "%s/*", path) >= (int)sizeof(child))
+        return -1;
+    search = FindFirstFileA(child, &entry);
+    if (search != INVALID_HANDLE_VALUE) {
+        do {
+            if (!strcmp(entry.cFileName, ".") || !strcmp(entry.cFileName, ".."))
+                continue;
+            if (snprintf(child, sizeof(child), "%s/%s", path, entry.cFileName) >=
+                    (int)sizeof(child) ||
+                fix_remove_tree(child) != 0)
+                failed = 1;
+        } while (FindNextFileA(search, &entry));
+        if (GetLastError() != ERROR_NO_MORE_FILES)
+            failed = 1;
+        FindClose(search);
+    } else if (GetLastError() != ERROR_FILE_NOT_FOUND)
+        failed = 1;
+    return failed ? -1 : RemoveDirectoryA(path) ? 0 : -1;
+#else
+    struct stat st;
+    DIR *directory;
+    struct dirent *entry;
+    if (lstat(path, &st) != 0)
+        return errno == ENOENT ? 0 : -1;
+    if (!S_ISDIR(st.st_mode))
+        return unlink(path);
+    directory = opendir(path);
+    if (directory == NULL)
+        return -1;
+    while ((entry = readdir(directory)) != NULL) {
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+            continue;
+        if (snprintf(child, sizeof(child), "%s/%s", path, entry->d_name) >= (int)sizeof(child) ||
+            fix_remove_tree(child) != 0)
+            failed = 1;
+    }
+    closedir(directory);
+    return failed ? -1 : rmdir(path);
+#endif
+}
+
+/** Keep failed fixtures as named evidence; remove successful fixtures. */
 static void fix_remove(void)
 {
-    char cmd[FIX_PATH_MAX + 16];
-
     if (!passed || fix_leaks()) {
         printf("fixtures: kept in %s\n", own);
         return;
     }
-    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", own);
-    if (system(cmd) != 0) {
+    if (fix_remove_tree(own) != 0)
         printf("fixtures: %s could not be removed\n", own);
-    }
 }
+
+#ifdef _WIN32
+/* Create the directory atomically; a colliding name is tried again. */
+static char *fix_mkdtemp(char *path)
+{
+    size_t n = strlen(path);
+    unsigned long seed = GetCurrentProcessId() ^ GetTickCount();
+    if (n < 6)
+        return NULL;
+    for (unsigned long i = 0; i < 4096; i++) {
+        snprintf(path + n - 6, 7, "%06lx", (seed + i) & 0xfffffful);
+        if (CreateDirectoryA(path, NULL))
+            return path;
+        if (GetLastError() != ERROR_ALREADY_EXISTS)
+            return NULL;
+    }
+    return NULL;
+}
+#endif
 
 const char *fix_dir(void)
 {
@@ -72,14 +157,28 @@ const char *fix_dir(void)
     }
     tmp = getenv("TMPDIR");
     if (!fix_plain(tmp)) {
+#ifdef _WIN32
+        static char native_tmp[FIX_TMP_MAX + 1];
+        DWORD got = GetTempPathA(sizeof(native_tmp), native_tmp);
+        if (!got || got >= sizeof(native_tmp) || !fix_plain(native_tmp)) {
+            printf("fixtures: no usable native temporary directory\n");
+            exit(1);
+        }
+        tmp = native_tmp;
+#else
         tmp = "/tmp";
+#endif
     }
     len = strlen(tmp);
     while (len > 0 && tmp[len - 1] == '/') {
         len--;
     }
     snprintf(own, sizeof(own), "%.*s/rach2_fixtures.XXXXXX", (int)len, tmp);
+#ifdef _WIN32
+    if (fix_mkdtemp(own) == NULL) {
+#else
     if (mkdtemp(own) == NULL) {
+#endif
         printf("fixtures: no directory could be made under %s\n", tmp);
         exit(1);
     }
