@@ -35,6 +35,7 @@ struct fixtures {
     int has_root;
     struct fix_volume root; /* its type may also be ext2-dir */
     char root_path[256];    /* the program's path inside the root */
+    char root_at[FIX_PATH]; /* the root: STATE/r, or STATE/a/TOKEN/r for ext2-dir */
     long tmpfs_bytes;       /* 0 for none */
     int tmpfs_global;
     int mountns, ipcns, utsns, pty, log, alone, console;
@@ -54,7 +55,7 @@ const char *fixture_parse(struct fixtures *fx, const struct eh_json *list, fix_h
                           const void *ctx, const char **why);
 int fixture_simple(const struct fixtures *fx);
 const char *fixture_prepare(struct fixtures *fx, const char *dir, const char **why);
-int fixture_args(const struct fixtures *fx, const char *work, char **argv, int n, int cap);
+int fixture_args(const struct fixtures *fx, char **argv, int n, int cap);
 int fixture_enter(const struct fixtures *fx, const char *work, char *prog, size_t cap,
                   const char **dir);
 int fixture_cleanup(struct fixtures *fx, const char *dir);

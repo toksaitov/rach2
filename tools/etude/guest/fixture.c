@@ -686,6 +686,39 @@ static int mount_point(struct fixtures *fx, const char *dir, const char *name, s
     return 0;
 }
 
+/** Make the directory `path` unless it is there; 0 or -1. */
+static int make_dir(const char *path)
+{
+    return mkdir(path, 0755) < 0 && errno != EEXIST ? -1 : 0;
+}
+
+/**
+ * Set `fx->root_at` for the attempt in `dir`, `STATE/a/TOKEN`; 0 or -1.
+ * An image is mounted on `STATE/r`, made here, in its case's own mount
+ * namespace, so one place serves every case, and its path is short: the
+ * kernel refuses a mount whose path, as the machine names it, is longer than
+ * 63 bytes, and a program in the root mounts below it. An `ext2-dir` tree
+ * is the root where it is copied, `STATE/a/TOKEN/r`, short for the same
+ * reason, since a mount below a bind of it would be measured by the bind's
+ * place and the tree's own path together.
+ */
+static int root_place(struct fixtures *fx, const char *dir)
+{
+    char full[PATH_MAX];
+    const char *token = realpath(dir, full) ? strrchr(full, '/') : NULL;
+    const char *a = token;
+
+    if (token && strcmp(fx->root.type, "ext2-dir") == 0)
+        return fpath(fx->root_at, "%s/r%s", full, "");
+    while (a && a > full && *--a != '/')
+        ;
+    if (!token || *a != '/' || a + 2 != token || a[1] != 'a' ||
+        snprintf(fx->root_at, sizeof(fx->root_at), "%.*s/r", (int)(a - full), full) >=
+            (int)sizeof(fx->root_at))
+        return -1;
+    return make_dir(fx->root_at);
+}
+
 /** Make the fixtures of `fx` that need the kernel, as fixture_prepare
  * says; 0 or -1. */
 static int kernel_prepare(struct fixtures *fx, const char *dir)
@@ -701,7 +734,7 @@ static int kernel_prepare(struct fixtures *fx, const char *dir)
             (fx->vol[i].mounted && mount_point(fx, dir, name, &fx->vol[i]) < 0))
             return -1;
     }
-    if ((fx->has_root && attach(&fx->root, dir) < 0) ||
+    if ((fx->has_root && (root_place(fx, dir) < 0 || attach(&fx->root, dir) < 0)) ||
         (fx->tmpfs_bytes && mount_point(fx, dir, "tmpfs", NULL) < 0))
         return -1;
     return 0;
@@ -778,68 +811,57 @@ static int copy_tree(const char *from, const char *to)
     return rc;
 }
 
-/** Make the directory `path` unless it is there; 0 or -1. */
-static int make_dir(const char *path)
-{
-    return mkdir(path, 0755) < 0 && errno != EEXIST ? -1 : 0;
-}
-
-/** Mount the root's image on `root`, or copy its tree there for
- * `ext2-dir` through a read-only mount on `WORK/image`; 0 or -1. */
-static int make_root(const struct fixtures *fx, const char *work, const char *root)
+/** Mount the root's image on `fx->root_at`, or for `ext2-dir` copy its tree
+ * there through a read-only mount on `WORK/image`; 0 or -1. */
+static int make_root(const struct fixtures *fx, const char *work)
 {
     char path[FIX_PATH];
     struct fix_volume image = fx->root;
 
     if (strcmp(fx->root.type, "ext2-dir") != 0)
-        return make_dir(root) < 0 ? -1 : mount_volume(&fx->root, root, 0);
+        return mount_volume(&fx->root, fx->root_at, 0);
     snprintf(image.type, sizeof(image.type), "ext2");
     if (fpath(path, "%s/image%s", work, "") < 0 || make_dir(path) < 0 ||
-        mount_volume(&image, path, MS_RDONLY) < 0 || copy_tree(path, root) < 0)
+        mount_volume(&image, path, MS_RDONLY) < 0 || copy_tree(path, fx->root_at) < 0 ||
+        umount2(path, 0) < 0)
         return -1;
-    return umount2(path, 0);
+    return 0;
 }
 
-/** Give the root `root` the machine's /proc, /dev and /sys by bind mounts,
- * and a tmpfs of its own on /dev/shm, nosuid and nodev as the test image has
- * it, where the tree has that directory; 0 or -1. Rach2 accepts a mount of
- * proc only where proc already is, so /proc is bound as the others are. */
+/** Give the root `root` the machine's /proc, /dev and /sys by recursive bind
+ * mounts; 0 or -1. Rach2 accepts a mount of proc only where proc already
+ * is, and none on a name of /dev, so /proc is bound as the others are, and
+ * /dev/shm and /dev/mqueue are the machine's, bound with /dev. */
 static int root_mounts(const char *root)
 {
     static const char *const bound[] = {"/proc", "/dev", "/sys"};
     char path[FIX_PATH];
-    struct stat st;
     int i;
 
     for (i = 0; i < 3; i++)
         if (fpath(path, "%s%s", root, bound[i]) < 0 || make_dir(path) < 0 ||
-            mount(bound[i], path, NULL, MS_BIND, NULL) < 0)
+            mount(bound[i], path, NULL, MS_BIND | MS_REC, NULL) < 0)
             return -1;
-    if (fpath(path, "%s/dev/shm%s", root, "") == 0 && stat(path, &st) == 0 && S_ISDIR(st.st_mode) &&
-        mount_tmpfs(16L << 20, path, MS_NOSUID | MS_NODEV) < 0)
-        return -1;
     return 0;
 }
 
 /**
  * Enter the case's root, in the child's own mount namespace: make it on
- * `WORK/root`, give it its mounts, copy the program `prog` of the workspace
- * over the root's file at its path, and make it the root and the working
- * directory.
+ * `fx->root_at`, give it its mounts, copy the program `prog` of the
+ * workspace over the root's file at its path, and make it the root and the
+ * working directory.
  */
 static int enter_root(const struct fixtures *fx, const char *work, const char *prog)
 {
-    char root[FIX_PATH];
     char path[FIX_PATH];
     struct stat st;
 
-    if (fpath(root, "%s/root%s", work, "") < 0 || make_root(fx, work, root) < 0 ||
-        root_mounts(root) < 0)
+    if (make_root(fx, work) < 0 || root_mounts(fx->root_at) < 0)
         return -1;
-    if (stat(prog, &st) < 0 || fpath(path, "%s%s", root, fx->root_path) < 0 ||
+    if (stat(prog, &st) < 0 || fpath(path, "%s%s", fx->root_at, fx->root_path) < 0 ||
         copy_file(prog, path, &st) < 0)
         return -1;
-    if (chdir(root) < 0 || chroot(".") < 0 || chdir("/") < 0)
+    if (chdir(fx->root_at) < 0 || chroot(".") < 0 || chdir("/") < 0)
         return -1;
     return 0;
 }
@@ -1035,12 +1057,12 @@ const char *fixture_prepare(struct fixtures *fx, const char *dir, const char **w
  * Append the arguments that give the fixtures' values to the program to
  * `argv`, which has `n` entries of `cap`: `ids=OLD:NEW,...`,
  * `ports=OLD:NEW,...`, `loops=DEVICE,...`, `peer=ADDRESS:PORT` and the
- * peer's NAME=VALUE arguments, and `root=PATH`, the private root
- * `WORK/root`, each when its fixture is there. The strings are allocated.
+ * peer's NAME=VALUE arguments, and `root=PATH`, the private root's mount
+ * point `STATE/r`, each when its fixture is there. The strings are allocated.
  *
  * @return the new count, or -1 when they do not fit.
  */
-int fixture_args(const struct fixtures *fx, const char *work, char **argv, int n, int cap)
+int fixture_args(const struct fixtures *fx, char **argv, int n, int cap)
 {
     char arg[FIX_ARG];
     int i;
@@ -1069,7 +1091,7 @@ int fixture_args(const struct fixtures *fx, const char *work, char **argv, int n
     for (i = 0; i < fx->npeer_values; i++)
         argv[n++] = strdup(fx->peer_value[i]);
     if (fx->has_root) {
-        if (snprintf(arg, sizeof(arg), "root=%s/root", work) >= (int)sizeof(arg))
+        if (snprintf(arg, sizeof(arg), "root=%s", fx->root_at) >= (int)sizeof(arg))
             return -1;
         argv[n++] = strdup(arg);
     }

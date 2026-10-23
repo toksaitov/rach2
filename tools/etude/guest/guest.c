@@ -1697,7 +1697,7 @@ static const char *spawn(struct attempt *a, const struct invocation *inv)
         return ETUDE_ERR_FAILED;
     for (n = 0; argv[n]; n++) {
     }
-    if (fixture_args(&a->fx, work, argv, n, ARGS_MAX) < 0) {
+    if (fixture_args(&a->fx, argv, n, ARGS_MAX) < 0) {
         free_vectors(argv, envp);
         return ETUDE_ERR_LIMIT;
     }
