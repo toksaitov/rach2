@@ -18,7 +18,12 @@
 # what it found. The sparse case reports the branch `absent` where sparse is
 # not installed, and the size case `unjudged` where pmccabe is not, which
 # leaves the complexity of the functions unjudged. The testing host has every
-# tool, at its recorded version.
+# tool, at its recorded version. On a host with another version of cppcheck,
+# clang-format or clang, or with no sparse, that case runs again in etude's
+# tooling machine (tools/etude/Readme.md, The tooling machine), an Ubuntu
+# with the testing host's packages, which compares its own version with the
+# record in the same way, and the job's report is the case's. Where no
+# machine is made, the case runs here as above.
 #
 # etude runs it in the case's workspace, with ETUDE_TREE naming the root of
 # the tree it checks, ARCH naming the architecture of a case that has one, and
@@ -83,11 +88,13 @@ printf 'verify-style: logs: %s\n' "$VDIR"
 # set, against that architecture's musl, as the build lays them out
 # (mk/arch.mk): an ELF32 i386 program at 0x08048000 or an ELF64 x86-64 one at
 # 0x400000. The kernel's second front ends, clang and sparse, read the
-# kernel sources of that architecture as its compiler does (KCHECK_TARGET
-# and KCHECK_WIDTH).
+# kernel sources of that architecture as its compiler does (KCHECK_TARGET,
+# KCHECK_SPARSE and KCHECK_WIDTH); sparse's target is otherwise the machine
+# it runs on.
 case "${ARCH:-i686}" in
     x86_64)
         KCHECK_TARGET=x86_64-elf
+        KCHECK_SPARSE=x86_64
         KCHECK_WIDTH=-m64
         LIBC="$REPO/build/x86_64/vendor-work/musl/install"
         ABI_CROSS=x86_64-elf-
@@ -98,6 +105,7 @@ case "${ARCH:-i686}" in
         ;;
     *)
         KCHECK_TARGET=i686-elf
+        KCHECK_SPARSE=i386
         KCHECK_WIDTH=-m32
         LIBC="$REPO/vendor/musl/install"
         ABI_CROSS=i686-elf-
@@ -678,7 +686,7 @@ case_sparse() {
     : >"$VDIR/verify_sparse.log"
     _bad=0
     for f in $(make -s -C "$REPO/rach2" print-c-src); do
-        (cd "$REPO/rach2" && sparse -D__CHECKER__ "$KCHECK_WIDTH" -ansi -ffreestanding -nostdinc -I"$_gccinc" \
+        (cd "$REPO/rach2" && sparse --arch="$KCHECK_SPARSE" -D__CHECKER__ "$KCHECK_WIDTH" -ansi -ffreestanding -nostdinc -I"$_gccinc" \
             -Wno-decl -Wno-non-pointer-null "$f") >>"$VDIR/verify_sparse.log" 2>&1 ||
             _bad=$((_bad + 1))
     done
@@ -728,6 +736,100 @@ case_links() {
     check checklists verify_checklists.log sh "$REPO/tools/verify/linkcheck.sh" $_checklists
 }
 
+# ---- The tooling machine. ----
+
+# judged_here: succeed when this host judges the case itself: its tool is at
+# the version tools/setup/judges records, or, for sparse, installed.
+judged_here() {
+    case "$CASE" in
+        sparse) command -v sparse >/dev/null 2>&1; return ;;
+    esac
+    _found=$("$CASE" --version </dev/null 2>/dev/null | head -1)
+    [ "$_found" = "$(sed -n "s/^$CASE: //p" "$REPO/tools/setup/judges")" ]
+}
+
+# in_tooling: run the case in etude's tooling machine, as the header says,
+# and exit with the job's status, or return when no machine is made. The
+# job's input is one tar file of the tree's tracked and unignored files under
+# the directories the four cases read. tools/setup/elfwrap.sh makes the
+# elf cross compilers there from Ubuntu's Linux ones, as on the testing host,
+# since sparse asks one for its include directory. On a Mac with Apple
+# silicon, unless ETUDE_TOOLING_ARCH says otherwise, the job runs in the arm64
+# machine under Apple's hypervisor, as the GNU layer's build does, since the
+# amd64 one runs under TCG there more than twenty times slower. A job that
+# ends before its report does reports each assertion it did not report as not
+# run.
+in_tooling() {
+    [ -z "${STYLE_IN_TOOLING:-}" ] || return 0
+    # shellcheck source=tests/system/tooling.sh
+    . "$REPO/tests/system/tooling.sh"
+    if [ -z "${ETUDE_TOOLING_ARCH:-}" ] && [ "$(uname -s)/$(uname -m)" = Darwin/arm64 ] &&
+        [ "$(sysctl -n kern.hv_support 2>/dev/null)" = 1 ]; then
+        ETUDE_TOOLING_ARCH=arm64 RACH2_QEMU_ACCEL=hvf
+        export ETUDE_TOOLING_ARCH RACH2_QEMU_ACCEL
+    fi
+    if ! tooling_made; then
+        echo "style: $CASE: no tooling machine is made to judge it under the recorded version; etude-tooling prepare makes one"
+        return 0
+    fi
+    echo "style: $CASE: the case runs in etude's tooling machine"
+    git -C "$REPO" ls-files -co --exclude-standard -- .clang-format mk rach2 krffs utils ish \
+        tests tools vendor/musl | while IFS= read -r f; do
+        [ ! -f "$REPO/$f" ] || printf '%s\n' "$f"
+    done >"$VDIR/files"
+    if ! grep -q . "$VDIR/files" ||
+        ! COPYFILE_DISABLE=1 tar -c --format ustar -f "$VDIR/tree.tar" -C "$REPO" -T "$VDIR/files"; then
+        unrun "the job's files could not be packed"
+    fi
+    cat >"$VDIR/job.sh" <<EOF
+set -u
+cd "\$ETUDE_WORK" && mkdir scratch tree bin && tar -x -f tree.tar -C tree || exit 3
+sh tree/tools/setup/elfwrap.sh i686 bin >&2 && sh tree/tools/setup/elfwrap.sh x86_64 bin >&2 ||
+    exit 3
+exec env PATH="\$ETUDE_WORK/bin:\$PATH" TMPDIR="\$ETUDE_WORK/scratch" \\
+    ETUDE_TREE="\$ETUDE_WORK/tree" ETUDE_CASE=$ID ARCH=${ARCH:-i686} STYLE_IN_TOOLING=1 \\
+    sh "\$ETUDE_WORK/tree/tests/cases/host/style.sh" $CASE
+EOF
+    tooling run -c 2 -m 2048 -s $(($(wc -c <"$VDIR/tree.tar") / 1048576 + 64)) \
+        -i "$VDIR/tree.tar" -o scratch -O "$VDIR" "$VDIR/job.sh" >"$VDIR/job.out"
+    _status=$?
+    cat "$VDIR/job.out"
+    [ "$_status" -eq 0 ] || [ ! -d "$VDIR/scratch" ] ||
+        echo "style: $CASE: the logs of the job are under $VDIR/scratch"
+    ! grep -q '^@etude 1 end ' "$VDIR/job.out" || exit "$_status"
+    case $_status in
+        125) unrun "the tooling machine failed; etude-tooling's lines say why" ;;
+        126) unrun "the tooling machine is not made; etude-tooling prepare makes it" ;;
+        *) unrun "the tooling machine's job ended with status $_status before its report did" ;;
+    esac
+}
+
+# unrun REASON: complete the report of a case whose job ended before its
+# report did, which may have `begin` and some records already: give `begin`
+# when it lacks it, each assertion it lacks as not run for REASON, and `end`.
+unrun() {
+    touch "$VDIR/job.out"
+    grep -q '^@etude 1 begin ' "$VDIR/job.out" || record "begin $ID"
+    RECORDS=$(grep -c -E '^@etude 1 (assert|notrun|branch) ' "$VDIR/job.out")
+    _reported=" $(awk '$1 == "@etude" && $2 == 1 && ($3 == "assert" || $3 == "notrun") {
+        printf "%s ", $4 }' "$VDIR/job.out")"
+    case "$CASE" in
+        cppcheck) _all="kernel-runs host-runs kernel-clean host-clean" ;;
+        clang-format) _all=formatted ;;
+        clang) _all=no-warnings ;;
+        sparse) _all="runs no-findings" ;;
+    esac
+    for _a in $_all; do
+        case "$_reported" in
+            *" $_a "*) ;;
+            *) record "notrun $_a $(clip "$1")"; RECORDS=$((RECORDS + 1)) ;;
+        esac
+    done
+    record "end $RECORDS"
+    echo "style: result: incomplete: $ID: $1"
+    exit 1
+}
+
 # ---- The run. ----
 
 ID=host.style.$CASE
@@ -740,6 +842,9 @@ case "$CASE" in
     abi|sources|text|messages|repro|checkers|devlog) ;;
     registry|waits|manual|clang|sparse|sizes|links) ;;
     *) echo "style: no case $CASE" >&2; exit 2 ;;
+esac
+case "$CASE" in
+    cppcheck|clang-format|clang|sparse) judged_here || in_tooling ;;
 esac
 record "begin $ID"
 "case_$(echo "$CASE" | tr - _)"

@@ -3,8 +3,10 @@
 # is not found. The first group are the commands only Linux has among the
 # platforms of tools/setup/prereqs: the network namespaces and Codex of the
 # codexapi and museapi suites, and exfatprogs. The rest are what the GNU
-# layer's build needs of its host (vendor/gnu/Readme.md, Building) and the
-# file-system checkers the suites run.
+# layer's build needs of its host (vendor/gnu/Readme.md, Building), the
+# file-system checkers the suites run, and the checkers of the style cases,
+# which tests/cases/host/style.sh runs here on a host that lacks the testing
+# host's versions.
 unshare
 ip
 codex
@@ -55,3 +57,4 @@ cppcheck
 shellcheck
 clang
 clang-format
+sparse

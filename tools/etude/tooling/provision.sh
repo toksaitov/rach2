@@ -30,7 +30,7 @@ PACKAGES='util-linux iproute2 exfatprogs dosfstools e2fsprogs python3 openssl gi
 curl wget ca-certificates nodejs npm build-essential gawk bison flex m4 perl
 texinfo xz-utils patch gzip bzip2 tar gnupg gpgv binutils mandoc mtools xorriso
 openssh-client rsync cppcheck shellcheck clang clang-format gcc-i686-linux-gnu binutils-i686-linux-gnu
-gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu'
+gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu sparse'
 X86=
 if [ "$(uname -m)" = aarch64 ]; then
     X86='qemu-i386 qemu-x86_64'

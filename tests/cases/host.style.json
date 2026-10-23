@@ -450,7 +450,7 @@
     },
     {
       "case_id": "host.style.sparse",
-      "behavior": "sparse finds nothing in the architecture's kernel, its address spaces checked, where sparse is installed",
+      "behavior": "sparse finds nothing in the architecture's kernel, its address spaces checked, where sparse is installed here or in etude's tooling machine",
       "units": ["style", "`check.sh` step 20, sparse"],
       "domain": "host",
       "architectures": ["i686", "x86_64"],
