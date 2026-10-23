@@ -1547,18 +1547,16 @@ $(ETUDE_SCENARIO_DISK): krffs/manifests/etude-scenario.manifest $(MKDISK) \
 # build's files or out of date. They are the cases of
 # tests/cases/host.imagerace.json, which etude runs, and have no target here.
 
-# The eight network suites again on the second card, each the family of
-# etude's cases whose machines have the e1000. The cases whose subject is
-# above the driver belong to the first card's family: `netif-e1000` and
-# `dhcp-e1000` have only the cases that the card changes, and `raw-e1000` has
-# the case of the card alone. The probe suite is not repeated at all, since
+# Seven network suites again on the second card, each the family of etude's
+# cases whose machines have the e1000. The cases whose subject is above the
+# driver belong to the first card's family: `netif-e1000` and `dhcp-e1000`
+# have only the cases that the card changes, and `raw-e1000` has the case of
+# the card alone. The packet suite is not repeated, since `dhcp-e1000`'s
+# udhcpc and arping send and receive through a packet socket on the card. The probe suite is not repeated at all, since
 # none of its probes sends a frame.
 
 # `tests/run ping-e1000`: the ping suite on the e1000 card. Its case is in
 # tests/cases/guest.ping-e1000.json, which etude runs, and has no target here.
-
-# `tests/run packet-e1000`: the packet suite on the e1000 card. Its case is in
-# tests/cases/guest.packet-e1000.json, which etude runs, and has no target here.
 
 # `tests/run netif-e1000`: the netif suite's probe on the e1000 card. Its cases
 # are in tests/cases/machine.netif-e1000.json, which etude runs, and have no

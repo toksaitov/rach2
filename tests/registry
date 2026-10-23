@@ -89,7 +89,6 @@ ssh-e1000|qemu,ssh|full
 exfat|qemu|core
 ext2|qemu,mke2fs,debugfs,e2fsck,mtype|core
 cred-persist|qemu|full
-packet-e1000|qemu|full
 addressed|qemu|full
 ping|qemu|full
 packet|qemu|full

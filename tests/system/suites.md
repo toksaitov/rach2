@@ -53,7 +53,6 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `exfat` (core tier; needs qemu; 128 MiB): exFAT written from a program, read back after a reboot, judged by the host's reader and the external checker where the host has one, taken through a crash and its repair, written from BusyBox and by two processes under the lag, and unmounted after a failed write with its dirty bit still set.
 * `ext2` (core tier; needs qemu, mke2fs, debugfs, e2fsck, mtype; 128 MiB): the ext2 driver booted: the probes as init on an ext2 root, ext2probe's link and cost rows on a fixture volume the host's mke2fs wrote, and os-real on its ext2 root, written, killed, checked, damaged and repaired by recovery's e2fsck.
 * `cred-persist` (full tier; needs qemu; 128 MiB): the credential replacement's durability across a reboot.
-* `packet-e1000` (full tier; needs qemu; 128 MiB): the packet suite on the e1000 card.
 * `addressed` (full tier; needs qemu; 128 MiB): the address named on the boot line, and the proof that it is the one in force.
 * `ping` (full tier; needs qemu; 128 MiB): the ICMP path against the SLIRP gateway, which is why it is a case of its own rather than a probe in the default suite.
 * `packet` (full tier; needs qemu; 128 MiB): the packet socket, which is how a DHCP client sees a reply that arrives before this machine owns an address.
