@@ -99,6 +99,8 @@ class Transfers(unittest.TestCase):
         self.assertFalse(TOOLS.native_goal("build/tests/cases/machine/disks/one.disk"))
         self.assertFalse(TOOLS.native_goal("build/x86_64/images/test.krffs"))
         self.assertTrue(TOOLS.native_goal("build/tests/cases/machine/disks_scenario"))
+        self.assertTrue(TOOLS.native_goal("build/tests/cases/gnu/sntpserver"))
+        self.assertFalse(TOOLS.native_goal("build/tests/cases/gnu/rows.sh"))
 
     def test_style_name(self):
         """The style script's short case name selects its full manifest identity."""

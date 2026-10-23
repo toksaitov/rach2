@@ -185,6 +185,8 @@ def native_goal(goal):
         parts = ('build', *parts[2:])
     if parts[:4] == ('build', 'tools', 'etude', 'guest'):
         return False
+    if parts == ('build', 'tests', 'cases', 'gnu', 'sntpserver'):
+        return True
     if parts[:4] in (('build', 'tests', 'cases', 'machine'),
                      ('build', 'tests', 'cases', 'host')):
         return len(parts) == 5
