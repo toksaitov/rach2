@@ -83,6 +83,16 @@ struct etude_budget_judgement {
     char error[600]; /* why the records cannot be judged, when that is so */
 };
 
+struct etude_preparation_selection {
+    const char *const *nodes;
+    size_t count;
+    unsigned architectures;
+    enum etude_budget_class cls;
+};
+int etude_budget_preparation(const struct cmp_history *h, const struct etude_budget_policy *p,
+                             const struct etude_preparation_selection *selection, uint64_t *us,
+                             size_t *count);
+
 int etude_budget_class_of(const char *name);
 const char *etude_budget_class_name(enum etude_budget_class cls);
 const char *etude_budget_verdict_name(enum etude_budget_verdict verdict);

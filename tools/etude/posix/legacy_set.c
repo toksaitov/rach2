@@ -1115,6 +1115,51 @@ static int plan_environment(struct set *x, struct cmp_text *t, struct cmp_text *
     return rc;
 }
 
+static int has_node(const char *const *nodes, size_t count, const char *name)
+{
+    for (size_t i = 0; i < count; i++)
+        if (!strcmp(nodes[i], name))
+            return 1;
+    return 0;
+}
+
+/** Bind aggregate preparation to all selected goals and architecture flags. */
+static int preparation_nodes(struct set *x, struct cmp_text *t)
+{
+    struct cmp_text d = {0};
+    size_t capacity = 0, count = 0;
+    for (size_t i = 0; i < x->n; i++)
+        capacity += x->mem[i].k->ngoals;
+    const char **nodes = calloc(capacity + 1, sizeof(*nodes));
+    if (!nodes)
+        return -1;
+    cmp_printf(&d, "{\"schema_version\":1,\"format\":\"etude-preparation-nodes\",\"architectures\":[");
+    for (size_t i = 0; i < x->narches; i++) {
+        cmp_printf(&d, "%s", i ? "," : "");
+        string(&d, x->arches[i]);
+    }
+    cmp_printf(&d, "],\"kernel\":");
+    if (x->o->kernel)
+        string(&d, x->o->kernel);
+    else
+        cmp_printf(&d, "null");
+    cmp_printf(&d, ",\"nodes\":[");
+    for (size_t i = 0; i < x->n; i++) {
+        const struct legacy_case *k = x->mem[i].k;
+        for (size_t j = 0; j < k->ngoals; j++)
+            if (!has_node(nodes, count, k->goals[j])) {
+                cmp_printf(&d, "%s", count ? "," : "");
+                string(&d, k->goals[j]);
+                nodes[count++] = k->goals[j];
+            }
+    }
+    cmp_printf(&d, "]}\n");
+    free(nodes);
+    cmp_printf(t, ",");
+    int rc = keep_doc(x, &d, t);
+    return rc;
+}
+
 /** Write the plan record. */
 static int write_plan(struct set *x)
 {
@@ -1172,6 +1217,7 @@ static int write_plan(struct set *x)
         else
             rc |= keep(x, bytes, count, &t);
         free(bytes);
+        rc |= preparation_nodes(x, &t);
     }
     rc |= plan_environment(x, &t, &d);
     cmp_printf(&d, "{\"schema_version\":1,\"width\":%u,\"serial\":", o->width);

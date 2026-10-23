@@ -51,6 +51,7 @@ struct verdict {
     const char *commit; /* the commit the plan must name, or NULL */
     const char *arch;
     const char *name; /* the set's, for a failure outside its suites */
+    struct json *selection; /* an explicit allocator export for focused checks */
     char **suite;
     size_t suites;
     int *failed;              /* by suite: an item of it did not pass */
@@ -890,6 +891,46 @@ static int has_suite(const struct verdict *v, size_t s)
     return 0;
 }
 
+/** Count occurrences of one allocated tuple in an item array. */
+static size_t selected_count(const struct json *items, const struct json *wanted)
+{
+    size_t count = 0;
+    const struct json *rep = json_member(wanted, "repetition");
+    if (!items || items->type != JSON_ARRAY || !rep || rep->type != JSON_INTEGER)
+        return 0;
+    for (size_t i = 0; i < items->count; i++) {
+        const struct json *item = items->item[i], *r = json_member(item, "repetition");
+        count += same(json_text(item, "case_id"), json_text(wanted, "case_id")) &&
+                 same(json_text(item, "architecture"), json_text(wanted, "architecture")) &&
+                 r && r->type == JSON_INTEGER && r->integer == rep->integer;
+    }
+    return count;
+}
+
+/** Bind focused coverage to the public allocator's complete export. */
+static void check_selected_coverage(struct verdict *v)
+{
+    const struct json *expected = json_member(v->selection, "items");
+    const struct json *actual = json_member(v->plan->data, "items");
+    const struct json *blob = json_member(v->plan->data, "selection");
+    const struct json *size = json_member(v->selection, "selection_size_bytes");
+    const struct json *actual_size = json_member(blob, "size_bytes");
+    const struct json *version = json_member(v->selection, "schema_version");
+    int valid = version && version->type == JSON_INTEGER && version->integer == 1 &&
+                expected && expected->type == JSON_ARRAY && expected->count && actual &&
+                actual->type == JSON_ARRAY && actual->count == expected->count && size &&
+                actual_size && size->type == JSON_INTEGER && actual_size->type == JSON_INTEGER &&
+                size->integer == actual_size->integer &&
+                same(json_text(v->selection, "selection_sha256"), json_text(blob, "sha256"));
+    for (size_t i = 0; valid && i < expected->count; i++)
+        valid = selected_count(actual, expected->item[i]) == 1 &&
+                selected_count(expected, actual->item[i]) == 1;
+    if (!valid) {
+        finding(NULL, 0, "the run does not match the complete focused selection export");
+        v->runner = 1;
+    }
+}
+
 /**
  * Checks that the plan has what was asked for: an item of each suite, and of
  * each case of a suite's manifests that runs on the architecture, as many
@@ -899,6 +940,10 @@ static void check_coverage(struct verdict *v)
 {
     size_t s, m, c;
 
+    if (v->selection != NULL) {
+        check_selected_coverage(v);
+        return;
+    }
     for (s = 0; s < v->suites; s++) {
         if (!has_suite(v, s)) {
             finding(NULL, 0, "the plan has no item of the suite %s", v->suite[s]);
@@ -1085,6 +1130,16 @@ static int verdict_options(struct verdict *v, char **args, int n, const char **c
             v->store = args[i + 1];
         } else if (strcmp(args[i], "-c") == 0) {
             v->commit = args[i + 1];
+        } else if (strcmp(args[i], "--selection") == 0) {
+            if (v->selection)
+                return -1;
+            size_t length;
+            char error[200], *bytes = read_file(args[i + 1], &length);
+            if (!bytes || json_parse(bytes, length, 1, &v->selection, error, sizeof error)) {
+                free(bytes);
+                return -1;
+            }
+            free(bytes);
         } else if (strcmp(args[i], "-m") == 0) {
             *cases = args[i + 1];
         } else {
@@ -1111,6 +1166,7 @@ static void free_verdict(struct verdict *v)
     free(v->rec);
     free(v->suite);
     free(v->failed);
+    json_free(v->selection);
     json_free(v->schema);
 }
 
@@ -1141,6 +1197,7 @@ int judge_verdict(struct cases *set, char **args, int n)
     memset(&v, 0, sizeof v);
     skip = verdict_options(&v, args, n, &cases);
     if (skip < 0 || n - skip < 4 || !(same(args[skip], "i686") || same(args[skip], "x86_64"))) {
+        free_verdict(&v);
         return 2;
     }
     args += skip;

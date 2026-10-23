@@ -10,6 +10,7 @@
  * host-inputs: tools/etude/schemas/budget.schema.json
  * host-inputs: tools/etude/schemas/budget.example.json
  * host-deps: tools/etude/budget.c tools/etude/budget_run.c tools/etude/digest.c
+ * host-deps: tools/etude/budget_prepare.c
  * host-deps: tools/etude/compare_load.c tools/etude/observe_import.c
  * host-deps: tools/etude/json.c
  * host-deps: tools/etude/cost.c tools/etude/sched.c tools/etude/ledger.c
@@ -1426,6 +1427,8 @@ static void test_unjudged(void)
     }
 }
 
+#include "compat/budget_preparation.c"
+
 int main(void)
 {
     char err[1200];
@@ -1447,6 +1450,7 @@ int main(void)
     test_digests();
     test_services();
     test_schedule();
+    test_aggregate_preparation();
     test_forecast();
     test_unknown_cost();
     test_deadline();

@@ -120,6 +120,10 @@ static int forecast(struct command *c)
     printf("forecast of %s on %s, %s, %s: %lu items, %lu nodes\n", c->subject, c->policy.machine_id,
            c->policy.os, c->policy.accelerator, (unsigned long)f.items, (unsigned long)f.nodes);
     printf("preparation recorded: %s\ncases recorded: %s\ndeadline: %s\n", a, b, d);
+    cmp_seconds(l->goal_us, a);
+    cmp_seconds(l->growth_us, b);
+    cmp_seconds(l->ceiling_us, d);
+    printf("goal: %s\ngrowth: %s\nceiling: %s\n", a, b, d);
     status = print_report(&f.report, 1);
     etude_budget_report_free(&f.report);
     return status;

@@ -29,7 +29,7 @@ Preparation builds and verifies immutable inputs before execution. Compiled help
                                         make a machine ready, build etude in its cache, or run its tooling machine
     etude build ...                     run one stamped step of the build through the host's store
 
-Linux and macOS have every verb. Windows has the native collection entry, `run suites`, the host-command adapter, `prepare`, `check`, `show lines`, `lock`, `admit` and `provision tooling`. Rach2 has `check` and the local `run native` collection, with no `check record`. The desktop `run native -t TRANSPORT` form is a separate explicit transport adapter. `etude` with no verb, or a verb with no form, prints the list on standard error and exits 2. A verb's messages begin `etude VERB:`, except those of `etude lock tree`, which begin with the NAME it is given. The paragraphs below give each verb's usage; `etude-guest`, the helper inside Rach2, and `etude-volume`, which `etude provision tooling` runs, are programs of their own.
+Linux and macOS have every verb. Windows has `estimate`, the native collection entry, `run suites`, the host-command adapter, `prepare`, `check`, `show lines`, `lock`, `admit` and `provision tooling`. Rach2 has `check` and the local `run native` collection, with no `check record`. The desktop `run native -t TRANSPORT` form is a separate explicit transport adapter. `etude` with no verb, or a verb with no form, prints the list on standard error and exits 2. A verb's messages begin `etude VERB:`, except those of `etude lock tree`, which begin with the NAME it is given. The paragraphs below give each verb's usage; `etude-guest`, the helper inside Rach2, and `etude-volume`, which `etude provision tooling` runs, are programs of their own.
 
 ### Native collection execution
 
@@ -75,6 +75,8 @@ RESULTS defaults to `RACH2_RESULTS` or `build/tests/results`; EVIDENCE defaults 
 
 The runner loads prior streams from RESULTS/history, or `-H HISTORY`, before it writes its own stream. It uses the comparison reader's eligibility checks: only first attempts of complete, undisrupted successful runs contribute. The case, architecture, placement, machine, accelerator, workload, assertion inventory, profile, operating system, operating system version and processor configuration must match. At most one attempt from each run contributes to a case's bounds. With five matching successes the existing watchdog policy fixes the case bound from elapsed times and the gap bound from recorded maximum progress gaps; with fewer samples each retains its manifest's initial value. Native attempts record that gap in an execution step. The plan's runner document records each fixed bound and its sample count. A heartbeat, repeated witness value or repeated text is no advance of progress. Bounds for stages and quiet witnesses retain their declared initial values until stage and witness measurements are available.
 
+The explicit focused push entry may supply `check verdict --selection EXPORT`, where EXPORT is the public allocator's `-N -J` output. The verdict checks its selection digest and complete case, architecture and repetition set in place of whole-suite coverage. It still validates all attempt evidence and source manifests. CI and release do not use this focused option.
+
 ### Measurement context
 
 `-I CONTEXT` binds a measurement to prepared inputs before execution. Without it the collection remains a correctness run and cannot supply a performance baseline. A context preallocates the run identity, states its purpose and supplies snapshots whose descriptors give an absolute `path`, lowercase `sha256` and `size_bytes`. The runner validates those bytes before execution and again before accepting the completed run. The tree lock remains held throughout.
@@ -119,7 +121,7 @@ The source-check preparation runs `etude check` through [`suitecheck.sh`](../ver
     etude check [-s SCHEMAS] attempt [-f FEATURE=present|absent]... [-k CONSOLE]... MANIFEST CASE ARCH PLACEMENT OUTPUT RUN ATTEMPT ITEM END [VALUE]
     etude check [-s SCHEMAS] results [-o OUTCOME] RESULTS MANIFEST...
     etude check [-s SCHEMAS] schema NAME FILE...
-    etude check [-s SCHEMAS] verdict [--project-architecture] [-b STORE] [-c COMMIT] [-m CASES] ARCH SET SUITES HISTORY...
+    etude check [-s SCHEMAS] verdict [--project-architecture] [--selection EXPORT] [-b STORE] [-c COMMIT] [-m CASES] ARCH SET SUITES HISTORY...
     etude check processor NAME
     etude check --selftest DIR
 

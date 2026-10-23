@@ -15,6 +15,9 @@
 #include "cost.h"
 #include "digest.h"
 #include "schema.h"
+#ifdef _WIN32
+#include "win/files.h"
+#endif
 
 /* The largest policy, schema or case manifest read. */
 #define DOCUMENT_LIMIT (UINT64_C(16) << 20)
@@ -426,6 +429,7 @@ struct selection {
     char **nodes;
     size_t nnodes, nodecap;
     size_t items;
+    unsigned architectures;
 };
 
 /** Add a line of `kind` to report `r`, counting the reasons it gives. */
@@ -651,6 +655,7 @@ static int select_arch(const struct etude_budget_policy *p, const struct cmp_his
     long long rep, reps = json_member(json_member(c, "workload"), "repetitions")->integer;
 
     memset(&cost, 0, sizeof(cost));
+    s->architectures |= !strcmp(arch, "i686") ? 1 : !strcmp(arch, "x86_64") ? 2 : 0;
     s->items += (size_t)reps;
     if (placement == NULL) {
         say(r, "unknown", "%s on %s cannot run on %s, whose guests run natively", case_id, arch,
@@ -922,6 +927,15 @@ static int charge_nodes(const struct etude_budget_policy *p, enum etude_budget_c
     size_t i, count;
     uint64_t us;
 
+    struct etude_preparation_selection selected = {
+        (const char *const *)s->nodes, s->nnodes, s->architectures, cls};
+    if (etude_budget_preparation(h, p, &selected, &us, &count))
+        return -1;
+    if (count) {
+        f->prep_us = us;
+        say(&f->report, "note", "aggregate preparation: %lu matching complete samples", (unsigned long)count);
+        return 0;
+    }
     for (i = 0; i < s->nnodes; i++) {
         if (node_cost(h, p, cls, s->nodes[i], &us, &count) != 0) {
             return -1;

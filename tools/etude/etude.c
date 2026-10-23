@@ -215,8 +215,8 @@ static const struct verb verbs[] = {
     {"show", show_main, "print a finished run as lines, or its failed attempts"},
 #ifndef _WIN32
     {"compare", cmp_main, "compare a run's times with earlier runs"},
-    {"estimate", etude_budget_main, "forecast a selection's time, or check a run's"},
 #endif
+    {"estimate", etude_budget_main, "forecast a selection's time, or check a run's budget"},
 #endif
 #endif
 #ifndef __rach2__
