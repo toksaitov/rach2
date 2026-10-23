@@ -64,7 +64,9 @@ static const char *const dropped_env[] = {"MAKEFLAGS=",
                                           "ETUDE_PREPARATION_RUN_ID=",
                                           "ETUDE_PREPARATION_RECEIPT=",
                                           "ETUDE_PREPARATION_COMMIT=",
-                                          "ETUDE_PREPARATION_GRANT="};
+                                          "ETUDE_PREPARATION_GRANT=",
+                                          "ETUDE_PREPARATION_IMPORT=",
+                                          "ETUDE_PREPARATION_CLEAN="};
 
 /* A list of strings from malloc. */
 struct list {
@@ -1037,13 +1039,110 @@ static int prepare_target(struct prep *p)
 #endif
 }
 
+/** Run a fixed preparation-only adapter under the existing owned step. */
+static int preparation_adapter(struct prep *p, const char *name, char **argv)
+{
+    struct step s;
+
+    memset(&s, 0, sizeof(s));
+    s.name = name;
+    s.script = script_log;
+    s.cmd = argv;
+    return run_step(p, &s);
+}
+
+/** Clean only the declared in-house outputs before ordinary preparation. */
+static int clean_inhouse(struct prep *p)
+{
+    const char *clean = getenv("ETUDE_PREPARATION_CLEAN");
+    char *output, *slash;
+    char *args[] = {"python3", "tools/ci/clean_inhouse.py", p->tree,
+                    (char *)(p->o->arch && !strcmp(p->o->arch, "i686,x86_64") ? "both" :
+                              p->o->arch ? p->o->arch : "i686"), NULL, NULL};
+    int status;
+
+    if (!clean)
+        return 0;
+    if (strcmp(clean, "1") || !p->receipt_path)
+        return refuse(p, "CLEAN must be 1 and requires a preparation receipt");
+    output = strdup(p->receipt_path);
+    if (!output)
+        return failed(p, "clean: memory ran out");
+    slash = strrchr(output, '/');
+#ifdef _WIN32
+    if (!slash || (strrchr(output, '\\') && strrchr(output, '\\') > slash))
+        slash = strrchr(output, '\\');
+#endif
+    if (!slash) {
+        free(output);
+        return refuse(p, "the preparation receipt must have an absolute directory");
+    }
+    *slash = '\0';
+    args[4] = output;
+    status = preparation_adapter(p, "clean-inhouse", args);
+    free(output);
+    return status;
+}
+
+/** Give the import adapter exactly the goals selected by the C allocator. */
+static int import_artifacts(struct prep *p, const char *config)
+{
+    char *request = format("%s/import.goals", p->work);
+    char *record = p->o->record ? artifact_path(p->tree, p->o->record) : NULL;
+    char *provenance = record ? format("%s.import.json", record) : NULL;
+    char *config_path = artifact_path(p->tree, config);
+    char *args[] = {"python3", "tools/etude/preparation_import.py", "prepare",
+                    "--tree", p->tree, "--config", (char *)config,
+                    "--request", request, "--work", p->work, "--provenance", provenance, "--commit",
+                    p->receipt_path ? p->receipt.commit : "", NULL};
+    FILE *f = request ? fopen(request, "wx") : NULL;
+    size_t i;
+    int status = 0;
+
+    if (!f || !provenance || !config_path) {
+        if (f)
+            fclose(f);
+        free(record);
+        free(provenance);
+        free(config_path);
+        free(request);
+        return failed(p, "import: the selected goal request cannot be written");
+    }
+    for (i = 0; !status && i < p->nt; i++) {
+        p->at = &p->t[i];
+        status = find_artifacts(p);
+    }
+    for (i = 0; !status && i < p->required.n; i++)
+        if (fprintf(f, "%s\n", p->required.v[i]) < 0)
+            status = 1;
+    if (fclose(f))
+        status = 1;
+    p->at = &p->t[0];
+    if (!status)
+        status = preparation_adapter(p, "import", args);
+    if (!status && (list_add(&p->required, config_path) || list_add(&p->required, provenance)))
+        status = failed(p, "import: memory ran out");
+    free(record);
+    free(provenance);
+    free(config_path);
+    free(request);
+    return status;
+}
+
 /** Run the steps, find and build the artifacts of each architecture in
  * turn, and record them. */
 static int prepare(struct prep *p)
 {
     size_t i;
     int status = find_path(p);
+    const char *config = getenv("ETUDE_PREPARATION_IMPORT");
 
+    if (status == 0)
+        status = clean_inhouse(p);
+    if (status == 0 && config) {
+        status = import_artifacts(p, config);
+        return status == 0 ? write_record(p) : status;
+    }
     if (status == 0)
         status = keys(p);
     for (i = 0; status == 0 && i < p->nt; i++) {

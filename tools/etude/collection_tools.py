@@ -192,14 +192,15 @@ def native_goal(goal):
     if parts == ('build', 'tests', 'cases', 'gnu', 'sntpserver'):
         return True
     if parts[:3] == ('build', 'tests', 'style'):
-        return parts[3:] in (('sparse.json',), ('sizes.json',), ('manual.json',))
+        return False
     if parts[:4] in (('build', 'tests', 'cases', 'machine'),
                      ('build', 'tests', 'cases', 'host')):
-        return len(parts) == 5
+        return (len(parts) == 5 and '.' not in parts[4] and
+                parts[4] not in ('fstool', 'root-password', 'test-password'))
     if parts[:3] == ('build', 'tests', 'host-suite'):
         return (len(parts) == 4 and (parts[3].endswith('.inventory.json') or
                                     parts[3] == 'vfs_unmount') or
-                len(parts) == 5 and parts[3] in ('scripts', 'schemas') or
+                len(parts) == 5 and parts[3] == 'scripts' or
                 parts[3:] == ('tests', 'usbstamp_hosttest'))
     if parts[:3] == ('build', 'tests', 'host'):
         return len(parts) == 4 and parts[3] not in ('exfat_writer', 'tooling_machine')

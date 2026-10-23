@@ -14,6 +14,9 @@
  * host-deps: tools/etude/posix/process.c utils/sha256.c
  * host-cflags: -I tools/etude/include -I tools/etude/posix
  * host-cflags: -Wall -Wextra -Werror
+ * host-inputs: tests/host/preparation_import_test.py
+ * host-inputs: tools/etude/preparation_import.py tools/etude/preparation_paths.py
+ * host-inputs: tools/etude/collection_tools.py
  * host-first: it runs for minutes
  *
  * Goals have the recovery key minted, the components and then the goals
@@ -862,6 +865,36 @@ static void test_graph(void)
         etude_store_close(s);
 }
 
+/** The Python importer is a preparation product, checked in this GNU fixture. */
+static void test_import_product(void)
+{
+    char *args[] = {"python3", "-B", "tests/host/preparation_import_test.py", NULL};
+    struct etude_exec *ex = etude_exec_new();
+    struct etude_proc *proc = NULL;
+    struct etude_exec_spec spec;
+    const struct etude_exec_result *result;
+
+    memset(&spec, 0, sizeof(spec));
+    spec.attempt_id = "preparation-import";
+    spec.argv = args;
+    spec.output_max = 65536;
+    spec.grace_us = 5000000;
+    CHECK(ex && !etude_exec_start(ex, &spec, &proc), "import product: started");
+    if (proc) {
+        while (etude_exec_wait(ex, 1000) != proc)
+            ;
+        result = etude_proc_result(proc);
+        CHECK(result->end == ETUDE_END_EXITED && !result->value &&
+                  result->cleanup == ETUDE_CLEANUP_CONFIRMED,
+              "import product: identity, receipt, fixture chain and native build vectors");
+        if (result->value)
+            printf("import product: %s%s", result->out.data ? result->out.data : "",
+                   result->err.data ? result->err.data : "");
+        etude_proc_free(proc);
+    }
+    etude_exec_free(ex);
+}
+
 int main(int argc, char **argv)
 {
     char held[32];
@@ -897,6 +930,7 @@ int main(int argc, char **argv)
     test_stop();
     test_check();
     test_graph();
+    test_import_product();
     if (fails != 0)
         return 1;
     fix_passed();
