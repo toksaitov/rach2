@@ -4,7 +4,7 @@
 # master has commits the last review did not read, one review at a time,
 # until STATE/stop exists.
 #
-# Usage: reviewer.sh [-a codex] [-s STATE]
+# Usage: reviewer.sh [-a codex] [-m MODEL] [-e EFFORT] [-s STATE] [-r REPO]
 #
 # The loop asks `board.sh phase` every five minutes. When it answers
 # `ready: no: review`, every member of the phase In progress and every `ci`
@@ -33,6 +33,8 @@
 # done again every five minutes, so that no finding is lost. A finding whose
 # issue GitHub created but whose answer was lost is filed again, and the
 # manager's triage closes the duplicate.
+# The owner's explicit -m and -e options replace the lead's defaults and
+# survive the loop's refresh from master. The report records their values.
 #
 # A review that ends without an answer in that form is run again at once, up
 # to three runs for one range; one that reaches its three hours is not, since
@@ -273,17 +275,26 @@ runs()
 main()
 {
     agent=codex state=$HOME/flow/reviewer repo=
-    while getopts a:s:r: o; do
+    while getopts a:m:e:s:r: o; do
         case $o in
             a) agent=$OPTARG ;;
+            m) LEAD=$OPTARG ;;
+            e) LEAD_EFFORT=$OPTARG ;;
             s) state=$OPTARG ;;
             r) repo=$OPTARG ;;
-            *) echo "usage: reviewer.sh [-a codex] [-s STATE]" >&2; exit 2 ;;
+            *) echo "usage: reviewer.sh [-a codex] [-m MODEL] [-e EFFORT] [-s STATE] [-r REPO]" >&2; exit 2 ;;
         esac
     done
     case $agent in
         codex) ;;
         *) echo "reviewer: no adapter for $agent" >&2; exit 2 ;;
+    esac
+    case $LEAD in
+        ''|*[!A-Za-z0-9._-]*) echo 'reviewer: invalid lead model' >&2; exit 2 ;;
+    esac
+    case $LEAD_EFFORT in
+        low|medium|high|xhigh|max|ultra) ;;
+        *) echo 'reviewer: invalid lead effort' >&2; exit 2 ;;
     esac
     [ -n "$repo" ] || repo=$(cd "$(dirname "$0")/../.." && pwd)
     mkdir -p "$state"
@@ -298,7 +309,7 @@ main()
             sleep 60
         done
         log "loop starts: $agent in $repo"
-        exec sh "$state/run/reviewer.sh" -a "$agent" -s "$state" -r "$repo"
+        exec sh "$state/run/reviewer.sh" -a "$agent" -m "$LEAD" -e "$LEAD_EFFORT" -s "$state" -r "$repo"
     fi
     while [ ! -e "$state/stop" ]; do
         if ! refresh; then
@@ -310,7 +321,7 @@ main()
         case $? in
             0)
                 log "restarting as master's loop"
-                exec sh "$state/run/reviewer.sh" -a "$agent" -s "$state" -r "$repo" ;;
+                exec sh "$state/run/reviewer.sh" -a "$agent" -m "$LEAD" -e "$LEAD_EFFORT" -s "$state" -r "$repo" ;;
             2)
                 log "update failed"
                 sleep 60
