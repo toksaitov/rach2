@@ -15,7 +15,11 @@ rm -rf "$OUT"
 mkdir -p "$TREE"
 cd "$REPO"
 # Only tracked source and the extracted musl inputs enter this small tree.
-git ls-files -z -- Makefile tests tools mk utils krffs rach2 ish vendor > "$OUT/sources.list"
+if git rev-parse --git-dir > /dev/null 2>&1; then
+    git ls-files -z -- Makefile tests tools mk utils krffs rach2 ish vendor > "$OUT/sources.list"
+else
+    cp build/gnu-source-files "$OUT/sources.list"
+fi
 python3 - "$REPO" "$TREE" "$OUT/sources.list" <<'PY'
 from pathlib import Path
 import shutil, sys

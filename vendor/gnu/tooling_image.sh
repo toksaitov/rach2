@@ -193,6 +193,9 @@ stage_tree()
         exit 1
     fi
     git ls-files -z -c -o --exclude-standard | tr '\0' '\n' > "$STAGE/git"
+    mkdir -p "$STAGE/build"
+    git ls-files -z -c -o --exclude-standard -- Makefile tests tools mk utils krffs rach2 ish \
+        vendor > "$STAGE/build/gnu-source-files"
     sh krffs/manifest_deps.sh krffs/manifests/os-real-gnu.manifest > "$STAGE/products" || :
     echo "$MUSL_CRYPT_SRC" >> "$STAGE/products"
     if [ "${GNU_TEST_PRODUCTS:-}" = 1 ] && [ "$RACH2_ARCH" = x86_64 ]; then
@@ -208,7 +211,8 @@ stage_tree()
         *bsdtar*) set -- --no-xattrs --no-mac-metadata ;;
         *) set -- ;;
     esac
-    COPYFILE_DISABLE=1 tar -c -z -f "$STAGE/tree.tar.gz" "$@" -T "$STAGE/list"
+    COPYFILE_DISABLE=1 tar -c -z -f "$STAGE/tree.tar.gz" "$@" -T "$STAGE/list" \
+        -C "$STAGE" build/gnu-source-files
     echo "gnu: tooling: staged $(wc -l < "$STAGE/list" | tr -d ' ') files," \
         "$(($(wc -c < "$STAGE/tree.tar.gz") / 1048576)) MiB compressed"
 }
