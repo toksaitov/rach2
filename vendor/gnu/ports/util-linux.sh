@@ -14,7 +14,9 @@
 # carries, so asciidoctor is not needed. For a prefix of /usr, util-linux
 # would put its programs and libraries in /bin, /sbin and /lib, which are the
 # musl system's; they go under /usr, as the other ports' do and Debian's
-# merged /usr has them.
+# merged /usr has them. The install runs serially: under parallel make it may
+# link swapon again while libtool reinstalls libmount, whose library is then
+# missing for a moment.
 VERSION=2.42.4
 DEPENDS=ncurses
 CONFIGURE_ARGS="--bindir=/usr/bin --sbindir=/usr/sbin --libdir=/usr/lib --disable-nls --disable-static --disable-asciidoc --disable-poman \
@@ -27,7 +29,7 @@ CONFIGURE_ARGS="--bindir=/usr/bin --sbindir=/usr/sbin --libdir=/usr/lib --disabl
 
 port_install()
 {
-    make install DESTDIR="$DEST"
+    make -j1 install DESTDIR="$DEST"
     mkdir -p "$OUT/setid"
     for p in newgrp write wall; do
         mv "$DEST/usr/bin/$p" "$OUT/setid/$p"
