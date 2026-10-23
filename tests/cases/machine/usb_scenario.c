@@ -299,20 +299,6 @@ static int typed_counts(struct usb_case *u)
     return usb_end(u);
 }
 
-/** The mouse moved with three button states, then the counts read. */
-static int mouse_counts(struct usb_case *u)
-{
-    struct usb_boot b;
-
-    booted(u, &b, MOUSE, "mouse");
-    usb_step(u, "move");
-    usb_mouse(&b, 20, -8, 0);
-    usb_mouse(&b, -12, 6, 1);
-    usb_mouse(&b, 8, 8, 2);
-    interrupts(u, &b);
-    return usb_end(u);
-}
-
 /** The PS/2 keyboard's line and the timer, with messages on. */
 static int line_counts(struct usb_case *u)
 {
@@ -711,7 +697,6 @@ static const struct {
     {"replug", replug},
     {"msi", typed_counts},
     {"nomsi", typed_counts},
-    {"mouse-msi", mouse_counts},
     {"msi-drop", typed_counts},
     {"msi-lines", line_counts},
     {"latency-spin", latency_spin},

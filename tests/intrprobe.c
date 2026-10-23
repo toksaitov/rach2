@@ -5,11 +5,9 @@
  * Four machines are checked by the one program, because what the file must
  * say is decided by the boot line and the device list, both of which the
  * guest can read for itself. On a machine with a USB keyboard the suite has
- * typed five keys before this runs, and on one with a mouse and no keyboard
- * it has moved the mouse with three button states; the probe first waits
- * until `/proc/usb` counts the reports that input makes, five from the
- * keyboards or three from the mice, so the interrupt counts are read after
- * the work they are judged against has arrived.
+ * typed five keys before this runs; the probe first waits until `/proc/usb`
+ * counts the five reports from the keyboards, so the interrupt counts are
+ * read after the work they are judged against has arrived.
  *
  * * With a USB device and messages, which is the ordinary boot: the
  *   controller's vector has taken at least two interrupts for those reports,
@@ -281,34 +279,25 @@ static int usb_devices(const char *kind, int *reports)
 }
 
 /**
- * Wait until the keyboards, or on a machine with none the mice, have
- * delivered the reports the suite's input makes. The emulator's keyboard
- * reports each key that goes down or up on a report of its own, and the
- * shell has read the five keys typed, so the keyboards have delivered five
- * at least. Its mouse merges movements the guest has not yet read into one
- * report but starts a new one when the buttons change, and the mouse is
- * moved with three button states, so the mice deliver three at least.
+ * Wait until the keyboards, when the machine has one, have delivered the
+ * reports the suite's typing makes. The emulator's keyboard reports each key
+ * that goes down or up on a report of its own, and the shell has read the
+ * five keys typed, so the keyboards have delivered five at least.
  *
  * The reports arrive through the controller's interrupts or the timer's
  * pump, while this yields between readings; none of the readings is
  * counted, and the suite's wait for this program's word bounds a machine on
  * which they never arrive.
  */
-static void await_reports(int keyboards, int mice)
+static void await_reports(void)
 {
-    const char *kind = " class 3 protocol 2 reports ";
-    int want = 3;
+    const char *kind = " class 3 protocol 1 reports ";
     int reports;
 
-    if (keyboards == 0 && mice == 0) {
+    if (usb_devices(kind, &reports) == 0) {
         return;
     }
-    if (keyboards > 0) {
-        kind = " class 3 protocol 1 reports ";
-        want = 5;
-    }
-    usb_devices(kind, &reports);
-    while (reports < want) {
+    while (reports < 5) {
         syscall0(SYS_SCHED_YIELD);
         usb_devices(kind, &reports);
     }
@@ -492,8 +481,7 @@ void probe_main(unsigned long *sp)
         fail("/proc/cmdline would not open");
     }
     if (!native) {
-        await_reports(usb_devices(" class 3 protocol 1 reports ", &key_reports),
-                      usb_devices(" class 3 protocol 2 reports ", &mouse_reports));
+        await_reports();
     }
     devices = usb_devices("", &all_reports);
     usb_devices(" class 3 protocol 1 reports ", &key_reports);

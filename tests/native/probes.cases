@@ -47,9 +47,9 @@ case forktest -- forktest
 case fpuprobe stage:fpuprobe -- fpuprobe
 case fsbaseprobe -- fsbaseprobe
 case hello -- hello
-# intrprobe leaves out the wait for typed keys and mouse reports, the
-# controller's interrupts for them, and the profiles of rach2.nomsi,
-# rach2.msidrop and a machine with no USB device.
+# intrprobe leaves out the wait for typed keys, the controller's interrupts
+# for them, and the profiles of rach2.nomsi, rach2.msidrop and a machine with
+# no USB device.
 case intrprobe -- intrprobe machine=native
 case jobprobe pty -- jobprobe
 case krffsprobe.read volume:krffs:krffsvol:attached mountns log -- krffsprobe read
