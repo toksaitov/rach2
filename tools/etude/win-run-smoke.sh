@@ -64,8 +64,13 @@ printf '{}\n' > "$tree/tests/cases/host.style.json"
 cat > "$work/bin/make" <<'SCRIPT'
 #!/bin/sh
 set -eu
+. "$SMOKE_TREE/tools/etude/hold.sh"
+cp "$SMOKE_TREE/build/.run.lock/owner" "$SMOKE_TREE/owner.before"
+etude_held "$SMOKE_TREE"
+etude_hold "$SMOKE_TREE" win-run-smoke "$0" "$@"
 [ -n "${RACH2_TREE_HELD:-}" ]
 [ "$(sed -n 's/^pid //p' "$SMOKE_TREE/build/.run.lock/owner")" = "$RACH2_TREE_HELD" ]
+cmp "$SMOKE_TREE/owner.before" "$SMOKE_TREE/build/.run.lock/owner"
 printf 'held\n' > "$SMOKE_TREE/made"
 exit 1
 SCRIPT

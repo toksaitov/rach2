@@ -38,6 +38,13 @@ int hold_read(long pid, struct hold_proc *p);
 long hold_parent(long pid);
 
 /**
+ * Say whether this process belongs to the Windows command job of the live
+ * owner `owner`, identified by its pid and start time. POSIX systems give 0
+ * and use the parent chain alone.
+ */
+int hold_in_job(const struct hold_proc *owner);
+
+/**
  * List into `pids` at most `max` of the running processes of the process
  * group `group`, other than this one.
  *

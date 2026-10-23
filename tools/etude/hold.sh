@@ -18,7 +18,8 @@
 # etude_held REPO: whether the run lock of the tree at REPO is held for an
 # ancestor of this shell: RACH2_TREE_HELD names a process, the lock's owner
 # record names the same one, and it is this shell, its parent, or that
-# parent's, up to the first process.
+# parent's, up to the first process. Windows also accepts membership in the
+# live holder's command job, across an ended MSYS intermediate process.
 etude_held()
 {
     case $(uname -s) in

@@ -522,12 +522,14 @@ static int row_run(void)
     return gate_run(0) != 0 || gate_run(1) != 0;
 }
 
-/** A second helper on a held tree is refused, and the first goes on. */
+/** A process outside the holder's job cannot query or reuse its hold. */
 static int row_busy(void)
 {
     const char *const first[] = {tree, "first", "wintarget", "gate", ready, go, NULL};
     const char *const second[] = {tree, "second", "wintarget", "exit", "0", NULL};
+    const char *const query[] = {"-q", tree, NULL};
     char line[64];
+    char *before;
     struct run a, b;
     struct gate g;
     DWORD status;
@@ -535,6 +537,14 @@ static int row_busy(void)
 
     if (hold(&a, "first", first) != 0 || gated(&a, &g) != 0)
         return 1;
+    before = get(owner);
+    setvar("RACH2_TREE_HELD", g.held);
+    st = run_hold(&b, "query-stranger", query);
+    if (st != 1 || before == NULL || !has(owner, before)) {
+        free(before);
+        return failed("an unrelated query exits %ld or changes the owner record", st);
+    }
+    free(before);
     if ((st = run_hold(&b, "second", second)) < 0)
         return 1;
     if (st != 1 || !said(&b, "second: result: refused: the tree is not free\n"))

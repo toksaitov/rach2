@@ -227,6 +227,35 @@ long hold_parent(long pid)
     return (long)parent;
 }
 
+/** Name the command job of owner `p` by its pid and creation time. */
+static void job_name(wchar_t *name, size_t size, const struct hold_proc *p)
+{
+    swprintf(name, size, L"Local\\rach2-hold.%ld.%llu", p->pid, p->start);
+}
+
+int hold_in_job(const struct hold_proc *owner)
+{
+    wchar_t name[96];
+    HANDLE h, j;
+    BOOL member = FALSE;
+
+    h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, (DWORD)owner->pid);
+    if (h == NULL)
+        return 0;
+    if (owner->start != 0 && owner->fraction == 0 && created(h) == owner->start &&
+        WaitForSingleObject(h, 0) == WAIT_TIMEOUT) {
+        job_name(name, sizeof name / sizeof name[0], owner);
+        j = OpenJobObjectW(JOB_OBJECT_QUERY, FALSE, name);
+        if (j != NULL) {
+            if (!IsProcessInJob(GetCurrentProcess(), j, &member))
+                member = FALSE;
+            CloseHandle(j);
+        }
+    }
+    CloseHandle(h);
+    return member != FALSE;
+}
+
 size_t hold_members(long group, long *pids, size_t max)
 {
     (void)group;
@@ -555,10 +584,21 @@ out:
 static HANDLE make_job(void)
 {
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION lim;
-    HANDLE j = CreateJobObjectW(NULL, NULL);
+    struct hold_proc me;
+    wchar_t name[96];
+    HANDLE j;
 
+    if (hold_read(hold_self(), &me) != 1)
+        return NULL;
+    job_name(name, sizeof name / sizeof name[0], &me);
+    j = CreateJobObjectW(NULL, name);
     if (j == NULL)
         return NULL;
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        CloseHandle(j);
+        SetLastError(ERROR_ALREADY_EXISTS);
+        return NULL;
+    }
     memset(&lim, 0, sizeof lim);
     lim.BasicLimitInformation.LimitFlags =
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;

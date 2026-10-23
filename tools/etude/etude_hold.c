@@ -104,6 +104,7 @@ static void read_record(const char *path, struct record *r)
  * Say whether the tree is held for an ancestor of this process:
  * RACH2_TREE_HELD names a process, the owner record names the same one, and
  * it is this process, its parent, or that parent's, up to the first process.
+ * A Windows command job also proves descent across an ended MSYS parent.
  */
 static int held_for_ancestor(const struct hold *h)
 {
@@ -120,7 +121,7 @@ static int held_for_ancestor(const struct hold *h)
     for (pid = hold_self(), depth = 0; pid > 1 && depth < 4096; pid = hold_parent(pid), depth++)
         if (pid == held)
             return 1;
-    return 0;
+    return r.identified && r.id.pid == held && hold_in_job(&r.id);
 }
 
 /** Say why the tree is not free, then that the request is refused; 0. */

@@ -174,6 +174,12 @@ size_t hold_members(long group, long *pids, size_t max)
 }
 #endif
 
+int hold_in_job(const struct hold_proc *owner)
+{
+    (void)owner;
+    return 0;
+}
+
 int hold_guard(const char *path)
 {
     struct flock lock;
