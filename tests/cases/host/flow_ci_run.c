@@ -241,9 +241,18 @@ int flow_ci_run_mock(int argc, char **argv)
 {
     const char *name = strrchr(argv[0], '/');
     name = name ? name + 1 : argv[0];
+    if (!strcmp(name, "uname")) {
+        puts("Linux");
+        return 0;
+    }
     if (!strcmp(name, "native-etude"))
         return flow_ci_native_mock(argc, argv);
     if (!strcmp(name, "git")) {
+        if (argc == 5 && !strcmp(argv[1], "-C") && !strcmp(argv[3], "rev-parse") &&
+            !strcmp(argv[4], "HEAD")) {
+            puts("0123456789abcdef0123456789abcdef01234567");
+            return 0;
+        }
         if (argc >= 3 && !strcmp(argv[1], "diff"))
             return 0;
         if (argc == 4 && !strcmp(argv[1], "rev-parse") && !strcmp(argv[2], "--short") &&

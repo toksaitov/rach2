@@ -74,21 +74,22 @@ for arch in $selected; do
     printf '%s\n' "$sha" > "$result/commit"
     : > "$result/failed"
 done
+"$etude" observe parent > "$out/caller.identity"
+IFS=' ' read -r caller_pid caller_creation caller_extra < "$out/caller.identity"
+case $caller_pid in ''|*[!0-9]*|0) echo 'ci: refused: invalid native caller PID' >&2; exit 2 ;; esac
+case $caller_creation in ''|*[!0-9]*|0) echo 'ci: refused: invalid native caller creation' >&2; exit 2 ;; esac
+[ -z "$caller_extra" ] || exit 2
+ETUDE_SEQUENCE_PARENT=$caller_pid:$caller_creation
+export ETUDE_SEQUENCE_PARENT
 status=0
-# Keep this parent alive while the native owner controls both phases.
-(
-    code=0
-    sh "$tree/tools/ci/native_sequence.sh" "$purpose" "$tree" "$out" "$arches" "$run" \
-        "$site" "$etude" "$accel" "$@" || code=$?
-    printf '%s\n' "$code" > "$out/sequence.status"
-) 2>&1 | tee "$out/log"
-if [ -f "$out/sequence.status" ]; then
-    status=$(cat "$out/sequence.status")
-else
-    echo 'ci: stopped: native owner left no sequence status' >&2
-    exit 125
+# The native owner mirrors phase output to OUT/log and the console.
+# Keep this immediate parent alive; an intermediate pipeline could outlive it.
+sh "$tree/tools/ci/native_sequence.sh" "$purpose" "$tree" "$out" "$arches" "$run" \
+    "$site" "$etude" "$accel" "$@" || status=$?
+printf '%s\n' "$status" > "$out/sequence.status"
+if [ ! -f "$out/log" ]; then
+    printf 'ci: native sequence stopped before its output log opened (status %s)\n' "$status" > "$out/log"
 fi
-case $status in ''|*[!0-9]*) exit 125 ;; esac
 [ "$status" -lt 128 ] || exit 125
 : > "$out/failed"
 result_status=0

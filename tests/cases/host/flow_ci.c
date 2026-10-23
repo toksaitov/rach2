@@ -250,10 +250,25 @@ static int mock_gh(int argc, char **argv)
     return result;
 }
 
+static int mock_native_reader(int argc, char **argv)
+{
+    char *all = join(argc, argv, 3);
+    int ok = all && strstr(all, "--project-architecture") && strstr(all, "--require-budget") &&
+             append(path("reader.log"), all);
+    free(all);
+    if (!ok)
+        return 2;
+    int failed = !strcmp(env("CI_TEST_NATIVE_GUARD"), "budget");
+    puts(failed ? "etude check: result: failed: runner" : "etude check: result: passed");
+    return failed;
+}
+
 static int mock_reader(int argc, char **argv)
 {
     char *s;
     int i;
+    if (argc > 2 && !strcmp(argv[1], "check") && !strcmp(argv[2], "verdict"))
+        return mock_native_reader(argc, argv);
     if (argc < 3 || strcmp(argv[1], "show") || strcmp(argv[2], "failures"))
         return 2;
     s = join(argc, argv, 3);
@@ -388,8 +403,31 @@ static int mock_tests(int argc, char **argv)
     return status;
 }
 
+static int mock_native_run(int argc, char **argv)
+{
+    char *current = read_trim(path("current")), file[16384];
+    int bad = current && !strcmp(current, "bad");
+    const char *failed = bad ? env("CI_TEST_FAILED") : "";
+    const char *kind = argc > 2 ? argv[2] : "";
+    const char *out = argc > 3 ? argv[3] : "";
+    int ok = *kind && *out;
+    snprintf(file, sizeof(file), "%s/%s-%s/native", out, kind, env("ARCH"));
+    ok = ok && fx_text(file, "etude-native-1\n");
+    snprintf(file, sizeof(file), "%s/%s-%s/failed", out, kind, env("ARCH"));
+    char text[256];
+    snprintf(text, sizeof(text), "%s%s", failed, *failed ? "\n" : "");
+    ok = ok && fx_text(file, text);
+    snprintf(file, sizeof(file), "%s/%s-%s/done", out, kind, env("ARCH"));
+    ok = ok && fx_text(file, "");
+    event(bad ? "native bad" : "native good");
+    free(current);
+    return !ok ? 2 : *failed ? 1 : 0;
+}
+
 static int mock_run(int argc, char **argv)
 {
+    if (fx_has("tools/ci/run.sh", "results=native\n"))
+        return mock_native_run(argc, argv);
     char *current = read_trim(path("current")), *clock = read_trim(path("clock")), line[8192];
     const char *kind = argc > 2 ? argv[2] : "";
     int result = 0;
@@ -1500,6 +1538,50 @@ static int prepare(struct fixture *f)
         ok = (action) && ok; \
     } while (0)
 
+static int native_report_row(struct fixture *f, const char *mode)
+{
+    if (!clean_results(f, "core") || !runsh(f, "full", "native"))
+        return 0;
+    for (unsigned i = 0; i < 2; i++) {
+        const char *arch = i ? "x86_64" : "i686";
+        char file[160];
+        snprintf(file, sizeof(file), "results/core-%s/native", arch);
+        if (!flow_put(f, file, "etude-native-1\n"))
+            return 0;
+        snprintf(file, sizeof(file), "results/core-%s/suites", arch);
+        if (!flow_put(f, file, "default\n"))
+            return 0;
+    }
+    if (strcmp(mode, "missing"))
+        if (!flow_put(f, "results/history/run.jsonl", "fixture\n") ||
+            !fx_mkdir(path("results/store")))
+            return 0;
+    fx_env("CI_TEST_NATIVE_GUARD", mode);
+    int ok = report(f, "core") == 0;
+    int fail = strcmp(mode, "pass") != 0;
+    ok = ok && log_has("gh.log", fail ? "-f state=failure -f context=ci/core/i686 "
+                                      : "-f state=success -f context=ci/core/i686 ");
+    ok = ok && log_has("gh.log", fail ? "-f state=failure -f context=ci/core/x86_64 "
+                                      : "-f state=success -f context=ci/core/x86_64 ");
+    fx_env("CI_TEST_NATIVE_GUARD", NULL);
+    return fx_check(f, ok, "native reporting validates complete history and budget");
+}
+
+static int native_bisect_row(struct fixture *f, int runner)
+{
+    const char *args[] = {"core", "i686", "good", "bad", "7", "default", NULL};
+    if (!runsh(f, "full", "native") || !start(f))
+        return 0;
+    fx_env("CI_TEST_FAIL", "1");
+    fx_env("CI_TEST_FAILED", runner ? "runner" : "default");
+    int code = bisect(f, args);
+    int ok = code == (runner ? 1 : 0) && !log_has("events", "make") &&
+             log_has("events", "native bad") && log_equal("limits", "");
+    ok = ok && log_has("gh.log", runner ? "unresolved: bad could not be tested again"
+                                        : "is the first commit that fails");
+    return fx_check(f, ok, "native bisection uses the public entry without a legacy timeout");
+}
+
 int flow_ci(struct fixture *f)
 {
     const char *kinds[] = {"core", "full"}, *states[] = {"missing", "unfinished", "missing-failed"};
@@ -1561,6 +1643,11 @@ int flow_ci(struct fixture *f)
     ROW(late_row(f, "failed"));
     ROW(late_row(f, "incomplete"));
     ROW(scoped_row(f));
+    ROW(native_report_row(f, "pass"));
+    ROW(native_report_row(f, "budget"));
+    ROW(native_report_row(f, "missing"));
+    ROW(native_bisect_row(f, 0));
+    ROW(native_bisect_row(f, 1));
     return ok;
 }
 #undef ROW

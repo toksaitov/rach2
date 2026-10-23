@@ -37,7 +37,7 @@ static int sequence(int argc, char **argv)
         !fx_text(path("selection.list"),
                  "style none host.fixture.style\nhost none host.fixture.host\n"
                  "default i686 machine.fixture.default\ndefault x86_64 machine.fixture.default\n"
-                 "bigmem x86_64 machine.fixture.bigmem\n"))
+                 ""))
         return 2;
     if (!strcmp(env("CI_NATIVE_MODE"), "cancel"))
         return 130;
@@ -70,6 +70,10 @@ static int verdict(int argc, char **argv)
 
 int flow_ci_native_mock(int argc, char **argv)
 {
+    if (argc == 3 && !strcmp(argv[1], "observe") && !strcmp(argv[2], "parent")) {
+        puts("1 1");
+        return 0;
+    }
     if (argc > 2 && !strcmp(argv[1], "observe") && !strcmp(argv[2], "sequence"))
         return sequence(argc, argv);
     if (argc > 2 && !strcmp(argv[1], "check") && !strcmp(argv[2], "verdict"))
@@ -98,7 +102,8 @@ static int setup(struct fixture *f)
         if (!flow_copy(f, from, to))
             return 0;
     }
-    if (!fx_mock(f, "native-etude") || !flow_put(f, "native-ledger/claims", "etude-ledger 1\n") ||
+    if (!fx_mock(f, "native-etude") || !fx_mock(f, "uname") ||
+        !flow_put(f, "native-ledger/claims", "etude-ledger 1\n") ||
         !fx_mkdir(flow_path(f, "native-locks")))
         return 0;
     char site[32768];
