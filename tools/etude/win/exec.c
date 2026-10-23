@@ -34,6 +34,7 @@ struct etude_proc {
     size_t output_max;
     struct etude_win_child *child;
     struct capture_lines lines;
+    struct capture_files files;
     etude_register_fn reg;
     etude_child_fn child_reg;
     void *reg_ctx;
@@ -139,6 +140,13 @@ static struct etude_proc *proc_new(const struct etude_exec_spec *spec)
         free(p);
         return NULL;
     }
+    if (capture_files_open(&p->files, spec) != 0) {
+        free(p->attempt_id);
+        capture_free(&p->r.out);
+        capture_free(&p->r.err);
+        free(p);
+        return NULL;
+    }
     strcpy(p->attempt_id, spec->attempt_id);
     p->r.attempt_id = p->attempt_id;
     p->r.end = p->r.exit_end = ETUDE_END_LOST;
@@ -159,6 +167,7 @@ static void proc_release(struct etude_proc *p)
     free(p->paused);
     capture_free(&p->r.out);
     capture_free(&p->r.err);
+    capture_files_close(&p->files);
     free(p->attempt_id);
     free(p);
 }
@@ -200,6 +209,9 @@ static void on_output(void *ctx, struct etude_win_child *c, enum etude_win_strea
 
     (void)c;
     p->ex->output = 1;
+    if (p->r.output_error == 0)
+        p->r.output_error =
+            capture_files_add(s == ETUDE_WIN_STDERR ? p->files.err : p->files.out, data, n);
     if (s == ETUDE_WIN_STDERR) {
         capture_add(&p->r.err, p->output_max, data, n);
         return;
@@ -245,7 +257,8 @@ int etude_exec_start(struct etude_exec *ex, const struct etude_exec_spec *spec,
     DWORD err;
 
     if (p == NULL) {
-        errno = ENOMEM;
+        if (errno == 0)
+            errno = ENOMEM;
         return -1;
     }
     p->ex = ex;

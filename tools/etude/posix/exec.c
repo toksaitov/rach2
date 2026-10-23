@@ -34,6 +34,7 @@ struct etude_proc {
     struct keeper_msg msg; /* a message of the keeper's being read */
     size_t msg_len;
     struct capture_lines lines;
+    struct capture_files files;
     int cancelled;
     int unverified;       /* a `child` record named a process of unknown start */
     int exited;           /* the keeper reported the end of the case's process */
@@ -75,6 +76,13 @@ static struct etude_proc *proc_new(const struct etude_exec_spec *spec)
         capture_init(&p->r.err, spec->output_max) != 0) {
         free(p->attempt_id);
         capture_free(&p->r.out);
+        free(p);
+        return NULL;
+    }
+    if (capture_files_open(&p->files, spec) != 0) {
+        free(p->attempt_id);
+        capture_free(&p->r.out);
+        capture_free(&p->r.err);
         free(p);
         return NULL;
     }
@@ -221,6 +229,7 @@ static void proc_release(struct etude_proc *p)
     close_fd(&p->err);
     capture_free(&p->r.out);
     capture_free(&p->r.err);
+    capture_files_close(&p->files);
     free(p->attempt_id);
     free(p);
 }
@@ -248,7 +257,8 @@ int etude_exec_start(struct etude_exec *ex, const struct etude_exec_spec *spec,
     struct etude_proc *p = proc_new(spec);
 
     if (p == NULL) {
-        errno = ENOMEM;
+        if (errno == 0)
+            errno = ENOMEM;
         return -1;
     }
     if (proc_spawn(p, spec) != 0 || proc_handshake(p, spec) != 0) {
@@ -312,6 +322,9 @@ static size_t read_output(struct etude_proc *p, int *fd, struct etude_output *o,
             return total;
         }
         total += (size_t)n;
+        if (p->r.output_error == 0)
+            p->r.output_error =
+                capture_files_add(scan ? p->files.out : p->files.err, buf, (size_t)n);
         capture_add(o, p->output_max, buf, (size_t)n);
         if (scan)
             capture_scan(&p->lines, buf, (size_t)n, child_found, p);

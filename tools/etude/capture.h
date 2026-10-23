@@ -7,6 +7,7 @@
 #define ETUDE_CAPTURE_H
 
 #include <stddef.h>
+#include <stdio.h>
 
 #include "etude/exec.h"
 #include "etude/report.h"
@@ -17,6 +18,18 @@ struct capture_lines {
     size_t len;
     int overlong; /* the current line is longer than a record can be */
 };
+
+/* Files owned by the controller, never inherited by the case. */
+struct capture_files {
+    FILE *out, *err;
+};
+
+/** Open optional output paths in binary truncate mode, sharing equal paths. */
+int capture_files_open(struct capture_files *f, const struct etude_exec_spec *s);
+/** Flush a complete chunk; return errno on a write failure. */
+int capture_files_add(FILE *f, const char *bytes, size_t n);
+/** Close each distinct file once. */
+void capture_files_close(struct capture_files *f);
 
 /** Make `o` an empty stream that keeps at most `max` bytes. */
 int capture_init(struct etude_output *o, size_t max);

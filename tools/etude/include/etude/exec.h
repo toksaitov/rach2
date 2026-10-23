@@ -73,21 +73,23 @@ typedef int (*etude_child_fn)(void *ctx, const char *attempt_id, const struct et
 /* One attempt to run, as the plan fixed it. */
 struct etude_exec_spec {
     const char *attempt_id;
-    char *const *argv;      /* argv[0] is the program's path */
-    char *const *envp;      /* the whole environment */
-    const char *cwd;        /* NULL keeps the controller's */
-    const char *stdin_path; /* NULL gives /dev/null; POSIX "-" duplicates stdin */
-    size_t output_max;      /* bytes kept of each of standard output and error */
-    uint64_t grace_us;      /* from the termination signal to the kill */
-    etude_register_fn reg;  /* NULL registers nothing */
-    etude_child_fn child;   /* NULL registers no descendant */
-    void *reg_ctx;          /* the context of `reg` and `child` */
-    int posix_only;         /* nonzero: use no interface beyond POSIX, as on a
-                               system without a subreaper, as the tests do on Linux */
-    const char *verdict;    /* where a keeper whose controller has gone, or
-                               one that reaps orphans, records its cleanup,
-                               or NULL; Windows, which has no keeper, writes
-                               none */
+    char *const *argv;       /* argv[0] is the program's path */
+    char *const *envp;       /* the whole environment */
+    const char *cwd;         /* NULL keeps the controller's */
+    const char *stdin_path;  /* NULL gives /dev/null; POSIX "-" duplicates stdin */
+    const char *stdout_path; /* optional complete output file, truncated before launch */
+    const char *stderr_path; /* same path merges streams; NULL keeps capture alone */
+    size_t output_max;       /* bytes kept of each of standard output and error */
+    uint64_t grace_us;       /* from the termination signal to the kill */
+    etude_register_fn reg;   /* NULL registers nothing */
+    etude_child_fn child;    /* NULL registers no descendant */
+    void *reg_ctx;           /* the context of `reg` and `child` */
+    int posix_only;          /* nonzero: use no interface beyond POSIX, as on a
+                                system without a subreaper, as the tests do on Linux */
+    const char *verdict;     /* where a keeper whose controller has gone, or
+                                one that reaps orphans, records its cleanup,
+                                or NULL; Windows, which has no keeper, writes
+                                none */
 };
 
 /* One output stream of a case. */
@@ -117,6 +119,7 @@ struct etude_exec_result {
     enum etude_end exit_end; /* how the process itself ended: EXITED,
                                 SIGNALED, or LOST when that was not seen */
     int exit_value;
+    int output_error; /* errno from writing a complete output file, or 0 */
     struct etude_output out;
     struct etude_output err;
     unsigned children;               /* `child` records naming a running descendant */

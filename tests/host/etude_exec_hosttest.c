@@ -983,6 +983,63 @@ static void test_controller_gone(void)
     close(fd);
 }
 
+/** Optional complete files keep both streams beyond the bounded capture. */
+static void test_output_files(struct etude_exec *ex)
+{
+    struct etude_exec_spec spec;
+    struct etude_proc *p;
+    const struct etude_exec_result *r;
+    char *args[] = {self, "--case", "say", "complete", "0", NULL};
+    char text[256];
+    FILE *f;
+    size_t n;
+
+    for (int merged = 0; merged < 2; merged++) {
+        memset(&spec, 0, sizeof(spec));
+        spec.attempt_id = merged ? "merged-output" : "split-output";
+        spec.argv = args;
+        spec.envp = environ;
+        spec.output_max = 4;
+        spec.stdout_path = fix_path("complete.out");
+        spec.stderr_path = merged ? spec.stdout_path : fix_path("complete.err");
+        f = fopen(spec.stdout_path, "w");
+        CHECK(f != NULL, "complete output fixture");
+        if (f != NULL) {
+            fputs("old output must be truncated", f);
+            fclose(f);
+        }
+        p = NULL;
+        CHECK(etude_exec_start(ex, &spec, &p) == 0, "complete output starts");
+        if (p == NULL)
+            continue;
+        while (etude_exec_wait(ex, -1) != p) {
+        }
+        r = etude_proc_result(p);
+        CHECK(r->end == ETUDE_END_EXITED && r->value == 0 && !r->output_error,
+              "complete output ends without a write error");
+        CHECK(r->out.kept == 4 && r->out.total > 4, "bounded capture remains bounded");
+        f = fopen(spec.stdout_path, "rb");
+        n = f == NULL ? 0 : fread(text, 1, sizeof(text) - 1, f);
+        if (f != NULL)
+            fclose(f);
+        text[n] = 0;
+        CHECK(strstr(text, "complete out\n") != NULL && strstr(text, "old output") == NULL,
+              "complete stdout is written after truncation");
+        if (merged)
+            CHECK(strstr(text, "complete err\n") != NULL, "equal paths merge both streams");
+        else {
+            CHECK(strstr(text, "complete err") == NULL, "distinct paths keep streams separate");
+            f = fopen(spec.stderr_path, "rb");
+            n = f == NULL ? 0 : fread(text, 1, sizeof(text) - 1, f);
+            if (f != NULL)
+                fclose(f);
+            text[n] = 0;
+            CHECK(strcmp(text, "complete err\n") == 0, "complete stderr is preserved");
+        }
+        etude_proc_free(p);
+    }
+}
+
 int main(int argc, char **argv)
 {
     struct etude_exec *ex;
@@ -997,6 +1054,7 @@ int main(int argc, char **argv)
     ex = etude_exec_new();
     if (ex == NULL)
         return 1;
+    test_output_files(ex);
     test_concurrent(ex);
     test_posix_only(ex);
     test_reaper(ex);
