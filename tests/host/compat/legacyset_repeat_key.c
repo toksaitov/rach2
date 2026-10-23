@@ -23,8 +23,8 @@ static void repetition_identity(const struct eh_json *data, const char *run)
 
 static struct eh_json *repetition_key_run(int variant)
 {
-    static const struct etude_legacy_member members[] = {
-        {"plain", 0, 0, ONE("plain"), NULL}, {"side-x", 0, 0, ONE("side-x"), NULL}};
+    static const struct etude_legacy_member members[] = {{"plain", 0, 0, ONE("plain"), NULL},
+                                                         {"side-x", 0, 0, ONE("side-x"), NULL}};
     char id[80], record[PATH_LEN], site[PATH_LEN];
     struct run r = {0};
     struct etude_legacy_set_opts o;
@@ -58,7 +58,8 @@ static struct eh_json *repetition_key_run(int variant)
     if (o.out)
         fclose(o.out);
     history_read(&r);
-    CHECK(!r.status && !r.read && count_kind(&r.h, "attempt") == (variant >= 3 && variant <= 4 ? 2 : 1),
+    CHECK(!r.status && !r.read &&
+              count_kind(&r.h, "attempt") == (variant >= 3 && variant <= 4 ? 2 : 1),
           "repeat key: real prepared collection and all allocated attempts pass");
     struct eh_json *plan = measurement_record(&r, "plan");
     repetition_identity(eh_json_get(plan, "data"), id);

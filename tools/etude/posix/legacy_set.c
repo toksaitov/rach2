@@ -875,8 +875,8 @@ static void reproduce(const struct set *x, struct cmp_text *d)
     cmp_printf(d, "{\"schema_version\":1,\"cache_evidence\":%s", cache ? cache : "null");
     if (x->o->repeat) {
         struct etude_repeat_spec spec;
-        etude_collection_repeat_spec(x->o->repeat, x->repeat_cases, x->repeat_count,
-                                     x->o->width, &spec);
+        etude_collection_repeat_spec(x->o->repeat, x->repeat_cases, x->repeat_count, x->o->width,
+                                     &spec);
         char *record = etude_repeat_record(&spec, x->run_id, x->repeat_items, x->n);
         if (!record) {
             d->failed = 1;
