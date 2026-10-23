@@ -39,7 +39,7 @@ struct etude_measurement_context {
     struct binding *files;
     size_t count;
     char *run_id;
-    char *text[9];
+    char *text[10];
     struct {
         char *path;
         char hash[65];
@@ -50,7 +50,7 @@ struct etude_measurement_context {
 };
 static const char *const keys[] = {
     "purpose", "source", "artifacts", "site_profile", "tools", "cache_state", "exemption",
-    "outer_observation", "physical_observation"};
+    "outer_observation", "physical_observation", "preparation"};
 
 static int fail(char *error, size_t size, const char *message)
 {
@@ -340,6 +340,7 @@ static int preparation(struct etude_measurement_context *c, const struct json *r
                        const char *commit, const char *record_hash)
 {
     const struct json *v = json_member(root, "preparation");
+    c->text[9] = strdup("null");
     if (!v || v->type == JSON_NULL)
         return 0;
     struct json *doc = snapshot(c, root, "preparation");
@@ -368,6 +369,10 @@ static int preparation(struct etude_measurement_context *c, const struct json *r
         r->elapsed = etude_history_elapsed(&r->start, &r->end);
         r->same_run = c->has_preparation = 1;
         ok = r->elapsed.reason == NULL;
+        if (ok) {
+            free(c->text[9]);
+            c->text[9] = canonical(doc);
+        }
     }
     json_free(doc);
     return ok ? 0 : -1;
