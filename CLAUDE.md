@@ -14,4 +14,4 @@
 * Tell the owner in the same turn of a delay of a day or more, a cost the owner has not seen, or anything that goes against what the owner asked.
 * Read a plan or a list of tasks that a worker or helper writes against the owner's requests and the plan's rules before giving out its tasks.
 * Show the owner research that the owner asked for whole, and say in the plan which of its findings it follows and which it sets aside, with the reason.
-* Answer each question of the owner's plainly, as the last thing in the reply, and ask for one decision at a time with the interactive question tool.
+* Answer each question of the owner's plainly, as the last thing in the reply, and ask for one decision at a time: with the interactive question tool when nothing waits on the session, and in the reply's text while it runs the manager's checks or other recurring work, since the tool stops the whole session until the owner answers.
