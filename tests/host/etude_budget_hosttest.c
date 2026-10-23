@@ -10,7 +10,8 @@
  * host-inputs: tools/etude/schemas/budget.schema.json
  * host-inputs: tools/etude/schemas/budget.example.json
  * host-deps: tools/etude/budget.c tools/etude/budget_run.c tools/etude/digest.c
- * host-deps: tools/etude/compare_load.c tools/etude/observe_import.c tools/etude/json.c
+ * host-deps: tools/etude/compare_load.c tools/etude/observe_import.c
+ * host-deps: tools/etude/json.c
  * host-deps: tools/etude/cost.c tools/etude/sched.c tools/etude/ledger.c
  * host-deps: tools/etude/posix/process.c tools/etude/compare.c
  * host-deps: tools/etude/compare_report.c tools/etude/history.c

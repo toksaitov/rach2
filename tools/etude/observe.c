@@ -1,4 +1,5 @@
-/* A separate native thread observes load even while the driver hashes inputs. */
+/* A separate native thread observes load even while the driver hashes inputs.
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,10 +29,11 @@ struct etude_observer {
     FILE *file;
     uint64_t samples, max_gap, denied;
     unsigned resets, available;
-    int stop, ready, done, joined, failed, owner_lost, overflow, cancelled;
+    int joined, failed, owner_lost, overflow, cancelled;
 #ifdef _WIN32
     HANDLE thread, event, ready_event;
 #else
+    int stop, ready, done;
     pthread_t thread;
     pthread_mutex_t mutex;
     pthread_cond_t condition;

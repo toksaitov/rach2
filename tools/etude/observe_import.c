@@ -110,7 +110,8 @@ static int sample(struct trace_reader *r, const struct eh_json *v, const char *l
     } else {
         if (mono < r->end_us)
             return -1;
-        if (utc < r->end_utc) r->utc_reset = 1;
+        if (utc < r->end_utc)
+            r->utc_reset = 1;
         if (mono - r->end_us > r->max_gap)
             r->max_gap = mono - r->end_us;
         if (!known || (r->cpu_known && cpu < r->cpu))
@@ -175,17 +176,18 @@ static char *read_trace(const char *bytes, size_t length, const char *run, uint6
         p = nl + 1;
     }
     int available = r.ended && r.count >= 2 && r.cpu_known && !r.utc_reset &&
-        r.max_gap <= 5 * ETUDE_OBSERVE_INTERVAL_US && r.start_utc <= start && r.end_utc >= end;
-    if (!r.ended || (strict && !available)) goto fail;
+                    r.max_gap <= 5 * ETUDE_OBSERVE_INTERVAL_US && r.start_utc <= start &&
+                    r.end_utc >= end;
+    if (!r.ended || (strict && !available))
+        goto fail;
     char prefix[512];
-    snprintf(
-        prefix, sizeof prefix,
-        "{\"schema_version\":1,\"method\":\"native-load-v1\","
-        "\"comparison_available\":%s,\"coverage\":{\"start_utc_us\":%llu,\"end_utc_us\":%llu,"
-        "\"start_us\":%llu,\"end_us\":%llu,\"samples\":%lu,\"max_gap_us\":%llu},\"first\":",
-        available ? "true" : "false", (unsigned long long)r.start_utc, (unsigned long long)r.end_utc,
-        (unsigned long long)r.start_us, (unsigned long long)r.end_us, (unsigned long)r.count,
-        (unsigned long long)r.max_gap);
+    snprintf(prefix, sizeof prefix,
+             "{\"schema_version\":1,\"method\":\"native-load-v1\","
+             "\"comparison_available\":%s,\"coverage\":{\"start_utc_us\":%llu,\"end_utc_us\":%llu,"
+             "\"start_us\":%llu,\"end_us\":%llu,\"samples\":%lu,\"max_gap_us\":%llu},\"first\":",
+             available ? "true" : "false", (unsigned long long)r.start_utc,
+             (unsigned long long)r.end_utc, (unsigned long long)r.start_us,
+             (unsigned long long)r.end_us, (unsigned long)r.count, (unsigned long long)r.max_gap);
     jbuf_puts(&b, prefix);
     jbuf_put(&b, r.first, r.first_size);
     jbuf_puts(&b, ",\"last\":");

@@ -522,20 +522,33 @@ static int other_process(void)
  * checked. */
 static void plan(void)
 {
-    static const char *const ids[] = {"fd-directory",    "lookup",
+    static const char *const ids[] = {"fd-directory",
+                                      "lookup",
                                       "dots",
-                                      "create",          "mkdir",
-                                      "rename",          "unlink",
-                                      "renamed-lookup",  "renamed-mkdir",
-                                      "renamed-chdir",   "renamed-file-link",
-                                      "removed-lookup",  "removed-links",
-                                      "removed-create",  "removed-cwd",
-                                      "file-notdir",     "pipe-notdir",
-                                      "closed-enoent",   "dev-through",
-                                      "cwd-root-other",  "cwd-root-self",
-                                      "fd-other-root",   "fd-other-same-uid",
-                                      "fd-other-eacces", "long-link",
-                                      "long-removal",    "cleanup"};
+                                      "create",
+                                      "mkdir",
+                                      "rename",
+                                      "unlink",
+                                      "renamed-lookup",
+                                      "renamed-mkdir",
+                                      "renamed-chdir",
+                                      "renamed-file-link",
+                                      "removed-lookup",
+                                      "removed-links",
+                                      "removed-create",
+                                      "removed-cwd",
+                                      "file-notdir",
+                                      "pipe-notdir",
+                                      "closed-enoent",
+                                      "dev-through",
+                                      "cwd-root-other",
+                                      "cwd-root-self",
+                                      "fd-other-root",
+                                      "fd-other-same-uid",
+                                      "fd-other-eacces",
+                                      "long-link",
+                                      "long-removal",
+                                      "cleanup"};
     unsigned i;
 
     report_begin(report_case(environ, "guest.default.proclinkmusl"));

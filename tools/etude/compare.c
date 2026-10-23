@@ -405,8 +405,8 @@ int cmp_load(struct cmp_history *h, const char *schema, char **paths, int count)
             return -1;
     if (index_records(h) || index_kinds(h))
         return -1;
-    for (size_t i = 0; i < h->runs; i++)
-        cmp_check_load(h->by_run[i]);
+    for (size_t run = 0; run < h->runs; run++)
+        cmp_check_load(h->by_run[run]);
     if (index_samples(h))
         return -1;
     return 0;

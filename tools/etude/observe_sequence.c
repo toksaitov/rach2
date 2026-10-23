@@ -1,4 +1,5 @@
-/* Own observation, admitted preparation and collection in one native process. */
+/* Own observation, admitted preparation and collection in one native process.
+ */
 #include "observe_sequence.h"
 #include <errno.h>
 #include <stdio.h>
@@ -515,7 +516,8 @@ static DWORD sequence_run(struct sequence *s)
         s->error = phase_end(s, &s->collection, &status);
         if (s->error)
             return status;
-        /* A successful observed collection must have requested its own footer. */
+        /* A successful observed collection must have requested its own footer.
+         */
         if (!status && stop_matches(s) != 1)
             s->error = ERROR_INVALID_DATA;
     }

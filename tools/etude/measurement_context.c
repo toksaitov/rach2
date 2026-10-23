@@ -609,7 +609,8 @@ int etude_context_open(const char *path, const struct etude_context_inputs *inpu
     if (ok) {
         struct json *check = NULL;
         char e[128];
-        /* Check the exemption with the history schema when the plan is built. */
+        /* Check the exemption with the history schema when the plan is built.
+         */
         ok = !json_parse(c->text[6], strlen(c->text[6]), 1, &check, e, sizeof(e)) &&
              (!strcmp(purpose, "phase_first_run") ? check->type == JSON_OBJECT
                                                   : check->type == JSON_NULL);

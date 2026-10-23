@@ -9,7 +9,8 @@
  * host-inputs: tools/etude/schemas/repeat.example.json
  * host-inputs: tools/etude/schemas/budget.schema.json
  * host-deps: tools/etude/repeat.c tools/etude/posix/repeat.c
- * host-deps: tools/etude/compare_load.c tools/etude/observe_import.c tools/etude/json.c
+ * host-deps: tools/etude/compare_load.c tools/etude/observe_import.c
+ * host-deps: tools/etude/json.c
  * host-deps: tools/etude/posix/load.c tools/etude/ledger.c
  * host-deps: tools/etude/watchdog.c tools/etude/supervise.c
  * host-deps: tools/etude/capture.c tools/etude/qemu_profile.c

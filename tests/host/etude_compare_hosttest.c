@@ -2,7 +2,8 @@
  * slowdown apart.
  * host-inputs: tools/etude/schemas/history.schema.json
  * host-deps: tools/etude/compare.c tools/etude/baseline.c
- * host-deps: tools/etude/compare_load.c tools/etude/observe_import.c tools/etude/json.c
+ * host-deps: tools/etude/compare_load.c tools/etude/observe_import.c
+ * host-deps: tools/etude/json.c
  * host-deps: tools/etude/compare_report.c tools/etude/compare_run.c
  * host-deps: tools/etude/history.c tools/etude/history_json.c
  * host-deps: tools/etude/history_collect.c utils/sha256.c

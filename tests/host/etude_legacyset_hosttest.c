@@ -12,7 +12,8 @@
  * without QEMU or guest artifacts.
  *
  * host-deps: tests/host/compat/desktop_host.c tests/host/compat/command_host.c
- * host-deps: tools/etude/compare_load.c tools/etude/observe_import.c tools/etude/json.c
+ * host-deps: tools/etude/compare_load.c tools/etude/observe_import.c
+ * host-deps: tools/etude/json.c
  * host-deps: tests/host/compat/legacyset_fixture.c
  * host-deps: tests/host/compat/legacyset_process.c
  * host-deps: tools/etude/observe.c tools/etude/observe_history.c

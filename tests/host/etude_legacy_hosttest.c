@@ -78,7 +78,9 @@ static const char makefile[] =
     "components: $(ARCH_BUILD)/rach2/kernel\n"
     "\t@$(note)\n"
     "\t@test ! -f fail-components\n"
-    "\t@test -z \"$$ETUDE_PREPARATION_RUN_ID$$ETUDE_PREPARATION_RECEIPT$$ETUDE_PREPARATION_COMMIT$$ETUDE_PREPARATION_GRANT\"\n"
+    "\t@test -z "
+    "\"$$ETUDE_PREPARATION_RUN_ID$$ETUDE_PREPARATION_RECEIPT$$ETUDE_PREPARATION_COMMIT$$ETUDE_"
+    "PREPARATION_GRANT\"\n"
     "$(ARCH_BUILD)/rach2/kernel:\n"
     "\t@mkdir -p $(@D) && echo kernel > $@ && $(note)\n"
     "recovery-key:\n"
@@ -309,14 +311,14 @@ static void receipt_env(const char *path)
 
 /** The receipt binds the completed record and one nonempty clock interval. */
 static void check_receipt(const char *path, const char *record,
-                           const struct etude_preparation_grant *grant)
+                          const struct etude_preparation_grant *grant)
 {
     char text[2048], error[160], hex[65];
     struct json *doc = NULL;
     const struct json *start, *end;
     long size = read_text(path, text, sizeof(text));
-    CHECK(size > 0 && !json_parse(text, (size_t)(size > 0 ? size : 0), 1, &doc, error,
-                                  sizeof(error)),
+    CHECK(size > 0 &&
+              !json_parse(text, (size_t)(size > 0 ? size : 0), 1, &doc, error, sizeof(error)),
           "receipt: valid JSON");
     if (!doc)
         return;
@@ -333,7 +335,7 @@ static void check_receipt(const char *path, const char *record,
               start->integer < end->integer,
           "receipt: elapsed preparation includes the build");
     CHECK(start && start->type == JSON_INTEGER &&
-          (uint64_t)start->integer == grant->start.monotonic_us,
+              (uint64_t)start->integer == grant->start.monotonic_us,
           "receipt: interval begins at the first admission grant");
     json_free(doc);
 }
@@ -357,7 +359,8 @@ static void test_alone(void)
     struct etude_preparation_grant grant;
     CHECK(!etude_history_now(&grant.start) && !etude_context_clock(&grant.clock),
           "receipt: first grant is read");
-    CHECK(!etude_context_grant_write(fix_path("alone.grant"), "fixture-preparation-1:prepare", &grant),
+    CHECK(!etude_context_grant_write(fix_path("alone.grant"), "fixture-preparation-1:prepare",
+                                     &grant),
           "receipt: admission grant writes");
     receipt_env(receipt);
     setenv("ETUDE_PREPARATION_GRANT", fix_path("alone.grant"), 1);
@@ -536,7 +539,7 @@ static void test_refused(void)
     receipt_env(NULL);
     struct etude_preparation_grant grant;
     CHECK(!etude_history_now(&grant.start) && !etude_context_clock(&grant.clock) &&
-          !etude_context_grant_write(fix_path("wrong.grant"), "another:prepare", &grant),
+              !etude_context_grant_write(fix_path("wrong.grant"), "another:prepare", &grant),
           "refused: unrelated grant is prepared");
     receipt_env(fix_path("wrong-grant.receipt"));
     setenv("ETUDE_PREPARATION_GRANT", fix_path("wrong.grant"), 1);
@@ -877,7 +880,8 @@ int main(int argc, char **argv)
     test_alone();
     if (argc == 2 && !strcmp(argv[1], "--receipt-only")) {
         test_refused();
-        if (fails) return 1;
+        if (fails)
+            return 1;
         fix_passed();
         puts("etude_legacy_hosttest: receipt pass");
         return 0;

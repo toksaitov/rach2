@@ -1,7 +1,8 @@
 /* Native load observations retain sampling limits and creation identities.
  * host-deps: tools/etude/observe.c tools/etude/observe_import.c
  * host-deps: tools/etude/observe_scope.c tools/etude/observe_system.c
- * host-deps: tools/etude/observe_sequence.c tools/etude/posix/observe_sequence.c
+ * host-deps: tools/etude/observe_sequence.c
+ * host-deps: tools/etude/posix/observe_sequence.c
  * host-deps: tools/etude/measurement_context.c tools/etude/history.c
  * host-deps: tools/etude/history_json.c tools/etude/history_collect.c
  * host-deps: tools/etude/json.c utils/sha256.c

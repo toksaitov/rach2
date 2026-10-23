@@ -1,4 +1,5 @@
-/* Native observations of load throughout a collection, not progress witnesses. */
+/* Native observations of load throughout a collection, not progress witnesses.
+ */
 #ifndef ETUDE_OBSERVE_H
 #define ETUDE_OBSERVE_H
 

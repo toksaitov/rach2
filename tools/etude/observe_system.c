@@ -130,8 +130,8 @@ const char *etude_load_platform(void)
 
 static void mac_counters(struct load_snapshot *s)
 {
-    host_cpu_load_info_data_t cpu;
-    vm_statistics64_data_t vm;
+    host_cpu_load_info_data_t cpu = {0};
+    vm_statistics64_data_t vm = {0};
     mach_msg_type_number_t n = HOST_CPU_LOAD_INFO_COUNT;
     mach_port_t host = mach_host_self();
     long hz = sysconf(_SC_CLK_TCK), page = sysconf(_SC_PAGESIZE);

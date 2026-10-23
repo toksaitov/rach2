@@ -68,9 +68,13 @@ void etude_load_account(struct load_account *a, struct load_snapshot *s, struct 
             continue;
         }
         uint64_t delta = p[i].cpu_us - old->cpu_us;
-        uint64_t *total = p[i].scope == old->scope && p[i].scope == 2   ? &a->outside_us
-                          : p[i].scope == old->scope && p[i].scope == 3 ? &a->virtualizer_us
-                                                                        : NULL;
+        uint64_t *total = NULL;
+        if (p[i].scope == old->scope) {
+            if (p[i].scope == 2)
+                total = &a->outside_us;
+            else if (p[i].scope == 3)
+                total = &a->virtualizer_us;
+        }
         if (total) {
             if (delta > (uint64_t)JSON_INTEGER_MAX - *total)
                 s->overflow = 1;
