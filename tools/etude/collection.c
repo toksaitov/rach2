@@ -307,6 +307,55 @@ static int manifests(struct collection *c)
     return 0;
 }
 
+static int selection_document(struct collection *c, struct suite_entry *s, const struct json *cases,
+                              struct json **picked, size_t count)
+{
+    char path[PATH_SIZE];
+    FILE *f;
+    size_t j, w;
+    struct json object = *s->doc, array = *cases;
+    struct jbuf data = {0};
+    object.item = calloc(object.count, sizeof(*object.item));
+    if (!object.item) {
+        return 2;
+    }
+    memcpy(object.item, s->doc->item, object.count * sizeof(*object.item));
+    array.item = picked;
+    array.count = count;
+    for (j = 0; j < object.count; j++)
+        if (object.item[j] == cases)
+            object.item[j] = &array;
+    json_canonical(&object, &data);
+    snprintf(path, sizeof(path), "%s/%s.json", c->work, s->name);
+    f = fopen(path, "wb");
+    int bad = f == NULL;
+    if (f) {
+        bad = fwrite(data.data, 1, data.len, f) != data.len;
+        bad |= fclose(f) != 0;
+    }
+    jbuf_free(&data);
+    free(object.item);
+    if (bad) {
+        return refused("cannot write case selection");
+    }
+    for (w = 0; w < 2; w++) {
+        const char *arch = w ? "x86_64" : "i686";
+        if (!(s->selected & (w ? 2 : 1)))
+            continue;
+        for (j = 0; j < count && !runs_on(picked[j], arch); j++) {
+        }
+        if (j == count)
+            continue;
+        struct etude_legacy_member *m = &c->members[c->nmembers++];
+        m->suite = s->name;
+        m->arch = arch;
+        m->cases = strdup(path);
+        m->serial = !strcmp(s->name, "style") || !strcmp(s->name, "host");
+        m->stops = !strcmp(s->name, "style");
+    }
+    return 0;
+}
+
 static int choose_cases(struct collection *c)
 {
     const char *identities = getenv("RACH2_CASES");
@@ -326,8 +375,6 @@ static int choose_cases(struct collection *c)
         char *ordered[WORDS_MAX];
         size_t nrows = 0, count = 0;
         struct json **picked;
-        char path[PATH_SIZE];
-        FILE *f;
         if (!s->selected)
             continue;
         cases = json_member(s->doc, "cases");
@@ -391,47 +438,9 @@ static int choose_cases(struct collection *c)
             free(picked);
             return refused("the selection leaves a suite with no case");
         }
-        struct json object = *s->doc, array = *cases;
-        struct jbuf data = {0};
-        object.item = calloc(object.count, sizeof(*object.item));
-        if (!object.item) {
+        if (selection_document(c, s, cases, picked, count) != 0) {
             free(picked);
             return 2;
-        }
-        memcpy(object.item, s->doc->item, object.count * sizeof(*object.item));
-        array.item = picked;
-        array.count = count;
-        for (j = 0; j < object.count; j++)
-            if (object.item[j] == cases)
-                object.item[j] = &array;
-        json_canonical(&object, &data);
-        snprintf(path, sizeof(path), "%s/%s.json", c->work, s->name);
-        f = fopen(path, "wb");
-        int bad = f == NULL;
-        if (f) {
-            bad = fwrite(data.data, 1, data.len, f) != data.len;
-            bad |= fclose(f) != 0;
-        }
-        jbuf_free(&data);
-        free(object.item);
-        if (bad) {
-            free(picked);
-            return refused("cannot write case selection");
-        }
-        for (w = 0; w < 2; w++) {
-            const char *arch = w ? "x86_64" : "i686";
-            if (!(s->selected & (w ? 2 : 1)))
-                continue;
-            for (j = 0; j < count && !runs_on(picked[j], arch); j++) {
-            }
-            if (j == count)
-                continue;
-            struct etude_legacy_member *m = &c->members[c->nmembers++];
-            m->suite = s->name;
-            m->arch = arch;
-            m->cases = strdup(path);
-            m->serial = !strcmp(s->name, "style") || !strcmp(s->name, "host");
-            m->stops = !strcmp(s->name, "style");
         }
         free(picked);
     }
@@ -634,34 +643,62 @@ done:
     return rc;
 }
 
+static int print_selection(struct collection *c)
+{
+    for (size_t i = 0; i < c->nmembers; i++) {
+        const struct etude_legacy_member *m = &c->members[i];
+        int status = 0;
+        struct json *d = read_json(m->cases, &status);
+        const struct json *a = json_member(d, "cases");
+        for (size_t j = 0; a && j < a->count; j++) {
+            const struct json *architectures = json_member(a->item[j], "architectures");
+            int previous = 0;
+            if (architectures && architectures->type == JSON_STRING)
+                for (size_t k = 0; k < i; k++)
+                    previous |= !strcmp(c->members[k].suite, m->suite);
+            if (!previous && runs_on(a->item[j], m->arch))
+                printf("%s %s %s\n", m->suite,
+                       architectures && architectures->type == JSON_STRING ? "none" : m->arch,
+                       json_text(a->item[j], "case_id"));
+        }
+        json_free(d);
+    }
+    return 0;
+}
+
+static int format_collection(struct collection *c, char *stream)
+{
+    char map[PATH_SIZE];
+    if (stream[0] && access(stream, R_OK) == 0 && path_of(map, c->work, "map") == 0) {
+        FILE *f = fopen(map, "w");
+        if (!f)
+            return refused("cannot write the result map");
+        for (size_t i = 0; i < c->nsuites; i++)
+            if (c->suites[i].selected)
+                fprintf(f, "%s %s\n", c->suites[i].name, json_text(c->suites[i].doc, "family_id"));
+        if (fclose(f) != 0)
+            return refused("cannot write the result map");
+        char *args[] = {c->program, "-s", c->schemas, "-a", (char *)c->arches, map, stream, NULL};
+        optind = 1;
+#ifdef __APPLE__
+        optreset = 1;
+#endif
+        int formatted = etude_lines_main(7, args);
+        if (formatted)
+            return 1;
+    }
+    return 0;
+}
+
 static int run_collection(struct collection *c, const char *accel, int dry)
 {
     struct etude_legacy_set_opts o;
     int rc, machines = 0, alone = 0;
-    char stream[PATH_SIZE] = "", map[PATH_SIZE];
+    char stream[PATH_SIZE] = "";
     if (choose_cases(c) != 0)
         return 2;
-    if (dry) {
-        for (size_t i = 0; i < c->nmembers; i++) {
-            const struct etude_legacy_member *m = &c->members[i];
-            int status = 0;
-            struct json *d = read_json(m->cases, &status);
-            const struct json *a = json_member(d, "cases");
-            for (size_t j = 0; a && j < a->count; j++) {
-                const struct json *architectures = json_member(a->item[j], "architectures");
-                int previous = 0;
-                if (architectures && architectures->type == JSON_STRING)
-                    for (size_t k = 0; k < i; k++)
-                        previous |= !strcmp(c->members[k].suite, m->suite);
-                if (!previous && runs_on(a->item[j], m->arch))
-                    printf("%s %s %s\n", m->suite,
-                           architectures && architectures->type == JSON_STRING ? "none" : m->arch,
-                           json_text(a->item[j], "case_id"));
-            }
-            json_free(d);
-        }
-        return 0;
-    }
+    if (dry)
+        return print_selection(c);
     if (access(c->record, R_OK) != 0) {
         fprintf(stderr,
                 "run: result: refused: prepared artifact record %s is unavailable; "
@@ -731,24 +768,8 @@ static int run_collection(struct collection *c, const char *accel, int dry)
     printf("run: starting: architecture %s, workers %u, accelerator %s\n", c->arches, c->width,
            accel);
     rc = etude_legacy_set(&o);
-    if (stream[0] && access(stream, R_OK) == 0 && path_of(map, c->work, "map") == 0) {
-        FILE *f = fopen(map, "w");
-        if (!f)
-            return refused("cannot write the result map");
-        for (size_t i = 0; i < c->nsuites; i++)
-            if (c->suites[i].selected)
-                fprintf(f, "%s %s\n", c->suites[i].name, json_text(c->suites[i].doc, "family_id"));
-        if (fclose(f) != 0)
-            return refused("cannot write the result map");
-        char *args[] = {c->program, "-s", c->schemas, "-a", (char *)c->arches, map, stream, NULL};
-        optind = 1;
-#ifdef __APPLE__
-        optreset = 1;
-#endif
-        int formatted = etude_lines_main(7, args);
-        if (!rc && formatted)
-            rc = 1;
-    }
+    if (format_collection(c, stream) != 0 && !rc)
+        rc = 1;
     if (rc == 0 && etude_legacy_check_tree(c->record, c->tree, 1, stdout) != 0) {
         fputs("run: result: failed: prepared artifacts changed during the run\n", stderr);
         return 1;
@@ -756,49 +777,31 @@ static int run_collection(struct collection *c, const char *accel, int dry)
     return rc;
 }
 
-static int collection_main(int argc, char **argv, int production)
+struct request {
+    const char *tree, *results, *evidence, *record, *accel;
+    int dry;
+};
+
+static int collection_options(struct collection *c, struct request *r, int argc, char **argv)
 {
-    struct collection *c = calloc(1, sizeof(*c));
-    const char *tree = ".", *results = getenv("RACH2_RESULTS"), *evidence = getenv("RACH2_FAILED"),
-               *record = NULL;
-    const char *accel = getenv("RACH2_QEMU_ACCEL");
-    int opt, rc = 2, dry = 0;
-    if (!c)
-        return refused("out of memory");
-    if (argc < 2) {
-        fputs(
-            "usage: etude run [-t TREE] [-a ARCH|both] [-p RECORD] [-o RESULTS] "
-            "[-j WORKERS] [-M MIB] [-H HISTORY] [-A ACCEL] [-k] [-N] SUITE...|core|all|inventory\n",
-            stderr);
-        free(c);
-        return 2;
-    }
-    defaults(c);
-    for (int i = 1; i < argc; i++) {
-        size_t used = strlen(c->args);
-        if (used + strlen(argv[i]) + 2 >= sizeof(c->args)) {
-            free(c);
-            return refused("arguments are too long");
-        }
-        snprintf(c->args + used, sizeof(c->args) - used, "%s%s", i > 1 ? " " : "", argv[i]);
-    }
+    int opt;
     optind = 1;
     while ((opt = getopt(argc, argv, "+t:a:o:e:p:j:M:H:g:A:C:kN")) != -1) {
         switch (opt) {
         case 't':
-            tree = optarg;
+            r->tree = optarg;
             break;
         case 'a':
             c->arches = optarg;
             break;
         case 'o':
-            results = optarg;
+            r->results = optarg;
             break;
         case 'e':
-            evidence = optarg;
+            r->evidence = optarg;
             break;
         case 'p':
-            record = optarg;
+            r->record = optarg;
             break;
         case 'j':
             c->width = positive(optarg) <= COLLECTION_MAX ? (unsigned)positive(optarg) : 0;
@@ -813,7 +816,7 @@ static int collection_main(int argc, char **argv, int production)
             c->commit = optarg;
             break;
         case 'A':
-            accel = optarg;
+            r->accel = optarg;
             break;
         case 'C':
             c->cpus = positive(optarg) <= 64 ? (unsigned)positive(optarg) : 0;
@@ -822,10 +825,10 @@ static int collection_main(int argc, char **argv, int production)
             c->stop_on_fail = 1;
             break;
         case 'N':
-            dry = 1;
+            r->dry = 1;
             break;
         default:
-            goto done;
+            return 2;
         }
     }
     if (!strcmp(c->arches, "i686 x86_64") || !strcmp(c->arches, "both"))
@@ -833,45 +836,21 @@ static int collection_main(int argc, char **argv, int production)
     if (strcmp(c->arches, "i686") && strcmp(c->arches, "x86_64") &&
         strcmp(c->arches, "i686,x86_64")) {
         refused("architectures must be i686, x86_64 or both");
-        goto done;
+        return 2;
     }
     if (!c->width || c->width > COLLECTION_MAX || !c->cpus || c->cpus > 64 || !c->memory) {
         refused("invalid workers, processors or memory limit");
-        goto done;
+        return 2;
     }
-    if (!realpath(tree, c->tree) || !realpath(argv[0], c->program)) {
+    if (!realpath(r->tree, c->tree) || !realpath(argv[0], c->program)) {
         refused("run etude by its path from a prepared tree");
-        goto done;
+        return 2;
     }
-    path_of(c->schemas, c->tree, "tools/etude/schemas");
-    if (registry(c) != 0 || select_suites(c, argc - optind, argv + optind) != 0)
-        goto done;
-    if (c->list) {
-        for (size_t i = 0; i < c->nsuites; i++)
-            printf("%s|%s|%s\n", c->suites[i].name, c->suites[i].tier, c->suites[i].arches);
-        rc = 0;
-        goto done;
-    }
-    if (manifests(c) != 0)
-        goto done;
-    if (!dry) {
-        char *query[] = {c->program, "-q", c->tree, NULL};
-        if (etude_lock_tree_main(3, query) != 0) {
-            char **command = calloc((size_t)argc + 6, sizeof(*command));
-            if (!command)
-                goto done;
-            command[0] = c->program;
-            command[1] = c->tree;
-            command[2] = "run";
-            command[3] = c->program;
-            command[4] = "run";
-            for (int i = 1; i < argc; i++)
-                command[i + 4] = argv[i];
-            rc = etude_lock_tree_main(argc + 4, command);
-            free(command);
-            goto done;
-        }
-    }
+    return 0;
+}
+
+static int collection_paths(struct collection *c, const struct request *r)
+{
     const char *tmp = getenv("TMPDIR");
 #ifdef _WIN32
     if (!tmp)
@@ -884,27 +863,27 @@ static int collection_main(int argc, char **argv, int production)
     if (!mkdtemp(c->work)) {
         c->work[0] = 0;
         refused("cannot make selection workspace");
-        goto done;
+        return 2;
     }
-    if (results) {
-        if (legacy_absolute(results))
-            snprintf(c->results, sizeof(c->results), "%s", results);
+    if (r->results) {
+        if (legacy_absolute(r->results))
+            snprintf(c->results, sizeof(c->results), "%s", r->results);
         else
-            path_of(c->results, c->tree, results);
+            path_of(c->results, c->tree, r->results);
     } else
         path_of(c->results, c->tree, "build/tests/results");
-    if (evidence) {
-        if (legacy_absolute(evidence))
-            snprintf(c->evidence, sizeof(c->evidence), "%s", evidence);
+    if (r->evidence) {
+        if (legacy_absolute(r->evidence))
+            snprintf(c->evidence, sizeof(c->evidence), "%s", r->evidence);
         else
-            path_of(c->evidence, c->tree, evidence);
+            path_of(c->evidence, c->tree, r->evidence);
     } else
         path_of(c->evidence, c->tree, "build/tests/failed");
-    if (record) {
-        if (legacy_absolute(record))
-            snprintf(c->record, sizeof(c->record), "%s", record);
+    if (r->record) {
+        if (legacy_absolute(r->record))
+            snprintf(c->record, sizeof(c->record), "%s", r->record);
         else
-            path_of(c->record, c->tree, record);
+            path_of(c->record, c->tree, r->record);
     } else
         path_of(c->record, c->tree, "build/tests/prepare.record");
     path_of(c->ledger, c->results, "ledger");
@@ -932,35 +911,58 @@ static int collection_main(int argc, char **argv, int production)
     if (statvfs(c->tree, &space) == 0)
         c->cap[2] = (uint64_t)space.f_bavail * space.f_frsize;
 #endif
-    if (!dry && c->cap[2] < (UINT64_C(40) << 30)) {
+    if (!r->dry && c->cap[2] < (UINT64_C(40) << 30)) {
         refused("the tree has less than 40 GiB free");
-        goto done;
+        return 2;
     }
-    if (!dry && (mkdirs(c->results) != 0 || mkdirs(c->evidence) != 0)) {
+    if (!r->dry && (mkdirs(c->results) != 0 || mkdirs(c->evidence) != 0)) {
         refused("cannot make result directories");
-        goto done;
+        return 2;
     }
+    return 0;
+}
+
+static const char *collection_accel(const char *accel)
+{
     if (!accel || !*accel) {
 #ifdef __linux__
         if (access("/dev/kvm", F_OK) == 0 && access("/dev/kvm", R_OK | W_OK) != 0) {
             refused("/dev/kvm exists but is not accessible; choose tcg explicitly");
-            goto done;
+            return NULL;
         }
         accel = access("/dev/kvm", R_OK | W_OK) == 0 ? "kvm" : "tcg";
 #else
         accel = "tcg";
 #endif
     }
-    signal(SIGINT, on_signal);
-    signal(SIGTERM, on_signal);
-#ifndef _WIN32
-    signal(SIGHUP, on_signal);
-#endif
-    setvbuf(stdout, NULL, _IOLBF, 0);
-    rc = production ? prepare_collection(c) : run_collection(c, accel, dry);
-done:
-    if (interrupted)
-        rc = 128 + interrupted;
+    return accel;
+}
+
+static int hold_collection(struct collection *c, int argc, char **argv, int production)
+{
+    char *query[] = {c->program, "-q", c->tree, NULL};
+    if (etude_lock_tree_main(3, query) == 0)
+        return -1;
+    size_t offset = production ? 5 : 4;
+    char **command = calloc((size_t)argc + 7, sizeof(*command));
+    if (!command)
+        return 2;
+    command[0] = c->program;
+    command[1] = c->tree;
+    command[2] = "run";
+    command[3] = c->program;
+    command[4] = production ? "prepare" : "run";
+    if (production)
+        command[5] = "collection";
+    for (int i = 1; i < argc; i++)
+        command[i + offset] = argv[i];
+    int rc = etude_lock_tree_main(argc + (int)offset, command);
+    free(command);
+    return rc;
+}
+
+static void collection_free(struct collection *c)
+{
     if (c->work[0]) {
         extern int legacy_remove_tree(const char *path);
         legacy_remove_tree(c->work);
@@ -978,6 +980,69 @@ done:
     for (size_t i = 0; i < c->nrow_words; i++)
         free(c->row_words[i]);
     free(c);
+}
+
+static int collection_main(int argc, char **argv, int production)
+{
+    struct collection *c = calloc(1, sizeof(*c));
+    struct request r = {".",  getenv("RACH2_RESULTS"),    getenv("RACH2_FAILED"),
+                        NULL, getenv("RACH2_QEMU_ACCEL"), 0};
+    int rc = 2;
+    if (!c)
+        return refused("out of memory");
+    if (argc < 2) {
+        fputs(
+            "usage: etude run [-t TREE] [-a ARCH|both] [-p RECORD] [-o RESULTS] "
+            "[-j WORKERS] [-M MIB] [-H HISTORY] [-A ACCEL] [-k] [-N] SUITE...|core|all|inventory\n",
+            stderr);
+        free(c);
+        return 2;
+    }
+    defaults(c);
+    for (int i = 1; i < argc; i++) {
+        size_t used = strlen(c->args);
+        if (used + strlen(argv[i]) + 2 >= sizeof(c->args)) {
+            free(c);
+            return refused("arguments are too long");
+        }
+        snprintf(c->args + used, sizeof(c->args) - used, "%s%s", i > 1 ? " " : "", argv[i]);
+    }
+    if (collection_options(c, &r, argc, argv) != 0)
+        goto done;
+    path_of(c->schemas, c->tree, "tools/etude/schemas");
+    if (registry(c) != 0 || select_suites(c, argc - optind, argv + optind) != 0)
+        goto done;
+    if (c->list) {
+        for (size_t i = 0; i < c->nsuites; i++)
+            printf("%s|%s|%s\n", c->suites[i].name, c->suites[i].tier, c->suites[i].arches);
+        rc = 0;
+        goto done;
+    }
+    if (manifests(c) != 0)
+        goto done;
+    if (!r.dry) {
+        int held = hold_collection(c, argc, argv, production);
+        if (held >= 0) {
+            rc = held;
+            goto done;
+        }
+    }
+    if (collection_paths(c, &r) != 0)
+        goto done;
+    r.accel = collection_accel(r.accel);
+    if (!r.accel)
+        goto done;
+    signal(SIGINT, on_signal);
+    signal(SIGTERM, on_signal);
+#ifndef _WIN32
+    signal(SIGHUP, on_signal);
+#endif
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    rc = production ? prepare_collection(c) : run_collection(c, r.accel, r.dry);
+done:
+    if (interrupted)
+        rc = 128 + interrupted;
+    collection_free(c);
     return rc;
 }
 

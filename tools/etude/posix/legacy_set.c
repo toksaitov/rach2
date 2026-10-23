@@ -961,6 +961,28 @@ done:
     return rc;
 }
 
+static int runner_document(struct set *x, struct cmp_text *t, struct cmp_text *d)
+{
+    const struct etude_legacy_set_opts *o = x->o;
+    size_t i;
+    cmp_printf(d, "{\"schema_version\":1,\"runner\":\"etude run\",\"program\":");
+    string(d, o->program);
+    cmp_printf(d, ",\"wait_s\":%u,\"bound_s\":%s,\"watchdog_policy\":\"%s\",\"bounds\":[", o->wait,
+               x->seconds, ETUDE_BOUND_POLICY);
+    for (i = 0; i < x->n; i++) {
+        const struct member *m = &x->mem[i];
+        cmp_printf(d, "%s{\"item_id\":", i ? "," : "");
+        string(d, m->item_id);
+        cmp_printf(d,
+                   ",\"case_us\":%llu,\"case_samples\":%lu,\"gap_us\":%llu,"
+                   "\"gap_samples\":%lu}",
+                   (unsigned long long)m->c.wd.case_us, (unsigned long)m->history_samples,
+                   (unsigned long long)m->c.wd.gap_us, (unsigned long)m->gap_samples);
+    }
+    cmp_printf(d, "]}\n");
+    return part(x, t, "runner", d);
+}
+
 /** Write the plan record. */
 static int write_plan(struct set *x)
 {
@@ -1051,22 +1073,7 @@ static int write_plan(struct set *x)
     if (rc == 0) {
         /* The temporary closing brace made the key available to the learner. */
         t.data[--t.length] = 0;
-        cmp_printf(&d, "{\"schema_version\":1,\"runner\":\"etude run\",\"program\":");
-        string(&d, o->program);
-        cmp_printf(&d, ",\"wait_s\":%u,\"bound_s\":%s,\"watchdog_policy\":\"%s\",\"bounds\":[",
-                   o->wait, x->seconds, ETUDE_BOUND_POLICY);
-        for (i = 0; i < x->n; i++) {
-            const struct member *m = &x->mem[i];
-            cmp_printf(&d, "%s{\"item_id\":", i ? "," : "");
-            string(&d, m->item_id);
-            cmp_printf(&d,
-                       ",\"case_us\":%llu,\"case_samples\":%lu,\"gap_us\":%llu,"
-                       "\"gap_samples\":%lu}",
-                       (unsigned long long)m->c.wd.case_us, (unsigned long)m->history_samples,
-                       (unsigned long long)m->c.wd.gap_us, (unsigned long)m->gap_samples);
-        }
-        cmp_printf(&d, "]}\n");
-        rc = part(x, &t, "runner", &d);
+        rc = runner_document(x, &t, &d);
         cmp_printf(&t, "}");
     }
     if (rc == 0)
