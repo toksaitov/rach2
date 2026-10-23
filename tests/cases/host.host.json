@@ -817,6 +817,12 @@
           "where": "tests/cases/host/host_suite_probe.c:133",
           "assumes": "A short pause yields between reads of the meeting directory.",
           "uncertainty_us": null
+        },
+        {
+          "kind": "injected_delay",
+          "where": "tests/cases/host/flow_tooling.c",
+          "assumes": "The mock machine has a delayed workload for the product deadline and cancellation checks. The controller gives no completion deadline of its own.",
+          "uncertainty_us": null
         }
       ],
       "native": {

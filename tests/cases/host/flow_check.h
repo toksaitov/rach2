@@ -38,4 +38,6 @@ int flow_ci_run(struct fixture *f);
 int flow_ci_run_mock(int argc, char **argv);
 int flow_release(struct fixture *f);
 int flow_release_mock(int argc, char **argv);
+int flow_tooling(struct fixture *f);
+int flow_tooling_mock(int argc, char **argv);
 #endif
