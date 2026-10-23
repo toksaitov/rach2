@@ -18,8 +18,6 @@
 
 #ifdef _WIN32
 #include "../win/files.h"
-#else
-#define ETUDE_SHELL "/bin/sh"
 #endif
 
 #include "etude/artifact.h"

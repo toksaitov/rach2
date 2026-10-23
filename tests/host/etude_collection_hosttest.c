@@ -1,6 +1,11 @@
 /* Check native collection selection, prepared execution and learned bounds.
  * host-deps: utils/sha256.c
  * host-cflags: -I utils -Wall -Wextra -Werror
+ * host-inputs: build/tools/etude/etude
+ * host-inputs: tools/etude/fixtures/verdict/cases/fixture.default.json
+ * host-inputs: tools/etude/fixtures/verdict/cases/fixture.host.json
+ * host-inputs: tools/etude/schemas/case.schema.json tools/etude/schemas/history.schema.json
+ * host-inputs: tools/etude/schemas/results.schema.json
  *
  * The real etude selects a fixture collection without a shell or Python,
  * then runs this binary as its prepared host case. Successful runs teach

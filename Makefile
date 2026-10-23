@@ -598,6 +598,7 @@ build/tests/host-suite/vfs_unmount: tests/cases/host/fixtures.py tests/cases/hos
 	CC="$(HOSTCC)" python3 -B tests/cases/host/fixtures.py vfs_unmount $@
 
 build/tests/host-suite/scripts.inventory.json: build/tests/system/fakeapi_test
+build/tests/host-suite/etude.inventory.json: $(ETUDE) build/tests/cases/host/host
 
 # Runtime inputs of the native QEMU checks, built before their inventory.
 HOST_BOOT_SCHEMA_SOURCES = $(wildcard tools/etude/schemas/*.schema.json)

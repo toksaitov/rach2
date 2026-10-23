@@ -26,6 +26,8 @@ The installed Windows GCC has no sanitizer runtimes. Its native platform and boo
 
 The driver verifies the manifest, group and architecture before any check starts. It checks each binary and input before and after execution, rejects scripts even on POSIX, and rejects newly added corpus inputs. The manifest, prepared inventory and live source or script list must agree. Every declared check stays visible, including unsupported checks. Missing checks fail their own assertions; extra checks fail `listed` and are not executed.
 
+The collection and host-driver regression fixtures write script bytes only to test this refusal. Preparation recognizes those two data fixtures while still rejecting interpreter calls in their sources. Both checks run natively on POSIX and fingerprint the prepared runner or driver they invoke.
+
 `RACH2_WORKERS` limits concurrency, default four. A check marked alone starts with no other check running. Each child receives its own `TMPDIR`, fatal ASan and UBSan options, and the tree as its current directory. Its output is retained whole in `NAME.log`. The executor registers children before release and confirms cleanup before the driver accepts a pass. A signal cancels and reaps active checks. Unconfirmed cleanup keeps the evidence directory.
 
 A completed check writes one assertion and one `progress checks N` record. The case has no clock limit. Etude's case and progress bounds apply. A passing case removes its workspace; a failing case prints the path it keeps.

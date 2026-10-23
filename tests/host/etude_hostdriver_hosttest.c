@@ -1,6 +1,7 @@
 /* Check prepared host execution, inventory completeness and input identity.
  * host-deps: utils/sha256.c
  * host-cflags: -I utils -Wall -Wextra -Werror
+ * host-inputs: build/tests/cases/host/host
  */
 #include <fcntl.h>
 #include <signal.h>
