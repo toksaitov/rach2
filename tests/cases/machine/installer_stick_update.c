@@ -182,9 +182,10 @@ static int boot_usb(struct etude_case *c, struct state *s)
         return 1;
     }
     if (ok) {
-        if (stick == NULL || stat(stick, &st) != 0)
+        if (stick == NULL || stat(stick, &st) != 0) {
+            ok = 0;
             snprintf(want, sizeof(want), "the stick's image cannot be read");
-        else
+        } else
             snprintf(want, sizeof(want), "usbdisk: disk1: mbr: %" PRIu64 " MiB, 3 partitions",
                      (uint64_t)st.st_size / MIB);
         if (text == NULL || strstr(text, want) == NULL) {
