@@ -9,6 +9,8 @@ import shlex
 import subprocess
 
 SOURCES = {'mkfatfixture': ['tests/host/mkfatfixture.c'],
+           'etude-workload': ['tests/host/fixtures/etude_workload.c',
+                              'tests/host/fixtures/guest_workload.c'],
            'mkexfatfixture': ['tests/host/mkexfatfixture.c'],
            'setidcheck': ['tools/inspect/setidcheck.c'],
            'etude-volume': ['tools/etude/volume/etude_volume.c', 'tools/etude/volume/volume.c']}
@@ -109,7 +111,12 @@ def prepare(names, compiler, flags, dependencies, digest, print_commands=False):
         output = str(root / name)
         sources = SOURCES[name]
         temporary = output + f'.{os.getpid()}.tmp'
-        command = [*flags, '-Wall', '-Wextra', '-Werror', '-o', temporary, *sources]
+        tool_flags = flags
+        if name == 'etude-workload':
+            # This transferred payload has no test judge or sanitizer fault case.
+            tool_flags = [f for f in flags if not f.startswith((
+                '-fsanitize=', '-fno-sanitize-recover=', '-g'))]
+        command = [*tool_flags, '-Wall', '-Wextra', '-Werror', '-o', temporary, *sources]
         print('host prepare: ' + shlex.join([*compiler, *command]), flush=True)
         if print_commands:
             continue
