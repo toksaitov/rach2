@@ -57,7 +57,7 @@ On 23 October the owner set aside the proof of a new test by a deliberate fault 
 * T47, #636, 6b36893f5: `tests/host/etude_runtime_hosttest.c`. Met.
 * T48, #637, ffa6b51c9: [the Mac's acceptance](mac.md) and [its artifacts](mac-artifacts.md). Met.
 * T49, #638, 003c9e59b: `tools/etude/win/winrunfix.c` and the 40 fixtures of `wincheck.sh` on Windows. Met.
-* T50, #639, 96e01a721: `tests/native/tccbuild.sh` and `tests/host/etude_native_hosttest.c`, run with the host's cc; no record of a run on the Lenovo. Gap: #963.
+* T50, #639, 96e01a721: `tests/native/tccbuild.sh` and the native transport adapter passed the four TinyCC modes over actual SSH on the Lenovo. [Acceptance record](t50-ssh.md), #963. Met; T93 remains separate.
 * T51, #640, 8fb0e87b6: `tools/etude/posix/bridge.c` and `etude-bridge`; `tests/host/etude_bridge_hosttest.c`. Met.
 * T52, #641, e25ba65f7: `etude-legacy`'s preparation; `tests/host/etude_legacy_hosttest.c`. Met.
 * T53, #642, 95c59a1e0: the legacy suites' supervision met its condition; with every suite converted, T88 removed it (07fc3cc70). Nothing is left.
@@ -130,7 +130,8 @@ The phase has 322 issues: 100 sub-issues of #589 and the others whose body says 
 
 ## The gaps
 
+The former T50 gap, #963, is resolved by the [Lenovo SSH acceptance](t50-ssh.md). T93 still requires its separate full eligible collection.
+
 * #961: `tests/system/unconverted` still exempts 54 sleeps and 6 skips in 41 files, which the conversions were to declare or remove (T06, T32, T33).
 * #962: `tests/run` runs one architecture a run, so the two architectures never share one schedule (T18).
-* #963: no record shows the TinyCC build of T50 on the Lenovo (T50), which T93 waits for.
 * #950 and #951, in group #956, open before this audit: host rows that pass after skipping a check for a missing program (T23, T45).
