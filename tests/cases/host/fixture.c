@@ -263,8 +263,7 @@ int fx_tree(const char *a, const char *b)
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, ".."))
             continue;
         if (!path_format(from, sizeof(from), "%s/%s", a, e->d_name) ||
-            !path_format(to, sizeof(to), "%s/%s", b, e->d_name) ||
-            !fx_tree(from, to))
+            !path_format(to, sizeof(to), "%s/%s", b, e->d_name) || !fx_tree(from, to))
             ok = 0;
     }
     closedir(d);
@@ -572,8 +571,8 @@ int fx_init(struct fixture *f, const char *root, const char *name, const char *s
     return path_format(f->root, sizeof(f->root), "%s", root) &&
            path_format(f->tree, sizeof(f->tree), "%s/tree", root) &&
            path_format(f->work, sizeof(f->work), "%s/%s", root, name) &&
-           path_format(f->bin, sizeof(f->bin), "%s/bin", f->work) &&
-           fx_remove(f->work) && fx_mkdir(f->bin);
+           path_format(f->bin, sizeof(f->bin), "%s/bin", f->work) && fx_remove(f->work) &&
+           fx_mkdir(f->bin);
 }
 void fx_destroy(struct fixture *f)
 {

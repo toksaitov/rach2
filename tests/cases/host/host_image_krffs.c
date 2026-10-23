@@ -117,7 +117,12 @@ struct refusal {
     int tree;
 };
 static const struct refusal refusals[] = {
-    {"doubled slash", "dir 0755 /" "/etc\n", "malformed directory path '/" "/etc'", 0},
+    {"doubled slash",
+     "dir 0755 /"
+     "/etc\n",
+     "malformed directory path '/"
+     "/etc'",
+     0},
     {"synthetic directory", "dir 0755 /proc/x\n", "'/proc/x' is under a kernel-synthetic namespace",
      0},
     {"synthetic file", "text 0644 /dev/console x\n",
