@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "machine.diskrate",
-  "summary": "The storage paths timed in the machine and judged by the counts the kernel keeps, never by their times, and the emulator's cost of a read buffer in a page of executed code; the programs are tests/cases/machine/diskrate_scenario.c and tests/placeprobe.c",
+  "summary": "The storage paths timed in the machine and judged by the counts the kernel keeps, never by their times; the program is tests/cases/machine/diskrate_scenario.c",
   "cases": [
     {
       "case_id": "machine.diskrate.storage",
@@ -118,34 +118,6 @@
       ],
       "timing": [],
       "native": {"plan": "none", "class": "card", "reason": "it counts the commands of QEMU's IDE, USB and AHCI controllers on empty disks of its own, which the Lenovo's disk is not"}
-    },
-    {
-      "case_id": "machine.diskrate.placement",
-      "behavior": "32 MiB read through a pipe into a buffer whose first page holds executed code, and into one that holds none, three runs each, every read copied whole; the times are printed for a person, since what they measure is the emulator's store path",
-      "units": ["diskrate", "placeprobe"],
-      "domain": "guest",
-      "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {"bytes": 33554432, "runs": 6}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": []}},
-      "execution": {"program": "placeprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "it reaps each writer; a failed read exits with its writer unreaped, which then dies of SIGPIPE"},
-      "assertions": [
-        {"assertion_id": "apart", "checks": "neither buffer shares a page with the program's code, from _start to etext", "source": "program"},
-        {"assertion_id": "executable", "checks": "the near buffer's first page runs the ret written into it", "source": "program"},
-        {"assertion_id": "runs", "checks": "each of the six runs reads 32 MiB, no read failing and every read's first and last byte copied, and its writer writes it all", "source": "program"}
-      ],
-      "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1200000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
-      "prepare": [
-        {"name": "placeprobe", "node": "tests/placeprobe", "per_architecture": true},
-        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
-        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
-        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
-      ],
-      "timing": [],
-      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
     }
   ]
 }

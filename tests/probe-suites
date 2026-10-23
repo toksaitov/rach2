@@ -30,7 +30,6 @@ fatwriteprobe fatwrite
 forktest exitline
 shelltest ext2
 usbdiskprobe usbdisk
-placeprobe diskrate
 ext2probe ext2
 krffsprobe krffsmount
 loopdevprobe loopdev

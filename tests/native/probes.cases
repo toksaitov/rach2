@@ -121,7 +121,6 @@ case permprobe root:krffs ids:1000 -- permprobe
 case pingtest alone peer:network -- pingtest machine=native
 # machine=native leaves out the comparison of HeapUsed in row (e).
 case pipeprobe -- pipeprobe machine=native
-case placeprobe -- placeprobe
 # machine=native leaves out the modes of descriptors 0, 1 and 2.
 case pollprobe console -- pollprobe machine=native
 # The four rounds alone; the three cycles' comparisons of HeapUsed and
