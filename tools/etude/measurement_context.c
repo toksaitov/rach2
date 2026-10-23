@@ -480,9 +480,9 @@ static int cache_identity(const struct etude_measurement_context *c, const struc
     const char *commit = json_text(protocol, "commit"), *expected = json_text(root, "commit");
     const char *machine = json_text(protocol, "machine_id"), *boot = json_text(protocol, "boot_id");
     return protocol && format && !strcmp(format, "etude-cache-protocol") && run &&
-           !strcmp(run, c->run_id) && commit && expected && !strcmp(commit, expected) &&
-           machine && boot && !etude_context_clock(&clock) &&
-           !strcmp(machine, clock.machine_id) && !strcmp(boot, clock.boot_id);
+           !strcmp(run, c->run_id) && commit && expected && !strcmp(commit, expected) && machine &&
+           boot && !etude_context_clock(&clock) && !strcmp(machine, clock.machine_id) &&
+           !strcmp(boot, clock.boot_id);
 }
 static int cache_evidence(struct etude_measurement_context *c, const struct json *root,
                           const struct json *cache)
@@ -497,8 +497,7 @@ static int cache_evidence(struct etude_measurement_context *c, const struct json
     char *profile = canonical(json_member(cache, "states"));
     const struct json *evidence = json_member(p, "evidence");
     int ok = cache_identity(c, root, p) && states && profile && !strcmp(states, profile) &&
-             evidence && evidence->type == JSON_ARRAY &&
-             evidence->count && evidence->count <= 16;
+             evidence && evidence->type == JSON_ARRAY && evidence->count && evidence->count <= 16;
     for (size_t i = 0; ok && i < evidence->count; i++)
         ok = !cache_blob(c, evidence->item[i]);
     if (ok)
