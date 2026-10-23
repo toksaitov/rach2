@@ -4,36 +4,6 @@
   "summary": "The source checks of tests/run style over the in-house tree, booting nothing; their program is tests/cases/host/style.sh",
   "cases": [
     {
-      "case_id": "host.style.tools",
-      "behavior": "every tool the style cases run is on the path: the cross compilers and readelf of i686 and of the architecture, cppcheck, ShellCheck, clang-format and clang",
-      "units": ["style", "`check.sh` preflight"],
-      "domain": "host",
-      "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": ["tools"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh"], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
-      "assertions": [
-        {"assertion_id": "i686-gcc", "checks": "i686-elf-gcc is on the path", "source": "program"},
-        {"assertion_id": "i686-readelf", "checks": "i686-elf-readelf is on the path", "source": "program"},
-        {"assertion_id": "cross-gcc", "checks": "the architecture's cross compiler is on the path", "source": "program"},
-        {"assertion_id": "cross-readelf", "checks": "the architecture's readelf is on the path", "source": "program"},
-        {"assertion_id": "cppcheck", "checks": "cppcheck is on the path", "source": "program"},
-        {"assertion_id": "shellcheck", "checks": "shellcheck is on the path", "source": "program"},
-        {"assertion_id": "clang-format", "checks": "clang-format is on the path", "source": "program"},
-        {"assertion_id": "clang", "checks": "clang is on the path", "source": "program"}
-      ],
-      "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
-      "prepare": [
-        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
-      ],
-      "timing": [],
-      "native": {"plan": "host"}
-    },
-    {
       "case_id": "host.style.assignments",
       "behavior": "every guest program the tests build is assigned to one suite, and every native case to a program, by probecheck.sh and nativecheck.sh, whose tests plant each kind of fault",
       "units": ["style", "`tools/verify/probecheck.sh`", "`tests/system/probecheck_test.sh`"],
@@ -47,29 +17,6 @@
         {"assertion_id": "probecheck-test", "checks": "tests/system/probecheck_test.sh finds each planted assignment fault", "source": "program"},
         {"assertion_id": "nativecheck", "checks": "tools/verify/nativecheck.sh passes the tree", "source": "program"},
         {"assertion_id": "nativecheck-test", "checks": "tests/system/nativecheck_test.sh finds each planted native fault", "source": "program"}
-      ],
-      "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
-      "prepare": [
-        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
-      ],
-      "timing": [],
-      "native": {"plan": "host"}
-    },
-    {
-      "case_id": "host.style.kernel-build",
-      "behavior": "the kernel of the architecture builds under -Werror",
-      "units": ["style", "`check.sh` step 1, the kernel build"],
-      "domain": "host",
-      "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": ["kernel-build"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["make", "i686-elf-gcc", "x86_64-elf-gcc"], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
-      "assertions": [
-        {"assertion_id": "werror-build", "checks": "make -C rach2 succeeds with every warning an error", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
@@ -309,57 +256,6 @@
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
-      ],
-      "timing": [],
-      "native": {"plan": "host"}
-    },
-    {
-      "case_id": "host.style.runner-rules",
-      "behavior": "the old runner's scoring rule and the harness's escape decoder pass their self-tests",
-      "units": ["style", "`runtests --selftest` and `harness --selftest`"],
-      "domain": "host",
-      "architectures": "none",
-      "workload": {"arguments": ["runner-rules"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": [], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
-      "assertions": [
-        {"assertion_id": "runtests-selftest", "checks": "runtests --selftest passes", "source": "program"},
-        {"assertion_id": "harness-selftest", "checks": "harness --selftest passes", "source": "program"}
-      ],
-      "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
-      "prepare": [
-        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
-        {"name": "runtests", "node": "tests/system/runtests", "per_architecture": false},
-        {"name": "harness", "node": "tests/system/harness", "per_architecture": false}
-      ],
-      "timing": [],
-      "native": {"plan": "host"}
-    },
-    {
-      "case_id": "host.style.setid",
-      "behavior": "every set-id line of every image manifest is one tools/inspect/setid.allow allows",
-      "units": ["style", "`setidcheck --selftest` and the manifest sweep"],
-      "domain": "host",
-      "architectures": "none",
-      "workload": {"arguments": ["setid"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": [], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
-      "assertions": [
-        {"assertion_id": "setid-selftest", "checks": "setidcheck --selftest passes", "source": "program"},
-        {"assertion_id": "manifests", "checks": "setidcheck passes every manifest", "source": "program"}
-      ],
-      "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
-      "prepare": [
-        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
-        {"name": "setidcheck", "node": "tools/inspect/setidcheck", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}

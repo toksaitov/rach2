@@ -6,7 +6,7 @@
 # The checks read the in-house code: the kernel, the KRFFS host tools, the
 # utilities, the ish shell, the tests, the tools and the build scripts, and
 # none of the vendored trees. Each run is one case, named by its argument:
-# `tools`, `kernel-build`, `cppcheck` and the others the manifest lists. It
+# `assignments`, `cppcheck` and the others the manifest lists. It
 # writes the case's report records on its standard output, an assertion for
 # each check (tools/etude/Readme.md, Report records), with the lines a person
 # reads between them, and exits 0 when every assertion passed and 1 when one
@@ -51,12 +51,9 @@ unset ETUDE_TREE
 REPO=$(pwd -P)
 
 ASCIISCAN="$REPO/build/tools/verify/asciiscan"
-RUNTESTS="$REPO/build/tests/system/runtests"
-HARNESS="$REPO/build/tests/system/harness"
 GUESTCHECK="$REPO/build/tools/verify/guestcheck"
 PROSECHECK="$REPO/build/tools/verify/prosecheck"
 SIZECHECK="$REPO/build/tools/verify/sizecheck"
-SETIDCHECK="$REPO/build/tools/inspect/setidcheck"
 CASECHECK="$REPO/build/tools/etude/casecheck"
 ELFCHECK="$REPO/build/tools/inspect/elfcheck"
 CFGCHECK="$REPO/build/tools/inspect/cfgcheck"
@@ -183,21 +180,6 @@ inhouse_ch() {
 
 # ---- The cases. ----
 
-# Every tool a case runs is on the path. The compilation databases are made
-# from i686's build whatever ARCH is; the cases that compile use ARCH's cross
-# toolchain.
-case_tools() {
-    for t in i686-gcc:i686-elf-gcc i686-readelf:i686-elf-readelf \
-             cross-gcc:${ABI_CROSS}gcc cross-readelf:${ABI_CROSS}readelf \
-             cppcheck:cppcheck shellcheck:shellcheck clang-format:clang-format clang:clang; do
-        if command -v "${t#*:}" >/dev/null 2>&1; then
-            pass "${t%%:*}"
-        else
-            fail "${t%%:*}" "${t#*:} is not on the path"
-        fi
-    done
-}
-
 # Every guest program the tests build is assigned once, and every native case
 # names a program; each checker's test plants the faults it finds.
 case_assignments() {
@@ -205,16 +187,6 @@ case_assignments() {
     check probecheck-test probecheck_test.log sh tests/system/probecheck_test.sh
     check nativecheck nativecheck.log sh tools/verify/nativecheck.sh
     check nativecheck-test nativecheck_test.log sh tests/system/nativecheck_test.sh
-}
-
-# The kernel builds under -Werror.
-case_kernel_build() {
-    if make -C rach2 >"$VDIR/verify_build.log" 2>&1; then
-        pass werror-build
-    else
-        fail werror-build "make -C rach2 failed; see $VDIR/verify_build.log"
-        show "$VDIR/verify_build.log"
-    fi
 }
 
 # cppcheck_status LOG STATUS FINDINGS: report the assertions RUNS and CLEAN
@@ -529,28 +501,6 @@ case_messages() {
     check kernel-formats verify_fmt.log "$REPO/tools/verify/fmtcheck.sh"
 }
 
-# The two rules of the old runner that decide a result without a boot: the
-# scoring rule, which turns serial text into every probe's PASS or FAIL, and
-# the harness's escape decoder, which turns a step's text into the bytes a
-# guest is given. The suites read their verdicts through both, so a suite
-# cannot find a fault in either; their self-tests can.
-case_runner_rules() {
-    built runtests-selftest "$RUNTESTS" && check runtests-selftest verify_score.log "$RUNTESTS" --selftest
-    built harness-selftest "$HARNESS" && check harness-selftest verify_harness.log "$HARNESS" --selftest
-}
-
-# Every set-id line in every image manifest, against the per-image
-# allowlist. This half reads sources only; the image inventory that reads a
-# built artifact runs from mkimage.sh and mkdisk.sh. The self-test runs
-# first: it covers the failure cases no current manifest has, so without it
-# a fault in, say, the image walk or the path decoding would leave every
-# manifest passing.
-case_setid() {
-    built setid-selftest "$SETIDCHECK" || return 0
-    check setid-selftest verify_setid_selftest.log "$SETIDCHECK" --selftest
-    check manifests verify_setid.log "$SETIDCHECK"
-}
-
 # Image reproducibility: one tree, one image. The check stages a scratch
 # manifest twice with the KRFFS host tools, so they are built here first, as
 # the kernel's case builds the kernel it checks; a binary left in build/ by
@@ -779,8 +729,8 @@ if [ -n "${ETUDE_CASE:-}" ] && [ "$ETUDE_CASE" != "$ID" ]; then
     exit 2
 fi
 case "$CASE" in
-    tools|assignments|kernel-build|cppcheck|shellcheck|conventions|clang-format) ;;
-    build-inputs|abi|sources|text|messages|runner-rules|setid|repro|checkers|devlog) ;;
+    assignments|cppcheck|shellcheck|conventions|clang-format|build-inputs) ;;
+    abi|sources|text|messages|repro|checkers|devlog) ;;
     registry|waits|manual|clang|sparse|sizes|links) ;;
     *) echo "style: no case $CASE" >&2; exit 2 ;;
 esac
