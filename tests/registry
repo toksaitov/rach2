@@ -39,7 +39,7 @@
 # Order is the schedule order: the pool starts at the top, and a pool finishes
 # when its longest member does, so the long suites are listed first.
 gnu|qemu,ssh,scp,sftp,python3|full|gnu-test*|2048
-agents|qemu,ssh,scp,debugfs,python3,openssl,git|full|etude-agents.disk*|4096|x86_64
+agents|qemu|full|etude-agents.disk*|4096|x86_64
 agentsaccept|qemu,ssh,python3,openssl,tmux|full||4096|x86_64
 installer-rehearse|qemu,qemu-img,xorriso,shasum|full||512
 install|qemu,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
@@ -50,7 +50,7 @@ menu|qemu,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 uefi|qemu,qemu-system-x86_64,xorriso,ssh,mformat,mmd,mcopy,mdel|full||512
 selfbuild-ext2|qemu,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 sealed|qemu,ssh,mformat,mmd,mcopy,debugfs,e2fsck,gzip|full
-fakeapi|qemu,ssh,scp,python3,openssl|full|etude-fakeapi.disk*|1024|x86_64
+fakeapi|qemu|full|etude-fakeapi.disk*|1024|x86_64
 dhcp|qemu|full
 netif|qemu|full
 mount|qemu,mformat,mcopy,mdel,mdir|core

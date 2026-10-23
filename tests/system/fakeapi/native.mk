@@ -2,7 +2,7 @@
 FAKEAPI_NATIVE = tests/system/fakeapi/native
 FAKEAPI_SRC = $(FAKEAPI_NATIVE)/json.c $(FAKEAPI_NATIVE)/platform.c \
               $(FAKEAPI_NATIVE)/tls.c $(FAKEAPI_NATIVE)/server.c \
-              $(FAKEAPI_NATIVE)/protocols.c $(FAKEAPI_NATIVE)/responses.c $(FAKEAPI_NATIVE)/assets.c $(FAKEAPI_NATIVE)/archive.c tools/etude/volume/volume.c
+              $(FAKEAPI_NATIVE)/protocols.c $(FAKEAPI_NATIVE)/responses.c $(FAKEAPI_NATIVE)/assets.c $(FAKEAPI_NATIVE)/archive.c $(FAKEAPI_NATIVE)/worker.c tools/etude/volume/volume.c
 FAKEAPI_HDR = $(wildcard $(FAKEAPI_NATIVE)/*.h)
 FAKEAPI_SSL = build/vendor/host-openssl
 FAKEAPI_CC = $(HOSTCC)

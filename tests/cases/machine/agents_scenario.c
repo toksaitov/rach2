@@ -5,8 +5,13 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include <direct.h>
+#define mkdir(path, mode) _mkdir(path)
+#endif
 
 #include "netcase.h"
+#include "agent_native.h"
 
 /* The state shared by the SSH workload's actions. */
 struct agent_case {
@@ -37,7 +42,11 @@ static void action(struct agent_case *s, const char *verb, const char *assertion
     char *argv[] = {"sh", s->driver, (char *)verb, s->row, NULL};
     int ok = 0;
 
-    if (net_ok(&s->u) && net_host(&s->u, argv, verb, &r) == ETUDE_OK) {
+    if (strncmp(etude_case_id(s->u.c), "machine.agentsaccept.", 21) != 0) {
+        if (net_ok(&s->u))
+            ok = agent_native_action(&s->u, &s->b, s->work, s->row, verb,
+                                     !strncmp(etude_case_id(s->u.c), "machine.fakeapi.", 16));
+    } else if (net_ok(&s->u) && net_host(&s->u, argv, verb, &r) == ETUDE_OK) {
         fputs(r.out, stdout);
         fputs(r.err, stderr);
         ok = net_exited0(&r);
@@ -235,7 +244,7 @@ int etude_scenario(struct etude_case *c)
         etude_service_stop(s.server, &end);
     }
     if (net_ok(&s.u) && s.u.failures == 0) {
-        char *clean[] = {"rm", "-rf", s.work, NULL};
+        char *clean[] = {"agent_server", "remove", s.work, NULL};
         struct net_run r;
         if (net_host(&s.u, clean, "remove-work", &r) == ETUDE_OK)
             net_run_free(&r);

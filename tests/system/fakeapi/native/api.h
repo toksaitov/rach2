@@ -54,6 +54,8 @@ int websocket_close(struct peer *p, unsigned code);
 const char *protocol_validate(const char *name, const struct value *step);
 const char *protocol_check(const char *name, const struct value *step, const struct request *r);
 int protocol_reply(const char *name, const struct value *step, struct peer *p);
+struct value *read_json_lines(const char *path);
+int verify_worker_archive(const char *archive, const char *directory);
 int unpack_assets(const char *archive, const char *destination);
 int remove_assets(const char *path);
 int render_script(const char *source, const char *destination, const char *row);

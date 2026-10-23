@@ -14,14 +14,15 @@ case ${OS:-}:$(uname -s):$(uname -m) in
     *:Linux:aarch64) target=linux-aarch64 ;;
     *) echo 'fakeapi: no static OpenSSL build target for this host' >&2; exit 2 ;;
 esac
+source_dir=$output/source-${archive##*/}
 mkdir -p "$output"
 # Only this rule writes the directory, under make's ordinary target ownership.
 # Reconfiguration keeps compilation incremental when the pin is unchanged.
-if [ ! -f "$output/source/Configure" ]; then
-    mkdir -p "$output/source"
-    tar -xf "$archive" --strip-components=1 -C "$output/source"
+if [ ! -f "$source_dir/Configure" ]; then
+    mkdir -p "$source_dir"
+    tar -xf "$archive" --strip-components=1 -C "$source_dir"
 fi
-cd "$output/source"
+cd "$source_dir"
 CC="$compiler" perl ./Configure "$target" no-shared no-module no-dso no-tests \
     no-zlib no-legacy --prefix="$output/install" --libdir=lib
 make build_libs

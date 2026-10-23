@@ -10,7 +10,7 @@
       "domain": "machine",
       "architectures": ["x86_64"],
       "workload": {"arguments": [], "inputs": {"row": "agy-print"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "ssh", "scp", "openssl", "rm", "git"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "agents_scenario",
         "stdin": null,
@@ -92,7 +92,9 @@
         {"name": "agent_server", "node": "tests/cases/machine/agent_server", "per_architecture": false},
         {"name": "agent_relay", "node": "tests/cases/machine/agent_relay", "per_architecture": false},
         {"name": "agents_scenario", "node": "tests/cases/machine/agents_scenario", "per_architecture": false},
-        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false}
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "agent-assets", "node": "tests/cases/machine/agents-assets.tar", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "network", "reason": "the test needs a fresh GNU root and the restricted QEMU user network whose only outbound route reaches this case API service"}
@@ -104,7 +106,7 @@
       "domain": "machine",
       "architectures": ["x86_64"],
       "workload": {"arguments": [], "inputs": {"row": "agy-screen"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "ssh", "scp", "openssl", "rm", "git"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "agents_scenario",
         "stdin": null,
@@ -186,7 +188,9 @@
         {"name": "agent_server", "node": "tests/cases/machine/agent_server", "per_architecture": false},
         {"name": "agent_relay", "node": "tests/cases/machine/agent_relay", "per_architecture": false},
         {"name": "agents_scenario", "node": "tests/cases/machine/agents_scenario", "per_architecture": false},
-        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false}
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "agent-assets", "node": "tests/cases/machine/agents-assets.tar", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "network", "reason": "the test needs a fresh GNU root and the restricted QEMU user network whose only outbound route reaches this case API service"}
@@ -198,7 +202,7 @@
       "domain": "machine",
       "architectures": ["x86_64"],
       "workload": {"arguments": [], "inputs": {"row": "agy"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "ssh", "scp", "openssl", "rm", "git"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "agents_scenario",
         "stdin": null,
@@ -280,7 +284,9 @@
         {"name": "agent_server", "node": "tests/cases/machine/agent_server", "per_architecture": false},
         {"name": "agent_relay", "node": "tests/cases/machine/agent_relay", "per_architecture": false},
         {"name": "agents_scenario", "node": "tests/cases/machine/agents_scenario", "per_architecture": false},
-        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false}
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "agent-assets", "node": "tests/cases/machine/agents-assets.tar", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "network", "reason": "the test needs a fresh GNU root and the restricted QEMU user network whose only outbound route reaches this case API service"}
@@ -292,7 +298,7 @@
       "domain": "machine",
       "architectures": ["x86_64"],
       "workload": {"arguments": [], "inputs": {"row": "claude-print"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "ssh", "scp", "openssl", "rm", "git"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "agents_scenario",
         "stdin": null,
@@ -374,7 +380,9 @@
         {"name": "agent_server", "node": "tests/cases/machine/agent_server", "per_architecture": false},
         {"name": "agent_relay", "node": "tests/cases/machine/agent_relay", "per_architecture": false},
         {"name": "agents_scenario", "node": "tests/cases/machine/agents_scenario", "per_architecture": false},
-        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false}
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "agent-assets", "node": "tests/cases/machine/agents-assets.tar", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "network", "reason": "the test needs a fresh GNU root and the restricted QEMU user network whose only outbound route reaches this case API service"}
@@ -386,7 +394,7 @@
       "domain": "machine",
       "architectures": ["x86_64"],
       "workload": {"arguments": [], "inputs": {"row": "claude-screen"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "ssh", "scp", "openssl", "rm", "git"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "agents_scenario",
         "stdin": null,
@@ -468,7 +476,9 @@
         {"name": "agent_server", "node": "tests/cases/machine/agent_server", "per_architecture": false},
         {"name": "agent_relay", "node": "tests/cases/machine/agent_relay", "per_architecture": false},
         {"name": "agents_scenario", "node": "tests/cases/machine/agents_scenario", "per_architecture": false},
-        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false}
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "agent-assets", "node": "tests/cases/machine/agents-assets.tar", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "network", "reason": "the test needs a fresh GNU root and the restricted QEMU user network whose only outbound route reaches this case API service"}
@@ -480,7 +490,7 @@
       "domain": "machine",
       "architectures": ["x86_64"],
       "workload": {"arguments": [], "inputs": {"row": "claude"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "ssh", "scp", "openssl", "rm", "git"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "agents_scenario",
         "stdin": null,
@@ -562,7 +572,9 @@
         {"name": "agent_server", "node": "tests/cases/machine/agent_server", "per_architecture": false},
         {"name": "agent_relay", "node": "tests/cases/machine/agent_relay", "per_architecture": false},
         {"name": "agents_scenario", "node": "tests/cases/machine/agents_scenario", "per_architecture": false},
-        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false}
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "agent-assets", "node": "tests/cases/machine/agents-assets.tar", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "network", "reason": "the test needs a fresh GNU root and the restricted QEMU user network whose only outbound route reaches this case API service"}
@@ -574,7 +586,7 @@
       "domain": "machine",
       "architectures": ["x86_64"],
       "workload": {"arguments": [], "inputs": {"row": "codex-exec"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "ssh", "scp", "openssl", "rm", "git"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "agents_scenario",
         "stdin": null,
@@ -656,7 +668,10 @@
         {"name": "agent_server", "node": "tests/cases/machine/agent_server", "per_architecture": false},
         {"name": "agent_relay", "node": "tests/cases/machine/agent_relay", "per_architecture": false},
         {"name": "agents_scenario", "node": "tests/cases/machine/agents_scenario", "per_architecture": false},
-        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false}
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "agent-assets", "node": "tests/cases/machine/agents-assets.tar", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "codex-digest", "node": "tests/cases/machine/codex.sha256", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "network", "reason": "the test needs a fresh GNU root and the restricted QEMU user network whose only outbound route reaches this case API service"}
@@ -668,7 +683,7 @@
       "domain": "machine",
       "architectures": ["x86_64"],
       "workload": {"arguments": [], "inputs": {"row": "codex-screen"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "ssh", "scp", "openssl", "rm", "git"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "agents_scenario",
         "stdin": null,
@@ -750,7 +765,10 @@
         {"name": "agent_server", "node": "tests/cases/machine/agent_server", "per_architecture": false},
         {"name": "agent_relay", "node": "tests/cases/machine/agent_relay", "per_architecture": false},
         {"name": "agents_scenario", "node": "tests/cases/machine/agents_scenario", "per_architecture": false},
-        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false}
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "agent-assets", "node": "tests/cases/machine/agents-assets.tar", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "codex-digest", "node": "tests/cases/machine/codex.sha256", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "network", "reason": "the test needs a fresh GNU root and the restricted QEMU user network whose only outbound route reaches this case API service"}
@@ -762,7 +780,7 @@
       "domain": "machine",
       "architectures": ["x86_64"],
       "workload": {"arguments": [], "inputs": {"row": "codex"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "ssh", "scp", "openssl", "rm", "git"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "agents_scenario",
         "stdin": null,
@@ -844,7 +862,9 @@
         {"name": "agent_server", "node": "tests/cases/machine/agent_server", "per_architecture": false},
         {"name": "agent_relay", "node": "tests/cases/machine/agent_relay", "per_architecture": false},
         {"name": "agents_scenario", "node": "tests/cases/machine/agents_scenario", "per_architecture": false},
-        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false}
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "agent-assets", "node": "tests/cases/machine/agents-assets.tar", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "network", "reason": "the test needs a fresh GNU root and the restricted QEMU user network whose only outbound route reaches this case API service"}
@@ -856,7 +876,7 @@
       "domain": "machine",
       "architectures": ["x86_64"],
       "workload": {"arguments": [], "inputs": {"row": "gh"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "ssh", "scp", "openssl", "rm", "git"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "agents_scenario",
         "stdin": null,
@@ -938,7 +958,9 @@
         {"name": "agent_server", "node": "tests/cases/machine/agent_server", "per_architecture": false},
         {"name": "agent_relay", "node": "tests/cases/machine/agent_relay", "per_architecture": false},
         {"name": "agents_scenario", "node": "tests/cases/machine/agents_scenario", "per_architecture": false},
-        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false}
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "agent-assets", "node": "tests/cases/machine/agents-assets.tar", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "network", "reason": "the test needs a fresh GNU root and the restricted QEMU user network whose only outbound route reaches this case API service"}
@@ -950,7 +972,7 @@
       "domain": "machine",
       "architectures": ["x86_64"],
       "workload": {"arguments": [], "inputs": {"row": "muse-tmux"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "ssh", "scp", "openssl", "rm", "git"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "agents_scenario",
         "stdin": null,
@@ -1032,7 +1054,9 @@
         {"name": "agent_server", "node": "tests/cases/machine/agent_server", "per_architecture": false},
         {"name": "agent_relay", "node": "tests/cases/machine/agent_relay", "per_architecture": false},
         {"name": "agents_scenario", "node": "tests/cases/machine/agents_scenario", "per_architecture": false},
-        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false}
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "agent-assets", "node": "tests/cases/machine/agents-assets.tar", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "network", "reason": "the test needs a fresh GNU root and the restricted QEMU user network whose only outbound route reaches this case API service"}
@@ -1044,7 +1068,7 @@
       "domain": "machine",
       "architectures": ["x86_64"],
       "workload": {"arguments": [], "inputs": {"row": "muse"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "ssh", "scp", "openssl", "rm", "git"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "agents_scenario",
         "stdin": null,
@@ -1126,7 +1150,9 @@
         {"name": "agent_server", "node": "tests/cases/machine/agent_server", "per_architecture": false},
         {"name": "agent_relay", "node": "tests/cases/machine/agent_relay", "per_architecture": false},
         {"name": "agents_scenario", "node": "tests/cases/machine/agents_scenario", "per_architecture": false},
-        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false}
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "agent-assets", "node": "tests/cases/machine/agents-assets.tar", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "network", "reason": "the test needs a fresh GNU root and the restricted QEMU user network whose only outbound route reaches this case API service"}
@@ -1138,7 +1164,7 @@
       "domain": "machine",
       "architectures": ["x86_64"],
       "workload": {"arguments": [], "inputs": {"row": "procfd"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "ssh", "scp", "openssl", "rm", "git"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "agents_scenario",
         "stdin": null,
@@ -1220,7 +1246,9 @@
         {"name": "agent_server", "node": "tests/cases/machine/agent_server", "per_architecture": false},
         {"name": "agent_relay", "node": "tests/cases/machine/agent_relay", "per_architecture": false},
         {"name": "agents_scenario", "node": "tests/cases/machine/agents_scenario", "per_architecture": false},
-        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false}
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "agent-assets", "node": "tests/cases/machine/agents-assets.tar", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "network", "reason": "the test needs a fresh GNU root and the restricted QEMU user network whose only outbound route reaches this case API service"}
@@ -1232,7 +1260,7 @@
       "domain": "machine",
       "architectures": ["x86_64"],
       "workload": {"arguments": [], "inputs": {"row": "worker-session"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "ssh", "scp", "openssl", "rm", "git"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "agents_scenario",
         "stdin": null,
@@ -1314,7 +1342,9 @@
         {"name": "agent_server", "node": "tests/cases/machine/agent_server", "per_architecture": false},
         {"name": "agent_relay", "node": "tests/cases/machine/agent_relay", "per_architecture": false},
         {"name": "agents_scenario", "node": "tests/cases/machine/agents_scenario", "per_architecture": false},
-        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false}
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "agent-assets", "node": "tests/cases/machine/agents-assets.tar", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "network", "reason": "the test needs a fresh GNU root and the restricted QEMU user network whose only outbound route reaches this case API service"}

@@ -700,6 +700,8 @@ $(NET_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils
 
+build/tests/cases/machine/agents_scenario: tests/cases/machine/agent_native.c tests/cases/machine/agent_native.h
+
 # The fake API and SNTP services are compiled portable helpers.
 include tests/system/fakeapi/native.mk
 

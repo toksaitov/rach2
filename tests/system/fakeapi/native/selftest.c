@@ -312,6 +312,129 @@ static void parser(void)
     destroy(v);
     destroy(round);
 }
+struct held_job {
+    struct peer peer;
+};
+static void held_request(void *arg)
+{
+    struct held_job *job = arg;
+    serve_request(&job->peer);
+}
+static void held_test(void)
+{
+    struct server s;
+    struct wire turn = {0}, held = {0}, release = {0};
+    struct request *r, *control;
+    struct held_job job;
+    struct peer p;
+    service_thread thread;
+    setup(&s, "{\"steps\":[{\"hold\":true,\"request\":{\"path\":\"/"
+              "turn\"},\"reply\":{\"status\":404}}]}");
+    r = get_request("GET", "/turn", "", "[]");
+    job.peer = test_peer(&s, r, &turn);
+    check(!service_thread_start(&thread, held_request, &job), "held request thread starts");
+    service_lock(&s.lock);
+    while (!s.held)
+        service_wait(&s.condition, &s.lock);
+    check(turn.out.len == 0 && !s.steps[0].played, "held reply writes nothing before release");
+    service_unlock(&s.lock);
+    control = get_request("GET", "/fakeapi/held", "", "[]");
+    p = test_peer(&s, control, &held);
+    serve_request(&p);
+    check(strstr(held.out.data, "held 1\n") != NULL, "held control identifies the request");
+    free_request(control);
+    control = get_request("POST", "/fakeapi/release", "", "[]");
+    p = test_peer(&s, control, &release);
+    serve_request(&p);
+    service_thread_join(thread);
+    check(s.requests == 1 && !verdict(&s) && strstr(turn.out.data, "404 Not Found"),
+          "release plays the held step without numbering control requests");
+    free_request(control);
+    free_request(r);
+    clear(&turn.out);
+    clear(&held.out);
+    clear(&release.out);
+    dispose(&s);
+}
+static void input_frame(struct buffer *b, unsigned opcode, int final, const char *data)
+{
+    unsigned char head[8], mask[4] = {1, 2, 3, 4};
+    size_t n = strlen(data), i, size = 2;
+    head[0] = (final ? 128 : 0) | opcode;
+    if (n < 126)
+        head[1] = 128 | (unsigned char)n;
+    else {
+        head[1] = 254;
+        head[2] = (unsigned char)(n >> 8);
+        head[3] = (unsigned char)n;
+        size = 4;
+    }
+    append(b, head, size);
+    append(b, mask, 4);
+    for (i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)data[i] ^ mask[i % 4];
+        append(b, &c, 1);
+    }
+}
+static void websocket_test(void)
+{
+    unsigned test;
+    for (test = 0; test < 3; test++) {
+        struct server s;
+        struct wire w = {0};
+        struct buffer input = {0};
+        struct request *r;
+        struct peer p;
+        setup(&s, "{\"steps\":[{\"request\":{\"path\":\"/"
+                  "ws\"},\"reply\":{\"websocket\":[{\"expect\":\"hello\"},{\"send\":\"bye\"}]}}]}");
+        r = get_request(
+            "GET", "/ws", "",
+            "[[\"Upgrade\",\"websocket\"],[\"Sec-WebSocket-Key\",\"dGhlIHNhbXBsZSBub25jZQ==\"]]");
+        if (test) {
+            input_frame(&input, 1, 0, "hel");
+            input_frame(&input, 9, 1, "ping");
+            input_frame(&input, 0, 1, "lo");
+            if (test == 2)
+                input_frame(&input, 8, 1, "\003\350");
+        }
+        w.in = (const unsigned char *)input.data;
+        w.left = input.len;
+        p = test_peer(&s, r, &w);
+        serve_request(&p);
+        check(test ? !verdict(&s) && s.steps[0].played : verdict(&s) && !s.steps[0].played,
+              test ? "fragmented WebSocket message and ping play step before closing reset"
+                   : "reset before expected WebSocket message fails the step");
+        check(strstr(w.out.data, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") != NULL,
+              "WebSocket upgrade accept digest");
+        clear(&input);
+        clear(&w.out);
+        free_request(r);
+        dispose(&s);
+    }
+}
+static void http_test(void)
+{
+    const char *bytes =
+        "POST /echo?one=1 HTTP/1.1\r\nHost: test\r\nExpect: 100-continue\r\nTransfer-Encoding: "
+        "CHUNKED\r\n\r\n7;ext=yes\r\n{\"a\":1}\r\n0\r\nTrailer: value\r\n\r\n";
+    struct wire w = {0};
+    struct server s;
+    struct peer p;
+    struct request *r;
+    int malformed;
+    setup(&s, "{\"steps\":[]}");
+    p = test_peer(&s, NULL, &w);
+    w.in = (const unsigned char *)bytes;
+    w.left = strlen(bytes);
+    r = request(&p, &malformed);
+    check(r && !malformed && !strcmp(r->body, "{\"a\":1}") && !strcmp(r->query, "one=1") &&
+              strstr(w.out.data, "100 Continue"),
+          "HTTP chunk extensions, trailers and continue handshake");
+    if (r)
+        free_request(r);
+    clear(&w.out);
+    dispose(&s);
+}
 int main(void)
 {
     parser();
@@ -320,6 +443,9 @@ int main(void)
     messages();
     gemini();
     responses_test();
+    held_test();
+    websocket_test();
+    http_test();
     if (!failures)
         puts("fakeapi-test: PASS");
     return failures ? 1 : 0;

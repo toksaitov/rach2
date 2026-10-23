@@ -223,7 +223,17 @@ static struct request *request(struct peer *p, int *malformed)
     if (!strcasecmp(header(r, "expect"), "100-continue") &&
         !write_peer(p, "HTTP/1.1 100 Continue\r\n\r\n", 25))
         goto bad;
-    if (strstr(header(r, "transfer-encoding"), "chunked")) {
+    {
+        const char *encoding = header(r, "transfer-encoding");
+        char *lower = strdup(encoding);
+        size_t i;
+        for (i = 0; lower[i]; i++)
+            lower[i] = (char)tolower((unsigned char)lower[i]);
+        p->websocket = strstr(lower, "chunked") != NULL;
+        free(lower);
+    }
+    if (p->websocket) {
+        p->websocket = 0;
         for (;;) {
             char *block;
             char crlf[2];
@@ -676,6 +686,11 @@ static void serve_request(struct peer *p)
         service_wake(&s->condition);
         while (!s->released && !s->stopping)
             service_wait(&s->condition, &s->lock);
+        if (s->stopping && !s->released) {
+            service_unlock(&s->lock);
+            p->keep = 0;
+            return;
+        }
         service_unlock(&s->lock);
     }
     if (!protocol_reply(s->steps[p->step - 1].protocol, selected, p)) {
@@ -721,6 +736,12 @@ static void connection(void *arg)
                     snprintf(c->server->first, sizeof(c->server->first),
                              "connection: a request that cannot be read");
                 service_unlock(&c->server->lock);
+                {
+                    struct value *entry = value('o');
+                    add(entry, "connection", string("client"));
+                    add(entry, "failed", string("a request that cannot be read"));
+                    record(c->server, entry);
+                }
                 const char *bad =
                     "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
                 write_peer(&p, bad, strlen(bad));
@@ -935,6 +956,8 @@ int main(int argc, char **argv)
         return 2;
     if (strstr(name, "agent_relay") && argc == 2)
         return relay(service_port(argv[1]));
+    if (argc == 4 && !strcmp(argv[1], "worker-proof"))
+        return verify_worker_archive(argv[2], argv[3]);
     if (argc == 4 && !strcmp(argv[1], "unpack"))
         return unpack_assets(argv[2], argv[3]);
     if (argc == 3 && !strcmp(argv[1], "remove"))

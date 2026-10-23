@@ -113,7 +113,7 @@ int render_script(const char *source, const char *destination, const char *row)
     destroy(script);
     return ok ? 0 : 2;
 }
-static struct value *audit(const char *path)
+struct value *read_json_lines(const char *path)
 {
     FILE *f = fopen(path, "rb");
     struct value *entries = value('a');
@@ -126,7 +126,7 @@ static struct value *audit(const char *path)
     while ((c = fgetc(f)) != EOF) {
         if (c == '\n') {
             struct value *v = parse(b.data ? b.data : "");
-            if (!v || v->type != 'o') {
+            if (!v) {
                 destroy(v);
                 destroy(entries);
                 entries = NULL;
@@ -203,10 +203,62 @@ static int verify_curl(const struct value *entries)
     }
     return request != 6 || socket_entry != 6;
 }
+static int worker_prompt(const char *script_path, const struct value *steps,
+                         const struct value *step, const struct value *body)
+{
+    const char *root_end = strstr(script_path, "/tests/system/");
+    const struct value *before, *messages = get(body, "messages"), *content;
+    struct buffer filename = {0}, prompt = {0}, actual = {0};
+    struct value *expected;
+    FILE *f;
+    char block[4096], issue[32];
+    size_t n;
+    unsigned session = 0;
+    if (!root_end || !messages || !messages->child)
+        return 0;
+    for (before = steps->child; before; before = before->next) {
+        if (!get(before, "results"))
+            session++;
+        if (before == step)
+            break;
+    }
+    if (session < 1 || session > 2)
+        return 0;
+    append(&filename, script_path, (size_t)(root_end - script_path));
+    putsb(&filename, "/tools/flow/worker.txt");
+    f = fopen(filename.data, "rb");
+    clear(&filename);
+    if (!f)
+        return 0;
+    while ((n = fread(block, 1, sizeof(block), f)))
+        append(&prompt, block, n);
+    fclose(f);
+    while (prompt.len && strchr(" \t\r\n", prompt.data[prompt.len - 1]))
+        prompt.data[--prompt.len] = 0;
+    expected = string(prompt.data ? prompt.data : "");
+    clear(&prompt);
+    snprintf(issue, sizeof(issue), "%u", session == 1 ? 901U : 902U);
+    replace(expected, "@ISSUE@", issue);
+    content = get(messages->child, "content");
+    if (content && content->type == 's')
+        putsb(&actual, text(content));
+    else
+        for (before = first(content); before; before = before->next) {
+            if (strcmp(field(before, "type"), "text"))
+                continue;
+            if (actual.len)
+                putsb(&actual, "\n");
+            putsb(&actual, field(before, "text"));
+        }
+    n = actual.data && strstr(actual.data, text(expected)) != NULL;
+    destroy(expected);
+    clear(&actual);
+    return (int)n;
+}
 int verify_record(const char *script_path, const char *record_path, const char *row,
                   const char *version)
 {
-    struct value *script = read_json(script_path), *entries = audit(record_path);
+    struct value *script = read_json(script_path), *entries = read_json_lines(record_path);
     const struct value *e, *steps = get(script, "steps"), *step;
     unsigned *seen = allocate((count(steps) + 1) * sizeof(*seen));
     unsigned requests = 0, turns = 0;
@@ -233,6 +285,8 @@ int verify_record(const char *script_path, const char *record_path, const char *
         strcat(agent, " ");
     }
     for (e = first(entries); e; e = e->next) {
+        if (e->type != 'o')
+            goto done;
         if (get(e, "failed") || get(e, "unexpected"))
             goto done;
         if (get(e, "received") && number(e, "n", 0) == 1 && !strncmp(row, "codex", 5)) {
@@ -269,6 +323,9 @@ int verify_record(const char *script_path, const char *record_path, const char *
                        : *field(script, "protocol") ? field(script, "protocol")
                                                     : "plain";
             why = protocol_check(protocol, step, &r);
+            if (!why && !strcmp(row, "worker-session") && !get(step, "results") &&
+                !worker_prompt(script_path, steps, step, r.json))
+                why = "the first request lacks its worker prompt";
             destroy(r.json);
             if (why) {
                 log_line("audit: request %u: %s", n, why);

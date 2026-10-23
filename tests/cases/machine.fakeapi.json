@@ -10,7 +10,7 @@
       "domain": "machine",
       "architectures": ["x86_64"],
       "workload": {"arguments": [], "inputs": {"row": "curl"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "ssh", "scp", "openssl", "rm"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "agents_scenario",
         "stdin": null,
@@ -92,7 +92,10 @@
         {"name": "agent_server", "node": "tests/cases/machine/agent_server", "per_architecture": false},
         {"name": "agent_relay", "node": "tests/cases/machine/agent_relay", "per_architecture": false},
         {"name": "agents_scenario", "node": "tests/cases/machine/agents_scenario", "per_architecture": false},
-        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false}
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "agent-assets", "node": "tests/cases/machine/agents-assets.tar", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "wsclient", "node": "tests/fakeapi/wsclient", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "network", "reason": "the test needs a fresh GNU root and the restricted QEMU user network whose only outbound route reaches this case API service"}
