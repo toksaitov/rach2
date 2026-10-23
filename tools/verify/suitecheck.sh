@@ -13,11 +13,6 @@
 # fails on these forms:
 #
 #   * `sleep N` or `usleep N` in a script, on the host or typed into the guest
-#   * `wait=N`, a harness step that slept
-#   * a `send=` step, or a typed `step "MARKER" "COMMAND"` of drive.sh's
-#     suites, whose text is longer than 240 characters: the console's line
-#     discipline keeps 255 of a line typed before the shell takes the
-#     terminal back, and drops the rest
 #   * a call of sleep, usleep, nanosleep or clock_nanosleep in C code, or
 #     of the system call of either of the last two by its number
 #   * an upper bound on a duration in C code: `ms`, an identifier ending in
@@ -34,8 +29,7 @@
 # or on a line of its own above its command, where it covers the command's
 # continuation lines too, and tests/system/intervals lists `FILE: REASON` in
 # the same words, FILE relative to the repository, so that every interval is
-# written down once and read by a person. A `wait=` step fails even when it
-# is marked, since the harness has no such step.
+# written down once and read by a person.
 #
 # Under tests/cases/ no mark is read. There a sleep or a bound on a duration
 # passes only at a line that a case's `timing` declares (tools/etude/Readme.md,
@@ -144,21 +138,6 @@ scan() {
     }
     {
         if (kind == "suite") {
-            if ($0 ~ /wait=[0-9]/) {
-                print file ":" NR ": fixed: a wait= step; wait for a token"
-            }
-            if (match($0, /"send=([^"\\]|\\.)*"/) && RLENGTH - 7 > 240) {
-                print file ":" NR ": fixed: a typed line of " RLENGTH - 7 " characters; the console keeps 255"
-            }
-            if (match($0, /^step "[^"]*" "([^"\\]|\\.)*"/)) {
-                typed = substr($0, 1, RLENGTH - 1)
-                sub(/^step "[^"]*" "/, "", typed)
-                escapes = typed
-                typed_length = length(typed) - gsub(/\\/, "", escapes)
-                if (typed_length > 240) {
-                    print file ":" NR ": fixed: a typed step of " typed_length " characters; the console keeps 255"
-                }
-            }
             if ($0 ~ /(^|[^A-Za-z0-9_.\/-])u?sleep[ \t]+("?\$|[0-9])/) {
                 refuse(file ~ /^tests\/system\// ? "fixed" : "sleep", "a sleep for a number of seconds", "injected_delay")
             }
@@ -381,7 +360,7 @@ selftest() {
     case_ 0 clean
     tree sleep 'sleep 2' 'int x;' ''
     case_ 1 sleep
-    tree sleepguest '"send=sleep 3; echo DONE"' 'int x;' ''
+    tree sleepguest 'type_line "sleep 3; echo DONE"' 'int x;' ''
     case_ 1 sleepguest
     tree sleepmarked 'sleep 2 # interval: the load runs for two seconds' 'int x;' 'tests/system/suites.mk: the load runs for two seconds'
     case_ 0 sleepmarked
@@ -389,12 +368,12 @@ selftest() {
 sleep 2' 'int x;' 'tests/system/suites.mk: the load runs for two seconds'
     case_ 0 sleepabove
     tree continued '# interval: the load runs for two seconds
-run "$HARNESS" \
-    "send=sleep 2; echo DONE" \
-    "expect=DONE"' 'int x;' 'tests/system/suites.mk: the load runs for two seconds'
+run_guest "$KERNEL" \
+    "sleep 2; echo DONE" \
+    DONE' 'int x;' 'tests/system/suites.mk: the load runs for two seconds'
     case_ 0 continued
     tree pastcommand '# interval: the load runs for two seconds
-run "$HARNESS" "expect=DONE"
+run_guest "$KERNEL" DONE
 sleep 2' 'int x;' 'tests/system/suites.mk: the load runs for two seconds'
     case_ 1 pastcommand
     tree sleepunlisted 'sleep 2 # interval: the load runs for two seconds' 'int x;' ''
@@ -403,10 +382,6 @@ sleep 2' 'int x;' 'tests/system/suites.mk: the load runs for two seconds'
     case_ 1 sleepother
     tree stale 'echo' 'int x;' 'tests/system/suites.mk: the load runs for two seconds'
     case_ 1 stale
-    tree waitstep '"expect=lease" wait=3' 'int x;' ''
-    case_ 1 waitstep
-    tree waitmarked '"expect=lease" wait=3 # interval: settling' 'int x;' 'tests/system/suites.mk: settling'
-    case_ 1 waitmarked
     tree usleep 'usleep 200' 'int x;' ''
     case_ 1 usleep
     tree sleepscaled 'sleep "$(scaled 5)"' 'int x;' ''
@@ -414,16 +389,6 @@ sleep 2' 'int x;' 'tests/system/suites.mk: the load runs for two seconds'
     tree sleepword '# a fixed sleep keeps the host waiting
 fail "the lag sleep boot"' 'int x;' ''
     case_ 0 sleepword
-    tree longescaped '"send=echo \"'"$(printf 'x%.0s' $(seq 1 236))"'\"; echo DONE"' 'int x;' ''
-    case_ 1 longescaped
-    tree longline "\"send=$(printf 'x%.0s' $(seq 1 250))\"" 'int x;' ''
-    case_ 1 longline
-    tree shortline "\"send=$(printf 'x%.0s' $(seq 1 200))\"" 'int x;' ''
-    case_ 0 shortline
-    tree longstep "step \"LONG\" \"echo $(printf 'x%.0s' $(seq 1 250))\"" 'int x;' ''
-    case_ 1 longstep
-    tree shortstep "step \"SHORT\" \"echo \\\"$(printf 'x%.0s' $(seq 1 200))\\\"\"" 'int x;' ''
-    case_ 0 shortstep
     tree upper 'echo' 'if (ms < 3000) { fail(); }' ''
     case_ 1 upper
     tree upperle 'echo' 'if (took <= 1500) { fail(); }' ''

@@ -612,12 +612,12 @@ case_registry() {
 }
 
 # The tests wait for events, assert on counts and report what they leave
-# out. A sleep for a fixed time, a `wait=N` harness step and an upper bound on
-# a duration are guesses at a machine's speed, and a skip printed in a
-# passing test reports the skip as a pass; each fails the check unless an
-# interval with a reason that tests/system/intervals lists marks it,
-# tests/system/unconverted counts it in an older test, or a case's manifest
-# declares its timing. casecheck checks the manifests.
+# out. A sleep for a fixed time and an upper bound on a duration are guesses
+# at a machine's speed, and a skip printed in a passing test reports the skip
+# as a pass; each fails the check unless an interval with a reason that
+# tests/system/intervals lists marks it, tests/system/unconverted counts it in
+# an older test, or a case's manifest declares its timing. casecheck checks
+# the manifests.
 case_waits() {
     check waits-and-criteria verify_suites.log sh "$REPO/tools/verify/suitecheck.sh"
 }
