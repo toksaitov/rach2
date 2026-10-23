@@ -1009,7 +1009,7 @@ struct etude_machine *etude_qemu_watch(struct etude_qemu *q, int timeout_ms, str
     for (;;) {
         done = take_finished(q);
         if (done != NULL || take_changes(q) || r.ready || r.output ||
-            (host != NULL && *host != NULL) || (unfinished(q) == 0 && cn == 0))
+            (host != NULL && *host != NULL) || (unfinished(q) == 0 && cn == 0 && host == NULL))
             return done;
         if (polled && until != 0 && posix_now_us() >= until)
             return NULL;

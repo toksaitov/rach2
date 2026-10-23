@@ -384,7 +384,7 @@ struct etude_machine *etude_qemu_wait(struct etude_qemu *q, int timeout_ms);
  * which is put in `*host`. Since the output of a host attempt ends the wait
  * too, a caller that looks for a line in it reads it as it comes. Each call
  * serves the machines at least once; with no machine running and no
- * descriptor it returns at once.
+ * descriptor and with `host` NULL it returns at once.
  *
  * @return the machine that ended, each once, or NULL.
  */

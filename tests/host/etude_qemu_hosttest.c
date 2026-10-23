@@ -2350,10 +2350,43 @@ static void test_memory(void)
     etude_qemu_free(q);
 }
 
+/**
+ * A host attempt finishes through the launcher with no machine or descriptor.
+ */
+static void test_host_without_machine(void)
+{
+    struct etude_qemu *q = etude_qemu_new();
+    struct etude_exec_spec spec;
+    struct etude_proc *p = NULL, *done = NULL;
+    char *args[] = {self, "--host-child", NULL};
+
+    CHECK(q != NULL, "host launcher");
+    if (q == NULL)
+        return;
+    memset(&spec, 0, sizeof(spec));
+    spec.attempt_id = "host-without-machine";
+    spec.argv = args;
+    spec.envp = environ;
+    spec.output_max = 1024;
+    spec.grace_us = FAKE_GRACE_US;
+    CHECK(etude_exec_start(etude_qemu_exec(q), &spec, &p) == 0, "host start");
+    if (p != NULL) {
+        etude_qemu_watch(q, -1, NULL, 0, &done);
+        CHECK(done == p, "host result with no machine");
+        if (done == p)
+            CHECK(etude_proc_result(p)->end == ETUDE_END_EXITED &&
+                      etude_proc_result(p)->value == 17,
+                  "host exit status");
+    }
+    etude_qemu_free(q);
+}
+
 int main(int argc, char **argv)
 {
     const char *fake = getenv("ETUDE_FAKE_QEMU");
 
+    if (argc == 2 && strcmp(argv[1], "--host-child") == 0)
+        return 17;
     if (fake != NULL && *fake != '\0')
         return fake_qemu(fake, argc, argv);
     if (realpath(argv[0], self) == NULL) {
@@ -2362,7 +2395,9 @@ int main(int argc, char **argv)
     }
     if (setenv("TMPDIR", fix_dir(), 1) != 0)
         return 1;
-    if (argc == 2 && strcmp(argv[1], "--boundary") == 0) {
+    if (argc == 2 && strcmp(argv[1], "--host-only") == 0) {
+        test_host_without_machine();
+    } else if (argc == 2 && strcmp(argv[1], "--boundary") == 0) {
         test_real(1);
     } else {
         test_argv();
@@ -2378,6 +2413,7 @@ int main(int argc, char **argv)
         test_audio();
         test_usb();
         test_memory();
+        test_host_without_machine();
         test_ends();
         test_refused_starts();
         test_real(0);
