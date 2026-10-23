@@ -51,10 +51,9 @@ RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"
 out=build$ARCH_SUFFIX/rach2
-runner="$repo/build/tests/system/runutil"
 checker="$repo/build/tools/inspect/elfcheck"
-if [ ! -x "$runner" ] || [ ! -x "$checker" ]; then
-    echo 'poll-kernels: build build/tests/system/runutil and build/tools/inspect/elfcheck first' >&2
+if [ ! -x "$checker" ]; then
+    echo 'poll-kernels: build build/tools/inspect/elfcheck first' >&2
     exit 1
 fi
 work=
@@ -104,8 +103,7 @@ build()
     echo "poll-kernels: building $order"
     # A source change within the object's timestamp unit must still compile.
     rm -f "$work/$out/sys/io/poll.o" "$work/$out/kernel"
-    "$runner" watch poll-kernels 120 \
-        make -s -C "$work/rach2" -j4 "ELFCHECK=$checker" "ARCH=$RACH2_ARCH" &
+    make -s -C "$work/rach2" -j4 "ELFCHECK=$checker" "ARCH=$RACH2_ARCH" &
     child=$!
     rc=0
     wait "$child" || rc=$?
