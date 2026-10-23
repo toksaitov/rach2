@@ -14,8 +14,9 @@
 #include "../json.h"
 #include "etude/remote.h"
 
-#define FILES_MAX 16
-#define ENV_MAX   32
+#define FILES_MAX    16
+#define ENV_MAX      32
+#define FIXTURES_MAX 16
 
 /* The exit statuses: one for each verdict, and one for a wrong command. */
 #define EXIT_PASS       0
@@ -39,6 +40,11 @@ struct options {
     int npaths;
     const char *env[ENV_MAX];
     int nenv;
+    const char *unset[ENV_MAX]; /* the variables left out */
+    int nunset;
+    const char *fixture[FIXTURES_MAX]; /* each `KIND VALUE...` beside the workspace */
+    int nfixtures;
+    const char *input; /* the name of the file that is the case's input, or NULL */
     uint64_t deadline_ms, grace_ms, output_max, cancel_ms, stage_ms;
     unsigned reconnects;
     int keep;
@@ -57,7 +63,8 @@ static int usage(void)
 {
     fputs("usage: etude run native -R RUN -a ATTEMPT -c CASE -j JOURNAL -t TRANSPORT -f FILE...\n"
           "                    [-d MS] [-g MS] [-o BYTES] [-x MS] [-s MS] [-r N]\n"
-          "                    [-e EVIDENCE] [-E NAME=VALUE]... [-k] -- PROGRAM [ARGUMENT...]\n",
+          "                    [-e EVIDENCE] [-E NAME=VALUE]... [-U NAME]... [-F FIXTURE]...\n"
+          "                    [-i INPUT] [-k] -- PROGRAM [ARGUMENT...]\n",
           stderr);
     return EXIT_USAGE;
 }
@@ -222,6 +229,19 @@ static int option(struct options *o, int c, const char *v)
             return -1;
         o->env[o->nenv++] = v;
         break;
+    case 'U':
+        if (o->nunset == ENV_MAX || v[0] == '\0' || strchr(v, '=') != NULL)
+            return -1;
+        o->unset[o->nunset++] = v;
+        break;
+    case 'F':
+        if (o->nfixtures == FIXTURES_MAX || v[0] == '\0' || v[0] == ' ')
+            return -1;
+        o->fixture[o->nfixtures++] = v;
+        break;
+    case 'i':
+        o->input = v;
+        break;
     case 'r':
         if (number(v, &n) != 0 || n > 100)
             return -1;
@@ -326,11 +346,50 @@ static void digest_of(const char *p, size_t n, char hex[65])
     sha256_hex(d, hex);
 }
 
+/** Say whether the variable that `env`, NAME=VALUE, sets is one that -U
+ * leaves out. */
+static int left_out(const struct options *o, const char *env, size_t len)
+{
+    int i;
+
+    for (i = 0; i < o->nunset; i++)
+        if (strlen(o->unset[i]) == len && strncmp(o->unset[i], env, len) == 0)
+            return 1;
+    return 0;
+}
+
+/** Append the fixture `spec`, `KIND VALUE...` separated by spaces, to `t` as
+ * an object of the invocation's fixtures. */
+static void put_fixture(struct text *t, const char *spec)
+{
+    char word[256];
+    size_t n;
+    int i;
+
+    for (i = 0;; i++) {
+        spec += strspn(spec, " ");
+        n = strcspn(spec, " ");
+        if (n == 0)
+            break;
+        if (n >= sizeof(word)) {
+            t->bad = 1;
+            return;
+        }
+        memcpy(word, spec, n);
+        word[n] = '\0';
+        spec += n;
+        put_text(t, i == 0 ? ",{\"fixture\":" : i == 1 ? ",\"given\":[" : ",");
+        put_string(t, word);
+    }
+    put_text(t, i == 1 ? ",\"given\":[]}" : "]}");
+}
+
 /**
  * Write the invocation of the case into `t`, as
  * tools/etude/schemas/invocation.schema.json gives it: the program and its
- * arguments, the files, a workspace, and an environment of PATH, HOME as the
- * workspace, ETUDE_CASE and the -E variables, the last of a name winning.
+ * arguments, the files, the input -i names, a workspace and the fixtures of
+ * -F, and an environment of PATH, HOME as the workspace, ETUDE_CASE and the
+ * -E variables, the last of a name winning, less the variables -U names.
  */
 static void invocation(struct text *t, const struct options *o, const struct file *files,
                        const char *token)
@@ -365,7 +424,8 @@ static void invocation(struct text *t, const struct options *o, const struct fil
         for (j = i + 1; j < n; j++)
             if (strncmp(env[j], env[i], len + 1) == 0)
                 break;
-        if (j < n || len >= sizeof(name) || (len == 10 && strncmp(env[i], "ETUDE_CASE", 10) == 0))
+        if (j < n || len >= sizeof(name) || (len == 10 && strncmp(env[i], "ETUDE_CASE", 10) == 0) ||
+            left_out(o, env[i], len))
             continue;
         memcpy(name, env[i], len);
         name[len] = '\0';
@@ -374,7 +434,12 @@ static void invocation(struct text *t, const struct options *o, const struct fil
         put_text(t, ":");
         put_string(t, env[i] + len + 1);
     }
-    put_text(t, "},\"stdin\":null,\"role\":\"ordinary\",\"files\":[");
+    put_text(t, "},\"stdin\":");
+    if (o->input != NULL)
+        put_string(t, o->input);
+    else
+        put_text(t, "null");
+    put_text(t, ",\"role\":\"ordinary\",\"files\":[");
     for (i = 0; i < o->npaths; i++) {
         digest_of(files[i].data, files[i].size, hex);
         put_text(t, i > 0 ? ",{\"name\":" : "{\"name\":");
@@ -382,8 +447,11 @@ static void invocation(struct text *t, const struct options *o, const struct fil
         putf(t, ",\"sha256\":\"%s\",\"size_bytes\":%llu,\"mode\":\"%s\"}", hex,
              (unsigned long long)files[i].size, files[i].mode);
     }
+    put_text(t, "],\"fixtures\":[{\"fixture\":\"workspace\",\"given\":[]}");
+    for (i = 0; i < o->nfixtures; i++)
+        put_fixture(t, o->fixture[i]);
     putf(t,
-         "],\"fixtures\":[{\"fixture\":\"workspace\",\"given\":[]}],\"deadline_us\":%llu,"
+         "],\"deadline_us\":%llu,"
          "\"grace_us\":%llu,\"output_max_bytes\":%llu}\n",
          (unsigned long long)o->deadline_ms * 1000, (unsigned long long)o->grace_ms * 1000,
          (unsigned long long)o->output_max);
@@ -581,6 +649,11 @@ int etude_native_main(int argc, char **argv)
             fprintf(stderr, "etude run: %s is not ASCII\n", o.env[i]);
             return EXIT_USAGE;
         }
+    for (i = 0; i < o.nfixtures; i++)
+        if (!ascii(o.fixture[i])) {
+            fprintf(stderr, "etude-native: the fixture %s is not ASCII\n", o.fixture[i]);
+            return EXIT_USAGE;
+        }
     memset(files, 0, sizeof(files));
     code = EXIT_USAGE;
     for (i = 0; i < o.npaths; i++) {
@@ -596,6 +669,12 @@ int etude_native_main(int argc, char **argv)
     }
     if (i == o.npaths) {
         fprintf(stderr, "etude run: the program %s is not one of the files\n", o.argv[0]);
+        goto out;
+    }
+    for (i = 0; o.input != NULL && i < o.npaths && strcmp(files[i].name, o.input) != 0; i++) {
+    }
+    if (o.input != NULL && i == o.npaths) {
+        fprintf(stderr, "etude-native: the input %s is not one of the files\n", o.input);
         goto out;
     }
     code = run_case(&o, files);
