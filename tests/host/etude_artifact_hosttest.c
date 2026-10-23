@@ -791,19 +791,47 @@ static uint64_t get_be(const unsigned char *p, int n)
     return v;
 }
 
-/* An overlay row: its object's size, its cluster size, the entries of its
- * L1 table and its clusters in all. */
+/* An overlay row: its disk's size, its cluster size, the entries of its L1
+ * table and its clusters in all, and its base's format, `raw` or `qcow2`. */
 struct overlay_want {
     uint64_t size;
     uint32_t cluster;
     uint64_t l1, clusters;
+    const char *format;
     const char *row;
 };
 
 /**
+ * Write `path` as the first 1000 bytes of a qcow2 image of `version`, whose
+ * backing file's name begins at `backing`, or 0 for none, and whose disk has
+ * `size` bytes, with the rest of the header zero.
+ */
+static int write_qcow2(const char *path, uint32_t version, uint64_t backing, uint64_t size)
+{
+    unsigned char head[1000];
+    int fd, r, i;
+
+    memset(head, 0, sizeof(head));
+    memcpy(head, "QFI\xfb", 4);
+    for (i = 0; i < 4; i++)
+        head[4 + i] = (unsigned char)(version >> (24 - 8 * i));
+    for (i = 0; i < 8; i++) {
+        head[8 + i] = (unsigned char)(backing >> (56 - 8 * i));
+        head[24 + i] = (unsigned char)(size >> (56 - 8 * i));
+    }
+    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0)
+        return -1;
+    r = put_all(fd, head, sizeof(head));
+    if (close(fd) != 0)
+        r = -1;
+    return r;
+}
+
+/**
  * Check the overlay `buf` of `len` bytes over the object at `real` as `w`
- * says: its header, its backing file and its format, an empty L1 table, and
- * its length, each cluster counted once by its refcounts.
+ * says: its header, its backing file and that file's format, an empty L1
+ * table, and its length, each cluster counted once by its refcounts.
  */
 static void overlay_check(const unsigned char *buf, uint64_t len, const char *real,
                           const struct overlay_want *w)
@@ -820,8 +848,10 @@ static void overlay_check(const unsigned char *buf, uint64_t len, const char *re
               get_be(buf + 24, 8) == size,
           row);
     CHECK(get_be(buf + 16, 4) == n && memcmp(buf + get_be(buf + 8, 8), real, n) == 0, row);
-    CHECK(get_be(buf + 104, 4) == 0xe2792acau && get_be(buf + 108, 4) == 3 &&
-              memcmp(buf + 112, "raw", 3) == 0 && get_be(buf + 120, 8) == 0,
+    CHECK(get_be(buf + 104, 4) == 0xe2792acau && get_be(buf + 108, 4) == strlen(w->format) &&
+              memcmp(buf + 112, w->format, strlen(w->format)) == 0 &&
+              get_be(buf + 112 + strlen(w->format), 8 - strlen(w->format)) == 0 &&
+              get_be(buf + 120, 8) == 0,
           row);
     CHECK(get_be(buf + 36, 4) == l1 && l1_at % cluster == 0 && l1_at + l1 * 8 <= len, row);
     CHECK(get_be(buf + 96, 4) == 4 && get_be(buf + 100, 4) == 104 && get_be(buf + 56, 4) >= 1, row);
@@ -832,8 +862,9 @@ static void overlay_check(const unsigned char *buf, uint64_t len, const char *re
 }
 
 /**
- * Store an object of `w->size` bytes, make an overlay of it, and check the
- * overlay as overlay_check does, and that the object stays read-only.
+ * Store a raw disk of `w->size` bytes, or the header of a qcow2 image of a
+ * disk of that size, make an overlay of it, and check the overlay as
+ * overlay_check does, and that the object stays read-only.
  */
 static void overlay_row(struct etude_store *s, const struct overlay_want *w)
 {
@@ -846,10 +877,14 @@ static void overlay_row(struct etude_store *s, const struct overlay_want *w)
     int fd;
 
     unlink(dest);
-    fd = open(src, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    CHECK(fd >= 0 && ftruncate(fd, (off_t)w->size) == 0 && put_all(fd, "base", 4) == 0, row);
-    if (fd >= 0)
-        close(fd);
+    if (strcmp(w->format, "qcow2") == 0) {
+        CHECK(write_qcow2(src, 3, 0, w->size) == 0, row);
+    } else {
+        fd = open(src, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        CHECK(fd >= 0 && ftruncate(fd, (off_t)w->size) == 0 && put_all(fd, "base", 4) == 0, row);
+        if (fd >= 0)
+            close(fd);
+    }
     if (etude_store_put(s, src, NULL, d, NULL) != 0 || etude_store_path(s, d, path, sizeof(path)) ||
         realpath(path, real) == NULL || etude_store_overlay(s, d, w->cluster, dest) != 0 ||
         stat(dest, &st) != 0 || (buf = malloc((size_t)st.st_size)) == NULL ||
@@ -871,17 +906,20 @@ static void overlay_row(struct etude_store *s, const struct overlay_want *w)
 /**
  * An overlay of an object is an empty qcow2 file whose backing file is the
  * object's path, of the object's size, in each cluster size from QEMU's
- * least to its greatest; and the overlays QEMU cannot open, of a cluster size
- * it lacks, of an object not a whole number of sectors, over an object
- * absent, or over a `dest` that exists, are refused.
+ * least to its greatest, or of the virtual size of a qcow2 object, whose
+ * format it names; and the overlays QEMU cannot open, of a cluster size it
+ * lacks, of a disk not a whole number of sectors, over an object absent, a
+ * qcow2 object of another version or with a backing file of its own, or over
+ * a `dest` that exists, are refused.
  */
 static void test_overlay(void)
 {
     static const struct overlay_want rows[] = {
-        {1u << 20, 4096, 1, 4, "overlay: 1 MiB in 4 KiB clusters"},
-        {(4u << 20) + 512, 4096, 3, 4, "overlay: past an L2 table's span"},
-        {4u << 20, 512, 128, 5, "overlay: 512-byte clusters, two of L1"},
-        {8u << 20, 2u << 20, 1, 4, "overlay: 2 MiB clusters"}};
+        {1u << 20, 4096, 1, 4, "raw", "overlay: 1 MiB in 4 KiB clusters"},
+        {(4u << 20) + 512, 4096, 3, 4, "raw", "overlay: past an L2 table's span"},
+        {4u << 20, 512, 128, 5, "raw", "overlay: 512-byte clusters, two of L1"},
+        {8u << 20, 2u << 20, 1, 4, "raw", "overlay: 2 MiB clusters"},
+        {UINT64_C(250059350016), 4096, 119238, 236, "qcow2", "overlay: a qcow2 base of 250 GB"}};
     const char *src = fix_path("overlay-src"), *dest = fix_path("overlay.qcow2");
     char d[ETUDE_DIGEST_HEX + 1];
     struct etude_store *s = etude_store_open(fix_path("overlay"));
@@ -906,6 +944,16 @@ static void test_overlay(void)
     CHECK(write_text(src, "not a sector\n") == 0 && etude_store_put(s, src, NULL, d, NULL) == 0 &&
               etude_store_overlay(s, d, 4096, dest) == -1 && errno == EINVAL,
           "overlay: a partial sector");
+    CHECK(write_qcow2(src, 1, 0, 1u << 20) == 0 && etude_store_put(s, src, NULL, d, NULL) == 0 &&
+              etude_store_overlay(s, d, 4096, dest) == -1 && errno == EINVAL,
+          "overlay: a qcow2 base of version 1");
+    CHECK(write_qcow2(src, 3, 512, 1u << 20) == 0 && etude_store_put(s, src, NULL, d, NULL) == 0 &&
+              etude_store_overlay(s, d, 4096, dest) == -1 && errno == EINVAL,
+          "overlay: a qcow2 base with a backing file");
+    CHECK(write_qcow2(src, 2, 0, (1u << 20) + 100) == 0 &&
+              etude_store_put(s, src, NULL, d, NULL) == 0 &&
+              etude_store_overlay(s, d, 4096, dest) == -1 && errno == EINVAL,
+          "overlay: a qcow2 base of a partial sector");
     CHECK(stat(dest, &st) == -1 && errno == ENOENT, "overlay: a refused one is not left");
     etude_store_close(s);
 }

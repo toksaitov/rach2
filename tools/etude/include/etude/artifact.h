@@ -121,19 +121,24 @@ int etude_store_copy(const struct etude_store *s, const char *digest, const char
 
 /**
  * Make `dest`, a file that must not exist, an empty qcow2 overlay over
- * object `digest`, whose absolute path it names as its raw backing file, in
+ * object `digest`, whose absolute path it names as its backing file, in
  * clusters of `cluster_bytes`, a power of two from 512 to 2 MiB.
  *
- * The overlay has the object's size and allocates no cluster, so that
- * QEMU's writes go to the overlay alone and `qemu-img map` lists what they
- * changed. The object is not read, and the caller checks it by its digest.
+ * An object that begins with qcow2's magic is a qcow2 backing file of the
+ * virtual size its header gives, so that a large sparse disk is stored as
+ * the few megabytes of its data; any other object is a raw backing file of
+ * its own length. The overlay has that size and allocates no cluster, so
+ * that QEMU's writes go to the overlay alone and `qemu-img map` lists at
+ * depth 0 what they changed. Only the object's first 32 bytes are read, and
+ * the caller checks the object by its digest.
  *
  * @return 0, or -1 with errno set: EINVAL for a malformed digest, a cluster
- *         size out of range, or an object that is empty or not a whole number
- *         of 512-byte sectors; EFBIG for an object whose L1 table would pass
- *         QEMU's 32 MiB; ENAMETOOLONG for an object path that does not fit
- *         the first cluster; EEXIST for a `dest` that exists; or an error of
- *         the system, after which `dest` is removed.
+ *         size out of range, a qcow2 object of a version other than 2 or 3
+ *         or with a backing file of its own, or a disk that is empty or not
+ *         a whole number of 512-byte sectors; EFBIG for an object whose L1
+ *         table would pass QEMU's 32 MiB; ENAMETOOLONG for an object path
+ *         that does not fit the first cluster; EEXIST for a `dest` that
+ *         exists; or an error of the system, after which `dest` is removed.
  */
 int etude_store_overlay(const struct etude_store *s, const char *digest, uint32_t cluster_bytes,
                         const char *dest);

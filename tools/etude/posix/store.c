@@ -65,8 +65,10 @@ unsigned long etude_store_hashed, etude_store_copied;
 /* An overlay's qcow2 header: its magic, "QFI\xfb"; the length of version 3's
  * header; the type of the extension that gives the backing file's format;
  * where the backing file's name begins, past that extension and the end of
- * the extensions; 16-bit refcounts; and the largest L1 table QEMU opens. */
+ * the extensions; 16-bit refcounts; and the largest L1 table QEMU opens. A
+ * base's header is read as far as the end of its size, QCOW_PROBE bytes. */
 #define QCOW_MAGIC          0x514649fbu
+#define QCOW_PROBE          32
 #define QCOW_HEADER         104
 #define QCOW_EXT_FORMAT     0xe2792acau
 #define QCOW_NAME           (QCOW_HEADER + 16 + 8)
@@ -950,15 +952,65 @@ static void put_be(unsigned char *p, uint64_t v, int n)
     }
 }
 
+/** Give the `n` bytes at `p` as a number, most significant first. */
+static uint64_t get_be(const unsigned char *p, int n)
+{
+    uint64_t v = 0;
+
+    while (n-- > 0)
+        v = v << 8 | *p++;
+    return v;
+}
+
+/**
+ * Give the format of the base `path`, of status `st`, and the size of the
+ * disk it holds. A file that begins with qcow2's magic is a qcow2 image of
+ * version 2 or 3 with no backing file of its own, whose header gives the
+ * size; any other file is a raw disk of its own length.
+ *
+ * @return 0, or -1 with errno set: EINVAL for a qcow2 image of another
+ *         version or with a backing file, or an error of the system.
+ */
+static int base_format(const char *path, const struct stat *st, const char **format, uint64_t *size)
+{
+    unsigned char head[QCOW_PROBE];
+    ssize_t got;
+    int fd, e;
+
+    *format = "raw";
+    *size = (uint64_t)st->st_size;
+    if (st->st_size < QCOW_PROBE)
+        return 0;
+    fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return -1;
+    got = read(fd, head, sizeof(head));
+    e = errno;
+    close(fd);
+    if (got != (ssize_t)sizeof(head)) {
+        errno = got < 0 ? e : EIO;
+        return -1;
+    }
+    if (get_be(head, 4) != QCOW_MAGIC)
+        return 0;
+    if ((get_be(head + 4, 4) != 2 && get_be(head + 4, 4) != 3) || get_be(head + 8, 8) != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    *format = "qcow2";
+    *size = get_be(head + 24, 8);
+    return 0;
+}
+
 /**
  * Write the clusters of an empty qcow2 version 3 overlay of `size` bytes in
- * clusters of 2^`bits` bytes over the raw file `base`, an absolute path, to
- * `fd`. The header, the backing file's format and name share cluster 0; the
- * refcount table, its blocks and the L1 table follow, each cluster counted
- * once, and the L1 table is left zero, so no cluster of the overlay is
- * allocated and every read falls through to the base.
+ * clusters of 2^`bits` bytes over `base`, an absolute path, of `format`,
+ * `raw` or `qcow2`, to `fd`. The header, the backing file's format and name
+ * share cluster 0; the refcount table, its blocks and the L1 table follow,
+ * each cluster counted once, and the L1 table is left zero, so no cluster of
+ * the overlay is allocated and every read falls through to the base.
  */
-static int write_overlay(int fd, const char *base, uint64_t size, unsigned bits)
+static int write_overlay(int fd, const char *base, const char *format, uint64_t size, unsigned bits)
 {
     uint64_t cluster = (uint64_t)1 << bits, l2_span = (cluster / 8) << bits;
     uint64_t l1 = (size + l2_span - 1) / l2_span, l1_clusters = (l1 * 8 + cluster - 1) / cluster;
@@ -997,8 +1049,8 @@ static int write_overlay(int fd, const char *base, uint64_t size, unsigned bits)
     put_be(buf + 96, QCOW_REFCOUNT_ORDER, 4);
     put_be(buf + 100, QCOW_HEADER, 4);
     put_be(buf + QCOW_HEADER, QCOW_EXT_FORMAT, 4);
-    put_be(buf + QCOW_HEADER + 4, 3, 4);
-    memcpy(buf + QCOW_HEADER + 8, "raw", 3);
+    put_be(buf + QCOW_HEADER + 4, strlen(format), 4);
+    memcpy(buf + QCOW_HEADER + 8, format, strlen(format));
     memcpy(buf + QCOW_NAME, base, name);
     for (i = 0; i < blocks; i++)
         put_be(buf + cluster + i * 8, (1 + table + i) * cluster, 8);
@@ -1020,7 +1072,9 @@ int etude_store_overlay(const struct etude_store *s, const char *digest, uint32_
                         const char *dest)
 {
     char *path, *base;
+    const char *format = "raw";
     struct stat st;
+    uint64_t size = 0;
     unsigned bits = 9;
     int fd, e;
 
@@ -1039,13 +1093,14 @@ int etude_store_overlay(const struct etude_store *s, const char *digest, uint32_
     free(path);
     if (base == NULL)
         return -1;
-    if (stat(base, &st) != 0) {
+    if (stat(base, &st) != 0 ||
+        (S_ISREG(st.st_mode) && base_format(base, &st, &format, &size) != 0)) {
         e = errno;
         free(base);
         errno = e;
         return -1;
     }
-    if (!S_ISREG(st.st_mode) || st.st_size == 0 || st.st_size % 512 != 0) {
+    if (!S_ISREG(st.st_mode) || size == 0 || size % 512 != 0) {
         free(base);
         errno = EINVAL;
         return -1;
@@ -1056,7 +1111,7 @@ int etude_store_overlay(const struct etude_store *s, const char *digest, uint32_
         return -1;
     }
     errno = 0;
-    if (write_overlay(fd, base, (uint64_t)st.st_size, bits) != 0 || close(fd) != 0) {
+    if (write_overlay(fd, base, format, size, bits) != 0 || close(fd) != 0) {
         e = errno;
         close(fd);
         unlink(dest);
