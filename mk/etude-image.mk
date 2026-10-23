@@ -21,6 +21,7 @@ check-mtools: $(MTOOLS_BIN) $(ELFCHECK)
 
 $(ETUDE_IMAGE): krffs/manifests/etude-image.manifest $(MTOOLS_BIN) $(DEBUGFS_BIN) \
                  $(ARCH_BUILD)/tests/cases/host/image-channel-fixture \
+                 $(ARCH_BUILD)/tests/cases/machine/installer-repair-fixture \
                  $(E2FSCK_BIN) $(MKE2FS_BIN) $(DUMPE2FS_BIN) $(TUNE2FS_BIN) $(RESIZE2FS_BIN) \
                  $(BUSYBOX_BIN) $(ARCH_BUILD)/tools/etude/guest/etude-guest $(IMAGE_TOOLS) \
                  | preflight krffs tools/etude/guest check-mtools check-e2fsck check-busybox
@@ -35,3 +36,12 @@ $(ARCH_BUILD)/tests/cases/host/image-channel-fixture: tests/cases/host/image_cha
 build/tests/cases/machine/metal/loop.krffs: build/tests/system/loopdev/krffs.img
 	@mkdir -p $(@D)
 	cp $< $@
+
+$(ARCH_BUILD)/tests/cases/machine/installer-repair-fixture: \
+    tests/cases/machine/installer_repair_fixture.c \
+    tests/cases/machine/installer_repair_fixture_edits.c \
+    tests/cases/machine/installer_repair_fixture.h $(LIBC_STAMP)
+	@mkdir -p $(@D)
+	RACH2_ARCH=$(ARCH) vendor/musl/muslgcc -std=c99 -Os -static \
+	    tests/cases/machine/installer_repair_fixture.c \
+	    tests/cases/machine/installer_repair_fixture_edits.c -o $@

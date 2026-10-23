@@ -176,7 +176,6 @@
         {"name": "stick", "node": "images/install-test-stick.img", "per_architecture": true},
         {"name": "mbr", "node": "images/installer-test-mbr.disk", "per_architecture": true},
         {"name": "mkmbr", "node": "tools/image/mkmbr", "per_architecture": false},
-        {"name": "installer_repair_disk", "node": "tests/cases/machine/installer_repair_disk", "per_architecture": false},
         {"name": "installer_repair_convert_stopped", "node": "tests/cases/machine/installer_repair_convert_stopped", "per_architecture": false},
         {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
         {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
@@ -250,7 +249,6 @@
         {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
         {"name": "mkgpt", "node": "tools/image/mkgpt", "per_architecture": false},
         {"name": "mkexfatfixture", "node": "tests/host/mkexfatfixture", "per_architecture": false},
-        {"name": "installer_repair_disk", "node": "tests/cases/machine/installer_repair_disk", "per_architecture": false},
         {"name": "installer_repair_resume", "node": "tests/cases/machine/installer_repair_resume", "per_architecture": false},
         {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
         {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}

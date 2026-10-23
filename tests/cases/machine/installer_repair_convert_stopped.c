@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "lib_installer_repair.h"
+#include "lib_installer_repair_disk.h"
 
 /**
  * Plant the stopped conversion on the host, run the update, and judge the
@@ -22,7 +23,7 @@
 int etude_scenario(struct etude_case *c)
 {
     const char *p;
-    char disk[4096] = "", work[4096] = "", boot[32], rec[32], line[64];
+    char disk[4096] = "", line[64];
     uint64_t esp = 0, at = 0, len = 0;
     char *out = NULL, *info = NULL, *cfg = NULL;
     struct drive d;
@@ -34,16 +35,11 @@ int etude_scenario(struct etude_case *c)
     if (p != NULL)
         snprintf(disk, sizeof(disk), "%s", p);
     have = p != NULL && repair_entry(c, "mkmbr", disk, 1, &esp, &len) == 0 &&
-           repair_entry(c, "mkmbr", disk, 2, &at, &len) == 0 &&
-           repair_path(c, "", work, sizeof(work)) == 0;
+           repair_entry(c, "mkmbr", disk, 2, &at, &len) == 0;
     planted = 0;
     if (have) {
-        snprintf(boot, sizeof(boot), "%llu", (unsigned long long)(esp / 512));
-        snprintf(rec, sizeof(rec), "%llu", (unsigned long long)(at / 512));
-        planted =
-            repair_run(
-                c, (char *const[]){"installer_repair_disk", "keep", disk, boot, rec, work, NULL},
-                "keep", &out) == 0;
+        struct repair_disk_request request = {"keep", disk, NULL, NULL, at / 512, esp / 512};
+        planted = repair_disk(c, &request, "keep", &out) == 0;
     }
     if (drive_halted()) {
         free(out);

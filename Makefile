@@ -845,7 +845,8 @@ CONSOLE_SCENARIOS = build/tests/cases/machine/grow_entry_at_end \
                     build/tests/cases/machine/installer_stick_update
 CONSOLE_LIB = tests/cases/machine/netcase.c \
               tests/cases/machine/drive.c tests/cases/machine/lib_grow.c \
-              tests/cases/machine/lib_installer.c tests/cases/machine/lib_installer_repair.c
+              tests/cases/machine/lib_installer.c tests/cases/machine/lib_installer_repair.c \
+              tests/cases/machine/lib_installer_repair_disk.c
 $(CONSOLE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c $(CONSOLE_LIB) \
                       $(CONSOLE_LIB:.c=.h) $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
 	@mkdir -p $(@D)

@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "lib_installer_repair.h"
+#include "lib_installer_repair_disk.h"
 
 /* The name the stick's volume gives the root image with the keys added. */
 #define KEY_ROOT_NAME "key-root.ext2"
@@ -214,6 +215,7 @@ static void payload(struct resume *r)
     const char *p;
     FILE *f;
     int i;
+    struct repair_disk_request keys = {"root-keys", r->root, NULL, NULL, 0, 0};
 
     if ((p = etude_private_copy(r->c, "root")) != NULL)
         snprintf(r->root, sizeof(r->root), "%s", p);
@@ -224,8 +226,7 @@ static void payload(struct resume *r)
         snprintf(r->why, sizeof(r->why), "the root image or the stick could not be copied");
         return;
     }
-    if (repair_run(r->c, (char *const[]){"installer_repair_disk", "root-keys", r->root, work, NULL},
-                   "root-keys", &out) != 0) {
+    if (repair_disk(r->c, &keys, "root-keys", &out) != 0) {
         snprintf(r->why, sizeof(r->why), "%.290s", out != NULL ? out : "the root image's keys");
         free(out);
         return;
@@ -356,31 +357,23 @@ static void archive_keys(struct resume *r)
 }
 
 /**
- * Run the disk script's `MODE` on the installed disk: `legacy` or `slot`,
+ * Run the compiled fixture's MODE on the installed disk: legacy or slot,
  * with the partitions' first sectors and the keyed root image.
  */
 static int plant(struct resume *r, const char *mode)
 {
-    char rec[32], rootat[32], work[4096], *out = NULL;
+    struct repair_disk_request request = {mode, r->disk, KEY_ROOT_NAME, r->pubkey, r->rec, 0};
+    char *out = NULL;
     int rc;
 
-    snprintf(rec, sizeof(rec), "%llu", (unsigned long long)r->rec);
-    snprintf(rootat, sizeof(rootat), "%llu", (unsigned long long)r->rootat);
-    if (repair_path(r->c, "", work, sizeof(work)) != 0)
+    if (repair_copy(r->root, r->disk, r->rootat * 512, 0) != 0) {
+        snprintf(r->why, sizeof(r->why), "the image could not be written onto the root");
         return -1;
-    if (strcmp(mode, "legacy") == 0)
-        rc = repair_run(r->c,
-                        (char *const[]){"installer_repair_disk", "legacy", r->disk, rec, rootat,
-                                        r->root, KEY_ROOT_NAME, work, r->pubkey, NULL},
-                        "legacy", &out);
-    else
-        rc = repair_run(r->c,
-                        (char *const[]){"installer_repair_disk", "slot", r->disk, rec, rootat,
-                                        r->root, work, NULL},
-                        "slot", &out);
+    }
+    rc = repair_disk(r->c, &request, mode, &out);
     if (rc != 0)
         snprintf(r->why, sizeof(r->why), "%.290s",
-                 out != NULL && out[0] != '\0' ? out : "the disk script did not run");
+                 out != NULL && out[0] != '\0' ? out : "the disk fixture did not finish");
     free(out);
     return rc == 0 ? 0 : -1;
 }
