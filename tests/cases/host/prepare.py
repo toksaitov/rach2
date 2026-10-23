@@ -27,8 +27,15 @@ CHECKERS = ('tools/inspect/elfcheck.c', 'tools/inspect/cfgcheck.c',
             'tools/etude/win/pecheck.c')
 COMMON = ['-std=c99', '-D_DEFAULT_SOURCE', '-D_FORTIFY_SOURCE=0',
           '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-g', '-O1']
-INCLUDES = ['rach2/sys', 'rach2/sys/arch/x86', 'rach2/sys/arch/i686',
-            'rach2/sys/lib', 'rach2/sys/proc', 'utils', 'krffs', 'tests/host/compat']
+KERNEL_INCLUDES = ['rach2/sys', 'rach2/sys/arch/x86', 'rach2/sys/arch/i686',
+                   'rach2/sys/lib', 'rach2/sys/proc']
+INCLUDES = ['utils', 'krffs', 'tests/host/compat']
+
+
+def include_flags(kernel):
+    """Keep kernel fixture headers out of the system header search."""
+    quoted = [w for d in KERNEL_INCLUDES for w in ('-iquote', d)] if kernel else []
+    return [*quoted, *[w for d in INCLUDES for w in ('-I', d)]]
 
 
 def digest(path):
@@ -99,7 +106,7 @@ def checks(group, arch, base):
             item = entry(identity, path.stem, out, [str(path), *deps],
                          alone='host-alone:' in path.read_text())
             item['command'] = [*fixtures.platform_flags(COMMON), '-DRACH2_HOSTTEST', '-Wno-empty-body', '-ffreestanding',
-                               *[w for d in INCLUDES for w in ('-I', d)], *flags,
+                               *include_flags(group == 'tests'), *flags,
                                '-o', out, str(path), *deps]
             if routing.windows_host() and (identity in routing.BOOTS or identity in {'etude_context', 'etude_observe'}):
                 item = windows.boot_entry(item, flags)
@@ -126,7 +133,7 @@ def checks(group, arch, base):
                 raise ValueError(f'{name}: the fuzz harness has no corpus')
             item['command'] = [*fixtures.platform_flags(COMMON), '-DRACH2_HOSTTEST', '-DFIXTURE_NO_MAIN', '-DFUZZ_REPLAY',
                                '-Wno-empty-body', '-ffreestanding',
-                               *[w for d in INCLUDES for w in ('-I', d)],
+                               *include_flags(True),
                                *metadata(source, 'fuzz-cflags', arch), '-o', out, str(source), *deps]
             item['data'] = list(map(str, corpus))
             item['corpus'] = str(Path('tests/fuzz/corpus', name))
