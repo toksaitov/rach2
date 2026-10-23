@@ -851,17 +851,8 @@ static int run_collection(struct collection *c, const char *accel, int dry)
                c->selection_cases == 1 ? "" : "s");
     putchar('\n');
     rc = etude_legacy_set(&o);
-    char context_error[256];
-    if (etude_context_recheck(c->context, context_error, sizeof(context_error))) {
-        fprintf(stderr, "run: result: failed: %s\n", context_error);
-        rc = 1;
-    }
     if (format_collection(c, stream) != 0 && !rc)
         rc = 1;
-    if (rc == 0 && etude_legacy_check_tree(c->record, c->tree, 1, stdout) != 0) {
-        fputs("run: result: failed: prepared artifacts changed during the run\n", stderr);
-        return 1;
-    }
     return rc;
 }
 

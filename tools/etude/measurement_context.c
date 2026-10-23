@@ -590,7 +590,7 @@ int etude_context_eligible(const struct etude_measurement_context *c)
 {
     return c && c->eligible && c->observer[0].path;
 }
-int etude_context_recheck(struct etude_measurement_context *c, char *error, size_t size)
+int etude_context_recheck(const struct etude_measurement_context *c, char *error, size_t size)
 {
     if (!c)
         return 0;
