@@ -11,7 +11,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "etude/scenario.h"
+#include "netcase.h"
 #include "sha256.h"
 
 /* The most of an SSH command's output that is read back. */
@@ -22,6 +22,7 @@
  * SSH server. */
 static char key[4096];
 static char port[16];
+static struct net_case network;
 
 /**
  * Say whether files `a` and `b` have the same bytes: 1 when they do, 0 when
@@ -108,28 +109,8 @@ static int has_line(const char *text, const char *line)
  */
 static int private_key(struct etude_case *c)
 {
-    const char *from = etude_artifact(c, "demo-key"), *to = etude_evidence(c, "ssh.key");
-    FILE *in = from != NULL ? fopen(from, "rb") : NULL, *out = NULL;
-    char buf[4096];
-    size_t n;
-    int fd = -1, rc = -1;
-
-    if (in != NULL && to != NULL && (fd = open(to, O_WRONLY | O_CREAT | O_TRUNC, 0600)) >= 0 &&
-        fchmod(fd, 0600) == 0 && (out = fdopen(fd, "wb")) != NULL) {
-        fd = -1;
-        while ((n = fread(buf, 1, sizeof(buf), in)) > 0 && fwrite(buf, 1, n, out) == n)
-            ;
-        rc = ferror(in) == 0 && feof(in) ? 0 : -1;
-    }
-    if (out != NULL && fclose(out) != 0)
-        rc = -1;
-    if (fd >= 0)
-        close(fd);
-    if (in != NULL)
-        fclose(in);
-    if (to != NULL)
-        snprintf(key, sizeof(key), "%s", to);
-    return rc;
+    (void)c;
+    return net_key(&network, "demo-key", key, sizeof(key)) != NULL ? 0 : -1;
 }
 
 /**
@@ -158,13 +139,15 @@ static enum etude_status ssh_run(struct etude_case *c, const char *command, cons
                     "root@127.0.0.1",
                     (char *)command,
                     NULL};
-    struct etude_termination end;
-    enum etude_status st = etude_host(c, argv, output, &end);
+    struct net_run run;
+    enum etude_status st = net_host(&network, argv, output, &run);
+    int ok = net_exited0(&run);
 
     read_text(etude_evidence(c, output), buf, size);
+    net_run_free(&run);
     if (st != ETUDE_OK)
         return st;
-    return end.end == ETUDE_END_EXITED && end.value == 0 ? ETUDE_OK : ETUDE_FAILED;
+    return ok ? ETUDE_OK : ETUDE_FAILED;
 }
 
 /**
@@ -330,11 +313,10 @@ int etude_scenario(struct etude_case *c)
 {
     int failed = 1;
 
+    net_case(&network, c);
     if (private_key(c) != 0)
         fprintf(stderr, "diskdiag: the demo key cannot be copied\n");
     else
         failed = control(c) != 0 || diagnostic(c) != 0 || absent(c) != 0;
-    if (key[0] != '\0')
-        remove(key);
-    return failed;
+    return net_end(&network) != 0 || failed;
 }

@@ -475,12 +475,7 @@ static void recovery(struct drill *s, struct net_boot *b)
 static void repair(struct drill *s)
 {
     char image[4096] = "", command[128], want[64], line[200];
-    char *argv[] = {"sh",
-                    "-c",
-                    "f=$1; shift; gzip -c \"$f\" | \"$@\"",
-                    "sh",
-                    image,
-                    NET_SSH,
+    char *argv[] = {NET_SSH,
                     NET_SSH_KEY(s->key),
                     "-T",
                     "-p",
@@ -491,13 +486,13 @@ static void repair(struct drill *s)
     struct net_run r;
 
     net_step(&s->u, "repair");
-    snprintf(command, sizeof(command), "gunzip | reflash /dev/disk0 %ld %ld", s->at.root,
+    snprintf(command, sizeof(command), "reflash /dev/disk0 %ld %ld", s->at.root,
              s->at.root_bytes);
     snprintf(want, sizeof(want), "wrote %ld bytes", s->at.root_bytes);
     if (net_path(&s->u, "root.img", image, sizeof(image)) != NULL &&
         copy_bytes(s->disk, s->at.root, s->at.root_bytes, image) != 0)
         net_fail(&s->u, "the root could not be read off the disk");
-    net_host(&s->u, argv, "repair", &r);
+    net_ssh_input(&s->u, argv, image, "repair", &r);
     net_assert(&s->u, "repair-length", has(r.out, want),
                "the repair did not report the whole length written: %s",
                said(&r, line, sizeof(line)));

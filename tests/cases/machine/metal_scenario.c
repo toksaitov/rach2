@@ -250,12 +250,7 @@ static void make_send(struct metal_case *s, const char *path)
 static void transfer(struct metal_case *s)
 {
     char send[4096] = "", host[64], guest[64], line[160], *text;
-    char *put[] = {"sh",
-                   "-c",
-                   "f=$1; shift; exec \"$@\" < \"$f\"",
-                   "sh",
-                   send,
-                   NET_SSH,
+    char *put[] = {NET_SSH,
                    NET_SSH_KEY(s->demo_key),
                    "-T",
                    "-p",
@@ -272,7 +267,7 @@ static void transfer(struct metal_case *s)
     net_host(&s->u, sum, "send.cksum", &r);
     crc_and_size(r.out, host, sizeof(host));
     net_run_free(&r);
-    net_host(&s->u, put, "sent", &r);
+    net_ssh_input(&s->u, put, send, "sent", &r);
     if (net_ok(&s->u) && !net_exited0(&r))
         net_fail(&s->u, "the file could not be sent: %s", said(&r, line, sizeof(line)));
     net_run_free(&r);

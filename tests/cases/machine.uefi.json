@@ -10,7 +10,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"disk": "the GPT disk mkdisk_grub.sh makes with the installer's ext2 root of 64 MiB, which stages the Doom WAD", "least_picture_colors": 65, "most_console_colors": 16}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["ssh"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
         "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["uefi-disk"]}],
@@ -18,6 +18,8 @@
         "cleanup": "libetude-case ends the machine and the game's ssh and removes the copy of the disk, which it keeps after a failure; the scenario removes its copy of the demo key and the screen dumps after a pass"
       },
       "steps": [
+        {"step_id": "channel-client", "stage": "boot", "machine": "channel-client",
+         "does": "boot the declared Rach2 OpenSSH client and open its framed command channel"},
         {"step_id": "boot", "stage": "boot", "machine": "uefi",
          "does": "boot the disk by OVMF until init starts the SSH server and the server answers, and read the firmware's and the kernel's records, and the uid, bootctl status and the game's WAD over SSH"},
         {"step_id": "screen", "stage": "execute", "machine": "uefi",
@@ -26,6 +28,11 @@
          "does": "run the game over SSH until it reports its first frame, count the screen's colors, stop the ssh, kill the game, wait until it has gone, count the colors again and end the machine with QMP's quit"}
       ],
       "machines": [
+        {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null,
+         "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "ahci"}],
+         "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"],
+         "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]},
+         "console": "serial", "qmp": true, "helper": true},
         {"machine_id": "uefi",
          "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "uefi-disk", "bus": "ide"}], "cpu": "max", "processors": 1,
                   "memory_bytes": 536870912, "firmware": "ovmf",
@@ -34,10 +41,7 @@
                   "boot_options": []},
          "console": "serial", "qmp": true, "helper": false}
       ],
-      "services": [
-        {"service_id": "doom", "program": "ssh", "ready": "doom: 1 frames in ",
-         "does": "run the game as root over SSH with its output on the connection, until the case stops the ssh"}
-      ],
+      "services": [],
       "assertions": [
         {"assertion_id": "booted-disk", "checks": "the firmware's BdsDxe says on the serial line that it starts the boot option of the IDE disk, UEFI QEMU HARDDISK", "source": "scenario"},
         {"assertion_id": "root-by-guid", "checks": "the kernel names its root GPTID=GUID,3, /dev/disk0p3, ext2", "source": "scenario"},
@@ -54,7 +58,7 @@
       "branches": [],
       "termination": {"end": "exited", "value": 0},
       "progress": [
-        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}
       ],
       "bounds": {
         "case": {"floor_us": 5000000, "initial_us": 1200000000, "ceiling_us": 3600000000},
@@ -64,9 +68,10 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 671088640, "disk_bytes": 268435456,
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1207959552, "disk_bytes": 4563402752,
                     "locks": [], "ports": 1, "loop_devices": 0},
       "prepare": [
+        {"name": "channel-client-image", "node": "images/gnu-test.disk", "per_architecture": true},
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "uefi-disk", "node": "tests/cases/machine/uefi/disk.img", "per_architecture": true},
         {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
@@ -84,7 +89,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"disk": "the GPT disk of machine.uefi.installed", "next_entry": "recovery"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["ssh"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
         "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["uefi-disk"]}],
@@ -92,12 +97,19 @@
         "cleanup": "libetude-case ends the machine and removes the copy of the disk, which it keeps after a failure; the scenario removes its copy of the demo key after a pass"
       },
       "steps": [
+        {"step_id": "channel-client", "stage": "boot", "machine": "channel-client",
+         "does": "boot the declared Rach2 OpenSSH client and open its framed command channel"},
         {"step_id": "arm", "stage": "execute",
          "does": "find GRUB's environment block in the copy with binfind and set next_entry=recovery in it, keeping every other line"},
         {"step_id": "boot", "stage": "boot", "machine": "uefi",
          "does": "boot the copy by OVMF until init starts the SSH server and the server answers, read the command line and bootctl status of the boot partition over SSH, and end the machine with QMP's quit"}
       ],
       "machines": [
+        {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null,
+         "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "ahci"}],
+         "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"],
+         "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]},
+         "console": "serial", "qmp": true, "helper": true},
         {"machine_id": "uefi",
          "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "uefi-disk", "bus": "ide"}], "cpu": "max", "processors": 1,
                   "memory_bytes": 536870912, "firmware": "ovmf",
@@ -114,7 +126,7 @@
       "branches": [],
       "termination": {"end": "exited", "value": 0},
       "progress": [
-        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
       ],
       "bounds": {
         "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 2700000000},
@@ -124,9 +136,10 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 671088640, "disk_bytes": 268435456,
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1207959552, "disk_bytes": 4563402752,
                     "locks": [], "ports": 1, "loop_devices": 0},
       "prepare": [
+        {"name": "channel-client-image", "node": "images/gnu-test.disk", "per_architecture": true},
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "uefi-disk", "node": "tests/cases/machine/uefi/disk.img", "per_architecture": true},
         {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
@@ -144,7 +157,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"disk": "the GPT disk of machine.uefi.installed", "deleted": "::/boot/grub/grub.cfg of partition 1"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["ssh", "mdel"], "features": {}},
+      "requirements": {"host_api": "c", "tools": ["mdel"], "features": {}},
       "execution": {
         "program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
         "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["uefi-disk"]}],
@@ -152,12 +165,19 @@
         "cleanup": "libetude-case ends the machine and removes the copy of the disk, which it keeps after a failure; the scenario removes its copy of the demo key after a pass"
       },
       "steps": [
+        {"step_id": "channel-client", "stage": "boot", "machine": "channel-client",
+         "does": "boot the declared Rach2 OpenSSH client and open its framed command channel"},
         {"step_id": "delete", "stage": "execute",
          "does": "read partition 1's offset off the copy's GUID table and delete /boot/grub/grub.cfg from its FAT with mdel"},
         {"step_id": "boot", "stage": "boot", "machine": "uefi",
          "does": "boot the copy by OVMF until init starts the SSH server and the server answers, read the command line over SSH, and end the machine with QMP's quit"}
       ],
       "machines": [
+        {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null,
+         "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "ahci"}],
+         "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"],
+         "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]},
+         "console": "serial", "qmp": true, "helper": true},
         {"machine_id": "uefi",
          "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "uefi-disk", "bus": "ide"}], "cpu": "max", "processors": 1,
                   "memory_bytes": 536870912, "firmware": "ovmf",
@@ -173,7 +193,7 @@
       "branches": [],
       "termination": {"end": "exited", "value": 0},
       "progress": [
-        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
       ],
       "bounds": {
         "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 2700000000},
@@ -183,9 +203,10 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 671088640, "tooling_memory_bytes": 1476395008, "disk_bytes": 268435456,
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1207959552, "tooling_memory_bytes": 1476395008, "disk_bytes": 4563402752,
                     "locks": [], "ports": 1, "loop_devices": 0},
       "prepare": [
+        {"name": "channel-client-image", "node": "images/gnu-test.disk", "per_architecture": true},
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "uefi-disk", "node": "tests/cases/machine/uefi/disk.img", "per_architecture": true},
         {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
@@ -202,7 +223,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"stick": "install-test-stick.img, which mkinstallstick.sh makes"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["ssh"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
         "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],
@@ -210,10 +231,17 @@
         "cleanup": "libetude-case ends the machine and removes the copy of the stick, which it keeps after a failure; the scenario removes its copy of the demo key after a pass"
       },
       "steps": [
+        {"step_id": "channel-client", "stage": "boot", "machine": "channel-client",
+         "does": "boot the declared Rach2 OpenSSH client and open its framed command channel"},
         {"step_id": "boot", "stage": "boot", "machine": "uefi",
          "does": "boot the stick by OVMF until init starts the SSH server and the server answers, read the partitions over SSH, and end the machine with QMP's quit"}
       ],
       "machines": [
+        {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null,
+         "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "ahci"}],
+         "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"],
+         "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]},
+         "console": "serial", "qmp": true, "helper": true},
         {"machine_id": "uefi",
          "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick", "bus": "device", "id": "stick"}], "cpu": "max", "processors": 1,
                   "memory_bytes": 536870912, "firmware": "ovmf",
@@ -231,7 +259,7 @@
       "branches": [],
       "termination": {"end": "exited", "value": 0},
       "progress": [
-        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
       ],
       "bounds": {
         "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 2700000000},
@@ -241,9 +269,10 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 671088640, "disk_bytes": 268435456,
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1207959552, "disk_bytes": 4563402752,
                     "locks": [], "ports": 1, "loop_devices": 0},
       "prepare": [
+        {"name": "channel-client-image", "node": "images/gnu-test.disk", "per_architecture": true},
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "stick", "node": "images/install-test-stick.img", "per_architecture": true},
         {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
@@ -260,7 +289,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"cd": "the recovery ISO, with the recovery key"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["ssh"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
         "isolation": [{"fixture": "scratch"}],
@@ -268,10 +297,17 @@
         "cleanup": "libetude-case ends the machine; the CD is the artifact, read-only; the scenario removes its copy of the demo key after a pass"
       },
       "steps": [
+        {"step_id": "channel-client", "stage": "boot", "machine": "channel-client",
+         "does": "boot the declared Rach2 OpenSSH client and open its framed command channel"},
         {"step_id": "boot", "stage": "boot", "machine": "uefi",
          "does": "boot the CD by OVMF until init starts the SSH server and the server answers, log in over SSH, and end the machine with QMP's quit"}
       ],
       "machines": [
+        {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null,
+         "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "ahci"}],
+         "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"],
+         "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]},
+         "console": "serial", "qmp": true, "helper": true},
         {"machine_id": "uefi",
          "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "recovery-iso", "bus": "ide", "media": "cdrom"}], "cpu": "max", "processors": 1,
                   "memory_bytes": 536870912, "firmware": "ovmf",
@@ -287,7 +323,7 @@
       "branches": [],
       "termination": {"end": "exited", "value": 0},
       "progress": [
-        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
       ],
       "bounds": {
         "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 2700000000},
@@ -297,9 +333,10 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 671088640, "disk_bytes": 16777216,
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1207959552, "disk_bytes": 4311744512,
                     "locks": [], "ports": 1, "loop_devices": 0},
       "prepare": [
+        {"name": "channel-client-image", "node": "images/gnu-test.disk", "per_architecture": true},
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "recovery-iso", "node": "images/rach2-recovery-with-key.iso", "per_architecture": true},
         {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
@@ -316,7 +353,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"disk": "the GPT disk of machine.uefi.installed, built with its core in tail A", "core": "vendor/grub/gpt-core.img, checked against the GRUB manifest"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["ssh", "sh"], "features": {}},
+      "requirements": {"host_api": "c", "tools": ["sh"], "features": {}},
       "execution": {
         "program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
         "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["uefi-disk"]}],
@@ -324,6 +361,8 @@
         "cleanup": "libetude-case ends the machine and removes the copy of the disk, which it keeps after a failure; the scenario removes its copy of the demo key after a pass"
       },
       "steps": [
+        {"step_id": "channel-client", "stage": "boot", "machine": "channel-client",
+         "does": "boot the declared Rach2 OpenSSH client and open its framed command channel"},
         {"step_id": "bios-boot", "stage": "boot", "machine": "bios",
          "does": "read the BIOS boot partition and the entry sector's blocklist off the copy's GUID table, keep the table's sectors, and boot the copy by SeaBIOS until init starts the SSH server and the server answers"},
         {"step_id": "swap-b", "stage": "execute", "machine": "bios",
@@ -334,6 +373,11 @@
          "does": "boot the copy by OVMF until the login prompt and end the machine with QMP's quit"}
       ],
       "machines": [
+        {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null,
+         "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "ahci"}],
+         "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"],
+         "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]},
+         "console": "serial", "qmp": true, "helper": true},
         {"machine_id": "bios",
          "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "uefi-disk", "bus": "ide"}], "cpu": "max", "processors": 1,
                   "memory_bytes": 134217728, "firmware": "seabios",
@@ -365,7 +409,7 @@
       "branches": [],
       "termination": {"end": "exited", "value": 0},
       "progress": [
-        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
       ],
       "bounds": {
         "case": {"floor_us": 5000000, "initial_us": 1800000000, "ceiling_us": 5400000000},
@@ -375,9 +419,10 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 939524096, "disk_bytes": 268435456,
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1476395008, "disk_bytes": 4563402752,
                     "locks": [], "ports": 1, "loop_devices": 0},
       "prepare": [
+        {"name": "channel-client-image", "node": "images/gnu-test.disk", "per_architecture": true},
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "uefi-disk", "node": "tests/cases/machine/uefi/disk.img", "per_architecture": true},
         {"name": "gpt-core", "node": "tests/cases/machine/sealed/gpt-core.img", "per_architecture": false},
@@ -395,7 +440,7 @@
       "domain": "machine",
       "architectures": ["x86_64"],
       "workload": {"arguments": [], "inputs": {"disk_bytes": 4398046511104, "stick": "install-test-stick.img", "answers": "the NVMe disk, root's password twice, the account owner and its password twice, the demonstration key as its authorized key, no recovery key, the grow, and the disk again"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["ssh", "sh"], "features": {}},
+      "requirements": {"host_api": "c", "tools": ["sh"], "features": {}},
       "execution": {
         "program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
         "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],
@@ -403,6 +448,8 @@
         "cleanup": "libetude-case ends the machine and removes the copies of the stick and the sparse disk, which it keeps after a failure; the scenario removes its copy of the demo key and the answers after a pass"
       },
       "steps": [
+        {"step_id": "channel-client", "stage": "boot", "machine": "channel-client",
+         "does": "boot the declared Rach2 OpenSSH client and open its framed command channel"},
         {"step_id": "install", "stage": "boot", "machine": "install",
          "does": "boot the stick by OVMF beside the empty NVMe disk until the server answers, answer rach2-install over SSH, sync, and end the machine with QMP's quit"},
         {"step_id": "boot", "stage": "execute", "machine": "installed",
@@ -411,6 +458,11 @@
          "does": "boot the kernel given to QEMU with rach2.root=ext2 and the NVMe disk until the kernel names its root, and end the machine with QMP's quit"}
       ],
       "machines": [
+        {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null,
+         "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "ahci"}],
+         "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"],
+         "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]},
+         "console": "serial", "qmp": true, "helper": true},
         {"machine_id": "install",
          "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick", "bus": "device", "id": "stick"}, {"name": "wide", "bus": "nvme", "serial": "rach2big", "discard": true, "size_bytes": 4398046511104}], "cpu": "max", "processors": 1,
                   "memory_bytes": 536870912, "firmware": "ovmf",
@@ -441,7 +493,7 @@
       "branches": [],
       "termination": {"end": "exited", "value": 0},
       "progress": [
-        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}
       ],
       "bounds": {
         "case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 7200000000},
@@ -451,9 +503,10 @@
           "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}
         }
       },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 1610612736, "disk_bytes": 4294967296,
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 2147483648, "disk_bytes": 8589934592,
                     "locks": [], "ports": 1, "loop_devices": 0},
       "prepare": [
+        {"name": "channel-client-image", "node": "images/gnu-test.disk", "per_architecture": true},
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "stick", "node": "images/install-test-stick.img", "per_architecture": true},
         {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
@@ -470,7 +523,7 @@
       "domain": "machine",
       "architectures": ["i686"],
       "workload": {"arguments": [], "inputs": {"disk_bytes": 4398046511104, "stick": "install-test-stick.img", "answers": "the NVMe disk, root's password twice, the account owner and its password twice, the demonstration key as its authorized key, no recovery key, the grow, and the disk again"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["ssh", "sh"], "features": {}},
+      "requirements": {"host_api": "c", "tools": ["sh"], "features": {}},
       "execution": {
         "program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
         "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],
@@ -478,6 +531,8 @@
         "cleanup": "libetude-case ends the machine and removes the copies of the stick and the sparse disk, which it keeps after a failure; the scenario removes its copy of the demo key and the answers after a pass"
       },
       "steps": [
+        {"step_id": "channel-client", "stage": "boot", "machine": "channel-client",
+         "does": "boot the declared Rach2 OpenSSH client and open its framed command channel"},
         {"step_id": "install", "stage": "boot", "machine": "install",
          "does": "boot the stick by SeaBIOS beside the empty NVMe disk until the server answers, answer rach2-install over SSH, sync, and end the machine with QMP's quit"},
         {"step_id": "boot", "stage": "execute", "machine": "installed",
@@ -486,6 +541,11 @@
          "does": "boot the kernel given to QEMU with rach2.root=ext2 and the NVMe disk until the kernel names its root, and end the machine with QMP's quit"}
       ],
       "machines": [
+        {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null,
+         "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "ahci"}],
+         "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"],
+         "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]},
+         "console": "serial", "qmp": true, "helper": true},
         {"machine_id": "install",
          "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick", "bus": "device", "id": "stick"}, {"name": "wide", "bus": "nvme", "serial": "rach2big", "discard": true, "size_bytes": 4398046511104}], "cpu": "max", "processors": 1,
                   "memory_bytes": 536870912, "firmware": "seabios",
@@ -514,7 +574,7 @@
       "branches": [],
       "termination": {"end": "exited", "value": 0},
       "progress": [
-        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}
       ],
       "bounds": {
         "case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 7200000000},
@@ -524,9 +584,10 @@
           "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}
         }
       },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 1610612736, "disk_bytes": 4294967296,
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 2147483648, "disk_bytes": 8589934592,
                     "locks": [], "ports": 1, "loop_devices": 0},
       "prepare": [
+        {"name": "channel-client-image", "node": "images/gnu-test.disk", "per_architecture": true},
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "stick", "node": "images/install-test-stick.img", "per_architecture": true},
         {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
@@ -543,7 +604,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"disk": "the GPT disk of machine.uefi.installed with RACH over four bytes of its primary header's checksum", "stick": "install-test-stick.img"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["ssh"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
         "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "uefi-disk"]}],
@@ -551,12 +612,19 @@
         "cleanup": "libetude-case ends the machine and removes the copies of the stick and the disk, which it keeps after a failure; the scenario removes its copy of the demo key after a pass"
       },
       "steps": [
+        {"step_id": "channel-client", "stage": "boot", "machine": "channel-client",
+         "does": "boot the declared Rach2 OpenSSH client and open its framed command channel"},
         {"step_id": "relocate", "stage": "boot", "machine": "rescue",
          "does": "write RACH over the primary header's checksum in the copy, boot the stick by SeaBIOS beside the disk until the server answers, run diskctl relocate /dev/disk0 and sync over SSH, end the machine with QMP's quit, and check the copy's primary header"},
         {"step_id": "repaired", "stage": "execute", "machine": "repaired",
          "does": "boot the disk alone by SeaBIOS until the login prompt and end the machine with QMP's quit"}
       ],
       "machines": [
+        {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null,
+         "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "ahci"}],
+         "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"],
+         "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]},
+         "console": "serial", "qmp": true, "helper": true},
         {"machine_id": "rescue",
          "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick", "bus": "device", "id": "stick"}, {"name": "uefi-disk", "bus": "ide"}], "cpu": "max", "processors": 1,
                   "memory_bytes": 536870912, "firmware": "seabios",
@@ -579,7 +647,7 @@
       "branches": [],
       "termination": {"end": "exited", "value": 0},
       "progress": [
-        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
       ],
       "bounds": {
         "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 2700000000},
@@ -589,9 +657,10 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 939524096, "disk_bytes": 536870912,
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1476395008, "disk_bytes": 4831838208,
                     "locks": [], "ports": 1, "loop_devices": 0},
       "prepare": [
+        {"name": "channel-client-image", "node": "images/gnu-test.disk", "per_architecture": true},
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "uefi-disk", "node": "tests/cases/machine/uefi/disk.img", "per_architecture": true},
         {"name": "stick", "node": "images/install-test-stick.img", "per_architecture": true},

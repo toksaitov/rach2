@@ -1,23 +1,10 @@
 /*
- * gnu_scenario.c: the scenario of the gnu cases, tests/cases/machine.gnu.json:
- * the GNU system on its ext2 root, driven over OpenSSH with nobody at its
- * console.
- *
- * Each case boots a machine of its own from an overlay of the GNU system's
- * disk, so that what one case writes no other case sees, and waits for
- * init's record that it started OpenSSH's sshd and then for the server's own
- * answer, since the server makes its host keys on a first boot before it
- * listens. The case `logins` logs in by key and by password and moves a
- * file with scp and sftp; the case `console` logs in as root at the serial
- * console and runs tmux there. Every other case is the row of
- * tests/system/gnu_rows.sh that the last part of its identity names: the
- * scenario puts the script on the machine with scp, with the files the row
- * reads, and runs the row as root under bash in a session of its own.
- *
- * Each ssh runs as a host tool: by key in batch mode, and by password under
- * ptydrive, which gives ssh a terminal, answers its prompt from the
- * environment and counts the prompts. The row's verdict is its own, the line
- * `GNUROW OK NAME` beside ssh's status 0.
+ * gnu_scenario.c: the GNU system's cases (machine.gnu.json). Each case
+ * boots an overlay of the prepared GNU root. The login and console cases
+ * use OpenSSH in a declared Rach2 client machine; their credentials,
+ * terminal windows, scp and sftp are the operations being tested. Other
+ * rows log in at the target console, open etude-guest's framed channel,
+ * transfer their inputs and run the installed GNU programs there.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -114,6 +101,10 @@ static enum etude_status as_user(struct gnu_case *s, const char *user, const cha
 static enum etude_status as_root(struct gnu_case *s, const char *command, const char *output,
                                  struct net_run *r)
 {
+    if (strcmp(s->row, "logins") != 0 && strcmp(s->row, "console") != 0) {
+        const char *argv[] = {"/bin/bash", "-c", command, NULL};
+        return net_guest(&s->u, s->b.m, argv, NULL, NULL, output, r);
+    }
     return as_user(s, "root", s->root_key, command, output, r);
 }
 
@@ -178,6 +169,12 @@ static int copy_to(struct gnu_case *s, const char *name, const char *remote, con
     if (path == NULL) {
         net_fail(&s->u, "artifact %s is not the case's", name);
         return 0;
+    }
+    if (strcmp(s->row, "logins") != 0) {
+        enum etude_status st = etude_guest_put(s->b.m, path, remote, "0644");
+        if (st != ETUDE_OK)
+            net_fail(&s->u, "the row's input could not be transferred to the guest");
+        return st == ETUDE_OK;
     }
     snprintf(to, sizeof(to), "root@127.0.0.1:%s", remote);
     if (net_host(&s->u, argv, output, &r) != ETUDE_OK)
@@ -436,7 +433,7 @@ static void row(struct gnu_case *s)
     snprintf(pattern, sizeof(pattern), "GNUROW FAIL %s", s->row);
     if (has_line(r.out, ok))
         net_assert(&s->u, "row", net_exited0(&r),
-                   "the row printed its OK, but ssh did not exit with status 0");
+                   "the row printed its OK, but its command did not exit with status 0");
     else
         net_assert(&s->u, "row", 0, "%s", line_of(&r, pattern, line, sizeof(line)));
     net_run_free(&r);
@@ -460,7 +457,8 @@ int etude_scenario(struct etude_case *c)
     snprintf(s.port, sizeof(s.port), "%u", port);
     if (port == 0)
         net_fail(&s.u, "the case has no port");
-    net_key(&s.u, "demo-key", s.root_key, sizeof(s.root_key));
+    if (strcmp(s.row, "logins") == 0 || strcmp(s.row, "console") == 0)
+        net_key(&s.u, "demo-key", s.root_key, sizeof(s.root_key));
     if (strcmp(s.row, "logins") == 0) {
         net_secret(&s.u, "demo-password", s.root_password, sizeof(s.root_password));
         net_secret(&s.u, "test-password", s.test_password, sizeof(s.test_password));
@@ -474,7 +472,11 @@ int etude_scenario(struct etude_case *c)
         up(&s, 0);
         console(&s);
     } else {
+        net_secret(&s.u, "demo-password", s.root_password, sizeof(s.root_password));
         up(&s, 0);
+        if (net_login(&s.b, "root", s.root_password, "# ") == ETUDE_OK &&
+            etude_guest_open(s.b.m) != ETUDE_OK)
+            net_fail(&s.u, "the GNU guest command channel did not open");
         stage(&s, &sntp);
         row(&s);
         if (sntp != NULL && etude_service_stop(sntp, &end) != ETUDE_OK)

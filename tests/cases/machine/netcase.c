@@ -11,6 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
+
 
 /* The longest assertion's detail. */
 #define NET_DETAIL_MAX 160
@@ -68,6 +70,14 @@ void net_case(struct net_case *u, struct etude_case *c)
     memset(u, 0, sizeof(*u));
     u->c = c;
     u->st = ETUDE_OK;
+    if (etude_has_machine(c, "channel-client")) {
+        struct etude_termination end;
+        u->st = etude_step(c, "channel-client");
+        if (u->st == ETUDE_OK)
+            u->st = etude_boot(c, "channel-client", NULL, &u->client, &end);
+        if (u->st != ETUDE_OK)
+            snprintf(u->why, sizeof(u->why), "the declared Rach2 SSH client did not start");
+    }
 }
 
 int net_ok(const struct net_case *u)
@@ -274,6 +284,9 @@ enum etude_status net_host(struct net_case *u, char *const argv[], const char *o
     r->end.value = -1;
     if (u->st != ETUDE_OK)
         return u->st;
+    if (strcmp(argv[0], "ssh") == 0 || strcmp(argv[0], "scp") == 0 ||
+        strcmp(argv[0], "sftp") == 0 || strcmp(argv[0], "ptydrive") == 0)
+        return net_ssh_input(u, argv, NULL, output, r);
     st = etude_host(u->c, argv, output, &r->end);
     if (st != ETUDE_OK)
         return failed(u, st, "%s: %s", argv[0], status_text(st));
@@ -283,6 +296,246 @@ enum etude_status net_host(struct net_case *u, char *const argv[], const char *o
     path = etude_evidence(u->c, name);
     r->err = net_file(path != NULL ? path : "");
     return ETUDE_OK;
+}
+
+/* The most argument words accepted by the guest's invocation. */
+#define CLIENT_WORDS 128
+
+/* A translated OpenSSH invocation and an optional sftp return file. */
+struct client_command {
+    const char *argv[CLIENT_WORDS];
+    char *owned[CLIENT_WORDS];
+    size_t count;
+    char returned[160];
+    char evidence[256];
+};
+
+/** Free the translated words after the channel has copied its invocation. */
+static void client_free(struct client_command *a)
+{
+    size_t i;
+
+    for (i = 0; i < a->count; i++)
+        free(a->owned[i]);
+}
+
+/** Copy one translated word, keeping it until the invocation is stored. */
+static const char *client_word(struct client_command *a, const char *word)
+{
+    size_t n = strlen(word) + 1;
+    char *p = malloc(n);
+
+    if (p == NULL || a->count + 1 >= CLIENT_WORDS) {
+        free(p);
+        return NULL;
+    }
+    memcpy(p, word, n);
+    a->owned[a->count] = p;
+    a->argv[a->count++] = p;
+    a->argv[a->count] = NULL;
+    return p;
+}
+
+/** Put a local input on the Rach2 client and return its temporary path. */
+static int client_file(struct net_case *u, const char *from, char path[160])
+{
+    snprintf(path, 160, "/tmp/etude-client-%u", ++u->client_files);
+    if (etude_guest_put(u->client, from, path, "0600") == ETUDE_OK)
+        return 1;
+    net_fail(u, "the SSH client's input could not be transferred");
+    return 0;
+}
+
+/** Replace the one get of a scenario's sftp batch with a client-local
+ * destination. The finished file is fetched through the framed channel. */
+static int client_batch(struct net_case *u, struct client_command *a, const char *from,
+                         char path[160])
+{
+    char *text = net_file(from), command[16], remote[4096], local[4096];
+    char evidence[80], batch[4096];
+    const char *base;
+    FILE *f;
+    int ok;
+
+    ok = sscanf(text, "%15s %4095s %4095[^\n]", command, remote, local) == 3 &&
+         strcmp(command, "get") == 0 && strchr(remote, '"') == NULL;
+    free(text);
+    if (!ok) {
+        net_fail(u, "the SSH client's sftp batch is not one file retrieval");
+        return 0;
+    }
+    base = strrchr(local, '/');
+    base = base != NULL ? base + 1 : local;
+    if (strlen(base) >= sizeof(a->evidence)) {
+        net_fail(u, "the sftp return evidence name is too long");
+        return 0;
+    }
+    strcpy(a->evidence, base);
+    snprintf(a->returned, sizeof(a->returned), "/tmp/etude-return-%u", ++u->client_files);
+    snprintf(evidence, sizeof(evidence), "client-batch-%u", u->client_files);
+    if (net_path(u, evidence, batch, sizeof(batch)) == NULL)
+        return 0;
+    f = fopen(batch, "wb");
+    if (f == NULL)
+        return 0;
+    ok = fprintf(f, "get \"%s\" \"%s\"\n", remote, a->returned) > 0;
+    if (fclose(f) != 0)
+        ok = 0;
+    return ok && client_file(u, batch, path);
+}
+
+/** Translate only the client invocation: local file arguments are copied,
+ * and its destination reaches the target's host forward through QEMU's
+ * gateway. The remote command string is left byte for byte. */
+static int client_arguments(struct net_case *u, char *const argv[], struct client_command *a)
+{
+    struct stat st;
+    char path[160], address[512];
+    const char *word, *at;
+    size_t i;
+
+    memset(a, 0, sizeof(*a));
+    if (u->client == NULL) {
+        net_fail(u, "the manifest declares no Rach2 SSH client");
+        return 0;
+    }
+    for (i = 0; argv[i] != NULL; i++) {
+        word = argv[i];
+        if (i == 0)
+            word = strcmp(word, "ptydrive") == 0 ? "/ptydrive" :
+                   strcmp(word, "scp") == 0 ? "/usr/bin/scp" :
+                   strcmp(word, "sftp") == 0 ? "/usr/bin/sftp" : "/usr/bin/ssh";
+        else if (i > 0 && strcmp(argv[i - 1], "-b") == 0) {
+            if (!client_batch(u, a, word, path))
+                return 0;
+            word = path;
+        } else if (word[0] != '-' && stat(word, &st) == 0 && S_ISREG(st.st_mode)) {
+            if (!client_file(u, word, path))
+                return 0;
+            word = path;
+        } else if ((at = strstr(word, "@127.0.0.1")) != NULL &&
+                   (at[10] == '\0' || at[10] == ':')) {
+            snprintf(address, sizeof(address), "%.*s@10.0.2.2%s", (int)(at - word), word, at + 10);
+            word = address;
+        }
+        if (client_word(a, word) == NULL) {
+            net_fail(u, "the SSH client's invocation is too long");
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** Give the default environment and the password only to the Rach2
+ * terminal driver, which redacts it before writing either transcript. */
+static void client_environment(const char *env[5], char password[512])
+{
+    const char *value = getenv("RACH2_PASSWORD");
+
+    env[0] = "PATH=/bin:/sbin:/usr/bin:/usr/sbin:/";
+    env[1] = "HOME=/root";
+    env[2] = "TERM=vt100";
+    env[3] = NULL;
+    env[4] = NULL;
+    if (value != NULL) {
+        snprintf(password, 512, "RACH2_PASSWORD=%s", value);
+        env[3] = password;
+    }
+}
+
+/** Read a client's result evidence into the ordinary network result. */
+static enum etude_status client_result(struct net_case *u, const char *output,
+                                        enum etude_status st,
+                                        const struct etude_guest_result *result, struct net_run *r)
+{
+    char name[256];
+    const char *path;
+
+    r->end = result->termination;
+    if (st == ETUDE_OK && (!result->complete || result->cleanup != ETUDE_CLEANUP_CONFIRMED))
+        st = ETUDE_LOST;
+    if (st != ETUDE_OK)
+        return failed(u, st, "Rach2 SSH client: %s", status_text(st));
+    path = etude_evidence(u->c, output);
+    r->out = net_file(path != NULL ? path : "");
+    snprintf(name, sizeof(name), "%s.err", output);
+    path = etude_evidence(u->c, name);
+    r->err = net_file(path != NULL ? path : "");
+    return ETUDE_OK;
+}
+
+enum etude_status net_guest(struct net_case *u, struct etude_case_machine *m,
+                            const char *const argv[], const char *const env[],
+                            const char *input, const char *output, struct net_run *r)
+{
+    struct etude_guest_result result;
+    enum etude_status st;
+
+    memset(r, 0, sizeof(*r));
+    r->end.end = ETUDE_END_LOST;
+    r->end.value = -1;
+    if (!net_ok(u))
+        return u->st;
+    st = etude_guest_command(m, argv, env, input, output, &result);
+    return client_result(u, output, st, &result, r);
+}
+
+enum etude_status net_ssh_input(struct net_case *u, char *const argv[], const char *input,
+                                const char *output, struct net_run *r)
+{
+    struct client_command a;
+    struct etude_guest_result result;
+    const char *env[5];
+    char password[512];
+    enum etude_status st;
+
+    memset(r, 0, sizeof(*r));
+    r->end.end = ETUDE_END_LOST;
+    r->end.value = -1;
+    if (!net_ok(u))
+        return u->st;
+    if (!client_arguments(u, argv, &a)) {
+        client_free(&a);
+        return u->st;
+    }
+    client_environment(env, password);
+    st = etude_guest_command(u->client, a.argv, env, input, output, &result);
+    if (st == ETUDE_OK && a.returned[0] != '\0' &&
+        result.termination.end == ETUDE_END_EXITED && result.termination.value == 0)
+        st = etude_guest_get(u->client, a.returned, a.evidence);
+    client_free(&a);
+    return client_result(u, output, st, &result, r);
+}
+
+enum etude_status net_ssh_start(struct net_case *u, char *const argv[], const char *ready)
+{
+    struct client_command a;
+    const char *env[5];
+    char password[512];
+    enum etude_status st;
+
+    if (!net_ok(u))
+        return u->st;
+    if (!client_arguments(u, argv, &a)) {
+        client_free(&a);
+        return u->st;
+    }
+    client_environment(env, password);
+    st = etude_guest_start(u->client, a.argv, env, NULL);
+    client_free(&a);
+    if (st == ETUDE_OK)
+        st = etude_guest_output_wait(u->client, ready);
+    return failed(u, st, "the Rach2 SSH workload did not start: %s", status_text(st));
+}
+
+enum etude_status net_ssh_finish(struct net_case *u, const char *output, struct net_run *r)
+{
+    struct etude_guest_result result;
+    enum etude_status st;
+
+    memset(r, 0, sizeof(*r));
+    st = etude_guest_finish(u->client, 1, output, &result);
+    return client_result(u, output, st, &result, r);
 }
 
 void net_run_free(struct net_run *r)

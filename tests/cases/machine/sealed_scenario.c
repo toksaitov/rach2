@@ -153,12 +153,7 @@ static enum etude_status as_root(struct sealed *s, const char *command, const ch
 static enum etude_status send_file(struct sealed *s, const char *path, const char *command,
                                    const char *output, struct net_run *r)
 {
-    char *argv[] = {"sh",
-                    "-c",
-                    "f=$1; shift; exec \"$@\" < \"$f\"",
-                    "sh",
-                    (char *)path,
-                    NET_SSH,
+    char *argv[] = {NET_SSH,
                     NET_SSH_KEY(s->key),
                     "-T",
                     "-p",
@@ -167,7 +162,7 @@ static enum etude_status send_file(struct sealed *s, const char *path, const cha
                     (char *)command,
                     NULL};
 
-    return net_host(&s->u, argv, output, r);
+    return net_ssh_input(&s->u, argv, path, output, r);
 }
 
 /** Run `command` as root and give its output and error in `r`, as as_root,
@@ -983,28 +978,15 @@ static int root_as_built(struct sealed *s)
  */
 static void rewrite(struct sealed *s)
 {
-    char command[128], wrote[64], bs[24], skip[24], count[24], bytes[24], line[160];
-    unsigned long long block;
+    char command[128], wrote[64], bytes[24], line[160], image[4096];
+    unsigned char buffer[65536];
+    unsigned long long offset, left;
+    size_t n;
+    FILE *f;
     struct net_run r;
     long long env;
-    char *argv[] = {"sh",
-                    "-c",
-                    "f=$1 bs=$2 skip=$3 count=$4; shift 4; "
-                    "dd if=\"$f\" bs=\"$bs\" skip=\"$skip\" count=\"$count\" 2>/dev/null | "
-                    "gzip -c | \"$@\"",
-                    "sh",
-                    (char *)s->artifact,
-                    bs,
-                    skip,
-                    count,
-                    NET_SSH,
-                    NET_SSH_KEY(s->key),
-                    "-T",
-                    "-p",
-                    s->port,
-                    "root@127.0.0.1",
-                    command,
-                    NULL};
+    char *argv[] = {NET_SSH, NET_SSH_KEY(s->key), "-T", "-p", s->port,
+                    "root@127.0.0.1", command, NULL};
 
     net_step(&s->u, "rewrite");
     zero_sectors(s, s->root_lba + 2, 2);
@@ -1027,14 +1009,28 @@ static void rewrite(struct sealed *s)
                "the recovery entry did not come up with the whole-disk device: %s",
                said(&r, line, sizeof(line)));
     net_run_free(&r);
-    block = s->root_lba % 2048 == 0 && s->root_size % 2048 == 0 ? 2048 : 1;
-    snprintf(bs, sizeof(bs), "%llu", block * 512);
-    snprintf(skip, sizeof(skip), "%llu", s->root_lba / block);
-    snprintf(count, sizeof(count), "%llu", s->root_size / block);
+    if (net_path(&s->u, "reflash-root.img", image, sizeof(image)) == NULL)
+        return;
+    f = fopen(image, "wb");
+    if (f == NULL) {
+        net_fail(&s->u, "the root transfer file could not be created");
+        return;
+    }
+    offset = s->root_lba * 512;
+    left = s->root_size * 512;
+    while (left > 0 && net_ok(&s->u)) {
+        n = left < sizeof(buffer) ? (size_t)left : sizeof(buffer);
+        if (disk_io(s, s->artifact, 0, offset, buffer, n) != 0 ||
+            fwrite(buffer, 1, n, f) != n)
+            net_fail(&s->u, "the root could not be extracted for transfer");
+        offset += n;
+        left -= n;
+    }
+    if (fclose(f) != 0)
+        net_fail(&s->u, "the root transfer file could not be closed");
     snprintf(bytes, sizeof(bytes), "%llu", s->root_size * 512);
-    snprintf(command, sizeof(command), "gunzip | reflash /dev/disk0 %llu %s", s->root_lba * 512,
-             bytes);
-    net_host(&s->u, argv, "reflash", &r);
+    snprintf(command, sizeof(command), "reflash /dev/disk0 %llu %s", s->root_lba * 512, bytes);
+    net_ssh_input(&s->u, argv, image, "reflash", &r);
     snprintf(wrote, sizeof(wrote), "wrote %s bytes", bytes);
     net_assert(&s->u, "rewrite-written", printed(&r, wrote),
                "the repair did not report the whole root written: %s",

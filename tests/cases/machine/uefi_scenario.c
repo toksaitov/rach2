@@ -142,12 +142,7 @@ static enum etude_status as_user(struct uefi *s, const char *user, const char *c
 static enum etude_status send_file(struct uefi *s, const char *path, const char *command,
                                    const char *output, struct net_run *r)
 {
-    char *argv[] = {"sh",
-                    "-c",
-                    "f=$1; shift; exec \"$@\" < \"$f\"",
-                    "sh",
-                    (char *)path,
-                    NET_SSH,
+    char *argv[] = {NET_SSH,
                     NET_SSH_KEY(s->key),
                     "-T",
                     "-p",
@@ -156,7 +151,7 @@ static enum etude_status send_file(struct uefi *s, const char *path, const char 
                     (char *)command,
                     NULL};
 
-    return net_host(&s->u, argv, output, r);
+    return net_ssh_input(&s->u, argv, path, output, r);
 }
 
 /** Give the count of the boots of `machine` after one more. */
@@ -423,8 +418,6 @@ static int installed(struct etude_case *c)
                     "root@127.0.0.1",
                     "cd /root && exec doom 2>&1 < /dev/null",
                     NULL};
-    struct etude_case_service *game = NULL;
-    struct etude_termination end;
     struct net_run r;
     char line[160];
     long n;
@@ -462,17 +455,18 @@ static int installed(struct etude_case *c)
     net_run_free(&r);
 
     net_step(&s.u, "doom");
-    /* The service's program is ssh, and it takes the words after it. */
-    if (net_ok(&s.u) && etude_service(c, "doom", args + 1, &game, &end) != ETUDE_OK)
-        net_fail(&s.u, "the game reported no frame drawn");
+    net_ssh_start(&s.u, args, "doom: 1 frames in ");
     net_assert(&s.u, "doom-drew", 1, "");
     screen(&s, "doom.ppm", 1, &r);
     n = colors_of(&r);
     net_assert(&s.u, "doom-picture", n > PICTURE_COLORS,
                "the screen had %ld colors while the game ran, not more than %d", n, PICTURE_COLORS);
     net_run_free(&r);
-    if (game != NULL && etude_service_stop(game, &end) != ETUDE_OK)
-        net_fail(&s.u, "the game's ssh did not stop");
+    if (s.u.client != NULL) {
+        struct net_run game;
+        net_ssh_finish(&s.u, "doom", &game);
+        net_run_free(&game);
+    }
     as_user(
         &s, "root",
         "killall doom; while pidof doom > /dev/null; do :; done; pidof doom || echo DOOM\"\"GONE",

@@ -48,6 +48,8 @@ struct net_case {
     char why[200];         /* what failed */
     int told;              /* an assertion has failed with `why` */
     unsigned failures;     /* the assertions that failed */
+    struct etude_case_machine *client; /* declared Rach2 SSH client, when used */
+    unsigned client_files;
     struct net_made *made; /* the files net_path gave, the newest first */
 };
 
@@ -67,7 +69,8 @@ struct net_run {
     char *err; /* its standard error, from malloc */
 };
 
-/** Begin the attempt `u` of case `c`. */
+/** Begin the attempt `u` of case `c`. When the manifest declares the
+ * channel-client machine, run its first step of that name and boot it. */
 void net_case(struct net_case *u, struct etude_case *c);
 
 /** Say whether every operation of `u` so far succeeded. */
@@ -148,13 +151,33 @@ enum etude_status net_command(struct net_boot *b, const char *command, const cha
                               char **text);
 
 /**
- * Run host tool or artifact `argv[0]` with its arguments, keeping its
- * standard output as evidence `output` and its standard error as
+ * Run host tool or artifact `argv[0]` with its arguments. ssh, scp, sftp
+ * and ptydrive instead run on the declared channel-client Rach2 machine,
+ * with their local files transferred through its framed channel. Keep
+ * standard output as evidence `output` and standard error as
  * `output`.err, and give its end and both texts in `r`, whatever its exit
  * status. Free them with net_run_free.
  */
 enum etude_status net_host(struct net_case *u, char *const argv[], const char *output,
                            struct net_run *r);
+
+/** Run an installed guest program through its already-open channel and
+ * read the ordinary result evidence into R. */
+enum etude_status net_guest(struct net_case *u, struct etude_case_machine *m,
+                            const char *const argv[], const char *const env[],
+                            const char *input, const char *output, struct net_run *r);
+
+/** Run an SSH client on the declared channel-client Rach2 machine, with
+ * INPUT, a host file, as its standard input. net_host selects the same path
+ * for ssh, scp, sftp and ptydrive. The actual SSH protocol still connects to
+ * the server through its forwarded port. */
+enum etude_status net_ssh_input(struct net_case *u, char *const argv[], const char *input,
+                                const char *output, struct net_run *r);
+
+/** Start an SSH client workload and wait for READY on its output. Collect
+ * it with net_ssh_finish, while other tools may run in between. */
+enum etude_status net_ssh_start(struct net_case *u, char *const argv[], const char *ready);
+enum etude_status net_ssh_finish(struct net_case *u, const char *output, struct net_run *r);
 
 /** Free the texts of `r`. */
 void net_run_free(struct net_run *r);
