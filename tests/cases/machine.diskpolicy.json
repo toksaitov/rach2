@@ -1,37 +1,181 @@
 {
   "schema_version": 1,
   "family_id": "machine.diskpolicy",
-  "summary": "The read-only kernel does not write the disk it boots, shown on the disk's bytes after a boot of each kernel, and the check that reads the policy off a kernel refuses the wrong one; the programs are tests/cases/host/diskpolicy.sh and tests/cases/machine/diskpolicy_scenario.c",
+  "summary": "The read-only kernel does not write the disk it boots, shown on the disk's bytes after a boot of each kernel, and the check that reads the policy off a kernel refuses the wrong one; the programs are tests/cases/host/family_scenario.c and tests/cases/machine/diskpolicy_scenario.c",
   "cases": [
     {
       "case_id": "machine.diskpolicy.check",
       "behavior": "tools/inspect/check_diskpolicy.sh accepts the read-write kernel as read-write and the read-only kernel as read-only, and refuses each offered as the other and an empty file",
-      "units": ["diskpolicy", "check_diskpolicy.sh"],
+      "units": [
+        "diskpolicy",
+        "check_diskpolicy.sh"
+      ],
       "domain": "host",
-      "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "make"], "features": {}},
-      "execution": {"program": "diskpolicy", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [], "children": "reaped", "cleanup": "nothing: it only reads the kernels"},
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "family_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [],
+        "children": "reaped",
+        "cleanup": "libetude-case ends the declared helper and removes its private disk; the C controller removes its fixture after a pass and exports failure evidence"
+      },
       "assertions": [
-        {"assertion_id": "read-write", "checks": "the check accepts the read-write kernel as read-write", "source": "program"},
-        {"assertion_id": "read-only", "checks": "the check accepts the read-only kernel as read-only", "source": "program"},
-        {"assertion_id": "read-write-refused", "checks": "the check refuses the read-write kernel offered as read-only", "source": "program"},
-        {"assertion_id": "read-only-refused", "checks": "the check refuses the read-only kernel offered as read-write", "source": "program"},
-        {"assertion_id": "empty-refused", "checks": "the check refuses an empty file offered as read-only", "source": "program"}
+        {
+          "assertion_id": "read-write",
+          "checks": "the check accepts the read-write kernel as read-write",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "read-only",
+          "checks": "the check accepts the read-only kernel as read-only",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "read-write-refused",
+          "checks": "the check refuses the read-write kernel offered as read-only",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "read-only-refused",
+          "checks": "the check refuses the read-only kernel offered as read-write",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "empty-refused",
+          "checks": "the check refuses an empty file offered as read-only",
+          "source": "scenario"
+        }
       ],
       "branches": [],
-      "termination": {"end": "exited", "value": 0},
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
       "progress": [],
-      "bounds": {"case": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}, "gap": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 134217728, "disk_bytes": 1048576, "locks": [], "ports": 0, "loop_devices": 0},
+      "bounds": {
+        "case": {
+          "floor_us": 100000,
+          "initial_us": 60000000,
+          "ceiling_us": 300000000
+        },
+        "gap": {
+          "floor_us": 100000,
+          "initial_us": 60000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {}
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 1610612736,
+        "disk_bytes": 12884901888,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
       "prepare": [
-        {"name": "diskpolicy", "node": "tests/cases/host/diskpolicy", "per_architecture": false},
-        {"name": "binfind", "node": "tools/inspect/binfind", "per_architecture": false},
-        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
-        {"name": "metal-kernel", "node": "rach2-metal/kernel", "per_architecture": true}
+        {
+          "name": "family_scenario",
+          "node": "tests/cases/host/family_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "scripts-assets",
+          "node": "tests/host-suite/scripts-assets.tar",
+          "per_architecture": false
+        },
+        {
+          "name": "products-kernel",
+          "node": "x86_64/rach2/kernel",
+          "per_architecture": false
+        },
+        {
+          "name": "products-image",
+          "node": "x86_64/images/gnu-test.disk",
+          "per_architecture": false
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "metal-kernel",
+          "node": "rach2-metal/kernel",
+          "per_architecture": true
+        }
       ],
       "timing": [],
-      "native": {"plan": "host"}
+      "native": {
+        "plan": "scenario"
+      },
+      "steps": [
+        {
+          "step_id": "products",
+          "stage": "execute",
+          "machine": "products",
+          "does": "boot the prepared GNU products helper on its private disk"
+        },
+        {
+          "step_id": "prepare",
+          "stage": "execute",
+          "does": "unpack the immutable source assets on the private disk"
+        },
+        {
+          "step_id": "check",
+          "stage": "execute",
+          "does": "run the C controller and adopt its complete report"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "products",
+          "qemu": {
+            "architecture": "x86_64",
+            "kernel": "products-kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "products-disk",
+                "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 1073741824,
+            "firmware": "direct",
+            "devices": [
+              "rtl8139"
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": true
+        }
+      ]
     },
     {
       "case_id": "machine.diskpolicy.bytes",

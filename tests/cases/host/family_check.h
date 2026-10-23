@@ -14,6 +14,7 @@ int family_run(struct fixture *f, const char *const argv[], const char *cwd,
                const char *const env[], const char *input);
 int family_eval(struct fixture *f, const char *command);
 int family_seed(struct fixture *f, const char *name, unsigned mib, const char *group);
+int family_diskpolicy(struct fixture *f);
 int family_grow(struct fixture *f, const char *id);
 int family_grow_boot(struct fixture *f);
 int family_grow_space(struct fixture *f);

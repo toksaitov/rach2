@@ -188,8 +188,12 @@ int main(int argc, char **argv)
     fx_mkdir(getenv("TMPDIR"));
     printf("@etude 1 begin %s\n", argv[1]);
     fflush(stdout);
-    ok = !strncmp(argv[1], "host.imagerace.", 15) ? family_image(&f, argv[1])
-                                                  : family_grow(&f, argv[1]);
+    if (!strcmp(argv[1], "machine.diskpolicy.check"))
+        ok = family_diskpolicy(&f);
+    else if (!strncmp(argv[1], "host.imagerace.", 15))
+        ok = family_image(&f, argv[1]);
+    else
+        ok = family_grow(&f, argv[1]);
     if (!ok)
         f.failed = 1;
     printf("@etude 1 end %u\n", records);

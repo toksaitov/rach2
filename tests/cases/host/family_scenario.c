@@ -24,6 +24,16 @@ static int prepare(struct etude_case *c, struct etude_case_machine *m)
            etude_guest_put(m, archive, "/host-work/assets.tar", "0600") == ETUDE_OK &&
            execute(m, untar, "family-assets") && execute(m, modes, "family-source-modes");
 }
+static int inputs(struct etude_case *c, struct etude_case_machine *m)
+{
+    const char *rw, *ro;
+    if (strcmp(etude_case_id(c), "machine.diskpolicy.check"))
+        return 1;
+    rw = etude_artifact(c, "kernel");
+    ro = etude_artifact(c, "metal-kernel");
+    return rw && ro && etude_guest_put(m, rw, "/host-work/readwrite.kernel", "0644") == ETUDE_OK &&
+           etude_guest_put(m, ro, "/host-work/readonly.kernel", "0644") == ETUDE_OK;
+}
 static int report(struct etude_case *c, const char *id, const char *const ids[], int held[40],
                   size_t n)
 {
@@ -87,7 +97,7 @@ int etude_scenario(struct etude_case *c)
     if (etude_step(c, "products") == ETUDE_OK &&
         etude_boot(c, "products", NULL, &m, &end) == ETUDE_OK &&
         etude_step(c, "prepare") == ETUDE_OK)
-        ready = prepare(c, m);
+        ready = prepare(c, m) && inputs(c, m);
     if (etude_step(c, "check") == ETUDE_OK && ready &&
         etude_guest_command(m, args, env, NULL, "family-report", &r) == ETUDE_OK && r.complete &&
         r.cleanup == ETUDE_CLEANUP_CONFIRMED && r.termination.end == ETUDE_END_EXITED &&

@@ -27,6 +27,8 @@ static const char *family_rows(const char *id)
         return "first changed unchanged beside added removed settled";
     if (!strcmp(id, "host.imagerace.probe"))
         return "staged";
+    if (!strcmp(id, "machine.diskpolicy.check"))
+        return "read-write read-only read-write-refused read-only-refused empty-refused";
     return NULL;
 }
 #endif
