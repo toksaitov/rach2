@@ -162,6 +162,8 @@ int etude_scenario(struct etude_case *c)
         h.failures += !held;
         etude_progress(c, "checks", ++native_count);
     }
+    if (ready && !h.failures && !guest_check(products, group, "--cleanup", arch))
+        goto done;
     complete = 1;
     failed = h.failures != 0;
 done:

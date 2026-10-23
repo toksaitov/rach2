@@ -26,12 +26,20 @@ def extract(out, groups):
     return origins
 
 
+def platform_flags(common):
+    """Use native Windows APIs without requesting unavailable sanitizer runtimes."""
+    if os.name != 'nt':
+        return list(common)
+    flags = [flag for flag in common if not flag.startswith(('-fsanitize=', '-fno-sanitize-'))]
+    return [*flags, '-D_WIN32_WINNT=0x0A00', '-static']
+
+
 def recipe(name, base, common):
     """Return a compiler invocation, its inputs and the prepared program."""
     work = base / (name + '-sources')
     work.mkdir(parents=True, exist_ok=True)
     origins = [str(MODULE_PATH), 'tests/cases/host/fixtures.py']
-    flags = [*common, '-Wall', '-Wextra', '-Werror', '-I', str(work)]
+    flags = [*platform_flags(common), '-Wall', '-Wextra', '-Werror', '-I', str(work)]
     source = 'tests/host/fixtures/' + name + '.c'
     deps = []
     kernel = ['-DRACH2_HOSTTEST', '-ffreestanding', '-Wno-pointer-to-int-cast',
@@ -119,3 +127,5 @@ if __name__ == '__main__':
     if program != str(output):
         raise SystemExit('output basename must equal the fixture name')
     subprocess.run([*shlex.split(os.environ.get('CC', 'cc')), *command], check=True)
+    if not output.exists() and Path(str(output) + '.exe').is_file():
+        Path(str(output) + '.exe').replace(output)
