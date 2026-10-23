@@ -50,7 +50,7 @@ static int pattern(const char *text, size_t n)
     if (n != BYTES)
         return 0;
     for (i = 0; i < n; i++)
-        if (text[i] != 'a' + i % 23)
+        if (text[i] != (char)('a' + i % 23))
             return 0;
     return 1;
 }

@@ -699,6 +699,7 @@ static const char *step_name(struct prep *p, const char *name)
     return p->name;
 }
 
+#ifndef _WIN32
 /** Run make with the goals `a` and `b`, NULL for none, as a build step. */
 static int build_step(struct prep *p, const char *name, const char *a, const char *b)
 {
@@ -715,6 +716,8 @@ static int build_step(struct prep *p, const char *name, const char *a, const cha
         args[n++] = (char *)b;
     return run_make(p, &s, args, n);
 }
+
+#endif
 
 /* ---- The steps' path. ---- */
 
@@ -757,6 +760,7 @@ static int find_artifacts(struct prep *p)
     return 0;
 }
 
+#ifndef _WIN32
 /** Build the goals in one make. */
 static int build_goals(struct prep *p)
 {
@@ -777,6 +781,8 @@ static int build_goals(struct prep *p)
     free(args);
     return status;
 }
+
+#endif
 
 /** Give the modification time of `st` in nanoseconds. */
 static long long mtime_ns(const struct stat *st)

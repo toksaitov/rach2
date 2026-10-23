@@ -111,7 +111,9 @@
 #include "etude/scenario.h"
 #include "sha256.h"
 
+#ifndef _WIN32
 extern char **environ;
+#endif
 
 int etude_guest_main(int argc, char **argv);
 
@@ -1869,7 +1871,7 @@ static int scenario_media(struct etude_case *c, int real)
     struct etude_termination end;
     char text[PATH_MAX + 256];
     struct stat st;
-    uint64_t at = 0;
+    uint64_t at = 0, allocated;
     int boot;
 
     for (boot = 0; boot < (real ? 1 : 2); boot++) {
@@ -1884,7 +1886,7 @@ static int scenario_media(struct etude_case *c, int real)
         etude_assert(c, ids[boot][0],
                      again != NULL && again == big && stat(big, &st) == 0 &&
                          (uint64_t)st.st_size == BIG_BYTES &&
-                         (uint64_t)st.st_blocks * 512u < (1u << 20),
+                         sh_allocated_bytes(big, &allocated) == 0 && allocated < (1u << 20),
                      "no sparse empty disk of 4 TiB, or another at the second boot");
         if (real)
             fix_format(text, sizeof(text), ": namespace 1: 4194304 MiB");
@@ -2781,9 +2783,9 @@ static void attempt_end(struct attempt *a, const char *stop_at)
 /** Say whether the output `o` has the record `rec`, a line of its own. */
 static int has_record(const struct outcome *o, const char *rec)
 {
-    char line[300];
+    char line[320];
 
-    snprintf(line, sizeof(line), "@etude 1 %s\n", rec);
+    fix_format(line, sizeof(line), "@etude 1 %s\n", rec);
     return strstr(o->out, line) != NULL;
 }
 
@@ -2954,12 +2956,13 @@ static char **row_env(const struct row *r, char *bufs[6])
         if (bufs[i] == NULL)
             exit(1);
     }
-    snprintf(bufs[0], PATH_MAX, "ETUDE_TEST_ROW=%s", r->name);
-    snprintf(bufs[1], PATH_MAX, "ETUDE_TEST_NONCE=etude-nonce-%ld-%s", (long)getpid(), r->name);
-    snprintf(bufs[2], PATH_MAX, "ETUDE_FAKE_QEMU=%s", r->mode != NULL ? r->mode : "");
-    snprintf(bufs[3], PATH_MAX, "ETUDE_FAKE_STAGE=%s", fix_dir());
-    snprintf(bufs[4], PATH_MAX, "ETUDE_FAKE_GUEST_PID=%s/%s.guest", fix_dir(), r->name);
-    snprintf(bufs[5], PATH_MAX, "ETUDE_TEST_MARK=%s/%s", fix_dir(), r->name);
+    fix_format(bufs[0], PATH_MAX + 64, "ETUDE_TEST_ROW=%s", r->name);
+    fix_format(bufs[1], PATH_MAX + 64, "ETUDE_TEST_NONCE=etude-nonce-%ld-%s", (long)getpid(),
+               r->name);
+    fix_format(bufs[2], PATH_MAX + 64, "ETUDE_FAKE_QEMU=%s", r->mode != NULL ? r->mode : "");
+    fix_format(bufs[3], PATH_MAX + 64, "ETUDE_FAKE_STAGE=%s", fix_dir());
+    fix_format(bufs[4], PATH_MAX + 64, "ETUDE_FAKE_GUEST_PID=%s/%s.guest", fix_dir(), r->name);
+    fix_format(bufs[5], PATH_MAX + 64, "ETUDE_TEST_MARK=%s/%s", fix_dir(), r->name);
     for (i = 0; i < 6; i++)
         env[n + i] = bufs[i];
     return env;
@@ -3394,7 +3397,7 @@ static int stand_in_site(struct site *s)
     if (write_invocation(inv, "test.scenario.guest", "1111111111111111", "etude-scenario-hosttest",
                          sha, size, args) != 0)
         return -1;
-    snprintf(args, sizeof(args), "\"tool\", \"killguest\", \"%s/guest.guest\"", fix_dir());
+    fix_format(args, sizeof(args), "\"tool\", \"killguest\", \"%s/guest.guest\"", fix_dir());
     if (write_invocation(kill_inv, "test.scenario.guest", "2222222222222222",
                          "etude-scenario-hosttest", sha, size, args) != 0)
         return -1;

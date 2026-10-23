@@ -28,7 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "volume.h"
+#include "../volume/volume.h"
 
 /* The longest name of a working file. */
 #define NAME_MAX 512

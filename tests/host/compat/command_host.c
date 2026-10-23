@@ -25,7 +25,9 @@ const char *host_tool_path(const char *name)
     return out;
 }
 
+#ifndef _WIN32
 extern char **environ;
+#endif
 
 /* The independent format checkers retain allocations at their process exit.
  * Preserve their existing leak setting while keeping ASan and UBSan fatal. */

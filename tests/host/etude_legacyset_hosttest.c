@@ -144,6 +144,9 @@
  * claims its tooling memory and its `memory_bytes` as a host case does, and
  * a guest case's tooling memory is refused.
  */
+#ifdef _WIN32
+#include "win/files.h"
+#endif
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>

@@ -5,14 +5,40 @@
 #include <process.h>
 #else
 #include <sys/socket.h>
-#include <signal.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 #include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "scenario_host.h"
+
+int sh_allocated_bytes(const char *path, uint64_t *bytes)
+{
+#ifdef _WIN32
+    wchar_t *wide = etude_win_long_path(path);
+    DWORD low, high;
+    int rc = 0;
+    if (!wide)
+        return -1;
+    SetLastError(NO_ERROR);
+    low = GetCompressedFileSizeW(wide, &high);
+    if (low == INVALID_FILE_SIZE && GetLastError() != NO_ERROR)
+        rc = etude_win_file_error();
+    else
+        *bytes = ((uint64_t)high << 32) | low;
+    free(wide);
+    return rc;
+#else
+    struct stat st;
+    if (stat(path, &st) != 0)
+        return -1;
+    *bytes = (uint64_t)st.st_blocks * 512u;
+    return 0;
+#endif
+}
 
 int sh_poll(struct sh_poll *items, size_t count, int milliseconds)
 {

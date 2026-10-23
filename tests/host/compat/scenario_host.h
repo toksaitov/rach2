@@ -25,6 +25,8 @@ int sh_bound_error(void);
 int sh_signal(long pid, int signal);
 int sh_arm_stop(int cooperative);
 int sh_dead_status(void);
+/* Query actual allocated bytes, excluding sparse holes, or return -1. */
+int sh_allocated_bytes(const char *path, uint64_t *bytes);
 #ifdef _WIN32
 struct sh_child {
     HANDLE process, job, output;

@@ -103,8 +103,10 @@ static void busy(int deaf)
     if (deaf)
         signal(SIGTERM, SIG_IGN);
     say("@etude 1 begin host.watchdog.busy\n");
-    for (;;)
-        spin++;
+    for (;;) {
+        for (spin = 0; spin < 100000; spin++) {
+        }
+    }
 }
 
 /** Print heartbeats forever: the witness at its units, records that go
