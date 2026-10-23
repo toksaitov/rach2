@@ -1094,7 +1094,8 @@ static int import_artifacts(struct prep *p, const char *config)
     char *args[] = {"python3", "tools/etude/preparation_import.py", "prepare",
                     "--tree", p->tree, "--config", (char *)config,
                     "--request", request, "--work", p->work, "--provenance", provenance, "--commit",
-                    p->receipt_path ? p->receipt.commit : "", NULL};
+                    p->receipt_path ? p->receipt.commit : "", "--arches",
+                    (char *)(p->o->arch ? p->o->arch : "i686"), NULL};
     FILE *f = request ? fopen(request, "wx") : NULL;
     size_t i;
     int status = 0;

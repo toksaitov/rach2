@@ -128,6 +128,9 @@ class ImportTests(unittest.TestCase):
                             '-obuild/x86_64/images/root.disk' in argv for argv in commands))
         self.assertTrue(all('-B' in argv for argv in commands[:2]))
         self.assertNotIn('-B', commands[-1])
+        with patch.object(product, 'run'):
+            commands = product.build_native(Path('.'), roles, [], 'x86_64')
+        self.assertTrue(all('ARCH=x86_64' in argv for argv in commands))
 
 
 if __name__ == '__main__':

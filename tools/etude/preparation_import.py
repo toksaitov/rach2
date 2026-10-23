@@ -209,7 +209,9 @@ def export(args):
     record = filesystem_path(args.record)
     text = record.read_text()
     files = record_files(text)
-    require(manifest_goals(tree) <= files.keys(), 'producer record is not a complete collection')
+    require(files.keys() <= manifest_goals(tree) |
+            {'build/rach2/kernel', 'build/x86_64/rach2/kernel'},
+            'producer record contains undeclared artifacts')
     receipt = read_json(filesystem_path(args.receipt))
     receipt_check(receipt, args.commit, text)
     etude = filesystem_path(args.etude)
@@ -217,7 +219,7 @@ def export(args):
     run([etude, 'check', 'record', '-d', record], tree)
     for name, value in files.items():
         verify(tree / name, value)
-    auxiliary = {name: describe(tree / name) for name in AUXILIARY}
+    auxiliary = {name: describe(tree / name) for name in AUXILIARY if (tree / name).exists()}
     inventories = inventory_texts(tree, files)
     nested_hashes = nested_inputs(inventories, files, digest(tree / 'tests/cases/host.host.json'))
     nested = {name: describe(tree / name) for name in nested_hashes}
@@ -311,7 +313,7 @@ def batches(base, goals, limit=28000):
         yield batch
 
 
-def build_native(tree, roles, imported):
+def build_native(tree, roles, imported, default_arch='i686'):
     frozen = ['-o' + name for name in sorted(imported)]
     settings = ['HOSTCC=/ucrt64/bin/gcc', 'CC=/ucrt64/bin/gcc', 'ETUDECC=/ucrt64/bin/gcc',
                 'HOST_TEST_PLATFORM=windows', 'OS=Windows_NT'] if windows_host() else []
@@ -319,7 +321,7 @@ def build_native(tree, roles, imported):
     for kind, flags in [('native', ['-B', '-j2']), ('inventory', ['-j1'])]:
         for arch in ('i686', 'x86_64'):
             goals = sorted(name for name, value in roles.items() if value == kind and
-                           (name.startswith('build/x86_64/')) == (arch == 'x86_64'))
+                           ('x86_64' if name.startswith('build/x86_64/') else default_arch) == arch)
             base = ['make', '--no-print-directory', '-k', 'ARCH=' + arch, *flags, *settings, *frozen]
             for argv in batches(base, goals):
                 run(argv, tree)
@@ -401,7 +403,7 @@ def prepare(args):
         require(result.split()[0].decode() == metadata['validator']['sha256'] and
                 producer['etude'] == metadata['validator']['path'], 'producer validator changed')
     files = record_files(metadata['record'])
-    require(manifest_goals(tree) <= files.keys(), 'incomplete producer record')
+    require(goals <= files.keys(), 'producer record does not cover every selected goal')
     receipt_check(metadata['receipt'], commit, metadata['record'])
     imported = {name: files[name] for name, kind in roles.items() if kind == 'portable'}
     for name, value in metadata['auxiliary'].items():
@@ -420,7 +422,9 @@ def prepare(args):
     transfer(producer, sorted(imported), tree, work)
     for name, value in imported.items():
         verify(tree / name, value)
-    commands = build_native(tree, roles, imported)
+    require(args.arches in ('i686', 'x86_64', 'i686,x86_64'), 'invalid native build architectures')
+    default_arch = 'x86_64' if args.arches == 'x86_64' else 'i686'
+    commands = build_native(tree, roles, imported, default_arch)
     validate_native(tree, roles)
     for name, value in imported.items():
         verify(tree / name, value)
@@ -440,7 +444,7 @@ def main():
     for name in ('tree', 'commit', 'record', 'receipt', 'etude', 'output'):
         p.add_argument('--' + name, required=True)
     p = commands.add_parser('prepare')
-    for name in ('tree', 'config', 'request', 'work', 'provenance', 'commit'):
+    for name in ('tree', 'config', 'request', 'work', 'provenance', 'commit', 'arches'):
         p.add_argument('--' + name, required=True)
     args = parser.parse_args()
     try:
