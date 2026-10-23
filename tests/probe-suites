@@ -1,6 +1,6 @@
-# The built programs that the default suite's PROBES array in
-# tests/system/runner/runtests.c leaves out, each with the one suite that runs
-# it. tools/verify/probecheck.sh reads this file.
+# The built programs that tests/default-probes leaves out and a suite runs,
+# each with the one suite that runs it. tools/verify/probecheck.sh reads this
+# file.
 usbprobe usb
 mouseprobe usb
 intrprobe usb

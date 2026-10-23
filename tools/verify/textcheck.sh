@@ -103,7 +103,7 @@ py_files() {
 # one by one.
 config_files() {
     ls ./.clang-format ./.clangd ./.gitignore 2>/dev/null
-    ls tests/registry tests/probe-suites tests/probe-helpers tests/system/intervals \
+    ls tests/registry tests/default-probes tests/probe-suites tests/probe-helpers tests/system/intervals \
         tools/setup/judges tools/verify/blame-ignore-revs man/aliases man/recovery 2>/dev/null
     prune_find '(' -name '.gitignore' -o -name '.gitattributes' -o -name '.gdbinit' \
         -o -name '*.manifest' -o -name '*.suppress' -o -name '*.reasons' \

@@ -2,10 +2,10 @@
 # probecheck.sh: check that every guest program tests/ builds has a suite or a
 # helper use with its reason.
 #
-# A program is assigned once: to the default suite by the PROBES table of
-# tests/system/runner/runtests.c, to a suite of tests/registry by a line
-# `NAME SUITE` of tests/probe-suites, or as a helper by a line `NAME REASON`
-# of tests/probe-helpers. An assignment of a program that is not built fails
+# A program is assigned once: to the default suite by a line of
+# tests/default-probes, to a suite of tests/registry by a line `NAME SUITE` of
+# tests/probe-suites, or as a helper by a line `NAME REASON` of
+# tests/probe-helpers. An assignment of a program that is not built fails
 # too, and so does a program of the default suite that has no case
 # guest.default.NAME in tests/cases/guest.default.json, NAME the program's
 # file name. PROBECHECK_ROOT, when set, is the tree to check in place of
@@ -36,14 +36,7 @@ for source in "$REPO"/tests/musl/*.c; do
     [ -f "$source" ] || continue
     printf 'musl/%s\n' "$(basename "$source" .c)" >> "$WORK/built"
 done
-awk '
-    /PROBES\[\].*= *\{/ { probes = 1 }
-    probes && /^[ \t]*"/ {
-        n = split($0, fields, "\"")
-        for (i = 2; i < n; i += 2) print fields[i], "default"
-    }
-    probes && /};/ { probes = 0 }
-' "$REPO/tests/system/runner/runtests.c" > "$WORK/default"
+awk '/^#/ || /^$/ { next } { print $1, "default" }' "$REPO/tests/default-probes" > "$WORK/default"
 awk '
     function fail(message) { print "probecheck: " message > "/dev/stderr"; bad = 1 }
     FILENAME == ARGV[1] { if ($1 != "") built[$1] = 1; next }

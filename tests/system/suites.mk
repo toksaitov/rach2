@@ -1214,10 +1214,10 @@ $(IMAGES_DIR)/smp-test.disk: $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MA
 # cannot boot in the slots of its candidate and recovery entries: the
 # candidate entry boots os-simple's ext2 root to a login prompt, and the
 # recovery entry the test image from RAM, at whose debug shell the scenario
-# runs the probes of SELFBUILD_PROBES, the PROBES table of
-# tests/system/runner/runtests.c less the probes this architecture does not
-# build. SELFBUILD_ROOTS has the same placeholder, and its candidate entry
-# boots an ext2 root of the test manifest to the debug shell.
+# runs the probes of SELFBUILD_PROBES, the list of tests/default-probes less
+# the probes this architecture does not build. SELFBUILD_ROOTS has the same
+# placeholder, and its candidate entry boots an ext2 root of the test manifest
+# to the debug shell.
 SELFBUILD_DISK = $(IMAGES_DIR)/selfbuild-test.disk
 SELFBUILD_EXT2_VOL = $(IMAGES_DIR)/selfbuild-ext2.vol
 SELFBUILD_EXT2_DISK = $(IMAGES_DIR)/selfbuild-ext2-test.disk
@@ -1260,17 +1260,10 @@ $(SELFBUILD_ROOTS): $(DEMO_CREDS) krffs/manifests/test.manifest $(MANIFEST_DEPS_
 	    sh tools/image/mkdisk_grub.sh $@.kernel $@.tmp
 	rm -f $@.ext2 $@.kernel
 	mv $@.tmp $@
-$(SELFBUILD_PROBES): tests/system/runner/runtests.c
+$(SELFBUILD_PROBES): tests/default-probes
 	@mkdir -p $(@D)
-	awk -v arch=$(ARCH) ' \
-	    FNR == NR && /I686_ONLY\[\] *=/ { \
-	        n = split($$0, f, "\""); for (i = 2; i < n; i += 2) only[f[i]] = 1 } \
-	    FNR == NR { next } \
-	    /PROBES\[\].*= *\{/ { p = 1 } \
-	    p && /^[ \t]*"/ { \
-	        n = split($$0, f, "\""); \
-	        for (i = 2; i < n; i += 2) if (arch == "i686" || !(f[i] in only)) print f[i] } \
-	    p && /};/ { p = 0 }' $< $< > $@.tmp
+	awk -v arch=$(ARCH) '/^#/ || /^$$/ { next } \
+	    NF == 1 || arch == $$2 { print $$1 }' $< > $@.tmp
 	mv $@.tmp $@
 # `tests/run ssh`: logins over SSH with nobody at the keyboard, the case of
 # tests/cases/machine.ssh.json.

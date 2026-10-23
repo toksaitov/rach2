@@ -11,9 +11,9 @@ trap 'rm -rf ${WORK:+"$WORK"}' 0
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-probecheck-test.XXXXXX")
-mkdir -p "$WORK/tests/musl" "$WORK/tests/system/runner" "$WORK/tests/cases"
+mkdir -p "$WORK/tests/musl" "$WORK/tests/cases"
 printf 'PROGS = alpha beta\n' > "$WORK/tests/Makefile"
-printf 'static const char *const PROBES[] = {\n    "alpha"};\n' > "$WORK/tests/system/runner/runtests.c"
+printf '# the default suite\nalpha\n' > "$WORK/tests/default-probes"
 printf 'default|-|core\nspecial|-|full\n' > "$WORK/tests/registry"
 printf 'beta special\n' > "$WORK/tests/probe-suites"
 printf 'musl/gamma child fixture\n' > "$WORK/tests/probe-helpers"

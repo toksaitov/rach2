@@ -1,0 +1,195 @@
+# The default suite's programs, one a line, in the order selfbuild's scenario
+# runs them in one boot of the test image: those that rewrite the account
+# files after those that read them, and those that change staged files last.
+# A program that i386 alone builds has `i686` after its name. Each has a case
+# guest.default.NAME of tests/cases/guest.default.json, and
+# tools/verify/probecheck.sh reads this file.
+dirtest
+stattest
+rmtest
+mvtest
+lstest
+dup2test
+auxvprobe
+tlsprobe i686
+fsbaseprobe
+errnoprobe
+vmprobe
+forkro
+cowregrant
+usercopyfault
+fdstale
+dirgrow
+dirprobe
+unlinkdirprobe
+pathcanon
+vfsprobe
+timeprobe
+sigprobe
+credprobe
+ownprobe
+permprobe
+sockettest
+# The YMM registers across switches, signals, an exec and ptrace, with XSAVE's
+# frame and register set; without AVX its rows say they did not run.
+xsaveprobe
+# The four limits: the process table, a process's descriptors, the socket pool
+# and the frames. Each is filled, the refusal the kernel documents is
+# required, and then the resource is required back.
+fdfull
+oomprobe
+# The limits prlimit64 keeps: processes per user, descriptors and the address
+# space, each refused by name.
+limitprobe
+# Run with no `--live`, dnstest runs the resolver's helpers that use no
+# network, on fixed wire data.
+dnstest
+trapprobe
+ofdprobe
+waitprobe
+pipeprobe
+pollprobe
+devprobe
+jobprobe
+miscprobe
+ptyprobe
+rngprobe
+orphanprobe
+loopprobe
+zombieprobe
+exitprobe
+survivorprobe
+procprobe
+suidprobe
+sudoprobe
+modeprobe
+# The identity and permission calls and their refusals, made through musl,
+# which chooses the system calls itself.
+musl/authmusl
+musl/permmusl
+musl/suidmusl
+# After those three, since it rewrites files they read and puts them back. It
+# is the slowest probe here: it waits out the credential lock's retry limit
+# twice and sleeps once inside a held transaction.
+musl/pwauthmusl
+# After it, for the same reason: it runs the image's setuid passwd, which
+# takes the same lock and rewrites the same files, and it restores all three
+# databases before it exits.
+musl/passwdmusl
+musl/addusermusl
+musl/loginmusl
+rebootprobe
+musl/readvmusl
+musl/clockmusl
+musl/statmusl
+musl/stampmusl
+musl/execargmusl
+musl/spawnmusl
+musl/sigmusl
+# execve of /proc/self/fd/N, which is glibc's fexecve without execveat.
+musl/fdexecmusl
+# clone in glibc's fork form, set_tid_address and futex.
+musl/clonemusl
+# Faults to handlers, SA_RESTART, the alternate stack, int3, the pending set,
+# sigsuspend's mask and SIGCHLD's siginfo.
+musl/sigframemusl
+# How many mappings a process may hold.
+musl/vmamusl
+# The file calls GNU libc makes: paths of PATH_MAX bytes, the descriptor forms
+# of the calls that take a path, the namespace calls through a directory
+# descriptor, positioned reads and writes, truncation by path, O_PATH
+# descriptors, lchown, the entry types getdents64 reports, and the file system
+# fstatfs names for each kind of descriptor.
+musl/pathmaxmusl
+musl/fdcallmusl
+musl/atcallmusl
+musl/preadmusl
+musl/truncmusl
+musl/opathmusl
+musl/lchownmusl
+musl/direntmusl
+musl/statfsmusl
+# The process calls static GNU programs make, each group through the libc that
+# has them: the CPU time the kernel charges, the clocks, how a process is
+# named and scheduled, waitid, prctl, the stack limit, and the flags a socket
+# is made with.
+musl/cputimemusl
+musl/clockidmusl
+musl/schedmusl
+musl/waitidmusl
+musl/prctlmusl
+musl/stackmusl
+musl/sockflagmusl
+# Capabilities, which Chromium's zygote gives up in each process it forks.
+musl/capmusl
+# eventfd, and epoll's level-triggered, edge-triggered and one-shot reports;
+# timerfd's expirations, alone and through epoll.
+musl/epollmusl
+musl/timerfdmusl
+# pselect6's descriptor sets, and the signal mask it waits under.
+musl/pselectmusl
+# The netlink route socket's dumps and refusals, the interface ioctls on an
+# AF_UNIX socket, and a uevent socket that hears nothing.
+musl/netlinkmusl
+# inotify's events of a directory and a file, and its refusals.
+musl/inotifymusl
+# AF_UNIX: pairs, descriptors and credentials in messages, and names in the
+# file system and the abstract namespace.
+musl/unixmusl
+# File mappings, shared memory, mremap and madvise.
+musl/mapmusl
+# System V shared memory, semaphores and message queues, and POSIX message
+# queues.
+musl/ipcmusl
+# seccomp's filters: errno, trap, kill, TSYNC, exec, strict mode.
+musl/seccompmusl
+# Namespaces: user, PID, mount, network, UTS and IPC, by unshare, setns and
+# clone.
+musl/nsmusl
+# FIFO files made by mkfifo and mknodat: their opens, waits and bytes.
+musl/fifomusl
+# statx, which both libcs call first for every stat, beside fstatat64.
+musl/statxmusl
+# Record, open file description and flock locks between processes: conflicts,
+# splits, waits, EDEADLK and the closes that drop them.
+musl/lockmusl
+# tmpfs mounted by a program and at /dev/shm.
+musl/tmpfsmusl
+# mknod's kinds on KRFFS and tmpfs: their types, a device node's number and
+# open, and the refusals in Linux's order.
+musl/mknodmusl
+# memfd_create, its descriptor and name, and each seal.
+musl/memfdmusl
+# chroot on KRFFS and tmpfs: paths, links and ".." inside the root, fork and
+# exec keeping it, and the rmdir and unmount it refuses.
+musl/chrootmusl
+# Paths that go on past /proc/PID/fd/N, cwd and root, and /dev/fd/N, from the
+# file or directory each refers to.
+musl/proclinkmusl
+# vfork and clone with CLONE_VM|CLONE_VFORK, as posix_spawn, system and popen
+# start their children.
+musl/vforkmusl
+# ptrace as GDB drives it: memory, registers, a step, a breakpoint, syscall
+# stops, the exec event, a debug register, attach and detach.
+musl/ptracemusl
+# sigtimedwait, the memory lock calls, mincore, getcpu, personality, sendmmsg
+# and recvmmsg, clock_gettime64 and close_range.
+musl/callsmusl
+# Core files: their notes and memory, the limit, the dumpable flag, and a link
+# at the name.
+musl/coremusl
+# Threads: their ids, locks and signals, the descriptors, directories and
+# umask they share, /proc/self/task, and exec and exit from one.
+musl/threadmusl
+# The shell's one-line form, which `su -c` depends on. It runs
+# /musl/statushelper, a fixture and not a probe, which is why that one is
+# staged but not listed here.
+musl/ishmusl
+# Last, since it changes the modes of a staged tree and makes files outside
+# it. It puts every one back, but a failure part way through would leave them
+# changed for the probes after it.
+searchprobe
+# Beside it for the same reason: it makes a tree of its own inside the two
+# staged directories of its sticky pair, and two more directories at the image
+# root, and removes every one of them again.
+stickyprobe
