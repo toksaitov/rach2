@@ -1,7 +1,6 @@
 /*
- * ssh_scenario.c: the scenario of the ssh cases, tests/cases/machine.ssh.json
- * and machine.ssh-e1000.json: logins to os-real over SSH with nobody at the
- * keyboard, on the card the case's machine has.
+ * ssh_scenario.c: the scenario of the ssh case, tests/cases/machine.ssh.json:
+ * logins to os-real over SSH with nobody at the keyboard.
  *
  * The procedure is a person's: boot os-real from a copy of its disk, log in
  * as root at the console, start dropbear as the Readme's recipe does, and

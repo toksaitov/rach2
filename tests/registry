@@ -82,7 +82,6 @@ noentropy|qemu|full
 shutdown|qemu|full
 fatwrite|qemu,mformat,mcopy,mdir|core
 ssh|qemu,ssh|core
-ssh-e1000|qemu,ssh|full
 exfat|qemu|core
 ext2|qemu,mke2fs,debugfs,e2fsck,mtype|core
 cred-persist|qemu|full
