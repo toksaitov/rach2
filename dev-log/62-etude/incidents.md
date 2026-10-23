@@ -159,3 +159,7 @@ The same check found the scheduled integration of the remaining flow controllers
 ## Image fixture control remained in shell commands
 
 The portable dependency audit found that the C image controllers still sent shell commands to their GNU helper for fixture creation, file inspection and cleanup. The earlier conversion changed the controller language without removing all shell control flow. Those operations must use a compiled fixture with explicit arguments. Only the product scripts whose behavior the assertions test may run as shell programs. The audit now distinguishes a tested program from fixture control at each execution call, including calls inside a declared helper. The repair precedes the combined check.
+
+## Takeover triage omitted existing plan tasks
+
+The coordinating checks left the unassigned comparison, deployment and final audit tasks without a triage record after their phase had started. The check at 20:55 on 23 October read the three tasks and marked them triaged, retaining their order and prerequisites. A planning task is exempt from triage only while its phase has not started; a takeover does not extend that exemption.
