@@ -344,6 +344,12 @@
 # an overlay is a machine's, its base is an artifact and its name is none,
 # and it is the same overlay wherever its name is given.
 0 manifest ./disks.json
+0 manifest ./helpers.json
+1 manifest ./helpers-bad.json | unknown: the fixture's file missing is no artifact that prepare lists
+1 manifest ./helpers-bad.json | stage: the fixture's file work is no artifact that prepare lists
+1 manifest ./helpers-shape.json | /cases/0/machines/0/qemu: has no member "architecture"
+1 manifest ./helpers-shape.json | /cases/1/machines/0/helper: is not true
+1 manifest ./helpers-shape.json | /cases/2/architectures: is a string, where the schema wants an array
 1 manifest ./disks-bad.json | twice: the disk stick is given twice in a profile
 1 manifest ./disks-bad.json | ide-five: the launcher attaches at most 8 disks of a profile, four of them on IDE and six on AHCI, and one at most that boots first
 1 manifest ./disks-bad.json | nine: the launcher attaches at most 8 disks of a profile, four of them on IDE and six on AHCI, and one at most that boots first

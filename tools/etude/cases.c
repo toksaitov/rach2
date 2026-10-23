@@ -352,7 +352,29 @@ static void prepared_qemu(const struct rule *r, const struct json *qemu)
     }
 }
 
-/** Requires the artifacts that the fixtures of `list` copy. */
+/** A machine creates empty disks and overlays in its private workspace. */
+static int generated_disk(const struct rule *r, const char *name)
+{
+    const struct json *machines = json_member(r->c, "machines");
+    size_t i, j;
+
+    if (!same(r->domain, "machine"))
+        return 0;
+    for (i = 0; machines != NULL && i < machines->count; i++) {
+        const struct json *disks = json_member(json_member(machines->item[i], "qemu"), "disks");
+
+        for (j = 0; disks != NULL && j < disks->count; j++) {
+            const struct json *disk = disks->item[j];
+
+            if (same(json_text(disk, "name"), name) &&
+                (json_member(disk, "size_bytes") != NULL || json_member(disk, "base") != NULL))
+                return 1;
+        }
+    }
+    return 0;
+}
+
+/** Requires prepared files, except disks that the machine creates itself. */
 static void prepared_fixtures(const struct rule *r, const struct json *list)
 {
     size_t i, j;
@@ -361,6 +383,9 @@ static void prepared_fixtures(const struct rule *r, const struct json *list)
         const struct json *names = json_member(list->item[i], "names");
 
         for (j = 0; names != NULL && j < names->count; j++) {
+            if (same(json_text(list->item[i], "fixture"), "disk") &&
+                generated_disk(r, names->item[j]->string))
+                continue;
             prepared(r, names->item[j], "the fixture's file");
         }
     }

@@ -58,9 +58,11 @@
          "else": {"not": {"anyOf": [{"required": ["steps"]}, {"required": ["machines"]}, {"required": ["services"]}]}}},
         {"if": {"properties": {"domain": {"const": "host"}}},
          "then": {"properties": {"native": {"properties": {"plan": {"const": "host"}}}}},
-         "else": {"properties": {"native": {"properties": {"plan": {"enum": ["native", "none"]}}}, "architectures": {"type": "array"}}}},
+         "else": {"properties": {"native": {"properties": {"plan": {"enum": ["native", "none"]}}}}}},
+        {"if": {"properties": {"domain": {"const": "machine"}, "architectures": {"const": "none"}}},
+         "then": {"properties": {"machines": {"items": {"properties": {"helper": {"const": true}, "qemu": {"required": ["architecture"]}}}}}}},
         {"if": {"properties": {"domain": {"const": "guest"}}},
-         "then": {"properties": {"requirements": {"required": ["qemu"]}, "resources": {"not": {"required": ["tooling_memory_bytes"]}}}},
+         "then": {"properties": {"architectures": {"type": "array"}, "requirements": {"required": ["qemu"]}, "resources": {"not": {"required": ["tooling_memory_bytes"]}}}},
          "else": {"properties": {"execution": {"properties": {"role": {"const": "ordinary"}, "stdin": {"type": "null"}}}, "requirements": {"not": {"required": ["qemu"]}}}}}
       ]
     },

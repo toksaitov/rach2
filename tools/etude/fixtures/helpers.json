@@ -1,0 +1,289 @@
+{
+  "schema_version": 1,
+  "family_id": "fixture.helpers",
+  "summary": "Shared host scenarios and their generated disks",
+  "cases": [
+    {
+      "case_id": "fixture.helpers.empty",
+      "behavior": "A shared host check uses one fixed-architecture helper and a private empty disk",
+      "units": [
+        "crash"
+      ],
+      "domain": "machine",
+      "architectures": "none",
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "crash_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "work"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "crash",
+          "stage": "execute",
+          "machine": "vm",
+          "does": "run the check in the helper"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "vm",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "work",
+                "size_bytes": 512
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [],
+            "architecture": "x86_64"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": true
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "said-exited",
+          "checks": "the helper reports its result",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 1
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 90000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 90000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "x86_64/rach2/kernel",
+          "per_architecture": false
+        },
+        {
+          "name": "crash_scenario",
+          "node": "tests/cases/machine/crash_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "system",
+        "reason": "The check needs a private helper machine"
+      }
+    },
+    {
+      "case_id": "fixture.helpers.overlay",
+      "behavior": "A shared host check uses one fixed-architecture helper and a private empty disk",
+      "units": [
+        "crash"
+      ],
+      "domain": "machine",
+      "architectures": "none",
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "crash_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "work"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "crash",
+          "stage": "execute",
+          "machine": "vm",
+          "does": "run the check in the helper"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "vm",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "work",
+                "base": "base",
+                "cluster_bytes": 65536
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [],
+            "architecture": "x86_64"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": true
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "said-exited",
+          "checks": "the helper reports its result",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 1
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 90000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 90000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "x86_64/rach2/kernel",
+          "per_architecture": false
+        },
+        {
+          "name": "crash_scenario",
+          "node": "tests/cases/machine/crash_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "base",
+          "node": "images/base.disk",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "system",
+        "reason": "The check needs a private helper machine"
+      }
+    }
+  ]
+}
