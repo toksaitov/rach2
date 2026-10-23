@@ -36,16 +36,15 @@
         "stages": {}
       },
       "resources": {
-        "cpu_millis": 2000,
-        "cpu_ceiling_millis": 2000,
-        "memory_bytes": 805306368,
-        "disk_bytes": 603979776,
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
         "locks": [],
         "ports": 0,
         "loop_devices": 0
       },
-      "prepare": [
-        {"name": "channel-client-image", "node": "images/gnu-test.disk", "per_architecture": true},{"name": "metalchecks", "node": "tests/cases/host/metalchecks", "per_architecture": false}],
+      "prepare": [{"name": "metalchecks", "node": "tests/cases/host/metalchecks", "per_architecture": false}],
       "timing": [],
       "native": {"plan": "host"}
     },
@@ -82,16 +81,15 @@
         "stages": {}
       },
       "resources": {
-        "cpu_millis": 2000,
-        "cpu_ceiling_millis": 2000,
-        "memory_bytes": 805306368,
-        "disk_bytes": 603979776,
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
         "locks": [],
         "ports": 0,
         "loop_devices": 0
       },
-      "prepare": [
-        {"name": "channel-client-image", "node": "images/gnu-test.disk", "per_architecture": true},{"name": "metalchecks", "node": "tests/cases/host/metalchecks", "per_architecture": false}],
+      "prepare": [{"name": "metalchecks", "node": "tests/cases/host/metalchecks", "per_architecture": false}],
       "timing": [],
       "native": {"plan": "host"}
     },
