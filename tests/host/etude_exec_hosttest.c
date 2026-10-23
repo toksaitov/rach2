@@ -15,8 +15,8 @@
  * program that checks its descriptors, signals and session. Each must keep
  * its own attempt, process, output and end, and leave no process behind.
  * Each case's process must be seen held before its exec when it is
- * registered: through /proc on Linux and Rach2, and through ps(1) on a host
- * without /proc. With `posix_only`, a reported descendant must still be
+ * registered: through /proc on Linux and Rach2, and native process queries
+ * on macOS. With `posix_only`, a reported descendant must still be
  * ended, an unreported one in its own session must leave the cleanup
  * unconfirmed, and processor time of an orphan must be a lower bound; on
  * Linux and Rach2, without it, the keeper must end and count both, and on a
@@ -49,6 +49,12 @@
 
 #if defined(__linux__)
 #include <sys/syscall.h>
+#endif
+
+#if defined(__APPLE__)
+#include <libproc.h>
+#include <sys/proc.h>
+#include <sys/sysctl.h>
 #endif
 
 #include "compat/pathmax_host.h"
@@ -419,48 +425,56 @@ static char state_of(long pid)
     return p != NULL && p[1] == ' ' ? p[2] : 0;
 }
 
-#else
+#elif defined(__APPLE__)
 
-/**
- * Put in `buf`, of `size` bytes, what ps(1) prints for the field `field` of
- * process `pid`, less its header and its trailing white space. A host
- * without /proc gives a process's state and command line through ps.
- *
- * @return the length of the text, 0 when the process is gone.
- */
-static size_t ps_field(long pid, const char *field, char *buf, size_t size)
-{
-    char cmd[64];
-    size_t n;
-    FILE *f;
-
-    snprintf(cmd, sizeof(cmd), "ps -o %s= -p %ld 2>/dev/null", field, pid);
-    f = popen(cmd, "r");
-    if (f == NULL)
-        return 0;
-    n = fread(buf, 1, size - 1, f);
-    pclose(f);
-    while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == ' '))
-        n--;
-    buf[n] = '\0';
-    return n;
-}
-
-/** Say whether the command line of `pid` names a case, or it has none left. */
+/* KERN_PROCARGS2 returns argc, the executable path, padding and argv. */
 static int ran_case(long pid)
 {
-    char buf[4096];
-
-    return ps_field(pid, "args", buf, sizeof(buf)) == 0 || strstr(buf, "--case") != NULL;
+    int mib[] = {CTL_KERN, KERN_PROCARGS2, (int)pid}, argc;
+    char buffer[65536], *at, *end;
+    size_t size = sizeof(buffer);
+    if (sysctl(mib, 3, buffer, &size, NULL, 0) != 0 || size < sizeof(argc))
+        return 1;
+    memcpy(&argc, buffer, sizeof(argc));
+    at = buffer + sizeof(argc);
+    end = buffer + size;
+    while (at < end && *at)
+        at++;
+    while (at < end && !*at)
+        at++;
+    for (int i = 0; i < argc && at < end; i++) {
+        char *next = memchr(at, 0, (size_t)(end - at));
+        if (!next)
+            return 1;
+        if (!strcmp(at, "--case"))
+            return 1;
+        at = next + 1;
+    }
+    return argc <= 0;
 }
 
-/** Give the state letter ps(1) gives `pid`, or 0 for none. */
+/* libproc gives the BSD process state without starting another program. */
 static char state_of(long pid)
 {
-    char buf[16];
-
-    return ps_field(pid, "state", buf, sizeof(buf)) > 0 ? buf[0] : 0;
+    struct proc_bsdinfo info;
+    if (proc_pidinfo((int)pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) != sizeof(info))
+        return 0;
+    switch (info.pbi_status) {
+    case SSLEEP:
+        return 'S';
+    case SRUN:
+        return 'R';
+    case SSTOP:
+        return 'T';
+    case SZOMB:
+        return 'Z';
+    default:
+        return 'I';
+    }
 }
+
+#else
+#error "etude_exec_hosttest needs a native process-state adapter on this host"
 
 #endif
 
