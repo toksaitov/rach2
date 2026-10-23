@@ -24,4 +24,6 @@ int flow_version_mock(int argc, char **argv);
 int flow_snapshot(const char *const paths[], char hex[65]);
 int flow_deploy(struct fixture *f);
 int flow_deploy_mock(int argc, char **argv);
+int flow_testing(struct fixture *f);
+int flow_testing_mock(int argc, char **argv);
 #endif

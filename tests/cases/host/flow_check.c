@@ -39,7 +39,9 @@ int main(int argc, char **argv)
     char value[8200];
     int ok;
     name = name ? name + 1 : argv[0];
-    if (argc == 2 && !strcmp(argv[1], "--hold")) {
+    if ((argc == 2 && !strcmp(argv[1], "--hold")) || (argc == 3 && !strcmp(argv[2], "--hold"))) {
+        if (getenv("FLOW_WAIT_READY"))
+            fx_text(getenv("FLOW_WAIT_READY"), "");
         for (;;)
             pause();
     }
@@ -48,6 +50,8 @@ int main(int argc, char **argv)
     if (strcmp(name, "host-flow-check")) {
         if (getenv("FLOW_PROGRESS"))
             return flow_progress_mock(argc, argv);
+        if (getenv("FLOW_TESTING"))
+            return flow_testing_mock(argc, argv);
         if (getenv("FLOW_DEPLOY"))
             return flow_deploy_mock(argc, argv);
         if (getenv("FLOW_VERSION"))
@@ -76,6 +80,8 @@ int main(int argc, char **argv)
     fx_env("FLOW_SELF", f.self);
     if (!strcmp(id, "progress"))
         ok = flow_progress(&f);
+    else if (!strcmp(id, "testing_run"))
+        ok = flow_testing(&f);
     else if (!strcmp(id, "etude_deploy"))
         ok = flow_deploy(&f);
     else if (!strcmp(id, "etude_version"))
