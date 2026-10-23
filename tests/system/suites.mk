@@ -989,20 +989,28 @@ $(CASE_IMAGE_LINKS):
 $(CASE_IMAGES)/sealed.name: $(SEALED_DISK)
 	@mkdir -p $(@D)
 	printf '%s\n' $(notdir $(SEALED_DISK)) > $@
-# The fixture of the rehearsal of the install sitting
-# (machine.installer-rehearse.sitting), which rehearse_fixture.sh writes from
-# the disk the test stick installs: a target disk of 256 MiB, 524288 sectors,
+# The fixtures of the rehearsals of the install sitting, which
+# rehearse_fixture.sh writes from the disk a stick installs: a target disk
 # marked at the first sector of each range of the save set, the save disk, the
-# ranges, the root's head that growset reads and the root's offset. base.raw is
-# written last, so the other files are there once it is.
+# ranges, the root's head that growset reads and the root's offset. The one in
+# rehearse/, for machine.installer-rehearse.sitting, is from the test stick's
+# disk on a target of 256 MiB, 524288 sectors; the one in rehearse-lenovo/,
+# for machine.installer-rehearse.lenovo, is from the sealed disk on a sparse
+# target of the Lenovo's 488397168 sectors. base.raw is written last, so the
+# other files are there once it is.
 REHEARSE_DIR = $(CASE_IMAGES)/rehearse
-REHEARSE_FILES = $(REHEARSE_DIR)/head.vol $(REHEARSE_DIR)/params $(REHEARSE_DIR)/ranges \
-                 $(REHEARSE_DIR)/save.img
-$(REHEARSE_DIR)/base.raw: $(INSTALLER_DISK) tests/cases/machine/rehearse_fixture.sh $(GROWSET) \
-                          $(MKEXFATFIXTURE) $(MKMBR) $(MKGPT)
+REHEARSE_LENOVO_DIR = $(CASE_IMAGES)/rehearse-lenovo
+REHEARSE_FILES = head.vol params ranges save.img
+REHEARSE_TOOLS = tests/cases/machine/rehearse_fixture.sh $(GROWSET) $(MKEXFATFIXTURE) $(MKMBR) $(MKGPT)
+$(REHEARSE_DIR)/base.raw: $(INSTALLER_DISK) $(REHEARSE_TOOLS)
 	sh tests/cases/machine/rehearse_fixture.sh $(INSTALLER_DISK) 524288 $(GROWSET) \
 	    $(MKEXFATFIXTURE) $(MKMBR) $(MKGPT) $(REHEARSE_DIR)
-$(REHEARSE_FILES): $(REHEARSE_DIR)/base.raw
+$(REHEARSE_LENOVO_DIR)/base.raw: $(SEALED_DISK) $(REHEARSE_TOOLS)
+	sh tests/cases/machine/rehearse_fixture.sh $(SEALED_DISK) 488397168 $(GROWSET) \
+	    $(MKEXFATFIXTURE) $(MKMBR) $(MKGPT) $(REHEARSE_LENOVO_DIR)
+$(addprefix $(REHEARSE_DIR)/,$(REHEARSE_FILES)): $(REHEARSE_DIR)/base.raw
+$(addprefix $(REHEARSE_LENOVO_DIR)/,$(REHEARSE_FILES)): $(REHEARSE_LENOVO_DIR)/base.raw
+$(addprefix $(REHEARSE_DIR)/,$(REHEARSE_FILES)) $(addprefix $(REHEARSE_LENOVO_DIR)/,$(REHEARSE_FILES)):
 	@test -f $@
 # The recovery RAM image of a tree with no key, which the installer's case
 # puts on an installed disk's recovery partition, so that the key the install
@@ -1061,10 +1069,10 @@ build/tests/cases/grow/grow_tool.sh build/tests/cases/grow/grow_measure.awk:
 # updated or converted from the stick, each update also stopped part way and
 # run again, as the cases of tests/cases/machine.installer-repair.json.
 # `tests/run installer-rehearse`: the rehearsal of the Lenovo's install
-# sitting in its small form, as the case of
-# tests/cases/machine.installer-rehearse.json; tests/system/rehearse_sitting.sh
-# runs it by hand at the machine's size. Etude runs the three, and they have
-# no target here.
+# sitting, in its small form with the test stick and on x86-64 at the
+# machine's own size with the product's stick, as the cases of
+# tests/cases/machine.installer-rehearse.json. Etude runs the three, and they
+# have no target here.
 # `tests/run uefi`: the machine booted by UEFI firmware, OVMF, from its
 # installed disk, from that disk's recovery entry, from the same disk with its
 # boot partition's menu deleted, from the install stick's image as a USB

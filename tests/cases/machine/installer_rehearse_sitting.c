@@ -1,9 +1,9 @@
 /*
- * installer_rehearse_sitting.c: the scenario of
- * machine.installer-rehearse.sitting, the Lenovo's install sitting rehearsed
- * on a disk of 256 MiB: the save of the save set, the install with the grow,
- * and the restore, each boot's writes judged against the set by the map of
- * the qcow2 overlay the target is.
+ * installer_rehearse_sitting.c: the scenario of the cases of
+ * machine.installer-rehearse, the Lenovo's install sitting rehearsed on a disk
+ * of the size the fixture gives: the save of the save set, the install with
+ * the grow, and the restore, each boot's writes judged against the set by the
+ * map of the qcow2 overlay the target is.
  */
 #include <inttypes.h>
 #include <stdio.h>
@@ -13,7 +13,8 @@
 #include "drive.h"
 #include "sha256.h"
 
-#define RANGES_MAX 256
+/* The most ranges a save set may have; the Lenovo's has some 1860. */
+#define RANGES_MAX 4096
 
 /* The save set, as the fixture's `ranges` file gives it, in sectors. */
 static struct range {
@@ -33,7 +34,8 @@ static char *next_line(char *line)
     return eol != NULL && eol[1] != '\0' ? eol + 1 : NULL;
 }
 
-/** Read the fixture's ranges and parameters; return 0, or -1. */
+/** Read the fixture's ranges and parameters; return 0, or -1 for a fixture
+ * that cannot be read or has more than RANGES_MAX ranges. */
 static int read_fixture(struct etude_case *c)
 {
     const char *rpath = etude_artifact(c, "ranges"), *ppath = etude_artifact(c, "params");
@@ -43,7 +45,11 @@ static int read_fixture(struct etude_case *c)
 
     if (rpath == NULL || ppath == NULL || (f = fopen(rpath, "r")) == NULL)
         return -1;
-    while (nranges < RANGES_MAX && fscanf(f, "%llu %llu", &a, &b) == 2) {
+    while (fscanf(f, "%llu %llu", &a, &b) == 2) {
+        if (nranges == RANGES_MAX) {
+            fclose(f);
+            return -1;
+        }
         ranges[nranges].start = a;
         ranges[nranges].count = b;
         nranges++;

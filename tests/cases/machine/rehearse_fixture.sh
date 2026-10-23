@@ -1,12 +1,12 @@
 #!/bin/sh
-# rehearse_fixture.sh: the fixture of the case
-# machine.installer-rehearse.sitting, the rehearsal of the Lenovo's install
-# sitting on a disk of its own.
+# rehearse_fixture.sh: the fixture of the cases of
+# machine.installer-rehearse, the rehearsals of the Lenovo's install sitting
+# on a disk of their own.
 #
 # Usage: rehearse_fixture.sh DISK SECTORS GROWSET MKEXFATFIXTURE MKMBR MKGPT DIR
 #
-# DISK is the image the test stick installs and SECTORS the target disk's
-# length. Into DIR it writes:
+# DISK is the image the stick installs and SECTORS the target disk's length.
+# Into DIR it writes:
 #
 #   head.vol      the first 128 MiB of the image's root, its third entry, which
 #                 growset reads for the grow's ranges
