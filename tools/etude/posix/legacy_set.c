@@ -795,25 +795,30 @@ static const char *family_of(const struct member *m)
     return m->manifest->family;
 }
 
-/** Append the selection of the plan: each suite, with the manifest of its
- * cases, and in a set of both architectures the one it runs on. */
+static int runs_case(const struct set *x, size_t i, const struct legacy_case *k);
+
+/** Serialize the requested inventory in request order. Workspace paths and
+ * history-dependent execution order do not change the selected work. */
 static void selection(const struct set *x, struct cmp_text *d)
 {
-    const struct member *m;
-    size_t i, n = 0;
-
+    size_t i, c, n = 0;
     cmp_printf(d, "{\"schema_version\":1,\"architecture\":\"%s\",\"suites\":[", x->o->arch);
-    for (i = 0; i < x->n; i++) {
-        if (!(m = &x->mem[i])->first)
-            continue;
+    for (i = 0; i < x->nmembers; i++) {
+        const struct etude_legacy_member *m = &x->members[i];
+        const struct legacy_manifest *man = &x->manifests[i];
         cmp_printf(d, "%s{\"suite\":", n++ ? "," : "");
-        string(d, m->m->suite);
-        if (x->narches > 1)
-            cmp_printf(d, ",\"architecture\":\"%s\"", m->m->arch);
-        cmp_printf(d, ",\"serial\":%s,\"stops\":%s,\"manifest\":", m->m->serial ? "true" : "false",
-                   m->m->stops ? "true" : "false");
-        string(d, m->manifest->path);
-        cmp_printf(d, "}");
+        string(d, m->suite);
+        cmp_printf(d, ",\"architecture\":\"%s\",\"serial\":%s,\"stops\":%s,\"cases\":[",
+                   m->arch, m->serial ? "true" : "false", m->stops ? "true" : "false");
+        size_t count = 0;
+        for (c = 0; c < man->ncases; c++) {
+            const struct legacy_case *k = &man->cases[c];
+            if (!runs_case(x, i, k)) continue;
+            cmp_printf(d, "%s{\"case_id\":", count++ ? "," : "");
+            string(d, k->case_id);
+            cmp_printf(d, ",\"architecture\":\"%s\",\"repetitions\":%lld}", k->arch, k->reps);
+        }
+        cmp_printf(d, "]}");
     }
     cmp_printf(d, "],\"stop_on_fail\":%s}\n", x->o->stop_on_fail ? "true" : "false");
 }
@@ -3771,5 +3776,63 @@ int etude_legacy_set(const struct etude_legacy_set_opts *o)
     }
 out:
     tear_down(&x);
+    return rc;
+}
+
+/* Preserve all selection bytes, including the final LF, in the export. */
+static void selection_string(struct cmp_text *d, const char *bytes)
+{
+    cmp_printf(d, "\"");
+    for (const unsigned char *p = (const unsigned char *)bytes; *p; p++) {
+        if (*p == '\\' || *p == '\"') cmp_printf(d, "\\%c", *p);
+        else if (*p < 32) cmp_printf(d, "\\u%04x", *p);
+        else cmp_printf(d, "%c", *p);
+    }
+    cmp_printf(d, "\"");
+}
+
+int etude_legacy_selection_export(const struct etude_legacy_set_opts *o, const char *path)
+{
+    struct set x;
+    struct cmp_text selected = {0}, d = {0};
+    char hex[65];
+    int rc = 2;
+    memset(&x, 0, sizeof x);
+    x.o = o;
+    x.out = stderr;
+    if (check(&x) != 0) goto done;
+    x.mem = calloc(x.n ? x.n : 1, sizeof *x.mem);
+    if (!x.mem) goto done;
+    size_t count = 0;
+    for (size_t i = 0; i < x.nmembers; i++) count = take_members(&x, i, count);
+    if (count != x.n) goto done;
+    selection(&x, &selected);
+    if (selected.failed) goto done;
+    digest_of(selected.data, selected.length, hex);
+    cmp_printf(&d, "{\"schema_version\":1,\"selection_sha256\":\"%s\","
+               "\"selection_size_bytes\":%lu,\"selection_bytes\":", hex,
+               (unsigned long)selected.length);
+    selection_string(&d, selected.data);
+    cmp_printf(&d, ",\"items\":[");
+    for (size_t i = 0; i < x.n; i++) {
+        const struct member *m = &x.mem[i];
+        cmp_printf(&d, "%s{\"case_id\":", i ? "," : "");
+        string(&d, m->k->case_id);
+        cmp_printf(&d, ",\"architecture\":\"%s\",\"repetition\":%lld}", m->k->arch, m->rep);
+    }
+    cmp_printf(&d, "]}\n");
+    if (!d.failed) {
+        FILE *f = fopen(path, "wbx");
+        if (f) {
+            int failed = fwrite(d.data, 1, d.length, f) != d.length;
+            failed |= fclose(f) != 0;
+            if (failed) remove(path);
+            else rc = 0;
+        }
+    }
+done:
+    for (size_t i = 0; x.manifests && i < x.nmembers; i++) legacy_manifest_free(&x.manifests[i]);
+    free(x.manifests); free(x.members); free(x.again); free(x.mem);
+    free(selected.data); free(d.data);
     return rc;
 }

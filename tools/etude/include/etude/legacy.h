@@ -205,6 +205,8 @@ struct etude_legacy_set_opts {
  *         refused before anything ran; 3 when the preparation failed; 128
  *         plus the signal's number after a stop.
  */
+int etude_legacy_selection_export(const struct etude_legacy_set_opts *o, const char *path);
+
 int etude_legacy_set(const struct etude_legacy_set_opts *o);
 
 #endif
