@@ -269,7 +269,7 @@ unusedStructMember:*tools/etude/budget.h
 unusedStructMember:*tools/etude/win/winexec.h
 
 # The frame codec's structure: cppcheck checks wire.h alone, and its members
-# are read in guest.c, wire.c, the etudeguest scenario and the host test.
+# are read in guest.c, wire.c and the host test.
 unusedStructMember:*tools/etude/guest/wire.h
 
 # The native fixtures' structures: cppcheck checks fixture.h alone, and its

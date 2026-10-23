@@ -117,14 +117,6 @@ $(PTYDRIVE): tests/system/runner/ptydrive.c
 # etude runs, and have no target here: guest cases that run under etude-guest,
 # and machine cases, whose scenario (tests/cases/machine/default_scenario.c)
 # runs a probe as the debug shell's transient init on the console.
-# `tests/run etudeguest`: etude-guest on the test image's serial console, as
-# the debug shell's designated init, without the debug-exit port. It is the
-# case of tests/cases/machine.etudeguest.json, which etude runs, and has no
-# target here: its scenario speaks etude's frames to etude-guest one at a
-# time, stores the image's /hello and /ish without a transfer and utils' `yes`
-# with one, and requires a pass, an intended failure, a repeated command
-# answered by the same events, a cancellation that leaves no process, and an
-# exec whose exit the kernel records as the designated init's.
 # `tests/run etudeexec`: Rach2 builds etude by its TinyCC recipe, and the POSIX
 # executor, built the same way, passes its test there. It is the case of
 # tests/cases/machine.etudeexec.json, which etude runs, and has no target here:

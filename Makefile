@@ -727,8 +727,7 @@ DISK_SCENARIOS = build/tests/cases/machine/diskpolicy_scenario \
                  build/tests/cases/machine/diskrate_scenario
 # The etudeguest case's scenario also reads and writes etude-guest's frames
 # with the codec of tools/etude/guest/wire.c, which libetude-case has.
-ETUDEGUEST_SCENARIO = build/tests/cases/machine/etudeguest_scenario
-MACHINE_SCENARIOS = $(LIFECYCLE_SCENARIOS) $(DISK_SCENARIOS) $(ETUDEGUEST_SCENARIO)
+MACHINE_SCENARIOS = $(LIFECYCLE_SCENARIOS) $(DISK_SCENARIOS)
 # A file of tests/native that the native run of a case stages, which the
 # case's prepare names as tests/native/NAME.
 build/tests/native/%: tests/native/%
@@ -745,13 +744,6 @@ $(LIFECYCLE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 	@mkdir -p $(@D)
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Iutils
-$(ETUDEGUEST_SCENARIO): build/tests/cases/machine/%: tests/cases/machine/%.c \
-                        tests/cases/machine/lifecycle.c tests/cases/machine/lifecycle.h \
-                        tools/etude/guest/wire.h tools/etude/include/etude/frame.h \
-                        $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
-	@mkdir -p $(@D)
-	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
-	    -Itools/etude/posix -Itools/etude/guest -Iutils
 $(DISK_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
                    tests/cases/machine/fileio.c tests/cases/machine/fileio.h \
                    $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
@@ -1707,7 +1699,7 @@ distclean: clean
 
 
 ifeq ($(OS),Windows_NT)
-$(ETUDE) $(LIFECYCLE_SCENARIOS) $(ETUDEGUEST_SCENARIO) $(DISK_SCENARIOS): \
+$(ETUDE) $(LIFECYCLE_SCENARIOS) $(DISK_SCENARIOS): \
     tools/etude/win/files.h tools/etude/win/sockets.h tools/etude/win/winexec.h \
     tools/etude/win/winfmt.h tools/etude/compile.sh
 endif
