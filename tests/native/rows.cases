@@ -14,7 +14,6 @@
 
 case gnu/names -- system/gnu_rows.sh names x86_64 work=work home=home stage=. @net machine=native
 case gnu/glibc -- system/gnu_rows.sh glibc x86_64 work=work home=home stage=. @net machine=native
-case gnu/zlib -- system/gnu_rows.sh zlib x86_64 work=work home=home stage=. @net machine=native
 case gnu/openssl -- system/gnu_rows.sh openssl x86_64 work=work home=home stage=. @net machine=native
 case gnu/openssh -- system/gnu_rows.sh openssh x86_64 work=work home=home stage=. @net machine=native
 case gnu/ncurses -- system/gnu_rows.sh ncurses x86_64 work=work home=home stage=. @net machine=native
@@ -32,7 +31,6 @@ case gnu/findutils -- system/gnu_rows.sh findutils x86_64 work=work home=home st
 case gnu/diffutils -- system/gnu_rows.sh diffutils x86_64 work=work home=home stage=. @net machine=native
 case gnu/patch -- system/gnu_rows.sh patch x86_64 work=work home=home stage=. @net machine=native
 case gnu/tar -- system/gnu_rows.sh tar x86_64 work=work home=home stage=. @net machine=native
-case gnu/gzip -- system/gnu_rows.sh gzip x86_64 work=work home=home stage=. @net machine=native
 case gnu/xz -- system/gnu_rows.sh xz x86_64 work=work home=home stage=. @net machine=native
 case gnu/iproute2 ports:5999 -- system/gnu_rows.sh iproute2 x86_64 work=work home=home stage=. @net machine=native
 case gnu/loopctl alone -- system/gnu_rows.sh loopctl x86_64 work=work home=home stage=. @net machine=native
@@ -53,7 +51,6 @@ case gnu/zip -- system/gnu_rows.sh zip x86_64 work=work home=home stage=. @net m
 case gnu/htop -- system/gnu_rows.sh htop x86_64 work=work home=home stage=. @net machine=native
 case gnu/chawan -- system/gnu_rows.sh chawan x86_64 work=work home=home stage=. @net machine=native
 case gnu/dosfstools -- system/gnu_rows.sh dosfstools x86_64 work=work home=home stage=. @net machine=native
-case gnu/m4 -- system/gnu_rows.sh m4 x86_64 work=work home=home stage=. @net machine=native
 case gnu/autoreconf -- system/gnu_rows.sh autoreconf x86_64 work=work home=home stage=. @net machine=native
 case gnu/bison -- system/gnu_rows.sh bison x86_64 work=work home=home stage=. @net machine=native
 case gnu/flex -- system/gnu_rows.sh flex x86_64 work=work home=home stage=. @net machine=native

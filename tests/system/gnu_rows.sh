@@ -758,7 +758,8 @@ row_autoreconf() {
     runs "autoreconf" sh -c "cd '$WORK/ar' && autoreconf -i"
     runs "configure" sh -c "cd '$WORK/ar' && ./configure"
     runs "make" make -C "$WORK/ar"
-    same "the program" "$("$WORK/ar/hi")" "hi from automake"
+    output "the program" "$WORK/ar/hi"
+    same "the program" "$OUT" "hi from automake"
 }
 
 # Bison makes a parser of a grammar of sums, which GCC compiles.
@@ -784,7 +785,8 @@ int main(void) { return yyparse(); }
 EOF
     runs "bison" bison -o "$WORK/sum.c" "$WORK/sum.y"
     runs "the parser's compile" cc -o "$WORK/sum" "$WORK/sum.c"
-    same "a sum" "$(printf '1+2+3\n' | "$WORK/sum")" "6"
+    output "a sum" "$WORK/sum" <<< '1+2+3'
+    same "a sum" "$OUT" "6"
 }
 
 # flex makes a scanner that counts the words of its input, which GCC
@@ -794,7 +796,8 @@ row_flex() {
         > "$WORK/words.l"
     runs "flex" flex -o "$WORK/words.c" "$WORK/words.l"
     runs "the scanner's compile" cc -o "$WORK/words" "$WORK/words.c" -lfl
-    same "the words" "$(echo 'one two three' | "$WORK/words")" "3"
+    output "the words" "$WORK/words" <<< 'one two three'
+    same "the words" "$OUT" "3"
 }
 
 # jq reads JSON, adds an array and matches a regular expression with the
@@ -829,7 +832,8 @@ row_cmake() {
         > "$WORK/cm/hi.c"
     runs "configure" cmake -S "$WORK/cm" -B "$WORK/cm/b"
     runs "build" cmake --build "$WORK/cm/b"
-    same "the program" "$("$WORK/cm/b/hi")" "hi from cmake"
+    output "the program" "$WORK/cm/b/hi"
+    same "the program" "$OUT" "hi from cmake"
 }
 
 # dig and host ask a name server, here a responder in Python on 127.0.0.1
