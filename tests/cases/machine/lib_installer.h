@@ -55,8 +55,7 @@ void inst_finish(void);
 void inst_refuse(struct drive *d, const char *why);
 
 /**
- * Wait for and type the lines of table `lines` in order, as the old
- * harness's `expect=` and `send=` steps did.
+ * Wait for and type the lines of table `lines` in order.
  *
  * @return 0, or -1 with `d->why` saying which line did not complete.
  */

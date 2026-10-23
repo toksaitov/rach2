@@ -10,7 +10,7 @@
  *
  * Prints "SURVIVORPROBE OK" before exiting. The verdict is the line the
  * kernel prints as it returns to the shell, `sys_exit: init process N exited
- * with status 0`, which runtests requires after the probe's own output.
+ * with status 0`, which its case requires after the probe's own output.
  * Freestanding; direct system calls (probe.h).
  */
 

@@ -328,8 +328,7 @@ hosttest()
 checkers()
 {
     for t in tools/inspect/elfcheck.c tools/inspect/cfgcheck.c tools/inspect/setidcheck.c \
-             tools/verify/prosecheck.c tools/etude/win/pecheck.c tests/system/runner/runtests.c \
-             tests/system/runner/harness.c; do
+             tools/verify/prosecheck.c tools/etude/win/pecheck.c; do
         base=$(basename "$t" .c)
         out="$W/${base}_selftest"
         cmd="$CC -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 $SAN -g -O1 -Wall -Wextra -Werror -o $out $t"

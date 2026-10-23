@@ -250,7 +250,7 @@ sh "$REPO/vendor/grub/verify_grub.sh" \
 
 # The menu on partition 1, /boot/grub/grub.cfg. Its own comments state the
 # order of its entries and the install contract. The serial terminal copies
-# loader errors into the harness's log.
+# loader errors into the log of the machine's console.
 cat > "$GRUB_CFG" <<'CFG'
 serial --unit=0 --speed=115200
 terminal_output serial console

@@ -262,7 +262,7 @@ static int sweep(const short *s, long frames, double rate, const double *freqs, 
  * Check the recording against the frequencies, as the file's comment says.
  *
  * QEMU writes the data length only when it closes the file, which a machine
- * the harness stops does not let it do, so a zero length or one past the end
+ * its case stops does not let it do, so a zero length or one past the end
  * of the file means that the samples run to the end. Only the first channel
  * is read: a tone is in every channel, and mixing them would cancel it in a
  * recording whose channels are out of phase. QEMU writes from when the

@@ -53,7 +53,7 @@ int drive_boot(struct drive *d, struct etude_case *c, const char *machine,
 
 /**
  * Wait for `text` on the console after the last text waited for, within the
- * step's bound, as the old harness's `expect=` did with a plain text.
+ * step's bound.
  *
  * @return 0, or -1 with `d->why` saying why.
  */

@@ -61,16 +61,11 @@ together = $(addprefix %/,$(patsubst build/%,%,$(1)))
 # run tests/run in a checkout whose suites.mk does not name RACH2_PORT_OFFSET,
 # the sign of a tree whose runs claim such a block.
 
-# The suites' wall-clock limit tool (see its rule below).
-DEADLINE        = build/tests/system/deadline
 PCAPCHECK       = build/tests/system/pcapcheck
 MKFIXTURE       = build/tests/system/mkfixture
 HOSTPEER        = build/tests/system/hostpeer
 WAVCHECK        = build/tests/system/wavcheck
-HARNESS         = build/tests/system/harness
-RUNTESTS        = build/tests/system/runtests
 PTYDRIVE        = build/tests/system/ptydrive
-RUNUTIL         = build/tests/system/runutil
 # The reader of a framebuffer console's text off QEMU's screen dump, which
 # the uefi cases run (tests/system/runner/screentext.c), with the kernel's
 # own font compiled beside it.
@@ -83,12 +78,6 @@ GROWSET         = build/tools/inspect/growset
 INSTALL_TEST_STICK = $(IMAGES_DIR)/install-test-stick.img
 INSTALLER_MBR_DISK = $(IMAGES_DIR)/installer-test-mbr.disk
 GROW_GPT_DISK = $(IMAGES_DIR)/grow-test-gpt.disk
-# The deadline tool: the suites' wall-clock limit, which kills the process
-# group at the deadline. It is built with the host compiler like the KRFFS
-# tools.
-$(DEADLINE): tests/system/runner/deadline.c
-	@mkdir -p $(dir $@)
-	$(HOST_LINK)
 $(SCREENTEXT): tests/system/runner/screentext.c rach2/sys/display/vga_font.c rach2/sys/display/vga_font.h
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
@@ -118,27 +107,16 @@ $(HOSTPEER): tests/system/runner/hostpeer.c
 $(WAVCHECK): tests/system/checkers/wavcheck.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
-# The three runners (tests/system/runner/): the serial harness every suite
-# drives, the probe runner one boot scores, and the pty driver the SSH suites
-# answer their password prompts through.
-$(HARNESS): tests/system/runner/harness.c
-	@mkdir -p $(dir $@)
-	$(HOST_LINK)
-$(RUNTESTS): tests/system/runner/runtests.c tests/clockref.h
-	@mkdir -p $(dir $@)
-	$(HOST_LINK)
+# The pty driver (tests/system/runner/ptydrive.c), through which the SSH,
+# installer, metal and gnu cases answer their password prompts.
 $(PTYDRIVE): tests/system/runner/ptydrive.c
-	@mkdir -p $(dir $@)
-	$(HOST_LINK)
-$(RUNUTIL): tests/system/runner/runutil.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
 # `tests/run default`: every guest probe, each in a boot of its own on the
 # test image. They are the cases of tests/cases/guest.default.json, which
 # etude runs, and have no target here: guest cases that run under etude-guest,
 # and machine cases, whose scenario (tests/cases/machine/default_scenario.c)
-# runs a probe as the debug shell's transient init on the console. The runner
-# tests/system/runner/runtests.c boots the probes in one machine.
+# runs a probe as the debug shell's transient init on the console.
 # `tests/run etudeguest`: etude-guest on the test image's serial console, as
 # the debug shell's designated init, without the debug-exit port. It is the
 # case of tests/cases/machine.etudeguest.json, which etude runs, and has no
@@ -1497,16 +1475,6 @@ $(ETUDE_SCENARIO_DISK): krffs/manifests/etude-scenario.manifest $(MKDISK) \
 	rm -f $@.tmp
 	$(MKDISK) krffs/manifests/etude-scenario.manifest $@.tmp 8 6 >/dev/null
 	mv $@.tmp $@
-
-# `tests/run runner`: the self-test of the old runner's program that
-# tools/dev/poll_kernels.sh still uses: runutil's process groups. No machine
-# is booted. They are the cases of tests/cases/host.runner.json, which etude
-# runs, and have no target here.
-
-# `tests/run drive`: the drivers' waits, drive.sh and the harness against fake
-# machines that choose when they are ready, booting nothing. They are the
-# case of tests/cases/host.drive.json, which etude runs, and have no target
-# here.
 
 # `tests/run krffscheck`: what the offline checker says about images broken on
 # purpose. No machine is booted. They are the cases of

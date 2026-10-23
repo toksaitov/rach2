@@ -262,7 +262,7 @@
     },
     {
       "case_id": "host.host.checkers",
-      "behavior": "the seven checkers that decide verdicts, elfcheck, cfgcheck, setidcheck, prosecheck, pecheck, runtests and harness, compiled again under AddressSanitizer and UndefinedBehaviorSanitizer, each pass their own selftests",
+      "behavior": "the five checkers that decide verdicts, elfcheck, cfgcheck, setidcheck, prosecheck and pecheck, compiled again under AddressSanitizer and UndefinedBehaviorSanitizer, each pass their own selftests",
       "units": ["host", "the inventory's checkers' self-tests, compiled and run under the sanitizers"],
       "domain": "host",
       "architectures": "none",
@@ -275,9 +275,7 @@
         {"assertion_id": "cfgcheck", "checks": "tools/inspect/cfgcheck.c, compiled under ASan and UBSan with -Wall -Wextra -Werror, passes its --selftest", "source": "program"},
         {"assertion_id": "setidcheck", "checks": "tools/inspect/setidcheck.c, compiled under ASan and UBSan with -Wall -Wextra -Werror, passes its --selftest", "source": "program"},
         {"assertion_id": "prosecheck", "checks": "tools/verify/prosecheck.c, compiled under ASan and UBSan with -Wall -Wextra -Werror, passes its --selftest", "source": "program"},
-        {"assertion_id": "pecheck", "checks": "tools/etude/win/pecheck.c, compiled under ASan and UBSan with -Wall -Wextra -Werror, passes its --selftest", "source": "program"},
-        {"assertion_id": "runtests", "checks": "tests/system/runner/runtests.c, compiled under ASan and UBSan with -Wall -Wextra -Werror, passes its --selftest", "source": "program"},
-        {"assertion_id": "harness", "checks": "tests/system/runner/harness.c, compiled under ASan and UBSan with -Wall -Wextra -Werror, passes its --selftest", "source": "program"}
+        {"assertion_id": "pecheck", "checks": "tools/etude/win/pecheck.c, compiled under ASan and UBSan with -Wall -Wextra -Werror, passes its --selftest", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},

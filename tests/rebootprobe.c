@@ -2,13 +2,13 @@
  * Drives reboot(2) at every answer that is not a shutdown, and leaves the
  * machine running.
  *
- * A fault in this probe can end every probe after it: they share one boot
- * (runtests), and a well-formed `RB_POWER_OFF` from a caller who is still
- * root stops the machine and the rest of the run with it. So the
- * unprivileged case checks its own precondition before it makes the call:
- * the child requires `setuid` to return 0 and `geteuid` to read back the new
- * uid, and exits with a status of its own, having made no call, if either
- * fails.
+ * A fault in this probe can end every probe after it where they share one
+ * boot, as the selfbuild cases run them, and a well-formed `RB_POWER_OFF`
+ * from a caller who is still root stops the machine and the rest of the run
+ * with it. So the unprivileged case checks its own precondition before it
+ * makes the call: the child requires `setuid` to return 0 and `geteuid` to
+ * read back the new uid, and exits with a status of its own, having made no
+ * call, if either fails.
  *
  * The cases: a correct call with `RB_DISABLE_CAD` returns 0, and so does each
  * of the three alternate second magics, the one way to show that the kernel

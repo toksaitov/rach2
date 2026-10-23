@@ -24,7 +24,7 @@
  * LOOP_CLR_FD detaches it.
  *
  * `loopdevprobe pull` is the stick's row: the image lives on a volume of a
- * stick, and the harness pulls the stick while the image is mounted. The
+ * stick, and the scenario pulls the stick while the image is mounted. The
  * row reads a file of the image, yielding between reads, until a read or
  * the open before it fails, which is the removal witnessed, however many
  * reads that takes; the case's watchdog ends a run whose reads never fail.

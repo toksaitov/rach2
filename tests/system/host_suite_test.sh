@@ -45,7 +45,7 @@ work=$(cd "$made" && pwd -P) || exit 1
 tree=$work/tree
 mkdir -p "$tree/tests/host" "$tree/tests/cases/host" "$tree/build/.run.lock" \
     "$tree/build/tools/etude" "$tree/tools/inspect" "$tree/tools/verify" \
-    "$tree/tools/etude/win" "$tree/tests/system/runner" "$work/meet" "$work/tmp" || exit 1
+    "$tree/tools/etude/win" "$work/meet" "$work/tmp" || exit 1
 cp "$repo/tests/cases/host/host.sh" "$tree/tests/cases/host/" || exit 1
 cp "$repo/tools/etude/hold.sh" "$tree/tools/etude/" || exit 1
 # The tree is held for this script, as tests/run holds it for the cases.
@@ -54,8 +54,7 @@ echo "pid $$" > "$tree/build/.run.lock/owner"
 # The checkers whose selftests the checkers case compiles: each passes its
 # selftest.
 for c in tools/inspect/elfcheck.c tools/inspect/cfgcheck.c tools/inspect/setidcheck.c \
-    tools/verify/prosecheck.c tools/etude/win/pecheck.c tests/system/runner/runtests.c \
-    tests/system/runner/harness.c; do
+    tools/verify/prosecheck.c tools/etude/win/pecheck.c; do
     printf '#include <string.h>\nint main(int c, char **v) { return !(c == 2 && strcmp(v[1], "--selftest") == 0); }\n' \
         > "$tree/$c"
 done
@@ -275,7 +274,7 @@ printf '{"cases": [{"case_id": "host.host.scripts", "assertions": [{"assertion_i
         [ "$t" = unlisted ] || printf ', {"assertion_id": "%s"}' "$t"
     done
     printf ', {"assertion_id": "ghost"}]},\n  {"case_id": "host.host.checkers", "assertions": [{"assertion_id": "listed"}'
-    for c in elfcheck cfgcheck setidcheck prosecheck pecheck runtests harness; do
+    for c in elfcheck cfgcheck setidcheck prosecheck pecheck; do
         printf ', {"assertion_id": "%s"}' "$c"
     done
     printf ']},\n  {"case_id": "host.host.scripts", "assertions": [{"assertion_id": "listed"}'
@@ -420,19 +419,19 @@ judge()
     line '  PASS: signals_hosttest' || miss 'the signals are at their defaults'
     line '    signals_hosttest: not run: nothing: this line is repeated under the pass' ||
         miss 'the not-run line is repeated'
-    [ "$(grep -c '^  PASS: [a-z]* selftest under the sanitizers$' "$work/out")" -eq 7 ] ||
+    [ "$(grep -c '^  PASS: [a-z]* selftest under the sanitizers$' "$work/out")" -eq 5 ] ||
         miss 'each selftest passes'
-    [ "$(grep -c '^@etude 1 assert [a-z]* pass$' "$work/out.checkers")" -eq 8 ] ||
+    [ "$(grep -c '^@etude 1 assert [a-z]* pass$' "$work/out.checkers")" -eq 6 ] ||
         miss 'each selftest and the list of checkers pass'
     ! grep -q 'unlisted_hosttest$' "$work/out" || miss 'a test the manifest does not name is not run'
     line '@etude 1 assert listed fail checks the case does not name: unlisted; checks the tree does not have: ghost' ||
         miss 'a test the manifest does not name, and a test the tree does not have, fail the list'
     line '@etude 1 assert ghost fail the tree has no such check.*' || miss 'a test the tree does not have fails'
     results tests $((tests - 1)) || miss 'every test named has one result and one assertion'
-    results checkers 7 || miss 'every checker has one result and one assertion'
+    results checkers 5 || miss 'every checker has one result and one assertion'
     results scripts 2 || miss 'every script has one result and one assertion'
     progressed tests $((tests - 1)) || miss 'every test that ends gives a record of progress'
-    progressed checkers 7 || miss 'every checker that ends gives a record of progress'
+    progressed checkers 5 || miss 'every checker that ends gives a record of progress'
     progressed scripts 2 || miss 'every script that ends gives a record of progress'
     [ "$status_stop" -eq 143 ] || miss 'the stopped case exits 143'
     grep -qx '  STOPPED: a script that never ends' "$work/out.stop" ||

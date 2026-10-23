@@ -22,8 +22,8 @@
  *
  * The bound. The child exits 0 only when its ping returned -ETIMEDOUT, and 3
  * for any other answer, so a wrong errno is not a pass, and its call lasts at
- * least PING_MIN_MS. A lost wakeup leaves the probe waiting, and the harness
- * ends it.
+ * least PING_MIN_MS. A lost wakeup leaves the probe waiting, and its case's
+ * watchdog ends it.
  *
  * The release. After the reap the parent's own loopback ping returns a
  * round-trip time of 0 or more, which shows that the slot came back, and is
@@ -76,7 +76,7 @@ static uint32_t gateway_ip, silent_ip;
  * four hundred ticks of the kernel's clock on every machine: the call, which
  * the child measures, may not return before them, less the tick a reading of
  * the clock may lose. How much longer it took depends on the machine and is
- * printed; a call that never returns is ended by the harness. */
+ * printed; a call that never returns is ended by its case's watchdog. */
 #define PING_MIN_MS 3990
 
 /* The assertions of the fork round, in the order the parent checks them. */

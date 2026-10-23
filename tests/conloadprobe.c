@@ -28,14 +28,14 @@
  *       image. The exec waits until `uart-bytes` has counted every byte
  *       of them, as stage B's reading does.
  *
- * How long the harness takes to type a stage decides nothing: the probe
+ * How long the scenario takes to type a stage decides nothing: the probe
  * waits for the counted bytes, and the suite's wait for its token ends a
  * run in which they never come. An overrun the port reports ends the wait
  * as well, since the bytes it lost cannot be counted, and the stage's reading
  * then finds the lines that are missing.
  *
  * Each stage is announced with `CONLOAD X` and closed with `CONLOAD X OK`;
- * the harness types after the announcement. After each loaded stage the
+ * the scenario types after the announcement. After each loaded stage the
  * probe prints how many files the writer completed in it. The end prints
  * the `/proc/console` counters and `CONLOAD OK lines=N`, or
  * `CONLOAD FAIL: reason`.

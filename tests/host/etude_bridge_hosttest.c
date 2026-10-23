@@ -103,7 +103,7 @@ static int lock_file(const char *name)
     return open(path, O_RDWR | O_CREAT, 0666);
 }
 
-/** Try a whole-file lock, as runutil does. */
+/** Try a whole-file lock, as etude-ports does. */
 static int lock_try(int fd, short type)
 {
     struct flock fl;

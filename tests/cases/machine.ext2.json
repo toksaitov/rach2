@@ -6,7 +6,7 @@
     {
       "case_id": "machine.ext2.probe-dirprobe",
       "behavior": "/dirprobe, run as init from the debug shell on an ext2 root staged from the test manifest, is the program the build made and passes its rows on an ext2 root",
-      "units": ["ext2", "tests/system/probe_roots.sh", "tests/dirprobe"],
+      "units": ["ext2", "tests/dirprobe"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"probe": "/dirprobe", "volume_mib": 16}, "repetitions": 1, "seed": null},
@@ -50,7 +50,7 @@
     {
       "case_id": "machine.ext2.probe-unlinkdirprobe",
       "behavior": "/unlinkdirprobe, run as init from the debug shell on an ext2 root staged from the test manifest, is the program the build made and passes its rows on an ext2 root",
-      "units": ["ext2", "tests/system/probe_roots.sh", "tests/unlinkdirprobe"],
+      "units": ["ext2", "tests/unlinkdirprobe"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"probe": "/unlinkdirprobe", "volume_mib": 16}, "repetitions": 1, "seed": null},
@@ -94,7 +94,7 @@
     {
       "case_id": "machine.ext2.probe-mvtest",
       "behavior": "/mvtest, run as init from the debug shell on an ext2 root staged from the test manifest, is the program the build made and passes its rows on an ext2 root",
-      "units": ["ext2", "tests/system/probe_roots.sh", "tests/mvtest"],
+      "units": ["ext2", "tests/mvtest"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"probe": "/mvtest", "volume_mib": 16}, "repetitions": 1, "seed": null},
@@ -138,7 +138,7 @@
     {
       "case_id": "machine.ext2.probe-vfsprobe",
       "behavior": "/vfsprobe, run as init from the debug shell on an ext2 root staged from the test manifest, is the program the build made and passes its rows on an ext2 root",
-      "units": ["ext2", "tests/system/probe_roots.sh", "tests/vfsprobe"],
+      "units": ["ext2", "tests/vfsprobe"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"probe": "/vfsprobe", "volume_mib": 16}, "repetitions": 1, "seed": null},
@@ -182,7 +182,7 @@
     {
       "case_id": "machine.ext2.probe-mapmusl",
       "behavior": "/musl/mapmusl, run as init from the debug shell on an ext2 root staged from the test manifest, is the program the build made and passes its rows on an ext2 root, among them a shared mapping of a file written back to it, which the KRFFS root refuses",
-      "units": ["ext2", "tests/system/probe_roots.sh", "tests/musl/mapmusl"],
+      "units": ["ext2", "tests/musl/mapmusl"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"probe": "/musl/mapmusl", "volume_mib": 16}, "repetitions": 1, "seed": null},

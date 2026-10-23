@@ -2,7 +2,7 @@
  * usbdiskprobe: a flash drive as a disk, its nodes, its volumes, and what
  * happens when it is pulled out.
  *
- * The program takes one word saying which part to run, because the harness
+ * The program takes one word saying which part to run, because the scenario
  * has to pull the stick out between some of them and a pulled stick cannot
  * be arranged from inside the machine:
  *

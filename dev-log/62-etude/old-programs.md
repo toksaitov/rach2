@@ -49,3 +49,15 @@ The three helpers and the choice of cases start at once. The scripts move to etu
 ## What stays
 
 `hostpeer`, `ptydrive` and `screentext` stay in `tests/system/runner/`, since etude's cases run them. The kernel built with `HARNESS=1` stays, since `machine.exitline.harness` boots it. Bisection runs an older commit's `tests/run`, which compiles that commit's runutil; since the helpers keep the files and protocols of the lock and the ports, an old run and a new one keep each other out of the tree and the ports as before.
+
+## Outcome
+
+The removal, #875, followed this plan except where the owner's decision of 2026-10-23 changed it: no new program runs a command under a fixed number of seconds, and a test is no longer proven by a mutation. So `etude-deadline` was not built (#898), and the proofs that #904, #905 and #906 were to move were deleted with their driver instead. What each use became:
+
+* runutil `watch`: `accept/su_command.sh` runs its session under its caller's watchdog alone, and `tools/dev/poll_kernels.sh` runs its builds with no idle limit.
+* deadline and deadline.sh: the scripts that used them wait for their events with no bound (#907 and the commits before it).
+* runtests: its list `PROBES` became `tests/default-probes`, which `probecheck.sh` and the list of the selfbuild cases read, and the self-test of the judge in `tests/clockref.h` became the host test `clockref_hosttest.c`.
+* The harness and drive.sh: `probe_roots.sh`, whose callers had gone, went with them. Three scripts that a person ran by hand still drove the harness and were not in this plan: `grow_machine.sh` and `machine_grow_space.sh` became cases of the `grow` family (#934), and `rehearse_sitting.sh` a case of `installer-rehearse` (#935).
+* `tools/verify/suitecheck.sh` lost its rules for the harness's `wait=` and `send=` steps and drive.sh's typed steps.
+
+`tests/system/fixtures/old_ports.py` still takes the host lock and a port block as an older checkout's runutil does, since bisection runs older commits beside new ones.

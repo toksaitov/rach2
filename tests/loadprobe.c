@@ -241,9 +241,9 @@ static void pinger(void)
 }
 
 /** The console reader: print "LOADPROBE read" for each line read, after
- * which the harness types the next line, and then count the line into
+ * which the scenario types the next line, and then count the line into
  * `report`, one byte each. The answer comes first, so that the parent, which
- * kills the reader at the last line's byte, does so after the harness has
+ * kills the reader at the last line's byte, does so after the scenario has
  * seen the last answer. It does not return. */
 static void reader(int report)
 {
