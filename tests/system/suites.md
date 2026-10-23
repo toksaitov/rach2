@@ -84,7 +84,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `disks` (core tier; needs qemu, mformat, mtype; 128 MiB): two disks of different sizes on one AHCI controller, both in /proc/disk with their ports and sizes, both with nodes, a partition of each mounted and written, and the second disk's file found on the second disk by the host.
 * `audio` (core tier; needs qemu; 128 MiB): what the machine actually played.
 * `netconsole` (core tier; needs qemu; 128 MiB): the kernel log on the wire, the cases of tests/cases/machine.netconsole.json.
-* `crash` (core tier; needs qemu; 128 MiB): prove the dirty-mount flag detects an unclean shutdown.
+* `crash` (core tier; needs qemu; 128 MiB): the dirty-mount flag, a spare mode bit of the root node, untouched by dirtyprobe's clears of the set-id bits and still set after the unclean stop that follows.
 * `pools` (core tier; needs qemu; 128 MiB): many pipes, ptys, sockets and processes live at once, and the kernel heap back where it started after a thousand each of pipes, ptys and sockets (see tests/poolprobe.c).
 * `runner` (core tier; needs nothing beyond the build; no machine): the self-test of the old runner's program that tests/run still uses: runutil's process groups.
 * `diskfull` (core tier; needs qemu; 128 MiB): a file system with no room left.

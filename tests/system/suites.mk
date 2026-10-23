@@ -514,10 +514,11 @@ $(PERSIST_DISK): krffs/manifests/persist-test.manifest $(MANIFEST_DEPS_persist_t
 # a lock whose removal stayed in the page cache would still be there.
 # Its cases are tests/cases/machine.cred-persist.json, with no target here.
 CRED_PERSIST_DISK = $(IMAGES_DIR)/cred-persist-test.disk
-# `tests/run crash`: prove the dirty-mount flag detects an unclean shutdown.
-# Its cases (tests/cases/machine.crash.json) boot copies of this disk and read
-# the flag with fsck.krffs. Its own image, so that it cannot race
-# another suite on a shared file under `make -j`.
+# `tests/run crash`: the dirty-mount flag, a spare mode bit of the root node,
+# untouched by dirtyprobe's clears of the set-id bits and still set after the
+# unclean stop that follows. Its case (tests/cases/machine.crash.json) boots a
+# copy of this disk and reads the flag with fsck.krffs. Its own image, so that
+# it cannot race another suite on a shared file under `make -j`.
 CRASH_TEST_IMAGE = $(IMAGES_DIR)/crash-test.disk
 $(CRASH_TEST_IMAGE): krffs/manifests/disk-test.manifest $(MANIFEST_DEPS_disk_test) $(MKDISK) \
                      build/krffs/mkfs.krffs build/krffs/stageimage.krffs | preflight krffs tests
