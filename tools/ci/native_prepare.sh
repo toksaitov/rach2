@@ -142,12 +142,16 @@ if [ -n "${ETUDE_PREPARATION_IMPORT:-}" ]; then
         resolved=$(program "$tool")
         set -- "$@" --tool "$resolved"
     done
-    transport=$("$python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["producer"].get("transport", "ssh"))' \
+    transport=$("$python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["producer"]["transport"])' \
         "$(python_path "$ETUDE_PREPARATION_IMPORT")")
     case $transport in
-        ssh|wsl-ssh) resolved=$(program ssh); set -- "$@" --tool "$resolved" ;;
-        wsl) resolved=$(program wsl.exe); set -- "$@" --tool "$resolved" ;;
-        local) ;;
+        ssh) resolved=$(program ssh); set -- "$@" --tool "$resolved" ;;
+        local)
+            if [ "$windows" -eq 1 ]; then
+                resolved=$(program cygpath)
+                set -- "$@" --tool "$resolved"
+            fi
+            ;;
         *) refuse "invalid producer transport: $transport" ;;
     esac
 fi
