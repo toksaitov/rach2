@@ -778,6 +778,7 @@ static int export_selection(struct collection *c, const char *accel)
     o.tree = c->tree;
     o.arch = c->arches;
     o.program = c->program;
+    o.account = c->account;
     o.members = c->members;
     o.nmembers = c->nmembers;
     o.native_locks = c->work;

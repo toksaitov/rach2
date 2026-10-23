@@ -29,7 +29,17 @@ refuse()
 [ "$#" -ge 9 ] || refuse 'expected PURPOSE TREE OUT ARCHES RUN_ID SITE ETUDE ACCEL SELECTION...'
 purpose=$1 tree=$2 out=$3 arches=$4 run=$5 site=$6 etude=$7 accel=$8
 shift 8
-case $purpose in ci|push|release|focused) ;; *) refuse "invalid routine purpose: $purpose" ;; esac
+case $purpose in
+    phase_first_run)
+        [ -n "${ETUDE_PHASE_SELECTION_EXPORT:-}" ] && [ -f "$ETUDE_PHASE_SELECTION_EXPORT" ] ||
+            refuse 'phase_first_run requires a preallocated selection export'
+        ;;
+    ci|push|release|focused)
+        [ "${ETUDE_PHASE_SELECTION_EXPORT+x}" != x ] ||
+            refuse 'routine preparation cannot use a phase selection exemption'
+        ;;
+    *) refuse "invalid purpose: $purpose" ;;
+esac
 case $arches in both|i686|x86_64) ;; *) refuse "invalid architectures: $arches" ;; esac
 case $accel in tcg|kvm|hvf|whpx) ;; *) refuse "invalid accelerator: $accel" ;; esac
 for word do case $word in ''|-*) refuse "invalid selection word: $word" ;; esac; done
@@ -108,6 +118,9 @@ done
 if [ -n "${ETUDE_PHYSICAL_TRACE:-}" ]; then
     set -- "$@" --physical-trace "$(native_path "$ETUDE_PHYSICAL_TRACE")" \
         --physical-stop-request "$(native_path "$ETUDE_PHYSICAL_STOP_REQUEST")"
+fi
+if [ "$purpose" = phase_first_run ]; then
+    set -- "$@" --selection-export "$(native_path "$ETUDE_PHASE_SELECTION_EXPORT")"
 fi
 "$python" "$generator" "$@"
 finished=1
