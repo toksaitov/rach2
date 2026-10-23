@@ -85,7 +85,7 @@ A row whose verdict compares a request with the guest's own deadline keeps the g
 
 The programs under `runner/` are host programs that `suites.mk` builds.
 
-* `hostpeer.c` is the host end of a connection: `hold` keeps a TCP connection open for a number of seconds, `echo` sends back what arrives over TCP and UDP, for a time or until it is stopped, and `send` sends one UDP datagram. Etude's socket and dgram cases run `echo` and `send`.
+* `hostpeer.c` is the host end of a connection: `hold` keeps a TCP connection open for a number of seconds, `echo` sends back what arrives over TCP and UDP, for a time or until it is stopped, and `send` sends one UDP datagram. Etude's socket and dgram cases run `echo` and `send`. Each job uses 127.0.0.1 unless `HOSTPEER_ADDRESS` names another IPv4 address, as [`tests/native/run.sh`](../native/run.sh) does for the controller's address on the Lenovo's network.
 * `ptydrive.c` runs a command, such as `ssh`, on a pseudo-terminal of a given size and answers one password prompt from an environment variable, which it removes from the command's environment and from the output it passes on. It waits for the command without a time limit unless `--timeout` gives one, and a SIGTERM, SIGINT or SIGHUP ends the command with it.
 * `screentext.c` prints the text a framebuffer console shows in a QEMU screen dump, matching each cell against the kernel's own font, `rach2/sys/display/vga_font.c`; `--colors` prints how many colours the dump has.
 

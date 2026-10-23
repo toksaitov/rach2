@@ -26,6 +26,11 @@
  *       send it to the port QEMU forwards to the guest's 7502, once the
  *       guest's probe says it waits for it.
  *
+ * With HOSTPEER_ADDRESS set to an IPv4 address, each job uses that address
+ * in place of 127.0.0.1: a native run on the Lenovo (tests/native/run.sh)
+ * reaches the echo server at the controller's own address on the LAN, and
+ * sends the dgram case's datagram to the machine's.
+ *
  * The exit status is 0 when the job was done, 1 when it could not be, and 2
  * for a usage error; the caller decides whether a failure is fatal. The end
  * of an echo server's time is a success.
@@ -42,13 +47,18 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-/** Fill `addr` with the loopback address and `port`. */
+/* The address of every job, the loopback's unless HOSTPEER_ADDRESS names
+ * another. */
+static struct in_addr peer_address;
+static char peer_text[INET_ADDRSTRLEN] = "127.0.0.1";
+
+/** Fill `addr` with the jobs' address and `port`. */
 static void fill_local(struct sockaddr_in *addr, long port)
 {
     memset(addr, 0, sizeof(*addr));
     addr->sin_family = AF_INET;
     addr->sin_port = htons((unsigned short)port);
-    addr->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr->sin_addr = peer_address;
 }
 
 /**
@@ -158,9 +168,9 @@ static int echo(long port, long seconds)
     if (port == 0)
         return 1;
     if (seconds == 0)
-        printf("hostpeer: echoing tcp and udp on 127.0.0.1:%ld until stopped\n", port);
+        printf("hostpeer: echoing tcp and udp on %s:%ld until stopped\n", peer_text, port);
     else
-        printf("hostpeer: echoing tcp and udp on 127.0.0.1:%ld for %lds\n", port, seconds);
+        printf("hostpeer: echoing tcp and udp on %s:%ld for %lds\n", peer_text, port, seconds);
     fflush(stdout);
 
     while (seconds == 0 || now() < deadline) {
@@ -248,7 +258,7 @@ static int send_text(long port, const char *text)
         return 1;
     }
     close(fd);
-    printf("hostpeer: sent %lu bytes to 127.0.0.1:%ld\n", (unsigned long)n, port);
+    printf("hostpeer: sent %lu bytes to %s:%ld\n", (unsigned long)n, peer_text, port);
     return 0;
 }
 
@@ -270,8 +280,17 @@ static int whole_number(const char *text, long *out)
 /** Check the arguments and run the job they name. */
 int main(int argc, char **argv)
 {
+    const char *address = getenv("HOSTPEER_ADDRESS");
     long port, seconds;
 
+    peer_address.s_addr = htonl(INADDR_LOOPBACK);
+    if (address != NULL && address[0] != '\0') {
+        if (inet_pton(AF_INET, address, &peer_address) != 1) {
+            fprintf(stderr, "hostpeer: HOSTPEER_ADDRESS is not an IPv4 address\n");
+            return 2;
+        }
+        snprintf(peer_text, sizeof(peer_text), "%s", address);
+    }
     if (argc != 4) {
         fprintf(stderr, "usage: hostpeer hold|echo PORT SECONDS\n"
                         "       hostpeer send PORT TEXT\n");
