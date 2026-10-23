@@ -340,19 +340,12 @@ static void logs(struct metal_case *s)
  * in as the test account, and require its output and status unchanged. */
 static void su(struct metal_case *s)
 {
-    char known[4096] = "";
-    char *argv[] = {
-        "sh",    s->su,  s->test_key, "127.0.0.1",
-        s->port, "test", known,       "printf '%s\\n' \"a 'quote' and a dollar \\$\"; exit 7",
-        NULL};
+    struct net_login login = {s->test_key, s->port, "test", s->root_password};
     struct net_run r;
     size_t n = 0;
 
     net_step(&s->u, "su");
-    net_path(&s->u, "su.known", known, sizeof(known));
-    put_env(s, "RACH2_ACCEPT_PASSWORD", s->root_password);
-    net_host(&s->u, argv, "su", &r);
-    clear_env();
+    net_su(&s->u, &login, "printf '%s\\n' \"a 'quote' and a dollar \\$\"; exit 7", "su", &r);
     if (r.out != NULL)
         for (n = strlen(r.out); n > 0 && strchr("\r\n", r.out[n - 1]) != NULL; n--)
             r.out[n - 1] = '\0';

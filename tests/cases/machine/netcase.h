@@ -185,6 +185,21 @@ enum etude_status net_ssh_attach(struct net_case *u, const char *input);
 enum etude_status net_ssh_start(struct net_case *u, char *const argv[], const char *ready);
 enum etude_status net_ssh_finish(struct net_case *u, const char *output, struct net_run *r);
 
+/* Credentials of one SSH account used for a root command through su. */
+struct net_login {
+    const char *key;
+    const char *port;
+    const char *user;
+    const char *password;
+};
+
+/** Run COMMAND as root through su in a terminal SSH login. The terminal
+ * driver must answer exactly one prompt. R receives only the command's
+ * output and its exact exit status; the redacted terminal transcript stays
+ * in evidence OUTPUT. No host shell or client runs. */
+enum etude_status net_su(struct net_case *u, const struct net_login *login, const char *command,
+                         const char *output, struct net_run *r);
+
 /** Free the texts of `r`. */
 void net_run_free(struct net_run *r);
 

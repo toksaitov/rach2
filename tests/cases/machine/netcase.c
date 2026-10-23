@@ -647,6 +647,159 @@ enum etude_status net_ssh_finish(struct net_case *u, const char *output, struct 
     return client_result(u, output, st, &result, r);
 }
 
+/** Quote one word for the guest shell, preserving every byte. */
+static char *client_quote(const char *word)
+{
+    size_t n = strlen(word), at = 0, i;
+    char *quoted;
+
+    if (n > (SIZE_MAX - 3) / 4 || (quoted = malloc(4 * n + 3)) == NULL)
+        return NULL;
+    quoted[at++] = '\'';
+    for (i = 0; i < n; i++) {
+        if (word[i] == '\'') {
+            memcpy(quoted + at, "'\\''", 4);
+            at += 4;
+        } else
+            quoted[at++] = word[i];
+    }
+    quoted[at++] = '\'';
+    quoted[at] = '\0';
+    return quoted;
+}
+
+/** Build su's command and its separate output/status markers. */
+static char *su_command(const char *command, const char *token)
+{
+    char *word = client_quote(command), *body, *quoted, *remote;
+    size_t size;
+
+    if (word == NULL)
+        return NULL;
+    size = strlen(word) + 2 * strlen(token) + 256;
+    body = malloc(size);
+    if (body == NULL) {
+        free(word);
+        return NULL;
+    }
+    snprintf(body, size,
+             "{ printf '\\n%%s\\n' '%s-begin'; /bin/sh -c %s 2>/dev/null; "
+             "accept_status=$?; printf '\\n%%s %%s\\n' '%s-end' \"$accept_status\"; } | cat",
+             token, word, token);
+    free(word);
+    quoted = client_quote(body);
+    free(body);
+    if (quoted == NULL)
+        return NULL;
+    size = strlen(quoted) + 8;
+    remote = malloc(size);
+    if (remote != NULL)
+        snprintf(remote, size, "su -c %s", quoted);
+    free(quoted);
+    return remote;
+}
+
+/** Extract the root command's bytes and status from the terminal driver. */
+static int su_result(struct net_run *r, const char *token)
+{
+    char begin[96], end[96], *first, *last, *digits, *text;
+    unsigned long status;
+    size_t n;
+
+    if (!net_exited0(r) || net_count(r->out, "PROMPTED=1") != 1 ||
+        net_count(r->out, "ANSWERED=1") != 1)
+        return 0;
+    snprintf(begin, sizeof(begin), "\n%s-begin\n", token);
+    snprintf(end, sizeof(end), "\n%s-end ", token);
+    first = strstr(r->out, begin);
+    first = first != NULL ? first + strlen(begin) : NULL;
+    last = first != NULL ? strstr(first, end) : NULL;
+    if (last == NULL)
+        return 0;
+    status = strtoul(last + strlen(end), &digits, 10);
+    if (status > 255 || digits == last + strlen(end) || *digits != '\n')
+        return 0;
+    n = (size_t)(last - first);
+    text = malloc(n + 1);
+    if (text == NULL)
+        return 0;
+    memcpy(text, first, n);
+    text[n] = '\0';
+    free(r->out);
+    r->out = text;
+    r->end.end = ETUDE_END_EXITED;
+    r->end.value = (int)status;
+    return 1;
+}
+
+enum etude_status net_su(struct net_case *u, const struct net_login *login, const char *command,
+                         const char *output, struct net_run *r)
+{
+    struct client_command a;
+    struct etude_guest_result result;
+    const char *env[5];
+    char password[512], who[128], token[64];
+    char *remote;
+    enum etude_status st;
+    unsigned tries;
+    char *argv[] = {"ptydrive", "--rows",
+                    "40",       "--cols",
+                    "120",      "--",
+                    "ssh",      "-tt",
+                    "-i",       (char *)login->key,
+                    "-p",       (char *)login->port,
+                    "-o",       "StrictHostKeyChecking=no",
+                    "-o",       "UserKnownHostsFile=/dev/null",
+                    "-o",       "BatchMode=yes",
+                    who,        NULL,
+                    NULL};
+
+    memset(r, 0, sizeof(*r));
+    r->end.end = ETUDE_END_LOST;
+    r->end.value = -1;
+    if (!net_ok(u))
+        return u->st;
+    snprintf(token, sizeof(token), "RACH2_SU_%u", ++u->client_files);
+    remote = su_command(command, token);
+    if (remote == NULL)
+        return failed(u, ETUDE_FAILED, "the root command could not be quoted");
+    argv[19] = remote;
+    snprintf(who, sizeof(who), "%s@127.0.0.1", login->user);
+    if (!client_arguments(u, argv, &a)) {
+        free(remote);
+        client_free(&a);
+        return u->st;
+    }
+    free(remote);
+    client_environment(env, password);
+    snprintf(password, sizeof(password), "RACH2_PASSWORD=%s", login->password);
+    env[3] = password;
+    for (tries = 0;; tries++) {
+        st = etude_guest_command(u->client, a.argv, env, NULL, output, &result);
+        st = client_result(u, output, st, &result, r);
+        if (st != ETUDE_OK || tries == 3 || net_count(r->out, "PROMPTED=0") != 1 ||
+            (strstr(r->out, "kex_exchange_identification") == NULL &&
+             strstr(r->out, "ssh_exchange_identification") == NULL &&
+             strstr(r->out, "Connection reset by") == NULL &&
+             strstr(r->out, "Connection refused") == NULL &&
+             strstr(r->out, "Connection timed out") == NULL))
+            break;
+        net_run_free(r);
+        {
+            const char *pause[] = {"/bin/sleep", "1", NULL};
+            struct etude_guest_result waited;
+            st = etude_guest_command(u->client, pause, NULL, NULL, "su-retry", &waited);
+            if (st != ETUDE_OK)
+                break;
+        }
+    }
+    client_free(&a);
+    if (st == ETUDE_OK && !su_result(r, token))
+        return failed(u, ETUDE_FAILED,
+                      "su did not answer one prompt and report its command's status");
+    return st;
+}
+
 void net_run_free(struct net_run *r)
 {
     free(r->out);
