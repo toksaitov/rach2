@@ -86,6 +86,7 @@ The host test of `etude-guest` closed its pipes before killing it. The helper co
 * The Codex loop's session on #681 read the comment that gave #939 to the stopped helper and handed #681 back at 13:10. #939 went to the Codex loop with #681 parked behind it.
 * The manager loop writes each day's report after 02:00 UTC. With the loop stopped, the coordinating session's checks wrote none for the 22nd until 13:20 on the 23rd (#943).
 * #951, the host suite passing the version bootstrap on the testing host without BusyBox, was filed at 13:37 on the 23rd and parked behind worker s's #941, though it has the cause of #950, which a helper had: a row that needs the tooling machine passes when the machine is not made. The check at 14:25 grouped the two in #956 for that helper, after #951 had waited fifty minutes.
+* The Mac Claude loop's session on #953 printed its result at 14:40 on the 23rd and stayed open for eight minutes, until the check stopped a Monitor it had left watching a deleted log (#960). It is the fault of the scheduled wakeups in a new form: print mode keeps a finished session open while anything it started may still report. The loops' Claude Code sessions now refuse the Monitor tool as they refuse ScheduleWakeup, and the helpers are started the same way.
 
 ## GitHub
 
