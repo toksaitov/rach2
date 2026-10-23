@@ -6,21 +6,23 @@
 #   tools/ci/bisect.sh [-c] [-e BRIDGE] [-m MINUTES] [-r RUN]
 #                      KIND ARCH GOOD BAD ISSUE ITEM...
 #
-# GOOD passed ci on ARCH and BAD failed it in a run of KIND, `core` or `full`,
-# or `night`, which issues filed before full runs name and which is taken as
-# `full`. ITEM... is what failed, as tools/ci/run.sh names it: `build`, `style`,
-# `host`, a suite, or a set's name. The report's `unfinished-core`,
-# `unfinished-full` and `unfinished-night` repeat the whole run through the
-# tested commit's tools/ci/run.sh, including its build and the full run's
-# separate bigmem; a commit whose run.sh does not take `full` runs the same set
-# as `night`. A commit is tested by building it and running those items, the
-# build alone when `build` is among them. tests/run takes a set only by itself,
-# so `core` runs after the other items in a run of its own, and `all` runs alone
-# since it covers every suite. Each test has the time limit of KIND's run step
-# in ci.yml or full.yml, 170 or 340 minutes, so that a run too slow for ci is
-# too slow here; timeout(1) stops it as it stops ci's. A test passes, fails, or
-# cannot be made. tests/run fails a commit when it exits 1 with the result `run:
-# result: failed`, its last line that begins `run: result: ` apart from the
+# GOOD passed ci on ARCH and BAD failed it in a run of KIND, `core` or
+# `full`, or `night`, which issues filed before full runs name and which is
+# taken as `full`. ITEM... is what failed, as tools/ci/run.sh names it:
+# `build`, `style`, `host`, a suite, or a set's name. The report's
+# `unfinished-core`, `unfinished-full` and `unfinished-night` repeat the
+# whole run through the tested commit's tools/ci/run.sh, including its build
+# and the full run's separate bigmem; a commit whose run.sh does not take
+# `full` runs the same set as `night`. A commit is tested by building it and
+# running those items, the build alone when `build` is among them. tests/run
+# takes a set only by itself, so `core` runs after the other items in a run
+# of its own, and `all` runs alone since it covers every suite. Each test
+# has the time limit of one architecture's run in ci.yml or full.yml: 170
+# minutes, or 340, half of full.yml's run of both architectures, so that a
+# run too slow for ci is too slow here; timeout(1) stops
+# it as it stops ci's. A test passes, fails, or cannot be made. tests/run
+# fails a commit when it exits 1 with the result `run: result: failed`, its
+# last line that begins `run: result: ` apart from the
 # `run: result: failed: NAMES` line, which names the suites that failed. The
 # result is on standard output and the names on standard error, and a launcher
 # that passes the two through pipes of their own may put either last in the log.

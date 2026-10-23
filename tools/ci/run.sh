@@ -6,6 +6,10 @@
 #   tools/ci/run.sh core DIR    the build, style, host and the core tier
 #   tools/ci/run.sh full DIR    the build from clean and every suite of ARCH
 #
+# With `ARCH='i686 x86_64'`, the run tests both architectures, and DIR gets
+# a directory for each, `KIND-ARCH`, with the files below, as the end of
+# this comment says.
+#
 # DIR receives `log`, the whole output; `err`, the standard error of each
 # run of tests/run in turn, which has the lines of the runner's own results;
 # `failed`, one line for each step that failed: `build`, a suite's name,
@@ -55,6 +59,21 @@
 # for a history that is missing, cut off or inconsistent, or a status that
 # disagrees with it.
 #
+# A run of both architectures reads the runner's lines. It cleans each
+# architecture for a full run, then builds each, and runs the suites of every
+# architecture that built as one run of tests/run, so that the cases of both
+# go through one schedule, and `bigmem` after it as a run of its own; with
+# SUITES, the suites it names, as `ARCH:SUITE` words of that run, and an
+# architecture that SUITES names nothing of is neither built nor tested and
+# gets `skipped`. DIR has the whole run's `log`, `err` and `kept/`, and
+# `failed` with each name as `ARCH:NAME`: `ARCH:build` for a build that
+# failed, the runner's `ARCH:SUITE` words, and every other name for each
+# architecture of the run of tests/run that gave it. At the end, and when the
+# run is stopped, each architecture's directory gets the log, the standard
+# error without the lines of the other architecture's suites, its own names
+# in `failed`, and the kept logs of its own cases and of those of no
+# architecture; `done` is written last in each, and only at the end.
+#
 # Each build and tests/run enters the installed site policy separately.
 set -u
 
@@ -69,6 +88,14 @@ esac
 ARCH=${ARCH:-i686}
 RACH2_MIN_FREE_GIB=${RACH2_MIN_FREE_GIB:-40}
 export ARCH RACH2_MIN_FREE_GIB
+# Both architectures, `ARCH='i686 x86_64'`, as the header says. ARCHES keeps
+# the architectures of the run, and ARCH names those of each step.
+ARCHES=$ARCH
+both=""
+case "$ARCH" in
+    'i686 x86_64') both=1 ;;
+    *' '*) echo "ci: $kind: refused: ARCH names one architecture, or both as 'i686 x86_64'" >&2; exit 2 ;;
+esac
 if [ "$kind" = full ]; then
     RACH2_STORE=
     export RACH2_STORE
@@ -86,7 +113,8 @@ mkdir -p "$out/kept"
 
 # End the run without `done`, as stopped.
 stop() {
-    echo "ci: $kind: stopped on $ARCH" | tee -a "$out/log"
+    echo "ci: $kind: stopped on $ARCHES" | tee -a "$out/log"
+    [ -z "$both" ] || share
     exit 143
 }
 
@@ -188,7 +216,10 @@ run_history() { # run_history NAME ARGS...
 # failed. The suites are on the runner's `run: result: failed: SUITE...` line,
 # the last line of its standard error that begins `run: `. The launcher passes
 # standard output and standard error through pipes of their own, so the two
-# are not in order in the log.
+# are not in order in the log. With both architectures, tests/run runs on
+# those ARCH names, its failed suites are `ARCH:SUITE` words, and each other
+# name, `runner` and NAME among them, is written as `ARCH:NAME` for each
+# architecture it ran on.
 run_set() { # run_set NAME ARGS...
     name=$1; shift
     : > "$out/set.log"
@@ -202,13 +233,18 @@ run_set() { # run_set NAME ARGS...
         sed -n 's/^run: result: failed: *//p' | tr ' ' '\n' | sed '/^$/d')
     known=$(awk -F'|' '/^[a-z]/ { print $1 } END { print "runner" }' tests/registry)
     for f in $failed; do
-        echo "$known" | grep -qx "$f" || failed=""
+        echo "$known" | grep -qx "${f#*:}" || failed=""
     done
-    if [ -n "$failed" ]; then
-        echo "$failed" >> "$out/failed"
-    else
-        echo "$name" >> "$out/failed"
+    [ -n "$failed" ] || failed=$name
+    if [ -n "$both" ]; then
+        failed=$(for f in $failed; do
+            case $f in
+                (*:*) echo "$f" ;;
+                (*) for a in $ARCH; do echo "$a:$f"; done ;;
+            esac
+        done)
     fi
+    echo "$failed" >> "$out/failed"
     return 1
 }
 
@@ -229,14 +265,123 @@ chosen() { # chosen NAME...
     done
 }
 
+# The names of the suites of a full run of ARCH, `bigmem` last.
+full_names() {
+    awk -F'|' -v a="$ARCH" '
+        /^[a-z]/ && $1 != "bigmem" && ($6 == "" || index("," $6 ",", "," a ",")) { print $1 }
+    ' tests/registry
+    [ "$ARCH" != x86_64 ] || echo bigmem
+}
+
+# Give each architecture of a run of both its directory, DIR/KIND-ARCH, as a
+# run of that architecture alone leaves it: the log; the standard error,
+# without the lines of the other architecture's suites; the names that
+# DIR/failed gives as `ARCH:NAME`; the kept logs of its cases, those of no
+# architecture and those of no case going to both; and once the run has
+# finished, `done`, beside `skipped` for one that had nothing to run.
+share() { # share [finished]
+    for a in i686 x86_64; do
+        d=$out/$kind-$a
+        o=x86_64
+        [ "$a" = i686 ] || o=i686
+        mkdir -p "$d/kept"
+        cp "$out/log" "$d/log"
+        grep -v "^run: $o:" "$out/err" > "$d/err"
+        sed -n "s/^$a://p" "$out/failed" > "$d/failed"
+        for k in "$out"/kept/*; do
+            [ -e "$k" ] || continue
+            case ${k##*/} in
+                tests.$o.* | *.$o.r[0-9]*) ;;
+                *) cp -R "$k" "$d/kept/" ;;
+            esac
+        done
+        [ -n "${1:-}" ] || continue
+        case " $tested " in *" $a "*) ;; *) : > "$d/skipped" ;; esac
+        : > "$d/done"
+    done
+}
+
+# Both architectures: each is cleaned for a full run, then each is built,
+# and the suites of every architecture that built run as one run of tests/run,
+# `bigmem` after it as a run of its own; a failure is `ARCH:build`. With
+# SUITES, a full run runs `ARCH:SUITE` for each word, and an architecture
+# that SUITES names nothing of is not built and is `skipped`.
+if [ -n "$both" ]; then
+    [ "$results" = lines ] || {
+        echo "ci: $kind: refused: a run of both architectures reads the runner's lines" | copy -a "$out/log"
+        exit 2
+    }
+    echo "ci: $kind: architectures i686 and x86_64 at $(git rev-parse --short HEAD)"
+    tested=""
+    words=""
+    for a in i686 x86_64; do
+        ARCH=$a
+        if [ "$kind" = full ]; then
+            # shellcheck disable=SC2046 # a suite name is one word by format
+            names=$(chosen $(full_names)) || {
+                echo "ci: full: refused: SUITES names a suite that $a does not run: $SUITES" | copy -a "$out/log"
+                exit 2
+            }
+            [ -n "$names" ] || { echo "ci: full: no suite to run again on $a" | copy -a "$out/log"; continue; }
+            [ -z "${SUITES:-}" ] ||
+                echo "ci: full: running again on $a: $(echo "$names" | tr '\n' ' ' | sed 's/ $//')" | copy -a "$out/log"
+            for n in $names; do words="$words $a:$n"; done
+        fi
+        tested="$tested $a"
+    done
+    built=""
+    for a in $tested; do
+        ARCH=$a
+        [ "$kind" != full ] || step make clean || echo "$a:build" >> "$out/failed"
+    done
+    for a in $tested; do
+        ARCH=$a
+        grep -qx "$a:build" "$out/failed" || step make || echo "$a:build" >> "$out/failed"
+        grep -qx "$a:build" "$out/failed" || built="$built $a"
+    done
+    ARCH=${built# }
+    if [ -n "$built" ] && [ "$kind" = core ]; then
+        run_set style style
+        run_set host host
+        run_set core core
+    elif [ -n "$built" ]; then
+        rest=""
+        bigmem=""
+        for w in $words; do
+            case " $built " in
+                *" ${w%%:*} "*) ;;
+                *) continue ;;
+            esac
+            if [ "$w" = x86_64:bigmem ]; then
+                bigmem=1
+            else
+                rest="$rest $w"
+            fi
+        done
+        [ -n "${SUITES:-}" ] || rest=$(for w in $rest; do echo "${w#*:}"; done | awk '!seen[$0]++')
+        # shellcheck disable=SC2086 # a suite name is one word by format
+        [ -z "$rest" ] || run_set all $rest
+        if [ -n "$bigmem" ]; then
+            ARCH=x86_64
+            run_set bigmem bigmem
+        fi
+    fi
+    find build/tests/failed -mindepth 1 -maxdepth 1 -newer "$out/start" \
+        -exec cp -R {} "$out/kept/" \; 2> /dev/null
+    share finished
+    : > "$out/done"
+    if [ -s "$out/failed" ]; then
+        echo "ci: $kind: result: failed: $(tr '\n' ' ' < "$out/failed")"
+        exit 1
+    fi
+    echo "ci: $kind: result: passed on i686 and x86_64"
+    exit 0
+fi
+
 echo "ci: $kind: architecture $ARCH at $(git rev-parse --short HEAD)"
 if [ "$kind" = full ]; then
-    names=$(awk -F'|' -v a="$ARCH" '
-        /^[a-z]/ && $1 != "bigmem" && ($6 == "" || index("," $6 ",", "," a ",")) { print $1 }
-    ' tests/registry)
-    [ "$ARCH" != x86_64 ] || names="$names bigmem"
-    # shellcheck disable=SC2086 # a suite name is one word by format
-    names=$(chosen $names) || {
+    # shellcheck disable=SC2046 # a suite name is one word by format
+    names=$(chosen $(full_names)) || {
         echo "ci: full: refused: SUITES names a suite that $ARCH does not run: $SUITES" | copy -a "$out/log"
         exit 2
     }

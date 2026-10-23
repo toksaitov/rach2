@@ -6,8 +6,9 @@
 # for each issue. tools/ci/bisect.sh tests the failing commit again, halves
 # the commits since the last pass, and comments on the issue with the commit
 # it names, an unresolved range, or a failure that did not repeat. Each test
-# has the time limit of the run that failed, 170 or 340 minutes, so that a
-# bisection can outlast one job. The script has 700 minutes, inside the job's
+# runs one architecture with that architecture's time limit in the run that
+# failed, 170 minutes, or 340 for a full run, so that a bisection can outlast
+# one job. The script has 700 minutes, inside the job's
 # 720, and when the time left cannot hold the next test it starts a new run
 # of this workflow on the range left, with `confirmed` set. Each test of a
 # core failure runs in the environment of master's tools/ci/core.env, which
