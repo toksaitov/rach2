@@ -573,9 +573,11 @@ static void check_run(const struct cmp_history *h, struct cmp_sample *s)
     const char *attempt_cleanup = cmp_text(eh_json_get(s->attempt->data, "result"), "cleanup");
     const char *run_cleanup = cmp_text(eh_json_get(s->run->data, "result"), "cleanup");
     s->watchdog_eligible = !s->reason[0] && attempt_cleanup && run_cleanup &&
-        !strcmp(attempt_cleanup, "confirmed") && !strcmp(run_cleanup, "confirmed");
+                           !strcmp(attempt_cleanup, "confirmed") &&
+                           !strcmp(run_cleanup, "confirmed");
     if (!s->run->load_eligible)
-        exclude(s, "its run has no verified continuous load observation or controlled measurement context");
+        exclude(s, "its run has no verified continuous load observation or controlled measurement "
+                   "context");
 }
 
 /**

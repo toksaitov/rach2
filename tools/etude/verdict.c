@@ -56,7 +56,7 @@ struct verdict {
     int *failed;              /* by suite: an item of it did not pass */
     int set_failed;           /* the shared preparation or an item of no suite */
     int runner;               /* the runner left work unconfirmed */
-    int require_budget; /* routine entry refuses an unknown or failed charge */
+    int require_budget;       /* routine entry refuses an unknown or failed charge */
     int project_architecture; /* report only this architecture after common validation */
     struct record *rec;
     size_t records, cap;

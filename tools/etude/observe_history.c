@@ -95,8 +95,8 @@ struct trace_span {
 };
 
 static int keep_trace(const struct etude_observation_run *r, const char *path,
-                      const struct trace_span *span, const char *summary,
-                      struct cmp_text *out, int *available)
+                      const struct trace_span *span, const char *summary, struct cmp_text *out,
+                      int *available)
 {
     char *bytes = NULL, *verified = NULL, location[8192], hash[65];
     size_t length = 0;

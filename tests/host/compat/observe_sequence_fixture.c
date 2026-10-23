@@ -49,9 +49,8 @@ static void sequence_caller(const char *receipt)
     long pid = (long)getpid();
 #endif
     CHECK(etude_process_state(pid, &caller) == 1 && caller.start_known);
-    snprintf(identity, sizeof(identity), "%ld:%llu", caller.pid,
-             (unsigned long long)caller.start);
-    snprintf(log, sizeof(log), "%s.log", receipt);
+    snprintf(identity, sizeof(identity), "%ld:%llu", caller.pid, (unsigned long long)caller.start);
+    fix_format(log, sizeof(log), "%s.log", receipt);
     CHECK(sequence_environment("ETUDE_SEQUENCE_PARENT", identity) == 0);
     CHECK(sequence_environment("ETUDE_SEQUENCE_LOG", log) == 0);
 }

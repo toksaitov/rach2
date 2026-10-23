@@ -24,8 +24,8 @@ int etude_sequence_parent_identity(long parent, struct etude_pid *identity)
         if (errno || *end || !creation)
             return -1;
     }
-    if (parent <= 1 || etude_process_state(parent, identity) != 1 ||
-        !identity->start_known || (creation && identity->start != creation))
+    if (parent <= 1 || etude_process_state(parent, identity) != 1 || !identity->start_known ||
+        (creation && identity->start != creation))
         return -1;
     return 0;
 }
@@ -130,8 +130,7 @@ static void output(void *unused, struct etude_win_child *child, enum etude_win_s
     (void)child;
     if (fwrite(bytes, 1, size, f) != size || fflush(f))
         output_failed = 1;
-    if (sequence_log &&
-        (fwrite(bytes, 1, size, sequence_log) != size || fflush(sequence_log)))
+    if (sequence_log && (fwrite(bytes, 1, size, sequence_log) != size || fflush(sequence_log)))
         output_failed = 1;
 }
 /* One persistent owner observes preparation and collection in separate Jobs. */

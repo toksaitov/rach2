@@ -20,8 +20,7 @@ int etude_posix_observe_parent_main(int argc, char **argv)
 {
     struct etude_pid identity;
     (void)argv;
-    if (argc != 2 || etude_process_state(getppid(), &identity) != 1 ||
-        !identity.start_known)
+    if (argc != 2 || etude_process_state(getppid(), &identity) != 1 || !identity.start_known)
         return 2;
     return printf("%ld %llu\n", identity.pid, (unsigned long long)identity.start) < 0 ? 1 : 0;
 }
@@ -100,8 +99,8 @@ static int stop_matches(const struct sequence *s)
     if (!f)
         return errno == ENOENT ? 0 : -1;
     size_t n = fread(bytes, 1, sizeof(bytes), f);
-    int match = !ferror(f) && n == strlen(s->run) + 1 &&
-                !memcmp(bytes, s->run, n - 1) && bytes[n - 1] == '\n';
+    int match = !ferror(f) && n == strlen(s->run) + 1 && !memcmp(bytes, s->run, n - 1) &&
+                bytes[n - 1] == '\n';
     if (fclose(f))
         match = 0;
     return match ? 1 : -1;
@@ -135,9 +134,10 @@ static int registered(void *context, const char *attempt, const struct etude_pid
                       const struct etude_pid *process)
 {
     struct sequence *s = context;
-    if (fprintf(s->record, "phase-child %s %ld %llu keeper %ld %llu\n", attempt,
-                process->pid, (unsigned long long)process->start, keeper->pid,
-                (unsigned long long)keeper->start) < 0 || fflush(s->record))
+    if (fprintf(s->record, "phase-child %s %ld %llu keeper %ld %llu\n", attempt, process->pid,
+                (unsigned long long)process->start, keeper->pid,
+                (unsigned long long)keeper->start) < 0 ||
+        fflush(s->record))
         return EIO;
     return stopped ? ECANCELED : 0;
 }
@@ -157,7 +157,8 @@ static int begin(struct sequence *s, unsigned index, char **argv, int observer)
     spec.reg = registered;
     spec.reg_ctx = s;
     if (fprintf(s->record, "phase-begin %s %s %llu\n", s->run, p->name,
-                (unsigned long long)posix_now_us()) < 0 || fflush(s->record))
+                (unsigned long long)posix_now_us()) < 0 ||
+        fflush(s->record))
         return -1;
     return etude_exec_start(s->executor, &spec, &p->process);
 }
@@ -172,13 +173,23 @@ static int begin_observer(struct sequence *s)
         return -1;
     }
     int error = fcntl(pipe_fds[0], F_SETFD, FD_CLOEXEC) < 0 ||
-                fcntl(pipe_fds[1], F_SETFD, FD_CLOEXEC) < 0 ||
-                dup2(pipe_fds[0], STDIN_FILENO) < 0;
+                fcntl(pipe_fds[1], F_SETFD, FD_CLOEXEC) < 0 || dup2(pipe_fds[0], STDIN_FILENO) < 0;
     char pid[32], creation[32];
     snprintf(pid, sizeof(pid), "%ld", s->owner.pid);
     snprintf(creation, sizeof(creation), "%llu", (unsigned long long)s->owner.start);
-    char *argv[] = {(char *)s->program, "observe", "-o", (char *)s->trace, "-p", pid,
-                    "-c", creation, "-r", (char *)s->run, "-s", (char *)s->stop, NULL};
+    char *argv[] = {(char *)s->program,
+                    "observe",
+                    "-o",
+                    (char *)s->trace,
+                    "-p",
+                    pid,
+                    "-c",
+                    creation,
+                    "-r",
+                    (char *)s->run,
+                    "-s",
+                    (char *)s->stop,
+                    NULL};
     if (!error)
         error = begin(s, 0, argv, 1);
     if (dup2(saved, STDIN_FILENO) < 0)
@@ -233,8 +244,7 @@ static int poll_sequence(struct sequence *s)
         if (p->process == done)
             p->done = 1;
         const struct etude_exec_result *r = etude_proc_result(p->process);
-        if (output(&r->out, &p->out, stdout, s->log) ||
-            output(&r->err, &p->err, stderr, s->log) ||
+        if (output(&r->out, &p->out, stdout, s->log) || output(&r->err, &p->err, stderr, s->log) ||
             r->output_error)
             s->error = EIO;
     }
@@ -252,10 +262,11 @@ static int end_phase(struct sequence *s, unsigned index)
         s->cleanup = 0;
         s->error = EBUSY;
     }
-    if (fprintf(s->record, "phase-end %s %s %llu status %d cleanup %s cpu_us %llu\n",
-                s->run, p->name, (unsigned long long)posix_now_us(), p->status,
+    if (fprintf(s->record, "phase-end %s %s %llu status %d cleanup %s cpu_us %llu\n", s->run,
+                p->name, (unsigned long long)posix_now_us(), p->status,
                 r->cleanup == ETUDE_CLEANUP_CONFIRMED ? "confirmed" : "unconfirmed",
-                (unsigned long long)r->cpu_us.value) < 0 || fflush(s->record))
+                (unsigned long long)r->cpu_us.value) < 0 ||
+        fflush(s->record))
         s->error = EIO;
     etude_proc_free(p->process);
     p->process = NULL;
@@ -302,8 +313,7 @@ static int observer_ready(struct sequence *s)
 
 static int run_sequence(struct sequence *s)
 {
-    if (begin_observer(s) || observer_ready(s) || begin(s, 1, s->prep_argv, 0) ||
-        wait_phase(s, 1))
+    if (begin_observer(s) || observer_ready(s) || begin(s, 1, s->prep_argv, 0) || wait_phase(s, 1))
         return 125;
     int status = s->phases[1].status;
     if (!status) {
@@ -325,12 +335,11 @@ static int sequence_open(struct sequence *s, const char *path)
     if (input && strcmp(input, "pipe"))
         return -1;
     s->watch_input = input != NULL;
-    if (!lstat(s->trace, &st) || errno != ENOENT ||
-        !lstat(s->stop, &st) || errno != ENOENT)
+    if (!lstat(s->trace, &st) || errno != ENOENT || !lstat(s->stop, &st) || errno != ENOENT)
         return -1;
     if (etude_sequence_parent_identity(getppid(), &s->parent) ||
-        etude_process_state(getpid(), &s->owner) != 1 ||
-        !s->owner.start_known || s->parent.start > s->owner.start)
+        etude_process_state(getpid(), &s->owner) != 1 || !s->owner.start_known ||
+        s->parent.start > s->owner.start)
         return -1;
     int fd = open(path, O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600);
     if (fd < 0)
@@ -340,9 +349,9 @@ static int sequence_open(struct sequence *s, const char *path)
         close(fd);
         return -1;
     }
-    if (fprintf(s->record, "owner %ld %llu\nparent %ld %llu\nrun %s\n",
-                s->owner.pid, (unsigned long long)s->owner.start,
-                s->parent.pid, (unsigned long long)s->parent.start, s->run) < 0 ||
+    if (fprintf(s->record, "owner %ld %llu\nparent %ld %llu\nrun %s\n", s->owner.pid,
+                (unsigned long long)s->owner.start, s->parent.pid,
+                (unsigned long long)s->parent.start, s->run) < 0 ||
         fflush(s->record))
         return -1;
     const char *log_path = getenv("ETUDE_SEQUENCE_LOG");

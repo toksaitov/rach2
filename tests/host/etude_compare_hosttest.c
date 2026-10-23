@@ -666,7 +666,8 @@ static void check_load_evidence(char *out, size_t size)
           "load-only exclusion preserves a successful timing observation");
     if (observed.sample_count == 1)
         CHECK(observed.samples[0].reason[0] && observed.samples[0].watchdog_eligible,
-              "unknown outside load excludes performance but still teaches a successful watchdog bound");
+              "unknown outside load excludes performance but still teaches a successful watchdog "
+              "bound");
     cmp_free(&observed);
     history = (char *)path("d1");
     CHECK(cmp_load(&observed, schema, &history, 1) == 0 && observed.sample_count == 1,
