@@ -156,33 +156,22 @@ static char *line(struct peer *p)
     clear(&b);
     return NULL;
 }
-static struct request *request(struct peer *p, int *malformed)
+static int request_line(struct request *r, const char *s)
 {
-    struct request *r = allocate(sizeof(*r));
-    char *s = NULL, *part, *end;
-    struct buffer body = {0};
-    unsigned long long length;
-    r->headers = value('a');
-    *malformed = 0;
-    do {
-        free(s);
-        s = line(p);
-    } while (s && !*s);
-    if (!s)
-        goto bad;
+    char *part;
     r->method = strdup(s);
     part = strchr(r->method, ' ');
     if (!part)
-        goto invalid;
+        return 0;
     *part++ = 0;
     r->target = strdup(part);
     part = strchr(r->target, ' ');
     if (!part)
-        goto invalid;
+        return 0;
     *part++ = 0;
     r->version = strdup(part);
     if (strncmp(r->version, "HTTP/1.", 7) || strchr(r->version, ' '))
-        goto invalid;
+        return 0;
     r->path = strdup(r->target);
     part = strchr(r->path, '?');
     if (part) {
@@ -190,18 +179,21 @@ static struct request *request(struct peer *p, int *malformed)
         r->query = strdup(part);
     } else
         r->query = strdup("");
-    free(s);
-    s = NULL;
+    return 1;
+}
+static int request_headers(struct peer *p, struct request *r)
+{
+    char *s = NULL, *part, *end;
     while ((s = line(p)) && *s) {
         struct value *pair;
         char *name = s;
         part = strchr(s, ':');
         if (!part || part == s)
-            goto invalid;
+            goto bad;
         *part++ = 0;
         for (end = name; *end; end++)
             if (isspace((unsigned char)*end))
-                goto invalid;
+                goto bad;
         while (*part == ' ' || *part == '\t')
             part++;
         end = part + strlen(part);
@@ -215,71 +207,115 @@ static struct request *request(struct peer *p, int *malformed)
         s = NULL;
     }
     if (!s)
+        goto bad;
+    free(s);
+    s = NULL;
+    return 1;
+bad:
+    free(s);
+    return 0;
+}
+static int chunked(const struct request *r)
+{
+    const char *encoding = header(r, "transfer-encoding");
+    char *lower = strdup(encoding);
+    size_t i;
+    int found;
+    for (i = 0; lower[i]; i++)
+        lower[i] = (char)tolower((unsigned char)lower[i]);
+    found = strstr(lower, "chunked") != NULL;
+    free(lower);
+    return found;
+}
+static int request_chunks(struct peer *p, struct buffer *body)
+{
+    char *s = NULL, *end;
+    unsigned long long length;
+    for (;;) {
+        char *block;
+        char crlf[2];
+        s = line(p);
+        if (!s || !isxdigit((unsigned char)*s))
+            goto bad;
+        errno = 0;
+        length = strtoull(s, &end, 16);
+        if (errno || (*end && *end != ';') || length > BODY_MAX - body->len)
+            goto bad;
+        free(s);
+        s = NULL;
+        if (!length) {
+            do {
+                free(s);
+                s = line(p);
+            } while (s && *s);
+            if (!s)
+                goto bad;
+            free(s);
+            s = NULL;
+            break;
+        }
+        block = allocate((size_t)length);
+        if (!read_peer(p, block, (size_t)length)) {
+            free(block);
+            goto bad;
+        }
+        append(body, block, (size_t)length);
+        free(block);
+        if (!read_peer(p, crlf, 2) || memcmp(crlf, "\r\n", 2))
+            goto bad;
+    }
+    return 1;
+bad:
+    free(s);
+    return 0;
+}
+static int request_length(struct peer *p, struct request *r, struct buffer *body)
+{
+    char *end;
+    unsigned long long length;
+    const char *len = header(r, "content-length");
+    if (!isdigit((unsigned char)*len))
+        return 0;
+    errno = 0;
+    length = strtoull(len, &end, 10);
+    if (*end || errno || length > BODY_MAX)
+        return 0;
+    body->data = allocate((size_t)length + 1);
+    body->len = body->cap = (size_t)length;
+    if (!read_peer(p, body->data, body->len))
+        return 0;
+    return 1;
+}
+static void free_request(struct request *r);
+static struct request *request(struct peer *p, int *malformed)
+{
+    struct request *r = allocate(sizeof(*r));
+    struct buffer body = {0};
+    char *s = NULL;
+    r->headers = value('a');
+    *malformed = 0;
+    do {
+        free(s);
+        s = line(p);
+    } while (s && !*s);
+    if (!s)
+        goto bad;
+    if (!request_line(r, s))
         goto invalid;
     free(s);
     s = NULL;
+    if (!request_headers(p, r))
+        goto invalid;
     p->request = r;
     p->keep = !strcmp(r->version, "HTTP/1.1") && strcasecmp(header(r, "connection"), "close");
     if (!strcasecmp(header(r, "expect"), "100-continue") &&
         !write_peer(p, "HTTP/1.1 100 Continue\r\n\r\n", 25))
         goto bad;
-    {
-        const char *encoding = header(r, "transfer-encoding");
-        char *lower = strdup(encoding);
-        size_t i;
-        for (i = 0; lower[i]; i++)
-            lower[i] = (char)tolower((unsigned char)lower[i]);
-        p->websocket = strstr(lower, "chunked") != NULL;
-        free(lower);
-    }
-    if (p->websocket) {
-        p->websocket = 0;
-        for (;;) {
-            char *block;
-            char crlf[2];
-            s = line(p);
-            if (!s || !isxdigit((unsigned char)*s))
-                goto invalid;
-            errno = 0;
-            length = strtoull(s, &end, 16);
-            if (errno || (*end && *end != ';') || length > BODY_MAX - body.len)
-                goto invalid;
-            free(s);
-            s = NULL;
-            if (!length) {
-                do {
-                    free(s);
-                    s = line(p);
-                } while (s && *s);
-                if (!s)
-                    goto invalid;
-                free(s);
-                s = NULL;
-                break;
-            }
-            block = allocate((size_t)length);
-            if (!read_peer(p, block, (size_t)length)) {
-                free(block);
-                goto invalid;
-            }
-            append(&body, block, (size_t)length);
-            free(block);
-            if (!read_peer(p, crlf, 2) || memcmp(crlf, "\r\n", 2))
-                goto invalid;
-        }
-    } else if (*header(r, "content-length")) {
-        const char *len = header(r, "content-length");
-        if (!isdigit((unsigned char)*len))
+    if (chunked(r)) {
+        if (!request_chunks(p, &body))
             goto invalid;
-        errno = 0;
-        length = strtoull(len, &end, 10);
-        if (*end || errno || length > BODY_MAX)
-            goto invalid;
-        body.data = allocate((size_t)length + 1);
-        body.len = body.cap = (size_t)length;
-        if (!read_peer(p, body.data, body.len))
-            goto invalid;
-    }
+    } else if (*header(r, "content-length") && !request_length(p, r, &body))
+        goto invalid;
     if (!body.data)
         putsb(&body, "");
     r->body = body.data;
@@ -290,15 +326,10 @@ invalid:
 bad:
     free(s);
     clear(&body);
-    free(r->method);
-    free(r->target);
-    free(r->version);
-    free(r->path);
-    free(r->query);
-    destroy(r->headers);
-    free(r);
+    free_request(r);
     return NULL;
 }
+
 static void free_request(struct request *r)
 {
     free(r->method);
@@ -486,43 +517,69 @@ int websocket_start(struct peer *p)
     clear(&b);
     return ok;
 }
+struct incoming_frame {
+    unsigned char *data;
+    uint64_t n;
+    unsigned op;
+    int final;
+};
+
+static int read_frame(struct peer *p, struct incoming_frame *f, size_t used)
+{
+    unsigned char head[2], mask[4], extra[8], *data;
+    uint64_t n;
+    unsigned op, i;
+    int final;
+    if (!read_peer(p, head, 2))
+        return 0;
+    final = head[0] & 0x80;
+    op = head[0] & 15;
+    n = head[1] & 127;
+    if (n == 126) {
+        if (!read_peer(p, extra, 2))
+            return 0;
+        n = (extra[0] << 8) | extra[1];
+    } else if (n == 127) {
+        if (!read_peer(p, extra, 8))
+            return 0;
+        n = 0;
+        for (i = 0; i < 8; i++)
+            n = (n << 8) | extra[i];
+    }
+    if (!(head[1] & 128) || (head[0] & 0x70) || n > BODY_MAX || used + n > BODY_MAX ||
+        ((op & 8) && (!final || n > 125)))
+        return 0;
+    if (!read_peer(p, mask, 4))
+        return 0;
+    data = allocate((size_t)n + 1);
+    if (!read_peer(p, data, (size_t)n)) {
+        free(data);
+        return 0;
+    }
+    for (i = 0; i < n; i++)
+        data[i] ^= mask[i % 4];
+    f->data = data;
+    f->n = n;
+    f->op = op;
+    f->final = final;
+    return 1;
+}
 static char *receive_message(struct peer *p, int closing)
 {
     struct buffer message = {0};
     unsigned kind = 0;
     for (;;) {
-        unsigned char head[2], mask[4], extra[8], *data;
+        struct incoming_frame incoming;
+        unsigned char *data;
         uint64_t n;
-        unsigned op, i;
+        unsigned op;
         int final;
-        if (!read_peer(p, head, 2))
+        if (!read_frame(p, &incoming, message.len))
             goto bad;
-        final = head[0] & 0x80;
-        op = head[0] & 15;
-        n = head[1] & 127;
-        if (n == 126) {
-            if (!read_peer(p, extra, 2))
-                goto bad;
-            n = (extra[0] << 8) | extra[1];
-        } else if (n == 127) {
-            if (!read_peer(p, extra, 8))
-                goto bad;
-            n = 0;
-            for (i = 0; i < 8; i++)
-                n = (n << 8) | extra[i];
-        }
-        if (!(head[1] & 128) || (head[0] & 0x70) || n > BODY_MAX || message.len + n > BODY_MAX ||
-            ((op & 8) && (!final || n > 125)))
-            goto bad;
-        if (!read_peer(p, mask, 4))
-            goto bad;
-        data = allocate((size_t)n + 1);
-        if (!read_peer(p, data, (size_t)n)) {
-            free(data);
-            goto bad;
-        }
-        for (i = 0; i < n; i++)
-            data[i] ^= mask[i % 4];
+        data = incoming.data;
+        n = incoming.n;
+        op = incoming.op;
+        final = incoming.final;
         if (op == 8) {
             note(p, "received_close", n >= 2 ? integer((data[0] << 8) | data[1]) : value('z'));
             if (!closing)
@@ -590,15 +647,10 @@ int websocket_close(struct peer *p, unsigned code)
     free(ignored);
     return 1;
 }
-static void serve_request(struct peer *p)
+static int control_request(struct peer *p)
 {
     struct server *s = p->server;
-    const struct value *selected = NULL;
-    const char *why = NULL;
-    char reason[2048] = "the script has no step left";
     size_t i;
-    int ordered = 0;
-    struct value *entry;
     int holds = 0;
     for (i = 0; i < s->nsteps; i++)
         if (flag(s->steps[i].script, "hold", 0))
@@ -618,8 +670,17 @@ static void serve_request(struct peer *p)
         }
         service_unlock(&s->lock);
         response(p, 200, NULL, "text/plain", body);
-        return;
+        return 1;
     }
+    return 0;
+}
+static const struct value *select_step(struct peer *p, char reason[2048])
+{
+    struct server *s = p->server;
+    const struct value *selected = NULL;
+    const char *why = NULL;
+    size_t i;
+    int ordered = 0;
     service_lock(&s->lock);
     p->n = ++s->requests;
     /* Ordered candidates precede unordered candidates, even earlier ones. */
@@ -632,7 +693,7 @@ static void serve_request(struct peer *p)
             selected = s->steps[i].script;
             p->step = (unsigned)i + 1;
         } else
-            snprintf(reason, sizeof(reason), "step %lu: %s", (unsigned long)i + 1, why);
+            snprintf(reason, 2048, "step %lu: %s", (unsigned long)i + 1, why);
         break;
     }
     for (i = 0; !selected && i < s->nsteps; i++) {
@@ -643,7 +704,7 @@ static void serve_request(struct peer *p)
             selected = s->steps[i].script;
             p->step = (unsigned)i + 1;
         } else if (!ordered) {
-            snprintf(reason, sizeof(reason), "step %lu: %s", (unsigned long)i + 1, why);
+            snprintf(reason, 2048, "step %lu: %s", (unsigned long)i + 1, why);
             ordered = 1;
         }
     }
@@ -653,6 +714,12 @@ static void serve_request(struct peer *p)
         snprintf(s->first, sizeof(s->first), "request %u: %s %s: %s", p->n, p->request->method,
                  p->request->target, reason);
     service_unlock(&s->lock);
+    return selected;
+}
+static void record_request(struct peer *p, const struct value *selected, const char *reason)
+{
+    struct server *s = p->server;
+    struct value *entry;
     entry = value('o');
     add(entry, "n", integer(p->n));
     add(entry, "method", string(p->request->method));
@@ -665,34 +732,54 @@ static void serve_request(struct peer *p)
     else
         add(entry, "unexpected", string(reason));
     record(s, entry);
+}
+static void unexpected_request(struct peer *p, const char *reason)
+{
+    struct value *body = value('o'), *error = value('o');
+    struct buffer message = {0};
+    log_line("%u: %s %s: unexpected: %s", p->n, p->request->method, p->request->target, reason);
+    putsb(&message, "fakeapi: ");
+    putsb(&message, reason);
+    add(error, "type", string("unexpected_request"));
+    add(error, "message", string(message.data));
+    add(body, "error", error);
+    json_response(p, 400, body);
+    destroy(body);
+    clear(&message);
+}
+static int held_reply(struct peer *p)
+{
+    struct server *s = p->server;
+
+    service_lock(&s->lock);
+    s->held = p->n;
+    service_wake(&s->condition);
+    while (!s->released && !s->stopping)
+        service_wait(&s->condition, &s->lock);
+    if (s->stopping && !s->released) {
+        service_unlock(&s->lock);
+        p->keep = 0;
+        return 0;
+    }
+    service_unlock(&s->lock);
+    return 1;
+}
+static void serve_request(struct peer *p)
+{
+    struct server *s = p->server;
+    const struct value *selected;
+    char reason[2048] = "the script has no step left";
+    if (control_request(p))
+        return;
+    selected = select_step(p, reason);
+    record_request(p, selected, reason);
     if (!selected) {
-        struct value *body = value('o'), *error = value('o');
-        struct buffer message = {0};
-        log_line("%u: %s %s: unexpected: %s", p->n, p->request->method, p->request->target, reason);
-        putsb(&message, "fakeapi: ");
-        putsb(&message, reason);
-        add(error, "type", string("unexpected_request"));
-        add(error, "message", string(message.data));
-        add(body, "error", error);
-        json_response(p, 400, body);
-        destroy(body);
-        clear(&message);
+        unexpected_request(p, reason);
         return;
     }
     log_line("%u: %s %s: step %u", p->n, p->request->method, p->request->target, p->step);
-    if (flag(selected, "hold", 0)) {
-        service_lock(&s->lock);
-        s->held = p->n;
-        service_wake(&s->condition);
-        while (!s->released && !s->stopping)
-            service_wait(&s->condition, &s->lock);
-        if (s->stopping && !s->released) {
-            service_unlock(&s->lock);
-            p->keep = 0;
-            return;
-        }
-        service_unlock(&s->lock);
-    }
+    if (flag(selected, "hold", 0) && !held_reply(p))
+        return;
     if (!protocol_reply(s->steps[p->step - 1].protocol, selected, p)) {
         if (p->websocket && !p->failed && !p->finished)
             fail_peer(p, "the connection ended in the WebSocket exchange");
@@ -785,12 +872,34 @@ static int verdict(struct server *s)
         log_line("result: pass: %lu steps played by %u requests", (unsigned long)owed, s->requests);
     return s->failures || left ? 1 : 0;
 }
+static int prepare_steps(struct server *s, const struct value *steps)
+{
+    const struct value *step;
+    size_t i = 0;
+    s->nsteps = count(steps);
+    s->steps = allocate(s->nsteps * sizeof(*s->steps));
+    for (step = steps->child; step; step = step->next, i++) {
+        const char *protocol = field(step, "protocol"), *why;
+        if (!*protocol)
+            protocol = field(s->script, "protocol");
+        if (!*protocol)
+            protocol = "plain";
+        why = protocol_validate(protocol, step);
+        if (why || (flag(step, "repeat", 0) && !flag(step, "unordered", 0))) {
+            log_line("result: refused: step %lu: %s", (unsigned long)i + 1,
+                     why ? why : "a repeated step is not unordered");
+            return 0;
+        }
+        s->steps[i].protocol = protocol;
+        s->steps[i].script = step;
+    }
+    return 1;
+}
 static int serve(const char *script, const char *record_path, const char *certdir, unsigned port)
 {
     struct server s;
     struct connection *connections = NULL, *c;
-    const struct value *step, *steps;
-    size_t i = 0;
+    const struct value *steps;
     int result = 2;
     service_socket listener;
     struct buffer status = {0};
@@ -803,23 +912,8 @@ static int serve(const char *script, const char *record_path, const char *certdi
     steps = get(s.script, "steps");
     if (!s.script || !steps || steps->type != 'a' || !s.tls)
         goto done;
-    s.nsteps = count(steps);
-    s.steps = allocate(s.nsteps * sizeof(*s.steps));
-    for (step = steps->child; step; step = step->next, i++) {
-        const char *protocol = field(step, "protocol"), *why;
-        if (!*protocol)
-            protocol = field(s.script, "protocol");
-        if (!*protocol)
-            protocol = "plain";
-        why = protocol_validate(protocol, step);
-        if (why || (flag(step, "repeat", 0) && !flag(step, "unordered", 0))) {
-            log_line("result: refused: step %lu: %s", (unsigned long)i + 1,
-                     why ? why : "a repeated step is not unordered");
-            goto done;
-        }
-        s.steps[i].protocol = protocol;
-        s.steps[i].script = step;
-    }
+    if (!prepare_steps(&s, steps))
+        goto done;
     s.record = fopen(record_path, "ab");
     if (!s.record)
         goto done;

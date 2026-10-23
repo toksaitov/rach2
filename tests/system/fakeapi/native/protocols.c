@@ -198,45 +198,50 @@ static const char *validate_anthropic(const struct value *s)
     }
     return validate_results(s);
 }
-static const char *check_anthropic(const struct value *s, const struct request *r)
+static const char *anthropic_request(const struct value *s, const struct request *r)
 {
-    const struct value *b = r->json, *v, *m, *block;
-    struct value *calls = value('o'), *results = value('o');
+    const struct value *b = r->json, *v;
     const char *why = NULL;
     if (strcmp(r->method, "POST") || strcmp(r->path, "/v1/messages")) {
         why = "expected POST /v1/messages";
-        goto done;
+        return why;
     }
     if (*r->query && strcmp(r->query, "beta=true")) {
         why = "unexpected Messages query";
-        goto done;
+        return why;
     }
     if (strcmp(header(r, "x-api-key"), dummy)) {
         why = "unexpected x-api-key header";
-        goto done;
+        return why;
     }
     if (strcmp(header(r, "anthropic-version"), "2023-06-01")) {
         why = "unexpected anthropic-version header";
-        goto done;
+        return why;
     }
     if (strncmp(header(r, "content-type"), "application/json", 16)) {
         why = "expected JSON content type";
-        goto done;
+        return why;
     }
     if (!b || b->type != 'o') {
         why = "expected a JSON Messages body";
-        goto done;
+        return why;
     }
     if (strcmp(field(b, "model"), model(s, "claude-sonnet-4-6")) ||
         flag(b, "stream", 0) != flag(s, "stream", 1)) {
         why = "unexpected model or stream setting";
-        goto done;
+        return why;
     }
     v = get(b, "max_tokens");
     if (!v || v->type != 'n' || v->number <= 0 || v->number != (long long)v->number) {
         why = "expected a positive max_tokens";
-        goto done;
+        return why;
     }
+    return why;
+}
+static const char *anthropic_tools(const struct value *s, const struct request *r)
+{
+    const struct value *b = r->json, *v;
+    const char *why = NULL;
     for (v = first(get(s, "tools")); v; v = v->next) {
         const struct value *tool;
         int found = 0;
@@ -246,13 +251,20 @@ static const char *check_anthropic(const struct value *s, const struct request *
                 found = 1;
         if (!found) {
             why = reason("missing tool definition: %s", text(v));
-            goto done;
+            return why;
         }
     }
     if (get(s, "body") && (why = subset(get(s, "body"), b))) {
         why = reason("unexpected body: %s", why);
-        goto done;
+        return why;
     }
+    return why;
+}
+static const char *anthropic_history(const struct request *r, struct value *calls,
+                                     struct value *results)
+{
+    const struct value *b = r->json, *m, *block;
+    const char *why = NULL;
     for (m = first(get(b, "messages")); m; m = m->next) {
         const struct value *content = get(m, "content");
         if (!content || content->type != 'a')
@@ -264,12 +276,18 @@ static const char *check_anthropic(const struct value *s, const struct request *
                 const char *id = field(block, "tool_use_id");
                 if (!get(calls, id) || get(results, id)) {
                     why = "a tool result has no preceding call or is duplicated";
-                    goto done;
+                    return why;
                 }
                 add(results, id, clone(block));
             }
         }
     }
+    return why;
+}
+static const char *anthropic_results(const struct value *s, const struct value *results)
+{
+    const struct value *v, *block;
+    const char *why = NULL;
     for (v = first(get(s, "results")); v; v = v->next) {
         const char *id = field(v, "id");
         char *actual;
@@ -277,25 +295,37 @@ static const char *check_anthropic(const struct value *s, const struct request *
         block = get(results, id);
         if (!block || flag(block, "is_error", 0)) {
             why = reason("missing or failed tool result: %s", id);
-            goto done;
+            return why;
         }
         for (part = first(get(block, "content")); part; part = part->next)
             if (strcmp(field(part, "type"), "text")) {
                 why = reason("wrong tool result: %s", id);
-                goto done;
+                return why;
             }
         actual = text_of(get(block, "content"), "\n");
         if (!contains(v, actual))
             why = reason("wrong tool result: %s", id);
         free(actual);
         if (why)
-            goto done;
+            return why;
     }
-done:
+    return why;
+}
+static const char *check_anthropic(const struct value *s, const struct request *r)
+{
+    struct value *calls = value('o'), *results = value('o');
+    const char *why = anthropic_request(s, r);
+    if (!why)
+        why = anthropic_tools(s, r);
+    if (!why)
+        why = anthropic_history(r, calls, results);
+    if (!why)
+        why = anthropic_results(s, results);
     destroy(calls);
     destroy(results);
     return why;
 }
+
 static struct value *typed(const char *type)
 {
     struct value *v = value('o');
@@ -447,47 +477,52 @@ static char *content_text(const struct value *content)
         putsb(&b, "");
     return b.data;
 }
-static const char *check_gemini(const struct value *s, const struct request *r)
+static const char *gemini_request(const struct value *s, const struct request *r)
 {
     char path[1024];
-    const struct value *b = r->json, *contents, *part, *v, *content;
-    struct value *calls = value('o'), *results = value('o');
+    const struct value *b = r->json, *contents;
     const char *why = NULL;
     snprintf(path, sizeof(path), "/v1beta/models/%s:%s", model(s, "gemini-3.1-pro-preview"),
              flag(s, "stream", 1) ? "streamGenerateContent" : "generateContent");
     if (strcmp(r->method, "POST") || strcmp(r->path, path)) {
         why = reason("expected POST %s", path);
-        goto done;
+        return why;
     }
     if (strcmp(r->query, flag(s, "stream", 1) ? "alt=sse" : "")) {
         why = "unexpected generateContent query";
-        goto done;
+        return why;
     }
     if (strcmp(header(r, "x-goog-api-key"), dummy)) {
         why = "unexpected x-goog-api-key header";
-        goto done;
+        return why;
     }
     if (strncmp(header(r, "content-type"), "application/json", 16)) {
         why = "expected JSON content type";
-        goto done;
+        return why;
     }
     if (!b || b->type != 'o') {
         why = "expected a JSON generateContent body";
-        goto done;
+        return why;
     }
     contents = get(b, "contents");
     if (!contents || contents->type != 'a' || !contents->child ||
         strcmp(field(contents->child, "role"), "user")) {
         why = "expected contents that begin with a user turn";
-        goto done;
+        return why;
     }
+    return why;
+}
+static const char *gemini_prompts_tools(const struct value *s, const struct request *r)
+{
+    const struct value *b = r->json, *contents = get(b, "contents"), *v;
+    const char *why = NULL;
     if (get(s, "system")) {
         char *actual = content_text(get(b, "systemInstruction"));
         int ok = strstr(actual, field(s, "system")) != NULL;
         free(actual);
         if (!ok) {
             why = "the system instruction lacks the step's fragment";
-            goto done;
+            return why;
         }
     }
     if (get(s, "prompt")) {
@@ -496,7 +531,7 @@ static const char *check_gemini(const struct value *s, const struct request *r)
         free(actual);
         if (!ok) {
             why = "the first user turn lacks the step's prompt";
-            goto done;
+            return why;
         }
     }
     for (v = first(get(s, "tools")); v; v = v->next) {
@@ -508,9 +543,16 @@ static const char *check_gemini(const struct value *s, const struct request *r)
                     found = 1;
         if (!found) {
             why = reason("missing function declaration: %s", text(v));
-            goto done;
+            return why;
         }
     }
+    return why;
+}
+static const char *gemini_history(const struct value *contents, struct value *calls,
+                                  struct value *results)
+{
+    const struct value *content, *part;
+    const char *why = NULL;
     for (content = contents->child; content; content = content->next) {
         for (part = first(get(content, "parts")); part; part = part->next) {
             const struct value *call = get(part, "functionCall"),
@@ -521,7 +563,7 @@ static const char *check_gemini(const struct value *s, const struct request *r)
                 free(expected);
                 if (!ok) {
                     why = reason("a call lacks its thought signature: %s", field(call, "id"));
-                    goto done;
+                    return why;
                 }
                 set(calls, field(call, "id"), clone(call));
             }
@@ -531,12 +573,18 @@ static const char *check_gemini(const struct value *s, const struct request *r)
                 if (!previous || get(results, id) ||
                     strcmp(field(response, "name"), field(previous, "name"))) {
                     why = "a function response has no preceding call or is duplicated";
-                    goto done;
+                    return why;
                 }
                 add(results, id, clone(get(response, "response")));
             }
         }
     }
+    return why;
+}
+static const char *gemini_results(const struct value *s, const struct value *results)
+{
+    const struct value *v;
+    const char *why = NULL;
     for (v = first(get(s, "results")); v; v = v->next) {
         const char *id = field(v, "id");
         const struct value *response = get(results, id), *output;
@@ -544,7 +592,7 @@ static const char *check_gemini(const struct value *s, const struct request *r)
         int ok;
         if (!response || get(response, "error")) {
             why = reason("missing or failed function response: %s", id);
-            goto done;
+            return why;
         }
         output = get(response, "output");
         actual = output && output->type == 's' ? strdup(text(output))
@@ -554,14 +602,26 @@ static const char *check_gemini(const struct value *s, const struct request *r)
         free(actual);
         if (!ok) {
             why = reason("wrong function response: %s", id);
-            goto done;
+            return why;
         }
     }
-done:
+    return why;
+}
+static const char *check_gemini(const struct value *s, const struct request *r)
+{
+    struct value *calls = value('o'), *results = value('o');
+    const char *why = gemini_request(s, r);
+    if (!why)
+        why = gemini_prompts_tools(s, r);
+    if (!why)
+        why = gemini_history(get(r->json, "contents"), calls, results);
+    if (!why)
+        why = gemini_results(s, results);
     destroy(calls);
     destroy(results);
     return why;
 }
+
 static struct value *gemini_response(const struct value *s, struct value *parts, size_t total,
                                      int last)
 {

@@ -158,51 +158,60 @@ static const struct value *nth(const struct value *v, unsigned n)
         p = p->next;
     return p;
 }
-static int verify_curl(const struct value *entries)
+static int curl_request(const struct value *e, unsigned request)
 {
     const char *paths[] = {"/v1/hello",  "/v1/echo",    "/v1/events",
                            "/v1/socket", "/v1/nothing", "/v1/last"};
+    struct request r;
+    const char *agent;
+    if (request >= 6 || number(e, "n", 0) != request + 1 ||
+        strcmp(field(e, "path"), paths[request]) ||
+        strcmp(field(e, "method"), request == 1 ? "POST" : "GET"))
+        return 1;
+    if (request == 4 ? !get(e, "unexpected")
+                     : number(e, "step", 0) != (request == 5 ? 5 : request + 1))
+        return 1;
+    memset(&r, 0, sizeof(r));
+    r.headers = (struct value *)get(e, "headers");
+    agent = header(&r, "user-agent");
+    if (request != 3 && strncmp(agent, "curl/", 5))
+        return 1;
+    if (request == 1 && strcmp(field(e, "body"), "{\"say\":\"ping\",\"from\":\"rach2\"}"))
+        return 1;
+    return 0;
+}
+static int curl_socket(const struct value *e, unsigned socket_entry)
+{
     const char *kind[] = {"received", "sent", "received", "sent", "sent_close", "received_close"};
+    const struct value *v;
+    if (socket_entry >= 6 || number(e, "n", 0) != 4 || !(v = get(e, kind[socket_entry])))
+        return 1;
+    if (socket_entry == 0 && strcmp(text(v), "ping"))
+        return 1;
+    if (socket_entry == 1 && strcmp(text(v), "pong"))
+        return 1;
+    if (socket_entry == 2 && strlen(text(v)) != 216)
+        return 1;
+    if (socket_entry == 3 && strcmp(text(v), "{\"n\": 3}"))
+        return 1;
+    if (socket_entry >= 4 && number(e, kind[socket_entry], 0) != 1000)
+        return 1;
+    return 0;
+}
+static int verify_curl(const struct value *entries)
+{
     const struct value *e;
     unsigned request = 0, socket_entry = 0;
     for (e = first(entries); e; e = e->next) {
         if (get(e, "method")) {
-            struct request r;
-            const char *agent;
-            if (request >= 6 || number(e, "n", 0) != request + 1 ||
-                strcmp(field(e, "path"), paths[request]) ||
-                strcmp(field(e, "method"), request == 1 ? "POST" : "GET"))
+            if (curl_request(e, request++))
                 return 1;
-            if (request == 4 ? !get(e, "unexpected")
-                             : number(e, "step", 0) != (request == 5 ? 5 : request + 1))
-                return 1;
-            memset(&r, 0, sizeof(r));
-            r.headers = (struct value *)get(e, "headers");
-            agent = header(&r, "user-agent");
-            if (request != 3 && strncmp(agent, "curl/", 5))
-                return 1;
-            if (request == 1 && strcmp(field(e, "body"), "{\"say\":\"ping\",\"from\":\"rach2\"}"))
-                return 1;
-            request++;
-        } else {
-            const struct value *v;
-            if (socket_entry >= 6 || number(e, "n", 0) != 4 || !(v = get(e, kind[socket_entry])))
-                return 1;
-            if (socket_entry == 0 && strcmp(text(v), "ping"))
-                return 1;
-            if (socket_entry == 1 && strcmp(text(v), "pong"))
-                return 1;
-            if (socket_entry == 2 && strlen(text(v)) != 216)
-                return 1;
-            if (socket_entry == 3 && strcmp(text(v), "{\"n\": 3}"))
-                return 1;
-            if (socket_entry >= 4 && number(e, kind[socket_entry], 0) != 1000)
-                return 1;
-            socket_entry++;
-        }
+        } else if (curl_socket(e, socket_entry++))
+            return 1;
     }
     return request != 6 || socket_entry != 6;
 }
+
 static int worker_prompt(const char *script_path, const struct value *steps,
                          const struct value *step, const struct value *body)
 {
@@ -263,126 +272,166 @@ static int worker_prompt(const char *script_path, const struct value *steps,
     clear(&actual);
     return (int)n;
 }
-int verify_record(const char *script_path, const char *record_path, const char *row,
-                  const char *version)
+struct audit {
+    struct value *script, *entries;
+    const struct value *steps;
+    const char *row, *script_path;
+    unsigned *seen, requests, turns, socket_n, closes;
+    char agent[200];
+};
+
+static int audit_metadata(struct audit *a, const char *version)
 {
-    struct value *script = read_json(script_path), *entries = read_json_lines(record_path);
-    const struct value *e, *steps = get(script, "steps"), *step;
-    unsigned *seen = allocate((count(steps) + 1) * sizeof(*seen));
-    unsigned requests = 0, turns = 0, socket_n = 0, closes = 0;
-    int result = 1;
-    char agent[200] = "";
-    if (!script || !entries || !steps)
-        goto done;
-    if (!strcmp(row, "curl")) {
-        result = verify_curl(entries);
-        goto done;
-    }
+    const char *row = a->row;
+    const struct value *e, *entries = a->entries;
     if (!strncmp(row, "codex", 5)) {
         for (e = first(entries); e; e = e->next)
             if (get(e, "method") && number(e, "step", 0) == 1)
-                socket_n = (unsigned)number(e, "n", 0);
-        if (!socket_n)
-            goto done;
+                a->socket_n = (unsigned)number(e, "n", 0);
+        if (!a->socket_n)
+            return 0;
     }
     if (!strncmp(row, "codex", 5))
-        snprintf(agent, sizeof(agent), "%s/%s ",
+        snprintf(a->agent, sizeof(a->agent), "%s/%s ",
                  !strcmp(row, "codex-screen") ? "codex-tui" : "codex_exec", version);
     if (!strncmp(row, "claude", 6) || !strcmp(row, "worker-session"))
-        snprintf(agent, sizeof(agent), "claude-cli/%s ", version);
+        snprintf(a->agent, sizeof(a->agent), "claude-cli/%s ", version);
     if (!strncmp(row, "muse", 4)) {
-        snprintf(agent, sizeof(agent), "muse-build/%s", version);
+        snprintf(a->agent, sizeof(a->agent), "muse-build/%s", version);
         {
-            char *dash = strchr(agent + strlen("muse-build/"), '-');
+            char *dash = strchr(a->agent + strlen("muse-build/"), '-');
             if (dash)
                 *dash = 0;
         }
-        strcat(agent, " ");
+        strcat(a->agent, " ");
     }
-    for (e = first(entries); e; e = e->next) {
-        if (e->type != 'o')
-            goto done;
-        if (get(e, "failed") || get(e, "unexpected"))
-            goto done;
-        if (get(e, "received") && number(e, "n", 0) == socket_n && !strncmp(row, "codex", 5)) {
-            struct value *body = parse(field(e, "received"));
-            if (!body || strcmp(field(body, "type"), "response.create") ||
-                flag(body, "generate", 1) != (turns != 0)) {
-                destroy(body);
-                goto done;
-            }
-            turns++;
+    return 1;
+}
+static int audit_headers(struct audit *a, const struct request *r, const char *protocol)
+{
+    const char *row = a->row, *expected_key = NULL;
+    if (!strcmp(protocol, "responses"))
+        expected_key = "Bearer sk-fakeapi-dummy";
+    if (!strncmp(row, "muse", 4))
+        expected_key = "Bearer meta-fakeapi-dummy";
+    if (expected_key && strcmp(header(r, "authorization"), expected_key))
+        return 0;
+    if (*a->agent && (strcmp(protocol, "plain") || !strncmp(row, "muse", 4)) &&
+        strncmp(header(r, "user-agent"), a->agent, strlen(a->agent)))
+        return 0;
+    if (!strcmp(protocol, "gemini") && strcmp(header(r, "host"), "fakeapi.test"))
+        return 0;
+    return 1;
+}
+static int audit_request(struct audit *a, const struct value *e)
+{
+    const char *row = a->row, *script_path = a->script_path;
+    const struct value *steps = a->steps, *script = a->script, *step;
+    struct request r;
+    const char *protocol, *why;
+    unsigned n = (unsigned)number(e, "step", 0);
+    if (!n || n > count(steps))
+        return 0;
+    step = nth(steps, n - 1);
+    a->seen[n]++;
+    a->requests++;
+    memset(&r, 0, sizeof(r));
+    r.method = (char *)field(e, "method");
+    r.path = (char *)field(e, "path");
+    r.query = (char *)field(e, "query");
+    r.target = r.path;
+    r.version = "HTTP/1.1";
+    r.body = (char *)field(e, "body");
+    r.headers = (struct value *)get(e, "headers");
+    r.json = parse(r.body);
+    protocol = *field(step, "protocol")     ? field(step, "protocol")
+               : *field(script, "protocol") ? field(script, "protocol")
+                                            : "plain";
+    why = protocol_check(protocol, step, &r);
+    if (!why && !strcmp(row, "worker-session") && !get(step, "results") &&
+        !worker_prompt(script_path, steps, step, r.json))
+        why = "the first request lacks its worker prompt";
+    destroy(r.json);
+    if (why) {
+        log_line("audit: request %u: %s", n, why);
+        return 0;
+    }
+    return audit_headers(a, &r, protocol);
+}
+static int audit_socket(struct audit *a, const struct value *e)
+{
+    const char *row = a->row;
+    if (get(e, "received") && number(e, "n", 0) == a->socket_n && !strncmp(row, "codex", 5)) {
+        struct value *body = parse(field(e, "received"));
+        if (!body || strcmp(field(body, "type"), "response.create") ||
+            flag(body, "generate", 1) != (a->turns != 0)) {
             destroy(body);
+            return 0;
         }
-        if (!strncmp(row, "codex", 5) && number(e, "n", 0) == socket_n && get(e, "sent_close")) {
-            if (number(e, "sent_close", 0) != 1000)
-                goto done;
-            closes++;
-        }
-        if (!get(e, "method")) {
-            if (!strncmp(row, "muse", 4))
-                goto done;
-            continue;
-        }
-        {
-            struct request r;
-            const char *protocol, *why, *expected_key = NULL;
-            unsigned n = (unsigned)number(e, "step", 0);
-            if (!n || n > count(steps))
-                goto done;
-            step = nth(steps, n - 1);
-            seen[n]++;
-            requests++;
-            memset(&r, 0, sizeof(r));
-            r.method = (char *)field(e, "method");
-            r.path = (char *)field(e, "path");
-            r.query = (char *)field(e, "query");
-            r.target = r.path;
-            r.version = "HTTP/1.1";
-            r.body = (char *)field(e, "body");
-            r.headers = (struct value *)get(e, "headers");
-            r.json = parse(r.body);
-            protocol = *field(step, "protocol")     ? field(step, "protocol")
-                       : *field(script, "protocol") ? field(script, "protocol")
-                                                    : "plain";
-            why = protocol_check(protocol, step, &r);
-            if (!why && !strcmp(row, "worker-session") && !get(step, "results") &&
-                !worker_prompt(script_path, steps, step, r.json))
-                why = "the first request lacks its worker prompt";
-            destroy(r.json);
-            if (why) {
-                log_line("audit: request %u: %s", n, why);
-                goto done;
-            }
-            if (!strcmp(protocol, "responses"))
-                expected_key = "Bearer sk-fakeapi-dummy";
-            if (!strncmp(row, "muse", 4))
-                expected_key = "Bearer meta-fakeapi-dummy";
-            if (expected_key && strcmp(header(&r, "authorization"), expected_key))
-                goto done;
-            if (*agent && (strcmp(protocol, "plain") || !strncmp(row, "muse", 4)) &&
-                strncmp(header(&r, "user-agent"), agent, strlen(agent)))
-                goto done;
-            if (!strcmp(protocol, "gemini") && strcmp(header(&r, "host"), "fakeapi.test"))
-                goto done;
-        }
+        a->turns++;
+        destroy(body);
     }
+    if (!strncmp(row, "codex", 5) && number(e, "n", 0) == a->socket_n && get(e, "sent_close")) {
+        if (number(e, "sent_close", 0) != 1000)
+            return 0;
+        a->closes++;
+    }
+    if (!get(e, "method")) {
+        if (!strncmp(row, "muse", 4))
+            return 0;
+        return 1;
+    }
+    return 1;
+}
+static int audit_complete(struct audit *a)
+{
+    const struct value *step, *steps = a->steps;
+    const char *row = a->row;
     for (step = steps->child; step; step = step->next) {
         unsigned n = 1;
         const struct value *before;
         for (before = steps->child; before != step; before = before->next)
             n++;
-        if (!flag(step, "repeat", 0) && seen[n] != 1)
+        if (!flag(step, "repeat", 0) && a->seen[n] != 1)
+            return 0;
+    }
+    if (!strncmp(row, "codex", 5) && (a->turns != 3 || a->closes != 1))
+        return 0;
+    return !(a->requests == 0 && steps->child);
+}
+int verify_record(const char *script_path, const char *record_path, const char *row,
+                  const char *version)
+{
+    struct audit a;
+    const struct value *e;
+    int result = 1;
+    memset(&a, 0, sizeof(a));
+    a.script = read_json(script_path);
+    a.entries = read_json_lines(record_path);
+    a.steps = get(a.script, "steps");
+    a.seen = allocate((count(a.steps) + 1) * sizeof(*a.seen));
+    a.row = row;
+    a.script_path = script_path;
+    if (!a.script || !a.entries || !a.steps)
+        goto done;
+    if (!strcmp(row, "curl")) {
+        result = verify_curl(a.entries);
+        goto done;
+    }
+    if (!audit_metadata(&a, version))
+        goto done;
+    for (e = first(a.entries); e; e = e->next) {
+        if (e->type != 'o' || get(e, "failed") || get(e, "unexpected") || !audit_socket(&a, e))
+            goto done;
+        if (get(e, "method") && !audit_request(&a, e))
             goto done;
     }
-    if (!strncmp(row, "codex", 5) && (turns != 3 || closes != 1))
-        goto done;
-    result = requests == 0 && steps->child ? 1 : 0;
+    result = !audit_complete(&a);
 done:
-    log_line("audit: %s: %u requests", result ? "fail" : "pass", requests);
-    free(seen);
-    destroy(script);
-    destroy(entries);
+    log_line("audit: %s: %u requests", result ? "fail" : "pass", a.requests);
+    free(a.seen);
+    destroy(a.script);
+    destroy(a.entries);
     return result;
 }
 

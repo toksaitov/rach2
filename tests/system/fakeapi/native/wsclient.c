@@ -97,52 +97,24 @@ static int read_line(SSL *ssl, char *line, size_t size)
     }
     return 0;
 }
-int main(int argc, char **argv)
+static int handshake(SSL *ssl, const char *host, const char *path)
 {
-    SSL_CTX *context = NULL;
-    BIO *connection = NULL;
-    SSL *ssl = NULL;
-    char host[512], address[550], request[4096], line[4096], accept[100] = "", expected[32], *port;
-    unsigned char random[16], key[32], digest[SHA_DIGEST_LENGTH], *data = NULL;
-    size_t size;
-    unsigned opcode;
-    int i, status = 1;
-    if (argc < 4 || strlen(argv[1]) >= sizeof(host))
-        goto done;
-    strcpy(host, argv[1]);
-    port = strchr(host, ':');
-    if (port)
-        *port++ = 0;
-    snprintf(address, sizeof(address), "%s:%s", host, port ? port : "443");
-    context = SSL_CTX_new(TLS_client_method());
-    if (!context || !SSL_CTX_load_verify_locations(context, argv[3], NULL))
-        goto done;
-    SSL_CTX_set_verify(context, SSL_VERIFY_PEER, NULL);
-    connection = BIO_new_ssl_connect(context);
-    if (!connection)
-        goto done;
-    BIO_get_ssl(connection, &ssl);
-    if (!ssl || !SSL_set_tlsext_host_name(ssl, host) ||
-        !X509_VERIFY_PARAM_set1_host(SSL_get0_param(ssl), host, 0))
-        goto done;
-    BIO_set_conn_hostname(connection, address);
-    if (BIO_do_connect(connection) <= 0 || BIO_do_handshake(connection) <= 0 ||
-        SSL_get_verify_result(ssl) != X509_V_OK)
-        goto done;
+    char request[4096], line[4096], accept[100] = "", expected[32];
+    unsigned char random[16], key[32], digest[SHA_DIGEST_LENGTH];
     if (RAND_bytes(random, sizeof(random)) != 1)
-        goto done;
+        return 0;
     EVP_EncodeBlock(key, random, sizeof(random));
     snprintf(request, sizeof(request),
              "GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: "
              "Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n",
-             argv[2], host, key);
+             path, host, key);
     if (!exact(ssl, request, strlen(request), 1) || !read_line(ssl, line, sizeof(line)) ||
         strncmp(line, "HTTP/1.1 101 ", 13))
-        goto done;
+        return 0;
     while (read_line(ssl, line, sizeof(line)) && *line) {
         char *colon = strchr(line, ':');
         if (!colon)
-            goto done;
+            return 0;
         *colon++ = 0;
         while (*colon == ' ' || *colon == '\t')
             colon++;
@@ -152,7 +124,15 @@ int main(int argc, char **argv)
     snprintf(request, sizeof(request), "%s258EAFA5-E914-47DA-95CA-C5AB0DC85B11", key);
     SHA1((unsigned char *)request, strlen(request), digest);
     EVP_EncodeBlock((unsigned char *)expected, digest, sizeof(digest));
-    if (strcmp(accept, expected) || !send_frame(ssl, 9, "keepalive", 9))
+    return !strcmp(accept, expected);
+}
+static int exchange(SSL *ssl, int argc, char **argv)
+{
+    unsigned char *data = NULL;
+    unsigned opcode;
+    size_t size;
+    int i, status = 1;
+    if (!send_frame(ssl, 9, "keepalive", 9))
         goto done;
     data = receive_frame(ssl, &opcode, &size);
     if (!data || opcode != 10 || size != 9 || memcmp(data, "keepalive", 9))
@@ -176,9 +156,44 @@ int main(int argc, char **argv)
     printf("close %u\n", (data[0] << 8) | data[1]);
     status = 0;
 done:
+    free(data);
+    return status == 0;
+}
+int main(int argc, char **argv)
+{
+    SSL_CTX *context = NULL;
+    BIO *connection = NULL;
+    SSL *ssl = NULL;
+    char host[512], address[550], *port;
+    int status = 1;
+    if (argc < 4 || strlen(argv[1]) >= sizeof(host))
+        goto done;
+    strcpy(host, argv[1]);
+    port = strchr(host, ':');
+    if (port)
+        *port++ = 0;
+    snprintf(address, sizeof(address), "%s:%s", host, port ? port : "443");
+    context = SSL_CTX_new(TLS_client_method());
+    if (!context || !SSL_CTX_load_verify_locations(context, argv[3], NULL))
+        goto done;
+    SSL_CTX_set_verify(context, SSL_VERIFY_PEER, NULL);
+    connection = BIO_new_ssl_connect(context);
+    if (!connection)
+        goto done;
+    BIO_get_ssl(connection, &ssl);
+    if (!ssl || !SSL_set_tlsext_host_name(ssl, host) ||
+        !X509_VERIFY_PARAM_set1_host(SSL_get0_param(ssl), host, 0))
+        goto done;
+    BIO_set_conn_hostname(connection, address);
+    if (BIO_do_connect(connection) <= 0 || BIO_do_handshake(connection) <= 0 ||
+        SSL_get_verify_result(ssl) != X509_V_OK)
+        goto done;
+    if (handshake(ssl, host, argv[2]) && exchange(ssl, argc, argv))
+        status = 0;
+
+done:
     if (status)
         fputs("wsclient: TLS or WebSocket exchange failed\n", stderr);
-    free(data);
     BIO_free_all(connection);
     SSL_CTX_free(context);
     return status;

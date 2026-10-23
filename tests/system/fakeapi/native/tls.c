@@ -79,12 +79,48 @@ static int write_pem(const char *dir, const char *name, X509 *cert, EVP_PKEY *pk
     clear(&path);
     return ok;
 }
+static int subject_names(GENERAL_NAMES *san, int n, char **names)
+{
+    int i;
+    for (i = 0; i < n; i++) {
+        GENERAL_NAME *name = GENERAL_NAME_new();
+        unsigned char address[16];
+        int len;
+        if (!name)
+            return 0;
+        len = inet_pton(AF_INET, names[i], address) == 1    ? 4
+              : inet_pton(AF_INET6, names[i], address) == 1 ? 16
+                                                            : 0;
+        if (len) {
+            ASN1_OCTET_STRING *ip = ASN1_OCTET_STRING_new();
+            if (!ip || !ASN1_OCTET_STRING_set(ip, address, len)) {
+                ASN1_OCTET_STRING_free(ip);
+                GENERAL_NAME_free(name);
+                return 0;
+            }
+            GENERAL_NAME_set0_value(name, GEN_IPADD, ip);
+        } else {
+            ASN1_IA5STRING *dns = ASN1_IA5STRING_new();
+            if (!dns || !ASN1_STRING_set(dns, names[i], -1)) {
+                ASN1_IA5STRING_free(dns);
+                GENERAL_NAME_free(name);
+                return 0;
+            }
+            GENERAL_NAME_set0_value(name, GEN_DNS, dns);
+        }
+        if (!sk_GENERAL_NAME_push(san, name)) {
+            GENERAL_NAME_free(name);
+            return 0;
+        }
+    }
+    return 1;
+}
 int make_ca(const char *dir, int n, char **names)
 {
     EVP_PKEY *cakey = NULL, *serverkey = NULL;
     X509 *ca = NULL, *server = NULL;
     GENERAL_NAMES *san = NULL;
-    int i, ok = 0;
+    int ok = 0;
     if (!n || service_mkdir(dir)) {
         log_line("ca: cannot make %s", dir);
         return 2;
@@ -103,37 +139,8 @@ int make_ca(const char *dir, int n, char **names)
     san = sk_GENERAL_NAME_new_null();
     if (!server || !san)
         goto done;
-    for (i = 0; i < n; i++) {
-        GENERAL_NAME *name = GENERAL_NAME_new();
-        unsigned char address[16];
-        int len;
-        if (!name)
-            goto done;
-        len = inet_pton(AF_INET, names[i], address) == 1    ? 4
-              : inet_pton(AF_INET6, names[i], address) == 1 ? 16
-                                                            : 0;
-        if (len) {
-            ASN1_OCTET_STRING *ip = ASN1_OCTET_STRING_new();
-            if (!ip || !ASN1_OCTET_STRING_set(ip, address, len)) {
-                ASN1_OCTET_STRING_free(ip);
-                GENERAL_NAME_free(name);
-                goto done;
-            }
-            GENERAL_NAME_set0_value(name, GEN_IPADD, ip);
-        } else {
-            ASN1_IA5STRING *dns = ASN1_IA5STRING_new();
-            if (!dns || !ASN1_STRING_set(dns, names[i], -1)) {
-                ASN1_IA5STRING_free(dns);
-                GENERAL_NAME_free(name);
-                goto done;
-            }
-            GENERAL_NAME_set0_value(name, GEN_DNS, dns);
-        }
-        if (!sk_GENERAL_NAME_push(san, name)) {
-            GENERAL_NAME_free(name);
-            goto done;
-        }
-    }
+    if (!subject_names(san, n, names))
+        goto done;
     if (!X509_add1_ext_i2d(server, NID_subject_alt_name, san, 0, 0) ||
         !extension(server, ca, NID_basic_constraints, "critical,CA:FALSE") ||
         !extension(server, ca, NID_key_usage, "critical,digitalSignature") ||

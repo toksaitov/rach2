@@ -241,10 +241,95 @@ bad:
     clear(&b);
     return NULL;
 }
-static struct value *read_value(struct reader *r, unsigned depth)
+static struct value *read_value(struct reader *r, unsigned depth);
+static struct value *read_container(struct reader *r, unsigned depth)
+{
+    struct value *v = NULL;
+    unsigned char close = *r->p++ == '{' ? '}' : ']';
+    v = value(close == '}' ? 'o' : 'a');
+    space(r);
+    if (*r->p == close) {
+        r->p++;
+        return v;
+    }
+    for (;;) {
+        char *key = NULL;
+        struct value *child;
+        space(r);
+        if (close == '}') {
+            if (*r->p != '"' || !(key = read_string(r)))
+                goto bad;
+            space(r);
+            if (*r->p != ':' || get(v, key)) {
+                free(key);
+                goto bad;
+            }
+            r->p++;
+        }
+        child = read_value(r, depth + 1);
+        if (!child) {
+            free(key);
+            goto bad;
+        }
+        add(v, key, child);
+        free(key);
+        space(r);
+        if (*r->p == close) {
+            r->p++;
+            return v;
+        }
+        if (*r->p != ',')
+            goto bad;
+        r->p++;
+    }
+bad:
+    destroy(v);
+    return NULL;
+}
+static struct value *read_number(struct reader *r)
 {
     struct value *v = NULL;
     char *end;
+
+    const unsigned char *start = r->p;
+    if (*r->p == '-')
+        r->p++;
+    if (*r->p == '0')
+        r->p++;
+    else {
+        if (*r->p < '1' || *r->p > '9')
+            goto bad;
+        while (isdigit(*r->p))
+            r->p++;
+    }
+    if (*r->p == '.') {
+        r->p++;
+        if (!isdigit(*r->p))
+            goto bad;
+        while (isdigit(*r->p))
+            r->p++;
+    }
+    if (*r->p == 'e' || *r->p == 'E') {
+        r->p++;
+        if (*r->p == '+' || *r->p == '-')
+            r->p++;
+        if (!isdigit(*r->p))
+            goto bad;
+        while (isdigit(*r->p))
+            r->p++;
+    }
+    v = value('n');
+    v->number = strtod((const char *)start, &end);
+    if ((const unsigned char *)end != r->p || !isfinite(v->number))
+        goto bad;
+    return v;
+bad:
+    destroy(v);
+    return NULL;
+}
+static struct value *read_value(struct reader *r, unsigned depth)
+{
+    struct value *v = NULL;
     space(r);
     if (depth > 128 || ++r->nodes > 1048576)
         return NULL;
@@ -254,45 +339,8 @@ static struct value *read_value(struct reader *r, unsigned depth)
             goto bad;
         return v;
     }
-    if (*r->p == '{' || *r->p == '[') {
-        unsigned char close = *r->p++ == '{' ? '}' : ']';
-        v = value(close == '}' ? 'o' : 'a');
-        space(r);
-        if (*r->p == close) {
-            r->p++;
-            return v;
-        }
-        for (;;) {
-            char *key = NULL;
-            struct value *child;
-            space(r);
-            if (close == '}') {
-                if (*r->p != '"' || !(key = read_string(r)))
-                    goto bad;
-                space(r);
-                if (*r->p != ':' || get(v, key)) {
-                    free(key);
-                    goto bad;
-                }
-                r->p++;
-            }
-            child = read_value(r, depth + 1);
-            if (!child) {
-                free(key);
-                goto bad;
-            }
-            add(v, key, child);
-            free(key);
-            space(r);
-            if (*r->p == close) {
-                r->p++;
-                return v;
-            }
-            if (*r->p != ',')
-                goto bad;
-            r->p++;
-        }
-    }
+    if (*r->p == '{' || *r->p == '[')
+        return read_container(r, depth);
     if (!strncmp((const char *)r->p, "true", 4)) {
         r->p += 4;
         return value('t');
@@ -305,40 +353,9 @@ static struct value *read_value(struct reader *r, unsigned depth)
         r->p += 4;
         return value('z');
     }
-    if (*r->p == '-' || isdigit(*r->p)) {
-        const unsigned char *start = r->p;
-        if (*r->p == '-')
-            r->p++;
-        if (*r->p == '0')
-            r->p++;
-        else {
-            if (*r->p < '1' || *r->p > '9')
-                goto bad;
-            while (isdigit(*r->p))
-                r->p++;
-        }
-        if (*r->p == '.') {
-            r->p++;
-            if (!isdigit(*r->p))
-                goto bad;
-            while (isdigit(*r->p))
-                r->p++;
-        }
-        if (*r->p == 'e' || *r->p == 'E') {
-            r->p++;
-            if (*r->p == '+' || *r->p == '-')
-                r->p++;
-            if (!isdigit(*r->p))
-                goto bad;
-            while (isdigit(*r->p))
-                r->p++;
-        }
-        v = value('n');
-        v->number = strtod((const char *)start, &end);
-        if ((const unsigned char *)end != r->p || !isfinite(v->number))
-            goto bad;
-        return v;
-    }
+    if (*r->p == '-' || isdigit(*r->p))
+        return read_number(r);
+
 bad:
     destroy(v);
     return NULL;
