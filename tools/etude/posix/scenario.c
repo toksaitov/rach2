@@ -3926,8 +3926,7 @@ static int stopped_by_signal(const struct etude_case_service *s)
 
 #ifdef _WIN32
     return r->end == ETUDE_END_STOPPED ||
-           (r->exit_end == ETUDE_END_EXITED &&
-            (uint32_t)r->exit_value == ETUDE_WIN_STOP_STATUS);
+           (r->exit_end == ETUDE_END_EXITED && (uint32_t)r->exit_value == ETUDE_WIN_STOP_STATUS);
 #else
     return r->exit_end == ETUDE_END_SIGNALED &&
            (r->exit_value == SIGTERM || r->exit_value == SIGKILL);

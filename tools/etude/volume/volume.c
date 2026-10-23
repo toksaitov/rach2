@@ -786,8 +786,8 @@ static int take(struct reader *r, const char *const *map, unsigned char *used, c
     return skip(r, size);
 }
 
-static int selected(struct reader *r, const char *const *map, unsigned char *used,
-                     const char *name, int dir, uint64_t size)
+static int selected(struct reader *r, const char *const *map, unsigned char *used, const char *name,
+                    int dir, uint64_t size)
 {
     if (strcmp(map[0], name) != 0)
         return skip(r, size);
@@ -797,8 +797,8 @@ static int selected(struct reader *r, const char *const *map, unsigned char *use
     return extract(r, name, map[1], size);
 }
 
-static int read_archive(const char *img, const char *const *map, int single,
-                         char *why, size_t whylen)
+static int read_archive(const char *img, const char *const *map, int single, char *why,
+                        size_t whylen)
 {
     static const unsigned char zero[BLOCK];
     struct reader r;
@@ -889,8 +889,7 @@ int etude_volume_read(const char *img, const char *const *map, char *why, size_t
     return read_archive(img, map, 0, why, whylen);
 }
 
-int etude_volume_file(const char *img, const char *name, const char *path,
-                      char *why, size_t whylen)
+int etude_volume_file(const char *img, const char *name, const char *path, char *why, size_t whylen)
 {
     const char *map[] = {name, path, NULL};
     return read_archive(img, map, 1, why, whylen);

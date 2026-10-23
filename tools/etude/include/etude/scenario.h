@@ -119,8 +119,8 @@ int etude_has_machine(const struct etude_case *c, const char *name);
  * The machine and any other machine using the file must have ended. The
  * binding lasts until replaced or until the attempt ends; it does not copy
  * the file. Immutable artifacts and host disks cannot be bound. */
-enum etude_status etude_bind_disk(struct etude_case *c, const char *machine,
-                                  const char *slot, const char *path);
+enum etude_status etude_bind_disk(struct etude_case *c, const char *machine, const char *slot,
+                                  const char *path);
 
 /**
  * Boot machine `machine` of the manifest, with `disks`, a list of names of

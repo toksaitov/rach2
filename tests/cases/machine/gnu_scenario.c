@@ -400,8 +400,7 @@ static void stage(struct gnu_case *s, struct etude_case_service **sntp)
         return;
     snprintf(ntp, sizeof(ntp), "%u", etude_port(s->u.c, 1));
     args[1] = ntp;
-    if (etude_port(s->u.c, 1) == 0 ||
-        etude_service(s->u.c, "sntp", args, sntp, &end) != ETUDE_OK) {
+    if (etude_port(s->u.c, 1) == 0 || etude_service(s->u.c, "sntp", args, sntp, &end) != ETUDE_OK) {
         *sntp = NULL;
         net_fail(&s->u, "the SNTP server did not start");
     }

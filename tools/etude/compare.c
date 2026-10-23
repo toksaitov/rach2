@@ -124,7 +124,6 @@ int cmp_store(const char *store, const char *bytes, size_t length, char *path, s
     return ok || holds(path, bytes, length) ? 0 : -1;
 }
 
-
 const char *const cmp_field_names[CMP_FIELDS] = {"case",
                                                  "architecture",
                                                  "domain",

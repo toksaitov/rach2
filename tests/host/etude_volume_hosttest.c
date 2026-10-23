@@ -751,20 +751,23 @@ static void row_selected(void)
     craft_data(&c, 6);
     craft_end(&c);
     put_file(fix_path("selected.tar"), (const char *)c.b, c.n);
-    CHECK(etude_volume_file(fix_path("selected.tar"), "ranges.txt", fix_path("ranges"), why, sizeof(why)) == 0,
+    CHECK(etude_volume_file(fix_path("selected.tar"), "ranges.txt", fix_path("ranges"), why,
+                            sizeof(why)) == 0,
           "one regular selected entry");
     data = get_file(fix_path("ranges"), &n);
     CHECK(data != NULL && n == 6 && access(fix_path("other"), F_OK) != 0,
           "other archive entries are not extracted");
     free(data);
-    CHECK(etude_volume_file(fix_path("selected.tar"), "absent", fix_path("missing"), why, sizeof(why)) != 0,
+    CHECK(etude_volume_file(fix_path("selected.tar"), "absent", fix_path("missing"), why,
+                            sizeof(why)) != 0,
           "a missing selected entry fails");
     c.n -= 1024;
     craft_header(&c, "ranges.txt", '0', 1);
     craft_data(&c, 1);
     craft_end(&c);
     put_file(fix_path("selected.tar"), (const char *)c.b, c.n);
-    CHECK(etude_volume_file(fix_path("selected.tar"), "ranges.txt", fix_path("ranges"), why, sizeof(why)) != 0,
+    CHECK(etude_volume_file(fix_path("selected.tar"), "ranges.txt", fix_path("ranges"), why,
+                            sizeof(why)) != 0,
           "a repeated selected entry fails");
 }
 

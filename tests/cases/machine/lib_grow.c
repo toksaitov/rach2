@@ -570,8 +570,7 @@ int grow_read_saved(struct etude_case *c, const char *store, const char *prefix,
     if (names == NULL)
         names = saved_files;
     for (i = 0; names[i] != NULL && i < 8; i++) {
-        char *argv[] = {"mkexfatfixture", "--check", (char *)store,
-                        "2048", "--read", file, NULL};
+        char *argv[] = {"mkexfatfixture", "--check", (char *)store, "2048", "--read", file, NULL};
         snprintf(file, sizeof(file), "saved/%s", names[i]);
         snprintf(ev, sizeof(ev), "%s%s", prefix, names[i]);
         grow_made(etude_evidence(c, ev));
@@ -619,12 +618,12 @@ int grow_read_plan(struct etude_case *c, char *seed, size_t size)
     grow_made(seed);
     grow_made(tools);
     {
-        char *const seed_argv[] = {"mkexfatfixture", "--check",
-                                   (char *)etude_artifact(c, "store"),
-                                   "2048", "--read", "seed.ext2", NULL};
-        char *const tools_argv[] = {"mkexfatfixture", "--check",
-                                    (char *)etude_artifact(c, "store"),
-                                    "2048", "--read", "grow-tools.tar", NULL};
+        char *const seed_argv[] = {
+            "mkexfatfixture", "--check", (char *)etude_artifact(c, "store"), "2048", "--read",
+            "seed.ext2",      NULL};
+        char *const tools_argv[] = {
+            "mkexfatfixture", "--check", (char *)etude_artifact(c, "store"), "2048", "--read",
+            "grow-tools.tar", NULL};
         grow_made(ranges);
         return drive_host(c, seed_argv, "plan-seed.ext2") == 0 &&
                        drive_host(c, tools_argv, "plan-grow-tools.tar") == 0 &&

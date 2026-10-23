@@ -64,8 +64,8 @@ int main(void)
     changed("whole after disk-commands 7", "whole after disk-commands 8", "witness differs");
     changed("resize before", "resize after", "duplicate witness");
     changed("table after monotonic-us 1", "resize after monotonic-us 1", "phase order");
-    changed("table after monotonic-us 1 disk-commands 1", "table after monotonic-us 1 disk-commands 0",
-            "no completed disk work");
+    changed("table after monotonic-us 1 disk-commands 1",
+            "table after monotonic-us 1 disk-commands 0", "no completed disk work");
     changed("monotonic-us 7", "monotonic-us 5", "clock moved backward");
     changed("monotonic-us 7", "monotonic-us 18446744073709551616", "counter overflow");
     changed("monotonic-us 7", "monotonic-us -7", "signed counter");

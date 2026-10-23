@@ -52,15 +52,16 @@ static int volume_digest(struct etude_case *c, const struct state *s, const char
                          const char *path, const char *name, char hex[65])
 {
     char out[4096];
-    char *argv[] = {"mkexfatfixture", "--check", (char *)stick, (char *)s->start,
-                    "--read", (char *)path, NULL};
+    char *argv[] = {"mkexfatfixture", "--check",    (char *)stick, (char *)s->start,
+                    "--read",         (char *)path, NULL};
     struct etude_termination end;
     int got;
 
     snprintf(out, sizeof(out), "%s", etude_evidence(c, name));
-    got = etude_host(c, argv, name, &end) == ETUDE_OK &&
-          end.end == ETUDE_END_EXITED && end.value == 0
-              ? file_digest(out, 0, UINT64_MAX, hex) : -1;
+    got =
+        etude_host(c, argv, name, &end) == ETUDE_OK && end.end == ETUDE_END_EXITED && end.value == 0
+            ? file_digest(out, 0, UINT64_MAX, hex)
+            : -1;
     unlink(out);
     return got;
 }

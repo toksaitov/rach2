@@ -462,8 +462,8 @@ static int far(struct usb_case *u)
     argv[2] = FAR_START ":" FAR_SECTORS ":fat=FARAWAY";
     argv[3] = NULL;
     usb_host(u, argv, "mkgpt.out");
-    if (usb_ok(u) && case_copy_range(volume, 0, UINT64_MAX, image,
-                                     strtoull(FAR_START, NULL, 10) * 512, 0) != 0)
+    if (usb_ok(u) &&
+        case_copy_range(volume, 0, UINT64_MAX, image, strtoull(FAR_START, NULL, 10) * 512, 0) != 0)
         usb_fail(u, "the far volume could not be copied to its partition");
     boot(u, &b, USB_SHELL);
     probe(u, &b, "probe", "/usbdiskprobe big", "big");

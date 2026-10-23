@@ -32,8 +32,8 @@ static char *run(const char *path, const char *mode)
     while (etude_exec_wait(ex, -1) != p)
         ;
     r = etude_proc_result(p);
-    if (r->end == ETUDE_END_EXITED && r->value == 0 &&
-        r->cleanup == ETUDE_CLEANUP_CONFIRMED && r->out.total == r->out.kept) {
+    if (r->end == ETUDE_END_EXITED && r->value == 0 && r->cleanup == ETUDE_CLEANUP_CONFIRMED &&
+        r->out.total == r->out.kept) {
         out = malloc(r->out.kept + 1);
         if (out) {
             memcpy(out, r->out.data, r->out.kept);
@@ -83,8 +83,7 @@ static int changed(const char *text, const char *from, const char *to)
 
 static int latency(const char *program)
 {
-    static const char *const modes[] = {"spin", "timer", "random", "pump", "work",
-                                        "undispatched"};
+    static const char *const modes[] = {"spin", "timer", "random", "pump", "work", "undispatched"};
     static const int wants[] = {1, 0, 1, 0, 0, 0};
     char *out[6] = {0}, *test = run(program, NULL);
     int ok = test != NULL, i;
