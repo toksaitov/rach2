@@ -59,9 +59,12 @@
 #define SEEK_SET 0
 #define SEEK_END 2
 
-#define STATFS_MAGIC_PROC  0x9FA0
-#define STATFS_MAGIC_KRFFS 0x4B524646
-#define STATFS_MAGIC_EXT2  0xEF53
+/* The f_type statfs(2) reports for /proc, the KRFFS boot root, a KRFFS
+ * volume mounted by mount(2), and ext2. */
+#define STATFS_MAGIC_PROC         0x9FA0
+#define STATFS_MAGIC_KRFFS        0x4B524646
+#define STATFS_MAGIC_KRFFS_VOLUME 0x4B52
+#define STATFS_MAGIC_EXT2         0xEF53
 
 /** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
@@ -518,6 +521,13 @@ static void succeed(void)
     sys_exit(0);
 }
 
+/** Whether `got`, the root's f_type, is `magic`, the one the probe expects;
+ * a KRFFS volume mounted by mount(2) counts as the KRFFS boot root. */
+static int magic_matches(unsigned got, unsigned magic)
+{
+    return got == magic || (magic == STATFS_MAGIC_KRFFS && got == STATFS_MAGIC_KRFFS_VOLUME);
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -769,7 +779,7 @@ void probe_main(unsigned long *sp)
     if (probe_statfs("/proc", iobuf) != 0 || *(unsigned *)iobuf != STATFS_MAGIC_PROC) {
         fail("statfs64 of /proc");
     }
-    if (probe_statfs("/", iobuf) != 0 || *(unsigned *)iobuf != magic) {
+    if (probe_statfs("/", iobuf) != 0 || !magic_matches(*(unsigned *)iobuf, magic)) {
         fail("statfs64 of the root");
     }
     if (magic == STATFS_MAGIC_EXT2

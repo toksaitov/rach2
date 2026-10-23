@@ -119,9 +119,11 @@ static void puts(const char *s)
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
-/* The f_type statfs(2) reports for each root the directory row knows. */
-#define STATFS_MAGIC_KRFFS 0x4B524646u
-#define STATFS_MAGIC_EXT2  0xEF53u
+/* The f_type statfs(2) reports for each root the directory row knows: the
+ * KRFFS boot root, a KRFFS volume mounted by mount(2), and ext2. */
+#define STATFS_MAGIC_KRFFS        0x4B524646u
+#define STATFS_MAGIC_KRFFS_VOLUME 0x4B52u
+#define STATFS_MAGIC_EXT2         0xEF53u
 
 /**
  * Whether the root under the probe is ext2, read by statfs(2) of `/` rather
@@ -141,7 +143,7 @@ static int root_is_ext2(void)
     if (*(unsigned *)buf == STATFS_MAGIC_EXT2) {
         return 1;
     }
-    if (*(unsigned *)buf == STATFS_MAGIC_KRFFS) {
+    if (*(unsigned *)buf == STATFS_MAGIC_KRFFS || *(unsigned *)buf == STATFS_MAGIC_KRFFS_VOLUME) {
         return 0;
     }
     return -1;
