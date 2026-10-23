@@ -232,15 +232,20 @@ static void ports(struct etude_ledger *l, const char *ledger)
 struct runner_claim {
     long keeper, process;
     int found;
+    enum etude_claim_status status;
+    char why[96]; /* what keeps the claim, when it is kept */
 };
 
-/** Note whether the fixture job still has an admission claim. */
+/** Note whether the fixture job still has an admission claim, and its status. */
 static int runner_visit(const struct etude_ledger_claim *c, void *ctx)
 {
     struct runner_claim *q = ctx;
 
-    if (strcmp(c->id, "runner-cleanup") == 0)
+    if (strcmp(c->id, "runner-cleanup") == 0) {
         q->found = 1;
+        q->status = c->status;
+        snprintf(q->why, sizeof(q->why), "%s", c->why);
+    }
     return 0;
 }
 
@@ -313,19 +318,68 @@ static pid_t runner_worker(const char *self, const char *ledger, const char *rea
     return worker;
 }
 
-/** Apply the runner's kill rule before the controller's loss starts cleanup. */
-static void runner_sweep(pid_t worker, pid_t holder, const struct runner_claim *q)
+/**
+ * Apply the runner's kill rule before the controller's loss starts cleanup.
+ *
+ * @return 1 when the rule killed the controller, `worker`, and 0 otherwise.
+ */
+static int runner_sweep(pid_t worker, pid_t holder, const struct runner_claim *q)
 {
     long targets[4] = {q->keeper, holder, q->process, worker};
-    int i;
+    int i, killed = 0;
 
     for (i = 0; i < 4; i++)
-        if (targets[i] > 0 && runner_tracks(targets[i]) == 1)
+        if (targets[i] > 0 && runner_tracks(targets[i]) == 1) {
             kill((pid_t)targets[i], SIGKILL);
+            killed |= targets[i] == worker;
+        }
+    return killed;
 }
 
-/** End fixture processes and remove its private claim after a failed sweep. */
-static void runner_dispose(struct etude_ledger *l, const struct runner_claim *q)
+/**
+ * Wait for `holder`, the fixture's lock holder and this process's child once
+ * the controller has died, while ledger `l` may yet free the claim it waits
+ * for. `*gone` is set once the holder is reaped, or is no child to reap.
+ *
+ * @return 1 when the holder exited with status 0; 0 when it ended otherwise,
+ *         or when the ledger keeps the claim uncertain, which recovery never
+ *         frees, with the reason on standard error.
+ */
+static int runner_released(struct etude_ledger *l, pid_t holder, int *gone)
+{
+    struct runner_claim q;
+    pid_t r;
+    int st;
+
+    *gone = 0;
+    for (;;) {
+        r = waitpid(holder, &st, WNOHANG);
+        if (r < 0 && errno == EINTR)
+            continue;
+        if (r != 0) {
+            *gone = 1;
+            if (r == holder)
+                forget(holder);
+            return r == holder && WIFEXITED(st) && WEXITSTATUS(st) == 0;
+        }
+        memset(&q, 0, sizeof(q));
+        if (l == NULL || etude_ledger_list(l, runner_visit, &q) != 0)
+            return 0;
+        if (q.found && q.status == ETUDE_CLAIM_UNCERTAIN) {
+            fprintf(stderr, "etude-bridge-test: runner: the claim is left uncertain: %s\n", q.why);
+            return 0;
+        }
+        /* interval: the holder and the ledger are looked at again every 10 ms */
+        poll(NULL, 0, 10);
+    }
+}
+
+/**
+ * End fixture processes and remove its private claim after a failed sweep,
+ * and then end and reap its lock holder, `holder`, unless it is `gone`.
+ */
+static void runner_dispose(struct etude_ledger *l, const struct runner_claim *q, pid_t holder,
+                           int gone)
 {
     if (q->keeper > 0)
         kill((pid_t)q->keeper, SIGKILL);
@@ -336,31 +390,59 @@ static void runner_dispose(struct etude_ledger *l, const struct runner_claim *q)
             etude_ledger_drop(l, "runner-cleanup");
         etude_ledger_close(l);
     }
+    if (holder > 0 && !gone) {
+        kill(holder, SIGKILL);
+        while (waitpid(holder, NULL, 0) < 0 && errno == EINTR) {
+        }
+        forget(holder);
+    }
+}
+
+/**
+ * Wait for the fixture's case to write its byte to `fd`, its ready FIFO,
+ * while `worker` runs; 1 once it has, 0 when the worker ended first.
+ */
+static int case_ready(int fd, pid_t worker)
+{
+    struct pollfd p;
+    siginfo_t si;
+    char c;
+
+    for (;;) {
+        p.fd = fd;
+        p.events = POLLIN;
+        p.revents = 0;
+        /* interval: the worker is looked at again every 10 ms */
+        if (poll(&p, 1, 10) == 1)
+            return read(fd, &c, 1) == 1;
+        memset(&si, 0, sizeof(si));
+        if (waitid(P_PID, (id_t)worker, &si, WEXITED | WNOHANG | WNOWAIT) != 0 || si.si_pid != 0)
+            return 0;
+    }
 }
 
 /**
  * Sweep a job's marked processes after its case is ready. Its keeper and
  * lock holder must survive, end the case and release the admission claim.
+ * The case ends whatever the bridge does: a controller the rule misses is
+ * killed too, and a claim the ledger keeps uncertain, with its holder, is
+ * reported and then ended.
  */
 static void runner_cleanup(const char *self, const char *ledger)
 {
     const char *ready = fix_path("runner-ready");
     const char *blocked = fix_path("runner-blocked");
-    struct runner_claim q = {0, 0, 0};
+    struct runner_claim q;
     struct etude_ledger *l;
     struct etude_pid id;
-    struct pollfd p;
-    pid_t worker, holder, reaped = 0;
-    int fd, host, st;
-    char c;
+    pid_t worker, holder;
+    int fd, host, st, gone = 1;
 
+    memset(&q, 0, sizeof(q));
     CHECK(mkfifo(ready, 0600) == 0 && mkfifo(blocked, 0600) == 0, "runner fixtures");
     fd = open(ready, O_RDWR | O_NONBLOCK);
     worker = runner_worker(self, ledger, ready, blocked, fd);
-    p.fd = fd;
-    p.events = POLLIN;
-    p.revents = 0;
-    CHECK(poll(&p, 1, -1) == 1 && read(fd, &c, 1) == 1, "runner case ready");
+    CHECK(case_ready(fd, worker), "runner case ready");
     l = etude_ledger_open(ledger);
     runner_processes(ledger, &q);
     CHECK(l != NULL && etude_ledger_list(l, runner_visit, &q) == 0 && q.found && q.keeper > 0 &&
@@ -375,23 +457,18 @@ static void runner_cleanup(const char *self, const char *ledger)
     CHECK(worker > 0 && runner_tracks(worker) == 1 && q.process > 0 &&
               runner_tracks(q.process) == 1,
           "runner controller and case marked");
-    runner_sweep(worker, holder, &q);
+    if (!runner_sweep(worker, holder, &q))
+        kill(worker, SIGKILL);
     CHECK(waitpid(worker, &st, 0) == worker, "runner controller reaped");
     active_worker = 0;
-    if (holder > 0)
-        while ((reaped = waitpid(holder, &st, 0)) < 0 && errno == EINTR) {
-        }
-    CHECK(reaped == holder && WIFEXITED(st) && WEXITSTATUS(st) == 0,
-          "runner holder confirms cleanup");
-    if (reaped == holder)
-        forget(holder);
+    CHECK(holder > 0 && runner_released(l, holder, &gone), "runner holder confirms cleanup");
     q.found = 0;
     CHECK(l != NULL && etude_ledger_list(l, runner_visit, &q) == 0 && !q.found,
           "runner sweep releases claim");
     CHECK(q.keeper > 0 && q.process > 0 && etude_process_state(q.keeper, &id) == 0 &&
               etude_process_state(q.process, &id) == 0,
           "runner sweep leaves no case");
-    runner_dispose(l, &q);
+    runner_dispose(l, &q, holder, gone);
     CHECK(lock_try(host, F_WRLCK) == 0, "runner sweep releases locks");
     close(host);
     close(fd);
@@ -404,8 +481,6 @@ static void lost_controller(const char *ledger)
     const char *blocked = fix_path("blocked");
     int fd, host, st;
     pid_t worker, holder;
-    struct pollfd p;
-    char c;
 
     CHECK(mkfifo(ready, 0600) == 0 && mkfifo(blocked, 0600) == 0, "controller fixtures");
     fd = open(ready, O_RDWR | O_NONBLOCK);
@@ -436,10 +511,7 @@ static void lost_controller(const char *ledger)
         _exit(etude_admit_main(17, args));
     }
     active_worker = worker;
-    p.fd = fd;
-    p.events = POLLIN;
-    p.revents = 0;
-    CHECK(poll(&p, 1, -1) == 1 && read(fd, &c, 1) == 1, "case ready before loss");
+    CHECK(case_ready(fd, worker), "case ready before loss");
     host = lock_file("rach2-host.lock");
     holder = (pid_t)locked_by(host, F_RDLCK);
     if (holder > 0)
