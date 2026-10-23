@@ -49,7 +49,7 @@ ETUDE_RUN_SRC = tools/etude/collection.c tools/etude/posix/run_suites.c tools/et
                 tools/etude/compare.c tools/etude/baseline.c tools/etude/compare_report.c \
                 tools/etude/compare_run.c tools/etude/lines.c tools/etude/posix/admit.c \
                 tools/etude/posix/run_host.c tools/etude/lock_tree.c tools/etude/lock_ports.c \
-                tools/etude/provision_tooling.c tools/etude/tooling.c
+                tools/etude/provision_tooling.c tools/etude/tooling.c tools/etude/tooling_cache.c
 
 # The verbs of Linux and macOS alone: `etude run native`, `etude show
 # failures`, `etude estimate`, `etude status` and `etude release`, `etude

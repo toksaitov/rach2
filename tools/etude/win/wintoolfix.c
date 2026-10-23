@@ -357,6 +357,86 @@ static char *job(const char *name, const char *text, char *path)
     return put(path, text) == 0 ? path : NULL;
 }
 
+/** Name a private obsolete-machine fixture by a repeated hex digit. */
+static char *old_cache(char path[PATH], char digit, const char *suffix)
+{
+    char key[65], name[96];
+    memset(key, digit, 64);
+    key[64] = 0;
+    snprintf(name, sizeof(name), "tooling-%s.%s", key, suffix);
+    return join(path, cache, name);
+}
+
+static int old_machine(char digit, int complete)
+{
+    char disk[PATH], tools[PATH];
+    old_cache(disk, digit, "qcow2");
+    old_cache(tools, digit, "tools");
+    if (put(disk, "obsolete reproducible overlay\n") ||
+        put(tools, complete ? "etude-tooling: provision: ok\n"
+                            : "etude-tooling: provision: failed: fixture\n"))
+        return 1;
+    SetFileAttributesA(disk, FILE_ATTRIBUTE_READONLY);
+    SetFileAttributesA(tools, FILE_ATTRIBUTE_READONLY);
+    return 0;
+}
+
+static int old_present(char digit)
+{
+    char path[PATH];
+    int disk = GetFileAttributesA(old_cache(path, digit, "qcow2")) != INVALID_FILE_ATTRIBUTES;
+    int tools = GetFileAttributesA(old_cache(path, digit, "tools")) != INVALID_FILE_ATTRIBUTES;
+    return disk + 2 * tools;
+}
+
+static int prepare_again(void)
+{
+    struct ran r;
+    int rc;
+    if (tooling(&r, NULL, "prepare", END))
+        return 1;
+    rc = r.status != 0 ? failed("cache preparation failed: %s", r.err) : 0;
+    ran_free(&r);
+    return rc;
+}
+
+/** A hard-link alias also retains a completed obsolete pair. */
+static int linked_machine(char *alias)
+{
+    char disk[PATH];
+    join(alias, cache, "retained-alias");
+    return old_machine('e', 1) || !CreateHardLinkA(alias, old_cache(disk, 'e', "qcow2"), NULL);
+}
+
+/** Keep pinned bases, incomplete pairs, downloads and old-format evidence. */
+static int row_cache(void)
+{
+    char key[65], name[96], pin[PATH], legacy[PATH], alias[PATH];
+    memset(key, 'b', 64);
+    key[64] = 0;
+    snprintf(name, sizeof(name), "job-%s-123-0", key);
+    join(pin, cache, name);
+    join(legacy, cache, "job-123-0");
+    if (old_machine('a', 1) || old_machine('b', 1) || old_machine('c', 0) ||
+        linked_machine(alias) || _mkdir(pin))
+        return failed("the obsolete cache fixtures cannot be written");
+    if (prepare_again())
+        return 1;
+    if (old_present('a') || old_present('b') != 3 || old_present('c') != 3 ||
+        old_present('e') != 3 || !cached("image-*.img"))
+        return failed("cache cleanup removed a referenced or incomplete file, or kept old output");
+    if (old_machine('d', 1) || _mkdir(legacy) || prepare_again())
+        return 1;
+    if (old_present('d') != 3)
+        return failed("cache cleanup removed a base beside old-format evidence");
+    remove_tree(alias);
+    if (_rmdir(legacy) || _rmdir(pin) || prepare_again())
+        return 1;
+    return !old_present('b') && !old_present('d') && !old_present('e') && old_present('c') == 3
+               ? 0
+               : failed("cache cleanup did not retain only the incomplete obsolete pair");
+}
+
 /** A machine made, recorded as one step, found by check and then reused. */
 static int row_made(void)
 {
@@ -392,7 +472,7 @@ static int row_made(void)
     if (strstr(r.out, "etude provision: result: reused ") == NULL)
         rc = failed("not reused: %s", r.out);
     ran_free(&r);
-    return rc;
+    return rc ? rc : row_cache();
 }
 
 /** An image of another digest is refused, and nothing is kept. */

@@ -25,6 +25,7 @@
 
 #include "../../utils/sha256.h"
 #include "etude/tooling.h"
+#include "tooling_cache.h"
 
 /* How often a boot's channel is read and QEMU sampled, in milliseconds. */
 #define POLL_MS 50
@@ -1099,6 +1100,7 @@ int etude_tooling_prepare(const struct etude_tooling_site *site, unsigned cpus,
     if (exists(w.m.disk)) {
         res->outcome = ETUDE_TOOLING_ENDED;
         res->reused = 1;
+        tooling_cache_prune(site, w.m.key);
         return 0;
     }
     if (make_dirs(site->cache) != 0)
@@ -1119,17 +1121,21 @@ int etude_tooling_prepare(const struct etude_tooling_site *site, unsigned cpus,
     res->cost.disk_bytes = used_bytes(w.m.disk) + used_bytes(w.m.image);
     if (w.root[0] != '\0' && exists(w.root)) {
         res->cost.disk_bytes += used_bytes(w.root);
-        remove(w.root);
+        if (res->cost.cleanup == ETUDE_CLEANUP_CONFIRMED)
+            remove(w.root);
     }
     boot_free(&w.b);
-    if (w.dir[0] != '\0' && res->outcome != ETUDE_TOOLING_ENDED &&
-        res->outcome != ETUDE_TOOLING_STOPPED)
+    if (w.dir[0] != '\0' &&
+        ((res->outcome != ETUDE_TOOLING_ENDED && res->outcome != ETUDE_TOOLING_STOPPED) ||
+         res->cost.cleanup != ETUDE_CLEANUP_CONFIRMED))
         snprintf(res->dir, sizeof(res->dir), "%s", w.dir);
     else if (w.dir[0] != '\0' && remove_dir(w.dir, scratch) != 0)
         res->cost.cleanup = ETUDE_CLEANUP_UNCONFIRMED;
     if (etude_history_now(&now) == 0)
         step_end(&w.b, &now, 0, 0, res->outcome == ETUDE_TOOLING_ENDED);
     res->cost.steps[0].cpu_us = from_exec(&res->cost.cpu_us, 0);
+    if (res->outcome == ETUDE_TOOLING_ENDED && res->cost.cleanup == ETUDE_CLEANUP_CONFIRMED)
+        tooling_cache_prune(site, w.m.key);
     return res->outcome == ETUDE_TOOLING_ENDED ? 0 : -1;
 }
 
@@ -1268,6 +1274,28 @@ static int job_line(const struct etude_tooling_site *site, const struct etude_to
     return w->l.failed ? failure(why, whylen, "QEMU's command line cannot be made") : 0;
 }
 
+/** Publish a base reference under the same mutex used by cache pruning. */
+static int job_directory(const struct etude_tooling_site *site, struct work *w, char *why,
+                         size_t size)
+{
+    intptr_t guard;
+    char prefix[80];
+    int rc;
+    if (tooling_cache_enter(site, &guard))
+        return failure(why, size, "the tooling cache mutex cannot be acquired");
+    rc = fmt(prefix, sizeof(prefix), "job-%s", w->m.key);
+    if (!rc)
+        rc = private_dir(site->cache, prefix, w->dir, sizeof(w->dir));
+    if (!rc && !exists(w->m.disk)) {
+        remove_dir(w->dir, (const char *const[]){NULL});
+        w->dir[0] = 0;
+        rc = -1;
+    }
+    tooling_cache_leave(guard);
+    return rc ? failure(why, size, "a private base reference in %s cannot be made", site->cache)
+              : 0;
+}
+
 /** Judge a job's boot; read its status, output and outputs from its volume. */
 static int job_judge(const struct etude_tooling_site *site, const struct etude_tooling_job *job,
                      const struct work *w, int late, struct etude_tooling_result *res)
@@ -1312,9 +1340,8 @@ int etude_tooling_run(const struct etude_tooling_site *site, const struct etude_
     if (etude_history_now(&now) != 0)
         return failure(res->why, sizeof(res->why), "the clock cannot be read");
     step_begin(&w.b, ETUDE_TOOLING_START, &now);
-    if (private_dir(site->cache, "job", w.dir, sizeof(w.dir)) != 0)
-        return failure(res->why, sizeof(res->why), "a directory in %s cannot be made: %s",
-                       site->cache, strerror(errno));
+    if (job_directory(site, &w, res->why, sizeof(res->why)) != 0)
+        return -1;
     if (job_line(site, job, &w, res->why, sizeof(res->why)) == 0) {
         end = boot_run(&w.b, site, w.l.argv, job->deadline_us, res->why, sizeof(res->why));
         if (end == BOOT_ENDED || end == BOOT_LATE)
@@ -1325,7 +1352,8 @@ int etude_tooling_run(const struct etude_tooling_site *site, const struct etude_
     for (i = 0; job->disks != NULL && job->disks[i] != NULL; i++)
         res->cost.disk_bytes += used_bytes(job->disks[i]);
     boot_free(&w.b);
-    if ((res->outcome != ETUDE_TOOLING_ENDED && res->outcome != ETUDE_TOOLING_STOPPED) || job->keep)
+    if ((res->outcome != ETUDE_TOOLING_ENDED && res->outcome != ETUDE_TOOLING_STOPPED) ||
+        job->keep || res->cost.cleanup != ETUDE_CLEANUP_CONFIRMED)
         snprintf(res->dir, sizeof(res->dir), "%s", w.dir);
     else if (remove_dir(w.dir, scratch) != 0 && res->cost.cleanup == ETUDE_CLEANUP_CONFIRMED)
         res->cost.cleanup = ETUDE_CLEANUP_UNCONFIRMED;
