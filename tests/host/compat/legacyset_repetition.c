@@ -81,6 +81,7 @@ static void repetition_load_case(struct etude_ledger *ledger, enum etude_load_ki
 
 static void test_repetition_loads(void)
 {
+    test_repetition_keys();
     struct etude_collection_repeat r = {0};
     CHECK(!etude_collection_repeat_option(&r, 'R', "3") && !etude_collection_repeat_valid(&r),
           "repeat: count requires explicit seed");

@@ -22,6 +22,7 @@
  * host-deps: tools/etude/repeat.c tools/etude/collection_repeat.c
  * host-deps: tools/etude/collection_load.c
  * host-inputs: tests/host/compat/legacyset_repetition.c
+ * host-inputs: tests/host/compat/legacyset_repeat_key.c
  * host-inputs: tests/host/compat/legacyset_context.c
  * host-deps: tools/etude/preparation_record.c tools/etude/posix/legacy_set.c
  * host-deps: tools/etude/posix/legacy_cases.c tools/etude/digest.c
@@ -2850,6 +2851,7 @@ static int guest_site(void)
 }
 
 #include "compat/legacyset_context.c"
+#include "compat/legacyset_repeat_key.c"
 #include "compat/legacyset_repetition.c"
 
 int main(int argc, char **argv)

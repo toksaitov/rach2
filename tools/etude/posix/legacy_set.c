@@ -872,8 +872,20 @@ static void reproduce(const struct set *x, struct cmp_text *d)
     size_t i;
 
     const char *cache = etude_context_text(x->o->context, "cache_evidence");
-    cmp_printf(d, "{\"schema_version\":1,\"cache_evidence\":%s,\"items\":[",
-               cache ? cache : "null");
+    cmp_printf(d, "{\"schema_version\":1,\"cache_evidence\":%s", cache ? cache : "null");
+    if (x->o->repeat) {
+        struct etude_repeat_spec spec;
+        etude_collection_repeat_spec(x->o->repeat, x->repeat_cases, x->repeat_count,
+                                     x->o->width, &spec);
+        char *record = etude_repeat_record(&spec, x->run_id, x->repeat_items, x->n);
+        if (!record) {
+            d->failed = 1;
+            return;
+        }
+        cmp_printf(d, ",\"repetition\":%s", record);
+        free(record);
+    }
+    cmp_printf(d, ",\"items\":[");
     for (i = 0; i < x->n; i++) {
         cmp_printf(d, "%s{\"item_id\":", i ? "," : "");
         string(d, x->mem[i].item_id);
@@ -1276,17 +1288,9 @@ static int write_plan(struct set *x)
     names(x, &d, is_serial);
     cmp_printf(&d, ",\"exclusive\":");
     names(x, &d, is_exclusive);
-    if (x->o->repeat) {
-        struct etude_repeat_spec spec;
-        etude_collection_repeat_spec(x->o->repeat, x->repeat_cases, x->repeat_count, o->width,
-                                     &spec);
-        char *record = etude_repeat_record(&spec, x->run_id, x->repeat_items, x->n);
-        if (!record)
-            return -1;
+    if (x->repeat_selection)
         cmp_printf(&d, ",\"repetition\":%s,\"load_ready_us\":30000000,\"load_grace_us\":5000000",
-                   record);
-        free(record);
-    }
+                   x->repeat_selection);
     cmp_printf(&d, "}\n");
     rc |= part(x, &t, "concurrency", &d);
     const char *exemption = etude_context_text(o->context, "exemption");
