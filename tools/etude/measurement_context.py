@@ -110,7 +110,8 @@ def observation(trace, stop, run_id):
     if not trace:
         require(not stop, 'a stop request needs its observation trace')
         return None
-    require(stop is not None and not stop.exists(), 'stop request already exists or is absent')
+    require(stop is not None and not stop.exists() and not stop.is_symlink(),
+            'stop request already exists or is absent')
     path = trace.resolve(strict=True)
     require(stat.S_ISREG(path.stat().st_mode), 'observation trace is not regular')
     with path.open('rb') as stream:
