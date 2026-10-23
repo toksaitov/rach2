@@ -32,8 +32,6 @@ struct row {
 };
 
 static const struct row rows[] = {
-    {"nodisk-fsdisk", REFUSED, NODISK_LAST,
-     "boot: refused: rach2.nodisk with rach2.fsdisk or rach2.root=disk"},
     {"nodisk-root", REFUSED, NODISK_LAST,
      "boot: refused: rach2.nodisk with rach2.fsdisk or rach2.root=disk"},
     {"blank", REFUSED,
@@ -41,7 +39,8 @@ static const struct row rows[] = {
      "boot: refused: no file system mounted"},
     {"init-loop", REFUSED, "is not the answer to a disk that cannot be read",
      "boot: refused: /sbin/init cannot be read (-40)"},
-    {"cut", REFUSED, NODISK_LAST, "boot: refused: rach2.nodisk"},
+    {"cut", REFUSED, NODISK_LAST,
+     "boot: refused: rach2.nodisk with rach2.fsdisk or rach2.root=disk"},
     {"cpu-486", PROCESSOR, "boot: refused: the processor has no rdtsc, and this kernel is i686",
      NULL},
     {"cpu-pentium", PROCESSOR, "boot: refused: the processor has no cmov, and this kernel is i686",
@@ -49,7 +48,6 @@ static const struct row rows[] = {
     {"cpu-qemu32", PROCESSOR,
      "boot: refused: the processor has no long mode, and this kernel is x86-64", NULL},
     {"kept", SHELL, "Kernel debug shell active", "boot: command line cut"},
-    {"rescue-fsdisk", SHELL, "Kernel debug shell active", "boot: refused: rach2.nodisk"},
     {"rescue-init", SHELL, "Kernel debug shell active", "boot: refused: rach2.nodisk"},
 };
 
@@ -205,8 +203,11 @@ static void shell(struct lc *l, struct etude_case_machine *m, const struct row *
     if (!lc_ok(l) || !settled(l, m, &at, "shell"))
         return;
     lc_assert(l, "shell", has(m, r->last), "the boot did not come to the debug shell");
-    if (lc_quit(l, m, NULL))
+    if (lc_quit(l, m, NULL)) {
         lc_find(l, m, strcmp(r->name, "kept") == 0 ? "not-cut" : "not-refused", r->said, 0, 0);
+        if (strcmp(r->name, "kept") == 0)
+            lc_find(l, m, "not-refused", "boot: refused: rach2.nodisk", 0, 0);
+    }
 }
 
 int etude_scenario(struct etude_case *c)
@@ -215,7 +216,7 @@ int etude_scenario(struct etude_case *c)
     static const char *const loop_ids[] = {"refused", "mounted", "halted", "no-shell", NULL};
     static const char *const cut_ids[] = {"refused", "cut-logged", "halted", "no-shell", NULL};
     static const char *const processor_ids[] = {"refused", "halted", "no-kernel", NULL};
-    static const char *const kept_ids[] = {"shell", "not-cut", NULL};
+    static const char *const kept_ids[] = {"shell", "not-cut", "not-refused", NULL};
     static const char *const rescue_ids[] = {"shell", "not-refused", NULL};
     const char *name = case_name(c);
     const struct row *r = NULL;
