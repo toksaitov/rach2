@@ -5,7 +5,7 @@
 
 # The sources of etude, the one command, for each platform. ETUDE_SRC is
 # that of Linux and macOS, which has every verb; ETUDE_WIN_SRC that of
-# Windows, ETUDE_RACH2_SRC that of Rach2, which has `check` alone, and
+# Windows, ETUDE_RACH2_SRC that of Rach2, with `check` and local native runs, and
 # ETUDE_LOCK_SRC that of the build of `lock` alone, with ETUDE_LOCK_ONLY
 # defined, which the first process of tests/run makes for itself. etude.c
 # chooses the verbs by the same platform.
@@ -17,7 +17,14 @@ ETUDE_CHECK_SRC = tools/etude/etude.c tools/etude/check.c tools/etude/cases.c \
                   tools/etude/processor.c tools/etude/qemu_profile.c tools/etude/schema.c \
                   tools/etude/verdict.c tools/etude/history.c tools/etude/history_json.c \
                   tools/etude/history_collect.c utils/sha256.c
-ETUDE_RACH2_SRC = $(ETUDE_CHECK_SRC)
+# The local Rach2 collection shares its framed transport with the desktop
+# single-attempt command; its public entry remains etude.
+NATIVE_COLLECTION_DRIVER_SRC = tests/native/collection.c tests/native/inventory.c \
+    tests/native/attempt.c tests/native/assets.c tests/native/proof.c tests/native/cut_transport.c
+NATIVE_COLLECTION_TRANSPORT_SRC = tools/etude/posix/run_native.c tools/etude/posix/remote.c \
+    tools/etude/posix/process.c tools/etude/guest/wire.c
+ETUDE_RACH2_SRC = $(ETUDE_CHECK_SRC) $(NATIVE_COLLECTION_DRIVER_SRC) \
+                   $(NATIVE_COLLECTION_TRANSPORT_SRC)
 
 # `etude lock`: the holder of a tree's run lock, on Linux and macOS, and the
 # holder of the host lock and a block of host ports, whose winfmt.c gives it

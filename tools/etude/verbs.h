@@ -12,6 +12,7 @@ int etude_collection_main(int argc, char **argv);
 int etude_suites_main(int argc, char **argv);
 int etude_host_main(int argc, char **argv);
 int etude_native_main(int argc, char **argv);
+int etude_native_collection_main(int argc, char **argv);
 int etude_prepare_main(int argc, char **argv);
 int etude_check_main(int argc, char **argv);
 int etude_record_main(int argc, char **argv);

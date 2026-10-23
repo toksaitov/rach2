@@ -2,7 +2,7 @@
 .PHONY: native-controller native-assets
 native-controller: $(LIBC_STAMP)
 	+$(MAKE) --no-print-directory -C tests/native
-$(ARCH_BUILD)/tests/native/native-collection: | native-controller
+$(ARCH_BUILD)/tests/native/etude: | native-controller
 	@test -x $@
 native-assets: tests musl-programs tools/etude/guest native-controller krffs \
     build/tests/host/mkexfatfixture $(IMAGES_DIR)/ext2-fixture.disk \

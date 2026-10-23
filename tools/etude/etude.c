@@ -2,7 +2,8 @@
  * etude.c: etude, the test runner's one command, which runs the verb its
  * first argument names, and the form of a verb that has several. Which verbs
  * a build has depends on its platform: every verb on Linux and macOS, those
- * with a Windows implementation on Windows, `check` on Rach2, and `lock`
+ * with a Windows implementation on Windows, `check` and local native runs
+ * on Rach2, and `lock`
  * alone where ETUDE_LOCK_ONLY is defined, as the first process of tests/run
  * builds it. tools/etude/Readme.md gives each verb's usage.
  */
@@ -78,7 +79,36 @@ static int check_main(int argc, char **argv)
     return etude_check_main(argc, argv);
 }
 
-#ifndef __rach2__
+#ifdef __rach2__
+
+/** Run the local collection, or its list and TinyCC proof forms. */
+static int native_main(int argc, char **argv)
+{
+    char **arguments;
+    int status, i;
+    if (argc > 1 && (strcmp(argv[1], "list") == 0 || strcmp(argv[1], "proof") == 0))
+        return etude_native_collection_main(argc, argv);
+    arguments = calloc((size_t)argc + 2, sizeof(*arguments));
+    if (arguments == NULL)
+        return 2;
+    arguments[0] = argv[0];
+    arguments[1] = "run";
+    for (i = 1; i < argc; i++)
+        arguments[i + 1] = argv[i];
+    status = etude_native_collection_main(argc + 1, arguments);
+    free(arguments);
+    return status;
+}
+
+static int run_main(int argc, char **argv)
+{
+    static const struct verb forms[] = {
+        {"native", native_main, "run, list or prove the local Rach2 inventory"},
+    };
+    return dispatch(forms, COUNT(forms), argc, argv, "etude run");
+}
+
+#else
 
 /** Run `etude run suites`, `etude run host` or `etude run native`. */
 static int run_main(int argc, char **argv)
@@ -176,8 +206,8 @@ static int provision_main(int argc, char **argv)
 /* The verbs, in the order the usage lists them. */
 static const struct verb verbs[] = {
 #ifndef ETUDE_LOCK_ONLY
-#ifndef __rach2__
     {"run", run_main, "run tests: suites, the host checks, or a case on a machine"},
+#ifndef __rach2__
     {"prepare", etude_prepare_main, "build what the selected tests need"},
 #endif
     {"check", check_main, "check case manifests, results and a run's history"},
@@ -209,6 +239,10 @@ static const struct verb verbs[] = {
 
 int main(int argc, char **argv)
 {
+#if defined(__rach2__) && !defined(ETUDE_LOCK_ONLY)
+    if (argc > 1 && strcmp(argv[1], "--cut-transport") == 0)
+        return etude_native_collection_main(argc, argv);
+#endif
 #if defined(_WIN32) && !defined(ETUDE_LOCK_ONLY)
     if (argc > 1 && strcmp(argv[1], "--bridge-holder") == 0)
         return etude_win_bridge_main(argc, argv);

@@ -50,6 +50,7 @@ etude_select()
             tools/etude/fixtures/*) ;;
             tools/etude/*.c|tools/etude/*.h|tools/etude/*.mk) printf '%s\n' "$path" ;;
             tools/etude/schemas/*.schema.json) printf '%s\n' "$path" ;;
+            tests/native/*.c|tests/native/*.h|tests/native/*.mk) printf '%s\n' "$path" ;;
             utils/sha256.c|utils/sha256.h) printf '%s\n' "$path" ;;
         esac
     done

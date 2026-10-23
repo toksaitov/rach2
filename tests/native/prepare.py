@@ -167,7 +167,7 @@ def inputs(root, tree, build, inventory):
                 selected.add(Path(value))
             elif kind == "pty":
                 selected.add(Path("tests/native") / value)
-    selected.add(build / "tests/native/native-collection")
+    selected.add(build / "tests/native/etude")
     selected.add(build / "tools/etude/guest/etude-guest")
     selected.add(Path("tests/native/tccbuild.sh"))
     for name in ("probes.cases", "musl.cases", "rows.cases", "maps", "Readme.md"):

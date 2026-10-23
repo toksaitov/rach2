@@ -295,7 +295,7 @@ int nc_collection(struct nc_config *conf, const struct nc_inventory *i, int argc
            interrupted ? ", interrupted" : "");
     return interrupted ? 128 + interrupted : failures ? 1 : 0;
 }
-int main(int argc, char **argv)
+int etude_native_collection_main(int argc, char **argv)
 {
     struct nc_config conf;
     struct nc_inventory *inventory;
@@ -305,7 +305,7 @@ int main(int argc, char **argv)
     if (argc < 2 ||
         (strcmp(argv[1], "list") && strcmp(argv[1], "run") && strcmp(argv[1], "proof")) ||
         !configure(argc, argv, &conf, &first) || !defaults(&conf, argv[0])) {
-        fputs("usage: native-collection list|run|proof [--tree DIR] [--results DIR] "
+        fputs("usage: etude run native [list|proof] [--tree DIR] [--results DIR] "
               "[configuration] [-- CASE...]\n",
               stderr);
         return 2;

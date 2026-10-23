@@ -23,7 +23,7 @@ Etude is a test runner in hosted C99 for Linux, macOS, Windows and Rach2, with `
                                         make a machine ready, build etude in its cache, or run its tooling machine
     etude build ...                     run one stamped step of the build through the host's store
 
-Linux and macOS have every verb. Windows has `run suites`, `run host`, `prepare`, `check`, `show lines`, `lock`, `admit` and `provision tooling`, and Rach2 has `check` alone, with no `check record`. `etude` with no verb, or a verb with no form, prints the list on standard error and exits 2. A verb's messages begin `etude VERB:`, except those of `etude lock tree`, which begin with the NAME it is given. The paragraphs below give each verb's usage; `etude-guest`, the helper inside Rach2, and `etude-volume`, which `etude provision tooling` runs, are programs of their own.
+Linux and macOS have every verb. Windows has `run suites`, `run host`, `prepare`, `check`, `show lines`, `lock`, `admit` and `provision tooling`, and Rach2 has `check` and `run native`, with no `check record`. `etude` with no verb, or a verb with no form, prints the list on standard error and exits 2. A verb's messages begin `etude VERB:`, except those of `etude lock tree`, which begin with the NAME it is given. The paragraphs below give each verb's usage; `etude-guest`, the helper inside Rach2, and `etude-volume`, which `etude provision tooling` runs, are programs of their own.
 
 ### Native collection execution
 
@@ -80,6 +80,8 @@ HOST, `-w`, `-l`, `-r`, `-c` and `-C` are as for `etude provision version`, and 
     etude serve --stdio -d DIR [-b BOOT] [-m MAXFRAME]
 
 It speaks frames on its standard input and output until the controller's `bye` or the end of the connection, and keeps its ledgers, files and workspaces under DIR, which it makes when it is missing. BOOT is the token of the machine's boot, by default the digest of Linux's `boot_id` or of macOS's `kern.boottime`, and MAXFRAME the largest frame it takes, 65536 by default. Its diagnostics go to stderr. It exits 0 after a `bye`, 1 after the connection was lost or broken, and 2 for a wrong usage or a DIR it cannot use.
+
+On Rach2, `etude run native [list|proof] OPTIONS [-- CASE...]` runs the local collection, lists its declared cases or runs the TinyCC proof. It links the same C collection and framed execution library that [`tests/native/Readme.md`](../../tests/native/Readme.md#local-collection) describes. The ordinary form starts etude-guest directly over pipes, and its four proof modes retain structured results and cleanup confirmations. `make native-assets` prepares this public executable, its inventory and immutable fixture files; the local TinyCC recipe builds the same `etude` entry.
 
 `etude run native` runs one case on a Rach2 machine that is already up, such as the Lenovo, through `etude-guest --stdio` on that machine, on Linux and macOS:
 
