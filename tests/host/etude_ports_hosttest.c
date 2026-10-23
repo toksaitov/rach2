@@ -2,7 +2,7 @@
  * Check `etude lock ports` against the host lock and the port blocks of the
  * old runner's protocol, and against a stand-in for an older checkout's
  * claim.
- * host-deps: tools/etude/portlock.c
+ * host-deps: tools/etude/portlock.c tests/host/compat/old_ports_host.c
  * host-cflags: -I tools/etude/include -I tools/etude -Wall -Wextra -Werror
  */
 #include <errno.h>
@@ -17,12 +17,13 @@
 #include <unistd.h>
 
 #include "compat/fixdir_host.c"
+#include "compat/old_ports_host.h"
 
 #include "verbs.h"
 #include "../../tools/etude/lock_ports.c"
 
-/* The stand-in for an older checkout's claim, from the root of the tree. */
-#define STAND_IN "tests/system/fixtures/old_ports.py"
+/* The prepared fixture reexecutes its command role while keeping its locks. */
+static char self[4096];
 
 /* How long a run that must wait is watched for a start, in milliseconds. */
 #define WATCH_MS 600
@@ -265,7 +266,7 @@ struct run {
     const char *name;   /* the run's files are NAME.on, NAME.go and NAME.err */
     int count;          /* the blocks it may take */
     const char *host;   /* RACH2_HOST_LOCK, or NULL for none */
-    const char *script; /* the command, or NULL for one that waits for NAME.go */
+    const char *mode;   /* exit7, or NULL for one that waits for NAME.go */
     const char *dir;    /* the directory of the locks, or NULL for the fixture's */
     const char *offset; /* a RACH2_PORT_OFFSET already set, or NULL */
     int work;           /* RACH2_RUN_WORK names the fixture's directory */
@@ -279,24 +280,24 @@ struct run {
  */
 static pid_t launch(const struct run *r)
 {
-    char script[8192], count[16], err[4096], name[256];
+    char count[16], err[4096], name[256];
     const char *dir = r->dir != NULL ? r->dir : fix_dir();
     pid_t pid;
     int fd;
 
-    if (r->script != NULL)
-        snprintf(script, sizeof(script), "%s", r->script);
-    else
-        snprintf(script, sizeof(script),
-                 "printf '%%s %%s\\n' \"$RACH2_PORT_OFFSET\" \"${RACH2_HOST_LOCK-unset}\" > "
-                 "%s/%s.on.new && mv %s/%s.on.new %s/%s.on; "
-                 "while [ ! -e %s/%s.go ]; do sleep 0.02; done",
-                 fix_dir(), r->name, fix_dir(), r->name, fix_dir(), r->name, fix_dir(), r->name);
     snprintf(count, sizeof(count), "%d", r->count);
     snprintf(name, sizeof(name), "%s.err", r->name);
     pid = fork();
     if (pid == 0) {
-        char *argv[] = {"etude", (char *)dir, count, "/bin/sh", "-c", script, NULL};
+        char *argv[] = {"etude",
+                        (char *)dir,
+                        count,
+                        self,
+                        "--port-command",
+                        (char *)fix_dir(),
+                        (char *)r->name,
+                        (char *)(r->mode ? r->mode : "wait"),
+                        NULL};
         close_releases();
         signal(SIGTERM, SIG_DFL);
         signal(SIGINT, SIG_DFL);
@@ -315,12 +316,9 @@ static pid_t launch(const struct run *r)
             dup2(fd, 1);
             dup2(fd, 2);
         }
-        if (r->old) {
-            execlp("python3", "python3", STAND_IN, dir, count, "/bin/sh", "-c", script,
-                   (char *)NULL);
-            _exit(126);
-        }
-        _exit(etude_lock_ports_main(6, argv));
+        if (r->old)
+            _exit(host_old_ports(dir, (unsigned)r->count, argv + 3));
+        _exit(etude_lock_ports_main(8, argv));
     }
     if (pid > 0)
         remember(pid);
@@ -417,7 +415,7 @@ static void blocks(void)
 static void variables(void)
 {
     struct run c = {"c", 1, "shared", NULL, NULL, "5000", 0, 0};
-    struct run d = {"d", 1, NULL, "exit 7", NULL, NULL, 0, 0};
+    struct run d = {"d", 1, NULL, "exit7", NULL, NULL, 0, 0};
     char buf[256];
     pid_t pc = launch(&c);
 
@@ -608,7 +606,7 @@ static void old_checkout(void)
     char buf[256];
     pid_t a, b;
 
-    CHECK(access(STAND_IN, R_OK) == 0, "old checkout");
+    CHECK(access(self, X_OK) == 0, "old checkout");
     a = launch(&o1);
     CHECK(runs("o1") && strcmp(seen("o1", buf, sizeof(buf)), "0 unset\n") == 0, "old checkout");
     b = launch(&q1);
@@ -635,9 +633,39 @@ static void old_checkout(void)
     CHECK(finish(b, "o4") == 0, "old checkout alone");
 }
 
-/** Run the rows in the fixture's directory, which holds every lock file. */
-int main(void)
+/** Write the child's observed environment atomically, then await its release. */
+static int command(int argc, char **argv)
 {
+    char pending[4096], ready[4096], go[4096];
+    const char *offset = getenv("RACH2_PORT_OFFSET"), *host = getenv("RACH2_HOST_LOCK");
+    FILE *file;
+    if (argc != 5)
+        return 125;
+    if (!strcmp(argv[4], "exit7"))
+        return 7;
+    if (snprintf(pending, sizeof(pending), "%s/%s.on.new", argv[2], argv[3]) >=
+            (int)sizeof(pending) ||
+        snprintf(ready, sizeof(ready), "%s/%s.on", argv[2], argv[3]) >= (int)sizeof(ready) ||
+        snprintf(go, sizeof(go), "%s/%s.go", argv[2], argv[3]) >= (int)sizeof(go))
+        return 125;
+    file = fopen(pending, "w");
+    if (!file)
+        return 125;
+    if (fprintf(file, "%s %s\n", offset ? offset : "", host ? host : "unset") < 0 ||
+        fclose(file) != 0 || rename(pending, ready) != 0)
+        return 125;
+    while (access(go, F_OK) != 0)
+        nap_ms(20);
+    return 0;
+}
+
+/** Run the rows in the fixture's directory, which holds every lock file. */
+int main(int argc, char **argv)
+{
+    if (argc > 1 && !strcmp(argv[1], "--port-command"))
+        return command(argc, argv);
+    if (!realpath(argv[0], self))
+        return 1;
     (void)fix_dir();
     atexit(cleanup_test);
     signal(SIGTERM, interrupted);
