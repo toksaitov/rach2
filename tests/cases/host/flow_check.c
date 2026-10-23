@@ -52,6 +52,8 @@ int main(int argc, char **argv)
     if (strcmp(name, "host-flow-check")) {
         if (getenv("FLOW_PROGRESS"))
             return flow_progress_mock(argc, argv);
+        if (getenv("FLOW_RELEASE"))
+            return flow_release_mock(argc, argv);
         if (getenv("FLOW_CI_RUN"))
             return flow_ci_run_mock(argc, argv);
         if (getenv("FLOW_CI"))
@@ -90,6 +92,8 @@ int main(int argc, char **argv)
     fx_env("FLOW_SELF", f.self);
     if (!strcmp(id, "progress"))
         ok = flow_progress(&f);
+    else if (!strcmp(id, "release_resume"))
+        ok = flow_release(&f);
     else if (!strcmp(id, "ci_run"))
         ok = flow_ci_run(&f);
     else if (!strcmp(id, "ci"))

@@ -36,4 +36,6 @@ int flow_board(struct fixture *f);
 int flow_board_mock(int argc, char **argv);
 int flow_ci_run(struct fixture *f);
 int flow_ci_run_mock(int argc, char **argv);
+int flow_release(struct fixture *f);
+int flow_release_mock(int argc, char **argv);
 #endif
