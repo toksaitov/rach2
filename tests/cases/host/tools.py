@@ -49,6 +49,8 @@ def external_exfat(marker):
     temporary = root.with_name(root.name + f'.{os.getpid()}.tmp')
     temporary.mkdir(parents=True)
     try:
+        writer = temporary / 'writer'
+        subprocess.run(['sh', str(source), '-p', str(writer.resolve())], check=True)
         subprocess.run(['sh', str(source), str(temporary.resolve())], check=True)
         files = {str(p.relative_to(temporary)): hashlib.sha256(p.read_bytes()).hexdigest()
                  for p in temporary.rglob('*') if p.is_file()}

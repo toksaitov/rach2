@@ -44,6 +44,10 @@ etude-admitted:
 	    exec "$$launcher" build $(MAKE) $(MAKECMDGOALS)
 else
 
+# Source data must not be rebuilt by make's built-in .sh-to-program rule.
+# In particular, tools/ci/site is configuration, not a copy of site.sh.
+.sh:
+
 # The architecture (mk/arch.mk): ARCH, and the paths of its build tree
 # (ARCH_BUILD) and of its ported musl (ARCH_MUSL). The host programs under
 # build/tools and build/krffs serve both architectures and keep their paths.
