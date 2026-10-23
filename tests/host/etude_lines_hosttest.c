@@ -1,6 +1,7 @@
 /* Check that etude's readers keep a suite's failure apart from the runner's,
  * and tell useful work from admission waits, stalled cases and uncertain
  * claims.
+ * host-inputs: tools/etude/schemas/history.schema.json
  * host-deps: tools/etude/lines.c tools/etude/history.c
  * host-deps: tools/etude/history_json.c tools/etude/history_collect.c
  * host-deps: utils/sha256.c tools/etude/posix/status.c tools/etude/watchdog.c

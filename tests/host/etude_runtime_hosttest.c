@@ -7,6 +7,7 @@
  * supervisor. This program is the cases, the workers, the controller, the
  * responder, the relay, and a service that keeps the output a case gives it.
  *
+ * host-inputs: tools/etude/schemas/history.schema.json
  * host-deps: tools/etude/repeat.c tools/etude/posix/repeat.c
  * host-deps: tools/etude/posix/load.c tools/etude/ledger.c
  * host-deps: tools/etude/watchdog.c tools/etude/supervise.c

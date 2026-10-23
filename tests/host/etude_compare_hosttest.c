@@ -1,5 +1,6 @@
 /* Check that etude's comparison tells noise, too little history and a
  * slowdown apart.
+ * host-inputs: tools/etude/schemas/history.schema.json
  * host-deps: tools/etude/compare.c tools/etude/baseline.c
  * host-deps: tools/etude/compare_report.c tools/etude/compare_run.c
  * host-deps: tools/etude/history.c tools/etude/history_json.c

@@ -4,6 +4,11 @@
  * forecast of a selection's charge from recorded costs, and the check of a
  * run's budget from its records.
  *
+ * host-inputs: tools/etude/schemas/history.schema.json
+ * host-inputs: tools/etude/schemas/case.schema.json
+ * host-inputs: tools/etude/schemas/case.host.example.json
+ * host-inputs: tools/etude/schemas/budget.schema.json
+ * host-inputs: tools/etude/schemas/budget.example.json
  * host-deps: tools/etude/budget.c tools/etude/budget_run.c tools/etude/digest.c
  * host-deps: tools/etude/cost.c tools/etude/sched.c tools/etude/ledger.c
  * host-deps: tools/etude/posix/process.c tools/etude/compare.c

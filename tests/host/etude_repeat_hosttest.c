@@ -4,6 +4,10 @@
  * and the load fixture (tools/etude/posix/load.c), with this program as the
  * cases' program and as the load.
  *
+ * host-inputs: tools/etude/schemas/history.schema.json
+ * host-inputs: tools/etude/schemas/repeat.schema.json
+ * host-inputs: tools/etude/schemas/repeat.example.json
+ * host-inputs: tools/etude/schemas/budget.schema.json
  * host-deps: tools/etude/repeat.c tools/etude/posix/repeat.c
  * host-deps: tools/etude/posix/load.c tools/etude/ledger.c
  * host-deps: tools/etude/watchdog.c tools/etude/supervise.c

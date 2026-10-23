@@ -3,6 +3,7 @@
  * (tools/etude/ledger.c), a worker's schedule (tools/etude/sched.c) and the
  * costs it takes from history (tools/etude/cost.c).
  *
+ * host-inputs: tools/etude/schemas/history.schema.json
  * host-deps: tools/etude/ledger.c tools/etude/sched.c tools/etude/cost.c
  * host-deps: tools/etude/compare.c tools/etude/baseline.c
  * host-deps: tools/etude/compare_report.c tools/etude/compare_run.c

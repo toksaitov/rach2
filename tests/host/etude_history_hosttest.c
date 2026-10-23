@@ -1,4 +1,7 @@
 /* Check etude history storage, clocks and accounting under damaged input.
+ * host-inputs: tools/etude/schemas/history.schema.json
+ * host-inputs: tools/etude/schemas/history.example.jsonl
+ * host-inputs: tools/etude/schemas/history.incomplete.example.jsonl
  * host-deps: tools/etude/history.c tools/etude/history_json.c
  * host-deps: tools/etude/history_collect.c utils/sha256.c
  * host-cflags: -I tools/etude/include -I tools/etude

@@ -1,6 +1,7 @@
 /* Check that `etude show failures` lists each attempt of a run that did not
  * pass, keeps a failure that a passing retry follows, and refuses a history
  * it cannot read whole.
+ * host-inputs: tools/etude/schemas/history.schema.json
  * host-deps: tools/etude/failures.c tools/etude/history.c
  * host-deps: tools/etude/history_json.c tools/etude/history_collect.c
  * host-deps: utils/sha256.c
