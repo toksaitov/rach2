@@ -106,6 +106,18 @@ jobs:
           SUITES: ${{ inputs.suites }}
         run: sh tools/ci/run.sh full "$RUNNER_TEMP/results"
 
+      - name: Stage the shared native evidence
+        if: always()
+        run: python3 tools/ci/native_evidence.py stage "$RUNNER_TEMP/results" "$RUNNER_TEMP/native-evidence"
+
+      - name: Upload the shared native evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: full-native-evidence
+          path: ${{ runner.temp }}/native-evidence
+          retention-days: 14
+
       - name: Upload the i686 logs
         if: always()
         uses: actions/upload-artifact@v7

@@ -3,7 +3,8 @@
 set -eu
 kind=$1
 out=$2
-case $kind in core|full) ;; *) exit 2 ;; esac
+shift 2
+case $kind in core|full|push) ;; *) exit 2 ;; esac
 tree=$(pwd -P)
 mkdir -p "$out"
 out=$(cd "$out" && pwd -P)
@@ -38,16 +39,18 @@ esac
 case $etude in /*|[A-Za-z]:/*) ;; *) echo 'ci: refused: ETUDE must be absolute' >&2; exit 2 ;; esac
 purpose=${ETUDE_PURPOSE:-ci}
 [ "$kind" != full ] || purpose=${ETUDE_PURPOSE:-release}
-case $kind/$purpose in core/ci|core/push|full/ci|full/release|full/push) ;;
+[ "$kind" != push ] || purpose=push
+case $kind/$purpose in core/ci|core/push|full/ci|full/release|full/push|push/push) ;;
     *) echo 'ci: refused: purpose does not match the routine selection' >&2; exit 2 ;;
 esac
 for filter in "${RACH2_CASES:-}" "${RACH2_AGENTS_ROWS:-}" "${RACH2_ACCEPT_AGENTS:-}"; do
-    [ -z "$filter" ] || { echo 'ci: refused: routine selection cannot inherit case filters' >&2; exit 2; }
+    [ "$kind" = push ] || [ -z "$filter" ] || { echo 'ci: refused: routine selection cannot inherit case filters' >&2; exit 2; }
 done
 run="routine-$purpose-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-$$"
 accel=${RACH2_QEMU_ACCEL:-}
 [ -n "$accel" ] || accel=$(sh "$tree/tools/ci/site.sh" "$tree/tools/ci/site" | sed -n 's/^accelerator=//p')
 "$etude" run -t "$tree" inventory > "$out/suites.inventory"
+if [ "$kind" != push ]; then
 set -f
 # shellcheck disable=SC2046 # the C inventory contains validated suite names
 set -- $(awk -F'|' -v a="$arches" '
@@ -55,6 +58,9 @@ set -- $(awk -F'|' -v a="$arches" '
     ($3 == "" || a == "both" || index("," $3 ",", "," a ",")) { print $1 }
 ' "$out/suites.inventory")
 set +f
+else
+    [ "$#" -gt 0 ] || { echo 'ci: refused: push requires explicit suites' >&2; exit 2; }
+fi
 if [ "$kind" = full ]; then
     set -- all
     if [ -n "${SUITES:-}" ]; then
@@ -63,9 +69,19 @@ if [ "$kind" = full ]; then
         # shellcheck disable=SC2086
         set -- $SUITES
         set +f
+        have_i686= have_x86_64=
         for suite do
-            case $suite in i686:*|x86_64:*) ;; *) echo "ci: refused: invalid selected suite: $suite" >&2; exit 2 ;; esac
+            case $suite in
+                i686:*) have_i686=1 ;;
+                x86_64:*) have_x86_64=1 ;;
+                *) echo "ci: refused: invalid selected suite: $suite" >&2; exit 2 ;;
+            esac
         done
+        case $have_i686/$have_x86_64 in
+            1/1) arches=both ;;
+            1/) arches=i686 ;;
+            /1) arches=x86_64 ;;
+        esac
     fi
 fi
 for arch in $selected; do
@@ -110,7 +126,12 @@ for arch in $selected; do
     printf '%s\n' "$suites" > "$result/suites"
     verdict=2
     if [ -n "$suites" ]; then
-        "$etude" check verdict --project-architecture --require-budget -b "$out/store" \
+        if [ "$kind" = push ]; then
+            set -- --selection "$out/selection.export.json"
+        else
+            set --
+        fi
+        "$etude" check verdict "$@" --project-architecture --require-budget -b "$out/store" \
             -c "$sha" "$arch" "$kind" "$suites" "$out/history" > "$result/verdict" 2>&1 && verdict=0 || verdict=$?
     else
         printf 'ci: no complete native selection\n' > "$result/verdict"

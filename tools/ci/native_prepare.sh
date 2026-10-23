@@ -74,14 +74,23 @@ qemu_x86_64=$(program qemu-system-x86_64)
 if [ "$windows" -eq 1 ]; then
     MSYS2_ARG_CONV_EXCL='*'
     export MSYS2_ARG_CONV_EXCL
-    "$python" -c 'import sys; sys.exit(sys.platform != "win32")' ||
-        refuse 'python3 must be a native Windows interpreter'
 fi
+python_path()
+{
+    if [ "$windows" -eq 1 ]; then
+        case $("$python" -c 'import sys; print(sys.platform)') in
+            msys|cygwin) cygpath -au "$1" ;;
+            win32) native_path "$1" ;;
+            *) refuse 'unsupported preparation Python platform' ;;
+        esac
+    else native_path "$1"
+    fi
+}
 tree_native=$(native_path "$tree")
 out_native=$(native_path "$out")
-generator=$(native_path "$tree/tools/etude/measurement_context.py")
+generator=$(python_path "$tree/tools/etude/measurement_context.py")
 [ -f "$generator" ] || refuse 'measurement context generator is absent'
-for name in prepare.record preparation.receipt.json selection.list source.json source.descriptor.json context; do
+for name in prepare.record preparation.receipt.json selection.list selection.export.json source.json source.descriptor.json context; do
     [ ! -e "$out/$name" ] && [ ! -L "$out/$name" ] || refuse "output exists: $out/$name"
 done
 [ -r "$out/outer-load.jsonl" ] || refuse 'outer observation is absent'
@@ -95,9 +104,22 @@ export ETUDE_ADMITTED ETUDE_SITE RACH2_QEMU_ACCEL
 export ETUDE_PREPARATION_RUN_ID ETUDE_PREPARATION_RECEIPT ETUDE_PREPARATION_COMMIT
 "$etude" prepare collection -t "$tree_native" -a "$arches" -p "$out_native/prepare.record" "$@"
 unset ETUDE_PREPARATION_RUN_ID ETUDE_PREPARATION_RECEIPT ETUDE_PREPARATION_COMMIT
+if [ "${ETUDE_PREPARATION_EXPORT:-0}" = 1 ]; then
+    [ "$windows" -eq 0 ] && [ "$(uname -s)" = Linux ] || refuse 'producer export requires Linux'
+    "$python" "$(python_path "$tree/tools/etude/preparation_import.py")" export \
+        --tree "$tree_native" --commit "$commit" --record "$out_native/prepare.record" \
+        --receipt "$out_native/preparation.receipt.json" --etude "$etude" --output "$out_native/producer.json"
+fi
+if [ "$purpose" != phase_first_run ]; then
+    [ -n "${ETUDE_REFERENCE:-}" ] || refuse 'routine preparation needs the selected reference policy and history'
+    "$python" "$(python_path "$tree/tools/ci/reference.py")" --tree "$tree_native" --etude "$etude" \
+        --reference "$(native_path "$ETUDE_REFERENCE")" --output "$out_native/reference.forecast" \
+        --site "$site" --accelerator "$accel" --preparation "$out_native/preparation.receipt.json"
+fi
+"$etude" run -N -J "$out_native/selection.export.json" -t "$tree_native" -a "$arches" -A "$accel" "$@"
 "$etude" run -N -t "$tree_native" -a "$arches" -p "$out_native/prepare.record" -A "$accel" "$@" > "$out/selection.list"
 "$python" "$generator" source --tree "$tree_native" --commit "$commit" --output "$out_native/source.json" > "$out/source.descriptor.json"
-source_sha=$("$python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$out_native/source.descriptor.json")
+source_sha=$("$python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$(python_path "$out/source.descriptor.json")")
 set -- compose --tree "$tree_native" --commit "$commit" \
     --source-snapshot "$out_native/source.json" --source-sha256 "$source_sha" \
     --record "$out_native/prepare.record" --site "$site" --etude "$etude" \
@@ -105,7 +127,7 @@ set -- compose --tree "$tree_native" --commit "$commit" \
     --run-id "$run" --purpose "$purpose" --preparation "$out_native/preparation.receipt.json" \
     --outer-trace "$out_native/outer-load.jsonl" --outer-stop-request "$out_native/outer-stop.request" \
     --output "$out_native/context" \
-    --cache-method 'Public preparation validates reused artifacts; OS cache remains natural after preparation.' \
+    --cache-method "Public preparation profile $purpose; clean-inhouse=${ETUDE_PREPARATION_CLEAN:-0}; imported=${ETUDE_PREPARATION_IMPORT:+yes}. Artifact hashes are verified; OS cache remains natural." \
     --ordinary-preparation 'Selected candidate production, verification, source capture and context composition occur inside admission.' \
     --one-time-production 'Existing installed toolchains and pinned download caches are retained; candidate artifact production is ordinary preparation.'
 # A fixed x86-64 helper may also be prepared for an i686-only selection.
@@ -115,6 +137,20 @@ for arch in i686 x86_64; do
         set -- "$@" --tool "$cross"
     fi
 done
+if [ -n "${ETUDE_PREPARATION_IMPORT:-}" ]; then
+    for tool in make rsync; do
+        resolved=$(program "$tool")
+        set -- "$@" --tool "$resolved"
+    done
+    transport=$("$python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["producer"].get("transport", "ssh"))' \
+        "$(python_path "$ETUDE_PREPARATION_IMPORT")")
+    case $transport in
+        ssh|wsl-ssh) resolved=$(program ssh); set -- "$@" --tool "$resolved" ;;
+        wsl) resolved=$(program wsl.exe); set -- "$@" --tool "$resolved" ;;
+        local) ;;
+        *) refuse "invalid producer transport: $transport" ;;
+    esac
+fi
 if [ -n "${ETUDE_PHYSICAL_TRACE:-}" ]; then
     set -- "$@" --physical-trace "$(native_path "$ETUDE_PHYSICAL_TRACE")" \
         --physical-stop-request "$(native_path "$ETUDE_PHYSICAL_STOP_REQUEST")"

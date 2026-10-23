@@ -53,6 +53,11 @@ static int sequence(int argc, char **argv)
     if (!counted_vectors(argc, argv) || !argument(argc, argv, "admit") ||
         !argument(argc, argv, "run") || !argument(argc, argv, "-I") || !argument(argc, argv, "-g"))
         return 2;
+    int push = !strcmp(env("CI_NATIVE_MODE"), "push");
+    if (push && (!argument(argc, argv, "i686:host") ||
+                 !argument(argc, argv, "x86_64:default") ||
+                 strcmp(env("RACH2_CASES"), "host.fixture.host,machine.fixture.default")))
+        return 2;
     if (fx_exists(path("sequence.calls")) || !fx_text(path("sequence.calls"), "one sequence\n") ||
         !fx_text(path("selection.list"),
                  "style none host.fixture.style\nhost none host.fixture.host\n"
@@ -64,7 +69,7 @@ static int sequence(int argc, char **argv)
         if (!fx_mkdir(path("store")) || !fx_text(path("history/run.jsonl"), "fixture\n"))
             return 2;
     }
-    return !strcmp(env("CI_NATIVE_MODE"), "pass") ? 0 : 1;
+    return !strcmp(env("CI_NATIVE_MODE"), "pass") || push ? 0 : 1;
 }
 
 static int verdict(int argc, char **argv)
@@ -72,6 +77,8 @@ static int verdict(int argc, char **argv)
     if (!argument(argc, argv, "--project-architecture") ||
         !argument(argc, argv, "--require-budget") || !argument(argc, argv, "-b") ||
         !argument(argc, argv, "-c"))
+        return 2;
+    if (!strcmp(env("CI_NATIVE_MODE"), "push") && !argument(argc, argv, "--selection"))
         return 2;
     int bad = !strcmp(env("CI_NATIVE_MODE"), "budget") ||
               !strcmp(env("CI_NATIVE_MODE"), "cleanup") || !fx_exists(path("history/run.jsonl"));
@@ -112,6 +119,7 @@ static int setup(struct fixture *f)
                            "native_sequence.sh",
                            "native_prepare.sh",
                            "native_site.sh",
+                           "push.sh",
                            "site.sh",
                            "site"};
     for (size_t i = 0; i < sizeof(files) / sizeof(*files); i++) {
@@ -127,9 +135,9 @@ static int setup(struct fixture *f)
         return 0;
     char site[32768];
     int n = snprintf(site, sizeof(site),
-                     "etude-site 2\nendpoint linux\nlauncher /bin/true\nledger %s\nlocks %s\n"
+                     "etude-site 2\nendpoint linux\nlauncher %s\nledger %s\nlocks %s\n"
                      "etude %s\ncapacity 24000,103079215104,171798691840\nwait 600\nseconds 600\n",
-                     flow_path(f, "native-ledger"), flow_path(f, "native-locks"),
+                     f->self, flow_path(f, "native-ledger"), flow_path(f, "native-locks"),
                      flow_path(f, "bin/native-etude"));
     if (n < 0 || (size_t)n >= sizeof(site) || !flow_put(f, "native.site", site))
         return 0;
@@ -168,6 +176,21 @@ static int row(struct fixture *f, const char *mode, unsigned number)
     return fx_check(f, ok, name);
 }
 
+static int push_row(struct fixture *f)
+{
+    const char *out = flow_path(f, "native.push");
+    fx_env("CI_NATIVE_OUT", out);
+    fx_env("CI_NATIVE_MODE", "push");
+    fx_env("RACH2_CASES", "host.fixture.host,machine.fixture.default");
+    const char *argv[] = {"/bin/sh", "tools/ci/push.sh", out,
+                           "i686:host", "x86_64:default", NULL};
+    fx_run(f, argv, flow_path(f, "tree"), NULL, NULL);
+    fx_env("RACH2_CASES", NULL);
+    int ok = f->status == 0 && fx_equal(path("sequence.calls"), "one sequence\n") &&
+             fx_exists(path("push-i686/done")) && fx_exists(path("push-x86_64/done"));
+    return fx_check(f, ok, "push keeps explicit suites and case filter through native sequence");
+}
+
 int flow_ci_native(struct fixture *f)
 {
     const char *modes[] = {"pass", "foreign", "budget", "cleanup", "missing-history", "cancel"};
@@ -176,6 +199,7 @@ int flow_ci_native(struct fixture *f)
     int ok = 1;
     for (unsigned i = 0; i < sizeof(modes) / sizeof(*modes); i++)
         ok = row(f, modes[i], i) && ok;
+    ok = push_row(f) && ok;
     fx_env("ETUDE", "");
     fx_env("ETUDE_SITE", "");
     fx_env("CI_NATIVE_OUT", "");

@@ -221,8 +221,16 @@ read_history() { # read_history RESULT
     else
         [ -d "$1/history" ] || return 0
     fi
-    reader=${ETUDE:-build/tools/etude/etude}
-    if [ -z "${ETUDE:-}" ] && ! make -s "$reader" >&2; then
+    reader=${ETUDE_REPORT_READER:-${ETUDE:-build/tools/etude/etude}}
+    if [ -n "$native" ]; then
+        if [ -z "${ETUDE_REPORT_READER_RECORD:-}" ] ||
+            ! reader=$(python3 tools/ci/native_reader.py "$reader" "$ETUDE_REPORT_READER_RECORD") ||
+            ! "$reader" check record -d "$ETUDE_REPORT_READER_RECORD" >&2; then
+            history='ci: report: installed native reader did not verify'
+            hstatus=2
+            return 0
+        fi
+    elif [ -z "${ETUDE:-}" ] && ! make -s "$reader" >&2; then
         history="ci: report: $reader could not be built"
         hstatus=2
         return 0

@@ -33,6 +33,14 @@ ETUDE_SITE=$site
 ETUDE_SEQUENCE_LOG=$out/log
 ETUDE_PREPARATION_GRANT=$out/preparation.grant.json
 export ETUDE_BUILD_JOBS JOBS RACH2_MIN_FREE_GIB ETUDE_SITE ETUDE_SEQUENCE_LOG ETUDE_PREPARATION_GRANT
+# Only release production discards in-house products. Explicit repair suites
+# retain their selection while rebuilding their selected architectures.
+if [ "$purpose" = release ]; then
+    ETUDE_PREPARATION_CLEAN=1
+    export ETUDE_PREPARATION_CLEAN
+else
+    unset ETUDE_PREPARATION_CLEAN
+fi
 unset MAKEFLAGS MFLAGS
 commit=$(git -C "$tree" rev-parse HEAD)
 shell_program=$(command -v sh)

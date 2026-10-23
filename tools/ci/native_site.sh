@@ -65,6 +65,16 @@ native_site_validate()
         NF != 3 { exit 1 }
         { for (i = 1; i <= 3; i++) if ($i !~ /^[1-9][0-9]*$/ || length($i) > 15) exit 1 }
     ' || { native_site_refuse 'invalid capacity'; return 2; }
+    for native_site_input in "${ETUDE_REFERENCE:-}" "${ETUDE_PREPARATION_IMPORT:-}"; do
+        [ -n "$native_site_input" ] || continue
+        case $native_site_input in
+            /*|[A-Za-z]:/*) ;;
+            *) native_site_refuse 'preparation configuration must be absolute'; return 2 ;;
+        esac
+        [ -f "$native_site_input" ] && [ -r "$native_site_input" ] || {
+            native_site_refuse 'preparation configuration is unavailable'; return 2;
+        }
+    done
     for native_site_bound in "$native_site_wait" "$native_site_seconds"; do
         native_site_positive "$native_site_bound" && [ "${#native_site_bound}" -le 5 ] &&
             [ "$native_site_bound" -le 86400 ] || { native_site_refuse 'invalid time bound'; return 2; }

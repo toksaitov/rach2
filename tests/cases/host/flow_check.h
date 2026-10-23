@@ -31,6 +31,8 @@ int flow_status_lock(int argc, char **argv);
 int flow_measure(struct fixture *f);
 int flow_measure_mock(int argc, char **argv);
 int flow_ci(struct fixture *f);
+int flow_ci_preparation(struct fixture *f);
+int flow_ci_reader_record(struct fixture *f, const char *program);
 int flow_ci_mock(int argc, char **argv);
 int flow_board(struct fixture *f);
 int flow_board_mock(int argc, char **argv);

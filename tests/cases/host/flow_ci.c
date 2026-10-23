@@ -267,6 +267,8 @@ static int mock_reader(int argc, char **argv)
 {
     char *s;
     int i;
+    if (argc > 2 && !strcmp(argv[1], "check") && !strcmp(argv[2], "record"))
+        return 0;
     if (argc > 2 && !strcmp(argv[1], "check") && !strcmp(argv[2], "verdict"))
         return mock_native_reader(argc, argv);
     if (argc < 3 || strcmp(argv[1], "show") || strcmp(argv[2], "failures"))
@@ -1469,6 +1471,7 @@ static int reset_row(struct fixture *f)
                                         "ETUDE_SITE",
                                         "ETUDE_ADMITTED",
                                         "GITHUB_STEP_SUMMARY",
+                                        "ETUDE_REPORT_READER_RECORD",
                                         "SUITES",
                                         NULL};
     unsigned i;
@@ -1502,6 +1505,8 @@ static int prepare(struct fixture *f)
     fx_env("CI_TEST_PASS", pass_streams);
     if (!fx_mkdir(path("state")) || !fx_mkdir(path("locks")) ||
         !flow_copy(f, "tools/ci/report.sh", "report.sh") ||
+        !flow_copy(f, "tools/ci/native_reader.py", "tree/tools/ci/native_reader.py") ||
+        !flow_copy(f, "tools/etude/preparation_paths.py", "tree/tools/etude/preparation_paths.py") ||
         !fx_replace(flow_source(f, "tools/ci/bisect.sh"), path("bisect.sh"),
                     "/etc/rach2/etude-site", path("no-installed-site")) ||
         !fx_copy("/host-products/etude", path("etude")))
@@ -1556,6 +1561,8 @@ static int native_report_row(struct fixture *f, const char *mode)
         if (!flow_put(f, "results/history/run.jsonl", "fixture\n") ||
             !fx_mkdir(path("results/store")))
             return 0;
+    if (!flow_ci_reader_record(f, path("bin/etude-reader")))
+        return 0;
     fx_env("CI_TEST_NATIVE_GUARD", mode);
     int ok = report(f, "core") == 0;
     int fail = strcmp(mode, "pass") != 0;
@@ -1643,6 +1650,7 @@ int flow_ci(struct fixture *f)
     ROW(late_row(f, "failed"));
     ROW(late_row(f, "incomplete"));
     ROW(scoped_row(f));
+    ROW(flow_ci_preparation(f));
     ROW(native_report_row(f, "pass"));
     ROW(native_report_row(f, "budget"));
     ROW(native_report_row(f, "missing"));
