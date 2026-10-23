@@ -234,6 +234,41 @@ leftovers()
     return 0
 }
 
+# The testing host's store of step outputs, and the days an entry of it that
+# no copy's stamp names stays unused before store_expire removes it.
+STORE=/var/cache/rach2-store
+STORE_DAYS=3
+
+# store_expire [DAYS]: remove from STORE on the testing host the entries that
+# no copy's stamp names and that no step has used for DAYS days, STORE_DAYS
+# unless given, with `etude-step -e` (tools/etude/Readme.md, The step store).
+# An entry is read-only and its builder's, so root removes them, with the
+# etude of origin/master, which version.sh builds from this clone into root's
+# cache of versions on the host, or finds built there. Print the lines of
+# etude-step with the machine's name first, and nothing when the host has no
+# store.
+store_expire()
+{
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
+        "MSYS_NO_PATHCONV=1 wsl.exe -u root -- test -d $STORE" < /dev/null 2> /dev/null || return 0
+    script=$(sh tools/etude/version.sh -r origin/master -s) ||
+        { echo "$TESTING: store: etude's build script cannot be made"; return 1; }
+    nonce=$(printf '%s\n' "$script" | sed -n 's/^ETUDE_NONCE=//p')
+    out=$(printf '%s\n' "$script" | perl -e 'alarm shift; exec @ARGV' 600 \
+        ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
+        "MSYS_NO_PATHCONV=1 wsl.exe -u root -- sh -s" 2>&1)
+    dir=$(printf '%s\n' "$out" | sed -n "s/^@etude-version $nonce [a-z]* [0-9a-f]* //p")
+    case $dir in
+        /*) ;;
+        *)
+            echo "$TESTING: store: etude was not built: $(printf '%s\n' "$out" | tail -n 1)"
+            return 1 ;;
+    esac
+    perl -e 'alarm shift; exec @ARGV' 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
+        "MSYS_NO_PATHCONV=1 wsl.exe -u root -- $dir/bin/etude-step -s $STORE -e ${1:-$STORE_DAYS}" \
+        < /dev/null 2>&1 | sed "s/^/$TESTING: /"
+}
+
 # prune_logs PATTERN...: remove the files of STATE that a PATTERN matches and
 # that are more than fourteen days old, then the oldest of the rest while they
 # add up to more than 1 GiB; a file written in the last day is kept whatever

@@ -30,7 +30,10 @@
 # `leftovers.pl`, through `leftovers` in lib.sh, on the testing host and
 # here, which removes the failed tests' directories, loose files in the home
 # directories and copies of the repository that finished work left; loop.log
-# has a line for each entry it removes and one for each run's total.
+# has a line for each entry it removes and one for each run's total. Last,
+# `store_expire` in lib.sh removes the entries of the testing host's store
+# of step outputs that no copy uses, with a line for each and one for the
+# total.
 
 PERIOD=1200
 TESTING=testing
@@ -87,6 +90,9 @@ main()
         [ "$swept_rc" -eq 0 ] || swept="scratch: failed on $TESTING: $swept"
         log "$swept"
         leftovers 2>&1 | grep -v ': leftovers: keeps ' | while IFS= read -r line; do
+            log "$line"
+        done
+        store_expire 2>&1 | while IFS= read -r line; do
             log "$line"
         done
         t=$(date -u '+%m%d-%H%M%S')
