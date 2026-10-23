@@ -143,7 +143,11 @@ merged()
 # runs, and only when `disposable` finds nothing ignored in it but build output,
 # which goes with it. A branch goes when it is merged, unless it is master, the
 # branch checked out, one checked out in a worktree, which git refuses to
-# delete, or one named for the issue in STATE/issue or STATE/parked. Each
+# delete, or one named for the issue in STATE/issue or STATE/parked. Where
+# the host has the store of step outputs, RACH2_STORE or else
+# /var/cache/rach2-store (tools/etude/Readme.md, The step store), a GNU layer
+# built in the clone goes, one whose cross/ is a directory and not a link
+# into the store, so that its next use takes the layer from the store. Each
 # removal is logged.
 tidy()
 {
@@ -163,6 +167,12 @@ tidy()
         done
         merged "refs/heads/$b" && git branch -q -D "$b" 2> /dev/null &&
             log "tidy: deleted the branch $b"
+    done
+    store=${RACH2_STORE-/var/cache/rach2-store}
+    [ -n "$store" ] && [ -d "$store" ] || return 0
+    for g in "$top"/build/vendor/gnu "$top"/build/*/vendor/gnu; do
+        [ -d "$g/cross" ] && [ ! -L "$g/cross" ] || continue
+        chmod -R u+w "$g" && rm -rf "$g" && log "tidy: removed the GNU layer built in $g"
     done
 }
 

@@ -15,7 +15,10 @@
 # with its branch and its build output, and keep one with an untracked file,
 # one with an ignored file that is not build output, a locked one, one with a
 # commit master lacks, and one outside .claude/worktrees; a branch rebased
-# onto a master that changed its file elsewhere counts as merged. `stems` must
+# onto a master that changed its file elsewhere counts as merged. With a
+# store of step outputs, `tidy` must remove a GNU layer built in the clone,
+# a read-only directory in it among its files, and keep one whose cross/ is a
+# link into the store; without the store it must keep both. `stems` must
 # list the rach2 stems of this tree's mktemp templates and Python prefixes,
 # and no other. `prune_logs` must remove a session's output past fourteen days
 # and keep a younger one and files its patterns do not match, and under 1 GiB
@@ -35,7 +38,7 @@ set -u
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 work=
 busy=
-trap '[ -z "$busy" ] || kill $busy 2> /dev/null; [ -z "$work" ] || rm -rf "$work"' EXIT
+trap '[ -z "$busy" ] || kill $busy 2> /dev/null; [ -z "$work" ] || { chmod -R u+w "$work"; rm -rf "$work"; }' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -68,7 +71,7 @@ sparse()
 setup()
 {
     rm -rf "$work/origin.git" "$work/clone" "$work/outside" "$work/stateA" \
-        "$work/stateB" "$work/tmp"
+        "$work/stateB" "$work/tmp" "$work/store"
     git init -q --bare "$work/origin.git"
     git init -q "$work/clone"
     cd "$work/clone" || return 1
@@ -126,6 +129,12 @@ setup()
     git worktree lock .claude/worktrees/locked
     (cd .claude/worktrees/unique && echo u > u && git add u && git commit -q -m 'Add u')
     git switch -q 7-current
+    mkdir -p build/vendor/gnu/cross/bin build/vendor/gnu/work/ro build/x86_64/vendor/gnu \
+        "$work/store/entries/k/tree/cross"
+    : > build/vendor/gnu/toolchain.stamp
+    : > build/vendor/gnu/work/ro/f
+    chmod a-w build/vendor/gnu/work/ro
+    ln -s "$work/store/entries/k/tree/cross" build/x86_64/vendor/gnu/cross
     mkdir "$work/stateA" "$work/stateB" "$work/tmp" "$work/tmp/rach2-young.Yy3Yy3"
     echo 5 > "$work/stateA/issue"
     echo 6 > "$work/stateA/parked"
@@ -201,7 +210,10 @@ rows()
     fi
     {
         # shellcheck source=tools/flow/lib.sh
-        (cd "$work/clone" && state=$work/stateA && . "$lib" && tidy)
+        (cd "$work/clone" && state=$work/stateA && . "$lib" && RACH2_STORE='' tidy)
+        [ -d "$work/clone/build/vendor/gnu/cross" ] && : > "$work/gnu-kept"
+        # shellcheck source=tools/flow/lib.sh
+        (cd "$work/clone" && state=$work/stateA && . "$lib" && RACH2_STORE=$work/store tidy)
         # shellcheck source=tools/flow/lib.sh
         (state=$work/stateA && . "$lib" && prune_logs 's-*')
         # shellcheck source=tools/flow/lib.sh
@@ -217,7 +229,7 @@ rows()
     a=$work/stateA b=$work/stateB t=$work/tmp
     for row in branch-merged branch-rebased branch-subject branch-unpushed \
         branch-held branch-parked branch-current branch-merge branch-pure branch-delete branch-space branch-place wt-clean wt-dirty wt-ignored wt-locked \
-        wt-unique wt-outside prune-age prune-pattern prune-size prune-young \
+        wt-unique wt-outside gnu-copy gnu-store gnu-none prune-age prune-pattern prune-size prune-young \
         scratch-old scratch-file scratch-young scratch-name scratch-link scratch-busy \
         scratch-program scratch-stems; do
         case $row in
@@ -239,6 +251,9 @@ rows()
             wt-locked) [ -d "$wt/locked" ] && has worktree-locked ;;
             wt-unique) [ -e "$wt/unique/u" ] && has worktree-unique ;;
             wt-outside) [ -d "$work/outside" ] && has outside ;;
+            gnu-copy) [ ! -e "$work/clone/build/vendor/gnu" ] ;;
+            gnu-store) [ -L "$work/clone/build/x86_64/vendor/gnu/cross" ] ;;
+            gnu-none) [ -e "$work/gnu-kept" ] ;;
             prune-age) [ ! -e "$a/s-old.jsonl" ] && [ -e "$a/s-mid.jsonl" ] ;;
             prune-pattern) [ -e "$a/c-old.jsonl" ] && [ -e "$a/loop.log" ] ;;
             prune-size) [ ! -e "$b/s-big1.jsonl" ] && [ ! -e "$b/s-big2.jsonl" ] ;;
@@ -261,4 +276,4 @@ rows()
 }
 
 rows >&2 || exit 1
-echo 'tidy-test: result: pass: 30 rows'
+echo 'tidy-test: result: pass: 33 rows'
