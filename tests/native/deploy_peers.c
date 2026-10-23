@@ -27,10 +27,15 @@ static char **peer_environment(const char *address)
 }
 static int start_peer(struct nd_deploy *d, unsigned which)
 {
-    char text[16];
+    char text[16], machine[64];
     char *argv[] = {(char *)d->c.hostpeer, which ? "send-repeat" : "echo", text,
                     which ? "outside" : "0", NULL};
-    char **env = peer_environment(which ? d->c.host : d->c.peer);
+    const char *slash = strchr(d->c.network, '/');
+    char **env;
+    if (!slash ||
+        !nd_format(machine, sizeof(machine), "%.*s", (int)(slash - d->c.network), d->c.network))
+        return 0;
+    env = peer_environment(which ? machine : d->c.peer);
     const char *ready = which ? "hostpeer: repeating " : "hostpeer: echoing ";
     size_t n;
     int ok;

@@ -3,6 +3,7 @@
 #include "deploy.h"
 #include "json.h"
 #include "sha256.h"
+#include <arpa/inet.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,8 +48,19 @@ static int option(struct nd_config *c, const char *name, const char *text)
 }
 static int peers_configured(const struct nd_config *c)
 {
-    return c->hostpeer && c->peer && c->network && c->gateway && c->far && c->empty && c->silent &&
-           c->echo_port && access(c->hostpeer, X_OK) == 0;
+    struct in_addr address;
+    char network[64], tail;
+    unsigned prefix;
+    if (!c->hostpeer || !c->peer || !c->network || !c->gateway || !c->far || !c->empty ||
+        !c->silent || !c->echo_port || access(c->hostpeer, X_OK))
+        return 0;
+    return sscanf(c->network, "%63[^/]/%u%c", network, &prefix, &tail) == 2 && prefix <= 32 &&
+           inet_pton(AF_INET, network, &address) == 1 &&
+           inet_pton(AF_INET, c->peer, &address) == 1 &&
+           inet_pton(AF_INET, c->gateway, &address) == 1 &&
+           inet_pton(AF_INET, c->far, &address) == 1 &&
+           inet_pton(AF_INET, c->empty, &address) == 1 &&
+           inet_pton(AF_INET, c->silent, &address) == 1;
 }
 static int configuration(const struct nd_config *c)
 {
@@ -128,7 +140,7 @@ static int metadata(struct nd_config *c)
 {
     struct json *document = NULL;
     char path[4096], bytes[65536], error[256];
-    const char *architecture, *archive;
+    const char *architecture, *archive, *maps_sha;
     FILE *file;
     size_t n;
     int ok = 0;
@@ -142,11 +154,15 @@ static int metadata(struct nd_config *c)
         json_parse(bytes, n, 1, &document, error, sizeof(error)) == 0) {
         architecture = json_text(document, "architecture");
         archive = json_text(document, "archive_sha256");
-        if (archive != NULL && strlen(archive) == 64 && strspn(archive, "0123456789abcdef") == 64 &&
+        maps_sha = json_text(document, "maps_sha256");
+        if (maps_sha != NULL && strlen(maps_sha) == 64 &&
+            strspn(maps_sha, "0123456789abcdef") == 64 && archive != NULL &&
+            strlen(archive) == 64 && strspn(archive, "0123456789abcdef") == 64 &&
             architecture != NULL &&
             (!strcmp(architecture, "i686") || !strcmp(architecture, "x86_64"))) {
             c->architecture = !strcmp(architecture, "i686") ? "i686" : "x86_64";
             memcpy(c->expected_archive, archive, 65);
+            memcpy(c->maps_sha, maps_sha, 65);
             ok = 1;
         }
     }
@@ -156,10 +172,13 @@ static int metadata(struct nd_config *c)
 }
 static int maps(struct nd_config *c)
 {
-    char path[4096], line[4096], *save, *word;
+    char path[4096], line[4096], actual[65], *save, *word;
+    uint64_t bytes;
     unsigned accounts = 0, ports = 0;
     FILE *file;
     if (!nd_format(path, sizeof(path), "%s/tree/tests/native/maps", c->payload))
+        return 0;
+    if (!hash_file(path, actual, &bytes) || strcmp(actual, c->maps_sha))
         return 0;
     file = fopen(path, "r");
     if (file == NULL)
