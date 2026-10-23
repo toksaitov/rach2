@@ -59,37 +59,49 @@ static int identity_main(int argc, char **argv)
     return printf("%llu\n", (unsigned long long)identity.start) < 0 ? 1 : 0;
 }
 
-int etude_observe_main(int argc, char **argv)
+struct observe_options {
+    const char *path, *run, *stop;
+    struct etude_pid root;
+};
+
+static int options(int argc, char **argv, struct observe_options *o)
 {
-    if (argc > 1 && !strcmp(argv[1], "identity"))
-        return identity_main(argc, argv);
-    if (argc > 1 && !strcmp(argv[1], "sequence"))
-        return etude_observe_sequence_main(argc, argv);
-    const char *path = NULL, *run = NULL, *stop = NULL;
-    struct etude_pid root = {0};
     char *end;
     int opt;
     optind = 1;
     while ((opt = getopt(argc, argv, "o:p:c:r:s:")) != -1) {
         errno = 0;
         if (opt == 'o')
-            path = optarg;
+            o->path = optarg;
         else if (opt == 'r')
-            run = optarg;
+            o->run = optarg;
         else if (opt == 's')
-            stop = optarg;
+            o->stop = optarg;
         else if (opt == 'p') {
-            root.pid = strtol(optarg, &end, 10);
-            if (errno || *end || root.pid <= 0)
+            o->root.pid = strtol(optarg, &end, 10);
+            if (errno || *end || o->root.pid <= 0)
                 return 2;
         } else if (opt == 'c') {
-            root.start = strtoull(optarg, &end, 10);
-            if (errno || *end || !root.start)
+            o->root.start = strtoull(optarg, &end, 10);
+            if (errno || *end || !o->root.start)
                 return 2;
-            root.start_known = 1;
+            o->root.start_known = 1;
         } else
             return 2;
     }
+    return 0;
+}
+
+int etude_observe_main(int argc, char **argv)
+{
+    if (argc > 1 && !strcmp(argv[1], "identity"))
+        return identity_main(argc, argv);
+    if (argc > 1 && !strcmp(argv[1], "sequence"))
+        return etude_observe_sequence_main(argc, argv);
+    struct observe_options oargs = {0};
+    if (options(argc, argv, &oargs)) return 2;
+    const char *path = oargs.path, *run = oargs.run, *stop = oargs.stop;
+    struct etude_pid root = oargs.root;
     if (!path || !run || !root.pid || !root.start_known || optind != argc) {
         fputs("usage: etude observe -o TRACE -p OWNER_PID -c OWNER_CREATION -r RUN_ID [-s "
               "STOP_REQUEST]\n",
