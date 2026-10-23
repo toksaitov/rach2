@@ -165,6 +165,38 @@ static int pace_mock(int argc, char **argv)
         return fclose(f) ? 1 : 0;
     }
 }
+static int clock_mock(int argc, char **argv)
+{
+    char *s, *end, *rest;
+    if (argc != 4 || strcmp(argv[1], "-d.") || strcmp(argv[2], "-f1") ||
+        strcmp(argv[3], "/proc/uptime"))
+        return 2;
+    s = fx_read(mp("clock"));
+    end = strchr(s, '\n');
+    if (!end) {
+        free(s);
+        return 1;
+    }
+    *end = 0;
+    puts(s);
+    rest = strdup(end + 1);
+    fx_text(mp("clock"), rest);
+    free(rest);
+    free(s);
+    return 0;
+}
+static int bootctl_mock(int argc, char **argv)
+{
+    if (argc != 2 || strcmp(argv[1], "status"))
+        return 2;
+    puts("bootctl: candidate: first sector 8, 8 sectors in 1 clusters, 3000 bytes\nbootctl: "
+         "fallback: first sector 16, 8 sectors in 1 clusters, 3000 bytes\nbootctl: grubenv: "
+         "first sector 24, 2 sectors in 1 clusters, 1024 bytes\nbootctl: saved_entry: fallback");
+    printf("bootctl: next_entry: %s\nbootctl: booted: %s\n", ev("MACHINE_NEXT"),
+           *ev("MACHINE_SLOT") ? ev("MACHINE_SLOT")
+                               : "not from a slot (no rach2.slot= on /proc/cmdline)");
+    return 0;
+}
 int flow_measure_mock(int argc, char **argv)
 {
     const char *name = strrchr(argv[0], '/');
@@ -173,18 +205,8 @@ int flow_measure_mock(int argc, char **argv)
         return ssh_mock(argc, argv);
     if (!strcmp(name, "sha256sum") || !strcmp(name, "shasum"))
         return hash_mock(argc, argv);
-    if (!strcmp(name, "bootctl")) {
-        if (argc != 2 || strcmp(argv[1], "status"))
-            return 2;
-        puts(
-            "bootctl: candidate: first sector 8, 8 sectors in 1 clusters, 3000 bytes\nbootctl: "
-            "fallback: first sector 16, 8 sectors in 1 clusters, 3000 bytes\nbootctl: grubenv: "
-            "first sector 24, 2 sectors in 1 clusters, 1024 bytes\nbootctl: saved_entry: fallback");
-        printf("bootctl: next_entry: %s\nbootctl: booted: %s\n", ev("MACHINE_NEXT"),
-               *ev("MACHINE_SLOT") ? ev("MACHINE_SLOT")
-                                   : "not from a slot (no rach2.slot= on /proc/cmdline)");
-        return 0;
-    }
+    if (!strcmp(name, "bootctl"))
+        return bootctl_mock(argc, argv);
     if (!strcmp(name, "sender"))
         return fx_text(mp("sent"), "") ? (!strcmp(ev("MODE"), "failure") ? 3 : 0) : 1;
     if (!strcmp(name, "cp")) {
@@ -192,25 +214,8 @@ int flow_measure_mock(int argc, char **argv)
             return 2;
         return fx_mkdir(argv[3]) ? 0 : 1;
     }
-    if (!strcmp(name, "cut")) {
-        char *s, *end, *rest;
-        if (argc != 4 || strcmp(argv[1], "-d.") || strcmp(argv[2], "-f1") ||
-            strcmp(argv[3], "/proc/uptime"))
-            return 2;
-        s = fx_read(mp("clock"));
-        end = strchr(s, '\n');
-        if (!end) {
-            free(s);
-            return 1;
-        }
-        *end = 0;
-        puts(s);
-        rest = strdup(end + 1);
-        fx_text(mp("clock"), rest);
-        free(rest);
-        free(s);
-        return 0;
-    }
+    if (!strcmp(name, "cut"))
+        return clock_mock(argc, argv);
     if (!strcmp(name, "make")) {
         char *s, number[50];
         unsigned n;

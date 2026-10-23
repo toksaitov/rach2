@@ -10,6 +10,44 @@ static const char *ev(const char *name)
     const char *v = getenv(name);
     return v ? v : "";
 }
+static int powershell_mock(int argc, char **argv)
+{
+    const char *query = ev("QUERY");
+    char pwd[4096], input;
+    if (!getcwd(pwd, sizeof(pwd)) || strcmp(pwd, "/") || strcmp(ev("RACH2_DISTRO"), "fixture"))
+        return 92;
+    if (strcmp(ev("WSLENV"), "KEPT/u:RACH2_DISTRO"))
+        return 93;
+    if (argc != 5 || strcmp(argv[1], "-NoProfile") || strcmp(argv[2], "-NonInteractive") ||
+        strcmp(argv[3], "-Command"))
+        return 94;
+    if (read(0, &input, 1) > 0)
+        return 95;
+    if (!fx_text(ev("SPACE_LOG"), query))
+        return 96;
+    if (!strcmp(query, "good"))
+        printf("D:\\WSL\\fixture\\ext4.vhdx\r\n");
+    else if (!strcmp(query, "lower"))
+        printf("d:\\WSL\\fixture\\ext4.vhdx\n");
+    else if (!strcmp(query, "absent"))
+        printf("D:\\WSL\\moved\\ext4.vhdx\n");
+    else if (!strcmp(query, "empty"))
+        return 0;
+    else if (!strcmp(query, "root"))
+        printf("\\\\server\\share\\ext4.vhdx\n");
+    else if (!strcmp(query, "duplicate"))
+        printf("D:\\WSL\\fixture\\ext4.vhdx\nD:\\WSL\\fixture\\ext4.vhdx\n");
+    else if (!strcmp(query, "noise"))
+        printf("error\nD:\\WSL\\fixture\\ext4.vhdx\n");
+    else if (!strcmp(query, "partial")) {
+        printf("D:\\WSL\\fixture\\ext4.vhdx\n");
+        return 1;
+    } else if (!strcmp(query, "failed"))
+        return 1;
+    else
+        return 96;
+    return 0;
+}
 int flow_space_mock(int argc, char **argv)
 {
     const char *name = strrchr(argv[0], '/');
@@ -36,57 +74,86 @@ int flow_space_mock(int argc, char **argv)
         }
         return 0;
     }
-    if (!strcmp(name, "powershell.exe")) {
-        const char *query = ev("QUERY");
-        char pwd[4096], input;
-        if (!getcwd(pwd, sizeof(pwd)) || strcmp(pwd, "/") || strcmp(ev("RACH2_DISTRO"), "fixture"))
-            return 92;
-        if (strcmp(ev("WSLENV"), "KEPT/u:RACH2_DISTRO"))
-            return 93;
-        if (argc != 5 || strcmp(argv[1], "-NoProfile") || strcmp(argv[2], "-NonInteractive") ||
-            strcmp(argv[3], "-Command"))
-            return 94;
-        if (read(0, &input, 1) > 0)
-            return 95;
-        if (!fx_text(ev("SPACE_LOG"), query))
-            return 96;
-        if (!strcmp(query, "good"))
-            printf("D:\\WSL\\fixture\\ext4.vhdx\r\n");
-        else if (!strcmp(query, "lower"))
-            printf("d:\\WSL\\fixture\\ext4.vhdx\n");
-        else if (!strcmp(query, "absent"))
-            printf("D:\\WSL\\moved\\ext4.vhdx\n");
-        else if (!strcmp(query, "empty"))
-            return 0;
-        else if (!strcmp(query, "root"))
-            printf("\\\\server\\share\\ext4.vhdx\n");
-        else if (!strcmp(query, "duplicate"))
-            printf("D:\\WSL\\fixture\\ext4.vhdx\nD:\\WSL\\fixture\\ext4.vhdx\n");
-        else if (!strcmp(query, "noise"))
-            printf("error\nD:\\WSL\\fixture\\ext4.vhdx\n");
-        else if (!strcmp(query, "partial")) {
-            printf("D:\\WSL\\fixture\\ext4.vhdx\n");
-            return 1;
-        } else if (!strcmp(query, "failed"))
-            return 1;
-        else
-            return 96;
-        return 0;
-    }
+    if (!strcmp(name, "powershell.exe"))
+        return powershell_mock(argc, argv);
     return 97;
 }
-int flow_space(struct fixture *f)
+struct space_row {
+    const char *row, *floor, *want_text, *kept, *query;
+    const char *linux_free, *windows_free, *windows_fs, *query_mode, *drive, *distro;
+    int want, linux_only;
+};
+static const struct space_row space_rows[] = {
+    {.row = "linux", .distro = "", .linux_only = 1},
+    {.row = "disabled",
+     .floor = "0",
+     .query_mode = "timeout",
+     .linux_free = "unknown",
+     .linux_only = 1},
+    {.row = "linux-low",
+     .linux_free = "41943039",
+     .want = 1,
+     .want_text = "39 GiB free under",
+     .linux_only = 1},
+    {.row = "linux-unknown",
+     .linux_free = "unknown",
+     .want = 1,
+     .want_text = "unknown GiB free under",
+     .linux_only = 1},
+    {.row = "missing", .want = 1, .want_text = "powershell.exe is missing"},
+    {.row = "good", .query = "good"},
+    {.row = "lower", .query = "lower", .query_mode = "lower"},
+    {.row = "edge", .windows_free = "41943040", .query = "good"},
+    {.row = "low",
+     .windows_free = "41943039",
+     .query = "good",
+     .want = 1,
+     .want_text = "39 GiB free on D:"},
+    {.row = "cached", .kept = "D:\\WSL\\fixture\\ext4.vhdx", .query_mode = "timeout"},
+    {.row = "cached-low",
+     .kept = "D:\\WSL\\fixture\\ext4.vhdx",
+     .query_mode = "timeout",
+     .windows_free = "41943039",
+     .want = 1,
+     .want_text = "39 GiB free on D:"},
+    {.row = "stale", .kept = "D:\\WSL\\moved\\ext4.vhdx", .query = "good"},
+    {.row = "stale-timeout",
+     .kept = "D:\\WSL\\moved\\ext4.vhdx",
+     .query_mode = "timeout",
+     .want = 1,
+     .want_text = "PowerShell status 124"},
+    {.row = "timeout", .query_mode = "timeout", .want = 1, .want_text = "PowerShell status 124"},
+    {.row = "failed", .query_mode = "failed", .want = 1, .want_text = "PowerShell status 1"},
+    {.row = "partial", .query_mode = "partial", .want = 1, .want_text = "PowerShell status 1"},
+    {.row = "empty", .query_mode = "empty", .want = 1, .want_text = "no valid free-space reading"},
+    {.row = "root", .query_mode = "root", .want = 1, .want_text = "no valid free-space reading"},
+    {.row = "duplicate",
+     .query_mode = "duplicate",
+     .want = 1,
+     .want_text = "no valid free-space reading"},
+    {.row = "noise", .query_mode = "noise", .want = 1, .want_text = "no valid free-space reading"},
+    {.row = "absent",
+     .query_mode = "absent",
+     .want = 1,
+     .want_text = "no valid free-space reading"},
+    {.row = "drive-timeout",
+     .drive = "timeout",
+     .want = 1,
+     .want_text = "no valid free-space reading"},
+    {.row = "drive-foreign",
+     .windows_fs = "fixture",
+     .want = 1,
+     .want_text = "no valid free-space reading"},
+    {.row = "drive-unknown",
+     .windows_free = "unknown",
+     .want = 1,
+     .want_text = "no valid free-space reading"}};
+
+static int space_setup(struct fixture *f, char windows[4096])
 {
-    const char *rows[] = {"linux",         "disabled",      "linux-low",     "linux-unknown",
-                          "missing",       "good",          "lower",         "edge",
-                          "low",           "cached",        "cached-low",    "stale",
-                          "stale-timeout", "timeout",       "failed",        "partial",
-                          "empty",         "root",          "duplicate",     "noise",
-                          "absent",        "drive-timeout", "drive-foreign", "drive-unknown"};
     const char *tools[] = {"awk", "mkdir", "mv", "rm", "tr", NULL};
-    char windows[4096], path[9000], file[4096];
+    char file[4096];
     unsigned i;
-    int ok = 1;
     for (i = 0; tools[i]; i++) {
         snprintf(file, sizeof(file), "/usr/bin/%s", tools[i]);
         if (symlink(file, flow_path(f, "bin/tmp")))
@@ -102,7 +169,7 @@ int flow_space(struct fixture *f)
     }
     if (!fx_mock(f, "df") || !fx_mock(f, "timeout"))
         return 0;
-    snprintf(windows, sizeof(windows), "%s/windows", f->work);
+    snprintf(windows, 4096, "%s/windows", f->work);
     fx_mkdir(windows);
     snprintf(file, sizeof(file), "%s/powershell.exe", windows);
     if (!fx_copy(f->self, file))
@@ -110,143 +177,96 @@ int flow_space(struct fixture *f)
     if (!flow_put(f, "mnt/d/WSL/fixture/ext4.vhdx", "") ||
         !flow_put(f, "input", "input must stay unread\n"))
         return 0;
-    fx_env("FLOW_SPACE", "1");
-    for (i = 0; i < 24; i++) {
-        const char *row = rows[i], *floor = "40", *want_text = "", *kept = "", *query = "";
-        int want = 0, linux_only = 0;
-        fx_env("LINUX_FREE", "104857600");
-        fx_env("WINDOWS_FREE", "42991616");
-        fx_env("WINDOWS_FS", "D:\\");
-        fx_env("QUERY", "good");
-        fx_env("DRIVE", "good");
-        fx_env("WSL_DISTRO_NAME", "fixture");
-        fx_env("WSLENV", "KEPT/u");
-        fx_env("SPACE_LOG", flow_path(f, "query"));
-        fx_env("XDG_CACHE_HOME", flow_path(f, "cache"));
-        fx_env("RACH2_WSL_MOUNTS", flow_path(f, "mnt"));
-        if (!strcmp(row, "linux")) {
-            fx_env("WSL_DISTRO_NAME", "");
-            linux_only = 1;
-        } else if (!strcmp(row, "disabled")) {
-            floor = "0";
-            fx_env("QUERY", "timeout");
-            fx_env("LINUX_FREE", "unknown");
-            linux_only = 1;
-        } else if (!strcmp(row, "linux-low")) {
-            fx_env("LINUX_FREE", "41943039");
-            want = 1;
-            want_text = "39 GiB free under";
-            linux_only = 1;
-        } else if (!strcmp(row, "linux-unknown")) {
-            fx_env("LINUX_FREE", "unknown");
-            want = 1;
-            want_text = "unknown GiB free under";
-            linux_only = 1;
-        } else if (!strcmp(row, "missing")) {
-            want = 1;
-            want_text = "powershell.exe is missing";
-        } else if (!strcmp(row, "good"))
-            query = "good";
-        else if (!strcmp(row, "lower")) {
-            fx_env("QUERY", "lower");
-            query = "lower";
-        } else if (!strcmp(row, "edge")) {
-            fx_env("WINDOWS_FREE", "41943040");
-            query = "good";
-        } else if (!strcmp(row, "low")) {
-            fx_env("WINDOWS_FREE", "41943039");
-            query = "good";
-            want = 1;
-            want_text = "39 GiB free on D:";
-        } else if (!strcmp(row, "cached") || !strcmp(row, "cached-low")) {
-            kept = "D:\\WSL\\fixture\\ext4.vhdx";
-            fx_env("QUERY", "timeout");
-            if (!strcmp(row, "cached-low")) {
-                fx_env("WINDOWS_FREE", "41943039");
-                want = 1;
-                want_text = "39 GiB free on D:";
-            }
-        } else if (!strcmp(row, "stale") || !strcmp(row, "stale-timeout")) {
-            kept = "D:\\WSL\\moved\\ext4.vhdx";
-            if (!strcmp(row, "stale"))
-                query = "good";
-            else {
-                fx_env("QUERY", "timeout");
-                want = 1;
-                want_text = "PowerShell status 124";
-            }
-        } else if (!strcmp(row, "timeout")) {
-            fx_env("QUERY", "timeout");
-            want = 1;
-            want_text = "PowerShell status 124";
-        } else if (!strcmp(row, "failed") || !strcmp(row, "partial")) {
-            fx_env("QUERY", row);
-            want = 1;
-            want_text = "PowerShell status 1";
-        } else if (!strncmp(row, "drive-", 6)) {
-            want = 1;
-            want_text = "no valid free-space reading";
-            if (!strcmp(row, "drive-timeout"))
-                fx_env("DRIVE", "timeout");
-            else if (!strcmp(row, "drive-foreign"))
-                fx_env("WINDOWS_FS", "fixture");
-            else
-                fx_env("WINDOWS_FREE", "unknown");
-        } else {
-            fx_env("QUERY", row);
-            want = 1;
-            want_text = "no valid free-space reading";
-        }
-        fx_remove(flow_path(f, "query"));
-        fx_remove(flow_path(f, "cache"));
-        if (*kept) {
-            char line[4096];
-            snprintf(line, sizeof(line), "%s\n", kept);
-            flow_put(f, "cache/rach2/wsl-disk.fixture", line);
-        }
-        if (!strcmp(row, "missing"))
-            snprintf(path, sizeof(path), "%s", f->bin);
-        else
-            snprintf(path, sizeof(path), "%s:%s", windows, f->bin);
-        fx_env("PATH", path);
-        {
-            const char *a[] = {
-                "/bin/sh", flow_source(f, "tools/setup/space.sh"), "run", "a run", floor, f->work,
-                NULL};
-            fx_run(f, a, f->work, NULL, flow_path(f, "input"));
-        }
-        ok = fx_check(f, f->status == want, row) && ok;
-        if (*query)
-            ok = fx_check(f, fx_equal(flow_path(f, "query"), query), "Windows query") && ok;
-        else if (!want)
-            ok = fx_check(f, !fx_exists(flow_path(f, "query")), "no query") && ok;
-        if (!want)
-            ok = fx_check(f, !*f->out && !*f->err, "quiet admission") && ok;
-        else
-            ok = fx_check(f,
-                          (strstr(f->out, "run: result: refused: ") ||
-                           strstr(f->err, "run: result: refused: ")) &&
-                              (strstr(f->out, want_text) || strstr(f->err, want_text)),
-                          "refusal diagnostic") &&
-                 ok;
-        if (linux_only)
-            continue;
-        if (*query)
-            kept = !strcmp(query, "lower") ? "d:\\WSL\\fixture\\ext4.vhdx"
-                                           : "D:\\WSL\\fixture\\ext4.vhdx";
-        if (*kept) {
-            char line[4096];
-            snprintf(line, sizeof(line), "%s\n", kept);
-            ok = fx_check(f,
-                          fx_equal(flow_path(f, "cache/rach2/wsl-disk.fixture"), line) &&
-                              fx_count(flow_path(f, "cache/rach2")) == 1,
-                          "kept Windows path") &&
-                 ok;
-        } else
-            ok = fx_check(f, !fx_exists(flow_path(f, "cache/rach2/wsl-disk.fixture")),
-                          "no cached Windows path") &&
-                 ok;
+    return 1;
+}
+static void space_environment(struct fixture *f, const struct space_row *r)
+{
+    fx_env("LINUX_FREE", r->linux_free ? r->linux_free : "104857600");
+    fx_env("WINDOWS_FREE", r->windows_free ? r->windows_free : "42991616");
+    fx_env("WINDOWS_FS", r->windows_fs ? r->windows_fs : "D:\\");
+    fx_env("QUERY", r->query_mode ? r->query_mode : "good");
+    fx_env("DRIVE", r->drive ? r->drive : "good");
+    fx_env("WSL_DISTRO_NAME", r->distro ? r->distro : "fixture");
+    fx_env("WSLENV", "KEPT/u");
+    fx_env("SPACE_LOG", flow_path(f, "query"));
+    fx_env("XDG_CACHE_HOME", flow_path(f, "cache"));
+    fx_env("RACH2_WSL_MOUNTS", flow_path(f, "mnt"));
+}
+static int cached_path(struct fixture *f, const char *query, const char *kept)
+{
+    int ok = 1;
+    if (*query)
+        kept =
+            !strcmp(query, "lower") ? "d:\\WSL\\fixture\\ext4.vhdx" : "D:\\WSL\\fixture\\ext4.vhdx";
+    if (*kept) {
+        char line[4096];
+        snprintf(line, sizeof(line), "%s\n", kept);
+        ok = fx_check(f,
+                      fx_equal(flow_path(f, "cache/rach2/wsl-disk.fixture"), line) &&
+                          fx_count(flow_path(f, "cache/rach2")) == 1,
+                      "kept Windows path") &&
+             ok;
+    } else
+        ok = fx_check(f, !fx_exists(flow_path(f, "cache/rach2/wsl-disk.fixture")),
+                      "no cached Windows path") &&
+             ok;
+    return ok;
+}
+static int space_run(struct fixture *f, const char *windows, const struct space_row *r)
+{
+    const char *row = r->row, *floor = r->floor ? r->floor : "40";
+    const char *want_text = r->want_text ? r->want_text : "";
+    const char *kept = r->kept ? r->kept : "", *query = r->query ? r->query : "";
+    int want = r->want, linux_only = r->linux_only, ok = 1;
+    char path[9000];
+    space_environment(f, r);
+    fx_remove(flow_path(f, "query"));
+    fx_remove(flow_path(f, "cache"));
+    if (*kept) {
+        char line[4096];
+        snprintf(line, sizeof(line), "%s\n", kept);
+        flow_put(f, "cache/rach2/wsl-disk.fixture", line);
     }
+    if (!strcmp(row, "missing"))
+        snprintf(path, sizeof(path), "%s", f->bin);
+    else
+        snprintf(path, sizeof(path), "%s:%s", windows, f->bin);
+    fx_env("PATH", path);
+    {
+        const char *a[] = {
+            "/bin/sh", flow_source(f, "tools/setup/space.sh"), "run", "a run", floor, f->work,
+            NULL};
+        fx_run(f, a, f->work, NULL, flow_path(f, "input"));
+    }
+    ok = fx_check(f, f->status == want, row) && ok;
+    if (*query)
+        ok = fx_check(f, fx_equal(flow_path(f, "query"), query), "Windows query") && ok;
+    else if (!want)
+        ok = fx_check(f, !fx_exists(flow_path(f, "query")), "no query") && ok;
+    if (!want)
+        ok = fx_check(f, !*f->out && !*f->err, "quiet admission") && ok;
+    else
+        ok = fx_check(f,
+                      (strstr(f->out, "run: result: refused: ") ||
+                       strstr(f->err, "run: result: refused: ")) &&
+                          (strstr(f->out, want_text) || strstr(f->err, want_text)),
+                      "refusal diagnostic") &&
+             ok;
+    if (linux_only)
+        return ok;
+    return cached_path(f, query, kept) && ok;
+}
+
+int flow_space(struct fixture *f)
+{
+    char windows[4096];
+    unsigned i;
+    int ok = 1;
+    if (!space_setup(f, windows))
+        return 0;
+    fx_env("FLOW_SPACE", "1");
+    for (i = 0; i < sizeof(space_rows) / sizeof(space_rows[0]); i++)
+        ok = space_run(f, windows, &space_rows[i]) && ok;
     fx_env("FLOW_SPACE", NULL);
     return ok;
 }

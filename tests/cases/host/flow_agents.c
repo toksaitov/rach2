@@ -150,6 +150,96 @@ int flow_credential_arguments(struct fixture *f)
          ok;
     return ok;
 }
+struct agent_row {
+    struct fx_child p;
+    int in, out, held;
+};
+
+static int agent_start(struct fixture *f, const char *script, unsigned i, struct agent_row *r)
+{
+    const char *a[] = {"/bin/bash", script,
+                       i == 1             ? "filtered"
+                       : i == 2 || i == 4 ? "work"
+                                          : "secrets",
+                       i == 2 || i == 4 ? "claude" : "qemu", NULL};
+    fx_remove(getenv("TMPDIR"));
+    fx_mkdir(getenv("TMPDIR"));
+    fx_remove(flow_path(f, "input"));
+    fx_remove(flow_path(f, "output"));
+    fx_remove(flow_path(f, "mark"));
+    if (i == 0)
+        flow_put(f, "input", "a log with rach2-offline-dummy-key in it\n");
+    if (i == 3 || i == 5)
+        if (mkfifo(flow_path(f, "input"), 0600))
+            return 0;
+    if (i == 5)
+        if (mkfifo(flow_path(f, "output"), 0600))
+            return 0;
+    if (i == 4)
+        fx_env("GUEST_TEST_MARK", flow_path(f, "mark"));
+    {
+        struct fx_io io = {i == 0 || i == 3 || i == 5 ? flow_path(f, "input") : NULL,
+                           i == 5 ? flow_path(f, "output") : NULL};
+        if (!fx_start_io(f, &r->p, a, f->work, NULL, &io))
+            return 0;
+    }
+    fx_env("GUEST_TEST_MARK", NULL);
+    return 1;
+}
+static int agent_wait(struct fixture *f, unsigned i, struct agent_row *r)
+{
+    struct fx_child *p = &r->p;
+    int in = -1, out = -1, held = 1;
+    if (i == 3 || i == 5) {
+        in = open(flow_path(f, "input"), O_WRONLY);
+        if (in < 0)
+            return 0;
+    }
+    if (i == 5) {
+        out = open(flow_path(f, "output"), O_RDONLY);
+        if (out < 0) {
+            close(in);
+            return 0;
+        }
+    }
+    if (i == 3 || i == 5)
+        held = until_log(f, p);
+    if (i == 4)
+        held = fx_until(p, flow_path(f, "mark"));
+    if (i == 3 || i == 4)
+        fx_stop(p, SIGTERM);
+    if (i == 5) {
+        close(out);
+        close(in);
+        in = -1;
+        while (!fx_poll(p))
+            fx_pause();
+        f->status = p->status;
+    } else
+        fx_wait(f, p);
+    if (in >= 0)
+        close(in);
+    while (kill(-p->pid, 0) == 0)
+        fx_pause();
+    r->in = in;
+    r->out = out;
+    r->held = held;
+    return 1;
+}
+static int agent_judge(struct fixture *f, unsigned i, const struct agent_row *r)
+{
+    int held = r->held;
+    if (i == 0 || i == 1)
+        held = held && !f->status &&
+               fx_regex(f->out, i ? "^0 of [0-9]+ strings$" : "^1 of [0-9]+ strings$");
+    if (i == 2)
+        held = held && !f->status && fx_regex(f->out, "^check checked$");
+    if (i == 3 || i == 4)
+        held = held && f->status == 143;
+    if (i == 5)
+        held = held && f->status == 141;
+    return held && fx_empty(getenv("TMPDIR"));
+}
 int flow_agents_guest(struct fixture *f)
 {
     static const char *names[] = {"secrets",      "filtered",  "work",
@@ -167,79 +257,15 @@ int flow_agents_guest(struct fixture *f)
     if (fx_run(f, setup, f->work, NULL, NULL) || fx_run(f, prepare, f->work, NULL, NULL))
         return 0;
     for (i = 0; i < 6; i++) {
-        struct fx_child p;
-        int in = -1, out = -1, held = 1;
-        const char *a[] = {"/bin/bash", setup[1],
-                           i == 1             ? "filtered"
-                           : i == 2 || i == 4 ? "work"
-                                              : "secrets",
-                           i == 2 || i == 4 ? "claude" : "qemu", NULL};
-        fx_remove(getenv("TMPDIR"));
-        fx_mkdir(getenv("TMPDIR"));
-        fx_remove(flow_path(f, "input"));
-        fx_remove(flow_path(f, "output"));
-        fx_remove(flow_path(f, "mark"));
-        if (i == 0)
-            flow_put(f, "input", "a log with rach2-offline-dummy-key in it\n");
-        if (i == 3 || i == 5)
-            if (mkfifo(flow_path(f, "input"), 0600))
-                return 0;
-        if (i == 5)
-            if (mkfifo(flow_path(f, "output"), 0600))
-                return 0;
-        if (i == 4)
-            fx_env("GUEST_TEST_MARK", flow_path(f, "mark"));
-        {
-            struct fx_io io = {i == 0 || i == 3 || i == 5 ? flow_path(f, "input") : NULL,
-                               i == 5 ? flow_path(f, "output") : NULL};
-            if (!fx_start_io(f, &p, a, f->work, NULL, &io))
-                return 0;
-        }
-        fx_env("GUEST_TEST_MARK", NULL);
-        if (i == 3 || i == 5) {
-            in = open(flow_path(f, "input"), O_WRONLY);
-            if (in < 0)
-                return 0;
-        }
-        if (i == 5) {
-            out = open(flow_path(f, "output"), O_RDONLY);
-            if (out < 0) {
-                close(in);
-                return 0;
-            }
-        }
-        if (i == 3 || i == 5)
-            held = until_log(f, &p);
-        if (i == 4)
-            held = fx_until(&p, flow_path(f, "mark"));
-        if (i == 3 || i == 4)
-            fx_stop(&p, SIGTERM);
-        if (i == 5) {
-            close(out);
-            close(in);
-            in = -1;
-            while (!fx_poll(&p))
-                fx_pause();
-            f->status = p.status;
-        } else
-            fx_wait(f, &p);
-        if (in >= 0)
-            close(in);
-        while (kill(-p.pid, 0) == 0)
-            fx_pause();
-        if (i == 0 || i == 1)
-            held = held && !f->status &&
-                   fx_regex(f->out, i ? "^0 of [0-9]+ strings$" : "^1 of [0-9]+ strings$");
-        if (i == 2)
-            held = held && !f->status && fx_regex(f->out, "^check checked$");
-        if (i == 3 || i == 4)
-            held = held && f->status == 143;
-        if (i == 5)
-            held = held && f->status == 141;
-        ok = fx_check(f, held && fx_empty(getenv("TMPDIR")), names[i]) && ok;
+        struct agent_row r;
+        memset(&r, 0, sizeof(r));
+        if (!agent_start(f, setup[1], i, &r) || !agent_wait(f, i, &r))
+            return 0;
+        ok = fx_check(f, agent_judge(f, i, &r), names[i]) && ok;
     }
     return ok;
 }
+
 int flow_check_workload(int argc, char **argv)
 {
     const char *mark = getenv("GUEST_TEST_MARK");

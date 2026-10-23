@@ -379,7 +379,7 @@ static int version_setup(struct version *value, struct fixture *f)
     *value = v;
     return 1;
 }
-static int version_publication_identity(struct version *value)
+static int version_reuse_identity(struct version *value)
 {
     struct version v = *value;
     struct fixture *f = v.f;
@@ -388,8 +388,6 @@ static int version_publication_identity(struct version *value)
     char target[4096];
     char first[5000];
     char second[100];
-    char before[65];
-    char after[65];
     char *saved;
     if (!state(&v))
         return 0;
@@ -419,6 +417,14 @@ static int version_publication_identity(struct version *value)
     ok = fx_check(f, !strncmp(first, second, 64) && !strcmp(first + 65, v.dir),
                   "reuse same version path") &&
          ok;
+    return ok;
+}
+static int version_publication_identity(struct version *value)
+{
+    struct version v = *value;
+    struct fixture *f = v.f;
+    char source[4096], first[5000], second[100], before[65], after[65], *saved;
+    int ok = version_reuse_identity(value);
     if (!state(&v) || !run(&v) || !result(&v, "built", NULL) || !snapshots(&v, before))
         return 0;
     snprintf(first, sizeof(first), "%s %s", v.key, v.dir);

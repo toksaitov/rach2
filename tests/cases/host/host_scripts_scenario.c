@@ -9,13 +9,17 @@ struct row {
     char id[80];
     int held;
 };
+
 static const char *kernel[] = {"chown",     "krffs_open", "krffs_root_lock", "krffs_stat",
                                "pagecache", "kstack",     "endothers",       NULL};
+
 static const char *image[] = {"mkext2_overlay", "krffs_tools",      "install_accounts",
                               "tooling_image",  "collection_tools", NULL};
+
 static const char *build[] = {"doom_libc",       "run_scripts",    "commit_msg",  "prereq",
                               "check_asm",       "check_ldscript", "together",    "gnu_cmake_jobs",
                               "gnu_port_resume", "host_suite",     "case_select", NULL};
+
 static const char *flow[] = {"machine_measure",
                              "ci",
                              "ci_run",
@@ -36,6 +40,7 @@ static const char *flow[] = {"machine_measure",
                              "etude_tooling",
                              "agents_credentials",
                              NULL};
+
 static int in(const char *const *list, const char *id)
 {
     while (*list)
@@ -46,6 +51,17 @@ static int in(const char *const *list, const char *id)
 static int protocol(const char *id)
 {
     return !strcmp(id, "anthropic") || !strcmp(id, "gemini") || !strcmp(id, "fakeapi");
+}
+static int required_rows(const struct row *rows, size_t n, const char *const *list)
+{
+    size_t i, j;
+    for (i = 0; list[i]; i++) {
+        for (j = 0; j < n && strcmp(rows[j].id, list[i]); j++) {
+        }
+        if (j == n)
+            return 0;
+    }
+    return 1;
 }
 static int rows(struct etude_case *c, struct row out[100], size_t *count)
 {
@@ -78,34 +94,8 @@ static int rows(struct etude_case *c, struct row out[100], size_t *count)
     if (ferror(f))
         ok = 0;
     fclose(f);
-    for (i = 0; kernel[i]; i++) {
-        size_t j;
-        for (j = 0; j < n && strcmp(out[j].id, kernel[i]); j++)
-            ;
-        if (j == n)
-            ok = 0;
-    }
-    for (i = 0; image[i]; i++) {
-        size_t j;
-        for (j = 0; j < n && strcmp(out[j].id, image[i]); j++)
-            ;
-        if (j == n)
-            ok = 0;
-    }
-    for (i = 0; build[i]; i++) {
-        size_t j;
-        for (j = 0; j < n && strcmp(out[j].id, build[i]); j++)
-            ;
-        if (j == n)
-            ok = 0;
-    }
-    for (i = 0; flow[i]; i++) {
-        size_t j;
-        for (j = 0; j < n && strcmp(out[j].id, flow[i]); j++)
-            ;
-        if (j == n)
-            ok = 0;
-    }
+    ok = required_rows(out, n, kernel) && required_rows(out, n, image) &&
+         required_rows(out, n, build) && required_rows(out, n, flow) && ok;
     *count = n;
     return ok && n == 45;
 }

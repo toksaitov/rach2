@@ -1,5 +1,6 @@
 /* flow_cleanup.c: cleanup preserves unlanded work, evidence and active files. */
 #define _POSIX_C_SOURCE 200809L
+#define _DARWIN_C_SOURCE
 #include "flow_check.h"
 #include <dirent.h>
 #include <fcntl.h>
@@ -63,7 +64,7 @@ static int age_tree(const char *path, time_t when)
     t[0].tv_sec = t[1].tv_sec = when;
     return !utimensat(AT_FDCWD, path, t, AT_SYMLINK_NOFOLLOW) && ok;
 }
-static int newer(const char *path, time_t stamp)
+static int newer(const char *path, struct timespec stamp)
 {
     struct stat st;
     DIR *d;
@@ -72,7 +73,13 @@ static int newer(const char *path, time_t stamp)
     int found = 0;
     if (lstat(path, &st))
         return 1;
-    if (st.st_mtime > stamp)
+#ifdef __APPLE__
+    struct timespec modified = st.st_mtimespec;
+#else
+    struct timespec modified = st.st_mtim;
+#endif
+    if (modified.tv_sec > stamp.tv_sec ||
+        (modified.tv_sec == stamp.tv_sec && modified.tv_nsec > stamp.tv_nsec))
         return 1;
     if (!S_ISDIR(st.st_mode))
         return 0;
@@ -263,11 +270,35 @@ static int exists(struct fixture *f, const char *name)
 {
     return fx_exists(flow_path(f, name));
 }
+static int leftovers_previews(struct fixture *f)
+{
+    int ok = 1;
+    if (!leftovers_setup(f))
+        return 0;
+    ok = fx_check(f,
+                  !leftovers_sweep(f, 0, 0) && exists(f, "home.noindex/rach2-landed") &&
+                      exists(f, "home.noindex/c160.log") &&
+                      exists(f, "home.noindex/rach2/build/tests/failed/"
+                                "tests.i686.20261020T000000Z.100.machine.a.r0"),
+                  "no text removes nothing") &&
+         ok;
+    if (!leftovers_setup(f))
+        return 0;
+    ok = fx_check(f,
+                  leftovers_sweep(f, 1, 1) && exists(f, "home.noindex/rach2-landed") &&
+                      exists(f, "home.noindex/c160.log") &&
+                      fx_regex(f->out, "leftovers: would remove copy .*/rach2-landed: [0-9]+ KiB"),
+                  "dry run removes nothing") &&
+         ok;
+    if (!leftovers_setup(f))
+        return 0;
+    return ok;
+}
 int flow_leftovers(struct fixture *f)
 {
     unsigned i;
     int ok = 1;
-    time_t stamp;
+    struct timespec stamp;
     struct fx_child busy[2];
     char cwd[4096];
     const char *keep[] = {
@@ -306,24 +337,7 @@ int flow_leftovers(struct fixture *f)
         "rach2-dirty/build/tests/failed/tests.i686.20261020T000000Z.600.machine.g.r0",
         "c160.log",
         "trial"};
-    if (!leftovers_setup(f))
-        return 0;
-    ok = fx_check(f,
-                  !leftovers_sweep(f, 0, 0) && exists(f, "home.noindex/rach2-landed") &&
-                      exists(f, "home.noindex/c160.log") &&
-                      exists(f, "home.noindex/rach2/build/tests/failed/"
-                                "tests.i686.20261020T000000Z.100.machine.a.r0"),
-                  "no text removes nothing") &&
-         ok;
-    if (!leftovers_setup(f))
-        return 0;
-    ok = fx_check(f,
-                  leftovers_sweep(f, 1, 1) && exists(f, "home.noindex/rach2-landed") &&
-                      exists(f, "home.noindex/c160.log") &&
-                      fx_regex(f->out, "leftovers: would remove copy .*/rach2-landed: [0-9]+ KiB"),
-                  "dry run removes nothing") &&
-         ok;
-    if (!leftovers_setup(f))
+    if (!leftovers_previews(f))
         return 0;
     {
         const char *a[] = {f->self, "--hold", NULL};
@@ -335,7 +349,8 @@ int flow_leftovers(struct fixture *f)
                 !link_ready(&busy[i], "cwd", flow_path(f, dirs[i])))
                 return 0;
     }
-    stamp = time(NULL);
+    if (clock_gettime(CLOCK_REALTIME, &stamp))
+        return 0;
     ok = fx_check(f, leftovers_sweep(f, 0, 1), "sweep status") && ok;
     for (i = 0; i < 2; i++) {
         fx_stop(&busy[i], SIGTERM);
@@ -389,9 +404,9 @@ static int sparse_at(struct fixture *f, const char *name, unsigned mib)
     }
     return !close(fd);
 }
-static int tidy_setup(struct fixture *f)
+static int tidy_files(struct fixture *f, const char *base)
 {
-    char cwd[4096], origin[4096], base[100], source[4096], target[4096], h[5000];
+    char cwd[4096], source[4096], target[4096];
     unsigned i;
     const char *worktrees[] = {"clean", "dirty", "ignored", "locked", "unique"};
     const char *scratch[] = {"rach2-old.Ab3dEf/sub/f",
@@ -403,6 +418,69 @@ static int tidy_setup(struct fixture *f)
                              "report.Ab3dEf",
                              "rach2-old.Ab3dEfGhI",
                              "rach2-young.Yy3Yy3/now"};
+    snprintf(cwd, sizeof(cwd), "%s/clone", f->work);
+    for (i = 0; i < 5; i++) {
+        char branch[100], wt[200];
+        snprintf(branch, sizeof(branch), "worktree-%s", worktrees[i]);
+        snprintf(wt, sizeof(wt), ".claude/worktrees/%s", worktrees[i]);
+        G("worktree", "add", "-q", "-b", branch, wt, base);
+    }
+    snprintf(target, sizeof(target), "%s/outside", f->work);
+    G("worktree", "add", "-q", "-b", "outside", target, base);
+    flow_put(f, "clone/.claude/worktrees/clean/build/out", "");
+    flow_put(f, "clone/.claude/worktrees/dirty/untracked", "");
+    flow_put(f, "clone/.claude/worktrees/ignored/game.wad", "");
+    G("worktree", "lock", ".claude/worktrees/locked");
+    snprintf(cwd, sizeof(cwd), "%s/clone/.claude/worktrees/unique", f->work);
+    file_at(cwd, "u", "u\n");
+    G("add", "u");
+    G("commit", "-q", "-m", "Add u");
+    snprintf(cwd, sizeof(cwd), "%s/clone", f->work);
+    G("switch", "-q", "7-current");
+    flow_put(f, "clone/build/vendor/gnu/toolchain.stamp", "");
+    fx_mkdir(flow_path(f, "clone/build/vendor/gnu/cross/bin"));
+    flow_put(f, "clone/build/vendor/gnu/work/ro/f", "");
+    chmod(flow_path(f, "clone/build/vendor/gnu/work/ro"), 0500);
+    fx_mkdir(flow_path(f, "clone/build/x86_64/vendor/gnu"));
+    fx_mkdir(flow_path(f, "store/entries/k/tree/cross"));
+    symlink(flow_path(f, "store/entries/k/tree/cross"),
+            flow_path(f, "clone/build/x86_64/vendor/gnu/cross"));
+    flow_put(f, "stateA/issue", "5\n");
+    flow_put(f, "stateA/parked", "6\n");
+    flow_put(f, "stateA/s-old.jsonl", "");
+    flow_put(f, "stateA/s-mid.jsonl", "");
+    flow_put(f, "stateA/c-old.jsonl", "");
+    flow_put(f, "stateA/loop.log", "");
+    age_tree(flow_path(f, "stateA/s-old.jsonl"), time(NULL) - 20 * 86400);
+    age_tree(flow_path(f, "stateA/c-old.jsonl"), time(NULL) - 20 * 86400);
+    age_tree(flow_path(f, "stateA/loop.log"), time(NULL) - 20 * 86400);
+    age_tree(flow_path(f, "stateA/s-mid.jsonl"), time(NULL) - 5 * 86400);
+    if (!sparse_at(f, "stateB/s-big1.jsonl", 600) || !sparse_at(f, "stateB/s-big2.jsonl", 600) ||
+        !sparse_at(f, "stateB/s-young.jsonl", 1200))
+        return 0;
+    age_tree(flow_path(f, "stateB/s-big1.jsonl"), time(NULL) - 3 * 86400);
+    age_tree(flow_path(f, "stateB/s-big2.jsonl"), time(NULL) - 2 * 86400);
+    for (i = 0; i < 9; i++) {
+        snprintf(target, sizeof(target), "tmp/%s", scratch[i]);
+        flow_put(f, target, "");
+    }
+    fx_mkdir(flow_path(f, "tmp/rach2-busy.Bu5yBu"));
+    fx_mkdir(flow_path(f, "tmp/rach2-prog.Pr0gPr"));
+    fx_mkdir(flow_path(f, "tmp/rach2-py.ab_12cde"));
+    fx_mkdir(flow_path(f, "target"));
+    snprintf(source, sizeof(source), "%s", f->self);
+    snprintf(target, sizeof(target), "%s/tmp/rach2-prog.Pr0gPr/sleep", f->work);
+    if (!fx_copy(source, target))
+        return 0;
+    symlink(flow_path(f, "target"), flow_path(f, "tmp/rach2-link.Li9kLi"));
+    if (!age_tree(flow_path(f, "tmp"), time(NULL) - 172800))
+        return 0;
+    flow_put(f, "tmp/rach2-young.Yy3Yy3/now", "");
+    return 1;
+}
+static int tidy_setup(struct fixture *f)
+{
+    char cwd[4096], origin[4096], base[100], h[5000];
     snprintf(cwd, sizeof(cwd), "%s/clone", f->work);
     snprintf(origin, sizeof(origin), "%s/origin.git", f->work);
     fx_mkdir(cwd);
@@ -481,65 +559,9 @@ static int tidy_setup(struct fixture *f)
     G("commit", "-q", "-a", "-m", "Edit k");
     G("push", "-q", "origin", "master");
     G("fetch", "-q", "origin");
-    for (i = 0; i < 5; i++) {
-        char branch[100], wt[200];
-        snprintf(branch, sizeof(branch), "worktree-%s", worktrees[i]);
-        snprintf(wt, sizeof(wt), ".claude/worktrees/%s", worktrees[i]);
-        G("worktree", "add", "-q", "-b", branch, wt, base);
-    }
-    snprintf(target, sizeof(target), "%s/outside", f->work);
-    G("worktree", "add", "-q", "-b", "outside", target, base);
-    flow_put(f, "clone/.claude/worktrees/clean/build/out", "");
-    flow_put(f, "clone/.claude/worktrees/dirty/untracked", "");
-    flow_put(f, "clone/.claude/worktrees/ignored/game.wad", "");
-    G("worktree", "lock", ".claude/worktrees/locked");
-    snprintf(cwd, sizeof(cwd), "%s/clone/.claude/worktrees/unique", f->work);
-    file_at(cwd, "u", "u\n");
-    G("add", "u");
-    G("commit", "-q", "-m", "Add u");
-    snprintf(cwd, sizeof(cwd), "%s/clone", f->work);
-    G("switch", "-q", "7-current");
-    flow_put(f, "clone/build/vendor/gnu/toolchain.stamp", "");
-    fx_mkdir(flow_path(f, "clone/build/vendor/gnu/cross/bin"));
-    flow_put(f, "clone/build/vendor/gnu/work/ro/f", "");
-    chmod(flow_path(f, "clone/build/vendor/gnu/work/ro"), 0500);
-    fx_mkdir(flow_path(f, "clone/build/x86_64/vendor/gnu"));
-    fx_mkdir(flow_path(f, "store/entries/k/tree/cross"));
-    symlink(flow_path(f, "store/entries/k/tree/cross"),
-            flow_path(f, "clone/build/x86_64/vendor/gnu/cross"));
-    flow_put(f, "stateA/issue", "5\n");
-    flow_put(f, "stateA/parked", "6\n");
-    flow_put(f, "stateA/s-old.jsonl", "");
-    flow_put(f, "stateA/s-mid.jsonl", "");
-    flow_put(f, "stateA/c-old.jsonl", "");
-    flow_put(f, "stateA/loop.log", "");
-    age_tree(flow_path(f, "stateA/s-old.jsonl"), time(NULL) - 20 * 86400);
-    age_tree(flow_path(f, "stateA/c-old.jsonl"), time(NULL) - 20 * 86400);
-    age_tree(flow_path(f, "stateA/loop.log"), time(NULL) - 20 * 86400);
-    age_tree(flow_path(f, "stateA/s-mid.jsonl"), time(NULL) - 5 * 86400);
-    if (!sparse_at(f, "stateB/s-big1.jsonl", 600) || !sparse_at(f, "stateB/s-big2.jsonl", 600) ||
-        !sparse_at(f, "stateB/s-young.jsonl", 1200))
-        return 0;
-    age_tree(flow_path(f, "stateB/s-big1.jsonl"), time(NULL) - 3 * 86400);
-    age_tree(flow_path(f, "stateB/s-big2.jsonl"), time(NULL) - 2 * 86400);
-    for (i = 0; i < 9; i++) {
-        snprintf(target, sizeof(target), "tmp/%s", scratch[i]);
-        flow_put(f, target, "");
-    }
-    fx_mkdir(flow_path(f, "tmp/rach2-busy.Bu5yBu"));
-    fx_mkdir(flow_path(f, "tmp/rach2-prog.Pr0gPr"));
-    fx_mkdir(flow_path(f, "tmp/rach2-py.ab_12cde"));
-    fx_mkdir(flow_path(f, "target"));
-    snprintf(source, sizeof(source), "%s", f->self);
-    snprintf(target, sizeof(target), "%s/tmp/rach2-prog.Pr0gPr/sleep", f->work);
-    if (!fx_copy(source, target))
-        return 0;
-    symlink(flow_path(f, "target"), flow_path(f, "tmp/rach2-link.Li9kLi"));
-    if (!age_tree(flow_path(f, "tmp"), time(NULL) - 172800))
-        return 0;
-    flow_put(f, "tmp/rach2-young.Yy3Yy3/now", "");
-    return 1;
+    return tidy_files(f, base);
 }
+
 static int lib_command(struct fixture *f, const char *cwd, const char *function, const char *state,
                        const char *store)
 {
@@ -549,7 +571,7 @@ static int lib_command(struct fixture *f, const char *cwd, const char *function,
              flow_path(f, state), flow_source(f, "tools/flow/lib.sh"), store, function);
     return !fx_run(f, a, cwd, NULL, NULL);
 }
-int flow_tidy(struct fixture *f)
+static int tidy_checks(struct fixture *f)
 {
     const char *keep_branches[] = {
         "3-subject",        "4-unpushed",      "5-held",          "6-parked", "7-current",
@@ -581,7 +603,64 @@ int flow_tidy(struct fixture *f)
         "clone/.claude/worktrees/clean", "clone/build/vendor/gnu", "stateA/s-old.jsonl",
         "stateB/s-big1.jsonl",           "stateB/s-big2.jsonl",    "tmp/rach2-old.Ab3dEf",
         "tmp/rach2-py.ab_12cde",         "tmp/rach2-file.Fi1eFi"};
-    char cwd[4096], program[4096], branch[200], *stems;
+    char cwd[4096], branch[200];
+    unsigned i;
+    int ok = 1;
+    snprintf(cwd, sizeof(cwd), "%s/clone", f->work);
+    for (i = 0; i < 14; i++) {
+        snprintf(branch, sizeof(branch), "refs/heads/%s", keep_branches[i]);
+        ok =
+            fx_check(f, g(f, cwd, "rev-parse", "-q", "--verify", branch, NULL), keep_branches[i]) &&
+            ok;
+    }
+    for (i = 0; i < 4; i++) {
+        snprintf(branch, sizeof(branch), "refs/heads/%s", gone_branches[i]);
+        ok = fx_check(f, !g(f, cwd, "rev-parse", "-q", "--verify", branch, NULL),
+                      gone_branches[i]) &&
+             ok;
+    }
+    for (i = 0; i < 21; i++)
+        ok = fx_check(f, exists(f, kept[i]), kept[i]) && ok;
+    for (i = 0; i < 8; i++)
+        ok = fx_check(f, !exists(f, gone[i]), gone[i]) && ok;
+    return ok;
+}
+static int tidy_stems(struct fixture *f)
+{
+    char cwd[4096], *stems;
+    int ok = 1;
+    /* stems reads a commit, so index a private copy of its source files. */
+    snprintf(cwd, sizeof(cwd), "%s/stems-source", f->work);
+    if (!fx_tree(flow_source(f, "tools"), flow_path(f, "stems-source/tools")) ||
+        !fx_tree(flow_source(f, "tests"), flow_path(f, "stems-source/tests")) ||
+        !g(f, cwd, "init", "-q", NULL) || !g(f, cwd, "add", "tools", "tests", NULL) ||
+        !g(f, cwd, "commit", "-q", "-m", "Prepared source fixtures", NULL))
+        return 0;
+    if (!lib_command(f, cwd, "stems HEAD", "stateA", ""))
+        return 0;
+    stems = f->out;
+    ok =
+        fx_check(f,
+                 fx_regex(stems, "^rach2_verify$") && fx_regex(stems, "^rach2-measure$") &&
+                     fx_regex(stems, "^rach2-muse-verify$") && !fx_regex(stems, "[^A-Za-z0-9_\n-]"),
+                 "scratch stems") &&
+        ok;
+    {
+        const char *line = stems;
+        while (*line) {
+            if (strncmp(line, "rach2", 5))
+                ok = fx_check(f, 0, "scratch stem prefix") && ok;
+            line = strchr(line, '\n');
+            if (!line)
+                break;
+            line++;
+        }
+    }
+    return ok;
+}
+int flow_tidy(struct fixture *f)
+{
+    char cwd[4096], program[4096];
     unsigned i;
     int ok = 1;
     struct fx_child busy[2];
@@ -630,48 +709,6 @@ int flow_tidy(struct fixture *f)
         fx_stop(&busy[i], SIGTERM);
         fx_wait(f, &busy[i]);
     }
-    for (i = 0; i < 14; i++) {
-        snprintf(branch, sizeof(branch), "refs/heads/%s", keep_branches[i]);
-        ok =
-            fx_check(f, g(f, cwd, "rev-parse", "-q", "--verify", branch, NULL), keep_branches[i]) &&
-            ok;
-    }
-    for (i = 0; i < 4; i++) {
-        snprintf(branch, sizeof(branch), "refs/heads/%s", gone_branches[i]);
-        ok = fx_check(f, !g(f, cwd, "rev-parse", "-q", "--verify", branch, NULL),
-                      gone_branches[i]) &&
-             ok;
-    }
-    for (i = 0; i < 21; i++)
-        ok = fx_check(f, exists(f, kept[i]), kept[i]) && ok;
-    for (i = 0; i < 8; i++)
-        ok = fx_check(f, !exists(f, gone[i]), gone[i]) && ok;
-    /* stems reads a commit, so index a private copy of its source files. */
-    snprintf(cwd, sizeof(cwd), "%s/stems-source", f->work);
-    if (!fx_tree(flow_source(f, "tools"), flow_path(f, "stems-source/tools")) ||
-        !fx_tree(flow_source(f, "tests"), flow_path(f, "stems-source/tests")) ||
-        !g(f, cwd, "init", "-q", NULL) || !g(f, cwd, "add", "tools", "tests", NULL) ||
-        !g(f, cwd, "commit", "-q", "-m", "Prepared source fixtures", NULL))
-        return 0;
-    if (!lib_command(f, cwd, "stems HEAD", "stateA", ""))
-        return 0;
-    stems = f->out;
-    ok =
-        fx_check(f,
-                 fx_regex(stems, "^rach2_verify$") && fx_regex(stems, "^rach2-measure$") &&
-                     fx_regex(stems, "^rach2-muse-verify$") && !fx_regex(stems, "[^A-Za-z0-9_\n-]"),
-                 "scratch stems") &&
-        ok;
-    {
-        const char *line = stems;
-        while (*line) {
-            if (strncmp(line, "rach2", 5))
-                ok = fx_check(f, 0, "scratch stem prefix") && ok;
-            line = strchr(line, '\n');
-            if (!line)
-                break;
-            line++;
-        }
-    }
-    return ok;
+    ok = tidy_checks(f) && ok;
+    return tidy_stems(f) && ok;
 }

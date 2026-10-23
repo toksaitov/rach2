@@ -32,6 +32,55 @@ int flow_copy(struct fixture *f, const char *source, const char *name)
 {
     return fx_copy(flow_source(f, source), flow_path(f, name));
 }
+static int mock_command(int argc, char **argv)
+{
+    static const struct {
+        const char *environment;
+        int (*run)(int, char **);
+    } mocks[] = {
+        {"FLOW_LAUNCH", flow_launch_mock},   {"FLOW_PROGRESS", flow_progress_mock},
+        {"FLOW_TOOLING", flow_tooling_mock}, {"FLOW_RELEASE", flow_release_mock},
+        {"FLOW_CI_RUN", flow_ci_run_mock},   {"FLOW_CI", flow_ci_mock},
+        {"FLOW_BOARD", flow_board_mock},     {"FLOW_MEASURE", flow_measure_mock},
+        {"FLOW_TESTING", flow_testing_mock}, {"FLOW_DEPLOY", flow_deploy_mock},
+        {"FLOW_VERSION", flow_version_mock}, {"FLOW_WORKER", flow_worker_mock},
+        {"FLOW_SPACE", flow_space_mock},
+    };
+    unsigned i;
+    for (i = 0; i < sizeof(mocks) / sizeof(mocks[0]); i++)
+        if (getenv(mocks[i].environment))
+            return mocks[i].run(argc, argv);
+    return flow_basic_mock(argc, argv);
+}
+static int controller(struct fixture *f, const char *id)
+{
+    static const struct {
+        const char *id;
+        int (*run)(struct fixture *);
+    } controllers[] = {
+        {"etude_launch", flow_launch},
+        {"progress", flow_progress},
+        {"etude_tooling", flow_tooling},
+        {"release_resume", flow_release},
+        {"ci_run", flow_ci_run},
+        {"ci", flow_ci},
+        {"board", flow_board},
+        {"machine_measure", flow_measure},
+        {"test_status", flow_status},
+        {"testing_run", flow_testing},
+        {"etude_deploy", flow_deploy},
+        {"etude_version", flow_version},
+        {"tidy", flow_tidy},
+        {"leftovers", flow_leftovers},
+        {"worker_park", flow_worker},
+        {"space", flow_space},
+    };
+    unsigned i;
+    for (i = 0; i < sizeof(controllers) / sizeof(controllers[0]); i++)
+        if (!strcmp(id, controllers[i].id))
+            return controllers[i].run(f);
+    return flow_basic(f, id);
+}
 int main(int argc, char **argv)
 {
     struct fixture f;
@@ -51,35 +100,8 @@ int main(int argc, char **argv)
     }
     if (argc == 2 && !strcmp(argv[1], "--check"))
         return flow_check_workload(argc, argv);
-    if (strcmp(name, "host-flow-check")) {
-        if (getenv("FLOW_LAUNCH"))
-            return flow_launch_mock(argc, argv);
-        if (getenv("FLOW_PROGRESS"))
-            return flow_progress_mock(argc, argv);
-        if (getenv("FLOW_TOOLING"))
-            return flow_tooling_mock(argc, argv);
-        if (getenv("FLOW_RELEASE"))
-            return flow_release_mock(argc, argv);
-        if (getenv("FLOW_CI_RUN"))
-            return flow_ci_run_mock(argc, argv);
-        if (getenv("FLOW_CI"))
-            return flow_ci_mock(argc, argv);
-        if (getenv("FLOW_BOARD"))
-            return flow_board_mock(argc, argv);
-        if (getenv("FLOW_MEASURE"))
-            return flow_measure_mock(argc, argv);
-        if (getenv("FLOW_TESTING"))
-            return flow_testing_mock(argc, argv);
-        if (getenv("FLOW_DEPLOY"))
-            return flow_deploy_mock(argc, argv);
-        if (getenv("FLOW_VERSION"))
-            return flow_version_mock(argc, argv);
-        if (getenv("FLOW_WORKER"))
-            return flow_worker_mock(argc, argv);
-        if (getenv("FLOW_SPACE"))
-            return flow_space_mock(argc, argv);
-        return flow_basic_mock(argc, argv);
-    }
+    if (strcmp(name, "host-flow-check"))
+        return mock_command(argc, argv);
     if (argc != 3) {
         fprintf(stderr, "usage: host-flow-check ID ROOT\n");
         return 2;
@@ -96,40 +118,7 @@ int main(int argc, char **argv)
     fx_env("LC_ALL", "C");
     fx_env("FLOW_WORK", f.work);
     fx_env("FLOW_SELF", f.self);
-    if (!strcmp(id, "etude_launch"))
-        ok = flow_launch(&f);
-    else if (!strcmp(id, "progress"))
-        ok = flow_progress(&f);
-    else if (!strcmp(id, "etude_tooling"))
-        ok = flow_tooling(&f);
-    else if (!strcmp(id, "release_resume"))
-        ok = flow_release(&f);
-    else if (!strcmp(id, "ci_run"))
-        ok = flow_ci_run(&f);
-    else if (!strcmp(id, "ci"))
-        ok = flow_ci(&f);
-    else if (!strcmp(id, "board"))
-        ok = flow_board(&f);
-    else if (!strcmp(id, "machine_measure"))
-        ok = flow_measure(&f);
-    else if (!strcmp(id, "test_status"))
-        ok = flow_status(&f);
-    else if (!strcmp(id, "testing_run"))
-        ok = flow_testing(&f);
-    else if (!strcmp(id, "etude_deploy"))
-        ok = flow_deploy(&f);
-    else if (!strcmp(id, "etude_version"))
-        ok = flow_version(&f);
-    else if (!strcmp(id, "tidy"))
-        ok = flow_tidy(&f);
-    else if (!strcmp(id, "leftovers"))
-        ok = flow_leftovers(&f);
-    else if (!strcmp(id, "worker_park"))
-        ok = flow_worker(&f);
-    else if (!strcmp(id, "space"))
-        ok = flow_space(&f);
-    else
-        ok = flow_basic(&f, id);
+    ok = controller(&f, id);
     fx_check(&f, ok, id);
     ok = !f.failed;
     fx_destroy(&f);

@@ -309,6 +309,7 @@ struct release_row {
     const char *record, *board, *state, *writes, *issues, *statuses, *runs, *log, *git, *sites,
         *accept;
 };
+
 static int setup(struct release *r, struct fixture *f)
 {
     char path[4096];
@@ -456,11 +457,11 @@ static int check(struct release *r, int held, const char *label)
 {
     return fx_check(r->f, held, label);
 }
-static int closing_rows(struct release *r)
+static int closed_records(struct release *r)
 {
     struct fixture *f = r->f;
     int ok = 1;
-    char record[9000], *line;
+    char *line;
     run(r, &(struct release_row){.record = r->finished, .board = "ready: yes " H});
     {
         char sum[4096];
@@ -488,6 +489,13 @@ static int closing_rows(struct release *r)
                    !archived(r, "7-") && !called(r, "^(machine|gh)"),
                "void record waits unchanged") &&
          ok;
+    return ok;
+}
+static int closing_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    char record[9000], *line;
+    int ok = closed_records(r);
     snprintf(record, sizeof(record), "%sreported %s\nclosing %s\n", r->finished, T, T);
     run(r, &(struct release_row){.record = record, .board = "ready: yes " H});
     ok = check(r,
@@ -555,13 +563,11 @@ static int new_candidate_rows(struct release *r)
              C);
     return check(r, f->status == 75 && called(r, expected), "new candidate runs every suite") && ok;
 }
-static int install_record_rows(struct release *r)
+static int interrupted_install_records(struct release *r)
 {
     struct fixture *f = r->f;
     char record[9000];
     int ok = 1;
-    unsigned i;
-    const char *writes[] = {"yes", "lost", "unsynced"};
     snprintf(record, sizeof(record), "%sfailed install: rach2-install ended 1: no space\n",
              r->installing);
     run(r, &(struct release_row){.record = record, .board = "ready: yes " C});
@@ -582,6 +588,14 @@ static int install_record_rows(struct release *r)
                    !called(r, "^(machine write|board)"),
                "install reboot does not write machine") &&
          ok;
+    return ok;
+}
+static int install_record_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    int ok = interrupted_install_records(r);
+    unsigned i;
+    const char *writes[] = {"yes", "lost", "unsynced"};
     for (i = 0; i < 3; i++) {
         run(r, &(struct release_row){
                    .record = r->accepted, .board = "ready: yes " H, .writes = writes[i]});

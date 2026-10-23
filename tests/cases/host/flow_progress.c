@@ -65,27 +65,9 @@ static int report(struct fixture *f, const char *label, const char *want, const 
                         (!absent || !strstr(f->out, absent)),
                     label);
 }
-int flow_progress(struct fixture *f)
+static int member_rows(struct fixture *f)
 {
-    char old[300], replacement[100];
-    struct tm tm;
-    time_t fixed;
     int ok = 1;
-    memset(&tm, 0, sizeof(tm));
-    tm.tm_year = 126;
-    tm.tm_mon = 9;
-    tm.tm_mday = 21;
-    tm.tm_hour = 12;
-    fx_env("TZ", "UTC0");
-    tzset();
-    fixed = mktime(&tm);
-    strcpy(old, "report(datetime.datetime.now(datetime.timezone.utc).timestamp())");
-    snprintf(replacement, sizeof(replacement), "report(%lld)", (long long)fixed);
-    if (!fx_replace(flow_source(f, "tools/flow/progress.py"), flow_path(f, "progress.py"), old,
-                    replacement) ||
-        !fx_mock(f, "gh") || !fx_mock(f, "sh"))
-        return 0;
-    fx_env("FLOW_PROGRESS", "1");
     base(f);
     ok = report(f, "phase-idle", "incident: phase #589", NULL, 0) && ok;
     ok = report(f, "dependency", "incident: member #1", NULL, 0) && ok;
@@ -126,6 +108,11 @@ int flow_progress(struct fixture *f)
     base(f);
     issues(f, 0, 1, 90, 0, 0);
     ok = report(f, "nonmember", NULL, "member #90", 0) && ok;
+    return ok;
+}
+static int failure_rows(struct fixture *f)
+{
+    int ok = 1;
     base(f);
     issues(f, 0, 1, 4, 0, 0);
     ok = report(f, "unassigned", "unassigned for 3600s", NULL, 0) && ok;
@@ -161,6 +148,31 @@ int flow_progress(struct fixture *f)
     base(f);
     data(f, "opened", "[[],[]]");
     ok = report(f, "changed-member", NULL, NULL, 1) && ok;
+    return ok;
+}
+int flow_progress(struct fixture *f)
+{
+    char old[300], replacement[100];
+    struct tm tm;
+    time_t fixed;
+    int ok;
+    memset(&tm, 0, sizeof(tm));
+    tm.tm_year = 126;
+    tm.tm_mon = 9;
+    tm.tm_mday = 21;
+    tm.tm_hour = 12;
+    fx_env("TZ", "UTC0");
+    tzset();
+    fixed = mktime(&tm);
+    strcpy(old, "report(datetime.datetime.now(datetime.timezone.utc).timestamp())");
+    snprintf(replacement, sizeof(replacement), "report(%lld)", (long long)fixed);
+    if (!fx_replace(flow_source(f, "tools/flow/progress.py"), flow_path(f, "progress.py"), old,
+                    replacement) ||
+        !fx_mock(f, "gh") || !fx_mock(f, "sh"))
+        return 0;
+    fx_env("FLOW_PROGRESS", "1");
+    ok = member_rows(f);
+    ok = failure_rows(f) && ok;
     fx_env("FLOW_PROGRESS", NULL);
     return ok;
 }

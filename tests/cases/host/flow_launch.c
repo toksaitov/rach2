@@ -187,6 +187,24 @@ static int launch_commands(int argc, char **argv, const char *name)
     }
     return 97;
 }
+static int platform_mock(int argc, char **argv, const char *name)
+{
+    if (!strcmp(name, "uname") && argc == 2 && !strcmp(argv[1], "-s")) {
+        puts("Linux");
+        return 0;
+    }
+    if (!strcmp(name, "id") && argc == 2 && !strcmp(argv[1], "-un")) {
+        puts(*ev("TEST_ACCOUNT") ? ev("TEST_ACCOUNT") : "test");
+        return 0;
+    }
+    if (!strcmp(name, "uname") || !strcmp(name, "id")) {
+        char executable[80];
+        snprintf(executable, sizeof(executable), "/usr/bin/%s", name);
+        execv(executable, argv);
+        return 127;
+    }
+    return launch_commands(argc, argv, name);
+}
 int flow_launch_mock(int argc, char **argv)
 {
     const char *name = strrchr(argv[0], '/');
@@ -218,21 +236,7 @@ int flow_launch_mock(int argc, char **argv)
         execvp(argv[first], argv + first);
         return 127;
     }
-    if (!strcmp(name, "uname") && argc == 2 && !strcmp(argv[1], "-s")) {
-        puts("Linux");
-        return 0;
-    }
-    if (!strcmp(name, "id") && argc == 2 && !strcmp(argv[1], "-un")) {
-        puts(*ev("TEST_ACCOUNT") ? ev("TEST_ACCOUNT") : "test");
-        return 0;
-    }
-    if (!strcmp(name, "uname") || !strcmp(name, "id")) {
-        char executable[80];
-        snprintf(executable, sizeof(executable), "/usr/bin/%s", name);
-        execv(executable, argv);
-        return 127;
-    }
-    r = launch_commands(argc, argv, name);
+    r = platform_mock(argc, argv, name);
     return r;
 }
 int launch_run(struct launch_fixture *u, const char *const argv[], int status)

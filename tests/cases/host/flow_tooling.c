@@ -62,6 +62,7 @@ struct qemu {
     char console[4096], channel[4096], seed[4096], job[4096];
     unsigned serials;
 };
+
 static void option(const char *text, const char *key, char *out, size_t size)
 {
     const char *at = strstr(text, key);
@@ -76,6 +77,34 @@ static void option(const char *text, const char *key, char *out, size_t size)
         n = size - 1;
     memcpy(out, at, n);
     out[n] = 0;
+}
+static int qemu_devices(struct qemu *q, int argc, char **argv)
+{
+    int i;
+    for (i = 1; i < argc; i++)
+        if (!strcmp(argv[i], "-device") && i + 1 < argc &&
+            !strncmp(argv[i + 1], "virtio-blk-pci,", 15)) {
+            char id[80], serial[80];
+            unsigned j;
+            option(argv[++i], "drive=", id, sizeof(id));
+            option(argv[i], "serial=", serial, sizeof(serial));
+            for (j = 0; j < q->count && strcmp(q->drives[j].id, id); j++) {
+            }
+            if (j == q->count)
+                return 0;
+            if (!strcmp(serial, "etude-job"))
+                snprintf(q->job, sizeof(q->job), "%s", q->drives[j].file);
+            else if (!strncmp(serial, "etude-d", 7)) {
+                char key[100];
+                unsigned n = (unsigned)atoi(serial + 7);
+                snprintf(key, sizeof(key), "ETUDE_DISK%u", n);
+                fx_env(key, q->drives[j].file);
+                if (n > q->serials)
+                    q->serials = n;
+            } else if (!*serial && strcmp(id, "root"))
+                snprintf(q->seed, sizeof(q->seed), "%s", q->drives[j].file);
+        }
+    return 1;
 }
 static int qemu_arguments(struct qemu *q, int argc, char **argv)
 {
@@ -103,29 +132,8 @@ static int qemu_arguments(struct qemu *q, int argc, char **argv)
             snprintf(*q->console ? q->channel : q->console, 4096, "%s", file + 5);
         }
     }
-    for (i = 1; i < argc; i++)
-        if (!strcmp(argv[i], "-device") && i + 1 < argc &&
-            !strncmp(argv[i + 1], "virtio-blk-pci,", 15)) {
-            char id[80], serial[80];
-            unsigned j;
-            option(argv[++i], "drive=", id, sizeof(id));
-            option(argv[i], "serial=", serial, sizeof(serial));
-            for (j = 0; j < q->count && strcmp(q->drives[j].id, id); j++) {
-            }
-            if (j == q->count)
-                return 0;
-            if (!strcmp(serial, "etude-job"))
-                snprintf(q->job, sizeof(q->job), "%s", q->drives[j].file);
-            else if (!strncmp(serial, "etude-d", 7)) {
-                char key[100];
-                unsigned n = (unsigned)atoi(serial + 7);
-                snprintf(key, sizeof(key), "ETUDE_DISK%u", n);
-                fx_env(key, q->drives[j].file);
-                if (n > q->serials)
-                    q->serials = n;
-            } else if (!*serial && strcmp(id, "root"))
-                snprintf(q->seed, sizeof(q->seed), "%s", q->drives[j].file);
-        }
+    if (!qemu_devices(q, argc, argv))
+        return 0;
     return *q->console && *q->channel && fx_text(q->console, "") && fx_text(q->channel, "");
 }
 static int seed(struct qemu *q)
@@ -284,6 +292,7 @@ struct tooling {
     struct fixture *f;
     char recipe[4096], cache[4096];
 };
+
 static int setup(struct tooling *t, struct fixture *f)
 {
     char target[4096], image[1000], hex[65];

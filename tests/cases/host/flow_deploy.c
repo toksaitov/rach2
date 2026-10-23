@@ -173,6 +173,35 @@ static int uname_mock(int argc, char **argv)
     execv(argv[0], argv);
     return 127;
 }
+static int cygpath_mock(int argc, char **argv)
+{
+    if (argc != 3)
+        return 1;
+    if (!strcmp(argv[1], "-u") && !strcmp(argv[2], "C:\\Users\\fix\\AppData\\Local"))
+        puts(dp("appdata"));
+    else if (!strcmp(argv[1], "-u") && !strcmp(argv[2], "C:\\Program Files"))
+        puts(dp("programfiles"));
+    else if (!strcmp(argv[1], "-m") &&
+             strstr(argv[2], "/programfiles/qemu/share/edk2-x86_64-code.fd"))
+        puts("C:/Program Files/qemu/share/edk2-x86_64-code.fd");
+    else if (!strcmp(argv[1], "-m") && argv[2][0] == '/')
+        puts(argv[2]);
+    else
+        return 1;
+    return 0;
+}
+static int id_mock(int argc, char **argv)
+{
+    if (argc != 2)
+        return 1;
+    if (!strcmp(argv[1], "-u"))
+        puts("1000");
+    else if (!strcmp(argv[1], "-un"))
+        puts("fixuser");
+    else
+        return 1;
+    return 0;
+}
 int flow_deploy_mock(int argc, char **argv)
 {
     const char *name = strrchr(argv[0], '/');
@@ -184,33 +213,10 @@ int flow_deploy_mock(int argc, char **argv)
         return flow_version_mock(argc, argv);
     if (!strcmp(name, "uname"))
         return uname_mock(argc, argv);
-    if (!strcmp(name, "cygpath")) {
-        if (argc != 3)
-            return 1;
-        if (!strcmp(argv[1], "-u") && !strcmp(argv[2], "C:\\Users\\fix\\AppData\\Local"))
-            puts(dp("appdata"));
-        else if (!strcmp(argv[1], "-u") && !strcmp(argv[2], "C:\\Program Files"))
-            puts(dp("programfiles"));
-        else if (!strcmp(argv[1], "-m") &&
-                 strstr(argv[2], "/programfiles/qemu/share/edk2-x86_64-code.fd"))
-            puts("C:/Program Files/qemu/share/edk2-x86_64-code.fd");
-        else if (!strcmp(argv[1], "-m") && argv[2][0] == '/')
-            puts(argv[2]);
-        else
-            return 1;
-        return 0;
-    }
-    if (!strcmp(name, "id")) {
-        if (argc != 2)
-            return 1;
-        if (!strcmp(argv[1], "-u"))
-            puts("1000");
-        else if (!strcmp(argv[1], "-un"))
-            puts("fixuser");
-        else
-            return 1;
-        return 0;
-    }
+    if (!strcmp(name, "cygpath"))
+        return cygpath_mock(argc, argv);
+    if (!strcmp(name, "id"))
+        return id_mock(argc, argv);
     if (!strcmp(name, "sudo")) {
         if (argc < 2 || strcmp(argv[1], "-n") || !fx_exists(dp("sudo"))) {
             fputs("sudo: a password is required\n", stderr);

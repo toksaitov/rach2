@@ -116,106 +116,96 @@ static int credential_file(struct fixture *f, const char *path, const char *text
     snprintf(file, sizeof(file), "%s/home/%s", f->work, path);
     return fx_text(file, text);
 }
-static int credentials(struct fixture *f)
+static int credential_files(struct fixture *f, const char *kind, unsigned mode)
 {
-    const char *dummy = "rach2-dummy-antigravity-token-00000000",
-               *gh = "gho_dummy_github_token_00000000";
-    char file[4096], token[200], line[5000], digest[65], path[300];
-    unsigned mode, i, j;
+    const char *gh = "gho_dummy_github_token_00000000";
+    char file[4096], path[300], token[200], line[5000];
+    unsigned i;
     int ok = 1;
-    struct sha256 hash;
-    unsigned char bytes[32];
-    sha256_init(&hash);
-    sha256_update(&hash, (const unsigned char *)dummy, strlen(dummy));
-    sha256_final(&hash, bytes);
-    for (i = 0; i < 32; i++)
-        snprintf(digest + i * 2, 3, "%02x", bytes[i]);
-    if (!credential_file(f, credential_paths[2], dummy))
-        return 0;
-    guest(f, "credentials", "lenovo", NULL, NULL);
-    snprintf(file, sizeof(file), "%s/home/%s", f->work, credential_paths[2]);
-    snprintf(line, sizeof(line), "%s %s\n", file, digest);
-    ok = fx_check(f, !f->status && strstr(f->out, line), "antigravity digest") && ok;
-    unlink(file);
-    guest(f, "credentials", "lenovo", NULL, NULL);
-    snprintf(line, sizeof(line), "%s missing\n", file);
-    ok = fx_check(f, !f->status && strstr(f->out, line), "antigravity absence") && ok;
-    for (mode = 0; mode < 2; mode++) {
-        const char *kind = mode ? "qemu" : "lenovo";
-        for (i = 0; i < 4; i++) {
-            snprintf(path, sizeof(path), mode ? "rach2-accept/keys/%s" : "%s",
-                     mode ? agents[i] : credential_paths[i]);
-            snprintf(token, sizeof(token), "dummy_%s_token_00000000000000", agents[i]);
-            if (!credential_file(f, path, token) || !credential_file(f, ".config/gh/hosts.yml", gh))
-                return 0;
-            guest(f, "credentials", kind, agents[i], NULL);
-            snprintf(file, sizeof(file), "%s/home/%s", f->work, path);
-            ok = fx_check(f,
-                          !f->status && !strstr(f->out, " missing") && strstr(f->out, file) &&
-                              strstr(f->out, "/.config/gh/hosts.yml ") &&
-                              fx_regex(f->out, "^[^\n]+\n[^\n]+\n$"),
-                          "selected files") &&
-                 ok;
-            unlink(file);
-            guest(f, "credentials", kind, agents[i], NULL);
-            snprintf(line, sizeof(line), "%s missing\n", file);
-            ok = fx_check(f, !f->status && strstr(f->out, line), "selected missing token") && ok;
-            snprintf(file, sizeof(file), "%s/home/.config/gh/hosts.yml", f->work);
-            unlink(file);
-            guest(f, "credentials", kind, agents[i], NULL);
-            ok = fx_check(f, !f->status && strstr(f->out, "/.config/gh/hosts.yml missing\n"),
-                          "selected missing github") &&
-                 ok;
-        }
-        for (i = 0; i < 4; i++) {
-            snprintf(path, sizeof(path), mode ? "rach2-accept/keys/%s" : "%s",
-                     mode ? agents[i] : credential_paths[i]);
-            snprintf(token, sizeof(token), "dummy_%s_token_00000000000000", agents[i]);
-            if (!credential_file(f, path, token))
-                return 0;
-        }
-        if (!credential_file(f, ".config/gh/hosts.yml", gh))
+    for (i = 0; i < 4; i++) {
+        snprintf(path, sizeof(path), mode ? "rach2-accept/keys/%s" : "%s",
+                 mode ? agents[i] : credential_paths[i]);
+        snprintf(token, sizeof(token), "dummy_%s_token_00000000000000", agents[i]);
+        if (!credential_file(f, path, token) || !credential_file(f, ".config/gh/hosts.yml", gh))
             return 0;
-        for (i = 0; i < 4; i++) {
-            text_input(f, "clean");
-            guest(f, "secrets", kind, agents[i], flow_path(f, "input"));
-            ok = fx_check(f, !f->status && !strcmp(f->out, "0 of 2 strings\n"), "selected clean") &&
-                 ok;
-            guest(f, "filtered", kind, agents[i], NULL);
-            ok = fx_check(f, !f->status && !strcmp(f->out, "0 of 2 strings\n"),
-                          "selected filtered") &&
-                 ok;
-            for (j = 0; j < 3; j++) {
-                if (j == 0)
-                    snprintf(token, sizeof(token), "dummy_%s_token_00000000000000", agents[i]);
-                if (j == 1)
-                    snprintf(token, sizeof(token), "%s", gh);
-                if (j == 2)
-                    snprintf(token, sizeof(token), "dummy_%s_token_00000000000000",
-                             agents[(i + 1) % 4]);
-                text_input(f, token);
-                guest(f, "secrets", kind, agents[i], flow_path(f, "input"));
-                ok = fx_check(f,
-                              !f->status &&
-                                  !strcmp(f->out, j == 2 ? "0 of 2 strings\n" : "1 of 2 strings\n"),
-                              "selected scan") &&
-                     ok;
-            }
-        }
+        guest(f, "credentials", kind, agents[i], NULL);
+        snprintf(file, sizeof(file), "%s/home/%s", f->work, path);
+        ok = fx_check(f,
+                      !f->status && !strstr(f->out, " missing") && strstr(f->out, file) &&
+                          strstr(f->out, "/.config/gh/hosts.yml ") &&
+                          fx_regex(f->out, "^[^\n]+\n[^\n]+\n$"),
+                      "selected files") &&
+             ok;
+        unlink(file);
+        guest(f, "credentials", kind, agents[i], NULL);
+        snprintf(line, sizeof(line), "%s missing\n", file);
+        ok = fx_check(f, !f->status && strstr(f->out, line), "selected missing token") && ok;
+        snprintf(file, sizeof(file), "%s/home/.config/gh/hosts.yml", f->work);
+        unlink(file);
+        guest(f, "credentials", kind, agents[i], NULL);
+        ok = fx_check(f, !f->status && strstr(f->out, "/.config/gh/hosts.yml missing\n"),
+                      "selected missing github") &&
+             ok;
+    }
+    return ok;
+}
+static int credential_scans(struct fixture *f, const char *kind, unsigned mode)
+{
+    const char *gh = "gho_dummy_github_token_00000000";
+    char path[300], token[200];
+    unsigned i, j;
+    int ok = 1;
+    for (i = 0; i < 4; i++) {
+        snprintf(path, sizeof(path), mode ? "rach2-accept/keys/%s" : "%s",
+                 mode ? agents[i] : credential_paths[i]);
+        snprintf(token, sizeof(token), "dummy_%s_token_00000000000000", agents[i]);
+        if (!credential_file(f, path, token))
+            return 0;
+    }
+    if (!credential_file(f, ".config/gh/hosts.yml", gh))
+        return 0;
+    for (i = 0; i < 4; i++) {
         text_input(f, "clean");
-        guest(f, "secrets", kind, NULL, flow_path(f, "input"));
-        ok =
-            fx_check(f, !f->status && !strcmp(f->out, "0 of 5 strings\n"), "all credentials") && ok;
-        {
-            const char *a[] = {"/bin/bash", flow_source(f, "tests/system/accept/agents_guest.sh"),
-                               "secrets",   kind,
-                               "claude",    "agy",
-                               NULL};
-            fx_run(f, a, f->work, NULL, flow_path(f, "input"));
-            ok = fx_check(f, !f->status && !strcmp(f->out, "0 of 3 strings\n"), "selected pair") &&
+        guest(f, "secrets", kind, agents[i], flow_path(f, "input"));
+        ok = fx_check(f, !f->status && !strcmp(f->out, "0 of 2 strings\n"), "selected clean") && ok;
+        guest(f, "filtered", kind, agents[i], NULL);
+        ok = fx_check(f, !f->status && !strcmp(f->out, "0 of 2 strings\n"), "selected filtered") &&
+             ok;
+        for (j = 0; j < 3; j++) {
+            if (j == 0)
+                snprintf(token, sizeof(token), "dummy_%s_token_00000000000000", agents[i]);
+            if (j == 1)
+                snprintf(token, sizeof(token), "%s", gh);
+            if (j == 2)
+                snprintf(token, sizeof(token), "dummy_%s_token_00000000000000",
+                         agents[(i + 1) % 4]);
+            text_input(f, token);
+            guest(f, "secrets", kind, agents[i], flow_path(f, "input"));
+            ok = fx_check(f,
+                          !f->status &&
+                              !strcmp(f->out, j == 2 ? "0 of 2 strings\n" : "1 of 2 strings\n"),
+                          "selected scan") &&
                  ok;
         }
     }
+    text_input(f, "clean");
+    guest(f, "secrets", kind, NULL, flow_path(f, "input"));
+    ok = fx_check(f, !f->status && !strcmp(f->out, "0 of 5 strings\n"), "all credentials") && ok;
+    {
+        const char *a[] = {"/bin/bash", flow_source(f, "tests/system/accept/agents_guest.sh"),
+                           "secrets",   kind,
+                           "claude",    "agy",
+                           NULL};
+        fx_run(f, a, f->work, NULL, flow_path(f, "input"));
+        ok = fx_check(f, !f->status && !strcmp(f->out, "0 of 3 strings\n"), "selected pair") && ok;
+    }
+    return ok;
+}
+static int credential_single(struct fixture *f, const char *dummy)
+{
+    char file[4096];
+    unsigned mode;
+    int ok = 1;
     /* The original single-token rows also verify redact's exact output. */
     fx_remove(flow_path(f, "home"));
     fx_mkdir(flow_path(f, "home"));
@@ -240,6 +230,37 @@ static int credentials(struct fixture *f)
     }
     return ok;
 }
+static int credentials(struct fixture *f)
+{
+    const char *dummy = "rach2-dummy-antigravity-token-00000000";
+    char file[4096], line[5000], digest[65];
+    unsigned mode, i;
+    int ok = 1;
+    struct sha256 hash;
+    unsigned char bytes[32];
+    sha256_init(&hash);
+    sha256_update(&hash, (const unsigned char *)dummy, strlen(dummy));
+    sha256_final(&hash, bytes);
+    for (i = 0; i < 32; i++)
+        snprintf(digest + i * 2, 3, "%02x", bytes[i]);
+    if (!credential_file(f, credential_paths[2], dummy))
+        return 0;
+    guest(f, "credentials", "lenovo", NULL, NULL);
+    snprintf(file, sizeof(file), "%s/home/%s", f->work, credential_paths[2]);
+    snprintf(line, sizeof(line), "%s %s\n", file, digest);
+    ok = fx_check(f, !f->status && strstr(f->out, line), "antigravity digest") && ok;
+    unlink(file);
+    guest(f, "credentials", "lenovo", NULL, NULL);
+    snprintf(line, sizeof(line), "%s missing\n", file);
+    ok = fx_check(f, !f->status && strstr(f->out, line), "antigravity absence") && ok;
+    for (mode = 0; mode < 2; mode++) {
+        const char *kind = mode ? "qemu" : "lenovo";
+        ok = credential_files(f, kind, mode) && ok;
+        ok = credential_scans(f, kind, mode) && ok;
+    }
+    return credential_single(f, dummy) && ok;
+}
+
 int flow_basic_mock(int argc, char **argv)
 {
     (void)argc;
