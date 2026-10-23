@@ -46,7 +46,7 @@ else
 
 # Source data must not be rebuilt by make's built-in .sh-to-program rule.
 # In particular, tools/ci/site is configuration, not a copy of site.sh.
-.sh:
+%: %.sh
 
 # The architecture (mk/arch.mk): ARCH, and the paths of its build tree
 # (ARCH_BUILD) and of its ported musl (ARCH_MUSL). The host programs under
