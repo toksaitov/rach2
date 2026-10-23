@@ -786,9 +786,13 @@ static int export_selection(struct collection *c, const char *accel)
     o.evidence = c->evidence;
     o.schemas = c->schemas;
     o.record = c->record;
+    o.ledger = c->ledger;
     o.width = c->width;
     o.cpus = c->cpus;
     o.accel = accel;
+    o.wait = 86400;
+    o.seconds = ETUDE_LEGACY_SECONDS;
+    o.kernel = getenv("RACH2_KERNEL");
     o.prepared = 1;
     o.stop_on_fail = c->stop_on_fail;
     memcpy(o.cap, c->cap, sizeof(o.cap));
