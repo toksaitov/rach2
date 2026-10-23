@@ -1,15 +1,15 @@
 /*
  * memory_scenario.c: the scenario of machine.memory and machine.bigmem, the
  * kernel's account of physical memory. Cases `size-MIB` boot the test image
- * with MIB MiB and check the four numbers of the memory report against the
- * map the kernel printed and the size QEMU gave, and bigmem's `size-8192`
- * compares memprobe's MemTotal with them too; `memprobe-MIB` and
- * `framefail-MIB` run memprobe at the two ends of the range and past 4 GiB,
- * `framefail` with every frame allocation of a fork and an exec failed in
- * turn; `boundary-73728` boots 72 GiB without 1 GiB pages, past the direct
- * map's 64 GiB; `strings` sweeps the kernel's copy, fill and move routines;
- * `refused` boots the recovery kernel in 8 MiB, which it must refuse by name;
- * and `stackoverrun-fork` and `stackoverrun-boot` run a kernel stack out.
+ * with MIB MiB and check the four numbers of the memory report against the map
+ * the kernel printed and the size QEMU gave, and bigmem's `size-8192` compares
+ * memprobe's MemTotal with them too; `memprobe-MIB` runs memprobe at the two
+ * ends of the range and past 4 GiB, and `framefail-64` with every frame
+ * allocation of a fork and an exec failed in turn; `boundary-73728` boots
+ * 72 GiB without 1 GiB pages, past the direct map's 64 GiB; `strings` sweeps
+ * the kernel's copy, fill and move routines; `refused` boots the recovery
+ * kernel in 8 MiB, which it must refuse by name; and `stackoverrun-fork` and
+ * `stackoverrun-boot` run a kernel stack out.
  */
 #include <inttypes.h>
 #include <stdio.h>

@@ -212,13 +212,13 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
 # which etude runs, and have no target here. The 72 GiB case boots only where
 # the site's policy has the line `boundary_lazy bigmem-boundary-v1`, and
 # elsewhere ends incomplete before its machine starts.
-# `tests/run memory`: the kernel's account of physical memory at five sizes,
-# memprobe and frame allocations failed at the two ends of the range, the
-# string routines swept, a machine of 8 MiB refused and kernel stacks run
-# out. They are the machine cases of tests/cases/machine.memory.json, which
+# `tests/run memory`: the kernel's account of physical memory at three sizes,
+# memprobe at the two ends of the range and frame allocations failed at the low
+# one, the string routines swept, a machine of 8 MiB refused and kernel stacks
+# run out. They are the machine cases of tests/cases/machine.memory.json, which
 # etude runs, and have no target here. The case of 8 MiB boots the recovery
-# kernel with this copy of its image, whose name does not depend on whether
-# the image carries a key.
+# kernel with this copy of its image, whose name does not depend on whether the
+# image carries a key.
 $(IMAGES_DIR)/memory-test.recovery.krffs: $(RECOVERY_IMAGE)
 	cp $(RECOVERY_IMAGE) $@
 # `tests/run pools`: many pipes, ptys, sockets and processes live at once,
