@@ -778,6 +778,13 @@ build/tests/cases/host/usbchecks: tests/cases/host/usbchecks.c \
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    $(ETUDE_PLATFORM_FLAGS) $(ETUDE_PLATFORM_LIBS)
 
+build/tests/cases/host/krffscheck: tests/cases/host/krffscheck.c \
+    tests/cases/host/native.c tests/cases/host/native.h \
+    $(filter-out tests/cases/host/host.c tools/etude/json.c utils/sha256.c,$(ETUDE_HOSTCASE_SRC))
+	@mkdir -p $(@D)
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	    $(ETUDE_PLATFORM_FLAGS) $(ETUDE_PLATFORM_LIBS)
+
 # The host's side of the network cases' connections that are not logins: a
 # wait for the guest's SSH server, and the ssh cases' flood.
 build/tests/cases/machine/sshpeer: tests/cases/machine/sshpeer.c
