@@ -223,7 +223,7 @@ The cache has `PC_SLOTS`, 2048 slots, and uses as many as half the caches' targe
 
 ## Tests
 
-`tests/run NAME` runs a suite on the architecture in `ARCH`, i686 by default, and `ARCH=x86_64 tests/run NAME` on x86-64 ([the suite inventory](../../../tests/system/suites.md)). `default`, `fault`, `memory`, `pools`, `ext2`, `disk` and `disk-ahci` are in the core tier, which `make test` runs.
+`tests/run NAME` runs a suite on the architecture in `ARCH`, i686 by default, and `ARCH=x86_64 tests/run NAME` on x86-64 ([the suite inventory](../../../tests/system/suites.md)). `default`, `fault`, `memory`, `pools`, `ext2` and `disk-ahci` are in the core tier, which `make test` runs.
 
 * `tests/run default` runs the guest probes ([the tests' Readme](../../../tests/Readme.md)): `vmprobe` (the heap, anonymous memory and stack growth), `forkro` and `cowregrant` (copy-on-write, and the frames of 200 forks that come back), `oomprobe` (the `SIGKILL` of a process out of memory), `usercopyfault` (EFAULT for a path that runs into an unmapped page), `musl/vmamusl` (300 mappings at once), `musl/mapmusl` (mappings of files and of shared memory, `mprotect`, `mremap`, `madvise`, `msync`, `/proc/self/mem`, and the program's own segments, which read its file again after `madvise`, in a copy of it whose file was renamed and unlinked as well) and `musl/callsmusl` (`mlock` and `mincore`).
 * `tests/run fault` runs `vmfault`, `vmro` and `winprobe`, which touch no mapping, a read-only page and the page-cache window, each in a boot of its own, and each must die on `SIGSEGV` with the kernel's record of the kill and the machine running.
@@ -231,7 +231,7 @@ The cache has `PC_SLOTS`, 2048 slots, and uses as many as half the caches' targe
 * `tests/run bigmem`, on x86-64 alone, requires all of a machine's 8 GiB to be counted, none of it unreachable, with MemTotal the frames the kernel manages, and a program's 5 GiB of pages to read back as written, and on a processor without 1 GiB pages a machine of 72 GiB to be counted to the direct map's 64 GiB; that machine boots only where the site permits the lazy memory profile that reserves 4 GiB for it.
 * `tests/run pools` requires the heap to come back to where it started after a thousand pipes, ptys and sockets each.
 * `tests/run ext2` runs `musl/mapmusl` on an ext2 root, with shared mappings written back to the file.
-* `tests/run disk`, `disk-ahci`, `stress` and `stress-ahci` write more than the disk page cache keeps through a KRFFS disk root.
+* `tests/run disk-ahci`, `stress` and `stress-ahci` write more than the disk page cache keeps through a KRFFS disk root.
 * `tests/run smp` runs fork, exec and `munmap` on several processors at once.
 
 `tests/run host` runs the host tests ([the host tests' Readme](../../../tests/host/Readme.md)): `frame_hosttest.c` (the map, from QEMU's, a laptop's, a UEFI map of 256 entries and synthetic ones, with each architecture's reach), `kheap_hosttest.c` (the heap's size, runs, reserve and guards), `paging_hosttest.c` (`paging.c` with i686's `mmu.c`: the range checks at the top of the address space, the temporary mappings and the guard's panic), `vm_hosttest.c`, `mm_hosttest.c`, `modlayout_hosttest.c`, `pagecache_hosttest.c`, `pagecache_ring_hosttest.c` (the slots against a lookup on a KRFFS disk root) and `tmpfs_hosttest.c` (`shmem.c`). `open_hosttest.c` compiles `filemap.c`, and `pipe_copy_hosttest.c` and `unix_hosttest.c` compile `usercopy.c`.

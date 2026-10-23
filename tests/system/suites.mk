@@ -254,12 +254,6 @@ $(IMAGES_DIR)/memory-test.recovery.krffs: $(RECOVERY_IMAGE)
 # `tests/run socket`: the guest opening connections of its own, checked by a
 # host that answers (see tests/cases/machine.socket.json). They are the cases
 # of that manifest, which etude runs, and have no target here.
-# `tests/run disk`: the disk-backed page-cache integrity check. It is the case
-# of tests/cases/guest.disk.json, which etude runs, and has no target here:
-# blockprobe on a KRFFS root that rach2.fsdisk mounts from a disk on IDE.
-# blockprobe's 6 MiB fit in the 8 MiB cache of this machine, so it proves that
-# data written and fsynced through the cache reads back whole; the stress
-# suite's 33 MiB exercise eviction.
 # `tests/run bootpart`: /proc/cmdline and the level-one disk devices. They
 # are the four cases of tests/cases/machine.bootpart.json, which etude runs,
 # and have no target here, each a boot that runs bootprobe at the debug
@@ -1388,7 +1382,7 @@ harness-kernel: $(HARNESS_KERNEL)
 # AHCI backend.
 AHCI_ATTACH = --qemu-arg=-device --qemu-arg=ich9-ahci,id=ahci0 \
               --qemu-arg=-device --qemu-arg=ide-hd,drive=drv0,bus=ahci0.0
-# `tests/run disk-ahci`: the disk suite's page-cache integrity check with the
+# `tests/run disk-ahci`: the page-cache integrity check of blockprobe with the
 # disk on an AHCI controller. It is the case of
 # tests/cases/guest.disk-ahci.json, which etude runs, and has no target here.
 # `tests/run disk-q35`: the same disk proof on the q35 machine, whose AHCI

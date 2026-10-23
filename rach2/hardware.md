@@ -114,7 +114,7 @@ There is no wireless driver, and the stack is IPv4 alone. On i686 an e1000 or RT
 | `pc` without the 8042 | `-machine pc,i8042=off` | USB alone | `usb` |
 | Processors | `-cpu max`, `-cpu qemu64`, `-smp 2` and `4` | the platform, the FPU, the random generator | every suite, `fpu`, `smp` |
 | UEFI firmware | OVMF | GRUB's EFI image, the framebuffer console | `uefi`, `installer` |
-| IDE disk | `-drive if=ide`, `ide-hd` | ATA | `disk`, `persist`, `bus` |
+| IDE disk | `-drive if=ide`, `ide-hd` | ATA | `persist`, `crash`, `bus` |
 | AHCI disk | `ich9-ahci` with `ide-hd` | AHCI | `disk-ahci`, `disks`, `queue` |
 | NVMe disk | `nvme` | NVMe | `uefi` |
 | USB controller and devices | `qemu-xhci`, `usb-kbd`, `usb-mouse`, `usb-hub`, `usb-storage`, `usb-bot` with `scsi-hd` | xHCI, HID, hub, mass storage | `usb`, `usbdisk` |

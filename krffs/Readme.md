@@ -90,7 +90,7 @@ The images are written under `build/images/`, or `build/x86_64/images/` for x86-
 | `grub-test` | `grub-test.ext2`, for `grub` and `bootorder` | os-real and two marked GRUB cores; `grub` stops if the other lines differ from os-real's |
 | `fs-demo` | `fs-demo/ext2.img`, `fs-demo/krffs.img` | `demo/hello.txt` |
 | `disk-test` | disks of `crash` and the other disk suites | probes the debug shell runs from a disk root |
-| `etude-disk` | the private disks of etude's guest cases on a KRFFS root on disk: `disk`, `disk-ahci`, `disk-q35`, `stress`, `stress-ahci`, `fdlock`, and `queue`'s root with a FAT32 partition added | `etude-guest`, `blockprobe`, `stressprobe`, `ahciprobe`, and the descriptor and mount probes `fdstale`, `bootprobe` and `procprobe` |
+| `etude-disk` | the private disks of etude's guest cases on a KRFFS root on disk: `disk-ahci`, `disk-q35`, `stress`, `stress-ahci`, `fdlock`, and `queue`'s root with a FAT32 partition added | `etude-guest`, `blockprobe`, `stressprobe`, `ahciprobe`, and the descriptor and mount probes `fdstale`, `bootprobe` and `procprobe` |
 | `procfiles-extra` | the additional staging in procfiles' copy of os-real | `procfilesmusl`, which judges the installed applets |
 | `persist-test` | disks of `persist`, `persist-ahci` | `persistprobe` |
 | `cred-persist-test` | the disk of `cred-persist` | `creddisk` and the two files it replaces |

@@ -10,7 +10,7 @@
  * equal is removed.
  *
  * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
- * names, guest.disk.blockprobe without it: `written`, every file written
+ * names, guest.disk-ahci.blockprobe without it: `written`, every file written
  * whole and synced; `read`, every file read whole; and `intact`, every byte
  * read equal to its pattern. Beside them it prints "BLOCKPROBE OK" and exits
  * 0, or prints "BLOCKPROBE FAIL: " and the step, and exits 1, which the bus
@@ -159,7 +159,7 @@ void probe_main(unsigned long *sp)
     size_t i, bad_at = 0;
     int fd;
 
-    report_begin(report_case(envp, "guest.disk.blockprobe"));
+    report_begin(report_case(envp, "guest.disk-ahci.blockprobe"));
     report_plan("written");
     report_plan("read");
     report_plan("intact");

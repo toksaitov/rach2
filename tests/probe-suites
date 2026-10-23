@@ -16,7 +16,7 @@ tcptest socket
 vmfault fault
 vmro fault
 ttyprobe console
-blockprobe disk
+blockprobe disk-ahci
 bootprobe bootpart
 persistprobe persist
 stressprobe stress

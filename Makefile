@@ -1170,7 +1170,7 @@ $(TEST_IMAGE): $(DEMO_CREDS) krffs/manifests/test.manifest $(MANIFEST_DEPS_test)
 	$(MKIMAGE) krffs/manifests/test.manifest $@ 13 5120
 
 # The disk of etude's cases that boot a KRFFS root on disk, such as those of
-# tests/cases/guest.disk.json: 64 MiB with a KRFFS partition of 48, of which
+# tests/cases/guest.stress.json: 64 MiB with a KRFFS partition of 48, of which
 # each case boots a private copy. A case's preparation names it as a goal.
 $(ETUDE_DISK): krffs/manifests/etude-disk.manifest $(MANIFEST_DEPS_etude_disk) $(MKDISK) $(IMAGE_TOOLS) | preflight krffs tests tools/etude/guest
 	$(MKDISK) krffs/manifests/etude-disk.manifest $@ 64 48

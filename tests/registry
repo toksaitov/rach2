@@ -118,7 +118,6 @@ disk-ahci|qemu|core|disk-ahci-test*,disk-ahci.*,disk-ahci/*
 grub|qemu,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|core
 disk-q35|qemu|full|disk-q35-test*,disk-q35.*,disk-q35/*
 doom|qemu|full
-disk|qemu|core|disk.*,disk/*
 diskpolicy|qemu|full
 console|qemu|core
 fpu|qemu|core

@@ -10,7 +10,7 @@
 file 0755 /etude-guest build/tools/etude/guest/etude-guest
 dir 1777 /tmp
 
-# blockprobe, the program of guest.disk, guest.disk-ahci and guest.disk-q35:
+# blockprobe, the program of guest.disk-ahci, guest.disk-q35 and guest.queue:
 # files larger together than the page cache's share of the disk, written,
 # synced and read back.
 file 0755 /blockprobe build/tests/blockprobe
