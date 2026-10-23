@@ -10,6 +10,7 @@
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
  * host-deps: tools/etude/posix/process.c utils/sha256.c
  * host-cflags: -I tools/etude/include -Wall -Wextra -Werror
+ * host-tools: etude-workload
  * host-alone: a run must start and write within a deadline of 300 ms
  *
  * Speaking frames itself, the test requires the responder to refuse a hello of
@@ -50,6 +51,7 @@
 #include "compat/pathmax_host.h"
 #include "compat/fixdir_host.c"
 #include "compat/directory_host.h"
+#include "compat/workload_host.h"
 #include "etude/remote.h"
 
 static int fails;
@@ -76,18 +78,8 @@ static char self[PATH_MAX];
 /* The case's program: it says its PID, counts its runs in the file its
  * first argument names, writes a file in its workspace, and exits with its
  * second argument, or waits to be ended when that is `wait`. */
-static const char prog[] = "#!/bin/sh\n"
-                           "echo \"pid=$$\"\n"
-                           "echo run >> \"$1\"\n"
-                           "echo 'to stderr' >&2\n"
-                           "echo made > out.txt\n"
-                           "case $2 in\n"
-                           "wait) echo waiting; exec sleep 60 ;;\n"
-                           "esac\n"
-                           "i=0\n"
-                           "while [ $i -lt 100 ]; do echo \"line $i of the output\"; i=$((i + 1)); "
-                           "done\n"
-                           "exit \"$2\"\n";
+static char *prog;
+static size_t prog_size;
 
 /** Write the SHA-256 of `n` bytes as hexadecimal into `hex`. */
 static void sha_hex(const void *p, size_t n, char hex[65])
@@ -160,20 +152,21 @@ static const char *invocation(const char *run, const char *attempt, const char *
     static char out[4096];
     char sha[65], tok[17];
 
-    sha_hex(prog, strlen(prog), sha);
+    sha_hex(prog, prog_size, sha);
     token(attempt, tok);
     fix_format(out, sizeof(out),
                "{\"schema_version\": 1, \"run_id\": \"%s\", \"attempt_id\": \"%s\", "
                "\"attempt_token\": \"%s\", \"case_id\": \"host.etude.remote\", "
                "\"program\": \"prog.sh\", \"arguments\": [\"%s\", \"%s\"], "
-               "\"environment\": {\"PATH\": \"/bin:/usr/bin\", \"HOME\": \"${WORKSPACE}\"}, "
+               "\"environment\": {\"PATH\": \"/bin:/usr/bin\", \"HOME\": \"${WORKSPACE}\", "
+               "\"ETUDE_WORKLOAD_ROLE\": \"remote\"}, "
                "\"stdin\": null, \"role\": \"%s\", "
                "\"files\": [{\"name\": \"prog.sh\", \"sha256\": \"%s\", \"size_bytes\": %lu, "
                "\"mode\": \"0755\"}], "
                "\"fixtures\": [{\"fixture\": \"%s\", \"given\": []}], "
                "\"deadline_us\": 30000000, \"grace_us\": 1000000, "
                "\"output_max_bytes\": 65536}",
-               run, attempt, tok, counter, code, role, sha, (unsigned long)strlen(prog), fixture);
+               run, attempt, tok, counter, code, role, sha, (unsigned long)prog_size, fixture);
     return out;
 }
 
@@ -313,16 +306,20 @@ static void peer_put(struct peer *p, const char *cmd, const char *name, const ch
                      const char *sha)
 {
     static char b64[1 << 16];
-    char size[24];
+    char size[24], position[24];
+    size_t offset = 0, amount;
     const char *put[] = {cmd, name, size, sha, "0755", NULL};
-    const char *data_f[] = {cmd, "0", b64, NULL};
+    const char *data_f[] = {cmd, position, b64, NULL};
     const char *seal[] = {cmd, NULL};
 
     snprintf(size, sizeof(size), "%lu", (unsigned long)n);
     peer_send(p, ETUDE_CMD_PUT, put);
-    if (n > 0) {
-        wire_base64((const unsigned char *)data, n, b64);
+    while (offset < n) {
+        amount = n - offset < 4096 ? n - offset : 4096;
+        snprintf(position, sizeof(position), "%lu", (unsigned long)offset);
+        wire_base64((const unsigned char *)data + offset, amount, b64);
         peer_send(p, ETUDE_CMD_DATA, data_f);
+        offset += amount;
     }
     peer_send(p, ETUDE_CMD_SEAL, seal);
 }
@@ -391,20 +388,20 @@ static void ledger_store(struct peer *p, const char *run)
     const char *seal[] = {"4", NULL};
     char sha[65], path[PATH_MAX];
 
-    sha_hex(prog, strlen(prog), sha);
-    peer_put(p, "2", "prog.sh", prog, strlen(prog), sha);
+    sha_hex(prog, prog_size, sha);
+    peer_put(p, "2", "prog.sh", prog, prog_size, sha);
     CHECK(peer_recv(p) == 0 && strcmp(p->f.type, ETUDE_EV_STORED) == 0 &&
               strcmp(p->f.field[2], sha) == 0,
           "a whole file is stored");
-    peer_put(p, "2", "prog.sh", prog, strlen(prog), sha);
+    peer_put(p, "2", "prog.sh", prog, prog_size, sha);
     CHECK(peer_recv(p) == 0 && strcmp(p->f.type, ETUDE_EV_STORED) == 0 &&
               strcmp(p->f.field[0], "2") == 0,
           "a repeated put is answered from the ledger");
-    peer_put(p, "2", "prog.sh", prog, strlen(prog), other_sha);
+    peer_put(p, "2", "prog.sh", prog, prog_size, other_sha);
     CHECK(peer_recv(p) == 0 && strcmp(p->f.type, ETUDE_EV_ERROR) == 0 &&
               strcmp(p->f.field[1], ETUDE_ERR_CONFLICT) == 0,
           "a command number reused with other fields is refused");
-    peer_put(p, "3", "bad.sh", prog, strlen(prog), other_sha);
+    peer_put(p, "3", "bad.sh", prog, prog_size, other_sha);
     CHECK(peer_recv(p) == 0 && strcmp(p->f.type, ETUDE_EV_ERROR) == 0 &&
               strcmp(p->f.field[0], "3") == 0 && strcmp(p->f.field[1], ETUDE_ERR_DAMAGED) == 0,
           "content whose digest is not the put's is refused");
@@ -633,8 +630,8 @@ static void test_raw_recovery(void)
         return;
     }
     CHECK(peer_hello(p, run), "recovery");
-    sha_hex(prog, strlen(prog), sha);
-    peer_put(p, "2", "prog.sh", prog, strlen(prog), sha);
+    sha_hex(prog, prog_size, sha);
+    peer_put(p, "2", "prog.sh", prog, prog_size, sha);
     peer_recv(p);
     inv = invocation(run, "raw-recovery-1", "ordinary", "workspace", counter, "wait");
     sha_hex(inv, strlen(inv), isha);
@@ -991,7 +988,7 @@ static void client_row(const struct row *w)
         printf("etude-remote-test: %s: open: %s: %s\n", w->name, etude_remote_status_text(st), why);
         return;
     }
-    st = etude_remote_put(conn, "prog.sh", prog, strlen(prog), "0755");
+    st = etude_remote_put(conn, "prog.sh", prog, prog_size, "0755");
     if (st == ETUDE_REMOTE_OK) {
         inv = invocation(w->name, attempt, "ordinary", "workspace", counter, w->code);
         st = etude_remote_run(conn, inv, strlen(inv), w->deadline_us, &res);
@@ -1175,12 +1172,18 @@ int main(int argc, char **argv)
         printf("etude-remote-test: fail: %s cannot be found\n", argv[0]);
         return 1;
     }
+    prog = host_workload_read(&prog_size);
+    if (prog == NULL) {
+        fputs("etude-remote-test: prepared workload is missing\n", stderr);
+        return 1;
+    }
     signal(SIGPIPE, SIG_IGN);
     test_raw_version();
     test_raw_ledger();
     test_raw_faults();
     test_raw_recovery();
     test_client();
+    free(prog);
     if (fails != 0)
         return 1;
     fix_passed();

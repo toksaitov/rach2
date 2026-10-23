@@ -2,6 +2,7 @@
  * Check tools/etude/serial.c, the controller of etude-guest on a serial
  * console, with frames the test writes itself and with etude-guest on pipes.
  *
+ * host-tools: etude-workload
  * host-deps: tools/etude/serial.c tools/etude/capture.c
  * host-deps: tools/etude/guest/guest.c tools/etude/guest/fixture.c
  * host-deps: tools/etude/guest/wire.c
@@ -56,6 +57,10 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include "compat/workload_host.h"
+
+static char *workload;
+static size_t workload_size;
 
 int etude_guest_main(int argc, char **argv);
 
@@ -161,6 +166,8 @@ static void cleanup(void)
 {
     int i;
 
+    free(workload);
+    workload = NULL;
     for (i = 0; i < nguests; i++)
         if (guests[i] > 0) {
             kill(guests[i], SIGKILL);
@@ -1179,24 +1186,25 @@ static enum etude_serial_status store(struct harness *h, const char *name, const
 
 /** Store program `name` and an invocation of it for attempt `token` with
  * the run `run_id`; the invocation's digest goes to `inv`. 0, or -1. */
-static int prepare(struct harness *h, const char *run_id, const char *name, const char *script,
+static int prepare(struct harness *h, const char *run_id, const char *name, const char *role,
                    const char *token, char inv[65])
 {
     char text[4096], sha[65];
     int n;
 
-    if (store(h, name, script, strlen(script), 0, sha) != ETUDE_SERIAL_DONE)
+    if (store(h, name, workload, workload_size, 0, sha) != ETUDE_SERIAL_DONE)
         return -1;
     n = snprintf(text, sizeof(text),
                  "{\"schema_version\": 1, \"run_id\": \"%s\", \"attempt_id\": \"attempt-%s\", "
                  "\"attempt_token\": \"%s\", \"case_id\": \"host.etude.serial\", "
                  "\"program\": \"%s\", \"arguments\": [], "
-                 "\"environment\": {\"PATH\": \"/bin:/usr/bin\"}, \"stdin\": null, "
+                 "\"environment\": {\"PATH\": \"/bin:/usr/bin\", "
+                 "\"ETUDE_WORKLOAD_ROLE\": \"%s\"}, \"stdin\": null, "
                  "\"role\": \"ordinary\", \"files\": [{\"name\": \"%s\", \"sha256\": \"%s\", "
                  "\"size_bytes\": %zu, \"mode\": \"0755\"}], "
                  "\"fixtures\": [{\"fixture\": \"workspace\", \"given\": []}], "
                  "\"deadline_us\": 60000000, \"grace_us\": 500000, \"output_max_bytes\": 65536}",
-                 run_id, token, token, name, name, sha, strlen(script));
+                 run_id, token, token, name, role, name, sha, workload_size);
     return store(h, "invocation.json", text, (size_t)n, 0, inv) == ETUDE_SERIAL_DONE ? 0 : -1;
 }
 
@@ -1229,10 +1237,9 @@ static int group_gone(long pgid)
 
 /* The programs: a pass with output on both streams, an intended failure,
  * and a program that runs until it is stopped. */
-static const char pass[] = "#!/bin/sh\ni=0\nwhile [ $i -lt 40 ]; do echo \"out line $i\"; "
-                           "i=$((i+1)); done\necho 'to stderr' >&2\n";
-static const char failing[] = "#!/bin/sh\necho broken >&2\nexit 3\n";
-static const char forever[] = "#!/bin/sh\necho ready\nexec sleep 60\n";
+static const char pass[] = "serial-pass";
+static const char failing[] = "serial-fail";
+static const char forever[] = "serial-forever";
 
 /** Give what the pass writes on its standard output. */
 static const char *pass_output(void)
@@ -1458,11 +1465,7 @@ static void check_relay(void)
 {
     static const char run_id[] = "etude-serial-test relay";
     struct harness *h = &H;
-    static char big[4096];
     char inv[65], sha[65], state[600];
-    size_t n;
-    int i;
-
     begin(h, run_id, KEEP, 0);
     h->relay = 1;
     snprintf(state, sizeof(state), "%s/state-relay", work);
@@ -1470,14 +1473,12 @@ static void check_relay(void)
     CHECK(etude_serial_open(h->s, now_us()) == 0 && serve(h, UNTIL_END) &&
               etude_serial_status(h->s) == ETUDE_SERIAL_DONE,
           "through a faulty relay the session opens");
-    n = (size_t)snprintf(big, sizeof(big), "%s", pass);
-    for (i = 0; i < 40; i++)
-        n += (size_t)snprintf(big + n, sizeof(big) - n, "# padding line %d of the program\n", i);
+    CHECK(workload_size >= 4096, "the program needs multiple transfer frames");
     CHECK(etude_serial_status(h->s) == ETUDE_SERIAL_DONE &&
-              store(h, "padded", big, n, 0, sha) == ETUDE_SERIAL_DONE,
+              store(h, "padded", workload, workload_size, 0, sha) == ETUDE_SERIAL_DONE,
           "through a faulty relay a file is stored");
     CHECK(etude_serial_status(h->s) == ETUDE_SERIAL_DONE &&
-              prepare(h, run_id, "padded", big, "00000000000000e1", inv) == 0 &&
+              prepare(h, run_id, "padded", pass, "00000000000000e1", inv) == 0 &&
               run(h, "00000000000000e1", inv, UNTIL_END) && passed(h),
           "through a faulty relay a pass arrives whole and in order");
     note_group(h);
@@ -1575,6 +1576,11 @@ int main(void)
     char path[700];
     FILE *f;
 
+    workload = host_workload_read(&workload_size);
+    if (workload == NULL) {
+        fputs("etude-serial-test: prepared workload is missing\n", stderr);
+        return 2;
+    }
     signal(SIGPIPE, SIG_IGN);
     atexit(cleanup);
     signal(SIGINT, stopped);
