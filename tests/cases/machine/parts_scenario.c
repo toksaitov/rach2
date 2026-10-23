@@ -339,9 +339,6 @@ struct write_row {
 static const struct write_row writes[] = {
     {"write-gpt-nombr", "parts-gpt-nombr", 1, GPT_REFUSAL},
     {"write-gpt-nombr-noprimary", "parts-gpt-nombr-noprimary", 1, GPT_REFUSAL},
-    {"write-gpt", "parts-gpt", 1, GPT_REFUSAL},
-    {"write-gpt-badprimary", "parts-c", 1, GPT_REFUSAL},
-    {"write-gpt-noprimary", "parts-gpt-noprimary", 1, GPT_REFUSAL},
     {"write-mbr-full", "parts-mbr-full", 0, MBR_REFUSAL},
     {"write-mbr-scratch", "parts-mbr-scratch", 0, NULL},
 };

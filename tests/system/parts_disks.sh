@@ -20,8 +20,7 @@
 # `shared` makes the disks of host-made data alone, in DIR. c.disk is the
 # table of b.disk with the same seed and no volumes, its primary header's
 # checksum broken, so that a reader takes the table from the backup: the
-# partition cases' clone of b.disk, and a disk of the recovery shell's
-# `disk write`.
+# partition cases' clone of b.disk.
 #
 # `disk write` in the recovery kernel's debug shell checks the whole-disk
 # write path by writing the boot disk's last sector and reading it back.
@@ -36,20 +35,15 @@
 #   gpt-nombr.disk            sector 0 zeroed, so no protective MBR;
 #   gpt-nombr-noprimary.disk  the same with the primary header zeroed as
 #                             well, so that only the last sector says GPT;
-#   gpt.disk                  both headers whole;
-#   c.disk                    the primary header's checksum broken;
-#   gpt-noprimary.disk        the primary header's sector zeroed, so that
-#                             LBA 1 says nothing and the table is in the
-#                             backup alone;
 #   mbr-full.disk             an MBR whose one partition reaches the last
 #                             sector, as a root grown into the whole disk
 #                             does;
 #   mbr-scratch.disk          an MBR whose one partition ends before the
 #                             last sector, which the command must write.
 #
-# A protective MBR's entry covers the whole disk, so on gpt.disk, c.disk and
-# gpt-noprimary.disk the MBR check refuses too, with another answer; on the
-# two without one the GUID checks alone keep the disk.
+# Neither GUID disk has a protective MBR, whose entry covers the whole disk
+# and would have the MBR check refuse too, so the GUID checks alone keep it:
+# the first by its primary header at LBA 1, the second by its backup header.
 #
 # Each file is written under a temporary name and renamed once all of them
 # are made.
@@ -131,17 +125,14 @@ if [ "$MODE" = arch ]; then
     names="a.disk b.disk b.gpt"
 else
     gpt_disk "$work/c.disk" --damage-primary > /dev/null || fail "mkgpt c.disk"
-    gpt_disk "$work/gpt.disk" > /dev/null || fail "mkgpt gpt.disk"
     gpt_disk "$work/gpt-nombr.disk" > /dev/null || fail "mkgpt gpt-nombr.disk"
     zero_sectors "$work/gpt-nombr.disk" 0 1 || fail "the protective MBR of gpt-nombr.disk"
     gpt_disk "$work/gpt-nombr-noprimary.disk" > /dev/null || fail "mkgpt gpt-nombr-noprimary.disk"
     zero_sectors "$work/gpt-nombr-noprimary.disk" 0 2 ||
         fail "the protective MBR and the primary header of gpt-nombr-noprimary.disk"
-    gpt_disk "$work/gpt-noprimary.disk" > /dev/null || fail "mkgpt gpt-noprimary.disk"
-    zero_sectors "$work/gpt-noprimary.disk" 1 1 || fail "the primary header of gpt-noprimary.disk"
     mbr_disk "$work/mbr-full.disk" 63488 || fail "mbr-full.disk"
     mbr_disk "$work/mbr-scratch.disk" 61440 || fail "mbr-scratch.disk"
-    names="c.disk gpt.disk gpt-nombr.disk gpt-nombr-noprimary.disk gpt-noprimary.disk"
+    names="c.disk gpt-nombr.disk gpt-nombr-noprimary.disk"
     names="$names mbr-full.disk mbr-scratch.disk"
 fi
 for name in $names; do

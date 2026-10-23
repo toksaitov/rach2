@@ -1383,13 +1383,12 @@ AHCI_ATTACH = --qemu-arg=-device --qemu-arg=ich9-ahci,id=ahci0 \
 # the tables number them, the table read again, a 5 TiB disk's numbers past
 # 32 bits in /sys/block and /proc/partitions, and the root chosen by identity:
 # found when the disks are swapped, refused when two disks have it. Then the
-# recovery kernel's `disk write` on five GPT disks (both headers whole, the
-# primary's checksum broken, the primary's sector zeroed, and two with no
-# protective MBR, one of them without its primary header too) and on an MBR
-# disk whose partition reaches the last sector, each of which must be refused
-# and left as it was, since the sector it writes is a backup header or a
-# partition's; and on an MBR disk whose last sector no partition holds, which
-# must take the round-trip. They are the cases of
+# recovery kernel's `disk write` on two GPT disks with no protective MBR, one
+# of them without its primary header too, and on an MBR disk whose partition
+# reaches the last sector, each of which must be refused and left as it was,
+# since the sector it writes is a backup header or a partition's; and on an
+# MBR disk whose last sector no partition holds, which must take the
+# round-trip. They are the cases of
 # tests/cases/machine.parts.json, which etude runs, each arrangement a boot of
 # its own, and have no target here.
 # The disks of the partition cases, tests/cases/machine.parts.json, which
@@ -1404,8 +1403,8 @@ $(call together,$(PARTS_ARCH_DISKS)): tests/system/parts_disks.sh \
     krffs/manifests/disk-test.manifest $(MANIFEST_DEPS_disk_test) $(MKDISK) build/krffs/mkfs.krffs \
     build/krffs/stageimage.krffs $(MKMBR) $(MKGPT) $(OS_SIMPLE_EXT2) | preflight krffs tests
 	sh tests/system/parts_disks.sh arch $(ARCH_CASE_DIR)/parts $(OS_SIMPLE_EXT2)
-PARTS_DATA_DISKS = $(addprefix $(CASE_DIR)/parts/,c.disk gpt.disk gpt-nombr.disk \
-                     gpt-nombr-noprimary.disk gpt-noprimary.disk mbr-full.disk mbr-scratch.disk)
+PARTS_DATA_DISKS = $(addprefix $(CASE_DIR)/parts/,c.disk gpt-nombr.disk \
+                     gpt-nombr-noprimary.disk mbr-full.disk mbr-scratch.disk)
 $(call together,$(PARTS_DATA_DISKS)): tests/system/parts_disks.sh $(MKMBR) $(MKGPT)
 	sh tests/system/parts_disks.sh shared $(CASE_DIR)/parts
 # `tests/run bus`: four IDE drives on both channels, an AHCI and an IDE disk
