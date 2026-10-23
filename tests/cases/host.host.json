@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "host.host",
-  "summary": "The host tests, the checkers' selftests and the fuzz corpora under the sanitizers, and the scripted checks of tests/cases/host/host.list, booting no machine but the boots case's; the program is tests/cases/host/host.sh",
+  "summary": "The host tests, the checkers' selftests and the fuzz corpora under the sanitizers, and the scripted checks of tests/cases/host/host.list, booting no machine but the boots case's; the program is tests/cases/host/host.c",
   "cases": [
     {
       "case_id": "host.host.tests",
@@ -10,8 +10,8 @@
       "domain": "host",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": ["tests"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "cc", "python3"], "features": {}},
-      "execution": {"program": "host", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its binaries, its logs and the checks' scratch directories under its scratch directory, which the program removes after a pass"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "host", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs and the checks' scratch directories under its scratch directory, which the program removes after a pass"},
       "assertions": [
         {"assertion_id": "listed", "checks": "each tests/host/*_hosttest.c that is not etude's and has no host-arch: line has an assertion of this case, and each assertion a test of the tree", "source": "program"},
         {"assertion_id": "accounttools", "checks": "tests/host/accounttools_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
@@ -176,7 +176,8 @@
         {"name": "host", "node": "tests/cases/host/host", "per_architecture": false},
         {"name": "etude", "node": "tools/etude/etude", "per_architecture": false},
         {"name": "e2fsck", "node": "vendor/e2fsprogs/e2fsck", "per_architecture": true},
-        {"name": "exfat-writer", "node": "tests/host/exfat_writer", "per_architecture": false}
+        {"name": "exfat-writer", "node": "tests/host/exfat_writer", "per_architecture": false},
+        {"name": "checks", "node": "tests/host-suite/tests.inventory.json", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -188,14 +189,17 @@
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["etude"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "cc", "python3"], "features": {}},
-      "execution": {"program": "host", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its binaries, its logs and the checks' scratch directories under its scratch directory, which the program removes after a pass"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "host", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs and the checks' scratch directories under its scratch directory, which the program removes after a pass"},
       "assertions": [
         {"assertion_id": "listed", "checks": "each tests/host/etude_*_hosttest.c with no host-arch: line has an assertion of this case, and each assertion a test of the tree", "source": "program"},
         {"assertion_id": "etude_artifact", "checks": "tests/host/etude_artifact_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
         {"assertion_id": "etude_bridge", "checks": "tests/host/etude_bridge_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
         {"assertion_id": "etude_budget", "checks": "tests/host/etude_budget_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
+        {"assertion_id": "etude_collection", "checks": "tests/host/etude_collection_hosttest.c is prepared under ASan and UBSan and checks native selection, complete output, immutable artifacts and learned watchdog bounds", "source": "program"},
         {"assertion_id": "etude_compare", "checks": "tests/host/etude_compare_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
+        {"assertion_id": "etude_disk_binding", "checks": "tests/host/etude_disk_binding_hosttest.c checks private disk bindings and image helper arguments under ASan and UBSan", "source": "program"},
+        {"assertion_id": "etude_hostdriver", "checks": "tests/host/etude_hostdriver_hosttest.c checks prepared execution, private scratch, immutable inputs, complete assertions and explicit unsupported checks under ASan and UBSan", "source": "program"},
         {"assertion_id": "etude_exec", "checks": "tests/host/etude_exec_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
         {"assertion_id": "etude_failures", "checks": "tests/host/etude_failures_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
         {"assertion_id": "etude_guest", "checks": "tests/host/etude_guest_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
@@ -223,7 +227,8 @@
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 16000, "memory_bytes": 4294967296, "disk_bytes": 2147483648, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "host", "node": "tests/cases/host/host", "per_architecture": false},
-        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false}
+        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false},
+        {"name": "checks", "node": "tests/host-suite/etude.inventory.json", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -235,8 +240,8 @@
       "domain": "host",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": ["boots"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "cc", "python3", "qemu-img"], "features": {}},
-      "execution": {"program": "host", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its binaries, its logs and the checks' scratch directories under its scratch directory, which the program removes after a pass"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "host", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs and the checks' scratch directories under its scratch directory, which the program removes after a pass"},
       "assertions": [
         {"assertion_id": "listed", "checks": "each tests/host/*_hosttest.c with a host-arch: line has an assertion of this case, and each assertion a test of the tree", "source": "program"},
         {"assertion_id": "etude_legacyset", "checks": "tests/host/etude_legacyset_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
@@ -255,7 +260,8 @@
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "test.krffs", "node": "images/test.krffs", "per_architecture": true},
         {"name": "host-etude-scenario.disk", "node": "images/host-etude-scenario.disk", "per_architecture": true},
-        {"name": "hello", "node": "tests/hello", "per_architecture": true}
+        {"name": "hello", "node": "tests/hello", "per_architecture": true},
+        {"name": "checks", "node": "tests/host-suite/boots.inventory.json", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -267,8 +273,8 @@
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["checkers"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "cc", "python3"], "features": {}},
-      "execution": {"program": "host", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its binaries, its logs and the checks' scratch directories under its scratch directory, which the program removes after a pass"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "host", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs and the checks' scratch directories under its scratch directory, which the program removes after a pass"},
       "assertions": [
         {"assertion_id": "listed", "checks": "each checker this case compiles has an assertion of this case, and each assertion a checker of the tree", "source": "program"},
         {"assertion_id": "elfcheck", "checks": "tools/inspect/elfcheck.c, compiled under ASan and UBSan with -Wall -Wextra -Werror, passes its --selftest", "source": "program"},
@@ -284,7 +290,8 @@
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 16000, "memory_bytes": 1073741824, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "host", "node": "tests/cases/host/host", "per_architecture": false},
-        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false}
+        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false},
+        {"name": "checks", "node": "tests/host-suite/checkers.inventory.json", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -296,8 +303,8 @@
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["fuzz"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "cc", "python3"], "features": {}},
-      "execution": {"program": "host", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its binaries, its logs and the checks' scratch directories under its scratch directory, which the program removes after a pass"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "host", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs and the checks' scratch directories under its scratch directory, which the program removes after a pass"},
       "assertions": [
         {"assertion_id": "listed", "checks": "each harness tests/fuzz/*_fuzz.c has an assertion of this case, and each assertion a harness of the tree", "source": "program"},
         {"assertion_id": "elf64", "checks": "every input of tests/fuzz/corpus/elf64/, of which there is at least one, passes through tests/fuzz/elf64_fuzz.c built as a replay program under ASan and UBSan", "source": "program"},
@@ -317,7 +324,8 @@
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 16000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "host", "node": "tests/cases/host/host", "per_architecture": false},
-        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false}
+        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false},
+        {"name": "checks", "node": "tests/host-suite/fuzz.inventory.json", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -329,8 +337,8 @@
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["scripts"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "cc", "python3"], "features": {}},
-      "execution": {"program": "host", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its binaries, its logs and the checks' scratch directories under its scratch directory, which the program removes after a pass"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "host", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs and the checks' scratch directories under its scratch directory, which the program removes after a pass"},
       "assertions": [
         {"assertion_id": "listed", "checks": "each check tests/cases/host/host.list names has an assertion of this case, and each assertion a check of the list", "source": "program"},
         {"assertion_id": "machine_measure", "checks": "the measurement drivers of tools/dev against fake commands: `sh tests/system/machine_measure_test.sh` exits 0", "source": "program"},
@@ -388,7 +396,7 @@
         {"name": "host", "node": "tests/cases/host/host", "per_architecture": false},
         {"name": "etude", "node": "tools/etude/etude", "per_architecture": false},
         {"name": "stageimage.krffs", "node": "krffs/stageimage.krffs", "per_architecture": false},
-        {"name": "tooling-machine", "node": "tests/host/tooling_machine", "per_architecture": false}
+        {"name": "checks", "node": "tests/host-suite/scripts.inventory.json", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}

@@ -1,0 +1,5 @@
+{
+    "anthropic": {"program": "build/tests/system/fakeapi_test"},
+    "gemini": {"program": "build/tests/system/fakeapi_test"},
+    "fakeapi": {"program": "build/tests/system/fakeapi_test"}
+}

@@ -502,6 +502,7 @@ include tools/etude/sources.mk
 ifeq ($(OS),Windows_NT)
 ETUDE_SRC = $(ETUDE_WIN_SRC)
 ETUDE_CASE_LIB_SRC = $(ETUDE_CASE_LIB_WIN_SRC)
+ETUDE_HOSTCASE_SRC = $(ETUDE_HOSTCASE_WIN_SRC)
 ETUDECC ?= /ucrt64/bin/gcc
 ETUDE_LINK = sh tools/etude/compile.sh $(ETUDECC) $@ $(HOSTCFLAGS) $(ETUDE_PLATFORM_FLAGS) $(filter %.c,$^) $(ETUDE_PLATFORM_LIBS)
 ETUDE_PLATFORM_FLAGS = -D_WIN32_WINNT=0x0A00 -static
@@ -542,6 +543,26 @@ build/tools/etude/image-command: tools/etude/win/image_command.c tools/etude/win
                                tools/etude/win/winfmt.c tools/etude/hold.h tools/etude/win/winfmt.h
 	@mkdir -p $(@D)
 	$(ETUDE_LINK) -std=c99
+
+# Host checks are compiled during preparation and executed by a native driver.
+# The inventory builder hashes every binary and input and never runs a check.
+build/tests/cases/host/host: $(ETUDE_HOSTCASE_SRC) $(ETUDE_HDRS)
+	@mkdir -p $(@D)
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	    -Itools/etude/posix -Iutils $(ETUDE_PLATFORM_FLAGS) $(ETUDE_PLATFORM_LIBS)
+
+build/tests/host-suite/scripts.inventory.json: build/tests/system/fakeapi_test
+
+.PHONY: host-inventory-force
+host-inventory-force:
+build/tests/host-suite/%.inventory.json: tests/cases/host/prepare.py \
+    tests/cases/host/host.list tests/cases/host/adapters.json \
+    tests/cases/host.host.json host-inventory-force
+	python3 -B tests/cases/host/prepare.py --arch $(ARCH) $* $@
+build/x86_64/tests/host-suite/%.inventory.json: tests/cases/host/prepare.py \
+    tests/cases/host/host.list tests/cases/host/adapters.json \
+    tests/cases/host.host.json host-inventory-force
+	python3 -B tests/cases/host/prepare.py --arch x86_64 $* $@
 
 # The programs of etude's host cases (tests/cases/host), which the cases'
 # preparation names, one for both architectures.
