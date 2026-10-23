@@ -24,6 +24,7 @@
 #include "etude/legacy.h"
 #include "etude/portlock.h"
 #include "verbs.h"
+#include "measurement_context.h"
 
 #define COLLECTION_MAX 1024
 #define WORDS_MAX      4096
@@ -52,7 +53,8 @@ struct collection {
     char results[PATH_SIZE], evidence[PATH_SIZE], schemas[PATH_SIZE];
     char record[PATH_SIZE], ledger[PATH_SIZE], locks[PATH_SIZE], status[PATH_SIZE];
     char account[128], site[PATH_SIZE];
-    const char *arches, *history, *commit;
+    const char *arches, *history, *commit, *context_path;
+    struct etude_measurement_context *context;
     unsigned width, cpus;
     uint64_t memory;
     uint64_t cap[3];
@@ -828,6 +830,8 @@ static int run_collection(struct collection *c, const char *accel, int dry)
     o.accel = accel;
     o.wait = 86400;
     o.seconds = ETUDE_LEGACY_SECONDS;
+    o.context = c->context;
+    o.run_id = etude_context_run_id(c->context);
     o.prepared = 1;
     o.history = c->history;
     o.commit = c->commit;
@@ -847,6 +851,11 @@ static int run_collection(struct collection *c, const char *accel, int dry)
                c->selection_cases == 1 ? "" : "s");
     putchar('\n');
     rc = etude_legacy_set(&o);
+    char context_error[256];
+    if (etude_context_recheck(c->context, context_error, sizeof(context_error))) {
+        fprintf(stderr, "run: result: failed: %s\n", context_error);
+        rc = 1;
+    }
     if (format_collection(c, stream) != 0 && !rc)
         rc = 1;
     if (rc == 0 && etude_legacy_check_tree(c->record, c->tree, 1, stdout) != 0) {
@@ -865,7 +874,7 @@ static int collection_options(struct collection *c, struct request *r, int argc,
 {
     int opt;
     optind = 1;
-    while ((opt = getopt(argc, argv, "+t:a:o:e:p:j:M:H:g:A:C:kN")) != -1) {
+    while ((opt = getopt(argc, argv, "+t:a:o:e:p:j:M:H:g:A:C:I:kN")) != -1) {
         switch (opt) {
         case 't':
             r->tree = optarg;
@@ -899,6 +908,9 @@ static int collection_options(struct collection *c, struct request *r, int argc,
             break;
         case 'C':
             c->cpus = positive(optarg) <= 64 ? (unsigned)positive(optarg) : 0;
+            break;
+        case 'I':
+            c->context_path = optarg;
             break;
         case 'k':
             c->stop_on_fail = 1;
@@ -1046,6 +1058,7 @@ static void collection_free(struct collection *c)
         free(c->wanted[i]);
     for (size_t i = 0; i < c->nrow_words; i++)
         free(c->row_words[i]);
+    etude_context_close(c->context);
     free(c);
 }
 
@@ -1060,7 +1073,8 @@ static int collection_main(int argc, char **argv, int production)
     if (argc < 2) {
         fputs(
             "usage: etude run [-t TREE] [-a ARCH|both] [-p RECORD] [-o RESULTS] "
-            "[-j WORKERS] [-M MIB] [-H HISTORY] [-A ACCEL] [-k] [-N] SUITE...|core|all|inventory\n",
+            "[-j WORKERS] [-M MIB] [-H HISTORY] [-A ACCEL] [-I CONTEXT] [-k] [-N] "
+            "SUITE...|core|all|inventory\n",
             stderr);
         free(c);
         return 2;
@@ -1102,6 +1116,15 @@ static int collection_main(int argc, char **argv, int production)
     r.accel = collection_accel(r.accel);
     if (!r.accel)
         goto done;
+    if (!production && !r.dry && c->context_path) {
+        char error[256];
+        if (site_policy(c) ||
+            etude_context_open(c->context_path, c->tree, c->record, c->site,
+                               c->commit, c->program, &c->context, error, sizeof(error))) {
+            refused("the measurement context or a bound input is invalid");
+            goto done;
+        }
+    }
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
 #ifndef _WIN32

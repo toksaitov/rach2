@@ -13,6 +13,7 @@
  * host-deps: tests/host/compat/desktop_host.c tests/host/compat/command_host.c
  * host-deps: tests/host/compat/legacyset_fixture.c
  * host-deps: tests/host/compat/legacyset_process.c
+ * host-deps: tools/etude/measurement_context.c
  * host-deps: tools/etude/posix/legacy.c tools/etude/posix/legacy_set.c
  * host-deps: tools/etude/posix/legacy_cases.c tools/etude/digest.c
  * host-deps: tools/etude/posix/legacy_guest.c tools/etude/serial.c

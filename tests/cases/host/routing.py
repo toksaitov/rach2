@@ -40,7 +40,7 @@ def interpreter(text, path=None):
 
 def backend(identity, sources, group):
     """The Windows adapter fixtures execute natively, including file checks."""
-    if group == 'scripts' or identity in BOOTS or identity in {'etude_platform', 'usbstamp'}:
+    if group == 'scripts' or identity in BOOTS or identity in {'etude_platform', 'etude_context', 'usbstamp'}:
         return 'native'
     if identity in PRODUCTS or windows_host():
         return 'gnu'

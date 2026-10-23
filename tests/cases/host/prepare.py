@@ -101,7 +101,7 @@ def checks(group, arch, base):
             item['command'] = [*fixtures.platform_flags(COMMON), '-DRACH2_HOSTTEST', '-Wno-empty-body', '-ffreestanding',
                                *[w for d in INCLUDES for w in ('-I', d)], *flags,
                                '-o', out, str(path), *deps]
-            if routing.windows_host() and identity in routing.BOOTS:
+            if routing.windows_host() and (identity in routing.BOOTS or identity == 'etude_context'):
                 item = windows.boot_entry(item, flags)
             if group == 'boots':
                 item['data'] = [*item.get('data', []), *boot_inputs.files(identity, arch)]
@@ -243,7 +243,7 @@ def prepare(args):
                                            if flag.startswith('-fsanitize=')
                                            for name in flag.split('=', 1)[1].split(',')})
         backend = routing.backend(item['assertion_id'], item['sources'], args.group)
-        if args.gnu and item['assertion_id'] not in routing.BOOTS | {'etude_platform'}:
+        if args.gnu and item['assertion_id'] not in routing.BOOTS | {'etude_platform', 'etude_context'}:
             backend = 'gnu'
         item['backend'] = backend
         windows_fixture = item.pop('windows_fixture', False)
