@@ -91,14 +91,24 @@ static void pause_sample(void)
 }
 
 static int keep_trace(const char *store, const char *path, const char *run, uint64_t start,
-                      uint64_t end, const char *summary, struct cmp_text *out)
+                      uint64_t end, const char *summary, struct cmp_text *out, int *available)
 {
     char *bytes = NULL, *verified = NULL, location[8192], hash[65];
     size_t length = 0;
     int rc = -1;
     if (!cmp_read_file(path, ETUDE_OBSERVE_BYTES, &bytes, &length))
-        verified = etude_observe_import(bytes, length, run, start, end);
+        verified = etude_observe_read(bytes, length, run, start, end);
     if (verified && !cmp_store(store, bytes, length, location, sizeof location, hash)) {
+        struct eh_json *proof = eh_json_parse(verified);
+        const struct eh_json *value = eh_json_get(proof, "comparison_available");
+        *available = value && value->type == 't';
+        eh_json_free(proof);
+        if (summary) {
+            proof = eh_json_parse(summary);
+            value = eh_json_get(proof, "comparison_available");
+            *available = *available && value && value->type == 't';
+            eh_json_free(proof);
+        }
         struct jbuf quoted = {0};
         struct json s = {0};
         s.type = JSON_STRING;
@@ -134,10 +144,9 @@ int etude_observation_finish(const struct etude_observation_run *r, char **json)
     }
     int stopped = r->runtime ? etude_observe_stop(r->runtime) : -1;
     char *summary = r->runtime ? etude_observe_summary(r->runtime, &r->owned_cpu) : NULL;
-    if (!stopped && summary && start && runtime_start && end &&
-        !keep_trace(r->store, r->path, r->run_id, runtime_start, end, summary, &pieces[0]))
-        available[0] = 1;
-    else {
+    if (stopped || !summary || !start || !runtime_start || !end ||
+        keep_trace(r->store, r->path, r->run_id, runtime_start, end, summary, &pieces[0],
+                   &available[0])) {
         if (!pieces[0].length)
             cmp_printf(&pieces[0], "null");
         rc = -1;
@@ -150,9 +159,8 @@ int etude_observation_finish(const struct etude_observation_run *r, char **json)
         else {
             for (unsigned wait = 0; path && !ended(path) && wait < 100; wait++)
                 pause_sample();
-            if (path && !keep_trace(r->store, path, r->run_id, start, end, NULL, &pieces[i + 1]))
-                available[i + 1] = 1;
-            else {
+            if (!path || keep_trace(r->store, path, r->run_id, start, end, NULL,
+                                    &pieces[i + 1], &available[i + 1])) {
                 if (!pieces[i + 1].length)
                     cmp_printf(&pieces[i + 1], "null");
                 rc = -1;
