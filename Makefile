@@ -555,7 +555,7 @@ build/tools/etude/image-command: tools/etude/win/image_command.c tools/etude/win
 build/tests/cases/host/host_checks_scenario: tests/cases/host/host_checks_scenario.c \
     tests/cases/host/host.c tools/etude/json.c $(ETUDE_CASE_LIB_SRC) $(ETUDE_HDRS)
 	@mkdir -p $(@D)
-	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	$(filter-out tests/cases/host/host.c,$(ETUDE_LINK)) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Iutils $(ETUDE_PLATFORM_FLAGS) $(ETUDE_PLATFORM_LIBS)
 
 # Host checks are compiled during preparation and executed by a native driver.
