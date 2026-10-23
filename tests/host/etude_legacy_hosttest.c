@@ -15,7 +15,8 @@
  * host-cflags: -I tools/etude/include -I tools/etude/posix
  * host-cflags: -Wall -Wextra -Werror
  * host-inputs: tests/host/preparation_import_test.py
- * host-inputs: tools/etude/preparation_import.py tools/etude/preparation_paths.py
+ * host-inputs: tools/etude/preparation_import.py
+ * host-inputs: tools/etude/preparation_paths.py
  * host-inputs: tools/etude/collection_tools.py
  * host-first: it runs for minutes
  *
@@ -865,7 +866,7 @@ static void test_graph(void)
         etude_store_close(s);
 }
 
-/** The Python importer is a preparation product, checked in this GNU fixture. */
+/* Check the preparation importer in the GNU fixture. */
 static void test_import_product(void)
 {
     char *args[] = {"python3", "-B", "tests/host/preparation_import_test.py", NULL};

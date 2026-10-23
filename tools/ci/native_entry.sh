@@ -73,7 +73,7 @@ if [ "$kind" = full ]; then
         # shellcheck disable=SC2086
         set -- $SUITES
         set +f
-        have_i686= have_x86_64=
+        have_i686='' have_x86_64=''
         for suite do
             case $suite in
                 i686:*) have_i686=1 ;;

@@ -36,7 +36,8 @@
  * etude check [-s SCHEMAS] schema NAME FILE...
  *     checks each document of FILE, or each line of a FILE whose name ends
  *     in .jsonl, against schemas/NAME.schema.json.
- * etude check [-s SCHEMAS] verdict [--project-architecture] [--selection EXPORT] [-b STORE]
+ * etude check [-s SCHEMAS] verdict [--project-architecture]
+ *         [--selection EXPORT] [-b STORE]
  *         [-c COMMIT] [-m CASES] ARCH
  *         SET SUITES HISTORY...
  *     reads the history of one run, its streams or directories of them, as

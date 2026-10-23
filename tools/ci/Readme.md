@@ -10,7 +10,9 @@ The commit's `site` selects the Actions runner label and accelerator. Activation
 
 The purposes `push`, `ci` and `release` have 300, 600 and 14400-second charged ceilings and 30, 60 and 600-second cleanup reserves. The full goal is 3600 seconds with another 3600 for growth. A routine invocation has no first-measurement exemption. Its C verdict refuses an unknown, failed or missing budget. Preparation, transfer, verification, native compilation, context composition, execution and cleanup remain inside the same charged interval.
 
-## Release preparation and imported products
+## Use
+
+### Release preparation and imported products
 
 Release preparation sets `ETUDE_PREPARATION_CLEAN=1`. The fixed `clean_inhouse.py TREE ARCHES OUT` runs inside the preparation's tree lock and lifetime. It removes in-house component, kernel variant, image, checker and test products for the selected architectures, including the guest probe names declared by `tests/Makefile`. It retains vendor builds and their dependency checks, tooling/download/source-judge caches, unrelated failed-run evidence and the current output directory. A changed vendor recipe still invalidates its ordinary keyed build. It does not run `distclean` or erase a store.
 
@@ -18,7 +20,7 @@ Release preparation sets `ETUDE_PREPARATION_CLEAN=1`. The fixed `clean_inhouse.p
 
 An admitted Linux preparation may set `ETUDE_PREPARATION_EXPORT=1` to write `OUT/producer.json` with the fixed exporter. This validates the successful selected producer record and its ordinary production receipt; it starts no build or transfer. Export failure prevents collection. Its verification remains in the contiguous charged interval. Importing a previous Linux product does not make that production one-time setup. Retain its own receipt and report the upstream production cost separately from the local import/build/run interval; do not combine unrelated monotonic clocks or count one producer invocation as five independent measurements.
 
-## Reference costs
+### Reference costs
 
 `ETUDE_REFERENCE` names an immutable version-one JSON object with `format: "etude-site-reference"`, `schema_version: 1`, `policy` and a nonempty `histories` array. Each descriptor has absolute `path`, `sha256` and `size_bytes`. The policy follows etude's budget schema. Activation supplies measured reference data for the selected machine; this repository supplies no invented site costs.
 
@@ -26,7 +28,7 @@ During routine preparation, `reference.py` verifies every referenced byte and th
 
 A native plan includes a hash-bound `etude-preparation-nodes` document beside its artifact record. It declares the complete deduplicated goal set, selected architectures and kernel override. Forecasting may use the actual aggregate preparation step once when that complete set and its architecture flags match, the run and cleanup passed without disruption, continuous-load evidence is eligible, and the samples share the selected site and newest matching operating-system, tools and cache context. An unknown or different set cannot borrow that cost. Older per-node measurements retain their original path. No aggregate duration is divided into unmeasured node costs. The selected site's baseline histories and all their referenced proof bytes must remain available for reference checks.
 
-## Shared evidence and reporting
+### Shared evidence and reporting
 
 `native_evidence.py stage RESULTS NEW_DIRECTORY` copies the common history, blob store, context, receipts and logs and records each file's hash and size. It excludes executable artifact objects and per-architecture projections, which are uploaded separately. `restore SOURCE RESULTS` verifies every file before creating any destination file and refuses overwrites. Core's separate report job restores this common evidence before reading either architecture. Full retains the same common artifact even though its reporter runs in the execution job.
 
@@ -34,7 +36,7 @@ The reporting host supplies its own absolute `ETUDE_REPORT_READER` (or `ETUDE`) 
 
 Site activation updates the selected runner and its environment, the affected-check transport used by workers, and their instructions together. The release still builds and installs the reviewed candidate on the Lenovo only after the selected site's required full check. Installation and trial acceptance remain separate release steps.
 
-## Retained routine evidence
+### Retained routine evidence
 
 Activation supplies `ETUDE_RETENTION`, an absolute selected-site policy, as well as the admission site and measured reference. `retention.py` is preparation and administration code. It starts no case. Its version-one `etude-retention-policy` document has `root`, the exact admission-file `site_sha256`, positive integer `max_bytes`, `max_age_days`, `reserve_bytes` and `issue_snapshot_max_age_seconds`, `baselines` (protection descriptors), `anchors` (immutable external proof descriptors), and `open_issues` (a snapshot descriptor, or null while its contents are uncertain). Descriptors give absolute `path`, `sha256` and `size_bytes`. Activation chooses the limits from the selected machine's available storage; there is no implicit unlimited policy or invented measured baseline.
 

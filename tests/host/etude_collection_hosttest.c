@@ -1,6 +1,7 @@
 /* Check native collection selection, prepared execution and learned bounds.
  * host-deps: utils/sha256.c tools/etude/posix/process.c
- * host-cflags: -I utils -I tools/etude/include -I tools/etude/posix -Wall -Wextra -Werror
+ * host-cflags: -I utils -I tools/etude/include -I tools/etude/posix -Wall
+ * host-cflags: -Wextra -Werror
  * host-inputs: build/tools/etude/etude
  * host-inputs: tools/etude/fixtures/verdict/cases/fixture.default.json
  * host-inputs: tools/etude/fixtures/verdict/cases/fixture.host.json

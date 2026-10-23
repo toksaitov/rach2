@@ -3911,7 +3911,7 @@ static size_t take_members(struct set *x, size_t s, size_t k)
     return k;
 }
 
-/* Apply the shared seed policy before paths or job pointers refer to members. */
+/* Apply the seed policy before paths or job pointers refer to members. */
 static int repeat_members(struct set *x)
 {
     const struct etude_collection_repeat *r = x->o->repeat;

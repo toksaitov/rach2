@@ -14,12 +14,17 @@
  * host-deps: tools/etude/guest/guest.c tools/etude/guest/fixture.c
  * host-deps: tools/etude/guest/wire.c tools/etude/history_json.c
  * host-deps: utils/sha256.c
- * host-deps: tests/native/collection.c tests/native/inventory.c tests/native/attempt.c
- * host-deps: tests/native/assets.c tests/native/proof.c tests/native/cut_transport.c
+ * host-deps: tests/native/collection.c tests/native/inventory.c
+ * host-deps: tests/native/attempt.c
+ * host-deps: tests/native/assets.c tests/native/proof.c
+ * host-deps: tests/native/cut_transport.c
  * host-deps: tests/native/history_plan.c tests/native/history_result.c
- * host-deps: tests/native/history_io.c tests/native/history_totals.c tests/native/bounds.c
- * host-deps: tools/etude/watchdog.c tools/etude/compare.c tools/etude/compare_load.c
- * host-deps: tools/etude/observe_import.c tools/etude/history.c tools/etude/history_collect.c
+ * host-deps: tests/native/history_io.c tests/native/history_totals.c
+ * host-deps: tests/native/bounds.c
+ * host-deps: tools/etude/watchdog.c tools/etude/compare.c
+ * host-deps: tools/etude/compare_load.c
+ * host-deps: tools/etude/observe_import.c tools/etude/history.c
+ * host-deps: tools/etude/history_collect.c
  * host-tools: etude-workload
  * host-inputs: tests/native/bounds.json tools/etude/schemas/history.schema.json
  * host-inputs: tests/native/tccbuild.sh

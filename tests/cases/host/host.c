@@ -307,7 +307,7 @@ static const char *prepared(const struct host *h, struct check *c)
         const char *path = input_path(inputs->item[i], decoded);
         if (!input_matches(h, path, json_text(inputs->item[i], "sha256"))) {
             snprintf(c->why, sizeof(c->why),
-                     "a source or corpus input changed after preparation: %s",
+                     "a source or corpus input changed after preparation: %.4000s",
                      path ? path : "(invalid path)");
             return c->why;
         }

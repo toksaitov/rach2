@@ -1,4 +1,4 @@
-/* Record measured native steps, terminal judgments and complete run coverage. */
+/* Record measured native steps, terminal results and complete coverage. */
 #define _POSIX_C_SOURCE 200809L
 #include "history.h"
 #include <stdio.h>

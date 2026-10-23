@@ -1,4 +1,4 @@
-/* Reserved-load startup, bad readiness and early exit on the native executor. */
+/* Check reserved-load startup, readiness and early exit. */
 #include "collection_load.h"
 #include "collection_repeat.h"
 static struct etude_ledger *repetition_ledger;
