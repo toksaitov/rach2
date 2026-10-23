@@ -43,7 +43,10 @@ real=$(cd "$made" && pwd -P) || exit 1
 case $real in /?*) work=$real ;; *) exit 1 ;; esac
 sweep=$work/leftovers.pl
 cp "${LEFTOVERS_PL:-$repo/tools/flow/leftovers.pl}" "$sweep" || exit 1
-h=$work/home
+# Spotlight indexes no directory whose name ends in .noindex; its mdworker
+# would otherwise open the new copies' files, and the sweep keeps a copy that a
+# process uses.
+h=$work/home.noindex
 f=$h/rach2/build/tests/failed
 run=tests.i686.20261020T000000Z
 
