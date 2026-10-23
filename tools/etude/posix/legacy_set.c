@@ -200,6 +200,8 @@ struct member {
     char (*digests)[ETUDE_DIGEST_HEX + 1];
     unsigned port; /* a machine case's first local port, or 0 */
     char inventory[65];
+    char execution_record[300];
+    size_t history_samples, gap_samples;
     char workload[400], assertions[400], profile[400]; /* blob references */
     struct command c;
 };
@@ -225,6 +227,10 @@ struct set {
     const char *os;
     char seconds[16];
     struct etude_history *h;
+    struct cmp_history baseline;
+    struct etude_bridge *collection_bridge;
+    char collection_claim[256];
+    int uncertain;
     struct etude_ledger *l;
     struct etude_supervisor *sup;
     struct etude_ledger_res cap[3];
@@ -814,6 +820,147 @@ static void selection(const struct set *x, struct cmp_text *d)
     cmp_printf(d, "],\"stop_on_fail\":%s}\n", x->o->stop_on_fail ? "true" : "false");
 }
 
+/** Load prior complete histories before this run opens its own stream. */
+static int load_history(struct set *x)
+{
+    char directory[PATH_LEN], path[PATH_LEN];
+    char **paths = NULL;
+    size_t count = 0;
+    DIR *d;
+    struct dirent *e;
+    int rc;
+    if (x->o->history != NULL)
+        rc = fit(directory, sizeof(directory), "%s", x->o->history);
+    else
+        rc = fit(directory, sizeof(directory), "%s/history", x->o->results);
+    if (rc != 0)
+        return -1;
+    d = opendir(directory);
+    if (d == NULL)
+        return errno == ENOENT ? 0 : -1;
+    while ((e = readdir(d)) != NULL) {
+        size_t n = strlen(e->d_name);
+        if (n < 7 || strcmp(e->d_name + n - 6, ".jsonl"))
+            continue;
+        if (count == 4096 || fit(path, sizeof(path), "%s/%s", directory, e->d_name) != 0) {
+            rc = -1;
+            goto done;
+        }
+        char **more = realloc(paths, (count + 1) * sizeof(*paths));
+        if (more == NULL) {
+            rc = -1;
+            goto done;
+        }
+        paths = more;
+        paths[count] = strdup(path);
+        if (paths[count] == NULL) {
+            rc = -1;
+            goto done;
+        }
+        count++;
+    }
+    rc = count ? cmp_load(&x->baseline, x->schema, paths, (int)count) : 0;
+    for (size_t i = 0; i < x->baseline.note_count; i++)
+        say(x, "etude run: history: %s", x->baseline.notes[i]);
+done:
+    closedir(d);
+    for (size_t i = 0; i < count; i++)
+        free(paths[i]);
+    free(paths);
+    return rc;
+}
+
+/** A gap is eligible only when its successful attempt lists the step. */
+static int history_gap(const struct cmp_history *h, const struct cmp_sample *s, uint64_t *gap)
+{
+    const struct eh_json *steps = eh_json_get(s->attempt->data, "steps");
+    const struct eh_json *id;
+    uint64_t largest = 0;
+    int found = 0;
+    for (id = steps ? steps->child : NULL; id; id = id->next) {
+        const struct cmp_record *r = id->type == 's' ? cmp_find(h, id->string) : NULL;
+        if (!r || strcmp(r->kind, "step") || strcmp(r->run, s->attempt->run))
+            continue;
+        const char *attempt = cmp_text(r->data, "attempt_id");
+        const char *plan = cmp_text(r->data, "plan_id");
+        const struct eh_json *result = eh_json_get(r->data, "result");
+        const char *outcome = cmp_text(result, "outcome"), *cleanup = cmp_text(result, "cleanup");
+        const struct eh_json *disruptions = eh_json_get(result, "disruptions");
+        const struct eh_json *value =
+            eh_json_get(eh_json_get(r->data, "max_progress_gap_us"), "value");
+        if (!attempt || strcmp(attempt, cmp_text(s->attempt->data, "attempt_id")) || !plan ||
+            strcmp(plan, s->plan->id) || !outcome || strcmp(outcome, "pass") || !cleanup ||
+            strcmp(cleanup, "confirmed") || (disruptions && disruptions->child) || !value ||
+            value->type != 'n' || value->number < 0)
+            continue;
+        if ((uint64_t)value->number > largest)
+            largest = (uint64_t)value->number;
+        found = 1;
+    }
+    *gap = largest;
+    return found;
+}
+
+/** Apply matching undisrupted successes to the bounds before attempts start. */
+static int learn_bounds(struct set *x, const char *plan_text)
+{
+    struct eh_json *plan = eh_json_parse(plan_text);
+    const struct eh_json *items = eh_json_get(plan, "items"), *item;
+    uint64_t *elapsed = calloc(x->baseline.sample_count + 1, sizeof(*elapsed));
+    uint64_t *gaps = calloc(x->baseline.sample_count + 1, sizeof(*gaps));
+    const char **runs = calloc(x->baseline.sample_count + 1, sizeof(*runs));
+    size_t i = 0;
+    int rc = -1;
+    if (!plan || !elapsed || !gaps || !runs)
+        goto done;
+    for (item = items ? items->child : NULL; item && i < x->n; item = item->next, i++) {
+        struct cmp_key key;
+        size_t n = 0, ngaps = 0;
+        cmp_item_key(plan, item, &key);
+        for (size_t j = 0; j < x->baseline.sample_count; j++) {
+            const struct cmp_sample *sample = &x->baseline.samples[j];
+            char differences[256];
+            const char *cleanup = cmp_text(eh_json_get(sample->attempt->data, "result"), "cleanup");
+            const char *run_cleanup =
+                sample->run ? cmp_text(eh_json_get(sample->run->data, "result"), "cleanup") : NULL;
+            if (!cleanup || strcmp(cleanup, "confirmed") || !run_cleanup ||
+                strcmp(run_cleanup, "confirmed"))
+                continue;
+            if (sample->reason[0] ||
+                cmp_key_differs(&key, &sample->key, 0, 10, differences, sizeof(differences)) != 0 ||
+                cmp_key_differs(&key, &sample->key, 11, 12, differences, sizeof(differences)) != 0)
+                continue;
+            size_t k;
+            for (k = 0; k < n && strcmp(runs[k], sample->attempt->run); k++) {
+            }
+            if (k < n)
+                continue;
+            runs[n] = sample->attempt->run;
+            elapsed[n++] = sample->elapsed_us;
+            uint64_t gap;
+            if (history_gap(&x->baseline, sample, &gap))
+                gaps[ngaps++] = gap;
+        }
+        struct legacy_case *k = (struct legacy_case *)x->mem[i].k;
+        if (legacy_case_learn(k, elapsed, n, gaps, ngaps) != 0)
+            goto done;
+        x->mem[i].history_samples = n;
+        x->mem[i].gap_samples = ngaps;
+        x->mem[i].c.wd.case_us = k->case_us;
+        x->mem[i].c.wd.gap_us = k->gap_us;
+        say(x, "etude run: bounds: %s %s: case %llu us (%lu samples), gap %llu us (%lu samples)",
+            k->case_id, k->arch, (unsigned long long)k->case_us, (unsigned long)n,
+            (unsigned long long)k->gap_us, (unsigned long)ngaps);
+    }
+    rc = i == x->n ? 0 : -1;
+done:
+    free(elapsed);
+    free(gaps);
+    free(runs);
+    eh_json_free(plan);
+    return rc;
+}
+
 /** Write the plan record. */
 static int write_plan(struct set *x)
 {
@@ -856,10 +1003,6 @@ static int write_plan(struct set *x)
         cmp_printf(&d, "null");
     cmp_printf(&d, "}\n");
     rc |= part(x, &t, "source", &d);
-    cmp_printf(&d, "{\"schema_version\":1,\"runner\":\"etude run suites\",\"program\":");
-    string(&d, o->program);
-    cmp_printf(&d, ",\"wait_s\":%u,\"bound_s\":%s}\n", o->wait, x->seconds);
-    rc |= part(x, &t, "runner", &d);
     cmp_printf(&t, ",\"artifacts\":[],\"environment\":{\"machine_id\":");
     string(&t, x->machine_id);
     cmp_printf(&t, ",\"boot_id\":");
@@ -903,6 +1046,29 @@ static int write_plan(struct set *x)
     reproduce(x, &d);
     rc |= part(x, &t, "reproduce", &d);
     cmp_printf(&t, "}");
+    if (rc == 0)
+        rc = learn_bounds(x, t.data);
+    if (rc == 0) {
+        /* The temporary closing brace made the key available to the learner. */
+        t.data[--t.length] = 0;
+        cmp_printf(&d, "{\"schema_version\":1,\"runner\":\"etude run\",\"program\":");
+        string(&d, o->program);
+        cmp_printf(&d, ",\"wait_s\":%u,\"bound_s\":%s,\"watchdog_policy\":\"%s\",\"bounds\":[",
+                   o->wait, x->seconds, ETUDE_BOUND_POLICY);
+        for (i = 0; i < x->n; i++) {
+            const struct member *m = &x->mem[i];
+            cmp_printf(&d, "%s{\"item_id\":", i ? "," : "");
+            string(&d, m->item_id);
+            cmp_printf(&d,
+                       ",\"case_us\":%llu,\"case_samples\":%lu,\"gap_us\":%llu,"
+                       "\"gap_samples\":%lu}",
+                       (unsigned long long)m->c.wd.case_us, (unsigned long)m->history_samples,
+                       (unsigned long long)m->c.wd.gap_us, (unsigned long)m->gap_samples);
+        }
+        cmp_printf(&d, "]}\n");
+        rc = part(x, &t, "runner", &d);
+        cmp_printf(&t, "}");
+    }
     if (rc == 0)
         rc = append(x, "plan", &t, x->plan_record, sizeof(x->plan_record));
     free(t.data);
@@ -1064,6 +1230,8 @@ static void release(struct set *x, struct command *c, enum etude_cleanup cleanup
         say(x, "etude run: the claim %s could not be ended: %s", c->id, strerror(errno));
     }
     c->claim = 0;
+    if (!ok || cleanup != ETUDE_CLEANUP_CONFIRMED)
+        x->uncertain = 1;
     if (c->bridge != NULL) {
         if (ok && cleanup == ETUDE_CLEANUP_CONFIRMED)
             etude_bridge_join(c->bridge);
@@ -1105,7 +1273,11 @@ static int start(struct set *x, struct command *c, char *const *vars, size_t n)
     c->spec.argv = c->argv;
     c->spec.envp = c->envp;
     c->spec.cwd = c->cwd;
-    c->spec.output_max = 4096;
+    c->spec.output_max = x->o->prepared && c->is_case ? 0 : 4096;
+    if (x->o->prepared && c->is_case) {
+        c->spec.stdout_path = c->out;
+        c->spec.stderr_path = c->out;
+    }
     c->spec.grace_us = c->grace_us;
     c->spec.reg = etude_ledger_register;
     c->spec.child = etude_ledger_child;
@@ -1417,6 +1589,9 @@ static void judge_case(struct set *x, struct member *m)
         came_out(c, outcome_of(v.outcome), 1, "%s; %s", why, v.reason);
     else
         came_out(c, outcome_of(v.outcome), 0, "%s", v.reason);
+    if (r->proc != NULL && r->proc->output_error != 0)
+        came_out(c, INCOMPLETE, 1, "its output could not be saved: %s",
+                 strerror(r->proc->output_error));
     settle(x, c);
 }
 
@@ -1551,6 +1726,37 @@ static int results(const struct set *x, const struct member *m, struct cmp_text 
     return keep_doc(x, &d, t);
 }
 
+/** Record the execution gap measured by the existing watchdog. */
+static int execution_step(struct set *x, struct member *m)
+{
+    struct command *c = &m->c;
+    struct cmp_text t = {0};
+    int rc = 0;
+    cmp_printf(&t, "{\"plan_id\":");
+    string(&t, x->plan_record);
+    cmp_printf(&t, ",\"item_id\":");
+    string(&t, m->item_id);
+    cmp_printf(&t, ",\"attempt_id\":");
+    string(&t, c->id);
+    cmp_printf(&t, ",\"step_id\":");
+    string(&t, c->id);
+    cmp_printf(&t, ",\"stage\":\"execute\",\"time\":");
+    rc |= interval(&t, x, &c->admitted, &c->done, NULL);
+    cmp_printf(&t, ",\"resources\":");
+    rc |= resources(x, c, &t);
+    cmp_printf(&t,
+               ",\"witnesses\":[],\"max_progress_gap_us\":{\"value\":%llu,"
+               "\"method\":\"watchdog-progress-v1\",\"quality\":\"exact\","
+               "\"interval_us\":null,\"error_bound\":1},\"result\":",
+               (unsigned long long)c->max_gap_us);
+    rc |= result(x, c, &t);
+    cmp_printf(&t, "}");
+    if (!rc)
+        rc = append(x, "step", &t, m->execution_record, sizeof(m->execution_record));
+    free(t.data);
+    return rc;
+}
+
 /** Write the attempt record of member `m`, which is done. */
 static int write_attempt(struct set *x, struct member *m)
 {
@@ -1565,7 +1771,12 @@ static int write_attempt(struct set *x, struct member *m)
     string(&t, m->item_id);
     cmp_printf(&t, ",\"attempt_id\":");
     string(&t, c->id);
-    cmp_printf(&t, ",\"previous_attempt_id\":null,\"steps\":[],\"time\":");
+    if (x->o->prepared && c->ran && execution_step(x, m) != 0)
+        rc = -1;
+    cmp_printf(&t, ",\"previous_attempt_id\":null,\"steps\":[");
+    if (m->execution_record[0])
+        string(&t, m->execution_record);
+    cmp_printf(&t, "],\"time\":");
     rc |= interval(&t, x, from, &c->done, NULL);
     cmp_printf(&t, ",\"queue_us\":");
     rc |= elapsed(&t, &c->queued, from);
@@ -1877,6 +2088,91 @@ static int write_run(struct set *x, enum outcome *worst)
 
 /* ---- The preparation. ---- */
 
+/** Validate the artifacts supplied by a producer, without running a build. */
+static int prepared(struct set *x)
+{
+    struct command *c = &x->prep;
+    size_t i, j;
+    struct stat st;
+    char path[PATH_LEN];
+    FILE *f;
+    char *line = NULL;
+    size_t room = 0;
+    int listed, at, rc = 0;
+    char unsupported[PATH_LEN] = "";
+    char digest[65];
+    unsigned long long bytes, inode;
+    long long mtime;
+
+    asked(c);
+    c->admitted = c->queued;
+    c->was_admitted = 1;
+    c->cleanup = ETUDE_CLEANUP_CONFIRMED;
+    if (etude_legacy_check_tree(x->record, x->tree, 1, x->out) != 0)
+        rc = 1;
+    for (i = 0; !rc && i < x->n; i++) {
+        const struct legacy_case *k = x->mem[i].k;
+        if (!k->guest) {
+            unsigned char magic[4];
+            f = fopen(x->mem[i].program, "rb");
+            int binary = f != NULL && fread(magic, 1, sizeof(magic), f) == sizeof(magic) &&
+                         ((!memcmp(magic, "\177ELF", 4)) || (magic[0] == 'M' && magic[1] == 'Z') ||
+                          (!memcmp(magic, "\317\372\355\376", 4)) ||
+                          (!memcmp(magic, "\316\372\355\376", 4)) ||
+                          (!memcmp(magic, "\312\376\272\276", 4)) ||
+                          (!memcmp(magic, "\312\376\272\277", 4)));
+            if (f)
+                fclose(f);
+            if (!binary) {
+                snprintf(unsupported, sizeof(unsupported), "%s", x->mem[i].program);
+                rc = 1;
+                break;
+            }
+        }
+        for (j = 0; j < k->ngoals; j++) {
+            if (fit(path, sizeof(path), "%s/%s", x->tree, k->goals[j]) != 0 ||
+                stat(path, &st) != 0) {
+                rc = 1;
+                break;
+            }
+            if (S_ISDIR(st.st_mode))
+                continue;
+            listed = 0;
+            f = fopen(x->record, "r");
+            if (f == NULL) {
+                rc = 1;
+                break;
+            }
+            while (getline(&line, &room, f) >= 0) {
+                at = -1;
+                if (sscanf(line, "file %64s %llu %llu %lld %n", digest, &bytes, &inode, &mtime,
+                           &at) == 4 &&
+                    at >= 0) {
+                    line[strcspn(line, "\n")] = 0;
+                    listed |= strcmp(line + at, k->goals[j]) == 0;
+                }
+            }
+            fclose(f);
+            if (!listed) {
+                rc = 1;
+                break;
+            }
+        }
+    }
+    free(line);
+    c->state = DONE;
+    etude_history_now(&c->done);
+    if (unsupported[0])
+        came_out(c, FAILURE, 0, "native execution requires a compiled program: %s", unsupported);
+    else if (rc)
+        came_out(c, FAILURE, 0, "prepared artifacts are missing, changed or absent from %s",
+                 x->record);
+    else
+        c->outcome = PASS;
+    write_step(x);
+    return rc;
+}
+
 /**
  * Prepare the cases' artifacts: claim every limited resource of the machine
  * and the old host lock alone, run `etude prepare` with its output
@@ -1890,6 +2186,8 @@ static int prepare(struct set *x)
     struct etude_supervised *f;
     int rc;
 
+    if (x->o->prepared)
+        return prepared(x);
     say(x, "run: preparing");
     asked(c);
     status(x, 1);
@@ -2246,6 +2544,15 @@ static int active(const struct command *c)
     return c->state == LOCKING || c->state == RUNNING;
 }
 
+/** The memory reserved by one command's claim. */
+static uint64_t command_memory(const struct command *c)
+{
+    for (size_t i = 0; i < c->nres; i++)
+        if (!strcmp(c->res[i].name, "memory_bytes"))
+            return c->res[i].amount;
+    return 0;
+}
+
 /**
  * Mark the members that may be admitted now. The order is kept: a member
  * that runs alone waits until nothing of the run is active and keeps the
@@ -2256,10 +2563,12 @@ static void mark_ready(struct set *x)
 {
     size_t i, busy = 0, room, marked = 0;
     int exclusive = 0, barrier = 0;
+    uint64_t memory = 0, budget = x->o->pool_memory_bytes;
 
     for (i = 0; i < x->n; i++)
         if (active(&x->mem[i].c)) {
             busy++;
+            memory += command_memory(&x->mem[i].c);
             exclusive |= x->mem[i].c.exclusive;
         }
     room = x->o->width == 0 ? x->n : x->o->width > busy ? x->o->width - busy : 0;
@@ -2268,6 +2577,11 @@ static void mark_ready(struct set *x)
 
         x->jobs[i].ready = 0;
         if (c->state != QUEUED || x->stopping || exclusive || barrier)
+            continue;
+        uint64_t amount = command_memory(c);
+        if (budget && amount > budget)
+            c->exclusive = 1;
+        if (budget && (busy || marked) && (amount > budget || memory > budget - amount))
             continue;
         if (c->exclusive) {
             barrier = 1;
@@ -2279,6 +2593,7 @@ static void mark_ready(struct set *x)
             room--;
         }
         x->jobs[i].ready = 1;
+        memory += amount;
         marked++;
         asked(c);
     }
@@ -2725,6 +3040,12 @@ static int check_ports(struct set *x, unsigned long long ports)
     const char *offset = getenv("RACH2_PORT_OFFSET");
     unsigned long long base;
 
+    if (x->o->native_locks != NULL) {
+        x->port_base = PORT_BASE;
+        return ports <= LEGACY_PORTS
+                   ? 0
+                   : refuse(x, "the machine cases need more local ports than the port block has");
+    }
     if (x->o->locks != NULL)
         return refuse(x, "a machine case's local ports are of the caller's port block, and "
                          "with a lock directory the caller holds none");
@@ -2905,7 +3226,7 @@ static int case_command(struct set *x, struct member *m)
     c->cwd = m->work;
     m->arch = k->arch;
     want[ETUDE_LEGACY_CPU] = k->cpu_millis;
-    want[ETUDE_LEGACY_MEMORY] = legacy_case_memory(k, TOOLING_HOST);
+    want[ETUDE_LEGACY_MEMORY] = legacy_case_memory(k, x->o->prepared ? 0 : TOOLING_HOST);
     want[ETUDE_LEGACY_DISK] = k->disk_bytes;
     for (i = 0; i < 3; i++) {
         if (want[i] == 0)
@@ -2934,10 +3255,12 @@ static int case_command(struct set *x, struct member *m)
         errno = ENOMEM;
         return -1;
     }
-    c->argv[a++] = (char *)ETUDE_SHELL;
-    c->argv[a++] = "-c";
-    c->argv[a++] = "exec \"$@\" >\"$0\" 2>&1";
-    c->argv[a++] = c->out;
+    if (!x->o->prepared) {
+        c->argv[a++] = (char *)ETUDE_SHELL;
+        c->argv[a++] = "-c";
+        c->argv[a++] = "exec \"$@\" >\"$0\" 2>&1";
+        c->argv[a++] = c->out;
+    }
     c->argv[a++] = m->program;
     if (k->machine)
         c->argv[a++] = m->invocation;
@@ -3017,6 +3340,8 @@ static int prep_command(struct set *x)
     c->end = ETUDE_END_STOPPED;
     c->value = -1;
     c->cwd = o->tree;
+    if (o->prepared)
+        return 0;
     if ((c->argv = calloc(2 * goal_count(x) + 20, sizeof(*c->argv))) == NULL) {
         errno = ENOMEM;
         return -1;
@@ -3104,6 +3429,8 @@ static int make_paths(struct set *x, char dir[PATH_LEN], char path[PATH_LEN])
         (o->record != NULL ? fit(x->record, sizeof(x->record), "%s", o->record)
                            : fit(x->record, sizeof(x->record), "%s/prepare.record", o->results)))
         return refuse(x, "a path of the run is too long");
+    if (o->history_path != NULL && fit(o->history_path, o->history_path_size, "%s", path) != 0)
+        return refuse(x, "the stream path does not fit its caller's buffer");
     if (make_dir(o->results) != 0 || make_dir(dir) != 0 || make_dir(x->store) != 0 ||
         make_dir(x->output) != 0 || make_dir(o->evidence) != 0) {
         say(x, "etude run: result: error: %s: %s", o->results, strerror(errno));
@@ -3192,6 +3519,68 @@ static int number_members(struct set *x)
     return 0;
 }
 
+/** Keep one block until every case claim of this collection is gone. */
+static int collection_locks(struct set *x)
+{
+    struct etude_ledger_res resource = {"collections", 1}, limit = {"collections", 1024};
+    struct etude_bridge_spec spec;
+    char offset[32];
+    if (x->o->native_locks == NULL)
+        return 0;
+    if (fit(x->collection_claim, sizeof(x->collection_claim), "%s:ports", x->run_id) != 0)
+        return -1;
+    for (;;) {
+        if (signalled(x)) {
+            errno = EINTR;
+            return -1;
+        }
+        if (etude_ledger_admit(x->l, x->collection_claim, x->o->account, &resource, 1, &limit, 1,
+                               1) == 0)
+            break;
+        if (errno != EAGAIN)
+            return -1;
+#ifdef _WIN32
+        Sleep(200);
+#else
+        poll(NULL, 0, 200);
+#endif
+    }
+    memset(&spec, 0, sizeof(spec));
+    spec.ledger = x->o->ledger;
+    spec.id = x->collection_claim;
+    spec.dir = x->o->native_locks;
+    spec.alone = x->o->host_alone;
+    spec.legacy = x->o->native_ports;
+    spec.wait_ms = 200;
+    for (;;) {
+        if (signalled(x)) {
+            errno = EINTR;
+            return -1;
+        }
+        x->collection_bridge = etude_bridge_collection_start(&spec, x->run_id);
+        if (x->collection_bridge)
+            break;
+        if (errno != EAGAIN && errno != EINTR && errno != ECANCELED)
+            return -1;
+#ifdef _WIN32
+        Sleep(200);
+#else
+        poll(NULL, 0, 200);
+#endif
+    }
+    int port_offset = etude_bridge_offset(x->collection_bridge);
+    if (port_offset < 0)
+        port_offset = 0;
+    snprintf(offset, sizeof(offset), "%d", port_offset);
+    x->port_base = PORT_BASE + (unsigned)port_offset;
+#ifdef _WIN32
+    _putenv_s("RACH2_PORT_OFFSET", offset);
+#else
+    setenv("RACH2_PORT_OFFSET", offset, 1);
+#endif
+    return 0;
+}
+
 /** Make the run's identity, directories, history, ledger and members; 0,
  * or 2 after a refusal or an error. */
 static int set_up(struct set *x)
@@ -3202,6 +3591,8 @@ static int set_up(struct set *x)
 
     if (identify(x) != 0 || make_paths(x, dir, path) != 0)
         return 2;
+    if (load_history(x) != 0)
+        return refuse(x, "matching history could not be loaded");
     if ((x->h = etude_history_open(path, x->schema, x->run_id, x->run_id, HISTORY_BYTES)) == NULL) {
         say(x, "etude run: result: error: %s: %s", path, strerror(errno));
         return 2;
@@ -3210,6 +3601,8 @@ static int set_up(struct set *x)
         say(x, "etude run: result: error: %s: %s", o->ledger, strerror(errno));
         return 2;
     }
+    if (collection_locks(x) != 0)
+        return refuse(x, "the native collection's host and port locks could not be taken");
     for (i = 0; i < 3; i++) {
         x->cap[i].name = resource_names[i];
         x->cap[i].amount = o->cap[i];
@@ -3231,11 +3624,11 @@ static int set_up(struct set *x)
             k = take_members(x, i, k);
     for (i = 0; i < x->n; i++)
         if (case_paths(x, &x->mem[i]) != 0) {
-            say(x, "etude-legacy: result: error: the run: %s", strerror(errno));
+            say(x, "etude run: result: error: the run: %s", strerror(errno));
             return 2;
         }
     if ((x->narches > 1 && order_members(x, serial) != 0) || number_members(x) != 0) {
-        say(x, "etude-legacy: result: error: the run: %s", strerror(errno));
+        say(x, "etude run: result: error: the run: %s", strerror(errno));
         return 2;
     }
     for (i = 0; i < x->n; i++)
@@ -3295,6 +3688,7 @@ static void tear_down(struct set *x)
     for (i = 0; x->manifests != NULL && i < x->nmembers; i++)
         legacy_manifest_free(&x->manifests[i]);
     free(x->manifests);
+    cmp_free(&x->baseline);
     free(x->members);
     free(x->again);
     free(x->prep.argv);
@@ -3305,6 +3699,18 @@ static void tear_down(struct set *x)
         etude_store_close(x->objects);
         if (legacy_remove_tree(x->objects_dir) != 0)
             say(x, "etude run: %s: not removed: %s", x->objects_dir, strerror(errno));
+    }
+    if (x->l != NULL && x->collection_claim[0]) {
+        if (etude_ledger_finish(x->l, x->collection_claim, ETUDE_CLEANUP_CONFIRMED) != 0) {
+            etude_ledger_withdraw(x->l, x->collection_claim);
+            x->uncertain = 1;
+        }
+        if (x->collection_bridge) {
+            if (x->uncertain)
+                etude_bridge_detach(x->collection_bridge);
+            else
+                etude_bridge_join(x->collection_bridge);
+        }
     }
     if (x->l != NULL)
         etude_ledger_close(x->l);
@@ -3342,6 +3748,11 @@ int etude_legacy_set(const struct etude_legacy_set_opts *o)
                     signalled(&x) ? x.stop_reason : "the preparation did not pass", 0);
     }
     status(&x, 1);
+    if (o->prepared && x.prep.outcome == PASS &&
+        etude_legacy_check_tree(x.record, x.tree, 1, x.out) != 0) {
+        came_out(&x.prep, INCOMPLETE, 1, "prepared artifacts changed during execution");
+        x.failed = 1;
+    }
     if (write_run(&x, &worst) != 0) {
         x.failed = 1;
         say(&x, "etude run: the run record could not be written: %s",

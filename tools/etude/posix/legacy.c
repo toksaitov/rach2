@@ -1035,8 +1035,8 @@ int etude_legacy_prepare(const struct etude_legacy_opts *o)
     p.out = o->out != NULL ? o->out : stdout;
     status = admit(&p);
     if (status == 0) {
-        fprintf(p.out, "etude prepare: preparing %lu goals for %s in %s\n", (unsigned long)o->ngoals,
-                o->arch != NULL ? o->arch : "i686", p.tree);
+        fprintf(p.out, "etude prepare: preparing %lu goals for %s in %s\n",
+                (unsigned long)o->ngoals, o->arch != NULL ? o->arch : "i686", p.tree);
         status = open_work(&p);
     }
     if (status == 0)
@@ -1120,6 +1120,7 @@ struct reading {
     size_t files;   /* the artifacts compared */
     size_t changed; /* those changed or missing */
     int digests;
+    const char *override_tree;
     FILE *out;
 };
 
@@ -1135,7 +1136,8 @@ static const char *check_line(struct reading *rd, char *line, size_t lineno)
     if (strncmp(line, "file ", 5) == 0) {
         if (rd->tree == NULL || take_entry(line, &e) != 0)
             return "a malformed file line";
-        rd->changed += (size_t)compare(rd->tree, &e, rd->digests, rd->out);
+        rd->changed += (size_t)compare(rd->override_tree != NULL ? rd->override_tree : rd->tree, &e,
+                                       rd->digests, rd->out);
         rd->files++;
         return NULL;
     }
@@ -1172,7 +1174,7 @@ static int check_lines(FILE *f, const char *record, struct reading *rd)
     return rd->changed != 0;
 }
 
-int etude_legacy_check(const char *record, int digests, FILE *out)
+int etude_legacy_check_tree(const char *record, const char *tree, int digests, FILE *out)
 {
     struct reading rd;
     FILE *f = fopen(record, "r");
@@ -1180,6 +1182,7 @@ int etude_legacy_check(const char *record, int digests, FILE *out)
 
     memset(&rd, 0, sizeof(rd));
     rd.digests = digests;
+    rd.override_tree = tree;
     rd.out = out != NULL ? out : stdout;
     if (f == NULL) {
         fprintf(rd.out, "etude check: %s: %s\n", record, strerror(errno));
@@ -1196,4 +1199,9 @@ int etude_legacy_check(const char *record, int digests, FILE *out)
         fprintf(rd.out, "etude check: result: changed: %lu of %lu files\n",
                 (unsigned long)rd.changed, (unsigned long)rd.files);
     return status;
+}
+
+int etude_legacy_check(const char *record, int digests, FILE *out)
+{
+    return etude_legacy_check_tree(record, NULL, digests, out);
 }

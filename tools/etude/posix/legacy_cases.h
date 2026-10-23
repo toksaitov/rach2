@@ -99,6 +99,10 @@ struct legacy_manifest {
 int legacy_manifest_read(struct legacy_manifest *m, const char *tree, const char *path,
                          const char *suite, const char *arch, const char *kernel);
 
+/* Fix the case and progress-gap bounds from successful matching attempts. */
+int legacy_case_learn(struct legacy_case *k, const uint64_t *elapsed, size_t n,
+                      const uint64_t *gaps, size_t ngaps);
+
 /** Free what `m` holds. */
 void legacy_manifest_free(struct legacy_manifest *m);
 

@@ -2003,7 +2003,7 @@ static void test_cases_both(void)
     CHECK(recorded(&r, "build/x86_64/cases/probe") && recorded(&r, "build/cases/probe") &&
               recorded(&r, "build/rach2/kernel") && recorded(&r, "build/x86_64/rach2/kernel"),
           "prepare: the goals and kernel of each architecture");
-    CHECK(has_line(r.out, "etude-legacy: result: ran: 2 suites, 2 passed"), "both: the result");
+    CHECK(has_line(r.out, "etude run: result: ran: 2 suites, 2 passed"), "both: the result");
     CHECK(r.claims == 0, "both: the ledger has no claim");
     CHECK(!r.leaks, "both: the driver leaks nothing");
     show(&r, before);
@@ -2026,7 +2026,7 @@ static void test_cases_one(void)
     CHECK(r.status == 0, "one: passed");
     CHECK(count_kind(&r.h, "attempt") == 5 && attempts_of(&r, "fixture.good.pass", "i686") == 0,
           "one: the cases of x86_64 and none alone");
-    CHECK(has_line(r.out, "etude-legacy: result: ran: 1 suites, 1 passed"), "one: the result");
+    CHECK(has_line(r.out, "etude run: result: ran: 1 suites, 1 passed"), "one: the result");
     show(&r, before);
 }
 

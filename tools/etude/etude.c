@@ -91,7 +91,10 @@ static int run_main(int argc, char **argv)
 #endif
     };
 
-    return dispatch(forms, COUNT(forms), argc, argv, "etude run");
+    if (argc >= 2 && (strcmp(argv[1], "suites") == 0 ||
+                      (strcmp(argv[1], "host") == 0 && argc > 2) || strcmp(argv[1], "native") == 0))
+        return dispatch(forms, COUNT(forms), argc, argv, "etude run");
+    return etude_collection_main(argc, argv);
 }
 
 /** Run `etude show lines` or `etude show failures`. */

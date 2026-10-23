@@ -921,3 +921,28 @@ int legacy_absolute(const char *path)
     return path != NULL && path[0] == '/';
 #endif
 }
+
+/** Fix one manifest bound from the eligible samples supplied by the runner. */
+static int learned_bound(const struct json *object, const uint64_t *samples, size_t n,
+                         uint64_t *out)
+{
+    struct etude_bound b;
+    struct etude_bound_fixed fixed;
+    b.floor_us = (uint64_t)count_of(object, "floor_us");
+    b.initial_us = (uint64_t)count_of(object, "initial_us");
+    b.ceiling_us = (uint64_t)count_of(object, "ceiling_us");
+    if (etude_bound_fix(&b, samples, n, &fixed) != 0)
+        return -1;
+    *out = fixed.us;
+    return 0;
+}
+
+int legacy_case_learn(struct legacy_case *k, const uint64_t *elapsed, size_t n,
+                      const uint64_t *gaps, size_t ngaps)
+{
+    const struct json *bounds = json_member(k->json, "bounds");
+    if (learned_bound(json_member(bounds, "case"), elapsed, n, &k->case_us) != 0 ||
+        learned_bound(json_member(bounds, "gap"), gaps, ngaps, &k->gap_us) != 0)
+        return -1;
+    return 0;
+}

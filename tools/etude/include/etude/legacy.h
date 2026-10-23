@@ -72,6 +72,8 @@ int etude_legacy_prepare(const struct etude_legacy_opts *o);
  *         missing; 2 for a record that cannot be read or is malformed.
  */
 int etude_legacy_check(const char *record, int digests, FILE *out);
+/* Check a deployed record against TREE instead of its production path. */
+int etude_legacy_check_tree(const char *record, const char *tree, int digests, FILE *out);
 
 /* One suite of a set, as the caller selects it. */
 struct etude_legacy_member {
@@ -95,17 +97,25 @@ struct etude_legacy_set_opts {
     const char *program; /* the path of etude, which runs the steps and judges */
     const struct etude_legacy_member *members;
     size_t nmembers;
-    const char *ledger;          /* the absolute directory of the machine's ledger */
-    const char *account;         /* the account the claims are made for */
-    uint64_t cap[3];             /* the ledger's limits, by enum etude_legacy_resource */
-    const char *locks;           /* the absolute directory of the old runner's host
-                                    and port locks, which each claim takes; NULL
-                                    for none */
-    unsigned wait;               /* the seconds a request may wait for admission */
-    unsigned seconds;            /* the bound of each step of the preparation */
-    unsigned width;              /* the most cases at once; 0 for the ledger's limits alone */
-    unsigned cpus;               /* each machine's processors, as RACH2_CPUS gives them */
-    const char *accel;           /* QEMU's accelerator, as RACH2_QEMU_ACCEL gives it */
+    const char *ledger;         /* the absolute directory of the machine's ledger */
+    const char *account;        /* the account the claims are made for */
+    uint64_t cap[3];            /* the ledger's limits, by enum etude_legacy_resource */
+    const char *locks;          /* the absolute directory of the old runner's host
+                                   and port locks, which each claim takes; NULL
+                                   for none */
+    const char *native_locks;   /* collection-wide durable host and port locks */
+    int native_ports;           /* the collection needs one compatibility block */
+    int host_alone;             /* hold those host locks exclusively */
+    unsigned wait;              /* the seconds a request may wait for admission */
+    unsigned seconds;           /* the bound of each step of the preparation */
+    uint64_t pool_memory_bytes; /* this run's pool budget; 0 uses the ledger alone */
+    unsigned width;             /* the most cases at once; 0 for the ledger's limits alone */
+    unsigned cpus;              /* each machine's processors, as RACH2_CPUS gives them */
+    const char *accel;          /* QEMU's accelerator, as RACH2_QEMU_ACCEL gives it */
+    int prepared;               /* artifacts already exist; validate the record, never run make */
+    char *history_path;         /* optional caller buffer receiving the new stream path */
+    size_t history_path_size;
+    const char *history;         /* matching history directory, or results/history */
     int stop_on_fail;            /* the first case that does not pass cancels the rest */
     const char *results;         /* the directory of the history's `history/` and
                                     `store/`, and of each command's output in
@@ -171,6 +181,11 @@ struct etude_legacy_set_opts {
  * manifest that cannot be read, of another suite's family, with no case on the
  * architecture, or with a case that the set driver cannot run
  * (legacy_manifest_read), and a request whose `o->site` cannot be read.
+ *
+ * With `prepared`, validate the existing record and artifact digests without
+ * running make, and execute compiled host programs directly with complete
+ * output files. `native_locks` keeps the collection's locks until all claims
+ * of the run have been released. `history` supplies earlier matching runs.
  *
  * The history is one stream under `o->results`, with the plan of one item
  * for each repetition of each case, a step for the preparation, an attempt
