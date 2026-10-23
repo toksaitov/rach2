@@ -302,6 +302,28 @@ static void write_spec(const struct spec *given)
         exit(1);
 }
 
+/* The executor uses execve. Resolve Git once without a shell or execvp. */
+static const char *git_program(void)
+{
+    static char resolved[4096];
+    const char *env = getenv("PATH");
+    if (*resolved) return resolved;
+    if (!env) return NULL;
+    char *paths = strdup(env), *part, *next = paths;
+    if (!paths) return NULL;
+    while (next) {
+        part = next;
+        next = strchr(part, ':');
+        if (next) *next++ = 0;
+        char candidate[4096];
+        int n = snprintf(candidate, sizeof candidate, "%s/git", *part ? part : ".");
+        if (n > 0 && n < (int)sizeof candidate && access(candidate, X_OK) == 0 &&
+            realpath(candidate, resolved)) break;
+    }
+    free(paths);
+    return *resolved ? resolved : NULL;
+}
+
 /** Run Git by argument vector in the fixture directory and keep its output. */
 static void git(char *const argv[], char *out, size_t size)
 {
@@ -311,9 +333,18 @@ static void git(char *const argv[], char *out, size_t size)
     const struct etude_exec_result *r;
     int ok = 0;
 
+    size_t count = 0;
+    while (argv[count]) count++;
+    char **arguments = calloc(count + 1, sizeof *arguments);
+    const char *program = git_program();
+    if (!arguments || !program) { perror("etude_compare_hosttest: Git"); exit(1); }
+    memcpy(arguments, argv, count * sizeof *arguments);
+    arguments[0] = (char *)program;
     memset(&spec, 0, sizeof spec);
     spec.attempt_id = "compare-git";
-    spec.argv = argv;
+    spec.argv = arguments;
+    extern char **environ;
+    spec.envp = environ;
     spec.cwd = directory;
     spec.output_max = 4096;
     if (ex != NULL && etude_exec_start(ex, &spec, &p) == 0) {
@@ -327,8 +358,10 @@ static void git(char *const argv[], char *out, size_t size)
         if (!ok)
             fprintf(stderr, "etude_compare_hosttest: Git failed: %s\n", r->err.data);
     }
+    if (!p) perror("etude_compare_hosttest: start Git");
     if (ex != NULL)
         etude_exec_free(ex);
+    free(arguments);
     if (!ok)
         exit(1);
 }
