@@ -587,7 +587,7 @@ STYLE_PREP_TOOLS = build/tests/cases/host/style $(ETUDE) build/tools/verify/asci
 style-evidence-force:
 build/tests/style/%.json: tests/cases/host/prepare_style.py tests/cases/host/style.sh \
     tests/cases/host.style.json $(STYLE_PREP_TOOLS) style-evidence-force
-	python3 -B tests/cases/host/prepare_style.py --arch i686 $* $@
+	python3 -B tests/cases/host/prepare_style.py --arch $(ARCH) $* $@
 build/x86_64/tests/style/%.json: tests/cases/host/prepare_style.py tests/cases/host/style.sh \
     tests/cases/host.style.json $(STYLE_PREP_TOOLS) style-evidence-force
 	python3 -B tests/cases/host/prepare_style.py --arch x86_64 $* $@
