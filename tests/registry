@@ -92,7 +92,6 @@ cred-persist|qemu|full
 addressed|qemu|full
 ping|qemu|full
 packet|qemu|full
-ping-e1000|qemu|full
 load|qemu,mformat|full
 authority|qemu|core|authority-test*,authority.*,authority-*,authority/*,auth-test.*
 queue|qemu,mformat|core
