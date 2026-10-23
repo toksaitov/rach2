@@ -938,6 +938,19 @@ static void missing_program(const char *ledger)
     fclose(err);
 }
 
+static int grant_resources(const struct etude_ledger_claim *claim, void *context)
+{
+    static const char *const names[] = {"cpu_millis", "memory_bytes", "disk_bytes"};
+    if (strcmp(claim->id, "grant:prepare")) return 0;
+    unsigned found = 0;
+    for (size_t i = 0; i < claim->nres; i++)
+        for (size_t j = 0; j < 3; j++)
+            if (!strcmp(claim->res[i].name, names[j]) && claim->res[i].amount == 1)
+                found |= 1u << j;
+    *(int *)context = claim->nres == 3 && found == 7;
+    return 0;
+}
+
 /* A failed grant publication releases the claim before any command starts. */
 static void grant_seed(struct etude_ledger *l, const char *ledger)
 {
@@ -945,13 +958,19 @@ static void grant_seed(struct etude_ledger *l, const char *ledger)
     struct etude_preparation_grant grant;
     struct etude_reading before;
     q.ledger = ledger; q.dir = fix_dir(); q.id = "grant:prepare"; q.account = "fixture";
-    q.res[1].name = q.cap[1].name = "memory_bytes";
-    q.res[1].amount = 1; q.cap[1].amount = 20;
+    static const char *const names[] = {"cpu_millis", "memory_bytes", "disk_bytes"};
+    for (size_t i = 0; i < 3; i++) {
+        q.res[i].name = q.cap[i].name = names[i];
+        q.res[i].amount = 1; q.cap[i].amount = 20;
+    }
     CHECK(!etude_history_now(&before), "grant clock reads");
     setenv("ETUDE_PREPARATION_GRANT", fix_path("admission.grant"), 1);
     struct etude_bridge *b = take(l, &q);
     CHECK(b && !etude_context_grant_read(fix_path("admission.grant"), q.id, &grant) &&
           grant.start.monotonic_us >= before.monotonic_us, "admission records its grant before locks");
+    int resources = 0;
+    CHECK(!etude_ledger_list(l, grant_resources, &resources) && resources,
+          "measured preparation reserves CPU, memory and disk");
     CHECK(!etude_ledger_finish(l, q.id, ETUDE_CLEANUP_CONFIRMED), "grant fixture claim ends");
     if (b) etude_bridge_join(b);
     b = take(l, &q);
@@ -962,7 +981,18 @@ static void grant_seed(struct etude_ledger *l, const char *ledger)
     }
     CHECK(etude_ledger_finish(l, q.id, ETUDE_CLEANUP_CONFIRMED) != 0 && errno == ENOENT,
           "grant write failure leaves no claim");
+    q.res[0].amount = 21;
+    CHECK(admit(l, "grant-cpu", q.account, q.res, q.cap, 0) != 0 && errno == ERANGE,
+          "measured preparation cannot exceed CPU capacity");
+    q.res[0].amount = 1; q.res[2].amount = 21;
+    CHECK(admit(l, "grant-disk", q.account, q.res, q.cap, 0) != 0 && errno == ERANGE,
+          "measured preparation cannot exceed disk capacity");
     unsetenv("ETUDE_PREPARATION_GRANT");
+    q.res[0].amount = 21;
+    CHECK(!admit(l, "compatibility", q.account, q.res, q.cap, 0),
+          "unmeasured compatibility admission still reserves only memory");
+    CHECK(!etude_ledger_finish(l, "compatibility", ETUDE_CLEANUP_CONFIRMED),
+          "compatibility fixture claim ends");
 }
 
 /** Exercise the bridge with private locks, without using host admission. */
