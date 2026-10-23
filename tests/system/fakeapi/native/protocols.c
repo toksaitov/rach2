@@ -22,6 +22,16 @@ static const char *reason(const char *format, ...)
     va_end(ap);
     return message;
 }
+static size_t utf8_span(const char *text_value, size_t characters)
+{
+    size_t n = 0;
+    while (text_value[n] && characters--) {
+        n++;
+        while (((unsigned char)text_value[n] & 0xc0) == 0x80)
+            n++;
+    }
+    return n;
+}
 static const char *model(const struct value *step, const char *fallback)
 {
     return *field(step, "model") ? field(step, "model") : fallback;
@@ -358,12 +368,13 @@ static int reply_anthropic(const struct value *s, struct peer *p)
         }
         body = tool ? encode(get(block, "input"), 0) : strdup(field(block, "text"));
         len = strlen(body);
-        for (offset = 0; offset < len; offset += 7) {
-            char part[8];
+        for (offset = 0; offset < len;) {
+            char part[29];
             struct value *delta = typed(tool ? "input_json_delta" : "text_delta");
-            size_t n = len - offset < 7 ? len - offset : 7;
+            size_t n = utf8_span(body + offset, 7);
             memcpy(part, body + offset, n);
             part[n] = 0;
+            offset += n;
             add(delta, tool ? "partial_json" : "text", string(part));
             data = typed("content_block_delta");
             add(data, "index", integer((long long)index));
@@ -587,12 +598,13 @@ static int reply_gemini(const struct value *s, struct peer *p)
         if (get(part, "text")) {
             const char *text_value = field(part, "text");
             size_t offset, n = strlen(text_value);
-            for (offset = 0; offset < n; offset += 7) {
+            for (offset = 0; offset < n;) {
                 struct value *v = value('o');
-                char chunk[8];
-                size_t len = n - offset < 7 ? n - offset : 7;
+                char chunk[29];
+                size_t len = utf8_span(text_value + offset, 7);
                 memcpy(chunk, text_value + offset, len);
                 chunk[len] = 0;
+                offset += len;
                 add(v, "text", string(chunk));
                 add(parts, NULL, v);
             }

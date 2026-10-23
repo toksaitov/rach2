@@ -1,65 +1,549 @@
 {
   "schema_version": 1,
   "family_id": "host.codexapi",
-  "summary": "OpenAI's Responses protocol in the fake API server, proved against Codex at the pinned version in namespaces of the case's own; the program is tests/cases/host/agentapi.sh",
+  "summary": "The pinned upstream codex CLI against the C Responses service, on an isolated GNU Rach2 machine driven by C",
   "cases": [
     {
       "case_id": "host.codexapi.exchange",
-      "behavior": "Codex, in a fresh home and namespaces of the case's own, reads a file and runs a command over a WebSocket, then, refused a second WebSocket with 426, edits a file, runs the command and commits over HTTPS, signed in to the fake API server with a dummy key",
-      "units": ["codexapi", "`tests/system/suites/codexapi.sh`, the first run"],
-      "domain": "host",
-      "architectures": "none",
-      "workload": {"arguments": ["codex", "exchange"], "inputs": {"script": "tests/system/fakeapi/codex.json", "version": "0.162.1"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "linux", "tools": ["sh", "unshare", "ip", "python3", "openssl", "git", "codex"], "features": {}},
-      "execution": {"program": "agentapi", "stdin": null, "role": "ordinary", "privileges": "an ordinary user, root only in the user namespace it makes for its network", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "Codex, the server and every process they start, which end with the PID namespace the program makes; the homes, the clones and the authority's key, which the program removes; its logs under its scratch directory"},
+      "behavior": "Codex, in a fresh home and an isolated GNU Rach2 machine, reads a file and runs a command over a WebSocket, then, refused a second WebSocket with 426, edits a file, runs the command and commits over HTTPS, signed in to the fake API server with a dummy key",
+      "units": [
+        "codexapi",
+        "`tests/system/suites/codexapi.sh`, the first run"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [
+          "codex",
+          "exchange"
+        ],
+        "inputs": {
+          "script": "tests/system/fakeapi/codex.json",
+          "version": "0.162.1"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "agentapi_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "the guest test account; root stages the private home and fixtures",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "gnu-disk"
+            ]
+          }
+        ],
+        "children": "reaped",
+        "cleanup": "C stops the service, removes the private CLI home and authority keys, and waits for QEMU to end, which ends all guest descendants"
+      },
       "assertions": [
-        {"assertion_id": "isolated", "checks": "the case's network namespace has no interface but loopback, and an outside address is unreachable from it", "source": "program"},
-        {"assertion_id": "version", "checks": "codex --version is Codex 0.162.1, the version the case pins", "source": "program"},
-        {"assertion_id": "exit", "checks": "codex exec ends with status 0", "source": "program"},
-        {"assertion_id": "verdict", "checks": "the server played its five steps with five requests, each tool result as the script expects", "source": "program"},
-        {"assertion_id": "exchange", "checks": "the record is two turns over a WebSocket, a second WebSocket refused with 426, and three turns over HTTPS", "source": "program"},
-        {"assertion_id": "credentials", "checks": "every request has the dummy key as its bearer token and the user agent of codex exec at the pinned version", "source": "program"},
-        {"assertion_id": "greeting", "checks": "greeting.txt says hello, rach2", "source": "program"},
-        {"assertion_id": "commit", "checks": "the history is the fixture's commit and Codex's, which changes greeting.txt alone, and the work tree is clean", "source": "program"},
-        {"assertion_id": "cleanup", "checks": "Codex, the server and every process they started have ended, and the homes, the clones and the authority's key are removed", "source": "program"}
+        {
+          "assertion_id": "isolated",
+          "checks": "the QEMU user network permits only the fake API route, and a connection to an outside address fails",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "version",
+          "checks": "codex --version is Codex 0.162.1, the version the case pins",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "exit",
+          "checks": "codex exec ends with status 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "verdict",
+          "checks": "the server played its five steps with five requests, each tool result as the script expects",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "exchange",
+          "checks": "the record is two turns over a WebSocket, a second WebSocket refused with 426, and three turns over HTTPS",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "credentials",
+          "checks": "every request has the dummy key as its bearer token and the user agent of codex exec at the pinned version",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "greeting",
+          "checks": "greeting.txt says hello, rach2",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "commit",
+          "checks": "the history is the fixture's commit and Codex's, which changes greeting.txt alone, and the work tree is clean",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "cleanup",
+          "checks": "the CLI command and service are reaped, the private home and authority keys are removed, and the case observes QEMU exit so that no guest descendant remains",
+          "source": "scenario"
+        }
       ],
       "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3355443200, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a declared C operation ended",
+          "limit": 9
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 1200000000,
+          "ceiling_us": 3600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 400000000,
+            "ceiling_us": 1200000000
+          },
+          "cleanup": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 180000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 5368709120,
+        "disk_bytes": 6442450944,
+        "locks": [],
+        "ports": 1,
+        "loop_devices": 0
+      },
       "prepare": [
-        {"name": "agentapi", "node": "tests/cases/host/agentapi", "per_architecture": false}
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-disk",
+          "node": "images/etude-agents.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "agent-assets",
+          "node": "tests/cases/machine/agents-assets.tar",
+          "per_architecture": false
+        },
+        {
+          "name": "agentapi_scenario",
+          "node": "tests/cases/machine/agentapi_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "agent_server",
+          "node": "tests/cases/machine/agent_server",
+          "per_architecture": false
+        },
+        {
+          "name": "agent_relay",
+          "node": "tests/cases/machine/agent_relay",
+          "per_architecture": false
+        }
       ],
       "timing": [],
-      "native": {"plan": "host"}
+      "native": {
+        "plan": "none",
+        "class": "network",
+        "reason": "the upstream CLI must run on the prepared GNU root with a fresh home and a QEMU network that permits only this case API fixture"
+      },
+      "steps": [
+        {
+          "step_id": "prepare",
+          "stage": "execute",
+          "does": "unpack the immutable fixture assets and create the test authority"
+        },
+        {
+          "step_id": "server",
+          "stage": "execute",
+          "does": "start the C API service"
+        },
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the prepared GNU root and open its framed channel",
+          "machine": "gnu"
+        },
+        {
+          "step_id": "setup",
+          "stage": "execute",
+          "does": "create a fresh CLI home and committed fixture"
+        },
+        {
+          "step_id": "version",
+          "stage": "execute",
+          "does": "check the exact pinned upstream version"
+        },
+        {
+          "step_id": "execute",
+          "stage": "execute",
+          "does": "run the upstream program as the test account"
+        },
+        {
+          "step_id": "verdict",
+          "stage": "execute",
+          "does": "stop and judge the C service"
+        },
+        {
+          "step_id": "verify",
+          "stage": "execute",
+          "does": "check the protocol audit, credentials and repository"
+        },
+        {
+          "step_id": "cleanup",
+          "stage": "execute",
+          "does": "remove private files and end every owned process"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 4294967296,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "rtl8139",
+                "restrict": true,
+                "guest_forwards": [
+                  {
+                    "address": "10.0.2.100",
+                    "guest_port": 443,
+                    "port": 0,
+                    "relay": [
+                      "agent_relay"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "boot_options": [
+              "rach2.root=ext2"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [
+        {
+          "service_id": "fakeapi",
+          "program": "agent_server",
+          "ready": "fakeapi: listening on",
+          "does": "play the private script over TLS on the case port, recording each request and printing a final verdict on SIGTERM"
+        }
+      ]
     },
     {
       "case_id": "host.codexapi.refusal",
       "behavior": "the fake API server refuses Codex's tool result when notes.txt asks for another change, and the repository stays as it was",
-      "units": ["codexapi", "`tests/system/suites/codexapi.sh`, the second run, with other notes"],
-      "domain": "host",
-      "architectures": "none",
-      "workload": {"arguments": ["codex", "refusal"], "inputs": {"script": "tests/system/fakeapi/codex.json", "version": "0.162.1"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "linux", "tools": ["sh", "unshare", "ip", "python3", "openssl", "git", "codex"], "features": {}},
-      "execution": {"program": "agentapi", "stdin": null, "role": "ordinary", "privileges": "an ordinary user, root only in the user namespace it makes for its network", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "Codex, the server and every process they start, which end with the PID namespace the program makes; the homes, the clones and the authority's key, which the program removes; its logs under its scratch directory"},
+      "units": [
+        "codexapi",
+        "`tests/system/suites/codexapi.sh`, the second run, with other notes"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [
+          "codex",
+          "refusal"
+        ],
+        "inputs": {
+          "script": "tests/system/fakeapi/codex.json",
+          "version": "0.162.1"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "agentapi_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "the guest test account; root stages the private home and fixtures",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "gnu-disk"
+            ]
+          }
+        ],
+        "children": "reaped",
+        "cleanup": "C stops the service, removes the private CLI home and authority keys, and waits for QEMU to end, which ends all guest descendants"
+      },
       "assertions": [
-        {"assertion_id": "isolated", "checks": "the case's network namespace has no interface but loopback, and an outside address is unreachable from it", "source": "program"},
-        {"assertion_id": "version", "checks": "codex --version is Codex 0.162.1, the version the case pins", "source": "program"},
-        {"assertion_id": "refused", "checks": "the server refuses the output of Codex's read of notes.txt, the first tool result, and its verdict fails", "source": "program"},
-        {"assertion_id": "unchanged", "checks": "greeting.txt says hello, world, and the history is the fixture's commit alone", "source": "program"},
-        {"assertion_id": "cleanup", "checks": "Codex, the server and every process they started have ended, and the homes, the clones and the authority's key are removed", "source": "program"}
+        {
+          "assertion_id": "isolated",
+          "checks": "the QEMU user network permits only the fake API route, and a connection to an outside address fails",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "version",
+          "checks": "codex --version is Codex 0.162.1, the version the case pins",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "refused",
+          "checks": "the server refuses the output of Codex's read of notes.txt, the first tool result, and its verdict fails",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "unchanged",
+          "checks": "greeting.txt says hello, world, and the history is the fixture's commit alone",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "cleanup",
+          "checks": "the CLI command and service are reaped, the private home and authority keys are removed, and the case observes QEMU exit so that no guest descendant remains",
+          "source": "scenario"
+        }
       ],
       "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3355443200, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a declared C operation ended",
+          "limit": 9
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 1200000000,
+          "ceiling_us": 3600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 400000000,
+            "ceiling_us": 1200000000
+          },
+          "cleanup": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 180000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 5368709120,
+        "disk_bytes": 6442450944,
+        "locks": [],
+        "ports": 1,
+        "loop_devices": 0
+      },
       "prepare": [
-        {"name": "agentapi", "node": "tests/cases/host/agentapi", "per_architecture": false}
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-disk",
+          "node": "images/etude-agents.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "agent-assets",
+          "node": "tests/cases/machine/agents-assets.tar",
+          "per_architecture": false
+        },
+        {
+          "name": "agentapi_scenario",
+          "node": "tests/cases/machine/agentapi_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "agent_server",
+          "node": "tests/cases/machine/agent_server",
+          "per_architecture": false
+        },
+        {
+          "name": "agent_relay",
+          "node": "tests/cases/machine/agent_relay",
+          "per_architecture": false
+        }
       ],
       "timing": [],
-      "native": {"plan": "host"}
+      "native": {
+        "plan": "none",
+        "class": "network",
+        "reason": "the upstream CLI must run on the prepared GNU root with a fresh home and a QEMU network that permits only this case API fixture"
+      },
+      "steps": [
+        {
+          "step_id": "prepare",
+          "stage": "execute",
+          "does": "unpack the immutable fixture assets and create the test authority"
+        },
+        {
+          "step_id": "server",
+          "stage": "execute",
+          "does": "start the C API service"
+        },
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the prepared GNU root and open its framed channel",
+          "machine": "gnu"
+        },
+        {
+          "step_id": "setup",
+          "stage": "execute",
+          "does": "create a fresh CLI home and committed fixture"
+        },
+        {
+          "step_id": "version",
+          "stage": "execute",
+          "does": "check the exact pinned upstream version"
+        },
+        {
+          "step_id": "execute",
+          "stage": "execute",
+          "does": "run the upstream program as the test account"
+        },
+        {
+          "step_id": "verdict",
+          "stage": "execute",
+          "does": "stop and judge the C service"
+        },
+        {
+          "step_id": "verify",
+          "stage": "execute",
+          "does": "check the protocol audit, credentials and repository"
+        },
+        {
+          "step_id": "cleanup",
+          "stage": "execute",
+          "does": "remove private files and end every owned process"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 4294967296,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "rtl8139",
+                "restrict": true,
+                "guest_forwards": [
+                  {
+                    "address": "10.0.2.100",
+                    "guest_port": 443,
+                    "port": 0,
+                    "relay": [
+                      "agent_relay"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "boot_options": [
+              "rach2.root=ext2"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [
+        {
+          "service_id": "fakeapi",
+          "program": "agent_server",
+          "ready": "fakeapi: listening on",
+          "does": "play the private script over TLS on the case port, recording each request and printing a final verdict on SIGTERM"
+        }
+      ]
     }
   ]
 }

@@ -4,6 +4,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#define mkdir(path, mode) _mkdir(path)
+#endif
 
 struct row {
     struct net_case *u;
@@ -251,10 +256,6 @@ static int setup(struct row *s)
     net_run_free(&r);
     if (!i)
         return 0;
-    if (s->fake) {
-        const char *client = etude_artifact(s->u->c, "wsclient");
-        return client && put(s, client, "/tmp/agents/wsclient", "0755");
-    }
     return 1;
 }
 static int row_run(struct row *s)
@@ -636,7 +637,7 @@ static int curl_case(struct row *s)
     memset(pad, 'x', 200);
     pad[200] = 0;
     snprintf(line, sizeof(line),
-             "/tmp/agents/wsclient fakeapi.test /v1/socket /tmp/agents/ca.pem ping "
+             "/etude-wsclient fakeapi.test /v1/socket /tmp/agents/ca.pem ping "
              "'{\"n\":2,\"pad\":\"%s\"}'",
              pad);
     if (!as_test(s, line, "websocket", &r))
@@ -688,4 +689,311 @@ int agent_native_action(struct net_case *u, struct net_boot *b, const char *work
     if (!strcmp(verb, "verify"))
         return verify(&s);
     return 0;
+}
+
+/* The upstream CLI proofs retain their case identities while moving their
+ * isolated process environment into a prepared GNU Rach2 machine. */
+static int api_prepare(struct row *s)
+{
+    const char *assets = etude_artifact(s->u->c, "agent-assets");
+    char ca[4096], destination[4096], *names[] = {"agent_server", "ca", ca, "fakeapi.test", NULL};
+    char *unpack[] = {"agent_server", "unpack", (char *)assets, s->assets, NULL};
+    char *render[] = {"agent_server", "render", s->script, destination, (char *)s->name, NULL};
+    if (!assets || !host(s, unpack, "unpack-api-assets"))
+        return 0;
+    path(s->script, sizeof(s->script), "%s/tests/system/fakeapi/%s.json", s->assets,
+         !strncmp(s->name, "codex", 5) ? "codex" : "muse");
+    path(ca, sizeof(ca), "%s/ca", s->work);
+    path(destination, sizeof(destination), "%s/script.json", s->work);
+    return host(s, names, "api-authority") && host(s, render, "api-script");
+}
+static int api_file(struct row *s, const char *name, const char *guest, const char *contents,
+                    const char *mode)
+{
+    char file[4096];
+    path(file, sizeof(file), "%s/%s", s->work, name);
+    return write_text(file, contents) && put(s, file, guest, mode);
+}
+static int api_setup(struct row *s, int refusal)
+{
+    char file[4096], config[5000];
+    unsigned i;
+    const char *files[] = {"check.sh", "greeting.txt", "notes.txt"};
+    if (!run(s,
+             "mkdir -p /tmp/agentapi/home/.codex /tmp/agentapi/home/.config/muse /tmp/agentapi/tmp "
+             "/tmp/agents/verify/repo /tmp/agents/fixture && printf '10.0.2.100 fakeapi.test\n' >> "
+             "/etc/hosts",
+             "api-directories"))
+        return 0;
+    for (i = 0; i < 3; i++) {
+        char guest[200];
+        path(file, sizeof(file), "%s/tests/system/fakeapi/repo/%s", s->assets, files[i]);
+        snprintf(guest, sizeof(guest), "/tmp/agents/fixture/%s", files[i]);
+        if (!put(s, file, guest, i == 0 ? "0755" : "0644"))
+            return 0;
+    }
+    path(file, sizeof(file), "%s/ca/ca.pem", s->work);
+    if (!put(s, file, "/tmp/agentapi/ca.pem", "0644"))
+        return 0;
+    snprintf(config, sizeof(config), "[user]\n name = %s Test\n email = %s@fakeapi.test\n",
+             !strncmp(s->name, "codex", 5) ? "Codex" : "Muse",
+             !strncmp(s->name, "codex", 5) ? "codex" : "muse");
+    if (!api_file(s, "gitconfig", "/tmp/agentapi/home/.gitconfig", config, "0644"))
+        return 0;
+    if (!strncmp(s->name, "codex", 5)) {
+        if (!api_file(s, "codex.toml", "/tmp/agentapi/home/.codex/config.toml",
+                      "model = \"gpt-5.5\"\nmodel_provider = \"fakeapi\"\napproval_policy = "
+                      "\"never\"\nsandbox_mode = \"danger-full-access\"\n"
+                      "check_for_update_on_startup = false\n[analytics]\nenabled = "
+                      "false\n[model_providers.fakeapi]\n"
+                      "name = \"fakeapi\"\nbase_url = \"https://fakeapi.test/v1\"\nenv_key = "
+                      "\"FAKEAPI_KEY\"\n"
+                      "wire_api = \"responses\"\nsupports_websockets = true\n",
+                      "0644"))
+            return 0;
+    } else if (!api_file(
+                   s, "muse-settings.json", "/tmp/agentapi/home/.config/muse/settings.json",
+                   "{\"schema_version\":1,\"telemetry\":{\"enabled\":false},\"runtime_"
+                   "capabilities\":{"
+                   "\"plugin:tbh-reminders:reminder:goal-reminder\":{\"enabled\":false},"
+                   "\"plugin:tbh-reminders:reminder:memory\":{\"enabled\":false},"
+                   "\"plugin:tbh-reminders:reminder:scope-reminder\":{\"enabled\":false},"
+                   "\"plugin:tbh-reminders:reminder:skill-reminder\":{\"enabled\":false},"
+                   "\"plugin:tbh-reminders:reminder:todo-reminder\":{\"enabled\":false},"
+                   "\"plugin:tbh-reminders:reminder:verify-reminder\":{\"enabled\":false}}}\n",
+                   "0644"))
+        return 0;
+    if (!run(s,
+             "cp /tmp/agents/fixture/* /tmp/agents/verify/repo/ && "
+             "chown -R test:test /tmp/agentapi /tmp/agents",
+             "api-fixture"))
+        return 0;
+    if (refusal && !api_file(s, "wrong-notes.txt", "/tmp/agents/verify/repo/notes.txt",
+                             "Change the greeting in greeting.txt to: hello, there\n", "0644"))
+        return 0;
+    {
+        struct net_run r;
+        int ok = as_test(s,
+                         "cd /tmp/agents/verify/repo && export HOME=/tmp/agentapi/home && "
+                         "git init -q . && git add . && git commit -qm 'The fixture'",
+                         "api-initial-commit", &r) &&
+                 net_exited0(&r);
+        net_run_free(&r);
+        return ok;
+    }
+}
+static int api_start(struct row *s)
+{
+    const char *prompt =
+        "Read notes.txt and do what it says. Check the change with check.sh, then commit it.";
+    char line[5000];
+    if (!strncmp(s->name, "codex", 5))
+        snprintf(
+            line, sizeof(line),
+            "cd /tmp/agents/verify/repo && exec env -i PATH=/usr/bin:/bin HOME=/tmp/agentapi/home "
+            "CODEX_HOME=/tmp/agentapi/home/.codex TMPDIR=/tmp/agentapi/tmp LANG=C.UTF-8 TERM=dumb "
+            "FAKEAPI_KEY=sk-fakeapi-dummy CODEX_CA_CERTIFICATE=/tmp/agentapi/ca.pem "
+            "/opt/codex/bin/codex exec '%s'",
+            prompt);
+    else
+        snprintf(
+            line, sizeof(line),
+            "cd /tmp/agents/verify/repo && exec env -i PATH=/usr/bin:/bin HOME=/tmp/agentapi/home "
+            "TMPDIR=/tmp/agentapi/tmp LANG=C.UTF-8 TERM=dumb META_API_KEY=meta-fakeapi-dummy "
+            "/opt/muse/bin/muse exec --yolo --model muse-spark-1.2 --max-model-steps 8 "
+            "--base-url https://fakeapi.test/v1 -c "
+            "'endpoint_transport.ca_bundle=\"/tmp/agentapi/ca.pem\"' '%s'",
+            prompt);
+    {
+        const char *args[] = {"/bin/su", "-s", "/bin/bash", "test", "-c", line, NULL};
+        return etude_guest_start(s->b->m, args, NULL, NULL) == ETUDE_OK;
+    }
+}
+static int api_audit(struct row *s)
+{
+    char script[4096], record_path[4096];
+    char *args[] = {"agent_server",  "verify",   script, record_path,
+                    (char *)s->name, s->version, NULL};
+    path(script, sizeof(script), "%s/script.json", s->work);
+    path(record_path, sizeof(record_path), "%s/record", s->work);
+    return host(s, args, "api-audit");
+}
+int agentapi_native(struct etude_case *c)
+{
+    struct net_case u;
+    struct net_boot b;
+    struct row s;
+    struct net_run r;
+    struct etude_case_service *server = NULL;
+    struct etude_termination end;
+    struct etude_guest_result result;
+    char work[4096], password[128], script[4096], record_path[4096], ca[4096], port[20];
+    const char *id = etude_case_id(c);
+    int codex = strstr(id, ".codexapi.") != NULL;
+    int refusal = strstr(id, ".refusal") != NULL, running = 0, stopped_service = 0, service_ok = 0,
+        prepared = 0;
+    int agent_ok = 0, audit_ok = 0, cleanup = 1, channel_ready = 0, muse_live = 1;
+    char *service_log = NULL, *status = NULL;
+    memset(&b, 0, sizeof(b));
+    memset(&s, 0, sizeof(s));
+    memset(&result, 0, sizeof(result));
+    net_case(&u, c);
+    s.u = &u;
+    s.b = &b;
+    s.name = codex ? "codex-api" : "muse-api";
+    snprintf(s.version, sizeof(s.version), "%s", codex ? "0.162.1" : "1.4.10-R6427.1");
+    snprintf(work, sizeof(work), "%s", etude_evidence(c, "api-work"));
+    s.work = work;
+    path(s.assets, sizeof(s.assets), "%s/assets", work);
+    net_step(&u, "prepare");
+    if (mkdir(work, 0700) || !api_prepare(&s))
+        net_fail(&u, "the API fixtures could not be prepared");
+    prepared = net_ok(&u);
+    net_step(&u, "server");
+    path(script, sizeof(script), "%s/script.json", work);
+    path(record_path, sizeof(record_path), "%s/record", work);
+    path(ca, sizeof(ca), "%s/ca", work);
+    snprintf(port, sizeof(port), "%u", etude_port(c, 0));
+    {
+        char *args[] = {"serve", script, record_path, ca, port, NULL};
+        if (net_ok(&u) && etude_service(c, "fakeapi", args, &server, &end) != ETUDE_OK)
+            net_fail(&u, "the API service did not listen");
+    }
+    net_step(&u, "boot");
+    net_boot(&b, &u, "gnu", 1, NULL);
+    net_wait(&b, "ext2: root: /dev/disk0p1");
+    net_wait(&b, "init: sshd: started as pid");
+    b.at = 0;
+    if (net_ok(&u) &&
+        (!net_secret(&u, "demo-password", password, sizeof(password)) ||
+         net_login(&b, "root", password, "# ") != ETUDE_OK || etude_guest_open(b.m) != ETUDE_OK))
+        net_fail(&u, "the guest command channel did not start");
+    channel_ready = net_ok(&u);
+    net_step(&u, "setup");
+    if (net_ok(&u) && !api_setup(&s, refusal))
+        net_fail(&u, "the fresh CLI home and repository could not be prepared");
+    if (net_ok(&u) && shell(&s, "curl -sS -o /dev/null http://1.1.1.1/; printf 'rc=%s\\n' \"$?\"",
+                            "api-no-route", &r)) {
+        agent_ok = strstr(r.out, "rc=") && !strstr(r.out, "rc=0");
+        net_run_free(&r);
+    }
+    net_assert(&u, "isolated", agent_ok, "the restricted guest reached an outside address");
+    agent_ok = 0;
+    net_step(&u, "version");
+    {
+        const char *args[] = {codex ? "/opt/codex/bin/codex" : "/opt/muse/bin/muse", "--version",
+                              NULL};
+        if (net_ok(&u) && command(&s, args, "api-version", &r)) {
+            agent_ok =
+                net_exited0(&r) && !strcmp(r.out, codex ? "codex-cli 0.162.1\n"
+                                                        : "Muse Code 1.4.10 (1.4.10-R6427.1)\n");
+            net_run_free(&r);
+        }
+    }
+    net_assert(&u, "version", agent_ok, "the upstream program is not the pinned version");
+    if (net_ok(&u) && !agent_ok)
+        net_fail(&u, "the upstream version differs from the case");
+    net_step(&u, "execute");
+    if (net_ok(&u))
+        running = api_start(&s);
+    if (net_ok(&u) && !running)
+        net_fail(&u, "the upstream CLI did not start");
+    if (running) {
+        uint64_t at;
+        if (refusal && !codex && etude_service_wait(server, ": unexpected:", 0, &at) != ETUDE_OK)
+            net_fail(&u, "the API did not reject Muse's incorrect tool result");
+        if (refusal && !codex)
+            muse_live = etude_guest_running(b.m);
+        if (etude_guest_finish(b.m, refusal && !codex, "upstream-cli", &result) != ETUDE_OK)
+            net_fail(&u, "the upstream CLI result was lost");
+        running = 0;
+        agent_ok = result.complete && result.cleanup == ETUDE_CLEANUP_CONFIRMED &&
+                   result.termination.end == ETUDE_END_EXITED && result.termination.value == 0;
+    }
+    net_step(&u, "verdict");
+    if (server) {
+        stopped_service = etude_service_stop(server, &end) == ETUDE_OK;
+        server = NULL;
+    }
+    service_log = net_file(etude_evidence(c, "fakeapi.1.out"));
+    {
+        char file[4096];
+        path(file, sizeof(file), "%s/record.status", work);
+        status = net_file(file);
+    }
+    service_ok =
+        stopped_service && !strcmp(status, refusal ? "1\n" : "0\n") &&
+        strstr(service_log, refusal ? codex ? "the first request 1: turn 2: the output of call_read"
+                                            : "result: fail:"
+                            : codex ? "result: pass: 5 steps played by 5 requests"
+                                    : "result: pass: 6 steps played by 6 requests");
+    if (refusal && !codex)
+        service_ok =
+            service_ok &&
+            strstr(service_log,
+                   "the first request 3: POST /v1/responses: step 3: the output of call_read");
+    fputs(service_log, stdout);
+    net_step(&u, "verify");
+    if (refusal) {
+        net_assert(&u, "refused", service_ok && muse_live,
+                   "the API did not refuse the first incorrect tool result");
+        {
+            const char *cat[] = {"/bin/cat", "/tmp/agents/verify/repo/greeting.txt", NULL};
+            audit_ok = net_ok(&u) &&
+                       guest_expect(&s, cat, "hello, world\n", "unchanged-greeting") &&
+                       git_expect(&s, "log", "--format=%s", "The fixture\n", "unchanged-history");
+        }
+        net_assert(&u, "unchanged", audit_ok,
+                   "the refusal changed the greeting or repository history");
+    } else {
+        net_assert(&u, "exit", agent_ok, "the upstream CLI did not exit with status zero");
+        net_assert(&u, "verdict", service_ok,
+                   "the API did not play the complete expected exchange");
+        audit_ok = net_ok(&u) && api_audit(&s);
+        net_assert(&u, "exchange", audit_ok, "the API audit differs from the scripted exchange");
+        net_assert(&u, "credentials", audit_ok,
+                   "an API request lacks the dummy key or upstream user agent");
+        {
+            const char *cat[] = {"/bin/cat", "/tmp/agents/verify/repo/greeting.txt", NULL};
+            net_assert(&u, "greeting",
+                       net_ok(&u) && guest_expect(&s, cat, "hello, rach2\n", "final-greeting"),
+                       "the greeting differs from the requested text");
+        }
+        net_assert(&u, "commit", net_ok(&u) && verify_repo(&s),
+                   "the upstream commit or work tree differs from the fixture's expected result");
+    }
+    net_step(&u, "cleanup");
+    if (running)
+        etude_guest_finish(b.m, 1, "upstream-cli-cancelled", &result);
+    if (server)
+        cleanup = etude_service_stop(server, &end) == ETUDE_OK;
+    if (b.m) {
+        if (channel_ready) {
+            int removed = run(&s,
+                              "rm -rf /tmp/agentapi /tmp/agents && test ! -e /tmp/agentapi "
+                              "&& test ! -e /tmp/agents",
+                              "remove-cli-home");
+            cleanup = cleanup && removed;
+        }
+        {
+            char *reply = NULL;
+            etude_qmp(b.m, "quit", NULL, &reply);
+            free(reply);
+            int ended = etude_wait_end(b.m, &end) == ETUDE_OK;
+            cleanup = cleanup && ended;
+        }
+    }
+    if (prepared || *ca) {
+        char *remove[] = {"agent_server", "remove", ca, NULL};
+        int removed = etude_host(c, remove, "remove-api-keys", &end) == ETUDE_OK &&
+                      end.end == ETUDE_END_EXITED && end.value == 0;
+        cleanup = removed && cleanup;
+    }
+    etude_assert(c, "cleanup", cleanup,
+                 "the private CLI processes, home or certificate keys outlived cleanup");
+    if (!cleanup)
+        u.failures++;
+    free(service_log);
+    free(status);
+    return net_end(&u);
 }

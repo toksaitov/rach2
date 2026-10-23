@@ -214,7 +214,7 @@ static int worker_prompt(const char *script_path, const struct value *steps,
     char block[4096], issue[32];
     size_t n;
     unsigned session = 0;
-    if (!root_end || !messages || !messages->child)
+    if (!messages || !messages->child)
         return 0;
     for (before = steps->child; before; before = before->next) {
         if (!get(before, "results"))
@@ -224,8 +224,16 @@ static int worker_prompt(const char *script_path, const struct value *steps,
     }
     if (session < 1 || session > 2)
         return 0;
-    append(&filename, script_path, (size_t)(root_end - script_path));
-    putsb(&filename, "/tools/flow/worker.txt");
+    if (root_end) {
+        append(&filename, script_path, (size_t)(root_end - script_path));
+        putsb(&filename, "/tools/flow/worker.txt");
+    } else {
+        const char *slash = strrchr(script_path, '/');
+        if (!slash)
+            return 0;
+        append(&filename, script_path, (size_t)(slash - script_path));
+        putsb(&filename, "/assets/tools/flow/worker.txt");
+    }
     f = fopen(filename.data, "rb");
     clear(&filename);
     if (!f)
@@ -261,7 +269,7 @@ int verify_record(const char *script_path, const char *record_path, const char *
     struct value *script = read_json(script_path), *entries = read_json_lines(record_path);
     const struct value *e, *steps = get(script, "steps"), *step;
     unsigned *seen = allocate((count(steps) + 1) * sizeof(*seen));
-    unsigned requests = 0, turns = 0;
+    unsigned requests = 0, turns = 0, socket_n = 0, closes = 0;
     int result = 1;
     char agent[200] = "";
     if (!script || !entries || !steps)
@@ -269,6 +277,13 @@ int verify_record(const char *script_path, const char *record_path, const char *
     if (!strcmp(row, "curl")) {
         result = verify_curl(entries);
         goto done;
+    }
+    if (!strncmp(row, "codex", 5)) {
+        for (e = first(entries); e; e = e->next)
+            if (get(e, "method") && number(e, "step", 0) == 1)
+                socket_n = (unsigned)number(e, "n", 0);
+        if (!socket_n)
+            goto done;
     }
     if (!strncmp(row, "codex", 5))
         snprintf(agent, sizeof(agent), "%s/%s ",
@@ -289,7 +304,7 @@ int verify_record(const char *script_path, const char *record_path, const char *
             goto done;
         if (get(e, "failed") || get(e, "unexpected"))
             goto done;
-        if (get(e, "received") && number(e, "n", 0) == 1 && !strncmp(row, "codex", 5)) {
+        if (get(e, "received") && number(e, "n", 0) == socket_n && !strncmp(row, "codex", 5)) {
             struct value *body = parse(field(e, "received"));
             if (!body || strcmp(field(body, "type"), "response.create") ||
                 flag(body, "generate", 1) != (turns != 0)) {
@@ -299,8 +314,16 @@ int verify_record(const char *script_path, const char *record_path, const char *
             turns++;
             destroy(body);
         }
-        if (!get(e, "method"))
+        if (!strncmp(row, "codex", 5) && number(e, "n", 0) == socket_n && get(e, "sent_close")) {
+            if (number(e, "sent_close", 0) != 1000)
+                goto done;
+            closes++;
+        }
+        if (!get(e, "method")) {
+            if (!strncmp(row, "muse", 4))
+                goto done;
             continue;
+        }
         {
             struct request r;
             const char *protocol, *why, *expected_key = NULL;
@@ -352,7 +375,7 @@ int verify_record(const char *script_path, const char *record_path, const char *
         if (!flag(step, "repeat", 0) && seen[n] != 1)
             goto done;
     }
-    if (!strncmp(row, "codex", 5) && turns != 3)
+    if (!strncmp(row, "codex", 5) && (turns != 3 || closes != 1))
         goto done;
     result = requests == 0 && steps->child ? 1 : 0;
 done:

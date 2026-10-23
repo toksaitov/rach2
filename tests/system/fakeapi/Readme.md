@@ -1,0 +1,21 @@
+# The scripted API service
+
+`native/` implements the test service in C11. `make build/tests/cases/machine/agent_server` builds it with static OpenSSL libraries from the GNU layer's pinned source. The preparation may use the compiler, Perl and Make; the service loads no host library or module and runs no command. `agent_relay` is the same compiled program under the name QEMU's restricted guest forward uses. `sntpserver.c`, one directory above, uses the same portable socket and process-lifetime code without TLS.
+
+The service accepts these commands:
+
+* `agent_server ca DIR NAME...` creates a private authority and an ECDSA server certificate for the DNS names and IP addresses. The certificates expire after two days. The caller owns `DIR` and removes it.
+* `agent_server serve SCRIPT RECORD CERTDIR [PORT]` serves HTTP/1.1 over TLS on loopback, using a free port when none is given. It prints its listening port, appends JSON records for requests and WebSocket messages, and prints its verdict on SIGTERM, SIGINT or a Windows console stop. It also writes `RECORD.status`. The verdict fails for an unexpected request, a failed exchange or any nonrepeated step left unplayed.
+* `agent_server relay PORT`, or `agent_relay PORT`, copies the connection on its standard streams to the service. It joins its copy thread before returning.
+* `agent_server render SOURCE DESTINATION ROW` makes the selected row's script, including its repository paths, unordered service calls, screen requests and held final answer.
+* `agent_server verify SCRIPT RECORD ROW VERSION` checks each recorded request against its step, the required credentials and user agent, and the row's WebSocket exchanges. Repeated steps are optional and every other step must occur once.
+* `agent_server unpack ARCHIVE DIR` reads the immutable source assets with etude's tar reader. `worker-proof ARCHIVE DIR` checks the returned worker board, log and transcripts; the C scenario separately checks the origin's commits with the guest's Git.
+* `agent_server remove DIR` removes private fixture files after their processes have ended.
+
+A script has a `protocol` and a `steps` array. The protocols are `plain` for literal requests and responses, `responses` for streamed OpenAI Responses and WebSocket continuations, `anthropic` for Messages, and `gemini` for generateContent. The checked JSON scripts in this directory and `../agents/` are the protocol fixtures. Requests are matched to the first available ordered step, then to available unordered steps. A repeated step must be unordered. A held step waits for `/fakeapi/release`; `/fakeapi/held` identifies its pending request. Control requests consume no step and have no request number.
+
+The transport accepts request bodies by length or chunks, including `100-continue` and chunk extensions. Responses use a length or chunked server-sent events. WebSocket requests use a checked upgrade digest, masked client frames, fragmented messages, ping and pong, 16-bit and 64-bit lengths, and the close handshake. A reset before the required exchange ends fails the step; a reset after the server starts the closing handshake does not undo it.
+
+Each connection has a thread. Shutdown closes every owned socket, wakes held replies and joins every thread before computing the verdict. The services also watch their parent's lifetime. A scenario that ends unexpectedly therefore cannot leave a service listening outside its owned job. TLS handshake failures consume no script step, which preserves the case that rejects the private authority against the guest's system store before trusting it explicitly.
+
+`native/selftest.c` compiles as `build/tests/system/fakeapi_test`. It checks the production request parser, protocol checks, response framing, ordered and repeated steps, held replies, fragmented WebSockets, reset behavior and all response variants using byte buffers in place of SSL reads and writes. The machine fakeapi case supplies the real TLS, hostname validation, guest routing and socket checks, with the GNU guest's curl and `/etude-wsclient`, compiled from `native/wsclient.c` when the GNU root is prepared. The Python modules remain the reference used by the older standalone proof programs while their entry points are migrated; the native machine scenarios run the C service and C verifiers.

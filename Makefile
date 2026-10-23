@@ -692,6 +692,7 @@ NET_SCENARIOS = build/tests/cases/machine/diskdiag_scenario \
                 build/tests/cases/machine/sealed_scenario \
                 build/tests/cases/machine/grub_scenario \
                 build/tests/cases/machine/agents_scenario \
+                build/tests/cases/machine/agentapi_scenario \
                 build/tests/cases/machine/uefi_scenario
 $(NET_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
                   tests/cases/machine/netcase.c tests/cases/machine/netcase.h \
@@ -700,7 +701,7 @@ $(NET_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils
 
-build/tests/cases/machine/agents_scenario: tests/cases/machine/agent_native.c tests/cases/machine/agent_native.h
+build/tests/cases/machine/agents_scenario build/tests/cases/machine/agentapi_scenario: tests/cases/machine/agent_native.c tests/cases/machine/agent_native.h
 
 # The fake API and SNTP services are compiled portable helpers.
 include tests/system/fakeapi/native.mk

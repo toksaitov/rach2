@@ -810,24 +810,20 @@ build/tests/cases/gnu/sed.tar.xz: vendor/gnu/fetch.sh vendor/gnu/sources.txt
 	@mkdir -p $(@D)
 	cp "`sh vendor/gnu/fetch.sh --path sed`" $@
 
-# `tests/run codexapi`: OpenAI's Responses protocol in the fake API server,
-# proved against Codex at the pinned version, in a fresh home and a network
-# namespace with only a loopback interface: Codex reads a file, runs a
-# command, edits a file and commits, over a WebSocket and then over the HTTPS
-# fallback, and the server refuses a wrong tool result. They are the cases of
-# tests/cases/host.codexapi.json, which run on the host, or in etude's tooling
-# machine on a host that is not Linux, and have no target here.
+# `tests/run codexapi`: OpenAI's Responses protocol in the C fake API
+# service, proved against the pinned upstream Codex in a fresh home on an
+# isolated GNU Rach2 machine: two turns over a WebSocket, a refused second
+# WebSocket and three turns over HTTPS, with the file, commit, credentials
+# and clean repository checked, and an incorrect tool result refused.
 
-# `tests/run museapi`: the Responses protocol of Meta's Model API in the fake
-# API server, proved against Muse Code at the pinned version, fetched and
-# checked against Meta's digest, in a fresh home and a network namespace with
-# only a loopback interface: Muse reads a file, runs a command, edits a file
-# and commits, and the server refuses a wrong tool result. They are the cases
-# of tests/cases/host.museapi.json, which run on the host, or in etude's
-# tooling machine on a host that is not Linux, and have no target here.
+# `tests/run museapi`: Meta's Model API in the C fake API service, proved
+# against the pinned upstream Muse on an isolated GNU Rach2 machine: the
+# model catalog and five HTTPS turns, with the file, commit, credentials
+# and clean repository checked, and an incorrect tool result refused while
+# Muse still runs, before its cancellation and confirmed cleanup.
 
 # `tests/run agents`: the pinned GNU agent packages and their headless and
-# interactive sessions, each row over SSH on a private GNU disk against its
+# interactive sessions, each row driven by C on a private GNU disk against its
 # fake API service, as the cases of tests/cases/machine.agents.json.
 
 # `tests/run agentsaccept`: each agent's work, cancellation, resized terminal,

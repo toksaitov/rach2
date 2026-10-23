@@ -124,7 +124,7 @@ diskfull|qemu|core
 fault|qemu|core
 imagerace|-|full
 krffscheck|python3|full
-codexapi|codex+python3+openssl+git+unshare+ip/tooling|full|||x86_64
-museapi|curl,python3+openssl+git+unshare+ip/tooling|full|||x86_64
+codexapi|qemu|full||4096|x86_64
+museapi|qemu|full||4096|x86_64
 conload|qemu,mformat|core
 textbusy|qemu|full||128|x86_64
