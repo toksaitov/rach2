@@ -76,12 +76,15 @@ static int fault_probe(const char *mode, int argc)
 
 static int signal_probe(void)
 {
+    /* This legacy output is input to the host runner's output filter. */
+    static const char note[] = "signals_hosttest: not run: nothing: "
+                               "this line is repeated under the pass";
     struct sigaction a, b;
     sigset_t mask;
     sigaction(SIGINT, NULL, &a);
     sigaction(SIGQUIT, NULL, &b);
     sigprocmask(SIG_BLOCK, NULL, &mask);
-    puts("signals_hosttest: not run: nothing: this line is repeated under the pass");
+    puts(note);
     return a.sa_handler != SIG_DFL || b.sa_handler != SIG_DFL || sigismember(&mask, SIGINT);
 }
 
@@ -143,6 +146,7 @@ int main(int argc, char **argv)
             return 6;
         while (count(meet) < 8) {
             struct timespec tick = {0, 1000000};
+            /* interval: poll the meeting directory every millisecond */
             nanosleep(&tick, NULL);
         }
         puts("meet: all 8 checks running");

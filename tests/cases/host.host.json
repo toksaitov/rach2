@@ -2375,12 +2375,6 @@
       "timing": [
         {
           "kind": "injected_delay",
-          "where": "tests/cases/host/fixture.c:385",
-          "assumes": "A short pause yields between reads of a fixture state. Completion is decided by published state and the case watchdog.",
-          "uncertainty_us": null
-        },
-        {
-          "kind": "injected_delay",
           "where": "tests/cases/host/flow_status.c:109",
           "assumes": "The wait fixture crosses one retry before comparing the stored start. The assertion compares records, not elapsed time.",
           "uncertainty_us": null
@@ -2393,20 +2387,32 @@
         },
         {
           "kind": "injected_delay",
-          "where": "tests/cases/host/host_suite_probe.c:115",
+          "where": "tests/cases/host/host_suite_probe.c:118",
           "assumes": "The child lingers so the driver can observe and cancel it.",
-          "uncertainty_us": null
-        },
-        {
-          "kind": "injected_delay",
-          "where": "tests/cases/host/host_suite_probe.c:146",
-          "assumes": "A short pause yields between reads of the meeting directory.",
           "uncertainty_us": null
         },
         {
           "kind": "injected_delay",
           "where": "tests/cases/host/flow_tooling.c:240",
           "assumes": "The mock machine has a delayed workload for the product deadline and cancellation checks. The controller gives no completion deadline of its own.",
+          "uncertainty_us": null
+        },
+        {
+          "kind": "injected_delay",
+          "where": "tests/cases/host/host_products_drive.c:140",
+          "assumes": "The mock retains its process group after TERM so the product must keep the workspace lock until cleanup ends.",
+          "uncertainty_us": null
+        },
+        {
+          "kind": "injected_delay",
+          "where": "tests/cases/host/host_products_drive.c:291",
+          "assumes": "A second TERM follows the first after half a second while the mock is still cleaning its process group.",
+          "uncertainty_us": null
+        },
+        {
+          "kind": "injected_delay",
+          "where": "tests/cases/host/host_products_drive.c:296",
+          "assumes": "The controller allows the TERM cleanup to begin before injecting SIGKILL, then checks the next invocation removes abandoned state.",
           "uncertainty_us": null
         }
       ],

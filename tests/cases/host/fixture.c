@@ -382,6 +382,7 @@ void fx_env(const char *key, const char *value)
 void fx_pause(void)
 {
     struct timespec t = {0, 20000000};
+    /* interval: poll the fixture state every 20 ms */
     nanosleep(&t, NULL);
 }
 int fx_start_io(struct fixture *f, struct fx_child *p, const char *const args[], const char *cwd,

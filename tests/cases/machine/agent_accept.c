@@ -26,6 +26,7 @@ static void pause_read(void)
     Sleep(2000);
 #else
     struct timespec t = {2, 0};
+    /* interval: poll the agent pane every two seconds */
     nanosleep(&t, NULL);
 #endif
 }

@@ -16,6 +16,12 @@ tests/host/etude_ports_hosttest.c: a run is looked at again, or watched while it
 tests/system/accept/agents_accept.sh: the reopened conversation is read every two seconds
 tests/host/etude_hold_hosttest.c: the path is looked at again every 10 ms
 tests/host/etude_hold_hosttest.c: a second TERM follows the first by 100 ms
+tests/host/etude_hold_hosttest.c: retain the parent while the second stop is sent.
+tests/cases/host/host_products_drive.c: poll the readiness file every 100 ms
+tests/cases/host/host_products_drive.c: poll the process group every 100 ms
+tests/cases/machine/agent_accept.c: poll the agent pane every two seconds
+tests/cases/host/fixture.c: poll the fixture state every 20 ms
+tests/cases/host/host_suite_probe.c: poll the meeting directory every millisecond
 tests/host/etude_step_hosttest.c: a fixture's file is looked at again every 10 ms
 tests/rawprobe.c: the ICMP count every 10 ms, and time for each reply
 tests/dgramprobe.c: the UDP counters are read again every 10 ms

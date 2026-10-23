@@ -34,8 +34,10 @@
 # the same words, FILE relative to the repository, so that every interval is
 # written down once and read by a person.
 #
-# Under tests/cases/ no mark is read. There a sleep or a bound on a duration
-# passes only at a line that a case's `timing` declares (tools/etude/Readme.md,
+# Under tests/cases/ a listed `interval: poll ...` marks a state polling
+# delay. It observes no completion from the delay or the number of tries.
+# Every other sleep or duration bound passes only at a line that a case's
+# `timing` declares (tools/etude/Readme.md,
 # Resources and timing): a sleep where it declares an `injected_delay`, a
 # bound where it declares a `clock_reference`. A declared line with neither
 # fails, and so does a line that prints a skip: a case's program reports
@@ -125,13 +127,12 @@ scan() {
             }
             return
         }
+        r = reason_of($0)
+        if (r == "" && prev_mark != "") r = prev_mark
+        if (cases && rule == "sleep" && r ~ /^poll / && ((file ": " r) in known)) return
         if (cases) {
             print at ": fixed: " what " that no case declares in its timing"
             return
-        }
-        r = reason_of($0)
-        if (r == "" && prev_mark != "") {
-            r = prev_mark
         }
         if (r == "") {
             print at ": " rule ": " what " without an interval: reason"
@@ -471,6 +472,23 @@ usleep(1000); /* interval: the writer runs for a millisecond */'
     timing_of caseundeclared ''
     put caseundeclared tests/system/intervals 'tests/cases/host/delay.c: the writer runs for a millisecond'
     case_ 1 caseundeclared
+    tree casepoll 'echo' 'int x;' ''
+    put casepoll tests/cases/host/delay.c 'int x;
+usleep(1000); /* interval: poll the state every millisecond */'
+    timing_of casepoll ''
+    put casepoll tests/system/intervals 'tests/cases/host/delay.c: poll the state every millisecond'
+    case_ 0 casepoll
+    tree casepollunlisted 'echo' 'int x;' ''
+    put casepollunlisted tests/cases/host/delay.c 'int x;
+usleep(1000); /* interval: poll the state every millisecond */'
+    timing_of casepollunlisted ''
+    case_ 1 casepollunlisted
+    tree casepollbound 'echo' 'int x;' ''
+    put casepollbound tests/cases/host/delay.c 'int x;
+if (elapsed_ms > 250) fail(); /* interval: poll the state every millisecond */'
+    timing_of casepollbound ''
+    put casepollbound tests/system/intervals 'tests/cases/host/delay.c: poll the state every millisecond'
+    case_ 1 casepollbound
     tree casekind 'echo' 'int x;' ''
     put casekind tests/cases/host/delay.c 'int x;
 usleep(1000);'

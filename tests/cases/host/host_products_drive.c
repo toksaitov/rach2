@@ -199,6 +199,7 @@ static int running(void)
         }
         if (got < 0 && errno != EINTR)
             return 0;
+        /* interval: poll the readiness file every 100 ms */
         usleep(100000);
     }
     return 1;
@@ -213,6 +214,7 @@ static int finish(void)
             return -1;
     active = 0;
     while (kill(-pid, 0) == 0 || errno == EPERM)
+        /* interval: poll the process group every 100 ms */
         usleep(100000);
     return WIFEXITED(status)     ? WEXITSTATUS(status)
            : WIFSIGNALED(status) ? 128 + WTERMSIG(status)
