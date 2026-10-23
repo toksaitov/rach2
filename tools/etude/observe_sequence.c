@@ -547,12 +547,8 @@ int etude_observe_sequence_main(int argc, char **argv)
 }
 
 #else
-#include <stdio.h>
 int etude_observe_sequence_main(int argc, char **argv)
 {
-    (void)argc;
-    (void)argv;
-    fputs("etude observe sequence: requires native Windows Jobs\n", stderr);
-    return 2;
+    return etude_posix_observe_sequence_main(argc, argv);
 }
 #endif
