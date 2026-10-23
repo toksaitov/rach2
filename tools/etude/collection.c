@@ -41,7 +41,7 @@ struct collection {
     struct suite_entry suites[COLLECTION_MAX];
     size_t nsuites;
     struct etude_legacy_member members[COLLECTION_MAX * 2];
-    size_t nmembers;
+    size_t nmembers, selection_cases;
     char *wanted[WORDS_MAX];
     size_t nwanted;
     char *row_words[WORDS_MAX * 2];
@@ -438,6 +438,8 @@ static int choose_cases(struct collection *c)
             free(picked);
             return refused("the selection leaves a suite with no case");
         }
+        if (identities || rows)
+            c->selection_cases += count;
         if (selection_document(c, s, cases, picked, count) != 0) {
             free(picked);
             return 2;
@@ -593,7 +595,7 @@ static int prepare_collection(struct collection *c)
     char **goals = calloc(4096, sizeof(*goals));
     size_t n = 0;
     int rc = 2;
-    if (goals == NULL || choose_cases(c) != 0) {
+    if (goals == NULL) {
         free(goals);
         return 2;
     }
@@ -695,8 +697,6 @@ static int run_collection(struct collection *c, const char *accel, int dry)
     struct etude_legacy_set_opts o;
     int rc, machines = 0, alone = 0;
     char stream[PATH_SIZE] = "";
-    if (choose_cases(c) != 0)
-        return 2;
     if (dry)
         return print_selection(c);
     if (access(c->record, R_OK) != 0) {
@@ -765,8 +765,12 @@ static int run_collection(struct collection *c, const char *accel, int dry)
     o.site = c->site[0] ? c->site : NULL;
     o.kernel = getenv("RACH2_KERNEL");
     memcpy(o.cap, c->cap, sizeof(o.cap));
-    printf("run: starting: architecture %s, workers %u, accelerator %s\n", c->arches, c->width,
+    printf("run: starting: architecture %s, workers %u, accelerator %s", c->arches, c->width,
            accel);
+    if (c->selection_cases)
+        printf(", a selection of %lu case%s", (unsigned long)c->selection_cases,
+               c->selection_cases == 1 ? "" : "s");
+    putchar('\n');
     rc = etude_legacy_set(&o);
     if (format_collection(c, stream) != 0 && !rc)
         rc = 1;
@@ -849,7 +853,7 @@ static int collection_options(struct collection *c, struct request *r, int argc,
     return 0;
 }
 
-static int collection_paths(struct collection *c, const struct request *r)
+static int selection_workspace(struct collection *c)
 {
     const char *tmp = getenv("TMPDIR");
 #ifdef _WIN32
@@ -865,6 +869,11 @@ static int collection_paths(struct collection *c, const struct request *r)
         refused("cannot make selection workspace");
         return 2;
     }
+    return 0;
+}
+
+static int collection_paths(struct collection *c, const struct request *r)
+{
     if (r->results) {
         if (legacy_absolute(r->results))
             snprintf(c->results, sizeof(c->results), "%s", r->results);
@@ -1018,7 +1027,7 @@ static int collection_main(int argc, char **argv, int production)
         rc = 0;
         goto done;
     }
-    if (manifests(c) != 0)
+    if (manifests(c) != 0 || selection_workspace(c) != 0 || choose_cases(c) != 0)
         goto done;
     if (!r.dry) {
         int held = hold_collection(c, argc, argv, production);
