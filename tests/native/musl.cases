@@ -27,7 +27,8 @@ case musl/direntmusl.ext2 mountns ids:1000 -- musl/direntmusl .
 case musl/direntmusl.krffs root:krffs ids:1000 -- musl/direntmusl
 case musl/epollmusl ports:7470 -- musl/epollmusl
 case musl/execargmusl root:ext2-dir -- musl/execargmusl
-case musl/fdcallmusl root:ext2-dir stage:native/hello.txt pty -- musl/fdcallmusl
+# On KRFFS: ext2 keeps a time as whole seconds, and this sets nanoseconds.
+case musl/fdcallmusl root:krffs stage:native/hello.txt pty -- musl/fdcallmusl
 case musl/fdexecmusl root:ext2-dir ids:1000 -- musl/fdexecmusl
 case musl/fifomusl root:krffs -- musl/fifomusl
 # Left out: the enumerated report, the codec and the tone.
@@ -80,8 +81,10 @@ case musl/spawnmusl -- musl/spawnmusl
 case musl/stackmusl root:ext2-dir ids:1000 -- musl/stackmusl
 case musl/stampmusl root:krffs -- musl/stampmusl
 case musl/statfsmusl root:ext2-dir ipcns -- musl/statfsmusl
-case musl/statmusl root:ext2-dir -- musl/statmusl
-case musl/statxmusl root:ext2-dir -- musl/statxmusl
+# On KRFFS: ext2 keeps a time as whole seconds below 2^31, and these set
+# nanoseconds and later times.
+case musl/statmusl root:krffs -- musl/statmusl
+case musl/statxmusl root:krffs -- musl/statxmusl
 case musl/suidmusl root:ext2-dir ids:1000 -- musl/suidmusl
 case musl/tcpsendrecv peer:echo -- musl/tcpsendrecv
 case musl/textbusymusl root:krffs stage:musl/statushelper -- musl/textbusymusl helper=/statushelper

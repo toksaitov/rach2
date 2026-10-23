@@ -3132,7 +3132,7 @@
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
       ],
       "timing": [],
-      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}, {"fixture": "root", "type": "ext2-dir"}]}
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}, {"fixture": "root", "type": "krffs"}]}
     },
     {
       "case_id": "guest.default.stampmusl",
@@ -5242,7 +5242,7 @@
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
       ],
       "timing": [],
-      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}, {"fixture": "root", "type": "ext2-dir"}]}
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}, {"fixture": "root", "type": "krffs"}]}
     },
     {
       "case_id": "guest.default.lockmusl",
