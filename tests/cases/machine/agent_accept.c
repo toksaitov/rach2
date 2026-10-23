@@ -40,6 +40,27 @@ static int save_file(const char *name, const char *text)
         ok = 0;
     return ok;
 }
+/* Compose one path only when every fragment and the terminator fit. */
+static int accept_path(char *out, size_t capacity, const char *const parts[])
+{
+    size_t used = 0, i, n;
+    if (!capacity)
+        return 0;
+    out[0] = 0;
+    for (i = 0; parts[i]; i++) {
+        n = strlen(parts[i]);
+        if (n >= capacity - used) {
+            out[0] = 0;
+            fprintf(stderr, "agents-accept: path exceeds %lu bytes\n", (unsigned long)capacity);
+            return 0;
+        }
+        memcpy(out + used, parts[i], n);
+        used += n;
+    }
+    out[used] = 0;
+    return 1;
+}
+
 static void recorded(struct acceptance *s, const char *label, const char *text)
 {
     FILE *f = fopen(s->log, "ab");
@@ -650,7 +671,11 @@ static int version(struct acceptance *s, const char *program, int after)
     text = guest(s, "version", extra);
     if (!text)
         return 0;
-    snprintf(path, sizeof(path), "%s/version.%s", s->work, program);
+    if (!accept_path(path, sizeof(path),
+                     (const char *const[]){s->work, "/version.", program, NULL})) {
+        free(text);
+        return 0;
+    }
     if (after) {
         saved = net_file(path);
         ok = !strcmp(saved, text);
@@ -658,7 +683,12 @@ static int version(struct acceptance *s, const char *program, int after)
         free(text);
         return ok;
     }
-    snprintf(recipe, sizeof(recipe), "%s/vendor/gnu/agents/packages/%s.sh", s->assets, program);
+    if (!accept_path(recipe, sizeof(recipe),
+                     (const char *const[]){s->assets, "/vendor/gnu/agents/packages/", program,
+                                           ".sh", NULL})) {
+        free(text);
+        return 0;
+    }
     source = net_file(recipe);
     at = strstr(source, "\nVERSION=");
     if (at)
@@ -708,9 +738,12 @@ static int prepare(struct acceptance *s)
     char *unpack[] = {"agent_server", "unpack", (char *)archive, s->assets, NULL};
     char *render[] = {"agent_server",  "accept-prepare", agent_source, gh_source,
                       (char *)s->work, (char *)s->agent, NULL};
-    snprintf(agent_source, sizeof(agent_source), "%s/tests/system/accept/agents/%s.json", s->assets,
-             s->agent);
-    snprintf(gh_source, sizeof(gh_source), "%s/tests/system/accept/agents/gh.json", s->assets);
+    if (!accept_path(agent_source, sizeof(agent_source),
+                     (const char *const[]){s->assets, "/tests/system/accept/agents/", s->agent,
+                                           ".json", NULL}) ||
+        !accept_path(gh_source, sizeof(gh_source),
+                     (const char *const[]){s->assets, "/tests/system/accept/agents/gh.json", NULL}))
+        return 0;
     return archive && host(s, unpack, "accept-assets") && host(s, render, "accept-scripts") &&
            save_file(s->log, "");
 }
@@ -720,6 +753,35 @@ static int upload(struct acceptance *s, const char *source, const char *target)
     snprintf(command, sizeof(command), "cat > ~/rach2-accept/%s", target);
     return remote_ok(s, 0, command, source);
 }
+static int upload_files(struct acceptance *s)
+{
+    char path[4096], extra[200];
+    if (!accept_path(
+            path, sizeof(path),
+            (const char *const[]){s->assets, "/tests/system/accept/agents_guest.sh", NULL}))
+        return 0;
+    if (!upload(s, path, "guest.sh"))
+        return 0;
+    {
+        const char *files[] = {"notes.txt", "greeting.txt", "check.sh"};
+        unsigned i;
+        for (i = 0; i < 3; i++) {
+            if (!accept_path(path, sizeof(path),
+                             (const char *const[]){s->assets, "/tests/system/fakeapi/repo/",
+                                                   files[i], NULL}))
+                return 0;
+            snprintf(extra, sizeof(extra), "fixture/%s", files[i]);
+            if (!upload(s, path, extra))
+                return 0;
+        }
+    }
+    if (!accept_path(path, sizeof(path), (const char *const[]){s->work, "/ca/ca.pem", NULL}))
+        return 0;
+    if (!upload(s, path, "ca.pem"))
+        return 0;
+    return 1;
+}
+
 static int setup(struct acceptance *s)
 {
     char path[4096], line[20000], *hosts, *at, *save = NULL, extra[200], *text;
@@ -732,7 +794,8 @@ static int setup(struct acceptance *s)
                    "~/rach2-accept/.rach2-accept",
                    NULL))
         return 0;
-    snprintf(path, sizeof(path), "%s/hosts", s->work);
+    if (!accept_path(path, sizeof(path), (const char *const[]){s->work, "/hosts", NULL}))
+        return 0;
     hosts = net_file(path);
     used = (size_t)snprintf(line, sizeof(line), "printf '");
     for (at = strtok_r(hosts, "\r\n", &save); at; at = strtok_r(NULL, "\r\n", &save)) {
@@ -754,21 +817,7 @@ static int setup(struct acceptance *s)
     strcpy(line + used, "' >> /etc/hosts");
     if (!remote_ok(s, 1, line, NULL))
         return 0;
-    snprintf(path, sizeof(path), "%s/tests/system/accept/agents_guest.sh", s->assets);
-    if (!upload(s, path, "guest.sh"))
-        return 0;
-    {
-        const char *files[] = {"notes.txt", "greeting.txt", "check.sh"};
-        unsigned i;
-        for (i = 0; i < 3; i++) {
-            snprintf(path, sizeof(path), "%s/tests/system/fakeapi/repo/%s", s->assets, files[i]);
-            snprintf(extra, sizeof(extra), "fixture/%s", files[i]);
-            if (!upload(s, path, extra))
-                return 0;
-        }
-    }
-    snprintf(path, sizeof(path), "%s/ca/ca.pem", s->work);
-    if (!upload(s, path, "ca.pem"))
+    if (!upload_files(s))
         return 0;
     text = guest(s, "setup", "");
     if (!text)
@@ -780,7 +829,11 @@ static int setup(struct acceptance *s)
     text = guest(s, "credentials", extra);
     if (!text)
         return 0;
-    snprintf(path, sizeof(path), "%s/credentials.before", s->work);
+    if (!accept_path(path, sizeof(path),
+                     (const char *const[]){s->work, "/credentials.before", NULL})) {
+        free(text);
+        return 0;
+    }
     count = *text && !strstr(text, " missing");
     if (count)
         count = save_file(path, text);
@@ -803,7 +856,11 @@ static int credentials(struct acceptance *s)
     text = guest(s, "credentials", extra);
     if (!text)
         return 0;
-    snprintf(path, sizeof(path), "%s/credentials.before", s->work);
+    if (!accept_path(path, sizeof(path),
+                     (const char *const[]){s->work, "/credentials.before", NULL})) {
+        free(text);
+        return 0;
+    }
     before = net_file(path);
     ok = !strcmp(before, text);
     free(before);
@@ -851,11 +908,13 @@ int agent_accept_action(struct net_case *u, const char *work, const char *agent,
     int ok;
     if (!s->u) {
         memset(s, 0, sizeof(*s));
-        s->u = u;
         s->work = work;
         s->agent = agent;
-        snprintf(s->assets, sizeof(s->assets), "%s/assets", work);
-        snprintf(s->log, sizeof(s->log), "%s/accept.log", work);
+        if (!accept_path(s->assets, sizeof(s->assets),
+                         (const char *const[]){work, "/assets", NULL}) ||
+            !accept_path(s->log, sizeof(s->log), (const char *const[]){work, "/accept.log", NULL}))
+            return 0;
+        s->u = u;
         snprintf(s->port, sizeof(s->port), "%u", etude_port(u->c, 0));
         snprintf(s->target, sizeof(s->target), "accept:%s", agent);
         net_key(u, "demo-key", s->root_key, sizeof(s->root_key));
