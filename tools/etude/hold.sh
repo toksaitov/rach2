@@ -24,7 +24,7 @@ etude_held()
     case $(uname -s) in
         MINGW*|MSYS*|UCRT*|CLANG*)
             [ -n "${RACH2_HOLD_HELPER:-}" ] && [ -x "$RACH2_HOLD_HELPER" ] || return 1
-            "$RACH2_HOLD_HELPER" -q "$1"
+            MSYS2_ARG_CONV_EXCL='*' "$RACH2_HOLD_HELPER" -q "$(cygpath -m "$1")"
             return $? ;;
     esac
     etude_held_owner=${RACH2_TREE_HELD:-}
@@ -58,9 +58,11 @@ etude_hold()
     case $(uname -s) in
         MINGW*|MSYS*|UCRT*|CLANG*)
             trap '[ -z "$etude_hold_dir" ] || rm -rf "$etude_hold_dir"' 0
+            etude_hold_source=$(cygpath -m "$etude_hold_repo") || exit 1
+            etude_hold_output=$(cygpath -m "$etude_hold_dir") || exit 1
             if ! "${ETUDE_WIN_CC:-/ucrt64/bin/gcc}" -std=c99 -O2 -static -D_WIN32_WINNT=0x0A00 \
-                -o "$etude_hold_dir/etude-hold.exe" "$etude_hold_repo/tools/etude/etude_hold.c" \
-                "$etude_hold_repo/tools/etude/win/hold.c" "$etude_hold_repo/tools/etude/win/winfmt.c"; then
+                -o "$etude_hold_output/etude-hold.exe" "$etude_hold_source/tools/etude/etude_hold.c" \
+                "$etude_hold_source/tools/etude/win/hold.c" "$etude_hold_source/tools/etude/win/winfmt.c"; then
                 echo "$etude_hold_name: etude-hold did not compile" >&2
                 exit 1
             fi
@@ -72,7 +74,9 @@ etude_hold()
                 trap - 0 HUP INT TERM
                 return 0
             fi
-            "$RACH2_HOLD_HELPER" "$etude_hold_repo" "$etude_hold_name" \
+            etude_hold_arg_conv=${MSYS2_ARG_CONV_EXCL-}
+            MSYS2_ARG_CONV_EXCL='*' "$RACH2_HOLD_HELPER" "$(cygpath -m "$etude_hold_repo")" "$etude_hold_name" \
+                "$(cygpath -m "$(command -v env)")" "MSYS2_ARG_CONV_EXCL=$etude_hold_arg_conv" \
                 "$(cygpath -m "$(command -v sh)")" "$@"
             exit $? ;;
     esac

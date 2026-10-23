@@ -63,19 +63,49 @@ fi
 trap '[ -z "$WORK" ] || rm -rf "$WORK"; [ -z "$STATUS_RECORD" ] || rm -f "$STATUS_RECORD"' 0
 trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
 # The first process compiles the two helpers the run needs before it builds,
-# etude-hold and etude-ports, with the host's cc into the scratch.
+# etude-hold and etude-ports, with the host compiler into the scratch.
 if [ -z "$WORK" ]; then
     WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-run.XXXXXX") || exit 1
-    if ! { mkdir "$WORK/bin" &&
-        cc -std=c99 -O2 -D_DEFAULT_SOURCE -o "$WORK/bin/etude-hold" \
-            "$REPO/tools/etude/etude_hold.c" "$REPO/tools/etude/posix/hold.c" &&
-        cc -std=c99 -O2 -D_DEFAULT_SOURCE -I"$REPO/tools/etude/include" -I"$REPO/tools/etude" \
-            -o "$WORK/bin/etude-ports" "$REPO/tools/etude/etude_ports.c" \
-            "$REPO/tools/etude/portlock.c" "$REPO/tools/etude/win/winfmt.c"; }; then
-        echo "run: result: refused: the run's helpers did not compile" >&2
-        exit 1
-    fi
+    mkdir "$WORK/bin" || exit 1
+    case $(uname -s) in
+        MINGW*|MSYS*|UCRT*|CLANG*)
+            helper_repo=$(cygpath -m "$REPO") || exit 1
+            helper_work=$(cygpath -m "$WORK") || exit 1
+            if ! { "${ETUDE_WIN_CC:-/ucrt64/bin/gcc}" -std=c99 -O2 -static -D_WIN32_WINNT=0x0A00 \
+                -o "$helper_work/bin/etude-hold.exe" "$helper_repo/tools/etude/etude_hold.c" \
+                "$helper_repo/tools/etude/win/hold.c" "$helper_repo/tools/etude/win/winfmt.c" &&
+                "${ETUDE_WIN_CC:-/ucrt64/bin/gcc}" -std=c99 -O2 -static -D_WIN32_WINNT=0x0A00 \
+                -I"$helper_repo/tools/etude/include" -I"$helper_repo/tools/etude" \
+                -o "$helper_work/bin/etude-ports.exe" "$helper_repo/tools/etude/etude_ports.c" \
+                "$helper_repo/tools/etude/portlock.c" "$helper_repo/tools/etude/win/winfmt.c"; }; then
+                echo "run: result: refused: the run's helpers did not compile" >&2
+                exit 1
+            fi ;;
+        *)
+            if ! { cc -std=c99 -O2 -D_DEFAULT_SOURCE -o "$WORK/bin/etude-hold" \
+                "$REPO/tools/etude/etude_hold.c" "$REPO/tools/etude/posix/hold.c" &&
+                cc -std=c99 -O2 -D_DEFAULT_SOURCE -I"$REPO/tools/etude/include" -I"$REPO/tools/etude" \
+                -o "$WORK/bin/etude-ports" "$REPO/tools/etude/etude_ports.c" \
+                "$REPO/tools/etude/portlock.c" "$REPO/tools/etude/win/winfmt.c"; }; then
+                echo "run: result: refused: the run's helpers did not compile" >&2
+                exit 1
+            fi ;;
+    esac
 fi
+RUN_SHELL='sh'
+RUN_ENV=
+RUN_TREE=$REPO
+RUN_PORT_DIR=${RACH2_PORT_DIR:-/tmp}
+case $(uname -s) in
+    MINGW*|MSYS*|UCRT*|CLANG*)
+        WORK=$(cygpath -m "$WORK") || exit 1
+        RUN_TREE=$(cygpath -m "$REPO") || exit 1
+        RUN_PORT_DIR=$(cygpath -m "$RUN_PORT_DIR") || exit 1
+        RUN_SHELL=$(cygpath -m "$(command -v sh)") || exit 1
+        RUN_ENV=$(cygpath -m "$(command -v env)") || exit 1
+        RACH2_HOLD_HELPER=$(cygpath -m "$WORK/bin/etude-hold.exe") || exit 1
+        export RACH2_HOLD_HELPER ;;
+esac
 case "${RACH2_PORT_OFFSET:-}" in
     *[!0-9]*) echo "run: result: refused: RACH2_PORT_OFFSET must be a whole number" >&2; exit 2 ;;
 esac
@@ -218,7 +248,11 @@ hold_tree() {
     stop=""
     trap 'stop=1; [ -z "$holder" ] || kill -TERM "$holder" 2>/dev/null' INT TERM HUP
     trap '[ -z "$WORK" ] || rm -rf "$WORK"; [ -z "$STATUS_RECORD" ] || rm -f "$STATUS_RECORD"' EXIT
-    "$WORK/bin/etude-hold" -r "$REPO" run sh "$0" "$@" &
+    set -- "$RUN_SHELL" "$0" "$@"
+    if [ -n "$RUN_ENV" ]; then
+        set -- "$RUN_ENV" "MSYS2_ARG_CONV_EXCL=${MSYS2_ARG_CONV_EXCL-}" "$@"
+    fi
+    MSYS2_ARG_CONV_EXCL='*' "$WORK/bin/etude-hold" -r "$RUN_TREE" run "$@" &
     holder=$!
     [ -z "$stop" ] || kill -TERM "$holder" 2>/dev/null
     while :; do
@@ -773,7 +807,11 @@ if [ -n "$NEED_PORTS" ]; then
     RACH2_RUN_WORK=$WORK; RACH2_RUN_STATUS=$STATUS_RECORD
     RACH2_HOST_LOCK=$(host_lock "$@")
     export RACH2_RUN_WORK RACH2_RUN_STATUS RACH2_HOST_LOCK
-    exec "$WORK/bin/etude-ports" "${RACH2_PORT_DIR:-/tmp}" 10 sh "$0" "$@"
+    set -- "$RUN_SHELL" "$0" "$@"
+    if [ -n "$RUN_ENV" ]; then
+        set -- "$RUN_ENV" "MSYS2_ARG_CONV_EXCL=${MSYS2_ARG_CONV_EXCL-}" "$@"
+    fi
+    MSYS2_ARG_CONV_EXCL='*' exec "$WORK/bin/etude-ports" "$RUN_PORT_DIR" 10 "$@"
 fi
 [ -z "${RACH2_PORT_OFFSET:-}" ] || export RACH2_PORT_OFFSET
 # The accelerator the suites' machines run on, which the set driver gives

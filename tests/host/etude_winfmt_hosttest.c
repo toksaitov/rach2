@@ -120,6 +120,7 @@ static void test_cmdline(void)
 {
     static const char *const hard[] = {"plain",
                                        "two words",
+                                       "single'quote",
                                        "",
                                        "quote\"in",
                                        "back\\slash",
@@ -137,12 +138,18 @@ static void test_cmdline(void)
                                        "\\\\",
                                        "x\"\"y",
                                        NULL};
+    static const char *const msys[] = {"single'quote", "*", "?", "[a-z]", NULL};
     static const char *const none[] = {NULL};
     static const char *const plain[] = {"a", "b\\c", "-x=1", NULL};
     char *line;
 
     round_trip("hard arguments", "C:\\Program Files\\x\\y.exe", hard);
     round_trip("no arguments", "y.exe", none);
+    if (etude_win_cmdline("y.exe", msys, &line) != 0 ||
+        strcmp(line, "\"y.exe\" \"single'quote\" \"*\" \"?\" \"[a-z]\"") != 0)
+        fail("apostrophes and wildcards are quoted for MSYS programs",
+             line != NULL ? line : "none");
+    free(line);
     if (etude_win_cmdline("C:\\t\\y.exe", plain, &line) != 0 ||
         strcmp(line, "\"C:\\t\\y.exe\" a b\\c -x=1") != 0)
         fail("plain arguments are left as they are", line != NULL ? line : "none");

@@ -8,10 +8,11 @@
 
 #include "winfmt.h"
 
-/** Whether ARG reaches a program unchanged without quotes. */
+/** Whether ARG reaches a program unchanged without quotes. MSYS programs
+ * also need quotes around apostrophes and wildcard characters. */
 static int plain(const char *arg)
 {
-    return arg[0] != '\0' && strpbrk(arg, " \t\n\v\"") == NULL;
+    return arg[0] != '\0' && strpbrk(arg, " \t\n\v\"'*?[]") == NULL;
 }
 
 /**
