@@ -31,8 +31,6 @@
 
 #ifdef _WIN32
 #include "../win/files.h"
-#else
-#define ETUDE_SHELL "/bin/sh"
 #endif
 
 #include "../compare.h"
@@ -1280,11 +1278,9 @@ static int start(struct set *x, struct command *c, char *const *vars, size_t n)
     c->spec.argv = c->argv;
     c->spec.envp = c->envp;
     c->spec.cwd = c->cwd;
-    c->spec.output_max = x->o->prepared && c->is_case ? 0 : 4096;
-    if (x->o->prepared && c->is_case) {
-        c->spec.stdout_path = c->out;
-        c->spec.stderr_path = c->out;
-    }
+    c->spec.output_max = 0;
+    c->spec.stdout_path = c->out;
+    c->spec.stderr_path = c->out;
     c->spec.grace_us = c->grace_us;
     c->spec.reg = etude_ledger_register;
     c->spec.child = etude_ledger_child;
@@ -3267,12 +3263,6 @@ static int case_command(struct set *x, struct member *m)
         errno = ENOMEM;
         return -1;
     }
-    if (!x->o->prepared) {
-        c->argv[a++] = (char *)ETUDE_SHELL;
-        c->argv[a++] = "-c";
-        c->argv[a++] = "exec \"$@\" >\"$0\" 2>&1";
-        c->argv[a++] = c->out;
-    }
     c->argv[a++] = m->program;
     if (k->machine)
         c->argv[a++] = m->invocation;
@@ -3358,10 +3348,6 @@ static int prep_command(struct set *x)
         errno = ENOMEM;
         return -1;
     }
-    c->argv[k++] = (char *)ETUDE_SHELL;
-    c->argv[k++] = "-c";
-    c->argv[k++] = "exec \"$@\" >\"$0\" 2>&1";
-    c->argv[k++] = c->out;
     c->argv[k++] = (char *)o->program;
     c->argv[k++] = "prepare";
     c->argv[k++] = "-t";

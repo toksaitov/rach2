@@ -1,19 +1,17 @@
 /**
  * Check etude's set driver (etude_legacy_set in tools/etude/posix/legacy_set.c)
- * on the suites of a fixture tree: case manifests, a Makefile that builds
- * their programs and artifacts, and a stand-in for QEMU first on the path.
- * This program holds the tree's run lock, and the driver's program is the
- * built etude, build/tools/etude/etude, whose `prepare` prepares the
- * fixture's artifacts and whose `check` judges each attempt. Each set runs
- * in a child of its own, with a private ledger, and with `locks` a private
- * directory of the old runner's locks. The fixture's host cases run one
- * shell script of the tree's, which its arguments make pass, fail, end its
- * report early, outrun its bound, meet another case, note its start and end,
- * or wait. Its guest cases run the tree's rngprobe on the real QEMU, booting
- * the tree's kernel and test image of the architecture ARCH names, i686 when
- * it is unset, which the fixture's preparation links into the fixture tree;
- * their evidence goes under the tree's build/tests.
+ * on the suites of a private fixture tree. Compiled roles of this binary
+ * supply preparation, host workloads, machine scenarios and QEMU argument
+ * recording. The built etude, build/tools/etude/etude, judges each attempt
+ * and verdict. Each set reexecutes this program with a private description,
+ * ledger and lock directory. Host workloads pass, fail, truncate their
+ * report, exceed a bound, meet another case, mark their start and end, or
+ * wait. Guest cases run rngprobe on the real desktop QEMU and the prepared
+ * kernel and test image of ARCH (i686 when unset). Their evidence is below
+ * the tree's build/tests.
  *
+ * host-deps: tests/host/compat/desktop_host.c tests/host/compat/command_host.c
+ * host-deps: tests/host/compat/legacyset_fixture.c tests/host/compat/legacyset_process.c
  * host-deps: tools/etude/posix/legacy.c tools/etude/posix/legacy_set.c
  * host-deps: tools/etude/posix/legacy_cases.c tools/etude/digest.c
  * host-deps: tools/etude/posix/legacy_guest.c tools/etude/serial.c
@@ -56,8 +54,8 @@
  * driver leaks no memory.
  *
  * A suite run by its cases gives an item of each repetition of each case that
- * runs on the architecture, or on none, with its program built by the
- * preparation as a goal: the tree's `build/NODE`, or `build/x86_64/NODE` for an
+ * runs on the architecture, or on none, with its staged program recorded
+ * by preparation as a goal: the tree's `build/NODE`, or `build/x86_64/NODE` for an
  * artifact of each architecture on x86_64. The program runs in its workspace,
  * which is removed after a pass and kept otherwise, with the driver's
  * environment, less the driver's own ARCH and ETUDE_SEED, and the tree, the
@@ -98,7 +96,7 @@
  * another node boot it, each kernel told by its digest in the preparation's
  * record and in QEMU's command line. A missing QEMU or image fails the test.
  *
- * A suite of machine cases runs a scenario of the tree's, a shell script that
+ * A suite of machine cases runs a compiled scenario of the tree's that
  * keeps a console in its workspace as the case's identity says, with one
  * argument, its invocation. The invocation gives each artifact's digest in the
  * run's store under the evidence, which the run removes at its end, the case's
@@ -150,16 +148,17 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <poll.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
+#include "compat/desktop_host.h"
+#include "compat/legacyset_fixture.h"
+#include "compat/command_host.h"
 #include "compat/fixdir_host.c"
 #include "compat/pathmax_host.h"
 #include "sha256.h"
@@ -168,6 +167,9 @@
 #include "etude/ledger.h"
 #include "etude/legacy.h"
 #include "legacy_cases.h"
+#ifdef _WIN32
+#include "verbs.h"
+#endif
 
 /* The set driver's copy of a file to its store, which a host test build of
  * legacy_set.c lets the test replace. */
@@ -179,7 +181,7 @@ extern int (*legacy_set_put)(struct etude_store *s, const char *path, const char
 extern long long etude_store_settle_ns;
 extern unsigned long etude_store_copied;
 
-static int fails;
+static int fails, completed;
 
 /** Count a failure when `cond` is false, and print its file, line and row. */
 #define CHECK(cond, row)                                                                     \
@@ -201,13 +203,9 @@ static int fails;
 /* The memory of the fixture machine's ledger, in MiB. */
 #define MEMORY_MIB 8192u
 
-/* LeakSanitizer's check, when the test is built with it; the reference is
- * weak, so a test built without it links. */
-extern int __lsan_do_recoverable_leak_check(void) __attribute__((weak));
-
 /* The built etude, the fixture tree, etude's schemas, and the fixtures'
  * ledger and lock directory. */
-static char etude[PATH_MAX];
+static char etude[PATH_MAX], self[PATH_MAX];
 static char tree[PATH_LEN];
 static char schemas[PATH_MAX];
 static char ledger[PATH_LEN];
@@ -222,112 +220,6 @@ static char guest_evidence[PATH_MAX];
 static char guest_bin[PATH_MAX]; /* the wrapper of QEMU, first on the path */
 static char real_path[8192];
 
-/* The fixture's Makefile: the components, which fail when FIXTURE_BREAK is
- * set, the machine cases' disk, and the cases' programs, each its script
- * under cases/ copied to build/cases or build/x86_64/cases. */
-static const char makefile[] =
-    "ARCH ?= i686\n"
-    "ifeq ($(ARCH),x86_64)\n"
-    "ARCH_BUILD := build/x86_64\n"
-    "else\n"
-    "ARCH_BUILD := build\n"
-    "endif\n"
-    "IMAGES := $(ARCH_BUILD)/images\n"
-    ".PHONY: components\n"
-    "components: $(ARCH_BUILD)/rach2/kernel\n"
-    "\t@if [ -n \"$$FIXTURE_BREAK\" ]; then echo broken components; exit 4; fi\n"
-    "$(ARCH_BUILD)/rach2/kernel:\n"
-    "\t@mkdir -p $(@D) && echo kernel > $@\n"
-    "$(IMAGES)/disk.img:\n"
-    "\t@mkdir -p $(@D) && echo disk > $@\n"
-    "build/cases/%: cases/%.sh\n"
-    "\t@mkdir -p $(@D) && cp $< $@ && chmod 755 $@\n"
-    "build/x86_64/cases/%: cases/%.sh\n"
-    "\t@mkdir -p $(@D) && cp $< $@ && chmod 755 $@\n";
-
-/* The program of the fixture's host cases. Its first argument says what it
- * does before its report ends: `pass`; `fail`, a failed assertion; `cut`, a
- * report with no end; `tick`, progress for 4.5 s; `slow`, progress for
- * 11.7 s; `plain`, a line of output; `long`, nothing until it is stopped;
- * `meet SELF OTHER`, a wait for the other case to be present, and a note in
- * the tree that it met it; `mark NAME SECONDS`, notes in the tree of its
- * start and its end; or `hold`, a word through the tree's FIFO that it has
- * started and a wait until it is stopped. It prints how it was run and
- * where, and leaves a file in $TMPDIR. */
-static const char probe[] =
-    "#!/bin/sh\n"
-    "echo \"program: $0 $*\"\n"
-    "echo \"cwd: $(pwd -P)\"\n"
-    "echo \"tree: ${ETUDE_TREE-unset}\"\n"
-    "echo \"case: $ETUDE_CASE arch: ${ARCH-unset} seed: ${ETUDE_SEED-unset}"
-    " inherited: ${FIXTURE_INHERITED-unset}\"\n"
-    "echo \"tmpdir: $TMPDIR\"\n"
-    "echo made > \"$TMPDIR/made\"\n"
-    "echo \"@etude 1 begin $ETUDE_CASE\"\n"
-    "echo \"@etude 1 progress ticks 1\"\n"
-    "case $1 in\n"
-    "fail) echo \"@etude 1 assert ran fail the count was 2\" ;;\n"
-    "cut) echo \"@etude 1 assert ran pass\"; exit 0 ;;\n"
-    "tick|slow)\n"
-    "    if [ \"$1\" = tick ]; then n=16; else n=40; fi\n"
-    "    i=2\n"
-    "    while [ $i -le $n ]; do\n"
-    "        sleep 0.3\n"
-    "        echo \"@etude 1 progress ticks $i\"\n"
-    "        i=$((i + 1))\n"
-    "    done\n"
-    "    echo \"@etude 1 assert ran pass\" ;;\n"
-    "plain) echo 'plain ran'; echo \"@etude 1 assert ran pass\" ;;\n"
-    "long) echo 'long running'; while :; do sleep 1; done ;;\n"
-    "meet)\n"
-    "    m=$ETUDE_TREE/meet\n"
-    "    touch \"$m/$2.here\"\n"
-    "    until [ -e \"$m/$3.here\" ]; do\n"
-    "        sleep 0.1\n"
-    "    done\n"
-    "    echo \"$2 met\" >> \"$m/log\"\n"
-    "    echo \"@etude 1 assert ran pass\" ;;\n"
-    "mark)\n"
-    "    echo \"start $2\" >> \"$ETUDE_TREE/marks\"\n"
-    "    sleep \"$3\"\n"
-    "    echo \"end $2\" >> \"$ETUDE_TREE/marks\"\n"
-    "    echo \"@etude 1 assert ran pass\" ;;\n"
-    "claim) sed -n 's/^resource memory_bytes /ledger: &/p' \"$FIXTURE_LEDGER/claims\"\n"
-    "    echo \"@etude 1 assert ran pass\" ;;\n"
-    "hold)\n"
-    "    echo holding\n"
-    "    echo started > \"$ETUDE_TREE/started.fifo\"\n"
-    "    while :; do sleep 1; done ;;\n"
-    "*) echo \"@etude 1 assert ran pass\" ;;\n"
-    "esac\n"
-    "echo \"@etude 1 end 1\"\n";
-
-/* The scenario of the fixture's machine cases. It takes the scratch from
- * its invocation, keeps the console `evidence/vm.1.console` there and
- * reports, as its case's identity says: a clean console, one with a panic,
- * one with the record of init's death that the case's machine declares, a
- * report that stops short with the exit status 1, as a lost transport gives,
- * or no console at all. The boundary case also prints the memory of the
- * claims in the ledger that FIXTURE_LEDGER names. */
-static const char scenario[] =
-    "#!/bin/sh\n"
-    "echo \"scenario: $0 $*\"\n"
-    "scratch=$(sed -n 's/.*\"scratch\":\"\\([^\"]*\\)\".*/\\1/p' \"$1\")\n"
-    "mkdir -p \"$scratch/evidence\"\n"
-    "c=$scratch/evidence/vm.1.console\n"
-    "echo 'Rach2 kernel booting' > \"$c\"\n"
-    "echo \"@etude 1 begin $ETUDE_CASE\"\n"
-    "case $ETUDE_CASE in\n"
-    "*.panic) echo '<2>[    0.500000] panic: page fault' >> \"$c\" ;;\n"
-    "*.allowed) echo '<2>[    1.250000] init: exited with status 1' >> \"$c\" ;;\n"
-    "*.lost) echo '@etude 1 progress stage 1'; exit 1 ;;\n"
-    "*.noconsole) rm -r \"$scratch/evidence\" ;;\n"
-    "*.accounting) sed -n 's/^resource memory_bytes /ledger: &/p' \"$FIXTURE_LEDGER/claims\" ;;\n"
-    "esac\n"
-    "echo '@etude 1 assert booted pass'\n"
-    "echo '@etude 1 progress stage 1'\n"
-    "echo '@etude 1 end 1'\n";
-
 /* The form of a machine case of the fixture, with its identity, its
  * machine's `critical` member, or nothing, and its local ports. */
 static const char machine_form[] =
@@ -336,7 +228,7 @@ static const char machine_form[] =
     " \"units\": [\"tests/host/etude_legacyset_hosttest.c\"], \"domain\": \"machine\",\n"
     " \"architectures\": [\"i686\"],\n"
     " \"workload\": {\"arguments\": [], \"inputs\": {}, \"repetitions\": 1, \"seed\": null},\n"
-    " \"requirements\": {\"host_api\": \"posix\", \"tools\": [\"sh\"], \"features\": {}},\n"
+    " \"requirements\": {\"host_api\": \"c\", \"tools\": [\"legacy-fixture\"], \"features\": {}},\n"
     " \"execution\": {\"program\": \"scenario\", \"stdin\": null, \"role\": \"ordinary\",\n"
     "  \"privileges\": \"an ordinary user\", \"isolation\": [{\"fixture\": \"scratch\"},\n"
     "  {\"fixture\": \"disk\", \"names\": [\"disk\"]}], \"children\": \"none\",\n"
@@ -382,8 +274,7 @@ static const struct {
                      {"fixture.machine.lost", "", 0},
                      {"fixture.machine.noconsole", "", 0}};
 
-/* The disk that the machine cases share, its text as the fixture's Makefile
- * makes it, and the text a row gives it after its first copy. */
+/* The shared disk's original text and the text after its first copy. */
 #define DISK "build/images/disk.img"
 static const char disk_text[] = "disk\n";
 static const char disk_changed[] = "disk changed after its first copy\n";
@@ -399,7 +290,7 @@ static const char boundary_manifest[] =
     " \"units\": [\"tests/host/etude_legacyset_hosttest.c\"], \"domain\": \"machine\",\n"
     " \"architectures\": [\"x86_64\"],\n"
     " \"workload\": {\"arguments\": [], \"inputs\": {}, \"repetitions\": 1, \"seed\": null},\n"
-    " \"requirements\": {\"host_api\": \"posix\", \"tools\": [\"sh\"], \"features\": {}},\n"
+    " \"requirements\": {\"host_api\": \"c\", \"tools\": [\"legacy-fixture\"], \"features\": {}},\n"
     " \"execution\": {\"program\": \"scenario\", \"stdin\": null, \"role\": \"ordinary\",\n"
     "  \"privileges\": \"an ordinary user\", \"isolation\": [{\"fixture\": \"scratch\"}],\n"
     "  \"children\": \"none\", \"cleanup\": \"nothing outside its scratch directory\"},\n"
@@ -459,7 +350,7 @@ static const char case_form[] =
     " \"units\": [\"tests/host/etude_legacyset_hosttest.c\"], \"domain\": \"host\",\n"
     " \"architectures\": %s,\n"
     " \"workload\": {\"arguments\": [%s], \"inputs\": {}, \"repetitions\": %d, \"seed\": %s},\n"
-    " \"requirements\": {\"host_api\": \"posix\", \"tools\": [\"sh\"], \"features\": {}},\n"
+    " \"requirements\": {\"host_api\": \"c\", \"tools\": [\"legacy-fixture\"], \"features\": {}},\n"
     " \"execution\": {\"program\": \"probe\", \"stdin\": null, \"role\": \"ordinary\",\n"
     "  \"privileges\": \"an ordinary user\", \"isolation\": [%s], \"children\": \"none\",\n"
     "  \"cleanup\": \"nothing outside its scratch directory\"},\n"
@@ -638,11 +529,6 @@ static const struct {
      "\"devices\": [{\"model\": \"rtl8139\", \"forwards\": [{\"protocol\": \"tcp\", "
      "\"port\": 0, \"guest_port\": 22}]}]"}};
 
-/* The stand-in for QEMU, which the machine cases' invocations name. */
-static const char standin[] = "#!/bin/sh\n"
-                              "echo FIXTURE-BOOT-OK\n"
-                              "sleep 0.2\n";
-
 /* The records of a history, each a line of the stream. */
 struct history {
     char **line;
@@ -670,7 +556,7 @@ struct run {
     unsigned limit_mib; /* the ledger's memory limit, or 0 for MEMORY_MIB */
     int guest;          /* it runs guest cases, on the real QEMU */
     enum put_fault put; /* the fault of the driver's copies */
-    pid_t pid;
+    struct legacy_child *child;
     int status;  /* the driver's, or -1 when a signal ended it */
     long claims; /* the claims the ledger kept after it, or -1 */
     int leaks;   /* LeakSanitizer found a leak of the driver */
@@ -719,6 +605,18 @@ static long read_text(const char *path, char *buf, size_t max)
     n = fread(buf, 1, max - 1, f);
     fclose(f);
     buf[n] = '\0';
+#ifdef _WIN32
+    {
+        size_t i, used = 0;
+        for (i = 0; i < n; i++) {
+            if (buf[i] == '\r' && i + 1 < n && buf[i + 1] == '\n')
+                continue;
+            buf[used++] = buf[i];
+        }
+        n = used;
+        buf[n] = '\0';
+    }
+#endif
     return (long)n;
 }
 
@@ -926,15 +824,7 @@ static void note_stop(int sig)
  * `etude run suites` does. */
 static void catch_stops(void)
 {
-    static const int sigs[] = {SIGTERM, SIGINT, SIGHUP};
-    struct sigaction sa;
-    size_t i;
-
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = note_stop;
-    sigemptyset(&sa.sa_mask);
-    for (i = 0; i < sizeof(sigs) / sizeof(sigs[0]); i++)
-        sigaction(sigs[i], &sa, NULL);
+    legacy_child_catch(note_stop);
 }
 
 /* ---- The fixture tree. ---- */
@@ -1035,8 +925,6 @@ static int make_cases(void)
     size_t i;
     int bad = 0;
 
-    bad |= write_text(in(path, sizeof(path), "cases/probe.sh"), probe, 0755);
-    bad |= write_text(in(path, sizeof(path), "cases/scenario.sh"), scenario, 0755);
     bad |= machine_text(text, sizeof(text)) != 0 ||
            write_text(in(path, sizeof(path), "cases/machine/machine.json"), text, 0644) != 0;
     bad |=
@@ -1089,40 +977,6 @@ static int make_cases(void)
     return bad ? -1 : 0;
 }
 
-/**
- * Give in `out` the rules that link the guest cases' artifacts, the nodes
- * `guest/NAME`, to the tree's build of their architecture, which the
- * fixture's preparation makes, and the rule of `-n fixture`'s kernel,
- * `rach2-fixture/kernel`: a copy of the tree's kernel with a line after
- * its end, which no loader reads, so that its digest is its own; 0, or -1
- * when they do not fit.
- */
-static int guest_rules(char *out, size_t size)
-{
-    static const char *const links[][2] = {{"kernel", "rach2/kernel"},
-                                           {"test.krffs", "images/test.krffs"},
-                                           {"etude-guest", "tools/etude/guest/etude-guest"},
-                                           {"rngprobe", "tests/rngprobe"}};
-    const char *dir = strcmp(guest_arch, "x86_64") == 0 ? "build/x86_64" : "build";
-    size_t i, used = 0;
-    int k;
-
-    for (i = 0; i < sizeof(links) / sizeof(links[0]); i++) {
-        k = snprintf(out + used, size - used,
-                     "%s/guest/%s:\n\t@mkdir -p $(@D) && ln -sf %s/%s $@\n", dir, links[i][0],
-                     guest_build, links[i][1]);
-        if (k < 0 || (size_t)k >= size - used)
-            return -1;
-        used += (size_t)k;
-    }
-    k = snprintf(out + used, size - used,
-                 ".PHONY: fixture-kernel\nfixture-kernel:\n\t@mkdir -p %s/rach2-fixture && "
-                 "cp %s/rach2/kernel %s/rach2-fixture/kernel && echo fixture >> "
-                 "%s/rach2-fixture/kernel\n",
-                 dir, guest_build, dir, dir);
-    return k < 0 || (size_t)k >= size - used ? -1 : 0;
-}
-
 /** Make the fixture tree, with its run lock held by this process and the
  * stand-in first on the path. */
 static void make_tree(void)
@@ -1142,7 +996,7 @@ static void make_tree(void)
                                        "cases/machine",
                                        "cases/boundary",
                                        "cases/tooling"};
-    static char source[1 << 20], newpath[8192], rules[8192];
+    static char newpath[8192];
     const char *oldpath = getenv("PATH");
     char path[PATH_LEN], owner[64], dir[PATH_MAX] = "";
     size_t i;
@@ -1158,19 +1012,19 @@ static void make_tree(void)
     bad |= mkdir(locks, 0755) != 0;
     for (i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++)
         bad |= mkdir(in(path, sizeof(path), dirs[i]), 0755) != 0;
-    bad |= mkfifo(in(path, sizeof(path), "started.fifo"), 0644) != 0;
     snprintf(owner, sizeof(owner), "pid %ld\n", (long)getpid());
-    bad |= guest_rules(rules, sizeof(rules)) != 0;
-    fix_format(source, sizeof(source), "%s%s", makefile, rules);
-    bad |= write_text(in(path, sizeof(path), "Makefile"), source, 0644);
-    bad |= write_text(in(path, sizeof(path), "qemu/qemu-system-i386"), standin, 0755);
-    bad |= write_text(in(path, sizeof(path), "qemu/qemu-system-x86_64"), standin, 0755);
+    bad |= legacy_fixture_stage(self, tree, guest_build, guest_arch) != 0;
+    bad |=
+        legacy_fixture_copy(self, in(path, sizeof(path), "qemu/qemu-system-i386" LEGACY_EXE)) != 0;
+    bad |= legacy_fixture_copy(self,
+                               in(path, sizeof(path), "qemu/qemu-system-x86_64" LEGACY_EXE)) != 0;
+    bad |= legacy_fixture_copy(self, in(path, sizeof(path), "qemu/legacy-fixture" LEGACY_EXE)) != 0;
     bad |= write_text(in(path, sizeof(path), "site.permits"), site_permits, 0644);
     bad |= write_text(in(path, sizeof(path), "site.other"), site_other, 0644);
     bad |= write_text(in(path, sizeof(path), "build/.run.lock/owner"), owner, 0644);
     bad |= make_cases();
     fix_format(real_path, sizeof(real_path), "%s", oldpath != NULL ? oldpath : "/usr/bin:/bin");
-    fix_format(newpath, sizeof(newpath), "%s/qemu:%s", tree, real_path);
+    fix_format(newpath, sizeof(newpath), "%s/qemu" LEGACY_PATH_SEPARATOR "%s", tree, real_path);
     bad |= setenv("PATH", newpath, 1) != 0;
     if (bad) {
         printf("etude-legacyset-test: fail: the fixture tree %s was not made\n", tree);
@@ -1207,7 +1061,7 @@ static void opts_for(struct etude_legacy_set_opts *o, const struct run *r)
     o->tree = tree;
     o->arch = r->arch != NULL ? r->arch : "i686";
     o->kernel = r->kernel;
-    o->program = etude;
+    o->program = self;
     o->members = r->members;
     o->nmembers = r->n;
     o->ledger = r->ledger != NULL ? r->ledger : ledger;
@@ -1307,7 +1161,7 @@ static void driver(const struct run *r)
     if (r->guest) {
         static char path[sizeof(guest_bin) + sizeof(real_path) + 1];
 
-        fix_format(path, sizeof(path), "%s:%s", guest_bin, real_path);
+        fix_format(path, sizeof(path), "%s" LEGACY_PATH_SEPARATOR "%s", guest_bin, real_path);
         if (setenv("PATH", path, 1) != 0)
             _exit(120);
     }
@@ -1323,12 +1177,143 @@ static void driver(const struct run *r)
             claims = -1;
         etude_ledger_close(l);
     }
-    leaks = __lsan_do_recoverable_leak_check != NULL && __lsan_do_recoverable_leak_check() != 0;
+    leaks = fix_leaks();
     if ((f = fopen(r->side, "w")) != NULL) {
         fprintf(f, "%ld %d\n", claims, leaks);
         fclose(f);
     }
     _exit(status & 0xff);
+}
+
+/* A private description contains values, never addresses from the parent. */
+struct run_description {
+    unsigned magic, n, width, locks, stop_on_fail, limit_mib, guest, put;
+    char fields[8][PATH_LEN];
+    char paths[6][PATH_LEN];
+    struct {
+        unsigned serial, stops;
+        char suite[PATH_LEN], cases[PATH_LEN], arch[PATH_LEN];
+    } members[32];
+};
+
+/** Serialize the run's scalar options, nullable strings and member table. */
+static int save_run(const char *path, const struct run *r)
+{
+    struct run_description *d = calloc(1, sizeof(*d));
+    const char *fields[] = {r->name, r->accel, r->ledger, r->unset,
+                            r->var,  r->arch,  r->kernel, r->site};
+    const char *paths[] = {r->results,  r->evidence, r->status_file,
+                           r->out_file, r->side,     r->copies};
+    FILE *f;
+    size_t i;
+    int bad = 0;
+    if (!d || r->n > 32) {
+        free(d);
+        return -1;
+    }
+    d->magic = 0x65747564;
+    d->n = (unsigned)r->n;
+    d->width = r->width;
+    d->locks = r->locks;
+    d->stop_on_fail = r->stop_on_fail;
+    d->limit_mib = r->limit_mib;
+    d->guest = r->guest;
+    d->put = r->put;
+    for (i = 0; i < 8; i++)
+        bad |= snprintf(d->fields[i], PATH_LEN, "%s", fields[i] ? fields[i] : "") >= PATH_LEN;
+    for (i = 0; i < 6; i++)
+        bad |= snprintf(d->paths[i], PATH_LEN, "%s", paths[i]) >= PATH_LEN;
+    for (i = 0; i < r->n; i++) {
+        const struct etude_legacy_member *m = &r->members[i];
+        d->members[i].serial = m->serial;
+        d->members[i].stops = m->stops;
+        bad |= snprintf(d->members[i].suite, PATH_LEN, "%s", m->suite ? m->suite : "") >= PATH_LEN;
+        bad |= snprintf(d->members[i].cases, PATH_LEN, "%s", m->cases ? m->cases : "") >= PATH_LEN;
+        bad |= snprintf(d->members[i].arch, PATH_LEN, "%s", m->arch ? m->arch : "") >= PATH_LEN;
+    }
+    f = bad ? NULL : fopen(path, "wb");
+    if (f) {
+        bad |= fwrite(d, sizeof(*d), 1, f) != 1;
+        bad |= fclose(f) != 0;
+    } else
+        bad = 1;
+    free(d);
+    return bad ? -1 : 0;
+}
+
+/** Restore or export only the controller's fixture locations. */
+static int fixture_environment(int restore)
+{
+    struct entry {
+        const char *name;
+        char *text;
+        size_t size;
+    };
+    struct entry entries[] = {{"LEGACY_SELF", self, sizeof(self)},
+                              {"LEGACY_ETUDE", etude, sizeof(etude)},
+                              {"LEGACY_TREE", tree, sizeof(tree)},
+                              {"LEGACY_SCHEMAS", schemas, sizeof(schemas)},
+                              {"LEGACY_LEDGER", ledger, sizeof(ledger)},
+                              {"LEGACY_LOCKS", locks, sizeof(locks)},
+                              {"LEGACY_GUEST_BUILD", guest_build, sizeof(guest_build)},
+                              {"LEGACY_GUEST_EVIDENCE", guest_evidence, sizeof(guest_evidence)},
+                              {"LEGACY_GUEST_BIN", guest_bin, sizeof(guest_bin)},
+                              {"LEGACY_REAL_PATH", real_path, sizeof(real_path)}};
+    size_t i;
+    for (i = 0; i < sizeof(entries) / sizeof(entries[0]); i++) {
+        struct entry *e = &entries[i];
+        const char *value = getenv(e->name);
+        if (restore) {
+            if (!value || snprintf(e->text, e->size, "%s", value) >= (int)e->size)
+                return -1;
+        } else if (setenv(e->name, e->text, 1) != 0)
+            return -1;
+    }
+    if (restore)
+        guest_arch = getenv("LEGACY_GUEST_ARCH");
+    else if (setenv("LEGACY_GUEST_ARCH", guest_arch, 1) != 0)
+        return -1;
+    return guest_arch ? 0 : -1;
+}
+
+/** Decode a description in this reexecuted process, then call the real driver. */
+static int driver_role(const char *path)
+{
+    static struct run_description d;
+    static struct run r;
+    static struct etude_legacy_member members[32];
+    const char **fields[] = {&r.name, &r.accel, &r.ledger, &r.unset,
+                             &r.var,  &r.arch,  &r.kernel, &r.site};
+    char *paths[] = {r.results, r.evidence, r.status_file, r.out_file, r.side, r.copies};
+    FILE *f = fopen(path, "rb");
+    size_t i;
+    if (!f)
+        return 121;
+    i = fread(&d, sizeof(d), 1, f);
+    fclose(f);
+    if (i != 1 || d.magic != 0x65747564 || d.n > 32 || fixture_environment(1) != 0)
+        return 121;
+    r.n = d.n;
+    r.width = d.width;
+    r.locks = d.locks;
+    r.stop_on_fail = d.stop_on_fail;
+    r.limit_mib = d.limit_mib;
+    r.guest = d.guest;
+    r.put = (enum put_fault)d.put;
+    for (i = 0; i < 8; i++)
+        *fields[i] = d.fields[i][0] ? d.fields[i] : NULL;
+    for (i = 0; i < 6; i++)
+        memcpy(paths[i], d.paths[i], PATH_LEN);
+    for (i = 0; i < r.n; i++) {
+        members[i].suite = d.members[i].suite;
+        members[i].cases = d.members[i].cases[0] ? d.members[i].cases : NULL;
+        members[i].arch = d.members[i].arch[0] ? d.members[i].arch : NULL;
+        members[i].serial = d.members[i].serial;
+        members[i].stops = d.members[i].stops;
+    }
+    r.members = members;
+    driver(&r);
+    return 121;
 }
 
 /** Start the set of `r` in a child, with its files named for the row, and
@@ -1347,35 +1332,23 @@ static void set_start(struct run *r)
     r->status = -1;
     r->claims = -1;
     fflush(stdout);
-    r->pid = fork();
-    if (r->pid == 0)
-        driver(r);
-    if (r->pid < 0)
-        printf("etude-legacyset-test: fail: %s: no child: %s\n", r->name, strerror(errno));
-}
-
-/** Say whether the driver `pid` is still running, without reaping it. */
-static int running(pid_t pid)
-{
-    siginfo_t si;
-
-    memset(&si, 0, sizeof(si));
-    return pid > 0 && waitid(P_PID, (id_t)pid, &si, WEXITED | WNOHANG | WNOWAIT) == 0 &&
-           si.si_pid == 0;
+    {
+        char description[PATH_LEN];
+        fix_format(description, sizeof(description), "%s/%s.driver", dir, r->name);
+        if (save_run(description, r) == 0)
+            r->child = legacy_child_start(self, description);
+        if (r->child == NULL)
+            printf("etude-legacyset-test: fail: %s: no child: %s\n", r->name, strerror(errno));
+    }
 }
 
 /** Wait for the set of `r` to end, and take what it gave. */
 static void set_finish(struct run *r)
 {
     char side[64];
-    int status;
-    pid_t got = -1;
-
-    if (r->pid > 0)
-        while ((got = waitpid(r->pid, &status, 0)) < 0 && errno == EINTR) {
-        }
-    if (got == r->pid && WIFEXITED(status))
-        r->status = WEXITSTATUS(status);
+    r->status = legacy_child_wait(r->child);
+    legacy_child_free(r->child);
+    r->child = NULL;
     read_text(r->out_file, r->out, sizeof(r->out));
     if (read_text(r->side, side, sizeof(side)) > 0 &&
         sscanf(side, "%ld %d", &r->claims, &r->leaks) != 2)
@@ -1492,26 +1465,18 @@ static int verdict(const struct run *r, const char *cases, const char *suite, ch
                    size_t size)
 {
     char store[PATH_LEN + 8], dir[PATH_LEN], history[PATH_LEN + 16], file[PATH_LEN];
-    int status, fd;
-    pid_t pid;
-
+    const char *args[] = {etude,     "check", "-s",    schemas, "verdict",
+                          "-b",      store,   "-m",    dir,     r->arch != NULL ? r->arch : "i686",
+                          "fixture", suite,   history, NULL};
+    int status;
     fix_format(store, sizeof(store), "%s/store", r->results);
     fix_format(history, sizeof(history), "%s/history", r->results);
     fix_format(file, sizeof(file), "%s/%s.verdict", fix_dir(), r->name);
     in(dir, sizeof(dir), cases);
     fflush(stdout);
-    if ((pid = fork()) == 0) {
-        fd = open(file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0 || dup2(fd, 1) < 0 || dup2(fd, 2) < 0)
-            _exit(127);
-        execl(etude, "etude", "check", "-s", schemas, "verdict", "-b", store, "-m", dir,
-              r->arch != NULL ? r->arch : "i686", "fixture", suite, history, (char *)NULL);
-        _exit(127);
-    }
-    if (pid < 0 || waitpid(pid, &status, 0) != pid)
-        return -1;
+    status = host_command(args, file, file, NULL, 0);
     read_text(file, out, size);
-    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    return status;
 }
 
 /* ---- Rows. ---- */
@@ -1724,38 +1689,34 @@ static void test_signal(void)
     static char status[OUT_LEN];
     char path[PATH_LEN], got[16], want[512];
     const char *at;
-    struct pollfd pfd;
-    int fd, began = 0, named = 0, before = fails;
+    int began = 0, named = 0, before = fails;
 
-    fd = open(in(path, sizeof(path), "started.fifo"), O_RDWR | O_CLOEXEC);
+    in(path, sizeof(path), "started");
+    unlink(path);
     r.name = "signal";
     r.members = m;
     r.n = 2;
     set_start(&r);
-    pfd.fd = fd;
-    pfd.events = POLLIN;
-    while (fd >= 0 && !began && running(r.pid))
-        /* interval: the driver is looked at again every 50 ms */
-        began = poll(&pfd, 1, 50) == 1;
-    CHECK((began || (fd >= 0 && poll(&pfd, 1, 0) == 1)) && read(fd, got, sizeof(got)) > 0,
-          "signal: the case started");
-    while (!named && running(r.pid)) {
+    while (!began && legacy_child_running(r.child)) {
+        began = read_text(path, got, sizeof(got)) > 0;
+        if (!began)
+            host_sleep_ms(50); /* interval: recheck the case's start witness */
+    }
+    CHECK(began || read_text(path, got, sizeof(got)) > 0, "signal: the case started");
+    while (!named && legacy_child_running(r.child)) {
         read_text(r.status_file, status, sizeof(status));
         named = (at = line_start(status, "attempt ")) != NULL &&
                 strstr(at, ":fixture.hold.one:i686:r0:a0 fixture.hold.one i686 ") != NULL;
         if (!named)
             /* interval: the record is read again every 50 ms */
-            usleep(50000);
+            host_sleep_ms(50);
     }
     CHECK(named, "status: the running case's attempt");
     CHECK(strncmp(status, "etude-status 1\n", 15) == 0, "status: the record's form");
     fix_format(want, sizeof(want), "ledger %s", ledger);
     CHECK(has_line(status, want), "status: the run's ledger");
-    if (r.pid > 0)
-        kill(r.pid, SIGTERM);
+    CHECK(legacy_child_stop(r.child) == 0, "signal: the native stop was delivered");
     set_finish(&r);
-    if (fd >= 0)
-        close(fd);
     fix_format(want, sizeof(want), "run %s", r.run_id);
     CHECK(has_line(status, want), "status: the run's identity");
     CHECK(!exists(r.status_file), "status: removed at the end");
@@ -2214,11 +2175,11 @@ static void digest_text(char *out, size_t size, const char *name, const char *te
  * for the file `file` of the tree. */
 static void digest_member(char *out, size_t size, const char *name, const char *file)
 {
-    static char data[4096];
-    char path[PATH_LEN];
-
-    read_text(in(path, sizeof(path), file), data, sizeof(data));
-    digest_text(out, size, name, data);
+    char path[PATH_LEN], hex[65];
+    struct stat st;
+    int rc = etude_digest_file(NULL, in(path, sizeof(path), file), &st, hex);
+    CHECK(rc == 0, "the fixture artifact can be hashed whole");
+    fix_format(out, size, "\"%s\":\"%s\"", name, rc == 0 ? hex : "unreadable");
 }
 
 /** Say whether the invocation of each machine case of run `r`, from the
@@ -2297,7 +2258,7 @@ static void test_machine(void)
     CHECK(invocation_has(&r, "fixture.machine.clean.r0", text), "invocation: the kernel's digest");
     digest_member(text, sizeof(text), "disk", DISK);
     CHECK(invocation_has(&r, "fixture.machine.clean.r0", text), "invocation: the disk's digest");
-    digest_member(text, sizeof(text), "scenario", "cases/scenario.sh");
+    digest_member(text, sizeof(text), "scenario", "cases/scenario.source");
     CHECK(invocation_has(&r, "fixture.machine.clean.r0", text),
           "invocation: the scenario's digest");
     CHECK(copies_of(&r, "build/rach2/kernel") == 1 && copies_of(&r, DISK) == 1 &&
@@ -2316,10 +2277,13 @@ static void test_machine(void)
           "invocation: the tree's digests file");
     fix_format(text, sizeof(text), "%s/%s.store", r.evidence, r.run_id);
     CHECK(!exists(text), "machine: the store of the artifacts is removed at the end");
-    fix_format(text, sizeof(text), "\"qemu_i686\":\"%s/qemu/qemu-system-i386\"", tree);
+    fix_format(text, sizeof(text), "\"qemu_i686\":\"%s/qemu/qemu-system-i386" LEGACY_EXE "\"",
+               tree);
     CHECK(invocation_has(&r, "fixture.machine.clean.r0", text),
           "invocation: the emulator found on the path");
-    CHECK(invocation_has(&r, "fixture.machine.clean.r0", "\"tools\":{\"sh\":\"/") &&
+    fix_format(text, sizeof(text),
+               "\"tools\":{\"legacy-fixture\":\"%s/qemu/legacy-fixture" LEGACY_EXE "\"}", tree);
+    CHECK(invocation_has(&r, "fixture.machine.clean.r0", text) &&
               invocation_has(&r, "fixture.machine.clean.r0", "\"accel\":\"tcg\"") &&
               invocation_has(&r, "fixture.machine.clean.r0", "\"steps\":{\"boot\":20000000}") &&
               invocation_has(&r, "fixture.machine.clean.r0", "\"cleanup_us\":7000000"),
@@ -2787,6 +2751,10 @@ static void remove_guest_evidence(void)
 {
     if (guest_evidence[0] == '\0')
         return;
+    if (!completed || fails) {
+        printf("fixtures: guest evidence kept in %s\n", guest_evidence);
+        return;
+    }
     if (fix_remove_tree(guest_evidence) != 0)
         printf("etude-legacyset-test: %s could not be removed\n", guest_evidence);
 }
@@ -2805,15 +2773,18 @@ static void on_signal(int sig)
  */
 static int guest_wrapper(const char *qemu)
 {
-    char path[PATH_MAX + 32], text[PATH_MAX * 2 + 128];
-    const char *name = strrchr(qemu, '/');
-
+    char path[PATH_MAX + 32];
+    const char *name = strrchr(qemu, '/'), *back = strrchr(qemu, '\\');
+    if (back && (!name || back > name))
+        name = back;
+    name = name != NULL ? name + 1 : qemu;
     fix_format(guest_bin, sizeof(guest_bin), "%s/bin", guest_evidence);
-    fix_format(path, sizeof(path), "%s/%s", guest_bin, name != NULL ? name + 1 : qemu);
-    fix_format(text, sizeof(text),
-               "#!/bin/sh\nprintf '%%s\\n' \"$*\" >> '%s/qemu.argv'\nexec '%s' \"$@\"\n",
-               guest_evidence, qemu);
-    return mkdir(guest_bin, 0755) != 0 || write_text(path, text, 0755) != 0 ? -1 : 0;
+    fix_format(path, sizeof(path), "%s/%s", guest_bin, name);
+    return mkdir(guest_bin, 0755) != 0 || legacy_fixture_copy(self, path) != 0 ||
+                   setenv("LEGACY_REAL_QEMU", qemu, 1) != 0 ||
+                   setenv("LEGACY_GUEST_EVIDENCE", guest_evidence, 1) != 0
+               ? -1
+               : 0;
 }
 
 /**
@@ -2827,25 +2798,14 @@ static int guest_site(void)
 {
     static const char *const needed[] = {"rach2/kernel", "images/test.krffs",
                                          "tools/etude/guest/etude-guest", "tests/rngprobe"};
-    const char *arch = getenv("ARCH"), *path = getenv("PATH");
-    const char *qemu, *end;
+    const char *arch = getenv("ARCH");
+    const char *qemu;
     char file[PATH_MAX], real_qemu[PATH_MAX];
-    size_t i, len;
-    int found = 0;
+    size_t i;
 
     guest_arch = arch != NULL && strcmp(arch, "x86_64") == 0 ? "x86_64" : "i686";
     qemu = strcmp(guest_arch, "x86_64") == 0 ? "qemu-system-x86_64" : "qemu-system-i386";
-    for (; !found && path != NULL && *path != '\0'; path = *end == ':' ? end + 1 : end) {
-        end = strchr(path, ':');
-        if (end == NULL)
-            end = path + strlen(path);
-        len = (size_t)(end - path);
-        if (len == 0)
-            continue;
-        snprintf(file, sizeof(file), "%.*s/%s", (int)len, path, qemu);
-        found = access(file, X_OK) == 0;
-    }
-    if (!found) {
+    if (host_program(qemu, file, sizeof(file)) == NULL) {
         printf("etude-legacyset-test: fail: cannot run the guest cases: no %s on PATH\n", qemu);
         return -1;
     }
@@ -2876,11 +2836,27 @@ static int guest_site(void)
     return 0;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     char held[32];
+    int role;
+#ifdef _WIN32
+    _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(stderr), _O_BINARY);
+    if (argc > 1 && !strcmp(argv[1], "--bridge-holder"))
+        return etude_win_bridge_main(argc, argv);
+#endif
+    role = legacy_fixture_role(argc, argv);
+    if (role >= 0)
+        return role;
+    if (argc == 3 && !strcmp(argv[1], "--legacy-driver"))
+        return driver_role(argv[2]);
+    if (host_executable(argv[0], self, sizeof(self)) != 0)
+        return 1;
 
+#ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
+#endif
     if (realpath("tools/etude/schemas", schemas) == NULL) {
         printf("etude-legacyset-test: fail: etude's schemas cannot be found\n");
         return 1;
@@ -2901,6 +2877,8 @@ int main(void)
     unsetenv("RACH2_OVMF_CODE");
     unsetenv("FIXTURE_BREAK");
     make_tree();
+    if (fixture_environment(0) != 0)
+        return 1;
     test_mixed();
     test_width();
     test_serial();
@@ -2925,6 +2903,7 @@ int main(void)
     test_guest();
     if (fails != 0)
         return 1;
+    completed = 1;
     fix_passed();
     printf("etude_legacyset_hosttest: pass\n");
     return 0;

@@ -39,10 +39,11 @@ def boot_entry(item, flags):
     """Use the native executor and state the installed compiler's instrumentation."""
     posix = {'tools/etude/posix/exec.c', 'tools/etude/posix/keeper.c',
              'tools/etude/posix/process.c', 'tools/etude/capture.c'}
-    sources = [s for s in item['sources'] if s not in posix]
+    sources = [('tools/etude/win/bridge.c' if s == 'tools/etude/posix/bridge.c' else s)
+               for s in item['sources'] if s not in posix]
     sources = list(dict.fromkeys([*sources, *source_list('ETUDE_WIN_EXEC_SRC')]))
     item['sources'] = sources
-    item['command'] = [*FLAGS, *flags, '-o', item['program'], *sources, *LIBS]
+    item['command'] = [*FLAGS, '-DRACH2_HOSTTEST', *flags, '-o', item['program'], *sources, *LIBS]
     item['data'] = ['tools/etude/sources.mk', 'tests/cases/host/windows.py']
     item['instrumentation'] = []
     return item
