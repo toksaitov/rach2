@@ -1,5 +1,7 @@
 # Milestone 62: etude, one test runner that runs the whole collection anywhere
 
+The [recovery acceptance and assignments](recovery.md) record the owner-authorized completion of the portable collection after the 23 October handoff.
+
 ## Goal
 
 `tests/run` gives way to etude, a test runner written in C, and its guest helper `etude-guest`, which runs inside Rach2. Etude runs natively on Windows 11, on the latest macOS, on the current Ubuntu LTS and on Rach2 itself. The collection of tests passes in every one of those places, and its results do not depend on how fast the machine is or on whether the processor is emulated, virtualized or real. The phase runs the whole collection in each environment, finds which machine runs it fastest, and moves routine testing there.

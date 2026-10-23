@@ -141,3 +141,11 @@ The owner ended the takeover on 23 October at about 16:30 and gave the managemen
 * It failed to report. It recorded lapses only when the owner demanded, buried answers under reports, gave the owner a wrong figure, assumed context the owner did not have, and asked the owner questions that the plan answered instead of deciding.
 
 The pipeline was stopped by 16:40: the five worker loops of the testing host and the owner's Claude Code and Codex loops by their `STATE/stop` files, with their running sessions ended; the reviewer loop by its stop file; the three helpers with their runs on the testing host; and the coordinating session's five-minute checks. The manager loop had been stopped since the 22nd. The two claims that the ended sessions left on the testing host's ledger were dropped once nothing of them ran. ci's core run of 0dbe289e2 was left to finish. The Lenovo runs the trial kernel of #682's helper from its candidate slot; its default is still 5dcbe0738 of phase 477.
+
+## The stopped runs left two tree locks
+
+The first Codex recovery check on 23 October found the stopped `m` and `v` workers' tree locks still present, although their holders, jobs and process groups had ended. The admission ledger was empty. The check removed only those two lock directories after checking the recorded identities and the process table, then read the ledger again. A stopped run's cleanup must check its tree lock as well as its admission claim.
+
+The same check found the Mac below the resource rule's free-space threshold, with 73 GiB free. No process used the old Mac comparison copy. Removing unused generated scenario images and its tooling-machine cache raised free space to 97 GiB; the GNU build caches and system images, source, run records and failed-case evidence were kept. The previous manager's expected progress file was absent. The recovery now records assignments, unresolved work and the next integration action explicitly.
+
+The first Codex recovery check found no manager progress record. The coordinating chat restored it after the initial assignments and cleanup, and reconciled the paused assignments with the board. Subsequent checks must read that record before changing the action or deadline.
