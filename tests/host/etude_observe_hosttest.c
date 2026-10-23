@@ -126,6 +126,15 @@ static void native(void)
           strstr(summary, "\"non_owned_cpu_upper_bound_us\":{\"value\":null"));
     free(summary);
     etude_observe_free(o);
+    o = etude_observe_start(fix_path("cancelled"), &self, "fixture");
+    CHECK(o != NULL);
+    if (o) {
+        CHECK(etude_observe_cancel(o) != 0);
+        summary = etude_observe_summary(o, NULL);
+        CHECK(summary && strstr(summary, "\"comparison_available\":false"));
+        free(summary);
+        etude_observe_free(o);
+    }
 }
 
 int main(void)

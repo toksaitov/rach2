@@ -6,6 +6,7 @@
 #include <unistd.h>
 #ifdef _WIN32
 #include <windows.h>
+#include "win/files.h"
 #else
 #include <poll.h>
 #endif
@@ -73,13 +74,14 @@ int etude_observe_main(int argc, char **argv)
     while (!etude_observe_done(o)) {
         requested = stop ? stop_request(stop, run) : stop_input();
         if (requested) break;
+        if (stop && stop_input()) { requested = -1; break; }
 #ifdef _WIN32
         if (stop) Sleep(100);
 #else
         if (stop) poll(NULL, 0, 100);
 #endif
     }
-    int rc = etude_observe_stop(o) || requested < 0;
+    int rc = (requested < 0 ? etude_observe_cancel(o) : etude_observe_stop(o)) != 0;
     char *summary = etude_observe_summary(o, NULL);
     if (summary) { fputs(summary, stdout); free(summary); }
     etude_observe_free(o);

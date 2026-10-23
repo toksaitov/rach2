@@ -5,6 +5,7 @@
 #include <stdarg.h>
 #ifdef _WIN32
 #include <windows.h>
+#include "win/files.h"
 #else
 #include <pthread.h>
 #include <time.h>
@@ -25,8 +26,8 @@ struct etude_observer {
     char run_id[256];
     FILE *file;
     uint64_t samples, max_gap, denied;
-    unsigned resets;
-    int stop, ready, done, joined, failed, owner_lost, overflow;
+    unsigned resets, available;
+    int stop, ready, done, joined, failed, owner_lost, overflow, cancelled;
 #ifdef _WIN32
     HANDLE thread, event, ready_event;
 #else
@@ -124,6 +125,7 @@ static void sample(struct etude_observer *o)
             if ((s.available & o->last.available & (1u << i)) &&
                 i != LOAD_MEMORY && s.value[i] < o->last.value[i]) o->resets |= 1u << i;
     }
+    o->available &= s.available;
     o->overflow |= s.overflow;
     o->denied += s.denied;
     o->last = s;
@@ -155,6 +157,7 @@ static void observe(struct etude_observer *o)
             now.start != o->account.root.start) { o->owner_lost = 1; break; }
         sample(o);
     }
+    if (o->cancelled) o->failed = 1;
     sample(o);
     fprintf(o->file, "{\"kind\":\"end\",\"utc_us\":%llu,\"monotonic_us\":%llu,"
         "\"samples\":%llu,\"complete\":%s,\"owner_lost\":%s}\n",
@@ -197,6 +200,7 @@ struct etude_observer *etude_observe_start(const char *path, const struct etude_
     }
     strcpy(o->run_id, run_id);
     o->account.root = *root;
+    o->available = (1u << LOAD_FIELDS) - 1;
     o->account.previous = calloc(ETUDE_OBSERVE_PROCESSES, sizeof *o->processes);
     o->processes = calloc(ETUDE_OBSERVE_PROCESSES, sizeof *o->processes);
     o->file = fopen(path, "wbx");
@@ -222,6 +226,7 @@ struct etude_observer *etude_observe_start(const char *path, const struct etude_
     while (!o->ready) pthread_cond_wait(&o->condition, &o->mutex);
     pthread_mutex_unlock(&o->mutex);
 #endif
+    if (o->failed) { etude_observe_free(o); return NULL; }
     return o;
 fail:
     if (o->file) fclose(o->file);
@@ -247,6 +252,19 @@ int etude_observe_stop(struct etude_observer *o)
         o->file = NULL; o->joined = 1;
     }
     return o->failed || o->owner_lost ? -1 : 0;
+}
+
+int etude_observe_cancel(struct etude_observer *o)
+{
+    if (!o || o->joined) return -1;
+#ifdef _WIN32
+    o->cancelled = 1;
+#else
+    pthread_mutex_lock(&o->mutex);
+    o->cancelled = 1;
+    pthread_mutex_unlock(&o->mutex);
+#endif
+    return etude_observe_stop(o);
 }
 
 void etude_observe_free(struct etude_observer *o)
@@ -287,7 +305,7 @@ char *etude_observe_summary(const struct etude_observer *o, const struct etude_m
 {
     struct jbuf b = {0};
     int cpu = o && o->joined && o->samples >= 2 && o->max_gap <= 5 * ETUDE_OBSERVE_INTERVAL_US && !o->failed && !o->owner_lost &&
-        (o->first.available & o->last.available & 1) && !(o->resets & 1);
+        (o->available & 1) && !(o->resets & 1);
     if (!o) return NULL;
     uint64_t busy = cpu ? o->last.value[LOAD_CPU] - o->first.value[LOAD_CPU] : 0;
     append(&b, "{\"schema_version\":1,\"method\":\"native-load-v1\",\"platform\":\"%s\","
@@ -307,7 +325,7 @@ char *etude_observe_summary(const struct etude_observer *o, const struct etude_m
         busy - owned->value : 0, "sampled", o->max_gap,
         cpu && owned && !owned->reason && busy >= owned->value);
     for (unsigned i = 1; i < LOAD_FIELDS; i++) {
-        int available = (o->first.available & o->last.available & (1u << i)) && !(o->resets & (1u << i));
+        int available = (o->available & (1u << i)) && !(o->resets & (1u << i));
         uint64_t v = i == LOAD_MEMORY ? o->last.value[i] : o->last.value[i] - o->first.value[i];
         metric(&b, etude_load_field_name(i), v, "sampled", o->max_gap, available);
     }
