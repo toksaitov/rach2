@@ -1495,12 +1495,11 @@ $(BUS_ROOTS): $(ARCH_CASE_DIR)/bus/%.disk: krffs/manifests/disk-test.manifest \
 # GUID table; and on the host, the grow script's checks and its measures'
 # checker. They are the cases of tests/cases/machine.grow.json, which etude
 # runs, and have no target here.
-# `tests/run queue`: real AHCI reads, interrupts, ext2 batch writes and
-# fallback root faults beside raw reads; controlled host models test deadlines.
-# It is the cases of tests/cases/guest.queue.json, which etude runs, and has
-# no target here. Their disks are two of 8 MiB with a FAT32 partition each,
-# a copy of etude's disk with a FAT32 partition after its KRFFS one, which is
-# the root, and an ext2 volume of 6 MiB on a disk of 8.
+# `tests/run queue`: real AHCI reads, interrupts and fallback root faults
+# beside raw reads; controlled host models test deadlines. It is the cases of
+# tests/cases/guest.queue.json, which etude runs, and has no target here.
+# Their disks are two of 8 MiB with a FAT32 partition each, and a copy of
+# etude's disk with a FAT32 partition after its KRFFS one, which is the root.
 QUEUE_DIR = $(IMAGES_DIR)/queue
 $(QUEUE_DIR)/slow.disk $(QUEUE_DIR)/fast.disk: $(MKMBR)
 	@mkdir -p $(@D)
@@ -1513,17 +1512,6 @@ $(QUEUE_DIR)/root.disk: $(ETUDE_DISK) $(MKMBR)
 	cp $(ETUDE_DISK) $@.tmp
 	$(MKMBR) --lba $@.tmp 2048:98304:7f 100352:28672:0c >/dev/null
 	mformat -i $@.tmp@@51380224 -F -T 28672 ::
-	mv $@.tmp $@
-$(QUEUE_DIR)/late.disk: $(MKMBR)
-	@mkdir -p $(@D)
-	rm -f $@.vol
-	. tools/setup/e2fsprogs_path.sh && E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 \
-	    -O sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize \
-	    $@.vol 6M >/dev/null
-	{ dd if=/dev/zero bs=1048576 count=1 2>/dev/null; cat $@.vol; \
-	  dd if=/dev/zero bs=1048576 count=1 2>/dev/null; } > $@.tmp
-	rm -f $@.vol
-	$(MKMBR) --lba $@.tmp 2048:12288:83 >/dev/null
 	mv $@.tmp $@
 # `tests/run persist-ahci`: fsync durability across a power cut with the disk
 # on an AHCI controller. It is the case of

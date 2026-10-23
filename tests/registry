@@ -96,7 +96,7 @@ packet|qemu|full
 ping-e1000|qemu|full
 load|qemu,mformat|full
 authority|qemu|core|authority-test*,authority.*,authority-*,authority/*,auth-test.*
-queue|qemu,mformat,mke2fs|core
+queue|qemu,mformat|core
 persist-ahci|qemu|full
 subset|qemu|core
 bus|qemu,mformat,mtype|full

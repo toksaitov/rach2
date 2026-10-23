@@ -60,7 +60,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `ping-e1000` (full tier; needs qemu; 128 MiB): the ping suite on the e1000 card.
 * `load` (full tier; needs qemu, mformat; 128 MiB): the machine under load while six lines are typed at its console: every line read, no request quarantined by its deadline, and the longest delays it saw, from `/proc/stat`, printed.
 * `authority` (core tier; needs qemu; 128 MiB): which kernel may write the whole disk.
-* `queue` (core tier; needs qemu, mformat, mke2fs; 128 MiB): real AHCI reads, interrupts, ext2 batch writes and fallback root faults beside raw reads; controlled host models test deadlines.
+* `queue` (core tier; needs qemu, mformat; 128 MiB): real AHCI reads, interrupts and fallback root faults beside raw reads; controlled host models test deadlines.
 * `persist-ahci` (full tier; needs qemu; 128 MiB): fsync durability across a power cut with the disk on an AHCI controller.
 * `subset` (core tier; needs qemu; 128 MiB): each optional device probe left out, and proved left out.
 * `bus` (full tier; needs qemu, mformat, mtype; 128 MiB): four IDE drives on both channels, an AHCI and an IDE disk together with the root on each in turn, and a disk past 128 GiB.

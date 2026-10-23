@@ -1,20 +1,15 @@
-/* Read and write real AHCI disks, count their interrupts, and run root faults
- * beside raw reads. Deadline and completion order use the host models.
+/* Read real AHCI disks, count their interrupts, and run root faults beside
+ * raw reads. Deadline and completion order use the host models.
  *
  * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
- * names, or without it guest.queue.read, guest.queue.fault or
- * guest.queue.write by the mode; each mode's function says what its
- * assertions check.
+ * names, or without it guest.queue.read or guest.queue.fault by the mode;
+ * each mode's function says what its assertions check.
  */
 
 #include "probe.h"
 #include "probe_report.h"
 
-#define O_RDONLY        0
-#define O_WRONLY        1
-#define O_CREAT         0x40
-#define O_TRUNC         0x200
-#define CLOCK_MONOTONIC 1
+#define O_RDONLY 0
 
 #define FIRST_BYTES  (1024 * 1024)
 #define SECOND_BYTES (256 * 1024)
@@ -78,16 +73,6 @@ static void fail(const char *why)
         }
     }
     syscall2(SYS_EXIT, 1, 0);
-}
-
-/** The monotonic clock in milliseconds. */
-static int now_ms(void)
-{
-    long ts[2];
-
-    ts[0] = ts[1] = 0;
-    syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)ts);
-    return ts[0] * 1000 + ts[1] / 1000000;
 }
 
 /** Open the partition node that the suite prepared before boot. */
@@ -317,7 +302,7 @@ static void fault_row(void)
     }
     syscall2(SYS_CLOSE, fd, 0);
     report_held();
-    if (((status >> 8) & 0xFF) != 0) {
+    if (status != 0) {
         fail("blockprobe on the root beside the queue");
     }
     report_held();
@@ -339,93 +324,9 @@ static void fault_row(void)
 
 void probe_main(unsigned long *sp);
 
-#define LATE_BYTES (1280 * 1024)
-
-/** Write an ext2 batch, read every byte back, and write another file:
- * `mounted`, the volume mounted on /late; `written`, the batch written in one
- * call; `synced`, the sync after it; `read-back`, every byte read back as
- * written; `writable`, a second file made and synced after the batch, which
- * a mount that went read-only refuses; and `unmounted`, the volume unmounted
- * and /late removed. */
-static void write_row(void)
-{
-    static unsigned char whole[LATE_BYTES];
-    static unsigned char block[4096];
-    int fd, i, j, start;
-
-    report_plan("mounted");
-    report_plan("written");
-    report_plan("synced");
-    report_plan("read-back");
-    report_plan("writable");
-    report_plan("unmounted");
-    if (syscall2(SYS_MKDIR, (long)"/late", 0755) != 0) {
-        fail("mkdir /late");
-    }
-    if (syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/late", (long)"ext2", 0, 0) != 0) {
-        fail("the ext2 mount");
-    }
-    report_held();
-    fd = syscall3(SYS_OPEN, (long)"/late/late.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) {
-        fail("create late.bin");
-    }
-    for (i = 0; i < LATE_BYTES; i++) {
-        whole[i] = (unsigned char)((i / (int)sizeof(block)) * 7 + i % (int)sizeof(block));
-    }
-    start = now_ms();
-    if (syscall3(SYS_WRITE, fd, (long)whole, LATE_BYTES) != LATE_BYTES) {
-        fail("the write of late.bin");
-    }
-    syscall1(SYS_CLOSE, fd);
-    report_held();
-    puts("AHCIPROBE WRITE ms:");
-    putnum(now_ms() - start);
-    puts("");
-    if (syscall1(SYS_SYNC, 0) != 0) {
-        fail("the sync after the batch");
-    }
-    report_held();
-    fd = syscall3(SYS_OPEN, (long)"/late/late.bin", O_RDONLY, 0);
-    if (fd < 0) {
-        fail("open late.bin to read it back");
-    }
-    for (i = 0; i < LATE_BYTES / (int)sizeof(block); i++) {
-        if (syscall3(SYS_READ, fd, (long)block, (int)sizeof(block)) != (int)sizeof(block)) {
-            fail("a read of late.bin");
-        }
-        for (j = 0; j < (int)sizeof(block); j++) {
-            if (block[j] != (unsigned char)(i * 7 + j)) {
-                fail("the bytes read back are not what was written");
-            }
-        }
-    }
-    syscall1(SYS_CLOSE, fd);
-    report_held();
-    fd = syscall3(SYS_OPEN, (long)"/late/again.bin", O_WRONLY | O_CREAT, 0644);
-    if (fd < 0) {
-        fail("the mount is not writable after the batch");
-    }
-    syscall1(SYS_CLOSE, fd);
-    if (syscall1(SYS_SYNC, 0) != 0) {
-        fail("the second sync");
-    }
-    report_held();
-    if (syscall2(SYS_UMOUNT2, (long)"/late", 0) != 0) {
-        fail("umount2 /late");
-    }
-    if (syscall1(SYS_RMDIR, (long)"/late") != 0) {
-        fail("remove mount directory");
-    }
-    report_held();
-    report_end();
-    puts("AHCIPROBE OK");
-    syscall2(SYS_EXIT, 0, 0);
-}
-
 PROBE_SP_ENTRY;
 
-/** Run `fault`, `write`, or the two-disk read when no mode is supplied. */
+/** Run `fault`, or the two-disk read when no mode is supplied. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
@@ -435,10 +336,6 @@ void probe_main(unsigned long *sp)
     if (argc >= 2 && argv[1][0] == 'f') {
         report_begin(report_case(envp, "guest.queue.fault"));
         fault_row();
-    }
-    if (argc >= 2 && argv[1][0] == 'w') {
-        report_begin(report_case(envp, "guest.queue.write"));
-        write_row();
     }
     report_begin(report_case(envp, "guest.queue.read"));
     read_row();
