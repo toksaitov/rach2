@@ -151,13 +151,60 @@ static void make_copy(const char *name, char *copy, size_t size, const char *tex
 static void key_of(const char *dir, char **argv, char key[65])
 {
     struct ran r;
-    char *k;
+    char line[PATH_LEN + 200];
+    FILE *f;
 
     run(dir, argv, &r);
-    k = strstr(r.out, "\nkey ");
     key[0] = '\0';
-    if (r.status == 0 && k != NULL)
-        snprintf(key, 65, "%.64s", k + 5);
+    f = fopen(fix_path("step.out"), "r");
+    if (!f)
+        return;
+    while (r.status == 0 && fgets(line, sizeof(line), f))
+        if (!strncmp(line, "key ", 4))
+            snprintf(key, 65, "%.64s", line + 4);
+    fclose(f);
+}
+
+/** Large source inventories retain every input and order-independent key. */
+static void test_many_inputs(void)
+{
+    enum { COUNT = 768, BASE = 8, STRIDE = 4 };
+    char (*paths)[32] = calloc(COUNT, sizeof(*paths));
+    char **argv = calloc(BASE + COUNT * STRIDE + 1, sizeof(*argv));
+    char *prefix[] = {"etude", "-p", "-n", "many", "-t", "st/many.stamp", "-o", "out"};
+    char first[65], changed[65], ordered[65], path[PATH_LEN];
+    int k;
+
+    if (!paths || !argv) {
+        CHECK(0, "many inputs: fixture allocation");
+        free(paths);
+        free(argv);
+        return;
+    }
+    memcpy(argv, prefix, sizeof(prefix));
+    for (k = 0; k < COUNT; k++) {
+        snprintf(paths[k], sizeof(*paths), "many/%04d", k);
+        fix_format(path, sizeof(path), "%s/%s", copy_a, paths[k]);
+        put(path, "before\n");
+        argv[BASE + k * STRIDE] = "-i";
+        argv[BASE + k * STRIDE + 1] = paths[k];
+        argv[BASE + k * STRIDE + 2] = "-x";
+        argv[BASE + k * STRIDE + 3] = paths[k];
+    }
+    key_of(copy_a, argv, first);
+    put(path, "after\n");
+    key_of(copy_a, argv, changed);
+    for (k = 0; k < COUNT; k++) {
+        argv[BASE + k * STRIDE + 1] = paths[COUNT - k - 1];
+        argv[BASE + k * STRIDE + 3] = paths[COUNT - k - 1];
+    }
+    key_of(copy_a, argv, ordered);
+    CHECK(strlen(first) == 64 && strlen(changed) == 64 && strcmp(first, changed),
+          "many inputs: changing the last file beyond 512 changes the key");
+    CHECK(strlen(ordered) == 64 && !strcmp(changed, ordered),
+          "many inputs: input and exclusion order do not change the key");
+    free(argv);
+    free(paths);
 }
 
 /** The key, its record and what changes them. */
@@ -737,6 +784,7 @@ int main(int argc, char **argv)
     make_copy("copy-a", copy_a, sizeof copy_a, "one\n");
     make_copy("copy-b", copy_b, sizeof copy_b, "two\n");
     test_key();
+    test_many_inputs();
     test_copy();
     test_link();
     test_here();

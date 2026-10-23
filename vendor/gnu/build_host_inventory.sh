@@ -14,7 +14,7 @@ SAN=$GNU_OUT/sanitizers
 rm -rf "$OUT"
 mkdir -p "$TREE"
 cd "$REPO"
-# Only tracked source and the extracted musl inputs enter this small tree.
+# Tracked sources and the extracted sources the tests compile enter this tree.
 if git rev-parse --git-dir > /dev/null 2>&1; then
     git ls-files -z -- Makefile tests tools mk utils krffs rach2 ish ports vendor > "$OUT/sources.list"
 else
@@ -34,11 +34,26 @@ for name in Path(sys.argv[3]).read_bytes().split(b'\0'):
     output = tree / relative
     output.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, output)
-for base in ('vendor/musl/musl-1.2.5', 'build/x86_64/vendor-work/musl/musl-1.2.5'):
-    source = repo / base
-    if source.is_dir():
-        shutil.copytree(source, tree / base, dirs_exist_ok=True,
-                        ignore=shutil.ignore_patterns('*.o', '*.a', '*.so', 'obj', 'lib'))
+# These are the only extracted musl bytes the inventories compile. Both
+# paths remain distinct because architecture metadata selects between them.
+for prefix in ('vendor', 'build/x86_64/vendor-work'):
+    relative = Path(prefix) / 'musl/musl-1.2.5/src/crypt/crypt_sha512.c'
+    source = repo / relative
+    if not source.is_file():
+        raise ValueError(f'host inventory: missing extracted source: {source}')
+    output = tree / relative
+    output.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, output)
+    library = Path(prefix) / 'e2fsprogs/e2fsprogs-1.47.4/lib'
+    if not (repo / library / 'ext2fs/unix_io.c').is_file():
+        raise ValueError(f'host inventory: missing patched e2fsprogs library: {library}')
+    for source in (repo / library).rglob('*'):
+        if source.is_symlink():
+            raise ValueError(f'host inventory: extracted source must be regular: {source}')
+        if source.is_file() and (source.suffix == '.h' or source.name == 'unix_io.c'):
+            output = tree / source.relative_to(repo)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, output)
 PY
 mkdir -p "$TREE/build/tools/etude" "$TREE/build/tests/cases/host"
 cp "$GNU_OUT/host-products/etude" "$TREE/build/tools/etude/etude"

@@ -23,9 +23,8 @@
 
 #include "sha256.h"
 
-/* The longest path the program makes, and the most operands of one kind. */
+/* The longest path the program makes. */
 #define PATH_LEN 4096
-#define LIST_MAX 512
 
 /* The seconds after which a directory left in the store's tmp/ is taken to
  * be one whose maker died, and removed. */
@@ -40,8 +39,8 @@ struct text {
 
 /* The operands of one kind, in the order given. */
 struct list {
-    const char *v[LIST_MAX];
-    int n;
+    const char **v;
+    int n, cap;
 };
 
 /* The step: its options, and what the program works out from them. */
@@ -444,17 +443,23 @@ static int add_depends(struct step *s, struct lines *l)
 }
 
 /** Add to `t` a line `WHAT NAME` for each name of `list`, sorted, each once. */
-static void add_names(struct text *t, const char *what, const struct list *list)
+static int add_names(struct text *t, const char *what, const struct list *list)
 {
-    const char *v[LIST_MAX];
-    int k, n = list->n;
+    const char **v;
+    int k, rc = 0, n = list->n;
 
+    if (!n)
+        return 0;
+    v = malloc((size_t)n * sizeof(*v));
+    if (!v)
+        return -1;
     memcpy(v, list->v, (size_t)n * sizeof(*v));
-    if (n)
-        qsort(v, (size_t)n, sizeof(*v), by_string);
-    for (k = 0; k < n; k++)
+    qsort(v, (size_t)n, sizeof(*v), by_string);
+    for (k = 0; k < n && !rc; k++)
         if (k == 0 || strcmp(v[k], v[k - 1]) != 0)
-            text_add(t, "%s %s\n", what, v[k]);
+            rc = text_add(t, "%s %s\n", what, v[k]);
+    free(v);
+    return rc;
 }
 
 /**
@@ -494,9 +499,11 @@ static int make_record(struct step *s)
     add_sorted(&s->record, &l);
     if (s->root)
         text_add(&s->record, "root %s\n", s->root);
-    add_names(&s->record, "use", &s->use);
-    add_names(&s->record, "output", &s->out);
-    add_names(&s->record, "skip", &s->skip);
+    if (add_names(&s->record, "use", &s->use) || add_names(&s->record, "output", &s->out) ||
+        add_names(&s->record, "skip", &s->skip)) {
+        say(s, "out of memory");
+        goto out;
+    }
     text_add(&s->record, "mode %s\n", s->root ? "link" : "copy");
     if (s->record.s == NULL) {
         say(s, "out of memory");
@@ -1772,8 +1779,17 @@ static int expire(struct step *s)
 
 static int list_add(struct list *l, const char *v)
 {
-    if (l->n == LIST_MAX)
-        return -1;
+    if (l->n == l->cap) {
+        int cap = l->cap > INT_MAX / 2 ? INT_MAX : l->cap ? l->cap * 2 : 16;
+        const char **next;
+        if (cap <= l->n || (size_t)cap > (size_t)-1 / sizeof(*next))
+            return -1;
+        next = realloc(l->v, (size_t)cap * sizeof(*next));
+        if (!next)
+            return -1;
+        l->v = next;
+        l->cap = cap;
+    }
     l->v[l->n++] = v;
     return 0;
 }
@@ -1891,14 +1907,11 @@ static int parse(struct step *s, int argc, char **argv)
     return check_placed(s);
 }
 
-int etude_build_main(int argc, char **argv)
+static int run_step(struct step *s, int argc, char **argv)
 {
-    static struct step step;
-    struct step *s = &step;
     struct sigaction sa;
     int rc;
 
-    memset(s, 0, sizeof(*s));
     if (parse(s, argc, argv) != 0)
         return usage();
     if (s->days) {
@@ -1960,5 +1973,22 @@ int etude_build_main(int argc, char **argv)
         signal(stop_signal, SIG_DFL);
         raise(stop_signal);
     }
+    return rc;
+}
+
+/** Keep operand and record storage private to this invocation. */
+int etude_build_main(int argc, char **argv)
+{
+    struct step step = {0};
+    int rc = run_step(&step, argc, argv);
+
+    free(step.cc.v);
+    free(step.wrap.v);
+    free(step.in.v);
+    free(step.dep.v);
+    free(step.use.v);
+    free(step.out.v);
+    free(step.skip.v);
+    free(step.record.s);
     return rc;
 }
