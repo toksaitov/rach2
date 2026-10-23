@@ -19,6 +19,7 @@ struct row {
     unsigned nhosts, sequence;
     int fake;
 };
+
 static int path(char *out, size_t size, const char *format, ...)
 {
     va_list ap;
@@ -385,6 +386,16 @@ static int worker_git(struct row *s, const char *arg, const char *extra, const c
                           NULL};
     return guest_expect(s, argv, expected, label);
 }
+static int closing_word(const char *word)
+{
+    static const char *verbs[] = {"close", "closes",  "closed",   "fix",     "fixes",
+                                  "fixed", "resolve", "resolves", "resolved"};
+    unsigned i;
+    for (i = 0; i < sizeof(verbs) / sizeof(verbs[0]); i++)
+        if (!strcmp(word, verbs[i]))
+            return 1;
+    return 0;
+}
 static int closing(const char *message, unsigned wanted)
 {
     const char *p = message;
@@ -400,9 +411,7 @@ static int closing(const char *message, unsigned wanted)
             p++;
         }
         word[n] = 0;
-        if (!strcmp(word, "close") || !strcmp(word, "closes") || !strcmp(word, "closed") ||
-            !strcmp(word, "fix") || !strcmp(word, "fixes") || !strcmp(word, "fixed") ||
-            !strcmp(word, "resolve") || !strcmp(word, "resolves") || !strcmp(word, "resolved")) {
+        if (closing_word(word)) {
             const char *q = p;
             char *end;
             unsigned long issue;
@@ -493,51 +502,11 @@ static int verify_worker(struct row *s)
     }
     return 1;
 }
-static int verify(struct row *s)
+static int verify_runtime(struct row *s)
 {
-    char script[4096], record_path[4096], line[1000];
-    char *args[7];
     char *before = NULL, *after = NULL, *memory = NULL, *expected = NULL;
     const char *digest = NULL;
     int ok = 0;
-    if (!metadata(s))
-        return 0;
-    path(script, sizeof(script), "%s/script.json", s->work);
-    path(record_path, sizeof(record_path), s->fake ? "%s/record" : "%s/row.%s.record", s->work,
-         s->name);
-    args[0] = "agent_server";
-    args[1] = "verify";
-    args[2] = script;
-    args[3] = record_path;
-    args[4] = (char *)s->name;
-    args[5] = s->version;
-    args[6] = NULL;
-    if (!host(s, args, "audit"))
-        return 0;
-    if (!*s->verifier || s->fake)
-        return 1;
-    snprintf(line, sizeof(line),
-             "mkdir -p /tmp/agents/verify && tar -xf /tmp/agents/results/%s.tar -C "
-             "/tmp/agents/verify && chown -R root:root /tmp/agents/verify",
-             s->name);
-    if (!run(s, line, "unpack-result"))
-        return 0;
-    if (!strcmp(s->name, "worker-session"))
-        return verify_worker(s);
-    {
-        char *mode = fetch(s, "/tmp/agents/verify/mode", "mode");
-        const char *wanted = strstr(s->name, "screen")       ? "screen"
-                             : !strcmp(s->name, "muse-tmux") ? "tmux"
-                             : strstr(s->name, "print")      ? "print"
-                                                             : "exec";
-        if (!mode || strcmp(trim(mode), wanted)) {
-            free(mode);
-            return 0;
-        }
-        free(mode);
-    }
-    if (!verify_repo(s))
-        return 0;
     before = fetch(s, "/tmp/agents/verify/binary.before", "binary-before");
     after = fetch(s, "/tmp/agents/verify/binary.after", "binary-after");
     if (!strncmp(s->name, "claude", 6))
@@ -576,6 +545,51 @@ done:
     free(expected);
     return ok;
 }
+static int verify(struct row *s)
+{
+    char script[4096], record_path[4096], line[1000];
+    char *args[7];
+    if (!metadata(s))
+        return 0;
+    path(script, sizeof(script), "%s/script.json", s->work);
+    path(record_path, sizeof(record_path), s->fake ? "%s/record" : "%s/row.%s.record", s->work,
+         s->name);
+    args[0] = "agent_server";
+    args[1] = "verify";
+    args[2] = script;
+    args[3] = record_path;
+    args[4] = (char *)s->name;
+    args[5] = s->version;
+    args[6] = NULL;
+    if (!host(s, args, "audit"))
+        return 0;
+    if (!*s->verifier || s->fake)
+        return 1;
+    snprintf(line, sizeof(line),
+             "mkdir -p /tmp/agents/verify && tar -xf /tmp/agents/results/%s.tar -C "
+             "/tmp/agents/verify && chown -R root:root /tmp/agents/verify",
+             s->name);
+    if (!run(s, line, "unpack-result"))
+        return 0;
+    if (!strcmp(s->name, "worker-session"))
+        return verify_worker(s);
+    {
+        char *mode = fetch(s, "/tmp/agents/verify/mode", "mode");
+        const char *wanted = strstr(s->name, "screen")       ? "screen"
+                             : !strcmp(s->name, "muse-tmux") ? "tmux"
+                             : strstr(s->name, "print")      ? "print"
+                                                             : "exec";
+        if (!mode || strcmp(trim(mode), wanted)) {
+            free(mode);
+            return 0;
+        }
+        free(mode);
+    }
+    if (!verify_repo(s))
+        return 0;
+    return verify_runtime(s);
+}
+
 static int as_test(struct row *s, const char *line, const char *label, struct net_run *r)
 {
     const char *argv[] = {"/bin/su", "-s", "/bin/bash", "test", "-c", line, NULL};
@@ -818,183 +832,232 @@ static int api_audit(struct row *s)
     path(record_path, sizeof(record_path), "%s/record", s->work);
     return host(s, args, "api-audit");
 }
-int agentapi_native(struct etude_case *c)
-{
+struct api_case {
+    struct etude_case *c;
     struct net_case u;
     struct net_boot b;
     struct row s;
-    struct net_run r;
-    struct etude_case_service *server = NULL;
+    struct etude_case_service *server;
     struct etude_termination end;
     struct etude_guest_result result;
     char work[4096], password[128], script[4096], record_path[4096], ca[4096], port[20];
-    const char *id = etude_case_id(c);
-    int codex = strstr(id, ".codexapi.") != NULL;
-    int refusal = strstr(id, ".refusal") != NULL, running = 0, stopped_service = 0, service_ok = 0,
-        prepared = 0;
-    int agent_ok = 0, audit_ok = 0, cleanup = 1, channel_ready = 0, muse_live = 1;
-    char *service_log = NULL, *status = NULL;
-    memset(&b, 0, sizeof(b));
-    memset(&s, 0, sizeof(s));
-    memset(&result, 0, sizeof(result));
-    net_case(&u, c);
-    s.u = &u;
-    s.b = &b;
-    s.name = codex ? "codex-api" : "muse-api";
-    snprintf(s.version, sizeof(s.version), "%s", codex ? "0.162.1" : "1.4.10-R6427.1");
-    snprintf(work, sizeof(work), "%s", etude_evidence(c, "api-work"));
-    s.work = work;
-    path(s.assets, sizeof(s.assets), "%s/assets", work);
-    net_step(&u, "prepare");
-    if (mkdir(work, 0700) || !api_prepare(&s))
-        net_fail(&u, "the API fixtures could not be prepared");
-    prepared = net_ok(&u);
-    net_step(&u, "server");
-    path(script, sizeof(script), "%s/script.json", work);
-    path(record_path, sizeof(record_path), "%s/record", work);
-    path(ca, sizeof(ca), "%s/ca", work);
-    snprintf(port, sizeof(port), "%u", etude_port(c, 0));
+    int codex, refusal, running, stopped_service, service_ok, prepared;
+    int agent_ok, audit_ok, cleanup, channel_ready, muse_live;
+    char *service_log, *status;
+};
+
+static void api_fixture(struct api_case *a)
+{
+    struct etude_case *c = a->c;
+    net_step(&a->u, "prepare");
+    if (mkdir(a->work, 0700) || !api_prepare(&a->s))
+        net_fail(&a->u, "the API fixtures could not be prepared");
+    a->prepared = net_ok(&a->u);
+    net_step(&a->u, "server");
+    path(a->script, sizeof(a->script), "%s/script.json", a->work);
+    path(a->record_path, sizeof(a->record_path), "%s/record", a->work);
+    path(a->ca, sizeof(a->ca), "%s/ca", a->work);
+    snprintf(a->port, sizeof(a->port), "%u", etude_port(c, 0));
     {
-        char *args[] = {"serve", script, record_path, ca, port, NULL};
-        if (net_ok(&u) && etude_service(c, "fakeapi", args, &server, &end) != ETUDE_OK)
-            net_fail(&u, "the API service did not listen");
+        char *args[] = {"serve", a->script, a->record_path, a->ca, a->port, NULL};
+        if (net_ok(&a->u) && etude_service(c, "fakeapi", args, &a->server, &a->end) != ETUDE_OK)
+            net_fail(&a->u, "the API service did not listen");
     }
-    net_step(&u, "boot");
-    net_boot(&b, &u, "gnu", 1, NULL);
-    net_wait(&b, "ext2: root: /dev/disk0p1");
-    net_wait(&b, "init: sshd: started as pid");
-    b.at = 0;
-    if (net_ok(&u) &&
-        (!net_secret(&u, "demo-password", password, sizeof(password)) ||
-         net_login(&b, "root", password, "# ") != ETUDE_OK || etude_guest_open(b.m) != ETUDE_OK))
-        net_fail(&u, "the guest command channel did not start");
-    channel_ready = net_ok(&u);
-    net_step(&u, "setup");
-    if (net_ok(&u) && !api_setup(&s, refusal))
-        net_fail(&u, "the fresh CLI home and repository could not be prepared");
-    if (net_ok(&u) && shell(&s, "curl -sS -o /dev/null http://1.1.1.1/; printf 'rc=%s\\n' \"$?\"",
-                            "api-no-route", &r)) {
-        agent_ok = strstr(r.out, "rc=") && !strstr(r.out, "rc=0");
+}
+static void api_boot(struct api_case *a)
+{
+    net_step(&a->u, "boot");
+    net_boot(&a->b, &a->u, "gnu", 1, NULL);
+    net_wait(&a->b, "ext2: root: /dev/disk0p1");
+    net_wait(&a->b, "init: sshd: started as pid");
+    a->b.at = 0;
+    if (net_ok(&a->u) && (!net_secret(&a->u, "demo-password", a->password, sizeof(a->password)) ||
+                          net_login(&a->b, "root", a->password, "# ") != ETUDE_OK ||
+                          etude_guest_open(a->b.m) != ETUDE_OK))
+        net_fail(&a->u, "the guest command channel did not start");
+    a->channel_ready = net_ok(&a->u);
+}
+static void api_isolation(struct api_case *a)
+{
+    struct net_run r;
+    net_step(&a->u, "setup");
+    if (net_ok(&a->u) && !api_setup(&a->s, a->refusal))
+        net_fail(&a->u, "the fresh CLI home and repository could not be prepared");
+    if (net_ok(&a->u) &&
+        shell(&a->s, "curl -sS -o /dev/null http://1.1.1.1/; printf 'rc=%s\\n' \"$?\"",
+              "api-no-route", &r)) {
+        a->agent_ok = strstr(r.out, "rc=") && !strstr(r.out, "rc=0");
         net_run_free(&r);
     }
-    net_assert(&u, "isolated", agent_ok, "the restricted guest reached an outside address");
-    agent_ok = 0;
-    net_step(&u, "version");
+    net_assert(&a->u, "isolated", a->agent_ok, "the restricted guest reached an outside address");
+    a->agent_ok = 0;
+}
+static void api_version(struct api_case *a)
+{
+    struct net_run r;
+    net_step(&a->u, "version");
     {
-        const char *args[] = {codex ? "/opt/codex/bin/codex" : "/opt/muse/bin/muse", "--version",
+        const char *args[] = {a->codex ? "/opt/codex/bin/codex" : "/opt/muse/bin/muse", "--version",
                               NULL};
-        if (net_ok(&u) && command(&s, args, "api-version", &r)) {
-            agent_ok =
-                net_exited0(&r) && !strcmp(r.out, codex ? "codex-cli 0.162.1\n"
-                                                        : "Muse Code 1.4.10 (1.4.10-R6427.1)\n");
+        if (net_ok(&a->u) && command(&a->s, args, "api-version", &r)) {
+            a->agent_ok =
+                net_exited0(&r) && !strcmp(r.out, a->codex ? "codex-cli 0.162.1\n"
+                                                           : "Muse Code 1.4.10 (1.4.10-R6427.1)\n");
             net_run_free(&r);
         }
     }
-    net_assert(&u, "version", agent_ok, "the upstream program is not the pinned version");
-    if (net_ok(&u) && !agent_ok)
-        net_fail(&u, "the upstream version differs from the case");
-    net_step(&u, "execute");
-    if (net_ok(&u))
-        running = api_start(&s);
-    if (net_ok(&u) && !running)
-        net_fail(&u, "the upstream CLI did not start");
-    if (running) {
+    net_assert(&a->u, "version", a->agent_ok, "the upstream program is not the pinned version");
+    if (net_ok(&a->u) && !a->agent_ok)
+        net_fail(&a->u, "the upstream version differs from the case");
+}
+static void api_execute(struct api_case *a)
+{
+    net_step(&a->u, "execute");
+    if (net_ok(&a->u))
+        a->running = api_start(&a->s);
+    if (net_ok(&a->u) && !a->running)
+        net_fail(&a->u, "the upstream CLI did not start");
+    if (a->running) {
         uint64_t at;
-        if (refusal && !codex && etude_service_wait(server, ": unexpected:", 0, &at) != ETUDE_OK)
-            net_fail(&u, "the API did not reject Muse's incorrect tool result");
-        if (refusal && !codex)
-            muse_live = etude_guest_running(b.m);
-        if (etude_guest_finish(b.m, refusal && !codex, "upstream-cli", &result) != ETUDE_OK)
-            net_fail(&u, "the upstream CLI result was lost");
-        running = 0;
-        agent_ok = result.complete && result.cleanup == ETUDE_CLEANUP_CONFIRMED &&
-                   result.termination.end == ETUDE_END_EXITED && result.termination.value == 0;
+        if (a->refusal && !a->codex &&
+            etude_service_wait(a->server, ": unexpected:", 0, &at) != ETUDE_OK)
+            net_fail(&a->u, "the API did not reject Muse's incorrect tool result");
+        if (a->refusal && !a->codex)
+            a->muse_live = etude_guest_running(a->b.m);
+        if (etude_guest_finish(a->b.m, a->refusal && !a->codex, "upstream-cli", &a->result) !=
+            ETUDE_OK)
+            net_fail(&a->u, "the upstream CLI result was lost");
+        a->running = 0;
+        a->agent_ok = a->result.complete && a->result.cleanup == ETUDE_CLEANUP_CONFIRMED &&
+                      a->result.termination.end == ETUDE_END_EXITED &&
+                      a->result.termination.value == 0;
     }
-    net_step(&u, "verdict");
-    if (server) {
-        stopped_service = etude_service_stop(server, &end) == ETUDE_OK;
-        server = NULL;
+}
+static void api_verdict(struct api_case *a)
+{
+    struct etude_case *c = a->c;
+    net_step(&a->u, "verdict");
+    if (a->server) {
+        a->stopped_service = etude_service_stop(a->server, &a->end) == ETUDE_OK;
+        a->server = NULL;
     }
-    service_log = net_file(etude_evidence(c, "fakeapi.1.out"));
+    a->service_log = net_file(etude_evidence(c, "fakeapi.1.out"));
     {
         char file[4096];
-        path(file, sizeof(file), "%s/record.status", work);
-        status = net_file(file);
+        path(file, sizeof(file), "%s/record.status", a->work);
+        a->status = net_file(file);
     }
-    service_ok =
-        stopped_service && !strcmp(status, refusal ? "1\n" : "0\n") &&
-        strstr(service_log, refusal ? codex ? "the first request 1: turn 2: the output of call_read"
-                                            : "result: fail:"
-                            : codex ? "result: pass: 5 steps played by 5 requests"
-                                    : "result: pass: 6 steps played by 6 requests");
-    if (refusal && !codex)
-        service_ok =
-            service_ok &&
-            strstr(service_log,
+    a->service_ok =
+        a->stopped_service && !strcmp(a->status, a->refusal ? "1\n" : "0\n") &&
+        strstr(a->service_log,
+               a->refusal ? a->codex ? "the first request 1: turn 2: the output of call_read"
+                                     : "result: fail:"
+               : a->codex ? "result: pass: 5 steps played by 5 requests"
+                          : "result: pass: 6 steps played by 6 requests");
+    if (a->refusal && !a->codex)
+        a->service_ok =
+            a->service_ok &&
+            strstr(a->service_log,
                    "the first request 3: POST /v1/responses: step 3: the output of call_read");
-    fputs(service_log, stdout);
-    net_step(&u, "verify");
-    if (refusal) {
-        net_assert(&u, "refused", service_ok && muse_live,
+    fputs(a->service_log, stdout);
+}
+static void api_verify(struct api_case *a)
+{
+    net_step(&a->u, "verify");
+    if (a->refusal) {
+        net_assert(&a->u, "refused", a->service_ok && a->muse_live,
                    "the API did not refuse the first incorrect tool result");
         {
             const char *cat[] = {"/bin/cat", "/tmp/agents/verify/repo/greeting.txt", NULL};
-            audit_ok = net_ok(&u) &&
-                       guest_expect(&s, cat, "hello, world\n", "unchanged-greeting") &&
-                       git_expect(&s, "log", "--format=%s", "The fixture\n", "unchanged-history");
+            a->audit_ok =
+                net_ok(&a->u) && guest_expect(&a->s, cat, "hello, world\n", "unchanged-greeting") &&
+                git_expect(&a->s, "log", "--format=%s", "The fixture\n", "unchanged-history");
         }
-        net_assert(&u, "unchanged", audit_ok,
+        net_assert(&a->u, "unchanged", a->audit_ok,
                    "the refusal changed the greeting or repository history");
     } else {
-        net_assert(&u, "exit", agent_ok, "the upstream CLI did not exit with status zero");
-        net_assert(&u, "verdict", service_ok,
+        net_assert(&a->u, "exit", a->agent_ok, "the upstream CLI did not exit with status zero");
+        net_assert(&a->u, "verdict", a->service_ok,
                    "the API did not play the complete expected exchange");
-        audit_ok = net_ok(&u) && api_audit(&s);
-        net_assert(&u, "exchange", audit_ok, "the API audit differs from the scripted exchange");
-        net_assert(&u, "credentials", audit_ok,
+        a->audit_ok = net_ok(&a->u) && api_audit(&a->s);
+        net_assert(&a->u, "exchange", a->audit_ok,
+                   "the API audit differs from the scripted exchange");
+        net_assert(&a->u, "credentials", a->audit_ok,
                    "an API request lacks the dummy key or upstream user agent");
         {
             const char *cat[] = {"/bin/cat", "/tmp/agents/verify/repo/greeting.txt", NULL};
-            net_assert(&u, "greeting",
-                       net_ok(&u) && guest_expect(&s, cat, "hello, rach2\n", "final-greeting"),
+            net_assert(&a->u, "greeting",
+                       net_ok(&a->u) &&
+                           guest_expect(&a->s, cat, "hello, rach2\n", "final-greeting"),
                        "the greeting differs from the requested text");
         }
-        net_assert(&u, "commit", net_ok(&u) && verify_repo(&s),
+        net_assert(&a->u, "commit", net_ok(&a->u) && verify_repo(&a->s),
                    "the upstream commit or work tree differs from the fixture's expected result");
     }
-    net_step(&u, "cleanup");
-    if (running)
-        etude_guest_finish(b.m, 1, "upstream-cli-cancelled", &result);
-    if (server)
-        cleanup = etude_service_stop(server, &end) == ETUDE_OK;
-    if (b.m) {
-        if (channel_ready) {
-            int removed = run(&s,
+}
+static void api_cleanup(struct api_case *a)
+{
+    struct etude_case *c = a->c;
+    net_step(&a->u, "cleanup");
+    if (a->running)
+        etude_guest_finish(a->b.m, 1, "upstream-cli-cancelled", &a->result);
+    if (a->server)
+        a->cleanup = etude_service_stop(a->server, &a->end) == ETUDE_OK;
+    if (a->b.m) {
+        if (a->channel_ready) {
+            int removed = run(&a->s,
                               "rm -rf /tmp/agentapi /tmp/agents && test ! -e /tmp/agentapi "
                               "&& test ! -e /tmp/agents",
                               "remove-cli-home");
-            cleanup = cleanup && removed;
+            a->cleanup = a->cleanup && removed;
         }
         {
             char *reply = NULL;
-            etude_qmp(b.m, "quit", NULL, &reply);
+            etude_qmp(a->b.m, "quit", NULL, &reply);
             free(reply);
-            int ended = etude_wait_end(b.m, &end) == ETUDE_OK;
-            cleanup = cleanup && ended;
+            int ended = etude_wait_end(a->b.m, &a->end) == ETUDE_OK;
+            a->cleanup = a->cleanup && ended;
         }
     }
-    if (prepared || *ca) {
-        char *remove[] = {"agent_server", "remove", net_ok(&u) && u.failures == 0 ? work : ca,
-                          NULL};
-        int removed = etude_host(c, remove, "remove-api-keys", &end) == ETUDE_OK &&
-                      end.end == ETUDE_END_EXITED && end.value == 0;
-        cleanup = removed && cleanup;
+    if (a->prepared || *a->ca) {
+        char *remove[] = {"agent_server", "remove",
+                          net_ok(&a->u) && a->u.failures == 0 ? a->work : a->ca, NULL};
+        int removed = etude_host(c, remove, "remove-api-keys", &a->end) == ETUDE_OK &&
+                      a->end.end == ETUDE_END_EXITED && a->end.value == 0;
+        a->cleanup = removed && a->cleanup;
     }
-    etude_assert(c, "cleanup", cleanup,
+    etude_assert(c, "cleanup", a->cleanup,
                  "the private CLI processes, home or certificate keys outlived cleanup");
-    if (!cleanup)
-        u.failures++;
-    free(service_log);
-    free(status);
-    return net_end(&u);
+    if (!a->cleanup)
+        a->u.failures++;
+}
+int agentapi_native(struct etude_case *c)
+{
+    struct api_case a;
+    const char *id = etude_case_id(c);
+    memset(&a, 0, sizeof(a));
+    a.c = c;
+    a.codex = strstr(id, ".codexapi.") != NULL;
+    a.refusal = strstr(id, ".refusal") != NULL;
+    a.cleanup = 1;
+    a.muse_live = 1;
+    net_case(&a.u, c);
+    a.s.u = &a.u;
+    a.s.b = &a.b;
+    a.s.name = a.codex ? "codex-api" : "muse-api";
+    snprintf(a.s.version, sizeof(a.s.version), "%s", a.codex ? "0.162.1" : "1.4.10-R6427.1");
+    snprintf(a.work, sizeof(a.work), "%s", etude_evidence(c, "api-work"));
+    a.s.work = a.work;
+    path(a.s.assets, sizeof(a.s.assets), "%s/assets", a.work);
+    api_fixture(&a);
+    api_boot(&a);
+    api_isolation(&a);
+    api_version(&a);
+    api_execute(&a);
+    api_verdict(&a);
+    api_verify(&a);
+    api_cleanup(&a);
+    free(a.service_log);
+    free(a.status);
+    return net_end(&a.u);
 }

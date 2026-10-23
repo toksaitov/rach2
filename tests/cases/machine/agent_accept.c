@@ -18,6 +18,7 @@ struct acceptance {
     unsigned output;
     int model_selected, window;
 };
+
 static struct acceptance state;
 static void pause_read(void)
 {
@@ -124,16 +125,23 @@ static char *client(struct acceptance *s, const char *const args[])
     }
     return net_file(etude_evidence(s->u->c, label));
 }
-static int tmux(struct acceptance *s, const char *verb, const char *a, const char *b, const char *c,
-                const char *d, const char *e, const char *f)
+static int tmux(struct acceptance *s, const char *const extra[])
 {
-    const char *args[] = {
-        "/usr/bin/tmux", "-L", "etude-agent-accept", verb, a, b, c, d, e, f, NULL};
-    char *text = client(s, args);
-    int ok = text != NULL;
+    const char *args[12] = {"/usr/bin/tmux", "-L", "etude-agent-accept"};
+    unsigned i = 0;
+    char *text;
+    int ok;
+    while (i < 8 && extra[i]) {
+        args[i + 3] = extra[i];
+        i++;
+    }
+    args[i + 3] = NULL;
+    text = client(s, args);
+    ok = text != NULL;
     free(text);
     return ok;
 }
+
 static int keys(struct acceptance *s, int literal, const char *key)
 {
     const char *args[] = {"/usr/bin/tmux",
@@ -236,7 +244,7 @@ static int leave(struct acceptance *s, const char *question)
     return ok;
 }
 /* Return one for a handled question, zero for none, and -1 for failure. */
-static int question(struct acceptance *s)
+static int claude_question(struct acceptance *s)
 {
     int ok = 1;
     if (!strcmp(s->agent, "claude") && shows(s, "Choose the text style"))
@@ -249,6 +257,15 @@ static int question(struct acceptance *s)
         ok = choose(s, "Yes, I trust this folder", "Down");
     else if (!strcmp(s->agent, "claude") && shows(s, "Yes, I accept"))
         ok = choose(s, "Yes, I accept", "Down");
+    else
+        return 0;
+    return ok ? 1 : -1;
+}
+static int question(struct acceptance *s)
+{
+    int ok = 1;
+    if (!strcmp(s->agent, "claude"))
+        return claude_question(s);
     else if (!strcmp(s->agent, "codex") && shows(s, "Trust and continue"))
         ok = choose(s, "1. Trust and continue", "Up");
     else if (!strcmp(s->agent, "codex") && shows(s, "Use existing model")) {
@@ -376,9 +393,10 @@ static int attach(struct acceptance *s)
         "tmux -u -L rach2-accept new-session -A -s rach2-accept-%s 2>/tmp/etude-accept-client.log",
         s->port, s->agent);
     if (s->window)
-        return tmux(s, "respawn-pane", "-k", "-t", s->target, command, NULL, NULL);
+        return tmux(s, (const char *const[]){"respawn-pane", "-k", "-t", s->target, command, NULL});
     s->window = 1;
-    return tmux(s, "new-window", "-d", "-t", "accept", "-n", s->agent, command);
+    return tmux(s, (const char *const[]){"new-window", "-d", "-t", "accept", "-n", s->agent,
+                                         command, NULL});
 }
 static int attached(struct acceptance *s)
 {
@@ -449,7 +467,7 @@ static int has_line(const char *text, const char *wanted)
     }
     return 0;
 }
-static int session(struct acceptance *s)
+static int session_start(struct acceptance *s)
 {
     char *text, command[300];
     unsigned i;
@@ -473,8 +491,9 @@ static int session(struct acceptance *s)
     if (!text)
         return 0;
     free(text);
-    if (!tmux(s, "set-option", "-g", "remain-on-exit", "on", NULL, NULL, NULL) ||
-        !tmux(s, "set-option", "-g", "default-terminal", "tmux-256color", NULL, NULL, NULL))
+    if (!tmux(s, (const char *const[]){"set-option", "-g", "remain-on-exit", "on", NULL}) ||
+        !tmux(s,
+              (const char *const[]){"set-option", "-g", "default-terminal", "tmux-256color", NULL}))
         return 0;
     text = guest(s, "prepare", NULL);
     if (!text)
@@ -493,6 +512,12 @@ static int session(struct acceptance *s)
     free(text);
     if (!i)
         return 0;
+    return 1;
+}
+static int session_work(struct acceptance *s)
+{
+    char *text;
+    unsigned i;
     if (!send_text(
             s,
             "Read notes.txt and do what it says. Check the change with check.sh, then commit it.",
@@ -519,6 +544,10 @@ static int session(struct acceptance *s)
     if (!i)
         return 0;
     said(s, "read, changed, tested and committed");
+    return 1;
+}
+static int session_cancel(struct acceptance *s)
+{
     if (!send_text(s,
                    "Run the shell command sleep 600 in the foreground and wait for it to finish.",
                    "to finish.", 1) ||
@@ -529,12 +558,19 @@ static int session(struct acceptance *s)
     if (!wait_guest(s, "sleeps", "", 0) || !wait_guest(s, "pid", NULL, 1))
         return 0;
     said(s, "cancelled");
-    if (!tmux(s, "resize-window", "-t", s->target, "-x", "100", "-y", "30") ||
+    if (!tmux(s, (const char *const[]){"resize-window", "-t", s->target, "-x", "100", "-y", "30",
+                                       NULL}) ||
         !wait_guest(s, "pane", "100x29 100x29 1", 0) || !idle(s) ||
-        !tmux(s, "resize-window", "-t", s->target, "-x", "120", "-y", "40") ||
+        !tmux(s, (const char *const[]){"resize-window", "-t", s->target, "-x", "120", "-y", "40",
+                                       NULL}) ||
         !wait_guest(s, "pane", "120x39 120x39 1", 0))
         return 0;
     said(s, "terminal size followed both changes");
+    return 1;
+}
+static int session_reconnect(struct acceptance *s)
+{
+    char *text;
     {
         const char *args[] = {"/usr/bin/tmux",   "-L",          "etude-agent-accept",
                               "display-message", "-p",          "-t",
@@ -554,6 +590,12 @@ static int session(struct acceptance *s)
         !attach(s) || !attached(s) || !idle(s))
         return 0;
     said(s, "survived the lost SSH client and reconnected");
+    return 1;
+}
+static int session_resume(struct acceptance *s)
+{
+    char command[300];
+    unsigned i;
     if (!quit(s))
         return 0;
     snprintf(command, sizeof(command), "bash ~/rach2-accept/guest.sh run %s resume", s->agent);
@@ -587,12 +629,18 @@ static int session(struct acceptance *s)
     said(s, "reopened the conversation with its cancelled request");
     if (!quit(s))
         return 0;
-    if (!tmux(s, "kill-window", "-t", s->target, NULL, NULL, NULL, NULL))
+    if (!tmux(s, (const char *const[]){"kill-window", "-t", s->target, NULL}))
         return 0;
     if (!remote_ok(s, 0, "tmux -L rach2-accept kill-server", NULL))
         return 0;
-    return tmux(s, "kill-server", NULL, NULL, NULL, NULL, NULL, NULL);
+    return tmux(s, (const char *const[]){"kill-server", NULL});
 }
+static int session(struct acceptance *s)
+{
+    return session_start(s) && session_work(s) && session_cancel(s) && session_reconnect(s) &&
+           session_resume(s);
+}
+
 static int version(struct acceptance *s, const char *program, int after)
 {
     char recipe[4096], path[4096], extra[100], expected[300], *source, *at, *text, *saved;
