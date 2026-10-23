@@ -60,8 +60,8 @@ def git(tree, *args):
 
 def frozen(tree, commit):
     require(git(tree, 'rev-parse', 'HEAD').decode().strip() == commit, 'source HEAD differs')
-    require(not git(tree, 'status', '--porcelain', '--untracked-files=no').strip(),
-            'tracked source inputs are modified')
+    require(not git(tree, 'status', '--porcelain', '--untracked-files=all').strip(),
+            'source inputs are modified or untracked')
 
 
 def relative(path):
