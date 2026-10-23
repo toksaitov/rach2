@@ -1792,15 +1792,36 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
 }
 
 /**
+ * Whether /proc in the calling process's root is the synthetic /proc: at
+ * the root of the mount table, and in a root chroot gave the process that
+ * has it by a bind, but not in one whose /proc is an ordinary directory.
+ */
+static int proc_is_synthetic(void)
+{
+    struct vfs_ref ref;
+    int yes;
+
+    if (!current_proc->fs->root_mnt) {
+        return 1;
+    }
+    if (vfs_resolve(NULL, "proc", 0, &ref, NULL, 0) != 0) {
+        return 0;
+    }
+    yes = vfs_synth_vpath(ref.mnt, ref.node) != NULL;
+    vfs_ref_release(&ref);
+    return yes;
+}
+
+/**
  * Replace the canonical path `s->path` by the path of the program the
  * /proc/<pid>/exe link it names reaches, if it names one, once `exec_open`
  * has gone on from the link to that program's file, and name the new address
  * space by it: Chromium runs its children by executing /proc/self/exe, and
  * the program they run is named by that path, not the link's, in its comm,
  * and in its own link where its file has no present path to give. For a
- * process chroot put in a directory, a path under /proc is not in the
- * synthetic /proc, so the path stays as the walk resolved it. 0, or the
- * link's error.
+ * process whose root has no synthetic /proc (`proc_is_synthetic`), a path
+ * under /proc is an ordinary one, so the path stays as the walk resolved it.
+ * 0, or the link's error.
  */
 static int32_t exec_link_name(struct exec_state *s)
 {
@@ -1809,7 +1830,7 @@ static int32_t exec_link_name(struct exec_state *s)
     int pid;
     int n;
 
-    if (current_proc->fs->root_mnt || synth_classify(path, &vp) != VNODE_PROC_EXE) {
+    if (synth_classify(path, &vp) != VNODE_PROC_EXE || !proc_is_synthetic()) {
         return 0;
     }
     pid = procfs_resolve_id(&vp);

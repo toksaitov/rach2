@@ -290,6 +290,12 @@ reads, from the path that link reads, less a
 and keeps that path as the one its own link reads where the file has no
 present path; Linux names such an image
 .Ql exe .
+In a root
+.Xr chroot 2
+gave the process whose
+.Pa /proc
+is an ordinary directory, not the synthetic one or a bind of it, the
+path is an ordinary path and names the image as any other does.
 .Pp
 An
 .Fn execve
