@@ -5,7 +5,4 @@
 # conversion to etude's cases (dev-log/62-etude/plan.md) declares each in a
 # case's timing or removes it. A file whose count differs from its entry fails
 # the check, so the list only falls. A person reads this list.
-tests/host/etude_exec_hosttest.c: 2 skip
 tests/host/fat32_hosttest.c: 1 skip
-tests/host/netif_hosttest.c: 1 sleep
-tests/host/pwauth_hosttest.c: 2 sleep

@@ -14,7 +14,10 @@
 #
 #   * `sleep N` or `usleep N` in a script, on the host or typed into the guest
 #   * a call of sleep, usleep, nanosleep or clock_nanosleep in C code, or
-#     of the system call of either of the last two by its number
+#     of the system call of either of the last two by its number; a line
+#     that begins in the first column with a type before the name declares
+#     or defines the function, as a test that replaces sleep does, and is
+#     not a call
 #   * an upper bound on a duration in C code: `ms`, an identifier ending in
 #     `_ms`, `_MS` or `secs`, one with `elapsed` in it, or `took`, against a
 #     literal of three digits or more: `x < 3000`, `x <= 3000`, `x > 3000`,
@@ -142,8 +145,9 @@ scan() {
                 refuse(file ~ /^tests\/system\// ? "fixed" : "sleep", "a sleep for a number of seconds", "injected_delay")
             }
         } else {
-            if (code_of($0) ~ /(^|[^A-Za-z0-9_])(sleep|usleep|nanosleep|clock_nanosleep)[ \t]*\(/ ||
-                code_of($0) ~ /(SYS_|__NR_)(CLOCK_|clock_)?(NANOSLEEP|nanosleep)([^A-Za-z0-9_]|$)/) {
+            if ($0 !~ /^[A-Za-z_][A-Za-z0-9_ \t]*[ \t*](sleep|usleep|nanosleep|clock_nanosleep)[ \t]*\(/ &&
+                (code_of($0) ~ /(^|[^A-Za-z0-9_])(sleep|usleep|nanosleep|clock_nanosleep)[ \t]*\(/ ||
+                 code_of($0) ~ /(SYS_|__NR_)(CLOCK_|clock_)?(NANOSLEEP|nanosleep)([^A-Za-z0-9_]|$)/)) {
                 refuse("sleep", "a sleep for a fixed time", "injected_delay")
             }
             if ($0 ~ /(^|[^A-Za-z0-9_])(ms|[A-Za-z0-9_]*_ms|[A-Za-z0-9_]*_MS|[A-Za-z0-9_]*elapsed[A-Za-z0-9_]*|[A-Za-z0-9_]*secs|took)[ \t]*(<|<=|>)[ \t]*[0-9][0-9][0-9]/ ||
@@ -411,6 +415,16 @@ fail "the lag sleep boot"' 'int x;' ''
     case_ 1 csleep
     tree csleepword 'echo' '/* usleep(1000) waits */ puts("sleep(1)"); nap(1);' ''
     case_ 0 csleepword
+    tree csleepdefined 'echo' 'unsigned int sleep(unsigned int seconds)
+{
+    return calls++;
+}' ''
+    case_ 0 csleepdefined
+    tree csleepdefinedcall 'echo' 'unsigned int sleep(unsigned int seconds)
+{
+    return usleep(seconds);
+}' ''
+    case_ 1 csleepdefinedcall
     tree csleepmarked 'echo' 'usleep(1000); /* interval: the writer runs for a millisecond */' 'tests/probe.c: the writer runs for a millisecond'
     case_ 0 csleepmarked
     tree csleepcounted 'echo' 'usleep(1000);' '' 'tests/probe.c: 1 sleep'

@@ -77,11 +77,11 @@ static int sibling_found = -1;   /* what close_four found, or -1 */
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
     unsigned long at = (unsigned long)src;
-    void (*sleep)(void) = copy_sleep;
+    void (*during)(void) = copy_sleep;
 
     copy_sleep = NULL;
-    if (sleep) {
-        sleep();
+    if (during) {
+        during();
     }
     if (!at || at > sizeof(user) || n > sizeof(user) - at) {
         return -EFAULT;

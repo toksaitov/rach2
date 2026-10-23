@@ -13,12 +13,14 @@
  * program reports, one left in its group, a tree that uses processor time
  * and memory, output past the bound kept with a report after it, and a
  * program that checks its descriptors, signals and session. Each must keep
- * its own attempt, process, output and end, and leave no process behind. On
- * Linux and Rach2 each case's process must be seen held before its exec when
- * it is registered. With `posix_only`, a reported descendant must still be
+ * its own attempt, process, output and end, and leave no process behind.
+ * Each case's process must be seen held before its exec when it is
+ * registered: through /proc on Linux and Rach2, and through ps(1) on a host
+ * without /proc. With `posix_only`, a reported descendant must still be
  * ended, an unreported one in its own session must leave the cleanup
  * unconfirmed, and processor time of an orphan must be a lower bound; on
- * Linux and Rach2, without it, the keeper must end and count both. A build
+ * Linux and Rach2, without it, the keeper must end and count both, and on a
+ * host with no subreaper it must give what `posix_only` gives. A build
  * for Rach2 defines __rach2__, as etude's recipe there does. A refused
  * registration and a failed exec must leave nothing running. A keeper killed
  * during registration must leave its held child ended by EOF; one killed
@@ -399,42 +401,6 @@ static int ran_case(long pid)
     return n == 0 || strstr(buf, "--case") != NULL;
 }
 
-#endif
-
-#if defined(__linux__)
-
-/**
- * Say whether process `pid` is held before its exec: seen blocked in
- * read(2), which only the wait for the keeper's go does before the exec,
- * while its command line is still this program's own. Waits until it is in
- * one state or has run.
- *
- * @return 1 when held, 0 when it ran first, -1 when Linux will not say.
- */
-static int held(long pid)
-{
-    char path[64], buf[256];
-    long nr;
-    size_t n;
-    FILE *f;
-
-    snprintf(path, sizeof(path), "/proc/%ld/syscall", pid);
-    for (;;) {
-        f = fopen(path, "r");
-        if (f == NULL)
-            return errno == EACCES || errno == EPERM ? -1 : 0;
-        n = fread(buf, 1, sizeof(buf) - 1, f);
-        fclose(f);
-        buf[n] = '\0';
-        if (sscanf(buf, "%ld", &nr) == 1 && nr == SYS_read)
-            return !ran_case(pid);
-        if (ran_case(pid))
-            return 0;
-    }
-}
-
-#elif defined(__rach2__)
-
 /** Give the state letter of `pid` from /proc/PID/stat, or 0 for none. */
 static char state_of(long pid)
 {
@@ -453,15 +419,60 @@ static char state_of(long pid)
     return p != NULL && p[1] == ' ' ? p[2] : 0;
 }
 
+#else
+
+/**
+ * Put in `buf`, of `size` bytes, what ps(1) prints for the field `field` of
+ * process `pid`, less its header and its trailing white space. A host
+ * without /proc gives a process's state and command line through ps.
+ *
+ * @return the length of the text, 0 when the process is gone.
+ */
+static size_t ps_field(long pid, const char *field, char *buf, size_t size)
+{
+    char cmd[64];
+    size_t n;
+    FILE *f;
+
+    snprintf(cmd, sizeof(cmd), "ps -o %s= -p %ld 2>/dev/null", field, pid);
+    f = popen(cmd, "r");
+    if (f == NULL)
+        return 0;
+    n = fread(buf, 1, size - 1, f);
+    pclose(f);
+    while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == ' '))
+        n--;
+    buf[n] = '\0';
+    return n;
+}
+
+/** Say whether the command line of `pid` names a case, or it has none left. */
+static int ran_case(long pid)
+{
+    char buf[4096];
+
+    return ps_field(pid, "args", buf, sizeof(buf)) == 0 || strstr(buf, "--case") != NULL;
+}
+
+/** Give the state letter ps(1) gives `pid`, or 0 for none. */
+static char state_of(long pid)
+{
+    char buf[16];
+
+    return ps_field(pid, "state", buf, sizeof(buf)) > 0 ? buf[0] : 0;
+}
+
+#endif
+
 /**
  * Say whether process `pid` is held before its exec: seen asleep while its
- * command line is still this program's own. Rach2 has no /proc/PID/syscall;
- * before its exec the case's process sleeps only in the read(2) that waits
- * for the keeper's go. Waits until it is in one state or has run.
+ * command line is still this program's own. Before its exec the case's
+ * process sleeps only in the read(2) that waits for the keeper's go. Waits
+ * until it is in one state or has run.
  *
  * @return 1 when held, 0 when it ran first.
  */
-static int held(long pid)
+static int held_asleep(long pid)
 {
     for (;;) {
         if (ran_case(pid))
@@ -471,12 +482,48 @@ static int held(long pid)
     }
 }
 
-#else
+#if defined(__linux__)
 
+/**
+ * Say whether process `pid` is held before its exec: seen blocked in
+ * read(2), which only the wait for the keeper's go does before the exec,
+ * while its command line is still this program's own. Waits until it is in
+ * one state or has run. Where Linux keeps /proc/PID/syscall from this
+ * process, asks as `held_asleep` does.
+ *
+ * @return 1 when held, 0 when it ran first.
+ */
 static int held(long pid)
 {
-    (void)pid;
-    return -1;
+    char path[64], buf[256];
+    long nr;
+    size_t n;
+    FILE *f;
+
+    snprintf(path, sizeof(path), "/proc/%ld/syscall", pid);
+    for (;;) {
+        f = fopen(path, "r");
+        if (f == NULL)
+            return errno == EACCES || errno == EPERM ? held_asleep(pid) : 0;
+        n = fread(buf, 1, sizeof(buf) - 1, f);
+        fclose(f);
+        buf[n] = '\0';
+        if (sscanf(buf, "%ld", &nr) == 1 && nr == SYS_read)
+            return !ran_case(pid);
+        if (ran_case(pid))
+            return 0;
+    }
+}
+
+#else
+
+/**
+ * Say whether process `pid` is held before its exec, as `held_asleep` does.
+ * Rach2 has no /proc/PID/syscall, and other hosts no /proc.
+ */
+static int held(long pid)
+{
+    return held_asleep(pid);
 }
 
 #endif
@@ -695,9 +742,12 @@ static void test_concurrent(struct etude_exec *ex)
 
 /**
  * Run, with POSIX interfaces alone, a reported descendant, an unreported one
- * in a session of its own, and an orphan that uses processor time.
+ * in a session of its own, and an orphan that uses processor time. With
+ * `posix_only` zero the keeper is asked to reap orphans, which a host with no
+ * subreaper must answer with POSIX interfaces alone; the attempts then have
+ * tokens of their own.
  */
-static void test_posix_only(struct etude_exec *ex)
+static void test_posix_only(struct etude_exec *ex, int posix_only)
 {
     struct want w[] = {
         {"daemon", "p", NULL, LONG_GRACE, 0, EXITED, 0, EXITED, 0, CONFIRMED},
@@ -709,21 +759,26 @@ static void test_posix_only(struct etude_exec *ex)
     long pid;
     int i;
 
-    run_all(ex, w, a, 3, 1);
+    if (!posix_only) {
+        w[0].token = "l";
+        w[1].token = "m";
+        w[2].token = "n";
+    }
+    run_all(ex, w, a, 3, posix_only);
     for (i = 0; i < 3; i++)
         if (a[i].p != NULL)
             check_attempt(&a[i]);
     if (a[0].p != NULL)
         check_gone(&a[0]);
     if (a[1].p != NULL) {
-        pid = printed_pid(etude_proc_result(a[1].p), "q");
-        CHECK(pid > 0, "q");
+        pid = printed_pid(etude_proc_result(a[1].p), w[1].token);
+        CHECK(pid > 0, w[1].token);
         if (pid > 0)
             kill((pid_t)pid, SIGKILL);
     }
     if (a[2].p != NULL) {
         r = etude_proc_result(a[2].p);
-        CHECK(r->cpu_us.quality == ETUDE_QUALITY_LOWER_BOUND, "r");
+        CHECK(r->cpu_us.quality == ETUDE_QUALITY_LOWER_BOUND, w[2].token);
     }
     for (i = 0; i < 3; i++)
         if (a[i].p != NULL)
@@ -760,9 +815,7 @@ static void test_reaper(struct etude_exec *ex)
         if (a[i].p != NULL)
             etude_proc_free(a[i].p);
 #else
-    (void)ex;
-    printf("etude_exec_hosttest: not run: the keeper as the reaper of orphans: "
-           "this host has no subreaper\n");
+    test_posix_only(ex, 0);
 #endif
 }
 
@@ -1043,7 +1096,6 @@ static void test_output_files(struct etude_exec *ex)
 int main(int argc, char **argv)
 {
     struct etude_exec *ex;
-    int i;
 
     if (argc == 5 && strcmp(argv[1], "--case") == 0)
         return run_case(argv[2], argv[3], argv[4]);
@@ -1056,7 +1108,7 @@ int main(int argc, char **argv)
         return 1;
     test_output_files(ex);
     test_concurrent(ex);
-    test_posix_only(ex);
+    test_posix_only(ex, 1);
     test_reaper(ex);
     test_unrun(ex);
     test_held_keeper(ex);
@@ -1064,12 +1116,6 @@ int main(int argc, char **argv)
     test_lost_keeper(ex);
     test_controller_gone();
     etude_exec_free(ex);
-    for (i = 0; i < nregs; i++)
-        if (regs[i].held < 0) {
-            printf("etude_exec_hosttest: not run: the hold of each case before its exec: "
-                   "this host does not show a process's system call\n");
-            break;
-        }
     if (fails != 0)
         return 1;
     fix_passed();

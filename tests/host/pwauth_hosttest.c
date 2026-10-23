@@ -693,16 +693,6 @@ static void pipe_capture_stop(char *buffer, size_t size)
     }
 }
 
-/** Sleep `ms` milliseconds, this test's one way of letting time pass. */
-static void nap(long ms)
-{
-    struct timespec ts;
-
-    ts.tv_sec = ms / 1000;
-    ts.tv_nsec = (ms % 1000) * 1000000L;
-    nanosleep(&ts, NULL);
-}
-
 /** Wait for `pid` to end, filling `*status`. Returns 1 when it was reaped, or
  * 0 when it cannot be. */
 static int reap(pid_t pid, int *status)
@@ -1786,7 +1776,7 @@ static void check_unlisted_death(void)
                 _exit(71);
             }
             for (;;) {
-                nap(50);
+                pause();
             }
         }
         close(ready[1]);
@@ -3124,6 +3114,7 @@ static void teardown_reader(const char *name, int master, int report[2], int rea
  */
 static void check_teardown(void)
 {
+    struct timespec tick = {0, 50000000};
     char filler[1024];
     char name[128];
     pid_t child;
@@ -3220,7 +3211,7 @@ static void check_teardown(void)
             break;
         }
         /* interval: the pipe is drained and the reader checked every 50 ms */
-        nap(50);
+        nanosleep(&tick, NULL);
     }
     if (!reaped) {
         fail("could not reap the reader the teardown case interrupts");
