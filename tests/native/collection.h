@@ -34,8 +34,11 @@ struct nc_inventory {
     char account[80];
     unsigned uid;
 };
+struct etude_reading;
 struct nc_config {
+    const struct etude_reading *granted;
     const char *tree, *inventory, *images, *guest, *state, *stage, *results, *run, *self;
+    const char *purpose, *machine, *kernel_sha256;
     const char *arch, *peer, *outside, *interface, *address, *gateway, *far, *empty, *silent;
 };
 struct nc_attempt {
@@ -46,6 +49,7 @@ struct nc_attempt {
     size_t nallocated, argc;
     char why[256];
 };
+int etude_native_collection_main(int argc, char **argv);
 int nc_assets(const struct nc_config *conf);
 int nc_inventory_read(struct nc_inventory *out, const struct nc_config *conf, int with_roots);
 void nc_inventory_free(struct nc_inventory *out);
@@ -56,8 +60,9 @@ int nc_attempt_make(struct nc_attempt *a, const struct nc_config *conf,
 void nc_attempt_free(struct nc_attempt *a);
 char *nc_text(struct nc_attempt *a, const char *format, ...);
 int nc_mkdir(const char *path);
+struct nc_history;
 int nc_run(const struct nc_config *conf, const struct nc_inventory *inventory,
-           const struct nc_case *c);
+           const struct nc_case *c, struct nc_history *history, size_t index);
 int nc_collection(struct nc_config *conf, const struct nc_inventory *inventory, int argc,
                   char **argv, int first);
 int nc_proof(struct nc_config *conf);

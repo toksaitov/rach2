@@ -7,7 +7,7 @@
 struct nd_config {
     const char *mode, *payload, *host, *mac, *slot, *kernel, *key, *target, *run, *logs;
     const char *ssh, *hostpeer, *peer, *network, *interface, *gateway, *far, *empty, *silent;
-    const char *architecture;
+    const char *architecture, *purpose;
     char **cases;
     int ncases;
     unsigned echo_port, datagram_port, uid;

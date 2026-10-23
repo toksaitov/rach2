@@ -312,9 +312,9 @@ int nc_attempt_make(struct nc_attempt *a, const struct nc_config *conf,
     a->spec.attempt = nc_text(a, "%s.%s.1", conf->run, c->name);
     a->spec.expected_end = ETUDE_END_EXITED;
     a->spec.staged_only = 1;
-    a->spec.deadline_ms = 1800000;
+
     a->spec.grace_ms = 5000;
-    a->spec.stage_ms = 120000;
+
     a->spec.output_max = 16777216;
     a->spec.reconnects = 3;
     a->transport[0] = (char *)conf->guest;

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "policy": "watchdog-bounds-v1",
+  "case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 7200000000},
+  "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 7200000000},
+  "transfer": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000},
+  "capture": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000},
+  "cleanup": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}
+}

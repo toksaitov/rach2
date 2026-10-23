@@ -20,11 +20,13 @@ ETUDE_CHECK_SRC = tools/etude/etude.c tools/etude/check.c tools/etude/cases.c \
 # The local Rach2 collection shares its framed transport with the desktop
 # single-attempt command; its public entry remains etude.
 NATIVE_COLLECTION_DRIVER_SRC = tests/native/collection.c tests/native/inventory.c \
-    tests/native/attempt.c tests/native/assets.c tests/native/proof.c tests/native/cut_transport.c
+    tests/native/attempt.c tests/native/assets.c tests/native/proof.c tests/native/cut_transport.c \
+    tests/native/history_plan.c tests/native/history_result.c tests/native/history_io.c tests/native/history_totals.c tests/native/bounds.c
 NATIVE_COLLECTION_TRANSPORT_SRC = tools/etude/posix/run_native.c tools/etude/posix/remote.c \
     tools/etude/posix/process.c tools/etude/guest/wire.c
 ETUDE_RACH2_SRC = $(ETUDE_CHECK_SRC) $(NATIVE_COLLECTION_DRIVER_SRC) \
-                   $(NATIVE_COLLECTION_TRANSPORT_SRC)
+                   $(NATIVE_COLLECTION_TRANSPORT_SRC) tools/etude/watchdog.c \
+                   tools/etude/compare.c tools/etude/compare_load.c tools/etude/observe_import.c
 
 # `etude lock`: the holder of a tree's run lock, on Linux and macOS, and the
 # holder of the host lock and a block of host ports, whose winfmt.c gives it

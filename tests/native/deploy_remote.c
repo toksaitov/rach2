@@ -104,10 +104,10 @@ static int run_arguments(struct nd_deploy *d, char *command, size_t size)
                      "--tree \"$dest/tree\" --arch '%s' "
                      "--guest \"$dest/tree/%s/tools/etude/guest/etude-guest\" "
                      "--state '%s/state' --stage \"$dest/stage\" --results '%s/results-%s' "
-                     "--run '%s' --peer '%s:%u' --outside-peer '%s' --interface '%s' "
+                     "--run '%s' --purpose '%s' --machine-id '%s' --kernel-sha256 '%s' --peer '%s:%u' --outside-peer '%s' --interface '%s' "
                      "--address '%s' --gateway '%s' --far '%s' --empty '%s' --silent '%s' --%s",
                      build, !strcmp(c->mode, "proof") ? "proof" : "", c->architecture, build,
-                     c->target, c->target, c->run, c->run, c->peer, c->echo_port, c->peer,
+                     c->target, c->target, c->run, c->run, c->purpose, c->mac, c->kernel_sha, c->peer, c->echo_port, c->peer,
                      c->interface, c->network, c->gateway, c->far, c->empty, c->silent, words);
 }
 int nd_run(struct nd_deploy *d)

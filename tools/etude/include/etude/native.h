@@ -11,6 +11,7 @@ struct etude_native_spec {
     size_t nenvironment, nunset, nfixtures;
     char *const *argv;
     const char *input;
+    const struct etude_remote_observer *observer;
     uint64_t deadline_ms, grace_ms, output_max, stage_ms, cancel_ms;
     unsigned reconnects;
     const volatile sig_atomic_t *cancel_requested;

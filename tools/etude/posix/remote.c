@@ -40,7 +40,7 @@ struct etude_remote {
     char boot[ETUDE_FRAME_TOKEN_LEN + 1]; /* the responder's, or "" */
     pid_t child;                          /* the transport, or -1 */
     int to, from;
-    int connected;
+    int connected, bounded_writes;
     uint64_t seq_out; /* the SEQ of the next frame sent */
     int has_peer;     /* a frame of the responder's arrived */
     uint64_t seq_in;  /* the SEQ of the last one */
@@ -88,6 +88,39 @@ static int write_all(int fd, const char *p, size_t n)
             return -1;
         p += w;
         n -= (size_t)w;
+    }
+    return 0;
+}
+
+/** The observed deadline also bounds a pipe whose reader has stopped. */
+static uint64_t write_limit(struct etude_remote *r, uint64_t until)
+{
+    const struct etude_remote_observer *o = r->conf.observer;
+    uint64_t observed = o && o->deadline ? o->deadline(o->context) : 0;
+    return observed && observed < until ? observed : until;
+}
+
+/** Write a frame without blocking observation or cancellation. */
+static int write_observed(struct etude_remote *r, const char *p, size_t n)
+{
+    uint64_t now = posix_now_us(), until = now + r->conf.stage_us;
+    struct pollfd fd = {r->to, POLLOUT, 0};
+    while (n) {
+        uint64_t limit = write_limit(r, until);
+        now = posix_now_us();
+        if (now >= limit || (r->conf.cancel_requested && *r->conf.cancel_requested)) {
+            errno = ETIMEDOUT;
+            return -1;
+        }
+        int ms = limit - now > 50000 ? 50 : (int)((limit - now + 999) / 1000);
+        int ready = poll(&fd, 1, ms);
+        if (ready < 0 && errno == EINTR) continue;
+        if (ready < 0) return -1;
+        if (!ready) continue;
+        ssize_t written = write(r->to, p, n);
+        if (written < 0 && (errno == EINTR || errno == EAGAIN)) continue;
+        if (written <= 0) return -1;
+        p += written; n -= (size_t)written;
     }
     return 0;
 }
@@ -161,6 +194,11 @@ static int transport_start(struct etude_remote *r)
         close(to[1]);
         return -1;
     }
+    r->bounded_writes = r->conf.observer != NULL;
+    if (r->bounded_writes && fcntl(to[1], F_SETFL, O_NONBLOCK) < 0) {
+        close(to[0]); close(to[1]); close(from[0]); close(from[1]);
+        return -1;
+    }
     pid = fork();
     if (pid < 0) {
         close(to[0]);
@@ -209,7 +247,7 @@ static void transport_stop(struct etude_remote *r)
     r->connected = 0;
     if (r->child < 0)
         return;
-    until = posix_now_us() + r->conf.stage_us;
+    until = write_limit(r, posix_now_us() + r->conf.stage_us);
     while (waitpid(r->child, &status, WNOHANG) == 0) {
         if (posix_now_us() >= until) {
             if (sig == SIGKILL) {
@@ -242,7 +280,7 @@ static int send_frame(struct etude_remote *r, const char *type, const char *cons
         return -1;
     }
     r->seq_out++;
-    if (write_all(r->to, buf, len) != 0) {
+    if ((r->bounded_writes ? write_observed(r, buf, len) : write_all(r->to, buf, len)) != 0) {
         free(buf);
         fail(r, "the connection was lost while a %s was sent", type);
         transport_stop(r);
@@ -371,6 +409,11 @@ static int read_frame(struct etude_remote *r, uint64_t until, struct wire_frame 
     int rc;
 
     for (;;) {
+        if (r->conf.observer && r->conf.observer->deadline) {
+            uint64_t bound = r->conf.observer->deadline(r->conf.observer->context);
+            if (bound && bound < until)
+                until = bound;
+        }
         if (r->from < 0)
             return READ_LOST;
         if (r->used > 0) {
@@ -963,10 +1006,19 @@ static int take_event(struct etude_remote *r, struct collect *c, struct wire_fra
         ok = -1;
     else if (strcmp(t, ETUDE_EV_STARTED) == 0)
         ok = take_started(c, f);
-    else if (strcmp(t, ETUDE_EV_OUT) == 0)
+    else if (strcmp(t, ETUDE_EV_OUT) == 0) {
+        size_t before = c->res->out.kept;
         ok = c->res->started ? take_output(c, f) : -1;
-    else if (strcmp(t, ETUDE_EV_EXIT) == 0)
+        if (!ok && c->res->out.kept > before && r->conf.observer && r->conf.observer->output)
+            r->conf.observer->output(r->conf.observer->context,
+                                    c->res->out.data + before, c->res->out.kept - before);
+    }
+    else if (strcmp(t, ETUDE_EV_EXIT) == 0) {
+        int had = c->have_exit;
         ok = take_exit(c, f);
+        if (!ok && !had && r->conf.observer && r->conf.observer->stage)
+            r->conf.observer->stage(r->conf.observer->context, "capture");
+    }
     else if (strcmp(t, ETUDE_EV_STREAM) == 0)
         ok = take_stream(c, f);
     else if (strcmp(t, ETUDE_EV_USAGE) == 0)
@@ -1105,6 +1157,7 @@ static int send_cancel(struct etude_remote *r, struct collect *c, struct run_clo
         return 1;
     k->cancelled = 1;
     c->res->cancelled = 1;
+    r->conf.observer = NULL;
     end = posix_now_us() + k->grace + 2 * r->conf.stage_us;
     if (end < k->limit)
         k->limit = end;
@@ -1129,6 +1182,14 @@ static enum etude_remote_status end_run(struct etude_remote *r, struct collect *
  * @return 1 with the run's status in `*st`, or 0 when the connection was
  *         lost and the run is to be sent again on the next.
  */
+static int cancel_due(struct etude_remote *r, const struct run_clock *k)
+{
+    return !k->cancelled && ((k->until && posix_now_us() >= k->until) ||
+           (r->conf.cancel_requested && *r->conf.cancel_requested) ||
+           (r->conf.observer && r->conf.observer->expired &&
+            r->conf.observer->expired(r->conf.observer->context)));
+}
+
 static int follow(struct etude_remote *r, struct collect *c, struct run_clock *k,
                   enum etude_remote_status *st)
 {
@@ -1137,8 +1198,7 @@ static int follow(struct etude_remote *r, struct collect *c, struct run_clock *k
     int rc;
 
     for (;;) {
-        if (!k->cancelled && ((k->until != 0 && posix_now_us() >= k->until) ||
-                              (r->conf.cancel_requested && *r->conf.cancel_requested))) {
+        if (cancel_due(r, k)) {
             rc = send_cancel(r, c, k);
             if (rc != 0) {
                 *st = ETUDE_REMOTE_SYSTEM;

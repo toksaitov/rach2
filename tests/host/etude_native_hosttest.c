@@ -14,7 +14,14 @@
  * host-deps: tools/etude/guest/guest.c tools/etude/guest/fixture.c
  * host-deps: tools/etude/guest/wire.c tools/etude/history_json.c
  * host-deps: utils/sha256.c
+ * host-deps: tests/native/collection.c tests/native/inventory.c tests/native/attempt.c
+ * host-deps: tests/native/assets.c tests/native/proof.c tests/native/cut_transport.c
+ * host-deps: tests/native/history_plan.c tests/native/history_result.c
+ * host-deps: tests/native/history_io.c tests/native/history_totals.c tests/native/bounds.c
+ * host-deps: tools/etude/watchdog.c tools/etude/compare.c tools/etude/compare_load.c
+ * host-deps: tools/etude/observe_import.c tools/etude/history.c tools/etude/history_collect.c
  * host-tools: etude-workload
+ * host-inputs: tests/native/bounds.json tools/etude/schemas/history.schema.json
  * host-inputs: tests/native/tccbuild.sh
  * host-cflags: -I tools/etude/include -I tools/etude -I tools/etude/guest
  * host-cflags: -I utils -Wall -Wextra -Werror
@@ -641,8 +648,11 @@ static void test_rows(void)
     }
 }
 
+#include "compat/native_history.c"
+
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--stalled-peer")) return nh_stalled_peer();
     if (argc == 3 && strcmp(argv[1], "--guest") == 0) {
         char *gargv[5];
         gargv[0] = "etude-guest";
@@ -660,6 +670,13 @@ int main(int argc, char **argv)
         printf("etude-run-native-test: fail: %s cannot be found\n", argv[0]);
         return 1;
     }
+    if (argc == 2 && !strcmp(argv[1], "--collection-history")) {
+        test_native_history();
+        if (fails) return 1;
+        fix_passed();
+        return 0;
+    }
+    test_native_history();
     if (!exists(CASE_SCRIPT)) {
         printf("etude-run-native-test: fail: %s is not here; run from the root of the tree\n",
                CASE_SCRIPT);

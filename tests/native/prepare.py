@@ -177,6 +177,8 @@ def inputs(root, tree, build, inventory):
     selected.add(build / "tests/native/etude")
     selected.add(build / "tools/etude/guest/etude-guest")
     selected.add(Path("tests/native/tccbuild.sh"))
+    selected.add(Path("tests/native/bounds.json"))
+    selected.add(Path("tools/etude/schemas/history.schema.json"))
     for name in ("probes.cases", "musl.cases", "rows.cases", "maps", "Readme.md"):
         selected.add(Path("tests/native") / name)
     invocation = set(selected)
@@ -355,6 +357,12 @@ def prepare(args):
                     break
             else:
                 raise ValueError(f"more than eight staged inputs named {file.name}")
+        if subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=all"], cwd=root):
+            raise ValueError("native source must be clean before preparation")
+        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        if not re.fullmatch("[0-9a-f]{40}", commit):
+            raise ValueError("native source has no exact commit")
+        (tree / "native-source.json").write_text(json.dumps({"commit": commit}) + "\n")
         records = [f"{digest(path)}  {path.relative_to(tree)}\n"
                    for path in sorted(tree.rglob("*")) if path.is_file()]
         (tree / "assets.sha256").write_text("".join(records))

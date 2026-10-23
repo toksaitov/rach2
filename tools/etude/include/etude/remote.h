@@ -77,6 +77,17 @@ enum etude_remote_status {
     ETUDE_REMOTE_SYSTEM    /* a local system call failed */
 };
 
+/* Optional observation of genuine native stages and new output bytes.
+ * A deadline is absolute monotonic time. Returning zero imposes no extra
+ * bound. Callbacks must not issue another operation on the connection. */
+struct etude_remote_observer {
+    void *context;
+    void (*stage)(void *context, const char *stage);
+    void (*output)(void *context, const char *bytes, size_t length);
+    uint64_t (*deadline)(void *context);
+    int (*expired)(void *context);
+};
+
 /* How the controller reaches a responder. The connection keeps the strings
  * and the vector until it is closed. */
 struct etude_remote_conf {
@@ -89,6 +100,7 @@ struct etude_remote_conf {
                              never reuses its number; NULL keeps none */
     const char *evidence; /* a file where lines not acted on are appended,
                              or NULL */
+    const struct etude_remote_observer *observer;
     size_t max_frame;     /* the largest frame offered; 0 gives
                              ETUDE_FRAME_STDIO_MAX */
     uint64_t stage_us;    /* the bound of a connection and of each answer */

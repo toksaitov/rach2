@@ -17,6 +17,7 @@ static int remove_ended(struct nc_attempt *a, struct etude_native_result *r)
     conf.run_id = a->spec.run;
     conf.journal = a->spec.journal;
     conf.evidence = a->spec.evidence;
+    conf.observer = a->spec.observer;
     conf.stage_us = a->spec.stage_ms * 1000;
     conf.reconnects = a->spec.reconnects;
     status = etude_remote_open(&conf, &remote, why, sizeof(why));

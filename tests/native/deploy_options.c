@@ -33,6 +33,7 @@ static int option(struct nd_config *c, const char *name, const char *text)
         {"--peer", &c->peer},           {"--hostpeer", &c->hostpeer}, {"--network", &c->network},
         {"--interface", &c->interface}, {"--gateway", &c->gateway},   {"--far", &c->far},
         {"--empty", &c->empty},         {"--silent", &c->silent},
+        {"--purpose", &c->purpose},
     };
     size_t n;
     if (!strcmp(name, "--echo-port"))
@@ -65,6 +66,8 @@ static int peers_configured(const struct nd_config *c)
 static int configuration(const struct nd_config *c)
 {
     int n;
+    if (strcmp(c->purpose, "focused") && strcmp(c->purpose, "phase_first_run"))
+        return 0;
     if (strcmp(c->mode, "stage") && strcmp(c->mode, "run") && strcmp(c->mode, "proof"))
         return 0;
     if (strcmp(c->slot, "candidate") && strcmp(c->slot, "fallback"))
@@ -86,6 +89,7 @@ int nd_options(struct nd_config *c, int argc, char **argv)
     memset(c, 0, sizeof(*c));
     if (argc < 10)
         return 0;
+    c->purpose = "focused";
     c->mode = argv[1];
     c->payload = argv[2];
     c->host = argv[3];

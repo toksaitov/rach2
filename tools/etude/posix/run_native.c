@@ -48,6 +48,7 @@ struct options {
     int nfixtures;
     const char *input; /* the name of the file that is the case's input, or NULL */
     uint64_t deadline_ms, grace_ms, output_max, cancel_ms, stage_ms;
+    const struct etude_remote_observer *observer;
     unsigned reconnects;
     int keep;
     char **argv; /* the program and its arguments */
@@ -589,6 +590,12 @@ static int structured_judge(const struct options *o, enum etude_remote_status st
  *
  * @return the exit status of the verdict.
  */
+static void observe_stage(const struct options *o, const char *stage)
+{
+    if (o->observer && o->observer->stage)
+        o->observer->stage(o->observer->context, stage);
+}
+
 static int run_case(const struct options *o, const struct file *files,
                     struct etude_native_result *outcome)
 {
@@ -622,6 +629,8 @@ static int run_case(const struct options *o, const struct file *files,
     conf.stage_us = o->stage_ms * 1000;
     conf.reconnects = o->reconnects;
     conf.cancel_requested = o->cancel_requested;
+    conf.observer = o->observer;
+    observe_stage(o, "transfer");
     memset(&res, 0, sizeof(res));
     st = etude_remote_open(&conf, &r, why, sizeof(why));
     if (st != ETUDE_REMOTE_OK) {
@@ -644,6 +653,7 @@ static int run_case(const struct options *o, const struct file *files,
     }
     if (st == ETUDE_REMOTE_OK) {
         fprintf(stderr, "etude run: run: case %s, attempt %s\n", o->case_id, token);
+        observe_stage(o, "execute");
         st = etude_remote_run(r, inv.p, inv.len, o->cancel_ms * 1000, &res);
     } else {
         memcpy(res.attempt, token, sizeof(token));
@@ -668,6 +678,7 @@ static int run_case(const struct options *o, const struct file *files,
     if (st != ETUDE_REMOTE_OK)
         printf("etude run: why: %s\n", etude_remote_why(r));
     fflush(stdout);
+    observe_stage(o, "cleanup");
     if (code == EXIT_PASS && !o->keep) {
         st = etude_remote_remove(r, token);
         if (outcome)
@@ -782,6 +793,7 @@ static int specification(const struct etude_native_spec *s, struct options *o)
     o->grace_ms = s->grace_ms ? s->grace_ms : 5000;
     o->output_max = s->output_max ? s->output_max : 1048576;
     o->stage_ms = s->stage_ms ? s->stage_ms : 30000;
+    o->observer = s->observer;
     o->reconnects = s->reconnects;
     o->cancel_ms = s->cancel_ms;
     o->cancel_requested = s->cancel_requested;
