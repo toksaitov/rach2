@@ -8,7 +8,7 @@ GNU_STEP_STAMPS += $(GNU_HOST_CHECKS_STAMP)
 gnu-host-checks: $(GNU_HOST_CHECKS_STAMP)
 
 $(GNU_HOST_CHECKS_STAMP): $(GNU_HOST_CHECKS_SOURCES) $(GNU_HOST_PRODUCTS_STAMP) \
-    $(GNU_SANITIZERS_STAMP) build/tests/host/exfat_writer | $(ETUDE)
+    $(GNU_SANITIZERS_STAMP) build/tests/host-suite/tools/exfat_external/exfat_external.img | $(ETUDE)
 	@rm -f $@
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else \
 	    $(GNU_STEP) -n gnu-host-checks -t $@ $(STEP_INPUTS) \

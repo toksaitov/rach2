@@ -1899,6 +1899,24 @@ static void full_set_rows(void)
  *   a create or a mkdir in it fails with EROFS, while a directory below it
  *   takes a file.
  */
+/* The checker may report other findings while listing this stream flag. */
+static int listed_nofat(void)
+{
+    char listing[32768], *line, *end;
+    const char *argv[] = {host_tool_path("mkexfatfixture"), "--check", fix_path("exfat_write.img"),
+                          "--list", 0};
+    if (host_command(argv, 0, 0, listing, sizeof listing) < 0)
+        return 0;
+    for (line = listing; line && *line; line = end ? end + 1 : 0) {
+        end = strchr(line, '\n');
+        if (end)
+            *end = '\0';
+        if (strstr(line, "/hello.txt") && strstr(line, "nofat"))
+            return 1;
+    }
+    return 0;
+}
+
 static void write_rows(void)
 {
     unsigned i;
@@ -2012,23 +2030,11 @@ static void write_rows(void)
     check(OPS->prepare_unmount(&mnt) == 0, "the full volume's clean unmount");
     unmount_image();
     {
-        char listing[32768], *line, *end;
-        const char *argv[] = {host_tool_path("mkexfatfixture"), "--check",
-                              fix_path("exfat_write.img"), "--list", 0};
-        int nofat_seen = 0;
         uint32_t used = 0, c, heap, spc, clusters;
         unsigned char *bitmap;
 
         run_check(check_out, sizeof(check_out));
-        if (host_command(argv, 0, 0, listing, sizeof listing) == 0) {
-            for (line = listing; line && *line; line = end ? end + 1 : 0) {
-                end = strchr(line, '\n');
-                if (end)
-                    *end = '\0';
-                if (strstr(line, "/hello.txt") && strstr(line, "nofat"))
-                    nofat_seen = 1;
-            }
-        }
+        int nofat_seen = listed_nofat();
         check(nofat_seen, "and its stream still says NoFatChain: the refusal wrote nothing");
         heap = image[88] | (image[89] << 8) | (image[90] << 16) | ((uint32_t)image[91] << 24);
         spc = image[109];

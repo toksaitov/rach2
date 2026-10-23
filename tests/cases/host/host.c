@@ -491,6 +491,28 @@ static int live_scripts(struct host *h, const char *group)
     return listed;
 }
 
+/* Missing declared entries still produce their own failed assertion. */
+static int complete_inventory(struct host *h)
+{
+    int listed = 1;
+    for (size_t i = 0; i < h->declared->count; i++) {
+        const char *id = json_text(h->declared->item[i], "assertion_id");
+        if (!id || !strcmp(id, "listed"))
+            continue;
+        size_t j;
+        for (j = 0; j < h->nchecks && strcmp(id, h->checks[j].id); j++) {
+        }
+        if (j == h->nchecks) {
+            listed = 0;
+            struct check absent = {0};
+            absent.id = id;
+            absent.label = id;
+            finished(h, &absent, "the prepared inventory has no check for this assertion");
+        }
+    }
+    return listed;
+}
+
 static int check_inventory(struct host *h, const char *group)
 {
     const struct json *entries = json_member(h->inventory, "checks");
@@ -522,21 +544,7 @@ static int check_inventory(struct host *h, const char *group)
             printf("host: listed: unlisted prepared check %s\n", c->id);
         }
     }
-    for (size_t i = 0; i < h->declared->count; i++) {
-        const char *id = json_text(h->declared->item[i], "assertion_id");
-        if (!id || !strcmp(id, "listed"))
-            continue;
-        size_t j;
-        for (j = 0; j < h->nchecks && strcmp(id, h->checks[j].id); j++) {
-        }
-        if (j == h->nchecks) {
-            listed = 0;
-            struct check absent = {0};
-            absent.id = id;
-            absent.label = id;
-            finished(h, &absent, "the prepared inventory has no check for this assertion");
-        }
-    }
+    listed &= complete_inventory(h);
     int sources = live_sources(h, group), scripts = live_scripts(h, group);
     if (sources < 0 || scripts < 0)
         return -1;
@@ -552,6 +560,27 @@ static int check_inventory(struct host *h, const char *group)
             return -1;
     }
     return 0;
+}
+
+static void finish_process(struct host *h, struct check *c, struct etude_proc *p)
+{
+    const struct etude_exec_result *result = etude_proc_result(p);
+    char why[160];
+    const char *error = NULL;
+    if (result->cleanup != ETUDE_CLEANUP_CONFIRMED) {
+        h->uncertain = 1;
+        error = "the check's process cleanup is unconfirmed";
+    } else if (result->output_error)
+        error = "the complete output could not be saved";
+    else if (result->end != ETUDE_END_EXITED)
+        error = stopped ? "the check was interrupted" : "the check did not exit normally";
+    else if (result->value) {
+        snprintf(why, sizeof(why), "the check exited with status %d", result->value);
+        error = why;
+    } else
+        error = prepared(h, c);
+    c->interrupted = stopped && result->end == ETUDE_END_STOPPED;
+    finished(h, c, error);
 }
 
 static int execute(struct host *h, unsigned width)
@@ -596,23 +625,7 @@ static int execute(struct host *h, unsigned width)
             struct check *c = &h->checks[i];
             if (c->proc != p)
                 continue;
-            const struct etude_exec_result *result = etude_proc_result(p);
-            char why[160];
-            const char *error = NULL;
-            if (result->cleanup != ETUDE_CLEANUP_CONFIRMED) {
-                h->uncertain = 1;
-                error = "the check's process cleanup is unconfirmed";
-            } else if (result->output_error)
-                error = "the complete output could not be saved";
-            else if (result->end != ETUDE_END_EXITED)
-                error = stopped ? "the check was interrupted" : "the check did not exit normally";
-            else if (result->value) {
-                snprintf(why, sizeof(why), "the check exited with status %d", result->value);
-                error = why;
-            } else
-                error = prepared(h, c);
-            c->interrupted = stopped && result->end == ETUDE_END_STOPPED;
-            finished(h, c, error);
+            finish_process(h, c, p);
             alone = 0;
             running--;
             etude_proc_free(c->proc);
@@ -664,44 +677,90 @@ static int load_inventory(struct host *h, const char *group, const char *arch)
     return 0;
 }
 
-int main(int argc, char **argv)
+static void release_host(struct host *h, int status)
 {
-    struct host h;
+    if (h->executor)
+        etude_exec_free(h->executor);
+    for (size_t i = 0; i < h->nchecks; i++) {
+        free(h->checks[i].argv);
+        if (h->checks[i].env) {
+            for (size_t j = 0; h->checks[i].env[j]; j++)
+                free(h->checks[i].env[j]);
+            free(h->checks[i].env);
+        }
+    }
+    if (h->work[0]) {
+        if ((!status || stopped) && !h->uncertain)
+            remove_tree(h->work);
+        else
+            printf("host: evidence: %s\n", h->work);
+    }
+    free(h->checks);
+    json_free(h->manifest);
+    json_free(h->inventory);
+}
+
+static int valid_group(const char *group)
+{
+    static const char *const groups[] = {"tests", "etude", "boots", "checkers", "fuzz", "scripts"};
+    for (size_t i = 0; i < sizeof groups / sizeof groups[0]; i++)
+        if (!strcmp(group, groups[i]))
+            return 1;
+    return 0;
+}
+
+static int host_options(struct host *h, int argc, char **argv, const char **selected_group,
+                        const char **selected_arch, unsigned *width)
+{
     const char *tree = getenv("ETUDE_TREE");
-    const char *group = argc == 2                                               ? argv[1]
-                        : (argc == 4 || argc == 5) && !strcmp(argv[1], "--one") ? argv[2]
-                                                                                : "";
-    const char *arch = getenv("ARCH"), *tmp = getenv("TMPDIR"), *jobs = getenv("RACH2_WORKERS");
-    unsigned width = 4;
-    int rc = 2;
-    memset(&h, 0, sizeof(h));
+    const char *group = "", *arch = getenv("ARCH"), *jobs = getenv("RACH2_WORKERS");
     json_program = "host";
-    h.only = (argc == 4 || argc == 5) && !strcmp(argv[1], "--one") ? argv[3] : NULL;
-    if (argc == 5 && h.only)
-        arch = argv[4];
-    if (strcmp(group, "tests") && strcmp(group, "etude") && strcmp(group, "boots") &&
-        strcmp(group, "checkers") && strcmp(group, "fuzz") && strcmp(group, "scripts")) {
+    if (argc == 2)
+        group = argv[1];
+    else if (argc == 4 || argc == 5) {
+        if (strcmp(argv[1], "--one"))
+            return 2;
+        group = argv[2];
+        h->only = argv[3];
+        if (argc == 5)
+            arch = argv[4];
+    }
+    if (!valid_group(group)) {
         fputs("usage: host [--one] tests|etude|boots|checkers|fuzz|scripts [ASSERTION]\n", stderr);
         return 2;
     }
     if (!tree)
         tree = ".";
-    if (!realpath(tree, h.tree))
+    if (!realpath(tree, h->tree))
         return 2;
     if (!arch || !*arch)
         arch = "i686";
     if (strcmp(arch, "i686") && strcmp(arch, "x86_64"))
         return 2;
-    snprintf(h.case_id, sizeof(h.case_id), "host.host.%s", group);
-    if (getenv("ETUDE_CASE") && strcmp(getenv("ETUDE_CASE"), h.case_id))
+    snprintf(h->case_id, sizeof(h->case_id), "host.host.%s", group);
+    if (getenv("ETUDE_CASE") && strcmp(getenv("ETUDE_CASE"), h->case_id))
         return 2;
     if (jobs) {
         char *end;
         unsigned long n = strtoul(jobs, &end, 10);
         if (*end || !n || n > CHECKS_MAX)
             return 2;
-        width = (unsigned)n;
+        *width = (unsigned)n;
     }
+    *selected_group = group;
+    *selected_arch = arch;
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    struct host h;
+    const char *group, *arch, *tmp = getenv("TMPDIR");
+    unsigned width = 4;
+    int rc = 2;
+    memset(&h, 0, sizeof h);
+    if (host_options(&h, argc, argv, &group, &arch, &width) != 0)
+        return 2;
     if (load_inventory(&h, group, arch) != 0) {
         fputs("host: missing, invalid or stale prepared inventory; prepare the host suite again\n",
               stderr);
@@ -737,24 +796,6 @@ int main(int argc, char **argv)
         printf("host: result: stopped by signal %d: %lu of %lu checks finished\n", (int)stopped,
                (unsigned long)h.reported, (unsigned long)h.nchecks);
 done:
-    if (h.executor)
-        etude_exec_free(h.executor);
-    for (size_t i = 0; i < h.nchecks; i++) {
-        free(h.checks[i].argv);
-        if (h.checks[i].env) {
-            for (size_t j = 0; h.checks[i].env[j]; j++)
-                free(h.checks[i].env[j]);
-            free(h.checks[i].env);
-        }
-    }
-    if (h.work[0]) {
-        if ((!rc || stopped) && !h.uncertain)
-            remove_tree(h.work);
-        else
-            printf("host: evidence: %s\n", h.work);
-    }
-    free(h.checks);
-    json_free(h.manifest);
-    json_free(h.inventory);
+    release_host(&h, rc);
     return stopped ? 128 + stopped : rc;
 }

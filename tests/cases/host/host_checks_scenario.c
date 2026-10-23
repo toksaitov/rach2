@@ -30,29 +30,6 @@ static int guest_check(struct etude_case_machine *m, const char *group, const ch
     return guest_run(m, argv, id);
 }
 
-static void dispose(struct host *h, int failed)
-{
-    if (h->executor)
-        etude_exec_free(h->executor);
-    for (size_t i = 0; i < h->nchecks; i++) {
-        free(h->checks[i].argv);
-        if (h->checks[i].env) {
-            for (size_t j = 0; h->checks[i].env[j]; j++)
-                free(h->checks[i].env[j]);
-            free(h->checks[i].env);
-        }
-    }
-    if (h->work[0]) {
-        if (!failed && !h->uncertain)
-            remove_tree(h->work);
-        else
-            fprintf(stderr, "host checks: evidence: %s\n", h->work);
-    }
-    free(h->checks);
-    json_free(h->inventory);
-    json_free(h->manifest);
-}
-
 static void (*prior_int)(int), (*prior_term)(int);
 #ifndef _WIN32
 static void (*prior_hup)(int);
@@ -90,33 +67,62 @@ static int native_checks(struct etude_case *c, struct host *h)
     return status;
 }
 
+static int select_native(struct host *h)
+{
+    int need_guest = 0;
+    for (size_t i = 0; i < h->nchecks; i++) {
+        const char *backend = json_text(h->checks[i].entry, "backend");
+        if (backend && !strcmp(backend, "gnu")) {
+            h->checks[i].selected = 0;
+            need_guest = 1;
+        } else if (!backend || strcmp(backend, "native")) {
+            assertion(h, h->checks[i].id, 0, "unknown prepared execution backend");
+            return -1;
+        }
+    }
+    return need_guest;
+}
+
+static int scenario_inventory(struct etude_case *c, struct host *h, const char **selected_group,
+                              const char **selected_arch)
+{
+    const char *id = etude_case_id(c), *tree = getenv("ETUDE_TREE"), *arch = getenv("ARCH");
+    const char *group = strrchr(id, '.');
+    int listed;
+
+    memset(h, 0, sizeof *h);
+    h->report_ctx = c;
+    h->report_assert = case_assert;
+    h->report_progress = case_progress;
+    if (!group || !realpath(tree ? tree : ".", h->tree))
+        return -1;
+    group++;
+    if (!arch || !*arch)
+        arch = "i686";
+    snprintf(h->case_id, sizeof h->case_id, "%s", id);
+    json_program = "host checks";
+    if (etude_step(c, "listed") != ETUDE_OK || load_inventory(h, group, arch) != 0) {
+        etude_assert(c, "listed", 0, "the prepared host inventory is missing or stale");
+        return -1;
+    }
+    listed = check_inventory(h, group) == 0 && h->failures == 0;
+    if (!listed)
+        return -1;
+    *selected_group = group;
+    *selected_arch = arch;
+    return 0;
+}
+
 int etude_scenario(struct etude_case *c)
 {
     struct host h;
     struct etude_case_machine *products = NULL;
     struct etude_termination end;
-    const char *id = etude_case_id(c), *tree = getenv("ETUDE_TREE"), *arch = getenv("ARCH");
-    const char *group = strrchr(id, '.'), *tmp = getenv("TMPDIR");
-    int listed, ready = 0, failed = 1, need_guest = 0;
+    const char *group, *arch, *tmp = getenv("TMPDIR");
+    int ready = 0, failed = 1, need_guest = 0, complete = 0;
     size_t native_count;
 
-    memset(&h, 0, sizeof h);
-    h.report_ctx = c;
-    h.report_assert = case_assert;
-    h.report_progress = case_progress;
-    if (!group || !realpath(tree ? tree : ".", h.tree))
-        return 1;
-    group++;
-    if (!arch || !*arch)
-        arch = "i686";
-    snprintf(h.case_id, sizeof h.case_id, "%s", id);
-    json_program = "host checks";
-    if (etude_step(c, "listed") != ETUDE_OK || load_inventory(&h, group, arch) != 0) {
-        etude_assert(c, "listed", 0, "the prepared host inventory is missing or stale");
-        goto done;
-    }
-    listed = check_inventory(&h, group) == 0 && h.failures == 0;
-    if (!listed)
+    if (scenario_inventory(c, &h, &group, &arch) != 0)
         goto done;
 #ifdef _WIN32
     if (!tmp)
@@ -130,16 +136,9 @@ int etude_scenario(struct etude_case *c)
         h.work[0] = '\0';
         goto done;
     }
-    for (size_t i = 0; i < h.nchecks; i++) {
-        const char *backend = json_text(h.checks[i].entry, "backend");
-        if (backend && !strcmp(backend, "gnu")) {
-            h.checks[i].selected = 0;
-            need_guest = 1;
-        } else if (!backend || strcmp(backend, "native")) {
-            etude_assert(c, h.checks[i].id, 0, "unknown prepared execution backend");
-            goto done;
-        }
-    }
+    need_guest = select_native(&h);
+    if (need_guest < 0)
+        goto done;
     if (native_checks(c, &h) < 0 || stopped)
         goto done;
     if (h.failures)
@@ -163,8 +162,9 @@ int etude_scenario(struct etude_case *c)
         h.failures += !held;
         etude_progress(c, "checks", ++native_count);
     }
+    complete = 1;
     failed = h.failures != 0;
 done:
-    dispose(&h, failed);
-    return failed;
+    release_host(&h, failed);
+    return complete ? 0 : 1;
 }

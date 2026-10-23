@@ -356,6 +356,79 @@ static int selection_document(struct collection *c, struct suite_entry *s, const
     return 0;
 }
 
+struct case_selection {
+    const struct json *cases;
+    struct json **picked;
+    const char *rows;
+    char **ordered;
+    size_t nrows, count;
+};
+
+static int selected_architecture(const struct suite_entry *s, const struct json *one)
+{
+    return ((s->selected & 1) && runs_on(one, "i686")) ||
+           ((s->selected & 2) && runs_on(one, "x86_64"));
+}
+
+static int choose_identities(struct collection *c, const struct suite_entry *s,
+                             const char *identities, struct case_selection *selection)
+{
+    size_t j, w;
+    for (j = 0; j < selection->cases->count; j++) {
+        const char *id = json_text(selection->cases->item[j], "case_id");
+        int wanted = identities == NULL && selection->rows == NULL;
+        for (w = 0; w < c->nwanted; w++)
+            if (id && !strcmp(id, c->wanted[w])) {
+                if (selection->rows) {
+                    return refused("a suite is chosen from twice");
+                }
+                c->used[w] = 1;
+                wanted = 1;
+            }
+        if (selection->rows)
+            continue;
+        if (!wanted)
+            continue;
+        if (!selected_architecture(s, selection->cases->item[j])) {
+            return refused("a chosen case does not run on the selected architecture");
+        }
+        selection->picked[selection->count++] = selection->cases->item[j];
+    }
+    return 0;
+}
+
+static int choose_rows(const struct suite_entry *s, struct case_selection *selection)
+{
+    size_t j, w;
+    for (w = 0; w < selection->nrows; w++) {
+        for (j = 0; j < w; j++)
+            if (!strcmp(selection->ordered[j], selection->ordered[w])) {
+                return refused("a row is repeated");
+            }
+        for (j = 0; j < selection->cases->count; j++) {
+            const char *id = json_text(selection->cases->item[j], "case_id"),
+                       *last = id ? strrchr(id, '.') : NULL;
+            if (last && !strcmp(last + 1, selection->ordered[w]))
+                break;
+        }
+        if (j == selection->cases->count || !selected_architecture(s, selection->cases->item[j])) {
+            return refused("an unknown row or a row of another architecture was chosen");
+        }
+        selection->picked[selection->count++] = selection->cases->item[j];
+    }
+    return 0;
+}
+
+static const char *suite_rows(const struct suite_entry *s)
+{
+    const char *rows = !strcmp(s->name, "agents")         ? getenv("RACH2_AGENTS_ROWS")
+                       : !strcmp(s->name, "agentsaccept") ? getenv("RACH2_ACCEPT_AGENTS")
+                                                          : NULL;
+    if (rows && !*rows)
+        rows = NULL;
+    return rows;
+}
+
 static int choose_cases(struct collection *c)
 {
     const char *identities = getenv("RACH2_CASES");
@@ -380,11 +453,7 @@ static int choose_cases(struct collection *c)
         cases = json_member(s->doc, "cases");
         if (!cases || cases->type != JSON_ARRAY)
             return refused("manifest has no cases");
-        rows = !strcmp(s->name, "agents")         ? getenv("RACH2_AGENTS_ROWS")
-               : !strcmp(s->name, "agentsaccept") ? getenv("RACH2_ACCEPT_AGENTS")
-                                                  : NULL;
-        if (rows && !*rows)
-            rows = NULL;
+        rows = suite_rows(s);
         if (words(rows, ordered, &nrows) != 0)
             return refused("the rows name no case");
         for (w = 0; w < nrows; w++)
@@ -392,47 +461,14 @@ static int choose_cases(struct collection *c)
         picked = calloc(cases->count + 1, sizeof(*picked));
         if (!picked)
             return 2;
-        for (j = 0; j < cases->count; j++) {
-            const char *id = json_text(cases->item[j], "case_id");
-            int wanted = identities == NULL && rows == NULL;
-            for (w = 0; w < c->nwanted; w++)
-                if (id && !strcmp(id, c->wanted[w])) {
-                    if (rows) {
-                        free(picked);
-                        return refused("a suite is chosen from twice");
-                    }
-                    c->used[w] = 1;
-                    wanted = 1;
-                }
-            if (rows)
-                continue;
-            if (!wanted)
-                continue;
-            if (!(((s->selected & 1) && runs_on(cases->item[j], "i686")) ||
-                  ((s->selected & 2) && runs_on(cases->item[j], "x86_64")))) {
-                free(picked);
-                return refused("a chosen case does not run on the selected architecture");
-            }
-            picked[count++] = cases->item[j];
-        }
-        for (w = 0; w < nrows; w++) {
-            for (j = 0; j < w; j++)
-                if (!strcmp(ordered[j], ordered[w])) {
-                    free(picked);
-                    return refused("a row is repeated");
-                }
-            for (j = 0; j < cases->count; j++) {
-                const char *id = json_text(cases->item[j], "case_id"),
-                           *last = id ? strrchr(id, '.') : NULL;
-                if (last && !strcmp(last + 1, ordered[w]))
-                    break;
-            }
-            if (j == cases->count || !(((s->selected & 1) && runs_on(cases->item[j], "i686")) ||
-                                       ((s->selected & 2) && runs_on(cases->item[j], "x86_64")))) {
-                free(picked);
-                return refused("an unknown row or a row of another architecture was chosen");
-            }
-            picked[count++] = cases->item[j];
+        struct case_selection selection = {cases, picked, rows, ordered, nrows, 0};
+        int error = choose_identities(c, s, identities, &selection);
+        if (!error)
+            error = choose_rows(s, &selection);
+        count = selection.count;
+        if (error) {
+            free(picked);
+            return error;
         }
         if (!count) {
             free(picked);
@@ -496,15 +532,65 @@ static void defaults(struct collection *c)
 }
 
 /* The installed ledger is authoritative; no shell launcher is involved. */
+struct site_values {
+    char capacity[160], endpoint[32];
+    unsigned fields;
+};
+
+static int site_field(struct collection *c, struct site_values *values, const char *line,
+                      const char *value)
+{
+    static const char *const keys[] = {"etude-site", "endpoint",     "launcher", "ledger",
+                                       "locks",      "etude",        "capacity", "wait",
+                                       "seconds",    "boundary_lazy"};
+    size_t i;
+    for (i = 0; i < sizeof(keys) / sizeof(keys[0]) && strcmp(line, keys[i]); i++) {
+    }
+    if (i == sizeof(keys) / sizeof(keys[0]) || !*value || (values->fields & (1u << i))) {
+        return refused("unknown, empty or repeated site policy field");
+    }
+    values->fields |= 1u << i;
+    if (i == 0 && strcmp(value, "2")) {
+        return refused("incompatible site policy");
+    }
+    if (i == 1)
+        snprintf(values->endpoint, sizeof(values->endpoint), "%s", value);
+    if (i == 3)
+        snprintf(c->ledger, sizeof(c->ledger), "%s", value);
+    if (i == 4)
+        snprintf(c->locks, sizeof(c->locks), "%s", value);
+    if (i == 6)
+        snprintf(values->capacity, sizeof(values->capacity), "%s", value);
+    if ((i == 7 || i == 8) && (!positive(value) || positive(value) > 86400)) {
+        return refused("invalid site wait or execution bound");
+    }
+    if (i == 9 && strcmp(value, "bigmem-boundary-v1")) {
+        return refused("invalid site memory profile");
+    }
+    return 0;
+}
+
+static int read_site(struct collection *c, FILE *f, struct site_values *values)
+{
+    char line[PATH_SIZE + 64];
+    while (fgets(line, sizeof(line), f)) {
+        char *value = strchr(line, ' ');
+        if (!value) {
+            return refused("malformed installed site policy");
+        }
+        *value++ = 0;
+        value[strcspn(value, "\r\n")] = 0;
+        if (site_field(c, values, line, value) != 0)
+            return 2;
+    }
+    return ferror(f) || (values->fields & 511) != 511 ? refused("incomplete installed site policy")
+                                                      : 0;
+}
+
 static int site_policy(struct collection *c)
 {
     const char *site = getenv("ETUDE_SITE");
     FILE *f;
-    char line[PATH_SIZE + 64], capacity[160] = "", endpoint[32] = "";
-    unsigned fields = 0;
-    static const char *const keys[] = {"etude-site", "endpoint",     "launcher", "ledger",
-                                       "locks",      "etude",        "capacity", "wait",
-                                       "seconds",    "boundary_lazy"};
     if (site == NULL) {
 #ifdef _WIN32
         site = "C:/ProgramData/rach2/etude-site";
@@ -517,47 +603,11 @@ static int site_policy(struct collection *c)
         return getenv("ETUDE_SITE") || errno != ENOENT
                    ? refused("installed site policy is unavailable")
                    : 0;
-    while (fgets(line, sizeof(line), f)) {
-        char *value = strchr(line, ' ');
-        size_t i;
-        if (!value) {
-            fclose(f);
-            return refused("malformed installed site policy");
-        }
-        *value++ = 0;
-        value[strcspn(value, "\r\n")] = 0;
-        for (i = 0; i < sizeof(keys) / sizeof(keys[0]) && strcmp(line, keys[i]); i++) {
-        }
-        if (i == sizeof(keys) / sizeof(keys[0]) || !*value || (fields & (1u << i))) {
-            fclose(f);
-            return refused("unknown, empty or repeated site policy field");
-        }
-        fields |= 1u << i;
-        if (i == 0 && strcmp(value, "2")) {
-            fclose(f);
-            return refused("incompatible site policy");
-        }
-        if (i == 1)
-            snprintf(endpoint, sizeof(endpoint), "%s", value);
-        if (i == 3)
-            snprintf(c->ledger, sizeof(c->ledger), "%s", value);
-        if (i == 4)
-            snprintf(c->locks, sizeof(c->locks), "%s", value);
-        if (i == 6)
-            snprintf(capacity, sizeof(capacity), "%s", value);
-        if ((i == 7 || i == 8) && (!positive(value) || positive(value) > 86400)) {
-            fclose(f);
-            return refused("invalid site wait or execution bound");
-        }
-        if (i == 9 && strcmp(value, "bigmem-boundary-v1")) {
-            fclose(f);
-            return refused("invalid site memory profile");
-        }
-    }
-    int bad = ferror(f);
+    struct site_values values = {{0}, {0}, 0};
+    int error = read_site(c, f, &values);
     fclose(f);
-    if (bad || (fields & 511) != 511)
-        return refused("incomplete installed site policy");
+    if (error)
+        return error;
 #ifdef _WIN32
     const char *os = "windows";
 #elif defined(__APPLE__)
@@ -565,9 +615,9 @@ static int site_policy(struct collection *c)
 #else
     const char *os = "linux";
 #endif
-    if (strcmp(endpoint, os))
+    if (strcmp(values.endpoint, os))
         return refused("site endpoint is disabled or incompatible");
-    char *p = capacity, *end;
+    char *p = values.capacity, *end;
     for (size_t i = 0; i < 3; i++) {
         if (*p < '1' || *p > '9')
             return refused("invalid site capacity");

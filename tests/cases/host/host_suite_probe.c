@@ -53,16 +53,8 @@ static int alone(void)
     return !d || others;
 }
 static void *volatile lost;
-int main(int argc, char **argv)
+static int fault_probe(const char *mode, int argc)
 {
-    if (argc == 2 && !strcmp(argv[1], "--selftest"))
-        return 0;
-    if (argc != 3 || strcmp(argv[1], "--probe"))
-        return 2;
-    const char *mode = argv[2], *tmp = getenv("TMPDIR"), *meet = getenv("HOST_SUITE_MEET");
-    char path[8192];
-    if (!tmp || !meet)
-        return 3;
     if (!strcmp(mode, "asan")) {
         volatile char *p = malloc(4);
         p[4] = 1;
@@ -79,6 +71,33 @@ int main(int argc, char **argv)
         lost = NULL;
         return 0;
     }
+    return -1;
+}
+
+static int signal_probe(void)
+{
+    struct sigaction a, b;
+    sigset_t mask;
+    sigaction(SIGINT, NULL, &a);
+    sigaction(SIGQUIT, NULL, &b);
+    sigprocmask(SIG_BLOCK, NULL, &mask);
+    puts("signals_hosttest: not run: nothing: this line is repeated under the pass");
+    return a.sa_handler != SIG_DFL || b.sa_handler != SIG_DFL || sigismember(&mask, SIGINT);
+}
+
+int main(int argc, char **argv)
+{
+    if (argc == 2 && !strcmp(argv[1], "--selftest"))
+        return 0;
+    if (argc != 3 || strcmp(argv[1], "--probe"))
+        return 2;
+    const char *mode = argv[2], *tmp = getenv("TMPDIR"), *meet = getenv("HOST_SUITE_MEET");
+    char path[8192];
+    if (!tmp || !meet)
+        return 3;
+    int fault = fault_probe(mode, argc);
+    if (fault >= 0)
+        return fault;
     if (!strcmp(mode, "keep")) {
         snprintf(path, sizeof(path), "%s/evidence", tmp);
         touch(path, 0);
@@ -86,13 +105,7 @@ int main(int argc, char **argv)
         return 1;
     }
     if (!strcmp(mode, "signals")) {
-        struct sigaction a, b;
-        sigset_t mask;
-        sigaction(SIGINT, NULL, &a);
-        sigaction(SIGQUIT, NULL, &b);
-        sigprocmask(SIG_BLOCK, NULL, &mask);
-        puts("signals_hosttest: not run: nothing: this line is repeated under the pass");
-        return a.sa_handler != SIG_DFL || b.sa_handler != SIG_DFL || sigismember(&mask, SIGINT);
+        return signal_probe();
     }
     if (!strcmp(mode, "alone"))
         return alone();

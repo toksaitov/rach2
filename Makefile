@@ -533,6 +533,10 @@ build/tests/host/exfat_writer: tests/host/mkexfat_external.sh tests/cases/host/t
 	@mkdir -p $(@D)
 	python3 -B tests/cases/host/tools.py --external-exfat $@
 
+# This target denotes the complete independent fixture, not just its record.
+build/tests/host-suite/tools/exfat_external/exfat_external.img: build/tests/host/exfat_writer
+	@test -f $@ && test -f $(@D)/exfat_external.manifest
+
 # The tooling machine itself, for the host suite's scripted checks that run a
 # program the host lacks in it (tests/system/tooling_ready.sh): the scripts
 # case's preparation names it, and it runs every time for the same reason.

@@ -2096,6 +2096,20 @@ static int write_run(struct set *x, enum outcome *worst)
 /* ---- The preparation. ---- */
 
 /** Validate the artifacts supplied by a producer, without running a build. */
+static int native_program(const char *path)
+{
+    unsigned char magic[4];
+    FILE *f = fopen(path, "rb");
+    int binary =
+        f != NULL && fread(magic, 1, sizeof(magic), f) == sizeof(magic) &&
+        ((!memcmp(magic, "\177ELF", 4)) || (magic[0] == 'M' && magic[1] == 'Z') ||
+         (!memcmp(magic, "\317\372\355\376", 4)) || (!memcmp(magic, "\316\372\355\376", 4)) ||
+         (!memcmp(magic, "\312\376\272\276", 4)) || (!memcmp(magic, "\312\376\272\277", 4)));
+    if (f)
+        fclose(f);
+    return binary;
+}
+
 static int prepared(struct set *x)
 {
     struct command *c = &x->prep;
@@ -2120,16 +2134,7 @@ static int prepared(struct set *x)
     for (i = 0; !rc && i < x->n; i++) {
         const struct legacy_case *k = x->mem[i].k;
         if (!k->guest) {
-            unsigned char magic[4];
-            f = fopen(x->mem[i].program, "rb");
-            int binary = f != NULL && fread(magic, 1, sizeof(magic), f) == sizeof(magic) &&
-                         ((!memcmp(magic, "\177ELF", 4)) || (magic[0] == 'M' && magic[1] == 'Z') ||
-                          (!memcmp(magic, "\317\372\355\376", 4)) ||
-                          (!memcmp(magic, "\316\372\355\376", 4)) ||
-                          (!memcmp(magic, "\312\376\272\276", 4)) ||
-                          (!memcmp(magic, "\312\376\272\277", 4)));
-            if (f)
-                fclose(f);
+            int binary = native_program(x->mem[i].program);
             if (!binary) {
                 snprintf(unsupported, sizeof(unsupported), "%s", x->mem[i].program);
                 rc = 1;

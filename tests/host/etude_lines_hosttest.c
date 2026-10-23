@@ -397,11 +397,16 @@ static void write_stream(const struct run_spec *r)
         exit(1);
 }
 
+struct format_output {
+    char *out, *err;
+    size_t size;
+};
+
 /** Run this program as the formatter, with the failures `named` outside the
  * suites, at most two, given by `-f`, and the architectures `arches` by `-a`
  * unless it is NULL; give its status and its two outputs. */
 static int format(const char *const *named, const char *arches, const char *map, const char *stream,
-                  char *out, char *err, size_t size)
+                  struct format_output output)
 {
     char schemas[PATH_ROOM + 32];
     char *argv[13];
@@ -430,8 +435,8 @@ static int format(const char *const *named, const char *arches, const char *map,
     }
     if (pid < 0 || waitpid(pid, &status, 0) != pid)
         return -1;
-    slurp("out", out, size);
-    slurp("err", err, size);
+    slurp("out", output.out, output.size);
+    slurp("err", output.err, output.size);
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
@@ -545,7 +550,7 @@ static void check_row(const struct row *w)
     snprintf(map, sizeof(map), "%s", path(map));
     write_stream(&w->run);
     snprintf(stream, sizeof(stream), "%s/%s.jsonl", directory, w->run.name);
-    status = format(NULL, NULL, map, stream, out, err, sizeof(out));
+    status = format(NULL, NULL, map, stream, (struct format_output){out, err, sizeof(out)});
     if (status != w->status || wanted(w, out, err)) {
         fprintf(stderr, "etude_lines_hosttest: %s: status %d\n--- stdout\n%s--- stderr\n%s",
                 w->run.name, status, out, err);
@@ -712,7 +717,8 @@ static void check_maps(void)
     size_t i;
     for (i = 0; i < sizeof(maps) / sizeof(maps[0]); i++) {
         put("bad.map", maps[i], 0644);
-        if (format(NULL, NULL, path("bad.map"), path("pass.jsonl"), out, err, sizeof(out)) != 2 ||
+        if (format(NULL, NULL, path("bad.map"), path("pass.jsonl"),
+                   (struct format_output){out, err, sizeof(out)}) != 2 ||
             !strstr(err, "etude show lines: ")) {
             fprintf(stderr, "etude_lines_hosttest: map \"%s\": %s%s", maps[i], out, err);
             CHECK(0, "a map that names an identity twice or no case is refused");
@@ -728,7 +734,8 @@ static void check_named(void)
     static char out[4096], err[4096];
     int status;
     put("named.map", TWO, 0644);
-    status = format(named, NULL, path("named.map"), path("pass.jsonl"), out, err, sizeof(out));
+    status = format(named, NULL, path("named.map"), path("pass.jsonl"),
+                    (struct format_output){out, err, sizeof(out)});
     if (status != 1 || !strstr(out, "run: fpu: PASS in 2s") ||
         !strstr(err, "run: result: failed: voided images\n") ||
         !strstr(out, "run: result: failed\n") || strstr(out, "suites passed")) {
@@ -746,7 +753,8 @@ static void check_runner(void)
     static char out[4096], err[4096];
     int status;
     put("runner.map", "runner guest.fpu\ndefault guest.default\n", 0644);
-    status = format(NULL, NULL, path("runner.map"), path("pass.jsonl"), out, err, sizeof(out));
+    status = format(NULL, NULL, path("runner.map"), path("pass.jsonl"),
+                    (struct format_output){out, err, sizeof(out)});
     if (status != 0 || !strstr(out, "run: runner: PASS in 2s") ||
         !strstr(out, "run: result: all 2 suites passed")) {
         fprintf(stderr, "etude_lines_hosttest: runner: status %d\n--- stdout\n%s--- stderr\n%s",
@@ -754,7 +762,8 @@ static void check_runner(void)
         CHECK(0, "the runner's own suite is a suite of the map");
     }
     put("runner.map", "runner guest.default\n", 0644);
-    status = format(NULL, NULL, path("runner.map"), path("failure.jsonl"), out, err, sizeof(out));
+    status = format(NULL, NULL, path("runner.map"), path("failure.jsonl"),
+                    (struct format_output){out, err, sizeof(out)});
     if (status != 1 || !strstr(err, "run: runner: FAIL in 2s\n") ||
         strstr(err, "run: runner: FAIL in 2s\nrun: runner: FAIL") ||
         !strstr(err, "run: runner: guest.fpu.xsave on x86_64 is in no suite of the map") ||
@@ -776,8 +785,8 @@ static void check_arches(void)
     static char out[4096], err[4096], one[4096];
     int status;
     put("both.map", TWO, 0644);
-    status =
-        format(NULL, "i686,x86_64", path("both.map"), path("failure.jsonl"), out, err, sizeof(out));
+    status = format(NULL, "i686,x86_64", path("both.map"), path("failure.jsonl"),
+                    (struct format_output){out, err, sizeof(out)});
     if (status != 1 ||
         !strstr(err, "run: x86_64:fpu: guest.fpu.xsave on x86_64: failure: it exited 1\n") ||
         !strstr(err, "run: x86_64:fpu: FAIL in 2s\n") ||
@@ -790,8 +799,8 @@ static void check_arches(void)
     }
     write_stream(&none);
     put("none.map", "fpu guest.fpu\n", 0644);
-    status =
-        format(NULL, "i686,x86_64", path("none.map"), path("none.jsonl"), out, err, sizeof(out));
+    status = format(NULL, "i686,x86_64", path("none.map"), path("none.jsonl"),
+                    (struct format_output){out, err, sizeof(out)});
     if (status != 0 || !strstr(out, "run: i686:fpu: PASS in") ||
         !strstr(out, "run: x86_64:fpu: PASS in") ||
         !strstr(out, "run: result: all 2 suites passed")) {
@@ -799,14 +808,16 @@ static void check_arches(void)
                 status, out, err);
         CHECK(0, "an item of no architecture is the first architecture's");
     }
-    format(NULL, NULL, path("both.map"), path("failure.jsonl"), one, err, sizeof(one));
-    status = format(NULL, "i686", path("both.map"), path("failure.jsonl"), out, err, sizeof(out));
+    format(NULL, NULL, path("both.map"), path("failure.jsonl"),
+           (struct format_output){one, err, sizeof(one)});
+    status = format(NULL, "i686", path("both.map"), path("failure.jsonl"),
+                    (struct format_output){out, err, sizeof(out)});
     if (status != 1 || strcmp(out, one) != 0) {
         fprintf(stderr, "etude_lines_hosttest: one: status %d\n--- stdout\n%s", status, out);
         CHECK(0, "-a of one architecture changes nothing");
     }
-    status =
-        format(NULL, "x86_64,i686", path("both.map"), path("failure.jsonl"), out, err, sizeof(out));
+    status = format(NULL, "x86_64,i686", path("both.map"), path("failure.jsonl"),
+                    (struct format_output){out, err, sizeof(out)});
     CHECK(status == 2, "-a of another value is a wrong usage");
 }
 

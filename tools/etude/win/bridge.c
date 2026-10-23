@@ -66,17 +66,33 @@ static int retry(void *ctx, const struct etude_portlock_wait *wait)
     return 0;
 }
 
+static int bridge_result(const char *path, int error, int offset)
+{
+    char tmp[4096];
+    FILE *f;
+    snprintf(tmp, sizeof tmp, "%s.new", path);
+    f = fopen(tmp, "w");
+    if (f == NULL)
+        error = EIO;
+    else {
+        int ok = fprintf(f, "%d %d\n", error, offset) > 0;
+        if (fclose(f) != 0)
+            ok = 0;
+        if (!ok || rename(tmp, path) != 0)
+            error = EIO;
+    }
+    return error;
+}
+
 /** Run the independent lock holder in its controller's executable. */
 int etude_win_bridge_main(int argc, char **argv)
 {
     struct etude_ledger *l;
     struct lookup q;
     uint64_t until;
-    char tmp[4096];
     struct etude_portlock locks;
     struct etude_portlock_spec spec;
     int taken = 0, offset = -1, error = 0;
-    FILE *f;
     if (argc != 10 && argc != 11)
         return 2;
     q.id = argv[3];
@@ -103,17 +119,7 @@ int etude_win_bridge_main(int argc, char **argv)
                 offset = locks.block * 1000;
         }
     }
-    snprintf(tmp, sizeof tmp, "%s.new", argv[9]);
-    f = fopen(tmp, "w");
-    if (f == NULL)
-        error = EIO;
-    else {
-        int ok = fprintf(f, "%d %d\n", error, offset) > 0;
-        if (fclose(f) != 0)
-            ok = 0;
-        if (!ok || rename(tmp, argv[9]) != 0)
-            error = EIO;
-    }
+    error = bridge_result(argv[9], error, offset);
     if (!error)
         for (;;) {
             q.owner = q.found = q.error = 0;

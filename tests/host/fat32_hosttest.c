@@ -1442,6 +1442,27 @@ static int run_check_list(char *out, unsigned long cap)
     }
 }
 
+/* Compare the driver's completed long names with the independent reader. */
+static void long_names_mtools(void)
+{
+    {
+        char out[32768];
+        const char *boot[] = {host_tool_path("mdir"), "-i", fix_path("fat32_write.img"), "::/BOOT",
+                              0};
+        const char *root[] = {host_tool_path("mdir"), "-i", fix_path("fat32_write.img"), "::/", 0};
+        char *alias, *name, *end;
+        int status = host_command(boot, 0, 0, out, sizeof out);
+        check(status == 0 && strstr(out, "moved name.txt") != 0,
+              "mtools lists the long name this driver wrote");
+        status = host_command(root, 0, 0, out, sizeof out);
+        alias = strstr(out, "LONGNA~2 TXT");
+        name = alias ? strstr(alias, "longname1.txt") : 0;
+        end = alias ? strchr(alias, '\n') : 0;
+        check(status == 0 && name != 0 && (end == 0 || name < end),
+              "and the alias this driver gave beside it");
+    }
+}
+
 /**
  * Long names of every kind, written and read back by name and by alias,
  * listed by the check and by mtools; the names that fail with `EINVAL`,
@@ -1616,22 +1637,7 @@ static void long_rows(void)
     check(OPS->prepare_unmount(&mnt) == 0, "the clean unmount");
     unmount_image();
     check_consistent("the volume is consistent and clean after the long-name rows", 0);
-    {
-        char out[32768];
-        const char *boot[] = {host_tool_path("mdir"), "-i", fix_path("fat32_write.img"), "::/BOOT",
-                              0};
-        const char *root[] = {host_tool_path("mdir"), "-i", fix_path("fat32_write.img"), "::/", 0};
-        char *alias, *name, *end;
-        int status = host_command(boot, 0, 0, out, sizeof out);
-        check(status == 0 && strstr(out, "moved name.txt") != 0,
-              "mtools lists the long name this driver wrote");
-        status = host_command(root, 0, 0, out, sizeof out);
-        alias = strstr(out, "LONGNA~2 TXT");
-        name = alias ? strstr(alias, "longname1.txt") : 0;
-        end = alias ? strchr(alias, '\n') : 0;
-        check(status == 0 && name != 0 && (end == 0 || name < end),
-              "and the alias this driver gave beside it");
-    }
+    long_names_mtools();
 }
 
 /**
