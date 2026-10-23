@@ -73,11 +73,10 @@ int check_grow_records(const char *text, FILE *evidence)
         return 0;
     while (*text && (line = line_next(&text)) != NULL) {
         char *v[16];
-        int record = strncmp(line, "growroot: measure:", 18) == 0 ||
-                     strncmp(line, "grow-witness:", 13) == 0;
         int count = words(line, v, 16), i, side, at;
         uint64_t t = 0, cmd = 0, fl = 0;
-        if (record && count < 0)
+        if (count < 0 && (!strcmp(v[0], "grow-witness:") ||
+                          (!strcmp(v[0], "growroot:") && !strcmp(v[1], "measure:"))))
             bad = 1;
         if (count > 0 && strcmp(v[0], "growroot:") == 0 && count > 1 &&
             strcmp(v[1], "measure:") == 0) {

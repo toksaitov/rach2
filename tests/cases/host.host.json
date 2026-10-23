@@ -14,6 +14,7 @@
       "execution": {"program": "host", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs and the checks' scratch directories under its scratch directory, which the program removes after a pass"},
       "assertions": [
         {"assertion_id": "listed", "checks": "each tests/host/*_hosttest.c that is not etude's and has no host-arch: line has an assertion of this case, and each assertion a test of the tree", "source": "program"},
+        {"assertion_id": "records", "checks": "tests/host/records_hosttest.c rejects missing, malformed and inconsistent measurement records under ASan and UBSan", "source": "program"},
         {"assertion_id": "accounttools", "checks": "tests/host/accounttools_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
         {"assertion_id": "acpi", "checks": "tests/host/acpi_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
         {"assertion_id": "ahci", "checks": "tests/host/ahci_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
@@ -199,6 +200,7 @@
         {"assertion_id": "etude_collection", "checks": "tests/host/etude_collection_hosttest.c is prepared under ASan and UBSan and checks native selection, complete output, immutable artifacts and learned watchdog bounds", "source": "program"},
         {"assertion_id": "etude_compare", "checks": "tests/host/etude_compare_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
         {"assertion_id": "etude_disk_binding", "checks": "tests/host/etude_disk_binding_hosttest.c checks private disk bindings and image helper arguments under ASan and UBSan", "source": "program"},
+        {"assertion_id": "etude_helper_arch", "checks": "tests/host/etude_helper_arch_hosttest.c checks helper architecture overrides and memory accounting under ASan and UBSan", "source": "program"},
         {"assertion_id": "etude_hostdriver", "checks": "tests/host/etude_hostdriver_hosttest.c checks prepared execution, private scratch, immutable inputs, complete assertions and explicit unsupported checks under ASan and UBSan", "source": "program"},
         {"assertion_id": "etude_exec", "checks": "tests/host/etude_exec_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
         {"assertion_id": "etude_failures", "checks": "tests/host/etude_failures_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},

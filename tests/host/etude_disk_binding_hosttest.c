@@ -9,6 +9,7 @@
  * host-deps: tools/etude/posix/process.c tools/etude/posix/store.c
  * host-deps: tools/etude/capture.c tools/etude/history_json.c
  * host-deps: tools/etude/guest/wire.c utils/sha256.c
+ * host-deps: tools/etude/volume/volume.c
  * host-cflags: -I tools/etude/include -I tools/etude -I tools/etude/posix
  * host-cflags: -I utils -Wall -Wextra -Werror
  */
