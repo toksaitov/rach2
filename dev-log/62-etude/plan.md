@@ -399,7 +399,7 @@ Removal, the four environments and the move:
 * T93. Run every eligible case on the Lenovo. Owner-only. Waits for T24, T50 and T88, and, when the Lenovo needs the candidate installed, for the first complete pass of T90, T91 or T92. Done when complete results and cleanup are recorded on the exact candidate kernel, and the accepted system is restored and checked.
 * T94. Select the fastest test machine. Waits for T14, T90, T91 and T92. Files: the comparison report and the proposed site profile. Done when the recommendation follows the measured whole-collection performance, and the Lenovo's smaller selection is not scored against the full runs. Report: [the comparison of the test machines](machines.md).
 * T95. Move routine testing to the selected machine. Owner-only. Waits for T22, T58 to T62 and T94. Done when push checks, ci and the release use one accounted machine with its limits, after the running jobs finish. A move that needs a new account or a hardware decision goes to the owner with the measured recommendation.
-* T96. Audit the phase for its review. Waits for T01 to T95. Files: the plan, the coverage inventory, the comparison report and the acceptance record. Done when every obligation has evidence or an ordinary issue, and the review and release can establish completion.
+* T96. Audit the phase for its review. Waits for T01 to T95. Files: the plan, the coverage inventory, the comparison report and the acceptance record. Done when every obligation has evidence or an ordinary issue, and the review and release can establish completion. The part that does not wait for the runs: [the audit of the tasks on master](audit.md).
 
 ## After the release
 
