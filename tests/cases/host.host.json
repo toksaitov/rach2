@@ -376,7 +376,8 @@
         {"assertion_id": "host_suite", "checks": "the host cases run their checks at once, each in its own scratch, with one result and one assertion each: `sh tests/system/host_suite_test.sh` exits 0", "source": "program"},
         {"assertion_id": "case_select", "checks": "tests/run runs the cases chosen, in their order, and refuses a wrong choice before it builds: `python3 -B tests/system/case_select_test.py` exits 0", "source": "program"},
         {"assertion_id": "tooling_image", "checks": "the GNU root's tooling job leaves no stage and no lock when a signal stops it: `sh tests/system/tooling_image_test.sh` exits 0", "source": "program"},
-        {"assertion_id": "gnu_cmake_jobs", "checks": "the cmake port's bootstrap runs no more jobs at once than its make allows: `sh tests/system/gnu_cmake_jobs_test.sh` exits 0", "source": "program"}
+        {"assertion_id": "gnu_cmake_jobs", "checks": "the cmake port's bootstrap runs no more jobs at once than its make allows: `sh tests/system/gnu_cmake_jobs_test.sh` exits 0", "source": "program"},
+        {"assertion_id": "gnu_port_resume", "checks": "a stopped build of the GNU ports goes on from the last port it finished: `sh tests/system/gnu_port_resume_test.sh` exits 0", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},

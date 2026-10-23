@@ -892,10 +892,11 @@ static int make_shims(struct step *s)
 }
 
 /**
- * Run the command with `root` as ETUDE_STEP_ROOT, or none, and ccache in
- * front of its compilers when the step uses it; with `shared`, files it
- * makes are writable by the group, so that a partial entry another account
- * left can be removed. The command's status, as wait gives it.
+ * Run the command with `root` as ETUDE_STEP_ROOT, or none, the key as
+ * ETUDE_STEP_KEY when every step it uses has one, and ccache in front of
+ * its compilers when the step uses it; with `shared`, files it makes are
+ * writable by the group, so that a partial entry another account left can
+ * be removed. The command's status, as wait gives it.
  */
 static int run_command(struct step *s, const char *root, const char *basedir, int shared)
 {
@@ -916,6 +917,10 @@ static int run_command(struct step *s, const char *root, const char *basedir, in
             setenv("ETUDE_STEP_ROOT", root, 1);
         else
             unsetenv("ETUDE_STEP_ROOT");
+        if (s->keyed)
+            setenv("ETUDE_STEP_KEY", s->key, 1);
+        else
+            unsetenv("ETUDE_STEP_KEY");
         if (s->shims[0]) {
             struct text path = {0};
             const char *old = getenv("PATH");

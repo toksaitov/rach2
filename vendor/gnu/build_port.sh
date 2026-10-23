@@ -39,7 +39,12 @@
 # port is built for another's DEPENDS only when it has no such list, and
 # every port depends on the runtime, the toolchain's glibc, and on pkgconf,
 # whose copy for the build host answers configure's questions about the
-# root's libraries. --all builds every recipe into an empty root. Programs
+# root's libraries. --all builds every recipe into an empty root. Under
+# etude-step, which gives it the key of the step's inputs as ETUDE_STEP_KEY,
+# it writes the key to work/ports.done and adds each port as it finishes,
+# and an --all with the same key, as when make runs the step again after a
+# stop, keeps the ports the list has, makes the root again from their stages
+# and goes on from the next; any other run removes the list. Programs
 # link with the shared libraries; GNU_LINK=static links the ports configured
 # by autoconf statically instead, and gives make -all-static in a port with
 # libtool, which reads -static as "no uninstalled shared libraries" and
@@ -61,6 +66,7 @@ SYSROOT="$OUT/sysroot"
 ROOT="$OUT/root"
 STAGE="$OUT/stage"
 WRAP="$OUT/wrap"
+DONE="$OUT/work/ports.done"
 TARGET="$GNU_TARGET"
 # shellcheck disable=SC2034 # the recipes read it
 LOADER="$GNU_LOADER"
@@ -261,14 +267,55 @@ build()
     echo "gnu: port: $name: done in $(($(date +%s) - t0)) s, $size MB installed"
 }
 
+# resume: when the list of an --all that stopped has ETUDE_STEP_KEY, keep the
+# stages of the ports it has and make the root again from them, in the order
+# they were built, so that it has nothing of the port the stop cut short;
+# remove the stages of the other ports. Fails when there is no such list, a
+# stage it names is gone or a copy fails; the caller then starts again from
+# an empty root.
+resume()
+{
+    if [ -z "${ETUDE_STEP_KEY:-}" ] || [ ! -f "$DONE" ] ||
+        [ "$(sed -n 1p "$DONE")" != "key $ETUDE_STEP_KEY" ]; then
+        return 1
+    fi
+    kept=$(sed 1d "$DONE")
+    for name in $kept; do
+        [ -d "$STAGE/$name" ] || return 1
+    done
+    rm -rf "$ROOT" || return 1
+    mkdir -p "$ROOT" || return 1
+    n=0
+    for name in $kept; do
+        cp -af "$STAGE/$name/." "$ROOT/" || return 1
+        n=$((n + 1))
+    done
+    for f in "$DIR"/ports/*.sh; do
+        name=$(basename "$f" .sh)
+        stale="$STAGE/$name"
+        if ! grep -Fqx "$name" "$DONE"; then
+            rm -rf "$stale" "$stale.files" "$stale.old" || return 1
+        fi
+    done
+    echo "gnu: port: resume: keeping the $n ports a stopped build finished"
+}
+
 if [ "$1" = --all ]; then
-    rm -rf "$ROOT" "$STAGE" "$OUT/setid" "$OUT/host" "$WRAP/$TARGET-pkg-config"
+    if ! resume; then
+        rm -rf "$ROOT" "$STAGE" "$OUT/setid" "$OUT/host" "$WRAP/$TARGET-pkg-config" "$DONE"
+        if [ -n "${ETUDE_STEP_KEY:-}" ]; then
+            mkdir -p "$OUT/work"
+            echo "key $ETUDE_STEP_KEY" >"$DONE"
+        fi
+    fi
     all=
     for f in "$DIR"/ports/*.sh; do
         all="$all $(basename "$f" .sh)"
     done
     # shellcheck disable=SC2086 # a port's name is one word
     set -- $all
+else
+    rm -f "$DONE"
 fi
 for name in "$@"; do
     if [ ! -f "$DIR/ports/$name.sh" ]; then
@@ -277,6 +324,9 @@ for name in "$@"; do
     fi
 done
 for name in $(order "$@" | awk '!seen[$0]++'); do
+    if [ -f "$DONE" ] && grep -Fqx "$name" "$DONE"; then
+        continue
+    fi
     case " $* " in
         *" $name "*)
             build "$name"
@@ -287,4 +337,8 @@ for name in $(order "$@" | awk '!seen[$0]++'); do
             fi
             ;;
     esac
+    if [ -f "$DONE" ]; then
+        echo "$name" >>"$DONE"
+    fi
 done
+rm -f "$DONE"

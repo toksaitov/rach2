@@ -45,6 +45,7 @@ check_ldscript|TinyCC's linker script reader against GNU ld|sh vendor/tcc/check_
 together|the makers of several fixture files run once for a parallel request of their files|sh tests/system/together_test.sh
 tooling_image|the GNU root's tooling job leaves no stage and no lock when a signal stops it|sh tests/system/tooling_image_test.sh
 gnu_cmake_jobs|the cmake port's bootstrap runs no more jobs at once than its make allows|sh tests/system/gnu_cmake_jobs_test.sh
+gnu_port_resume|a stopped build of the GNU ports goes on from the last port it finished|sh tests/system/gnu_port_resume_test.sh
 host_suite|the host cases run their checks at once, each in its own scratch, with one result and one assertion each|sh tests/system/host_suite_test.sh
 case_select|tests/run runs the cases chosen, in their order, and refuses a wrong choice before it builds|python3 -B tests/system/case_select_test.py
 progress|the manager's phase progress and delayed work|python3 -B tests/system/progress_test.py

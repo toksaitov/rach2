@@ -1,11 +1,11 @@
 /**
  * Check etude-step: the key of a step and what changes it, a copy-mode step
  * stored by one copy and taken by another, a link-mode step built in the
- * store with the links of its uses, the build without the store, the steps
- * that are not shared, a failed and an unfinished build, ccache's names, two
- * builds of one key at once, the removal of entries nobody uses, and the
- * refusals. Each row runs the program's
- * main in a child of the test, in copies and a store of its own.
+ * store with the links of its uses, the build without the store, the key a
+ * command is given, the steps that are not shared, a failed and an
+ * unfinished build, ccache's names, two builds of one key at once, the
+ * removal of entries nobody uses, and the refusals. Each row runs the
+ * program's main in a child of the test, in copies and a store of its own.
  * host-deps: utils/sha256.c
  * host-cflags: -I utils -Wall -Wextra -Werror
  */
@@ -456,6 +456,55 @@ static void test_here(void)
           "here: nothing was stored for it");
 }
 
+/** The key a command has as ETUDE_STEP_KEY: the stamp's, and none when a
+ * step it uses has no key. */
+static void test_key_env(void)
+{
+    char buf[512], stamp[512];
+    char *keyed[] = {"etude-step",
+                     "-s",
+                     "",
+                     "-n",
+                     "env",
+                     "-t",
+                     "st/env.stamp",
+                     "-i",
+                     "src",
+                     "-o",
+                     "ek",
+                     "--",
+                     "sh",
+                     "-c",
+                     "echo \"etude-step 1 $ETUDE_STEP_KEY here\" > ek",
+                     NULL};
+    char *unkeyed[] = {"etude-step",
+                       "-s",
+                       "",
+                       "-n",
+                       "unkeyed",
+                       "-t",
+                       "st/unkeyed.stamp",
+                       "-d",
+                       "none.stamp",
+                       "-o",
+                       "uk",
+                       "--",
+                       "sh",
+                       "-c",
+                       "echo \"${ETUDE_STEP_KEY-none}\" > uk",
+                       NULL};
+    struct ran r;
+
+    run(copy_a, keyed, &r);
+    in_copy(copy_a, "st/env.stamp", stamp, sizeof stamp);
+    CHECK(r.status == 0 && stamp[0] && strcmp(in_copy(copy_a, "ek", buf, sizeof buf), stamp) == 0,
+          "key env: the command has the key of its stamp as ETUDE_STEP_KEY");
+    put(fix_path("copy-a/none.stamp"), "");
+    run(copy_a, unkeyed, &r);
+    CHECK(r.status == 0 && strcmp(in_copy(copy_a, "uk", buf, sizeof buf), "none\n") == 0,
+          "key env: a step that uses a stamp of no key has no ETUDE_STEP_KEY");
+}
+
 /** A command that fails, one that makes no output, and a link-mode build
  * that is cut short and then built again. */
 static void test_failures(void)
@@ -864,6 +913,7 @@ int main(void)
     test_copy();
     test_link();
     test_here();
+    test_key_env();
     test_failures();
     test_ccache();
     test_together();
