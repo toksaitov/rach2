@@ -413,6 +413,14 @@ $(ARCH_CASE_DIR)/install.disk: $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
 	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
+
+# A mixed collection may request its fixed x86-64 helper from an i686 make.
+# Let the architecture's own graph check and produce the disk each time.
+ifneq ($(ARCH),x86_64)
+build/x86_64/tests/cases/machine/install.disk: ask-the-sub-make
+	+$(MAKE) --no-print-directory ARCH=x86_64 $@
+endif
+
 # `tests/run sealed`: the disk that goes into the laptop, operated the way it
 # will be operated once it is in there. It is the two cases of
 # tests/cases/machine.sealed.json, which etude runs on separate copies of the

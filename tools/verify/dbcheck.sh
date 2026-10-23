@@ -23,6 +23,10 @@
 # describe; such a source passes when that script names it, or when
 # tools/etude/sources.mk lists it for the Windows etude that the script
 # builds.
+# The Windows scenario actor is selected by host/windows.py. The native
+# mandoc build copies its entry and mapping adapter to batch_main.c and
+# batch_mmap.c, compiled by tools/setup/mandoc-batch.mk; these two sources
+# have no POSIX translation-unit command.
 #
 # Usage: dbcheck.sh [DBDIR]
 set -u
@@ -49,7 +53,9 @@ cat "$DBDIR"/*.json | LC_ALL=C awk -F'"' '
             if ($i == "file") f = $(i + 2)
         }
         if (f ~ /^\//) print f; else print d "/" f
-    }' | sed 's#/\./#/#g' | sort -u >"$known"
+    }' | python3 -c 'from pathlib import Path; import sys
+for line in sys.stdin:
+    print(Path(line.rstrip("\n")).resolve())' | sort -u >"$known"
 sources=$( {
     find rach2 -name '*.c'
     find krffs utils ish tests -path '*/vendor' -prune -o -path '*/vs-dokany' -prune -o -name '*.c' -print
@@ -58,7 +64,12 @@ sources=$( {
 } 2>/dev/null | sort -u )
 # included FILE: true when a C file in FILE's directory includes FILE by name.
 included() {
-    grep -rqF --include='*.c' "#include \"${1##*/}\"" "$(dirname "$1")"
+    grep -rqF --include='*.c' "#include \"${1##*/}\"" "$(dirname "$1")" && return 0
+    case $1 in
+        tests/host/compat/*)
+            grep -qF "#include \"compat/${1##*/}\"" tests/host/*.c ;;
+        *) return 1 ;;
+    esac
 }
 # fixture FILE: true when FILE is under tests/system/fixtures or
 # tests/host/fixtures and a script under tests/system or tests/host names it.
@@ -70,12 +81,18 @@ fixture() {
     esac
     grep -rqF --include='*.sh' "fixtures/${1##*/}" "$tree"
 }
-# windows FILE: true when FILE is under tools/etude/win and
-# tools/etude/wincheck.sh names it or tools/etude/sources.mk lists it.
+# windows FILE: true for the exact Windows-only build routes described above.
 windows() {
     case $1 in
         tools/etude/win/*) grep -qF "${1##*/}" tools/etude/wincheck.sh ||
             grep -qF "$1" tools/etude/sources.mk ;;
+        tests/host/compat/scenario_guest.c)
+            grep -qF "'$1'" tests/cases/host/windows.py ;;
+        tools/setup/mandoc-win/main.c|tools/setup/mandoc-win/mmap.c)
+            mapped=batch_${1##*/}
+            grep -qF 'compat=$TREE/tools/setup/mandoc-win' tools/setup/build_host_tool.sh &&
+            grep -qF "cp \"\$compat/${1##*/}\" \"\$m/$mapped\"" tools/setup/build_host_tool.sh &&
+            grep -qF "${mapped%.c}.o" tools/setup/mandoc-batch.mk ;;
         *) return 1 ;;
     esac
 }

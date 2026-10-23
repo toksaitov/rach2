@@ -34,6 +34,14 @@ $(PREFIX)/drive: tests/cases/host/host_products_drive.c
 $(PREFIX)/image-fixture: tests/cases/host/image_fixture.c tests/cases/host/fixture.c
 	@mkdir -p $(@D)
 	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
+
+# These outputs belong to inventory and root staging, not host-products/all.
+$(PREFIX)/driver: tests/cases/host/gnu_driver.c tests/cases/host/fixture.c
+	@mkdir -p $(@D)
+	$(CC) -std=c99 -D_DEFAULT_SOURCE -Wall -Wextra -Werror $(abspath $^) -o $@
+$(PREFIX)/etude-wsclient: tests/system/fakeapi/native/wsclient.c
+	@mkdir -p $(@D)
+	$(CC) -std=c99 -O2 $(abspath $<) -o $@ -lssl -lcrypto
 $(PREFIX)/stageimage.krffs: $(PRODUCT_KRFFS) krffs/krffs_allocator.c krffs/stageimage.krffs.c
 	@mkdir -p $(@D)
 	$(CC) $(PRODUCT_CFLAGS) -o $@ $^

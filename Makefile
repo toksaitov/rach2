@@ -437,13 +437,15 @@ $(ARCH_BUILD)/ish/ish: ask-the-sub-make
 # links build/ish/ish.o with the host cc.
 $(CURDIR)/$(ARCH_BUILD)/ish/ish: $(ARCH_BUILD)/ish/ish
 	+@:
-# One of the four krffs tools runs the sub-make and the other three wait for
+# One KRFFS tool runs the sub-make and the other tools wait for
 # it. A rule with several targets is a rule for each target, so one rule for
-# all four would run four sub-makes of one directory at once in a clean
+# all of them would run several sub-makes of one directory at once in a clean
 # build.
 build/krffs/mkfs.krffs: ask-the-sub-make | check-libc
 	@$(MAKE) --no-print-directory -C krffs
-build/krffs/stageimage.krffs build/krffs/fsck.krffs build/krffs/readfile.krffs: build/krffs/mkfs.krffs
+build/krffs/stageimage.krffs build/krffs/fsck.krffs build/krffs/readfile.krffs \
+build/krffs/defrag.krffs build/krffs/edfs.krffs build/krffs/fsviz.krffs \
+build/krffs/mkhash.krffs: build/krffs/mkfs.krffs
 	@:
 
 # A staged file waits for its component, then make reads its time again.
@@ -1649,6 +1651,18 @@ HOST_TOOLS = $(BINFIND) $(CHECKRECOVERY) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $
 host-tools: $(HOST_TOOLS)
 print-host-tools:
 	@echo $(HOST_TOOLS)
+
+# Collection-only commands enter the database without enlarging `all`.
+COLLECTION_TOOLS = build/tests/cases/host/host_checks_scenario \
+    build/tests/cases/host/host_scripts_scenario build/tests/cases/host/family_scenario \
+    build/tests/cases/host/style build/tests/cases/host/usbchecks \
+    build/tests/cases/host/krffscheck build/tests/cases/machine/agent_server \
+    build/tests/cases/gnu/sntpserver build/tests/system/fakeapi_test \
+    build/tools/dev/native-deploy $(ARCH_BUILD)/tests/cases/host/image-channel-fixture \
+    $(ARCH_BUILD)/tests/cases/machine/installer-repair-fixture
+.PHONY: print-collection-tools
+print-collection-tools:
+	@echo $(COLLECTION_TOOLS)
 
 # Fails when a kernel .c on disk is missing from C_SRC, or a C_SRC entry is
 # missing from disk, so that a new kernel source cannot be left out of the

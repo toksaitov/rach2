@@ -11,8 +11,9 @@
 # database per unit under build/compile_commands/: the four i686 kernel
 # variants (rach2, rach2-recovery, rach2-metal, rach2-harness) and the x86-64
 # kernel (rach2-x86_64), the guest programs
-# (tests, ish, utils, musl-programs, doom), the host programs (krffs, tools,
-# host-tests). The union is compile_commands.json at the root, for clangd.
+# (tests, ish, utils, musl-programs, doom, native-collection), the host programs
+# (krffs, tools, collection-tools, host-tests), and the GNU product controllers
+# and routed host fixtures. The union is compile_commands.json at the root.
 # tools/verify/dbcheck.sh requires every in-house C source to be in one of
 # them. The vendored musl, busybox, dropbear and doomgeneric trees are
 # excluded: their flags do not belong in a portable database.
@@ -75,7 +76,8 @@ join_continuations() {
 # Read joined commands from $1 and print one database entry per C source
 # operand of each compile command, with $2 as the escaped directory and $3
 # the compiler the unit uses: `cross` selects either architecture's elf GCC,
-# i686's or x86-64's, `host` the host compiler, cc or what CC names.
+# i686's or x86-64's, `host` the host compiler, and `gnu` the GNU helper's
+# compiler and freestanding fixtures. `collection` combines host and cross.
 # Selection keys on the first word of the command: Homebrew installs libgcc
 # under a path containing `i686-elf-gcc`, so matching the whole line would
 # select linker lines and continuation fragments through that path.
@@ -84,13 +86,21 @@ emit_entries() {
     dir_json=$2
     which=${3:-cross}
     while IFS= read -r line; do
+        case $line in 'host prepare: '*) line=${line#'host prepare: '} ;; esac
         set -f
         # shellcheck disable=SC2086 # word-splitting the command is the point
         set -- $line
         set +f
-        case "$which:${1-}" in
-            cross:*i686-elf-*gcc | cross:*x86_64-elf-*gcc) ;;
-            host:cc|host:gcc|host:clang|host:"${CC:-cc}") ;;
+        # The root recipes select muslgcc's architecture with this assignment.
+        case ${1-} in RACH2_ARCH=i686|RACH2_ARCH=x86_64) shift ;; esac
+        case ${1-} in
+            *i686-elf-*gcc|*x86_64-elf-*gcc|vendor/musl/muslgcc) selected=cross ;;
+            *x86_64-rach2-linux-gnu-gcc|*i686-linux-gnu-gcc) selected=gnu ;;
+            cc|gcc|clang|*/cc|*/gcc|*/clang|"${CC:-cc}") selected=host ;;
+            *) continue ;;
+        esac
+        case "$which:$selected" in
+            cross:cross|host:host|gnu:gnu|gnu:cross|collection:host|collection:cross) ;;
             *) continue ;;
         esac
         cmd_json=$(json_escape "$line")
@@ -159,13 +169,15 @@ build_array() {
 #   4. A malformed entry, a string split by an unescaped quote, is rejected.
 #   5. json_escape escapes a tab, a double quote and a backslash, and nothing
 #      else.
+#   6. Collection recipes retain architecture assignments and sanitizer flags;
+#      GNU compiler commands are selected without selecting linker operands.
 selftest() {
     st_dir=
     trap 'rm -rf ${st_dir:+"$st_dir"}' EXIT
     trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    st_dir=$(mktemp -d) || exit 1
+    st_dir=$(mktemp -d "${TMPDIR:-/tmp}/rach2-compile-selftest.XXXXXX") || exit 1
     st_fail=0
 
     # Case 1: the wrapped Homebrew recipe.
@@ -233,11 +245,29 @@ EOF
         st_fail=1
     fi
 
+    # Case 6: actual collection command forms, not guessed source lists.
+    cat >"$st_dir/collection" <<'EOF'
+RACH2_ARCH=i686 vendor/musl/muslgcc -std=c99 fixture.c -o fixture
+/build/cross/bin/x86_64-rach2-linux-gnu-gcc --sysroot=/build/root -fsanitize=address,undefined controller.c -o controller
+host prepare: /usr/bin/cc -std=c99 -fsanitize=address,undefined native.c -o native
+ld -o linked /lib/x86_64-rach2-linux-gnu-gcc/libgcc.a ignored.c
+EOF
+    emit_entries "$st_dir/collection" /fixture collection >"$st_dir/native_entries"
+    emit_entries "$st_dir/collection" /fixture gnu >"$st_dir/gnu_entries"
+    if [ "$(wc -l <"$st_dir/native_entries" | tr -d ' ')" != 2 ] ||
+        [ "$(wc -l <"$st_dir/gnu_entries" | tr -d ' ')" != 2 ] ||
+        ! grep -qF 'RACH2_ARCH=i686 vendor/musl/muslgcc ' "$st_dir/native_entries" ||
+        ! grep -qF -- '-fsanitize=address,undefined controller.c' "$st_dir/gnu_entries" ||
+        grep -qF 'ignored.c' "$st_dir/native_entries" "$st_dir/gnu_entries"; then
+        echo 'compile_commands: selftest: collection compiler selection failed' >&2
+        st_fail=1
+    fi
+
     if [ "$st_fail" != 0 ]; then
         echo "compile_commands: selftest: FAIL" >&2
         exit 1
     fi
-    echo "compile_commands: selftest: OK (5 cases)"
+    echo "compile_commands: selftest: OK (6 cases)"
     exit 0
 }
 
@@ -327,7 +357,52 @@ unit krffs "$REPO/krffs" host make -Bn $MUSL_FILES all mount
 host_tools=$(make -s -C "$REPO" print-host-tools)
 # shellcheck disable=SC2086
 unit tools "$REPO" host make -Bn $host_tools
-unit host-tests "$REPO" host env HOST_PRINT_COMMANDS=1 sh tests/cases/host/host.sh
+collection_tools=$(make -s -C "$REPO" print-collection-tools) || exit 1
+[ -n "$collection_tools" ] || { echo 'compile_commands: no collection targets' >&2; exit 1; }
+# These prerequisites are generated by preparation, not by database creation.
+# shellcheck disable=SC2086
+unit collection-tools "$REPO" collection make -Bn -o vendor/musl/.stamp \
+    -o build/vendor/host-openssl/ready $collection_tools
+# shellcheck disable=SC2086
+unit native-collection "$REPO/tests/native" cross make -Bn \
+    $(printf '%s\n' "$MUSL_FILES" | sed 's#\.\./vendor/#../../vendor/#g')
+
+# Print the same recipes preparation uses, including tools and GNU-routed
+# fixtures. Print mode never compiles a check or publishes an inventory.
+host_commands() {
+    route=$1
+    shift
+    for group in "$@"; do
+        # shellcheck disable=SC2086 # route supplies zero or one fixed option
+        python3 -B tests/cases/host/prepare.py --print-commands ${route:+--gnu} "$group" \
+            "$DBDIR/host-inputs/$group.inventory.json" || return
+    done
+}
+native_host_commands() {
+    host_commands '' tests etude boots checkers fuzz scripts
+}
+gnu_host_commands() (
+    RACH2_ARCH=x86_64
+    . "$REPO/vendor/gnu/arch.sh"
+    CC="$GNU_OUT/cross/bin/$GNU_TARGET-gcc --sysroot=$GNU_OUT/root -B$GNU_OUT/sanitizers/compiler/ -L$GNU_OUT/sanitizers/root/usr/lib"
+    export CC
+    HOST_TEST_PLATFORM=posix host_commands gnu tests etude checkers fuzz
+)
+gnu_product_commands() (
+    RACH2_ARCH=x86_64
+    . "$REPO/vendor/gnu/arch.sh"
+    compiler="$GNU_OUT/cross/bin/$GNU_TARGET-gcc --sysroot=$GNU_OUT/root"
+    make -Bn -f tests/cases/host/products.mk CC="$compiler" \
+        SANITIZER_CC="$compiler -B$GNU_OUT/sanitizers/compiler/ -L$GNU_OUT/sanitizers/root/usr/lib" \
+        PREFIX="$GNU_OUT/host-products" all &&
+    make -Bn -f tests/cases/host/products.mk CC="$compiler" \
+        PREFIX="$GNU_OUT/host-checks" "$GNU_OUT/host-checks/driver" &&
+    make -Bn -f tests/cases/host/products.mk CC="$compiler" \
+        PREFIX="$DBDIR/gnu-root" "$DBDIR/gnu-root/etude-wsclient"
+)
+unit host-tests "$REPO" host native_host_commands
+unit gnu-host-tests "$REPO" gnu gnu_host_commands
+unit gnu-products "$REPO" gnu gnu_product_commands
 
 build_array "$entries" >"$out_tmp"
 if ! validate_db "$out_tmp"; then

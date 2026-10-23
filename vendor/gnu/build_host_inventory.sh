@@ -90,7 +90,8 @@ done
 for group in etude checkers fuzz; do
     python3 -B tests/cases/host/prepare.py --gnu "$group" "build/tests/host-suite/$group.inventory.json"
 done
-"$GNU_OUT/cross/bin/$GNU_TARGET-gcc" --sysroot="$GNU_OUT/root" -std=c99 -D_DEFAULT_SOURCE \
-    -Wall -Wextra -Werror "$REPO/tests/cases/host/gnu_driver.c" "$REPO/tests/cases/host/fixture.c" -o "$OUT/driver"
+make --no-print-directory -C "$REPO" -f tests/cases/host/products.mk \
+    CC="$GNU_OUT/cross/bin/$GNU_TARGET-gcc --sysroot=$GNU_OUT/root" \
+    PREFIX="$OUT" "$OUT/driver"
 chmod -R a+rX "$TREE"
 rm -rf "$TOOLS" "$OUT/sources.list"
