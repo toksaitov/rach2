@@ -7476,15 +7476,15 @@ long sys_statx(isr_params_t *params)
  * followed, and a path that named a directory by its end, `dir`, must
  * reach one (`resolve_named`).
  *
- * access(2) is the one call judged by the real ids: it exists so that a
- * set-id program can ask what its invoker could do. The walk charges
- * search permission the same way, so a set-id program cannot report a
- * reachability its invoker does not have. A /dev, /proc or /sys node is
- * judged by the owner, group and mode its stat gives, through a final
- * link, so W_OK on /proc/PID/stat is -EACCES and R_OK succeeds. R_OK, W_OK
- * and X_OK are the octal digits the permission check takes. The walk keeps
- * the lock of the mount it ends on until the attributes are read, as
- * `do_stat64`'s does, and for the same reason.
+ * access(2) is the one call judged by the real ids: it exists so that a set-id
+ * program can ask what its invoker could do. The walk charges search permission
+ * the same way, so a set-id program cannot report a reachability its invoker
+ * does not have. A /dev, /proc or /sys node is judged by the owner, group and
+ * mode its stat gives, through a final link, so W_OK on /proc/PID/stat is
+ * -EACCES to a caller other than root, and R_OK succeeds. R_OK, W_OK and X_OK
+ * are the octal digits the permission check takes. The walk keeps the lock of
+ * the mount it ends on until the attributes are read, as `do_stat64`'s does,
+ * and for the same reason.
  */
 static int32_t do_access(const char *name, int mode, int dir)
 {

@@ -10,11 +10,12 @@
  * and the match of stat and fstat identities. Listings of /dev and /proc
  * show "null", "self" and the caller's pid, which is what ps reads; openat
  * resolves a name relative to a descriptor of a synthetic directory.
- * `access` succeeds for F_OK and R_OK, and fails with EACCES for a write to a
- * read-only proc file, ENOENT for a missing device, and EINVAL for a bad
- * mode. /proc/self is a symbolic link to the caller's pid: lstat sees the
- * link, stat follows it to the directory, and /proc/self/fd/0 leads to the
- * console's character device.
+ * `access` succeeds for F_OK and R_OK; for W_OK of a read-only proc file it
+ * succeeds for root, as on Linux, and fails with EACCES for anyone else; it
+ * fails with ENOENT for a missing device and EINVAL for a bad mode.
+ * /proc/self is a symbolic link to the caller's pid: lstat sees the link, stat
+ * follows it to the directory, and /proc/self/fd/0 leads to the console's
+ * character device.
  *
  * Staged into the test image as /musl/devtest. Prints `DEVTEST OK` when every
  * check passes, and otherwise a line for each failed check and
@@ -36,6 +37,18 @@ static void check(int cond, const char *msg)
     if (!cond) {
         fails++;
         printf("  FAIL: %s\n", msg);
+    }
+}
+
+/** Check access(W_OK) of a read-only proc file: 0 for root, else EACCES. */
+static void check_proc_write(void)
+{
+    errno = 0;
+    if (getuid() == 0) {
+        check(access("/proc/self/stat", W_OK) == 0, "access(/proc/self/stat, W_OK) as root");
+    } else {
+        check(access("/proc/self/stat", W_OK) < 0 && errno == EACCES,
+              "access(/proc/self/stat, W_OK) -> EACCES");
     }
 }
 
@@ -157,9 +170,7 @@ int main(void)
     /* access(2) on synthetic paths. */
     check(access("/dev/null", F_OK) == 0, "access(/dev/null, F_OK)");
     check(access("/proc/self/stat", R_OK) == 0, "access(/proc/self/stat, R_OK)");
-    errno = 0;
-    check(access("/proc/self/stat", W_OK) < 0 && errno == EACCES,
-          "access(/proc/self/stat, W_OK) -> EACCES");
+    check_proc_write();
     errno = 0;
     check(access("/dev/nope", F_OK) < 0 && errno == ENOENT, "access(/dev/nope) -> ENOENT");
     errno = 0;
