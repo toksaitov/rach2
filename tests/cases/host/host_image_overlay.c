@@ -30,8 +30,8 @@ static int prepare(struct image_check *t)
         return 0;
     snprintf(
         command, sizeof(command),
-        "cp /host-products/stageimage.krffs %s/tree/build/krffs/; cp /host-products/setidcheck "
-        "%s/tree/build/tools/inspect/; touch %s/outside; chmod 666 %s/outside",
+        "cp /host-products/stageimage.krffs %s/tree/build/krffs/ && cp /host-products/setidcheck "
+        "%s/tree/build/tools/inspect/ && touch %s/outside && chmod 666 %s/outside",
         t->dir, t->dir, t->dir, t->dir);
     return image_expect(t, command, "");
 }
@@ -43,7 +43,7 @@ static char *volume(struct image_check *t, const char *mask, const char *name, i
     int status;
     snprintf(
         command, sizeof(command),
-        "rm -rf %s/tree/build/layer; umask %s; mkdir -p %s/tree/build/layer/usr/libexec "
+        "set -e; rm -rf %s/tree/build/layer; umask %s; mkdir -p %s/tree/build/layer/usr/libexec "
         "%s/tree/build/layer/usr/share/probe; printf '#!/bin/sh\\n' > "
         "%s/tree/build/layer/usr/libexec/probe; chmod 755 %s/tree/build/layer/usr/libexec/probe; "
         "printf 'data\\n' > %s/tree/build/layer/usr/share/probe/data; umask 002; ln -s %s/outside "
@@ -111,7 +111,7 @@ static void refused(struct image_check *t, const char *tool, const char *expecte
     char command[4096], relative[160], script[512], *out;
     int status, ok;
     snprintf(command, sizeof(command),
-             "mkdir -p %s/fail-%s; ln -s /host-products/mke2fs %s/fail-%s/mke2fs; ln -s "
+             "set -e; mkdir -p %s/fail-%s; ln -s /host-products/mke2fs %s/fail-%s/mke2fs; ln -s "
              "/host-products/debugfs "
              "%s/fail-%s/debugfs; ln -s /host-products/e2fsck %s/fail-%s/e2fsck; rm %s/fail-%s/%s",
              t->dir, tool, t->dir, tool, t->dir, tool, t->dir, tool, t->dir, tool, tool);

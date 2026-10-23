@@ -20,7 +20,7 @@ static int prepare(struct image_check *t)
         !image_put(t, "tree/krffs/manifest_deps.sh", "#!/bin/sh\nexit 0\n", 17, "0755"))
         return 0;
     snprintf(command, sizeof(command),
-             "ln -s /host-products/drive %s/tree/bin/git; ln -s /host-products/drive "
+             "set -e; ln -s /host-products/drive %s/tree/bin/git; ln -s /host-products/drive "
              "%s/tree/build/tools/etude/etude; ln -s /host-products/drive "
              "%s/tree/build/tools/verify/sha256",
              t->dir, t->dir, t->dir);
@@ -40,10 +40,11 @@ int image_tooling(struct image_check *t)
         for (row = 0; row < sizeof(rows) / sizeof(rows[0]); row++) {
             int status;
             char *out;
-            snprintf(command, sizeof(command),
-                     "rm -rf %s/tree/build/vendor %s/tree/build/tooling %s/tree/build/images; "
-                     "mkdir -p %s/tree/build/tooling",
-                     t->dir, t->dir, t->dir, t->dir);
+            snprintf(
+                command, sizeof(command),
+                "set -e; rm -rf %s/tree/build/vendor %s/tree/build/tooling %s/tree/build/images; "
+                "mkdir -p %s/tree/build/tooling",
+                t->dir, t->dir, t->dir, t->dir);
             if (!image_expect(t, command, ""))
                 return 0;
             snprintf(command, sizeof(command), "/host-products/drive %s/tree %s %s", t->dir,

@@ -5,6 +5,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <errno.h>
 #include <unistd.h>
 #include "host_image.h"
 
@@ -17,7 +18,7 @@ int image_remove_tree(const char *path)
     char child[8192];
     int ok = 1;
     if (lstat(path, &st) != 0)
-        return 1;
+        return errno == ENOENT;
     if (!S_ISDIR(st.st_mode))
         return unlink(path) == 0;
     dir = opendir(path);

@@ -275,10 +275,11 @@ static int replacement(struct image_check *t)
              t->dir, t->dir);
     ok = image_expect(t, command, "") &&
          image_source(t, "krffs/mkimage.sh", "tree/krffs/mkimage.sh");
-    snprintf(command, sizeof(command),
-             "cp /host-products/mkfs.krffs /host-products/stageimage.krffs %s/tree/build/krffs/; "
-             "truncate -s 1048576 %s/out/image.krffs; /host-products/mkfs.krffs %s/out/image.krffs",
-             t->dir, t->dir, t->dir);
+    snprintf(
+        command, sizeof(command),
+        "cp /host-products/mkfs.krffs /host-products/stageimage.krffs %s/tree/build/krffs/; "
+        "truncate -s 1048576 %s/out/image.krffs && /host-products/mkfs.krffs %s/out/image.krffs",
+        t->dir, t->dir, t->dir);
     before = image_command(t, command, &status);
     free(before);
     ok = ok && status == 0 && image_text(t, "old.manifest", "text 0644 /old.txt previous\n") &&
