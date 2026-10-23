@@ -15,4 +15,6 @@ int flow_space_mock(int argc, char **argv);
 int flow_agents_guest(struct fixture *f);
 int flow_credential_arguments(struct fixture *f);
 int flow_check_workload(int argc, char **argv);
+int flow_worker(struct fixture *f);
+int flow_worker_mock(int argc, char **argv);
 #endif

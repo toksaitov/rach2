@@ -340,6 +340,7 @@
       ],
       "domain": "machine",
       "architectures": [
+        "i686",
         "x86_64"
       ],
       "workload": {
@@ -640,14 +641,14 @@
           "per_architecture": false
         },
         {
-          "name": "kernel",
-          "node": "rach2/kernel",
-          "per_architecture": true
+          "name": "products-kernel",
+          "node": "x86_64/rach2/kernel",
+          "per_architecture": false
         },
         {
           "name": "products-image",
-          "node": "images/gnu-test.disk",
-          "per_architecture": true
+          "node": "x86_64/images/gnu-test.disk",
+          "per_architecture": false
         },
         {
           "name": "scripts-assets",
@@ -1043,7 +1044,8 @@
         {
           "machine_id": "products",
           "qemu": {
-            "kernel": "kernel",
+            "architecture": "x86_64",
+            "kernel": "products-kernel",
             "initrd": null,
             "disks": [
               {

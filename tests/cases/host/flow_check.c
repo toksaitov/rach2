@@ -44,6 +44,8 @@ int main(int argc, char **argv)
     if (strcmp(name, "host-flow-check")) {
         if (getenv("FLOW_PROGRESS"))
             return flow_progress_mock(argc, argv);
+        if (getenv("FLOW_WORKER"))
+            return flow_worker_mock(argc, argv);
         if (getenv("FLOW_SPACE"))
             return flow_space_mock(argc, argv);
         return flow_basic_mock(argc, argv);
@@ -66,6 +68,8 @@ int main(int argc, char **argv)
     fx_env("FLOW_SELF", f.self);
     if (!strcmp(id, "progress"))
         ok = flow_progress(&f);
+    else if (!strcmp(id, "worker_park"))
+        ok = flow_worker(&f);
     else if (!strcmp(id, "space"))
         ok = flow_space(&f);
     else

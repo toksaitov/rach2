@@ -6,6 +6,8 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <regex.h>
+#include <pwd.h>
+#include <grp.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -473,6 +475,14 @@ int fx_init(struct fixture *f, const char *root, const char *name, const char *s
 {
     memset(f, 0, sizeof(*f));
     owner = f;
+    if (geteuid() == 0) {
+        struct passwd *account = getpwnam("test");
+        if (!account || !fx_mkdir(root) || chown(root, account->pw_uid, account->pw_gid) ||
+            initgroups(account->pw_name, account->pw_gid) || setgid(account->pw_gid) ||
+            setuid(account->pw_uid))
+            return 0;
+    }
+
     if (!ngroups) {
         struct sigaction action;
         memset(&action, 0, sizeof(action));
