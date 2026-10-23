@@ -6,7 +6,7 @@
 
 `etude prepare collection host` builds the native driver and the inventories under `build/tests/host-suite/`. The `tests` and `boots` inventories are separate for i686 and x86-64; the other four cases run once in a collection. The build-only tool `prepare.py` compiles host tests, checker selftests and fuzz replay programs. It reads the existing `host-deps:`, `host-cflags:`, `host-first:`, `host-alone:` and `host-arch:` metadata. Alone checks follow shared checks.
 
-Each inventory records its manifest digest, group and architecture. Each entry records an assertion, label, shared or alone scheduling, relative executable path, arguments, executable SHA-256 and input paths with SHA-256. Compiler dependency files include local headers and recursively included `.c` files. Fuzz entries also record the corpus directory and every corpus file as an argument and input. Reuse requires the same compiler command, inputs and binary. A missing source, empty corpus or compilation failure fails preparation.
+Each inventory records its manifest digest, group and architecture. Each entry records an assertion, label, shared or alone scheduling, relative executable path, arguments, executable SHA-256 and input paths with SHA-256. A separate compiler dependency scan for each translation unit includes local headers and recursively included `.c` files. Fuzz entries also record the corpus directory and every corpus file as an argument and input. Reuse requires the same compiler command, inputs and binary. A missing source, empty corpus or compilation failure fails preparation.
 
 `adapters.json` maps a `host.list` assertion to a prepared executable and optional arguments. Make rules prepare those executables before publishing the scripts inventory. A missing adapter produces an unsupported entry rather than executing the old command. The API protocol assertions use `build/tests/system/fakeapi_test`.
 
@@ -22,7 +22,7 @@ A completed check writes one assertion and one `progress checks N` record. The c
 
 The native driver does not make existing POSIX test fixtures portable. Tests whose compiled sources still invoke an interpreter receive an explicit unsupported result until their fixtures have a native adapter. Other unavailable platform APIs fail preparation, rather than removing an assertion.
 
-* Kernel function fixtures need build-only extraction and compilation, then native execution: `chown`, `krffs_open`, `krffs_root_lock`, `krffs_stat`, `pagecache`, `kstack` and `endothers`.
+The seven extracted kernel fixtures (`chown`, `krffs_open`, `krffs_root_lock`, `krffs_stat`, `pagecache`, `kstack` and `endothers`) are compiled during preparation, then run as native binaries with their original assertions. Their extraction inputs and generated includes enter the fingerprint. The two threaded fixtures use pthreads on POSIX and SRW locks, condition variables and native threads on Windows. `build/tests/host-suite/vfs_unmount` prepares the same unmount fixture for the USB disk case.
 * Doom's C library fixtures need prepared architecture binaries and a declared Rach2 guest executor for their ABI.
 * Build, deployment, flow and resource regressions need shared native filesystem, process and command-mock fixtures. Where the product is intentionally a shell program, it may run in a declared GNU Rach2 helper; the test's setup, control and assertions must remain in C.
 * TinyCC's assembler and linker comparisons need prepared tools and native comparison adapters.

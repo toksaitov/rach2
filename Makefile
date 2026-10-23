@@ -551,15 +551,23 @@ build/tests/cases/host/host: $(ETUDE_HOSTCASE_SRC) $(ETUDE_HDRS)
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Iutils $(ETUDE_PLATFORM_FLAGS) $(ETUDE_PLATFORM_LIBS)
 
+build/tests/host-suite/tests/usbstamp_hosttest: tests/cases/host/prepare.py \
+    tests/host/usbstamp_hosttest.c host-inventory-force
+	python3 -B tests/cases/host/prepare.py --only usbstamp tests build/tests/host-suite/tests.inventory.json
+
+build/tests/host-suite/vfs_unmount: tests/cases/host/fixtures.py tests/host/fixtures/extract.py \
+    tests/system/fixtures/vfs_unmount.c rach2/sys/fs/vfs.c
+	python3 -B tests/cases/host/fixtures.py vfs_unmount $@
+
 build/tests/host-suite/scripts.inventory.json: build/tests/system/fakeapi_test
 
 .PHONY: host-inventory-force
 host-inventory-force:
-build/tests/host-suite/%.inventory.json: tests/cases/host/prepare.py \
+build/tests/host-suite/%.inventory.json: tests/cases/host/prepare.py tests/cases/host/fixtures.py \
     tests/cases/host/host.list tests/cases/host/adapters.json \
     tests/cases/host.host.json host-inventory-force
 	python3 -B tests/cases/host/prepare.py --arch $(ARCH) $* $@
-build/x86_64/tests/host-suite/%.inventory.json: tests/cases/host/prepare.py \
+build/x86_64/tests/host-suite/%.inventory.json: tests/cases/host/prepare.py tests/cases/host/fixtures.py \
     tests/cases/host/host.list tests/cases/host/adapters.json \
     tests/cases/host.host.json host-inventory-force
 	python3 -B tests/cases/host/prepare.py --arch x86_64 $* $@

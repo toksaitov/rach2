@@ -13,6 +13,7 @@ import re
 import shlex
 import subprocess
 import sys
+import fixtures
 
 ROOT = Path(__file__).resolve().parents[3]
 GROUPS = ('tests', 'etude', 'boots', 'checkers', 'fuzz', 'scripts')
@@ -112,15 +113,21 @@ def checks(group, arch, base):
             if not line or line.startswith('#'):
                 continue
             name, label, old = line.split('|', 2)
-            adapter = adapters.get(name)
-            item = entry(name, label, adapter['program'] if adapter else None, [],
-                         adapter.get('arguments', []) if adapter else [])
-            item['command'] = None
-            item['inputs'] = [dict(path='tests/cases/host/host.list',
-                                  sha256=digest(Path('tests/cases/host/host.list'))),
-                              dict(path=str(adapters_path), sha256=digest(adapters_path))]
-            if not adapter:
-                item['unsupported'] = f'no native adapter for the behavioral check: {old}'
+            if name in fixtures.NAMES:
+                command, sources, origins, program = fixtures.recipe(name, base, COMMON)
+                item = entry(name, label, program, sources)
+                item['command'] = command
+                item['data'] = [*origins, 'tests/cases/host/host.list', str(adapters_path)]
+            else:
+                adapter = adapters.get(name)
+                item = entry(name, label, adapter['program'] if adapter else None, [],
+                             adapter.get('arguments', []) if adapter else [])
+                item['command'] = None
+                item['inputs'] = [dict(path='tests/cases/host/host.list',
+                                      sha256=digest(Path('tests/cases/host/host.list'))),
+                                  dict(path=str(adapters_path), sha256=digest(adapters_path))]
+                if not adapter:
+                    item['unsupported'] = f'no native adapter for the behavioral check: {old}'
             yield item
 
 
@@ -133,6 +140,28 @@ def valid_previous(old, item, compiler):
             digest(Path(value['path'])) == value['sha256'] for value in old['inputs'])
     except (KeyError, OSError):
         return False
+
+
+def compiler_inputs(compiler, command, sources):
+    """Scan each translation unit; a shared -MF would retain only the last."""
+    flags = []
+    skip = False
+    for word in command:
+        if skip:
+            skip = False
+        elif word == '-o':
+            skip = True
+        elif word not in sources and word != '-c':
+            flags.append(word)
+    dependencies = set()
+    for source in sources:
+        if not source.endswith('.c'):
+            continue
+        result = subprocess.run([*compiler, *flags, '-MM', '-MT', 'host-input', source],
+                                check=True, text=True, capture_output=True)
+        text = result.stdout.replace('\\\n', ' ')
+        dependencies.update(shlex.split(text.split(':', 1)[1]))
+    return dependencies
 
 
 def prepare(args):
@@ -150,6 +179,8 @@ def prepare(args):
         pass
     inventory = []
     for item in checks(args.group, args.arch, base):
+        if args.only and item['assertion_id'] != args.only:
+            continue
         command = item.pop('command')
         if args.print_commands:
             if command:
@@ -168,16 +199,14 @@ def prepare(args):
                 for source in item['sources']:
                     if not Path(source).is_file():
                         raise ValueError(f"{item['assertion_id']}: missing source {source}")
-                dep = str(base / (item['assertion_id'] + '.d'))
-                full = [*compiler, *command, '-MMD', '-MF', dep]
+                full = [*compiler, *command]
                 print('host prepare: ' + shlex.join(full), flush=True)
                 subprocess.run(full, check=True)
                 program = Path(item['program'])
                 if not program.exists() and Path(str(program) + '.exe').exists():
                     Path(str(program) + '.exe').replace(program)
                 item['sha256'] = digest(program)
-                text = Path(dep).read_text().replace('\\\n', ' ')
-                dependencies = shlex.split(text.split(':', 1)[1])
+                dependencies = compiler_inputs(compiler, command, item['sources'])
                 sources = sorted(set([*item['sources'], *dependencies, *item.get('data', [])]))
                 item['inputs'] = [dict(path=p, sha256=digest(Path(p))) for p in sources]
             for value in item['inputs']:
@@ -197,7 +226,7 @@ def prepare(args):
         item.pop('sources', None)
         item.pop('data', None)
         inventory.append(item)
-    if args.print_commands:
+    if args.print_commands or args.only:
         return
     record = dict(schema_version=1, group=args.group, architecture=args.arch if args.group in ('tests', 'boots') else 'none',
                   manifest_sha256=digest(Path('tests/cases/host.host.json')), checks=inventory)
@@ -212,6 +241,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--arch', choices=('i686', 'x86_64'), default=os.environ.get('ARCH', 'i686'))
     parser.add_argument('--print-commands', action='store_true')
+    parser.add_argument('--only', help='prepare one check for a component build')
     parser.add_argument('group', choices=GROUPS)
     parser.add_argument('output')
     args = parser.parse_args()
