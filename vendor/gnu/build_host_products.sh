@@ -18,7 +18,7 @@ compiler=$GNU_OUT/cross/bin/$GNU_TARGET-gcc
 make --no-print-directory -f tests/cases/host/products.mk \
     CC="$compiler --sysroot=$GNU_OUT/root" PREFIX="$out" \
     SANITIZER_CC="$compiler --sysroot=$GNU_OUT/root -B$GNU_OUT/sanitizers/compiler/ -L$GNU_OUT/sanitizers/root/usr/lib"
-for tool in mke2fs debugfs e2fsck; do
+for tool in mke2fs debugfs e2fsck resize2fs; do
     cp "$ARCH_BUILD/vendor/e2fsprogs/$tool" "$out/$tool"
 done
 

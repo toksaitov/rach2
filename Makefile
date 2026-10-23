@@ -552,6 +552,29 @@ build/tests/cases/host/host: $(ETUDE_HOSTCASE_SRC) $(ETUDE_HDRS)
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Iutils $(ETUDE_PLATFORM_FLAGS) $(ETUDE_PLATFORM_LIBS)
 
+build/tests/cases/host/style: tests/cases/host/style.c tests/cases/host/source_snapshot.c \
+    tests/cases/host/source_snapshot.h tools/etude/json.c utils/sha256.c \
+    $(if $(filter Windows_NT,$(OS)),$(ETUDE_WIN_EXEC_SRC))
+	@mkdir -p $(@D)
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	    -Iutils $(ETUDE_PLATFORM_FLAGS) $(ETUDE_PLATFORM_LIBS)
+
+# Compiler and source checks run during preparation. The native style case
+# verifies the complete source digest and every declared assertion at runtime.
+STYLE_PREP_TOOLS = build/tests/cases/host/style $(ETUDE) build/tools/verify/asciiscan \
+    build/tools/verify/guestcheck build/tools/verify/prosecheck build/tools/verify/sizecheck \
+    build/tools/inspect/elfcheck build/tools/inspect/cfgcheck build/tools/etude/win/pecheck
+.PHONY: style-evidence-force
+style-evidence-force:
+build/tests/style/%.json: tests/cases/host/prepare_style.py tests/cases/host/style.sh \
+    tests/cases/host.style.json $(STYLE_PREP_TOOLS) style-evidence-force
+	python3 -B tests/cases/host/prepare_style.py --arch i686 $* $@
+build/x86_64/tests/style/%.json: tests/cases/host/prepare_style.py tests/cases/host/style.sh \
+    tests/cases/host.style.json $(STYLE_PREP_TOOLS) style-evidence-force
+	python3 -B tests/cases/host/prepare_style.py --arch x86_64 $* $@
+build/tests/style/abi.json: $(LIBC_STAMP)
+build/x86_64/tests/style/abi.json: $(LIBC_STAMP)
+
 build/tests/host-suite/tests/usbstamp_hosttest: tests/cases/host/prepare.py \
     tests/host/usbstamp_hosttest.c host-inventory-force
 	python3 -B tests/cases/host/prepare.py --only usbstamp tests build/tests/host-suite/tests.inventory.json

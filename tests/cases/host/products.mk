@@ -9,7 +9,8 @@ PRODUCT_KRFFS = krffs/krffs_file_system.c krffs/krffs_node.c \
 PRODUCT_FLOW = $(wildcard tests/cases/host/flow_*.c) tests/cases/host/fixture.c utils/sha256.c
 PRODUCT_BUILD = $(wildcard tests/cases/host/build_*.c) tests/cases/host/fixture.c utils/sha256.c
 PRODUCT_PROGRAMS = host-flow-check host-build-check drive stageimage.krffs mkfs.krffs \
-    setidcheck sha256 etude etude-volume host host-suite-probe doom_libc-i686 doom_libc-x86_64
+    setidcheck sha256 etude etude-volume host host-suite-probe doom_libc-i686 doom_libc-x86_64 \
+    growset growboot growroot growroot-memory reflash diskctl bootctl mkfatfixture
 
 .PHONY: all
 all: $(addprefix $(PREFIX)/,$(PRODUCT_PROGRAMS))
@@ -33,6 +34,30 @@ $(PREFIX)/setidcheck: tools/inspect/setidcheck.c
 	@mkdir -p $(@D)
 	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
 $(PREFIX)/sha256: tools/verify/sha256.c
+	@mkdir -p $(@D)
+	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
+$(PREFIX)/growset: utils/growset.c
+	@mkdir -p $(@D)
+	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
+$(PREFIX)/growboot: utils/growboot.c utils/bootslot.c
+	@mkdir -p $(@D)
+	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
+$(PREFIX)/growroot: utils/growroot.c utils/gptdisk.c
+	@mkdir -p $(@D)
+	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
+$(PREFIX)/growroot-memory: utils/growroot.c utils/gptdisk.c
+	@mkdir -p $(@D)
+	$(CC) $(PRODUCT_CFLAGS) -DGROWROOT_MEMORY_MIB=1048576u -o $@ $^
+$(PREFIX)/reflash: utils/reflash.c utils/sectorcopy.c utils/sha256.c
+	@mkdir -p $(@D)
+	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
+$(PREFIX)/diskctl: utils/diskctl.c utils/gptdisk.c
+	@mkdir -p $(@D)
+	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
+$(PREFIX)/bootctl: utils/bootctl.c utils/bootslot.c utils/bootverb.c utils/grubslot.c
+	@mkdir -p $(@D)
+	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
+$(PREFIX)/mkfatfixture: tests/host/mkfatfixture.c
 	@mkdir -p $(@D)
 	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
 $(PREFIX)/etude: $(ETUDE_SRC)

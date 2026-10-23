@@ -32,6 +32,14 @@ The seven extracted kernel fixtures (`chown`, `krffs_open`, `krffs_root_lock`, `
 
 `host.sh` remains as the legacy driver and build-command interface while its callers migrate. The prepared native path does not use it. `etude_hostdriver_hosttest.c` checks the native driver's execution and immutable input boundary. The legacy scheduling and interruption regressions remain declared in `host.list` until their adapters preserve those checks.
 
+## Source-check evidence
+
+`style.c` reads source-check evidence made by `prepare_style.py` during artifact preparation. The preparation host runs the existing checks, requires every assertion to pass, and requires the recorded compiler and formatter versions, sparse and a judged complexity result. The evidence records the command, architecture, judge versions, assertions, branches, preparation time and source digest. The native case reports that these checks ran during preparation.
+
+The source digest includes sorted paths and file contents, so adding or removing a source changes it. `source_snapshot.c` enumerates the in-house source, build, test, manual and milestone directories and the port recipes; it excludes extracted upstream trees, installed products, caches and binary artifacts. The native reader checks this digest and exact assertion and branch coverage before reporting a pass. A missing or stale record is incomplete and needs preparation again. It never launches a compiler or interpreter. The collection's prepared artifact record also protects the evidence file itself.
+
+`krffscheck.c` runs the offline KRFFS tools directly through the native executor. It constructs corrupt images and each prefix of the update protocol in C, then checks repair, retained data and wrong write orders. `native.c` keeps its images under `build/tests`, records complete child output and removes successful scratch after process cleanup is confirmed.
+
 ## Product and driver regressions
 
 `host-build-check` is a prepared C controller for the compiler, build and runner assertions of `host.list`. The controller creates fixtures, launches product programs, reads results and checks them through `fixture.c`. Command substitutes are native C entries of the same executable. The products retain their own command language: a commit hook runs by its executable entry, a port recipe runs in its normal shell, and make runs its own recipes. No old test shell driver runs.

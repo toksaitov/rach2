@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "host.style",
-  "summary": "The source checks of tests/run style over the in-house tree, booting nothing; their program is tests/cases/host/style.sh",
+  "summary": "Source-check evidence produced during preparation and verified against the complete source digest by tests/cases/host/style.c",
   "cases": [
     {
       "case_id": "host.style.assignments",
@@ -10,8 +10,8 @@
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["assignments"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "make", "awk"], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the native reader writes no files"},
       "assertions": [
         {"assertion_id": "probecheck", "checks": "tools/verify/probecheck.sh passes the tree", "source": "program"},
         {"assertion_id": "probecheck-test", "checks": "tests/system/probecheck_test.sh finds each planted assignment fault", "source": "program"},
@@ -22,9 +22,10 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 1048576, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
-        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
+        {"name": "style-evidence", "node": "tests/style/assignments.json", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -36,8 +37,8 @@
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["cppcheck"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["cppcheck"], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the native reader writes no files"},
       "assertions": [
         {"assertion_id": "kernel-runs", "checks": "both passes over the kernel run to their end", "source": "program"},
         {"assertion_id": "host-runs", "checks": "the pass over the host programs runs to its end", "source": "program"},
@@ -50,9 +51,10 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 1048576, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
-        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
+        {"name": "style-evidence", "node": "tests/style/cppcheck.json", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -64,8 +66,8 @@
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["shellcheck"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["shellcheck"], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the native reader writes no files"},
       "assertions": [
         {"assertion_id": "scripts-listed", "checks": "tools/verify/scripts.sh lists the scripts, and the list is not empty", "source": "program"},
         {"assertion_id": "scripts-clean", "checks": "shellcheck passes every script listed", "source": "program"}
@@ -74,9 +76,10 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 1048576, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
-        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
+        {"name": "style-evidence", "node": "tests/style/shellcheck.json", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -88,8 +91,8 @@
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["conventions"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "awk"], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the native reader writes no files"},
       "assertions": [
         {"assertion_id": "no-line-comments", "checks": "no in-house C file has a // comment", "source": "program"},
         {"assertion_id": "ascii", "checks": "no in-house C file has a byte outside ASCII", "source": "program"},
@@ -102,10 +105,11 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 1048576, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
-        {"name": "asciiscan", "node": "tools/verify/asciiscan", "per_architecture": false}
+        {"name": "asciiscan", "node": "tools/verify/asciiscan", "per_architecture": false},
+        {"name": "style-evidence", "node": "tests/style/conventions.json", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -117,8 +121,8 @@
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["clang-format"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["clang-format"], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the native reader writes no files"},
       "assertions": [
         {"assertion_id": "formatted", "checks": "clang-format would change no in-house file", "source": "program"}
       ],
@@ -128,9 +132,10 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 1048576, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
-        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
+        {"name": "style-evidence", "node": "tests/style/clang-format.json", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -142,8 +147,8 @@
       "domain": "host",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": ["build-inputs"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["make", "i686-elf-gcc", "x86_64-elf-gcc"], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the native reader writes no files"},
       "assertions": [
         {"assertion_id": "link-inputs", "checks": "tests/system/build_inputs_test.sh passes", "source": "program"}
       ],
@@ -151,9 +156,10 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 1048576, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
-        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
+        {"name": "style-evidence", "node": "tests/style/build-inputs.json", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -165,8 +171,8 @@
       "domain": "host",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": ["abi"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["i686-elf-gcc", "i686-elf-readelf", "x86_64-elf-gcc", "x86_64-elf-readelf"], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the native reader writes no files"},
       "assertions": [
         {"assertion_id": "musl-link", "checks": "the program links against the architecture's musl", "source": "program"},
         {"assertion_id": "elf-header", "checks": "its ELF header and program headers are those of the architecture's ABI", "source": "program"}
@@ -175,9 +181,10 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 1048576, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
-        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
+        {"name": "style-evidence", "node": "tests/style/abi.json", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -189,8 +196,8 @@
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["sources"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["make", "clang"], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the native reader writes no files"},
       "assertions": [
         {"assertion_id": "kernel-list", "checks": "tools/verify/check_sources.sh finds every kernel source listed and every entry on disk", "source": "program"},
         {"assertion_id": "guest-lists", "checks": "guestcheck finds the guest makefiles in agreement with the host build", "source": "program"},
@@ -202,10 +209,11 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 1048576, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
-        {"name": "guestcheck", "node": "tools/verify/guestcheck", "per_architecture": false}
+        {"name": "guestcheck", "node": "tools/verify/guestcheck", "per_architecture": false},
+        {"name": "style-evidence", "node": "tests/style/sources.json", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -217,8 +225,8 @@
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["text"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "awk"], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the native reader writes no files"},
       "assertions": [
         {"assertion_id": "textcheck", "checks": "tools/verify/textcheck.sh finds nothing", "source": "program"},
         {"assertion_id": "comment-columns", "checks": "no comment line is wider than 80 columns", "source": "program"},
@@ -229,10 +237,11 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 1048576, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
-        {"name": "prosecheck", "node": "tools/verify/prosecheck", "per_architecture": false}
+        {"name": "prosecheck", "node": "tools/verify/prosecheck", "per_architecture": false},
+        {"name": "style-evidence", "node": "tests/style/text.json", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -244,8 +253,8 @@
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["messages"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "awk"], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the native reader writes no files"},
       "assertions": [
         {"assertion_id": "kernel-formats", "checks": "tools/verify/fmtcheck.sh finds nothing", "source": "program"}
       ],
@@ -253,9 +262,10 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 1048576, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
-        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
+        {"name": "style-evidence", "node": "tests/style/messages.json", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -267,8 +277,8 @@
       "domain": "host",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": ["repro"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["make", "sh"], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the native reader writes no files"},
       "assertions": [
         {"assertion_id": "krffs-tools", "checks": "the KRFFS host tools build", "source": "program"},
         {"assertion_id": "one-image", "checks": "tools/verify/check_repro.sh passes", "source": "program"}
@@ -277,9 +287,10 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 1048576, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
-        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
+        {"name": "style-evidence", "node": "tests/style/repro.json", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -291,8 +302,8 @@
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["checkers"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["make", "sh", "python3"], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the native reader writes no files"},
       "assertions": [
         {"assertion_id": "elfcheck", "checks": "elfcheck --selftest passes", "source": "program"},
         {"assertion_id": "cfgcheck", "checks": "cfgcheck --selftest passes", "source": "program"},
@@ -311,14 +322,15 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 1048576, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
         {"name": "elfcheck", "node": "tools/inspect/elfcheck", "per_architecture": false},
         {"name": "cfgcheck", "node": "tools/inspect/cfgcheck", "per_architecture": false},
         {"name": "pecheck", "node": "tools/etude/win/pecheck", "per_architecture": false},
         {"name": "etude", "node": "tools/etude/etude", "per_architecture": false},
-        {"name": "asciiscan", "node": "tools/verify/asciiscan", "per_architecture": false}
+        {"name": "asciiscan", "node": "tools/verify/asciiscan", "per_architecture": false},
+        {"name": "style-evidence", "node": "tests/style/checkers.json", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -330,8 +342,8 @@
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["devlog"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": [], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the native reader writes no files"},
       "assertions": [
         {"assertion_id": "index", "checks": "prosecheck devlog passes", "source": "program"}
       ],
@@ -339,10 +351,11 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 1048576, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
-        {"name": "prosecheck", "node": "tools/verify/prosecheck", "per_architecture": false}
+        {"name": "prosecheck", "node": "tools/verify/prosecheck", "per_architecture": false},
+        {"name": "style-evidence", "node": "tests/style/devlog.json", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -354,8 +367,8 @@
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["registry"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["make", "awk", "sh"], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the native reader writes no files"},
       "assertions": [
         {"assertion_id": "names-once", "checks": "no suite is named twice in tests/registry", "source": "program"},
         {"assertion_id": "families", "checks": "every row has a family of cases, every family a row, and tests/system/suites.mk no run- target", "source": "program"},
@@ -368,10 +381,11 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 1048576, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
-        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false}
+        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false},
+        {"name": "style-evidence", "node": "tests/style/registry.json", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -383,8 +397,8 @@
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["waits"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "awk"], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the native reader writes no files"},
       "assertions": [
         {"assertion_id": "waits-and-criteria", "checks": "tools/verify/suitecheck.sh finds no guessed duration, unreported skip or invalid manifest", "source": "program"}
       ],
@@ -392,10 +406,11 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 1048576, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
-        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false}
+        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false},
+        {"name": "style-evidence", "node": "tests/style/waits.json", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -407,8 +422,8 @@
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["manual"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["make", "mandoc"], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the native reader writes no files"},
       "assertions": [
         {"assertion_id": "mancheck", "checks": "make mancheck passes", "source": "program"}
       ],
@@ -416,9 +431,10 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 1048576, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
-        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
+        {"name": "style-evidence", "node": "tests/style/manual.json", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -430,8 +446,8 @@
       "domain": "host",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": ["clang"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["clang", "make"], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the native reader writes no files"},
       "assertions": [
         {"assertion_id": "no-warnings", "checks": "every kernel source compiles under clang's list with no warning", "source": "program"}
       ],
@@ -441,9 +457,10 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 1048576, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
-        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
+        {"name": "style-evidence", "node": "tests/style/clang.json", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -455,8 +472,8 @@
       "domain": "host",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": ["sparse"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["make"], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the native reader writes no files"},
       "assertions": [
         {"assertion_id": "runs", "checks": "sparse runs over every kernel source", "source": "program"},
         {"assertion_id": "no-findings", "checks": "sparse reports no warning or error", "source": "program"}
@@ -467,9 +484,10 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 1048576, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
-        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
+        {"name": "style-evidence", "node": "tests/style/sparse.json", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -481,8 +499,8 @@
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["sizes"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": [], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the native reader writes no files"},
       "assertions": [
         {"assertion_id": "within-limits", "checks": "sizecheck finds no function past a limit tools/verify/sizes.reasons does not allow", "source": "program"}
       ],
@@ -492,10 +510,11 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 1048576, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
-        {"name": "sizecheck", "node": "tools/verify/sizecheck", "per_architecture": false}
+        {"name": "sizecheck", "node": "tools/verify/sizecheck", "per_architecture": false},
+        {"name": "style-evidence", "node": "tests/style/sizes.json", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -507,8 +526,8 @@
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["links"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "awk"], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the native reader writes no files"},
       "assertions": [
         {"assertion_id": "documents", "checks": "tools/verify/linkcheck.sh passes the documents git tracks", "source": "program"},
         {"assertion_id": "checklists", "checks": "tools/verify/linkcheck.sh passes the milestone checklists", "source": "program"}
@@ -517,9 +536,10 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 1048576, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
-        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
+        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
+        {"name": "style-evidence", "node": "tests/style/links.json", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}

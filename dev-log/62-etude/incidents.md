@@ -149,3 +149,9 @@ The first Codex recovery check on 23 October found the stopped `m` and `v` worke
 The same check found the Mac below the resource rule's free-space threshold, with 73 GiB free. No process used the old Mac comparison copy. Removing unused generated scenario images and its tooling-machine cache raised free space to 97 GiB; the GNU build caches and system images, source, run records and failed-case evidence were kept. The previous manager's expected progress file was absent. The recovery now records assignments, unresolved work and the next integration action explicitly.
 
 The first Codex recovery check found no manager progress record. The coordinating chat restored it after the initial assignments and cleanup, and reconciled the paused assignments with the board. Subsequent checks must read that record before changing the action or deadline.
+
+## A resumed helper wrote in the coordinating checkout
+
+At 19:35 on 23 October, the coordinating check found six new files from a resumed Codex helper in the coordinating checkout. The helper had relied on the shell tool's default directory after resuming its task. No existing file was overwritten, staged or committed. The helper moved only its six files to its own worktree and checked its branch. Every helper shell call now supplies its worktree directory explicitly.
+
+The same check found the scheduled integration of the remaining flow controllers incomplete: two controllers still needed conversion after the completed batches had been imported. Their worker kept those two tasks; the idle worker took the independent grow and image cases. Long checks remained deferred until the implementation batch was complete, as the owner requested.
