@@ -2,6 +2,11 @@
  * ext2_hosttest.c: the ext2 driver, rach2/sys/fs/ext2.c, over the buffer
  * cache, on volumes the host's mke2fs makes.
  *
+ * host-tools: setidcheck mke2fs debugfs dumpe2fs e2fsck
+ * host-deps: tests/host/compat/ext2_fixture.c tests/host/compat/command_host.c
+ * host-deps: tools/etude/capture.c tools/etude/posix/exec.c
+ * host-deps: tools/etude/posix/keeper.c tools/etude/posix/process.c
+ * host-cflags: -I tools/etude/include
  * host-deps: rach2/sys/fs/ext2.c rach2/sys/fs/bcache.c rach2/sys/fs/fatcommon.c
  * host-deps: rach2/sys/block/chain.c rach2/sys/fs/fd.c rach2/sys/fs/lock.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
@@ -18,9 +23,9 @@
  * 1 KiB volume has a sparse file with a byte behind each level of
  * indirection and mounts read-only by name, as a dir_index volume does; an
  * unknown incompatible feature fails the mount. The tree, the volumes,
- * setidcheck, built at every run, and what the host's tools print are kept
- * in a directory of the test's own (compat/fixdir_host.c), which main names
- * to the shell commands as `$FIX`, so that two runs at once share no file.
+ * prepared setidcheck and what the independent tools print are kept in a
+ * directory of the test's own (compat/fixdir_host.c). Native C creates the
+ * fixtures and controls every command, so concurrent runs share no file.
  * The test includes no hosted header: the kernel headers define the
  * fixed-width types, and the C library calls it makes are declared below.
  */
@@ -29,10 +34,13 @@
 #include "../../rach2/sys/lib/kerrno.h"
 #include "../../rach2/sys/proc/process.h"
 #include "fixdir_host.h"
+#include "command_host.h"
+#include "ext2_fixture.h"
 
 extern int printf(const char *fmt, ...);
 extern int snprintf(char *s, unsigned long n, const char *fmt, ...);
-extern int system(const char *cmd);
+extern int symlink(const char *target, const char *path);
+extern int unlink(const char *path);
 extern void exit(int status);
 extern void *fopen(const char *path, const char *mode);
 extern int fseek(void *f, long off, int whence);
@@ -360,12 +368,6 @@ static int streq(const char *a, const char *b)
     return strcmp(a, b) == 0;
 }
 
-/** Run `cmd` through the shell; whether it exited with status 0. */
-static int run(const char *cmd)
-{
-    return system(cmd) == 0;
-}
-
 /**
  * Make the image at `path`, of `bytes` bytes, the device. The image open
  * before is synced through the cache and closed, and the cache is emptied.
@@ -541,13 +543,12 @@ static void same_as_tree(const char *guest, const char *what)
  */
 static void against_reader(const char *img)
 {
-    char cmd[1024];
     char line[1024];
+    const char *argv[] = {host_tool_path("setidcheck"), "--nodes", "--ext2", img, 0};
     void *f;
     int listed = 0, agreed = 0;
 
-    fix_format(cmd, sizeof(cmd), "$FIX/setidcheck --nodes --ext2 %s > $FIX/nodes.txt", img);
-    if (!run(cmd)) {
+    if (host_command(argv, fix_path("nodes.txt"), 0, 0, 0) != 0) {
         check(0, "setidcheck lists the image's nodes");
         return;
     }
@@ -610,25 +611,10 @@ static void against_reader(const char *img)
  */
 static void build_tree(void)
 {
-    run("mkdir -p $FIX/tree/dir/sub $FIX/tree/many");
-    run("printf 'hello\\n' > $FIX/tree/hello.txt");
-    run("printf 'deep\\n' > $FIX/tree/dir/sub/deep.txt");
-    run("head -c 200000 /dev/urandom > $FIX/tree/dir/big.bin");
-    run("ln -s hello.txt $FIX/tree/fast");
-    run("ln -s "
-        "dir/sub/deep.txt/../../../dir/sub/deep.txt/../../sub/deep.txt/../deep.txt/../"
-        "deep.txt $FIX/tree/slow");
-    run("ln $FIX/tree/hello.txt $FIX/tree/hello.link");
-    run("dd if=/dev/zero of=$FIX/tree/sparse bs=1 count=0 seek=5000000 2>/dev/null; "
-        "printf 'end' >> $FIX/tree/sparse");
-    run("i=0; while [ $i -lt 300 ]; do printf 'x' > $FIX"
-        "/tree/many/file$i.txt; i=$((i+1)); done");
-    run("mkdir -p $FIX/levels; "
-        "dd if=/dev/zero of=$FIX/levels/levels bs=1 count=0 seek=70000000 2>/dev/null; "
-        "printf 'A' | dd of=$FIX/levels/levels bs=1 seek=0 conv=notrunc 2>/dev/null; "
-        "printf 'B' | dd of=$FIX/levels/levels bs=1 seek=12388 conv=notrunc 2>/dev/null; "
-        "printf 'C' | dd of=$FIX/levels/levels bs=1 seek=300000 conv=notrunc 2>/dev/null; "
-        "printf 'D' | dd of=$FIX/levels/levels bs=1 seek=69000000 conv=notrunc 2>/dev/null");
+    if (!ext2_fixture_tree(fix_dir())) {
+        printf("ext2_hosttest: the native fixture tree could not be made\n");
+        exit(1);
+    }
 }
 
 /**
@@ -639,24 +625,24 @@ static void build_tree(void)
 static uint64_t build_image(const char *img, int block, int inode, const char *features,
                             unsigned long mib, const char *tree)
 {
-    char cmd[2048];
-
-    fix_format(cmd, sizeof(cmd),
-               ". tools/setup/e2fsprogs_path.sh; img=%s; rm -f $img; : > $img; "
-               "E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b %d -I %d -O %s -d $FIX"
-               "/%s $img %luM >/dev/null 2>&1 && "
-               "debugfs -w -R 'mknod cold c 4 5' $img >/dev/null 2>&1 && "
-               "debugfs -w -R 'mknod cnew c 1 1' $img >/dev/null 2>&1 && "
-               "debugfs -w -R 'set_inode_field /cnew block[0] 0' $img >/dev/null 2>&1 && "
-               "debugfs -w -R 'set_inode_field /cnew block[1] 286338160' $img >/dev/null 2>&1 && "
-               "debugfs -w -R 'mknod bdev b 8 1' $img >/dev/null 2>&1 && "
-               "debugfs -w -R 'set_inode_field /hello.txt uid 7' $img >/dev/null 2>&1 && "
-               "debugfs -w -R 'set_inode_field /hello.txt gid 9' $img >/dev/null 2>&1 && "
-               "debugfs -w -R 'set_inode_field /hello.txt mode 0104755' $img >/dev/null 2>&1",
-               img, block, inode, features, tree, mib);
-    if (!run(cmd)) {
-        printf("ext2_hosttest: mke2fs or debugfs failed for %s\n", img);
+    static const char *const edits[] = {"mknod cold c 4 5",
+                                        "mknod cnew c 1 1",
+                                        "set_inode_field /cnew block[0] 0",
+                                        "set_inode_field /cnew block[1] 286338160",
+                                        "mknod bdev b 8 1",
+                                        "set_inode_field /hello.txt uid 7",
+                                        "set_inode_field /hello.txt gid 9",
+                                        "set_inode_field /hello.txt mode 0104755"};
+    unsigned i;
+    if (!ext2_fixture_image(img, block, inode, features, mib, fix_path(tree))) {
+        printf("ext2_hosttest: mke2fs failed for %s\n", img);
         exit(1);
+    }
+    for (i = 0; i < sizeof edits / sizeof edits[0]; i++) {
+        if (!ext2_fixture_debugfs(img, edits[i], 1, 0)) {
+            printf("ext2_hosttest: debugfs failed for %s\n", img);
+            exit(1);
+        }
     }
     return (uint64_t)mib << 20;
 }
@@ -925,8 +911,8 @@ static void refusal_rows(void)
     unmount_image();
 
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
-    run(". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'set_inode_field /dir/big.bin size "
-        "5000000000' $FIX/mut.ext2 >/dev/null 2>&1");
+    ext2_fixture_debugfs(fix_path("mut.ext2"), "set_inode_field /dir/big.bin size 5000000000", 1,
+                         0);
     use_image(img, bytes);
     check(mount_image() == 0, "the volume with the big file mounts");
     n = walk("/dir/big.bin", &err);
@@ -948,8 +934,7 @@ static void refusal_rows(void)
     unmount_image();
 
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
-    run(". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'set_inode_field /hello.txt block[0] "
-        "9999999' $FIX/mut.ext2 >/dev/null 2>&1");
+    ext2_fixture_debugfs(fix_path("mut.ext2"), "set_inode_field /hello.txt block[0] 9999999", 1, 0);
     use_image(img, bytes);
     check(mount_image() == 0, "the volume with the bad pointer mounts");
     n = walk("/hello.txt", &err);
@@ -962,8 +947,7 @@ static void refusal_rows(void)
     unmount_image();
 
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
-    run(". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'set_inode_field /hello.txt block[0] "
-        "1' $FIX/mut.ext2 >/dev/null 2>&1");
+    ext2_fixture_debugfs(fix_path("mut.ext2"), "set_inode_field /hello.txt block[0] 1", 1, 0);
     use_image(img, bytes);
     check(mount_image() == 0, "the volume with the pointer into a table mounts");
     n = walk("/hello.txt", &err);
@@ -980,8 +964,7 @@ static void refusal_rows(void)
         void *f;
         unsigned long table = 0;
 
-        run(". tools/setup/e2fsprogs_path.sh; dumpe2fs $FIX"
-            "/mut.ext2 2>/dev/null | grep 'Inode table at' | head -1 > $FIX/table.txt");
+        ext2_fixture_line(img, "dumpe2fs", 0, "Inode table at", 0, fix_path("table.txt"));
         f = fopen(fix_path("table.txt"), "r");
         if (f && fgets(line, sizeof(line), f)) {
             char *p = line;
@@ -997,11 +980,8 @@ static void refusal_rows(void)
         if (table != 0) {
             char cmd[512];
 
-            snprintf(cmd, sizeof(cmd),
-                     ". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'set_inode_field /hello.txt "
-                     "block[0] %lu' $FIX/mut.ext2 >/dev/null 2>&1",
-                     table);
-            run(cmd);
+            snprintf(cmd, sizeof(cmd), "set_inode_field /hello.txt block[0] %lu", table);
+            ext2_fixture_debugfs(img, cmd, 1, 0);
             use_image(img, bytes);
             check(mount_image() == 0, "the volume with the pointer into the inode table mounts");
             n = walk("/hello.txt", &err);
@@ -1029,8 +1009,7 @@ static void refusal_rows(void)
             char line[256];
             void *f;
 
-            run(". tools/setup/e2fsprogs_path.sh; debugfs -R 'stat /' $FIX"
-                "/mut.ext2 2>/dev/null | grep -A1 '^BLOCKS' | tail -1 > $FIX/blk.txt");
+            ext2_fixture_line(img, "debugfs", "stat /", "BLOCKS", 1, fix_path("blk.txt"));
             f = fopen(fix_path("blk.txt"), "r");
             if (f && fgets(line, sizeof(line), f)) {
                 char *p = line;
@@ -1098,8 +1077,7 @@ static void refusal_rows(void)
                         "^ext_attr,^has_journal,^extent,^64bit,^flex_bg,"
                         "^metadata_csum,^huge_file,^dir_nlink,^extra_isize",
                         16, "tree");
-    run(". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'ssv rev_level 0' $FIX"
-        "/mut.ext2 >/dev/null 2>&1");
+    ext2_fixture_debugfs(fix_path("mut.ext2"), "ssv rev_level 0", 1, 0);
     use_image(img, bytes);
     check(mount_image() == 0, "a revision 0 volume mounts");
     same_as_tree("/hello.txt", "a revision 0 volume reads");
@@ -1127,8 +1105,7 @@ static void refusal_rows(void)
     unmount_image();
 
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
-    run(". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'set_inode_field /dir size 1' $FIX"
-        "/mut.ext2 >/dev/null 2>&1");
+    ext2_fixture_debugfs(fix_path("mut.ext2"), "set_inode_field /dir size 1", 1, 0);
     use_image(img, bytes);
     check(mount_image() == 0, "the volume with the short directory mounts");
     check(walk("/dir/sub", &err) == 0 && err == -EIO && memcmp(last_warn, "directory ", 10) == 0,
@@ -1136,10 +1113,17 @@ static void refusal_rows(void)
     unmount_image();
 
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
-    run("t=$(printf 'a%.0s' $(seq 1 1021)); ln -s \"$t\" $FIX/tree/long1021; "
-        ". tools/setup/e2fsprogs_path.sh; rm -f $FIX/mut.ext2; : > $FIX/mut.ext2; "
-        "E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 -O " PROFILE " -d $FIX"
-        "/tree $FIX/mut.ext2 16M >/dev/null 2>&1; rm -f $FIX/tree/long1021");
+    {
+        char target[1022];
+        memset(target, 'a', sizeof target - 1);
+        target[sizeof target - 1] = 0;
+        if (symlink(target, fix_path("tree/long1021")) ||
+            !ext2_fixture_image(img, 4096, 128, PROFILE, 16, fix_path("tree")) ||
+            unlink(fix_path("tree/long1021"))) {
+            printf("ext2_hosttest: the long-link fixture could not be made\n");
+            exit(1);
+        }
+    }
     use_image(img, bytes);
     check(mount_image() == 0, "the volume with the long link mounts");
     n = walk("/long1021", &err);
@@ -1154,8 +1138,7 @@ static void refusal_rows(void)
     }
     unmount_image();
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
-    run(". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'set_inode_field /slow block[0] 0' $FIX"
-        "/mut.ext2 >/dev/null 2>&1");
+    ext2_fixture_debugfs(fix_path("mut.ext2"), "set_inode_field /slow block[0] 0", 1, 0);
     use_image(img, bytes);
     check(mount_image() == 0, "the volume with the blockless slow link mounts");
     n = walk("/slow", &err);
@@ -1167,21 +1150,18 @@ static void refusal_rows(void)
     unmount_image();
 
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
-    run(". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'set_bg 0 free_blocks_count 65535' $FIX"
-        "/mut.ext2 >/dev/null 2>&1");
+    ext2_fixture_debugfs(fix_path("mut.ext2"), "set_bg 0 free_blocks_count 65535", 1, 0);
     use_image(img, bytes);
     check(mount_image() == -EINVAL && streq(last_warn, "refused: group free count"),
           "a free count past the group is refused by name");
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
-    run(". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'set_bg 0 block_bitmap 1' $FIX"
-        "/mut.ext2 >/dev/null 2>&1");
+    ext2_fixture_debugfs(fix_path("mut.ext2"), "set_bg 0 block_bitmap 1", 1, 0);
     use_image(img, bytes);
     check(mount_image() == -EINVAL &&
               memcmp(last_warn, "refused: group 0: bitmaps at 1 and ", 35) == 0,
           "a bitmap on the descriptors' block is refused by name");
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
-    run(". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'set_bg 0 inode_table 0' $FIX"
-        "/mut.ext2 >/dev/null 2>&1");
+    ext2_fixture_debugfs(fix_path("mut.ext2"), "set_bg 0 inode_table 0", 1, 0);
     use_image(img, bytes);
     check(mount_image() == -EINVAL && memcmp(last_warn, "refused: group 0: bitmaps at ", 29) == 0 &&
               strstr(last_warn, ", table at 0, in blocks "),
@@ -1224,8 +1204,7 @@ static void refusal_rows(void)
     unmount_image();
 
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
-    run(". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'set_inode_field /sparse size "
-        "4294967295' $FIX/mut.ext2 >/dev/null 2>&1");
+    ext2_fixture_debugfs(fix_path("mut.ext2"), "set_inode_field /sparse size 4294967295", 1, 0);
     use_image(img, bytes);
     check(mount_image() == 0, "the volume with the largest file mounts");
     n = walk("/sparse", &err);
@@ -1378,11 +1357,7 @@ static void fill_pattern(void)
  */
 static int e2fsck_clean(const char *img)
 {
-    char cmd[512];
-
-    fix_format(cmd, sizeof(cmd),
-               ". tools/setup/e2fsprogs_path.sh; e2fsck -fn %s > $FIX/fsck.out 2>&1", img);
-    return system(cmd) == 0;
+    return ext2_fixture_fsck(img, "-fn", fix_path("fsck.out")) == 0;
 }
 
 /**
@@ -1455,17 +1430,10 @@ static void time_row(void)
  */
 static int e2fsck_status(const char *img)
 {
-    char cmd[512];
-    int rc;
-
-    fix_format(cmd, sizeof(cmd),
-               ". tools/setup/e2fsprogs_path.sh; e2fsck -fn %s > $FIX/fsck.out 2>&1", img);
-    rc = system(cmd);
-    system(
-        "awk '/[?] no$/ { if ($0 ~ /^(Fix|Clear|Allocate|Salvage|Connect to .lost.found)[?] no$/) "
-        "print prev; else print $0 } /./ { prev = $0 }' $FIX/fsck.out > $FIX"
-        "/findings.txt");
-    return (rc >> 8) & 0xFF;
+    int rc = ext2_fixture_fsck(img, "-fn", fix_path("fsck.out"));
+    if (!ext2_fixture_findings(fix_path("fsck.out"), fix_path("findings.txt")))
+        return 8;
+    return rc;
 }
 
 /* The repairs the order of writes allows at a stop: counts, bitmaps, a
@@ -1548,33 +1516,38 @@ static int findings_allowed(int counts)
 /** Whether setidcheck's reader walks every node of `img` without a fault. */
 static int reader_walks(const char *img)
 {
-    char cmd[512];
-
-    fix_format(cmd, sizeof(cmd), "$FIX/setidcheck --nodes --ext2 %s > $FIX/nodes.txt 2>&1", img);
-    return system(cmd) == 0;
+    const char *argv[] = {host_tool_path("setidcheck"), "--nodes", "--ext2", img, 0};
+    return host_command(argv, fix_path("nodes.txt"), fix_path("nodes.txt"), 0, 0) == 0;
 }
 
 /** Whether debugfs's answer to `request` has the text `text`. */
 static int debugfs_says(const char *img, const char *request, const char *text)
 {
-    char cmd[600];
-
-    fix_format(cmd, sizeof(cmd),
-               ". tools/setup/e2fsprogs_path.sh; debugfs -R '%s' %s 2>/dev/null | grep -qF '%s'",
-               request, img, text);
-    return system(cmd) == 0;
+    return ext2_fixture_debugfs(img, request, 0, fix_path("debugfs.txt")) &&
+           ext2_fixture_contains(fix_path("debugfs.txt"), text);
 }
 
 /** Whether debugfs's `ls -l` of `dir` in `img` lists `name`. */
 static int debugfs_lists(const char *img, const char *dir, const char *name)
 {
-    char cmd[600];
-
-    fix_format(
-        cmd, sizeof(cmd),
-        ". tools/setup/e2fsprogs_path.sh; debugfs -R 'ls -l %s' %s 2>/dev/null | grep -q ' %s$'",
-        dir, img, name);
-    return system(cmd) == 0;
+    char request[600], line[4096];
+    void *f;
+    int found = 0;
+    unsigned long n, len = strlen(name);
+    snprintf(request, sizeof request, "ls -l %s", dir);
+    if (!ext2_fixture_debugfs(img, request, 0, fix_path("debugfs.txt")))
+        return 0;
+    f = fopen(fix_path("debugfs.txt"), "r");
+    while (f && fgets(line, sizeof line, f)) {
+        n = strlen(line);
+        if (n && line[n - 1] == '\n')
+            line[--n] = 0;
+        if (n > len && line[n - len - 1] == ' ' && !strcmp(line + n - len, name))
+            found = 1;
+    }
+    if (f)
+        fclose(f);
+    return found;
 }
 
 /* The sequences, each on a fresh volume; a sequence returns 0 and leaves
@@ -2145,11 +2118,7 @@ static int debugfs_numbers(const char *cmd, const char *key, uint64_t *out, int 
     int n = 0;
     void *f;
 
-    fix_format(line, sizeof(line),
-               ". tools/setup/e2fsprogs_path.sh; debugfs -R '%s' %s > $FIX"
-               "/debugfs.txt 2>/dev/null",
-               cmd, wimg);
-    run(line);
+    ext2_fixture_debugfs(wimg, cmd, 0, fix_path("debugfs.txt"));
     f = fopen(fix_path("debugfs.txt"), "r");
     if (!f) {
         return 0;
@@ -2179,17 +2148,12 @@ static int debugfs_numbers(const char *cmd, const char *key, uint64_t *out, int 
 static int debugfs_list(const char *cmd, const char *key, uint64_t *out, int cap)
 {
     static char text[65536];
-    char line[512];
     unsigned long got;
     const char *at;
     int n = 0;
     void *f;
 
-    fix_format(line, sizeof(line),
-               ". tools/setup/e2fsprogs_path.sh; debugfs -R '%s' %s > $FIX"
-               "/debugfs.txt 2>/dev/null",
-               cmd, wimg);
-    run(line);
+    ext2_fixture_debugfs(wimg, cmd, 0, fix_path("debugfs.txt"));
     f = fopen(fix_path("debugfs.txt"), "r");
     if (!f) {
         return 0;
@@ -3182,7 +3146,7 @@ static void write_rows(void)
         snprintf(what, sizeof(what), "'%s' leaves a volume e2fsck calls clean", sequences[i].name);
         check(e2fsck_clean(wimg), what);
         if (!e2fsck_clean(wimg)) {
-            system("head -20 $FIX/fsck.out");
+            ext2_fixture_head(fix_path("fsck.out"), 20);
         }
         snprintf(what, sizeof(what), "'%s' leaves a volume the reader walks", sequences[i].name);
         check(reader_walks(wimg), what);
@@ -3454,13 +3418,10 @@ static uint64_t build_junk_image(void)
         int i, nonzero = 0;
 
         bytes = build_image(fix_path("junk.ext2"), 4096, 128, PROFILE, 16, "tree");
-        snprintf(cmd, sizeof(cmd),
-                 ". tools/setup/e2fsprogs_path.sh; head -c 14000000 /dev/urandom > $FIX"
-                 "/junk.bin && "
-                 "debugfs -w -R \"write $FIX/junk.bin junk\" $FIX"
-                 "/junk.ext2 >/dev/null 2>&1 && "
-                 "debugfs -w -R 'rm junk' $FIX/junk.ext2 >/dev/null 2>&1");
-        if (!run(cmd)) {
+        snprintf(cmd, sizeof cmd, "write %s junk", fix_path("junk.bin"));
+        if (!ext2_fixture_noise(fix_path("junk.bin"), 14000000) ||
+            !ext2_fixture_debugfs(fix_path("junk.ext2"), cmd, 1, 0) ||
+            !ext2_fixture_debugfs(fix_path("junk.ext2"), "rm junk", 1, 0)) {
             printf("ext2_hosttest: the junk volume did not build\n");
             exit(1);
         }
@@ -3708,14 +3669,11 @@ static int names_present(int i)
  */
 static int repaired_ok(const char *img, uint64_t bytes, int i, int stop, int named_before)
 {
-    char cmd[700];
     int rc;
 
-    fix_format(cmd, sizeof(cmd),
-               ". tools/setup/e2fsprogs_path.sh; cp %s $FIX/repair.ext2 && e2fsck -fy $FIX"
-               "/repair.ext2 > $FIX/repair.out 2>&1; s=$?; test $s -le 2",
-               img);
-    if (system(cmd) != 0) {
+    if (!copy_file(img, fix_path("repair.ext2")) ||
+        (rc = ext2_fixture_fsck(fix_path("repair.ext2"), "-fy", fix_path("repair.out"))) < 0 ||
+        rc > 2) {
         printf("  e2fsck -fy could not repair '%s' stopped after write %d\n", sequences[i].name,
                stop);
         return 0;
@@ -3740,7 +3698,6 @@ static int repaired_ok(const char *img, uint64_t bytes, int i, int stop, int nam
 /** Run debugfs -w over `img` with the requests in `script`, one per line. */
 static int debugfs_script(const char *img, const char *script)
 {
-    char cmd[512];
     void *f = fopen(fix_path("dbg.cmd"), "wb");
 
     if (!f) {
@@ -3748,25 +3705,21 @@ static int debugfs_script(const char *img, const char *script)
     }
     fwrite(script, 1, strlen(script), f);
     fclose(f);
-    fix_format(cmd, sizeof(cmd),
-               ". tools/setup/e2fsprogs_path.sh; debugfs -w -f $FIX/dbg.cmd %s >/dev/null 2>&1",
-               img);
-    return run(cmd);
+    {
+        const char *argv[] = {host_tool_path("debugfs"), "-w", "-f", fix_path("dbg.cmd"), img, 0};
+        return host_command(argv, 0, 0, 0, 0) == 0;
+    }
 }
 
 /** The number right after `key` in debugfs's answer to `request`, or -1. */
 static long debugfs_number(const char *img, const char *request, const char *key)
 {
-    char cmd[512], line[512];
+    char line[512];
     void *f;
     long v = -1;
 
-    fix_format(cmd, sizeof(cmd),
-               ". tools/setup/e2fsprogs_path.sh; debugfs -R '%s' %s 2>/dev/null > $FIX/dbg.out",
-               request, img);
-    if (!run(cmd)) {
+    if (!ext2_fixture_debugfs(img, request, 0, fix_path("dbg.out")))
         return -1;
-    }
     f = fopen(fix_path("dbg.out"), "rb");
     if (!f) {
         return -1;
@@ -3883,6 +3836,20 @@ static void fault_row(const char *img, const char *script, const char *fault, co
  *   read-only, by name;
  * - a read-only mount runs no check and writes nothing.
  */
+static int lost_block_reported(void)
+{
+    return ext2_fixture_contains(fix_path("fsck.out"), "-(4000)") ||
+           ext2_fixture_contains(fix_path("fsck.out"), "-4000");
+}
+
+static int orphan_reported(long ino)
+{
+    char text[128];
+    snprintf(text, sizeof text, "Unattached inode %ld", ino);
+    return ext2_fixture_contains(fix_path("fsck.out"), text) &&
+           !ext2_fixture_contains(fix_path("fsck.out"), "Multiply");
+}
+
 static void dirty_rows(void)
 {
     const char *img = fix_path("dirty.ext2");
@@ -3935,15 +3902,14 @@ static void dirty_rows(void)
               strstr(last_check, "1 lost blocks, 0 orphan inodes") != 0,
           "a lost block mounts writable with the block counted");
     check(fill_volume() == 0 && unmount_rw() == 0 && disk_state(img) == 2 &&
-              e2fsck_status(img) == 4 && run("grep -q -- '-(4000)\\|-4000' $FIX/fsck.out"),
+              e2fsck_status(img) == 4 && lost_block_reported(),
           "and filling the volume leaves it lost: the error bit set, e2fsck still owed it");
     use_image(img, bytes);
     last_check[0] = 0;
     check(mount_rw() == 0 && strstr(last_check, "1 lost blocks") != 0 && unmount_rw() == 0 &&
               disk_state(img) == 2,
           "the error bit survives a mount and an unmount");
-    check(run(". tools/setup/e2fsprogs_path.sh; e2fsck -fp $FIX/dirty.ext2 >/dev/null 2>&1; "
-              "test $? -eq 1"),
+    check(ext2_fixture_fsck(fix_path("dirty.ext2"), "-fp", fix_path("repair.out")) == 1,
           "e2fsck -p repairs it");
     use_image(img, bytes);
     last_check[0] = 0;
@@ -3960,11 +3926,8 @@ static void dirty_rows(void)
     check(ino > 0 && blk > 0 && mount_rw() == 0 && (mnt.flags & VFS_MS_RDONLY) == 0 &&
               strstr(last_check, "0 lost blocks, 1 orphan inodes") != 0,
           "an orphan inode mounts writable with the orphan counted");
-    snprintf(script, sizeof(script),
-             "grep -q 'Unattached inode %ld' $FIX/fsck.out && ! grep -q 'Multiply' $FIX"
-             "/fsck.out",
-             ino);
-    check(fill_volume() == 0 && unmount_rw() == 0 && e2fsck_status(img) == 4 && run(script),
+    check(fill_volume() == 0 && unmount_rw() == 0 && e2fsck_status(img) == 4 &&
+              orphan_reported(ino),
           "and filling the volume leaves the orphan and its blocks to e2fsck");
 
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
@@ -4251,7 +4214,7 @@ static void matrix_rows(void)
                      sequences[i].name, k, n);
             if (status != 0 && status != 4) {
                 printf("  e2fsck -fn exited %d:\n", status);
-                system("head -14 $FIX/fsck.out");
+                ext2_fixture_head(fix_path("fsck.out"), 14);
             }
             check((status == 0 || status == 4) && findings_allowed(sequences[i].counts), what);
             snprintf(what, sizeof(what),
@@ -4267,16 +4230,8 @@ static void matrix_rows(void)
     }
     printf("ext2_hosttest: %d stops walked\n", total);
     wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
-    {
-        char cmd[512];
-
-        fix_format(cmd, sizeof(cmd),
-                   ". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'write /dev/null hello.txt' %s "
-                   ">/dev/null 2>&1; "
-                   "debugfs -w -R 'set_inode_field /hello.txt size 5' %s >/dev/null 2>&1",
-                   wimg, wimg);
-        system(cmd);
-    }
+    ext2_fixture_debugfs(wimg, "write /dev/null hello.txt", 1, 0);
+    ext2_fixture_debugfs(wimg, "set_inode_field /hello.txt size 5", 1, 0);
     use_image(wimg, wbytes);
     if (mount_image() == 0) {
         check(!base_intact(), "a base file changed under the repair is seen by the comparison");
@@ -4298,7 +4253,7 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 }
 
 /**
- * Name the fixture directory to the shell, build setidcheck and the tree,
+ * Make the native fixture tree using the prepared independent tools,
  * and run the rows: the reads at 4 KiB blocks with 128- and 256-byte inodes
  * and at 2 KiB, the 1 KiB levels, the failures, the write sequences, the
  * order rows, the writer's failures, the dirty volumes, the matrix and the
@@ -4309,19 +4264,7 @@ int main(int argc, char **argv)
 {
     uint64_t bytes;
 
-    if (setenv("FIX", fix_dir(), 1) != 0) {
-        printf("ext2_hosttest: the fixture directory could not be named to the shell\n");
-        return 1;
-    }
     wimg = fix_path("w.ext2");
-    if (!run(". tools/setup/e2fsprogs_path.sh; command -v mke2fs >/dev/null")) {
-        printf("ext2_hosttest: mke2fs is not on the path; e2fsprogs is a required host tool\n");
-        return 1;
-    }
-    if (!run("${CC:-cc} -O2 -o $FIX/setidcheck tools/inspect/setidcheck.c")) {
-        printf("ext2_hosttest: setidcheck did not build\n");
-        return 1;
-    }
     build_tree();
 
     if (argc == 2 && streq(argv[1], "--times-only")) {
