@@ -101,7 +101,7 @@ $(MKFATFIXTURE): tests/host/mkfatfixture.c
 # server the socket suite sends to.
 $(HOSTPEER): tests/system/runner/hostpeer.c
 	@mkdir -p $(dir $@)
-	$(HOST_LINK)
+	$(ETUDE_LINK)
 # What a machine played, measured off the recording QEMU's wav backend writes
 # (tests/system/checkers/wavcheck.c).
 $(WAVCHECK): tests/system/checkers/wavcheck.c

@@ -846,7 +846,7 @@ build/tests/cases/machine/sshpeer: tests/cases/machine/sshpeer.c
 # The clock case's reference, which answers the guest with the host's clocks.
 build/tests/cases/machine/clockpeer: tests/cases/machine/clockpeer.c
 	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE
 
 # The scenarios of the installer and grow cases drive their machines at the
 # console, each linked with the console driver, drive.c, and the code that

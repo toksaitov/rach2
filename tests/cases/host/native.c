@@ -20,8 +20,13 @@ static volatile sig_atomic_t interrupted;
 
 int native_path(char out[4096], const char *base, const char *name)
 {
-    int n = snprintf(out, 4096, "%s/%s", base, name);
-    return n < 0 || n >= 4096 ? -1 : 0;
+    size_t a = strlen(base), b = strlen(name);
+    if (a >= 4096 || b >= 4096 - a - 1)
+        return -1;
+    memcpy(out, base, a);
+    out[a] = '/';
+    memcpy(out + a + 1, name, b + 1);
+    return 0;
 }
 
 static int remove_tree(const char *path)

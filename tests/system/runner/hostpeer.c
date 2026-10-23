@@ -39,18 +39,85 @@
  * for a usage error; the caller decides whether a failure is fatal. The end
  * of an echo server's time is a success.
  */
-#include <arpa/inet.h>
 #include <errno.h>
 #include <signal.h>
-#include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <time.h>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+typedef SOCKET peer_socket;
+#define PEER_INVALID     INVALID_SOCKET
+#define peer_close       closesocket
+#define peer_error       WSAGetLastError()
+#define PEER_INTERRUPTED WSAEINTR
+#define PEER_INUSE       WSAEADDRINUSE
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/time.h>
-#include <unistd.h>
-#include <time.h>
+typedef int peer_socket;
+#define PEER_INVALID     (-1)
+#define peer_close       close
+#define peer_error       errno
+#define PEER_INTERRUPTED EINTR
+#define PEER_INUSE       EADDRINUSE
+#endif
+
+#ifdef _WIN32
+static void socket_cleanup(void)
+{
+    WSACleanup();
+}
+#endif
+
+/** Report the host's socket error. */
+static void socket_error(const char *operation)
+{
+#ifdef _WIN32
+    fprintf(stderr, "%s: socket error %d\n", operation, peer_error);
+#else
+    perror(operation);
+#endif
+}
+
+/** Sleep for a whole number of seconds without overflowing milliseconds. */
+static void pause_seconds(unsigned long seconds)
+{
+#ifdef _WIN32
+    while (seconds) {
+        DWORD part = seconds > 86400 ? 86400 : (DWORD)seconds;
+        Sleep(part * 1000);
+        seconds -= part;
+    }
+#else
+    sleep((unsigned)seconds);
+#endif
+}
+
+/** Select on native socket handles; Windows ignores the first argument. */
+static int ready_sockets(peer_socket a, peer_socket b, peer_socket c, fd_set *set,
+                         struct timeval *tv)
+{
+#ifdef _WIN32
+    (void)a;
+    (void)b;
+    (void)c;
+    return select(0, set, NULL, NULL, tv);
+#else
+    int max = a > b ? a : b;
+    if (c > max)
+        max = c;
+    return select(max + 1, set, NULL, NULL, tv);
+#endif
+}
 
 /* The address of every job, the loopback's unless HOSTPEER_ADDRESS names
  * another. */
@@ -74,30 +141,41 @@ static void fill_local(struct sockaddr_in *addr, long port)
 static int hold(long port, long seconds)
 {
     struct sockaddr_in addr;
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    peer_socket fd = socket(AF_INET, SOCK_STREAM, 0);
 
-    if (fd < 0) {
-        perror("hostpeer: socket");
+    if (fd == PEER_INVALID) {
+        socket_error("hostpeer: socket");
         return 1;
     }
     fill_local(&addr, port);
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
-        perror("hostpeer: connect");
-        close(fd);
+        socket_error("hostpeer: connect");
+        peer_close(fd);
         return 1;
     }
-    sleep((unsigned)seconds);
-    close(fd);
+    pause_seconds((unsigned long)seconds);
+    peer_close(fd);
     return 0;
 }
 
 /** Seconds on the calendar clock, which `echo` measures its time on. */
 static double now(void)
 {
+#ifndef _WIN32
     struct timeval tv;
+#endif
 
+#ifdef _WIN32
+    FILETIME time;
+    ULARGE_INTEGER value;
+    GetSystemTimePreciseAsFileTime(&time);
+    value.LowPart = time.dwLowDateTime;
+    value.HighPart = time.dwHighDateTime;
+    return (double)value.QuadPart / 1e7;
+#else
     gettimeofday(&tv, NULL);
     return tv.tv_sec + tv.tv_usec / 1e6;
+#endif
 }
 
 /**
@@ -110,7 +188,7 @@ static double now(void)
  *
  * @return the port bound, or 0 when none could be, with the reason printed.
  */
-static long bind_pair(int *listener, int *dgram, long port)
+static long bind_pair(peer_socket *listener, peer_socket *dgram, long port)
 {
     struct sockaddr_in addr;
     socklen_t len;
@@ -120,27 +198,27 @@ static long bind_pair(int *listener, int *dgram, long port)
     for (tries = 0; tries < 16; tries++) {
         *listener = socket(AF_INET, SOCK_STREAM, 0);
         *dgram = socket(AF_INET, SOCK_DGRAM, 0);
-        if (*listener < 0 || *dgram < 0) {
-            perror("hostpeer: socket");
+        if (*listener == PEER_INVALID || *dgram == PEER_INVALID) {
+            socket_error("hostpeer: socket");
             return 0;
         }
-        setsockopt(*listener, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+        setsockopt(*listener, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof(one));
         fill_local(&addr, port);
         len = sizeof(addr);
         if (bind(*listener, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
             listen(*listener, 4) != 0 ||
             getsockname(*listener, (struct sockaddr *)&addr, &len) != 0) {
-            perror("hostpeer: tcp bind");
+            socket_error("hostpeer: tcp bind");
             return 0;
         }
         if (bind(*dgram, (struct sockaddr *)&addr, sizeof(addr)) == 0)
             return ntohs(addr.sin_port);
-        if (port != 0 || errno != EADDRINUSE)
+        if (port != 0 || peer_error != PEER_INUSE)
             break;
-        close(*listener);
-        close(*dgram);
+        peer_close(*listener);
+        peer_close(*dgram);
     }
-    perror("hostpeer: udp bind");
+    socket_error("hostpeer: udp bind");
     return 0;
 }
 
@@ -165,10 +243,12 @@ static long bind_pair(int *listener, int *dgram, long port)
 static int echo(long port, long seconds)
 {
     struct sockaddr_in from;
-    int listener, dgram, conn = -1;
+    peer_socket listener, dgram, conn = PEER_INVALID;
     double deadline = now() + seconds;
 
+#ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
+#endif
     port = bind_pair(&listener, &dgram, port);
     if (port == 0)
         return 1;
@@ -182,23 +262,20 @@ static int echo(long port, long seconds)
         char buf[2048];
         struct timeval tv;
         fd_set rfds;
-        int max = listener > dgram ? listener : dgram;
         ssize_t n;
 
         FD_ZERO(&rfds);
         FD_SET(listener, &rfds);
         FD_SET(dgram, &rfds);
-        if (conn >= 0) {
+        if (conn != PEER_INVALID) {
             FD_SET(conn, &rfds);
-            if (conn > max)
-                max = conn;
         }
         tv.tv_sec = 0;
         tv.tv_usec = 200000;
-        if (select(max + 1, &rfds, NULL, NULL, &tv) < 0) {
-            if (errno == EINTR)
+        if (ready_sockets(listener, dgram, conn, &rfds, &tv) < 0) {
+            if (peer_error == PEER_INTERRUPTED)
                 continue;
-            perror("hostpeer: select");
+            socket_error("hostpeer: select");
             return 1;
         }
         if (FD_ISSET(dgram, &rfds)) {
@@ -208,37 +285,37 @@ static int echo(long port, long seconds)
             if (n > 0)
                 sendto(dgram, buf, (size_t)n, 0, (struct sockaddr *)&from, flen);
         }
-        if (FD_ISSET(listener, &rfds) && conn < 0)
+        if (FD_ISSET(listener, &rfds) && conn == PEER_INVALID)
             conn = accept(listener, NULL, NULL);
-        if (conn >= 0 && FD_ISSET(conn, &rfds)) {
-            n = read(conn, buf, sizeof(buf));
+        if (conn != PEER_INVALID && FD_ISSET(conn, &rfds)) {
+            n = recv(conn, buf, sizeof(buf), 0);
             if (n > 0) {
                 ssize_t off = 0;
 
                 while (off < n) {
-                    ssize_t w = write(conn, buf + off, (size_t)(n - off));
+                    ssize_t w = send(conn, buf + off, (int)(n - off), 0);
 
                     if (w <= 0)
                         break;
                     off += w;
                 }
                 if (off < n) {
-                    close(conn);
-                    conn = -1;
+                    peer_close(conn);
+                    conn = PEER_INVALID;
                 }
             } else {
                 if (n == 0)
                     printf("hostpeer: tcp: the peer closed its end\n");
                 fflush(stdout);
-                close(conn);
-                conn = -1;
+                peer_close(conn);
+                conn = PEER_INVALID;
             }
         }
     }
-    if (conn >= 0)
-        close(conn);
-    close(listener);
-    close(dgram);
+    if (conn != PEER_INVALID)
+        peer_close(conn);
+    peer_close(listener);
+    peer_close(dgram);
     return 0;
 }
 
@@ -250,19 +327,19 @@ static int send_text(long port, const char *text)
 {
     struct sockaddr_in addr;
     size_t n = strlen(text);
-    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    peer_socket fd = socket(AF_INET, SOCK_DGRAM, 0);
 
-    if (fd < 0) {
-        perror("hostpeer: socket");
+    if (fd == PEER_INVALID) {
+        socket_error("hostpeer: socket");
         return 1;
     }
     fill_local(&addr, port);
     if (sendto(fd, text, n, 0, (struct sockaddr *)&addr, sizeof(addr)) != (ssize_t)n) {
-        perror("hostpeer: sendto");
-        close(fd);
+        socket_error("hostpeer: sendto");
+        peer_close(fd);
         return 1;
     }
-    close(fd);
+    peer_close(fd);
     printf("hostpeer: sent %lu bytes to %s:%ld\n", (unsigned long)n, peer_text, port);
     return 0;
 }
@@ -276,36 +353,51 @@ static void stop_repeat(int sig)
 static int send_repeat(long port, const char *text)
 {
     struct sockaddr_in address;
+#ifndef _WIN32
     struct sigaction action;
-    int fd = socket(AF_INET, SOCK_DGRAM, 0), status = 0;
+#endif
+    peer_socket fd = socket(AF_INET, SOCK_DGRAM, 0);
+    int status = 0;
     size_t size = strlen(text);
-    if (fd < 0)
+    if (fd == PEER_INVALID)
         return 1;
+#ifdef _WIN32
+    signal(SIGTERM, stop_repeat);
+    signal(SIGINT, stop_repeat);
+    signal(SIGBREAK, stop_repeat);
+#else
     memset(&action, 0, sizeof(action));
     action.sa_handler = stop_repeat;
     sigemptyset(&action.sa_mask);
     sigaction(SIGTERM, &action, NULL);
     sigaction(SIGINT, &action, NULL);
     sigaction(SIGHUP, &action, NULL);
+#endif
     fill_local(&address, port);
     printf("hostpeer: repeating %lu bytes to %s:%ld until stopped\n", (unsigned long)size,
            peer_text, port);
     fflush(stdout);
     while (!repeat_stop) {
+#ifndef _WIN32
         struct timespec interval = {1, 0};
+#endif
         if (sendto(fd, text, size, 0, (struct sockaddr *)&address, sizeof(address)) !=
             (ssize_t)size) {
-            if (errno == EINTR)
+            if (peer_error == PEER_INTERRUPTED)
                 continue;
-            perror("hostpeer: sendto");
+            socket_error("hostpeer: sendto");
             status = 1;
             break;
         }
         /* interval: the outside probe receives one datagram each second */
+#ifdef _WIN32
+        Sleep(1000);
+#else
         while (!repeat_stop && nanosleep(&interval, &interval) && errno == EINTR) {
         }
+#endif
     }
-    close(fd);
+    peer_close(fd);
     return status;
 }
 
@@ -330,6 +422,14 @@ int main(int argc, char **argv)
     const char *address = getenv("HOSTPEER_ADDRESS");
     long port, seconds;
 
+#ifdef _WIN32
+    WSADATA winsock;
+    if (WSAStartup(MAKEWORD(2, 2), &winsock)) {
+        fprintf(stderr, "hostpeer: WSAStartup failed\n");
+        return 1;
+    }
+    atexit(socket_cleanup);
+#endif
     peer_address.s_addr = htonl(INADDR_LOOPBACK);
     if (address != NULL && address[0] != '\0') {
         if (inet_pton(AF_INET, address, &peer_address) != 1) {

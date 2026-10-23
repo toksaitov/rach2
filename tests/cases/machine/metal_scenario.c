@@ -419,7 +419,7 @@ static long flushes(struct metal_case *s, const char *output)
  * are counted around it, since it must flush what it wrote to the stick before it unmounts. Its run
  * is left in `r`.
  */
-static void accept(struct metal_case *s, struct net_run *r)
+static void accept_checks(struct metal_case *s, struct net_run *r)
 {
     long before, after;
 
@@ -560,7 +560,7 @@ static int unattended(struct etude_case *c)
     logs(&s);
     su(&s);
     unnamed(&s);
-    accept(&s, &r);
+    accept_checks(&s, &r);
     stick(&s, &r);
     net_run_free(&r);
     return net_end(&s.u);

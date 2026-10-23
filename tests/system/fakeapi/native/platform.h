@@ -10,6 +10,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <direct.h>
 typedef SOCKET service_socket;
 typedef HANDLE service_thread;
 typedef CRITICAL_SECTION service_mutex;
