@@ -171,7 +171,7 @@ static void sequence_fixture_row(const char *mode, unsigned expected)
     if (error)
         return;
     spawn.program = self;
-    spawn.argv = args;
+    spawn.argv = args + 1;
     error = etude_win_start(&sup, &spawn, &child);
     CHECK(error == 0);
     if (!error) {

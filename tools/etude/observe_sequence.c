@@ -311,7 +311,7 @@ static DWORD phase_start(struct sequence *s, struct phase *phase, const char *pr
     if (_putenv_s("PATH", path))
         return ERROR_INVALID_ENVIRONMENT;
     spawn.program = program;
-    spawn.argv = (const char *const *)argv;
+    spawn.argv = (const char *const *)argv + 1;
     spawn.registered = sequence_registered;
     spawn.output = sequence_output;
     spawn.ctx = phase;
