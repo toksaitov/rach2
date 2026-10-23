@@ -15,6 +15,7 @@ import subprocess
 import sys
 import fixtures
 import windows
+import tools
 
 ROOT = Path(__file__).resolve().parents[3]
 GROUPS = ('tests', 'etude', 'boots', 'checkers', 'fuzz', 'scripts')
@@ -77,12 +78,14 @@ def checks(group, arch, base):
                 continue
             deps = metadata(path, 'host-deps', arch)
             flags = metadata(path, 'host-cflags', arch)
+            required_tools = metadata(path, 'host-tools', arch)
             out = str(base / path.stem)
             item = entry(identity, path.stem, out, [str(path), *deps],
                          alone='host-alone:' in path.read_text())
             item['command'] = [*COMMON, '-DRACH2_HOSTTEST', '-Wno-empty-body', '-ffreestanding',
                                *[w for d in INCLUDES for w in ('-I', d)], *flags,
                                '-o', out, str(path), *deps]
+            item['tools'] = required_tools
             # These are behavioral dependencies, never preparation-time passes.
             if re.search(r'\b(?:system|popen)\s*\(', path.read_text()):
                 item['unsupported'] = 'the host test still invokes a shell; a native fixture adapter is required'
@@ -187,6 +190,8 @@ def prepare(args):
             continue
         command = item.pop('command')
         windows_fixture = item.pop('windows_fixture', False)
+        tool_inputs = tools.prepare(item.pop('tools', []), compiler, COMMON, compiler_inputs,
+                                   digest, args.print_commands)
         companions = windows.companions(compiler, base, compiler_inputs, digest,
                                         args.print_commands) if windows_fixture else []
         if args.print_commands:
@@ -217,7 +222,7 @@ def prepare(args):
                 sources = sorted(set([*item['sources'], *dependencies, *item.get('data', [])]))
                 item['inputs'] = [dict(path=p, sha256=digest(Path(p))) for p in sources]
             item['inputs'] = list({value['path']: value for value in
-                                   [*item['inputs'], *companions]}.values())
+                                   [*item['inputs'], *companions, *tool_inputs]}.values())
             for value in ([] if windows_fixture else item['inputs']):
                 path = Path(value['path'])
                 if path.suffix != '.c':

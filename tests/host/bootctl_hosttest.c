@@ -2,6 +2,11 @@
  * bootctl_hosttest.c: utils/bootslot.c, the boot-slot library bootctl
  * drives, over FAT32 images in memory.
  *
+ * host-tools: mkfatfixture
+ * host-deps: tests/host/compat/command_host.c tools/etude/capture.c
+ * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
+ * host-deps: tools/etude/posix/process.c
+ * host-cflags: -I tools/etude/include
  * host-deps: utils/bootslot.c tests/host/compat/fixdir_host.c
  *
  * The fixtures come from tests/host/mkfatfixture.c, a FAT32 writer written
@@ -23,6 +28,7 @@
 
 #include "bootslot.h"
 #include "fixdir_host.h"
+#include "command_host.h"
 
 #define IMG_BYTES (8192 * 512)
 
@@ -93,30 +99,18 @@ static const struct bootslot_io IO = {io_read, io_write, NULL};
 /** Build the fixture `mkfatfixture` makes with the option `opt`, load it
  *  into `img` and clear the injector. Exits with status 1 when the builder
  *  cannot be built or run or the image does not load, since no row means
- *  anything then. The builder is compiled at the first load, into the
- *  test's own fixture directory (compat/fixdir_host.c), since the suite
- *  compiles and runs this test directly and has no build system to ask. */
+ *  anything then. Preparation compiles the builder before execution. */
 static void load(const char *opt)
 {
-    static int built;
-    char cmd[2048];
+    const char *argv[] = {host_tool_path("mkfatfixture"), fix_path("fat_case.img"),
+                          opt[0] ? opt : NULL, NULL};
     FILE *f;
 
-    if (!built) {
-        fix_format(cmd, sizeof(cmd), "${CC:-cc} -O2 -o %s tests/host/mkfatfixture.c",
-                   fix_path("mkfatfixture"));
-        if (system(cmd) != 0) {
-            fprintf(stderr, "bootctl_hosttest: cannot build the fixture builder\n");
-            exit(1);
-        }
-        built = 1;
-    }
-    fix_format(cmd, sizeof(cmd), "%s %s %s", fix_path("mkfatfixture"), fix_path("fat_case.img"),
-               opt);
-    if (system(cmd) != 0) {
+    if (host_command(argv, NULL, NULL, NULL, 0) != 0) {
         fprintf(stderr, "bootctl_hosttest: fixture builder failed\n");
         exit(1);
     }
+
     f = fopen(fix_path("fat_case.img"), "rb");
     if (!f || fread(img.data, 1, IMG_BYTES, f) != IMG_BYTES) {
         fprintf(stderr, "bootctl_hosttest: fixture did not load\n");

@@ -1,13 +1,17 @@
 /*
  * fatcheck_hosttest.c: `mkfatfixture --check` against every fixture.
  *
+ * host-tools: mkfatfixture
+ * host-deps: tests/host/compat/command_host.c tools/etude/capture.c
+ * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
+ * host-deps: tools/etude/posix/process.c
+ * host-cflags: -I tools/etude/include
  * host-deps: tests/host/compat/fixdir_host.c
  *
  * The check is the reader every FAT write test relies on, so it is tested
  * on its own: every malformed fixture must fail it with the finding named
- * for its fault, and every well-formed one must pass. The builder is
- * compiled here on every run, into the test's own fixture directory
- * (compat/fixdir_host.c).
+ * for its fault, and every well-formed one must pass. Preparation compiles
+ * the builder; execution creates only its private images.
  */
 
 #include <stdint.h>
@@ -17,17 +21,9 @@
 #include <sys/wait.h>
 
 #include "fixdir_host.h"
+#include "command_host.h"
 
 static int fails;
-
-/** The builder's command, run with leak detection off. */
-static const char *tool(void)
-{
-    static char text[1200];
-
-    fix_format(text, sizeof(text), "ASAN_OPTIONS=detect_leaks=0 %s", fix_path("mkfatfixture"));
-    return text;
-}
 
 /** Count and print a failed row. */
 static void check(int ok, const char *what)
@@ -45,25 +41,11 @@ static void check(int ok, const char *what)
  */
 static void judge(int want_rc, const char *want, const char *label)
 {
-    char cmd[2400], line[512], out[8192];
-    FILE *p;
-    int rc;
-    size_t n = 0;
+    char cmd[2400], out[8192];
+    const char *argv[] = {host_tool_path("mkfatfixture"), "--check", fix_path("fatcheck.img"),
+                          NULL};
+    int rc = host_command(argv, NULL, NULL, out, sizeof out);
 
-    fix_format(cmd, sizeof(cmd), "%s --check %s", tool(), fix_path("fatcheck.img"));
-    p = popen(cmd, "r");
-    if (p == NULL) {
-        printf("fatcheck_hosttest: cannot run the check\n");
-        fails++;
-        return;
-    }
-    out[0] = '\0';
-    while (fgets(line, sizeof(line), p) != NULL && n + strlen(line) < sizeof(out) - 1) {
-        strcpy(out + n, line);
-        n += strlen(line);
-    }
-    rc = pclose(p);
-    rc = rc != -1 && WIFEXITED(rc) ? WEXITSTATUS(rc) : -1;
     fix_format(cmd, sizeof(cmd), "'%s' exits %d and says '%s'", label, want_rc, want);
     check(rc == want_rc && strstr(out, want) != NULL, cmd);
     if (rc != want_rc || strstr(out, want) == NULL) {
@@ -74,10 +56,10 @@ static void judge(int want_rc, const char *want, const char *label)
 /** Build the fixture the builder's option `opt` names and judge it. */
 static void row(const char *opt, int want_rc, const char *want)
 {
-    char cmd[2400];
+    const char *argv[] = {host_tool_path("mkfatfixture"), fix_path("fatcheck.img"),
+                          opt[0] ? opt : NULL, NULL};
 
-    fix_format(cmd, sizeof(cmd), "%s %s %s", tool(), fix_path("fatcheck.img"), opt);
-    if (system(cmd) != 0) {
+    if (host_command(argv, NULL, NULL, NULL, 0) != 0) {
         check(0, "build fixture");
         return;
     }
@@ -98,13 +80,13 @@ static void long_name_row(unsigned count, int restart, int want_rc, const char *
     static const unsigned at[13] = {1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30};
     static const unsigned char alias[] = "BOUND   TXT";
     unsigned char entries[23 * 32], sum = 0;
-    char cmd[2400];
+    const char *argv[] = {host_tool_path("mkfatfixture"), fix_path("fatcheck.img"), "--cluster8",
+                          NULL};
     unsigned i, k;
     FILE *f;
     int ok;
 
-    fix_format(cmd, sizeof(cmd), "%s %s --cluster8", tool(), fix_path("fatcheck.img"));
-    if (system(cmd) != 0) {
+    if (host_command(argv, NULL, NULL, NULL, 0) != 0) {
         check(0, "build long-name fixture");
         return;
     }
@@ -143,7 +125,7 @@ static void long_name_row(unsigned count, int restart, int want_rc, const char *
 }
 
 /**
- * Build the fixture builder, then run the rows: each well-formed geometry
+ * Run the prepared fixture builder's rows: each well-formed geometry
  * the builder has, and a volume whose free clusters hold junk, must pass;
  * each fault must fail with the finding named for it; and the long names
  * of 20 entries must pass and those of 21 entries or with a repeated start
@@ -151,18 +133,6 @@ static void long_name_row(unsigned count, int restart, int want_rc, const char *
  */
 int main(void)
 {
-    char cmd[2048];
-    const char *cc = getenv("CC");
-
-    fix_format(cmd, sizeof(cmd),
-               "%s -std=c99 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined "
-               "-fno-sanitize-recover=all -o %s tests/host/mkfatfixture.c",
-               cc ? cc : "cc", fix_path("mkfatfixture"));
-    if (system(cmd) != 0) {
-        printf("fatcheck_hosttest: cannot build the fixture builder\n");
-        return 1;
-    }
-
     row("", 0, "check: OK: ");
     row("--cluster8", 0, "check: OK: ");
     row("--fragmented", 0, "check: OK: ");
