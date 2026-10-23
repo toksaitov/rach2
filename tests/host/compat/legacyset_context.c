@@ -29,8 +29,8 @@ static void measurement_descriptor(struct jbuf *b, const char *path, const char 
     CHECK(!etude_digest_file(NULL, path, &st, hash), "context: input hashes");
     jbuf_puts(b, "{\"path\":");
     measurement_quote(b, name ? name : path);
-    snprintf(size, sizeof size, ",\"sha256\":\"%s\",\"size_bytes\":%llu}",
-             hash, (unsigned long long)st.st_size);
+    snprintf(size, sizeof size, ",\"sha256\":\"%s\",\"size_bytes\":%llu}", hash,
+             (unsigned long long)st.st_size);
     jbuf_puts(b, size);
 }
 static void measurement_file(const char *path, struct jbuf *b)
@@ -68,7 +68,8 @@ static void measurement_bound(const struct eh_json *blob, const char *text)
     char hash[65];
     measurement_hash(text, hash);
     const struct eh_json *sum = eh_json_get(blob, "sha256");
-    CHECK(sum && sum->type == 's' && !strcmp(sum->string, hash), "context: plan binds snapshot bytes");
+    CHECK(sum && sum->type == 's' && !strcmp(sum->string, hash),
+          "context: plan binds snapshot bytes");
 }
 static void measurement_record_file(const char *path)
 {
@@ -79,9 +80,10 @@ static void measurement_record_file(const char *path)
     FILE *f = fopen(path, "wb");
     CHECK(f != NULL, "context: producer record opens");
     if (f) {
-        fprintf(f, "etude-prepare 1\ntree %s\narch i686\nkernel build/rach2/kernel\n"
-                "file %s %llu %llu 0 build/cases/probe\n", tree, hash,
-                (unsigned long long)st.st_size, (unsigned long long)st.st_ino);
+        fprintf(f,
+                "etude-prepare 1\ntree %s\narch i686\nkernel build/rach2/kernel\n"
+                "file %s %llu %llu 0 build/cases/probe\n",
+                tree, hash, (unsigned long long)st.st_size, (unsigned long long)st.st_ino);
         CHECK(!fclose(f), "context: producer record closes");
     }
 }
@@ -112,11 +114,13 @@ static void measurement_snapshots(void)
     jbuf_puts(&b, "}");
     measurement_file(fix_path("measurement-site.json"), &b);
     CHECK(!write_text(fix_path("measurement-cache.json"),
-          "{\"schema_version\":1,\"controlled\":true,\"method\":\"verified fixture artifacts; natural OS cache\"}", 0644),
+                      "{\"schema_version\":1,\"controlled\":true,\"method\":\"verified fixture "
+                      "artifacts; natural OS cache\"}",
+                      0644),
           "context: cache procedure writes");
 }
 static void measurement_exemption(struct jbuf *b, const struct etude_legacy_set_opts *o,
-                                   const char *id, int bad)
+                                  const char *id, int bad)
 {
     char path[PATH_LEN], text[16384], hash[65], meta[180];
     fix_format(path, sizeof path, "%s/%s.selection-export", fix_dir(), id);
@@ -124,28 +128,38 @@ static void measurement_exemption(struct jbuf *b, const struct etude_legacy_set_
     CHECK(read_text(path, text, sizeof text) > 0, "context: selection export reads");
     struct json *export = NULL;
     char error[256];
-    CHECK(!json_parse(text, strlen(text), 1, &export, error, sizeof error), "context: export parses");
+    CHECK(!json_parse(text, strlen(text), 1, &export, error, sizeof error),
+          "context: export parses");
     const char *bytes = json_text(export, "selection_bytes");
     CHECK(bytes != NULL, "context: exact selection bytes exist");
-    if (!bytes) { json_free(export); jbuf_puts(b, "null"); return; }
+    if (!bytes) {
+        json_free(export);
+        jbuf_puts(b, "null");
+        return;
+    }
     measurement_hash(bytes, hash);
     fix_format(path, sizeof path, "%s/%s.selection.json", fix_dir(), id);
     CHECK(!write_text(path, bytes, 0644), "context: exact selection bytes are retained");
-    if (bad == 1) hash[0] = hash[0] == '0' ? '1' : '0';
+    if (bad == 1)
+        hash[0] = hash[0] == '0' ? '1' : '0';
     jbuf_puts(b, "{\"reason\":\"milestone-62-first-runs\",\"phase_issue\":589,\"manifest\":{");
-    snprintf(meta, sizeof meta, "\"sha256\":\"%s\",\"size_bytes\":%lu,\"locations\":[", hash, (unsigned long)strlen(bytes));
+    snprintf(meta, sizeof meta, "\"sha256\":\"%s\",\"size_bytes\":%lu,\"locations\":[", hash,
+             (unsigned long)strlen(bytes));
     jbuf_puts(b, meta);
     measurement_quote(b, path);
     jbuf_puts(b, "]},\"run_ids\":[");
     measurement_quote(b, bad == 2 ? "unrelated-run" : id);
-    if (bad == 5) jbuf_puts(b, ",\"unrelated-extra-run\"");
+    if (bad == 5)
+        jbuf_puts(b, ",\"unrelated-extra-run\"");
     jbuf_puts(b, "],\"attempt_ids\":[");
     if (bad != 3) {
         char attempt[256];
         fix_format(attempt, sizeof attempt, "%s:fixture.plain.one:i686:r0:a0", id);
         measurement_quote(b, attempt);
-        if (bad == 4) jbuf_puts(b, ",\"unrelated-extra-attempt\"");
-    } else jbuf_puts(b, "\"unrelated-attempt\"");
+        if (bad == 4)
+            jbuf_puts(b, ",\"unrelated-extra-attempt\"");
+    } else
+        jbuf_puts(b, "\"unrelated-attempt\"");
     jbuf_puts(b, "]}");
     json_free(export);
 }
@@ -164,14 +178,17 @@ static void measurement_unavailable(struct jbuf *context, const char *id,
     const char *platform = "linux-proc-counters-v1";
 #endif
     jbuf_puts(&trace, "{\"kind\":\"start\",\"schema_version\":1,"
-              "\"method\":\"native-load-v1\",\"platform\":");
+                      "\"method\":\"native-load-v1\",\"platform\":");
     measurement_quote(&trace, platform);
-    jbuf_puts(&trace, ",\"run_id\":"); measurement_quote(&trace, id);
-    jbuf_puts(&trace, ",\"machine_id\":"); measurement_quote(&trace, receipt->clock.machine_id);
-    jbuf_puts(&trace, ",\"boot_id\":"); measurement_quote(&trace, receipt->clock.boot_id);
+    jbuf_puts(&trace, ",\"run_id\":");
+    measurement_quote(&trace, id);
+    jbuf_puts(&trace, ",\"machine_id\":");
+    measurement_quote(&trace, receipt->clock.machine_id);
+    jbuf_puts(&trace, ",\"boot_id\":");
+    measurement_quote(&trace, receipt->clock.boot_id);
     jbuf_puts(&trace, ",\"root_pid\":1,\"root_creation\":\"1\","
-              "\"observer_pid\":2,\"observer_creation\":\"2\","
-              "\"requested_interval_us\":1000000,\"process_limit\":4096}\n");
+                      "\"observer_pid\":2,\"observer_creation\":\"2\","
+                      "\"requested_interval_us\":1000000,\"process_limit\":4096}\n");
     measurement_hash(trace.data, hash);
     uint64_t utc = etude_observe_utc(receipt->end.utc);
     for (int i = 0; i < 2; i++) {
@@ -181,8 +198,7 @@ static void measurement_unavailable(struct jbuf *context, const char *id,
                  "\"shared_virtualizer_cpu_lower_us\":0,\"processes\":0,\"denied\":1,"
                  "\"lost\":0,\"unclassified\":0,\"overflow\":false,"
                  "\"identities_sha256\":\"%064d\"}\n",
-                 (unsigned long long)receipt->end.monotonic_us,
-                 (unsigned long long)utc, 0);
+                 (unsigned long long)receipt->end.monotonic_us, (unsigned long long)utc, 0);
         jbuf_puts(&trace, fields);
     }
     snprintf(fields, sizeof fields,
@@ -193,14 +209,17 @@ static void measurement_unavailable(struct jbuf *context, const char *id,
     fix_format(path, sizeof path, "%s/%s.outer-trace", fix_dir(), id);
     fix_format(stop, sizeof stop, "%s/%s.outer-stop", fix_dir(), id);
     measurement_file(path, &trace);
-    jbuf_puts(context, ",\"outer_observation\":{\"trace\":"); measurement_quote(context, path);
-    jbuf_puts(context, ",\"stop_request\":"); measurement_quote(context, stop);
-    jbuf_puts(context, ",\"header_sha256\":"); measurement_quote(context, hash);
+    jbuf_puts(context, ",\"outer_observation\":{\"trace\":");
+    measurement_quote(context, path);
+    jbuf_puts(context, ",\"stop_request\":");
+    measurement_quote(context, stop);
+    jbuf_puts(context, ",\"header_sha256\":");
+    measurement_quote(context, hash);
     jbuf_puts(context, "}");
 }
-static struct etude_measurement_context *measurement_context(
-    struct etude_legacy_set_opts *o, const char *id, int first, int bad,
-    struct etude_preparation_receipt *receipt)
+static struct etude_measurement_context *
+measurement_context(struct etude_legacy_set_opts *o, const char *id, int first, int bad,
+                    struct etude_preparation_receipt *receipt)
 {
     char path[PATH_LEN], hash[65], error[256];
     struct stat st;
@@ -222,22 +241,32 @@ static struct etude_measurement_context *measurement_context(
     measurement_quote(&b, measurement_commit);
     jbuf_puts(&b, first ? ",\"purpose\":\"phase_first_run\"" : ",\"purpose\":\"ci\"");
     const char *names[] = {"source", "tools", "site_profile", "cache_state"};
-    const char *files[] = {"measurement-source.json", "measurement-tools.json", "measurement-site.json", "measurement-cache.json"};
+    const char *files[] = {"measurement-source.json", "measurement-tools.json",
+                           "measurement-site.json", "measurement-cache.json"};
     for (size_t i = 0; i < 4; i++) {
-        jbuf_puts(&b, ","); measurement_quote(&b, names[i]); jbuf_puts(&b, ":");
+        jbuf_puts(&b, ",");
+        measurement_quote(&b, names[i]);
+        jbuf_puts(&b, ":");
         measurement_descriptor(&b, fix_path(files[i]), NULL);
     }
-    jbuf_puts(&b, ",\"artifacts\":"); measurement_descriptor(&b, o->record, NULL);
-    jbuf_puts(&b, ",\"preparation\":"); measurement_descriptor(&b, path, NULL);
+    jbuf_puts(&b, ",\"artifacts\":");
+    measurement_descriptor(&b, o->record, NULL);
+    jbuf_puts(&b, ",\"preparation\":");
+    measurement_descriptor(&b, path, NULL);
     jbuf_puts(&b, ",\"exemption\":");
-    if (first) measurement_exemption(&b, o, id, bad); else jbuf_puts(&b, "null");
-    if (bad == -1) measurement_unavailable(&b, id, receipt);
+    if (first)
+        measurement_exemption(&b, o, id, bad);
+    else
+        jbuf_puts(&b, "null");
+    if (bad == -1)
+        measurement_unavailable(&b, id, receipt);
     jbuf_puts(&b, "}");
     fix_format(path, sizeof path, "%s/%s.context", fix_dir(), id);
     measurement_file(path, &b);
     struct etude_measurement_context *ctx = NULL;
-    CHECK(!etude_context_open(path, tree, o->record, o->site, measurement_commit, self,
-                               &ctx, error, sizeof error), "context: bound context opens");
+    CHECK(!etude_context_open(path, tree, o->record, o->site, measurement_commit, self, &ctx, error,
+                              sizeof error),
+          "context: bound context opens");
     return ctx;
 }
 static void measurement_unavailable_history(const struct run *r, const struct eh_json *load)
@@ -257,19 +286,23 @@ static void measurement_unavailable_history(const struct run *r, const struct eh
     const struct eh_json *kept = locations ? locations->child : NULL;
     char retained[8192];
     CHECK(kept && kept->type == 's' && read_text(kept->string, retained, sizeof retained) > 0 &&
-          !strcmp(retained, bytes), "context: raw unavailable trace is retained byte for byte");
+              !strcmp(retained, bytes),
+          "context: raw unavailable trace is retained byte for byte");
     fix_format(path, sizeof path, "%s/%s.outer-stop", fix_dir(), r->name);
     CHECK(exists(path), "context: completed observation still receives its stop request");
 }
 static void measurement_history(struct run *r, const struct etude_measurement_context *ctx,
-                                 const struct etude_preparation_receipt *receipt, int first,
-                                 int unavailable)
+                                const struct etude_preparation_receipt *receipt, int first,
+                                int unavailable)
 {
     struct eh_json *plan = measurement_record(r, "plan"), *run = measurement_record(r, "run");
     const struct eh_json *p = eh_json_get(plan, "data"), *data = eh_json_get(run, "data");
     CHECK(plan && run, "context: plan and run records exist");
     const struct eh_json *purpose = eh_json_get(p, "purpose");
-    CHECK(purpose && purpose->type == 's' && !strcmp(purpose->string, first ? "phase_first_run" : ctx ? "ci" : "focused"),
+    CHECK(purpose && purpose->type == 's' &&
+              !strcmp(purpose->string, first ? "phase_first_run"
+                                       : ctx ? "ci"
+                                             : "focused"),
           "context: requested purpose reaches the plan");
     if (ctx) {
         const char *keys[] = {"source", "tools", "site_profile", "cache_state"};
@@ -286,12 +319,15 @@ static void measurement_history(struct run *r, const struct etude_measurement_co
     const struct eh_json *charge = eh_json_get(budget, "charged_us");
     struct eh_json *load = measurement_blob(eh_json_get(data, "load"));
     const struct eh_json *available = eh_json_get(load, "comparison_available");
-    CHECK(available && available->type == 'f', "context: unavailable outer observation is not a baseline");
-    if (unavailable) measurement_unavailable_history(r, load);
+    CHECK(available && available->type == 'f',
+          "context: unavailable outer observation is not a baseline");
+    if (unavailable)
+        measurement_unavailable_history(r, load);
     if (ctx) {
-        uint64_t start = measurement_number(time, "start_us"), end = measurement_number(time, "end_us");
+        uint64_t start = measurement_number(time, "start_us"),
+                 end = measurement_number(time, "end_us");
         CHECK(start == receipt->start.monotonic_us && end >= receipt->end.monotonic_us &&
-              measurement_number(charge, "value") == end - start,
+                  measurement_number(charge, "value") == end - start,
               "context: charge is contiguous preparation start through final cleanup");
         struct eh_json *step = measurement_record(r, "step");
         const struct eh_json *step_data = eh_json_get(step, "data");
@@ -306,32 +342,41 @@ static void measurement_history(struct run *r, const struct etude_measurement_co
         const struct eh_json *proof = eh_json_get(load, "preparation");
         const struct eh_json *proof_id = eh_json_get(proof, "run_id");
         CHECK(proof_id && proof_id->type == 's' && !strcmp(proof_id->string, receipt->run_id) &&
-              measurement_number(eh_json_get(proof, "start"), "monotonic_us") == start,
+                  measurement_number(eh_json_get(proof, "start"), "monotonic_us") == start,
               "context: full preparation proof is retained with the run");
         const struct eh_json *verdict = eh_json_get(budget, "verdict");
-        CHECK(verdict && verdict->type == 's' && !strcmp(verdict->string, first ? "exempt" : "pass"),
+        CHECK(verdict && verdict->type == 's' &&
+                  !strcmp(verdict->string, first ? "exempt" : "pass"),
               "context: exact first-run exemption and routine CI budget differ");
     } else {
         const struct eh_json *value = eh_json_get(charge, "value");
-        CHECK(value && value->type == 'z', "context: prepared run without receipt has unknown ordinary charge");
+        CHECK(value && value->type == 'z',
+              "context: prepared run without receipt has unknown ordinary charge");
     }
-    eh_json_free(load); eh_json_free(plan); eh_json_free(run);
+    eh_json_free(load);
+    eh_json_free(plan);
+    eh_json_free(run);
 }
 static void measurement_export_bytes(const struct json *doc)
 {
     char hash[65];
-    const char *bytes = json_text(doc, "selection_bytes"), *digest = json_text(doc, "selection_sha256");
+    const char *bytes = json_text(doc, "selection_bytes"),
+               *digest = json_text(doc, "selection_sha256");
     const struct json *size = json_member(doc, "selection_size_bytes");
-    if (bytes) measurement_hash(bytes, hash); else hash[0] = 0;
-    CHECK(bytes && strlen(bytes) && bytes[strlen(bytes) - 1] == '\n' && digest && !strcmp(hash, digest) &&
-          size && size->type == JSON_INTEGER && size->integer == (long long)strlen(bytes),
+    if (bytes)
+        measurement_hash(bytes, hash);
+    else
+        hash[0] = 0;
+    CHECK(bytes && strlen(bytes) && bytes[strlen(bytes) - 1] == '\n' && digest &&
+              !strcmp(hash, digest) && size && size->type == JSON_INTEGER &&
+              size->integer == (long long)strlen(bytes),
           "context: exact exported bytes include the final newline and match their hash");
 }
 struct measurement_allocations {
     unsigned pass, tick, none, arch;
 };
-static void measurement_export_repeat(struct measurement_allocations *count,
-                                      const char *arch, long long repetition)
+static void measurement_export_repeat(struct measurement_allocations *count, const char *arch,
+                                      long long repetition)
 {
     CHECK((!strcmp(arch, "i686") || !strcmp(arch, "x86_64")) && repetition >= 0 && repetition < 2,
           "context: repeated case has its resolved architecture");
@@ -346,11 +391,15 @@ static void measurement_export_item(struct measurement_allocations *count, const
     const struct json *rep = json_member(item, "repetition");
     const char *id = json_text(item, "case_id"), *a = json_text(item, "architecture");
     CHECK(id && a && rep && rep->type == JSON_INTEGER, "context: allocated item is explicit");
-    if (!id || !a || !rep || rep->type != JSON_INTEGER) return;
-    if (!strcmp(id, "fixture.good.pass")) measurement_export_repeat(count, a, rep->integer);
-    else if (!strcmp(id, "fixture.good.tick")) count->tick |= !strcmp(a, "i686") ? 1u : !strcmp(a, "x86_64") ? 2u : 0u;
+    if (!id || !a || !rep || rep->type != JSON_INTEGER)
+        return;
+    if (!strcmp(id, "fixture.good.pass"))
+        measurement_export_repeat(count, a, rep->integer);
+    else if (!strcmp(id, "fixture.good.tick"))
+        count->tick |= !strcmp(a, "i686") ? 1u : !strcmp(a, "x86_64") ? 2u : 0u;
     else if (!strcmp(id, "fixture.good.none")) {
-        CHECK(!strcmp(a, "none") && !rep->integer, "context: architecture-independent work retains none");
+        CHECK(!strcmp(a, "none") && !rep->integer,
+              "context: architecture-independent work retains none");
         count->none++;
     } else if (!strcmp(id, "fixture.good.arch")) {
         CHECK(!strcmp(a, "x86_64") && !rep->integer, "context: x86-64-only work stays x86-64");
@@ -363,7 +412,8 @@ static void measurement_export_items(const struct json *doc)
     struct measurement_allocations count = {0};
     CHECK(items && items->type == JSON_ARRAY && items->count == 8,
           "context: exact repeated items are allocated once per architecture");
-    for (size_t i = 0; items && i < items->count; i++) measurement_export_item(&count, items->item[i]);
+    for (size_t i = 0; items && i < items->count; i++)
+        measurement_export_item(&count, items->item[i]);
     CHECK(count.pass == 15 && count.tick == 3 && count.none == 1 && count.arch == 1,
           "context: full exported first-attempt scope matches the selected workloads");
 }
@@ -375,7 +425,10 @@ static void measurement_export_cases(void)
     struct etude_legacy_set_opts o;
     char path[PATH_LEN], text[32768], error[256];
     memset(&r, 0, sizeof r);
-    r.name = "measurement-export"; r.members = &member; r.n = 1; r.width = 1;
+    r.name = "measurement-export";
+    r.members = &member;
+    r.n = 1;
+    r.width = 1;
     opts_for(&o, &r);
     o.arch = "i686,x86_64";
     o.native_locks = locks;
@@ -383,7 +436,8 @@ static void measurement_export_cases(void)
     CHECK(!etude_legacy_selection_export(&o, path), "context: both-architecture selection exports");
     CHECK(read_text(path, text, sizeof text) > 0, "context: allocation export reads");
     struct json *doc = NULL;
-    CHECK(!json_parse(text, strlen(text), 1, &doc, error, sizeof error), "context: allocation export parses");
+    CHECK(!json_parse(text, strlen(text), 1, &doc, error, sizeof error),
+          "context: allocation export parses");
     measurement_export_bytes(doc);
     measurement_export_items(doc);
     json_free(doc);
@@ -408,21 +462,35 @@ static void test_contexts(void)
         memset(&r, 0, sizeof r);
         fix_format(id, sizeof id, "measurement-context-%d", n);
         measurement_paths(&r, id);
-        r.members = &member; r.n = 1; r.width = 1;
+        r.members = &member;
+        r.n = 1;
+        r.width = 1;
         opts_for(&o, &r);
-        o.prepared = 1; o.record = record; o.native_locks = locks;
-        o.run_id = id; o.commit = measurement_commit; o.stop = &stop_signal;
+        o.prepared = 1;
+        o.record = record;
+        o.native_locks = locks;
+        o.run_id = id;
+        o.commit = measurement_commit;
+        o.stop = &stop_signal;
         o.site = in(site, sizeof site, "site.permits");
-        if (n) ctx = measurement_context(&o, id, n >= 2 && n < 8,
-                                          n == 11 ? -1 : n >= 3 && n < 8 ? n - 2 : 0, &receipt);
+        if (n)
+            ctx = measurement_context(&o, id, n >= 2 && n < 8,
+                                      n == 11           ? -1
+                                      : n >= 3 && n < 8 ? n - 2
+                                                        : 0,
+                                      &receipt);
         o.context = ctx;
-        if (n == 8) o.commit = "2222222222222222222222222222222222222222";
-        if (n == 9) o.commit = NULL;
-        if (n == 10) o.run_id = "unrelated-run";
+        if (n == 8)
+            o.commit = "2222222222222222222222222222222222222222";
+        if (n == 9)
+            o.commit = NULL;
+        if (n == 10)
+            o.run_id = "unrelated-run";
         o.out = fopen(r.out_file, "wb");
         CHECK(o.out != NULL, "context: output opens");
         r.status = o.out ? etude_legacy_set(&o) : 2;
-        if (o.out) fclose(o.out);
+        if (o.out)
+            fclose(o.out);
         history_read(&r);
         if (n < 3 || n == 11) {
             CHECK(!r.status && !r.read, "context: valid prepared host run succeeds");
@@ -433,8 +501,8 @@ static void test_contexts(void)
             if (n >= 8) {
                 char output[4096];
                 CHECK(read_text(r.out_file, output, sizeof output) > 0 &&
-                      strstr(output, n == 10 ? "allocated run identity differs" :
-                             "differs from the verified source commit"),
+                          strstr(output, n == 10 ? "allocated run identity differs"
+                                                 : "differs from the verified source commit"),
                       "context: direct API refuses a conflicting or absent identity");
             }
         }
@@ -443,7 +511,8 @@ static void test_contexts(void)
         long claims = 0;
         CHECK(l && !etude_ledger_list(l, count_claim, &claims) && !claims,
               "context: no admission claim remains");
-        if (l) etude_ledger_close(l);
+        if (l)
+            etude_ledger_close(l);
         etude_context_close(ctx);
         history_free(&r.h);
     }

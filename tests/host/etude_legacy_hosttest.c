@@ -43,6 +43,7 @@
 #include "etude/legacy.h"
 #include "sha256.h"
 #include "../../tools/etude/json.h"
+#include "../../tools/etude/measurement_context.h"
 
 static int fails;
 
@@ -77,7 +78,7 @@ static const char makefile[] =
     "components: $(ARCH_BUILD)/rach2/kernel\n"
     "\t@$(note)\n"
     "\t@test ! -f fail-components\n"
-    "\t@test -z \"$$ETUDE_PREPARATION_RUN_ID$$ETUDE_PREPARATION_RECEIPT$$ETUDE_PREPARATION_COMMIT\"\n"
+    "\t@test -z \"$$ETUDE_PREPARATION_RUN_ID$$ETUDE_PREPARATION_RECEIPT$$ETUDE_PREPARATION_COMMIT$$ETUDE_PREPARATION_GRANT\"\n"
     "$(ARCH_BUILD)/rach2/kernel:\n"
     "\t@mkdir -p $(@D) && echo kernel > $@ && $(note)\n"
     "recovery-key:\n"
@@ -302,11 +303,13 @@ static void receipt_env(const char *path)
         unsetenv("ETUDE_PREPARATION_RUN_ID");
         unsetenv("ETUDE_PREPARATION_RECEIPT");
         unsetenv("ETUDE_PREPARATION_COMMIT");
+        unsetenv("ETUDE_PREPARATION_GRANT");
     }
 }
 
 /** The receipt binds the completed record and one nonempty clock interval. */
-static void check_receipt(const char *path, const char *record)
+static void check_receipt(const char *path, const char *record,
+                           const struct etude_preparation_grant *grant)
 {
     char text[2048], error[160], hex[65];
     struct json *doc = NULL;
@@ -329,6 +332,9 @@ static void check_receipt(const char *path, const char *record)
     CHECK(start && end && start->type == JSON_INTEGER && end->type == JSON_INTEGER &&
               start->integer < end->integer,
           "receipt: elapsed preparation includes the build");
+    CHECK(start && start->type == JSON_INTEGER &&
+          (uint64_t)start->integer == grant->start.monotonic_us,
+          "receipt: interval begins at the first admission grant");
     json_free(doc);
 }
 
@@ -348,7 +354,13 @@ static void test_alone(void)
     make_tree("alone", tree, sizeof(tree));
     opts_for(&o, tree, "alone", goals);
     fix_format(receipt, sizeof(receipt), "%s/alone.receipt", fix_dir());
+    struct etude_preparation_grant grant;
+    CHECK(!etude_history_now(&grant.start) && !etude_context_clock(&grant.clock),
+          "receipt: first grant is read");
+    CHECK(!etude_context_grant_write(fix_path("alone.grant"), "fixture-preparation-1:prepare", &grant),
+          "receipt: admission grant writes");
     receipt_env(receipt);
+    setenv("ETUDE_PREPARATION_GRANT", fix_path("alone.grant"), 1);
     run(&o, &r);
     receipt_env(NULL);
     read_text(in(path, sizeof(path), tree, "calls"), calls, sizeof(calls));
@@ -380,13 +392,13 @@ static void test_alone(void)
           "alone: the demo key's mode");
     CHECK(!exists(o.work), "alone: the work removed");
     show(&r, before);
-    check_receipt(receipt, record);
+    check_receipt(receipt, record, &grant);
     receipt_env(receipt);
     run(&o, &r);
     receipt_env(NULL);
     CHECK(r.status == 2 && strstr(r.out, "receipt must be a new file"),
           "receipt: duplicate refused before preparing");
-    check_receipt(receipt, record);
+    check_receipt(receipt, record, &grant);
 }
 
 /** The same goals again: no key minted, nothing rebuilt. */
@@ -519,6 +531,20 @@ static void test_refused(void)
     setenv("RACH2_TREE_HELD", held, 1);
     setenv("ETUDE_PREPARATION_RUN_ID", "partial", 1);
     refused(tree, "receipt-partial", a, "i686", NULL,
+            "a preparation receipt needs RUN_ID, RECEIPT and COMMIT variables "
+            "and an artifact record");
+    receipt_env(NULL);
+    struct etude_preparation_grant grant;
+    CHECK(!etude_history_now(&grant.start) && !etude_context_clock(&grant.clock) &&
+          !etude_context_grant_write(fix_path("wrong.grant"), "another:prepare", &grant),
+          "refused: unrelated grant is prepared");
+    receipt_env(fix_path("wrong-grant.receipt"));
+    setenv("ETUDE_PREPARATION_GRANT", fix_path("wrong.grant"), 1);
+    refused(tree, "grant-wrong", a, "i686", NULL,
+            "the preparation grant does not match this run and clock");
+    receipt_env(NULL);
+    setenv("ETUDE_PREPARATION_GRANT", fix_path("wrong.grant"), 1);
+    refused(tree, "grant-unpaired", a, "i686", NULL,
             "a preparation receipt needs RUN_ID, RECEIPT and COMMIT variables "
             "and an artifact record");
     receipt_env(NULL);
@@ -849,6 +875,13 @@ int main(int argc, char **argv)
     setenv("MAKEFLAGS", "n", 1);
     setenv("ARCH", "x86_64", 1);
     test_alone();
+    if (argc == 2 && !strcmp(argv[1], "--receipt-only")) {
+        test_refused();
+        if (fails) return 1;
+        fix_passed();
+        puts("etude_legacy_hosttest: receipt pass");
+        return 0;
+    }
     test_again();
     test_machine();
     test_helper_architecture();

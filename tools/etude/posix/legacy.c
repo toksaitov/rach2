@@ -60,7 +60,8 @@ static const char script_path[] = "exec 2>\"$1\"; [ ! -f tools/setup/e2fsprogs_p
  * descriptors do not reach it, so each step's make is a make of its own. */
 static const char *const dropped_env[] = {
     "MAKEFLAGS=", "MFLAGS=", "MAKELEVEL=", "LC_ALL=", "PATH=",
-    "ETUDE_PREPARATION_RUN_ID=", "ETUDE_PREPARATION_RECEIPT=", "ETUDE_PREPARATION_COMMIT="};
+    "ETUDE_PREPARATION_RUN_ID=", "ETUDE_PREPARATION_RECEIPT=", "ETUDE_PREPARATION_COMMIT=",
+    "ETUDE_PREPARATION_GRANT="};
 
 /* A list of strings from malloc. */
 struct list {
@@ -243,10 +244,11 @@ static int begin_receipt(struct prep *p)
     const char *run = getenv("ETUDE_PREPARATION_RUN_ID");
     const char *path = getenv("ETUDE_PREPARATION_RECEIPT");
     const char *commit = getenv("ETUDE_PREPARATION_COMMIT");
+    const char *seed = getenv("ETUDE_PREPARATION_GRANT");
     struct stat st;
     size_t n;
 
-    if (!run && !path && !commit)
+    if (!run && !path && !commit && !seed)
         return 0;
     if (!run || !path || !commit || !*path || !p->o->record)
         return refuse(p, "a preparation receipt needs RUN_ID, RECEIPT and COMMIT variables "
@@ -264,6 +266,16 @@ static int begin_receipt(struct prep *p)
     memcpy(p->receipt.commit, commit, 41);
     if (etude_context_clock(&p->receipt.clock) || etude_history_now(&p->receipt.start))
         return refuse(p, "the preparation clock or machine identity is unavailable");
+    if (seed) {
+        struct etude_preparation_grant grant;
+        char claim[sizeof p->receipt.run_id + 8];
+        int size = snprintf(claim, sizeof claim, "%s:prepare", run);
+        if (size < 0 || (size_t)size >= sizeof claim ||
+            etude_context_grant_read(seed, claim, &grant))
+            return refuse(p, "the preparation grant does not match this run and clock");
+        p->receipt.clock = grant.clock;
+        p->receipt.start = grant.start;
+    }
     p->receipt_path = path;
     return 0;
 }

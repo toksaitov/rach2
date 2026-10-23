@@ -9,6 +9,7 @@
 #include "etude/bridge.h"
 #include "etude/ledger.h"
 #include "posix.h"
+#include "../measurement_context.h"
 
 #ifdef _WIN32
 #include "../win/files.h"
@@ -337,6 +338,16 @@ static int parse(int argc, char **argv, struct request *q)
     return q->seconds == 0 ? -1 : 0;
 }
 
+/* Record the first granted reading before locks or a child can delay it. */
+static int grant_start(const char *claim)
+{
+    const char *path = getenv("ETUDE_PREPARATION_GRANT");
+    struct etude_preparation_grant g;
+    if (!path) return 0;
+    if (etude_history_now(&g.start) || etude_context_clock(&g.clock)) return -1;
+    return etude_context_grant_write(path, claim, &g);
+}
+
 /**
  * Admit the claim of `q` in `l` and take its locks, within -w's bound when
  * one was given, and set RACH2_PORT_OFFSET for a legacy port block.
@@ -357,6 +368,14 @@ static struct etude_bridge *take(struct etude_ledger *l, const struct request *q
                     q->wait);
         else
             fprintf(stderr, "etude admit: result: refused: admission: %s\n", strerror(errno));
+        return NULL;
+    }
+    if (grant_start(q->id)) {
+        int error = errno;
+        fprintf(stderr, "etude admit: result: refused: preparation grant: %s\n", strerror(error));
+        if (etude_ledger_finish(l, q->id, ETUDE_CLEANUP_CONFIRMED))
+            fprintf(stderr, "etude admit: preparation grant cleanup: %s\n", strerror(errno));
+        errno = error;
         return NULL;
     }
     if (q->wait != 0) {

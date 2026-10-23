@@ -10,6 +10,17 @@ struct etude_context_clock {
     char machine_id[128], boot_id[128];
 };
 
+/* Admission records its first granted reading before waiting for host locks. */
+struct etude_preparation_grant {
+    struct etude_context_clock clock;
+    struct etude_reading start;
+};
+int etude_context_grant_write(const char *path, const char *claim_id,
+                              const struct etude_preparation_grant *grant);
+/* Require the exact claim, current machine and boot, and no future reading. */
+int etude_context_grant_read(const char *path, const char *claim_id,
+                             struct etude_preparation_grant *grant);
+
 /* A receipt is valid only after preparation and owned cleanup succeeded. */
 struct etude_preparation_receipt {
     char run_id[256], commit[41], record_sha256[65];

@@ -286,6 +286,19 @@ static void put_reading(struct jbuf *b, const struct etude_reading *r)
              (unsigned long long)r->monotonic_us, (unsigned long long)r->resolution_us);
     jbuf_puts(b, numbers);
 }
+static int create_document(const char *path, struct jbuf *b)
+{
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600), ok = 0;
+    FILE *f = fd < 0 ? NULL : fdopen(fd, "wb");
+    if (f) {
+        ok = fwrite(b->data, 1, b->len, f) == b->len && !fflush(f) && !context_sync(fd);
+        if (fclose(f))
+            ok = 0;
+    } else if (fd >= 0)
+        close(fd);
+    jbuf_free(b);
+    return ok ? 0 : -1;
+}
 static int valid_receipt(const struct etude_preparation_receipt *r)
 {
     return r && r->passed && r->cleanup_confirmed && eh_identity(r->run_id) &&
@@ -317,16 +330,7 @@ int etude_context_receipt_write(const char *path, const struct etude_preparation
     jbuf_puts(&b, ",\"end\":");
     put_reading(&b, &r->end);
     jbuf_puts(&b, "}\n");
-    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600), ok = 0;
-    FILE *f = fd < 0 ? NULL : fdopen(fd, "wb");
-    if (f) {
-        ok = fwrite(b.data, 1, b.len, f) == b.len && !fflush(f) && !context_sync(fd);
-        if (fclose(f))
-            ok = 0;
-    } else if (fd >= 0)
-        close(fd);
-    jbuf_free(&b);
-    return ok ? 0 : -1;
+    return create_document(path, &b);
 }
 static int copy_field(const struct json *doc, const char *key, char *out, size_t size)
 {
@@ -335,6 +339,51 @@ static int copy_field(const struct json *doc, const char *key, char *out, size_t
         return -1;
     strcpy(out, v);
     return 0;
+}
+int etude_context_grant_write(const char *path, const char *claim,
+                              const struct etude_preparation_grant *g)
+{
+    struct jbuf b = {0};
+    if (!absolute(path) || !eh_identity(claim) || !g ||
+        !eh_identity(g->clock.machine_id) || !eh_identity(g->clock.boot_id) ||
+        !eh_utc(g->start.utc) || !g->start.resolution_us ||
+        g->start.monotonic_us > ETUDE_HISTORY_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    jbuf_puts(&b, "{\"schema_version\":1,\"format\":\"etude-preparation-grant\",\"claim_id\":");
+    quote(&b, claim);
+    jbuf_puts(&b, ",\"machine_id\":"); quote(&b, g->clock.machine_id);
+    jbuf_puts(&b, ",\"boot_id\":"); quote(&b, g->clock.boot_id);
+    jbuf_puts(&b, ",\"start\":"); put_reading(&b, &g->start);
+    jbuf_puts(&b, "}\n");
+    return create_document(path, &b);
+}
+int etude_context_grant_read(const char *path, const char *claim,
+                             struct etude_preparation_grant *g)
+{
+    struct etude_context_clock clock;
+    struct etude_reading now;
+    struct stat st;
+    if (!g || !absolute(path) || !eh_identity(claim) || lstat(path, &st) ||
+        !S_ISREG(st.st_mode) || st.st_size > 4096) {
+        errno = EINVAL;
+        return -1;
+    }
+    memset(g, 0, sizeof *g);
+    struct json *doc = document(path);
+    const char *format = json_text(doc, "format"), *id = json_text(doc, "claim_id");
+    int ok = version(doc) && format && !strcmp(format, "etude-preparation-grant") &&
+        id && !strcmp(id, claim) &&
+        !copy_field(doc, "machine_id", g->clock.machine_id, sizeof g->clock.machine_id) &&
+        !copy_field(doc, "boot_id", g->clock.boot_id, sizeof g->clock.boot_id) &&
+        !reading(json_member(doc, "start"), &g->start) &&
+        !etude_context_clock(&clock) && !etude_history_now(&now) &&
+        !strcmp(clock.machine_id, g->clock.machine_id) && !strcmp(clock.boot_id, g->clock.boot_id) &&
+        g->start.monotonic_us <= now.monotonic_us;
+    json_free(doc);
+    if (!ok) errno = EINVAL;
+    return ok ? 0 : -1;
 }
 static int preparation(struct etude_measurement_context *c, const struct json *root,
                        const char *commit, const char *record_hash)

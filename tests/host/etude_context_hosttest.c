@@ -117,6 +117,34 @@ static void bad_receipt(const char *name, int kind)
     CHECK(open_context(&c) != 0 && !c, "unrelated or future preparation is refused");
     etude_context_close(c);
 }
+static void test_grants(void)
+{
+    struct etude_preparation_grant grant = {receipt.clock, receipt.start}, loaded;
+    const char *claim = "context-test:prepare";
+    CHECK(!etude_context_grant_write(fix_path("grant"), claim, &grant), "grant writes once");
+    CHECK(!etude_context_grant_read(fix_path("grant"), claim, &loaded) &&
+          loaded.start.monotonic_us == grant.start.monotonic_us &&
+          !strcmp(loaded.clock.boot_id, grant.clock.boot_id), "first grant reading is preserved");
+    CHECK(etude_context_grant_write(fix_path("grant"), claim, &grant) != 0,
+          "an existing grant is never replaced");
+    CHECK(etude_context_grant_read(fix_path("grant"), "unrelated:prepare", &loaded) != 0,
+          "another claim cannot supply the start");
+    CHECK(etude_context_grant_write("relative-grant", claim, &grant) != 0,
+          "grant requires an absolute output path");
+    strcpy(grant.clock.boot_id, "another-boot");
+    CHECK(!etude_context_grant_write(fix_path("grant-boot"), claim, &grant) &&
+          etude_context_grant_read(fix_path("grant-boot"), claim, &loaded) != 0,
+          "a grant from another boot is refused");
+    grant.clock = receipt.clock;
+    grant.start.monotonic_us += UINT64_C(10000000000);
+    CHECK(!etude_context_grant_write(fix_path("grant-future"), claim, &grant) &&
+          etude_context_grant_read(fix_path("grant-future"), claim, &loaded) != 0,
+          "a future grant is refused");
+    put("grant-malformed", "{}\n");
+    CHECK(etude_context_grant_read(fix_path("grant-malformed"), claim, &loaded) != 0,
+          "a malformed grant is refused");
+}
+
 int main(void)
 {
     char descriptor_text[2048], error[256];
@@ -138,6 +166,7 @@ int main(void)
     CHECK(!etude_context_clock(&receipt.clock), "native clock identity exists");
     CHECK(!etude_history_now(&receipt.start), "preparation start is read");
     receipt.end = receipt.start;
+    test_grants();
 #ifdef _WIN32
     const char *platform = "windows-native-counters-v1";
 #elif defined(__APPLE__)

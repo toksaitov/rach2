@@ -2,6 +2,9 @@
  * Check the bridge against the POSIX record locks used by old runners.
  * host-deps: tools/etude/posix/bridge.c tools/etude/portlock.c
  * host-deps: tools/etude/ledger.c
+ * host-deps: tools/etude/measurement_context.c tools/etude/json.c
+ * host-deps: tools/etude/history.c tools/etude/history_json.c
+ * host-deps: tools/etude/history_collect.c
  * host-deps: tools/etude/posix/process.c tools/etude/capture.c utils/sha256.c
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
  * host-cflags: -I tools/etude/include -Wall -Wextra -Werror
@@ -935,6 +938,33 @@ static void missing_program(const char *ledger)
     fclose(err);
 }
 
+/* A failed grant publication releases the claim before any command starts. */
+static void grant_seed(struct etude_ledger *l, const char *ledger)
+{
+    struct request q = {0};
+    struct etude_preparation_grant grant;
+    struct etude_reading before;
+    q.ledger = ledger; q.dir = fix_dir(); q.id = "grant:prepare"; q.account = "fixture";
+    q.res[1].name = q.cap[1].name = "memory_bytes";
+    q.res[1].amount = 1; q.cap[1].amount = 20;
+    CHECK(!etude_history_now(&before), "grant clock reads");
+    setenv("ETUDE_PREPARATION_GRANT", fix_path("admission.grant"), 1);
+    struct etude_bridge *b = take(l, &q);
+    CHECK(b && !etude_context_grant_read(fix_path("admission.grant"), q.id, &grant) &&
+          grant.start.monotonic_us >= before.monotonic_us, "admission records its grant before locks");
+    CHECK(!etude_ledger_finish(l, q.id, ETUDE_CLEANUP_CONFIRMED), "grant fixture claim ends");
+    if (b) etude_bridge_join(b);
+    b = take(l, &q);
+    CHECK(!b, "existing grant refuses admission before a child");
+    if (b) {
+        etude_ledger_finish(l, q.id, ETUDE_CLEANUP_CONFIRMED);
+        etude_bridge_join(b);
+    }
+    CHECK(etude_ledger_finish(l, q.id, ETUDE_CLEANUP_CONFIRMED) != 0 && errno == ENOENT,
+          "grant write failure leaves no claim");
+    unsetenv("ETUDE_PREPARATION_GRANT");
+}
+
 /** Exercise the bridge with private locks, without using host admission. */
 int main(int argc, char **argv)
 {
@@ -960,6 +990,12 @@ int main(int argc, char **argv)
     CHECK(l != NULL, "open ledger");
     if (l == NULL)
         return 1;
+    grant_seed(l, ledger);
+    if (argc == 2 && !strcmp(argv[1], "--grant-only")) {
+        etude_ledger_close(l);
+        if (!fails) fix_passed();
+        return fails != 0;
+    }
     b = start(ledger, "absent", fix_dir(), 0, 0, 0);
     CHECK(b == NULL && errno == ENOENT, "absent claim refused");
     collection(l, ledger);
