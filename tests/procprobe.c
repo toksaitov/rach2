@@ -60,9 +60,10 @@
  * `/proc/net/tcp` as a whole row of the probe's, `procs_blocked` of 0, the
  * idle and busy ticks, and the count of the lines of `/proc/mounts`; it finds
  * its listener's row by its port rather than as the last, and the host bridge
- * by its class rather than at 00:00.0; and it requires the interface's
- * address in Linux's form without QEMU's prefix, and its PCI function on any
- * bus.
+ * by its class rather than at 00:00.0; it requires the interface's address
+ * in Linux's form without QEMU's prefix, and its PCI function on any bus; and
+ * it takes the root's line of mountinfo with the device of the machine's
+ * root, whatever that is, in place of the test image's 0:0.
  */
 
 #include "probe.h"
@@ -1186,6 +1187,24 @@ static const char *host_bridge(void)
     return slot;
 }
 
+/** Whether `buf` of `n` bytes begins with mountinfo's line for the root, of
+ * id 1 and parent 1, with the device 0:0 or, given `machine=native`, any. */
+static int root_line(const char *buf, int n)
+{
+    int i = 4;
+
+    if (!probe_native()) {
+        return contains(buf, n < 12 ? n : 12, "1 1 0:0 / / ");
+    }
+    if (n < 4 || !contains(buf, 4, "1 1 ")) {
+        return 0;
+    }
+    while (i < n && buf[i] != ' ' && buf[i] != '\n') {
+        i++;
+    }
+    return i + 5 <= n && contains(buf + i, 5, " / / ");
+}
+
 /** /sys: the host bridge every machine here has at 00:00.0, its link in the
  * bus's list leading where Linux's does, and its uevent with the variables
  * lspci reads; the mount table listing /sys read-only; and mountinfo with
@@ -1219,8 +1238,7 @@ static void sys_rows(void)
           "/proc/mounts lists /sys, read-only");
     n = slurp("/proc/self/mountinfo", buf, (int)sizeof(buf));
     check("mountinfo",
-          contains(buf, n < 12 ? n : 12, "1 1 0:0 / / ") &&
-              contains(buf, n, "\n3 1 0:6 / /proc rw,relatime - proc proc rw\n") &&
+          root_line(buf, n) && contains(buf, n, "\n3 1 0:6 / /proc rw,relatime - proc proc rw\n") &&
               contains(buf, n, "\n4 2 0:19 / /dev/shm rw,nosuid,nodev - tmpfs tmpfs rw\n") &&
               contains(buf, n, "\n6 1 0:7 / /sys ro,nosuid,nodev,noexec - sysfs sysfs ro\n"),
           "/proc/self/mountinfo has each mount's id, parent, device and options");
