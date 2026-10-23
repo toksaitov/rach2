@@ -113,8 +113,12 @@ static void imports(void)
     free(bounded);
     trace(text, sizeof text, 6000000, 0);
     CHECK(etude_observe_import(text, strlen(text), "fixture", 100, 12000100) == NULL);
+    v = etude_observe_read(text, strlen(text), "fixture", 100, 12000100);
+    CHECK(v && strstr(v, "\"comparison_available\":false")); free(v);
     trace(text, sizeof text, 1000000, 1);
     CHECK(etude_observe_import(text, strlen(text), "fixture", 100, 2000100) == NULL);
+    v = etude_observe_read(text, strlen(text), "fixture", 100, 2000100);
+    CHECK(v && strstr(v, "\"comparison_available\":false")); free(v);
     CHECK(etude_observe_utc("1970-01-01T00:00:01.000001Z") == 1000001);
     CHECK(etude_observe_utc("invalid") == 0);
 }

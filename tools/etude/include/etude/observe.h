@@ -26,6 +26,10 @@ void etude_observe_free(struct etude_observer *observer);
 void etude_observe_bounds(const struct etude_observer *observer, uint64_t *start_utc_us,
                           uint64_t *end_utc_us);
 int etude_observe_main(int argc, char **argv);
+/* Read a complete trace; unavailable counters/coverage yield a summary with
+ * comparison_available false. NULL denotes malformed or incomplete capture. */
+char *etude_observe_read(const char *bytes, size_t length, const char *run_id,
+                         uint64_t start_utc_us, uint64_t end_utc_us);
 /* Verify the complete native trace and its coverage, returning JSON or NULL. */
 char *etude_observe_import(const char *bytes, size_t length, const char *run_id,
                            uint64_t start_utc_us, uint64_t end_utc_us);

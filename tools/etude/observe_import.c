@@ -12,7 +12,7 @@ struct trace_reader {
     const char *first, *last;
     size_t first_size, last_size, count;
     uint64_t start_utc, end_utc, start_us, end_us, cpu, max_gap;
-    int cpu_known, ended;
+    int cpu_known, ended, utc_reset;
 };
 
 uint64_t etude_observe_utc(const char *utc)
@@ -108,8 +108,9 @@ static int sample(struct trace_reader *r, const struct eh_json *v, const char *l
         r->start_us = mono;
         r->cpu_known = known;
     } else {
-        if (mono < r->end_us || utc < r->end_utc)
+        if (mono < r->end_us)
             return -1;
+        if (utc < r->end_utc) r->utc_reset = 1;
         if (mono - r->end_us > r->max_gap)
             r->max_gap = mono - r->end_us;
         if (!known || (r->cpu_known && cpu < r->cpu))
@@ -157,8 +158,8 @@ static int read_line(struct trace_reader *r, const char *line, size_t n, const c
     return rc;
 }
 
-char *etude_observe_import(const char *bytes, size_t length, const char *run, uint64_t start,
-                           uint64_t end)
+static char *read_trace(const char *bytes, size_t length, const char *run, uint64_t start,
+                        uint64_t end, int strict)
 {
     struct trace_reader r = {0};
     struct jbuf b = {0};
@@ -173,16 +174,16 @@ char *etude_observe_import(const char *bytes, size_t length, const char *run, ui
             goto fail;
         p = nl + 1;
     }
-    if (!r.ended || !r.cpu_known || r.max_gap > 5 * ETUDE_OBSERVE_INTERVAL_US ||
-        r.start_utc > start || r.end_utc < end)
-        goto fail;
+    int available = r.ended && r.count >= 2 && r.cpu_known && !r.utc_reset &&
+        r.max_gap <= 5 * ETUDE_OBSERVE_INTERVAL_US && r.start_utc <= start && r.end_utc >= end;
+    if (!r.ended || (strict && !available)) goto fail;
     char prefix[512];
     snprintf(
         prefix, sizeof prefix,
         "{\"schema_version\":1,\"method\":\"native-load-v1\","
-        "\"comparison_available\":true,\"coverage\":{\"start_utc_us\":%llu,\"end_utc_us\":%llu,"
+        "\"comparison_available\":%s,\"coverage\":{\"start_utc_us\":%llu,\"end_utc_us\":%llu,"
         "\"start_us\":%llu,\"end_us\":%llu,\"samples\":%lu,\"max_gap_us\":%llu},\"first\":",
-        (unsigned long long)r.start_utc, (unsigned long long)r.end_utc,
+        available ? "true" : "false", (unsigned long long)r.start_utc, (unsigned long long)r.end_utc,
         (unsigned long long)r.start_us, (unsigned long long)r.end_us, (unsigned long)r.count,
         (unsigned long long)r.max_gap);
     jbuf_puts(&b, prefix);
@@ -195,4 +196,16 @@ char *etude_observe_import(const char *bytes, size_t length, const char *run, ui
 fail:
     eh_json_free(r.header);
     return NULL;
+}
+
+char *etude_observe_read(const char *bytes, size_t length, const char *run, uint64_t start,
+                         uint64_t end)
+{
+    return read_trace(bytes, length, run, start, end, 0);
+}
+
+char *etude_observe_import(const char *bytes, size_t length, const char *run, uint64_t start,
+                           uint64_t end)
+{
+    return read_trace(bytes, length, run, start, end, 1);
 }
