@@ -804,6 +804,27 @@ static int listed(const struct json *list, const char *value)
     return 0;
 }
 
+/** An architecture override belongs only to a declared helper machine. */
+static void rule_helper_architecture(const struct rule *r)
+{
+    const struct json *machines = json_member(r->c, "machines");
+    const struct json *qemu = json_member(json_member(r->c, "requirements"), "qemu");
+    const struct json *arch = json_member(qemu, "architecture");
+    size_t i;
+
+    if (arch != NULL)
+        finding(r->file, arch->line, "%s: only a helper machine may override its architecture",
+                json_text(r->c, "case_id"));
+    for (i = 0; machines != NULL && i < machines->count; i++) {
+        const struct json *machine = machines->item[i];
+        const struct json *helper = json_member(machine, "helper");
+        arch = json_member(json_member(machine, "qemu"), "architecture");
+        if (arch != NULL && (helper == NULL || !helper->integer))
+            finding(r->file, arch->line, "%s: only a helper machine may override its architecture",
+                    json_text(r->c, "case_id"));
+    }
+}
+
 /**
  * A machine case's steps run on its machines, under identities of its own,
  * and each of its services runs a tool of its requirements or an artifact
@@ -1215,7 +1236,9 @@ static int qemu_memory(const struct rule *r, const struct json *qemu,
     struct etude_qemu_profile p;
 
     memset(&p, 0, sizeof(p));
-    p.architecture = arches->count == 1 ? arches->item[0]->string : "both";
+    p.architecture = json_text(qemu, "architecture");
+    if (p.architecture == NULL)
+        p.architecture = arches->count == 1 ? arches->item[0]->string : "both";
     p.cpu = json_text(qemu, "cpu");
     p.initrd = json_text(qemu, "initrd");
     p.memory_profile = json_text(qemu, "memory_profile");
@@ -1501,6 +1524,7 @@ static void check_case(const char *file, const struct json *c, const char *root)
     rule_attached(&r);
     rule_captures(&r);
     rule_steps(&r);
+    rule_helper_architecture(&r);
     rule_suspensions(&r);
     rule_networks(&r);
     rule_faults(&r);

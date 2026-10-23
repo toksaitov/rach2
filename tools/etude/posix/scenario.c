@@ -573,7 +573,7 @@ static int load_steps(struct etude_case *c)
         }
     }
     for (i = 0, s = machines != NULL ? machines->child : NULL; s != NULL; s = s->next, i++) {
-        const char *console = jtext(s, "console");
+        const char *console = jtext(s, "console"), *arch;
 
         c->decls[i].id = jtext(s, "machine_id");
         c->decls[i].qemu = eh_json_get(s, "qemu");
@@ -582,6 +582,14 @@ static int load_steps(struct etude_case *c)
         c->decls[i].helper = jbool(s, "helper") == 1;
         if (c->decls[i].id == NULL || c->decls[i].qemu == NULL) {
             diag("machine %lu of the case has no identity or profile", (unsigned long)i);
+            return -1;
+        }
+        arch = jtext(c->decls[i].qemu, "architecture");
+        if (eh_json_get(c->decls[i].qemu, "architecture") != NULL &&
+            (!c->decls[i].helper || arch == NULL ||
+             (strcmp(arch, "i686") != 0 && strcmp(arch, "x86_64") != 0))) {
+            diag("machine %s: only a helper may select architecture i686 or x86_64",
+                 c->decls[i].id);
             return -1;
         }
     }
@@ -1669,6 +1677,13 @@ static enum etude_firmware firmware_of(const char *firmware)
     return ETUDE_FIRMWARE_DIRECT;
 }
 
+/** Resolve a helper's explicit architecture, or the case architecture. */
+static const char *machine_architecture(const struct etude_case *c, const struct machine_decl *d)
+{
+    const char *arch = d->helper ? jtext(d->qemu, "architecture") : NULL;
+    return arch != NULL ? arch : c->arch;
+}
+
 /**
  * Give the memory a boot of declaration `d` reserves on the case's
  * architecture: its resident RAM and QEMU's overhead, as etude_qemu_memory
@@ -1689,7 +1704,7 @@ static uint64_t decl_need(const struct etude_case *c, const struct machine_decl 
     memset(disks, 0, sizeof(disks));
     for (i = 0; i < n && i < DISKS_MAX; i++)
         disks[i].path = "disk";
-    p.architecture = c->arch;
+    p.architecture = machine_architecture(c, d);
     p.initrd = jtext(qp, "initrd");
     p.cpu = jtext(qp, "cpu");
     p.processors = (unsigned)jnum(qp, "processors");
@@ -1894,7 +1909,7 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
         m->disks[i].unsafe = d.unsafe;
     }
     m->disks[i].path = NULL;
-    p->architecture = c->arch;
+    p->architecture = machine_architecture(c, m->decl);
     p->kernel = jtext(qp, "kernel") != NULL ? etude_artifact(c, jtext(qp, "kernel")) : NULL;
     p->initrd = jtext(qp, "initrd") != NULL ? etude_artifact(c, jtext(qp, "initrd")) : NULL;
     p->disks = m->disks;

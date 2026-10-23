@@ -98,13 +98,14 @@
           "propertyNames": {"$ref": "#/$defs/name"},
           "additionalProperties": {"enum": ["present", "absent", "either"]}
         },
-        "qemu": {"$ref": "#/$defs/qemu"}
+        "qemu": {"allOf": [{"$ref": "#/$defs/qemu"}, {"not": {"required": ["architecture"]}}]}
       }
     },
     "qemu": {
       "type": "object", "additionalProperties": false,
       "required": ["kernel", "initrd", "disks", "cpu", "processors", "memory_bytes", "firmware", "devices", "boot_options"],
       "properties": {
+        "architecture": {"enum": ["i686", "x86_64"]},
         "kernel": {"$ref": "#/$defs/name"},
         "initrd": {"oneOf": [{"$ref": "#/$defs/name"}, {"type": "null"}]},
         "disks": {"type": "array", "items": {"$ref": "#/$defs/disk"}},
@@ -311,7 +312,11 @@
             "records": {"type": "array", "items": {"$ref": "#/$defs/text"}}
           }
         }
-      }
+      },
+      "allOf": [{
+        "if": {"properties": {"helper": {"const": false}}},
+        "then": {"properties": {"qemu": {"not": {"required": ["architecture"]}}}}
+      }]
     },
     "service": {
       "type": "object", "additionalProperties": false,
