@@ -630,16 +630,12 @@ static int runs_on(const struct json *c, const char *arch)
     return archs->type == JSON_STRING ? same(arch, "none") : listed(archs, arch);
 }
 
-/**
- * Checks the results document `doc`, at `path`, of the attempt `a` of `it`,
- * which its record gives as a pass; returns the outcome it supports.
- */
-static enum result judge_pass(const struct verdict *v, const struct item *it,
-                              const struct record *a, const struct json *doc, const char *path)
+/** Match a results document to its planned item and attempt. */
+static int results_identity(const struct verdict *v, const struct item *it, const struct record *a,
+                            const struct json *doc, const char *path)
 {
     const struct json *c = find_case(v->set, it->case_id, NULL);
-    int before = findings(), judged;
-    char why[300];
+    int before = findings();
 
     expect(doc, "run_id", json_text(a->doc, "run_id"), path);
     expect(doc, "attempt_id", json_text(a->data, "attempt_id"), path);
@@ -651,6 +647,16 @@ static enum result judge_pass(const struct verdict *v, const struct item *it,
         finding(path, 0, "%s does not run on %s, the architecture of the item %s", it->case_id,
                 json_text(it->j, "architecture"), it->id);
     }
+    return findings() == before;
+}
+
+/** Return the outcome supported by a claimed pass's assertions. */
+static enum result judge_pass(const struct verdict *v, const struct record *a,
+                              const struct json *doc, const char *path)
+{
+    int before = findings(), judged;
+    char why[300];
+
     judged = judge_document(v->set, doc, path, why, sizeof why);
     if (judged > 0) {
         finding(path, 0, "the attempt %s is recorded as a pass, and its results give %s, as %s",
@@ -662,9 +668,8 @@ static enum result judge_pass(const struct verdict *v, const struct item *it,
 
 /**
  * Returns the outcome that the evidence of the attempt `a` of `it` supports.
- * Every attempt needs its referenced results bytes and a valid document.
- * A pass also needs passing steps and assertions of this run, attempt,
- * item and case.
+ * Every attempt needs valid referenced results of its run, attempt,
+ * item and case. A pass also needs passing steps and assertions.
  */
 static enum result prove(const struct verdict *v, const struct item *it, const struct record *a)
 {
@@ -677,6 +682,10 @@ static enum result prove(const struct verdict *v, const struct item *it, const s
 
     doc = read_results(v, a, path, sizeof path);
     if (doc == NULL) {
+        return RESULT_INCOMPLETE;
+    }
+    if (!results_identity(v, it, a, doc, path)) {
+        json_free(doc);
         return RESULT_INCOMPLETE;
     }
     if (claim != RESULT_PASS) {
@@ -694,7 +703,7 @@ static enum result prove(const struct verdict *v, const struct item *it, const s
             return RESULT_INCOMPLETE;
         }
     }
-    proved = judge_pass(v, it, a, doc, path);
+    proved = judge_pass(v, a, doc, path);
     json_free(doc);
     return proved;
 }
