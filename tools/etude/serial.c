@@ -1140,3 +1140,8 @@ int etude_serial_guest(const struct etude_serial *s, struct etude_pid *pid,
     memcpy(boot, s->boot, ETUDE_FRAME_TOKEN_LEN + 1);
     return 0;
 }
+
+int etude_serial_running(const struct etude_serial *s)
+{
+    return s->op == OP_RUN && s->status == ETUDE_SERIAL_BUSY && s->result.started && !s->have_exit;
+}

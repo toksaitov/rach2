@@ -180,6 +180,9 @@ enum etude_serial_status etude_serial_status(const struct etude_serial *s);
  * "" when it did. */
 const char *etude_serial_why(const struct etude_serial *s);
 
+/** Whether the current run has started and no exit has been observed. */
+int etude_serial_running(const struct etude_serial *s);
+
 /** Give the result of the last run. */
 const struct etude_serial_result *etude_serial_result(const struct etude_serial *s);
 

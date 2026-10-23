@@ -2992,6 +2992,19 @@ enum etude_status etude_guest_output_wait(struct etude_case_machine *m, const ch
     return st == ETUDE_OK && !w.found ? ETUDE_LOST : st;
 }
 
+int etude_guest_running(struct etude_case_machine *m)
+{
+    struct etude_proc *finished = NULL;
+
+    if (m->serial == NULL || !m->command_output)
+        return 0;
+    etude_qemu_watch(m->c->q, 0, NULL, 0, &finished);
+    if (finished != NULL)
+        host_finished(m->c, finished, NULL);
+    serve_sessions(m->c, posix_now_us());
+    return etude_serial_running(m->serial);
+}
+
 enum etude_status etude_guest_finish(struct etude_case_machine *m, int cancel, const char *output,
                                      struct etude_guest_result *result)
 {

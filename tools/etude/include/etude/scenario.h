@@ -223,6 +223,10 @@ enum etude_status etude_guest_start(struct etude_case_machine *m, const char *co
 /** Wait for TEXT on the command's standard output, within the step bound. */
 enum etude_status etude_guest_output_wait(struct etude_case_machine *m, const char *text);
 
+/** Read currently available channel events and say whether the installed
+ * command has started without an observed exit. This does not wait. */
+int etude_guest_running(struct etude_case_machine *m);
+
 /** Collect the started command, cancelling it first when CANCEL is nonzero.
  * A cancellation uses the existing cancel and cleaned records. */
 enum etude_status etude_guest_finish(struct etude_case_machine *m, int cancel, const char *output,
