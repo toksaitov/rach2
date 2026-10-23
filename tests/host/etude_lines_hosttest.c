@@ -16,7 +16,11 @@
  * lines, through a tests/run that runs the formatter, and the real suites
  * function of tools/ci/bisect.sh judges them, with a registry whose core
  * tier is the map's suites, as the tested commit's would be: a failure
- * beside a fault of the runner leaves bisection unresolved.
+ * beside a fault of the runner leaves bisection unresolved. Given both
+ * architectures, `-a i686,x86_64`, the formatter makes each suite of the map
+ * a suite `ARCH:SUITE` of each, leaves out one with no case beside one with
+ * cases, and gives an item of no architecture to i686; given one, it prints
+ * what it prints without `-a`.
  *
  * The status writer then records a run's attempts from real watchdogs, and
  * the ledger gets real claims and requests: a claim of this process, one
@@ -394,12 +398,13 @@ static void write_stream(const struct run_spec *r)
 }
 
 /** Run this program as the formatter, with the failures `named` outside the
- * suites, at most two, given by `-f`; give its status and its two outputs. */
-static int format(const char *const *named, const char *map, const char *stream, char *out,
-                  char *err, size_t size)
+ * suites, at most two, given by `-f`, and the architectures `arches` by `-a`
+ * unless it is NULL; give its status and its two outputs. */
+static int format(const char *const *named, const char *arches, const char *map, const char *stream,
+                  char *out, char *err, size_t size)
 {
     char schemas[PATH_ROOM + 32];
-    char *argv[11];
+    char *argv[13];
     int status, o, e, n = 4;
     pid_t pid;
     snprintf(schemas, sizeof(schemas), "%s/tools/etude/schemas", repo);
@@ -407,6 +412,10 @@ static int format(const char *const *named, const char *map, const char *stream,
     for (; named && *named && n < 8; named++) {
         argv[n++] = "-f";
         argv[n++] = (char *)*named;
+    }
+    if (arches) {
+        argv[n++] = "-a";
+        argv[n++] = (char *)arches;
     }
     argv[n++] = (char *)map, argv[n++] = (char *)stream, argv[n] = NULL;
     fflush(stdout);
@@ -536,7 +545,7 @@ static void check_row(const struct row *w)
     snprintf(map, sizeof(map), "%s", path(map));
     write_stream(&w->run);
     snprintf(stream, sizeof(stream), "%s/%s.jsonl", directory, w->run.name);
-    status = format(NULL, map, stream, out, err, sizeof(out));
+    status = format(NULL, NULL, map, stream, out, err, sizeof(out));
     if (status != w->status || wanted(w, out, err)) {
         fprintf(stderr, "etude_lines_hosttest: %s: status %d\n--- stdout\n%s--- stderr\n%s",
                 w->run.name, status, out, err);
@@ -551,6 +560,7 @@ static void check_row(const struct row *w)
 #define TWO            "fpu guest.fpu\ndefault guest.default\n"
 #define XSAVE          "guest.fpu.xsave", "guest.fpu", "x86_64"
 #define BOOT           "guest.default.boot", "guest.default", "i686"
+#define HOSTFPU        "guest.fpu.host", "guest.fpu", "none"
 
 /* The rows of the formatter, ci and bisection. */
 static const struct row rows[] = {
@@ -702,8 +712,8 @@ static void check_maps(void)
     size_t i;
     for (i = 0; i < sizeof(maps) / sizeof(maps[0]); i++) {
         put("bad.map", maps[i], 0644);
-        if (format(NULL, path("bad.map"), path("pass.jsonl"), out, err, sizeof(out)) != 2 ||
-            !strstr(err, "etude show: ")) {
+        if (format(NULL, NULL, path("bad.map"), path("pass.jsonl"), out, err, sizeof(out)) != 2 ||
+            !strstr(err, "etude show lines: ")) {
             fprintf(stderr, "etude_lines_hosttest: map \"%s\": %s%s", maps[i], out, err);
             CHECK(0, "a map that names an identity twice or no case is refused");
         }
@@ -718,7 +728,7 @@ static void check_named(void)
     static char out[4096], err[4096];
     int status;
     put("named.map", TWO, 0644);
-    status = format(named, path("named.map"), path("pass.jsonl"), out, err, sizeof(out));
+    status = format(named, NULL, path("named.map"), path("pass.jsonl"), out, err, sizeof(out));
     if (status != 1 || !strstr(out, "run: fpu: PASS in 2s") ||
         !strstr(err, "run: result: failed: voided images\n") ||
         !strstr(out, "run: result: failed\n") || strstr(out, "suites passed")) {
@@ -736,7 +746,7 @@ static void check_runner(void)
     static char out[4096], err[4096];
     int status;
     put("runner.map", "runner guest.fpu\ndefault guest.default\n", 0644);
-    status = format(NULL, path("runner.map"), path("pass.jsonl"), out, err, sizeof(out));
+    status = format(NULL, NULL, path("runner.map"), path("pass.jsonl"), out, err, sizeof(out));
     if (status != 0 || !strstr(out, "run: runner: PASS in 2s") ||
         !strstr(out, "run: result: all 2 suites passed")) {
         fprintf(stderr, "etude_lines_hosttest: runner: status %d\n--- stdout\n%s--- stderr\n%s",
@@ -744,7 +754,7 @@ static void check_runner(void)
         CHECK(0, "the runner's own suite is a suite of the map");
     }
     put("runner.map", "runner guest.default\n", 0644);
-    status = format(NULL, path("runner.map"), path("failure.jsonl"), out, err, sizeof(out));
+    status = format(NULL, NULL, path("runner.map"), path("failure.jsonl"), out, err, sizeof(out));
     if (status != 1 || !strstr(err, "run: runner: FAIL in 2s\n") ||
         strstr(err, "run: runner: FAIL in 2s\nrun: runner: FAIL") ||
         !strstr(err, "run: runner: guest.fpu.xsave on x86_64 is in no suite of the map") ||
@@ -754,6 +764,50 @@ static void check_runner(void)
                 status, out, err);
         CHECK(0, "the runner's own suite is a suite of the map");
     }
+}
+
+/** Check the lines of a run of both architectures, `-a i686,x86_64`: each
+ * suite of the map is a suite `ARCH:SUITE` of each architecture, one with no
+ * case beside one with cases is left out, an item of no architecture is the
+ * first architecture's, and `-a` of one architecture changes nothing. */
+static void check_arches(void)
+{
+    static const struct run_spec none = {"none", 2, {PASS(HOSTFPU), PASS(XSAVE)}, 1, NULL, NULL, 0};
+    static char out[4096], err[4096], one[4096];
+    int status;
+    put("both.map", TWO, 0644);
+    status =
+        format(NULL, "i686,x86_64", path("both.map"), path("failure.jsonl"), out, err, sizeof(out));
+    if (status != 1 ||
+        !strstr(err, "run: x86_64:fpu: guest.fpu.xsave on x86_64: failure: it exited 1\n") ||
+        !strstr(err, "run: x86_64:fpu: FAIL in 2s\n") ||
+        !strstr(out, "run: i686:default: PASS in 2s\n") ||
+        !strstr(err, "run: result: failed: x86_64:fpu\n") || strstr(out, "i686:fpu") ||
+        strstr(err, "i686:fpu") || strstr(out, "x86_64:default") || strstr(err, "runner")) {
+        fprintf(stderr, "etude_lines_hosttest: both: status %d\n--- stdout\n%s--- stderr\n%s",
+                status, out, err);
+        CHECK(0, "a run of both architectures gives each suite's architecture");
+    }
+    write_stream(&none);
+    put("none.map", "fpu guest.fpu\n", 0644);
+    status =
+        format(NULL, "i686,x86_64", path("none.map"), path("none.jsonl"), out, err, sizeof(out));
+    if (status != 0 || !strstr(out, "run: i686:fpu: PASS in") ||
+        !strstr(out, "run: x86_64:fpu: PASS in") ||
+        !strstr(out, "run: result: all 2 suites passed")) {
+        fprintf(stderr, "etude_lines_hosttest: none: status %d\n--- stdout\n%s--- stderr\n%s",
+                status, out, err);
+        CHECK(0, "an item of no architecture is the first architecture's");
+    }
+    format(NULL, NULL, path("both.map"), path("failure.jsonl"), one, err, sizeof(one));
+    status = format(NULL, "i686", path("both.map"), path("failure.jsonl"), out, err, sizeof(out));
+    if (status != 1 || strcmp(out, one) != 0) {
+        fprintf(stderr, "etude_lines_hosttest: one: status %d\n--- stdout\n%s", status, out);
+        CHECK(0, "-a of one architecture changes nothing");
+    }
+    status =
+        format(NULL, "x86_64,i686", path("both.map"), path("failure.jsonl"), out, err, sizeof(out));
+    CHECK(status == 2, "-a of another value is a wrong usage");
 }
 
 /** Give the time of the monotonic clock in microseconds. */
@@ -1017,6 +1071,7 @@ int main(int argc, char **argv)
     check_maps();
     check_named();
     check_runner();
+    check_arches();
     check_status();
     if (failures)
         fprintf(stderr, "etude_lines_hosttest: %d checks failed\n", failures);

@@ -23,14 +23,20 @@ static const char *const rank_names[] = {"pass", "cancelled", "incomplete", "fai
 static const char *const suite_words[] = {"PASS", "CANCELLED", "INCOMPLETE", "FAIL"};
 
 static const char usage_text[] =
-    "usage: etude show lines [-s SCHEMAS] [-f NAME]... MAP STREAM...\n";
+    "usage: etude show lines [-s SCHEMAS] [-a ARCHES] [-f NAME]... MAP STREAM...\n";
 
 /* The most failures outside the suites that a run may name with -f. */
 #define EXTRA_MAX 8
 
-/* A suite of the map: its name, and the cases and families it holds. */
+/* A suite of the map: its name, and the cases and families it holds. In a
+ * run of two architectures, each line of the map but the runner's gives a
+ * suite on each, named `ARCH:SUITE`. */
 struct suite {
     char *name;
+    const char *arch; /* the architecture of its items, or NULL for any */
+    size_t line;      /* the line of the map that gave it */
+    int dropped;      /* it has no item, and the suite of its line on the
+                         other architecture has */
     char **ids;
     size_t nids;
     size_t items;    /* the planned items of it */
@@ -77,6 +83,8 @@ struct lines {
     size_t nfaults, capfaults;
     struct suite *suites;
     size_t nsuites;
+    const char *arches[2]; /* a run of two architectures, as -a gives them */
+    size_t narches;
     struct item *items;
     size_t nitems;
     const struct record *plan, *run;
@@ -180,8 +188,9 @@ static int map_line(struct lines *l, char *line)
     if (!more)
         return -1;
     l->suites = more;
-    s = &l->suites[l->nsuites++];
+    s = &l->suites[l->nsuites];
     memset(s, 0, sizeof(*s));
+    s->line = l->nsuites++;
     if (!(s->name = copy(word)))
         return -1;
     while ((word = strtok(NULL, " \t")) != NULL) {
@@ -225,6 +234,62 @@ static int read_map(struct lines *l, const char *path)
     else if (!l->nsuites)
         fprintf(stderr, "etude show: %s: names no suite\n", path);
     return bad || !l->nsuites ? -1 : 0;
+}
+
+/** Say whether suite `si` is the runner's own, `runner`, which a fault of
+ * the runner fails as well. */
+static int runner_suite(const struct lines *l, size_t si)
+{
+    return !strcmp(l->suites[si].name, "runner");
+}
+
+/**
+ * In a run of two architectures, give each suite of the map but the
+ * runner's a suite on each architecture, `ARCH:SUITE`, in the order of
+ * `l->arches`, with the cases and families of its line.
+ *
+ * @return 0, or -1 when memory ran out.
+ */
+static int split(struct lines *l)
+{
+    struct suite *more, *s;
+    size_t i, a, j, n = 0, k = 0, size;
+    int bad = 0;
+    if (l->narches < 2)
+        return 0;
+    for (i = 0; i < l->nsuites; i++)
+        n += runner_suite(l, i) ? 1 : l->narches;
+    if (!(more = calloc(n, sizeof(*more))))
+        return -1;
+    for (i = 0; i < l->nsuites; i++)
+        for (a = 0; a < (runner_suite(l, i) ? 1 : l->narches); a++) {
+            s = &more[k++];
+            s->line = l->suites[i].line;
+            s->arch = runner_suite(l, i) ? NULL : l->arches[a];
+            size = strlen(l->suites[i].name) + 8;
+            s->name = malloc(size);
+            s->ids = calloc(l->suites[i].nids, sizeof(*s->ids));
+            if (!s->name || !s->ids) {
+                bad = 1;
+                continue;
+            }
+            snprintf(s->name, size, "%s%s%s", s->arch ? s->arch : "", s->arch ? ":" : "",
+                     l->suites[i].name);
+            for (j = 0; j < l->suites[i].nids; j++)
+                if ((s->ids[s->nids] = copy(l->suites[i].ids[j])))
+                    s->nids++;
+            bad |= s->nids < l->suites[i].nids;
+        }
+    for (i = 0; i < l->nsuites; i++) {
+        for (j = 0; j < l->suites[i].nids; j++)
+            free(l->suites[i].ids[j]);
+        free(l->suites[i].ids);
+        free(l->suites[i].name);
+    }
+    free(l->suites);
+    l->suites = more;
+    l->nsuites = n;
+    return bad ? -1 : 0;
 }
 
 /** Keep a plan, attempt or run record of the run that the streams hold. */
@@ -322,12 +387,25 @@ static const char *label(const struct item *it)
     return out;
 }
 
+/** Say whether suite `s` may hold item `it` by their architectures: an item
+ * of no architecture goes to the suite on the run's first. */
+static int same_arch(const struct lines *l, const struct suite *s, const struct item *it)
+{
+    if (!s->arch)
+        return 1;
+    if (!strcmp(it->arch, "none"))
+        return s->arch == l->arches[0];
+    return !strcmp(it->arch, s->arch);
+}
+
 /** Give an item to the one suite of the map that holds its case or family. */
 static void assign(struct lines *l, struct item *it)
 {
     size_t i, j;
     it->suite = -1;
     for (i = 0; i < l->nsuites; i++) {
+        if (!same_arch(l, &l->suites[i], it))
+            continue;
         for (j = 0; j < l->suites[i].nids; j++)
             if (!strcmp(l->suites[i].ids[j], it->case_id) ||
                 !strcmp(l->suites[i].ids[j], it->family_id))
@@ -344,6 +422,17 @@ static void assign(struct lines *l, struct item *it)
         fault(l, "%s is in no suite of the map", label(it));
     else
         l->suites[it->suite].items++;
+}
+
+/** Say whether the line of the map that gave suite `si` gave a suite with an
+ * item on another architecture. */
+static int other_arch(const struct lines *l, size_t si)
+{
+    size_t i;
+    for (i = 0; l->suites[si].arch && i < l->nsuites; i++)
+        if (i != si && l->suites[i].line == l->suites[si].line && l->suites[i].items)
+            return 1;
+    return 0;
 }
 
 /** Take the run's one plan and its items; 0, or -1 when there is none. */
@@ -379,7 +468,7 @@ static int take_plan(struct lines *l)
         assign(l, it);
     }
     for (i = 0; i < l->nsuites; i++)
-        if (!l->suites[i].items)
+        if (!l->suites[i].items && !(l->suites[i].dropped = other_arch(l, i)))
             fault(l, "the plan has no case of the suite %s", l->suites[i].name);
     return 0;
 }
@@ -606,13 +695,6 @@ static const char *seconds(int known, uint64_t us)
     return out;
 }
 
-/** Say whether suite `si` is the runner's own, `runner`, which a fault of
- * the runner fails as well. */
-static int runner_suite(const struct lines *l, size_t si)
-{
-    return !strcmp(l->suites[si].name, "runner");
-}
-
 /** Say whether the map has the runner's own suite. */
 static int has_runner_suite(const struct lines *l)
 {
@@ -661,7 +743,7 @@ static void print_runner(const struct lines *l)
 /** Print the suites that failed or did not finish by their own cases. */
 static void print_failed(const struct lines *l)
 {
-    size_t i, used = 0, size = (l->nsuites + l->nextra) * 66 + 8;
+    size_t i, used = 0, size = (l->nsuites + l->nextra) * 74 + 8;
     char *names = malloc(size);
     if (!names) {
         say(stderr, "run: result: failed: runner");
@@ -684,9 +766,12 @@ static void print_failed(const struct lines *l)
 /** Print every line; give the exit status. */
 static int print(struct lines *l, enum rank worst)
 {
-    size_t i;
+    size_t i, n = 0;
     for (i = 0; i < l->nsuites; i++)
-        print_suite(l, i);
+        if (!l->suites[i].dropped) {
+            print_suite(l, i);
+            n++;
+        }
     if (l->nfaults)
         print_runner(l);
     print_failed(l);
@@ -697,7 +782,7 @@ static int print(struct lines *l, enum rank worst)
     else if (worst == R_CANCELLED)
         say(stdout, "run: result: interrupted");
     else
-        say(stdout, "run: result: all %lu suites passed", (unsigned long)l->nsuites);
+        say(stdout, "run: result: all %lu suites passed", (unsigned long)n);
     return worst == R_PASS && !l->nfaults && !l->nextra ? 0 : 1;
 }
 
@@ -730,10 +815,18 @@ int etude_lines_main(int argc, char **argv)
     enum rank worst = R_INCOMPLETE;
     int i = 1, status = 2;
     memset(&l, 0, sizeof(l));
-    while (i + 1 < argc && (!strcmp(argv[i], "-s") || !strcmp(argv[i], "-f"))) {
+    while (i + 1 < argc &&
+           (!strcmp(argv[i], "-s") || !strcmp(argv[i], "-f") || !strcmp(argv[i], "-a"))) {
         if (argv[i][1] == 's')
             schemas = argv[i + 1];
-        else if (l.nextra < EXTRA_MAX && suite_name(argv[i + 1]))
+        else if (argv[i][1] == 'a' && !strcmp(argv[i + 1], "i686,x86_64")) {
+            l.arches[0] = "i686";
+            l.arches[1] = "x86_64";
+            l.narches = 2;
+        } else if (argv[i][1] == 'a') {
+            if (strcmp(argv[i + 1], "i686") && strcmp(argv[i + 1], "x86_64"))
+                break;
+        } else if (l.nextra < EXTRA_MAX && suite_name(argv[i + 1]))
             l.extra[l.nextra++] = argv[i + 1];
         else
             break;
@@ -746,7 +839,10 @@ int etude_lines_main(int argc, char **argv)
     snprintf(schema, sizeof(schema), "%s/history.schema.json", schemas);
     l.schema = schema;
     if (read_map(&l, argv[i]) == 0) {
-        load(&l, argv + i + 1, argc - i - 1);
+        if (split(&l) != 0)
+            l.nomem = 1;
+        else
+            load(&l, argv + i + 1, argc - i - 1);
         if (!l.nomem && take_plan(&l) == 0) {
             take_attempts(&l);
             take_run(&l);

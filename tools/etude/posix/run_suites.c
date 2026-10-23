@@ -169,9 +169,10 @@ static int limits_of(const char *s, uint64_t cap[3])
 
 /**
  * Read the selection at `path`: one suite on each line, its name followed
- * by `serial`, `stops` or both, and last `cases=MANIFEST`, the manifest of
- * the cases that run it, with `#` beginning a comment line. The names go to
- * `names` and the manifests to `cases`.
+ * by `serial`, `stops` or both, `arch=ARCH` for a suite that runs on that
+ * one of the set's architectures alone, and last `cases=MANIFEST`, the
+ * manifest of the cases that run it, with `#` beginning a comment line. The
+ * names go to `names` and the manifests to `cases`.
  *
  * @return the count of members in `*m`, or -1 after a message.
  */
@@ -201,6 +202,8 @@ static long selection_of(const char *path, struct etude_legacy_member *m, char n
                 m[n].serial = 1;
             else if (strcmp(w, "stops") == 0)
                 m[n].stops = 1;
+            else if (strcmp(w, "arch=i686") == 0 || strcmp(w, "arch=x86_64") == 0)
+                m[n].arch = strcmp(w + 5, "i686") == 0 ? "i686" : "x86_64";
             else if (strncmp(w, "cases=", 6) == 0 && w[6] != '\0')
                 m[n].cases = strcpy(cases[n], w + 6);
             else
@@ -213,8 +216,9 @@ static long selection_of(const char *path, struct etude_legacy_member *m, char n
     fclose(f);
     return n;
 bad:
-    fprintf(stderr, "etude run: %s:%ld: not a suite, serial or stops, and cases=MANIFEST\n", path,
-            no);
+    fprintf(stderr,
+            "etude run: %s:%ld: not a suite, serial, stops or arch=ARCH, and cases=MANIFEST\n",
+            path, no);
     fclose(f);
     return -1;
 }

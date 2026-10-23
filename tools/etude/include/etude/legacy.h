@@ -24,7 +24,7 @@
 /* One preparation, as the caller asks for it. */
 struct etude_legacy_opts {
     const char *tree;   /* the root of the tree whose goals are built */
-    const char *arch;   /* i686 or x86_64 */
+    const char *arch;   /* i686, x86_64, or both as i686,x86_64 */
     const char *kernel; /* NAME of the kernel rach2-NAME the suites boot, as
                            RACH2_KERNEL names it, or NULL for rach2 */
     const char *work;   /* the work directory, which must not exist, or
@@ -50,7 +50,11 @@ struct etude_legacy_opts {
  * cancelled at its bound: the path, the recovery key when the tree has a
  * recovery system and no key, the components, the kernel `o->kernel` names,
  * and last the goals. Every goal, and the kernel the suites boot, must then
- * exist; each regular file is hashed into the record. The work directory is
+ * exist; each regular file is hashed into the record. A preparation of both
+ * architectures makes the components, the kernel and the goals of i686 and
+ * then those of x86_64, each with its own ARCH, the goals under
+ * `build/x86_64/` being x86_64's and the others i686's, and writes one
+ * record of both. The work directory is
  * removed after a success and after a stop, and kept after a failure.
  *
  * @return 0 when every artifact exists; 1 when a step failed or an artifact
@@ -76,6 +80,8 @@ struct etude_legacy_member {
     int stops;         /* its failure cancels the suites not yet started */
     const char *cases; /* the manifest whose host, guest or machine cases run
                           the suite, from the tree's root unless absolute */
+    const char *arch;  /* the one architecture of the set's that it runs on,
+                          or NULL for each of them */
 };
 
 /* The resources of a machine's ledger that a set's claims take. */
@@ -84,7 +90,7 @@ enum etude_legacy_resource { ETUDE_LEGACY_CPU, ETUDE_LEGACY_MEMORY, ETUDE_LEGACY
 /* One run of a set of suites, as the caller asks for it. */
 struct etude_legacy_set_opts {
     const char *tree;    /* the root of the tree, which the caller holds */
-    const char *arch;    /* i686 or x86_64 */
+    const char *arch;    /* i686, x86_64, or both as i686,x86_64 */
     const char *kernel;  /* as for a preparation, or NULL */
     const char *program; /* the path of etude, which runs the steps and judges */
     const struct etude_legacy_member *members;
@@ -129,7 +135,11 @@ struct etude_legacy_set_opts {
  *
  * The cases of a member are those of its manifest that run on `o->arch` or
  * on none, each repetition of each a member of the run that keeps the
- * suite's `serial`. Their artifacts are the goals of the preparation; with
+ * suite's `serial`. A set of both architectures runs each member on each, or
+ * on the one its `arch` names, as one run with one preparation of both: a
+ * case runs on each of its architectures, and a case of none runs once,
+ * with the suite's first architecture; each name of a case's files and its
+ * label give its architecture. Their artifacts are the goals of the preparation; with
  * `o->kernel`, the kernel that a guest case boots from the node
  * `rach2/kernel` is `rach2-KERNEL/kernel` in its place. The preparation is a
  * claim of every limited resource of the ledger, with the old runner's host
@@ -138,7 +148,9 @@ struct etude_legacy_set_opts {
  * takes the old host lock, shared, or alone for a guest case whose memory is
  * more than half the limit, and a guest case's claim takes a port block as
  * well. The serial members run first, one at a time; the others run in the
- * order given, as many at once as the ledger and `o->width` admit. A suite
+ * order given, or for both architectures in etude_sched_order's, the
+ * costlier case first, so that the long cases of the two run side by side,
+ * as many at once as the ledger and `o->width` admit. A suite
  * that `stops` and did not pass cancels what runs and what has not started,
  * once every member of the suite has ended; with `o->stop_on_fail`, the
  * first member that does not pass does so at once.

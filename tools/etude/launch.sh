@@ -98,6 +98,8 @@ legacy_resources()
     if [ "${1:-}" = inventory ]; then build_resources true; return; fi
     [ -r tests/registry ] || refuse 'cannot read the suite registry'
     # serial is an optional host isolation field after the architectures.
+    # ARCH may name both architectures, and a suite then counts once for
+    # each it runs on; a word ARCH:SUITE names the suite on that one.
     selection=$(printf '%s\n' "$@" | awk -F'|' -v arch="${ARCH:-i686}" '
         NR == FNR {
             if ($0 ~ /^#/ || $1 == "") next
@@ -106,12 +108,15 @@ legacy_resources()
         }
         { requested[$0] = 1 }
         END {
-            for (i = 1; i <= n; i++) {
-                s = order[i]
-                if (arches[s] != "" && index("," arches[s] ",", "," arch ",") == 0) continue
-                if (requested[s] || requested["all"] || (requested["core"] && tier[s] == "core"))
-                    print mem[s], isolation[s]
-            }
+            na = split(arch, want, " ")
+            for (i = 1; i <= n; i++)
+                for (a = 1; a <= na; a++) {
+                    s = order[i]
+                    if (arches[s] != "" && index("," arches[s] ",", "," want[a] ",") == 0) continue
+                    if (requested[s] || requested[want[a] ":" s] || requested["all"] ||
+                        (requested["core"] && tier[s] == "core"))
+                        print mem[s], isolation[s]
+                }
         }
     ' tests/registry -) || refuse 'cannot select suites'
     [ -n "$selection" ] || refuse 'no suites selected'

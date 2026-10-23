@@ -75,15 +75,25 @@ struct step {
     char *answer;       /* that answer, its first line, once it passed */
 };
 
+/* One architecture of a preparation. */
+struct target {
+    const char *arch;  /* i686 or x86_64 */
+    const char *build; /* its build tree */
+    char *var;         /* ARCH=..., given to each of its makes */
+    char *kernel;      /* the kernel the suites boot */
+    char *kernel_var;  /* BOOT_KERNEL=..., or NULL for the default */
+};
+
 /* One preparation under way. */
 struct prep {
     const struct etude_legacy_opts *o;
     FILE *out;
     char *tree;
-    const char *arch_build; /* the architecture's build tree */
-    char *arch_var;         /* ARCH=..., given to every make */
-    char *kernel;           /* the kernel the suites boot */
-    char *kernel_var;       /* BOOT_KERNEL=..., or NULL for the default */
+    struct target t[2]; /* the architectures, prepared in this order */
+    size_t nt;
+    const struct target *at; /* the one the steps build for now */
+    char name[64];           /* a build step's name, with `at`'s architecture
+                                in a preparation of both */
     char *work;
     char **env; /* the steps' environment */
     struct etude_exec *ex;
@@ -250,30 +260,52 @@ static int tree_held(const struct prep *p)
     }
 }
 
-/** Take the architecture and the kernel; 0, or 2 after a refusal. */
+/** Take the architectures, `i686`, `x86_64` or `i686,x86_64`, and the
+ * kernel; 0, or 2 after a refusal. */
 static int admit_machine(struct prep *p)
 {
     const struct etude_legacy_opts *o = p->o;
     const char *arch = o->arch != NULL ? o->arch : "i686";
+    struct target *t;
+    size_t i;
 
-    if (strcmp(arch, "i686") == 0)
-        p->arch_build = "build";
-    else if (strcmp(arch, "x86_64") == 0)
-        p->arch_build = "build/x86_64";
-    else
+    if (strcmp(arch, "i686,x86_64") == 0) {
+        p->t[0].arch = "i686";
+        p->t[1].arch = "x86_64";
+        p->nt = 2;
+    } else if (strcmp(arch, "i686") == 0 || strcmp(arch, "x86_64") == 0) {
+        p->t[0].arch = arch;
+        p->nt = 1;
+    } else {
         return refuse(p, "%s: the architectures are i686 and x86_64", arch);
+    }
     if (o->kernel != NULL && !plain_name(o->kernel))
         return refuse(p, "%s: a kernel's name is letters, digits, '_' and '-'", o->kernel);
-    p->arch_var = format("ARCH=%s", arch);
-    if (o->kernel != NULL) {
-        p->kernel = format("%s/rach2-%s/kernel", p->arch_build, o->kernel);
-        p->kernel_var = p->kernel != NULL ? format("BOOT_KERNEL=%s", p->kernel) : NULL;
-    } else {
-        p->kernel = format("%s/rach2/kernel", p->arch_build);
+    for (i = 0; i < p->nt; i++) {
+        t = &p->t[i];
+        t->build = strcmp(t->arch, "x86_64") == 0 ? "build/x86_64" : "build";
+        t->var = format("ARCH=%s", t->arch);
+        if (o->kernel != NULL) {
+            t->kernel = format("%s/rach2-%s/kernel", t->build, o->kernel);
+            t->kernel_var = t->kernel != NULL ? format("BOOT_KERNEL=%s", t->kernel) : NULL;
+        } else {
+            t->kernel = format("%s/rach2/kernel", t->build);
+        }
+        if (t->var == NULL || t->kernel == NULL || (o->kernel != NULL && t->kernel_var == NULL))
+            return sys_error(p, "the request", ENOMEM);
     }
-    if (p->arch_var == NULL || p->kernel == NULL || (o->kernel != NULL && p->kernel_var == NULL))
-        return sys_error(p, "the request", ENOMEM);
+    p->at = &p->t[0];
     return 0;
+}
+
+/** Say whether goal `goal` is built for target `t`: in a preparation of both
+ * architectures, x86_64's goals are those in its build tree, build/x86_64/,
+ * and i686's are the rest; in a preparation of one, every goal is its. */
+static int goal_of(const struct prep *p, const struct target *t, const char *goal)
+{
+    int x86_64 = strncmp(goal, "build/x86_64/", 13) == 0;
+
+    return p->nt == 1 || x86_64 == (strcmp(t->arch, "x86_64") == 0);
 }
 
 /** Say whether `s` names a goal inside the tree: a relative path of
@@ -646,15 +678,25 @@ static int run_make(struct prep *p, struct step *s, char *const *args, size_t n)
     s->cmd[k++] = "-C";
     s->cmd[k++] = p->tree;
     s->cmd[k++] = "--no-print-directory";
-    s->cmd[k++] = p->arch_var;
-    if (p->kernel_var != NULL)
-        s->cmd[k++] = p->kernel_var;
+    s->cmd[k++] = p->at->var;
+    if (p->at->kernel_var != NULL)
+        s->cmd[k++] = p->at->kernel_var;
     for (i = 0; i < n; i++)
         s->cmd[k++] = args[i];
     status = run_step(p, s);
     free(s->cmd);
     s->cmd = NULL;
     return status;
+}
+
+/** Give the name of build step `name` for `p->at`: `name`, or in a
+ * preparation of both architectures `name-ARCH`. */
+static const char *step_name(struct prep *p, const char *name)
+{
+    if (p->nt == 1)
+        return name;
+    snprintf(p->name, sizeof(p->name), "%s-%s", name, p->at->arch);
+    return p->name;
 }
 
 /** Run make with the goals `a` and `b`, NULL for none, as a build step. */
@@ -665,7 +707,7 @@ static int build_step(struct prep *p, const char *name, const char *a, const cha
     size_t n = 0;
 
     memset(&s, 0, sizeof(s));
-    s.name = name;
+    s.name = step_name(p, name);
     s.script = script_log;
     if (a != NULL)
         args[n++] = (char *)a;
@@ -697,16 +739,18 @@ static int find_path(struct prep *p)
 
 /* ---- The artifacts. ---- */
 
-/** Take the goals and the kernel the suites boot as the artifacts required,
- * and the goals as those the last step builds; 0, or 1. */
+/** Take the goals of `p->at` and the kernel its suites boot as artifacts
+ * required, and those goals as the ones its last step builds; 0, or 1. */
 static int find_artifacts(struct prep *p)
 {
     size_t i;
 
+    list_free(&p->goals);
     for (i = 0; i < p->o->ngoals; i++)
-        if (list_add(&p->required, p->o->goals[i]) != 0 || list_add(&p->goals, p->o->goals[i]) != 0)
+        if (goal_of(p, p->at, p->o->goals[i]) && (list_add(&p->required, p->o->goals[i]) != 0 ||
+                                                  list_add(&p->goals, p->o->goals[i]) != 0))
             return failed(p, "artifacts: memory ran out");
-    if (list_add(&p->required, p->kernel) != 0)
+    if (list_add(&p->required, p->at->kernel) != 0)
         return failed(p, "artifacts: memory ran out");
     list_unique(&p->goals);
     list_unique(&p->required);
@@ -727,7 +771,7 @@ static int build_goals(struct prep *p)
     args[0] = "-j";
     memcpy(args + 1, p->goals.v, p->goals.n * sizeof(*args));
     memset(&s, 0, sizeof(s));
-    s.name = "artifacts";
+    s.name = step_name(p, "artifacts");
     s.script = script_log;
     status = run_make(p, &s, args, p->goals.n + 1);
     free(args);
@@ -762,11 +806,15 @@ static char *artifact_path(const char *tree, const char *name)
     return absolute ? strdup(name) : format("%s/%s", tree, name);
 }
 
-/** Write the record's head to `f`. */
+/** Write the record's head to `f`: its tree, and the architecture and the
+ * kernel of each target. */
 static void record_head(const struct prep *p, FILE *f)
 {
-    fprintf(f, "%s\ntree %s\narch %s\nkernel %s\n", RECORD_HEAD, p->tree, p->arch_var + 5,
-            p->kernel);
+    size_t i;
+
+    fprintf(f, "%s\ntree %s\n", RECORD_HEAD, p->tree);
+    for (i = 0; i < p->nt; i++)
+        fprintf(f, "arch %s\nkernel %s\n", p->t[i].arch, p->t[i].kernel);
 }
 
 /**
@@ -878,47 +926,39 @@ static int keys(struct prep *p)
     return status;
 }
 
-/** Run the steps, find and build the artifacts, and record them. */
-static int prepare(struct prep *p)
+/** Build the artifacts of `p->at` and take them as required. */
+static int prepare_target(struct prep *p)
 {
-    char *kernel_goal;
-    int status = find_path(p);
-
-    if (status == 0)
-        status = keys(p);
 #ifdef _WIN32
-    if (status == 0) {
-        struct step s;
-        char **args = calloc(p->o->ngoals + 7, sizeof(*args));
-        size_t i;
+    struct step s;
+    char **args = calloc(p->o->ngoals + 7, sizeof(*args));
+    size_t i, n = 6;
+    int status;
 
-        if (args == NULL)
-            return failed(p, "tooling: memory ran out");
-        args[0] = "python3";
-        args[1] = "tools/etude/collection_tools.py";
-        args[2] = "prepare";
-        args[3] = p->tree;
-        args[4] = p->arch_var + 5;
-        args[5] = (char *)(p->o->kernel != NULL ? p->o->kernel : "");
-        for (i = 0; i < p->o->ngoals; i++)
-            args[i + 6] = (char *)p->o->goals[i];
-        memset(&s, 0, sizeof(s));
-        s.name = "tooling";
-        s.script = "exec >\"$1\" 2>&1; shift; REPO=$PWD; "
-                   ". tools/etude/collection-windows.sh && "
-                   "collection_windows && exec \"$@\"";
-        s.cmd = args;
-        status = run_step(p, &s);
-        free(args);
-    }
-    if (status == 0)
-        status = find_artifacts(p);
-    if (status == 0)
-        status = write_record(p);
-    return status;
-#endif
-    if (status == 0)
-        status = build_step(p, "components", "-j", "components");
+    if (args == NULL)
+        return failed(p, "tooling: memory ran out");
+    args[0] = "python3";
+    args[1] = "tools/etude/collection_tools.py";
+    args[2] = "prepare";
+    args[3] = p->tree;
+    args[4] = (char *)p->at->arch;
+    args[5] = (char *)(p->o->kernel != NULL ? p->o->kernel : "");
+    for (i = 0; i < p->o->ngoals; i++)
+        if (goal_of(p, p->at, p->o->goals[i]))
+            args[n++] = (char *)p->o->goals[i];
+    memset(&s, 0, sizeof(s));
+    s.name = step_name(p, "tooling");
+    s.script = "exec >\"$1\" 2>&1; shift; REPO=$PWD; "
+               ". tools/etude/collection-windows.sh && "
+               "collection_windows && exec \"$@\"";
+    s.cmd = args;
+    status = run_step(p, &s);
+    free(args);
+    return status == 0 ? find_artifacts(p) : status;
+#else
+    char *kernel_goal;
+    int status = build_step(p, "components", "-j", "components");
+
     if (status == 0 && p->o->kernel != NULL) {
         kernel_goal = format("%s-kernel", p->o->kernel);
         status = kernel_goal != NULL ? build_step(p, "kernel", kernel_goal, NULL)
@@ -929,6 +969,24 @@ static int prepare(struct prep *p)
         status = find_artifacts(p);
     if (status == 0)
         status = build_goals(p);
+    return status;
+#endif
+}
+
+/** Run the steps, find and build the artifacts of each architecture in
+ * turn, and record them. */
+static int prepare(struct prep *p)
+{
+    size_t i;
+    int status = find_path(p);
+
+    if (status == 0)
+        status = keys(p);
+    for (i = 0; status == 0 && i < p->nt; i++) {
+        p->at = &p->t[i];
+        status = prepare_target(p);
+    }
+    p->at = &p->t[0];
     if (status == 0)
         status = write_record(p);
     return status;
@@ -969,6 +1027,7 @@ static void conclude(struct prep *p, int status)
 int etude_legacy_prepare(const struct etude_legacy_opts *o)
 {
     struct prep p;
+    size_t i;
     int status;
 
     memset(&p, 0, sizeof(p));
@@ -976,8 +1035,8 @@ int etude_legacy_prepare(const struct etude_legacy_opts *o)
     p.out = o->out != NULL ? o->out : stdout;
     status = admit(&p);
     if (status == 0) {
-        fprintf(p.out, "etude prepare: preparing %lu goals for %s in %s\n",
-                (unsigned long)o->ngoals, p.arch_var + 5, p.tree);
+        fprintf(p.out, "etude prepare: preparing %lu goals for %s in %s\n", (unsigned long)o->ngoals,
+                o->arch != NULL ? o->arch : "i686", p.tree);
         status = open_work(&p);
     }
     if (status == 0)
@@ -986,9 +1045,11 @@ int etude_legacy_prepare(const struct etude_legacy_opts *o)
     list_free(&p.goals);
     list_free(&p.required);
     free(p.tree);
-    free(p.arch_var);
-    free(p.kernel);
-    free(p.kernel_var);
+    for (i = 0; i < 2; i++) {
+        free(p.t[i].var);
+        free(p.t[i].kernel);
+        free(p.t[i].kernel_var);
+    }
     free(p.work);
     free(p.why);
     return status;

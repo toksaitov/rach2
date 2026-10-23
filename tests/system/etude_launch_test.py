@@ -204,6 +204,12 @@ done
     saw(4, same=False)
     clear()
 
+    # A run of both architectures that names a suite on one is admitted.
+    stage = "arches"
+    run(["sh", "tests/run", "x86_64:default"], dict(env, ARCH="i686 x86_64"), tree)
+    saw()
+    clear()
+
     # Owner commands admit their build and test steps independently,
     # preserving quoting, standard input and the command's own status.
     stage = "owner"

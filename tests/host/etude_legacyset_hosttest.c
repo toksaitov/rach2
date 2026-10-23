@@ -50,7 +50,9 @@
  * end. A failed preparation exits 3 with every item cancelled and no attempt.
  * A case that asks for more memory than the machine has runs. A set of no
  * suite, a bad name, a suite named twice, a suite with no manifest, a bad
- * accelerator and a relative ledger are refused, with nothing run. The
+ * accelerator, a relative ledger, architectures other than `i686`, `x86_64`
+ * and `i686,x86_64`, and a suite of an architecture not the set's are
+ * refused, with nothing run. The
  * driver leaks no memory.
  *
  * A suite run by its cases gives an item of each repetition of each case that
@@ -66,7 +68,15 @@
  * `etude check verdict` passes a run of passing cases and fails the suite of
  * failing ones.
  * A failed case of a suite that `stops` leaves the suite's other cases to run
- * before the set stops. A manifest that cannot be read, of another suite's
+ * before the set stops. A set of both architectures, `i686,x86_64`, is one
+ * run, `tests.i686-x86_64.*`, with one plan that gives each suite's
+ * architecture and one preparation whose record has both architectures'
+ * goals and kernels; it runs each case on each architecture of its own, its
+ * workspace and output named and its start line labelled with the
+ * architecture, and a case of no architecture once, in the order of
+ * etude_sched_order, which puts the cases of the two architectures side by
+ * side. A suite that names one architecture runs there alone, and a set of
+ * the other refuses it. A manifest that cannot be read, of another suite's
  * family, with a case of a
  * domain other than host, guest and machine, that reads its input, needs
  * loop devices or a fixture other than scratch, or has no case on the
@@ -1509,9 +1519,9 @@ static int verdict(const struct run *r, const char *cases, const char *suite, ch
 /** A set of two suites of one case each that pass and one that fails. */
 static void test_mixed(void)
 {
-    static const struct etude_legacy_member m[] = {{"plain", 0, 0, ONE("plain")},
-                                                   {"side-x", 0, 0, ONE("side-x")},
-                                                   {"fail", 0, 0, ONE("fail")}};
+    static const struct etude_legacy_member m[] = {{"plain", 0, 0, ONE("plain"), NULL},
+                                                   {"side-x", 0, 0, ONE("side-x"), NULL},
+                                                   {"fail", 0, 0, ONE("fail"), NULL}};
     static const char *const names[] = {"plain", "side-x", "fail"};
     static struct run r;
     char line[PATH_LEN * 2];
@@ -1581,10 +1591,10 @@ static int apart(const char *marks, const char *name)
  * without, and a width of one runs them one after the other. */
 static void test_width(void)
 {
-    static const struct etude_legacy_member meet[] = {{"meet-a", 0, 0, ONE("meet-a")},
-                                                      {"meet-b", 0, 0, ONE("meet-b")}};
-    static const struct etude_legacy_member side[] = {{"side-x", 0, 0, ONE("side-x")},
-                                                      {"side-y", 0, 0, ONE("side-y")}};
+    static const struct etude_legacy_member meet[] = {{"meet-a", 0, 0, ONE("meet-a"), NULL},
+                                                      {"meet-b", 0, 0, ONE("meet-b"), NULL}};
+    static const struct etude_legacy_member side[] = {{"side-x", 0, 0, ONE("side-x"), NULL},
+                                                      {"side-y", 0, 0, ONE("side-y"), NULL}};
     static const char *const names[] = {"meet", "meetlocks", "width"};
     static struct run r[3];
     char path[PATH_LEN], log[1024];
@@ -1620,9 +1630,9 @@ static void test_width(void)
  * it. */
 static void test_serial(void)
 {
-    static const struct etude_legacy_member m[] = {{"side-x", 0, 0, ONE("side-x")},
-                                                   {"serial", 1, 0, ONE("serial")},
-                                                   {"side-y", 0, 0, ONE("side-y")}};
+    static const struct etude_legacy_member m[] = {{"side-x", 0, 0, ONE("side-x"), NULL},
+                                                   {"serial", 1, 0, ONE("serial"), NULL},
+                                                   {"side-y", 0, 0, ONE("side-y"), NULL}};
     static struct run r;
     char path[PATH_LEN], marks[1024];
     int before = fails, serial, side;
@@ -1648,8 +1658,9 @@ static void test_serial(void)
  * not started. */
 static void test_first(void)
 {
-    static const struct etude_legacy_member m[] = {
-        {"fail", 0, 0, ONE("fail")}, {"long", 0, 0, ONE("long")}, {"plain", 0, 0, ONE("plain")}};
+    static const struct etude_legacy_member m[] = {{"fail", 0, 0, ONE("fail"), NULL},
+                                                   {"long", 0, 0, ONE("long"), NULL},
+                                                   {"plain", 0, 0, ONE("plain"), NULL}};
     static struct run r;
     int before = fails;
 
@@ -1681,8 +1692,9 @@ static void test_first(void)
 /** A failure of a member that `stops` cancels the rest. */
 static void test_stops(void)
 {
-    static const struct etude_legacy_member m[] = {
-        {"fail", 0, 1, ONE("fail")}, {"long", 0, 0, ONE("long")}, {"plain", 0, 0, ONE("plain")}};
+    static const struct etude_legacy_member m[] = {{"fail", 0, 1, ONE("fail"), NULL},
+                                                   {"long", 0, 0, ONE("long"), NULL},
+                                                   {"plain", 0, 0, ONE("plain"), NULL}};
     static struct run r;
     int before = fails;
 
@@ -1706,8 +1718,8 @@ static void test_stops(void)
  * attempt first, and the set then ends with the case cancelled. */
 static void test_signal(void)
 {
-    static const struct etude_legacy_member m[] = {{"hold", 0, 0, ONE("hold")},
-                                                   {"plain", 0, 0, ONE("plain")}};
+    static const struct etude_legacy_member m[] = {{"hold", 0, 0, ONE("hold"), NULL},
+                                                   {"plain", 0, 0, ONE("plain"), NULL}};
     static struct run r;
     static char status[OUT_LEN];
     char path[PATH_LEN], got[16], want[512];
@@ -1765,8 +1777,8 @@ static void test_signal(void)
 /** A preparation that fails cancels every item, and no case starts. */
 static void test_prepare(void)
 {
-    static const struct etude_legacy_member m[] = {{"plain", 0, 0, ONE("plain")},
-                                                   {"fail", 0, 0, ONE("fail")}};
+    static const struct etude_legacy_member m[] = {{"plain", 0, 0, ONE("plain"), NULL},
+                                                   {"fail", 0, 0, ONE("fail"), NULL}};
     static char var[] = "FIXTURE_BREAK=1";
     static struct run r;
     char step[32];
@@ -1793,7 +1805,7 @@ static void test_prepare(void)
  * runs, its claim held to the limit. */
 static void test_large(void)
 {
-    static const struct etude_legacy_member m[] = {{"plain", 0, 0, ONE("plain")}};
+    static const struct etude_legacy_member m[] = {{"plain", 0, 0, ONE("plain"), NULL}};
     static struct run r;
     int before = fails;
 
@@ -1857,7 +1869,7 @@ static void good_ran(struct run *r)
 /** A suite run by the cases of its manifest, which pass. */
 static void test_cases(void)
 {
-    static const struct etude_legacy_member m[] = {{"good", 0, 0, "cases/good/good.json"}};
+    static const struct etude_legacy_member m[] = {{"good", 0, 0, "cases/good/good.json", NULL}};
     static char var[] = "FIXTURE_INHERITED=yes";
     static struct run r;
     static char text[OUT_LEN];
@@ -1888,7 +1900,7 @@ static void test_cases(void)
  * build/x86_64, and the others their program of build. */
 static void test_cases64(void)
 {
-    static const struct etude_legacy_member m[] = {{"good", 0, 0, "cases/good/good.json"}};
+    static const struct etude_legacy_member m[] = {{"good", 0, 0, "cases/good/good.json", NULL}};
     static struct run r;
     static char text[OUT_LEN];
     char line[PATH_LEN * 2];
@@ -1923,11 +1935,106 @@ static void test_cases64(void)
     show(&r, before);
 }
 
+/** Count the attempts of run `r` of case `id` on `arch`. */
+static int attempts_of(const struct run *r, const char *id, const char *arch)
+{
+    char tail[256];
+    size_t i;
+    int n = 0;
+
+    fix_format(tail, sizeof(tail), ":%s:%s:r", id, arch);
+    for (i = 0; i < r->h.n; i++)
+        n += strstr(r->h.line[i], "\"kind\":\"attempt\"") != NULL && strstr(r->h.line[i], tail);
+    return n;
+}
+
+/** A set of both architectures runs the cases of each in one plan, in the
+ * scheduler's order, its case of no architecture once. */
+static void test_cases_both(void)
+{
+    static const struct etude_legacy_member m[] = {{"good", 0, 0, "cases/good/good.json", NULL}};
+    static struct run r;
+    static char text[OUT_LEN];
+    char line[PATH_LEN * 2];
+    int before = fails;
+
+    r.name = "cases-both";
+    r.members = m;
+    r.n = 1;
+    r.arch = "i686,x86_64";
+    set_run(&r);
+    CHECK(r.status == 0, "both: passed");
+    CHECK(r.read == 0, "both: the history is whole");
+    CHECK(strncmp(r.run_id, "tests.i686-x86_64.", 18) == 0, "both: the run's identity");
+    CHECK(count_kind(&r.h, "plan") == 1 && count_kind(&r.h, "step") == 1,
+          "both: one plan and one preparation");
+    CHECK(count_kind(&r.h, "attempt") == 8, "both: an attempt of each case on each architecture");
+    CHECK(case_is(&r, "fixture.good.pass", "i686", 1, "pass", NULL) &&
+              case_is(&r, "fixture.good.pass", "x86_64", 1, "pass", NULL) &&
+              case_is(&r, "fixture.good.tick", "i686", 0, "pass", NULL) &&
+              case_is(&r, "fixture.good.tick", "x86_64", 0, "pass", NULL) &&
+              case_is(&r, "fixture.good.arch", "x86_64", 0, "pass", NULL),
+          "both: the cases of each architecture passed");
+    CHECK(attempts_of(&r, "fixture.good.none", "none") == 1 &&
+              attempts_of(&r, "fixture.good.arch", "i686") == 0,
+          "both: the case of none once, and no case off its architecture");
+    CHECK(plan_has(&r, "{\"suite\":\"good\",\"architecture\":\"x86_64\""),
+          "both: the plan gives each suite's architecture");
+    fix_format(line, sizeof(line), "program: %s/build/x86_64/cases/probe pass", tree);
+    CHECK(output_has(&r, "fixture.good.arch.x86_64.r0", line),
+          "both: the program of each architecture");
+    CHECK(output_has(&r, "fixture.good.pass.i686.r1",
+                     "case: fixture.good.pass arch: i686 seed: 7 inherited: unset") &&
+              output_has(&r, "fixture.good.pass.x86_64.r0",
+                         "case: fixture.good.pass arch: x86_64 seed: 7 inherited: unset") &&
+              output_has(&r, "fixture.good.none.none.r0",
+                         "case: fixture.good.none arch: unset seed: unset inherited: unset"),
+          "both: each case's architecture");
+    CHECK(has_line(r.out, "run: good: fixture.good.pass on x86_64 r1: starting") &&
+              has_line(r.out, "run: good: fixture.good.none: starting"),
+          "both: a line of each start with its architecture");
+    CHECK(line_no(r.out, "run: good: fixture.good.pass on x86_64: starting") <
+              line_no(r.out, "run: good: fixture.good.tick on i686: starting"),
+          "both: the architectures' cases interleaved");
+    fix_format(line, sizeof(line), "%s/prepare.record", r.results);
+    CHECK(read_text(line, text, sizeof(text)) > 0 && strstr(text, "\narch i686\n") != NULL &&
+              strstr(text, "\narch x86_64\n") != NULL,
+          "prepare: one record of both architectures");
+    CHECK(recorded(&r, "build/x86_64/cases/probe") && recorded(&r, "build/cases/probe") &&
+              recorded(&r, "build/rach2/kernel") && recorded(&r, "build/x86_64/rach2/kernel"),
+          "prepare: the goals and kernel of each architecture");
+    CHECK(has_line(r.out, "etude-legacy: result: ran: 2 suites, 2 passed"), "both: the result");
+    CHECK(r.claims == 0, "both: the ledger has no claim");
+    CHECK(!r.leaks, "both: the driver leaks nothing");
+    show(&r, before);
+}
+
+/** A set of both architectures with a suite that names one runs it there
+ * alone. */
+static void test_cases_one(void)
+{
+    static const struct etude_legacy_member m[] = {
+        {"good", 0, 0, "cases/good/good.json", "x86_64"}};
+    static struct run r;
+    int before = fails;
+
+    r.name = "cases-one";
+    r.members = m;
+    r.n = 1;
+    r.arch = "i686,x86_64";
+    set_run(&r);
+    CHECK(r.status == 0, "one: passed");
+    CHECK(count_kind(&r.h, "attempt") == 5 && attempts_of(&r, "fixture.good.pass", "i686") == 0,
+          "one: the cases of x86_64 and none alone");
+    CHECK(has_line(r.out, "etude-legacy: result: ran: 1 suites, 1 passed"), "one: the result");
+    show(&r, before);
+}
+
 /** A suite of cases that pass, fail, end their report early and run past
  * their case bound. */
 static void test_cases_mixed(void)
 {
-    static const struct etude_legacy_member m[] = {{"mixed", 0, 0, "cases/mixed/mixed.json"}};
+    static const struct etude_legacy_member m[] = {{"mixed", 0, 0, "cases/mixed/mixed.json", NULL}};
     static const char *const kept_ones[] = {"fixture.mixed.fail.r0", "fixture.mixed.cut.r0",
                                             "fixture.mixed.slow.r0"};
     static struct run r;
@@ -1977,8 +2084,8 @@ static void test_cases_mixed(void)
  * its suite to run, and the set then stops before the next suite. */
 static void test_cases_stops(void)
 {
-    static const struct etude_legacy_member m[] = {{"mixed", 1, 1, "cases/mixed/mixed.json"},
-                                                   {"plain", 0, 0, ONE("plain")}};
+    static const struct etude_legacy_member m[] = {{"mixed", 1, 1, "cases/mixed/mixed.json", NULL},
+                                                   {"plain", 0, 0, ONE("plain"), NULL}};
     static struct run r;
     int before = fails;
 
@@ -2066,7 +2173,8 @@ static void test_cases_refused(void)
  * `locks` that has one is refused. */
 static void test_machine_locks(void)
 {
-    static const struct etude_legacy_member m[] = {{"machine", 0, 0, "cases/machine/machine.json"}};
+    static const struct etude_legacy_member m[] = {
+        {"machine", 0, 0, "cases/machine/machine.json", NULL}};
     static struct run r;
 
     r.members = m;
@@ -2152,7 +2260,8 @@ static int copies_of(const struct run *r, const char *name)
  * report, end and console. */
 static void test_machine(void)
 {
-    static const struct etude_legacy_member m[] = {{"machine", 0, 0, "cases/machine/machine.json"}};
+    static const struct etude_legacy_member m[] = {
+        {"machine", 0, 0, "cases/machine/machine.json", NULL}};
     static struct run r;
     char text[PATH_LEN * 2], console[PATH_LEN * 2];
     int before = fails, given;
@@ -2251,7 +2360,8 @@ static void test_machine(void)
  */
 static void test_publish(void)
 {
-    static const struct etude_legacy_member m[] = {{"machine", 0, 0, "cases/machine/machine.json"}};
+    static const struct etude_legacy_member m[] = {
+        {"machine", 0, 0, "cases/machine/machine.json", NULL}};
     static struct run changed, failed;
     char text[PATH_LEN * 2], disk[PATH_LEN];
     int before = fails;
@@ -2324,7 +2434,7 @@ static int boundary_started(const struct run *r)
 static void boundary_refused(struct run *r, const char *row, const char *why)
 {
     static const struct etude_legacy_member m[] = {
-        {"boundary", 0, 0, "cases/boundary/boundary.json"}};
+        {"boundary", 0, 0, "cases/boundary/boundary.json", NULL}};
     int before = fails;
 
     r->name = row;
@@ -2351,7 +2461,7 @@ static void boundary_refused(struct run *r, const char *row, const char *why)
 static void test_boundary(void)
 {
     static const struct etude_legacy_member m[] = {
-        {"boundary", 0, 0, "cases/boundary/boundary.json"}};
+        {"boundary", 0, 0, "cases/boundary/boundary.json", NULL}};
     static const char deny[] =
         "the site's policy does not permit the lazy memory profile bigmem-boundary-v1";
     static struct run r, other, none, small, missing;
@@ -2429,7 +2539,8 @@ static uint64_t tooling_claim(const char *suite, const char *name, int tooling, 
  * memory claims it as a host case does, and a guest case's is refused. */
 static void test_tooling(void)
 {
-    static const struct etude_legacy_member m[] = {{"tooling", 0, 0, "cases/tooling/tooling.json"}};
+    static const struct etude_legacy_member m[] = {
+        {"tooling", 0, 0, "cases/tooling/tooling.json", NULL}};
     static struct run r;
     static char var[PATH_LEN + 32];
     char why[400];
@@ -2553,7 +2664,7 @@ static int lines_with(const char *text, const char *word)
  */
 static void test_guest(void)
 {
-    static const struct etude_legacy_member m[] = {{"guest", 0, 0, "cases/guest/guest.json"}};
+    static const struct etude_legacy_member m[] = {{"guest", 0, 0, "cases/guest/guest.json", NULL}};
     static struct run r;
     static char text[OUT_LEN];
     const char *dir = strcmp(guest_arch, "x86_64") == 0 ? "build/x86_64" : "build";
@@ -2633,12 +2744,13 @@ static void test_guest(void)
 /** The requests refused before anything runs. */
 static void test_refused(void)
 {
-    static const struct etude_legacy_member bad[] = {{"Plain", 0, 0, ONE("plain")}};
-    static const struct etude_legacy_member twice[] = {{"plain", 0, 0, ONE("plain")},
-                                                       {"plain", 0, 0, ONE("plain")}};
-    static const struct etude_legacy_member one[] = {{"plain", 0, 0, ONE("plain")}};
-    static const struct etude_legacy_member bare[] = {{"plain", 0, 0, NULL}};
-    static struct run r[6];
+    static const struct etude_legacy_member bad[] = {{"Plain", 0, 0, ONE("plain"), NULL}};
+    static const struct etude_legacy_member twice[] = {{"plain", 0, 0, ONE("plain"), NULL},
+                                                       {"plain", 0, 0, ONE("plain"), NULL}};
+    static const struct etude_legacy_member one[] = {{"plain", 0, 0, ONE("plain"), NULL}};
+    static const struct etude_legacy_member bare[] = {{"plain", 0, 0, NULL, NULL}};
+    static const struct etude_legacy_member other[] = {{"plain", 0, 0, ONE("plain"), "x86_64"}};
+    static struct run r[8];
 
     r[0].members = one;
     refused(&r[0], "none", "refused: no suite", NULL);
@@ -2660,6 +2772,14 @@ static void test_refused(void)
     r[5].n = 1;
     r[5].ledger = "ledger";
     refused(&r[5], "relative", "refused: a relative ledger", NULL);
+    r[6].members = other;
+    r[6].n = 1;
+    refused(&r[6], "otherarch", "refused: a suite of another architecture",
+            "a suite's architecture is not one of the set's");
+    r[7].members = one;
+    r[7].n = 1;
+    r[7].arch = "x86_64,i686";
+    refused(&r[7], "botharch", "refused: both architectures in another order", NULL);
 }
 
 /** Remove the guest cases' evidence under the tree's build/tests. */
@@ -2795,6 +2915,8 @@ int main(void)
     test_refused();
     test_cases();
     test_cases64();
+    test_cases_both();
+    test_cases_one();
     test_cases_mixed();
     test_cases_stops();
     test_machine();
