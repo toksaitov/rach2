@@ -5,6 +5,7 @@ Only preparation invokes this module. The C adapter owns its processes,
 artifact record, cleanup and same-run timing receipt.
 """
 import argparse
+from datetime import datetime
 import hashlib
 import json
 import os
@@ -133,14 +134,33 @@ def record_files(text):
     return files
 
 
+def receipt_reading(value):
+    utc = value.get('utc', '')
+    require(isinstance(utc, str) and re.fullmatch(
+        r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?Z', utc),
+        'invalid producer UTC reading')
+    datetime.fromisoformat(utc.removesuffix('Z') + '+00:00')
+    for key in ('monotonic_us', 'resolution_us'):
+        number = value.get(key)
+        require(type(number) is int and 0 <= number <= 9007199254740991,
+                'invalid producer clock reading')
+    require(value['resolution_us'] > 0, 'unknown producer clock resolution')
+    return value['monotonic_us']
+
+
 def receipt_check(receipt, commit, record):
     require(receipt.get('format') == 'etude-preparation-receipt' and
             receipt.get('schema_version') == 1 and receipt.get('outcome') == 'pass' and
             receipt.get('cleanup') == 'confirmed' and receipt.get('commit') == commit and
             receipt.get('record_sha256') == hashlib.sha256(record.encode()).hexdigest(),
             'ordinary producer preparation receipt does not bind this source and record')
-    require(receipt.get('start', {}).get('monotonic_us', -1) <=
-            receipt.get('end', {}).get('monotonic_us', -2), 'producer interval is invalid')
+    for key, limit in (('run_id', 255), ('machine_id', 127), ('boot_id', 127)):
+        value = receipt.get(key)
+        require(isinstance(value, str) and len(value) <= limit and
+                re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]*', value),
+                'invalid ordinary producer identity')
+    require(receipt_reading(receipt.get('start', {})) <= receipt_reading(receipt.get('end', {})),
+            'producer interval is invalid')
 
 
 def inventory_texts(tree, files):

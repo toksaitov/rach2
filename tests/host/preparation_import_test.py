@@ -42,12 +42,16 @@ class ImportTests(unittest.TestCase):
         record = 'etude-prepare 1\ntree /producer\n'
         receipt = dict(format='etude-preparation-receipt', schema_version=1,
                        outcome='pass', cleanup='confirmed', commit='1' * 40,
+                       run_id='production-1', machine_id='linux', boot_id='boot-1',
                        record_sha256=hashlib.sha256(record.encode()).hexdigest(),
-                       start=dict(monotonic_us=1), end=dict(monotonic_us=5))
+                       start=dict(utc='2026-10-24T00:00:00Z', monotonic_us=1, resolution_us=1),
+                       end=dict(utc='2026-10-24T00:00:01Z', monotonic_us=5, resolution_us=1))
         product.receipt_check(receipt, '1' * 40, record)
         for key, value in [('cleanup', 'unknown'), ('outcome', 'fail'),
                            ('commit', '2' * 40), ('record_sha256', '0' * 64),
-                           ('end', dict(monotonic_us=0))]:
+                           ('end', dict(receipt['end'], monotonic_us=0)),
+                           ('run_id', ''), ('boot_id', 'other boot'),
+                           ('start', dict(receipt['start'], resolution_us=0))]:
             with self.subTest(key=key), self.assertRaises(ValueError):
                 product.receipt_check(dict(receipt, **{key: value}), '1' * 40, record)
 
