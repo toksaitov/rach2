@@ -133,6 +133,12 @@ build_layer()
     cd $TREE || exit 1
     set --
     if [ "${GNU_TEST_PRODUCTS:-}" = 1 ]; then
+        # The product fixtures build against ported musl and e2fsprogs.
+        # Both Debian cross toolchains are installed in the tooling recipe.
+        sh tools/setup/elfwrap.sh i686 "$TREE/build/tooling-elf" || exit 1
+        sh tools/setup/elfwrap.sh x86_64 "$TREE/build/tooling-elf" || exit 1
+        PATH=$TREE/build/tooling-elf:$PATH
+        export PATH
         set -- gnu-sanitizers gnu-host-products
         [ "$RACH2_ARCH" != x86_64 ] || set -- "$@" gnu-host-checks
     fi
