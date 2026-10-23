@@ -533,7 +533,8 @@ row_procps() {
 # util-linux's programs: the disks and mounts from /sys and /proc and the root
 # /etc/fstab names, a lock taken and waited for, the limits and the I/O class of
 # a process, the login history, with a session on a terminal of the machine's
-# own server, and the record of the boot that init writes, the formatting and
+# own server, or in a native run the history alone, and the record of the
+# boot that init writes, the formatting and
 # terminal tools jq's tests and scripts use, uuidgen, dmesg, newgrp's
 # set-user-ID mode, and the namespaces unshare makes, nsenter enters and lsns
 # lists.
@@ -561,8 +562,10 @@ row_utillinux() {
         runs "ssh-keygen" ssh-keygen -q -t ed25519 -N '' -f "$WORK/id"
         cat "$WORK/id.pub" >> /root/.ssh/authorized_keys
         runs "a session with a terminal" ssh -tt "${opts[@]}" root@127.0.0.1 true
+        has "last" "$(last -n 1 root)" "root"
+    else
+        has "last" "$(last -n 1)" "wtmp begins"
     fi
-    has "last" "$(last -n 1 root)" "root"
     has "the boot's record in utmp" "$(utmpdump /var/run/utmp 2>/dev/null)" "[reboot"
     has "last -x" "$(last -x reboot)" "system boot"
     same "column -t" "$(printf 'a b\nccc d\n' | column -t)" "$(printf 'a    b\nccc  d')"

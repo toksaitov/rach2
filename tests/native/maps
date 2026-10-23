@@ -1,8 +1,8 @@
 # The native values of the ids and ports the guest programs use, and the
-# volume images their cases name (Readme.md). An id maps to 60000 more than
-# itself, and 65534 to 60534; a port to 40000 more than itself.
-idmap 5:60005 1000:61000 1001:61001 1002:61002 2000:62000 3000:63000
-idmap 4242:64242 4243:64243 65534:60534
+# volume images their cases name (Readme.md). An id maps to 50000 more than
+# itself, and 65534 to 50534; a port to 40000 more than itself.
+idmap 5:50005 1000:51000 1001:51001 1002:51002 2000:52000 3000:53000
+idmap 4242:54242 4243:54243 65534:50534
 portmap 47:40047 4433:44433 5353:45353 5999:45999 7000:47000 7461:47461
 portmap 7470:47470 7480:47480 7481:47481
 portmap 7100:47100 7101:47101 7102:47102 7200:47200 7203:47203 7205:47205
@@ -28,7 +28,7 @@ image load-vfat vfat 64
 image loopdev-ext2 ext2 4 from build/tests/system/loopdev/ext2.img
 image loopdev-fat vfat 4 from build/tests/system/loopdev/fat.img
 image loopdev-krffs krffs 4 from build/tests/system/loopdev/krffs.img
-idmap 4000:64000
+idmap 4000:54000
 portmap 8080:48080 8081:48081 12345:52345
 portmap 9000:49000 9001:49001 9002:49002 9003:49003 9004:49004 9005:49005
 portmap 9006:49006 9007:49007 9100:49100 9101:49101 9102:49102 9103:49103
@@ -36,3 +36,5 @@ portmap 9104:49104 9105:49105 9106:49106 9107:49107
 image fat64 vfat 64
 image krffs16 krffs 16
 image krffs48 krffs 48
+# The ordinary GNU test account is separate from the probes' mapped ids.
+account test 60000
