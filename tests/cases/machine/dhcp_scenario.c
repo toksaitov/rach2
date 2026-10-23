@@ -1,8 +1,8 @@
 /*
- * dhcp_scenario.c: the scenario of the cases of tests/cases/machine.dhcp.json
- * and machine.dhcp-e1000.json: the machine taking an address it was not told,
- * with both of its clients, BusyBox's `udhcpc`, which `ifup` runs on os-real
- * and the metal image, and os-simple's own `dhcpc`, which its `netup` runs.
+ * dhcp_scenario.c: the scenario of the cases of tests/cases/machine.dhcp.json:
+ * the machine taking an address it was not told, with both of its clients,
+ * BusyBox's `udhcpc`, which `ifup` runs on os-real and the metal image, and
+ * os-simple's own `dhcpc`, which its `netup` runs.
  *
  * A boot that is to take a lease has `rach2.ip=none`, so IPv4 is unset and
  * nothing is configured until userland does it, and its card's user network
@@ -197,13 +197,13 @@ static int answers(struct dhcp_case *s, unsigned i, const char *output)
 }
 
 /**
- * The `lease` case, on the card of the case's family: os-real finds eth0
- * unset, `ifup -a` takes the lease of 192.168.90.20 with its mask, its
- * broadcast address and its name server, and the machine reaches the
- * gateway by IP and by ARP. An arping at an address nothing answers must end
- * at its deadline with status 1: the run ends in the SIGALRM handler, so it
- * needs the interval timer (setitimer(2)). Nothing answers 10.9.9.9, and
- * nothing needs to: the capture says where the ping went.
+ * The `lease` case, on the RTL8139: os-real finds eth0 unset, `ifup -a` takes
+ * the lease of 192.168.90.20 with its mask, its broadcast address and its name
+ * server, and the machine reaches the gateway by IP and by ARP. An arping at an
+ * address nothing answers must end at its deadline with status 1: the run ends
+ * in the SIGALRM handler, so it needs the interval timer (setitimer(2)).
+ * Nothing answers 10.9.9.9, and nothing needs to: the capture says where the
+ * ping went.
  */
 static void lease_case(struct dhcp_case *s)
 {

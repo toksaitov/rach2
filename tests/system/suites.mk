@@ -1546,23 +1546,19 @@ $(ETUDE_SCENARIO_DISK): krffs/manifests/etude-scenario.manifest $(MKDISK) \
 # build's files or out of date. They are the cases of
 # tests/cases/host.imagerace.json, which etude runs, and have no target here.
 
-# Three network suites again on the second card, each the family of etude's
+# Two network suites again on the second card, each the family of etude's
 # cases whose machines have the e1000. The cases whose subject is above the
-# driver belong to the first card's family: `dhcp-e1000` has only the case that
-# the card changes. The packet, ping, dgram, raw and netif suites are not
-# repeated: `dhcp-e1000`'s udhcpc and arping send and receive through a packet
-# socket on the card; the sockets and the interface ioctls are above the
-# driver, which builds no header and sums no checksum, and an interface taken
-# down is a flag the driver never sees; and the netif suite's `twocards` case
-# runs those ioctls and pings, connects and sends on two e1000s. The probe suite is not repeated at all,
+# driver belong to the first card's family. The packet, ping, dgram, raw, netif
+# and dhcp suites are not repeated: the sockets, the interface ioctls and the
+# DHCP clients are above the driver, which builds no header and sums no
+# checksum, and an interface taken down is a flag the driver never sees. The
+# netif suite's `twocards` case runs those ioctls and pings, connects and sends
+# through a packet socket on two e1000s, and the dhcp suite's `two-networks`
+# case takes a lease through each of two. The probe suite is not repeated at all,
 # since none of its probes sends a frame.
 
 # `tests/run netconsole-e1000`: the netconsole suite on the e1000 card, the
 # cases of tests/cases/machine.netconsole-e1000.json.
-
-# `tests/run dhcp-e1000`: the dhcp suite's lease on the e1000 card. Its case is
-# in tests/cases/machine.dhcp-e1000.json, which etude runs, and has no target
-# here.
 
 # `tests/run ssh-e1000`: the ssh suite on the e1000 card, the case of
 # tests/cases/machine.ssh-e1000.json.

@@ -15,7 +15,6 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `selfbuild-ext2` (full tier; needs qemu, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the machine builds its own kernel on an ext2 root, and the kernel it built runs.
 * `sealed` (full tier; needs qemu, ssh, mformat, mmd, mcopy, debugfs, e2fsck, gzip; 128 MiB): the disk that goes into the laptop, operated the way it will be operated once it is in there.
 * `fakeapi` (full tier; needs qemu, ssh, scp, python3, openssl; 1024 MiB; x86_64 only): curl's TLS, JSON and server-sent events, a WebSocket exchange and an unexpected request that fails the API server's verdict, on a restricted GNU machine, as tests/cases/machine.fakeapi.json.
-* `dhcp-e1000` (full tier; needs qemu; 128 MiB): the dhcp suite's lease on the e1000 card.
 * `dhcp` (full tier; needs qemu; 128 MiB): the machine taking an address it was not told, with both of its clients: BusyBox's `udhcpc`, which `ifup` runs, and os-simple's own `dhcpc`, which its `netup` runs.
 * `netif` (full tier; needs qemu; 128 MiB): the interface ioctls, which is how a program sets this machine's address, and machines with two cards.
 * `mount` (core tier; needs qemu, mformat, mcopy, mdel, mdir; 128 MiB): the partition nodes, the block path through a device that sleeps or never answers, mount(2) and the claims it makes, and the FAT driver mounted from BusyBox's shell.
