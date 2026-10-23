@@ -39,6 +39,8 @@ int main(int argc, char **argv)
     char value[8200];
     int ok;
     name = name ? name + 1 : argv[0];
+    if (argc > 1 && !strncmp(argv[1], "--launch-", 9))
+        return flow_launch_aux(argc, argv);
     if (argc > 1 && !strcmp(argv[1], "--status-lock"))
         return flow_status_lock(argc, argv);
     if ((argc == 2 && !strcmp(argv[1], "--hold")) || (argc == 3 && !strcmp(argv[2], "--hold"))) {
@@ -50,6 +52,8 @@ int main(int argc, char **argv)
     if (argc == 2 && !strcmp(argv[1], "--check"))
         return flow_check_workload(argc, argv);
     if (strcmp(name, "host-flow-check")) {
+        if (getenv("FLOW_LAUNCH"))
+            return flow_launch_mock(argc, argv);
         if (getenv("FLOW_PROGRESS"))
             return flow_progress_mock(argc, argv);
         if (getenv("FLOW_TOOLING"))
@@ -92,7 +96,9 @@ int main(int argc, char **argv)
     fx_env("LC_ALL", "C");
     fx_env("FLOW_WORK", f.work);
     fx_env("FLOW_SELF", f.self);
-    if (!strcmp(id, "progress"))
+    if (!strcmp(id, "etude_launch"))
+        ok = flow_launch(&f);
+    else if (!strcmp(id, "progress"))
         ok = flow_progress(&f);
     else if (!strcmp(id, "etude_tooling"))
         ok = flow_tooling(&f);

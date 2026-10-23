@@ -40,4 +40,7 @@ int flow_release(struct fixture *f);
 int flow_release_mock(int argc, char **argv);
 int flow_tooling(struct fixture *f);
 int flow_tooling_mock(int argc, char **argv);
+int flow_launch(struct fixture *f);
+int flow_launch_mock(int argc, char **argv);
+int flow_launch_aux(int argc, char **argv);
 #endif
