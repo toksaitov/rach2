@@ -155,8 +155,8 @@ def exemption(args, output):
 
 def compose(args):
     tree = args.tree.resolve(strict=True)
-    require(IDENTITY.fullmatch(args.run_id) and len(args.run_id) < 160,
-            'run identity must be valid and fit the native allocator (under 160 bytes)')
+    require(IDENTITY.fullmatch(args.run_id),
+            'run identity must be valid and fit the native allocator (at most 255 bytes)')
     source_doc = verify_source(tree, args.source_snapshot, args.source_sha256, args.commit)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
