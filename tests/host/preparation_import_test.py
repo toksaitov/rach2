@@ -133,8 +133,8 @@ class ImportTests(unittest.TestCase):
                 product.validate_producer(dict(transport=mode))
 
     def test_posix_wsl_ssh(self):
-        producer = dict(transport='wsl-ssh', tree='/home/testing/rach2',
-                        metadata='/home/testing/rach2/build/producer.json', etude='/immutable/etude',
+        producer = dict(transport='wsl-ssh', tree='/producer',
+                        metadata='/producer/build/producer.json', etude='/immutable/etude',
                         host='testing', distribution='Ubuntu-26.04', user='testing')
         with patch.object(product, 'windows_host', return_value=False):
             product.validate_producer(producer)
@@ -147,7 +147,7 @@ class ImportTests(unittest.TestCase):
                     product.transfer(producer, ['build/images/a.disk'], Path(work), Path(work))
                 argv = run.call_args.args[0]
                 server = next(arg for arg in argv if arg.startswith('--rsync-path='))
-                self.assertIn('--exec /immutable/etude lock tree /home/testing/rach2 '
+                self.assertIn('--exec /immutable/etude lock tree /producer '
                               'prepare-import /usr/bin/rsync', server)
         for key in ('distribution', 'user'):
             for bad in (None, '', '-bad', 'bad value', 'bad;command'):
