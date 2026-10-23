@@ -1,11 +1,11 @@
 #!/bin/sh
 # nativecheck_test.sh: check tools/verify/nativecheck.sh on a small tree in
-# fourteen cases: complete cases pass, and a program with no case and no
+# twenty-two cases: complete cases pass, and a program with no case and no
 # reason, a program with a case and a reason, a reason for a program that is
 # not built, a case named for another program, a case named twice, a fixture
 # that fits no form, an id, a port or an image that maps lacks, a volume of
 # another type than its image, a staged file that is missing, a port mapped
-# twice and more volumes than loop devices fail.
+# twice, invalid account declarations and more volumes than loop devices fail.
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 WORK=
@@ -22,6 +22,7 @@ cat > "$WORK/tests/native/maps" <<'EOF'
 idmap 1000:61000
 portmap 7000:47000
 image vol ext2 16
+account test 60000
 EOF
 printf 'gamma two disks of the suite\n' > "$WORK/tests/native/machine"
 : > "$WORK/tests/native/probes.cases"
@@ -90,4 +91,19 @@ sed '$d' "$WORK/tests/native/maps" > "$WORK/maps" && mv "$WORK/maps" "$WORK/test
 cases "$good
 case alpha.y root:krffs volume:ext2:vol volume:ext2:vol volume:ext2:vol volume:ext2:vol -- alpha"
 check 1 'more volumes than loop devices'
-echo "nativecheck-test: passed: 14 cases"
+cases "$good"
+cp "$WORK/tests/native/maps" "$WORK/good-maps"
+sed '/^account /d' "$WORK/good-maps" > "$WORK/tests/native/maps"
+check 1 'an account is required'
+for account in 'account test' 'account bad/name 60000' 'account test 0' \
+    'account test 65536' 'account test 60000 extra'; do
+    sed '/^account /d' "$WORK/good-maps" > "$WORK/tests/native/maps"
+    printf '%s\n' "$account" >> "$WORK/tests/native/maps"
+    check 1 "$account"
+done
+cp "$WORK/good-maps" "$WORK/tests/native/maps"
+printf 'account other 60001\n' >> "$WORK/tests/native/maps"
+check 1 'an account declared twice'
+sed 's/account test 60000/account test 61000/' "$WORK/good-maps" > "$WORK/tests/native/maps"
+check 1 'an account uid used by the id map'
+echo "nativecheck-test: passed: 22 cases"

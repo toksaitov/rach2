@@ -101,6 +101,12 @@ awk '
                 else if (pair[1] in portnew || newport[pair[2]]++ || pair[2] > 65535) fail(where, "a port mapped twice or out of range: " $i)
                 else portnew[pair[1]] = 1
             }
+        } else if ($1 == "account") {
+            accounts++
+            if (NF != 3 || $2 !~ /^[A-Za-z0-9_.+-]+$/ || length($2) > 63 ||
+                $3 !~ /^[1-9][0-9]*$/ || $3 > 65535)
+                fail(where, "an account that is not NAME UID with a safe name and uid 1 to 65535")
+            accountuid = $3
         } else if ($1 == "image" && (NF == 4 || (NF == 6 && $5 == "from")) && $3 ~ /^(krffs|ext2|vfat|exfat)$/ && $4 ~ /^[1-9][0-9]*$/) {
             if ($2 in imagetype) fail(where, "an image named twice: " $2)
             imagetype[$2] = $3
@@ -133,6 +139,8 @@ awk '
         if (volumes > 4) fail(where, "more volumes and roots than the four loop devices")
     }
     END {
+        if (accounts != 1) fail("tests/native/maps", "exactly one account is required")
+        if (accountuid in newid) fail("tests/native/maps", "the account uid is also a mapped id")
         for (p in built) {
             if (p in cased && p in machine) fail("tests/native/machine", "a program with a case: " p)
             else if (!(p in cased) && !(p in staged) && !(p in machine)) fail("tests/native", "a program with no case and no reason: " p)
