@@ -99,8 +99,8 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"stick": "the test stick", "root": "installer-root.ext2 on the stick", "mbr": "installer-test-mbr.disk", "efi": "vendor/grub/bootx64.efi"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["mcopy", "minfo", "mtype"], "features": {}},
-      "execution": {"program": "installer_repair_convert", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "mbr"]}], "children": "none", "cleanup": "libetude-case ends each machine and removes the copies, which it keeps after a failure; the scenario removes its own directory unless an assertion failed"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "installer_repair_convert", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "mbr"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends each machine and removes the copies, which it keeps after a failure; the scenario removes its own directory unless an assertion failed"},
       "steps": [
         {"step_id": "layout", "stage": "execute", "does": "read the MBR disk's first entry with mkmbr and its boot partition with minfo"},
         {"step_id": "convert", "stage": "execute", "does": "boot the stick beside the disk and update the disk from it twice", "machine": "recovery"},
@@ -111,7 +111,8 @@
       "machines": [
         {"machine_id": "recovery", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick", "bus": "device", "id": "stick"}, "mbr"], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-kbd", "bus": "xhci.0"}, {"model": "usb-storage", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
         {"machine_id": "uefi", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["mbr"], "cpu": "max", "processors": 2, "memory_bytes": 536870912, "firmware": "ovmf", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
-        {"machine_id": "bios", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["mbr"], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "bios", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["mbr"], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {"assertion_id": "old-layout", "checks": "the MBR disk's first entry has type 0x0c and its boot partition is FAT32 at eight sectors to a cluster, the layout installed before", "source": "scenario"},
@@ -126,14 +127,16 @@
         {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
       ],
       "bounds": {"case": {"floor_us": 5000000, "initial_us": 7200000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 120000000, "ceiling_us": 600000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
-      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1207959552, "tooling_memory_bytes": 2013265920, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 3000, "cpu_ceiling_millis": 3000, "memory_bytes": 1610612736, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "stick", "node": "images/install-test-stick.img", "per_architecture": true},
         {"name": "mbr", "node": "images/installer-test-mbr.disk", "per_architecture": true},
         {"name": "bootx64", "node": "tests/cases/fixtures/bootx64.efi", "per_architecture": false},
         {"name": "mkmbr", "node": "tools/image/mkmbr", "per_architecture": false},
-        {"name": "installer_repair_convert", "node": "tests/cases/machine/installer_repair_convert", "per_architecture": false}
+        {"name": "installer_repair_convert", "node": "tests/cases/machine/installer_repair_convert", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "firmware", "reason": "the case boots one disk by UEFI and by BIOS after the stick has converted it"}
@@ -145,15 +148,16 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"stick": "the test stick", "root": "installer-root.ext2 on the stick", "mbr": "installer-test-mbr.disk", "zeroed": "the boot partition's first 64 sectors"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "dd", "rm", "mkdir", "mcopy", "mdir", "minfo", "mtype"], "features": {}},
-      "execution": {"program": "installer_repair_convert_stopped", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "mbr"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the copies, which it keeps after a failure; the scenario removes its own directory unless an assertion failed"},
+      "requirements": {"host_api": "posix", "tools": ["sh", "dd", "rm", "mkdir"], "features": {}},
+      "execution": {"program": "installer_repair_convert_stopped", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "mbr"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the copies, which it keeps after a failure; the scenario removes its own directory unless an assertion failed"},
       "steps": [
         {"step_id": "plant", "stage": "execute", "does": "keep the boot partition's files and first sector on the recovery partition, marked whole, and zero the boot partition's first sectors, with installer_repair_disk.sh keep"},
         {"step_id": "resume", "stage": "execute", "does": "boot the stick beside the disk and update the disk from it", "machine": "recovery"},
         {"step_id": "inspect", "stage": "execute", "does": "look for the copy on the recovery partition with mdir, and read the boot partition with minfo and its menu with mtype"}
       ],
       "machines": [
-        {"machine_id": "recovery", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick", "bus": "device", "id": "stick"}, "mbr"], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-kbd", "bus": "xhci.0"}, {"model": "usb-storage", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "recovery", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick", "bus": "device", "id": "stick"}, "mbr"], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-kbd", "bus": "xhci.0"}, {"model": "usb-storage", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {"assertion_id": "planted", "checks": "the boot partition's files are planted on the recovery partition and its file system zeroed", "source": "scenario"},
@@ -166,14 +170,16 @@
         {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
       ],
       "bounds": {"case": {"floor_us": 5000000, "initial_us": 5400000000, "ceiling_us": 10800000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 120000000, "ceiling_us": 600000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
-      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "tooling_memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 3000, "cpu_ceiling_millis": 3000, "memory_bytes": 671088640, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "stick", "node": "images/install-test-stick.img", "per_architecture": true},
         {"name": "mbr", "node": "images/installer-test-mbr.disk", "per_architecture": true},
         {"name": "mkmbr", "node": "tools/image/mkmbr", "per_architecture": false},
         {"name": "installer_repair_disk", "node": "tests/cases/machine/installer_repair_disk", "per_architecture": false},
-        {"name": "installer_repair_convert_stopped", "node": "tests/cases/machine/installer_repair_convert_stopped", "per_architecture": false}
+        {"name": "installer_repair_convert_stopped", "node": "tests/cases/machine/installer_repair_convert_stopped", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "disk", "reason": "the case writes the partitions of a disk and updates it from the install stick"}
@@ -185,8 +191,8 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"stick": "the test stick, its volume made again with the keyed root", "disk": "installer-test.disk", "root": "installer-root.ext2 with keys in /srv/alice and /srv/empty, as key-root.ext2", "password": "the demo password", "key": "root's demo key", "accounts": "worker, Alice and alice, each with a new ed25519 key", "stops": "exit 99 before the new archive's directory, exit 98 after the root is checked"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["sh", "dd", "rm", "mkdir", "grep", "debugfs", "mcopy", "mmd", "mdeltree"], "features": {}},
-      "execution": {"program": "installer_repair_resume", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "disk", "root"]}], "children": "none", "cleanup": "libetude-case ends each machine and removes the copies, which it keeps after a failure; the scenario removes its own directory, with the keys it made, unless an assertion failed"},
+      "requirements": {"host_api": "c", "tools": ["sh", "dd", "rm", "mkdir", "grep"], "features": {}},
+      "execution": {"program": "installer_repair_resume", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "disk", "root"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends each machine and removes the copies, which it keeps after a failure; the scenario removes its own directory, with the keys it made, unless an assertion failed"},
       "steps": [
         {"step_id": "channel-client", "stage": "boot", "machine": "channel-client", "does": "boot the declared Rach2 OpenSSH client and open its framed command channel"},
         {"step_id": "keys", "stage": "execute", "does": "copy root's demo key, take its public half with ssh-keygen, and make a key for each of three accounts"},
@@ -204,7 +210,8 @@
         {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]}, "console": "serial", "qmp": true, "helper": true},
         {"machine_id": "recovery", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick", "bus": "device", "id": "stick"}, "disk"], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-kbd", "bus": "xhci.0"}, {"model": "usb-storage", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
         {"machine_id": "installed", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["disk"], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
-        {"machine_id": "installed-net", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["disk"], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "installed-net", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["disk"], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {"assertion_id": "keys-recorded", "checks": "the installed machine takes keys for root, the test account and three accounts, two homes outside /home and its host keys, and prints at least six key digests", "source": "scenario"},
@@ -232,7 +239,7 @@
         {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 11}
       ],
       "bounds": {"case": {"floor_us": 5000000, "initial_us": 21600000000, "ceiling_us": 43200000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 120000000, "ceiling_us": 600000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
-      "resources": {"cpu_millis": 3000, "cpu_ceiling_millis": 3000, "memory_bytes": 1342177280, "tooling_memory_bytes": 1610612736, "disk_bytes": 5368709120, "locks": [], "ports": 1, "loop_devices": 0},
+      "resources": {"cpu_millis": 4000, "cpu_ceiling_millis": 4000, "memory_bytes": 1744830464, "disk_bytes": 5368709120, "locks": [], "ports": 1, "loop_devices": 0},
       "prepare": [
         {"name": "channel-client-image", "node": "images/gnu-test.disk", "per_architecture": true},
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
@@ -244,7 +251,9 @@
         {"name": "mkgpt", "node": "tools/image/mkgpt", "per_architecture": false},
         {"name": "mkexfatfixture", "node": "tests/host/mkexfatfixture", "per_architecture": false},
         {"name": "installer_repair_disk", "node": "tests/cases/machine/installer_repair_disk", "per_architecture": false},
-        {"name": "installer_repair_resume", "node": "tests/cases/machine/installer_repair_resume", "per_architecture": false}
+        {"name": "installer_repair_resume", "node": "tests/cases/machine/installer_repair_resume", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "system", "reason": "the case changes the installed machine's accounts and keys and updates it from the install stick"}

@@ -1529,8 +1529,8 @@ static struct machine_decl *find_decl(struct etude_case *c, const char *id)
 }
 
 /** Find the private file bound to a slot, or NULL. */
-static const char *bound_disk(const struct etude_case *c,
-                              const struct machine_decl *machine, const char *name)
+static const char *bound_disk(const struct etude_case *c, const struct machine_decl *machine,
+                              const char *name)
 {
     const struct disk_binding *b;
 
@@ -1540,8 +1540,8 @@ static const char *bound_disk(const struct etude_case *c,
     return NULL;
 }
 
-enum etude_status etude_bind_disk(struct etude_case *c, const char *machine,
-                                  const char *slot, const char *path)
+enum etude_status etude_bind_disk(struct etude_case *c, const char *machine, const char *slot,
+                                  const char *path)
 {
     struct machine_decl *d = find_decl(c, machine);
     struct disk_decl disk;
@@ -1551,15 +1551,14 @@ enum etude_status etude_bind_disk(struct etude_case *c, const char *machine,
     char root[4096], file[4096];
     size_t n, i;
 
-    if (d == NULL || slot == NULL || path == NULL ||
-        find_disk(d->qemu, slot, &disk) != 0 || disk.size == 0 ||
-        disk.cdrom || disk.base != NULL ||
-        (d->now != NULL && mres(d->now)->state != ETUDE_MACHINE_ENDED) ||
+    if (d == NULL || slot == NULL || path == NULL || find_disk(d->qemu, slot, &disk) != 0 ||
+        disk.size == 0 || disk.cdrom || disk.base != NULL || lstat(path, &st) != 0 ||
+        !S_ISREG(st.st_mode) || (d->now != NULL && mres(d->now)->state != ETUDE_MACHINE_ENDED) ||
         realpath(c->scratch, root) == NULL || realpath(path, file) == NULL)
         return ETUDE_REFUSED;
     n = strlen(root);
-    if (strncmp(root, file, n) != 0 || file[n] != '/' ||
-        lstat(file, &st) != 0 || !S_ISREG(st.st_mode) || st.st_nlink != 1)
+    if (strncmp(root, file, n) != 0 || file[n] != '/' || lstat(file, &st) != 0 ||
+        !S_ISREG(st.st_mode) || st.st_nlink != 1)
         return ETUDE_REFUSED;
     /* Windows realpath normalizes names without resolving reparse points.
      * Check every descendant as well as the file on both platforms. */
@@ -2111,8 +2110,8 @@ enum etude_status etude_boot(struct etude_case *c, const char *machine, const ch
     if (stop_asked)
         return ETUDE_STOPPED;
     if (d == NULL || c->cur < 0 ||
-        (!d->helper && (c->steps[c->cur].machine == NULL ||
-                       strcmp(c->steps[c->cur].machine, machine) != 0))) {
+        (!d->helper &&
+         (c->steps[c->cur].machine == NULL || strcmp(c->steps[c->cur].machine, machine) != 0))) {
         diag("machine %s is not the machine of the step that runs", machine);
         c->faults++;
         return ETUDE_REFUSED;
@@ -3115,6 +3114,275 @@ static char **arguments(const char *program, char *const args[])
     return v;
 }
 
+/* ---- Image tools in the declared Rach2 helper. ---- */
+
+/** The tools whose command line the image helper implements. */
+static int image_tool(const char *name)
+{
+    static const char *const names[] = {"mattrib", "mcopy",    "mdel",    "mdeltree",  "mdir",
+                                        "mformat", "minfo",    "mlabel",  "mmd",       "mmove",
+                                        "mrd",     "mren",     "mtype",   "debugfs",   "e2fsck",
+                                        "mke2fs",  "dumpe2fs", "tune2fs", "resize2fs", NULL};
+    size_t i;
+
+    for (i = 0; name != NULL && names[i] != NULL; i++)
+        if (strcmp(name, names[i]) == 0)
+            return 1;
+    return 0;
+}
+
+/** Split a debugfs request, including its quoted pathname operands. */
+static int image_words(char *text, char **words, size_t max)
+{
+    char *p = text, *out = text;
+    size_t n = 0;
+    int quote;
+
+    while (*p != '\0') {
+        while (*p == ' ' || *p == '\t')
+            p++;
+        if (*p == '\0')
+            break;
+        if (n == max)
+            return -1;
+        words[n++] = out;
+        quote = 0;
+        while (*p != '\0' && (quote || (*p != ' ' && *p != '\t'))) {
+            if ((*p == '\'' || *p == '"') && (!quote || quote == *p)) {
+                quote = quote ? 0 : *p;
+                p++;
+            } else if (*p == '\\' && p[1] != '\0') {
+                p++;
+                *out++ = *p++;
+            } else {
+                *out++ = *p++;
+            }
+        }
+        if (quote)
+            return -1;
+        while (*p == ' ' || *p == '\t')
+            p++;
+        *out++ = '\0';
+    }
+    return (int)n;
+}
+
+/** Copy a fetched output into a private pathname of this attempt. */
+static int image_output(struct etude_case *c, const char *from, const char *to)
+{
+    char root[4096], parent[4096], canonical[4096], *slash;
+    unsigned char buf[65536];
+    size_t n, count;
+    FILE *in = NULL;
+    int fd = -1, rc = -1;
+    struct stat st;
+
+    if (strlen(to) >= sizeof(parent) || realpath(c->scratch, root) == NULL)
+        return -1;
+    strcpy(parent, to);
+    slash = strrchr(parent, '/');
+    if (slash == NULL)
+        return -1;
+    *slash = '\0';
+    if (realpath(parent, canonical) == NULL)
+        return -1;
+    n = strlen(root);
+    if (strncmp(canonical, root, n) != 0 || (canonical[n] != '\0' && canonical[n] != '/') ||
+        (lstat(to, &st) == 0 && (!S_ISREG(st.st_mode) || st.st_nlink != 1)))
+        return -1;
+    in = fopen(from, "rb");
+    fd = open(to, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (in == NULL || fd < 0)
+        goto done;
+    while ((count = fread(buf, 1, sizeof(buf), in)) != 0) {
+        size_t at = 0;
+        while (at < count) {
+            ssize_t wrote = write(fd, buf + at, count - at);
+            if (wrote < 0 && errno == EINTR)
+                continue;
+            if (wrote <= 0)
+                goto done;
+            at += (size_t)wrote;
+        }
+    }
+    if (!ferror(in))
+        rc = 0;
+    made(c, to, 0);
+done:
+    if (in != NULL)
+        fclose(in);
+    if (fd >= 0 && close(fd) != 0)
+        rc = -1;
+    return rc;
+}
+
+/* The translated command and the storage of its pathname arguments. */
+struct image_invocation {
+    const char *args[68], *input, *destination;
+    char disk[4096], device[4096], program[80], request[8192], parsed[4096];
+};
+
+/** Translate the file operand in a debugfs request. */
+static enum etude_status image_request(char *const argv[], int request_at, size_t prefix,
+                                       struct image_invocation *v)
+{
+    char *words[8];
+    int nw, file_at;
+
+    if (strcmp(argv[0], "debugfs") != 0 || request_at < 0)
+        return ETUDE_OK;
+    {
+        if (strlen(argv[request_at]) >= sizeof(v->parsed))
+            return ETUDE_REFUSED;
+        strcpy(v->parsed, argv[request_at]);
+        nw = image_words(v->parsed, words, 8);
+        if (nw < 1)
+            return ETUDE_REFUSED;
+        if (strcmp(words[0], "dump") == 0 || strcmp(words[0], "write") == 0) {
+            if (nw != 3)
+                return ETUDE_REFUSED;
+            file_at = strcmp(words[0], "write") == 0 ? 1 : 2;
+            if (file_at == 1)
+                v->input = words[file_at];
+            else
+                v->destination = words[file_at];
+            words[file_at] = "/tmp/image-file";
+            if (strchr(words[1], '"') != NULL || strchr(words[2], '"') != NULL ||
+                (size_t)snprintf(v->request, sizeof(v->request), "%s \"%s\" \"%s\"", words[0],
+                                 words[1], words[2]) >= sizeof(v->request))
+                return ETUDE_REFUSED;
+            v->args[prefix + (size_t)request_at - 1] = v->request;
+        } else if (strcmp(words[0], "rdump") == 0) {
+            return ETUDE_REFUSED;
+        }
+    }
+    return ETUDE_OK;
+}
+
+/** Translate explicit disk and file operands, never a host shell command. */
+static enum etude_status image_arguments(struct etude_case *c, char *const argv[],
+                                         const char *output, struct image_invocation *v)
+{
+    const char *suffix;
+    size_t count = 0, prefix, i, disk_at = 0;
+    int mt, request_at = -1;
+
+    while (count < 64 && argv[count] != NULL)
+        count++;
+    if (count < 2 || count == 64 || c->cur < 0 || !file_name(output))
+        return ETUDE_REFUSED;
+    mt = argv[0][0] == 'm' && strcmp(argv[0], "mke2fs") != 0;
+    prefix = mt ? 3 : 1;
+    snprintf(v->program, sizeof(v->program), "/bin/%s", mt ? "mtools" : argv[0]);
+    v->args[0] = v->program;
+    if (mt) {
+        v->args[1] = "-c";
+        v->args[2] = argv[0];
+        for (i = 1; i + 1 < count; i++)
+            if (strcmp(argv[i], "-i") == 0)
+                disk_at = i + 1;
+    } else {
+        disk_at = count - 1;
+        if (strcmp(argv[0], "mke2fs") == 0 && argv[disk_at][0] >= '0' && argv[disk_at][0] <= '9')
+            disk_at--;
+    }
+    if (disk_at == 0 || strlen(argv[disk_at]) >= sizeof(v->disk))
+        return ETUDE_REFUSED;
+    strcpy(v->disk, argv[disk_at]);
+    suffix = strstr(v->disk, mt ? "@@" : "?offset=");
+    if (suffix != NULL) {
+        snprintf(v->device, sizeof(v->device), "/dev/disk0%s", suffix);
+        v->disk[suffix - v->disk] = '\0';
+    } else {
+        strcpy(v->device, "/dev/disk0");
+    }
+    for (i = 1; i < count; i++) {
+        v->args[prefix + i - 1] = i == disk_at ? v->device : argv[i];
+        if (strcmp(argv[i], "-R") == 0 && i + 1 < count)
+            request_at = (int)i + 1;
+        /* Directory staging belongs to artifact preparation. */
+        if (strcmp(argv[0], "mke2fs") == 0 && strcmp(argv[i], "-d") == 0)
+            return ETUDE_REFUSED;
+    }
+    v->args[prefix + count - 1] = NULL;
+    if (strcmp(argv[0], "mcopy") == 0) {
+        if (count < 5)
+            return ETUDE_REFUSED;
+        for (i = count - 2; i < count; i++) {
+            if (strncmp(argv[i], "::", 2) != 0) {
+                if (i == count - 1)
+                    v->destination = argv[i];
+                else
+                    v->input = argv[i];
+                v->args[prefix + i - 1] = "/tmp/image-file";
+            }
+        }
+        if (v->input != NULL && v->destination != NULL)
+            return ETUDE_REFUSED;
+    }
+    return image_request(argv, request_at, prefix, v);
+}
+
+/** Run one image command; the helper has no mounted volume from its disk. */
+static enum etude_status image_host(struct etude_case *c, char *const argv[], const char *output,
+                                    struct etude_termination *end)
+{
+    struct image_invocation v;
+    const char *sync_args[] = {"/bin/busybox", "sync", NULL};
+    const char *disks[] = {"image-disk", NULL};
+    char fetched[200], fetched_path[4096], sync_output[200], *reply = NULL;
+    struct etude_case_machine *m = NULL;
+    struct etude_termination stopped;
+    struct etude_guest_result result, synced;
+    enum etude_status st, stop_status;
+
+    memset(&v, 0, sizeof(v));
+    st = image_arguments(c, argv, output, &v);
+    if (st != ETUDE_OK)
+        return st;
+    if (etude_bind_disk(c, "image-helper", "image-disk", v.disk) != ETUDE_OK)
+        return ETUDE_REFUSED;
+    st = etude_boot(c, "image-helper", disks, &m, &stopped);
+    if (st != ETUDE_OK)
+        return st;
+    if (v.input != NULL &&
+        (st = etude_guest_put(m, v.input, "/tmp/image-file", "0600")) != ETUDE_OK)
+        goto done;
+    st = etude_guest_command(m, v.args, NULL, NULL, output, &result);
+    *end = result.termination;
+    if (st != ETUDE_OK || !result.complete)
+        goto done;
+    if (result.cleanup != ETUDE_CLEANUP_CONFIRMED) {
+        c->unconfirmed = 1;
+        st = ETUDE_LOST;
+        goto done;
+    }
+    if (v.destination != NULL && result.termination.end == ETUDE_END_EXITED &&
+        result.termination.value == 0) {
+        snprintf(fetched, sizeof(fetched), "image-file.%s", output);
+        st = etude_guest_get(m, "/tmp/image-file", fetched);
+        if (st != ETUDE_OK)
+            goto done;
+        snprintf(fetched_path, sizeof(fetched_path), "%s", etude_evidence(c, fetched));
+        if (image_output(c, fetched_path, v.destination) != 0) {
+            st = ETUDE_FAILED;
+            goto done;
+        }
+    }
+    snprintf(sync_output, sizeof(sync_output), "image-sync.%s", output);
+    st = etude_guest_command(m, sync_args, NULL, NULL, sync_output, &synced);
+    if (st == ETUDE_OK &&
+        (!synced.complete || synced.cleanup != ETUDE_CLEANUP_CONFIRMED ||
+         synced.termination.end != ETUDE_END_EXITED || synced.termination.value != 0))
+        st = ETUDE_FAILED;
+done:
+    stop_status = etude_qmp(m, "quit", NULL, &reply);
+    free(reply);
+    if (stop_status == ETUDE_OK)
+        stop_status = etude_wait_end(m, &stopped);
+    return st == ETUDE_OK ? stop_status : st;
+}
+
 enum etude_status etude_host(struct etude_case *c, char *const argv[], const char *output,
                              struct etude_termination *end)
 {
@@ -3131,6 +3399,8 @@ enum etude_status etude_host(struct etude_case *c, char *const argv[], const cha
     end->console_offset = 0;
     if (stop_asked)
         return ETUDE_STOPPED;
+    if (argv != NULL && image_tool(argv[0]) && etude_has_machine(c, "image-helper"))
+        return image_host(c, argv, output, end);
     program = program_path(c, argv[0]);
     if (c->cur < 0 || program == NULL || !file_name(output) ||
         (size_t)snprintf(err_name, sizeof(err_name), "%s.err", output) >= sizeof(err_name)) {

@@ -157,13 +157,8 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"disk": "the GPT disk of machine.uefi.installed", "deleted": "::/boot/grub/grub.cfg of partition 1"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["mdel"], "features": {}},
-      "execution": {
-        "program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
-        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["uefi-disk"]}],
-        "children": "reaped",
-        "cleanup": "libetude-case ends the machine and removes the copy of the disk, which it keeps after a failure; the scenario removes its copy of the demo key after a pass"
-      },
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["uefi-disk"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "reaped", "cleanup": "libetude-case ends the machine and removes the copy of the disk, which it keeps after a failure; the scenario removes its copy of the demo key after a pass"},
       "steps": [
         {"step_id": "channel-client", "stage": "boot", "machine": "channel-client",
          "does": "boot the declared Rach2 OpenSSH client and open its framed command channel"},
@@ -173,18 +168,9 @@
          "does": "boot the copy by OVMF until init starts the SSH server and the server answers, read the command line over SSH, and end the machine with QMP's quit"}
       ],
       "machines": [
-        {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null,
-         "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "ahci"}],
-         "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"],
-         "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]},
-         "console": "serial", "qmp": true, "helper": true},
-        {"machine_id": "uefi",
-         "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "uefi-disk", "bus": "ide"}], "cpu": "max", "processors": 1,
-                  "memory_bytes": 536870912, "firmware": "ovmf",
-                  "devices": [{"model": "vga"},
-                              {"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}],
-                  "boot_options": []},
-         "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]}, "console": "serial", "qmp": true, "helper": true},
+        {"machine_id": "uefi", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "uefi-disk", "bus": "ide"}], "cpu": "max", "processors": 1, "memory_bytes": 536870912, "firmware": "ovmf", "devices": [{"model": "vga"}, {"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {"assertion_id": "menu-deleted", "checks": "mdel deletes /boot/grub/grub.cfg from the FAT of the copy's partition 1", "source": "scenario"},
@@ -203,15 +189,16 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1207959552, "tooling_memory_bytes": 1476395008, "disk_bytes": 4563402752,
-                    "locks": [], "ports": 1, "loop_devices": 0},
+      "resources": {"cpu_millis": 3000, "cpu_ceiling_millis": 3000, "memory_bytes": 1610612736, "disk_bytes": 4563402752, "locks": [], "ports": 1, "loop_devices": 0},
       "prepare": [
         {"name": "channel-client-image", "node": "images/gnu-test.disk", "per_architecture": true},
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "uefi-disk", "node": "tests/cases/machine/uefi/disk.img", "per_architecture": true},
         {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
         {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
-        {"name": "uefi_scenario", "node": "tests/cases/machine/uefi_scenario", "per_architecture": false}
+        {"name": "uefi_scenario", "node": "tests/cases/machine/uefi_scenario", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "image", "reason": "the case deletes the menu from the EFI system partition of a copy of the disk from the host"}

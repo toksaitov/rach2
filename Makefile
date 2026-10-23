@@ -96,6 +96,7 @@ RESIZE2FS_BIN = $(VENDOR_STAGE)/e2fsprogs/resize2fs
 MKE2FS_BIN   = $(VENDOR_STAGE)/e2fsprogs/mke2fs
 TUNE2FS_BIN  = $(VENDOR_STAGE)/e2fsprogs/tune2fs
 DUMPE2FS_BIN = $(VENDOR_STAGE)/e2fsprogs/dumpe2fs
+DEBUGFS_BIN = $(VENDOR_STAGE)/e2fsprogs/debugfs
 
 # The pinned source tarballs, by the names the build_*.sh scripts check by
 # SHA-256. They are named here and not found with $(wildcard), which would drop
@@ -281,7 +282,7 @@ E2FSPROGS_LIB = $(ARCH_VENDOR)/e2fsprogs/$(notdir $(E2FSPROGS_TARBALL:.tar.gz=))
 $(E2FSPROGS_STAMP): vendor/e2fsprogs/build_e2fsprogs.sh $(VENDOR_COMMON) \
                     vendor/e2fsprogs/mke2fs.conf \
                     $(E2FSPROGS_PATCHES) $(E2FSPROGS_TARBALL) $(LIBC_STAMP) | $(SHA256TOOL) $(ETUDE)
-	@rm -f $@ $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(TUNE2FS_BIN) $(DUMPE2FS_BIN)
+	@rm -f $@ $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(TUNE2FS_BIN) $(DUMPE2FS_BIN) $(DEBUGFS_BIN)
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); \
 	    $(STEP) -n e2fsprogs -t $@ -c $(CROSS_PREFIX)gcc -c cc $(STEP_INPUTS) \
 	        -o $(E2FSPROGS_STAGE) -o $(E2FSPROGS_LIB) -x Makefile -x '*.o' -x '*.a' \
@@ -388,7 +389,7 @@ MANIFEST_DEPS_doom_test := $(shell $(MANIFEST_DEPS) krffs/manifests/doom-test.ma
 # them as prerequisites, order-only in the rule of a file, so that a tree with
 # nothing built yet can stage it.
 MANIFEST_PARTS_os_real = utils check-busybox check-tcc check-pdpmake check-setid \
-                         check-dropbearmulti check-e2fsck ports/doom $(MAN_ALL)
+                         check-dropbearmulti check-e2fsck tools/etude/guest ports/doom $(MAN_ALL)
 MANIFEST_INPUTS = $(sort $(MANIFEST_DEPS_test) $(MANIFEST_DEPS_os_simple) \
     $(MANIFEST_DEPS_os_real) $(MANIFEST_DEPS_os_real_gnu) $(MANIFEST_DEPS_rach2_metal) \
     $(MANIFEST_DEPS_rach2_recovery) $(MANIFEST_DEPS_rach2_metal_disk) $(MANIFEST_DEPS_grub_test) \
@@ -406,7 +407,7 @@ endif
 $(BUSYBOX_OUTPUTS): $(BUSYBOX_STAMP)
 $(DROPBEAR_BIN): $(DROPBEAR_STAMP)
 $(PDPMAKE_BIN): $(PDPMAKE_STAMP)
-$(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(TUNE2FS_BIN) $(DUMPE2FS_BIN): $(E2FSPROGS_STAMP)
+$(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(TUNE2FS_BIN) $(DUMPE2FS_BIN) $(DEBUGFS_BIN): $(E2FSPROGS_STAMP)
 
 # --- The component files the root rules name. Each has a rule that runs its
 #     component's sub-make: without one, a deleted kernel beside its kernel.o
@@ -628,7 +629,6 @@ LIFECYCLE_SCENARIOS = build/tests/cases/machine/audio_scenario \
                       build/tests/cases/machine/shutdown_scenario \
                       build/tests/cases/machine/smp_scenario
 DISK_SCENARIOS = build/tests/cases/machine/diskpolicy_scenario \
-                 build/tests/cases/machine/diskdiag_scenario \
                  build/tests/cases/machine/diskrate_scenario
 # The etudeguest case's scenario also reads and writes etude-guest's frames
 # with the codec of tools/etude/guest/wire.c, which libetude-case has.
@@ -681,7 +681,8 @@ $(PROBE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 # The network scenarios share netcase.c, and so do the scenarios of the GRUB
 # disks and the development tools' scenario, which log in and type at the
 # console as they do.
-NET_SCENARIOS = build/tests/cases/machine/ssh_scenario build/tests/cases/machine/e1000_scenario \
+NET_SCENARIOS = build/tests/cases/machine/diskdiag_scenario \
+                build/tests/cases/machine/ssh_scenario build/tests/cases/machine/e1000_scenario \
                 build/tests/cases/machine/metal_scenario build/tests/cases/machine/netconsole_scenario \
                 build/tests/cases/machine/devtools_scenario \
                 build/tests/cases/machine/dhcp_scenario build/tests/cases/machine/gnu_scenario \
@@ -763,7 +764,8 @@ CONSOLE_SCENARIOS = build/tests/cases/machine/grow_entry_at_end \
                     build/tests/cases/machine/installer_spoiled \
                     build/tests/cases/machine/installer_stick \
                     build/tests/cases/machine/installer_stick_update
-CONSOLE_LIB = tests/cases/machine/drive.c tests/cases/machine/lib_grow.c \
+CONSOLE_LIB = tests/cases/machine/netcase.c \
+              tests/cases/machine/drive.c tests/cases/machine/lib_grow.c \
               tests/cases/machine/lib_installer.c tests/cases/machine/lib_installer_repair.c
 $(CONSOLE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c $(CONSOLE_LIB) \
                       $(CONSOLE_LIB:.c=.h) $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
@@ -1384,9 +1386,10 @@ RESIZE2FS_LIMIT = 430080
 MKE2FS_LIMIT = 552960
 TUNE2FS_LIMIT = 532480
 DUMPE2FS_LIMIT = 430080
+DEBUGFS_LIMIT = 1048576
 check-e2fsck: $(E2FSPROGS_STAMP) $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(TUNE2FS_BIN) \
-              $(DUMPE2FS_BIN) $(ELFCHECK)
-	@for f in $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(TUNE2FS_BIN) $(DUMPE2FS_BIN); do test -s $$f || { \
+              $(DUMPE2FS_BIN) $(DEBUGFS_BIN) $(ELFCHECK)
+	@for f in $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(TUNE2FS_BIN) $(DUMPE2FS_BIN) $(DEBUGFS_BIN); do test -s $$f || { \
 	    echo "e2fsprogs: $$f missing or empty; rm $(E2FSPROGS_STAMP) and rebuild (make e2fsprogs)" >&2; \
 	    exit 1; }; done
 	@$(ELFCHECK) --arch $(ARCH) $(E2FSCK_BIN)
@@ -1394,6 +1397,8 @@ check-e2fsck: $(E2FSPROGS_STAMP) $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(
 	@$(ELFCHECK) --arch $(ARCH) $(MKE2FS_BIN)
 	@$(ELFCHECK) --arch $(ARCH) $(TUNE2FS_BIN)
 	@$(ELFCHECK) --arch $(ARCH) $(DUMPE2FS_BIN)
+	@$(ELFCHECK) --arch $(ARCH) $(DEBUGFS_BIN)
+	@test $$(wc -c < $(DEBUGFS_BIN)) -le $(DEBUGFS_LIMIT)
 	@size=$$(wc -c < $(E2FSCK_BIN) | tr -d ' '); test "$$size" -le $(E2FSCK_LIMIT) || { \
 	    echo "e2fsprogs: e2fsck is $$size bytes, over the Makefile's E2FSCK_LIMIT of $(E2FSCK_LIMIT)" >&2; \
 	    exit 1; }
@@ -1482,6 +1487,7 @@ include mk/gnu.mk
 include mk/gnu-extra.mk
 include mk/gnu-agents.mk
 include mk/gnu-image.mk
+include mk/etude-image.mk
 include tests/system/suites.mk
 
 # Without the store, as in a release's full run, no output the store gave may

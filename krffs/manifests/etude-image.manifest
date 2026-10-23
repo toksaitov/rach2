@@ -1,0 +1,17 @@
+# The image helper runs compiled file-system tools on attached test disks.
+# Its recovery kernel permits raw writes; it mounts none of those disks.
+file 0755 /etude-guest build/tools/etude/guest/etude-guest
+dir 1777 /tmp
+dir 0755 /root
+dir 0755 /bin
+file 0755 /bin/busybox build/vendor/busybox/busybox
+file 0755 /bin/mtools build/vendor/mtools/mtools
+file 0755 /bin/debugfs build/vendor/e2fsprogs/debugfs
+file 0755 /bin/e2fsck build/vendor/e2fsprogs/e2fsck
+file 0755 /bin/mke2fs build/vendor/e2fsprogs/mke2fs
+file 0755 /bin/dumpe2fs build/vendor/e2fsprogs/dumpe2fs
+file 0755 /bin/tune2fs build/vendor/e2fsprogs/tune2fs
+file 0755 /bin/resize2fs build/vendor/e2fsprogs/resize2fs
+dir 0755 /etc
+text 0644 /etc/passwd root:x:0:0:root:/root:/bin/busybox\n
+text 0644 /etc/group root:x:0:\n

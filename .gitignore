@@ -25,3 +25,7 @@ build/
 # the tests run Python with -B, and a stray one must not stop a loop's clone
 # from updating.
 __pycache__/
+
+# Extracted sources of the pinned image helper tools.
+vendor/mtools/mtools-*/
+vendor/mtools/.stamp

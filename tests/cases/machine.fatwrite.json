@@ -15,16 +15,8 @@
         "repetitions": 1,
         "seed": null
       },
-      "requirements": {"host_api": "posix", "tools": ["mcopy", "mdir"], "features": {}},
-      "execution": {
-        "program": "fswrite_scenario",
-        "stdin": null,
-        "role": "ordinary",
-        "privileges": "an ordinary user",
-        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["fatwrite-disk"]}],
-        "children": "none",
-        "cleanup": "libetude-case ends the machines and removes the disk's copy, which it keeps after a failure; the scenario removes the files it reads out of the volume once they are judged the same"
-      },
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {"program": "fswrite_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["fatwrite-disk"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machines and removes the disk's copy, which it keeps after a failure; the scenario removes the files it reads out of the volume once they are judged the same"},
       "steps": [
         {
           "step_id": "write",
@@ -78,40 +70,9 @@
         }
       ],
       "machines": [
-        {
-          "machine_id": "probe",
-          "qemu": {
-            "kernel": "kernel",
-            "initrd": "test-image",
-            "disks": ["fatwrite-disk"],
-            "cpu": "max",
-            "processors": 1,
-            "memory_bytes": 134217728,
-            "firmware": "direct",
-            "devices": [],
-            "boot_options": ["rach2.rescue"]
-          },
-          "console": "serial",
-          "qmp": true,
-          "helper": false
-        },
-        {
-          "machine_id": "busybox",
-          "qemu": {
-            "kernel": "kernel",
-            "initrd": "os-real",
-            "disks": ["fatwrite-disk"],
-            "cpu": "max",
-            "processors": 1,
-            "memory_bytes": 134217728,
-            "firmware": "direct",
-            "devices": [],
-            "boot_options": ["rach2.diskdiag"]
-          },
-          "console": "serial",
-          "qmp": true,
-          "helper": false
-        }
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["fatwrite-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "busybox", "qemu": {"kernel": "kernel", "initrd": "os-real", "disks": ["fatwrite-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.diskdiag"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {
@@ -222,34 +183,19 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {
-        "cpu_millis": 1000,
-        "cpu_ceiling_millis": 1000,
-        "memory_bytes": 536870912,
-        "tooling_memory_bytes": 3623878656,
-        "disk_bytes": 268435456,
-        "locks": [],
-        "ports": 0,
-        "loop_devices": 0
-      },
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 939524096, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
         {"name": "os-real", "node": "images/os-real.krffs", "per_architecture": true},
         {"name": "fatwrite-disk", "node": "images/fatwrite-volume.disk", "per_architecture": true},
-        {
-          "name": "demo-password",
-          "node": "tests/cases/credentials/rach2_demo_password",
-          "per_architecture": false
-        },
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
         {"name": "mkfatfixture", "node": "tests/host/mkfatfixture", "per_architecture": false},
         {"name": "readfile.krffs", "node": "krffs/readfile.krffs", "per_architecture": false},
         {"name": "fstool", "node": "tests/cases/host/fstool", "per_architecture": false},
-        {
-          "name": "fswrite_scenario",
-          "node": "tests/cases/machine/fswrite_scenario",
-          "per_architecture": false
-        }
+        {"name": "fswrite_scenario", "node": "tests/cases/machine/fswrite_scenario", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
       "native": {

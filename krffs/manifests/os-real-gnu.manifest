@@ -212,3 +212,7 @@ dir 0700:1000:1000 /home/test
 dir 0700:1000:1000 /home/test/.ssh
 file 0600:1000:1000 /home/test/.ssh/authorized_keys krffs/test_authorized_keys
 optional-file 0644 /demo/doom1.wad ports/doom/doom1.wad
+
+# The test runner controls installed commands through this framed helper.
+file 0755 /etude-guest build/tools/etude/guest/etude-guest
+file 0755 /ptydrive build/tools/etude/guest/ptydrive

@@ -10,14 +10,15 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"command": "exec /partsprobe"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["mtype"], "features": {}},
-      "execution": {"program": "parts_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["parts-a", "parts-b", "parts-c"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copies and the empty disk, which it keeps after a failure"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "parts_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["parts-a", "parts-b", "parts-c"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copies and the empty disk, which it keeps after a failure"},
       "steps": [
         {"step_id": "probe", "stage": "execute", "machine": "tables", "does": "boot the test image with disks A, B, C and D on ports 0 to 3 of the AHCI controller, run partsprobe at the debug shell, and end the machine with QMP's quit"},
         {"step_id": "files", "stage": "execute", "does": "read logical.txt out of the copy of A's logical partition 6 and gpt.txt out of the copy of B's GUID entry 3 with mtype"}
       ],
       "machines": [
-        {"machine_id": "tables", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "parts-a", "bus": "ahci"}, {"name": "parts-b", "bus": "ahci"}, {"name": "parts-c", "bus": "ahci"}, {"name": "parts-d", "bus": "ahci", "size_bytes": 8388608}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.disk=ahci", "rach2.diskdiag", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "tables", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "parts-a", "bus": "ahci"}, {"name": "parts-b", "bus": "ahci"}, {"name": "parts-c", "bus": "ahci"}, {"name": "parts-d", "bus": "ahci", "size_bytes": 8388608}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.disk=ahci", "rach2.diskdiag", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {"assertion_id": "probe-ok", "checks": "partsprobe's line says PARTSPROBE OK, never PARTSPROBE FAIL: /proc/disk lists each disk and partition as built, the nodes exist for the partitions and for no extended entry, seventh entry or blank disk, disk 2 was read from its backup GUID header, two partitions mount and take a write, BLKRRPART is refused while one is mounted and reads the table again once none is, and /sys/block and /sys/dev/block describe a partition", "source": "scenario"},
@@ -38,14 +39,16 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "tooling_memory_bytes": 1073741824, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 671088640, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
         {"name": "parts-a", "node": "tests/cases/machine/parts/a.disk", "per_architecture": true},
         {"name": "parts-b", "node": "tests/cases/machine/parts/b.disk", "per_architecture": true},
         {"name": "parts-c", "node": "tests/cases/machine/parts/c.disk", "per_architecture": false},
-        {"name": "parts_scenario", "node": "tests/cases/machine/parts_scenario", "per_architecture": false}
+        {"name": "parts_scenario", "node": "tests/cases/machine/parts_scenario", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "layout", "reason": "the probe reads four disks of crafted tables on QEMU's AHCI controller, two of them written, and the host reads the copies the machine wrote"}

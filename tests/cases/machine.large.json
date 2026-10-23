@@ -10,13 +10,8 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"file_mib": 256, "volume_mib": 6144, "limit_offset": "2196875759616"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["mke2fs", "e2fsck"], "features": {}},
-      "execution": {
-        "program": "large_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
-        "isolation": [{"fixture": "scratch"}],
-        "children": "none",
-        "cleanup": "libetude-case ends the machines and removes the empty disk, which it keeps after a failure"
-      },
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "large_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machines and removes the empty disk, which it keeps after a failure"},
       "steps": [
         {"step_id": "volume", "stage": "prepare",
          "does": "write the disk's MBR, with identity 1a26e001 and its ext2, exFAT and FAT32 partitions, with mkmbr, and make the ext2 volume in the first with mke2fs; the disk stays sparse"},
@@ -32,18 +27,9 @@
          "does": "end the machine and run e2fsck -fn on the volume"}
       ],
       "machines": [
-        {"machine_id": "write",
-         "qemu": {"kernel": "kernel", "initrd": "test-image",
-                  "disks": [{"name": "large", "bus": "ahci", "size_bytes": 12954107904}],
-                  "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [],
-                  "boot_options": ["rach2.rescue"]},
-         "console": "serial", "qmp": true, "helper": false},
-        {"machine_id": "check",
-         "qemu": {"kernel": "kernel", "initrd": "test-image",
-                  "disks": [{"name": "large", "bus": "ahci", "size_bytes": 12954107904}],
-                  "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [],
-                  "boot_options": ["rach2.rescue"]},
-         "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "write", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "large", "bus": "ahci", "size_bytes": 12954107904}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "check", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "large", "bus": "ahci", "size_bytes": 12954107904}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {"assertion_id": "volume", "checks": "mkmbr writes the disk's table and mke2fs makes the 6 GiB ext2 volume in its first partition, each exiting 0", "source": "scenario"},
@@ -72,13 +58,14 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 536870912, "tooling_memory_bytes": 1342177280, "disk_bytes": 536870912,
-                    "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 939524096, "disk_bytes": 536870912, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
         {"name": "mkmbr", "node": "tools/image/mkmbr", "per_architecture": false},
-        {"name": "large_scenario", "node": "tests/cases/machine/large_scenario", "per_architecture": false}
+        {"name": "large_scenario", "node": "tests/cases/machine/large_scenario", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "layout", "reason": "it boots an empty AHCI disk of its own whose partitions the host's tools format before the boots and check after them"}
@@ -167,13 +154,8 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"volume_mib": 64, "limit_offset": "4294967295"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["mformat"], "features": {}},
-      "execution": {
-        "program": "large_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
-        "isolation": [{"fixture": "scratch"}],
-        "children": "none",
-        "cleanup": "libetude-case ends the machine and removes the empty disk, which it keeps after a failure"
-      },
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "large_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the empty disk, which it keeps after a failure"},
       "steps": [
         {"step_id": "volume", "stage": "prepare",
          "does": "write the disk's MBR, with identity 1a26e001 and its ext2, exFAT and FAT32 partitions, with mkmbr, and make the FAT32 volume in the third with mformat; the disk stays sparse"},
@@ -183,12 +165,8 @@
          "does": "run bigfileprobe limit at the last byte of 4 GiB and end the machine"}
       ],
       "machines": [
-        {"machine_id": "fixture",
-         "qemu": {"kernel": "kernel", "initrd": "test-image",
-                  "disks": [{"name": "large", "bus": "ahci", "size_bytes": 12954107904}],
-                  "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [],
-                  "boot_options": ["rach2.rescue"]},
-         "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "large", "bus": "ahci", "size_bytes": 12954107904}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {"assertion_id": "volume", "checks": "mkmbr writes the disk's table and mformat makes the 64 MiB FAT32 volume in its third partition, each exiting 0", "source": "scenario"},
@@ -210,13 +188,14 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "tooling_memory_bytes": 1073741824, "disk_bytes": 16777216,
-                    "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 671088640, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
         {"name": "mkmbr", "node": "tools/image/mkmbr", "per_architecture": false},
-        {"name": "large_scenario", "node": "tests/cases/machine/large_scenario", "per_architecture": false}
+        {"name": "large_scenario", "node": "tests/cases/machine/large_scenario", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "layout", "reason": "it boots an empty AHCI disk of its own whose partition the host's tools format before the boot"}

@@ -28,7 +28,7 @@ GNU_IMAGE_DEPS = $(DEMO_CREDS) krffs/manifests/os-real-gnu.manifest $(MANIFEST_D
                  tools/image/mkext2.sh vendor/gnu/install_root.sh vendor/gnu/fetch.sh \
                  vendor/gnu/sources-extra.txt $(GNU_IMAGE_STAMPS) $(IMAGE_TOOLS) $(MAN_ALL)
 GNU_IMAGE_ORDER = preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid \
-                  check-e2fsck ports/doom
+                  check-e2fsck tools/etude/guest ports/doom
 
 .PHONY: os-real-gnu-ext2 os-real-gnu-agents-ext2
 os-real-gnu-ext2: $(OS_REAL_GNU_EXT2)

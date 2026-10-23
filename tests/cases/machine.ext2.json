@@ -10,14 +10,15 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"probe": "/dirprobe", "volume_mib": 16}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["debugfs"], "features": {}},
-      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["probes-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the probe read back from it, which it keeps after a failure"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["probes-disk"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the probe read back from it, which it keeps after a failure"},
       "steps": [
         {"step_id": "staged", "stage": "execute", "does": "read the probe back from the copy's ext2 volume with debugfs and compare it with the built one"},
         {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the copy as the ext2 root with rach2.rescue, run the probe from the debug shell as its transient init, wait for the shell and end the machine"}
       ],
       "machines": [
-        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {"assertion_id": "staged", "checks": "the probe that debugfs reads from the volume is the built one, byte for byte", "source": "scenario"},
@@ -37,12 +38,14 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "tooling_memory_bytes": 1073741824, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 671088640, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "probes-disk", "node": "images/ext2-probes.disk", "per_architecture": true},
         {"name": "probe", "node": "tests/dirprobe", "per_architecture": true},
-        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "image", "reason": "the probe runs as init on an ext2 root of the test manifest's programs, a system image other than the installed one"}
@@ -54,14 +57,15 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"probe": "/unlinkdirprobe", "volume_mib": 16}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["debugfs"], "features": {}},
-      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["probes-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the probe read back from it, which it keeps after a failure"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["probes-disk"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the probe read back from it, which it keeps after a failure"},
       "steps": [
         {"step_id": "staged", "stage": "execute", "does": "read the probe back from the copy's ext2 volume with debugfs and compare it with the built one"},
         {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the copy as the ext2 root with rach2.rescue, run the probe from the debug shell as its transient init, wait for the shell and end the machine"}
       ],
       "machines": [
-        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {"assertion_id": "staged", "checks": "the probe that debugfs reads from the volume is the built one, byte for byte", "source": "scenario"},
@@ -81,12 +85,14 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "tooling_memory_bytes": 1073741824, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 671088640, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "probes-disk", "node": "images/ext2-probes.disk", "per_architecture": true},
         {"name": "probe", "node": "tests/unlinkdirprobe", "per_architecture": true},
-        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "image", "reason": "the probe runs as init on an ext2 root of the test manifest's programs, a system image other than the installed one"}
@@ -98,14 +104,15 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"probe": "/mvtest", "volume_mib": 16}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["debugfs"], "features": {}},
-      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["probes-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the probe read back from it, which it keeps after a failure"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["probes-disk"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the probe read back from it, which it keeps after a failure"},
       "steps": [
         {"step_id": "staged", "stage": "execute", "does": "read the probe back from the copy's ext2 volume with debugfs and compare it with the built one"},
         {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the copy as the ext2 root with rach2.rescue, run the probe from the debug shell as its transient init, wait for the shell and end the machine"}
       ],
       "machines": [
-        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {"assertion_id": "staged", "checks": "the probe that debugfs reads from the volume is the built one, byte for byte", "source": "scenario"},
@@ -125,12 +132,14 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "tooling_memory_bytes": 1073741824, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 671088640, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "probes-disk", "node": "images/ext2-probes.disk", "per_architecture": true},
         {"name": "probe", "node": "tests/mvtest", "per_architecture": true},
-        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "image", "reason": "the probe runs as init on an ext2 root of the test manifest's programs, a system image other than the installed one"}
@@ -142,14 +151,15 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"probe": "/vfsprobe", "volume_mib": 16}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["debugfs"], "features": {}},
-      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["probes-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the probe read back from it, which it keeps after a failure"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["probes-disk"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the probe read back from it, which it keeps after a failure"},
       "steps": [
         {"step_id": "staged", "stage": "execute", "does": "read the probe back from the copy's ext2 volume with debugfs and compare it with the built one"},
         {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the copy as the ext2 root with rach2.rescue, run the probe from the debug shell as its transient init, wait for the shell and end the machine"}
       ],
       "machines": [
-        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {"assertion_id": "staged", "checks": "the probe that debugfs reads from the volume is the built one, byte for byte", "source": "scenario"},
@@ -169,12 +179,14 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "tooling_memory_bytes": 1073741824, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 671088640, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "probes-disk", "node": "images/ext2-probes.disk", "per_architecture": true},
         {"name": "probe", "node": "tests/vfsprobe", "per_architecture": true},
-        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "image", "reason": "the probe runs as init on an ext2 root of the test manifest's programs, a system image other than the installed one"}
@@ -186,14 +198,15 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"probe": "/musl/mapmusl", "volume_mib": 16}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["debugfs"], "features": {}},
-      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["probes-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the probe read back from it, which it keeps after a failure"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["probes-disk"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the probe read back from it, which it keeps after a failure"},
       "steps": [
         {"step_id": "staged", "stage": "execute", "does": "read the probe back from the copy's ext2 volume with debugfs and compare it with the built one"},
         {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the copy as the ext2 root with rach2.rescue, run the probe from the debug shell as its transient init, wait for the shell and end the machine"}
       ],
       "machines": [
-        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {"assertion_id": "staged", "checks": "the probe that debugfs reads from the volume is the built one, byte for byte", "source": "scenario"},
@@ -213,12 +226,14 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "tooling_memory_bytes": 1073741824, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 671088640, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "probes-disk", "node": "images/ext2-probes.disk", "per_architecture": true},
         {"name": "probe", "node": "tests/musl/mapmusl", "per_architecture": true},
-        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "image", "reason": "the probe runs as init on an ext2 root of the test manifest's programs, a system image other than the installed one"}
@@ -617,8 +632,8 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"root_mib": 96, "second_mib": 32, "lost_block": 20000, "freed": "/etc/hostname", "sector": 16383}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["debugfs", "e2fsck", "mtype"], "features": {}},
-      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["root-disk"]}], "children": "none", "cleanup": "libetude-case ends the machines and removes the disk copy, the second disk and the volumes read out of the copy, which it keeps after a failure"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["root-disk"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machines and removes the disk copy, the second disk and the volumes read out of the copy, which it keeps after a failure"},
       "steps": [
         {"step_id": "first", "stage": "execute", "machine": "root", "does": "boot the copy, log in as root, read /proc/mounts, write /root/first and sync, write to the second partition's node, and end the machine with QMP's quit"},
         {"step_id": "mkfs", "stage": "execute", "machine": "root", "does": "boot the copy, make an ext2 and a FAT volume in files on the second partition, mount each through a loop device, write it, unmount the partition and end the machine"},
@@ -635,7 +650,8 @@
       "machines": [
         {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false},
         {"machine_id": "look", "qemu": {"kernel": "recovery-kernel", "initrd": "recovery-image", "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
-        {"machine_id": "repair", "qemu": {"kernel": "recovery-kernel", "initrd": "recovery-image", "disks": ["root-disk", {"name": "root-copy", "bus": "ide", "size_bytes": 136314880}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.fsck"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "repair", "qemu": {"kernel": "recovery-kernel", "initrd": "recovery-image", "disks": ["root-disk", {"name": "root-copy", "bus": "ide", "size_bytes": 136314880}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.fsck"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {"assertion_id": "first-mounted", "checks": "/proc/mounts has /dev/disk0p1 / ext2 rw,relatime 0 0", "source": "scenario"},
@@ -696,14 +712,16 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 805306368, "tooling_memory_bytes": 1610612736, "disk_bytes": 402653184, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1207959552, "disk_bytes": 402653184, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "root-disk", "node": "images/ext2-root.disk", "per_architecture": true},
         {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
         {"name": "recovery-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
         {"name": "recovery-image", "node": "images/etude-recovery.krffs", "per_architecture": true},
-        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "disk", "reason": "the case kills the machine under its root, damages the disk between boots and boots the recovery system on it, which the installed machine's disk cannot be"}

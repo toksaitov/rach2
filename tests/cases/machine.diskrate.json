@@ -10,13 +10,8 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"raw_mib": 256, "exfat_mib": 256, "fat_mib": 256, "stick_mib": 16, "ahci_mib": 64}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["dd", "mformat"], "features": {}},
-      "execution": {
-        "program": "diskrate_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
-        "isolation": [{"fixture": "scratch"}],
-        "children": "none",
-        "cleanup": "libetude-case ends the machines and removes the five empty disks, which it keeps after a failure; the scenario removes the exFAT volume it copies into its disk"
-      },
+      "requirements": {"host_api": "c", "tools": ["dd"], "features": {}},
+      "execution": {"program": "diskrate_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machines and removes the five empty disks, which it keeps after a failure; the scenario removes the exFAT volume it copies into its disk"},
       "steps": [
         {"step_id": "volumes", "stage": "prepare",
          "does": "make an exFAT volume with the fixture builder and a FAT32 one with mformat in two empty disks, each behind an MBR partition at sector 2048"},
@@ -28,27 +23,10 @@
          "does": "boot the recovery system with an empty AHCI disk and write and read 32 MiB of it raw"}
       ],
       "machines": [
-        {"machine_id": "paths",
-         "qemu": {"kernel": "kernel", "initrd": "os-real",
-                  "disks": [{"name": "raw", "bus": "ide", "size_bytes": 268435456},
-                            {"name": "exfat", "bus": "ide", "size_bytes": 268435456},
-                            {"name": "fat", "bus": "ide", "size_bytes": 268435456}],
-                  "cpu": "max", "processors": 1, "memory_bytes": 536870912, "firmware": "direct", "devices": [],
-                  "boot_options": ["rach2.diskdiag"]},
-         "console": "serial", "qmp": true, "helper": false},
-        {"machine_id": "stick",
-         "qemu": {"kernel": "recovery-kernel", "initrd": "recovery-image",
-                  "disks": [{"name": "stick", "bus": "device", "id": "stick", "size_bytes": 16777216}],
-                  "cpu": "max", "processors": 1, "memory_bytes": 536870912, "firmware": "direct",
-                  "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-storage", "bus": "xhci.0", "drive": "stick"}],
-                  "boot_options": []},
-         "console": "serial", "qmp": true, "helper": false},
-        {"machine_id": "ahci",
-         "qemu": {"kernel": "recovery-kernel", "initrd": "recovery-image",
-                  "disks": [{"name": "ahci", "bus": "ahci", "size_bytes": 67108864}],
-                  "cpu": "max", "processors": 1, "memory_bytes": 536870912, "firmware": "direct", "devices": [],
-                  "boot_options": ["rach2.disk=ahci"]},
-         "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "paths", "qemu": {"kernel": "kernel", "initrd": "os-real", "disks": [{"name": "raw", "bus": "ide", "size_bytes": 268435456}, {"name": "exfat", "bus": "ide", "size_bytes": 268435456}, {"name": "fat", "bus": "ide", "size_bytes": 268435456}], "cpu": "max", "processors": 1, "memory_bytes": 536870912, "firmware": "direct", "devices": [], "boot_options": ["rach2.diskdiag"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "stick", "qemu": {"kernel": "recovery-kernel", "initrd": "recovery-image", "disks": [{"name": "stick", "bus": "device", "id": "stick", "size_bytes": 16777216}], "cpu": "max", "processors": 1, "memory_bytes": 536870912, "firmware": "direct", "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-storage", "bus": "xhci.0", "drive": "stick"}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "ahci", "qemu": {"kernel": "recovery-kernel", "initrd": "recovery-image", "disks": [{"name": "ahci", "bus": "ahci", "size_bytes": 67108864}], "cpu": "max", "processors": 1, "memory_bytes": 536870912, "firmware": "direct", "devices": [], "boot_options": ["rach2.disk=ahci"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {"assertion_id": "dma", "checks": "the ATA driver says that each of the three IDE disks, primary master, primary slave and secondary master, selected bus-master DMA", "source": "scenario"},
@@ -104,8 +82,7 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 2147483648, "tooling_memory_bytes": 2952790016, "disk_bytes": 1073741824,
-                    "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 2550136832, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "os-real", "node": "images/os-real.krffs", "per_architecture": true},
@@ -114,7 +91,9 @@
         {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
         {"name": "mkexfatfixture", "node": "tests/host/mkexfatfixture", "per_architecture": false},
         {"name": "mkmbr", "node": "tools/image/mkmbr", "per_architecture": false},
-        {"name": "diskrate_scenario", "node": "tests/cases/machine/diskrate_scenario", "per_architecture": false}
+        {"name": "diskrate_scenario", "node": "tests/cases/machine/diskrate_scenario", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "card", "reason": "it counts the commands of QEMU's IDE, USB and AHCI controllers on empty disks of its own, which the Lenovo's disk is not"}

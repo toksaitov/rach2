@@ -1,6 +1,6 @@
 # e2fsprogs
 
-e2fsprogs is the ext2 tool set. Rach2 builds five of its programs statically against the ported [musl](../musl/Readme.md): `e2fsck`, `resize2fs`, `mke2fs`, `tune2fs` and `dumpe2fs`. BusyBox has no ext2 checker or resizer. The recovery system's init runs `e2fsck -p` on each partition of each disk with the ext2 magic when the boot line has `rach2.fsck`, `growroot` runs `resize2fs` after it enlarges a root partition, and `mke2fs` makes an ext2 volume in a file for a loop device to mount. The [manifests](../../krffs/manifests/) say which image stages which program, and [e2fsck(8)](../../man/man8/e2fsck.8), [resize2fs(8)](../../man/man8/resize2fs.8), [mke2fs(8)](../../man/man8/mke2fs.8), [tune2fs(8)](../../man/man8/tune2fs.8) and [dumpe2fs(8)](../../man/man8/dumpe2fs.8) are their pages. `debugfs` is not built for the machine; the host's own e2fsprogs builds and checks the ext2 root images, as [tools/Readme.md](../../tools/Readme.md) says.
+e2fsprogs is the ext2 tool set. Rach2 builds six of its programs statically against the ported [musl](../musl/Readme.md): `e2fsck`, `resize2fs`, `mke2fs`, `tune2fs` `dumpe2fs` and `debugfs`. BusyBox has no ext2 checker or resizer. The recovery system's init runs `e2fsck -p` on each partition of each disk with the ext2 magic when the boot line has `rach2.fsck`, `growroot` runs `resize2fs` after it enlarges a root partition, and `mke2fs` makes an ext2 volume in a file for a loop device to mount. The [manifests](../../krffs/manifests/) say which image stages which program, and [e2fsck(8)](../../man/man8/e2fsck.8), [resize2fs(8)](../../man/man8/resize2fs.8), [mke2fs(8)](../../man/man8/mke2fs.8), [tune2fs(8)](../../man/man8/tune2fs.8) and [dumpe2fs(8)](../../man/man8/dumpe2fs.8) are their pages. `debugfs` is staged in the test runner's image helper. That helper runs the independent ext2 checks on private raw disks through etude's framed channel. Build preparation may use the host's e2fsprogs to construct the initial images.
 
 ## Sources and license
 
@@ -22,7 +22,7 @@ The build applies the patches [`patches/series`](patches/series) lists, in its o
 
 ### Configuration
 
-The configure run uses the private uuid and blkid libraries and the resizer, and turns off message catalogs, thread-local storage, `uuidd`, `fuse2fs`, the initrd helper, `e2image`, `e4defrag`, `debugfs`, multiple-mount protection, backtraces, tdb and rpath. Each program is linked with `RDYNAMIC` empty: that flag exports every symbol for the backtrace, which is off, and the freestanding linker does not take it.
+The configure run uses the private uuid and blkid libraries and the resizer, and turns off message catalogs, thread-local storage, `uuidd`, `fuse2fs`, the initrd helper, `e2image`, `e4defrag`, multiple-mount protection, backtraces, tdb and rpath. Each program is linked with `RDYNAMIC` empty: that flag exports every symbol for the backtrace, which is off, and the freestanding linker does not take it.
 
 ## Building
 
@@ -34,10 +34,10 @@ The configure run uses the private uuid and blkid libraries and the resizer, and
 2. Applies the patches `patches/series` lists. It fails on a named patch that is absent and on a `patches/*.patch` the series does not list.
 3. Copies in `mke2fs.conf`.
 4. Configures with `CC` set to the `muslgcc` wrapper and the cross `ar` and `ranlib`, with the options above. The configure output goes to `configure.log` in the extracted tree, and each later step to its own `build-*.log` there; a failed step prints the last 20 lines of its log.
-5. Builds the libraries, then the five programs. Under the root `make -j`, each make shares the root's jobserver and its job limit; run without one, it takes `-j` from `JOBS`, 4 by default.
-6. Strips the five and stages them.
+5. Builds the libraries, then the six programs. Under the root `make -j`, each make shares the root's jobserver and its job limit; run without one, it takes `-j` from `JOBS`, 4 by default.
+6. Strips the six and stages them.
 
-Each staged program is a stripped static `ET_EXEC`, ELF32 i386 or ELF64 x86-64. The stamp depends on the script, the tarball, `mke2fs.conf`, `muslgcc`, `mk/arch.sh`, `patches/series` and every patch, and the musl stamp. `make check-e2fsck` requires each program to be nonempty, runs `elfcheck` on it for the architecture, and refuses one larger than its limit in the root `Makefile` (`E2FSCK_LIMIT`, `RESIZE2FS_LIMIT`, `MKE2FS_LIMIT`, `TUNE2FS_LIMIT` and `DUMPE2FS_LIMIT`, one set for both architectures), so that a configure that turns a library or a feature back on fails here and not in an image.
+Each staged program is a stripped static `ET_EXEC`, ELF32 i386 or ELF64 x86-64. The stamp depends on the script, the tarball, `mke2fs.conf`, `muslgcc`, `mk/arch.sh`, `patches/series` and every patch, and the musl stamp. `make check-e2fsck` requires each program to be nonempty, runs `elfcheck` on it for the architecture, and refuses one larger than its limit in the root `Makefile` (`E2FSCK_LIMIT`, `RESIZE2FS_LIMIT`, `MKE2FS_LIMIT`, `TUNE2FS_LIMIT` `DUMPE2FS_LIMIT` and `DEBUGFS_LIMIT`, one set for both architectures), so that a configure that turns a library or a feature back on fails here and not in an image.
 
 ## Updating
 

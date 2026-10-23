@@ -10,14 +10,15 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"command": "exec /busprobe four", "sectors": "32768, 40960, 49152 and 57344"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["mtype"], "features": {}},
-      "execution": {"program": "bus_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["bus-pm", "bus-ps", "bus-sm", "bus-ss"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disks' copies, which it keeps after a failure"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "bus_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["bus-pm", "bus-ps", "bus-sm", "bus-ss"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disks' copies, which it keeps after a failure"},
       "steps": [
         {"step_id": "probe", "stage": "execute", "machine": "four", "does": "boot the test image with a disk on each of the four IDE places, run busprobe four at the debug shell: /proc/disk lists ata 0 to 3 at their sizes, and each drive's partition is mounted, given drive.txt with its position's name, read back and unmounted; read the ATA driver's record of each drive, and end the machine with QMP's quit"},
         {"step_id": "host", "stage": "execute", "does": "read drive.txt off the FAT32 volume of each drive's copy with mtype"}
       ],
       "machines": [
-        {"machine_id": "four", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["bus-pm", "bus-ps", "bus-sm", "bus-ss"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "four", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["bus-pm", "bus-ps", "bus-sm", "bus-ss"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {"assertion_id": "four-drives", "checks": "busprobe's line says BUSPROBE OK, never BUSPROBE FAIL: /proc/disk lists ata 0 to 3 at 32768, 40960, 49152 and 57344 sectors, and the FAT32 partition of each mounts, takes drive.txt that reads back and unmounts", "source": "scenario"},
@@ -44,7 +45,7 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "tooling_memory_bytes": 1073741824, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 671088640, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
@@ -52,7 +53,9 @@
         {"name": "bus-ps", "node": "tests/cases/machine/bus/ps.disk", "per_architecture": false},
         {"name": "bus-sm", "node": "tests/cases/machine/bus/sm.disk", "per_architecture": false},
         {"name": "bus-ss", "node": "tests/cases/machine/bus/ss.disk", "per_architecture": false},
-        {"name": "bus_scenario", "node": "tests/cases/machine/bus_scenario", "per_architecture": false}
+        {"name": "bus_scenario", "node": "tests/cases/machine/bus_scenario", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "card", "reason": "the case needs a drive on each of the four places of the PC's two IDE channels, which the Lenovo does not have"}
@@ -154,15 +157,16 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"command": "exec /busprobe big", "disk_bytes": 139586437120, "partition_start": 268437504, "partition_sectors": 65536}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["mformat", "mtype"], "features": {}},
-      "execution": {"program": "bus_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes the empty disk's file, which it keeps after a failure"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "bus_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the empty disk's file, which it keeps after a failure"},
       "steps": [
         {"step_id": "layout", "stage": "execute", "does": "give the empty disk an MBR with mkmbr, of id 12345678 and one FAT32 partition of 65536 sectors at sector 268437504, and format the partition with mformat"},
         {"step_id": "probe", "stage": "execute", "machine": "big", "does": "boot the test image with the disk on the primary master, run busprobe big at the debug shell: the disk listed at 272629760 sectors, its partition at sector 268437504, mounted, given far.txt, read back and unmounted; read the ATA driver's record of the drive, and end the machine with QMP's quit"},
         {"step_id": "host", "stage": "execute", "does": "read far.txt off the partition of the disk's file with mtype"}
       ],
       "machines": [
-        {"machine_id": "big", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "bus-big", "bus": "ide", "size_bytes": 139586437120}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "big", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "bus-big", "bus": "ide", "size_bytes": 139586437120}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {"assertion_id": "far-partition", "checks": "busprobe's line says BUSPROBE OK, never BUSPROBE FAIL: /proc/disk lists disk 0 ata 0 at 272629760 sectors and its partition at sector 268437504 of 65536 sectors, which mounts, takes far.txt that reads back and unmounts", "source": "scenario"},
@@ -183,12 +187,14 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "tooling_memory_bytes": 1073741824, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 671088640, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
         {"name": "mkmbr", "node": "tools/image/mkmbr", "per_architecture": false},
-        {"name": "bus_scenario", "node": "tests/cases/machine/bus_scenario", "per_architecture": false}
+        {"name": "bus_scenario", "node": "tests/cases/machine/bus_scenario", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "card", "reason": "the case needs a disk of 130 GiB on an IDE channel, whose partition past 2^28 sectors only the ATA driver's 48-bit commands reach, and the Lenovo has no IDE channel"}

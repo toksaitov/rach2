@@ -142,8 +142,8 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"stick": "the test stick, under an overlay", "image": "the 108 MiB disk image the test stick carries", "one": "a patterned disk of 256 MiB", "two": "a patterned disk of 256 MiB", "keyless": "the recovery image staged with no key"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["mdel", "mcopy", "mtype"], "features": {}},
-      "execution": {"program": "installer_install", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends each machine and removes the overlay and the two disks, which it keeps after a failure; the scenario removes the keys and the outputs it made"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "installer_install", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends each machine and removes the overlay and the two disks, which it keeps after a failure; the scenario removes the keys and the outputs it made"},
       "steps": [
         {"step_id": "channel-client", "stage": "boot", "machine": "channel-client", "does": "boot the declared Rach2 OpenSSH client and open its framed command channel"},
         {"step_id": "install-second", "stage": "execute", "machine": "installer", "does": "fill both disks with the pattern, make the recovery key, boot the stick, answer the installer wrongly until it stops, compare both disks with the pattern, and install onto the second"},
@@ -157,7 +157,8 @@
         {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]}, "console": "serial", "qmp": true, "helper": true},
         {"machine_id": "installer", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick-overlay", "bus": "device", "id": "stick", "base": "teststick", "cluster_bytes": 65536}, {"name": "one", "size_bytes": 268435456}, {"name": "two", "size_bytes": 268435456}], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-kbd", "bus": "xhci.0"}, {"model": "usb-storage", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
         {"machine_id": "installed", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "two", "size_bytes": 268435456}], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
-        {"machine_id": "net", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "one", "size_bytes": 268435456}, {"name": "two", "size_bytes": 268435456}], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "net", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "one", "size_bytes": 268435456}, {"name": "two", "size_bytes": 268435456}], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {"assertion_id": "refusals", "checks": "the installer names what is wrong with each wrong answer and asks again, refuses a confirmation that is not the disk's name, stops when told, and stops when its answers end before its questions", "source": "scenario"},
@@ -196,7 +197,7 @@
         {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 7}
       ],
       "bounds": {"case": {"floor_us": 5000000, "initial_us": 14400000000, "ceiling_us": 28800000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 600000000, "ceiling_us": 1800000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 120000000, "ceiling_us": 600000000}}},
-      "resources": {"cpu_millis": 3000, "cpu_ceiling_millis": 3000, "memory_bytes": 1342177280, "tooling_memory_bytes": 1610612736, "disk_bytes": 6442450944, "locks": [], "ports": 1, "loop_devices": 0},
+      "resources": {"cpu_millis": 4000, "cpu_ceiling_millis": 4000, "memory_bytes": 1744830464, "disk_bytes": 6442450944, "locks": [], "ports": 1, "loop_devices": 0},
       "prepare": [
         {"name": "channel-client-image", "node": "images/gnu-test.disk", "per_architecture": true},
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
@@ -206,7 +207,9 @@
         {"name": "demo_key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
         {"name": "password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
         {"name": "mkgpt", "node": "tools/image/mkgpt", "per_architecture": false},
-        {"name": "installer_install", "node": "tests/cases/machine/installer_install", "per_architecture": false}
+        {"name": "installer_install", "node": "tests/cases/machine/installer_install", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "disk", "reason": "the case installs onto the disks of machines the stick boots, and boots the recovery systems of the disks it wrote"}

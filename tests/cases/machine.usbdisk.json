@@ -308,44 +308,16 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["mtype"], "features": {}},
-      "execution": {
-        "program": "usbdisk_scenario",
-        "stdin": null,
-        "role": "ordinary",
-        "privileges": "an ordinary user",
-        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],
-        "children": "none",
-        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"
-      },
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {"program": "usbdisk_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"},
       "steps": [
         {"step_id": "boot", "stage": "boot", "does": "boot the test image to the debug shell", "machine": "usbdisk"},
         {"step_id": "probe", "stage": "execute", "does": "run usbdiskprobe write", "machine": "usbdisk"},
         {"step_id": "read", "stage": "execute", "does": "read written.txt off the stick's copy with mtype"}
       ],
       "machines": [
-        {
-          "machine_id": "usbdisk",
-          "qemu": {
-            "kernel": "kernel",
-            "initrd": "test-image",
-            "disks": [{"name": "stick", "bus": "device", "id": "stick"}],
-            "cpu": "max",
-            "processors": 1,
-            "memory_bytes": 134217728,
-            "firmware": "direct",
-            "devices": [
-              {"model": "qemu-xhci", "id": "xhci"},
-              {"model": "usb-kbd", "bus": "xhci.0"},
-              {"model": "usb-mouse", "bus": "xhci.0"},
-              {"model": "usb-storage", "id": "st0", "bus": "xhci.0", "drive": "stick"}
-            ],
-            "boot_options": []
-          },
-          "console": "serial",
-          "qmp": true,
-          "helper": false
-        }
+        {"machine_id": "usbdisk", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "stick", "bus": "device", "id": "stick"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-kbd", "bus": "xhci.0"}, {"model": "usb-mouse", "bus": "xhci.0"}, {"model": "usb-storage", "id": "st0", "bus": "xhci.0", "drive": "stick"}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {
@@ -375,20 +347,14 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {
-        "cpu_millis": 1000,
-        "cpu_ceiling_millis": 1000,
-        "memory_bytes": 268435456, "tooling_memory_bytes": 1073741824,
-        "disk_bytes": 134217728,
-        "locks": [],
-        "ports": 0,
-        "loop_devices": 0
-      },
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 671088640, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
         {"name": "stick", "node": "tests/cases/machine/usbdisk/stick-mbr.img", "per_architecture": false},
-        {"name": "usbdisk_scenario", "node": "tests/cases/machine/usbdisk_scenario", "per_architecture": false}
+        {"name": "usbdisk_scenario", "node": "tests/cases/machine/usbdisk_scenario", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
       "native": {
@@ -1090,16 +1056,8 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["dd", "mtype"], "features": {}},
-      "execution": {
-        "program": "usbdisk_scenario",
-        "stdin": null,
-        "role": "ordinary",
-        "privileges": "an ordinary user",
-        "isolation": [{"fixture": "scratch"}],
-        "children": "none",
-        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"
-      },
+      "requirements": {"host_api": "posix", "tools": ["dd"], "features": {}},
+      "execution": {"program": "usbdisk_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"},
       "steps": [
         {
           "step_id": "layout",
@@ -1115,28 +1073,8 @@
         }
       ],
       "machines": [
-        {
-          "machine_id": "usbdisk",
-          "qemu": {
-            "kernel": "kernel",
-            "initrd": "test-image",
-            "disks": [{"name": "big", "bus": "device", "id": "big", "size_bytes": 2469606195200}],
-            "cpu": "max",
-            "processors": 1,
-            "memory_bytes": 134217728,
-            "firmware": "direct",
-            "devices": [
-              {"model": "qemu-xhci", "id": "xhci"},
-              {"model": "usb-kbd", "bus": "xhci.0"},
-              {"model": "usb-mouse", "bus": "xhci.0"},
-              {"model": "usb-storage", "id": "st0", "bus": "xhci.0", "drive": "big"}
-            ],
-            "boot_options": []
-          },
-          "console": "serial",
-          "qmp": true,
-          "helper": false
-        }
+        {"machine_id": "usbdisk", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "big", "bus": "device", "id": "big", "size_bytes": 2469606195200}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-kbd", "bus": "xhci.0"}, {"model": "usb-mouse", "bus": "xhci.0"}, {"model": "usb-storage", "id": "st0", "bus": "xhci.0", "drive": "big"}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {
@@ -1166,21 +1104,15 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {
-        "cpu_millis": 1000,
-        "cpu_ceiling_millis": 1000,
-        "memory_bytes": 268435456, "tooling_memory_bytes": 1073741824,
-        "disk_bytes": 201326592,
-        "locks": [],
-        "ports": 0,
-        "loop_devices": 0
-      },
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 671088640, "disk_bytes": 201326592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
         {"name": "mkgpt", "node": "tools/image/mkgpt", "per_architecture": false},
         {"name": "far", "node": "tests/cases/machine/usbdisk/far.vol", "per_architecture": false},
-        {"name": "usbdisk_scenario", "node": "tests/cases/machine/usbdisk_scenario", "per_architecture": false}
+        {"name": "usbdisk_scenario", "node": "tests/cases/machine/usbdisk_scenario", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
       "native": {

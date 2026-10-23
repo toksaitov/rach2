@@ -102,16 +102,8 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"lines": 1000}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["sh", "cksum", "shasum", "mcopy"], "features": {}},
-      "execution": {
-        "program": "metal_scenario",
-        "stdin": null,
-        "role": "ordinary",
-        "privileges": "an ordinary user",
-        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "rstick1", "rstick2"]}],
-        "children": "reaped",
-        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure; metal_accept.sh removes what it made on the machine and on the host"
-      },
+      "requirements": {"host_api": "c", "tools": ["sh", "cksum", "shasum"], "features": {}},
+      "execution": {"program": "metal_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "rstick1", "rstick2"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "reaped", "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure; metal_accept.sh removes what it made on the machine and on the host"},
       "steps": [
         {"step_id": "channel-client", "stage": "boot", "machine": "channel-client",
          "does": "boot the declared Rach2 OpenSSH client and open its framed command channel"},
@@ -170,64 +162,9 @@
         }
       ],
       "machines": [
-        {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null,
-         "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "ahci"}],
-         "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"],
-         "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]},
-         "console": "serial", "qmp": true, "helper": true},
-        {
-          "machine_id": "metal",
-          "qemu": {
-            "kernel": "metal-kernel",
-            "initrd": "metal-image",
-            "disks": [
-              {"name": "stick", "bus": "device", "id": "stick"},
-              {"name": "rstick1", "bus": "device", "id": "rstick1"},
-              {"name": "rstick2", "bus": "device", "id": "rstick2"}
-            ],
-            "cpu": "max",
-            "processors": 1,
-            "memory_bytes": 134217728,
-            "firmware": "direct",
-            "devices": [
-              {
-                "model": "rtl8139",
-                "net": "192.168.90.0/24",
-                "host": "192.168.90.2",
-                "dhcpstart": "192.168.90.15",
-                "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]
-              },
-              {"model": "qemu-xhci", "id": "xhci"},
-              {"model": "usb-hub", "bus": "xhci.0", "port": "1"},
-              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.2"},
-              {
-                "model": "usb-storage",
-                "bus": "xhci.0",
-                "port": "1.3",
-                "drive": "stick",
-                "properties": {"serial": "ACCEPT01"}
-              },
-              {
-                "model": "usb-storage",
-                "bus": "xhci.0",
-                "port": "1.4",
-                "drive": "rstick1",
-                "properties": {"serial": "RECOVERY01"}
-              },
-              {
-                "model": "usb-storage",
-                "bus": "xhci.0",
-                "port": "1.5",
-                "drive": "rstick2",
-                "properties": {"serial": "RECOVERY02"}
-              }
-            ],
-            "boot_options": ["rach2.ip=192.168.90.15/24", "rach2.gateway=192.168.90.2", "rach2.netconsole"]
-          },
-          "console": "serial",
-          "qmp": true,
-          "helper": false
-        }
+        {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]}, "console": "serial", "qmp": true, "helper": true},
+        {"machine_id": "metal", "qemu": {"kernel": "metal-kernel", "initrd": "metal-image", "disks": [{"name": "stick", "bus": "device", "id": "stick"}, {"name": "rstick1", "bus": "device", "id": "rstick1"}, {"name": "rstick2", "bus": "device", "id": "rstick2"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [{"model": "rtl8139", "net": "192.168.90.0/24", "host": "192.168.90.2", "dhcpstart": "192.168.90.15", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}, {"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-hub", "bus": "xhci.0", "port": "1"}, {"model": "usb-kbd", "bus": "xhci.0", "port": "1.2"}, {"model": "usb-storage", "bus": "xhci.0", "port": "1.3", "drive": "stick", "properties": {"serial": "ACCEPT01"}}, {"model": "usb-storage", "bus": "xhci.0", "port": "1.4", "drive": "rstick1", "properties": {"serial": "RECOVERY01"}}, {"model": "usb-storage", "bus": "xhci.0", "port": "1.5", "drive": "rstick2", "properties": {"serial": "RECOVERY02"}}], "boot_options": ["rach2.ip=192.168.90.15/24", "rach2.gateway=192.168.90.2", "rach2.netconsole"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {
@@ -367,15 +304,7 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {
-        "cpu_millis": 2000,
-        "cpu_ceiling_millis": 2000,
-        "memory_bytes": 805306368, "tooling_memory_bytes": 1073741824,
-        "disk_bytes": 4563402752,
-        "locks": [],
-        "ports": 1,
-        "loop_devices": 0
-      },
+      "resources": {"cpu_millis": 3000, "cpu_ceiling_millis": 3000, "memory_bytes": 1207959552, "disk_bytes": 4563402752, "locks": [], "ports": 1, "loop_devices": 0},
       "prepare": [
         {"name": "channel-client-image", "node": "images/gnu-test.disk", "per_architecture": true},
         {"name": "metal-kernel", "node": "rach2-metal/kernel", "per_architecture": true},
@@ -391,7 +320,9 @@
         {"name": "mkfs-krffs", "node": "krffs/mkfs.krffs", "per_architecture": false},
         {"name": "stageimage-krffs", "node": "krffs/stageimage.krffs", "per_architecture": false},
         {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
-        {"name": "metal_scenario", "node": "tests/cases/machine/metal_scenario", "per_architecture": false}
+        {"name": "metal_scenario", "node": "tests/cases/machine/metal_scenario", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
       "native": {

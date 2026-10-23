@@ -10,13 +10,8 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"boots": 25}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["sh", "dd", "gzip", "debugfs", "e2fsck"], "features": {}},
-      "execution": {
-        "program": "sealed_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
-        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["sealed"]}],
-        "children": "reaped",
-        "cleanup": "libetude-case ends the machine and removes the copy of the disk, which it keeps after a failure; the scenario removes its copy of the demo key and the marked kernel after a pass"
-      },
+      "requirements": {"host_api": "c", "tools": ["sh", "dd", "gzip"], "features": {}},
+      "execution": {"program": "sealed_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["sealed"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "reaped", "cleanup": "libetude-case ends the machine and removes the copy of the disk, which it keeps after a failure; the scenario removes its copy of the demo key and the marked kernel after a pass"},
       "steps": [
         {"step_id": "channel-client", "stage": "boot", "machine": "channel-client",
          "does": "boot the declared Rach2 OpenSSH client and open its framed command channel"},
@@ -45,18 +40,9 @@
          "does": "boot the rewritten root and read bootctl status, the console and the lease"}
       ],
       "machines": [
-        {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null,
-         "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "channel-input", "size_bytes": 512, "bus": "ahci"}],
-         "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"],
-         "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]},
-         "console": "serial", "qmp": true, "helper": true},
-        {"machine_id": "sealed",
-         "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "sealed", "bus": "ahci"}], "cpu": "max", "processors": 1,
-                  "memory_bytes": 134217728, "firmware": "seabios",
-                  "devices": [{"model": "rtl8139", "net": "192.168.0.0/24", "host": "192.168.0.2",
-                               "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}],
-                  "boot_options": []},
-         "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "channel-input", "size_bytes": 512, "bus": "ahci"}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]}, "console": "serial", "qmp": true, "helper": true},
+        {"machine_id": "sealed", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "sealed", "bus": "ahci"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "seabios", "devices": [{"model": "rtl8139", "net": "192.168.0.0/24", "host": "192.168.0.2", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {"assertion_id": "layout", "checks": "the copy's GUID table has a boot partition first and an ext2 root, the first partition whose superblock has 0xEF53 at byte 56", "source": "scenario"},
@@ -147,8 +133,7 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 805306368, "tooling_memory_bytes": 1073741824, "disk_bytes": 6442450944,
-                    "locks": [], "ports": 1, "loop_devices": 0},
+      "resources": {"cpu_millis": 3000, "cpu_ceiling_millis": 3000, "memory_bytes": 1207959552, "disk_bytes": 6442450944, "locks": [], "ports": 1, "loop_devices": 0},
       "prepare": [
         {"name": "channel-client-image", "node": "images/gnu-test.disk", "per_architecture": true},
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
@@ -158,7 +143,9 @@
         {"name": "binfind", "node": "tools/inspect/binfind", "per_architecture": false},
         {"name": "elfcheck", "node": "tools/inspect/elfcheck", "per_architecture": false},
         {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
-        {"name": "sealed_scenario", "node": "tests/cases/machine/sealed_scenario", "per_architecture": false}
+        {"name": "sealed_scenario", "node": "tests/cases/machine/sealed_scenario", "per_architecture": false},
+        {"name": "image-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "image", "reason": "the case writes the machine's disk between boots, destroys its root and replaces its boot loader, which only a copy of the disk under QEMU allows"}
