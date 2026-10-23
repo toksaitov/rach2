@@ -171,7 +171,7 @@ class ImportTests(unittest.TestCase):
                  patch.object(product, 'run') as run:
                 product.transfer(producer, ['build/images/a.disk'], dest, tree)
             argv = run.call_args.args[0]
-            self.assertIn('--force-local', argv)
+            self.assertNotIn('--force-local', argv)
             self.assertEqual(argv[-3:], ['--', str(root.resolve()) + '/', str(dest) + '/'])
             self.assertEqual(cygpath.call_count, 3)
             self.assertNotIn('ssh', argv)
