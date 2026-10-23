@@ -51,6 +51,7 @@ struct step {
     const char *stamp; /* the stamp the step writes, with its key */
     const char *arch;  /* the architecture, or NULL */
     const char *root;  /* link mode: the step's root in the copy; else NULL */
+    const char *days;  /* -e: the days unused after which an entry may go */
     int print;         /* -p: print the record and the key, and run nothing */
     struct list cc;    /* compilers whose identity counts, and ccache wraps */
     struct list wrap;  /* compilers ccache wraps whose identity does not count */
@@ -84,7 +85,8 @@ static int usage(void)
                     "[-w CC]...\n"
                     "                  [-i FILE]... [-d STAMP]... [-r ROOT [-u PATH]...] "
                     "[-x NAME]...\n"
-                    "                  -o PATH... -- COMMAND [ARG...]\n");
+                    "                  -o PATH... -- COMMAND [ARG...]\n"
+                    "       etude-step [-p] -s STORE -e DAYS\n");
     return 2;
 }
 
@@ -1253,33 +1255,98 @@ static int build_in_store(struct step *s, const char *entry)
     return 0;
 }
 
-/** Open and hold the lock of the step's key, waiting for another build of
- * the key to end: its descriptor, or -1 with the exit status in `rc`. */
-static int hold_key(const struct step *s, int *rc)
+/**
+ * Open the lock of `key` and take it, waiting for another process that holds
+ * it when `wait` is 1: its descriptor; -2 when `wait` is 0 and the lock is
+ * held; -1 on an error or a stop. A lock file that `etude-step -e` removed
+ * while this process waited for it is opened again, so that every holder
+ * holds the file the path names. `made` is 1 when this process made the file.
+ */
+static int lock_key(const struct step *s, const char *key, int wait, int *made)
 {
     char lock[PATH_LEN];
+    struct stat a, b;
     int fd;
 
-    *rc = 1;
-    if (path_fmt(lock, "%s/locks/%s", s->shelf, s->key) != 0)
+    if (path_fmt(lock, "%s/locks/%s", s->shelf, key) != 0)
         return -1;
-    if ((fd = open(lock, O_RDWR | O_CREAT, 0664)) < 0) {
-        say(s, "cannot open %s: %s", lock, strerror(errno));
-        return -1;
-    }
-    fchmod(fd, 0664);
-    if (flock(fd, LOCK_EX | LOCK_NB) == 0)
-        return fd;
-    printf("etude-step: %s: waiting for another build of %.12s\n", s->name, s->key);
-    fflush(stdout);
-    while (flock(fd, LOCK_EX) != 0)
-        if (errno != EINTR || stop_signal) {
-            close(fd);
-            if (stop_signal)
-                *rc = 128 + stop_signal;
+    for (;;) {
+        *made = 0;
+        if ((fd = open(lock, O_RDWR)) < 0 && errno == ENOENT) {
+            if ((fd = open(lock, O_RDWR | O_CREAT | O_EXCL, 0664)) < 0 && errno == EEXIST)
+                continue;
+            if (fd >= 0) {
+                *made = 1;
+                fchmod(fd, 0664);
+            }
+        }
+        if (fd < 0) {
+            say(s, "cannot open %s: %s", lock, strerror(errno));
             return -1;
         }
+        if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+            if (!wait) {
+                close(fd);
+                return -2;
+            }
+            printf("etude-step: %s: waiting for another build of %.12s\n", s->name, key);
+            fflush(stdout);
+            while (flock(fd, LOCK_EX) != 0)
+                if (errno != EINTR || stop_signal) {
+                    close(fd);
+                    return -1;
+                }
+        }
+        if (fstat(fd, &a) == 0 && stat(lock, &b) == 0 && a.st_dev == b.st_dev &&
+            a.st_ino == b.st_ino)
+            return fd;
+        close(fd);
+    }
+}
+
+/**
+ * Open and hold the lock of the step's key, waiting for another build of the
+ * key to end, and date the lock now, which records that a step used the key:
+ * its descriptor, or -1 with the exit status in `rc`.
+ */
+static int hold_key(const struct step *s, int *rc)
+{
+    int made, fd = lock_key(s, s->key, 1, &made);
+
+    if (fd < 0) {
+        *rc = stop_signal ? 128 + stop_signal : 1;
+        return -1;
+    }
+    futimens(fd, NULL);
     return fd;
+}
+
+/**
+ * Record in the store's stamps/ that the step's stamp names its key: a link
+ * `stamps/KEY.HASH` to the stamp's absolute path, HASH being the SHA-256 of
+ * the path. `etude-step -e` keeps each entry whose key a stamp so recorded
+ * still names. A failure is reported and does not fail the step.
+ */
+static void record_stamp(const struct step *s)
+{
+    char path[PATH_LEN], dir[PATH_LEN], link[PATH_LEN], tmp[PATH_LEN], to[PATH_LEN], hex[65];
+    ssize_t n;
+
+    if ((s->stamp[0] == '/' ? path_fmt(path, "%s", s->stamp)
+                            : path_fmt(path, "%s/%s", s->here, s->stamp)) != 0)
+        return;
+    hash_text(path, strlen(path), hex);
+    if (path_fmt(dir, "%s/stamps", s->shelf) != 0 ||
+        path_fmt(link, "%s/%s.%s", dir, s->key, hex) != 0 ||
+        path_fmt(tmp, "%s/.%s.%ld", dir, hex, (long)getpid()) != 0)
+        return;
+    n = readlink(link, to, sizeof(to) - 1);
+    if (n >= 0 && (size_t)n == strlen(path) && memcmp(to, path, (size_t)n) == 0)
+        return;
+    if (store_dir(dir) != 0 || symlink(path, tmp) != 0 || rename(tmp, link) != 0) {
+        say(s, "cannot record the stamp in %s: %s", dir, strerror(errno));
+        unlink(tmp);
+    }
 }
 
 /** Build a copy-mode step in the copy, and add its outputs to the store as
@@ -1330,7 +1397,371 @@ static int run_shared(struct step *s)
     } else {
         rc = build_and_add(s, entry);
     }
+    if (rc == 0)
+        record_stamp(s);
     close(fd);
+    return rc;
+}
+
+/** 1 when `name` begins with a key, 64 hexadecimal digits in lowercase. */
+static int keyed_name(const char *name)
+{
+    return strspn(name, "0123456789abcdef") >= 64;
+}
+
+/** 1 when `l` has the key `key`. */
+static int has_key(const struct lines *l, const char *key)
+{
+    size_t i;
+
+    for (i = 0; i < l->n; i++)
+        if (strncmp(l->v[i], key, 64) == 0)
+            return 1;
+    return 0;
+}
+
+/** Add the key at the start of `key` to `l` when it is not there. */
+static int keep_key(struct lines *l, const char *key)
+{
+    return has_key(l, key) ? 0 : lines_add(l, "%.64s", key);
+}
+
+/** The key the stamp `path` names, as stamp_key gives it, reading nothing but
+ * a regular file. */
+static int named_key(const char *path, char key[65])
+{
+    struct stat st;
+
+    if (stat(path, &st) != 0)
+        return -1;
+    return S_ISREG(st.st_mode) ? stamp_key(path, key, NULL) : 0;
+}
+
+/**
+ * Add to `live` the key of each link of the store's stamps/ whose stamp still
+ * names it, and remove each link whose stamp is gone or names another key,
+ * counting them in `dropped`. A stamp that cannot be read for another reason,
+ * such as a home directory this account may not search, keeps its key.
+ */
+static int read_stamps(const struct step *s, struct lines *live, int *dropped)
+{
+    char dir[PATH_LEN], link[PATH_LEN], to[PATH_LEN], key[65];
+    DIR *d;
+    struct dirent *e;
+    int rc = 0;
+
+    if (path_fmt(dir, "%s/stamps", s->shelf) != 0)
+        return -1;
+    if ((d = opendir(dir)) == NULL)
+        return errno == ENOENT ? 0 : -1;
+    while (rc == 0 && (e = readdir(d)) != NULL) {
+        ssize_t n;
+        int got;
+
+        if (!keyed_name(e->d_name) || e->d_name[64] != '.' ||
+            path_fmt(link, "%s/%s", dir, e->d_name) != 0 ||
+            (n = readlink(link, to, sizeof(to) - 1)) < 0)
+            continue;
+        to[n] = '\0';
+        got = named_key(to, key);
+        if ((got == 1 && strncmp(key, e->d_name, 64) == 0) ||
+            (got < 0 && errno != ENOENT && errno != ENOTDIR)) {
+            rc = keep_key(live, e->d_name);
+        } else if (s->print || unlink(link) == 0) {
+            (*dropped)++;
+        }
+    }
+    closedir(d);
+    return rc;
+}
+
+/** Add to `live` each key that the record of an entry in `live` uses, and
+ * so on, since a link-mode entry has links to the entries it uses. */
+static int add_uses(const struct step *s, struct lines *live)
+{
+    char p[PATH_LEN], line[PATH_LEN + 200];
+    size_t i;
+
+    for (i = 0; i < live->n; i++) {
+        FILE *f;
+
+        if (path_fmt(p, "%s/entries/%s/record", s->shelf, live->v[i]) != 0 ||
+            (f = fopen(p, "r")) == NULL)
+            continue;
+        while (fgets(line, sizeof(line), f) != NULL)
+            if (strncmp(line, "depends ", 8) == 0 && keyed_name(line + 8) &&
+                keep_key(live, line + 8) != 0) {
+                fclose(f);
+                return -1;
+            }
+        fclose(f);
+    }
+    return 0;
+}
+
+/** The bytes the tree `path` takes on its disk. */
+static double tree_bytes(const char *path)
+{
+    struct stat st;
+    double n;
+    DIR *d;
+    struct dirent *e;
+
+    if (lstat(path, &st) != 0)
+        return 0;
+    n = (double)st.st_blocks * 512;
+    if (!S_ISDIR(st.st_mode) || (d = opendir(path)) == NULL)
+        return n;
+    while ((e = readdir(d)) != NULL) {
+        char sub[PATH_LEN];
+
+        if (strcmp(e->d_name, ".") != 0 && strcmp(e->d_name, "..") != 0 &&
+            path_fmt(sub, "%s/%s", path, e->d_name) == 0)
+            n += tree_bytes(sub);
+    }
+    closedir(d);
+    return n;
+}
+
+/** The step and the architecture that the record of `entry` gives, in
+ * `what`, or `a partial entry` when it has no record. */
+static void entry_what(const char *entry, char *what, size_t size)
+{
+    char p[PATH_LEN], line[PATH_LEN + 200], step[256] = "", arch[64] = "";
+    FILE *f;
+
+    if (path_fmt(p, "%s/record", entry) != 0 || (f = fopen(p, "r")) == NULL) {
+        snprintf(what, size, "a partial entry");
+        return;
+    }
+    while (fgets(line, sizeof(line), f) != NULL) {
+        line[strcspn(line, "\n")] = '\0';
+        if (strncmp(line, "step ", 5) == 0)
+            snprintf(step, sizeof(step), "%.200s", line + 5);
+        else if (strncmp(line, "arch ", 5) == 0)
+            snprintf(arch, sizeof(arch), " for %.40s", line + 5);
+    }
+    fclose(f);
+    snprintf(what, size, "%s%s", step, arch);
+}
+
+/* An entry that `etude-step -e` may remove: its key, the time a step last
+ * used it, and the descriptor of its lock while this process holds it. */
+struct doomed {
+    char key[65];
+    time_t used;
+    int fd;
+};
+
+/** The time a step last used the entry `key`: the later of its lock's date
+ * and the entry's; (time_t)-1 when the entry is gone. */
+static time_t entry_used(const struct step *s, const char *key)
+{
+    char p[PATH_LEN];
+    struct stat st;
+    time_t used;
+
+    if (path_fmt(p, "%s/entries/%.64s", s->shelf, key) != 0 || lstat(p, &st) != 0)
+        return (time_t)-1;
+    used = st.st_mtime;
+    if (path_fmt(p, "%s/locks/%.64s", s->shelf, key) == 0 && stat(p, &st) == 0 &&
+        st.st_mtime > used)
+        used = st.st_mtime;
+    return used;
+}
+
+/**
+ * Remove the entry `d`, whose lock this process holds, and its lock file,
+ * adding its size to `freed`; with -p only report it. 0, or -1 when the entry
+ * cannot be moved out of entries/.
+ */
+static int drop_entry(const struct step *s, const struct doomed *d, double *freed)
+{
+    char entry[PATH_LEN], lock[PATH_LEN], aside[PATH_LEN], what[300];
+    struct stat st;
+    double bytes;
+
+    if (path_fmt(entry, "%s/entries/%s", s->shelf, d->key) != 0 ||
+        path_fmt(lock, "%s/locks/%s", s->shelf, d->key) != 0 ||
+        path_fmt(aside, "%s/tmp/%s.gone.%ld", s->shelf, d->key, (long)getpid()) != 0 ||
+        lstat(entry, &st) != 0)
+        return -1;
+    bytes = tree_bytes(entry);
+    entry_what(entry, what, sizeof(what));
+    if (!s->print) {
+        chmod(entry, (st.st_mode & 07777) | S_IRWXU);
+        if (rename(entry, aside) != 0) {
+            say(s, "cannot remove %s: %s", entry, strerror(errno));
+            chmod(entry, st.st_mode & 07777);
+            return -1;
+        }
+        if (remove_tree(aside) != 0)
+            say(s, "some of %s is not this account's and stays", aside);
+        unlink(lock);
+    }
+    *freed += bytes;
+    printf("etude-step: %s: %s %.12s, %s, %.0f MiB, unused for %ld days\n", s->name,
+           s->print ? "would remove" : "removed", d->key, what, bytes / 1048576,
+           (long)((time(NULL) - d->used) / 86400));
+    return 0;
+}
+
+/** Remove each lock file of the store that has no entry and that no step
+ * has used since `before`. */
+static void drop_locks(const struct step *s, time_t before)
+{
+    char dir[PATH_LEN], lock[PATH_LEN], entry[PATH_LEN];
+    DIR *d;
+    struct dirent *e;
+
+    if (path_fmt(dir, "%s/locks", s->shelf) != 0 || (d = opendir(dir)) == NULL)
+        return;
+    while ((e = readdir(d)) != NULL) {
+        struct stat st;
+        int fd, made;
+
+        if (!keyed_name(e->d_name) || e->d_name[64] != '\0' ||
+            path_fmt(lock, "%s/%s", dir, e->d_name) != 0 ||
+            path_fmt(entry, "%s/entries/%s", s->shelf, e->d_name) != 0 || stat(lock, &st) != 0 ||
+            st.st_mtime > before || lstat(entry, &st) == 0)
+            continue;
+        if ((fd = lock_key(s, e->d_name, 0, &made)) < 0)
+            continue;
+        if (made || (fstat(fd, &st) == 0 && st.st_mtime <= before && lstat(entry, &st) != 0))
+            unlink(lock);
+        close(fd);
+    }
+    closedir(d);
+}
+
+/* What `etude-step -e` works out: the keys it keeps, and the entries it may
+ * remove. */
+struct sweep {
+    struct lines live; /* the keys kept: named, recent, or used by one kept */
+    struct doomed *v;  /* the entries that may go */
+    size_t n, cap;
+    time_t before; /* an entry used after this time stays */
+    int entries;   /* the entries the store had */
+};
+
+/** Read the store's entries/ into `w`: each entry not in `w->live` that no
+ * step has used since `w->before` is a candidate, and the rest are kept. */
+static int find_doomed(const struct step *s, struct sweep *w)
+{
+    char dir[PATH_LEN];
+    DIR *d;
+    struct dirent *e;
+    int rc = 0;
+
+    if (path_fmt(dir, "%s/entries", s->shelf) != 0)
+        return -1;
+    if ((d = opendir(dir)) == NULL)
+        return errno == ENOENT ? 0 : -1;
+    while (rc == 0 && (e = readdir(d)) != NULL) {
+        time_t used;
+
+        if (!keyed_name(e->d_name) || e->d_name[64] != '\0')
+            continue;
+        w->entries++;
+        if (has_key(&w->live, e->d_name) || (used = entry_used(s, e->d_name)) == (time_t)-1)
+            continue;
+        if (used > w->before) {
+            rc = keep_key(&w->live, e->d_name);
+            continue;
+        }
+        if (w->n == w->cap) {
+            size_t cap = w->cap ? w->cap * 2 : 64;
+            struct doomed *v = realloc(w->v, cap * sizeof(*v));
+
+            if (v == NULL) {
+                rc = -1;
+                break;
+            }
+            w->v = v;
+            w->cap = cap;
+        }
+        memcpy(w->v[w->n].key, e->d_name, 65);
+        w->v[w->n].used = used;
+        w->v[w->n++].fd = -1;
+    }
+    closedir(d);
+    return rc;
+}
+
+/** Lock each candidate of `w` not yet kept, without waiting, and keep one
+ * whose lock is held or that a step used since it was read. 0, or 1 when a
+ * lock cannot be opened. */
+static int lock_doomed(const struct step *s, struct sweep *w)
+{
+    size_t i;
+    int rc = 0;
+
+    for (i = 0; i < w->n; i++) {
+        struct doomed *d = &w->v[i];
+        struct stat st;
+        int made;
+
+        if (has_key(&w->live, d->key))
+            continue;
+        d->fd = lock_key(s, d->key, 0, &made);
+        if (d->fd >= 0 && !made && fstat(d->fd, &st) == 0 && st.st_mtime > d->used)
+            d->used = st.st_mtime;
+        if (d->fd == -1)
+            rc = 1;
+        if (d->fd < 0 || d->used > w->before)
+            keep_key(&w->live, d->key);
+    }
+    return rc;
+}
+
+/**
+ * Remove from the store each entry that no recorded stamp names and that no
+ * step has used for `s->days` days, with its lock file; the links of stamps
+ * that are gone; the lock files of keys with no entry; and what tmp/ has kept
+ * for a day. An entry that stays keeps each entry it uses, since a link-mode
+ * entry has links to them. Each entry that may go is locked, without
+ * waiting, and its date read again before any is removed, so that a step that
+ * takes or builds one meanwhile keeps it and what it uses. With -p, list the
+ * entries that would go and remove nothing. The exit status: 0, or 1 when
+ * something cannot be read or removed.
+ */
+static int expire(struct step *s)
+{
+    struct sweep w;
+    size_t i;
+    double freed = 0;
+    int dropped = 0, removed = 0, rc;
+
+    memset(&w, 0, sizeof(w));
+    w.before = time(NULL) - atol(s->days) * 86400L;
+    if (read_stamps(s, &w.live, &dropped) != 0 || find_doomed(s, &w) != 0 ||
+        add_uses(s, &w.live) != 0) {
+        say(s, "cannot read %s: %s", s->shelf, strerror(errno));
+        free(w.v);
+        lines_free(&w.live);
+        return 1;
+    }
+    rc = lock_doomed(s, &w);
+    add_uses(s, &w.live);
+    for (i = 0; i < w.n; i++) {
+        if (w.v[i].fd < 0)
+            continue;
+        if (!has_key(&w.live, w.v[i].key) && drop_entry(s, &w.v[i], &freed) != 0)
+            rc = 1;
+        else if (!has_key(&w.live, w.v[i].key))
+            removed++;
+        close(w.v[i].fd);
+    }
+    if (!s->print) {
+        drop_locks(s, w.before);
+        clear_stale(s);
+    }
+    printf("etude-step: %s: result: %s %d entries, %.1f GiB, and %d links of stamps that are "
+           "gone; kept %d entries\n",
+           s->name, s->print ? "would remove" : "removed", removed, freed / 1073741824.0, dropped,
+           w.entries - removed);
+    free(w.v);
+    lines_free(&w.live);
     return rc;
 }
 
@@ -1356,6 +1787,8 @@ static const char **value_of(struct step *s, int c)
         return &s->arch;
     case 'r':
         return &s->root;
+    case 'e':
+        return &s->days;
     }
     return NULL;
 }
@@ -1404,6 +1837,18 @@ static int check_placed(const struct step *s)
     return 0;
 }
 
+/** 1 when -e has a store, a number of days and no option of a step. */
+static int expire_usage(const struct step *s)
+{
+    size_t n = strlen(s->days);
+
+    if (s->store == NULL || *s->store == '\0' || n == 0 || n > 5 ||
+        strspn(s->days, "0123456789") != n)
+        return 0;
+    return !s->name && !s->stamp && !s->arch && !s->root &&
+           s->cc.n + s->wrap.n + s->in.n + s->dep.n + s->use.n + s->out.n + s->skip.n == 0;
+}
+
 /** Read the options into `s`; 0, or -1 on a usage error. */
 static int parse(struct step *s, int argc, char **argv)
 {
@@ -1429,6 +1874,8 @@ static int parse(struct step *s, int argc, char **argv)
         else if ((l = list_of(s, a[1])) == NULL || list_add(l, argv[++i]) != 0)
             return -1;
     }
+    if (s->days)
+        return i == argc && expire_usage(s) ? 0 : -1;
     if (i >= argc && !s->print)
         return -1;
     s->argv = argv + i;
@@ -1449,6 +1896,17 @@ int main(int argc, char **argv)
     memset(s, 0, sizeof(*s));
     if (parse(s, argc, argv) != 0)
         return usage();
+    if (s->days) {
+        struct stat st;
+
+        s->name = "store";
+        if (stat(s->store, &st) != 0 || !S_ISDIR(st.st_mode) ||
+            realpath(s->store, s->shelf) == NULL) {
+            say(s, "the store %s is not a directory", s->store);
+            return 1;
+        }
+        return expire(s);
+    }
     if (getcwd(s->here, sizeof(s->here)) == NULL) {
         say(s, "getcwd: %s", strerror(errno));
         return 1;

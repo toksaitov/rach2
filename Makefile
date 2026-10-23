@@ -1607,12 +1607,19 @@ include tests/system/suites.mk
 # Without the store, as in a release's full run, no output the store gave may
 # stand: the stamp of each step whose outputs came from the store, or are
 # links into it, is removed as make reads this file, so that the step is
-# built again in this copy before anything uses it.
+# built again in this copy before anything uses it. With the store, so is the
+# stamp of such a step whose entry `etude-step -e` has removed.
 STEP_STAMPS = $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) $(PDPMAKE_STAMP) \
               $(E2FSPROGS_STAMP) $(GNU_STEP_STAMPS)
-ifeq ($(RACH2_STORE)$(DRY_RUN),)
+ifeq ($(DRY_RUN),)
+ifeq ($(RACH2_STORE),)
 _ := $(shell for f in $(STEP_STAMPS); do \
         grep -qs '^etude-step 1 [0-9a-f]* store$$' "$$f" && rm -f "$$f"; done; :)
+else
+_ := $(shell for f in $(STEP_STAMPS); do \
+        k=$$(sed -n 's/^etude-step 1 \([0-9a-f]*\) store$$/\1/p' "$$f" 2> /dev/null); \
+        [ -z "$$k" ] || [ -e '$(RACH2_STORE)/entries/'"$$k/record" ] || rm -f "$$f"; done; :)
+endif
 endif
 
 # The host programs the build itself needs, which `all` builds and the

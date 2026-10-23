@@ -3,17 +3,20 @@
  * stored by one copy and taken by another, a link-mode step built in the
  * store with the links of its uses, the build without the store, the steps
  * that are not shared, a failed and an unfinished build, ccache's names, two
- * builds of one key at once, and the refusals. Each row runs the program's
+ * builds of one key at once, the removal of entries nobody uses, and the
+ * refusals. Each row runs the program's
  * main in a child of the test, in copies and a store of its own.
  * host-deps: utils/sha256.c
  * host-cflags: -I utils -Wall -Wextra -Werror
  */
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -617,6 +620,204 @@ static void test_together(void)
     CHECK(strcmp(get(cmd, buf, sizeof buf), "run\n") == 0, "together: the command ran once");
 }
 
+/** Date each file of `dir` in the store `shelf` three days back. */
+static void age(const char *shelf, const char *dir)
+{
+    char p[1200];
+    DIR *d;
+    struct dirent *e;
+    struct timespec t[2];
+
+    t[0].tv_sec = t[1].tv_sec = time(NULL) - 3 * 86400L;
+    t[0].tv_nsec = t[1].tv_nsec = 0;
+    fix_format(p, sizeof p, "%s/%s", shelf, dir);
+    if ((d = opendir(p)) == NULL)
+        return;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.')
+            continue;
+        fix_format(p, sizeof p, "%s/%s/%s", shelf, dir, e->d_name);
+        utimensat(AT_FDCWD, p, t, AT_SYMLINK_NOFOLLOW);
+    }
+    closedir(d);
+}
+
+/** The count of links in the store's stamps/ for the key `key`. */
+static int recorded(const char *shelf, const char *key)
+{
+    char p[1200];
+    DIR *d;
+    struct dirent *e;
+    int n = 0;
+
+    fix_format(p, sizeof p, "%s/stamps", shelf);
+    if ((d = opendir(p)) == NULL)
+        return 0;
+    while ((e = readdir(d)) != NULL)
+        if (strncmp(e->d_name, key, 64) == 0 && e->d_name[64] == '.')
+            n++;
+    closedir(d);
+    return n;
+}
+
+/** The path `what`, such as `entries` or `locks`, of the key that the stamp
+ * `stamp` of copy a gives, in `out`. */
+static void key_path(const char *shelf, const char *stamp, const char *what, char *out, size_t size)
+{
+    char buf[256], key[65];
+
+    in_copy(copy_a, stamp, buf, sizeof buf);
+    if (sscanf(buf, "etude-step 1 %64s", key) != 1)
+        key[0] = '\0';
+    fix_format(out, size, "%s/%s/%s", shelf, what, key);
+}
+
+/* The store of the removal's rows, its entries, and the commands they run. */
+static char shelf[PATH_LEN], tc_e[1200], ports_e[1200], demo_e[1200];
+static char *ex_tc[] = {"etude-step",
+                        "-s",
+                        shelf,
+                        "-n",
+                        "tc",
+                        "-t",
+                        "e/tc.stamp",
+                        "-r",
+                        "e",
+                        "-i",
+                        "src",
+                        "-o",
+                        "cross",
+                        "--",
+                        "sh",
+                        "-c",
+                        "mkdir -p \"$ETUDE_STEP_ROOT/cross\"",
+                        NULL};
+static char *ex_ports[] = {"etude-step",
+                           "-s",
+                           shelf,
+                           "-n",
+                           "ports",
+                           "-t",
+                           "e/ports.stamp",
+                           "-r",
+                           "e",
+                           "-d",
+                           "e/tc.stamp",
+                           "-u",
+                           "cross",
+                           "-o",
+                           "root",
+                           "--",
+                           "sh",
+                           "-c",
+                           "mkdir -p \"$ETUDE_STEP_ROOT/root\"",
+                           NULL};
+static char *ex_demo[] = {"etude-step", "-s", shelf, "-n", "demo", "-t",          "e/demo.stamp",
+                          "-o",         "dm", "--",  "sh", "-c",   "echo d > dm", NULL};
+static char *ex_go[] = {"etude-step", "-s", shelf, "-e", "2", NULL};
+static char *ex_list[] = {"etude-step", "-p", "-s", shelf, "-e", "2", NULL};
+static char *ex_named[] = {"etude-step", "-s", shelf, "-e", "2", "-n", "x", NULL};
+static char *ex_word[] = {"etude-step", "-s", shelf, "-e", "two", NULL};
+static char *ex_nostore[] = {"etude-step", "-e", "2", NULL};
+
+/** The removal of entries, what stays: what a recorded stamp names, what a
+ * kept entry uses, and an entry used recently or whose lock is held, each
+ * with what it uses. */
+static void test_expire(void)
+{
+    char p[1200];
+    struct ran r;
+    int fd;
+
+    fix_format(p, sizeof p, "%s/store-e", fix_dir());
+    mkdir(p, 0700);
+    if (realpath(p, shelf) == NULL) {
+        CHECK(0, "expire: the store is made");
+        return;
+    }
+    run(copy_a, ex_tc, &r);
+    run(copy_a, ex_ports, &r);
+    run(copy_a, ex_demo, &r);
+    run(copy_b, ex_demo, &r);
+    CHECK(r.status == 0 && strstr(r.out, "taken from the store") != NULL,
+          "expire: the steps are built and taken");
+    key_path(shelf, "e/tc.stamp", "entries", tc_e, sizeof tc_e);
+    key_path(shelf, "e/ports.stamp", "entries", ports_e, sizeof ports_e);
+    key_path(shelf, "e/demo.stamp", "entries", demo_e, sizeof demo_e);
+    CHECK(recorded(shelf, demo_e + strlen(shelf) + 9) == 2,
+          "expire: the stamp of each copy that has the key is recorded");
+    age(shelf, "entries");
+    age(shelf, "locks");
+    run(copy_a, ex_go, &r);
+    CHECK(r.status == 0 && strstr(r.out, "result: removed 0 entries") != NULL && exists(tc_e) &&
+              exists(ports_e) && exists(demo_e),
+          "expire: an entry that a recorded stamp names stays");
+
+    unlink(fix_path("copy-a/e/tc.stamp"));
+    run(copy_a, ex_go, &r);
+    CHECK(r.status == 0 && strstr(r.out, "removed 0 entries, 0.0 GiB, and 1 links") != NULL &&
+              exists(tc_e),
+          "expire: an entry that a kept entry uses stays, and the gone stamp's link goes");
+
+    unlink(fix_path("copy-a/e/ports.stamp"));
+    fix_format(p, sizeof p, "%s/locks/%s", shelf, ports_e + strlen(shelf) + 9);
+    utimensat(AT_FDCWD, p, NULL, 0);
+    run(copy_a, ex_go, &r);
+    CHECK(r.status == 0 && strstr(r.out, "removed 0 entries") != NULL && exists(ports_e) &&
+              exists(tc_e),
+          "expire: a recent use keeps the entry and what it uses");
+
+    age(shelf, "locks");
+    fd = open(p, O_RDWR);
+    CHECK(fd >= 0 && flock(fd, LOCK_EX) == 0, "expire: the test holds a lock");
+    run(copy_a, ex_go, &r);
+    CHECK(r.status == 0 && strstr(r.out, "removed 0 entries") != NULL && exists(ports_e) &&
+              exists(tc_e),
+          "expire: a held lock keeps the entry and what it uses");
+    if (fd >= 0)
+        close(fd);
+}
+
+/** The removal of entries, what goes: -p removes nothing; an entry that no
+ * stamp names goes with its lock file and is built again; and the refusals. */
+static void test_expire_removal(void)
+{
+    char p[1200], buf[256];
+    struct ran r;
+
+    fix_format(p, sizeof p, "%s/locks/%s", shelf, ports_e + strlen(shelf) + 9);
+    run(copy_a, ex_list, &r);
+    CHECK(r.status == 0 && strstr(r.out, "would remove 2 entries") != NULL &&
+              strstr(r.out, ", ports, ") != NULL && strstr(r.out, ", tc, ") != NULL &&
+              exists(ports_e) && exists(tc_e),
+          "expire: -p lists the entries that would go and removes nothing");
+    run(copy_a, ex_go, &r);
+    CHECK(r.status == 0 && strstr(r.out, "result: removed 2 entries") != NULL &&
+              strstr(r.out, "unused for 3 days") != NULL && !exists(ports_e) && !exists(tc_e) &&
+              !exists(p) && exists(demo_e),
+          "expire: an entry nobody names or uses goes, with its lock file");
+
+    unlink(fix_path("copy-b/e/demo.stamp"));
+    put(fix_path("copy-a/e/demo.stamp"),
+        "etude-step 1 1111111111111111111111111111111111111111111111111111111111111111 here\n");
+    run(copy_a, ex_go, &r);
+    CHECK(r.status == 0 && strstr(r.out, "result: removed 1 entries") != NULL && !exists(demo_e),
+          "expire: a stamp that names another key no longer keeps the entry");
+
+    run(copy_a, ex_tc, &r);
+    CHECK(r.status == 0 && strstr(r.out, "built in the store") != NULL && exists(tc_e) &&
+              strcmp(in_copy(copy_a, "e/tc.stamp", buf, sizeof buf), "") != 0,
+          "expire: a removed entry is built again");
+
+    run(copy_a, ex_named, &r);
+    CHECK(r.status == 2, "expire: -e takes no option of a step");
+    run(copy_a, ex_word, &r);
+    CHECK(r.status == 2, "expire: DAYS is a number");
+    run(copy_a, ex_nostore, &r);
+    CHECK(r.status == 2, "expire: -e needs a store");
+    remove_tree(shelf);
+}
+
 /** The usage errors. */
 static void test_refusals(void)
 {
@@ -666,6 +867,8 @@ int main(void)
     test_failures();
     test_ccache();
     test_together();
+    test_expire();
+    test_expire_removal();
     test_refusals();
     fix_format(p, sizeof p, "%s", store);
     remove_tree(p);
