@@ -39,7 +39,7 @@ static void spin(void)
     volatile unsigned long n = 0;
 
     for (;;)
-        n++;
+        n = n + 1;
 }
 
 /** Spin on `count` processors: this process and count - 1 children. */
