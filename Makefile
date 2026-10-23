@@ -599,13 +599,27 @@ build/tests/host-suite/vfs_unmount: tests/cases/host/fixtures.py tests/cases/hos
 
 build/tests/host-suite/scripts.inventory.json: build/tests/system/fakeapi_test
 
+# Runtime inputs of the native QEMU checks, built before their inventory.
+HOST_BOOT_SCHEMA_SOURCES = $(wildcard tools/etude/schemas/*.schema.json)
+HOST_BOOT_SCHEMAS = $(patsubst tools/etude/schemas/%,build/tests/host-suite/schemas/%,$(HOST_BOOT_SCHEMA_SOURCES))
+build/tests/host-suite/schemas/%: tools/etude/schemas/%
+	@mkdir -p $(@D)
+	cp $< $@.tmp && mv $@.tmp $@
+build/tests/host-suite/boots.inventory.json: $(ETUDE) $(HOST_BOOT_SCHEMAS) \
+    build/rach2/kernel build/images/test.krffs build/images/host-etude-scenario.disk \
+    build/tests/hello build/tests/rngprobe build/tools/etude/guest/etude-guest
+build/x86_64/tests/host-suite/boots.inventory.json: $(ETUDE) $(HOST_BOOT_SCHEMAS) \
+    build/x86_64/rach2/kernel build/x86_64/images/test.krffs \
+    build/x86_64/images/host-etude-scenario.disk build/x86_64/tests/hello \
+    build/x86_64/tests/rngprobe build/x86_64/tools/etude/guest/etude-guest
+
 .PHONY: host-inventory-force
 host-inventory-force:
-build/tests/host-suite/%.inventory.json: tests/cases/host/prepare.py tests/cases/host/fixtures.py tests/cases/host/windows.py tests/cases/host/tools.py tests/cases/host/routing.py \
+build/tests/host-suite/%.inventory.json: tests/cases/host/prepare.py tests/cases/host/fixtures.py tests/cases/host/windows.py tests/cases/host/tools.py tests/cases/host/routing.py tests/cases/host/boot_inputs.py \
     tests/cases/host/host.list tests/cases/host/adapters.json \
     tests/cases/host.host.json host-inventory-force
 	CC="$(HOSTCC)" python3 -B tests/cases/host/prepare.py --arch $(ARCH) $* $@
-build/x86_64/tests/host-suite/%.inventory.json: tests/cases/host/prepare.py tests/cases/host/fixtures.py tests/cases/host/windows.py tests/cases/host/tools.py tests/cases/host/routing.py \
+build/x86_64/tests/host-suite/%.inventory.json: tests/cases/host/prepare.py tests/cases/host/fixtures.py tests/cases/host/windows.py tests/cases/host/tools.py tests/cases/host/routing.py tests/cases/host/boot_inputs.py \
     tests/cases/host/host.list tests/cases/host/adapters.json \
     tests/cases/host.host.json host-inventory-force
 	CC="$(HOSTCC)" python3 -B tests/cases/host/prepare.py --arch x86_64 $* $@

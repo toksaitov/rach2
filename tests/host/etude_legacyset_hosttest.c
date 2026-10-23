@@ -2857,7 +2857,7 @@ int main(int argc, char **argv)
 #ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
 #endif
-    if (realpath("tools/etude/schemas", schemas) == NULL) {
+    if (realpath("build/tests/host-suite/schemas", schemas) == NULL) {
         printf("etude-legacyset-test: fail: etude's schemas cannot be found\n");
         return 1;
     }

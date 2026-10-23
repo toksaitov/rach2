@@ -1383,6 +1383,61 @@
           "name": "products-image",
           "node": "x86_64/images/gnu-test.disk",
           "per_architecture": false
+        },
+        {
+          "name": "etude",
+          "node": "tools/etude/etude",
+          "per_architecture": false
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "rngprobe",
+          "node": "tests/rngprobe",
+          "per_architecture": true
+        },
+        {
+          "name": "schema-budget",
+          "node": "tests/host-suite/schemas/budget.schema.json",
+          "per_architecture": false
+        },
+        {
+          "name": "schema-case",
+          "node": "tests/host-suite/schemas/case.schema.json",
+          "per_architecture": false
+        },
+        {
+          "name": "schema-history",
+          "node": "tests/host-suite/schemas/history.schema.json",
+          "per_architecture": false
+        },
+        {
+          "name": "schema-invocation",
+          "node": "tests/host-suite/schemas/invocation.schema.json",
+          "per_architecture": false
+        },
+        {
+          "name": "schema-repeat",
+          "node": "tests/host-suite/schemas/repeat.schema.json",
+          "per_architecture": false
+        },
+        {
+          "name": "schema-reproduce",
+          "node": "tests/host-suite/schemas/reproduce.schema.json",
+          "per_architecture": false
+        },
+        {
+          "name": "schema-results",
+          "node": "tests/host-suite/schemas/results.schema.json",
+          "per_architecture": false
+        },
+        {
+          "name": "schema-scenario",
+          "node": "tests/host-suite/schemas/scenario.schema.json",
+          "per_architecture": false
         }
       ],
       "timing": [],

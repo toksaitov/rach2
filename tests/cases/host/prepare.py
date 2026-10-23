@@ -17,6 +17,7 @@ import fixtures
 import windows
 import tools
 import routing
+import boot_inputs
 
 ROOT = Path(__file__).resolve().parents[3]
 GROUPS = ('tests', 'etude', 'boots', 'checkers', 'fuzz', 'scripts')
@@ -88,6 +89,8 @@ def checks(group, arch, base):
                                '-o', out, str(path), *deps]
             if routing.windows_host() and identity in routing.BOOTS:
                 item = windows.boot_entry(item, flags)
+            if group == 'boots':
+                item['data'] = [*item.get('data', []), *boot_inputs.files(identity, arch)]
             item['tools'] = required_tools
             yield item
     elif group == 'checkers':
