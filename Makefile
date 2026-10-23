@@ -734,7 +734,7 @@ $(USB_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 # wait for the guest's SSH server, and the ssh cases' flood.
 build/tests/cases/machine/sshpeer: tests/cases/machine/sshpeer.c
 	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE
 
 # The clock case's reference, which answers the guest with the host's clocks.
 build/tests/cases/machine/clockpeer: tests/cases/machine/clockpeer.c
