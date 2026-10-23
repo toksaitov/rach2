@@ -425,7 +425,8 @@ static unsigned loop_counter(const char *line, const char *key)
 }
 
 /** The loop device's writes and syncs now, from its line of /proc/loop,
- * "loopN BYTES rw writes W syncs S PATH". */
+ * "loopN BYTES rw writes W syncs S PATH": W + S commands, since a disk's
+ * count of commands has its flushes in it, and S flushes. */
 static struct disk_counts loop_counts(void)
 {
     static char text[1024];
@@ -445,8 +446,8 @@ static struct disk_counts loop_counts(void)
             k++;
         }
         if ((i == 0 || text[i - 1] == '\n') && k == len && text[i + len] == ' ') {
-            counts.commands = loop_counter(text + i, "writes");
             counts.flushes = loop_counter(text + i, "syncs");
+            counts.commands = loop_counter(text + i, "writes") + counts.flushes;
             return counts;
         }
     }
