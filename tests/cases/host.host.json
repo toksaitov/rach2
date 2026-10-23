@@ -175,7 +175,8 @@
       "prepare": [
         {"name": "host", "node": "tests/cases/host/host", "per_architecture": false},
         {"name": "etude-host", "node": "tools/etude/etude-host", "per_architecture": false},
-        {"name": "e2fsck", "node": "vendor/e2fsprogs/e2fsck", "per_architecture": true}
+        {"name": "e2fsck", "node": "vendor/e2fsprogs/e2fsck", "per_architecture": true},
+        {"name": "exfat-writer", "node": "tests/host/exfat_writer", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}

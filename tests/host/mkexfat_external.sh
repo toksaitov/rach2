@@ -9,12 +9,19 @@
 # DIR/exfat_external.manifest (name|size|mtime as an epoch second) and the
 # source files under DIR/exfat_src/. Exits 3 when the host has neither
 # hdiutil and newfs_exfat nor a made tooling machine, which the test reports
-# as rows not run.
+# as a failure, and 1 when the volume cannot be made.
+#
+# mkexfat_external.sh -p FILE readies the writer, as the host case's
+# preparation does through `make build/tests/host/exfat_writer`: on a host
+# without hdiutil and newfs_exfat it makes the tooling machine with
+# `etude-tooling prepare` when it is not made, which downloads and provisions
+# it once. FILE then has one line, `hdiutil` or etude-tooling's
+# `etude-tooling: result: made KEY DISK`, and is written only when that line
+# changes, so that the preparation's record of it stays the same. Exits 0, 1
+# when the machine cannot be made, and 3 when the host has neither hdiutil
+# and newfs_exfat nor etude-tooling.
 set -u
-DIR=${1:?directory}
 TOOLING=build/tools/etude/etude-tooling
-IMG="$DIR/exfat_external.img"
-SRC="$DIR/exfat_src"
 ACCENT="$(printf 'e\303\251t\303\251.txt')" # e-acute t e-acute, kept ASCII here
 LONG="A name of some length that takes more than one name entry.txt"
 
@@ -33,11 +40,27 @@ eval "$MAKE_SRC"
 
 if command -v hdiutil >/dev/null 2>&1 && command -v newfs_exfat >/dev/null 2>&1; then
     host=mac
-elif [ -x "$TOOLING" ] && "$TOOLING" check >/dev/null 2>&1; then
+elif [ -x "$TOOLING" ]; then
     host=tooling
 else
     exit 3
 fi
+if [ "${1:-}" = -p ]; then
+    OUT=${2:?file}
+    if [ "$host" = mac ]; then
+        line=hdiutil
+    else
+        "$TOOLING" check >/dev/null 2>&1 || "$TOOLING" prepare >&2 || exit 1
+        line=$("$TOOLING" check 2>/dev/null) || exit 1
+    fi
+    [ "$(cat "$OUT" 2>/dev/null)" = "$line" ] && exit 0
+    printf '%s\n' "$line" > "$OUT.tmp" && mv "$OUT.tmp" "$OUT" || exit 1
+    exit 0
+fi
+DIR=${1:?directory}
+IMG="$DIR/exfat_external.img"
+SRC="$DIR/exfat_src"
+[ "$host" = mac ] || "$TOOLING" check >/dev/null 2>&1 || exit 3
 rm -rf "$IMG" "$SRC" "$DIR/exfat_external.manifest" "$DIR/exfat_job.sh"
 make_src "$SRC" || exit 1
 if [ "$host" = mac ]; then

@@ -676,6 +676,17 @@ $(ETUDEVOLUME): $(ETUDE_VOLUME_SRC) tools/etude/volume/volume.h
 	@mkdir -p $(@D)
 	$(ETUDE_LINK) -std=c99
 
+# The writer of the exFAT volume another implementation made, which
+# exfat_hosttest.c reads: hdiutil on macOS, and elsewhere the tooling
+# machine, made here when it is not (tests/host/mkexfat_external.sh -p). The
+# host case's preparation names it. The script runs every time, since the
+# machine's key follows its recipe, and rewrites the file only when the
+# writer changes.
+.PHONY: build/tests/host/exfat_writer
+build/tests/host/exfat_writer: tests/host/mkexfat_external.sh | $(ETUDETOOLING)
+	@mkdir -p $(@D)
+	sh tests/host/mkexfat_external.sh -p $@
+
 # etude-step (tools/etude/step/etude_step.c), which runs each stamped step of
 # the build through the host's store of step outputs.
 $(ETUDESTEP): $(ETUDE_STEP_SRC) utils/sha256.h

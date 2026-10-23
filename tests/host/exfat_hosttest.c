@@ -13,10 +13,11 @@
  * The builder is compiled and run on every run, in the test's own fixture
  * directory (compat/fixdir_host.c), so that runs at once do not share one. The
  * rows read the well-formed volume back through every shape of file and set,
- * mount each damaged volume, mount a volume the host's own tools wrote, run the
- * write sequences and stop each after every write, bound the cost of creates in
- * a large directory, check what a sync and an unlink leave on the medium, and
- * mount dirty volumes. Each function's comment says what its rows require.
+ * mount each damaged volume, mount a volume another implementation wrote, run
+ * the write sequences and stop each after every write, bound the cost of
+ * creates in a large directory, check what a sync and an unlink leave on the
+ * medium, and mount dirty volumes. Each function's comment says what its rows
+ * require.
  */
 
 #include "../../rach2/sys/fs/exfat.h"
@@ -762,8 +763,8 @@ static void damaged_rows(void)
 /** A volume another implementation made and filled (mkexfat_external.sh:
  *  macOS's, or Linux's in etude's tooling machine) mounts and has every
  *  file of its manifest, with its size, its modification time within two
- *  seconds, and its bytes. On a host with neither the rows report
- *  themselves as not run. */
+ *  seconds, and its bytes. On a host with neither the rows fail; the host
+ *  case's preparation makes the tooling machine. */
 static void external_rows(void)
 {
     char cmd[2048], line[600];
@@ -774,8 +775,9 @@ static void external_rows(void)
     rc = system(cmd);
     rc = rc == -1 ? -1 : (rc >> 8) & 0xff;
     if (rc == 3) {
-        printf("exfat_hosttest: not run: the rows of the volume another implementation made: this "
-               "host has neither hdiutil and newfs_exfat nor a made tooling machine\n");
+        check(0, "the external volume is made by another implementation: this host has neither "
+                 "hdiutil and newfs_exfat nor a made tooling machine, which "
+                 "`make build/tests/host/exfat_writer` makes");
         return;
     }
     check(rc == 0, "the external volume is made by another implementation");
