@@ -5190,10 +5190,13 @@ long sys_chdir(isr_params_t *params)
  * The working directory's path is the one the descriptor's `*at` calls
  * resolve against (`fd_dir_path`), so it follows a directory a type can name
  * after a rename; a descriptor on anything but a directory is -ENOTDIR, and
- * one on a directory ext2 or tmpfs removed since is -ENOENT. Entering takes
- * search permission on the directory, which a synthetic one grants
- * everybody, and the mount hold chdir takes. A descriptor opened with O_PATH
- * does as well as any other.
+ * one on a directory ext2 or tmpfs removed since is -ENOENT. A synthetic
+ * directory is named by its kind, as `do_chdir` names it, in whatever root
+ * the caller has, since a root chroot gave it has /dev, /proc or /sys by a
+ * bind, which the path from the root of the mount table does not pass
+ * through. Entering takes search permission on the directory, which a
+ * synthetic one grants everybody, and the mount hold chdir takes. A
+ * descriptor opened with O_PATH does as well as any other.
  */
 long sys_fchdir(isr_params_t *params)
 {
@@ -5213,10 +5216,19 @@ long sys_fchdir(isr_params_t *params)
     if (!path) {
         return -ENOMEM;
     }
+    if (entry->type == FD_TYPE_SYNTH_DIR) {
+        const struct synth_dir *sd = (const struct synth_dir *)entry->priv;
+
+        rc = sd ? 0 : -EBADF;
+        if (rc == 0) {
+            synth_dir_path(sd->kind, sd->pid, sd->tid, path, VFS_PATH_MAX);
+            rc = cwd_enter(path, NULL, NULL);
+        }
+        path_buf_put(path);
+        return rc;
+    }
     rc = fd_dir_path(entry, path, VFS_PATH_MAX, NULL);
-    if (rc == 0 && entry->type == FD_TYPE_SYNTH_DIR) {
-        rc = cwd_enter(path, NULL, NULL);
-    } else if (rc == 0 && (!entry->ofd || !entry->ofd->vmnt)) {
+    if (rc == 0 && (!entry->ofd || !entry->ofd->vmnt)) {
         rc = -EBADF;
     } else if (rc == 0) {
         ref.mnt = entry->ofd->vmnt;

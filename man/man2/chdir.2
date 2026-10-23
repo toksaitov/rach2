@@ -72,6 +72,14 @@ A directory outside the root
 gave the process returns
 .Er ENOENT ,
 where Linux enters it.
+A synthetic directory under
+.Pa /dev ,
+.Pa /proc
+or
+.Pa /sys
+is recorded by its path in that tree, as
+.Fn chdir
+records it, in whatever root the process has.
 .Pp
 A working directory holds a reference to its mount, which keeps the
 mount from being unmounted, and to its node on a file system that counts
