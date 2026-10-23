@@ -41,6 +41,12 @@ def boot_entry(item, flags):
              'tools/etude/posix/process.c', 'tools/etude/capture.c'}
     sources = [('tools/etude/win/bridge.c' if s == 'tools/etude/posix/bridge.c' else s)
                for s in item['sources'] if s not in posix]
+    # The Windows scenario has a native serial actor for its stand-in row.
+    # The real row still runs etude-guest inside the prepared Rach2 image.
+    if 'tests/host/etude_scenario_hosttest.c' in sources:
+        guest = {'tools/etude/guest/guest.c', 'tools/etude/guest/fixture.c'}
+        sources = [s for s in sources if s not in guest]
+        sources.append('tests/host/compat/scenario_guest.c')
     sources = list(dict.fromkeys([*sources, *source_list('ETUDE_WIN_EXEC_SRC')]))
     item['sources'] = sources
     item['command'] = [*FLAGS, '-DRACH2_HOSTTEST', *flags, '-o', item['program'], *sources, *LIBS]

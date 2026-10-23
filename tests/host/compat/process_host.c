@@ -1,4 +1,8 @@
 /* Enumerate command arguments without invoking ps or another program. */
+#ifdef _WIN32
+#include "win/files.h"
+#include <tlhelp32.h>
+#endif
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -6,7 +10,110 @@
 #include <unistd.h>
 #include "process_host.h"
 
-#if defined(__APPLE__)
+#if defined(_WIN32)
+/* Normalize the native command line to the argument spelling used by the
+ * POSIX ownership queries. Windows quotes every generated argument. */
+static char *plain_arguments(const wchar_t *line)
+{
+    typedef wchar_t **(WINAPI * split_fn)(const wchar_t *, int *);
+    HMODULE module = LoadLibraryW(L"shell32.dll");
+    split_fn split;
+    wchar_t **words;
+    char *word, *out = NULL, *more;
+    size_t used = 0, length;
+    int count, i;
+    if (module == NULL)
+        return NULL;
+    split = (split_fn)(void *)GetProcAddress(module, "CommandLineToArgvW");
+    words = split != NULL ? split(line, &count) : NULL;
+    if (words != NULL) {
+        for (i = 0; i < count; i++) {
+            word = etude_win_utf8(words[i]);
+            if (word == NULL) {
+                free(out);
+                out = NULL;
+                break;
+            }
+            length = strlen(word);
+            more = realloc(out, used + length + 2);
+            if (more == NULL) {
+                free(word);
+                free(out);
+                out = NULL;
+                break;
+            }
+            out = more;
+            if (used)
+                out[used++] = ' ';
+            memcpy(out + used, word, length + 1);
+            used += length;
+            free(word);
+        }
+        LocalFree(words);
+    }
+    FreeLibrary(module);
+    return out;
+}
+
+/* ProcessCommandLineInformation reads the command line without a helper or
+ * remote memory-layout assumptions. Processes may end during enumeration. */
+static char *arguments(long pid)
+{
+    typedef LONG(WINAPI * query_fn)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+    struct native_string {
+        USHORT length, capacity;
+        PWSTR text;
+    };
+    query_fn query = (query_fn)(void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"),
+                                                      "NtQueryInformationProcess");
+    struct native_string *value;
+    HANDLE process;
+    ULONG size = 0;
+    char *out = NULL;
+    if (query == NULL)
+        return NULL;
+    process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+    if (process == NULL)
+        return NULL;
+    query(process, 60, NULL, 0, &size);
+    value = size > sizeof(*value) ? calloc(1, size + sizeof(wchar_t)) : NULL;
+    if (value != NULL && query(process, 60, value, size, &size) >= 0 && value->text != NULL &&
+        value->length % sizeof(wchar_t) == 0) {
+        value->text[value->length / sizeof(wchar_t)] = L'\0';
+        out = plain_arguments(value->text);
+    }
+    free(value);
+    CloseHandle(process);
+    return out;
+}
+
+int host_process_arguments(int (*visit)(long, const char *, void *), void *ctx)
+{
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    PROCESSENTRY32W entry;
+    char *args;
+    int result = 0;
+    if (snapshot == INVALID_HANDLE_VALUE)
+        return -1;
+    memset(&entry, 0, sizeof(entry));
+    entry.dwSize = sizeof(entry);
+    if (!Process32FirstW(snapshot, &entry)) {
+        CloseHandle(snapshot);
+        return -1;
+    }
+    do {
+        args = arguments((long)entry.th32ProcessID);
+        if (args != NULL) {
+            result = visit((long)entry.th32ProcessID, args, ctx);
+            free(args);
+        }
+    } while (result == 0 && Process32NextW(snapshot, &entry));
+    if (result == 0 && GetLastError() != ERROR_NO_MORE_FILES)
+        result = -1;
+    CloseHandle(snapshot);
+    return result;
+}
+#elif defined(__APPLE__)
 #include <libproc.h>
 #include <sys/sysctl.h>
 

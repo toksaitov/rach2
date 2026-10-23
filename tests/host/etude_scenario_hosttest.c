@@ -6,7 +6,8 @@
  * a disk of the architecture ARCH names.
  *
  * host-deps: tests/host/compat/process_host.c
- * host-deps: tools/etude/posix/scenario.c tools/etude/posix/case_main.c
+ * host-deps: tests/host/compat/desktop_host.c tests/host/compat/scenario_host.c
+ * host-deps: tools/etude/posix/scenario.c
  * host-deps: tools/etude/serial.c tools/etude/processor.c
  * host-deps: tools/etude/posix/qemu.c tools/etude/qemu_profile.c
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
@@ -80,24 +81,29 @@
  * written inside one and one after each; a stop signal, a step's bound and a
  * kill of the scenario during a stop each leave no stopped QEMU.
  */
+#ifdef _WIN32
+#include "win/files.h"
+#else
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <sys/wait.h>
+#endif
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <netinet/in.h>
-#include <poll.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/un.h>
-#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
 #include "compat/pathmax_host.h"
+#include "compat/scenario_host.h"
+#include "compat/scenario_guest.h"
 #include "compat/fixdir_host.c"
 #include "compat/process_host.h"
 #include "etude/artifact.h"
@@ -232,8 +238,25 @@ static struct sockaddr_in loopback(long port)
  * relative to the row's directory so that a long TMPDIR fits. Restore the
  * current directory before returning 0 for success or -1 for an error.
  */
-static int peer_endpoint(int fd, const char *mark, int binding)
+static int peer_endpoint(host_socket fd, const char *mark, int binding)
 {
+#ifdef _WIN32
+    char path[PATH_MAX];
+    unsigned port;
+    struct sockaddr_in address;
+    FILE *file;
+    if (mark == NULL || binding)
+        return -1;
+    fix_format(path, sizeof(path), "%s.peer", mark);
+    file = fopen(path, "r");
+    if (file == NULL)
+        return -1;
+    port = 0;
+    fscanf(file, "%u", &port);
+    fclose(file);
+    address = loopback(port);
+    return port != 0 ? connect((SOCKET)fd, (struct sockaddr *)&address, sizeof(address)) : -1;
+#else
     struct sockaddr_un a;
     char path[PATH_MAX], *name;
     int cwd, result, error;
@@ -265,16 +288,28 @@ static int peer_endpoint(int fd, const char *mark, int binding)
     close(cwd);
     errno = error;
     return result;
+#endif
 }
 
 /**
  * Receive the row's bound TCP socket from its controller and check its
  * port. Give the descriptor, owned by the caller, or -1 for an error.
  */
-static int peer_socket(const char *port)
+static host_socket peer_socket(const char *port)
 {
     struct sockaddr_in a;
-    socklen_t len = sizeof(a);
+    sh_socklen len = sizeof(a);
+    host_socket fd = HOST_SOCKET_INVALID, connection;
+#ifndef _WIN32
+    int received_fd = -1;
+#endif
+#ifdef _WIN32
+    connection = sh_socket(SOCK_STREAM);
+    if (connection >= 0 && peer_endpoint(connection, getenv("ETUDE_TEST_MARK"), 0) == 0)
+        fd = sh_receive_socket(connection);
+    if (connection >= 0)
+        host_socket_close(connection);
+#else
     struct msghdr msg;
     struct cmsghdr *c;
     union {
@@ -283,7 +318,6 @@ static int peer_socket(const char *port)
     } control;
     char byte;
     struct iovec iov = {&byte, 1};
-    int fd = -1, connection;
 
     connection = socket(AF_UNIX, SOCK_STREAM, 0);
     if (connection < 0)
@@ -297,16 +331,19 @@ static int peer_socket(const char *port)
         recvmsg(connection, &msg, 0) == 1 && !(msg.msg_flags & MSG_CTRUNC)) {
         c = CMSG_FIRSTHDR(&msg);
         if (c != NULL && c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS &&
-            c->cmsg_len == CMSG_LEN(sizeof(fd)))
-            memcpy(&fd, CMSG_DATA(c), sizeof(fd));
+            c->cmsg_len == CMSG_LEN(sizeof(received_fd))) {
+            memcpy(&received_fd, CMSG_DATA(c), sizeof(received_fd));
+            fd = received_fd;
+        }
     }
-    close(connection);
+    host_socket_close(connection);
+#endif
     if (fd >= 0 && getsockname(fd, (struct sockaddr *)&a, &len) != 0) {
-        close(fd);
+        host_socket_close(fd);
         return -1;
     }
     if (fd >= 0 && a.sin_port != htons((unsigned short)strtol(port, NULL, 10))) {
-        close(fd);
+        host_socket_close(fd);
         errno = EINVAL;
         return -1;
     }
@@ -327,10 +364,11 @@ static int peer_socket(const char *port)
  */
 static int peer(const char *port, const char *mode)
 {
-    struct pollfd p[PEER_CONNS + 1];
+    struct sh_poll p[PEER_CONNS + 1];
     char line[PEER_CONNS][256], text[300];
     size_t len[PEER_CONNS];
-    int l, i, n, k;
+    host_socket l;
+    int i, n, k;
     ssize_t got;
     char buf[512];
 
@@ -339,12 +377,11 @@ static int peer(const char *port, const char *mode)
         return 3;
     }
     if (strcmp(mode, "mute") == 0)
-        for (;;)
-            pause();
+        host_wait_forever();
     l = peer_socket(port);
     if (l < 0 || listen(l, PEER_CONNS) != 0) {
         if (l >= 0)
-            close(l);
+            host_socket_close(l);
         snprintf(text, sizeof(text), "peer: cannot serve: %s", strerror(errno));
         say(text);
         return 3;
@@ -353,10 +390,10 @@ static int peer(const char *port, const char *mode)
     say(text);
     for (i = 0; i <= PEER_CONNS; i++) {
         p[i].fd = i == 0 ? l : -1;
-        p[i].events = POLLIN;
+        p[i].events = SH_POLLIN;
     }
     for (;;) {
-        if (poll(p, PEER_CONNS + 1, -1) < 0)
+        if (sh_poll(p, PEER_CONNS + 1, -1) < 0)
             continue;
         if (p[0].revents != 0)
             for (i = 1; i <= PEER_CONNS; i++)
@@ -368,9 +405,9 @@ static int peer(const char *port, const char *mode)
         for (i = 1; i <= PEER_CONNS; i++) {
             if (p[i].fd < 0 || p[i].revents == 0)
                 continue;
-            got = read(p[i].fd, buf, sizeof(buf));
+            got = host_socket_read(p[i].fd, buf, sizeof(buf));
             if (got <= 0) {
-                close(p[i].fd);
+                host_socket_close(p[i].fd);
                 p[i].fd = -1;
                 say("peer: closed");
                 if (strcmp(mode, "once") == 0)
@@ -393,13 +430,14 @@ static int peer(const char *port, const char *mode)
                 snprintf(text, sizeof(text), "peer: got %s", line[k]);
                 say(text);
             }
-            if (write(p[i].fd, buf, (size_t)got) != got)
+            if (host_socket_write(p[i].fd, buf, (size_t)got) != got)
                 say("peer: a reply was cut short");
         }
     }
 }
 
 /** Write the `len` bytes at `buf` to `fd`; 0, or -1 for an error. */
+#ifndef _WIN32
 static int write_bytes(int fd, const char *buf, size_t len)
 {
     ssize_t n;
@@ -414,6 +452,8 @@ static int write_bytes(int fd, const char *buf, size_t len)
     return 0;
 }
 
+#endif
+
 /**
  * Be the relay of a guest forward, as QEMU runs it for each connection:
  * join standard input and output, the guest's connection, to a connection to
@@ -423,8 +463,11 @@ static int write_bytes(int fd, const char *buf, size_t len)
  */
 static int relay(const char *port)
 {
+#ifdef _WIN32
+    return scenario_relay(port);
+#else
     struct sockaddr_in a = loopback(strtol(port, NULL, 10));
-    struct pollfd p[2];
+    struct sh_poll p[2];
     char buf[4096];
     ssize_t n;
     int s, from_guest = 1, to_guest = 1;
@@ -435,8 +478,8 @@ static int relay(const char *port)
     while (from_guest || to_guest) {
         p[0].fd = from_guest ? 0 : -1;
         p[1].fd = to_guest ? s : -1;
-        p[0].events = p[1].events = POLLIN;
-        if (poll(p, 2, -1) < 0)
+        p[0].events = p[1].events = SH_POLLIN;
+        if (sh_poll(p, 2, -1) < 0)
             continue;
         if (p[0].revents != 0) {
             n = read(0, buf, sizeof(buf));
@@ -458,6 +501,7 @@ static int relay(const char *port)
         }
     }
     return 0;
+#endif
 }
 
 /**
@@ -494,7 +538,7 @@ static int tool(int argc, char **argv)
         if (f != NULL)
             fclose(f);
         if (pid > 0)
-            kill((pid_t)pid, SIGKILL);
+            sh_signal(pid, SIGKILL);
         return 0;
     }
     return 2;
@@ -503,31 +547,25 @@ static int tool(int argc, char **argv)
 /* ---- The stand-in for QEMU. ---- */
 
 /** Write all of `text` to `fd`, or end the stand-in. */
-static void put(int fd, const char *text)
+static void put(host_socket fd, const char *text)
 {
     size_t len = strlen(text), done = 0;
-    ssize_t n;
-
+    int n;
     while (done < len) {
-        n = write(fd, text + done, len - done);
+        n = host_socket_write(fd, text + done, len - done);
         if (n <= 0)
             _exit(120);
         done += (size_t)n;
     }
 }
 
-/** Connect to the Unix socket at `path`, as QEMU's client chardev does. */
-static int fake_connect(const char *path)
+/** Connect to the endpoint of QEMU's client chardev. */
+static host_socket fake_connect(const char *path)
 {
-    struct sockaddr_un a;
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-
-    memset(&a, 0, sizeof(a));
-    a.sun_family = AF_UNIX;
-    snprintf(a.sun_path, sizeof(a.sun_path), "%s", path);
-    if (fd < 0 || connect(fd, (struct sockaddr *)&a, sizeof(a)) != 0)
+    host_socket socket = host_qemu_connect(path);
+    if (socket < 0)
         _exit(121);
-    return fd;
+    return socket;
 }
 
 /* The stand-in prints ticks on its console once it is told to, and the file
@@ -567,16 +605,13 @@ static int fake_wait_ms(void)
 /** Write a tick on the console `con`, once the stand-in ticks and while the
  * console is open: `tick N`, N the monotonic clock in microseconds, as the
  * library's executor reads it. */
-static void fake_tick(int con)
+static void fake_tick(host_socket con)
 {
-    struct timespec ts;
     char text[64];
 
     if (!fake_ticking || con < 0)
         return;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    snprintf(text, sizeof(text), "tick %llu\r\n",
-             (unsigned long long)ts.tv_sec * 1000000u + (unsigned long long)ts.tv_nsec / 1000u);
+    snprintf(text, sizeof(text), "tick %llu\r\n", (unsigned long long)host_clock_us());
     put(con, text);
 }
 
@@ -593,7 +628,7 @@ static const char *fake_arg(int argc, char **argv, const char *opt, const char *
 
 /* A line read a byte at a time from a socket. */
 struct fake_in {
-    int fd;
+    host_socket fd;
     char line[512];
     size_t len;
 };
@@ -606,7 +641,7 @@ static int fake_read(struct fake_in *in)
     ssize_t n;
 
     for (;;) {
-        n = read(in->fd, &c, 1);
+        n = host_socket_read(in->fd, &c, 1);
         if (n <= 0)
             return n < 0 && errno == EINTR ? 0 : -1;
         if (c == '\n' || c == '\r') {
@@ -640,7 +675,7 @@ static long fake_command(const char *line, char *name, size_t size)
 }
 
 /** Send QMP's event SHUTDOWN of the guest or not, for `reason`. */
-static void fake_shutdown(int qmp, int guest, const char *reason)
+static void fake_shutdown(host_socket qmp, int guest, const char *reason)
 {
     char text[256];
 
@@ -673,7 +708,7 @@ static void fake_registers(char *text, size_t size)
 }
 
 /** Answer one QMP line of the launcher's or the scenario's; exit at quit. */
-static void fake_qmp(int qmp, const char *line, const char *accel, const char *mode)
+static void fake_qmp(host_socket qmp, const char *line, const char *accel, const char *mode)
 {
     char name[64], text[1024], regs[768];
     long id = fake_command(line, name, sizeof(name));
@@ -732,21 +767,21 @@ static void fake_disk(const char *disk, const char *text, char *out, size_t size
  * 127.0.0.1, as a guest reaches the host, and say on the console `con`
  * whether the line came back.
  */
-static void fake_peer(int con, const char *args)
+static void fake_peer(host_socket con, const char *args)
 {
     char *text, want[300], got[300], said[400];
     struct sockaddr_in a = loopback(strtol(args, &text, 10));
     size_t n = 0;
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    host_socket fd = sh_socket(SOCK_STREAM);
 
     snprintf(want, sizeof(want), "%s\n", *text == ' ' ? text + 1 : text);
     if (fd >= 0 && connect(fd, (struct sockaddr *)&a, sizeof(a)) == 0 &&
-        write(fd, want, strlen(want)) == (ssize_t)strlen(want))
-        while (n + 1 < sizeof(got) && read(fd, got + n, 1) == 1 && got[n++] != '\n') {
+        host_socket_write(fd, want, strlen(want)) == (ssize_t)strlen(want))
+        while (n + 1 < sizeof(got) && host_socket_read(fd, got + n, 1) == 1 && got[n++] != '\n') {
         }
     got[n] = '\0';
     if (fd >= 0)
-        close(fd);
+        host_socket_close(fd);
     want[strlen(want) - 1] = '\0';
     if (n > 0 && strncmp(got, want, strlen(want)) == 0)
         snprintf(said, sizeof(said), "fake: peer echoed %s\r\n> ", want);
@@ -760,8 +795,18 @@ static void fake_peer(int con, const char *args)
  * `exec /etude-guest` does, with the stage directory ETUDE_FAKE_STAGE and
  * the resend interval of `line`; its PID goes to ETUDE_FAKE_GUEST_PID.
  */
-static pid_t fake_guest(int con, const char *line)
+static long fake_guest(host_socket con, const char *line)
 {
+#ifdef _WIN32
+    long child = scenario_guest_start(self, con);
+    FILE *file = fopen(getenv("ETUDE_FAKE_GUEST_PID"), "w");
+    (void)line;
+    if (file != NULL) {
+        fprintf(file, "%ld\n", child);
+        fclose(file);
+    }
+    return child;
+#else
     const char *resend = strstr(line, "--resend-ms ");
     char state[PATH_MAX], ms[32], pid[32];
     char *args[] = {
@@ -786,6 +831,7 @@ static pid_t fake_guest(int con, const char *line)
         fclose(f);
     }
     return child;
+#endif
 }
 
 /**
@@ -825,13 +871,13 @@ static void fake_console(struct fake_in *con, struct fake_in *qmp, const char *d
         fake_halted = con->line[4] == '\0' ? fake_cpus : 1;
     } else if (strcmp(con->line, "die") == 0) {
         put(con->fd, "fake: dying\r\n");
-        kill(getpid(), SIGKILL);
+        sh_signal((long)getpid(), SIGKILL);
     } else if (strcmp(con->line, "closecon") == 0) {
-        close(con->fd);
+        host_socket_close(con->fd);
         con->fd = -1;
     } else if (strcmp(con->line, "closeqmp") == 0) {
         put(con->fd, "fake: no qmp\r\n> ");
-        close(qmp->fd);
+        host_socket_close(qmp->fd);
         qmp->fd = -1;
     } else if (strncmp(con->line, "peer ", 5) == 0) {
         fake_peer(con->fd, con->line + 5);
@@ -840,7 +886,7 @@ static void fake_console(struct fake_in *con, struct fake_in *qmp, const char *d
         put(con->fd, "fake: ticking\r\n");
     } else if (strncmp(con->line, "exec /etude-guest", 17) == 0) {
         fake_guest(con->fd, con->line);
-        close(con->fd);
+        host_socket_close(con->fd);
         con->fd = -1;
     }
 }
@@ -881,7 +927,7 @@ static int fake_refused(const char *mode, int argc, char **argv, const char *dis
 
 /** Print the value of each `-netdev` of `argv` on the console `fd`, as
  * `fake: netdev VALUE`. */
-static void fake_netdevs(int fd, int argc, char **argv)
+static void fake_netdevs(host_socket fd, int argc, char **argv)
 {
     int i;
 
@@ -898,7 +944,7 @@ static void fake_netdevs(int fd, int argc, char **argv)
  * Say each `-drive` and `-device` argument of the stand-in's command line
  * on console `fd`, as `fake: drive ARG` or `fake: device ARG`.
  */
-static void fake_drives(int fd, int argc, char **argv)
+static void fake_drives(host_socket fd, int argc, char **argv)
 {
     int i;
 
@@ -950,7 +996,7 @@ static int fake_qemu(const char *mode, int argc, char **argv)
     static const unsigned char pcap[4] = {0xd4, 0xc3, 0xb2, 0xa1};
     char path[PATH_MAX];
     struct fake_in con, qmp;
-    struct pollfd p[2];
+    struct sh_poll p[2];
     int ok = 1, r;
 
     if ((r = fake_refused(mode, argc, argv, disk)) != 0)
@@ -966,8 +1012,8 @@ static int fake_qemu(const char *mode, int argc, char **argv)
             *strchr(path, ',') = '\0';
         disk = path;
     }
-    con.fd = fake_connect(fake_arg(argc, argv, "-chardev", "socket,id=etude-console,path="));
-    qmp.fd = fake_connect(fake_arg(argc, argv, "-chardev", "socket,id=etude-qmp,path="));
+    con.fd = fake_connect(host_qemu_endpoint(argc, argv, "etude-console"));
+    qmp.fd = fake_connect(host_qemu_endpoint(argc, argv, "etude-qmp"));
     con.len = qmp.len = 0;
     put(qmp.fd, "{\"QMP\": {\"version\": {}, \"capabilities\": []}}\r\n");
     while (ok) {
@@ -987,8 +1033,8 @@ static int fake_qemu(const char *mode, int argc, char **argv)
     for (;;) {
         p[0].fd = con.fd;
         p[1].fd = qmp.fd;
-        p[0].events = p[1].events = POLLIN;
-        r = poll(p, 2, fake_wait_ms());
+        p[0].events = p[1].events = SH_POLLIN;
+        r = sh_poll(p, 2, fake_wait_ms());
         fake_tick(con.fd);
         if (r < 0)
             continue;
@@ -1003,7 +1049,7 @@ static int fake_qemu(const char *mode, int argc, char **argv)
             continue;
         r = fake_read(&con);
         if (r < 0) {
-            close(con.fd);
+            host_socket_close(con.fd);
             con.fd = -1;
             continue;
         }
@@ -1011,8 +1057,7 @@ static int fake_qemu(const char *mode, int argc, char **argv)
             continue;
         fake_console(&con, &qmp, disk, mode);
         if (con.fd < 0 && qmp.fd < 0)
-            for (;;)
-                pause();
+            host_wait_forever();
     }
 }
 
@@ -1265,7 +1310,7 @@ static int scenario_lost(struct etude_case *c, const char *how)
     expect(c, "ended", etude_wait_end(m, &end), ETUDE_OK);
     etude_assert(c, "not-shutdown",
                  end.end == ETUDE_END_QEMU_EXITED &&
-                     end.value == (strcmp(how, "die") == 0 ? SIGKILL : 0),
+                     end.value == (strcmp(how, "die") == 0 ? sh_dead_status() : 0),
                  "taken for another end");
     return 0;
 }
@@ -1912,7 +1957,7 @@ static int scenario_forward(struct etude_case *c, int real)
     struct sockaddr_in a;
     char line[PATH_MAX + 512];
     uint64_t at;
-    int fd;
+    host_socket fd;
 
     if (etude_step(c, "serve") != ETUDE_OK)
         return 1;
@@ -1927,20 +1972,19 @@ static int scenario_forward(struct etude_case *c, int real)
     if (real) {
         expect(c, "shell", etude_console_wait(m, "Type 'help'", 0, &at), ETUDE_OK);
         a = loopback((long)etude_port(c, 0));
-        fd = socket(AF_INET, SOCK_STREAM, 0);
+        fd = sh_socket(SOCK_STREAM);
         etude_assert(c, "tcp-forward",
                      fd >= 0 && connect(fd, (struct sockaddr *)&a, sizeof(a)) == 0,
                      "nothing accepts a connection at the first port");
         if (fd >= 0)
-            close(fd);
+            host_socket_close(fd);
         a = loopback((long)etude_port(c, 1));
-        fd = socket(AF_INET, SOCK_DGRAM, 0);
+        fd = sh_socket(SOCK_DGRAM);
         etude_assert(c, "udp-forward",
-                     fd >= 0 && bind(fd, (struct sockaddr *)&a, sizeof(a)) != 0 &&
-                         errno == EADDRINUSE,
+                     fd >= 0 && bind(fd, (struct sockaddr *)&a, sizeof(a)) != 0 && sh_bound_error(),
                      "nothing has bound the second port");
         if (fd >= 0)
-            close(fd);
+            host_socket_close(fd);
         if (s == NULL)
             return 1;
         forward_real(c, m, s, at);
@@ -2307,15 +2351,15 @@ static int forward_row(const struct row *r)
 static unsigned free_port(int type)
 {
     struct sockaddr_in a = loopback(0);
-    socklen_t len = sizeof(a);
+    sh_socklen len = sizeof(a);
     unsigned port = 0;
-    int fd = socket(AF_INET, type, 0);
+    host_socket fd = sh_socket(type);
 
     if (fd >= 0 && bind(fd, (struct sockaddr *)&a, sizeof(a)) == 0 &&
         getsockname(fd, (struct sockaddr *)&a, &len) == 0)
         port = ntohs(a.sin_port);
     if (fd >= 0)
-        close(fd);
+        host_socket_close(fd);
     return port;
 }
 
@@ -2544,19 +2588,27 @@ struct outcome {
 
 /* The controller's bound TCP socket and the Unix listener that passes it. */
 struct peer_fixture {
-    int tcp, handoff;
+    host_socket tcp, handoff;
     char path[PATH_MAX];
 };
 
 /** Pass `peer`'s TCP socket to one service that has connected to it. */
 static void peer_handoff(struct peer_fixture *peer)
 {
+#ifdef _WIN32
+    host_socket connection = (host_socket)accept((SOCKET)peer->handoff, NULL, NULL);
+    CHECK(connection >= 0 && sh_send_socket(connection, peer->tcp) == 0,
+          "the peer receives its bound socket");
+    if (connection >= 0)
+        host_socket_close(connection);
+#else
     struct msghdr msg;
     struct cmsghdr *c;
     union {
         struct cmsghdr align;
         char bytes[CMSG_SPACE(sizeof(int))];
     } control;
+    int passed_fd = (int)peer->tcp;
     char byte = 0;
     struct iovec iov = {&byte, 1};
     struct sigaction ignore, old;
@@ -2575,8 +2627,8 @@ static void peer_handoff(struct peer_fixture *peer)
     c = CMSG_FIRSTHDR(&msg);
     c->cmsg_level = SOL_SOCKET;
     c->cmsg_type = SCM_RIGHTS;
-    c->cmsg_len = CMSG_LEN(sizeof(peer->tcp));
-    memcpy(CMSG_DATA(c), &peer->tcp, sizeof(peer->tcp));
+    c->cmsg_len = CMSG_LEN(sizeof(passed_fd));
+    memcpy(CMSG_DATA(c), &passed_fd, sizeof(passed_fd));
     memset(&ignore, 0, sizeof(ignore));
     ignore.sa_handler = SIG_IGN;
     sigemptyset(&ignore.sa_mask);
@@ -2588,13 +2640,17 @@ static void peer_handoff(struct peer_fixture *peer)
     CHECK(sendmsg(connection, &msg, 0) == 1, "the peer receives its bound socket");
     sigaction(SIGPIPE, &old, NULL);
     close(connection);
+#endif
 }
 
 /* One attempt that runs: its process and the pipe of its output. */
 struct attempt {
     const struct row *r;
-    pid_t pid;
+    long pid;
     int fd;
+#ifdef _WIN32
+    struct sh_child child;
+#endif
     int stopped;
     char err[PATH_MAX];
     struct outcome *o;
@@ -2607,7 +2663,9 @@ static void attempt_start(struct attempt *a, const struct row *r, const char *in
                           struct outcome *o)
 {
     char *argv[] = {self, (char *)inv, NULL};
+#ifndef _WIN32
     int out[2], fd;
+#endif
 
     memset(a, 0, sizeof(*a));
     memset(o, 0, sizeof(*o));
@@ -2616,6 +2674,12 @@ static void attempt_start(struct attempt *a, const struct row *r, const char *in
     a->fd = -1;
     o->status = -1;
     fix_format(a->err, sizeof(a->err), "%s/%s.err", fix_dir(), r->name);
+#ifdef _WIN32
+    if (sh_start(&a->child, self, argv, env, a->err, 1) == 0) {
+        a->pid = a->child.pid;
+        a->fd = 0;
+    }
+#else
     if (pipe(out) != 0)
         return;
     a->pid = fork();
@@ -2631,6 +2695,7 @@ static void attempt_start(struct attempt *a, const struct row *r, const char *in
     }
     close(out[1]);
     a->fd = out[0];
+#endif
 }
 
 /**
@@ -2641,29 +2706,41 @@ static void attempt_start(struct attempt *a, const struct row *r, const char *in
 static int attempt_read(struct attempt *a, const char *want, const char *stop_at)
 {
     struct outcome *o = a->o;
-    struct pollfd p[2];
+    struct sh_poll p[2];
     ssize_t n;
 
     while (a->fd >= 0) {
         if (want != NULL && strstr(o->out, want) != NULL)
             return 1;
+#ifdef _WIN32
+        p[0].fd = a->peer->handoff;
+        p[0].events = SH_POLLIN;
+        if (p[0].fd >= 0 && sh_poll(p, 1, 0) > 0 && p[0].revents)
+            peer_handoff(a->peer);
+        n = sh_read(&a->child, o->out + o->len, sizeof(o->out) - 1 - o->len);
+        if (n == 0) {
+            host_sleep_ms(10);
+            continue;
+        }
+#else
         p[0].fd = a->fd;
         p[1].fd = a->peer->handoff;
-        p[0].events = p[1].events = POLLIN;
-        if (poll(p, 2, -1) <= 0)
+        p[0].events = p[1].events = SH_POLLIN;
+        if (sh_poll(p, 2, -1) <= 0)
             continue;
-        if (p[1].revents & POLLIN)
+        if (p[1].revents & SH_POLLIN)
             peer_handoff(a->peer);
         if (p[0].revents == 0)
             continue;
         n = read(a->fd, o->out + o->len, sizeof(o->out) - 1 - o->len);
+#endif
         if (n <= 0)
             break;
         o->len += (size_t)n;
         o->out[o->len] = '\0';
         if (stop_at != NULL && !a->stopped && strstr(o->out, stop_at) != NULL) {
             a->stopped = 1;
-            kill(a->pid, a->r->stop_sig != 0 ? a->r->stop_sig : SIGTERM);
+            sh_signal(a->pid, a->r->stop_sig != 0 ? a->r->stop_sig : SIGTERM);
         }
     }
     return 0;
@@ -2675,14 +2752,21 @@ static void attempt_end(struct attempt *a, const char *stop_at)
     struct outcome *o = a->o;
     char line[512];
     FILE *f;
+#ifndef _WIN32
     int st;
+#endif
 
     attempt_read(a, NULL, stop_at);
+#ifdef _WIN32
+    o->status = sh_wait(&a->child);
+#else
     if (a->fd >= 0)
         close(a->fd);
     a->fd = -1;
     if (a->pid > 0 && waitpid(a->pid, &st, 0) == a->pid && WIFEXITED(st))
         o->status = WEXITSTATUS(st);
+#endif
+    a->fd = -1;
     f = fopen(a->err, "r");
     if (f == NULL)
         return;
@@ -2890,8 +2974,26 @@ static char **row_env(const struct row *r, char *bufs[6])
 static unsigned reserve_peer(struct peer_fixture *peer, const char *mark)
 {
     struct sockaddr_in a = loopback(0);
-    socklen_t len = sizeof(a);
+    sh_socklen len = sizeof(a);
 
+#ifdef _WIN32
+    unsigned short handoff_port;
+    FILE *file;
+    peer->tcp = sh_socket(SOCK_STREAM);
+    peer->handoff = (host_socket)etude_win_listen(&handoff_port);
+    if (peer->tcp < 0 || peer->handoff < 0 ||
+        bind((SOCKET)peer->tcp, (struct sockaddr *)&a, sizeof(a)) != 0 ||
+        getsockname((SOCKET)peer->tcp, (struct sockaddr *)&a, &len) != 0)
+        return 0;
+    fix_format(peer->path, sizeof(peer->path), "%s.peer", mark);
+    file = fopen(peer->path, "w");
+    if (file == NULL)
+        return 0;
+    fprintf(file, "%u\n", (unsigned)handoff_port);
+    if (fclose(file) != 0)
+        return 0;
+    return ntohs(a.sin_port);
+#else
     peer->tcp = socket(AF_INET, SOCK_STREAM, 0);
     peer->handoff = socket(AF_UNIX, SOCK_STREAM, 0);
     if (peer->tcp < 0 || peer->handoff < 0 || fcntl(peer->tcp, F_SETFD, FD_CLOEXEC) != 0 ||
@@ -2902,6 +3004,7 @@ static unsigned reserve_peer(struct peer_fixture *peer, const char *mark)
         return 0;
     fix_format(peer->path, sizeof(peer->path), "%s.peer", mark);
     return listen(peer->handoff, 1) == 0 ? ntohs(a.sin_port) : 0;
+#endif
 }
 
 /* A row that runs, with what its files and its judgement need. */
@@ -2965,9 +3068,9 @@ static void row_finish(struct row_run *rr, const char *stop_at, int judged)
             judge(rr->r, rr->o, rr->scratch);
     }
     if (rr->peer.tcp >= 0)
-        close(rr->peer.tcp);
+        host_socket_close(rr->peer.tcp);
     if (rr->peer.handoff >= 0)
-        close(rr->peer.handoff);
+        host_socket_close(rr->peer.handoff);
     if (rr->peer.path[0] != '\0')
         unlink(rr->peer.path);
     for (i = 0; i < 6; i++)
@@ -3044,7 +3147,7 @@ static int row_procs(const char *name, long pids[ROW_PROCS])
 
     fix_format(inv, sizeof(inv), "%s/%s.invocation.json", fix_dir(), name);
     fix_format(scratch, sizeof(scratch), "%s/%s.scratch/", fix_dir(), name);
-    fix_format(mark, sizeof(mark), " mark=%s/%s\n", fix_dir(), name);
+    fix_format(mark, sizeof(mark), "mark=%s/%s", fix_dir(), name);
     return find_procs(NULL, any, pids);
 }
 
@@ -3056,7 +3159,7 @@ static void row_gone(const char *name)
 
     while ((n = row_procs(name, pids)) > 0)
         /* interval: the row's processes are counted again every 100 ms */
-        poll(NULL, 0, 100);
+        host_sleep_ms(100);
     if (n < 0) {
         printf("etude-scenario-test: fail: %s: its processes cannot be counted\n", name);
         fails++;
@@ -3068,12 +3171,14 @@ static int tell_peer(unsigned port, const char *text)
 {
     struct sockaddr_in a = loopback((long)port);
     char buf[64];
-    int fd = socket(AF_INET, SOCK_STREAM, 0), ok;
+    host_socket fd = sh_socket(SOCK_STREAM);
+    int ok;
 
     ok = fd >= 0 && connect(fd, (struct sockaddr *)&a, sizeof(a)) == 0 &&
-         write(fd, text, strlen(text)) == (ssize_t)strlen(text) && read(fd, buf, sizeof(buf)) > 0;
+         host_socket_write(fd, text, strlen(text)) == (ssize_t)strlen(text) &&
+         host_socket_read(fd, buf, sizeof(buf)) > 0;
     if (fd >= 0)
-        close(fd);
+        host_socket_close(fd);
     return ok ? 0 : -1;
 }
 
@@ -3154,7 +3259,7 @@ static void test_stop_all(const struct site *s)
     if (rr.started && attempt_read(&rr.a, WAITING, NULL)) {
         n = row_procs("stop-all", pids);
         for (i = 0; i < n; i++)
-            kill((pid_t)pids[i], SIGTERM);
+            sh_signal(pids[i], SIGTERM);
         rr.a.stopped = 1;
     }
     CHECK(rr.a.stopped, "stop-all: every process stopped during its wait");
@@ -3183,13 +3288,17 @@ static void test_isolation(const struct site *s)
         printf("etude-scenario-test: fail: hold: its service and machines did not start\n");
         fails++;
         if (hold.started)
-            kill(hold.a.pid, SIGKILL);
+            sh_signal(hold.a.pid, SIGKILL);
         row_finish(&hold, NULL, 1);
         row_gone("hold");
         return;
     }
     nb = row_procs("hold", before);
+#ifdef _WIN32
+    CHECK(nb >= 4, "hold: its scenario, service and machines run in owned jobs");
+#else
     CHECK(nb >= 6, "hold: its scenario, keepers, service and machines run");
+#endif
     for (i = 0; i <= nfail + 1; i++) {
         const struct row *r = i < nfail ? &fail_rows[i] : i == nfail ? kill_row : stop_all_row;
 
@@ -3219,13 +3328,12 @@ static void test_isolation(const struct site *s)
  * directory, its kernel's in the store among them. */
 static int machines_left(void)
 {
-    char qemu[PATH_MAX + 16], dir[PATH_MAX + 2];
+    char dir[PATH_MAX + 2];
     const char *any[] = {dir, NULL};
     long pids[ROW_PROCS];
 
-    fix_format(qemu, sizeof(qemu), "%s -accel", self);
     fix_format(dir, sizeof(dir), "%s/", fix_dir());
-    return find_procs(qemu, any, pids) != 0;
+    return find_procs(NULL, any, pids) != 0;
 }
 
 /** Copy the file at `from` to `to`, executable when `mode` says so. */
@@ -3300,21 +3408,7 @@ static int stand_in_site(struct site *s)
 /** Give the path of `name` on PATH in `out`, or NULL when it is not there. */
 static const char *on_path(const char *name, char *out, size_t size)
 {
-    const char *path = getenv("PATH"), *end;
-    size_t len;
-
-    for (; path != NULL && *path != '\0'; path = *end == ':' ? end + 1 : end) {
-        end = strchr(path, ':');
-        if (end == NULL)
-            end = path + strlen(path);
-        len = (size_t)(end - path);
-        if (len == 0)
-            continue;
-        snprintf(out, size, "%.*s/%s", (int)len, path, name);
-        if (access(out, X_OK) == 0)
-            return out;
-    }
-    return NULL;
+    return host_program(name, out, size);
 }
 
 /* The store of the real rows, under the tree's build/tests, since it has a
@@ -3535,17 +3629,48 @@ static const struct row forward_rows[] = {
 static void test_suspend(const struct site *s)
 {
     struct row_run killed;
+#ifdef _WIN32
+    long pids[ROW_PROCS];
+    HANDLE processes[ROW_PROCS];
+    DWORD status;
+    int count = 0, i, ended_count = 0, killed_scenario = 0;
+#else
     char ended[PATH_MAX];
+#endif
 
     run_row(&suspend_rows[0], s, NULL);
     run_row(&suspend_rows[1], s, STALLED);
     run_row(&suspend_rows[2], s, NULL);
     row_start(&killed, &suspend_rows[3], s);
+#ifdef _WIN32
+    if (killed.started && attempt_read(&killed.a, STALLED, NULL)) {
+        count = row_procs("suspend-kill", pids);
+        for (i = 0; i < count; i++)
+            processes[i] =
+                OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pids[i]);
+    }
+#endif
     row_finish(&killed, STALLED, 0);
     CHECK(killed.a.stopped, "suspend-kill: killed during its stop");
     row_gone("suspend-kill");
+#ifdef _WIN32
+    for (i = 0; i < count; i++) {
+        if (processes[i] != NULL) {
+            if (WaitForSingleObject(processes[i], INFINITE) == WAIT_OBJECT_0 &&
+                GetExitCodeProcess(processes[i], &status) && status != STILL_ACTIVE) {
+                ended_count++;
+                if (pids[i] == killed.a.pid)
+                    killed_scenario = status == ETUDE_WIN_STOP_STATUS;
+            }
+            CloseHandle(processes[i]);
+        }
+    }
+    CHECK(count >= 2 && ended_count == count && killed_scenario,
+          "suspend-kill: the scenario was killed and every stopped QEMU ended");
+#else
     fix_format(ended, sizeof(ended), "%s/suspend-kill.ended", fix_dir());
     CHECK(file_has(ended, "fake: terminated"), "suspend-kill: the stopped QEMU took its SIGTERM");
+#endif
 }
 
 /** Run the audio rows, the capture rows, the stand-in rows, the fault row,
@@ -3601,21 +3726,34 @@ static void test_real(void)
 
 /**
  * Run the test, or this program as the host tool or the stand-in for QEMU,
- * and exit; with one argument, the invocation, return so that the library's
- * own `main` runs the scenario. A constructor, since `main` is
- * libetude-case's.
+ * and exit; with one argument, the invocation, enter the library's ordinary
+ * scenario entry point. Windows constructors do not receive argc and argv.
  */
-static void __attribute__((constructor)) dispatch(int argc, char **argv)
+int main(int argc, char **argv)
 {
     const char *fake = getenv("ETUDE_FAKE_QEMU");
 
+#ifdef _WIN32
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(stderr), _O_BINARY);
+#endif
+    if (host_executable(argv[0], self, sizeof(self)) != 0 || sh_arm_stop(argc == 2) != 0)
+        return 1;
+#ifdef _WIN32
+    if (argc == 4 && strcmp(argv[1], "--scenario-guest") == 0)
+        return scenario_guest_actor(argv[2]);
+#endif
+    for (char *path = self; *path; path++)
+        if (*path == '\\')
+            *path = '/';
     if (argc == 2)
-        return;
+        return etude_case_main(argc, argv);
     if (argc >= 3 && strcmp(argv[1], "tool") == 0)
         exit(tool(argc, argv));
     if (fake != NULL && *fake != '\0')
         exit(fake_qemu(fake, argc, argv));
-    if (realpath(argv[0], self) == NULL) {
+    if (host_executable(argv[0], self, sizeof(self)) != 0) {
         printf("etude-scenario-test: fail: %s cannot be found\n", argv[0]);
         exit(1);
     }

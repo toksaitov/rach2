@@ -133,6 +133,11 @@ const char *fix_dir(void)
         printf("fixtures: no directory could be made under %s\n", tmp);
         exit(1);
     }
+#ifdef _WIN32
+    for (char *path = own; *path; path++)
+        if (*path == '\\')
+            *path = '/';
+#endif
     atexit(fix_remove);
     return own;
 }
