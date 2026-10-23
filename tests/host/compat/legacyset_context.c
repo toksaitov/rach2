@@ -1,5 +1,6 @@
 /* Focused context/history rows of the set-driver fixture; no QEMU needed. */
 #include "measurement_context.h"
+#include "etude/observe.h"
 #include "history_json.h"
 
 static const char measurement_commit[] = "1111111111111111111111111111111111111111";
@@ -148,6 +149,55 @@ static void measurement_exemption(struct jbuf *b, const struct etude_legacy_set_
     jbuf_puts(b, "]}");
     json_free(export);
 }
+/* A closed fixture trace is valid evidence even without system CPU counters.
+ * Its samples also end before this run, so it cannot be a timing baseline. */
+static void measurement_unavailable(struct jbuf *context, const char *id,
+                                    const struct etude_preparation_receipt *receipt)
+{
+    struct jbuf trace = {0};
+    char path[PATH_LEN], stop[PATH_LEN], hash[65], fields[1024];
+#ifdef _WIN32
+    const char *platform = "windows-native-counters-v1";
+#elif defined(__APPLE__)
+    const char *platform = "macos-mach-libproc-v1";
+#else
+    const char *platform = "linux-proc-counters-v1";
+#endif
+    jbuf_puts(&trace, "{\"kind\":\"start\",\"schema_version\":1,"
+              "\"method\":\"native-load-v1\",\"platform\":");
+    measurement_quote(&trace, platform);
+    jbuf_puts(&trace, ",\"run_id\":"); measurement_quote(&trace, id);
+    jbuf_puts(&trace, ",\"machine_id\":"); measurement_quote(&trace, receipt->clock.machine_id);
+    jbuf_puts(&trace, ",\"boot_id\":"); measurement_quote(&trace, receipt->clock.boot_id);
+    jbuf_puts(&trace, ",\"root_pid\":1,\"root_creation\":\"1\","
+              "\"observer_pid\":2,\"observer_creation\":\"2\","
+              "\"requested_interval_us\":1000000,\"process_limit\":4096}\n");
+    measurement_hash(trace.data, hash);
+    uint64_t utc = etude_observe_utc(receipt->end.utc);
+    for (int i = 0; i < 2; i++) {
+        snprintf(fields, sizeof fields,
+                 "{\"kind\":\"sample\",\"monotonic_us\":%llu,\"utc_us\":%llu,"
+                 "\"system_busy_cpu_us\":null,\"outside_cpu_lower_us\":0,"
+                 "\"shared_virtualizer_cpu_lower_us\":0,\"processes\":0,\"denied\":1,"
+                 "\"lost\":0,\"unclassified\":0,\"overflow\":false,"
+                 "\"identities_sha256\":\"%064d\"}\n",
+                 (unsigned long long)receipt->end.monotonic_us,
+                 (unsigned long long)utc, 0);
+        jbuf_puts(&trace, fields);
+    }
+    snprintf(fields, sizeof fields,
+             "{\"kind\":\"end\",\"utc_us\":%llu,\"monotonic_us\":%llu,"
+             "\"samples\":2,\"complete\":true,\"owner_lost\":false}\n",
+             (unsigned long long)utc, (unsigned long long)receipt->end.monotonic_us);
+    jbuf_puts(&trace, fields);
+    fix_format(path, sizeof path, "%s/%s.outer-trace", fix_dir(), id);
+    fix_format(stop, sizeof stop, "%s/%s.outer-stop", fix_dir(), id);
+    measurement_file(path, &trace);
+    jbuf_puts(context, ",\"outer_observation\":{\"trace\":"); measurement_quote(context, path);
+    jbuf_puts(context, ",\"stop_request\":"); measurement_quote(context, stop);
+    jbuf_puts(context, ",\"header_sha256\":"); measurement_quote(context, hash);
+    jbuf_puts(context, "}");
+}
 static struct etude_measurement_context *measurement_context(
     struct etude_legacy_set_opts *o, const char *id, int first, int bad,
     struct etude_preparation_receipt *receipt)
@@ -181,6 +231,7 @@ static struct etude_measurement_context *measurement_context(
     jbuf_puts(&b, ",\"preparation\":"); measurement_descriptor(&b, path, NULL);
     jbuf_puts(&b, ",\"exemption\":");
     if (first) measurement_exemption(&b, o, id, bad); else jbuf_puts(&b, "null");
+    if (bad == -1) measurement_unavailable(&b, id, receipt);
     jbuf_puts(&b, "}");
     fix_format(path, sizeof path, "%s/%s.context", fix_dir(), id);
     measurement_file(path, &b);
@@ -189,8 +240,30 @@ static struct etude_measurement_context *measurement_context(
                                &ctx, error, sizeof error), "context: bound context opens");
     return ctx;
 }
+static void measurement_unavailable_history(const struct run *r, const struct eh_json *load)
+{
+    const struct eh_json *eligible = eh_json_get(load, "context_eligible");
+    const struct eh_json *outer = eh_json_get(load, "outer");
+    const struct eh_json *summary = eh_json_get(outer, "summary");
+    const struct eh_json *cpu = eh_json_get(eh_json_get(summary, "first"), "system_busy_cpu_us");
+    const struct eh_json *ok = eh_json_get(summary, "comparison_available");
+    CHECK(eligible && eligible->type == 't' && ok && ok->type == 'f' && cpu && cpu->type == 'z',
+          "context: valid context retains unavailable CPU measurements without comparison");
+    char path[PATH_LEN], bytes[8192] = {0};
+    fix_format(path, sizeof path, "%s/%s.outer-trace", fix_dir(), r->name);
+    CHECK(read_text(path, bytes, sizeof bytes) > 0, "context: unavailable trace reads");
+    measurement_bound(eh_json_get(outer, "trace"), bytes);
+    const struct eh_json *locations = eh_json_get(eh_json_get(outer, "trace"), "locations");
+    const struct eh_json *kept = locations ? locations->child : NULL;
+    char retained[8192];
+    CHECK(kept && kept->type == 's' && read_text(kept->string, retained, sizeof retained) > 0 &&
+          !strcmp(retained, bytes), "context: raw unavailable trace is retained byte for byte");
+    fix_format(path, sizeof path, "%s/%s.outer-stop", fix_dir(), r->name);
+    CHECK(exists(path), "context: completed observation still receives its stop request");
+}
 static void measurement_history(struct run *r, const struct etude_measurement_context *ctx,
-                                 const struct etude_preparation_receipt *receipt, int first)
+                                 const struct etude_preparation_receipt *receipt, int first,
+                                 int unavailable)
 {
     struct eh_json *plan = measurement_record(r, "plan"), *run = measurement_record(r, "run");
     const struct eh_json *p = eh_json_get(plan, "data"), *data = eh_json_get(run, "data");
@@ -213,7 +286,8 @@ static void measurement_history(struct run *r, const struct etude_measurement_co
     const struct eh_json *charge = eh_json_get(budget, "charged_us");
     struct eh_json *load = measurement_blob(eh_json_get(data, "load"));
     const struct eh_json *available = eh_json_get(load, "comparison_available");
-    CHECK(available && available->type == 'f', "context: missing outer observation is not a baseline");
+    CHECK(available && available->type == 'f', "context: unavailable outer observation is not a baseline");
+    if (unavailable) measurement_unavailable_history(r, load);
     if (ctx) {
         uint64_t start = measurement_number(time, "start_us"), end = measurement_number(time, "end_us");
         CHECK(start == receipt->start.monotonic_us && end >= receipt->end.monotonic_us &&
@@ -305,7 +379,7 @@ static void test_contexts(void)
     measurement_export_cases();
     catch_stops();
     stop_signal = 0;
-    for (int n = 0; n < 11; n++) {
+    for (int n = 0; n < 12; n++) {
         char id[80], site[PATH_LEN];
         struct run r;
         struct etude_legacy_set_opts o;
@@ -321,7 +395,7 @@ static void test_contexts(void)
         o.run_id = id; o.commit = measurement_commit; o.stop = &stop_signal;
         o.site = in(site, sizeof site, "site.permits");
         if (n) ctx = measurement_context(&o, id, n >= 2 && n < 8,
-                                          n >= 3 && n < 8 ? n - 2 : 0, &receipt);
+                                          n == 11 ? -1 : n >= 3 && n < 8 ? n - 2 : 0, &receipt);
         o.context = ctx;
         if (n == 8) o.commit = "2222222222222222222222222222222222222222";
         if (n == 9) o.commit = NULL;
@@ -331,9 +405,9 @@ static void test_contexts(void)
         r.status = o.out ? etude_legacy_set(&o) : 2;
         if (o.out) fclose(o.out);
         history_read(&r);
-        if (n < 3) {
+        if (n < 3 || n == 11) {
             CHECK(!r.status && !r.read, "context: valid prepared host run succeeds");
-            measurement_history(&r, ctx, &receipt, n == 2);
+            measurement_history(&r, ctx, &receipt, n == 2, n == 11);
         } else {
             CHECK(r.status == 2 && !count_kind(&r.h, "attempt"),
                   "context: unrelated selection, run, commit or attempt refuses work");
