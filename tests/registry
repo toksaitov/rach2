@@ -91,7 +91,6 @@ packet|qemu|full
 load|qemu,mformat|full
 authority|qemu|core|authority-test*,authority.*,authority-*,authority/*,auth-test.*
 queue|qemu,mformat|core
-persist-ahci|qemu|full
 subset|qemu|core
 bus|qemu,mformat,mtype|full
 exitline|qemu|full

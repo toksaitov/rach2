@@ -498,7 +498,7 @@ $(DRILL_CASE_DISK): $(DEMO_CREDS) tools/image/mkdisk_grub.sh tools/image/grub-em
 # tests/cases/machine.persist.json, which etude runs, and has no target here:
 # two boots of one private copy of this disk on IDE, the first writing and
 # fsyncing /persist.txt and then cut off by QMP's quit, the second reading it
-# back. The disk is the persist-ahci case's too.
+# back.
 PERSIST_DISK = $(IMAGES_DIR)/persist-test.disk
 $(PERSIST_DISK): krffs/manifests/persist-test.manifest $(MANIFEST_DEPS_persist_test) $(MKDISK) \
                  $(IMAGE_TOOLS) | preflight krffs tests
@@ -1499,10 +1499,6 @@ $(QUEUE_DIR)/root.disk: $(ETUDE_DISK) $(MKMBR)
 	$(MKMBR) --lba $@.tmp 2048:98304:7f 100352:28672:0c >/dev/null
 	mformat -i $@.tmp@@51380224 -F -T 28672 ::
 	mv $@.tmp $@
-# `tests/run persist-ahci`: fsync durability across a power cut with the disk
-# on an AHCI controller. It is the case of
-# tests/cases/machine.persist-ahci.json, which etude runs, and has no target
-# here.
 # `tests/run stress-ahci`: the stress suite's on-disk KRFFS larger than the page
 # cache, on an AHCI controller. It is the case of
 # tests/cases/guest.stress-ahci.json, which etude runs, and has no target

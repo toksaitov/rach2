@@ -1,9 +1,8 @@
 /*
- * persist_scenario.c: the scenario of machine.persist.fsync and
- * machine.persist-ahci.fsync (../machine.persist.json,
- * ../machine.persist-ahci.json). persistprobe writes and syncs a file on the
- * KRFFS root of a disk, the machine is cut off, and a second boot of the same
- * copy reads the file back.
+ * persist_scenario.c: the scenario of machine.persist.fsync
+ * (../machine.persist.json). persistprobe writes and syncs a file on the KRFFS
+ * root of a disk, the machine is cut off, and a second boot of the same copy
+ * reads the file back.
  */
 #include <stdio.h>
 #include <stdlib.h>

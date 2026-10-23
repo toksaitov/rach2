@@ -92,7 +92,7 @@ The images are written under `build/images/`, or `build/x86_64/images/` for x86-
 | `disk-test` | disks of `crash` and the other disk suites | probes the debug shell runs from a disk root |
 | `etude-disk` | the private disks of etude's guest cases on a KRFFS root on disk: `disk-q35`, `stress`, `stress-ahci`, `fdlock`, and `queue`'s root with a FAT32 partition added | `etude-guest`, `blockprobe`, `stressprobe`, `ahciprobe`, and the descriptor and mount probes `fdstale`, `bootprobe` and `procprobe` |
 | `procfiles-extra` | the additional staging in procfiles' copy of os-real | `procfilesmusl`, which judges the installed applets |
-| `persist-test` | disks of `persist`, `persist-ahci` | `persistprobe` |
+| `persist-test` | the disk of `persist` | `persistprobe` |
 | `cred-persist-test` | the disk of `cred-persist` | `creddisk` and the two files it replaces |
 | `shutdown-test` | the disk of `shutdown` | BusyBox, a set-user-ID `su`, `init-shell`, a test account |
 | `doom-test` | the disk of `doom` | BusyBox, `init-shell`, Doom and its WAD when the tree has one |
