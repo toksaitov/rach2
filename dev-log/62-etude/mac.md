@@ -1,6 +1,6 @@
 # Native Mac runtime acceptance
 
-T48 passed on the Mac mini on 2026-10-20. The accepted etude source is `b1356deab76f8f47ea59698436134d92a2d8a205`. The guest inputs use the kernel and probe sources at `2a495869`. This is the focused runtime acceptance for #637. T91 still owes the whole collection on both architectures. The hashes of the native executables and guest artifacts are in [mac-artifacts.md](mac-artifacts.md).
+T48 passed on the Mac mini on 2026-10-20. The accepted etude source is `b1356deab76f8f47ea59698436134d92a2d8a205`. The guest inputs use the kernel and probe sources at `2a495869`. This is the focused runtime acceptance for #637. The whole collection, T91, is recorded in [mac-run.md](mac-run.md). The hashes of the native executables and guest artifacts are in [mac-artifacts.md](mac-artifacts.md).
 
 ## Machine and build
 
