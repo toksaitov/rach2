@@ -89,7 +89,12 @@ static int krffs_run_check_utility(const char *program, const char *path, off_t 
  */
 static int krffs_check_region(const char *path, off_t offset, size_t size)
 {
-    int result = krffs_run_check_utility(KRFFS_FILE_SYSTEM_CHECK_UTILITY_NAME, path, offset, size);
+    const char *prepared = getenv("KRFFS_FSCK");
+    int result;
+
+    if (prepared != NULL && prepared[0] != '\0')
+        return krffs_run_check_utility(prepared, path, offset, size);
+    result = krffs_run_check_utility(KRFFS_FILE_SYSTEM_CHECK_UTILITY_NAME, path, offset, size);
 
     if (result == -1 || result == 127) {
         result =
