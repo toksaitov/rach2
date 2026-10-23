@@ -635,6 +635,7 @@ static int run_step(struct prep *p, struct step *s)
     char **argv = log != NULL ? step_argv(s, log) : NULL;
     struct etude_exec_spec spec;
     struct etude_proc *proc = NULL;
+    struct follow follow = {log, -1};
     enum ended ended;
     int status;
 
@@ -659,10 +660,12 @@ static int run_step(struct prep *p, struct step *s)
     if (etude_exec_start(p->ex, &spec, &proc) != 0) {
         status = failed(p, "%s: it did not start: %s", s->name, strerror(errno));
     } else {
-        ended = await_step(p, proc, NULL);
+        ended = await_step(p, proc, s->capture ? NULL : &follow);
         status = judge(p, s, etude_proc_result(proc), ended, log);
         etude_proc_free(proc);
     }
+    if (follow.fd >= 0)
+        close(follow.fd);
     free(argv);
     free(log);
     return status;
