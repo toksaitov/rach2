@@ -63,8 +63,7 @@ def rows(root, repo):
     env = dict(os.environ)
     real_make = env.get("ETUDE_MAKE_REAL") or shutil.which("make")
     for key in ("ETUDE_ADMITTED", "ETUDE_SITE", "RACH2_PORT_OFFSET", "SSH_TEST_PORT",
-                "RACH2_RUN_GROUP", "RACH2_RUN_WORK", "RACH2_RUN_UTIL",
-                "RACH2_RUN_TREE_LOCK", "RACH2_RUN_STATUS", "MAKEFLAGS", "MFLAGS",
+                "RACH2_RUN_WORK", "RACH2_RUN_STATUS", "MAKEFLAGS", "MFLAGS",
                 "MAKELEVEL", "MAKEOVERRIDES", "ETUDE_BUILD_JOBS", "JOBS"):
         env.pop(key, None)
     bridge = repo / "build/tools/etude/etude-bridge"

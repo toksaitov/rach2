@@ -67,7 +67,6 @@ def rows(reader, helper, root):
     ports = root / "ports"
     ports.mkdir(exist_ok=True)
     env = dict(os.environ, RACH2_RUN_WORK=str(work))
-    env.pop("RACH2_RUN_TREE_LOCK", None)
     env.pop("RACH2_RUN_STATUS", None)
     env.pop("RACH2_HOST_LOCK", None)
     status = build / ".run.status.fixture"

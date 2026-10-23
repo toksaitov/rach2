@@ -100,9 +100,12 @@ def choose_rows(selector, scratch):
                f"status {p.returncode}, wrote {wrote}, said {p.stderr.strip()!r}")
 
 
-TREE_FILES = ["tests/system/runlock.sh", "tests/system/runner/runutil.c",
-              "tools/setup/e2fsprogs_path.sh", "tools/setup/hostcheck.c",
-              "tools/setup/ovmf_path.sh"]
+TREE_FILES = ["tools/etude/hold.sh", "tools/etude/hold.h", "tools/etude/etude_hold.c",
+              "tools/etude/posix/hold.c", "tools/etude/etude_ports.c",
+              "tools/etude/portlock.c", "tools/etude/include/etude/portlock.h",
+              "tools/etude/win/winfmt.c", "tools/etude/win/winfmt.h",
+              "tools/setup/e2fsprogs_path.sh",
+              "tools/setup/hostcheck.c", "tools/setup/ovmf_path.sh"]
 
 
 def run_rows(selector, runner, scratch):
@@ -111,6 +114,7 @@ def run_rows(selector, runner, scratch):
     for f in TREE_FILES:
         (tree / f).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(REPO / f, tree / f)
+    (tree / "tests/system").mkdir(parents=True)
     shutil.copy(runner, tree / "tests/run")
     shutil.copy(selector, tree / "tests/system/case_select.py")
     (tree / "tests/registry").write_text("style|-|full||128\nhost|-|full||128\n")

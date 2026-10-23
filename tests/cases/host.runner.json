@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "host.runner",
-  "summary": "The self-test of runutil's process groups, which tests/run uses, booting nothing; the program is tests/cases/host/runner.sh",
+  "summary": "The self-test of runutil's process groups, which tools/dev/poll_kernels.sh uses, booting nothing; the program is tests/cases/host/runner.sh",
   "cases": [
     {
       "case_id": "host.runner.group",

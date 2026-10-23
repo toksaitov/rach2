@@ -25,14 +25,6 @@ if [ "${ETUDE_ADMITTED:-}" != "$site" ] && { [ -e "$site" ] || [ -L "$site" ] ||
     exec "$launcher" legacy sh "$0" "$@"
 fi
 
-# A run started again under its port claim owns the tree lock it took before
-# the claim, from this line on: a signal ends it through the exit trap, which
-# removes the lock and the run's scratch (see the claim below).
-if [ -n "${RACH2_RUN_TREE_LOCK:-}" ]; then
-    trap 'rm -rf "$RACH2_RUN_WORK" "$RACH2_RUN_TREE_LOCK" "${RACH2_RUN_STATUS:-}"' 0
-    trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
-fi
-
 # ARCH names the architecture the run builds and boots, as mk/arch.mk does:
 # i686 when it is unset, into build/ on qemu-system-i386, or x86_64, into
 # build/x86_64/ on qemu-system-x86_64. Every make the run starts is given it,
@@ -52,43 +44,42 @@ ARCH_VAR="ARCH=$ARCH"
 # is rach2/kernel there. tests/system/suites.mk says which boots it replaces.
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
-# Compile the host helper in private scratch before making a process group.
-# No product or shared build file is written by this bootstrap. The exit trap
-# removes the scratch unless the exec below hands it to the run.
-if [ "${RACH2_RUN_GROUP:-}" != "$$" ]; then
-    WORK=
-    trap '[ -z "$WORK" ] || rm -rf "$WORK"' 0
-    trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
+# A run is two processes. The first, which the caller starts, checks the names
+# and the host in a private scratch directory, takes the tree through
+# etude-hold (hold_tree below), waits for the hold to end and removes the
+# scratch and the status record. The second is the hold's command, the run
+# proper: this script again, with RACH2_RUN_WORK naming the scratch and
+# RACH2_RUN_STATUS the status record, which it removes as well when it ends.
+# No product or shared build file is written before the hold.
+HELD=""
+if [ -n "${RACH2_RUN_WORK:-}" ]; then
+    HELD=1
+    WORK=$RACH2_RUN_WORK
+    STATUS_RECORD=${RACH2_RUN_STATUS:-}
+else
+    WORK=""
+    STATUS_RECORD=""
+fi
+trap '[ -z "$WORK" ] || rm -rf "$WORK"; [ -z "$STATUS_RECORD" ] || rm -f "$STATUS_RECORD"' 0
+trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
+# The first process compiles the two helpers the run needs before it builds,
+# etude-hold and etude-ports, with the host's cc into the scratch.
+if [ -z "$WORK" ]; then
     WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-run.XXXXXX") || exit 1
-    if ! cc -O2 -Wall -Wextra -o "$WORK/runutil" "$REPO/tests/system/runner/runutil.c"; then
-        echo "run: result: refused: the runner helper did not compile" >&2
-        rm -rf "$WORK"; exit 1
+    if ! { mkdir "$WORK/bin" &&
+        cc -std=c99 -O2 -D_DEFAULT_SOURCE -o "$WORK/bin/etude-hold" \
+            "$REPO/tools/etude/etude_hold.c" "$REPO/tools/etude/posix/hold.c" &&
+        cc -std=c99 -O2 -D_DEFAULT_SOURCE -I"$REPO/tools/etude/include" -I"$REPO/tools/etude" \
+            -o "$WORK/bin/etude-ports" "$REPO/tools/etude/etude_ports.c" \
+            "$REPO/tools/etude/portlock.c" "$REPO/tools/etude/win/winfmt.c"; }; then
+        echo "run: result: refused: the run's helpers did not compile" >&2
+        exit 1
     fi
-    RACH2_RUN_GROUP=$$; RACH2_RUN_WORK=$WORK; RACH2_RUN_UTIL=$WORK/runutil
-    export RACH2_RUN_GROUP RACH2_RUN_WORK RACH2_RUN_UTIL
-    # A shell with job control makes the first command of a pipeline the
-    # leader of a group that holds the whole pipeline, such as the `tail` the
-    # run's output is piped to, and the end of a run stops its group. So a
-    # run that finds itself a leader starts in a group of its own under
-    # `runutil lead`, which passes that whole group the signals that reach
-    # this process and exits with the run's status.
-    if [ "$("$RACH2_RUN_UTIL" pgid $$)" = "$$" ]; then
-        # shellcheck disable=SC2016 # $$ is the inner shell's, expanded there
-        exec "$RACH2_RUN_UTIL" lead sh -c 'RACH2_RUN_GROUP=$$; export RACH2_RUN_GROUP; exec "$0" group sh "$@"' \
-            "$RACH2_RUN_UTIL" "$0" "$@"
-    fi
-    exec "$RACH2_RUN_UTIL" group sh "$0" "$@"
 fi
 case "${RACH2_PORT_OFFSET:-}" in
-    *[!0-9]*) echo "run: result: refused: RACH2_PORT_OFFSET must be a whole number" >&2; rm -rf "$RACH2_RUN_WORK"; exit 2 ;;
+    *[!0-9]*) echo "run: result: refused: RACH2_PORT_OFFSET must be a whole number" >&2; exit 2 ;;
 esac
-WORK=$RACH2_RUN_WORK
-STATUS_RECORD=${RACH2_RUN_STATUS:-}
-HANDOFF_LOCK=${RACH2_RUN_TREE_LOCK:-}
-LOCKED=${HANDOFF_LOCK:+1}
-trap 'rm -rf "$WORK" ${HANDOFF_LOCK:+"$HANDOFF_LOCK"} ${STATUS_RECORD:+"$STATUS_RECORD"}' 0
-trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
-unset RACH2_RUN_GROUP RACH2_RUN_WORK RACH2_RUN_TREE_LOCK RACH2_PROGRESS_FD RACH2_HOST_LOCK RACH2_RUN_STATUS
+unset RACH2_RUN_WORK RACH2_PROGRESS_FD RACH2_HOST_LOCK RACH2_RUN_STATUS
 LC_ALL=C; export LC_ALL
 
 # e2fsprogs, where a package manager keeps it off the path, so that the suites
@@ -167,7 +158,6 @@ WORKERS=$(awk -v n="$WORKERS" 'BEGIN {if (n < 1 || n > 1024) exit 1; printf "%.0
 # run prints its lines and exits as the signal says. A signal before or after
 # the driver ends the run at once, and stops the make it waits for. `finish`
 # runs once: the trap calls it and the EXIT trap finds it done.
-OWN_PGID=$("$RACH2_RUN_UTIL" pgid $$)
 DRIVER=""
 WATCHER=""
 MAKE_PID=""
@@ -179,12 +169,11 @@ finish() {
     FINISHED=1
     trap '' INT TERM HUP
     [ -z "$WATCHER" ] || kill "$WATCHER" 2>/dev/null
-    [ -z "$MAKE_PID" ] || "$RACH2_RUN_UTIL" killgroup "$MAKE_PID" 15 2>/dev/null
+    [ -z "$MAKE_PID" ] || stop_make
     if [ -n "$DRIVER" ]; then
         kill -TERM "$DRIVER" 2>/dev/null
         wait "$DRIVER" 2>/dev/null
     fi
-    lock_release
     rm -rf "$WORK"
     [ -z "$STATUS_RECORD" ] || rm -f "$STATUS_RECORD"
 }
@@ -193,86 +182,72 @@ trap 'SIGNALLED=1; finish; echo "run: result: interrupted by int" >&2; exit 130'
 trap 'SIGNALLED=1; finish; echo "run: result: interrupted by term" >&2; exit 143' TERM
 trap 'SIGNALLED=1; finish; echo "run: result: interrupted by hup" >&2; exit 129' HUP
 # One run at a time on a tree: two share `build/` and its images, and each suite
-# kills what runs under its directory at its start. Two runners are kept apart
-# by a POSIX record lock on `build/.run.guard`; beside it a directory, made
-# atomically, holds the owner's pid, process group, scratch directory and
-# arguments, which is what a second runner prints and what a takeover reads. A
-# lock with no owner file yet is one being taken this moment, until it is ten
-# seconds old. A lock whose owner is gone is taken over only when nothing of its
-# group is left: a runner killed with KILL cannot clean up, and its makes and
-# machines may still be running; they are named for the person to stop. The
-# takeover moves the old lock aside by rename, which one taker at most can do.
-# The pid alone does not say the owner is alive, since pids are reused; the pid
-# is the owner's while its group is the recorded one. A script holds the tree
-# through etude-hold or runlock_exec.sh, and a run it starts finds the lock's
-# owner among its ancestors (runlock.sh) and runs under that hold, taking and
-# releasing nothing; a script a run starts finds the run's hold the same way. A
-# script's lock, whose owner file says `held`, is never taken over: only its
-# holder's clean exit removes it, since a holder that is gone may have left
-# work running in groups no ledger names. A runner that took the tree and then
-# claimed its ports starts again as the same process, finds itself the owner,
-# and keeps the tree.
+# kills what runs under its directory at its start. The lock is etude-hold's
+# (tools/etude/Readme.md): a POSIX record lock on `build/.run.guard`, and beside
+# it the directory `build/.run.lock`, whose owner record gives the holder's
+# identity, its command's process group and the run's arguments, which is what
+# a second run prints and what a takeover reads. hold_tree runs the run proper
+# as etude-hold's command, a process group of its own, which a TERM, INT or
+# HUP that reaches the holder reaches once as TERM; the holder outlives the
+# run and removes the directory when it ends. A lock whose holder is gone is
+# taken over only when nothing of its command's group is left, and a script's
+# lock, whose record says `held`, never is. A run started under the hold of a
+# script or a caller finds the holder among its ancestors (tools/etude/hold.sh)
+# and runs under that hold, taking and releasing nothing; a script the run
+# starts finds the run's hold the same way.
 LOCK="$REPO/build/.run.lock"
-. "$REPO/tests/system/runlock.sh"
+. "$REPO/tools/etude/hold.sh"
 lock_field() { sed -n "s/^$1 //p" "$LOCK/owner" 2>/dev/null; }
-lock_owner_alive() {
-    opid=$(lock_field pid)
-    [ -n "$opid" ] && [ "$("$RACH2_RUN_UTIL" pgid "$opid" 2>/dev/null)" = "$(lock_field pgid)" ]
+# hold_tree ARGS: run the run proper under etude-hold and exit with its status.
+# The holder runs in the background, so that a TERM, INT or HUP that reaches
+# this process is passed on to it at once, as TERM, which is what the holder
+# passes to its command; under a caller's hold, where etude-hold becomes the
+# run proper, an INT would be lost, since a background command starts with
+# INT ignored. The run proper's standard input is /dev/null, as a background
+# command's is. A refusal of the tree prints its reason and exits 1. The EXIT
+# trap removes the scratch and the status record when the run has ended.
+hold_tree() {
+    STATUS_RECORD=$REPO/build/.run.status.$$
+    RACH2_RUN_WORK=$WORK; RACH2_RUN_STATUS=$STATUS_RECORD
+    export RACH2_RUN_WORK RACH2_RUN_STATUS
+    holder=""
+    stop=""
+    trap 'stop=1; [ -z "$holder" ] || kill -TERM "$holder" 2>/dev/null' INT TERM HUP
+    trap '[ -z "$WORK" ] || rm -rf "$WORK"; [ -z "$STATUS_RECORD" ] || rm -f "$STATUS_RECORD"' EXIT
+    "$WORK/bin/etude-hold" -r "$REPO" run sh "$0" "$@" &
+    holder=$!
+    [ -z "$stop" ] || kill -TERM "$holder" 2>/dev/null
+    while :; do
+        wait "$holder"
+        held_rc=$?
+        kill -0 "$holder" 2>/dev/null || break
+    done
+    # A holder killed with KILL leaves the run proper running, and the run's
+    # own exit removes the scratch and the status record.
+    [ "$held_rc" != 137 ] || { WORK=""; STATUS_RECORD=""; }
+    exit "$held_rc"
 }
-lock_being_taken() {
-    [ ! -f "$LOCK/owner" ] && "$RACH2_RUN_UTIL" young "$LOCK" 10
-}
-lock_survivors() {
-    opgid=$(lock_field pgid)
-    ps -A -o pid= -o pgid= | awk -v group="$opgid" '$2 == group {print $1}' |
-        while read -r p; do kill -0 "$p" 2>/dev/null && echo "$p"; done | tr '\n' ' '
-}
-lock_take() {
-    mkdir -p "$REPO/build"
-    if [ "${RACH2_TREE_HELD:-}" = "$$" ] && [ "$(lock_field pid)" = "$$" ]; then
-        LOCKED=1
-        return 0
-    fi
-    if runlock_held "$REPO"; then
-        echo "run: the tree is held for this run by its caller, pid $RACH2_TREE_HELD"
-        return 0
-    fi
-    if [ "${RACH2_RUN_LOCK:-}" != "$$" ]; then
-        RACH2_RUN_LOCK=$$; RACH2_RUN_GROUP=$$; RACH2_RUN_WORK=$WORK
-        export RACH2_RUN_LOCK RACH2_RUN_GROUP RACH2_RUN_WORK
-        exec "$RACH2_RUN_UTIL" lock "$REPO/build/.run.guard" "$LOCK/owner" sh "$0" "$@"
-    fi
-    unset RACH2_RUN_LOCK
-    if mkdir "$LOCK" 2>/dev/null; then
-        :
-    elif lock_being_taken; then
-        echo "run: another run is taking this tree" >&2
-        return 1
-    elif lock_owner_alive; then
-        echo "run: another run holds this tree: $(lock_field pid), $(lock_field args), since $(lock_field since)" >&2
-        return 1
-    elif [ -n "$(lock_field held)" ]; then
-        echo "run: a script's hold on this tree was left: $(lock_field args), since $(lock_field since); its work may still run; stop its work and remove $LOCK" >&2
-        return 1
-    elif [ -n "$(lock_survivors)" ]; then
-        echo "run: a run that is gone left work running: pids $(lock_survivors); stop them before the next run" >&2
-        return 1
-    else
-        echo "run: taking over the lock a run left: $(lock_field pid), $(lock_field args)"
-        mv "$LOCK" "$LOCK.old.$$" 2>/dev/null || { echo "run: another run took the tree first" >&2; return 1; }
-        rm -rf "$LOCK.old.$$"
-        mkdir "$LOCK" 2>/dev/null || { echo "run: another run took the tree first" >&2; return 1; }
-    fi
-    { echo "pid $$"; echo "pgid $OWN_PGID"; echo "work $WORK"; echo "since $(date '+%Y-%m-%d %H:%M:%S')"; echo "args $*"; } > "$LOCK/owner.new"
-    mv "$LOCK/owner.new" "$LOCK/owner"
-    LOCKED=1
-    RACH2_TREE_HELD=$$
-    export RACH2_TREE_HELD
-}
+# stop_make: stop the make the run waits for, with TERM. A run that leads its
+# process group, as etude-hold's command does, stops the whole group, which
+# holds the make and its recipes and nothing that `finish` has not stopped. A
+# run under a caller's hold, whose group is the caller's, stops the make and
+# each of its descendants that one reading of the process table finds.
 # shellcheck disable=SC2329 # run from finish, from the traps
-lock_release() {
-    [ -n "$LOCKED" ] && [ "$(sed -n 's/^pid //p' "$LOCK/owner" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK"
-    LOCKED=""
+stop_make() {
+    if [ "$(ps -o pgid= -p $$ | tr -d ' ')" = "$$" ]; then
+        kill -s TERM 0 2>/dev/null
+        return
+    fi
+    # shellcheck disable=SC2046 # one pid a word
+    kill -s TERM $(ps -A -o pid= -o ppid= | awk -v root="$MAKE_PID" '
+        { below[$2] = below[$2] " " $1 }
+        END {
+            todo = root
+            while (todo != "") {
+                n = split(todo, now, " "); todo = ""
+                for (i = 1; i <= n; i++) { print now[i]; todo = todo below[now[i]] }
+            }
+        }') 2>/dev/null
 }
 
 # The registry, one field at a time. Order in the file is the schedule order.
@@ -487,13 +462,15 @@ check_tools() { # check_tools NAME
     done
 }
 
-# A make run under the runner is started in the background, in a process
-# group of its own, and waited for, since the shell runs a trap at once while
-# it waits and only after the command ends while one runs in the foreground:
-# a signal then stops the run at once, and `finish` stops the make's group.
+# A make run under the runner is started in the background, in the run's
+# process group, and waited for, since the shell runs a trap at once while it
+# waits and only after the command ends while one runs in the foreground: a
+# signal then stops the run at once, and `finish` stops the make (stop_make).
+# A make in the run's group is one of the processes of the hold's command, which
+# a takeover of the lock of a run killed with KILL finds still running.
 run_make() {
     # shellcheck disable=SC2086
-    "$RACH2_RUN_UTIL" group make -C "$REPO" --no-print-directory $ARCH_VAR "$@" &
+    make -C "$REPO" --no-print-directory $ARCH_VAR "$@" &
     MAKE_PID=$!
     wait "$MAKE_PID"
     make_rc=$?
@@ -560,7 +537,7 @@ watch_scripts() {
     trap - EXIT INT HUP
     trap '[ -z "$nap" ] || kill "$nap" 2>/dev/null; exit 0' TERM
     while :; do
-        "$RACH2_RUN_UTIL" sleep 2 &
+        sleep 2 &
         nap=$!
         wait "$nap"
         nap=""
@@ -719,9 +696,9 @@ for suite in "$@"; do
         *) sockets="" ;;
     esac
 done
-# A runner that took the tree and then claimed its ports, below, starts again
-# as the same process and has made these checks already.
-if [ "${RACH2_TREE_HELD:-}" != "$$" ]; then
+# The run proper, the hold's command, finds these checks made by the process
+# that took the tree for it.
+if [ -z "$HELD" ]; then
     check_host $diskimage $sockets || { echo "run: result: refused: this host cannot run the set" >&2; exit 1; }
     [ -n "$sockets" ] || check_space || exit 1
     check_declarations || exit 1
@@ -729,10 +706,22 @@ fi
 
 set_accel || exit 2
 set_cpus || exit 2
-lock_take "$@" || { echo "run: result: refused: the tree is not free" >&2; exit 1; }
-STATUS_RECORD=$REPO/build/.run.status.$$
+NEED_PORTS=""
+[ -z "$machines" ] || [ -n "${RACH2_PORT_OFFSET:-}" ] || NEED_PORTS=1
+[ -n "$HELD" ] || hold_tree "$@"
+etude_held "$REPO" || {
+    echo "run: result: refused: the tree is not held for this run: RACH2_TREE_HELD must name an ancestor that build/.run.lock/owner names" >&2
+    exit 1
+}
+if [ "$(lock_field pid)" != "$PPID" ]; then
+    echo "run: the tree is held for this run by its caller, pid $RACH2_TREE_HELD"
+fi
+# The status record, which tools/flow/test_status.py reads: the identity of
+# the holder, which runs for as long as the run, the scratch, where the port
+# claim records its wait, and the names.
+[ -n "$STATUS_RECORD" ] || { echo "run: result: refused: RACH2_RUN_STATUS is not set" >&2; exit 1; }
 {
-    echo "identity $("$RACH2_RUN_UTIL" identity $$)"
+    echo "identity $(lock_field identity)"
     echo "work $WORK"
     echo "args $*"
 } > "$STATUS_RECORD.new"
@@ -747,37 +736,34 @@ host_lock() { # host_lock NAME...
     done
     echo shared
 }
-# The block of host ports the run's machines forward, claimed last, after
-# every check that can refuse the run and after the tree is taken, and only
-# when a suite named boots a machine: one whose tools name QEMU. `inventory`,
-# a refused command and a set of suites that boot nothing, such as `style` and
-# `runner`, claim nothing. Every tree on the host, in every account, claims a
-# block from the same lock files in /tmp, so two trees never forward the same
-# port; the helper holds the lock through exec for as long as this process
-# lives and sets RACH2_PORT_OFFSET, which the set driver adds to the ports of
-# the machine cases. The runner starts again under the lock with the names it
-# was given, as a set expanded them, and keeps the tree it took:
-# RACH2_RUN_TREE_LOCK names the lock directory, which the helper removes if
-# the claim is interrupted, and which the run owns again from its first line.
-# A caller that set the offset itself owns the ports it names. Before the
-# block, the helper takes the host lock in the same directory, of the kind
-# RACH2_HOST_LOCK gives it: `shared`, which any number of runs have at once,
-# or, for a run with a suite that declares more guest memory than half of the
-# host's, as `bigmem` does on the testing host, `alone`, which waits for the
-# runs in progress to end and keeps every other run that claims a block from
-# starting until this one ends (`host_claim` in the helper says how).
-# The variable is given to the helper alone, which unsets it before the exec.
-# RACH2_PORT_DIR names another directory for the block files and the host
-# lock's, as it does for tools/ci/bisect.sh.
-if [ -n "$machines" ] && [ -z "${RACH2_PORT_OFFSET:-}" ]; then
-    RACH2_RUN_GROUP=$$; RACH2_RUN_WORK=$WORK
-    export RACH2_RUN_GROUP RACH2_RUN_WORK
-    if [ -n "$LOCKED" ]; then
-        RACH2_RUN_TREE_LOCK=$LOCK; export RACH2_RUN_TREE_LOCK
-    fi
-    RACH2_RUN_STATUS=$STATUS_RECORD; export RACH2_RUN_STATUS
-    RACH2_HOST_LOCK=$(host_lock "$@"); export RACH2_HOST_LOCK
-    exec "$RACH2_RUN_UTIL" ports "${RACH2_PORT_DIR:-/tmp}" 10 sh "$0" "$@"
+# The block of host ports the run's machines forward, claimed by etude-ports
+# last, after every check that can refuse the run and after the tree is held,
+# and only when a suite named boots a machine: one whose tools name QEMU.
+# `inventory`, a refused command and a set of suites that boot nothing, such
+# as `style` and `host`, claim nothing. Every tree on the host, in every
+# account, claims a block from the same lock files in /tmp, so two trees never
+# forward the same port; the helper holds the lock through exec for as long as
+# this process lives and sets RACH2_PORT_OFFSET, which the set driver adds to
+# the ports of the machine cases. The run starts again under the lock with the
+# names it was given, as a set expanded them; while the helper waits it writes
+# the wait to `claim.wait` in RACH2_RUN_WORK, which the status record names.
+# The holder keeps the tree while the claim waits, and removes the lock when
+# the claim is interrupted, as the first process removes the scratch and the
+# status record. A caller that set the offset itself owns the ports it names.
+# Before the block, the helper takes the host lock in the same directory, of
+# the kind RACH2_HOST_LOCK gives it: `shared`, which any number of runs have
+# at once, or, for a run with a suite that declares more guest memory than
+# half of the host's, as `bigmem` does on the testing host, `alone`, which
+# waits for the runs in progress to end and keeps every other run that claims
+# a block from starting until this one ends. The variable is given to the
+# helper alone, which unsets it before the exec. RACH2_PORT_DIR names another
+# directory for the block files and the host lock's, as it does for
+# tools/ci/bisect.sh.
+if [ -n "$NEED_PORTS" ]; then
+    RACH2_RUN_WORK=$WORK; RACH2_RUN_STATUS=$STATUS_RECORD
+    RACH2_HOST_LOCK=$(host_lock "$@")
+    export RACH2_RUN_WORK RACH2_RUN_STATUS RACH2_HOST_LOCK
+    exec "$WORK/bin/etude-ports" "${RACH2_PORT_DIR:-/tmp}" 10 sh "$0" "$@"
 fi
 [ -z "${RACH2_PORT_OFFSET:-}" ] || export RACH2_PORT_OFFSET
 # The accelerator the suites' machines run on, which the set driver gives
@@ -800,7 +786,7 @@ echo "run: starting: $* (pid $$, $(date '+%Y-%m-%d %H:%M:%S'), architecture $ARC
 # called. A plain `make` mints nothing, which is what keeps the absence
 # meaningful.
 if [ ! -f "$REPO/krffs/recovery_authorized_keys" ]; then
-    make -C "$REPO" --no-print-directory recovery-key || {
+    run_make recovery-key || {
         echo "run: result: the recovery system's key could not be made" >&2
         exit 1
     }
