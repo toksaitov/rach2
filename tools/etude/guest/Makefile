@@ -34,7 +34,7 @@ CONFIG_TEXT = $(CC) $(CFLAGS) $(LINK_PRE) $(LINK_POST)
 include $(TOP)/mk/fingerprint.mk
 
 .PHONY: all clean libc-check
-all: $(BUILD)/etude-guest
+all: $(BUILD)/etude-guest $(BUILD)/ptydrive
 
 clean:
 	rm -rf $(BUILD)
@@ -50,3 +50,12 @@ $(BUILD)/etude-guest: $(SRC) $(HDR) $(CONFIG) $(CRT1) $(CRTI) $(PREFIX)/lib/libc
 	$(CC) $(CFLAGS) -MF $(BUILD)/etude-guest.d -o $@ $(LINK_PRE) $(SRC) $(LINK_POST)
 
 -include $(BUILD)/etude-guest.d
+
+# The SSH scenarios run this terminal driver inside their Rach2 client,
+# under the same framed command controller as the client itself.
+$(BUILD)/ptydrive: $(TOP)/tests/system/runner/ptydrive.c $(CONFIG) $(CRT1) $(CRTI) \
+                   $(PREFIX)/lib/libc.a $(LIBGCC) $(CRTN) | libc-check
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -MF $(BUILD)/ptydrive.d -o $@ $(LINK_PRE) $< $(LINK_POST)
+
+-include $(BUILD)/ptydrive.d

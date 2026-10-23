@@ -160,6 +160,8 @@ struct etude_case_machine {
     struct etude_machine_spec spec;
     unsigned boot;               /* the machine's boot, counted from 1 */
     struct etude_serial *serial; /* etude-guest's session, for a helper */
+    uint64_t commands;
+    int command_output; /* installed commands do not emit case reports */
     size_t fed;                  /* console bytes fed to the session */
     int serial_closed;
     char line[ETUDE_REPORT_LINE_MAX + 1]; /* the guest's output line being read */
@@ -1295,7 +1297,7 @@ static void serial_output(void *ctx, int fd, const char *buf, size_t n)
     struct etude_case_machine *m = ctx;
     size_t i;
 
-    if (fd != 1)
+    if (fd != 1 || m->command_output)
         return;
     for (i = 0; i < n; i++) {
         if (buf[i] != '\n') {
@@ -1940,12 +1942,49 @@ static int text_found(void *arg)
     return t->gone;
 }
 
+/** Open the framed session at the console offset the caller selected. */
+static enum etude_status open_guest(struct etude_case_machine *m)
+{
+    struct etude_case *c = m->c;
+    struct etude_serial_conf sc;
+    enum etude_status st;
+
+    memset(&sc, 0, sizeof(sc));
+    sc.run_id = m->attempt_id;
+    sc.resend_us = c->resend_us;
+    sc.output_max = (size_t)c->output_max;
+    sc.write = serial_write;
+    sc.output = serial_output;
+    sc.ctx = m;
+
+    m->serial = etude_serial_new(&sc);
+    if (m->serial == NULL || etude_serial_open(m->serial, posix_now_us()) != 0)
+        return ETUDE_FAILED;
+    st = serve_until(c, session_done, m, NULL, step_deadline(c), 1);
+    return st != ETUDE_OK ? st : session_status(m);
+}
+
+enum etude_status etude_guest_open(struct etude_case_machine *m)
+{
+    char command[96];
+
+    if (m->serial != NULL)
+        return m->serial_closed ? ETUDE_LOST : ETUDE_OK;
+    if (m->c->cur < 0 || !m->decl->console)
+        return ETUDE_REFUSED;
+    m->fed = mres(m)->console.kept;
+    snprintf(command, sizeof(command), "/etude-guest --stage / --resend-ms %llu\n",
+             (unsigned long long)((m->c->resend_us + 999) / 1000));
+    if (etude_machine_type(m->m, command, strlen(command)) != 0)
+        return ETUDE_LOST;
+    return open_guest(m);
+}
+
 /** Start etude-guest at the debug shell of a helper's machine and open its
  * session. */
 static enum etude_status start_guest(struct etude_case_machine *m)
 {
     struct etude_case *c = m->c;
-    struct etude_serial_conf sc;
     struct text_wait t;
     enum etude_status st;
     char command[96];
@@ -1963,19 +2002,18 @@ static enum etude_status start_guest(struct etude_case_machine *m)
              (unsigned long long)((c->resend_us + 999) / 1000));
     if (etude_machine_type(m->m, command, strlen(command)) != 0)
         return ETUDE_LOST;
-    memset(&sc, 0, sizeof(sc));
-    sc.run_id = m->attempt_id;
-    sc.resend_us = c->resend_us;
-    sc.output_max = (size_t)c->output_max;
-    sc.write = serial_write;
-    sc.output = serial_output;
-    sc.ctx = m;
     m->fed = (size_t)t.at;
-    m->serial = etude_serial_new(&sc);
-    if (m->serial == NULL || etude_serial_open(m->serial, posix_now_us()) != 0)
-        return ETUDE_FAILED;
-    st = serve_until(c, session_done, m, NULL, step_deadline(c), 1);
-    return st != ETUDE_OK ? st : session_status(m);
+    return open_guest(m);
+}
+
+int etude_has_machine(const struct etude_case *c, const char *name)
+{
+    size_t i;
+
+    for (i = 0; name != NULL && i < c->decl_count; i++)
+        if (strcmp(c->decls[i].id, name) == 0)
+            return 1;
+    return 0;
 }
 
 enum etude_status etude_boot(struct etude_case *c, const char *machine, const char *const disks[],
@@ -2562,6 +2600,7 @@ enum etude_status etude_guest(struct etude_case_machine *m, const char *name,
         goto done;
     m->line_len = 0;
     m->line_long = 0;
+    m->command_output = 0;
     st = session_op(m, etude_serial_run(m->serial, token, sha, posix_now_us()));
     if (st == ETUDE_BOUND || st == ETUDE_STOPPED)
         cancel_run(m);
@@ -2577,6 +2616,335 @@ done:
     eh_json_free(inv);
     free(text);
     return st;
+}
+
+/* ---- Installed guest commands and files. ---- */
+
+static void keep_evidence(struct etude_case *, const char *, const char *, size_t);
+
+/** Hash a regular input stream and rewind it for a framed transfer. */
+static int guest_file_hash(FILE *f, uint64_t *size, char hex[65])
+{
+    unsigned char bytes[65536], d[32];
+    struct sha256 h;
+    size_t n;
+
+    *size = 0;
+    sha256_init(&h);
+    while ((n = fread(bytes, 1, sizeof(bytes), f)) != 0) {
+        *size += n;
+        if (*size > ((uint64_t)1 << 30))
+            return -1;
+        sha256_update(&h, bytes, n);
+    }
+    if (ferror(f) || fseek(f, 0, SEEK_SET) != 0)
+        return -1;
+    sha256_final(&h, d);
+    sha256_hex(d, hex);
+    return 0;
+}
+
+/** Read a transfer part from its stream, whose position follows OFFSET. */
+static int guest_file_read(void *ctx, uint64_t offset, void *bytes, size_t n)
+{
+    FILE *f = ctx;
+
+    (void)offset;
+    return fread(bytes, 1, n, f) == n ? 0 : -1;
+}
+
+/** Send a file as a stored relative name or an absolute destination. */
+static enum etude_status guest_send_file(struct etude_case_machine *m, const char *host,
+                                        const char *guest, const char *mode,
+                                        uint64_t *size, char hex[65])
+{
+    FILE *f;
+    enum etude_status st;
+
+    if (m->serial == NULL || m->serial_closed || m->c->cur < 0 || host == NULL || guest == NULL)
+        return ETUDE_REFUSED;
+    f = fopen(host, "rb");
+    if (f == NULL)
+        return ETUDE_FAILED;
+    if (guest_file_hash(f, size, hex) != 0) {
+        fclose(f);
+        return ETUDE_FAILED;
+    }
+    st = put_op(m, etude_serial_put_reader(m->serial, guest, *size, hex, mode,
+                                           guest_file_read, f, posix_now_us()));
+    fclose(f);
+    return st;
+}
+
+enum etude_status etude_guest_put(struct etude_case_machine *m, const char *host,
+                                  const char *guest, const char *mode)
+{
+    uint64_t size;
+    char hex[65];
+
+    if (guest == NULL || guest[0] != '/')
+        return ETUDE_REFUSED;
+    return guest_send_file(m, host, guest, mode, &size, hex);
+}
+
+/** Write one received part to the private evidence file. */
+static int guest_file_write(void *ctx, const void *bytes, size_t n)
+{
+    return fwrite(bytes, 1, n, ctx) == n ? 0 : -1;
+}
+
+enum etude_status etude_guest_get(struct etude_case_machine *m, const char *guest,
+                                  const char *name)
+{
+    const char *path;
+    char target[4096], part[4120];
+    FILE *f;
+    enum etude_status st;
+
+    if (m->serial == NULL || m->serial_closed || m->c->cur < 0 || guest == NULL ||
+        guest[0] != '/' || (path = etude_evidence(m->c, name)) == NULL ||
+        strlen(path) >= sizeof(target))
+        return ETUDE_REFUSED;
+    strcpy(target, path);
+    snprintf(part, sizeof(part), "%s.part", target);
+    f = fopen(part, "wb");
+    if (f == NULL)
+        return ETUDE_FAILED;
+    made(m->c, part, 0);
+    st = put_op(m, etude_serial_get(m->serial, guest, guest_file_write, f, posix_now_us()));
+    if (fclose(f) != 0 && st == ETUDE_OK)
+        st = ETUDE_FAILED;
+    if (st == ETUDE_OK && rename(part, target) != 0)
+        st = ETUDE_FAILED;
+    if (st == ETUDE_OK)
+        made(m->c, target, 0);
+    else
+        unlink(part);
+    return st;
+}
+
+/* A bounded JSON invocation being built. */
+struct command_text {
+    char *text;
+    size_t len;
+    int failed;
+};
+
+/** Append formatted text to an invocation. */
+static void command_add(struct command_text *t, const char *format, ...)
+{
+    va_list ap;
+    int n;
+
+    if (t->failed)
+        return;
+    va_start(ap, format);
+    n = vsnprintf(t->text + t->len, DOCUMENT_MAX - t->len, format, ap);
+    va_end(ap);
+    if (n < 0 || (size_t)n >= DOCUMENT_MAX - t->len)
+        t->failed = 1;
+    else
+        t->len += (size_t)n;
+}
+
+/** Append a JSON string, including its quotes. */
+static void command_string(struct command_text *t, const char *s)
+{
+    const unsigned char *p = (const unsigned char *)s;
+
+    command_add(t, "\"");
+    for (; *p && !t->failed; p++) {
+        if (*p == '"' || *p == '\\')
+            command_add(t, "\\%c", *p);
+        else if (*p < ' ' || *p > '~')
+            command_add(t, "\\u%04x", *p);
+        else
+            command_add(t, "%c", *p);
+    }
+    command_add(t, "\"");
+}
+
+/** Append the arguments and environment, rejecting malformed assignments. */
+static void command_vectors(struct command_text *t, const char *const argv[],
+                             const char *const env[])
+{
+    static const char *const defaults[] = {
+        "PATH=/bin:/sbin:/usr/bin:/usr/sbin:/", "HOME=/root", "TERM=vt100", NULL};
+    size_t i;
+    const char *eq;
+    char key[256];
+
+    command_add(t, ",\"arguments\":[");
+    for (i = 1; argv[i] != NULL; i++) {
+        if (i > 1)
+            command_add(t, ",");
+        command_string(t, argv[i]);
+    }
+    command_add(t, "],\"environment\":{");
+    if (env == NULL)
+        env = defaults;
+    for (i = 0; env[i] != NULL; i++) {
+        eq = strchr(env[i], '=');
+        if (eq == NULL || eq == env[i] || (size_t)(eq - env[i]) >= sizeof(key)) {
+            t->failed = 1;
+            return;
+        }
+        if (i > 0)
+            command_add(t, ",");
+        memcpy(key, env[i], (size_t)(eq - env[i]));
+        key[eq - env[i]] = '\0';
+        command_string(t, key);
+        command_add(t, ":");
+        command_string(t, eq + 1);
+    }
+    command_add(t, "}");
+}
+
+/** Build the installed command's ordinary invocation. */
+static int command_invocation(struct etude_case_machine *m, struct command_text *t,
+                               const char *const argv[], const char *const env[],
+                               const char *input, uint64_t input_size, const char *input_sha,
+                               const char *token)
+{
+    uint64_t now = posix_now_us(), deadline = step_deadline(m->c);
+
+    t->text = malloc(DOCUMENT_MAX);
+    t->len = 0;
+    t->failed = t->text == NULL;
+    command_add(t, "{\"schema_version\":1,\"run_id\":");
+    command_string(t, m->attempt_id);
+    command_add(t, ",\"attempt_id\":");
+    command_string(t, token);
+    command_add(t, ",\"attempt_token\":");
+    command_string(t, token);
+    command_add(t, ",\"case_id\":");
+    command_string(t, m->c->case_id);
+    command_add(t, ",\"program\":");
+    command_string(t, argv[0]);
+    command_vectors(t, argv, env);
+    command_add(t, ",\"role\":\"ordinary\",\"stdin\":%s,\"files\":[",
+                input != NULL ? "\"stdin\"" : "null");
+    if (input != NULL)
+        command_add(t, "{\"name\":\"stdin\",\"sha256\":\"%s\",\"size_bytes\":%llu,"
+                    "\"mode\":\"0600\"}", input_sha, (unsigned long long)input_size);
+    command_add(t, "],\"fixtures\":[{\"fixture\":\"workspace\",\"given\":[]}],"
+                "\"deadline_us\":%llu,\"grace_us\":%llu,\"output_max_bytes\":%llu}",
+                (unsigned long long)(deadline > now ? deadline - now : 1),
+                (unsigned long long)m->c->grace_us, (unsigned long long)m->c->output_max);
+    return t->failed ? -1 : 0;
+}
+
+enum etude_status etude_guest_start(struct etude_case_machine *m, const char *const argv[],
+                                    const char *const env[], const char *input)
+{
+    struct command_text t;
+    char sha[65], token[17], identity[384], input_sha[65];
+    uint64_t size = 0;
+    enum etude_status st;
+
+    if (m->serial == NULL || m->serial_closed || m->c->cur < 0 || argv == NULL ||
+        argv[0] == NULL || argv[0][0] != '/')
+        return ETUDE_REFUSED;
+    if (input != NULL) {
+        st = guest_send_file(m, input, "stdin", "0600", &size, input_sha);
+        if (st != ETUDE_OK)
+            return st;
+    }
+    snprintf(identity, sizeof(identity), "%s.command.%llu", m->attempt_id,
+             (unsigned long long)++m->commands);
+    digest_of(identity, strlen(identity), sha);
+    memcpy(token, sha, 16);
+    token[16] = '\0';
+    if (command_invocation(m, &t, argv, env, input, size, input_sha, token) != 0) {
+        free(t.text);
+        return ETUDE_REFUSED;
+    }
+    digest_of(t.text, t.len, sha);
+    st = put_op(m, etude_serial_put(m->serial, "invocation.json", t.len, sha, "0644",
+                                    t.text, posix_now_us()));
+    free(t.text);
+    if (st != ETUDE_OK)
+        return st;
+    m->command_output = 1;
+    return etude_serial_run(m->serial, token, sha, posix_now_us()) == 0 ? ETUDE_OK : ETUDE_FAILED;
+}
+
+/* A wait for text on the running command's output. */
+struct command_wait {
+    struct etude_case_machine *m;
+    const char *text;
+    int found;
+};
+
+/** Say whether text arrived, or the command can produce no more. */
+static int command_output_found(void *ctx)
+{
+    struct command_wait *w = ctx;
+    const struct etude_serial_result *r = etude_serial_result(w->m->serial);
+
+    w->found = find_text(r->out.data, r->out.kept, w->text) >= 0;
+    return w->found || etude_serial_status(w->m->serial) != ETUDE_SERIAL_BUSY;
+}
+
+enum etude_status etude_guest_output_wait(struct etude_case_machine *m, const char *text)
+{
+    struct command_wait w;
+    enum etude_status st;
+
+    if (m->serial == NULL || !m->command_output || text == NULL || text[0] == '\0')
+        return ETUDE_REFUSED;
+    memset(&w, 0, sizeof(w));
+    w.m = m;
+    w.text = text;
+    st = serve_until(m->c, command_output_found, &w, NULL, step_deadline(m->c), 1);
+    return st == ETUDE_OK && !w.found ? ETUDE_LOST : st;
+}
+
+enum etude_status etude_guest_finish(struct etude_case_machine *m, int cancel,
+                                     const char *output, struct etude_guest_result *result)
+{
+    const struct etude_serial_result *r;
+    char err[256];
+    enum etude_status st;
+
+    memset(result, 0, sizeof(*result));
+    result->termination.end = ETUDE_END_LOST;
+    result->termination.value = -1;
+    result->cleanup = ETUDE_CLEANUP_UNCONFIRMED;
+    if (m->serial == NULL || !m->command_output || output == NULL || strlen(output) > 240)
+        return ETUDE_REFUSED;
+    if (cancel && etude_serial_status(m->serial) == ETUDE_SERIAL_BUSY &&
+        etude_serial_cancel(m->serial, posix_now_us()) != 0)
+        return ETUDE_FAILED;
+    st = session_op(m, 0);
+    if (st == ETUDE_BOUND || st == ETUDE_STOPPED)
+        cancel_run(m);
+    r = etude_serial_result(m->serial);
+    result->termination.end = r->end;
+    result->termination.value = r->value;
+    result->termination.console_offset = mres(m)->console.total;
+    result->process = r->process;
+    result->cleanup = r->cleanup;
+    result->complete = r->complete;
+    keep_evidence(m->c, output, r->out.data, r->out.kept);
+    snprintf(err, sizeof(err), "%s.err", output);
+    keep_evidence(m->c, err, r->err.data, r->err.kept);
+    m->command_output = 0;
+    return st;
+}
+
+enum etude_status etude_guest_command(struct etude_case_machine *m, const char *const argv[],
+                                      const char *const env[], const char *input,
+                                      const char *output, struct etude_guest_result *result)
+{
+    enum etude_status st;
+
+    memset(result, 0, sizeof(*result));
+    result->termination.end = ETUDE_END_LOST;
+    result->termination.value = -1;
+    result->cleanup = ETUDE_CLEANUP_UNCONFIRMED;
+    st = etude_guest_start(m, argv, env, input);
+    return st == ETUDE_OK ? etude_guest_finish(m, 0, output, result) : st;
 }
 
 /* ---- Host tools. ---- */

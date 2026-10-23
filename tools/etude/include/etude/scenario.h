@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include "etude/contract.h"
+#include "etude/exec.h"
 
 /* One attempt of the case, as the executor started it. */
 struct etude_case;
@@ -103,6 +104,10 @@ const char *etude_artifact(struct etude_case *c, const char *name);
  */
 const char *etude_private_copy(struct etude_case *c, const char *name);
 
+/** Say whether the manifest declares machine NAME. This query neither
+ * starts it nor changes the attempt's result. */
+int etude_has_machine(const struct etude_case *c, const char *name);
+
 /**
  * Boot machine `machine` of the manifest, with `disks`, a list of names of
  * disks of its profile ended by NULL, or all of them for NULL, and, when the
@@ -166,6 +171,57 @@ enum etude_status etude_qmp(struct etude_case_machine *m, const char *execute,
  */
 enum etude_status etude_guest(struct etude_case_machine *m, const char *name,
                               struct etude_termination *end);
+
+/* An installed command's observed end and independent cleanup result. */
+struct etude_guest_result {
+    struct etude_termination termination;
+    struct etude_pid process;
+    enum etude_cleanup cleanup;
+    int complete; /* all result records and verified output arrived */
+};
+
+/** Start /etude-guest at the current guest shell prompt and open its framed
+ * session. The caller first logs in and waits for that prompt. A helper
+ * machine's etude_boot already opens its session. The console then belongs
+ * to the channel until the machine ends. */
+enum etude_status etude_guest_open(struct etude_case_machine *m);
+
+/** Run an installed absolute guest program, argv[0], with argv[1...] as
+ * its arguments. ENV is a NULL-terminated list of NAME=VALUE strings, or
+ * NULL for PATH=/bin:/sbin:/usr/bin:/usr/sbin:/ and HOME=/root. INPUT is a
+ * host file used as standard input, or NULL for no input. Standard output
+ * is evidence OUTPUT, and standard error OUTPUT.err. A nonzero guest exit
+ * is still ETUDE_OK; RESULT distinguishes exit, signal, lost result and
+ * unconfirmed cleanup. Each command has a fresh attempt identity and ends
+ * its process group before returning. No guest report is interpreted. */
+enum etude_status etude_guest_command(struct etude_case_machine *m, const char *const argv[],
+                                      const char *const env[], const char *input,
+                                      const char *output, struct etude_guest_result *result);
+
+/** Start the same command without waiting, for a workload that must stay
+ * running while other machines or host tools are observed. One command may
+ * run per channel; the machine owns it until finish or cleanup. */
+enum etude_status etude_guest_start(struct etude_case_machine *m, const char *const argv[],
+                                    const char *const env[], const char *input);
+
+/** Wait for TEXT on the command's standard output, within the step bound. */
+enum etude_status etude_guest_output_wait(struct etude_case_machine *m, const char *text);
+
+/** Collect the started command, cancelling it first when CANCEL is nonzero.
+ * A cancellation uses the existing cancel and cleaned records. */
+enum etude_status etude_guest_finish(struct etude_case_machine *m, int cancel,
+                                     const char *output, struct etude_guest_result *result);
+
+/** Copy a host file to an absolute guest path with octal MODE (such as
+ * "0755"). The guest replaces it only after its size and digest match.
+ * The destination's parent directory must exist. */
+enum etude_status etude_guest_put(struct etude_case_machine *m, const char *host,
+                                  const char *guest, const char *mode);
+
+/** Fetch an absolute guest file as evidence NAME. The evidence is published
+ * only after the channel verifies its complete size and SHA-256. */
+enum etude_status etude_guest_get(struct etude_case_machine *m, const char *guest,
+                                  const char *name);
 
 /**
  * Wait for the machine to end and give how it ended. A shutdown, a reset and

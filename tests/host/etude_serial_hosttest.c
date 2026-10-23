@@ -1296,6 +1296,80 @@ static void check_guest_stores(struct harness *h, const char *state)
           "a staged put of a file not staged is refused as damaged");
 }
 
+/* A streamed transfer, with no whole-file buffer in the controller. */
+struct file_transfer {
+    const char *text;
+    size_t len, at;
+    char received[128];
+};
+
+/** Supply the next bytes at the exact offset requested. */
+static int transfer_read(void *ctx, uint64_t offset, void *bytes, size_t n)
+{
+    struct file_transfer *t = ctx;
+
+    if (offset != t->at || offset + n > t->len)
+        return -1;
+    memcpy(bytes, t->text + t->at, n);
+    t->at += n;
+    return 0;
+}
+
+/** Collect each received part exactly once. */
+static int transfer_write(void *ctx, const void *bytes, size_t n)
+{
+    struct file_transfer *t = ctx;
+
+    if (t->at + n >= sizeof(t->received))
+        return -1;
+    memcpy(t->received + t->at, bytes, n);
+    t->at += n;
+    t->received[t->at] = '\0';
+    return 0;
+}
+
+/** Transfer to an absolute destination and back, then run an installed
+ * program with no stored executable in its invocation. */
+static void check_installed(struct harness *h)
+{
+    struct file_transfer t;
+    const struct etude_serial_result *r;
+    char path[160], sha[65], inv[65], text[2048];
+    const char *token = "00000000000000a5";
+    int n;
+
+    memset(&t, 0, sizeof(t));
+    t.text = "a file transferred through the guest channel\n";
+    t.len = strlen(t.text);
+    snprintf(path, sizeof(path), "%s/channel-file", work);
+    digest_hex(t.text, t.len, sha);
+    CHECK(etude_serial_put_reader(h->s, path, t.len, sha, "0600", transfer_read, &t,
+                                  now_us()) == 0 && serve(h, UNTIL_END) &&
+              etude_serial_status(h->s) == ETUDE_SERIAL_DONE,
+          "a streamed put publishes an absolute guest destination");
+    t.at = 0;
+    CHECK(etude_serial_get(h->s, path, transfer_write, &t, now_us()) == 0 &&
+              serve(h, UNTIL_END) && etude_serial_status(h->s) == ETUDE_SERIAL_DONE &&
+              t.at == t.len && strcmp(t.text, t.received) == 0,
+          "get checks and returns the complete absolute file");
+    n = snprintf(text, sizeof(text),
+                 "{\"schema_version\":1,\"run_id\":\"installed\",\"attempt_id\":\"installed\","
+                 "\"attempt_token\":\"%s\",\"case_id\":\"host.etude.serial\","
+                 "\"program\":\"/bin/sh\",\"arguments\":[\"-c\",\"cat '%s'; exit 7\"],"
+                 "\"environment\":{\"PATH\":\"/bin:/usr/bin\"},\"stdin\":null,"
+                 "\"role\":\"ordinary\",\"files\":[],\"fixtures\":[],"
+                 "\"deadline_us\":60000000,\"grace_us\":500000,\"output_max_bytes\":65536}",
+                 token, path);
+    CHECK(n > 0 && (size_t)n < sizeof(text) &&
+              store(h, "invocation.json", text, (size_t)n, 0, inv) == ETUDE_SERIAL_DONE &&
+              run(h, token, inv, UNTIL_END), "an installed absolute program runs");
+    r = etude_serial_result(h->s);
+    CHECK(r->complete && r->end == ETUDE_END_EXITED && r->value == 7 &&
+              r->cleanup == ETUDE_CLEANUP_CONFIRMED && strcmp(h->out[0], t.text) == 0,
+          "an installed program retains exit status, output and cleanup");
+    unlink(path);
+}
+
 /** Run a pass, an intended failure, a pass beside frames that etude-guest
  * did not send, and a program cancelled, of the run `run_id`. */
 static void check_guest_runs(struct harness *h, const char *run_id)
@@ -1369,6 +1443,7 @@ static void check_guest(void)
           "the session opens with etude-guest");
     if (etude_serial_status(h->s) == ETUDE_SERIAL_DONE) {
         check_guest_stores(h, state);
+        check_installed(h);
         check_guest_runs(h, run_id);
         check_guest_bye(h);
     }

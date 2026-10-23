@@ -31,7 +31,7 @@
 #define LINE_KEEP (2 * ETUDE_FRAME_SERIAL_MAX)
 
 /* The operations, as serial.h describes them. */
-enum op { OP_NONE, OP_OPEN, OP_PUT, OP_RUN, OP_BYE };
+enum op { OP_NONE, OP_OPEN, OP_PUT, OP_GET, OP_RUN, OP_BYE };
 
 /* A sequenced frame of this side's, sent and not yet acknowledged, or queued
  * behind a full window. */
@@ -76,11 +76,17 @@ struct etude_serial {
 
     /* a put */
     const unsigned char *data;
+    int (*file_read)(void *, uint64_t, void *, size_t);
+    void *read_ctx;
     uint64_t size;
     uint64_t at; /* the bytes queued in data frames */
     int sealed;  /* the seal is queued */
     char name[ETUDE_FRAME_SERIAL_MAX];
     char sha[65];
+
+    /* a get */
+    int (*file_write)(void *, const void *, size_t);
+    void *file_ctx;
 
     /* a run */
     char attempt[ETUDE_FRAME_TOKEN_LEN + 1];
@@ -244,12 +250,13 @@ static int put_next(struct etude_serial *s)
     char b64[ETUDE_FRAME_SERIAL_MAX + 1];
     const char *a[3];
     size_t room, chunk;
+    unsigned char bytes[ETUDE_FRAME_SERIAL_MAX];
 
     if (s->op != OP_PUT || s->status != ETUDE_SERIAL_BUSY || s->sealed)
         return 0;
     snprintf(cmd, sizeof(cmd), "%llu", (unsigned long long)s->cmd);
     a[0] = cmd;
-    if (s->data == NULL || s->at >= s->size) {
+    if ((s->data == NULL && s->file_read == NULL) || s->at >= s->size) {
         if (queue_frame(s, ETUDE_CMD_SEAL, 1, a) != 0) {
             end_op(s, ETUDE_SERIAL_PROTOCOL, "the seal of %s cannot be queued", s->name);
             return 0;
@@ -266,7 +273,14 @@ static int put_next(struct etude_serial *s)
     chunk = room / 4 * 3;
     if (chunk > s->size - s->at)
         chunk = (size_t)(s->size - s->at);
-    wire_base64(s->data + s->at, chunk, b64);
+    if (s->file_read != NULL) {
+        if (s->file_read(s->read_ctx, s->at, bytes, chunk) != 0) {
+            lose(s, "the file being sent could not be read");
+            return 0;
+        }
+        wire_base64(bytes, chunk, b64);
+    } else
+        wire_base64(s->data + s->at, chunk, b64);
     a[2] = b64;
     if (chunk == 0 || queue_frame(s, ETUDE_CMD_DATA, 3, a) != 0) {
         end_op(s, ETUDE_SERIAL_PROTOCOL, "a data frame of %s does not fit", s->name);
@@ -464,6 +478,43 @@ static void take_stored(struct etude_serial *s, const struct wire_frame *f)
         return;
     }
     end_op(s, ETUDE_SERIAL_DONE, "");
+}
+
+/** Take data parts followed by sent, checking offsets, size and digest. */
+static void take_get(struct etude_serial *s, const struct wire_frame *f)
+{
+    unsigned char bytes[ETUDE_FRAME_SERIAL_MAX], d[32];
+    char hex[65];
+    uint64_t off;
+    long n;
+
+    if (strcmp(f->type, ETUDE_CMD_DATA) == 0) {
+        if (f->nfields != 3 || !wire_number(f->field[1], &off) || off != s->at ||
+            strlen(f->field[2]) / 4 * 3 > sizeof(bytes) ||
+            (n = wire_unbase64(f->field[2], bytes)) <= 0) {
+            protocol(s, f, "with a damaged file part");
+            return;
+        }
+        if (s->file_write(s->file_ctx, bytes, (size_t)n) != 0) {
+            lose(s, "the received file could not be written");
+            return;
+        }
+        s->at += (uint64_t)n;
+        sha256_update(&s->got_sha[0], bytes, (size_t)n);
+        return;
+    }
+    if (strcmp(f->type, ETUDE_EV_SENT) != 0 || f->nfields != 4 ||
+        strcmp(f->field[1], s->name) != 0 || !wire_number(f->field[2], &off) ||
+        !wire_hex(f->field[3], 64)) {
+        protocol(s, f, "where the sent of the get was due");
+        return;
+    }
+    sha256_final(&s->got_sha[0], d);
+    sha256_hex(d, hex);
+    if (off != s->at || strcmp(hex, f->field[3]) != 0)
+        end_op(s, ETUDE_SERIAL_DAMAGED, "the received file has another size or digest");
+    else
+        end_op(s, ETUDE_SERIAL_DONE, "");
 }
 
 /** Take `bye CMD`, which ends the session. */
@@ -714,6 +765,9 @@ static void take_event(struct etude_serial *s, const struct wire_frame *f)
     case OP_PUT:
         take_stored(s, f);
         break;
+    case OP_GET:
+        take_get(s, f);
+        break;
     case OP_RUN:
         take_run(s, f, cmd);
         break;
@@ -887,8 +941,9 @@ int etude_serial_open(struct etude_serial *s, uint64_t now_us)
     return 0;
 }
 
-int etude_serial_put(struct etude_serial *s, const char *name, uint64_t size, const char *sha256,
-                     const char *mode, const void *data, uint64_t now_us)
+static int begin_put(struct etude_serial *s, const char *name, uint64_t size, const char *sha256,
+                      const char *mode, const void *data,
+                      int (*read)(void *, uint64_t, void *, size_t), void *ctx, uint64_t now_us)
 {
     char cmd[24], sz[24];
     const char *a[5];
@@ -914,9 +969,57 @@ int etude_serial_put(struct etude_serial *s, const char *name, uint64_t size, co
     snprintf(s->name, sizeof(s->name), "%s", name);
     memcpy(s->sha, sha256, sizeof(s->sha));
     s->data = data;
+    s->file_read = read;
+    s->read_ctx = ctx;
     s->size = size;
     s->at = 0;
     s->sealed = 0;
+    pump(s, now_us);
+    return 0;
+}
+
+int etude_serial_put(struct etude_serial *s, const char *name, uint64_t size, const char *sha256,
+                     const char *mode, const void *data, uint64_t now_us)
+{
+    return begin_put(s, name, size, sha256, mode, data, NULL, NULL, now_us);
+}
+
+int etude_serial_put_reader(struct etude_serial *s, const char *name, uint64_t size,
+                            const char *sha256, const char *mode,
+                            int (*read)(void *, uint64_t, void *, size_t), void *ctx,
+                            uint64_t now_us)
+{
+    if (read == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    return begin_put(s, name, size, sha256, mode, NULL, read, ctx, now_us);
+}
+
+int etude_serial_get(struct etude_serial *s, const char *name,
+                     int (*write)(void *, const void *, size_t), void *ctx, uint64_t now_us)
+{
+    char cmd[24];
+    const char *a[2];
+
+    if (!may_begin(s, 1))
+        return -1;
+    if (strlen(name) >= sizeof(s->name) || !printable(name) || write == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    snprintf(cmd, sizeof(cmd), "%llu", (unsigned long long)s->next_cmd);
+    a[0] = cmd;
+    a[1] = name;
+    if (queue_frame(s, ETUDE_CMD_GET, 2, a) != 0)
+        return -1;
+    begin(s, OP_GET);
+    s->cmd = s->next_cmd++;
+    snprintf(s->name, sizeof(s->name), "%s", name);
+    s->file_write = write;
+    s->file_ctx = ctx;
+    s->at = 0;
+    sha256_init(&s->got_sha[0]);
     pump(s, now_us);
     return 0;
 }

@@ -127,6 +127,22 @@ int etude_serial_open(struct etude_serial *s, uint64_t now_us);
 int etude_serial_put(struct etude_serial *s, const char *name, uint64_t size, const char *sha256,
                      const char *mode, const void *data, uint64_t now_us);
 
+/** As etude_serial_put, reading each part from READ instead of a whole
+ * memory buffer. READ must fill N bytes at OFFSET or return nonzero. */
+int etude_serial_put_reader(struct etude_serial *s, const char *name, uint64_t size,
+                            const char *sha256, const char *mode,
+                            int (*read)(void *, uint64_t, void *, size_t), void *ctx,
+                            uint64_t now_us);
+
+/**
+ * Fetch `name`, an absolute guest path or an attempt-relative path, through
+ * get/data/sent. Each decoded part is passed to `write` once in order. A
+ * nonzero return from it loses the session. The final size and SHA-256 must
+ * match before the operation is DONE. The callback stays valid until then.
+ */
+int etude_serial_get(struct etude_serial *s, const char *name,
+                     int (*write)(void *, const void *, size_t), void *ctx, uint64_t now_us);
+
 /**
  * Run attempt `attempt`, the invocation's token, from the invocation stored
  * under the digest `invocation`, and follow it until `cleaned`: `started`,
