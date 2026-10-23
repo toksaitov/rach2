@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import fixtures
@@ -37,6 +38,19 @@ def digest(path):
         for block in iter(lambda: stream.read(1024 * 1024), b''):
             h.update(block)
     return h.hexdigest()
+
+
+def compiler_record(command):
+    """Identify the executable that compiled a reusable native inventory."""
+    executable = shutil.which(command[0])
+    if not executable:
+        raise ValueError('the host compiler is unavailable: ' + command[0])
+    path = Path(executable).resolve()
+    version = subprocess.run([*command, '--version'], check=True, text=True,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout.strip()
+    if not version:
+        raise ValueError('the host compiler reported no version')
+    return dict(command=command, executable=str(path), sha256=digest(path), version=version)
 
 
 def metadata(path, tag, arch):
@@ -181,11 +195,14 @@ def prepare(args):
     compiler = shlex.split(os.environ.get('CC', 'cc'))
     if not compiler:
         raise ValueError('CC names no compiler')
+    identity = compiler_record(compiler) if not args.print_commands else None
     if not args.print_commands:
         base.mkdir(parents=True, exist_ok=True)
     previous = {}
     try:
-        previous = {x['assertion_id']: x for x in json.loads(Path(args.output).read_text())['checks']}
+        old = json.loads(Path(args.output).read_text())
+        if old.get('compiler') == identity:
+            previous = {x['assertion_id']: x for x in old['checks']}
     except (OSError, KeyError, ValueError):
         pass
     inventory = []
@@ -278,7 +295,8 @@ def prepare(args):
     if args.print_commands or args.only:
         return
     record = dict(schema_version=1, group=args.group, architecture=args.arch if args.group in ('tests', 'boots') else 'none',
-                  manifest_sha256=digest(Path('tests/cases/host.host.json')), checks=inventory)
+                  manifest_sha256=digest(Path('tests/cases/host.host.json')), compiler=identity,
+                  checks=inventory)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + '.tmp')
