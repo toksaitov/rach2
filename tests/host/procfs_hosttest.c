@@ -700,6 +700,15 @@ static void mem_descriptor(void)
     check(procfs_mem_read(&entries[0], (char __user *)buf, sizeof(buf)) == 4 && mem_reads == 1 &&
               space.users == 1,
           "a read while the process runs is a user for its length");
+    if (sizeof(uintptr_t) < sizeof(uint64_t)) {
+        uint64_t offset = (uint64_t)(uintptr_t)-1 + 1;
+
+        mem_ofd.offset = offset;
+        check(procfs_mem_read(&entries[0], (char __user *)buf, sizeof(buf)) == -EIO &&
+                  space.users == 1 && mem_ofd.offset == offset && mem_reads == 1,
+              "an offset past the address width releases its user and reaches no memory");
+        mem_ofd.offset = sizeof(buf);
+    }
     space.users = 0;
     check(procfs_mem_read(&entries[0], (char __user *)buf, sizeof(buf)) == 0 && mem_reads == 1,
           "a read once the process has ended returns 0 and reaches no memory");

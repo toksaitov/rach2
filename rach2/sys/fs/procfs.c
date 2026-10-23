@@ -4661,6 +4661,7 @@ static int32_t procfs_mem_access(fd_entry_t *e, char __user *dst, const char __u
         return 0;
     }
     if ((uint64_t)addr != e->ofd->offset) {
+        procfs_mm_put(mm);
         return -EIO;
     }
     while (done < count) {
