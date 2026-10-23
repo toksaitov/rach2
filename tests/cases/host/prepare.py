@@ -99,15 +99,15 @@ def checks(group, arch, base):
             if identity == 'etude_platform' and routing.windows_host():
                 yield windows.platform_entry(base, entry)
                 continue
-            deps = metadata(path, 'host-deps', arch)
+            sources = list(dict.fromkeys([str(path), *metadata(path, 'host-deps', arch)]))
             flags = metadata(path, 'host-cflags', arch)
             required_tools = metadata(path, 'host-tools', arch)
             out = str(base / path.stem)
-            item = entry(identity, path.stem, out, [str(path), *deps],
+            item = entry(identity, path.stem, out, sources,
                          alone='host-alone:' in path.read_text())
             item['command'] = [*fixtures.platform_flags(COMMON), '-DRACH2_HOSTTEST', '-Wno-empty-body', '-ffreestanding',
                                *include_flags(group == 'tests'), *flags,
-                               '-o', out, str(path), *deps]
+                               '-o', out, *sources]
             if routing.windows_host() and (identity in routing.BOOTS or identity in {'etude_context', 'etude_observe'}):
                 item = windows.boot_entry(item, flags)
             if group == 'boots':
@@ -127,14 +127,14 @@ def checks(group, arch, base):
             name = source.stem.removesuffix('_fuzz')
             corpus = sorted(p for p in Path('tests/fuzz/corpus', name).rglob('*') if p.is_file())
             out = str(base / name)
-            deps = metadata(source, 'fuzz-deps', arch)
-            item = entry(name, name + ' corpus replayed', out, [str(source), *deps], map(str, corpus))
+            sources = list(dict.fromkeys([str(source), *metadata(source, 'fuzz-deps', arch)]))
+            item = entry(name, name + ' corpus replayed', out, sources, map(str, corpus))
             if not corpus:
                 raise ValueError(f'{name}: the fuzz harness has no corpus')
             item['command'] = [*fixtures.platform_flags(COMMON), '-DRACH2_HOSTTEST', '-DFIXTURE_NO_MAIN', '-DFUZZ_REPLAY',
                                '-Wno-empty-body', '-ffreestanding',
                                *include_flags(True),
-                               *metadata(source, 'fuzz-cflags', arch), '-o', out, str(source), *deps]
+                               *metadata(source, 'fuzz-cflags', arch), '-o', out, *sources]
             item['data'] = list(map(str, corpus))
             item['corpus'] = str(Path('tests/fuzz/corpus', name))
             yield item

@@ -16,7 +16,7 @@
  * host-deps: tools/etude/posix/process.c tools/etude/compare.c
  * host-deps: tools/etude/compare_report.c tools/etude/history.c
  * host-deps: tools/etude/history_json.c tools/etude/history_collect.c
- * host-deps: tools/etude/json.c tools/etude/schema.c utils/sha256.c
+ * host-deps: tools/etude/schema.c utils/sha256.c
  * host-cflags: -I tools/etude/include -I tools/etude -Wall -Wextra -Werror
  *
  * A policy whose limits do not nest is refused. The schedule keeps a job

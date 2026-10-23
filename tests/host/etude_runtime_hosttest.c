@@ -18,8 +18,8 @@
  * host-deps: tools/etude/posix/process.c tools/etude/posix/qemu.c
  * host-deps: tools/etude/processor.c tools/etude/posix/serve.c
  * host-deps: tools/etude/posix/remote.c tools/etude/guest/wire.c
- * host-deps: tools/etude/json.c
- * host-deps: tools/etude/compare.c tools/etude/baseline.c
+ * host-deps: tools/etude/compare.c
+ * host-deps: tools/etude/baseline.c
  * host-deps: tools/etude/compare_report.c tools/etude/compare_run.c
  * host-deps: tools/etude/history.c tools/etude/history_json.c
  * host-deps: tools/etude/history_collect.c utils/sha256.c
