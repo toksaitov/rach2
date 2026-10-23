@@ -40,7 +40,7 @@ ETUDE_LOCK_WIN_SRC = tools/etude/etude.c tools/etude/lock_tree.c tools/etude/win
 # `etude show lines`, the compatible formatter, and `etude admit`, the
 # external admission wrapper for old checkouts and new runs. These are the
 # parts with Windows sources as well.
-ETUDE_OBSERVE_SRC = tools/etude/observe.c tools/etude/observe_import.c \
+ETUDE_OBSERVE_SRC = tools/etude/observe_history.c tools/etude/observe.c tools/etude/observe_import.c \
                     tools/etude/observe_main.c tools/etude/observe_scope.c \
                     tools/etude/observe_system.c
 
@@ -51,7 +51,7 @@ ETUDE_RUN_SRC = $(ETUDE_OBSERVE_SRC) tools/etude/measurement_context.c tools/etu
                 tools/etude/guest/wire.c tools/etude/posix/store.c \
                 tools/etude/watchdog.c tools/etude/supervise.c tools/etude/ledger.c \
                 tools/etude/sched.c tools/etude/portlock.c tools/etude/posix/status.c \
-                tools/etude/compare.c tools/etude/baseline.c tools/etude/compare_report.c \
+                tools/etude/compare.c tools/etude/compare_load.c tools/etude/baseline.c tools/etude/compare_report.c \
                 tools/etude/compare_run.c tools/etude/lines.c tools/etude/posix/admit.c \
                 tools/etude/posix/run_host.c tools/etude/lock_tree.c tools/etude/lock_ports.c \
                 tools/etude/provision_tooling.c tools/etude/tooling.c tools/etude/tooling_cache.c

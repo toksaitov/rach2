@@ -89,7 +89,7 @@ $(PREFIX)/mkfatfixture: tests/host/mkfatfixture.c
 	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
 $(PREFIX)/etude: $(ETUDE_SRC)
 	@mkdir -p $(@D)
-	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
+	$(CC) $(PRODUCT_CFLAGS) -pthread -o $@ $^
 $(PREFIX)/etude-volume: $(ETUDE_VOLUME_SRC)
 	@mkdir -p $(@D)
 	$(CC) $(PRODUCT_CFLAGS) -o $@ $^

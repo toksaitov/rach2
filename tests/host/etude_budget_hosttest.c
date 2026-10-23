@@ -10,6 +10,7 @@
  * host-inputs: tools/etude/schemas/budget.schema.json
  * host-inputs: tools/etude/schemas/budget.example.json
  * host-deps: tools/etude/budget.c tools/etude/budget_run.c tools/etude/digest.c
+ * host-deps: tools/etude/compare_load.c tools/etude/observe_import.c tools/etude/json.c
  * host-deps: tools/etude/cost.c tools/etude/sched.c tools/etude/ledger.c
  * host-deps: tools/etude/posix/process.c tools/etude/compare.c
  * host-deps: tools/etude/compare_report.c tools/etude/history.c
@@ -42,6 +43,7 @@
 #include "compat/fixdir_host.c"
 #include "../../utils/sha256.h"
 #include "budget.h"
+#include "compat/load_history_host.h"
 #include "digest.h"
 #include "etude/history.h"
 
@@ -606,7 +608,7 @@ static int write_summary(struct writer *w, const char *plan_id, char ids[][300],
 {
     static char items[16384];
     const struct run *r = w->r;
-    char time[1200], boot[300], budget[2000], b[200];
+    char time[1200], boot[300], budget[2000], b[200], load[1800];
     size_t used = 0;
     int k;
 
@@ -620,12 +622,14 @@ static int write_summary(struct writer *w, const char *plan_id, char ids[][300],
     fix_format(boot, sizeof(boot), "%s-boot", r->id);
     interval(time, sizeof(time), r->utc, boot, r->start, r->end);
     budget_of(r, budget, sizeof(budget));
+    if (r->end >= 0 && load_fixture(load, sizeof load, fix_dir(), r->id, time)) return -1;
+    if (r->end < 0) strcpy(load, "null");
     blob_of(b, sizeof(b), "3333333333333333333333333333333333333333333333333333333333333333");
     fix_format(w->data, sizeof(w->data),
                "{\"plan_id\":\"%s\",\"items\":[%s],\"preparation_steps\":[%s],\"time\":%s,"
                "\"resources\":%s,\"stage_totals\":%s,\"family_totals\":%s,"
                "\"useful_concurrency\":%s,\"load\":%s,\"budget\":%s,\"result\":%s}",
-               plan_id, items, prep, time, RESOURCES, b, b, b, b, budget,
+               plan_id, items, prep, time, RESOURCES, b, b, b, r->end < 0 ? b : load, budget,
                r->end < 0 ? "{\"outcome\":\"incomplete\",\"reason\":\"the executor was lost\","
                             "\"cleanup\":\"unconfirmed\",\"evidence\":[],\"capture_errors\":[],"
                             "\"disruptions\":[]}"

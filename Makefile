@@ -509,9 +509,11 @@ $(SIZECHECK): tools/verify/sizecheck.c
 # Etude is hosted C99. sources.mk lists the sources of etude, for this build
 # and for a cached version's.
 ETUDE_LINK = $(HOST_LINK)
+ETUDE_THREAD_FLAGS = -pthread
 include tools/etude/sources.mk
 ifeq ($(OS),Windows_NT)
 ETUDE_SRC = $(ETUDE_WIN_SRC)
+ETUDE_THREAD_FLAGS =
 ETUDE_CASE_LIB_SRC = $(ETUDE_CASE_LIB_WIN_SRC)
 ETUDE_HOSTCASE_SRC = $(ETUDE_HOSTCASE_WIN_SRC)
 ETUDECC ?= /ucrt64/bin/gcc
@@ -527,7 +529,7 @@ include tests/cases/host/family.mk
 $(ETUDE): $(ETUDE_SRC) $(ETUDE_HDRS) | $(ETUDEVOLUME)
 	@mkdir -p $(dir $@)
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
-	    -Itools/etude/posix -Iutils
+	    -Itools/etude/posix -Iutils $(ETUDE_THREAD_FLAGS)
 $(ETUDEVOLUME): $(ETUDE_VOLUME_SRC) tools/etude/volume/volume.h
 	@mkdir -p $(@D)
 	$(ETUDE_LINK) -std=c99

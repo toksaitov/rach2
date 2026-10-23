@@ -286,7 +286,7 @@ static void metric(struct jbuf *b, const char *name, uint64_t value, const char 
 char *etude_observe_summary(const struct etude_observer *o, const struct etude_measurement *owned)
 {
     struct jbuf b = {0};
-    int cpu = o && o->joined && o->samples >= 2 && !o->failed && !o->owner_lost &&
+    int cpu = o && o->joined && o->samples >= 2 && o->max_gap <= 5 * ETUDE_OBSERVE_INTERVAL_US && !o->failed && !o->owner_lost &&
         (o->first.available & o->last.available & 1) && !(o->resets & 1);
     if (!o) return NULL;
     uint64_t busy = cpu ? o->last.value[LOAD_CPU] - o->first.value[LOAD_CPU] : 0;

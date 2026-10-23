@@ -1011,6 +1011,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "etude_observe",
+          "checks": "native system counters, bounded trace coverage and process creation identities are checked on the collection host; PID reuse, lost ancestry and missing counters cannot become precise outside accounting",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "etude_compare",
           "checks": "tests/host/etude_compare_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"

@@ -2,6 +2,7 @@
  * slowdown apart.
  * host-inputs: tools/etude/schemas/history.schema.json
  * host-deps: tools/etude/compare.c tools/etude/baseline.c
+ * host-deps: tools/etude/compare_load.c tools/etude/observe_import.c tools/etude/json.c
  * host-deps: tools/etude/compare_report.c tools/etude/compare_run.c
  * host-deps: tools/etude/history.c tools/etude/history_json.c
  * host-deps: tools/etude/history_collect.c utils/sha256.c
@@ -13,6 +14,7 @@
 #include <etude/exec.h>
 #include "compat/tree_host.h"
 #include "compare.h"
+#include "compat/load_history_host.h"
 #include "../../utils/sha256.h"
 #include <fcntl.h>
 #include <signal.h>
@@ -40,6 +42,7 @@ struct spec {
     int hour, items, disrupted, no_run_record, retry;
     uint64_t boot_us, execute_us;
     const char *reproduce;
+    int unknown_load;
 };
 
 #define CHECK(test, detail)                                                  \
@@ -240,7 +243,7 @@ static void write_run(struct etude_history *h, const struct spec *r, const char 
                       char attempts[][300], uint64_t end)
 {
     static char data[65536];
-    char items[16384], time[1200], res[600], ok[400], b[200], m[200], id[300];
+    char items[16384], time[1200], res[600], ok[400], b[200], m[200], id[300], load[1800];
     size_t used = 0;
     int i;
     for (i = 0; i < r->items; i++)
@@ -254,6 +257,8 @@ static void write_run(struct etude_history *h, const struct spec *r, const char 
     resources(res, sizeof(res), end / 2);
     result(ok, sizeof(ok), r->outcome, r->disrupted);
     blob(b, sizeof(b), "fixed");
+    if (load_fixture(load, sizeof load, directory, r->run, time)) exit(1);
+    if (r->unknown_load) strcpy(load, b);
     snprintf(m, sizeof(m),
              "{\"value\":%llu,\"method\":\"monotonic-v1\",\"quality\":\"exact\","
              "\"interval_us\":null,\"error_bound\":1}",
@@ -265,7 +270,7 @@ static void write_run(struct etude_history *h, const struct spec *r, const char 
              "\"outside_queue_us\":%s,\"one_time_setup_us\":%s,\"goal_us\":3600000000,"
              "\"growth_us\":0,\"ceiling_us\":3600000000,\"cleanup_reserve_us\":1000000,"
              "\"verdict\":\"pass\"},\"result\":%s}",
-             plan_id, items, time, res, b, b, b, b, b, m, m, m, ok);
+             plan_id, items, time, res, b, b, b, load, b, m, m, m, ok);
     append(h, "run", data, id);
 }
 
@@ -632,6 +637,45 @@ static void check_damage(char *out, size_t size)
         "an invalid stream is noted");
 }
 
+/* A passing result without whole-run evidence is not a baseline sample. */
+static void check_load_evidence(char *out, size_t size)
+{
+    struct spec r;
+    memset(&r, 0, sizeof r);
+    r.run = "unknown-load"; r.hour = 30; r.boot_us = 91 * SECOND;
+    r.execute_us = 10 * SECOND; r.unknown_load = 1;
+    write_spec(&r);
+    CHECK(compare(out, size, "unknown-load " HISTORY " @unknown-load") == 0,
+          "unknown load is reported without failing the comparison command");
+    has(out, "verdict: not_comparable", "a run with unknown load is excluded");
+    has(out, "no verified continuous load observation", "the missing observation is named");
+    r.run = "changed-trace"; r.unknown_load = 0;
+    write_spec(&r);
+    /* Read the newly published run and change its trace after publication. */
+    struct cmp_history h;
+    char *stream = (char *)path(r.run);
+    CHECK(cmp_load(&h, schema, &stream, 1) == 0 && h.runs == 1,
+          "the synthetic load record is eligible before its trace changes");
+    if (h.runs == 1) {
+        const struct eh_json *ref = eh_json_get(h.by_run[0]->data, "load");
+        const char *file = eh_json_get(ref, "locations")->child->string;
+        char *bytes = NULL;
+        size_t length;
+        CHECK(cmp_read_file(file, 65536, &bytes, &length) == 0, "read the load fixture");
+        struct eh_json *load = bytes ? eh_json_parse(bytes) : NULL;
+        ref = eh_json_get(eh_json_get(load, "outer"), "trace");
+        const struct eh_json *locations = eh_json_get(ref, "locations");
+        FILE *f = locations ? fopen(locations->child->string, "ab") : NULL;
+        CHECK(f != NULL && fputs(" ", f) >= 0, "change published trace bytes");
+        if (f) CHECK(fclose(f) == 0, "close changed trace");
+        eh_json_free(load); free(bytes);
+    }
+    cmp_free(&h);
+    CHECK(compare(out, size, "changed-trace " HISTORY " @changed-trace") == 0,
+          "a changed trace is reported without failing the comparison command");
+    has(out, "verdict: not_comparable", "a trace digest mismatch excludes the run");
+}
+
 /** Check the statistics against the examples of the measurement record. */
 static void check_statistics(void)
 {
@@ -684,6 +728,7 @@ int main(void)
     check_other_verdicts(out, sizeof(out));
     check_accepted(out, sizeof(out));
     check_damage(out, sizeof(out));
+    check_load_evidence(out, sizeof(out));
     if (failures)
         fprintf(stderr, "etude_compare_hosttest: %d checks failed\n", failures);
     else

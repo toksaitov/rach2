@@ -133,7 +133,7 @@ etude_main()
     platform=$(etude_platform) || etude_fail "unknown system $(uname -s)"
     cc=${ETUDE_CC:-cc}
     exe=
-    flags='-std=c99 -O2'
+    flags='-std=c99 -O2 -pthread'
     # shellcheck disable=SC2016 # make expands the variable
     src='SRC=$(ETUDE_SRC)'
     defs=-D_DEFAULT_SOURCE

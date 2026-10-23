@@ -26,6 +26,7 @@ struct cmp_record {
     size_t length, order; /* the line's bytes, and its place in the input */
     struct eh_json *json;
     const struct eh_json *data;
+    int load_eligible; /* verified once before attempts are indexed */
     struct cmp_sample *sample; /* an attempt's sample, or NULL */
 };
 
@@ -127,6 +128,7 @@ void cmp_result_free(struct cmp_result *result);
 void cmp_seconds(uint64_t us, char out[32]);
 void cmp_printf(struct cmp_text *text, const char *format, ...);
 void cmp_item_key(const struct eh_json *plan, const struct eh_json *item, struct cmp_key *key);
+void cmp_check_load(struct cmp_record *run);
 int cmp_read_file(const char *path, size_t limit, char **bytes, size_t *length);
 int cmp_store(const char *store, const char *bytes, size_t length, char *path, size_t size,
               char hex[65]);

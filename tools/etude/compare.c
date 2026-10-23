@@ -403,7 +403,11 @@ int cmp_load(struct cmp_history *h, const char *schema, char **paths, int count)
     for (i = 0; i < count; i++)
         if (load_stream(h, schema, paths[i], &state))
             return -1;
-    if (index_records(h) || index_kinds(h) || index_samples(h))
+    if (index_records(h) || index_kinds(h))
+        return -1;
+    for (size_t i = 0; i < h->runs; i++)
+        cmp_check_load(h->by_run[i]);
+    if (index_samples(h))
         return -1;
     return 0;
 }
@@ -562,6 +566,8 @@ static void check_run(const struct cmp_history *h, struct cmp_sample *s)
     if (strcmp(cmp_text(s->run->data, "plan_id"), s->plan->id))
         exclude(s, "its run record is of another plan, %s", cmp_text(s->run->data, "plan_id"));
     check_result(s, eh_json_get(s->run->data, "result"), "its run");
+    if (!s->run->load_eligible)
+        exclude(s, "its run has no verified continuous load observation or controlled measurement context");
     item = member_with(eh_json_get(s->run->data, "items"), "item_id",
                        cmp_text(s->attempt->data, "item_id"));
     if (!item || !listed(eh_json_get(item, "attempt_records"), s->attempt->id))

@@ -11,8 +11,11 @@
  * the tree's build/tests.
  *
  * host-deps: tests/host/compat/desktop_host.c tests/host/compat/command_host.c
+ * host-deps: tools/etude/compare_load.c tools/etude/observe_import.c tools/etude/json.c
  * host-deps: tests/host/compat/legacyset_fixture.c
  * host-deps: tests/host/compat/legacyset_process.c
+ * host-deps: tools/etude/observe.c tools/etude/observe_history.c
+ * host-deps: tools/etude/observe_scope.c tools/etude/observe_system.c
  * host-deps: tools/etude/measurement_context.c
  * host-deps: tools/etude/posix/legacy.c tools/etude/posix/legacy_set.c
  * host-deps: tools/etude/posix/legacy_cases.c tools/etude/digest.c
@@ -29,6 +32,7 @@
  * host-deps: tools/etude/compare.c tools/etude/baseline.c
  * host-deps: tools/etude/history.c tools/etude/history_json.c
  * host-deps: tools/etude/history_collect.c utils/sha256.c
+ * host-cflags: -pthread
  * host-cflags: -I tools/etude/include -I tools/etude -I tools/etude/posix
  * host-cflags: -Wall -Wextra -Werror
  * host-first: it runs for minutes

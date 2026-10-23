@@ -147,7 +147,8 @@ char *etude_observe_import(const char *bytes, size_t length, const char *run,
         if (!nl || read_line(&r, p, (size_t)(nl - p), run)) goto fail;
         p = nl + 1;
     }
-    if (!r.ended || !r.cpu_known || r.start_utc > start || r.end_utc < end) goto fail;
+    if (!r.ended || !r.cpu_known || r.max_gap > 5 * ETUDE_OBSERVE_INTERVAL_US ||
+        r.start_utc > start || r.end_utc < end) goto fail;
     char prefix[512];
     snprintf(prefix, sizeof prefix, "{\"schema_version\":1,\"method\":\"native-load-v1\","
         "\"comparison_available\":true,\"coverage\":{\"start_utc_us\":%llu,\"end_utc_us\":%llu,"
