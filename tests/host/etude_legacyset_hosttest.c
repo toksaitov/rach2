@@ -20,7 +20,7 @@
  * host-deps: tools/etude/observe_scope.c tools/etude/observe_system.c
  * host-deps: tools/etude/measurement_context.c
  * host-inputs: tests/host/compat/legacyset_context.c
- * host-deps: tools/etude/posix/legacy.c tools/etude/posix/legacy_set.c
+ * host-deps: tools/etude/preparation_record.c tools/etude/posix/legacy_set.c
  * host-deps: tools/etude/posix/legacy_cases.c tools/etude/digest.c
  * host-deps: tools/etude/posix/legacy_guest.c tools/etude/serial.c
  * host-deps: tools/etude/guest/wire.c tools/etude/posix/store.c
