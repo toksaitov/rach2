@@ -163,3 +163,7 @@ The portable dependency audit found that the C image controllers still sent shel
 ## Takeover triage omitted existing plan tasks
 
 The coordinating checks left the unassigned comparison, deployment and final audit tasks without a triage record after their phase had started. The check at 20:55 on 23 October read the three tasks and marked them triaged, retaining their order and prerequisites. A planning task is exempt from triage only while its phase has not started; a takeover does not extend that exemption.
+
+## GNU routing left interpreter-based process fixtures
+
+The dependency audit at 21:15 on 23 October found host process tests whose compiled controllers still created shell workloads or used shell commands for fixture control. Routing those tests to the GNU helper satisfied the desktop dependency check but did not complete the C conversion. The coordinator is converting those roles and preserving their assertions. The audit must inspect execution calls inside each declared helper as well as those on the desktop. Scripts that are themselves the tested product, and script bytes that a refusal test never executes, are distinct from fixture control.

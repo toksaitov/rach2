@@ -28,6 +28,7 @@
 #include "../../tools/etude/posix/admit.c"
 
 static int fails;
+static char executable[4096];
 #define CHECK(c, row)                                                     \
     do {                                                                  \
         if (!(c)) {                                                       \
@@ -40,6 +41,69 @@ static int fails;
 static pid_t active_worker;
 static long holders[32];
 static size_t nholders;
+
+/** Announce the child, then wait on the pipe owned by the test. */
+static int fixture_block(char **argv)
+{
+    FILE *f;
+    char line[4096];
+    int fd;
+    ssize_t n;
+    const char *marker = getenv("RUNNER_TRACKING_ID");
+    if (strcmp(argv[5], "tracked") == 0 &&
+        (marker == NULL || strcmp(marker, "etude-admit-fixture") != 0))
+        return 90;
+    f = fopen(argv[3], "w");
+    if (f == NULL || fputc('.', f) == EOF || fclose(f) != 0)
+        return 92;
+    fd = open(argv[4], O_RDONLY);
+    if (fd < 0)
+        return 93;
+    while ((n = read(fd, line, sizeof(line))) > 0 || (n < 0 && errno == EINTR)) {
+        if (n > 0 && fwrite(line, 1, (size_t)n, stdout) != (size_t)n) {
+            close(fd);
+            return 94;
+        }
+    }
+    close(fd);
+    return n < 0;
+}
+
+/** Run a compiled command whose process the admission checks observe. */
+static int fixture_command(int argc, char **argv)
+{
+    FILE *f;
+    char path[4096], line[4096];
+    int found = 0;
+
+    if (argc < 3)
+        return 99;
+    if (strcmp(argv[2], "pass") == 0)
+        return 0;
+    if (strcmp(argv[2], "kill") == 0) {
+        raise(SIGKILL);
+        return 99;
+    }
+    if (strcmp(argv[2], "block") == 0 && argc == 6)
+        return fixture_block(argv);
+    if (strcmp(argv[2], "touch") == 0 && argc == 4) {
+        f = fopen(argv[3], "w");
+        return f != NULL && fclose(f) == 0 ? 2 : 95;
+    }
+    if (strcmp(argv[2], "registered") != 0 || argc != 4)
+        return 99;
+    if (getenv("RACH2_PORT_OFFSET") == NULL || strcmp(getenv("RACH2_PORT_OFFSET"), "0") != 0)
+        return 90;
+    if (snprintf(path, sizeof(path), "%s/claims", argv[3]) >= (int)sizeof(path))
+        return 91;
+    f = fopen(path, "r");
+    if (f == NULL)
+        return 91;
+    while (fgets(line, sizeof(line), f))
+        found |= strstr(line, "state running") != NULL;
+    fclose(f);
+    return found ? 7 : 91;
+}
 
 /** Keep the identity of a fixture's lock holder for interrupted cleanup. */
 static void remember(long pid)
@@ -342,10 +406,8 @@ static pid_t runner_worker(const char *self, const char *ledger, const char *rea
         unsetenv("RACH2_PORT_OFFSET");
         unsetenv("SSH_TEST_PORT");
         execl(self, self, "--runner-worker", "-p", "-d", fix_dir(), ledger, "runner-cleanup",
-              "test", "shared", "1,15,1", "10,20,10", "20", "/bin/sh", "-c",
-              "test \"$RUNNER_TRACKING_ID\" = etude-admit-fixture || exit 90; "
-              "printf . > \"$1\"; cat \"$2\"",
-              "sh", ready, blocked, (char *)NULL);
+              "test", "shared", "1,15,1", "10,20,10", "20", executable, "--bridge-command", "block",
+              ready, blocked, "tracked", (char *)NULL);
         _exit(99);
     }
     active_worker = worker;
@@ -531,18 +593,18 @@ static void lost_controller(const char *ledger)
                         "1,15,1",
                         "10,20,10",
                         "20",
-                        "/bin/sh",
-                        "-c",
-                        "printf . > \"$1\"; cat \"$2\"",
-                        "sh",
+                        executable,
+                        "--bridge-command",
+                        "block",
                         (char *)ready,
                         (char *)blocked,
+                        "ordinary",
                         NULL};
         close(fd);
         unsetenv("RACH2_PORT_OFFSET");
         unsetenv("SSH_TEST_PORT");
         optind = 1;
-        _exit(etude_admit_main(17, args));
+        _exit(etude_admit_main((int)(sizeof(args) / sizeof(args[0])) - 1, args));
     }
     active_worker = worker;
     CHECK(case_ready(fd, worker), "case ready before loss");
@@ -720,10 +782,9 @@ static void waiting(struct etude_ledger *l, const char *ledger)
                     "1,10,1",
                     "10,20,10",
                     "5",
-                    "/bin/sh",
-                    "-c",
-                    ": > \"$1\"; exit 2",
-                    "sh",
+                    executable,
+                    "--bridge-command",
+                    "touch",
                     (char *)ran,
                     NULL};
     pid_t pid;
@@ -774,8 +835,8 @@ static void processors(struct etude_ledger *l, const char *ledger)
 {
     char *args[] = {"etude",       "-d",   (char *)fix_dir(), (char *)ledger,
                     "beside-busy", "test", "shared",          "5,1,5",
-                    "10,20,10",    "5",    "/bin/sh",         "-c",
-                    "exit 0",      NULL};
+                    "10,20,10",    "5",    executable,        "--bridge-command",
+                    "pass",        NULL};
 
     busy(l);
     CHECK(bridge_status(bridge_child(args)) == 0, "processors and disk not judged");
@@ -786,9 +847,22 @@ static void processors(struct etude_ledger *l, const char *ledger)
 static void incomplete(const char *ledger)
 {
     const char *rec = fix_path("result");
-    char *args[] = {"etude",   "-d",   (char *)fix_dir(), "-r",    (char *)rec, (char *)ledger,
-                    "killed",  "test", "shared",          "1,1,1", "10,20,10",  "5",
-                    "/bin/sh", "-c",   "kill -KILL $$",   NULL};
+    char *args[] = {"etude",
+                    "-d",
+                    (char *)fix_dir(),
+                    "-r",
+                    (char *)rec,
+                    (char *)ledger,
+                    "killed",
+                    "test",
+                    "shared",
+                    "1,1,1",
+                    "10,20,10",
+                    "5",
+                    executable,
+                    "--bridge-command",
+                    "kill",
+                    NULL};
 
     CHECK(bridge_status(bridge_child(args)) == 2, "killed command fails");
     CHECK(recorded(rec, "incomplete"), "incomplete recorded");
@@ -811,11 +885,9 @@ static void wrapper(const char *ledger)
                     "1,15,1",
                     "10,20,10",
                     "5",
-                    "/bin/sh",
-                    "-c",
-                    "test \"$RACH2_PORT_OFFSET\" = 0 || exit 90; "
-                    "grep -q 'state running' \"$1/claims\" || exit 91; exit 7",
-                    "sh",
+                    executable,
+                    "--bridge-command",
+                    "registered",
                     (char *)ledger,
                     NULL};
 
@@ -870,6 +942,10 @@ int main(int argc, char **argv)
     const char *ledger;
     struct etude_bridge *b;
 
+    if (argc > 1 && strcmp(argv[1], "--bridge-command") == 0)
+        return fixture_command(argc, argv);
+    if (realpath(argv[0], executable) == NULL)
+        return 1;
     if (argc > 1 && strcmp(argv[1], "--runner-worker") == 0)
         return etude_admit_main(argc - 1, argv + 1);
     atexit(cleanup_test);
