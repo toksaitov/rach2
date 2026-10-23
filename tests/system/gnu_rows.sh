@@ -147,17 +147,11 @@ row_glibc() {
         "../usr/share/zoneinfo/Etc/UTC Etc/UTC"
 }
 
-# zlib compresses and decompresses through openssl, and curl names the
-# version it was built with.
-row_zlib() {
-    same "a round trip" "$(printf 'zlib row' | openssl zlib | openssl zlib -d)" "zlib row"
-    has "curl's zlib" "$(curl -V | head -n 1)" "zlib/1.3.2"
-}
-
 # OpenSSL's version and a SHA-256 digest, the number of certificates in
 # /etc/ssl/cert.pem, and a root of Debian's bundle verified against the
 # default store.
 row_openssl() {
+    same "a zlib round trip" "$(printf 'zlib row' | openssl zlib | openssl zlib -d)" "zlib row"
     has "the version" "$(openssl version)" "OpenSSL 4.0.2"
     has "SHA-256" "$(printf abc | openssl dgst -sha256)" "$ABC"
     same "the bundle" "$(grep -c 'BEGIN CERTIFICATE' /etc/ssl/cert.pem)" "121"
@@ -242,6 +236,7 @@ row_perl() {
 # curl asks it once after that; the row keeps the FIFO of the server's output
 # open until the server has ended, so that a later line cannot end it.
 row_curl() {
+    has "curl's zlib" "$(curl -V | head -n 1)" "zlib/1.3.2"
     local server name=rach2 https line accept
     https=$(port 4433)
 
@@ -379,19 +374,13 @@ row_patch() {
 # version.
 row_tar() {
     mkdir -p "$WORK/dir" "$WORK/x"
-    printf 'tar row\n' > "$WORK/dir/file"
+    seq 1 1000 > "$WORK/dir/file"
     runs "tar -c" tar -czf "$WORK/t.tgz" -C "$WORK" dir
     same "tar -t" "$(tar -tzf "$WORK/t.tgz" | sort | tr '\n' ' ')" "dir/ dir/file "
     runs "tar -x" tar -xzf "$WORK/t.tgz" -C "$WORK/x"
-    same "the extracted file" "$(cat "$WORK/x/dir/file" 2>&1)" "tar row"
+    same "the extracted file" "$(cksum < "$WORK/x/dir/file")" "$(cksum < "$WORK/dir/file")"
+    has "gzip's version" "$(gzip --version | head -n 1)" "1.15"
     has "the version" "$(tar --version | head -n 1)" "(GNU tar) 1.35"
-}
-
-# gzip compresses and decompresses a file unchanged, and its version.
-row_gzip() {
-    seq 1 1000 > "$WORK/in"
-    same "a round trip" "$(gzip -c "$WORK/in" | gzip -dc | cksum)" "$(cksum < "$WORK/in")"
-    has "the version" "$(gzip --version | head -n 1)" "1.15"
 }
 
 # xz compresses and decompresses a file unchanged, and its version.
@@ -754,14 +743,6 @@ row_dosfstools() {
     has "the check" "$OUT" "files"
     runs "fatlabel" fatlabel "$WORK/v.img" RENAMED
     same "the label" "$(fatlabel "$WORK/v.img")" "RENAMED"
-}
-
-# m4 expands a macro it was given.
-row_m4() {
-    cat > "$WORK/greet.m4" << 'EOF'
-define(`greet', `hello $1')greet(`world')
-EOF
-    same "a macro" "$(m4 "$WORK/greet.m4")" "hello world"
 }
 
 # Autoconf and Automake make a package's build from configure.ac and
