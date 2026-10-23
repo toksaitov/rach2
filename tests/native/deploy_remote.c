@@ -72,10 +72,19 @@ static int run_setup(struct nd_deploy *d, char *setup, size_t size)
                      "test ! -d '%s/state/collection.lock'; umask 077; mkdir -m 700 \"$claim\"; "
                      "printf '%%s\\n' '%s' > \"$claim/owner\"; "
                      "start=$(awk '{print $22}' /proc/$$/stat); "
-                     "boot=$(cat /proc/sys/kernel/random/boot_id); test -n \"$boot\"; "
+                     "bootfile=/dev/shm/etude-guest-boot; if test ! -e \"$bootfile\"; then "
+                     "(scratch=/dev/shm/etude-boot-%s; mkdir -m 700 \"$scratch\"; "
+                     "trap 'rm -rf \"$scratch\"' EXIT; trap 'exit 143' TERM; "
+                     "trap 'exit 130' INT; trap 'exit 129' HUP; umask 022; "
+                     "printf '%%s' '%s' > \"$scratch/value\"; "
+                     "ln \"$scratch/value\" \"$bootfile\" || test -f \"$bootfile\"); fi; "
+                     "test ! -L \"$bootfile\"; test -f \"$bootfile\"; "
+                     "case $(stat -c '%%u:%%a:%%s' \"$bootfile\") in "
+                     "0:644:64|0:600:64|0:444:64|0:400:64) ;; *) exit 1;; esac; "
+                     "boot=$(cat \"$bootfile\"); case $boot in *[!0-9a-f]*|'') exit 1;; esac; "
                      "printf '%%s %%s %%s\\n' \"$$\" \"$start\" \"$boot\" > \"$claim/identity\"; ",
                      c->target, c->archive_sha, c->archive_sha, c->target, c->run, c->target,
-                     c->run, c->target, c->nonce);
+                     c->run, c->target, c->nonce, c->nonce, c->nonce);
 }
 static int run_arguments(struct nd_deploy *d, char *command, size_t size)
 {
@@ -123,7 +132,7 @@ int nd_remote_cleanup(struct nd_deploy *d)
                    "read pid born boot < \"$receipt\"; "
                    "case $pid:$born in *[!0-9:]*|:*) exit 1;; esac; "
                    "test \"$pid\" -gt 1; test \"$born\" -gt 0; "
-                   "while test \"$boot\" = \"$(cat /proc/sys/kernel/random/boot_id)\" && test -r "
+                   "while test \"$boot\" = \"$(cat /dev/shm/etude-guest-boot 2>/dev/null || true)\" && test -r "
                    "/proc/$pid/stat; do "
                    "start=$(awk '{print $22}' /proc/$pid/stat) || break; "
                    "test \"$start\" = \"$born\" || break; kill -TERM \"$pid\" || break; sleep 1; "

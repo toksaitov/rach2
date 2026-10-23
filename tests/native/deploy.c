@@ -13,10 +13,10 @@ static void interrupted(int signal)
 {
     nd_interrupted = signal;
 }
-static int nonce(char text[33])
+static int nonce(char text[65])
 {
     static const char digits[] = "0123456789abcdef";
-    unsigned char bytes[16];
+    unsigned char bytes[32];
     size_t at = 0, i;
     int file = open("/dev/urandom", O_RDONLY);
     ssize_t count;
@@ -35,7 +35,7 @@ static int nonce(char text[33])
         text[2 * i] = digits[bytes[i] >> 4];
         text[2 * i + 1] = digits[bytes[i] & 15];
     }
-    text[32] = '\0';
+    text[64] = '\0';
     return 1;
 }
 static int prepare(struct nd_deploy *d)

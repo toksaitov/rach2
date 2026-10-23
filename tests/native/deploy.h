@@ -11,7 +11,7 @@ struct nd_config {
     char **cases;
     int ncases;
     unsigned echo_port, datagram_port, uid;
-    char nonce[33], account[64], archive[4096], archive_sha[65], expected_archive[65],
+    char nonce[65], account[64], archive[4096], archive_sha[65], expected_archive[65],
         kernel_sha[65];
     uint64_t kernel_size;
 };
