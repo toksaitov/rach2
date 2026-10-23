@@ -26,16 +26,8 @@ def external_tool(name):
         if not path.is_file():
             raise ValueError(f'prepared native host tool is missing: {path}')
         return path.resolve()
-    paths = os.environ.get('PATH', '').split(os.pathsep)
-    paths += ['/opt/homebrew/opt/e2fsprogs/sbin', '/usr/local/opt/e2fsprogs/sbin',
-              '/sbin', '/usr/sbin']
-    if name in {'mke2fs', 'debugfs', 'dumpe2fs', 'e2fsck'}:
-        paths = [p for p in paths if all((Path(p) / n).is_file()
-                 for n in ('mke2fs', 'debugfs', 'e2fsck'))]
-    found = shutil.which(name, path=os.pathsep.join(paths))
-    if not found:
-        raise ValueError(f'prepare the required native host tool: {name}')
-    return Path(found).resolve()
+    raise ValueError(f'{name}: independent tools require the declared GNU helper; '
+                     'set HOST_TEST_PREPARED_TOOLS during GNU preparation')
 
 
 def external_exfat(marker):

@@ -1,339 +1,1848 @@
 {
   "schema_version": 1,
   "family_id": "host.host",
-  "summary": "The host tests, the checkers' selftests and the fuzz corpora under the sanitizers, and the scripted checks of tests/cases/host/host.list, booting no machine but the boots case's; the program is tests/cases/host/host.c",
+  "summary": "Native C host checks and prepared GNU fixtures, with independent filesystem tools, fatal sanitizers and all declared assertions",
   "cases": [
     {
       "case_id": "host.host.tests",
       "behavior": "each host test of tests/host but etude's own compiles natively with the kernel, utility, KRFFS, e2fsprogs and Doom sources it names and runs under AddressSanitizer and UndefinedBehaviorSanitizer, every report fatal, and exits 0",
-      "units": ["host", "the host tests of the inventory, each `tests/host/NAME_hosttest.c` but etude's, compiled and run under the sanitizers"],
-      "domain": "host",
-      "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": ["tests"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}},
-      "execution": {"program": "host", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs and the checks' scratch directories under its scratch directory, which the program removes after a pass"},
+      "units": [
+        "host",
+        "the host tests of the inventory, each `tests/host/NAME_hosttest.c` but etude's, compiled and run under the sanitizers"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [
+          "tests"
+        ],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "host_checks_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "reaped",
+        "cleanup": "the native executor reaps every child; the case library stops the declared GNU helper and keeps failed evidence"
+      },
       "assertions": [
-        {"assertion_id": "style_evidence", "checks": "source evidence rejects changed, added or removed inputs, missing assertions and unrecorded judges", "source": "program"},
-        {"assertion_id": "listed", "checks": "each tests/host/*_hosttest.c that is not etude's and has no host-arch: line has an assertion of this case, and each assertion a test of the tree", "source": "program"},
-        {"assertion_id": "style_evidence", "checks": "source evidence rejects changed, added or removed inputs, missing assertions and unrecorded judges", "source": "program"},
-        {"assertion_id": "records", "checks": "tests/host/records_hosttest.c rejects missing, malformed and inconsistent measurement records under ASan and UBSan", "source": "program"},
-        {"assertion_id": "accounttools", "checks": "tests/host/accounttools_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "acpi", "checks": "tests/host/acpi_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "ahci", "checks": "tests/host/ahci_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "arp", "checks": "tests/host/arp_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "ata", "checks": "tests/host/ata_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "bcache_cost", "checks": "tests/host/bcache_cost_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "bcache", "checks": "tests/host/bcache_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "block", "checks": "tests/host/block_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "board", "checks": "tests/host/board_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "bootctl", "checks": "tests/host/bootctl_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "bootslot", "checks": "tests/host/bootslot_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "bootverb", "checks": "tests/host/bootverb_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "clockref", "checks": "tests/host/clockref_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "coredump", "checks": "tests/host/coredump_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "corefile", "checks": "tests/host/corefile_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "debugreg", "checks": "tests/host/debugreg_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "devfs", "checks": "tests/host/devfs_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "dhcpc", "checks": "tests/host/dhcpc_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "dhcpmsg", "checks": "tests/host/dhcpmsg_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "diskcmd", "checks": "tests/host/diskcmd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "diskctl", "checks": "tests/host/diskctl_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "diskinfo", "checks": "tests/host/diskinfo_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "dma", "checks": "tests/host/dma_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "doom_platform", "checks": "tests/host/doom_platform_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "e1000", "checks": "tests/host/e1000_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "e2fsprogs_alignment64", "checks": "tests/host/e2fsprogs_alignment64_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "e2fsprogs_alignment", "checks": "tests/host/e2fsprogs_alignment_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "elf", "checks": "tests/host/elf_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "epoll", "checks": "tests/host/epoll_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "eventfd", "checks": "tests/host/eventfd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "exfat", "checks": "tests/host/exfat_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "exfatcheck", "checks": "tests/host/exfatcheck_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "exit", "checks": "tests/host/exit_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "ext2", "checks": "tests/host/ext2_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "ext2_reserve", "checks": "tests/host/ext2_reserve_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "fat32", "checks": "tests/host/fat32_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "fatcheck", "checks": "tests/host/fatcheck_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "fatname", "checks": "tests/host/fatname_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "fbcon", "checks": "tests/host/fbcon_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "fd", "checks": "tests/host/fd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "file_read", "checks": "tests/host/file_read_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "fixdir", "checks": "tests/host/fixdir_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "fpuframe64", "checks": "tests/host/fpuframe64_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "fpuframe", "checks": "tests/host/fpuframe_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "frame", "checks": "tests/host/frame_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "futex", "checks": "tests/host/futex_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "gpt", "checks": "tests/host/gpt_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "gptdisk", "checks": "tests/host/gptdisk_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "growroot", "checks": "tests/host/growroot_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "grubembed", "checks": "tests/host/grubembed_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "grubslot", "checks": "tests/host/grubslot_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "hda", "checks": "tests/host/hda_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "hid", "checks": "tests/host/hid_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "httpd", "checks": "tests/host/httpd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "hub", "checks": "tests/host/hub_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "icmp", "checks": "tests/host/icmp_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "initpolicy", "checks": "tests/host/initpolicy_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "ish", "checks": "tests/host/ish_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "kfmt", "checks": "tests/host/kfmt_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "kheap", "checks": "tests/host/kheap_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "klog", "checks": "tests/host/klog_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "krandom", "checks": "tests/host/krandom_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "krffs_fuse", "checks": "tests/host/krffs_fuse_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "krffs_hash", "checks": "tests/host/krffs_hash_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "krffs", "checks": "tests/host/krffs_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "krffsmount", "checks": "tests/host/krffsmount_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "kstd", "checks": "tests/host/kstd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "kstring", "checks": "tests/host/kstring_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "lag", "checks": "tests/host/lag_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "lapic", "checks": "tests/host/lapic_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "latency", "checks": "tests/host/latency_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "lock", "checks": "tests/host/lock_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "loop_attach", "checks": "tests/host/loop_attach_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "mbinfo", "checks": "tests/host/mbinfo_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "mbr", "checks": "tests/host/mbr_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "mkhash", "checks": "tests/host/mkhash_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "mm", "checks": "tests/host/mm_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "modlayout", "checks": "tests/host/modlayout_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "msc", "checks": "tests/host/msc_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "n_tty", "checks": "tests/host/n_tty_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "ncport", "checks": "tests/host/ncport_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "ncwrite", "checks": "tests/host/ncwrite_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "netcfg", "checks": "tests/host/netcfg_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "netcfg_io", "checks": "tests/host/netcfg_io_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "netconf", "checks": "tests/host/netconf_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "netconsole", "checks": "tests/host/netconsole_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "netdev", "checks": "tests/host/netdev_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "netif", "checks": "tests/host/netif_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "netup", "checks": "tests/host/netup_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "nvme", "checks": "tests/host/nvme_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "open", "checks": "tests/host/open_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "oplmusic", "checks": "tests/host/oplmusic_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "packet", "checks": "tests/host/packet_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "pagecache", "checks": "tests/host/pagecache_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "pagecache_ring", "checks": "tests/host/pagecache_ring_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "paging", "checks": "tests/host/paging_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "partition", "checks": "tests/host/partition_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "pcimsi", "checks": "tests/host/pcimsi_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "pipe_copy", "checks": "tests/host/pipe_copy_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "pipe_ring", "checks": "tests/host/pipe_ring_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "poll_deadline", "checks": "tests/host/poll_deadline_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "poll_select", "checks": "tests/host/poll_select_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "power", "checks": "tests/host/power_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "process_timer", "checks": "tests/host/process_timer_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "procfs", "checks": "tests/host/procfs_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "ps2kbd", "checks": "tests/host/ps2kbd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "ps2mouse", "checks": "tests/host/ps2mouse_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "ptrace", "checks": "tests/host/ptrace_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "pwauth", "checks": "tests/host/pwauth_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "pwauthatexit", "checks": "tests/host/pwauthatexit_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "pwauthfault", "checks": "tests/host/pwauthfault_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "raw", "checks": "tests/host/raw_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "rcvwnd", "checks": "tests/host/rcvwnd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "readfile", "checks": "tests/host/readfile_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "refclock", "checks": "tests/host/refclock_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "request", "checks": "tests/host/request_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "resolv", "checks": "tests/host/resolv_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "rm", "checks": "tests/host/rm_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "rtc", "checks": "tests/host/rtc_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "rtl8139", "checks": "tests/host/rtl8139_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "rtl8168", "checks": "tests/host/rtl8168_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "sb16", "checks": "tests/host/sb16_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "sched", "checks": "tests/host/sched_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "sectorcopy", "checks": "tests/host/sectorcopy_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "sha256", "checks": "tests/host/sha256_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "smbios", "checks": "tests/host/smbios_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "smp", "checks": "tests/host/smp_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "socket_wake", "checks": "tests/host/socket_wake_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "synthfs", "checks": "tests/host/synthfs_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "syscall", "checks": "tests/host/syscall_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "sysv_detach", "checks": "tests/host/sysv_detach_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "tables", "checks": "tests/host/tables_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "tcp", "checks": "tests/host/tcp_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "tcp_reset", "checks": "tests/host/tcp_reset_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "timercal", "checks": "tests/host/timercal_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "timerfd", "checks": "tests/host/timerfd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "tls64", "checks": "tests/host/tls64_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "tls", "checks": "tests/host/tls_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "tmpfs", "checks": "tests/host/tmpfs_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "tty", "checks": "tests/host/tty_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "udelay", "checks": "tests/host/udelay_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "uimage", "checks": "tests/host/uimage_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "unix", "checks": "tests/host/unix_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "usb", "checks": "tests/host/usb_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "usb_interrupt", "checks": "tests/host/usb_interrupt_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "usbdisk", "checks": "tests/host/usbdisk_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "usbstamp", "checks": "tests/host/usbstamp_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "vga_gfx", "checks": "tests/host/vga_gfx_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "vga_text", "checks": "tests/host/vga_text_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "vm", "checks": "tests/host/vm_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "wait_queue", "checks": "tests/host/wait_queue_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "xhci", "checks": "tests/host/xhci_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"}
+        {
+          "assertion_id": "style_evidence",
+          "checks": "source evidence rejects changed, added or removed inputs, missing assertions and unrecorded judges",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "listed",
+          "checks": "each tests/host/*_hosttest.c that is not etude's and has no host-arch: line has an assertion of this case, and each assertion a test of the tree",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "style_evidence",
+          "checks": "source evidence rejects changed, added or removed inputs, missing assertions and unrecorded judges",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "records",
+          "checks": "tests/host/records_hosttest.c rejects missing, malformed and inconsistent measurement records under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "accounttools",
+          "checks": "tests/host/accounttools_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "acpi",
+          "checks": "tests/host/acpi_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ahci",
+          "checks": "tests/host/ahci_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "arp",
+          "checks": "tests/host/arp_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ata",
+          "checks": "tests/host/ata_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "bcache_cost",
+          "checks": "tests/host/bcache_cost_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "bcache",
+          "checks": "tests/host/bcache_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "block",
+          "checks": "tests/host/block_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "board",
+          "checks": "tests/host/board_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "bootctl",
+          "checks": "tests/host/bootctl_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "bootslot",
+          "checks": "tests/host/bootslot_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "bootverb",
+          "checks": "tests/host/bootverb_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "clockref",
+          "checks": "tests/host/clockref_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "coredump",
+          "checks": "tests/host/coredump_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "corefile",
+          "checks": "tests/host/corefile_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "debugreg",
+          "checks": "tests/host/debugreg_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "devfs",
+          "checks": "tests/host/devfs_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "dhcpc",
+          "checks": "tests/host/dhcpc_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "dhcpmsg",
+          "checks": "tests/host/dhcpmsg_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "diskcmd",
+          "checks": "tests/host/diskcmd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "diskctl",
+          "checks": "tests/host/diskctl_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "diskinfo",
+          "checks": "tests/host/diskinfo_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "dma",
+          "checks": "tests/host/dma_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "doom_platform",
+          "checks": "tests/host/doom_platform_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "e1000",
+          "checks": "tests/host/e1000_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "e2fsprogs_alignment64",
+          "checks": "tests/host/e2fsprogs_alignment64_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "e2fsprogs_alignment",
+          "checks": "tests/host/e2fsprogs_alignment_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "elf",
+          "checks": "tests/host/elf_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "epoll",
+          "checks": "tests/host/epoll_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "eventfd",
+          "checks": "tests/host/eventfd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "exfat",
+          "checks": "tests/host/exfat_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "exfatcheck",
+          "checks": "tests/host/exfatcheck_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "exit",
+          "checks": "tests/host/exit_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ext2",
+          "checks": "tests/host/ext2_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ext2_reserve",
+          "checks": "tests/host/ext2_reserve_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "fat32",
+          "checks": "tests/host/fat32_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "fatcheck",
+          "checks": "tests/host/fatcheck_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "fatname",
+          "checks": "tests/host/fatname_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "fbcon",
+          "checks": "tests/host/fbcon_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "fd",
+          "checks": "tests/host/fd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "file_read",
+          "checks": "tests/host/file_read_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "fixdir",
+          "checks": "tests/host/fixdir_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "fpuframe64",
+          "checks": "tests/host/fpuframe64_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "fpuframe",
+          "checks": "tests/host/fpuframe_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "frame",
+          "checks": "tests/host/frame_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "futex",
+          "checks": "tests/host/futex_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "gpt",
+          "checks": "tests/host/gpt_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "gptdisk",
+          "checks": "tests/host/gptdisk_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "growroot",
+          "checks": "tests/host/growroot_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "grubembed",
+          "checks": "tests/host/grubembed_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "grubslot",
+          "checks": "tests/host/grubslot_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "hda",
+          "checks": "tests/host/hda_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "hid",
+          "checks": "tests/host/hid_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "httpd",
+          "checks": "tests/host/httpd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "hub",
+          "checks": "tests/host/hub_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "icmp",
+          "checks": "tests/host/icmp_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "initpolicy",
+          "checks": "tests/host/initpolicy_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ish",
+          "checks": "tests/host/ish_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "kfmt",
+          "checks": "tests/host/kfmt_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "kheap",
+          "checks": "tests/host/kheap_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "klog",
+          "checks": "tests/host/klog_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "krandom",
+          "checks": "tests/host/krandom_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "krffs_fuse",
+          "checks": "tests/host/krffs_fuse_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "krffs_hash",
+          "checks": "tests/host/krffs_hash_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "krffs",
+          "checks": "tests/host/krffs_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "krffsmount",
+          "checks": "tests/host/krffsmount_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "kstd",
+          "checks": "tests/host/kstd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "kstring",
+          "checks": "tests/host/kstring_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "lag",
+          "checks": "tests/host/lag_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "lapic",
+          "checks": "tests/host/lapic_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "latency",
+          "checks": "tests/host/latency_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "lock",
+          "checks": "tests/host/lock_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "loop_attach",
+          "checks": "tests/host/loop_attach_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "mbinfo",
+          "checks": "tests/host/mbinfo_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "mbr",
+          "checks": "tests/host/mbr_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "mkhash",
+          "checks": "tests/host/mkhash_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "mm",
+          "checks": "tests/host/mm_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "modlayout",
+          "checks": "tests/host/modlayout_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "msc",
+          "checks": "tests/host/msc_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "n_tty",
+          "checks": "tests/host/n_tty_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ncport",
+          "checks": "tests/host/ncport_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ncwrite",
+          "checks": "tests/host/ncwrite_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "netcfg",
+          "checks": "tests/host/netcfg_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "netcfg_io",
+          "checks": "tests/host/netcfg_io_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "netconf",
+          "checks": "tests/host/netconf_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "netconsole",
+          "checks": "tests/host/netconsole_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "netdev",
+          "checks": "tests/host/netdev_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "netif",
+          "checks": "tests/host/netif_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "netup",
+          "checks": "tests/host/netup_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "nvme",
+          "checks": "tests/host/nvme_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "open",
+          "checks": "tests/host/open_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "oplmusic",
+          "checks": "tests/host/oplmusic_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "packet",
+          "checks": "tests/host/packet_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "pagecache",
+          "checks": "tests/host/pagecache_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "pagecache_ring",
+          "checks": "tests/host/pagecache_ring_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "paging",
+          "checks": "tests/host/paging_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "partition",
+          "checks": "tests/host/partition_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "pcimsi",
+          "checks": "tests/host/pcimsi_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "pipe_copy",
+          "checks": "tests/host/pipe_copy_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "pipe_ring",
+          "checks": "tests/host/pipe_ring_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "poll_deadline",
+          "checks": "tests/host/poll_deadline_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "poll_select",
+          "checks": "tests/host/poll_select_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "power",
+          "checks": "tests/host/power_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "process_timer",
+          "checks": "tests/host/process_timer_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "procfs",
+          "checks": "tests/host/procfs_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ps2kbd",
+          "checks": "tests/host/ps2kbd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ps2mouse",
+          "checks": "tests/host/ps2mouse_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ptrace",
+          "checks": "tests/host/ptrace_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "pwauth",
+          "checks": "tests/host/pwauth_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "pwauthatexit",
+          "checks": "tests/host/pwauthatexit_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "pwauthfault",
+          "checks": "tests/host/pwauthfault_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "raw",
+          "checks": "tests/host/raw_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "rcvwnd",
+          "checks": "tests/host/rcvwnd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "readfile",
+          "checks": "tests/host/readfile_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "refclock",
+          "checks": "tests/host/refclock_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "request",
+          "checks": "tests/host/request_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "resolv",
+          "checks": "tests/host/resolv_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "rm",
+          "checks": "tests/host/rm_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "rtc",
+          "checks": "tests/host/rtc_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "rtl8139",
+          "checks": "tests/host/rtl8139_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "rtl8168",
+          "checks": "tests/host/rtl8168_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "sb16",
+          "checks": "tests/host/sb16_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "sched",
+          "checks": "tests/host/sched_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "sectorcopy",
+          "checks": "tests/host/sectorcopy_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "sha256",
+          "checks": "tests/host/sha256_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "smbios",
+          "checks": "tests/host/smbios_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "smp",
+          "checks": "tests/host/smp_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "socket_wake",
+          "checks": "tests/host/socket_wake_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "synthfs",
+          "checks": "tests/host/synthfs_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "syscall",
+          "checks": "tests/host/syscall_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "sysv_detach",
+          "checks": "tests/host/sysv_detach_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "tables",
+          "checks": "tests/host/tables_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "tcp",
+          "checks": "tests/host/tcp_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "tcp_reset",
+          "checks": "tests/host/tcp_reset_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "timercal",
+          "checks": "tests/host/timercal_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "timerfd",
+          "checks": "tests/host/timerfd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "tls64",
+          "checks": "tests/host/tls64_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "tls",
+          "checks": "tests/host/tls_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "tmpfs",
+          "checks": "tests/host/tmpfs_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "tty",
+          "checks": "tests/host/tty_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "udelay",
+          "checks": "tests/host/udelay_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "uimage",
+          "checks": "tests/host/uimage_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "unix",
+          "checks": "tests/host/unix_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "usb",
+          "checks": "tests/host/usb_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "usb_interrupt",
+          "checks": "tests/host/usb_interrupt_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "usbdisk",
+          "checks": "tests/host/usbdisk_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "usbstamp",
+          "checks": "tests/host/usbstamp_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "vga_gfx",
+          "checks": "tests/host/vga_gfx_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "vga_text",
+          "checks": "tests/host/vga_text_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "vm",
+          "checks": "tests/host/vm_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "wait_queue",
+          "checks": "tests/host/wait_queue_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "xhci",
+          "checks": "tests/host/xhci_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        }
       ],
       "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [{"witness_id": "checks", "kind": "step", "means": "a check of the case has ended, passed or failed", "limit": null}],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 16000, "memory_bytes": 4294967296, "disk_bytes": 4294967296, "locks": [], "ports": 0, "loop_devices": 0},
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "checks",
+          "kind": "step",
+          "means": "a check of the case has ended, passed or failed",
+          "limit": null
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "stages": {}
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 16000,
+        "memory_bytes": 6442450944,
+        "disk_bytes": 15032385536,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
       "prepare": [
-        {"name": "host", "node": "tests/cases/host/host", "per_architecture": false},
-        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false},
-        {"name": "e2fsck", "node": "vendor/e2fsprogs/e2fsck", "per_architecture": true},
-        {"name": "exfat-writer", "node": "tests/host/exfat_writer", "per_architecture": false},
-        {"name": "checks", "node": "tests/host-suite/tests.inventory.json", "per_architecture": true}
+        {
+          "name": "e2fsck",
+          "node": "vendor/e2fsprogs/e2fsck",
+          "per_architecture": true
+        },
+        {
+          "name": "checks",
+          "node": "tests/host-suite/tests.inventory.json",
+          "per_architecture": true
+        },
+        {
+          "name": "host_checks_scenario",
+          "node": "tests/cases/host/host_checks_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "products-kernel",
+          "node": "x86_64/rach2/kernel",
+          "per_architecture": false
+        },
+        {
+          "name": "products-image",
+          "node": "x86_64/images/gnu-test.disk",
+          "per_architecture": false
+        }
       ],
       "timing": [],
-      "native": {"plan": "host"}
+      "native": {
+        "plan": "none",
+        "class": "system",
+        "reason": "native C executes platform checks and controls the declared GNU POSIX fixtures"
+      },
+      "steps": [
+        {
+          "step_id": "listed",
+          "stage": "execute",
+          "does": "validate all declared and prepared check identities"
+        },
+        {
+          "step_id": "native",
+          "stage": "execute",
+          "does": "run the prepared checks on the collection host"
+        },
+        {
+          "step_id": "products",
+          "stage": "boot",
+          "does": "boot the declared GNU products helper when needed",
+          "machine": "products"
+        },
+        {
+          "step_id": "gnu",
+          "stage": "execute",
+          "does": "run the prepared POSIX fixture on the GNU helper"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "products",
+          "qemu": {
+            "architecture": "x86_64",
+            "kernel": "products-kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "products-disk",
+                "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 4294967296,
+            "firmware": "direct",
+            "devices": [
+              "rtl8139"
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": true
+        }
+      ]
     },
     {
       "case_id": "host.host.etude",
       "behavior": "each of etude's host tests, tests/host/etude_*_hosttest.c, that boots no kernel compiles natively with etude's sources it names and runs under AddressSanitizer and UndefinedBehaviorSanitizer, every report fatal, and exits 0",
-      "units": ["host", "the host tests of the inventory's Etude, each `tests/host/etude_NAME_hosttest.c` that boots no kernel, compiled and run under the sanitizers"],
-      "domain": "host",
+      "units": [
+        "host",
+        "the host tests of the inventory's Etude, each `tests/host/etude_NAME_hosttest.c` that boots no kernel, compiled and run under the sanitizers"
+      ],
+      "domain": "machine",
       "architectures": "none",
-      "workload": {"arguments": ["etude"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}},
-      "execution": {"program": "host", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs and the checks' scratch directories under its scratch directory, which the program removes after a pass"},
+      "workload": {
+        "arguments": [
+          "etude"
+        ],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "host_checks_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "reaped",
+        "cleanup": "the native executor reaps every child; the case library stops the declared GNU helper and keeps failed evidence"
+      },
       "assertions": [
-        {"assertion_id": "listed", "checks": "each tests/host/etude_*_hosttest.c with no host-arch: line has an assertion of this case, and each assertion a test of the tree", "source": "program"},
-        {"assertion_id": "etude_artifact", "checks": "tests/host/etude_artifact_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_bridge", "checks": "tests/host/etude_bridge_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_budget", "checks": "tests/host/etude_budget_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_collection", "checks": "tests/host/etude_collection_hosttest.c is prepared under ASan and UBSan and checks native selection, complete output, immutable artifacts and learned watchdog bounds", "source": "program"},
-        {"assertion_id": "etude_compare", "checks": "tests/host/etude_compare_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_disk_binding", "checks": "tests/host/etude_disk_binding_hosttest.c checks private disk bindings and image helper arguments under ASan and UBSan", "source": "program"},
-        {"assertion_id": "etude_helper_arch", "checks": "tests/host/etude_helper_arch_hosttest.c checks helper architecture overrides and memory accounting under ASan and UBSan", "source": "program"},
-        {"assertion_id": "etude_hostdriver", "checks": "tests/host/etude_hostdriver_hosttest.c checks prepared execution, private scratch, immutable inputs, complete assertions and explicit unsupported checks under ASan and UBSan", "source": "program"},
-        {"assertion_id": "etude_platform", "checks": "the execution host runs native complete-output checks; Windows also runs the prepared process, path, job, lock, ledger, supervisor and tooling fixtures with no interpreter", "source": "program"},
-        {"assertion_id": "etude_exec", "checks": "tests/host/etude_exec_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_failures", "checks": "tests/host/etude_failures_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_guest", "checks": "tests/host/etude_guest_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_history", "checks": "tests/host/etude_history_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_hold", "checks": "tests/host/etude_hold_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_ledger", "checks": "tests/host/etude_ledger_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_ledgercmd", "checks": "tests/host/etude_ledgercmd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_legacy", "checks": "tests/host/etude_legacy_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_lines", "checks": "tests/host/etude_lines_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_native", "checks": "tests/host/etude_native_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_ports", "checks": "tests/host/etude_ports_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_remote", "checks": "tests/host/etude_remote_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_repeat", "checks": "tests/host/etude_repeat_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_runtime", "checks": "tests/host/etude_runtime_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_sched", "checks": "tests/host/etude_sched_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_serial", "checks": "tests/host/etude_serial_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_step", "checks": "tests/host/etude_step_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_volume", "checks": "tests/host/etude_volume_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_winfmt", "checks": "tests/host/etude_winfmt_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"}
+        {
+          "assertion_id": "listed",
+          "checks": "each tests/host/etude_*_hosttest.c with no host-arch: line has an assertion of this case, and each assertion a test of the tree",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_artifact",
+          "checks": "tests/host/etude_artifact_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_bridge",
+          "checks": "tests/host/etude_bridge_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_budget",
+          "checks": "tests/host/etude_budget_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_collection",
+          "checks": "tests/host/etude_collection_hosttest.c is prepared under ASan and UBSan and checks native selection, complete output, immutable artifacts and learned watchdog bounds",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_compare",
+          "checks": "tests/host/etude_compare_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_disk_binding",
+          "checks": "tests/host/etude_disk_binding_hosttest.c checks private disk bindings and image helper arguments under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_helper_arch",
+          "checks": "tests/host/etude_helper_arch_hosttest.c checks helper architecture overrides and memory accounting under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_hostdriver",
+          "checks": "tests/host/etude_hostdriver_hosttest.c checks prepared execution, private scratch, immutable inputs, complete assertions and explicit unsupported checks under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_platform",
+          "checks": "the execution host runs native complete-output checks; Windows also runs the prepared process, path, job, lock, ledger, supervisor and tooling fixtures with no interpreter",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_exec",
+          "checks": "tests/host/etude_exec_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_failures",
+          "checks": "tests/host/etude_failures_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_guest",
+          "checks": "tests/host/etude_guest_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_history",
+          "checks": "tests/host/etude_history_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_hold",
+          "checks": "tests/host/etude_hold_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_ledger",
+          "checks": "tests/host/etude_ledger_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_ledgercmd",
+          "checks": "tests/host/etude_ledgercmd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_legacy",
+          "checks": "tests/host/etude_legacy_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_lines",
+          "checks": "tests/host/etude_lines_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_native",
+          "checks": "tests/host/etude_native_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_ports",
+          "checks": "tests/host/etude_ports_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_remote",
+          "checks": "tests/host/etude_remote_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_repeat",
+          "checks": "tests/host/etude_repeat_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_runtime",
+          "checks": "tests/host/etude_runtime_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_sched",
+          "checks": "tests/host/etude_sched_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_serial",
+          "checks": "tests/host/etude_serial_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_step",
+          "checks": "tests/host/etude_step_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_volume",
+          "checks": "tests/host/etude_volume_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_winfmt",
+          "checks": "tests/host/etude_winfmt_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        }
       ],
       "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [{"witness_id": "checks", "kind": "step", "means": "a check of the case has ended, passed or failed", "limit": null}],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 16000, "memory_bytes": 4294967296, "disk_bytes": 2147483648, "locks": [], "ports": 0, "loop_devices": 0},
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "checks",
+          "kind": "step",
+          "means": "a check of the case has ended, passed or failed",
+          "limit": null
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "stages": {}
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 16000,
+        "memory_bytes": 6442450944,
+        "disk_bytes": 15032385536,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
       "prepare": [
-        {"name": "host", "node": "tests/cases/host/host", "per_architecture": false},
-        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false},
-        {"name": "checks", "node": "tests/host-suite/etude.inventory.json", "per_architecture": false}
+        {
+          "name": "checks",
+          "node": "tests/host-suite/etude.inventory.json",
+          "per_architecture": false
+        },
+        {
+          "name": "host_checks_scenario",
+          "node": "tests/cases/host/host_checks_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "products-kernel",
+          "node": "x86_64/rach2/kernel",
+          "per_architecture": false
+        },
+        {
+          "name": "products-image",
+          "node": "x86_64/images/gnu-test.disk",
+          "per_architecture": false
+        }
       ],
       "timing": [],
-      "native": {"plan": "host"}
+      "native": {
+        "plan": "none",
+        "class": "system",
+        "reason": "native C executes platform checks and controls the declared GNU POSIX fixtures"
+      },
+      "steps": [
+        {
+          "step_id": "listed",
+          "stage": "execute",
+          "does": "validate all declared and prepared check identities"
+        },
+        {
+          "step_id": "native",
+          "stage": "execute",
+          "does": "run the prepared checks on the collection host"
+        },
+        {
+          "step_id": "products",
+          "stage": "boot",
+          "does": "boot the declared GNU products helper when needed",
+          "machine": "products"
+        },
+        {
+          "step_id": "gnu",
+          "stage": "execute",
+          "does": "run the prepared POSIX fixture on the GNU helper"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "products",
+          "qemu": {
+            "architecture": "x86_64",
+            "kernel": "products-kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "products-disk",
+                "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 4294967296,
+            "firmware": "direct",
+            "devices": [
+              "rtl8139"
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": true
+        }
+      ]
     },
     {
       "case_id": "host.host.boots",
       "behavior": "each host test with a host-arch: line, etude's QEMU launcher, watchdog, scenario library and set driver, compiles under AddressSanitizer and UndefinedBehaviorSanitizer and exits 0, booting the kernel and test image of the architecture under QEMU",
-      "units": ["host", "`tests/host/etude_qemu_hosttest.c`, `etude_watchdog_hosttest.c`, `etude_scenario_hosttest.c` and `etude_legacyset_hosttest.c`, compiled and run under the sanitizers on the kernel of ARCH"],
-      "domain": "host",
-      "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": ["boots"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}},
-      "execution": {"program": "host", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs and the checks' scratch directories under its scratch directory, which the program removes after a pass"},
+      "units": [
+        "host",
+        "`tests/host/etude_qemu_hosttest.c`, `etude_watchdog_hosttest.c`, `etude_scenario_hosttest.c` and `etude_legacyset_hosttest.c`, compiled and run under the sanitizers on the kernel of ARCH"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [
+          "boots"
+        ],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "host_checks_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "reaped",
+        "cleanup": "the native executor reaps every child; the case library stops the declared GNU helper and keeps failed evidence"
+      },
       "assertions": [
-        {"assertion_id": "listed", "checks": "each tests/host/*_hosttest.c with a host-arch: line has an assertion of this case, and each assertion a test of the tree", "source": "program"},
-        {"assertion_id": "etude_legacyset", "checks": "tests/host/etude_legacyset_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_qemu", "checks": "tests/host/etude_qemu_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_scenario", "checks": "tests/host/etude_scenario_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
-        {"assertion_id": "etude_watchdog", "checks": "tests/host/etude_watchdog_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"}
+        {
+          "assertion_id": "listed",
+          "checks": "each tests/host/*_hosttest.c with a host-arch: line has an assertion of this case, and each assertion a test of the tree",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_legacyset",
+          "checks": "tests/host/etude_legacyset_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_qemu",
+          "checks": "tests/host/etude_qemu_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_scenario",
+          "checks": "tests/host/etude_scenario_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_watchdog",
+          "checks": "tests/host/etude_watchdog_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        }
       ],
       "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [{"witness_id": "checks", "kind": "step", "means": "a check of the case has ended, passed or failed", "limit": null}],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 16000, "memory_bytes": 2147483648, "disk_bytes": 4294967296, "locks": [], "ports": 0, "loop_devices": 0},
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "checks",
+          "kind": "step",
+          "means": "a check of the case has ended, passed or failed",
+          "limit": null
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "stages": {}
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 16000,
+        "memory_bytes": 6442450944,
+        "disk_bytes": 15032385536,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
       "prepare": [
-        {"name": "host", "node": "tests/cases/host/host", "per_architecture": false},
-        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false},
-        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
-        {"name": "test.krffs", "node": "images/test.krffs", "per_architecture": true},
-        {"name": "host-etude-scenario.disk", "node": "images/host-etude-scenario.disk", "per_architecture": true},
-        {"name": "hello", "node": "tests/hello", "per_architecture": true},
-        {"name": "checks", "node": "tests/host-suite/boots.inventory.json", "per_architecture": true}
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "test.krffs",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "host-etude-scenario.disk",
+          "node": "images/host-etude-scenario.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "hello",
+          "node": "tests/hello",
+          "per_architecture": true
+        },
+        {
+          "name": "checks",
+          "node": "tests/host-suite/boots.inventory.json",
+          "per_architecture": true
+        },
+        {
+          "name": "host_checks_scenario",
+          "node": "tests/cases/host/host_checks_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "products-kernel",
+          "node": "x86_64/rach2/kernel",
+          "per_architecture": false
+        },
+        {
+          "name": "products-image",
+          "node": "x86_64/images/gnu-test.disk",
+          "per_architecture": false
+        }
       ],
       "timing": [],
-      "native": {"plan": "host"}
+      "native": {
+        "plan": "none",
+        "class": "system",
+        "reason": "native C executes platform checks and controls the declared GNU POSIX fixtures"
+      },
+      "steps": [
+        {
+          "step_id": "listed",
+          "stage": "execute",
+          "does": "validate all declared and prepared check identities"
+        },
+        {
+          "step_id": "native",
+          "stage": "execute",
+          "does": "run the prepared checks on the collection host"
+        },
+        {
+          "step_id": "products",
+          "stage": "boot",
+          "does": "boot the declared GNU products helper when needed",
+          "machine": "products"
+        },
+        {
+          "step_id": "gnu",
+          "stage": "execute",
+          "does": "run the prepared POSIX fixture on the GNU helper"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "products",
+          "qemu": {
+            "architecture": "x86_64",
+            "kernel": "products-kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "products-disk",
+                "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 4294967296,
+            "firmware": "direct",
+            "devices": [
+              "rtl8139"
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": true
+        }
+      ]
     },
     {
       "case_id": "host.host.checkers",
       "behavior": "the five checkers that decide verdicts, elfcheck, cfgcheck, setidcheck, prosecheck and pecheck, compiled again under AddressSanitizer and UndefinedBehaviorSanitizer, each pass their own selftests",
-      "units": ["host", "the inventory's checkers' self-tests, compiled and run under the sanitizers"],
-      "domain": "host",
+      "units": [
+        "host",
+        "the inventory's checkers' self-tests, compiled and run under the sanitizers"
+      ],
+      "domain": "machine",
       "architectures": "none",
-      "workload": {"arguments": ["checkers"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}},
-      "execution": {"program": "host", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs and the checks' scratch directories under its scratch directory, which the program removes after a pass"},
+      "workload": {
+        "arguments": [
+          "checkers"
+        ],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "host_checks_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "reaped",
+        "cleanup": "the native executor reaps every child; the case library stops the declared GNU helper and keeps failed evidence"
+      },
       "assertions": [
-        {"assertion_id": "listed", "checks": "each checker this case compiles has an assertion of this case, and each assertion a checker of the tree", "source": "program"},
-        {"assertion_id": "elfcheck", "checks": "tools/inspect/elfcheck.c, compiled under ASan and UBSan with -Wall -Wextra -Werror, passes its --selftest", "source": "program"},
-        {"assertion_id": "cfgcheck", "checks": "tools/inspect/cfgcheck.c, compiled under ASan and UBSan with -Wall -Wextra -Werror, passes its --selftest", "source": "program"},
-        {"assertion_id": "setidcheck", "checks": "tools/inspect/setidcheck.c, compiled under ASan and UBSan with -Wall -Wextra -Werror, passes its --selftest", "source": "program"},
-        {"assertion_id": "prosecheck", "checks": "tools/verify/prosecheck.c, compiled under ASan and UBSan with -Wall -Wextra -Werror, passes its --selftest", "source": "program"},
-        {"assertion_id": "pecheck", "checks": "tools/etude/win/pecheck.c, compiled under ASan and UBSan with -Wall -Wextra -Werror, passes its --selftest", "source": "program"}
+        {
+          "assertion_id": "listed",
+          "checks": "each checker this case compiles has an assertion of this case, and each assertion a checker of the tree",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "elfcheck",
+          "checks": "tools/inspect/elfcheck.c, compiled under ASan and UBSan with -Wall -Wextra -Werror, passes its --selftest",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "cfgcheck",
+          "checks": "tools/inspect/cfgcheck.c, compiled under ASan and UBSan with -Wall -Wextra -Werror, passes its --selftest",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "setidcheck",
+          "checks": "tools/inspect/setidcheck.c, compiled under ASan and UBSan with -Wall -Wextra -Werror, passes its --selftest",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "prosecheck",
+          "checks": "tools/verify/prosecheck.c, compiled under ASan and UBSan with -Wall -Wextra -Werror, passes its --selftest",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "pecheck",
+          "checks": "tools/etude/win/pecheck.c, compiled under ASan and UBSan with -Wall -Wextra -Werror, passes its --selftest",
+          "source": "scenario"
+        }
       ],
       "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [{"witness_id": "checks", "kind": "step", "means": "a check of the case has ended, passed or failed", "limit": null}],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 16000, "memory_bytes": 1073741824, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "checks",
+          "kind": "step",
+          "means": "a check of the case has ended, passed or failed",
+          "limit": null
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "stages": {}
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 16000,
+        "memory_bytes": 6442450944,
+        "disk_bytes": 15032385536,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
       "prepare": [
-        {"name": "host", "node": "tests/cases/host/host", "per_architecture": false},
-        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false},
-        {"name": "checks", "node": "tests/host-suite/checkers.inventory.json", "per_architecture": false}
+        {
+          "name": "checks",
+          "node": "tests/host-suite/checkers.inventory.json",
+          "per_architecture": false
+        },
+        {
+          "name": "host_checks_scenario",
+          "node": "tests/cases/host/host_checks_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "products-kernel",
+          "node": "x86_64/rach2/kernel",
+          "per_architecture": false
+        },
+        {
+          "name": "products-image",
+          "node": "x86_64/images/gnu-test.disk",
+          "per_architecture": false
+        }
       ],
       "timing": [],
-      "native": {"plan": "host"}
+      "native": {
+        "plan": "none",
+        "class": "system",
+        "reason": "native C executes platform checks and controls the declared GNU POSIX fixtures"
+      },
+      "steps": [
+        {
+          "step_id": "listed",
+          "stage": "execute",
+          "does": "validate all declared and prepared check identities"
+        },
+        {
+          "step_id": "native",
+          "stage": "execute",
+          "does": "run the prepared checks on the collection host"
+        },
+        {
+          "step_id": "products",
+          "stage": "boot",
+          "does": "boot the declared GNU products helper when needed",
+          "machine": "products"
+        },
+        {
+          "step_id": "gnu",
+          "stage": "execute",
+          "does": "run the prepared POSIX fixture on the GNU helper"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "products",
+          "qemu": {
+            "architecture": "x86_64",
+            "kernel": "products-kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "products-disk",
+                "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 4294967296,
+            "firmware": "direct",
+            "devices": [
+              "rtl8139"
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": true
+        }
+      ]
     },
     {
       "case_id": "host.host.fuzz",
       "behavior": "each fuzz harness of tests/fuzz, built as a replay program under AddressSanitizer and UndefinedBehaviorSanitizer, passes every input of its committed corpus, and a harness without a corpus fails",
-      "units": ["host", "the inventory's fuzz harnesses, each corpus replayed under the sanitizers"],
-      "domain": "host",
+      "units": [
+        "host",
+        "the inventory's fuzz harnesses, each corpus replayed under the sanitizers"
+      ],
+      "domain": "machine",
       "architectures": "none",
-      "workload": {"arguments": ["fuzz"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}},
-      "execution": {"program": "host", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs and the checks' scratch directories under its scratch directory, which the program removes after a pass"},
+      "workload": {
+        "arguments": [
+          "fuzz"
+        ],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "host_checks_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "reaped",
+        "cleanup": "the native executor reaps every child; the case library stops the declared GNU helper and keeps failed evidence"
+      },
       "assertions": [
-        {"assertion_id": "listed", "checks": "each harness tests/fuzz/*_fuzz.c has an assertion of this case, and each assertion a harness of the tree", "source": "program"},
-        {"assertion_id": "elf64", "checks": "every input of tests/fuzz/corpus/elf64/, of which there is at least one, passes through tests/fuzz/elf64_fuzz.c built as a replay program under ASan and UBSan", "source": "program"},
-        {"assertion_id": "elf", "checks": "every input of tests/fuzz/corpus/elf/, of which there is at least one, passes through tests/fuzz/elf_fuzz.c built as a replay program under ASan and UBSan", "source": "program"},
-        {"assertion_id": "exfat", "checks": "every input of tests/fuzz/corpus/exfat/, of which there is at least one, passes through tests/fuzz/exfat_fuzz.c built as a replay program under ASan and UBSan", "source": "program"},
-        {"assertion_id": "ext2", "checks": "every input of tests/fuzz/corpus/ext2/, of which there is at least one, passes through tests/fuzz/ext2_fuzz.c built as a replay program under ASan and UBSan", "source": "program"},
-        {"assertion_id": "fat32", "checks": "every input of tests/fuzz/corpus/fat32/, of which there is at least one, passes through tests/fuzz/fat32_fuzz.c built as a replay program under ASan and UBSan", "source": "program"},
-        {"assertion_id": "gpt", "checks": "every input of tests/fuzz/corpus/gpt/, of which there is at least one, passes through tests/fuzz/gpt_fuzz.c built as a replay program under ASan and UBSan", "source": "program"},
-        {"assertion_id": "krffs", "checks": "every input of tests/fuzz/corpus/krffs/, of which there is at least one, passes through tests/fuzz/krffs_fuzz.c built as a replay program under ASan and UBSan", "source": "program"},
-        {"assertion_id": "mbr", "checks": "every input of tests/fuzz/corpus/mbr/, of which there is at least one, passes through tests/fuzz/mbr_fuzz.c built as a replay program under ASan and UBSan", "source": "program"},
-        {"assertion_id": "packet", "checks": "every input of tests/fuzz/corpus/packet/, of which there is at least one, passes through tests/fuzz/packet_fuzz.c built as a replay program under ASan and UBSan", "source": "program"}
+        {
+          "assertion_id": "listed",
+          "checks": "each harness tests/fuzz/*_fuzz.c has an assertion of this case, and each assertion a harness of the tree",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "elf64",
+          "checks": "every input of tests/fuzz/corpus/elf64/, of which there is at least one, passes through tests/fuzz/elf64_fuzz.c built as a replay program under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "elf",
+          "checks": "every input of tests/fuzz/corpus/elf/, of which there is at least one, passes through tests/fuzz/elf_fuzz.c built as a replay program under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "exfat",
+          "checks": "every input of tests/fuzz/corpus/exfat/, of which there is at least one, passes through tests/fuzz/exfat_fuzz.c built as a replay program under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ext2",
+          "checks": "every input of tests/fuzz/corpus/ext2/, of which there is at least one, passes through tests/fuzz/ext2_fuzz.c built as a replay program under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "fat32",
+          "checks": "every input of tests/fuzz/corpus/fat32/, of which there is at least one, passes through tests/fuzz/fat32_fuzz.c built as a replay program under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "gpt",
+          "checks": "every input of tests/fuzz/corpus/gpt/, of which there is at least one, passes through tests/fuzz/gpt_fuzz.c built as a replay program under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "krffs",
+          "checks": "every input of tests/fuzz/corpus/krffs/, of which there is at least one, passes through tests/fuzz/krffs_fuzz.c built as a replay program under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "mbr",
+          "checks": "every input of tests/fuzz/corpus/mbr/, of which there is at least one, passes through tests/fuzz/mbr_fuzz.c built as a replay program under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "packet",
+          "checks": "every input of tests/fuzz/corpus/packet/, of which there is at least one, passes through tests/fuzz/packet_fuzz.c built as a replay program under ASan and UBSan",
+          "source": "scenario"
+        }
       ],
       "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [{"witness_id": "checks", "kind": "step", "means": "a check of the case has ended, passed or failed", "limit": null}],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 16000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "checks",
+          "kind": "step",
+          "means": "a check of the case has ended, passed or failed",
+          "limit": null
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "stages": {}
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 16000,
+        "memory_bytes": 6442450944,
+        "disk_bytes": 15032385536,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
       "prepare": [
-        {"name": "host", "node": "tests/cases/host/host", "per_architecture": false},
-        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false},
-        {"name": "checks", "node": "tests/host-suite/fuzz.inventory.json", "per_architecture": false}
+        {
+          "name": "checks",
+          "node": "tests/host-suite/fuzz.inventory.json",
+          "per_architecture": false
+        },
+        {
+          "name": "host_checks_scenario",
+          "node": "tests/cases/host/host_checks_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "products-kernel",
+          "node": "x86_64/rach2/kernel",
+          "per_architecture": false
+        },
+        {
+          "name": "products-image",
+          "node": "x86_64/images/gnu-test.disk",
+          "per_architecture": false
+        }
       ],
       "timing": [],
-      "native": {"plan": "host"}
+      "native": {
+        "plan": "none",
+        "class": "system",
+        "reason": "native C executes platform checks and controls the declared GNU POSIX fixtures"
+      },
+      "steps": [
+        {
+          "step_id": "listed",
+          "stage": "execute",
+          "does": "validate all declared and prepared check identities"
+        },
+        {
+          "step_id": "native",
+          "stage": "execute",
+          "does": "run the prepared checks on the collection host"
+        },
+        {
+          "step_id": "products",
+          "stage": "boot",
+          "does": "boot the declared GNU products helper when needed",
+          "machine": "products"
+        },
+        {
+          "step_id": "gnu",
+          "stage": "execute",
+          "does": "run the prepared POSIX fixture on the GNU helper"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "products",
+          "qemu": {
+            "architecture": "x86_64",
+            "kernel": "products-kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "products-disk",
+                "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 4294967296,
+            "firmware": "direct",
+            "devices": [
+              "rtl8139"
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": true
+        }
+      ]
     },
     {
       "case_id": "host.host.scripts",

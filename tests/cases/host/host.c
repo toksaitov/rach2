@@ -38,6 +38,10 @@ struct host {
     struct check *checks;
     size_t nchecks, reported, failures, records;
     int uncertain;
+    void *report_ctx;
+    void (*report_assert)(void *, const char *, int, const char *);
+    void (*report_progress)(void *, size_t);
+    const char *only;
     struct etude_exec *executor;
 };
 
@@ -138,6 +142,12 @@ static int remove_tree(const char *path)
 static void assertion(struct host *h, const char *id, int pass, const char *why)
 {
     char line[256], detail[145];
+    if (h->report_assert) {
+        h->report_assert(h->report_ctx, id, pass, why);
+        h->records++;
+        h->failures += !pass;
+        return;
+    }
     size_t n = 0;
     size_t limit = strlen(id) < 220 ? 220 - strlen(id) : 0;
     if (limit >= sizeof(detail))
@@ -171,6 +181,10 @@ static int declared(const struct host *h, const char *id)
 static void progress(struct host *h)
 {
     char line[80];
+    if (h->report_progress) {
+        h->report_progress(h->report_ctx, ++h->reported);
+        return;
+    }
     int n = snprintf(line, sizeof(line), "@etude 1 progress checks %lu\n",
                      (unsigned long)++h->reported);
     if (write(1, line, (size_t)n) != n)
@@ -528,6 +542,15 @@ static int check_inventory(struct host *h, const char *group)
         return -1;
     listed &= sources && scripts;
     assertion(h, "listed", listed, "the declared, source and prepared inventories differ");
+    if (h->only) {
+        int found = 0;
+        for (size_t i = 0; i < h->nchecks; i++) {
+            h->checks[i].selected &= !strcmp(h->checks[i].id, h->only);
+            found += h->checks[i].selected;
+        }
+        if (found != 1)
+            return -1;
+    }
     return 0;
 }
 
@@ -644,15 +667,21 @@ static int load_inventory(struct host *h, const char *group, const char *arch)
 int main(int argc, char **argv)
 {
     struct host h;
-    const char *tree = getenv("ETUDE_TREE"), *group = argc == 2 ? argv[1] : "";
+    const char *tree = getenv("ETUDE_TREE");
+    const char *group = argc == 2                                               ? argv[1]
+                        : (argc == 4 || argc == 5) && !strcmp(argv[1], "--one") ? argv[2]
+                                                                                : "";
     const char *arch = getenv("ARCH"), *tmp = getenv("TMPDIR"), *jobs = getenv("RACH2_WORKERS");
     unsigned width = 4;
     int rc = 2;
     memset(&h, 0, sizeof(h));
     json_program = "host";
+    h.only = (argc == 4 || argc == 5) && !strcmp(argv[1], "--one") ? argv[3] : NULL;
+    if (argc == 5 && h.only)
+        arch = argv[4];
     if (strcmp(group, "tests") && strcmp(group, "etude") && strcmp(group, "boots") &&
         strcmp(group, "checkers") && strcmp(group, "fuzz") && strcmp(group, "scripts")) {
-        fputs("usage: host tests|etude|boots|checkers|fuzz|scripts\n", stderr);
+        fputs("usage: host [--one] tests|etude|boots|checkers|fuzz|scripts [ASSERTION]\n", stderr);
         return 2;
     }
     if (!tree)

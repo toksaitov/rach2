@@ -547,6 +547,13 @@ build/tools/etude/image-command: tools/etude/win/image_command.c tools/etude/win
 	@mkdir -p $(@D)
 	$(ETUDE_LINK) -std=c99
 
+# A native scenario combines each group's native and declared GNU checks.
+build/tests/cases/host/host_checks_scenario: tests/cases/host/host_checks_scenario.c \
+    tests/cases/host/host.c tools/etude/json.c $(ETUDE_CASE_LIB_SRC) $(ETUDE_HDRS)
+	@mkdir -p $(@D)
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	    -Itools/etude/posix -Iutils $(ETUDE_PLATFORM_FLAGS) $(ETUDE_PLATFORM_LIBS)
+
 # Host checks are compiled during preparation and executed by a native driver.
 # The inventory builder hashes every binary and input and never runs a check.
 build/tests/cases/host/host: $(ETUDE_HOSTCASE_SRC) $(ETUDE_HDRS)
@@ -589,11 +596,11 @@ build/tests/host-suite/scripts.inventory.json: build/tests/system/fakeapi_test
 
 .PHONY: host-inventory-force
 host-inventory-force:
-build/tests/host-suite/%.inventory.json: tests/cases/host/prepare.py tests/cases/host/fixtures.py tests/cases/host/windows.py tests/cases/host/tools.py \
+build/tests/host-suite/%.inventory.json: tests/cases/host/prepare.py tests/cases/host/fixtures.py tests/cases/host/windows.py tests/cases/host/tools.py tests/cases/host/routing.py \
     tests/cases/host/host.list tests/cases/host/adapters.json \
     tests/cases/host.host.json host-inventory-force
 	python3 -B tests/cases/host/prepare.py --arch $(ARCH) $* $@
-build/x86_64/tests/host-suite/%.inventory.json: tests/cases/host/prepare.py tests/cases/host/fixtures.py tests/cases/host/windows.py tests/cases/host/tools.py \
+build/x86_64/tests/host-suite/%.inventory.json: tests/cases/host/prepare.py tests/cases/host/fixtures.py tests/cases/host/windows.py tests/cases/host/tools.py tests/cases/host/routing.py \
     tests/cases/host/host.list tests/cases/host/adapters.json \
     tests/cases/host.host.json host-inventory-force
 	python3 -B tests/cases/host/prepare.py --arch x86_64 $* $@
@@ -1568,6 +1575,7 @@ include mk/gnu.mk
 include mk/gnu-extra.mk
 include mk/gnu-sanitizers.mk
 include mk/gnu-host-products.mk
+include mk/gnu-host-checks.mk
 include mk/gnu-agents.mk
 include mk/gnu-image.mk
 include tests/system/suites.mk

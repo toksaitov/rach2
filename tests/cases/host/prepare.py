@@ -16,6 +16,7 @@ import sys
 import fixtures
 import windows
 import tools
+import routing
 
 ROOT = Path(__file__).resolve().parents[3]
 GROUPS = ('tests', 'etude', 'boots', 'checkers', 'fuzz', 'scripts')
@@ -86,9 +87,6 @@ def checks(group, arch, base):
                                *[w for d in INCLUDES for w in ('-I', d)], *flags,
                                '-o', out, str(path), *deps]
             item['tools'] = required_tools
-            # These are behavioral dependencies, never preparation-time passes.
-            if re.search(r'\b(?:system|popen)\s*\(', path.read_text()):
-                item['unsupported'] = 'the host test still invokes a shell; a native fixture adapter is required'
             yield item
     elif group == 'checkers':
         for source in CHECKERS:
@@ -189,7 +187,32 @@ def prepare(args):
         if args.only and item['assertion_id'] != args.only:
             continue
         command = item.pop('command')
+        backend = routing.backend(item['assertion_id'], item['sources'], args.group)
+        if args.gnu and item['assertion_id'] not in routing.BOOTS | {'etude_platform'}:
+            backend = 'gnu'
+        item['backend'] = backend
         windows_fixture = item.pop('windows_fixture', False)
+        if backend == 'gnu' and not args.gnu:
+            item['program'] = None
+            item['arguments'] = []
+            item['sha256'] = None
+            item['inputs'] = [dict(path=p, sha256=digest(Path(p))) for p in item['sources']
+                              if Path(p).is_file()]
+            item.pop('tools', None)
+            item.pop('sources', None)
+            item.pop('data', None)
+            item['command'] = None
+            inventory.append(item)
+            continue
+        if backend == 'native' and args.gnu:
+            item['program'] = None
+            item['command'] = None
+            item['unsupported'] = 'this assertion executes on the collection host'
+            item.pop('tools', None)
+            item.pop('sources', None)
+            item.pop('data', None)
+            inventory.append(item)
+            continue
         tool_inputs = tools.prepare(item.pop('tools', []), compiler, COMMON, compiler_inputs,
                                    digest, args.print_commands)
         companions = windows.companions(compiler, base, compiler_inputs, digest,
@@ -223,7 +246,7 @@ def prepare(args):
                 item['inputs'] = [dict(path=p, sha256=digest(Path(p))) for p in sources]
             item['inputs'] = list({value['path']: value for value in
                                    [*item['inputs'], *companions, *tool_inputs]}.values())
-            for value in ([] if windows_fixture else item['inputs']):
+            for value in ([] if windows_fixture or args.gnu else item['inputs']):
                 path = Path(value['path'])
                 if path.suffix != '.c':
                     continue
@@ -255,6 +278,7 @@ def prepare(args):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--arch', choices=('i686', 'x86_64'), default=os.environ.get('ARCH', 'i686'))
+    parser.add_argument('--gnu', action='store_true', help='prepare the declared GNU helper checks')
     parser.add_argument('--print-commands', action='store_true')
     parser.add_argument('--only', help='prepare one check for a component build')
     parser.add_argument('group', choices=GROUPS)
