@@ -29,7 +29,7 @@ Preparation builds and verifies immutable inputs before execution. Compiled help
                                         make a machine ready, build etude in its cache, or run its tooling machine
     etude build ...                     run one stamped step of the build through the host's store
 
-Linux and macOS have every verb. Windows has `estimate`, the native collection entry, `run suites`, the host-command adapter, `prepare`, `check`, `show lines`, `lock`, `admit` and `provision tooling`. Rach2 has `check` and the local `run native` collection, with no `check record`. The desktop `run native -t TRANSPORT` form is a separate explicit transport adapter. `etude` with no verb, or a verb with no form, prints the list on standard error and exits 2. A verb's messages begin `etude VERB:`, except those of `etude lock tree`, which begin with the NAME it is given. The paragraphs below give each verb's usage; `etude-guest`, the helper inside Rach2, and `etude-volume`, which `etude provision tooling` runs, are programs of their own.
+Linux and macOS have every verb. Windows has `stress`, `estimate`, the native collection entry, `run suites`, the host-command adapter, `prepare`, `check`, `show lines`, `lock`, `admit` and `provision tooling`. Rach2 has `check` and the local `run native` collection, with no `check record`. The desktop `run native -t TRANSPORT` form is a separate explicit transport adapter. `etude` with no verb, or a verb with no form, prints the list on standard error and exits 2. A verb's messages begin `etude VERB:`, except those of `etude lock tree`, which begin with the NAME it is given. The paragraphs below give each verb's usage; `etude-guest`, the helper inside Rach2, and `etude-volume`, which `etude provision tooling` runs, are programs of their own.
 
 ### Native collection execution
 
@@ -37,7 +37,8 @@ The public desktop entry selects and runs suites from prepared artifacts:
 
     etude run [-t TREE] [-a i686|x86_64|both] [-p RECORD] [-o RESULTS] [-e EVIDENCE]
               [-j WORKERS] [-M MEMORY_MIB] [-H HISTORY] [-g COMMIT] [-A ACCEL]
-              [-C CPUS] [-I CONTEXT] [-k] [-N [-J FILE]] SUITE...|core|all|inventory
+              [-C CPUS] [-I CONTEXT] [-S SEED [-R COUNT] [-L KIND:AMOUNT]...]
+              [-k] [-N [-J FILE]] SUITE...|core|all|inventory
 
 TREE defaults to the current directory. `-a both`, or `ARCH='i686 x86_64'`, gives both architectures one plan and schedule. A name `ARCH:SUITE` selects that suite on one architecture. A case of no architecture runs once. `RACH2_CASES`, `RACH2_AGENTS_ROWS` and `RACH2_ACCEPT_AGENTS` select cases as for `tests/run`: identities keep the manifest's order, row names keep their given order, an identity must belong to a named suite, and an explicit selection leaves no named suite empty. Unknown and repeated suites, identities and rows are refused before execution. `-N` prints the selected suite, architecture and case identities without building or executing them. With `-J FILE` it instead exports the allocator's exact normalized selection bytes, hash and allocated case, architecture and repetition entries for a measurement context. `-k` stops on the first failure. Options precede suite names; `etude run host` selects the collection's host suite, while the older `etude run host` form with arguments remains the host-check adapter.
 
@@ -1066,6 +1067,23 @@ A remote attempt's end and cleanup are those the case reported. One whose transp
 On Windows the shared launcher uses private, exclusively bound loopback TCP listeners for the serial console and QMP. WHPX uses `qemu-system-x86_64` for both kernel architectures, since the i386 frontend has no WHPX backend. QEMU starts suspended in its Job Object, is registered before it runs, and receives one accelerator. A failed accelerator start has no fallback. The executor waits for those sockets beside its completion port, and accounts for the whole job. A controller killed while a case runs takes the case with it when its last job handle closes.
 
 ### Repetitions
+
+The public prepared collection accepts `-S SEED`, `-R COUNT` and repeated `-L KIND:AMOUNT` options before its suite operands. `-S` requests the existing `repeat-splitmix64-v1` shuffle, including seed zero. `-R` multiplies each manifest's declared repetitions by COUNT, from 1 to 1000; it does not retry away an earlier failure. `-L cpu:N`, `-L memory:BYTES` and `-L disk:BYTES` declare up to sixteen loads. The planner assigns one of them to every item from the same seed. A repetition count or load without an explicit seed is refused. The default collection keeps its existing selection and schedule.
+
+For example, after ordinary preparation:
+
+```text
+etude run -t TREE -p RECORD -S 42 -R 3 -L cpu:1 -L memory:67108864 agents
+etude run -N -J selection.json -t TREE -S 42 -R 3 -L cpu:1 -L memory:67108864 agents
+```
+
+The public allocator and executor derive the same exact item order. The history's selection and concurrency blobs retain the full repetition record; each workload and profile binds its seed, order digest and assigned load kind and amount. Loaded and unloaded attempts therefore use separate learned bounds. Explicit shuffled runs retain every declared exclusive reservation; a serial suite may occur later in that requested order. Every repetition has its own attempt and output, and a later pass leaves earlier failures in the run.
+
+The case and its load share one resource claim. CPU load reserves N processors, at most 1024; other loads reserve one processor. Each load also reserves 16 MiB for its controller, another MiB per CPU worker or the requested held memory, and 64 KiB of output plus the requested disk bytes. A combined request that exceeds capacity is refused before execution. Both process trees are registered before their programs run. The case starts only after the native load's readiness record; disk readiness follows its first completed write and synchronization. Readiness has a declared initial bound of 30 seconds, with five seconds for load cancellation. The case keeps its own progress watchdog.
+
+Loaded attempts register the load as the claim's primary tree and the case as additional owned processes. Neither keeper publishes a verdict for the composite claim. The live controller releases its resources only after both cleanups are confirmed. On controller loss, an unproved composite cleanup retains the full claim for explicit recovery.
+
+The existing C executor stops and reaps the load after the case ends and before its reservation is released, including failure or interruption. A load that ends early or cannot become ready makes the attempt incomplete with a disruption; uncertain cleanup retains the reservation. `run.load.applied` records the actual load, readiness/end readings, process identities, accounting availability and cleanup, with digest references to its captured output. Load CPU cost is included in the attempt and whole-run accounting. The load helper is the same native `etude stress` command on Linux, macOS and Windows; it starts no shell or interpreter.
 
 [`posix/repeat.c`](posix/repeat.c) runs a plan of repetitions on Linux and macOS, as `etude_repeat_run` of [`repeat.h`](include/etude/repeat.h) declares. It keeps the repetition record in the store, writes the plan record, and runs the items in their order, `width` cases at once, on a supervisor of its own:
 

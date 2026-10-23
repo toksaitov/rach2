@@ -93,7 +93,9 @@ enum etude_legacy_resource { ETUDE_LEGACY_CPU, ETUDE_LEGACY_MEMORY, ETUDE_LEGACY
 
 /* One run of a set of suites, as the caller asks for it. */
 struct etude_measurement_context;
+struct etude_collection_repeat;
 struct etude_legacy_set_opts {
+    const struct etude_collection_repeat *repeat; /* explicit seeded repetitions, or NULL */
     const struct etude_measurement_context *context; /* verified measurement inputs */
     const char *run_id;  /* preallocated identity, or NULL for a correctness run */
     const char *tree;    /* the root of the tree, which the caller holds */

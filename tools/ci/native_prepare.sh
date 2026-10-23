@@ -42,7 +42,24 @@ case $purpose in
 esac
 case $arches in both|i686|x86_64) ;; *) refuse "invalid architectures: $arches" ;; esac
 case $accel in tcg|kvm|hvf|whpx) ;; *) refuse "invalid accelerator: $accel" ;; esac
-for word do case $word in ''|-*) refuse "invalid selection word: $word" ;; esac; done
+selection_arguments()
+{
+    while [ "$#" -gt 0 ]; do
+        case $1 in
+            -S|-R|-L)
+                [ "$#" -ge 2 ] && [ -n "$2" ] || refuse 'a repetition option has no value'
+                shift 2
+                ;;
+            ''|-*) refuse "invalid selection word: $1" ;;
+            *)
+                for word do case $word in ''|-*) refuse "invalid selection word: $word" ;; esac; done
+                return
+                ;;
+        esac
+    done
+    refuse 'selection has no suite or case'
+}
+selection_arguments "$@"
 [ -n "${ETUDE_ADMITTED:-}" ] || refuse 'the sequence is not admitted'
 case ${ETUDE_PHYSICAL_TRACE:+set}/${ETUDE_PHYSICAL_STOP_REQUEST:+set} in
     /|set/set) ;; *) refuse 'physical observation needs both trace and stop paths' ;;

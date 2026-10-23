@@ -25,6 +25,7 @@
 #include "etude/portlock.h"
 #include "verbs.h"
 #include "measurement_context.h"
+#include "collection_repeat.h"
 
 #define COLLECTION_MAX 1024
 #define WORDS_MAX      4096
@@ -55,6 +56,7 @@ struct collection {
     char account[128], site[PATH_SIZE];
     const char *arches, *history, *commit, *context_path, *selection_export;
     struct etude_measurement_context *context;
+    struct etude_collection_repeat repeat;
     unsigned width, cpus;
     uint64_t memory;
     uint64_t cap[3];
@@ -775,6 +777,7 @@ static int export_selection(struct collection *c, const char *accel)
     struct etude_legacy_set_opts o;
     extern int etude_legacy_selection_export(const struct etude_legacy_set_opts *, const char *);
     memset(&o, 0, sizeof(o));
+    o.repeat = c->repeat.seeded ? &c->repeat : NULL;
     o.tree = c->tree;
     o.arch = c->arches;
     o.program = c->program;
@@ -840,6 +843,7 @@ static int run_collection(struct collection *c, const char *accel, int dry)
     if (getenv("RACH2_PORT_OFFSET") || getenv("SSH_TEST_PORT"))
         return refused("port overrides bypass native admission");
     memset(&o, 0, sizeof(o));
+    o.repeat = c->repeat.seeded ? &c->repeat : NULL;
     o.tree = c->tree;
     o.arch = c->arches;
     o.program = c->program;
@@ -895,8 +899,14 @@ static int collection_options(struct collection *c, struct request *r, int argc,
 {
     int opt;
     optind = 1;
-    while ((opt = getopt(argc, argv, "+t:a:o:e:p:j:M:H:g:A:C:I:J:kN")) != -1) {
+    while ((opt = getopt(argc, argv, "+t:a:o:e:p:j:M:H:g:A:C:I:J:R:S:L:kN")) != -1) {
         switch (opt) {
+        case 'R':
+        case 'S':
+        case 'L':
+            if (etude_collection_repeat_option(&c->repeat, opt, optarg))
+                return refused("invalid repetition seed, count or load");
+            break;
         case 't':
             r->tree = optarg;
             break;
@@ -946,6 +956,8 @@ static int collection_options(struct collection *c, struct request *r, int argc,
             return 2;
         }
     }
+    if (!etude_collection_repeat_valid(&c->repeat))
+        return refused("repetitions and controlled load require an explicit -S seed");
     if (!strcmp(c->arches, "i686 x86_64") || !strcmp(c->arches, "both"))
         c->arches = "i686,x86_64";
     if (strcmp(c->arches, "i686") && strcmp(c->arches, "x86_64") &&
@@ -1114,6 +1126,7 @@ static int collection_main(int argc, char **argv, int production)
     if (argc < 2) {
         fputs("usage: etude run [-t TREE] [-a ARCH|both] [-p RECORD] [-o RESULTS] "
               "[-j WORKERS] [-M MIB] [-H HISTORY] [-A ACCEL] [-I CONTEXT] [-k] [-N [-J FILE]] "
+              "[-S SEED [-R COUNT] [-L cpu:N|memory:BYTES|disk:BYTES]...] "
               "SUITE...|core|all|inventory\n",
               stderr);
         free(c);

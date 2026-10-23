@@ -34,6 +34,8 @@
 #endif
 
 #include "../compare.h"
+#include "../collection_repeat.h"
+#include "../collection_load.h"
 #include "../measurement_context.h"
 #include "../observe_history.h"
 #include "etude/artifact.h"
@@ -125,6 +127,7 @@ enum outcome { PASS, FAILURE, INCOMPLETE, CANCELLED };
 enum state {
     QUEUED,  /* not admitted; its request may wait in the ledger */
     LOCKING, /* its claim is admitted and waits for the old locks */
+    LOADING, /* its registered load is starting before the case */
     RUNNING, /* it runs */
     DONE     /* it ended, or never started */
 };
@@ -153,6 +156,8 @@ struct command {
     struct etude_exec_spec spec;
     char verdict[PATH_LEN];
     struct etude_supervised *sup;
+    struct etude_collection_load *load;
+    int load_stopped;
     struct etude_reading queued, admitted, done;
     uint64_t queued_us, queued_epoch_us; /* when it was first asked for */
     int asked, was_admitted, ran, cancelled;
@@ -203,6 +208,8 @@ struct member {
     char execution_record[300];
     size_t history_samples, gap_samples;
     char workload[400], assertions[400], profile[400]; /* blob references */
+    const struct etude_load *load;
+    struct legacy_case *learned;
     struct command c;
 };
 
@@ -235,6 +242,10 @@ struct set {
     struct etude_supervisor *sup;
     struct etude_ledger_res cap[3];
     size_t ncap;
+    struct etude_repeat_case *repeat_cases;
+    struct etude_repeat_item *repeat_items;
+    size_t repeat_count;
+    char *repeat_selection;
     struct member *mem; /* the serial suites' members first, as given, then
                            the rest: as given in a set of one architecture,
                            and in a set of both in etude_sched_order's
@@ -642,9 +653,32 @@ static int item_docs(const struct set *x, struct member *m)
     int rc;
 
     digest_of(k->inventory.data, k->inventory.len, m->inventory);
-    rc = keep_bytes(x, k->workload.data, k->workload.len, m->workload, sizeof(m->workload));
+    if (x->repeat_selection) {
+        char order[65];
+        digest_of(x->repeat_selection, strlen(x->repeat_selection), order);
+        struct cmp_text binding = {0}, d = {0};
+        cmp_printf(&binding, "{\"policy\":\"%s\",\"seed\":%llu,\"order_sha256\":\"%s\",\"load\":",
+                   ETUDE_REPEAT_POLICY, (unsigned long long)x->o->repeat->seed, order);
+        if (m->load) {
+            const char *kind = m->load->kind == ETUDE_LOAD_CPU ? "cpu" :
+                               m->load->kind == ETUDE_LOAD_MEMORY ? "memory" : "disk";
+            cmp_printf(&binding, "{\"load_id\":\"%s\",\"kind\":\"%s\",\"amount\":%llu}",
+                       m->load->load_id, kind, (unsigned long long)m->load->amount);
+        } else cmp_printf(&binding, "null");
+        cmp_printf(&binding, "}");
+        cmp_printf(&d, "{\"declared\":%s,\"repetition\":%s}\n", k->workload.data, binding.data);
+        rc = keep_bytes(x, d.data, d.length, m->workload, sizeof(m->workload));
+        free(d.data);
+        memset(&d, 0, sizeof(d));
+        cmp_printf(&d, "{\"declared\":%s,\"repetition\":%s}\n", k->profile.data, binding.data);
+        rc |= keep_bytes(x, d.data, d.length, m->profile, sizeof(m->profile));
+        free(d.data);
+        free(binding.data);
+    } else {
+        rc = keep_bytes(x, k->workload.data, k->workload.len, m->workload, sizeof(m->workload));
+        rc |= keep_bytes(x, k->profile.data, k->profile.len, m->profile, sizeof(m->profile));
+    }
     rc |= keep_bytes(x, k->inventory.data, k->inventory.len, m->assertions, sizeof(m->assertions));
-    rc |= keep_bytes(x, k->profile.data, k->profile.len, m->profile, sizeof(m->profile));
     return rc;
 }
 
@@ -905,11 +939,15 @@ static void selection(const struct set *x, struct cmp_text *d)
                 continue;
             cmp_printf(d, "%s{\"case_id\":", count++ ? "," : "");
             string(d, k->case_id);
-            cmp_printf(d, ",\"architecture\":\"%s\",\"repetitions\":%lld}", k->arch, k->reps);
+            cmp_printf(d, ",\"architecture\":\"%s\",\"repetitions\":%lld}", k->arch, k->reps *
+                       (x->o->repeat && x->o->repeat->count ? x->o->repeat->count : 1));
         }
         cmp_printf(d, "]}");
     }
-    cmp_printf(d, "],\"stop_on_fail\":%s}\n", x->o->stop_on_fail ? "true" : "false");
+    cmp_printf(d, "],\"stop_on_fail\":%s", x->o->stop_on_fail ? "true" : "false");
+    if (x->repeat_selection)
+        cmp_printf(d, ",\"repetition\":%s", x->repeat_selection);
+    cmp_printf(d, "}\n");
 }
 
 /** Load prior complete histories before this run opens its own stream. */
@@ -1226,6 +1264,14 @@ static int write_plan(struct set *x)
     names(x, &d, is_serial);
     cmp_printf(&d, ",\"exclusive\":");
     names(x, &d, is_exclusive);
+    if (x->o->repeat) {
+        struct etude_repeat_spec spec;
+        etude_collection_repeat_spec(x->o->repeat, x->repeat_cases, x->repeat_count, o->width, &spec);
+        char *record = etude_repeat_record(&spec, x->run_id, x->repeat_items, x->n);
+        if (!record) return -1;
+        cmp_printf(&d, ",\"repetition\":%s,\"load_ready_us\":30000000,\"load_grace_us\":5000000", record);
+        free(record);
+    }
     cmp_printf(&d, "}\n");
     rc |= part(x, &t, "concurrency", &d);
     const char *exemption = etude_context_text(o->context, "exemption");
@@ -1397,12 +1443,44 @@ static int lock(const struct set *x, struct command *c, unsigned wait_ms)
     return -1;
 }
 
+/* End the registered load before its shared reservation can be released. */
+static enum etude_cleanup stop_load(struct command *c, enum etude_cleanup cleanup)
+{
+    if (!c->load || c->load_stopped)
+        return cleanup;
+    c->load_stopped = 1;
+    if (etude_collection_load_stop(c->load) != ETUDE_CLEANUP_CONFIRMED)
+        cleanup = ETUDE_CLEANUP_UNCONFIRMED;
+    struct etude_measure load = etude_collection_load_cpu(c->load);
+    if (c->cpu_us.quality && load.quality) {
+        c->cpu_us.value += load.value;
+        if (load.quality == ETUDE_QUALITY_LOWER_BOUND)
+            c->cpu_us.quality = ETUDE_QUALITY_LOWER_BOUND;
+        c->cpu_us.method = "case-and-reserved-load-v1";
+    } else {
+        c->cpu_us.quality = ETUDE_QUALITY_UNAVAILABLE;
+        c->cpu_us.method = "case or reserved-load CPU accounting unavailable";
+    }
+    if (etude_collection_load_failed(c->load)) {
+        c->outcome = INCOMPLETE;
+        snprintf(c->reason, sizeof(c->reason), "the reserved load failed or ended before cancellation");
+        snprintf(c->disruption, sizeof(c->disruption), "%s", c->reason);
+    }
+    if (cleanup != ETUDE_CLEANUP_CONFIRMED) {
+        c->outcome = INCOMPLETE;
+        snprintf(c->disruption, sizeof(c->disruption), "reserved-load cleanup is unconfirmed");
+    }
+    etude_history_now(&c->done);
+    return cleanup;
+}
+
 /** End the claim of command `c` with `cleanup`, and let its locks go with
  * it, or leave them with the claim when the cleanup is not confirmed. */
-static void release(struct set *x, struct command *c, enum etude_cleanup cleanup)
+static enum etude_cleanup release(struct set *x, struct command *c, enum etude_cleanup cleanup)
 {
     int ok = 1;
-
+    cleanup = stop_load(c, cleanup);
+    c->cleanup = cleanup;
     if (c->claim && etude_ledger_finish(x->l, c->id, cleanup) != 0) {
         ok = 0;
         x->failed = 1;
@@ -1418,6 +1496,7 @@ static void release(struct set *x, struct command *c, enum etude_cleanup cleanup
             etude_bridge_detach(c->bridge);
         c->bridge = NULL;
     }
+    return cleanup;
 }
 
 /** End command `c` before it ran, with `outcome` for `reason`; a reason of
@@ -1425,16 +1504,18 @@ static void release(struct set *x, struct command *c, enum etude_cleanup cleanup
 static void not_run(struct set *x, struct command *c, enum outcome outcome, const char *reason,
                     int disrupted)
 {
+    enum etude_cleanup cleanup = ETUDE_CLEANUP_CONFIRMED;
     if (c->claim || c->bridge != NULL)
-        release(x, c, ETUDE_CLEANUP_CONFIRMED);
-    c->outcome = outcome;
-    if (reason != c->reason)
+        cleanup = release(x, c, cleanup);
+    int load_failed = etude_collection_load_failed(c->load);
+    c->outcome = cleanup == ETUDE_CLEANUP_CONFIRMED && !load_failed ? outcome : INCOMPLETE;
+    if (!load_failed && reason != c->reason)
         snprintf(c->reason, sizeof(c->reason), "%s", reason);
-    if (disrupted)
+    if (disrupted && !load_failed)
         snprintf(c->disruption, sizeof(c->disruption), "%s", reason);
     c->end = ETUDE_END_STOPPED;
     c->value = -1;
-    c->cleanup = ETUDE_CLEANUP_CONFIRMED;
+    c->cleanup = cleanup;
     c->state = DONE;
     etude_history_now(&c->done);
 }
@@ -1456,10 +1537,10 @@ static int start(struct set *x, struct command *c, char *const *vars, size_t n)
     c->spec.stdout_path = c->out;
     c->spec.stderr_path = c->out;
     c->spec.grace_us = c->grace_us;
-    c->spec.reg = etude_ledger_register;
+    c->spec.reg = c->load ? etude_collection_load_register_case : etude_ledger_register;
     c->spec.child = etude_ledger_child;
     c->spec.reg_ctx = x->l;
-    if (etude_ledger_verdict_path(x->l, c->id, c->verdict, sizeof(c->verdict)) == 0)
+    if (!c->load && etude_ledger_verdict_path(x->l, c->id, c->verdict, sizeof(c->verdict)) == 0)
         c->spec.verdict = c->verdict;
     if (etude_supervise_host(x->sup, &c->spec, &c->wd, &c->sup) != 0) {
         c->sup = NULL;
@@ -1796,7 +1877,7 @@ static void status_of(const struct command *c, const char *case_id, const char *
     if (c->state == RUNNING && c->sup != NULL) {
         etude_status_watch(s, etude_supervised_watchdog(c->sup), r->now, r->epoch);
         r->n++;
-    } else if ((c->state == QUEUED && c->asked) || c->state == LOCKING) {
+    } else if ((c->state == QUEUED && c->asked) || c->state == LOCKING || c->state == LOADING) {
         s->waiting = 1;
         s->since_us = c->queued_epoch_us;
         r->n++;
@@ -2098,7 +2179,29 @@ static int totals(const struct set *x, struct cmp_text *t)
     return rc;
 }
 
-/** Append the run's useful concurrency, and the loads it applied: none. */
+/* Keep a load's complete bounded readiness and diagnostic output by digest. */
+static int load_capture(const struct set *x, struct etude_collection_load *load,
+                         struct cmp_text *text)
+{
+    cmp_printf(text, ",\"capture\":{");
+    for (int error = 0; error < 2; error++) {
+        const char *path = etude_collection_load_output(load, error);
+        char *bytes = NULL;
+        size_t size = 0;
+        cmp_printf(text, "%s\"%s\":", error ? "," : "", error ? "stderr" : "stdout");
+        if (!path) cmp_printf(text, "null");
+        else {
+            if (read_tail(path, 65536, &bytes, &size)) return -1;
+            int rc = keep(x, bytes, size, text);
+            free(bytes);
+            if (rc) return -1;
+        }
+    }
+    cmp_printf(text, "}");
+    return text->failed ? -1 : 0;
+}
+
+/** Append useful concurrency and the observed reserved loads. */
 static int observed(const struct set *x, struct cmp_text *t)
 {
     struct cmp_text u = {NULL, 0, 0, 0}, l = {NULL, 0, 0, 0};
@@ -2114,6 +2217,25 @@ static int observed(const struct set *x, struct cmp_text *t)
                x->load ? x->load
                        : "{\"schema_version\":1,\"method\":\"native-load-v1\",\"comparison_"
                          "available\":false}");
+    if (x->o->repeat) {
+        while (l.length && (l.data[l.length - 1] == '\n' || l.data[l.length - 1] == ' ')) l.length--;
+        if (!l.length || l.data[l.length - 1] != '}') { free(l.data); free(u.data); return -1; }
+        l.data[--l.length] = 0;
+        cmp_printf(&l, ",\"applied\":[");
+        size_t n = 0;
+        for (size_t i = 0; i < x->n; i++) {
+            if (!x->mem[i].load) continue;
+            cmp_printf(&l, "%s{\"item_id\":", n++ ? "," : "");
+            string(&l, x->mem[i].item_id);
+            cmp_printf(&l, ",\"load\":");
+            cmp_printf(&l, "%s", etude_collection_load_record(x->mem[i].c.load));
+            if (load_capture(x, x->mem[i].c.load, &l)) {
+                free(l.data); free(u.data); return -1;
+            }
+            cmp_printf(&l, "}");
+        }
+        cmp_printf(&l, "]}\n");
+    }
     rc = part(x, t, "useful_concurrency", &u);
     rc |= part(x, t, "load", &l);
     return rc;
@@ -2758,7 +2880,7 @@ static void publish(struct set *x)
 /** Say whether command `c` holds or runs on what the machine admitted. */
 static int active(const struct command *c)
 {
-    return c->state == LOCKING || c->state == RUNNING;
+    return c->state == LOCKING || c->state == LOADING || c->state == RUNNING;
 }
 
 /** The memory reserved by one command's claim. */
@@ -2855,7 +2977,7 @@ static void stop_all(struct set *x, const char *why, const char *what)
 
         if (c->state == QUEUED && x->jobs[i].state == ETUDE_JOB_ADMITTED)
             c->claim = 1;
-        if (c->state == QUEUED || c->state == LOCKING)
+        if (c->state == QUEUED || c->state == LOCKING || c->state == LOADING)
             not_run(x, c, CANCELLED, why, 0);
         else if (c->state == RUNNING && !c->cancelled) {
             if (x->mem[i].g != NULL)
@@ -2913,7 +3035,7 @@ static int start_guest(struct set *x, struct member *m, char *const *vars, size_
     s.envp = c->envp;
     s.memory_bytes = m->k->memory_bytes;
     s.grace_us = c->grace_us;
-    s.reg = etude_ledger_register;
+    s.reg = c->load ? etude_collection_load_register_case : etude_ledger_register;
     s.reg_ctx = x->l;
     s.wd = &c->wd;
     if (legacy_guest_start(x->sup, &s, &m->g, &c->sup, why, size) != 0) {
@@ -2928,6 +3050,26 @@ static int start_guest(struct set *x, struct member *m, char *const *vars, size_
     }
     c->started_us = posix_now_us();
     c->state = RUNNING;
+    return 0;
+}
+
+/* The case and load share one admitted resource vector and registered claim. */
+static int begin_load(struct set *x, struct member *m)
+{
+    struct etude_collection_load_spec spec;
+    if (make_dir(m->work))
+        return -1;
+    memset(&spec, 0, sizeof(spec));
+    spec.program = x->o->program;
+    spec.claim = m->c.id;
+    spec.workspace = m->work;
+    spec.output = m->c.out;
+    spec.load = m->load;
+    spec.ledger = x->l;
+    m->c.load = etude_collection_load_start(&spec);
+    if (!m->c.load)
+        return -1;
+    m->c.state = LOADING;
     return 0;
 }
 
@@ -3044,6 +3186,16 @@ static void advance(struct set *x, size_t i)
     struct etude_job *j = &x->jobs[i];
     int rc;
 
+    if (c->state == LOADING) {
+        rc = etude_collection_load_poll(c->load);
+        if (rc > 0)
+            start_case(x, m);
+        else if (rc < 0) {
+            not_run(x, c, INCOMPLETE, "the reserved load did not become ready", 1);
+            write_attempt(x, m);
+        }
+        return;
+    }
     if (c->state == QUEUED) {
         if (j->state == ETUDE_JOB_ADMITTED) {
             granted(x, c);
@@ -3073,7 +3225,12 @@ static void advance(struct set *x, size_t i)
         status(x, 1);
     rc = lock(x, c, c->exclusive ? wait_left_ms(x, c) : 0);
     if (rc == 1) {
-        start_case(x, m);
+        if (!m->load)
+            start_case(x, m);
+        else if (begin_load(x, m)) {
+            not_run(x, c, INCOMPLETE, "the reserved load could not start", 1);
+            write_attempt(x, m);
+        }
     } else if (rc < 0) {
         not_run(x, c, INCOMPLETE, c->reason, 1);
         write_attempt(x, m);
@@ -3083,6 +3240,17 @@ static void advance(struct set *x, size_t i)
         not_run(x, c, INCOMPLETE, c->reason, 1);
         write_attempt(x, m);
     }
+}
+
+/* Readiness has a pipe event; wait on it rather than polling a quiet load. */
+static int wait_loading(struct set *x)
+{
+    for (size_t i = 0; i < x->n; i++)
+        if (x->mem[i].c.state == LOADING) {
+            etude_collection_load_wait(x->mem[i].c.load, ASK_MS);
+            return 1;
+        }
+    return 0;
 }
 
 /** Run the members until each is done. */
@@ -3109,6 +3277,11 @@ static void drive(struct set *x)
                 advance(x, i);
             if (c->state == RUNNING) {
                 busy++;
+                if (c->load && etude_collection_load_poll(c->load) < 0 && !c->cancelled) {
+                    if (x->mem[i].g) legacy_guest_cancel(x->mem[i].g);
+                    else etude_supervised_cancel(c->sup);
+                    c->cancelled = 1;
+                }
                 if (x->mem[i].g != NULL)
                     legacy_guest_serve(x->mem[i].g);
                 feed(c);
@@ -3122,6 +3295,7 @@ static void drive(struct set *x)
             return;
         status(x, 0);
         if (busy == 0) {
+            if (wait_loading(x)) continue;
 #ifdef _WIN32
             Sleep(ASK_MS);
 #else
@@ -3309,10 +3483,17 @@ static int check_cases(struct set *x)
         for (k = 0; k < x->manifests[i].ncases; k++) {
             if (!runs_case(x, i, &x->manifests[i].cases[k]))
                 continue;
-            x->n += (size_t)x->manifests[i].cases[k].reps;
+            size_t factor = o->repeat && o->repeat->count ? o->repeat->count : 1;
+            uint64_t repetitions = (uint64_t)x->manifests[i].cases[k].reps;
+            if ((o->repeat && repetitions > UINT_MAX / factor) ||
+                repetitions > SIZE_MAX / factor ||
+                x->n > SIZE_MAX / sizeof(struct member) - repetitions * factor)
+                return refuse(x, "the requested repetition inventory is too large");
+            x->n += (size_t)repetitions * factor;
             machines |= x->manifests[i].cases[k].machine;
             ports += (unsigned long long)x->manifests[i].cases[k].ports *
-                     (unsigned long long)x->manifests[i].cases[k].reps;
+                     (unsigned long long)x->manifests[i].cases[k].reps *
+                     (o->repeat && o->repeat->count ? o->repeat->count : 1);
         }
     }
     if (ports > 0 && check_ports(x, ports) != 0)
@@ -3363,6 +3544,8 @@ static int check(struct set *x)
 {
     const struct etude_legacy_set_opts *o = x->o;
 
+    if (o->repeat && (!o->repeat->seeded || !etude_collection_repeat_valid(o->repeat)))
+        return refuse(x, "repetitions and loads require an explicit valid seed");
     if (check_arches(x) != 0 || check_members(x) != 0)
         return 2;
     if (check_given(x) != 0 || check_site(x) != 0)
@@ -3447,6 +3630,18 @@ static int case_command(struct set *x, struct member *m)
     want[ETUDE_LEGACY_CPU] = k->cpu_millis;
     want[ETUDE_LEGACY_MEMORY] = legacy_case_memory(k, x->o->prepared ? 0 : TOOLING_HOST);
     want[ETUDE_LEGACY_DISK] = k->disk_bytes;
+    if (m->load) {
+        uint64_t extra[3];
+        if (etude_collection_load_resources(m->load, extra))
+            return -1;
+        for (i = 0; i < 3; i++) {
+            if (want[i] > x->cap[i].amount || extra[i] > x->cap[i].amount - want[i]) {
+                errno = ERANGE;
+                return -1;
+            }
+            want[i] += extra[i];
+        }
+    }
     for (i = 0; i < 3; i++) {
         if (want[i] == 0)
             continue;
@@ -3683,13 +3878,54 @@ static size_t take_members(struct set *x, size_t s, size_t k)
     long long r;
 
     for (c = 0; c < man->ncases; c++)
-        for (r = 0; runs_case(x, s, &man->cases[c]) && r < man->cases[c].reps; r++, k++) {
+        for (r = 0; runs_case(x, s, &man->cases[c]) && r < man->cases[c].reps *
+                  (x->o->repeat && x->o->repeat->count ? x->o->repeat->count : 1); r++, k++) {
             x->mem[k].m = &x->members[s];
             x->mem[k].manifest = man;
             x->mem[k].k = &man->cases[c];
             x->mem[k].rep = r;
         }
     return k;
+}
+
+/* Apply the shared seed policy before paths or job pointers refer to members. */
+static int repeat_members(struct set *x)
+{
+    const struct etude_collection_repeat *r = x->o->repeat;
+    if (!r)
+        return 0;
+    struct member *ordered = calloc(x->n, sizeof(*ordered));
+    size_t *first = calloc(x->n, sizeof(*first));
+    x->repeat_cases = calloc(x->n, sizeof(*x->repeat_cases));
+    if (!ordered || !first || !x->repeat_cases) {
+        free(ordered); free(first); return -1;
+    }
+    for (size_t i = 0; i < x->n; i++) {
+        struct member *m = &x->mem[i];
+        if (m->rep)
+            continue;
+        size_t at = x->repeat_count++;
+        first[at] = i;
+        x->repeat_cases[at].case_id = m->k->case_id;
+        x->repeat_cases[at].arch = m->k->arch;
+        x->repeat_cases[at].repetitions = (unsigned)m->k->reps * (r->count ? r->count : 1);
+    }
+    struct etude_repeat_spec spec;
+    etude_collection_repeat_spec(r, x->repeat_cases, x->repeat_count, x->o->width, &spec);
+    size_t count = 0;
+    int rc = etude_repeat_plan(&spec, &x->repeat_items, &count);
+    if (!rc && count == x->n) {
+        x->repeat_selection = etude_repeat_record(&spec, "selection", x->repeat_items, count);
+        rc = x->repeat_selection ? 0 : -1;
+        for (size_t i = 0; i < count; i++) {
+            struct etude_repeat_item *item = &x->repeat_items[i];
+            ordered[i] = x->mem[first[item->case_index] + item->repetition];
+            ordered[i].load = item->load == ETUDE_REPEAT_NO_LOAD ? NULL : &r->loads[item->load];
+        }
+        if (!rc) memcpy(x->mem, ordered, count * sizeof(*ordered));
+    } else rc = -1;
+    free(first); free(ordered);
+    return rc;
 }
 
 /**
@@ -3828,13 +4064,63 @@ static int start_observer(struct set *x)
     return 0;
 }
 
+/* Allocate and order the members before commands retain pointers into them. */
+static int prepare_members(struct set *x)
+{
+    const struct etude_legacy_set_opts *o = x->o;
+    size_t i, k = 0, serial;
+    x->mem = calloc(x->n, sizeof(*x->mem));
+    x->jobs = calloc(x->n, sizeof(*x->jobs));
+    x->sup = etude_supervisor_new();
+    if (x->mem == NULL || x->jobs == NULL || x->sup == NULL) {
+        say(x, "etude run: result: error: the run: %s", strerror(ENOMEM));
+        return 2;
+    }
+    for (i = 0; i < x->nmembers; i++)
+        if (o->repeat || x->members[i].serial)
+            k = take_members(x, i, k);
+    serial = k;
+    for (i = 0; i < x->nmembers; i++)
+        if (!o->repeat && !x->members[i].serial)
+            k = take_members(x, i, k);
+    if (repeat_members(x))
+        return refuse(x, "the seeded repetition plan could not be allocated");
+    if (o->repeat)
+        for (i = 0; i < x->n; i++) {
+            struct member *m = &x->mem[i];
+            m->learned = malloc(sizeof(*m->learned));
+            if (!m->learned) return refuse(x, "repetition bounds could not be allocated");
+            *m->learned = *m->k;
+            m->k = m->learned;
+        }
+    for (i = 0; i < x->n; i++)
+        if (case_paths(x, &x->mem[i]) != 0) {
+            say(x, "etude run: result: error: the run: %s", strerror(errno));
+            return 2;
+        }
+    if ((!o->repeat && x->narches > 1 && order_members(x, serial) != 0) || number_members(x) != 0) {
+        say(x, "etude run: result: error: the run: %s", strerror(errno));
+        return 2;
+    }
+    for (i = 0; i < x->n; i++)
+        if (case_command(x, &x->mem[i]) != 0) {
+            say(x, "etude run: result: error: the run: %s", strerror(errno));
+            return 2;
+        }
+    if (prep_command(x) != 0) {
+        say(x, "etude run: result: error: the run: %s", strerror(errno));
+        return 2;
+    }
+    return 0;
+}
+
 /** Make the run's identity, directories, history, ledger and members; 0,
  * or 2 after a refusal or an error. */
 static int set_up(struct set *x)
 {
     const struct etude_legacy_set_opts *o = x->o;
     char dir[PATH_LEN], path[PATH_LEN];
-    size_t i, k = 0, serial;
+    size_t i;
 
     if (identify(x) != 0 || make_paths(x, dir, path) != 0)
         return 2;
@@ -3858,39 +4144,7 @@ static int set_up(struct set *x)
         x->cap[i].amount = o->cap[i];
     }
     x->ncap = 3;
-    x->mem = calloc(x->n, sizeof(*x->mem));
-    x->jobs = calloc(x->n, sizeof(*x->jobs));
-    x->sup = etude_supervisor_new();
-    if (x->mem == NULL || x->jobs == NULL || x->sup == NULL) {
-        say(x, "etude run: result: error: the run: %s", strerror(ENOMEM));
-        return 2;
-    }
-    for (i = 0; i < x->nmembers; i++)
-        if (x->members[i].serial)
-            k = take_members(x, i, k);
-    serial = k;
-    for (i = 0; i < x->nmembers; i++)
-        if (!x->members[i].serial)
-            k = take_members(x, i, k);
-    for (i = 0; i < x->n; i++)
-        if (case_paths(x, &x->mem[i]) != 0) {
-            say(x, "etude run: result: error: the run: %s", strerror(errno));
-            return 2;
-        }
-    if ((x->narches > 1 && order_members(x, serial) != 0) || number_members(x) != 0) {
-        say(x, "etude run: result: error: the run: %s", strerror(errno));
-        return 2;
-    }
-    for (i = 0; i < x->n; i++)
-        if (case_command(x, &x->mem[i]) != 0) {
-            say(x, "etude run: result: error: the run: %s", strerror(errno));
-            return 2;
-        }
-    if (prep_command(x) != 0) {
-        say(x, "etude run: result: error: the run: %s", strerror(errno));
-        return 2;
-    }
-    return 0;
+    return prepare_members(x);
 }
 
 /** Give the count of the request's members that have an item. */
@@ -3934,6 +4188,7 @@ static void cleanup_owned(struct set *x)
     for (size_t i = 0; x->mem && i < x->n; i++) {
         legacy_guest_free(x->mem[i].g);
         x->mem[i].g = NULL;
+        x->mem[i].c.cleanup = stop_load(&x->mem[i].c, x->mem[i].c.cleanup);
         if (x->mem[i].c.cleanup != ETUDE_CLEANUP_CONFIRMED)
             x->uncertain = 1;
     }
@@ -4023,10 +4278,12 @@ static void tear_down(struct set *x)
     etude_observe_free(x->observer);
     free(x->load);
     for (size_t i = 0; x->mem && i < x->n; i++) {
+        etude_collection_load_free(x->mem[i].c.load);
         free(x->mem[i].c.argv);
         free(x->mem[i].c.envp);
         free(x->mem[i].judged);
         free(x->mem[i].digests);
+        free(x->mem[i].learned);
     }
     for (size_t i = 0; x->manifests && i < x->nmembers; i++)
         legacy_manifest_free(&x->manifests[i]);
@@ -4036,6 +4293,9 @@ static void tear_down(struct set *x)
     free(x->again);
     free(x->prep.argv);
     free(x->prep.envp);
+    free(x->repeat_cases);
+    free(x->repeat_items);
+    free(x->repeat_selection);
     free(x->mem);
     free(x->jobs);
     if (x->h && etude_history_close(x->h))
@@ -4137,7 +4397,7 @@ int etude_legacy_selection_export(const struct etude_legacy_set_opts *o, const c
     size_t count = 0;
     for (size_t i = 0; i < x.nmembers; i++)
         count = take_members(&x, i, count);
-    if (count != x.n)
+    if (count != x.n || repeat_members(&x))
         goto done;
     selection(&x, &selected);
     if (selected.failed)
@@ -4173,6 +4433,9 @@ done:
     free(x.manifests);
     free(x.members);
     free(x.again);
+    free(x.repeat_cases);
+    free(x.repeat_items);
+    free(x.repeat_selection);
     free(x.mem);
     free(selected.data);
     free(d.data);

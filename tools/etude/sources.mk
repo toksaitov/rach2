@@ -47,7 +47,8 @@ ETUDE_OBSERVE_SRC = tools/etude/observe_sequence.c tools/etude/posix/observe_seq
                     tools/etude/observe_main.c tools/etude/observe_scope.c \
                     tools/etude/observe_system.c
 
-ETUDE_RUN_SRC = $(ETUDE_OBSERVE_SRC) tools/etude/measurement_context.c tools/etude/collection.c \
+ETUDE_RUN_SRC = tools/etude/repeat.c tools/etude/collection_repeat.c tools/etude/collection_load.c \
+                tools/etude/posix/load.c $(ETUDE_OBSERVE_SRC) tools/etude/measurement_context.c tools/etude/collection.c \
                 tools/etude/posix/run_suites.c tools/etude/posix/legacy.c \
                 tools/etude/preparation_record.c \
                 tools/etude/posix/legacy_set.c tools/etude/posix/legacy_cases.c \
@@ -63,11 +64,11 @@ ETUDE_RUN_SRC = $(ETUDE_OBSERVE_SRC) tools/etude/measurement_context.c tools/etu
 
 # The verbs of Linux and macOS alone: `etude run native`, `etude show
 # failures`, `etude status` and `etude release`, `etude
-# serve`, `etude stress` and `etude build`, with the host executor, which
+# serve` and `etude build`, with the host executor, which
 # ETUDE_WIN_EXEC_SRC replaces on Windows.
 ETUDE_POSIX_SRC = tools/etude/posix/run_native.c tools/etude/posix/remote.c \
                   tools/etude/failures.c tools/etude/posix/claims.c tools/etude/posix/responder.c \
-                  tools/etude/posix/serve.c tools/etude/posix/load.c tools/etude/step/step.c \
+                  tools/etude/posix/serve.c tools/etude/step/step.c \
                   tools/etude/posix/exec.c tools/etude/posix/keeper.c \
                   tools/etude/posix/process.c tools/etude/posix/qemu.c \
                   tools/etude/posix/bridge.c tools/etude/posix/hold.c \

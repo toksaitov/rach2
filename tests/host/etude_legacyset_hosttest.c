@@ -19,6 +19,9 @@
  * host-deps: tools/etude/observe.c tools/etude/observe_history.c
  * host-deps: tools/etude/observe_scope.c tools/etude/observe_system.c
  * host-deps: tools/etude/measurement_context.c
+ * host-deps: tools/etude/repeat.c tools/etude/collection_repeat.c
+ * host-deps: tools/etude/collection_load.c
+ * host-inputs: tests/host/compat/legacyset_repetition.c
  * host-inputs: tests/host/compat/legacyset_context.c
  * host-deps: tools/etude/preparation_record.c tools/etude/posix/legacy_set.c
  * host-deps: tools/etude/posix/legacy_cases.c tools/etude/digest.c
@@ -2847,6 +2850,7 @@ static int guest_site(void)
 }
 
 #include "compat/legacyset_context.c"
+#include "compat/legacyset_repetition.c"
 
 int main(int argc, char **argv)
 {
@@ -2858,6 +2862,8 @@ int main(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "--bridge-holder"))
         return etude_win_bridge_main(argc, argv);
 #endif
+    if (argc == 4 && !strcmp(argv[1], "stress"))
+        return repetition_load_role(argv[2]);
     role = legacy_fixture_role(argc, argv);
     if (role >= 0)
         return role;
@@ -2877,7 +2883,8 @@ int main(int argc, char **argv)
         printf("etude-legacyset-test: fail: build/tools/etude/etude is not built\n");
         return 1;
     }
-    context_only = argc == 2 && !strcmp(argv[1], "--context-only");
+    int repetitions_only = argc == 2 && !strcmp(argv[1], "--repetitions-only");
+    context_only = repetitions_only || (argc == 2 && !strcmp(argv[1], "--context-only"));
     if (context_only)
         guest_arch = "i686";
     else if (guest_site() != 0)
@@ -2894,6 +2901,9 @@ int main(int argc, char **argv)
     make_tree();
     if (fixture_environment(0) != 0)
         return 1;
+    if (repetitions_only)
+        return repetition_cases_only();
+    test_repetition_loads();
     test_contexts();
     if (context_only) {
         if (fails)

@@ -1,8 +1,12 @@
 /*
- * load.c: the load fixture that a repetition runs beside its case, on POSIX
- * systems. It spins processors, holds written memory, or writes and
- * synchronizes a file, until it is killed.
+ * load.c: the native load fixture that runs beside a repeated case. It spins
+ * processors, holds written memory, or writes and synchronizes a file, until
+ * it is killed.
  */
+#ifdef _WIN32
+#include "../win/files.h"
+#include <windows.h>
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -42,12 +46,27 @@ static void spin(void)
         n = n + 1;
 }
 
-/** Spin on `count` processors: this process and count - 1 children. */
+#ifdef _WIN32
+static DWORD WINAPI thread_spin(void *argument)
+{
+    (void)argument;
+    spin();
+    return 0;
+}
+#endif
+/** Spin on `count` processors within the executor's owned process tree. */
 static int load_cpu(uint64_t count)
 {
-    pid_t pids[LOAD_CPU_MAX];
     uint64_t i;
-
+#ifdef _WIN32
+    for (i = 1; i < count; i++) {
+        HANDLE thread = CreateThread(NULL, 65536, thread_spin, NULL, 0, NULL);
+        if (!thread)
+            return 1;
+        CloseHandle(thread);
+    }
+#else
+    pid_t pids[LOAD_CPU_MAX];
     for (i = 1; i < count; i++) {
         pids[i] = fork();
         if (pids[i] == 0)
@@ -59,6 +78,7 @@ static int load_cpu(uint64_t count)
             return 1;
         }
     }
+#endif
     if (ready() != 0)
         return 1;
     spin();
@@ -79,14 +99,54 @@ static int load_memory(uint64_t bytes)
         m[at] = (unsigned char)at;
     if (ready() != 0)
         return 1;
-    for (;;)
+    for (;;) {
+#ifdef _WIN32
+        Sleep(INFINITE);
+#else
         pause();
+#endif
+    }
 }
 
 /**
  * Write `bytes` to a file of this process's, unlinked once it is open, and
  * synchronize it, again and again until killed.
  */
+#ifdef _WIN32
+static int load_disk(uint64_t bytes)
+{
+    static unsigned char chunk[LOAD_CHUNK];
+    char name[64];
+    snprintf(name, sizeof(name), "etude-stress.%lu", (unsigned long)GetCurrentProcessId());
+    HANDLE file = CreateFileA(name, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_DELETE, NULL,
+                              CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
+                              NULL);
+    if (file == INVALID_HANDLE_VALUE)
+        return 1;
+    memset(chunk, 0xa5, sizeof(chunk));
+    int announced = 0;
+    for (;;) {
+        LARGE_INTEGER at;
+        at.QuadPart = 0;
+        if (!SetFilePointerEx(file, at, NULL, FILE_BEGIN)) break;
+        for (uint64_t written = 0; written < bytes;) {
+            DWORD n = bytes - written < LOAD_CHUNK ? (DWORD)(bytes - written) : LOAD_CHUNK;
+            DWORD done;
+            if (!WriteFile(file, chunk, n, &done, NULL) || done != n) {
+                CloseHandle(file); return 1;
+            }
+            written += done;
+        }
+        if (!FlushFileBuffers(file)) break;
+        if (!announced) {
+            if (ready()) break;
+            announced = 1;
+        }
+    }
+    CloseHandle(file);
+    return 1;
+}
+#else
 static int load_disk(uint64_t bytes)
 {
     static unsigned char chunk[LOAD_CHUNK];
@@ -102,8 +162,7 @@ static int load_disk(uint64_t bytes)
         return 1;
     }
     memset(chunk, 0xa5, sizeof(chunk));
-    if (ready() != 0)
-        return 1;
+    int announced = 0;
     for (;;) {
         for (at = 0; at < bytes; at += n) {
             n = bytes - at < LOAD_CHUNK ? (size_t)(bytes - at) : LOAD_CHUNK;
@@ -116,8 +175,14 @@ static int load_disk(uint64_t bytes)
             fprintf(stderr, "etude stress: fsync: %s\n", strerror(errno));
             return 1;
         }
+        if (!announced) {
+            if (ready()) return 1;
+            announced = 1;
+        }
     }
 }
+
+#endif
 
 int etude_load_main(int argc, char **argv)
 {

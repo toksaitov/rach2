@@ -223,13 +223,13 @@ static const struct verb verbs[] = {
     {"lock", lock_main, "hold a tree's run lock, or the host lock and a port block"},
 #endif
 #if !defined(ETUDE_LOCK_ONLY) && !defined(__rach2__)
+    {"stress", etude_load_main, "apply a processor, memory or disk load"},
     {"observe", etude_observe_main, "record native system and process load"},
     {"admit", etude_admit_main, "start a command once the ledger admits it"},
 #ifndef _WIN32
     {"status", etude_status_main, "list the claims in a machine's ledger"},
     {"release", etude_release_main, "drop a claim whose processes have ended"},
     {"serve", etude_serve_main, "respond to remote execution over ssh"},
-    {"stress", etude_load_main, "apply a processor, memory or disk load"},
 #endif
     {"provision", provision_main, "make a machine ready, or its tooling machine"},
 #ifndef _WIN32
