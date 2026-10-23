@@ -12,6 +12,7 @@
 #include <poll.h>
 #endif
 #include "etude/observe.h"
+#include "observe_sequence.h"
 
 static int stop_input(void)
 {
@@ -47,6 +48,8 @@ static int stop_request(const char *path, const char *run)
 
 int etude_observe_main(int argc, char **argv)
 {
+    if (argc > 1 && !strcmp(argv[1], "sequence"))
+        return etude_observe_sequence_main(argc, argv);
     const char *path = NULL, *run = NULL, *stop = NULL;
     struct etude_pid root = {0};
     char *end;
@@ -78,7 +81,7 @@ int etude_observe_main(int argc, char **argv)
               stderr);
         return 2;
     }
-    if (stop && stop_request(stop, run) != 0)
+    if (stop && (access(stop, F_OK) == 0 || errno != ENOENT))
         return 2;
     struct etude_observer *o = etude_observe_start(path, &root, run);
     if (!o) {

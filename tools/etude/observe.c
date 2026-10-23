@@ -216,7 +216,7 @@ struct etude_observer *etude_observe_start(const char *path, const struct etude_
 #else
     long self = (long)getpid();
 #endif
-    if (!run_id || strlen(run_id) >= sizeof o->run_id || !eh_identity(run_id) ||
+    if (!root || !run_id || strlen(run_id) >= sizeof o->run_id || !eh_identity(run_id) ||
         etude_context_clock(&o->clock) != 0 || etude_process_state(self, &o->identity) != 1 ||
         !o->identity.start_known || etude_process_state(root->pid, &owner) != 1 ||
         !owner.start_known || !root->start_known || owner.start != root->start) {
