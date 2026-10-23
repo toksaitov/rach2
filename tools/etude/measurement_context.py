@@ -9,6 +9,7 @@ import re
 import stat
 import subprocess
 import sys
+from preparation_paths import filesystem_path, native_path
 
 IDENTITY = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}\Z')
 SHA = re.compile(r'[0-9a-f]{64}\Z')
@@ -21,7 +22,7 @@ def require(held, reason):
 
 
 def digest(path):
-    path = Path(path)
+    path = filesystem_path(path)
     before = path.stat()
     require(stat.S_ISREG(before.st_mode), f'not a regular input: {path}')
     h = hashlib.sha256()
@@ -36,16 +37,16 @@ def digest(path):
 
 
 def descriptor(path):
-    path = Path(path).resolve(strict=True)
-    return dict(path=str(path), **digest(path))
+    path = filesystem_path(path).resolve(strict=True)
+    return dict(path=native_path(path), **digest(path))
 
 
 def data(path):
-    return json.loads(Path(path).read_text())
+    return json.loads(filesystem_path(path).read_text())
 
 
 def create(path, value):
-    path = Path(path)
+    path = filesystem_path(path)
     raw = (json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(',', ':')) + '\n').encode()
     with path.open('xb') as stream:
         stream.write(raw)
@@ -121,7 +122,7 @@ def observation(trace, stop, run_id):
     require(header.get('schema_version') == 1 and header.get('kind') == 'start' and
             header.get('method') == 'native-load-v1' and header.get('run_id') == run_id,
             'observation header belongs to another run or method')
-    return dict(trace=str(path), stop_request=str(stop.resolve()),
+    return dict(trace=native_path(path), stop_request=native_path(stop, strict=False),
                 header_sha256=hashlib.sha256(line).hexdigest())
 
 
@@ -197,20 +198,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
     capture = commands.add_parser('source', help='capture all tracked inputs of a clean frozen source')
-    capture.add_argument('--tree', type=Path, required=True)
+    capture.add_argument('--tree', type=filesystem_path, required=True)
     capture.add_argument('--commit', required=True)
-    capture.add_argument('--output', type=Path, required=True)
+    capture.add_argument('--output', type=filesystem_path, required=True)
     capture.add_argument('--extra', action='append', default=[], help='additional prepared source path under tree')
     make = commands.add_parser('compose', help='verify deployed inputs and compose context before execution')
     for flag in ('tree', 'record', 'site', 'etude', 'source-snapshot', 'output'):
-        make.add_argument('--' + flag, type=Path, required=True)
+        make.add_argument('--' + flag, type=filesystem_path, required=True)
     for flag in ('commit', 'run-id', 'source-sha256', 'cache-method', 'ordinary-preparation', 'one-time-production'):
         make.add_argument('--' + flag, required=True)
     make.add_argument('--purpose', choices=('focused', 'push', 'ci', 'release', 'phase_first_run'), required=True)
-    make.add_argument('--tool', type=Path, action='append', default=[])
+    make.add_argument('--tool', type=filesystem_path, action='append', default=[])
     for flag in ('preparation', 'outer-trace', 'outer-stop-request', 'physical-trace',
                  'physical-stop-request', 'selection-export'):
-        make.add_argument('--' + flag, type=Path)
+        make.add_argument('--' + flag, type=filesystem_path)
     args = parser.parse_args()
     require(COMMIT.fullmatch(args.commit), 'commit must be 40 lowercase hexadecimal digits')
     if args.command == 'source':
