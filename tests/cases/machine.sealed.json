@@ -56,6 +56,7 @@
         {"assertion_id": "first-mounted", "checks": "the mount table has /dev/disk0p3 / ext2 rw,relatime", "source": "scenario"},
         {"assertion_id": "first-unchecked", "checks": "the first boot's console has no ext2: check, since a freshly built root is clean", "source": "scenario"},
         {"assertion_id": "first-no-fallback", "checks": "the first boot's console has no Falling back to", "source": "scenario"},
+        {"assertion_id": "first-no-recovery", "checks": "the first untouched boot has no modules: found record from the recovery RAM image", "source": "scenario"},
         {"assertion_id": "first-lease", "checks": "/var/log/services records a lease of an address, which init's DHCP client took", "source": "scenario"},
         {"assertion_id": "kernel-sent", "checks": "the marked kernel sent down an ssh connection to cat > /tmp/kernel arrives, ssh exiting 0", "source": "scenario"},
         {"assertion_id": "kernel-installed", "checks": "bootctl kernel /tmp/kernel says installed: into the candidate slot", "source": "scenario"},
@@ -149,73 +150,6 @@
       ],
       "timing": [],
       "native": {"plan": "none", "class": "image", "reason": "the case writes the machine's disk between boots, destroys its root and replaces its boot loader, which only a copy of the disk under QEMU allows"}
-    },
-    {
-      "case_id": "machine.sealed.control",
-      "behavior": "a copy of the sealed disk with nothing injected boots its candidate, takes a lease and leaves no trial armed, and its whole console has no fallback and no recovery",
-      "units": ["sealed"],
-      "domain": "machine",
-      "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {"boots": 1}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}},
-      "execution": {
-        "program": "sealed_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
-        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["sealed"]}],
-        "children": "reaped",
-        "cleanup": "libetude-case ends the machine and removes the copy of the disk, which it keeps after a failure; the scenario removes its copy of the demo key after a pass"
-      },
-      "steps": [
-        {"step_id": "channel-client", "stage": "boot", "machine": "channel-client",
-         "does": "boot the declared Rach2 OpenSSH client and open its framed command channel"},
-        {"step_id": "boot", "stage": "boot", "machine": "sealed",
-         "does": "boot the disk until init starts the SSH server and the server answers, read bootctl status and the lease, power off and read the whole console"}
-      ],
-      "machines": [
-        {"machine_id": "channel-client", "qemu": {"kernel": "kernel", "initrd": null,
-         "disks": [{"name": "channel-client-disk", "base": "channel-client-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "channel-input", "size_bytes": 512, "bus": "ahci"}],
-         "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"],
-         "boot_options": ["rach2.root=ext2", "rach2.rescue", "rach2.ip=10.0.2.15/24", "rach2.gateway=10.0.2.2"]},
-         "console": "serial", "qmp": true, "helper": true},
-        {"machine_id": "sealed",
-         "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "sealed", "bus": "ahci"}], "cpu": "max", "processors": 1,
-                  "memory_bytes": 134217728, "firmware": "seabios",
-                  "devices": [{"model": "rtl8139", "net": "192.168.0.0/24", "host": "192.168.0.2",
-                               "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}],
-                  "boot_options": []},
-         "console": "serial", "qmp": true, "helper": false}
-      ],
-      "assertions": [
-        {"assertion_id": "control-candidate", "checks": "after init says it started the SSH server and the server answers, bootctl status says booted: candidate", "source": "scenario"},
-        {"assertion_id": "control-lease", "checks": "/var/log/services records a lease", "source": "scenario"},
-        {"assertion_id": "control-unarmed", "checks": "bootctl status says next_entry: absent", "source": "scenario"},
-        {"assertion_id": "control-no-fallback", "checks": "the whole console, read after the power-off, has no Falling back to", "source": "scenario"},
-        {"assertion_id": "control-no-recovery", "checks": "the whole console has no modules: found, which only a boot of the recovery entry prints", "source": "scenario"}
-      ],
-      "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [
-        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
-      ],
-      "bounds": {
-        "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 2700000000},
-        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
-        "stages": {
-          "boot": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
-          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
-        }
-      },
-      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 805306368, "disk_bytes": 5637144576,
-                    "locks": [], "ports": 1, "loop_devices": 0},
-      "prepare": [
-        {"name": "channel-client-image", "node": "images/gnu-test.disk", "per_architecture": true},
-        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
-        {"name": "sealed", "node": "images/rach2-sealed-with-key.disk", "per_architecture": true},
-        {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
-        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
-        {"name": "sealed_scenario", "node": "tests/cases/machine/sealed_scenario", "per_architecture": false}
-      ],
-      "timing": [],
-      "native": {"plan": "none", "class": "image", "reason": "the absence of a fallback and of recovery is read from the whole console of a fresh boot of a copy of the disk"}
     }
   ]
 }

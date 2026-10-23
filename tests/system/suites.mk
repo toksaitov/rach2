@@ -422,15 +422,14 @@ build/x86_64/tests/cases/machine/install.disk: ask-the-sub-make
 endif
 
 # `tests/run sealed`: the disk that goes into the laptop, operated the way it
-# will be operated once it is in there. It is the two cases of
-# tests/cases/machine.sealed.json, which etude runs on separate copies of the
-# one disk, and has no target here: a fault case that walks the whole life of
-# the machine over SSH (a kernel sent down the connection, installed, tried and
-# committed; a destroyed candidate caught by the fallback and repaired; a
+# will be operated once it is in there. It is the case of
+# tests/cases/machine.sealed.json, which etude runs on a copy of the disk, and
+# has no target here: an untouched boot with no fallback or recovery, then the
+# whole life of the machine over SSH (a kernel sent down the connection,
+# installed, tried and committed; a destroyed candidate caught by the fallback and repaired; a
 # missing, a damaged and an unclean root each landing in recovery and repaired;
 # a menu staged and then torn; the boot loader replaced through /dev/grubcore;
-# the root destroyed and rewritten from recovery), and a control case that
-# injects nothing and finds no fallback and no recovery anywhere.
+# the root destroyed and rewritten from recovery).
 # The artifact of the sealed cases beyond the kernel, the sealed disk and the
 # demo key: GRUB's pinned GPT core, which the fault case installs through
 # /dev/grubcore, checked against the GRUB manifest as it is copied.

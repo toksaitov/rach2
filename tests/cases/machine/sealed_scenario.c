@@ -20,10 +20,6 @@
  * the next boot of the machine is a new QEMU on the same copy, which keeps
  * what the boots before it wrote. What the old suite did to the disk from
  * the host, this scenario does to the copy between boots.
- *
- * machine.sealed.control boots another copy with nothing injected and finds
- * no fallback and no recovery anywhere on its console; a run that entered
- * recovery on purpose could not show that.
  */
 #include <fcntl.h>
 #include <stdio.h>
@@ -481,6 +477,8 @@ static void first_boot(struct sealed *s, long *cand)
                "a freshly built ext2 root was checked at its first boot");
     net_assert(&s->u, "first-no-fallback", !has(text, FALLING_BACK),
                "the first boot of a good disk took the fallback");
+    net_assert(&s->u, "first-no-recovery", !has(text, RECOVERY_RAM),
+               "the first boot of a good disk loaded the recovery RAM image");
     free(text);
     ask(s, "cat /var/log/services", "services", &r);
     net_assert(&s->u, "first-lease", has(r.out, "lease of"),
@@ -1098,51 +1096,12 @@ static int fault(struct etude_case *c)
     return net_end(&s.u);
 }
 
-/**
- * The case machine.sealed.control: the ordinary work with nothing injected,
- * and no fallback and no recovery on the whole console once the machine has
- * stopped. The menu draws every entry's title, recovery's among them, so a
- * boot of recovery is told by the RAM image it loads.
- */
-static int control(struct etude_case *c)
-{
-    struct sealed s;
-    struct net_run r;
-    char line[160], *text;
-    int candidate, unarmed;
-
-    begin(&s, c);
-    net_step(&s.u, "boot");
-    up(&s);
-    ask(&s, "bootctl status", "status", &r);
-    candidate = printed(&r, "booted: candidate");
-    unarmed = printed(&r, "next_entry: absent");
-    net_assert(&s.u, "control-candidate", candidate,
-               "the control run did not boot its candidate: %s",
-               line_of(&r, "booted:", line, sizeof(line)));
-    net_run_free(&r);
-    ask(&s, "cat /var/log/services", "services", &r);
-    net_assert(&s.u, "control-lease", has(r.out, "lease of"), "the control run recorded no lease");
-    net_run_free(&r);
-    net_assert(&s.u, "control-unarmed", unarmed, "the control run left a trial armed");
-    stop(&s);
-    text = console(&s);
-    net_assert(&s.u, "control-no-fallback", !has(text, FALLING_BACK),
-               "the control run took a fallback with nothing injected");
-    net_assert(&s.u, "control-no-recovery", !has(text, RECOVERY_RAM),
-               "the control run reached recovery with nothing injected");
-    free(text);
-    return net_end(&s.u);
-}
-
 int etude_scenario(struct etude_case *c)
 {
     const char *id = etude_case_id(c);
 
     if (strcmp(id, "machine.sealed.fault") == 0)
         return fault(c);
-    if (strcmp(id, "machine.sealed.control") == 0)
-        return control(c);
     fprintf(stderr, "sealed_scenario: no case %s\n", id);
     return 1;
 }
