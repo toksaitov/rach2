@@ -10,7 +10,8 @@ suite of the run must be named. ROWS are the last parts of identities of
 SUITE's cases, run in the order given; a SUITE that is not a suite of the
 run is passed over. CASES is the directory of the manifests, the manifest
 of a suite being the first `*.SUITE.json` in it, and OUT the directory that
-gets SUITE.json for each suite chosen from. A case chosen must run on ARCH.
+gets SUITE.json for each suite chosen from. ARCH is the run's architecture,
+or its two separated by a blank, and a case chosen must run on each.
 
 The program prints the number of cases chosen, or nothing when no suite
 was chosen from, and exits 0. A choice it refuses, an identity or row that
@@ -49,8 +50,9 @@ def choose(manifest, wanted, arch, ordered):
     order when ORDERED and in the manifest's otherwise."""
     cases = {case["case_id"]: case for case in manifest["cases"]}
     for name in wanted:
-        if not runs_on(cases[name], arch):
-            raise Refused(f"{name} does not run on {arch}")
+        for one in arch.split():
+            if not runs_on(cases[name], one):
+                raise Refused(f"{name} does not run on {one}")
     if ordered:
         return [cases[name] for name in wanted]
     return [case for case in manifest["cases"] if case["case_id"] in wanted]

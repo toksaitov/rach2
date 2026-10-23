@@ -4,6 +4,7 @@
 #
 #   tests/run NAME              one suite
 #   tests/run NAME NAME...      those suites, at the same time
+#   tests/run ARCH:NAME         a suite on one of the run's architectures
 #   tests/run core              the tier `make test` runs
 #   tests/run all               every suite
 #   tests/run inventory         every suite with what it proves, as Markdown
@@ -27,16 +28,34 @@ fi
 
 # ARCH names the architecture the run builds and boots, as mk/arch.mk does:
 # i686 when it is unset, into build/ on qemu-system-i386, or x86_64, into
-# build/x86_64/ on qemu-system-x86_64. Every make the run starts is given it,
-# and a set is the suites the registry lists for it.
+# build/x86_64/ on qemu-system-x86_64. `ARCH='i686 x86_64'` names both: each
+# suite named runs on each of them that the registry lists for it, or on the
+# one ARCH:NAME names, and the cases of both go through one schedule. Every
+# make the run starts is given one architecture, the first for the run's own
+# programs, and a set is the suites the registry lists for any of them.
 ARCH=${ARCH:-i686}
-case "$ARCH" in
-    i686) ARCH_BUILD=build; RACH2_QEMU="qemu-system-i386" ;;
-    x86_64) ARCH_BUILD=build/x86_64; RACH2_QEMU="qemu-system-x86_64" ;;
-    *) echo "run: result: refused: ARCH=$ARCH: the architectures are i686 and x86_64" >&2; exit 2 ;;
-esac
-export RACH2_QEMU
-ARCH_VAR="ARCH=$ARCH"
+ARCHES=""
+for arch in $ARCH; do
+    case "$arch" in
+        i686|x86_64) ;;
+        *) echo "run: result: refused: ARCH=$ARCH: the architectures are i686 and x86_64" >&2; exit 2 ;;
+    esac
+done
+for arch in i686 x86_64; do
+    case " $ARCH " in *" $arch "*) ARCHES="$ARCHES $arch" ;; esac
+done
+ARCHES=${ARCHES# }
+[ -n "$ARCHES" ] || { echo "run: result: refused: ARCH names no architecture" >&2; exit 2; }
+ARCH=$ARCHES
+arch_build() { case "$1" in x86_64) echo build/x86_64 ;; *) echo build ;; esac; }
+arch_qemu() { case "$1" in x86_64) echo qemu-system-x86_64 ;; *) echo qemu-system-i386 ;; esac; }
+if [ "$ARCH" = "${ARCH%% *}" ]; then
+    RACH2_QEMU=$(arch_qemu "$ARCH")
+    export RACH2_QEMU
+else
+    unset RACH2_QEMU
+fi
+ARCH_VAR="ARCH=${ARCH%% *}"
 
 # RACH2_KERNEL=NAME passes rach2-NAME/kernel in the architecture's build tree
 # to the suites as BOOT_KERNEL, after the preparation has built it with the
@@ -289,10 +308,14 @@ tier_names()   { awk -F'|' -v t="$1" '!/^#/ && $3 == t { print $1 }' "$REGISTRY"
 # The architectures a suite runs on, the sixth field, commas between them;
 # empty is every architecture.
 suite_arches() { awk -F'|' -v s="$1" '!/^#/ && $1 == s { print $6 }' "$REGISTRY"; }
-suite_for_arch() { # suite_for_arch NAME: 0 when it runs on ARCH
+suite_on() { # suite_on NAME ARCH: 0 when the suite runs on that architecture
     case ",$(suite_arches "$1")," in
-        ,,|*",$ARCH,"*) return 0 ;;
+        ,,|*",$2,"*) return 0 ;;
     esac
+    return 1
+}
+suite_for_arch() { # suite_for_arch NAME: 0 when it runs on one of ARCH
+    for a in $ARCH; do suite_on "$1" "$a" && return 0; done
     return 1
 }
 arch_only() { # arch_only NAME...: those of the names that run on ARCH
@@ -389,10 +412,12 @@ check_declarations() { # a glob two suites declare is refused before anything ru
     dup=$(image_table "$(suite_names)" | awk '{print $2}' | sort | uniq -d | head -3)
     [ -z "$dup" ] || { echo "run: result: refused: two suites declare the same images:$(echo "$dup" | tr '\n' ' ')" >&2; return 1; }
 }
-check_images() { # check_images NAMES: 0 when every file made that is not a
-                 # recorded build product belongs to one of them
+check_images() { # check_images A NAMES: 0 when every file made for the
+                 # architecture A that is not a recorded build product
+                 # belongs to one of them
     [ -f "$WORK/images.stamp" ] || return 0
-    image_table "$1" > "$WORK/images.patterns"
+    ARCH_BUILD=$(arch_build "$1")
+    image_table "$2" > "$WORK/images.patterns"
     ( cd "$REPO/$ARCH_BUILD/images" 2>/dev/null && find . -type f -newer "$WORK/images.stamp" | sed 's|^\./||' | sort ) > "$WORK/images.made"
     # A product of the run's target is the build's, and check_hashes checks it.
     if [ -f "$WORK/inventory.products" ]; then
@@ -473,9 +498,9 @@ tooling_host() {
 
 # Every external command a suite needs, before anything is built for it. An
 # entry with alternatives, `a+b/c+d`, is met when every command of one of
-# them is installed. `qemu` is the emulator of ARCH, and `tooling` is met
-# where tooling_host succeeds.
-check_tools() { # check_tools NAME
+# them is installed. `qemu` is the emulator of the architecture A, and
+# `tooling` is met where tooling_host succeeds.
+check_tools() { # check_tools NAME A
     tools=$(suite_tools "$1")
     [ "$tools" = "-" ] && return 0
     for entry in $(echo "$tools" | tr ',' ' '); do
@@ -484,7 +509,7 @@ check_tools() { # check_tools NAME
             has=1
             for tool in $(echo "$choice" | tr '+' ' '); do
                 case "$tool" in
-                    qemu) tool=$RACH2_QEMU ;;
+                    qemu) tool=$(arch_qemu "$2") ;;
                     tooling) tooling_host && continue; has=""; break ;;
                 esac
                 if ! command -v "$tool" >/dev/null 2>&1; then
@@ -500,7 +525,7 @@ check_tools() { # check_tools NAME
         [ -n "$met" ] && continue
         case "$entry" in
             *[/+]*) echo "run: $1 needs $(tools_prose "$entry"), which this host does not have" >&2 ;;
-            *) [ "$entry" = qemu ] && entry=$RACH2_QEMU
+            *) [ "$entry" = qemu ] && entry=$(arch_qemu "$2")
                echo "run: $1 needs $entry and it is not installed" >&2 ;;
         esac
         return 1
@@ -683,25 +708,56 @@ esac
 
 # Every name and every tool, before a single object is built: a run that is
 # going to refuse the last suite should refuse it now rather than in an hour.
+# A name is a suite, which runs on each architecture of ARCH that the
+# registry lists for it, or ARCH:SUITE, which runs on that one alone. SUITES
+# are the suites named, each once, and PAIRS each suite on each architecture
+# it runs on, as `SUITE:ARCH` words.
 [ "$#" -gt 0 ] || { echo "run: result: refused: no suites in that set" >&2; exit 2; }
-seen=""
-for suite in "$@"; do
+SUITES=""
+PAIRS=" "
+for name in "$@"; do
+    suite=${name#*:}
+    on=$ARCH
+    case "$name" in
+        *:*) on=${name%%:*}
+             case " $ARCH " in
+                 *" $on "*) ;;
+                 *) echo "run: result: refused: $name: ARCH is $ARCH" >&2; exit 2 ;;
+             esac ;;
+    esac
     suite_known "$suite" || {
         echo "run: result: refused: unknown suite '$suite'" >&2; usage_names; exit 2
     }
     ls "$REPO"/tests/cases/*."$suite".json > /dev/null 2>&1 || {
         echo "run: result: refused: no family of cases in tests/cases is the suite $suite" >&2; exit 2
     }
-    # Two runs of one suite would share one ledger and one held output.
-    case " $seen " in
-        *" $suite "*) echo "run: result: refused: $suite is named twice" >&2; exit 2 ;;
-    esac
-    seen="$seen $suite"
-    suite_for_arch "$suite" || {
-        echo "run: result: refused: $suite runs on $(suite_arches "$suite") alone, and ARCH is $ARCH" >&2; exit 2
+    runs=""
+    for a in $on; do
+        suite_on "$suite" "$a" && runs="$runs $a"
+    done
+    [ -n "$runs" ] || {
+        echo "run: result: refused: $suite runs on $(suite_arches "$suite") alone, and ARCH is $on" >&2; exit 2
     }
-    check_tools "$suite" || { echo "run: result: refused: $suite has no tools to run with" >&2; exit 1; }
+    # Two runs of one suite would share one ledger and one held output.
+    for a in $runs; do
+        case "$PAIRS" in
+            *" $suite:$a "*) echo "run: result: refused: $suite is named twice" >&2; exit 2 ;;
+        esac
+        PAIRS="$PAIRS$suite:$a "
+        check_tools "$suite" "$a" || { echo "run: result: refused: $suite has no tools to run with" >&2; exit 1; }
+    done
+    case " $SUITES " in *" $suite "*) ;; *) SUITES="${SUITES:+$SUITES }$suite" ;; esac
 done
+pair_arches() { # pair_arches SUITE: the architectures the run runs it on
+    for a in $ARCH; do
+        case "$PAIRS" in *" $1:$a "*) printf '%s ' "$a" ;; esac
+    done
+}
+arch_suites() { # arch_suites A: the suites the run runs on that architecture
+    for s in $SUITES; do
+        case "$PAIRS" in *" $s:$1 "*) printf '%s ' "$s" ;; esac
+    done
+}
 # The cases chosen, before anything is built: RACH2_CASES gives case
 # identities, of which each suite of the run runs those of its own, and must
 # name one of each; RACH2_AGENTS_ROWS and RACH2_ACCEPT_AGENTS give the rows of
@@ -714,9 +770,10 @@ accept_rows=${RACH2_ACCEPT_AGENTS:-}
 chosen=""
 if [ -n "${RACH2_CASES:-}$agents_rows$accept_rows" ]; then
     rm -rf "$WORK/chosen"
+    # shellcheck disable=SC2086 # a suite name is one word by format
     chosen=$(python3 "$REPO/tests/system/case_select.py" ${RACH2_CASES:+-c "$RACH2_CASES"} \
         ${agents_rows:+-r agents "$agents_rows"} ${accept_rows:+-r agentsaccept "$accept_rows"} \
-        "$ARCH" "$REPO/tests/cases" "$WORK/chosen" "$@") || {
+        "$ARCH" "$REPO/tests/cases" "$WORK/chosen" $SUITES) || {
         echo "run: result: refused: the cases chosen are not cases of the suites named" >&2; exit 2
     }
 fi
@@ -728,7 +785,7 @@ esac
 diskimage=""
 sockets="--no-sockets"
 machines=""
-for suite in "$@"; do
+for suite in $SUITES; do
     case ",$(suite_tools "$suite")," in
         *[,/+]hdiutil[,/+]*) command -v hdiutil >/dev/null 2>&1 && diskimage="--diskimage" ;;
     esac
@@ -804,7 +861,8 @@ host_lock() { # host_lock NAME...
 # block files and the host lock's, as it does for tools/ci/bisect.sh.
 if [ -n "$NEED_PORTS" ]; then
     RACH2_RUN_WORK=$WORK; RACH2_RUN_STATUS=$STATUS_RECORD
-    RACH2_HOST_LOCK=$(host_lock "$@")
+    # shellcheck disable=SC2086 # a suite name is one word by format
+    RACH2_HOST_LOCK=$(host_lock $SUITES)
     export RACH2_RUN_WORK RACH2_RUN_STATUS RACH2_HOST_LOCK
     set -- "$RUN_SHELL" "$0" "$@"
     if [ -n "$RUN_ENV" ]; then
@@ -824,7 +882,11 @@ export RACH2_QEMU_ACCEL
 
 # The line that says this run began. Everything below it belongs to this run,
 # and a log without it is a run that never started.
-echo "run: starting: $* (pid $$, $(date '+%Y-%m-%d %H:%M:%S'), architecture $ARCH, workers $WORKERS, memory $MEMORY_MIB MiB, accelerator $RACH2_QEMU_ACCEL, processors $RACH2_CPUS$selection)"
+case "$ARCH" in
+    *' '*) arches="architectures $(echo "$ARCH" | sed 's/ / and /')" ;;
+    *) arches="architecture $ARCH" ;;
+esac
+echo "run: starting: $* (pid $$, $(date '+%Y-%m-%d %H:%M:%S'), $arches, workers $WORKERS, memory $MEMORY_MIB MiB, accelerator $RACH2_QEMU_ACCEL, processors $RACH2_CPUS$selection)"
 case $(uname -s) in
     MINGW*|MSYS*|UCRT*|CLANG*) collection_windows || exit 1 ;;
 esac
@@ -879,9 +941,11 @@ family_of() { # family_of SUITE: the line of the suite's family, or nothing
 # The suites the driver runs, one a line with the manifest of the suite's
 # cases; `style` and `host` run first, one at a time, and a failure of `style`
 # stops the set, since the fix of a style fault is an edit, which changes the
-# GNU root's sources. The map gives each suite its family of cases.
+# GNU root's sources. A suite that the run runs on one of its two
+# architectures alone has a line for it, with `arch=`. The map gives each
+# suite its family of cases.
 : > "$WORK/map"
-for suite in "$@"; do
+for suite in $SUITES; do
     case "$suite" in
         style) flags=" serial stops" ;;
         host) flags=" serial" ;;
@@ -892,7 +956,12 @@ for suite in "$@"; do
         echo "run: result: refused: no family of cases in tests/cases is the suite $suite" >&2; exit 2
     }
     [ ! -f "$WORK/chosen/$suite.json" ] || family="${family%% *} $WORK/chosen/$suite.json"
-    echo "$suite$flags cases=${family#* }"
+    on=$(pair_arches "$suite")
+    if [ "$on" = "$ARCH " ]; then
+        echo "$suite$flags cases=${family#* }"
+    else
+        for a in $on; do echo "$suite$flags arch=$a cases=${family#* }"; done
+    fi
     echo "$suite ${family%% *}" >> "$WORK/map"
 done > "$WORK/selection"
 # The driver's ledger is the run's own: the machine's admission is the claim
@@ -921,7 +990,7 @@ admitted=""
 forward() { SIGNALLED=$1; [ -z "$DRIVER" ] || kill "-$1" "$DRIVER" 2>/dev/null; }
 trap 'forward INT' INT; trap 'forward TERM' TERM; trap 'forward HUP' HUP
 # shellcheck disable=SC2086 # the options are one word each or none
-"$ETUDE" run suites -t "$REPO" -a "$ARCH" ${RACH2_KERNEL:+-n "$RACH2_KERNEL"} \
+"$ETUDE" run suites -t "$REPO" -a "$(echo "$ARCH" | tr ' ' ,)" ${RACH2_KERNEL:+-n "$RACH2_KERNEL"} \
     -l "$WORK/ledger" -c "$capacity" -j "$WORKERS" -o "$RESULTS" -e "$FAILED" \
     -S "$SCHEMAS" -p "$RECORD" -r "$STATUS_RECORD" -m "$WORK/images.stamp" \
     ${commit:+-g "$commit"} ${RACH2_STOP_ON_FAIL:+-k} ${admitted:+-P "$admitted"} -q "$*" "$WORK/selection" &
@@ -933,7 +1002,7 @@ while :; do
     driver_rc=$?
     kill -0 "$DRIVER" 2>/dev/null || break
 done
-stream="$RESULTS/history/tests.$ARCH.*.$DRIVER.jsonl"
+stream="$RESULTS/history/tests.$(echo "$ARCH" | tr ' ' -).*.$DRIVER.jsonl"
 DRIVER=""
 kill "$WATCHER" 2>/dev/null
 wait "$WATCHER" 2>/dev/null
@@ -951,10 +1020,14 @@ esac
 extra=""
 { [ ! -f "$WORK/voided" ] && check_hashes; } || extra="-f voided"
 [ ! -f "$RECORD" ] || sed -n 's/^file [^ ]* [^ ]* [^ ]* [^ ]* //p' "$RECORD" > "$WORK/inventory.products"
-check_images "$*" || extra="$extra -f images"
+images=""
+for a in $ARCH; do
+    check_images "$a" "$(arch_suites "$a")" || images=1
+done
+[ -z "$images" ] || extra="$extra -f images"
 # shellcheck disable=SC2086 # the options are one word each
 # shellcheck disable=SC2086 # the stream is a pattern of one file
-"$ETUDE" show lines -s "$SCHEMAS" $extra "$WORK/map" $stream
+"$ETUDE" show lines -s "$SCHEMAS" -a "$(echo "$ARCH" | tr ' ' ,)" $extra "$WORK/map" $stream
 lines_rc=$?
 if [ -n "$SIGNALLED" ]; then
     case "$SIGNALLED" in

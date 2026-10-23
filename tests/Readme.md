@@ -13,11 +13,14 @@ tests/run ext2 fatwrite    # several, at the same time
 tests/run core             # the core tier
 tests/run all              # every suite
 tests/run inventory        # every suite with what it proves, as Markdown
+ARCH='i686 x86_64' tests/run default fifo   # both architectures, one schedule
 ```
 
 `tests/registry` lists the suites, one line each, with the external commands each needs and its tier, `core` or `full`; [`system/suites.md`](system/suites.md) is that list with the sentence that says what each suite proves. The core tier exercises every subsystem of the kernel at least once. A suite named `NAME` is the cases of a family in [`cases/`](cases/Readme.md) whose identity ends in `NAME`, which etude runs. The runner refuses an unknown name, a name with no family, a name given twice, a missing command and a set given with another name before it builds anything.
 
 `ARCH` chooses the architecture, as it does for the build: unset or `i686`, the run builds into `build/` and boots `qemu-system-i386`; `x86_64`, it builds into `build/x86_64/` and boots `qemu-system-x86_64`. `all` and `core` are then the suites the registry lists for that architecture, and naming a suite that does not run on it is refused.
+
+`ARCH='i686 x86_64'` tests both architectures as one run: the preparation builds both trees, each into its own directory, and the cases of both go through one schedule and one admission, the longer cases first, so that the long cases of one architecture run beside those of the other. Each suite named runs on each architecture it runs on, and `all` and `core` are the suites the registry lists for either. A name `ARCH:SUITE`, as `x86_64:fpu`, runs the suite on that architecture alone, and is accepted in a run of one architecture too when ARCH is that one; a suite named twice for one architecture is refused. A case of no architecture, such as a host check, runs once. The lines the run prints name each suite `ARCH:SUITE`, as `run: x86_64:fpu: PASS in 12s`, a case's lines say `CASE on ARCH`, and a kept workspace is `RUN.CASE.ARCH.rR` under `RACH2_FAILED`. With `RACH2_CASES`, each case listed must run on both. A run of one architecture is as the paragraph above says, and prints the plain suite names.
 
 These variables change a run:
 
@@ -27,7 +30,7 @@ These variables change a run:
 | `RACH2_MEMORY_MIB` | three quarters of the host's memory | guest memory the running suites may declare together |
 | `RACH2_CPUS` | 2 | processors of every machine, 1 to 64; a suite that names its own count keeps it |
 | `RACH2_STOP_ON_FAIL` | unset | when set, the first failure stops the set |
-| `RACH2_CASES` | unset | case identities separated by blanks, such as `guest.default.vforkmusl machine.ext2.cost`: each suite of the run runs only the cases listed of its own, in its manifest's order, and the start line says the run is a selection; an identity that is no case of a suite of the run, or of the architecture, one given twice and a suite left with no case are refused before anything is built |
+| `RACH2_CASES` | unset | case identities separated by blanks, such as `guest.default.vforkmusl machine.ext2.cost`: each suite of the run runs only the cases listed of its own, in its manifest's order, and the start line says the run is a selection; an identity that is no case of a suite of the run, or of the architecture, one given twice and a suite left with no case are refused before anything is built; in a run of both architectures a case must run on each |
 | `RACH2_KERNEL` | unset | `ubsan` or `o2`: a suite that boots the kernel directly boots that build instead; a disk keeps `rach2/kernel` |
 | `RACH2_QEMU_ACCEL` | `kvm` where `/dev/kvm` opens, `hvf` on an x86 Mac that supports it, `tcg` where neither exists; a `/dev/kvm` the user cannot open is refused | the accelerator every machine uses: `kvm`, `hvf` or `tcg` |
 | `RACH2_MIN_FREE_GIB` | 40 | free space a run of any suite besides `style` and `host` needs before it builds; 0 skips the check; when set, `make` too refuses to build with less |
