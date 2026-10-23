@@ -3527,6 +3527,16 @@ static int identify(struct set *x)
 
     if (gmtime_r(&now, &tm) == NULL || strftime(stamp, sizeof(stamp), "%Y%m%dT%H%M%SZ", &tm) == 0)
         return refuse(x, "the clock cannot be read");
+    if (o->context) {
+        const char *text = etude_context_text(o->context, "source");
+        struct eh_json *source = text ? eh_json_parse(text) : NULL;
+        const struct eh_json *commit = eh_json_get(source, "commit");
+        int matching = o->commit && commit && commit->type == 's' &&
+                       !strcmp(o->commit, commit->string);
+        eh_json_free(source);
+        if (!matching)
+            return refuse(x, "the requested commit differs from the verified source commit");
+    }
     const char *allocated = etude_context_run_id(o->context);
     if (allocated && o->run_id && strcmp(allocated, o->run_id))
         return refuse(x, "the allocated run identity differs from its context");

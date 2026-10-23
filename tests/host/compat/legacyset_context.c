@@ -305,7 +305,7 @@ static void test_contexts(void)
     measurement_export_cases();
     catch_stops();
     stop_signal = 0;
-    for (int n = 0; n < 8; n++) {
+    for (int n = 0; n < 11; n++) {
         char id[80], site[PATH_LEN];
         struct run r;
         struct etude_legacy_set_opts o;
@@ -320,8 +320,12 @@ static void test_contexts(void)
         o.prepared = 1; o.record = record; o.native_locks = locks;
         o.run_id = id; o.commit = measurement_commit; o.stop = &stop_signal;
         o.site = in(site, sizeof site, "site.permits");
-        if (n) ctx = measurement_context(&o, id, n >= 2, n >= 3 ? n - 2 : 0, &receipt);
+        if (n) ctx = measurement_context(&o, id, n >= 2 && n < 8,
+                                          n >= 3 && n < 8 ? n - 2 : 0, &receipt);
         o.context = ctx;
+        if (n == 8) o.commit = "2222222222222222222222222222222222222222";
+        if (n == 9) o.commit = NULL;
+        if (n == 10) o.run_id = "unrelated-run";
         o.out = fopen(r.out_file, "wb");
         CHECK(o.out != NULL, "context: output opens");
         r.status = o.out ? etude_legacy_set(&o) : 2;
@@ -332,7 +336,14 @@ static void test_contexts(void)
             measurement_history(&r, ctx, &receipt, n == 2);
         } else {
             CHECK(r.status == 2 && !count_kind(&r.h, "attempt"),
-                  "context: unrelated selection, run or attempt cannot exempt work");
+                  "context: unrelated selection, run, commit or attempt refuses work");
+            if (n >= 8) {
+                char output[4096];
+                CHECK(read_text(r.out_file, output, sizeof output) > 0 &&
+                      strstr(output, n == 10 ? "allocated run identity differs" :
+                             "differs from the verified source commit"),
+                      "context: direct API refuses a conflicting or absent identity");
+            }
         }
         CHECK(!exists(r.status_file), "context: status is removed before the run ends");
         struct etude_ledger *l = etude_ledger_open(ledger);
