@@ -5,7 +5,7 @@ native-controller: $(LIBC_STAMP)
 	+$(MAKE) --no-print-directory -C tests/native
 $(ARCH_BUILD)/tests/native/etude: | native-controller
 	@test -x $@
-native-assets: tests musl-programs tools/etude/guest native-controller krffs \
+native-assets: tests musl-programs utils ish check-dropbearmulti tools/etude/guest native-controller krffs \
     build/tests/host/mkexfatfixture $(IMAGES_DIR)/ext2-fixture.disk \
     build/tests/system/loopdev/fat.img build/tests/system/loopdev/ext2.img \
     build/tests/system/loopdev/krffs.img build/tests/system/krffsvol/volume.krffs \

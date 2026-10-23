@@ -35,8 +35,12 @@ int nc_proof_prepare(struct nc_attempt *a, const struct nc_config *conf, const c
     }
     if (mode == 4) {
         char *marker = nc_text(a, "%s/cut.marker", directory);
-        for (int n = 6; n >= 0; n--)
-            a->transport[n + 4] = a->transport[n];
+        size_t count = 0;
+        while (a->transport[count])
+            count++;
+        if (count + 5 > sizeof(a->transport) / sizeof(a->transport[0]))
+            return 0;
+        memmove(a->transport + 4, a->transport, (count + 1) * sizeof(a->transport[0]));
         a->transport[0] = (char *)conf->self;
         a->transport[1] = "--cut-transport";
         a->transport[2] = marker;

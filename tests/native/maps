@@ -16,7 +16,7 @@ image big-exfat exfat 512
 image big-ext2 ext2 1024
 image big-vfat vfat 64
 image dirgrow-krffs krffs 16
-image ext2-fixture ext2 16 from build/tests/system/ext2-fixture.vol
+image ext2-fixture ext2 16 from build/images/ext2-fixture.disk@1048576
 image fatwrite-exfat exfat 64
 image fatwrite-vfat vfat 64
 image krffsvol krffs 4 from build/tests/system/krffsvol/volume.krffs

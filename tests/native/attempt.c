@@ -321,8 +321,12 @@ int nc_attempt_make(struct nc_attempt *a, const struct nc_config *conf,
     a->transport[1] = "--stdio";
     a->transport[2] = "--state";
     a->transport[3] = (char *)conf->state;
-    a->transport[4] = "--stage";
-    a->transport[5] = (char *)conf->stage;
+    for (unsigned n = 0; n < 8; n++) {
+        a->transport[4 + n * 2] = "--stage";
+        a->transport[5 + n * 2] = n ? nc_text(a, "%s/%u", conf->stage, n) : (char *)conf->stage;
+        if (!a->transport[5 + n * 2])
+            return fail(a, "cannot allocate the prepared stage paths");
+    }
     a->spec.transport_argv = a->transport;
     if (!file(a, program(a, conf, c->argv[0])) || !arguments(a, conf, c))
         return 0;

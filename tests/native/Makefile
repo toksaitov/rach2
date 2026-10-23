@@ -11,7 +11,7 @@ LIBGCC := $(shell $(CC) $(ARCH_CFLAGS) -print-libgcc-file-name)
 PRE = $(PREFIX)/lib/crt1.o $(PREFIX)/lib/crti.o
 POST = $(PREFIX)/lib/libc.a $(LIBGCC) $(PREFIX)/lib/crtn.o -Wl,-z,noexecstack $(ARCH_LDFLAGS)
 CFLAGS = $(ARCH_CFLAGS) -std=c99 -static -nostdlib -nostartfiles -isystem $(PREFIX)/include \
-    -D__rach2__ -D_DEFAULT_SOURCE -O2 -Wall -Wextra -I$(TOP)/tools/etude/include \
+    -D__rach2__ -D_DEFAULT_SOURCE -O2 -Wall -Wextra -Werror -I$(TOP)/tools/etude/include \
     -I$(TOP)/tools/etude -I$(TOP)/tools/etude/posix -I$(TOP)/tools/etude/guest -I$(TOP)/utils
 SRC = $(addprefix $(TOP)/,$(ETUDE_RACH2_SRC))
 HDR = $(addprefix $(TOP)/,$(NATIVE_COLLECTION_HDR)) $(wildcard $(TOP)/tools/etude/*.h)

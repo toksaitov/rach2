@@ -41,7 +41,7 @@ struct nc_config {
 struct nc_attempt {
     struct etude_native_spec spec;
     char *files[16], *fixtures[16], *environment[32], *unset[32], *argv[NC_WORD_MAX];
-    char *transport[12];
+    char *transport[32];
     char *allocated[256];
     size_t nallocated, argc;
     char why[256];

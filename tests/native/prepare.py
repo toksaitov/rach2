@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import tarfile
@@ -45,8 +46,11 @@ def cases(root):
 
 def invoke(args, *, root, env, **kwargs):
     print("native-prepare:", " ".join(map(str, args)), flush=True)
-    result = subprocess.run(list(map(str, args)), cwd=root, env=env, check=True,
-                          capture_output=True, text=True, **kwargs)
+    result = subprocess.run(list(map(str, args)), cwd=root, env=env,
+                            capture_output=True, text=True, **kwargs)
+    if result.returncode:
+        print(result.stdout + result.stderr, end="", flush=True)
+        result.check_returncode()
     return result.stdout + result.stderr
 
 
@@ -96,8 +100,9 @@ def manifest(root, extras, build, ids):
         if any(re.match(rf"^(file|text)\s+\S+\s+/{re.escape(name)}(\s|$)", line)
                for line in lines):
             continue
-        source = Path("tests") / extra if extra.startswith("native/") else build / "tests" / extra
-        mode = "0755" if os.access(root / source, os.X_OK) else "0644"
+        source = Path("tests") / extra if extra.startswith("native/") else Path("build/tests") / extra
+        actual = Path("tests") / extra if extra.startswith("native/") else build / "tests" / extra
+        mode = "0755" if os.access(root / actual, os.X_OK) else "0644"
         lines.append(f"file {mode} /{name} {source}")
     return "\n".join(lines) + "\n"
 
@@ -167,7 +172,7 @@ def inputs(root, tree, build, inventory):
                 selected.update(program_path(build, name) for name in value.split(","))
             elif kind == "file":
                 selected.add(Path(value))
-            elif kind == "pty":
+            elif kind == "pty" and value:
                 selected.add(Path("tests/native") / value)
     selected.add(build / "tests/native/etude")
     selected.add(build / "tools/etude/guest/etude-guest")
@@ -191,6 +196,49 @@ def inputs(root, tree, build, inventory):
     return [tree / path for path in sorted(invocation)]
 
 
+def image_source(root, origin, path, mib, build):
+    """Copy a volume, or its declared byte range in an independently made disk."""
+    source, mark, offset = origin.rpartition("@")
+    if not mark:
+        source, offset = origin, None
+    if build != Path("build") and source.startswith("build/") and not source.startswith("build/tests/system/"):
+        source = str(build) + source[5:]
+    source = root / source
+    if offset is None:
+        shutil.copy2(source, path)
+        return
+    if not offset.isdecimal():
+        raise ValueError(f"invalid image byte offset: {origin}")
+    start, length = int(offset), mib * 1048576
+    if start + length > source.stat().st_size:
+        raise ValueError(f"image range exceeds {source}")
+    with source.open("rb") as src, path.open("wb") as dst:
+        src.seek(start)
+        while length:
+            chunk = src.read(min(length, 1048576))
+            if not chunk:
+                raise ValueError(f"short source image: {source}")
+            dst.write(chunk)
+            length -= len(chunk)
+
+
+def filesystem_tools(args):
+    """Use one e2fsprogs installation, as tools/setup/e2fsprogs_path.sh does."""
+    names = ("mke2fs", "debugfs", "e2fsck")
+    search = os.environ.get("PATH", "").split(os.pathsep)
+    search += ["/opt/homebrew/opt/e2fsprogs/sbin", "/usr/local/opt/e2fsprogs/sbin", "/sbin", "/usr/sbin"]
+    directory = next((Path(d) for d in search if all(os.access(Path(d) / n, os.X_OK) for n in names)), None)
+    tools = {}
+    for name in (*names, "mformat"):
+        value = getattr(args, name)
+        if value is None:
+            value = str(directory / name) if name in names and directory else shutil.which(name)
+        if not value or not shutil.which(str(value)):
+            raise ValueError(f"native preparation requires {name}")
+        tools[name] = value
+    return tools
+
+
 def images(root, output, build, inventory, env, work, tools):
     output.mkdir(parents=True)
     for line in (root / "tests/native/maps").read_text().splitlines():
@@ -203,10 +251,7 @@ def images(root, output, build, inventory, env, work, tools):
         if source:
             if len(source) != 2 or source[0] != "from":
                 raise ValueError(line)
-            origin = source[1]
-            if build != Path("build") and origin.startswith("build/") and not origin.startswith("build/tests/system/"):
-                origin = str(build) + origin[5:]
-            shutil.copy2(root / origin, path)
+            image_source(root, source[1], path, mib, build)
         elif kind == "exfat":
             invoke([tools["exfat"], "--make", path, "--sectors", mib * 2048], root=root, env=env)
         else:
@@ -279,9 +324,9 @@ def prepare(args):
         raise ValueError("output must be below this tree's build directory")
     destination.parent.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="rach2-native-prepare.", dir=destination.parent))
-    tools = {"mkfs": root / "build/krffs/mkfs.krffs", "stage": root / "build/krffs/stageimage.krffs",
-             "exfat": root / "build/tests/host/mkexfatfixture", "mke2fs": args.mke2fs,
-             "debugfs": args.debugfs, "e2fsck": args.e2fsck, "mformat": args.mformat}
+    tools = filesystem_tools(args)
+    tools.update(mkfs=root / "build/krffs/mkfs.krffs", stage=root / "build/krffs/stageimage.krffs",
+                 exfat=root / "build/tests/host/mkexfatfixture")
     env = dict(os.environ, E2FSPROGS_FAKE_TIME="1")
     env["RACH2_PATH_MAP"] = "" if args.architecture == "i686" else (
         f"build/man/=build/man/ build/tests/system/=build/tests/system/ build/={build}/ "
@@ -296,19 +341,26 @@ def prepare(args):
         image_dir = tree / build / "tests/native/images"
         images(root, image_dir, build, inventory, env, work, tools)
         files.extend(path for path in image_dir.iterdir() if path.name != "roots")
+        lanes = [stage] + [stage / str(n) for n in range(1, 8)]
+        for lane in lanes[1:]:
+            lane.mkdir()
         for file in files:
-            name = file.name
-            target = stage / name
-            if target.exists():
-                if digest(target) != digest(file):
-                    raise ValueError(f"two staged inputs have different bytes: {name}")
+            wanted = digest(file)
+            for lane in lanes:
+                target = lane / file.name
+                if not target.exists():
+                    os.link(file, target)
+                    break
+                if digest(target) == wanted:
+                    break
             else:
-                os.link(file, target)
+                raise ValueError(f"more than eight staged inputs named {file.name}")
         records = [f"{digest(path)}  {path.relative_to(tree)}\n"
                    for path in sorted(tree.rglob("*")) if path.is_file()]
         (tree / "assets.sha256").write_text("".join(records))
         record = {"schema_version": 1, "architecture": args.architecture,
             "cases": [name for name, _, _ in inventory], "account": "maps",
+            "maps_sha256": digest(tree / "tests/native/maps"),
             "roots": str(image_dir.relative_to(payload) / "roots")}
         metadata = payload / "prepared.json"
         metadata.write_text(json.dumps(record, indent=2) + "\n")
@@ -330,9 +382,13 @@ def prepare(args):
 
 
 if __name__ == "__main__":
+    def interrupted(signum, _frame):
+        raise SystemExit(128 + signum)
+    for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(signum, interrupted)
     parser = argparse.ArgumentParser()
     parser.add_argument("--architecture", choices=("i686", "x86_64"), required=True)
     parser.add_argument("--output", required=True)
     for tool in ("mke2fs", "debugfs", "e2fsck", "mformat"):
-        parser.add_argument("--" + tool, default=tool)
+        parser.add_argument("--" + tool)
     prepare(parser.parse_args())

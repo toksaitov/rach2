@@ -209,7 +209,7 @@ static int configure(int argc, char **argv, struct nc_config *c, int *first)
 }
 static int defaults(struct nc_config *c, const char *self)
 {
-    static char tree[4096], inventory[4096], images[4096], guest[4096], run[160], executable[4096];
+    static char tree[4096], inventory[8192], images[8192], guest[8192], run[160], executable[4096];
     if (!realpath(c->tree, tree) || !realpath(self, executable))
         return 0;
     c->tree = tree;
@@ -311,7 +311,7 @@ int etude_native_collection_main(int argc, char **argv)
         return 2;
     }
     if (!strcmp(argv[1], "proof"))
-        return nc_proof(&conf);
+        return nc_assets(&conf) ? nc_proof(&conf) : 2;
     inventory = calloc(1, sizeof(*inventory));
     if (!inventory)
         return 2;
