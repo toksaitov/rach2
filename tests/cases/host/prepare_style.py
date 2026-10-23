@@ -23,7 +23,7 @@ def digest(path):
 
 def judges(case, prefix, arch):
     if case == 'sparse':
-        program = shutil.which('clang')
+        program = shutil.which(os.environ.get('USERCHECK_CLANG', 'clang'))
         if not program:
             raise ValueError('clang is required for user-pointer checking')
         version = subprocess.check_output([program, '--version'], text=True).splitlines()[0]

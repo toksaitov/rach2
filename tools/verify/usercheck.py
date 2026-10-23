@@ -2,6 +2,7 @@
 """Check the kernel's user-pointer contract with Clang, during preparation."""
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -10,6 +11,12 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 TRUSTED = ROOT / 'rach2/sys/mm/usercopy.c'
 COPIES = {'copy_from_user', 'copy_to_user', 'strncpy_from_user', 'strnlen_user'}
+
+
+def native_path(path):
+    if sys.platform in ('msys', 'cygwin'):
+        return subprocess.check_output(['cygpath', '-m', str(path)], text=True).strip()
+    return str(path)
 
 
 def user_type(node):
@@ -50,13 +57,15 @@ def audit(node, source, trusted, function=None):
     return failures
 
 
-def check(path, arch, compiler='clang', trusted=TRUSTED):
+def check(path, arch, compiler=None, trusted=TRUSTED, environment=None):
+    compiler = compiler or os.environ.get('USERCHECK_CLANG', 'clang')
     target = 'i686-elf' if arch == 'i686' else 'x86_64-elf'
-    resource = subprocess.check_output([compiler, '-print-resource-dir'], text=True).strip()
+    resource = subprocess.check_output([compiler, '-print-resource-dir'], text=True,
+                                       env=environment).strip()
     command = [compiler, '--target=' + target, '-ansi', '-ffreestanding', '-nostdinc',
                '-isystem', str(Path(resource) / 'include'), '-DRACH2_USERCHECK',
-               '-Werror=noderef', '-fsyntax-only', '-Xclang', '-ast-dump=json', str(path)]
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+               '-Werror=noderef', '-fsyntax-only', '-Xclang', '-ast-dump=json', native_path(path)]
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment)
     diagnostics = result.stderr.decode(errors='replace')
     if result.returncode:
         return False, diagnostics
@@ -67,7 +76,7 @@ def check(path, arch, compiler='clang', trusted=TRUSTED):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--arch', choices=('i686', 'x86_64'), required=True)
-    parser.add_argument('--clang', default='clang')
+    parser.add_argument('--clang', default=os.environ.get('USERCHECK_CLANG', 'clang'))
     parser.add_argument('sources', type=Path, nargs='+')
     args = parser.parse_args()
     failed = False

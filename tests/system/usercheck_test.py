@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compiler fixtures for the user-pointer checker, run during preparation."""
 import importlib.util
+import os
 from pathlib import Path
 import tempfile
 
@@ -31,18 +32,21 @@ CASES = {
 
 
 def main():
-    header = (ROOT / 'rach2/sys/lib/kuser.h').as_posix()
+    header = CHECKER.native_path(ROOT / 'rach2/sys/lib/kuser.h')
+    environment = None
+    if os.environ.get('USERCHECK_SYSTEM_PATH'):
+        environment = {**os.environ, 'PATH': os.environ['USERCHECK_SYSTEM_PATH']}
     with tempfile.TemporaryDirectory(prefix='rach2-usercheck.') as scratch:
         path = Path(scratch) / 'usercopy.c'
         for arch in ('i686', 'x86_64'):
             for name, (wanted, body) in CASES.items():
                 path.write_text(f'#include "{header}"\n{body}\n')
-                passed, output = CHECKER.check(path, arch, trusted=path)
+                passed, output = CHECKER.check(path, arch, trusted=path, environment=environment)
                 print(f'{arch}: {name}: {"accepted" if passed else "rejected"}')
                 if passed != wanted:
                     raise ValueError(f'{arch}: {name}: unexpected result\n{output}')
             path.write_text(f'#include "{header}"\n{CASES["trusted-copy"][1]}\n')
-            passed, output = CHECKER.check(path, arch)
+            passed, output = CHECKER.check(path, arch, environment=environment)
             if passed:
                 raise ValueError(f'{arch}: __force accepted outside usercopy.c')
             print(f'{arch}: wrong-file: rejected')

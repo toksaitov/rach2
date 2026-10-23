@@ -673,7 +673,7 @@ case_clang() {
 # contract with Clang and a parsed audit of explicit __force casts. Both
 # compiler fixtures and kernel inputs must pass on the preparation host.
 case_sparse() {
-    if ! command -v clang >/dev/null 2>&1; then
+    if ! command -v "${USERCHECK_CLANG:-clang}" >/dev/null 2>&1; then
         branch tool absent
         fail runs "clang is required for user-pointer checking"
         fail no-findings "the user-pointer contract was not checked"

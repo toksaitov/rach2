@@ -1,0 +1,20 @@
+{
+  "version": "21.1.8",
+  "package": {
+    "file": "LLVM-21.1.8-win64.exe",
+    "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/LLVM-21.1.8-win64.exe",
+    "sha256": "7a5386c26497db1691f320121e5b113364dd0274b98e55f15f4dbc00c0450113"
+  },
+  "signature": {
+    "file": "LLVM-21.1.8-win64.exe.sig",
+    "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/LLVM-21.1.8-win64.exe.sig",
+    "sha256": "0efb8c5ee76a8ed0645d5bec7beb0faf5cf39b2dd590f8b4b99b900f583df92c"
+  },
+  "signer": "B6C8F98282B944E3B0D5C2530FC3042E345AD05D",
+  "key_source": "https://releases.llvm.org/release-keys.asc",
+  "key_source_sha256": "f38bd19b7f2d22cafa755841e6ce9375b9a2e6d41f7b974e4953d6b084839001",
+  "licenses": [
+    {"file": "llvm21-LICENSE.TXT", "url": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-21.1.8/llvm/LICENSE.TXT", "sha256": "8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee"},
+    {"file": "clang21-LICENSE.TXT", "url": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-21.1.8/clang/LICENSE.TXT", "sha256": "ebcd9bbf783a73d05c53ba4d586b8d5813dcdf3bbec50265860ccc885e606f47"}
+  ]
+}
