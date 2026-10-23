@@ -1137,7 +1137,8 @@ static int follow(struct etude_remote *r, struct collect *c, struct run_clock *k
     int rc;
 
     for (;;) {
-        if (!k->cancelled && k->until != 0 && posix_now_us() >= k->until) {
+        if (!k->cancelled && ((k->until != 0 && posix_now_us() >= k->until) ||
+                              (r->conf.cancel_requested && *r->conf.cancel_requested))) {
             rc = send_cancel(r, c, k);
             if (rc != 0) {
                 *st = ETUDE_REMOTE_SYSTEM;
@@ -1145,6 +1146,8 @@ static int follow(struct etude_remote *r, struct collect *c, struct run_clock *k
             }
         }
         wake = !k->cancelled && k->until != 0 && k->until < k->limit ? k->until : k->limit;
+        if (!k->cancelled && r->conf.cancel_requested && wake > posix_now_us() + 50000)
+            wake = posix_now_us() + 50000;
         rc = read_frame(r, wake, &f);
         if (rc == READ_TIME && wake == k->limit) {
             fail(r, "attempt %s did not end within its deadline and grace", c->res->attempt);

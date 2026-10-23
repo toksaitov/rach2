@@ -13,6 +13,7 @@ struct etude_native_spec {
     const char *input;
     uint64_t deadline_ms, grace_ms, output_max, stage_ms, cancel_ms;
     unsigned reconnects;
+    const volatile sig_atomic_t *cancel_requested;
     int staged_only, keep;
     enum etude_end expected_end;
     int expected_value;
@@ -21,6 +22,7 @@ struct etude_native_result {
     enum etude_remote_status transport;
     struct etude_remote_result attempt;
     int status; /* 0 pass, 1 failure, 2 refused, 3 cancelled, 4 incomplete */
+    char detail[256];
     int removed;
 };
 /** Run one attempt through direct process arguments. Staged-only files are

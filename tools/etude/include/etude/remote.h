@@ -11,6 +11,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <signal.h>
 
 #include "etude/exec.h"
 #include "etude/frame.h"
@@ -92,6 +93,7 @@ struct etude_remote_conf {
                              ETUDE_FRAME_STDIO_MAX */
     uint64_t stage_us;    /* the bound of a connection and of each answer */
     unsigned reconnects;  /* connections made again within one operation */
+    const volatile sig_atomic_t *cancel_requested; /* caller requests cancellation */
 };
 
 /* What the controller learned of one attempt. */

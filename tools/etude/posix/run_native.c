@@ -55,6 +55,7 @@ struct options {
     int staged_only;
     enum etude_end expected_end;
     int expected_value;
+    const volatile sig_atomic_t *cancel_requested;
 };
 
 /* A string that grows, for the invocation. */
@@ -620,14 +621,17 @@ static int run_case(const struct options *o, const struct file *files,
     conf.evidence = o->evidence;
     conf.stage_us = o->stage_ms * 1000;
     conf.reconnects = o->reconnects;
+    conf.cancel_requested = o->cancel_requested;
     memset(&res, 0, sizeof(res));
     st = etude_remote_open(&conf, &r, why, sizeof(why));
     if (st != ETUDE_REMOTE_OK) {
         free(inv.p);
         printf("etude run: result: incomplete: case %s: not run: the connection failed (%s: %s)\n",
                o->case_id, etude_remote_status_text(st), why);
-        if (outcome)
+        if (outcome) {
             outcome->transport = st;
+            snprintf(outcome->detail, sizeof(outcome->detail), "%s", why);
+        }
         return EXIT_INCOMPLETE;
     }
     for (i = 0; i < o->npaths && st == ETUDE_REMOTE_OK; i++) {
@@ -650,6 +654,8 @@ static int run_case(const struct options *o, const struct file *files,
     if (outcome) {
         code = structured_judge(o, st, &res, &verdict, code);
         outcome->transport = st;
+        snprintf(outcome->detail, sizeof(outcome->detail), "%s",
+                 st == ETUDE_REMOTE_OK ? why : etude_remote_why(r));
     }
     if (res.started)
         snprintf(process, sizeof(process), "%ld", res.process.pid);
@@ -778,6 +784,7 @@ static int specification(const struct etude_native_spec *s, struct options *o)
     o->stage_ms = s->stage_ms ? s->stage_ms : 30000;
     o->reconnects = s->reconnects;
     o->cancel_ms = s->cancel_ms;
+    o->cancel_requested = s->cancel_requested;
     for (i = 0; i < s->nfiles; i++)
         if (option(o, 'f', s->files[i]))
             return 0;
@@ -803,6 +810,8 @@ int etude_native_attempt(const struct etude_native_spec *spec, struct etude_nati
     result->attempt.value = -1;
     result->attempt.cleanup = ETUDE_CLEANUP_UNCONFIRMED;
     result->status = EXIT_USAGE;
+    snprintf(result->detail, sizeof(result->detail),
+             "the invocation was refused before it started");
     if (specification(spec, &o))
         result->status = execute_options(o, result);
     return result->status;

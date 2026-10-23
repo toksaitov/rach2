@@ -1,0 +1,97 @@
+# The native cases of the GNU and agents rows and of tccbuild.sh
+# (Readme.md). A program named system/ or native/ is a script of tests/, not
+# a program of the build. A word `@net` of a command is the machine's
+# interface, address and gateway, as run.sh gives them, and a word
+# `@agents:NAME` is the version that vendor/gnu/agents/packages/NAME.sh pins.
+# `file:PATH` puts the file PATH of the tree in the workspace.
+#
+# Left out, as tests/system/gnu_rows.sh says, under machine=native: the
+# login to the machine's own server in openssh, rsync and utillinux, whose
+# `last` then finds no session of root's, the counts of the whole machine in
+# procps, utillinux and chromium, and the write refused over the root in
+# disknode. The rows cron, shadow and ntpd change the
+# machine (`machine`).
+
+case gnu/names -- system/gnu_rows.sh names x86_64 work=work home=home stage=. @net machine=native
+case gnu/glibc -- system/gnu_rows.sh glibc x86_64 work=work home=home stage=. @net machine=native
+case gnu/zlib -- system/gnu_rows.sh zlib x86_64 work=work home=home stage=. @net machine=native
+case gnu/openssl -- system/gnu_rows.sh openssl x86_64 work=work home=home stage=. @net machine=native
+case gnu/openssh -- system/gnu_rows.sh openssh x86_64 work=work home=home stage=. @net machine=native
+case gnu/ncurses -- system/gnu_rows.sh ncurses x86_64 work=work home=home stage=. @net machine=native
+case gnu/less -- system/gnu_rows.sh less x86_64 work=work home=home stage=. @net machine=native
+case gnu/vim -- system/gnu_rows.sh vim x86_64 work=work home=home stage=. @net machine=native
+case gnu/perl -- system/gnu_rows.sh perl x86_64 work=work home=home stage=. @net machine=native
+case gnu/curl ports:4433 -- system/gnu_rows.sh curl x86_64 work=work home=home stage=. @net machine=native
+case gnu/git -- system/gnu_rows.sh git x86_64 work=work home=home stage=. @net machine=native
+case gnu/coreutils -- system/gnu_rows.sh coreutils x86_64 work=work home=home stage=. @net machine=native
+case gnu/bash -- system/gnu_rows.sh bash x86_64 work=work home=home stage=. @net machine=native
+case gnu/grep -- system/gnu_rows.sh grep x86_64 work=work home=home stage=. @net machine=native
+case gnu/sed -- system/gnu_rows.sh sed x86_64 work=work home=home stage=. @net machine=native
+case gnu/gawk -- system/gnu_rows.sh gawk x86_64 work=work home=home stage=. @net machine=native
+case gnu/findutils -- system/gnu_rows.sh findutils x86_64 work=work home=home stage=. @net machine=native
+case gnu/diffutils -- system/gnu_rows.sh diffutils x86_64 work=work home=home stage=. @net machine=native
+case gnu/patch -- system/gnu_rows.sh patch x86_64 work=work home=home stage=. @net machine=native
+case gnu/tar -- system/gnu_rows.sh tar x86_64 work=work home=home stage=. @net machine=native
+case gnu/gzip -- system/gnu_rows.sh gzip x86_64 work=work home=home stage=. @net machine=native
+case gnu/xz -- system/gnu_rows.sh xz x86_64 work=work home=home stage=. @net machine=native
+case gnu/iproute2 ports:5999 -- system/gnu_rows.sh iproute2 x86_64 work=work home=home stage=. @net machine=native
+case gnu/loopctl alone -- system/gnu_rows.sh loopctl x86_64 work=work home=home stage=. @net machine=native
+case gnu/losetup mountns alone -- system/gnu_rows.sh losetup x86_64 work=work home=home stage=. @net machine=native
+case gnu/e2fsprogs -- system/gnu_rows.sh e2fsprogs x86_64 work=work home=home stage=. @net machine=native
+case gnu/file -- system/gnu_rows.sh file x86_64 work=work home=home stage=. @net machine=native
+case gnu/pkgconf -- system/gnu_rows.sh pkgconf x86_64 work=work home=home stage=. @net machine=native
+case gnu/procps -- system/gnu_rows.sh procps x86_64 work=work home=home stage=. @net machine=native
+case gnu/utillinux -- system/gnu_rows.sh utillinux x86_64 work=work home=home stage=. @net machine=native
+case gnu/zstd -- system/gnu_rows.sh zstd x86_64 work=work home=home stage=. @net machine=native
+case gnu/rsync -- system/gnu_rows.sh rsync x86_64 work=work home=home stage=. @net machine=native
+case gnu/nano -- system/gnu_rows.sh nano x86_64 work=work home=home stage=. @net machine=native
+case gnu/texinfo -- system/gnu_rows.sh texinfo x86_64 work=work home=home stage=. @net machine=native
+case gnu/strace -- system/gnu_rows.sh strace x86_64 work=work home=home stage=. @net machine=native
+case gnu/lsof -- system/gnu_rows.sh lsof x86_64 work=work home=home stage=. @net machine=native
+case gnu/tmux -- system/gnu_rows.sh tmux x86_64 work=work home=home stage=. @net machine=native
+case gnu/zip -- system/gnu_rows.sh zip x86_64 work=work home=home stage=. @net machine=native
+case gnu/htop -- system/gnu_rows.sh htop x86_64 work=work home=home stage=. @net machine=native
+case gnu/chawan -- system/gnu_rows.sh chawan x86_64 work=work home=home stage=. @net machine=native
+case gnu/dosfstools -- system/gnu_rows.sh dosfstools x86_64 work=work home=home stage=. @net machine=native
+case gnu/m4 -- system/gnu_rows.sh m4 x86_64 work=work home=home stage=. @net machine=native
+case gnu/autoreconf -- system/gnu_rows.sh autoreconf x86_64 work=work home=home stage=. @net machine=native
+case gnu/bison -- system/gnu_rows.sh bison x86_64 work=work home=home stage=. @net machine=native
+case gnu/flex -- system/gnu_rows.sh flex x86_64 work=work home=home stage=. @net machine=native
+case gnu/jq -- system/gnu_rows.sh jq x86_64 work=work home=home stage=. @net machine=native
+case gnu/screen -- system/gnu_rows.sh screen x86_64 work=work home=home stage=. @net machine=native
+case gnu/sudo -- system/gnu_rows.sh sudo x86_64 work=work home=home stage=. @net machine=native
+case gnu/cmake -- system/gnu_rows.sh cmake x86_64 work=work home=home stage=. @net machine=native
+case gnu/dig ports:5353 -- system/gnu_rows.sh dig x86_64 work=work home=home stage=. @net machine=native
+case gnu/fallocate -- system/gnu_rows.sh fallocate x86_64 work=work home=home stage=. @net machine=native
+case gnu/chattr -- system/gnu_rows.sh chattr x86_64 work=work home=home stage=. @net machine=native
+case gnu/filecache -- system/gnu_rows.sh filecache x86_64 work=work home=home stage=. @net machine=native
+case gnu/uname -- system/gnu_rows.sh uname x86_64 work=work home=home stage=. @net machine=native
+case gnu/ttygroup -- system/gnu_rows.sh ttygroup x86_64 work=work home=home stage=. @net machine=native
+case gnu/disknode -- system/gnu_rows.sh disknode x86_64 work=work home=home stage=. @net machine=native
+case gnu/python -- system/gnu_rows.sh python x86_64 work=work home=home stage=. @net machine=native
+case gnu/gnupg -- system/gnu_rows.sh gnupg x86_64 work=work home=home stage=. @net machine=native
+case gnu/autotools file:build/tests/cases/gnu/sed.tar.xz -- \
+    system/gnu_rows.sh autotools x86_64 work=work home=home stage=. @net machine=native
+case gnu/make -- system/gnu_rows.sh make x86_64 work=work home=home stage=. @net machine=native
+case gnu/gcc -- system/gnu_rows.sh gcc x86_64 work=work home=home stage=. @net machine=native
+case gnu/gdb -- system/gnu_rows.sh gdb x86_64 work=work home=home stage=. @net machine=native
+case gnu/js -- system/gnu_rows.sh js x86_64 work=work home=home stage=. @net machine=native
+case gnu/dbus -- system/gnu_rows.sh dbus x86_64 work=work home=home stage=. @net machine=native
+case gnu/chromium -- system/gnu_rows.sh chromium x86_64 work=work home=home stage=. @net machine=native
+
+# Left out, as each row says: what needs the fake API server or QEMU's
+# restricted network. The sessions of agy-print, claude-print, codex-exec
+# and the screens play against the fake server (`machine`).
+case agents/agy ids:1000 file:tests/system/agents/agy.sh -- \
+    system/agents_rows.sh agy @agents:agy work=work home=home stage=. machine=native
+case agents/claude ids:1000 file:tests/system/agents/claude.sh -- \
+    system/agents_rows.sh claude @agents:claude work=work home=home stage=. machine=native
+case agents/codex ids:1000 file:tests/system/agents/codex.sh -- \
+    system/agents_rows.sh codex @agents:codex work=work home=home stage=. machine=native
+case agents/gh ids:1000 ports:4433 file:tests/system/agents/gh.sh -- \
+    system/agents_rows.sh gh @agents:gh work=work home=home stage=. machine=native
+case agents/muse ids:1000 file:tests/system/agents/muse.sh -- \
+    system/agents_rows.sh muse @agents:muse work=work home=home stage=. machine=native
+
+case tccbuild.pass -- native/tccbuild.sh pass
+case tccbuild.fail end:exit:1 -- native/tccbuild.sh fail

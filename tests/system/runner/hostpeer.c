@@ -46,6 +46,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <time.h>
 
 /* The address of every job, the loopback's unless HOSTPEER_ADDRESS names
  * another. */
@@ -262,6 +263,48 @@ static int send_text(long port, const char *text)
     return 0;
 }
 
+/* A repeated datagram peer belongs to its deployment process. */
+static volatile sig_atomic_t repeat_stop;
+static void stop_repeat(int sig)
+{
+    repeat_stop = sig;
+}
+static int send_repeat(long port, const char *text)
+{
+    struct sockaddr_in address;
+    struct sigaction action;
+    int fd = socket(AF_INET, SOCK_DGRAM, 0), status = 0;
+    size_t size = strlen(text);
+    if (fd < 0)
+        return 1;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = stop_repeat;
+    sigemptyset(&action.sa_mask);
+    sigaction(SIGTERM, &action, NULL);
+    sigaction(SIGINT, &action, NULL);
+    sigaction(SIGHUP, &action, NULL);
+    fill_local(&address, port);
+    printf("hostpeer: repeating %lu bytes to %s:%ld until stopped\n", (unsigned long)size,
+           peer_text, port);
+    fflush(stdout);
+    while (!repeat_stop) {
+        struct timespec interval = {1, 0};
+        if (sendto(fd, text, size, 0, (struct sockaddr *)&address, sizeof(address)) !=
+            (ssize_t)size) {
+            if (errno == EINTR)
+                continue;
+            perror("hostpeer: sendto");
+            status = 1;
+            break;
+        }
+        /* interval: the outside probe receives one datagram each second */
+        while (!repeat_stop && nanosleep(&interval, &interval) && errno == EINTR) {
+        }
+    }
+    close(fd);
+    return status;
+}
+
 /**
  * Read `text` into `*out` as a decimal number. Returns 1, or 0 when `text`
  * is empty or has anything after the number: `strtol` alone reads `10junk`
@@ -293,15 +336,16 @@ int main(int argc, char **argv)
     }
     if (argc != 4) {
         fprintf(stderr, "usage: hostpeer hold|echo PORT SECONDS\n"
-                        "       hostpeer send PORT TEXT\n");
+                        "       hostpeer send|send-repeat PORT TEXT\n");
         return 2;
     }
-    if (strcmp(argv[1], "send") == 0) {
+    if (strcmp(argv[1], "send") == 0 || strcmp(argv[1], "send-repeat") == 0) {
         if (!whole_number(argv[2], &port) || port < 1 || port > 65535) {
             fprintf(stderr, "hostpeer: a port in 1..65535\n");
             return 2;
         }
-        return send_text(port, argv[3]);
+        return strcmp(argv[1], "send-repeat") == 0 ? send_repeat(port, argv[3])
+                                                   : send_text(port, argv[3]);
     }
     if (!whole_number(argv[2], &port) || !whole_number(argv[3], &seconds) || port < 0 ||
         port > 65535 || seconds < 0 || (port == 0 && strcmp(argv[1], "echo") != 0)) {
