@@ -41,7 +41,7 @@ struct legacy_case {
     const char **args; /* the workload's arguments */
     size_t nargs;
     uint64_t case_us, gap_us; /* the bounds of the case and the gap, fixed
-                                 without history: their ceilings */
+                                 without history: their initial values */
     uint64_t expected_us;     /* the case's `initial_us`, its expected time */
     /* A guest or machine case's bound of each stage the manifest bounds, by
      * enum etude_stage, fixed so; 0 for one bounded by the case alone. */

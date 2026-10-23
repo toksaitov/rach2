@@ -149,7 +149,7 @@ static long long count_of(const struct json *o, const char *name)
 
 /**
  * Give bound `b` as etude_bound_fix fixes it without history, which is its
- * ceiling, or 0 when it is absent or malformed.
+ * initial value, or 0 when it is absent or malformed.
  */
 static uint64_t fixed_of(const struct json *b)
 {

@@ -144,7 +144,7 @@ struct etude_legacy_set_opts {
  * first member that does not pass does so at once.
  *
  * Each case runs in a workspace of its own under `o->evidence`, under the
- * case's bounds as etude_bound_fix fixes them without history, their ceilings:
+ * case's bounds as etude_bound_fix fixes them without history, their initial values:
  * a host case's program with ETUDE_TREE naming the tree, a guest case's program
  * on a machine of its QEMU profile, through etude-guest, with the memory the
  * launcher reserves for the machine as its claim, and a machine case's scenario

@@ -15,7 +15,7 @@
  * host-alone: a stand-in QEMU must answer three queries within 500 ms
  * host-arch: it boots the kernel and test image of ARCH
  *
- * Bounds are fixed by their policy: the ceiling with fewer than five
+ * Bounds are fixed by their policy: the initial value with fewer than five
  * samples, and from the samples with more. The watchdog alone then
  * reads report records at times the test gives: only a witness that
  * advances is progress, a quiet witness's announcement replaces the gap
@@ -351,8 +351,8 @@ static void test_bounds(void)
     struct etude_bound b = {1 * S, 60 * S, 900 * S}, tiny = {1, 10, 100};
     struct etude_bound_fixed f;
 
-    fix_row("no history", &b, NULL, 0, 900 * S, 0);
-    fix_row("four samples", &b, ten, 4, 900 * S, 0);
+    fix_row("no history", &b, NULL, 0, 60 * S, 0);
+    fix_row("four samples", &b, ten, 4, 60 * S, 0);
     fix_row("five equal samples", &b, ten, 5, 20 * S, 0);
     fix_row("a spread of five", &b, spread, 5, 2 * (120 * S + 44478000u), 0);
     fix_row("an even count", &b, even, 6, 433434000u, 0);

@@ -16,9 +16,9 @@
 #include "etude/qemu.h"
 
 /* The policy by which etude_bound_fix fixes a bound from samples. */
-#define ETUDE_BOUND_POLICY "watchdog-bounds-v2"
+#define ETUDE_BOUND_POLICY "watchdog-bounds-v1"
 
-/* The fewest samples a bound is fixed from; with fewer, the ceiling. */
+/* The fewest samples a bound is fixed from; with fewer, the initial value. */
 #define ETUDE_BOUND_SAMPLES 5
 
 /* The stages a case's watchdog follows, indexed by enum etude_stage. */
@@ -27,15 +27,15 @@
 /* A bound as a manifest declares it. */
 struct etude_bound {
     uint64_t floor_us;
-    uint64_t initial_us; /* the expected time without history, for the cost
-                            of a job; no bound is fixed from it */
+    uint64_t initial_us; /* the bound without history, and the expected time
+                            that a job without history costs */
     uint64_t ceiling_us;
 };
 
 /* A bound the plan fixed, and how. */
 struct etude_bound_fixed {
     uint64_t us;
-    size_t samples;      /* the samples it came from; 0 for the ceiling */
+    size_t samples;      /* the samples it came from; 0 for the initial value */
     uint64_t largest_us; /* the largest sample; 0 without samples */
     uint64_t spread_us;  /* 3 * 1.4826 times the samples' median absolute
                             deviation, rounded upward */
@@ -47,11 +47,10 @@ struct etude_bound_fixed {
  * machine and accelerator, each the time of a successful attempt or its
  * longest gap between progress records.
  *
- * With fewer than ETUDE_BOUND_SAMPLES samples the bound is the ceiling, so
- * that a case without history on a machine waits as long as its manifest
- * allows. Otherwise it is twice the sum of the largest sample and the
- * spread, held between the floor and the ceiling. The caller gives only the
- * samples of attempts that passed undisrupted.
+ * With fewer than ETUDE_BOUND_SAMPLES samples the bound is the initial
+ * value. Otherwise it is twice the sum of the largest sample and the
+ * spread. Either is then held between the floor and the ceiling. The caller
+ * gives only the samples of attempts that passed undisrupted.
  *
  * @return 0, or EINVAL for a bound whose floor is 0 or whose values are out
  *         of order, EOVERFLOW for samples too large to add, or ENOMEM.

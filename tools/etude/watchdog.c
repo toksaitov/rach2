@@ -80,7 +80,7 @@ int etude_bound_fix(const struct etude_bound *b, const uint64_t *samples, size_t
     memset(out, 0, sizeof(*out));
     if (b->floor_us == 0 || b->floor_us > b->initial_us || b->initial_us > b->ceiling_us)
         return EINVAL;
-    value = b->ceiling_us;
+    value = b->initial_us;
     if (n >= ETUDE_BOUND_SAMPLES) {
         v = malloc(n * sizeof(*v));
         if (v == NULL)
