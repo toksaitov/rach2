@@ -49,13 +49,20 @@ static int fix_plain(const char *tmp)
 
 /* LeakSanitizer's check, when the test is built with it; the reference is
  * weak, so a test built without it links. */
+#ifndef _WIN32
 extern int __lsan_do_recoverable_leak_check(void) __attribute__((weak));
+#endif
 
 /** Whether LeakSanitizer finds a leak now, which its own check at the end of
  * the process, after this one, reports as the test's failure. */
 static int fix_leaks(void)
 {
+#ifdef _WIN32
+    /* LeakSanitizer has no Windows runtime; the GNU checks retain it. */
+    return 0;
+#else
     return __lsan_do_recoverable_leak_check != NULL && __lsan_do_recoverable_leak_check() != 0;
+#endif
 }
 
 #include "tree_host.h"

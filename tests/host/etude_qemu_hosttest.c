@@ -8,6 +8,7 @@
  * host-deps: tools/etude/qemu_profile.c tools/etude/posix/exec.c
  * host-deps: tools/etude/posix/keeper.c tools/etude/posix/process.c
  * host-deps: tools/etude/posix/qemu.c tools/etude/processor.c
+ * host-deps: tests/host/compat/desktop_host.c
  * host-cflags: -I tools/etude/include -Wall -Wextra -Werror
  * host-first: it runs for minutes
  * host-alone: a stand-in QEMU must quit within a grace of 300 ms
@@ -75,6 +76,9 @@
  * and name server addresses, the restriction, forwards and guest forwards,
  * with its station address on its `-device`.
  */
+#ifdef _WIN32
+#include "win/files.h"
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -82,19 +86,19 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/resource.h>
-#include <sys/un.h>
 #include <dirent.h>
 #include <unistd.h>
 
 #include "compat/pathmax_host.h"
+#include "compat/desktop_host.h"
 #include "compat/fixdir_host.c"
 #include "compat/ovmf_host.h"
 #include "etude/qemu.h"
 
+#ifndef _WIN32
 extern char **environ;
+#endif
 
 static int fails;
 
@@ -117,47 +121,57 @@ static int fails;
 #define UEFI_CD   "UEFI QEMU DVD-ROM"
 #define UEFI_NVME "UEFI QEMU NVMe Ctrl rach2big"
 
+/* Exact chardev arguments use the transport of the native launcher. */
+#ifdef _WIN32
+#define TEST_CONSOLE "27001"
+#define TEST_QMP     "27002"
+#define TEST_CHANNELS                                                                           \
+    "-chardev socket,id=etude-console,host=127.0.0.1,port=27001 -serial chardev:etude-console " \
+    "-chardev socket,id=etude-qmp,host=127.0.0.1,port=27002 -mon chardev=etude-qmp,mode=control "
+#else
+#define TEST_CONSOLE "/s/c"
+#define TEST_QMP     "/s/q"
+#define TEST_CHANNELS                                                           \
+    "-chardev socket,id=etude-console,path=/s/c -serial chardev:etude-console " \
+    "-chardev socket,id=etude-qmp,path=/s/q -mon chardev=etude-qmp,mode=control "
+#endif
+
 /* This program, by an absolute path. */
 static char self[PATH_MAX];
 
 /* ---- The stand-in for QEMU. ---- */
 
 /** Write all of `text` to `fd`, or end the stand-in. */
-static void put(int fd, const char *text)
+static void put(host_socket fd, const char *text)
 {
     size_t len = strlen(text), done = 0;
     ssize_t n;
 
     while (done < len) {
-        n = write(fd, text + done, len - done);
+        n = host_socket_write(fd, text + done, len - done);
         if (n <= 0)
             _exit(120);
         done += (size_t)n;
     }
 }
 
-/** Connect to the Unix socket at `path`, as QEMU's client chardev does. */
-static int fake_connect(const char *path)
+/** Connect to the endpoint used by QEMU's native client chardev. */
+static host_socket fake_connect(const char *endpoint)
 {
-    struct sockaddr_un a;
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-
-    memset(&a, 0, sizeof(a));
-    a.sun_family = AF_UNIX;
-    snprintf(a.sun_path, sizeof(a.sun_path), "%s", path);
-    if (fd < 0 || connect(fd, (struct sockaddr *)&a, sizeof(a)) != 0)
+    host_socket socket = host_qemu_connect(endpoint);
+    if (socket == HOST_SOCKET_INVALID)
         _exit(121);
-    return fd;
+    return socket;
 }
 
 /** Read one line of QMP into `line`, without its newline; -1 at its end. */
-static int fake_line(int fd, char *line, size_t size)
+static int fake_line(host_socket fd, char *line, size_t size)
 {
     size_t n = 0;
     char c;
 
     for (;;) {
-        if (read(fd, &c, 1) != 1)
+        if (host_socket_read(fd, &c, 1) != 1)
             return -1;
         if (c == '\n')
             break;
@@ -184,7 +198,7 @@ static long fake_command(const char *line, char *name, size_t size)
 }
 
 /** Send QMP's event SHUTDOWN, of the guest or not, for `reason`. */
-static void fake_shutdown(int qmp, int guest, const char *reason)
+static void fake_shutdown(host_socket qmp, int guest, const char *reason)
 {
     char text[256];
 
@@ -196,7 +210,7 @@ static void fake_shutdown(int qmp, int guest, const char *reason)
 }
 
 /** Answer QMP until it asks to quit, then report the quit and exit 0. */
-static void fake_obey(int qmp)
+static void fake_obey(host_socket qmp)
 {
     char line[512], name[64], text[128];
     long id;
@@ -218,7 +232,7 @@ static void fake_obey(int qmp)
  * query-accelerators, and "wrong" reports another accelerator than `accel`
  * in use.
  */
-static void fake_start(int qmp, const char *mode, const char *accel)
+static void fake_start(host_socket qmp, const char *mode, const char *accel)
 {
     const char *other = strcmp(accel, "tcg") == 0 ? "kvm" : "tcg";
     char line[512], name[64], text[256];
@@ -256,13 +270,13 @@ static void fake_start(int qmp, const char *mode, const char *accel)
 }
 
 /** Read the console until the launcher has typed `go` and a return. */
-static void fake_wait_go(int con)
+static void fake_wait_go(host_socket con)
 {
     char seen[4] = "";
     char c;
 
     while (strcmp(seen, "go\r") != 0) {
-        if (read(con, &c, 1) != 1)
+        if (host_socket_read(con, &c, 1) != 1)
             _exit(123);
         memmove(seen, seen + 1, 2);
         seen[2] = c;
@@ -270,17 +284,13 @@ static void fake_wait_go(int con)
     }
 }
 
-/** Find the path of the `-chardev` socket of id `id` in QEMU's arguments. */
+/** Find QEMU's chardev endpoint, or end the stand-in on malformed arguments. */
 static const char *fake_socket(int argc, char **argv, const char *id)
 {
-    char head[64];
-    int i;
-
-    snprintf(head, sizeof(head), "socket,id=%s,path=", id);
-    for (i = 1; i + 1 < argc; i++)
-        if (strcmp(argv[i], "-chardev") == 0 && strncmp(argv[i + 1], head, strlen(head)) == 0)
-            return argv[i + 1] + strlen(head);
-    _exit(124);
+    const char *endpoint = host_qemu_endpoint(argc, argv, id);
+    if (endpoint == NULL)
+        _exit(124);
+    return endpoint;
 }
 
 /**
@@ -290,7 +300,8 @@ static const char *fake_socket(int argc, char **argv, const char *id)
 static int fake_qemu(const char *mode, int argc, char **argv)
 {
     const char *accel = NULL, *reason = NULL;
-    int i, con, qmp, guest = 1, stopped = 0;
+    int i, guest = 1, stopped = 0;
+    host_socket con, qmp;
     const char *audio = NULL;
     FILE *wav;
 
@@ -315,8 +326,7 @@ static int fake_qemu(const char *mode, int argc, char **argv)
         return 1;
     }
     if (strcmp(mode, "silent") == 0)
-        for (;;)
-            pause();
+        host_wait_forever();
     fake_start(qmp, mode, accel);
     if (audio != NULL) {
         wav = fopen(audio + 5, "wb");
@@ -335,8 +345,7 @@ static int fake_qemu(const char *mode, int argc, char **argv)
     if (strcmp(mode, "deaf") == 0) {
         signal(SIGTERM, SIG_IGN);
         put(con, "fake: deaf\r\n");
-        for (;;)
-            pause();
+        host_wait_forever();
     }
     if (strcmp(mode, "shutdown") == 0 || strcmp(mode, "old") == 0)
         reason = "guest-shutdown";
@@ -653,8 +662,7 @@ static void check_details(const struct row *r, const struct etude_machine_result
         CHECK(res->qemu->exit_end == ETUDE_END_EXITED && res->qemu->exit_value == 3, "crash");
         CHECK(find(&res->console, "fake: crashing\r\n", 0) >= 0, "crash");
     } else if (strcmp(r->name, "deaf") == 0) {
-        CHECK(res->qemu->exit_end == ETUDE_END_SIGNALED && res->qemu->exit_value == SIGKILL,
-              "deaf");
+        CHECK(host_process_stopped(res->qemu, 1), "deaf");
     } else if (strcmp(r->name, "obey") == 0) {
         CHECK(res->qemu->exit_end == ETUDE_END_EXITED && res->qemu->exit_value == 0, "obey");
         CHECK(strcmp(res->reason, "host-qmp-quit") == 0, "obey");
@@ -784,26 +792,6 @@ static void boundary_result(const struct row *r)
            (unsigned long long)res->qemu->peak_bytes.value);
 }
 
-/** Give the path of `name` on PATH in `out`, or NULL when it is not there. */
-static const char *on_path(const char *name, char *out, size_t size)
-{
-    const char *path = getenv("PATH"), *end;
-    size_t len;
-
-    for (; path != NULL && *path != '\0'; path = *end == ':' ? end + 1 : end) {
-        end = strchr(path, ':');
-        if (end == NULL)
-            end = path + strlen(path);
-        len = (size_t)(end - path);
-        if (len == 0)
-            continue;
-        snprintf(out, size, "%.*s/%s", (int)len, path, name);
-        if (access(out, X_OK) == 0)
-            return out;
-    }
-    return NULL;
-}
-
 /** Fill row `r` with the kernel and test image of its architecture's build. */
 static int real_files(struct row *r)
 {
@@ -904,8 +892,8 @@ static void test_real(int boundary)
         fails++;
         return;
     }
-    if (on_path("qemu-system-i386", q32, sizeof(q32)) == NULL ||
-        on_path("qemu-system-x86_64", q64, sizeof(q64)) == NULL) {
+    if (host_program("qemu-system-i386", q32, sizeof(q32)) == NULL ||
+        host_program("qemu-system-x86_64", q64, sizeof(q64)) == NULL) {
         printf("etude-qemu-test: fail: cannot run the boots: no qemu-system-i386 and "
                "qemu-system-x86_64 on PATH\n");
         fails++;
@@ -985,8 +973,8 @@ static void test_uefi(void)
     int fd;
 
     snprintf(cd, sizeof(cd), "%s/images/test.krffs", dir);
-    if (on_path("qemu-system-i386", q32, sizeof(q32)) == NULL ||
-        on_path("qemu-system-x86_64", q64, sizeof(q64)) == NULL ||
+    if (host_program("qemu-system-i386", q32, sizeof(q32)) == NULL ||
+        host_program("qemu-system-x86_64", q64, sizeof(q64)) == NULL ||
         ovmf_code(code, sizeof(code)) == NULL || access(cd, R_OK) != 0) {
         printf("etude-qemu-test: fail: cannot run the UEFI boot: no QEMU or OVMF, or %s is "
                "not built\n",
@@ -1031,7 +1019,7 @@ static int make_in(const struct etude_qemu_profile *p, const struct etude_qemu_s
 {
     struct etude_qemu_line out = {argv, max, buf, size};
 
-    return etude_qemu_argv(p, site, "/s/c", "/s/q", "/s/one,two.wav", &out);
+    return etude_qemu_argv(p, site, TEST_CONSOLE, TEST_QMP, "/s/one,two.wav", &out);
 }
 
 /** Make the command line of profile `p` on `site` with the test's sockets. */
@@ -1478,9 +1466,7 @@ static void test_argv(void)
         "-drive file=/d/n.qcow2,format=qcow2,if=none,id=etude-disk5,cache=unsafe "
         "-device nvme,drive=etude-disk5,serial=rach2.n-1 "
         "-netdev user,id=net0 -device rtl8139,netdev=net0 -netdev user,id=net1 "
-        "-device e1000,netdev=net1 -vga std -device ahci "
-        "-chardev socket,id=etude-console,path=/s/c -serial chardev:etude-console "
-        "-chardev socket,id=etude-qmp,path=/s/q -mon chardev=etude-qmp,mode=control "
+        "-device e1000,netdev=net1 -vga std -device ahci " TEST_CHANNELS
         "-append rach2.fsdisk quiet=1";
     struct etude_qemu_site site = {ETUDE_ACCEL_KVM, "/q/i686", "/q/x86_64", NULL, "/f/ov,mf", 0};
     struct etude_qemu_profile p;
@@ -2113,9 +2099,7 @@ static void test_usb(void)
         "-device usb-kbd,bus=xhci.0,port=1.2 "
         "-device usb-storage,bus=xhci.0,drive=stick,bootindex=0 "
         "-device usb-bot,id=bot,bus=xhci.0 -device scsi-hd,bus=bot.0,drive=lun1 "
-        "-netdev user,id=net0 -device e1000,netdev=net0,mac=52:54:00:12:34:58,id=nic "
-        "-chardev socket,id=etude-console,path=/s/c -serial chardev:etude-console "
-        "-chardev socket,id=etude-qmp,path=/s/q -mon chardev=etude-qmp,mode=control "
+        "-netdev user,id=net0 -device e1000,netdev=net0,mac=52:54:00:12:34:58,id=nic " TEST_CHANNELS
         "-append rach2.usbdisk";
     struct etude_qemu_disk disks[] = {
         {.path = "/d/stick,one.img", .bus = ETUDE_BUS_DEVICE, .id = "stick"},
@@ -2383,11 +2367,11 @@ int main(int argc, char **argv)
         return 17;
     if (fake != NULL && *fake != '\0')
         return fake_qemu(fake, argc, argv);
-    if (realpath(argv[0], self) == NULL) {
+    if (host_executable(argv[0], self, sizeof(self)) != 0) {
         printf("etude-qemu-test: fail: %s cannot be found\n", argv[0]);
         return 1;
     }
-    if (setenv("TMPDIR", fix_dir(), 1) != 0)
+    if (host_environment("TMPDIR", fix_dir()) != 0)
         return 1;
     if (argc == 2 && strcmp(argv[1], "--host-only") == 0) {
         test_host_without_machine();

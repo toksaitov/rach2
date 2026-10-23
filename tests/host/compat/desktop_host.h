@@ -29,6 +29,10 @@ void host_wait_forever(void);
 int host_quiet_child(const char *self, const char *mode);
 /** Check the platform's actual stopped status; HARD selects SIGKILL on POSIX. */
 int host_process_stopped(const struct etude_exec_result *result, int hard);
+/** Resolve this executable, using its native module path on Windows. */
+int host_executable(const char *argument, char *out, size_t size);
+/** Set an inherited environment entry through the native C runtime. */
+int host_environment(const char *name, const char *value);
 /** Locate a native program on PATH, including Windows' executable suffix. */
 const char *host_program(const char *name, char *out, size_t size);
 #endif

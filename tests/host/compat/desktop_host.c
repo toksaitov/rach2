@@ -198,6 +198,37 @@ int host_process_stopped(const struct etude_exec_result *result, int hard)
 #endif
 }
 
+int host_executable(const char *argument, char *out, size_t size)
+{
+    char *absolute;
+    int result = -1;
+#ifdef _WIN32
+    wchar_t *module = calloc(32768, sizeof(*module));
+    DWORD length;
+    (void)argument;
+    if (module == NULL)
+        return -1;
+    length = GetModuleFileNameW(NULL, module, 32768);
+    absolute = length > 0 && length < 32768 ? etude_win_utf8(module) : NULL;
+    free(module);
+#else
+    absolute = realpath(argument, NULL);
+#endif
+    if (absolute != NULL && snprintf(out, size, "%s", absolute) < (int)size)
+        result = 0;
+    free(absolute);
+    return result;
+}
+
+int host_environment(const char *name, const char *value)
+{
+#ifdef _WIN32
+    return _putenv_s(name, value);
+#else
+    return setenv(name, value, 1);
+#endif
+}
+
 const char *host_program(const char *name, char *out, size_t size)
 {
 #ifdef _WIN32

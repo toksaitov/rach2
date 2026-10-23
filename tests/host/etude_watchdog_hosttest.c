@@ -10,6 +10,7 @@
  * host-deps: tools/etude/qemu_profile.c tools/etude/posix/exec.c
  * host-deps: tools/etude/posix/keeper.c tools/etude/posix/process.c
  * host-deps: tools/etude/posix/qemu.c tools/etude/processor.c
+ * host-deps: tests/host/compat/desktop_host.c
  * host-cflags: -I tools/etude/include -Wall -Wextra -Werror
  * host-first: it runs for minutes
  * host-alone: a stand-in QEMU must answer three queries within 500 ms
@@ -31,24 +32,26 @@
  * end. With the real QEMU, a kernel idle at its debug shell runs out of its
  * gap, and QMP gives its status and its registers before it is stopped.
  */
+#ifdef _WIN32
+#include "win/files.h"
+#endif
 #include <errno.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/resource.h>
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
 #include "compat/pathmax_host.h"
+#include "compat/desktop_host.h"
 #include "compat/fixdir_host.c"
 #include "etude/watchdog.h"
 
+#ifndef _WIN32
 extern char **environ;
+#endif
 
 static int fails;
 
@@ -82,15 +85,13 @@ static void say(const char *text)
 static void burn(uint64_t us)
 {
     volatile unsigned long spin = 0;
-    struct rusage ru;
     uint64_t used = 0;
 
     while (used < us) {
         for (spin = 0; spin < 100000; spin++) {
         }
-        getrusage(RUSAGE_SELF, &ru);
-        used = (uint64_t)ru.ru_utime.tv_sec * 1000000u + (uint64_t)ru.ru_utime.tv_usec +
-               (uint64_t)ru.ru_stime.tv_sec * 1000000u + (uint64_t)ru.ru_stime.tv_usec;
+        if (host_process_cpu_us(&used) != 0)
+            _exit(122);
     }
 }
 
@@ -110,8 +111,6 @@ static void busy(int deaf)
  * back, name no witness or do not parse, and other output. */
 static void heartbeat(void)
 {
-    struct timespec t = {0, 20000000};
-
     say("@etude 1 begin host.watchdog.heartbeat\n@etude 1 progress tick 3\n");
     for (;;) {
         say("@etude 1 progress tick 3\n");
@@ -120,7 +119,7 @@ static void heartbeat(void)
         say("@etude 1 progress tick x\n");
         say("still alive\n");
         /* interval: a heartbeat every 20 ms, which is no progress */
-        nanosleep(&t, NULL);
+        host_sleep_ms(20);
     }
 }
 
@@ -128,21 +127,8 @@ static void heartbeat(void)
  * it done; with `forever`, the child never ends. */
 static int quiet(int forever)
 {
-    pid_t pid;
-    int status;
-
     say("@etude 1 begin host.watchdog.quiet\n@etude 1 progress compile 0\n");
-    pid = fork();
-    if (pid < 0)
-        _exit(121);
-    if (pid == 0) {
-        if (forever)
-            for (;;)
-                pause();
-        burn(2 * S);
-        _exit(0);
-    }
-    if (waitpid(pid, &status, 0) != pid || status != 0)
+    if (host_quiet_child(self, forever ? "forever" : "burn") != 0)
         return 1;
     say("@etude 1 progress compile 1\n@etude 1 progress steps 1\n");
     return 0;
@@ -151,7 +137,6 @@ static int quiet(int forever)
 /** Advance a witness without limit forever. */
 static void endless(void)
 {
-    struct timespec t = {0, 20000000};
     char line[64];
     unsigned long n;
 
@@ -159,7 +144,7 @@ static void endless(void)
         snprintf(line, sizeof(line), "@etude 1 progress steps %lu\n", n);
         say(line);
         /* interval: progress every 20 ms, which the case's bound must end */
-        nanosleep(&t, NULL);
+        host_sleep_ms(20);
     }
 }
 
@@ -180,41 +165,36 @@ static int case_main(const char *role)
 /* ---- The stand-in for QEMU. ---- */
 
 /** Write all of `text` to `fd`, or end the stand-in. */
-static void put(int fd, const char *text)
+static void put(host_socket fd, const char *text)
 {
     size_t len = strlen(text), done = 0;
     ssize_t n;
 
     while (done < len) {
-        n = write(fd, text + done, len - done);
+        n = host_socket_write(fd, text + done, len - done);
         if (n <= 0)
             _exit(120);
         done += (size_t)n;
     }
 }
 
-/** Connect to the Unix socket at `path`, as QEMU's client chardev does. */
-static int fake_connect(const char *path)
+/** Connect to the endpoint used by QEMU's native client chardev. */
+static host_socket fake_connect(const char *endpoint)
 {
-    struct sockaddr_un a;
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-
-    memset(&a, 0, sizeof(a));
-    a.sun_family = AF_UNIX;
-    snprintf(a.sun_path, sizeof(a.sun_path), "%s", path);
-    if (fd < 0 || connect(fd, (struct sockaddr *)&a, sizeof(a)) != 0)
+    host_socket socket = host_qemu_connect(endpoint);
+    if (socket == HOST_SOCKET_INVALID)
         _exit(121);
-    return fd;
+    return socket;
 }
 
 /** Read one line of QMP into `line`, without its newline; -1 at its end. */
-static int fake_line(int fd, char *line, size_t size)
+static int fake_line(host_socket fd, char *line, size_t size)
 {
     size_t n = 0;
     char c;
 
     for (;;) {
-        if (read(fd, &c, 1) != 1)
+        if (host_socket_read(fd, &c, 1) != 1)
             return -1;
         if (c == '\n')
             break;
@@ -240,17 +220,13 @@ static long fake_command(const char *line, char *name, size_t size)
     return id != NULL ? strtol(id + 5, NULL, 10) : -1;
 }
 
-/** Find the path of the `-chardev` socket of id `id` in QEMU's arguments. */
+/** Find QEMU's chardev endpoint, or end the stand-in on malformed arguments. */
 static const char *fake_socket(int argc, char **argv, const char *id)
 {
-    char head[64];
-    int i;
-
-    snprintf(head, sizeof(head), "socket,id=%s,path=", id);
-    for (i = 1; i + 1 < argc; i++)
-        if (strcmp(argv[i], "-chardev") == 0 && strncmp(argv[i + 1], head, strlen(head)) == 0)
-            return argv[i + 1] + strlen(head);
-    _exit(124);
+    const char *endpoint = host_qemu_endpoint(argc, argv, id);
+    if (endpoint == NULL)
+        _exit(124);
+    return endpoint;
 }
 
 /**
@@ -258,7 +234,7 @@ static const char *fake_socket(int argc, char **argv, const char *id)
  * `answer` the commands that read its state and the quit. Without it QMP
  * stops answering after the start, and SIGTERM is ignored.
  */
-static void fake_qmp(int qmp, const char *accel, int answer)
+static void fake_qmp(host_socket qmp, const char *accel, int answer)
 {
     char line[512], name[64], text[512];
     long id;
@@ -290,8 +266,7 @@ static void fake_qmp(int qmp, const char *accel, int answer)
             _exit(0);
         if (strcmp(name, "cont") == 0 && !answer) {
             signal(SIGTERM, SIG_IGN);
-            for (;;)
-                pause();
+            host_wait_forever();
         }
     }
     _exit(0);
@@ -301,7 +276,8 @@ static void fake_qmp(int qmp, const char *accel, int answer)
 static int fake_qemu(const char *mode, int argc, char **argv)
 {
     const char *accel = NULL;
-    int i, con, qmp;
+    int i;
+    host_socket con, qmp;
 
     for (i = 1; i + 1 < argc; i++)
         if (strcmp(argv[i], "-accel") == 0)
@@ -312,8 +288,7 @@ static int fake_qemu(const char *mode, int argc, char **argv)
     qmp = fake_connect(fake_socket(argc, argv, "etude-qmp"));
     put(con, "fake: up\r\n");
     if (strcmp(mode, "mute") == 0)
-        for (;;)
-            pause();
+        host_wait_forever();
     fake_qmp(qmp, accel, strcmp(mode, "answer") == 0);
     return 0;
 }
@@ -599,10 +574,7 @@ static void start_remote(struct etude_supervisor *s, struct row *r)
 /** Give the monotonic clock in microseconds. */
 static uint64_t now_us(void)
 {
-    struct timespec ts;
-
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u;
+    return host_clock_us();
 }
 
 /** Say whether the console of `res` has `text` after `from`. */
@@ -707,9 +679,7 @@ static void check_stopped_host(const struct row *r, int deaf)
 
     CHECK(res->asked && res->cleanup == ETUDE_CLEANUP_CONFIRMED && !res->claim_kept, r->name);
     CHECK(res->owned_count == 2 && res->owned[1].pid == res->proc->process.pid, r->name);
-    CHECK(res->proc->exit_end == ETUDE_END_SIGNALED &&
-              res->proc->exit_value == (deaf ? SIGKILL : SIGTERM),
-          r->name);
+    CHECK(host_process_stopped(res->proc, deaf), r->name);
     CHECK(res->finished_us - res->expired_us < 10 * S, r->name);
 }
 
@@ -722,9 +692,14 @@ static void check_gap_rows(struct row *rows)
         res = etude_supervised_result(rows[0].a);
         check_stopped_host(&rows[0], 0);
         CHECK(res->expired->advances == 0 && res->bound_us == 1 * S, "busy");
-#if defined(__linux__)
-        CHECK(res->sample_cpu_us.quality == ETUDE_QUALITY_LOWER_BOUND &&
-                  res->sample_cpu_us.value > 0 && res->sample_rss_bytes.value > 0,
+#if defined(__linux__) || defined(_WIN32)
+#ifdef _WIN32
+        const enum etude_quality cpu_quality = ETUDE_QUALITY_EXACT;
+#else
+        const enum etude_quality cpu_quality = ETUDE_QUALITY_LOWER_BOUND;
+#endif
+        CHECK(res->sample_cpu_us.quality == cpu_quality && res->sample_cpu_us.value > 0 &&
+                  res->sample_rss_bytes.value > 0,
               "busy: processor use is no progress");
 #endif
     }
@@ -867,9 +842,7 @@ static void test_machines(void)
               "hung");
         CHECK(strstr(res->capture_error, "query-status: QMP did not answer") != NULL, "hung");
         CHECK(strstr(res->capture_error, "human-monitor-command: QMP did not") != NULL, "hung");
-        CHECK(res->machine->qemu->exit_end == ETUDE_END_SIGNALED &&
-                  res->machine->qemu->exit_value == SIGKILL,
-              "hung: QEMU was killed");
+        CHECK(host_process_stopped(res->machine->qemu, 1), "hung: QEMU was killed");
         CHECK(res->cleanup == ETUDE_CLEANUP_CONFIRMED && !res->claim_kept, "hung");
         CHECK(res->owned_count == 2 && res->owned[1].pid == res->machine->qemu->process.pid,
               "hung");
@@ -895,26 +868,6 @@ static void test_machines(void)
         CHECK(res->incomplete, "confirm");
     }
     rows_free(s, rows, n);
-}
-
-/** Give the path of `name` on PATH in `out`, or NULL when it is not there. */
-static const char *on_path(const char *name, char *out, size_t size)
-{
-    const char *path = getenv("PATH"), *end;
-    size_t len;
-
-    for (; path != NULL && *path != '\0'; path = *end == ':' ? end + 1 : end) {
-        end = strchr(path, ':');
-        if (end == NULL)
-            end = path + strlen(path);
-        len = (size_t)(end - path);
-        if (len == 0)
-            continue;
-        snprintf(out, size, "%.*s/%s", (int)len, path, name);
-        if (access(out, X_OK) == 0)
-            return out;
-    }
-    return NULL;
 }
 
 /**
@@ -945,9 +898,9 @@ static void test_real(void)
     }
     snprintf(r.kernel, sizeof(r.kernel), "%s/rach2/kernel", dir);
     snprintf(r.initrd, sizeof(r.initrd), "%s/images/test.krffs", dir);
-    if (on_path("qemu-system-i386", q32, sizeof(q32)) == NULL ||
-        on_path("qemu-system-x86_64", q64, sizeof(q64)) == NULL || access(r.kernel, R_OK) != 0 ||
-        access(r.initrd, R_OK) != 0) {
+    if (host_program("qemu-system-i386", q32, sizeof(q32)) == NULL ||
+        host_program("qemu-system-x86_64", q64, sizeof(q64)) == NULL ||
+        access(r.kernel, R_OK) != 0 || access(r.initrd, R_OK) != 0) {
         printf("etude-watchdog-test: fail: cannot boot: QEMU is not on PATH, or %s or %s is "
                "not built\n",
                r.kernel, r.initrd);
@@ -979,15 +932,23 @@ int main(int argc, char **argv)
 {
     const char *role = getenv("ETUDE_WATCHDOG_ROLE"), *fake = getenv("ETUDE_FAKE_QEMU");
 
+    if (argc == 3 && strcmp(argv[1], "--quiet-child") == 0) {
+        if (strcmp(argv[2], "forever") == 0)
+            host_wait_forever();
+        if (strcmp(argv[2], "burn") != 0)
+            return 125;
+        burn(2 * S);
+        return 0;
+    }
+    if (host_executable(argv[0], self, sizeof(self)) != 0) {
+        printf("etude-watchdog-test: fail: %s cannot be found\n", argv[0]);
+        return 1;
+    }
     if (role != NULL && *role != '\0')
         return case_main(role);
     if (fake != NULL && *fake != '\0')
         return fake_qemu(fake, argc, argv);
-    if (realpath(argv[0], self) == NULL) {
-        printf("etude-watchdog-test: fail: %s cannot be found\n", argv[0]);
-        return 1;
-    }
-    if (setenv("TMPDIR", fix_dir(), 1) != 0)
+    if (host_environment("TMPDIR", fix_dir()) != 0)
         return 1;
     test_bounds();
     test_watchdog();

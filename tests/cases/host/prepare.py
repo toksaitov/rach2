@@ -86,6 +86,8 @@ def checks(group, arch, base):
             item['command'] = [*COMMON, '-DRACH2_HOSTTEST', '-Wno-empty-body', '-ffreestanding',
                                *[w for d in INCLUDES for w in ('-I', d)], *flags,
                                '-o', out, str(path), *deps]
+            if os.name == 'nt' and identity in routing.BOOTS:
+                item = windows.boot_entry(item, flags)
             item['tools'] = required_tools
             yield item
     elif group == 'checkers':
@@ -187,6 +189,9 @@ def prepare(args):
         if args.only and item['assertion_id'] != args.only:
             continue
         command = item.pop('command')
+        item['instrumentation'] = sorted({name for flag in command or []
+                                           if flag.startswith('-fsanitize=')
+                                           for name in flag.split('=', 1)[1].split(',')})
         backend = routing.backend(item['assertion_id'], item['sources'], args.group)
         if args.gnu and item['assertion_id'] not in routing.BOOTS | {'etude_platform'}:
             backend = 'gnu'
@@ -194,6 +199,7 @@ def prepare(args):
         windows_fixture = item.pop('windows_fixture', False)
         if backend == 'gnu' and not args.gnu:
             item['program'] = None
+            item['instrumentation'] = None
             item['arguments'] = []
             item['sha256'] = None
             item['inputs'] = [dict(path=p, sha256=digest(Path(p))) for p in item['sources']
@@ -206,6 +212,7 @@ def prepare(args):
             continue
         if backend == 'native' and args.gnu:
             item['program'] = None
+            item['instrumentation'] = None
             item['command'] = None
             item['unsupported'] = 'this assertion executes on the collection host'
             item.pop('tools', None)
@@ -249,6 +256,9 @@ def prepare(args):
             for value in ([] if windows_fixture or args.gnu else item['inputs']):
                 path = Path(value['path'])
                 if path.suffix != '.c':
+                    continue
+                # The Windows file adapter's legacy shell lookup is not called by native checks.
+                if os.name == 'nt' and path == Path('tools/etude/win/files.c'):
                     continue
                 text = path.read_text(errors='replace')
                 if (re.search(r'\b(?:system|popen)\s*\(', text) or
