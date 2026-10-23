@@ -802,20 +802,18 @@ static int make_root(const struct fixtures *fx, const char *work, const char *ro
     return umount2(path, 0);
 }
 
-/** Give the root `root` /proc, the machine's /dev and /sys, and a tmpfs of
- * its own on /dev/shm, nosuid and nodev as the test image has it, where the
- * tree has that directory; 0 or -1. */
+/** Give the root `root` the machine's /proc, /dev and /sys by bind mounts,
+ * and a tmpfs of its own on /dev/shm, nosuid and nodev as the test image has
+ * it, where the tree has that directory; 0 or -1. Rach2 accepts a mount of
+ * proc only where proc already is, so /proc is bound as the others are. */
 static int root_mounts(const char *root)
 {
-    static const char *const bound[] = {"/dev", "/sys"};
+    static const char *const bound[] = {"/proc", "/dev", "/sys"};
     char path[FIX_PATH];
     struct stat st;
     int i;
 
-    if (fpath(path, "%s/proc%s", root, "") < 0 || make_dir(path) < 0 ||
-        mount("proc", path, "proc", 0, NULL) < 0)
-        return -1;
-    for (i = 0; i < 2; i++)
+    for (i = 0; i < 3; i++)
         if (fpath(path, "%s%s", root, bound[i]) < 0 || make_dir(path) < 0 ||
             mount(bound[i], path, NULL, MS_BIND, NULL) < 0)
             return -1;
