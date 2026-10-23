@@ -450,7 +450,8 @@ static char cmdline[512];
 
 /**
  * Whether this boot was given an address and no gateway: the boot line has
- * `rach2.ip=` and no `rach2.gateway=`.
+ * `rach2.ip=` with an address, not `none`, which leaves the interface to a
+ * program such as a DHCP client, and no `rach2.gateway=`.
  *
  * The suite boots the probe both ways. With no route off the subnet the
  * probe checks that the machine says so, and cannot wait for the gateway's
@@ -470,7 +471,8 @@ static int booted_without_a_route(void)
         return 0;
     }
     cmdline[n] = '\0';
-    return contains(cmdline, n, "rach2.ip=") && !contains(cmdline, n, "rach2.gateway=");
+    return contains(cmdline, n, "rach2.ip=") && !contains(cmdline, n, "rach2.ip=none") &&
+           !contains(cmdline, n, "rach2.gateway=");
 }
 
 static uint8_t frame_a[1600];
