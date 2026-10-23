@@ -271,18 +271,6 @@ $(IMAGES_DIR)/memory-test.recovery.krffs: $(RECOVERY_IMAGE)
 # could not address. It is that large on purpose: a few gigabytes would be
 # satisfied by an implementation that kept 33 bits, and it is attached over
 # AHCI because the ATA driver's 28-bit LBA stops at 128 GiB.
-FD_HOSTTEST = build/tests/host/fd_hosttest
-FD_HOSTTEST_SOURCES = tests/host/fd_hosttest.c rach2/sys/fs/fd.c \
-                     rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
-$(FD_HOSTTEST): $(FD_HOSTTEST_SOURCES) rach2/sys/proc/process.c
-	@mkdir -p $(dir $@)
-	$(HOSTCC) -std=c99 -DRACH2_HOSTTEST -g -O1 -ffreestanding -Wno-empty-body \
-	    -I rach2/sys -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast \
-	    -fsanitize=address,undefined -fno-sanitize-recover=all \
-	    -o $@ $(FD_HOSTTEST_SOURCES)
-	$(HOSTCC) -DRACH2_HOSTTEST -I rach2/sys -MM -MP -MT $@ $(FD_HOSTTEST_SOURCES) > $@.d
--include $(FD_HOSTTEST).d
-
 # `tests/run fdlock`: pending KRFFS relocation, orphan truncation, and
 # concurrent raw offsets. The raw boot is under the lag, so its disk keeps
 # the guest's flushes from the host (cache=unsafe), as tests/system/Readme.md

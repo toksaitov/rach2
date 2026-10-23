@@ -97,7 +97,7 @@ The kernel writes back nothing on a timer: [update(8)](../../../man/man8/update.
 ## Tests
 
 * `tests/run default` runs, among the other probes on the test image, `ofdprobe` (shared descriptions), `fdfull` and `limitprobe` (the descriptor limit), `fdstale` (a descriptor across an unlink, a rename and a relocation, and `rmdir` of a directory in use), `dirprobe`, `dirgrow`, `unlinkdirprobe`, `pathcanon` and `vfsprobe` (directories and paths), `ownprobe`, `permprobe`, `modeprobe`, `searchprobe` and `stickyprobe` (ownership and permission), and the musl programs `pathmaxmusl`, `fdcallmusl`, `atcallmusl`, `preadmusl`, `truncmusl`, `opathmusl`, `lchownmusl`, `direntmusl`, `statfsmusl`, `statmusl`, `stampmusl` and `threadmusl`.
-* `tests/run fdlock` runs `fd_hosttest`, then boots a KRFFS disk root for `fdstale` and for concurrent offsets of a raw disk window.
+* `tests/run fdlock` boots a KRFFS disk root for `fdstale` and for concurrent offsets of a raw disk window.
 * `tests/run persist` and `tests/run persist-ahci` boot a copy of one KRFFS disk twice, on an IDE and on an AHCI controller, cut the first boot off once the file is written, `fsync`ed and `sync`ed, and require the file to be read back on the second.
 * `tests/run diskfull` fills the KRFFS root of the test image until a write fails with `ENOSPC` after bytes were written, and requires the space back after an unlink.
 * `tests/run host` runs `fd_hosttest` (descriptions, each sharer's descriptor limit, the errors of an allocation) and `open_hosttest` (opens and truncations, the close of a descriptor whose release sleeps, the key of a file's locks, and the release of a KRFFS root orphan).

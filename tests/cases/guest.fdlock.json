@@ -4,92 +4,6 @@
   "summary": "Open description lifetime, KRFFS orphans and shared raw offsets; tests/fdstale.c and tests/bootprobe.c report their rows",
   "cases": [
     {
-      "case_id": "guest.fdlock.host",
-      "behavior": "operations receive relocated handles under the namespace lock",
-      "units": [
-        "fdlock"
-      ],
-      "domain": "host",
-      "architectures": [
-        "i686",
-        "x86_64"
-      ],
-      "workload": {
-        "arguments": [],
-        "inputs": {},
-        "repetitions": 1,
-        "seed": null
-      },
-      "requirements": {
-        "host_api": "posix",
-        "tools": [
-          "sh",
-          "make"
-        ],
-        "features": {}
-      },
-      "execution": {
-        "program": "fdlock",
-        "stdin": null,
-        "role": "ordinary",
-        "privileges": "an ordinary user",
-        "isolation": [],
-        "children": "reaped",
-        "cleanup": "the host test frees its allocations and writes no files"
-      },
-      "assertions": [
-        {
-          "assertion_id": "locking",
-          "checks": "the fd host test passes every relocation and namespace check",
-          "source": "program"
-        }
-      ],
-      "branches": [],
-      "termination": {
-        "end": "exited",
-        "value": 0
-      },
-      "progress": [],
-      "bounds": {
-        "case": {
-          "floor_us": 1000000,
-          "initial_us": 300000000,
-          "ceiling_us": 900000000
-        },
-        "gap": {
-          "floor_us": 1000000,
-          "initial_us": 300000000,
-          "ceiling_us": 900000000
-        },
-        "stages": {}
-      },
-      "resources": {
-        "cpu_millis": 1000,
-        "cpu_ceiling_millis": 1000,
-        "memory_bytes": 268435456,
-        "disk_bytes": 0,
-        "locks": [],
-        "ports": 0,
-        "loop_devices": 0
-      },
-      "prepare": [
-        {
-          "name": "fdlock",
-          "node": "tests/cases/host/fdlock",
-          "per_architecture": false
-        },
-        {
-          "name": "fd-hosttest",
-          "node": "tests/host/fd_hosttest",
-          "per_architecture": false
-        }
-      ],
-      "timing": [],
-      "native": {
-        "plan": "host"
-      }
-    },
-    {
       "case_id": "guest.fdlock.orphans",
       "behavior": "the unchanged control descriptor reads its bytes; an unlinked descriptor keeps its file; an orphan truncates through its node; directory scans preserve orphan handles; a refused rename preserves both nodes; an orphan remains readable in another process; process exit releases orphan references; a relocation updates another process descriptor; directory removal respects descriptors and working directories; duplicates retain an orphan until their last close; growth relocates all open descriptions; repeated close releases orphans; unheld unlinks do not leak nodes; replacement without a holder does not leak nodes",
       "units": [
@@ -1193,7 +1107,7 @@
         },
         {
           "assertion_id": "proc-listing",
-          "checks": "the two raw devices appear in proc",
+          "checks": "getdents of /proc lists cmdline",
           "source": "program"
         },
         {
