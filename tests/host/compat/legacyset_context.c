@@ -317,13 +317,63 @@ static void measurement_history(struct run *r, const struct etude_measurement_co
     }
     eh_json_free(load); eh_json_free(plan); eh_json_free(run);
 }
+static void measurement_export_bytes(const struct json *doc)
+{
+    char hash[65];
+    const char *bytes = json_text(doc, "selection_bytes"), *digest = json_text(doc, "selection_sha256");
+    const struct json *size = json_member(doc, "selection_size_bytes");
+    if (bytes) measurement_hash(bytes, hash); else hash[0] = 0;
+    CHECK(bytes && strlen(bytes) && bytes[strlen(bytes) - 1] == '\n' && digest && !strcmp(hash, digest) &&
+          size && size->type == JSON_INTEGER && size->integer == (long long)strlen(bytes),
+          "context: exact exported bytes include the final newline and match their hash");
+}
+struct measurement_allocations {
+    unsigned pass, tick, none, arch;
+};
+static void measurement_export_repeat(struct measurement_allocations *count,
+                                      const char *arch, long long repetition)
+{
+    CHECK((!strcmp(arch, "i686") || !strcmp(arch, "x86_64")) && repetition >= 0 && repetition < 2,
+          "context: repeated case has its resolved architecture");
+    if (repetition >= 0 && repetition < 2) {
+        unsigned bit = 1u << ((!strcmp(arch, "x86_64") ? 2 : 0) + (unsigned)repetition);
+        CHECK(!(count->pass & bit), "context: no repeated allocation is duplicated");
+        count->pass |= bit;
+    }
+}
+static void measurement_export_item(struct measurement_allocations *count, const struct json *item)
+{
+    const struct json *rep = json_member(item, "repetition");
+    const char *id = json_text(item, "case_id"), *a = json_text(item, "architecture");
+    CHECK(id && a && rep && rep->type == JSON_INTEGER, "context: allocated item is explicit");
+    if (!id || !a || !rep || rep->type != JSON_INTEGER) return;
+    if (!strcmp(id, "fixture.good.pass")) measurement_export_repeat(count, a, rep->integer);
+    else if (!strcmp(id, "fixture.good.tick")) count->tick |= !strcmp(a, "i686") ? 1u : !strcmp(a, "x86_64") ? 2u : 0u;
+    else if (!strcmp(id, "fixture.good.none")) {
+        CHECK(!strcmp(a, "none") && !rep->integer, "context: architecture-independent work retains none");
+        count->none++;
+    } else if (!strcmp(id, "fixture.good.arch")) {
+        CHECK(!strcmp(a, "x86_64") && !rep->integer, "context: x86-64-only work stays x86-64");
+        count->arch++;
+    }
+}
+static void measurement_export_items(const struct json *doc)
+{
+    const struct json *items = json_member(doc, "items");
+    struct measurement_allocations count = {0};
+    CHECK(items && items->type == JSON_ARRAY && items->count == 8,
+          "context: exact repeated items are allocated once per architecture");
+    for (size_t i = 0; items && i < items->count; i++) measurement_export_item(&count, items->item[i]);
+    CHECK(count.pass == 15 && count.tick == 3 && count.none == 1 && count.arch == 1,
+          "context: full exported first-attempt scope matches the selected workloads");
+}
 /* The exported scope includes repetitions and architecture-independent work. */
 static void measurement_export_cases(void)
 {
     static const struct etude_legacy_member member = {"good", 0, 0, "cases/good/good.json", NULL};
     struct run r;
     struct etude_legacy_set_opts o;
-    char path[PATH_LEN], text[32768], hash[65], error[256];
+    char path[PATH_LEN], text[32768], error[256];
     memset(&r, 0, sizeof r);
     r.name = "measurement-export"; r.members = &member; r.n = 1; r.width = 1;
     opts_for(&o, &r);
@@ -334,39 +384,8 @@ static void measurement_export_cases(void)
     CHECK(read_text(path, text, sizeof text) > 0, "context: allocation export reads");
     struct json *doc = NULL;
     CHECK(!json_parse(text, strlen(text), 1, &doc, error, sizeof error), "context: allocation export parses");
-    const char *bytes = json_text(doc, "selection_bytes"), *digest = json_text(doc, "selection_sha256");
-    const struct json *size = json_member(doc, "selection_size_bytes"), *items = json_member(doc, "items");
-    if (bytes) measurement_hash(bytes, hash); else hash[0] = 0;
-    CHECK(bytes && strlen(bytes) && bytes[strlen(bytes) - 1] == '\n' && digest && !strcmp(hash, digest) &&
-          size && size->type == JSON_INTEGER && size->integer == (long long)strlen(bytes),
-          "context: exact exported bytes include the final newline and match their hash");
-    unsigned pass = 0, tick = 0, none = 0, arch = 0;
-    CHECK(items && items->type == JSON_ARRAY && items->count == 8,
-          "context: exact repeated items are allocated once per architecture");
-    for (size_t i = 0; items && i < items->count; i++) {
-        const struct json *v = items->item[i], *rep = json_member(v, "repetition");
-        const char *id = json_text(v, "case_id"), *a = json_text(v, "architecture");
-        CHECK(id && a && rep && rep->type == JSON_INTEGER, "context: allocated item is explicit");
-        if (!id || !a || !rep || rep->type != JSON_INTEGER) continue;
-        if (!strcmp(id, "fixture.good.pass")) {
-            CHECK((!strcmp(a, "i686") || !strcmp(a, "x86_64")) && rep->integer >= 0 && rep->integer < 2,
-                  "context: repeated case has its resolved architecture");
-            if (rep->integer >= 0 && rep->integer < 2) {
-                unsigned bit = 1u << ((!strcmp(a, "x86_64") ? 2 : 0) + (unsigned)rep->integer);
-                CHECK(!(pass & bit), "context: no repeated allocation is duplicated");
-                pass |= bit;
-            }
-        } else if (!strcmp(id, "fixture.good.tick")) tick |= !strcmp(a, "i686") ? 1u : !strcmp(a, "x86_64") ? 2u : 0u;
-        else if (!strcmp(id, "fixture.good.none")) {
-            CHECK(!strcmp(a, "none") && !rep->integer, "context: architecture-independent work retains none");
-            none++;
-        } else if (!strcmp(id, "fixture.good.arch")) {
-            CHECK(!strcmp(a, "x86_64") && !rep->integer, "context: x86-64-only work stays x86-64");
-            arch++;
-        }
-    }
-    CHECK(pass == 15 && tick == 3 && none == 1 && arch == 1,
-          "context: full exported first-attempt scope matches the selected workloads");
+    measurement_export_bytes(doc);
+    measurement_export_items(doc);
     json_free(doc);
 }
 static void test_contexts(void)
