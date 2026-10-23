@@ -4,7 +4,7 @@
  * A test of the guest's network needs a process at the host end of QEMU's
  * user network: a peer for a connection the guest is to show in its tables,
  * or a server whose answers show what the guest sent. hostpeer is that
- * process, in one of three jobs.
+ * process, in these jobs.
  *
  *   hostpeer hold PORT SECONDS
  *       Connect to 127.0.0.1:PORT and keep the connection open for SECONDS,
@@ -26,8 +26,12 @@
  *       send it to the port QEMU forwards to the guest's 7502, once the
  *       guest's probe says it waits for it.
  *
+ *   hostpeer send-repeat PORT TEXT
+ *       Send TEXT as a UDP datagram once each second until a termination
+ *       signal ends the peer. The native deployment owns and reaps it.
+ *
  * With HOSTPEER_ADDRESS set to an IPv4 address, each job uses that address
- * in place of 127.0.0.1: a native run on the Lenovo (tests/native/run.sh)
+ * in place of 127.0.0.1: a native run on the Lenovo (tests/native/Readme.md)
  * reaches the echo server at the controller's own address on the LAN, and
  * sends the dgram case's datagram to the machine's.
  *

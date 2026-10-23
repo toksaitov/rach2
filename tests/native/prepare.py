@@ -2,6 +2,7 @@
 """Prepare immutable native files and roots; execute no native test case."""
 import argparse
 import hashlib
+import gzip
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import tarfile
 
 PROFILE = ("sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,"
            "^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,"
@@ -252,6 +254,23 @@ def digest(path):
     return value.hexdigest()
 
 
+def archive_header(info):
+    """Keep file modes and links; make archive ownership and times stable."""
+    info.uid = info.gid = 0
+    info.uname = info.gname = ""
+    info.mtime = 0
+    return info
+
+
+def archive_payload(payload, output):
+    """Build a transport artifact without invoking a host archive command."""
+    with output.open("wb") as raw:
+        with gzip.GzipFile(fileobj=raw, mode="wb", filename="", mtime=0) as compressed:
+            with tarfile.open(fileobj=compressed, mode="w|", format=tarfile.USTAR_FORMAT) as archive:
+                archive.add(payload, arcname=".", filter=archive_header)
+    return digest(output)
+
+
 def prepare(args):
     root = Path(__file__).resolve().parents[2]
     build = Path("build/x86_64" if args.architecture == "x86_64" else "build")
@@ -288,13 +307,23 @@ def prepare(args):
         records = [f"{digest(path)}  {path.relative_to(tree)}\n"
                    for path in sorted(tree.rglob("*")) if path.is_file()]
         (tree / "assets.sha256").write_text("".join(records))
-        (payload / "prepared.json").write_text(json.dumps({"schema_version": 1, "architecture": args.architecture,
-            "cases": [name for name, _, _ in inventory], "account": "maps", "roots": str(image_dir.relative_to(payload) / "roots")}, indent=2) + "\n")
+        record = {"schema_version": 1, "architecture": args.architecture,
+            "cases": [name for name, _, _ in inventory], "account": "maps",
+            "roots": str(image_dir.relative_to(payload) / "roots")}
+        metadata = payload / "prepared.json"
+        metadata.write_text(json.dumps(record, indent=2) + "\n")
+        archive = work / "prepared.tar.gz"
+        record["archive_sha256"] = archive_payload(payload, archive)
+        metadata.write_text(json.dumps(record, indent=2) + "\n")
+        archive_hash = work / "prepared.tar.gz.sha256"
+        archive_hash.write_text(record["archive_sha256"] + "\n")
         if destination.exists():
             if not (destination / "prepared.json").is_file():
                 raise ValueError("existing output is not a native preparation")
             shutil.rmtree(destination)
         payload.rename(destination)
+        archive.replace(Path(str(destination) + ".tar.gz"))
+        archive_hash.replace(Path(str(destination) + ".tar.gz.sha256"))
         print(f"native-prepare: {len(inventory)} cases in {destination}")
     finally:
         shutil.rmtree(work)
