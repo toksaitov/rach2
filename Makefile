@@ -511,6 +511,7 @@ endif
 ETUDEVOLUME = build/tools/etude/etude-volume
 ETUDE_HDRS = $(wildcard tools/etude/*.h tools/etude/include/etude/*.h tools/etude/posix/*.h \
                         tools/etude/guest/*.h tools/etude/volume/*.h) utils/sha256.h
+include tests/cases/host/scripts.mk
 $(ETUDE): $(ETUDE_SRC) $(ETUDE_HDRS) | $(ETUDEVOLUME)
 	@mkdir -p $(dir $@)
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
@@ -766,6 +767,9 @@ $(USB_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 
 build/tests/cases/machine/grow_measured: tests/system/checkers/records.c \
     tests/system/checkers/records.h
+
+build/tests/cases/machine/metal_scenario: tests/cases/machine/metal_accept.c \
+    tests/cases/machine/metal_accept.h
 
 build/tests/cases/host/usbchecks: tests/cases/host/usbchecks.c \
     tests/system/checkers/records.c tests/system/checkers/records.h \

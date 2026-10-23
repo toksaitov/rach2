@@ -18,3 +18,16 @@ HOST_SCRIPT_ASSETS = $(wildcard $(shell git ls-files tools tests mk Makefile \
 build/tests/host-suite/scripts-assets.tar: $(HOST_SCRIPT_ASSETS)
 	@mkdir -p $(@D)
 	COPYFILE_DISABLE=1 tar --format=ustar -cf $@ $(HOST_SCRIPT_ASSETS)
+
+build/tests/host-suite/sources/%: %
+	@mkdir -p $(@D)
+	cp $< $@
+
+# The products helper executes both x86 ABIs even in an i686-only collection.
+ifneq ($(ARCH),x86_64)
+.PHONY: prepare-host-products-x86_64
+prepare-host-products-x86_64:
+	+$(MAKE) --no-print-directory ARCH=x86_64 rach2 build/x86_64/images/gnu-test.disk
+build/x86_64/rach2/kernel build/x86_64/images/gnu-test.disk: | prepare-host-products-x86_64
+	@test -s $@
+endif

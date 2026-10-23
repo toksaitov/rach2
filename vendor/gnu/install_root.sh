@@ -146,6 +146,7 @@ install_part()
 }
 
 install_part root
+RACH2_ARCH=$RACH2_ARCH sh "$DIR/build_host_products.sh" "$TREE"
 # Build the framed WebSocket fixture against the same TLS libraries as the
 # guest tools. This happens in the GNU build environment on every host.
 "$OUT/cross/bin/$GNU_TARGET-gcc" --sysroot="$OUT/root" -std=c99 -O2 \

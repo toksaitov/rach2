@@ -3110,6 +3110,11 @@ static const char *program_path(struct etude_case *c, const char *name)
     return a != NULL ? executable(c, a) : NULL;
 }
 
+const char *etude_program(struct etude_case *c, const char *name)
+{
+    return program_path(c, name);
+}
+
 /** Make the argument vector of `program` with `args` after it, ended by
  * NULL; NULL when memory ran out. */
 static char **arguments(const char *program, char *const args[])

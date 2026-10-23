@@ -6,6 +6,7 @@ dir 0755 /root
 dir 0755 /bin
 file 0755 /bin/busybox build/vendor/busybox/busybox
 file 0755 /bin/mtools build/vendor/mtools/mtools
+file 0755 /bin/image-channel-fixture build/tests/cases/host/image-channel-fixture
 file 0755 /bin/debugfs build/vendor/e2fsprogs/debugfs
 file 0755 /bin/e2fsck build/vendor/e2fsprogs/e2fsck
 file 0755 /bin/mke2fs build/vendor/e2fsprogs/mke2fs

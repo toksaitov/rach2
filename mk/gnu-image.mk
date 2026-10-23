@@ -26,6 +26,11 @@ GNU_IMAGE_STAMPS = $(GNU_PORTS_STAMP) $(GNU_NATIVE_STAMP) $(GNU_GDB_STAMP) \
                    $(GNU_JS_STAMP) $(GNU_CHROMIUM_STAMP)
 GNU_IMAGE_DEPS = $(DEMO_CREDS) krffs/manifests/os-real-gnu.manifest $(MANIFEST_DEPS_os_real_gnu) \
                  tools/image/mkext2.sh vendor/gnu/install_root.sh vendor/gnu/fetch.sh \
+                 vendor/gnu/build_host_products.sh tests/cases/host/products.mk \
+                 $(wildcard tests/cases/host/*.c tests/cases/host/*.h) \
+                 $(ETUDE_SRC) $(ETUDE_HOSTCASE_SRC) $(ETUDE_HDRS) \
+                 $(wildcard krffs/*.c krffs/*.h vendor/tcc/rach2-*.patch) $(TCC_TARBALL) \
+                 ports/doom/crt0.c tests/host/fixtures/doom_libc.c \
                  tests/system/fakeapi/native/wsclient.c \
                  vendor/gnu/sources-extra.txt $(GNU_IMAGE_STAMPS) $(IMAGE_TOOLS) $(MAN_ALL)
 GNU_IMAGE_ORDER = preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid \

@@ -20,10 +20,16 @@ check-mtools: $(MTOOLS_BIN) $(ELFCHECK)
 	@test $$(wc -c < $(MTOOLS_BIN)) -le 1048576
 
 $(ETUDE_IMAGE): krffs/manifests/etude-image.manifest $(MTOOLS_BIN) $(DEBUGFS_BIN) \
+                 $(ARCH_BUILD)/tests/cases/host/image-channel-fixture \
                  $(E2FSCK_BIN) $(MKE2FS_BIN) $(DUMPE2FS_BIN) $(TUNE2FS_BIN) $(RESIZE2FS_BIN) \
                  $(BUSYBOX_BIN) $(ARCH_BUILD)/tools/etude/guest/etude-guest $(IMAGE_TOOLS) \
                  | preflight krffs tools/etude/guest check-mtools check-e2fsck check-busybox
 	$(MKIMAGE) krffs/manifests/etude-image.manifest $@ 64
+
+$(ARCH_BUILD)/tests/cases/host/image-channel-fixture: tests/cases/host/image_channel_fixture.c \
+    $(LIBC_STAMP)
+	@mkdir -p $(@D)
+	RACH2_ARCH=$(ARCH) vendor/musl/muslgcc -std=c99 -Os -static $< -o $@
 
 # The loop-mount acceptance fixture is built once and copied per attempt.
 build/tests/cases/machine/metal/loop.krffs: build/tests/system/loopdev/krffs.img
