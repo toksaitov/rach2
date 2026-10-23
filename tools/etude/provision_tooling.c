@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "etude/tooling.h"
+#include "tooling_cache.h"
 
 #ifdef _WIN32
 #include <fcntl.h>
@@ -297,7 +298,7 @@ static int read_options(int argc, char **argv, struct options *op, int *rest)
     memset(op, 0, sizeof(*op));
     op->site.recipe = "tools/etude/tooling";
     op->site.volume = find_volume(argv[0]);
-    op->site.cache = cache != NULL && *cache != '\0' ? cache : "build/tooling";
+    op->site.cache = cache != NULL && *cache != '\0' ? cache : tooling_cache_default();
     op->site.arch = getenv("ETUDE_TOOLING_ARCH");
     op->site.accel = getenv("RACH2_QEMU_ACCEL");
     op->site.envp = environ;

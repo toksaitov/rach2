@@ -92,13 +92,12 @@ class Job:
         out = self.work / "out"
         out.mkdir()
         etude = self.root / "build/tools/etude/etude"
-        cache = local(os.environ.get("ETUDE_TOOLING_CACHE", str(self.root / "build/tooling")))
         accel = os.environ.get("RACH2_QEMU_ACCEL")
         if not accel:
             raise ValueError("RACH2_QEMU_ACCEL must name the requested accelerator")
         args = [native(etude), "provision", "tooling",
                 "-r", native(self.root / "tools/etude/tooling"),
-                "-C", native(cache), "-a", accel, "run", "-c", "1", "-m", str(memory),
+                *cache_args(), "-a", accel, "run", "-c", "1", "-m", str(memory),
                 "-s", str(volume), "-O", native(out)]
         if network:
             args.append("-n")
@@ -127,9 +126,14 @@ class Job:
             raise ValueError("RACH2_QEMU_ACCEL must name the requested accelerator")
         return run_child([
             native(self.root / "build/tools/etude/etude"), "provision", "tooling",
-            "-r", native(self.root / "tools/etude/tooling"), "-C",
-            native(local(os.environ.get("ETUDE_TOOLING_CACHE", str(self.root / "build/tooling")))),
+            "-r", native(self.root / "tools/etude/tooling"), *cache_args(),
             "-a", os.environ["RACH2_QEMU_ACCEL"], "prepare", "-c", "1"])
+
+
+def cache_args():
+    """Keep explicit private caches; otherwise use the provisioned CLI default."""
+    cache = os.environ.get("ETUDE_TOOLING_CACHE")
+    return ["-C", native(local(cache))] if cache else []
 
 
 def image_command(job, tool, args):

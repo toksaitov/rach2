@@ -2,15 +2,19 @@
 # tooling.sh: what a suite sources to run a command its host lacks in etude's
 # tooling machine (tools/etude/Readme.md, The tooling machine). REPO must be
 # the tree's root. The machine is the one tools/etude/tooling describes, in
-# the cache ETUDE_TOOLING_CACHE names or build/tooling, and runs under the
-# accelerator RACH2_QEMU_ACCEL names, which tests/run sets.
+# the cache ETUDE_TOOLING_CACHE names or the provisioned shared default. It
+# runs under the accelerator RACH2_QEMU_ACCEL names, which tests/run sets.
 
 TOOLING_BIN=$REPO/build/tools/etude/etude
 
 # tooling ARG...: run `etude provision tooling` with the tree's recipe and
 # cache.
 tooling() {
-    "$TOOLING_BIN" provision tooling -r "$REPO/tools/etude/tooling" -C "${ETUDE_TOOLING_CACHE:-$REPO/build/tooling}" "$@"
+    if [ -n "${ETUDE_TOOLING_CACHE:-}" ]; then
+        "$TOOLING_BIN" provision tooling -r "$REPO/tools/etude/tooling" -C "$ETUDE_TOOLING_CACHE" "$@"
+    else
+        (cd "$REPO" && "$TOOLING_BIN" provision tooling -r "$REPO/tools/etude/tooling" "$@")
+    fi
 }
 
 # tooling_made: succeed when the tooling machine is made, so that a job can run.

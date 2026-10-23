@@ -455,6 +455,7 @@ static int row_made(void)
     else if (!contains(disk, "overlay of image-"))
         rc = failed("the disk does not name its image from the cache");
     else if (cached("tooling-*.tools") == NULL ||
+             !(GetFileAttributesA(cached("tooling-*.tools")) & FILE_ATTRIBUTE_READONLY) ||
              !contains(cached("tooling-*.tools"), "provision: ok"))
         rc = failed("no record of the tools");
     else if (cached("prepare-*") != NULL)

@@ -5,7 +5,8 @@
  *
  * host-deps: tests/host/compat/output_sinks.c tools/etude/capture.c
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
- * host-deps: tools/etude/posix/process.c
+ * host-deps: tools/etude/posix/process.c tools/etude/tooling_cache.c
+ * host-deps: tests/host/compat/tooling_cache_fixture.c
  * host-cflags: -I tools/etude/include -Wall -Wextra -Werror
  */
 #include <stdio.h>
@@ -14,6 +15,8 @@
 #include <unistd.h>
 
 #include "output_sinks.h"
+
+int etude_test_tooling_cache(const char *tmp);
 
 int main(int argc, char **argv)
 {
@@ -30,6 +33,8 @@ int main(int argc, char **argv)
     }
     if (tmp == NULL || tmp[0] == '\0')
         tmp = "/tmp";
+    if (etude_test_tooling_cache(tmp))
+        return 1;
     if (argv[0][0] == '/')
         return etude_test_output_sinks(argv[0], "--big", tmp);
     if (getcwd(path, sizeof path) == NULL || strlen(path) + strlen(argv[0]) + 2 > sizeof path)

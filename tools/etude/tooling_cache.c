@@ -49,11 +49,56 @@ static int pause_lock(const struct etude_tooling_site *site)
     return 1;
 }
 
+/** Prefer only an administrator-provisioned shared directory. */
+const char *tooling_cache_default(void)
+{
+#ifndef _WIN32
+    const char *path = "/var/cache/rach2-tooling";
+    struct stat st;
+    if (!lstat(path, &st) && S_ISDIR(st.st_mode) && st.st_uid == 0 &&
+        (st.st_mode & 07777) == 02770 && !access(path, R_OK | W_OK | X_OK))
+        return path;
+#endif
+    return "build/tooling";
+}
+
+#ifndef _WIN32
+/** Publish a locked, group-accessible inode after its mode is complete. */
+static int new_mutex(const char *path)
+{
+    char temporary[CACHE_PATH];
+    struct flock lock;
+    int fd, saved;
+    if (snprintf(temporary, sizeof(temporary), "%s.XXXXXX", path) >= (int)sizeof(temporary))
+        return -1;
+    fd = mkstemp(temporary);
+    if (fd < 0)
+        return -1;
+    memset(&lock, 0, sizeof(lock));
+    lock.l_type = F_WRLCK;
+    lock.l_whence = SEEK_SET;
+    if (fcntl(fd, F_SETFD, FD_CLOEXEC) || fchmod(fd, 0660) || fcntl(fd, F_SETLK, &lock) ||
+        link(temporary, path)) {
+        saved = errno;
+        unlink(temporary);
+        close(fd);
+        errno = saved;
+        return -1;
+    }
+    if (unlink(temporary)) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+#endif
+
 /** The kernel releases this noninherited mutex if its owner dies. */
-int tooling_cache_enter(const struct etude_tooling_site *site, intptr_t *guard)
+static int cache_enter(const struct etude_tooling_site *site, const char *name, int wait,
+                       intptr_t *guard)
 {
     char path[CACHE_PATH];
-    if ((site->stop && *site->stop) || !path_of(path, site->cache, ".tooling-cache.lock"))
+    if ((site->stop && *site->stop) || !path_of(path, site->cache, name))
         return -1;
 #ifdef _WIN32
     HANDLE file =
@@ -70,34 +115,66 @@ int tooling_cache_enter(const struct etude_tooling_site *site, intptr_t *guard)
     }
     while (
         !LockFileEx(file, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &overlap)) {
-        if (GetLastError() != ERROR_LOCK_VIOLATION || !pause_lock(site)) {
+        DWORD error = GetLastError();
+        if (!wait || error != ERROR_LOCK_VIOLATION || !pause_lock(site)) {
             CloseHandle(file);
-            return -1;
+            return !wait && error == ERROR_LOCK_VIOLATION ? 1 : -1;
         }
     }
     *guard = (intptr_t)file;
 #else
-    int fd = open(path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);
+    int fd;
     struct stat st;
     struct flock lock;
+    for (;;) {
+        fd = open(path, O_RDWR | O_CLOEXEC | O_NOFOLLOW);
+        if (fd >= 0 || errno != ENOENT)
+            break;
+        fd = new_mutex(path);
+        if (fd >= 0 || errno != EEXIST)
+            break;
+    }
     if (fd < 0)
         return -1;
     memset(&lock, 0, sizeof(lock));
     lock.l_type = F_WRLCK;
     lock.l_whence = SEEK_SET;
-    if (fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_nlink != 1) {
+    while (fcntl(fd, F_SETLK, &lock) != 0) {
+        int busy = errno == EAGAIN || errno == EACCES;
+        if (!wait || (!busy && errno != EINTR) || !pause_lock(site)) {
+            close(fd);
+            return !wait && busy ? 1 : -1;
+        }
+    }
+    if (fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_nlink != 1 ||
+        (st.st_uid == geteuid() && fchmod(fd, 0660))) {
         close(fd);
         return -1;
-    }
-    while (fcntl(fd, F_SETLK, &lock) != 0) {
-        if ((errno != EAGAIN && errno != EACCES && errno != EINTR) || !pause_lock(site)) {
-            close(fd);
-            return -1;
-        }
     }
     *guard = fd;
 #endif
     return 0;
+}
+
+int tooling_cache_enter(const struct etude_tooling_site *site, intptr_t *guard)
+{
+    return cache_enter(site, ".tooling-cache.lock", 1, guard);
+}
+
+static int prepare_guard(const struct etude_tooling_site *site, const char *key, int wait,
+                         intptr_t *guard)
+{
+    char name[96];
+    if (strlen(key) != 64 || strspn(key, "0123456789abcdef") != 64)
+        return -1;
+    snprintf(name, sizeof(name), ".tooling-%s.lock", key);
+    return cache_enter(site, name, wait, guard);
+}
+
+int tooling_cache_prepare_enter(const struct etude_tooling_site *site, const char *key,
+                                intptr_t *guard)
+{
+    return prepare_guard(site, key, 1, guard);
 }
 
 void tooling_cache_leave(intptr_t guard)
@@ -282,12 +359,16 @@ void tooling_cache_prune(const struct etude_tooling_site *site, const char *curr
             snprintf(name, sizeof(name), "tooling-%s.tools", key);
             if (!path_of(tools, site->cache, name))
                 break;
+            intptr_t preparation;
+            if (prepare_guard(site, key, 0, &preparation))
+                continue;
             if (completed(disk, tools)) {
                 if (discard(disk) || discard(tools))
                     fprintf(stderr, "etude tooling: cannot remove obsolete machine %s\n", key);
                 else
                     fprintf(stderr, "etude tooling: removed obsolete machine %s\n", key);
             }
+            tooling_cache_leave(preparation);
         }
     tooling_cache_leave(guard);
     free(c);

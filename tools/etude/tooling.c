@@ -949,11 +949,17 @@ static int download(const struct etude_tooling_site *site, const struct etude_to
         remove(part);
         return failure(why, whylen, "%s has the digest %s, not %s", m->url, hex, m->image_sha256);
     }
-    read_only(part);
-    if (!exists(m->image) && rename(part, m->image) != 0) {
-        remove(part);
-        return failure(why, whylen, "%s cannot be published: %s", m->image, strerror(errno));
-    }
+    if (read_only(part))
+        return failure(why, whylen, "%s cannot be protected", part);
+    if (!exists(m->image) && rename(part, m->image) == 0)
+        return 0;
+    /* Another recipe may have published this same pinned image. */
+    if (file_sha256(m->image, hex) || strcmp(hex, m->image_sha256))
+        return failure(why, whylen, "%s cannot be published; verified download retained: %s",
+                       m->image, part);
+#ifdef _WIN32
+    _chmod(part, _S_IREAD | _S_IWRITE);
+#endif
     remove(part);
     return 0;
 }
@@ -1052,12 +1058,56 @@ static void note_stop(const struct etude_tooling_site *site, struct etude_toolin
     failure(res->why, sizeof(res->why), "a signal stopped %s", what);
 }
 
+/** Keep an interrupted publication's report before publishing another. */
+static int preserve_report(struct work *w)
+{
+    char path[PATH_LEN];
+    unsigned n;
+
+    if (!exists(w->m.tools))
+        return 0;
+    for (n = 0; n < 1000; n++) {
+        if (fmt(path, sizeof(path), "%s.partial-%ld-%u", w->m.tools, (long)getpid(), n))
+            return -1;
+        if (!exists(path)) {
+            if (rename(w->m.tools, path))
+                return -1;
+            fprintf(stderr, "etude tooling: retained incomplete publication: %s\n", path);
+            return 0;
+        }
+    }
+    return -1;
+}
+
+/** Publish the protected report first; the disk marks the complete pair. */
+static int publish_files(struct work *w, struct etude_tooling_result *res)
+{
+    char path[PATH_LEN], *log;
+    size_t len;
+    FILE *f;
+    int ok;
+
+    if (fmt(path, sizeof(path), "%s/tools", w->dir) ||
+        !(log = slurp(w->b.channel, EVIDENCE_MAX, &len)))
+        return failure(res->why, sizeof(res->why), "the provisioning report cannot be read");
+    f = fopen(path, "wb");
+    ok = f && fwrite(log, 1, len, f) == len;
+    if (f && fclose(f))
+        ok = 0;
+    free(log);
+    if (!ok || read_only(path) || read_only(w->root))
+        return failure(res->why, sizeof(res->why), "the tooling files cannot be protected");
+    if (preserve_report(w) || rename(path, w->m.tools) || rename(w->root, w->m.disk))
+        return failure(res->why, sizeof(res->why), "the tooling files cannot be published: %s",
+                       strerror(errno));
+    res->outcome = ETUDE_TOOLING_ENDED;
+    return 0;
+}
+
 /** Judge a provisioning boot, and publish its disk and its report. */
 static int prepare_publish(struct work *w, int late, struct etude_tooling_result *res)
 {
     const struct boot *b = &w->b;
-    char *log;
-    size_t len;
 
     if (late) {
         res->outcome = ETUDE_TOOLING_LATE;
@@ -1066,27 +1116,13 @@ static int prepare_publish(struct work *w, int late, struct etude_tooling_result
     if (!b->provisioned || b->failed[0] != '\0')
         return failure(res->why, sizeof(res->why), "%s",
                        b->failed[0] != '\0' ? b->failed : "provision.sh did not report");
-    if ((log = slurp(b->channel, EVIDENCE_MAX, &len)) != NULL) {
-        FILE *f = fopen(w->m.tools, "wb");
-
-        if (f == NULL || fwrite(log, 1, len, f) != len || fclose(f) != 0)
-            failure(res->why, sizeof(res->why), "%s cannot be written", w->m.tools);
-        free(log);
-    }
-    if (res->why[0] != '\0')
-        return -1;
-    read_only(w->root);
-    if (!exists(w->m.disk) && rename(w->root, w->m.disk) != 0)
-        return failure(res->why, sizeof(res->why), "%s cannot be published: %s", w->m.disk,
-                       strerror(errno));
-    res->outcome = ETUDE_TOOLING_ENDED;
-    return 0;
+    return publish_files(w, res);
 }
 
-int etude_tooling_prepare(const struct etude_tooling_site *site, unsigned cpus,
-                          uint64_t deadline_us, struct etude_tooling_result *res)
+static int prepare_once(const struct etude_tooling_site *site, unsigned cpus, uint64_t deadline_us,
+                        struct etude_tooling_result *res)
 {
-    static const char *const scratch[] = {"seed.img", "console.log", "channel.log", NULL};
+    static const char *const scratch[] = {"seed.img", "console.log", "channel.log", "tools", NULL};
     struct work w;
     struct etude_reading now;
     int end;
@@ -1137,6 +1173,31 @@ int etude_tooling_prepare(const struct etude_tooling_site *site, unsigned cpus,
     if (res->outcome == ETUDE_TOOLING_ENDED && res->cost.cleanup == ETUDE_CLEANUP_CONFIRMED)
         tooling_cache_prune(site, w.m.key);
     return res->outcome == ETUDE_TOOLING_ENDED ? 0 : -1;
+}
+
+/** Recheck after the preceding owner has completed or lost its kernel lock. */
+int etude_tooling_prepare(const struct etude_tooling_site *site, unsigned cpus,
+                          uint64_t deadline_us, struct etude_tooling_result *res)
+{
+    struct etude_tooling_machine machine;
+    intptr_t guard;
+    int status;
+    memset(res, 0, sizeof(*res));
+    res->outcome = ETUDE_TOOLING_FAILED;
+    res->cost.cleanup = ETUDE_CLEANUP_CONFIRMED;
+    if (etude_tooling_machine(site, &machine, res->why, sizeof(res->why)))
+        return -1;
+    if (make_dirs(site->cache))
+        return failure(res->why, sizeof(res->why), "%s cannot be made: %s", site->cache,
+                       strerror(errno));
+    if (tooling_cache_prepare_enter(site, machine.key, &guard)) {
+        failure(res->why, sizeof(res->why), "the recipe's preparation mutex cannot be acquired");
+        note_stop(site, res, "the preparation mutex");
+        return -1;
+    }
+    status = prepare_once(site, cpus, deadline_us, res);
+    tooling_cache_leave(guard);
+    return status;
 }
 
 /** Give the last name of `path`, which may end in separators. */
