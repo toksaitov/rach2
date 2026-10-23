@@ -85,6 +85,20 @@ int etude_win_program(const char *name, char *out, size_t size);
 /** Return a POSIX shell supplied by MSYS2, or NULL. */
 const char *etude_win_shell(void);
 
+/** Read or write at a 64-bit byte offset without moving FD's position. */
+ssize_t etude_win_pread(int fd, void *buf, size_t size, int64_t offset);
+ssize_t etude_win_pwrite(int fd, const void *buf, size_t size, int64_t offset);
+/** Copy at most SIZE bytes, always adding a terminator. */
+char *etude_win_strndup(const char *text, size_t size);
+/** Set or remove a variable in the process and its child environment. */
+int etude_win_setenv(const char *name, const char *value, int overwrite);
+int etude_win_unsetenv(const char *name);
+#define pread        etude_win_pread
+#define pwrite       etude_win_pwrite
+#define strndup      etude_win_strndup
+#define setenv       etude_win_setenv
+#define unsetenv     etude_win_unsetenv
+
 /** Read one line, growing its caller-owned buffer. */
 ssize_t etude_win_getline(char **line, size_t *capacity, FILE *file);
 /** Convert a Unix time to UTC in caller-owned storage. */

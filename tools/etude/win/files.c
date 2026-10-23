@@ -616,3 +616,104 @@ int etude_win_boot_id(char *out, size_t size)
     }
     return 0;
 }
+
+/** Perform positioned I/O on an independent handle. ReOpenFile keeps the
+ * caller's file position unchanged, including while another thread uses
+ * the original handle. An overlapped request also accepts offsets beyond
+ * the CRT's 32-bit off_t. */
+static ssize_t positioned_io(int fd, void *buf, size_t size, int64_t offset, int writing)
+{
+    HANDLE h, source = (HANDLE)_get_osfhandle(fd);
+    OVERLAPPED at;
+    DWORD n = 0, error = 0;
+    BOOL ok;
+
+    if (offset < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (source == INVALID_HANDLE_VALUE) {
+        errno = EBADF;
+        return -1;
+    }
+    h = ReOpenFile(source, writing ? GENERIC_WRITE : GENERIC_READ,
+                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_FLAG_OVERLAPPED);
+    if (h == INVALID_HANDLE_VALUE)
+        return etude_win_file_error();
+    memset(&at, 0, sizeof(at));
+    at.Offset = (DWORD)(uint64_t)offset;
+    at.OffsetHigh = (DWORD)((uint64_t)offset >> 32);
+    at.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (at.hEvent == NULL) {
+        error = GetLastError();
+        CloseHandle(h);
+        SetLastError(error);
+        return etude_win_file_error();
+    }
+    if (size > MAXDWORD)
+        size = MAXDWORD;
+    ok = writing ? WriteFile(h, buf, (DWORD)size, &n, &at) :
+                   ReadFile(h, buf, (DWORD)size, &n, &at);
+    if (!ok && GetLastError() == ERROR_IO_PENDING)
+        ok = GetOverlappedResult(h, &at, &n, TRUE);
+    if (!ok)
+        error = GetLastError();
+    CloseHandle(at.hEvent);
+    CloseHandle(h);
+    if (!writing && error == ERROR_HANDLE_EOF)
+        return 0;
+    if (!ok) {
+        SetLastError(error);
+        return etude_win_file_error();
+    }
+    return (ssize_t)n;
+}
+
+ssize_t etude_win_pread(int fd, void *buf, size_t size, int64_t offset)
+{
+    return positioned_io(fd, buf, size, offset, 0);
+}
+
+ssize_t etude_win_pwrite(int fd, const void *buf, size_t size, int64_t offset)
+{
+    return positioned_io(fd, (void *)buf, size, offset, 1);
+}
+
+char *etude_win_strndup(const char *text, size_t size)
+{
+    size_t n = 0;
+    char *copy;
+
+    while (n < size && text[n] != '\0')
+        n++;
+    copy = malloc(n + 1);
+    if (copy == NULL) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    memcpy(copy, text, n);
+    copy[n] = '\0';
+    return copy;
+}
+
+int etude_win_setenv(const char *name, const char *value, int overwrite)
+{
+    int error;
+
+    if (name == NULL || name[0] == '\0' || strchr(name, '=') != NULL || value == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!overwrite && getenv(name) != NULL)
+        return 0;
+    error = _putenv_s(name, value);
+    if (error == 0)
+        return 0;
+    errno = error;
+    return -1;
+}
+
+int etude_win_unsetenv(const char *name)
+{
+    return etude_win_setenv(name, "", 1);
+}

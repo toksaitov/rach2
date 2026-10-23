@@ -12,6 +12,10 @@
 
 #include "etude/scenario.h"
 
+#ifdef _WIN32
+#include "../../../tools/etude/win/files.h"
+#endif
+
 /* The debug shell's greeting, at the boot and after each program. */
 #define NET_SHELL "Type 'help' for available commands."
 

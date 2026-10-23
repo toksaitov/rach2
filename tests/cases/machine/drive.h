@@ -12,6 +12,10 @@
 
 #include "etude/scenario.h"
 
+#ifdef _WIN32
+#include "../../../tools/etude/win/files.h"
+#endif
+
 /*
  * The longest line drive_send types: what the guest terminal's canonical line
  * holds before its newline (N_TTY_LINE_MAX less one, rach2/sys/tty/n_tty.h).
