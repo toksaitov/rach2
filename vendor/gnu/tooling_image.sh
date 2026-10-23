@@ -195,6 +195,10 @@ stage_tree()
     git ls-files -z -c -o --exclude-standard | tr '\0' '\n' > "$STAGE/git"
     sh krffs/manifest_deps.sh krffs/manifests/os-real-gnu.manifest > "$STAGE/products" || :
     echo "$MUSL_CRYPT_SRC" >> "$STAGE/products"
+    if [ "${GNU_TEST_PRODUCTS:-}" = 1 ] && [ "$RACH2_ARCH" = x86_64 ]; then
+        echo build/tests/host/exfat_writer >> "$STAGE/products"
+        find build/tests/host-suite/tools/exfat_external -type f >> "$STAGE/products"
+    fi
     LC_ALL=C sort -u "$STAGE/git" "$STAGE/products" | while IFS= read -r f; do
         if [ -f "$f" ] || [ -L "$f" ]; then
             printf '%s\n' "$f"

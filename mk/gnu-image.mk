@@ -38,7 +38,8 @@ os-real-gnu-agents-ext2: $(OS_REAL_GNU_AGENTS_EXT2)
 
 ifeq ($(GNU_TOOLING),)
 $(GNU_TEST_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) \
-    $(GNU_SANITIZERS_STAMP) $(GNU_HOST_PRODUCTS_STAMP) | $(GNU_IMAGE_ORDER)
+    $(GNU_SANITIZERS_STAMP) $(GNU_HOST_PRODUCTS_STAMP) \
+    $(if $(filter x86_64,$(ARCH)),$(GNU_HOST_CHECKS_STAMP)) | $(GNU_IMAGE_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_TEST_PRODUCTS=1 \
 	    sh tools/image/mkext2.sh --overlay vendor/gnu/install_root.sh \
 	    krffs/manifests/os-real-gnu.manifest $@ 12288
@@ -61,6 +62,8 @@ GNU_AGENTS_ALL_RECIPES = $(patsubst %,vendor/gnu/agents/packages/%.sh,$(GNU_AGEN
 
 $(GNU_TEST_EXT2): $(GNU_TOOLING_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_RECIPES) \
     $(GNU_SANITIZER_SOURCES) $(GNU_HOST_PRODUCTS_SOURCES) \
+    $(if $(filter x86_64,$(ARCH)),$(GNU_HOST_CHECKS_SOURCES) \
+        build/tests/host-suite/tools/exfat_external/exfat_external.img) \
     $(if $(GNU_AGENTS_RECIPES),$(GNU_AGENTS_SOURCES)) | $(GNU_TOOLING_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_LINK="$(GNU_LINK)" \
 	    GNU_TEST_PRODUCTS=1 MUSL_CRYPT_SRC=$(MUSL_CRYPT_SRC) \

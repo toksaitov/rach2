@@ -149,6 +149,10 @@ install_part root
 if [ "${GNU_TEST_PRODUCTS:-}" = 1 ]; then
     mkdir "$TREE/host-products"
     cp -a "$OUT/host-products/." "$TREE/host-products/"
+    if [ "$RACH2_ARCH" = x86_64 ]; then
+        mkdir "$TREE/host-products/host-checks"
+        cp -a "$OUT/host-checks/." "$TREE/host-products/host-checks/"
+    fi
     writable
 fi
 # Build the framed WebSocket fixture against the same TLS libraries as the

@@ -134,6 +134,7 @@ build_layer()
     set --
     if [ "${GNU_TEST_PRODUCTS:-}" = 1 ]; then
         set -- gnu-sanitizers gnu-host-products
+        [ "$RACH2_ARCH" != x86_64 ] || set -- "$@" gnu-host-checks
     fi
     # shellcheck disable=SC2086 # DRY_RUN is empty or -n
     exec make --no-print-directory -j"$JOBS" $DRY_RUN ARCH="$RACH2_ARCH" GNU_AGENTS="$GNU_AGENTS" \
