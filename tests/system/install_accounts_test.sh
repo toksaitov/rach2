@@ -21,7 +21,9 @@
 # image's system group that no new account comes with, as the GNU root's
 # `crontab` comes, must be added alone; and a system account the machine has
 # by the image's name and id, with no shadow line, `nobody`'s of id 65534
-# among them, must get the image's.
+# among them, must get the image's; and the image's `nobody` and `nogroup`,
+# of id 65534, which the machine lacks, must be appended with the shadow
+# line.
 #
 # Usage: sh tests/system/install_accounts_test.sh
 #
@@ -164,6 +166,16 @@ rows() {
         [ "$(cat "$work/dest/etc/shadow")" != "$(printf '%b' "${machine_shadow}sshd:!:0:0:99999:7:::\nnobody:!:::::::")" ] ||
         [ "$(grep -c '^sshd:' "$work/dest/etc/passwd")" != 1 ]; then
         fail "a system account the machine has without a shadow line gets the image's"
+    fi
+
+    files "$work/image" "${image_passwd}nobody:x:65534:65534::/nonexistent:/usr/sbin/nologin\n" \
+        "${image_group}nogroup:x:65534:\n" "${image_shadow}nobody:*:0:0:99999:7:::\n"
+    files "$work/dest" "$machine_passwd" "$machine_group" "$machine_shadow"
+    if ! keep "$work/image" "$work/dest" ||
+        ! grep -qx 'nobody:x:65534:65534::/nonexistent:/usr/sbin/nologin' "$work/dest/etc/passwd" ||
+        ! grep -qx 'nogroup:x:65534:' "$work/dest/etc/group" ||
+        ! grep -qx 'nobody:\*:0:0:99999:7:::' "$work/dest/etc/shadow"; then
+        fail "the image's nobody and nogroup, of id 65534, are appended with the shadow line"
     fi
 }
 

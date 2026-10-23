@@ -456,23 +456,22 @@ add_lines() {
 # the image, such as the GNU root's OpenSSH with its `sshd`, does not start
 # without its own.
 #
-# An account of IMAGE/etc/passwd with an id below 1000 is appended to
-# DEST/etc/passwd when DEST has neither its name nor its id. A group of
-# IMAGE/etc/group with an id below 1000 is appended to DEST/etc/group when
-# DEST has neither its name nor its id, whether or not an account comes with
-# it, as the GNU root's `crontab` comes alone; but the primary group of an
-# image account whose name or id DEST gives another account stays out. An
-# image shadow line is appended to DEST/etc/shadow for each account, of an id
-# below 1000 or `nobody` with its id of 65534 as on Linux, that DEST has by
-# the image's name and id and has no shadow line for: one appended here, or
-# one an older image gave without a line. An id is compared as a number, and
-# a name or an id the image has twice is taken once. Status 0 with nothing
-# done when IMAGE has no etc/passwd, and 1 when a file could not be read or
-# written.
+# A system account is one of an id below 1000, or of 65534, the id of `nobody`
+# and `nogroup` as on Linux. A system account of IMAGE/etc/passwd is appended
+# to DEST/etc/passwd when DEST has neither its name nor its id. A system group
+# of IMAGE/etc/group is appended to DEST/etc/group when DEST has neither its
+# name nor its id, whether or not an account comes with it, as the GNU root's
+# `crontab` comes alone; but the primary group of an image account whose name
+# or id DEST gives another account stays out. An image shadow line is appended
+# to DEST/etc/shadow for each system account that DEST has by the image's name
+# and id and has no shadow line for: one appended here, or one an older image
+# gave without a line. An id is compared as a number, and a name or an id the
+# image has twice is taken once. Status 0 with nothing done when IMAGE has no
+# etc/passwd, and 1 when a file could not be read or written.
 keep_image_accounts() {
     [ -f "$1/etc/passwd" ] || return 0
     added=$(awk -F: 'FILENAME == ARGV[1] { name[$1] = 1; id[$3 + 0] = 1; next }
-        $3 + 0 < 1000 && !($1 in name) && !(($3 + 0) in id) {
+        ($3 + 0 < 1000 || $3 + 0 == 65534) && !($1 in name) && !(($3 + 0) in id) {
             print; name[$1] = 1; id[$3 + 0] = 1
         }' "$2/etc/passwd" "$1/etc/passwd") || return 1
     groups=
@@ -480,12 +479,13 @@ keep_image_accounts() {
         groups=$(awk -F: 'FILENAME == ARGV[1] { name[$1] = 1; id[$3 + 0] = 1; next }
             FILENAME == ARGV[2] { uid[$1] = $3 + 0; used[$3 + 0] = 1; next }
             FILENAME == ARGV[3] {
-                if ($3 + 0 < 1000 && (($1 in uid) || (($3 + 0) in used)) &&
+                if (($3 + 0 < 1000 || $3 + 0 == 65534) && (($1 in uid) || (($3 + 0) in used)) &&
                     !(($1 in uid) && uid[$1] == $3 + 0))
                     refused[$4 + 0] = 1
                 next
             }
-            $3 + 0 < 1000 && !($1 in name) && !(($3 + 0) in id) && !(($3 + 0) in refused) {
+            ($3 + 0 < 1000 || $3 + 0 == 65534) && !($1 in name) && !(($3 + 0) in id) &&
+                !(($3 + 0) in refused) {
                 print; name[$1] = 1; id[$3 + 0] = 1
             }' "$2/etc/group" "$2/etc/passwd" "$1/etc/passwd" "$1/etc/group") || return 1
     fi
