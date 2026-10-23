@@ -75,6 +75,7 @@ static int handle_stat(HANDLE h, struct etude_win_stat *st, int nofollow)
         return etude_win_file_error();
     memset(st, 0, sizeof *st);
     st->st_dev = f.dwVolumeSerialNumber;
+    st->st_nlink = f.nNumberOfLinks;
     st->st_ino = (uint64_t)f.nFileIndexHigh << 32 | f.nFileIndexLow;
     st->st_size = (int64_t)f.nFileSizeHigh << 32 | f.nFileSizeLow;
     st->st_mode = (f.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? S_IFDIR : S_IFREG;
@@ -652,8 +653,7 @@ static ssize_t positioned_io(int fd, void *buf, size_t size, int64_t offset, int
     }
     if (size > MAXDWORD)
         size = MAXDWORD;
-    ok = writing ? WriteFile(h, buf, (DWORD)size, &n, &at) :
-                   ReadFile(h, buf, (DWORD)size, &n, &at);
+    ok = writing ? WriteFile(h, buf, (DWORD)size, &n, &at) : ReadFile(h, buf, (DWORD)size, &n, &at);
     if (!ok && GetLastError() == ERROR_IO_PENDING)
         ok = GetOverlappedResult(h, &at, &n, TRUE);
     if (!ok)

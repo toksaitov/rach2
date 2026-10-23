@@ -169,7 +169,7 @@ struct etude_case_machine {
     struct etude_serial *serial; /* etude-guest's session, for a helper */
     uint64_t commands;
     int command_output; /* installed commands do not emit case reports */
-    size_t fed;                  /* console bytes fed to the session */
+    size_t fed;         /* console bytes fed to the session */
     int serial_closed;
     char line[ETUDE_REPORT_LINE_MAX + 1]; /* the guest's output line being read */
     size_t line_len;
@@ -2734,8 +2734,8 @@ static int guest_file_read(void *ctx, uint64_t offset, void *bytes, size_t n)
 
 /** Send a file as a stored relative name or an absolute destination. */
 static enum etude_status guest_send_file(struct etude_case_machine *m, const char *host,
-                                        const char *guest, const char *mode,
-                                        uint64_t *size, char hex[65])
+                                         const char *guest, const char *mode, uint64_t *size,
+                                         char hex[65])
 {
     FILE *f;
     enum etude_status st;
@@ -2749,14 +2749,14 @@ static enum etude_status guest_send_file(struct etude_case_machine *m, const cha
         fclose(f);
         return ETUDE_FAILED;
     }
-    st = put_op(m, etude_serial_put_reader(m->serial, guest, *size, hex, mode,
-                                           guest_file_read, f, posix_now_us()));
+    st = put_op(m, etude_serial_put_reader(m->serial, guest, *size, hex, mode, guest_file_read, f,
+                                           posix_now_us()));
     fclose(f);
     return st;
 }
 
-enum etude_status etude_guest_put(struct etude_case_machine *m, const char *host,
-                                  const char *guest, const char *mode)
+enum etude_status etude_guest_put(struct etude_case_machine *m, const char *host, const char *guest,
+                                  const char *mode)
 {
     uint64_t size;
     char hex[65];
@@ -2772,8 +2772,7 @@ static int guest_file_write(void *ctx, const void *bytes, size_t n)
     return fwrite(bytes, 1, n, ctx) == n ? 0 : -1;
 }
 
-enum etude_status etude_guest_get(struct etude_case_machine *m, const char *guest,
-                                  const char *name)
+enum etude_status etude_guest_get(struct etude_case_machine *m, const char *guest, const char *name)
 {
     const char *path;
     char target[4096], part[4120];
@@ -2845,10 +2844,10 @@ static void command_string(struct command_text *t, const char *s)
 
 /** Append the arguments and environment, rejecting malformed assignments. */
 static void command_vectors(struct command_text *t, const char *const argv[],
-                             const char *const env[])
+                            const char *const env[])
 {
-    static const char *const defaults[] = {
-        "PATH=/bin:/sbin:/usr/bin:/usr/sbin:/", "HOME=/root", "TERM=vt100", NULL};
+    static const char *const defaults[] = {"PATH=/bin:/sbin:/usr/bin:/usr/sbin:/", "HOME=/root",
+                                           "TERM=vt100", NULL};
     size_t i;
     const char *eq;
     char key[256];
@@ -2881,9 +2880,8 @@ static void command_vectors(struct command_text *t, const char *const argv[],
 
 /** Build the installed command's ordinary invocation. */
 static int command_invocation(struct etude_case_machine *m, struct command_text *t,
-                               const char *const argv[], const char *const env[],
-                               const char *input, uint64_t input_size, const char *input_sha,
-                               const char *token)
+                              const char *const argv[], const char *const env[], const char *input,
+                              uint64_t input_size, const char *input_sha, const char *token)
 {
     uint64_t now = posix_now_us(), deadline = step_deadline(m->c);
 
@@ -2901,30 +2899,38 @@ static int command_invocation(struct etude_case_machine *m, struct command_text 
     command_add(t, ",\"program\":");
     command_string(t, argv[0]);
     command_vectors(t, argv, env);
-    command_add(t, ",\"role\":\"ordinary\",\"stdin\":%s,\"files\":[",
-                input != NULL ? "\"stdin\"" : "null");
+    command_add(t, ",\"role\":\"ordinary\",\"stdin\":");
     if (input != NULL)
-        command_add(t, "{\"name\":\"stdin\",\"sha256\":\"%s\",\"size_bytes\":%llu,"
-                    "\"mode\":\"0600\"}", input_sha, (unsigned long long)input_size);
-    command_add(t, "],\"fixtures\":[{\"fixture\":\"workspace\",\"given\":[]}],"
+        command_string(t, input);
+    else
+        command_add(t, "null");
+    command_add(t, ",\"files\":[");
+    if (input != NULL && input[0] != '/')
+        command_add(t,
+                    "{\"name\":\"stdin\",\"sha256\":\"%s\",\"size_bytes\":%llu,"
+                    "\"mode\":\"0600\"}",
+                    input_sha, (unsigned long long)input_size);
+    command_add(t,
+                "],\"fixtures\":[{\"fixture\":\"workspace\",\"given\":[]}],"
                 "\"deadline_us\":%llu,\"grace_us\":%llu,\"output_max_bytes\":%llu}",
                 (unsigned long long)(deadline > now ? deadline - now : 1),
                 (unsigned long long)m->c->grace_us, (unsigned long long)m->c->output_max);
     return t->failed ? -1 : 0;
 }
 
-enum etude_status etude_guest_start(struct etude_case_machine *m, const char *const argv[],
-                                    const char *const env[], const char *input)
+static enum etude_status start_command(struct etude_case_machine *m, const char *const argv[],
+                                       const char *const env[], const char *input,
+                                       int installed_input)
 {
     struct command_text t;
     char sha[65], token[17], identity[384], input_sha[65];
     uint64_t size = 0;
     enum etude_status st;
 
-    if (m->serial == NULL || m->serial_closed || m->c->cur < 0 || argv == NULL ||
-        argv[0] == NULL || argv[0][0] != '/')
+    if (m->serial == NULL || m->serial_closed || m->c->cur < 0 || argv == NULL || argv[0] == NULL ||
+        argv[0][0] != '/')
         return ETUDE_REFUSED;
-    if (input != NULL) {
+    if (input != NULL && !installed_input) {
         st = guest_send_file(m, input, "stdin", "0600", &size, input_sha);
         if (st != ETUDE_OK)
             return st;
@@ -2934,18 +2940,26 @@ enum etude_status etude_guest_start(struct etude_case_machine *m, const char *co
     digest_of(identity, strlen(identity), sha);
     memcpy(token, sha, 16);
     token[16] = '\0';
-    if (command_invocation(m, &t, argv, env, input, size, input_sha, token) != 0) {
+    if (command_invocation(m, &t, argv, env,
+                           input != NULL ? (installed_input ? input : "stdin") : NULL, size,
+                           input_sha, token) != 0) {
         free(t.text);
         return ETUDE_REFUSED;
     }
     digest_of(t.text, t.len, sha);
-    st = put_op(m, etude_serial_put(m->serial, "invocation.json", t.len, sha, "0644",
-                                    t.text, posix_now_us()));
+    st = put_op(m, etude_serial_put(m->serial, "invocation.json", t.len, sha, "0644", t.text,
+                                    posix_now_us()));
     free(t.text);
     if (st != ETUDE_OK)
         return st;
     m->command_output = 1;
     return etude_serial_run(m->serial, token, sha, posix_now_us()) == 0 ? ETUDE_OK : ETUDE_FAILED;
+}
+
+enum etude_status etude_guest_start(struct etude_case_machine *m, const char *const argv[],
+                                    const char *const env[], const char *input)
+{
+    return start_command(m, argv, env, input, 0);
 }
 
 /* A wait for text on the running command's output. */
@@ -2979,8 +2993,8 @@ enum etude_status etude_guest_output_wait(struct etude_case_machine *m, const ch
     return st == ETUDE_OK && !w.found ? ETUDE_LOST : st;
 }
 
-enum etude_status etude_guest_finish(struct etude_case_machine *m, int cancel,
-                                     const char *output, struct etude_guest_result *result)
+enum etude_status etude_guest_finish(struct etude_case_machine *m, int cancel, const char *output,
+                                     struct etude_guest_result *result)
 {
     const struct etude_serial_result *r;
     char err[256];
@@ -3023,6 +3037,22 @@ enum etude_status etude_guest_command(struct etude_case_machine *m, const char *
     result->termination.value = -1;
     result->cleanup = ETUDE_CLEANUP_UNCONFIRMED;
     st = etude_guest_start(m, argv, env, input);
+    return st == ETUDE_OK ? etude_guest_finish(m, 0, output, result) : st;
+}
+
+enum etude_status etude_guest_command_file(struct etude_case_machine *m, const char *const argv[],
+                                           const char *const env[], const char *input,
+                                           const char *output, struct etude_guest_result *result)
+{
+    enum etude_status st;
+
+    memset(result, 0, sizeof(*result));
+    result->termination.end = ETUDE_END_LOST;
+    result->termination.value = -1;
+    result->cleanup = ETUDE_CLEANUP_UNCONFIRMED;
+    if (input == NULL || input[0] != '/')
+        return ETUDE_REFUSED;
+    st = start_command(m, argv, env, input, 1);
     return st == ETUDE_OK ? etude_guest_finish(m, 0, output, result) : st;
 }
 

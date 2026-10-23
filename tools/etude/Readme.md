@@ -473,6 +473,8 @@ The same library runs installed guest programs with `etude_guest_command`, whose
 
 `etude_guest_put` streams a host file to an absolute guest path using put/data/seal. The guest first checks the stored object's size and SHA-256, writes a temporary file beside the destination with the requested mode, and renames it into place. `etude_guest_get` uses get/data/sent, checking each offset and the final size and SHA-256 before publishing its evidence file. Both use the existing frame sequence, acknowledgements and retransmission. Relative put names and attempt-relative get paths keep their earlier meaning. An installed program needs no executable in its invocation's files; relative programs still require that file. Installed commands have fresh attempt tokens and the same process-group cleanup as guest probes.
 
+`etude_guest_command_file` takes its standard input from an absolute guest path instead of a transferred file. A large image may therefore be a declared raw disk attached to the helper, read through `/dev/diskN`; its bytes do not cross the console. Its process, result and cleanup use the same invocation and frames as every other command. The SSH repair scenarios stop their client before rebinding its declared input disk, then boot it again and stream that disk through the installed SSH client.
+
 ### History
 
 The plan's items refer to a case by three digests, each of a canonical JSON document taken from the manifest: members sorted by name, no space outside strings, and `schema_version` 1.

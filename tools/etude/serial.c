@@ -942,8 +942,8 @@ int etude_serial_open(struct etude_serial *s, uint64_t now_us)
 }
 
 static int begin_put(struct etude_serial *s, const char *name, uint64_t size, const char *sha256,
-                      const char *mode, const void *data,
-                      int (*read)(void *, uint64_t, void *, size_t), void *ctx, uint64_t now_us)
+                     const char *mode, const void *data,
+                     int (*read)(void *, uint64_t, void *, size_t), void *ctx, uint64_t now_us)
 {
     char cmd[24], sz[24];
     const char *a[5];

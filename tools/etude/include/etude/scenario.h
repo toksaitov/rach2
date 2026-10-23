@@ -206,6 +206,14 @@ enum etude_status etude_guest_command(struct etude_case_machine *m, const char *
                                       const char *const env[], const char *input,
                                       const char *output, struct etude_guest_result *result);
 
+/** As etude_guest_command, taking standard input from the absolute guest
+ * path INPUT, which may be a declared attached raw disk. No input bytes
+ * cross the console channel. The machine and its disk remain owned by the
+ * scenario's declared resources and cleanup. */
+enum etude_status etude_guest_command_file(struct etude_case_machine *m, const char *const argv[],
+                                           const char *const env[], const char *input,
+                                           const char *output, struct etude_guest_result *result);
+
 /** Start the same command without waiting, for a workload that must stay
  * running while other machines or host tools are observed. One command may
  * run per channel; the machine owns it until finish or cleanup. */
@@ -217,14 +225,14 @@ enum etude_status etude_guest_output_wait(struct etude_case_machine *m, const ch
 
 /** Collect the started command, cancelling it first when CANCEL is nonzero.
  * A cancellation uses the existing cancel and cleaned records. */
-enum etude_status etude_guest_finish(struct etude_case_machine *m, int cancel,
-                                     const char *output, struct etude_guest_result *result);
+enum etude_status etude_guest_finish(struct etude_case_machine *m, int cancel, const char *output,
+                                     struct etude_guest_result *result);
 
 /** Copy a host file to an absolute guest path with octal MODE (such as
  * "0755"). The guest replaces it only after its size and digest match.
  * The destination's parent directory must exist. */
-enum etude_status etude_guest_put(struct etude_case_machine *m, const char *host,
-                                  const char *guest, const char *mode);
+enum etude_status etude_guest_put(struct etude_case_machine *m, const char *host, const char *guest,
+                                  const char *mode);
 
 /** Fetch an absolute guest file as evidence NAME. The evidence is published
  * only after the channel verifies its complete size and SHA-256. */

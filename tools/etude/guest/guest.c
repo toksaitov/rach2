@@ -971,7 +971,8 @@ static void do_put(const struct wire_frame *f, const char *text)
     }
     if (!cmd_begin(cmd, text))
         return;
-    if ((!good_name(f->field[1]) && !absolute_file(f->field[1])) || !wire_number(f->field[2], &size) || !wire_hex(f->field[3], 64) ||
+    if ((!good_name(f->field[1]) && !absolute_file(f->field[1])) ||
+        !wire_number(f->field[2], &size) || !wire_hex(f->field[3], 64) ||
         strlen(f->field[4]) != 4 || strspn(f->field[4], "01234567") != 4) {
         cmd_error(cmd, ETUDE_ERR_UNKNOWN);
         return;
@@ -1243,7 +1244,8 @@ static const char *load_invocation(struct invocation *inv, const char *sha, cons
     inv->output_max = int_member(inv->root, "output_max_bytes");
     v = eh_json_get(inv->root, "stdin");
     inv->stdin_name = v && v->type == 's' ? v->string : NULL;
-    if (strcmp(inv->token, token) != 0 || (!good_name(inv->program) && !absolute_file(inv->program)) || inv->deadline_us < 1 ||
+    if (strcmp(inv->token, token) != 0 ||
+        (!good_name(inv->program) && !absolute_file(inv->program)) || inv->deadline_us < 1 ||
         inv->grace_us < 1 || inv->output_max < 1 || !v || (v->type != 'z' && v->type != 's') ||
         (strcmp(inv->role, "ordinary") != 0 && strcmp(inv->role, "init") != 0)) {
         note("invocation %s: a field has no valid value for attempt %s", sha, token);
@@ -1262,7 +1264,8 @@ static const char *load_invocation(struct invocation *inv, const char *sha, cons
             return ETUDE_ERR_REFUSED;
         }
     }
-    if ((inv->program[0] != '/' && !find_file(inv, inv->program)) || (inv->stdin_name && !find_file(inv, inv->stdin_name))) {
+    if ((inv->program[0] != '/' && !find_file(inv, inv->program)) ||
+        (inv->stdin_name && !absolute_file(inv->stdin_name) && !find_file(inv, inv->stdin_name))) {
         note("invocation %s: the program or the input is not one of its files", sha);
         return ETUDE_ERR_REFUSED;
     }
@@ -1682,9 +1685,11 @@ static const char *spawn(struct attempt *a, const struct invocation *inv)
     ssize_t r;
 
     if (!realpath(a->dir, dir) || path_of(work, "%s/work", dir) < 0 ||
-        path_of(prog, inv->program[0] == '/' ? "%s%s" : "%s/%s",
-                inv->program[0] == '/' ? "" : work, inv->program) < 0 ||
-        path_of(input, "%s/%s", work, inv->stdin_name ? inv->stdin_name : "") < 0)
+        path_of(prog, inv->program[0] == '/' ? "%s%s" : "%s/%s", inv->program[0] == '/' ? "" : work,
+                inv->program) < 0 ||
+        path_of(input, inv->stdin_name && inv->stdin_name[0] == '/' ? "%s%s" : "%s/%s",
+                inv->stdin_name && inv->stdin_name[0] == '/' ? "" : work,
+                inv->stdin_name ? inv->stdin_name : "") < 0)
         return ETUDE_ERR_LIMIT;
     argv[0] = NULL;
     envp[0] = NULL;
@@ -2003,10 +2008,10 @@ static void do_exec(const struct wire_frame *f, const char *text)
         code = ETUDE_ERR_LIMIT;
     if (!code)
         code = prepare(&inv, a.dir);
-    if (!code &&
-        (path_of(work, "%s/work", a.dir) < 0 || path_of(prog, inv.program[0] == '/' ? "%s%s" : "%s/%s",
-                     inv.program[0] == '/' ? "" : work, inv.program) < 0 ||
-         build_vectors(&inv, work, inv.program, argv, envp) < 0))
+    if (!code && (path_of(work, "%s/work", a.dir) < 0 ||
+                  path_of(prog, inv.program[0] == '/' ? "%s%s" : "%s/%s",
+                          inv.program[0] == '/' ? "" : work, inv.program) < 0 ||
+                  build_vectors(&inv, work, inv.program, argv, envp) < 0))
         code = ETUDE_ERR_LIMIT;
     if (code) {
         eh_json_free(inv.root);
@@ -2443,8 +2448,8 @@ static void do_get(const struct wire_frame *f, const char *text)
             cmd_error(cmd, ETUDE_ERR_UNKNOWN);
             return;
         }
-    if (path_of(path, name[0] == '/' ? "%s%s" : "%s/a/%s",
-                name[0] == '/' ? "" : opt.state, name) < 0) {
+    if (path_of(path, name[0] == '/' ? "%s%s" : "%s/a/%s", name[0] == '/' ? "" : opt.state, name) <
+        0) {
         cmd_error(cmd, ETUDE_ERR_LIMIT);
         return;
     }

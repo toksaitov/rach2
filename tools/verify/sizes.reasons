@@ -771,3 +771,8 @@ utils/passwd.c:main lines 190 one procedure over a file format, in the order the
 
 utils/pwauth.c:pwauth_read_password complexity 28 one procedure over a file format, in the order the format is read
 utils/pwauth.c:pwauth_read_password lines 116 one procedure over a file format, in the order the format is read
+
+tools/etude/serial.c:begin_put params 9 the parameters are one stored file's identity and data source, and the time each controller call takes
+tools/etude/serial.c:etude_serial_put_reader params 8 the parameters are one stored file's identity and streaming callback, and the time each controller call takes
+tools/etude/posix/scenario.c:command_invocation params 8 the parameters are the fields of one installed command's invocation, written in the document's order
+tests/cases/machine/netcase.c:net_guest params 7 the case, machine, arguments, environment, input, evidence and result describe one guest command

@@ -14,7 +14,7 @@
 
 /* File identity and times from the handle, including files beyond 4 GiB. */
 struct etude_win_stat {
-    uint64_t st_dev, st_ino;
+    uint64_t st_dev, st_ino, st_nlink;
     int64_t st_size;
     unsigned st_mode;
     struct timespec st_mtim, st_ctim;
@@ -93,11 +93,11 @@ char *etude_win_strndup(const char *text, size_t size);
 /** Set or remove a variable in the process and its child environment. */
 int etude_win_setenv(const char *name, const char *value, int overwrite);
 int etude_win_unsetenv(const char *name);
-#define pread        etude_win_pread
-#define pwrite       etude_win_pwrite
-#define strndup      etude_win_strndup
-#define setenv       etude_win_setenv
-#define unsetenv     etude_win_unsetenv
+#define pread    etude_win_pread
+#define pwrite   etude_win_pwrite
+#define strndup  etude_win_strndup
+#define setenv   etude_win_setenv
+#define unsetenv etude_win_unsetenv
 
 /** Read one line, growing its caller-owned buffer. */
 ssize_t etude_win_getline(char **line, size_t *capacity, FILE *file);
