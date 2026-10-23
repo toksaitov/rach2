@@ -84,9 +84,10 @@ struct etude_exec_spec {
     void *reg_ctx;          /* the context of `reg` and `child` */
     int posix_only;         /* nonzero: use no interface beyond POSIX, as on a
                                system without a subreaper, as the tests do on Linux */
-    const char *verdict;    /* where a keeper whose controller has gone records
-                               its cleanup, or NULL; Windows, which has no
-                               keeper, writes none */
+    const char *verdict;    /* where a keeper whose controller has gone, or
+                               one that reaps orphans, records its cleanup,
+                               or NULL; Windows, which has no keeper, writes
+                               none */
 };
 
 /* One output stream of a case. */

@@ -22,8 +22,10 @@
  * orphans below it, from workers killed while their cases run: a case that
  * outlives its worker keeps the claim until its keeper confirms the cleanup;
  * a descendant that escaped unreported, with POSIX interfaces alone, leaves
- * the claim uncertain; and a reported descendant that outlives its worker,
- * keeper and case keeps the claim live, and uncertain once it has ended.
+ * the claim uncertain; a reported descendant that outlives its worker,
+ * keeper and case keeps the claim live, and uncertain once it has ended; and
+ * a worker that ends after its keeper has reported the cleanup, before it
+ * records it, leaves a claim that the keeper's verdict frees.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -894,6 +896,46 @@ static void test_reported(void)
     etude_ledger_close(l);
 }
 
+/**
+ * End a worker after its keeper has reported the cleanup and been reaped,
+ * and before the worker records the cleanup in the ledger, as a sweep that
+ * kills the case first and the worker a moment later may: the keeper's
+ * verdict confirms the cleanup, and recovery frees the claim.
+ */
+static void test_unrecorded(void)
+{
+    const char *dir = fix_path("unrecorded");
+    struct etude_ledger *l = etude_ledger_open(dir);
+    size_t freed = 9;
+    int st = 0;
+    pid_t w;
+
+    if (l == NULL || (w = fork()) < 0) {
+        CHECK(0, "unrecorded");
+        etude_ledger_close(l);
+        return;
+    }
+    if (w == 0) {
+        struct etude_ledger *wl = etude_ledger_open(dir);
+        struct etude_exec *ex = etude_exec_new();
+        struct etude_proc *p;
+        struct run run;
+
+        if (wl == NULL || ex == NULL ||
+            etude_ledger_reserve(wl, "unrecorded", NULL, 0, NULL, 0) != 0)
+            _exit(1);
+        run_for(&run, wl, "unrecorded", "exit", NULL, SHORT_GRACE);
+        if (etude_exec_start(ex, &run.spec, &p) != 0)
+            _exit(1);
+        finish_run(ex, p);
+        _exit(etude_proc_result(p)->cleanup == ETUDE_CLEANUP_CONFIRMED ? 0 : 2);
+    }
+    CHECK(waitpid(w, &st, 0) == w && WIFEXITED(st) && WEXITSTATUS(st) == 0, "unrecorded");
+    CHECK(etude_ledger_recover(l, &freed) == 0 && freed == 1 && !kept(l, "unrecorded"),
+          "unrecorded");
+    etude_ledger_close(l);
+}
+
 #endif
 
 /** On Linux, where this process reaps orphans, test workers that die. */
@@ -904,6 +946,7 @@ static void test_workers(void)
     test_worker_death();
     test_unreported();
     test_reported();
+    test_unrecorded();
 #endif
 }
 

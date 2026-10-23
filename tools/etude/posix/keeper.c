@@ -287,6 +287,11 @@ static void write_verdict(const struct keeper_args *a, int confirmed)
  * keeper whose controller has gone also requires the case's output to have
  * closed, as the controller would, and records its finding in the verdict
  * file, which the ledger reads in place of the controller's report.
+ *
+ * A keeper that reaps orphans has seen every descendant of the case, so it
+ * also records its finding before it reports to a controller that lives: a
+ * controller killed after the report and before it records the cleanup in
+ * the ledger would otherwise leave a claim that nothing can confirm.
  */
 static void keeper_finish(struct keeper *kp)
 {
@@ -311,6 +316,8 @@ static void keeper_finish(struct keeper *kp)
 #else
     peak = (uint64_t)ru.ru_maxrss * 1024u;
 #endif
+    if (kp->controller && kp->reaper)
+        write_verdict(kp->args, confirmed);
     if (kp->controller &&
         keeper_send(kp->args->ev, KEEP_USAGE, (int64_t)cpu, kp->reaper && confirmed,
                     (int64_t)peak) == 0 &&
