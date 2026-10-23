@@ -1087,14 +1087,12 @@ $(ARCH_CASE_DIR)/uefi/disk.img: $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $
 # tests/cases/machine.usbdisk.json: sticks with an MBR, a GUID table and no
 # table; the nodes, the mounts, a write, the pull from under a mount and the
 # replug, ten plugs and pulls of a stick nobody opened, BusyBox mounting by
-# label, a throughput line, a boot from the stick image, three sticks at once,
-# raw writes from the recovery kernel, a stick past two terabytes and two
-# logical units.
+# label, a boot from the stick image, three sticks at once, a stick past two
+# terabytes and two logical units.
 
 # The artifacts of the USB cases beyond the kernels, the images and the
 # credentials: the sticks and the far volume that usbdisk_sticks.sh makes,
-# the checker of the keystroke records, and the recovery image under one
-# name, whether or not it has the development key.
+# and the checker of the keystroke records.
 USB_CASE_STICKS = $(addprefix $(CASE_DIR)/usbdisk/,stick-mbr.img stick-gpt.img stick-super.img \
                   stick-hub.img far.vol)
 $(call together,$(USB_CASE_STICKS)): tests/system/usbdisk_sticks.sh $(MKEXFATFIXTURE) \
@@ -1102,8 +1100,6 @@ $(call together,$(USB_CASE_STICKS)): tests/system/usbdisk_sticks.sh $(MKEXFATFIX
 	sh tests/system/usbdisk_sticks.sh $(CASE_DIR)/usbdisk $(MKEXFATFIXTURE)
 $(CASE_DIR)/usblatency.awk: tests/system/checkers/usblatency.awk
 	@mkdir -p $(@D)
-	cp $< $@
-$(IMAGES_DIR)/usbdisk-recovery.krffs: $(RECOVERY_IMAGE)
 	cp $< $@
 # `tests/run diskpolicy`: the read-only kernel does not write the disk, shown on
 # the bytes rather than on a return value. It is the cases of

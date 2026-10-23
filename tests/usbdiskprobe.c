@@ -35,11 +35,6 @@
  *   `USBDISKPROBE READ FAILED`; one read of the probe's own goes before
  *   them. The harness pulls the stick during the reads and reads the order
  *   of that line and the kernel's `given back` line.
- * * `throughput`: 16 MiB read from `/dev/disk0` in 32 KiB pieces, timed by
- *   the monotonic clock and printed as `USBDISKPROBE THROUGHPUT N KB/s over
- *   M ms`.
- *   The number is printed, not judged: it depends on the emulator and the
- *   machine.
  * * `three`, `pullone [N]`, `big` and `luns`: three sticks at once, the pull
  *   of one of three, a stick past two terabytes, and a device of two logical
  *   units, as their functions describe.
@@ -49,8 +44,6 @@
  */
 
 #include "probe.h"
-
-#define CLOCK_MONOTONIC 1
 
 #define O_RDONLY 0
 #define O_WRONLY 1
@@ -656,43 +649,6 @@ static void part_free(void)
 
 static char big[32768];
 
-/** `throughput`: time 16 MiB of reads of /dev/disk0 and print the rate. */
-static void part_throughput(void)
-{
-    struct {
-        long sec;
-        long nsec;
-    } before, after;
-    int fd = syscall3(SYS_OPEN, (long)"/dev/disk0", O_RDONLY, 0);
-    int total = 0;
-    int ms;
-
-    if (fd < 0) {
-        fail("/dev/disk0 would not open");
-    }
-    syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)&before);
-    while (total < 16 * 1024 * 1024) {
-        int n = syscall3(SYS_READ, fd, (long)big, (int)sizeof(big));
-
-        if (n <= 0) {
-            fail("a read of /dev/disk0 failed before 16 MiB");
-        }
-        total += n;
-    }
-    syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)&after);
-    syscall1(SYS_CLOSE, fd);
-    ms = (after.sec - before.sec) * 1000 + (after.nsec - before.nsec) / 1000000;
-    if (ms <= 0) {
-        ms = 1;
-    }
-    put("USBDISKPROBE THROUGHPUT ");
-    putnum((int)((16 * 1024 * 1000) / ms));
-    put(" KB/s over ");
-    putnum(ms);
-    put(" ms\n");
-    ok();
-}
-
 /**
  * `pullread`, the pull during a transfer: a child reads the stick in large
  * calls until one fails, and `USBDISKPROBE READING` is printed once the
@@ -993,9 +949,6 @@ void probe_main(unsigned long *sp)
     }
     if (same(what, "super")) {
         part_super();
-    }
-    if (same(what, "throughput")) {
-        part_throughput();
     }
     if (same(what, "pullread")) {
         part_pullread();

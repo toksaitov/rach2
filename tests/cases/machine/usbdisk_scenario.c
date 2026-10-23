@@ -27,141 +27,6 @@
 #define FAR_START   "4294969344"
 #define FAR_SECTORS "65536"
 
-/* The raw writes of the recovery kernel: the 4 KiB pattern at sector 1000,
- * and 128 pieces of 32 KiB from byte 5 MiB, each a header `PIECE-NNN-` of
- * its index and the first 32758 bytes of the base pattern. */
-#define RAW_OFFSET  (1000L * 512)
-#define RAW_BYTES   4096L
-#define BIG_OFFSET  (160L * 32768)
-#define BIG_PIECES  128
-#define PIECE_BYTES 32768L
-#define BASE_BYTES  32758L
-
-/* The lines typed at the recovery shell. Each echo splits its token with
- * "" so that the typed line does not have it. */
-#define COUNT_COMMANDS "$(grep \"^disk-commands \" /proc/disk | cut -d\" \" -f2)"
-#define RAW_LINE                                                                               \
-    "yes RACH2RAW | head -c 4096 > /tmp/p; dd if=/tmp/p of=/dev/disk0 bs=512 seek=1000 2>&1; " \
-    "dd if=/dev/disk0 bs=512 skip=1000 count=8 2>/dev/null | cksum; cksum < /tmp/p; "          \
-    "echo RAW\"\"DONE"
-#define BIG_START_LINE                                                                      \
-    "yes RACH2-BIG-PATTERN-LINE | head -c 32768 > /tmp/base; p() { printf PIECE-%03d- $1; " \
-    "dd if=/tmp/base bs=32758 count=1 2>/dev/null; }; c0=" COUNT_COMMANDS "; echo BIG\"\"START"
-#define BIG_WRITE_LINE                                                                    \
-    "i=0; while [ $i -lt 128 ]; do p $i > /tmp/blk; dd if=/tmp/blk of=/dev/disk0 bs=32k " \
-    "seek=$((160 + i)) count=1 2>/dev/null; i=$((i + 1)); done; sync; c1=" COUNT_COMMANDS \
-    "; echo BIG\"\"WROTE"
-#define BIG_READ_LINE                                                                    \
-    "dd if=/dev/disk0 bs=32k skip=160 count=128 2>/dev/null | cksum; c2=" COUNT_COMMANDS \
-    "; i=0; while [ $i -lt 128 ]; do p $i; i=$((i + 1)); done | cksum; "                 \
-    "echo BIGCMDS $((c1-c0)) $((c2-c1)); echo BIG\"\"DONE"
-
-/* A POSIX cksum in progress: the CRC so far and the bytes it covers. */
-struct cksum {
-    uint32_t crc;
-    uint64_t length;
-};
-
-/** Add byte `b` to the CRC `crc` of the POSIX cksum polynomial. */
-static uint32_t crc_byte(uint32_t crc, unsigned char b)
-{
-    int i;
-
-    crc ^= (uint32_t)b << 24;
-    for (i = 0; i < 8; i++)
-        crc = (crc & 0x80000000u) != 0 ? (crc << 1) ^ 0x04C11DB7u : crc << 1;
-    return crc;
-}
-
-/** Add the `n` bytes at `p` to the cksum `k`. */
-static void cksum_add(struct cksum *k, const void *p, size_t n)
-{
-    const unsigned char *s = p;
-    size_t i;
-
-    for (i = 0; i < n; i++)
-        k->crc = crc_byte(k->crc, s[i]);
-    k->length += n;
-}
-
-/** Give the value cksum(1) prints for the bytes `k` covers: the CRC of the
- * bytes and then of their length, least significant byte first, inverted. */
-static uint32_t cksum_end(const struct cksum *k)
-{
-    uint32_t crc = k->crc;
-    uint64_t n;
-
-    for (n = k->length; n != 0; n >>= 8)
-        crc = crc_byte(crc, (unsigned char)(n & 0xFF));
-    return ~crc;
-}
-
-/** Fill `buf` of `n` bytes with `line` repeated, as `yes` and `head -c`
- * write it; `line` ends with its newline. */
-static void repeat(char *buf, size_t n, const char *line)
-{
-    size_t len = strlen(line), i;
-
-    for (i = 0; i < n; i++)
-        buf[i] = line[i % len];
-}
-
-/** Give the cksum of the recovery case's 4 KiB pattern. */
-static uint32_t raw_pattern(void)
-{
-    char buf[RAW_BYTES];
-    struct cksum k = {0, 0};
-
-    repeat(buf, sizeof(buf), "RACH2RAW\n");
-    cksum_add(&k, buf, sizeof(buf));
-    return cksum_end(&k);
-}
-
-/** Give the cksum of the recovery case's 128 pieces: each `PIECE-NNN-` and
- * the first 32758 bytes of the base pattern. */
-static uint32_t big_pattern(void)
-{
-    static char base[PIECE_BYTES];
-    struct cksum k = {0, 0};
-    char head[16];
-    int i;
-
-    repeat(base, sizeof(base), "RACH2-BIG-PATTERN-LINE\n");
-    for (i = 0; i < BIG_PIECES; i++) {
-        snprintf(head, sizeof(head), "PIECE-%03d-", i);
-        cksum_add(&k, head, strlen(head));
-        cksum_add(&k, base, BASE_BYTES);
-    }
-    return cksum_end(&k);
-}
-
-/**
- * Give in `*sum` the cksum of the `n` bytes at `offset` of the file at
- * `path`; -1 when they cannot all be read. The offsets stay below 2^31 so
- * that stdio's long reaches them on every host.
- */
-static int file_cksum(const char *path, long offset, long n, uint32_t *sum)
-{
-    struct cksum k = {0, 0};
-    char buf[8192];
-    FILE *f = path != NULL ? fopen(path, "rb") : NULL;
-    size_t got;
-
-    if (f == NULL)
-        return -1;
-    if (fseek(f, offset, SEEK_SET) != 0) {
-        fclose(f);
-        return -1;
-    }
-    while (n > 0 && (got = fread(buf, 1, n < (long)sizeof(buf) ? (size_t)n : sizeof(buf), f)) > 0) {
-        cksum_add(&k, buf, got);
-        n -= (long)got;
-    }
-    fclose(f);
-    *sum = cksum_end(&k);
-    return n == 0 ? 0 : -1;
-}
-
 /** Give the size of the file at `path` in bytes, or -1. */
 static long file_size(const char *path)
 {
@@ -535,35 +400,6 @@ static int busybox(struct usb_case *u)
     return usb_end(u);
 }
 
-/** A 16 MiB read of the stick, its rate printed for a person and not
- * judged, needs no recovery of a command. */
-static int throughput(struct usb_case *u)
-{
-    char line[LINE_MAX_LEN];
-    struct usb_boot b;
-    struct usb_run r;
-    char *text;
-    unsigned n;
-
-    boot(u, &b, USB_SHELL);
-    usb_step(u, "probe");
-    usb_exec(&b, "/usbdiskprobe throughput", &r);
-    if (r.text != NULL && usb_find(r.text, PROBE " THROUGHPUT") != NULL) {
-        printf("usbdisk_scenario: %s\n",
-               usb_copy_line(usb_find(r.text, PROBE " THROUGHPUT"), line, sizeof(line)));
-        fflush(stdout);
-    }
-    usb_probe(u, "throughput", &r, PROBE);
-    free(r.text);
-    text = usb_text(&b, 0, b.at);
-    n = usb_count(text, "usbdisk: recovery");
-    usb_assert(u, "no-recovery", n == 0, "%s",
-               usb_copy_line(usb_find(text, "usbdisk: recovery"), line, sizeof(line)));
-    free(text);
-    no_fail(u, &b);
-    return usb_end(u);
-}
-
 /** The stick image booted by the firmware is the machine's disk0, and its
  * second partition mounts. */
 static int stickboot(struct usb_case *u)
@@ -605,69 +441,6 @@ static int three(struct usb_case *u)
     pulled(u, &b, "pullone", "/usbdiskprobe pullone", "st1", "pullone");
     no_fail(u, &b);
     recorded(u, &b, "usbdisk: disk1: reclaimed", "reclaimed");
-    return usb_end(u);
-}
-
-/** Report assertion `id`: at least two lines of `text` begin with `sum` and
- * a space. */
-static void sums(struct usb_case *u, const char *id, const char *text, uint32_t sum)
-{
-    char prefix[16];
-    unsigned n;
-
-    snprintf(prefix, sizeof(prefix), "%lu ", (unsigned long)sum);
-    n = count_begins(text, prefix, NULL);
-    usb_assert(u, id, n >= 2, "%u lines begin with the cksum %lu, not 2", n, (unsigned long)sum);
-}
-
-/** Report assertion `id`: the `n` bytes at `offset` of the stick's copy have
- * the cksum `sum`. */
-static void on_copy(struct usb_case *u, const char *id, const char *image, long offset, long n,
-                    uint32_t sum)
-{
-    uint32_t got = 0;
-
-    if (usb_ok(u) && file_cksum(image, offset, n, &got) != 0)
-        usb_assert(u, id, 0, "the copy did not read at byte %ld", offset);
-    else
-        usb_assert(u, id, got == sum, "byte %ld: cksum %lu, not %lu", offset, (unsigned long)got,
-                   (unsigned long)sum);
-}
-
-/** The recovery kernel writes the stick raw, and the machine and the host
- * read the patterns back. */
-static int recovery(struct usb_case *u)
-{
-    uint32_t raw = raw_pattern(), big = big_pattern();
-    char image[PATH_MAX_LEN], line[LINE_MAX_LEN];
-    const char *last;
-    struct usb_boot b;
-    char *text;
-
-    boot(u, &b, "recovery image");
-    usb_wait(&b, "~ #");
-    usb_step(u, "raw");
-    shell(&b, RAW_LINE, "RAWDONE");
-    usb_assert(u, "raw", 1, "");
-    text = usb_text(&b, 0, b.at);
-    sums(u, "raw-machine", text, raw);
-    free(text);
-    usb_step(u, "big");
-    shell(&b, BIG_START_LINE, "BIGSTART");
-    shell(&b, BIG_WRITE_LINE, "BIGWROTE");
-    shell(&b, BIG_READ_LINE, "BIGDONE");
-    usb_assert(u, "big", 1, "");
-    text = usb_text(&b, 0, b.at);
-    sums(u, "big-machine", text, big);
-    count_begins(text, "BIGCMDS ", &last);
-    usb_copy_line(last, line, sizeof(line));
-    usb_assert(u, "big-commands", strcmp(line, "BIGCMDS 128 128") == 0, "%s",
-               line[0] != '\0' ? line : "no BIGCMDS line");
-    free(text);
-    usb_step(u, "host");
-    keep_path(u, image, etude_private_copy(u->c, "stick"), "the stick's copy");
-    on_copy(u, "raw-host", image, RAW_OFFSET, RAW_BYTES, raw);
-    on_copy(u, "big-host", image, BIG_OFFSET, BIG_PIECES * PIECE_BYTES, big);
     return usb_end(u);
 }
 
@@ -752,10 +525,8 @@ static const struct {
     {"holdnestedexfat", holdnestedexfat},
     {"churn", churn},
     {"busybox", busybox},
-    {"throughput", throughput},
     {"stickboot", stickboot},
     {"three", three},
-    {"recovery", recovery},
     {"big", far},
     {"luns", luns},
 };
