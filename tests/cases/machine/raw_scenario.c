@@ -1,7 +1,7 @@
 /*
- * raw_scenario.c: the scenario of the raw socket cases (../machine.raw.json
- * and ../machine.raw-e1000.json): rawprobe on each path of its own boot, and
- * the two programs built on the raw socket, traceroute and ping, on os-real.
+ * raw_scenario.c: the scenario of the raw socket cases (../machine.raw.json):
+ * rawprobe on each path of its own boot, and the two programs built on the raw
+ * socket, traceroute and ping, on os-real.
  */
 #include <stdio.h>
 #include <string.h>
