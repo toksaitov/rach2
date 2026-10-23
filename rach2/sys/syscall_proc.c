@@ -645,8 +645,6 @@ struct exec_file {
     int readable;           /* whether the caller may read the file itself */
 };
 
-static int mmap_fault_readable(const struct vfs_mount *mnt);
-
 /* What a program's set-id bits would do: the bits that apply, and the file
  * owner's ids they would give. */
 struct exec_setid {
@@ -1186,9 +1184,8 @@ static int32_t exec_keep(struct exec_file *f, const struct vfs_ref *ref, struct 
  * from the open file. The mapping keeps a description of the file open for
  * reading, in a copy of a descriptor no table has (`filemap_new`), so the
  * image keeps its file through a close, a rename or an unlink, as a mapping
- * by mmap does. A file that is not regular, or one on a disk a page fault
- * cannot read (`mmap_fault_readable`), gets none, and the loader copies its
- * segments. 0, or -ENOMEM or the open's error.
+ * by mmap does. A file that is not regular gets none, and the loader copies
+ * its segments. 0, or -ENOMEM or the open's error.
  */
 static int32_t exec_map(struct exec_file *f, const struct vfs_ref *ref, const struct vfs_stat *vst)
 {
@@ -1199,7 +1196,7 @@ static int32_t exec_map(struct exec_file *f, const struct vfs_ref *ref, const st
     fd_entry_t e;
     int32_t rc;
 
-    if (type != 0100000u || !mmap_fault_readable(ref->mnt)) {
+    if (type != 0100000u) {
         return 0;
     }
     ofd = fd_ofd_new();
@@ -5645,34 +5642,13 @@ struct map_source {
     uint32_t prot;
 };
 
-/**
- * Whether a page of a file on `mnt` can be read where a user page fault
- * reads it, with interrupts off and outside any system call. A file in
- * memory or on the root window can, and so can one on a disk the block
- * layer polls there. A loop device, which reads through the file system
- * that holds its file and sleeps its caller, and a USB stick, which answers
- * only through its interrupts, cannot: `block_request` stops the machine
- * when a fault reaches either.
- */
-static int mmap_fault_readable(const struct vfs_mount *mnt)
-{
-    uint32_t flags;
-
-    if (!mnt->dev) {
-        return 1;
-    }
-    flags = block_flags(mnt->dev);
-    return (flags & BLOCK_FAULT_SAFE) || ((flags & BLOCK_POLLABLE) && !(flags & BLOCK_CALLER_SYNC));
-}
-
 /** 0 when the descriptor `e` may be mapped, shared or not, with the
- * protection `prot`: ENODEV for what is not a file or is on a device a page
- * fault cannot read (`mmap_fault_readable`), since the first touch of the
- * mapping would read it there, and EACCES for a descriptor not open for
- * reading, or for a writable shared mapping, not open for writing. */
+ * protection `prot`: ENODEV for what is not a file, and EACCES for a
+ * descriptor not open for reading, or for a writable shared mapping, not
+ * open for writing. */
 static int32_t mmap_file_check(const fd_entry_t *e, int shared, uint32_t prot)
 {
-    if (e->type != FD_TYPE_FILE || !e->ofd || !e->ofd->vmnt || !mmap_fault_readable(e->ofd->vmnt)) {
+    if (e->type != FD_TYPE_FILE || !e->ofd || !e->ofd->vmnt) {
         return -ENODEV;
     }
     if (!(e->flags & FD_FLAG_READ) ||

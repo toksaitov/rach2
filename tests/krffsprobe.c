@@ -5,8 +5,8 @@
  * builds, on /k read-only and checks what a mounted volume must give: every
  * byte of a file whose contents follow a rule, the names in the root and in
  * a subdirectory, a stat of each kind, a read past the end, a name that is
- * not there, and a write refused because the mount is read-only. Then it
- * unmounts.
+ * not there, a private mapping of the file, and a write refused because the
+ * mount is read-only. Then it unmounts.
  *
  * `krffsprobe write` mounts it for writing and does what a file system is
  * for: creates, writes, reads back, grows, truncates, renames, removes,
@@ -20,7 +20,8 @@
  * it: the case gives it a volume broken on purpose, and checks the errno and
  * the kernel's own line on the console. `krffsprobe failed` writes until the
  * device fails a write, `krffsprobe three` mounts three volumes at once, and
- * `krffsprobe pull` writes until the stick under the mount is pulled;
+ * `krffsprobe pull` maps a file of a stick's volume privately and then
+ * writes until the stick under the mount is pulled;
  * `probe_main` says what each requires.
  *
  * The mount directories, k, k2 and k3, are made in the working directory,
@@ -43,6 +44,10 @@
 #define O_TRUNC  01000
 
 #define MS_RDONLY 1
+
+#define PROT_READ   1
+#define PROT_WRITE  2
+#define MAP_PRIVATE 2
 
 #define EPERM   1
 #define ENOENT  2
@@ -341,6 +346,47 @@ static void read_rows(void)
         if (!saw_pattern || !saw_sub) {
             fail("the listing of the mount");
         }
+    }
+}
+
+/**
+ * A private mapping of two pages of /k/pattern.bin, from its second page,
+ * reads the file's bytes on both, and a store through it changes the mapping
+ * and not the file. The volume is a disk's under QEMU and a loop device's in
+ * a native run; a page fault reads the page from either, before any read
+ * of the file has brought its blocks in.
+ */
+static void map_rows(void)
+{
+    volatile unsigned char *m;
+    unsigned char one = 0;
+    long addr;
+    int fd;
+
+    fd = syscall3(SYS_OPEN, (long)"k/pattern.bin", O_RDONLY, 0);
+    if (fd < 0) {
+        fail_with("opening /k/pattern.bin to map it", fd);
+    }
+    addr = probe_mmap(0, 2 * 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 4096);
+    if (sys_failed(addr)) {
+        fail_with("a private mapping of /k/pattern.bin", (int)addr);
+    }
+    m = (volatile unsigned char *)addr;
+    if (m[0] != pattern_byte(4096) || m[4095] != pattern_byte(8191) ||
+        m[4096] != pattern_byte(8192) || m[8191] != pattern_byte(12287)) {
+        fail("the bytes of a private mapping of /k/pattern.bin");
+    }
+    m[0] = (unsigned char)~pattern_byte(4096);
+    if (m[0] != (unsigned char)~pattern_byte(4096)) {
+        fail("a store through a private mapping of /k/pattern.bin");
+    }
+    if (syscall3(SYS_LSEEK, fd, 4096, 0) != 4096 || syscall3(SYS_READ, fd, (long)&one, 1) != 1 ||
+        one != pattern_byte(4096)) {
+        fail("a store through a private mapping reached /k/pattern.bin");
+    }
+    syscall1(SYS_CLOSE, fd);
+    if (syscall2(SYS_MUNMAP, addr, 2 * 4096) != 0) {
+        fail("unmapping /k/pattern.bin");
     }
 }
 
@@ -1034,7 +1080,10 @@ static void wait_replacement(void)
  * it. `three`: three volumes at once, each of its own, so that what one
  * mount writes is in that volume and in no other.
  *
- * `pull`: a stick pulled from under a mounted volume. What the machine must
+ * `pull`: a stick pulled from under a mounted volume. First the first byte
+ * of a file on the stick, read through a private mapping before read(2)
+ * reads it, must be the byte read(2) gives: a page fault reads it from a
+ * device that answers only through its interrupts. What the machine must
  * give then is an error from what was in flight, no writes to a device that is
  * not there, and an unmount that takes the mount down rather than failing
  * its sync for ever. The row writes until a write or the open before it
@@ -1178,11 +1227,25 @@ void probe_main(unsigned long *sp)
         {
             int fd = syscall3(SYS_OPEN, (long)"k/hello.txt", O_RDONLY, 0);
             char one[8];
+            char mapped;
+            long addr;
 
             one[0] = 0;
-            if (fd < 0 || syscall3(SYS_READ, fd, (long)one, (int)sizeof(one)) <= 0) {
+            if (fd < 0) {
+                fail_with("opening a file on the stick", fd);
+            }
+            addr = probe_mmap(0, 4096, PROT_READ, MAP_PRIVATE, fd, 0);
+            if (sys_failed(addr)) {
+                fail_with("a private mapping of a file on the stick", (int)addr);
+            }
+            mapped = *(volatile char *)addr;
+            if (syscall3(SYS_READ, fd, (long)one, (int)sizeof(one)) <= 0) {
                 fail("reading the stick's volume before the pull");
             }
+            if (mapped != one[0]) {
+                fail("the first byte of a private mapping of a file on the stick");
+            }
+            syscall2(SYS_MUNMAP, addr, 4096);
             syscall1(SYS_CLOSE, fd);
         }
         for (;;) {
@@ -1303,6 +1366,7 @@ void probe_main(unsigned long *sp)
     if (rc != 0) {
         fail_with("mounting the volume", rc);
     }
+    map_rows();
     read_rows();
     mounts_say_ro();
     refusal_rows();

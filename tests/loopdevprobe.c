@@ -5,7 +5,8 @@
  * and a KRFFS one, each with a file of known bytes in it, and for the refusals
  * a second FAT32 image and a file whose length is not whole sectors. The probe
  * mounts that volume, attaches an image to /dev/loop0 through
- * /dev/loop-control, mounts the device, reads what is in it, writes a file,
+ * /dev/loop-control, mounts the device, reads what is in it, first through a
+ * private mapping, which a page fault reads through the device, writes a file,
  * unmounts, detaches, attaches again and reads back what it wrote, which is
  * what says the write reached the file and not only the cache.
  *
@@ -67,6 +68,9 @@
 #define O_TRUNC  01000
 
 #define MS_RDONLY 1
+
+#define PROT_READ   1
+#define MAP_PRIVATE 2
 
 /* The writes the durable mode makes, each a sync point of KRFFS. */
 #define DURABLE_WRITES 128
@@ -319,6 +323,34 @@ static void expect_file(const char *path, const char *want)
         if (buffer[i] != want[i]) {
             fail_with("a byte of a file in the image", i);
         }
+    }
+}
+
+/** Fail unless a private mapping of the file `path` begins with the bytes of
+ * `want`. */
+static void expect_mapped(const char *path, const char *want)
+{
+    const char *m;
+    long addr;
+    int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
+    int i;
+
+    if (fd < 0) {
+        fail_with("opening a file in the image to map it", fd);
+    }
+    addr = probe_mmap(0, 4096, PROT_READ, MAP_PRIVATE, fd, 0);
+    syscall1(SYS_CLOSE, fd);
+    if (sys_failed(addr)) {
+        fail_with("a private mapping of a file in the image", (int)addr);
+    }
+    m = (const char *)addr;
+    for (i = 0; want[i]; i++) {
+        if (m[i] != want[i]) {
+            fail_with("a byte of a private mapping of a file in the image", i);
+        }
+    }
+    if (syscall2(SYS_MUNMAP, addr, 4096) != 0) {
+        fail("unmapping a file in the image");
     }
 }
 
@@ -765,7 +797,8 @@ static void pull_mode(void)
 }
 
 /** Attach `image` to loop0 and mount it as `type`, with /proc/loop naming
- * nothing before and the image after. */
+ * nothing before and the image after, and read its file through a private
+ * mapping and then with read(2). */
 static void attach_rows(const char *type)
 {
     char lines[512], path[PATH_CAP];
@@ -787,7 +820,8 @@ static void attach_rows(const char *type)
     if (rc != 0) {
         fail_with("mounting the image through the device", rc);
     }
-    expect_file(join(path, mount_dir, "hello.txt"), "hello from inside an image");
+    expect_mapped(join(path, mount_dir, "hello.txt"), "hello from inside an image");
+    expect_file(path, "hello from inside an image");
 }
 
 /** Everything the attachment of `image` refuses, as the file's opening

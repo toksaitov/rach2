@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "machine.loopdev.vfat",
-      "behavior": "a FAT32 image on a FAT32 volume is attached to a loop device, mounted, written and read back, every refusal holds, and the host finds the write inside the image file",
+      "behavior": "a FAT32 image on a FAT32 volume is attached to a loop device, mounted, read through a private mapping, written and read back, every refusal holds, and the host finds the write inside the image file",
       "units": ["loopdev"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
@@ -50,7 +50,7 @@
     },
     {
       "case_id": "machine.loopdev.krffs",
-      "behavior": "a KRFFS image on a FAT32 volume is attached to a loop device, mounted, written and read back, every refusal holds, a write through the device has synced the backing file when it returns, and the host's checker finds the image clean with the write in it",
+      "behavior": "a KRFFS image on a FAT32 volume is attached to a loop device, mounted, read through a private mapping, written and read back, every refusal holds, a write through the device has synced the backing file when it returns, and the host's checker finds the image clean with the write in it",
       "units": ["loopdev"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],

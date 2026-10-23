@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "machine.krffsmount.volume",
-      "behavior": "one volume through six boots: mounted read-only and read to its last byte with nothing written; written and unmounted clean; read back after a reboot; left dirty by a machine ended while it writes; read back again; and checked and written by the next mount that writes, which leaves it clean",
+      "behavior": "one volume through six boots: mounted read-only, mapped privately and read to its last byte with nothing written; written and unmounted clean; read back after a reboot; left dirty by a machine ended while it writes; read back again; and checked and written by the next mount that writes, which leaves it clean",
       "units": ["krffsmount"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
@@ -385,7 +385,7 @@
     },
     {
       "case_id": "machine.krffsmount.pull",
-      "behavior": "a USB stick pulled from under a mounted volume while a program writes it makes the writes fail, the stick plugged in again while the old mount is still there is a device of its own that the old mount does not read, and the old mount unmounts",
+      "behavior": "a file on a USB stick mapped privately reads the bytes read(2) gives, and the stick pulled from under its mounted volume while a program writes it makes the writes fail, the stick plugged in again while the old mount is still there is a device of its own that the old mount does not read, and the old mount unmounts",
       "units": ["krffsmount"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],

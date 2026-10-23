@@ -226,11 +226,9 @@ shared mapping has the file's pages in memory, which it then maps too.
 A writable shared mapping needs a descriptor open for writing.
 .El
 .Pp
-A file on a device that a page fault cannot read, a loop device or a USB
-stick, is refused with
-.Er ENODEV :
-a fault reads the file with interrupts off, where only a disk the kernel
-polls can answer, and such a device would stop the machine.
+A page of a file on a loop device or a USB stick, which the kernel cannot
+read with interrupts off, is read at the first touch as a system call
+reads it, with the faulting thread asleep until the device answers.
 .Pp
 Shared memory, anonymous, a file on tmpfs or the pages in memory of a file
 on ext2, has pages up to 16 TiB less a page, the most a file in memory
@@ -571,9 +569,8 @@ could not write a page of a shared mapping back to its file, or the
 file system's fsync of it failed.
 .It Er ENODEV
 .Fa fd
-is not a file, the file is on a loop device or a USB stick, or a
-writable shared mapping names a file on a disk file system other than
-ext2.
+is not a file, or a writable shared mapping names a file on a disk file
+system other than ext2.
 .It Er ENOMEM
 A mapping has no suitable address range, would exceed
 .Dv RLIMIT_AS ,

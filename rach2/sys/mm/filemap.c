@@ -11,11 +11,13 @@
 #include "../irq.h"
 #include "../fs/krffs.h"
 #include "../fs/vfs.h"
+#include "../block/block.h"
 #include "../block/loop.h"
 #include "../klog.h"
 #include "../proc/process.h"
 #include "../proc/wait_queue.h"
 #include "../lib/kerrno.h"
+#include "../lib/kirq.h"
 #include "../lib/kstring.h"
 #include "../lib/kuser.h"
 #include "filecache.h"
@@ -58,8 +60,61 @@ struct filemap {
 static struct filemap *maps;
 static struct dshare *dshares;
 
+/**
+ * Whether a page of a file on `mnt` can be read with interrupts off and
+ * outside any system call. A file in memory or on the KRFFS root can, and so
+ * can one on a disk the block layer polls there. A loop device, which reads
+ * through the file system that holds its file and sleeps its caller, and a
+ * USB stick, which answers only through its interrupts, cannot.
+ */
+static int filemap_fault_readable(const struct vfs_mount *mnt)
+{
+    uint32_t flags;
+
+    if (!mnt || !mnt->dev) {
+        return 1;
+    }
+    flags = block_flags(mnt->dev);
+    return (flags & BLOCK_FAULT_SAFE) || ((flags & BLOCK_POLLABLE) && !(flags & BLOCK_CALLER_SYNC));
+}
+
+/**
+ * Read page `pgoff` of the file `m` maps into `page`: the count read, or a
+ * negative errno. A file on a device that cannot be read with interrupts
+ * off (`filemap_fault_readable`) is read as a system call reads it. A thread
+ * outside every call, faulting from user mode or writing a signal's frame
+ * on its way back there, is marked in a call and runs with interrupts on
+ * for the read, as `terminate_current_process` runs a process's end, so the
+ * device may sleep it and the timer does not switch away in the middle; the
+ * fault holds the file across the read and looks its region up again after
+ * (`file_fault`). A thread inside a call with interrupts off cannot sleep,
+ * and its read fails with EIO.
+ */
+static int32_t filemap_read(struct filemap *m, uint8_t *page, uint32_t pgoff)
+{
+    int entered = 0;
+    int32_t got;
+
+    if (!filemap_fault_readable(m->entry.ofd ? m->entry.ofd->vmnt : NULL) &&
+        !(kirq_enabled() && proc_in_syscall())) {
+        if (!current_proc || current_proc->in_syscall) {
+            return -EIO;
+        }
+        current_proc->in_syscall = 1;
+        arch_irq_enable();
+        entered = 1;
+    }
+    got = fs_read_at(&m->entry, page, PAGE_SIZE, (uint64_t)pgoff * PAGE_SIZE);
+    if (entered) {
+        arch_irq_disable();
+        current_proc->in_syscall = 0;
+    }
+    return got;
+}
+
 /** A page of a private mapping: the copy the file cache has of it, or the
- * page read from the file, which the cache then keeps a copy of. */
+ * page read from the file (`filemap_read`), which the cache then keeps a
+ * copy of. */
 static int filemap_fill(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
 {
     struct filemap *m = (struct filemap *)f;
@@ -74,7 +129,7 @@ static int filemap_fill(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
     if (!page) {
         return -1;
     }
-    got = fs_read_at(&m->entry, page, PAGE_SIZE, (uint64_t)pgoff * PAGE_SIZE);
+    got = filemap_read(m, page, pgoff);
     if (got >= 0 && got < (int32_t)PAGE_SIZE) {
         k_memset(page + got, 0, PAGE_SIZE - (uint32_t)got);
     }
