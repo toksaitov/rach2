@@ -107,6 +107,44 @@ class ImportTests(unittest.TestCase):
             product.validate_native(tree, roles)
             self.assertNotEqual(target.read_bytes(), b'old foreign executable')
 
+    def test_direct_wsl_transport(self):
+        producer = dict(transport='wsl', distribution='Ubuntu-26.04', user='testing',
+                        tree='/producer', metadata='/producer/export.json', etude='/producer/etude')
+        with patch.object(product, 'windows_host', return_value=False):
+            with self.assertRaises(ValueError):
+                product.wsl_command(producer, ['/bin/cat'])
+        with patch.object(product, 'windows_host', return_value=True), \
+             patch.object(product.shutil, 'which', return_value='C:/Windows/System32/wsl.exe'), \
+             patch.object(product.subprocess, 'run') as run:
+            product.validate_producer(producer)
+            self.assertEqual(run.call_args.args[0], [
+                'C:/Windows/System32/wsl.exe', '--distribution', 'Ubuntu-26.04',
+                '--user', 'testing', '--exec', '/usr/bin/true'])
+            with tempfile.TemporaryDirectory(prefix='rach2-import-') as work:
+                tree = Path(work)
+                with patch.object(product, 'wsl_path', side_effect=['/mapped/tree', '/mapped/list']):
+                    product.transfer(producer, ['build/images/a.disk'], tree, tree)
+                argv = run.call_args.args[0]
+                self.assertEqual(argv[argv.index('--exec') + 1:], [
+                    '/producer/etude', 'lock', 'tree', '/producer', 'prepare-import',
+                    '/usr/bin/rsync', '-a', '--sparse', '--protect-args',
+                    '--files-from=/mapped/list', '--', '/producer/', '/mapped/tree/'])
+                self.assertEqual((tree / 'import-files.list').read_text(), 'build/images/a.disk\n')
+                self.assertEqual(run.call_args.kwargs['env']['MSYS2_ARG_CONV_EXCL'], '*')
+
+    def test_wsl_mapping(self):
+        producer = dict(transport='wsl')
+        with tempfile.TemporaryDirectory(prefix='rach2-import-') as work:
+            path = Path(work)
+            with patch.object(product, 'producer_output', side_effect=[b'/mapped/tree\n',
+                                                                      str(path).encode() + b'\r\n']), \
+                 patch.object(product, 'wsl_command', return_value=['wsl.exe', 'test']), \
+                 patch.object(product.subprocess, 'run'):
+                self.assertEqual(product.wsl_path(producer, path), '/mapped/tree')
+            with patch.object(product, 'producer_output', side_effect=[b'/mapped/tree\n', b'/other/tree\n']):
+                with self.assertRaises((ValueError, OSError)):
+                    product.wsl_path(producer, path)
+
     def test_encoded_inputs(self):
         value = 'build/tests/na' + chr(239) + 've'
         self.assertEqual(product.inventory_path(dict(path_hex=os.fsencode(value).hex())), value)

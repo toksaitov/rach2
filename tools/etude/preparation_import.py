@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -240,6 +241,44 @@ def windows_host():
     return os.name == 'nt' or sys.platform in ('msys', 'cygwin')
 
 
+def wsl_command(producer, words):
+    require(windows_host(), 'direct WSL transport requires native Windows')
+    executable = shutil.which('wsl.exe')
+    require(executable is not None, 'wsl.exe is not installed or not on PATH')
+    distribution = producer.get('distribution', 'Ubuntu-26.04')
+    user = producer.get('user', 'testing')
+    for value in (distribution, user):
+        require(isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', value),
+                'invalid WSL distribution or user')
+    return [executable, '--distribution', distribution, '--user', user, '--exec', *words]
+
+
+def producer_command(producer, words):
+    return wsl_command(producer, words) if producer['transport'] == 'wsl' else remote_command(producer, words)
+
+
+def wsl_environment():
+    return dict(os.environ, MSYS2_ARG_CONV_EXCL='*', MSYS_NO_PATHCONV='1')
+
+
+def producer_output(producer, words):
+    return subprocess.check_output(producer_command(producer, words), env=wsl_environment())
+
+
+def wsl_path(producer, path):
+    """Ask the selected distro for both mappings and check the actual object."""
+    native = native_path(path)
+    mapped = producer_output(producer, ['/usr/bin/wslpath', '-a', '-u', native]).decode().rstrip('\r\n')
+    require(mapped.startswith('/') and not any(c in mapped for c in ('\0', '\r', '\n')),
+            'wslpath did not return one absolute Linux path')
+    restored = producer_output(producer, ['/usr/bin/wslpath', '-a', '-w', mapped]).decode().rstrip('\r\n')
+    require(filesystem_path(restored).samefile(filesystem_path(native)),
+            'WSL path mapping does not identify the native input')
+    subprocess.run(wsl_command(producer, ['/usr/bin/test', '-e', mapped]),
+                   env=wsl_environment(), check=True)
+    return mapped
+
+
 def remote_prefix(producer):
     mode = producer['transport']
     if mode == 'ssh':
@@ -268,7 +307,11 @@ def validate_producer(producer):
             require(filesystem_path(value).is_absolute(), 'local producer paths must be absolute')
     if producer['transport'] != 'local':
         require(producer['etude'].startswith('/'), 'remote etude must be absolute')
-        remote_command(producer, [])
+        if producer['transport'] == 'wsl':
+            subprocess.run(wsl_command(producer, ['/usr/bin/true']),
+                           env=wsl_environment(), check=True)
+        else:
+            remote_command(producer, [])
 
 
 def get_metadata(producer, work):
@@ -278,13 +321,22 @@ def get_metadata(producer, work):
     locker = [producer['etude'], 'lock', 'tree', producer['tree'], 'prepare-import',
               '/bin/cat', producer['metadata']]
     with path.open('xb') as stream:
-        run(remote_command(producer, locker), work, stdout=stream)
+        run(producer_command(producer, locker), work, stdout=stream, env=wsl_environment())
     return path
 
 
 def transfer(producer, names, tree, work):
     listing = work / 'import-files.list'
-    listing.write_text('\n'.join(names) + '\n')
+    listing.write_text('\n'.join(names) + '\n', encoding='utf-8', errors='surrogateescape')
+    if producer['transport'] == 'wsl':
+        destination = wsl_path(producer, tree)
+        file_list = wsl_path(producer, listing)
+        locker = [producer['etude'], 'lock', 'tree', producer['tree'], 'prepare-import',
+                  '/usr/bin/rsync', '-a', '--sparse', '--protect-args',
+                  '--files-from=' + file_list, '--',
+                  producer['tree'].rstrip('/') + '/', destination.rstrip('/') + '/']
+        run(wsl_command(producer, locker), tree, env=wsl_environment())
+        return
     args = ['rsync', '-a', '--sparse', '--protect-args', '--files-from=' + str(listing)]
     if producer['transport'] == 'local':
         root = filesystem_path(producer['tree']).resolve()
@@ -385,12 +437,15 @@ def prepare(args):
     roles = {name: role(name) for name in goals}
     producer = config['producer']
     required = {'transport', 'tree', 'metadata', 'sha256'}
-    optional = set() if producer['transport'] == 'local' else {'host', 'etude', 'distribution', 'user'}
+    optional = {'wsl': {'etude', 'distribution', 'user'},
+                'local': set(), 'ssh': {'host', 'etude'},
+                'wsl-ssh': {'host', 'etude', 'distribution', 'user'}}.get(producer['transport'], set())
     require(required <= producer.keys() and not (producer.keys() - required - optional),
             'unknown or missing producer field')
-    require(producer['transport'] in ('local', 'ssh', 'wsl-ssh'), 'unknown transport')
-    require(producer['transport'] == 'local' or {'host', 'etude'} <= producer.keys(),
-            'remote producer needs its host and immutable etude')
+    require(producer['transport'] in ('local', 'ssh', 'wsl-ssh', 'wsl'), 'unknown transport')
+    require(producer['transport'] == 'local' or
+            ('etude' in producer and (producer['transport'] == 'wsl' or 'host' in producer)),
+            'producer needs its immutable etude and remote host when applicable')
     validate_producer(producer)
     metadata_path = get_metadata(producer, work)
     require(digest(metadata_path) == producer['sha256'], 'producer metadata hash differs')
@@ -399,7 +454,7 @@ def prepare(args):
             metadata['commit'] == commit and metadata['source'] == inputs,
             'producer source differs from native source')
     if producer['transport'] != 'local':
-        result = subprocess.check_output(remote_command(producer, ['/usr/bin/sha256sum', producer['etude']]))
+        result = producer_output(producer, ['/usr/bin/sha256sum', producer['etude']])
         require(result.split()[0].decode() == metadata['validator']['sha256'] and
                 producer['etude'] == metadata['validator']['path'], 'producer validator changed')
     files = record_files(metadata['record'])
