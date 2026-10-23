@@ -317,6 +317,8 @@ static int run_sequence(struct sequence *s)
         return 125;
     int status = s->phases[1].status;
     if (!status) {
+        if (unsetenv("ETUDE_PREPARATION_GRANT"))
+            return 125;
         if (begin(s, 2, s->run_argv, 0) || wait_phase(s, 2))
             return 125;
         status = s->phases[2].status;

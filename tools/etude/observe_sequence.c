@@ -504,6 +504,10 @@ static DWORD sequence_run(struct sequence *s)
     if (s->error)
         return status;
     if (!status) {
+        if (_putenv_s("ETUDE_PREPARATION_GRANT", "")) {
+            s->error = ERROR_INVALID_ENVIRONMENT;
+            return 125;
+        }
         s->error = phase_start(s, &s->collection, s->collection_program, s->collection_argv,
                                s->runtime_path);
         if (s->error || wait_phase(s, &s->collection))
