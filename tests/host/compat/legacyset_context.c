@@ -264,9 +264,7 @@ measurement_context(struct etude_legacy_set_opts *o, const char *id, int first, 
     fix_format(path, sizeof path, "%s/%s.context", fix_dir(), id);
     measurement_file(path, &b);
     struct etude_measurement_context *ctx = NULL;
-    const struct etude_context_inputs inputs = {
-        tree, o->record, o->site, measurement_commit, self
-    };
+    const struct etude_context_inputs inputs = {tree, o->record, o->site, measurement_commit, self};
     CHECK(!etude_context_open(path, &inputs, &ctx, error, sizeof error),
           "context: bound context opens");
     return ctx;

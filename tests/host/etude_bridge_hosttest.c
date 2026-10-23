@@ -941,7 +941,8 @@ static void missing_program(const char *ledger)
 static int grant_resources(const struct etude_ledger_claim *claim, void *context)
 {
     static const char *const names[] = {"cpu_millis", "memory_bytes", "disk_bytes"};
-    if (strcmp(claim->id, "grant:prepare")) return 0;
+    if (strcmp(claim->id, "grant:prepare"))
+        return 0;
     unsigned found = 0;
     for (size_t i = 0; i < claim->nres; i++)
         for (size_t j = 0; j < 3; j++)
@@ -957,22 +958,28 @@ static void grant_seed(struct etude_ledger *l, const char *ledger)
     struct request q = {0};
     struct etude_preparation_grant grant;
     struct etude_reading before;
-    q.ledger = ledger; q.dir = fix_dir(); q.id = "grant:prepare"; q.account = "fixture";
+    q.ledger = ledger;
+    q.dir = fix_dir();
+    q.id = "grant:prepare";
+    q.account = "fixture";
     static const char *const names[] = {"cpu_millis", "memory_bytes", "disk_bytes"};
     for (size_t i = 0; i < 3; i++) {
         q.res[i].name = q.cap[i].name = names[i];
-        q.res[i].amount = 1; q.cap[i].amount = 20;
+        q.res[i].amount = 1;
+        q.cap[i].amount = 20;
     }
     CHECK(!etude_history_now(&before), "grant clock reads");
     setenv("ETUDE_PREPARATION_GRANT", fix_path("admission.grant"), 1);
     struct etude_bridge *b = take(l, &q);
     CHECK(b && !etude_context_grant_read(fix_path("admission.grant"), q.id, &grant) &&
-          grant.start.monotonic_us >= before.monotonic_us, "admission records its grant before locks");
+              grant.start.monotonic_us >= before.monotonic_us,
+          "admission records its grant before locks");
     int resources = 0;
     CHECK(!etude_ledger_list(l, grant_resources, &resources) && resources,
           "measured preparation reserves CPU, memory and disk");
     CHECK(!etude_ledger_finish(l, q.id, ETUDE_CLEANUP_CONFIRMED), "grant fixture claim ends");
-    if (b) etude_bridge_join(b);
+    if (b)
+        etude_bridge_join(b);
     b = take(l, &q);
     CHECK(!b, "existing grant refuses admission before a child");
     if (b) {
@@ -984,7 +991,8 @@ static void grant_seed(struct etude_ledger *l, const char *ledger)
     q.res[0].amount = 21;
     CHECK(admit(l, "grant-cpu", q.account, q.res, q.cap, 0) != 0 && errno == ERANGE,
           "measured preparation cannot exceed CPU capacity");
-    q.res[0].amount = 1; q.res[2].amount = 21;
+    q.res[0].amount = 1;
+    q.res[2].amount = 21;
     CHECK(admit(l, "grant-disk", q.account, q.res, q.cap, 0) != 0 && errno == ERANGE,
           "measured preparation cannot exceed disk capacity");
     unsetenv("ETUDE_PREPARATION_GRANT");
@@ -1023,7 +1031,8 @@ int main(int argc, char **argv)
     grant_seed(l, ledger);
     if (argc == 2 && !strcmp(argv[1], "--grant-only")) {
         etude_ledger_close(l);
-        if (!fails) fix_passed();
+        if (!fails)
+            fix_passed();
         return fails != 0;
     }
     b = start(ledger, "absent", fix_dir(), 0, 0, 0);

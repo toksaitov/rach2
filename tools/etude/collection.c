@@ -1086,6 +1086,23 @@ static void collection_free(struct collection *c)
     free(c);
 }
 
+static int collection_context(struct collection *c, int production, int dry)
+{
+    if (production || dry || !c->context_path)
+        return 0;
+    char error[256];
+    if (site_policy(c)) {
+        refused("the measurement context or a bound input is invalid");
+        return -1;
+    }
+    const struct etude_context_inputs inputs = {c->tree, c->record, c->site, c->commit, c->program};
+    if (etude_context_open(c->context_path, &inputs, &c->context, error, sizeof(error))) {
+        refused("the measurement context or a bound input is invalid");
+        return -1;
+    }
+    return 0;
+}
+
 static int collection_main(int argc, char **argv, int production)
 {
     struct collection *c = calloc(1, sizeof(*c));
@@ -1095,11 +1112,10 @@ static int collection_main(int argc, char **argv, int production)
     if (!c)
         return refused("out of memory");
     if (argc < 2) {
-        fputs(
-            "usage: etude run [-t TREE] [-a ARCH|both] [-p RECORD] [-o RESULTS] "
-            "[-j WORKERS] [-M MIB] [-H HISTORY] [-A ACCEL] [-I CONTEXT] [-k] [-N [-J FILE]] "
-            "SUITE...|core|all|inventory\n",
-            stderr);
+        fputs("usage: etude run [-t TREE] [-a ARCH|both] [-p RECORD] [-o RESULTS] "
+              "[-j WORKERS] [-M MIB] [-H HISTORY] [-A ACCEL] [-I CONTEXT] [-k] [-N [-J FILE]] "
+              "SUITE...|core|all|inventory\n",
+              stderr);
         free(c);
         return 2;
     }
@@ -1144,20 +1160,8 @@ static int collection_main(int argc, char **argv, int production)
     r.accel = collection_accel(r.accel);
     if (!r.accel)
         goto done;
-    if (!production && !r.dry && c->context_path) {
-        char error[256];
-        if (site_policy(c)) {
-            refused("the measurement context or a bound input is invalid");
-            goto done;
-        }
-        const struct etude_context_inputs inputs = {
-            c->tree, c->record, c->site, c->commit, c->program
-        };
-        if (etude_context_open(c->context_path, &inputs, &c->context, error, sizeof(error))) {
-            refused("the measurement context or a bound input is invalid");
-            goto done;
-        }
-    }
+    if (collection_context(c, production, r.dry))
+        goto done;
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
 #ifndef _WIN32

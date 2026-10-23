@@ -15,8 +15,13 @@ static int failures;
 static const char commit[] = "1111111111111111111111111111111111111111";
 static struct etude_preparation_receipt receipt;
 static int with_observer = 1;
-#define CHECK(held, message) do { if (!(held)) { \
-    fprintf(stderr, "etude-context: %s\n", message); failures++; } } while (0)
+#define CHECK(held, message)                                 \
+    do {                                                     \
+        if (!(held)) {                                       \
+            fprintf(stderr, "etude-context: %s\n", message); \
+            failures++;                                      \
+        }                                                    \
+    } while (0)
 
 static void stopped(int sig)
 {
@@ -43,8 +48,8 @@ static void descriptor(const char *name, char out[2048], char hash[65])
     sha256_update(&s, bytes, n);
     sha256_final(&s, digest);
     sha256_hex(digest, hash);
-    snprintf(out, 2048, "{\"path\":\"%s\",\"sha256\":\"%s\",\"size_bytes\":%lu}",
-             fix_path(name), hash, (unsigned long)n);
+    snprintf(out, 2048, "{\"path\":\"%s\",\"sha256\":\"%s\",\"size_bytes\":%lu}", fix_path(name),
+             hash, (unsigned long)n);
 }
 static void snapshots(int bad_source)
 {
@@ -54,8 +59,8 @@ static void snapshots(int bad_source)
     if (!at)
         exit(2);
     snprintf(data, sizeof(data),
-             "{\"schema_version\":1,\"commit\":\"%s\",\"inputs\":[{\"path\":\"%s\",%s]}",
-             commit, bad_source ? "../input" : "input", at);
+             "{\"schema_version\":1,\"commit\":\"%s\",\"inputs\":[{\"path\":\"%s\",%s]}", commit,
+             bad_source ? "../input" : "input", at);
     put("source", data);
     descriptor("tool", tool, hash);
     snprintf(data, sizeof(data), "{\"schema_version\":1,\"inputs\":[%s]}", tool);
@@ -98,9 +103,8 @@ static void context(const char *receipt_name)
 static int open_context(struct etude_measurement_context **c)
 {
     char error[256];
-    const struct etude_context_inputs inputs = {
-        fix_dir(), fix_path("record"), fix_path("policy"), commit, fix_path("tool")
-    };
+    const struct etude_context_inputs inputs = {fix_dir(), fix_path("record"), fix_path("policy"),
+                                                commit, fix_path("tool")};
     return etude_context_open(fix_path("context"), &inputs, c, error, sizeof(error));
 }
 static void bad_receipt(const char *name, int kind)
@@ -124,8 +128,9 @@ static void test_grants(void)
     const char *claim = "context-test:prepare";
     CHECK(!etude_context_grant_write(fix_path("grant"), claim, &grant), "grant writes once");
     CHECK(!etude_context_grant_read(fix_path("grant"), claim, &loaded) &&
-          loaded.start.monotonic_us == grant.start.monotonic_us &&
-          !strcmp(loaded.clock.boot_id, grant.clock.boot_id), "first grant reading is preserved");
+              loaded.start.monotonic_us == grant.start.monotonic_us &&
+              !strcmp(loaded.clock.boot_id, grant.clock.boot_id),
+          "first grant reading is preserved");
     CHECK(etude_context_grant_write(fix_path("grant"), claim, &grant) != 0,
           "an existing grant is never replaced");
     CHECK(etude_context_grant_read(fix_path("grant"), "unrelated:prepare", &loaded) != 0,
@@ -134,12 +139,12 @@ static void test_grants(void)
           "grant requires an absolute output path");
     strcpy(grant.clock.boot_id, "another-boot");
     CHECK(!etude_context_grant_write(fix_path("grant-boot"), claim, &grant) &&
-          etude_context_grant_read(fix_path("grant-boot"), claim, &loaded) != 0,
+              etude_context_grant_read(fix_path("grant-boot"), claim, &loaded) != 0,
           "a grant from another boot is refused");
     grant.clock = receipt.clock;
     grant.start.monotonic_us += UINT64_C(10000000000);
     CHECK(!etude_context_grant_write(fix_path("grant-future"), claim, &grant) &&
-          etude_context_grant_read(fix_path("grant-future"), claim, &loaded) != 0,
+              etude_context_grant_read(fix_path("grant-future"), claim, &loaded) != 0,
           "a future grant is refused");
     put("grant-malformed", "{}\n");
     CHECK(etude_context_grant_read(fix_path("grant-malformed"), claim, &loaded) != 0,

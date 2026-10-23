@@ -33,8 +33,7 @@ struct etude_preparation_receipt {
 /* Use the same platform observer for preparation and runtime clocks. */
 int etude_context_clock(struct etude_context_clock *clock);
 /* Create once. Never replace a receipt, including one from a failed attempt. */
-int etude_context_receipt_write(const char *path,
-                                const struct etude_preparation_receipt *receipt);
+int etude_context_receipt_write(const char *path, const struct etude_preparation_receipt *receipt);
 
 /* Descriptors bind snapshots to actual bytes. Source inputs are relative to
  * tree; native tool inputs retain their actual absolute paths. */
@@ -54,6 +53,7 @@ etude_context_preparation(const struct etude_measurement_context *context);
 /* Missing or uncontrolled context cannot contribute a performance baseline. */
 int etude_context_eligible(const struct etude_measurement_context *context);
 /* Recheck the context and every bound file after execution. */
-int etude_context_recheck(const struct etude_measurement_context *context, char *error, size_t size);
+int etude_context_recheck(const struct etude_measurement_context *context, char *error,
+                          size_t size);
 void etude_context_close(struct etude_measurement_context *context);
 #endif

@@ -252,8 +252,8 @@ static int admit(struct etude_ledger *l, const char *id, const char *account,
     size_t first = getenv("ETUDE_PREPARATION_GRANT") ? 0 : 1;
     size_t count = first ? 1 : 3;
 
-    while (etude_ledger_admit(l, id, account, res + first, count,
-                              cap + first, count, seconds != 0) != 0) {
+    while (etude_ledger_admit(l, id, account, res + first, count, cap + first, count,
+                              seconds != 0) != 0) {
         e = errno;
         if (seconds != 0 && e == EAGAIN && !stopped && posix_now_us() < until) {
 #ifdef _WIN32
@@ -343,8 +343,10 @@ static int grant_start(const char *claim)
 {
     const char *path = getenv("ETUDE_PREPARATION_GRANT");
     struct etude_preparation_grant g;
-    if (!path) return 0;
-    if (etude_history_now(&g.start) || etude_context_clock(&g.clock)) return -1;
+    if (!path)
+        return 0;
+    if (etude_history_now(&g.start) || etude_context_clock(&g.clock))
+        return -1;
     return etude_context_grant_write(path, claim, &g);
 }
 

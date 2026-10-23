@@ -58,10 +58,15 @@ static const char script_path[] = "exec 2>\"$1\"; [ ! -f tools/setup/e2fsprogs_p
 
 /* The variables of make that a step does not inherit: a jobserver's
  * descriptors do not reach it, so each step's make is a make of its own. */
-static const char *const dropped_env[] = {
-    "MAKEFLAGS=", "MFLAGS=", "MAKELEVEL=", "LC_ALL=", "PATH=",
-    "ETUDE_PREPARATION_RUN_ID=", "ETUDE_PREPARATION_RECEIPT=", "ETUDE_PREPARATION_COMMIT=",
-    "ETUDE_PREPARATION_GRANT="};
+static const char *const dropped_env[] = {"MAKEFLAGS=",
+                                          "MFLAGS=",
+                                          "MAKELEVEL=",
+                                          "LC_ALL=",
+                                          "PATH=",
+                                          "ETUDE_PREPARATION_RUN_ID=",
+                                          "ETUDE_PREPARATION_RECEIPT=",
+                                          "ETUDE_PREPARATION_COMMIT=",
+                                          "ETUDE_PREPARATION_GRANT="};
 
 /* A list of strings from malloc. */
 struct list {

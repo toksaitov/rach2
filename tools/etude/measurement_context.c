@@ -23,12 +23,12 @@
 #ifdef _WIN32
 #include "win/files.h"
 #define context_sync _commit
-#define fdopen _fdopen
+#define fdopen       _fdopen
 #else
 #define context_sync fsync
 #endif
 #define CONTEXT_MAX (32U * 1024U * 1024U)
-#define INPUT_MAX 65536U
+#define INPUT_MAX   65536U
 
 struct binding {
     char *path;
@@ -49,8 +49,8 @@ struct etude_measurement_context {
     struct etude_preparation_receipt preparation;
 };
 static const char *const keys[] = {
-    "purpose", "source", "artifacts", "site_profile", "tools", "cache_state", "exemption",
-    "outer_observation", "physical_observation", "preparation"};
+    "purpose",     "source",    "artifacts",         "site_profile",         "tools",
+    "cache_state", "exemption", "outer_observation", "physical_observation", "preparation"};
 
 static int fail(char *error, size_t size, const char *message)
 {
@@ -223,8 +223,8 @@ static int relative(const char *path)
     }
     return 1;
 }
-static int inputs(struct etude_measurement_context *c, const struct json *doc,
-                  const char *tree, const char *program)
+static int inputs(struct etude_measurement_context *c, const struct json *doc, const char *tree,
+                  const char *program)
 {
     const struct json *a = json_member(doc, "inputs");
     int found = program == NULL;
@@ -301,12 +301,11 @@ static int create_document(const char *path, struct jbuf *b)
 }
 static int valid_receipt(const struct etude_preparation_receipt *r)
 {
-    return r && r->passed && r->cleanup_confirmed && eh_identity(r->run_id) &&
-           hex(r->commit, 40) && hex(r->record_sha256, 64) &&
-           eh_identity(r->clock.machine_id) && eh_identity(r->clock.boot_id) &&
-           eh_utc(r->start.utc) && eh_utc(r->end.utc) && r->start.resolution_us &&
-           r->end.resolution_us && r->end.monotonic_us >= r->start.monotonic_us &&
-           r->end.monotonic_us <= ETUDE_HISTORY_MAX;
+    return r && r->passed && r->cleanup_confirmed && eh_identity(r->run_id) && hex(r->commit, 40) &&
+           hex(r->record_sha256, 64) && eh_identity(r->clock.machine_id) &&
+           eh_identity(r->clock.boot_id) && eh_utc(r->start.utc) && eh_utc(r->end.utc) &&
+           r->start.resolution_us && r->end.resolution_us &&
+           r->end.monotonic_us >= r->start.monotonic_us && r->end.monotonic_us <= ETUDE_HISTORY_MAX;
 }
 int etude_context_receipt_write(const char *path, const struct etude_preparation_receipt *r)
 {
@@ -315,7 +314,8 @@ int etude_context_receipt_write(const char *path, const struct etude_preparation
         errno = EINVAL;
         return -1;
     }
-    jbuf_puts(&b, "{\"schema_version\":1,\"format\":\"etude-preparation-receipt\",\"outcome\":\"pass\",\"cleanup\":\"confirmed\",\"run_id\":");
+    jbuf_puts(&b, "{\"schema_version\":1,\"format\":\"etude-preparation-receipt\",\"outcome\":"
+                  "\"pass\",\"cleanup\":\"confirmed\",\"run_id\":");
     quote(&b, r->run_id);
     jbuf_puts(&b, ",\"commit\":");
     quote(&b, r->commit);
@@ -344,61 +344,61 @@ int etude_context_grant_write(const char *path, const char *claim,
                               const struct etude_preparation_grant *g)
 {
     struct jbuf b = {0};
-    if (!absolute(path) || !eh_identity(claim) || !g ||
-        !eh_identity(g->clock.machine_id) || !eh_identity(g->clock.boot_id) ||
-        !eh_utc(g->start.utc) || !g->start.resolution_us ||
+    if (!absolute(path) || !eh_identity(claim) || !g || !eh_identity(g->clock.machine_id) ||
+        !eh_identity(g->clock.boot_id) || !eh_utc(g->start.utc) || !g->start.resolution_us ||
         g->start.monotonic_us > ETUDE_HISTORY_MAX) {
         errno = EINVAL;
         return -1;
     }
     jbuf_puts(&b, "{\"schema_version\":1,\"format\":\"etude-preparation-grant\",\"claim_id\":");
     quote(&b, claim);
-    jbuf_puts(&b, ",\"machine_id\":"); quote(&b, g->clock.machine_id);
-    jbuf_puts(&b, ",\"boot_id\":"); quote(&b, g->clock.boot_id);
-    jbuf_puts(&b, ",\"start\":"); put_reading(&b, &g->start);
+    jbuf_puts(&b, ",\"machine_id\":");
+    quote(&b, g->clock.machine_id);
+    jbuf_puts(&b, ",\"boot_id\":");
+    quote(&b, g->clock.boot_id);
+    jbuf_puts(&b, ",\"start\":");
+    put_reading(&b, &g->start);
     jbuf_puts(&b, "}\n");
     return create_document(path, &b);
 }
-int etude_context_grant_read(const char *path, const char *claim,
-                             struct etude_preparation_grant *g)
+int etude_context_grant_read(const char *path, const char *claim, struct etude_preparation_grant *g)
 {
     struct etude_context_clock clock;
     struct etude_reading now;
     struct stat st;
-    if (!g || !absolute(path) || !eh_identity(claim) || lstat(path, &st) ||
-        !S_ISREG(st.st_mode) || st.st_size > 4096) {
+    if (!g || !absolute(path) || !eh_identity(claim) || lstat(path, &st) || !S_ISREG(st.st_mode) ||
+        st.st_size > 4096) {
         errno = EINVAL;
         return -1;
     }
     memset(g, 0, sizeof *g);
     struct json *doc = document(path);
     const char *format = json_text(doc, "format"), *id = json_text(doc, "claim_id");
-    int ok = version(doc) && format && !strcmp(format, "etude-preparation-grant") &&
-        id && !strcmp(id, claim) &&
-        !copy_field(doc, "machine_id", g->clock.machine_id, sizeof g->clock.machine_id) &&
-        !copy_field(doc, "boot_id", g->clock.boot_id, sizeof g->clock.boot_id) &&
-        !reading(json_member(doc, "start"), &g->start) &&
-        !etude_context_clock(&clock) && !etude_history_now(&now) &&
-        !strcmp(clock.machine_id, g->clock.machine_id) && !strcmp(clock.boot_id, g->clock.boot_id) &&
-        g->start.monotonic_us <= now.monotonic_us;
+    int ok = version(doc) && format && !strcmp(format, "etude-preparation-grant") && id &&
+             !strcmp(id, claim) &&
+             !copy_field(doc, "machine_id", g->clock.machine_id, sizeof g->clock.machine_id) &&
+             !copy_field(doc, "boot_id", g->clock.boot_id, sizeof g->clock.boot_id) &&
+             !reading(json_member(doc, "start"), &g->start) && !etude_context_clock(&clock) &&
+             !etude_history_now(&now) && !strcmp(clock.machine_id, g->clock.machine_id) &&
+             !strcmp(clock.boot_id, g->clock.boot_id) && g->start.monotonic_us <= now.monotonic_us;
     json_free(doc);
-    if (!ok) errno = EINVAL;
+    if (!ok)
+        errno = EINVAL;
     return ok ? 0 : -1;
 }
 static int receipt_fields(const struct json *doc, struct etude_preparation_receipt *r)
 {
     const char *outcome = json_text(doc, "outcome"), *cleanup = json_text(doc, "cleanup");
     const char *format = json_text(doc, "format");
-    return doc && format && !strcmp(format, "etude-preparation-receipt") &&
-             outcome && cleanup && !strcmp(outcome, "pass") &&
-             !strcmp(cleanup, "confirmed") &&
-             !copy_field(doc, "run_id", r->run_id, sizeof(r->run_id)) &&
-             !copy_field(doc, "commit", r->commit, sizeof(r->commit)) &&
-             !copy_field(doc, "record_sha256", r->record_sha256, sizeof(r->record_sha256)) &&
-             !copy_field(doc, "machine_id", r->clock.machine_id, sizeof(r->clock.machine_id)) &&
-             !copy_field(doc, "boot_id", r->clock.boot_id, sizeof(r->clock.boot_id)) &&
-             !reading(json_member(doc, "start"), &r->start) &&
-             !reading(json_member(doc, "end"), &r->end);
+    return doc && format && !strcmp(format, "etude-preparation-receipt") && outcome && cleanup &&
+           !strcmp(outcome, "pass") && !strcmp(cleanup, "confirmed") &&
+           !copy_field(doc, "run_id", r->run_id, sizeof(r->run_id)) &&
+           !copy_field(doc, "commit", r->commit, sizeof(r->commit)) &&
+           !copy_field(doc, "record_sha256", r->record_sha256, sizeof(r->record_sha256)) &&
+           !copy_field(doc, "machine_id", r->clock.machine_id, sizeof(r->clock.machine_id)) &&
+           !copy_field(doc, "boot_id", r->clock.boot_id, sizeof(r->clock.boot_id)) &&
+           !reading(json_member(doc, "start"), &r->start) &&
+           !reading(json_member(doc, "end"), &r->end);
 }
 static int preparation(struct etude_measurement_context *c, const struct json *root,
                        const char *commit, const char *record_hash)
@@ -413,9 +413,9 @@ static int preparation(struct etude_measurement_context *c, const struct json *r
     struct etude_reading now;
     int ok = receipt_fields(doc, r);
     r->passed = r->cleanup_confirmed = ok;
-    ok = ok && valid_receipt(r) && !strcmp(c->run_id, r->run_id) &&
-         !strcmp(commit, r->commit) && !strcmp(record_hash, r->record_sha256) &&
-         !etude_context_clock(&clock) && !strcmp(clock.machine_id, r->clock.machine_id) &&
+    ok = ok && valid_receipt(r) && !strcmp(c->run_id, r->run_id) && !strcmp(commit, r->commit) &&
+         !strcmp(record_hash, r->record_sha256) && !etude_context_clock(&clock) &&
+         !strcmp(clock.machine_id, r->clock.machine_id) &&
          !strcmp(clock.boot_id, r->clock.boot_id) && !etude_history_now(&now) &&
          r->end.monotonic_us <= now.monotonic_us;
     if (ok) {
@@ -492,8 +492,7 @@ static struct json *observer_header(const char *path, char hash[65], struct stat
         return NULL;
     if (!fstat(fileno(f), st) && S_ISREG(st->st_mode) && fgets(line, sizeof(line), f)) {
         size_t n = strlen(line);
-        if (n && line[n - 1] == '\n' &&
-            !json_parse(line, n, 1, &doc, error, sizeof(error))) {
+        if (n && line[n - 1] == '\n' && !json_parse(line, n, 1, &doc, error, sizeof(error))) {
             struct sha256 sha;
             unsigned char digest[32];
             sha256_init(&sha);
@@ -516,14 +515,12 @@ static int observer_start(const struct json *h, const char *run_id)
     const char *machine = json_text(h, "machine_id"), *boot = json_text(h, "boot_id");
     uint64_t root, observer, interval, limit;
     if (!version(h) || !kind || strcmp(kind, "start") || !method ||
-        strcmp(method, "native-load-v1") || !run || strcmp(run, run_id) ||
-        !platform || !eh_identity(machine) || !eh_identity(boot) ||
-        number(h, "root_pid", &root) || !root ||
+        strcmp(method, "native-load-v1") || !run || strcmp(run, run_id) || !platform ||
+        !eh_identity(machine) || !eh_identity(boot) || number(h, "root_pid", &root) || !root ||
         number(h, "observer_pid", &observer) || !observer ||
         number(h, "requested_interval_us", &interval) || interval != 1000000 ||
         number(h, "process_limit", &limit) || limit != 4096 ||
-        !decimal(json_text(h, "root_creation")) ||
-        !decimal(json_text(h, "observer_creation")))
+        !decimal(json_text(h, "root_creation")) || !decimal(json_text(h, "observer_creation")))
         return -1;
     return 0;
 }
@@ -544,7 +541,9 @@ static int observer_identity(const struct json *h, const char *run_id, int physi
     const char *expected = "linux-proc-counters-v1";
 #endif
     return etude_context_clock(&clock) || strcmp(platform, expected) ||
-           strcmp(machine, clock.machine_id) || strcmp(boot, clock.boot_id) ? -1 : 0;
+                   strcmp(machine, clock.machine_id) || strcmp(boot, clock.boot_id)
+               ? -1
+               : 0;
 }
 static int observation(struct etude_measurement_context *c, const struct json *root, int physical)
 {
@@ -578,9 +577,8 @@ static int context_header(struct etude_measurement_context *c, const struct json
     const char *id = json_text(doc, "run_id"), *purpose = json_text(doc, "purpose");
     const char *got = json_text(doc, "commit");
     const char *format = json_text(doc, "format");
-    int ok = version(doc) && format &&
-             !strcmp(format, "etude-measurement-context") && eh_identity(id) && purpose && got && commit &&
-             !strcmp(got, commit);
+    int ok = version(doc) && format && !strcmp(format, "etude-measurement-context") &&
+             eh_identity(id) && purpose && got && commit && !strcmp(got, commit);
     if (ok) {
         c->run_id = strdup(id);
         struct jbuf b = {0};
@@ -613,8 +611,8 @@ int etude_context_open(const char *path, const struct etude_context_inputs *inpu
         char e[128];
         /* Check the exemption with the history schema when the plan is built. */
         ok = !json_parse(c->text[6], strlen(c->text[6]), 1, &check, e, sizeof(e)) &&
-             (!strcmp(purpose, "phase_first_run") ? check->type == JSON_OBJECT :
-                                                    check->type == JSON_NULL);
+             (!strcmp(purpose, "phase_first_run") ? check->type == JSON_OBJECT
+                                                  : check->type == JSON_NULL);
         json_free(check);
     }
     json_free(doc);
