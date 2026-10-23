@@ -584,8 +584,10 @@ static struct json *read_results(const struct verdict *v, const struct record *a
     snprintf(path, n, "%s/%s", v->store != NULL ? v->store : ".", json_text(blob, "sha256"));
     f = v->store != NULL ? fopen(path, "rb") : NULL;
     if (f == NULL) {
-        finding(a->stream, 0, "the results of the attempt %s, a pass, are not in the store",
-                attempt);
+        const char *pass =
+            same(json_text(json_member(a->data, "result"), "outcome"), "pass") ? ", a pass," : "";
+        finding(a->stream, 0, "the results of the attempt %s%s are not in the store", attempt,
+                pass);
         return NULL;
     }
     fclose(f);
@@ -604,6 +606,10 @@ static struct json *read_results(const struct verdict *v, const struct record *a
         finding(path, 0, "%s", err);
     }
     free(text);
+    if (doc != NULL && schema_findings(v->schema, doc, path) != 0) {
+        json_free(doc);
+        doc = NULL;
+    }
     return doc;
 }
 
@@ -635,9 +641,6 @@ static enum result judge_pass(const struct verdict *v, const struct item *it,
     int before = findings(), judged;
     char why[300];
 
-    if (schema_findings(v->schema, doc, path) != 0) {
-        return RESULT_INCOMPLETE;
-    }
     expect(doc, "run_id", json_text(a->doc, "run_id"), path);
     expect(doc, "attempt_id", json_text(a->data, "attempt_id"), path);
     expect(doc, "item_id", it->id, path);
@@ -659,9 +662,9 @@ static enum result judge_pass(const struct verdict *v, const struct item *it,
 
 /**
  * Returns the outcome that the evidence of the attempt `a` of `it` supports.
- * Only a pass is checked: it needs each step the attempt lists passed, and
- * its results document in the store, of this run, attempt, item and case,
- * with assertions that give a pass.
+ * Every attempt needs its referenced results bytes and a valid document.
+ * A pass also needs passing steps and assertions of this run, attempt,
+ * item and case.
  */
 static enum result prove(const struct verdict *v, const struct item *it, const struct record *a)
 {
@@ -672,7 +675,12 @@ static enum result prove(const struct verdict *v, const struct item *it, const s
     char path[1200];
     size_t s;
 
+    doc = read_results(v, a, path, sizeof path);
+    if (doc == NULL) {
+        return RESULT_INCOMPLETE;
+    }
     if (claim != RESULT_PASS) {
+        json_free(doc);
         return claim;
     }
     for (s = 0; s < steps->count; s++) {
@@ -682,12 +690,9 @@ static enum result prove(const struct verdict *v, const struct item *it, const s
             finding(a->stream, 0, "the attempt %s is recorded as a pass, and its step %s is %s",
                     json_text(a->data, "attempt_id"), json_text(r->data, "step_id"),
                     json_text(json_member(r->data, "result"), "outcome"));
+            json_free(doc);
             return RESULT_INCOMPLETE;
         }
-    }
-    doc = read_results(v, a, path, sizeof path);
-    if (doc == NULL) {
-        return RESULT_INCOMPLETE;
     }
     proved = judge_pass(v, it, a, doc, path);
     json_free(doc);
@@ -1101,7 +1106,8 @@ static void free_verdict(struct verdict *v)
 }
 
 /**
- * Runs the `verdict` command: `[--project-architecture] [--require-budget] [-b STORE]
+ * Runs the `verdict` command: `[--project-architecture] [--require-budget] [-b
+ * STORE]
  * [-c COMMIT] [-m CASES] ARCH SET
  * SUITES HISTORY...`. Each HISTORY is a stream of the run, or a directory
  * whose `.jsonl` files are its streams; STORE is the directory of the blobs
