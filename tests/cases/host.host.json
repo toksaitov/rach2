@@ -362,6 +362,12 @@
         "isolation": [
           {
             "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "image-disk"
+            ]
           }
         ],
         "children": "reaped",
@@ -628,8 +634,8 @@
       "resources": {
         "cpu_millis": 1000,
         "cpu_ceiling_millis": 1000,
-        "memory_bytes": 2147483648,
-        "disk_bytes": 12884901888,
+        "memory_bytes": 2550136832,
+        "disk_bytes": 13421772800,
         "locks": [],
         "ports": 0,
         "loop_devices": 0
@@ -657,7 +663,7 @@
         },
         {
           "name": "host-list",
-          "node": "tests/cases/host/host.list",
+          "node": "tests/host-suite/sources/tests/cases/host/host.list",
           "per_architecture": false
         },
         {
@@ -701,31 +707,6 @@
           "per_architecture": false
         },
         {
-          "name": "host-stageimage",
-          "node": "krffs/stageimage",
-          "per_architecture": false
-        },
-        {
-          "name": "host-mkfs",
-          "node": "krffs/mkfs",
-          "per_architecture": false
-        },
-        {
-          "name": "host-setidcheck",
-          "node": "tools/inspect/setidcheck",
-          "per_architecture": false
-        },
-        {
-          "name": "host-sha256",
-          "node": "tools/verify/sha256",
-          "per_architecture": false
-        },
-        {
-          "name": "host-products-drive",
-          "node": "tests/host-suite/products-drive",
-          "per_architecture": false
-        },
-        {
           "name": "host-krffs-mkfs",
           "node": "krffs/mkfs.krffs",
           "per_architecture": false
@@ -757,37 +738,47 @@
         },
         {
           "name": "host-source-installer",
-          "node": "utils/rach2-install",
+          "node": "tests/host-suite/sources/utils/rach2-install",
           "per_architecture": false
         },
         {
           "name": "host-source-mkimage",
-          "node": "krffs/mkimage.sh",
+          "node": "tests/host-suite/sources/krffs/mkimage.sh",
           "per_architecture": false
         },
         {
           "name": "host-source-mkext2",
-          "node": "tools/image/mkext2.sh",
+          "node": "tests/host-suite/sources/tools/image/mkext2.sh",
           "per_architecture": false
         },
         {
           "name": "host-source-e2fs-path",
-          "node": "tools/setup/e2fsprogs_path.sh",
+          "node": "tests/host-suite/sources/tools/setup/e2fsprogs_path.sh",
           "per_architecture": false
         },
         {
           "name": "host-source-tooling-image",
-          "node": "vendor/gnu/tooling_image.sh",
+          "node": "tests/host-suite/sources/vendor/gnu/tooling_image.sh",
           "per_architecture": false
         },
         {
           "name": "host-source-gnu-arch",
-          "node": "vendor/gnu/arch.sh",
+          "node": "tests/host-suite/sources/vendor/gnu/arch.sh",
           "per_architecture": false
         },
         {
           "name": "host-source-mk-arch",
-          "node": "mk/arch.sh",
+          "node": "tests/host-suite/sources/mk/arch.sh",
+          "per_architecture": false
+        },
+        {
+          "name": "image-kernel",
+          "node": "x86_64/rach2-recovery/kernel",
+          "per_architecture": false
+        },
+        {
+          "name": "image-tools",
+          "node": "x86_64/images/etude-image.krffs",
           "per_architecture": false
         }
       ],
@@ -1066,6 +1057,32 @@
               "rach2.root=ext2",
               "rach2.rescue"
             ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": true
+        },
+        {
+          "machine_id": "image-helper",
+          "qemu": {
+            "kernel": "image-kernel",
+            "initrd": "image-tools",
+            "disks": [
+              {
+                "name": "image-disk",
+                "bus": "ide",
+                "size_bytes": 512
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 268435456,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.rescue"
+            ],
+            "architecture": "x86_64"
           },
           "console": "serial",
           "qmp": true,
