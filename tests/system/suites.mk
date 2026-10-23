@@ -974,20 +974,21 @@ $(CASE_IMAGES)/sealed.name: $(SEALED_DISK)
 # rehearse/, for machine.installer-rehearse.sitting, is from the test stick's
 # disk on a target of 256 MiB, 524288 sectors; the one in rehearse-lenovo/,
 # for machine.installer-rehearse.lenovo, is from the sealed disk on a sparse
-# target of the Lenovo's 488397168 sectors. base.raw is written last, so the
-# other files are there once it is.
+# target of the Lenovo's 488397168 sectors. The target is a qcow2 image, which
+# holds only the marks, and is written last, so the other files are there
+# once it is.
 REHEARSE_DIR = $(CASE_IMAGES)/rehearse
 REHEARSE_LENOVO_DIR = $(CASE_IMAGES)/rehearse-lenovo
 REHEARSE_FILES = head.vol params ranges save.img
 REHEARSE_TOOLS = tests/cases/machine/rehearse_fixture.sh $(GROWSET) $(MKEXFATFIXTURE) $(MKMBR) $(MKGPT)
-$(REHEARSE_DIR)/base.raw: $(INSTALLER_DISK) $(REHEARSE_TOOLS)
+$(REHEARSE_DIR)/base.qcow2: $(INSTALLER_DISK) $(REHEARSE_TOOLS)
 	sh tests/cases/machine/rehearse_fixture.sh $(INSTALLER_DISK) 524288 $(GROWSET) \
 	    $(MKEXFATFIXTURE) $(MKMBR) $(MKGPT) $(REHEARSE_DIR)
-$(REHEARSE_LENOVO_DIR)/base.raw: $(SEALED_DISK) $(REHEARSE_TOOLS)
+$(REHEARSE_LENOVO_DIR)/base.qcow2: $(SEALED_DISK) $(REHEARSE_TOOLS)
 	sh tests/cases/machine/rehearse_fixture.sh $(SEALED_DISK) 488397168 $(GROWSET) \
 	    $(MKEXFATFIXTURE) $(MKMBR) $(MKGPT) $(REHEARSE_LENOVO_DIR)
-$(addprefix $(REHEARSE_DIR)/,$(REHEARSE_FILES)): $(REHEARSE_DIR)/base.raw
-$(addprefix $(REHEARSE_LENOVO_DIR)/,$(REHEARSE_FILES)): $(REHEARSE_LENOVO_DIR)/base.raw
+$(addprefix $(REHEARSE_DIR)/,$(REHEARSE_FILES)): $(REHEARSE_DIR)/base.qcow2
+$(addprefix $(REHEARSE_LENOVO_DIR)/,$(REHEARSE_FILES)): $(REHEARSE_LENOVO_DIR)/base.qcow2
 $(addprefix $(REHEARSE_DIR)/,$(REHEARSE_FILES)) $(addprefix $(REHEARSE_LENOVO_DIR)/,$(REHEARSE_FILES)):
 	@test -f $@
 # The recovery RAM image of a tree with no key, which the installer's case

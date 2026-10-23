@@ -41,7 +41,7 @@
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "stick", "node": "images/install-test-stick.img", "per_architecture": true},
-        {"name": "base", "node": "images/cases/rehearse/base.raw", "per_architecture": true},
+        {"name": "base", "node": "images/cases/rehearse/base.qcow2", "per_architecture": true},
         {"name": "save", "node": "images/cases/rehearse/save.img", "per_architecture": true},
         {"name": "head", "node": "images/cases/rehearse/head.vol", "per_architecture": true},
         {"name": "ranges", "node": "images/cases/rehearse/ranges", "per_architecture": true},
@@ -91,7 +91,7 @@
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "stick", "node": "images/cases/install-stick.img", "per_architecture": true},
-        {"name": "base", "node": "images/cases/rehearse-lenovo/base.raw", "per_architecture": true},
+        {"name": "base", "node": "images/cases/rehearse-lenovo/base.qcow2", "per_architecture": true},
         {"name": "save", "node": "images/cases/rehearse-lenovo/save.img", "per_architecture": true},
         {"name": "head", "node": "images/cases/rehearse-lenovo/head.vol", "per_architecture": true},
         {"name": "ranges", "node": "images/cases/rehearse-lenovo/ranges", "per_architecture": true},

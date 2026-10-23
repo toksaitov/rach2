@@ -14,14 +14,17 @@
 #   ranges        the save set, `START COUNT` a line in sectors: the image's
 #                 extent, the grow's ranges beyond it, and the disk's end from
 #                 the eight-sector boundary at or below the GUID table's backup
-#   base.raw      the target disk, sparse, with the first sector of each range
-#                 saying `range START COUNT`, so that a save that read another
-#                 offset or a restore that put zeros back shows in the digests
+#   base.qcow2    the target disk, a qcow2 image whose only data is the first
+#                 sector of each range saying `range START COUNT`, so that a
+#                 save that read another offset or a restore that put zeros
+#                 back shows in the digests
 #   save.img      the save disk: an MBR and an exFAT volume from sector 2048
 #                 with room for every range, whose one file is the ranges
 #
-# base.raw is written last, under a temporary name, since the rule that runs
-# this script makes it and takes it as the sign that the rest is there.
+# The target is a qcow2 image, since etude's store reads and hashes every
+# byte of an artifact, holes included, and the Lenovo's disk is 250 GB. It is
+# written last, under a temporary name, since the rule that runs this script
+# makes it and takes it as the sign that the rest is there.
 set -eu
 disk=$1
 sectors=$2
@@ -31,7 +34,7 @@ mkmbr=$5
 mkgpt=$6
 dir=$7
 mkdir -p "$dir"
-rm -f "$dir/base.raw" "$dir/base.raw.tmp"
+rm -f "$dir/base.qcow2" "$dir/base.qcow2.tmp" "$dir/base.raw" "$dir/base.raw.tmp"
 
 # The root's first sector: the third entry of the image's GUID table, whose
 # extent `mkgpt --list` prints in bytes.
@@ -69,4 +72,6 @@ while read -r s c; do
     printf 'range %s %s\n' "$s" "$c" |
         dd of="$dir/base.raw.tmp" bs=512 seek="$s" count=1 conv=notrunc 2>/dev/null
 done < "$dir/ranges"
-mv "$dir/base.raw.tmp" "$dir/base.raw"
+qemu-img convert -f raw -O qcow2 -o cluster_size=4096 "$dir/base.raw.tmp" "$dir/base.qcow2.tmp"
+rm -f "$dir/base.raw.tmp"
+mv "$dir/base.qcow2.tmp" "$dir/base.qcow2"
