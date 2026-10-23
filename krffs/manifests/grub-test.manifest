@@ -192,6 +192,9 @@ file 0600:1000:1000 /home/test/.ssh/authorized_keys krffs/test_authorized_keys
 # Doom's game data, when the tree has it.
 optional-file 0644 /demo/doom1.wad ports/doom/doom1.wad
 
+# The test runner controls installed commands through this framed helper.
+file 0755 /etude-guest build/tools/etude/guest/etude-guest
+
 # The two core images the grub suite builds, each with a marker of which one
 # it is, so that a boot is known by what its boot loader prints
 # (tools/image/mkgrubcore.sh).

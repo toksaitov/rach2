@@ -1043,9 +1043,6 @@ static void copy_rows(const char *type)
 
     if (copy_dir[0] != '\0') {
         syscall2(SYS_MKDIR, (long)copy_dir, 0755);
-        if (copy_dir[0] != '\0') {
-            native_copy_names(type, ram);
-        }
         rc = syscall5(SYS_MOUNT, (long)"tmpfs", (long)copy_dir, (long)"tmpfs", 0,
                       (long)"size=8388608");
         if (rc != 0) {
@@ -1079,6 +1076,8 @@ static void copy_rows(const char *type)
         if (syscall1(SYS_UNLINK, (long)spare) != 0) {
             fail("removing the spare file");
         }
+    } else {
+        native_copy_names(type, ram);
     }
     rc = syscall5(SYS_MOUNT, (long)"/dev/loop0", (long)mount_dir, (long)type, MS_RDONLY, 0);
     if (rc != 0) {
