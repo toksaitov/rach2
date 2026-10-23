@@ -98,6 +98,48 @@ class PreparationPaths(unittest.TestCase):
             inputs = json.loads((args.output/'source.json').read_text())['inputs']
             self.assertEqual(inputs[0]['path'], 'source.c')
             self.assertEqual(inputs[0]['sha256'], context.digest(source)['sha256'])
+            cache = json.loads((args.output/'cache.json').read_text())
+            self.assertFalse(cache['controlled'])
+            self.assertEqual({v['state'] for v in cache['states'].values()}, {'unknown'})
+            self.assertIsNone(doc['cache_evidence'])
+
+    def test_cache_protocol_is_bound_and_profile_is_stable(self):
+        with tempfile.TemporaryDirectory(prefix='rach2-context-cache.') as scratch:
+            root = Path(scratch)
+            evidence = root/'evidence'
+            evidence.write_text('complete conditioning record\n')
+            receipt = dict(run_id='sample-1', commit='a'*40, machine_id='host', boot_id='boot')
+            doc = dict(format='etude-cache-protocol', schema_version=1, **receipt,
+                       states={k: dict(state='warm', procedure='fixture')
+                               for k in ('artifacts', 'build', 'tools', 'os')},
+                       evidence=[dict(**context.digest(evidence), locations=[str(evidence)])])
+            path = root/'protocol.json'
+            args = argparse.Namespace(cache_protocol=path, cache_method='fixture',
+                    ordinary_preparation='ordinary', one_time_production='none')
+
+            def check(number):
+                out = root/str(number)
+                out.mkdir()
+                path.write_text(json.dumps(doc))
+                return context.cache_context(args, receipt, out)
+
+            first, proof = check(1)
+            self.assertTrue(json.loads(Path(first['path']).read_text())['controlled'])
+            self.assertIsNotNone(proof)
+            receipt['run_id'] = doc['run_id'] = 'sample-2'
+            second, changed_proof = check(2)
+            self.assertEqual(first['sha256'], second['sha256'])
+            self.assertNotEqual(proof['sha256'], changed_proof['sha256'])
+            doc['states']['os']['state'] = 'unknown'
+            unknown, _ = check(3)
+            self.assertFalse(json.loads(Path(unknown['path']).read_text())['controlled'])
+            doc['run_id'] = 'another-run'
+            with self.assertRaises(ValueError):
+                check(4)
+            doc['run_id'] = receipt['run_id']
+            evidence.write_text('changed conditioning record\n')
+            with self.assertRaises(ValueError):
+                check(5)
 
 
 if __name__ == '__main__':

@@ -39,7 +39,7 @@ struct etude_measurement_context {
     struct binding *files;
     size_t count;
     char *run_id;
-    char *text[10];
+    char *text[11];
     struct {
         char *path;
         char hash[65];
@@ -50,7 +50,8 @@ struct etude_measurement_context {
 };
 static const char *const keys[] = {
     "purpose",     "source",    "artifacts",         "site_profile",         "tools",
-    "cache_state", "exemption", "outer_observation", "physical_observation", "preparation"};
+    "cache_state", "exemption", "outer_observation", "physical_observation", "preparation",
+    "cache_evidence"};
 
 static int fail(char *error, size_t size, const char *message)
 {
@@ -445,6 +446,65 @@ static int source_tools(struct etude_measurement_context *c, const struct json *
     json_free(tools);
     return ok ? 0 : -1;
 }
+static int cache_states(const struct json *cache)
+{
+    static const char *const names[] = {"artifacts", "build", "tools", "os"};
+    const struct json *states = json_member(cache, "states");
+    if (!states || states->type != JSON_OBJECT || states->count != 4)
+        return 0;
+    for (size_t i = 0; i < 4; i++) {
+        const struct json *v = json_member(states, names[i]);
+        const char *state = json_text(v, "state"), *procedure = json_text(v, "procedure");
+        if (!state || (strcmp(state, "cold") && strcmp(state, "warm")) ||
+            !procedure || !*procedure)
+            return 0;
+    }
+    return 1;
+}
+static int cache_blob(struct etude_measurement_context *c, const struct json *ref)
+{
+    const struct json *locations = json_member(ref, "locations");
+    if (!locations || locations->type != JSON_ARRAY || !locations->count)
+        return -1;
+    for (size_t i = 0; i < locations->count; i++) {
+        const struct json *path = locations->item[i];
+        if (path->type == JSON_STRING && absolute(path->string) &&
+            !bound(c, ref, path->string))
+            return 0;
+    }
+    return -1;
+}
+static int cache_evidence(struct etude_measurement_context *c, const struct json *root,
+                          const struct json *cache)
+{
+    const struct json *ref = json_member(root, "cache_evidence");
+    if (!ref || ref->type == JSON_NULL) {
+        c->text[10] = strdup("null");
+        return c->text[10] ? 0 : -1;
+    }
+    struct json *p = snapshot(c, root, "cache_evidence");
+    struct etude_context_clock clock;
+    const char *format = json_text(p, "format"), *run = json_text(p, "run_id");
+    const char *commit = json_text(p, "commit"), *expected = json_text(root, "commit");
+    const char *machine = json_text(p, "machine_id"), *boot = json_text(p, "boot_id");
+    char *states = canonical(json_member(p, "states"));
+    char *profile = canonical(json_member(cache, "states"));
+    const struct json *evidence = json_member(p, "evidence");
+    int ok = p && format && !strcmp(format, "etude-cache-protocol") && run &&
+             !strcmp(run, c->run_id) && commit && expected && !strcmp(commit, expected) &&
+             machine && boot && !etude_context_clock(&clock) &&
+             !strcmp(machine, clock.machine_id) && !strcmp(boot, clock.boot_id) &&
+             states && profile && !strcmp(states, profile) && evidence &&
+             evidence->type == JSON_ARRAY && evidence->count && evidence->count <= 16;
+    for (size_t i = 0; ok && i < evidence->count; i++)
+        ok = !cache_blob(c, evidence->item[i]);
+    if (ok)
+        c->text[10] = canonical(p);
+    free(states);
+    free(profile);
+    json_free(p);
+    return ok && c->text[10] ? 1 : -1;
+}
 static int site_cache(struct etude_measurement_context *c, const struct json *root,
                       const char *site)
 {
@@ -453,11 +513,13 @@ static int site_cache(struct etude_measurement_context *c, const struct json *ro
     const struct json *controlled = json_member(cache, "controlled");
     const char *method = json_text(cache, "method");
     int ok = s && cache && site && !bound(c, policy, site);
+    int proof = ok ? cache_evidence(c, root, cache) : -1;
+    ok = ok && proof >= 0;
     if (ok) {
         c->text[3] = canonical(s);
         c->text[5] = canonical(cache);
         c->eligible = controlled && controlled->type == JSON_BOOLEAN && controlled->integer &&
-                      method && *method;
+                      method && *method && cache_states(cache) && proof == 1;
     }
     json_free(s);
     json_free(cache);

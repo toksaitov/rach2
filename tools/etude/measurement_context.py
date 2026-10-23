@@ -155,6 +155,50 @@ def exemption(args, output):
                 run_ids=[args.run_id], attempt_ids=attempts)
 
 
+def cache_context(args, receipt, output):
+    names = ('artifacts', 'build', 'tools', 'os')
+    states = {name: dict(state='unknown', procedure='No cache conditioning was recorded.')
+              for name in names}
+    proof = None
+    path = getattr(args, 'cache_protocol', None)
+    if path:
+        doc = data(path)
+        require(receipt is not None and doc.get('format') == 'etude-cache-protocol' and
+                doc.get('schema_version') == 1, 'cache protocol needs native preparation')
+        for name in ('run_id', 'commit', 'machine_id', 'boot_id'):
+            require(doc.get(name) == receipt[name], 'cache protocol differs in ' + name)
+        states = doc.get('states')
+        require(isinstance(states, dict) and set(states) == set(names),
+                'cache protocol must classify artifacts, build, tools and os')
+        for value in states.values():
+            require(isinstance(value, dict) and set(value) == {'state', 'procedure'} and
+                    value['state'] in ('cold', 'warm', 'unknown') and
+                    isinstance(value['procedure'], str) and value['procedure'].strip(),
+                    'cache state needs a classification and procedure')
+        evidence = doc.get('evidence')
+        require(isinstance(evidence, list) and 0 < len(evidence) <= 16,
+                'cache protocol needs bounded retained evidence')
+        for ref in evidence:
+            locations = ref.get('locations')
+            require(isinstance(locations, list) and locations and
+                    all(isinstance(p, str) and filesystem_path(p).is_absolute() for p in locations),
+                    'cache evidence needs absolute locations')
+            expected = {key: ref[key] for key in ('sha256', 'size_bytes')}
+            found = False
+            for location in locations:
+                try:
+                    found |= digest(location) == expected
+                except OSError:
+                    pass
+            require(found, 'cache evidence bytes are missing or changed')
+        proof = create(output / 'cache-evidence.json', doc)
+    profile = dict(schema_version=1, states=states,
+                   controlled=proof is not None and all(v['state'] != 'unknown' for v in states.values()),
+                   method=args.cache_method, ordinary_preparation=args.ordinary_preparation,
+                   one_time_production=args.one_time_production)
+    return create(output / 'cache.json', profile), proof
+
+
 def compose(args):
     tree = canonical_path(args.tree)
     require(IDENTITY.fullmatch(args.run_id),
@@ -169,12 +213,8 @@ def compose(args):
                                 inputs=[descriptor(p) for p in programs]))
     snapshots['site_profile'] = create(output / 'site.json', dict(schema_version=1,
                                             policy=descriptor(args.site)))
-    snapshots['cache_state'] = create(output / 'cache.json', dict(schema_version=1,
-                controlled=True, method=args.cache_method,
-                ordinary_preparation=args.ordinary_preparation,
-                one_time_production=args.one_time_production))
     record = descriptor(args.record)
-    prep = None
+    prep = receipt = None
     if args.preparation:
         receipt = data(args.preparation)
         require(receipt.get('format') == 'etude-preparation-receipt' and
@@ -183,9 +223,10 @@ def compose(args):
                 receipt.get('commit') == args.commit and receipt.get('record_sha256') == record['sha256'],
                 'preparation receipt differs from this run/source/record')
         prep = descriptor(args.preparation)
+    snapshots['cache_state'], cache_evidence = cache_context(args, receipt, output)
     context = dict(format='etude-measurement-context', schema_version=1,
                    run_id=args.run_id, commit=args.commit, purpose=args.purpose,
-                   artifacts=record, preparation=prep, **snapshots)
+                   artifacts=record, preparation=prep, cache_evidence=cache_evidence, **snapshots)
     context['outer_observation'] = observation(args.outer_trace, args.outer_stop_request, args.run_id)
     context['physical_observation'] = observation(args.physical_trace, args.physical_stop_request, args.run_id)
     context['exemption'] = exemption(args, output)
@@ -209,6 +250,8 @@ def main():
         make.add_argument('--' + flag, required=True)
     make.add_argument('--purpose', choices=('focused', 'push', 'ci', 'release', 'phase_first_run'), required=True)
     make.add_argument('--tool', type=filesystem_path, action='append', default=[])
+    make.add_argument('--cache-protocol', type=filesystem_path,
+                      help='recorded cache classifications and hash-bound conditioning evidence')
     for flag in ('preparation', 'outer-trace', 'outer-stop-request', 'physical-trace',
                  'physical-stop-request', 'selection-export'):
         make.add_argument('--' + flag, type=filesystem_path)

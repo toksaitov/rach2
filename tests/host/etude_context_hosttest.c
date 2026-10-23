@@ -15,6 +15,8 @@ static int failures;
 static const char commit[] = "1111111111111111111111111111111111111111";
 static struct etude_preparation_receipt receipt;
 static int with_observer = 1;
+static int with_cache = 1;
+static const char *cache_class = "warm";
 #define CHECK(held, message)                                 \
     do {                                                     \
         if (!(held)) {                                       \
@@ -68,19 +70,43 @@ static void snapshots(int bad_source)
     descriptor("policy", policy, hash);
     snprintf(data, sizeof(data), "{\"schema_version\":1,\"policy\":%s}", policy);
     put("site", data);
-    put("cache", "{\"schema_version\":1,\"controlled\":true,"
-                 "\"method\":\"verified artifacts; OS cache natural after preparation\"}");
+    char states[2048], evidence[2048], condition[2048];
+    snprintf(states, sizeof(states),
+             "{\"artifacts\":{\"state\":\"%s\",\"procedure\":\"fixture\"},"
+             "\"build\":{\"state\":\"%s\",\"procedure\":\"fixture\"},"
+             "\"tools\":{\"state\":\"%s\",\"procedure\":\"fixture\"},"
+             "\"os\":{\"state\":\"%s\",\"procedure\":\"fixture\"}}",
+             cache_class, cache_class, cache_class, cache_class);
+    snprintf(data, sizeof(data),
+             "{\"schema_version\":1,\"controlled\":true,\"method\":\"fixture\",\"states\":%s}",
+             states);
+    put("cache", data);
+    put("condition", "recorded fixture conditioning\n");
+    descriptor("condition", condition, hash);
+    snprintf(evidence, sizeof(evidence),
+             "{\"sha256\":\"%s\",\"size_bytes\":%lu,\"locations\":[\"%s\"]}", hash,
+             (unsigned long)strlen("recorded fixture conditioning\n"), fix_path("condition"));
+    snprintf(data, sizeof(data),
+             "{\"schema_version\":1,\"format\":\"etude-cache-protocol\",\"states\":%s,"
+             "\"run_id\":\"context-test\",\"commit\":\"%s\",\"machine_id\":\"%s\","
+             "\"boot_id\":\"%s\",\"evidence\":[%s]}", states, commit,
+             receipt.clock.machine_id, receipt.clock.boot_id, evidence);
+    put("cache-evidence", data);
 }
 static void context(const char *receipt_name)
 {
     char s[2048], t[2048], p[2048], cache[2048], artifacts[2048], prep[2048], hash[65];
-    char observer[4096];
+    char observer[4096], proof[2048];
     char text[16384];
     descriptor("source", s, hash);
     descriptor("tools", t, hash);
     descriptor("site", p, hash);
     descriptor("cache", cache, hash);
     descriptor("record", artifacts, hash);
+    if (with_cache)
+        descriptor("cache-evidence", proof, hash);
+    else
+        strcpy(proof, "null");
     if (receipt_name)
         descriptor(receipt_name, prep, hash);
     else
@@ -96,8 +122,8 @@ static void context(const char *receipt_name)
              "{\"format\":\"etude-measurement-context\",\"schema_version\":1,"
              "\"run_id\":\"context-test\",\"commit\":\"%s\",\"purpose\":\"focused\","
              "\"source\":%s,\"artifacts\":%s,\"site_profile\":%s,\"tools\":%s,"
-             "\"cache_state\":%s,\"preparation\":%s,\"exemption\":null,\"outer_observation\":%s}",
-             commit, s, artifacts, p, t, cache, prep, observer);
+             "\"cache_state\":%s,\"preparation\":%s,\"exemption\":null,\"outer_observation\":%s,"
+             "\"cache_evidence\":%s}", commit, s, artifacts, p, t, cache, prep, observer, proof);
     put("context", text);
 }
 static int open_context(struct etude_measurement_context **c)
@@ -165,11 +191,11 @@ int main(void)
     put("tool", "native executable fixture\n");
     put("record", "producer record fixture\n");
     put("policy", "installed policy fixture\n");
-    snapshots(0);
     strcpy(receipt.run_id, "context-test");
     strcpy(receipt.commit, commit);
     descriptor("record", descriptor_text, receipt.record_sha256);
     CHECK(!etude_context_clock(&receipt.clock), "native clock identity exists");
+    snapshots(0);
     CHECK(!etude_history_now(&receipt.start), "preparation start is read");
     receipt.end = receipt.start;
     test_grants();
@@ -203,6 +229,10 @@ int main(void)
         const struct etude_preparation_receipt *r = etude_context_preparation(c);
         CHECK(r && r->same_run && !r->elapsed.reason, "same-run duration is exact");
         CHECK(etude_context_eligible(c), "controlled method and outer header validate");
+        put("condition", "changed conditioning evidence\n");
+        CHECK(etude_context_recheck(c, error, sizeof(error)) != 0,
+              "changed cache conditioning evidence is refused");
+        put("condition", "recorded fixture conditioning\n");
         FILE *trace = fopen(fix_path("trace"), "ab");
         if (!trace || fputs("{\"sample\":1}\n", trace) < 0 || fclose(trace))
             exit(2);
@@ -221,6 +251,21 @@ int main(void)
     bad_receipt("other-run", 0);
     bad_receipt("other-boot", 1);
     bad_receipt("future", 2);
+    with_cache = 0;
+    context(NULL);
+    c = NULL;
+    CHECK(!open_context(&c) && !etude_context_eligible(c),
+          "controlled flag without cache evidence is correctness only");
+    etude_context_close(c);
+    with_cache = 1;
+    cache_class = "unknown";
+    snapshots(0);
+    context(NULL);
+    c = NULL;
+    CHECK(!open_context(&c) && !etude_context_eligible(c),
+          "unknown cache classification is correctness only");
+    etude_context_close(c);
+    cache_class = "warm";
     with_observer = 0;
     snapshots(0);
     context(NULL);

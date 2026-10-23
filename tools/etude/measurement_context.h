@@ -44,7 +44,7 @@ int etude_context_open(const char *path, const struct etude_context_inputs *inpu
                        struct etude_measurement_context **context, char *error, size_t size);
 /* Return canonical JSON for purpose, source, artifacts, site_profile, tools,
  * cache_state, exemption, outer_observation, physical_observation or
- * preparation (the complete verified receipt, or null). The
+ * preparation (the complete verified receipt, or null), or cache_evidence. The
  * context owns each immutable fragment; live trace headers are pinned. */
 const char *etude_context_text(const struct etude_measurement_context *context, const char *key);
 const char *etude_context_run_id(const struct etude_measurement_context *context);

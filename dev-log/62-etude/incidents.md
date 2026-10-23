@@ -227,3 +227,9 @@ The repeated check used the public local importer to copy a record-bound 8 MiB i
 ## The reviewer did not accept the owner's model choice
 
 The recovery's review would have used the loop's hardcoded lead model despite the owner's explicit GPT-6.1 Sol instruction. A private script edit would also be lost when the loop refreshed from master. Issue #992 adds model and effort options, validates them before starting work and passes them through both restart paths. The existing project defaults remain the defaults; this phase uses the owner's chosen model at high effort. No review was started with the wrong model.
+
+## A cache description was accepted as controlled evidence
+
+The final comparison setup check found that the context generator always marked caches controlled, although its public preparation description left the operating-system cache natural. Issue #993 makes unrecorded cache conditions unknown and requires explicit classifications, a procedure and source/run/machine/boot-bound evidence before performance comparison. Correctness runs remain valid without that evidence. Cache procedures form a stable comparison key; the individual evidence remains separately retained and checked for changes. No complete recovered run had yet been ranked using the incorrect flag.
+
+The coordinator's first bounded compiler command for this repair bypassed the installed admission launcher. It failed on a duplicate feature macro before linking or executing a test. The subsequent commands used the launcher and retained their admission results. A shell command then exceeded the site's declared capacity and was refused before execution; its retry declared a smaller share. These local mistakes changed no hardware or test evidence. Direct compiler commands and bounded fixtures need the same installed admission authority as other work on an enrolled host.

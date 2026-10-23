@@ -826,7 +826,8 @@ static void reproduce(const struct set *x, struct cmp_text *d)
 {
     size_t i;
 
-    cmp_printf(d, "{\"schema_version\":1,\"items\":[");
+    const char *cache = etude_context_text(x->o->context, "cache_evidence");
+    cmp_printf(d, "{\"schema_version\":1,\"cache_evidence\":%s,\"items\":[", cache ? cache : "null");
     for (i = 0; i < x->n; i++) {
         cmp_printf(d, "%s{\"item_id\":", i ? "," : "");
         string(d, x->mem[i].item_id);

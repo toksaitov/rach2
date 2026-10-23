@@ -130,6 +130,9 @@ set -- compose --tree "$tree_native" --commit "$commit" \
     --cache-method "Public preparation profile $purpose; clean-inhouse=${ETUDE_PREPARATION_CLEAN:-0}; imported=${ETUDE_PREPARATION_IMPORT:+yes}. Artifact hashes are verified; OS cache remains natural." \
     --ordinary-preparation 'Selected candidate production, verification, source capture and context composition occur inside admission.' \
     --one-time-production 'Existing installed toolchains and pinned download caches are retained; candidate artifact production is ordinary preparation.'
+if [ -n "${ETUDE_CACHE_PROTOCOL:-}" ]; then
+    set -- "$@" --cache-protocol "$(python_path "$ETUDE_CACHE_PROTOCOL")"
+fi
 # A fixed x86-64 helper may also be prepared for an i686-only selection.
 for arch in i686 x86_64; do
     if command -v "$arch-elf-gcc" >/dev/null 2>&1; then
