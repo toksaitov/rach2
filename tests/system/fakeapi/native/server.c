@@ -41,12 +41,12 @@ void log_line(const char *format, ...)
 {
     va_list ap;
     struct buffer b = {0};
-    char text[8192];
+    char message[8192];
     va_start(ap, format);
-    vsnprintf(text, sizeof(text), format, ap);
+    vsnprintf(message, sizeof(message), format, ap);
     va_end(ap);
     putsb(&b, "fakeapi: ");
-    putsb(&b, text);
+    putsb(&b, message);
     putsb(&b, "\n");
     fputs(b.data, stdout);
     fflush(stdout);
@@ -218,9 +218,10 @@ bad:
 static int chunked(const struct request *r)
 {
     const char *encoding = header(r, "transfer-encoding");
-    char *lower = strdup(encoding);
+    char *lower = allocate(strlen(encoding) + 1);
     size_t i;
     int found;
+    strcpy(lower, encoding);
     for (i = 0; lower[i]; i++)
         lower[i] = (char)tolower((unsigned char)lower[i]);
     found = strstr(lower, "chunked") != NULL;
@@ -921,6 +922,7 @@ static int serve(const char *script, const char *record_path, const char *certdi
     if (listener == SERVICE_INVALID)
         goto done;
     log_line("listening on 127.0.0.1:%u", port);
+    result = 0;
     while (!stopped && service_parent_alive()) {
         service_socket fd;
         if (!service_ready(listener, 200))
@@ -954,7 +956,7 @@ static int serve(const char *script, const char *record_path, const char *certdi
         connections = c->next;
         free(c);
     }
-    result = verdict(&s);
+    result |= verdict(&s);
 done:
     if (result == 2)
         log_line("result: refused: the script, certificate or listening socket is unavailable");
@@ -994,7 +996,7 @@ static void relay_out(void *arg)
 }
 int relay(unsigned port)
 {
-    struct sockaddr_in at;
+    struct sockaddr_in address;
     struct relay_job job;
     service_thread outward;
     char block[65536];
@@ -1002,11 +1004,11 @@ int relay(unsigned port)
     job.socket = socket(AF_INET, SOCK_STREAM, 0);
     if (job.socket == SERVICE_INVALID)
         return 1;
-    memset(&at, 0, sizeof(at));
-    at.sin_family = AF_INET;
-    at.sin_addr.s_addr = htonl(UINT32_C(0x7f000001));
-    at.sin_port = htons((unsigned short)port);
-    if (connect(job.socket, (struct sockaddr *)&at, sizeof(at)) ||
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(UINT32_C(0x7f000001));
+    address.sin_port = htons((unsigned short)port);
+    if (connect(job.socket, (struct sockaddr *)&address, sizeof(address)) ||
         service_thread_start(&outward, relay_out, &job)) {
         service_close(job.socket);
         return 1;

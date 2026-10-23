@@ -4,6 +4,7 @@
 set -eu
 
 DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck disable=SC2034 # arch.sh reads REPO to locate mk/arch.sh
 REPO=$(CDPATH='' cd -- "$DIR/../.." && pwd)
 . "$DIR/arch.sh"
 OUT=$GNU_OUT
@@ -26,9 +27,14 @@ VERSION=$(awk '$1 == "gcc" { print $2; exit }' "$DIR/sources.txt")
 ARCHIVE=$(sh "$DIR/fetch.sh" --path gcc)
 PREFIX=gcc-$VERSION
 rm -rf "$WORK" "$DEST"
-trap 'status=$?; if [ "$status" -ne 0 ]; then
-    echo "gnu: sanitizers: build evidence: $WORK" >&2
-fi' 0
+report_failure()
+{
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        echo "gnu: sanitizers: build evidence: $WORK" >&2
+    fi
+}
+trap report_failure 0
 mkdir -p "$WORK/source" "$WORK/build" "$WORK/install" "$DEST/compiler" "$DEST/root/usr/lib"
 # Keep the standalone configure's sibling sources and auxiliary files,
 # without unpacking the compiler, its tests or its other runtime libraries.

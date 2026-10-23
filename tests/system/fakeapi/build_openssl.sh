@@ -2,7 +2,7 @@
 # build_openssl.sh: prepare static host libraries from the GNU layer's pin.
 # The C services need no OpenSSL executable, modules or shared libraries.
 set -eu
-repo=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
 output=$repo/build/vendor/host-openssl
 compiler=${FAKEAPI_CC:-cc}
 archive=$(sh "$repo/vendor/gnu/fetch.sh" --path openssl)

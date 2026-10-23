@@ -153,7 +153,7 @@ static int exchange(SSL *ssl, int argc, char **argv)
     data = receive_frame(ssl, &opcode, &size);
     if (!data || opcode != 8 || size < 2 || !send_frame(ssl, 8, data, 2))
         goto done;
-    printf("close %u\n", (data[0] << 8) | data[1]);
+    printf("close %u\n", ((unsigned)data[0] << 8) | data[1]);
     status = 0;
 done:
     free(data);

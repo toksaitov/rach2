@@ -299,3 +299,13 @@ unusedStructMember:*tools/etude/hold.h
 # The native file-status and directory records are public across translation
 # units; their fields are read by the shared store and collection driver.
 unusedStructMember:*tools/etude/win/files.h
+
+# The fake API exports these structures across translation units. The source
+# list also checks headers alone: api.h members are used by server.c,
+# protocols.c, responses.c and worker.c; json.h members are used by json.c.
+unusedStructMember:*tests/system/fakeapi/native/api.h
+unusedStructMember:*tests/system/fakeapi/native/json.h
+
+# The native attempt records are shared by posix/run_native.c and the native
+# collection adapter in tests/native/{attempt,collection,proof}.c.
+unusedStructMember:*tools/etude/include/etude/native.h

@@ -30,8 +30,9 @@ done
 # The tarball and six patches are the same as the installed compiler's.
 tarball=$repo/vendor/tcc/tcc-0.9.27.tar.bz2
 expected=$(sed -n 's/^TARBALL_SHA256="\([0-9a-f]*\)"$/\1/p' vendor/tcc/build_tcc.sh)
-set -- $(build/tools/verify/sha256 "$tarball")
-[ "$1" = "$expected" ] || { echo 'host-products: TinyCC digest differs' >&2; exit 1; }
+actual=$(build/tools/verify/sha256 "$tarball")
+actual=${actual%% *}
+[ "$actual" = "$expected" ] || { echo 'host-products: TinyCC digest differs' >&2; exit 1; }
 tar -xf "$tarball" -C "$work"
 src=$work/tcc-0.9.27
 cd "$src"

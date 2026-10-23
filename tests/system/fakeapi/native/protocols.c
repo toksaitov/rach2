@@ -117,7 +117,7 @@ static const char *check_plain(const struct value *s, const struct request *r)
 static int reply_plain(const struct value *s, struct peer *p)
 {
     const struct value *r = get(s, "reply"), *h = get(r, "headers"), *v;
-    int status = (int)number(r, "status", 200), ok = 1;
+    int status = (int)number(r, "status", 200), ok;
     if (get(r, "websocket")) {
         if (!websocket_start(p))
             return 0;
@@ -397,6 +397,11 @@ static int reply_anthropic(const struct value *s, struct peer *p)
             break;
         }
         body = tool ? encode(get(block, "input"), 0) : strdup(field(block, "text"));
+        if (!body) {
+            fail_peer(p, "cannot allocate a content block");
+            ok = 0;
+            break;
+        }
         len = strlen(body);
         for (offset = 0; offset < len;) {
             char part[29];
@@ -556,7 +561,7 @@ static const char *gemini_history(const struct value *contents, struct value *ca
     for (content = contents->child; content; content = content->next) {
         for (part = first(get(content, "parts")); part; part = part->next) {
             const struct value *call = get(part, "functionCall"),
-                               *response = get(part, "functionResponse");
+                               *reply = get(part, "functionResponse");
             if (!strcmp(field(content, "role"), "model") && call && call->type == 'o') {
                 char *expected = signature(field(call, "id"));
                 int ok = !strcmp(expected, field(part, "thoughtSignature"));
@@ -567,15 +572,15 @@ static const char *gemini_history(const struct value *contents, struct value *ca
                 }
                 set(calls, field(call, "id"), clone(call));
             }
-            if (response && response->type == 'o') {
-                const char *id = field(response, "id");
+            if (reply && reply->type == 'o') {
+                const char *id = field(reply, "id");
                 const struct value *previous = get(calls, id);
                 if (!previous || get(results, id) ||
-                    strcmp(field(response, "name"), field(previous, "name"))) {
+                    strcmp(field(reply, "name"), field(previous, "name"))) {
                     why = "a function response has no preceding call or is duplicated";
                     return why;
                 }
-                add(results, id, clone(get(response, "response")));
+                add(results, id, clone(get(reply, "response")));
             }
         }
     }
@@ -587,14 +592,14 @@ static const char *gemini_results(const struct value *s, const struct value *res
     const char *why = NULL;
     for (v = first(get(s, "results")); v; v = v->next) {
         const char *id = field(v, "id");
-        const struct value *response = get(results, id), *output;
+        const struct value *reply = get(results, id), *output;
         char *actual;
         int ok;
-        if (!response || get(response, "error")) {
+        if (!reply || get(reply, "error")) {
             why = reason("missing or failed function response: %s", id);
             return why;
         }
-        output = get(response, "output");
+        output = get(reply, "output");
         actual = output && output->type == 's' ? strdup(text(output))
                  : output                      ? encode(output, 0)
                                                : NULL;

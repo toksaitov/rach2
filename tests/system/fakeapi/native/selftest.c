@@ -187,8 +187,8 @@ static void messages(void)
     check(!protocol_validate("anthropic", step) && !protocol_check("anthropic", step, r),
           "Messages validates preceding call and text-block result");
     {
-        struct value *body = r->json, *messages = (struct value *)get(body, "messages");
-        struct value *result = (struct value *)get(messages->child->next, "content")->child;
+        struct value *body = r->json, *history = (struct value *)get(body, "messages");
+        struct value *result = (struct value *)get(history->child->next, "content")->child;
         set(result, "is_error", boolean(1));
         check(protocol_check("anthropic", step, r) != NULL, "Messages rejects failed tool result");
         set(result, "is_error", boolean(0));
@@ -358,7 +358,8 @@ static void held_test(void)
 }
 static void input_frame(struct buffer *b, unsigned opcode, int final, const char *data)
 {
-    unsigned char head[8], mask[4] = {1, 2, 3, 4};
+    unsigned char head[8];
+    const unsigned char mask[4] = {1, 2, 3, 4};
     size_t n = strlen(data), i, size = 2;
     head[0] = (final ? 128 : 0) | opcode;
     if (n < 126)

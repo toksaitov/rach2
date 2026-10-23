@@ -184,7 +184,11 @@ static int curl_socket(const struct value *e, unsigned socket_entry)
 {
     const char *kind[] = {"received", "sent", "received", "sent", "sent_close", "received_close"};
     const struct value *v;
-    if (socket_entry >= 6 || number(e, "n", 0) != 4 || !(v = get(e, kind[socket_entry])))
+    const char *key;
+    if (socket_entry >= sizeof(kind) / sizeof(kind[0]))
+        return 1;
+    key = kind[socket_entry];
+    if (number(e, "n", 0) != 4 || !(v = get(e, key)))
         return 1;
     if (socket_entry == 0 && strcmp(text(v), "ping"))
         return 1;
@@ -194,7 +198,7 @@ static int curl_socket(const struct value *e, unsigned socket_entry)
         return 1;
     if (socket_entry == 3 && strcmp(text(v), "{\"n\": 3}"))
         return 1;
-    if (socket_entry >= 4 && number(e, kind[socket_entry], 0) != 1000)
+    if (socket_entry >= 4 && number(e, key, 0) != 1000)
         return 1;
     return 0;
 }
@@ -290,10 +294,9 @@ static int audit_metadata(struct audit *a, const char *version)
                 a->socket_n = (unsigned)number(e, "n", 0);
         if (!a->socket_n)
             return 0;
-    }
-    if (!strncmp(row, "codex", 5))
         snprintf(a->agent, sizeof(a->agent), "%s/%s ",
                  !strcmp(row, "codex-screen") ? "codex-tui" : "codex_exec", version);
+    }
     if (!strncmp(row, "claude", 6) || !strcmp(row, "worker-session"))
         snprintf(a->agent, sizeof(a->agent), "claude-cli/%s ", version);
     if (!strncmp(row, "muse", 4)) {
