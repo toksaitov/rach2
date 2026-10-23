@@ -146,7 +146,9 @@ install_part()
 }
 
 install_part root
-RACH2_ARCH=$RACH2_ARCH sh "$DIR/build_host_products.sh" "$TREE"
+mkdir "$TREE/host-products"
+cp -a "$OUT/host-products/." "$TREE/host-products/"
+writable
 # Build the framed WebSocket fixture against the same TLS libraries as the
 # guest tools. This happens in the GNU build environment on every host.
 "$OUT/cross/bin/$GNU_TARGET-gcc" --sysroot="$OUT/root" -std=c99 -O2 \
@@ -159,6 +161,8 @@ rm -f "$TREE/usr/lib/libstdc++.so.6"
 install_part native
 install_part gdb
 install_part js
+cp -a "$OUT/sanitizers/root/." "$TREE/"
+writable
 
 # The browser's packages. Each package's list is the listing of its unpack,
 # where /bin, /lib and /sbin were links into /usr, as trixie has them; here

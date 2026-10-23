@@ -9,8 +9,7 @@ PRODUCT_KRFFS = krffs/krffs_file_system.c krffs/krffs_node.c \
 PRODUCT_FLOW = $(wildcard tests/cases/host/flow_*.c) tests/cases/host/fixture.c utils/sha256.c
 PRODUCT_BUILD = $(wildcard tests/cases/host/build_*.c) tests/cases/host/fixture.c utils/sha256.c
 PRODUCT_PROGRAMS = host-flow-check host-build-check drive stageimage.krffs mkfs.krffs \
-    setidcheck sha256 prepared/etude prepared/etude-volume prepared/host \
-    prepared/doom_libc-i686 prepared/doom_libc-x86_64
+    setidcheck sha256 etude etude-volume host host-suite-probe doom_libc-i686 doom_libc-x86_64
 
 .PHONY: all
 all: $(addprefix $(PREFIX)/,$(PRODUCT_PROGRAMS))
@@ -36,16 +35,20 @@ $(PREFIX)/setidcheck: tools/inspect/setidcheck.c
 $(PREFIX)/sha256: tools/verify/sha256.c
 	@mkdir -p $(@D)
 	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
-$(PREFIX)/prepared/etude: $(ETUDE_SRC)
+$(PREFIX)/etude: $(ETUDE_SRC)
 	@mkdir -p $(@D)
 	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
-$(PREFIX)/prepared/etude-volume: $(ETUDE_VOLUME_SRC)
+$(PREFIX)/etude-volume: $(ETUDE_VOLUME_SRC)
 	@mkdir -p $(@D)
 	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
-$(PREFIX)/prepared/host: $(ETUDE_HOSTCASE_SRC)
+$(PREFIX)/host: $(ETUDE_HOSTCASE_SRC)
 	@mkdir -p $(@D)
 	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
-$(PREFIX)/prepared/doom_libc-%: ports/doom/crt0.c tests/host/fixtures/doom_libc.c
+$(PREFIX)/host-suite-probe: tests/cases/host/host_suite_probe.c
+	@mkdir -p $(@D)
+	$(SANITIZER_CC) $(PRODUCT_CFLAGS) -fsanitize=address,undefined \
+	    -fno-sanitize-recover=all -O1 -g -o $@ $^
+$(PREFIX)/doom_libc-%: ports/doom/crt0.c tests/host/fixtures/doom_libc.c
 	@mkdir -p $(@D)
 	$*-elf-gcc -std=gnu99 -Os -ffreestanding -fno-pie -no-pie -nostdlib -static \
 	    -Wl,--build-id=none -Iports/doom/include $^ -o $@

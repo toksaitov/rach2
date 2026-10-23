@@ -5,20 +5,19 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 REPO=$repo
 . "$repo/vendor/gnu/arch.sh"
-target=${1:?usage: build_host_products.sh ROOT}
-case $target in /*) ;; *) target=$PWD/$target ;; esac
-out=$target/host-products
+out=$GNU_OUT/host-products
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-mkdir -p "$out/prepared" "$repo/build/tests"
+mkdir -p "$out" "$repo/build/tests"
 work=$(mktemp -d "$repo/build/tests/host-products.XXXXXX")
 cd "$repo"
 compiler=$GNU_OUT/cross/bin/$GNU_TARGET-gcc
 make --no-print-directory -f tests/cases/host/products.mk \
-    CC="$compiler --sysroot=$GNU_OUT/root" PREFIX="$out"
+    CC="$compiler --sysroot=$GNU_OUT/root" PREFIX="$out" \
+    SANITIZER_CC="$compiler --sysroot=$GNU_OUT/root -B$GNU_OUT/sanitizers/compiler/ -L$GNU_OUT/sanitizers/root/usr/lib"
 for tool in mke2fs debugfs e2fsck; do
     cp "$ARCH_BUILD/vendor/e2fsprogs/$tool" "$out/$tool"
 done
@@ -41,5 +40,5 @@ case "$RACH2_ARCH" in i686) cpu=i386 ;; *) cpu=x86_64 ;; esac
 ./configure --cross-prefix="$GNU_OUT/cross/bin/$GNU_TARGET-" --cpu="$cpu" \
     --extra-cflags="--sysroot=$GNU_OUT/root" --extra-ldflags="--sysroot=$GNU_OUT/root"
 make i386-tcc x86_64-tcc
-mkdir -p "$out/prepared/tcc"
-cp i386-tcc x86_64-tcc "$out/prepared/tcc/"
+mkdir -p "$out/tcc"
+cp i386-tcc x86_64-tcc "$out/tcc/"
