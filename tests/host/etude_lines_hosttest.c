@@ -5,6 +5,9 @@
  * host-deps: tools/etude/history_json.c tools/etude/history_collect.c
  * host-deps: utils/sha256.c tools/etude/posix/status.c tools/etude/watchdog.c
  * host-deps: tools/etude/ledger.c tools/etude/posix/process.c
+ * host-deps: tests/cases/host/fixture.c tests/host/compat/status_proc_host.c
+ * host-tools: python3
+ * host-inputs: tools/ci/run.sh tools/ci/bisect.sh tools/flow/test_status.py tests/registry
  * host-cflags: -I tools/etude/include -I tools/etude -Wall -Wextra -Werror
  *
  * Each row writes a run's history through the history store and runs this
@@ -25,10 +28,10 @@
  * The status writer then records a run's attempts from real watchdogs, and
  * the ledger gets real claims and requests: a claim of this process, one
  * whose owner ended with its cleanup unconfirmed, one whose owner ended while
- * its process runs, the protected request and one behind it. On Linux,
- * tools/flow/test_status.py, or the reader the environment's
- * ETUDE_LINES_READER names, must report each as it is; elsewhere it must say
- * that it needs the Linux testing host.
+ * its process runs, the protected request and one behind it. The reader
+ * tools/flow/test_status.py, or ETUDE_LINES_READER, reads proc-format copies
+ * of the actual process identities and a kernel-observed lock holder. An
+ * empty proc directory also checks the unavailable-host report.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -49,6 +52,8 @@
 #include "etude/status.h"
 #include "etude/watchdog.h"
 #include "lines.h"
+#include "../cases/host/fixture.h"
+#include "compat/status_proc_host.h"
 
 #define SECOND UINT64_C(1000000)
 
@@ -60,6 +65,11 @@ static char directory[1024]; /* the scratch directory */
 static char self[PATH_ROOM]; /* this program */
 static char repo[PATH_ROOM]; /* the tree, where the test runs */
 static pid_t holder;         /* a process a claim registers, or 0 */
+static struct fixture commands;
+static int commands_ready;
+static pid_t observed[16];
+static size_t nobserved;
+static const char *proc_root;
 static int holder_pipe = -1; /* the write end of its standard input */
 static const char schema[] = "tools/etude/schemas/history.schema.json";
 
@@ -111,18 +121,16 @@ struct row {
 /** Remove the scratch directory and end the holder, even after a failure. */
 static void cleanup(void)
 {
-    char command[1200];
+    if (commands_ready)
+        fx_destroy(&commands);
     if (holder_pipe >= 0)
         close(holder_pipe);
     if (holder > 0) {
         kill(holder, SIGKILL);
         waitpid(holder, NULL, 0);
     }
-    if (*directory) {
-        snprintf(command, sizeof(command), "rm -rf '%s'", directory);
-        if (system(command))
-            fprintf(stderr, "etude_lines_hosttest: cannot remove %s\n", directory);
-    }
+    if (*directory && !fx_remove(directory))
+        fprintf(stderr, "etude_lines_hosttest: cannot remove %s\n", directory);
 }
 
 /** Exit through the cleanup after a signal. */
@@ -461,80 +469,132 @@ static int wanted(const struct row *w, const char *out, const char *err)
     return bad;
 }
 
-/** Run the shell command that `format` makes; exit when it is too long. */
-static int shell(const char *format, ...)
+/** Copy only the actual product functions that the old harness sourced. */
+static int bisect_functions(void)
 {
-    static char command[4 * PATH_ROOM + 4096];
-    va_list ap;
-    int n;
-    va_start(ap, format);
-    n = vsnprintf(command, sizeof(command), format, ap);
-    va_end(ap);
-    if (n < 0 || (size_t)n >= sizeof(command)) {
-        fprintf(stderr, "etude_lines_hosttest: a command is too long\n");
-        exit(1);
+    static const char *const names[] = {"members() ", "admitted() ", "historic() ", "suites() "};
+    FILE *source = fopen("tools/ci/bisect.sh", "r"), *out = fopen(path("bisect-functions"), "w");
+    char *line = NULL;
+    size_t capacity = 0, i;
+    unsigned found = 0;
+    int copying = 0, ok = source != NULL && out != NULL;
+    while (ok && getline(&line, &capacity, source) >= 0) {
+        if (!copying)
+            for (i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+                if (!strncmp(line, names[i], strlen(names[i]))) {
+                    copying = 1;
+                    found |= 1u << i;
+                }
+        if (copying) {
+            if (fputs(line, out) == EOF)
+                ok = 0;
+            if (line[0] == '}')
+                copying = 0;
+        }
     }
-    return system(command);
+    free(line);
+    if (source && (ferror(source) || fclose(source)))
+        ok = 0;
+    if (out && fclose(out))
+        ok = 0;
+    return ok && !copying && found == 15;
 }
 
-/** Make the tree ci's run.sh runs in: the registry, a tests/run that runs
- * the formatter for `core` and passes the other sets, and stand-ins for make
- * and git; and the script that runs bisection's reading of tests/run. */
+/** Create the fixture's files and compiled command roles without a shell. */
 static void make_tree(void)
 {
-    if (shell("mkdir -p '%s/tree/tests' '%s/tree/bin' && cp '%s/tests/registry' '%s/tree/tests/'",
-              directory, directory, repo, directory))
+    char search[32768];
+    const char *old = getenv("PATH");
+    int n = snprintf(search, sizeof(search), "%s/tree/bin:%s", directory, old ? old : "");
+    if (!fx_mkdir(path("tree/tests")) || !fx_mkdir(path("tree/bin")) ||
+        !fx_copy("tests/registry", path("tree/tests/registry")) ||
+        !fx_copy(self, path("tree/tests/run")) || symlink(self, path("tree/bin/make")) ||
+        symlink(self, path("tree/bin/git")) || !bisect_functions() || n < 0 ||
+        n >= (int)sizeof(search) || setenv("PATH", search, 1))
         exit(1);
-    put("tree/tests/run",
-        "#!/bin/sh\n"
-        "case $1 in\n"
-        "    core) exec \"$ETUDE_LINES_SELF\" --lines -s \"$ETUDE_LINES_SCHEMAS\" "
-        "\"$ETUDE_LINES_MAP\" \"$ETUDE_LINES_STREAM\" ;;\n"
-        "esac\n"
-        "echo \"run: $1: PASS in 1s\"\n"
-        "echo 'run: result: all 1 suites passed'\n",
-        0755);
-    put("tree/bin/make", "#!/bin/sh\nexit 0\n", 0755);
-    put("tree/bin/git", "#!/bin/sh\necho 0000000\n", 0755);
-    put("tree/bisect.sh",
-        "#!/bin/sh\n"
-        "limited() { \"$@\"; }\n"
-        "ledger=\n"
-        "log=$1\n"
-        "mkdir -p \"$log.tree/tests\" && ln -s \"$PWD/tests/run\" \"$log.tree/tests/run\" &&\n"
-        "    awk 'NF && !/^#/ { print $1 \"|qemu|core\" }' \"$ETUDE_LINES_MAP\" \\\n"
-        "        > \"$log.tree/tests/registry\" && : > \"$log.log\" && cd \"$log.tree\" || exit 3\n"
-        "eval \"$(awk '/^(members|admitted|historic|suites)\\(\\) /,/^}/' "
-        "\"$ETUDE_LINES_REPO/tools/ci/bisect.sh\")\"\n"
-        "suites core\n",
-        0755);
 }
 
-/** Run ci's run.sh and bisection's reading on a row's lines. */
+/** Pass a row's formatter inputs to the compiled tests/run fixture. */
+static int reader_environment(const char *map, const char *stream)
+{
+    char schemas[PATH_ROOM + 32];
+    int n = snprintf(schemas, sizeof(schemas), "%s/tools/etude/schemas", repo);
+    return n < 0 || n >= (int)sizeof(schemas) || setenv("ETUDE_LINES_SELF", self, 1) ||
+                   setenv("ETUDE_LINES_SCHEMAS", schemas, 1) || setenv("ETUDE_LINES_MAP", map, 1) ||
+                   setenv("ETUDE_LINES_STREAM", stream, 1) || setenv("ETUDE_LINES_REPO", repo, 1)
+               ? -1
+               : 0;
+}
+
+/** Give bisection the row's registry and initially empty log from C. */
+static int bisect_tree(const char *log, const char *map, char *work, size_t size)
+{
+    char destination[4096], name[256], *line = NULL;
+    size_t capacity = 0;
+    FILE *input = NULL, *registry = NULL;
+    int n = snprintf(work, size, "%s.tree", log), ok;
+    if (n < 0 || n >= (int)size)
+        return 0;
+    n = snprintf(destination, sizeof(destination), "%s/tests", work);
+    if (n < 0 || n >= (int)sizeof(destination) || !fx_mkdir(destination))
+        return 0;
+    n = snprintf(destination, sizeof(destination), "%s/tests/run", work);
+    if (n < 0 || n >= (int)sizeof(destination) || symlink(path("tree/tests/run"), destination))
+        return 0;
+    n = snprintf(destination, sizeof(destination), "%s/tests/registry", work);
+    if (n < 0 || n >= (int)sizeof(destination))
+        return 0;
+    input = fopen(map, "r");
+    registry = fopen(destination, "w");
+    ok = input != NULL && registry != NULL;
+    while (ok && getline(&line, &capacity, input) >= 0)
+        if (line[0] != '#' && sscanf(line, "%255s", name) == 1 &&
+            fprintf(registry, "%s|qemu|core\n", name) < 0)
+            ok = 0;
+    free(line);
+    if (input && (ferror(input) || fclose(input)))
+        ok = 0;
+    if (registry && fclose(registry))
+        ok = 0;
+    n = snprintf(destination, sizeof(destination), "%s.log", log);
+    return ok && n >= 0 && n < (int)sizeof(destination) && fx_text(destination, "");
+}
+
+/** Run the actual CI program and bisection's sourced product functions. */
 static void readers(const struct row *w, const char *map, const char *stream)
 {
-    char failed[1024], name[300];
-    int status;
-    status =
-        shell("cd '%s/tree' && ETUDE_LINES_SELF='%s' ETUDE_LINES_SCHEMAS='%s/tools/etude/schemas' "
-              "ETUDE_LINES_MAP='%s' ETUDE_LINES_STREAM='%s' ETUDE_LINES_REPO='%s' "
-              "PATH=\"$PWD/bin:$PATH\" sh '%s/tools/ci/run.sh' core '%s/ci-%s' >/dev/null 2>&1",
-              directory, self, repo, map, stream, repo, repo, directory, w->run.name);
+    char failed[1024], name[300], program[PATH_ROOM + 32], log[4096], work[4096];
+    const char *ci[] = {"/bin/sh", program, "core", log, NULL};
+    const char *bisect[] = {
+        "/bin/sh",
+        "-c",
+        ". \"$1\"; limited() { \"$@\"; }; ledger=; site_launcher=; log=$2; suites core",
+        "etude-lines-bisect",
+        NULL,
+        log,
+        NULL};
+    int n, status;
+    n = snprintf(program, sizeof(program), "%s/tools/ci/run.sh", repo);
+    if (n < 0 || n >= (int)sizeof(program) || reader_environment(map, stream))
+        exit(1);
+    n = snprintf(log, sizeof(log), "%s/ci-%s", directory, w->run.name);
+    if (n < 0 || n >= (int)sizeof(log))
+        exit(1);
+    status = fx_run(&commands, ci, path("tree"), NULL, NULL);
     snprintf(name, sizeof(name), "ci-%s/failed", w->run.name);
     slurp(name, failed, sizeof(failed));
-    if (strcmp(failed, w->failed) || WEXITSTATUS(status) != (*w->failed ? 1 : 0)) {
+    if (strcmp(failed, w->failed) || status != (*w->failed ? 1 : 0)) {
         fprintf(stderr, "etude_lines_hosttest: %s: ci recorded \"%s\", status %d\n", w->run.name,
-                failed, WEXITSTATUS(status));
+                failed, status);
         CHECK(0, w->detail);
     }
-    status =
-        shell("cd '%s/tree' && ETUDE_LINES_SELF='%s' ETUDE_LINES_SCHEMAS='%s/tools/etude/schemas' "
-              "ETUDE_LINES_MAP='%s' ETUDE_LINES_STREAM='%s' ETUDE_LINES_REPO='%s' "
-              "sh bisect.sh '%s/bisect-%s'",
-              directory, self, repo, map, stream, repo, directory, w->run.name);
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != w->bisect) {
-        fprintf(stderr, "etude_lines_hosttest: %s: bisection judged %d\n", w->run.name,
-                WEXITSTATUS(status));
+    n = snprintf(log, sizeof(log), "%s/bisect-%s", directory, w->run.name);
+    if (n < 0 || n >= (int)sizeof(log) || !bisect_tree(log, map, work, sizeof(work)))
+        exit(1);
+    bisect[4] = path("bisect-functions");
+    status = fx_run(&commands, bisect, work, NULL, NULL);
+    if (status != w->bisect) {
+        fprintf(stderr, "etude_lines_hosttest: %s: bisection judged %d\n", w->run.name, status);
         CHECK(0, w->detail);
     }
 }
@@ -829,19 +889,43 @@ static uint64_t monotonic(void)
     return (uint64_t)t.tv_sec * SECOND + (uint64_t)t.tv_nsec / 1000;
 }
 
-/** Start a process that runs until its standard input closes; give it. */
-static pid_t start_holder(int *write_end)
+/** Hold a real write lock, then acknowledge readiness to the parent. */
+static void holder_lock(int ready, const char *name)
 {
-    int p[2];
+    struct flock lock;
+    int fd = -1;
+    char byte = 'r';
+    memset(&lock, 0, sizeof(lock));
+    lock.l_type = F_WRLCK;
+    lock.l_whence = SEEK_SET;
+    if (name && ((fd = open(name, O_CREAT | O_RDWR, 0600)) < 0 || fcntl(fd, F_SETLKW, &lock)))
+        _exit(1);
+    if (write(ready, &byte, 1) != 1)
+        _exit(1);
+    close(ready);
+    /* The lock descriptor remains open until this process exits. */
+}
+
+/** Start an owned process, optionally holding a file lock until input closes. */
+static pid_t start_holder(int *write_end, const char *lock)
+{
+    int p[2], ready[2];
     pid_t pid;
     char c;
-    if (pipe(p))
+    if (pipe(p) || pipe(ready) || (pid = fork()) < 0)
         exit(1);
-    if ((pid = fork()) == 0) {
+    if (!pid) {
         close(p[1]);
+        close(ready[0]);
+        holder_lock(ready[1], lock);
         _exit(read(p[0], &c, 1) < 0);
     }
+    observed[nobserved++] = pid;
     close(p[0]);
+    close(ready[1]);
+    if (read(ready[0], &c, 1) != 1)
+        exit(1);
+    close(ready[0]);
     *write_end = p[1];
     return pid;
 }
@@ -870,6 +954,8 @@ static int worker(const char *ledger, const char *id, uint64_t cpu, const struct
         etude_ledger_close(l);
         _exit(0);
     }
+    if (pid > 0)
+        observed[nobserved++] = pid;
     if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status))
         return -1;
     return WEXITSTATUS(status);
@@ -888,7 +974,7 @@ static struct etude_ledger *fill_ledger(const char *ledger)
     CHECK(l && etude_ledger_admit(l, "C1", "tester", &res, 1, &cap, 1, 0) == 0,
           "this process's claim is admitted");
     CHECK(worker(ledger, "A1", 500, NULL, 1) == 0, "a worker leaves a claim uncertain");
-    holder = start_holder(&holder_pipe);
+    holder = start_holder(&holder_pipe, path("status.lock"));
     CHECK(etude_process_state((long)holder, &held) == 1, "the holder's identity is read");
     CHECK(worker(ledger, "E1", 100, &held, 0) == 0, "a worker leaves a claim running");
     errno = 0;
@@ -947,7 +1033,7 @@ static void write_records(const char *ledger, const char *build)
     s.args = "with a\nnewline";
     CHECK(etude_status_write(record, &s) == -1 && errno == EINVAL,
           "a field of two lines is refused");
-    gone = start_holder(&end);
+    gone = start_holder(&end, NULL);
     CHECK(etude_process_state((long)gone, &s.owner) == 1, "the ended owner's identity is read");
     close(end);
     waitpid(gone, &status, 0);
@@ -958,20 +1044,39 @@ static void write_records(const char *ledger, const char *build)
         etude_watchdog_free(w[i]);
 }
 
+/** Publish a legacy wait for the file lock held by the owned child. */
+static void write_lock_wait(void)
+{
+    struct etude_pid owner;
+    char text[4096];
+    if (etude_process_state(getpid(), &owner) != 1 || !owner.start_known ||
+        !fx_mkdir(path("root/wait")))
+        exit(1);
+    snprintf(text, sizeof(text), "identity %ld %ld %llu 0\nwork %s/root/wait\nargs lock-wait\n",
+             (long)getpid(), (long)getpgrp(), (unsigned long long)owner.start, directory);
+    put("root/build/.run.status.lock", text, 0600);
+    snprintf(text, sizeof(text), "reason ports\nsince 1\nlock WRITE %s\n", path("status.lock"));
+    put("root/wait/claim.wait", text, 0600);
+}
+
 /** Run the status reader on the tree `root`; give its output. */
 static void read_status(const char *root, char *out, size_t size)
 {
-    const char *reader = getenv("ETUDE_LINES_READER");
-    char command[2 * PATH_ROOM + 100];
-    FILE *pipe;
-    size_t n;
-    snprintf(command, sizeof(command), "python3 -B '%s' '%s' 2>&1",
-             reader && *reader ? reader : "tools/flow/test_status.py", root);
-    pipe = popen(command, "r");
-    n = pipe ? fread(out, 1, size - 1, pipe) : 0;
-    out[n] = 0;
-    if (pipe)
-        pclose(pipe);
+    const char *reader = getenv("ETUDE_LINES_READER"), *tools = getenv("HOST_TEST_TOOLS");
+    char python[4096], setting[4096];
+    const char *environment[] = {setting, NULL};
+    const char *args[] = {python, "-B", reader && *reader ? reader : "tools/flow/test_status.py",
+                          root, NULL};
+    int n = snprintf(python, sizeof(python), "%s/python3",
+                     tools && *tools ? tools : "build/tests/host-suite/tools");
+    if (n < 0 || n >= (int)sizeof(python))
+        exit(1);
+    n = snprintf(setting, sizeof(setting), "RACH2_STATUS_PROC_ROOT=%s",
+                 proc_root ? proc_root : "/proc");
+    if (n < 0 || n >= (int)sizeof(setting))
+        exit(1);
+    fx_run(&commands, args, NULL, environment, NULL);
+    snprintf(out, size, "%s%s", commands.out ? commands.out : "", commands.err ? commands.err : "");
 }
 
 /** Check that the reader's output has `text`. */
@@ -989,10 +1094,6 @@ static void check_reader(const char *root, const char *ledger, const char *owner
     static char out[65536];
     char text[1400];
     read_status(root, out, sizeof(out));
-    if (access("/proc/locks", F_OK)) {
-        has(out, "test status unavailable: Linux testing host required", "the reader needs Linux");
-        return;
-    }
     snprintf(text, sizeof(text), "etude run %s alive: core (run run1, status written ", owner);
     has(out, text, "the run's owner is alive");
     has(out, "working: guest.fpu.xsave on x86_64 in execute: last progress ",
@@ -1044,24 +1145,67 @@ static void check_status(void)
         exit(1);
     put("state/etude/machine", machine, 0644);
     setenv("XDG_STATE_HOME", path("state"), 1);
+    observed[nobserved++] = getpid();
     l = fill_ledger(ledger);
     write_records(ledger, build);
+    write_lock_wait();
+    proc_root = path("proc-unavailable");
+    if (!fx_mkdir(proc_root))
+        exit(1);
+    read_status(root, out, sizeof(out));
+    has(out, "test status unavailable: Linux testing host required", "the reader needs Linux");
+    proc_root = path("proc-observed");
+    if (!status_proc_capture(proc_root, observed, nobserved, path("status.lock"))) {
+        CHECK(0, "the fixture records actual process and lock observations");
+        etude_ledger_close(l);
+        return;
+    }
     snprintf(owner, sizeof(owner), "%ld", (long)getpid());
     check_reader(root, ledger, owner);
+    read_status(root, out, sizeof(out));
+    snprintf(machine, sizeof(machine), "holder %ld alive", (long)holder);
+    has(out, "waits for ports since ", "the reader reports the actual lock wait");
+    has(out, machine, "the reader identifies the kernel-observed lock holder");
     unlink(path("root/build/.run.status.1"));
     unlink(path("root/build/.run.status.2"));
+    unlink(path("root/build/.run.status.lock"));
     read_status(root, out, sizeof(out));
-    if (!access("/proc/locks", F_OK)) {
-        has(out, "no recorded test run", "the ledger is read after the run's record is gone");
-        has(out, "claim A1: uncertain: ", "the ledger is read after the run's record is gone");
-    }
+    has(out, "no recorded test run", "the ledger is read after the run's record is gone");
+    has(out, "claim A1: uncertain: ", "the ledger is read after the run's record is gone");
     etude_ledger_close(l);
+}
+
+/** The compiled tests/run, make and git models used by the actual CI products. */
+static int fixture_role(int argc, char **argv)
+{
+    if (argc > 1 && !strcmp(argv[1], "core")) {
+        char *args[] = {"lines",
+                        "-s",
+                        getenv("ETUDE_LINES_SCHEMAS"),
+                        getenv("ETUDE_LINES_MAP"),
+                        getenv("ETUDE_LINES_STREAM"),
+                        NULL};
+        if (!args[2] || !args[3] || !args[4])
+            return 125;
+        return etude_lines_main(5, args);
+    }
+    printf("run: %s: PASS in 1s\nrun: result: all 1 suites passed\n", argc > 1 ? argv[1] : "");
+    return 0;
 }
 
 int main(int argc, char **argv)
 {
-    const char *base = getenv("TMPDIR");
+    const char *base = getenv("TMPDIR"), *name = strrchr(argv[0], '/');
     size_t i;
+    name = name ? name + 1 : argv[0];
+    if (!strcmp(name, "make"))
+        return 0;
+    if (!strcmp(name, "git")) {
+        puts("0000000");
+        return 0;
+    }
+    if (!strcmp(name, "run"))
+        return fixture_role(argc, argv);
     if (argc > 1 && !strcmp(argv[1], "--lines"))
         return etude_lines_main(argc - 1, argv + 1);
     if (!realpath(argv[0], self) || !getcwd(repo, sizeof(repo)))
@@ -1076,6 +1220,12 @@ int main(int argc, char **argv)
             (int)sizeof(directory) ||
         !mkdtemp(directory))
         return 1;
+    if (!fx_init(&commands, directory, "commands", self))
+        return 1;
+    commands_ready = 1;
+    signal(SIGTERM, stopped);
+    signal(SIGINT, stopped);
+    signal(SIGHUP, stopped);
     make_tree();
     for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++)
         check_row(&rows[i]);

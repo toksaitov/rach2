@@ -92,6 +92,7 @@ def checks(group, arch, base):
             if group == 'boots':
                 item['data'] = [*item.get('data', []), *boot_inputs.files(identity, arch)]
             item['tools'] = required_tools
+            item.setdefault('data', []).extend(metadata(path, 'host-inputs', arch))
             yield item
     elif group == 'checkers':
         for source in CHECKERS:

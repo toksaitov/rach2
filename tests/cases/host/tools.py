@@ -12,7 +12,7 @@ SOURCES = {'mkfatfixture': ['tests/host/mkfatfixture.c'],
            'mkexfatfixture': ['tests/host/mkexfatfixture.c'],
            'setidcheck': ['tools/inspect/setidcheck.c'],
            'etude-volume': ['tools/etude/volume/etude_volume.c', 'tools/etude/volume/volume.c']}
-EXTERNAL = {'tar', 'mdir', 'mcopy', 'mke2fs', 'debugfs', 'dumpe2fs', 'e2fsck'}
+EXTERNAL = {'tar', 'mdir', 'mcopy', 'mke2fs', 'debugfs', 'dumpe2fs', 'e2fsck', 'python3'}
 BUILT = {}
 
 

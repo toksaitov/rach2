@@ -14,6 +14,9 @@ import time
 ETUDE_STATUS = "etude-status 1"
 ETUDE_LEDGER = "etude-ledger 1"
 
+# Tests may provide proc-format observations of their own processes and locks.
+PROC_ROOT = Path(os.environ.get("RACH2_STATUS_PROC_ROOT", "/proc"))
+
 
 def fields(path):
     """Read an atomic key/value record, preserving repeated keys."""
@@ -33,7 +36,7 @@ def process(pid, group=None, start=None):
     try:
         if group is not None and not str(group).isdigit():
             return "unknown"
-        text = Path(f"/proc/{int(pid)}/stat").read_text()
+        text = (PROC_ROOT / str(int(pid)) / "stat").read_text()
         words = text[text.rindex(")") + 2:].split()
         if words[0] in ("Z", "X"):
             return "dead"
@@ -67,7 +70,7 @@ def since(rows):
 def locks():
     """Read current POSIX lock holders, omitting queued lock requests."""
     result = []
-    for line in Path("/proc/locks").read_text().splitlines():
+    for line in (PROC_ROOT / "locks").read_text().splitlines():
         words = line.split()
         if len(words) >= 8 and words[1] == "POSIX":
             major, minor, inode = words[5].split(":")
@@ -190,7 +193,7 @@ def ledger(directory):
 def boot_id():
     """Give this boot's identity, as the ledger records it."""
     try:
-        return Path("/proc/sys/kernel/random/boot_id").read_text().strip() or "-"
+        return (PROC_ROOT / "sys/kernel/random/boot_id").read_text().strip() or "-"
     except OSError:
         return "-"
 
@@ -363,7 +366,7 @@ def claims(directory):
 
 def report(repo):
     """Report each recorded run and any tree lock whose owner has ended."""
-    if not Path("/proc/locks").exists():
+    if not (PROC_ROOT / "locks").exists():
         print("  test status unavailable: Linux testing host required")
         return
     build = Path(repo) / "build"
