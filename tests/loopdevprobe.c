@@ -51,11 +51,13 @@
  * mounts the images, and on the root, where it puts the copy. A native run
  * (probe_args.h) has no volume of images: `images=DIR` names a directory,
  * such as a tmpfs, into which the probe copies the images the workspace has,
- * and the probe neither mounts nor unmounts it; `mount=DIR` and `ro=DIR` name
- * the mount points; and `copy=DIR` a directory on which the probe mounts a
- * tmpfs of its own for the copy, which has no device under it, as the root
- * of the test image has none. A relative path is taken from the working
- * directory.
+ * and the probe neither mounts nor unmounts it, so that a device on a file of
+ * an image's volume has one device under it, not two, and is allowed;
+ * `mount=DIR` and `ro=DIR` name the mount points; and `copy=DIR` a directory
+ * on which the probe mounts a tmpfs of its own for the copy, which has no
+ * device under it, as the root of the test image has none; the tmpfs allows
+ * an unlink of the attached copy and a rename over it, which the KRFFS root
+ * refuses. A relative path is taken from the working directory.
  */
 
 #include "probe.h"
@@ -864,9 +866,14 @@ static void refusal_rows(void)
     if (control_on("attach 1 ", join(path, images_dir, "odd.bin")) != -EINVAL) {
         fail("a file whose length is not whole sectors was attached");
     }
-    /* A device on a file on a device on a file is ELOOP. */
-    if (control_on("attach 1 ", join(path, mount_dir, "inner.bin")) != -ELOOP) {
+    /* A device on a file on a device on a disk is ELOOP; on a tmpfs, which
+     * has no device, the chain is one device long, which is allowed. */
+    rc = control_on("attach 1 ", join(path, mount_dir, "inner.bin"));
+    if (!native_images && rc != -ELOOP) {
         fail("a device was made to stand on another one");
+    }
+    if (native_images && (rc != 0 || control("detach 1") != 0)) {
+        fail_with("a device on a file of a device on a tmpfs", rc);
     }
 
     /* The control node refuses malformed commands. */
@@ -980,8 +987,9 @@ static void read_back_rows(const char *type)
 /**
  * The image copied into the copy's directory, the root, which is memory and
  * has no device under it, or a tmpfs mounted on `copy=`, mounted as `type`.
- * An unlink of the file under the device, a rename over it and an open that
- * truncates it are each refused while the device stands on it.
+ * An open that truncates the file under the device is refused while the
+ * device stands on it, and on the KRFFS root an unlink of it and a rename
+ * over it are refused too; a tmpfs allows those two, as Linux does.
  */
 static void copy_rows(const char *type)
 {
@@ -1002,22 +1010,23 @@ static void copy_rows(const char *type)
     if (rc != 0) {
         fail_with("attaching an image that lives in memory", rc);
     }
-    /* Neither an unlink nor a rename over it removes the attached file. */
-    if (syscall1(SYS_UNLINK, (long)ram) != -EBUSY) {
-        fail("the file under an attached device was unlinked");
-    }
-    fd = syscall3(SYS_OPEN, (long)join(spare, copy_dir, "spare.img"), O_WRONLY | O_CREAT | O_TRUNC,
-                  0644);
-    if (fd < 0) {
-        fail("making a file to rename over the attached one");
-    }
-    syscall3(SYS_WRITE, fd, (long)"x", 1);
-    syscall1(SYS_CLOSE, fd);
-    if (syscall2(SYS_RENAME, (long)spare, (long)ram) != -EBUSY) {
-        fail("the file under an attached device was renamed over");
-    }
-    if (syscall1(SYS_UNLINK, (long)spare) != 0) {
-        fail("removing the spare file");
+    if (copy_dir[0] == '\0') {
+        if (syscall1(SYS_UNLINK, (long)ram) != -EBUSY) {
+            fail("the file under an attached device was unlinked");
+        }
+        fd = syscall3(SYS_OPEN, (long)join(spare, copy_dir, "spare.img"),
+                      O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) {
+            fail("making a file to rename over the attached one");
+        }
+        syscall3(SYS_WRITE, fd, (long)"x", 1);
+        syscall1(SYS_CLOSE, fd);
+        if (syscall2(SYS_RENAME, (long)spare, (long)ram) != -EBUSY) {
+            fail("the file under an attached device was renamed over");
+        }
+        if (syscall1(SYS_UNLINK, (long)spare) != 0) {
+            fail("removing the spare file");
+        }
     }
     /* An open that truncates is a change of its length like any other. */
     if (syscall3(SYS_OPEN, (long)ram, O_WRONLY | O_TRUNC, 0) != -EBUSY) {
