@@ -209,8 +209,6 @@ int main(int argc, char **argv, char **envp)
 
     if (live) {
         live_rows();
-    } else {
-        puts("live DNS: skipped; pass --live to resolve real names");
     }
 
     report_finish();
