@@ -984,6 +984,51 @@ static void read_back_rows(const char *type)
     syscall1(SYS_CLOSE, fd);
 }
 
+/** Read the attached image after a change to its name. */
+static void attached_contents(const char *type)
+{
+    char path[PATH_CAP];
+    int rc = syscall5(SYS_MOUNT, (long)"/dev/loop0", (long)mount_dir, (long)type, MS_RDONLY, 0);
+
+    if (rc != 0) {
+        fail_with("mounting the attached image after unlink", rc);
+    }
+    expect_file(join(path, mount_dir, "hello.txt"), "hello from inside an image");
+    rc = syscall2(SYS_UMOUNT2, (long)mount_dir, 0);
+    if (rc != 0) {
+        fail_with("unmounting the attached image after unlink", rc);
+    }
+}
+
+/** A tmpfs keeps the attached inode through unlink and replacement. */
+static void native_copy_names(const char *type, const char *ram)
+{
+    char spare[PATH_CAP];
+    int fd, rc;
+
+    if (syscall1(SYS_UNLINK, (long)ram) != 0) {
+        fail("unlinking the attached tmpfs image");
+    }
+    attached_contents(type);
+    if (control("detach 0") != 0) {
+        fail("detaching the unlinked tmpfs image");
+    }
+    copy_file(image, ram, "opening the image to copy it again", "copying the image again",
+              "reading the image to copy it again");
+    rc = control_on("attach 0 ", ram);
+    if (rc != 0) {
+        fail_with("attaching the second tmpfs image", rc);
+    }
+    fd = syscall3(SYS_OPEN, (long)join(spare, copy_dir, "spare.img"), O_WRONLY | O_CREAT | O_TRUNC,
+                  0644);
+    if (fd < 0 || syscall3(SYS_WRITE, fd, (long)"x", 1) != 1 || syscall1(SYS_CLOSE, fd) != 0) {
+        fail("making a file to replace the attached tmpfs image");
+    }
+    if (syscall2(SYS_RENAME, (long)spare, (long)ram) != 0) {
+        fail("renaming over the attached tmpfs image");
+    }
+}
+
 /**
  * The image copied into the copy's directory, the root, which is memory and
  * has no device under it, or a tmpfs mounted on `copy=`, mounted as `type`.
@@ -998,6 +1043,9 @@ static void copy_rows(const char *type)
 
     if (copy_dir[0] != '\0') {
         syscall2(SYS_MKDIR, (long)copy_dir, 0755);
+        if (copy_dir[0] != '\0') {
+            native_copy_names(type, ram);
+        }
         rc = syscall5(SYS_MOUNT, (long)"tmpfs", (long)copy_dir, (long)"tmpfs", 0,
                       (long)"size=8388608");
         if (rc != 0) {
@@ -1009,6 +1057,10 @@ static void copy_rows(const char *type)
     rc = control_on("attach 0 ", ram);
     if (rc != 0) {
         fail_with("attaching an image that lives in memory", rc);
+    }
+    /* An open that truncates is a change of its length like any other. */
+    if (syscall3(SYS_OPEN, (long)ram, O_WRONLY | O_TRUNC, 0) != -EBUSY) {
+        fail("an attached image was truncated by an open");
     }
     if (copy_dir[0] == '\0') {
         if (syscall1(SYS_UNLINK, (long)ram) != -EBUSY) {
@@ -1027,10 +1079,6 @@ static void copy_rows(const char *type)
         if (syscall1(SYS_UNLINK, (long)spare) != 0) {
             fail("removing the spare file");
         }
-    }
-    /* An open that truncates is a change of its length like any other. */
-    if (syscall3(SYS_OPEN, (long)ram, O_WRONLY | O_TRUNC, 0) != -EBUSY) {
-        fail("an attached image was truncated by an open");
     }
     rc = syscall5(SYS_MOUNT, (long)"/dev/loop0", (long)mount_dir, (long)type, MS_RDONLY, 0);
     if (rc != 0) {
