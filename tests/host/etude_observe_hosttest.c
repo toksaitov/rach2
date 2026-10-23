@@ -163,15 +163,11 @@ static void native(void)
 
 int main(int argc, char **argv)
 {
-#ifdef _WIN32
+    sequence_program = argv[0];
     int role = sequence_fixture_role(argc, argv);
     if (role >= 0)
         return role;
     sequence_fixture();
-#else
-    (void)argc;
-    (void)argv;
-#endif
     accounting();
     imports();
     native();

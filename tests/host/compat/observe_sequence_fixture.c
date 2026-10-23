@@ -1,7 +1,43 @@
-/* Compiled observer, preparation and collection roles for the Windows owner. */
-#ifdef _WIN32
+/* Compiled observer, preparation and collection roles for the native owner. */
 #include "observe_sequence.h"
+#ifdef _WIN32
 #include "win/winexec.h"
+#else
+#include <poll.h>
+#include "etude/exec.h"
+extern char **environ;
+#endif
+static const char *sequence_program;
+
+static int sequence_input_gone(void)
+{
+#ifdef _WIN32
+    DWORD available;
+    return !PeekNamedPipe(GetStdHandle(STD_INPUT_HANDLE), NULL, 0, NULL, &available, NULL) ||
+           available;
+#else
+    struct pollfd input = {STDIN_FILENO, POLLIN, 0};
+    return poll(&input, 1, 0) > 0 && input.revents;
+#endif
+}
+
+static void sequence_poll_interval(void)
+{
+#ifdef _WIN32
+    Sleep(10); /* interval: poll the fixture stop request every 10 ms */
+#else
+    poll(NULL, 0, 10); /* interval: poll the fixture stop request every 10 ms */
+#endif
+}
+
+static int sequence_mode(const char *mode)
+{
+#ifdef _WIN32
+    return _putenv_s("SEQUENCE_FIXTURE_MODE", mode ? mode : "");
+#else
+    return mode ? setenv("SEQUENCE_FIXTURE_MODE", mode, 1) : unsetenv("SEQUENCE_FIXTURE_MODE");
+#endif
+}
 
 static int sequence_fixture_observer(int argc, char **argv)
 {
@@ -29,9 +65,7 @@ static int sequence_fixture_observer(int argc, char **argv)
     fflush(stdout);
     int status = 9;
     for (;;) {
-        DWORD available;
-        if (!PeekNamedPipe(GetStdHandle(STD_INPUT_HANDLE), NULL, 0, NULL, &available, NULL) ||
-            available)
+        if (sequence_input_gone())
             break;
         FILE *request = fopen(stop, "rb");
         if (request) {
@@ -46,7 +80,7 @@ static int sequence_fixture_observer(int argc, char **argv)
             }
             break;
         }
-        Sleep(10); /* interval: poll the fixture stop request every 10 ms */
+        sequence_poll_interval();
     }
     if (fclose(f))
         status = 9;
@@ -98,15 +132,20 @@ static char *sequence_fixture_read(const char *path)
 static void sequence_fixture_row(const char *mode, unsigned expected)
 {
     char self[32768], receipt[1200], trace_path[1200], stop[1200];
+#ifdef _WIN32
     CHECK(GetModuleFileNameA(NULL, self, sizeof(self)) > 0);
+#else
+    CHECK(realpath(sequence_program, self) != NULL);
+#endif
     snprintf(receipt, sizeof(receipt), "%s/%s.receipt", fix_dir(), mode);
     snprintf(trace_path, sizeof(trace_path), "%s/%s.trace", fix_dir(), mode);
     snprintf(stop, sizeof(stop), "%s/%s.stop", fix_dir(), mode);
-    CHECK(_putenv_s("SEQUENCE_FIXTURE_MODE", mode) == 0);
+    CHECK(sequence_mode(mode) == 0);
     const char *path = getenv("PATH");
     const char *args[] = {self, "observe", "sequence", receipt, "fixture", trace_path, stop,
                           self, path,      path,       self,    "2",       self,       "admit",
                           self, "4",       self,       "run",   stop,      "fixture",  NULL};
+#ifdef _WIN32
     struct etude_win_sup sup;
     struct etude_win_spawn spawn = {0};
     struct etude_win_child *child = NULL;
@@ -125,6 +164,28 @@ static void sequence_fixture_row(const char *mode, unsigned expected)
         CHECK(!error && child->status == expected);
     }
     CHECK(etude_win_sup_close(&sup, 30000) == 0);
+#else
+    struct etude_exec *ex = etude_exec_new();
+    struct etude_exec_spec spec = {0};
+    struct etude_proc *child = NULL;
+    spec.attempt_id = "sequence-fixture";
+    spec.argv = (char *const *)args;
+    spec.envp = environ;
+    spec.output_max = 65536;
+    spec.grace_us = 2000000;
+    CHECK(ex != NULL);
+    int error = ex ? etude_exec_start(ex, &spec, &child) : -1;
+    CHECK(error == 0);
+    if (!error) {
+        while (etude_exec_wait(ex, 100) != child)
+            ;
+        const struct etude_exec_result *r = etude_proc_result(child);
+        CHECK(r->end == ETUDE_END_EXITED && r->value == (int)expected);
+        CHECK(r->cleanup == ETUDE_CLEANUP_CONFIRMED);
+    }
+    if (ex)
+        etude_exec_free(ex);
+#endif
     char *text = sequence_fixture_read(receipt);
     CHECK(text && strstr(text, "\nactive 0\ncleanup confirmed\n"));
     if (text) {
@@ -142,6 +203,5 @@ static void sequence_fixture(void)
     sequence_fixture_row("pass", 0);
     sequence_fixture_row("preparation-failure", 7);
     sequence_fixture_row("observer-failure", 125);
-    CHECK(_putenv_s("SEQUENCE_FIXTURE_MODE", "") == 0);
+    CHECK(sequence_mode(NULL) == 0);
 }
-#endif
