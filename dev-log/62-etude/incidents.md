@@ -217,3 +217,9 @@ A stopped run is ready to resume only after its process identities, ledger claim
 ## A bounded command started before its transfer completed
 
 The Windows preparation check launched its admitted shell before SCP had completed transferring the command file. The shell exited 127 because build.sh was absent; no compiler, native owner, test or QEMU started. The worker retained that log and admission result, waited for successful transfer completion, and used a new admission result for the actual batch. Transfer completion and verification are dependencies of execution, not independent work. A launch must follow successful transfer and file/digest checks sequentially. The frozen candidate was unchanged.
+
+## MSYS preparation changed a UNC producer path
+
+The bounded Windows import check for #988 found that Python's POSIX realpath reduced the two leading slashes of a UNC producer path to one. The resulting path identified a local directory instead of the WSL share. Preparation now preserves the UNC prefix through the installed cygpath conversion and checks the filesystem identity with stat before using the result. The same check then exposed an unsupported rsync --force-local argument; local operands already use absolute MSYS paths and need no such option. Both faults occurred before any collection or QEMU execution.
+
+The repeated check used the public local importer to copy a record-bound 8 MiB image through the actual WSL UNC share into NTFS, with spaces in both destination and control paths. Source and destination digests matched, the source was unchanged, and the native allocation query reported a sparse file with 131,072 allocated bytes. All five path fixture rows passed under the existing MSYS Python. Admission exited zero, the native owner confirmed cleanup, every recorded identity ended, both real ledgers were empty, and the disabled native site policy was unchanged. The original failed attempts and successful receipts remain separate.

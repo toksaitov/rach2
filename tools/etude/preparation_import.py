@@ -16,7 +16,7 @@ import stat
 import subprocess
 import sys
 
-from preparation_paths import cygpath, filesystem_path, native_path
+from preparation_paths import cygpath, filesystem_path, native_path, canonical_path
 from collection_tools import native_goal
 
 FORMAT = 'etude-preparation-producer'
@@ -287,7 +287,7 @@ def get_metadata(producer, work):
 
 
 def idle_local(producer, tree):
-    root = filesystem_path(producer['tree']).resolve(strict=True)
+    root = canonical_path(producer['tree'])
     require(not root.samefile(tree), 'producer and native destination are the same filesystem object')
     require(not os.path.lexists(root / 'build/.run.lock'), 'local producer tree is active or uncertain')
     return root
@@ -304,7 +304,6 @@ def transfer(producer, names, tree, work):
     args = ['rsync', '-a', '--sparse', '--protect-args', '--files-from=' + rsync_path(listing)]
     if producer['transport'] == 'local':
         root = idle_local(producer, tree)
-        args += ['--force-local']
         operand = rsync_path(root).rstrip('/') + '/'
     else:
         locker = [producer['etude'], 'lock', 'tree', producer['tree'], 'prepare-import', '/usr/bin/rsync']
@@ -381,10 +380,10 @@ def validate_native(tree, roles):
 
 def prepare(args):
     tree, work = filesystem_path(args.tree), filesystem_path(args.work)
-    config_path = filesystem_path(args.config).resolve(strict=True)
-    output = filesystem_path(args.provenance).resolve()
+    config_path = canonical_path(args.config)
+    output = canonical_path(args.provenance, strict=False)
     require(not output.exists() and config_path.parent == output.parent and
-            tree.resolve() in output.parents,
+            canonical_path(tree) in output.parents,
             'config and new provenance must be in the declared record output directory')
     config_bytes = config_path.read_bytes()
     config = json.loads(config_bytes)

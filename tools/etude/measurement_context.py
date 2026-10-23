@@ -9,7 +9,7 @@ import re
 import stat
 import subprocess
 import sys
-from preparation_paths import filesystem_path, native_path
+from preparation_paths import filesystem_path, native_path, canonical_path
 
 IDENTITY = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}\Z')
 SHA = re.compile(r'[0-9a-f]{64}\Z')
@@ -37,7 +37,7 @@ def digest(path):
 
 
 def descriptor(path):
-    path = filesystem_path(path).resolve(strict=True)
+    path = canonical_path(path)
     return dict(path=native_path(path), **digest(path))
 
 
@@ -74,7 +74,7 @@ def relative(path):
 
 
 def source(args):
-    tree = args.tree.resolve(strict=True)
+    tree = canonical_path(args.tree)
     frozen(tree, args.commit)
     names = git(tree, 'ls-files', '-z').decode().split('\0')
     names = sorted(set(filter(None, names)) | set(args.extra))
@@ -113,7 +113,7 @@ def observation(trace, stop, run_id):
         return None
     require(stop is not None and not stop.exists() and not stop.is_symlink(),
             'stop request already exists or is absent')
-    path = trace.resolve(strict=True)
+    path = canonical_path(trace)
     require(stat.S_ISREG(path.stat().st_mode), 'observation trace is not regular')
     with path.open('rb') as stream:
         line = stream.readline(65536)
@@ -156,15 +156,15 @@ def exemption(args, output):
 
 
 def compose(args):
-    tree = args.tree.resolve(strict=True)
+    tree = canonical_path(args.tree)
     require(IDENTITY.fullmatch(args.run_id),
             'run identity must be valid and fit the native allocator (at most 255 bytes)')
     source_doc = verify_source(tree, args.source_snapshot, args.source_sha256, args.commit)
-    output = args.output.resolve()
+    output = canonical_path(args.output, strict=False)
     output.mkdir(parents=True, exist_ok=False)
     snapshots = {}
     snapshots['source'] = create(output / 'source.json', source_doc)
-    programs = sorted({args.etude.resolve(strict=True), *(p.resolve(strict=True) for p in args.tool)})
+    programs = sorted({canonical_path(args.etude), *(canonical_path(p) for p in args.tool)})
     snapshots['tools'] = create(output / 'tools.json', dict(schema_version=1,
                                 inputs=[descriptor(p) for p in programs]))
     snapshots['site_profile'] = create(output / 'site.json', dict(schema_version=1,

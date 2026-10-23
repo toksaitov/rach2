@@ -43,6 +43,21 @@ class PreparationPaths(unittest.TestCase):
             with self.assertRaises(ValueError):
                 paths.native_path(__file__)
 
+    def test_unc_canonicalization_preserves_identity_without_realpath(self):
+        unc = '//server/share/input'
+        with patch.object(paths, 'msys_host', return_value=True), \
+                patch.object(paths, 'cygpath', return_value=unc), \
+                patch.object(Path, 'samefile', return_value=True) as same, \
+                patch.object(Path, 'resolve', side_effect=AssertionError('UNC realpath')):
+            self.assertEqual(str(paths.canonical_path(unc)), unc)
+            self.assertEqual(paths.native_path(unc), unc)
+            self.assertEqual(same.call_count, 2)
+        with patch.object(paths, 'msys_host', return_value=True), \
+                patch.object(paths, 'cygpath', return_value=unc), \
+                patch.object(Path, 'samefile', return_value=False):
+            with self.assertRaises(ValueError):
+                paths.canonical_path(unc)
+
     def test_compose_serializes_every_native_descriptor(self):
         with tempfile.TemporaryDirectory(prefix='rach2-context-paths.') as scratch:
             root = Path(scratch).resolve()
