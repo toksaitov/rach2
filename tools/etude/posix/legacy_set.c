@@ -1018,7 +1018,7 @@ static int learn_bounds(struct set *x, const char *plan_text)
             if (!cleanup || strcmp(cleanup, "confirmed") || !run_cleanup ||
                 strcmp(run_cleanup, "confirmed"))
                 continue;
-            if (sample->reason[0] ||
+            if (!sample->watchdog_eligible ||
                 cmp_key_differs(&key, &sample->key, 0, 10, differences, sizeof(differences)) != 0 ||
                 cmp_key_differs(&key, &sample->key, 11, 12, differences, sizeof(differences)) != 0)
                 continue;
@@ -1109,7 +1109,7 @@ static int plan_environment(struct set *x, struct cmp_text *t, struct cmp_text *
     cmp_printf(d, "{\"schema_version\":1,\"state\":\"the driver does not measure caches\"}\n");
     rc |= context_part(x, t, "cache_state", d);
     cmp_printf(d, "{\"schema_version\":1,\"method\":\"native-load-v1\","
-                   "\"stage\":\"planned\"}\n");
+                  "\"stage\":\"planned\"}\n");
     rc |= part(x, t, "load", d);
     cmp_printf(t, "}");
     return rc;
@@ -2162,9 +2162,9 @@ static int run_budget(struct set *x, struct cmp_text *t, int open)
     else
         rc |= elapsed(t, from, end);
     cmp_printf(t, ",\"outside_queue_us\":{\"value\":0,\"method\":\"set-driver-v1\",\"quality\":"
-                   "\"exact\",\"interval_us\":null,\"error_bound\":0},\"one_time_setup_us\":"
-                   "{\"value\":0,\"method\":\"set-driver-v1\",\"quality\":\"exact\","
-                   "\"interval_us\":null,\"error_bound\":0},");
+                  "\"exact\",\"interval_us\":null,\"error_bound\":0},\"one_time_setup_us\":"
+                  "{\"value\":0,\"method\":\"set-driver-v1\",\"quality\":\"exact\","
+                  "\"interval_us\":null,\"error_bound\":0},");
     struct etude_measurement charge = etude_history_elapsed(from, end);
     int known =
         !open && !charge.reason && (!x->o->prepared || etude_context_preparation(x->o->context));
@@ -3547,8 +3547,8 @@ static int identify(struct set *x)
         const char *text = etude_context_text(o->context, "source");
         struct eh_json *source = text ? eh_json_parse(text) : NULL;
         const struct eh_json *commit = eh_json_get(source, "commit");
-        int matching = o->commit && commit && commit->type == 's' &&
-                       !strcmp(o->commit, commit->string);
+        int matching =
+            o->commit && commit && commit->type == 's' && !strcmp(o->commit, commit->string);
         eh_json_free(source);
         if (!matching)
             return refuse(x, "the requested commit differs from the verified source commit");
@@ -3796,7 +3796,8 @@ static int set_up(struct set *x)
         say(x, "etude run: result: error: %s: %s", path, strerror(errno));
         return 2;
     }
-    if (start_observer(x)) return 2;
+    if (start_observer(x))
+        return 2;
     budget_limits(x);
     if ((x->l = etude_ledger_open(o->ledger)) == NULL) {
         say(x, "etude run: result: error: %s: %s", o->ledger, strerror(errno));

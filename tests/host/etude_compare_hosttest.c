@@ -660,6 +660,21 @@ static void check_load_evidence(char *out, size_t size)
     r.execute_us = 10 * SECOND;
     r.unknown_load = 1;
     write_spec(&r);
+    struct cmp_history observed;
+    char *history = (char *)path(r.run);
+    CHECK(cmp_load(&observed, schema, &history, 1) == 0 && observed.sample_count == 1,
+          "load-only exclusion preserves a successful timing observation");
+    if (observed.sample_count == 1)
+        CHECK(observed.samples[0].reason[0] && observed.samples[0].watchdog_eligible,
+              "unknown outside load excludes performance but still teaches a successful watchdog bound");
+    cmp_free(&observed);
+    history = (char *)path("d1");
+    CHECK(cmp_load(&observed, schema, &history, 1) == 0 && observed.sample_count == 1,
+          "read a run with an actual recorded disruption");
+    if (observed.sample_count == 1)
+        CHECK(!observed.samples[0].watchdog_eligible,
+              "an actual disruption cannot teach a watchdog bound");
+    cmp_free(&observed);
     CHECK(compare(out, size, "unknown-load " HISTORY " @unknown-load") == 0,
           "unknown load is reported without failing the comparison command");
     has(out, "verdict: not_comparable", "a run with unknown load is excluded");

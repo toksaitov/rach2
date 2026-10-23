@@ -43,6 +43,7 @@ struct cmp_sample {
     char start[CMP_UTC], end[CMP_UTC];          /* end is empty when unknown */
     uint64_t elapsed_us, error_us, interval_us; /* error: resolution or bound */
     const char *quality;
+    int watchdog_eligible; /* known success, without performance-only load requirements */
     char reason[400];
 };
 

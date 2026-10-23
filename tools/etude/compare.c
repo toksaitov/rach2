@@ -566,13 +566,16 @@ static void check_run(const struct cmp_history *h, struct cmp_sample *s)
     if (strcmp(cmp_text(s->run->data, "plan_id"), s->plan->id))
         exclude(s, "its run record is of another plan, %s", cmp_text(s->run->data, "plan_id"));
     check_result(s, eh_json_get(s->run->data, "result"), "its run");
-    if (!s->run->load_eligible)
-        exclude(s, "its run has no verified continuous load observation or controlled measurement "
-                   "context");
     item = member_with(eh_json_get(s->run->data, "items"), "item_id",
                        cmp_text(s->attempt->data, "item_id"));
     if (!item || !listed(eh_json_get(item, "attempt_records"), s->attempt->id))
         exclude(s, "its run's summary does not list it");
+    const char *attempt_cleanup = cmp_text(eh_json_get(s->attempt->data, "result"), "cleanup");
+    const char *run_cleanup = cmp_text(eh_json_get(s->run->data, "result"), "cleanup");
+    s->watchdog_eligible = !s->reason[0] && attempt_cleanup && run_cleanup &&
+        !strcmp(attempt_cleanup, "confirmed") && !strcmp(run_cleanup, "confirmed");
+    if (!s->run->load_eligible)
+        exclude(s, "its run has no verified continuous load observation or controlled measurement context");
 }
 
 /**
