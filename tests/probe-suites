@@ -28,7 +28,7 @@ poolprobe pools
 mountprobe mount
 fatwriteprobe fatwrite
 forktest exitline
-shelltest ext2
+shelltest selfbuild-ext2
 usbdiskprobe usbdisk
 ext2probe ext2
 krffsprobe krffsmount

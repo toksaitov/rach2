@@ -32,12 +32,8 @@ struct probe {
 };
 
 static const struct probe probes[] = {
-    {"shelltest", "/shelltest"},     {"limitprobe", "/limitprobe"},
-    {"dirprobe", "/dirprobe"},       {"unlinkdirprobe", "/unlinkdirprobe"},
-    {"mvtest", "/mvtest"},           {"vfsprobe", "/vfsprobe"},
-    {"dnstest", "/dnstest"},         {"devprobe", "/devprobe"},
-    {"orphanprobe", "/orphanprobe"}, {"modeprobe", "/modeprobe"},
-    {"mapmusl", "/musl/mapmusl"},
+    {"dirprobe", "/dirprobe"}, {"unlinkdirprobe", "/unlinkdirprobe"}, {"mvtest", "/mvtest"},
+    {"vfsprobe", "/vfsprobe"}, {"mapmusl", "/musl/mapmusl"},
 };
 
 /*

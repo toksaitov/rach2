@@ -45,7 +45,7 @@ static const char back[] = ", returning to kernel shell";
 static const char greeting[] = "Type 'help'";
 
 /* The probes that tests/Readme.md lists for an installed root, ended by NULL,
- * which the ext2 family runs on an ext2 root of the test manifest. */
+ * run on an ext2 root of the test manifest. */
 static const char *const root_probes[] = {
     "shelltest", "limitprobe", "dirprobe",    "unlinkdirprobe", "mvtest", "vfsprobe",
     "dnstest",   "devprobe",   "orphanprobe", "modeprobe",      NULL,
