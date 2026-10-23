@@ -711,9 +711,9 @@ $(IMAGES_DIR)/fatwrite-volume.disk: krffs/manifests/disk-test.manifest $(MANIFES
 	    $(MKMBR) --lba "$$temp" 2048:98304:7f 100352:28672:0c; \
 	    mformat -i "$$temp@@51380224" -F -T 28672 -v M37FAT ::; mv "$$temp" $@
 
-# `tests/run loopdev`: a file system in a file, through a loop device: a FAT32,
-# an ext2 and a KRFFS image on a FAT32 volume, each mounted, written and read
-# back, and everything an attachment refuses. They are the cases of
+# `tests/run loopdev`: a file system in a file, through a loop device: a FAT32
+# and a KRFFS image on a FAT32 volume, each mounted, written and read back, and
+# everything an attachment refuses. They are the cases of
 # tests/cases/machine.loopdev.json, which etude runs, and have no target here.
 # The artifacts of the loop device cases beyond the kernel and the test
 # image, which loopdev_disks.sh makes: the FAT32, ext2 and KRFFS images in

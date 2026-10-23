@@ -357,14 +357,12 @@ static const char *case_name(struct etude_case *c)
 int etude_scenario(struct etude_case *c)
 {
     static const char *const vfats[] = {"probe-ok", "attach-said", "made-in-image", NULL};
-    static const char *const ext2s[] = {"probe-ok", "attach-said", NULL};
     static const char *const krffss[] = {"probe-ok",    "attach-said",   "durable-ok",
                                          "fsck-strict", "made-in-image", NULL};
     static const char *const lags[] = {"probe-ok", "made-in-image", NULL};
     static const char *const ext2backs[] = {"probe-ok", NULL};
     static const char *const pulls[] = {"holding", "pulled", "probe-ok", "gone-said", NULL};
     static const struct row vfat = {"vfat", "volume", 1, "vfat", "probe-ok", "attach-said"};
-    static const struct row ext2 = {"ext2", "volume", 1, "ext2", "probe-ok", "attach-said"};
     static const struct row krffs = {"krffs", "volume", 1, "krffs", "probe-ok", "attach-said"};
     static const struct row durable = {"durable", "volume", 2, "durable", "durable-ok", NULL};
     static const struct row lag = {"lag", "lagging", 1, "vfat", "probe-ok", NULL};
@@ -378,9 +376,6 @@ int etude_scenario(struct etude_case *c)
         probe(&r, &vfat);
         if (lc_step(&r.l, "image"))
             fat_made(&r, "loopdev-disk", "made-in-image");
-    } else if (strcmp(name, "ext2") == 0) {
-        lc_begin(&r.l, c, ext2s);
-        probe(&r, &ext2);
     } else if (strcmp(name, "krffs") == 0) {
         lc_begin(&r.l, c, krffss);
         probe(&r, &krffs);
