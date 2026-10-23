@@ -28,7 +28,43 @@ cd "$source_dir"
 CC="$compiler" perl ./Configure "$target" no-shared no-module no-dso no-tests \
     no-zlib no-legacy --prefix="$output/install" --libdir=lib
 make build_libs
-mkdir -p "$output/lib" "$output/include"
-cp libssl.a libcrypto.a "$output/lib/"
-cp -R include/openssl "$output/include/"
+# Publish fresh copies so read-only headers from the pinned archive are never
+# opened for replacement. Keep the preceding generation until both moves end.
+stage=
+finished=
+published=
+cleanup_publish() {
+    status=$?
+    trap - EXIT HUP INT TERM
+    [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1
+    if [ -n "$stage" ]; then
+        if [ -z "$finished" ]; then
+            for name in $published; do rm -rf "${output:?}/${name:?}"; done
+            for name in lib include; do
+                if [ -d "$stage/previous-$name" ]; then
+                    mv "$stage/previous-$name" "$output/$name"
+                fi
+            done
+        fi
+        rm -rf "$stage"
+    fi
+    exit "$status"
+}
+trap cleanup_publish EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+stage=$(mktemp -d "$output/publish.XXXXXX")
+mkdir "$stage/lib" "$stage/include"
+cp libssl.a libcrypto.a "$stage/lib/"
+cp -R include/openssl "$stage/include/"
+for name in lib include; do
+    if [ -e "$output/$name" ]; then
+        mv "$output/$name" "$stage/previous-$name"
+    fi
+    # Track the destination before the move so a signal cannot omit rollback.
+    published="$name $published"
+    mv "$stage/$name" "$output/$name"
+done
 touch "$output/ready"
+finished=1
