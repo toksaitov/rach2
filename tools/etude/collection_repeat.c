@@ -37,8 +37,7 @@ static int load(struct etude_collection_repeat *r, const char *text)
     return 0;
 }
 
-int etude_collection_repeat_option(struct etude_collection_repeat *r, int option,
-                                  const char *text)
+int etude_collection_repeat_option(struct etude_collection_repeat *r, int option, const char *text)
 {
     uint64_t value;
     if (option == 'L')
@@ -59,18 +58,21 @@ int etude_collection_repeat_option(struct etude_collection_repeat *r, int option
 
 int etude_collection_repeat_valid(const struct etude_collection_repeat *r)
 {
-    if (r->nloads > ETUDE_COLLECTION_LOADS || r->count > 1000 ||
-        r->seed > ETUDE_REPEAT_SEED_MAX || ((!r->seeded) && (r->count || r->nloads)))
+    if (r->nloads > ETUDE_COLLECTION_LOADS || r->count > 1000 || r->seed > ETUDE_REPEAT_SEED_MAX ||
+        ((!r->seeded) && (r->count || r->nloads)))
         return 0;
     for (size_t i = 0; i < r->nloads; i++) {
         const struct etude_load *l = &r->loads[i];
         if (!l->load_id || !*l->load_id || strlen(l->load_id) > 63 ||
-            strspn(l->load_id, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-") != strlen(l->load_id) ||
+            strspn(l->load_id,
+                   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-") !=
+                strlen(l->load_id) ||
             l->kind > ETUDE_LOAD_DISK || !l->amount || l->amount > ETUDE_REPEAT_SEED_MAX ||
             (l->kind == ETUDE_LOAD_CPU && l->amount > 1024))
             return 0;
         for (size_t j = 0; j < i; j++)
-            if (!strcmp(l->load_id, r->loads[j].load_id)) return 0;
+            if (!strcmp(l->load_id, r->loads[j].load_id))
+                return 0;
     }
     return 1;
 }

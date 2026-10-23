@@ -32,8 +32,7 @@ static int option(struct nd_config *c, const char *name, const char *text)
     } options[] = {
         {"--peer", &c->peer},           {"--hostpeer", &c->hostpeer}, {"--network", &c->network},
         {"--interface", &c->interface}, {"--gateway", &c->gateway},   {"--far", &c->far},
-        {"--empty", &c->empty},         {"--silent", &c->silent},
-        {"--purpose", &c->purpose},
+        {"--empty", &c->empty},         {"--silent", &c->silent},     {"--purpose", &c->purpose},
     };
     size_t n;
     if (!strcmp(name, "--echo-port"))

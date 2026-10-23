@@ -12,7 +12,8 @@ static void repetition_cleanup(void)
     repetition_claim = 0;
     etude_collection_load_free(repetition_owned);
     repetition_owned = NULL;
-    if (repetition_ledger) etude_ledger_close(repetition_ledger);
+    if (repetition_ledger)
+        etude_ledger_close(repetition_ledger);
     repetition_ledger = NULL;
 }
 
@@ -33,8 +34,8 @@ static int repetition_load_role(const char *kind)
 static void repetition_load_case(struct etude_ledger *ledger, enum etude_load_kind kind)
 {
     struct etude_load load = {"fixture-load", kind, 1};
-    struct etude_ledger_res cap[] = {{"cpu_millis", 10000}, {"memory_bytes", 1073741824},
-                                    {"disk_bytes", 1048576}};
+    struct etude_ledger_res cap[] = {
+        {"cpu_millis", 10000}, {"memory_bytes", 1073741824}, {"disk_bytes", 1048576}};
     uint64_t amount[3];
     CHECK(!etude_collection_load_resources(&load, amount), "repeat: load resources are explicit");
     struct etude_ledger_res request[3];
@@ -44,7 +45,8 @@ static void repetition_load_case(struct etude_ledger *ledger, enum etude_load_ki
     }
     int admitted = etude_ledger_admit(ledger, "reserved-load", "fixture", request, 3, cap, 3, 0);
     CHECK(!admitted, "repeat: load admitted before its processes start");
-    if (admitted) return;
+    if (admitted)
+        return;
     repetition_claim = 1;
     struct etude_collection_load_spec spec;
     memset(&spec, 0, sizeof(spec));
@@ -67,9 +69,9 @@ static void repetition_load_case(struct etude_ledger *ledger, enum etude_load_ki
     enum etude_cleanup cleanup = etude_collection_load_stop(owned);
     CHECK(cleanup == ETUDE_CLEANUP_CONFIRMED, "repeat: every owned load process is reaped");
     const char *record = etude_collection_load_record(owned);
-    CHECK(strstr(record, "\"cleanup\":\"confirmed\"") &&
-              strstr(record, "\"keeper\":{") && strstr(record, "\"process\":{") &&
-              strstr(record, "\"amount\":1"), "repeat: actual load identity and cleanup retained");
+    CHECK(strstr(record, "\"cleanup\":\"confirmed\"") && strstr(record, "\"keeper\":{") &&
+              strstr(record, "\"process\":{") && strstr(record, "\"amount\":1"),
+          "repeat: actual load identity and cleanup retained");
     CHECK(!etude_ledger_finish(ledger, "reserved-load", cleanup),
           "repeat: reservation ends only after confirmed load cleanup");
     repetition_claim = 0;
@@ -80,17 +82,21 @@ static void repetition_load_case(struct etude_ledger *ledger, enum etude_load_ki
 static void test_repetition_loads(void)
 {
     struct etude_collection_repeat r = {0};
-    CHECK(!etude_collection_repeat_option(&r, 'R', "3") &&
-              !etude_collection_repeat_valid(&r), "repeat: count requires explicit seed");
+    CHECK(!etude_collection_repeat_option(&r, 'R', "3") && !etude_collection_repeat_valid(&r),
+          "repeat: count requires explicit seed");
     CHECK(!etude_collection_repeat_option(&r, 'S', "0") &&
               !etude_collection_repeat_option(&r, 'L', "cpu:1") &&
-              etude_collection_repeat_valid(&r), "repeat: zero seed and native CPU load are valid");
+              etude_collection_repeat_valid(&r),
+          "repeat: zero seed and native CPU load are valid");
     CHECK(etude_collection_repeat_option(&r, 'L', "cpu:0") < 0 &&
               etude_collection_repeat_option(&r, 'L', "cpu:1025") < 0 &&
               etude_collection_repeat_option(&r, 'S', "1") < 0,
           "repeat: invalid or repeated configuration is refused");
     static int registered;
-    if (!registered) { atexit(repetition_cleanup); registered = 1; }
+    if (!registered) {
+        atexit(repetition_cleanup);
+        registered = 1;
+    }
     struct etude_ledger *ledger = etude_ledger_open(fix_path("repeat-ledger"));
     repetition_ledger = ledger;
     CHECK(ledger != NULL, "repeat: private ledger opens");

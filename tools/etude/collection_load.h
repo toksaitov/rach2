@@ -10,7 +10,8 @@ struct etude_collection_load_spec {
     const struct etude_load *load;
     struct etude_ledger *ledger;
 };
-struct etude_collection_load *etude_collection_load_start(const struct etude_collection_load_spec *);
+struct etude_collection_load *
+etude_collection_load_start(const struct etude_collection_load_spec *);
 int etude_collection_load_poll(struct etude_collection_load *);
 int etude_collection_load_wait(struct etude_collection_load *, int milliseconds);
 enum etude_cleanup etude_collection_load_stop(struct etude_collection_load *);

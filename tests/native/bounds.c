@@ -5,8 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 static const char *fields[] = {"case", "gap", "transfer", "capture", "cleanup"};
-static enum etude_stage stages[] = {ETUDE_STAGE_EXECUTE, ETUDE_STAGE_TRANSFER,
-                                     ETUDE_STAGE_CAPTURE, ETUDE_STAGE_CLEANUP};
+static enum etude_stage stages[] = {ETUDE_STAGE_EXECUTE, ETUDE_STAGE_TRANSFER, ETUDE_STAGE_CAPTURE,
+                                    ETUDE_STAGE_CLEANUP};
 static const char *names[] = {"execute", "transfer", "capture", "cleanup"};
 static uint64_t number(const struct eh_json *o, const char *name)
 {
@@ -22,8 +22,7 @@ static int declarations(struct nc_history *h)
         return 0;
     struct eh_json *doc = eh_json_parse(bytes);
     free(bytes);
-    int ok = doc && cmp_text(doc, "policy") &&
-             !strcmp(cmp_text(doc, "policy"), ETUDE_BOUND_POLICY);
+    int ok = doc && cmp_text(doc, "policy") && !strcmp(cmp_text(doc, "policy"), ETUDE_BOUND_POLICY);
     for (size_t i = 0; ok && i < 5; i++) {
         const struct eh_json *d = eh_json_get(doc, fields[i]);
         struct etude_bound *b = &h->declared[i];
@@ -36,8 +35,8 @@ static int declarations(struct nc_history *h)
     eh_json_free(doc);
     return ok;
 }
-static int step_value(const struct cmp_history *h, const struct cmp_sample *s,
-                       const char *stage, int gap, uint64_t *value)
+static int step_value(const struct cmp_history *h, const struct cmp_sample *s, const char *stage,
+                      int gap, uint64_t *value)
 {
     const struct eh_json *steps = eh_json_get(s->attempt->data, "steps");
     for (const struct eh_json *id = steps ? steps->child : NULL; id; id = id->next) {
@@ -49,12 +48,13 @@ static int step_value(const struct cmp_history *h, const struct cmp_sample *s,
             continue;
         const struct eh_json *result = eh_json_get(r->data, "result");
         const struct eh_json *d = eh_json_get(result, "disruptions");
-        const struct eh_json *metric = gap ? eh_json_get(r->data, "max_progress_gap_us") :
-            eh_json_get(eh_json_get(r->data, "time"), "elapsed_us");
+        const struct eh_json *metric =
+            gap ? eh_json_get(r->data, "max_progress_gap_us")
+                : eh_json_get(eh_json_get(r->data, "time"), "elapsed_us");
         const struct eh_json *v = eh_json_get(metric, "value");
         if (strcmp(cmp_text(result, "outcome"), "pass") ||
-            strcmp(cmp_text(result, "cleanup"), "confirmed") || (d && d->child) ||
-            !v || v->type != 'n' || v->number < 0)
+            strcmp(cmp_text(result, "cleanup"), "confirmed") || (d && d->child) || !v ||
+            v->type != 'n' || v->number < 0)
             continue;
         *value = (uint64_t)v->number;
         return 1;
@@ -64,14 +64,15 @@ static int step_value(const struct cmp_history *h, const struct cmp_sample *s,
 static int matches(struct nc_history *h, struct nc_measure *m, const struct cmp_sample *s)
 {
     const struct eh_json *env = eh_json_get(s->plan->data, "environment");
-    return h->conf->machine && h->conf->kernel_sha256 && s->watchdog_eligible && !strcmp(s->key.value[0], m->case_id) &&
-           !strcmp(s->key.value[1], h->conf->arch) && !strcmp(s->key.value[2], "native") &&
-           !strcmp(s->key.value[3], h->machine) && !strcmp(s->key.value[4], "native") &&
-           !strcmp(s->key.value[5], m->workload) && !strcmp(s->key.value[6], m->assertions) &&
-           !strcmp(s->key.value[7], m->profile) && !strcmp(cmp_text(env, "os_version"), h->version);
+    return h->conf->machine && h->conf->kernel_sha256 && s->watchdog_eligible &&
+           !strcmp(s->key.value[0], m->case_id) && !strcmp(s->key.value[1], h->conf->arch) &&
+           !strcmp(s->key.value[2], "native") && !strcmp(s->key.value[3], h->machine) &&
+           !strcmp(s->key.value[4], "native") && !strcmp(s->key.value[5], m->workload) &&
+           !strcmp(s->key.value[6], m->assertions) && !strcmp(s->key.value[7], m->profile) &&
+           !strcmp(cmp_text(env, "os_version"), h->version);
 }
 static int learn(struct nc_history *h, struct nc_measure *m, unsigned field,
-                  struct etude_bound_fixed *fixed)
+                 struct etude_bound_fixed *fixed)
 {
     uint64_t *samples = calloc(h->prior.sample_count + 1, sizeof(*samples));
     const char **runs = calloc(h->prior.sample_count + 1, sizeof(*runs));
@@ -86,12 +87,13 @@ static int learn(struct nc_history *h, struct nc_measure *m, unsigned field,
         if (!matches(h, m, s))
             continue;
         size_t j;
-        for (j = 0; j < count && strcmp(runs[j], s->attempt->run); j++) {}
+        for (j = 0; j < count && strcmp(runs[j], s->attempt->run); j++) {
+        }
         if (j < count)
             continue;
         uint64_t value = s->elapsed_us;
-        if (field && !step_value(&h->prior, s, field == 1 ? "execute" : fields[field],
-                                  field == 1, &value))
+        if (field &&
+            !step_value(&h->prior, s, field == 1 ? "execute" : fields[field], field == 1, &value))
             continue;
         runs[count] = s->attempt->run;
         samples[count++] = value;
@@ -107,7 +109,8 @@ int nc_bounds(struct nc_history *h)
         return 0;
     for (size_t n = 0; n < h->count; n++) {
         struct nc_measure *m = &h->items[n];
-        struct etude_bound_fixed *b[] = {&m->whole, &m->gap, &m->transfer, &m->capture, &m->cleanup};
+        struct etude_bound_fixed *b[] = {&m->whole, &m->gap, &m->transfer, &m->capture,
+                                         &m->cleanup};
         for (unsigned i = 0; i < 5; i++)
             if (!learn(h, m, i, b[i]))
                 return 0;

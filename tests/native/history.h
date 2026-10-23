@@ -32,7 +32,8 @@ struct nc_history {
     const struct nc_case **cases;
     size_t count;
     char store[4096], schema[4096], machine[128], boot[128], version[256], commit[65];
-    char plan[256], selection[2048], source[2048], runner[2048], policy[2048], environment[2048], reproduce[2048];
+    char plan[256], selection[2048], source[2048], runner[2048], policy[2048], environment[2048],
+        reproduce[2048];
     struct etude_bound declared[5];
     int failed, incomplete, unconfirmed, terminal;
 };
@@ -49,7 +50,7 @@ int nc_history_open(struct nc_history *h, const struct nc_config *conf,
 int nc_history_attempt(struct nc_history *h, size_t n, const struct etude_native_result *result,
                        int status, const char *reason);
 int nc_totals(struct nc_history *h, struct cmp_text *stage, struct cmp_text *family,
-               struct cmp_text *concurrency);
+              struct cmp_text *concurrency);
 int nc_history_finish(struct nc_history *h);
 int nc_history_close(struct nc_history *h);
 int nc_bounds(struct nc_history *h);

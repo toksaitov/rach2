@@ -130,7 +130,7 @@ int flow_ci_preparation(struct fixture *f)
 
 int flow_ci_retention_setup(struct fixture *f)
 {
-    const char *names[] = {"retention.py", "retention_io.py", "retention_closure.py",
+    const char *names[] = {"retention.py",          "retention_io.py",     "retention_closure.py",
                            "retention_registry.py", "retention_access.py", "retention_issues.py"};
     for (size_t i = 0; i < sizeof(names) / sizeof(*names); i++) {
         char from[160], to[200];
@@ -155,17 +155,19 @@ int flow_ci_retention_setup(struct fixture *f)
     if (n < 0 || (size_t)n >= sizeof text || !flow_put(f, "retention.policy", text))
         return 0;
     fx_env("ETUDE_RETENTION", flow_path(f, "retention.policy"));
-    const char *argv[] = {"python3", flow_path(f, "tree/tools/ci/retention.py"), "--policy",
-                          flow_path(f, "retention.policy"), "--site", flow_path(f, "native.site"),
-                          "init", NULL};
+    const char *argv[] = {"python3",  flow_path(f, "tree/tools/ci/retention.py"),
+                          "--policy", flow_path(f, "retention.policy"),
+                          "--site",   flow_path(f, "native.site"),
+                          "init",     NULL};
     fx_run(f, argv, NULL, NULL, NULL);
     return f->status == 0;
 }
 
 int flow_ci_retained_out(struct fixture *f, char *out, size_t size)
 {
-    const char *argv[] = {"python3", flow_path(f, "tree/tools/ci/retention.py"), "--policy",
-                          flow_path(f, "retention.policy"), "--site", flow_path(f, "native.site"),
+    const char *argv[] = {"python3",  flow_path(f, "tree/tools/ci/retention.py"),
+                          "--policy", flow_path(f, "retention.policy"),
+                          "--site",   flow_path(f, "native.site"),
                           "allocate", NULL};
     fx_run(f, argv, NULL, NULL, NULL);
     if (f->status != 0 || !f->out)

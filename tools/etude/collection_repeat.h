@@ -12,7 +12,7 @@ struct etude_collection_repeat {
     char names[ETUDE_COLLECTION_LOADS][32];
 };
 int etude_collection_repeat_option(struct etude_collection_repeat *repeat, int option,
-                                  const char *value);
+                                   const char *value);
 int etude_collection_repeat_valid(const struct etude_collection_repeat *repeat);
 void etude_collection_repeat_spec(const struct etude_collection_repeat *repeat,
                                   const struct etude_repeat_case *cases, size_t count,

@@ -82,16 +82,24 @@ static int save_result(const char *directory, struct nc_history *history, size_t
     json_string(fp, reason ? reason : "");
     fprintf(fp, ",\"collection_status\":%d,\"measurements\":", status);
     struct cmp_text metrics = {0};
-    cmp_printf(&metrics, "{\"time\":"); nc_time(history, &metrics, &measure->start, &measure->end);
-    cmp_printf(&metrics, ",\"cpu_us\":"); nc_metric(&metrics, &r->attempt.cpu_us);
-    cmp_printf(&metrics, ",\"peak_bytes\":"); nc_metric(&metrics, &r->attempt.peak_bytes);
+    cmp_printf(&metrics, "{\"time\":");
+    nc_time(history, &metrics, &measure->start, &measure->end);
+    cmp_printf(&metrics, ",\"cpu_us\":");
+    nc_metric(&metrics, &r->attempt.cpu_us);
+    cmp_printf(&metrics, ",\"peak_bytes\":");
+    nc_metric(&metrics, &r->attempt.peak_bytes);
     cmp_printf(&metrics, ",\"watchdog_expiry\":");
-    nc_quote(&metrics, etude_expiry_name(etude_watchdog_check(measure->watchdog, measure->end.monotonic_us)));
-    cmp_printf(&metrics, ",\"case_bound_us\":%llu,\"gap_bound_us\":%llu,\"case_samples\":%lu,\"gap_samples\":%lu}",
-               (unsigned long long)measure->whole.us, (unsigned long long)measure->gap.us,
-               (unsigned long)measure->whole.samples, (unsigned long)measure->gap.samples);
-    if (metrics.failed) ok = 0;
-    else fputs(metrics.data, fp);
+    nc_quote(&metrics,
+             etude_expiry_name(etude_watchdog_check(measure->watchdog, measure->end.monotonic_us)));
+    cmp_printf(
+        &metrics,
+        ",\"case_bound_us\":%llu,\"gap_bound_us\":%llu,\"case_samples\":%lu,\"gap_samples\":%lu}",
+        (unsigned long long)measure->whole.us, (unsigned long long)measure->gap.us,
+        (unsigned long)measure->whole.samples, (unsigned long)measure->gap.samples);
+    if (metrics.failed)
+        ok = 0;
+    else
+        fputs(metrics.data, fp);
     free(metrics.data);
     fputs("}\n", fp);
     return !fclose(fp) && ok;
@@ -167,13 +175,17 @@ int nc_run(const struct nc_config *conf, const struct nc_inventory *inventory,
     a.spec.attempt = measure->attempt;
     a.spec.deadline_ms = (measure->whole.us + 999) / 1000;
     uint64_t stage = measure->transfer.us;
-    if (measure->capture.us > stage) stage = measure->capture.us;
-    if (measure->cleanup.us > stage) stage = measure->cleanup.us;
+    if (measure->capture.us > stage)
+        stage = measure->capture.us;
+    if (measure->cleanup.us > stage)
+        stage = measure->cleanup.us;
     a.spec.stage_ms = (stage + 999) / 1000;
     a.spec.observer = &measure->observer;
 
     if (interrupted || history->unconfirmed) {
-        snprintf(a.why, sizeof(a.why), history->unconfirmed ? "earlier native cleanup is unconfirmed" : "the collection was interrupted before this case");
+        snprintf(a.why, sizeof(a.why),
+                 history->unconfirmed ? "earlier native cleanup is unconfirmed"
+                                      : "the collection was interrupted before this case");
         made = 0;
         r.status = 3;
     }
@@ -220,18 +232,34 @@ static int configure(int argc, char **argv, struct nc_config *c, int *first)
         }
         if (n + 1 == argc)
             return 0;
-        struct option { const char *name; const char **value; } options[] = {
-            {"--tree", &c->tree}, {"--inventory", &c->inventory}, {"--images", &c->images},
-            {"--guest", &c->guest}, {"--state", &c->state}, {"--stage", &c->stage},
-            {"--results", &c->results}, {"--run", &c->run}, {"--purpose", &c->purpose},
-            {"--machine-id", &c->machine}, {"--kernel-sha256", &c->kernel_sha256},
-            {"--arch", &c->arch}, {"--peer", &c->peer}, {"--outside-peer", &c->outside},
-            {"--interface", &c->interface}, {"--address", &c->address},
-            {"--gateway", &c->gateway}, {"--far", &c->far}, {"--empty", &c->empty},
-            {"--silent", &c->silent}
-        };
+        struct option {
+            const char *name;
+            const char **value;
+        } options[] = {{"--tree", &c->tree},
+                       {"--inventory", &c->inventory},
+                       {"--images", &c->images},
+                       {"--guest", &c->guest},
+                       {"--state", &c->state},
+                       {"--stage", &c->stage},
+                       {"--results", &c->results},
+                       {"--run", &c->run},
+                       {"--purpose", &c->purpose},
+                       {"--machine-id", &c->machine},
+                       {"--kernel-sha256", &c->kernel_sha256},
+                       {"--arch", &c->arch},
+                       {"--peer", &c->peer},
+                       {"--outside-peer", &c->outside},
+                       {"--interface", &c->interface},
+                       {"--address", &c->address},
+                       {"--gateway", &c->gateway},
+                       {"--far", &c->far},
+                       {"--empty", &c->empty},
+                       {"--silent", &c->silent}};
         for (size_t i = 0; i < sizeof(options) / sizeof(*options); i++)
-            if (!strcmp(argv[n], options[i].name)) { value = options[i].value; break; }
+            if (!strcmp(argv[n], options[i].name)) {
+                value = options[i].value;
+                break;
+            }
         if (!value || !*argv[n + 1] || strpbrk(argv[n + 1], "\r\n\t"))
             return 0;
         *value = argv[n + 1];
@@ -239,8 +267,8 @@ static int configure(int argc, char **argv, struct nc_config *c, int *first)
     *first = n;
     return (!strcmp(c->arch, "i686") || !strcmp(c->arch, "x86_64")) &&
            (!strcmp(c->purpose, "focused") || !strcmp(c->purpose, "phase_first_run")) &&
-           (!c->kernel_sha256 || (strlen(c->kernel_sha256) == 64 &&
-              strspn(c->kernel_sha256, "0123456789abcdef") == 64));
+           (!c->kernel_sha256 ||
+            (strlen(c->kernel_sha256) == 64 && strspn(c->kernel_sha256, "0123456789abcdef") == 64));
 }
 static int defaults(struct nc_config *c, const char *self)
 {
@@ -322,17 +350,20 @@ int nc_collection(struct nc_config *conf, const struct nc_inventory *i, int argc
         return 2;
     }
     for (size_t n = 0; n < history.count; n++) {
-            int status;
-            status = nc_run(conf, i, history.cases[n], &history, n);
-            failures += status != 0;
-            ran++;
-        }
+        int status;
+        status = nc_run(conf, i, history.cases[n], &history, n);
+        failures += status != 0;
+        ran++;
+    }
     if (history.unconfirmed || rmdir(lock)) {
-        failures++; history.unconfirmed = 1;
+        failures++;
+        history.unconfirmed = 1;
         fprintf(stderr, "native: cleanup unconfirmed; collection claim retained: %s\n", lock);
     }
-    if (!nc_history_finish(&history)) failures++;
-    if (!nc_history_close(&history)) failures++;
+    if (!nc_history_finish(&history))
+        failures++;
+    if (!nc_history_close(&history))
+        failures++;
     printf("native: result: %u cases, %u failed or incomplete%s\n", ran, failures,
            interrupted ? ", interrupted" : "");
     return interrupted ? 128 + interrupted : failures ? 1 : 0;

@@ -660,11 +660,13 @@ static int item_docs(const struct set *x, struct member *m)
         cmp_printf(&binding, "{\"policy\":\"%s\",\"seed\":%llu,\"order_sha256\":\"%s\",\"load\":",
                    ETUDE_REPEAT_POLICY, (unsigned long long)x->o->repeat->seed, order);
         if (m->load) {
-            const char *kind = m->load->kind == ETUDE_LOAD_CPU ? "cpu" :
-                               m->load->kind == ETUDE_LOAD_MEMORY ? "memory" : "disk";
+            const char *kind = m->load->kind == ETUDE_LOAD_CPU      ? "cpu"
+                               : m->load->kind == ETUDE_LOAD_MEMORY ? "memory"
+                                                                    : "disk";
             cmp_printf(&binding, "{\"load_id\":\"%s\",\"kind\":\"%s\",\"amount\":%llu}",
                        m->load->load_id, kind, (unsigned long long)m->load->amount);
-        } else cmp_printf(&binding, "null");
+        } else
+            cmp_printf(&binding, "null");
         cmp_printf(&binding, "}");
         cmp_printf(&d, "{\"declared\":%s,\"repetition\":%s}\n", k->workload.data, binding.data);
         rc = keep_bytes(x, d.data, d.length, m->workload, sizeof(m->workload));
@@ -861,7 +863,8 @@ static void reproduce(const struct set *x, struct cmp_text *d)
     size_t i;
 
     const char *cache = etude_context_text(x->o->context, "cache_evidence");
-    cmp_printf(d, "{\"schema_version\":1,\"cache_evidence\":%s,\"items\":[", cache ? cache : "null");
+    cmp_printf(d, "{\"schema_version\":1,\"cache_evidence\":%s,\"items\":[",
+               cache ? cache : "null");
     for (i = 0; i < x->n; i++) {
         cmp_printf(d, "%s{\"item_id\":", i ? "," : "");
         string(d, x->mem[i].item_id);
@@ -939,8 +942,8 @@ static void selection(const struct set *x, struct cmp_text *d)
                 continue;
             cmp_printf(d, "%s{\"case_id\":", count++ ? "," : "");
             string(d, k->case_id);
-            cmp_printf(d, ",\"architecture\":\"%s\",\"repetitions\":%lld}", k->arch, k->reps *
-                       (x->o->repeat && x->o->repeat->count ? x->o->repeat->count : 1));
+            cmp_printf(d, ",\"architecture\":\"%s\",\"repetitions\":%lld}", k->arch,
+                       k->reps * (x->o->repeat && x->o->repeat->count ? x->o->repeat->count : 1));
         }
         cmp_printf(d, "]}");
     }
@@ -1266,10 +1269,13 @@ static int write_plan(struct set *x)
     names(x, &d, is_exclusive);
     if (x->o->repeat) {
         struct etude_repeat_spec spec;
-        etude_collection_repeat_spec(x->o->repeat, x->repeat_cases, x->repeat_count, o->width, &spec);
+        etude_collection_repeat_spec(x->o->repeat, x->repeat_cases, x->repeat_count, o->width,
+                                     &spec);
         char *record = etude_repeat_record(&spec, x->run_id, x->repeat_items, x->n);
-        if (!record) return -1;
-        cmp_printf(&d, ",\"repetition\":%s,\"load_ready_us\":30000000,\"load_grace_us\":5000000", record);
+        if (!record)
+            return -1;
+        cmp_printf(&d, ",\"repetition\":%s,\"load_ready_us\":30000000,\"load_grace_us\":5000000",
+                   record);
         free(record);
     }
     cmp_printf(&d, "}\n");
@@ -1463,7 +1469,8 @@ static enum etude_cleanup stop_load(struct command *c, enum etude_cleanup cleanu
     }
     if (etude_collection_load_failed(c->load)) {
         c->outcome = INCOMPLETE;
-        snprintf(c->reason, sizeof(c->reason), "the reserved load failed or ended before cancellation");
+        snprintf(c->reason, sizeof(c->reason),
+                 "the reserved load failed or ended before cancellation");
         snprintf(c->disruption, sizeof(c->disruption), "%s", c->reason);
     }
     if (cleanup != ETUDE_CLEANUP_CONFIRMED) {
@@ -2181,7 +2188,7 @@ static int totals(const struct set *x, struct cmp_text *t)
 
 /* Keep a load's complete bounded readiness and diagnostic output by digest. */
 static int load_capture(const struct set *x, struct etude_collection_load *load,
-                         struct cmp_text *text)
+                        struct cmp_text *text)
 {
     cmp_printf(text, ",\"capture\":{");
     for (int error = 0; error < 2; error++) {
@@ -2189,12 +2196,15 @@ static int load_capture(const struct set *x, struct etude_collection_load *load,
         char *bytes = NULL;
         size_t size = 0;
         cmp_printf(text, "%s\"%s\":", error ? "," : "", error ? "stderr" : "stdout");
-        if (!path) cmp_printf(text, "null");
+        if (!path)
+            cmp_printf(text, "null");
         else {
-            if (read_tail(path, 65536, &bytes, &size)) return -1;
+            if (read_tail(path, 65536, &bytes, &size))
+                return -1;
             int rc = keep(x, bytes, size, text);
             free(bytes);
-            if (rc) return -1;
+            if (rc)
+                return -1;
         }
     }
     cmp_printf(text, "}");
@@ -2218,19 +2228,27 @@ static int observed(const struct set *x, struct cmp_text *t)
                        : "{\"schema_version\":1,\"method\":\"native-load-v1\",\"comparison_"
                          "available\":false}");
     if (x->o->repeat) {
-        while (l.length && (l.data[l.length - 1] == '\n' || l.data[l.length - 1] == ' ')) l.length--;
-        if (!l.length || l.data[l.length - 1] != '}') { free(l.data); free(u.data); return -1; }
+        while (l.length && (l.data[l.length - 1] == '\n' || l.data[l.length - 1] == ' '))
+            l.length--;
+        if (!l.length || l.data[l.length - 1] != '}') {
+            free(l.data);
+            free(u.data);
+            return -1;
+        }
         l.data[--l.length] = 0;
         cmp_printf(&l, ",\"applied\":[");
         size_t n = 0;
         for (size_t i = 0; i < x->n; i++) {
-            if (!x->mem[i].load) continue;
+            if (!x->mem[i].load)
+                continue;
             cmp_printf(&l, "%s{\"item_id\":", n++ ? "," : "");
             string(&l, x->mem[i].item_id);
             cmp_printf(&l, ",\"load\":");
             cmp_printf(&l, "%s", etude_collection_load_record(x->mem[i].c.load));
             if (load_capture(x, x->mem[i].c.load, &l)) {
-                free(l.data); free(u.data); return -1;
+                free(l.data);
+                free(u.data);
+                return -1;
             }
             cmp_printf(&l, "}");
         }
@@ -3278,8 +3296,10 @@ static void drive(struct set *x)
             if (c->state == RUNNING) {
                 busy++;
                 if (c->load && etude_collection_load_poll(c->load) < 0 && !c->cancelled) {
-                    if (x->mem[i].g) legacy_guest_cancel(x->mem[i].g);
-                    else etude_supervised_cancel(c->sup);
+                    if (x->mem[i].g)
+                        legacy_guest_cancel(x->mem[i].g);
+                    else
+                        etude_supervised_cancel(c->sup);
                     c->cancelled = 1;
                 }
                 if (x->mem[i].g != NULL)
@@ -3295,7 +3315,8 @@ static void drive(struct set *x)
             return;
         status(x, 0);
         if (busy == 0) {
-            if (wait_loading(x)) continue;
+            if (wait_loading(x))
+                continue;
 #ifdef _WIN32
             Sleep(ASK_MS);
 #else
@@ -3485,8 +3506,7 @@ static int check_cases(struct set *x)
                 continue;
             size_t factor = o->repeat && o->repeat->count ? o->repeat->count : 1;
             uint64_t repetitions = (uint64_t)x->manifests[i].cases[k].reps;
-            if ((o->repeat && repetitions > UINT_MAX / factor) ||
-                repetitions > SIZE_MAX / factor ||
+            if ((o->repeat && repetitions > UINT_MAX / factor) || repetitions > SIZE_MAX / factor ||
                 x->n > SIZE_MAX / sizeof(struct member) - repetitions * factor)
                 return refuse(x, "the requested repetition inventory is too large");
             x->n += (size_t)repetitions * factor;
@@ -3878,8 +3898,10 @@ static size_t take_members(struct set *x, size_t s, size_t k)
     long long r;
 
     for (c = 0; c < man->ncases; c++)
-        for (r = 0; runs_case(x, s, &man->cases[c]) && r < man->cases[c].reps *
-                  (x->o->repeat && x->o->repeat->count ? x->o->repeat->count : 1); r++, k++) {
+        for (r = 0; runs_case(x, s, &man->cases[c]) &&
+                    r < man->cases[c].reps *
+                            (x->o->repeat && x->o->repeat->count ? x->o->repeat->count : 1);
+             r++, k++) {
             x->mem[k].m = &x->members[s];
             x->mem[k].manifest = man;
             x->mem[k].k = &man->cases[c];
@@ -3898,7 +3920,9 @@ static int repeat_members(struct set *x)
     size_t *first = calloc(x->n, sizeof(*first));
     x->repeat_cases = calloc(x->n, sizeof(*x->repeat_cases));
     if (!ordered || !first || !x->repeat_cases) {
-        free(ordered); free(first); return -1;
+        free(ordered);
+        free(first);
+        return -1;
     }
     for (size_t i = 0; i < x->n; i++) {
         struct member *m = &x->mem[i];
@@ -3922,9 +3946,12 @@ static int repeat_members(struct set *x)
             ordered[i] = x->mem[first[item->case_index] + item->repetition];
             ordered[i].load = item->load == ETUDE_REPEAT_NO_LOAD ? NULL : &r->loads[item->load];
         }
-        if (!rc) memcpy(x->mem, ordered, count * sizeof(*ordered));
-    } else rc = -1;
-    free(first); free(ordered);
+        if (!rc)
+            memcpy(x->mem, ordered, count * sizeof(*ordered));
+    } else
+        rc = -1;
+    free(first);
+    free(ordered);
     return rc;
 }
 
@@ -4089,7 +4116,8 @@ static int prepare_members(struct set *x)
         for (i = 0; i < x->n; i++) {
             struct member *m = &x->mem[i];
             m->learned = malloc(sizeof(*m->learned));
-            if (!m->learned) return refuse(x, "repetition bounds could not be allocated");
+            if (!m->learned)
+                return refuse(x, "repetition bounds could not be allocated");
             *m->learned = *m->k;
             m->k = m->learned;
         }

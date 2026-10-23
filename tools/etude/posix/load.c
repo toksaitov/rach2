@@ -118,9 +118,9 @@ static int load_disk(uint64_t bytes)
     static unsigned char chunk[LOAD_CHUNK];
     char name[64];
     snprintf(name, sizeof(name), "etude-stress.%lu", (unsigned long)GetCurrentProcessId());
-    HANDLE file = CreateFileA(name, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_DELETE, NULL,
-                              CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
-                              NULL);
+    HANDLE file =
+        CreateFileA(name, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_DELETE, NULL, CREATE_NEW,
+                    FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, NULL);
     if (file == INVALID_HANDLE_VALUE)
         return 1;
     memset(chunk, 0xa5, sizeof(chunk));
@@ -128,18 +128,22 @@ static int load_disk(uint64_t bytes)
     for (;;) {
         LARGE_INTEGER at;
         at.QuadPart = 0;
-        if (!SetFilePointerEx(file, at, NULL, FILE_BEGIN)) break;
+        if (!SetFilePointerEx(file, at, NULL, FILE_BEGIN))
+            break;
         for (uint64_t written = 0; written < bytes;) {
             DWORD n = bytes - written < LOAD_CHUNK ? (DWORD)(bytes - written) : LOAD_CHUNK;
             DWORD done;
             if (!WriteFile(file, chunk, n, &done, NULL) || done != n) {
-                CloseHandle(file); return 1;
+                CloseHandle(file);
+                return 1;
             }
             written += done;
         }
-        if (!FlushFileBuffers(file)) break;
+        if (!FlushFileBuffers(file))
+            break;
         if (!announced) {
-            if (ready()) break;
+            if (ready())
+                break;
             announced = 1;
         }
     }
@@ -176,7 +180,8 @@ static int load_disk(uint64_t bytes)
             return 1;
         }
         if (!announced) {
-            if (ready()) return 1;
+            if (ready())
+                return 1;
             announced = 1;
         }
     }

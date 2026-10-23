@@ -49,8 +49,8 @@ struct etude_measurement_context {
     struct etude_preparation_receipt preparation;
 };
 static const char *const keys[] = {
-    "purpose",     "source",    "artifacts",         "site_profile",         "tools",
-    "cache_state", "exemption", "outer_observation", "physical_observation", "preparation",
+    "purpose",       "source",    "artifacts",         "site_profile",         "tools",
+    "cache_state",   "exemption", "outer_observation", "physical_observation", "preparation",
     "cache_evidence"};
 
 static int fail(char *error, size_t size, const char *message)
@@ -455,8 +455,7 @@ static int cache_states(const struct json *cache)
     for (size_t i = 0; i < 4; i++) {
         const struct json *v = json_member(states, names[i]);
         const char *state = json_text(v, "state"), *procedure = json_text(v, "procedure");
-        if (!state || (strcmp(state, "cold") && strcmp(state, "warm")) ||
-            !procedure || !*procedure)
+        if (!state || (strcmp(state, "cold") && strcmp(state, "warm")) || !procedure || !*procedure)
             return 0;
     }
     return 1;
@@ -468,8 +467,7 @@ static int cache_blob(struct etude_measurement_context *c, const struct json *re
         return -1;
     for (size_t i = 0; i < locations->count; i++) {
         const struct json *path = locations->item[i];
-        if (path->type == JSON_STRING && absolute(path->string) &&
-            !bound(c, ref, path->string))
+        if (path->type == JSON_STRING && absolute(path->string) && !bound(c, ref, path->string))
             return 0;
     }
     return -1;
@@ -493,9 +491,9 @@ static int cache_evidence(struct etude_measurement_context *c, const struct json
     int ok = p && format && !strcmp(format, "etude-cache-protocol") && run &&
              !strcmp(run, c->run_id) && commit && expected && !strcmp(commit, expected) &&
              machine && boot && !etude_context_clock(&clock) &&
-             !strcmp(machine, clock.machine_id) && !strcmp(boot, clock.boot_id) &&
-             states && profile && !strcmp(states, profile) && evidence &&
-             evidence->type == JSON_ARRAY && evidence->count && evidence->count <= 16;
+             !strcmp(machine, clock.machine_id) && !strcmp(boot, clock.boot_id) && states &&
+             profile && !strcmp(states, profile) && evidence && evidence->type == JSON_ARRAY &&
+             evidence->count && evidence->count <= 16;
     for (size_t i = 0; ok && i < evidence->count; i++)
         ok = !cache_blob(c, evidence->item[i]);
     if (ok)

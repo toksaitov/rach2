@@ -101,10 +101,10 @@ struct etude_remote_conf {
     const char *evidence; /* a file where lines not acted on are appended,
                              or NULL */
     const struct etude_remote_observer *observer;
-    size_t max_frame;     /* the largest frame offered; 0 gives
-                             ETUDE_FRAME_STDIO_MAX */
-    uint64_t stage_us;    /* the bound of a connection and of each answer */
-    unsigned reconnects;  /* connections made again within one operation */
+    size_t max_frame;    /* the largest frame offered; 0 gives
+                            ETUDE_FRAME_STDIO_MAX */
+    uint64_t stage_us;   /* the bound of a connection and of each answer */
+    unsigned reconnects; /* connections made again within one operation */
     const volatile sig_atomic_t *cancel_requested; /* caller requests cancellation */
 };
 

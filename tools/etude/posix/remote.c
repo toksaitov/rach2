@@ -114,13 +114,19 @@ static int write_observed(struct etude_remote *r, const char *p, size_t n)
         }
         int ms = limit - now > 50000 ? 50 : (int)((limit - now + 999) / 1000);
         int ready = poll(&fd, 1, ms);
-        if (ready < 0 && errno == EINTR) continue;
-        if (ready < 0) return -1;
-        if (!ready) continue;
+        if (ready < 0 && errno == EINTR)
+            continue;
+        if (ready < 0)
+            return -1;
+        if (!ready)
+            continue;
         ssize_t written = write(r->to, p, n);
-        if (written < 0 && (errno == EINTR || errno == EAGAIN)) continue;
-        if (written <= 0) return -1;
-        p += written; n -= (size_t)written;
+        if (written < 0 && (errno == EINTR || errno == EAGAIN))
+            continue;
+        if (written <= 0)
+            return -1;
+        p += written;
+        n -= (size_t)written;
     }
     return 0;
 }
@@ -196,7 +202,10 @@ static int transport_start(struct etude_remote *r)
     }
     r->bounded_writes = r->conf.observer != NULL;
     if (r->bounded_writes && fcntl(to[1], F_SETFL, O_NONBLOCK) < 0) {
-        close(to[0]); close(to[1]); close(from[0]); close(from[1]);
+        close(to[0]);
+        close(to[1]);
+        close(from[0]);
+        close(from[1]);
         return -1;
     }
     pid = fork();
@@ -1010,16 +1019,14 @@ static int take_event(struct etude_remote *r, struct collect *c, struct wire_fra
         size_t before = c->res->out.kept;
         ok = c->res->started ? take_output(c, f) : -1;
         if (!ok && c->res->out.kept > before && r->conf.observer && r->conf.observer->output)
-            r->conf.observer->output(r->conf.observer->context,
-                                    c->res->out.data + before, c->res->out.kept - before);
-    }
-    else if (strcmp(t, ETUDE_EV_EXIT) == 0) {
+            r->conf.observer->output(r->conf.observer->context, c->res->out.data + before,
+                                     c->res->out.kept - before);
+    } else if (strcmp(t, ETUDE_EV_EXIT) == 0) {
         int had = c->have_exit;
         ok = take_exit(c, f);
         if (!ok && !had && r->conf.observer && r->conf.observer->stage)
             r->conf.observer->stage(r->conf.observer->context, "capture");
-    }
-    else if (strcmp(t, ETUDE_EV_STREAM) == 0)
+    } else if (strcmp(t, ETUDE_EV_STREAM) == 0)
         ok = take_stream(c, f);
     else if (strcmp(t, ETUDE_EV_USAGE) == 0)
         ok = take_usage(c, f);
@@ -1185,9 +1192,9 @@ static enum etude_remote_status end_run(struct etude_remote *r, struct collect *
 static int cancel_due(struct etude_remote *r, const struct run_clock *k)
 {
     return !k->cancelled && ((k->until && posix_now_us() >= k->until) ||
-           (r->conf.cancel_requested && *r->conf.cancel_requested) ||
-           (r->conf.observer && r->conf.observer->expired &&
-            r->conf.observer->expired(r->conf.observer->context)));
+                             (r->conf.cancel_requested && *r->conf.cancel_requested) ||
+                             (r->conf.observer && r->conf.observer->expired &&
+                              r->conf.observer->expired(r->conf.observer->context)));
 }
 
 static int follow(struct etude_remote *r, struct collect *c, struct run_clock *k,

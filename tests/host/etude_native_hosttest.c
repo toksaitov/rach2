@@ -652,7 +652,8 @@ static void test_rows(void)
 
 int main(int argc, char **argv)
 {
-    if (argc == 2 && !strcmp(argv[1], "--stalled-peer")) return nh_stalled_peer();
+    if (argc == 2 && !strcmp(argv[1], "--stalled-peer"))
+        return nh_stalled_peer();
     if (argc == 3 && strcmp(argv[1], "--guest") == 0) {
         char *gargv[5];
         gargv[0] = "etude-guest";
@@ -672,7 +673,8 @@ int main(int argc, char **argv)
     }
     if (argc == 2 && !strcmp(argv[1], "--collection-history")) {
         test_native_history();
-        if (fails) return 1;
+        if (fails)
+            return 1;
         fix_passed();
         return 0;
     }

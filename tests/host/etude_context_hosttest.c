@@ -89,8 +89,8 @@ static void snapshots(int bad_source)
     snprintf(data, sizeof(data),
              "{\"schema_version\":1,\"format\":\"etude-cache-protocol\",\"states\":%s,"
              "\"run_id\":\"context-test\",\"commit\":\"%s\",\"machine_id\":\"%s\","
-             "\"boot_id\":\"%s\",\"evidence\":[%s]}", states, commit,
-             receipt.clock.machine_id, receipt.clock.boot_id, evidence);
+             "\"boot_id\":\"%s\",\"evidence\":[%s]}",
+             states, commit, receipt.clock.machine_id, receipt.clock.boot_id, evidence);
     put("cache-evidence", data);
 }
 static void context(const char *receipt_name)
@@ -123,7 +123,8 @@ static void context(const char *receipt_name)
              "\"run_id\":\"context-test\",\"commit\":\"%s\",\"purpose\":\"focused\","
              "\"source\":%s,\"artifacts\":%s,\"site_profile\":%s,\"tools\":%s,"
              "\"cache_state\":%s,\"preparation\":%s,\"exemption\":null,\"outer_observation\":%s,"
-             "\"cache_evidence\":%s}", commit, s, artifacts, p, t, cache, prep, observer, proof);
+             "\"cache_evidence\":%s}",
+             commit, s, artifacts, p, t, cache, prep, observer, proof);
     put("context", text);
 }
 static int open_context(struct etude_measurement_context **c)

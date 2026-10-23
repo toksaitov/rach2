@@ -19,8 +19,9 @@ struct etude_collection_load {
 
 static const char *quality(enum etude_quality value)
 {
-    return value == ETUDE_QUALITY_EXACT ? "exact" :
-           value == ETUDE_QUALITY_LOWER_BOUND ? "lower_bound" : "unavailable";
+    return value == ETUDE_QUALITY_EXACT         ? "exact"
+           : value == ETUDE_QUALITY_LOWER_BOUND ? "lower_bound"
+                                                : "unavailable";
 }
 
 static const char *kind(enum etude_load_kind value)
@@ -46,8 +47,9 @@ int etude_collection_load_resources(const struct etude_load *load, uint64_t reso
     return 0;
 }
 /* Add the case to the running load claim; neither keeper proves both trees. */
-int etude_collection_load_register_case(void *context, const char *claim, const struct etude_pid *keeper,
-                       const struct etude_pid *process)
+int etude_collection_load_register_case(void *context, const char *claim,
+                                        const struct etude_pid *keeper,
+                                        const struct etude_pid *process)
 {
     int error = 0;
     if (keeper && keeper->pid > 0)
@@ -55,7 +57,8 @@ int etude_collection_load_register_case(void *context, const char *claim, const 
     return error ? error : etude_ledger_child(context, claim, process);
 }
 
-struct etude_collection_load *etude_collection_load_start(const struct etude_collection_load_spec *s)
+struct etude_collection_load *
+etude_collection_load_start(const struct etude_collection_load_spec *s)
 {
     struct etude_collection_load *l = calloc(1, sizeof(*l));
     if (!l)
@@ -64,7 +67,9 @@ struct etude_collection_load *etude_collection_load_start(const struct etude_col
     int a = snprintf(l->output, sizeof(l->output), "%s.load.out", s->output);
     int b = snprintf(l->error, sizeof(l->error), "%s.load.err", s->output);
     if (a < 0 || (size_t)a >= sizeof(l->output) || b < 0 || (size_t)b >= sizeof(l->error)) {
-        free(l); errno = ENAMETOOLONG; return NULL;
+        free(l);
+        errno = ENAMETOOLONG;
+        return NULL;
     }
     char amount[32];
     snprintf(amount, sizeof(amount), "%llu", (unsigned long long)s->load->amount);
@@ -158,19 +163,20 @@ const char *etude_collection_load_record(struct etude_collection_load *l)
         snprintf(cpu, sizeof(cpu), "%llu", (unsigned long long)r->cpu_us.value);
     if (r->peak_bytes.quality)
         snprintf(peak, sizeof(peak), "%llu", (unsigned long long)r->peak_bytes.value);
-    snprintf(l->record, sizeof(l->record), "{\"load_id\":\"%s\",\"kind\":\"%s\",\"amount\":%llu,"
-                  "\"ready_us\":%llu,\"ended_us\":%llu,\"cleanup\":\"%s\",\"failed\":%s,"
-                  "\"keeper\":{\"pid\":%ld,\"creation\":%llu},"
-                  "\"process\":{\"pid\":%ld,\"creation\":%llu},\"end\":%d,\"value\":%d,"
-                  "\"cpu_us\":%s,\"cpu_quality\":\"%s\",\"cpu_method\":\"%s\","
-                  "\"peak_bytes\":%s,\"peak_quality\":\"%s\",\"peak_method\":\"%s\"}",
-               l->load->load_id, kind(l->load->kind), (unsigned long long)l->load->amount,
-               (unsigned long long)l->ready_us, (unsigned long long)r->finished_us,
-               r->cleanup == ETUDE_CLEANUP_CONFIRMED ? "confirmed" : "unconfirmed",
-               l->failed ? "true" : "false", r->keeper.pid, (unsigned long long)r->keeper.start,
-               r->process.pid, (unsigned long long)r->process.start, (int)r->end, r->value,
-               cpu, quality(r->cpu_us.quality), r->cpu_us.method,
-               peak, quality(r->peak_bytes.quality), r->peak_bytes.method);
+    snprintf(l->record, sizeof(l->record),
+             "{\"load_id\":\"%s\",\"kind\":\"%s\",\"amount\":%llu,"
+             "\"ready_us\":%llu,\"ended_us\":%llu,\"cleanup\":\"%s\",\"failed\":%s,"
+             "\"keeper\":{\"pid\":%ld,\"creation\":%llu},"
+             "\"process\":{\"pid\":%ld,\"creation\":%llu},\"end\":%d,\"value\":%d,"
+             "\"cpu_us\":%s,\"cpu_quality\":\"%s\",\"cpu_method\":\"%s\","
+             "\"peak_bytes\":%s,\"peak_quality\":\"%s\",\"peak_method\":\"%s\"}",
+             l->load->load_id, kind(l->load->kind), (unsigned long long)l->load->amount,
+             (unsigned long long)l->ready_us, (unsigned long long)r->finished_us,
+             r->cleanup == ETUDE_CLEANUP_CONFIRMED ? "confirmed" : "unconfirmed",
+             l->failed ? "true" : "false", r->keeper.pid, (unsigned long long)r->keeper.start,
+             r->process.pid, (unsigned long long)r->process.start, (int)r->end, r->value, cpu,
+             quality(r->cpu_us.quality), r->cpu_us.method, peak, quality(r->peak_bytes.quality),
+             r->peak_bytes.method);
     return l->record;
 }
 

@@ -46,7 +46,8 @@ static void collection_cleanup(void)
 {
     if (collection_child > 0) {
         kill(collection_child, SIGTERM);
-        while (waitpid(collection_child, NULL, 0) < 0 && errno == EINTR) {}
+        while (waitpid(collection_child, NULL, 0) < 0 && errno == EINTR) {
+        }
         collection_child = 0;
     }
     int fd = open(fix_path("rach2-host.lock"), O_RDWR);
@@ -62,15 +63,16 @@ static void collection_cleanup(void)
             fcntl(fd, F_GETLK, &lock) == 0 && lock.l_type != F_UNLCK &&
             etude_process_state(lock.l_pid, &current) == 1 && current.start_known &&
             first.pid == current.pid && first.start == current.start) {
-            fprintf(stderr, "fixture cleanup: detached holder %ld creation %llu\n",
-                    first.pid, (unsigned long long)first.start);
+            fprintf(stderr, "fixture cleanup: detached holder %ld creation %llu\n", first.pid,
+                    (unsigned long long)first.start);
             int ended = kill(first.pid, SIGKILL);
             CHECK(ended == 0, "private detached holder ends");
             if (!ended) {
                 lock.l_type = F_WRLCK;
-                while (fcntl(fd, F_SETLKW, &lock) < 0 && errno == EINTR) {}
-                CHECK(etude_process_state(first.pid, &current) == 0 ||
-                          current.start != first.start, "private detached holder cleanup confirmed");
+                while (fcntl(fd, F_SETLKW, &lock) < 0 && errno == EINTR) {
+                }
+                CHECK(etude_process_state(first.pid, &current) == 0 || current.start != first.start,
+                      "private detached holder cleanup confirmed");
             }
         }
     }
@@ -160,8 +162,10 @@ static void case_environment(const char *cases, const char *rows, const char *fa
         unsetenv("ETUDE_COLLECTION_FAIL");
     } else {
         unsetenv("ETUDE_COLLECTION_READY");
-        if (failure) setenv("ETUDE_COLLECTION_FAIL", failure, 1);
-        else unsetenv("ETUDE_COLLECTION_FAIL");
+        if (failure)
+            setenv("ETUDE_COLLECTION_FAIL", failure, 1);
+        else
+            unsetenv("ETUDE_COLLECTION_FAIL");
     }
 }
 
@@ -186,8 +190,10 @@ static void interrupt_output(int fd, pid_t child)
             }
         }
     CHECK(ready, "the loaded compiled case is running before interruption");
-    if (input) fclose(input);
-    if (output) fclose(output);
+    if (input)
+        fclose(input);
+    if (output)
+        fclose(output);
 }
 
 static int run(char *const *options, const char *cases, const char *rows, const char *failure,
@@ -199,7 +205,8 @@ static int run(char *const *options, const char *cases, const char *rows, const 
     pid_t child;
     int stream[2] = {-1, -1};
     int interrupt = failure && !strcmp(failure, "wait");
-    if (interrupt && pipe(stream)) return -1;
+    if (interrupt && pipe(stream))
+        return -1;
     argv[n++] = etude;
     argv[n++] = "run";
     argv[n++] = "-t";
@@ -210,8 +217,10 @@ static int run(char *const *options, const char *cases, const char *rows, const 
     child = fork();
     CHECK(child >= 0, "collection child starts");
     if (child == 0) {
-        int fd = interrupt ? stream[1] : open(fix_path("output"), O_WRONLY | O_CREAT | O_TRUNC, 0600);
-        if (stream[0] >= 0) close(stream[0]);
+        int fd =
+            interrupt ? stream[1] : open(fix_path("output"), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (stream[0] >= 0)
+            close(stream[0]);
         if (fd < 0 || dup2(fd, 1) < 0 || dup2(fd, 2) < 0)
             _exit(120);
         close(fd);
@@ -238,8 +247,8 @@ static int run(char *const *options, const char *cases, const char *rows, const 
     if (ledger) {
         char claims[128];
         size_t count = fread(claims, 1, sizeof(claims), ledger);
-        CHECK(count == strlen("etude-ledger 1\n") &&
-                  !memcmp(claims, "etude-ledger 1\n", count), "every case and load claim is released");
+        CHECK(count == strlen("etude-ledger 1\n") && !memcmp(claims, "etude-ledger 1\n", count),
+              "every case and load claim is released");
         fclose(ledger);
     }
     FILE *f = fopen(fix_path("output"), "rb");
@@ -260,17 +269,21 @@ static int occurrences(const char *text, const char *word)
 
 static void repetitions(char *out, size_t room)
 {
-    char *first[] = {"-N", "-J", (char *)fix_path("first-selection.json"), "-S", "42", "-R", "6", "host", NULL};
-    char *second[] = {"-N", "-J", (char *)fix_path("second-selection.json"), "-S", "42", "-R", "6", "host", NULL};
+    char *first[] = {"-N",   "-J", (char *)fix_path("first-selection.json"), "-S", "42", "-R", "6",
+                     "host", NULL};
+    char *second[] = {
+        "-N", "-J", (char *)fix_path("second-selection.json"), "-S", "42", "-R", "6", "host", NULL};
     CHECK(!run(first, NULL, NULL, NULL, out, room) && !run(second, NULL, NULL, NULL, out, room),
           "seeded public allocator exports without artifacts or execution");
     char a[16384], b[16384];
     FILE *f = fopen(fix_path("first-selection.json"), "rb");
     size_t na = f ? fread(a, 1, sizeof(a) - 1, f) : 0;
-    if (f) fclose(f);
+    if (f)
+        fclose(f);
     f = fopen(fix_path("second-selection.json"), "rb");
     size_t nb = f ? fread(b, 1, sizeof(b) - 1, f) : 0;
-    if (f) fclose(f);
+    if (f)
+        fclose(f);
     a[na] = b[nb] = 0;
     CHECK(na && na == nb && !strcmp(a, b) && occurrences(a, "\"repetition\":") >= 6,
           "the same seed retains exact item order and every repetition");
@@ -293,7 +306,8 @@ static void repetitions(char *out, size_t room)
     for (size_t i = 0; i < 3; i++) {
         char *loaded[] = {"-A", "tcg", "-S", "42", "-R", "2", "-L", (char *)loads[i], "host", NULL};
         int status = run(loaded, NULL, NULL, NULL, out, room);
-        if (status || occurrences(out, ": starting\n") != 2) fprintf(stderr, "%s", out);
+        if (status || occurrences(out, ": starting\n") != 2)
+            fprintf(stderr, "%s", out);
         CHECK(!status && occurrences(out, ": starting\n") == 2,
               "every repeated compiled case runs beside its declared ready native load");
         CHECK(strstr(out, "case 30000000 us (0 samples)"),
@@ -342,7 +356,8 @@ int main(int argc, char **argv)
         if (ready) {
             puts("fixture: interrupt-ready");
             fflush(stdout);
-            for (;;) pause();
+            for (;;)
+                pause();
         }
         for (size_t i = 0; i < 10000; i++)
             putchar('x');

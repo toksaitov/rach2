@@ -62,15 +62,24 @@ void nc_time(struct nc_history *h, struct cmp_text *t, const struct etude_readin
             t->failed = 1;
             return;
         }
-    } else strcpy(metric, "{\"value\":null,\"reason\":\"native cleanup is not confirmed\"}");
+    } else
+        strcpy(metric, "{\"value\":null,\"reason\":\"native cleanup is not confirmed\"}");
     cmp_printf(t, "{\"start_utc\":\"%s\",\"end_utc\":", a->utc);
-    if (b) nc_quote(t, b->utc); else cmp_printf(t, "null");
-    cmp_printf(t, ",\"clock\":{\"machine_id\":"); nc_quote(t, h->machine);
-    cmp_printf(t, ",\"boot_id\":"); nc_quote(t, h->boot);
-    cmp_printf(t, ",\"clock_id\":\"monotonic\",\"resolution_us\":%llu},\"start_us\":%llu,\"end_us\":",
+    if (b)
+        nc_quote(t, b->utc);
+    else
+        cmp_printf(t, "null");
+    cmp_printf(t, ",\"clock\":{\"machine_id\":");
+    nc_quote(t, h->machine);
+    cmp_printf(t, ",\"boot_id\":");
+    nc_quote(t, h->boot);
+    cmp_printf(t,
+               ",\"clock_id\":\"monotonic\",\"resolution_us\":%llu},\"start_us\":%llu,\"end_us\":",
                (unsigned long long)a->resolution_us, (unsigned long long)a->monotonic_us);
-    if (b) cmp_printf(t, "%llu", (unsigned long long)b->monotonic_us);
-    else cmp_printf(t, "null");
+    if (b)
+        cmp_printf(t, "%llu", (unsigned long long)b->monotonic_us);
+    else
+        cmp_printf(t, "null");
     cmp_printf(t, ",\"elapsed_us\":%s}", metric);
 }
 int nc_record(struct nc_history *h, const char *kind, struct cmp_text *t, char id[256])
