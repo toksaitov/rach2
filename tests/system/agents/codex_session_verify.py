@@ -61,15 +61,19 @@ def prepare_script(source, destination, row):
 def program_digest():
     """Return the SHA-256 of bin/codex in the package the recipe pins.
 
-    The package is the download fetch_agents.sh keeps, checked first against
-    the recipe's digest.
+    The package is the download fetch_agents.sh keeps, which `fetch_agents.sh
+    -f` checks against the recipe's digest. A host that builds the GNU layer
+    in etude's tooling machine, as a Mac does, keeps no download, and the
+    script then fetches the package to the same place from the recipe's URL.
     """
     recipe = (REPO / "vendor/gnu/agents/packages/codex.sh").read_text()
     package = re.search(r"^PACKAGE=(\S+)$", recipe, re.M).group(1)
-    pinned = re.search(r'^FILES="\$PACKAGE \S+ sha256:([0-9a-f]{64})$', recipe, re.M).group(1)
-    path = REPO / "vendor/gnu/downloads/agents/codex" / package
-    if hashlib.sha256(path.read_bytes()).hexdigest() != pinned:
-        raise ValueError(f"{path} is not the package the recipe pins")
+    fetch = subprocess.run(["sh", str(REPO / "vendor/gnu/agents/fetch_agents.sh"), "-f", "codex",
+                            package], capture_output=True, text=True)
+    if fetch.returncode != 0:
+        raise ValueError(fetch.stderr.strip().splitlines()[-1] if fetch.stderr.strip()
+                         else f"fetch_agents.sh -f codex {package}: status {fetch.returncode}")
+    path = fetch.stdout.strip()
     with tarfile.open(path) as source:
         for member in source.getmembers():
             if os.path.normpath(member.name) == "bin/codex" and member.isfile():

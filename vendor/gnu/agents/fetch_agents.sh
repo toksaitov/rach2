@@ -5,6 +5,11 @@
 # the digest its vendor publishes, and stage it as the x86-64 GNU root has it.
 #
 # Usage: fetch_agents.sh NAME...
+#        fetch_agents.sh -f NAME FILE
+#
+# The second form fetches and checks the one download FILE of the package
+# NAME, prints its path and stages nothing, for a host that needs the file
+# without the stage, such as a test's check of the pinned program.
 #
 # A package is a recipe, packages/NAME.sh, a shell fragment that sets
 #
@@ -24,9 +29,10 @@
 #
 # A download is kept in ../downloads/agents/NAME/ once and checked against
 # its digest each time `fetched` names it; a file with another digest is
-# removed and refused. The stage is agents/NAME of the layer's build tree for
-# x86-64 (vendor/gnu/arch.sh), made again from nothing, and fails when one of
-# NOTICES is not in it.
+# removed and refused. It is downloaded to FILE.PID.part and renamed, so that
+# two processes that fetch it at once each rename a whole file. The stage is
+# agents/NAME of the layer's build tree for x86-64 (vendor/gnu/arch.sh), made
+# again from nothing, and fails when one of NOTICES is not in it.
 #
 
 set -e
@@ -37,13 +43,19 @@ REPO="$(cd "$GNU/../.." && pwd)"
 . "$GNU/arch.sh"
 SHA="$REPO/build/tools/verify/sha256"
 
-if [ "$RACH2_ARCH" != x86_64 ]; then
+usage()
+{
+    echo "usage: fetch_agents.sh NAME..." >&2
+    echo "       fetch_agents.sh -f NAME FILE" >&2
+    exit 2
+}
+
+if [ $# -eq 0 ] || { [ "$1" = -f ] && [ $# -ne 3 ]; }; then
+    usage
+fi
+if [ "$1" != -f ] && [ "$RACH2_ARCH" != x86_64 ]; then
     echo "gnu: agents: the packages are built for x86-64 only; run with RACH2_ARCH=x86_64" >&2
     exit 1
-fi
-if [ $# -eq 0 ]; then
-    echo "usage: fetch_agents.sh NAME..." >&2
-    exit 2
 fi
 
 # digest_of ALGORITHM FILE: print FILE's digest in hex.
@@ -96,12 +108,12 @@ fetched()
     mkdir -p "$DL"
     if [ ! -f "$file" ]; then
         echo "gnu: agents: $NAME $VERSION: downloading $1" >&2
-        download "$2" "$file.part" || {
-            rm -f "$file.part"
+        download "$2" "$file.$$.part" || {
+            rm -f "$file.$$.part"
             echo "gnu: agents: $NAME: download failed: $2" >&2
             return 1
         }
-        mv "$file.part" "$file"
+        mv "$file.$$.part" "$file"
     fi
     got=$(digest_of "$algorithm" "$file") || return 1
     if [ "$got" != "$want" ]; then
@@ -112,10 +124,9 @@ fetched()
     echo "$file"
 }
 
-# stage NAME: fetch, check and stage the package NAME, in a shell of its own
-# so that one recipe's variables and functions do not reach the next.
-stage()
-(
+# load NAME: read the recipe of the package NAME and set NAME and DL.
+load()
+{
     NAME=$1
     recipe="$DIR/packages/$NAME.sh"
     if [ ! -f "$recipe" ]; then
@@ -136,6 +147,13 @@ stage()
         fi
     done
     DL="$GNU/downloads/agents/$NAME"
+}
+
+# stage NAME: fetch, check and stage the package NAME, in a shell of its own
+# so that one recipe's variables and functions do not reach the next.
+stage()
+(
+    load "$1"
     for f in $(printf '%s\n' "$FILES" | awk 'NF { print $1 }'); do
         fetched "$f" > /dev/null
     done
@@ -164,6 +182,15 @@ stage()
     echo "gnu: agents: $NAME $VERSION: $(cd "$STAGE" && find . ! -type d | wc -l | tr -d ' ') files staged"
 )
 
+if [ "$1" = -f ]; then
+    load "$2"
+    trap 'rm -f "$DL/$3.$$.part"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 129' HUP
+    fetched "$3"
+    exit
+fi
 for name in "$@"; do
     stage "$name"
 done
