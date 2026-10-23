@@ -437,15 +437,23 @@ usage_names() {
 }
 
 # What the host must let the run do, tried and not merely looked up.
-# `tools/setup/hostcheck.c` binds a TCP, a UDP and a Unix socket when a chosen
-# suite boots a machine, and attaches a disk image when one names hdiutil and
-# the host has it; a refusal stops the run before the build.
+# `tools/setup/hostcheck.c` binds TCP and UDP sockets, and a Unix socket on
+# POSIX hosts, for suites besides style and host. It also attaches a disk
+# image when a suite names hdiutil and the host has it. A refusal stops the
+# run before the build.
 check_host() {
     checker="$WORK/hostcheck"
-    cc -O2 -o "$checker" "$REPO/tools/setup/hostcheck.c" || {
+    case $(uname -s) in
+        MINGW*|MSYS*|UCRT*|CLANG*)
+            checker="$WORK/hostcheck.exe"
+            check_source=$(cygpath -m "$REPO/tools/setup/hostcheck.c") || return 1
+            "${ETUDE_WIN_CC:-/ucrt64/bin/gcc}" -std=c99 -O2 -static \
+                -o "$checker" "$check_source" -lws2_32 ;;
+        *) cc -O2 -o "$checker" "$REPO/tools/setup/hostcheck.c" ;;
+    esac || {
         echo "run: the host check did not compile" >&2; return 1
     }
-    if "$checker" "$WORK" ${1:+"$1"}; then
+    if "$checker" "$WORK" "$@"; then
         return 0
     fi
     echo "run: result: the host refuses an operation the suites need; nothing was built" >&2

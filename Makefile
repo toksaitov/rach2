@@ -903,7 +903,7 @@ $(ASCIISCAN): tools/verify/asciiscan.c
 	$(HOST_LINK)
 $(HOSTCHECK): tools/setup/hostcheck.c
 	@mkdir -p $(dir $@)
-	$(HOST_LINK)
+	$(ETUDE_LINK)
 $(MACHINENET): tools/dev/machine_net.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)

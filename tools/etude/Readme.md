@@ -1071,7 +1071,7 @@ Only root, or the builder's account for its own entries, can remove an entry of 
 
 ## Tests
 
-`sh tools/etude/win-run-smoke.sh`, in an admitted MSYS2 shell on Windows, checks the native bootstrap of `tests/run inventory`, the script entry point's tree hold, argument quoting through MSYS and native processes, the command's exit status and lock cleanup.
+`sh tools/etude/win-run-smoke.sh`, in an admitted MSYS2 shell on Windows, checks the native bootstrap of `tests/run inventory`, the script entry point's tree hold, argument quoting through MSYS and native processes, the command's exit status and lock cleanup. It also runs a native `tests/run` selection through the host-operation check to a stand-in make that requires the tree lock, then refuses TCP and UDP socket creation in turn and requires each refusal to stop before the tree lock or make. A style selection requires no sockets.
 
 The QEMU host test checks the audio cards' arguments and comma quoting, concurrent recordings, refusal to replace an existing recording, and the lifetime of temporary and evidence files. Its real HDA and SB16 boots play a scale and require a WAV file with samples after shutdown. The scenario host test passes two boots' recordings to a host tool, requires distinct paths and passing cleanup, and checks both recordings in a failed attempt's evidence.
 

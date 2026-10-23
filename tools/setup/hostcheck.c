@@ -7,8 +7,9 @@
  * lose suites to a socket bind the session is not allowed or a disk image
  * it cannot attach. So the operations are tried, not the names: unless
  * `--no-sockets` is given, a TCP and a UDP socket bound on the loopback
- * address and a Unix socket bound in the directory given, and, when
- * `--diskimage` is given on a Mac, a sixteen-megabyte image created,
+ * address and, on POSIX hosts, a Unix socket bound in the directory given.
+ * Windows QEMU uses loopback TCP for its console and monitor. When
+ * `--diskimage` is given on a Mac, a sixteen-megabyte image is created,
  * attached without a mount and detached with `hdiutil`. A refusal names the
  * operation; the exit status is nonzero on any. The directory's name goes
  * into a shell command, so an apostrophe in it is quoted as the shell wants.
@@ -18,11 +19,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <winsock2.h>
+typedef SOCKET host_socket;
+#define HOST_INVALID_SOCKET INVALID_SOCKET
+#define host_close          closesocket
+#else
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+typedef int host_socket;
+#define HOST_INVALID_SOCKET (-1)
+#define host_close          close
+#endif
 
 static int failed;
 
@@ -37,9 +48,9 @@ static void refused(const char *what)
 static void try_inet(int type, const char *name)
 {
     struct sockaddr_in a;
-    int s = socket(AF_INET, type, 0);
+    host_socket s = socket(AF_INET, type, 0);
 
-    if (s < 0) {
+    if (s == HOST_INVALID_SOCKET) {
         refused(name);
         return;
     }
@@ -52,9 +63,10 @@ static void try_inet(int type, const char *name)
     } else if (type == SOCK_STREAM && listen(s, 1) != 0) {
         refused(name);
     }
-    close(s);
+    host_close(s);
 }
 
+#ifndef _WIN32
 /** Bind a Unix socket in `dir`, or record the refusal. */
 static void try_unix(const char *dir)
 {
@@ -144,6 +156,7 @@ static void try_diskimage(const char *dir)
         refused("a disk image created, attached and detached with hdiutil");
     }
 }
+#endif
 
 /**
  * Try the operations the options choose. The exit status is 0 when all
@@ -169,12 +182,28 @@ int main(int argc, char **argv)
         }
     }
     if (sockets) {
+#ifdef _WIN32
+        WSADATA data;
+
+        if (WSAStartup(MAKEWORD(2, 2), &data) != 0) {
+            refused("winsock initialization");
+            return 1;
+        }
+#endif
         try_inet(SOCK_STREAM, "a TCP socket bound on the loopback address");
         try_inet(SOCK_DGRAM, "a UDP socket bound on the loopback address");
+#ifdef _WIN32
+        WSACleanup();
+#else
         try_unix(argv[1]);
+#endif
     }
     if (diskimage) {
+#ifdef _WIN32
+        refused("disk image attachment with hdiutil on windows");
+#else
         try_diskimage(argv[1]);
+#endif
     }
     if (failed) {
         return 1;
