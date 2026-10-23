@@ -18,6 +18,7 @@
 static int failures;
 static pid_t active;
 static char driver[PATH_MAX], self[PATH_MAX], tree[PATH_MAX];
+static const char *extra_input;
 #define CHECK(ok, why)                                      \
     do {                                                    \
         if (!(ok)) {                                        \
@@ -81,10 +82,11 @@ static void copy_probe(void)
 
 static void inventory(int omit, const char *unsupported)
 {
-    char manifest[65], program[65], source[65];
+    char manifest[65], program[65], source[65], extra[65];
     hash("tests/cases/host.host.json", manifest);
     hash("build/tests/probe", program);
     hash("tests/host/a_hosttest.c", source);
+    hash("tests/host/\303\251.txt", extra);
     FILE *f = fopen(fix_path("build/tests/host-suite/tests.inventory.json"), "wb");
     CHECK(f != NULL, "inventory opens");
     if (!f)
@@ -93,13 +95,17 @@ static void inventory(int omit, const char *unsupported)
             "{\"schema_version\":1,\"group\":\"tests\",\"architecture\":\"i686\","
             "\"manifest_sha256\":\"%s\",\"checks\":[",
             manifest);
-    for (int i = 0; i < (omit ? 1 : 2); i++)
+    for (int i = 0; i < (omit ? 1 : 2); i++) {
         fprintf(f,
                 "%s{\"assertion_id\":\"%c\",\"label\":\"probe %c\",\"mode\":\"shared\","
                 "\"program\":\"build/tests/probe\",\"sha256\":\"%s\","
                 "\"arguments\":[\"--probe\"],\"inputs\":[{\"path\":\"tests/host/a_hosttest.c\","
-                "\"sha256\":\"%s\"}],\"unsupported\":\"%s\"}",
-                i ? "," : "", 'a' + i, 'a' + i, program, source, unsupported ? unsupported : "");
+                "\"sha256\":\"%s\"}",
+                i ? "," : "", 'a' + i, 'a' + i, program, source);
+        if (extra_input)
+            fprintf(f, ",{%s,\"sha256\":\"%s\"}", extra_input, extra);
+        fprintf(f, "],\"unsupported\":\"%s\"}", unsupported ? unsupported : "");
+    }
     fputs("]}\n", f);
     CHECK(fclose(f) == 0, "inventory closes");
 }
@@ -165,11 +171,36 @@ static void fixtures(void)
         CHECK(mkdir(fix_path(dirs[i]), 0700) == 0, "fixture directory created");
     put("tests/host/a_hosttest.c", "/* prepared source a */\n");
     put("tests/host/b_hosttest.c", "/* prepared source b */\n");
+    put("tests/host/\303\251.txt", "non-ASCII fixture name\n");
     put("tests/cases/host.host.json",
         "{\"cases\":[{\"case_id\":\"host.host.tests\","
         "\"assertions\":[{\"assertion_id\":\"listed\"},{\"assertion_id\":\"a\"},"
         "{\"assertion_id\":\"b\"}]}]}\n");
     copy_probe();
+}
+
+static void encoded_inputs(void)
+{
+    char output[32768];
+    static const char *bad[] = {
+        "\"path_hex\":\"74657374732f686f73742fc3a92e74787\"",
+        "\"path_hex\":\"gg\"", "\"path_hex\":\"610062\"",
+        "\"path_hex\":\"2e2e2f6f757473696465\"",
+        "\"path\":\"tests/host/a_hosttest.c\",\"path_hex\":\"61\"",
+        "\"path\":\"tests/host/a_hosttest.c\",\"path_hex\":null"};
+    extra_input = "\"path_hex\":\"74657374732f686f73742fc3a92e747874\"";
+    inventory(0, NULL);
+    CHECK(run(output, sizeof(output)) == 0, "encoded filename bytes are verified");
+    put("tests/host/\303\251.txt", "changed fixture\n");
+    CHECK(run(output, sizeof(output)) == 1 && strstr(output, "input changed"),
+          "changed encoded input is refused before execution");
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        extra_input = bad[i];
+        inventory(0, NULL);
+        CHECK(run(output, sizeof(output)) == 1 && strstr(output, "input changed"),
+              "malformed or unsafe encoded input is rejected");
+    }
+    extra_input = NULL;
 }
 
 static void checks(void)
@@ -180,6 +211,8 @@ static void checks(void)
     CHECK(run(output, sizeof(output)) == 0 && strstr(output, "assert a pass") &&
               strstr(output, "assert b pass") && strstr(output, "assert listed pass"),
           "prepared binaries execute with isolated scratch and fatal sanitizer settings");
+    encoded_inputs();
+    inventory(0, NULL);
     setenv("HOST_PROBE_FAIL", "1", 1);
     CHECK(run(output, sizeof(output)) == 1 && strstr(output, "assert a fail") &&
               strstr(output, "probe complete"),

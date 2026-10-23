@@ -211,6 +211,39 @@ static int input_matches(const struct host *h, const char *relative, const char 
            !strcmp(actual, expected);
 }
 
+/* Input filenames may contain bytes outside the ASCII JSON vocabulary. */
+static const char *input_path(const struct json *input, char decoded[PATH_SIZE])
+{
+    const char *plain = json_text(input, "path");
+    const struct json *encoded = json_member(input, "path_hex");
+    const char *hex;
+    size_t n;
+    if (!encoded)
+        return plain;
+    if (json_member(input, "path") || encoded->type != JSON_STRING)
+        return NULL;
+    hex = encoded->string;
+    if (!(n = strlen(hex)) || n % 2 || n / 2 >= PATH_SIZE)
+        return NULL;
+    for (size_t i = 0; i < n; i += 2) {
+        unsigned value = 0;
+        for (size_t j = 0; j < 2; j++) {
+            unsigned char c = (unsigned char)hex[i + j];
+            if (c >= '0' && c <= '9')
+                value = value * 16 + c - '0';
+            else if (c >= 'a' && c <= 'f')
+                value = value * 16 + c - 'a' + 10;
+            else
+                return NULL;
+        }
+        if (!value)
+            return NULL;
+        decoded[i / 2] = (char)value;
+    }
+    decoded[n / 2] = 0;
+    return decoded;
+}
+
 /* Every file present in a corpus must be one of the prepared arguments. */
 static int corpus_matches(const struct host *h, const struct json *args, const char *relative)
 {
@@ -270,7 +303,8 @@ static const char *prepared(const struct host *h, struct check *c)
     if (!inputs || inputs->type != JSON_ARRAY)
         return "the prepared input inventory is missing";
     for (size_t i = 0; i < inputs->count; i++) {
-        const char *path = json_text(inputs->item[i], "path");
+        char decoded[PATH_SIZE];
+        const char *path = input_path(inputs->item[i], decoded);
         if (!input_matches(h, path, json_text(inputs->item[i], "sha256"))) {
             snprintf(c->why, sizeof(c->why),
                      "a source or corpus input changed after preparation: %s",

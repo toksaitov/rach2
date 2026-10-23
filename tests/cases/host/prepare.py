@@ -47,6 +47,35 @@ def digest(path):
     return h.hexdigest()
 
 
+def input_path(path):
+    """Normalize compiler spellings without resolving the build store's links."""
+    path = Path(os.path.normpath(path))
+    if path.is_absolute():
+        path = path.relative_to(ROOT)
+    if not path.parts or '..' in path.parts or any(':' in part or '\\' in part for part in path.parts):
+        raise ValueError(f'input path is not relative to the tree: {path}')
+    return path.as_posix()
+
+
+def decoded_input(value):
+    """Read an encoded filename before testing whether a binary is reusable."""
+    value = dict(value)
+    if 'path_hex' in value:
+        if 'path' in value:
+            raise ValueError('an input has two path representations')
+        value['path'] = os.fsdecode(bytes.fromhex(value.pop('path_hex')))
+    value['path'] = input_path(value['path'])
+    return value
+
+
+def encoded_input(value):
+    """Keep arbitrary fixture filename bytes outside the ASCII JSON strings."""
+    value = decoded_input(value)
+    if not value['path'].isascii():
+        value['path_hex'] = os.fsencode(value.pop('path')).hex()
+    return value
+
+
 def compiler_record(command):
     """Identify the executable that compiled a reusable native inventory."""
     executable = shutil.which(command[0])
@@ -198,7 +227,7 @@ def compiler_inputs(compiler, command, sources):
         result = subprocess.run([*compiler, *flags, '-MM', '-MT', 'host-input', source],
                                 check=True, text=True, capture_output=True)
         text = result.stdout.replace('\\\n', ' ')
-        dependencies.update(shlex.split(text.split(':', 1)[1]))
+        dependencies.update(input_path(p) for p in shlex.split(text.split(':', 1)[1]))
     return dependencies
 
 
@@ -238,6 +267,8 @@ def prepare(args):
     try:
         old = json.loads(Path(args.output).read_text())
         if old.get('compiler') == identity:
+            for check in old['checks']:
+                check['inputs'] = [decoded_input(value) for value in check['inputs']]
             previous = {x['assertion_id']: x for x in old['checks']}
     except (OSError, KeyError, ValueError):
         pass
@@ -334,6 +365,8 @@ def prepare(args):
         inventory.append(item)
     if args.print_commands or args.only:
         return
+    for check in inventory:
+        check['inputs'] = [encoded_input(value) for value in check['inputs']]
     record = dict(schema_version=1, group=args.group, architecture=args.arch if args.group in ('tests', 'boots') else 'none',
                   manifest_sha256=digest(Path('tests/cases/host.host.json')), compiler=identity,
                   checks=inventory)
