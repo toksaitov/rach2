@@ -198,7 +198,8 @@ def valid_previous(old, item, compiler):
         return False
     try:
         return old['sha256'] == digest(Path(item['program'])) and all(
-            digest(Path(value['path'])) == value['sha256'] for value in old['inputs'])
+            digest(Path(value['path'])) == value['sha256']
+            for value in [*old['inputs'], *old.get('compiler_inputs', [])])
     except (KeyError, OSError):
         return False
 
@@ -217,7 +218,7 @@ def compiler_flags(command, sources):
     return flags
 
 
-def compiler_inputs(compiler, command, sources):
+def compiler_inputs(compiler, command, sources, external=None):
     """Scan each translation unit; a shared -MF would retain only the last."""
     flags = compiler_flags(command, sources)
     dependencies = set()
@@ -227,7 +228,13 @@ def compiler_inputs(compiler, command, sources):
         result = subprocess.run([*compiler, *flags, '-MM', '-MT', 'host-input', source],
                                 check=True, text=True, capture_output=True)
         text = result.stdout.replace('\\\n', ' ')
-        dependencies.update(input_path(p) for p in shlex.split(text.split(':', 1)[1]))
+        for name in shlex.split(text.split(':', 1)[1]):
+            path = Path(os.path.normpath(name))
+            if path.is_absolute() and not path.is_relative_to(ROOT):
+                if external is not None:
+                    external[str(path)] = dict(path=str(path), sha256=digest(path))
+            else:
+                dependencies.add(input_path(path))
     return dependencies
 
 
@@ -321,6 +328,7 @@ def prepare(args):
             old = previous.get(item['assertion_id'])
             if valid_previous(old, probe, compiler):
                 item['sha256'], item['inputs'] = old['sha256'], old['inputs']
+                item['compiler_inputs'] = old.get('compiler_inputs', [])
                 data_inputs = {value['path']: value for value in item['inputs']}
                 for data in item.get('data', []):
                     data_inputs[data] = dict(path=data, sha256=digest(Path(data)))
@@ -336,7 +344,9 @@ def prepare(args):
                 if not program.exists() and Path(str(program) + '.exe').exists():
                     Path(str(program) + '.exe').replace(program)
                 item['sha256'] = digest(program)
-                dependencies = compiler_inputs(compiler, command, item['sources'])
+                external = {}
+                dependencies = compiler_inputs(compiler, command, item['sources'], external)
+                item['compiler_inputs'] = [external[p] for p in sorted(external)]
                 sources = sorted(set([*item['sources'], *dependencies, *item.get('data', [])]))
                 item['inputs'] = [dict(path=p, sha256=digest(Path(p))) for p in sources]
             item['inputs'] = list({value['path']: value for value in
