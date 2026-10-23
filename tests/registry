@@ -40,7 +40,7 @@
 # when its longest member does, so the long suites are listed first.
 gnu|qemu,ssh,scp,sftp,python3|full|gnu-test*|2048
 agents|qemu|full|etude-agents.disk*|4096|x86_64
-agentsaccept|qemu,ssh,python3,openssl,tmux|full||4096|x86_64
+agentsaccept|qemu|full||4352|x86_64
 installer-rehearse|qemu,qemu-img,xorriso,shasum|full||512
 install|qemu,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 selfbuild|qemu,mformat,mmd,mcopy|full|selfbuild-test*,selfbuild.*,selfbuild/*

@@ -29,8 +29,8 @@ static void stamp(unsigned char *out, uint64_t ns)
 }
 int main(int argc, char **argv)
 {
-    char *end, packet[513], tail;
-    unsigned port, sequence;
+    char *end, packet[513];
+    unsigned port;
     unsigned long long epoch;
     uint64_t start, now, real;
     service_socket fd;
@@ -70,12 +70,24 @@ int main(int argc, char **argv)
         now = service_monotonic();
         real = epoch * UINT64_C(1000000000) + now - start;
         if (!strncmp(packet, "CLOCKREF ", 9)) {
-            const char *p = packet + 9;
-            if (*p < '0' || *p > '9' || sscanf(packet, "CLOCKREF %u %c", &sequence, &tail) != 1)
+            char *token = packet + 9, *p, *tail;
+            char answer[1024];
+            while (*token && strchr(" \t\r\n\v\f", *token))
+                token++;
+            p = token;
+            while (*p >= '0' && *p <= '9')
+                p++;
+            if (p == token)
                 continue;
-            n = snprintf(packet, sizeof(packet), "CLOCKREF %u %llu %llu", sequence,
+            tail = p;
+            while (*tail && strchr(" \t\r\n\v\f", *tail))
+                tail++;
+            if (*tail)
+                continue;
+            *p = 0;
+            n = snprintf(answer, sizeof(answer), "CLOCKREF %s %llu %llu", token,
                          (unsigned long long)now, (unsigned long long)real);
-            sendto(fd, packet, n, 0, (struct sockaddr *)&peer, size);
+            sendto(fd, answer, n, 0, (struct sockaddr *)&peer, size);
             continue;
         }
         if (n < 48 || ((unsigned char)packet[0] & 7) != 3)

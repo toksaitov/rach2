@@ -14,7 +14,9 @@ case ${OS:-}:$(uname -s):$(uname -m) in
     *:Linux:aarch64) target=linux-aarch64 ;;
     *) echo 'fakeapi: no static OpenSSL build target for this host' >&2; exit 2 ;;
 esac
-source_dir=$output/source-${archive##*/}
+digest=$(awk '$1 == "openssl" {print $4; exit}' "$repo/vendor/gnu/sources.txt" "$repo/vendor/gnu/sources-extra.txt")
+[ -n "$digest" ] || exit 2
+source_dir=$output/source-$digest
 mkdir -p "$output"
 # Only this rule writes the directory, under make's ordinary target ownership.
 # Reconfiguration keeps compilation incremental when the pin is unchanged.

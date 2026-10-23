@@ -12,6 +12,7 @@
 
 #include "netcase.h"
 #include "agent_native.h"
+#include "agent_accept.h"
 
 /* The state shared by the SSH workload's actions. */
 struct agent_case {
@@ -19,7 +20,6 @@ struct agent_case {
     struct net_boot b;
     struct etude_case_service *server;
     char work[4096];
-    char driver[4096];
     char verdict[4096]; /* the server exit status written before it ends */
     char root_key[4096];
     char test_key[4096];
@@ -27,30 +27,17 @@ struct agent_case {
     unsigned starts;
 };
 
-/** Put a workload setting in the environment or fail the attempt. */
-static void setting(struct agent_case *s, const char *name, const char *value)
-{
-    if (setenv(name, value, 1) != 0)
-        net_fail(&s->u, "could not set %s", name);
-}
-
 /** Run an SSH workload action and report its assertion, if one is given.
  * The scripts' output stays in the evidence and is printed. */
 static void action(struct agent_case *s, const char *verb, const char *assertion)
 {
-    struct net_run r;
-    char *argv[] = {"sh", s->driver, (char *)verb, s->row, NULL};
     int ok = 0;
-
-    if (strncmp(etude_case_id(s->u.c), "machine.agentsaccept.", 21) != 0) {
-        if (net_ok(&s->u))
+    if (net_ok(&s->u)) {
+        if (!strncmp(etude_case_id(s->u.c), "machine.agentsaccept.", 21))
+            ok = agent_accept_action(&s->u, s->work, s->row, verb);
+        else
             ok = agent_native_action(&s->u, &s->b, s->work, s->row, verb,
                                      !strncmp(etude_case_id(s->u.c), "machine.fakeapi.", 16));
-    } else if (net_ok(&s->u) && net_host(&s->u, argv, verb, &r) == ETUDE_OK) {
-        fputs(r.out, stdout);
-        fputs(r.err, stderr);
-        ok = net_exited0(&r);
-        net_run_free(&r);
     }
     if (!ok)
         net_fail(&s->u, "%s failed; see its output", verb);
@@ -205,36 +192,19 @@ static void acceptance(struct agent_case *s)
 int etude_scenario(struct etude_case *c)
 {
     struct agent_case s;
-    const char *id = etude_case_id(c), *tree = getenv("ETUDE_TREE"), *driver;
-    char port[16];
+    const char *id = etude_case_id(c);
     int accept = strncmp(id, "machine.agentsaccept.", 21) == 0;
     int fake = strncmp(id, "machine.fakeapi.", 16) == 0;
 
     memset(&s, 0, sizeof(s));
     net_case(&s.u, c);
     snprintf(s.row, sizeof(s.row), "%s", strrchr(id, '.') + 1);
-    if (tree == NULL) {
-        net_fail(&s.u, "ETUDE_TREE is absent");
-        return net_end(&s.u);
-    }
-    driver = accept ? "tests/system/accept/agents_accept.sh"
-             : fake ? "tests/cases/machine/agent_fakeapi.sh"
-                    : "tests/cases/machine/agent_rows.sh";
-    snprintf(s.driver, sizeof(s.driver), "%s/%s", tree, driver);
     snprintf(s.work, sizeof(s.work), "%s", etude_evidence(c, "work"));
     if (mkdir(s.work, 0700) != 0)
         net_fail(&s.u, "could not make the workload directory");
     net_key(&s.u, "demo-key", s.root_key, sizeof(s.root_key));
     net_key(&s.u, "test-key", s.test_key, sizeof(s.test_key));
-    setting(&s, "AGENT_WORK", s.work);
-    setting(&s, "AGENT_ROOT_KEY", s.root_key);
-    setting(&s, "AGENT_TEST_KEY", s.test_key);
-    snprintf(port, sizeof(port), "%u", etude_port(c, 0));
-    setting(&s, "AGENT_PORT", port);
     if (accept) {
-        char wrapper[4096];
-        snprintf(wrapper, sizeof(wrapper), "%s/tests/cases/machine/agent_accept.sh", tree);
-        snprintf(s.driver, sizeof(s.driver), "%s", wrapper);
         acceptance(&s);
     } else {
         row(&s, fake);

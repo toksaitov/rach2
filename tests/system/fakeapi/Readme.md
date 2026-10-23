@@ -8,6 +8,7 @@ The service accepts these commands:
 * `agent_server serve SCRIPT RECORD CERTDIR [PORT]` serves HTTP/1.1 over TLS on loopback, using a free port when none is given. It prints its listening port, appends JSON records for requests and WebSocket messages, and prints its verdict on SIGTERM, SIGINT or a Windows console stop. It also writes `RECORD.status`. The verdict fails for an unexpected request, a failed exchange or any nonrepeated step left unplayed.
 * `agent_server relay PORT`, or `agent_relay PORT`, copies the connection on its standard streams to the service. It joins its copy thread before returning.
 * `agent_server render SOURCE DESTINATION ROW` makes the selected row's script, including its repository paths, unordered service calls, screen requests and held final answer.
+* `agent_server accept-prepare AGENTJSON GHJSON DIR AGENT` creates the acceptance scripts and authority for both programs' declared hosts.
 * `agent_server verify SCRIPT RECORD ROW VERSION` checks each recorded request against its step, the required credentials and user agent, and the row's WebSocket exchanges. Repeated steps are optional and every other step must occur once.
 * `agent_server unpack ARCHIVE DIR` reads the immutable source assets with etude's tar reader. `worker-proof ARCHIVE DIR` checks the returned worker board, log and transcripts; the C scenario separately checks the origin's commits with the guest's Git.
 * `agent_server remove DIR` removes private fixture files after their processes have ended.

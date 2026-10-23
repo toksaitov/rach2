@@ -984,7 +984,8 @@ int agentapi_native(struct etude_case *c)
         }
     }
     if (prepared || *ca) {
-        char *remove[] = {"agent_server", "remove", ca, NULL};
+        char *remove[] = {"agent_server", "remove", net_ok(&u) && u.failures == 0 ? work : ca,
+                          NULL};
         int removed = etude_host(c, remove, "remove-api-keys", &end) == ETUDE_OK &&
                       end.end == ETUDE_END_EXITED && end.value == 0;
         cleanup = removed && cleanup;

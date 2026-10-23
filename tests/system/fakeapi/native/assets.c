@@ -385,3 +385,86 @@ done:
     destroy(entries);
     return result;
 }
+
+int prepare_acceptance(const char *agent_source, const char *gh_source, const char *directory,
+                       const char *agent)
+{
+    struct value *source = read_json(agent_source), *github = read_json(gh_source);
+    struct value *hosts = value('a');
+    const struct value *h, *v;
+    struct buffer path = {0}, names_text = {0};
+    const char *parts[] = {"session", "after", "gh"};
+    char **names;
+    unsigned i;
+    int ok = 0;
+    char repo[200];
+    if (!source || !github)
+        goto done;
+    for (i = 0; i < 2; i++)
+        for (h = first(get(i ? github : source, "hosts")); h; h = h->next) {
+            int seen = 0;
+            for (v = hosts->child; v; v = v->next)
+                if (!strcmp(text(v), text(h)))
+                    seen = 1;
+            if (!seen)
+                add(hosts, NULL, clone(h));
+        }
+    names = allocate((count(hosts) + 1) * sizeof(*names));
+    i = 0;
+    for (h = hosts->child; h; h = h->next) {
+        names[i++] = (char *)text(h);
+        putsb(&names_text, text(h));
+        putsb(&names_text, "\n");
+    }
+    putsb(&path, directory);
+    putsb(&path, "/ca");
+    ok = make_ca(path.data, (int)i, names) == 0;
+    free(names);
+    clear(&path);
+    if (!ok)
+        goto done;
+    putsb(&path, directory);
+    putsb(&path, "/hosts");
+    {
+        FILE *f = fopen(path.data, "wb");
+        ok = f && fputs(names_text.data ? names_text.data : "", f) >= 0;
+        if (f && fclose(f))
+            ok = 0;
+    }
+    clear(&path);
+    if (!ok)
+        goto done;
+    snprintf(repo, sizeof(repo), "/home/test/rach2-accept/%s", agent);
+    for (i = 0; i < 3; i++) {
+        struct value *script = clone(get(i == 2 ? github : source, i == 2 ? "after" : parts[i]));
+        char *encoded;
+        FILE *f;
+        if (script->type != 'o') {
+            destroy(script);
+            ok = 0;
+            break;
+        }
+        replace(script, "@REPO@", repo);
+        encoded = encode(script, 0);
+        destroy(script);
+        putsb(&path, directory);
+        putsb(&path, "/");
+        putsb(&path, parts[i]);
+        putsb(&path, ".json");
+        f = fopen(path.data, "wb");
+        ok = f && fputs(encoded, f) >= 0;
+        if (f && fclose(f))
+            ok = 0;
+        free(encoded);
+        clear(&path);
+        if (!ok)
+            break;
+    }
+done:
+    clear(&path);
+    clear(&names_text);
+    destroy(hosts);
+    destroy(source);
+    destroy(github);
+    return ok ? 0 : 2;
+}

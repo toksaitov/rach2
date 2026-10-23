@@ -956,6 +956,8 @@ int main(int argc, char **argv)
         return 2;
     if (strstr(name, "agent_relay") && argc == 2)
         return relay(service_port(argv[1]));
+    if (argc == 6 && !strcmp(argv[1], "accept-prepare"))
+        return prepare_acceptance(argv[2], argv[3], argv[4], argv[5]);
     if (argc == 4 && !strcmp(argv[1], "worker-proof"))
         return verify_worker_archive(argv[2], argv[3]);
     if (argc == 4 && !strcmp(argv[1], "unpack"))
