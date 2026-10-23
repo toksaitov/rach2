@@ -26,6 +26,13 @@
 # `sysroot` marks the image that has the compiler, whose search paths are
 # then inventoried too.
 
+# The private image-tool helper starts the framed guest directly. It has
+# no set-id programs and no installed init.
+manifest etude-image
+trusted file 0755:0:0 /etude-guest build/tools/etude/guest/etude-guest
+sentinel /etude-guest 0755:0:0
+init none
+
 manifest os-real
 setid /bin/su 04755:0:0 build/vendor/busybox/busybox-suid
 setid /bin/passwd 04755:0:0 build/vendor/busybox/busybox-suid

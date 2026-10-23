@@ -56,6 +56,6 @@ $(BUILD)/etude-guest: $(SRC) $(HDR) $(CONFIG) $(CRT1) $(CRTI) $(PREFIX)/lib/libc
 $(BUILD)/ptydrive: $(TOP)/tests/system/runner/ptydrive.c $(CONFIG) $(CRT1) $(CRTI) \
                    $(PREFIX)/lib/libc.a $(LIBGCC) $(CRTN) | libc-check
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -MF $(BUILD)/ptydrive.d -o $@ $(LINK_PRE) $< $(LINK_POST)
+	$(CC) $(CFLAGS) -D_DEFAULT_SOURCE -MF $(BUILD)/ptydrive.d -o $@ $(LINK_PRE) $< $(LINK_POST)
 
 -include $(BUILD)/ptydrive.d
