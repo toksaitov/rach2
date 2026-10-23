@@ -225,6 +225,7 @@ def prepare(args):
                 text = path.read_text(errors='replace')
                 if (re.search(r'\b(?:system|popen)\s*\(', text) or
                         re.search(r'["\'](?:/bin/)?(?:sh|bash|python3?|perl)["\']', text) or
+                        re.search(r'#![^\n"\']*\b(?:sh|bash|python3?|perl)\b', text) or
                         'ETUDE_SHELL' in text):
                     item['unsupported'] = ('a compiled source still requires an interpreter; '
                                            'a native fixture adapter is required: ' + str(path))

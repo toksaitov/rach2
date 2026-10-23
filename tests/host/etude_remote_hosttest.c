@@ -49,6 +49,7 @@
 #include "../../utils/sha256.h"
 #include "compat/pathmax_host.h"
 #include "compat/fixdir_host.c"
+#include "compat/directory_host.h"
 #include "etude/remote.h"
 
 static int fails;
@@ -1108,12 +1109,12 @@ static void check_version(const struct row *w)
 
 static void check_cut_put(const struct row *w)
 {
-    char tok[17], cmdline[PATH_MAX + 64];
+    char tok[17], blob[PATH_MAX + 64];
 
     token(w->name, tok);
-    fix_format(cmdline, sizeof(cmdline), "ls '%s/%s/blob' | grep -q part", fix_path("state"), tok);
+    fix_format(blob, sizeof(blob), "%s/%s/blob", fix_path("state"), tok);
     CHECK(whole_pass(0), "a cut transfer is sent again, and the run passes");
-    CHECK(system(cmdline) != 0, "a cut transfer leaves no partial file");
+    CHECK(host_directory_count(blob, "part") == 0, "a cut transfer leaves no partial file");
 }
 
 static void check_deadline(const struct row *w)

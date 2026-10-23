@@ -20,6 +20,8 @@
 #define SECOND UINT64_C(1000000)
 #define TRIES  3 /* the attempts the plan gives each item */
 
+#include "compat/tree_host.h"
+
 static int failures;
 static char directory[1024];
 static const char schema[] = "tools/etude/schemas/history.schema.json";
@@ -62,10 +64,8 @@ struct run_spec {
 /** Remove the fixtures, even after a failure. */
 static void cleanup(void)
 {
-    char command[1200];
     if (*directory) {
-        snprintf(command, sizeof(command), "rm -rf '%s'", directory);
-        if (system(command))
+        if (host_remove_tree(directory) != 0)
             fprintf(stderr, "etude_failures_hosttest: cannot remove %s\n", directory);
     }
 }

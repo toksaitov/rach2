@@ -2785,12 +2785,9 @@ static void test_refused(void)
 /** Remove the guest cases' evidence under the tree's build/tests. */
 static void remove_guest_evidence(void)
 {
-    char cmd[PATH_MAX + 16];
-
     if (guest_evidence[0] == '\0')
         return;
-    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", guest_evidence);
-    if (system(cmd) != 0)
+    if (fix_remove_tree(guest_evidence) != 0)
         printf("etude-legacyset-test: %s could not be removed\n", guest_evidence);
 }
 

@@ -44,6 +44,8 @@ extern const char *etude_guest_fault;
  * itself. */
 #define HOLD_SECONDS "86400"
 
+#include "compat/tree_host.h"
+
 static int failures;
 static char work[512];
 /* The scratch directory by its resolved path, with no symbolic link and no
@@ -91,10 +93,7 @@ static size_t in_len;
 /** Remove the tree at `path` (the test's own scratch). */
 static void remove_tree(const char *path)
 {
-    char cmd[700];
-
-    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", path);
-    if (system(cmd) != 0)
+    if (host_remove_tree(path) != 0)
         fprintf(stderr, "etude_guest_hosttest: could not remove %s\n", path);
 }
 

@@ -141,8 +141,7 @@ static int run_child(const char *tmp, int pass, int code, char *dir, size_t size
         if (f) {
             fclose(f);
         }
-        snprintf(cmd, sizeof(cmd), "rm -rf '%s'", dir);
-        if (system(cmd) != 0) {
+        if (fix_remove_tree(dir) != 0) {
             return -1;
         }
     }
@@ -225,8 +224,7 @@ static void leak_row(void)
     if (n > 0) {
         dir[n] = '\0';
         there = stat(dir, &st) == 0;
-        snprintf(cmd, sizeof(cmd), "rm -rf '%s'", dir);
-        if (there && system(cmd) != 0) {
+        if (there && fix_remove_tree(dir) != 0) {
             there = 0;
         }
     }

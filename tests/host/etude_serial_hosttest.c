@@ -59,6 +59,8 @@
 
 int etude_guest_main(int argc, char **argv);
 
+#include "compat/tree_host.h"
+
 static int fails;
 
 /** Count a failure when `cond` is false, and print its file, line and row. */
@@ -157,7 +159,6 @@ static void digest_hex(const void *p, size_t n, char hex[65])
  * scratch, on every exit path. */
 static void cleanup(void)
 {
-    char cmd[700];
     int i;
 
     for (i = 0; i < nguests; i++)
@@ -168,8 +169,7 @@ static void cleanup(void)
     for (i = 0; i < ngroups; i++)
         kill(-(pid_t)groups[i], SIGKILL);
     if (*work) {
-        snprintf(cmd, sizeof(cmd), "rm -rf '%s'", work);
-        if (system(cmd) != 0)
+        if (host_remove_tree(work) != 0)
             fprintf(stderr, "etude-serial-test: could not remove %s\n", work);
     }
 }

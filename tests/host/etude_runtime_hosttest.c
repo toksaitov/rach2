@@ -67,6 +67,7 @@
 #include "../../utils/sha256.h"
 #include "compat/pathmax_host.h"
 #include "compat/fixdir_host.c"
+#include "compat/directory_host.h"
 #include "budget.h"
 #include "compare.h"
 #include "etude/remote.h"
@@ -1768,21 +1769,63 @@ static int controller(const char *run, const char *mode, struct remote_summary *
     return n == 12 ? 0 : -1;
 }
 
+/** Count complete cleanup records in one responder command journal. */
+static int clean_records(const char *path)
+{
+    char line[4096];
+    FILE *f = fopen(path, "r");
+    int n = 0, ok;
+    size_t size;
+
+    if (f == NULL)
+        return -1;
+    while (fgets(line, sizeof line, f) != NULL) {
+        size = strlen(line);
+        if (size >= 19 && strncmp(line, "cleaned ", 8) == 0 &&
+            strcmp(line + size - 11, " confirmed\n") == 0)
+            n++;
+    }
+    ok = !ferror(f);
+    fclose(f);
+    return ok ? n : -1;
+}
+
 /**
  * Say whether the responder recorded the end and the confirmed cleanup of
  * every attempt of run `run`, and ran exactly `attempts` of them.
  */
 static int responder_recorded(const char *run, int attempts)
 {
-    char tok[65], cmd[PATH_MAX * 2];
+    char tok[65], path[PATH_MAX], command[PATH_MAX];
+    DIR *directory;
+    struct dirent *entry;
+    int records = 0, n, error;
 
     sha_hex(run, strlen(run), tok);
     tok[16] = '\0';
-    fix_format(cmd, sizeof(cmd),
-               "d='%s/%s'; test \"$(ls \"$d/att\" | wc -l)\" -eq %d && "
-               "test \"$(cat \"$d\"/cmd/* | grep -c '^cleaned .* confirmed$')\" -eq %d",
-               fix_path("remote"), tok, attempts, attempts);
-    return system(cmd) == 0;
+    fix_format(path, sizeof path, "%s/%s/att", fix_path("remote"), tok);
+    if (host_directory_count(path, NULL) != attempts)
+        return 0;
+    fix_format(path, sizeof path, "%s/%s/cmd", fix_path("remote"), tok);
+    directory = opendir(path);
+    if (directory == NULL)
+        return 0;
+    errno = 0;
+    while ((entry = readdir(directory)) != NULL) {
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+            continue;
+        fix_format(command, sizeof command, "%s/%s", path, entry->d_name);
+        n = clean_records(command);
+        if (n < 0) {
+            closedir(directory);
+            return 0;
+        }
+        records += n;
+        errno = 0;
+    }
+    error = errno;
+    closedir(directory);
+    return error == 0 && records == attempts;
 }
 
 /**

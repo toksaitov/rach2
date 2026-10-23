@@ -54,6 +54,7 @@
 
 #include "compat/pathmax_host.h"
 #include "compat/fixdir_host.c"
+#include "compat/directory_host.h"
 #include "../../utils/sha256.h"
 #include "budget.h"
 #include "compare.h"
@@ -1069,10 +1070,7 @@ static void test_width(void)
 /** Say whether the loads' scratch directory is empty. */
 static int scratch_empty(void)
 {
-    char cmd[PATH_MAX + 64];
-
-    snprintf(cmd, sizeof(cmd), "test -z \"$(ls -A '%s')\"", fix_path("scratch"));
-    return system(cmd) == 0;
+    return host_directory_count(fix_path("scratch"), NULL) == 0;
 }
 
 /**
