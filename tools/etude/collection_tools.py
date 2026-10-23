@@ -187,6 +187,8 @@ def native_goal(goal):
         return False
     if parts == ('build', 'tests', 'cases', 'gnu', 'sntpserver'):
         return True
+    if parts[:3] == ('build', 'tests', 'style'):
+        return parts[3:] in (('sparse.json',), ('sizes.json',), ('manual.json',))
     if parts[:4] in (('build', 'tests', 'cases', 'machine'),
                      ('build', 'tests', 'cases', 'host')):
         return len(parts) == 5
@@ -255,6 +257,9 @@ def prepare(job, arch, kernel, goals):
     native_goals = [g for g in goals if native_goal(g)]
     guest_goals = [g for g in goals if not native_goal(g)]
     ab = "build/x86_64" if arch == "x86_64" else "build"
+    if any(g in ('build/tests/style/manual.json', 'build/x86_64/tests/style/manual.json')
+           for g in native_goals):
+        guest_goals.append(ab + '/vendor/busybox/applet_tables-main.h')
     guest_goals.append(ab + "/rach2" + ("-" + kernel if kernel else "") + "/kernel")
     files = subprocess.check_output(["git", "-C", str(root), "ls-files", "-z"]).split(b"\0")
     paths = [os.fsdecode(p) for p in files if p and (root / os.fsdecode(p)).is_file()]

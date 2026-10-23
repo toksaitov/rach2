@@ -101,6 +101,10 @@ class Transfers(unittest.TestCase):
         self.assertTrue(TOOLS.native_goal("build/tests/cases/machine/disks_scenario"))
         self.assertTrue(TOOLS.native_goal("build/tests/cases/gnu/sntpserver"))
         self.assertFalse(TOOLS.native_goal("build/tests/cases/gnu/rows.sh"))
+        for build in ('build', 'build/x86_64'):
+            for judge in ('sparse', 'sizes', 'manual'):
+                self.assertTrue(TOOLS.native_goal(build + '/tests/style/' + judge + '.json'))
+            self.assertFalse(TOOLS.native_goal(build + '/tests/style/abi.json'))
 
     def test_style_name(self):
         """The style script's short case name selects its full manifest identity."""
