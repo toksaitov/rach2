@@ -14,6 +14,8 @@
  * host-deps: tools/etude/guest/guest.c tools/etude/guest/fixture.c
  * host-deps: tools/etude/guest/wire.c tools/etude/history_json.c
  * host-deps: utils/sha256.c
+ * host-tools: etude-workload
+ * host-inputs: tests/native/tccbuild.sh
  * host-cflags: -I tools/etude/include -I tools/etude -I tools/etude/guest
  * host-cflags: -I utils -Wall -Wextra -Werror
  * host-first: it runs for minutes
@@ -29,7 +31,7 @@
  * connection's etude-guest, which ends the first and reports the build
  * stopped; and an etude-guest killed during the build must leave the build's
  * end recorded as lost, with its cleanup confirmed by the next etude-guest
- * once the build's processes have ended. A script run with the options
+ * once the build's processes have ended. A compiled fixture run with
  * -F, -i and -U must get the values of its fixtures as arguments, the file
  * -i names as its standard input, and none of the variables -U names. In
  * every row the cleanup is confirmed, and the test waits until every
@@ -52,6 +54,7 @@
 #include "../../tools/etude/guest/wire.h"
 #include "../../utils/sha256.h"
 #include "compat/fixdir_host.c"
+#include "compat/workload_host.h"
 #include "etude/frame.h"
 
 int etude_guest_main(int argc, char **argv);
@@ -72,13 +75,6 @@ static int fails;
 /* The case's script, from the root of the tree. */
 #define CASE_SCRIPT "tests/native/tccbuild.sh"
 
-/* The script of the row of fixtures, which prints what it was given. */
-static const char show_script[] = "#!/bin/sh\n"
-                                  "printf 'show: args %s\\n' \"$*\"\n"
-                                  "printf 'show: input %s\\n' \"$(cat)\"\n"
-                                  "printf 'show: kept %s, gone %s\\n' \"${KEPT-unset}\" "
-                                  "\"${GONE-unset}\"\n";
-
 /* The bytes of a path, as many as realpath(3) may write on Linux; the
  * freestanding <limits.h> of the host tests' build has no PATH_MAX. */
 #define PATH_CAP 4096
@@ -98,8 +94,8 @@ static void pause_ms(long ms)
     }
 }
 
-/** Write all of `n` bytes. */
-static void write_all(int fd, const char *p, size_t n)
+/** Write all of `n` bytes; 0, or -1 on a write failure. */
+static int write_all(int fd, const char *p, size_t n)
 {
     ssize_t w;
 
@@ -108,10 +104,11 @@ static void write_all(int fd, const char *p, size_t n)
         if (w < 0 && errno == EINTR)
             continue;
         if (w <= 0)
-            return;
+            return -1;
         p += w;
         n -= (size_t)w;
     }
+    return 0;
 }
 
 /** Say whether `path` exists. */
@@ -374,19 +371,24 @@ static void group_gone(long pgid)
         pause_ms(20);
 }
 
-/** Append to `argv` at `n` the options of the row of fixtures: show.sh and
+/** Append to `argv` at `n` the options of the row of fixtures: show and
  * its input, two variables of which -U leaves one out, and two fixtures;
  * the new count. */
 static int show_options(char **argv, int n)
 {
     static char show[PATH_CAP], input[PATH_CAP];
     static char *const opts[] = {
-        "-i", "input", "-E", "KEPT=1",           "-E", "GONE=1",
-        "-U", "GONE",  "-F", "ports 7470:47470", "-F", "ids  1000:61000 ",
+        "-E", "ETUDE_WORKLOAD_ROLE=native-show",
+        "-i", "input",
+        "-E", "KEPT=1",
+        "-E", "GONE=1",
+        "-U", "GONE",
+        "-F", "ports 7470:47470",
+        "-F", "ids  1000:61000 ",
     };
     size_t i;
 
-    fix_format(show, sizeof(show), "%s/show.sh", fix_dir());
+    fix_format(show, sizeof(show), "%s/show", fix_dir());
     fix_format(input, sizeof(input), "%s/input", fix_dir());
     argv[n++] = "-f";
     argv[n++] = show;
@@ -457,7 +459,7 @@ static void run_row(const struct row *w, struct outcome *o)
         argv[n++] = (char *)w->cancel;
     }
     argv[n++] = "--";
-    argv[n++] = shows ? "show.sh" : "tccbuild.sh";
+    argv[n++] = shows ? "show" : "tccbuild.sh";
     argv[n++] = (char *)w->build;
     argv[n] = NULL;
     fflush(stdout);
@@ -571,7 +573,7 @@ static void check_show(const struct outcome *o)
 {
     CHECK(o->status == 0 && says(o, "result: pass: case tccbuild.show") &&
               says(o, "cleanup confirmed, reconnections 0"),
-          "the script of fixtures passes");
+          "the compiled fixture passes");
     CHECK(strstr(o->out, "show: args show ") != NULL &&
               strstr(o->out, " ports=7470:47470") != NULL &&
               strstr(o->out, " ids=1000:61000") != NULL,
@@ -581,24 +583,27 @@ static void check_show(const struct outcome *o)
     CHECK(strstr(o->out, "show: kept 1, gone unset\n") != NULL, "a variable -U names is left out");
 }
 
-/** Write the script and the input of the row of fixtures. */
-static void write_show(void)
+/** Write the prepared executable and the input of the row of fixtures. */
+static int write_show(void)
 {
     char path[PATH_CAP];
-    int fd;
-
-    fix_format(path, sizeof(path), "%s/show.sh", fix_dir());
+    size_t size;
+    char *bytes = host_workload_read(&size);
+    int fd, ok;
+    if (!bytes)
+        return 0;
+    fix_format(path, sizeof(path), "%s/show", fix_dir());
     fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0755);
-    if (fd >= 0) {
-        write_all(fd, show_script, sizeof(show_script) - 1);
-        close(fd);
-    }
+    ok = fd >= 0 && write_all(fd, bytes, size) == 0;
+    if (fd >= 0 && close(fd))
+        ok = 0;
+    free(bytes);
     fix_format(path, sizeof(path), "%s/input", fix_dir());
     fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd >= 0) {
-        write_all(fd, "given by -i\n", 12);
-        close(fd);
-    }
+    ok = fd >= 0 && write_all(fd, "given by -i\n", 12) == 0 && ok;
+    if (fd >= 0 && close(fd))
+        ok = 0;
+    return ok;
 }
 
 static void test_rows(void)
@@ -620,7 +625,10 @@ static void test_rows(void)
     size_t i;
     int before;
 
-    write_show();
+    if (!write_show()) {
+        CHECK(0, "the prepared workload and input are available");
+        return;
+    }
     for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
         before = fails;
         run_row(&rows[i].w, &o);
