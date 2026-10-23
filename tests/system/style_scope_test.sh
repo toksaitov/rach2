@@ -12,10 +12,12 @@
 # planted, one at a time, in a kind of file it reads: a non-ASCII byte in
 # tests/registry, a spaced "--" on a manifest line and in an assembly
 # comment, a "Phase" tag in a suppression file, a spaced "--" in an echo
-# of a script with no suffix, and in a component document a heading out of
+# of a script with no suffix, a spaced "--" in a Python docstring, message,
+# raised exception and comment, and in a component document a heading out of
 # order, one not in the list, a milestone cited by number and a link into a
-# milestone's directory. A vendored Readme with a heading out of the list must
-# not be read.
+# milestone's directory. The clean Python file generates a shell command that
+# ends its options with "--", which the check must pass. A vendored Readme
+# with a heading out of the list must not be read.
 #
 # Usage: sh tests/system/style_scope_test.sh
 #
@@ -38,7 +40,7 @@ for d in rach2/sys/arch/i686 krffs/manifests krffs/vendor utils ish tests/host t
     vendor/musl/install build/tools/verify saved; do
     mkdir -p "$tree/$d"
 done
-for f in scripts.sh textcheck.sh; do
+for f in scripts.sh textcheck.sh pyprose.py; do
     cp "$repo/tools/verify/$f" "$tree/tools/verify/$f"
 done
 # The byte scanner the text check runs, compiled into the private tree; with no
@@ -56,6 +58,15 @@ printf '# the suites\nstyle|shellcheck|full\n' >"$tree/tests/registry"
 printf '# an image\ntext 0644 /motd hello\n' >"$tree/krffs/manifests/x.manifest"
 printf '# the exceptions\nvariableScope\n' >"$tree/tools/verify/cppcheck.suppress"
 printf '.text\n# the entry point\n_start:\n' >"$tree/rach2/sys/arch/i686/loader.s"
+cat >"$tree/utils/gen.py" <<'EOF'
+"""Write a script that removes a file."""
+
+SCRIPT = """#!/bin/sh
+rm -f -- "$1"
+"""
+
+print("gen: writing the script")
+EOF
 for f in vendor/busybox/busybox-9.9/v.sh vendor/musl/install/w.sh ports/doom/src/u.sh \
     krffs/vendor/t.sh; do
     printf '#!/bin/sh\necho vendored\n' >"$tree/$f"
@@ -65,7 +76,7 @@ printf '# man\n\nA summary.\n\n## Use\n' >"$tree/man/Readme.md"
 printf '# busybox\n\n## Notes\n' >"$tree/vendor/busybox/busybox-9.9/Readme.md"
 for f in tests/run utils/tool tests/registry krffs/manifests/x.manifest \
     tools/verify/cppcheck.suppress rach2/sys/arch/i686/loader.s mk/Readme.md \
-    man/Readme.md; do
+    man/Readme.md utils/gen.py; do
     mkdir -p "$tree/saved/$(dirname "$f")"
     cp "$tree/$f" "$tree/saved/$f"
 done
@@ -141,6 +152,14 @@ rows()
     dashes=--
     printf 'echo "a %s b"\n' "$dashes" >"$work/plant"
     planted text-script-dash tests/run 3 '[prose em-dash in a message]'
+    printf '"""Write it %s then run it."""\n' "$dashes" >"$work/plant"
+    planted text-python-docstring utils/gen.py 8 '[prose em-dash]'
+    printf 'print("gen: done %s the script is written")\n' "$dashes" >"$work/plant"
+    planted text-python-message utils/gen.py 8 '[prose em-dash]'
+    printf 'raise SystemExit(\n    "gen: no script %s see above")\n' "$dashes" >"$work/plant"
+    planted text-python-raise utils/gen.py 9 '[prose em-dash]'
+    printf '# Write it %s then run it.\n' "$dashes" >"$work/plant"
+    planted text-python-comment utils/gen.py 8 '[prose em-dash]'
     printf '## Design\n' >"$work/plant"
     planted text-doc-order mk/Readme.md 8 '[heading out of order]'
     printf '## Notes\n' >"$work/plant"

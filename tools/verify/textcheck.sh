@@ -9,13 +9,13 @@
 # make, Python and configuration files; an em-dash written as a spaced "--"
 # in a C, header, assembly, linker-script or awk comment, in an echo or
 # printf message or a make $(error/warning/info) directive, in a Python
-# docstring or message, on any line of a configuration file, or in Markdown
-# prose; a Markdown bullet written as "-"; a "Phase N" or "Part N" diary tag
-# in a code comment or a configuration file; and, in the component
+# comment, docstring or message, on any line of a configuration file, or in
+# Markdown prose; a Markdown bullet written as "-"; a "Phase N" or "Part N"
+# diary tag in a code comment or a configuration file; and, in the component
 # documents, a "##" heading out of the list and order of AGENTS.md, or a
 # milestone cited by number. tools/verify/prosecheck.c checks the
 # vocabulary, and a person checks the rest of the register rule in review.
-# The script uses grep, find, awk and sed.
+# The script uses grep, find, awk and sed, and python3 for the Python files.
 #
 set -u
 
@@ -145,14 +145,12 @@ config_files() {
             | sed "s|^|$f:|; s|\$|  [prose em-dash in a make directive]|"
     done
 
-    # A spaced "--" used as an em-dash in the Python tools (a docstring, a
-    # comment, or a stderr message). An argparse "--flag" has no surrounding
-    # spaces, so it is not matched; only the spaced prose form is.
-    py_files | sort -u | while IFS= read -r f; do
-        [ -f "$f" ] || continue
-        grep -nE ' -- ' "$f" \
-            | sed "s|^|$f:|; s|\$|  [prose em-dash]|"
-    done
+    # A spaced "--" used as an em-dash in the Python tools: in a comment, a
+    # docstring or a message. pyprose.py parses each file to tell these from
+    # the other strings, so that a command the program runs or generates may
+    # end its options with "--".
+    py_files | sort -u | python3 tools/verify/pyprose.py \
+        || echo "tools/verify/pyprose.py:0:  [check did not finish]"
 
     # A spaced "--" on any line of a configuration file. None of these
     # formats writes an option or an operator that way, so the spaced form is
