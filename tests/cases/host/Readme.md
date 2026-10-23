@@ -26,17 +26,13 @@ The driver verifies the manifest, group and architecture before any check starts
 
 A completed check writes one assertion and one `progress checks N` record. The case has no clock limit. Etude's case and progress bounds apply. A passing case removes its workspace; a failing case prints the path it keeps.
 
-## Remaining adapters
-
-The native driver does not make existing POSIX test fixtures portable. Tests whose compiled sources still invoke an interpreter receive an explicit unsupported result until their fixtures have a native adapter. Other unavailable platform APIs fail preparation, rather than removing an assertion.
+## Fixture placement
 
 The seven extracted kernel fixtures (`chown`, `krffs_open`, `krffs_root_lock`, `krffs_stat`, `pagecache`, `kstack` and `endothers`) are compiled during preparation, then run as native binaries with their original assertions. Their extraction inputs and generated includes enter the fingerprint. The two threaded fixtures use pthreads on POSIX and SRW locks, condition variables and native threads on Windows. `build/tests/host-suite/vfs_unmount` prepares the same unmount fixture for the USB disk case.
-* Doom's C library fixtures need prepared architecture binaries and a declared Rach2 guest executor for their ABI.
-* Build, deployment, flow and resource regressions need shared native filesystem, process and command-mock fixtures. Where the product is intentionally a shell program, it may run in a declared GNU Rach2 helper; the test's setup, control and assertions must remain in C.
-* TinyCC's assembler and linker comparisons need prepared tools and native comparison adapters.
-* Existing C tests that use fork, pipes, signals or POSIX-specific filesystems need shared platform adapters. A native Windows process fixture must preserve each assertion, including process cleanup and interruption checks.
 
-`host.sh` remains as the legacy driver and build-command interface while its callers migrate. The prepared native path does not use it. `etude_hostdriver_hosttest.c` checks the native driver's execution and immutable input boundary. The legacy scheduling and interruption regressions remain declared in `host.list` until their adapters preserve those checks.
+The GNU helper supplies the POSIX environment of filesystem, compiler, build, deployment and worker-loop checks. Their C controllers create fixtures and judge results. A product written in shell or Python runs in its own language when its behavior is the subject of the check. The old test driver does not run. TinyCC and Doom checks use binaries prepared for the tested architecture.
+
+Native executor, platform and QEMU checks run on the collection host. Preparation rejects an undeclared interpreter or missing adapter; execution reports a missing check as a failure. `host.sh` remains as the legacy build-command interface. The prepared collection does not call it. `etude_hostdriver_hosttest.c` and the compiled host-suite controller check scheduling, interruption and immutable inputs.
 
 ## Source-check evidence
 
@@ -67,6 +63,7 @@ The five imagerace cases use the same native scenario and the prepared `family_i
 The disk-policy host case transfers its declared ordinary and read-only kernel artifacts to the helper, then runs the actual `check_diskpolicy.sh` with the prepared `binfind`. C checks the five original acceptance and refusal results; the script never builds a checker or reads an undeclared kernel.
 
 The metal family keeps its two host assertions. Its C transport controller runs every one of the 17 fault cases with both root-key and su transport, including the approved disk serial, refusal of similarly prefixed disk names, failed transfers and hashes, and FAT unmount, remount and independent host-read checks. Native command substitutes model remote replies; the actual deployment acceptance script makes its own decisions. The password controller runs all nine prompt, echo, split-output, repeated-prompt and pre-session connection cases against the prepared PTY fixture and real `ptydrive`. It audits the helper transcripts before cleanup and requires the original status, prompt and answer counts, retry count and returned bytes. The deployment scripts themselves are unchanged.
+
 ## GNU host inventories
 
 `make ARCH=x86_64 gnu-host-checks` compiles the GNU helper's host checks with the separately prepared ASan and UBSan runtimes. It never runs a check. The cached output is `GNU_OUT/host-checks/`: `driver` enters its prepared `tree/`, becomes the ordinary `test` account, and starts `/host-products/host --one GROUP ASSERTION ARCH`. Both target-ABI inventories are present. The tree contains the binaries, their source fingerprints, corpus files, independent filesystem inputs and native GNU tools. The image stages this output at `/host-products/host-checks`.
