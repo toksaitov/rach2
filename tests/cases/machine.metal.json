@@ -95,13 +95,21 @@
     },
     {
       "case_id": "machine.metal.unattended",
-      "behavior": "the metal image, which the Lenovo boots, reached over SSH with nobody at its console: init's server, a file each way, init's restart of the server, the boot and system logs, and metal_accept.sh rehearsed against the machine and its sticks",
+      "behavior": "the metal image, which the Lenovo boots, reached over SSH with nobody at its console: init's server, a file each way, init's restart of the server, the boot and system logs, and the C acceptance controller checking the machine and its sticks",
       "units": ["metal"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"lines": 1000}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["sh", "cksum", "shasum"], "features": {}},
-      "execution": {"program": "metal_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "rstick1", "rstick2"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "reaped", "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure; metal_accept.sh removes what it made on the machine and on the host"},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "metal_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "rstick1", "rstick2"]}, {"fixture": "disk", "names": ["image-disk"]}],
+        "children": "reaped",
+        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure; the C controller unmounts its volumes, detaches its loop device and removes its guest and host temporary files"
+      },
       "steps": [
         {"step_id": "channel-client", "stage": "boot", "machine": "channel-client",
          "does": "boot the declared Rach2 OpenSSH client and open its framed command channel"},
@@ -141,17 +149,17 @@
         {
           "step_id": "su",
           "stage": "execute",
-          "does": "run a quoted command that exits 7 as root through su_command.sh, logged in as the test account"
+          "does": "run a quoted command that exits 7 as root through the guest terminal driver and su, logged in as the test account"
         },
         {
           "step_id": "unnamed",
           "stage": "execute",
-          "does": "run metal_accept.sh with no stick named, and hash the stick before and after"
+          "does": "run the C acceptance controller with no stick named, and checksum the stick before and after"
         },
         {
           "step_id": "accept",
           "stage": "execute",
-          "does": "run metal_accept.sh as the test account through su with the stick ACCEPT01 named, reading the stick's flush count before and after"
+          "does": "run the C acceptance controller as the test account through su with the stick ACCEPT01 named, reading the stick's flush count before and after"
         },
         {
           "step_id": "stick",
@@ -304,6 +312,8 @@
       },
       "resources": {"cpu_millis": 3000, "cpu_ceiling_millis": 3000, "memory_bytes": 1207959552, "disk_bytes": 4563402752, "locks": [], "ports": 1, "loop_devices": 0},
       "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "accept-loop-image", "node": "tests/cases/machine/metal/loop.krffs", "per_architecture": false},
         {"name": "channel-client-image", "node": "images/gnu-test.disk", "per_architecture": true},
         {"name": "metal-kernel", "node": "rach2-metal/kernel", "per_architecture": true},
         {"name": "metal-image", "node": "images/rach2-metal.krffs", "per_architecture": true},

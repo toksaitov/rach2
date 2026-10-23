@@ -1,34 +1,9 @@
 /*
- * metal_scenario.c: the scenario of the machine cases of
- * tests/cases/machine.metal.json: the metal image reached over SSH with
- * nobody at its console, metal_accept.sh rehearsed against it, and the
- * script's installed-root rows on small GRUB disks.
- *
- * The metal image is the one the Lenovo boots. machine.metal.unattended
- * boots it with a LAN address on the kernel command line, as the stick
- * gives one, and types nothing at the console, so everything it checks
- * follows from the machine having booted on its own: init supervising
- * dropbear, the address reaching the stack, root's key, a pty, a file each
- * way, the boot and system logs, and init's restart of a killed server.
- * Then it runs the release's own acceptance script against the machine,
- * once with no stick named, which must write none, and once through su with
- * the stick ACCEPT01 named, beside two recovery sticks the script must
- * refuse, and judges what the script wrote to the stick with the host's
- * tools.
- *
- * The emulator shows that the metal kernel brings up the network, the USB
- * controller, a hub, a keyboard and the sticks without disturbing anything
- * else it does; the firmware's handoff and the chipset's port routing have
- * no emulation, and the release checks them on the Lenovo.
- *
- * The installed cases each boot one disk that
- * tests/system/metal_installed_disks.sh made, with BusyBox, bootctl and the
- * rows of metal_accept.sh that read the command line, the disk and the ext2
- * root, type `exec /bin/sh /check.sh` at its debug shell, and judge the
- * status and the lines the rows printed.
- *
- * The scenario runs the tree's metal_accept.sh and su_command.sh, as the
- * release does, from the root that ETUDE_TREE names.
+ * metal_scenario.c: the metal cases of machine.metal.json. The unattended
+ * case reaches the metal image over SSH, checks its services and runs the
+ * C acceptance controller against its hub and sticks. Installed-root cases
+ * judge the guest's own checks at its recovery console. The real Lenovo's
+ * native acceptance scripts remain separate from this QEMU controller.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,19 +11,20 @@
 #include <unistd.h>
 
 #include "netcase.h"
+#include "metal_accept.h"
+#include "sha256.h"
 
 /* What init prints each time it starts the SSH server, before its pid. */
 #define SSHD_STARTED "init: sshd: started as pid "
 
 /* The scripts the unattended case runs, by their paths in the tree. */
-#define ACCEPT     "tests/system/accept/metal_accept.sh"
-#define SU_COMMAND "tests/system/accept/su_command.sh"
 
 /* The lines of the file sent to the guest and read back. */
 #define SEND_LINES 1000
 
 /* The sectors of the stick's KRFFS volume, as metal_sticks.sh makes it. */
-#define STICK_VOLUME "skip=100352 count=32768"
+#define STICK_OFFSET (100352UL * 512)
+#define STICK_BYTES  (32768UL * 512)
 
 /* What the acceptance says of each recovery stick. */
 #define RECOVERY_REFUSED "carries a Rach2 recovery ISO in its table and is not written"
@@ -62,8 +38,6 @@ struct metal_case {
     char demo_key[4096]; /* the paths of the private copies of the keys */
     char test_key[4096];
     const char *stick; /* the copy of the stick the acceptance writes */
-    char accept[4096]; /* the absolute paths of the tree's scripts, since a */
-    char su[4096];     /* host tool runs in a directory of its own */
 };
 
 /** Say whether `text` has `part`; no text has nothing. */
@@ -104,23 +78,6 @@ static int has_pid(const char *text, long n)
             end = (char *)p + strcspn(p, " \t\r\n");
     }
     return 0;
-}
-
-/** Put `name` in the environment with `value`, or fail the attempt. */
-static void put_env(struct metal_case *s, const char *name, const char *value)
-{
-    if (net_ok(&s->u) && setenv(name, value, 1) != 0)
-        net_fail(&s->u, "%s could not be put in the environment", name);
-}
-
-/** Take the acceptance's settings out of the environment. */
-static void clear_env(void)
-{
-    unsetenv("RACH2_ACCEPT_PASSWORD");
-    unsetenv("RACH2_ACCEPT_SU");
-    unsetenv("RACH2_ACCEPT_FAT_IMAGE");
-    unsetenv("RACH2_ACCEPT_USER");
-    unsetenv("RACH2_ACCEPT_KEY");
 }
 
 /**
@@ -245,6 +202,45 @@ static void make_send(struct metal_case *s, const char *path)
         net_fail(&s->u, "the file to send could not be written");
 }
 
+/** Update the CRC used by POSIX cksum with one byte. */
+static unsigned long checksum_byte(unsigned long crc, unsigned char byte)
+{
+    unsigned i;
+    crc ^= (unsigned long)byte << 24;
+    for (i = 0; i < 8; i++)
+        crc = (crc & 0x80000000UL) ? ((crc << 1) ^ 0x04c11db7UL) : crc << 1;
+    return crc & 0xffffffffUL;
+}
+
+/** Give the file's POSIX checksum and byte count, or "none". */
+static const char *host_cksum(const char *path, char *out, size_t size)
+{
+    FILE *f = path != NULL ? fopen(path, "rb") : NULL;
+    unsigned char bytes[65536];
+    unsigned long crc = 0, table[256];
+    unsigned long long total = 0, length;
+    size_t n, i;
+    strcpy(out, "none");
+    if (f == NULL)
+        return out;
+    for (i = 0; i < 256; i++)
+        table[i] = checksum_byte(0, (unsigned char)i);
+    while ((n = fread(bytes, 1, sizeof(bytes), f)) != 0) {
+        total += n;
+        for (i = 0; i < n; i++)
+            crc = ((crc << 8) ^ table[((crc >> 24) ^ bytes[i]) & 255]) & 0xffffffffUL;
+    }
+    if (ferror(f)) {
+        fclose(f);
+        return out;
+    }
+    fclose(f);
+    for (length = total; length != 0; length >>= 8)
+        crc = checksum_byte(crc, (unsigned char)length);
+    snprintf(out, size, "%lu %llu", (~crc) & 0xffffffffUL, total);
+    return out;
+}
+
 /** Send a file to the guest, compare the cksum the guest reads of it with
  * the host's, and read it back. */
 static void transfer(struct metal_case *s)
@@ -252,15 +248,12 @@ static void transfer(struct metal_case *s)
     char send[4096] = "", host[64], guest[64], line[160], *text;
     char *put[] = {NET_SSH,          NET_SSH_KEY(s->demo_key), "-T", "-p", s->port,
                    "root@127.0.0.1", "cat > /tmp/metal.in",    NULL};
-    char *sum[] = {"cksum", send, NULL};
     struct net_run r;
 
     net_step(&s->u, "transfer");
     net_path(&s->u, "send", send, sizeof(send));
     make_send(s, send);
-    net_host(&s->u, sum, "send.cksum", &r);
-    crc_and_size(r.out, host, sizeof(host));
-    net_run_free(&r);
+    host_cksum(send, host, sizeof(host));
     net_ssh_input(&s->u, put, send, "sent", &r);
     if (net_ok(&s->u) && !net_exited0(&r))
         net_fail(&s->u, "the file could not be sent: %s", said(&r, line, sizeof(line)));
@@ -336,8 +329,8 @@ static void logs(struct metal_case *s)
     net_run_free(&r);
 }
 
-/** Run a quoted command that exits 7 as root through su_command.sh, logged
- * in as the test account, and require its output and status unchanged. */
+/** Run a quoted command through su as the test account and require its
+ * output and exit status 7 unchanged. */
 static void su(struct metal_case *s)
 {
     struct net_login login = {s->test_key, s->port, "test", s->root_password};
@@ -359,13 +352,8 @@ static void su(struct metal_case *s)
 /** Give the cksum of the stick in `buf` of `size` bytes, or "none". */
 static const char *stick_sum(struct metal_case *s, const char *output, char *buf, size_t size)
 {
-    char *argv[] = {"cksum", (char *)s->stick, NULL};
-    struct net_run r;
-
-    net_host(&s->u, argv, output, &r);
-    crc_and_size(net_exited0(&r) ? r.out : NULL, buf, size);
-    net_run_free(&r);
-    return buf;
+    (void)output;
+    return host_cksum(s->stick, buf, size);
 }
 
 /** Run the acceptance script with `serial` named, or none for NULL,
@@ -373,10 +361,21 @@ static const char *stick_sum(struct metal_case *s, const char *output, char *buf
 static void accept_run(struct metal_case *s, const char *serial, const char *output,
                        struct net_run *r)
 {
-    char *argv[] = {"sh", s->accept, "127.0.0.1", s->port, (char *)serial, NULL};
-
-    net_host(&s->u, argv, output, r);
-    clear_env();
+    struct metal_accept_request request;
+    char image[4200];
+    memset(&request, 0, sizeof(request));
+    request.login.key = serial != NULL ? s->test_key : s->demo_key;
+    request.login.user = serial != NULL ? "test" : "root";
+    request.login.port = s->port;
+    request.login.password = s->root_password;
+    request.use_su = serial != NULL;
+    request.serial = serial;
+    if (serial != NULL) {
+        snprintf(image, sizeof(image), "%s@@1048576", s->stick != NULL ? s->stick : "");
+        request.fat_image = image;
+    }
+    if (metal_accept_run(&s->u, &request, output, r) != ETUDE_OK)
+        net_fail(&s->u, "the C acceptance controller did not finish");
 }
 
 /** The acceptance with no stick named: it must pass and write none. */
@@ -387,7 +386,6 @@ static void unnamed(struct metal_case *s)
 
     net_step(&s->u, "unnamed");
     stick_sum(s, "stick.before", before, sizeof(before));
-    put_env(s, "RACH2_ACCEPT_KEY", s->demo_key);
     accept_run(s, NULL, "accept.unnamed", &r);
     net_assert(&s->u, "unnamed-pass",
                printed(&r, "metal-accept: PASS") &&
@@ -415,25 +413,18 @@ static long flushes(struct metal_case *s, const char *output)
 }
 
 /**
- * The acceptance as the release runs it on the Lenovo: logged in as the test
- * account by its key, root's commands through su with root's password, and
- * the stick ACCEPT01 named, whose FAT volume the script also reads on the
- * host. The stick's flushes are counted around it, since it must flush what
- * it wrote to the stick before it unmounts. Its run is left in `r`.
+ * The acceptance uses the release's authentication: the test account by
+ * key, root's commands through su with root's password, and ACCEPT01 named.
+ * An independent tool reads its FAT volume while the guest has it unmounted. The stick's flushes
+ * are counted around it, since it must flush what it wrote to the stick before it unmounts. Its run
+ * is left in `r`.
  */
 static void accept(struct metal_case *s, struct net_run *r)
 {
-    char image[4200];
     long before, after;
 
     net_step(&s->u, "accept");
     before = flushes(s, "usb.before");
-    snprintf(image, sizeof(image), "%s@@1048576", s->stick != NULL ? s->stick : "");
-    put_env(s, "RACH2_ACCEPT_SU", "1");
-    put_env(s, "RACH2_ACCEPT_FAT_IMAGE", image);
-    put_env(s, "RACH2_ACCEPT_USER", "test");
-    put_env(s, "RACH2_ACCEPT_KEY", s->test_key);
-    put_env(s, "RACH2_ACCEPT_PASSWORD", s->root_password);
     accept_run(s, "ACCEPT01", "accept", r);
     after = flushes(s, "usb.after");
     net_assert(&s->u, "accept-pass", net_exited0(r) && printed(r, "metal-accept: PASS"),
@@ -466,34 +457,60 @@ static void accept(struct metal_case *s, struct net_run *r)
 
 /** Judge with the host's tools what the acceptance, whose run is `r`, wrote
  * to the stick, and read the boot log once more. */
+/** Copy the stick's declared KRFFS partition while the guest has it
+ * unmounted, preserving the independent checker's input. */
+static int extract_volume(const char *disk, const char *volume)
+{
+    unsigned char bytes[65536];
+    FILE *in = fopen(disk, "rb"), *out = fopen(volume, "wb");
+    unsigned long left = STICK_BYTES;
+    size_t n;
+    int ok = in != NULL && out != NULL;
+    if (ok && fseek(in, (long)STICK_OFFSET, SEEK_SET) != 0)
+        ok = 0;
+    while (ok && left != 0) {
+        n = left < sizeof(bytes) ? (size_t)left : sizeof(bytes);
+        ok = fread(bytes, 1, n, in) == n && fwrite(bytes, 1, n, out) == n;
+        left -= (unsigned long)n;
+    }
+    if (in != NULL)
+        fclose(in);
+    if (out != NULL && fclose(out) != 0)
+        ok = 0;
+    return ok;
+}
+
+/** Give the digest of exactly the first sector, or "none". */
+static int first_sector(const char *path, char hex[65])
+{
+    FILE *f = fopen(path, "rb");
+    unsigned char bytes[512], digest[32];
+    struct sha256 sha;
+    int ok = f != NULL && fread(bytes, 1, sizeof(bytes), f) == sizeof(bytes);
+    strcpy(hex, "none");
+    if (f != NULL)
+        fclose(f);
+    if (!ok)
+        return 0;
+    sha256_init(&sha);
+    sha256_update(&sha, bytes, sizeof(bytes));
+    sha256_final(&sha, digest);
+    sha256_hex(digest, hex);
+    return 1;
+}
+
 static void stick(struct metal_case *s, const struct net_run *r)
 {
-    char volume[4096] = "", file[4096] = "", mbr[128], line[160], *text;
-    char *take[] = {"sh",
-                    "-c",
-                    "dd if=\"$1\" of=\"$2\" bs=512 " STICK_VOLUME " 2>/dev/null",
-                    "sh",
-                    (char *)s->stick,
-                    volume,
-                    NULL};
+    char volume[4096] = "", file[4096] = "", mbr[128], hex[65], line[160], *text;
     char *fsck[] = {"fsck-krffs", volume, "--strict", NULL};
     char *readfile[] = {"readfile-krffs", volume, "/accept.txt", file, NULL};
-    char *hash[] = {"sh",
-                    "-c",
-                    "dd if=\"$1\" bs=512 count=1 2>/dev/null | shasum -a 256",
-                    "sh",
-                    (char *)s->stick,
-                    NULL};
     struct net_run t;
     int clean;
-
     net_step(&s->u, "stick");
     net_path(&s->u, "stick.krffs", volume, sizeof(volume));
     net_path(&s->u, "accept.txt", file, sizeof(file));
-    net_host(&s->u, take, "stick.take", &t);
-    if (net_ok(&s->u) && !net_exited0(&t))
+    if (net_ok(&s->u) && !extract_volume(s->stick, volume))
         net_fail(&s->u, "the stick's KRFFS volume could not be copied");
-    net_run_free(&t);
     net_host(&s->u, fsck, "stick.fsck", &t);
     clean = net_exited0(&t);
     net_run_free(&t);
@@ -504,13 +521,10 @@ static void stick(struct metal_case *s, const struct net_run *r)
                      : "fsck.krffs --strict finds the stick's volume faulty");
     free(text);
     net_run_free(&t);
-    snprintf(mbr, sizeof(mbr), "disk: the MBR hashes to ");
-    net_host(&s->u, hash, "stick.mbr", &t);
-    if (net_exited0(&t) && strspn(t.out, "0123456789abcdef") == 64)
-        strncat(mbr, t.out, 64);
-    net_run_free(&t);
-    net_assert(&s->u, "stick-mbr", strlen(mbr) == 24 + 64 && printed(r, mbr),
-               "the acceptance did not print the hash of the stick's first sector, [%s]", mbr + 24);
+    first_sector(s->stick, hex);
+    snprintf(mbr, sizeof(mbr), "disk: the MBR hashes to %s", hex);
+    net_assert(&s->u, "stick-mbr", strlen(hex) == 64 && printed(r, mbr),
+               "the acceptance did not print the hash of the stick's first sector, [%s]", hex);
     as_root(s, "cat /dev/bootlog", 0, "bootlog.after", &t);
     net_assert(&s->u, "bootlog-kept",
                has(t.out, "boot: Rach2 Booting") && has(t.out, "usb: controller:") &&
@@ -519,25 +533,10 @@ static void stick(struct metal_case *s, const struct net_run *r)
     net_run_free(&t);
 }
 
-/** Give in `buf` of `size` bytes the absolute path of `path`, a script of
- * the tree that ETUDE_TREE names, or of the working directory without it,
- * and say whether it is there. */
-static int in_tree(const char *path, char *buf, size_t size)
-{
-    char dir[4096];
-    const char *tree = getenv("ETUDE_TREE");
-
-    if (tree == NULL || tree[0] != '/')
-        tree = getcwd(dir, sizeof(dir));
-    return tree != NULL && (size_t)snprintf(buf, size, "%s/%s", tree, path) < size &&
-           access(buf, R_OK) == 0;
-}
-
 /** The case machine.metal.unattended. The acceptance saves the boot log it
  * reads with the attempt's evidence. */
 static int unattended(struct etude_case *c)
 {
-    char bootlog[4096] = "", *slash;
     struct metal_case s;
     struct net_run r;
     unsigned port;
@@ -549,17 +548,9 @@ static int unattended(struct etude_case *c)
     snprintf(s.port, sizeof(s.port), "%u", port);
     if (port == 0)
         net_fail(&s.u, "the case has no port");
-    if (net_ok(&s.u) &&
-        (!in_tree(ACCEPT, s.accept, sizeof(s.accept)) || !in_tree(SU_COMMAND, s.su, sizeof(s.su))))
-        net_fail(&s.u, "%s is not in the tree: set ETUDE_TREE to its root", ACCEPT);
     net_secret(&s.u, "demo-password", s.root_password, sizeof(s.root_password));
     net_key(&s.u, "demo-key", s.demo_key, sizeof(s.demo_key));
     net_key(&s.u, "test-key", s.test_key, sizeof(s.test_key));
-    if (net_path(&s.u, "metal-bootlog.txt", bootlog, sizeof(bootlog)) != NULL &&
-        (slash = strrchr(bootlog, '/')) != NULL) {
-        *slash = '\0';
-        put_env(&s, "RACH2_ACCEPT_RECORDS", bootlog);
-    }
     if (net_ok(&s.u) && (s.stick = etude_private_copy(c, "stick")) == NULL)
         net_fail(&s.u, "the stick has no private copy");
     boot(&s);
