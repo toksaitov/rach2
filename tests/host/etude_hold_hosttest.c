@@ -24,6 +24,8 @@
 #include "../../tools/etude/lock_tree.c"
 
 static int fails;
+static char executable[4096];
+static volatile sig_atomic_t fixture_terms;
 
 #define CHECK(c, row)                                                         \
     do {                                                                      \
@@ -87,6 +89,117 @@ static void put(const char *path, const char *text)
         fprintf(stderr, "etude-lock-tree-test: cannot write %s\n", path);
         exit(1);
     }
+}
+
+/** Count every stop delivered to a fixture process. */
+static void fixture_term(int sig)
+{
+    (void)sig;
+    fixture_terms++;
+}
+
+/** Append the observed signal count after leaving the handler. */
+static int fixture_log(const char *path, const char *word)
+{
+    FILE *f = fopen(path, "a");
+    sig_atomic_t i;
+    if (f == NULL)
+        return 99;
+    for (i = 0; i < fixture_terms; i++)
+        if (fprintf(f, "%s\n", word) < 0) {
+            fclose(f);
+            return 99;
+        }
+    return fclose(f) == 0 ? 0 : 99;
+}
+
+/** Let the lock helper deliver TERM to a parent and its child. */
+static int fixture_stop(const char *ready, const char *log)
+{
+    struct sigaction sa;
+    sigset_t block, prior;
+    int sync[2], status;
+    char byte;
+    pid_t child;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = fixture_term;
+    sigemptyset(&sa.sa_mask);
+    sigemptyset(&block);
+    sigaddset(&block, SIGTERM);
+    if (sigaction(SIGTERM, &sa, NULL) != 0 || sigprocmask(SIG_BLOCK, &block, &prior) != 0 ||
+        pipe(sync) != 0)
+        return 99;
+    child = fork();
+    if (child < 0) {
+        close(sync[0]);
+        close(sync[1]);
+        return 99;
+    }
+    if (child == 0) {
+        close(sync[0]);
+        if (write(sync[1], ".", 1) != 1)
+            _exit(99);
+        close(sync[1]);
+        while (!fixture_terms)
+            sigsuspend(&prior);
+        _exit(fixture_log(log, "child"));
+    }
+    close(sync[1]);
+    if (read(sync[0], &byte, 1) != 1) {
+        close(sync[0]);
+        kill(child, SIGKILL);
+        while (waitpid(child, NULL, 0) < 0 && errno == EINTR) {
+        }
+        return 99;
+    }
+    close(sync[0]);
+    put(ready, "");
+    while (!fixture_terms)
+        sigsuspend(&prior);
+    if (sigprocmask(SIG_SETMASK, &prior, NULL) != 0)
+        return 99;
+    /* interval: retain the parent while the second stop is sent. */
+    usleep(500000);
+    while (waitpid(child, &status, 0) < 0)
+        if (errno != EINTR)
+            return 99;
+    return fixture_log(log, "term") == 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 5 : 99;
+}
+
+/** Run the compiled command whose arguments and status the row observes. */
+static int fixture_command(int argc, char **argv)
+{
+    FILE *f;
+    char text[4096];
+    const char *held;
+
+    if (argc < 3)
+        return 99;
+    if (strcmp(argv[2], "exit") == 0 && argc == 4)
+        return atoi(argv[3]);
+    if (strcmp(argv[2], "kill") == 0) {
+        raise(SIGKILL);
+        return 99;
+    }
+    if (strcmp(argv[2], "busy") == 0 && argc == 4) {
+        put(argv[3], "");
+        for (;;)
+            pause();
+    }
+    if (strcmp(argv[2], "stop") == 0 && argc == 5)
+        return fixture_stop(argv[3], argv[4]);
+    if (strcmp(argv[2], "observe") != 0 || argc != 5)
+        return 99;
+    held = getenv("RACH2_TREE_HELD");
+    f = fopen(argv[4], "w");
+    if (f == NULL)
+        return 99;
+    if (fprintf(f, "held %s\n%s", held == NULL ? "" : held, get(argv[3], text, sizeof(text))) < 0) {
+        fclose(f);
+        return 99;
+    }
+    return fclose(f) == 0 ? 3 : 99;
 }
 
 /** Say whether `path` exists. */
@@ -238,23 +351,23 @@ static void test_hold(int run_hold)
 {
     const char *row = run_hold ? "run hold" : "script hold";
     char tree[1024], cmd[4096], owner[1200], seen[1200], rec[4096], field_buf[256], want[64];
-    char *argv[8];
+    char *argv[10];
     struct ran r;
     int n = 0;
 
     make_tree(run_hold ? "hold-run" : "hold-script", tree, sizeof tree);
     fix_format(seen, sizeof seen, "%s/seen", tree);
     lock_path(tree, "owner", owner, sizeof owner);
-    fix_format(cmd, sizeof cmd, "{ echo \"held $RACH2_TREE_HELD\"; cat %s; } > %s; exit 3", owner,
-               seen);
     argv[n++] = "etude";
     if (run_hold)
         argv[n++] = "-r";
     argv[n++] = tree;
     argv[n++] = "script";
-    argv[n++] = "sh";
-    argv[n++] = "-c";
-    argv[n++] = cmd;
+    argv[n++] = executable;
+    argv[n++] = "--hold-command";
+    argv[n++] = "observe";
+    argv[n++] = owner;
+    argv[n++] = seen;
     argv[n] = NULL;
     run(argv, &r);
     get(seen, rec, sizeof rec);
@@ -266,8 +379,8 @@ static void test_hold(int run_hold)
     CHECK(strncmp(line_of(rec, "identity", field_buf, sizeof field_buf), want, strlen(want)) == 0 &&
               field_buf[strlen(want)] == ' ',
           row);
-    CHECK(strncmp(line_of(rec, "args", field_buf, sizeof field_buf), "script sh -c ", 13) == 0,
-          row);
+    fix_format(cmd, sizeof(cmd), "script %s --hold-command observe %s %s", executable, owner, seen);
+    CHECK(strcmp(line_of(rec, "args", owner, sizeof(owner)), cmd) == 0, row);
     CHECK(line_of(rec, "since", field_buf, sizeof field_buf)[0] != '\0', row);
     CHECK(strtol(line_of(rec, "job", field_buf, sizeof field_buf), NULL, 10) > 0 &&
               strcmp(field_buf, want) != 0,
@@ -287,7 +400,7 @@ static void test_hold(int run_hold)
 static void test_ancestor(void)
 {
     char tree[1024], record[256], before[512], after[512], path[1200], self[32];
-    char *argv[] = {"etude", tree, "script", "sh", "-c", "exit 6", NULL};
+    char *argv[] = {"etude", tree, "script", executable, "--hold-command", "exit", "6", NULL};
     struct ran r;
 
     make_tree("ancestor", tree, sizeof tree);
@@ -318,14 +431,14 @@ static void test_ancestor(void)
 static void test_busy(void)
 {
     char tree[1024], ready[1200], cmd[1300], err[1200];
-    char *first[] = {"etude", tree, "first", "sh", "-c", cmd, NULL};
-    char *second[] = {"etude", tree, "second", "true", NULL};
+    char *first[] = {"etude", tree, "first", executable, "--hold-command", "busy", ready, NULL};
+    char *second[] = {"etude", tree, "second", executable, "--hold-command", "exit", "0", NULL};
     struct ran r;
     int status;
 
     make_tree("busy", tree, sizeof tree);
     fix_format(ready, sizeof ready, "%s/ready", tree);
-    fix_format(cmd, sizeof cmd, "touch %s; while :; do sleep 0.05; done", ready);
+    fix_format(cmd, sizeof cmd, "first %s --hold-command busy", executable);
     fix_format(err, sizeof err, "%s/first.err", tree);
     beside = start(first, err);
     CHECK(appears(ready, beside), "busy: the first hold runs its command");
@@ -333,7 +446,7 @@ static void test_busy(void)
     run(second, &r);
     CHECK(r.status == 1, "busy: a second hold is refused");
     CHECK(strstr(r.err, "second: another run holds this tree: ") != NULL &&
-              strstr(r.err, "first sh -c touch") != NULL &&
+              strstr(r.err, cmd) != NULL &&
               strstr(r.err, "second: result: refused: the tree is not free") != NULL,
           "busy: the refusal names the holder");
     CHECK(running(beside), "busy: the first hold is left as it was");
@@ -462,18 +575,14 @@ static void test_takeovers(void)
  */
 static void test_stop(void)
 {
-    char tree[1024], ready[1200], log[1200], cmd[4096], path[1200], text[256];
-    char *argv[] = {"etude", tree, "stopped", "sh", "-c", cmd, NULL};
+    char tree[1024], ready[1200], log[1200], path[1200], text[256];
+    char *argv[] = {"etude", tree,  "stopped", executable, "--hold-command",
+                    "stop",  ready, log,       NULL};
     int status;
 
     make_tree("stop", tree, sizeof tree);
     fix_format(ready, sizeof ready, "%s/ready", tree);
     fix_format(log, sizeof log, "%s/log", tree);
-    fix_format(cmd, sizeof cmd,
-               "sh -c 'trap \"echo child >> %s; exit 0\" TERM; while :; do sleep 0.05; done' & "
-               "trap 'echo term >> %s; sleep 0.5; wait; exit 5' TERM; touch %s; "
-               "while :; do sleep 0.05; done",
-               log, log, ready);
     fix_format(path, sizeof path, "%s/stop.err", tree);
     beside = start(argv, path);
     CHECK(appears(ready, beside), "stop: the command runs");
@@ -500,7 +609,7 @@ static void test_stop(void)
 static void test_killed(void)
 {
     char tree[1024], path[1200];
-    char *argv[] = {"etude", tree, "killed", "sh", "-c", "kill -KILL $$", NULL};
+    char *argv[] = {"etude", tree, "killed", executable, "--hold-command", "kill", NULL};
     struct ran r;
 
     make_tree("killed", tree, sizeof tree);
@@ -532,8 +641,12 @@ static void test_scratch(void)
     CHECK(!exists(lock_path(tree, NULL, path, sizeof path)), "scratch: no lock is left");
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    if (argc > 1 && strcmp(argv[1], "--hold-command") == 0)
+        return fixture_command(argc, argv);
+    if (realpath(argv[0], executable) == NULL)
+        return 1;
     signal(SIGHUP, interrupted);
     signal(SIGINT, interrupted);
     signal(SIGTERM, interrupted);
