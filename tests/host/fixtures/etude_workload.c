@@ -14,6 +14,7 @@ static int wait_for_stop(void)
     fflush(NULL);
     for (;;)
         pause();
+    return 125;
 }
 
 static int remote_workload(int argc, char **argv)
