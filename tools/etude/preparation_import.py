@@ -330,6 +330,11 @@ def transfer(producer, names, tree, work):
     listing.write_text('\n'.join(names) + '\n', encoding='utf-8', errors='surrogateescape')
     if producer['transport'] == 'wsl':
         destination = wsl_path(producer, tree)
+        comparison = subprocess.run(wsl_command(producer, ['/usr/bin/test', producer['tree'],
+                                                          '-ef', destination]),
+                                    env=wsl_environment())
+        require(comparison.returncode == 1,
+                'producer and native destination must be distinct filesystem objects')
         file_list = wsl_path(producer, listing)
         locker = [producer['etude'], 'lock', 'tree', producer['tree'], 'prepare-import',
                   '/usr/bin/rsync', '-a', '--sparse', '--protect-args',

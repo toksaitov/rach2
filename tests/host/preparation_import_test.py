@@ -116,6 +116,7 @@ class ImportTests(unittest.TestCase):
         with patch.object(product, 'windows_host', return_value=True), \
              patch.object(product.shutil, 'which', return_value='C:/Windows/System32/wsl.exe'), \
              patch.object(product.subprocess, 'run') as run:
+            run.return_value.returncode = 1
             product.validate_producer(producer)
             self.assertEqual(run.call_args.args[0], [
                 'C:/Windows/System32/wsl.exe', '--distribution', 'Ubuntu-26.04',
@@ -131,6 +132,9 @@ class ImportTests(unittest.TestCase):
                     '--files-from=/mapped/list', '--', '/producer/', '/mapped/tree/'])
                 self.assertEqual((tree / 'import-files.list').read_text(), 'build/images/a.disk\n')
                 self.assertEqual(run.call_args.kwargs['env']['MSYS2_ARG_CONV_EXCL'], '*')
+                run.return_value.returncode = 0
+                with patch.object(product, 'wsl_path', return_value='/producer'), self.assertRaises(ValueError):
+                    product.transfer(producer, [], tree, tree)
 
     def test_wsl_mapping(self):
         producer = dict(transport='wsl')
