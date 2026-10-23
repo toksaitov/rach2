@@ -40,7 +40,7 @@ $(PREFIX)/stageimage.krffs: $(PRODUCT_KRFFS) krffs/krffs_allocator.c krffs/stage
 $(PREFIX)/mkfs.krffs: $(PRODUCT_KRFFS) krffs/mkfs.krffs.c
 	@mkdir -p $(@D)
 	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
-$(PREFIX)/readfile.krffs: $(PRODUCT_KRFFS) krffs/readfile.krffs.c
+$(PREFIX)/readfile.krffs: $(PRODUCT_KRFFS) krffs/krffs_reader.c krffs/readfile.krffs.c
 	@mkdir -p $(@D)
 	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
 $(PREFIX)/binfind: tools/inspect/binfind.c
