@@ -115,9 +115,12 @@ make install
 # musl's own wrapper, musl-gcc, and its specs file name the install by its
 # absolute path. Nothing here runs them, since muslgcc links the programs;
 # without them the install is the same in every copy of the tree, and the
-# host's store of step outputs can share it (tools/etude/Readme.md).
+# host's store of step outputs can share it (tools/etude/Readme.md). musl's
+# configure builds the wrapper only for a compiler whose own C library is
+# glibc; a cross compiler with none, as on macOS, gets no wrapper, and the
+# install then has no bin directory.
 rm -f "$PREFIX/bin/musl-gcc" "$PREFIX/lib/musl-gcc.specs"
-rmdir "$PREFIX/bin"
+[ ! -d "$PREFIX/bin" ] || rmdir "$PREFIX/bin"
 
 echo "libc: built"
 echo "  libc.a:  $PREFIX/lib/libc.a"
