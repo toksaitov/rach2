@@ -53,7 +53,7 @@ struct collection {
     char results[PATH_SIZE], evidence[PATH_SIZE], schemas[PATH_SIZE];
     char record[PATH_SIZE], ledger[PATH_SIZE], locks[PATH_SIZE], status[PATH_SIZE];
     char account[128], site[PATH_SIZE];
-    const char *arches, *history, *commit, *context_path;
+    const char *arches, *history, *commit, *context_path, *selection_export;
     struct etude_measurement_context *context;
     unsigned width, cpus;
     uint64_t memory;
@@ -769,13 +769,38 @@ static int format_collection(struct collection *c, char *stream)
     return 0;
 }
 
+/* Export the actual allocator's selection without starting its cases. */
+static int export_selection(struct collection *c, const char *accel)
+{
+    struct etude_legacy_set_opts o;
+    extern int etude_legacy_selection_export(const struct etude_legacy_set_opts *, const char *);
+    memset(&o, 0, sizeof(o));
+    o.tree = c->tree;
+    o.arch = c->arches;
+    o.program = c->program;
+    o.members = c->members;
+    o.nmembers = c->nmembers;
+    o.native_locks = c->work;
+    o.results = c->results;
+    o.evidence = c->evidence;
+    o.schemas = c->schemas;
+    o.record = c->record;
+    o.width = c->width;
+    o.cpus = c->cpus;
+    o.accel = accel;
+    o.prepared = 1;
+    o.stop_on_fail = c->stop_on_fail;
+    memcpy(o.cap, c->cap, sizeof(o.cap));
+    return etude_legacy_selection_export(&o, c->selection_export);
+}
+
 static int run_collection(struct collection *c, const char *accel, int dry)
 {
     struct etude_legacy_set_opts o;
     int rc, machines = 0, alone = 0;
     char stream[PATH_SIZE] = "";
     if (dry)
-        return print_selection(c);
+        return c->selection_export ? export_selection(c, accel) : print_selection(c);
     if (access(c->record, R_OK) != 0) {
         fprintf(stderr,
                 "run: result: refused: prepared artifact record %s is unavailable; "
@@ -865,7 +890,7 @@ static int collection_options(struct collection *c, struct request *r, int argc,
 {
     int opt;
     optind = 1;
-    while ((opt = getopt(argc, argv, "+t:a:o:e:p:j:M:H:g:A:C:I:kN")) != -1) {
+    while ((opt = getopt(argc, argv, "+t:a:o:e:p:j:M:H:g:A:C:I:J:kN")) != -1) {
         switch (opt) {
         case 't':
             r->tree = optarg;
@@ -902,6 +927,9 @@ static int collection_options(struct collection *c, struct request *r, int argc,
             break;
         case 'I':
             c->context_path = optarg;
+            break;
+        case 'J':
+            c->selection_export = optarg;
             break;
         case 'k':
             c->stop_on_fail = 1;
@@ -1064,7 +1092,7 @@ static int collection_main(int argc, char **argv, int production)
     if (argc < 2) {
         fputs(
             "usage: etude run [-t TREE] [-a ARCH|both] [-p RECORD] [-o RESULTS] "
-            "[-j WORKERS] [-M MIB] [-H HISTORY] [-A ACCEL] [-I CONTEXT] [-k] [-N] "
+            "[-j WORKERS] [-M MIB] [-H HISTORY] [-A ACCEL] [-I CONTEXT] [-k] [-N [-J FILE]] "
             "SUITE...|core|all|inventory\n",
             stderr);
         free(c);
@@ -1081,6 +1109,10 @@ static int collection_main(int argc, char **argv, int production)
     }
     if (collection_options(c, &r, argc, argv) != 0)
         goto done;
+    if (c->selection_export && (production || !r.dry)) {
+        refused("-J selection export requires -N on the native run entry");
+        goto done;
+    }
     if (path_of(c->schemas, c->tree, "tools/etude/schemas") != 0) {
         refused("schema path is too long");
         goto done;
