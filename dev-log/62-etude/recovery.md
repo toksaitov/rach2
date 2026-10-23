@@ -37,3 +37,5 @@ The first three workers use GPT-6.1 Sol at high effort. The account reported 4% 
 ## Repairs already on master
 
 Issue #938 is fixed by `0b8953edd`, which makes private copies of the GNU store's read-only trees writable before modifying them. The Chromium archive orders a directory before all of its descendants, so extraction finishes those descendants before restoring the directory's mode. The recovery's i686 GNU preparation completed the ports, native compiler, GDB, JavaScript, Chromium and sanitizer stages from the store; its complete log is retained with the preparation evidence.
+
+Issue #942 is fixed by `c771b2363`, which runs util-linux's install with one job. The installed programs no longer link while libtool reinstalls `libmount`. The GNU ports stage completed with this recipe during the recovery preparation. The saved worker's equivalent fix is not applied a second time.
