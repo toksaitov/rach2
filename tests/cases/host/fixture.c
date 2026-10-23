@@ -479,6 +479,7 @@ int fx_init(struct fixture *f, const char *root, const char *name, const char *s
 {
     memset(f, 0, sizeof(*f));
     owner = f;
+    signal(SIGCHLD, SIG_DFL);
     if (geteuid() == 0) {
         struct passwd *account = getpwnam("test");
         if (!account || !fx_mkdir(root) || chown(root, account->pw_uid, account->pw_gid) ||

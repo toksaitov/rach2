@@ -39,6 +39,8 @@ int main(int argc, char **argv)
     char value[8200];
     int ok;
     name = name ? name + 1 : argv[0];
+    if (argc > 1 && !strcmp(argv[1], "--status-lock"))
+        return flow_status_lock(argc, argv);
     if ((argc == 2 && !strcmp(argv[1], "--hold")) || (argc == 3 && !strcmp(argv[2], "--hold"))) {
         if (getenv("FLOW_WAIT_READY"))
             fx_text(getenv("FLOW_WAIT_READY"), "");
@@ -80,6 +82,8 @@ int main(int argc, char **argv)
     fx_env("FLOW_SELF", f.self);
     if (!strcmp(id, "progress"))
         ok = flow_progress(&f);
+    else if (!strcmp(id, "test_status"))
+        ok = flow_status(&f);
     else if (!strcmp(id, "testing_run"))
         ok = flow_testing(&f);
     else if (!strcmp(id, "etude_deploy"))

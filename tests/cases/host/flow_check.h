@@ -26,4 +26,6 @@ int flow_deploy(struct fixture *f);
 int flow_deploy_mock(int argc, char **argv);
 int flow_testing(struct fixture *f);
 int flow_testing_mock(int argc, char **argv);
+int flow_status(struct fixture *f);
+int flow_status_lock(int argc, char **argv);
 #endif
