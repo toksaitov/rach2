@@ -627,8 +627,6 @@ static int attach(struct fix_volume *v, const char *dir)
     if (loop_command(line) < 0)
         return -1;
     v->loop = n;
-    snprintf(line, sizeof(line), "loop %d", n);
-    remember(dir, line);
     return 0;
 }
 
@@ -924,6 +922,59 @@ static int detach(int n)
     return loop_command(line);
 }
 
+/**
+ * Detach each loop device that /proc/loop lists on a file under `dir`: those
+ * the case's program attached itself and left. A device whose file is on
+ * another such device's volume must go first, so each pass detaches what it
+ * can and the passes repeat while one detaches something. 0, also where
+ * there is no /proc/loop, as on Linux; or -1 when a device on a file under
+ * `dir` is left or /proc/loop cannot be read.
+ */
+static int detach_left(const char *dir)
+{
+    char full[PATH_MAX];
+    size_t len;
+    int pass;
+
+    if (!realpath(dir, full))
+        return -1;
+    len = strlen(full);
+    for (pass = 0; pass <= FIX_VOLUMES; pass++) {
+        char text[4096];
+        int fd = open("/proc/loop", O_RDONLY | O_CLOEXEC);
+        ssize_t n;
+        int left = 0, gone = 0;
+        char *line, *next;
+
+        if (fd < 0)
+            return errno == ENOENT ? 0 : -1;
+        n = read(fd, text, sizeof(text) - 1);
+        close(fd);
+        if (n < 0)
+            return -1;
+        text[n] = '\0';
+        for (line = text; *line; line = next) {
+            char *file;
+
+            next = strchr(line, '\n');
+            next = next ? (*next = '\0', next + 1) : line + strlen(line);
+            file = strrchr(line, ' ');
+            if (strncmp(line, "loop", 4) != 0 || !file || strncmp(file + 1, full, len) != 0 ||
+                file[1 + len] != '/')
+                continue;
+            if (detach(atoi(line + 4)) == 0)
+                gone++;
+            else
+                left++;
+        }
+        if (left == 0)
+            return 0;
+        if (gone == 0)
+            return -1;
+    }
+    return -1;
+}
+
 /** Remove the fixtures of `fx` that need the kernel, as fixture_cleanup
  * says, and the record of what they made once all of it is removed; 0, or
  * -1 when something made could not be removed. */
@@ -941,11 +992,8 @@ static int kernel_cleanup(struct fixtures *fx, const char *dir)
             (fpath(path, "%s/work/%s", dir, vol) < 0 || umount2(path, 0) < 0))
             rc = -1;
     }
-    if (fx->has_root && fx->root.loop >= 0 && detach(fx->root.loop) < 0)
+    if (detach_left(dir) < 0)
         rc = -1;
-    for (i = 0; i < fx->nvol; i++)
-        if (fx->vol[i].loop >= 0 && detach(fx->vol[i].loop) < 0)
-            rc = -1;
     if (fx->log && keep_log(fx, dir) < 0)
         rc = -1;
     free(fx->log_before);
@@ -1058,9 +1106,10 @@ int fixture_enter(const struct fixtures *fx, const char *work, char *prog, size_
 /**
  * Remove the fixtures of the attempt in `dir` once its processes have
  * ended: close the pseudo-terminal, unmount what etude-guest mounted, detach
- * the loop devices and keep the kernel's records as `DIR/log`. A mount
- * namespace of the case's own has ended with its last process, and the
- * kernel unmounted its mounts then.
+ * the loop devices on files of the attempt, its program's among them, and
+ * keep the kernel's records as `DIR/log`. A mount namespace of the case's
+ * own has ended with its last process, and the kernel unmounted its mounts
+ * then.
  *
  * @return 0, or -1 when something made could not be removed.
  */
@@ -1079,11 +1128,11 @@ int fixture_cleanup(struct fixtures *fx, const char *dir)
 }
 
 /**
- * Remove what the record `DIR/fixtures` says an attempt's fixtures made,
- * for an attempt whose etude-guest ended before it could: its mounts in
- * the order opposite to their making, then its loop devices. Only the
- * fixtures that need the kernel write the record, so where FIX_KERNEL is 0
- * there is nothing to remove.
+ * Remove what an attempt whose etude-guest ended before it could left: the
+ * mounts the record `DIR/fixtures` names, in the order opposite to their
+ * making, then every loop device on a file under `DIR`. Only the fixtures
+ * that need the kernel write the record, so where FIX_KERNEL is 0 there is
+ * nothing to remove.
  *
  * @return 0, or -1 when something is left.
  */
@@ -1097,7 +1146,7 @@ int fixture_settle(const char *dir)
     ssize_t len;
 
     if (fpath(path, "%s/fixtures%s", dir, "") < 0 || (fd = open(path, O_RDONLY | O_CLOEXEC)) < 0)
-        return 0;
+        return detach_left(dir);
     len = read(fd, text, sizeof(text) - 1);
     close(fd);
     if (len < 0)
@@ -1106,14 +1155,11 @@ int fixture_settle(const char *dir)
     line[0] = strtok(text, "\n");
     while (n < 63 && line[n])
         line[++n] = strtok(NULL, "\n");
-    while (n-- > 0) {
-        if (strncmp(line[n], "mount ", 6) == 0) {
-            if (umount2(line[n] + 6, 0) < 0 && errno != EINVAL)
-                rc = -1;
-        } else if (strncmp(line[n], "loop ", 5) == 0 && detach(atoi(line[n] + 5)) < 0) {
+    while (n-- > 0)
+        if (strncmp(line[n], "mount ", 6) == 0 && umount2(line[n] + 6, 0) < 0 && errno != EINVAL)
             rc = -1;
-        }
-    }
+    if (detach_left(dir) < 0)
+        rc = -1;
     if (rc == 0)
         unlink(path);
     return rc;
