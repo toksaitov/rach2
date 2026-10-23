@@ -6,8 +6,9 @@
  * kernel's __user. In a normal build they expand to nothing. Under sparse
  * (which defines __CHECKER__) a __user pointer is tagged noderef and a distinct
  * address space, so dereferencing one directly, instead of going through the
- * copy_from_user/copy_to_user helpers, becomes a sparse error. __force casts
- * the annotation away inside the helpers, the only place that is allowed.
+ * copy_from_user/copy_to_user helpers, becomes a sparse error. __force marks
+ * intentional removal of the annotation: copies, validated direct-I/O buffers
+ * and conversions to integer addresses for range checks and page accounting.
  * RACH2_USERCHECK uses Clang's equivalent pointer attributes and a parsed
  * cast audit during preparation; the ordinary build is unchanged.
  */

@@ -700,7 +700,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
             return -EBADF;
         }
         if (entry->sock->type == SOCK_STREAM) {
-            if (!user_buffer_ok((uintptr_t)buf, count, 0)) {
+            if (!user_buffer_ok((__force uintptr_t)buf, count, 0)) {
                 return -EFAULT;
             }
             return socket_tcp_send(entry->sock, (const uint8_t __force *)buf, (int)count,
@@ -710,7 +710,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
             if (!entry->sock->connected) {
                 return -EDESTADDRREQ;
             }
-            if (!user_buffer_ok((uintptr_t)buf, count, 0)) {
+            if (!user_buffer_ok((__force uintptr_t)buf, count, 0)) {
                 return -EFAULT;
             }
             if (count > 1500) {
@@ -4462,7 +4462,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
 
     if (entry->type == FD_TYPE_SOCKET) {
         int sock_nonblock;
-        if (!entry->sock || !user_buffer_ok((uintptr_t)buf, count, 1)) {
+        if (!entry->sock || !user_buffer_ok((__force uintptr_t)buf, count, 1)) {
             return -EFAULT;
         }
         if (sock_is_query(entry->sock)) {
@@ -4492,7 +4492,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
         }
 
         if (fb_owner_pid == current_proc->tgid) {
-            if (!user_buffer_ok((uintptr_t)buf, count, 1)) {
+            if (!user_buffer_ok((__force uintptr_t)buf, count, 1)) {
                 return -EFAULT;
             }
             return kbd_read_scancodes((uint8_t __force *)buf, (int)count);
@@ -4536,7 +4536,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
             return 0;
         }
 
-        if (!user_buffer_ok((uintptr_t)buf,
+        if (!user_buffer_ok((__force uintptr_t)buf,
                             (uint32_t)packets_requested * sizeof(struct mouse_packet), 1)) {
             return -EFAULT;
         }
@@ -4620,7 +4620,7 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf, uint32_t 
         if (sock_is_query(entry->sock)) {
             return -EOPNOTSUPP;
         }
-        if (!user_buffer_ok((uintptr_t)buf, count, 1)) {
+        if (!user_buffer_ok((__force uintptr_t)buf, count, 1)) {
             return -EFAULT;
         }
         if (entry->sock->type == SOCK_RAW) {

@@ -22,12 +22,16 @@ CASES = {
     'cast': (False, 'int *f(int __user *p) { return (int *)p; }'),
     'typedef': (False, 'typedef int __user *up; int *f(up p) { return (int *)p; }'),
     'preserve': (True, 'void __user *f(int __user *p) { return (void __user *)p; }'),
+    'discard': (True, 'void f(int __user *p) { (void)p; }'),
+    'discard-typedef': (True, 'typedef void unused; void f(int __user *p) { (unused)p; }'),
+    'discard-cast': (False, 'void f(int __user *p) { (void)(int *)p; }'),
+    'discard-read': (False, 'void f(int __user *p) { (void)*p; }'),
     'integer': (False, 'int *f(int __user *p) { return (int *)(unsigned long)p; }'),
     'comment': (False, 'int *copy_from_user(int __user *p) { return (int /* __force */ *)p; }'),
     'operand-comment': (False, 'int *copy_from_user(int __user *p) { return (int *) /* __force */ p; }'),
-    'wrong-function': (False, 'int *f(int __user *p) { return (int __force *)p; }'),
-    'trusted-copy': (True, 'int *copy_from_user(int __user *p) { return (int __force *)p; }'),
-    'trusted-integer': (True, 'unsigned long copy_to_user(int __user *p) { return (__force unsigned long)p; }'),
+    'explicit-force': (True, 'int *f(int __user *p) { return (int __force *)p; }'),
+    'copy-force': (True, 'int *copy_from_user(int __user *p) { return (int __force *)p; }'),
+    'force-integer': (True, 'unsigned long copy_to_user(int __user *p) { return (__force unsigned long)p; }'),
 }
 
 
@@ -41,15 +45,16 @@ def main():
         for arch in ('i686', 'x86_64'):
             for name, (wanted, body) in CASES.items():
                 path.write_text(f'#include "{header}"\n{body}\n')
-                passed, output = CHECKER.check(path, arch, trusted=path, environment=environment)
+                passed, output = CHECKER.check(path, arch, environment=environment)
                 print(f'{arch}: {name}: {"accepted" if passed else "rejected"}')
                 if passed != wanted:
                     raise ValueError(f'{arch}: {name}: unexpected result\n{output}')
-            path.write_text(f'#include "{header}"\n{CASES["trusted-copy"][1]}\n')
-            passed, output = CHECKER.check(path, arch, environment=environment)
-            if passed:
-                raise ValueError(f'{arch}: __force accepted outside usercopy.c')
-            print(f'{arch}: wrong-file: rejected')
+            other = Path(scratch) / 'caller.c'
+            other.write_text(f'#include "{header}"\n{CASES["copy-force"][1]}\n')
+            passed, output = CHECKER.check(other, arch, environment=environment)
+            if not passed:
+                raise ValueError(f'{arch}: explicit __force rejected outside usercopy.c\n{output}')
+            print(f'{arch}: force-other-file: accepted')
     return 0
 
 

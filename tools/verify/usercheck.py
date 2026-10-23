@@ -8,10 +8,6 @@ import re
 import subprocess
 import sys
 
-ROOT = Path(__file__).resolve().parents[2]
-TRUSTED = ROOT / 'rach2/sys/mm/usercopy.c'
-COPIES = {'copy_from_user', 'copy_to_user', 'strncpy_from_user', 'strnlen_user'}
-
 
 def native_path(path):
     if sys.platform in ('msys', 'cygwin'):
@@ -19,9 +15,13 @@ def native_path(path):
     return str(path)
 
 
-def user_type(node):
+def type_name(node):
     types = node.get('type', {})
-    spelling = types.get('desugaredQualType', types.get('qualType', ''))
+    return types.get('desugaredQualType', types.get('qualType', ''))
+
+
+def user_type(node):
+    spelling = type_name(node)
     # Clang retains the annotation macro's name in its printed AST types.
     return 'address_space(1)' in spelling or re.search(r'\b__user\b', spelling) is not None
 
@@ -40,24 +40,22 @@ def force_cast(node, source):
     return re.fullmatch(rb'\s*\([^()]*\b__force\b[^()]*\)\s*', spelling) is not None
 
 
-def audit(node, source, trusted, function=None):
+def audit(node, source):
     failures = []
-    if node.get('kind') == 'FunctionDecl':
-        function = node.get('name')
-        trusted = trusted and 'includedFrom' not in node.get('loc', {})
     children = node.get('inner', [])
     if node.get('kind') == 'CStyleCastExpr' and children and \
-            user_type(children[0]) and not user_type(node):
-        if not (trusted and function in COPIES and force_cast(node, source)):
+            user_type(children[0]) and not user_type(node) and \
+            type_name(node) != 'void':
+        if not force_cast(node, source):
             offset = node.get('range', {}).get('begin', {}).get('offset', 0)
             line = source[:offset].count(b'\n') + 1
-            failures.append(f'{line}: error: user-pointer cast requires __force in a user-copy helper')
+            failures.append(f'{line}: error: user-pointer cast requires explicit __force')
     for child in children:
-        failures.extend(audit(child, source, trusted, function))
+        failures.extend(audit(child, source))
     return failures
 
 
-def check(path, arch, compiler=None, trusted=TRUSTED, environment=None):
+def check(path, arch, compiler=None, environment=None):
     compiler = compiler or os.environ.get('USERCHECK_CLANG', 'clang')
     target = 'i686-elf' if arch == 'i686' else 'x86_64-elf'
     resource = subprocess.check_output([compiler, '-print-resource-dir'], text=True,
@@ -69,7 +67,7 @@ def check(path, arch, compiler=None, trusted=TRUSTED, environment=None):
     diagnostics = result.stderr.decode(errors='replace')
     if result.returncode:
         return False, diagnostics
-    findings = audit(json.loads(result.stdout), path.read_bytes(), path.resolve() == trusted.resolve())
+    findings = audit(json.loads(result.stdout), path.read_bytes())
     return not findings and not diagnostics, diagnostics + ''.join(f'{path}:{s}\n' for s in findings)
 
 

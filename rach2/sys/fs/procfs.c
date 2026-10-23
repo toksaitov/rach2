@@ -4700,7 +4700,7 @@ static int32_t procfs_mem_read(fd_entry_t *e, char __user *buf, uint32_t count)
 /** The write of a mem descriptor (`procfs_mem_access`). */
 static int32_t procfs_mem_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
-    return procfs_mem_access(e, (char __user *)(uintptr_t)buf, count, 1);
+    return procfs_mem_access(e, (char __user *)buf, count, 1);
 }
 
 static const struct file_ops procfs_mem_ops = {procfs_mem_read, procfs_mem_write, procfs_poll,
