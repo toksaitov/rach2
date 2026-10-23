@@ -13,6 +13,7 @@
 #   e2fsprogs             mke2fs, debugfs and e2fsck, from the tarball
 #                         vendored under vendor/e2fsprogs/
 #   mandoc                mandoc, linked against a static zlib built with it
+#   pmccabe               the recorded 2.8 complexity parser
 #
 # and it is installed under PREFIX, which is made if absent, with its programs
 # in PREFIX/bin. Each upstream tarball is downloaded with curl or wget into
@@ -22,8 +23,9 @@
 # succeeded or not. It needs a C and a C++ compiler, GNU Make, m4, gzip, bzip2
 # and tar.
 #
-# On Windows the script runs under MSYS2 in the MSYS environment, and builds
-# programs that use the MSYS runtime. With the packages gcc, make, curl, tar,
+# On Windows the cross toolchain and e2fsprogs use the MSYS runtime. The
+# source judges use the native UCRT compiler and need no MSYS runtime when
+# executed. With the packages gcc, make, curl, tar,
 # xz, bzip2, m4, diffutils and patch installed by pacman, the command is the
 # same, run by MSYS2's shell from the tree, for example:
 #
@@ -59,6 +61,11 @@ MANDOC=mandoc-1.14.6
 MANDOC_SHA256=8bf0d570f01e70a6e124884088870cbed7537f36328d512909eb10cd53179d9c
 ZLIB=zlib-1.3.2
 ZLIB_SHA256=bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16
+PMCCABE=pmccabe_2.8.orig.tar.gz
+# Debian's signed pmccabe_2.8-3.dsc records this upstream source digest.
+PMCCABE_SHA256=08c125d13e43f4c7557fb15ad953e06562097ed5bae094b9683b265827e2c4dc
+STRPTIME_REF=036e40e6d80b1d71e57d3715ae20175ce09d7b78
+STRPTIME_SHA256=ecbb2772b734a90ba54e87adb61a8b94f131f300d78ddba4be7ae54e50436e12
 
 die() {
     echo "build-host-tool: $*" >&2
@@ -70,14 +77,14 @@ say() {
 }
 
 usage() {
-    echo "usage: sh tools/setup/build_host_tool.sh i686-elf|x86_64-elf|e2fsprogs|mandoc PREFIX" >&2
+    echo "usage: sh tools/setup/build_host_tool.sh i686-elf|x86_64-elf|e2fsprogs|mandoc|pmccabe PREFIX" >&2
     exit 2
 }
 
 [ $# -eq 2 ] || usage
 NAME=$1
 case "$NAME" in
-    i686-elf|x86_64-elf|e2fsprogs|mandoc) ;;
+    i686-elf|x86_64-elf|e2fsprogs|mandoc|pmccabe) ;;
     *) usage ;;
 esac
 
@@ -90,10 +97,24 @@ case "$TREE$PREFIX" in
 esac
 
 BUILD_OPT=
+NATIVE_WINDOWS=0
 case "$(uname -s)" in
-    MSYS*) BUILD_OPT=--build=x86_64-pc-cygwin ;;
-    MINGW*|UCRT*|CLANG*)
-        die "run this in MSYS2's MSYS environment (MSYSTEM=MSYS), not ${MSYSTEM:-$(uname -s)}" ;;
+    MSYS*|MINGW*|UCRT*|CLANG*)
+        case "$NAME" in
+            mandoc|pmccabe)
+                NATIVE_WINDOWS=1
+                CC=${SOURCE_TOOL_CC:-/ucrt64/bin/gcc}
+                case "$("$CC" -dumpmachine)" in
+                    *mingw*) ;;
+                    *) die "$CC must produce native Windows executables" ;;
+                esac
+                export CC ;;
+            *)
+                case "$(uname -s)" in
+                    MSYS*) BUILD_OPT=--build=x86_64-pc-cygwin ;;
+                    *) die "run the cross-tool build in MSYS2's MSYS environment" ;;
+                esac ;;
+        esac ;;
 esac
 
 JOBS=$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 1)
@@ -114,9 +135,6 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 mkdir -p "$TREE/build/host-tools" "$DOWNLOADS" || die "cannot make the build directories"
-mkdir "$TREE/build/host-tools/$NAME" ||
-    die "$TREE/build/host-tools/$NAME exists; another build is running there, or remove it"
-work=$TREE/build/host-tools/$NAME
 
 sha256_of() {
     if command -v sha256sum >/dev/null 2>&1; then
@@ -281,18 +299,80 @@ build_mandoc() {
     say "configuring $MANDOC"
     {
         echo "PREFIX=$PREFIX"
-        echo "CFLAGS=\"-g -O2 -I$z\""
-        echo "LDFLAGS=\"-L$z\""
+        echo "CC=${CC:-cc}"
+        if [ "$NATIVE_WINDOWS" = 1 ]; then
+            compat=$TREE/tools/setup/mandoc-win
+            native_z=$(cygpath -m "$z") || die "cannot convert zlib path"
+            native_compat=$(cygpath -m "$compat") || die "cannot convert compatibility path"
+            echo "CFLAGS=\"-g -O2 -std=gnu99 -D_GNU_SOURCE -I$native_z -I$native_compat -include $native_compat/strptime.h\""
+            echo 'HAVE_STRPTIME=1'
+            echo 'OSNAME=Windows'
+            echo "LDFLAGS=\"-L$native_z\""
+        else
+            echo "CFLAGS=\"-g -O2 -I$z\""
+            echo "LDFLAGS=\"-L$z\""
+        fi
     } >"$m/configure.local" || die "cannot write $m/configure.local"
-    run "$m" ./configure
+    mkdir -p "$TREE/build/host-tool-logs/mandoc" || die "cannot make log directory"
+    (cd "$m" && ./configure)
+    configured=$?
+    cp "$m/config.log" "$TREE/build/host-tool-logs/mandoc/config.log" || die "cannot save config.log"
+    [ "$configured" = 0 ] || die "mandoc configure failed; see build/host-tool-logs/mandoc/config.log"
     say "building $MANDOC"
-    run "$m" make -j"$JOBS" mandoc
+    if [ "$NATIVE_WINDOWS" = 1 ]; then
+        fetch "https://raw.githubusercontent.com/vim/vim/$STRPTIME_REF/src/strptime.c" "$STRPTIME_SHA256"
+        cp "$DOWNLOADS/strptime.c" "$m/batch_strptime.c" || die "cannot copy strptime"
+        cp "$compat/main.c" "$m/batch_main.c" || die "cannot copy batch entry"
+        cp "$compat/mmap.c" "$m/batch_mmap.c" || die "cannot copy mapping adapter"
+        run "$m" make -f "$TREE/tools/setup/mandoc-batch.mk" -j"$JOBS" mandoc
+        mkdir -p "$PREFIX/share/licenses" || die "cannot make license directory"
+        cp "$DOWNLOADS/strptime.c" "$PREFIX/share/licenses/mandoc-strptime.c" || die "cannot copy license"
+    else
+        run "$m" make -j"$JOBS" mandoc
+    fi
     put "$m" mandoc
+    mkdir -p "$PREFIX/share/licenses" || die "cannot make license directory"
+    cp "$m/LICENSE" "$PREFIX/share/licenses/mandoc.txt" || die "cannot copy mandoc license"
+    cp "$z/LICENSE" "$PREFIX/share/licenses/zlib.txt" || die "cannot copy zlib license"
+    tool_record mandoc
 }
+
+tool_record() {
+    python3 "$TREE/tests/system/source_tools_test.py" check "$1" "$PREFIX" ||
+        die "$1 fixture failed; evidence: $PREFIX/$1.check.json"
+    python3 "$TREE/tools/setup/source_tool_record.py" write "$1" "$PREFIX" ||
+        die "cannot write tool record"
+}
+
+build_pmccabe() {
+    fetch "https://deb.debian.org/debian/pool/main/p/pmccabe/$PMCCABE" "$PMCCABE_SHA256"
+    mkdir "$work/src" || die "cannot make $work"
+    unpack "$DOWNLOADS/$PMCCABE" "$work/src"
+    pm_source=$work/src/pmccabe-v2.8
+    flags='-std=gnu89 -O2 -Wall -Wextra'
+    [ "$NATIVE_WINDOWS" = 0 ] || flags="$flags -DWIN32"
+    run "$pm_source" make CC="${CC:-cc}" CFLAGS="$flags" pmccabe
+    put "$pm_source" pmccabe
+    mkdir -p "$PREFIX/share/licenses" || die "cannot make license directory"
+    cp "$pm_source/COPYING" "$PREFIX/share/licenses/pmccabe.txt" || die "cannot copy pmccabe license"
+    tool_record pmccabe
+}
+
+case "$NAME" in
+    pmccabe|mandoc)
+        if python3 "$TREE/tools/setup/source_tool_record.py" check "$NAME" "$PREFIX"; then
+            say "$NAME is unchanged in $PREFIX"
+            exit 0
+        fi ;;
+esac
+mkdir "$TREE/build/host-tools/$NAME" ||
+    die "$TREE/build/host-tools/$NAME exists; another build is running there, or remove it"
+work=$TREE/build/host-tools/$NAME
 
 case "$NAME" in
     i686-elf|x86_64-elf) build_cross "$NAME" ;;
     e2fsprogs) build_e2fsprogs ;;
     mandoc) build_mandoc ;;
+    pmccabe) build_pmccabe ;;
 esac
 say "installed $NAME in $PREFIX"

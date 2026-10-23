@@ -60,10 +60,11 @@ static int skip_directory(const char *parent, const char *name)
 static int source_file(const char *name)
 {
     static const char *const suffixes[] = {
-        ".c",        ".h",      ".S",    ".s",   ".sh",      ".awk",   ".pl", ".py",    ".json",
-        ".yml",      ".yaml",   ".md",   ".mk",  ".def",     ".inc",   ".in", ".patch", ".rules",
-        ".manifest", ".cfg",    ".conf", ".txt", ".reasons", ".allow", ".ld", ".list",  ".pins",
-        ".link",     ".script", ".1",    ".2",   ".3",       ".4",     ".5",  ".7",     ".8"};
+        ".c",     ".h",     ".S",     ".s",        ".sh",   ".awk",    ".pl",  ".py",
+        ".ps1",   ".json",  ".yml",   ".yaml",     ".md",   ".mk",     ".def", ".inc",
+        ".in",    ".patch", ".rules", ".manifest", ".cfg",  ".conf",   ".txt", ".reasons",
+        ".allow", ".ld",    ".list",  ".pins",     ".link", ".script", ".1",   ".2",
+        ".3",     ".4",     ".5",     ".7",        ".8"};
     static const char *const names[] = {
         "Makefile", "Readme",        "LICENSE",    "COPYING",        "run",          "registry",
         "judges",   ".clang-format", ".gitignore", ".gitattributes", ".editorconfig"};

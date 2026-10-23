@@ -467,7 +467,7 @@
     },
     {
       "case_id": "host.style.sparse",
-      "behavior": "sparse finds nothing in the architecture's kernel, its address spaces checked, where sparse is installed here or in etude's tooling machine",
+      "behavior": "Clang and the parsed cast audit find no violation of the kernel's user-pointer contract during preparation",
       "units": ["style", "`check.sh` step 20, sparse"],
       "domain": "host",
       "architectures": ["i686", "x86_64"],
@@ -475,8 +475,8 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the native reader writes no files"},
       "assertions": [
-        {"assertion_id": "runs", "checks": "sparse runs over every kernel source", "source": "program"},
-        {"assertion_id": "no-findings", "checks": "sparse reports no warning or error", "source": "program"}
+        {"assertion_id": "runs", "checks": "the compiler fixtures and user-pointer checker run over every kernel source", "source": "program"},
+        {"assertion_id": "no-findings", "checks": "the compiler and explicit-cast audit report no user-pointer finding", "source": "program"}
       ],
       "branches": [
         {"group_id": "tool", "decided_by": "report", "alternatives": [{"alternative_id": "present", "when": null, "assertions": ["runs", "no-findings"]}, {"alternative_id": "absent", "when": null, "assertions": []}]}

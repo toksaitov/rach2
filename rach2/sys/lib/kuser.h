@@ -8,8 +8,15 @@
  * address space, so dereferencing one directly, instead of going through the
  * copy_from_user/copy_to_user helpers, becomes a sparse error. __force casts
  * the annotation away inside the helpers, the only place that is allowed.
+ * RACH2_USERCHECK uses Clang's equivalent pointer attributes and a parsed
+ * cast audit during preparation; the ordinary build is unchanged.
  */
-#ifdef __CHECKER__
+#if defined(RACH2_USERCHECK) && defined(__clang__)
+#define __user   __attribute__((noderef, address_space(1)))
+#define __kernel __attribute__((address_space(0)))
+/* Clang's explicit casts are checked by tools/verify/usercheck.py. */
+#define __force
+#elif defined(__CHECKER__)
 #define __user   __attribute__((noderef, address_space(1)))
 #define __kernel __attribute__((address_space(0)))
 #define __force  __attribute__((force))

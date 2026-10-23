@@ -15,15 +15,10 @@
 # A check judged by a tool's version, that of cppcheck, clang-format or clang,
 # reports the branch `recorded` under the version tools/setup/judges records
 # and `other` under another, with no assertion of the findings, and prints
-# what it found. The sparse case reports the branch `absent` where sparse is
-# not installed, and the size case `unjudged` where pmccabe is not, which
-# leaves the complexity of the functions unjudged. The testing host has every
-# tool, at its recorded version. On a host with another version of cppcheck,
-# clang-format or clang, or with no sparse, that case runs again in etude's
-# tooling machine (tools/etude/Readme.md, The tooling machine), an Ubuntu
-# with the testing host's packages, which compares its own version with the
-# record in the same way, and the job's report is the case's. Where no
-# machine is made, the case runs here as above.
+# what it found. The historical sparse case checks user pointers with Clang
+# and a parsed cast audit on the preparation host. The sizes and manual cases
+# use the pinned native pmccabe and mandoc tools. Missing tools fail evidence
+# preparation. The other versioned cases retain their tooling-machine route.
 #
 # etude runs it in the case's workspace, with ETUDE_TREE naming the root of
 # the tree it checks, ARCH naming the architecture of a case that has one, and
@@ -49,8 +44,11 @@ case $(uname -s) in
     MINGW*|MSYS*|UCRT*|CLANG*)
         style_tree=${ETUDE_TREE:-$(pwd)}
         style_tree=$(cygpath -u "$style_tree") || exit 2
-        exec python3 "$style_tree/tools/etude/collection_tools.py" style "$style_tree" \
-            "${ETUDE_COLLECTION_ARCH:-${ARCH:-i686}}" "$CASE" ;;
+        case "$CASE" in
+            sparse|sizes|manual) ETUDE_TREE=$style_tree ;;
+            *) exec python3 "$style_tree/tools/etude/collection_tools.py" style "$style_tree" \
+                "${ETUDE_COLLECTION_ARCH:-${ARCH:-i686}}" "$CASE" ;;
+        esac ;;
 esac
 if [ -n "${ETUDE_TREE-}" ]; then
     cd "$ETUDE_TREE" || exit 2
@@ -87,14 +85,11 @@ printf 'verify-style: logs: %s\n' "$VDIR"
 # The ABI check links for the architecture the case is for, ARCH, i686 unless
 # set, against that architecture's musl, as the build lays them out
 # (mk/arch.mk): an ELF32 i386 program at 0x08048000 or an ELF64 x86-64 one at
-# 0x400000. The kernel's second front ends, clang and sparse, read the
-# kernel sources of that architecture as its compiler does (KCHECK_TARGET,
-# KCHECK_SPARSE and KCHECK_WIDTH); sparse's target is otherwise the machine
-# it runs on.
+# 0x400000. The kernel's Clang checks read the sources of that architecture
+# as its compiler does (KCHECK_TARGET and KCHECK_WIDTH).
 case "${ARCH:-i686}" in
     x86_64)
         KCHECK_TARGET=x86_64-elf
-        KCHECK_SPARSE=x86_64
         KCHECK_WIDTH=-m64
         LIBC="$REPO/build/x86_64/vendor-work/musl/install"
         ABI_CROSS=x86_64-elf-
@@ -105,7 +100,6 @@ case "${ARCH:-i686}" in
         ;;
     *)
         KCHECK_TARGET=i686-elf
-        KCHECK_SPARSE=i386
         KCHECK_WIDTH=-m32
         LIBC="$REPO/vendor/musl/install"
         ABI_CROSS=i686-elf-
@@ -635,7 +629,11 @@ case_waits() {
 # a page or an alias, every alias names a page, every page passes mandoc's
 # lint, and the recovery image stages the pages man/recovery lists.
 case_manual() {
-    check mancheck verify_man.log make -s -C "$REPO" mancheck
+    _man_goal=mancheck
+    case $(uname -s) in
+        MINGW*|MSYS*|UCRT*|CLANG*) _man_goal=mancheck-prepared ;;
+    esac
+    check mancheck verify_man.log make -s -C "$REPO" "$_man_goal"
 }
 
 # clang as a second front end over the kernel, with a short positive list of
@@ -671,35 +669,30 @@ case_clang() {
     fi
 }
 
-# sparse with __CHECKER__ defined, so the kernel's __user annotations are
-# checked: a user pointer dereferenced directly, or passed where a kernel
-# pointer is expected, is a finding. -Wno-non-pointer-null is the one category
-# left out; tools/verify/exceptions.md says why.
+# Keep the historical case identity while checking the existing __user
+# contract with Clang and a parsed audit of explicit __force casts. Both
+# compiler fixtures and kernel inputs must pass on the preparation host.
 case_sparse() {
-    if ! command -v sparse >/dev/null 2>&1; then
+    if ! command -v clang >/dev/null 2>&1; then
         branch tool absent
-        echo "style: sparse: absent here; the testing host judges"
+        fail runs "clang is required for user-pointer checking"
+        fail no-findings "the user-pointer contract was not checked"
         return
     fi
     branch tool present
-    _gccinc=$("${ABI_CROSS}gcc" -print-file-name=include)
     : >"$VDIR/verify_sparse.log"
     _bad=0
-    for f in $(make -s -C "$REPO/rach2" print-c-src); do
-        (cd "$REPO/rach2" && sparse --arch="$KCHECK_SPARSE" -D__CHECKER__ "$KCHECK_WIDTH" -ansi -ffreestanding -nostdinc -I"$_gccinc" \
-            -Wno-decl -Wno-non-pointer-null "$f") >>"$VDIR/verify_sparse.log" 2>&1 ||
-            _bad=$((_bad + 1))
-    done
+    python3 "$REPO/tests/system/usercheck_test.py" >>"$VDIR/verify_sparse.log" 2>&1 || _bad=1
+    _files=$(make -s -C "$REPO/rach2" print-c-src)
+    # shellcheck disable=SC2086
+    (cd "$REPO/rach2" && python3 "$REPO/tools/verify/usercheck.py" --arch "${ARCH:-i686}" $_files) \
+        >>"$VDIR/verify_sparse.log" 2>&1 || _bad=1
     if [ "$_bad" -eq 0 ]; then
         pass runs
-    else
-        fail runs "sparse did not run over $_bad file(s); see $VDIR/verify_sparse.log"
-    fi
-    _n=$(grep -c "warning:\|error:" "$VDIR/verify_sparse.log")
-    if [ "$_n" -eq 0 ]; then
         pass no-findings
     else
-        fail no-findings "$_n finding(s); see $VDIR/verify_sparse.log"
+        fail runs "user-pointer checks failed; see $VDIR/verify_sparse.log"
+        fail no-findings "the compiler or cast audit reported a finding"
         show "$VDIR/verify_sparse.log"
     fi
 }
@@ -739,11 +732,8 @@ case_links() {
 # ---- The tooling machine. ----
 
 # judged_here: succeed when this host judges the case itself: its tool is at
-# the version tools/setup/judges records, or, for sparse, installed.
+# the version tools/setup/judges records.
 judged_here() {
-    case "$CASE" in
-        sparse) command -v sparse >/dev/null 2>&1; return ;;
-    esac
     _found=$("$CASE" --version </dev/null 2>/dev/null | head -1)
     [ "$_found" = "$(sed -n "s/^$CASE: //p" "$REPO/tools/setup/judges")" ]
 }
@@ -751,9 +741,9 @@ judged_here() {
 # in_tooling: run the case in etude's tooling machine, as the header says,
 # and exit with the job's status, or return when no machine is made. The
 # job's input is one tar file of the tree's tracked and unignored files under
-# the directories the four cases read. tools/setup/elfwrap.sh makes the
+# the directories the three cases read. tools/setup/elfwrap.sh makes the
 # elf cross compilers there from Ubuntu's Linux ones, as on the testing host,
-# since sparse asks one for its include directory. On a Mac with Apple
+# for source checks that query their include directories. On a Mac with Apple
 # silicon, unless ETUDE_TOOLING_ARCH says otherwise, the job runs in the arm64
 # machine under Apple's hypervisor, as the GNU layer's build does, since the
 # amd64 one runs under TCG there more than twenty times slower. A job that
@@ -817,7 +807,6 @@ unrun() {
         cppcheck) _all="kernel-runs host-runs kernel-clean host-clean" ;;
         clang-format) _all=formatted ;;
         clang) _all=no-warnings ;;
-        sparse) _all="runs no-findings" ;;
     esac
     for _a in $_all; do
         case "$_reported" in
@@ -844,7 +833,7 @@ case "$CASE" in
     *) echo "style: no case $CASE" >&2; exit 2 ;;
 esac
 case "$CASE" in
-    cppcheck|clang-format|clang|sparse) judged_here || in_tooling ;;
+    cppcheck|clang-format|clang) judged_here || in_tooling ;;
 esac
 record "begin $ID"
 "case_$(echo "$CASE" | tr - _)"

@@ -578,6 +578,8 @@ build/tests/cases/host/style: tests/cases/host/style.c tests/cases/host/source_s
 
 # Compiler and source checks run during preparation. The native style case
 # verifies the complete source digest and every declared assertion at runtime.
+include mk/source-tools.mk
+
 STYLE_PREP_TOOLS = build/tests/cases/host/style $(ETUDE) build/tools/verify/asciiscan \
     build/tools/verify/guestcheck build/tools/verify/prosecheck build/tools/verify/sizecheck \
     build/tools/inspect/elfcheck build/tools/inspect/cfgcheck build/tools/etude/win/pecheck
@@ -591,6 +593,11 @@ build/x86_64/tests/style/%.json: tests/cases/host/prepare_style.py tests/cases/h
 	python3 -B tests/cases/host/prepare_style.py --arch x86_64 $* $@
 build/tests/style/abi.json: $(LIBC_STAMP)
 build/x86_64/tests/style/abi.json: $(LIBC_STAMP)
+build/tests/style/sizes.json build/x86_64/tests/style/sizes.json: host-pmccabe
+build/tests/style/manual.json build/x86_64/tests/style/manual.json: host-mandoc
+ifneq ($(OS),Windows_NT)
+build/tests/style/manual.json build/x86_64/tests/style/manual.json: $(BUSYBOX_STAMP)
+endif
 
 build/tests/host-suite/tests/usbstamp_hosttest: tests/cases/host/prepare.py \
     tests/host/usbstamp_hosttest.c host-inventory-force
@@ -1017,8 +1024,10 @@ $(MANCHECK): tools/verify/mancheck.c
 	$(HOST_LINK)
 # `make mancheck`: every program, applet and call has a page; see the tool.
 # The calls are both architectures', each table read with its own numbers.
-.PHONY: mancheck
+.PHONY: mancheck mancheck-prepared
 mancheck: $(MANCHECK) $(BUSYBOX_STAMP)
+mancheck-prepared: $(MANCHECK)
+mancheck mancheck-prepared:
 	$(MANCHECK) man rach2/sys/arch/i686/sysnr.h rach2/sys/arch/i686/systab.c:rach2/sys/syscall_net.c $(BUSYBOX_STAGE)/applet_tables-main.h \
 	    utils/programs.mk krffs/manifests/rach2-recovery.manifest krffs/manifests/os-simple.manifest \
 	    krffs/manifests/os-real.manifest krffs/manifests/rach2-metal-disk.manifest

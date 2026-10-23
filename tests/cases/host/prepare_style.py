@@ -2,14 +2,45 @@
 """Run source checks during preparation and publish source-bound evidence."""
 import argparse
 import datetime
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / 'tools/setup'))
+from source_tool_record import identity  # noqa: E402
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def judges(case, prefix, arch):
+    if case == 'sparse':
+        program = shutil.which('clang')
+        if not program:
+            raise ValueError('clang is required for user-pointer checking')
+        version = subprocess.check_output([program, '--version'], text=True).splitlines()[0]
+        return dict(tool='clang', version=version, path=str(Path(program).resolve()),
+                    binary_sha256=digest(Path(program)))
+    pinned = {'sizes': ('pmccabe', '2.8'), 'manual': ('mandoc', '1.14.6')}
+    if case not in pinned:
+        return None
+    tool, _ = pinned[case]
+    try:
+        found = identity(tool, prefix)
+    except (OSError, ValueError) as error:
+        raise ValueError(f'{tool} is missing or changed; make host-{tool}') from error
+    if case == 'manual':
+        path = Path('build/x86_64' if arch == 'x86_64' else 'build') / 'vendor/busybox/applet_tables-main.h'
+        found['prepared_inputs'] = {path.as_posix(): digest(ROOT / path)}
+    return found
 
 
 def fingerprint(driver):
@@ -62,11 +93,14 @@ def main():
     manifest = json.loads((ROOT / 'tests/cases/host.style.json').read_text())
     definition = next(c for c in manifest['cases'] if c['case_id'] == 'host.style.' + args.case)
     architecture = 'none' if definition['architectures'] == 'none' else args.arch
+    prefix = Path(os.environ.get('SOURCE_TOOL_PREFIX', ROOT / 'build/host-tools/native')).resolve()
+    actual_judges = judges(args.case, prefix, args.arch)
     source_hash = fingerprint(driver)
     if args.output.is_file():
         old = json.loads(args.output.read_text())
         if old.get('version') == 1 and old.get('source_sha256') == source_hash and \
-                old.get('architecture') == architecture and old.get('case_id') == definition['case_id']:
+                old.get('architecture') == architecture and old.get('case_id') == definition['case_id'] and \
+                old.get('actual_judges') == actual_judges:
             # The native reader also checks exact assertion and branch coverage.
             checked = subprocess.run([str(driver), args.case], env={**os.environ,
                                      'ETUDE_TREE': str(ROOT), 'ARCH': args.arch},
@@ -77,7 +111,8 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     log = args.output.with_suffix('.log')
     env = {**os.environ, 'ARCH': args.arch, 'ETUDE_TREE': str(ROOT),
-           'ETUDE_CASE': definition['case_id'], 'PYTHONDONTWRITEBYTECODE': '1'}
+           'ETUDE_CASE': definition['case_id'], 'PYTHONDONTWRITEBYTECODE': '1',
+           'PATH': str(prefix / 'bin') + os.pathsep + os.environ.get('PATH', '')}
     result = subprocess.run(['sh', 'tests/cases/host/style.sh', args.case], env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     log.write_text(result.stdout)
@@ -86,10 +121,13 @@ def main():
     assertions, branches = collect(definition, result.stdout)
     if fingerprint(driver) != source_hash:
         raise ValueError(f'sources changed during {args.case}; evidence: {log}')
+    if judges(args.case, prefix, args.arch) != actual_judges:
+        raise ValueError(f'the source-check tool changed during {args.case}; evidence: {log}')
     record = dict(version=1, case_id=definition['case_id'], architecture=architecture,
                   source_sha256=source_hash, assertions=assertions, branches=branches,
                   prepared_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
                   command=['sh', 'tests/cases/host/style.sh', args.case],
+                  actual_judges=actual_judges,
                   judges=(ROOT / 'tools/setup/judges').read_text())
     fd, name = tempfile.mkstemp(dir=args.output.parent, prefix=args.output.name + '.')
     try:

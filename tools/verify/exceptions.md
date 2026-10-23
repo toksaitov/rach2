@@ -4,9 +4,9 @@ Every check in this tree is meant to be green with nothing suppressed. This file
 
 ## Categories left out
 
-* sparse `-Wnon-pointer-null`: the kernel writes `0` for a null pointer in several hundred places, a style older than the check. The check is run for the address-space annotations, which a literal zero does not touch, and the zeros are left as they are: each is a plain zero the reader takes as null, and a change would be churn without a fault.
-* sparse `-Wdecl`: sparse asks for `static` on every function and variable without a prior declaration. The kernel's own `-Wmissing-prototypes` under `-Werror` already requires a prior declaration of every function that is not `static`, and a variable a header declares is what the linker joins. The two overlap, and GCC's is the one under the build.
 * GCC `-Wconversion -Wsign-conversion` and `-Wunused-macros`: rejected as warning flags, with the reasons beside the flag list in `mk/warnings.mk`.
+
+The historical `sparse` case checks the user-pointer contract with Clang and a parsed cast audit, as [Native source judges](../setup/source-tools.md) describes. It no longer runs Sparse or uses its `-Wno-non-pointer-null` and `-Wno-decl` exceptions. Literal zero remains a valid C null pointer; the kernel's existing `-Wmissing-prototypes` still checks declarations.
 
 ## Individual exceptions
 

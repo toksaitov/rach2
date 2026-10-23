@@ -45,6 +45,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <errno.h>
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 #define NAMES        4096
 #define NAME_MAX_LEN 64
@@ -145,6 +152,31 @@ static int is_page(const char *text, const char *section)
     return 0;
 }
 
+/* Run the native linter directly, retaining diagnostics and exit status. */
+static int lint_page(const char *path)
+{
+    const char *args[] = {"mandoc", "-T", "lint", "-W", "warning", path, NULL};
+#ifdef _WIN32
+    return _spawnvp(_P_WAIT, args[0], args) == 0;
+#else
+    pid_t child, got;
+    int status;
+
+    child = fork();
+    if (child == 0) {
+        execvp(args[0], (char *const *)args);
+        _exit(127);
+    }
+    if (child < 0) {
+        return 0;
+    }
+    do {
+        got = waitpid(child, &status, 0);
+    } while (got < 0 && errno == EINTR);
+    return got == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+#endif
+}
+
 /**
  * Reads the pages, `MANDIR/manN/NAME.N`, and lints each with mandoc when
  * `lint` is set.
@@ -167,7 +199,7 @@ static void read_pages(const char *mandir, int lint)
             continue;
         }
         while ((e = readdir(d)) != NULL) {
-            char name[NAME_MAX_LEN], cmd[1024];
+            char name[NAME_MAX_LEN], path[1024];
             size_t len = strlen(e->d_name);
 
             if (e->d_name[0] == '.' || len < 3 || e->d_name[len - 2] != '.' ||
@@ -180,9 +212,8 @@ static void read_pages(const char *mandir, int lint)
             if (!lint) {
                 continue;
             }
-            snprintf(cmd, sizeof(cmd), "mandoc -T lint -W warning '%s/%s' >/dev/null 2>&1", dir,
-                     e->d_name);
-            if (system(cmd) != 0) {
+            snprintf(path, sizeof(path), "%s/%s", dir, e->d_name);
+            if (!lint_page(path)) {
                 fail("%s/%s: mandoc -T lint found a warning", dir, e->d_name);
             }
         }
