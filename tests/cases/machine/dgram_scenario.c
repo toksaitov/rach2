@@ -1,8 +1,8 @@
 /*
- * dgram_scenario.c: the scenario of the dgram cases (../machine.dgram.json,
- * ../machine.dgram-e1000.json), dgramprobe at the debug shell of a machine
- * whose card forwards a port of the case's to the guest's port 7502, and the
- * probe's broadcast found in the capture of that card.
+ * dgram_scenario.c: the scenario of the dgram case (../machine.dgram.json),
+ * dgramprobe at the debug shell of a machine whose card forwards a port of the
+ * case's to the guest's port 7502, and the probe's broadcast found in the
+ * capture of that card.
  */
 #include <stdio.h>
 #include <stdlib.h>

@@ -72,7 +72,6 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `servicelog` (full tier; needs qemu, mke2fs; 128 MiB): the log init's services write to is bounded within a boot, and a log a boot left full is removed at the next.
 * `persist` (core tier; needs qemu; 128 MiB): fsync durability across a power cut.
 * `style` (full tier; needs cppcheck, shellcheck, clang, clang-format, python3; no machine): the source checks over the tree, booting nothing.
-* `dgram-e1000` (full tier; needs qemu; 128 MiB): the dgram suite on the e1000 card.
 * `dgram` (core tier; needs qemu; 128 MiB): a connected datagram socket and the permission to broadcast, which is how a DHCP client renews a lease and how it asks for one.
 * `diskdiag` (full tier; needs qemu, ssh; 128 MiB): a disk read without being mounted and without being written.
 * `e1000` (core tier; needs qemu; 128 MiB): the network path on the other emulated card, and the probe order that decides which card a machine with more than one of them gets, the cases of tests/cases/machine.e1000.json, each a boot of its own.

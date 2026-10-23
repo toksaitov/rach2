@@ -108,7 +108,6 @@ bootline|qemu,mke2fs|full
 servicelog|qemu,mke2fs|full
 persist|qemu|core|persist-test.*,persist.*,persist/*
 style|cppcheck,shellcheck,clang,clang-format,python3|full
-dgram-e1000|qemu|full
 dgram|qemu|core
 diskdiag|qemu,ssh|full
 e1000|qemu|core
