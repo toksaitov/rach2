@@ -856,6 +856,19 @@ struct shape {
     int network;
 };
 
+/** Select the NIC only for a job that requested a network. */
+static const char *network_model(const struct etude_tooling_site *site, int arm)
+{
+#ifdef _WIN32
+    if (!arm && strcmp(site->accel, "whpx") == 0)
+        return "e1000";
+#else
+    (void)site;
+    (void)arm;
+#endif
+    return "virtio-net-pci";
+}
+
 /**
  * Start QEMU's command line: the machine, its root disk and its consoles. An
  * amd64 machine is QEMU's default PC; an arm64 one is its `virt` board with
@@ -897,7 +910,10 @@ static int qemu_line(struct line *l, const struct etude_tooling_site *site,
     arg(l, "-device");
     arg(l, "virtio-rng-pci");
     arg(l, "-nic");
-    arg(l, "%s", shape->network ? "user,model=virtio-net-pci" : "none");
+    if (shape->network)
+        arg(l, "user,model=%s", network_model(site, arm));
+    else
+        arg(l, "none");
     if (qemu_value(dir, v, sizeof(v)) != 0)
         return -1;
     arg(l, "-serial");

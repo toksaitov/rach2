@@ -85,7 +85,7 @@ class Job:
             self.back.append((name + "/" + path.name, path))
         return shlex.quote(name + "/" + path.name)
 
-    def run(self, script, volume=256, memory=512):
+    def run(self, script, volume=256, memory=512, network=False):
         """Run a supervised tooling job and publish its transferred outputs."""
         script_path = self.work / "job.sh"
         script_path.write_text(script, encoding="utf-8")
@@ -100,6 +100,8 @@ class Job:
                 "-r", native(self.root / "tools/etude/tooling"),
                 "-C", native(cache), "-a", accel, "run", "-c", "1", "-m", str(memory),
                 "-s", str(volume), "-O", native(out)]
+        if network:
+            args.append("-n")
         for flag, paths in (("-i", self.inputs), ("-d", self.disks)):
             for path in paths:
                 args += [flag, native(path)]
@@ -321,7 +323,7 @@ export PATH=/root/bin:$PATH
     script += 'tar --sparse -cf "$ETUDE_DISK2" ' + goals_text + "\n"
     input_bytes = sum(path.stat().st_size for path in job.inputs)
     volume = max(512, (input_bytes + 1048575) // 1048576 + 64)
-    status = job.run(script, volume=volume, memory=4096)
+    status = job.run(script, volume=volume, memory=4096, network=True)
     if status:
         return status
     subprocess.check_call(["tar", "-xf", str(products), "-C", str(root)])

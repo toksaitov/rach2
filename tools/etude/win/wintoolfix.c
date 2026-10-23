@@ -28,6 +28,8 @@
 /* The programs winstand.exe stands in for. */
 static const char *const stand_ins[] = {"curl", "qemu-img", "qemu-system-x86_64"};
 
+static const char *tooling_accel = "tcg";
+
 /* The fixture's directories under scratch\tooling, and its files. */
 static char base[PATH], bin[PATH], fix[PATH], cache[PATH], recipe[PATH], outdir[PATH], store[PATH],
     schema[PATH], tool[PATH];
@@ -216,6 +218,7 @@ static int tooling(struct ran *r, const char *stream, const char *command, ...)
     size_t n = 10;
     va_list ap;
 
+    argv[8] = (char *)tooling_accel;
     argv[9] = (char *)command;
     if (stream != NULL) {
         char *h[] = {"-H", history(stream, path),
@@ -577,6 +580,32 @@ static int has_line(const char *path, const char *line)
     return found;
 }
 
+/** WHPX uses e1000 with the job disks and still permits no network. */
+static int whpx_line(char *script, char *disk, const char *args)
+{
+    struct ran r;
+    int rc;
+    tooling_accel = "whpx";
+    rc = tooling(&r, NULL, "run", "-n", "-d", disk, script, END);
+    tooling_accel = "tcg";
+    if (rc != 0)
+        return 1;
+    ran_free(&r);
+    if (!has_line(args, "whpx") || !has_line(args, "user,model=e1000") ||
+        has_line(args, "user,model=virtio-net-pci") ||
+        !has_line(args, "virtio-blk-pci,drive=d1,serial=etude-d1"))
+        return failed("WHPX did not select e1000 with the attached disk");
+    tooling_accel = "whpx";
+    rc = tooling(&r, NULL, "run", script, END);
+    tooling_accel = "tcg";
+    if (rc != 0)
+        return 1;
+    ran_free(&r);
+    return has_line(args, "none") && !has_line(args, "user,model=e1000")
+               ? 0
+               : failed("a WHPX job without -n has a network");
+}
+
 /** QEMU's command line: its shape, its network and its disks, root first. */
 static int row_line(void)
 {
@@ -613,7 +642,7 @@ static int row_line(void)
     ran_free(&r);
     if (!has_line(args, "none"))
         rc = failed("a job without -n has a network");
-    return rc;
+    return rc ? rc : whpx_line(script, disk, args);
 }
 
 /**
