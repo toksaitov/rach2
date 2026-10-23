@@ -13,6 +13,7 @@
 #include "../../../utils/sha256.h"
 #include "../json.h"
 #include "etude/remote.h"
+#include "etude/native.h"
 
 #define FILES_MAX    16
 #define ENV_MAX      32
@@ -31,6 +32,7 @@ struct file {
     char *data;
     size_t size;
     const char *mode;
+    char sha[65];
 };
 
 /* What the command line asks for. */
@@ -49,6 +51,10 @@ struct options {
     unsigned reconnects;
     int keep;
     char **argv; /* the program and its arguments */
+    char *const *transport_argv;
+    int staged_only;
+    enum etude_end expected_end;
+    int expected_value;
 };
 
 /* A string that grows, for the invocation. */
@@ -198,6 +204,8 @@ static int option(struct options *o, int c, const char *v)
 {
     uint64_t n, *num = number_option(o, c);
 
+    if (!v)
+        return -1;
     if (num != NULL)
         return number(v, num);
     switch (c) {
@@ -288,7 +296,7 @@ static int parse(int argc, char **argv, struct options *o)
 }
 
 /** Read the file at `path` whole into `f`; 0, or -1 with a diagnostic. */
-static int read_case_file(const char *path, struct file *f)
+static int read_case_file(const char *path, struct file *f, int staged_only)
 {
     struct stat st;
     const char *slash = strrchr(path, '/');
@@ -308,11 +316,34 @@ static int read_case_file(const char *path, struct file *f)
         return -1;
     }
     f->size = (size_t)st.st_size;
-    f->data = malloc(f->size + 1);
-    if (f->data == NULL || fread(f->data, 1, f->size, in) != f->size) {
-        fprintf(stderr, "etude run: %s: cannot be read\n", path);
-        fclose(in);
-        return -1;
+    if (staged_only) {
+        struct sha256 hash;
+        unsigned char data[65536], digest[32];
+        size_t n, total = 0;
+        sha256_init(&hash);
+        while ((n = fread(data, 1, sizeof(data), in))) {
+            sha256_update(&hash, data, n);
+            total += n;
+        }
+        if (ferror(in) || total != f->size) {
+            fclose(in);
+            return -1;
+        }
+        sha256_final(&hash, digest);
+        sha256_hex(digest, f->sha);
+    } else {
+        struct sha256 hash;
+        unsigned char digest[32];
+        f->data = malloc(f->size + 1);
+        if (f->data == NULL || fread(f->data, 1, f->size, in) != f->size) {
+            fprintf(stderr, "etude run: %s: cannot be read\n", path);
+            fclose(in);
+            return -1;
+        }
+        sha256_init(&hash);
+        sha256_update(&hash, (const unsigned char *)f->data, f->size);
+        sha256_final(&hash, digest);
+        sha256_hex(digest, f->sha);
     }
     fclose(in);
     f->mode = (st.st_mode & 0111) != 0 ? "0755" : "0644";
@@ -332,18 +363,6 @@ static void token_of(const char *s, char out[ETUDE_FRAME_TOKEN_LEN + 1])
     sha256_hex(d, hex);
     memcpy(out, hex, ETUDE_FRAME_TOKEN_LEN);
     out[ETUDE_FRAME_TOKEN_LEN] = '\0';
-}
-
-/** Give the SHA-256 of `n` bytes in hexadecimal. */
-static void digest_of(const char *p, size_t n, char hex[65])
-{
-    struct sha256 h;
-    unsigned char d[32];
-
-    sha256_init(&h);
-    sha256_update(&h, (const unsigned char *)p, n);
-    sha256_final(&h, d);
-    sha256_hex(d, hex);
 }
 
 /** Say whether the variable that `env`, NAME=VALUE, sets is one that -U
@@ -396,7 +415,7 @@ static void invocation(struct text *t, const struct options *o, const struct fil
 {
     static const char *const base[] = {"PATH=/bin:/usr/bin:/sbin:/usr/sbin", "HOME=${WORKSPACE}"};
     const char *env[ENV_MAX + 3];
-    char hex[65], name[128];
+    char name[128];
     int n = 0, i, j;
 
     for (i = 0; i < 2; i++)
@@ -441,10 +460,9 @@ static void invocation(struct text *t, const struct options *o, const struct fil
         put_text(t, "null");
     put_text(t, ",\"role\":\"ordinary\",\"files\":[");
     for (i = 0; i < o->npaths; i++) {
-        digest_of(files[i].data, files[i].size, hex);
         put_text(t, i > 0 ? ",{\"name\":" : "{\"name\":");
         put_string(t, files[i].name);
-        putf(t, ",\"sha256\":\"%s\",\"size_bytes\":%llu,\"mode\":\"%s\"}", hex,
+        putf(t, ",\"sha256\":\"%s\",\"size_bytes\":%llu,\"mode\":\"%s\"}", files[i].sha,
              (unsigned long long)files[i].size, files[i].mode);
     }
     put_text(t, "],\"fixtures\":[{\"fixture\":\"workspace\",\"given\":[]}");
@@ -543,6 +561,26 @@ static void print_output(const struct etude_remote_result *res)
     fflush(stderr);
 }
 
+static int structured_judge(const struct options *o, enum etude_remote_status st,
+                            const struct etude_remote_result *res, const char **verdict, int code)
+{
+    if (st != ETUDE_REMOTE_OK || !res->complete)
+        return code;
+    if (res->cleanup != ETUDE_CLEANUP_CONFIRMED) {
+        *verdict = "incomplete";
+        return EXIT_INCOMPLETE;
+    }
+    if (res->end == o->expected_end && res->value == o->expected_value) {
+        *verdict = "pass";
+        return EXIT_PASS;
+    }
+    if (res->end == ETUDE_END_EXITED || res->end == ETUDE_END_SIGNALED) {
+        *verdict = "failure";
+        return EXIT_FAILURE;
+    }
+    return code;
+}
+
 /**
  * Store the files and the invocation, run the attempt and wait for its end,
  * remove its workspace after a pass unless `-k` keeps it, and end the
@@ -550,7 +588,8 @@ static void print_output(const struct etude_remote_result *res)
  *
  * @return the exit status of the verdict.
  */
-static int run_case(const struct options *o, const struct file *files)
+static int run_case(const struct options *o, const struct file *files,
+                    struct etude_native_result *outcome)
 {
     static struct etude_remote_conf conf;
     static char *argv[4];
@@ -575,7 +614,7 @@ static int run_case(const struct options *o, const struct file *files)
     argv[2] = (char *)o->transport;
     argv[3] = NULL;
     memset(&conf, 0, sizeof(conf));
-    conf.argv = argv;
+    conf.argv = o->transport_argv ? o->transport_argv : argv;
     conf.run_id = o->run;
     conf.journal = o->journal;
     conf.evidence = o->evidence;
@@ -587,12 +626,17 @@ static int run_case(const struct options *o, const struct file *files)
         free(inv.p);
         printf("etude run: result: incomplete: case %s: not run: the connection failed (%s: %s)\n",
                o->case_id, etude_remote_status_text(st), why);
+        if (outcome)
+            outcome->transport = st;
         return EXIT_INCOMPLETE;
     }
     for (i = 0; i < o->npaths && st == ETUDE_REMOTE_OK; i++) {
         fprintf(stderr, "etude run: put: %s: %lu bytes\n", files[i].name,
                 (unsigned long)files[i].size);
-        st = etude_remote_put(r, files[i].name, files[i].data, files[i].size, files[i].mode);
+        st = o->staged_only
+                 ? etude_remote_reference(r, files[i].name, files[i].size, files[i].sha,
+                                          files[i].mode)
+                 : etude_remote_put(r, files[i].name, files[i].data, files[i].size, files[i].mode);
     }
     if (st == ETUDE_REMOTE_OK) {
         fprintf(stderr, "etude run: run: case %s, attempt %s\n", o->case_id, token);
@@ -603,6 +647,10 @@ static int run_case(const struct options *o, const struct file *files)
     free(inv.p);
     print_output(&res);
     code = judge(st, &res, &verdict, why, sizeof(why));
+    if (outcome) {
+        code = structured_judge(o, st, &res, &verdict, code);
+        outcome->transport = st;
+    }
     if (res.started)
         snprintf(process, sizeof(process), "%ld", res.process.pid);
     else
@@ -616,25 +664,28 @@ static int run_case(const struct options *o, const struct file *files)
     fflush(stdout);
     if (code == EXIT_PASS && !o->keep) {
         st = etude_remote_remove(r, token);
+        if (outcome)
+            outcome->removed = st == ETUDE_REMOTE_OK;
         if (st != ETUDE_REMOTE_OK)
             fprintf(stderr, "etude run: remove: %s: %s\n", etude_remote_status_text(st),
                     etude_remote_why(r));
     }
-    etude_remote_result_free(&res);
-    etude_remote_close(r);
+    if (outcome)
+        outcome->attempt = res;
+    else
+        etude_remote_result_free(&res);
+    if (etude_remote_close(r) != ETUDE_REMOTE_OK ||
+        (outcome && code == EXIT_PASS && !o->keep && !outcome->removed))
+        code = EXIT_INCOMPLETE;
     return code;
 }
 
-/** Run `etude run native`: the options, the files, the run. */
-int etude_native_main(int argc, char **argv)
+/** Validate and execute the shared structured invocation. */
+static int execute_options(struct options o, struct etude_native_result *outcome)
 {
-    struct options o;
     struct file files[FILES_MAX];
     int i, j, code;
-
     json_program = "etude run";
-    if (parse(argc, argv, &o) != 0)
-        return usage();
     if (!ascii(o.run) || !ascii(o.attempt) || !ascii(o.case_id) || !good_name(o.argv[0])) {
         fputs("etude run: the ids must be ASCII and the program a file's name\n", stderr);
         return EXIT_USAGE;
@@ -657,7 +708,7 @@ int etude_native_main(int argc, char **argv)
     memset(files, 0, sizeof(files));
     code = EXIT_USAGE;
     for (i = 0; i < o.npaths; i++) {
-        if (read_case_file(o.path[i], &files[i]) != 0)
+        if (read_case_file(o.path[i], &files[i], o.staged_only) != 0)
             goto out;
         for (j = 0; j < i; j++)
             if (strcmp(files[j].name, files[i].name) == 0) {
@@ -677,9 +728,87 @@ int etude_native_main(int argc, char **argv)
         fprintf(stderr, "etude-native: the input %s is not one of the files\n", o.input);
         goto out;
     }
-    code = run_case(&o, files);
+    code = run_case(&o, files, outcome);
 out:
     for (i = 0; i < o.npaths; i++)
         free(files[i].data);
     return code;
+}
+
+int etude_native_main(int argc, char **argv)
+{
+    struct options o;
+    if (parse(argc, argv, &o) != 0)
+        return usage();
+    return execute_options(o, NULL);
+}
+static int valid_specification(const struct etude_native_spec *s)
+{
+    if (!s || !s->run || !s->attempt || !s->case_id || !s->journal || !s->transport_argv ||
+        !s->transport_argv[0] || !s->argv || !s->argv[0] || !s->files || !s->nfiles ||
+        s->nfiles > FILES_MAX || s->nenvironment > ENV_MAX || s->nunset > ENV_MAX ||
+        s->nfixtures > FIXTURES_MAX || s->reconnects > 100 || s->expected_value < 0 ||
+        s->expected_value > 255 ||
+        (s->expected_end == ETUDE_END_SIGNALED && s->expected_value == 0) ||
+        (s->expected_end != ETUDE_END_EXITED && s->expected_end != ETUDE_END_SIGNALED))
+        return 0;
+    return 1;
+}
+static int specification(const struct etude_native_spec *s, struct options *o)
+{
+    size_t i;
+    memset(o, 0, sizeof(*o));
+    if (!valid_specification(s))
+        return 0;
+    o->run = s->run;
+    o->attempt = s->attempt;
+    o->case_id = s->case_id;
+    o->journal = s->journal;
+    o->evidence = s->evidence;
+    o->transport_argv = s->transport_argv;
+    o->argv = (char **)s->argv;
+    o->input = s->input;
+    o->staged_only = s->staged_only;
+    o->keep = s->keep;
+    o->expected_end = s->expected_end;
+    o->expected_value = s->expected_value;
+    o->deadline_ms = s->deadline_ms ? s->deadline_ms : 600000;
+    o->grace_ms = s->grace_ms ? s->grace_ms : 5000;
+    o->output_max = s->output_max ? s->output_max : 1048576;
+    o->stage_ms = s->stage_ms ? s->stage_ms : 30000;
+    o->reconnects = s->reconnects;
+    o->cancel_ms = s->cancel_ms;
+    for (i = 0; i < s->nfiles; i++)
+        if (option(o, 'f', s->files[i]))
+            return 0;
+    for (i = 0; i < s->nenvironment; i++)
+        if (!s->environment || option(o, 'E', s->environment[i]))
+            return 0;
+    for (i = 0; i < s->nunset; i++)
+        if (!s->unset || option(o, 'U', s->unset[i]))
+            return 0;
+    for (i = 0; i < s->nfixtures; i++)
+        if (!s->fixtures || option(o, 'F', s->fixtures[i]))
+            return 0;
+    return 1;
+}
+int etude_native_attempt(const struct etude_native_spec *spec, struct etude_native_result *result)
+{
+    struct options o;
+    if (!result)
+        return EXIT_USAGE;
+    memset(result, 0, sizeof(*result));
+    result->transport = ETUDE_REMOTE_SYSTEM;
+    result->attempt.end = ETUDE_END_LOST;
+    result->attempt.value = -1;
+    result->attempt.cleanup = ETUDE_CLEANUP_UNCONFIRMED;
+    result->status = EXIT_USAGE;
+    if (specification(spec, &o))
+        result->status = execute_options(o, result);
+    return result->status;
+}
+void etude_native_result_free(struct etude_native_result *result)
+{
+    if (result)
+        etude_remote_result_free(&result->attempt);
 }

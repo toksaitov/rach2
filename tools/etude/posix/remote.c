@@ -648,7 +648,7 @@ static enum etude_remote_status put_once(struct etude_remote *r, const struct ou
     b64 = malloc(r->max);
     if (b64 == NULL)
         return ETUDE_REMOTE_SYSTEM;
-    for (at = 0; at < o->size; at += n) {
+    for (at = 0; o->data != NULL && at < o->size; at += n) {
         n = o->size - at < chunk ? o->size - at : chunk;
         wire_base64(o->data + at, n, b64);
         snprintf(offset, sizeof(offset), "%llu", (unsigned long long)at);
@@ -680,19 +680,11 @@ static enum etude_remote_status put_once(struct etude_remote *r, const struct ou
     return ETUDE_REMOTE_OK;
 }
 
-enum etude_remote_status etude_remote_put(struct etude_remote *r, const char *name,
-                                          const void *data, size_t size, const char *mode)
+static enum etude_remote_status store_outgoing(struct etude_remote *r, struct outgoing *o)
 {
     enum etude_remote_status st = ETUDE_REMOTE_LOST;
-    struct outgoing o;
     unsigned tries;
 
-    o.name = name;
-    o.mode = mode;
-    o.data = data;
-    o.size = size;
-    digest_hex(data, size, o.sha);
-    snprintf(o.sizetext, sizeof(o.sizetext), "%llu", (unsigned long long)size);
     for (tries = 0; tries <= r->conf.reconnects; tries++) {
         if (!r->connected) {
             st = reconnect(r);
@@ -702,11 +694,40 @@ enum etude_remote_status etude_remote_put(struct etude_remote *r, const char *na
                 return st;
             }
         }
-        st = put_once(r, &o);
+        st = put_once(r, o);
         if (st == ETUDE_REMOTE_OK || (!transient(st) && st != ETUDE_REMOTE_DAMAGED))
             return st;
     }
     return st;
+}
+
+enum etude_remote_status etude_remote_put(struct etude_remote *r, const char *name,
+                                          const void *data, size_t size, const char *mode)
+{
+    struct outgoing o;
+    memset(&o, 0, sizeof(o));
+    o.name = name;
+    o.mode = mode;
+    o.data = data;
+    o.size = size;
+    digest_hex(data, size, o.sha);
+    snprintf(o.sizetext, sizeof(o.sizetext), "%llu", (unsigned long long)size);
+    return store_outgoing(r, &o);
+}
+
+enum etude_remote_status etude_remote_reference(struct etude_remote *r, const char *name,
+                                                size_t size, const char *sha, const char *mode)
+{
+    struct outgoing o;
+    if (strlen(sha) != 64 || strspn(sha, "0123456789abcdef") != 64)
+        return ETUDE_REMOTE_REFUSED;
+    memset(&o, 0, sizeof(o));
+    o.name = name;
+    o.mode = mode;
+    o.size = size;
+    memcpy(o.sha, sha, sizeof(o.sha));
+    snprintf(o.sizetext, sizeof(o.sizetext), "%llu", (unsigned long long)size);
+    return store_outgoing(r, &o);
 }
 
 /* What has arrived of one attempt, with the text of each event, so that an

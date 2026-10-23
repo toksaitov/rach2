@@ -135,6 +135,12 @@ enum etude_remote_status etude_remote_open(const struct etude_remote_conf *conf,
 enum etude_remote_status etude_remote_put(struct etude_remote *r, const char *name,
                                           const void *data, size_t size, const char *mode);
 
+/** Resolve an existing staged file by the same put and seal records, without
+ * data frames. The responder confirms its size and digest or returns an error;
+ * it never substitutes an unverified path for the named object. */
+enum etude_remote_status etude_remote_reference(struct etude_remote *r, const char *name,
+                                                size_t size, const char *sha, const char *mode);
+
 /**
  * Run the attempt that `invocation` gives and wait for its end.
  *
