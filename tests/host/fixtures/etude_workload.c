@@ -50,6 +50,12 @@ static int serial_workload(const char *role)
 {
     int i;
 
+    if (strcmp(role, "serial-installed") == 0) {
+        while ((i = getchar()) != EOF)
+            if (putchar(i) == EOF)
+                return 125;
+        return ferror(stdin) ? 125 : 7;
+    }
     if (strcmp(role, "serial-fail") == 0) {
         fputs("broken\n", stderr);
         return 3;

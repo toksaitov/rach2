@@ -1341,10 +1341,23 @@ static void check_installed(struct harness *h)
 {
     struct file_transfer t;
     const struct etude_serial_result *r;
-    char path[700], sha[65], inv[65], text[2048];
+    char path[700], program[700], sha[65], inv[65], text[2048];
     const char *token = "00000000000000a5";
+    FILE *file;
     int n;
 
+    snprintf(program, sizeof(program), "%s/installed", work);
+    file = fopen(program, "wb");
+    if (file == NULL || fwrite(workload, 1, workload_size, file) != workload_size) {
+        if (file != NULL)
+            fclose(file);
+        CHECK(0, "the installed program is prepared");
+        return;
+    }
+    if (fclose(file) != 0 || chmod(program, 0755) != 0) {
+        CHECK(0, "the installed program is executable");
+        return;
+    }
     memset(&t, 0, sizeof(t));
     t.text = "a file transferred through the guest channel\n";
     t.len = strlen(t.text);
@@ -1362,11 +1375,11 @@ static void check_installed(struct harness *h)
     n = snprintf(text, sizeof(text),
                  "{\"schema_version\":1,\"run_id\":\"installed\",\"attempt_id\":\"installed\","
                  "\"attempt_token\":\"%s\",\"case_id\":\"host.etude.serial\","
-                 "\"program\":\"/bin/sh\",\"arguments\":[\"-c\",\"cat; exit 7\"],"
-                 "\"environment\":{\"PATH\":\"/bin:/usr/bin\"},\"stdin\":\"%s\","
+                 "\"program\":\"%s\",\"arguments\":[],"
+                 "\"environment\":{\"ETUDE_WORKLOAD_ROLE\":\"serial-installed\"},\"stdin\":\"%s\","
                  "\"role\":\"ordinary\",\"files\":[],\"fixtures\":[],"
                  "\"deadline_us\":60000000,\"grace_us\":500000,\"output_max_bytes\":65536}",
-                 token, path);
+                 token, program, path);
     CHECK(n > 0 && (size_t)n < sizeof(text) &&
               store(h, "invocation.json", text, (size_t)n, 0, inv) == ETUDE_SERIAL_DONE &&
               run(h, token, inv, UNTIL_END),
@@ -1376,6 +1389,7 @@ static void check_installed(struct harness *h)
               r->cleanup == ETUDE_CLEANUP_CONFIRMED && strcmp(h->out[0], t.text) == 0,
           "an installed program retains exit status, output and cleanup");
     unlink(path);
+    unlink(program);
 }
 
 /** Run a pass, an intended failure, a pass beside frames that etude-guest
