@@ -22,6 +22,7 @@
  * host-deps: tools/etude/history.c tools/etude/history_json.c
  * host-deps: tools/etude/history_collect.c utils/sha256.c
  * host-deps: tools/etude/budget.c tools/etude/digest.c tools/etude/cost.c
+ * host-deps: tools/etude/budget_prepare.c
  * host-deps: tools/etude/sched.c tools/etude/json.c tools/etude/schema.c
  * host-cflags: -I tools/etude/include -I tools/etude -Wall -Wextra -Werror
  * host-first: it runs for minutes
