@@ -927,13 +927,14 @@ static int charge_nodes(const struct etude_budget_policy *p, enum etude_budget_c
     size_t i, count;
     uint64_t us;
 
-    struct etude_preparation_selection selected = {
-        (const char *const *)s->nodes, s->nnodes, s->architectures, cls};
+    struct etude_preparation_selection selected = {(const char *const *)s->nodes, s->nnodes,
+                                                   s->architectures, cls};
     if (etude_budget_preparation(h, p, &selected, &us, &count))
         return -1;
     if (count) {
         f->prep_us = us;
-        say(&f->report, "note", "aggregate preparation: %lu matching complete samples", (unsigned long)count);
+        say(&f->report, "note", "aggregate preparation: %lu matching complete samples",
+            (unsigned long)count);
         return 0;
     }
     for (i = 0; i < s->nnodes; i++) {

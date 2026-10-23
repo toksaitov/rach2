@@ -54,8 +54,7 @@ static int sequence(int argc, char **argv)
         !argument(argc, argv, "run") || !argument(argc, argv, "-I") || !argument(argc, argv, "-g"))
         return 2;
     int push = !strcmp(env("CI_NATIVE_MODE"), "push");
-    if (push && (!argument(argc, argv, "i686:host") ||
-                 !argument(argc, argv, "x86_64:default") ||
+    if (push && (!argument(argc, argv, "i686:host") || !argument(argc, argv, "x86_64:default") ||
                  strcmp(env("RACH2_CASES"), "host.fixture.host,machine.fixture.default")))
         return 2;
     if (fx_exists(path("sequence.calls")) || !fx_text(path("sequence.calls"), "one sequence\n") ||
@@ -182,8 +181,7 @@ static int push_row(struct fixture *f)
     fx_env("CI_NATIVE_OUT", out);
     fx_env("CI_NATIVE_MODE", "push");
     fx_env("RACH2_CASES", "host.fixture.host,machine.fixture.default");
-    const char *argv[] = {"/bin/sh", "tools/ci/push.sh", out,
-                           "i686:host", "x86_64:default", NULL};
+    const char *argv[] = {"/bin/sh", "tools/ci/push.sh", out, "i686:host", "x86_64:default", NULL};
     fx_run(f, argv, flow_path(f, "tree"), NULL, NULL);
     fx_env("RACH2_CASES", NULL);
     int ok = f->status == 0 && fx_equal(path("sequence.calls"), "one sequence\n") &&

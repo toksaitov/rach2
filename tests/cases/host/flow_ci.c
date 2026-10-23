@@ -1506,7 +1506,8 @@ static int prepare(struct fixture *f)
     if (!fx_mkdir(path("state")) || !fx_mkdir(path("locks")) ||
         !flow_copy(f, "tools/ci/report.sh", "report.sh") ||
         !flow_copy(f, "tools/ci/native_reader.py", "tree/tools/ci/native_reader.py") ||
-        !flow_copy(f, "tools/etude/preparation_paths.py", "tree/tools/etude/preparation_paths.py") ||
+        !flow_copy(f, "tools/etude/preparation_paths.py",
+                   "tree/tools/etude/preparation_paths.py") ||
         !fx_replace(flow_source(f, "tools/ci/bisect.sh"), path("bisect.sh"),
                     "/etc/rach2/etude-site", path("no-installed-site")) ||
         !fx_copy("/host-products/etude", path("etude")))

@@ -50,7 +50,7 @@ struct verdict {
     const char *store;  /* the directory of blobs, or NULL */
     const char *commit; /* the commit the plan must name, or NULL */
     const char *arch;
-    const char *name; /* the set's, for a failure outside its suites */
+    const char *name;       /* the set's, for a failure outside its suites */
     struct json *selection; /* an explicit allocator export for focused checks */
     char **suite;
     size_t suites;
@@ -901,8 +901,8 @@ static size_t selected_count(const struct json *items, const struct json *wanted
     for (size_t i = 0; i < items->count; i++) {
         const struct json *item = items->item[i], *r = json_member(item, "repetition");
         count += same(json_text(item, "case_id"), json_text(wanted, "case_id")) &&
-                 same(json_text(item, "architecture"), json_text(wanted, "architecture")) &&
-                 r && r->type == JSON_INTEGER && r->integer == rep->integer;
+                 same(json_text(item, "architecture"), json_text(wanted, "architecture")) && r &&
+                 r->type == JSON_INTEGER && r->integer == rep->integer;
     }
     return count;
 }
@@ -916,8 +916,8 @@ static void check_selected_coverage(struct verdict *v)
     const struct json *size = json_member(v->selection, "selection_size_bytes");
     const struct json *actual_size = json_member(blob, "size_bytes");
     const struct json *version = json_member(v->selection, "schema_version");
-    int valid = version && version->type == JSON_INTEGER && version->integer == 1 &&
-                expected && expected->type == JSON_ARRAY && expected->count && actual &&
+    int valid = version && version->type == JSON_INTEGER && version->integer == 1 && expected &&
+                expected->type == JSON_ARRAY && expected->count && actual &&
                 actual->type == JSON_ARRAY && actual->count == expected->count && size &&
                 actual_size && size->type == JSON_INTEGER && actual_size->type == JSON_INTEGER &&
                 size->integer == actual_size->integer &&

@@ -1133,7 +1133,8 @@ static int preparation_nodes(struct set *x, struct cmp_text *t)
     const char **nodes = calloc(capacity + 1, sizeof(*nodes));
     if (!nodes)
         return -1;
-    cmp_printf(&d, "{\"schema_version\":1,\"format\":\"etude-preparation-nodes\",\"architectures\":[");
+    cmp_printf(&d,
+               "{\"schema_version\":1,\"format\":\"etude-preparation-nodes\",\"architectures\":[");
     for (size_t i = 0; i < x->narches; i++) {
         cmp_printf(&d, "%s", i ? "," : "");
         string(&d, x->arches[i]);

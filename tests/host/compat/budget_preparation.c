@@ -29,23 +29,26 @@ static void test_aggregate_preparation(void)
     run.id = "run";
     run.kind = "run";
     run.load_eligible = 1;
-    run.json = eh_json_parse("{\"plan_id\":\"plan\",\"preparation_steps\":[\"step\"],"
-                             "\"result\":{\"outcome\":\"pass\",\"cleanup\":\"confirmed\",\"disruptions\":[]}}");
+    run.json = eh_json_parse(
+        "{\"plan_id\":\"plan\",\"preparation_steps\":[\"step\"],"
+        "\"result\":{\"outcome\":\"pass\",\"cleanup\":\"confirmed\",\"disruptions\":[]}}");
     run.data = run.json;
     step.id = "step";
     step.kind = "step";
-    step.json = eh_json_parse("{\"plan_id\":\"plan\",\"item_id\":null,\"stage\":\"build\",\"time\":{"
-                              "\"end_utc\":\"2026-10-24T00:00:00.000000Z\",\"elapsed_us\":{\"value\":12345,"
-                              "\"quality\":\"exact\",\"error_bound\":1}},\"result\":{\"outcome\":\"pass\","
-                              "\"cleanup\":\"confirmed\",\"disruptions\":[]}}");
+    step.json =
+        eh_json_parse("{\"plan_id\":\"plan\",\"item_id\":null,\"stage\":\"build\",\"time\":{"
+                      "\"end_utc\":\"2026-10-24T00:00:00.000000Z\",\"elapsed_us\":{\"value\":12345,"
+                      "\"quality\":\"exact\",\"error_bound\":1}},\"result\":{\"outcome\":\"pass\","
+                      "\"cleanup\":\"confirmed\",\"disruptions\":[]}}");
     step.data = step.json;
     plan.run = run.run = step.run = "one";
     history.by_id = records;
     history.unique = 3;
     history.by_run = runs;
     history.runs = 1;
-    CHECK(etude_budget_preparation(&history, &policy, &selected, &us, &count) == 0 &&
-              count == 1 && us == 12345, "aggregate charged once");
+    CHECK(etude_budget_preparation(&history, &policy, &selected, &us, &count) == 0 && count == 1 &&
+              us == 12345,
+          "aggregate charged once");
     selected.architectures = 1;
     CHECK(etude_budget_preparation(&history, &policy, &selected, &us, &count) == 0 && count == 0,
           "aggregate refuses architecture change");

@@ -35,8 +35,8 @@ static struct eh_json *document(const struct eh_json *ref)
         sha256_update(&hash, (const unsigned char *)bytes, length);
         sha256_final(&hash, digest);
         sha256_hex(digest, actual);
-        struct eh_json *doc = length == (size_t)size->number && !strcmp(actual, hex)
-                                  ? eh_json_parse(bytes) : NULL;
+        struct eh_json *doc =
+            length == (size_t)size->number && !strcmp(actual, hex) ? eh_json_parse(bytes) : NULL;
         free(bytes);
         if (doc)
             return doc;
@@ -51,7 +51,8 @@ static int nodes_match(const struct eh_json *doc, const struct etude_preparation
     const struct eh_json *kernel = eh_json_get(doc, "kernel");
     const struct eh_json *version = eh_json_get(doc, "schema_version");
     unsigned mask = 0;
-    if (!version || version->type != 'n' || version->number != 1 || !same(cmp_text(doc, "format"), "etude-preparation-nodes") || !nodes || nodes->type != 'a' ||
+    if (!version || version->type != 'n' || version->number != 1 ||
+        !same(cmp_text(doc, "format"), "etude-preparation-nodes") || !nodes || nodes->type != 'a' ||
         !arches || arches->type != 'a' || !kernel || kernel->type != 'z')
         return 0;
     for (const struct eh_json *a = arches->child; a; a = a->next)
@@ -101,9 +102,10 @@ static int step_sample(const struct cmp_record *step, const struct eh_json *envi
     const struct eh_json *item = eh_json_get(step->data, "item_id");
     const struct eh_json *time = eh_json_get(step->data, "time");
     const struct eh_json *elapsed = eh_json_get(time, "elapsed_us");
-    const struct eh_json *value = eh_json_get(elapsed, "value"), *error = eh_json_get(elapsed, "error_bound");
-    if (!item || item->type != 'z' || !value || value->type != 'n' || value->number < 0 ||
-        !error || error->type != 'n' || same(cmp_text(elapsed, "quality"), "lower_bound"))
+    const struct eh_json *value = eh_json_get(elapsed, "value"),
+                         *error = eh_json_get(elapsed, "error_bound");
+    if (!item || item->type != 'z' || !value || value->type != 'n' || value->number < 0 || !error ||
+        error->type != 'n' || same(cmp_text(elapsed, "quality"), "lower_bound"))
         return 0;
     out->environment = environment;
     out->elapsed = (uint64_t)value->number;
@@ -125,9 +127,8 @@ static int sample(const struct cmp_history *h, const struct etude_budget_policy 
         !(s->cls == ETUDE_BUDGET_RELEASE && same(purpose, "phase_first_run")))
         return 0;
     const struct eh_json *env = eh_json_get(plan->data, "environment");
-    if (!same(cmp_text(env, "machine_id"), p->machine_id) ||
-        !same(cmp_text(env, "os"), p->os) || !same(cmp_text(env, "accelerator"), p->accelerator) ||
-        !declares(plan, s))
+    if (!same(cmp_text(env, "machine_id"), p->machine_id) || !same(cmp_text(env, "os"), p->os) ||
+        !same(cmp_text(env, "accelerator"), p->accelerator) || !declares(plan, s))
         return 0;
     const struct cmp_record *step = cmp_find(h, refs->child->string);
     if (!step || strcmp(step->kind, "step") || strcmp(step->run, run->run) ||

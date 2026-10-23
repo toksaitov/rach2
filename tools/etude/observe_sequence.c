@@ -460,8 +460,7 @@ static DWORD phase_end(struct sequence *s, struct phase *phase, DWORD *status)
 
 static int clear_preparation_inputs(void)
 {
-    return _putenv_s("ETUDE_PREPARATION_GRANT", "") ||
-           _putenv_s("ETUDE_PREPARATION_IMPORT", "") ||
+    return _putenv_s("ETUDE_PREPARATION_GRANT", "") || _putenv_s("ETUDE_PREPARATION_IMPORT", "") ||
            _putenv_s("ETUDE_PREPARATION_CLEAN", "");
 }
 
