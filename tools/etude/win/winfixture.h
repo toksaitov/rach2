@@ -11,7 +11,8 @@
 /* The path of wintarget.exe, beside winfixture.exe, in UTF-8. */
 extern char target[];
 
-/* winfixture.exe's directory, in UTF-8, where fixtures make their files. */
+/* Immutable executable directory and private scratch, in UTF-8. */
+extern char binary_dir[];
 extern char scratch[];
 
 /* The path of winfixture.exe itself, in UTF-8. */
@@ -48,6 +49,9 @@ int fx_exec_sample(void);
 
 /** Waits of no time serve an attempt until it finishes, with its output. */
 int fx_exec_poll(void);
+
+/** Complete output files preserve bytes, truncate and close shared streams. */
+int fx_exec_sinks(void);
 
 /**
  * The ledger registers an attempt and its reported descendant, and recovery

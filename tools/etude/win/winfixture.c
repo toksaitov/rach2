@@ -55,6 +55,7 @@ struct cap {
 static struct etude_win_sup sup;
 char fixture_path[MAX_PATH * 4];
 char scratch[MAX_PATH * 4];
+char binary_dir[MAX_PATH * 4];
 char target[sizeof scratch + 16];
 static const char *current;
 static char detail[512];
@@ -1141,6 +1142,7 @@ static const struct {
     {"exec-unrun", fx_exec_unrun},
     {"exec-sample", fx_exec_sample},
     {"exec-poll", fx_exec_poll},
+    {"exec-sinks", fx_exec_sinks},
     {"collection-files", fx_collection_files},
     {"collection-qemu", fx_collection_qemu},
     {"ledger", fx_ledger},
@@ -1186,12 +1188,18 @@ static int locate(void)
     }
     strcpy(fixture_path, u);
     free(u);
-    strcpy(scratch, fixture_path);
-    slash = strrchr(scratch, '\\');
+    strcpy(binary_dir, fixture_path);
+    slash = strrchr(binary_dir, '\\');
     if (slash == NULL)
         return -1;
     *slash = '\0';
-    snprintf(target, sizeof target, "%s\\wintarget.exe", scratch);
+    strcpy(scratch, binary_dir);
+    if (getenv("TMPDIR") != NULL && getenv("TMPDIR")[0] != '\0') {
+        if (strlen(getenv("TMPDIR")) >= sizeof scratch)
+            return -1;
+        strcpy(scratch, getenv("TMPDIR"));
+    }
+    snprintf(target, sizeof target, "%s\\wintarget.exe", binary_dir);
     return 0;
 }
 

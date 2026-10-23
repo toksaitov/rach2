@@ -78,7 +78,7 @@ fi
 # copy DIR: copy the sources to DIR/tools/etude and DIR/utils.
 copy() {
     e=$1/tools/etude
-    mkdir -p "$e/win" "$e/posix" "$e/guest" "$e/volume" "$e/include/etude" "$e/schemas" "$1/utils"
+    mkdir -p "$e/win" "$e/posix" "$e/guest" "$e/volume" "$e/include/etude" "$e/schemas" "$1/utils" "$1/tests/host/compat"
     cp "$repo"/utils/sha256.h "$repo"/utils/sha256.c "$1/utils/"
     cp "$src"/*.c "$src"/*.h "$src"/sources.mk "$src"/version.mk "$e/"
     cp "$src"/posix/*.c "$src"/posix/*.h "$e/posix/"
@@ -87,6 +87,8 @@ copy() {
     cp "$src"/volume/volume.h "$src"/volume/volume.c "$src"/volume/etude_volume.c "$e/volume/"
     cp "$src"/include/etude/*.h "$e/include/etude/"
     cp "$src"/schemas/history.schema.json "$e/schemas/"
+    cp "$src"/schemas/history.schema.json "$e/win/"
+    cp "$repo"/tests/host/compat/output_sinks.[ch] "$1/tests/host/compat/"
 }
 
 # compile DIR FLAGS: build the programs in DIR/tools/etude/win, etude.exe
@@ -98,9 +100,9 @@ compile() {
         cd "$1/tools/etude/win"
         executor='exec.c ../capture.c winexec.c winsys.c winfmt.c files.c'
         # shellcheck disable=SC2086
-        "$cc" $2 -I ../include -I ../../../utils -o winfixture.exe winfixture.c winexecfix.c \
+        "$cc" $2 -I ../include -I ../../../utils -I ../../../tests/host/compat -o winfixture.exe winfixture.c winexecfix.c \
             winledgerfix.c winrunfix.c wintoolfix.c winholdfix.c winportsfix.c ../ledger.c ../watchdog.c \
-            ../supervise.c ../history_json.c ../posix/qemu.c ../posix/store.c ../qemu_profile.c ../processor.c wincollectionfix.c $executor ../../../utils/sha256.c -lws2_32 -lbcrypt
+            ../supervise.c ../history_json.c ../posix/qemu.c ../posix/store.c ../qemu_profile.c ../processor.c wincollectionfix.c $executor ../../../utils/sha256.c ../../../tests/host/compat/output_sinks.c -lws2_32 -lbcrypt
         # shellcheck disable=SC2086
         "$cc" $2 -municode -o wintarget.exe wintarget.c -lws2_32 -lbcrypt
         # shellcheck disable=SC2086

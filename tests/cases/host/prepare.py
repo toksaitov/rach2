@@ -14,6 +14,7 @@ import shlex
 import subprocess
 import sys
 import fixtures
+import windows
 
 ROOT = Path(__file__).resolve().parents[3]
 GROUPS = ('tests', 'etude', 'boots', 'checkers', 'fuzz', 'scripts')
@@ -71,6 +72,9 @@ def checks(group, arch, base):
                                   'host-first:' not in p.read_text(), p.name))
         for path in paths:
             identity = path.stem.removesuffix('_hosttest')
+            if identity == 'etude_platform' and os.name == 'nt':
+                yield windows.platform_entry(base, entry)
+                continue
             deps = metadata(path, 'host-deps', arch)
             flags = metadata(path, 'host-cflags', arch)
             out = str(base / path.stem)
@@ -182,6 +186,9 @@ def prepare(args):
         if args.only and item['assertion_id'] != args.only:
             continue
         command = item.pop('command')
+        windows_fixture = item.pop('windows_fixture', False)
+        companions = windows.companions(compiler, base, compiler_inputs, digest,
+                                        args.print_commands) if windows_fixture else []
         if args.print_commands:
             if command:
                 print(shlex.join([*compiler, *command]))
@@ -209,7 +216,9 @@ def prepare(args):
                 dependencies = compiler_inputs(compiler, command, item['sources'])
                 sources = sorted(set([*item['sources'], *dependencies, *item.get('data', [])]))
                 item['inputs'] = [dict(path=p, sha256=digest(Path(p))) for p in sources]
-            for value in item['inputs']:
+            item['inputs'] = list({value['path']: value for value in
+                                   [*item['inputs'], *companions]}.values())
+            for value in ([] if windows_fixture else item['inputs']):
                 path = Path(value['path'])
                 if path.suffix != '.c':
                     continue

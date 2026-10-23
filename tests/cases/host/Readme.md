@@ -10,6 +10,8 @@ Each inventory records its manifest digest, group and architecture. Each entry r
 
 `adapters.json` maps a `host.list` assertion to a prepared executable and optional arguments. Make rules prepare those executables before publishing the scripts inventory. A missing adapter produces an unsupported entry rather than executing the old command. The API protocol assertions use `build/tests/system/fakeapi_test`.
 
+`etude_platform` executes on the collection's own host. POSIX uses the native executor to check complete stdout and stderr beyond capture limits, truncation, merged streams, handle release and refusal when a sink cannot be opened. Windows preparation builds `winfixture.exe`, `wintarget.exe`, `winstand.exe`, `etude.exe`, `etude-volume.exe` and `image-command.exe` into the platform directory, and fingerprints every binary, source and schema. The entry runs every Windows fixture, including the same output-file checks. The Windows fixtures use the check's private `TMPDIR`; executable and schema paths remain in the prepared directory. These checks require no interpreter. They retain the Windows job, accounting, suspension, path, argument, environment, socket, lock, ledger, supervisor and tooling assertions.
+
 ## Execution
 
 The driver verifies the manifest, group and architecture before any check starts. It checks each binary and input before and after execution, rejects scripts even on POSIX, and rejects newly added corpus inputs. The manifest, prepared inventory and live source or script list must agree. Every declared check stays visible, including unsupported checks. Missing checks fail their own assertions; extra checks fail `listed` and are not executed.

@@ -11,6 +11,7 @@
 #include "etude/exec.h"
 #include "winexec.h"
 #include "winfixture.h"
+#include "output_sinks.h"
 
 /* The attempts that run at once. */
 enum { A_EXIT, A_CANCEL, A_BOUND, A_ORPHAN, A_TREE, ATTEMPTS };
@@ -309,4 +310,11 @@ int fx_exec_poll(void)
         r = failed("the attempt gave other output: %s", etude_proc_result(p)->out.data);
     etude_exec_free(ex);
     return r;
+}
+
+int fx_exec_sinks(void)
+{
+    return etude_test_output_sinks(target, "big", scratch) == 0
+               ? 0
+               : failed("complete output files or bounded capture differed");
 }

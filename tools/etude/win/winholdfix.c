@@ -427,16 +427,16 @@ static int fresh(void)
     join(lock, build, ".run.lock");
     join(owner, lock, "owner");
     join(guard, build, ".run.guard");
-    join(helper, scratch, "etude.exe");
+    join(helper, binary_dir, "etude.exe");
     join(ready, base, "ready");
     join(go, base, "go");
     nlive = 0;
     old_path = getvar("PATH");
     old_held = getvar("RACH2_TREE_HELD");
-    path = malloc(strlen(scratch) + (old_path != NULL ? strlen(old_path) : 0) + 2);
+    path = malloc(strlen(binary_dir) + (old_path != NULL ? strlen(old_path) : 0) + 2);
     if (path == NULL)
         return failed("out of memory");
-    sprintf(path, "%s;%s", scratch, old_path != NULL ? old_path : "");
+    sprintf(path, "%s;%s", binary_dir, old_path != NULL ? old_path : "");
     setvar("PATH", path);
     free(path);
     setvar("RACH2_TREE_HELD", NULL);

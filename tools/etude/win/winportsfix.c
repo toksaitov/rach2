@@ -176,7 +176,7 @@ int fx_ports(void)
     size_t i;
     int rc;
 
-    snprintf(etude, sizeof etude, "%s\\etude.exe", scratch);
+    snprintf(etude, sizeof etude, "%s\\etude.exe", binary_dir);
     snprintf(dir, sizeof dir, "%s\\ports", scratch);
     CreateDirectoryA(dir, NULL);
     rc = check();

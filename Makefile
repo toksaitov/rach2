@@ -564,11 +564,11 @@ build/tests/host-suite/scripts.inventory.json: build/tests/system/fakeapi_test
 
 .PHONY: host-inventory-force
 host-inventory-force:
-build/tests/host-suite/%.inventory.json: tests/cases/host/prepare.py tests/cases/host/fixtures.py \
+build/tests/host-suite/%.inventory.json: tests/cases/host/prepare.py tests/cases/host/fixtures.py tests/cases/host/windows.py \
     tests/cases/host/host.list tests/cases/host/adapters.json \
     tests/cases/host.host.json host-inventory-force
 	python3 -B tests/cases/host/prepare.py --arch $(ARCH) $* $@
-build/x86_64/tests/host-suite/%.inventory.json: tests/cases/host/prepare.py tests/cases/host/fixtures.py \
+build/x86_64/tests/host-suite/%.inventory.json: tests/cases/host/prepare.py tests/cases/host/fixtures.py tests/cases/host/windows.py \
     tests/cases/host/host.list tests/cases/host/adapters.json \
     tests/cases/host.host.json host-inventory-force
 	python3 -B tests/cases/host/prepare.py --arch x86_64 $* $@

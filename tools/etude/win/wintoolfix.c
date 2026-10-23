@@ -308,8 +308,8 @@ static int fresh(void)
     join(outdir, base, "out");
     join(store, base, "store");
     snprintf(cache, sizeof cache, "%s\\cache\\deep", base);
-    snprintf(schema, sizeof schema, "%s\\..\\schemas\\history.schema.json", scratch);
-    join(tool, scratch, "etude.exe");
+    snprintf(schema, sizeof schema, "%s\\history.schema.json", binary_dir);
+    join(tool, binary_dir, "etude.exe");
     if (_mkdir(base) != 0 || _mkdir(bin) != 0 || _mkdir(fix) != 0 || _mkdir(recipe) != 0 ||
         _mkdir(outdir) != 0 || _mkdir(store) != 0)
         return failed("%s cannot be made", base);
@@ -325,7 +325,7 @@ static int fresh(void)
     snprintf(line, sizeof line, "amd64 https://images.example/fixture.img %s\n", hex);
     if (put(join(path, recipe, "image"), line) != 0)
         return failed("the recipe's image cannot be written");
-    join(self, scratch, "winstand.exe");
+    join(self, binary_dir, "winstand.exe");
     for (i = 0; i < sizeof stand_ins / sizeof stand_ins[0]; i++) {
         snprintf(line, sizeof line, "%s.exe", stand_ins[i]);
         if (!CopyFileA(self, join(path, bin, line), FALSE))

@@ -202,6 +202,7 @@
         {"assertion_id": "etude_disk_binding", "checks": "tests/host/etude_disk_binding_hosttest.c checks private disk bindings and image helper arguments under ASan and UBSan", "source": "program"},
         {"assertion_id": "etude_helper_arch", "checks": "tests/host/etude_helper_arch_hosttest.c checks helper architecture overrides and memory accounting under ASan and UBSan", "source": "program"},
         {"assertion_id": "etude_hostdriver", "checks": "tests/host/etude_hostdriver_hosttest.c checks prepared execution, private scratch, immutable inputs, complete assertions and explicit unsupported checks under ASan and UBSan", "source": "program"},
+        {"assertion_id": "etude_platform", "checks": "the execution host runs native complete-output checks; Windows also runs the prepared process, path, job, lock, ledger, supervisor and tooling fixtures with no interpreter", "source": "program"},
         {"assertion_id": "etude_exec", "checks": "tests/host/etude_exec_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
         {"assertion_id": "etude_failures", "checks": "tests/host/etude_failures_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
         {"assertion_id": "etude_guest", "checks": "tests/host/etude_guest_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
