@@ -167,8 +167,8 @@ def valid_previous(old, item, compiler):
         return False
 
 
-def compiler_inputs(compiler, command, sources):
-    """Scan each translation unit; a shared -MF would retain only the last."""
+def compiler_flags(command, sources):
+    """Retain the compile options without its output or translation units."""
     flags = []
     skip = False
     for word in command:
@@ -178,6 +178,12 @@ def compiler_inputs(compiler, command, sources):
             skip = True
         elif word not in sources and word != '-c':
             flags.append(word)
+    return flags
+
+
+def compiler_inputs(compiler, command, sources):
+    """Scan each translation unit; a shared -MF would retain only the last."""
+    flags = compiler_flags(command, sources)
     dependencies = set()
     for source in sources:
         if not source.endswith('.c'):
@@ -187,6 +193,29 @@ def compiler_inputs(compiler, command, sources):
         text = result.stdout.replace('\\\n', ' ')
         dependencies.update(shlex.split(text.split(':', 1)[1]))
     return dependencies
+
+
+def compiled_interpreter(compiler, command, sources, candidates):
+    """Inspect active C code with the compiler's actual defines and includes."""
+    wanted = {path.resolve(): path for path in candidates}
+    flags = compiler_flags(command, sources)
+    for source in sources:
+        if not source.endswith('.c'):
+            continue
+        result = subprocess.run([*compiler, *flags, '-E', source], check=True,
+                                text=True, capture_output=True)
+        chunks = {path: [] for path in wanted}
+        current = None
+        for line in result.stdout.splitlines():
+            marker = re.match(r'^#\s+\d+\s+"([^"]+)"', line)
+            if marker:
+                current = Path(marker[1]).resolve()
+            elif current in chunks:
+                chunks[current].append(line)
+        for path, lines in chunks.items():
+            if routing.interpreter('\n'.join(lines), wanted[path]):
+                return wanted[path]
+    return None
 
 
 def prepare(args):
@@ -274,6 +303,7 @@ def prepare(args):
                 item['inputs'] = [dict(path=p, sha256=digest(Path(p))) for p in sources]
             item['inputs'] = list({value['path']: value for value in
                                    [*item['inputs'], *companions, *tool_inputs]}.values())
+            candidates = []
             for value in ([] if windows_fixture or args.gnu else item['inputs']):
                 path = Path(value['path'])
                 if path.suffix != '.c':
@@ -283,9 +313,12 @@ def prepare(args):
                     continue
                 text = path.read_text(errors='replace')
                 if routing.interpreter(text, path):
+                    candidates.append(path)
+            if candidates:
+                path = compiled_interpreter(compiler, command, item['sources'], candidates)
+                if path:
                     item['unsupported'] = ('a compiled source still requires an interpreter; '
                                            'a native fixture adapter is required: ' + str(path))
-                    break
             item['command'] = [*compiler, *command]
         elif item['program']:
             item['sha256'] = digest(Path(item['program']))

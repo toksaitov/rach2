@@ -8,7 +8,7 @@ from pathlib import Path
 BOOTS = {'etude_qemu', 'etude_scenario', 'etude_watchdog', 'etude_legacyset'}
 # Filesystem tools and POSIX build products run on the GNU helper.
 PRODUCTS = {'ext2', 'fat32', 'etude_volume', 'etude_compare', 'etude_step',
-            'etude_native'}
+            'etude_native', 'doom_platform'}
 # These fixtures write a script solely to require its rejection before launch.
 SCRIPT_REFUSALS = {'tests/host/etude_collection_hosttest.c',
                    'tests/host/etude_hostdriver_hosttest.c'}
@@ -22,7 +22,15 @@ def windows_host():
     return os.name == 'nt' or sys.platform in ('msys', 'cygwin')
 
 
+def without_comments(text):
+    """Remove C comments while preserving quoted strings and characters."""
+    token = r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|/\*.*?\*/|//[^\n]*'
+    return re.sub(token, lambda m: ' ' if m[0].startswith('/') else m[0],
+                  text, flags=re.DOTALL)
+
+
 def interpreter(text, path=None):
+    text = without_comments(text)
     return (re.search(r'\b(?:system|popen)\s*\(', text) or
             re.search(r'["\'](?:/bin/)?(?:sh|bash|python3?|perl)["\']', text) or
             (str(path) not in SCRIPT_REFUSALS and

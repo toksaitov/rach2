@@ -25,7 +25,6 @@
  * host-deps: tools/etude/posix/bridge.c tools/etude/portlock.c
  * host-deps: tools/etude/posix/status.c
  * host-deps: tools/etude/compare.c tools/etude/baseline.c
- * host-deps: tools/etude/compare_report.c tools/etude/compare_run.c
  * host-deps: tools/etude/history.c tools/etude/history_json.c
  * host-deps: tools/etude/history_collect.c utils/sha256.c
  * host-cflags: -I tools/etude/include -I tools/etude -I tools/etude/posix
