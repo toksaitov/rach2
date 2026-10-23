@@ -3,6 +3,11 @@
  * (tools/etude/volume/volume.c): the FAT16 seed volume, and the tar archive
  * of the job volume in both directions.
  *
+ * host-tools: tar
+ * host-deps: tests/host/compat/command_host.c tools/etude/capture.c
+ * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
+ * host-deps: tools/etude/posix/process.c
+ * host-cflags: -I tools/etude/include
  * host-deps: tools/etude/volume/volume.c
  * host-cflags: -I tools/etude/volume -Wall -Wextra -Werror
  *
@@ -34,6 +39,7 @@
 #include <unistd.h>
 
 #include "compat/fixdir_host.c"
+#include "command_host.h"
 #include "volume.h"
 
 static int fails;
@@ -118,14 +124,6 @@ static int is_dir(const char *path)
     struct stat st;
 
     return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
-}
-
-/** Run a shell command; give its exit status. */
-static int run(const char *command)
-{
-    int rc = system(command);
-
-    return rc == -1 ? -1 : WIFEXITED(rc) ? WEXITSTATUS(rc) : 128;
 }
 
 /* ---- The seed volume. ---- */
@@ -402,7 +400,7 @@ static const char *const *results(struct results *r, const char *dir, const char
 /** The writer's row: the host's tar extracts the volume, and the reader too. */
 static void row_writer(void)
 {
-    char tree[512], img[512], cmd[2048], path[1024], why[512], job[1024], outputs[1024], in[1024];
+    char tree[512], img[512], path[1024], why[512], job[1024], outputs[1024], in[1024];
     const char *map[7];
     struct etude_volume *v;
     struct stat st;
@@ -425,8 +423,11 @@ static void row_writer(void)
 
     fix_format(path, sizeof(path), "%s/x", fix_dir());
     make(path);
-    fix_format(cmd, sizeof(cmd), "tar -x -f %s -C %s/x", img, fix_dir());
-    CHECK(run(cmd) == 0, "writer: the host's tar extracts the volume");
+    {
+        const char *argv[] = {host_tool_path("tar"), "-x", "-f", img, "-C", path, NULL};
+        CHECK(host_command(argv, NULL, NULL, NULL, 0) == 0,
+              "writer: the host's tar extracts the volume");
+    }
     fix_format(path, sizeof(path), "%s/x/job.sh", fix_dir());
     CHECK(has(path, "cat note\n"), "writer: job.sh");
     fix_format(path, sizeof(path), "%s/x/outputs", fix_dir());
@@ -469,7 +470,7 @@ static void row_writer(void)
 /** Read the results in `stage` archived by the host's tar with `format`. */
 static void read_format(const char *stage, const char *format)
 {
-    char arch[512], img[512], cmd[2048], out[512], dir[512], tree[512], path[1024], why[512];
+    char arch[512], img[512], out[512], dir[512], tree[512], path[1024], why[512];
     char row[128], *a;
     struct results r;
     size_t n;
@@ -478,9 +479,21 @@ static void read_format(const char *stage, const char *format)
     snprintf(row, sizeof(row), "reader: tar %s", format);
     fix_format(arch, sizeof(arch), "%s/results.tar", fix_dir());
     fix_format(img, sizeof(img), "%s/results.img", fix_dir());
-    fix_format(cmd, sizeof(cmd), "cd %s && tar -c -f %s %s out stdout stderr status", stage, arch,
-               format);
-    CHECK(run(cmd) == 0, row);
+    {
+        const char *argv[] = {host_tool_path("tar"),
+                              "-c",
+                              "-f",
+                              arch,
+                              format,
+                              "-C",
+                              stage,
+                              "out",
+                              "stdout",
+                              "stderr",
+                              "status",
+                              NULL};
+        CHECK(host_command(argv, NULL, NULL, NULL, 0) == 0, row);
+    }
     a = get_file(arch, &n);
     CHECK(a != NULL, row);
     if (a == NULL)
@@ -494,10 +507,11 @@ static void read_format(const char *stage, const char *format)
         fclose(f);
     }
     free(a);
-    fix_format(cmd, sizeof(cmd), "rm -rf %s/rd && mkdir -p %s/rd/out", fix_dir(), fix_dir());
-    run(cmd);
     fix_format(dir, sizeof(dir), "%s/rd", fix_dir());
+    CHECK(fix_remove_tree(dir) == 0, row);
+    make(dir);
     fix_format(out, sizeof(out), "%s/rd/out", fix_dir());
+    make(out);
     fix_format(tree, sizeof(tree), "%s/rd/elsewhere/tree", fix_dir());
     why[0] = '\0';
     CHECK(etude_volume_read(img, results(&r, dir, tree, out), why, sizeof(why)) == 0, why);
@@ -536,7 +550,13 @@ static void row_reader(void)
     put_file(path, "", 0);
     fix_format(path, sizeof(path), "%s/status", stage);
     put_file(path, "3\n", 2);
-    formats = run("tar --version 2>/dev/null | grep -q 'GNU tar'") == 0 ? gnu : bsd;
+    {
+        char version[4096];
+        const char *argv[] = {host_tool_path("tar"), "--version", NULL};
+        int status = host_command(argv, NULL, NULL, version, sizeof version);
+        CHECK(status == 0, "reader: the prepared tar identifies its formats");
+        formats = status == 0 && strstr(version, "GNU tar") != NULL ? gnu : bsd;
+    }
     for (; *formats != NULL; formats++)
         read_format(stage, *formats);
 }

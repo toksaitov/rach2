@@ -3,6 +3,11 @@
  * cache and the disk model of compat/devmodel.c, on the volumes
  * mkexfatfixture.c builds.
  *
+ * host-tools: mkexfatfixture exfat_external
+ * host-deps: tests/host/compat/command_host.c tools/etude/capture.c
+ * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
+ * host-deps: tools/etude/posix/process.c
+ * host-cflags: -I tools/etude/include
  * host-deps: rach2/sys/fs/exfat.c rach2/sys/fs/bcache.c rach2/sys/block/chain.c
  * host-deps: rach2/sys/fs/fatcommon.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
@@ -26,11 +31,11 @@
 #include "../../rach2/sys/proc/process.h"
 #include "devmodel.h"
 #include "fixdir_host.h"
+#include "command_host.h"
 
 /* No hosted headers: the kernel headers define the fixed-width types. */
 extern int printf(const char *fmt, ...);
 extern int snprintf(char *s, unsigned long n, const char *fmt, ...);
-extern int system(const char *cmd);
 extern void exit(int status);
 extern void *fopen(const char *path, const char *mode);
 extern unsigned long fread(void *buf, unsigned long size, unsigned long n, void *f);
@@ -47,8 +52,6 @@ extern long atol(const char *s);
 extern int strncmp(const char *a, const char *b, unsigned long n);
 extern int strcmp(const char *a, const char *b);
 extern unsigned long fwrite(const void *buf, unsigned long size, unsigned long n, void *f);
-extern void *popen(const char *cmd, const char *mode);
-extern int pclose(void *f);
 
 /* The largest image, 32 MiB: the fixture is 16, the external volume 16. */
 #define IMG_BYTES (65536u * 512u)
@@ -223,7 +226,6 @@ static void check(int ok, const char *what)
     }
 }
 
-static int builder_built;
 /* The image the builder made last and the option it was made with: the
    matrix loads one fixture again at every stop, and the builder makes the
    same bytes each time. */
@@ -270,21 +272,13 @@ static int load_file(const char *path)
 }
 
 /** Build the fixture with the builder's option `opt` and load it into the
- *  device, as `load_file` does; the builder is compiled at the first call.
+ *  device, as `load_file` does; preparation compiles the builder.
  *  The option built last is loaded again from the copy kept of its image. */
 static void load(const char *opt)
 {
-    char cmd[2048];
+    const char *argv[] = {host_tool_path("mkexfatfixture"), fix_path("exfat_case.img"),
+                          opt[0] ? opt : 0, 0};
 
-    if (!builder_built) {
-        fix_format(cmd, sizeof(cmd), "${CC:-cc} -O2 -o %s tests/host/mkexfatfixture.c",
-                   fix_path("mkexfatfixture"));
-        if (system(cmd) != 0) {
-            printf("exfat_hosttest: cannot build the fixture builder\n");
-            exit(1);
-        }
-        builder_built = 1;
-    }
     if (built_bytes != 0 && strcmp(opt, built_opt) == 0) {
         stop_after = -1;
         model.stopped = 0;
@@ -293,9 +287,7 @@ static void load(const char *opt)
         take_image(built_bytes);
         return;
     }
-    fix_format(cmd, sizeof(cmd), "%s %s %s", fix_path("mkexfatfixture"), fix_path("exfat_case.img"),
-               opt);
-    if (system(cmd) != 0) {
+    if (host_command(argv, 0, 0, 0, 0) != 0) {
         printf("exfat_hosttest: fixture builder failed for %s\n", opt);
         exit(1);
     }
@@ -760,34 +752,23 @@ static void damaged_rows(void)
     check(mount_image(VFS_MS_RDONLY, "nosuch=1") == -EINVAL, "an unknown option is EINVAL");
 }
 
-/** A volume another implementation made and filled (mkexfat_external.sh:
- *  macOS's, or Linux's in etude's tooling machine) mounts and has every
+/** An independent volume produced during preparation mounts and has every
  *  file of its manifest, with its size, its modification time within two
- *  seconds, and its bytes. On a host with neither the rows fail; the host
- *  case's preparation makes the tooling machine. */
+ *  seconds, and its bytes. The image and expected files are immutable. */
 static void external_rows(void)
 {
-    char cmd[2048], line[600];
+    char line[600];
     void *m;
-    int rc;
 
-    fix_format(cmd, sizeof(cmd), "sh tests/host/mkexfat_external.sh %s", fix_dir());
-    rc = system(cmd);
-    rc = rc == -1 ? -1 : (rc >> 8) & 0xff;
-    if (rc == 3) {
-        check(0, "the external volume is made by another implementation: this host has neither "
-                 "hdiutil and newfs_exfat nor a made tooling machine, which "
-                 "`make build/tests/host/exfat_writer` makes");
-        return;
-    }
-    check(rc == 0, "the external volume is made by another implementation");
-    if (rc != 0) {
-        return;
-    }
-    check(load_file(fix_path("exfat_external.img")) == 0, "the external volume loads");
+    m = fopen(host_tool_path("exfat_external/exfat_external.manifest"), "r");
+    check(m != 0, "the external volume is made by another implementation during preparation");
+    if (m)
+        fclose(m);
+    check(load_file(host_tool_path("exfat_external/exfat_external.img")) == 0,
+          "the independent prepared external volume loads");
     check(mount_image(VFS_MS_RDONLY, "") == 0,
           "the volume another implementation made and filled mounts");
-    m = fopen(fix_path("exfat_external.manifest"), "r");
+    m = fopen(host_tool_path("exfat_external/exfat_external.manifest"), "r");
     check(m != 0, "the manifest exists");
     while (m && fgets(line, sizeof(line), m)) {
         char *bar1 = strchr(line, '|'), *bar2;
@@ -824,7 +805,7 @@ static void external_rows(void)
         check(OPS->getattr(&mnt, n, &st) == 0 && (long)st.size == size && st.mtime_sec <= mtime &&
                   st.mtime_sec + 2 > mtime,
               what);
-        fix_format(src, sizeof(src), "%s/exfat_src/%s", fix_dir(), line);
+        fix_format(src, sizeof(src), "%s/%s", host_tool_path("exfat_external/exfat_src"), line);
         f = fopen(src, "rb");
         got = f ? fread(want, 1, sizeof(want), f) : 0;
         if (f) {
@@ -903,10 +884,7 @@ static int write_at(void *node, const unsigned char *buf, uint32_t count, uint64
  *  checker. Returns the check's exit status, with its output in `out`. */
 static int run_check_on(const unsigned char *what, char *out, unsigned long cap)
 {
-    char cmd[2048], line[300];
     void *f;
-    unsigned long n = 0;
-    int rc;
 
     f = fopen(fix_path("exfat_write.img"), "wb");
     if (!f || fwrite(what, 1, (unsigned long)image_sectors * 512, f) !=
@@ -915,20 +893,11 @@ static int run_check_on(const unsigned char *what, char *out, unsigned long cap)
         exit(1);
     }
     fclose(f);
-    fix_format(cmd, sizeof(cmd), "%s --check %s", fix_path("mkexfatfixture"),
-               fix_path("exfat_write.img"));
-    f = popen(cmd, "r");
-    if (!f) {
-        printf("exfat_hosttest: cannot run the check\n");
-        exit(1);
+    {
+        const char *argv[] = {host_tool_path("mkexfatfixture"), "--check",
+                              fix_path("exfat_write.img"), 0};
+        return host_command(argv, 0, 0, out, cap);
     }
-    out[0] = '\0';
-    while (fgets(line, sizeof(line), f) && n + strlen(line) < cap - 1) {
-        memcpy(out + n, line, strlen(line) + 1);
-        n += strlen(line);
-    }
-    rc = pclose(f);
-    return rc == -1 ? -1 : (rc >> 8) & 0xff;
 }
 
 /** Check the image the device answers, settled: what a checker sees after
@@ -2043,23 +2012,22 @@ static void write_rows(void)
     check(OPS->prepare_unmount(&mnt) == 0, "the full volume's clean unmount");
     unmount_image();
     {
-        char cmd[2048], line[300];
-        void *pf;
+        char listing[32768], *line, *end;
+        const char *argv[] = {host_tool_path("mkexfatfixture"), "--check",
+                              fix_path("exfat_write.img"), "--list", 0};
         int nofat_seen = 0;
         uint32_t used = 0, c, heap, spc, clusters;
         unsigned char *bitmap;
 
         run_check(check_out, sizeof(check_out));
-        fix_format(cmd, sizeof(cmd), "%s --check %s --list", fix_path("mkexfatfixture"),
-                   fix_path("exfat_write.img"));
-        pf = popen(cmd, "r");
-        while (pf && fgets(line, sizeof(line), pf)) {
-            if (strstr(line, "/hello.txt") && strstr(line, "nofat")) {
-                nofat_seen = 1;
+        if (host_command(argv, 0, 0, listing, sizeof listing) == 0) {
+            for (line = listing; line && *line; line = end ? end + 1 : 0) {
+                end = strchr(line, '\n');
+                if (end)
+                    *end = '\0';
+                if (strstr(line, "/hello.txt") && strstr(line, "nofat"))
+                    nofat_seen = 1;
             }
-        }
-        if (pf) {
-            pclose(pf);
         }
         check(nofat_seen, "and its stream still says NoFatChain: the refusal wrote nothing");
         heap = image[88] | (image[89] << 8) | (image[90] << 16) | ((uint32_t)image[91] << 24);

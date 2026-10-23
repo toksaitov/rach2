@@ -3,6 +3,11 @@
  * cache and the disk model of compat/devmodel.c, on volumes mkfatfixture
  * builds.
  *
+ * host-tools: mkfatfixture mdir mcopy
+ * host-deps: tests/host/compat/command_host.c tools/etude/capture.c
+ * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
+ * host-deps: tools/etude/posix/process.c
+ * host-cflags: -I tools/etude/include
  * host-deps: rach2/sys/fs/fat32.c rach2/sys/fs/bcache.c rach2/sys/block/chain.c
  * host-deps: rach2/sys/fs/fat32name.c rach2/sys/fs/fatcommon.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
@@ -31,10 +36,10 @@
 #include "../../rach2/sys/proc/process.h"
 #include "devmodel.h"
 #include "fixdir_host.h"
+#include "command_host.h"
 
 extern int printf(const char *fmt, ...);
 extern int snprintf(char *s, unsigned long n, const char *fmt, ...);
-extern int system(const char *cmd);
 extern int access(const char *path, int mode);
 extern void exit(int status);
 extern void *fopen(const char *path, const char *mode);
@@ -187,7 +192,6 @@ static int streq(const char *a, const char *b)
     return *a == *b;
 }
 
-static int builder_built;
 /* The image the builder made last and the option it was made with: the
    matrix loads one fixture again at every stop, and the builder makes the
    same bytes each time. */
@@ -197,30 +201,20 @@ static int built_kept;
 
 /**
  * Build the fixture the builder's option `opt` names and load it into the
- * image and the model. The builder is compiled once a run, so that an edited
- * builder is the one that runs, and the option built last is loaded again
+ * image and the model. Preparation compiles the builder and fingerprints
+ * its source and binary. The option built last is loaded again
  * from the copy kept of its image. What the cache still holds of the
  * previous image is written into that image before it is replaced, so that
  * the cache empties, and a stop is over. Exits the test when a step fails.
  */
 static void load(const char *opt)
 {
-    char cmd[2048];
+    const char *argv[] = {host_tool_path("mkfatfixture"), fix_path("fat32_case.img"),
+                          opt[0] ? opt : 0, 0};
     void *f;
 
-    if (!builder_built) {
-        fix_format(cmd, sizeof(cmd), "${CC:-cc} -O2 -o %s/mkfatfixture tests/host/mkfatfixture.c",
-                   fix_dir());
-        if (system(cmd) != 0) {
-            printf("fat32_hosttest: cannot build the fixture builder\n");
-            exit(1);
-        }
-        builder_built = 1;
-    }
     if (!built_kept || !streq(opt, built_opt)) {
-        fix_format(cmd, sizeof(cmd), "%s/mkfatfixture %s/fat32_case.img %s", fix_dir(), fix_dir(),
-                   opt);
-        if (system(cmd) != 0) {
+        if (host_command(argv, 0, 0, 0, 0) != 0) {
             printf("fat32_hosttest: fixture builder failed for %s\n", opt);
             exit(1);
         }
@@ -818,11 +812,9 @@ static void malformed_rows(void)
 
 /* ---- the write half ---- */
 
-extern int system(const char *cmd);
-extern void *popen(const char *cmd, const char *mode);
-extern int pclose(void *f);
 extern char *fgets(char *s, int n, void *f);
 extern char *strstr(const char *hay, const char *needle);
+extern char *strchr(const char *s, int c);
 extern int strncmp(const char *a, const char *b, unsigned long n);
 extern unsigned long strlen(const char *s);
 
@@ -853,10 +845,7 @@ static int mount_rw(const char *options)
  */
 static int run_check_on(const unsigned char *what, char *out, unsigned long cap)
 {
-    char cmd[2048], line[300];
     void *f;
-    unsigned long n = 0;
-    int rc;
 
     f = fopen(fix_path("fat32_write.img"), "wb");
     if (!f || fwrite(what, 1, IMG_BYTES, f) != IMG_BYTES) {
@@ -864,20 +853,11 @@ static int run_check_on(const unsigned char *what, char *out, unsigned long cap)
         exit(1);
     }
     fclose(f);
-    fix_format(cmd, sizeof(cmd), "%s/mkfatfixture --check %s/fat32_write.img", fix_dir(),
-               fix_dir());
-    f = popen(cmd, "r");
-    if (!f) {
-        printf("fat32_hosttest: cannot run the check\n");
-        exit(1);
+    {
+        const char *argv[] = {host_tool_path("mkfatfixture"), "--check",
+                              fix_path("fat32_write.img"), 0};
+        return host_command(argv, 0, 0, out, cap);
     }
-    out[0] = '\0';
-    while (fgets(line, sizeof(line), f) && n + strlen(line) < cap - 1) {
-        __builtin_memcpy(out + n, line, strlen(line) + 1);
-        n += strlen(line);
-    }
-    rc = pclose(f);
-    return rc == -1 ? -1 : (rc >> 8) & 0xff;
 }
 
 /**
@@ -1448,29 +1428,18 @@ static int oracle_ok(void)
  */
 static int run_check_list(char *out, unsigned long cap)
 {
-    char cmd[2048], line[600];
     void *f;
-    unsigned long n = 0;
-    int rc;
 
     f = fopen(fix_path("fat32_write.img"), "wb");
     if (!f || fwrite(image, 1, IMG_BYTES, f) != IMG_BYTES) {
         exit(1);
     }
     fclose(f);
-    fix_format(cmd, sizeof(cmd), "%s/mkfatfixture --check %s/fat32_write.img --list", fix_dir(),
-               fix_dir());
-    f = popen(cmd, "r");
-    if (!f) {
-        exit(1);
+    {
+        const char *argv[] = {host_tool_path("mkfatfixture"), "--check",
+                              fix_path("fat32_write.img"), "--list", 0};
+        return host_command(argv, 0, 0, out, cap);
     }
-    out[0] = '\0';
-    while (fgets(line, sizeof(line), f) && n + strlen(line) < cap - 1) {
-        __builtin_memcpy(out + n, line, strlen(line) + 1);
-        n += strlen(line);
-    }
-    rc = pclose(f);
-    return rc == -1 ? -1 : (rc >> 8) & 0xff;
 }
 
 /**
@@ -1647,18 +1616,21 @@ static void long_rows(void)
     check(OPS->prepare_unmount(&mnt) == 0, "the clean unmount");
     unmount_image();
     check_consistent("the volume is consistent and clean after the long-name rows", 0);
-    if (system("which mdir >/dev/null 2>&1") == 0) {
-        char cmd[2048];
-
-        fix_format(cmd, sizeof(cmd),
-                   "mdir -i %s/fat32_write.img ::/BOOT 2>/dev/null | grep -q 'moved name.txt'",
-                   fix_dir());
-        check(system(cmd) == 0, "mtools lists the long name this driver wrote");
-        fix_format(
-            cmd, sizeof(cmd),
-            "mdir -i %s/fat32_write.img ::/ 2>/dev/null | grep -q 'LONGNA~2 TXT.*longname1.txt'",
-            fix_dir());
-        check(system(cmd) == 0, "and the alias this driver gave beside it");
+    {
+        char out[32768];
+        const char *boot[] = {host_tool_path("mdir"), "-i", fix_path("fat32_write.img"), "::/BOOT",
+                              0};
+        const char *root[] = {host_tool_path("mdir"), "-i", fix_path("fat32_write.img"), "::/", 0};
+        char *alias, *name, *end;
+        int status = host_command(boot, 0, 0, out, sizeof out);
+        check(status == 0 && strstr(out, "moved name.txt") != 0,
+              "mtools lists the long name this driver wrote");
+        status = host_command(root, 0, 0, out, sizeof out);
+        alias = strstr(out, "LONGNA~2 TXT");
+        name = alias ? strstr(alias, "longname1.txt") : 0;
+        end = alias ? strchr(alias, '\n') : 0;
+        check(status == 0 && name != 0 && (end == 0 || name < end),
+              "and the alias this driver gave beside it");
     }
 }
 
@@ -2191,28 +2163,25 @@ static void write_rows(void)
     check((image[65] & 1) == 0, "the boot-sector dirty flag is clear after it");
     unmount_image();
     check_consistent("the volume is consistent and clean after the unmount", 0);
-    if (system("which mcopy >/dev/null 2>&1") == 0) {
-        char cmd[2048];
+    {
+        char out[32768];
+        const char *copy[] = {
+            host_tool_path("mcopy"),      "-n", "-i", fix_path("fat32_write.img"), "::/BOOT/R3.TXT",
+            fix_path("fat32_mtools.out"), 0};
+        const char *list[] = {host_tool_path("mdir"), "-i", fix_path("fat32_write.img"), "::/BOOT",
+                              0};
         void *f;
         unsigned long got;
 
-        fix_format(
-            cmd, sizeof(cmd),
-            "mcopy -n -i %s/fat32_write.img ::/BOOT/R3.TXT %s/fat32_mtools.out >/dev/null 2>&1",
-            fix_dir(), fix_dir());
-        check(system(cmd) == 0, "mtools copies a file this driver wrote");
+        check(host_command(copy, 0, 0, 0, 0) == 0, "mtools copies a file this driver wrote");
         f = fopen(fix_path("fat32_mtools.out"), "rb");
         got = f ? fread(back, 1, sizeof(back), f) : 0;
-        if (f) {
+        if (f)
             fclose(f);
-        }
         check(got == 700 && __builtin_memcmp(back, pattern, 700) == 0,
               "with the bytes this driver wrote");
-        fix_format(cmd, sizeof(cmd), "mdir -i %s/fat32_write.img ::/BOOT 2>/dev/null | grep -q RD2",
-                   fix_dir());
-        check(system(cmd) == 0, "and lists the directory this driver moved");
-    } else {
-        printf("fat32_hosttest: mtools absent, its comparison skipped\n");
+        check(host_command(list, 0, 0, out, sizeof out) == 0 && strstr(out, "RD2") != 0,
+              "and lists the directory this driver moved");
     }
 }
 

@@ -13,6 +13,7 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "host", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs and the checks' scratch directories under its scratch directory, which the program removes after a pass"},
       "assertions": [
+        {"assertion_id": "style_evidence", "checks": "source evidence rejects changed, added or removed inputs, missing assertions and unrecorded judges", "source": "program"},
         {"assertion_id": "listed", "checks": "each tests/host/*_hosttest.c that is not etude's and has no host-arch: line has an assertion of this case, and each assertion a test of the tree", "source": "program"},
         {"assertion_id": "style_evidence", "checks": "source evidence rejects changed, added or removed inputs, missing assertions and unrecorded judges", "source": "program"},
         {"assertion_id": "records", "checks": "tests/host/records_hosttest.c rejects missing, malformed and inconsistent measurement records under ASan and UBSan", "source": "program"},

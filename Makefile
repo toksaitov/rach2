@@ -520,16 +520,12 @@ $(ETUDEVOLUME): $(ETUDE_VOLUME_SRC) tools/etude/volume/volume.h
 	@mkdir -p $(@D)
 	$(ETUDE_LINK) -std=c99
 
-# The writer of the exFAT volume another implementation made, which
-# exfat_hosttest.c reads: hdiutil on macOS, and elsewhere the tooling
-# machine, made here when it is not (tests/host/mkexfat_external.sh -p). The
-# host case's preparation names it. The script runs every time, since the
-# machine's key follows its recipe, and rewrites the file only when the
-# writer changes.
+# The independent exFAT fixture is produced during preparation. Runtime
+# checks read its image, manifest and expected files without mounting a volume.
 .PHONY: build/tests/host/exfat_writer
-build/tests/host/exfat_writer: tests/host/mkexfat_external.sh | $(ETUDE)
+build/tests/host/exfat_writer: tests/host/mkexfat_external.sh tests/cases/host/tools.py | $(ETUDE)
 	@mkdir -p $(@D)
-	sh tests/host/mkexfat_external.sh -p $@
+	python3 -B tests/cases/host/tools.py --external-exfat $@
 
 # The tooling machine itself, for the host suite's scripted checks that run a
 # program the host lacks in it (tests/system/tooling_ready.sh): the scripts
