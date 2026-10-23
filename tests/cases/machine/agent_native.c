@@ -571,10 +571,7 @@ static int verify(struct row *s)
         return verify_worker(s);
     {
         char *mode = fetch(s, "/tmp/agents/verify/mode", "mode");
-        const char *wanted = strstr(s->name, "screen")       ? "screen"
-                             : !strcmp(s->name, "muse-tmux") ? "tmux"
-                             : strstr(s->name, "print")      ? "print"
-                                                             : "exec";
+        const char *wanted = strstr(s->name, "print") ? "print" : "exec";
         if (!mode || strcmp(trim(mode), wanted)) {
             free(mode);
             return 0;

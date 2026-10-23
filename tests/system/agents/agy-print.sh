@@ -27,9 +27,9 @@
 
 PROMPT="Read fixture.txt, check it with the shell, change answer=before to answer=after, and commit the change."
 
-# session_start MODE: make the session's home, scratch and the fixture's
-# repository in SESSION, WORK/session, record MODE, the repository's path,
-# the program's digest and the start, and sample the free frames until
+# session_start: make the session's home, scratch and the fixture's
+# repository in SESSION, WORK/session, record the repository's path, the
+# program's digest and the start, and sample the free frames until
 # session_end.
 session_start() {
     SESSION=$WORK/session
@@ -46,7 +46,7 @@ session_start() {
     output "git add" env HOME="$SESSION/home" git add fixture.txt
     output "the fixture's commit" env HOME="$SESSION/home" \
         git commit -qm "Create the offline fixture"
-    printf '%s\n' "$1" > "$SESSION/mode"
+    printf '%s\n' print > "$SESSION/mode"
     printf '%s\n' "$SESSION/repo" > "$SESSION/at"
     output "the program's digest before the session" sha256sum /opt/agy/bin/agy
     printf '%s\n' "$OUT" > "$SESSION/binary.before"
@@ -74,10 +74,10 @@ session_end() {
         repo mode at binary.before binary.after memory seconds steps
 }
 
-# session_env TERM: print the environment of the session, a variable to a
-# line: the settings of agy_test.py's client, with TERM.
+# session_env: print the environment of the session, a variable to a line:
+# the settings of agy_test.py's client.
 session_env() {
-    printf '%s\n' PATH=/usr/bin:/bin "HOME=$SESSION/home" LC_ALL=C "TERM=$1" \
+    printf '%s\n' PATH=/usr/bin:/bin "HOME=$SESSION/home" LC_ALL=C TERM=dumb \
         "TMPDIR=$SESSION/tmp" GEMINI_API_KEY=rach2-offline-dummy-key \
         GOOGLE_GEMINI_BASE_URL=https://fakeapi.test "SSL_CERT_FILE=$CA" \
         AGY_CLI_DISABLE_AUTO_UPDATE=true
@@ -95,20 +95,19 @@ session_unmodified() {
         "$data"/*.db-shm "$data"/conversations/*.db-shm
 }
 
-# Stop the sampler and the private tmux server on every exit path.
+# Stop the sampler on every exit path.
 row_cleanup() {
     if [ -n "${SAMPLER:-}" ]; then
         kill "$SAMPLER" 2> /dev/null
         wait "$SAMPLER" 2> /dev/null
         SAMPLER=
     fi
-    tmux -L agy kill-server 2> /dev/null || true
 }
 
 row() {
     local pid status env
-    session_start print || return
-    mapfile -t env < <(session_env dumb)
+    session_start || return
+    mapfile -t env < <(session_env)
     env -i "${env[@]}" agy -p "$PROMPT" --output-format json --dangerously-skip-permissions \
         --print-timeout 10m > "$SESSION/client.log" 2>&1 &
     pid=$!

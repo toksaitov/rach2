@@ -15,13 +15,11 @@
 # program do its job as a person would ask for it and compares what it
 # printed or wrote with what it must be, through the functions below; a row
 # that runs the tree's tools, such as the worker loop, makes a git repository
-# of the tree's tests and tools with `tree`, and a row
-# that drives a program's screen runs it in tmux, on the server and in the
-# session PANE names, waits for it with `pane` and answers its questions
-# with `keys`, `press` and `choose`. A row that inspects a program while it
-# waits for the fake server's answer has that answer held, with `held` and
-# `release`. The script prints
-# `AGENTROW OK NAME` when every comparison holds, and otherwise
+# of the tree's tests and tools with `tree`, and a row that runs a program's
+# screen in tmux, on the server and in the session PANE names, waits for it
+# with `pane`. A row that inspects a program while it waits for the fake
+# server's answer has that answer held, with `held` and `release`. The
+# script prints `AGENTROW OK NAME` when every comparison holds, and otherwise
 # `AGENTROW FAIL NAME: ` with the first that did not.
 #
 # A native run, on a Rach2 that is already up, starts the script as root and
@@ -30,9 +28,8 @@
 # /tmp/agents/work/NAME and the account's home; `stage=DIR` for the files
 # the suite stages in /tmp/agents; `ids=OLD:NEW,...`, whose NEW for 1000,
 # the test account's id, the script runs the row as, with no account of its
-# own; `ports=OLD:NEW,...` for the ports a row listens on; and
-# `machine=native`, under which a row leaves out what needs the fake API
-# server or QEMU's restricted network.
+# own; `ports=OLD:NEW,...` maps a row's listening ports; and `machine=native`
+# leaves out what needs the fake API server or QEMU's restricted network.
 #
 
 set -u
@@ -62,7 +59,6 @@ export HOME
 # shellcheck disable=SC2034 # the rows read it
 CA=$STAGE/ca.pem
 PANE=
-SELECTED=
 FAILED=
 OUT=
 
@@ -151,61 +147,6 @@ pane() {
 missing() {
     fail "$1: the screen showed no [$2], but [$(tmux -u -L "$PANE" capture-pane -p -t "$PANE" 2>&1 |
         sed '/^ *$/d' | tail -n 4 | tr '\n' ' ')]"
-}
-
-# keys KEY...: press the keys KEY in the window of the tmux server PANE.
-keys() {
-    tmux -u -L "$PANE" send-keys -t "$PANE" "$@"
-}
-
-# program NAME: print the process ID of NAME, the program that the shell of
-# the window of the tmux server PANE started. A child of the program has its
-# name until the child calls execve, so a search by the name alone can find
-# two processes.
-program() {
-    pgrep -P "$(tmux -L "$PANE" display-message -p -t "$PANE" '#{pane_pid}')" -x "$1"
-}
-
-# press WHAT KEY TEXT: press KEY until the window of PANE shows TEXT on two
-# reads in a row, looking once a second, and fail as `pane` does when the
-# program ends or the window cannot be read first. KEY is pressed on
-# a screen without TEXT that is the same on two reads in a row and that the
-# program has drawn since KEY was last pressed. A program's question can
-# refuse keys for a moment after it opens and then be drawn again, or take a
-# key and draw its first answer again; either way the program settles on a
-# new screen without TEXT, and is given KEY again. A key whose effect a slow
-# program has yet to draw leaves the screen as it was, and is not pressed
-# twice.
-press() {
-    local screen last='' pressed='' drawn=1 shown=''
-    while screen=$(tmux -u -L "$PANE" capture-pane -p -t "$PANE"); do
-        [ "$screen" = "$pressed" ] || drawn=1
-        case "$screen" in
-            *"$3"*)
-                [ -z "$shown" ] || return 0
-                shown=1
-                ;;
-            *" ended with status "*) break ;;
-            *)
-                shown=
-                if [ "$screen" = "$last" ] && [ -n "$drawn" ]; then
-                    keys "$2"
-                    pressed=$screen
-                    drawn=
-                fi
-                ;;
-        esac
-        last=$screen
-        sleep 1
-    done
-    missing "$1" "$3"
-    return 1
-}
-
-# choose WHAT KEY ANSWER: press KEY until the window of PANE has marked
-# ANSWER selected, the program's mark SELECTED before it, as `press` does.
-choose() {
-    press "$1" "$2" "$SELECTED $3"
 }
 
 # exited WHAT COMMAND...: wait until COMMAND, which prints the processes it

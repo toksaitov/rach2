@@ -81,7 +81,7 @@ case gnu/chromium -- system/gnu_rows.sh chromium x86_64 work=work home=home stag
 
 # Left out, as each row says: what needs the fake API server or QEMU's
 # restricted network. The sessions of agy-print, claude-print, codex-exec
-# and the screens play against the fake server (`machine`).
+# play against the fake server (`machine`); interactive sessions use agentsaccept.
 case agents/agy ids:1000 file:tests/system/agents/agy.sh -- \
     system/agents_rows.sh agy @agents:agy work=work home=home stage=. machine=native
 case agents/claude ids:1000 file:tests/system/agents/claude.sh -- \

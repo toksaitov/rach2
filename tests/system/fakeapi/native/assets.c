@@ -66,36 +66,14 @@ int render_script(const char *source, const char *destination, const char *row)
         return 2;
     snprintf(repo, sizeof(repo), "/tmp/agents/work/%s/session/repo", row);
     replace(script, "@REPO@", repo);
-    if (!strcmp(row, "claude-screen"))
-        extra = sibling(source, "claude-screen.json");
-    else if (!strcmp(row, "codex-screen"))
-        extra = sibling(source, "codex-screen.json");
-    else if (!strncmp(row, "agy-", 4))
+    if (!strncmp(row, "agy-", 4))
         extra = sibling(source, "agy-services.json");
     if (extra) {
         join_steps(script, extra, strncmp(row, "codex-", 6) != 0, 1);
         destroy(extra);
-    } else if (!strcmp(row, "claude-screen") || !strcmp(row, "codex-screen") ||
-               !strncmp(row, "agy-", 4)) {
+    } else if (!strncmp(row, "agy-", 4)) {
         destroy(script);
         return 2;
-    }
-    if (!strcmp(row, "muse-tmux")) {
-        struct value *joined = value('a'), *config;
-        const struct value *p = first(get(script, "steps"));
-        if (!p) {
-            destroy(script);
-            return 2;
-        }
-        add(joined, NULL, clone(p));
-        add(joined, NULL, clone(p));
-        config =
-            parse("{\"protocol\":\"plain\",\"unordered\":true,\"request\":{\"path\":\"/muse-code/"
-                  "config\",\"query\":\"channel=public\"},\"reply\":{\"status\":404}}");
-        add(joined, NULL, config);
-        for (p = p->next; p; p = p->next)
-            add(joined, NULL, clone(p));
-        set(script, "steps", joined);
     }
     steps = (struct value *)get(script, "steps");
     last = steps ? steps->child : NULL;
@@ -294,8 +272,7 @@ static int audit_metadata(struct audit *a, const char *version)
                 a->socket_n = (unsigned)number(e, "n", 0);
         if (!a->socket_n)
             return 0;
-        snprintf(a->agent, sizeof(a->agent), "%s/%s ",
-                 !strcmp(row, "codex-screen") ? "codex-tui" : "codex_exec", version);
+        snprintf(a->agent, sizeof(a->agent), "codex_exec/%s ", version);
     }
     if (!strncmp(row, "claude", 6) || !strcmp(row, "worker-session"))
         snprintf(a->agent, sizeof(a->agent), "claude-cli/%s ", version);

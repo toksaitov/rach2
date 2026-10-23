@@ -33,9 +33,9 @@
 
 PROMPT="Read notes.txt and do what it says. Check the change with check.sh, then commit it."
 
-# session_start MODE: make the session's home, scratch and the fixture's
+# session_start: make the session's home, scratch and the fixture's
 # repository in SESSION, WORK/session, with Codex's settings for the fake
-# server, start the session bus of the home's login in BUS, record MODE, the
+# server, start the session bus of the home's login in BUS, record the
 # program's digest and the start, and sample the free frames until
 # session_end.
 session_start() {
@@ -70,7 +70,7 @@ EOF
     output "git init" env HOME="$SESSION/home" git init -q .
     output "git add" git add .
     output "the fixture's commit" env HOME="$SESSION/home" git commit -qm "The fixture"
-    printf '%s\n' "$1" > "$SESSION/mode"
+    printf '%s\n' exec > "$SESSION/mode"
     output "the program's digest before the session" sha256sum /opt/codex/bin/codex
     printf '%s\n' "$OUT" > "$SESSION/binary.before"
     : > "$SESSION/steps"
@@ -97,11 +97,11 @@ session_end() {
         repo mode binary.before binary.after memory seconds steps
 }
 
-# session_env TERM: print the environment of the session, a variable to a
-# line: that of the codexapi cases' Codex, with TERM, the session bus BUS,
+# session_env: print the environment of the session, a variable to a line:
+# that of the codexapi cases' Codex, with the session bus BUS,
 # and MARK, which every process Codex starts inherits.
 session_env() {
-    printf '%s\n' PATH=/usr/bin:/bin "HOME=$SESSION/home" LANG=C.UTF-8 "TERM=$1" \
+    printf '%s\n' PATH=/usr/bin:/bin "HOME=$SESSION/home" LANG=C.UTF-8 TERM=dumb \
         "TMPDIR=$SESSION/tmp" FAKEAPI_KEY=sk-fakeapi-dummy "CODEX_CA_CERTIFICATE=$CA" \
         "DBUS_SESSION_BUS_ADDRESS=$BUS" "$MARK"
 }
@@ -130,15 +130,14 @@ gone() {
     exited "$1: the processes left" left
 }
 
-# Stop the sampler, the private tmux server, what Codex left and the
-# login's session bus on every exit path.
+# Stop the sampler, what Codex left and the login's session bus on every
+# exit path.
 row_cleanup() {
     if [ -n "${SAMPLER:-}" ]; then
         kill "$SAMPLER" 2> /dev/null
         wait "$SAMPLER" 2> /dev/null
         SAMPLER=
     fi
-    tmux -L codex kill-server 2> /dev/null || true
     if [ -n "${SESSION:-}" ]; then
         left | awk '{ print $1 }' | xargs -r kill -9 2> /dev/null
     fi
@@ -149,8 +148,8 @@ row_cleanup() {
 
 row() {
     local pid status env
-    session_start exec || return
-    mapfile -t env < <(session_env dumb)
+    session_start || return
+    mapfile -t env < <(session_env)
     env -i "${env[@]}" codex exec "$PROMPT" < /dev/null > "$SESSION/client.log" 2>&1 &
     pid=$!
     if held "codex exec" "$pid"; then

@@ -14,10 +14,6 @@
 # shellcheck disable=SC2034 # agents_rows.sh's pane reads it
 PANE=muse
 
-# The mark Muse puts before the answer a question has selected, U+27E9, in
-# UTF-8.
-SELECTED=$(printf '\342\237\251')
-
 row() {
     output "muse --version" env HOME="$WORK/home" muse --version
     same "the version" "$OUT" "Muse Code ${VERSION%%-*} ($VERSION)"
@@ -43,7 +39,7 @@ row() {
     tmux -L muse kill-server 2> /dev/null
 
     [ -z "$NATIVE" ] || return 0
-    muse_session exec
+    muse_session
 }
 
 # Stop the memory sampler and the private tmux server on every exit path.
@@ -56,49 +52,10 @@ row_cleanup() {
     tmux -L muse kill-server 2>/dev/null || true
 }
 
-# muse_quit: end Muse in its window as a person does, with Ctrl-C twice, and
-# wait until the window shows that Muse ended. Muse takes the first press as
-# a request to quit and shows "Press Ctrl-C again to quit" for three seconds;
-# a second press while the notice shows quits. While local work, such as a
-# background command, is still active, Muse asks first whether to exit, and
-# the row answers Exit anyway. The row reads the screen once a second and
-# presses the keys that the screen's state calls for each time the state
-# changes: both presses on the prompt, the second on the notice, and Up and
-# then Enter on the question. A press that Muse has yet to read leaves the
-# state as it was and is not repeated; a notice that ends before the second
-# press is read leaves the prompt, where the row presses twice again.
-muse_quit() {
-    local screen state seen=''
-    while screen=$(tmux -u -L muse capture-pane -p -t muse); do
-        case "$screen" in
-            *"muse ended with status"*) return 0 ;;
-            *"$SELECTED 1. Exit anyway"*"Enter to confirm"*)
-                keys Enter
-                pane "the session exit" "muse ended with status"
-                return
-                ;;
-            *"Exit anyway"*) state=Up ;;
-            *"Press Ctrl-C again to quit"*) state=C-c ;;
-            *) state="C-c C-c" ;;
-        esac
-        if [ "$state" != "$seen" ]; then
-            # shellcheck disable=SC2086 # a state calls for one key or two
-            keys $state
-            seen=$state
-        fi
-        sleep 1
-    done
-    missing "the session exit" "muse ended with status"
-    return 1
-}
-
-# Run the shared script in headless mode or in the terminal, in a fresh home.
-# In the terminal the row ends Muse with muse_quit. The script that runs Muse
-# runs a handler of its own on SIGINT while Muse runs, which Muse does not
-# inherit, and ignores SIGINT once Muse has ended, so a Ctrl-C that comes
-# after the end does not end the window.
+# muse_session: run the shared script with `muse exec` in a fresh home and a
+# clone of the shared fixture, and archive what the host verifies.
 muse_session() {
-    local began screen
+    local began
     mkdir -p "$WORK/session/home/.config/muse" "$WORK/session/repo" /tmp/agents/results
     cp /tmp/agents/fixture/* "$WORK/session/repo/"
     cat > "$WORK/session/home/.gitconfig" <<'EOF'
@@ -117,7 +74,6 @@ EOF
     "ca_bundle": "$CA"
   },
   "telemetry": {"enabled": false},
-  "tui": {"prompt_hint_enabled": false},
   "runtime_capabilities": {
     "plugin:tbh-reminders:reminder:goal-reminder": {"enabled": false},
     "plugin:tbh-reminders:reminder:memory": {"enabled": false},
@@ -136,39 +92,12 @@ EOF
     printf '%s\n' "$OUT" > "$WORK/session/binary.before"
     sample_memory > "$WORK/session/memory" &
     SAMPLER=$!
-    printf '%s\n' "$1" > "$WORK/session/mode"
+    printf '%s\n' exec > "$WORK/session/mode"
     began=$(date +%s)
-    if [ "$1" = exec ]; then
-        output "muse exec" env -i PATH="$PATH" HOME="$WORK/session/home" TMPDIR="$WORK/session" \
+    output "muse exec" env -i PATH="$PATH" HOME="$WORK/session/home" TMPDIR="$WORK/session" \
         LANG=C.UTF-8 TERM=dumb META_API_KEY=meta-fakeapi-dummy \
         muse exec --yolo --model muse-spark-1.2 --max-model-steps 8 \
         'Read notes.txt and do what it says. Check the change with check.sh, then commit it.'
-    else
-        cat > "$WORK/session/start.sh" <<EOF
-#!/bin/bash
-cd '$WORK/session/repo' || exit 1
-trap : INT
-env -i PATH='$PATH' HOME='$WORK/session/home' TMPDIR='$WORK/session' \\
-    LANG=C.UTF-8 TERM=xterm-256color META_API_KEY=meta-fakeapi-dummy \\
-    muse --yolo --model muse-spark-1.2 \\
-    'Read notes.txt and do what it says. Check the change with check.sh, then commit it.'
-status=\$?
-trap '' INT
-echo "muse ended with status \$status"
-sleep infinity
-EOF
-        tmux -L muse new-session -d -s muse -x 100 -y 40 \
-            "/bin/bash '$WORK/session/start.sh'" || fail "the tmux session"
-        pane "the completed session" "the change is committed."
-        tmux -L muse capture-pane -p -S - -t muse > "$WORK/session/screen.txt"
-        muse_quit
-        screen=$(tmux -L muse capture-pane -p -t muse)
-        case "$screen" in
-            *"muse ended with status 0"*|*"muse ended with status 130"*) ;;
-            *) fail "the interactive session's exit: $screen" ;;
-        esac
-        tmux -L muse kill-server 2>/dev/null || true
-    fi
     printf '%s\n' "$(($(date +%s) - began))" > "$WORK/session/seconds"
     kill "$SAMPLER"
     wait "$SAMPLER" 2>/dev/null || true
