@@ -16,7 +16,10 @@
 # attaches to a tmux session there, in which the account's login shell
 # starts the agent. The script types into its own tmux, so that every key
 # goes through SSH's terminal, and reads the agent's screen from the
-# machine's tmux. It answers the questions of a first start and of a new
+# machine's tmux. A client that exits before the machine's session reports
+# it, as one does when the machine closes its connection during the SSH
+# banner exchange, is started again, and its status and its log are kept.
+# It answers the questions of a first start and of a new
 # directory, asks the agent to read notes.txt, do what it says, check the
 # change and commit it, and requires a second commit whose greeting.txt
 # check.sh passes, with nothing left uncommitted. It then asks for `sleep 600`
@@ -494,7 +497,8 @@ until_guest() {
 }
 
 # attach: start the host's window of the agent, whose SSH client attaches to
-# the agent's session on the machine, made the first time.
+# the agent's session on the machine, made the first time. The client's
+# stderr goes to $work/client.AGENT.
 attach() {
     # shellcheck disable=SC2016 # the quotes are the client's, around the path
     client="exec ssh -tt -p $PORT ${KEY:+-i '$KEY'} -o BatchMode=yes -o StrictHostKeyChecking=no"
@@ -502,6 +506,7 @@ attach() {
     client="$client -o 'UserKnownHostsFile=$work/known' -o ControlPath=none"
     client="$client -o LogLevel=ERROR"
     client="$client $USERNAME@$HOST tmux -u -L rach2-accept new-session -A -s rach2-accept-$agent"
+    client="$client 2> '$work/client.$agent'"
     if h list-windows -F '#{window_name}' | grep -qx "$agent"; then
         h respawn-pane -k -t "accept:$agent" "$client"
     else
@@ -509,12 +514,40 @@ attach() {
     fi
 }
 
+# attached WHAT: wait until the agent's session on the machine reports the
+# client of the host's window, describing the wait as WHAT in the log. A
+# client that has exited first leaves its pane dead: its status and its log
+# are recorded and it is started again. The fifth such client fails WHAT.
+attached() {
+    say "$agent: waiting: $1"
+    lost=0
+    while :; do
+        OUT=$(guest pane "$agent")
+        [ "$OUT" != "120x39 120x39 1" ] || return 0
+        dead=$(h display-message -p -t "accept:$agent" '#{pane_dead} #{pane_dead_status}')
+        case $dead in
+            "1 "*)
+                lost=$((lost + 1))
+                say "$agent: the SSH client exited with status ${dead#1 } before the session reported it"
+                record "$agent: the SSH client's log" "$(cat "$work/client.$agent" 2> /dev/null)"
+                if [ "$lost" -ge 5 ]; then
+                    bad "$agent: $1: $lost SSH clients exited before the session reported one"
+                    return 1
+                fi
+                attach
+                ;;
+        esac
+        # interval: the machine is asked every two seconds
+        sleep 2
+    done
+}
+
 # step_session: the agent's work in its screen, from the repository to the
 # reopened conversation.
 step_session() {
     guest prepare "$agent" > /dev/null || { bad "$agent: the repository"; return 1; }
     attach
-    until_guest "the client attached" "120x39 120x39 1" pane "$agent" || return 1
+    attached "the client attached" || return 1
     keys -l "bash ~/rach2-accept/guest.sh run $agent start" && keys Enter
     idle "the first prompt" || return 1
     record "$agent: the first prompt" "$SCREEN"
@@ -564,8 +597,8 @@ step_session() {
         return 1
     [ -n "$(guest pid "$agent")" ] || bad "$agent: the agent ended with its SSH connection"
     attach
-    until_guest "the client attached again" "120x39 120x39 1" pane "$agent" &&
-        idle "the screen after the new connection" &&
+    attached "the client attached again" || return 1
+    idle "the screen after the new connection" &&
         say "$agent: reconnected: OK"
 
     quit || return 1
