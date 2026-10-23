@@ -13,9 +13,7 @@
       "domain": "machine",
       "architectures": "none",
       "workload": {
-        "arguments": [
-          "concurrent"
-        ],
+        "arguments": [],
         "inputs": {
           "manifest": "krffs/manifests/imagerace-tree.manifest",
           "size_mib": 2,
@@ -83,15 +81,21 @@
       "bounds": {
         "case": {
           "floor_us": 1000000,
-          "initial_us": 600000000,
-          "ceiling_us": 1200000000
+          "initial_us": 1000000000,
+          "ceiling_us": 2400000000
         },
         "gap": {
           "floor_us": 1000000,
           "initial_us": 600000000,
           "ceiling_us": 1200000000
         },
-        "stages": {}
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 400000000,
+            "ceiling_us": 1200000000
+          }
+        }
       },
       "resources": {
         "cpu_millis": 1000,
@@ -190,9 +194,7 @@
       "domain": "machine",
       "architectures": "none",
       "workload": {
-        "arguments": [
-          "interrupted"
-        ],
+        "arguments": [],
         "inputs": {
           "manifest": "krffs/manifests/imagerace-tree.manifest",
           "size_mib": 2,
@@ -255,15 +257,21 @@
       "bounds": {
         "case": {
           "floor_us": 1000000,
-          "initial_us": 900000000,
-          "ceiling_us": 1800000000
+          "initial_us": 1300000000,
+          "ceiling_us": 3000000000
         },
         "gap": {
           "floor_us": 1000000,
           "initial_us": 900000000,
           "ceiling_us": 1800000000
         },
-        "stages": {}
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 400000000,
+            "ceiling_us": 1200000000
+          }
+        }
       },
       "resources": {
         "cpu_millis": 1000,
@@ -366,9 +374,7 @@
         "x86_64"
       ],
       "workload": {
-        "arguments": [
-          "prerequisites"
-        ],
+        "arguments": [],
         "inputs": {
           "test_image": "images/test.krffs",
           "os_real_image": "images/os-real.krffs",
@@ -431,15 +437,21 @@
       "bounds": {
         "case": {
           "floor_us": 1000000,
-          "initial_us": 600000000,
-          "ceiling_us": 1200000000
+          "initial_us": 1000000000,
+          "ceiling_us": 2400000000
         },
         "gap": {
           "floor_us": 1000000,
           "initial_us": 600000000,
           "ceiling_us": 1200000000
         },
-        "stages": {}
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 400000000,
+            "ceiling_us": 1200000000
+          }
+        }
       },
       "resources": {
         "cpu_millis": 1000,
@@ -539,9 +551,7 @@
       "domain": "machine",
       "architectures": "none",
       "workload": {
-        "arguments": [
-          "restage"
-        ],
+        "arguments": [],
         "inputs": {
           "manifest": "krffs/manifests/imagerace-tree.manifest",
           "size_mib": 2
@@ -613,15 +623,21 @@
       "bounds": {
         "case": {
           "floor_us": 1000000,
-          "initial_us": 600000000,
-          "ceiling_us": 1200000000
+          "initial_us": 1000000000,
+          "ceiling_us": 2400000000
         },
         "gap": {
           "floor_us": 1000000,
           "initial_us": 600000000,
           "ceiling_us": 1200000000
         },
-        "stages": {}
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 400000000,
+            "ceiling_us": 1200000000
+          }
+        }
       },
       "resources": {
         "cpu_millis": 1000,
@@ -721,9 +737,7 @@
       "domain": "machine",
       "architectures": "none",
       "workload": {
-        "arguments": [
-          "probe"
-        ],
+        "arguments": [],
         "inputs": {
           "script": "tests/system/imagerace_probe.sh",
           "probe": "tests/conloadprobe.c"
@@ -765,15 +779,21 @@
       "bounds": {
         "case": {
           "floor_us": 1000000,
-          "initial_us": 1800000000,
-          "ceiling_us": 3600000000
+          "initial_us": 2200000000,
+          "ceiling_us": 4800000000
         },
         "gap": {
           "floor_us": 1000000,
           "initial_us": 1800000000,
           "ceiling_us": 3600000000
         },
-        "stages": {}
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 400000000,
+            "ceiling_us": 1200000000
+          }
+        }
       },
       "resources": {
         "cpu_millis": 1000,

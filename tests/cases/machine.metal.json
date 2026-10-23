@@ -13,9 +13,7 @@
       "domain": "machine",
       "architectures": "none",
       "workload": {
-        "arguments": [
-          "transport"
-        ],
+        "arguments": [],
         "inputs": {},
         "repetitions": 1,
         "seed": null
@@ -54,15 +52,21 @@
       "bounds": {
         "case": {
           "floor_us": 1000000,
-          "initial_us": 120000000,
-          "ceiling_us": 600000000
+          "initial_us": 520000000,
+          "ceiling_us": 1800000000
         },
         "gap": {
           "floor_us": 1000000,
           "initial_us": 120000000,
           "ceiling_us": 600000000
         },
-        "stages": {}
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 400000000,
+            "ceiling_us": 1200000000
+          }
+        }
       },
       "resources": {
         "cpu_millis": 1000,
@@ -162,9 +166,7 @@
       "domain": "machine",
       "architectures": "none",
       "workload": {
-        "arguments": [
-          "password"
-        ],
+        "arguments": [],
         "inputs": {},
         "repetitions": 1,
         "seed": null
@@ -203,15 +205,21 @@
       "bounds": {
         "case": {
           "floor_us": 1000000,
-          "initial_us": 120000000,
-          "ceiling_us": 600000000
+          "initial_us": 520000000,
+          "ceiling_us": 1800000000
         },
         "gap": {
           "floor_us": 1000000,
           "initial_us": 120000000,
           "ceiling_us": 600000000
         },
-        "stages": {}
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 400000000,
+            "ceiling_us": 1200000000
+          }
+        }
       },
       "resources": {
         "cpu_millis": 1000,

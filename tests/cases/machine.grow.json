@@ -419,9 +419,7 @@
       "domain": "machine",
       "architectures": "none",
       "workload": {
-        "arguments": [
-          "measure"
-        ],
+        "arguments": [],
         "inputs": {
           "checker": "tests/system/checkers/grow_measure.awk",
           "measures": 6
@@ -488,15 +486,21 @@
       "bounds": {
         "case": {
           "floor_us": 1000000,
-          "initial_us": 120000000,
-          "ceiling_us": 600000000
+          "initial_us": 520000000,
+          "ceiling_us": 1800000000
         },
         "gap": {
           "floor_us": 1000000,
           "initial_us": 120000000,
           "ceiling_us": 600000000
         },
-        "stages": {}
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 400000000,
+            "ceiling_us": 1200000000
+          }
+        }
       },
       "resources": {
         "cpu_millis": 1000,
@@ -597,9 +601,7 @@
       "domain": "machine",
       "architectures": "none",
       "workload": {
-        "arguments": [
-          "check"
-        ],
+        "arguments": [],
         "inputs": {
           "script": "tools/dev/machine_grow.sh",
           "small_seed_mib": 8,
@@ -679,15 +681,21 @@
       "bounds": {
         "case": {
           "floor_us": 1000000,
-          "initial_us": 900000000,
-          "ceiling_us": 1800000000
+          "initial_us": 1300000000,
+          "ceiling_us": 3000000000
         },
         "gap": {
           "floor_us": 1000000,
           "initial_us": 900000000,
           "ceiling_us": 1800000000
         },
-        "stages": {}
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 400000000,
+            "ceiling_us": 1200000000
+          }
+        }
       },
       "resources": {
         "cpu_millis": 1000,
@@ -788,9 +796,7 @@
       "domain": "machine",
       "architectures": "none",
       "workload": {
-        "arguments": [
-          "boot"
-        ],
+        "arguments": [],
         "inputs": {
           "script": "tools/dev/machine_grow.sh",
           "geometries": "cluster8 cluster1",
@@ -863,15 +869,21 @@
       "bounds": {
         "case": {
           "floor_us": 1000000,
-          "initial_us": 600000000,
-          "ceiling_us": 1800000000
+          "initial_us": 1000000000,
+          "ceiling_us": 3000000000
         },
         "gap": {
           "floor_us": 1000000,
           "initial_us": 600000000,
           "ceiling_us": 1800000000
         },
-        "stages": {}
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 400000000,
+            "ceiling_us": 1200000000
+          }
+        }
       },
       "resources": {
         "cpu_millis": 1000,
@@ -972,9 +984,7 @@
       "domain": "machine",
       "architectures": "none",
       "workload": {
-        "arguments": [
-          "space"
-        ],
+        "arguments": [],
         "inputs": {
           "script": "tools/dev/machine_grow.sh",
           "seed_mib": 1024,
@@ -1062,15 +1072,21 @@
       "bounds": {
         "case": {
           "floor_us": 1000000,
-          "initial_us": 600000000,
-          "ceiling_us": 1800000000
+          "initial_us": 1000000000,
+          "ceiling_us": 3000000000
         },
         "gap": {
           "floor_us": 1000000,
           "initial_us": 600000000,
           "ceiling_us": 1800000000
         },
-        "stages": {}
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 400000000,
+            "ceiling_us": 1200000000
+          }
+        }
       },
       "resources": {
         "cpu_millis": 1000,
@@ -1171,9 +1187,7 @@
       "domain": "machine",
       "architectures": "none",
       "workload": {
-        "arguments": [
-          "memory"
-        ],
+        "arguments": [],
         "inputs": {
           "requirement_mib": 1048576,
           "identity": "MBRID=47470001,1"
@@ -1220,15 +1234,21 @@
       "bounds": {
         "case": {
           "floor_us": 1000000,
-          "initial_us": 120000000,
-          "ceiling_us": 600000000
+          "initial_us": 520000000,
+          "ceiling_us": 1800000000
         },
         "gap": {
           "floor_us": 1000000,
           "initial_us": 120000000,
           "ceiling_us": 600000000
         },
-        "stages": {}
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 400000000,
+            "ceiling_us": 1200000000
+          }
+        }
       },
       "resources": {
         "cpu_millis": 1000,
@@ -1329,9 +1349,7 @@
       "domain": "machine",
       "architectures": "none",
       "workload": {
-        "arguments": [
-          "replay"
-        ],
+        "arguments": [],
         "inputs": {
           "script": "tools/dev/machine_grow.sh",
           "seed_mib": 1024,
@@ -1382,15 +1400,21 @@
       "bounds": {
         "case": {
           "floor_us": 1000000,
-          "initial_us": 1800000000,
-          "ceiling_us": 3600000000
+          "initial_us": 2200000000,
+          "ceiling_us": 4800000000
         },
         "gap": {
           "floor_us": 1000000,
           "initial_us": 1800000000,
           "ceiling_us": 3600000000
         },
-        "stages": {}
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 400000000,
+            "ceiling_us": 1200000000
+          }
+        }
       },
       "resources": {
         "cpu_millis": 1000,
