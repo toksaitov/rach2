@@ -131,10 +131,13 @@ sync_tree()
 build_layer()
 {
     cd $TREE || exit 1
+    set --
+    if [ "${GNU_TEST_PRODUCTS:-}" = 1 ]; then
+        set -- gnu-sanitizers gnu-host-products
+    fi
     # shellcheck disable=SC2086 # DRY_RUN is empty or -n
     exec make --no-print-directory -j"$JOBS" $DRY_RUN ARCH="$RACH2_ARCH" GNU_AGENTS="$GNU_AGENTS" \
-        GNU_LINK="$GNU_LINK" gnu-ports gnu-native gnu-gdb gnu-js gnu-chromium gnu-agents \
-        gnu-sanitizers gnu-host-products
+        GNU_LINK="$GNU_LINK" gnu-ports gnu-native gnu-gdb gnu-js gnu-chromium gnu-agents "$@"
 }
 
 # build_image: as the build's account, make the image as mk/gnu-image.mk's
@@ -145,7 +148,8 @@ build_image()
     make --no-print-directory -C krffs MUSL_CRYPT="../$MUSL_CRYPT_SRC" ../build/krffs/stageimage.krffs ||
         exit 1
     [ -z "$RACH2_PATH_MAP" ] || export RACH2_PATH_MAP
-    RACH2_ARCH=$RACH2_ARCH GNU_AGENTS="$GNU_AGENTS" exec sh tools/image/mkext2.sh \
+    RACH2_ARCH=$RACH2_ARCH GNU_AGENTS="$GNU_AGENTS" GNU_TEST_PRODUCTS=${GNU_TEST_PRODUCTS:-} \
+        exec sh tools/image/mkext2.sh \
         --overlay vendor/gnu/install_root.sh krffs/manifests/os-real-gnu.manifest "$MNT/out/$IMAGE" "$SIZE"
 }
 

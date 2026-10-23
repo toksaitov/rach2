@@ -791,12 +791,12 @@ $(IMAGES_DIR)/ext2-root.disk: $(DEMO_CREDS) krffs/manifests/os-real.manifest $(M
 # tooling machine (mk/gnu-image.mk), which a set without this suite must not
 # need, so only the cases' preparation asks for it.
 GNU_TEST_DISK = $(IMAGES_DIR)/gnu-test.disk
-$(GNU_TEST_DISK): $(OS_REAL_GNU_EXT2) $(MKMBR)
+$(GNU_TEST_DISK): $(GNU_TEST_EXT2) $(MKMBR)
 	@mkdir -p $(@D)
 	rm -f $@.tmp
-	mib=$$(($$(wc -c < $(OS_REAL_GNU_EXT2)) / 1048576)) && \
+	mib=$$(($$(wc -c < $(GNU_TEST_EXT2)) / 1048576)) && \
 	dd if=/dev/zero of=$@.tmp bs=1048576 count=0 seek=$$((mib + 2)) 2>/dev/null && \
-	dd if=$(OS_REAL_GNU_EXT2) of=$@.tmp bs=1048576 seek=1 conv=notrunc,sparse 2>/dev/null && \
+	dd if=$(GNU_TEST_EXT2) of=$@.tmp bs=1048576 seek=1 conv=notrunc,sparse 2>/dev/null && \
 	$(MKMBR) --lba $@.tmp 2048:$$((mib * 2048)):83 > /dev/null
 	mv $@.tmp $@
 
