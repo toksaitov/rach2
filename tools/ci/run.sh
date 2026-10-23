@@ -1,80 +1,10 @@
 #!/bin/sh
-#
-# tools/ci/run.sh: build the tree and run one of ci's sets for the
-# architecture ARCH names, and keep what tools/ci/report.sh reads.
-#
-#   tools/ci/run.sh core DIR    the build, style, host and the core tier
-#   tools/ci/run.sh full DIR    the build from clean and every suite of ARCH
-#
-# With `ARCH='i686 x86_64'`, the run tests both architectures, and DIR gets
-# a directory for each, `KIND-ARCH`, with the files below, as the end of
-# this comment says.
-#
-# DIR receives `log`, the whole output; `err`, the standard error of each
-# run of tests/run in turn, which has the lines of the runner's own results;
-# `failed`, one line for each step that failed: `build`, a suite's name,
-# `runner` for a fault of the runner, the set's own name when the runner
-# failed without naming a suite of the registry or `runner`, or `runner` when
-# its history cannot show what ran; `kept/`, the serial logs that tests/run kept
-# for the failed suites; and `done`, written last, without which a reader
-# takes the run as unfinished. A full run first runs `make clean`, which
-# removes ARCH's in-house objects and images but keeps the vendored builds,
-# then `make`; a failure of either is `build`. It then
-# runs every suite of the registry that runs on ARCH, `style` and `host`
-# among them, as one set, and after it `bigmem`, which runs only on x86_64
-# and needs the host alone, as a run of its own. When SUITES is set, as
-# `ARCH:SUITE` words, a full run runs only the suites it names for ARCH, and
-# refuses a word whose suite ARCH does not run; when it names none for ARCH,
-# the run builds nothing and writes `skipped` beside `done`. The build runs with
-# RACH2_MIN_FREE_GIB at 40 unless the environment gives another, so that it
-# stops, as `build`, before it fills the host's disk. A full run builds
-# without the host's store of step outputs, RACH2_STORE empty, so that the
-# store cannot change what a release passes: the root Makefile then builds
-# again in this copy each step whose outputs came from the store. The exit
-# status is 0 when nothing failed. A TERM to the run's process group, which
-# timeout(1) sends at the workflow's time limit, ends the run without `done`
-# once the step it interrupts has stopped, so that tests/run stops its
-# machines before the next run starts; the status is then 143. A step whose
-# command a signal ended, or that wrote no status because the shell that ran
-# it was killed, ends the run the same way. GitHub's cleanup of a cancelled
-# job kills the job's processes one at a time, in the order of their process
-# IDs, so the run's shell may outlive the step it is in, or be killed just
-# after it has forked the next step. Each step therefore checks, just before
-# it starts its command, that the run's shell is alive under the parent it
-# started with, and starts nothing otherwise.
-#
-# `results` below says how this tree's tests/run gives its results. With
-# `lines`, the runner's last `run: result: failed:` line on its standard error
-# names the suites that failed, and a pass is its status 0. With `history`, the
-# suites of a kind run as one run of tests/run, core's as `tests/run style host
-# core` and full's with `bigmem` among them, since report.sh reads the history
-# of one run. tests/run writes etude's history of it under DIR, which
-# RACH2_RESULTS names: its streams in `history/` and the blobs they refer to,
-# each named by its SHA-256, in `store/`, where report.sh reads them. `etude
-# check verdict` judges that history against the case manifests of tests/cases.
-# The run passes only when the history shows every suite asked for planned whole
-# and every attempt of every item passed, with its results in the store, and
-# tests/run's status is 0. A suite with an item that did not pass fails, a
-# failed retry among them, the set fails for a failed preparation, and `runner`
-# for a history that is missing, cut off or inconsistent, or a status that
-# disagrees with it.
-#
-# A run of both architectures reads the runner's lines. It cleans each
-# architecture for a full run, then builds each, and runs the suites of every
-# architecture that built as one run of tests/run, so that the cases of both
-# go through one schedule, and `bigmem` after it as a run of its own; with
-# SUITES, the suites it names, as `ARCH:SUITE` words of that run, and an
-# architecture that SUITES names nothing of is neither built nor tested and
-# gets `skipped`. DIR has the whole run's `log`, `err` and `kept/`, and
-# `failed` with each name as `ARCH:NAME`: `ARCH:build` for a build that
-# failed, the runner's `ARCH:SUITE` words, and every other name for each
-# architecture of the run of tests/run that gave it. At the end, and when the
-# run is stopped, each architecture's directory gets the log, the standard
-# error without the lines of the other architecture's suites, its own names
-# in `failed`, and the kept logs of its own cases and of those of no
-# architecture; `done` is written last in each, and only at the end.
-#
-# Each build and tests/run enters the installed site policy separately.
+# Run a prepared native CI collection and preserve both architecture results.
+# core selects style, host and core; full selects all suites, including bigmem.
+# SUITES may select ARCH:SUITE operands for a full rerun. One history and store
+# describe the whole collection; strict C verdicts project architecture results.
+# An installed immutable ETUDE and version-two site policy are required.
+# Historical lines/history paths remain for old-commit bisection fixtures.
 set -u
 
 
@@ -102,7 +32,10 @@ if [ "$kind" = full ]; then
 fi
 # How this tree's tests/run gives its results, `lines` or `history`, as the
 # header says.
-results=lines
+results=native
+if [ "$results" = native ]; then
+    exec sh tools/ci/native_entry.sh "$kind" "$out"
+fi
 top=$$
 parent=$PPID
 mkdir -p "$out/kept"

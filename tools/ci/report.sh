@@ -20,7 +20,11 @@
 # architecture whose directory has `skipped`, where it had nothing to run,
 # gets no status and counts as passed.
 #
-# An architecture's directory may also have `history/`, the history streams of
+# Native result directories have `native` and `suites`; their shared parent
+# has one history and store. The strict C verdict validates that complete
+# history and its charged budget before projecting this architecture's result.
+# Missing native history cannot use the old result-lines fallback.
+# An older architecture directory may also have `history/`, the history streams of
 # etude's run, and `store/`, the blobs they refer to, each named by its SHA-256.
 # The script reads them with `etude show failures`, of build/tools/etude/etude,
 # which it asks make for, or of the program that ETUDE names. An architecture
@@ -106,6 +110,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 statuses=$(mktemp "${TMPDIR:-/tmp}/rach2-report.XXXXXX") || exit 1
 rc=0
+native_expected=
+grep -qx 'results=native' tools/ci/run.sh 2> /dev/null && native_expected=1
 
 # Append each LINE to the job's summary.
 summarize() { # summarize LINE...
@@ -201,14 +207,31 @@ unrun_once() { # unrun_once ARCH
 read_history() { # read_history RESULT
     history=
     hstatus=0
-    [ -d "$1/history" ] || return 0
+    common=$1
+    native=
+    if [ -n "$native_expected" ] || [ -f "$1/native" ]; then
+        native=1
+        common=$1/..
+        if ! grep -qx 'etude-native-1' "$1/native" || [ ! -s "$1/suites" ] ||
+            [ ! -d "$common/history" ] || [ ! -d "$common/store" ]; then
+            history='ci: report: native collection history or selection is missing'
+            hstatus=2
+            return 0
+        fi
+    else
+        [ -d "$1/history" ] || return 0
+    fi
     reader=${ETUDE:-build/tools/etude/etude}
     if [ -z "${ETUDE:-}" ] && ! make -s "$reader" >&2; then
         history="ci: report: $reader could not be built"
         hstatus=2
         return 0
     fi
-    if [ -d "$1/store" ]; then
+    if [ -n "$native" ]; then
+        history=$("$reader" check verdict --project-architecture --require-budget \
+            -b "$common/store" -c "$sha" "$arch" "$kind" "$(cat "$1/suites")" \
+            "$common/history" 2>&1) || hstatus=$?
+    elif [ -d "$1/store" ]; then
         history=$("$reader" show failures -b "$1/store" "$1"/history/* 2>&1) || hstatus=$?
     else
         history=$("$reader" show failures "$1"/history/* 2>&1) || hstatus=$?
@@ -238,7 +261,7 @@ for arch in i686 x86_64; do
         i686) verdict=${VERDICT_i686-} ;;
         x86_64) verdict=${VERDICT_x86_64-} ;;
     esac
-    if [ ! -f "$result/done" ] && [ "${verdict%% *}" = "done" ]; then
+    if [ -z "$native_expected" ] && [ ! -f "$result/native" ] && [ ! -f "$result/done" ] && [ "${verdict%% *}" = "done" ]; then
         mkdir -p "$result"
         echo "${verdict#done}" | tr ' ' '\n' | sed '/^$/d' > "$result/failed"
         : > "$result/done"

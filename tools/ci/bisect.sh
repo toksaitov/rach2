@@ -334,6 +334,46 @@ historic() {
     grep -qx 'results=history' tools/ci/run.sh 2> /dev/null
 }
 
+# Native commits retain their public preparation, context and one collection.
+# The current commit's native owner supplies the purpose deadline and cleanup.
+# Old commits below retain their historical runner and timeout protocol.
+native_commit() {
+    grep -qx 'results=native' tools/ci/run.sh 2> /dev/null
+}
+
+native_tested() {
+    native_kind=${run_kind:-full}
+    [ "$test_set" != core ] || native_kind=core
+    native_purpose=ci
+    [ "$kind" = core ] || native_purpose=release
+    selected=
+    if [ -z "$run_kind" ] && [ "$test_set" != all ] && [ "$test_set" != core ]; then
+        # shellcheck disable=SC2086 # registry suite names are individual operands
+        for suite in $test_items $test_set; do
+            selected="$selected $ARCH:$suite"
+        done
+    fi
+    code=0
+    ETUDE_PURPOSE=$native_purpose SUITES=$selected sh tools/ci/run.sh "$native_kind" "$log.run" \
+        >> "$log.log" 2>&1 || code=$?
+    native_result=$log.run/$native_kind-$ARCH
+    if [ ! -f "$native_result/done" ] || [ ! -f "$native_result/native" ] ||
+        [ ! -f "$native_result/failed" ]; then
+        echo 'ci: bisect: untestable: native collection left no complete result' >> "$log.log"
+        return 2
+    fi
+    if grep -qx runner "$native_result/failed"; then
+        echo 'ci: bisect: untestable: native history, cleanup or budget did not validate' >> "$log.log"
+        return 2
+    fi
+    case $code in
+        0) [ ! -s "$native_result/failed" ] && return 0 ;;
+        1) [ -s "$native_result/failed" ] && return 1 ;;
+    esac
+    echo 'ci: bisect: untestable: native status disagrees with its verdict' >> "$log.log"
+    return 2
+}
+
 # Run tests/run with ARGS, its output on the log, and judge it by its status
 # and its result: the last line of the run that begins `run: result: `, apart
 # from the `run: result: failed: ` lines, which name the suites that failed
@@ -442,6 +482,16 @@ tested() { # tested COMMIT
     test_end=$(($(date +%s) + limit * 60))
     git checkout -q --detach "$1" > "$log.log" 2>&1 || { mv "$log.log" "$log.untestable.log"; return 2; }
     echo "ci: bisect: testing $(git log -1 --format='%h %s' "$1")"
+    if native_commit; then
+        native_verdict=0
+        native_tested || native_verdict=$?
+        case $native_verdict in
+            0) mv "$log.log" "$log.passed.log" ;;
+            1) mv "$log.log" "$log.failed.log" ;;
+            *) mv "$log.log" "$log.untestable.log" ;;
+        esac
+        return "$native_verdict"
+    fi
     if [ -n "$run_kind" ]; then
         here=$run_kind
         [ "$here" != full ] || grep -q '^ *core|full)' tools/ci/run.sh || here=night

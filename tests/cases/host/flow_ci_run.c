@@ -241,7 +241,11 @@ int flow_ci_run_mock(int argc, char **argv)
 {
     const char *name = strrchr(argv[0], '/');
     name = name ? name + 1 : argv[0];
+    if (!strcmp(name, "native-etude"))
+        return flow_ci_native_mock(argc, argv);
     if (!strcmp(name, "git")) {
+        if (argc >= 3 && !strcmp(argv[1], "diff"))
+            return 0;
         if (argc == 4 && !strcmp(argv[1], "rev-parse") && !strcmp(argv[2], "--short") &&
             !strcmp(argv[3], "HEAD")) {
             puts("0123456");
@@ -295,10 +299,9 @@ static const char lost[] =
 
 static int install(const char *mode)
 {
-    if (!strcmp(mode, "lines"))
-        return fx_copy(path("run.sh"), path("tree/tools/ci/run.sh"));
-    return fx_replace(path("run.sh"), path("tree/tools/ci/run.sh"), "results=lines\n",
-                      "results=history\n") &&
+    const char *replacement = !strcmp(mode, "lines") ? "results=lines\n" : "results=history\n";
+    return fx_replace(path("run.sh"), path("tree/tools/ci/run.sh"), "results=native\n",
+                      replacement) &&
            !fx_same(path("run.sh"), path("tree/tools/ci/run.sh"));
 }
 
@@ -779,5 +782,6 @@ int flow_ci_run(struct fixture *f)
     ok = history_rows(&r) && ok;
     ok = cut_rows(&r) && ok;
     ok = both_rows(&r) && ok;
+    ok = flow_ci_native(f) && ok;
     return ok;
 }
