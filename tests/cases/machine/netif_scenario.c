@@ -1,28 +1,26 @@
 /*
  * netif_scenario.c: the scenario of the netif and addressed cases
- * (../machine.netif.json, ../machine.netif-e1000.json and
- * ../machine.addressed.json): netifprobe and pingtest at the debug shell of
- * a machine whose cards and boot line each case chooses, their reports taken
- * from the console, and what the kernel's boot log and the card's capture
- * say of the interfaces.
+ * (../machine.netif.json and ../machine.addressed.json): netifprobe and
+ * pingtest at the debug shell of a machine whose cards and boot line each
+ * case chooses, their reports taken from the console, and what the kernel's
+ * boot log and the card's capture say of the interfaces.
  *
- * The `probe` cases run netifprobe on a machine with QEMU's address. The
+ * The `probe` case runs netifprobe on a machine with QEMU's address. The
  * probe takes the interface down and brings it up again, and says so at
  * each; the scenario then sends a datagram from the host through the forward
  * of the case's port to the guest's port 9999, and the probe requires the
  * first dropped at the interface and the second received. The `unaddressed`
- * cases boot with `rach2.ip=none`, and the probe configures the machine from
+ * case boots with `rach2.ip=none`, and the probe configures the machine from
  * nothing.
  *
- * The other netif cases test the stack, and run with the RTL8139 family
- * alone. Two cards are two interfaces, each with its own name, station
- * address and address (`twocards`, which also runs `netifprobe second`). The
- * driver table tries the RTL8139 first, so it is eth0 whichever slot it is
- * in, and each card takes the address that `rach2.ifaddr` gives its station
- * address (`twomodels`). A card refused at its bring-up leaves the other one
- * serving (`refused`). pingtest shows in each that the machine reaches the
- * gateway; in `twomodels` the ping leaves by the second interface, which is
- * on the gateway's network.
+ * The other netif cases boot two cards, which are two interfaces, each with its
+ * own name, station address and address (`twocards`, which also runs
+ * `netifprobe second`). The driver table tries the RTL8139 first, so it is eth0
+ * whichever slot it is in, and each card takes the address that `rach2.ifaddr`
+ * gives its station address (`twomodels`). A card refused at its bring-up
+ * leaves the other one serving (`refused`). pingtest shows in each that the
+ * machine reaches the gateway; in `twomodels` the ping leaves by the second
+ * interface, which is on the gateway's network.
  *
  * The `addressed` case gives the machine 10.0.2.77 on the boot line. That is
  * not QEMU's 10.0.2.15, which a kernel that ignored `rach2.ip=` would still
@@ -306,19 +304,14 @@ struct netif_case {
 /**
  * Boot the machine `guest` of the case the identity names to the debug
  * shell and run the case's steps; refuse an identity that is no case of
- * the three families.
+ * the two families.
  */
 int etude_scenario(struct etude_case *c)
 {
     static const struct netif_case cases[] = {
-        {"machine.netif.probe", probe_case},
-        {"machine.netif.unaddressed", unaddressed_case},
-        {"machine.netif.twocards", twocards_case},
-        {"machine.netif.twomodels", twomodels_case},
-        {"machine.netif.refused", refused_case},
-        {"machine.netif-e1000.probe", probe_case},
-        {"machine.netif-e1000.unaddressed", unaddressed_case},
-        {"machine.addressed.pingtest", addressed_case},
+        {"machine.netif.probe", probe_case},       {"machine.netif.unaddressed", unaddressed_case},
+        {"machine.netif.twocards", twocards_case}, {"machine.netif.twomodels", twomodels_case},
+        {"machine.netif.refused", refused_case},   {"machine.addressed.pingtest", addressed_case},
     };
     const struct netif_case *k = NULL;
     struct net_case u;
@@ -330,9 +323,7 @@ int etude_scenario(struct etude_case *c)
             k = &cases[i];
     }
     if (k == NULL) {
-        fprintf(stderr,
-                "netif_scenario: %s is no case of machine.netif, machine.netif-e1000 or "
-                "machine.addressed\n",
+        fprintf(stderr, "netif_scenario: %s is no case of machine.netif or machine.addressed\n",
                 etude_case_id(c));
         return 1;
     }

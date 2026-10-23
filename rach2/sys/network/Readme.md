@@ -137,4 +137,4 @@ Every entry to the kernel takes the big lock ([`../proc/smp.h`](../proc/smp.h)),
 The suites boot QEMU on the RTL8139 unless they say otherwise; [`tests/system/suites.md`](../../../tests/system/suites.md) says what each proves, and [`tests/Readme.md`](../../../tests/Readme.md) how to run one.
 
 * Core tier: `default`, whose `loopprobe` runs UDP and TCP over 127.0.0.1, with `sockettest` and the musl probes `sockflagmusl`, `epollmusl`, `netlinkmusl`, `callsmusl` and `nsmusl`; `socket`, whose `udptest` and `tcptest` reach an echo peer on the host; and `dgram`, `netconsole`, `e1000`, `ssh` and `pools`.
-* Full tier: `addressed`, `ping`, `netif`, `packet`, `raw` and `dhcp`, and the e1000 twins `netif-e1000`, `dhcp-e1000`, `netconsole-e1000` and `ssh-e1000`.
+* Full tier: `addressed`, `ping`, `netif`, `packet`, `raw` and `dhcp`, and the e1000 twins `dhcp-e1000`, `netconsole-e1000` and `ssh-e1000`.

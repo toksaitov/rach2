@@ -54,7 +54,6 @@ fakeapi|qemu,ssh,scp,python3,openssl|full|etude-fakeapi.disk*|1024|x86_64
 dhcp-e1000|qemu|full
 dhcp|qemu|full
 netif|qemu|full
-netif-e1000|qemu|full
 mount|qemu,mformat,mcopy,mdel,mdir|core
 fdlock|qemu|full
 grow|qemu,mke2fs,e2fsck,qemu-img,xorriso|full||512
