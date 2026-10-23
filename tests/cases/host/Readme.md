@@ -36,7 +36,7 @@ A completed check writes one assertion and one `progress checks N` record. The c
 
 ## Fixture placement
 
-The seven extracted kernel fixtures (`chown`, `krffs_open`, `krffs_root_lock`, `krffs_stat`, `pagecache`, `kstack` and `endothers`) are compiled during preparation, then run as native binaries with their original assertions. Their extraction inputs and generated includes enter the fingerprint. The two threaded fixtures use pthreads on POSIX and SRW locks, condition variables and native threads on Windows. `build/tests/host-suite/vfs_unmount` prepares the same unmount fixture for the USB disk case.
+The seven extracted kernel fixtures (`chown`, `krffs_open`, `krffs_root_lock`, `krffs_stat`, `pagecache`, `kstack` and `endothers`) are compiled during preparation, then run as native binaries with their original assertions. Their extraction inputs and generated includes enter the fingerprint. The two threaded fixtures use pthreads on POSIX and SRW locks, condition variables and native threads on Windows. Kernel include directories apply only to quoted includes, so pthreads reads the system scheduler header. `build/tests/host-suite/vfs_unmount` prepares the same unmount fixture for the USB disk case.
 
 The GNU helper supplies the POSIX environment of filesystem, compiler, build, deployment and worker-loop checks. Their C controllers create fixtures and judge results. A product written in shell or Python runs in its own language when its behavior is the subject of the check. The old test driver does not run. TinyCC and Doom checks use binaries prepared for the tested architecture.
 

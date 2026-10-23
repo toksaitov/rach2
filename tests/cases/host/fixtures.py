@@ -43,8 +43,10 @@ def recipe(name, base, common):
     flags = [*platform_flags(common), '-Wall', '-Wextra', '-Werror', '-I', str(work)]
     source = 'tests/host/fixtures/' + name + '.c'
     deps = []
+    # Kernel headers must not replace system headers included by pthreads.
     kernel = ['-DRACH2_HOSTTEST', '-ffreestanding', '-Wno-pointer-to-int-cast',
-              '-Wno-int-to-pointer-cast', '-I', SYS[:-1], '-I', SYS + 'lib', '-I', SYS + 'proc']
+              '-Wno-int-to-pointer-cast', '-iquote', SYS[:-1], '-iquote', SYS + 'lib',
+              '-iquote', SYS + 'proc']
     if name == 'chown':
         source = 'tests/host/fixtures/chown_plan.c'
         origins += extract(work / 'chown_plan.inc', [
