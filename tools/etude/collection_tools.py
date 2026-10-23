@@ -177,13 +177,22 @@ def image_command(job, tool, args):
 
 
 def native_goal(goal):
-    """Select host programs that must be compiled on the Windows endpoint."""
+    """Select native executables and inventories, retaining portable guest data."""
     parts = Path(goal).parts
-    return (goal.startswith("build/tools/") or
-            (len(parts) == 5 and parts[:4] == ("build", "tests", "cases", "machine")) or
-            goal.startswith("build/tests/system/") and len(parts) == 4 or
-            goal.startswith("build/tests/host/") and len(parts) == 4 or
-            goal.startswith("build/krffs/"))
+    if parts[:2] == ('build', 'x86_64'):
+        parts = ('build', *parts[2:])
+    if parts[:4] in (('build', 'tests', 'cases', 'machine'),
+                     ('build', 'tests', 'cases', 'host')):
+        return len(parts) == 5
+    if parts[:3] == ('build', 'tests', 'host-suite'):
+        return (len(parts) == 4 and (parts[3].endswith('.inventory.json') or
+                                    parts[3] == 'vfs_unmount') or
+                len(parts) == 5 and parts[3] == 'scripts' or
+                parts[3:] == ('tests', 'usbstamp_hosttest'))
+    if parts[:3] == ('build', 'tests', 'host'):
+        return len(parts) == 4 and parts[3] not in ('exfat_writer', 'tooling_machine')
+    return (parts[:2] in (('build', 'tools'), ('build', 'krffs')) or
+            len(parts) == 4 and parts[:3] == ('build', 'tests', 'system'))
 
 
 def workspace(root, arch):
@@ -316,7 +325,8 @@ export PATH=/root/bin:$PATH
     subprocess.check_call(["tar", "-xf", str(products), "-C", str(root)])
     if native_goals:
         return subprocess.call(["make", "-C", str(root), "--no-print-directory", "-j1",
-                                "ARCH=" + arch, "HOSTCC=/ucrt64/bin/gcc", *native_goals])
+                                "ARCH=" + arch, "HOSTCC=/ucrt64/bin/gcc", "CC=/ucrt64/bin/gcc",
+                                "HOST_TEST_PLATFORM=windows", *native_goals])
     return 0
 
 

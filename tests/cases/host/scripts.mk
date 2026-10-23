@@ -33,3 +33,16 @@ build/x86_64/rach2/kernel build/x86_64/images/gnu-test.disk \
 build/x86_64/rach2-recovery/kernel build/x86_64/images/etude-image.krffs: | prepare-host-products-x86_64
 	@test -s $@
 endif
+
+# These native binaries are preparation goals of host.host.scripts themselves.
+HOST_KERNEL_FIXTURES = chown krffs_open krffs_root_lock krffs_stat pagecache kstack endothers
+HOST_KERNEL_FIXTURE_INPUTS = tests/cases/host/fixtures.py tests/cases/host/routing.py \
+    tests/host/fixtures/extract.py $(wildcard tests/host/fixtures/*.c tests/host/fixtures/*.h) \
+    tests/host/pagecache_hosttest.c rach2/sys/fs/vfs.c rach2/sys/fs/vfs.h \
+    rach2/sys/syscall_fs.c rach2/sys/syscall_proc.c rach2/sys/syscall_internal.h \
+    rach2/sys/proc/process.h rach2/sys/arch/i686/cpu.h rach2/sys/arch/i686/uabi.h \
+    $(wildcard rach2/sys/lib/*.h rach2/sys/fs/*.h rach2/sys/proc/*.h)
+$(addprefix build/tests/host-suite/scripts/,$(HOST_KERNEL_FIXTURES)): \
+    build/tests/host-suite/scripts/%: $(HOST_KERNEL_FIXTURE_INPUTS)
+	@mkdir -p $(@D)
+	CC="$(HOSTCC)" python3 -B tests/cases/host/fixtures.py $* $@

@@ -5,6 +5,7 @@ from pathlib import Path
 import shlex
 import subprocess
 import sys
+import routing
 
 MODULE_PATH = Path('tests/host/fixtures/extract.py')
 SPEC = importlib.util.spec_from_file_location('kernel_extract', MODULE_PATH)
@@ -28,7 +29,7 @@ def extract(out, groups):
 
 def platform_flags(common):
     """Use native Windows APIs without requesting unavailable sanitizer runtimes."""
-    if os.name != 'nt':
+    if not routing.windows_host():
         return list(common)
     flags = [flag for flag in common if not flag.startswith(('-fsanitize=', '-fno-sanitize-'))]
     return [*flags, '-D_WIN32_WINNT=0x0A00', '-static']
@@ -110,7 +111,7 @@ def recipe(name, base, common):
         raise ValueError('unknown extracted kernel fixture: ' + name)
     if name in ('krffs_open', 'krffs_root_lock'):
         deps += ['tests/host/fixtures/krffs_open_threads.c']
-        if os.name != 'nt':
+        if not routing.windows_host():
             flags += ['-pthread']
     program = str(base / name)
     sources = [source, *deps]

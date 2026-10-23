@@ -65,6 +65,7 @@ mkdir -p "$TREE/build/tests/host" "$TREE/build/tests/host-suite/tools"
 cp "$REPO/build/tests/host/exfat_writer" "$TREE/build/tests/host/"
 cp -R "$REPO/build/tests/host-suite/tools/exfat_external" "$TREE/build/tests/host-suite/tools/"
 cd "$TREE"
+export HOST_TEST_PLATFORM=posix
 export HOST_TEST_PREPARED_TOOLS=$TOOLS
 export CC="$CC --sysroot=$GNU_OUT/root -B$SAN/compiler/ -L$SAN/root/usr/lib"
 for arch in i686 x86_64; do

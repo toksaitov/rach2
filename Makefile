@@ -590,11 +590,12 @@ build/x86_64/tests/style/abi.json: $(LIBC_STAMP)
 
 build/tests/host-suite/tests/usbstamp_hosttest: tests/cases/host/prepare.py \
     tests/host/usbstamp_hosttest.c host-inventory-force
-	python3 -B tests/cases/host/prepare.py --only usbstamp tests build/tests/host-suite/tests.inventory.json
+	CC="$(HOSTCC)" python3 -B tests/cases/host/prepare.py --only usbstamp tests build/tests/host-suite/tests.inventory.json
 
-build/tests/host-suite/vfs_unmount: tests/cases/host/fixtures.py tests/host/fixtures/extract.py \
+build/tests/host-suite/vfs_unmount: tests/cases/host/fixtures.py tests/cases/host/routing.py \
+    tests/host/fixtures/extract.py \
     tests/system/fixtures/vfs_unmount.c rach2/sys/fs/vfs.c
-	python3 -B tests/cases/host/fixtures.py vfs_unmount $@
+	CC="$(HOSTCC)" python3 -B tests/cases/host/fixtures.py vfs_unmount $@
 
 build/tests/host-suite/scripts.inventory.json: build/tests/system/fakeapi_test
 
@@ -603,11 +604,11 @@ host-inventory-force:
 build/tests/host-suite/%.inventory.json: tests/cases/host/prepare.py tests/cases/host/fixtures.py tests/cases/host/windows.py tests/cases/host/tools.py tests/cases/host/routing.py \
     tests/cases/host/host.list tests/cases/host/adapters.json \
     tests/cases/host.host.json host-inventory-force
-	python3 -B tests/cases/host/prepare.py --arch $(ARCH) $* $@
+	CC="$(HOSTCC)" python3 -B tests/cases/host/prepare.py --arch $(ARCH) $* $@
 build/x86_64/tests/host-suite/%.inventory.json: tests/cases/host/prepare.py tests/cases/host/fixtures.py tests/cases/host/windows.py tests/cases/host/tools.py tests/cases/host/routing.py \
     tests/cases/host/host.list tests/cases/host/adapters.json \
     tests/cases/host.host.json host-inventory-force
-	python3 -B tests/cases/host/prepare.py --arch x86_64 $* $@
+	CC="$(HOSTCC)" python3 -B tests/cases/host/prepare.py --arch x86_64 $* $@
 
 # The programs of etude's host cases (tests/cases/host), which the cases'
 # preparation names, one for both architectures.

@@ -12,8 +12,12 @@
 #include "proc/sched.c"
 
 extern int printf(const char *format, ...);
+#ifndef _WIN32
 extern int dprintf(int fd, const char *format, ...);
-extern int vsnprintf(char *out, unsigned long size, const char *format, va_list args);
+#else
+extern int _write(int fd, const void *bytes, unsigned size);
+#endif
+extern int vsnprintf(char *out, size_t size, const char *format, va_list args);
 extern int strcmp(const char *a, const char *b);
 extern char *strstr(const char *text, const char *part);
 
@@ -31,12 +35,28 @@ static unsigned records;
 static char record[512];
 static int failures;
 
-#define CHECK(condition, detail)                               \
-    do {                                                       \
-        if (!(condition)) {                                    \
-            dprintf(2, "usbstamp-test: failed: %s\n", detail); \
-            failures++;                                        \
-        }                                                      \
+/** Preserve the diagnostic stream with the native CRT on each host. */
+static void failed_check(const char *detail)
+{
+#ifdef _WIN32
+    static const char prefix[] = "usbstamp-test: failed: ";
+    unsigned size = 0;
+    while (detail[size])
+        size++;
+    _write(2, prefix, sizeof(prefix) - 1);
+    _write(2, detail, size);
+    _write(2, "\n", 1);
+#else
+    dprintf(2, "usbstamp-test: failed: %s\n", detail);
+#endif
+}
+
+#define CHECK(condition, detail)  \
+    do {                          \
+        if (!(condition)) {       \
+            failed_check(detail); \
+            failures++;           \
+        }                         \
     } while (0)
 
 /** Substitute an explicit clock; the test does not wait. */

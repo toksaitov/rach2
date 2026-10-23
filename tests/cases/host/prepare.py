@@ -74,7 +74,7 @@ def checks(group, arch, base):
                                   'host-first:' not in p.read_text(), p.name))
         for path in paths:
             identity = path.stem.removesuffix('_hosttest')
-            if identity == 'etude_platform' and os.name == 'nt':
+            if identity == 'etude_platform' and routing.windows_host():
                 yield windows.platform_entry(base, entry)
                 continue
             deps = metadata(path, 'host-deps', arch)
@@ -83,10 +83,10 @@ def checks(group, arch, base):
             out = str(base / path.stem)
             item = entry(identity, path.stem, out, [str(path), *deps],
                          alone='host-alone:' in path.read_text())
-            item['command'] = [*COMMON, '-DRACH2_HOSTTEST', '-Wno-empty-body', '-ffreestanding',
+            item['command'] = [*fixtures.platform_flags(COMMON), '-DRACH2_HOSTTEST', '-Wno-empty-body', '-ffreestanding',
                                *[w for d in INCLUDES for w in ('-I', d)], *flags,
                                '-o', out, str(path), *deps]
-            if os.name == 'nt' and identity in routing.BOOTS:
+            if routing.windows_host() and identity in routing.BOOTS:
                 item = windows.boot_entry(item, flags)
             item['tools'] = required_tools
             yield item
@@ -106,7 +106,7 @@ def checks(group, arch, base):
             item = entry(name, name + ' corpus replayed', out, [str(source), *deps], map(str, corpus))
             if not corpus:
                 raise ValueError(f'{name}: the fuzz harness has no corpus')
-            item['command'] = [*COMMON, '-DRACH2_HOSTTEST', '-DFIXTURE_NO_MAIN', '-DFUZZ_REPLAY',
+            item['command'] = [*fixtures.platform_flags(COMMON), '-DRACH2_HOSTTEST', '-DFIXTURE_NO_MAIN', '-DFUZZ_REPLAY',
                                '-Wno-empty-body', '-ffreestanding',
                                *[w for d in INCLUDES for w in ('-I', d)],
                                *metadata(source, 'fuzz-cflags', arch), '-o', out, str(source), *deps]
@@ -220,7 +220,7 @@ def prepare(args):
             item.pop('data', None)
             inventory.append(item)
             continue
-        tool_inputs = tools.prepare(item.pop('tools', []), compiler, COMMON, compiler_inputs,
+        tool_inputs = tools.prepare(item.pop('tools', []), compiler, fixtures.platform_flags(COMMON), compiler_inputs,
                                    digest, args.print_commands)
         companions = windows.companions(compiler, base, compiler_inputs, digest,
                                         args.print_commands) if windows_fixture else []
@@ -258,7 +258,7 @@ def prepare(args):
                 if path.suffix != '.c':
                     continue
                 # The Windows file adapter's legacy shell lookup is not called by native checks.
-                if os.name == 'nt' and path == Path('tools/etude/win/files.c'):
+                if routing.windows_host() and path == Path('tools/etude/win/files.c'):
                     continue
                 text = path.read_text(errors='replace')
                 if (re.search(r'\b(?:system|popen)\s*\(', text) or
