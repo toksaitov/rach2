@@ -687,6 +687,14 @@ build/tests/host/exfat_writer: tests/host/mkexfat_external.sh | $(ETUDETOOLING)
 	@mkdir -p $(@D)
 	sh tests/host/mkexfat_external.sh -p $@
 
+# The tooling machine itself, for the host suite's scripted checks that run a
+# program the host lacks in it (tests/system/tooling_ready.sh): the scripts
+# case's preparation names it, and it runs every time for the same reason.
+.PHONY: build/tests/host/tooling_machine
+build/tests/host/tooling_machine: tests/system/tooling_ready.sh | $(ETUDETOOLING)
+	@mkdir -p $(@D)
+	sh tests/system/tooling_ready.sh $@
+
 # etude-step (tools/etude/step/etude_step.c), which runs each stamped step of
 # the build through the host's store of step outputs.
 $(ETUDESTEP): $(ETUDE_STEP_SRC) utils/sha256.h

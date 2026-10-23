@@ -13,10 +13,9 @@
 #
 # mkexfat_external.sh -p FILE readies the writer, as the host case's
 # preparation does through `make build/tests/host/exfat_writer`: on a host
-# without hdiutil and newfs_exfat it makes the tooling machine with
-# `etude-tooling prepare` when it is not made, which downloads and provisions
-# it once. FILE then has one line, `hdiutil` or etude-tooling's
-# `etude-tooling: result: made KEY DISK`, and is written only when that line
+# without hdiutil and newfs_exfat it makes the tooling machine when it is not
+# made, and FILE has its `made` line, as tests/system/tooling_ready.sh writes
+# it; on macOS FILE has `hdiutil`. FILE is written only when its line
 # changes, so that the preparation's record of it stays the same. Exits 0, 1
 # when the machine cannot be made, and 3 when the host has neither hdiutil
 # and newfs_exfat nor etude-tooling.
@@ -47,14 +46,9 @@ else
 fi
 if [ "${1:-}" = -p ]; then
     OUT=${2:?file}
-    if [ "$host" = mac ]; then
-        line=hdiutil
-    else
-        "$TOOLING" check >/dev/null 2>&1 || "$TOOLING" prepare >&2 || exit 1
-        line=$("$TOOLING" check 2>/dev/null) || exit 1
-    fi
-    [ "$(cat "$OUT" 2>/dev/null)" = "$line" ] && exit 0
-    printf '%s\n' "$line" > "$OUT.tmp" && mv "$OUT.tmp" "$OUT" || exit 1
+    [ "$host" = mac ] || exec sh tests/system/tooling_ready.sh "$OUT"
+    [ "$(cat "$OUT" 2>/dev/null)" = hdiutil ] && exit 0
+    echo hdiutil > "$OUT.tmp" && mv "$OUT.tmp" "$OUT" || exit 1
     exit 0
 fi
 DIR=${1:?directory}

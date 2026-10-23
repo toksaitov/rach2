@@ -388,7 +388,8 @@
       "prepare": [
         {"name": "host", "node": "tests/cases/host/host", "per_architecture": false},
         {"name": "etude-host", "node": "tools/etude/etude-host", "per_architecture": false},
-        {"name": "stageimage.krffs", "node": "krffs/stageimage.krffs", "per_architecture": false}
+        {"name": "stageimage.krffs", "node": "krffs/stageimage.krffs", "per_architecture": false},
+        {"name": "tooling-machine", "node": "tests/host/tooling_machine", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}

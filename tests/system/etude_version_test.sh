@@ -31,8 +31,8 @@
 #
 # The busybox row runs on the host when it has BusyBox, and otherwise in
 # etude's tooling machine (tests/system/tooling.sh), whose Ubuntu has it: the
-# job runs this test with --busybox against the private copy. The row is not
-# run when neither has BusyBox.
+# job runs this test with --busybox against the private copy. The row fails
+# when neither has BusyBox; the host suite's preparation makes the machine.
 #
 # --busybox runs the busybox row alone, and exits 3 when the host has no
 # BusyBox.
@@ -164,7 +164,7 @@ if [ -n "$busybox" ]; then
     done
 fi
 
-# Where the busybox row ran, and why it did not.
+# Where the busybox row ran, and why it cannot run.
 ranbusybox=
 nobusybox=
 tooling=
@@ -352,7 +352,10 @@ row()
                 shell_row "$work/busybox/sh" "$work/busybox" || return 1
                 ranbusybox='on this host'
             elif [ -n "$tooling" ]; then
-                busybox_elsewhere
+                busybox_elsewhere || return 1
+            else
+                why "$nobusybox"
+                return 1
             fi ;;
         term)
             state
@@ -500,8 +503,8 @@ busybox_elsewhere()
     tooling run -m 1024 -i "$work/job.tar" "$work/job.sh" > "$work/out" 2> "$work/err" || rc=$?
     case $rc in
         0) ranbusybox='in the tooling machine' ;;
-        3) nobusybox='no busybox on this host or in the tooling machine' ;;
-        126) nobusybox='no busybox on this host, and no made tooling machine' ;;
+        3) why 'no busybox on this host or in the tooling machine'; return 1 ;;
+        126) why 'no busybox on this host, and no made tooling machine'; return 1 ;;
         *) why "the tooling machine's job ended with status $rc"; return 1 ;;
     esac
 }
@@ -544,5 +547,4 @@ fi
 rows >&2 || exit 1
 echo "etude-version-test: shells: $shells${ranbusybox:+ busybox}"
 [ -z "$ranbusybox" ] || echo "etude-version-test: busybox: $ranbusybox"
-[ -z "$nobusybox" ] || echo "etude-version-test: not run: busybox: $nobusybox"
 echo 'etude-version-test: result: pass: 15 rows'
