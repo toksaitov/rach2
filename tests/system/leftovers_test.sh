@@ -211,9 +211,9 @@ EOF
     check dry || failed=1
     (setup) > "$work/out" 2>&1 || { cat "$work/out"; echo 'leftovers-test: setup failed'; return 1; }
     if [ -d /proc/self/fd ]; then
-        (cd "$f/$run.500.machine.f.r0" && exec sleep 300) &
+        (cd "$f/$run.500.machine.f.r0" && exec sleep 86400) &
         busy=$!
-        (cd "$h/busy" && exec sleep 300) &
+        (cd "$h/busy" && exec sleep 86400) &
         busy="$busy $!"
         # shellcheck disable=SC2086 # busy is a list of process ids
         set -- $busy
