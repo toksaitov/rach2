@@ -11,6 +11,7 @@
 #include <pwd.h>
 #include <grp.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,6 +26,24 @@ static volatile sig_atomic_t stopped;
 static struct fixture *owner;
 static char *external[256];
 static size_t nexternal;
+
+/* Never use a truncated pathname for fixture files or cleanup. */
+static int path_format(char *path, size_t size, const char *format, ...)
+{
+    va_list args;
+    int n;
+    va_start(args, format);
+    n = vsnprintf(path, size, format, args);
+    va_end(args);
+    if (n >= 0 && (size_t)n < size)
+        return 1;
+    if (size)
+        path[0] = 0;
+    if (n >= 0)
+        errno = ENAMETOOLONG;
+    return 0;
+}
+
 void fx_reap_groups(struct fixture *f)
 {
     sigset_t block, previous;
@@ -65,8 +84,8 @@ static void children_cleanup(void)
     for (i = 0; i < nexternal; i++) {
         if (owner && (stopped || owner->failed)) {
             char saved[4096];
-            snprintf(saved, sizeof(saved), "%s/external-%u", owner->work, (unsigned)i);
-            if (!fx_tree(external[i], saved))
+            if (!path_format(saved, sizeof(saved), "%s/external-%u", owner->work, (unsigned)i) ||
+                !fx_tree(external[i], saved))
                 fprintf(stderr, "fixture: extra evidence could not be copied: %s\n", external[i]);
         }
         fx_remove(external[i]);
@@ -243,8 +262,8 @@ int fx_tree(const char *a, const char *b)
     while ((e = readdir(d))) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, ".."))
             continue;
-        if (snprintf(from, sizeof(from), "%s/%s", a, e->d_name) >= (int)sizeof(from) ||
-            snprintf(to, sizeof(to), "%s/%s", b, e->d_name) >= (int)sizeof(to) ||
+        if (!path_format(from, sizeof(from), "%s/%s", a, e->d_name) ||
+            !path_format(to, sizeof(to), "%s/%s", b, e->d_name) ||
             !fx_tree(from, to))
             ok = 0;
     }
@@ -270,7 +289,7 @@ int fx_remove(const char *p)
     while ((e = readdir(d))) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, ".."))
             continue;
-        if (snprintf(q, sizeof(q), "%s/%s", p, e->d_name) >= (int)sizeof(q) || !fx_remove(q))
+        if (!path_format(q, sizeof(q), "%s/%s", p, e->d_name) || !fx_remove(q))
             ok = 0;
     }
     closedir(d);
@@ -396,10 +415,11 @@ int fx_start_io(struct fixture *f, struct fx_child *p, const char *const args[],
     if (ngroups == sizeof(groups) / sizeof(groups[0]))
         return 0;
     memset(p, 0, sizeof(*p));
-    snprintf(p->out, sizeof(p->out), "%s/command.%u.out", f->work, ++f->command);
-    snprintf(p->err, sizeof(p->err), "%s/command.%u.err", f->work, f->command);
-    if (output)
-        snprintf(p->out, sizeof(p->out), "%s", output);
+    ++f->command;
+    if (!(output ? path_format(p->out, sizeof(p->out), "%s", output)
+                 : path_format(p->out, sizeof(p->out), "%s/command.%u.out", f->work, f->command)) ||
+        !path_format(p->err, sizeof(p->err), "%s/command.%u.err", f->work, f->command))
+        return 0;
     child = fork();
     if (child < 0)
         return 0;
@@ -504,8 +524,8 @@ int fx_sh(struct fixture *f, const char *command)
 int fx_mock(struct fixture *f, const char *name)
 {
     char path[4096];
-    snprintf(path, sizeof(path), "%s/%s", f->bin, name);
-    return !link(f->self, path) || fx_copy(f->self, path);
+    return path_format(path, sizeof(path), "%s/%s", f->bin, name) &&
+           (!link(f->self, path) || fx_copy(f->self, path));
 }
 int fx_until(struct fx_child *p, const char *path)
 {
@@ -549,11 +569,11 @@ int fx_init(struct fixture *f, const char *root, const char *name, const char *s
     }
     if (!realpath(self, f->self))
         return 0;
-    snprintf(f->root, sizeof(f->root), "%s", root);
-    snprintf(f->tree, sizeof(f->tree), "%s/tree", root);
-    snprintf(f->work, sizeof(f->work), "%s/%s", root, name);
-    snprintf(f->bin, sizeof(f->bin), "%s/bin", f->work);
-    return fx_remove(f->work) && fx_mkdir(f->bin);
+    return path_format(f->root, sizeof(f->root), "%s", root) &&
+           path_format(f->tree, sizeof(f->tree), "%s/tree", root) &&
+           path_format(f->work, sizeof(f->work), "%s/%s", root, name) &&
+           path_format(f->bin, sizeof(f->bin), "%s/bin", f->work) &&
+           fx_remove(f->work) && fx_mkdir(f->bin);
 }
 void fx_destroy(struct fixture *f)
 {
