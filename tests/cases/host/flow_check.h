@@ -19,4 +19,6 @@ int flow_worker(struct fixture *f);
 int flow_worker_mock(int argc, char **argv);
 int flow_leftovers(struct fixture *f);
 int flow_tidy(struct fixture *f);
+int flow_version(struct fixture *f);
+int flow_version_mock(int argc, char **argv);
 #endif
