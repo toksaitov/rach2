@@ -1799,6 +1799,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
 static int proc_is_synthetic(void)
 {
     struct vfs_ref ref;
+    const struct vpath *vp;
     int yes;
 
     if (!current_proc->fs->root_mnt) {
@@ -1807,7 +1808,8 @@ static int proc_is_synthetic(void)
     if (vfs_resolve(NULL, "proc", 0, &ref, NULL, 0) != 0) {
         return 0;
     }
-    yes = vfs_synth_vpath(ref.mnt, ref.node) != NULL;
+    vp = vfs_synth_vpath(ref.mnt, ref.node);
+    yes = vp && vp->kind == VNODE_PROC_DIR;
     vfs_ref_release(&ref);
     return yes;
 }

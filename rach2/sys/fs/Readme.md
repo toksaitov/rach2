@@ -55,7 +55,7 @@ A process is privileged when `proc_privileged` is true of it; [the process subsy
 
 `cred_kill_setid` on the KRFFS root and `vfs_kill_setid` elsewhere take the set-id bits from a file that is not a directory, setuid always and setgid when group execute is set, after an unprivileged write that moved bytes or truncation, and after any `chown` that changes an owner. The sticky rule is `cred_sticky_ok` on the KRFFS root and `cred_remove_ref` elsewhere, each after the write check on the parent. Each call's page gives the rules it applies.
 
-A new node takes the caller's effective ids and the mode under the umask. On the KRFFS root, ext2 and tmpfs a set-group-ID directory gives a new node its group, and a new directory the bit; a KRFFS volume gives the caller's group even there (`maker_gid` in `krffsmount.c`); FAT32 and exFAT report the mount's ids and mask. Each type keeps its own times and is given new ones through `setattr`; `utimensat` leaves the KRFFS root directory's times alone and succeeds. Only tmpfs advances a file's access time on a read.
+A new node takes the caller's effective ids and the mode under the umask. On KRFFS, ext2 and tmpfs a set-group-ID directory gives a new node its group, and a new directory the bit; FAT32 and exFAT report the mount's ids and mask. Each type keeps its own times and is given new ones through `setattr`; `utimensat` leaves the KRFFS root directory's times alone and succeeds. Only tmpfs advances a file's access time on a read.
 
 ### The lifetime of a file of the KRFFS root
 
