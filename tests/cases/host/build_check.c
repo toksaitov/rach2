@@ -50,6 +50,10 @@ int main(int argc, char **argv)
             ok = build_prereq(&f);
         else if (!strcmp(argv[1], "together"))
             ok = build_together(&f);
+        else if (!strcmp(argv[1], "host_suite"))
+            ok = build_suite(&f);
+        else if (!strcmp(argv[1], "case_select"))
+            ok = build_runner(&f, argv[1]);
         else {
             fprintf(stderr, "host-build-check: unknown check: %s\n", argv[1]);
             ok = 0;

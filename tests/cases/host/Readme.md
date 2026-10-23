@@ -29,3 +29,13 @@ The seven extracted kernel fixtures (`chown`, `krffs_open`, `krffs_root_lock`, `
 * Existing C tests that use fork, pipes, signals or POSIX-specific filesystems need shared platform adapters. A native Windows process fixture must preserve each assertion, including process cleanup and interruption checks.
 
 `host.sh` remains as the legacy driver and build-command interface while its callers migrate. The prepared native path does not use it. `etude_hostdriver_hosttest.c` checks the native driver's execution and immutable input boundary. The legacy scheduling and interruption regressions remain declared in `host.list` until their adapters preserve those checks.
+
+## Product and driver regressions
+
+`host-build-check` is a prepared C controller for the compiler, build and runner assertions of `host.list`. The controller creates fixtures, launches product programs, reads results and checks them through `fixture.c`. Command substitutes are native C entries of the same executable. The products retain their own command language: a commit hook runs by its executable entry, a port recipe runs in its normal shell, and make runs its own recipes. No old test shell driver runs.
+
+The compiler checks retain the assembler instruction and byte comparisons, the linker's segment, section, symbol and PC-relative address checks, and both Doom ABI runs. The build checks retain all launch-script settings, commit-message inputs, prerequisite reports and privilege cases, malformed recipes, firmware probes, interrupted port resumes, make job limits and parallel maker requests on both architectures.
+
+`case_select` invokes the native collection entry on private manifests, preserving order, architecture restrictions, agent row choices and refusals before build state exists. Its accepted rows use the public dry selection entry because native execution does not build artifacts. `host_suite` invokes the prepared host driver over native probes, including real ASan, UBSan and, on Linux, LSan faults. The probes are compiled during preparation as `host-suite-probe`; the controller never compiles them. It checks every result, assertion and progress count, retained evidence, scratch isolation, exclusive scheduling, duplicate refusal and cleanup after a signal.
+
+The products directory defaults to `/host-products`, or `HOST_PRODUCTS` for a native fixture run. It provides `etude`, `host`, `host-suite-probe`, `doom_libc-i686`, `doom_libc-x86_64`, `tcc/i386-tcc` and `tcc/x86_64-tcc`. The fallback `ROOT/prepared` supports a staged native fixture. The GNU helper must provide working sanitizer runtimes before it can run the sanitizer probes; a missing runtime is a failed preparation or execution, never a skipped check.

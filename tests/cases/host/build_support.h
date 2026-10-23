@@ -23,6 +23,12 @@ static inline const char *bp(const char *base, const char *name)
         abort();
     return out;
 }
+static inline const char *product_path(struct fixture *f, const char *name)
+{
+    const char *base = getenv("HOST_PRODUCTS");
+    const char *path = bp(base ? base : "/host-products", name);
+    return fx_exists(path) ? path : bp(bp(f->root, "prepared"), name);
+}
 static inline int source_copy(struct fixture *f, const char *name)
 {
     return fx_copy(bp(f->tree, name), bp(f->work, name));
@@ -54,6 +60,7 @@ int build_ldscript(struct fixture *f);
 int build_doom(struct fixture *f);
 int build_prereq(struct fixture *f);
 int build_together(struct fixture *f);
+int build_suite(struct fixture *f);
 int build_runner(struct fixture *f, const char *id);
 int build_job_process(const char *name);
 int build_prereq_mock(int argc, char **argv);

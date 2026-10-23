@@ -344,6 +344,21 @@ static void print_log(const char *path, int failed)
     fclose(f);
 }
 
+static int empty_directory(const char *path)
+{
+    DIR *d = opendir(path);
+    struct dirent *e;
+    int empty = d != NULL;
+    while (d && (e = readdir(d)))
+        if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..")) {
+            empty = 0;
+            break;
+        }
+    if (d)
+        closedir(d);
+    return empty;
+}
+
 static void finished(struct host *h, struct check *c, const char *error)
 {
     int ok = error == NULL;
@@ -355,7 +370,7 @@ static void finished(struct host *h, struct check *c, const char *error)
     if (c->log[0])
         print_log(c->log, !ok);
     if (c->scratch[0]) {
-        if ((ok || stopped) && !h->uncertain)
+        if ((ok || stopped || empty_directory(c->scratch)) && !h->uncertain)
             remove_tree(c->scratch);
         else
             printf("    scratch kept: %s\n", c->scratch);

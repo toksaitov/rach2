@@ -161,7 +161,7 @@ int build_job_process(const char *name)
 
 static int jobs_tree(struct fixture *f)
 {
-    char text[16384];
+    char text[32768];
     if (!fx_mkdir(bp(f->work, "src")) || !fx_mock(f, "getconf") || !fx_mock(f, "nproc") ||
         !fx_copy(f->self, bp(f->work, "src/bootstrap")))
         return 0;

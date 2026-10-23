@@ -4,7 +4,7 @@
 
 static const char *tcc(struct fixture *f, int bits)
 {
-    return bp(f->root, bits == 32 ? "prepared/tcc/i386-tcc" : "prepared/tcc/x86_64-tcc");
+    return product_path(f, bits == 32 ? "tcc/i386-tcc" : "tcc/x86_64-tcc");
 }
 static int command(struct fixture *f, const char *const args[])
 {
@@ -334,8 +334,8 @@ int build_doom(struct fixture *f)
     const char *arches[] = {"i686", "x86_64"};
     for (size_t i = 0; i < 2; i++) {
         char relative[128];
-        snprintf(relative, sizeof(relative), "prepared/doom_libc-%s", arches[i]);
-        const char *a[] = {bp(f->root, relative), bp(f->work, "doom.data"), NULL};
+        snprintf(relative, sizeof(relative), "doom_libc-%s", arches[i]);
+        const char *a[] = {product_path(f, relative), bp(f->work, "doom.data"), NULL};
         fx_remove(a[1]);
         int status = fx_run(f, a, f->work, NULL, NULL);
         fx_check(f, status == 0 && f->out && strstr(f->out, format), arches[i]);
