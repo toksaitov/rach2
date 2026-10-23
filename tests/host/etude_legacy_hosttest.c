@@ -384,6 +384,35 @@ static void test_machine(void)
     show(&r, before);
 }
 
+/** A fixed x86_64 helper is prepared beside the selected i686 artifacts. */
+static void test_helper_architecture(void)
+{
+    char *goals[] = {"build/images/a.img", "build/x86_64/images/a.img", NULL};
+    char tree[PATH_LEN], path[PATH_LEN], calls[4096], record[8192];
+    struct etude_legacy_opts o;
+    struct outcome r;
+    int before = fails;
+
+    make_tree("helper-architecture", tree, sizeof(tree));
+    opts_for(&o, tree, "helper-architecture", goals);
+    run(&o, &r);
+    CHECK(r.status == 0, "helper architecture: prepared");
+    read_text(in(path, sizeof(path), tree, "calls"), calls, sizeof(calls));
+    CHECK(has_line(calls, "build/images/a.img i686 build/rach2/kernel C"),
+          "helper architecture: selected artifact uses i686");
+    CHECK(has_line(calls, "build/x86_64/images/a.img x86_64 build/x86_64/rach2/kernel C"),
+          "helper architecture: fixed helper artifact uses x86_64");
+    CHECK(line_at(calls, "components x86_64 build/x86_64/rach2/kernel C") >
+              line_at(calls, "build/images/a.img i686 build/rach2/kernel C"),
+          "helper architecture: helper components follow selected artifacts");
+    read_text(o.record, record, sizeof(record));
+    CHECK(has_line(record, "arch i686") && has_line(record, "arch x86_64") &&
+              strstr(record, " build/images/a.img\n") &&
+              strstr(record, " build/x86_64/images/a.img\n"),
+          "helper architecture: record includes both architectures and artifacts");
+    show(&r, before);
+}
+
 /**
  * Prepare `goals` of tree `tree` as row `row`, with `arch` and `kernel`,
  * and require a refusal with `why` and nothing built or left.
@@ -752,6 +781,7 @@ int main(int argc, char **argv)
     test_alone();
     test_again();
     test_machine();
+    test_helper_architecture();
     test_refused();
     test_failed();
     test_missing();

@@ -276,6 +276,12 @@ static int admit_machine(struct prep *p)
     } else if (strcmp(arch, "i686") == 0 || strcmp(arch, "x86_64") == 0) {
         p->t[0].arch = arch;
         p->nt = 1;
+        for (i = 0; strcmp(arch, "i686") == 0 && i < o->ngoals; i++)
+            if (strncmp(o->goals[i], "build/x86_64/", 13) == 0) {
+                p->t[1].arch = "x86_64";
+                p->nt = 2;
+                break;
+            }
     } else {
         return refuse(p, "%s: the architectures are i686 and x86_64", arch);
     }
@@ -298,9 +304,8 @@ static int admit_machine(struct prep *p)
     return 0;
 }
 
-/** Say whether goal `goal` is built for target `t`: in a preparation of both
- * architectures, x86_64's goals are those in its build tree, build/x86_64/,
- * and i686's are the rest; in a preparation of one, every goal is its. */
+/** Assign fixed x86_64 goals to their build architecture. Shared goals stay
+ * with the requested architecture, or i686 when both are prepared. */
 static int goal_of(const struct prep *p, const struct target *t, const char *goal)
 {
     int x86_64 = strncmp(goal, "build/x86_64/", 13) == 0;

@@ -54,7 +54,9 @@ struct etude_legacy_opts {
  * architectures makes the components, the kernel and the goals of i686 and
  * then those of x86_64, each with its own ARCH, the goals under
  * `build/x86_64/` being x86_64's and the others i686's, and writes one
- * record of both. The work directory is
+ * record of both. An i686 request that includes a fixed `build/x86_64/`
+ * artifact also prepares that architecture and records both. Shared goals
+ * of a request for x86_64 alone still build with ARCH=x86_64. The work directory is
  * removed after a success and after a stop, and kept after a failure.
  *
  * @return 0 when every artifact exists; 1 when a step failed or an artifact
