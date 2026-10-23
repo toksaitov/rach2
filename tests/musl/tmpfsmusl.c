@@ -336,6 +336,23 @@ static int deep(void)
     return 0;
 }
 
+/** Check the permanent shared-memory mount, including from a private root. */
+static int shm_unmount(void)
+{
+    const char *path = root_prefix[0] ? "/proc/1/root/dev/shm" : "/dev/shm";
+    struct stat local, original;
+
+    if (stat("/dev/shm", &local) != 0 || stat(path, &original) != 0 ||
+        local.st_dev != original.st_dev || local.st_ino != original.st_ino) {
+        return fail("the private root's shared-memory mount differs from the permanent mount");
+    }
+    if (umount2(path, 0) != -1 || errno != EBUSY) {
+        return fail("an unmount of the permanent shared-memory mount");
+    }
+    row_held();
+    return 0;
+}
+
 /**
  * Check /dev/shm: its kind, mode and magic, its line in /proc/mounts, a file
  * in it, ".." from it, and that it does not unmount. Returns 0, or 1 once the
@@ -380,11 +397,7 @@ static int shm(void)
         return fail("/dev/shm by way of /dev/pts/..");
     }
     row_held();
-    if (umount2("/dev/shm", 0) != -1 || errno != EBUSY) {
-        return fail("an unmount of /dev/shm");
-    }
-    row_held();
-    return 0;
+    return shm_unmount();
 }
 
 /** Whether a line of /proc/self/mountinfo has `text` in it. */

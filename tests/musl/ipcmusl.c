@@ -48,7 +48,9 @@
  *
  * Given `machine=native` (tests/native/Readme.md), it still makes the
  * thousand refusals and leaves out the comparison of the kernel's heap, since
- * the machine's services allocate from it meanwhile.
+ * the machine's services allocate from it meanwhile. Its private mount of
+ * mqueue lists the queues of its IPC namespace, so no queue name is shared
+ * with services on the installed system.
  *
  * Prints `IPCMUSL OK` and exits 0 on success, and prints
  * `IPCMUSL FAIL (detail)` and exits 1 otherwise.
@@ -70,6 +72,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <mqueue.h>
+#include <sys/mount.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
@@ -742,6 +745,28 @@ static int mq_fd_file(mqd_t q, const struct stat *st)
     return 0;
 }
 
+static const char *mq_directory = "/dev/mqueue";
+
+/** The queue file belongs to this case's IPC namespace. */
+static const char *mq_path(const char *name)
+{
+    static char path[256];
+    snprintf(path, sizeof(path), "%s/%s", mq_directory, name);
+    return path;
+}
+
+static int mq_mount(void)
+{
+    if (!probe_native()) {
+        return 0;
+    }
+    mq_directory = "mqueue";
+    if (mkdir(mq_directory, 0700) != 0 || mount("mqueue", mq_directory, "mqueue", 0, NULL) != 0) {
+        return fail("mounting the case's message-queue namespace");
+    }
+    return 0;
+}
+
 /**
  * Check /dev/mqueue while the queue /ipcfiles has one message of 4 bytes: its
  * file, its status line and its entry; a second queue whose name goes with
@@ -760,16 +785,16 @@ static int mq_files(void)
     if (q == (mqd_t)-1 || mq_send(q, "four", 4, 0) != 0) {
         return fail("a queue for /dev/mqueue");
     }
-    if (stat("/dev/mqueue/ipcfiles", &st) != 0 || !S_ISREG(st.st_mode) ||
+    if (stat(mq_path("ipcfiles"), &st) != 0 || !S_ISREG(st.st_mode) ||
         (st.st_mode & 0777) != 0600 || st.st_size != 4) {
         return fail("/dev/mqueue gives the queue's file its mode and size");
     }
     held();
-    if (!file_has("/dev/mqueue/ipcfiles", "QSIZE:4 ")) {
+    if (!file_has(mq_path("ipcfiles"), "QSIZE:4 ")) {
         return fail("the queue's file reads as its status line");
     }
     held();
-    dir = opendir("/dev/mqueue");
+    dir = opendir(mq_directory);
     while (dir && (d = readdir(dir)) != NULL) {
         listed |= strcmp(d->d_name, "ipcfiles") == 0;
     }
@@ -781,7 +806,7 @@ static int mq_files(void)
     }
     held();
     q2 = mq_open("/ipcfiles2", O_CREAT | O_EXCL | O_RDWR, 0600, NULL);
-    if (q2 == (mqd_t)-1 || mq_close(q2) != 0 || unlink("/dev/mqueue/ipcfiles2") != 0 ||
+    if (q2 == (mqd_t)-1 || mq_close(q2) != 0 || unlink(mq_path("ipcfiles2")) != 0 ||
         mq_open("/ipcfiles2", O_RDWR) != (mqd_t)-1 || errno != ENOENT) {
         return fail("unlinking a queue's file takes its name");
     }
@@ -808,7 +833,7 @@ static void on_mq(int sig, siginfo_t *si, void *ctx)
  */
 static int mq_rows(void)
 {
-    struct mq_attr attr = {0, 4, 64, 0};
+    struct mq_attr attr = {0, 4, 64, 0, {0}};
     struct sigevent ev;
     struct sigaction sa;
     struct timespec ts;
@@ -938,7 +963,8 @@ int main(int argc, char **argv)
 {
     probe_args(argc, argv);
     plan();
-    if (shm_rows() || sem_rows() || msg_rows() || cut_rows() || mq_rows() || mq_files()) {
+    if (mq_mount() || shm_rows() || sem_rows() || msg_rows() || cut_rows() || mq_rows() ||
+        mq_files()) {
         return 1;
     }
 #if defined(__x86_64__)
@@ -946,6 +972,9 @@ int main(int argc, char **argv)
         return 1;
     }
 #endif
+    if (probe_native() && (umount2(mq_directory, 0) != 0 || rmdir(mq_directory) != 0)) {
+        return fail("removing the case's message-queue mount");
+    }
     report_end();
     printf("IPCMUSL OK\n");
     return 0;

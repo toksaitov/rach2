@@ -592,7 +592,6 @@ tests/musl/threadmusl.c:main complexity 37 a test's rows, each a case, read as o
 tests/musl/threadmusl.c:sharing complexity 36 a test's rows, each a case, read as one table
 
 tests/musl/tmpfsmusl.c:placed complexity 34 a test's rows, each a case, read as one table
-tests/musl/tmpfsmusl.c:shm complexity 27 a test's rows, each a case, read as one table
 
 tests/musl/truncmusl.c:length_rows complexity 26 a test's rows, each a case, read as one table
 

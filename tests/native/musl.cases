@@ -36,7 +36,7 @@ case musl/hdaprobe -- musl/hdaprobe machine=native
 case musl/hello -- musl/hello
 case musl/inotifymusl tmpfs:1M -- musl/inotifymusl dir=tmpfs/inotifymusl
 # Left out: the kernel's heap after a thousand refused segments.
-case musl/ipcmusl ipcns -- musl/ipcmusl machine=native
+case musl/ipcmusl ipcns mountns -- musl/ipcmusl machine=native
 case musl/ishmusl root:ext2-dir env:HOME -- musl/ishmusl
 case musl/lchownmusl.ext2 -- musl/lchownmusl .
 case musl/lchownmusl.krffs root:krffs -- musl/lchownmusl
