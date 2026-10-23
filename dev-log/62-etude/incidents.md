@@ -171,3 +171,7 @@ The dependency audit at 21:15 on 23 October found host process tests whose compi
 ## Integrated repairs still appeared ready to take
 
 The recovery check at 23:15 on 23 October found nine repairs still marked Ready although their code was integrated or being checked by the coordinator's workers. The new conversion tasks had been marked In progress, but the older issues covered by the same work had not. One still had a stopped worker's assignee. The coordinator assigned all nine to the owner's account and marked them In progress. Reusing an earlier repair transfers its issue as well as its commits; the board must show the account doing the remaining check and push.
+
+## The recovery audit omitted saved work
+
+The check at 00:15 on 24 October found that the saved review of redundant machine cases, #924, still had no completed disposition in the converted collection. The earlier recovery had rejected weak redundancy arguments but had not finished the remaining review. The channel worker took all 26 families before the collection was frozen. Two saved GNU repairs were already present on master, but their issues, #938 and #942, still belonged to the stopped worker. Their completion is now recorded for closure with the recovery commits. The cache acceptance task, #893, also moved to In progress for its remaining checks. An integration check must account for every inherited issue, including work whose patch was rejected or superseded, rather than only the new conversion tasks.
