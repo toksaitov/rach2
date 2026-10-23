@@ -39,6 +39,7 @@
 #include "etude/artifact.h"
 #include "etude/legacy.h"
 #include "sha256.h"
+#include "../../tools/etude/json.h"
 
 static int fails;
 
@@ -73,6 +74,7 @@ static const char makefile[] =
     "components: $(ARCH_BUILD)/rach2/kernel\n"
     "\t@$(note)\n"
     "\t@test ! -f fail-components\n"
+    "\t@test -z \"$$ETUDE_PREPARATION_RUN_ID$$ETUDE_PREPARATION_RECEIPT$$ETUDE_PREPARATION_COMMIT\"\n"
     "$(ARCH_BUILD)/rach2/kernel:\n"
     "\t@mkdir -p $(@D) && echo kernel > $@ && $(note)\n"
     "recovery-key:\n"
@@ -286,13 +288,55 @@ static void show(const struct outcome *r, int before)
         printf("etude-prepare-test: its output:\n%s", r->out);
 }
 
+/** Give this invocation a fresh receipt, or clear the optional inputs. */
+static void receipt_env(const char *path)
+{
+    if (path) {
+        setenv("ETUDE_PREPARATION_RUN_ID", "fixture-preparation-1", 1);
+        setenv("ETUDE_PREPARATION_RECEIPT", path, 1);
+        setenv("ETUDE_PREPARATION_COMMIT", "0123456789abcdef0123456789abcdef01234567", 1);
+    } else {
+        unsetenv("ETUDE_PREPARATION_RUN_ID");
+        unsetenv("ETUDE_PREPARATION_RECEIPT");
+        unsetenv("ETUDE_PREPARATION_COMMIT");
+    }
+}
+
+/** The receipt binds the completed record and one nonempty clock interval. */
+static void check_receipt(const char *path, const char *record)
+{
+    char text[2048], error[160], hex[65];
+    struct json *doc = NULL;
+    const struct json *start, *end;
+    long size = read_text(path, text, sizeof(text));
+    CHECK(size > 0 && !json_parse(text, (size_t)(size > 0 ? size : 0), 1, &doc, error,
+                                  sizeof(error)),
+          "receipt: valid JSON");
+    if (!doc)
+        return;
+    sha_text(record, hex);
+    CHECK(json_text(doc, "record_sha256") && !strcmp(json_text(doc, "record_sha256"), hex),
+          "receipt: actual artifact record digest");
+    CHECK(json_text(doc, "run_id") && !strcmp(json_text(doc, "run_id"), "fixture-preparation-1") &&
+              json_text(doc, "outcome") && !strcmp(json_text(doc, "outcome"), "pass") &&
+              json_text(doc, "cleanup") && !strcmp(json_text(doc, "cleanup"), "confirmed"),
+          "receipt: the completed invocation");
+    start = json_member(json_member(doc, "start"), "monotonic_us");
+    end = json_member(json_member(doc, "end"), "monotonic_us");
+    CHECK(start && end && start->type == JSON_INTEGER && end->type == JSON_INTEGER &&
+              start->integer < end->integer,
+          "receipt: elapsed preparation includes the build");
+    json_free(doc);
+}
+
 /* ---- Rows. ---- */
 
 /** Goals: the steps in order, the goals built, the record. */
 static void test_alone(void)
 {
     char *goals[] = {"build/images/a.img", "krffs/shadow", "build/images", NULL};
-    char tree[PATH_LEN], path[PATH_LEN], calls[4096], record[8192], files[1024], want[128], hex[65];
+    char tree[PATH_LEN], path[PATH_LEN], receipt[PATH_LEN];
+    char calls[4096], record[8192], files[1024], want[128], hex[65];
     struct etude_legacy_opts o;
     struct outcome r;
     struct stat st;
@@ -300,7 +344,10 @@ static void test_alone(void)
 
     make_tree("alone", tree, sizeof(tree));
     opts_for(&o, tree, "alone", goals);
+    fix_format(receipt, sizeof(receipt), "%s/alone.receipt", fix_dir());
+    receipt_env(receipt);
     run(&o, &r);
+    receipt_env(NULL);
     read_text(in(path, sizeof(path), tree, "calls"), calls, sizeof(calls));
     read_text(o.record, record, sizeof(record));
     record_files(record, files, sizeof(files));
@@ -330,6 +377,13 @@ static void test_alone(void)
           "alone: the demo key's mode");
     CHECK(!exists(o.work), "alone: the work removed");
     show(&r, before);
+    check_receipt(receipt, record);
+    receipt_env(receipt);
+    run(&o, &r);
+    receipt_env(NULL);
+    CHECK(r.status == 2 && strstr(r.out, "receipt must be a new file"),
+          "receipt: duplicate refused before preparing");
+    check_receipt(receipt, record);
 }
 
 /** The same goals again: no key minted, nothing rebuilt. */
@@ -460,6 +514,11 @@ static void test_refused(void)
             "build/.run.lock/owner names");
     snprintf(held, sizeof(held), "%ld", (long)getpid());
     setenv("RACH2_TREE_HELD", held, 1);
+    setenv("ETUDE_PREPARATION_RUN_ID", "partial", 1);
+    refused(tree, "receipt-partial", a, "i686", NULL,
+            "a preparation receipt needs RUN_ID, RECEIPT and COMMIT variables "
+            "and an artifact record");
+    receipt_env(NULL);
 }
 
 /** A failed step stops the preparation and keeps its log. */
@@ -470,11 +529,14 @@ static void test_failed(void)
     struct etude_legacy_opts o;
     struct outcome r;
     int before = fails;
+    const char *receipt = fix_path("failed.receipt");
 
     make_tree("failed", tree, sizeof(tree));
     write_text(in(path, sizeof(path), tree, "fail-components"), "", 0644);
     opts_for(&o, tree, "failed", goals);
+    receipt_env(receipt);
     run(&o, &r);
+    receipt_env(NULL);
     read_text(in(path, sizeof(path), tree, "calls"), calls, sizeof(calls));
     fix_format(path, sizeof(path), "%s/3-components.log", o.work);
     read_text(path, log, sizeof(log));
@@ -488,6 +550,7 @@ static void test_failed(void)
     CHECK(strstr(r.out, "step: artifacts") == NULL && strstr(calls, "a.img") == NULL,
           "failed: no step after it");
     CHECK(!exists(o.record), "failed: no record");
+    CHECK(!exists(receipt), "failed: no successful receipt");
     show(&r, before);
 }
 
@@ -602,6 +665,7 @@ static void test_stop(void)
     char *goals[] = {"build/images/w.img", NULL};
     char tree[PATH_LEN], path[PATH_LEN], got[16];
     const char *out = fix_path("stop.out");
+    const char *receipt = fix_path("stop.receipt");
     struct etude_legacy_opts o;
     struct outcome r;
     int status = -1, fd, before = fails;
@@ -612,7 +676,9 @@ static void test_stop(void)
     o.seconds = 30;
     fd = open(in(path, sizeof(path), tree, "started.fifo"), O_RDWR);
     fflush(stdout);
+    receipt_env(receipt);
     pid = start_child(&o, out);
+    receipt_env(NULL);
     CHECK(fd >= 0 && pid > 0 && await_start(fd, pid, got, sizeof(got)), "stop: the step started");
     if (pid > 0) {
         kill(pid, SIGTERM);
@@ -621,6 +687,7 @@ static void test_stop(void)
     CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 128 + SIGTERM, "stop: stopped");
     CHECK(no_reader(in(path, sizeof(path), tree, "hang.fifo")), "stop: its recipe ended");
     CHECK(!exists(o.work) && !exists(o.record), "stop: the work removed");
+    CHECK(!exists(receipt), "stop: no successful receipt");
     if (fd >= 0)
         close(fd);
     read_text(out, r.out, sizeof(r.out));

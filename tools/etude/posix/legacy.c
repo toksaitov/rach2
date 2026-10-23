@@ -24,6 +24,7 @@
 #include "etude/artifact.h"
 #include "etude/exec.h"
 #include "etude/legacy.h"
+#include "../measurement_context.h"
 #include "posix.h"
 
 #ifndef _WIN32
@@ -58,7 +59,8 @@ static const char script_path[] = "exec 2>\"$1\"; [ ! -f tools/setup/e2fsprogs_p
 /* The variables of make that a step does not inherit: a jobserver's
  * descriptors do not reach it, so each step's make is a make of its own. */
 static const char *const dropped_env[] = {
-    "MAKEFLAGS=", "MFLAGS=", "MAKELEVEL=", "LC_ALL=", "PATH="};
+    "MAKEFLAGS=", "MFLAGS=", "MAKELEVEL=", "LC_ALL=", "PATH=",
+    "ETUDE_PREPARATION_RUN_ID=", "ETUDE_PREPARATION_RECEIPT=", "ETUDE_PREPARATION_COMMIT="};
 
 /* A list of strings from malloc. */
 struct list {
@@ -102,6 +104,8 @@ struct prep {
     struct list goals;    /* the artifacts the last step builds */
     struct list required; /* every artifact recorded */
     size_t files;         /* the regular files of `required` */
+    const char *receipt_path;
+    struct etude_preparation_receipt receipt;
 };
 
 /* ---- Strings and lists. ---- */
@@ -231,6 +235,64 @@ static int sys_error(struct prep *p, const char *what, int err)
 static int stopped(const struct prep *p)
 {
     return p->o->stop != NULL && *p->o->stop != 0;
+}
+
+/** Validate optional measurement inputs before starting any preparation. */
+static int begin_receipt(struct prep *p)
+{
+    const char *run = getenv("ETUDE_PREPARATION_RUN_ID");
+    const char *path = getenv("ETUDE_PREPARATION_RECEIPT");
+    const char *commit = getenv("ETUDE_PREPARATION_COMMIT");
+    struct stat st;
+    size_t n;
+
+    if (!run && !path && !commit)
+        return 0;
+    if (!run || !path || !commit || !*path || !p->o->record)
+        return refuse(p, "a preparation receipt needs RUN_ID, RECEIPT and COMMIT variables "
+                         "and an artifact record");
+    n = strlen(run);
+    if (!n || n >= sizeof(p->receipt.run_id) ||
+        !strchr("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", run[0]) ||
+        strspn(run, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:/-") != n)
+        return refuse(p, "the preparation run identity is not an ASCII token");
+    if (strlen(commit) != 40 || strspn(commit, "0123456789abcdef") != 40)
+        return refuse(p, "the preparation commit is not a full lowercase SHA-1");
+    if (!lstat(path, &st) || errno != ENOENT)
+        return refuse(p, "the preparation receipt must be a new file: %s", path);
+    memcpy(p->receipt.run_id, run, n + 1);
+    memcpy(p->receipt.commit, commit, 41);
+    if (etude_context_clock(&p->receipt.clock) || etude_history_now(&p->receipt.start))
+        return refuse(p, "the preparation clock or machine identity is unavailable");
+    p->receipt_path = path;
+    return 0;
+}
+
+/** Publish timing only after the artifact record and cleanup succeeded. */
+static int finish_receipt(struct prep *p)
+{
+    struct etude_context_clock end;
+    struct stat st;
+
+    if (!p->receipt_path)
+        return 0;
+    if (etude_digest_file(NULL, p->o->record, &st, p->receipt.record_sha256))
+        return failed(p, "the preparation record cannot be hashed");
+    if (etude_context_clock(&end) || etude_history_now(&p->receipt.end) ||
+        strcmp(end.machine_id, p->receipt.clock.machine_id) ||
+        strcmp(end.boot_id, p->receipt.clock.boot_id))
+        return failed(p, "the preparation clock identity changed or is unavailable");
+    p->receipt.elapsed = etude_history_elapsed(&p->receipt.start, &p->receipt.end);
+    if (p->receipt.elapsed.reason)
+        return failed(p, "preparation timing: %s", p->receipt.elapsed.reason);
+    if (stopped(p))
+        return 128 + (int)*p->o->stop;
+    p->receipt.passed = 1;
+    p->receipt.cleanup_confirmed = 1;
+    p->receipt.same_run = 1;
+    if (etude_context_receipt_write(p->receipt_path, &p->receipt))
+        return failed(p, "the preparation receipt cannot be published: %s", strerror(errno));
+    return 0;
 }
 
 /* ---- Admission. ---- */
@@ -898,7 +960,8 @@ static int write_record(struct prep *p)
     status = hash_artifacts(p, f);
     if ((fflush(f) != 0 || fsync(fd) != 0) && status == 0)
         status = failed(p, "record: %s cannot be written: %s", dest, strerror(errno));
-    fclose(f);
+    if (fclose(f) != 0 && status == 0)
+        status = failed(p, "record: %s cannot be closed: %s", dest, strerror(errno));
     if (status == 0 && rename(tmp, dest) != 0)
         status = failed(p, "record: %s cannot be written: %s", dest, strerror(errno));
     if (status != 0)
@@ -1008,23 +1071,27 @@ static int prepare(struct prep *p)
 
 /** End the executor, keep the work and name it, or remove it, and free the
  * rest. */
-static void release(struct prep *p, int keep)
+static int release(struct prep *p, int keep)
 {
     size_t i;
+    int status = 0;
 
     if (p->ex != NULL)
         etude_exec_free(p->ex);
     if (p->work != NULL && keep)
         fprintf(p->out, "etude prepare: evidence: %s\n", p->work);
-    else if (p->work != NULL && remove_tree(p->work) != 0)
+    else if (p->work != NULL && remove_tree(p->work) != 0) {
         fprintf(p->out, "etude prepare: %s: not removed\n", p->work);
+        status = failed(p, "the preparation work directory was not removed");
+    }
     fflush(p->out);
     for (i = 0; p->env != NULL && p->env[i] != NULL; i++)
         free(p->env[i]);
     free(p->env);
+    return status;
 }
 
-/** Print the result line, remove or keep the work, and free the rest. */
+/** Print the result after cleanup and any requested receipt publication. */
 static void conclude(struct prep *p, int status)
 {
     if (status == 0)
@@ -1035,7 +1102,7 @@ static void conclude(struct prep *p, int status)
                 p->why != NULL ? p->why : "memory ran out");
     else if (status > 128)
         fprintf(p->out, "etude prepare: result: stopped by signal %d\n", status - 128);
-    release(p, status == 1);
+    fflush(p->out);
 }
 
 int etude_legacy_prepare(const struct etude_legacy_opts *o)
@@ -1047,7 +1114,9 @@ int etude_legacy_prepare(const struct etude_legacy_opts *o)
     memset(&p, 0, sizeof(p));
     p.o = o;
     p.out = o->out != NULL ? o->out : stdout;
-    status = admit(&p);
+    status = begin_receipt(&p);
+    if (status == 0)
+        status = admit(&p);
     if (status == 0) {
         fprintf(p.out, "etude prepare: preparing %lu goals for %s in %s\n",
                 (unsigned long)o->ngoals, o->arch != NULL ? o->arch : "i686", p.tree);
@@ -1055,6 +1124,10 @@ int etude_legacy_prepare(const struct etude_legacy_opts *o)
     }
     if (status == 0)
         status = prepare(&p);
+    if (release(&p, status == 1) != 0 && status == 0)
+        status = 1;
+    if (status == 0)
+        status = finish_receipt(&p);
     conclude(&p, status);
     list_free(&p.goals);
     list_free(&p.required);
