@@ -27,9 +27,11 @@
  *
  * `mkfixture auth DISK` builds the disk of the authority cases
  * (tests/cases/guest.authority.json): 4 GiB of zeros, sparse, with an MBR
- * signature and no partitions, so that discovery publishes /dev/grubcore and
- * no boot partition. bootprobe writes it at 3 GiB, past what a signed 32-bit
- * offset reaches, and requires the sector there to be zero before the write.
+ * whose entry 1 is FAT-typed (0x0c) at LBA 2048, AUTH_PART_SECTORS long, so
+ * that discovery publishes both /dev/grubcore and /dev/bootpart, each of which
+ * bootprobe must find refused to a writer while it holds the whole disk.
+ * bootprobe writes the disk at 3 GiB, past what a signed 32-bit offset
+ * reaches, and requires the sector there to be zero before the write.
  * etude reads the whole artifact to take its digest and to copy it for each
  * case, so it is no larger than the probe needs.
  */
@@ -47,6 +49,9 @@
 #define WIDE_NEAR (5 * GIB)
 #define WIDE_FAR  (258 * GIB)
 #define AUTH_SIZE (4 * GIB)
+
+#define AUTH_PART_LBA     2048
+#define AUTH_PART_SECTORS 2048
 
 /** Store `v` at `p`, little-endian. */
 static void w32(unsigned char *p, uint32_t v)
@@ -168,19 +173,25 @@ static int make_wide(const char *path)
  * `path`; 0, or 1 having said why. */
 static int make_auth(const char *path)
 {
+    unsigned char mbr[SECTOR];
     FILE *f = fopen(path, "wb");
 
+    memset(mbr, 0, sizeof(mbr));
+    mbr[446 + 4] = 0x0C;
+    w32(mbr + 446 + 8, AUTH_PART_LBA);
+    w32(mbr + 446 + 12, AUTH_PART_SECTORS);
+    mbr[510] = 0x55;
+    mbr[511] = 0xAA;
     if (f == NULL) {
         fprintf(stderr, "mkfixture: auth: cannot create %s\n", path);
         return 1;
     }
     if (fseeko(f, (off_t)AUTH_SIZE - 1, SEEK_SET) != 0 || fputc(0, f) == EOF ||
-        fseeko(f, 510, SEEK_SET) != 0 || fputc(0x55, f) == EOF || fputc(0xAA, f) == EOF ||
-        fclose(f) != 0) {
+        fseeko(f, 0, SEEK_SET) != 0 || fwrite(mbr, 1, SECTOR, f) != SECTOR || fclose(f) != 0) {
         fprintf(stderr, "mkfixture: auth: cannot write %s\n", path);
         return 1;
     }
-    printf("mkfixture: auth: %s: %llu bytes of zeros and an MBR signature\n", path,
+    printf("mkfixture: auth: %s: %llu bytes of zeros and an MBR with a FAT-typed entry 1\n", path,
            (unsigned long long)AUTH_SIZE);
     return 0;
 }

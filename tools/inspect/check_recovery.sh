@@ -12,9 +12,9 @@
 #
 # The string and the write handler are separate conditionals, so the check
 # finds a build mistake and says nothing of a kernel edited afterwards.
-# `tests/run authority` runs it on both kernels, then boots them and requires
-# a write by the ordinary one to fail. The authority itself is described in
-# rach2/sys/block/Readme.md.
+# The rach2-recovery target runs it on both kernels, and `tests/run authority`
+# boots them and requires a write by the ordinary one to fail. The authority
+# itself is described in rach2/sys/block/Readme.md.
 #
 # Usage: check_recovery.sh <kernel> recovery|ordinary
 #

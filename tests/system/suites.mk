@@ -397,19 +397,20 @@ $(BOOTORDER_CASE_DISK): $(DEMO_CREDS) tools/image/mkdisk_grub.sh tools/image/gru
 # must still boot through the stub with GRUB's parse error in the log; and the
 # slot's extent read back to prove bootctl overwrote bytes in place rather
 # than rewriting a file.
-# `tests/run authority`: which kernel may write the whole disk. The
-# authority is read off each built kernel, and then each boots the test image
-# with a disk over AHCI: the everyday build must refuse a write to /dev/disk0
-# with -EPERM and the sector must still be zero afterwards, so the refusal is
-# proved to have written nothing rather than merely returned an error; the
-# recovery build must write a sector past 2 GiB, read it back byte for byte,
-# and take a 200-sector write in one call, which is what makes a whole-disk
-# reflash finishable: one sector per driver call would turn a 500 MiB write
-# into a million cache flushes. They are the cases of
+# `tests/run authority`: which kernel may write the whole disk. The build reads
+# the authority off each kernel (the rach2-recovery target), and each case boots
+# one kernel with the test image and a disk over AHCI: the everyday build must
+# refuse a write to /dev/disk0 with -EPERM and the sector must still be zero
+# afterwards, so the refusal is proved to have written nothing rather than
+# merely returned an error; the recovery build must write a sector past 2 GiB,
+# read it back byte for byte, and take a 200-sector write in one call, which is
+# what makes a whole-disk reflash finishable: one sector per driver call would
+# turn a 500 MiB write into a million cache flushes. They are the cases of
 # tests/cases/guest.authority.json, which etude runs, and have no target here.
 #
 # The disk of the boots, which the cases' preparation names: 4 GiB of zeros
-# with an MBR signature, made beside its name and renamed into place.
+# with an MBR whose FAT-typed entry 1 publishes /dev/bootpart, made beside its
+# name and renamed into place.
 $(IMAGES_DIR)/auth-test.disk: $(MKFIXTURE)
 	@mkdir -p $(@D)
 	$(MKFIXTURE) auth $@.tmp && mv $@.tmp $@

@@ -272,10 +272,10 @@ static void auth_case(int recovery)
         second = syscall3(SYS_OPEN, (long)"/dev/disk0", O_WRONLY, 0);
         check(second == -EBUSY, "however it asks for the write");
         second = syscall3(SYS_OPEN, (long)"/dev/bootpart", O_RDWR, 0);
-        check(second == -EBUSY || second == -ENOENT,
+        check(second == -EBUSY,
               "a writer of the boot partition is refused while the whole disk is held");
         second = syscall3(SYS_OPEN, (long)"/dev/grubcore", O_RDWR, 0);
-        check(second == -EBUSY || second == -ENOENT, "and so is a writer of the loader's gap");
+        check(second == -EBUSY, "and so is a writer of the loader's gap");
         second = syscall3(SYS_OPEN, (long)"/dev/disk0", O_RDONLY, 0);
         check(second >= 0, "but a reader alongside it is not");
         if (second >= 0) {
