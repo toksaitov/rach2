@@ -56,6 +56,7 @@ struct verdict {
     int *failed;              /* by suite: an item of it did not pass */
     int set_failed;           /* the shared preparation or an item of no suite */
     int runner;               /* the runner left work unconfirmed */
+    int require_budget; /* routine entry refuses an unknown or failed charge */
     int project_architecture; /* report only this architecture after common validation */
     struct record *rec;
     size_t records, cap;
@@ -952,6 +953,8 @@ static void reach(struct verdict *v)
             if (v->item[i].proved == RESULT_INCOMPLETE || v->item[i].proved == RESULT_CANCELLED)
                 v->runner = 1;
     if (v->run != NULL) {
+        if (v->require_budget && !judge_run_budget(v->set, v->plan->data, v->run->data, v->store))
+            v->runner = 1;
         prepared = check_preparation(v);
         check_summary(v, prepared);
         if (!same(json_text(json_member(v->run->data, "result"), "cleanup"), "confirmed")) {
@@ -1052,6 +1055,11 @@ static int verdict_options(struct verdict *v, char **args, int n, const char **c
     int i;
 
     for (i = 0; i < n && args[i][0] == '-';) {
+        if (strcmp(args[i], "--require-budget") == 0) {
+            v->require_budget = 1;
+            i++;
+            continue;
+        }
         if (strcmp(args[i], "--project-architecture") == 0) {
             v->project_architecture = 1;
             i++;
@@ -1093,7 +1101,7 @@ static void free_verdict(struct verdict *v)
 }
 
 /**
- * Runs the `verdict` command: `[--project-architecture] [-b STORE]
+ * Runs the `verdict` command: `[--project-architecture] [--require-budget] [-b STORE]
  * [-c COMMIT] [-m CASES] ARCH SET
  * SUITES HISTORY...`. Each HISTORY is a stream of the run, or a directory
  * whose `.jsonl` files are its streams; STORE is the directory of the blobs

@@ -1101,6 +1101,8 @@ Native execution reads the installed admission policy and uses its shared ledger
 
 Artifacts are checked before execution and again before the run record is completed. Immutable kernels and images are published in the run's store; disks that a case writes are private copies under its workspace. A passing attempt removes its workspace. A failed or incomplete attempt retains named evidence, and uncertain process cleanup retains the reservation.
 
+`etude check verdict --require-budget` is the routine entry's budget check on every platform. It accepts push, ci and release purposes only. The policy bytes in the result store must match the plan and run references and the budget schema; site and class limits must agree with the plan. The recorded charge must have a known error bound, equal the full observed run interval, and fit its ceiling including that bound. This entry requires zero subtracted queue and setup costs. Records that subtract such costs need the separate record-level budget judgement. Unknown, exempt and failed budgets fail this check on both projections of a both-architecture run. A first-run experiment uses its explicit exemption and the ordinary correctness verdict instead.
+
 ### Native load observations
 
 `etude observe identity PID` prints the live process's native creation identity as decimal digits and a newline. A wrapper queries its persistent owner before starting preparation and keeps the same PID through execution.
