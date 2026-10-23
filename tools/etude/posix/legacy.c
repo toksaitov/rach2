@@ -1056,9 +1056,14 @@ static int clean_inhouse(struct prep *p)
 {
     const char *clean = getenv("ETUDE_PREPARATION_CLEAN");
     char *output, *slash;
-    char *args[] = {"python3", "tools/ci/clean_inhouse.py", p->tree,
-                    (char *)(p->o->arch && !strcmp(p->o->arch, "i686,x86_64") ? "both" :
-                              p->o->arch ? p->o->arch : "i686"), NULL, NULL};
+    char *args[] = {"python3",
+                    "tools/ci/clean_inhouse.py",
+                    p->tree,
+                    (char *)(p->o->arch && !strcmp(p->o->arch, "i686,x86_64") ? "both"
+                             : p->o->arch                                     ? p->o->arch
+                                                                              : "i686"),
+                    NULL,
+                    NULL};
     int status;
 
     if (!clean)
@@ -1091,11 +1096,24 @@ static int import_artifacts(struct prep *p, const char *config)
     char *record = p->o->record ? etude_record_artifact_path(p->tree, p->o->record) : NULL;
     char *provenance = record ? format("%s.import.json", record) : NULL;
     char *config_path = etude_record_artifact_path(p->tree, config);
-    char *args[] = {"python3", "tools/etude/preparation_import.py", "prepare",
-                    "--tree", p->tree, "--config", (char *)config,
-                    "--request", request, "--work", p->work, "--provenance", provenance, "--commit",
-                    p->receipt_path ? p->receipt.commit : "", "--arches",
-                    (char *)(p->o->arch ? p->o->arch : "i686"), NULL};
+    char *args[] = {"python3",
+                    "tools/etude/preparation_import.py",
+                    "prepare",
+                    "--tree",
+                    p->tree,
+                    "--config",
+                    (char *)config,
+                    "--request",
+                    request,
+                    "--work",
+                    p->work,
+                    "--provenance",
+                    provenance,
+                    "--commit",
+                    p->receipt_path ? p->receipt.commit : "",
+                    "--arches",
+                    (char *)(p->o->arch ? p->o->arch : "i686"),
+                    NULL};
     FILE *f = request ? fopen(request, "wx") : NULL;
     size_t i;
     int status = 0;

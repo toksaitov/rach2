@@ -803,8 +803,8 @@ static int case_architecture(const struct etude_case *c)
 
     if (arches != NULL && arches->type == 's')
         return !strcmp(arches->string, "none") && !strcmp(c->arch, "none");
-    for (arch = arches != NULL && arches->type == 'a' ? arches->child : NULL;
-         arch != NULL; arch = arch->next)
+    for (arch = arches != NULL && arches->type == 'a' ? arches->child : NULL; arch != NULL;
+         arch = arch->next)
         if (arch->type == 's' && !strcmp(arch->string, c->arch))
             return 1;
     return 0;

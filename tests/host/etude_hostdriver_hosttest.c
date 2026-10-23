@@ -182,12 +182,12 @@ static void fixtures(void)
 static void encoded_inputs(void)
 {
     char output[32768];
-    static const char *bad[] = {
-        "\"path_hex\":\"74657374732f686f73742fc3a92e74787\"",
-        "\"path_hex\":\"gg\"", "\"path_hex\":\"610062\"",
-        "\"path_hex\":\"2e2e2f6f757473696465\"",
-        "\"path\":\"tests/host/a_hosttest.c\",\"path_hex\":\"61\"",
-        "\"path\":\"tests/host/a_hosttest.c\",\"path_hex\":null"};
+    static const char *bad[] = {"\"path_hex\":\"74657374732f686f73742fc3a92e74787\"",
+                                "\"path_hex\":\"gg\"",
+                                "\"path_hex\":\"610062\"",
+                                "\"path_hex\":\"2e2e2f6f757473696465\"",
+                                "\"path\":\"tests/host/a_hosttest.c\",\"path_hex\":\"61\"",
+                                "\"path\":\"tests/host/a_hosttest.c\",\"path_hex\":null"};
     extra_input = "\"path_hex\":\"74657374732f686f73742fc3a92e747874\"";
     inventory(0, NULL);
     CHECK(run(output, sizeof(output)) == 0, "encoded filename bytes are verified");

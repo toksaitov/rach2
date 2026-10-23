@@ -102,7 +102,8 @@ static int compare(const char *tree, const struct entry *e, int digests, FILE *o
     if (digests)
         changed = changed || strcmp(hex, e->digest) != 0;
     else
-        changed = changed || (unsigned long long)st.st_ino != e->inode || etude_record_mtime_ns(&st) != e->mtime;
+        changed = changed || (unsigned long long)st.st_ino != e->inode ||
+                  etude_record_mtime_ns(&st) != e->mtime;
     if (changed)
         fprintf(out, "etude check: changed: %s\n", e->path);
     return changed;

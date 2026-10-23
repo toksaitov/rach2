@@ -75,7 +75,8 @@ static void invocation_architectures(void)
         fputs("{\"schema_version\":1,\"run_id\":\"run\",\"attempt_id\":\"attempt\","
               "\"case_id\":\"host.fixture\",\"architecture\":\"none\",\"scratch\":\"scratch\","
               "\"manifest\":\"manifest\",\"store\":\"store\",\"grace_us\":1,\"cleanup_us\":1,"
-              "\"console_max_bytes\":1,\"output_max_bytes\":1,\"resend_us\":1}", f) < 0 ||
+              "\"console_max_bytes\":1,\"output_max_bytes\":1,\"resend_us\":1}",
+              f) < 0 ||
         fclose(f) != 0)
         exit(2);
     memset(&c, 0, sizeof(c));
