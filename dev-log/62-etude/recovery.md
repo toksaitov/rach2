@@ -33,3 +33,7 @@ Each worker has a separate worktree and starts no helpers. The coordinator owns 
 The starting commit is fc9f7421ac4ed5c081f666597ab6c576e5c21b21. Its routine checks passed on both architectures, but the phase has not had its review. The earlier Ubuntu and Mac results describe the adapter-based collection; they do not establish acceptance of the portable path. Windows has no complete passing collection record. The saved Lenovo result predates its branch's rebase and does not validate the final native fixes.
 
 The first three workers use GPT-6.1 Sol at high effort. The account reported 4% of its weekly allowance used at the start. Usage and the remaining implementation path are checked at integration points. The initial target is 24 October; it is revised from completed code, required checks and measured run times, rather than from issue counts or human development estimates.
+
+## Repairs already on master
+
+Issue #938 is fixed by `0b8953edd`, which makes private copies of the GNU store's read-only trees writable before modifying them. The Chromium archive orders a directory before all of its descendants, so extraction finishes those descendants before restoring the directory's mode. The recovery's i686 GNU preparation completed the ports, native compiler, GDB, JavaScript, Chromium and sanitizer stages from the store; its complete log is retained with the preparation evidence.
