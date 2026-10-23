@@ -21,7 +21,7 @@
       },
       "assertions": [
         {"assertion_id": "gateway-replies", "checks": "three pings to the gateway each get a reply", "source": "program"},
-        {"assertion_id": "silent-timeout", "checks": "a ping to an address nobody answers fails", "source": "program"},
+        {"assertion_id": "silent-timeout", "checks": "a ping to an address nobody answers fails with ETIMEDOUT", "source": "program"},
         {"assertion_id": "child-in-ping", "checks": "the child writes its byte just before its ping, and /proc shows it asleep in the call", "source": "program"},
         {"assertion_id": "busy", "checks": "while the child is in its call, the parent's ping of the loopback address answers EBUSY", "source": "program"},
         {"assertion_id": "progress", "checks": "the parent's clock readings while the child waits span some time, so the wait sleeps", "source": "program"},

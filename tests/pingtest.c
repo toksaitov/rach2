@@ -2,9 +2,9 @@
  * pingtest: the kernel's ICMP echo, through the SC_PING socket operation.
  *
  * Two controls first: three pings to the SLIRP gateway 10.0.2.2 get replies,
- * and one to an address nobody answers fails. Then the four properties of
- * the sleeping wait, in one fork round, with a child pinging an address
- * nobody answers:
+ * and one to an address nobody answers fails with ETIMEDOUT. Then the four
+ * properties of the sleeping wait, in one fork round, with a child pinging an
+ * address nobody answers:
  *
  * Progress. The parent reads the clock in a loop while the child is inside
  * that four-second call, and the readings it takes while the child is alive
@@ -492,18 +492,18 @@ void probe_main(unsigned long *sp)
         failed++;
     }
 
-    /* Test 2: a ping to an address nobody answers fails. */
+    /* Test 2: a ping to an address nobody answers fails with ETIMEDOUT. */
     print_test("Test 2: ping ", silent_ip, " times out... ");
     rtt = ping(silent_ip);
-    if (rtt < 0) {
+    if (rtt == PING_ETIMEDOUT) {
         puts("OK (timeout)");
         report_pass("silent-timeout");
         passed++;
     } else {
-        print("FAILED (unexpected reply, rtt=");
+        print("FAILED (not ETIMEDOUT, rtt=");
         print_num(rtt);
         puts(")");
-        report_fail("silent-timeout", "the address nobody answers replied");
+        report_fail("silent-timeout", "the unanswered ping did not end in ETIMEDOUT");
         failed++;
     }
 
