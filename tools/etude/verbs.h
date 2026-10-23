@@ -7,6 +7,7 @@
 #ifndef ETUDE_VERBS_H
 #define ETUDE_VERBS_H
 
+int etude_observe_main(int argc, char **argv);
 int etude_collection_prepare_main(int argc, char **argv);
 int etude_collection_main(int argc, char **argv);
 int etude_suites_main(int argc, char **argv);

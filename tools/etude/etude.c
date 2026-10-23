@@ -223,6 +223,7 @@ static const struct verb verbs[] = {
     {"lock", lock_main, "hold a tree's run lock, or the host lock and a port block"},
 #endif
 #if !defined(ETUDE_LOCK_ONLY) && !defined(__rach2__)
+    {"observe", etude_observe_main, "record native system and process load"},
     {"admit", etude_admit_main, "start a command once the ledger admits it"},
 #ifndef _WIN32
     {"status", etude_status_main, "list the claims in a machine's ledger"},
