@@ -44,6 +44,43 @@ static struct maker_rule *find_rule(const char *key)
     r->key = strdup(key);
     return r;
 }
+static int record_rule(char *head, const char *line)
+{
+    char script[512], mode[128] = "", key[1024];
+    sscanf(line + 1, "sh tests/system/%511s %127s", script, mode);
+    int lower = *mode && strspn(mode, "abcdefghijklmnopqrstuvwxyz") == strlen(mode);
+    snprintf(key, sizeof(key), "%s%s%s", script, lower ? " " : "", lower ? mode : "");
+    struct maker_rule *r = find_rule(key);
+    char *colon = strchr(head, ':');
+    if (!r || !colon) {
+        return 0;
+    }
+    *colon++ = 0;
+    for (char *p = colon; *p; p++)
+        if (*p == '|')
+            *p = ' ';
+    if (!strncmp(head, "%/", 2)) {
+        r->pattern++;
+        char expanded[16384] = "";
+        size_t n = 0;
+        for (const char *p = head; *p; p++) {
+            const char *w = *p == '%' ? "build" : NULL;
+            size_t z = w ? 5 : 1;
+            if (n + z >= sizeof(expanded))
+                abort();
+            memcpy(expanded + n, w ? w : p, z);
+            n += z;
+        }
+        expanded[n] = 0;
+        extend(&r->targets, expanded);
+    } else if (strcmp(head, "&")) {
+        r->explicit ++;
+        extend(&r->targets, head);
+    }
+    extend(&r->prereqs, colon);
+    return 1;
+}
+
 static int parse_rules(const char *database)
 {
     char *copy = strdup(database), *save, *head = NULL;
@@ -51,40 +88,11 @@ static int parse_rules(const char *database)
     for (char *line = strtok_r(copy, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
         if (*line == '\t') {
             if (head && !strncmp(line, "\tsh tests/system/", 17)) {
-                char script[512], mode[128] = "", key[1024];
-                sscanf(line + 1, "sh tests/system/%511s %127s", script, mode);
-                int lower = *mode && strspn(mode, "abcdefghijklmnopqrstuvwxyz") == strlen(mode);
-                snprintf(key, sizeof(key), "%s%s%s", script, lower ? " " : "", lower ? mode : "");
-                struct maker_rule *r = find_rule(key);
-                char *colon = strchr(head, ':');
-                if (!r || !colon) {
+                if (!record_rule(head, line)) {
                     free(copy);
                     free(head);
                     return 0;
                 }
-                *colon++ = 0;
-                for (char *p = colon; *p; p++)
-                    if (*p == '|')
-                        *p = ' ';
-                if (!strncmp(head, "%/", 2)) {
-                    r->pattern++;
-                    char expanded[16384] = "";
-                    size_t n = 0;
-                    for (const char *p = head; *p; p++) {
-                        const char *w = *p == '%' ? "build" : NULL;
-                        size_t z = w ? 5 : 1;
-                        if (n + z >= sizeof(expanded))
-                            abort();
-                        memcpy(expanded + n, w ? w : p, z);
-                        n += z;
-                    }
-                    expanded[n] = 0;
-                    extend(&r->targets, expanded);
-                } else if (strcmp(head, "&")) {
-                    r->explicit ++;
-                    extend(&r->targets, head);
-                }
-                extend(&r->prereqs, colon);
             }
             free(head);
             head = NULL;

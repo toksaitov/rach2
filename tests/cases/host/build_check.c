@@ -1,6 +1,25 @@
 /* C control of the host suite's compiler and build-product regressions. */
 #include "build_support.h"
 
+static int run_check(struct fixture *f, const char *id)
+{
+    static const struct {
+        const char *name;
+        int (*run)(struct fixture *);
+    } checks[] = {{"commit_msg", build_commit_msg},   {"run_scripts", build_run_scripts},
+                  {"gnu_port_resume", build_resume},  {"gnu_cmake_jobs", build_jobs},
+                  {"doom_libc", build_doom},          {"check_asm", build_asm},
+                  {"check_ldscript", build_ldscript}, {"prereq", build_prereq},
+                  {"together", build_together},       {"host_suite", build_suite}};
+    if (!strcmp(id, "case_select"))
+        return build_runner(f, id);
+    for (size_t i = 0; i < sizeof(checks) / sizeof(checks[0]); i++)
+        if (!strcmp(id, checks[i].name))
+            return checks[i].run(f);
+    fprintf(stderr, "host-build-check: unknown check: %s\n", id);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     int mock = build_prereq_mock(argc, argv);
@@ -31,34 +50,8 @@ int main(int argc, char **argv)
     fx_env("HOME", bp(f.work, "home"));
     fx_env("TMPDIR", bp(f.work, "tmp"));
     int ok = fx_mkdir(getenv("HOME")) && fx_mkdir(getenv("TMPDIR"));
-    if (ok) {
-        if (!strcmp(argv[1], "commit_msg"))
-            ok = build_commit_msg(&f);
-        else if (!strcmp(argv[1], "run_scripts"))
-            ok = build_run_scripts(&f);
-        else if (!strcmp(argv[1], "gnu_port_resume"))
-            ok = build_resume(&f);
-        else if (!strcmp(argv[1], "gnu_cmake_jobs"))
-            ok = build_jobs(&f);
-        else if (!strcmp(argv[1], "doom_libc"))
-            ok = build_doom(&f);
-        else if (!strcmp(argv[1], "check_asm"))
-            ok = build_asm(&f);
-        else if (!strcmp(argv[1], "check_ldscript"))
-            ok = build_ldscript(&f);
-        else if (!strcmp(argv[1], "prereq"))
-            ok = build_prereq(&f);
-        else if (!strcmp(argv[1], "together"))
-            ok = build_together(&f);
-        else if (!strcmp(argv[1], "host_suite"))
-            ok = build_suite(&f);
-        else if (!strcmp(argv[1], "case_select"))
-            ok = build_runner(&f, argv[1]);
-        else {
-            fprintf(stderr, "host-build-check: unknown check: %s\n", argv[1]);
-            ok = 0;
-        }
-    }
+    if (ok)
+        ok = run_check(&f, argv[1]);
     fx_check(&f, ok, argv[1]);
     ok = !f.failed;
     if (!ok)

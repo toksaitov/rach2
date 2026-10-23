@@ -151,7 +151,7 @@
       "requirements": {"host_api": "posix", "tools": [], "features": {}},
       "execution": {"program": "installer_repair_convert_stopped", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "mbr"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the copies, which it keeps after a failure; the scenario removes its own directory unless an assertion failed"},
       "steps": [
-        {"step_id": "plant", "stage": "execute", "does": "keep the boot partition's files and first sector on the recovery partition, marked whole, and zero the boot partition's first sectors, with installer_repair_disk.sh keep"},
+        {"step_id": "plant", "stage": "execute", "does": "keep the boot partition's files and first sector on the recovery partition, marked whole, and zero the boot partition's first sectors, with the compiled installer repair fixture (keep)"},
         {"step_id": "resume", "stage": "execute", "does": "boot the stick beside the disk and update the disk from it", "machine": "recovery"},
         {"step_id": "inspect", "stage": "execute", "does": "look for the copy on the recovery partition with mdir, and read the boot partition with minfo and its menu with mtype"}
       ],
@@ -198,9 +198,9 @@
         {"step_id": "record", "stage": "execute", "does": "boot the disk, give root, the test account and three accounts keys and two homes outside /home, make the host keys, and print every key's digest", "machine": "installed"},
         {"step_id": "payload", "stage": "execute", "does": "put keys in /srv/alice and /srv/empty of a copy of the root image with debugfs, and make it the one file of the stick's volume with mkexfatfixture"},
         {"step_id": "archive-keys", "stage": "execute", "does": "boot the stick, plant a half-written slot A and a key name that differs only in case, update, remove the name, update again and check the homes outside /home", "machine": "recovery"},
-        {"step_id": "plant-legacy", "stage": "execute", "does": "move the archive to the old layout with an account and an unowned key added, write the image over the root, mark the stop, and plant an unfinished slot A, with installer_repair_disk.sh legacy"},
+        {"step_id": "plant-legacy", "stage": "execute", "does": "move the archive to the old layout with an account and an unowned key added, write the image over the root, mark the stop, and plant an unfinished slot A, with the compiled installer repair fixture (legacy)"},
         {"step_id": "archive-stop", "stage": "execute", "does": "boot the stick, stop a copy of the installer before it writes the new archive, check the old archive is whole, update and check the slots", "machine": "recovery"},
-        {"step_id": "plant-slot", "stage": "execute", "does": "replant the unowned key in slot A, write the image over the root again and mark slot A, with installer_repair_disk.sh slot"},
+        {"step_id": "plant-slot", "stage": "execute", "does": "replant the unowned key in slot A, write the image over the root again and mark slot A, with the compiled installer repair fixture (slot)"},
         {"step_id": "stopped-update", "stage": "execute", "does": "boot the stick and update the disk from the marked archive", "machine": "recovery"},
         {"step_id": "stopped-boot", "stage": "execute", "does": "boot the disk with its SSH port forwarded, check the accounts, homes, keys and modes, log in with root's key and print every key's digest", "machine": "installed-net"},
         {"step_id": "retry", "stage": "execute", "does": "boot the stick, put a file in a home, stop a copy of the installer after the root is checked, and run the update again", "machine": "recovery"}

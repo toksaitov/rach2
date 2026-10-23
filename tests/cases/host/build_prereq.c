@@ -402,6 +402,29 @@ static int recipe_sources(struct fixture *f)
     free(text);
     return 1;
 }
+static void registry_coverage(struct fixture *f, char *have[4])
+{
+    char *save;
+    char *text = fx_read(bp(f->tree, "tests/registry"));
+    for (char *line = text ? strtok_r(text, "\n", &save) : NULL; line;
+         line = strtok_r(NULL, "\n", &save)) {
+        if (*line == '#')
+            continue;
+        char *field = strchr(line, '|');
+        if (!field)
+            continue;
+        field++;
+        char *end = strchr(field, '|');
+        if (end)
+            *end = 0;
+        char *fields;
+        for (char *name = strtok_r(field, ",", &fields); name; name = strtok_r(NULL, ",", &fields))
+            if (strcmp(name, "-") && strcmp(name, "qemu"))
+                required(f, have, name);
+    }
+    free(text);
+}
+
 static int coverage(struct fixture *f)
 {
     char *have[4] = {0};
@@ -443,24 +466,7 @@ static int coverage(struct fixture *f)
                            "qemu-img", "qemu-system-i386", "qemu-system-x86_64", NULL};
     for (size_t i = 0; tools[i]; i++)
         required(f, have, tools[i]);
-    text = fx_read(bp(f->tree, "tests/registry"));
-    for (char *line = text ? strtok_r(text, "\n", &save) : NULL; line;
-         line = strtok_r(NULL, "\n", &save)) {
-        if (*line == '#')
-            continue;
-        char *field = strchr(line, '|');
-        if (!field)
-            continue;
-        field++;
-        char *end = strchr(field, '|');
-        if (end)
-            *end = 0;
-        char *fields;
-        for (char *name = strtok_r(field, ",", &fields); name; name = strtok_r(NULL, ",", &fields))
-            if (strcmp(name, "-") && strcmp(name, "qemu"))
-                required(f, have, name);
-    }
-    free(text);
+    registry_coverage(f, have);
     const char *needs[] = {"qemu-system-x86_64", "qemu-img", "curl"};
     for (size_t p = 1; p < 3; p++) {
         for (size_t i = 0; i < 3; i++)

@@ -1554,43 +1554,59 @@ static const char *bound_disk(const struct etude_case *c, const struct machine_d
     return NULL;
 }
 
-enum etude_status etude_bind_disk(struct etude_case *c, const char *machine, const char *slot,
-                                  const char *path)
+/** Resolve a private regular file and reject links through its descendants. */
+static int private_disk_path(struct etude_case *c, const char *path, char file[4096])
 {
-    struct machine_decl *d = find_decl(c, machine);
-    struct disk_decl disk;
-    struct disk_binding *b;
-    struct etude_case_machine *m;
     struct stat st;
-    char root[4096], file[4096];
+    char root[4096];
     size_t n, i;
-
-    if (d == NULL || slot == NULL || path == NULL || find_disk(d->qemu, slot, &disk) != 0 ||
-        disk.size == 0 || disk.cdrom || disk.base != NULL || lstat(path, &st) != 0 ||
-        !S_ISREG(st.st_mode) || (d->now != NULL && mres(d->now)->state != ETUDE_MACHINE_ENDED) ||
-        realpath(c->scratch, root) == NULL || realpath(path, file) == NULL)
-        return ETUDE_REFUSED;
+    if (lstat(path, &st) != 0 || !S_ISREG(st.st_mode) || realpath(c->scratch, root) == NULL ||
+        realpath(path, file) == NULL)
+        return 0;
     n = strlen(root);
     if (strncmp(root, file, n) != 0 || file[n] != '/' || lstat(file, &st) != 0 ||
         !S_ISREG(st.st_mode) || st.st_nlink != 1)
-        return ETUDE_REFUSED;
+        return 0;
     /* Windows realpath normalizes names without resolving reparse points.
      * Check every descendant as well as the file on both platforms. */
     for (i = n + 1; file[i] != '\0'; i++) {
         if (file[i] == '/') {
             file[i] = '\0';
             if (lstat(file, &st) != 0 || !S_ISDIR(st.st_mode))
-                return ETUDE_REFUSED;
+                return 0;
             file[i] = '/';
         }
     }
+    return 1;
+}
+
+static int disk_active(struct etude_case *c, const char *file)
+{
+    struct etude_case_machine *m;
+    size_t i;
     for (m = c->machines; m != NULL; m = m->next) {
         if (mres(m)->state == ETUDE_MACHINE_ENDED)
             continue;
         for (i = 0; m->disks[i].path != NULL; i++)
             if (strcmp(m->disks[i].path, file) == 0)
-                return ETUDE_REFUSED;
+                return 1;
     }
+    return 0;
+}
+
+enum etude_status etude_bind_disk(struct etude_case *c, const char *machine, const char *slot,
+                                  const char *path)
+{
+    struct machine_decl *d = find_decl(c, machine);
+    struct disk_decl disk;
+    struct disk_binding *b;
+    char file[4096];
+
+    if (d == NULL || slot == NULL || path == NULL || find_disk(d->qemu, slot, &disk) != 0 ||
+        disk.size == 0 || disk.cdrom || disk.base != NULL ||
+        (d->now != NULL && mres(d->now)->state != ETUDE_MACHINE_ENDED) ||
+        !private_disk_path(c, path, file) || disk_active(c, file))
+        return ETUDE_REFUSED;
     for (b = c->bindings; b != NULL; b = b->next)
         if (b->machine == d && strcmp(b->name, slot) == 0)
             break;
@@ -3158,11 +3174,12 @@ static char **arguments(const char *program, char *const args[])
 /** The tools whose command line the image helper implements. */
 static int image_tool(const char *name)
 {
-    static const char *const names[] = {"mattrib", "mcopy",    "mdel",    "mdeltree",  "mdir",
-                                        "mformat", "minfo",    "mlabel",  "mmd",       "mmove",
-                                        "mrd",     "mren",     "mtype",   "debugfs",   "e2fsck",
-                                        "mke2fs",  "dumpe2fs", "tune2fs", "resize2fs",
-                                        "image-channel-fixture", NULL};
+    static const char *const names[] = {"mattrib",  "mcopy",   "mdel",      "mdeltree",
+                                        "mdir",     "mformat", "minfo",     "mlabel",
+                                        "mmd",      "mmove",   "mrd",       "mren",
+                                        "mtype",    "debugfs", "e2fsck",    "mke2fs",
+                                        "dumpe2fs", "tune2fs", "resize2fs", "image-channel-fixture",
+                                        NULL};
     size_t i;
 
     for (i = 0; name != NULL && names[i] != NULL; i++)
@@ -3299,11 +3316,57 @@ static enum etude_status image_request(char *const argv[], int request_at, size_
     return ETUDE_OK;
 }
 
+static enum etude_status image_copy_arguments(char *const argv[], size_t count, size_t prefix,
+                                              struct image_invocation *v)
+{
+    size_t i;
+    if (count < 5)
+        return ETUDE_REFUSED;
+    for (i = count - 2; i < count; i++) {
+        if (strncmp(argv[i], "::", 2) != 0) {
+            if (i == count - 1)
+                v->destination = argv[i];
+            else
+                v->input = argv[i];
+            v->args[prefix + i - 1] = "/tmp/image-file";
+        }
+    }
+    if (v->input != NULL && v->destination != NULL)
+        return ETUDE_REFUSED;
+    return ETUDE_OK;
+}
+
+static size_t image_disk_argument(char *const argv[], size_t count, int mt, int copy,
+                                  struct image_invocation *v)
+{
+    size_t i, disk_at = 0;
+    const char *suffix;
+    if (mt || copy) {
+        for (i = 1; i + 1 < count; i++)
+            if (strcmp(argv[i], "-i") == 0)
+                disk_at = i + 1;
+    } else {
+        disk_at = count - 1;
+        if (strcmp(argv[0], "mke2fs") == 0 && argv[disk_at][0] >= '0' && argv[disk_at][0] <= '9')
+            disk_at--;
+    }
+    if (disk_at == 0 || strlen(argv[disk_at]) >= sizeof(v->disk))
+        return 0;
+    strcpy(v->disk, argv[disk_at]);
+    suffix = strstr(v->disk, mt ? "@@" : "?offset=");
+    if (suffix != NULL) {
+        snprintf(v->device, sizeof(v->device), "/dev/disk0%s", suffix);
+        v->disk[suffix - v->disk] = '\0';
+    } else {
+        strcpy(v->device, "/dev/disk0");
+    }
+    return disk_at;
+}
+
 /** Translate explicit disk and file operands, never a host shell command. */
 static enum etude_status image_arguments(struct etude_case *c, char *const argv[],
                                          const char *output, struct image_invocation *v)
 {
-    const char *suffix;
     size_t count = 0, prefix, i, disk_at = 0;
     int mt, copy, request_at = -1;
 
@@ -3320,25 +3383,9 @@ static enum etude_status image_arguments(struct etude_case *c, char *const argv[
         v->args[1] = "-c";
         v->args[2] = argv[0];
     }
-    if (mt || copy) {
-        for (i = 1; i + 1 < count; i++)
-            if (strcmp(argv[i], "-i") == 0)
-                disk_at = i + 1;
-    } else {
-        disk_at = count - 1;
-        if (strcmp(argv[0], "mke2fs") == 0 && argv[disk_at][0] >= '0' && argv[disk_at][0] <= '9')
-            disk_at--;
-    }
-    if (disk_at == 0 || strlen(argv[disk_at]) >= sizeof(v->disk))
+    disk_at = image_disk_argument(argv, count, mt, copy, v);
+    if (!disk_at)
         return ETUDE_REFUSED;
-    strcpy(v->disk, argv[disk_at]);
-    suffix = strstr(v->disk, mt ? "@@" : "?offset=");
-    if (suffix != NULL) {
-        snprintf(v->device, sizeof(v->device), "/dev/disk0%s", suffix);
-        v->disk[suffix - v->disk] = '\0';
-    } else {
-        strcpy(v->device, "/dev/disk0");
-    }
     for (i = 1; i < count; i++) {
         v->args[prefix + i - 1] = i == disk_at ? v->device : argv[i];
         if (strcmp(argv[i], "-R") == 0 && i + 1 < count)
@@ -3351,30 +3398,17 @@ static enum etude_status image_arguments(struct etude_case *c, char *const argv[
         }
     }
     v->args[prefix + count - 1] = NULL;
-    if (copy) {
-        if (count < 5)
-            return ETUDE_REFUSED;
-        for (i = count - 2; i < count; i++) {
-            if (strncmp(argv[i], "::", 2) != 0) {
-                if (i == count - 1)
-                    v->destination = argv[i];
-                else
-                    v->input = argv[i];
-                v->args[prefix + i - 1] = "/tmp/image-file";
-            }
-        }
-        if (v->input != NULL && v->destination != NULL)
-            return ETUDE_REFUSED;
-    }
+    if (copy && image_copy_arguments(argv, count, prefix, v) != ETUDE_OK)
+        return ETUDE_REFUSED;
     return image_request(argv, request_at, prefix, v);
 }
 
 /** Stage a directory as a native archive for mke2fs's -d operand. */
 static enum etude_status image_directory(struct etude_case *c, struct etude_case_machine *m,
-                                          const char *directory, const char *output)
+                                         const char *directory, const char *output)
 {
-    const char *args[] = {"/bin/busybox", "tar", "-xf", "/tmp/image-directory.tar", "-C", "/tmp",
-                          NULL};
+    const char *args[] = {"/bin/busybox", "tar",  "-xf", "/tmp/image-directory.tar",
+                          "-C",           "/tmp", NULL};
     char path[4096], why[256], name[200];
     struct etude_volume *v;
     struct etude_guest_result result;
@@ -3406,7 +3440,7 @@ static enum etude_status image_directory(struct etude_case *c, struct etude_case
 
 /** Keep a file an image command wrote, even when the command failed. */
 static enum etude_status image_fetch(struct etude_case *c, struct etude_case_machine *m,
-                                      const char *destination, const char *output, int succeeded)
+                                     const char *destination, const char *output, int succeeded)
 {
     const char *args[] = {"/bin/busybox", "test", "-f", "/tmp/image-file", NULL};
     struct etude_guest_result result;
@@ -3456,8 +3490,7 @@ static enum etude_status image_host(struct etude_case *c, char *const argv[], co
     if (v.input != NULL &&
         (st = etude_guest_put(m, v.input, "/tmp/image-file", "0600")) != ETUDE_OK)
         goto done;
-    if (v.directory != NULL &&
-        (st = image_directory(c, m, v.directory, output)) != ETUDE_OK)
+    if (v.directory != NULL && (st = image_directory(c, m, v.directory, output)) != ETUDE_OK)
         goto done;
     st = etude_guest_command(m, v.args, NULL, NULL, output, &result);
     *end = result.termination;
@@ -3468,10 +3501,9 @@ static enum etude_status image_host(struct etude_case *c, char *const argv[], co
         st = ETUDE_LOST;
         goto done;
     }
-    if (v.destination != NULL &&
-        (st = image_fetch(c, m, v.destination, output,
-                           result.termination.end == ETUDE_END_EXITED &&
-                               result.termination.value == 0)) != ETUDE_OK)
+    if (v.destination != NULL && (st = image_fetch(c, m, v.destination, output,
+                                                   result.termination.end == ETUDE_END_EXITED &&
+                                                       result.termination.value == 0)) != ETUDE_OK)
         goto done;
     snprintf(sync_output, sizeof(sync_output), "image-sync.%s", output);
     st = etude_guest_command(m, sync_args, NULL, NULL, sync_output, &synced);

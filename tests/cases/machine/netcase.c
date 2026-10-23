@@ -402,6 +402,18 @@ static const char *client_hosts(const char *word, char out[160])
     return out;
 }
 
+static const char *client_program(const char *name)
+{
+    static const char *const names[] = {"ptydrive", "scp", "sftp", "ssh-keygen"};
+    static const char *const paths[] = {"/ptydrive", "/usr/bin/scp", "/usr/bin/sftp",
+                                        "/usr/bin/ssh-keygen"};
+    size_t i;
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+        if (!strcmp(name, names[i]))
+            return paths[i];
+    return "/usr/bin/ssh";
+}
+
 /** Translate only the client invocation: local file arguments are copied,
  * and its destination reaches the target's host forward through QEMU's
  * gateway. The remote command string is left byte for byte. */
@@ -420,11 +432,7 @@ static int client_arguments(struct net_case *u, char *const argv[], struct clien
     for (i = 0; argv[i] != NULL; i++) {
         word = argv[i];
         if (i == 0)
-            word = strcmp(word, "ptydrive") == 0     ? "/ptydrive"
-                   : strcmp(word, "scp") == 0        ? "/usr/bin/scp"
-                   : strcmp(word, "sftp") == 0       ? "/usr/bin/sftp"
-                   : strcmp(word, "ssh-keygen") == 0 ? "/usr/bin/ssh-keygen"
-                                                     : "/usr/bin/ssh";
+            word = client_program(word);
         else if (i > 0 && strcmp(argv[i - 1], "-b") == 0) {
             if (!client_batch(u, a, word, path))
                 return 0;

@@ -679,11 +679,26 @@ static void retry(struct resume *r)
  * build on stops them when it fails, as the suite stopped there, and the
  * assertions not reached fail with the reason.
  */
+static void plant_legacy(struct resume *r)
+{
+    struct etude_case *c = r->c;
+    uint64_t len;
+    const char *p;
+    if ((p = etude_private_copy(c, "disk")) != NULL)
+        snprintf(r->disk, sizeof(r->disk), "%s", p);
+    if (p == NULL || repair_entry(c, "mkgpt", r->disk, 2, &r->rec, &len) != 0 ||
+        repair_entry(c, "mkgpt", r->disk, 3, &r->rootat, &len) != 0)
+        snprintf(r->why, sizeof(r->why),
+                 "the recovery or the root partition's start could not be read");
+    r->rec /= 512;
+    r->rootat /= 512;
+    if (r->why[0] == '\0')
+        plant(r, "legacy");
+}
+
 int etude_scenario(struct etude_case *c)
 {
     struct resume r;
-    uint64_t len;
-    const char *p;
 
     memset(&r, 0, sizeof(r));
     r.c = c;
@@ -734,16 +749,7 @@ int etude_scenario(struct etude_case *c)
 
     if (etude_step(c, "plant-legacy") != ETUDE_OK)
         return 1;
-    if ((p = etude_private_copy(c, "disk")) != NULL)
-        snprintf(r.disk, sizeof(r.disk), "%s", p);
-    if (p == NULL || repair_entry(c, "mkgpt", r.disk, 2, &r.rec, &len) != 0 ||
-        repair_entry(c, "mkgpt", r.disk, 3, &r.rootat, &len) != 0)
-        snprintf(r.why, sizeof(r.why),
-                 "the recovery or the root partition's start could not be read");
-    r.rec /= 512;
-    r.rootat /= 512;
-    if (r.why[0] == '\0')
-        plant(&r, "legacy");
+    plant_legacy(&r);
     if (drive_halted())
         return 1;
     repair_assert(c, "legacy-planted", r.why[0] == '\0', r.why);

@@ -6,6 +6,7 @@ struct suite_probe {
     const char *id, *mode;
     int alone;
 };
+
 static const struct suite_probe probes[] = {
     {"meet1", "meet", 0},          {"meet2", "meet", 0},   {"meet3", "meet", 0},
     {"meet4", "meet", 0},          {"meet5", "meet", 0},   {"meet6", "meet", 0},
@@ -17,13 +18,16 @@ static const struct suite_probe probes[] = {
     {"gone", "gone", 0},           {"keep", "keep", 0},    {"signals", "signals", 0},
     {"linger", "linger", 0},       {"alone1", "alone", 1}, {"alone2", "alone", 1},
     {"unlisted", "script_fail", 0}};
+
 static const struct suite_probe checker_probes[] = {{"elfcheck", "--selftest", 0},
                                                     {"cfgcheck", "--selftest", 0},
                                                     {"setidcheck", "--selftest", 0},
                                                     {"prosecheck", "--selftest", 0},
                                                     {"pecheck", "--selftest", 0}};
+
 static const struct suite_probe script_probes[] = {{"script_pass", "script_pass", 0},
                                                    {"script_fail", "script_fail", 0}};
+
 static int file_hash(const char *path, char hex[65])
 {
     struct sha256 h;

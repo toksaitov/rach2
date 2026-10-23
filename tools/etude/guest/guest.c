@@ -1662,6 +1662,18 @@ static void take_terminal(struct attempt *a, const char *input)
     fcntl(a->fd[1], F_SETFL, O_NONBLOCK);
 }
 
+static int spawn_pipes(struct attempt *a, struct pipes *pp)
+{
+    if (pipe(pp->out) < 0 || pipe(pp->err) < 0 || pipe(pp->sync) < 0 || pipe(pp->exe) < 0 ||
+        fcntl(pp->exe[1], F_SETFD, FD_CLOEXEC) < 0 || (a->pid = fork()) < 0) {
+        note("spawn: %s", strerror(errno));
+        close_pipes(pp);
+        a->pid = 0;
+        return -1;
+    }
+    return 0;
+}
+
 /**
  * Start the child of attempt `a` from `inv`. The child leads a session and
  * a group of its own and waits until its identity is in the attempt's
@@ -1701,12 +1713,8 @@ static const char *spawn(struct attempt *a, const struct invocation *inv)
         free_vectors(argv, envp);
         return ETUDE_ERR_LIMIT;
     }
-    if (pipe(pp.out) < 0 || pipe(pp.err) < 0 || pipe(pp.sync) < 0 || pipe(pp.exe) < 0 ||
-        fcntl(pp.exe[1], F_SETFD, FD_CLOEXEC) < 0 || (a->pid = fork()) < 0) {
-        note("spawn: %s", strerror(errno));
+    if (spawn_pipes(a, &pp) < 0) {
         free_vectors(argv, envp);
-        close_pipes(&pp);
-        a->pid = 0;
         return ETUDE_ERR_FAILED;
     }
     if (a->pid == 0) {

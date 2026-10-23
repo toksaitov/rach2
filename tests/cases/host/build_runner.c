@@ -132,6 +132,7 @@ struct select_row {
     const char *name, *arch, *cases, *rows, *suites, *want;
     int status;
 };
+
 static const struct select_row selections[] = {
     {"manifest-order", "i686", "host.alpha.c host.alpha.a", NULL, "alpha",
      "alpha i686 host.alpha.a\nalpha none host.alpha.c\n", 0},
@@ -149,6 +150,7 @@ static const struct select_row selections[] = {
     {"rows-empty", "i686", NULL, " ", "agents", NULL, 2},
     {"rows-repeated", "i686", NULL, "x x", "agents", NULL, 2},
     {"rows-unknown", "i686", NULL, "x nope", "agents", NULL, 2}};
+
 static int selection_row(struct fixture *f, const char *tree, const struct select_row *r,
                          int prepare)
 {

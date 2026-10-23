@@ -144,6 +144,45 @@ static int fsck_clean(struct drive *d)
     return grow_shell(d, "FSCK", NULL, "/sbin/e2fsck -fn /dev/disk0p1 > /dev/null 2>&1") == 0;
 }
 
+/** Read the added group's inode-table block from its disk descriptor. */
+static uint32_t descriptor_table(struct etude_case *c, const char *one)
+{
+    uint32_t itable = 0;
+    char count[32], of[600], in[600];
+    char *const argv[] = {"qemu-img", "dd",  "-f", "qcow2", "-O", "raw",
+                          "bs=512",   count, in,   of,      NULL};
+    unsigned char *bytes;
+
+    snprintf(count, sizeof(count), "count=%" PRIu64, DESC / 512 + 1);
+    snprintf(in, sizeof(in), "if=%s", one);
+    snprintf(of, sizeof(of), "of=%s", etude_evidence(c, "desc.raw"));
+    grow_made(of + 3);
+    size_t len = 0;
+    bytes = drive_host(c, argv, "desc.out") == 0
+                ? (unsigned char *)read_file(etude_evidence(c, "desc.raw"), &len)
+                : NULL;
+    if (bytes != NULL && len >= DESC + 12)
+        itable = (uint32_t)bytes[DESC + 8] | (uint32_t)bytes[DESC + 9] << 8 |
+                 (uint32_t)bytes[DESC + 10] << 16 | (uint32_t)bytes[DESC + 11] << 24;
+    free(bytes);
+    return itable;
+}
+
+static int measured_records(struct etude_case *c, const char *measures)
+{
+    size_t len = 0;
+    char *text;
+    int ok;
+    FILE *report = fopen(etude_evidence(c, "measures.txt"), "w");
+    text = read_file(measures, &len);
+    ok = report != NULL && text != NULL && check_grow_records(text, report);
+    if (report != NULL && fclose(report) != 0)
+        ok = 0;
+    free(text);
+    text = NULL;
+    return ok;
+}
+
 /**
  * Grow on the overlay `one`, judge its writes and its measures, write a file
  * at the end of the grown volume, read the descriptor of the first added
@@ -248,15 +287,8 @@ int etude_scenario(struct etude_case *c)
     ok = text != NULL && grow_write_text(measures, text) == 0;
     free(text);
     text = NULL;
-    if (ok) {
-        FILE *report = fopen(etude_evidence(c, "measures.txt"), "w");
-        text = read_file(measures, &len);
-        ok = report != NULL && text != NULL && check_grow_records(text, report);
-        if (report != NULL && fclose(report) != 0)
-            ok = 0;
-        free(text);
-        text = NULL;
-    }
+    if (ok)
+        ok = measured_records(c, measures);
     grow_assert(c, "measures", ok,
                 "growroot's phase measures do not match the wrapper's counters or show no work");
 
@@ -288,25 +320,7 @@ int etude_scenario(struct etude_case *c)
 
     if (etude_step(c, "descriptor") != ETUDE_OK)
         return 1;
-    {
-        char count[32], of[600], in[600];
-        char *const argv[] = {"qemu-img", "dd",  "-f", "qcow2", "-O", "raw",
-                              "bs=512",   count, in,   of,      NULL};
-        unsigned char *bytes;
-
-        snprintf(count, sizeof(count), "count=%" PRIu64, DESC / 512 + 1);
-        snprintf(in, sizeof(in), "if=%s", one);
-        snprintf(of, sizeof(of), "of=%s", etude_evidence(c, "desc.raw"));
-        grow_made(of + 3);
-        len = 0;
-        bytes = drive_host(c, argv, "desc.out") == 0
-                    ? (unsigned char *)read_file(etude_evidence(c, "desc.raw"), &len)
-                    : NULL;
-        if (bytes != NULL && len >= DESC + 12)
-            itable = (uint32_t)bytes[DESC + 8] | (uint32_t)bytes[DESC + 9] << 8 |
-                     (uint32_t)bytes[DESC + 10] << 16 | (uint32_t)bytes[DESC + 11] << 24;
-        free(bytes);
-    }
+    itable = descriptor_table(c, one);
     snprintf(why, sizeof(why), "the first added group's inode table is at block %" PRIu32, itable);
     ok = itable >= ADDED * GROUP_BLOCKS && itable < (ADDED + 1) * GROUP_BLOCKS;
     grow_assert(c, "descriptor", ok, why);
