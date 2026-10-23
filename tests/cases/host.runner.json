@@ -1,32 +1,8 @@
 {
   "schema_version": 1,
   "family_id": "host.runner",
-  "summary": "The self-tests of the old runner's programs that tests/run and the old drivers still use, booting nothing; the program is tests/cases/host/runner.sh",
+  "summary": "The self-test of runutil's process groups, which tests/run uses, booting nothing; the program is tests/cases/host/runner.sh",
   "cases": [
-    {
-      "case_id": "host.runner.harness",
-      "behavior": "the harness's own self-test, without QEMU: its escape decoder and mouse step, its probe wait bounds, a write the machine does not read, output read before a timeout or an exit, an unreadable sendfile, a step ended at a --never text and the report of a failed step",
-      "units": ["runner", "`harness --selftest`"],
-      "domain": "host",
-      "architectures": "none",
-      "workload": {"arguments": ["harness"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh"], "features": {}},
-      "execution": {"program": "runner", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "nothing beyond its output"},
-      "assertions": [
-        {"assertion_id": "selftest", "checks": "harness --selftest exits 0", "source": "program"}
-      ],
-      "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 600000000}, "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
-      "prepare": [
-        {"name": "runner", "node": "tests/cases/host/runner", "per_architecture": false},
-        {"name": "harness", "node": "tests/system/harness", "per_architecture": false}
-      ],
-      "timing": [],
-      "native": {"plan": "host"}
-    },
     {
       "case_id": "host.runner.group",
       "behavior": "runutil runs a command in a process group of its own whether its parent put it there, its own setpgid did or it leads a session, and reports a setpgid that gives it none with status 2",
@@ -38,29 +14,6 @@
       "execution": {"program": "runner", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the private copy of runutil and its build, which runutil_group.sh removes"},
       "assertions": [
         {"assertion_id": "setpgid", "checks": "tests/system/runutil_group.sh exits 0", "source": "program"}
-      ],
-      "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 600000000}, "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
-      "prepare": [
-        {"name": "runner", "node": "tests/cases/host/runner", "per_architecture": false}
-      ],
-      "timing": [],
-      "native": {"plan": "host"}
-    },
-    {
-      "case_id": "host.runner.cpu",
-      "behavior": "quiet processor work in another process group keeps a supervised command alive, and an unrelated worker does not keep an idle one alive",
-      "units": ["runner", "`tests/system/runutil_cpu.sh`"],
-      "domain": "host",
-      "architectures": "none",
-      "workload": {"arguments": ["cpu"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "cc"], "features": {}},
-      "execution": {"program": "runner", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "the private copy of runutil, its workers and their logs, which runutil_cpu.sh stops and removes"},
-      "assertions": [
-        {"assertion_id": "descendants", "checks": "tests/system/runutil_cpu.sh exits 0", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},

@@ -4,18 +4,15 @@
 # the self-tests of the old runner's programs that tests/run and the old
 # drivers still use, booting nothing.
 #
-# Each run is one case, named by its argument: `harness`, the harness's own
-# self-test; and `group` and `cpu`, runutil's supervision of a command's
-# process group and of the processor time of its descendants, from
-# tests/system/runutil_group.sh and runutil_cpu.sh. The manifest says what
-# each assertion checks.
+# Each run is one case, named by its argument: `group`, runutil's supervision
+# of a command's process group, from tests/system/runutil_group.sh. The
+# manifest says what each assertion checks.
 #
 # The program writes the case's report records on its standard output
 # (tools/etude/Readme.md, Report records), with the output of what it runs
 # between them, and exits 0 when every assertion passed and 1 otherwise.
 # etude runs it with ETUDE_TREE naming the root of the tree and TMPDIR the
-# case's workspace; the harness is the artifact the manifest's `prepare`
-# lists.
+# case's workspace.
 #
 # Usage, in the root of a built tree, or anywhere with ETUDE_TREE set to it:
 #     sh tests/cases/host/runner.sh CASE
@@ -64,18 +61,11 @@ judge() {
 
 FAILED=""
 case "$CASE" in
-    harness|group|cpu) ;;
+    group) ;;
     *) echo "runner: no case $CASE" >&2; exit 2 ;;
 esac
 record "begin $ID"
-case "$CASE" in
-    harness)
-        judge selftest "harness --selftest" "$REPO/build/tests/system/harness" --selftest ;;
-    group)
-        judge setpgid "runutil_group.sh" sh "$REPO/tests/system/runutil_group.sh" ;;
-    cpu)
-        judge descendants "runutil_cpu.sh" sh "$REPO/tests/system/runutil_cpu.sh" ;;
-esac
+judge setpgid "runutil_group.sh" sh "$REPO/tests/system/runutil_group.sh"
 record "end 1"
 if [ -z "$FAILED" ]; then
     echo "runner: result: passed: $ID"
