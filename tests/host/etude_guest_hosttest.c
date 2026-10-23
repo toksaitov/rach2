@@ -39,6 +39,7 @@ extern const char *etude_guest_fault;
 #define PATH_CAP 4096
 
 #include "compat/tree_host.h"
+#include "compat/workload_host.h"
 
 static int failures;
 static char work[512];
@@ -46,7 +47,7 @@ static char work[512];
  * doubled slash, which is how etude-guest gives a workspace to a program. */
 static char resolved[PATH_CAP];
 /* Prepared workload bytes, transferred with their explicit length. */
-static unsigned char *workload;
+static char *workload;
 static size_t workload_size;
 static pid_t guest = -1;
 static int to_guest = -1;
@@ -1589,29 +1590,12 @@ static void check_serial(void)
     end_guest();
 }
 
-/** Read the small prepared workload once; no compilation occurs at execution. */
-static int load_workload(void)
-{
-    const char *tools = getenv("HOST_TEST_TOOLS");
-    char path[PATH_CAP];
-    struct stat st;
-    FILE *f;
-    int n = snprintf(path, sizeof(path), "%s/etude-workload",
-                     tools && *tools ? tools : "build/tests/host-suite/tools");
-    if (n < 0 || n >= (int)sizeof(path) || stat(path, &st) || st.st_size <= 0 ||
-        (uintmax_t)st.st_size > SIZE_MAX || !(f = fopen(path, "rb")))
-        return 0;
-    workload_size = (size_t)st.st_size;
-    workload = malloc(workload_size);
-    n = workload && fread(workload, 1, workload_size, f) == workload_size;
-    return !fclose(f) && n;
-}
-
 int main(void)
 {
     char *tmp = getenv("TMPDIR");
 
-    if (!load_workload()) {
+    workload = host_workload_read(&workload_size);
+    if (!workload) {
         fprintf(stderr, "etude_guest_hosttest: prepared etude-workload is missing or unreadable\n");
         free(workload);
         return 2;
