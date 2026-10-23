@@ -1,9 +1,9 @@
 /* Drive etude-guest through pipes, as the controller drives it through SSH
- * and the serial console, and check the contracts of its commands. Run as
- * `--setsid PROGRAM [ARG...]`, this program is setsid(1) for the scripts it
- * runs, since macOS has none.
+ * and the serial console, and check the contracts of its commands. Small
+ * prepared native workloads exercise each invocation without an interpreter.
  * host-deps: tools/etude/guest/guest.c tools/etude/guest/fixture.c
  * host-deps: tools/etude/guest/wire.c
+ * host-tools: etude-workload
  * host-deps: tools/etude/history_json.c utils/sha256.c
  * host-cflags: -I tools/etude/include -I tools/etude -I tools/etude/guest
  * host-cflags: -I utils
@@ -38,12 +38,6 @@ extern const char *etude_guest_fault;
  * freestanding <limits.h> of the host tests' build has no PATH_MAX. */
 #define PATH_CAP 4096
 
-/* The seconds a holder of a scratch FIFO sleeps: a day, longer than the host
- * case's watchdog lets a check go without progress, so that while the test
- * runs only a kill ends a holder, and one that a killed test leaves ends by
- * itself. */
-#define HOLD_SECONDS "86400"
-
 #include "compat/tree_host.h"
 
 static int failures;
@@ -51,8 +45,9 @@ static char work[512];
 /* The scratch directory by its resolved path, with no symbolic link and no
  * doubled slash, which is how etude-guest gives a workspace to a program. */
 static char resolved[PATH_CAP];
-/* This program, by an absolute path. */
-static char self[PATH_CAP];
+/* Prepared workload bytes, transferred with their explicit length. */
+static unsigned char *workload;
+static size_t workload_size;
 static pid_t guest = -1;
 static int to_guest = -1;
 static int from_guest = -1;
@@ -134,6 +129,7 @@ static void cleanup(void)
 {
     end_guest();
     end_groups();
+    free(workload);
     if (*work)
         remove_tree(work);
 }
@@ -404,9 +400,9 @@ struct shape {
     const char *input;    /* the text of `input.txt`, its standard input, or NULL */
 };
 
-/** Store a shell script as `name` and an invocation of it of shape `sh` for
+/** Store the compiled workload as `name` and an invocation of shape `sh` for
  * the attempt `token`; the invocation's digest goes to `inv`. */
-static void put_invocation(const char *name, const char *script, const char *token,
+static void put_invocation(const char *name, const char *workload_role, const char *token,
                            const struct shape *sh, char inv[65])
 {
     const char *input = sh->input;
@@ -416,10 +412,10 @@ static void put_invocation(const char *name, const char *script, const char *tok
     char c[24];
     int n;
 
-    put_file(name, script, strlen(script), "0755", hex, c);
+    put_file(name, (const char *)workload, workload_size, "0755", hex, c);
     n = snprintf(files, sizeof(files),
                  "{\"name\": \"%s\", \"sha256\": \"%s\", \"size_bytes\": %zu, \"mode\": \"0755\"}",
-                 name, hex, strlen(script));
+                 name, hex, workload_size);
     if (input) {
         put_file("input.txt", input, strlen(input), "0644", hex, c);
         snprintf(files + n, sizeof(files) - (size_t)n,
@@ -433,17 +429,18 @@ static void put_invocation(const char *name, const char *script, const char *tok
         "\"attempt_id\": \"attempt-%s\", \"attempt_token\": \"%s\", "
         "\"case_id\": \"host.etude.guest\", \"program\": \"%s\", \"arguments\": [\"a b\"], "
         "\"environment\": {\"PATH\": \"/bin:/usr/bin\", \"HOME\": \"${WORKSPACE}\", "
-        "\"MARKS\": \"%s/marks\", \"HOSTTEST\": \"%s\"}, \"stdin\": %s, \"role\": \"%s\", "
+        "\"MARKS\": \"%s/marks\", \"ETUDE_WORKLOAD_ROLE\": \"%s\"}, \"stdin\": %s, \"role\": "
+        "\"%s\", "
         "\"files\": [%s], \"fixtures\": %s, \"deadline_us\": %ld, \"grace_us\": 500000, "
         "\"output_max_bytes\": %ld}",
-        token, token, name, work, self, input ? "\"input.txt\"" : "null", sh->role, files,
+        token, token, name, work, workload_role, input ? "\"input.txt\"" : "null", sh->role, files,
         sh->fixtures, sh->deadline_ms * 1000, case_keep);
     put_file("invocation.json", text, (size_t)n, "0644", inv, c);
 }
 
 /** put_invocation with the workspace alone and no input. */
-static void put_case(const char *name, const char *script, const char *token, const char *role,
-                     long deadline_ms, char inv[65])
+static void put_case(const char *name, const char *workload_role, const char *token,
+                     const char *role, long deadline_ms, char inv[65])
 {
     struct shape sh;
 
@@ -451,12 +448,12 @@ static void put_case(const char *name, const char *script, const char *token, co
     sh.deadline_ms = deadline_ms;
     sh.fixtures = "[{\"fixture\": \"workspace\", \"given\": []}]";
     sh.input = NULL;
-    put_invocation(name, script, token, &sh, inv);
+    put_invocation(name, workload_role, token, &sh, inv);
 }
 
 /** put_invocation of an ordinary case with the fixtures of the JSON array
  * `fixtures` and the standard input `input`, or none when it is NULL. */
-static void put_case_with(const char *name, const char *script, const char *token,
+static void put_case_with(const char *name, const char *workload_role, const char *token,
                           const char *fixtures, const char *input, char inv[65])
 {
     struct shape sh;
@@ -465,7 +462,7 @@ static void put_case_with(const char *name, const char *script, const char *toke
     sh.deadline_ms = 30000;
     sh.fixtures = fixtures;
     sh.input = input;
-    put_invocation(name, script, token, &sh, inv);
+    put_invocation(name, workload_role, token, &sh, inv);
 }
 
 /* The output, the end and the cleanup an attempt reported. */
@@ -576,7 +573,7 @@ static int collect(struct ending *e, const char *c, const char *token)
     return collect_within(e, c, token, ETUDE_FRAME_STDIO_MAX);
 }
 
-/** The number of lines of the marks file, where the scripts count their
+/** The number of lines of the marks file, where the workloads count their
  * runs. */
 static int marks(void)
 {
@@ -601,7 +598,7 @@ static int alive(long pid)
     return pid > 0 && (kill((pid_t)pid, 0) == 0 || errno != ESRCH);
 }
 
-/** Read a file whose first line is a PID, as a script writes one. */
+/** Read a file whose first line is a PID, as a workload writes one. */
 static long read_pid(const char *name)
 {
     char path[600];
@@ -619,7 +616,7 @@ static long read_pid(const char *name)
 }
 
 /** Open the read end of the FIFO `name` in the scratch directory, which an
- * attempt's script opens for writing as its descendants' descriptor 9; -1 on
+ * attempt's workload opens for writing as its descendants' descriptor 9; -1 on
  * failure. Open it before the attempt runs. */
 static int watch(const char *name)
 {
@@ -726,10 +723,8 @@ static void bye(int status)
  * over standard I/O. */
 static void check_pass_fail_repeat(void)
 {
-    static const char pass[] = "#!/bin/sh\necho \"@etude 1 begin host.etude.guest\"\n"
-                               "echo \"$1|$HOME|$(pwd)\"\necho run >> \"$MARKS\"\n"
-                               "echo \"@etude 1 end 0\"\n";
-    static const char fail[] = "#!/bin/sh\necho broken >&2\nexit 3\n";
+    static const char pass[] = "guest-pass";
+    static const char fail[] = "guest-fail";
     struct ending e;
     struct got g;
     char inv[65];
@@ -828,8 +823,8 @@ static void check_pass_fail_repeat(void)
  * repeated, with output past the invocation's bound, and its usage. */
 static void check_sizes(void)
 {
-    static const char both[] = "#!/bin/sh\necho out\necho err >&2\n";
-    static const char flood[] = "#!/bin/sh\nhead -c 1200 /dev/zero | tr '\\0' 0\n";
+    static const char both[] = "guest-both";
+    static const char flood[] = "guest-flood";
     struct ending e;
     struct ending again;
     char inv[65];
@@ -863,20 +858,13 @@ static void check_sizes(void)
 }
 
 /* A program that ignores SIGTERM and says when it is ready. */
-static const char ignore[] = "#!/bin/sh\ntrap '' TERM\nexec 9> \"$MARKS.open\"\n"
-                             "echo $$ > \"$MARKS.leader\"\n"
-                             "echo ready\nwhile :; do sleep 1; done\n";
+static const char ignore[] = "guest-ignore";
 
 /** A cancellation, a deadline, a child that left its group and a lost
  * connection: each ends the attempt as stopped and leaves no process. */
 static void check_interruptions(void)
 {
-    static const char hang[] = "#!/bin/sh\nexec 9> \"$MARKS.open\"\n"
-                               "echo $$ > \"$MARKS.leader\"\n"
-                               "sleep " HOLD_SECONDS " &\necho $! > \"$MARKS.member\"\n"
-                               "\"$HOSTTEST\" --setsid sleep " HOLD_SECONDS " &\n"
-                               "echo \"@etude 1 child $!\"\n"
-                               "echo $! > \"$MARKS.escaped\"\necho ready\nwait\n";
+    static const char hang[] = "guest-hang";
     struct ending e;
     struct got g;
     char inv[65];
@@ -1020,11 +1008,7 @@ static int settled_confirmed(const char *token)
  * reports its exit even while its new parent has not reaped it. */
 static void check_orphan_group(void)
 {
-    static const char leaving[] = "#!/bin/sh\nexec 9> \"$MARKS.open\"\n"
-                                  "echo $$ > \"$MARKS.leader\"\nsleep " HOLD_SECONDS " &\n"
-                                  "echo $! > \"$MARKS.member\"\n"
-                                  "exec 8> \"$MARKS.leader-open\"\necho ready\n"
-                                  "read release < \"$MARKS.release\"\n";
+    static const char leaving[] = "guest-leaving";
     struct got g;
     char inv[65];
     char c[24];
@@ -1102,8 +1086,8 @@ static long make_group(const char *name, int own_session, long *group)
         for (i = 3; i < 1024; i++)
             if (i != fd)
                 close(i);
-        execl("/bin/sleep", "sleep", HOLD_SECONDS, (char *)NULL);
-        _exit(127);
+        for (;;)
+            pause();
     }
     close(p[1]);
     if (first < 0 || read(p[0], &pid, sizeof(pid)) != (ssize_t)sizeof(pid))
@@ -1214,7 +1198,7 @@ static long read_text(const char *path, char *buf, size_t cap)
  * whole, and the run sent again is answered with the whole end. */
 static void check_unfinished_end(void)
 {
-    static const char quick[] = "#!/bin/sh\necho out\necho err >&2\n";
+    static const char quick[] = "guest-both";
     static char whole[8192];
     static char now[8192];
     struct ending e;
@@ -1263,7 +1247,7 @@ static void check_unfinished_end(void)
  * which only the run's record keeps. */
 static void check_record_first(void)
 {
-    static const char quick[] = "#!/bin/sh\necho quick\n";
+    static const char quick[] = "guest-quick";
     struct ending e;
     char inv[65];
     char c[24];
@@ -1406,10 +1390,8 @@ static void refused_run(const char *token, const char *inv, const char *code, co
  */
 static void check_fixtures(void)
 {
-    static const char args[] = "#!/bin/sh\necho run >> \"$MARKS\"\necho \"$0|$*\"\n";
-    static const char term[] =
-        "#!/bin/sh\necho run >> \"$MARKS\"\n[ -t 0 ] && [ -t 1 ] && [ -t 2 ] "
-        "&& : </dev/tty && read line && echo \"got $line\"\n";
+    static const char args[] = "guest-args";
+    static const char term[] = "guest-term";
     static const char *const bad[] = {
         "[{\"fixture\": \"ids\", \"given\": [\"1000\"]}]",
         "[{\"fixture\": \"ids\", \"given\": [\"1000:314159001\", \"1001:314159001\"]}]",
@@ -1500,8 +1482,7 @@ static void check_fixtures(void)
 
 static void check_long_end(void)
 {
-    static const char flood[] = "#!/bin/sh\nhead -c 10000000 /dev/zero | tr '\\0' 0\n"
-                                "head -c 10000000 /dev/zero | tr '\\0' 1 >&2\nkill -TERM $$\n";
+    static const char flood[] = "guest-long";
     static const char long_cmd[] = "999999999999999999";
     static struct ending e;
     char inv[65];
@@ -1526,8 +1507,7 @@ static void check_long_end(void)
  */
 static void check_serial(void)
 {
-    static const char init[] = "#!/bin/sh\necho \"@etude 1 begin host.etude.guest\"\n"
-                               "echo \"pid $$\"\necho run >> \"$MARKS\"\nexit 7\n";
+    static const char init[] = "guest-init";
     static struct got g;
     static struct got again;
     char inv[65];
@@ -1609,28 +1589,31 @@ static void check_serial(void)
     end_guest();
 }
 
-/** Execute `argv` in a new session, as setsid(1) does, for the `hang`
- * script's child that leaves the attempt's process group; 127 when it
- * cannot. */
-static int setsid_main(char **argv)
+/** Read the small prepared workload once; no compilation occurs at execution. */
+static int load_workload(void)
 {
-    if (setsid() < 0) {
-        perror("etude_guest_hosttest: setsid");
-        return 127;
-    }
-    execvp(argv[0], argv);
-    perror(argv[0]);
-    return 127;
+    const char *tools = getenv("HOST_TEST_TOOLS");
+    char path[PATH_CAP];
+    struct stat st;
+    FILE *f;
+    int n = snprintf(path, sizeof(path), "%s/etude-workload",
+                     tools && *tools ? tools : "build/tests/host-suite/tools");
+    if (n < 0 || n >= (int)sizeof(path) || stat(path, &st) || st.st_size <= 0 ||
+        (uintmax_t)st.st_size > SIZE_MAX || !(f = fopen(path, "rb")))
+        return 0;
+    workload_size = (size_t)st.st_size;
+    workload = malloc(workload_size);
+    n = workload && fread(workload, 1, workload_size, f) == workload_size;
+    return !fclose(f) && n;
 }
 
-int main(int argc, char **argv)
+int main(void)
 {
     char *tmp = getenv("TMPDIR");
 
-    if (argc >= 3 && strcmp(argv[1], "--setsid") == 0)
-        return setsid_main(argv + 2);
-    if (!realpath(argv[0], self)) {
-        perror(argv[0]);
+    if (!load_workload()) {
+        fprintf(stderr, "etude_guest_hosttest: prepared etude-workload is missing or unreadable\n");
+        free(workload);
         return 2;
     }
     signal(SIGPIPE, SIG_IGN);
