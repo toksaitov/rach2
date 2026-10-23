@@ -129,6 +129,13 @@ struct blank {
     char *path;
 };
 
+/* A private file bound to one declared empty disk slot. */
+struct disk_binding {
+    struct disk_binding *next;
+    struct machine_decl *machine;
+    char *name, *path;
+};
+
 /* A disk of a machine's profile, as the manifest declares it. */
 struct disk_decl {
     const char *name;
@@ -219,6 +226,7 @@ struct etude_case {
     struct etude_case_service *services;
     struct made *made;
     struct blank *blanks;
+    struct disk_binding *bindings;
     char path[4096]; /* the path etude_evidence gave last */
 };
 
@@ -1520,6 +1528,74 @@ static struct machine_decl *find_decl(struct etude_case *c, const char *id)
     return NULL;
 }
 
+/** Find the private file bound to a slot, or NULL. */
+static const char *bound_disk(const struct etude_case *c,
+                              const struct machine_decl *machine, const char *name)
+{
+    const struct disk_binding *b;
+
+    for (b = c->bindings; b != NULL; b = b->next)
+        if (b->machine == machine && strcmp(b->name, name) == 0)
+            return b->path;
+    return NULL;
+}
+
+enum etude_status etude_bind_disk(struct etude_case *c, const char *machine,
+                                  const char *slot, const char *path)
+{
+    struct machine_decl *d = find_decl(c, machine);
+    struct disk_decl disk;
+    struct disk_binding *b;
+    struct etude_case_machine *m;
+    struct stat st;
+    char root[4096], file[4096];
+    size_t n, i;
+
+    if (d == NULL || slot == NULL || path == NULL ||
+        find_disk(d->qemu, slot, &disk) != 0 || disk.size == 0 ||
+        disk.cdrom || disk.base != NULL ||
+        (d->now != NULL && mres(d->now)->state != ETUDE_MACHINE_ENDED) ||
+        realpath(c->scratch, root) == NULL || realpath(path, file) == NULL)
+        return ETUDE_REFUSED;
+    n = strlen(root);
+    if (strncmp(root, file, n) != 0 || file[n] != '/' ||
+        lstat(file, &st) != 0 || !S_ISREG(st.st_mode) || st.st_nlink != 1)
+        return ETUDE_REFUSED;
+    /* Windows realpath normalizes names without resolving reparse points.
+     * Check every descendant as well as the file on both platforms. */
+    for (i = n + 1; file[i] != '\0'; i++) {
+        if (file[i] == '/') {
+            file[i] = '\0';
+            if (lstat(file, &st) != 0 || !S_ISDIR(st.st_mode))
+                return ETUDE_REFUSED;
+            file[i] = '/';
+        }
+    }
+    for (m = c->machines; m != NULL; m = m->next) {
+        if (mres(m)->state == ETUDE_MACHINE_ENDED)
+            continue;
+        for (i = 0; m->disks[i].path != NULL; i++)
+            if (strcmp(m->disks[i].path, file) == 0)
+                return ETUDE_REFUSED;
+    }
+    for (b = c->bindings; b != NULL; b = b->next)
+        if (b->machine == d && strcmp(b->name, slot) == 0)
+            break;
+    if (b == NULL) {
+        b = calloc(1, sizeof(*b));
+        if (b == NULL || (b->name = dup_text(slot)) == NULL) {
+            free(b);
+            return ETUDE_FAILED;
+        }
+        b->machine = d;
+        b->next = c->bindings;
+        c->bindings = b;
+    }
+    free(b->path);
+    b->path = dup_text(file);
+    return b->path != NULL ? ETUDE_OK : ETUDE_FAILED;
+}
+
 /** Copy the strings of array `v` into `out`, at most `max`, ended by NULL;
  * -1 when there are more or one is not a string. */
 static int strings(const struct eh_json *v, const char **out, size_t max)
@@ -1803,7 +1879,9 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
                  m->decl->id, name, DISKS_MAX);
             return ETUDE_REFUSED;
         }
-        m->disks[i].path = d.cdrom ? etude_artifact(c, name) : etude_private_copy(c, name);
+        m->disks[i].path = bound_disk(c, m->decl, name);
+        if (m->disks[i].path == NULL)
+            m->disks[i].path = d.cdrom ? etude_artifact(c, name) : etude_private_copy(c, name);
         if (m->disks[i].path == NULL)
             return ETUDE_REFUSED;
         m->disks[i].bus = d.bus;
@@ -2032,8 +2110,9 @@ enum etude_status etude_boot(struct etude_case *c, const char *machine, const ch
     end->console_offset = 0;
     if (stop_asked)
         return ETUDE_STOPPED;
-    if (d == NULL || c->cur < 0 || c->steps[c->cur].machine == NULL ||
-        strcmp(c->steps[c->cur].machine, machine) != 0) {
+    if (d == NULL || c->cur < 0 ||
+        (!d->helper && (c->steps[c->cur].machine == NULL ||
+                       strcmp(c->steps[c->cur].machine, machine) != 0))) {
         diag("machine %s is not the machine of the step that runs", machine);
         c->faults++;
         return ETUDE_REFUSED;
@@ -3477,6 +3556,7 @@ static void case_free(struct etude_case *c)
     struct etude_case_service *s;
     struct made *f;
     struct blank *b;
+    struct disk_binding *binding;
     size_t i;
 
     while ((m = c->machines) != NULL) {
@@ -3499,6 +3579,12 @@ static void case_free(struct etude_case *c)
         c->blanks = b->next;
         free(b->path);
         free(b);
+    }
+    while ((binding = c->bindings) != NULL) {
+        c->bindings = binding->next;
+        free(binding->name);
+        free(binding->path);
+        free(binding);
     }
     for (i = 0; i < c->art_count; i++) {
         free(c->arts[i].path);

@@ -108,6 +108,14 @@ const char *etude_private_copy(struct etude_case *c, const char *name);
  * starts it nor changes the attempt's result. */
 int etude_has_machine(const struct etude_case *c, const char *name);
 
+/** Bind a private regular file to a declared empty disk SLOT of MACHINE.
+ * PATH must be inside this attempt's scratch, with no links to other files.
+ * The machine and any other machine using the file must have ended. The
+ * binding lasts until replaced or until the attempt ends; it does not copy
+ * the file. Immutable artifacts and host disks cannot be bound. */
+enum etude_status etude_bind_disk(struct etude_case *c, const char *machine,
+                                  const char *slot, const char *path);
+
 /**
  * Boot machine `machine` of the manifest, with `disks`, a list of names of
  * disks of its profile ended by NULL, or all of them for NULL, and, when the
