@@ -30,13 +30,30 @@ static void sequence_poll_interval(void)
 #endif
 }
 
-static int sequence_mode(const char *mode)
+static int sequence_environment(const char *name, const char *value)
 {
 #ifdef _WIN32
-    return _putenv_s("SEQUENCE_FIXTURE_MODE", mode ? mode : "");
+    return _putenv_s(name, value ? value : "");
 #else
-    return mode ? setenv("SEQUENCE_FIXTURE_MODE", mode, 1) : unsetenv("SEQUENCE_FIXTURE_MODE");
+    return value ? setenv(name, value, 1) : unsetenv(name);
 #endif
+}
+
+static void sequence_caller(const char *receipt)
+{
+    struct etude_pid caller;
+    char identity[80], log[1200];
+#ifdef _WIN32
+    long pid = (long)GetCurrentProcessId();
+#else
+    long pid = (long)getpid();
+#endif
+    CHECK(etude_process_state(pid, &caller) == 1 && caller.start_known);
+    snprintf(identity, sizeof(identity), "%ld:%llu", caller.pid,
+             (unsigned long long)caller.start);
+    snprintf(log, sizeof(log), "%s.log", receipt);
+    CHECK(sequence_environment("ETUDE_SEQUENCE_PARENT", identity) == 0);
+    CHECK(sequence_environment("ETUDE_SEQUENCE_LOG", log) == 0);
 }
 
 static int sequence_fixture_observer(int argc, char **argv)
@@ -140,7 +157,8 @@ static void sequence_fixture_row(const char *mode, unsigned expected)
     snprintf(receipt, sizeof(receipt), "%s/%s.receipt", fix_dir(), mode);
     snprintf(trace_path, sizeof(trace_path), "%s/%s.trace", fix_dir(), mode);
     snprintf(stop, sizeof(stop), "%s/%s.stop", fix_dir(), mode);
-    CHECK(sequence_mode(mode) == 0);
+    CHECK(sequence_environment("SEQUENCE_FIXTURE_MODE", mode) == 0);
+    sequence_caller(receipt);
     const char *path = getenv("PATH");
     const char *args[] = {self, "observe", "sequence", receipt, "fixture", trace_path, stop,
                           self, path,      path,       self,    "2",       self,       "admit",
@@ -203,5 +221,7 @@ static void sequence_fixture(void)
     sequence_fixture_row("pass", 0);
     sequence_fixture_row("preparation-failure", 7);
     sequence_fixture_row("observer-failure", 125);
-    CHECK(sequence_mode(NULL) == 0);
+    CHECK(sequence_environment("SEQUENCE_FIXTURE_MODE", NULL) == 0);
+    CHECK(sequence_environment("ETUDE_SEQUENCE_PARENT", NULL) == 0);
+    CHECK(sequence_environment("ETUDE_SEQUENCE_LOG", NULL) == 0);
 }

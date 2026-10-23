@@ -11,7 +11,16 @@ case $purpose in
     push) limit=270 ;;
     ci) limit=540 ;;
     release) limit=13800 ;;
-    *) echo 'native-sequence: purpose must be push, ci or release' >&2; exit 2 ;;
+    phase_first_run)
+        [ -n "${ETUDE_PHASE_SELECTION_EXPORT:-}" ] && [ -r "$ETUDE_PHASE_SELECTION_EXPORT" ] || {
+            echo 'native-sequence: first measurements need a preallocated selection export' >&2; exit 2;
+        }
+        limit=86400 ;;
+    *) echo 'native-sequence: invalid purpose' >&2; exit 2 ;;
+esac
+case $purpose/${ETUDE_PHASE_SELECTION_EXPORT:+set} in
+    phase_first_run/set|push/|ci/|release/) ;;
+    *) echo 'native-sequence: a routine run cannot use a first-measurement selection' >&2; exit 2 ;;
 esac
 case $arches in i686|x86_64|both) ;; *) exit 2 ;; esac
 . "$tree/tools/ci/native_site.sh"
@@ -21,7 +30,8 @@ native_site_load "$site"
 ETUDE_BUILD_JOBS=$native_site_jobs JOBS=$native_site_jobs
 RACH2_MIN_FREE_GIB=${RACH2_MIN_FREE_GIB:-40}
 ETUDE_SITE=$site
-export ETUDE_BUILD_JOBS JOBS RACH2_MIN_FREE_GIB ETUDE_SITE
+ETUDE_SEQUENCE_LOG=$out/log
+export ETUDE_BUILD_JOBS JOBS RACH2_MIN_FREE_GIB ETUDE_SITE ETUDE_SEQUENCE_LOG
 unset MAKEFLAGS MFLAGS
 commit=$(git -C "$tree" rev-parse HEAD)
 shell_program=$(command -v sh)

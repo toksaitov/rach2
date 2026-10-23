@@ -2,6 +2,7 @@
 #ifndef _WIN32
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +15,16 @@
 
 extern char **environ;
 static volatile sig_atomic_t stopped;
+
+int etude_posix_observe_parent_main(int argc, char **argv)
+{
+    struct etude_pid identity;
+    (void)argv;
+    if (argc != 2 || etude_process_state(getppid(), &identity) != 1 ||
+        !identity.start_known)
+        return 2;
+    return printf("%ld %llu\n", identity.pid, (unsigned long long)identity.start) < 0 ? 1 : 0;
+}
 
 struct sequence_phase {
     const char *name;
@@ -28,8 +39,8 @@ struct sequence {
     struct etude_exec *executor;
     struct etude_pid parent, owner;
     struct sequence_phase phases[3];
-    FILE *record;
-    int observer_input, error, cancelled, cleanup;
+    FILE *record, *log;
+    int observer_input, error, cancelled, cleanup, watch_input;
 };
 
 static void stop(int signal_number)
@@ -178,11 +189,13 @@ static int begin_observer(struct sequence *s)
     return error;
 }
 
-static int output(const struct etude_output *o, size_t *seen, FILE *stream)
+static int output(const struct etude_output *o, size_t *seen, FILE *stream, FILE *log)
 {
     if (o->kept > *seen) {
         size_t n = o->kept - *seen;
         if (fwrite(o->data + *seen, 1, n, stream) != n || fflush(stream))
+            return -1;
+        if (log && (fwrite(o->data + *seen, 1, n, log) != n || fflush(log)))
             return -1;
         *seen = o->kept;
     }
@@ -199,7 +212,9 @@ static void cancel(struct sequence *s)
 static void parent_check(struct sequence *s)
 {
     struct etude_pid current;
-    if (stopped || etude_process_state(s->parent.pid, &current) != 1 ||
+    struct pollfd input = {STDIN_FILENO, POLLIN, 0};
+    int input_gone = s->watch_input && poll(&input, 1, 0) > 0 && input.revents;
+    if (stopped || input_gone || etude_process_state(s->parent.pid, &current) != 1 ||
         !current.start_known || current.start != s->parent.start) {
         s->cancelled = 1;
         cancel(s);
@@ -218,7 +233,8 @@ static int poll_sequence(struct sequence *s)
         if (p->process == done)
             p->done = 1;
         const struct etude_exec_result *r = etude_proc_result(p->process);
-        if (output(&r->out, &p->out, stdout) || output(&r->err, &p->err, stderr) ||
+        if (output(&r->out, &p->out, stdout, s->log) ||
+            output(&r->err, &p->err, stderr, s->log) ||
             r->output_error)
             s->error = EIO;
     }
@@ -305,12 +321,15 @@ static int run_sequence(struct sequence *s)
 static int sequence_open(struct sequence *s, const char *path)
 {
     struct stat st;
+    const char *input = getenv("ETUDE_SEQUENCE_INPUT");
+    if (input && strcmp(input, "pipe"))
+        return -1;
+    s->watch_input = input != NULL;
     if (!lstat(s->trace, &st) || errno != ENOENT ||
         !lstat(s->stop, &st) || errno != ENOENT)
         return -1;
-    long parent = getppid();
-    if (parent <= 1 || etude_process_state(parent, &s->parent) != 1 ||
-        !s->parent.start_known || etude_process_state(getpid(), &s->owner) != 1 ||
+    if (etude_sequence_parent_identity(getppid(), &s->parent) ||
+        etude_process_state(getpid(), &s->owner) != 1 ||
         !s->owner.start_known || s->parent.start > s->owner.start)
         return -1;
     int fd = open(path, O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600);
@@ -326,6 +345,17 @@ static int sequence_open(struct sequence *s, const char *path)
                 s->parent.pid, (unsigned long long)s->parent.start, s->run) < 0 ||
         fflush(s->record))
         return -1;
+    const char *log_path = getenv("ETUDE_SEQUENCE_LOG");
+    if (log_path && *log_path) {
+        fd = open(log_path, O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600);
+        if (fd < 0)
+            return -1;
+        s->log = fdopen(fd, "wb");
+        if (!s->log) {
+            close(fd);
+            return -1;
+        }
+    }
     s->executor = etude_exec_new();
     return s->executor ? 0 : -1;
 }
@@ -344,6 +374,8 @@ static int sequence_close(struct sequence *s, int status)
         etude_exec_free(s->executor);
     if (s->observer_input >= 0)
         close(s->observer_input);
+    if (s->log && fclose(s->log))
+        s->error = EIO;
     int result = !s->cleanup ? 125 : s->cancelled ? 130 : s->error ? 125 : status;
     if (s->record) {
         if (fprintf(s->record, "error %d\ncancelled %d\nstatus %d\nactive %s\ncleanup %s\n",

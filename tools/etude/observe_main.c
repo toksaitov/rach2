@@ -94,6 +94,8 @@ static int options(int argc, char **argv, struct observe_options *o)
 
 int etude_observe_main(int argc, char **argv)
 {
+    if (argc > 1 && !strcmp(argv[1], "parent"))
+        return etude_observe_parent_main(argc, argv);
     if (argc > 1 && !strcmp(argv[1], "identity"))
         return identity_main(argc, argv);
     if (argc > 1 && !strcmp(argv[1], "sequence"))

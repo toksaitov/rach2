@@ -1,5 +1,34 @@
 /* Own observation, admitted preparation and collection in one native process. */
 #include "observe_sequence.h"
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "etude/exec.h"
+
+/* A direct caller can bind its identity before an intervening shell exec. */
+int etude_sequence_parent_identity(long parent, struct etude_pid *identity)
+{
+    const char *text = getenv("ETUDE_SEQUENCE_PARENT");
+    uint64_t creation = 0;
+    if (text) {
+        char *end;
+        errno = 0;
+        parent = strtol(text, &end, 10);
+        if (errno || end == text || *end != ':')
+            return -1;
+        text = end + 1;
+        if (*text < '1' || *text > '9')
+            return -1;
+        creation = strtoull(text, &end, 10);
+        if (errno || *end || !creation)
+            return -1;
+    }
+    if (parent <= 1 || etude_process_state(parent, identity) != 1 ||
+        !identity->start_known || (creation && identity->start != creation))
+        return -1;
+    return 0;
+}
 #ifdef _WIN32
 #include <stdio.h>
 #include <errno.h>
@@ -12,7 +41,8 @@
 #include "win/files.h"
 #include <tlhelp32.h>
 static HANDLE input_gone;
-static FILE *record;
+static FILE *record, *sequence_log;
+static int output_failed;
 static struct etude_win_ident *known;
 static size_t nknown, capknown;
 
@@ -98,8 +128,11 @@ static void output(void *unused, struct etude_win_child *child, enum etude_win_s
     FILE *f = stream == ETUDE_WIN_STDOUT ? stdout : stderr;
     (void)unused;
     (void)child;
-    fwrite(bytes, 1, size, f);
-    fflush(f);
+    if (fwrite(bytes, 1, size, f) != size || fflush(f))
+        output_failed = 1;
+    if (sequence_log &&
+        (fwrite(bytes, 1, size, sequence_log) != size || fflush(sequence_log)))
+        output_failed = 1;
 }
 /* One persistent owner observes preparation and collection in separate Jobs. */
 struct phase {
@@ -121,11 +154,11 @@ struct sequence {
 };
 
 /* Keep an exact parent process handle; a reused PID cannot satisfy it. */
-static DWORD parent_open(struct sequence *s)
+static DWORD parent_pid(void)
 {
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == INVALID_HANDLE_VALUE)
-        return GetLastError();
+        return 0;
     PROCESSENTRY32W entry = {0};
     entry.dwSize = sizeof(entry);
     DWORD parent = 0;
@@ -137,8 +170,29 @@ static DWORD parent_open(struct sequence *s)
             }
         } while (Process32NextW(snapshot, &entry));
     CloseHandle(snapshot);
+    return parent;
+}
+
+int etude_observe_parent_main(int argc, char **argv)
+{
+    struct etude_pid identity;
+    (void)argv;
+    DWORD parent = parent_pid();
+    if (argc != 2 || !parent || etude_process_state(parent, &identity) != 1 ||
+        !identity.start_known)
+        return 2;
+    return printf("%ld %llu\n", identity.pid, (unsigned long long)identity.start) < 0 ? 1 : 0;
+}
+
+static DWORD parent_open(struct sequence *s)
+{
+    DWORD parent = parent_pid();
     if (!parent)
         return ERROR_INVALID_PARAMETER;
+    struct etude_pid identity;
+    if (etude_sequence_parent_identity(parent, &identity))
+        return ERROR_INVALID_PARAMETER;
+    parent = (DWORD)identity.pid;
     s->parent = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, parent);
     if (!s->parent)
         return GetLastError();
@@ -153,6 +207,8 @@ static DWORD parent_open(struct sequence *s)
         return ERROR_INVALID_PARAMETER;
     uint64_t created =
         (uint64_t)parent_times[0].dwHighDateTime << 32 | parent_times[0].dwLowDateTime;
+    if (created != identity.start)
+        return ERROR_INVALID_PARAMETER;
     if (fprintf(record, "parent %lu %llu\n", (unsigned long)parent, (unsigned long long)created) <
             0 ||
         fflush(record))
@@ -340,6 +396,8 @@ static void stop_all(struct sequence *s)
 
 static int sequence_poll(struct sequence *s)
 {
+    if (output_failed)
+        s->error = ERROR_WRITE_FAULT;
     if (WaitForSingleObject(input_gone, 0) == WAIT_OBJECT_0 ||
         WaitForSingleObject(s->parent, 0) != WAIT_TIMEOUT) {
         s->cancelled = 1;
@@ -487,6 +545,10 @@ static int sequence_close(struct sequence *s, DWORD status)
     DWORD cleanup_error = s->supervisor.port ? etude_win_sup_close(&s->supervisor, 30000) : 0;
     if (cleanup_error && !s->error)
         s->error = cleanup_error;
+    if (sequence_log && fclose(sequence_log))
+        output_failed = 1;
+    if (output_failed)
+        s->error = ERROR_WRITE_FAULT;
     int result = cleanup_error  ? 125
                  : s->cancelled ? 130
                  : s->error     ? 125
@@ -539,7 +601,20 @@ int etude_observe_sequence_main(int argc, char **argv)
         return 2;
     }
     SetConsoleCtrlHandler(on_console, TRUE);
-    s.error = parent_open(&s);
+    sequence_log = NULL;
+    output_failed = 0;
+    const char *log_path = getenv("ETUDE_SEQUENCE_LOG");
+    if (log_path && *log_path) {
+        fd = etude_win_open(log_path, O_CREAT | O_EXCL | O_WRONLY, 0600);
+        sequence_log = fd < 0 ? NULL : _fdopen(fd, "wb");
+        if (!sequence_log) {
+            if (fd >= 0)
+                _close(fd);
+            s.error = ERROR_OPEN_FAILED;
+        }
+    }
+    if (!s.error)
+        s.error = parent_open(&s);
     if (!s.error)
         s.error = etude_win_sup_open(&s.supervisor);
     DWORD status = s.error ? 125 : sequence_run(&s);
@@ -547,6 +622,11 @@ int etude_observe_sequence_main(int argc, char **argv)
 }
 
 #else
+int etude_observe_parent_main(int argc, char **argv)
+{
+    return etude_posix_observe_parent_main(argc, argv);
+}
+
 int etude_observe_sequence_main(int argc, char **argv)
 {
     return etude_posix_observe_sequence_main(argc, argv);
