@@ -167,3 +167,7 @@ The coordinating checks left the unassigned comparison, deployment and final aud
 ## GNU routing left interpreter-based process fixtures
 
 The dependency audit at 21:15 on 23 October found host process tests whose compiled controllers still created shell workloads or used shell commands for fixture control. Routing those tests to the GNU helper satisfied the desktop dependency check but did not complete the C conversion. The coordinator is converting those roles and preserving their assertions. The audit must inspect execution calls inside each declared helper as well as those on the desktop. Scripts that are themselves the tested product, and script bytes that a refusal test never executes, are distinct from fixture control.
+
+## Integrated repairs still appeared ready to take
+
+The recovery check at 23:15 on 23 October found nine repairs still marked Ready although their code was integrated or being checked by the coordinator's workers. The new conversion tasks had been marked In progress, but the older issues covered by the same work had not. One still had a stopped worker's assignee. The coordinator assigned all nine to the owner's account and marked them In progress. Reusing an earlier repair transfers its issue as well as its commits; the board must show the account doing the remaining check and push.
