@@ -1,38 +1,8 @@
-# full: every suite on both architectures, built from clean, at one commit,
-# on the one machine that the commit's tools/ci/site selects.
-#
-# tools/flow/release.sh starts a run when a phase's work is finished and
-# reviewed, and a person may start one with `gh workflow run full.yml -f
-# sha=SHA`. The input is the commit's whole hash, forty lowercase hexadecimal
-# digits; the first step refuses anything else. The optional input `title`
-# is the run's title, which release.sh sets to name the commit by its short
-# hash and the phase, and by which it finds the run. The optional input
-# `suites`, `ARCH:SUITE` words such as `x86_64:agents`, makes the run test
-# only those suites; release.sh sets it when the commit differs from a commit
-# that failed a full run only by the fixes of those failures. The first job,
-# on any runner labelled rach2, checks the inputs, checks out the commit and
-# reads its tools/ci/site with its tools/ci/site.sh: the label of the runners
-# of the machine that runs the release tests, and the accelerator they ask
-# QEMU for. A commit without those files, or whose site the script refuses,
-# gets no run. The second job runs on a self-hosted runner with that label,
-# and sets RACH2_QEMU_ACCEL to the accelerator, so that every machine of the
-# run asks QEMU for it alone, whatever the runner's own environment gives.
-# One full run goes at a time, outside the core runs' group, and none is
-# cancelled; of the runs started while one runs, only the newest waits, since
-# GitHub cancels a waiting run when a newer one joins the group. The run tests
-# both architectures on one runner, so that the core runs keep the other:
-# tools/ci/run.sh, with `ARCH='i686 x86_64'`, builds each from clean, keeping
-# the vendored builds, and runs every suite of both, or those that `suites`
-# names, as one run of tests/run, whose cases share one schedule, and then
-# `bigmem` alone; it leaves a directory of results for each architecture.
-# tools/ci/report.sh sets the statuses `ci/full/ARCH` and `ci/full`, or for
-# a run of chosen suites `ci/rerun/ARCH` and `ci/rerun`, files what fails as
-# core runs do, and starts bisect.yml for a new failure. A run that a person
-# cancels reports nothing. GitHub cancels a job that passes its time limit
-# too, so the run has 680 minutes inside the job's, which leave time for the
-# report. At the limit timeout(1) sends TERM to the run's process group, and
-# run.sh ends once tests/run has stopped its machines; both architectures
-# are then reported as unfinished.
+# Release checks use one measured native collection of both architectures.
+# The requested commit selects the runner and accelerator. The optional
+# ARCH:SUITE list limits a repair run; otherwise every case is included.
+# Preparation, execution and cleanup share the four-hour release ceiling.
+# Artifacts and per-architecture results come from the same complete history.
 name: Release tests
 run-name: ${{ inputs.title || format('Release tests of {0}', inputs.sha) }}
 
@@ -50,6 +20,10 @@ on:
         description: Only these suites, as ARCH:SUITE words; empty for every suite
         required: false
         default: ''
+
+defaults:
+  run:
+    shell: bash
 
 permissions:
   contents: read
@@ -114,7 +88,7 @@ jobs:
     name: Build and test both architectures on ${{ needs.site.outputs.runner }} under ${{ needs.site.outputs.accelerator }}
     needs: site
     runs-on: ${{ fromJSON(needs.site.outputs.labels) }}
-    timeout-minutes: 720
+    timeout-minutes: 270
     env:
       RACH2_QEMU_ACCEL: ${{ needs.site.outputs.accelerator }}
     steps:
@@ -130,7 +104,7 @@ jobs:
         env:
           ARCH: i686 x86_64
           SUITES: ${{ inputs.suites }}
-        run: timeout -k 60 680m sh tools/ci/run.sh full "$RUNNER_TEMP/results"
+        run: sh tools/ci/run.sh full "$RUNNER_TEMP/results"
 
       - name: Upload the i686 logs
         if: always()

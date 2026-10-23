@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# tools/ci/site.sh: read the site of the release tests, tools/ci/site, and
+# tools/ci/site.sh: read the site of routine checks, tools/ci/site, and
 # print it as a workflow's outputs.
 #
 #   tools/ci/site.sh [FILE]
@@ -8,11 +8,10 @@
 # FILE, or standard input without one, has one line `runner LABEL` and one
 # line `accelerator NAME`; empty lines and lines that begin with `#` are
 # comments. LABEL is the label of the self-hosted GitHub Actions runners of
-# the machine that runs the release tests, lowercase letters, digits and
-# hyphens; full.yml runs the tests on a runner that has it. NAME is the
-# accelerator, lowercase letters, which full.yml puts in RACH2_QEMU_ACCEL so
-# that the run asks QEMU for it alone; tests/run takes kvm, hvf or tcg, and
-# refuses a run under any other. The script prints
+# the machine that runs the checks, lowercase letters, digits and
+# hyphens; the core and release workflows select a runner that has it. NAME
+# is the accelerator, lowercase letters, which the workflow puts in
+# RACH2_QEMU_ACCEL. The native runner validates its availability. The script prints
 #
 #   runner=LABEL
 #   labels=["self-hosted","LABEL"]

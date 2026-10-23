@@ -2,7 +2,8 @@
 # tools/ci/report.sh for each new failure issue whose last pass it found,
 # and for an `intermittent` issue whose failure a later run repeated.
 #
-# It runs outside the core runs' group, on either runner, one run at a time
+# It runs outside the core runs' group, on the failing commit's selected
+# machine and accelerator, one run at a time
 # for each issue. tools/ci/bisect.sh tests the failing commit again, halves
 # the commits since the last pass, and comments on the issue with the commit
 # it names, an unresolved range, or a failure that did not repeat. Each test
@@ -55,6 +56,10 @@ on:
         required: false
         default: ''
 
+defaults:
+  run:
+    shell: bash
+
 permissions:
   contents: read
   issues: write
@@ -65,9 +70,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  site:
+    name: Read the failing commit's test machine
+    runs-on: [self-hosted, rach2]
+    outputs:
+      labels: ${{ steps.site.outputs.labels }}
+      accelerator: ${{ steps.site.outputs.accelerator }}
+    steps:
+      - name: Check out the current tools
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          clean: false
+          fetch-depth: 0
+      - name: Read the failing commit's site
+        id: site
+        env:
+          BAD: ${{ inputs.bad }}
+        run: |
+          case "$BAD" in ''|*[!0-9a-f]*) exit 2 ;; esac
+          [ "${#BAD}" -eq 40 ] || exit 2
+          if git cat-file -e "$BAD:tools/ci/site" 2>/dev/null; then
+              git show "$BAD:tools/ci/site" > "$RUNNER_TEMP/bisect-site"
+          else
+              cp tools/ci/site "$RUNNER_TEMP/bisect-site"
+          fi
+          sh tools/ci/site.sh "$RUNNER_TEMP/bisect-site" >> "$GITHUB_OUTPUT"
+
   bisect:
     name: Find the commit that caused the failure
-    runs-on: [self-hosted, rach2]
+    needs: site
+    runs-on: ${{ fromJSON(needs.site.outputs.labels) }}
+    env:
+      RACH2_QEMU_ACCEL: ${{ needs.site.outputs.accelerator }}
     timeout-minutes: 720
     steps:
       - name: Check out master
