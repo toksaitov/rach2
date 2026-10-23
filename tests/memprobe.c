@@ -38,9 +38,9 @@
  * refuses a page, which it does with EFAULT from the read once the free
  * memory is inside the reserve kept for root; then a fork must be refused
  * with ENOMEM, the probe prints "MEMPROBE HOG: fork refused with ENOMEM",
- * and it sleeps holding what it took until it is killed, ignoring the hangup
- * its shell's exit sends. The mount suite then logs in as root beside it and
- * kills it.
+ * and it waits in pause holding what it took until it is killed, ignoring the
+ * hangup its shell's exit sends. The mount suite then logs in as root beside
+ * it and kills it.
  *
  * The probe executes itself as `/memprobe`, or by the absolute path it was
  * started by (probe_args.h), as a native run starts it from its workspace.
@@ -468,11 +468,7 @@ static void run_hog(void)
     }
     puts("MEMPROBE HOG: fork refused with ENOMEM");
     for (;;) {
-        long ts[2];
-
-        ts[0] = 1;
-        ts[1] = 0;
-        syscall2(SYS_NANOSLEEP, (long)ts, 0);
+        syscall0(SYS_PAUSE);
     }
 }
 

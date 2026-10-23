@@ -14,7 +14,6 @@ tests/host/netif_hosttest.c: 1 sleep
 tests/host/pwauth_hosttest.c: 2 sleep
 tests/loadprobe.c: 1 sleep
 tests/loopprobe.c: 1 sleep
-tests/memprobe.c: 1 sleep
 tests/modeprobe.c: 1 sleep
 tests/mountprobe.c: 1 sleep
 tests/musl/callsmusl.c: 3 sleep
