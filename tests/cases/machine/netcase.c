@@ -3,6 +3,7 @@
  * share, as netcase.h declares them.
  */
 #include "netcase.h"
+#include "sha256.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -12,7 +13,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
-
 
 /* The longest assertion's detail. */
 #define NET_DETAIL_MAX 160
@@ -285,7 +285,8 @@ enum etude_status net_host(struct net_case *u, char *const argv[], const char *o
     if (u->st != ETUDE_OK)
         return u->st;
     if (strcmp(argv[0], "ssh") == 0 || strcmp(argv[0], "scp") == 0 ||
-        strcmp(argv[0], "sftp") == 0 || strcmp(argv[0], "ptydrive") == 0)
+        strcmp(argv[0], "sftp") == 0 || strcmp(argv[0], "ptydrive") == 0 ||
+        strcmp(argv[0], "ssh-keygen") == 0)
         return net_ssh_input(u, argv, NULL, output, r);
     st = etude_host(u->c, argv, output, &r->end);
     if (st != ETUDE_OK)
@@ -308,6 +309,7 @@ struct client_command {
     size_t count;
     char returned[160];
     char evidence[256];
+    char key_guest[160], key_host[4096];
 };
 
 /** Free the translated words after the channel has copied its invocation. */
@@ -349,7 +351,7 @@ static int client_file(struct net_case *u, const char *from, char path[160])
 /** Replace the one get of a scenario's sftp batch with a client-local
  * destination. The finished file is fetched through the framed channel. */
 static int client_batch(struct net_case *u, struct client_command *a, const char *from,
-                         char path[160])
+                        char path[160])
 {
     char *text = net_file(from), command[16], remote[4096], local[4096];
     char evidence[80], batch[4096];
@@ -384,6 +386,22 @@ static int client_batch(struct net_case *u, struct client_command *a, const char
     return ok && client_file(u, batch, path);
 }
 
+/** Keep a separate known-hosts file for each local path the scenario used.
+ * It stays on the private client root, across commands of the attempt. */
+static const char *client_hosts(const char *word, char out[160])
+{
+    struct sha256 h;
+    unsigned char d[32];
+    char hex[65];
+
+    sha256_init(&h);
+    sha256_update(&h, (const unsigned char *)word, strlen(word));
+    sha256_final(&h, d);
+    sha256_hex(d, hex);
+    snprintf(out, 160, "UserKnownHostsFile=/tmp/etude-known-%s", hex);
+    return out;
+}
+
 /** Translate only the client invocation: local file arguments are copied,
  * and its destination reaches the target's host forward through QEMU's
  * gateway. The remote command string is left byte for byte. */
@@ -402,19 +420,33 @@ static int client_arguments(struct net_case *u, char *const argv[], struct clien
     for (i = 0; argv[i] != NULL; i++) {
         word = argv[i];
         if (i == 0)
-            word = strcmp(word, "ptydrive") == 0 ? "/ptydrive" :
-                   strcmp(word, "scp") == 0 ? "/usr/bin/scp" :
-                   strcmp(word, "sftp") == 0 ? "/usr/bin/sftp" : "/usr/bin/ssh";
+            word = strcmp(word, "ptydrive") == 0     ? "/ptydrive"
+                   : strcmp(word, "scp") == 0        ? "/usr/bin/scp"
+                   : strcmp(word, "sftp") == 0       ? "/usr/bin/sftp"
+                   : strcmp(word, "ssh-keygen") == 0 ? "/usr/bin/ssh-keygen"
+                                                     : "/usr/bin/ssh";
         else if (i > 0 && strcmp(argv[i - 1], "-b") == 0) {
             if (!client_batch(u, a, word, path))
                 return 0;
             word = path;
-        } else if (word[0] != '-' && stat(word, &st) == 0 && S_ISREG(st.st_mode)) {
+        } else if (strncmp(word, "UserKnownHostsFile=", 19) == 0 &&
+                   strcmp(word + 19, "/dev/null") != 0) {
+            word = client_hosts(word, path);
+        } else if ((strcmp(argv[i - 1], "-i") == 0 || strcmp(argv[i - 1], "-f") == 0 ||
+                    strcmp(argv[0], "scp") == 0) &&
+                   stat(word, &st) == 0 && S_ISREG(st.st_mode)) {
             if (!client_file(u, word, path))
                 return 0;
             word = path;
-        } else if ((at = strstr(word, "@127.0.0.1")) != NULL &&
-                   (at[10] == '\0' || at[10] == ':')) {
+        } else if (strcmp(argv[0], "ssh-keygen") == 0 && strcmp(argv[i - 1], "-f") == 0) {
+            if (strlen(word) >= sizeof(a->key_host)) {
+                net_fail(u, "the generated key's host path is too long");
+                return 0;
+            }
+            strcpy(a->key_host, word);
+            snprintf(a->key_guest, sizeof(a->key_guest), "/tmp/etude-key-%u", ++u->client_files);
+            word = a->key_guest;
+        } else if ((at = strstr(word, "@127.0.0.1")) != NULL && (at[10] == '\0' || at[10] == ':')) {
             snprintf(address, sizeof(address), "%.*s@10.0.2.2%s", (int)(at - word), word, at + 10);
             word = address;
         }
@@ -444,9 +476,8 @@ static void client_environment(const char *env[5], char password[512])
 }
 
 /** Read a client's result evidence into the ordinary network result. */
-static enum etude_status client_result(struct net_case *u, const char *output,
-                                        enum etude_status st,
-                                        const struct etude_guest_result *result, struct net_run *r)
+static enum etude_status client_result(struct net_case *u, const char *output, enum etude_status st,
+                                       const struct etude_guest_result *result, struct net_run *r)
 {
     char name[256];
     const char *path;
@@ -465,8 +496,8 @@ static enum etude_status client_result(struct net_case *u, const char *output,
 }
 
 enum etude_status net_guest(struct net_case *u, struct etude_case_machine *m,
-                            const char *const argv[], const char *const env[],
-                            const char *input, const char *output, struct net_run *r)
+                            const char *const argv[], const char *const env[], const char *input,
+                            const char *output, struct net_run *r)
 {
     struct etude_guest_result result;
     enum etude_status st;
@@ -478,6 +509,55 @@ enum etude_status net_guest(struct net_case *u, struct etude_case_machine *m,
         return u->st;
     st = etude_guest_command(m, argv, env, input, output, &result);
     return client_result(u, output, st, &result, r);
+}
+
+/** Fetch a generated client key to the scenario's private file. */
+static enum etude_status client_key_file(struct net_case *u, const char *guest, const char *host,
+                                         const char *evidence)
+{
+    enum etude_status st = etude_guest_get(u->client, guest, evidence);
+    const char *path;
+    FILE *in, *out;
+    unsigned char bytes[65536];
+    size_t n;
+    int ok;
+
+    if (st != ETUDE_OK)
+        return st;
+    path = etude_evidence(u->c, evidence);
+    in = path != NULL ? fopen(path, "rb") : NULL;
+    out = fopen(host, "wb");
+    ok = in != NULL && out != NULL;
+    while (ok && (n = fread(bytes, 1, sizeof(bytes), in)) != 0)
+        ok = fwrite(bytes, 1, n, out) == n;
+    if (in != NULL) {
+        if (ferror(in))
+            ok = 0;
+        fclose(in);
+    }
+    if (out != NULL) {
+        if (fchmod(fileno(out), 0600) != 0)
+            ok = 0;
+        if (fclose(out) != 0)
+            ok = 0;
+    }
+    return ok ? ETUDE_OK : ETUDE_FAILED;
+}
+
+/** Bring both key files back after ssh-keygen's successful exit. */
+static enum etude_status client_keys(struct net_case *u, const struct client_command *a)
+{
+    char guest[180], host[4120], evidence[80];
+    enum etude_status st;
+
+    snprintf(evidence, sizeof(evidence), "client-key-%u", u->client_files);
+    st = client_key_file(u, a->key_guest, a->key_host, evidence);
+    if (st != ETUDE_OK)
+        return st;
+    snprintf(guest, sizeof(guest), "%s.pub", a->key_guest);
+    snprintf(host, sizeof(host), "%s.pub", a->key_host);
+    snprintf(evidence, sizeof(evidence), "client-key-%u.pub", u->client_files);
+    return client_key_file(u, guest, host, evidence);
 }
 
 enum etude_status net_ssh_input(struct net_case *u, char *const argv[], const char *input,
@@ -499,12 +579,41 @@ enum etude_status net_ssh_input(struct net_case *u, char *const argv[], const ch
         return u->st;
     }
     client_environment(env, password);
-    st = etude_guest_command(u->client, a.argv, env, input, output, &result);
-    if (st == ETUDE_OK && a.returned[0] != '\0' &&
-        result.termination.end == ETUDE_END_EXITED && result.termination.value == 0)
+    if (input != NULL && strcmp(input, u->client_input) == 0)
+        st = etude_guest_command_file(u->client, a.argv, env, "/dev/disk1", output, &result);
+    else
+        st = etude_guest_command(u->client, a.argv, env, input, output, &result);
+    if (st == ETUDE_OK && a.returned[0] != '\0' && result.termination.end == ETUDE_END_EXITED &&
+        result.termination.value == 0)
         st = etude_guest_get(u->client, a.returned, a.evidence);
+    if (st == ETUDE_OK && a.key_host[0] != '\0' && result.termination.end == ETUDE_END_EXITED &&
+        result.termination.value == 0)
+        st = client_keys(u, &a);
     client_free(&a);
     return client_result(u, output, st, &result, r);
+}
+
+enum etude_status net_ssh_attach(struct net_case *u, const char *input)
+{
+    struct etude_termination end;
+    char *reply = NULL;
+    enum etude_status st;
+
+    if (!net_ok(u))
+        return u->st;
+    if (u->client == NULL || input == NULL || strlen(input) >= sizeof(u->client_input))
+        return failed(u, ETUDE_REFUSED, "the SSH client has no raw input attachment");
+    st = etude_qmp(u->client, "quit", NULL, &reply);
+    free(reply);
+    if (st == ETUDE_OK)
+        st = etude_wait_end(u->client, &end);
+    if (st == ETUDE_OK)
+        st = etude_bind_disk(u->c, "channel-client", "channel-input", input);
+    if (st == ETUDE_OK)
+        st = etude_boot(u->c, "channel-client", NULL, &u->client, &end);
+    if (st == ETUDE_OK)
+        strcpy(u->client_input, input);
+    return failed(u, st, "the SSH client's raw input disk could not be attached");
 }
 
 enum etude_status net_ssh_start(struct net_case *u, char *const argv[], const char *ready)

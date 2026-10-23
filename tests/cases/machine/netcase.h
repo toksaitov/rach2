@@ -44,13 +44,14 @@ struct net_made {
  */
 struct net_case {
     struct etude_case *c;
-    enum etude_status st;  /* ETUDE_OK until an operation fails */
-    char why[200];         /* what failed */
-    int told;              /* an assertion has failed with `why` */
-    unsigned failures;     /* the assertions that failed */
+    enum etude_status st;              /* ETUDE_OK until an operation fails */
+    char why[200];                     /* what failed */
+    int told;                          /* an assertion has failed with `why` */
+    unsigned failures;                 /* the assertions that failed */
     struct etude_case_machine *client; /* declared Rach2 SSH client, when used */
     unsigned client_files;
-    struct net_made *made; /* the files net_path gave, the newest first */
+    char client_input[4096]; /* the file bound as the client's raw input disk */
+    struct net_made *made;   /* the files net_path gave, the newest first */
 };
 
 /* One boot of a machine, and how far the scenario has read its console. */
@@ -164,8 +165,8 @@ enum etude_status net_host(struct net_case *u, char *const argv[], const char *o
 /** Run an installed guest program through its already-open channel and
  * read the ordinary result evidence into R. */
 enum etude_status net_guest(struct net_case *u, struct etude_case_machine *m,
-                            const char *const argv[], const char *const env[],
-                            const char *input, const char *output, struct net_run *r);
+                            const char *const argv[], const char *const env[], const char *input,
+                            const char *output, struct net_run *r);
 
 /** Run an SSH client on the declared channel-client Rach2 machine, with
  * INPUT, a host file, as its standard input. net_host selects the same path
@@ -173,6 +174,11 @@ enum etude_status net_guest(struct net_case *u, struct etude_case_machine *m,
  * the server through its forwarded port. */
 enum etude_status net_ssh_input(struct net_case *u, char *const argv[], const char *input,
                                 const char *output, struct net_run *r);
+
+/** Restart the declared client with private INPUT bound to its raw
+ * channel-input disk. Call in the client's declared transfer boot step.
+ * A subsequent net_ssh_input of that file reads /dev/disk1 directly. */
+enum etude_status net_ssh_attach(struct net_case *u, const char *input);
 
 /** Start an SSH client workload and wait for READY on its output. Collect
  * it with net_ssh_finish, while other tools may run in between. */

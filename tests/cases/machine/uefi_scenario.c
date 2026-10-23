@@ -142,14 +142,8 @@ static enum etude_status as_user(struct uefi *s, const char *user, const char *c
 static enum etude_status send_file(struct uefi *s, const char *path, const char *command,
                                    const char *output, struct net_run *r)
 {
-    char *argv[] = {NET_SSH,
-                    NET_SSH_KEY(s->key),
-                    "-T",
-                    "-p",
-                    s->port,
-                    "root@127.0.0.1",
-                    (char *)command,
-                    NULL};
+    char *argv[] = {NET_SSH,          NET_SSH_KEY(s->key), "-T", "-p", s->port,
+                    "root@127.0.0.1", (char *)command,     NULL};
 
     return net_ssh_input(&s->u, argv, path, output, r);
 }

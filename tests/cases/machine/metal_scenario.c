@@ -250,14 +250,8 @@ static void make_send(struct metal_case *s, const char *path)
 static void transfer(struct metal_case *s)
 {
     char send[4096] = "", host[64], guest[64], line[160], *text;
-    char *put[] = {NET_SSH,
-                   NET_SSH_KEY(s->demo_key),
-                   "-T",
-                   "-p",
-                   s->port,
-                   "root@127.0.0.1",
-                   "cat > /tmp/metal.in",
-                   NULL};
+    char *put[] = {NET_SSH,          NET_SSH_KEY(s->demo_key), "-T", "-p", s->port,
+                   "root@127.0.0.1", "cat > /tmp/metal.in",    NULL};
     char *sum[] = {"cksum", send, NULL};
     struct net_run r;
 

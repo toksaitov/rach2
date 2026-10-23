@@ -153,14 +153,8 @@ static enum etude_status as_root(struct sealed *s, const char *command, const ch
 static enum etude_status send_file(struct sealed *s, const char *path, const char *command,
                                    const char *output, struct net_run *r)
 {
-    char *argv[] = {NET_SSH,
-                    NET_SSH_KEY(s->key),
-                    "-T",
-                    "-p",
-                    s->port,
-                    "root@127.0.0.1",
-                    (char *)command,
-                    NULL};
+    char *argv[] = {NET_SSH,          NET_SSH_KEY(s->key), "-T", "-p", s->port,
+                    "root@127.0.0.1", (char *)command,     NULL};
 
     return net_ssh_input(&s->u, argv, path, output, r);
 }
@@ -985,8 +979,8 @@ static void rewrite(struct sealed *s)
     FILE *f;
     struct net_run r;
     long long env;
-    char *argv[] = {NET_SSH, NET_SSH_KEY(s->key), "-T", "-p", s->port,
-                    "root@127.0.0.1", command, NULL};
+    char *argv[] = {NET_SSH, NET_SSH_KEY(s->key), "-T",    "-p",
+                    s->port, "root@127.0.0.1",    command, NULL};
 
     net_step(&s->u, "rewrite");
     zero_sectors(s, s->root_lba + 2, 2);
@@ -1020,8 +1014,7 @@ static void rewrite(struct sealed *s)
     left = s->root_size * 512;
     while (left > 0 && net_ok(&s->u)) {
         n = left < sizeof(buffer) ? (size_t)left : sizeof(buffer);
-        if (disk_io(s, s->artifact, 0, offset, buffer, n) != 0 ||
-            fwrite(buffer, 1, n, f) != n)
+        if (disk_io(s, s->artifact, 0, offset, buffer, n) != 0 || fwrite(buffer, 1, n, f) != n)
             net_fail(&s->u, "the root could not be extracted for transfer");
         offset += n;
         left -= n;
@@ -1030,6 +1023,8 @@ static void rewrite(struct sealed *s)
         net_fail(&s->u, "the root transfer file could not be closed");
     snprintf(bytes, sizeof(bytes), "%llu", s->root_size * 512);
     snprintf(command, sizeof(command), "reflash /dev/disk0 %llu %s", s->root_lba * 512, bytes);
+    net_step(&s->u, "rewrite-input");
+    net_ssh_attach(&s->u, image);
     net_ssh_input(&s->u, argv, image, "reflash", &r);
     snprintf(wrote, sizeof(wrote), "wrote %s bytes", bytes);
     net_assert(&s->u, "rewrite-written", printed(&r, wrote),

@@ -694,7 +694,7 @@ int etude_scenario(struct etude_case *c)
 
     memset(&r, 0, sizeof(r));
     r.c = c;
-    if (etude_step(c, "keys") != ETUDE_OK)
+    if (drive_channel(c) != 0 || etude_step(c, "keys") != ETUDE_OK)
         return 1;
     if (repair_password(c, r.password, sizeof(r.password)) != 0)
         snprintf(r.why, sizeof(r.why), "the demo password could not be read");

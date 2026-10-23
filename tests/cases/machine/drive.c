@@ -11,10 +11,20 @@
 #include <unistd.h>
 
 #include "drive.h"
+#include "netcase.h"
 #include "sha256.h"
 
 /* The case was stopped: every scenario returns at once. */
 static int halted;
+
+/* The scenario's optional client for SSH operations judged by the case. */
+static struct net_case channel;
+
+int drive_channel(struct etude_case *c)
+{
+    net_case(&channel, c);
+    return net_ok(&channel) ? 0 : -1;
+}
 
 /* The boots of each machine in this attempt, which name its consoles. */
 static struct {
@@ -333,7 +343,14 @@ int drive_host(struct etude_case *c, char *const argv[], const char *output)
     struct etude_termination end;
     enum etude_status st;
 
-    st = etude_host(c, argv, output, &end);
+    if (strcmp(argv[0], "ssh") == 0 || strcmp(argv[0], "ptydrive") == 0 ||
+        strcmp(argv[0], "ssh-keygen") == 0) {
+        struct net_run r;
+        st = net_host(&channel, argv, output, &r);
+        end = r.end;
+        net_run_free(&r);
+    } else
+        st = etude_host(c, argv, output, &end);
     if (st == ETUDE_STOPPED)
         halted = 1;
     if (st != ETUDE_OK || end.end != ETUDE_END_EXITED)

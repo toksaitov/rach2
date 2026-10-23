@@ -16,6 +16,10 @@
 #include "../../../tools/etude/win/files.h"
 #endif
 
+/** Boot the optional declared SSH client in its first step. Call before
+ * the scenario begins its own steps; cases without that machine do nothing. */
+int drive_channel(struct etude_case *c);
+
 /*
  * The longest line drive_send types: what the guest terminal's canonical line
  * holds before its newline (N_TTY_LINE_MAX less one, rach2/sys/tty/n_tty.h).

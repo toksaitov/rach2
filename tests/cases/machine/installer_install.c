@@ -706,6 +706,8 @@ int etude_scenario(struct etude_case *c)
 {
     struct state s;
 
+    if (drive_channel(c) != 0)
+        return 1;
     memset(&s, 0, sizeof(s));
     if (etude_step(c, "install-second") != ETUDE_OK || row_install_second(c, &s) != 0)
         return 1;

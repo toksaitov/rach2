@@ -35,9 +35,9 @@
 #include <ws2tcpip.h>
 typedef SOCKET peer_socket;
 typedef WSAPOLLFD peer_pollfd;
-#define PEER_INVALID INVALID_SOCKET
-#define peer_close closesocket
-#define peer_error WSAGetLastError()
+#define PEER_INVALID     INVALID_SOCKET
+#define peer_close       closesocket
+#define peer_error       WSAGetLastError()
 #define PEER_INTERRUPTED WSAEINTR
 #else
 #include <arpa/inet.h>
@@ -47,9 +47,9 @@ typedef WSAPOLLFD peer_pollfd;
 #include <unistd.h>
 typedef int peer_socket;
 typedef struct pollfd peer_pollfd;
-#define PEER_INVALID (-1)
-#define peer_close close
-#define peer_error errno
+#define PEER_INVALID     (-1)
+#define peer_close       close
+#define peer_error       errno
 #define PEER_INTERRUPTED EINTR
 #endif
 
