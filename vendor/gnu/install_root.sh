@@ -146,6 +146,11 @@ install_part()
 }
 
 install_part root
+# Build the framed WebSocket fixture against the same TLS libraries as the
+# guest tools. This happens in the GNU build environment on every host.
+"$OUT/cross/bin/$GNU_TARGET-gcc" --sysroot="$OUT/root" -std=c99 -O2 \
+    "$REPO/tests/system/fakeapi/native/wsclient.c" -o "$TREE/etude-wsclient" \
+    -lssl -lcrypto
 # The runtime's libstdc++.so.6 is a copy of the cross compiler's library,
 # and the native compiler has the same library of the same GCC with the links
 # and archives a link against it needs, so its copy replaces the runtime's.
