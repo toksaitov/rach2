@@ -53,9 +53,10 @@ struct verdict {
     const char *name; /* the set's, for a failure outside its suites */
     char **suite;
     size_t suites;
-    int *failed;    /* by suite: an item of it did not pass */
-    int set_failed; /* the shared preparation or an item of no suite */
-    int runner;     /* the runner left work unconfirmed */
+    int *failed;              /* by suite: an item of it did not pass */
+    int set_failed;           /* the shared preparation or an item of no suite */
+    int runner;               /* the runner left work unconfirmed */
+    int project_architecture; /* report only this architecture after common validation */
     struct record *rec;
     size_t records, cap;
     char **owned; /* the paths of the streams read */
@@ -854,13 +855,20 @@ static size_t repetitions(const struct verdict *v, const char *case_id, const ch
     return count;
 }
 
+/** Project only ordinary asserted failures; incomplete work is common. */
+static int projected(const struct verdict *v, const struct item *it)
+{
+    const char *arch = json_text(it->j, "architecture");
+    return !v->project_architecture || same(arch, v->arch) || same(arch, "none");
+}
+
 /** Returns 1 when the plan has an item of the suite `s`. */
 static int has_suite(const struct verdict *v, size_t s)
 {
     size_t i;
 
     for (i = 0; i < v->items; i++) {
-        if (v->item[i].suite == (int)s) {
+        if (v->item[i].suite == (int)s && projected(v, &v->item[i])) {
             return 1;
         }
     }
@@ -912,7 +920,7 @@ static void report_items(struct verdict *v)
     for (i = 0; i < v->items; i++) {
         const struct item *it = &v->item[i];
 
-        if (it->proved == RESULT_PASS) {
+        if (it->proved == RESULT_PASS || !projected(v, it)) {
             continue;
         }
         say("item %s: %s on %s: %s, in %s\n", it->id, it->case_id, json_text(it->j, "architecture"),
@@ -939,6 +947,10 @@ static void reach(struct verdict *v)
     attach_attempts(v);
     check_steps(v);
     judge_items(v);
+    if (v->project_architecture)
+        for (size_t i = 0; i < v->items; i++)
+            if (v->item[i].proved == RESULT_INCOMPLETE || v->item[i].proved == RESULT_CANCELLED)
+                v->runner = 1;
     if (v->run != NULL) {
         prepared = check_preparation(v);
         check_summary(v, prepared);
@@ -1039,7 +1051,14 @@ static int verdict_options(struct verdict *v, char **args, int n, const char **c
 {
     int i;
 
-    for (i = 0; i + 1 < n && args[i][0] == '-'; i += 2) {
+    for (i = 0; i < n && args[i][0] == '-';) {
+        if (strcmp(args[i], "--project-architecture") == 0) {
+            v->project_architecture = 1;
+            i++;
+            continue;
+        }
+        if (i + 1 >= n)
+            return -1;
         if (strcmp(args[i], "-b") == 0) {
             v->store = args[i + 1];
         } else if (strcmp(args[i], "-c") == 0) {
@@ -1049,6 +1068,7 @@ static int verdict_options(struct verdict *v, char **args, int n, const char **c
         } else {
             return -1;
         }
+        i += 2;
     }
     return i;
 }
@@ -1073,7 +1093,8 @@ static void free_verdict(struct verdict *v)
 }
 
 /**
- * Runs the `verdict` command: `[-b STORE] [-c COMMIT] [-m CASES] ARCH SET
+ * Runs the `verdict` command: `[--project-architecture] [-b STORE]
+ * [-c COMMIT] [-m CASES] ARCH SET
  * SUITES HISTORY...`. Each HISTORY is a stream of the run, or a directory
  * whose `.jsonl` files are its streams; STORE is the directory of the blobs
  * they reference, each named by its SHA-256; CASES the directory of the case
@@ -1082,7 +1103,8 @@ static void free_verdict(struct verdict *v)
  * the name of the set that ran them, which a failure outside them takes.
  * Prints each item that did not pass and a result line. Returns 0 for a
  * pass, 1 for anything else, and 2 for a wrong usage or schemas that cannot
- * be read.
+ * be read. With --project-architecture only ordinary assertion failures
+ * are projected to ARCH and none; common history is always validated whole.
  */
 int judge_verdict(struct cases *set, char **args, int n)
 {
