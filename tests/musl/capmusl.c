@@ -495,6 +495,7 @@ static void *last_thread(void *arg)
         _exit(2);
     }
     while (!leader_ended()) {
+        /* interval: the first thread's state is looked at again every 10 ms */
         nanosleep(&tick, NULL);
     }
     if (write(leader_go[1], "x", 1) != 1) {

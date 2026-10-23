@@ -121,6 +121,7 @@ static void tick(void)
 
     how_long.tv_sec = 0;
     how_long.tv_nsec = 60000000L; /* 60 ms, six ticks of the 100 Hz clock */
+    /* interval: two stamps are 60 ms apart, so that they differ */
     nanosleep(&how_long, (struct timespec *)0);
 }
 

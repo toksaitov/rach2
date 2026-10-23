@@ -263,6 +263,7 @@ static int seen_asleep(pid_t pid)
         if (state == 0 || state == 'Z') {
             return 0;
         }
+        /* interval: a process's state is looked at again every 10 ms */
         usleep(10000);
     }
 }

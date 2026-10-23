@@ -273,6 +273,7 @@ static int sleep_row(int empty[2])
     }
     if (pid == 0) {
         while ((state = state_of(parent)) != 'S' && state != 0 && state != 'Z') {
+            /* interval: the probe's state is looked at again every 10 ms */
             nanosleep(&pause_ts, NULL);
         }
         kill(parent, SIGUSR1);

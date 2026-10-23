@@ -318,6 +318,7 @@ static int asleep(const volatile pid_t *id, int thread)
         if (state == 0 || state == 'Z') {
             return 0;
         }
+        /* interval: a task's state is looked at again every 10 ms */
         usleep(10000);
     }
 }

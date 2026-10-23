@@ -361,6 +361,7 @@ static int synthetic_times(void)
     if ((long)st.st_mtim.tv_sec != boot) {
         return fail(SYNTHETIC_AGREE);
     }
+    /* interval: the clock moves a second while /dev/null's time must stay */
     sleep(1);
     if (stat("/dev/null", &st) != 0 || (long)st.st_mtim.tv_sec != boot) {
         return fail(SYNTHETIC_STEADY);

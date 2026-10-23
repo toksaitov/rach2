@@ -525,6 +525,7 @@ static void *sleeper(void *arg)
         __atomic_store_n(&sleep_ready, 1, __ATOMIC_SEQ_CST);
         await(&sleep_go);
         __atomic_store_n(&sleep_go, 0, __ATOMIC_SEQ_CST);
+        /* interval: the sleeps are the calls timed */
         nanosleep(&req, NULL);
         __atomic_store_n(&sleep_done, 1, __ATOMIC_SEQ_CST);
     }

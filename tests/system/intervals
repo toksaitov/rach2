@@ -32,3 +32,29 @@ tests/sigprobe.c: the sleeps tested, which a signal ends or must not end
 tests/timeprobe.c: the sleep the row tests
 tests/waitprobe.c: the child's state is read again every 10 ms
 tests/xsaveprobe.c: the processes switch while the registers are checked
+tests/musl/callsmusl.c: the blocked periodic timer of 20 ms runs for ten periods
+tests/musl/callsmusl.c: a process's state is looked at again every 10 ms
+tests/musl/capmusl.c: the first thread's state is looked at again every 10 ms
+tests/musl/clockidmusl.c: the sleeps are the calls tested
+tests/musl/epollmusl.c: a process's state is looked at again every 10 ms
+tests/musl/fifomusl.c: a process's state is looked at again every 10 ms
+tests/musl/ipcmusl.c: the semaphore's waiters are counted again every 10 ms
+tests/musl/ipcmusl.c: a process's state is looked at again every 10 ms
+tests/musl/lockmusl.c: a task's state is looked at again every 10 ms
+tests/musl/pselectmusl.c: the probe's state is looked at again every 10 ms
+tests/musl/ptracemusl.c: a process's state is looked at again every 10 ms
+tests/musl/ptracemusl.c: the second thread's state is looked at again every 10 ms
+tests/musl/pwauthmusl.c: a nap waits between reads, or for what must not come
+tests/musl/pwauthmusl.c: the state and the pipe are looked at again every 10 ms
+tests/musl/pwauthmusl.c: the file is looked at again every 10 ms
+tests/musl/sigframemusl.c: a process's state is looked at again every 10 ms
+tests/musl/smpmusl.c: the sleeps are the calls timed
+tests/musl/stampmusl.c: two stamps are 60 ms apart, so that they differ
+tests/musl/statmusl.c: the clock moves a second while /dev/null's time must stay
+tests/musl/threadmusl.c: a thread's state is looked at again every 10 ms
+tests/musl/threadmusl.c: the other handler is looked for again every 10 ms
+tests/musl/threadmusl.c: the takers' states are looked at again every 10 ms
+tests/musl/timerfdmusl.c: a process's state is looked at again every 10 ms
+tests/musl/unixmusl.c: a process's state is looked at again every 10 ms
+tests/musl/pollmusl.c: the parent's state is looked at again every millisecond
+tests/host/pwauth_hosttest.c: the pipe is drained and the reader checked every 50 ms

@@ -727,6 +727,7 @@ static void nap(long ms)
 
     ts.tv_sec = ms / 1000;
     ts.tv_nsec = (ms % 1000) * 1000000L;
+    /* interval: a nap waits between reads, or for what must not come */
     nanosleep(&ts, NULL);
 }
 
@@ -781,6 +782,7 @@ static int asleep_drained(pid_t pid, int fd)
         if (ended(pid)) {
             return 0;
         }
+        /* interval: the state and the pipe are looked at again every 10 ms */
         usleep(10000);
     }
 }
@@ -801,6 +803,7 @@ static int await_text(const char *path, const char *text, pid_t pid)
         if (ended(pid)) {
             return 0;
         }
+        /* interval: the file is looked at again every 10 ms */
         usleep(10000);
     }
 }
@@ -1005,7 +1008,7 @@ static int check_fork(void)
 
         return fail(FORK_KILL_FORK);
     }
-    nap(200);
+    asleep_drained(child, -1);
     kill(child, SIGINT);
     if (waitpid(child, &status, 0) != child || !WIFSIGNALED(status) || WTERMSIG(status) != SIGINT) {
         cred_txn_end();
@@ -2734,27 +2737,41 @@ static int check_high_signals(void)
 
     for (i = 0; i < sizeof(handled) / sizeof(handled[0]); i++) {
         pid_t child;
+        int ready[2];
         int status;
+        char token = '\0';
 
         unlink("/etc/.pwlock");
+        if (pipe(ready) != 0) {
+            return fail(HIGH_FORK);
+        }
         child = fork();
         if (child == 0) {
+            close(ready[0]);
             if (cred_txn_begin("pwauthmusl") != 0) {
                 _exit(70);
             }
+            if (write(ready[1], "r", 1) != 1) {
+                child_exit(71);
+            }
             for (;;) {
-                sleep(1);
+                pause();
             }
         }
+        close(ready[1]);
         if (child < 0) {
+            close(ready[0]);
+
             return fail(HIGH_FORK);
         }
-        while (!present("/etc/.pwlock")) {
-            if (waitpid(child, &status, WNOHANG) == child) {
-                return fail(HIGH_BEGIN);
-            }
-            sleep(1);
+        if (read(ready[0], &token, 1) != 1 || !present("/etc/.pwlock")) {
+            close(ready[0]);
+            kill(child, SIGKILL);
+            waitpid(child, &status, 0);
+
+            return fail(HIGH_BEGIN);
         }
+        close(ready[0]);
         kill(child, handled[i]);
         if (waitpid(child, &status, 0) != child) {
             return fail(HIGH_REAP);

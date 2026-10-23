@@ -36,13 +36,13 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "../probe_args.h"
@@ -131,21 +131,25 @@ static int has(int fd, int cloexec, int nonblock)
 
 /**
  * Accept a connection on the non-blocking listener `ls` with the accept4
- * `flags`, trying again every 10 ms while the handshake's last segment is on
- * its way through the loopback ring. Returns the new descriptor, or -1 with
- * errno set to an error other than EAGAIN.
+ * `flags`, waiting in poll(2) for the listener to be readable while the
+ * handshake's last segment is on its way through the loopback ring. Returns
+ * the new descriptor, or -1 with errno set to an error other than EAGAIN.
  */
 static int accept_arrived(int ls, int flags)
 {
-    struct timespec tick = {0, 10000000};
+    struct pollfd pfd;
     long fd;
 
+    pfd.fd = ls;
+    pfd.events = POLLIN;
     for (;;) {
         fd = sc(SC_ACCEPT4, ls, 0, 0, flags);
         if (fd >= 0 || errno != EAGAIN) {
             return (int)fd;
         }
-        nanosleep(&tick, NULL);
+        if (poll(&pfd, 1, -1) < 0 && errno != EINTR) {
+            return -1;
+        }
     }
 }
 

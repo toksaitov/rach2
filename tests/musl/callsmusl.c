@@ -338,6 +338,7 @@ static int timers(void)
     if (timer_settime(t, 0, &its, NULL) != 0) {
         return fail("timer_settime of a periodic timer");
     }
+    /* interval: the blocked periodic timer of 20 ms runs for ten periods */
     usleep(210000);
     if (sigwaitinfo(&set, &si) != SIGUSR2 || si.si_overrun < 3 || timer_getoverrun(t) < 3) {
         return fail("a blocked periodic timer's signal did not carry its overrun");
@@ -574,6 +575,7 @@ static int seen_asleep(pid_t pid)
         if (state == 0 || state == 'Z') {
             return 0;
         }
+        /* interval: a process's state is looked at again every 10 ms */
         usleep(10000);
     }
 }
@@ -1573,23 +1575,34 @@ static int unfreeze(pid_t spinner, int state, const char *why)
 }
 
 /** Check that freeze waits for the wake alarm while the spinner is held.
- * The caller owns the RTC descriptor `fd`; return 0, or report a failure. */
+ * The spinner writes a byte to a pipe before it spins, and the freeze waits
+ * for the byte. The caller owns the RTC descriptor `fd`; return 0, or report
+ * a failure. */
 static int freezes(int fd)
 {
     struct wkalrm w, back;
     struct stat st;
-    int state, woke;
+    int started[2], spun, state, woke;
     long before, after;
     pid_t spinner;
+    char c;
 
+    if (pipe(started) != 0) {
+        return fail("a pipe for the spinning child");
+    }
     spinner = fork();
     if (spinner == 0) {
+        if (write(started[1], "s", 1) != 1) {
+            _exit(1);
+        }
         for (;;) {
         }
     }
-    usleep(50000);
+    close(started[1]);
+    spun = spinner > 0 && read(started[0], &c, 1) == 1;
+    close(started[0]);
     state = open("/sys/power/state", O_WRONLY);
-    if (spinner < 0 || state < 0 || wake_in(fd, 2, &w) != 0) {
+    if (!spun || state < 0 || wake_in(fd, 2, &w) != 0) {
         return unfreeze(spinner, state, "a spinning child, /sys/power/state and the wake alarm");
     }
     if (fstat(state, &st) != 0 || (st.st_mode & 0777) != 0644) {

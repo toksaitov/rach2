@@ -957,6 +957,7 @@ static char await_state(pid_t pid, char want)
         if (state == want || state == 'Z' || state == 0) {
             return state;
         }
+        /* interval: a process's state is looked at again every 10 ms */
         usleep(10000);
     }
 }
@@ -994,6 +995,7 @@ static int stopped_leader(void)
     }
     close(p[0]);
     while (!sleeping(pid, sleeper)) {
+        /* interval: the second thread's state is looked at again every 10 ms */
         usleep(10000);
     }
     if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) != 0 || !stopped_by(pid, SIGSTOP)) {

@@ -309,6 +309,7 @@ static int await_waiter(int id, pid_t child)
         if (waitpid(child, NULL, WNOHANG) != 0) {
             break;
         }
+        /* interval: the semaphore's waiters are counted again every 10 ms */
         usleep(10000);
     }
     kill(child, SIGKILL);
@@ -498,6 +499,7 @@ static int seen_asleep(pid_t pid)
         if (state == 0 || state == 'Z') {
             return 0;
         }
+        /* interval: a process's state is looked at again every 10 ms */
         usleep(10000);
     }
 }

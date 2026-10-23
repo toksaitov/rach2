@@ -41,15 +41,6 @@ static void check(int cond, const char *msg)
     }
 }
 
-/** Sleep for `ms` milliseconds with `nanosleep`. */
-static void msleep(int ms)
-{
-    struct timespec ts;
-    ts.tv_sec = ms / 1000;
-    ts.tv_nsec = (long)(ms % 1000) * 1000000L;
-    nanosleep(&ts, 0);
-}
-
 /** The state letter of /proc/`pid`/stat, the field after the command's
  * closing parenthesis, or 0 when the file cannot be read. */
 static char state_of(pid_t pid)
@@ -77,6 +68,7 @@ static char state_of(pid_t pid)
  * write failed and 2 when the parent ended without sleeping. */
 static void wake_sleeper(pid_t parent, int fd)
 {
+    struct timespec tick = {0, 1000000};
     char state;
 
     for (;;) {
@@ -87,7 +79,8 @@ static void wake_sleeper(pid_t parent, int fd)
         if (state == 0 || state == 'Z') {
             _exit(2);
         }
-        msleep(1);
+        /* interval: the parent's state is looked at again every millisecond */
+        nanosleep(&tick, 0);
     }
 }
 

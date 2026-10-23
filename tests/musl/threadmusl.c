@@ -740,6 +740,7 @@ static int thread_asleep(const volatile pid_t *t)
         if (state == 0 || state == 'Z') {
             return 0;
         }
+        /* interval: a thread's state is looked at again every 10 ms */
         usleep(10000);
     }
 }
@@ -844,6 +845,7 @@ static void on_usr1_waits(int sig)
     (void)sig;
     usr1_by = tid();
     while (!usr2_by) {
+        /* interval: the other handler is looked for again every 10 ms */
         usleep(10000);
     }
 }
@@ -948,6 +950,7 @@ static int handler_mask(void)
         return 1;
     }
     while (!takers_suspended()) {
+        /* interval: the takers' states are looked at again every 10 ms */
         usleep(10000);
     }
     kill(getpid(), SIGUSR1);

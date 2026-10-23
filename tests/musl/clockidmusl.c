@@ -81,9 +81,11 @@ struct kts {
 };
 
 #if defined __x86_64__
+/* interval: the sleeps are the calls tested */
 #define SYS_CLOCK_NANOSLEEP SYS_clock_nanosleep
 #define SYS_CLOCK_GETRES    SYS_clock_getres
 #else
+/* interval: the sleeps are the calls tested */
 #define SYS_CLOCK_NANOSLEEP SYS_clock_nanosleep_time32
 #define SYS_CLOCK_GETRES    SYS_clock_getres_time32
 #endif
@@ -133,6 +135,7 @@ static void to_kts(long long ns, struct kts *ts)
  */
 static long sleep_raw(long clk, long flags, const struct kts *req, struct kts *rem)
 {
+    /* interval: the sleeps are the calls tested */
     return syscall(SYS_CLOCK_NANOSLEEP, clk, flags, req, rem);
 }
 
@@ -750,6 +753,7 @@ static int wide_times(void)
         req.nsec = 0;
         alarms = 0;
         alarm_every(100000);
+        /* interval: the sleeps are the calls tested */
         r = syscall(SYS_nanosleep, &req, NULL);
         alarm_in(0);
         if (r != -1 || errno != EINTR || alarms < 1) {
