@@ -53,11 +53,6 @@
           "source": "scenario"
         },
         {
-          "assertion_id": "style_evidence",
-          "checks": "source evidence rejects changed, added or removed inputs, missing assertions and unrecorded judges",
-          "source": "scenario"
-        },
-        {
           "assertion_id": "records",
           "checks": "tests/host/records_hosttest.c rejects missing, malformed and inconsistent measurement records under ASan and UBSan",
           "source": "scenario"

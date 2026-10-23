@@ -1583,6 +1583,7 @@ include mk/gnu-host-checks.mk
 include mk/gnu-agents.mk
 include mk/gnu-image.mk
 include tests/system/suites.mk
+include tests/native/native.mk
 
 # Without the store, as in a release's full run, no output the store gave may
 # stand: the stamp of each step whose outputs came from the store, or are
