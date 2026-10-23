@@ -46,8 +46,23 @@ static int stop_request(const char *path, const char *run)
     return !error && n == size + 1 && !memcmp(text, run, size) && text[size] == '\n' ? 1 : -1;
 }
 
+/* Query the persistent owner's creation identity before preparation starts. */
+static int identity_main(int argc, char **argv)
+{
+    char *end;
+    struct etude_pid identity;
+    if (argc != 3) return 2;
+    errno = 0;
+    long pid = strtol(argv[2], &end, 10);
+    if (errno || !argv[2][0] || *end || pid <= 0 ||
+        etude_process_state(pid, &identity) != 1 || !identity.start_known) return 1;
+    return printf("%llu\n", (unsigned long long)identity.start) < 0 ? 1 : 0;
+}
+
 int etude_observe_main(int argc, char **argv)
 {
+    if (argc > 1 && !strcmp(argv[1], "identity"))
+        return identity_main(argc, argv);
     if (argc > 1 && !strcmp(argv[1], "sequence"))
         return etude_observe_sequence_main(argc, argv);
     const char *path = NULL, *run = NULL, *stop = NULL;
