@@ -277,6 +277,7 @@ void probe_main(unsigned long *sp)
             if (r != 0) {
                 break;
             }
+            /* interval: the child's state is read again every 10 ms */
             syscall2(SYS_NANOSLEEP, (long)&ts, 0);
         }
         check(r == 0, "asleep", "the child was seen asleep in its recvfrom");

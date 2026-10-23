@@ -610,6 +610,7 @@ static void sys_nanosleep_ms(long ms)
 
     req.tv_sec = ms / 1000L;
     req.tv_nsec = (ms % 1000L) * 1000000L;
+    /* interval: the reader's state is read again every 10 ms */
     r = syscall2(SYS_NANOSLEEP, (long)(&req), (long)0);
     (void)r;
 }

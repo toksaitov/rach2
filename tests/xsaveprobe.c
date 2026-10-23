@@ -418,6 +418,7 @@ static const char *hold(const struct ymm *v, unsigned ms)
             return why;
         }
         syscall1(SYS_SCHED_YIELD, 0);
+        /* interval: the processes switch while the registers are checked */
         syscall2(SYS_NANOSLEEP, (long)&nap, 0);
         for (spin = 0; spin < 20000u; spin++) {
         }

@@ -626,6 +626,7 @@ static void nap(long ms)
 
     req.tv_sec = ms / 1000;
     req.tv_nsec = (ms % 1000) * 1000000L;
+    /* interval: a child is read every 10 ms; btime and ticks need time */
     syscall3(SYS_NANOSLEEP, (long)&req, 0, 0);
 }
 

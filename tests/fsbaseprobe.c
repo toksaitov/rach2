@@ -183,6 +183,7 @@ static void sleep_ms(long ms)
 
     ts.sec = 0;
     ts.nsec = ms * 1000000L;
+    /* interval: a sleep switches the probe away and back */
     syscall2(SYS_NANOSLEEP, (long)&ts, 0);
 }
 

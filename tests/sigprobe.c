@@ -371,6 +371,7 @@ static int sleep_ms(int ms)
 
     req[0] = ms / 1000;
     req[1] = (ms % 1000) * 1000000;
+    /* interval: the sleeps tested, which a signal ends or must not end */
     return syscall2(SYS_NANOSLEEP, (long)req, 0);
 }
 

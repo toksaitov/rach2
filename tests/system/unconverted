@@ -5,17 +5,10 @@
 # conversion to etude's cases (dev-log/62-etude/plan.md) declares each in a
 # case's timing or removes it. A file whose count differs from its entry fails
 # the check, so the list only falls. A person reads this list.
-tests/dgramprobe.c: 1 sleep
-tests/exitprobe.c: 1 sleep
-tests/fsbaseprobe.c: 1 sleep
 tests/host/etude_exec_hosttest.c: 2 skip
 tests/host/fat32_hosttest.c: 1 skip
 tests/host/netif_hosttest.c: 1 sleep
 tests/host/pwauth_hosttest.c: 2 sleep
-tests/loadprobe.c: 1 sleep
-tests/loopprobe.c: 1 sleep
-tests/modeprobe.c: 1 sleep
-tests/mountprobe.c: 1 sleep
 tests/musl/callsmusl.c: 3 sleep
 tests/musl/capmusl.c: 1 sleep
 tests/musl/clockidmusl.c: 4 sleep
@@ -35,10 +28,3 @@ tests/musl/statmusl.c: 1 sleep
 tests/musl/threadmusl.c: 3 sleep
 tests/musl/timerfdmusl.c: 1 sleep
 tests/musl/unixmusl.c: 1 sleep
-tests/pingtest.c: 1 sleep
-tests/pollprobe.c: 1 sleep
-tests/procprobe.c: 1 sleep
-tests/sigprobe.c: 1 sleep
-tests/timeprobe.c: 1 sleep
-tests/waitprobe.c: 1 sleep
-tests/xsaveprobe.c: 1 sleep

@@ -181,6 +181,7 @@ static void sleep_ms(int ms)
 
     ts[0] = ms / 1000;
     ts[1] = (ms % 1000) * 1000000;
+    /* interval: the child's name is read again every 10 ms */
     syscall2(SYS_NANOSLEEP, (long)ts, 0);
 }
 

@@ -266,6 +266,7 @@ void probe_main(unsigned long *sp)
         req.tv_nsec = 150000000; /* 150 ms */
 
         syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)&before);
+        /* interval: the sleep the row tests */
         check(NANOSLEEP, syscall2(SYS_NANOSLEEP, (long)&req, 0) == 0, "nanosleep 150ms");
         syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)&after);
     }

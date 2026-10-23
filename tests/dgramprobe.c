@@ -133,6 +133,7 @@ static void nap(long ms)
 
     ts.tv_sec = ms / 1000;
     ts.tv_nsec = (ms % 1000) * 1000000L;
+    /* interval: the UDP counters are read again every 10 ms */
     (void)syscall2(SYS_NANOSLEEP, (long)(&ts), (long)0);
 }
 

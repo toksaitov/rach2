@@ -242,6 +242,7 @@ static int sys_gettimeofday(struct timeval_probe *tv)
 /** nanosleep(2) with no remainder. */
 static int sys_nanosleep(const struct timespec_probe *req)
 {
+    /* interval: a child is looked at again every 10 or 50 ms */
     return syscall2(SYS_NANOSLEEP, (long)req, (long)0);
 }
 

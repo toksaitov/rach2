@@ -616,6 +616,7 @@ static void sleep_past_second(void)
 
     ts[0] = 1;
     ts[1] = 100000000u; /* 1.1 s */
+    /* interval: the clock must leave the second the times were stamped in */
     syscall3(SYS_NANOSLEEP, (long)ts, 0, 0);
 }
 

@@ -130,6 +130,7 @@ static void msleep(int ms)
     } ts;
     ts.tv_sec = ms / 1000;
     ts.tv_nsec = (ms % 1000) * 1000000;
+    /* interval: the parent's state is read again every 10 ms */
     syscall2(SYS_NANOSLEEP, (long)&ts, 0);
 }
 

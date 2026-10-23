@@ -113,6 +113,7 @@ static void wait_parent(int parent)
                 return;
             }
         }
+        /* interval: the parent's state is read again every millisecond */
         call(SYS_NANOSLEEP, (long)nap, 0, 0);
     }
 }

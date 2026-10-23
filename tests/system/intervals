@@ -18,3 +18,17 @@ tests/host/etude_hold_hosttest.c: the path is looked at again every 10 ms
 tests/host/etude_hold_hosttest.c: a second TERM follows the first by 100 ms
 tests/host/etude_step_hosttest.c: a fixture's file is looked at again every 10 ms
 tests/rawprobe.c: the ICMP count every 10 ms, and time for each reply
+tests/dgramprobe.c: the UDP counters are read again every 10 ms
+tests/exitprobe.c: the parent's state is read again every millisecond
+tests/fsbaseprobe.c: a sleep switches the probe away and back
+tests/loadprobe.c: the gateway is pinged every 50 ms, a load for the run
+tests/loopprobe.c: the reader's state is read again every 10 ms
+tests/modeprobe.c: the clock must leave the second the times were stamped in
+tests/mountprobe.c: the child's name is read again every 10 ms
+tests/pingtest.c: a child is looked at again every 10 or 50 ms
+tests/pollprobe.c: the parent's state is read again every 10 ms
+tests/procprobe.c: a child is read every 10 ms; btime and ticks need time
+tests/sigprobe.c: the sleeps tested, which a signal ends or must not end
+tests/timeprobe.c: the sleep the row tests
+tests/waitprobe.c: the child's state is read again every 10 ms
+tests/xsaveprobe.c: the processes switch while the registers are checked
