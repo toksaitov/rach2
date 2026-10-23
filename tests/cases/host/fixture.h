@@ -34,6 +34,8 @@ int fx_replace(const char *source, const char *target, const char *from, const c
 void fx_env(const char *name, const char *value);
 int fx_start(struct fixture *f, struct fx_child *p, const char *const argv[], const char *cwd,
              const char *const env[], const char *input);
+int fx_start_io(struct fixture *f, struct fx_child *p, const char *const argv[], const char *cwd,
+                const char *const env[], const char *input, const char *output);
 int fx_poll(struct fx_child *p);
 int fx_wait(struct fixture *f, struct fx_child *p);
 void fx_stop(struct fx_child *p, int signal);

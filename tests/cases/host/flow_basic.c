@@ -248,10 +248,12 @@ int flow_basic_mock(int argc, char **argv)
 }
 int flow_basic(struct fixture *f, const char *id)
 {
+    if (!strcmp(id, "agents_guest"))
+        return flow_agents_guest(f);
     if (!strcmp(id, "limited"))
         return limited(f);
     if (!strcmp(id, "agents_credentials"))
-        return credentials(f);
+        return credentials(f) && flow_credential_arguments(f);
     fprintf(stderr, "fixture: no controller for %s\n", id);
     return 0;
 }

@@ -39,9 +39,13 @@ int main(int argc, char **argv)
     char value[8200];
     int ok;
     name = name ? name + 1 : argv[0];
+    if (argc == 2 && !strcmp(argv[1], "--check"))
+        return flow_check_workload(argc, argv);
     if (strcmp(name, "host-flow-check")) {
         if (getenv("FLOW_PROGRESS"))
             return flow_progress_mock(argc, argv);
+        if (getenv("FLOW_SPACE"))
+            return flow_space_mock(argc, argv);
         return flow_basic_mock(argc, argv);
     }
     if (argc != 3) {
@@ -62,6 +66,8 @@ int main(int argc, char **argv)
     fx_env("FLOW_SELF", f.self);
     if (!strcmp(id, "progress"))
         ok = flow_progress(&f);
+    else if (!strcmp(id, "space"))
+        ok = flow_space(&f);
     else
         ok = flow_basic(&f, id);
     fx_check(&f, ok, id);

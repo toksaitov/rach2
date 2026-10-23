@@ -14,6 +14,42 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+/* Group identities stay registered after their leaders exit, until cleanup. */
+static pid_t groups[1024];
+static size_t ngroups;
+static volatile sig_atomic_t stopped;
+static struct fixture *owner;
+static void signal_children(int sig)
+{
+    size_t i;
+    stopped = sig;
+    for (i = 0; i < ngroups; i++)
+        if (groups[i] > 0)
+            kill(-groups[i], SIGTERM);
+}
+static void children_cleanup(void)
+{
+    size_t i;
+    int status;
+    for (i = 0; i < ngroups; i++)
+        if (groups[i] > 0)
+            kill(-groups[i], SIGKILL);
+    for (i = 0; i < ngroups; i++)
+        if (groups[i] > 0)
+            while (waitpid(groups[i], &status, 0) < 0 && errno == EINTR) {
+            }
+    if (stopped && owner)
+        fprintf(stderr, "fixture: interrupted; evidence: %s\n", owner->work);
+    ngroups = 0;
+}
+static void interrupted(void)
+{
+    if (stopped) {
+        int sig = stopped;
+        children_cleanup();
+        exit(128 + sig);
+    }
+}
 int fx_exists(const char *p)
 {
     struct stat st;
@@ -298,14 +334,19 @@ void fx_pause(void)
     struct timespec t = {0, 20000000};
     nanosleep(&t, NULL);
 }
-int fx_start(struct fixture *f, struct fx_child *p, const char *const args[], const char *cwd,
-             const char *const env[], const char *input)
+int fx_start_io(struct fixture *f, struct fx_child *p, const char *const args[], const char *cwd,
+                const char *const env[], const char *input, const char *output)
 {
     int i;
     pid_t child;
+    interrupted();
+    if (ngroups == sizeof(groups) / sizeof(groups[0]))
+        return 0;
     memset(p, 0, sizeof(*p));
     snprintf(p->out, sizeof(p->out), "%s/command.%u.out", f->work, ++f->command);
     snprintf(p->err, sizeof(p->err), "%s/command.%u.err", f->work, f->command);
+    if (output)
+        snprintf(p->out, sizeof(p->out), "%s", output);
     child = fork();
     if (child < 0)
         return 0;
@@ -339,8 +380,14 @@ int fx_start(struct fixture *f, struct fx_child *p, const char *const args[], co
         _exit(127);
     }
     p->pid = child;
+    groups[ngroups++] = child;
     setpgid(child, child);
     return 1;
+}
+int fx_start(struct fixture *f, struct fx_child *p, const char *const a[], const char *cwd,
+             const char *const env[], const char *input)
+{
+    return fx_start_io(f, p, a, cwd, env, input, NULL);
 }
 int fx_poll(struct fx_child *p)
 {
@@ -369,8 +416,11 @@ void fx_stop(struct fx_child *p, int sig)
 }
 int fx_wait(struct fixture *f, struct fx_child *p)
 {
-    while (!fx_poll(p))
+    while (!fx_poll(p)) {
+        interrupted();
         fx_pause();
+    }
+    interrupted();
     free(f->out);
     free(f->err);
     f->out = fx_read(p->out);
@@ -422,6 +472,17 @@ int fx_check(struct fixture *f, int held, const char *label)
 int fx_init(struct fixture *f, const char *root, const char *name, const char *self)
 {
     memset(f, 0, sizeof(*f));
+    owner = f;
+    if (!ngroups) {
+        struct sigaction action;
+        memset(&action, 0, sizeof(action));
+        action.sa_handler = signal_children;
+        sigemptyset(&action.sa_mask);
+        sigaction(SIGTERM, &action, NULL);
+        sigaction(SIGINT, &action, NULL);
+        sigaction(SIGHUP, &action, NULL);
+        atexit(children_cleanup);
+    }
     if (!realpath(self, f->self))
         return 0;
     snprintf(f->root, sizeof(f->root), "%s", root);
@@ -432,6 +493,8 @@ int fx_init(struct fixture *f, const char *root, const char *name, const char *s
 }
 void fx_destroy(struct fixture *f)
 {
+    children_cleanup();
+    owner = NULL;
     free(f->out);
     free(f->err);
     if (!f->failed)
