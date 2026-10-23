@@ -91,6 +91,7 @@
 
 #include "compat/pathmax_host.h"
 #include "compat/fixdir_host.c"
+#include "compat/ovmf_host.h"
 #include "etude/qemu.h"
 
 extern char **environ;
@@ -960,14 +961,7 @@ static void test_real(int boundary)
  */
 static const char *ovmf_code(char *out, size_t size)
 {
-    FILE *p = popen(". tools/setup/ovmf_path.sh && printf '%s' \"$OVMF_CODE\"", "r");
-    size_t n;
-
-    if (p == NULL)
-        return NULL;
-    n = fread(out, 1, size - 1, p);
-    out[n] = '\0';
-    return pclose(p) == 0 && n > 0 && access(out, R_OK) == 0 ? out : NULL;
+    return host_ovmf_code(out, size);
 }
 
 /**

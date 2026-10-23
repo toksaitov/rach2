@@ -4,9 +4,13 @@
  * host-deps: tools/etude/compare_report.c tools/etude/compare_run.c
  * host-deps: tools/etude/history.c tools/etude/history_json.c
  * host-deps: tools/etude/history_collect.c utils/sha256.c
+ * host-deps: tools/etude/capture.c tools/etude/posix/exec.c
+ * host-deps: tools/etude/posix/keeper.c tools/etude/posix/process.c
  * host-cflags: -I tools/etude/include -I tools/etude
  */
 #include <etude/history.h>
+#include <etude/exec.h>
+#include "compat/tree_host.h"
 #include "compare.h"
 #include "../../utils/sha256.h"
 #include <fcntl.h>
@@ -48,10 +52,8 @@ struct spec {
 /** Remove the fixtures, even after a failure. */
 static void cleanup(void)
 {
-    char command[1200];
     if (*directory) {
-        snprintf(command, sizeof(command), "rm -rf '%s'", directory);
-        if (system(command))
+        if (host_remove_tree(directory) != 0)
             fprintf(stderr, "etude_compare_hosttest: cannot remove %s\n", directory);
     }
 }
@@ -299,15 +301,35 @@ static void write_spec(const struct spec *given)
         exit(1);
 }
 
-/** Run a command of the shell in the fixture directory; exit when it fails. */
-static void shell(const char *command)
+/** Run Git by argument vector in the fixture directory and keep its output. */
+static void git(char *const argv[], char *out, size_t size)
 {
-    char line[2400];
-    snprintf(line, sizeof(line), "cd '%s' && %s", directory, command);
-    if (system(line)) {
-        fprintf(stderr, "etude_compare_hosttest: failed: %s\n", command);
-        exit(1);
+    struct etude_exec_spec spec;
+    struct etude_exec *ex = etude_exec_new();
+    struct etude_proc *p = NULL;
+    const struct etude_exec_result *r;
+    int ok = 0;
+
+    memset(&spec, 0, sizeof spec);
+    spec.attempt_id = "compare-git";
+    spec.argv = argv;
+    spec.cwd = directory;
+    spec.output_max = 4096;
+    if (ex != NULL && etude_exec_start(ex, &spec, &p) == 0) {
+        while (etude_exec_wait(ex, -1) != p)
+            ;
+        r = etude_proc_result(p);
+        ok = r->end == ETUDE_END_EXITED && r->value == 0 && r->cleanup == ETUDE_CLEANUP_CONFIRMED &&
+             r->out.total == r->out.kept && r->err.total == r->err.kept && r->out.kept < size;
+        if (ok && out != NULL)
+            memcpy(out, r->out.data, r->out.kept + 1);
+        if (!ok)
+            fprintf(stderr, "etude_compare_hosttest: Git failed: %s\n", r->err.data);
     }
+    if (ex != NULL)
+        etude_exec_free(ex);
+    if (!ok)
+        exit(1);
 }
 
 /** Make a repository of three commits, whose hashes the runs name. */
@@ -315,25 +337,41 @@ static void make_repository(void)
 {
     static const char *const subjects[] = {"Measure the baseline", "Slow down the boot",
                                            "Add a check"};
-    char command[1200];
-    FILE *pipe;
+    char *init[] = {"git", "init", "-q", "repo", NULL};
+    char *commit[] = {"git",
+                      "-C",
+                      "repo",
+                      "-c",
+                      "user.name=etude",
+                      "-c",
+                      "user.email=etude@example.com",
+                      "-c",
+                      "commit.gpgsign=false",
+                      "-c",
+                      "core.hooksPath=/dev/null",
+                      "commit",
+                      "-q",
+                      "--allow-empty",
+                      "-m",
+                      NULL,
+                      NULL};
+    char *head[] = {"git", "-C", "repo", "rev-parse", "HEAD", NULL};
+    char hash[64];
     int i;
+
     unsetenv("GIT_DIR");
     unsetenv("GIT_WORK_TREE");
-    shell("git init -q repo");
+    git(init, NULL, 4097);
     for (i = 0; i < 3; i++) {
-        snprintf(command, sizeof(command),
-                 "git -C repo -c user.name=etude -c user.email=etude@example.com "
-                 "-c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q --allow-empty "
-                 "-m '%s'",
-                 subjects[i]);
-        shell(command);
-        snprintf(command, sizeof(command), "git -C '%s/repo' rev-parse HEAD", directory);
-        pipe = popen(command, "r");
-        if (!pipe || !fgets(commits[i], sizeof(commits[i]), pipe) || pclose(pipe)) {
+        commit[15] = (char *)subjects[i];
+        git(commit, NULL, 4097);
+        git(head, hash, sizeof hash);
+        if (strlen(hash) != 41 || hash[40] != '\n') {
             fprintf(stderr, "etude_compare_hosttest: cannot read commit %d\n", i);
             exit(1);
         }
+        memcpy(commits[i], hash, 40);
+        commits[i][40] = '\0';
     }
 }
 
@@ -598,7 +636,8 @@ int main(void)
             (int)sizeof(directory) ||
         !mkdtemp(directory))
         return 1;
-    shell("mkdir store");
+    if (mkdir(path("store"), 0700) != 0)
+        exit(1);
     make_repository();
     check_statistics();
     write_history();

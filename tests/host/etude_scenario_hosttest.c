@@ -5,6 +5,7 @@
  * program they run; and with the real QEMU on the kernel, the test image and
  * a disk of the architecture ARCH names.
  *
+ * host-deps: tests/host/compat/process_host.c
  * host-deps: tools/etude/posix/scenario.c tools/etude/posix/case_main.c
  * host-deps: tools/etude/serial.c tools/etude/processor.c
  * host-deps: tools/etude/posix/qemu.c tools/etude/qemu_profile.c
@@ -98,6 +99,7 @@
 
 #include "compat/pathmax_host.h"
 #include "compat/fixdir_host.c"
+#include "compat/process_host.h"
 #include "etude/artifact.h"
 #include "etude/report.h"
 #include "etude/scenario.h"
@@ -2992,45 +2994,48 @@ static int pid_order(const void *a, const void *b)
     return x < y ? -1 : x > y;
 }
 
-/**
- * Put in `pids`, sorted, the processes that run with one of the texts of
- * `any`, a list that NULL ends, in their arguments, and with `need` too when
- * it is not NULL; give their count, or -1 when ps cannot be read.
- *
- * ps lists every process of the machine, among them those of other runs of
- * this test, which ci's runners and the worker copies start at the same
- * time. Each caller's texts contain the path of this run's fixture
- * directory, which no other run has, so that a run neither counts nor kills
- * another's processes.
- */
+struct matching_processes {
+    const char *need;
+    const char *const *any;
+    long *pids;
+    int n;
+};
+
+/* Every matching argument contains this run's private fixture path. */
+static int match_process(long pid, const char *arguments, void *ctx)
+{
+    struct matching_processes *m = ctx;
+    int i;
+
+    for (i = 0; m->any[i] != NULL; i++)
+        if (strstr(arguments, m->any[i]) != NULL)
+            break;
+    if (m->any[i] == NULL || (m->need != NULL && strstr(arguments, m->need) == NULL))
+        return 0;
+    if (m->n == ROW_PROCS)
+        return -1;
+    m->pids[m->n++] = pid;
+    return 0;
+}
+
+/** Find only this run's processes through native argument-vector queries. */
 static int find_procs(const char *need, const char *const any[], long pids[ROW_PROCS])
 {
-    char line[8192];
-    FILE *f = popen("ps -ww -eo pid=,args=", "r");
-    int n = 0, i;
+    struct matching_processes m = {need, any, pids, 0};
 
-    if (f == NULL)
+    if (host_process_arguments(match_process, &m) != 0)
         return -1;
-    while (fgets(line, sizeof(line), f) != NULL) {
-        for (i = 0; any[i] != NULL; i++)
-            if (strstr(line, any[i]) != NULL)
-                break;
-        if (any[i] != NULL && (need == NULL || strstr(line, need) != NULL) && n < ROW_PROCS)
-            pids[n++] = strtol(line, NULL, 10);
-    }
-    if (pclose(f) != 0)
-        return -1;
-    qsort(pids, (size_t)n, sizeof(pids[0]), pid_order);
-    return n;
+    qsort(pids, (size_t)m.n, sizeof(pids[0]), pid_order);
+    return m.n;
 }
 
 /**
  * Put in `pids`, sorted, the processes of row `name` in this run, found by
  * their arguments: the scenario and its keepers by its invocation, the
  * stand-ins for QEMU and the services by the copies and programs in its
- * scratch, and its services by their mark; give their count, or -1 when ps
- * cannot be read. Each of the three contains a path in this run's fixture
- * directory.
+ * scratch, and its services by their mark; give their count, or -1 when
+ * native process queries fail. Each of the three contains a path in this
+ * run's fixture directory.
  */
 static int row_procs(const char *name, long pids[ROW_PROCS])
 {
@@ -3319,12 +3324,9 @@ static char real_store[PATH_MAX];
 /** Remove the real rows' store. */
 static void remove_real_store(void)
 {
-    char cmd[PATH_MAX + 16];
-
     if (real_store[0] == '\0')
         return;
-    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", real_store);
-    if (system(cmd) != 0)
+    if (fix_remove_tree(real_store) != 0)
         printf("etude-scenario-test: %s could not be removed\n", real_store);
 }
 
