@@ -806,9 +806,6 @@ $(GNU_TEST_DISK): $(OS_REAL_GNU_EXT2) $(MKMBR)
 build/tests/cases/gnu/rows.sh: tests/system/gnu_rows.sh
 	@mkdir -p $(@D)
 	cp $< $@
-build/tests/cases/gnu/sntpserver.py: tests/system/sntpserver.py
-	@mkdir -p $(@D)
-	cp $< $@
 build/tests/cases/gnu/sed.tar.xz: vendor/gnu/fetch.sh vendor/gnu/sources.txt
 	@mkdir -p $(@D)
 	cp "`sh vendor/gnu/fetch.sh --path sed`" $@

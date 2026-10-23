@@ -369,7 +369,7 @@ static void console(struct gnu_case *s)
  */
 static void stage(struct gnu_case *s, struct etude_case_service **sntp)
 {
-    char *args[] = {"-B", NULL, NTP_EPOCH, NULL, NULL};
+    char *args[] = {NTP_EPOCH, NULL, NULL};
     char line[160], ntp[16];
     struct etude_termination end;
     struct net_run r;
@@ -399,9 +399,8 @@ static void stage(struct gnu_case *s, struct etude_case_service **sntp)
     if (!net_ok(&s->u))
         return;
     snprintf(ntp, sizeof(ntp), "%u", etude_port(s->u.c, 1));
-    args[1] = (char *)etude_artifact(s->u.c, "sntpserver");
-    args[3] = ntp;
-    if (args[1] == NULL || etude_port(s->u.c, 1) == 0 ||
+    args[1] = ntp;
+    if (etude_port(s->u.c, 1) == 0 ||
         etude_service(s->u.c, "sntp", args, sntp, &end) != ETUDE_OK) {
         *sntp = NULL;
         net_fail(&s->u, "the SNTP server did not start");

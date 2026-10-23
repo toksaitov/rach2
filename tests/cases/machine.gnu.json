@@ -2544,7 +2544,7 @@
     {
       "case_id": "machine.gnu.ntpd",
       "behavior": "one `ntpd -n` runs with the pool servers of /etc/ntp.conf; with the case's SNTP server, whose time starts at 2030-01-01, put in their place and ntpd killed, init starts one again, which says in /var/log/services that it set the time, and clockmusl finds the machine's clock agreeing with the server's bracketed reference.",
-      "units": ["gnu_rows.sh row_ntpd", "tests/system/sntpserver.py"],
+      "units": ["gnu_rows.sh row_ntpd", "tests/system/sntpserver.c"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"row": "ntpd"}, "repetitions": 1, "seed": null},
@@ -2559,7 +2559,7 @@
         {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 2, "memory_bytes": 2147483648, "firmware": "direct", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [
-        {"service_id": "sntp", "program": "python3", "ready": "sntpserver: port", "does": "serve SNTP and the clock reference on the case's second port, with a time that starts at 2030-01-01 00:00:00 UTC and advances at the host's rate"}
+        {"service_id": "sntp", "program": "sntpserver", "ready": "sntpserver: port", "does": "serve SNTP and the clock reference on the case's second port, with a time that starts at 2030-01-01 00:00:00 UTC and advances at the host's rate"}
       ],
       "assertions": [
         {"assertion_id": "row", "checks": "gnu_rows.sh ntpd prints GNUROW OK ntpd as a line of its own and ssh exits with status 0", "source": "scenario"}
@@ -2575,7 +2575,7 @@
         {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
         {"name": "gnu-rows", "node": "tests/cases/gnu/rows.sh", "per_architecture": false},
         {"name": "clockmusl", "node": "tests/musl/clockmusl", "per_architecture": true},
-        {"name": "sntpserver", "node": "tests/cases/gnu/sntpserver.py", "per_architecture": false},
+        {"name": "sntpserver", "node": "tests/cases/gnu/sntpserver", "per_architecture": false},
         {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
         {"name": "gnu_scenario", "node": "tests/cases/machine/gnu_scenario", "per_architecture": false}
       ],

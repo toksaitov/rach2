@@ -700,11 +700,8 @@ $(NET_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils
 
-# The fake API service and relay of the agent machine cases.
-build/tests/cases/machine/agent_server build/tests/cases/machine/agent_relay: build/tests/cases/machine/%: tests/cases/machine/%.sh
-	@mkdir -p $(@D)
-	cp $< $@
-	chmod 755 $@
+# The fake API and SNTP services are compiled portable helpers.
+include tests/system/fakeapi/native.mk
 
 # The network, process and disk scenarios that read a probe's console
 # report.
