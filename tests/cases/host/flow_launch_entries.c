@@ -14,9 +14,9 @@ static int build(struct launch_fixture *u)
     char *text = fx_read(flow_source(f, "Makefile")), *at, *output;
     const char *plain[] = {"/usr/bin/make", "ARG=two words", NULL};
     const char *seven[] = {flow_path(f, "launch"), "build", "/usr/bin/make", "-j", "7",
-        "ARG=two words", NULL};
+                           "ARG=two words",        NULL};
     const char *sixteen[] = {flow_path(f, "launch"), "build", "/usr/bin/make", "-j16",
-        "ARG=two words", NULL};
+                             "ARG=two words",        NULL};
     int ok;
     if (!text || !(at = strstr(text, "# The architecture (mk/arch.mk):"))) {
         free(text);
@@ -70,8 +70,7 @@ static int jobs(struct launch_fixture *u)
     fx_env("ETUDE_BUILD_JOBS", "3");
     fx_env("MAKELEVEL", "0");
     if (!job_row(u, unbounded, "-j\ncomponents\n-j3\n") ||
-        !job_row(u, plain, "components\n-j1\n") ||
-        !job_row(u, one, "-j\n1\ncomponents\n-j1\n") ||
+        !job_row(u, plain, "components\n-j1\n") || !job_row(u, one, "-j\n1\ncomponents\n-j1\n") ||
         !job_row(u, two, "--jobs=2\ncomponents\n-j2\n") ||
         !job_row(u, nine, "-j9\ncomponents\n-j3\n") ||
         !job_row(u, twelve, "-j12\ncomponents\n-j3\n"))
@@ -129,19 +128,20 @@ static int owner(struct launch_fixture *u)
     fx_env("FLOW_LAUNCH_MODE", "owner");
     fx_env("RACH2_TESTING_COPY", u->tree);
     snprintf(command, sizeof(command),
-        "RACH2_WORKERS=2 RACH2_MEMORY_MIB=96 '%s/launch' build bash -c "
-        "'\"%s\" --launch-observer || exit 3; printf \"a\\047b\\n\"; cat; exit 7'",
-        f->work, f->self);
+             "RACH2_WORKERS=2 RACH2_MEMORY_MIB=96 '%s/launch' build bash -c "
+             "'\"%s\" --launch-observer || exit 3; printf \"a\\047b\\n\"; cat; exit 7'",
+             f->work, f->self);
     flow_put(f, "owner-input", "owner input\n");
     ok = fx_run(f, a, u->tree, NULL, flow_path(f, "owner-input")) == 7 &&
          strstr(f->out, "a'b\nowner input\n");
-    return fx_check(f, ok, "owner command preserves quotes, stdin and status") && launch_saw(u, 1, 1);
+    return fx_check(f, ok, "owner command preserves quotes, stdin and status") &&
+           launch_saw(u, 1, 1);
 }
 static int legacy(struct launch_fixture *u)
 {
     struct fixture *f = u->f;
-    const char *a[] = {flow_path(f, "launch"), "-r", flow_path(f, "result"), "legacy",
-        flow_path(f, "old-run"), NULL};
+    const char *a[] = {flow_path(f, "launch"),  "-r", flow_path(f, "result"), "legacy",
+                       flow_path(f, "old-run"), NULL};
     struct flock lock;
     int fd, ok;
     char *seen;
@@ -156,22 +156,30 @@ static int legacy(struct launch_fixture *u)
     ok = !fcntl(fd, F_SETLK, &lock) && launch_run(u, a, 0);
     close(fd);
     seen = fx_read(flow_path(f, "observed"));
-    ok = fx_check(f, ok && seen && !strncmp(seen, "1000 ", 5) &&
-        fx_equal(flow_path(f, "result"), "exited 0\n"), "legacy shares reserved port block") && ok;
+    ok = fx_check(f,
+                  ok && seen && !strncmp(seen, "1000 ", 5) &&
+                      fx_equal(flow_path(f, "result"), "exited 0\n"),
+                  "legacy shares reserved port block") &&
+         ok;
     free(seen);
     return ok && launch_saw(u, 1, 1);
 }
 static int bisection(struct launch_fixture *u)
 {
     struct fixture *f = u->f;
-    const char *a[] = {"sh", flow_source(f, "tools/ci/bisect.sh"), "-e", "/host-products/etude",
-        "core", "i686", "good", "bad", "1", "default", NULL};
+    const char *a[] = {"sh",   flow_source(f, "tools/ci/bisect.sh"),
+                       "-e",   "/host-products/etude",
+                       "core", "i686",
+                       "good", "bad",
+                       "1",    "default",
+                       NULL};
     char machine[8192];
     int ok;
     fx_env("FLOW_LAUNCH_MODE", "bisect");
     flow_put(f, "private-ledger/claims", "etude-ledger 1\n");
     snprintf(machine, sizeof(machine),
-        "etude-machine 1\nledger %s/private-ledger\ncpus 16\nmemory_bytes 268435456\n", f->work);
+             "etude-machine 1\nledger %s/private-ledger\ncpus 16\nmemory_bytes 268435456\n",
+             f->work);
     flow_put(f, "private-state/machine", machine);
     flow_put(f, "checkout/tools/ci/core.env", "# Core settings.\nRACH2_WORKERS=2\n");
     fx_env("GITHUB_REPOSITORY", "test/rach2");
@@ -188,13 +196,17 @@ static int nested(struct launch_fixture *u)
     struct fixture *f = u->f;
     char command[32768];
     const char *a[] = {flow_path(f, "launch"), "build", "/bin/sh", "-c", command, NULL};
-    snprintf(command, sizeof(command), "'%s' --launch-observer && '%s/launch' -r '%s/result' "
-             "legacy '%s' --launch-observer", f->self, f->work, f->work, f->self);
+    snprintf(command, sizeof(command),
+             "'%s' --launch-observer && '%s/launch' -r '%s/result' "
+             "legacy '%s' --launch-observer",
+             f->self, f->work, f->work, f->self);
     if (!launch_run(u, a, 0) || !fx_equal(flow_path(f, "result"), "exited 0\n") ||
         !launch_saw(u, 2, 1))
         return 0;
-    snprintf(command, sizeof(command), "'%s' --launch-observer && '%s/launch' -r '%s/result' "
-             "legacy /bin/sh -c 'kill -TERM $$'", f->self, f->work, f->work);
+    snprintf(command, sizeof(command),
+             "'%s' --launch-observer && '%s/launch' -r '%s/result' "
+             "legacy /bin/sh -c 'kill -TERM $$'",
+             f->self, f->work, f->work);
     if (!launch_run(u, a, 143) || !fx_equal(flow_path(f, "result"), "incomplete\n") ||
         !launch_saw(u, 1, 1))
         return 0;
@@ -208,7 +220,8 @@ static int nested(struct launch_fixture *u)
 }
 int launch_entries(struct launch_fixture *u)
 {
-    return build(u) && jobs(u) && worker_ci(u) && owner(u) && legacy(u) && bisection(u) && nested(u);
+    return build(u) && jobs(u) && worker_ci(u) && owner(u) && legacy(u) && bisection(u) &&
+           nested(u);
 }
 static int refuse(struct launch_fixture *u, const char *policy)
 {
@@ -216,14 +229,14 @@ static int refuse(struct launch_fixture *u, const char *policy)
     const char *a[] = {flow_path(f, "launch"), "build", f->self, "--launch-observer", NULL};
     flow_put(f, "site", policy);
     return launch_run(u, a, 2) && fx_check(f, !fx_exists(flow_path(f, "observed")),
-                                         "refused launch never executes command");
+                                           "refused launch never executes command");
 }
 static int bad_policies(struct launch_fixture *u)
 {
     static const char *from[] = {"etude-site 2", "endpoint linux", "/host-products/etude",
-        "24000,103079215104,171798691840", NULL};
+                                 "24000,103079215104,171798691840", NULL};
     static const char *to[] = {"etude-site 1", "endpoint windows", "/missing-etude",
-        "24000,0,171798691840"};
+                               "24000,0,171798691840"};
     struct fixture *f = u->f;
     char policy[33000];
     unsigned i;
@@ -247,7 +260,8 @@ static int bad_policies(struct launch_fixture *u)
 static int bad_environment(struct launch_fixture *u)
 {
     struct fixture *f = u->f;
-    static const char *key[] = {"ETUDE_SITE", "RACH2_PORT_OFFSET", "SSH_TEST_PORT", "ETUDE_ADMITTED"};
+    static const char *key[] = {"ETUDE_SITE", "RACH2_PORT_OFFSET", "SSH_TEST_PORT",
+                                "ETUDE_ADMITTED"};
     static const char *value[] = {"/missing-site", "0", "2222", "/other/site"};
     unsigned i;
     flow_put(f, "site", u->policy);

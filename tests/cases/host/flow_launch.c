@@ -59,8 +59,8 @@ static int observer(void)
          strstr(text, "state running") && !strstr(text, "resource cpu_millis ") &&
          !strstr(text, "resource disk_bytes ") && strstr(text, wanted) &&
          !strcmp(ev("RACH2_WORKERS"), "2") && !strcmp(ev("RACH2_MEMORY_MIB"), "96") &&
-         *ev("RACH2_PORT_OFFSET") && !*end && offset >= 0 && offset <= 9000 &&
-         offset % 1000 == 0 && locked(lp("locks/rach2-host.lock"));
+         *ev("RACH2_PORT_OFFSET") && !*end && offset >= 0 && offset <= 9000 && offset % 1000 == 0 &&
+         locked(lp("locks/rach2-host.lock"));
     snprintf(name, sizeof(name), "locks/rach2-ports.%ld", offset / 1000);
     ok = ok && locked(lp(name));
     if (!ok) {
@@ -195,8 +195,7 @@ int flow_launch_mock(int argc, char **argv)
     if (!strcmp(name, "run"))
         return synthetic_run(argc, argv);
     if (!strcmp(name, "sh")) {
-        if (argc > 1 && !strcmp(argv[1], "tests/run") &&
-            strcmp(ev("FLOW_LAUNCH_MODE"), "worker"))
+        if (argc > 1 && !strcmp(argv[1], "tests/run") && strcmp(ev("FLOW_LAUNCH_MODE"), "worker"))
             return synthetic_run(argc - 1, argv + 1);
         execv("/bin/sh", argv);
         return 127;
@@ -266,8 +265,7 @@ int launch_saw(struct launch_fixture *u, unsigned count, int same)
             break;
         }
         for (i = 0; i < n; i++)
-            if ((same && strcmp(hashes[i], hash + 1)) ||
-                (!same && !strcmp(hashes[i], hash + 1)))
+            if ((same && strcmp(hashes[i], hash + 1)) || (!same && !strcmp(hashes[i], hash + 1)))
                 ok = 0;
         strcpy(hashes[n++], hash + 1);
     }
@@ -277,11 +275,21 @@ int launch_saw(struct launch_fixture *u, unsigned count, int same)
 static int setup(struct launch_fixture *u)
 {
     struct fixture *f = u->f;
-    static const char *clear[] = {"ETUDE_ADMITTED", "ETUDE_SITE", "RACH2_PORT_OFFSET",
-        "SSH_TEST_PORT", "RACH2_RUN_WORK", "RACH2_RUN_STATUS", "MAKEFLAGS", "MFLAGS",
-        "MAKELEVEL", "MAKEOVERRIDES", "ETUDE_BUILD_JOBS", "JOBS", NULL};
-    static const char *mock[] = {"uname", "cc", "make", "gh", "git", "timeout", "id", "sh",
-        "ssh", "wsl.exe", "rsync", "record-make", NULL};
+    static const char *clear[] = {"ETUDE_ADMITTED",
+                                  "ETUDE_SITE",
+                                  "RACH2_PORT_OFFSET",
+                                  "SSH_TEST_PORT",
+                                  "RACH2_RUN_WORK",
+                                  "RACH2_RUN_STATUS",
+                                  "MAKEFLAGS",
+                                  "MFLAGS",
+                                  "MAKELEVEL",
+                                  "MAKEOVERRIDES",
+                                  "ETUDE_BUILD_JOBS",
+                                  "JOBS",
+                                  NULL};
+    static const char *mock[] = {"uname", "cc",  "make",    "gh",    "git",         "timeout", "id",
+                                 "sh",    "ssh", "wsl.exe", "rsync", "record-make", NULL};
     unsigned i;
     for (i = 0; clear[i]; i++)
         fx_env(clear[i], NULL);
@@ -296,9 +304,10 @@ static int setup(struct launch_fixture *u)
     chmod(flow_path(f, "launch"), 0755);
     chmod(flow_path(f, "etude-bin/make"), 0755);
     snprintf(u->policy, sizeof(u->policy),
-        "etude-site 2\nendpoint linux\nlauncher %s/launch\nledger %s/ledger\nlocks %s/locks\n"
-        "etude /host-products/etude\ncapacity 24000,103079215104,171798691840\nwait 3\nseconds 30\n",
-        f->work, f->work, f->work);
+             "etude-site 2\nendpoint linux\nlauncher %s/launch\nledger %s/ledger\nlocks %s/locks\n"
+             "etude /host-products/etude\ncapacity 24000,103079215104,171798691840\nwait "
+             "3\nseconds 30\n",
+             f->work, f->work, f->work);
     flow_put(f, "site", u->policy);
     fx_env("FLOW_LAUNCH", f->work);
     fx_env("ETUDE_SITE", flow_path(f, "site"));

@@ -19,8 +19,7 @@ static unsigned long long physical_memory(void)
         return 0;
     return memory;
 #else
-    return (unsigned long long)sysconf(_SC_PHYS_PAGES) *
-           (unsigned long long)sysconf(_SC_PAGESIZE);
+    return (unsigned long long)sysconf(_SC_PHYS_PAGES) * (unsigned long long)sysconf(_SC_PAGESIZE);
 #endif
 }
 static unsigned count(const char *s, const char *word)
@@ -71,15 +70,16 @@ static int concurrent_start(struct launch_fixture *u, struct fx_child *p, unsign
     snprintf(ready, sizeof(ready), "TEST_READY=%s/ready-%s-%u", f->work, kind, i);
     snprintf(release, sizeof(release), "TEST_RELEASE=%s/release-%s-%s", f->work,
              i == 2 ? "only" : "shared", kind);
-    snprintf(workers, sizeof(workers), "TEST_WORKERS=%u", i == 2 && !strcmp(kind, "serial") ? 1 : 2);
+    snprintf(workers, sizeof(workers), "TEST_WORKERS=%u",
+             i == 2 && !strcmp(kind, "serial") ? 1 : 2);
     return fx_start(f, p, a, u->tree, env, NULL);
 }
 static int ordinary_claims(struct launch_fixture *u)
 {
     char *text = fx_read(flow_path(u->f, "ledger/claims"));
-    int ok = text && count(text, "state running") == 2 &&
-        strstr(text, "account account-0\n") && strstr(text, "account account-1\n") &&
-        count(text, "resource memory_bytes 5368709120\n") == 2;
+    int ok = text && count(text, "state running") == 2 && strstr(text, "account account-0\n") &&
+             strstr(text, "account account-1\n") &&
+             count(text, "resource memory_bytes 5368709120\n") == 2;
     free(text);
     return fx_check(u->f, ok, "two ordinary launches hold independent shared claims");
 }
@@ -87,7 +87,7 @@ static int exclusive_claim(struct launch_fixture *u)
 {
     char *text = fx_read(flow_path(u->f, "ledger/claims"));
     int ok = text && count(text, "state running") == 1 &&
-        strstr(text, "resource memory_bytes 103079215104\n");
+             strstr(text, "resource memory_bytes 103079215104\n");
     free(text);
     return fx_check(u->f, ok, "exclusive launch takes whole site capacity");
 }
