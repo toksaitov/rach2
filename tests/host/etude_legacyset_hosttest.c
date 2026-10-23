@@ -8,7 +8,8 @@
  * report, exceed a bound, meet another case, mark their start and end, or
  * wait. Guest cases run rngprobe on the real desktop QEMU and the prepared
  * kernel and test image of ARCH (i686 when unset). Their evidence is below
- * the tree's build/tests.
+ * the tree's build/tests. --context-only runs the native measurement rows
+ * without QEMU or guest artifacts.
  *
  * host-deps: tests/host/compat/desktop_host.c tests/host/compat/command_host.c
  * host-deps: tools/etude/compare_load.c tools/etude/observe_import.c tools/etude/json.c
@@ -17,11 +18,11 @@
  * host-deps: tools/etude/observe.c tools/etude/observe_history.c
  * host-deps: tools/etude/observe_scope.c tools/etude/observe_system.c
  * host-deps: tools/etude/measurement_context.c
+ * host-inputs: tests/host/compat/legacyset_context.c
  * host-deps: tools/etude/posix/legacy.c tools/etude/posix/legacy_set.c
  * host-deps: tools/etude/posix/legacy_cases.c tools/etude/digest.c
  * host-deps: tools/etude/posix/legacy_guest.c tools/etude/serial.c
  * host-deps: tools/etude/guest/wire.c tools/etude/posix/store.c
- * host-deps: tools/etude/json.c
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
  * host-deps: tools/etude/posix/process.c tools/etude/capture.c
  * host-deps: tools/etude/watchdog.c tools/etude/supervise.c
@@ -189,7 +190,7 @@ extern int (*legacy_set_put)(struct etude_store *s, const char *path, const char
 extern long long etude_store_settle_ns;
 extern unsigned long etude_store_copied;
 
-static int fails, completed;
+static int fails, completed, context_only;
 
 /** Count a failure when `cond` is false, and print its file, line and row. */
 #define CHECK(cond, row)                                                                     \
@@ -1021,7 +1022,7 @@ static void make_tree(void)
     for (i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++)
         bad |= mkdir(in(path, sizeof(path), dirs[i]), 0755) != 0;
     snprintf(owner, sizeof(owner), "pid %ld\n", (long)getpid());
-    bad |= legacy_fixture_stage(self, tree, guest_build, guest_arch) != 0;
+    bad |= legacy_fixture_stage(self, tree, context_only ? NULL : guest_build, guest_arch) != 0;
     bad |=
         legacy_fixture_copy(self, in(path, sizeof(path), "qemu/qemu-system-i386" LEGACY_EXE)) != 0;
     bad |= legacy_fixture_copy(self,
@@ -2844,6 +2845,8 @@ static int guest_site(void)
     return 0;
 }
 
+#include "compat/legacyset_context.c"
+
 int main(int argc, char **argv)
 {
     char held[32];
@@ -2873,7 +2876,10 @@ int main(int argc, char **argv)
         printf("etude-legacyset-test: fail: build/tools/etude/etude is not built\n");
         return 1;
     }
-    if (guest_site() != 0)
+    context_only = argc == 2 && !strcmp(argv[1], "--context-only");
+    if (context_only)
+        guest_arch = "i686";
+    else if (guest_site() != 0)
         return 1;
     snprintf(held, sizeof(held), "%ld", (long)getpid());
     setenv("RACH2_TREE_HELD", held, 1);
@@ -2887,6 +2893,15 @@ int main(int argc, char **argv)
     make_tree();
     if (fixture_environment(0) != 0)
         return 1;
+    test_contexts();
+    if (context_only) {
+        if (fails)
+            return 1;
+        completed = 1;
+        fix_passed();
+        puts("etude_legacyset_hosttest: context pass");
+        return 0;
+    }
     test_mixed();
     test_width();
     test_serial();

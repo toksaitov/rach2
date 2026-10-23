@@ -105,6 +105,8 @@ int legacy_fixture_stage(const char *self, const char *tree, const char *guest_b
     bad |= parents(path) != 0;
     snprintf(path, sizeof(path), "%s/cases/scenario.source", tree);
     bad |= legacy_fixture_copy(self, path) != 0;
+    if (guest_build == NULL)
+        return bad ? -1 : 0;
     for (i = 0; i < sizeof(links) / sizeof(links[0]); i++) {
         snprintf(source, sizeof(source), "%s/%s", guest_build, links[i][1]);
         snprintf(path, sizeof(path), "%s/%s/guest/%s", tree, build, links[i][0]);

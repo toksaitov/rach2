@@ -13,6 +13,7 @@
 
 /* Return -1 for the controller, or a fixture role's exit status. */
 int legacy_fixture_role(int argc, char **argv);
+/* Stage native roles; a NULL guest_build leaves guest assets unstaged. */
 int legacy_fixture_stage(const char *self, const char *tree, const char *guest_build,
                          const char *arch);
 int legacy_fixture_copy(const char *from, const char *to);
