@@ -107,7 +107,8 @@ $(tail -n 10 "$state/manager.log" 2> /dev/null)"
         run_session "$state/c-$t.jsonl" "$state/c-$t.err" "$DEADLINE" \
             env CLAUDE_CODE_EFFORT_LEVEL=high CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000 \
             claude -p "$prompt" --permission-mode bypassPermissions \
-            --disallowedTools ScheduleWakeup --output-format stream-json --verbose
+            --disallowedTools ScheduleWakeup,Monitor \
+            --output-format stream-json --verbose
         status=$?
         log "check $t ended $status"
         line=$(jq -r 'select(.type == "result") | .result' "$state/c-$t.jsonl" 2> /dev/null |

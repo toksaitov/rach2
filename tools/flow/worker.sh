@@ -18,16 +18,16 @@
 # AGENT is the program a session runs: Claude Code, `claude`, the default, or
 # the Codex CLI, `codex`, at the model and effort below. A Claude Code session
 # waits for its helpers however long they run, which print mode does not do
-# unless CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS is 0, and cannot schedule a
-# wakeup, since print mode keeps a finished session open until a pending
-# wakeup fires. STATE, `~/flow` unless given, holds the issue file, the log
-# `loop.log`, each session's output as `s-TIME.jsonl` and `s-TIME.err`, the
-# process group of the session that is running in `session`, the clone's path
-# in `repo`, and in `copy` the copy on the testing host that
-# RACH2_TESTING_COPY names for testing.sh, if any; `touch STATE/stop` ends
-# the loop after the session that is running. Sessions run with
-# RACH2_MIN_FREE_GIB at 40 unless the environment gives another, so that a
-# build they start stops before it fills the disk.
+# unless CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS is 0, and cannot schedule a wakeup
+# or start a Monitor, since print mode keeps a finished session open until a
+# pending wakeup fires or a monitor's command ends. STATE, `~/flow` unless
+# given, holds the issue file, the log `loop.log`, each session's output as
+# `s-TIME.jsonl` and `s-TIME.err`, the process group of the session that is
+# running in `session`, the clone's path in `repo`, and in `copy` the copy on
+# the testing host that RACH2_TESTING_COPY names for testing.sh, if any; `touch
+# STATE/stop` ends the loop after the session that is running. Sessions run with
+# RACH2_MIN_FREE_GIB at 40 unless the environment gives another, so that a build
+# they start stops before it fills the disk.
 #
 # A session that ends on the account's usage limit makes the loop wait fifteen
 # minutes. One shorter than two minutes for another reason, such as a lost
@@ -217,7 +217,7 @@ session()
                 CLAUDE_CODE_EFFORT_LEVEL="$REASONING" \
                 CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000 \
                 claude -p "$prompt" --permission-mode bypassPermissions \
-                --disallowedTools ScheduleWakeup \
+                --disallowedTools ScheduleWakeup,Monitor \
                 --output-format stream-json --verbose ;;
         codex)
             run_session "$state/s-$t.jsonl" "$state/s-$t.err" "$DEADLINE" \
