@@ -4647,7 +4647,8 @@ static struct mm *procfs_mem_mm(const struct procfs_file *f)
  * machine's addresses. It has a user's count for the length of the call,
  * which may sleep bringing a page in while the process ends.
  */
-static int32_t procfs_mem_access(fd_entry_t *e, char __user *ubuf, uint32_t count, int write)
+static int32_t procfs_mem_access(fd_entry_t *e, char __user *dst, const char __user *src,
+                                 uint32_t count, int write)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
     struct mm *mm = f ? procfs_mem_mm(f) : NULL;
@@ -4669,14 +4670,14 @@ static int32_t procfs_mem_access(fd_entry_t *e, char __user *ubuf, uint32_t coun
             n = (uint32_t)(PAGE_SIZE - (addr & (PAGE_SIZE - 1u)));
         }
         if (write) {
-            if (copy_from_user(buf, ubuf + done, n) != 0) {
+            if (copy_from_user(buf, src + done, n) != 0) {
                 rc = -EFAULT;
                 break;
             }
             rc = paging_access(mm, addr, buf, n, 1);
         } else {
             rc = paging_access(mm, addr, buf, n, 0);
-            if (rc == 0 && copy_to_user(ubuf + done, buf, n) != 0) {
+            if (rc == 0 && copy_to_user(dst + done, buf, n) != 0) {
                 rc = -EFAULT;
             }
         }
@@ -4694,13 +4695,13 @@ static int32_t procfs_mem_access(fd_entry_t *e, char __user *ubuf, uint32_t coun
 /** The read of a mem descriptor (`procfs_mem_access`). */
 static int32_t procfs_mem_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
-    return procfs_mem_access(e, buf, count, 0);
+    return procfs_mem_access(e, buf, NULL, count, 0);
 }
 
 /** The write of a mem descriptor (`procfs_mem_access`). */
 static int32_t procfs_mem_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
-    return procfs_mem_access(e, (char __user *)buf, count, 1);
+    return procfs_mem_access(e, NULL, buf, count, 1);
 }
 
 static const struct file_ops procfs_mem_ops = {procfs_mem_read, procfs_mem_write, procfs_poll,
