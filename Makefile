@@ -149,11 +149,12 @@ MKDISK          = krffs/mkdisk.sh
 # empty, as a release's full run sets it. Each stamped step runs through
 # etude-step: the vendored projects here, and the GNU layer in mk/gnu*.mk.
 # STEP_INPUTS gives it the rule's prerequisites, a stamp of another step with
-# -d and every other file with -i; order-only prerequisites are not inputs.
+# -d and every other file with -i; order-only prerequisites are not inputs,
+# nor is gnu-in-copy, the phony target mk/gnu.mk gives to rebuild a step.
 RACH2_STORE ?= $(wildcard /var/cache/rach2-store)
 ETUDESTEP       = build/tools/etude/etude-step
 STEP            = $(ETUDESTEP) -s '$(RACH2_STORE)' -a $(ARCH)
-STEP_INPUTS     = $(foreach f,$^,$(if $(filter %.stamp,$f),-d,-i) $f)
+STEP_INPUTS     = $(foreach f,$(filter-out gnu-in-copy,$^),$(if $(filter %.stamp,$f),-d,-i) $f)
 
 .PHONY: all clean distclean images musl-programs test preflight check-sources \
         test-image os-simple-image os-real-image os-real-disk \
