@@ -145,7 +145,7 @@ if [ -n "${ETUDE_PREPARATION_IMPORT:-}" ]; then
     transport=$("$python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["producer"]["transport"])' \
         "$(python_path "$ETUDE_PREPARATION_IMPORT")")
     case $transport in
-        ssh) resolved=$(program ssh); set -- "$@" --tool "$resolved" ;;
+        ssh|wsl-ssh) resolved=$(program ssh); set -- "$@" --tool "$resolved" ;;
         local)
             if [ "$windows" -eq 1 ]; then
                 resolved=$(program cygpath)

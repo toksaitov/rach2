@@ -240,15 +240,27 @@ def windows_host():
     return os.name == 'nt' or sys.platform in ('msys', 'cygwin')
 
 
+def remote_prefix(producer):
+    if producer['transport'] == 'ssh':
+        return []
+    require(producer['transport'] == 'wsl-ssh', 'unsupported producer transport')
+    for key in ('distribution', 'user'):
+        value = producer.get(key)
+        require(isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', value),
+                'invalid WSL distribution or user')
+    return ['env', 'MSYS_NO_PATHCONV=1', 'wsl.exe', '--distribution',
+            producer['distribution'], '--user', producer['user'], '--exec']
+
+
 def remote_command(producer, words):
     host = producer['host']
     require(re.fullmatch(r'[A-Za-z0-9_.@-]+', host) and not host.startswith('-'), 'invalid SSH host')
     return ['ssh', '-o', 'BatchMode=yes', host,
-            shlex.join(words)]
+            shlex.join([*remote_prefix(producer), *words])]
 
 
 def validate_producer(producer):
-    require(producer['transport'] in ('local', 'ssh'), 'unsupported producer transport')
+    require(producer['transport'] in ('local', 'ssh', 'wsl-ssh'), 'unsupported producer transport')
     for key in ('tree', 'metadata'):
         value = producer[key]
         require(isinstance(value, str) and not any(c in value for c in ('\0', '\n', '\r')),
@@ -296,7 +308,7 @@ def transfer(producer, names, tree, work):
         operand = rsync_path(root).rstrip('/') + '/'
     else:
         locker = [producer['etude'], 'lock', 'tree', producer['tree'], 'prepare-import', '/usr/bin/rsync']
-        args += ['--rsync-path=' + shlex.join(locker), '-e', 'ssh -o BatchMode=yes']
+        args += ['--rsync-path=' + shlex.join([*remote_prefix(producer), *locker]), '-e', 'ssh -o BatchMode=yes']
         operand = producer['host'] + ':' + producer['tree'].rstrip('/') + '/'
     run([*args, '--', operand, rsync_path(tree).rstrip('/') + '/'], tree)
     if producer['transport'] == 'local':
@@ -390,9 +402,11 @@ def prepare(args):
     producer = config['producer']
     required = {'transport', 'tree', 'metadata', 'sha256'}
     optional = set() if producer['transport'] == 'local' else {'host', 'etude'}
+    if producer['transport'] == 'wsl-ssh':
+        optional |= {'distribution', 'user'}
     require(required <= producer.keys() and not (producer.keys() - required - optional),
             'unknown or missing producer field')
-    require(producer['transport'] in ('local', 'ssh'), 'unknown transport')
+    require(producer['transport'] in ('local', 'ssh', 'wsl-ssh'), 'unknown transport')
     require(producer['transport'] == 'local' or {'host', 'etude'} <= producer.keys(),
             'remote producer needs its host and immutable etude')
     validate_producer(producer)

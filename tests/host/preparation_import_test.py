@@ -128,9 +128,34 @@ class ImportTests(unittest.TestCase):
                 product.idle_local(producer, dest)
 
     def test_refused_wsl_transports(self):
-        for mode in ('wsl', 'wsl-ssh'):
+        for mode in ('wsl',):
             with self.subTest(mode=mode), self.assertRaises(ValueError):
                 product.validate_producer(dict(transport=mode))
+
+    def test_posix_wsl_ssh(self):
+        producer = dict(transport='wsl-ssh', tree='/home/testing/rach2',
+                        metadata='/home/testing/rach2/build/producer.json', etude='/immutable/etude',
+                        host='testing', distribution='Ubuntu-26.04', user='testing')
+        with patch.object(product, 'windows_host', return_value=False):
+            product.validate_producer(producer)
+            words = product.remote_command(producer, ['/bin/cat', '/metadata'])
+            self.assertEqual(words[:4], ['ssh', '-o', 'BatchMode=yes', 'testing'])
+            self.assertEqual(words[4], 'env MSYS_NO_PATHCONV=1 wsl.exe --distribution '
+                             'Ubuntu-26.04 --user testing --exec /bin/cat /metadata')
+            with tempfile.TemporaryDirectory(prefix='rach2-import-') as work:
+                with patch.object(product, 'run') as run:
+                    product.transfer(producer, ['build/images/a.disk'], Path(work), Path(work))
+                argv = run.call_args.args[0]
+                server = next(arg for arg in argv if arg.startswith('--rsync-path='))
+                self.assertIn('--exec /immutable/etude lock tree /home/testing/rach2 '
+                              'prepare-import /usr/bin/rsync', server)
+        for key in ('distribution', 'user'):
+            for bad in (None, '', '-bad', 'bad value', 'bad;command'):
+                with self.subTest(key=key, bad=bad), self.assertRaises(ValueError):
+                    product.validate_producer(dict(producer, **{key: bad}))
+        with patch.object(product, 'windows_host', return_value=True):
+            with self.assertRaises(ValueError):
+                product.validate_producer(producer)
 
     def test_native_local_copy(self):
         with tempfile.TemporaryDirectory(prefix='rach2-import-') as work:
