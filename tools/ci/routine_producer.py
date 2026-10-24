@@ -84,7 +84,7 @@ def main():
     if args.action == 'projection':
         projection(p, 'producer.site')
     elif args.action == 'produce':
-        # The native phase owns source staging, admission and all build children.
+        # The native phase owns source staging, admission and build children.
         # stdin remains a separate owner-loss channel; the build consumes none.
         stage(args, config)
     else:

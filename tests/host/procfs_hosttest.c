@@ -954,7 +954,8 @@ static void entry_replace_rows(struct vfs_ref *parent)
     vfs_name_put(source);
 }
 
-/** The actual name-record implementation over a model directory with aliases. */
+/** The actual name-record implementation over a model directory with aliases.
+ */
 static void exe_entries(void)
 {
     struct vfs_ref parent;
