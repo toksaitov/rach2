@@ -87,9 +87,9 @@ $(PREFIX)/diskctl: utils/diskctl.c utils/gptdisk.c
 $(PREFIX)/bootctl: utils/bootctl.c utils/bootslot.c utils/bootverb.c utils/grubslot.c
 	@mkdir -p $(@D)
 	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
-$(PREFIX)/mkfatfixture: tests/host/mkfatfixture.c
+$(PREFIX)/mkfatfixture: tests/host/mkfatfixture.c tests/host/mkfatfixture.h
 	@mkdir -p $(@D)
-	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
+	$(CC) $(PRODUCT_CFLAGS) -o $@ $(filter %.c,$^)
 $(PREFIX)/etude: $(ETUDE_SRC)
 	@mkdir -p $(@D)
 	$(CC) $(PRODUCT_CFLAGS) -pthread -o $@ $^
@@ -103,7 +103,8 @@ $(PREFIX)/host-suite-probe: tests/cases/host/host_suite_probe.c
 	@mkdir -p $(@D)
 	$(SANITIZER_CC) $(PRODUCT_CFLAGS) -fsanitize=address,undefined \
 	    -fno-sanitize-recover=all -O1 -g -o $@ $^
-$(PREFIX)/doom_libc-%: ports/doom/crt0.c tests/host/fixtures/doom_libc.c
+$(PREFIX)/doom_libc-%: ports/doom/crt0.c tests/host/fixtures/doom_libc.c \
+    $(wildcard ports/doom/include/*.h ports/doom/include/sys/*.h)
 	@mkdir -p $(@D)
 	$*-elf-gcc -std=gnu99 -Os -ffreestanding -fno-pie -no-pie -nostdlib -static \
-	    -Wl,--build-id=none -Iports/doom/include $^ -o $@
+	    -Wl,--build-id=none -Iports/doom/include $(filter %.c,$^) -o $@

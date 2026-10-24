@@ -6,6 +6,7 @@ GNU_HOST_PRODUCTS_SOURCES = vendor/gnu/build_host_products.sh vendor/gnu/arch.sh
     tests/cases/host/host.c $(ETUDE_VOLUME_SRC) $(ETUDE_HDRS) \
     $(wildcard krffs/*.c krffs/*.h vendor/tcc/rach2-*.patch) $(TCC_TARBALL) \
     vendor/tcc/build_tcc.sh ports/doom/crt0.c tests/host/fixtures/doom_libc.c \
+    $(wildcard ports/doom/include/*.h ports/doom/include/sys/*.h) \
     tools/inspect/setidcheck.c tools/verify/sha256.c utils/sha256.c utils/sha256.h \
     $(wildcard utils/grow*.c utils/grow*.h utils/boot*.c utils/boot*.h) \
     utils/reflash.c utils/sectorcopy.c utils/sectorcopy.h utils/diskctl.c utils/gptdisk.c \

@@ -39,7 +39,16 @@ endif
 HOST_KERNEL_FIXTURES = chown krffs_open krffs_root_lock krffs_stat pagecache kstack endothers
 HOST_KERNEL_FIXTURE_INPUTS = tests/cases/host/fixtures.py tests/cases/host/routing.py \
     tests/host/fixtures/extract.py $(wildcard tests/host/fixtures/*.c tests/host/fixtures/*.h) \
-    tests/host/pagecache_hosttest.c rach2/sys/fs/vfs.c rach2/sys/fs/vfs.h \
+    tests/host/pagecache_hosttest.c tests/host/krffs_hosttest.c \
+    tests/host/krffsmount_hosttest.c tests/host/krffs_hash_vectors.h \
+    tests/host/compat/vfs_name_none.c rach2/sys/fs/vfs.c rach2/sys/fs/vfs.h \
+    rach2/sys/fs/fd.c rach2/sys/fs/krffs.c rach2/sys/fs/krffsmount.c \
+    rach2/sys/mm/pagecache.c rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c \
+    rach2/sys/arch/arch.h rach2/sys/arch/x86/isr.h rach2/sys/arch/x86/pic.h \
+    rach2/sys/block/block.h rach2/sys/display/textcon.h rach2/sys/io/inotify.h \
+    rach2/sys/mm/kheap.h rach2/sys/mm/pagecache.h rach2/sys/mm/vm.h \
+    rach2/sys/fpu.h rach2/sys/irq.h rach2/sys/kio.h rach2/sys/klog.h \
+    rach2/sys/panic.h rach2/sys/rtc.h rach2/sys/serial.h \
     rach2/sys/syscall_fs.c rach2/sys/syscall_proc.c rach2/sys/syscall_internal.h \
     rach2/sys/proc/process.h rach2/sys/arch/i686/cpu.h rach2/sys/arch/i686/uabi.h \
     $(wildcard rach2/sys/lib/*.h rach2/sys/fs/*.h rach2/sys/proc/*.h)
