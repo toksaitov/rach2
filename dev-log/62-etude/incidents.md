@@ -1032,3 +1032,9 @@ The first Mac whole collection on af1af2d49 left etude_exec_hosttest spinning in
 The fixture now reads BSD and task counters together, recognizes a sleeping task by its nonempty task and zero runnable threads, and fails a missing or terminal state. Transitional observations sleep between reads. Every registration asserts the held-child witness and refuses execution when it is absent. Linux syscall observations also stop on an empty or failed read. No deadline or production executor changes. The coordinator ended only the identified stuck fixture; its keeper's EOF cleanup ended both held descendants, and native postchecks confirmed all three absent. The whole collection continued without changing its source or artifacts.
 
 The admitted repaired executor fixture completed in 1.35 seconds and every held-child witness passed. Its overall result still failed two exact stderr checks because the sanitizer lacked its symbolizer. That separate failure remains visible in the retained log; the state repair does not change either output assertion.
+
+## The launcher fixture assumed one watch meant completion
+
+The first Mac collection's i686 QEMU fixture failed its host-only check after one etude_qemu_watch call. The API also returns when a host attempt writes output, before that attempt has completed. The instrumented child produced a missing-symbolizer warning in this run. The fixture treated that early return as a missing completed child and failed before checking its exit status. Its complete log remains in the measured-01 host.host.boots evidence, with fixtures at /tmp/rach2_fixtures.jJ3ufN.
+
+The fixture now serves watch events until the child completes, then keeps the existing exit-status-17 assertion. This is the only direct watch call in the host fixtures. Their other launcher waits already loop for completion or explicitly check an empty launcher. No production launcher, result assertion or timeout changes.

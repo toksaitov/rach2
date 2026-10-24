@@ -2349,7 +2349,8 @@ static void test_host_without_machine(void)
     spec.grace_us = FAKE_GRACE_US;
     CHECK(etude_exec_start(etude_qemu_exec(q), &spec, &p) == 0, "host start");
     if (p != NULL) {
-        etude_qemu_watch(q, -1, NULL, 0, &done);
+        while (done != p)
+            etude_qemu_watch(q, -1, NULL, 0, &done);
         CHECK(done == p, "host result with no machine");
         if (done == p)
             CHECK(etude_proc_result(p)->end == ETUDE_END_EXITED &&
