@@ -704,3 +704,9 @@ The first local admitted transport probe completed its wire command and child cl
 ### Native Windows authority compile used POSIX declarations (#1037)
 
 The exact cdaaf Windows build stopped on ESTALE, a duplicate environ declaration and a POSIX-only saved-input variable. MinGW does not define ESTALE and declares its environment accessor with an import attribute. The changed-identity refusal now uses portable EAGAIN, and the environment declaration and saved-input descriptor are confined to the POSIX branch. The failed source archive, complete compiler log and owned cleanup receipt remain separate from the replacement build. No collection or installed policy change occurred.
+
+## Clean preparation finds omitted products and source-check failures
+
+The first clean preparation of `34d88dbc0` stopped after 127 seconds, before any case ran. The repetition fixture exceeded its existing complexity limit (#1064); host inventory preparation required an exFAT writer absent from its build dependencies (#1065); twenty comment lines exceeded 80 columns (#1066); and the host Cppcheck run reported 75 findings in the new authority, routine-reader and fixture code (#1067). The earlier retained-products preparation could not reveal the missing product dependency. Both lifetime owners reported confirmed cleanup, and both resource ledgers were empty.
+
+The complete preparation log and diagnostics were retained. The repairs are one batch, followed by the affected source checks and another clean preparation. The complexity bound and static checks remain unchanged. The complete clean run also supplies the ordinary preparation sample required by the release forecast; it remains an unranked first measurement.
