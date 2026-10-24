@@ -169,6 +169,7 @@ class ImportTests(unittest.TestCase):
                 with patch.object(product, 'run') as run:
                     product.transfer(producer, ['build/images/a.disk'], Path(work), Path(work))
                 argv = run.call_args.args[0]
+                self.assertEqual(argv.count('--compress'), 1)
                 server = next(arg for arg in argv if arg.startswith('--rsync-path='))
                 self.assertIn('--exec /immutable/etude lock tree /producer '
                               'prepare-import /usr/bin/rsync', server)
@@ -179,6 +180,19 @@ class ImportTests(unittest.TestCase):
         with patch.object(product, 'windows_host', return_value=True):
             with self.assertRaises(ValueError):
                 product.validate_producer(producer)
+
+    def test_ssh_compression(self):
+        producer = dict(transport='ssh', tree='/producer',
+                        metadata='/producer/metadata', etude='/immutable/etude', host='testing')
+        with tempfile.TemporaryDirectory(prefix='rach2-import-') as work:
+            with patch.object(product, 'run') as run:
+                product.transfer(producer, ['build/images/a.disk'], Path(work), Path(work))
+            argv = run.call_args.args[0]
+            self.assertEqual(argv.count('--compress'), 1)
+            self.assertIn('--sparse', argv)
+            self.assertIn('--rsync-path=/immutable/etude lock tree /producer '
+                          'prepare-import /usr/bin/rsync', argv)
+            self.assertEqual(argv[-3:], ['--', 'testing:/producer/', work + '/'])
 
     def test_native_local_copy(self):
         with tempfile.TemporaryDirectory(prefix='rach2-import-') as work:
@@ -194,6 +208,7 @@ class ImportTests(unittest.TestCase):
                  patch.object(product, 'run') as run:
                 product.transfer(producer, ['build/images/a.disk'], dest, tree)
             argv = run.call_args.args[0]
+            self.assertNotIn('--compress', argv)
             self.assertNotIn('--force-local', argv)
             self.assertEqual(argv[-3:], ['--', str(root.resolve()) + '/', str(dest) + '/'])
             self.assertEqual(cygpath.call_count, 3)

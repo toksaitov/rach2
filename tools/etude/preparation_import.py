@@ -317,7 +317,8 @@ def transfer(producer, names, tree, work):
         operand = rsync_path(root).rstrip('/') + '/'
     else:
         locker = [producer['etude'], 'lock', 'tree', producer['tree'], 'prepare-import', '/usr/bin/rsync']
-        args += ['--rsync-path=' + shlex.join([*remote_prefix(producer), *locker]), '-e', 'ssh -o BatchMode=yes']
+        args += ['--compress', '--rsync-path=' + shlex.join([*remote_prefix(producer), *locker]),
+                 '-e', 'ssh -o BatchMode=yes']
         operand = producer['host'] + ':' + producer['tree'].rstrip('/') + '/'
     run([*args, '--', operand, rsync_path(tree).rstrip('/') + '/'], tree)
     if producer['transport'] == 'local':
