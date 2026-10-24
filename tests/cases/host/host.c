@@ -18,6 +18,7 @@ extern char **environ;
 #include "etude/report.h"
 #include "json.h"
 #include "sha256.h"
+#include "sanitizer_tool.h"
 
 #define PATH_SIZE  4096
 #define CHECKS_MAX 1024
@@ -327,6 +328,23 @@ static const char *prepared(const struct host *h, struct check *c)
     }
     if (!symbolizer_found)
         return "the sanitizer symbolizer is not a prepared input";
+#ifdef __APPLE__
+    if (symbolizer) {
+        char snapshot[PATH_SIZE], native[PATH_SIZE], provenance[PATH_SIZE];
+        int found = 0;
+        if (snprintf(provenance, sizeof(provenance), "%s.provenance.json", symbolizer) >=
+            (int)sizeof(provenance))
+            return "the sanitizer provenance path is too long";
+        for (size_t i = 0; i < inputs->count; i++) {
+            char decoded[PATH_SIZE];
+            const char *path = input_path(inputs->item[i], decoded);
+            found |= path && !strcmp(path, provenance);
+        }
+        if (!found || path_of(snapshot, h->tree, symbolizer) ||
+            host_sanitizer_source(snapshot, native, sizeof(native)))
+            return "the native sanitizer tool differs from its prepared snapshot";
+    }
+#endif
     const char *corpus = json_text(c->entry, "corpus");
     if (corpus && !corpus_matches(h, json_member(c->entry, "arguments"), corpus))
         return "the corpus contains files that were not prepared";
@@ -359,6 +377,12 @@ static int environment(struct host *h, struct check *c)
         char path[PATH_SIZE], value[PATH_SIZE + 32];
         if (!relative_path(symbolizer) || path_of(path, h->tree, symbolizer) != 0)
             return -1;
+#ifdef __APPLE__
+        char native[PATH_SIZE];
+        if (host_sanitizer_source(path, native, sizeof(native)))
+            return -1;
+        strcpy(path, native);
+#endif
         snprintf(value, sizeof(value), "ASAN_SYMBOLIZER_PATH=%s", path);
         c->env[used++] = strdup(value);
     }

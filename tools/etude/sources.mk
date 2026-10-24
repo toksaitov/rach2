@@ -113,10 +113,12 @@ ETUDE_CASE_LIB_WIN_SRC = tools/etude/posix/scenario.c tools/etude/posix/case_mai
                          tools/etude/volume/volume.c utils/sha256.c
 
 # The native driver of prepared host checks, linked without the command UI.
-ETUDE_HOSTCASE_SRC = tests/cases/host/host.c tools/etude/json.c utils/sha256.c \
+ETUDE_HOSTCASE_SRC = tests/cases/host/host.c tests/cases/host/sanitizer_tool.c \
+                     tools/etude/json.c utils/sha256.c \
                      tools/etude/capture.c tools/etude/posix/exec.c \
                      tools/etude/posix/keeper.c tools/etude/posix/process.c
-ETUDE_HOSTCASE_WIN_SRC = tests/cases/host/host.c tools/etude/json.c utils/sha256.c \
+ETUDE_HOSTCASE_WIN_SRC = tests/cases/host/host.c tests/cases/host/sanitizer_tool.c \
+                         tools/etude/json.c utils/sha256.c \
                          $(ETUDE_WIN_EXEC_SRC)
 
 # Native Windows behavior fixtures and the programs they launch.

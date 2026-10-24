@@ -6,6 +6,7 @@
 #include "etude/exec.h"
 #include "../../system/checkers/records.h"
 #include "../../host/compat/sanitizer_env_host.h"
+#include "sanitizer_tool.h"
 #ifdef _WIN32
 #include "win/files.h"
 #endif
@@ -28,7 +29,7 @@ static char *run(const char *path, const char *mode)
                  tree ? tree : ".") >= (int)sizeof(symbolizer))
         goto failed;
 #ifdef __APPLE__
-    if (realpath(symbolizer, resolved) == NULL)
+    if (host_sanitizer_source(symbolizer, resolved, sizeof(resolved)))
         goto failed;
 #else
     resolved[0] = 0;
@@ -46,6 +47,13 @@ static char *run(const char *path, const char *mode)
     while (etude_exec_wait(ex, -1) != p)
         ;
     r = etude_proc_result(p);
+#ifdef __APPLE__
+    if (host_sanitizer_source(symbolizer, resolved, sizeof(resolved))) {
+        fprintf(stderr, "usbchecks: native sanitizer tool changed\n");
+        etude_proc_free(p);
+        goto failed;
+    }
+#endif
     if (r->end == ETUDE_END_EXITED && r->value == 0 && r->cleanup == ETUDE_CLEANUP_CONFIRMED &&
         r->out.total == r->out.kept) {
         out = malloc(r->out.kept + 1);

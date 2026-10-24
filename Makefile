@@ -578,7 +578,7 @@ build/tests/cases/host/host_checks_scenario: tests/cases/host/host_checks_scenar
 
 # Host checks are compiled during preparation and executed by a native driver.
 # The inventory builder hashes every binary and input and never runs a check.
-build/tests/cases/host/host: $(ETUDE_HOSTCASE_SRC) $(ETUDE_HDRS)
+build/tests/cases/host/host: $(ETUDE_HOSTCASE_SRC) $(ETUDE_HDRS) tests/cases/host/sanitizer_tool.h
 	@mkdir -p $(@D)
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Iutils $(ETUDE_PLATFORM_FLAGS) $(ETUDE_PLATFORM_LIBS)
@@ -851,16 +851,17 @@ build/tests/cases/machine/metal_scenario: tests/cases/machine/metal_accept.c \
     tests/cases/machine/metal_accept.h tests/cases/machine/fileio.c tests/cases/machine/fileio.h
 
 build/tests/cases/host/usbchecks: tests/cases/host/usbchecks.c \
+    tests/cases/host/sanitizer_tool.h \
     tests/host/compat/sanitizer_env_host.h \
     tests/system/checkers/records.c tests/system/checkers/records.h \
-    $(filter-out tests/cases/host/host.c tools/etude/json.c utils/sha256.c,$(ETUDE_HOSTCASE_SRC))
+    $(filter-out tests/cases/host/host.c,$(ETUDE_HOSTCASE_SRC))
 	@mkdir -p $(@D)
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
-	    $(ETUDE_PLATFORM_FLAGS) $(ETUDE_PLATFORM_LIBS)
+	    -Iutils $(ETUDE_PLATFORM_FLAGS) $(ETUDE_PLATFORM_LIBS)
 
 build/tests/cases/host/krffscheck: tests/cases/host/krffscheck.c \
     tests/cases/host/native.c tests/cases/host/native.h \
-    $(filter-out tests/cases/host/host.c tools/etude/json.c utils/sha256.c,$(ETUDE_HOSTCASE_SRC))
+    $(filter-out tests/cases/host/host.c tests/cases/host/sanitizer_tool.c tools/etude/json.c utils/sha256.c,$(ETUDE_HOSTCASE_SRC))
 	@mkdir -p $(@D)
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    $(ETUDE_PLATFORM_FLAGS) $(ETUDE_PLATFORM_LIBS)
