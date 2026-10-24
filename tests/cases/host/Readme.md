@@ -1,6 +1,6 @@
 # Prepared host checks
 
-`host_checks_scenario.c` runs the five C groups of `host.host.json` over the inventory and executor in `host.c`. It executes native platform checks on the collection host and POSIX fixtures in one declared x86-64 GNU Rach2 helper per case. The separate scripts scenario controls the `host.list` checks. Every check uses prepared binaries, private scratch and complete output. The desktop requires no compiler, interpreter, tar, mtools, e2fsprogs or Linux tooling machine.
+`host_checks_scenario.c` runs the four mixed C groups of `host.host.json` over the inventory and executor in `host.c`. It executes native platform checks on the collection host and POSIX fixtures in one declared x86-64 GNU Rach2 helper per case. The boots group uses `host boots` directly as a host-domain case. All four boot fixtures run natively on each supported host; they start their own QEMU instances and judge their prepared kernels, including intentional fault cases. No unused outer GNU helper or outer kernel-console witness is declared for this group. The separate scripts scenario controls the `host.list` checks. Every check uses prepared binaries, private scratch and complete output. The desktop requires no compiler, interpreter, tar, mtools, e2fsprogs or Linux tooling machine.
 
 ## Use
 

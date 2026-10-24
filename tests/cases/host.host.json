@@ -1285,13 +1285,15 @@
         "host",
         "`tests/host/etude_qemu_hosttest.c`, `etude_watchdog_hosttest.c`, `etude_scenario_hosttest.c` and `etude_legacyset_hosttest.c`, compiled and run under the sanitizers on the kernel of ARCH"
       ],
-      "domain": "machine",
+      "domain": "host",
       "architectures": [
         "i686",
         "x86_64"
       ],
       "workload": {
-        "arguments": [],
+        "arguments": [
+          "boots"
+        ],
         "inputs": {},
         "repetitions": 1,
         "seed": null
@@ -1302,7 +1304,7 @@
         "features": {}
       },
       "execution": {
-        "program": "host_checks_scenario",
+        "program": "host",
         "stdin": null,
         "role": "ordinary",
         "privileges": "an ordinary user",
@@ -1312,33 +1314,33 @@
           }
         ],
         "children": "reported",
-        "cleanup": "the native executor reports and reaps every child; the case library stops the GNU helper and exports failed fixtures"
+        "cleanup": "the native executor reports and reaps every fixture child and retains failed output"
       },
       "assertions": [
         {
           "assertion_id": "listed",
           "checks": "each tests/host/*_hosttest.c with a host-arch: line has an assertion of this case, and each assertion a test of the tree",
-          "source": "scenario"
+          "source": "program"
         },
         {
           "assertion_id": "etude_legacyset",
           "checks": "tests/host/etude_legacyset_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
-          "source": "scenario"
+          "source": "program"
         },
         {
           "assertion_id": "etude_qemu",
           "checks": "tests/host/etude_qemu_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
-          "source": "scenario"
+          "source": "program"
         },
         {
           "assertion_id": "etude_scenario",
           "checks": "tests/host/etude_scenario_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
-          "source": "scenario"
+          "source": "program"
         },
         {
           "assertion_id": "etude_watchdog",
           "checks": "tests/host/etude_watchdog_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
-          "source": "scenario"
+          "source": "program"
         }
       ],
       "branches": [],
@@ -1347,12 +1349,6 @@
         "value": 0
       },
       "progress": [
-        {
-          "witness_id": "stage",
-          "kind": "step",
-          "means": "a declared scenario step has ended",
-          "limit": 4
-        },
         {
           "witness_id": "checks",
           "kind": "counter",
@@ -1415,18 +1411,8 @@
           "per_architecture": true
         },
         {
-          "name": "host_checks_scenario",
-          "node": "tests/cases/host/host_checks_scenario",
-          "per_architecture": false
-        },
-        {
-          "name": "products-kernel",
-          "node": "x86_64/rach2/kernel",
-          "per_architecture": false
-        },
-        {
-          "name": "products-image",
-          "node": "x86_64/images/gnu-test.disk",
+          "name": "host",
+          "node": "tests/cases/host/host",
           "per_architecture": false
         },
         {
@@ -1487,65 +1473,8 @@
       ],
       "timing": [],
       "native": {
-        "plan": "none",
-        "class": "system",
-        "reason": "native C executes platform checks and controls the declared GNU POSIX fixtures"
-      },
-      "steps": [
-        {
-          "step_id": "listed",
-          "stage": "execute",
-          "does": "validate all declared and prepared check identities"
-        },
-        {
-          "step_id": "native",
-          "stage": "execute",
-          "does": "run the prepared checks on the collection host"
-        },
-        {
-          "step_id": "products",
-          "stage": "boot",
-          "does": "boot the declared GNU products helper when needed",
-          "machine": "products"
-        },
-        {
-          "step_id": "gnu",
-          "stage": "execute",
-          "does": "run the prepared POSIX fixture on the GNU helper"
-        }
-      ],
-      "machines": [
-        {
-          "machine_id": "products",
-          "qemu": {
-            "architecture": "x86_64",
-            "kernel": "products-kernel",
-            "initrd": null,
-            "disks": [
-              {
-                "name": "products-disk",
-                "base": "products-image",
-                "cluster_bytes": 65536,
-                "bus": "ahci"
-              }
-            ],
-            "cpu": "max",
-            "processors": 1,
-            "memory_bytes": 4294967296,
-            "firmware": "direct",
-            "devices": [
-              "rtl8139"
-            ],
-            "boot_options": [
-              "rach2.root=ext2",
-              "rach2.rescue"
-            ]
-          },
-          "console": "serial",
-          "qmp": true,
-          "helper": true
-        }
-      ]
+        "plan": "host"
+      }
     },
     {
       "case_id": "host.host.checkers",
