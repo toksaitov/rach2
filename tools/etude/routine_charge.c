@@ -319,9 +319,9 @@ static int authority_binding(const struct proof *p, const struct json *authority
 }
 static int snapshot_policy(const struct proof *p, const struct json *ref)
 {
-    const struct json *endpoints = json_member(p->lease, "endpoints");
-    for (size_t i = 0; endpoints && i < endpoints->count; i++) {
-        const struct json *e = endpoints->item[i];
+    const struct json *entries = json_member(p->lease, "endpoints");
+    for (size_t i = 0; entries && i < entries->count; i++) {
+        const struct json *e = entries->item[i];
         if (same(json_text(e, "name"), "windows"))
             return reference(ref, json_member(e, "policy_before")) && verified_bytes(ref);
     }
@@ -418,12 +418,14 @@ static int producer(const struct proof *p)
     struct json *metadata = document(json_member(refs, "metadata"));
     const char *record = json_text(metadata, "record");
     char hash[65];
-    if (record)
+    int record_matches = 0;
+    if (record) {
         digest(record, strlen(record), hash);
+        record_matches = same(hash, json_text(receipt, "record_sha256"));
+    }
     ok = ok && format(metadata, "etude-preparation-producer") &&
          same(json_text(metadata, "commit"), p->commit) &&
-         json_equal(json_member(metadata, "receipt"), receipt) && record &&
-         same(hash, json_text(receipt, "record_sha256"));
+         json_equal(json_member(metadata, "receipt"), receipt) && record_matches;
     json_free(metadata);
     json_free(receipt);
     return ok;
@@ -572,10 +574,10 @@ static int consumer_producer(const struct proof *p)
 }
 static int producer_phase(const struct proof *p, const struct json *phase, const struct json *raw)
 {
-    const struct json *producer = json_member(p->upstream, "producer");
-    struct json *receipt = document(json_member(producer, "receipt"));
+    const struct json *source = json_member(p->upstream, "producer");
+    struct json *receipt = document(json_member(source, "receipt"));
     int ok = import_mode(p) &&
-             reference(json_member(phase, "receipt"), json_member(producer, "cleanup")) &&
+             reference(json_member(phase, "receipt"), json_member(source, "cleanup")) &&
              producer_cleanup(json_member(phase, "receipt"), receipt) &&
              clock_identity(phase, receipt) && format(raw, "etude-authority-child");
     json_free(receipt);
@@ -585,12 +587,12 @@ static int phase_receipt(const struct proof *p, const struct json *phase)
 {
     struct json *raw = document(json_member(phase, "receipt"));
     const struct json *owner = json_member(raw, "owner");
-    int producer = same(json_text(phase, "phase"), "producer");
+    int is_producer = same(json_text(phase, "phase"), "producer");
     int ok = identity(json_member(raw, "process"), json_member(phase, "child")) &&
              identity(owner, owner) && clock_identity(raw, phase) &&
              json_equal(json_member(raw, "start"), json_member(phase, "start")) &&
              json_equal(json_member(raw, "end"), json_member(phase, "end"));
-    if (producer)
+    if (is_producer)
         ok = ok && producer_phase(p, phase, raw);
     else
         ok = ok && format(raw, "etude-routine-child") && result_pass(json_member(raw, "result")) &&

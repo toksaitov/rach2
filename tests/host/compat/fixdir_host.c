@@ -55,15 +55,12 @@ extern int __lsan_do_recoverable_leak_check(void) __attribute__((weak));
 
 /** Whether LeakSanitizer finds a leak now, which its own check at the end of
  * the process, after this one, reports as the test's failure. */
+#ifndef _WIN32
 static int fix_leaks(void)
 {
-#ifdef _WIN32
-    /* LeakSanitizer has no Windows runtime; the GNU checks retain it. */
-    return 0;
-#else
     return __lsan_do_recoverable_leak_check != NULL && __lsan_do_recoverable_leak_check() != 0;
-#endif
 }
+#endif
 
 #include "tree_host.h"
 #define fix_remove_tree host_remove_tree
@@ -71,7 +68,13 @@ static int fix_leaks(void)
 /** Keep failed fixtures as named evidence; remove successful fixtures. */
 static void fix_remove(void)
 {
-    if (!passed || fix_leaks()) {
+    int keep = !passed;
+
+#ifndef _WIN32
+    if (!keep)
+        keep = fix_leaks();
+#endif
+    if (keep) {
         printf("fixtures: kept in %s\n", own);
         return;
     }

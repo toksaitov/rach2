@@ -34,15 +34,16 @@ static int parse(int argc, char **argv, struct command *c)
     int i = 1, end;
 
     c->schemas = "tools/etude/schemas";
-    while (i + 1 < argc && argv[i][0] == '-') {
+    for (;;) {
+        if (argc - i < 3)
+            return -1;
+        if (argv[i][0] != '-')
+            break;
         if (!strcmp(argv[i], "-s"))
             c->schemas = argv[i + 1];
         else if (strcmp(argv[i], "--routine-proofs") || etude_routine_proof_directory(argv[i + 1]))
             return -1;
         i += 2;
-    }
-    if (argc - i < 3) {
-        return -1;
     }
     c->verb = argv[i];
     c->policy_path = argv[i + 1];
