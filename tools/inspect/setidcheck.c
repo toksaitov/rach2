@@ -4144,12 +4144,44 @@ static void fake_add(struct fake_fs *fs, const char *path, unsigned long mode)
    by debugfs, and then copies with one thing changed, by debugfs where
    debugfs can and by a byte where it cannot. */
 
-/** Run `command` with system(3); 0 when it exits 0, else -1. */
+/* Prepared tools take precedence without a PATH fallback after a failure.
+ * A standalone invocation retains the common host installation lookup. */
+static const char st_e2fs_tools[] = "if [ -n \"${HOST_TEST_TOOLS:-}\" ]; then "
+                                    "_st_mke2fs=\"$HOST_TEST_TOOLS/mke2fs\"; "
+                                    "_st_debugfs=\"$HOST_TEST_TOOLS/debugfs\"; "
+                                    "else . tools/setup/e2fsprogs_path.sh; "
+                                    "_st_mke2fs=mke2fs; _st_debugfs=debugfs; fi; ";
+
+/** Run a tool command, preserving its complete diagnostics on failure. */
 static int st_run(const char *command)
 {
-    int rc = system(command);
+    char log[512], wrapped[4608], bytes[4096];
+    FILE *f;
+    size_t count;
+    int n, rc;
 
-    return rc == 0 ? 0 : -1;
+    snprintf(log, sizeof(log), "%s/ext2-tools.log", st_tmp);
+    n = snprintf(wrapped, sizeof(wrapped), "{ %s; } > '%s' 2>&1", command, log);
+    if (n < 0 || (size_t)n >= sizeof(wrapped)) {
+        fprintf(stderr, "check-setid: ext2 fixture command is too long\n");
+        return -1;
+    }
+    rc = system(wrapped);
+    if (rc == 0)
+        return 0;
+    fprintf(stderr, "check-setid: ext2 fixture command failed (system status %d): %s\n", rc,
+            command);
+    f = fopen(log, "rb");
+    if (f == NULL) {
+        fprintf(stderr, "check-setid: cannot read %s: %s\n", log, strerror(errno));
+    } else {
+        while ((count = fread(bytes, 1, sizeof(bytes), f)) != 0)
+            fwrite(bytes, 1, count, stderr);
+        if (ferror(f))
+            fprintf(stderr, "check-setid: cannot finish reading %s\n", log);
+        fclose(f);
+    }
+    return -1;
 }
 
 /** Remove the tree at `path`, ignoring what cannot be removed. */
@@ -4227,14 +4259,12 @@ static int st_ext2_fixture(const char *out)
         return -1;
     unlink(out);
     snprintf(cmd, sizeof(cmd),
-             ". tools/setup/e2fsprogs_path.sh 2>/dev/null || true; "
-             ": > '%s' && E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 "
+             "%s: > '%s' && E2FSPROGS_FAKE_TIME=1 \"$_st_mke2fs\" -q -F -t ext2 -b 4096 "
              "-I 128 -O sparse_super,large_file,filetype,^dir_index,"
              "resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,"
              "^metadata_csum,^huge_file,^dir_nlink,^extra_isize -d '%s' "
-             "'%s' 8M >/dev/null 2>&1 && debugfs -w -f '%s' '%s' "
-             ">/dev/null 2>&1",
-             out, tree, out, script, out);
+             "'%s' 8M && \"$_st_debugfs\" -w -f '%s' '%s'",
+             st_e2fs_tools, out, tree, out, script, out);
     if (st_run(cmd) != 0)
         return -1;
     st_rm_tree(tree);
@@ -4251,10 +4281,9 @@ static int st_ext2_copy(const char *clean, const char *out, const char *commands
     char cmd[4096];
 
     snprintf(cmd, sizeof(cmd),
-             ". tools/setup/e2fsprogs_path.sh 2>/dev/null || true; "
-             "cp '%s' '%s' && printf '%%s\\n' '%s' > '%s.cmd' && "
-             "debugfs -w -f '%s.cmd' '%s' >/dev/null 2>&1",
-             clean, out, commands, out, out, out);
+             "%scp '%s' '%s' && printf '%%s\\n' '%s' > '%s.cmd' && "
+             "\"$_st_debugfs\" -w -f '%s.cmd' '%s'",
+             st_e2fs_tools, clean, out, commands, out, out, out);
     return st_run(cmd);
 }
 

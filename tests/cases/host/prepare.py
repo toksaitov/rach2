@@ -152,6 +152,9 @@ def checks(group, arch, base):
             item['command'] = [*COMMON, '-Wall', '-Wextra', '-Werror', '-o', out, source]
             if name == 'prosecheck':
                 item['data'] = ['CLAUDE.md', 'AGENTS.md']
+            if name == 'setidcheck':
+                item['tools'] = ['mke2fs', 'debugfs']
+                item['data'] = ['tools/inspect/setid.allow', 'tools/setup/e2fsprogs_path.sh']
             yield item
     elif group == 'fuzz':
         for source in sorted(Path('tests/fuzz').glob('*_fuzz.c')):
