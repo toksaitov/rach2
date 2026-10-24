@@ -66,9 +66,9 @@ static void message(struct acceptance *a, int failed, const char *format, ...)
         a->fails++;
 }
 
-/** Run a command as the login account, without su or a terminal. */
-static enum etude_status account(struct acceptance *a, const char *command, const char *input,
-                                 const char *output, struct net_run *r)
+/** Run or download through the login account with the same SSH retries. */
+static enum etude_status account_mode(struct acceptance *a, const char *command, const char *input,
+                                      const char *output, struct net_run *r, int download)
 {
     char who[128];
     unsigned tries;
@@ -84,7 +84,8 @@ static enum etude_status account(struct acceptance *a, const char *command, cons
     snprintf(who, sizeof(who), "%s@127.0.0.1", a->request->login.user);
     for (tries = 0;; tries++) {
         const char *error;
-        st = net_ssh_input(a->u, argv, input, output, r);
+        st = download ? net_ssh_download(a->u, argv, output, r)
+                      : net_ssh_input(a->u, argv, input, output, r);
         error = r->err != NULL ? r->err : "";
         if (st != ETUDE_OK || tries == 3 || r->end.end != ETUDE_END_EXITED || r->end.value != 255 ||
             (strstr(error, "kex_exchange_identification") == NULL &&
@@ -105,6 +106,13 @@ static enum etude_status account(struct acceptance *a, const char *command, cons
             }
         }
     }
+}
+
+/** Run a command as the login account, without su or a terminal. */
+static enum etude_status account(struct acceptance *a, const char *command, const char *input,
+                                 const char *output, struct net_run *r)
+{
+    return account_mode(a, command, input, output, r, 0);
 }
 
 /** Run a required root command, retaining its status even when the caller
@@ -250,10 +258,8 @@ static int put_file(struct acceptance *a, const char *host, const char *guest)
 static int get_file(struct acceptance *a, const char *guest, const char *host)
 {
     struct net_run r;
-    char command[640], output[180], who[128], *text;
+    char command[640], output[180], *text;
     const char *evidence;
-    char *argv[] = {NET_SSH, NET_SSH_KEY((char *)a->request->login.key), "-T", "-p",
-                    (char *)a->request->login.port, who, command, NULL};
     int ok;
     enum etude_status st;
     if (a->request->use_su) {
@@ -266,8 +272,7 @@ static int get_file(struct acceptance *a, const char *guest, const char *host)
     snprintf(command, sizeof(command), "cat %s%s", a->request->use_su ? a->transfer : guest,
              a->request->use_su ? "/data" : "");
     snprintf(output, sizeof(output), "%s.get-%u", a->prefix, ++a->commands);
-    snprintf(who, sizeof(who), "%s@127.0.0.1", a->request->login.user);
-    st = net_ssh_download(a->u, argv, output, &r);
+    st = account_mode(a, command, NULL, output, &r, 1);
     evidence = etude_evidence(a->u->c, output);
     ok = st == ETUDE_OK && net_exited0(&r) && evidence != NULL && copy_file(evidence, host);
     net_run_free(&r);
@@ -726,8 +731,8 @@ static void loop_image(struct acceptance *a)
         return;
     }
     text = read_format(a, "wc -c < %s", guest);
-    message(a, strcmp(text, size) != 0, "image: the transfer has %s bytes (expected %s)",
-            text, size);
+    message(a, strcmp(text, size) != 0, "image: the transfer has %s bytes (expected %s)", text,
+            size);
     free(text);
     text = read_format(a, "loopctl attach 0 %s && grep -c '^loop0 ' /proc/loop", guest);
     ok = strcmp(text, "1") == 0;

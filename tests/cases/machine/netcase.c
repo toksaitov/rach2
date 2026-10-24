@@ -603,16 +603,15 @@ enum etude_status net_ssh_input(struct net_case *u, char *const argv[], const ch
 
 /** Remove only this download's private file after a completed command.
  * Lost channels leave the file to the owned client machine's cleanup. */
-static enum etude_status download_remove(struct net_case *u, const char *path,
-                                          const char *output)
+static enum etude_status download_remove(struct net_case *u, const char *path, const char *output)
 {
     const char *argv[] = {"/bin/rm", "-f", "--", path, NULL};
     struct etude_guest_result result;
     enum etude_status st = etude_guest_command(u->client, argv, NULL, NULL, output, &result);
 
-    if (st == ETUDE_OK && (!result.complete || result.cleanup != ETUDE_CLEANUP_CONFIRMED ||
-                          result.termination.end != ETUDE_END_EXITED ||
-                          result.termination.value != 0))
+    if (st == ETUDE_OK &&
+        (!result.complete || result.cleanup != ETUDE_CLEANUP_CONFIRMED ||
+         result.termination.end != ETUDE_END_EXITED || result.termination.value != 0))
         st = ETUDE_FAILED;
     return st;
 }
@@ -632,8 +631,7 @@ enum etude_status net_ssh_download(struct net_case *u, char *const argv[], const
     r->end.value = -1;
     if (!net_ok(u))
         return u->st;
-    if (strcmp(argv[0], "ssh") != 0 ||
-        strlen(output) > sizeof(evidence) - sizeof(".command.err"))
+    if (strcmp(argv[0], "ssh") != 0 || strlen(output) > sizeof(evidence) - sizeof(".command.err"))
         return failed(u, ETUDE_REFUSED, "invalid SSH download invocation");
     if (!client_arguments(u, argv, &a)) {
         client_free(&a);
