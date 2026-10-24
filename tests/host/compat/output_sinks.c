@@ -71,6 +71,15 @@ static void capture_detail(const char *name, const struct etude_output *output)
     fputc('\n', stderr);
 }
 
+static int capture_matches(const struct etude_exec_result *r)
+{
+    return r->end == ETUDE_END_EXITED && r->value == 0 && r->output_error == 0 &&
+           r->cleanup == ETUDE_CLEANUP_CONFIRMED && r->out.kept == 17 && r->out.total == BYTES &&
+           r->err.total == 9 && r->out.data != NULL && r->err.data != NULL &&
+           memcmp(r->out.data, "abcdefghijklmnopq", 17) == 0 &&
+           strcmp(r->err.data, "big done\n") == 0;
+}
+
 static int attempt(struct etude_exec *ex, struct etude_exec_spec *spec, int merged)
 {
     struct etude_proc *p = NULL;
@@ -86,10 +95,7 @@ static int attempt(struct etude_exec *ex, struct etude_exec_spec *spec, int merg
     while (etude_exec_wait(ex, -1) != p)
         ;
     r = etude_proc_result(p);
-    if (r->end != ETUDE_END_EXITED || r->value != 0 || r->output_error != 0 ||
-        r->cleanup != ETUDE_CLEANUP_CONFIRMED || r->out.kept != 17 || r->out.total != BYTES ||
-        r->err.total != 9 || r->out.data == NULL || r->err.data == NULL ||
-        memcmp(r->out.data, "abcdefghijklmnopq", 17) != 0 || strcmp(r->err.data, "big done\n") != 0)
+    if (!capture_matches(r))
         goto done;
     out = contents(spec->stdout_path, &nout);
     if (!merged) {

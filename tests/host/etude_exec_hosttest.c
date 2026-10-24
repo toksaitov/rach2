@@ -510,7 +510,7 @@ static int held_asleep(long pid)
             fprintf(stderr, "etude-exec-test: held process %ld: state %d\n", pid, (int)state);
             return 0;
         }
-        /* interval: observe a transitional state again after 1 ms */
+        /* interval: the child is checked every 1 ms */
         nanosleep(&pause, NULL);
     }
 }
@@ -549,7 +549,7 @@ static int held(long pid)
             return !ran_case(pid);
         if (ran_case(pid))
             return 0;
-        /* interval: observe a transitional syscall again after 1 ms */
+        /* interval: the child is checked every 1 ms */
         nanosleep(&pause, NULL);
     }
 }

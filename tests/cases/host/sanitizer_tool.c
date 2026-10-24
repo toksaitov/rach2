@@ -1,4 +1,4 @@
-/* Apple system tools execute at their native path, with snapshot verification. */
+/* Verify Apple system tools against a snapshot before native-path execution. */
 #include "sanitizer_tool.h"
 #ifdef __APPLE__
 #include <stdio.h>

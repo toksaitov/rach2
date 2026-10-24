@@ -281,6 +281,42 @@ static int corpus_matches(const struct host *h, const struct json *args, const c
     return ok;
 }
 
+static int native_binary(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    unsigned char magic[4];
+    int binary = f && fread(magic, 1, 4, f) == 4 &&
+                 (!memcmp(magic, "\177ELF", 4) || (magic[0] == 'M' && magic[1] == 'Z') ||
+                  !memcmp(magic, "\317\372\355\376", 4) || !memcmp(magic, "\316\372\355\376", 4) ||
+                  !memcmp(magic, "\312\376\272\276", 4) || !memcmp(magic, "\312\376\272\277", 4));
+    if (f)
+        fclose(f);
+    return binary;
+}
+
+#ifdef __APPLE__
+static const char *sanitizer_matches(const struct host *h, const struct json *inputs,
+                                     const char *symbolizer)
+{
+    char snapshot[PATH_SIZE], native[PATH_SIZE], provenance[PATH_SIZE];
+    int found = 0;
+    if (!symbolizer)
+        return NULL;
+    if (snprintf(provenance, sizeof(provenance), "%s.provenance.json", symbolizer) >=
+        (int)sizeof(provenance))
+        return "the sanitizer provenance path is too long";
+    for (size_t i = 0; i < inputs->count; i++) {
+        char decoded[PATH_SIZE];
+        const char *path = input_path(inputs->item[i], decoded);
+        found |= path && !strcmp(path, provenance);
+    }
+    if (!found || path_of(snapshot, h->tree, symbolizer) ||
+        host_sanitizer_source(snapshot, native, sizeof(native)))
+        return "the native sanitizer tool differs from its prepared snapshot";
+    return NULL;
+}
+#endif
+
 static const char *prepared(const struct host *h, struct check *c)
 {
     const char *unsupported = json_text(c->entry, "unsupported");
@@ -290,15 +326,7 @@ static const char *prepared(const struct host *h, struct check *c)
     const char *hash = json_text(c->entry, "sha256");
     if (!input_matches(h, program, hash) || path_of(c->program, h->tree, program) != 0)
         return "the prepared binary is missing or changed";
-    FILE *f = fopen(c->program, "rb");
-    unsigned char magic[4];
-    int binary = f && fread(magic, 1, 4, f) == 4 &&
-                 (!memcmp(magic, "\177ELF", 4) || (magic[0] == 'M' && magic[1] == 'Z') ||
-                  !memcmp(magic, "\317\372\355\376", 4) || !memcmp(magic, "\316\372\355\376", 4) ||
-                  !memcmp(magic, "\312\376\272\276", 4) || !memcmp(magic, "\312\376\272\277", 4));
-    if (f)
-        fclose(f);
-    if (!binary)
+    if (!native_binary(c->program))
         return "the prepared program is a script; a native adapter is required";
     const struct json *inputs = json_member(c->entry, "inputs");
     const char *symbolizer = json_text(c->entry, "sanitizer_symbolizer");
@@ -329,21 +357,9 @@ static const char *prepared(const struct host *h, struct check *c)
     if (!symbolizer_found)
         return "the sanitizer symbolizer is not a prepared input";
 #ifdef __APPLE__
-    if (symbolizer) {
-        char snapshot[PATH_SIZE], native[PATH_SIZE], provenance[PATH_SIZE];
-        int found = 0;
-        if (snprintf(provenance, sizeof(provenance), "%s.provenance.json", symbolizer) >=
-            (int)sizeof(provenance))
-            return "the sanitizer provenance path is too long";
-        for (size_t i = 0; i < inputs->count; i++) {
-            char decoded[PATH_SIZE];
-            const char *path = input_path(inputs->item[i], decoded);
-            found |= path && !strcmp(path, provenance);
-        }
-        if (!found || path_of(snapshot, h->tree, symbolizer) ||
-            host_sanitizer_source(snapshot, native, sizeof(native)))
-            return "the native sanitizer tool differs from its prepared snapshot";
-    }
+    const char *error = sanitizer_matches(h, inputs, symbolizer);
+    if (error)
+        return error;
 #endif
     const char *corpus = json_text(c->entry, "corpus");
     if (corpus && !corpus_matches(h, json_member(c->entry, "arguments"), corpus))
