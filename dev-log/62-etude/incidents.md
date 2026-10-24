@@ -601,3 +601,7 @@ The full Linux collection on ed5953 stopped the growth replay at its existing pr
 ## A failure archive exhausted the helper console (#1049)
 
 The edited-probe image fixture failed, but exporting its complete source and build tree exceeded the helper's 64 MiB serial capture limit. The scenario ignored the failed transfer and reported a nonexistent archive. A prepared C selector now exports complete small direct files within a bounded allowance and records selected and omitted entries in an inventory. Larger files and subdirectories remain on the retained private products disk. The family scenario checks the transfer result before it names the archive. Script-controller failures use the same bounded export and report transfer failures. The serial limit is unchanged.
+
+## Product fixtures spent their progress bound uploading sources (#1051)
+
+The full Linux collection stopped several product-family cases during their initial source upload. Their consoles still acknowledged new transfer records at the 600-second progress bound, before a fixture command ran. Preparation now compresses the immutable source tar with gzip. GNU tar reads that format directly in the existing helper. The archive retains the same source files, and the case and progress bounds are unchanged.

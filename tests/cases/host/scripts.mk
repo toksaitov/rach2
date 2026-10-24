@@ -16,7 +16,7 @@ HOST_SCRIPT_ASSETS = $(wildcard $(shell git ls-files tools tests mk Makefile krf
     utils rach2 ish ports vendor/gnu vendor/tcc/asm-test vendor/tcc/ld-test))
 build/tests/host-suite/scripts-assets.tar: $(HOST_SCRIPT_ASSETS)
 	@mkdir -p $(@D)
-	COPYFILE_DISABLE=1 tar --format=ustar -cf $@ $(HOST_SCRIPT_ASSETS)
+	COPYFILE_DISABLE=1 tar --format=ustar -czf $@ $(HOST_SCRIPT_ASSETS)
 
 build/tests/host-suite/sources/%: %
 	@mkdir -p $(@D)
