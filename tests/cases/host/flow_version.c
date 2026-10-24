@@ -221,8 +221,7 @@ static const char *version_platform(struct utsname *u)
         size_t n = strlen(u->release);
         return n >= 6 && !strcmp(u->release + n - 6, "-rach2") ? "rach2" : "linux";
     }
-    return !strncmp(u->sysname, "MINGW", 5) || !strncmp(u->sysname, "MSYS", 4) ? "windows"
-                                                                                  : NULL;
+    return !strncmp(u->sysname, "MINGW", 5) || !strncmp(u->sysname, "MSYS", 4) ? "windows" : NULL;
 }
 
 static const char *version_flags(const char *platform)
@@ -838,8 +837,8 @@ static int version_real_verbs(struct version *v, const char *target, int rach2)
         if (rach2)
             snprintf(wanted, sizeof wanted, "etude: %s: no such command\n", verbs[i]);
         else
-            snprintf(wanted, sizeof wanted, "usage: etude %s%s%s ", verbs[i],
-                     sub[i] ? " " : "", sub[i] ? sub[i] : "");
+            snprintf(wanted, sizeof wanted, "usage: etude %s%s%s ", verbs[i], sub[i] ? " " : "",
+                     sub[i] ? sub[i] : "");
         ok = fx_check(v->f, v->f->status == 2 && strstr(v->f->err, wanted), wanted) && ok;
     }
     return ok;
@@ -859,12 +858,11 @@ static int version_real_native(struct version *v, const char *target)
         if (!fx_text(path, i ? "" : "case fixture.version -- /bin/true\n"))
             return 0;
     }
-    const char *a[] = {target, "run", "native", "list", "--tree", v->tree, "--inventory",
-                       inventory, NULL};
-    return fx_check(v->f,
-                    !fx_run(v->f, a, v->f->work, NULL, NULL) &&
-                        !strcmp(v->f->out, "fixture.version\n"),
-                    "built Rach2 native entry lists its declared inventory");
+    const char *a[] = {target,  "run",         "native",  "list", "--tree",
+                       v->tree, "--inventory", inventory, NULL};
+    return fx_check(
+        v->f, !fx_run(v->f, a, v->f->work, NULL, NULL) && !strcmp(v->f->out, "fixture.version\n"),
+        "built Rach2 native entry lists its declared inventory");
 }
 
 static int version_real_build(struct version *value)

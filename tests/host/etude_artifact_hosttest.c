@@ -796,8 +796,8 @@ static void range_refused(const char *src, const char *copy, uint64_t offset, ui
               read_text(copy, buf, sizeof(buf)) == 8 && !memcmp(buf, "abc\0\0\0\0\0", 8),
           "range: an existing destination is unchanged");
     fd = open(src, O_RDONLY);
-    CHECK(fd >= 0 && lseek(fd, (off_t)offset, SEEK_SET) == (off_t)offset &&
-              read(fd, buf, 3) == 3 && !memcmp(buf, "abc", 3) && fstat(fd, &st) == 0 &&
+    CHECK(fd >= 0 && lseek(fd, (off_t)offset, SEEK_SET) == (off_t)offset && read(fd, buf, 3) == 3 &&
+              !memcmp(buf, "abc", 3) && fstat(fd, &st) == 0 &&
               (uint64_t)st.st_size == offset + length,
           "range: the source disk is unchanged");
     if (fd >= 0)
@@ -816,8 +816,8 @@ static void test_range(void)
     CHECK(fd >= 0, "range: create private source");
     if (fd < 0)
         return;
-    ready = lseek(fd, (off_t)offset, SEEK_SET) == (off_t)offset &&
-            put_all(fd, "abc", 3) == 0 && ftruncate(fd, (off_t)(offset + length)) == 0;
+    ready = lseek(fd, (off_t)offset, SEEK_SET) == (off_t)offset && put_all(fd, "abc", 3) == 0 &&
+            ftruncate(fd, (off_t)(offset + length)) == 0;
     CHECK(close(fd) == 0 && ready, "range: data past 4 GiB and a trailing hole");
     if (!ready)
         return;

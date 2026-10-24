@@ -1,5 +1,5 @@
 /* Independent formatters and checkers in the declared GNU Rach2 helper. */
-#define _POSIX_C_SOURCE 200809L
+#define _POSIX_C_SOURCE   200809L
 #define _FILE_OFFSET_BITS 64
 #include <errno.h>
 #include <fcntl.h>
@@ -35,10 +35,9 @@ static int partition(char **argv, char path[64])
     off_t size = fd < 0 ? -1 : lseek(fd, 0, SEEK_END);
     if (fd >= 0)
         close(fd);
-    if (n != 512 || size < 0 || mbr[510] != 0x55 || mbr[511] != 0xaa ||
-        !number(argv[3], &part) || part < 1 || part > 4 || !number(argv[4], &start) ||
-        !number(argv[5], &count) || !count || start > (uint64_t)size / 512 ||
-        count > (uint64_t)size / 512 - start)
+    if (n != 512 || size < 0 || mbr[510] != 0x55 || mbr[511] != 0xaa || !number(argv[3], &part) ||
+        part < 1 || part > 4 || !number(argv[4], &start) || !number(argv[5], &count) || !count ||
+        start > (uint64_t)size / 512 || count > (uint64_t)size / 512 - start)
         return 0;
     const unsigned char *entry = mbr + 446 + (part - 1) * 16;
     if (entry[4] != 7 || le32(entry + 8) != start || le32(entry + 12) != count)

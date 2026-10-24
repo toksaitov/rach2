@@ -396,8 +396,8 @@ static int kernel_check64(const unsigned char *d, size_t n, int tcc, char *detai
  * `detail` and the optional physical image end, or 1 with the first
  * violation in `kfail`.
  */
-static int kernel_check(const unsigned char *d, size_t n, int tcc, char *detail,
-                        size_t detail_len, uint64_t *physical_end)
+static int kernel_check(const unsigned char *d, size_t n, int tcc, char *detail, size_t detail_len,
+                        uint64_t *physical_end)
 {
     uint32_t e_type, e_machine, e_entry, e_phoff, e_phentsize, e_phnum;
     uint32_t shoff, e_shentsize, e_shnum;
@@ -1328,8 +1328,8 @@ static void st_boot_module(void)
     size_t i, n;
 
     for (i = 0; i < sizeof rows / sizeof rows[0]; i++) {
-        int accepted = kernel_module_check(rows[i].kernel_end, rows[i].bytes,
-                                           detail, sizeof detail) == 0;
+        int accepted =
+            kernel_module_check(rows[i].kernel_end, rows[i].bytes, detail, sizeof detail) == 0;
         if (accepted != rows[i].accepted) {
             fprintf(stderr, "elfcheck: selftest: boot module: %s: wrong verdict\n", rows[i].name);
             st_bad++;

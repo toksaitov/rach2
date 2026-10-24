@@ -427,8 +427,8 @@ int store_copy_range(const char *source, uint64_t offset, uint64_t length, const
     in = open(source, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     if (in < 0 || fstat(in, &st))
         goto done;
-    if (!S_ISREG(st.st_mode) || st.st_size < 0 ||
-        offset > (uint64_t)st.st_size || length > (uint64_t)st.st_size - offset) {
+    if (!S_ISREG(st.st_mode) || st.st_size < 0 || offset > (uint64_t)st.st_size ||
+        length > (uint64_t)st.st_size - offset) {
         errno = EINVAL;
         goto done;
     }
@@ -436,8 +436,8 @@ int store_copy_range(const char *source, uint64_t offset, uint64_t length, const
     out = open(dest, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
     if (out < 0)
         goto done;
-    if (lseek(in, (off_t)offset, SEEK_SET) < 0 ||
-        copy_stream(in, out, NULL, NULL, length) || fsync(out) || fstat(in, &st))
+    if (lseek(in, (off_t)offset, SEEK_SET) < 0 || copy_stream(in, out, NULL, NULL, length) ||
+        fsync(out) || fstat(in, &st))
         goto done;
     status_of(&st, &after);
     if (!status_same(&before, &after)) {
