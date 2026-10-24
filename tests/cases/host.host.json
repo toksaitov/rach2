@@ -1367,13 +1367,7 @@
           "initial_us": 1800000000,
           "ceiling_us": 3600000000
         },
-        "stages": {
-          "boot": {
-            "floor_us": 1000000,
-            "initial_us": 400000000,
-            "ceiling_us": 1200000000
-          }
-        }
+        "stages": {}
       },
       "resources": {
         "cpu_millis": 1000,
