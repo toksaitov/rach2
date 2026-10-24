@@ -26,7 +26,7 @@ The `clock` suite is etude's case [`machine.clock.json`](../cases/machine.clock.
 
 `suites.mk`, which the root `Makefile` includes, has the disks, fixtures, captures and ports of the suites, which the cases' manifests name as artifacts, and the test tools it builds under `build/tests/system/`. It exports `RACH2_ARCH`, `ARCH_BUILD` (`build` or `build/x86_64`) and `RACH2_QEMU` (`qemu-system-i386` or `qemu-system-x86_64`) to its recipes. A comment line in `suites.mk` that begins `` `tests/run NAME` `` says what the suite proves; `tests/run inventory` prints those sentences with the registry's fields, and [`suites.md`](suites.md) is its output, which `tests/run style` compares with the command's. The test tools are host programs and stay under `build/` for both architectures.
 
-A suite's cases and [the cases' Readme](../cases/Readme.md) say what each of its boots requires.
+A suite's cases and [the cases' Readme](../cases/Readme.md) say what each of its boots requires. The etudeexec source archive retains the files under `tools/etude` and `tests/native` and its explicit auxiliary inputs, excluding generated `__pycache__` directories and `.pyc` and `.pyo` files. Python imports therefore do not change its source set.
 
 ### The runner
 

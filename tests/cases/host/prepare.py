@@ -353,8 +353,9 @@ def prepare(args):
                 item['compiler_inputs'] = [external[p] for p in sorted(external)]
                 sources = sorted(set([*item['sources'], *dependencies, *item.get('data', [])]))
                 item['inputs'] = [dict(path=p, sha256=digest(Path(p))) for p in sources]
-            item['inputs'] = list({value['path']: value for value in
-                                   [*item['inputs'], *companions, *tool_inputs]}.values())
+            all_inputs = {value['path']: value for value in
+                          [*item['inputs'], *companions, *tool_inputs]}
+            item['inputs'] = [all_inputs[path] for path in sorted(all_inputs)]
             candidates = []
             for value in ([] if windows_fixture or args.gnu else item['inputs']):
                 path = Path(value['path'])
