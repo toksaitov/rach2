@@ -84,7 +84,7 @@ static int sequence(int argc, char **argv)
     }
     if (!strncmp(env("CI_NATIVE_MODE"), "completion", 10))
         return completion();
-    return !strcmp(env("CI_NATIVE_MODE"), "pass") || push ? 0 : 1;
+    return !strcmp(env("CI_NATIVE_MODE"), "pass") || *env("CI_NATIVE_ROUTE_MODE") || push ? 0 : 1;
 }
 
 static int verdict(int argc, char **argv)
@@ -133,6 +133,20 @@ int flow_ci_native_mock(int argc, char **argv)
     return 2;
 }
 
+static int route_fixture(struct fixture *f)
+{
+    FILE *file = fopen(flow_path(f, "tree/tools/ci/native_site.sh"), "a");
+    if (!file)
+        return 0;
+    int ok = fputs("\nnative_site_route() {\n"
+                   "    native_site_routed=''\n"
+                   "    native_site_authority_program=''\n"
+                   "    native_site_mode=${CI_NATIVE_ROUTE_MODE:-}\n"
+                   "}\n",
+                   file) >= 0;
+    return fclose(file) == 0 && ok;
+}
+
 static int setup(struct fixture *f)
 {
     const char *files[] = {"run.sh",
@@ -173,7 +187,7 @@ static int setup(struct fixture *f)
     fx_env("ARCH", "i686 x86_64");
     fx_env("SUITES", "");
     fx_env("ETUDE_ROUTINE_ROUTE", NULL);
-    return flow_ci_retention_setup(f);
+    return route_fixture(f) && flow_ci_retention_setup(f);
 }
 
 static int row(struct fixture *f, const char *mode, unsigned number)
@@ -184,9 +198,13 @@ static int row(struct fixture *f, const char *mode, unsigned number)
         return 0;
     fx_env("CI_NATIVE_OUT", out);
     fx_env("CI_NATIVE_MODE", mode);
+    int routed = !strcmp(mode, "macos-import") || !strcmp(mode, "wsl-native") ||
+                 !strcmp(mode, "windows-import");
+    fx_env("CI_NATIVE_ROUTE_MODE", routed ? mode : "");
     const char *argv[] = {"/bin/sh", "tools/ci/run.sh", "core", out, NULL};
     fx_run(f, argv, flow_path(f, "tree"), NULL, NULL);
-    int passed = !strcmp(mode, "pass") || !strcmp(mode, "completion");
+    int passed =
+        !strcmp(mode, "pass") || !strcmp(mode, "completion") || !strcmp(mode, "macos-import");
     int ok = f->status == (passed ? 0 : !strcmp(mode, "cancel") ? 125 : 1);
     for (unsigned i = 0; i < 2; i++) {
         const char *arch = i ? "x86_64" : "i686";
@@ -233,12 +251,16 @@ int flow_ci_native(struct fixture *f)
                            "completion",
                            "completion-relative",
                            "completion-multiple",
-                           "completion-pack-failed"};
+                           "completion-pack-failed",
+                           "macos-import",
+                           "wsl-native",
+                           "windows-import"};
     if (!setup(f))
         return 0;
     int ok = 1;
     for (unsigned i = 0; i < sizeof(modes) / sizeof(*modes); i++)
         ok = row(f, modes[i], i) && ok;
+    fx_env("CI_NATIVE_ROUTE_MODE", NULL);
     ok = push_row(f) && ok;
     fx_env("ETUDE_RETENTION", NULL);
     fx_env("ETUDE", "");

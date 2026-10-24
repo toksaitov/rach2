@@ -22,6 +22,7 @@ esac
 site=${ETUDE_SITE:-/etc/rach2/etude-site}
 . "$tree/tools/ci/native_site.sh"
 native_site_load "$site"
+routine_mode=${native_site_mode:-}
 etude=${ETUDE:-$native_site_etude}
 [ -z "$native_site_routed" ] || [ "$etude" = "$native_site_authority_program" ] || {
     echo 'ci: refused: routine route requires its installed authority program' >&2; exit 2;
@@ -125,7 +126,11 @@ if [ ! -f "$out/log" ]; then
 fi
 [ "$status" -lt 128 ] || exit 125
 routine_completion='' routine_problem=''
-if [ -n "${ETUDE_ROUTINE_ROUTE:-}" ] || [ -e "$out/routine-completion.path" ]; then
+case $routine_mode in
+    wsl-native|windows-import) routine_required=1 ;;
+    *) routine_required='' ;;
+esac
+if [ -n "$routine_required" ] || [ -e "$out/routine-completion.path" ]; then
     pointer=$out/routine-completion.path
     if [ -f "$pointer" ] && [ ! -L "$pointer" ] &&
         [ "$(wc -c < "$pointer")" -le 4096 ] &&
