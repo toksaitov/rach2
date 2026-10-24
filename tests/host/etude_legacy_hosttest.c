@@ -13,12 +13,14 @@
  * host-deps: tools/etude/posix/prepare.c tools/etude/capture.c
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
  * host-deps: tools/etude/posix/process.c utils/sha256.c
+ * host-deps: tests/host/compat/command_host.c
  * host-cflags: -I tools/etude/include -I tools/etude/posix
  * host-cflags: -Wall -Wextra -Werror
  * host-inputs: tests/host/preparation_import_test.py
  * host-inputs: tools/etude/preparation_import.py
  * host-inputs: tools/etude/preparation_paths.py
  * host-inputs: tools/etude/collection_tools.py
+ * host-tools: python3
  * host-first: it runs for minutes
  *
  * Goals have the recovery key minted, the components and then the goals
@@ -45,11 +47,14 @@
 #include <unistd.h>
 
 #include "compat/fixdir_host.c"
+#include "compat/command_host.h"
 #include "etude/artifact.h"
 #include "etude/legacy.h"
 #include "sha256.h"
 #include "../../tools/etude/json.h"
 #include "../../tools/etude/measurement_context.h"
+
+extern char **environ;
 
 static int fails;
 
@@ -870,27 +875,38 @@ static void test_graph(void)
 /* Check the preparation importer in the GNU fixture. */
 static void test_import_product(void)
 {
-    char *args[] = {"python3", "-B", "tests/host/preparation_import_test.py", NULL};
+    char *args[] = {(char *)host_tool_path("python3"), "-B",
+                    "tests/host/preparation_import_test.py", NULL};
     struct etude_exec *ex = etude_exec_new();
     struct etude_proc *proc = NULL;
     struct etude_exec_spec spec;
     const struct etude_exec_result *result;
+    int started;
 
     memset(&spec, 0, sizeof(spec));
     spec.attempt_id = "preparation-import";
     spec.argv = args;
+    spec.envp = environ;
+    spec.cwd = getenv("ETUDE_TREE");
     spec.output_max = 65536;
     spec.grace_us = 5000000;
-    CHECK(ex && !etude_exec_start(ex, &spec, &proc), "import product: started");
+    started = ex && !etude_exec_start(ex, &spec, &proc);
+    if (!started)
+        fprintf(stderr, "import product: %s: %s\n", args[0],
+                ex ? strerror(errno) : "cannot create the native executor");
+    CHECK(started, "import product: started");
     if (proc) {
         while (etude_exec_wait(ex, 1000) != proc)
             ;
         result = etude_proc_result(proc);
         CHECK(result->end == ETUDE_END_EXITED && !result->value &&
-                  result->cleanup == ETUDE_CLEANUP_CONFIRMED,
+                  result->cleanup == ETUDE_CLEANUP_CONFIRMED && !result->output_error,
               "import product: identity, receipt, fixture chain and native build vectors");
-        if (result->value)
-            printf("import product: %s%s", result->out.data ? result->out.data : "",
+        if (result->end != ETUDE_END_EXITED || result->value ||
+            result->cleanup != ETUDE_CLEANUP_CONFIRMED || result->output_error)
+            printf("import product: end=%d value=%d cleanup=%d output_error=%d\n%s%s",
+                   result->end, result->value, result->cleanup, result->output_error,
+                   result->out.data ? result->out.data : "",
                    result->err.data ? result->err.data : "");
         etude_proc_free(proc);
     }
