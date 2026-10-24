@@ -3,6 +3,7 @@
 #include "../proc/process.h"
 
 #include "vfs.h"
+#include "name.h"
 #include "lock.h"
 #include "../io/inotify.h"
 #include "../lib/kerrno.h"
@@ -186,6 +187,8 @@ void fd_ofd_unref(struct open_file *ofd)
                 inotify_desc(ofd, (ofd->watch_flags & OFD_WATCH_WRITE) ? IN_CLOSE_WRITE
                                                                        : IN_CLOSE_NOWRITE);
             }
+            vfs_name_put(ofd->name);
+            ofd->name = NULL;
             kfree(ofd->leaf);
             ofd->leaf = NULL;
             kfree(ofd->dirpath);

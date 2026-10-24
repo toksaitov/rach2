@@ -73,7 +73,9 @@ def recipe(name, base, common):
             'mount_covering|path_last|mount_named_at|mount_named|named_in_rest|climbs|node_put|'
             'walk_lock|walk_unlock|vfs_walk_unlock|ref_move_node|walk_move|walk_root|root_current|'
             'dotdot_stays|walk_leaf|walk_pages|walk_splice|walk_link|walk_last_comp|walk_is_link|'
-            'walk_rest_len|walk_name_root|walk_name_add|walk_name_text|walk_name_end|resolve_path|'
+            'walk_rest_len|walk_name_root|walk_name_add|walk_name_text|walk_name_end|'
+            'struct walk_record|walk_record_entry|walk_record_clear|walk_record_move|'
+            'walk_release|walk_finish|resolve_path|vfs_resolve_entry|'
             'vfs_resolve|vfs_ref_release|vfs_desc_open|vfs_desc_close|vfs_getattr|vfs_open_node|'
             'vfs_release|vfs_truncate|vfs_create')])
         origins += extract(work / 'syscall_open.inc', [
@@ -82,7 +84,8 @@ def recipe(name, base, common):
              'name_is|device_name|open_device_name|open_link_target|node_make|open_create|'
              'open_mounted_node|path_starts|ofd_record_path|open_install|open_synth_node|do_open')])
         flags += kernel
-        deps += [SYS + 'fs/fd.c', SYS + 'lib/kstring.c', SYS + 'lib/kctypes.c']
+        deps += [SYS + 'fs/fd.c', 'tests/host/compat/vfs_name_none.c',
+                 SYS + 'lib/kstring.c', SYS + 'lib/kctypes.c']
     elif name == 'krffs_root_lock':
         origins += extract(work / 'kfs_data.inc', [('fs/vfs.c',
             'struct ns_turn|mount_base|ns_my_turn|vfs_ns_lock|vfs_ns_unlock|kfs_read_locked|'

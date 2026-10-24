@@ -227,6 +227,9 @@ int32_t resolve_named(const char *name, int walk, int dir, struct vfs_ref *ref);
  * file. `real` is an empty string when the path does not fit.
  */
 int32_t resolve_named_real(const char *name, int walk, int dir, struct vfs_ref *ref, char *real);
+struct vfs_name;
+int32_t resolve_named_entry(const char *name, int walk, int dir, struct vfs_ref *ref, char *real,
+                            struct vfs_name **entry);
 
 struct vpath;
 struct open_file;

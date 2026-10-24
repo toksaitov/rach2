@@ -48,6 +48,7 @@
 #include "io/timerfd.h"
 #include "fs/synthfs.h"
 #include "fs/vfs.h"
+#include "fs/name.h"
 #include "block/usbdisk.h"
 #include "fs/procfs.h"
 #include "mm/paging.h"
@@ -1223,6 +1224,15 @@ static int32_t exec_map(struct exec_file *f, const struct vfs_ref *ref, const st
     return f->map ? 0 : -ENOMEM;
 }
 
+/** Transfer the resolved entry, or share the descriptor execution selected. */
+static void exec_keep_entry(struct mm *keep, const struct open_file *link, struct vfs_name **entry)
+{
+    struct open_file *file = keep->interp_file ? keep->interp_file : keep->exe_file;
+
+    file->name = *entry ? *entry : vfs_name_ref(link ? link->name : NULL);
+    *entry = NULL;
+}
+
 /**
  * Open the file at the absolute, canonical `path` into `f` for execve to
  * read, and when `id` is not NULL, say in it what the file's set-id bits
@@ -1269,6 +1279,7 @@ static int32_t exec_open(struct exec_file *f, const char *path, int end, struct 
                          struct mm *keep)
 {
     struct open_file *link = NULL;
+    struct vfs_name *entry = NULL;
     struct vfs_ref ref;
     struct vfs_stat vst;
     char *real = path_buf_get();
@@ -1284,11 +1295,12 @@ static int32_t exec_open(struct exec_file *f, const char *path, int end, struct 
     if (real == NULL) {
         return -ENOMEM;
     }
-    rc = resolve_named_real(path + (path[0] == '/'), VFS_WALK_LOCK, end, &ref, real);
+    rc = resolve_named_entry(path + (path[0] == '/'), VFS_WALK_LOCK, end, &ref, real, &entry);
     if (rc == 0) {
         rc = exec_follow_fd(&ref, &link);
     }
     if (rc != 0) {
+        vfs_name_put(entry);
         path_buf_put(real);
         return rc;
     }
@@ -1326,7 +1338,11 @@ static int32_t exec_open(struct exec_file *f, const char *path, int end, struct 
     }
     if (rc == 0 && keep != NULL) {
         rc = exec_keep(f, &ref, keep, link, real, path);
+        if (rc == 0) {
+            exec_keep_entry(keep, link, &entry);
+        }
     }
+    vfs_name_put(entry);
     path_buf_put(real);
     vfs_walk_unlock(ref.mnt);
     if (f->ref.mnt == NULL) {

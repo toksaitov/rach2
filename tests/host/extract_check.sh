@@ -79,7 +79,9 @@ case $name in
             vfs_walk_unlock ref_move_node walk_move walk_root root_current \
             dotdot_stays walk_leaf walk_pages walk_splice walk_link \
             walk_last_comp walk_is_link walk_rest_len walk_name_root \
-            walk_name_add walk_name_text walk_name_end resolve_path \
+            walk_name_add walk_name_text walk_name_end 'struct walk_record' \
+            walk_record_entry walk_record_clear walk_record_move walk_release walk_finish \
+            resolve_path vfs_resolve_entry \
             vfs_resolve vfs_ref_release vfs_desc_open vfs_desc_close \
             vfs_getattr vfs_open_node vfs_release vfs_truncate vfs_create
         $extract "$work/syscall_open.inc" -f $s/syscall_fs.c \
@@ -91,6 +93,7 @@ case $name in
             -c tests/host/fixtures/krffs_open_threads.c -o "$work/threads.o"
         "$cc" -I "$work" $kernel -Wall -Wextra -Werror $san -pthread \
             tests/host/fixtures/krffs_open.c "$work/threads.o" $s/fs/fd.c \
+            tests/host/compat/vfs_name_none.c \
             $s/lib/kstring.c $s/lib/kctypes.c -o "$work/$name"
         ;;
     krffs_root_lock)

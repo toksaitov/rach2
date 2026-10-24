@@ -3,6 +3,7 @@
  * cache, on volumes the host's mke2fs makes.
  *
  * host-tools: setidcheck mke2fs debugfs dumpe2fs e2fsck
+ * host-deps: tests/host/compat/vfs_name_none.c
  * host-deps: tests/host/compat/ext2_fixture.c tests/host/compat/command_host.c
  * host-deps: tools/etude/capture.c tools/etude/posix/exec.c
  * host-deps: tools/etude/posix/keeper.c tools/etude/posix/process.c

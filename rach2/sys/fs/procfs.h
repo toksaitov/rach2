@@ -79,9 +79,10 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap);
 /**
  * The target of /proc/<pid>/exe, the path of the program `pid` runs, into
  * `buf` of `cap` bytes with no terminator: the present path of the program's
- * file on a type with a path operation, relative to the reader's root; the
- * path its exec found it at, followed by " (deleted)", for a file that has
- * lost its last name; and the saved path when no present path can be read.
+ * selected entry, relative to the reader's root, followed by " (deleted)"
+ * after that entry is removed, even if another hard link survives. Types
+ * without a recorded entry use their per-node path and link count; the
+ * saved exec path is used when no present path can be read.
  * Its length, -ENOENT for no such process or no program, or -EACCES for a
  * caller that may not read the process's memory, as Linux asks a ptrace
  * read check of the reader.
@@ -126,6 +127,11 @@ int procfs_open_ns(int pid, int kind, int flags);
  * process or no program, or -EACCES as for the link's text.
  */
 int procfs_exe_file(int pid, struct vfs_ref *out);
+
+/* Hold the selected entry of the same executable, after the caller has
+ * obtained its file with no intervening sleep; NULL if none is recorded. */
+struct vfs_name;
+struct vfs_name *procfs_exe_entry(int pid);
 
 /**
  * The object the /proc link `vp` refers to, which the resolver goes on from

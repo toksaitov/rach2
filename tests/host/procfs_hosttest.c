@@ -5,6 +5,7 @@
  * paths of /proc/PID/maps, a read of a process's arguments while the process
  * is reaped, and oom_score_adj.
  *
+ * host-deps: rach2/sys/fs/name.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  *
@@ -17,6 +18,8 @@
 struct vpath;
 struct fd_entry;
 struct vfs_ref;
+struct vfs_name;
+static struct vfs_name *procfs_exe_entry(int pid);
 static int procfs_resolve_pid(int pid);
 static int procfs_resolve_id(const struct vpath *vp);
 static int procfs_open(const struct vpath *vp, int flags);
@@ -392,6 +395,47 @@ static const char *program_path;
 static const char *mounted_path;
 static const char *reader_root;
 static int file_holds, mount_locks;
+static int entry_model, entry_holds, entry_outside;
+static struct vfs_mount entry_base;
+static const char *entry_directory;
+static krffs_node_t entry_parent, replacement;
+static struct {
+    const char *leaf;
+    void *node;
+} entry_nodes[4];
+
+static void entry_hold(struct vfs_mount *mnt, void *node)
+{
+    (void)mnt;
+    (void)node;
+    entry_holds++;
+}
+
+static void entry_put(struct vfs_mount *mnt, void *node)
+{
+    (void)mnt;
+    (void)node;
+    entry_holds--;
+}
+
+static int entry_lookup(struct vfs_mount *mnt, void *parent, const char *leaf, void **node)
+{
+    unsigned i;
+
+    check(parent == &entry_parent, "a name is looked up in its held parent");
+    for (i = 0; i < 4; i++) {
+        if (entry_nodes[i].node && __builtin_strcmp(leaf, entry_nodes[i].leaf) == 0) {
+            *node = entry_nodes[i].node;
+            entry_hold(mnt, *node);
+            return 0;
+        }
+    }
+    return -ENOENT;
+}
+
+static const struct vfs_ops entry_ops = {
+    .lookup = entry_lookup, .hold = entry_hold, .put = entry_put};
+static const struct vfs_type entry_type = {"entries", NULL, &entry_ops, 1, 0};
 static char exec_path[] = "/tmp/a";
 static char interp_path[] = "/lib/ld-linux.so.2";
 
@@ -411,9 +455,13 @@ const char *proc_cwd(const struct process *p)
 /** Model path reconstruction on a mounted file system and the reader's root. */
 int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap)
 {
-    const char *path = node == &program ? mounted_path : reader_root;
+    const char *path = entry_model && node == &entry_parent ? entry_directory
+                       : node == &program                   ? mounted_path
+                                                            : reader_root;
     uint32_t n;
-    (void)mnt;
+    if (entry_model && entry_outside && mnt == &other_mount && node == &entry_parent) {
+        return -ENOENT;
+    }
     if (!path) {
         return -ENOENT;
     }
@@ -431,6 +479,10 @@ int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     (void)node;
     k_memset(st, 0, sizeof(*st));
     st->nlink = mounted_path != NULL;
+    if (entry_model) {
+        st->ino = node == &entry_parent ? 11 : node == &program ? 12 : 13;
+        st->mode = node == &entry_parent ? 0040755 : 0100755;
+    }
     return 0;
 }
 void fd_ofd_ref(struct open_file *file)
@@ -463,11 +515,39 @@ int vfs_enter(struct vfs_mount *mnt)
 }
 void vfs_ref_hold(const struct vfs_ref *ref)
 {
-    (void)ref;
+    if (ref->mnt->type && ref->mnt->type->ops && ref->mnt->type->ops->hold) {
+        ref->mnt->type->ops->hold(ref->mnt, ref->node);
+    }
+}
+void vfs_ref_put(struct vfs_ref *ref)
+{
+    if (ref->mnt && ref->mnt->type && ref->mnt->type->ops && ref->mnt->type->ops->put) {
+        ref->mnt->type->ops->put(ref->mnt, ref->node);
+    }
+    ref->mnt = NULL;
+    ref->node = NULL;
 }
 void vfs_ref_release(struct vfs_ref *ref)
 {
-    (void)ref;
+    vfs_ref_put(ref);
+}
+const struct vfs_mount *vfs_mount_base(const struct vfs_mount *mnt)
+{
+    return mnt->bind_of ? mnt->bind_of : mnt;
+}
+void vfs_desc_open(struct vfs_mount *mnt)
+{
+    mnt->refs++;
+}
+void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
+{
+    struct vfs_ref parent;
+
+    check(handle == NULL && mnt->refs > 0, "a name owns one mount reference and no open handle");
+    parent.mnt = mnt;
+    parent.node = node;
+    vfs_ref_put(&parent);
+    mnt->refs--;
 }
 
 /** The path the root gives `node`: `program_path` for the program. Returns
@@ -772,6 +852,142 @@ static void exe_links(void)
     krffs_fs = NULL;
 }
 
+/** Read a real held-name record through procfs, including its deleted mark. */
+static void entry_expect(struct vfs_name *name, void *node, const char *want)
+{
+    char text[128];
+    struct vfs_name *held;
+    int n;
+
+    exe_ofd.name = name;
+    exe_ofd.vnode = node;
+    held = procfs_exe_entry(7);
+    check(held == name, "an exec of the proc link shares its exact selected entry");
+    vfs_name_put(held);
+    n = procfs_readlink_exe(7, text, sizeof(text));
+    check(n == (int)k_strlen(want) && __builtin_memcmp(text, want, (unsigned)n) == 0,
+          "procfs keeps the selected entry's exact path and deleted state");
+    check(file_holds == 0 && mount_locks == 0 && space.holds == 1,
+          "a named executable read releases its temporary holds and lock");
+}
+
+/** Selected entries use the reader's root after releasing the file lock. */
+static void entry_root_row(struct vfs_name *name)
+{
+    struct fs_struct fs;
+    process_t *saved = current_proc;
+
+    k_memset(&fs, 0, sizeof(fs));
+    fs.root_mnt = &other_mount;
+    fs.root_node = &root_dir;
+    reader_root = "/private/root";
+    process.fs = &fs;
+    current_proc = &process;
+    entry_expect(name, &program, "/bin/chosen");
+    process.fs = NULL;
+    current_proc = saved;
+}
+
+/** A name survives sharing, file and parent renames, and removal of its link. */
+static void entry_alias_rows(struct vfs_ref *parent)
+{
+    struct vfs_name *name = NULL, *alias = NULL;
+
+    check(vfs_name_capture(parent, "chosen", &name) == 0 && name,
+          "capture the executed hard-link entry");
+    check(vfs_name_capture(parent, "other", &alias) == 0 && alias,
+          "capture another entry of the same inode independently");
+    if (!name || !alias) {
+        vfs_name_put(name);
+        vfs_name_put(alias);
+        return;
+    }
+    entry_expect(name, &program, "/private/root/bin/chosen");
+    entry_expect(alias, &program, "/private/root/bin/other");
+    entry_root_row(name);
+    check(vfs_name_same(&other_mount, &entry_parent, "chosen", &entry_parent, "other"),
+          "a rename between existing aliases is a same-inode no-op");
+    entry_expect(name, &program, "/private/root/bin/chosen");
+    check(vfs_name_ref(name) == name, "another description can share the selected entry");
+    vfs_name_put(name);
+    entry_nodes[0].leaf = "renamed";
+    vfs_name_rename(&other_mount, &entry_parent, "chosen", &entry_parent, "renamed");
+    entry_expect(name, &program, "/private/root/bin/renamed");
+    entry_expect(alias, &program, "/private/root/bin/other");
+    entry_directory = "/moved/bin";
+    entry_outside = 1;
+    entry_expect(name, &program, "/moved/bin/renamed");
+    entry_nodes[0].node = NULL;
+    vfs_name_unlink(&other_mount, &entry_parent, "renamed");
+    entry_expect(name, &program, "/moved/bin/renamed (deleted)");
+    entry_nodes[0].node = &replacement;
+    entry_expect(name, &program, "/moved/bin/renamed (deleted)");
+    entry_expect(alias, &program, "/moved/bin/other");
+    vfs_name_put(name);
+    vfs_name_put(alias);
+}
+
+/** Replacing one executable entry does not select its surviving alias. */
+static void entry_replace_rows(struct vfs_ref *parent)
+{
+    struct vfs_name *victim = NULL, *source = NULL;
+
+    entry_nodes[0].leaf = "chosen";
+    entry_nodes[0].node = &program;
+    entry_nodes[2].leaf = "source";
+    entry_nodes[2].node = &replacement;
+    check(vfs_name_capture(parent, "chosen", &victim) == 0 && victim,
+          "capture the executable entry that will be replaced");
+    check(vfs_name_capture(parent, "source", &source) == 0 && source,
+          "capture the replacing file's entry");
+    if (victim && source) {
+        check(!vfs_name_same(&other_mount, &entry_parent, "source", &entry_parent, "chosen"),
+              "different inode entries are not a rename no-op");
+        entry_nodes[0].node = &replacement;
+        entry_nodes[2].node = NULL;
+        vfs_name_rename(&other_mount, &entry_parent, "source", &entry_parent, "chosen");
+        entry_expect(victim, &program, "/moved/bin/chosen (deleted)");
+        entry_expect(source, &replacement, "/moved/bin/chosen");
+    }
+    vfs_name_put(victim);
+    vfs_name_put(source);
+}
+
+/** The actual name-record implementation over a model directory with aliases. */
+static void exe_entries(void)
+{
+    struct vfs_ref parent;
+
+    entry_model = 1;
+    entry_directory = "/private/root/bin";
+    mounted_path = "/private/root/bin/other";
+    entry_nodes[0].leaf = "chosen";
+    entry_nodes[0].node = &program;
+    entry_nodes[1].leaf = "other";
+    entry_nodes[1].node = &program;
+    other_mount.type = &entry_type;
+    entry_base.type = &entry_type;
+    other_mount.bind_of = &entry_base;
+    other_mount.refs = 0;
+    parent.mnt = &other_mount;
+    parent.node = &entry_parent;
+    space.holds = 1;
+    space.exe = exec_path;
+    space.exe_file = &exe_ofd;
+    process.mm = &space;
+    exe_ofd.vmnt = &other_mount;
+    entry_alias_rows(&parent);
+    check(entry_holds == 0 && other_mount.refs == 0, "shared entry ownership ends exactly once");
+    entry_replace_rows(&parent);
+    check(entry_holds == 0 && other_mount.refs == 0, "replacement releases every parent and mount");
+    exe_ofd.name = NULL;
+    process.mm = NULL;
+    other_mount.type = NULL;
+    other_mount.bind_of = NULL;
+    entry_outside = 0;
+    entry_model = 0;
+}
+
 /** A reader's private root is removed only at a complete path component. */
 static void exe_chroot(void)
 {
@@ -1020,6 +1236,7 @@ int main(void)
     mem_descriptor();
     exe_links();
     exe_chroot();
+    exe_entries();
     image_paths();
     reaped_during_read();
     oom_values();

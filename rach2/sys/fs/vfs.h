@@ -86,6 +86,7 @@
 #define VFS_LINK  3
 
 struct vfs_mount;
+struct vfs_name;
 
 /* What getattr reports and setattr changes. Times are seconds and
  * nanoseconds; `mode` includes the S_IF type bits. `blocks` is the 512-byte
@@ -427,6 +428,12 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
  * `vfs_resolve` does.
  */
 int vfs_resolve_real(const char *path, int flags, struct vfs_ref *out, char *real);
+
+/* Resolve and capture the final regular-file entry in the same walk.
+ * The returned name owns its parent and mount; the caller puts or transfers
+ * it even if a later open fails. No entry is returned for a mount root. */
+int vfs_resolve_entry(const char *path, int flags, struct vfs_ref *out, char *real,
+                      struct vfs_name **entry);
 
 /** Take another hold on `r`'s node, on a type that counts holds. */
 void vfs_ref_hold(const struct vfs_ref *r);

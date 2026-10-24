@@ -71,6 +71,7 @@ struct krffs_node;
 struct socket;
 struct file_ops;
 struct vfs_mount;
+struct vfs_name;
 
 /*
  * An open file description (OFD): the state that the descriptors made from
@@ -120,6 +121,9 @@ struct open_file {
      * directory's type has no `path` operation, answering ENAMETOOLONG for
      * NULL, and what `/proc/PID/fd` reports. The last unref frees it. */
     char *dirpath;
+    /* The selected regular-file entry, shared by fork and descriptor exec.
+     * Its parent and mount stay held until the description's last unref. */
+    struct vfs_name *name;
     /* The count of descriptions made when this one was, which tells it
      * from a new description the heap gives the same address after its
      * last close; an epoll registration keeps both. */

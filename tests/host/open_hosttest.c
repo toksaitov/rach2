@@ -4,6 +4,7 @@
  * the loop devices of rach2/sys/block/loop.c and the file mappings of
  * rach2/sys/mm/filemap.c, on a model mounted type and a model KRFFS root.
  *
+ * host-deps: tests/host/compat/vfs_name_none.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/park_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
@@ -1352,6 +1353,16 @@ int vfs_resolve_real(const char *path, int flags, struct vfs_ref *out, char *rea
         real[0] = '\0';
     }
     return vfs_resolve(0, path, flags, out, 0, 0);
+}
+
+/** This resolver model has no captured entry; its original walk is unchanged. */
+int vfs_resolve_entry(const char *path, int flags, struct vfs_ref *out, char *real,
+                      struct vfs_name **entry)
+{
+    if (entry) {
+        *entry = NULL;
+    }
+    return vfs_resolve_real(path, flags, out, real);
 }
 
 /** Give back the lock a locked walk took. */

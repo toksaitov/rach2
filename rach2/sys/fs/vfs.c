@@ -6,6 +6,7 @@
 
 #include "../mm/kheap.h"
 #include "vfs.h"
+#include "name.h"
 
 #include "../klog.h"
 #include "../lib/kerrno.h"
@@ -838,7 +839,7 @@ static int walk_link(struct vfs_mount *mnt, void *found, const char *rest, char 
     return walk_splice(*linkpath, *target, tlen, rest);
 }
 
-static int walk_exe(struct vfs_ref *cur, void *found, int locked);
+static int walk_exe(struct vfs_ref *cur, void *found, int locked, struct vfs_name **entry);
 static int synth_object_link(const struct vpath *vp);
 static int walk_object(struct vfs_ref *cur, void *found, const char *rest, char **linkpath,
                        char **target, int locked);
@@ -982,6 +983,80 @@ static void walk_name_end(struct walk_name *wn)
     wn->buf[wn->len] = '\0';
 }
 
+struct walk_record {
+    char *real;
+    struct vfs_name **entry;
+};
+
+/** Capture a regular file's final entry before its parent hold is released. */
+static int walk_record_entry(struct walk_record *record, const struct vfs_ref *parent, void *found,
+                             const char *leaf, const char *rest)
+{
+    struct vfs_stat st;
+    int rc;
+
+    if (!record || !record->entry) {
+        return 0;
+    }
+    while (*rest == '/') {
+        rest++;
+    }
+    if (*rest || (mount_base(parent->mnt) == mounts[0] && parent->mnt->type == &vfs_krffs_type)) {
+        return 0;
+    }
+    rc = vfs_getattr(parent->mnt, found, &st);
+    if (rc != 0 || (st.mode & 0170000u) != 0100000u) {
+        return rc;
+    }
+    return vfs_name_capture(parent, leaf, record->entry);
+}
+
+/** Release an unsuccessful walk's entry, or initialize its empty slot. */
+static void walk_record_clear(struct walk_record *record, int release)
+{
+    if (record && record->entry) {
+        if (release) {
+            vfs_name_put(*record->entry);
+        }
+        *record->entry = NULL;
+    }
+}
+
+/** Move to a looked-up node after recording its final directory entry. */
+static int walk_record_move(struct walk_record *record, struct vfs_ref *cur, void *found,
+                            const char *leaf, const char *rest)
+{
+    int rc = walk_record_entry(record, cur, found, leaf, rest);
+
+    if (rc != 0) {
+        node_put(cur->mnt, found);
+    } else {
+        ref_move_node(cur, found);
+    }
+    return rc;
+}
+
+/** Release the current node before dropping its namespace lock and mount. */
+static void walk_release(struct vfs_ref *cur, int locked)
+{
+    struct vfs_mount *mnt = cur->mnt;
+
+    vfs_ref_put(cur);
+    walk_unlock(mnt, locked);
+    vfs_leave(mnt);
+}
+
+/** Validate the final node, including a parent walk's search permission. */
+static int walk_finish(const struct vfs_ref *cur, int flags)
+{
+    if (vfs_mount_gone(cur->mnt) && !(flags & WALK_UNMOUNT)) {
+        return -EIO;
+    }
+    return (flags & VFS_WALK_PARENT)
+               ? may_search(cur->mnt, cur->node, (flags & VFS_WALK_REAL_IDS) != 0)
+               : 0;
+}
+
 /**
  * Resolve one path, as `vfs_resolve` says; with WALK_UNMOUNT, for an unmount,
  * the walk may end on a mount whose device has gone, though it looks up no
@@ -1043,7 +1118,7 @@ static void walk_name_end(struct walk_name *wn)
  * final mount locked when its type sets `ns_serialised`, so an open can
  * register its description before a relocation.
  *
- * With `real` not NULL the walk records the path it takes in it, as
+ * With `record->real` not NULL the walk records the path it takes in it, as
  * `vfs_resolve_real` says. Each name is recorded when it is looked up or
  * entered, and a symbolic link found so is dropped again for its target,
  * whose components are recorded as the walk takes them. What a type that
@@ -1053,7 +1128,8 @@ static void walk_name_end(struct walk_name *wn)
  * walk does.
  */
 static int resolve_path(const struct vfs_ref *start, const char *path, int flags,
-                        struct vfs_ref *out, char *leaf, uint32_t leafcap, char *real)
+                        struct vfs_ref *out, char *leaf, uint32_t leafcap,
+                        struct walk_record *record)
 {
     struct walk_name name;
     struct vfs_ref cur;
@@ -1065,11 +1141,11 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
     int links;
     int jumped;
     int locked = (flags & VFS_WALK_LOCK) != 0;
-    struct vfs_mount *was;
     char *linkpath = 0;
     char *target = 0;
     int rc;
 
+    walk_record_clear(record, 0);
     if (!path || !out) {
         return -EINVAL;
     }
@@ -1089,7 +1165,7 @@ begin:
     last_comp = leaf_comp;
     links = 0;
     jumped = 0;
-    walk_name_root(&name, real);
+    walk_name_root(&name, record ? record->real : NULL);
     walk_root(&root);
     cur = (p[0] == '/' || !start) ? root : *start;
     if (p[0] == '/' && p[1] == '/') {
@@ -1147,7 +1223,7 @@ begin:
             } else if (!last_comp && !(flags & VFS_WALK_NOFOLLOW) && walk_is_link(cur.mnt, found)) {
                 if (vp->kind == VNODE_PROC_EXE) {
                     walk_name_text(&name, from, p);
-                    rc = walk_exe(&cur, found, locked);
+                    rc = walk_exe(&cur, found, locked, record ? record->entry : NULL);
                     if (rc != 0) {
                         goto out_err;
                     }
@@ -1281,7 +1357,10 @@ begin:
                 continue;
             }
         }
-        ref_move_node(&cur, found);
+        rc = walk_record_move(record, &cur, found, comp, p);
+        if (rc != 0) {
+            goto out_err;
+        }
 
         m = mount_covering(cur.mnt, cur.node);
         if (m) {
@@ -1292,15 +1371,9 @@ begin:
         }
     }
 
-    if (vfs_mount_gone(cur.mnt) && !(flags & WALK_UNMOUNT)) {
-        rc = -EIO;
+    rc = walk_finish(&cur, flags);
+    if (rc != 0) {
         goto out_err;
-    }
-    if (flags & VFS_WALK_PARENT) {
-        rc = may_search(cur.mnt, cur.node, use_real);
-        if (rc != 0) {
-            goto out_err;
-        }
     }
     path_buf_put(linkpath);
     path_buf_put(target);
@@ -1309,19 +1382,14 @@ begin:
     return 0;
 
 restart:
-    was = cur.mnt;
-    vfs_ref_put(&cur);
-    walk_unlock(was, locked);
-    vfs_leave(was);
+    walk_release(&cur, locked);
     goto begin;
 
 out_err:
+    walk_record_clear(record, 1);
     path_buf_put(linkpath);
     path_buf_put(target);
-    was = cur.mnt;
-    vfs_ref_put(&cur);
-    walk_unlock(was, locked);
-    vfs_leave(was);
+    walk_release(&cur, locked);
     return rc;
 }
 
@@ -1333,7 +1401,17 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
 
 int vfs_resolve_real(const char *path, int flags, struct vfs_ref *out, char *real)
 {
-    return resolve_path(0, path, flags & ~VFS_WALK_PARENT, out, 0, 0, real);
+    return vfs_resolve_entry(path, flags, out, real, NULL);
+}
+
+int vfs_resolve_entry(const char *path, int flags, struct vfs_ref *out, char *real,
+                      struct vfs_name **entry)
+{
+    struct walk_record record;
+
+    record.real = real;
+    record.entry = entry;
+    return resolve_path(0, path, flags & ~VFS_WALK_PARENT, out, 0, 0, &record);
 }
 
 void vfs_ref_release(struct vfs_ref *r)
@@ -1396,6 +1474,7 @@ static void repoint_one(struct vfs_mount *mnt, const void *from, void *to)
     if (mnt->root == from) {
         mnt->root = to;
     }
+    vfs_name_repoint(mnt, from, to);
     fd_ofd_repoint(mnt, from, to);
     loop_repoint(mnt, from, to);
     lock_repoint(mnt, (uint64_t)(uintptr_t)from, (uint64_t)(uintptr_t)to);
@@ -1804,6 +1883,9 @@ int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
     watched = inotify_watches && watched_entry(mnt, dir, name, &was) == 0 &&
               watched_node(mnt, dir, &parent) == 0;
     rc = mnt->type->ops->unlink(mount_base(mnt), dir, name);
+    if (rc == 0) {
+        vfs_name_unlink(mnt, dir, name);
+    }
     if (rc == 0 && watched) {
         watch_removed(mnt, parent.ino, name, &was);
     }
@@ -1876,7 +1958,7 @@ int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *n
                const char *newname)
 {
     struct vfs_stat moved, replaced, from, to;
-    int watched, had_target = 0;
+    int watched, had_target = 0, same;
     int rc;
 
     if (vfs_mount_gone(mnt)) {
@@ -1894,7 +1976,11 @@ int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *n
         had_target =
             watched_entry(mnt, newdir, newname, &replaced) == 0 && replaced.ino != moved.ino;
     }
+    same = vfs_name_same(mnt, olddir, oldname, newdir, newname);
     rc = mnt->type->ops->rename(mount_base(mnt), olddir, oldname, newdir, newname);
+    if (rc == 0 && !same) {
+        vfs_name_rename(mnt, olddir, oldname, newdir, newname);
+    }
     if (rc == 0 && watched) {
         uint32_t cookie = inotify_cookie();
         uint32_t isdir = watched_isdir(&moved);
@@ -2758,15 +2844,15 @@ static int synth_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t
  * node. 0, or -ENOENT for a process with no program, -EACCES for a caller
  * that may not read its memory (`procfs_exe_file`), or -EBUSY.
  */
-static int walk_exe(struct vfs_ref *cur, void *found, int locked)
+static int walk_exe(struct vfs_ref *cur, void *found, int locked, struct vfs_name **entry)
 {
     struct vpath vp = ((struct synth_node *)found)->vp;
     struct vfs_ref exe;
-    int rc;
+    int rc, pid;
 
     node_put(cur->mnt, found);
     for (;;) {
-        int pid = procfs_resolve_id(&vp);
+        pid = procfs_resolve_id(&vp);
 
         rc = pid < 0 ? -ENOENT : procfs_exe_file(pid, &exe);
         if (rc != 0 || exe.mnt == cur->mnt) {
@@ -2778,6 +2864,9 @@ static int walk_exe(struct vfs_ref *cur, void *found, int locked)
         }
     }
     if (rc == 0) {
+        if (entry) {
+            *entry = procfs_exe_entry(pid);
+        }
         vfs_ref_hold(&exe);
         ref_move_node(cur, exe.node);
     }

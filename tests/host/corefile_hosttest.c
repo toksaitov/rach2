@@ -2,6 +2,7 @@
  * corefile_hosttest.c: the core file `fs_core_file` writes, its descriptor
  * and its limit.
  *
+ * host-deps: tests/host/compat/vfs_name_none.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
@@ -334,6 +335,16 @@ int vfs_resolve_real(const char *path, int flags, struct vfs_ref *out, char *rea
     return vfs_resolve(0, path, flags, out, 0, 0);
 }
 
+/** This resolver model has no captured entry; its original walk is unchanged. */
+int vfs_resolve_entry(const char *path, int flags, struct vfs_ref *out, char *real,
+                      struct vfs_name **entry)
+{
+    if (entry) {
+        *entry = NULL;
+    }
+    return vfs_resolve_real(path, flags, out, real);
+}
+
 /** The model type takes no walk lock. */
 void vfs_walk_unlock(struct vfs_mount *mnt)
 {
@@ -368,6 +379,12 @@ void vfs_ref_hold(const struct vfs_ref *r)
 {
     (void)r;
     check(0, "unexpected reference hold");
+}
+
+/** The model has no counted node holds separate from its walk. */
+void vfs_ref_put(struct vfs_ref *ref)
+{
+    (void)ref;
 }
 
 /** Let go of a reference, which the model does not count. */

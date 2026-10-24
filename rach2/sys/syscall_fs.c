@@ -44,6 +44,7 @@
 #include "fs/devfs.h"
 #include "fs/synthfs.h"
 #include "fs/vfs.h"
+#include "fs/name.h"
 #include "block/usbdisk.h"
 #include "fs/procfs.h"
 #include "fs/tmpfs.h"
@@ -1963,6 +1964,7 @@ static int32_t proc_fd_reopen(const struct open_file *src, int flags)
         fd_free(current_proc->fds, fd);
         return rc;
     }
+    current_proc->fds->entries[fd].ofd->name = vfs_name_ref(src->name);
     rc = open_install(&ref, fd, src->dirpath ? src->dirpath + 1 : "", flags);
     vfs_walk_unlock(mnt);
     return rc;
@@ -2570,7 +2572,8 @@ static int node_make(const struct vfs_ref *parent, const char *leaf, uint32_t mo
  * there success keeps it through the registration of the open handle; on
  * another type it is taken around `node_make` alone and given back at once.
  */
-static int open_create(const char *name, int flags, uint32_t mode, struct vfs_ref *ref)
+static int open_create(const char *name, int flags, uint32_t mode, struct vfs_ref *ref,
+                       struct vfs_name **entry)
 {
     struct vfs_ref parent;
     char leafname[VFS_NAME_MAX + 1];
@@ -2604,6 +2607,17 @@ static int open_create(const char *name, int flags, uint32_t mode, struct vfs_re
         vfs_ns_lock(parent.mnt);
     }
     rc = node_make(&parent, leafname, mode, 0, &made);
+    if (rc == 0 && entry && !mnt_is_root(parent.mnt)) {
+        rc = vfs_name_capture(&parent, leafname, entry);
+        if (rc != 0) {
+            struct vfs_ref child;
+
+            child.mnt = parent.mnt;
+            child.node = made;
+            vfs_ref_put(&child);
+            rc = -ENOMEM;
+        }
+    }
     if (!held) {
         vfs_ns_unlock(parent.mnt);
     }
@@ -3040,6 +3054,7 @@ static int32_t open_synth_node(const struct vpath *vp, int flags)
 static int32_t do_open(const char *name, int flags, uint32_t mode)
 {
     struct vfs_ref ref;
+    struct vfs_name *entry = NULL;
     struct vfs_mount *locked;
     char *through = NULL;
     int followed = 0;
@@ -3057,12 +3072,12 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
         return fd;
     }
 again:
-    rc = vfs_resolve(0, name,
-                     VFS_WALK_LOCK |
-                         (((flags & O_NOFOLLOW) || ((flags & O_CREAT) && (flags & O_EXCL)))
-                              ? VFS_WALK_NOFOLLOW
-                              : 0),
-                     &ref, 0, 0);
+    rc = vfs_resolve_entry(name,
+                           VFS_WALK_LOCK |
+                               (((flags & O_NOFOLLOW) || ((flags & O_CREAT) && (flags & O_EXCL)))
+                                    ? VFS_WALK_NOFOLLOW
+                                    : 0),
+                           &ref, NULL, &entry);
     if (rc == -ENOENT && (flags & O_CREAT)) {
         if (!through) {
             through = path_buf_get();
@@ -3079,7 +3094,7 @@ again:
             name = through;
             goto again;
         }
-        rc = open_create(name, flags, mode & 07777u, &ref);
+        rc = open_create(name, flags, mode & 07777u, &ref, &entry);
         if (rc > 0) {
             goto again;
         }
@@ -3115,10 +3130,13 @@ again:
         }
     }
     locked = ref.mnt;
+    current_proc->fds->entries[fd].ofd->name = entry;
+    entry = NULL;
     rc = open_install(&ref, fd, name, flags);
     fd = -1;
     vfs_walk_unlock(locked);
 out:
+    vfs_name_put(entry);
     if (fd >= 0) {
         fd_free(current_proc->fds, fd);
     }
@@ -6198,11 +6216,21 @@ int32_t resolve_named(const char *name, int walk, int dir, struct vfs_ref *ref)
 
 int32_t resolve_named_real(const char *name, int walk, int dir, struct vfs_ref *ref, char *real)
 {
-    int32_t rc = vfs_resolve_real(name, dir ? walk & ~VFS_WALK_NOFOLLOW : walk, ref, real);
+    return resolve_named_entry(name, walk, dir, ref, real, NULL);
+}
+
+int32_t resolve_named_entry(const char *name, int walk, int dir, struct vfs_ref *ref, char *real,
+                            struct vfs_name **entry)
+{
+    int32_t rc = vfs_resolve_entry(name, dir ? walk & ~VFS_WALK_NOFOLLOW : walk, ref, real, entry);
 
     if (rc == 0 && dir) {
         rc = ref_dir_check(ref, 1);
         if (rc != 0) {
+            if (entry) {
+                vfs_name_put(*entry);
+                *entry = NULL;
+            }
             if (walk & VFS_WALK_LOCK) {
                 vfs_walk_unlock(ref->mnt);
             }
@@ -6401,6 +6429,7 @@ static int32_t path_install(struct vfs_ref *ref, const char *name, int flags)
 static int32_t open_path(const char *name, int flags)
 {
     struct vfs_ref ref;
+    struct vfs_name *entry = NULL;
     struct vfs_mount *locked;
     const struct vpath *vp;
     int walk = VFS_WALK_LOCK;
@@ -6413,7 +6442,7 @@ static int32_t open_path(const char *name, int flags)
     if (!fd_can_alloc(current_proc->fds)) {
         return -EMFILE;
     }
-    rc = vfs_resolve(0, name, walk, &ref, 0, 0);
+    rc = vfs_resolve_entry(name, walk, &ref, NULL, &entry);
     if (rc != 0) {
         return rc;
     }
@@ -6427,6 +6456,11 @@ static int32_t open_path(const char *name, int flags)
         return synth_open_path(&vpc, name, flags);
     }
     rc = path_install(&ref, name, flags);
+    if (rc >= 0) {
+        current_proc->fds->entries[rc].ofd->name = entry;
+        entry = NULL;
+    }
+    vfs_name_put(entry);
     vfs_walk_unlock(locked);
     return rc;
 }
@@ -12504,7 +12538,7 @@ int32_t fs_socket_bind(const char *path, uint32_t mode, struct vfs_ref *ref, uin
         rc = bind_name_check(buf, end);
     }
     if (rc >= 0) {
-        rc = open_create(buf, O_EXCL, S_IFSOCK | (mode & 07777u), ref);
+        rc = open_create(buf, O_EXCL, S_IFSOCK | (mode & 07777u), ref, NULL);
         if (rc == 0) {
             vfs_walk_unlock(ref->mnt);
             rc = vfs_getattr(ref->mnt, ref->node, &st);

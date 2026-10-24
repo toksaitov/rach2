@@ -3,6 +3,7 @@
  * rach2/sys/fs/fd.c, and the process allocation of rach2/sys/proc/process.c
  * that makes a table.
  *
+ * host-deps: tests/host/compat/vfs_name_none.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast

@@ -11,6 +11,7 @@
 #include "../krffsmount_hosttest.c"
 #undef main
 #include "fs/synthfs.h"
+#include "fs/name.h"
 #include "panic.h"
 
 extern void exit(int status);
@@ -85,11 +86,12 @@ static void path_buf_put(char *buf)
 
 /** The resolver's step through /proc/<pid>/exe, which no row's walk takes:
  * the fixture has no /proc. */
-static int walk_exe(struct vfs_ref *cur, void *found, int locked)
+static int walk_exe(struct vfs_ref *cur, void *found, int locked, struct vfs_name **entry)
 {
     (void)cur;
     (void)found;
     (void)locked;
+    (void)entry;
     check(0, "no walk goes through /proc/<pid>/exe");
     return -ENOENT;
 }

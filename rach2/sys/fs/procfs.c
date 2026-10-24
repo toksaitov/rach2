@@ -41,6 +41,7 @@
 #include "../cmdline.h"
 #include "../block/diskinfo.h"
 #include "vfs.h"
+#include "name.h"
 #include "lock.h"
 #include "tmpfs.h"
 #include "cpuinfo.h"
@@ -670,6 +671,15 @@ int procfs_exe_file(int pid, struct vfs_ref *out)
     return 0;
 }
 
+struct vfs_name *procfs_exe_entry(int pid)
+{
+    process_t *p = procfs_proc(pid);
+
+    return p && p->mm && p->mm->exe_file && procfs_may_read_mem(p)
+               ? vfs_name_ref(p->mm->exe_file->name)
+               : NULL;
+}
+
 /** The node of the program's file `ofd` describes when that is a file of
  * the KRFFS root, whose node has a path of its own; NULL otherwise. */
 static krffs_node_t *exe_root_node(const struct open_file *ofd)
@@ -758,6 +768,13 @@ static char *exe_file_path(struct open_file *file, int *deleted)
         *deleted = node->name[0] == '\0';
         if (!*deleted) {
             path = exe_present_path(node);
+        }
+    } else if (file->name) {
+        *deleted = vfs_name_deleted(file->name);
+        path = kmalloc(VFS_PATH_MAX);
+        if (path && vfs_name_path(file->name, file->vnode, path, VFS_PATH_MAX, deleted) != 0) {
+            kfree(path);
+            path = NULL;
         }
     } else {
         if (vfs_getattr(file->vmnt, file->vnode, &st) == 0) {
