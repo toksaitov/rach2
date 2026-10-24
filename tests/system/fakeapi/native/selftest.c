@@ -2,6 +2,7 @@
  * SSL reads and writes use byte buffers here. The server and each protocol
  * are the production C; the integration case supplies real TLS sockets. */
 #include "api.h"
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 struct wire {
@@ -27,6 +28,22 @@ static int test_read(SSL *tls, void *bytes, int n)
     w->left -= (size_t)n;
     return n;
 }
+#ifndef _WIN32
+static int interrupt_verdict, repeated_stop;
+static struct buffer stopped_verdict;
+
+/** Deliver a separate TERM after the first handler, during verdict output. */
+static int test_fputs(const char *text, FILE *file)
+{
+    if (interrupt_verdict && !strncmp(text, "fakeapi: result:", 16)) {
+        interrupt_verdict = 0;
+        repeated_stop = raise(SIGTERM) == 0;
+        putsb(&stopped_verdict, text);
+    }
+    return fputs(text, file);
+}
+#define fputs test_fputs
+#endif
 #define SSL_write test_write
 #define SSL_read  test_read
 #define main      fakeapi_program
@@ -34,6 +51,9 @@ static int test_read(SSL *tls, void *bytes, int n)
 #undef main
 #undef SSL_write
 #undef SSL_read
+#ifndef _WIN32
+#undef fputs
+#endif
 static int failures;
 static void check(int held, const char *what)
 {
@@ -436,8 +456,137 @@ static void http_test(void)
     clear(&w.out);
     dispose(&s);
 }
+#ifndef _WIN32
+static char stop_record[4096], stop_status[4096];
+
+/** Remove only the two files owned by the shutdown regression. */
+static void stop_cleanup(void)
+{
+    if (*stop_status)
+        unlink(stop_status);
+    if (*stop_record)
+        unlink(stop_record);
+}
+
+/** Check every recorded request, including the final successful exchange. */
+static void stop_records(struct server *s, int refused)
+{
+    char line[4096];
+    unsigned i, n = refused ? 2 : 1;
+
+    rewind(s->record);
+    for (i = 0; i < n; i++) {
+        struct value *v = fgets(line, sizeof(line), s->record) ? parse(line) : NULL;
+        const char *path = refused && !i ? "/nothing" : "/last";
+        check(v && number(v, "n", 0) == i + 1 && !strcmp(field(v, "path"), path) &&
+                  (refused && !i ? get(v, "unexpected") != NULL : number(v, "step", 0) == 1),
+              "shutdown retains every request and its exact outcome");
+        destroy(v);
+    }
+    check(fgetc(s->record) == EOF && !ferror(s->record), "request record ends exactly at EOF");
+}
+
+/** A second TERM must not terminate verdict or status serialization. */
+static void stop_case(int refused)
+{
+    struct server s;
+    struct wire w = {0};
+    struct request *r;
+    struct peer p;
+    FILE *file, *record_file;
+    char status[8] = {0};
+    int i, result;
+    const char *expected = refused
+        ? "fakeapi: result: fail: 1 failed, the first request 1: GET /nothing: "
+          "step 1: the path is /nothing, not /last\n"
+        : "fakeapi: result: pass: 1 steps played by 1 requests\n";
+
+    record_file = fopen(stop_record, "w+b");
+    check(record_file != NULL, "shutdown fixture opens its owned request record");
+    if (!record_file)
+        return;
+    setup(&s, "{\"steps\":[{\"request\":{\"path\":\"/last\"},\"reply\":{\"body\":\"done\"}}]}");
+    fclose(s.record);
+    s.record = record_file;
+    for (i = 0; i <= refused; i++) {
+        r = get_request("GET", refused && !i ? "/nothing" : "/last", "", "[]");
+        p = test_peer(&s, r, &w);
+        serve_request(&p);
+        free_request(r);
+    }
+    stopped = 0;
+    check(raise(SIGTERM) == 0 && stopped, "first TERM handler has completed before shutdown");
+    repeated_stop = 0;
+    interrupt_verdict = 1;
+    result = verdict(&s);
+    check(repeated_stop && stopped && !interrupt_verdict,
+          "separate TERM during verdict preserves the installed handler");
+    check(stopped_verdict.data && !strcmp(stopped_verdict.data, expected),
+          "shutdown prints the exact pass or intentional refusal verdict");
+    check(write_status(stop_record, result) == refused,
+          "service returns its exact pass or intentional refusal exit status");
+    file = fopen(stop_status, "rb");
+    check(file && fgets(status, sizeof(status), file) &&
+              !strcmp(status, refused ? "1\n" : "0\n") && fgetc(file) == EOF && !ferror(file),
+          "a printed verdict also has its complete exact status file");
+    if (file)
+        fclose(file);
+    stop_records(&s, refused);
+    clear(&stopped_verdict);
+    clear(&w.out);
+    dispose(&s);
+}
+
+static void stop_test(void)
+{
+    const char *tmp = getenv("TMPDIR");
+    int fd, length;
+    size_t n;
+    struct buffer invalid = {0};
+
+    if (!tmp || !*tmp)
+        tmp = "/tmp";
+    if (atexit(stop_cleanup)) {
+        check(0, "shutdown fixture cleanup installs before file creation");
+        return;
+    }
+    length = snprintf(stop_record, sizeof(stop_record), "%s/rach2-fakeapi-stop.XXXXXX", tmp);
+    if (length < 0 || length >= (int)sizeof(stop_record) - 7) {
+        *stop_record = 0;
+        check(0, "shutdown fixture path fits");
+        return;
+    }
+    fd = mkstemp(stop_record);
+    check(fd >= 0, "shutdown fixture owns a unique record path");
+    if (fd < 0) {
+        *stop_record = 0;
+        return;
+    }
+    close(fd);
+    n = strlen(stop_record);
+    memcpy(stop_status, stop_record, n);
+    memcpy(stop_status + n, ".status", 8);
+    if (stop_handlers()) {
+        check(0, "persistent stop handlers install");
+        return;
+    }
+    stop_case(0);
+    stop_case(1);
+    putsb(&invalid, stop_record);
+    putsb(&invalid, "/blocked");
+    check(write_status(invalid.data, 0) == 2,
+          "a printed pass cannot turn an unwritable status file into success");
+    clear(&invalid);
+    stop_cleanup();
+    *stop_record = *stop_status = 0;
+    stopped = 0;
+}
+#endif
 int main(void)
 {
+#ifndef _WIN32
+    stop_test();
+#endif
     parser();
     selection();
     literal();

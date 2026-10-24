@@ -66,7 +66,7 @@ static void serve(struct agent_case *s, const char *script, const char *record)
 
 /** Stop the server and judge its final verdict. A stop may report the
  * supervisor's stopped end, so its own result line and exit status are
- * read from the evidence the wrapper writes. */
+ * read from the evidence the service writes. */
 static void unserve(struct agent_case *s, const char *assertion, int refused)
 {
     struct etude_termination end;

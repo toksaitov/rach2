@@ -27,6 +27,25 @@ static void stop(int sig)
     (void)sig;
     stopped = 1;
 }
+/** Keep stop handlers installed through thread joins and result publication. */
+static int stop_handlers(void)
+{
+#ifdef _WIN32
+    return signal(SIGTERM, stop) == SIG_ERR || signal(SIGINT, stop) == SIG_ERR ? -1 : 0;
+#else
+    struct sigaction action;
+
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = stop;
+    sigemptyset(&action.sa_mask);
+    sigaddset(&action.sa_mask, SIGTERM);
+    sigaddset(&action.sa_mask, SIGINT);
+    if (sigaction(SIGTERM, &action, NULL) || sigaction(SIGINT, &action, NULL))
+        return -1;
+    action.sa_handler = SIG_IGN;
+    return sigaction(SIGPIPE, &action, NULL);
+#endif
+}
 #ifdef _WIN32
 static BOOL WINAPI console_stop(DWORD sig)
 {
@@ -873,6 +892,24 @@ static int verdict(struct server *s)
         log_line("result: pass: %lu steps played by %u requests", (unsigned long)owed, s->requests);
     return s->failures || left ? 1 : 0;
 }
+/** Publish the service's own result, apart from its supervisor's stop reason. */
+static int write_status(const char *record_path, int result)
+{
+    struct buffer status = {0};
+    FILE *file;
+
+    putsb(&status, record_path);
+    putsb(&status, ".status");
+    file = fopen(status.data, "wb");
+    if (file) {
+        fprintf(file, "%d\n", result);
+        if (fclose(file))
+            result = 2;
+    } else
+        result = 2;
+    clear(&status);
+    return result;
+}
 static int prepare_steps(struct server *s, const struct value *steps)
 {
     const struct value *step;
@@ -903,8 +940,6 @@ static int serve(const char *script, const char *record_path, const char *certdi
     const struct value *steps;
     int result = 2;
     service_socket listener;
-    struct buffer status = {0};
-    FILE *status_file;
     memset(&s, 0, sizeof(s));
     service_mutex_init(&s.lock);
     service_condition_init(&s.condition);
@@ -960,16 +995,7 @@ static int serve(const char *script, const char *record_path, const char *certdi
 done:
     if (result == 2)
         log_line("result: refused: the script, certificate or listening socket is unavailable");
-    putsb(&status, record_path);
-    putsb(&status, ".status");
-    status_file = fopen(status.data, "wb");
-    if (status_file) {
-        fprintf(status_file, "%d\n", result);
-        if (fclose(status_file))
-            result = 2;
-    } else
-        result = 2;
-    clear(&status);
+    result = write_status(record_path, result);
     if (s.record)
         fclose(s.record);
     free(s.steps);
@@ -1039,14 +1065,12 @@ int main(int argc, char **argv)
     const char *name = strrchr(argv[0], '/');
     name = name ? name + 1 : argv[0];
     setvbuf(stdout, NULL, _IOLBF, 0);
-    signal(SIGTERM, stop);
-    signal(SIGINT, stop);
+    if (stop_handlers())
+        return 2;
 #ifdef _WIN32
     SetConsoleCtrlHandler(console_stop, TRUE);
     _setmode(0, _O_BINARY);
     _setmode(1, _O_BINARY);
-#else
-    signal(SIGPIPE, SIG_IGN);
 #endif
     if (service_init())
         return 2;
