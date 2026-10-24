@@ -321,3 +321,20 @@ unusedStructMember:*tests/system/fakeapi/native/json.h
 # The native attempt records are shared by posix/run_native.c and the native
 # collection adapter in tests/native/{attempt,collection,proof}.c.
 unusedStructMember:*tools/etude/include/etude/native.h
+
+# These headers are also analysed alone. All implementations are already in
+# srclists.sh; a standalone header has no member readers. The phase, binding,
+# state and authority members are read by authority.c/authority_parse.c. File
+# identity and gate members are read by authority.c and both platform adapters.
+# The remaining invocation fields are read by authority_run.c; its unused
+# metadata fields were removed rather than suppressed.
+unusedStructMember:*tools/etude/authority.h
+unusedStructMember:*tools/etude/authority_internal.h
+unusedStructMember:*tools/etude/authority_platform.h
+unusedStructMember:*tools/etude/authority_run.h
+
+# routine_charge.c reads every routine input and writes the cost fields;
+# budget_prepare.c/budget_run.c/verdict_budget.c read those results.
+# routine_owner.c reads every owner field, including the direct phase state.
+unusedStructMember:*tools/etude/routine_charge.h
+unusedStructMember:*tools/etude/routine_owner.h

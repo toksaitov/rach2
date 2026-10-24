@@ -714,3 +714,7 @@ The complete preparation log and diagnostics were retained. The repairs are one 
 ## Native host inventory omitted its independent exFAT producer (#1065)
 
 Run 14 stopped during clean preparation because the host inventory required the independent exFAT data before its Make producer had run. Both native architecture inventories now depend on the shared exfat_writer target, which validates the complete fixture and already depends on the native etude preparation tool. Windows keeps the check in its declared GNU helper; that image's existing prerequisite prepares the same independent fixture. No manual prebuild or runtime tool lookup is required.
+
+## Standalone authority headers produced false unused-member reports (#1067)
+
+Run 14 stopped during clean preparation on Cppcheck before any runtime case. The host analysis list already includes every authority and routine implementation; the retained log shows those translation units being checked. It also checks each header alone, where no implementation reads its fields. The existing file-specific header policy now covers the six new authority and routine interfaces, with their actual readers documented. Five unread authority invocation metadata fields and two set-only initializers were removed instead of hidden. Numeric identity parsing validates the entire decimal token before accumulation, preserving canonical positive values and overflow refusal without a misleading inferred per-iteration range.

@@ -75,9 +75,7 @@ static int command_phase(int argc, char **argv)
     if (setenv("ETUDE_AUTHORITY_RUN", phase.run_id, 1) ||
         setenv("ETUDE_AUTHORITY_PHASE", phase.phase, 1))
         return 125;
-    struct authority_run run = {.run = phase.run_id,
-                                .commit = phase.commit,
-                                .phase = phase.phase,
+    struct authority_run run = {.phase = phase.phase,
                                 .receipt = argv[5],
                                 .argv = argv + 6,
                                 .watch_input = getenv("ETUDE_AUTHORITY_INPUT") != NULL};

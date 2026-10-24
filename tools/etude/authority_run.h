@@ -3,8 +3,7 @@
 #define ETUDE_AUTHORITY_RUN_H
 #include "include/etude/exec.h"
 struct authority_run {
-    const char *receipt, *run, *commit, *phase;
-    const char *route, *lease, *admission;
+    const char *receipt, *phase;
     char **argv;
     int watch_input, forward_input, dedicated_input, clear_parent;
 };

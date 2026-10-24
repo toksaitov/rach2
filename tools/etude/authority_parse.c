@@ -119,12 +119,12 @@ int authority_binding_read(struct authority_binding *b)
 
 static int positive(const char *text, uint64_t *value)
 {
-    if (*text < '1' || *text > '9')
+    if (*text < '1' || *text > '9' || strspn(text, "0123456789") != strlen(text))
         return -1;
     uint64_t n = 0;
     for (; *text; text++) {
         unsigned digit = (unsigned)(*text - '0');
-        if (digit > 9 || n > (UINT64_MAX - digit) / 10)
+        if (n > (UINT64_MAX - digit) / 10)
             return -1;
         n = n * 10 + digit;
     }
