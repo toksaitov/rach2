@@ -2980,7 +2980,7 @@
         "ports": 0,
         "loop_devices": 0
       },
-      "prepare": [{"name": "usbchecks", "node": "tests/cases/host/usbchecks", "per_architecture": false}, {"name": "usb-check-fixture", "node": "tests/host-suite/tests/usbstamp_hosttest", "per_architecture": false}],
+      "prepare": [{"name": "usbchecks", "node": "tests/cases/host/usbchecks", "per_architecture": false}, {"name": "usb-check-fixture", "node": "tests/host-suite/tests/usbstamp_hosttest", "per_architecture": false}, {"name": "sanitizer-tools", "node": "tests/host-suite/sanitizer", "per_architecture": false}],
       "timing": [],
       "native": {"plan": "host"}
     }

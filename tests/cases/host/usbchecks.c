@@ -1,13 +1,13 @@
 /* Native checks of USB record judgments and the extracted VFS unmount code. */
 #include <stdio.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include "etude/exec.h"
 #include "../../system/checkers/records.h"
+#include "../../host/compat/sanitizer_env_host.h"
 #ifdef _WIN32
 #include "win/files.h"
-#else
-extern char **environ;
 #endif
 
 static char *run(const char *path, const char *mode)
@@ -21,14 +21,28 @@ static char *run(const char *path, const char *mode)
     memset(&spec, 0, sizeof(spec));
     spec.attempt_id = mode ? mode : "test";
     spec.argv = argv;
+#ifndef _WIN32
+    char symbolizer[4096], resolved[4096];
+    const char *tree = getenv("ETUDE_TREE");
+    if (snprintf(symbolizer, sizeof(symbolizer), "%s/build/tests/host-suite/sanitizer/atos",
+                 tree ? tree : ".") >= (int)sizeof(symbolizer))
+        goto failed;
+#ifdef __APPLE__
+    if (realpath(symbolizer, resolved) == NULL)
+        goto failed;
+#else
+    resolved[0] = 0;
+#endif
+    spec.envp = host_sanitizer_environment(resolved);
+    if (spec.envp == NULL)
+        goto failed;
+#else
     spec.envp = environ;
+#endif
     spec.output_max = 1u << 20;
     spec.grace_us = 5000000;
-    if (!ex || etude_exec_start(ex, &spec, &p) != 0) {
-        if (ex)
-            etude_exec_free(ex);
-        return NULL;
-    }
+    if (!ex || etude_exec_start(ex, &spec, &p) != 0)
+        goto failed;
     while (etude_exec_wait(ex, -1) != p)
         ;
     r = etude_proc_result(p);
@@ -45,6 +59,11 @@ static char *run(const char *path, const char *mode)
     etude_proc_free(p);
     etude_exec_free(ex);
     return out;
+failed:
+    fprintf(stderr, "usbchecks: prepared child: %s\n", strerror(errno));
+    if (ex)
+        etude_exec_free(ex);
+    return NULL;
 }
 
 static int combined(const char *a, const char *b, int want)

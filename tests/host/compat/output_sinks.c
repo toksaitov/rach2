@@ -6,6 +6,7 @@
 
 #include "etude/exec.h"
 #include "output_sinks.h"
+#include "sanitizer_env_host.h"
 
 #define BYTES 100000
 
@@ -55,6 +56,21 @@ static int pattern(const char *text, size_t n)
     return 1;
 }
 
+static void capture_detail(const char *name, const struct etude_output *output)
+{
+    size_t i;
+
+    fprintf(stderr, "output-sinks: %s: kept %lu, total %llu, closed %d, bytes", name,
+            (unsigned long)output->kept, (unsigned long long)output->total, output->closed);
+    if (output->data == NULL) {
+        fputs(" unavailable\n", stderr);
+        return;
+    }
+    for (i = 0; i < output->kept; i++)
+        fprintf(stderr, " %02x", (unsigned char)output->data[i]);
+    fputc('\n', stderr);
+}
+
 static int attempt(struct etude_exec *ex, struct etude_exec_spec *spec, int merged)
 {
     struct etude_proc *p = NULL;
@@ -63,16 +79,19 @@ static int attempt(struct etude_exec *ex, struct etude_exec_spec *spec, int merg
     size_t nout = 0, nerr = 0;
     int ok = 0;
 
-    if (etude_exec_start(ex, spec, &p) != 0)
+    if (etude_exec_start(ex, spec, &p) != 0) {
+        fprintf(stderr, "output-sinks: start: %s\n", strerror(errno));
         return 0;
+    }
     while (etude_exec_wait(ex, -1) != p)
         ;
     r = etude_proc_result(p);
     if (r->end != ETUDE_END_EXITED || r->value != 0 || r->output_error != 0 ||
         r->cleanup != ETUDE_CLEANUP_CONFIRMED || r->out.kept != 17 || r->out.total != BYTES ||
-        r->err.total != 9 || memcmp(r->out.data, "abcdefghijklmnopq", 17) != 0 ||
+        r->err.total != 9 || r->out.data == NULL || r->err.data == NULL ||
+        memcmp(r->out.data, "abcdefghijklmnopq", 17) != 0 ||
         strcmp(r->err.data, "big done\n") != 0)
-        return 0;
+        goto done;
     out = contents(spec->stdout_path, &nout);
     if (!merged) {
         err = contents(spec->stderr_path, &nerr);
@@ -82,6 +101,27 @@ static int attempt(struct etude_exec *ex, struct etude_exec_spec *spec, int merg
         /* Pipe service order may place stderr between stdout chunks. */
         memmove(marker, marker + 9, nout - (size_t)(marker - out) - 9);
         ok = pattern(out, nout - 9);
+    }
+done:
+    if (!ok) {
+        fprintf(stderr,
+                "output-sinks: result: end %d, value %d, output error %d, cleanup %d\n",
+                (int)r->end, r->value, r->output_error, (int)r->cleanup);
+        fprintf(stderr,
+                "output-sinks: predicates: exited %d, zero status %d, no output error %d, "
+                "cleanup confirmed %d, stdout kept %d, stdout total %d, stderr total %d, "
+                "stdout prefix %d, stderr marker %d\n",
+                r->end == ETUDE_END_EXITED, r->value == 0, r->output_error == 0,
+                r->cleanup == ETUDE_CLEANUP_CONFIRMED, r->out.kept == 17,
+                r->out.total == BYTES, r->err.total == 9,
+                r->out.data != NULL && r->out.kept >= 17 &&
+                    memcmp(r->out.data, "abcdefghijklmnopq", 17) == 0,
+                r->err.data != NULL && strcmp(r->err.data, "big done\n") == 0);
+        capture_detail("stdout", &r->out);
+        capture_detail("stderr", &r->err);
+        fprintf(stderr, "output-sinks: files: merged %d, stdout read %d (%lu bytes), "
+                        "stderr read %d (%lu bytes)\n",
+                merged, out != NULL, (unsigned long)nout, err != NULL, (unsigned long)nerr);
     }
     free(out);
     free(err);
@@ -95,7 +135,8 @@ int etude_test_output_sinks(const char *target, const char *mode, const char *sc
     struct etude_exec_spec spec;
     struct etude_exec *ex = etude_exec_new();
     struct etude_proc *p = NULL;
-    int ok = 0;
+    const char *stage = "initialize paths and executor";
+    int ok = 0, saved;
 
     if (snprintf(out, sizeof out, "%s/output-sinks.out", scratch) >= (int)sizeof out ||
         snprintf(err, sizeof err, "%s/output-sinks.err", scratch) >= (int)sizeof err ||
@@ -106,34 +147,50 @@ int etude_test_output_sinks(const char *target, const char *mode, const char *sc
     memset(&spec, 0, sizeof spec);
     spec.attempt_id = "output-sinks";
     spec.argv = argv;
+#ifndef _WIN32
+    spec.envp = host_sanitizer_environment(getenv("ASAN_SYMBOLIZER_PATH"));
+    if (spec.envp == NULL)
+        goto done;
+#endif
     spec.output_max = 17;
     spec.stdout_path = out;
     spec.stderr_path = err;
+    stage = "separate streams";
     if (!seed(out) || !seed(err) || !attempt(ex, &spec, 0))
         goto done;
     /* Starting again truncates both old files, even after an earlier run. */
+    stage = "truncate separate streams";
     if (!attempt(ex, &spec, 0))
         goto done;
     spec.stderr_path = out;
+    stage = "merged streams";
     if (!seed(out) || !attempt(ex, &spec, 1))
         goto done;
     /* Closing a merged stream once must release the file for replacement. */
+    stage = "replace merged file";
     if (remove(out) != 0 || !seed(out))
         goto done;
     spec.stderr_path = absent;
+    stage = "refuse missing stderr parent and release stdout file";
     errno = 0;
     if (etude_exec_start(ex, &spec, &p) != -1 || errno == 0 || etude_exec_wait(ex, 0) != NULL ||
         remove(out) != 0)
         goto done;
     ok = 1;
 done:
+    saved = errno;
     if (ex != NULL)
         etude_exec_free(ex);
-    if (!ok)
-        fprintf(stderr, "output-sinks: complete output, capture or file ownership differed\n");
-    if (out[0])
-        remove(out);
-    if (err[0])
-        remove(err);
+    if (!ok) {
+        fprintf(stderr, "output-sinks: %s: complete output, capture or file ownership differed "
+                        "(errno %d: %s)\n",
+                stage, saved, strerror(saved));
+        fprintf(stderr, "output-sinks: evidence: %s and %s\n", out, err);
+    } else {
+        if (out[0])
+            remove(out);
+        if (err[0])
+            remove(err);
+    }
     return ok ? 0 : 1;
 }

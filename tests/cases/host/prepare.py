@@ -321,7 +321,11 @@ def prepare(args):
             item.pop('data', None)
             inventory.append(item)
             continue
-        tool_inputs = tools.prepare(item.pop('tools', []), compiler, fixtures.platform_flags(COMMON), compiler_inputs,
+        required_tools = item.pop('tools', [])
+        if sys.platform == 'darwin' and item['instrumentation']:
+            required_tools.append('atos')
+            item['sanitizer_symbolizer'] = 'build/tests/host-suite/sanitizer/atos'
+        tool_inputs = tools.prepare(required_tools, compiler, fixtures.platform_flags(COMMON), compiler_inputs,
                                    digest, args.print_commands, compiler_identity=identity)
         companions = windows.companions(compiler, base, compiler_inputs, digest,
                                         args.print_commands) if windows_fixture else []

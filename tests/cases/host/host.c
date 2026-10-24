@@ -300,6 +300,17 @@ static const char *prepared(const struct host *h, struct check *c)
     if (!binary)
         return "the prepared program is a script; a native adapter is required";
     const struct json *inputs = json_member(c->entry, "inputs");
+    const char *symbolizer = json_text(c->entry, "sanitizer_symbolizer");
+    int symbolizer_found = symbolizer == NULL;
+    if (json_member(c->entry, "sanitizer_symbolizer") &&
+        (symbolizer == NULL || !relative_path(symbolizer)))
+        return "the sanitizer symbolizer path is invalid";
+#ifdef __APPLE__
+    const struct json *instrumentation = json_member(c->entry, "instrumentation");
+    if (instrumentation && instrumentation->type == JSON_ARRAY && instrumentation->count &&
+        symbolizer == NULL)
+        return "the prepared sanitizer symbolizer is missing";
+#endif
     if (!inputs || inputs->type != JSON_ARRAY)
         return "the prepared input inventory is missing";
     for (size_t i = 0; i < inputs->count; i++) {
@@ -311,14 +322,18 @@ static const char *prepared(const struct host *h, struct check *c)
                      path ? path : "(invalid path)");
             return c->why;
         }
+        if (symbolizer && !strcmp(path, symbolizer))
+            symbolizer_found = 1;
     }
+    if (!symbolizer_found)
+        return "the sanitizer symbolizer is not a prepared input";
     const char *corpus = json_text(c->entry, "corpus");
     if (corpus && !corpus_matches(h, json_member(c->entry, "arguments"), corpus))
         return "the corpus contains files that were not prepared";
     return NULL;
 }
 
-static int environment(struct check *c)
+static int environment(struct host *h, struct check *c)
 {
     size_t n = 0, used = 0;
     while (environ[n])
@@ -329,6 +344,7 @@ static int environment(struct check *c)
     for (size_t i = 0; i < n; i++) {
         if (!strncmp(environ[i], "TMPDIR=", 7) || !strncmp(environ[i], "ETUDE_TREE=", 11) ||
             !strncmp(environ[i], "ASAN_OPTIONS=", 13) ||
+            !strncmp(environ[i], "ASAN_SYMBOLIZER_PATH=", 21) ||
             !strncmp(environ[i], "UBSAN_OPTIONS=", 14) || !strncmp(environ[i], "LSAN_OPTIONS=", 13))
             continue;
         c->env[used++] = strdup(environ[i]);
@@ -338,6 +354,14 @@ static int environment(struct check *c)
     c->env[used++] = strdup(tmp);
     c->env[used++] = strdup("ASAN_OPTIONS=halt_on_error=1:exitcode=1");
     c->env[used++] = strdup("UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1:exitcode=1");
+    const char *symbolizer = json_text(c->entry, "sanitizer_symbolizer");
+    if (symbolizer) {
+        char path[PATH_SIZE], value[PATH_SIZE + 32];
+        if (!relative_path(symbolizer) || path_of(path, h->tree, symbolizer) != 0)
+            return -1;
+        snprintf(value, sizeof(value), "ASAN_SYMBOLIZER_PATH=%s", path);
+        c->env[used++] = strdup(value);
+    }
     for (size_t i = 0; i < used; i++)
         if (!c->env[i])
             return -1;
@@ -354,7 +378,7 @@ static int start(struct host *h, struct check *c)
         return -1;
     char name[160];
     snprintf(name, sizeof(name), "%s.log", c->id);
-    if (path_of(c->log, h->work, name) != 0 || environment(c) != 0)
+    if (path_of(c->log, h->work, name) != 0 || environment(h, c) != 0)
         return -1;
     c->argv = calloc(args->count + 2, sizeof(*c->argv));
     if (!c->argv)

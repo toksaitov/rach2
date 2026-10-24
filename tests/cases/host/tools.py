@@ -20,6 +20,11 @@ EXTERNAL = {'tar', 'mdir', 'mcopy', 'mke2fs', 'debugfs', 'dumpe2fs', 'e2fsck', '
 
 def external_tool(name):
     """Find a declared native binary during preparation, never during a test."""
+    if name == 'atos' and sys.platform == 'darwin':
+        source = Path('/usr/bin/atos')
+        if not source.is_file():
+            raise ValueError('the native sanitizer symbolizer is missing: ' + str(source))
+        return source.resolve()
     explicit = os.environ.get('HOST_TEST_PREPARED_TOOLS')
     if explicit:
         path = Path(explicit) / name
@@ -30,6 +35,38 @@ def external_tool(name):
         return path.resolve()
     raise ValueError(f'{name}: independent tools require the declared GNU helper; '
                      'set HOST_TEST_PREPARED_TOOLS during GNU preparation')
+
+
+def copied_tool(root, name, source, digest):
+    """Publish a native executable and its actual resolved-source provenance."""
+    output = root / name
+    root.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_name(output.name + f'.{os.getpid()}.tmp')
+    shutil.copyfile(source, temporary)
+    temporary.chmod(source.stat().st_mode)
+    temporary.replace(output)
+    magic = output.read_bytes()[:4]
+    if magic not in (b'\x7fELF', b'\xcf\xfa\xed\xfe', b'\xfe\xed\xfa\xcf',
+                     b'\xce\xfa\xed\xfe', b'\xfe\xed\xfa\xce', b'\xca\xfe\xba\xbe') and not magic.startswith(b'MZ'):
+        raise ValueError(f'prepared host tool is not a native executable: {source}')
+    if digest(source) != digest(output):
+        raise ValueError('native tool changed while copying: ' + str(source))
+    provenance = root / (name + '.provenance.json')
+    provenance.write_text(json.dumps(dict(source=str(source), sha256=digest(output)),
+                                     sort_keys=True) + '\n')
+    return {str(p): dict(path=str(p), sha256=digest(p)) for p in (output, provenance)}
+
+
+def sanitizer_tools(root, digest):
+    """Bind the native sanitizer tool set, including an empty non-Mac set."""
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    inputs = copied_tool(root, 'atos', external_tool('atos'), digest) if sys.platform == 'darwin' else {}
+    manifest = root / 'tools.json'
+    manifest.write_text(json.dumps(dict(schema_version=1, platform=sys.platform,
+                                      inputs=[inputs[p] for p in sorted(inputs)]), sort_keys=True) + '\n')
+    inputs[str(manifest)] = dict(path=str(manifest), sha256=digest(manifest))
+    return inputs
 
 
 def external_exfat(marker):
@@ -130,6 +167,12 @@ def prepare(names, compiler, flags, dependencies, digest, print_commands=False, 
     root = Path('build/tests/host-suite/tools')
     inputs = {}
     for name in names:
+        if name == 'atos':
+            if print_commands:
+                print('host prepare: native sanitizer tool: /usr/bin/atos')
+            else:
+                inputs.update(sanitizer_tools('build/tests/host-suite/sanitizer', digest))
+            continue
         if name == 'exfat_external':
             marker = Path('build/tests/host/exfat_writer')
             root_data = root / name
@@ -147,20 +190,7 @@ def prepare(names, compiler, flags, dependencies, digest, print_commands=False, 
                 print('host prepare: native external tool: ' + name)
                 continue
             source = external_tool(name)
-            output = root / name
-            root.mkdir(parents=True, exist_ok=True)
-            temporary = output.with_name(output.name + f'.{os.getpid()}.tmp')
-            shutil.copyfile(source, temporary)
-            temporary.chmod(source.stat().st_mode)
-            temporary.replace(output)
-            magic = output.read_bytes()[:4]
-            if magic not in (b'\x7fELF', b'\xcf\xfa\xed\xfe', b'\xfe\xed\xfa\xcf',
-                             b'\xce\xfa\xed\xfe', b'\xfe\xed\xfa\xce', b'\xca\xfe\xba\xbe') and not magic.startswith(b'MZ'):
-                raise ValueError(f'prepared host tool is not a native executable: {source}')
-            provenance = root / (name + '.provenance.json')
-            provenance.write_text(json.dumps(dict(source=str(source), sha256=digest(output)),
-                                             sort_keys=True) + '\n')
-            inputs.update({str(p): dict(path=str(p), sha256=digest(p)) for p in [output, provenance]})
+            inputs.update(copied_tool(root, name, source, digest))
             continue
         if name not in SOURCES:
             raise ValueError(f'no native host tool preparation recipe: {name}')
@@ -171,9 +201,12 @@ def prepare(names, compiler, flags, dependencies, digest, print_commands=False, 
 
 if __name__ == '__main__':
     try:
-        if len(sys.argv) != 3 or sys.argv[1] != '--external-exfat':
-            raise ValueError('usage: tools.py --external-exfat RECORD')
-        external_exfat(sys.argv[2])
+        if len(sys.argv) != 3 or sys.argv[1] not in ('--external-exfat', '--sanitizer'):
+            raise ValueError('usage: tools.py --external-exfat RECORD | --sanitizer DIRECTORY')
+        if sys.argv[1] == '--sanitizer':
+            sanitizer_tools(sys.argv[2], lambda p: hashlib.sha256(p.read_bytes()).hexdigest())
+        else:
+            external_exfat(sys.argv[2])
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f'host tools: {error}', file=sys.stderr)
         sys.exit(1)

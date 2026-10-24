@@ -622,6 +622,11 @@ build/tests/host-suite/vfs_unmount: tests/cases/host/fixtures.py tests/cases/hos
     tests/system/fixtures/vfs_unmount.c rach2/sys/fs/vfs.c
 	CC="$(HOSTCC)" python3 -B tests/cases/host/fixtures.py vfs_unmount $@
 
+.PHONY: host-sanitizer-force
+host-sanitizer-force:
+build/tests/host-suite/sanitizer: tests/cases/host/tools.py host-sanitizer-force
+	python3 -B tests/cases/host/tools.py --sanitizer $@
+
 build/tests/host-suite/scripts.inventory.json: build/tests/system/fakeapi_test
 build/tests/host-suite/etude.inventory.json: $(ETUDE) build/tests/cases/host/host
 
@@ -846,6 +851,7 @@ build/tests/cases/machine/metal_scenario: tests/cases/machine/metal_accept.c \
     tests/cases/machine/metal_accept.h tests/cases/machine/fileio.c tests/cases/machine/fileio.h
 
 build/tests/cases/host/usbchecks: tests/cases/host/usbchecks.c \
+    tests/host/compat/sanitizer_env_host.h \
     tests/system/checkers/records.c tests/system/checkers/records.h \
     $(filter-out tests/cases/host/host.c tools/etude/json.c utils/sha256.c,$(ETUDE_HOSTCASE_SRC))
 	@mkdir -p $(@D)

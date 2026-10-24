@@ -63,10 +63,11 @@
 
 #include "compat/pathmax_host.h"
 #include "compat/fixdir_host.c"
+#include "compat/sanitizer_env_host.h"
 #include "etude/exec.h"
 #include "../../tools/etude/posix/posix.h"
 
-extern char **environ;
+static char **case_environment;
 
 static int fails;
 
@@ -612,7 +613,7 @@ static void spec_for(struct etude_exec_spec *s, struct attempt *a, int posix_onl
     memset(s, 0, sizeof(*s));
     s->attempt_id = a->attempt_id;
     s->argv = a->argv;
-    s->envp = environ;
+    s->envp = case_environment;
     s->output_max = 4096;
     s->grace_us = a->w.grace_us;
     s->reg = record;
@@ -1092,7 +1093,7 @@ static void test_output_files(struct etude_exec *ex)
         memset(&spec, 0, sizeof(spec));
         spec.attempt_id = merged ? "merged-output" : "split-output";
         spec.argv = args;
-        spec.envp = environ;
+        spec.envp = case_environment;
         spec.output_max = 4;
         spec.stdout_path = fix_path("complete.out");
         spec.stderr_path = merged ? spec.stdout_path : fix_path("complete.err");
@@ -1202,6 +1203,9 @@ int main(int argc, char **argv)
         printf("etude-exec-test: fail: %s cannot be found\n", argv[0]);
         return 1;
     }
+    case_environment = host_sanitizer_environment(getenv("ASAN_SYMBOLIZER_PATH"));
+    if (case_environment == NULL)
+        return 1;
     ex = etude_exec_new();
     if (ex == NULL)
         return 1;
