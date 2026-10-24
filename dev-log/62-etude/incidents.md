@@ -982,3 +982,9 @@ Source review before releasing Windows preparation found that prepare-only.sh cl
 The corrected control design uses a real native admit claim and its new preparation grant inside the tracked Windows Job. Only the admitted child receives the matching ETUDE_ADMITTED value. The native grant and preparation receipt remain distinct from transport and final Job cleanup evidence. An outer WSL claim cannot remain held while the Linux authority is frozen, since freezing requires an empty ledger.
 
 The authorized read-only inventory found that neither fixed physical-authority binding was installed. The actual Linux policy was version 1 and enabled; the MSYS policy was version 1 and disabled. Source support for protected phases is not evidence of enrollment. Preparation therefore remains blocked until the real protected bindings, gates, policies and ordinary launcher paths are installed and checked, and both endpoint transitions have confirmed cleanup. A private enabled site projection or an environment marker cannot replace that authority.
+
+## Continuous coordination stopped before Windows enrollment
+
+At 21:20 on October 24, the coordinating session resumed after an unexplained gap of roughly two hours. Continuous progress and the required manager checks were missed while the Windows enrollment proposal was incomplete. A helper reported a model-capacity error, but the retained evidence does not establish why the coordinating session stopped. The gap is not attributed to Windows review or to that error.
+
+The completed Linux run23 producer and export remain their original events. Their actual metadata and raw preparation receipt are now bound to the pending Windows controls without changing the frozen d5cefe047 source. The next action is the concrete protected enrollment and launcher-coverage review, followed by the released Windows preparation window. No PC operation is performed while the Mac import owns the producer.
