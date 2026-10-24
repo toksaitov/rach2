@@ -621,3 +621,7 @@ The GNU board fixture failed nine rows while the actual board operations returne
 ## Cleanup fixture timestamps, 2026-10-24
 
 The native cleanup fixture aged the entire scratch tree, including the file intended to make its parent young. Reopening that empty file did not restore its timestamp on Rach2. Issue #1058 sets its timestamp explicitly after aging the tree, matching the original fixture, which never aged the young file. The cleanup program and its checks for old, young, active and unrelated paths are unchanged.
+
+## Native CI command entry, 2026-10-24
+
+The native CI fixture installed a comment-only, non-executable `tests/run`, while the bisection product executes that path directly. Its command handler recognized only `sh tests/run`, so suite, admission and structured-history rows could not run their fixture workload. Issue #1057 installs the prepared native controller at that path and dispatches its original argument vector to the same workload handler. Every original result, history, admission, retry and refusal assertion remains.

@@ -426,6 +426,20 @@ static int mock_native_run(int argc, char **argv)
     return !ok ? 2 : *failed ? 1 : 0;
 }
 
+static int direct_tests(int argc, char **argv)
+{
+    char **args = calloc((size_t)argc + 2, sizeof(*args));
+    int i, status;
+    if (!args)
+        return 2;
+    args[0] = "sh";
+    for (i = 0; i < argc; i++)
+        args[i + 1] = argv[i];
+    status = mock_tests(argc + 1, args);
+    free(args);
+    return status;
+}
+
 static int mock_run(int argc, char **argv)
 {
     if (fx_has("tools/ci/run.sh", "results=native\n"))
@@ -498,6 +512,8 @@ int flow_ci_mock(int argc, char **argv)
         return mock_gh(argc, argv);
     if (!strcmp(name, "etude-reader"))
         return mock_reader(argc, argv);
+    if (!strcmp(name, "run"))
+        return direct_tests(argc, argv);
     if (!strcmp(name, "make")) {
         event("make");
         admitted("make");
@@ -1523,8 +1539,7 @@ static int prepare(struct fixture *f)
         !flow_put(f, "tree/tools/ci/core.env",
                   "# The environment of a core run.\nJOBS=3\nMAKEFLAGS=-j3 "
                   "--output-sync\nRACH2_WORKERS=5\n") ||
-        !flow_put(f, "tree/tests/run",
-                  "#!/bin/sh\n# Native command fixture reads RACH2_PORT_OFFSET.\n") ||
+        !fx_copy(f->self, path("tree/tests/run")) ||
         !fx_mkdir(path("tree/tests/cases")))
         return 0;
     for (i = 0; i < 3; i++) {
