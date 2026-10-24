@@ -2,7 +2,7 @@
 # worker-session: the project's worker loop, tools/flow/worker.sh, runs a
 # session of Claude Code on each of two issues, as the test account, and
 # Claude Code plays tests/system/agents/worker-session.json against the fake
-# server. The row makes a git repository of the tree's tests and tools, a
+# server. The row makes a git repository of the agent fixtures and flow tools, a
 # bare copy of it as the loop's `origin`, and a clone of that, whose
 # worker.sh the loop runs. `gh` on the path is fakegh.py, which serves a
 # board of one phase In progress, #900, and two of its tasks, #901 and #902,

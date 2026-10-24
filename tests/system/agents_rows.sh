@@ -14,8 +14,8 @@
 # of the fake API server's certificate authority in CA. A row has a
 # program do its job as a person would ask for it and compares what it
 # printed or wrote with what it must be, through the functions below; a row
-# that runs the tree's tools, such as the worker loop, makes a git repository
-# of the tree's tests and tools with `tree`, and a row that runs a program's
+# that runs the flow tools, such as the worker loop, makes a git repository
+# of the prepared source assets with `tree`, and a row that runs a program's
 # screen in tmux, on the server and in the session PANE names, waits for it
 # with `pane`. A row that inspects a program while it waits for the fake
 # server's answer has that answer held, with `held` and `release`. The
@@ -113,8 +113,8 @@ status() {
         fail "$what: status $got, want $want: $(printf '%s' "$OUT" | tail -n 3 | tr '\n' ' ')"
 }
 
-# tree: make WORK/tree a git repository with one commit of the tree's tests
-# and tools, from the tar the suite stages, or fail and return 1.
+# tree: make WORK/tree a git repository with one commit of the source assets
+# from the tar the suite stages, or fail and return 1.
 tree() {
     if ! { mkdir "$WORK/tree" && tar -xf "$STAGE/tree.tar" -C "$WORK/tree" &&
         git -C "$WORK/tree" init -q && git -C "$WORK/tree" add -A &&

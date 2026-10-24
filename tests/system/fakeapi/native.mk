@@ -44,7 +44,11 @@ build/tests/system/fakeapi_test: $(FAKEAPI_NATIVE)/selftest.c $(filter-out $(FAK
 
 # Immutable scripts and fixtures. Host C reads metadata; the guest receives
 # the same archive for workloads that exercise the tree's tools.
-AGENT_ASSET_FILES = $(wildcard $(shell git ls-files tests tools vendor/gnu/agents/packages))
-build/tests/cases/machine/agents-assets.tar: $(AGENT_ASSET_FILES)
+AGENT_ASSET_PATHS = tests/system/agents_rows.sh tests/system/agents \
+    tests/system/accept/agents_guest.sh tests/system/accept/agents \
+    'tests/system/fakeapi/*.json' tests/system/fakeapi/repo \
+    tools/flow tools/git-hooks vendor/gnu/agents/packages
+AGENT_ASSET_FILES := $(shell git ls-files -- $(AGENT_ASSET_PATHS))
+build/tests/cases/machine/agents-assets.tar: $(AGENT_ASSET_FILES) tests/system/fakeapi/native.mk
 	@mkdir -p $(@D)
-	git ls-files tests tools vendor/gnu/agents/packages | tar --format=ustar -cf $@ -T -
+	tar --format=ustar -cf $@ $(AGENT_ASSET_FILES)
