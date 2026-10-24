@@ -183,6 +183,7 @@
 #include "etude/ledger.h"
 #include "etude/legacy.h"
 #include "legacy_cases.h"
+#include "json.h"
 #ifdef _WIN32
 #include "verbs.h"
 #endif
@@ -289,6 +290,8 @@ static const struct {
                      {"fixture.machine.allowed", ", \"critical\": \"init: exited\"", 1},
                      {"fixture.machine.lost", "", 0},
                      {"fixture.machine.noconsole", "", 0}};
+
+enum { MACHINE_COUNT = sizeof(machine_cases) / sizeof(machine_cases[0]) };
 
 /* The shared disk's original text and the text after its first copy. */
 #define DISK "build/images/disk.img"
@@ -2200,19 +2203,99 @@ static void digest_member(char *out, size_t size, const char *name, const char *
     fix_format(out, size, "\"%s\":\"%s\"", name, rc == 0 ? hex : "unreadable");
 }
 
-/** Say whether the invocation of each machine case of run `r`, from the
- * `first` of `machine_cases` on, has the text `text`. */
-static int invocations_have(const struct run *r, size_t first, const char *text)
+/** Each machine invocation but `except`, when supplied, contains `text`. */
+static int invocations_have(const struct run *r, const char *except, const char *text)
 {
     char tail[64];
     size_t i;
 
-    for (i = first; i < sizeof(machine_cases) / sizeof(machine_cases[0]); i++) {
+    for (i = 0; i < MACHINE_COUNT; i++) {
+        if (except && !strcmp(except, machine_cases[i].id))
+            continue;
         fix_format(tail, sizeof(tail), "%s.r0", machine_cases[i].id);
         if (!invocation_has(r, tail, text))
             return 0;
     }
     return 1;
+}
+
+/** Read the recorded plan, without assuming the manifest's declaration order. */
+static struct json *machine_plan(const struct run *r)
+{
+    struct json *doc = NULL;
+    char error[256];
+    for (size_t i = 0; i < r->h.n; i++) {
+        if (!strstr(r->h.line[i], "\"kind\":\"plan\""))
+            continue;
+        if (json_parse(r->h.line[i], strlen(r->h.line[i]), 1, &doc, error, sizeof(error)))
+            return NULL;
+        return doc;
+    }
+    return NULL;
+}
+
+/** Find an explicit fixture case identity, or MACHINE_COUNT when unknown. */
+static size_t machine_index(const char *id)
+{
+    for (size_t i = 0; id && i < MACHINE_COUNT; i++)
+        if (!strcmp(id, machine_cases[i].id))
+            return i;
+    return MACHINE_COUNT;
+}
+
+/** Every case occurs once, with equal costs ordered by its case identity. */
+static int machine_order(const struct run *r, char order[MACHINE_COUNT][64])
+{
+    struct json *doc = machine_plan(r);
+    const struct json *items = json_member(json_member(doc, "data"), "items");
+    unsigned seen = 0;
+    int ok = items && items->type == JSON_ARRAY && items->count == MACHINE_COUNT;
+    for (size_t i = 0; ok && i < MACHINE_COUNT; i++) {
+        const char *id = json_text(items->item[i], "case_id");
+        size_t index = machine_index(id);
+        if (index == MACHINE_COUNT || (seen & (1u << index)) ||
+            (i && strcmp(order[i - 1], id) >= 0) || strlen(id) >= sizeof(order[i])) {
+            ok = 0;
+            break;
+        }
+        strcpy(order[i], id);
+        seen |= 1u << index;
+    }
+    json_free(doc);
+    return ok && seen == (1u << MACHINE_COUNT) - 1;
+}
+
+/** Verify every exact port slice in plan order, including empty slices. */
+static int machine_ports(const struct run *r)
+{
+    char order[MACHINE_COUNT][64] = {{0}}, tail[80], ports[96];
+    unsigned next = 9400;
+    if (!machine_order(r, order))
+        return 0;
+    for (size_t i = 0; i < MACHINE_COUNT; i++) {
+        size_t index = machine_index(order[i]);
+        if (index == MACHINE_COUNT)
+            return 0;
+        unsigned count = machine_cases[index].ports;
+        strcpy(ports, "\"ports\":[");
+        for (unsigned n = 0; n < count; n++) {
+            size_t used = strlen(ports);
+            snprintf(ports + used, sizeof(ports) - used, "%s%u", n ? "," : "", next++);
+        }
+        strcat(ports, "]");
+        fix_format(tail, sizeof(tail), "%s.r0", order[i]);
+        if (!invocation_has(r, tail, ports))
+            return 0;
+    }
+    return next == 9403;
+}
+
+/** Check the invocation of one explicit case identity. */
+static int machine_invocation_has(const struct run *r, const char *id, const char *text)
+{
+    char tail[80];
+    fix_format(tail, sizeof(tail), "%s.r0", id);
+    return invocation_has(r, tail, text);
 }
 
 /** Count the copies of the file `name` of the tree that the driver of run
@@ -2282,11 +2365,11 @@ static void test_machine(void)
     CHECK(copies_of(&r, "build/rach2/kernel") == 1 && copies_of(&r, DISK) == 1 &&
               copies_of(&r, "build/cases/scenario") == 1,
           "publish: the artifacts the five cases share are copied once each");
-    given = invocations_have(&r, 0, text);
+    given = invocations_have(&r, NULL, text);
     digest_member(text, sizeof(text), "kernel", "build/rach2/kernel");
-    given &= invocations_have(&r, 0, text);
+    given &= invocations_have(&r, NULL, text);
     digest_member(text, sizeof(text), "disk", DISK);
-    given &= invocations_have(&r, 0, text);
+    given &= invocations_have(&r, NULL, text);
     CHECK(given, "publish: each case is given each artifact's digest");
     fix_format(text, sizeof(text), "\"store\":\"%s/%s.store\"", r.evidence, r.run_id);
     CHECK(invocation_has(&r, "fixture.machine.clean.r0", text), "invocation: the store");
@@ -2309,10 +2392,8 @@ static void test_machine(void)
     CHECK(invocation_has(&r, "fixture.machine.clean.r0",
                          "\"ovmf_i686\":null,\"ovmf_x86_64\":\"/firmware/OVMF_CODE_4M.fd\""),
           "invocation: the firmware RACH2_OVMF_CODE names");
-    CHECK(invocation_has(&r, "fixture.machine.clean.r0", "\"ports\":[9400,9401]") &&
-              invocation_has(&r, "fixture.machine.allowed.r0", "\"ports\":[9402]") &&
-              invocation_has(&r, "fixture.machine.panic.r0", "\"ports\":[]"),
-          "invocation: the ports of the caller's block, each case's its own");
+    CHECK(machine_ports(&r),
+          "invocation: all exact disjoint port slices follow the recorded deterministic plan");
     CHECK(invocation_has(&r, "fixture.machine.clean.r0", "\"boundary_lazy\":false}"),
           "invocation: a run of no site does not permit the lazy boundary profile");
     fix_format(text, sizeof(text), "\"scratch\":\"%s/%s.fixture.machine.clean.r0\"", r.evidence,
@@ -2345,7 +2426,7 @@ static void test_publish(void)
     static const struct etude_legacy_member m[] = {
         {"machine", 0, 0, "cases/machine/machine.json", NULL}};
     static struct run changed, failed;
-    char text[PATH_LEN * 2], disk[PATH_LEN];
+    char text[PATH_LEN * 2], disk[PATH_LEN], order[MACHINE_COUNT][64] = {{0}};
     int before = fails;
 
     changed.name = "publish-changed";
@@ -2353,6 +2434,8 @@ static void test_publish(void)
     changed.n = 1;
     changed.put = PUT_CHANGE;
     set_run(&changed);
+    CHECK(machine_order(&changed, order),
+          "publish-changed: every case has its unique planned identity");
     CHECK(write_text(in(disk, sizeof(disk), DISK), disk_text, 0644) == 0,
           "publish-changed: the disk restored");
     CHECK(changed.status == 1, "publish-changed: a case did not pass");
@@ -2362,10 +2445,10 @@ static void test_publish(void)
           "publish-changed: the disk changed after its first copy is copied again, and "
           "nothing else");
     digest_text(text, sizeof(text), "disk", disk_text);
-    CHECK(invocation_has(&changed, "fixture.machine.clean.r0", text),
+    CHECK(machine_invocation_has(&changed, order[0], text),
           "publish-changed: the first case is given the disk's first digest");
     digest_text(text, sizeof(text), "disk", disk_changed);
-    CHECK(invocations_have(&changed, 1, text),
+    CHECK(invocations_have(&changed, order[0], text),
           "publish-changed: the cases after it are given the changed disk's digest");
     CHECK(changed.claims == 0, "publish-changed: the ledger has no claim");
     CHECK(!changed.leaks, "publish-changed: the driver leaks nothing");
@@ -2377,21 +2460,24 @@ static void test_publish(void)
     failed.n = 1;
     failed.put = PUT_FAIL;
     set_run(&failed);
+    memset(order, 0, sizeof(order));
+    CHECK(machine_order(&failed, order),
+          "publish-failed: every case has its unique planned identity");
     CHECK(failed.status == 1, "publish-failed: a case did not pass");
     CHECK(failed.read == 0, "publish-failed: the history is whole");
-    CHECK(case_is(&failed, "fixture.machine.clean", "i686", 0, "incomplete",
+    CHECK(case_is(&failed, order[0], "i686", 0, "incomplete",
                   "its artifact disk, " DISK ", could not be published: No such file or "
                   "directory"),
           "publish-failed: the case whose copy failed is incomplete with the reason");
-    CHECK(!invocation_has(&failed, "fixture.machine.clean.r0", "{"),
+    CHECK(!machine_invocation_has(&failed, order[0], "{"),
           "publish-failed: that case has no invocation");
     CHECK(copies_of(&failed, "build/rach2/kernel") == 1 && copies_of(&failed, DISK) == 2 &&
               copies_of(&failed, "build/cases/scenario") == 1,
           "publish-failed: the next case copies the disk again, and the others reuse its copy");
     digest_text(text, sizeof(text), "disk", disk_text);
-    CHECK(invocations_have(&failed, 1, text),
+    CHECK(invocations_have(&failed, order[0], text),
           "publish-failed: the cases after it are given the disk's digest");
-    CHECK(case_is(&failed, "fixture.machine.allowed", "i686", 0, "pass", NULL),
+    CHECK(case_is(&failed, order[1], "i686", 0, "pass", NULL),
           "publish-failed: a case after it passes");
     CHECK(failed.claims == 0, "publish-failed: the ledger has no claim");
     CHECK(!failed.leaks, "publish-failed: the driver leaks nothing");
