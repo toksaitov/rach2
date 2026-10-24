@@ -531,7 +531,7 @@ static int hub_pull(struct usb_case *u)
     booted(u, &b, NULL, "shell");
     usb_step(u, "pull");
     pulled_under(u, &b, "/usbdiskprobe hold", "hub", "unmounted");
-    usb_times(&b, "usb: slot: ", 4, &slots);
+    usb_times(&b, ": given back", 4, &slots);
     usb_times(&b, ": gone", 4, &hub);
     to = later(b.at, later(slots, hub));
     text = usb_text(&b, 0, to);
