@@ -740,3 +740,9 @@ The one existing route host fixture then passed all eleven tests under the insta
 The complete host compilation after run 15 passed the corrected audio fixture and all other native fixture groups, but the x86-64 boot inventory stopped before its guest probes existed. Its direct prerequisites named hello and rngprobe. The root rules for component outputs came only from manifest scanning, which omits absent build products; a concurrent image prerequisite eventually built both probes, after Make had already rejected their missing rules. Previously built probes hid the fault.
 
 The root Makefile now always includes both probe paths in the existing tests-component rule for the selected architecture. The component still runs once under parallel Make, and its own dependency tracking decides what to compile. Direct inventory prerequisites must have rules before any incidental image preparation creates their files.
+
+## A forced rebuild flag did not reach the admitted Make
+
+At 13:30 on October 24, reading the run 16 bootstrap log showed that the root Make admission restart had not passed its command-line `-W` option to the inner Make. The command succeeded with the runner already up to date. The first receipt proved a successful build check, but the coordinator had described it as a fresh compilation. No collection had started.
+
+The coordinator retained that receipt and ran the same target through the installed external build admission, with `-W` on the admitted Make command itself. The complete log now records the compiler invocation. All tracked inputs were checked before and after, the new executable matched the staged digest, the admission exited zero, and its ledger was empty. The new receipt records the earlier receipt's digest and leaves both records intact. A successful Make status is compilation evidence only when the retained log records the compiler.
