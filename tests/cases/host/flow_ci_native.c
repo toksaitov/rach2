@@ -95,7 +95,7 @@ static int verdict(int argc, char **argv)
         return 2;
     if (!strcmp(env("CI_NATIVE_MODE"), "push") && !argument(argc, argv, "--selection"))
         return 2;
-    if (!strcmp(env("CI_NATIVE_MODE"), "completion") &&
+    if (!strncmp(env("CI_NATIVE_MODE"), "completion", 10) &&
         (!argument(argc, argv, "--routine-completion") ||
          !argument(argc, argv, path("routine.completion.json")) ||
          !argument(argc, argv, "--routine-proofs") ||
@@ -162,6 +162,11 @@ static int setup(struct fixture *f)
                      flow_path(f, "bin/native-etude"));
     if (n < 0 || (size_t)n >= sizeof(site) || !flow_put(f, "native.site", site))
         return 0;
+    if (!flow_put(f, "tree/tools/ci/routine_pack.py",
+                  "import os, sys\n"
+                  "sys.exit(2 if os.environ.get('CI_NATIVE_MODE') == 'completion-pack-failed' "
+                  "else 0)\n"))
+        return 0;
     fx_env("ETUDE_SITE", flow_path(f, "native.site"));
     fx_env("ETUDE", flow_path(f, "bin/native-etude"));
     fx_env("RACH2_QEMU_ACCEL", "tcg");
@@ -227,7 +232,8 @@ int flow_ci_native(struct fixture *f)
                            "cancel",
                            "completion",
                            "completion-relative",
-                           "completion-multiple"};
+                           "completion-multiple",
+                           "completion-pack-failed"};
     if (!setup(f))
         return 0;
     int ok = 1;

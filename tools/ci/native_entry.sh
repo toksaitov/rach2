@@ -110,6 +110,15 @@ status=0
 # Keep this immediate parent alive; an intermediate pipeline could outlive it.
 sh "$tree/tools/ci/native_sequence.sh" "$purpose" "$tree" "$out" "$arches" "$run" \
     "$site" "$etude" "$accel" "$@" || status=$?
+if [ -f "$out/routine-completion.path" ]; then
+    pack_script=$tree/tools/ci/routine_pack.py
+    case $(uname -s) in
+        MINGW*|MSYS*|UCRT*|CLANG*) pack_script=$(cygpath -au "$pack_script") ;;
+    esac
+    if ! python3 "$pack_script" "$out"; then
+        [ "$status" -ge 128 ] || status=2
+    fi
+fi
 printf '%s\n' "$status" > "$out/sequence.status"
 if [ ! -f "$out/log" ]; then
     printf 'ci: native sequence stopped before its output log opened (status %s)\n' "$status" > "$out/log"
