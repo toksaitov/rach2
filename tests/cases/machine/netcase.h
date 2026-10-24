@@ -175,6 +175,13 @@ enum etude_status net_guest(struct net_case *u, struct etude_case_machine *m,
 enum etude_status net_ssh_input(struct net_case *u, char *const argv[], const char *input,
                                 const char *output, struct net_run *r);
 
+/** Run SSH with standard output in a private client file, then fetch the
+ * whole file as evidence OUTPUT through the size/hash-checked channel.
+ * Command diagnostics are OUTPUT.command and OUTPUT.command.err. The SSH
+ * exit status remains in R; a failed command never publishes the file. */
+enum etude_status net_ssh_download(struct net_case *u, char *const argv[], const char *output,
+                                   struct net_run *r);
+
 /** Restart the declared client with private INPUT bound to its raw
  * channel-input disk. Call in the client's declared transfer boot step.
  * A subsequent net_ssh_input of that file reads /dev/disk1 directly. */

@@ -11,6 +11,7 @@
 #include <string.h>
 #include "metal_accept.h"
 #include "fileio.h"
+#include <sys/stat.h>
 
 /* Each command has evidence. Every guest mount and temporary directory is
  * recorded for cleanup before the case ends. */
@@ -249,9 +250,12 @@ static int put_file(struct acceptance *a, const char *host, const char *guest)
 static int get_file(struct acceptance *a, const char *guest, const char *host)
 {
     struct net_run r;
-    char command[640], output[180], *text;
+    char command[640], output[180], who[128], *text;
     const char *evidence;
+    char *argv[] = {NET_SSH, NET_SSH_KEY((char *)a->request->login.key), "-T", "-p",
+                    (char *)a->request->login.port, who, command, NULL};
     int ok;
+    enum etude_status st;
     if (a->request->use_su) {
         if (!transfer_directory(a))
             return 0;
@@ -262,9 +266,10 @@ static int get_file(struct acceptance *a, const char *guest, const char *host)
     snprintf(command, sizeof(command), "cat %s%s", a->request->use_su ? a->transfer : guest,
              a->request->use_su ? "/data" : "");
     snprintf(output, sizeof(output), "%s.get-%u", a->prefix, ++a->commands);
-    account(a, command, NULL, output, &r);
+    snprintf(who, sizeof(who), "%s@127.0.0.1", a->request->login.user);
+    st = net_ssh_download(a->u, argv, output, &r);
     evidence = etude_evidence(a->u->c, output);
-    ok = net_exited0(&r) && evidence != NULL && copy_file(evidence, host);
+    ok = st == ETUDE_OK && net_exited0(&r) && evidence != NULL && copy_file(evidence, host);
     net_run_free(&r);
     if (a->request->use_su) {
         text = read_format(a, "if [ -f %s/data ]; then mv %s/data %s; fi", a->transfer, a->transfer,
@@ -694,9 +699,10 @@ static void loop_image(struct acceptance *a)
 {
     char *text = read_command(a, "cat /proc/filesystems");
     const char *image;
-    char guest[320], after[4096], file[4096], name[180];
+    char guest[320], after[4096], file[4096], name[180], size[32];
     char *fsck[] = {"fsck-krffs", after, "--strict", NULL};
     char *readfile[] = {"readfile-krffs", after, "/accept.txt", file, NULL};
+    struct stat before, downloaded;
     int ok;
     if (text[0] == '\0')
         message(a, 1, "the machine gave no file-system list");
@@ -709,13 +715,19 @@ static void loop_image(struct acceptance *a)
     image = etude_artifact(a->u->c, "accept-loop-image");
     if (image == NULL || !temporary_directory(a))
         return;
+    if (stat(image, &before) != 0 || !S_ISREG(before.st_mode) || before.st_size <= 0) {
+        message(a, 1, "the prepared loop image is not a nonempty regular file");
+        return;
+    }
+    snprintf(size, sizeof(size), "%llu", (unsigned long long)before.st_size);
     snprintf(guest, sizeof(guest), "%s/loop.img", a->temporary);
     if (!put_file(a, image, guest)) {
         message(a, 1, "image: the transfer failed");
         return;
     }
     text = read_format(a, "wc -c < %s", guest);
-    message(a, strcmp(text, "1048576") != 0, "image: the transfer has %s bytes", text);
+    message(a, strcmp(text, size) != 0, "image: the transfer has %s bytes (expected %s)",
+            text, size);
     free(text);
     text = read_format(a, "loopctl attach 0 %s && grep -c '^loop0 ' /proc/loop", guest);
     ok = strcmp(text, "1") == 0;
@@ -743,7 +755,8 @@ static void loop_image(struct acceptance *a)
     snprintf(name, sizeof(name), "%s.loop.accept", a->prefix);
     if (net_path(a->u, name, file, sizeof(file)) == NULL)
         return;
-    if (!get_file(a, guest, after))
+    if (!get_file(a, guest, after) || stat(after, &downloaded) != 0 ||
+        downloaded.st_size != before.st_size)
         message(a, 1, "the image the machine wrote could not be downloaded");
     else {
         ok = image_tool(a, fsck, "loop.fsck");

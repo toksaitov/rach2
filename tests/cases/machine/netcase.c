@@ -601,6 +601,73 @@ enum etude_status net_ssh_input(struct net_case *u, char *const argv[], const ch
     return client_result(u, output, st, &result, r);
 }
 
+/** Remove only this download's private file after a completed command.
+ * Lost channels leave the file to the owned client machine's cleanup. */
+static enum etude_status download_remove(struct net_case *u, const char *path,
+                                          const char *output)
+{
+    const char *argv[] = {"/bin/rm", "-f", "--", path, NULL};
+    struct etude_guest_result result;
+    enum etude_status st = etude_guest_command(u->client, argv, NULL, NULL, output, &result);
+
+    if (st == ETUDE_OK && (!result.complete || result.cleanup != ETUDE_CLEANUP_CONFIRMED ||
+                          result.termination.end != ETUDE_END_EXITED ||
+                          result.termination.value != 0))
+        st = ETUDE_FAILED;
+    return st;
+}
+
+enum etude_status net_ssh_download(struct net_case *u, char *const argv[], const char *output,
+                                   struct net_run *r)
+{
+    struct client_command a;
+    struct etude_guest_result result;
+    const char *env[5], *words[CLIENT_WORDS + 6];
+    char password[512], path[160], evidence[256], cleanup[256];
+    enum etude_status st, removed;
+    size_t i;
+
+    memset(r, 0, sizeof(*r));
+    r->end.end = ETUDE_END_LOST;
+    r->end.value = -1;
+    if (!net_ok(u))
+        return u->st;
+    if (strcmp(argv[0], "ssh") != 0 ||
+        strlen(output) > sizeof(evidence) - sizeof(".command.err"))
+        return failed(u, ETUDE_REFUSED, "invalid SSH download invocation");
+    if (!client_arguments(u, argv, &a)) {
+        client_free(&a);
+        return u->st;
+    }
+    if (a.count > CLIENT_WORDS - 6) {
+        client_free(&a);
+        return failed(u, ETUDE_REFUSED, "the SSH download has too many arguments");
+    }
+    snprintf(path, sizeof(path), "/tmp/etude-download-%u", ++u->client_files);
+    snprintf(evidence, sizeof(evidence), "%s.command", output);
+    snprintf(cleanup, sizeof(cleanup), "%s.cleanup", output);
+    words[0] = "/bin/sh";
+    words[1] = "-c";
+    words[2] = "umask 077; set -C; file=$1; shift; exec \"$@\" > \"$file\"";
+    words[3] = "etude-download";
+    words[4] = path;
+    for (i = 0; i < a.count; i++)
+        words[i + 5] = a.argv[i];
+    words[i + 5] = NULL;
+    client_environment(env, password);
+    st = etude_guest_command(u->client, words, env, NULL, evidence, &result);
+    client_free(&a);
+    st = client_result(u, evidence, st, &result, r);
+    if (st != ETUDE_OK)
+        return st;
+    if (net_exited0(r))
+        st = etude_guest_get(u->client, path, output);
+    removed = download_remove(u, path, cleanup);
+    if (st == ETUDE_OK)
+        st = removed;
+    return failed(u, st, "the SSH file download or its cleanup failed: %s", status_text(st));
+}
+
 enum etude_status net_ssh_attach(struct net_case *u, const char *input)
 {
     struct etude_termination end;
