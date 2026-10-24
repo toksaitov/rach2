@@ -1180,7 +1180,7 @@ static int build_fat(const char *option)
     if (is("--vfs") || is("--dir-loop")) {
         unsigned units[256];
         unsigned char *p = dir + 96;
-        unsigned char *far;
+        unsigned char *far_entry;
         int n, i;
         static const char e5name[11] = {0x05, '5', 'F', 'I', 'L', 'E', ' ', ' ', 'T', 'X', 'T'};
 
@@ -1208,14 +1208,14 @@ static int build_fat(const char *option)
         dirent_at(p, "FRAG    BIN", 0x20, 5000, 1536);
         p += 32;
         dirent_at(p, "SUB        ", 0x10, 5020, 0);
-        far = img + CLUSTER_OFF(9);
+        far_entry = img + CLUSTER_OFF(9);
         for (i = 0; i < 208; i++)
             units[i] = (unsigned)('a' + (i % 26));
         units[204] = '.';
         units[205] = 't';
         units[206] = 'x';
         units[207] = 't';
-        lfn_write(far, units, 208, "LONGLO~1TXT", 0);
+        lfn_write(far_entry, units, 208, "LONGLO~1TXT", 0);
         dirent_at(img + CLUSTER_OFF(10), "LONGLO~1TXT", 0x20, 5034, 8);
         p = img + CLUSTER_OFF(10) + 32;
         n = ascii_units("badord.txt", units);
