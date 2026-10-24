@@ -311,3 +311,7 @@ The first complete collection ran mkext2_overlay first, following host.list, whi
 
 
 Review of the scheduling repair found that making the sixteen-processor ceiling the manifest floor would prevent use on the Mac's smaller admitted capacity. The coordinator had approved that floor without checking every platform. The manifest keeps its one-processor floor; prepared composite host groups reserve the lesser of their declared ceiling and the selected capacity. Capacity below the floor is refused, and a repeated load must still fit beside the actual reservation. The focused regression inspects an actual 8000-unit private claim for a 1000-floor, 16000-ceiling case, and checks refusal below the floor and when a load exceeds capacity. No Mac or Windows collection was launched with the incorrect floor.
+
+Integration of #999 and #1003 required the capacity regression to change its private site policy as well as its command options: installed authority defines the capacity of an actual run. The fixture now sets 8000 units for the ceiling and added-load checks, 1000 for the below-floor refusal, and restores its original private capacity afterward.
+
+The coordinator also repeated the direct-compiler admission lapse for two small Mac object builds while preparing #1004 and #1007. They completed without starting tests or touching the frozen collection. The object outputs were removed or replaced by the admitted batch; the installed launcher is required for every later compiler command.

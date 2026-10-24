@@ -323,7 +323,7 @@ static void repetitions(char *out, size_t room)
 }
 
 /* Never fall back to an installed authority when exercising private cases. */
-static void fixture_policy(void)
+static void fixture_policy(unsigned cpu)
 {
     char text[PATH_MAX * 4 + 256];
 #ifdef __APPLE__
@@ -333,8 +333,8 @@ static void fixture_policy(void)
 #endif
     fix_format(text, sizeof(text),
                "etude-site 2\nendpoint %s\nlauncher %s\nledger %s\nlocks %s\netude %s\n"
-               "capacity 4000,536870912,1073741824\nwait 60\nseconds 60\n",
-               endpoint, etude, fix_path("build/tests/results/ledger"), tree, etude);
+               "capacity %u,536870912,1073741824\nwait 60\nseconds 60\n",
+               endpoint, etude, fix_path("build/tests/results/ledger"), tree, etude, cpu);
     put("site", text);
 }
 
@@ -359,7 +359,7 @@ static void fixture(void)
     CHECK(chmod(fix_path("build/tests/host/sha256_hosttest"), 0700) == 0,
           "prepared binary is executable");
     make_record();
-    fixture_policy();
+    fixture_policy(4000);
 }
 
 #include "compat/collection_scheduling.c"

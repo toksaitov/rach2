@@ -160,6 +160,7 @@ static void scheduling_capacity(char *out, size_t room)
     scheduling_floor = 1000;
     scheduling_ceiling = 16000;
     scheduling_manifest("host.host", ids);
+    fixture_policy(8000);
     setenv("ETUDE_COLLECTION_CPU", "8000", 1);
     char *fit[] = {"-A", "tcg", "-j", "4", "-C", "2", "host", NULL};
     CHECK(!run(fit, NULL, NULL, NULL, out, room),
@@ -171,12 +172,14 @@ static void scheduling_capacity(char *out, size_t room)
           "a real load beyond the clamped host claim refuses before execution");
     scheduling_floor = 2000;
     scheduling_manifest("host.host", ids);
+    fixture_policy(1000);
     char *small[] = {"-A", "tcg", "-j", "1", "-C", "1", "host", NULL};
     CHECK(run(small, NULL, NULL, NULL, out, room) == 2 &&
               !strstr(out, "host.host.etude: starting"),
           "capacity below the host manifest floor refuses before execution");
     unsetenv("ETUDE_COLLECTION_CPU");
     scheduling_floor = scheduling_ceiling = 0;
+    fixture_policy(4000);
 }
 
 static void scheduling(char *out, size_t room)
