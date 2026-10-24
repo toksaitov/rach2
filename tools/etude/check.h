@@ -53,8 +53,11 @@ int judge_attempt(struct cases *set, char **args, int n);
 int judge_results(const struct cases *set, const char *path, const char *claim);
 int judge_document(const struct cases *set, const struct json *doc, const char *file, char *why,
                    size_t n);
+struct budget_verdict_input {
+    const char *store, *run_id, *history, *completion;
+};
 int judge_run_budget(const struct cases *set, const struct json *plan, const struct json *run,
-                     const char *store);
+                     const struct budget_verdict_input *input);
 int judge_verdict(struct cases *set, char **args, int n);
 
 #endif

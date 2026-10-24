@@ -15,7 +15,8 @@
 ETUDE_CHECK_SRC = tools/etude/etude.c tools/etude/check.c tools/etude/cases.c \
                   tools/etude/digest.c tools/etude/judge.c tools/etude/json.c \
                   tools/etude/processor.c tools/etude/qemu_profile.c tools/etude/schema.c \
-                  tools/etude/verdict.c tools/etude/verdict_budget.c tools/etude/history.c tools/etude/history_json.c \
+                  tools/etude/verdict.c tools/etude/verdict_budget.c tools/etude/routine_charge.c \
+                  tools/etude/observe_import.c tools/etude/history.c tools/etude/history_json.c \
                   tools/etude/history_collect.c utils/sha256.c
 # The local Rach2 collection shares its framed transport with the desktop
 # single-attempt command; its public entry remains etude.
@@ -26,7 +27,7 @@ NATIVE_COLLECTION_TRANSPORT_SRC = tools/etude/posix/run_native.c tools/etude/pos
     tools/etude/posix/process.c tools/etude/guest/wire.c
 ETUDE_RACH2_SRC = $(ETUDE_CHECK_SRC) $(NATIVE_COLLECTION_DRIVER_SRC) \
                    $(NATIVE_COLLECTION_TRANSPORT_SRC) tools/etude/watchdog.c \
-                   tools/etude/compare.c tools/etude/compare_load.c tools/etude/observe_import.c
+                   tools/etude/compare.c tools/etude/compare_load.c
 
 # `etude lock`: the holder of a tree's run lock, on Linux and macOS, and the
 # holder of the host lock and a block of host ports, whose winfmt.c gives it
@@ -43,7 +44,7 @@ ETUDE_LOCK_WIN_SRC = tools/etude/etude.c tools/etude/lock_tree.c tools/etude/win
 # external admission wrapper for old checkouts and new runs. These are the
 # parts with Windows sources as well.
 ETUDE_OBSERVE_SRC = tools/etude/observe_sequence.c tools/etude/posix/observe_sequence.c \
-                    tools/etude/observe_history.c tools/etude/observe.c tools/etude/observe_import.c \
+                    tools/etude/observe_history.c tools/etude/observe.c \
                     tools/etude/observe_main.c tools/etude/observe_scope.c \
                     tools/etude/observe_system.c
 

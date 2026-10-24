@@ -2,6 +2,7 @@
 #include "check.h"
 #include "schema.h"
 #include "sha256.h"
+#include "routine_charge.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -108,24 +109,43 @@ static int charge(const struct json *run)
            number(json_member(budget, "one_time_setup_us"), "value", &once) && !once;
 }
 
+static int physical_charge(const struct json *run, const struct etude_routine_cost *cost)
+{
+    const struct json *budget = json_member(run, "budget");
+    const struct json *value = json_member(json_member(budget, "charged_us"), "value");
+    uint64_t ceiling, queue, once;
+    return same(json_text(budget, "verdict"), "unknown") && value && value->type == JSON_NULL &&
+           number(budget, "ceiling_us", &ceiling) && cost->charged_us <= ceiling &&
+           cost->error_us <= ceiling - cost->charged_us &&
+           number(json_member(budget, "outside_queue_us"), "value", &queue) && !queue &&
+           number(json_member(budget, "one_time_setup_us"), "value", &once) && !once;
+}
+
 int judge_run_budget(const struct cases *set, const struct json *plan, const struct json *run,
-                     const char *store)
+                     const struct budget_verdict_input *input)
 {
     const char *purpose = json_text(plan, "purpose");
     const struct json *budget = json_member(run, "budget");
     const struct json *ref = json_member(budget, "policy");
     const struct json *planned = json_member(plan, "policies");
     uint64_t planned_size, recorded_size;
-    struct json *policy = policy_read(set, ref, store);
+    struct json *policy = policy_read(set, ref, input->store);
     const struct json *site = json_member(policy, "site");
     const struct json *env = json_member(plan, "environment");
     const struct json *clock = json_member(json_member(run, "time"), "clock");
+    const struct etude_routine_input routine = {
+        NULL, input->run_id, json_text(plan, "commit"), input->completion, input->history,
+        NULL, NULL};
+    struct etude_routine_cost cost;
+    int measured = etude_routine_plan(plan, &routine, &cost);
+    int charged = measured > 0
+                      ? physical_charge(run, &cost)
+                      : measured == 0 && same(json_text(budget, "verdict"), "pass") && charge(run);
     int ok = (same(purpose, "push") || same(purpose, "ci") || same(purpose, "release")) &&
-             same(json_text(budget, "verdict"), "pass") && policy &&
-             same(json_text(planned, "sha256"), json_text(ref, "sha256")) &&
+             charged && policy && same(json_text(planned, "sha256"), json_text(ref, "sha256")) &&
              number(planned, "size_bytes", &planned_size) &&
              number(ref, "size_bytes", &recorded_size) && planned_size == recorded_size &&
-             limits(budget, policy, purpose) && charge(run);
+             limits(budget, policy, purpose);
     static const char *const fields[] = {"machine_id", "os", "accelerator"};
 
     for (unsigned i = 0; i < 3; i++)

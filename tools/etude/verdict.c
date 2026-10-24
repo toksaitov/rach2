@@ -17,6 +17,7 @@
 #include "etude/history.h"
 #include "schema.h"
 #include "sha256.h"
+#include "routine_charge.h"
 
 /* The outcome of an attempt, an item or a run, in the history's words. */
 enum result { RESULT_PASS, RESULT_FAILURE, RESULT_INCOMPLETE, RESULT_CANCELLED };
@@ -54,10 +55,11 @@ struct verdict {
     struct json *selection; /* an explicit allocator export for focused checks */
     char **suite;
     size_t suites;
-    int *failed;              /* by suite: an item of it did not pass */
-    int set_failed;           /* the shared preparation or an item of no suite */
-    int runner;               /* the runner left work unconfirmed */
-    int require_budget;       /* routine entry refuses an unknown or failed charge */
+    int *failed;        /* by suite: an item of it did not pass */
+    int set_failed;     /* the shared preparation or an item of no suite */
+    int runner;         /* the runner left work unconfirmed */
+    int require_budget; /* routine entry refuses an unknown or failed charge */
+    const char *routine_completion;
     int project_architecture; /* report only this architecture after common validation */
     struct record *rec;
     size_t records, cap;
@@ -1012,7 +1014,9 @@ static void reach(struct verdict *v)
             if (v->item[i].proved == RESULT_INCOMPLETE || v->item[i].proved == RESULT_CANCELLED)
                 v->runner = 1;
     if (v->run != NULL) {
-        if (v->require_budget && !judge_run_budget(v->set, v->plan->data, v->run->data, v->store))
+        const struct budget_verdict_input input = {v->store, json_text(v->run->doc, "run_id"),
+                                                   v->run->stream, v->routine_completion};
+        if (v->require_budget && !judge_run_budget(v->set, v->plan->data, v->run->data, &input))
             v->runner = 1;
         prepared = check_preparation(v);
         check_summary(v, prepared);
@@ -1128,6 +1132,14 @@ static int verdict_options(struct verdict *v, char **args, int n, const char **c
             return -1;
         if (strcmp(args[i], "-b") == 0) {
             v->store = args[i + 1];
+        } else if (strcmp(args[i], "--routine-completion") == 0) {
+            if (v->routine_completion)
+                return -1;
+            v->routine_completion = args[i + 1];
+            v->require_budget = 1;
+        } else if (strcmp(args[i], "--routine-proofs") == 0) {
+            if (etude_routine_proof_directory(args[i + 1]))
+                return -1;
         } else if (strcmp(args[i], "-c") == 0) {
             v->commit = args[i + 1];
         } else if (strcmp(args[i], "--selection") == 0) {
@@ -1195,6 +1207,7 @@ int judge_verdict(struct cases *set, char **args, int n)
     int skip, status = 2, before = findings();
 
     memset(&v, 0, sizeof v);
+    etude_routine_proof_directory(NULL);
     skip = verdict_options(&v, args, n, &cases);
     if (skip < 0 || n - skip < 4 || !(same(args[skip], "i686") || same(args[skip], "x86_64"))) {
         free_verdict(&v);

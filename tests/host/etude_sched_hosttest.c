@@ -4,6 +4,7 @@
  * costs it takes from history (tools/etude/cost.c).
  *
  * host-inputs: tools/etude/schemas/history.schema.json
+ * host-deps: tools/etude/routine_charge.c
  * host-deps: tools/etude/ledger.c tools/etude/sched.c tools/etude/cost.c
  * host-deps: tools/etude/compare_load.c tools/etude/observe_import.c
  * host-deps: tools/etude/json.c

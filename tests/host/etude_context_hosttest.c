@@ -1,4 +1,6 @@
 /* Check context input hashes, deployment paths and preparation identity.
+ * host-deps: tools/etude/routine_charge.c
+ * host-deps: tools/etude/observe_import.c
  * host-deps: tools/etude/boot_identity.c
  * host-deps: tools/etude/measurement_context.c tools/etude/json.c
  * host-deps: tools/etude/history.c tools/etude/history_json.c

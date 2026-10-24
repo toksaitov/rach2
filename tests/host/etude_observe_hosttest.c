@@ -1,4 +1,5 @@
 /* Native load observations retain sampling limits and creation identities.
+ * host-deps: tools/etude/routine_charge.c
  * host-deps: tools/etude/observe.c tools/etude/observe_import.c
  * host-deps: tools/etude/observe_scope.c tools/etude/observe_system.c
  * host-deps: tools/etude/observe_sequence.c

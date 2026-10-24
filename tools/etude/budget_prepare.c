@@ -26,17 +26,10 @@ static struct eh_json *document(const struct eh_json *ref)
     for (const struct eh_json *at = locations->child; at; at = at->next) {
         char *bytes;
         size_t length;
-        if (at->type != 's' || cmp_read_file(at->string, (size_t)size->number, &bytes, &length))
+        if (at->type != 's')
             continue;
-        struct sha256 hash;
-        unsigned char digest[32];
-        char actual[65];
-        sha256_init(&hash);
-        sha256_update(&hash, (const unsigned char *)bytes, length);
-        sha256_final(&hash, digest);
-        sha256_hex(digest, actual);
-        struct eh_json *doc =
-            length == (size_t)size->number && !strcmp(actual, hex) ? eh_json_parse(bytes) : NULL;
+        bytes = etude_routine_blob(hex, (uint64_t)size->number, at->string, &length);
+        struct eh_json *doc = bytes ? eh_json_parse(bytes) : NULL;
         free(bytes);
         if (doc)
             return doc;
@@ -149,6 +142,12 @@ int etude_budget_preparation_eligible(const struct cmp_record *plan, enum etude_
     return 0;
 }
 
+int etude_budget_routine(const struct cmp_record *plan, const struct cmp_record *run,
+                         struct etude_routine_cost *cost)
+{
+    return cmp_routine_cost(plan, run, cost);
+}
+
 static int declares(const struct cmp_record *plan, const struct etude_preparation_selection *s)
 {
     const struct eh_json *refs = eh_json_get(plan->data, "artifacts");
@@ -186,13 +185,26 @@ static int step_sample(const struct cmp_record *step, const struct eh_json *envi
     return out->end != NULL;
 }
 
+static int physical_preparation(const struct cmp_record *plan, const struct cmp_record *run,
+                                struct preparation_sample *out)
+{
+    struct etude_routine_cost cost;
+    int routine = etude_budget_routine(plan, run, &cost);
+    if (routine < 0 || (routine && !cost.preparation_load_available))
+        return 0;
+    if (routine)
+        out->elapsed = cost.preparation_us;
+    return 1;
+}
+
 static int sample(const struct cmp_history *h, const struct etude_budget_policy *p,
                   const struct etude_preparation_selection *s, const struct cmp_record *run,
                   struct preparation_sample *out)
 {
     const struct cmp_record *plan = cmp_find(h, cmp_text(run->data, "plan_id"));
     const struct eh_json *refs = eh_json_get(run->data, "preparation_steps");
-    if (!plan || strcmp(plan->run, run->run) || !run->load_eligible ||
+    int local = run->load_eligible || (run->routine_load && run->local_load_eligible);
+    if (!plan || strcmp(plan->run, run->run) || !local ||
         !passed(eh_json_get(run->data, "result")) || !refs || !refs->child || refs->child->next)
         return 0;
     const char *purpose = cmp_text(plan->data, "purpose");
@@ -210,7 +222,9 @@ static int sample(const struct cmp_history *h, const struct etude_budget_policy 
         !same(cmp_text(step->data, "plan_id"), plan->id) ||
         !passed(eh_json_get(step->data, "result")))
         return 0;
-    return step_sample(step, env, out);
+    if (!step_sample(step, env, out))
+        return 0;
+    return physical_preparation(plan, run, out);
 }
 
 static int same_environment(const struct eh_json *a, const struct eh_json *b)

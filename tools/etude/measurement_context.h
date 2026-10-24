@@ -43,6 +43,17 @@ int etude_context_clock(struct etude_context_clock *clock);
 /* Create once. Never replace a receipt, including one from a failed attempt. */
 int etude_context_receipt_write(const char *path, const struct etude_preparation_receipt *receipt);
 
+/* The physical owner supplies the reading at its actual exclusive lease.
+ * Route and lease are existing files; completion is a new terminal file. */
+struct etude_routine_grant_inputs {
+    const char *run_id, *commit, *route, *lease, *completion_path;
+    const char *owner_pid, *owner_creation;
+    struct etude_context_clock clock;
+    struct etude_reading start;
+};
+int etude_context_routine_grant_write(const char *path,
+                                      const struct etude_routine_grant_inputs *inputs);
+
 /* Descriptors bind snapshots to actual bytes. Source inputs are relative to
  * tree; native tool inputs retain their actual absolute paths. */
 struct etude_context_inputs {
@@ -52,7 +63,9 @@ int etude_context_open(const char *path, const struct etude_context_inputs *inpu
                        struct etude_measurement_context **context, char *error, size_t size);
 /* Return canonical JSON for purpose, source, artifacts, site_profile, tools,
  * cache_state, exemption, outer_observation, physical_observation or
- * preparation (the complete verified receipt, or null), or cache_evidence. The
+ * preparation (the complete verified receipt, or null), cache_evidence,
+ * routine_grant or upstream_preparation (original blob references), or
+ * routine_proofs (the native-readable resolver path or null). The
  * context owns each immutable fragment; live trace headers are pinned. */
 const char *etude_context_text(const struct etude_measurement_context *context, const char *key);
 const char *etude_context_run_id(const struct etude_measurement_context *context);

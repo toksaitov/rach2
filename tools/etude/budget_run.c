@@ -8,9 +8,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const char usage_text[] =
-    "usage: etude estimate [-s SCHEMAS] forecast POLICY CLASS MANIFEST... [-- HISTORY...]\n"
-    "       etude estimate [-s SCHEMAS] check POLICY RUN [MANIFEST...] -- HISTORY...\n";
+static const char usage_text[] = "usage: etude estimate [-s SCHEMAS] [--routine-proofs DIR] "
+                                 "forecast POLICY CLASS MANIFEST... [-- HISTORY...]\n"
+                                 "       etude estimate [-s SCHEMAS] [--routine-proofs DIR] check "
+                                 "POLICY RUN [MANIFEST...] -- HISTORY...\n";
 
 /* What one invocation works with. */
 struct command {
@@ -33,8 +34,11 @@ static int parse(int argc, char **argv, struct command *c)
     int i = 1, end;
 
     c->schemas = "tools/etude/schemas";
-    if (i + 1 < argc && strcmp(argv[i], "-s") == 0) {
-        c->schemas = argv[i + 1];
+    while (i + 1 < argc && argv[i][0] == '-') {
+        if (!strcmp(argv[i], "-s"))
+            c->schemas = argv[i + 1];
+        else if (strcmp(argv[i], "--routine-proofs") || etude_routine_proof_directory(argv[i + 1]))
+            return -1;
         i += 2;
     }
     if (argc - i < 3) {
@@ -175,6 +179,7 @@ int etude_budget_main(int argc, char **argv)
     int status = 2, i;
 
     memset(&c, 0, sizeof(c));
+    etude_routine_proof_directory(NULL);
     if (parse(argc, argv, &c) != 0) {
         fputs(usage_text, stderr);
         return 2;

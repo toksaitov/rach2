@@ -9,6 +9,7 @@
  * on the machine's side, or kills etude-guest. The build's compiler is the
  * host's cc, which tccbuild.sh takes from TCC.
  *
+ * host-deps: tools/etude/routine_charge.c
  * host-deps: tools/etude/posix/run_native.c tools/etude/posix/remote.c
  * host-deps: tools/etude/posix/process.c tools/etude/json.c
  * host-deps: tools/etude/guest/guest.c tools/etude/guest/fixture.c

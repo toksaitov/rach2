@@ -236,8 +236,15 @@ read_history() { # read_history RESULT
         return 0
     fi
     if [ -n "$native" ]; then
-        history=$("$reader" check verdict --project-architecture --require-budget \
-            -b "$common/store" -c "$sha" "$arch" "$kind" "$(cat "$1/suites")" \
+        native_suites=$(cat "$1/suites")
+        if [ -f "$common/routine-completion.path" ]; then
+            set -- --routine-completion "$common/routine.completion.json" \
+                --routine-proofs "$common/routine-proofs"
+        else
+            set --
+        fi
+        history=$("$reader" check verdict "$@" --project-architecture --require-budget \
+            -b "$common/store" -c "$sha" "$arch" "$kind" "$native_suites" \
             "$common/history" 2>&1) || hstatus=$?
     elif [ -d "$1/store" ]; then
         history=$("$reader" show failures -b "$1/store" "$1"/history/* 2>&1) || hstatus=$?

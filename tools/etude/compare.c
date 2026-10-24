@@ -406,7 +406,7 @@ int cmp_load(struct cmp_history *h, const char *schema, char **paths, int count)
     if (index_records(h) || index_kinds(h))
         return -1;
     for (size_t run = 0; run < h->runs; run++)
-        cmp_check_load(h->by_run[run]);
+        cmp_check_load(h->by_run[run], cmp_find(h, cmp_text(h->by_run[run]->data, "plan_id")));
     if (index_samples(h))
         return -1;
     return 0;
@@ -578,6 +578,10 @@ static void check_run(const struct cmp_history *h, struct cmp_sample *s)
     if (!s->run->load_eligible)
         exclude(s, "its run has no verified continuous load observation or controlled measurement "
                    "context");
+    if (s->run->routine_load < 0)
+        exclude(s, "its physical route has no matching terminal ownership proof");
+    else if (s->run->routine_load == 2)
+        exclude(s, "its physical lease interval extends beyond complete load coverage");
 }
 
 /**

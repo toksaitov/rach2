@@ -8,6 +8,7 @@
  * host-inputs: tools/etude/schemas/repeat.schema.json
  * host-inputs: tools/etude/schemas/repeat.example.json
  * host-inputs: tools/etude/schemas/budget.schema.json
+ * host-deps: tools/etude/routine_charge.c
  * host-deps: tools/etude/repeat.c tools/etude/posix/repeat.c
  * host-deps: tools/etude/compare_load.c tools/etude/observe_import.c
  * host-deps: tools/etude/json.c

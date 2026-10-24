@@ -6,6 +6,7 @@
 #endif
 #endif
 #include "measurement_context.h"
+#include "routine_charge.h"
 #include "boot_identity.h"
 #include "history_json.h"
 #include "json.h"
@@ -43,7 +44,7 @@ struct etude_measurement_context {
     struct binding *files;
     size_t count;
     char *run_id;
-    char *text[11];
+    char *text[14];
     struct {
         char *path;
         char hash[65];
@@ -52,10 +53,20 @@ struct etude_measurement_context {
     int eligible, has_preparation;
     struct etude_preparation_receipt preparation;
 };
-static const char *const keys[] = {
-    "purpose",       "source",    "artifacts",         "site_profile",         "tools",
-    "cache_state",   "exemption", "outer_observation", "physical_observation", "preparation",
-    "cache_evidence"};
+static const char *const keys[] = {"purpose",
+                                   "source",
+                                   "artifacts",
+                                   "site_profile",
+                                   "tools",
+                                   "cache_state",
+                                   "exemption",
+                                   "outer_observation",
+                                   "physical_observation",
+                                   "preparation",
+                                   "cache_evidence",
+                                   "routine_grant",
+                                   "upstream_preparation",
+                                   "routine_proofs"};
 
 static int fail(char *error, size_t size, const char *message)
 {
@@ -326,24 +337,28 @@ static int valid_receipt(const struct etude_preparation_receipt *r)
 }
 
 /* Record conditioning only after the preparer has completed its steps. */
+static int put_file_ref(struct jbuf *b, const char *path)
+{
+    char hash[65], text[160];
+    uint64_t size;
+    if (!absolute(path) || hash_file(path, hash, &size))
+        return -1;
+    snprintf(text, sizeof(text), "{\"sha256\":\"%s\",\"size_bytes\":%llu,\"locations\":[", hash,
+             (unsigned long long)size);
+    jbuf_puts(b, text);
+    quote(b, path);
+    jbuf_puts(b, "]}");
+    return 0;
+}
 static int put_conditioning(struct jbuf *b, const struct etude_preparation_receipt *r)
 {
     const char *states[] = {"unknown", "retained", "clean"};
-    char hash[65], text[160];
-    uint64_t size;
     jbuf_puts(b, ",\"conditioning\":{\"inhouse\":");
     quote(b, states[r->conditioning]);
     jbuf_puts(b, *r->import_provenance ? ",\"backend\":\"import\",\"provenance\":"
                                        : ",\"backend\":\"ordinary\",\"provenance\":null");
-    if (*r->import_provenance) {
-        if (!absolute(r->import_provenance) || hash_file(r->import_provenance, hash, &size))
-            return -1;
-        snprintf(text, sizeof(text), "{\"sha256\":\"%s\",\"size_bytes\":%llu,\"locations\":[", hash,
-                 (unsigned long long)size);
-        jbuf_puts(b, text);
-        quote(b, r->import_provenance);
-        jbuf_puts(b, "]}");
-    }
+    if (*r->import_provenance && put_file_ref(b, r->import_provenance))
+        return -1;
     jbuf_puts(b, "}");
     return 0;
 }
@@ -374,6 +389,55 @@ int etude_context_receipt_write(const char *path, const struct etude_preparation
         return -1;
     }
     jbuf_puts(&b, "}\n");
+    return create_document(path, &b);
+}
+
+static int decimal_identity(const char *text)
+{
+    return text && *text && *text != '0' && strlen(text) <= 20 &&
+           strspn(text, "0123456789") == strlen(text);
+}
+int etude_context_routine_grant_write(const char *path, const struct etude_routine_grant_inputs *in)
+{
+    struct jbuf b = {0};
+    struct stat st;
+    struct etude_context_clock clock;
+    struct etude_reading now;
+    if (!absolute(path) || !in || !eh_identity(in->run_id) || !hex(in->commit, 40) ||
+        !decimal_identity(in->owner_pid) || !decimal_identity(in->owner_creation) ||
+        !absolute(in->completion_path) || !eh_utc(in->start.utc) || !in->start.resolution_us ||
+        etude_context_clock(&clock) || etude_history_now(&now) ||
+        strcmp(clock.machine_id, in->clock.machine_id) ||
+        strcmp(clock.boot_id, in->clock.boot_id) || in->start.monotonic_us > now.monotonic_us ||
+        lstat(in->completion_path, &st) == 0 || errno != ENOENT) {
+        errno = EINVAL;
+        return -1;
+    }
+    jbuf_puts(&b, "{\"format\":\"etude-routine-grant\",\"schema_version\":1,\"run_id\":");
+    quote(&b, in->run_id);
+    jbuf_puts(&b, ",\"commit\":");
+    quote(&b, in->commit);
+    jbuf_puts(&b, ",\"route\":");
+    int failed = put_file_ref(&b, in->route);
+    jbuf_puts(&b, ",\"lease\":");
+    failed |= put_file_ref(&b, in->lease);
+    jbuf_puts(&b, ",\"owner\":{\"pid\":");
+    quote(&b, in->owner_pid);
+    jbuf_puts(&b, ",\"creation\":");
+    quote(&b, in->owner_creation);
+    jbuf_puts(&b, "},\"machine_id\":");
+    quote(&b, in->clock.machine_id);
+    jbuf_puts(&b, ",\"boot_id\":");
+    quote(&b, in->clock.boot_id);
+    jbuf_puts(&b, ",\"start\":");
+    put_reading(&b, &in->start);
+    jbuf_puts(&b, ",\"completion_path\":");
+    quote(&b, in->completion_path);
+    jbuf_puts(&b, ",\"phase\":\"physical-capacity-granted\"}\n");
+    if (failed) {
+        jbuf_free(&b);
+        return -1;
+    }
     return create_document(path, &b);
 }
 static int copy_field(const struct json *doc, const char *key, char *out, size_t size)
@@ -727,6 +791,62 @@ static int context_header(struct etude_measurement_context *c, const struct json
     }
     return ok;
 }
+static int routine_bind(struct etude_measurement_context *c, const struct json *v, unsigned depth)
+{
+    if (!v || depth > 16)
+        return depth > 16 ? -1 : 0;
+    const struct json *paths = json_member(v, "locations");
+    if (json_text(v, "sha256") && json_member(v, "size_bytes") && paths) {
+        size_t size = 0;
+        char *bytes = etude_routine_bytes(v, &size), error[160];
+        if (!bytes)
+            return -1;
+        char path[4096];
+        if (etude_routine_location(v, path, sizeof(path))) {
+            free(bytes);
+            return -1;
+        }
+        for (size_t i = 0; i < c->count; i++)
+            if (!strcmp(path, c->files[i].path)) {
+                free(bytes);
+                return bound(c, v, path);
+            }
+        int rc = bound(c, v, path);
+        struct json *doc = NULL;
+        if (!rc && !json_parse(bytes, size, 1, &doc, error, sizeof(error)))
+            rc = routine_bind(c, doc, depth + 1);
+        free(bytes);
+        json_free(doc);
+        return rc;
+    }
+    for (size_t i = 0; i < v->count; i++)
+        if (routine_bind(c, v->item[i], depth + 1))
+            return -1;
+    return 0;
+}
+static int routine_context(struct etude_measurement_context *c, const struct json *root,
+                           const char *commit)
+{
+    const struct json *grant = json_member(root, "routine_grant");
+    const struct json *upstream = json_member(root, "upstream_preparation");
+    const struct json *resolver = json_member(root, "routine_proofs");
+    if (resolver && resolver->type != JSON_NULL && resolver->type != JSON_STRING)
+        return -1;
+    c->text[11] = grant ? canonical(grant) : strdup("null");
+    c->text[12] = upstream ? canonical(upstream) : strdup("null");
+    c->text[13] = resolver ? canonical(resolver) : strdup("null");
+    if ((!grant || grant->type == JSON_NULL) && (!upstream || upstream->type == JSON_NULL))
+        return 0;
+    const char *proofs = json_text(root, "routine_proofs");
+    if (etude_routine_proof_directory(proofs))
+        return -1;
+    int rc = etude_routine_context(grant, upstream, c->run_id, commit) ||
+                     routine_bind(c, grant, 0) || routine_bind(c, upstream, 0)
+                 ? -1
+                 : 0;
+    etude_routine_proof_directory(NULL);
+    return rc;
+}
 int etude_context_open(const char *path, const struct etude_context_inputs *inputs,
                        struct etude_measurement_context **out, char *error, size_t size)
 {
@@ -740,7 +860,8 @@ int etude_context_open(const char *path, const struct etude_context_inputs *inpu
     int ok = c && original_ok && context_header(c, doc, inputs->commit) &&
              !source_tools(c, doc, inputs->tree, inputs->commit, inputs->program) &&
              !site_cache(c, doc, inputs->site) && !artifacts(c, doc, inputs->record) &&
-             !observation(c, doc, 0) && !observation(c, doc, 1);
+             !observation(c, doc, 0) && !observation(c, doc, 1) &&
+             !routine_context(c, doc, inputs->commit);
     if (ok) {
         struct json *check = NULL;
         char e[128];

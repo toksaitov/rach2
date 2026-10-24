@@ -229,6 +229,22 @@ def compose(args):
                    artifacts=record, preparation=prep, cache_evidence=cache_evidence, **snapshots)
     context['outer_observation'] = observation(args.outer_trace, args.outer_stop_request, args.run_id)
     context['physical_observation'] = observation(args.physical_trace, args.physical_stop_request, args.run_id)
+    grant = getattr(args, 'routine_grant', None)
+    upstream = getattr(args, 'upstream_preparation', None)
+    require(not upstream or grant, 'an upstream event needs its physical grant')
+    for name, path in (('routine_grant', grant), ('upstream_preparation', upstream)):
+        if path:
+            doc = data(path)
+            require(doc.get('run_id') == args.run_id and doc.get('commit') == args.commit,
+                    'routine proof differs from this run/source')
+            ref = descriptor(path)
+            context[name] = dict(sha256=ref['sha256'], size_bytes=ref['size_bytes'],
+                                 locations=[ref['path']])
+    proofs = getattr(args, 'routine_proofs', None)
+    if proofs:
+        require(grant is not None and canonical_path(proofs).is_dir(),
+                'routine resolver needs a grant and a prepared directory')
+        context['routine_proofs'] = native_path(canonical_path(proofs))
     context['exemption'] = exemption(args, output)
     result = create(output / 'context.json', context)
     print(json.dumps(dict(context=result, run_id=args.run_id,
@@ -253,7 +269,8 @@ def main():
     make.add_argument('--cache-protocol', type=filesystem_path,
                       help='recorded cache classifications and hash-bound conditioning evidence')
     for flag in ('preparation', 'outer-trace', 'outer-stop-request', 'physical-trace',
-                 'physical-stop-request', 'selection-export'):
+                 'physical-stop-request', 'selection-export', 'routine-grant', 'upstream-preparation',
+                 'routine-proofs'):
         make.add_argument('--' + flag, type=filesystem_path)
     args = parser.parse_args()
     require(COMMIT.fullmatch(args.commit), 'commit must be 40 lowercase hexadecimal digits')

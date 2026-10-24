@@ -9,6 +9,7 @@
  * host-inputs: tools/etude/schemas/case.host.example.json
  * host-inputs: tools/etude/schemas/budget.schema.json
  * host-inputs: tools/etude/schemas/budget.example.json
+ * host-deps: tools/etude/routine_charge.c
  * host-deps: tools/etude/budget.c tools/etude/budget_run.c tools/etude/digest.c
  * host-deps: tools/etude/budget_prepare.c
  * host-deps: tools/etude/compare_load.c tools/etude/observe_import.c
@@ -1431,6 +1432,7 @@ static void test_unjudged(void)
 
 #include "compat/budget_preparation.c"
 #include "compat/budget_conditioning.c"
+#include "compat/budget_routine.c"
 
 int main(void)
 {
@@ -1455,6 +1457,7 @@ int main(void)
     test_schedule();
     test_aggregate_preparation();
     test_conditioned_preparation();
+    test_routine_charge();
     test_implicit_preparation();
     test_forecast();
     test_unknown_cost();

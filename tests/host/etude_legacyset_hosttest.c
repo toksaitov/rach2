@@ -11,6 +11,7 @@
  * the tree's build/tests. --context-only runs the native measurement rows
  * without QEMU or guest artifacts.
  *
+ * host-deps: tools/etude/routine_charge.c
  * host-deps: tests/host/compat/desktop_host.c tests/host/compat/command_host.c
  * host-deps: tools/etude/compare_load.c tools/etude/observe_import.c
  * host-deps: tools/etude/json.c

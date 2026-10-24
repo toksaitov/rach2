@@ -26,7 +26,9 @@ struct cmp_record {
     size_t length, order; /* the line's bytes, and its place in the input */
     struct eh_json *json;
     const struct eh_json *data;
+    int local_load_eligible;   /* local runtime and outer observations only */
     int load_eligible;         /* verified once before attempts are indexed */
+    int routine_load;          /* 0 ordinary, 1 complete, 2 local only, -1 invalid */
     struct cmp_sample *sample; /* an attempt's sample, or NULL */
 };
 
@@ -129,7 +131,10 @@ void cmp_result_free(struct cmp_result *result);
 void cmp_seconds(uint64_t us, char out[32]);
 void cmp_printf(struct cmp_text *text, const char *format, ...);
 void cmp_item_key(const struct eh_json *plan, const struct eh_json *item, struct cmp_key *key);
-void cmp_check_load(struct cmp_record *run);
+struct etude_routine_cost;
+int cmp_routine_cost(const struct cmp_record *plan, const struct cmp_record *run,
+                     struct etude_routine_cost *cost);
+void cmp_check_load(struct cmp_record *run, const struct cmp_record *plan);
 int cmp_read_file(const char *path, size_t limit, char **bytes, size_t *length);
 /* Read a blob hint only after verifying its bounded size and SHA-256. */
 char *cmp_blob_bytes(const struct eh_json *ref, size_t *length);

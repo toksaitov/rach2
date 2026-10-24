@@ -77,6 +77,43 @@ class Retention(unittest.TestCase):
         for member in [*bundle.rglob('*'), bundle]:
             os.utime(member, (old, old))
 
+    def test_transported_routine_proofs(self):
+        from native_evidence import stage, restore
+        source = self.base / 'routine-source'
+        source.mkdir()
+        leaf = self.base / 'proof bytes'
+        leaf.write_bytes(b'actual proof bytes\n')
+        ref = dict(sha256=hashlib.sha256(leaf.read_bytes()).hexdigest(),
+                   size_bytes=leaf.stat().st_size, locations=[str(leaf)])
+        grant = source / 'routine.grant.json'
+        grant.write_text(json.dumps(dict(proof=ref)) + '\n')
+        grant_ref = dict(sha256=hashlib.sha256(grant.read_bytes()).hexdigest(),
+                         size_bytes=grant.stat().st_size, locations=[str(grant)])
+        (source / 'routine.completion.json').write_text(json.dumps(dict(routine_grant=grant_ref)))
+        output = self.base / 'routine-transport'
+        stage(source, output)
+        self.assertEqual((output / 'routine-proofs' / ref['sha256']).read_bytes(), leaf.read_bytes())
+        self.assertFalse((output / 'routine-proof-errors.json').exists())
+        restored = self.base / 'routine-restored'
+        restore(output, restored)
+        self.assertEqual((restored / 'routine.grant.json').read_bytes(), grant.read_bytes())
+        self.assertEqual(json.loads(grant.read_text())['proof']['locations'], [str(leaf)])
+        leaf.write_bytes(b'changed proof bytes\n')
+        bad = self.base / 'routine-changed'
+        stage(source, bad)
+        self.assertTrue((bad / 'routine-proof-errors.json').is_file())
+        self.assertFalse((bad / 'routine-proofs' / ref['sha256']).exists())
+        leaf.unlink()
+        missing = self.base / 'routine-missing'
+        stage(source, missing)
+        self.assertTrue((missing / 'routine-proof-errors.json').is_file())
+        ref['locations'].append(str(self.base / 'second-location'))
+        grant.write_text(json.dumps(dict(proof=ref)) + '\n')
+        ambiguous = self.base / 'routine-ambiguous'
+        stage(source, ambiguous)
+        errors = json.loads((ambiguous / 'routine-proof-errors.json').read_text())
+        self.assertTrue(any('ambiguous' in error for error in errors))
+
     def test_prunes_only_sealed_unchanged_old_registered_bundle(self):
         ordinary = self.bundle()
         self.assertEqual(seal(self.policy, self.root, ordinary)['state'], 'sealed')

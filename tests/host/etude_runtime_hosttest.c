@@ -8,6 +8,7 @@
  * responder, the relay, and a service that keeps the output a case gives it.
  *
  * host-inputs: tools/etude/schemas/history.schema.json
+ * host-deps: tools/etude/routine_charge.c
  * host-deps: tools/etude/repeat.c tools/etude/posix/repeat.c
  * host-deps: tools/etude/compare_load.c tools/etude/observe_import.c
  * host-deps: tools/etude/json.c

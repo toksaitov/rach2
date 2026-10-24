@@ -1,4 +1,5 @@
 /* Check native collection selection, prepared execution and learned bounds.
+ * host-deps: tools/etude/routine_charge.c
  * host-deps: utils/sha256.c tools/etude/posix/process.c tools/etude/json.c
  * host-deps: tools/etude/compare.c tools/etude/baseline.c
  * host-deps: tools/etude/compare_load.c tools/etude/observe_import.c

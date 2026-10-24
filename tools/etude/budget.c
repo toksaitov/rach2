@@ -853,7 +853,9 @@ static int node_sample(const struct cmp_history *h, const struct etude_budget_po
     }
     plan = plan_of(h, r);
     run = run_of(h, r->run);
-    if (plan == NULL || run == NULL || !same(cmp_text(run->data, "plan_id"), plan->id) ||
+    /* A physical aggregate has no measured per-node allocation. */
+    if (plan == NULL || run == NULL || run->routine_load ||
+        !same(cmp_text(run->data, "plan_id"), plan->id) ||
         !listed(eh_json_get(run->data, "preparation_steps"), r->id) ||
         !clean_pass(eh_json_get(run->data, "result")) ||
         !teaches(cls, cmp_text(plan->data, "purpose")) ||
@@ -1090,6 +1092,7 @@ struct run_view {
     const struct cmp_record *run, *plan;
     const struct eh_json *clock; /* the clock of the run's own time */
     int known;                   /* the interval has a measured start and end */
+    int routine;                 /* verified terminal charge replaces local time */
     uint64_t lo, hi;             /* the charged interval on that clock */
     uint64_t work_start;         /* the first start of the run's charged work */
     uint64_t error_us;           /* the error bound of the run's elapsed time */
@@ -1625,6 +1628,18 @@ static int charge(struct run_view *v, struct etude_budget_judgement *j)
         j->charged_us = total > j->one_time_us ? total - j->one_time_us : 0;
         j->charged_known = 1;
     }
+    struct etude_routine_cost routine;
+    int status = etude_budget_routine(v->plan, v->run, &routine);
+    if (status < 0) {
+        j->charged_known = 0;
+        say(&j->report, "unknown", "the whole-PC owner has no matching completed charge proof");
+    } else if (status) {
+        v->routine = 1;
+        j->charged_us = routine.charged_us;
+        j->one_time_us = 0;
+        j->charged_known = 1;
+        v->error_us = routine.error_us;
+    }
     return 0;
 }
 
@@ -1687,7 +1702,7 @@ static int agrees(const struct run_view *v, struct etude_budget_judgement *j)
     char x[32], y[32];
     int ok = same(verdict, "unknown") || same(verdict, verdict_names[j->report.verdict]);
 
-    if (j->charged_known) {
+    if (j->charged_known && !(v->routine && same(verdict, "unknown") && charged < 0)) {
         ok = ok && charged == (int64_t)j->charged_us && once == (int64_t)j->one_time_us;
     }
     if (!ok) {

@@ -1231,7 +1231,14 @@ static int preparation_nodes(struct set *x, struct cmp_text *t)
             }
     }
     const char *preparation = etude_context_text(x->o->context, "preparation");
-    cmp_printf(&d, "],\"preparation\":%s}\n", preparation ? preparation : "null");
+    const char *grant = etude_context_text(x->o->context, "routine_grant");
+    const char *upstream = etude_context_text(x->o->context, "upstream_preparation");
+    const char *proofs = etude_context_text(x->o->context, "routine_proofs");
+    cmp_printf(&d,
+               "],\"preparation\":%s,\"routine_grant\":%s,\"upstream_preparation\":%s,"
+               "\"routine_proofs\":%s}\n",
+               preparation ? preparation : "null", grant ? grant : "null",
+               upstream ? upstream : "null", proofs ? proofs : "null");
     free(nodes);
     cmp_printf(t, ",");
     int rc = keep_doc(x, &d, t);
@@ -2414,8 +2421,12 @@ static int run_budget(struct set *x, struct cmp_text *t, int open)
 {
     const struct etude_reading *from = charged_start(x), *end = &x->end;
     int rc = 0;
+    const char *grant = etude_context_text(x->o->context, "routine_grant");
+    int routine = grant && strcmp(grant, "null");
     cmp_printf(t, ",\"budget\":{\"policy\":%s,\"charged_us\":", x->policy);
-    if (open)
+    if (routine)
+        cmp_printf(t, "{\"value\":null,\"reason\":\"whole-PC owner cleanup is pending\"}");
+    else if (open)
         cmp_printf(t, "{\"value\":null,\"reason\":\"the run has not ended\"}");
     else if (x->o->prepared && !etude_context_preparation(x->o->context))
         cmp_printf(t,
@@ -2427,8 +2438,8 @@ static int run_budget(struct set *x, struct cmp_text *t, int open)
                   "{\"value\":0,\"method\":\"set-driver-v1\",\"quality\":\"exact\","
                   "\"interval_us\":null,\"error_bound\":0},");
     struct etude_measurement charge = etude_history_elapsed(from, end);
-    int known =
-        !open && !charge.reason && (!x->o->prepared || etude_context_preparation(x->o->context));
+    int known = !routine && !open && !charge.reason &&
+                (!x->o->prepared || etude_context_preparation(x->o->context));
     const char *verdict = !strcmp(purpose(x), "\"phase_first_run\"")            ? "exempt"
                           : !known                                              ? "unknown"
                           : charge.value <= x->ceiling_us && !x->budget_expired ? "pass"
