@@ -1,0 +1,13 @@
+--- a/devices.c
++++ b/devices.c
+@@ -898,9 +898,9 @@
+ 			strerror(errno));
+ 		return -1;
+ 	}
++	dev->tot_sectors = ulong_to_sectors(size);
+ 
+ 	if (ioctl(fd, HDIO_GETGEO, &geom) < 0) {
+-		dev->tot_sectors = ulong_to_sectors(size);
+ 		if(errno != ENOTTY)
+ 			fprintf(stderr,
+ 				"Could not get geometry of device (%s)\n",

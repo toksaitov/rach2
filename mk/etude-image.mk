@@ -13,6 +13,7 @@ mtools: $(MTOOLS_STAMP)
 etude-image: $(ETUDE_IMAGE)
 etude-image-force:
 $(MTOOLS_STAMP): vendor/mtools/build_mtools.sh vendor/mtools/offset64.patch \
+    vendor/mtools/block-geometry.patch \
     $(MTOOLS_TARBALL) $(VENDOR_COMMON) \
                  $(LIBC_STAMP) | $(SHA256TOOL) $(ETUDE)
 	@rm -f $@
