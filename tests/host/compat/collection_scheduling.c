@@ -1,7 +1,7 @@
 /* Public collection scheduling over compiled, prepared fixture cases. */
 #include "../../../tools/etude/json.h"
 
-static unsigned scheduling_floor, scheduling_ceiling;
+static unsigned scheduling_initial, scheduling_ceiling;
 
 /* Replace only an existing string in the fixture's parsed case. */
 static void scheduling_string(struct json *object, const char *key, const char *value)
@@ -42,7 +42,7 @@ static void scheduling_manifest(const char *family, const char *const *ids)
         scheduling_string(one, "case_id", ids[i]);
         if (scheduling_ceiling) {
             struct json *r = (struct json *)json_member(one, "resources");
-            ((struct json *)json_member(r, "cpu_millis"))->integer = scheduling_floor;
+            ((struct json *)json_member(r, "cpu_millis"))->integer = scheduling_initial;
             ((struct json *)json_member(r, "cpu_ceiling_millis"))->integer = scheduling_ceiling;
         }
         json_canonical(one, &output);
@@ -156,25 +156,29 @@ static void scheduling_policy(char *out, size_t room)
 static void scheduling_capacity(char *out, size_t room)
 {
     static const char *const ids[] = {"host.host.etude", NULL};
-    scheduling_floor = 1000;
+    scheduling_initial = 1000;
     scheduling_ceiling = 16000;
     scheduling_manifest("host.host", ids);
     fixture_policy(8000);
-    setenv("ETUDE_COLLECTION_CPU", "8000", 1);
+    setenv("ETUDE_COLLECTION_CPU", "1000", 1);
     char *fit[] = {"-A", "tcg", "-j", "4", "-C", "2", "host", NULL};
     CHECK(!run(fit, NULL, NULL, NULL, out, room),
-          "host ceiling clamps to the actual 8000 capacity in its running claim");
+          "the declared 1000 initial claim is used below a 16000 ceiling");
     char *load[] = {"-A", "tcg", "-j", "4", "-C", "2", "-S", "42", "-L", "cpu:1", "host", NULL};
-    CHECK(run(load, NULL, NULL, NULL, out, room) == 2 && !strstr(out, "host.host.etude: starting"),
-          "a real load beyond the clamped host claim refuses before execution");
-    scheduling_floor = 2000;
+    setenv("ETUDE_COLLECTION_CPU", "2000", 1);
+    CHECK(!run(load, NULL, NULL, NULL, out, room),
+          "a fitting CPU load is added to the declared initial reservation");
+    char *over[] = {"-A", "tcg", "-j", "4", "-C", "2", "-S", "42", "-L", "cpu:8", "host", NULL};
+    CHECK(run(over, NULL, NULL, NULL, out, room) == 2 && !strstr(out, "host.host.etude: starting"),
+          "a CPU load beyond the actual site capacity refuses before execution");
+    scheduling_initial = 2000;
     scheduling_manifest("host.host", ids);
     fixture_policy(1000);
     char *small[] = {"-A", "tcg", "-j", "1", "-C", "1", "host", NULL};
     CHECK(run(small, NULL, NULL, NULL, out, room) == 2 && !strstr(out, "host.host.etude: starting"),
-          "capacity below the host manifest floor refuses before execution");
+          "capacity below the host declared initial claim refuses before execution");
     unsetenv("ETUDE_COLLECTION_CPU");
-    scheduling_floor = scheduling_ceiling = 0;
+    scheduling_initial = scheduling_ceiling = 0;
     fixture_policy(4000);
 }
 
@@ -184,8 +188,12 @@ static void scheduling(char *out, size_t room)
                                       "host.host.boots", NULL};
     static const char *const style[] = {"fixture.style.ready", NULL};
     CHECK(unlink(fix_path("tests/cases/fixture.host.json")) == 0, "old host fixture is replaced");
+    scheduling_initial = 1000;
+    scheduling_ceiling = 16000;
     scheduling_manifest("host.host", ids);
+    scheduling_initial = scheduling_ceiling = 0;
     scheduling_manifest("fixture.style", style);
+    fixture_policy(2000);
     put("tests/registry", "host|-|core\nstyle|-|core\n");
     for (int i = 0; i < 2; i++) {
         char path[32];

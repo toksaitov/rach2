@@ -3644,8 +3644,8 @@ static int case_paths(struct set *x, struct member *m)
     return 0;
 }
 
-/* Composite prepared host groups can run several native checks. Reserve
- * their ceiling on the selected machine, retaining the manifest's floor. */
+/* The declaration is the first CPU reservation; a ceiling is not an
+ * estimate of sustained use merely because a child group can run in parallel. */
 static int case_cpu(const struct set *x, const struct member *m, uint64_t *amount)
 {
     const struct legacy_case *k = m->k;
@@ -3656,7 +3656,6 @@ static int case_cpu(const struct set *x, const struct member *m, uint64_t *amoun
             errno = ERANGE;
             return -1;
         }
-        *amount = k->cpu_ceiling_millis < capacity ? k->cpu_ceiling_millis : capacity;
     }
     return 0;
 }
