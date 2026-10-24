@@ -16,18 +16,22 @@
 #include <poll.h>
 #include <fcntl.h>
 #include "posix/posix.h"
-extern char **environ;
 #endif
+extern char **environ;
 
 static volatile sig_atomic_t stopped;
-static void stop(int value) { stopped = value; }
+static void stop(int value)
+{
+    stopped = value;
+}
 
 static int input_lost(void)
 {
 #ifdef _WIN32
     HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
     DWORD available;
-    if (GetFileType(input) != FILE_TYPE_PIPE || !PeekNamedPipe(input, NULL, 0, NULL, &available, NULL))
+    if (GetFileType(input) != FILE_TYPE_PIPE ||
+        !PeekNamedPipe(input, NULL, 0, NULL, &available, NULL))
         return 1;
     return available != 0;
 #else
@@ -40,8 +44,7 @@ static int input_lost(void)
 static int identity(const struct etude_pid *id)
 {
     struct etude_pid now;
-    return etude_process_state(id->pid, &now) == 1 && now.start_known &&
-           now.start == id->start;
+    return etude_process_state(id->pid, &now) == 1 && now.start_known && now.start == id->start;
 }
 
 /* The JSON wrapper is written from the actual executor result only after
@@ -68,13 +71,16 @@ static int receipt(const struct authority_run *run, const struct etude_exec_resu
     jbuf_puts(&b, ",\"end\":");
     routine_reading(&b, &end);
     char values[768];
-    snprintf(values, sizeof values, ",\"owner\":{\"pid\":\"%ld\",\"creation\":\"%llu\"},\"process\":{\"pid\":\"%ld\",\"creation\":\"%llu\"},"
-              "\"keeper\":{\"pid\":\"%ld\",\"creation\":\"%llu\"},"
-              "\"result\":{\"end\":%d,\"value\":%d,\"exit_end\":%d,\"exit_value\":%d,"
-              "\"cleanup\":%d,\"output_error\":%d}}\n", owner.pid, (unsigned long long)owner.start, r->process.pid,
-              (unsigned long long)r->process.start, r->keeper.pid,
-              (unsigned long long)r->keeper.start, r->end, r->value, r->exit_end,
-              r->exit_value, r->cleanup, r->output_error);
+    snprintf(values, sizeof values,
+             ",\"owner\":{\"pid\":\"%ld\",\"creation\":\"%llu\"},\"process\":{\"pid\":\"%ld\","
+             "\"creation\":\"%llu\"},"
+             "\"keeper\":{\"pid\":\"%ld\",\"creation\":\"%llu\"},"
+             "\"result\":{\"end\":%d,\"value\":%d,\"exit_end\":%d,\"exit_value\":%d,"
+             "\"cleanup\":%d,\"output_error\":%d}}\n",
+             owner.pid, (unsigned long long)owner.start, r->process.pid,
+             (unsigned long long)r->process.start, r->keeper.pid,
+             (unsigned long long)r->keeper.start, r->end, r->value, r->exit_end, r->exit_value,
+             r->cleanup, r->output_error);
     jbuf_puts(&b, values);
     int error = routine_create(run->receipt, &b);
     jbuf_free(&b);
@@ -90,6 +96,21 @@ static void output(const struct etude_output *stream, size_t *seen, FILE *file)
         *seen = stream->kept;
     }
 }
+
+#ifndef _WIN32
+static int input_channel(int *writer, int *original)
+{
+    int channel[2];
+    if (pipe(channel))
+        return -1;
+    *writer = channel[1];
+    *original = dup(STDIN_FILENO);
+    int error =
+        *original < 0 || fcntl(*writer, F_SETFD, FD_CLOEXEC) || dup2(channel[0], STDIN_FILENO) < 0;
+    close(channel[0]);
+    return error ? -1 : 0;
+}
+#endif
 
 int authority_run_command(const struct authority_run *run, struct etude_exec_result *result)
 {
@@ -115,21 +136,9 @@ int authority_run_command(const struct authority_run *run, struct etude_exec_res
     int status = 125;
     int writer = -1, original = -1;
 #ifndef _WIN32
-    int channel[2];
     if (run->dedicated_input) {
-        if (pipe(channel))
+        if (input_channel(&writer, &original))
             goto done;
-        writer = channel[1];
-        original = dup(STDIN_FILENO);
-        if (original < 0) {
-            close(channel[0]);
-            goto done;
-        }
-        if (fcntl(writer, F_SETFD, FD_CLOEXEC) || dup2(channel[0], STDIN_FILENO) < 0) {
-            close(channel[0]);
-            goto done;
-        }
-        close(channel[0]);
         spec.stdin_path = "-";
     }
 #endif
@@ -157,6 +166,10 @@ int authority_run_command(const struct authority_run *run, struct etude_exec_res
     }
     *result = *etude_proc_result(child);
     result->out.data = result->err.data = NULL;
+    if (result->out.total != result->out.kept || result->err.total != result->err.kept) {
+        result->output_error = EOVERFLOW;
+        fputs("etude authority: owned output exceeded its retained bound\n", stderr);
+    }
     if (receipt(run, result, &start))
         goto done;
     if (result->cleanup == ETUDE_CLEANUP_CONFIRMED && !result->output_error &&

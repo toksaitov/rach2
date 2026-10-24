@@ -49,7 +49,11 @@ int authority_token(const char *text)
                strlen(text);
 }
 
-struct field { const char *name; char *value; size_t size; };
+struct field {
+    const char *name;
+    char *value;
+    size_t size;
+};
 
 static int fields(char *bytes, const char *header, struct field *fields, size_t count)
 {
@@ -132,13 +136,15 @@ int authority_state_read(const struct authority_binding *b, struct authority_sta
 {
     char *bytes, pid[32], creation[32];
     size_t size;
-    if (authority_protected(b->state, b->operator_id, 1) ||
-        authority_read(b->state, &bytes, &size))
+    if (authority_protected(b->state, b->operator_id, 1) || authority_read(b->state, &bytes, &size))
         return -1;
-    struct field f[] = {{"run", s->run, sizeof s->run}, {"commit", s->commit, sizeof s->commit},
-                        {"phase", s->phase, sizeof s->phase}, {"nonce", s->nonce, sizeof s->nonce},
+    struct field f[] = {{"run", s->run, sizeof s->run},
+                        {"commit", s->commit, sizeof s->commit},
+                        {"phase", s->phase, sizeof s->phase},
+                        {"nonce", s->nonce, sizeof s->nonce},
                         {"snapshot", s->snapshot, sizeof s->snapshot},
-                        {"owner_pid", pid, sizeof pid}, {"owner_creation", creation, sizeof creation}};
+                        {"owner_pid", pid, sizeof pid},
+                        {"owner_creation", creation, sizeof creation}};
     int error = fields(bytes, "etude-authority-state 1", f, sizeof f / sizeof *f);
     uint64_t p = 0;
     free(bytes);
@@ -180,7 +186,7 @@ int authority_state_write(const struct authority_binding *b, const struct author
 
 /* The capacity is read from the installed policy, never a caller projection. */
 int authority_policy(const struct authority_binding *b, const char *path, char **bytes,
-                      size_t *size, uint64_t capacity[3], int *enabled)
+                     size_t *size, uint64_t capacity[3], int *enabled)
 {
     if (authority_protected(path, b->operator_id, 0) || authority_read(path, bytes, size))
         return -1;
@@ -188,9 +194,12 @@ int authority_policy(const struct authority_binding *b, const char *path, char *
     if (strncmp(p, "etude-site 2\n", 13))
         goto bad;
     const char *endpoint = strstr(p, "\nendpoint "), *cap = strstr(p, "\ncapacity ");
-    if (!endpoint || !cap)
+    if (!endpoint || !cap || strstr(endpoint + 1, "\nendpoint ") || strstr(cap + 1, "\ncapacity "))
         goto bad;
     endpoint += 10;
+    if (strncmp(endpoint, "disabled\n", 9) && strncmp(endpoint, "linux\n", 6) &&
+        strncmp(endpoint, "macos\n", 6) && strncmp(endpoint, "windows\n", 8))
+        goto bad;
     *enabled = strncmp(endpoint, "disabled\n", 9) != 0;
     cap += 10;
     for (size_t i = 0; i < 3; i++) {

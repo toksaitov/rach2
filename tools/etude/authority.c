@@ -14,8 +14,8 @@
 static int same_file(const char *one, const char *two)
 {
     struct authority_file_id a, b;
-    return !authority_file_id(one, &a) && !authority_file_id(two, &b) &&
-           a.device == b.device && a.inode == b.inode;
+    return !authority_file_id(one, &a) && !authority_file_id(two, &b) && a.device == b.device &&
+           a.inode == b.inode;
 }
 
 static struct etude_authority *binding_open(int exclusive)
@@ -177,8 +177,8 @@ int etude_authority_freeze(const struct etude_authority_phase *p, struct etude_a
         goto done;
     int n = snprintf(a->state.snapshot, sizeof a->state.snapshot, "%s/%s.policy",
                      a->binding.archive, p->run_id);
-    if (n < 0 || (size_t)n >= sizeof a->state.snapshot ||
-        access(a->state.snapshot, F_OK) == 0 || errno != ENOENT)
+    if (n < 0 || (size_t)n >= sizeof a->state.snapshot || access(a->state.snapshot, F_OK) == 0 ||
+        errno != ENOENT)
         goto done;
     strcpy(a->state.run, p->run_id);
     strcpy(a->state.commit, p->commit);
@@ -246,7 +246,6 @@ int etude_authority_restore(struct etude_authority *a)
     return error || unlink(a->binding.state) ? -1 : 0;
 }
 
-
 int etude_authority_reopen(const struct etude_authority_phase *p, struct etude_authority **out)
 {
     *out = NULL;
@@ -270,18 +269,18 @@ int etude_authority_reopen(const struct etude_authority_phase *p, struct etude_a
     return 0;
 }
 
-
 int etude_authority_physical(const struct etude_authority_phase *p, int release,
-                              struct etude_reading *grant)
+                             struct etude_reading *grant)
 {
     struct etude_authority *a = binding_open(1);
     if (!a)
         return -1;
     int error = !phase_valid(p) || !authority_operator(a->binding.operator_id) || !empty(a);
     char expected[768];
-    int n = snprintf(expected, sizeof expected,
-                     "etude-physical-block 1\nrun %s\ncommit %s\nowner_pid %ld\nowner_creation %llu\n",
-                     p->run_id, p->commit, p->owner.pid, (unsigned long long)p->owner.start);
+    int n =
+        snprintf(expected, sizeof expected,
+                 "etude-physical-block 1\nrun %s\ncommit %s\nowner_pid %ld\nowner_creation %llu\n",
+                 p->run_id, p->commit, p->owner.pid, (unsigned long long)p->owner.start);
     if (n < 0 || (size_t)n >= sizeof expected)
         error = 1;
     if (!error && release) {

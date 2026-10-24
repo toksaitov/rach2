@@ -23,7 +23,7 @@ void routine_reading(struct jbuf *b, const struct etude_reading *r)
     jbuf_puts(b, "{\"utc\":");
     routine_quote(b, r->utc);
     snprintf(numbers, sizeof numbers, ",\"monotonic_us\":%llu,\"resolution_us\":%llu}",
-              (unsigned long long)r->monotonic_us, (unsigned long long)r->resolution_us);
+             (unsigned long long)r->monotonic_us, (unsigned long long)r->resolution_us);
     jbuf_puts(b, numbers);
 }
 
@@ -54,8 +54,8 @@ int routine_ref(struct jbuf *b, const char *path)
     sha256_final(&hash, sum);
     char hex[65], text[180];
     sha256_hex(sum, hex);
-    snprintf(text, sizeof text, "{\"sha256\":\"%s\",\"size_bytes\":%llu,\"locations\":[",
-              hex, (unsigned long long)size);
+    snprintf(text, sizeof text, "{\"sha256\":\"%s\",\"size_bytes\":%llu,\"locations\":[", hex,
+             (unsigned long long)size);
     jbuf_puts(b, text);
     routine_quote(b, path);
     jbuf_puts(b, "]}");

@@ -28,6 +28,6 @@ int authority_read(const char *path, char **bytes, size_t *size);
 int authority_token(const char *text);
 int authority_absolute(const char *text);
 int authority_owner_live(const struct etude_pid *identity);
-int authority_policy(const struct authority_binding *binding, const char *path,
-                      char **bytes, size_t *size, uint64_t capacity[3], int *enabled);
+int authority_policy(const struct authority_binding *binding, const char *path, char **bytes,
+                     size_t *size, uint64_t capacity[3], int *enabled);
 #endif

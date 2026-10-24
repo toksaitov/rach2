@@ -34,9 +34,10 @@ static void authority_config(char binding[4096], char ledger[4096], char marker[
     authority_put(site, "etude-site 2\nendpoint linux\ncapacity 1000,4096,8192\n");
     char bytes[32768];
     n = snprintf(bytes, sizeof bytes,
-        "etude-authority 1\nledger %s\nsite %s\ngate %s\nstate %s\narchive %s\n"
-        "operator %lu\nprogram %s\nlauncher_body %s\nphysical_block %s\nroute %s\n",
-        ledger, site, gate, state, archive, (unsigned long)geteuid(), self, self, marker, route);
+                 "etude-authority 1\nledger %s\nsite %s\ngate %s\nstate %s\narchive %s\n"
+                 "operator %lu\nprogram %s\nlauncher_body %s\nphysical_block %s\nroute %s\n",
+                 ledger, site, gate, state, archive, (unsigned long)geteuid(), self, self, marker,
+                 route);
     CHECK(n > 0 && (size_t)n < sizeof bytes, "authority binding size");
     authority_put(binding, bytes);
     CHECK(setenv("ETUDE_TEST_AUTHORITY", binding, 1) == 0, "authority fixture binding");
@@ -60,7 +61,9 @@ static void test_authority(void)
     char binding[4096], ledger[4096], marker[4096], alias[4096];
     authority_config(binding, ledger, marker);
     struct etude_authority *normal = NULL, *exclusive = NULL;
-    struct etude_authority_phase phase = {.run_id = "fixture-authority", .phase = "producer",
+    struct etude_authority_phase phase = {
+        .run_id = "fixture-authority",
+        .phase = "producer",
         .commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         .nonce = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"};
     CHECK(etude_process_state(getpid(), &phase.owner) == 1, "authority actual owner");

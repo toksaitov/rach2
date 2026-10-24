@@ -4,8 +4,12 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "include/etude/exec.h"
-struct authority_file_id { uint64_t device, inode; };
-struct authority_gate { intptr_t value; };
+struct authority_file_id {
+    uint64_t device, inode;
+};
+struct authority_gate {
+    intptr_t value;
+};
 int authority_file_id(const char *path, struct authority_file_id *identity);
 int authority_protected(const char *path, const char *operator_id, int private_file);
 int authority_operator(const char *operator_id);

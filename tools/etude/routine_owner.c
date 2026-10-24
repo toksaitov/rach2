@@ -28,7 +28,7 @@ static void owner_identity(struct jbuf *b, const struct etude_pid *id)
 {
     char value[128];
     snprintf(value, sizeof value, "{\"pid\":\"%ld\",\"creation\":\"%llu\"}", id->pid,
-              (unsigned long long)id->start);
+             (unsigned long long)id->start);
     jbuf_puts(b, value);
 }
 
@@ -75,7 +75,7 @@ static int settings(struct etude_routine_owner *r)
 }
 
 int routine_owner_open(struct etude_routine_owner *r, const char *route, const char *directory,
-                        const char *run, const char *purpose)
+                       const char *run, const char *purpose)
 {
     memset(r, 0, sizeof *r);
     r->route = route;
@@ -112,9 +112,10 @@ static int write_lease(struct etude_routine_owner *r)
     if (path(r, "lease.inputs.json", inputs) || path(r, "routine.lease.json", output) ||
         routine_json(inputs, &doc))
         return -1;
-    const struct json *authority = json_member(doc, "authority"), *endpoints = json_member(doc, "endpoints");
-    if (!authority || authority->type != JSON_OBJECT || !endpoints || endpoints->type != JSON_ARRAY ||
-        endpoints->count != 2) {
+    const struct json *authority = json_member(doc, "authority"),
+                      *endpoints = json_member(doc, "endpoints");
+    if (!authority || authority->type != JSON_OBJECT || !endpoints ||
+        endpoints->type != JSON_ARRAY || endpoints->count != 2) {
         json_free(doc);
         return -1;
     }
@@ -137,7 +138,9 @@ static int write_lease(struct etude_routine_owner *r)
 
 int routine_owner_grant(struct etude_routine_owner *r)
 {
-    struct etude_authority_phase p = {.run_id = r->run, .commit = r->commit, .owner = r->owner,
+    struct etude_authority_phase p = {.run_id = r->run,
+                                      .commit = r->commit,
+                                      .owner = r->owner,
                                       .nonce = getenv("ETUDE_AUTHORITY_NONCE")};
     struct etude_authority *authority = NULL;
     if (etude_authority_reopen(&p, &authority))
@@ -155,9 +158,15 @@ int routine_owner_grant(struct etude_routine_owner *r)
         return -1;
     snprintf(pid, sizeof pid, "%ld", r->owner.pid);
     snprintf(creation, sizeof creation, "%llu", (unsigned long long)r->owner.start);
-    struct etude_routine_grant_inputs inputs = {.run_id = r->run, .commit = r->commit,
-        .route = r->route, .lease = lease, .completion_path = completion,
-        .owner_pid = pid, .owner_creation = creation, .clock = r->clock, .start = r->start};
+    struct etude_routine_grant_inputs inputs = {.run_id = r->run,
+                                                .commit = r->commit,
+                                                .route = r->route,
+                                                .lease = lease,
+                                                .completion_path = completion,
+                                                .owner_pid = pid,
+                                                .owner_creation = creation,
+                                                .clock = r->clock,
+                                                .start = r->start};
     if (etude_context_routine_grant_write(grant, &inputs) ||
         setenv("ETUDE_ROUTINE_GRANT", grant, 1))
         return -1;
@@ -180,12 +189,23 @@ int routine_owner_expired(const struct etude_routine_owner *r)
 {
     struct etude_reading now;
     return r->granted && (etude_history_now(&now) || now.monotonic_us < r->start.monotonic_us ||
-           now.monotonic_us - r->start.monotonic_us >= r->work_us);
+                          now.monotonic_us - r->start.monotonic_us >= r->work_us);
 }
 
 int routine_owner_prepared(struct etude_routine_owner *r)
 {
     return etude_history_now(&r->preparation_end);
+}
+
+static int prepared_document(const struct etude_routine_owner *r, const struct json *document)
+{
+    const char *run = json_text(document, "run_id"), *commit = json_text(document, "commit");
+    const struct json *result = json_member(document, "result");
+    const char *end = json_text(result, "end"), *cleanup = json_text(result, "cleanup");
+    const struct json *value = json_member(result, "value");
+    return !run || strcmp(run, r->run) || !commit || strcmp(commit, r->commit) || !end ||
+           strcmp(end, "exited") || !cleanup || strcmp(cleanup, "confirmed") || !value ||
+           value->type != JSON_INTEGER || value->integer;
 }
 
 int routine_owner_direct_prepared(struct etude_routine_owner *r)
@@ -208,15 +228,8 @@ int routine_owner_direct_prepared(struct etude_routine_owner *r)
         error = !json_equal(json_member(ref, "sha256"), json_member(actual, "sha256")) ||
                 !json_equal(json_member(ref, "size_bytes"), json_member(actual, "size_bytes")) ||
                 routine_json(phase, &document);
-    if (!error) {
-        const char *run = json_text(document, "run_id"), *commit = json_text(document, "commit");
-        const struct json *result = json_member(document, "result");
-        const char *end = json_text(result, "end"), *cleanup = json_text(result, "cleanup");
-        const struct json *value = json_member(result, "value");
-        error = !run || strcmp(run, r->run) || !commit || strcmp(commit, r->commit) ||
-                !end || strcmp(end, "exited") || !cleanup || strcmp(cleanup, "confirmed") ||
-                !value || value->type != JSON_INTEGER || value->integer;
-    }
+    if (!error)
+        error = prepared_document(r, document);
     if (!error)
         error = etude_history_now(&r->preparation_end);
     if (!error) {
@@ -242,12 +255,12 @@ static int phase_result(struct jbuf *b, const struct etude_exec_result *result)
 {
     char numbers[384];
     snprintf(numbers, sizeof numbers,
-              "{\"end\":\"%s\",\"value\":%d,\"exit_end\":\"%s\",\"exit_value\":%d,"
-              "\"cleanup\":\"%s\",\"output_error\":%d,\"active\":0}",
-              result->end == ETUDE_END_EXITED ? "exited" : "cancelled", result->value,
-              result->exit_end == ETUDE_END_EXITED ? "exited" : "lost", result->exit_value,
-              result->cleanup == ETUDE_CLEANUP_CONFIRMED ? "confirmed" : "unconfirmed",
-              result->output_error);
+             "{\"end\":\"%s\",\"value\":%d,\"exit_end\":\"%s\",\"exit_value\":%d,"
+             "\"cleanup\":\"%s\",\"output_error\":%d,\"active\":0}",
+             result->end == ETUDE_END_EXITED ? "exited" : "cancelled", result->value,
+             result->exit_end == ETUDE_END_EXITED ? "exited" : "lost", result->exit_value,
+             result->cleanup == ETUDE_CLEANUP_CONFIRMED ? "confirmed" : "unconfirmed",
+             result->output_error);
     jbuf_puts(b, numbers);
     return result->cleanup != ETUDE_CLEANUP_CONFIRMED;
 }
@@ -265,9 +278,9 @@ static int physical_reading(const struct etude_routine_owner *r, const char *nam
     const struct json *mono = json_member(reading, "monotonic_us"),
                       *resolution = json_member(reading, "resolution_us");
     int error = !machine || strcmp(machine, r->clock.machine_id) || !boot ||
-        strcmp(boot, r->clock.boot_id) || !utc || strlen(utc) >= sizeof start->utc ||
-        !mono || mono->type != JSON_INTEGER || mono->integer < 0 ||
-        !resolution || resolution->type != JSON_INTEGER || resolution->integer < 1;
+                strcmp(boot, r->clock.boot_id) || !utc || strlen(utc) >= sizeof start->utc ||
+                !mono || mono->type != JSON_INTEGER || mono->integer < 0 || !resolution ||
+                resolution->type != JSON_INTEGER || resolution->integer < 1;
     if (!error) {
         strcpy(start->utc, utc);
         start->monotonic_us = (uint64_t)mono->integer;
@@ -278,13 +291,14 @@ static int physical_reading(const struct etude_routine_owner *r, const char *nam
 }
 
 int routine_owner_phase(struct etude_routine_owner *r, const char *name,
-                         const struct etude_exec_result *result, const struct etude_reading *start)
+                        const struct etude_exec_result *result, const struct etude_reading *start)
 {
     if (strcmp(name, "preparation") && strcmp(name, "collection"))
         return 0;
     struct etude_reading end, actual_start = *start;
-    if (etude_history_now(&end) || (!strcmp(name, "preparation") &&
-        physical_reading(r, "routine-proofs-input/consumer-start.json", &actual_start)))
+    if (etude_history_now(&end) ||
+        (!strcmp(name, "preparation") &&
+         physical_reading(r, "routine-proofs-input/consumer-start.json", &actual_start)))
         return -1;
     start = &actual_start;
     if (!strcmp(name, "collection")) {
@@ -359,7 +373,8 @@ int routine_owner_complete(struct etude_routine_owner *r, int status, int confir
     if (!strcmp(r->mode, "wsl-native")) {
         char file[4096];
         struct json *phase = NULL;
-        if (!r->direct_prepared || path(r, "routine.collection.json", file) || routine_json(file, &phase))
+        if (!r->direct_prepared || path(r, "routine.collection.json", file) ||
+            routine_json(file, &phase))
             return -1;
         const struct json *child = json_member(phase, "child");
         const char *pid = json_text(child, "pid"), *creation = json_text(child, "creation");
@@ -416,8 +431,8 @@ int routine_owner_complete(struct etude_routine_owner *r, int status, int confir
     error |= reference(&b, r, "linux-final.claims");
     jbuf_puts(&b, "},{\"endpoint\":\"windows\",\"claims\":");
     error |= reference(&b, r, "windows-final.claims");
-    jbuf_puts(&b, status ? "}],\"result\":{\"outcome\":\"fail\",\"cleanup\":\"confirmed\"}}\n" :
-                         "}],\"result\":{\"outcome\":\"pass\",\"cleanup\":\"confirmed\"}}\n");
+    jbuf_puts(&b, status ? "}],\"result\":{\"outcome\":\"fail\",\"cleanup\":\"confirmed\"}}\n"
+                         : "}],\"result\":{\"outcome\":\"pass\",\"cleanup\":\"confirmed\"}}\n");
     if (!error)
         error = routine_create(completion, &b);
     jbuf_free(&b);

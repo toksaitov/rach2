@@ -4,8 +4,7 @@
 #include "include/etude/exec.h"
 #include "include/etude/history.h"
 int routine_direct_phase(const char *phase, const struct etude_pid *owner,
-                          const struct etude_exec_result *result,
-                          const struct etude_reading *start);
+                         const struct etude_exec_result *result, const struct etude_reading *start);
 /* 1 acknowledged, 0 pending, -1 invalid or failed. */
 int routine_direct_ack(void);
 #endif

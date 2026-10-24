@@ -52,7 +52,8 @@ static int capability(struct etude_authority_phase *p, const char *run, const ch
     owner = end + 1;
     p->owner.start = strtoull(owner, &end, 10);
     p->owner.start_known = 1;
-    return errno || end == owner || *end || !p->owner.start || !authority_owner_live(&p->owner) ? -1 : 0;
+    return errno || end == owner || *end || !p->owner.start || !authority_owner_live(&p->owner) ? -1
+                                                                                                : 0;
 }
 
 static int command_phase(int argc, char **argv)
@@ -74,13 +75,16 @@ static int command_phase(int argc, char **argv)
     if (setenv("ETUDE_AUTHORITY_RUN", phase.run_id, 1) ||
         setenv("ETUDE_AUTHORITY_PHASE", phase.phase, 1))
         return 125;
-    struct authority_run run = {.run = phase.run_id, .commit = phase.commit,
-                                .phase = phase.phase, .receipt = argv[5],
-                                .argv = argv + 6, .watch_input = getenv("ETUDE_AUTHORITY_INPUT") != NULL};
+    struct authority_run run = {.run = phase.run_id,
+                                .commit = phase.commit,
+                                .phase = phase.phase,
+                                .receipt = argv[5],
+                                .argv = argv + 6,
+                                .watch_input = getenv("ETUDE_AUTHORITY_INPUT") != NULL};
     struct etude_exec_result result = {0};
     int status = authority_run_command(&run, &result);
-    if (result.cleanup != ETUDE_CLEANUP_CONFIRMED ||
-        etude_authority_reopen(&phase, &authority) || etude_authority_block(authority))
+    if (result.cleanup != ETUDE_CLEANUP_CONFIRMED || etude_authority_reopen(&phase, &authority) ||
+        etude_authority_block(authority))
         goto failed;
     etude_authority_close(authority);
     return status;
@@ -198,7 +202,8 @@ static int command_facts(int argc, char **argv)
     jbuf_puts(&b, "{\"binding\":");
     if (!error)
         error = routine_ref(&b, targets[0]);
-    const char *keys[] = {",\"state\":", ",\"policy_before\":", ",\"policy_disabled\":", ",\"ledger_empty\":"};
+    const char *keys[] = {
+        ",\"state\":", ",\"policy_before\":", ",\"policy_disabled\":", ",\"ledger_empty\":"};
     for (size_t i = 1; !error && i < 5; i++) {
         jbuf_puts(&b, keys[i - 1]);
         error = routine_ref(&b, targets[i]);
@@ -210,7 +215,7 @@ static int command_facts(int argc, char **argv)
     routine_quote(&b, a->binding.gate);
     char ids[180];
     snprintf(ids, sizeof ids, ",\"identity\":{\"device\":\"%llu\",\"inode\":\"%llu\"}}}\n",
-              (unsigned long long)gate.device, (unsigned long long)gate.inode);
+             (unsigned long long)gate.device, (unsigned long long)gate.inode);
     jbuf_puts(&b, ids);
     char output[4096];
     n = snprintf(output, sizeof output, "%s/facts.json", argv[4]);
@@ -230,7 +235,8 @@ static int command_helper(int argc, char **argv)
     struct authority_binding binding;
     if (authority_binding_read(&binding) || !authority_operator(binding.operator_id))
         return 125;
-    struct authority_run run = {.phase = "routine-helper", .argv = argv + 2,
+    struct authority_run run = {.phase = "routine-helper",
+                                .argv = argv + 2,
                                 .forward_input = getenv("ETUDE_ROUTINE_INPUT") != NULL};
     struct etude_exec_result result = {0};
     return authority_run_command(&run, &result);
@@ -245,8 +251,8 @@ static int command_proxy(int argc, char **argv)
 #else
     if (argc < 4 || setenv("ETUDE_ROUTINE_INPUT", "pipe", 1))
         return 2;
-    struct authority_run run = {.phase = "physical-owner", .argv = argv + 2,
-                                .dedicated_input = 1, .clear_parent = 1};
+    struct authority_run run = {
+        .phase = "physical-owner", .argv = argv + 2, .dedicated_input = 1, .clear_parent = 1};
     struct etude_exec_result result = {0};
     return authority_run_command(&run, &result);
 #endif
@@ -281,9 +287,9 @@ static int command_route(int argc, char **argv)
     if (!descriptor || argc != 3 || authority_binding_read(&binding) ||
         !authority_operator(binding.operator_id) || authority_file_id(binding.site, &expected) ||
         authority_file_id(argv[2], &requested) || expected.device != requested.device ||
-        expected.inode != requested.inode ||
-        authority_file_id(binding.route, &route) || authority_file_id(descriptor, &configured) ||
-        route.device != configured.device || route.inode != configured.inode)
+        expected.inode != requested.inode || authority_file_id(binding.route, &route) ||
+        authority_file_id(descriptor, &configured) || route.device != configured.device ||
+        route.inode != configured.inode)
         return 125;
     return 0;
 }

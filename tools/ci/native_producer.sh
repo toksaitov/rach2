@@ -11,7 +11,8 @@ case $purpose in push|ci|release) ;; *) exit 2 ;; esac
 ETUDE_PREPARATION_RUN_ID=$run ETUDE_PREPARATION_RECEIPT=$out/preparation.receipt.json
 ETUDE_PREPARATION_COMMIT=$ETUDE_ROUTINE_COMMIT ETUDE_PREPARATION_EXPORT=1
 export ETUDE_PREPARATION_RUN_ID ETUDE_PREPARATION_RECEIPT ETUDE_PREPARATION_COMMIT
-export ETUDE_PREPARATION_EXPORT
+RACH2_QEMU_ACCEL=$accel
+export ETUDE_PREPARATION_EXPORT RACH2_QEMU_ACCEL
 if [ "$purpose" = release ]; then ETUDE_PREPARATION_CLEAN=1; export ETUDE_PREPARATION_CLEAN; fi
 "$etude" prepare collection -t "$tree" -a "$arches" -p "$out/prepare.record" "$@"
 python3 "$tree/tools/etude/preparation_import.py" export --tree "$tree" --commit "$ETUDE_ROUTINE_COMMIT" \

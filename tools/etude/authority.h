@@ -30,9 +30,9 @@ int etude_authority_block(struct etude_authority *authority);
 int etude_authority_restore(struct etude_authority *authority);
 /* Reopen a previously blocked endpoint using its exact protected capability. */
 int etude_authority_reopen(const struct etude_authority_phase *phase,
-                            struct etude_authority **authority);
+                           struct etude_authority **authority);
 int etude_authority_main(int argc, char **argv);
 int etude_authority_physical(const struct etude_authority_phase *phase, int release,
-                              struct etude_reading *grant);
+                             struct etude_reading *grant);
 
 #endif

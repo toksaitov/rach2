@@ -2,6 +2,7 @@
 """Exercise fixed route vectors and retained proof closure without a site."""
 import hashlib
 import json
+import io
 import os
 from pathlib import Path
 import sys
@@ -13,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import routine_entry
 import routine_jobs
 import routine_pack
+import routine_remote
 
 
 def reference(path, location=None):
@@ -74,6 +76,23 @@ class RouteTests(unittest.TestCase):
             grant.write_text(json.dumps(proof))
             with self.assertRaises(ValueError):
                 routine_pack.pack(out)
+
+    def test_failed_handshake_reaps_transport(self):
+        class Child:
+            stdin = io.BytesIO()
+            stdout = io.BytesIO()
+            waited = False
+            def wait(self):
+                self.waited = True
+                return 1
+        with tempfile.TemporaryDirectory(prefix='rach2-routine-') as name:
+            child = Child()
+            with patch('routine_remote.subprocess.Popen', return_value=child):
+                with self.assertRaises(ValueError):
+                    routine_remote.Remote(dict(transport='ssh', host='fixture', etude='/etude',
+                                               state_root='/state'), 'run', Path(name) / 'wire')
+            self.assertTrue(child.waited)
+            self.assertTrue(child.stdin.closed)
 
     def test_counted_vectors(self):
         program = '/immutable/etude'

@@ -23,7 +23,7 @@ static void identity(struct jbuf *b, const struct etude_pid *id)
 {
     char text[160];
     snprintf(text, sizeof text, "{\"pid\":\"%ld\",\"creation\":\"%llu\"}", id->pid,
-              (unsigned long long)id->start);
+             (unsigned long long)id->start);
     jbuf_puts(b, text);
 }
 
@@ -31,17 +31,17 @@ static void result_json(struct jbuf *b, const struct etude_exec_result *r)
 {
     char text[384];
     snprintf(text, sizeof text,
-              "{\"end\":\"%s\",\"value\":%d,\"exit_end\":\"%s\",\"exit_value\":%d,"
-              "\"cleanup\":\"%s\",\"output_error\":%d,\"active\":0}",
-              r->end == ETUDE_END_EXITED ? "exited" : "cancelled", r->value,
-              r->exit_end == ETUDE_END_EXITED ? "exited" : "lost", r->exit_value,
-              r->cleanup == ETUDE_CLEANUP_CONFIRMED ? "confirmed" : "unconfirmed", r->output_error);
+             "{\"end\":\"%s\",\"value\":%d,\"exit_end\":\"%s\",\"exit_value\":%d,"
+             "\"cleanup\":\"%s\",\"output_error\":%d,\"active\":0}",
+             r->end == ETUDE_END_EXITED ? "exited" : "cancelled", r->value,
+             r->exit_end == ETUDE_END_EXITED ? "exited" : "lost", r->exit_value,
+             r->cleanup == ETUDE_CLEANUP_CONFIRMED ? "confirmed" : "unconfirmed", r->output_error);
     jbuf_puts(b, text);
 }
 
 static int phase_document(const char *phase, const struct etude_pid *owner,
-                           const struct etude_exec_result *r, const struct etude_reading *start,
-                           const struct json *grant)
+                          const struct etude_exec_result *r, const struct etude_reading *start,
+                          const struct json *grant)
 {
     char basename[128], raw[4096], output[4096], receipt[4096];
     snprintf(basename, sizeof basename, "routine.%s.result.json", phase);
@@ -113,7 +113,7 @@ static int phase_document(const char *phase, const struct etude_pid *owner,
 }
 
 int routine_direct_phase(const char *phase, const struct etude_pid *owner,
-                          const struct etude_exec_result *r, const struct etude_reading *start)
+                         const struct etude_exec_result *r, const struct etude_reading *start)
 {
     const char *grant_path = getenv("ETUDE_ROUTINE_GRANT");
     if (!getenv("ETUDE_ROUTINE_DIRECT"))
@@ -147,7 +147,8 @@ int routine_direct_ack(void)
     if (!file)
         return errno == ENOENT ? 0 : -1;
     size_t n = fread(text, 1, sizeof text, file);
-    int ok = !ferror(file) && n == strlen(run) + 1 && !memcmp(text, run, n - 1) && text[n - 1] == '\n';
+    int ok =
+        !ferror(file) && n == strlen(run) + 1 && !memcmp(text, run, n - 1) && text[n - 1] == '\n';
     if (fclose(file))
         ok = 0;
     return ok ? 1 : -1;

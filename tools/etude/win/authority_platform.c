@@ -70,9 +70,8 @@ static int safe_acl(PACL acl, PSID operator_id, int private_file)
 {
     if (!acl)
         return 0;
-    DWORD forbidden = FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA |
-                      FILE_WRITE_ATTRIBUTES | DELETE | WRITE_DAC | WRITE_OWNER |
-                      GENERIC_WRITE | GENERIC_ALL;
+    DWORD forbidden = FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES |
+                      DELETE | WRITE_DAC | WRITE_OWNER | GENERIC_WRITE | GENERIC_ALL;
     if (private_file)
         forbidden |= FILE_READ_DATA | GENERIC_READ;
     for (DWORD i = 0; i < acl->AceCount; i++) {
@@ -103,16 +102,17 @@ int authority_protected(const char *path, const char *text, int private_file)
         goto done;
     DWORD attrs = GetFileAttributesW(wide);
     if (attrs == INVALID_FILE_ATTRIBUTES || attrs & FILE_ATTRIBUTE_REPARSE_POINT ||
-        (private_file < 0 ? !(attrs & FILE_ATTRIBUTE_DIRECTORY) :
-         (attrs & FILE_ATTRIBUTE_DIRECTORY)))
+        (private_file < 0 ? !(attrs & FILE_ATTRIBUTE_DIRECTORY)
+                          : (attrs & FILE_ATTRIBUTE_DIRECTORY)))
         goto done;
-    if (GetNamedSecurityInfoW(wide, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION |
-                            DACL_SECURITY_INFORMATION, &owner, NULL, &acl, NULL, &descriptor))
+    if (GetNamedSecurityInfoW(wide, SE_FILE_OBJECT,
+                              OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, &owner, NULL,
+                              &acl, NULL, &descriptor))
         goto done;
     ok = trusted_sid(owner, sid) && safe_acl(acl, sid, private_file > 0);
     if (private_file > 0)
         ok = ok && EqualSid(owner, sid);
- done:
+done:
     LocalFree(descriptor);
     LocalFree(sid);
     free(wide);
@@ -128,14 +128,14 @@ int authority_gate_open(const char *path, int exclusive, struct authority_gate *
     if (!wide)
         return -1;
     HANDLE file = CreateFileW(wide, GENERIC_READ | (exclusive ? GENERIC_WRITE : 0),
-                               FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
-                               FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+                              FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                              FILE_FLAG_OPEN_REPARSE_POINT, NULL);
     free(wide);
     if (file == INVALID_HANDLE_VALUE)
         return etude_win_file_error();
     OVERLAPPED at = {0};
-    if (!LockFileEx(file, LOCKFILE_FAIL_IMMEDIATELY | (exclusive ? LOCKFILE_EXCLUSIVE_LOCK : 0),
-                    0, 1, 0, &at)) {
+    if (!LockFileEx(file, LOCKFILE_FAIL_IMMEDIATELY | (exclusive ? LOCKFILE_EXCLUSIVE_LOCK : 0), 0,
+                    1, 0, &at)) {
         DWORD error = GetLastError();
         CloseHandle(file);
         SetLastError(error);
@@ -168,8 +168,8 @@ static PSECURITY_DESCRIPTOR own_descriptor(int private_file)
         int n = swprintf(sddl, 1024, L"D:P(A;;FA;;;%ls)(A;;FA;;;SY)(A;;FA;;;BA)%ls", sid,
                          private_file ? L"" : L"(A;;GR;;;BU)");
         if (n > 0 && n < 1024)
-            ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1,
-                                                                   &descriptor, NULL);
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &descriptor,
+                                                                 NULL);
     }
     LocalFree(sid);
     free(user);
@@ -184,8 +184,8 @@ static PSECURITY_DESCRIPTOR previous_descriptor(const wchar_t *path, int private
         return GetLastError() == ERROR_FILE_NOT_FOUND ? own_descriptor(private_file) : NULL;
     PSECURITY_DESCRIPTOR descriptor = NULL;
     if (GetNamedSecurityInfoW((wchar_t *)path, SE_FILE_OBJECT,
-                              OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
-                              NULL, NULL, NULL, NULL, &descriptor))
+                              OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, NULL, NULL,
+                              NULL, NULL, &descriptor))
         return NULL;
     return descriptor;
 }
@@ -209,8 +209,8 @@ int authority_publish(const char *path, const void *data, size_t size, int priva
         return -1;
     }
     SECURITY_ATTRIBUTES security = {sizeof security, descriptor, FALSE};
-    HANDLE file = CreateFileW(wide, GENERIC_WRITE, 0, &security, CREATE_NEW,
-                               FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE file =
+        CreateFileW(wide, GENERIC_WRITE, 0, &security, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
     DWORD error = file == INVALID_HANDLE_VALUE ? GetLastError() : 0;
     size_t offset = 0;
     while (!error && offset < size) {

@@ -57,7 +57,8 @@ int authority_protected(const char *path, const char *text, int private_file)
 {
     struct stat st;
     uid_t uid;
-    if (operator_uid(text, &uid) || lstat(path, &st) || (private_file < 0 ? !S_ISDIR(st.st_mode) : !S_ISREG(st.st_mode)) ||
+    if (operator_uid(text, &uid) || lstat(path, &st) ||
+        (private_file < 0 ? !S_ISDIR(st.st_mode) : !S_ISREG(st.st_mode)) ||
         (st.st_uid != 0 && st.st_uid != uid) || (st.st_mode & 022) ||
         (private_file > 0 && (st.st_uid != uid || (st.st_mode & 077)))) {
         errno = EACCES;
@@ -123,6 +124,58 @@ static int copy_access(int original, int target)
 #endif
 }
 
+static int preserve_access(const char *path, int target, const struct stat *previous)
+{
+    if (!S_ISREG(previous->st_mode) || fchown(target, previous->st_uid, previous->st_gid) ||
+        fchmod(target, previous->st_mode & 0777))
+        return -1;
+    int original = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    struct stat actual;
+    int error = original < 0 || fstat(original, &actual) || actual.st_dev != previous->st_dev ||
+                actual.st_ino != previous->st_ino || copy_access(original, target);
+    if (original >= 0)
+        close(original);
+    return error ? -1 : 0;
+}
+
+static int write_all(int fd, const void *data, size_t size)
+{
+    const unsigned char *bytes = data;
+    size_t at = 0;
+    while (at < size) {
+        ssize_t n = write(fd, bytes + at, size - at);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0) {
+            if (!n)
+                errno = EIO;
+            return -1;
+        }
+        at += (size_t)n;
+    }
+    return fsync(fd);
+}
+
+static int flush_parent(const char *path)
+{
+    char parent[4096];
+    memcpy(parent, path, strlen(path) + 1);
+    char *slash = strrchr(parent, '/');
+    if (!slash) {
+        errno = EINVAL;
+        return -1;
+    }
+    *slash = 0;
+    int fd = open(*parent ? parent : "/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (fd < 0)
+        return -1;
+    int error = fsync(fd), saved = errno;
+    if (close(fd) && !error)
+        return -1;
+    errno = saved;
+    return error;
+}
+
 int authority_publish(const char *path, const void *data, size_t size, int private_file)
 {
     char temporary[4096];
@@ -139,33 +192,10 @@ int authority_publish(const char *path, const void *data, size_t size, int priva
                   private_file ? 0600 : 0644);
     if (fd < 0)
         return -1;
-    const unsigned char *bytes = data;
-    size_t at = 0;
     int error = 0;
-    if (existed && (!S_ISREG(previous.st_mode) ||
-        fchown(fd, previous.st_uid, previous.st_gid) ||
-        fchmod(fd, private_file ? 0600 : previous.st_mode & 0777)))
+    if (existed && preserve_access(path, fd, &previous))
         error = errno ? errno : EACCES;
-    if (existed && !error) {
-        int original = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-        struct stat actual;
-        if (original < 0 || fstat(original, &actual) || actual.st_dev != previous.st_dev ||
-            actual.st_ino != previous.st_ino || copy_access(original, fd))
-            error = errno ? errno : ESTALE;
-        if (original >= 0)
-            close(original);
-    }
-    while (!error && at < size) {
-        ssize_t wrote = write(fd, bytes + at, size - at);
-        if (wrote < 0 && errno == EINTR)
-            continue;
-        if (wrote <= 0) {
-            error = wrote < 0 ? errno : EIO;
-            break;
-        }
-        at += (size_t)wrote;
-    }
-    if (!error && fsync(fd))
+    if (!error && write_all(fd, data, size))
         error = errno;
     if (close(fd) && !error)
         error = errno;
@@ -173,24 +203,8 @@ int authority_publish(const char *path, const void *data, size_t size, int priva
         error = errno;
     if (error)
         unlink(temporary);
-    else {
-        char parent[4096];
-        memcpy(parent, path, strlen(path) + 1);
-        char *slash = strrchr(parent, '/');
-        if (!slash)
-            error = EINVAL;
-        else {
-            *slash = 0;
-            fd = open(*parent ? parent : "/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-            if (fd < 0)
-                error = errno;
-            else {
-                if (fsync(fd))
-                    error = errno;
-                close(fd);
-            }
-        }
-    }
+    else if (flush_parent(path))
+        error = errno;
     errno = error;
     return error ? -1 : 0;
 }

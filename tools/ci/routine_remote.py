@@ -38,13 +38,20 @@ class Remote:
         command = [*prefix, producer['etude'], 'serve', '--stdio', '-d', state]
         self.child = subprocess.Popen(['ssh', '-oBatchMode=yes', '--', host, shlex.join(command)],
                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        try:
+            self.handshake()
+        except BaseException:
+            self.abandon()
+            raise
+        self.files = {}
+
+    def handshake(self):
         kind, fields = self.read()
         require(kind == 'alive' and len(fields) == 3 and '1' in fields[0].split(','),
                 'responder did not offer frame version1')
         cmd = self.command('hello', '1', '65536')
         kind, fields = self.answer(cmd)
         require(kind == 'ready' and fields[1:3] == ['1', '65536'], 'responder handshake failed')
-        self.files = {}
 
     def send(self, kind, *fields):
         values = ['#E1', self.session, self.boot, str(self.seq),
@@ -171,6 +178,10 @@ class Remote:
     def abandon(self):
         # The native responder cancels its executor when its control input ends.
         # An uncertain transport never produces a successful phase proof.
-        self.child.stdin.close()
-        self.child.wait()
-        self.transcript.close()
+        try:
+            self.child.stdin.close()
+        except OSError:
+            pass
+        finally:
+            self.child.wait()
+            self.transcript.close()
