@@ -41,12 +41,28 @@ static int fixture_manifest(struct fixture *f, const char *path)
         fclose(fp);
     return ok;
 }
+/* Derive coverage from the verified source tree, not a historical total. */
+static unsigned source_manifests(struct fixture *f)
+{
+    DIR *dir = opendir(family_source(f, "krffs/manifests"));
+    struct dirent *entry;
+    unsigned count = 0;
+    if (!dir)
+        return 0;
+    while ((entry = readdir(dir))) {
+        size_t n = strlen(entry->d_name);
+        if (n >= 9 && !strcmp(entry->d_name + n - 9, ".manifest"))
+            count++;
+    }
+    closedir(dir);
+    return count;
+}
 static int closure(struct fixture *f)
 {
     DIR *dir = opendir(family_path(f, "root/krffs/manifests"));
     struct dirent *e;
     int ok = dir != NULL;
-    unsigned manifests = 0, paths = 0;
+    unsigned manifests = 0, paths = 0, expected = source_manifests(f);
     FILE *mk;
     if (!dir)
         return 0;
@@ -90,7 +106,9 @@ static int closure(struct fixture *f)
         }
     }
     closedir(dir);
-    return ok && manifests >= 24 && paths > manifests;
+    printf("manifest coverage: %u of %u source manifests, %u file paths\n", manifests, expected,
+           paths);
+    return ok && expected && manifests == expected && paths > manifests;
 }
 static int no_builder(struct fixture *f, const char *target)
 {
