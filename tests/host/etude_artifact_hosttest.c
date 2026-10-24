@@ -705,12 +705,12 @@ static void test_digests_objects(void)
     etude_store_close(s);
 }
 
-/** Give in `*bytes` the space on disk of the file at `path`; 0 or -1. */
-static int disk_bytes(const char *path, uint64_t *bytes)
+/** Give the allocation of `path`, requiring its expected length; 0 or -1. */
+static int disk_bytes(const char *path, uint64_t length, uint64_t *bytes)
 {
     struct stat st;
 
-    if (stat(path, &st) != 0 || st.st_size != (off_t)SPARSE_BYTES)
+    if (stat(path, &st) != 0 || st.st_size < 0 || (uint64_t)st.st_size != length)
         return -1;
     *bytes = (uint64_t)st.st_blocks * 512u;
     return 0;
@@ -766,15 +766,16 @@ static void test_sparse(void)
               put_all(fd, data, SPARSE_DATA) == 0 && ftruncate(fd, SPARSE_BYTES) == 0 &&
               close(fd) == 0,
           "sparse");
-    CHECK(disk_bytes(src, &bytes) == 0 && bytes < SPARSE_BYTES / 8,
+    CHECK(disk_bytes(src, SPARSE_BYTES, &bytes) == 0 && bytes < SPARSE_BYTES / 8,
           "sparse: the fixture's file system keeps holes");
     CHECK(etude_store_put(s, src, NULL, d, &size) == 0 && strcmp(d, want) == 0 &&
               size == SPARSE_BYTES,
           "sparse: put: the digest of the whole file");
-    CHECK(etude_store_path(s, want, path, sizeof(path)) == 0 && disk_bytes(path, &bytes) == 0,
+    CHECK(etude_store_path(s, want, path, sizeof(path)) == 0 &&
+              disk_bytes(path, SPARSE_BYTES, &bytes) == 0,
           "sparse: put: whole");
     CHECK(bytes < SPARSE_BYTES / 8, "sparse: put: the object keeps the holes");
-    CHECK(etude_store_copy(s, want, copy) == 0 && disk_bytes(copy, &bytes) == 0,
+    CHECK(etude_store_copy(s, want, copy) == 0 && disk_bytes(copy, SPARSE_BYTES, &bytes) == 0,
           "sparse: copy: whole");
     CHECK(bytes < SPARSE_BYTES / 8, "sparse: copy: the copy keeps the holes");
     CHECK(etude_store_put(s, copy, want, d, NULL) == 0, "sparse: copy: the same content");
@@ -804,11 +805,12 @@ static void range_refused(const char *src, const char *copy, uint64_t offset, ui
         CHECK(close(fd) == 0, "range: close source");
 }
 
-/** Copy a bounded sparse volume past 4 GiB, without its surrounding disk. */
+/** Copy a bounded sparse volume past 4 GiB, without its surrounding disk.
+ * Its trailing gap exceeds APFS's small-gap zero fill, as in test_sparse. */
 static void test_range(void)
 {
     const char *src = fix_path("range-src"), *copy = fix_path("range-copy");
-    uint64_t offset = UINT64_C(4294967296) + 7, length = 8u << 20, bytes;
+    uint64_t offset = UINT64_C(4294967296) + 7, length = 64u << 20, bytes;
     struct stat st;
     char buf[9];
     int fd = open(src, O_WRONLY | O_CREAT | O_EXCL, 0600), ready;
@@ -825,7 +827,7 @@ static void test_range(void)
               (uint64_t)st.st_size == length && read_text(copy, buf, sizeof(buf)) == 8 &&
               !memcmp(buf, "abc\0\0\0\0\0", 8),
           "range: exact offset, bytes and length");
-    CHECK(disk_bytes(copy, &bytes) == 0 && bytes < length / 2,
+    CHECK(disk_bytes(copy, length, &bytes) == 0 && bytes < length / 2,
           "range: the private volume keeps its trailing hole");
     range_refused(src, copy, offset, length);
 }
