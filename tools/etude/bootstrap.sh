@@ -190,7 +190,8 @@ etude_text()
 # A colon distinguishes every source line from a file or completion record.
 etude_pack()
 {
-    LC_ALL=C awk -v root="$1" '
+    ETUDE_TEXT_ROOT="$1" LC_ALL=C awk '
+        BEGIN { root = ENVIRON["ETUDE_TEXT_ROOT"] }
         {
             file = root "/" $0
             print "file " $0
@@ -205,7 +206,8 @@ etude_pack()
 # The caller verifies its source digest before invoking the compiler.
 etude_unpack_text()
 {
-    LC_ALL=C awk -v root="$1" '
+    ETUDE_TEXT_ROOT="$1" LC_ALL=C awk '
+        BEGIN { root = ENVIRON["ETUDE_TEXT_ROOT"] }
         function finish() {
             if (file && close(file) != 0) { bad = 1; exit 1 }
             file = ""
