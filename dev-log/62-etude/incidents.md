@@ -483,3 +483,9 @@ The first complete recovered Linux collection at ed5953bc2 failed seventeen chec
 The first whole recovered Linux run rejected `host.host.boots` on both architectures even though all four compiled tests passed (#1034). The driver reported keeper and child identities, but the manifest declared that no child records were needed. Its check counter also shared the `checks` witness with the scenario library's step counter, which moved that witness backward. The manifest now declares the reported children and gives completed steps and completed checks separate bounded witnesses. The existing child registration and cleanup remain.
 
 The same run exposed missing GNU failure files: the driver printed private paths inside the helper, but the scenario stopped that helper without exporting them. The scenario now exports the failed check directory through its owned channel before cleanup, using sparse tar output. Original failures and their complete outer logs remain in run `phase589-linux-ed5953bc2b56-01`; passing component lines alone did not establish a valid enclosing report.
+
+## Guest executor archive omitted a cleanup header
+
+The ed5953bc2 whole collection reached the TinyCC build of the executor fixture on both architectures, after the runner build, reuse, platform, recipe and history checks passed. Both compilers stopped at fixdir_host.c because tree_host.h was absent from the prepared archive (#1036). The archive explicitly listed the older fixture headers but had not followed the directory cleanup dependency. The complete consoles are retained under retry-13/etudeexec-evidence.json; the issue preserves both compiler diagnostics.
+
+The archive input list now includes tree_host.h. The compile and executor assertions remain unchanged, and the ordinary artifact rule will rebuild the archive before the next combined collection. No running image or source tree was changed.
