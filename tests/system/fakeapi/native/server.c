@@ -138,8 +138,7 @@ static void websocket_tls_error(struct peer *p, int result, int sending)
     int saved_errno = errno;
     int error = SSL_get_error(p->tls, result);
     log_line("%u: WebSocket %s returned %d, SSL_get_error %d, errno %d (%s)", p->n,
-             sending ? "SSL_write" : "SSL_read", result, error, saved_errno,
-             strerror(saved_errno));
+             sending ? "SSL_write" : "SSL_read", result, error, saved_errno, strerror(saved_errno));
     ERR_print_errors_fp(stderr);
 }
 
@@ -990,8 +989,8 @@ static void setup_failure(const char *operation, const char *path)
     ERR_print_errors_fp(stderr);
 }
 
-static service_socket prepare_service(struct server *s, const char *script,
-                                      const char *record_path, const char *certdir, unsigned *port)
+static service_socket prepare_service(struct server *s, const char *script, const char *record_path,
+                                      const char *certdir, unsigned *port)
 {
     const struct value *steps;
     service_socket listener;

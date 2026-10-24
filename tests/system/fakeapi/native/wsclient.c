@@ -33,8 +33,8 @@ static int exact(SSL *ssl, void *data, size_t n, int sending, const char *part)
             fprintf(stderr,
                     "wsclient: %s: %s: %s returned %d, remaining %zu, SSL_get_error %d, "
                     "errno %d (%s)\n",
-                    stage, part, sending ? "SSL_write" : "SSL_read", got, n, error,
-                    saved_errno, strerror(saved_errno));
+                    stage, part, sending ? "SSL_write" : "SSL_read", got, n, error, saved_errno,
+                    strerror(saved_errno));
             ERR_print_errors_fp(stderr);
             return 0;
         }
@@ -68,8 +68,7 @@ static int send_frame(SSL *ssl, unsigned opcode, const void *data, size_t n)
         return failed("cannot allocate the outgoing payload");
     for (i = 0; i < n; i++)
         payload[i] = ((const unsigned char *)data)[i] ^ mask[i % 4];
-    ok = exact(ssl, head, len, 1, "frame header") &&
-         exact(ssl, payload, n, 1, "frame payload");
+    ok = exact(ssl, head, len, 1, "frame header") && exact(ssl, payload, n, 1, "frame payload");
     free(payload);
     return ok;
 }
@@ -188,8 +187,9 @@ static int exchange(SSL *ssl, int argc, char **argv)
         goto done;
     if (opcode != 10 || size != 9 || memcmp(data, "keepalive", 9)) {
         size_t at;
-        fprintf(stderr, "wsclient: %s: expected opcode 10 and keepalive, got opcode %u, %zu bytes\n",
-                stage, opcode, size);
+        fprintf(stderr,
+                "wsclient: %s: expected opcode 10 and keepalive, got opcode %u, %zu bytes\n", stage,
+                opcode, size);
         fprintf(stderr, "wsclient: %s: pong prefix ", stage);
         for (at = 0; at < size && at < 8; at++)
             fprintf(stderr, "%02x", (unsigned)data[at]);

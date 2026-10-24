@@ -54,10 +54,10 @@ static int test_fputs(const char *text, FILE *file)
 }
 #define fputs test_fputs
 #endif
-#define SSL_write test_write
-#define SSL_read  test_read
+#define SSL_write     test_write
+#define SSL_read      test_read
 #define SSL_get_error test_tls_error
-#define main      fakeapi_program
+#define main          fakeapi_program
 #include "server.c"
 #undef main
 #undef SSL_write
@@ -89,14 +89,12 @@ static void check(int held, const char *what)
 }
 static void serial_test(void)
 {
-    static const unsigned char inputs[][8] = {
-        {0, 1, 2, 3, 4, 5, 6, 7},
-        {0, 128, 2, 3, 4, 5, 6, 7},
-        {0, 0, 1, 2, 3, 4, 5, 6},
-        {0, 0, 0, 0, 0, 0, 0, 0},
-        {127, 255, 255, 255, 255, 255, 255, 255},
-        {255, 255, 255, 255, 255, 255, 255, 255}
-    };
+    static const unsigned char inputs[][8] = {{0, 1, 2, 3, 4, 5, 6, 7},
+                                              {0, 128, 2, 3, 4, 5, 6, 7},
+                                              {0, 0, 1, 2, 3, 4, 5, 6},
+                                              {0, 0, 0, 0, 0, 0, 0, 0},
+                                              {127, 255, 255, 255, 255, 255, 255, 255},
+                                              {255, 255, 255, 255, 255, 255, 255, 255}};
     EVP_PKEY *pkey = key();
     size_t i;
 
