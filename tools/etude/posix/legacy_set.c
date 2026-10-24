@@ -3697,18 +3697,14 @@ static int case_paths(struct set *x, struct member *m)
     return 0;
 }
 
-/* The declaration is the first CPU reservation; a ceiling is not an
- * estimate of sustained use merely because a child group can run in parallel. */
+/* Reserve the selected estimate, not the initial declaration as a floor.
+ * A demand above capacity cannot become admissible by reducing its claim. */
 static int case_cpu(const struct set *x, const struct member *m, uint64_t *amount)
 {
-    const struct legacy_case *k = m->k;
     *amount = m->cost.cpu_millis;
-    if (x->o->prepared && !strcmp(m->manifest->family, "host.host")) {
-        uint64_t capacity = x->cap[ETUDE_LEGACY_CPU].amount;
-        if (capacity < k->cpu_millis || k->cpu_ceiling_millis < k->cpu_millis) {
-            errno = ERANGE;
-            return -1;
-        }
+    if (*amount > x->cap[ETUDE_LEGACY_CPU].amount) {
+        errno = ERANGE;
+        return -1;
     }
     return 0;
 }
