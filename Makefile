@@ -451,7 +451,9 @@ build/krffs/mkhash.krffs: build/krffs/mkfs.krffs
 # A staged file waits for its component, then make reads its time again.
 # Each component still runs once, even when several images stage its files.
 # The empty recipes run under -n too, without claiming a file has changed.
-$(filter-out $(ARCH_BUILD)/tests/musl/%,$(filter $(ARCH_BUILD)/tests/%,$(MANIFEST_INPUTS))): tests
+# The boot inventory also needs two probes before a manifest can find them.
+$(sort $(ARCH_BUILD)/tests/hello $(ARCH_BUILD)/tests/rngprobe \
+    $(filter-out $(ARCH_BUILD)/tests/musl/%,$(filter $(ARCH_BUILD)/tests/%,$(MANIFEST_INPUTS)))): tests
 	+@:
 $(filter $(ARCH_BUILD)/tests/musl/%,$(MANIFEST_INPUTS)): musl-programs
 	+@:

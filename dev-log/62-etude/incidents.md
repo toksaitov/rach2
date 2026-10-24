@@ -734,3 +734,9 @@ The repair binds reconciliation to the actual current Linux boot and retains the
 Review also found that a caller-supplied runner name could match a busy runner without a coordinating workflow identifier. The busy exception now requires the actual unique in-progress coordinating job and its nonempty server-provided name. A focused fixture retains that refusal when only the runner name is present.
 
 The one existing route host fixture then passed all eleven tests under the installed Mac build admission. Its complete command, output and exited-zero result are retained in the services worktree at build/tests/listener-reconcile. The admission ledger contained only its header afterward. The fixture used mocked GitHub and boot inputs, with no testing-PC, network or policy activity.
+
+## Clean boot inventory preparation lacked two probe rules (#1070)
+
+The complete host compilation after run 15 passed the corrected audio fixture and all other native fixture groups, but the x86-64 boot inventory stopped before its guest probes existed. Its direct prerequisites named hello and rngprobe. The root rules for component outputs came only from manifest scanning, which omits absent build products; a concurrent image prerequisite eventually built both probes, after Make had already rejected their missing rules. Previously built probes hid the fault.
+
+The root Makefile now always includes both probe paths in the existing tests-component rule for the selected architecture. The component still runs once under parallel Make, and its own dependency tracking decides what to compile. Direct inventory prerequisites must have rules before any incidental image preparation creates their files.
