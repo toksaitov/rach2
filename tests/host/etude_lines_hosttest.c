@@ -19,8 +19,9 @@
  * a pass, a failure, a failure that a retry passed, a stalled case, an
  * attempt that something outside its case disrupted, a run cut short, a case
  * of no suite, a suite of no case, a cancelled run, and run records that
- * disagree with their attempts. The real tools/ci/run.sh then reads the
- * lines, through a tests/run that runs the formatter, and the real suites
+ * disagree with their attempts. The retained lines branch of tools/ci/run.sh
+ * reads them through a tests/run that runs the formatter. Only its entry
+ * selector changes in a private copy. The real suites
  * function of tools/ci/bisect.sh judges them, with a registry whose core
  * tier is the map's suites, as the tested commit's would be: a failure
  * beside a fault of the runner leaves bisection unresolved. Given both
@@ -512,6 +513,8 @@ static void make_tree(void)
     int n = snprintf(search, sizeof(search), "%s/tree/bin:%s", directory, old ? old : "");
     if (!fx_mkdir(path("tree/tests")) || !fx_mkdir(path("tree/bin")) ||
         !fx_copy("tests/registry", path("tree/tests/registry")) ||
+        !fx_replace("tools/ci/run.sh", path("run.sh"), "results=native\n",
+                    "results=lines\n") ||
         !fx_copy(self, path("tree/tests/run")) || symlink(self, path("tree/bin/make")) ||
         symlink(self, path("tree/bin/git")) || !bisect_functions() || n < 0 ||
         n >= (int)sizeof(search) || setenv("PATH", search, 1))
@@ -578,7 +581,7 @@ static void readers(const struct row *w, const char *map, const char *stream)
         log,
         NULL};
     int n, status;
-    n = snprintf(program, sizeof(program), "%s/tools/ci/run.sh", repo);
+    n = snprintf(program, sizeof(program), "%s/run.sh", directory);
     if (n < 0 || n >= (int)sizeof(program) || reader_environment(map, stream))
         exit(1);
     n = snprintf(log, sizeof(log), "%s/ci-%s", directory, w->run.name);
@@ -783,7 +786,7 @@ static void check_maps(void)
         put("bad.map", maps[i], 0644);
         if (format(NULL, NULL, path("bad.map"), path("pass.jsonl"),
                    (struct format_output){out, err, sizeof(out)}) != 2 ||
-            !strstr(err, "etude show lines: ")) {
+            !strstr(err, "etude show: ")) {
             fprintf(stderr, "etude_lines_hosttest: map \"%s\": %s%s", maps[i], out, err);
             CHECK(0, "a map that names an identity twice or no case is refused");
         }
