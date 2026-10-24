@@ -109,13 +109,13 @@
         },
         {
           "name": "products-kernel",
-          "node": "x86_64/rach2/kernel",
-          "per_architecture": false
+          "node": "rach2/kernel",
+          "per_architecture": true
         },
         {
           "name": "products-image",
-          "node": "x86_64/images/gnu-test.disk",
-          "per_architecture": false
+          "node": "images/gnu-test.disk",
+          "per_architecture": true
         },
         {
           "name": "kernel",
@@ -144,7 +144,7 @@
         {
           "step_id": "prepare",
           "stage": "execute",
-          "does": "unpack the immutable source assets on the private disk"
+          "does": "unpack the immutable source assets and verify the selected prepared kernel inputs on the private disk"
         },
         {
           "step_id": "check",
@@ -156,7 +156,6 @@
         {
           "machine_id": "products",
           "qemu": {
-            "architecture": "x86_64",
             "kernel": "products-kernel",
             "initrd": null,
             "disks": [

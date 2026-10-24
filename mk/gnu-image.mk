@@ -23,7 +23,9 @@ GNU_TOOLING ?= $(if $(filter Linux_x86_64,$(shell uname -s)_$(shell uname -m)),,
 OS_REAL_GNU_EXT2 = $(IMAGES_DIR)/os-real-gnu.ext2
 OS_REAL_GNU_AGENTS_EXT2 = $(IMAGES_DIR)/os-real-gnu-agents.ext2
 GNU_TEST_EXT2 = $(IMAGES_DIR)/gnu-test.ext2
-$(GNU_TEST_EXT2): build/tests/host-suite/scripts-assets.tar
+# Stage the exact kernel profiles beside the GNU test products. These file
+# rules share the ordinary component producers; no kernel is rebuilt here.
+$(GNU_TEST_EXT2): build/tests/host-suite/scripts-assets.tar $(KERNEL) $(METAL_KERNEL)
 GNU_IMAGE_STAMPS = $(GNU_PORTS_STAMP) $(GNU_NATIVE_STAMP) $(GNU_GDB_STAMP) \
                    $(GNU_JS_STAMP) $(GNU_CHROMIUM_STAMP)
 GNU_IMAGE_DEPS = $(DEMO_CREDS) krffs/manifests/os-real-gnu.manifest $(MANIFEST_DEPS_os_real_gnu) \

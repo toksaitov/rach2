@@ -154,6 +154,11 @@ if [ "${GNU_TEST_PRODUCTS:-}" = 1 ]; then
     cp -a "$OUT/host-products/." "$TREE/host-products/"
     chmod u+w "$TREE/host-products"
     cp "$REPO/build/tests/host-suite/scripts-assets.tar" "$TREE/host-products/scripts-assets.tar"
+    mkdir -p "$TREE/host-products/diskpolicy/$RACH2_ARCH"
+    cp "$ARCH_BUILD/rach2/kernel" \
+        "$TREE/host-products/diskpolicy/$RACH2_ARCH/readwrite.kernel"
+    cp "$ARCH_BUILD/rach2-metal/kernel" \
+        "$TREE/host-products/diskpolicy/$RACH2_ARCH/readonly.kernel"
     # Install only the isolated helper tools, without changing root/.
     for tool in mkfs.exfat fsck.exfat; do
         test -x "$OUT/fstools/usr/sbin/$tool"

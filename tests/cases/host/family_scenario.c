@@ -1,5 +1,6 @@
 /* family_scenario.c: native ownership of one prepared product-family check. */
 #include "etude/scenario.h"
+#include "etude/artifact.h"
 #include "family_rows.h"
 #include "family_transport.h"
 #include "host_assets.h"
@@ -8,6 +9,7 @@ extern const char *etude_case_architecture(const struct etude_case *c);
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 static int execute(struct etude_case_machine *m, const char *const a[], const char *name)
 {
     struct etude_guest_result r;
@@ -24,15 +26,43 @@ static int prepare(struct etude_case *c, struct etude_case_machine *m)
     return host_assets_match(c, m) && execute(m, mkdir, "family-workspace") &&
            execute(m, untar, "family-assets") && execute(m, modes, "family-source-modes");
 }
+/** Compare the staged guest kernel with the exact declared artifact. */
+static int kernel_input(struct etude_case *c, struct etude_case_machine *m, const char *artifact,
+                        const char *name)
+{
+    const char *arch = etude_case_architecture(c), *input = etude_artifact(c, artifact), *path;
+    char source[200], target[200], output[100], expected[300], actual[300], digest[65];
+    const char *copy[] = {"/bin/cp", source, target, NULL};
+    const char *hash[] = {"/bin/sha256sum", target, NULL};
+    struct stat st;
+    FILE *f;
+    size_t n;
+    int ok;
+
+    if ((strcmp(arch, "i686") && strcmp(arch, "x86_64")) || !input ||
+        etude_digest_file(NULL, input, &st, digest) != 0)
+        return 0;
+    snprintf(source, sizeof(source), "/host-products/diskpolicy/%s/%s", arch, name);
+    snprintf(target, sizeof(target), "/host-work/%s", name);
+    snprintf(output, sizeof(output), "%s-copy", name);
+    if (!execute(m, copy, output))
+        return 0;
+    snprintf(output, sizeof(output), "%s-digest", name);
+    if (!execute(m, hash, output) || !(path = etude_evidence(c, output)) ||
+        !(f = fopen(path, "rb")))
+        return 0;
+    snprintf(expected, sizeof(expected), "%s  %s\n", digest, target);
+    n = fread(actual, 1, sizeof(actual), f);
+    ok = !ferror(f) && n == strlen(expected) && !memcmp(actual, expected, n);
+    if (fclose(f) != 0)
+        ok = 0;
+    return ok;
+}
 static int inputs(struct etude_case *c, struct etude_case_machine *m)
 {
-    const char *rw, *ro;
-    if (strcmp(etude_case_id(c), "machine.diskpolicy.check"))
-        return 1;
-    rw = etude_artifact(c, "kernel");
-    ro = etude_artifact(c, "metal-kernel");
-    return rw && ro && etude_guest_put(m, rw, "/host-work/readwrite.kernel", "0644") == ETUDE_OK &&
-           etude_guest_put(m, ro, "/host-work/readonly.kernel", "0644") == ETUDE_OK;
+    return strcmp(etude_case_id(c), "machine.diskpolicy.check") ||
+           (kernel_input(c, m, "kernel", "readwrite.kernel") &&
+            kernel_input(c, m, "metal-kernel", "readonly.kernel"));
 }
 static int report(struct etude_case *c, const char *id, const char *const ids[], int held[40],
                   size_t n, const char *output)
