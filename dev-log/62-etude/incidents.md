@@ -538,3 +538,7 @@ The first Linux collection found the authorization-code prompt before the captur
 ## API repository ownership (#1040)
 
 The API scenarios created their Git repository as test and inspected it as root. Git rejected this ownership mismatch after otherwise successful exchanges. Once the CLI has ended, the scenario gives its private verification tree to root before checking the unchanged refusal or the exact resulting commit. The ordinary agent rows already did this after unpacking their returned archive. Git's ownership checks remain enabled.
+
+## Muse API dummy credential (#1041)
+
+Muse withheld its dummy bearer because the API scenario supplied a command-line endpoint without an explicit bearer setting. All six requests completed, then the credential audit failed. The scenario now configures the endpoint, bearer authorization and private certificate together in its isolated settings file, as the passing Muse session row does. The request credential and user-agent assertions are unchanged.

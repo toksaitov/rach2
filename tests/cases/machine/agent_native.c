@@ -760,7 +760,10 @@ static int api_setup(struct row *s, int refusal)
             return 0;
     } else if (!api_file(
                    s, "muse-settings.json", "/tmp/agentapi/home/.config/muse/settings.json",
-                   "{\"schema_version\":1,\"telemetry\":{\"enabled\":false},\"runtime_"
+                   "{\"schema_version\":1,\"endpoint_transport\":{"
+                   "\"base_url\":\"https://fakeapi.test/v1\",\"auth\":\"bearer\","
+                   "\"ca_bundle\":\"/tmp/agentapi/ca.pem\"},"
+                   "\"telemetry\":{\"enabled\":false},\"runtime_"
                    "capabilities\":{"
                    "\"plugin:tbh-reminders:reminder:goal-reminder\":{\"enabled\":false},"
                    "\"plugin:tbh-reminders:reminder:memory\":{\"enabled\":false},"
@@ -807,9 +810,7 @@ static int api_start(struct row *s)
             line, sizeof(line),
             "cd /tmp/agents/verify/repo && exec env -i PATH=/usr/bin:/bin HOME=/tmp/agentapi/home "
             "TMPDIR=/tmp/agentapi/tmp LANG=C.UTF-8 TERM=dumb META_API_KEY=meta-fakeapi-dummy "
-            "/opt/muse/bin/muse exec --yolo --model muse-spark-1.2 --max-model-steps 8 "
-            "--base-url https://fakeapi.test/v1 -c "
-            "'endpoint_transport.ca_bundle=\"/tmp/agentapi/ca.pem\"' '%s'",
+            "/opt/muse/bin/muse exec --yolo --model muse-spark-1.2 --max-model-steps 8 '%s'",
             prompt);
     {
         const char *args[] = {"/bin/su", "-s", "/bin/bash", "test", "-c", line, NULL};
