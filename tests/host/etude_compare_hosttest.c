@@ -353,6 +353,7 @@ static void git_details(FILE *file, const struct etude_exec_spec *spec,
     fprintf(file, "cwd=%s\nstdout=%s\nstderr=%s\noutput_max=%lu result_buffer=%lu\n", spec->cwd,
             spec->stdout_path, spec->stderr_path, (unsigned long)spec->output_max,
             (unsigned long)size);
+    fprintf(file, "cleanup_grace_us=%llu\n", (unsigned long long)spec->grace_us);
     fprintf(file, "PATH=%s\nHOME=%s\n", getenv("PATH") ? getenv("PATH") : "",
             getenv("HOME") ? getenv("HOME") : "");
     for (i = 0; spec->argv[i]; i++)
@@ -417,6 +418,7 @@ static void git(char *const argv[], char *out, size_t size)
     extern char **environ;
     spec.envp = environ;
     spec.cwd = directory;
+    spec.grace_us = 2 * SECOND;
     spec.output_max = 4096;
     snprintf(name, sizeof(name), "git-%u.out", ++sequence);
     spec.stdout_path = path(name);
