@@ -3,6 +3,7 @@
 #include "etude/artifact.h"
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 
 int host_assets_match(struct etude_case *c, struct etude_case_machine *m)
 {
