@@ -13,6 +13,9 @@
 #include <windows.h>
 #else
 #include <dirent.h>
+#ifdef __APPLE__
+#include <dlfcn.h>
+#endif
 #include <errno.h>
 #include <sys/stat.h>
 #endif
@@ -47,9 +50,9 @@ static int fix_plain(const char *tmp)
 #endif
 }
 
-/* LeakSanitizer's check, when the test is built with it; the reference is
- * weak, so a test built without it links. */
-#ifndef _WIN32
+/* ELF permits an absent weak checker. Darwin looks it up at runtime so an
+ * unsanitized fixture does not require the symbol at link time. */
+#if !defined(_WIN32) && !defined(__APPLE__)
 extern int __lsan_do_recoverable_leak_check(void) __attribute__((weak));
 #endif
 
@@ -58,7 +61,12 @@ extern int __lsan_do_recoverable_leak_check(void) __attribute__((weak));
 #ifndef _WIN32
 static int fix_leaks(void)
 {
+#ifdef __APPLE__
+    int (*check)(void) = (int (*)(void))dlsym(RTLD_DEFAULT, "__lsan_do_recoverable_leak_check");
+    return check != NULL && check() != 0;
+#else
     return __lsan_do_recoverable_leak_check != NULL && __lsan_do_recoverable_leak_check() != 0;
+#endif
 }
 #endif
 
