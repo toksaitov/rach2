@@ -4,7 +4,7 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import shutil
 import sys
 
@@ -77,14 +77,21 @@ def routine_proofs(source, output):
                     if (not isinstance(sha, str) or len(sha) != 64 or
                             any(c not in '0123456789abcdef' for c in sha) or
                             type(size) is not int or not 0 <= size <= 64 * 1024 * 1024 or
-                            not isinstance(locations, list) or len(locations) != 1):
+                            not isinstance(locations, list) or len(locations) != 1 or
+                            not isinstance(locations[0], str) or
+                            not (Path(locations[0]).is_absolute() or PureWindowsPath(locations[0]).is_absolute())):
                         raise ValueError('invalid or ambiguous routine proof reference')
                     if sha in seen:
                         continue
-                    path = filesystem_path(locations[0])
-                    if (not path.is_absolute() or path.is_symlink() or not path.is_file() or
-                            path.stat().st_size != size or file_hash(path) != sha):
-                        raise ValueError('missing or changed routine proof: ' + str(path))
+                    candidates = [filesystem_path(locations[0])]
+                    retained = source / 'routine-proofs'
+                    if retained.is_dir() and not retained.is_symlink():
+                        candidates.append(retained / sha)
+                    path = next((item for item in candidates if item.is_absolute() and
+                                 not item.is_symlink() and item.is_file() and
+                                 item.stat().st_size == size and file_hash(item) == sha), None)
+                    if path is None:
+                        raise ValueError('missing or changed routine proof: ' + locations[0])
                     target = directory / sha
                     with path.open('rb') as src, target.open('xb') as dst:
                         shutil.copyfileobj(src, dst)

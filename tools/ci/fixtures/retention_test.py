@@ -114,6 +114,38 @@ class Retention(unittest.TestCase):
         errors = json.loads((ambiguous / 'routine-proof-errors.json').read_text())
         self.assertTrue(any('ambiguous' in error for error in errors))
 
+    def test_foreign_routine_locator_uses_exact_retained_proof(self):
+        from native_evidence import stage
+        source = self.base / 'foreign-routine'
+        source.mkdir()
+        proofs = source / 'routine-proofs'
+        proofs.mkdir()
+        payload = b'original Windows authority snapshot\n'
+        sha = hashlib.sha256(payload).hexdigest()
+        proof = proofs / sha
+        proof.write_bytes(payload)
+        ref = dict(sha256=sha, size_bytes=len(payload), locations=['D:/private/authority.snapshot'])
+        grant = source / 'routine.grant.json'
+        grant.write_text(json.dumps(dict(proof=ref)) + '\n')
+        output = self.base / 'foreign-transport'
+        stage(source, output)
+        self.assertFalse((output / 'routine-proof-errors.json').exists())
+        self.assertEqual((output / 'routine-proofs' / sha).read_bytes(), payload)
+        self.assertEqual(json.loads((output / 'routine.grant.json').read_text())['proof'], ref)
+        proof.write_bytes(b'changed')
+        wrong = self.base / 'foreign-wrong'
+        stage(source, wrong)
+        self.assertTrue((wrong / 'routine-proof-errors.json').is_file())
+        self.assertFalse((wrong / 'routine-proofs' / sha).exists())
+        proof.unlink()
+        missing = self.base / 'foreign-missing'
+        stage(source, missing)
+        self.assertTrue((missing / 'routine-proof-errors.json').is_file())
+        proof.symlink_to(grant)
+        symlinked = self.base / 'foreign-symlink'
+        stage(source, symlinked)
+        self.assertTrue((symlinked / 'routine-proof-errors.json').is_file())
+
     def test_prunes_only_sealed_unchanged_old_registered_bundle(self):
         ordinary = self.bundle()
         self.assertEqual(seal(self.policy, self.root, ordinary)['state'], 'sealed')
