@@ -36,8 +36,8 @@
             "fixture": "scratch"
           }
         ],
-        "children": "reaped",
-        "cleanup": "the native executor reaps every child; the case library stops the declared GNU helper and keeps failed evidence"
+        "children": "reported",
+        "cleanup": "the native executor reports and reaps every child; the case library stops the GNU helper and exports failed fixtures"
       },
       "assertions": [
         {
@@ -828,10 +828,16 @@
       },
       "progress": [
         {
-          "witness_id": "checks",
+          "witness_id": "stage",
           "kind": "step",
+          "means": "a declared scenario step has ended",
+          "limit": 4
+        },
+        {
+          "witness_id": "checks",
+          "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": null
+          "limit": 156
         }
       ],
       "bounds": {
@@ -981,8 +987,8 @@
             "fixture": "scratch"
           }
         ],
-        "children": "reaped",
-        "cleanup": "the native executor reaps every child; the case library stops the declared GNU helper and keeps failed evidence"
+        "children": "reported",
+        "cleanup": "the native executor reports and reaps every child; the case library stops the GNU helper and exports failed fixtures"
       },
       "assertions": [
         {
@@ -1148,10 +1154,16 @@
       },
       "progress": [
         {
-          "witness_id": "checks",
+          "witness_id": "stage",
           "kind": "step",
+          "means": "a declared scenario step has ended",
+          "limit": 4
+        },
+        {
+          "witness_id": "checks",
+          "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": null
+          "limit": 31
         }
       ],
       "bounds": {
@@ -1299,8 +1311,8 @@
             "fixture": "scratch"
           }
         ],
-        "children": "reaped",
-        "cleanup": "the native executor reaps every child; the case library stops the declared GNU helper and keeps failed evidence"
+        "children": "reported",
+        "cleanup": "the native executor reports and reaps every child; the case library stops the GNU helper and exports failed fixtures"
       },
       "assertions": [
         {
@@ -1336,10 +1348,16 @@
       },
       "progress": [
         {
-          "witness_id": "checks",
+          "witness_id": "stage",
           "kind": "step",
+          "means": "a declared scenario step has ended",
+          "limit": 4
+        },
+        {
+          "witness_id": "checks",
+          "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": null
+          "limit": 5
         }
       ],
       "bounds": {
@@ -1559,8 +1577,8 @@
             "fixture": "scratch"
           }
         ],
-        "children": "reaped",
-        "cleanup": "the native executor reaps every child; the case library stops the declared GNU helper and keeps failed evidence"
+        "children": "reported",
+        "cleanup": "the native executor reports and reaps every child; the case library stops the GNU helper and exports failed fixtures"
       },
       "assertions": [
         {
@@ -1601,10 +1619,16 @@
       },
       "progress": [
         {
-          "witness_id": "checks",
+          "witness_id": "stage",
           "kind": "step",
+          "means": "a declared scenario step has ended",
+          "limit": 4
+        },
+        {
+          "witness_id": "checks",
+          "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": null
+          "limit": 6
         }
       ],
       "bounds": {
@@ -1749,8 +1773,8 @@
             "fixture": "scratch"
           }
         ],
-        "children": "reaped",
-        "cleanup": "the native executor reaps every child; the case library stops the declared GNU helper and keeps failed evidence"
+        "children": "reported",
+        "cleanup": "the native executor reports and reaps every child; the case library stops the GNU helper and exports failed fixtures"
       },
       "assertions": [
         {
@@ -1811,10 +1835,16 @@
       },
       "progress": [
         {
-          "witness_id": "checks",
+          "witness_id": "stage",
           "kind": "step",
+          "means": "a declared scenario step has ended",
+          "limit": 4
+        },
+        {
+          "witness_id": "checks",
+          "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": null
+          "limit": 10
         }
       ],
       "bounds": {
@@ -2211,10 +2241,16 @@
       },
       "progress": [
         {
-          "witness_id": "checks",
+          "witness_id": "stage",
           "kind": "step",
+          "means": "a declared scenario step has ended",
+          "limit": 48
+        },
+        {
+          "witness_id": "checks",
+          "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": null
+          "limit": 46
         }
       ],
       "bounds": {

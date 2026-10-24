@@ -477,3 +477,9 @@ The clone probe now uses 16-byte-aligned byte arrays of the same 64 KiB size. Th
 ## The history formatter fixture used the native CI entry
 
 The first complete recovered Linux collection at ed5953bc2 failed seventeen checks of `etude_lines_hosttest` (#1032). Its private tree modeled the historical text-output runner, but invoked the current CI script whose default selects native preparation. That entry could not exist in the historical fixture. The fixture now changes only the entry selector in its private copy to exercise the retained text-output branch, as the other CI fixtures do. All pass, failure, retry, interruption and malformed-history expectations remain. The five malformed-map checks now require the current `etude show:` diagnostic prefix as well as refusal status 2. Native CI entry behavior remains covered by the compiled CI fixtures.
+
+## The embedded host driver reported a different child and progress contract
+
+The first whole recovered Linux run rejected `host.host.boots` on both architectures even though all four compiled tests passed (#1034). The driver reported keeper and child identities, but the manifest declared that no child records were needed. Its check counter also shared the `checks` witness with the scenario library's step counter, which moved that witness backward. The manifest now declares the reported children and gives completed steps and completed checks separate bounded witnesses. The existing child registration and cleanup remain.
+
+The same run exposed missing GNU failure files: the driver printed private paths inside the helper, but the scenario stopped that helper without exporting them. The scenario now exports the failed check directory through its owned channel before cleanup, using sparse tar output. Original failures and their complete outer logs remain in run `phase589-linux-ed5953bc2b56-01`; passing component lines alone did not establish a valid enclosing report.

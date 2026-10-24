@@ -30,6 +30,17 @@ static int guest_check(struct etude_case_machine *m, const char *group, const ch
     return guest_run(m, argv, id);
 }
 
+/* Export failed scratch while the helper still owns its private disk. */
+static int guest_evidence(struct etude_case_machine *m, const char *group, const char *arch)
+{
+    char name[100];
+    const char *args[] = {"/bin/tar", "-Scf", "/host-work/host-fixtures.tar", "-C",
+                          "/host-work", name, NULL};
+    int n = snprintf(name, sizeof name, "host-checks.%s.%s/.checks", group, arch);
+    return n > 0 && n < (int)sizeof name && guest_run(m, args, "host-fixture-archive") &&
+           etude_guest_get(m, "/host-work/host-fixtures.tar", "host-fixtures.tar") == ETUDE_OK;
+}
+
 static void (*prior_int)(int), (*prior_term)(int);
 #ifndef _WIN32
 static void (*prior_hup)(int);
@@ -161,6 +172,8 @@ int etude_scenario(struct etude_case *c)
         h.failures += !held;
         etude_progress(c, "checks", ++native_count);
     }
+    if (ready && h.failures && !guest_evidence(products, group, arch))
+        goto done;
     if (ready && !h.failures && !guest_check(products, group, "--cleanup", arch))
         goto done;
     complete = 1;
