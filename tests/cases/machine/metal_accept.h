@@ -7,6 +7,7 @@ struct metal_accept_request {
     int use_su;
     const char *serial;
     const char *fat_image;
+    uint64_t fat_offset, fat_bytes;
 };
 /* Run the machine checks of the native metal_accept.sh route in C. */
 enum etude_status metal_accept_run(struct net_case *u, const struct metal_accept_request *request,

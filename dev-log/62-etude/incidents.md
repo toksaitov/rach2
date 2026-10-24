@@ -633,3 +633,7 @@ The Linux run on 2026-10-24 produced eight valid latency measurements on both ar
 ## The process-link probe repeated its first assertion (#1062)
 
 The Linux run on 2026-10-24 completed all 27 process-link checks on both architectures, but its report repeated `fd-directory` and omitted `cleanup`. The first check reported its name directly without advancing the planned assertion cursor. It now advances the cursor with `report_held`, as each later check does. The filesystem operations and their judgments are unchanged.
+
+## Image checks tried to bind disks still owned by QEMU (#1060)
+
+The Linux run on 2026-10-24 completed the USB write and metal FAT remount checks, but their independent image reads were refused. Both manifests already declared the image helper. Their controllers tried to give that helper a disk still owned by the original QEMU machine. The USB controller now ends and reaps its machine before mtype reads the written file. The metal controller copies the known 48 MiB FAT partition after a successful unmount and checks that private snapshot; the original machine then remounts its partition to remove the witness. Disk ownership checks and every byte comparison remain unchanged.

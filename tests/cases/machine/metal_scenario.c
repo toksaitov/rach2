@@ -362,7 +362,6 @@ static void accept_run(struct metal_case *s, const char *serial, const char *out
                        struct net_run *r)
 {
     struct metal_accept_request request;
-    char image[4200];
     memset(&request, 0, sizeof(request));
     request.login.key = serial != NULL ? s->test_key : s->demo_key;
     request.login.user = serial != NULL ? "test" : "root";
@@ -371,8 +370,9 @@ static void accept_run(struct metal_case *s, const char *serial, const char *out
     request.use_su = serial != NULL;
     request.serial = serial;
     if (serial != NULL) {
-        snprintf(image, sizeof(image), "%s@@1048576", s->stick != NULL ? s->stick : "");
-        request.fat_image = image;
+        request.fat_image = s->stick;
+        request.fat_offset = 1048576;
+        request.fat_bytes = 48UL * 1048576;
     }
     if (metal_accept_run(&s->u, &request, output, r) != ETUDE_OK)
         net_fail(&s->u, "the C acceptance controller did not finish");

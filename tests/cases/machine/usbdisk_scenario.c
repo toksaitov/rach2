@@ -255,12 +255,17 @@ static int written(struct usb_case *u)
     char image[PATH_MAX_LEN], spec[PATH_MAX_LEN + 16], out[PATH_MAX_LEN];
     char *argv[5];
     struct usb_boot b;
+    struct etude_termination end;
     char *text;
 
     boot(u, &b, USB_SHELL);
     probe(u, &b, "probe", "/usbdiskprobe write", "write");
     no_fail(u, &b);
     usb_step(u, "read");
+    usb_qmp(&b, "quit", NULL);
+    if (usb_end_of(&b, &end) == ETUDE_OK &&
+        (end.end != ETUDE_END_EXITED || end.value != 0))
+        usb_fail(u, "the USB machine did not exit cleanly before the host read");
     keep_path(u, image, etude_private_copy(u->c, "stick"), "the stick's copy");
     snprintf(spec, sizeof(spec), "%s@@1048576", image);
     argv[0] = "mtype";

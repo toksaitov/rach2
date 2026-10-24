@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "metal_accept.h"
+#include "fileio.h"
 
 /* Each command has evidence. Every guest mount and temporary directory is
  * recorded for cleanup before the case ends. */
@@ -796,6 +797,21 @@ static int same_file(const char *one, const char *two)
     return ok;
 }
 
+/** Read a private snapshot of the unmounted FAT volume. The machine still
+ * owns its disk and will remount the volume to remove the witness. */
+static int stick_copy(struct acceptance *a, const char *source, const char *actual)
+{
+    char name[180], snapshot[4096];
+    char *copy[] = {"mcopy", "-n", "-i", snapshot, (char *)source, (char *)actual, NULL};
+    snprintf(name, sizeof(name), "%s.stick.snapshot", a->prefix);
+    if (net_path(a->u, name, snapshot, sizeof(snapshot)) == NULL ||
+        !a->request->fat_bytes ||
+        case_copy_range(a->request->fat_image, a->request->fat_offset, a->request->fat_bytes,
+                        snapshot, 0, 1) != 0)
+        return 0;
+    return image_tool(a, copy, "stick.copy");
+}
+
 /** The FAT witness is judged after each successful unmount, and by an
  * independent image tool while the guest volume is unmounted. */
 static int stick_witness(struct acceptance *a, const char *node)
@@ -803,7 +819,6 @@ static int stick_witness(struct acceptance *a, const char *node)
     char expected[4096], actual[4096], name[180], guest[320], mount[320], source[420];
     char command[1200], *text, *base;
     FILE *f;
-    char *copy[] = {"mcopy", "-n", "-i", (char *)a->request->fat_image, source, actual, NULL};
     int ok;
     snprintf(name, sizeof(name), "%s.stick.expected", a->prefix);
     if (net_path(a->u, name, expected, sizeof(expected)) == NULL)
@@ -848,7 +863,7 @@ static int stick_witness(struct acceptance *a, const char *node)
             return 0;
         base = strrchr(a->stick_file, '/');
         snprintf(source, sizeof(source), "::/%s", base != NULL ? base + 1 : a->stick_file);
-        if (!image_tool(a, copy, "stick.copy") || !same_file(expected, actual)) {
+        if (!stick_copy(a, source, actual) || !same_file(expected, actual)) {
             message(a, 1, "stick: host FAT bytes differ");
             return 0;
         }
