@@ -12,7 +12,8 @@ ETUDE_IMAGE_FREE_KIB = 4096
 mtools: $(MTOOLS_STAMP)
 etude-image: $(ETUDE_IMAGE)
 etude-image-force:
-$(MTOOLS_STAMP): vendor/mtools/build_mtools.sh $(MTOOLS_TARBALL) $(VENDOR_COMMON) \
+$(MTOOLS_STAMP): vendor/mtools/build_mtools.sh vendor/mtools/offset64.patch \
+    $(MTOOLS_TARBALL) $(VENDOR_COMMON) \
                  $(LIBC_STAMP) | $(SHA256TOOL) $(ETUDE)
 	@rm -f $@
 	+@$(STEP) -n mtools -t $@ -c $(CROSS_PREFIX)gcc -c cc $(STEP_INPUTS) \

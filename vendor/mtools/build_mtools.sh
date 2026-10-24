@@ -22,6 +22,8 @@ rm -rf "$SRC"
 mkdir -p "$WORK" "$STAGE"
 tar xzf "$TARBALL" -C "$WORK"
 cd "$SRC"
+# musl has 64-bit file offsets on i686, whose long remains 32 bits.
+patch -p1 -F 0 --batch --forward < "$SCRIPT_DIR/offset64.patch"
 ./configure --host="$HOST_TRIPLE" --without-x --disable-floppyd \
     CC="$REPO/vendor/musl/muslgcc" AR="${CROSS}ar" RANLIB="${CROSS}ranlib" \
     CFLAGS=-O2 > configure.log 2>&1 || { tail -20 configure.log >&2; exit 1; }

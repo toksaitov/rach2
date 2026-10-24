@@ -1,0 +1,5 @@
+--- a/misc.c
++++ b/misc.c
+@@ -212 +212 @@
+-	siz = strtol(str, endp, 0);
++	siz = strtoll(str, endp, 0);
