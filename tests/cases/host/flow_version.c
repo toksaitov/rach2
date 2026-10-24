@@ -355,6 +355,9 @@ static int version_setup(struct version *value, struct fixture *f)
     snprintf(target, sizeof(target), "%s/tools/etude", v.tree);
     if (!fx_tree(flow_source(f, "tools/etude"), target))
         return 0;
+    snprintf(target, sizeof(target), "%s/tests/native", v.tree);
+    if (!fx_tree(flow_source(f, "tests/native"), target))
+        return 0;
     snprintf(target, sizeof(target), "%s/utils/sha256.c", v.tree);
     if (!fx_copy(flow_source(f, "utils/sha256.c"), target))
         return 0;
@@ -454,6 +457,31 @@ static int version_publication_identity(struct version *value)
                   "side by side and first version unchanged") &&
          ok;
     return ok;
+}
+static int version_native_sources(struct version *value)
+{
+    struct version v = *value;
+    struct fixture *f = v.f;
+    char source[4096], staged[4096], first[100], *saved;
+    int ok;
+    if (!state(&v) || !run(&v) || !result(&v, "built", NULL))
+        return 0;
+    snprintf(first, sizeof(first), "%s", v.key);
+    snprintf(source, sizeof(source), "%s/tests/native/collection.c", v.tree);
+    snprintf(staged, sizeof(staged), "%s/src/tests/native/collection.c", v.dir);
+    ok = fx_check(f, fx_same(source, staged), "native collection source reaches the builder");
+    saved = fx_read(source);
+    append(source, "/* A native collection change. */\n");
+    run(&v);
+    fx_text(source, saved);
+    free(saved);
+    ok = fx_check(f, result(&v, "built", NULL) && strcmp(first, v.key) && compiles() == 2,
+                  "native collection source changes the version") &&
+         ok;
+    run(&v);
+    return fx_check(f, result(&v, "reused", NULL) && !strcmp(first, v.key) && compiles() == 2,
+                    "restored native source reuses its version") &&
+           ok;
 }
 static int version_account_shells(struct version *value)
 {
@@ -737,7 +765,7 @@ static int version_revision(struct version *value)
         if (fx_run(f, commit, v.tree, NULL, NULL))
             return 0;
     }
-    snprintf(source, sizeof(source), "%s/tools/etude/json.c", v.tree);
+    snprintf(source, sizeof(source), "%s/tests/native/collection.c", v.tree);
     saved = fx_read(source);
     append(source, "/* A change. */\n");
     {
@@ -833,6 +861,7 @@ int flow_version(struct fixture *f)
     if (!version_setup(&v, f))
         return 0;
     ok = version_publication_identity(&v) && ok;
+    ok = version_native_sources(&v) && ok;
     ok = version_account_shells(&v) && ok;
     ok = version_interruption(&v) && ok;
     ok = version_truncation(&v) && ok;

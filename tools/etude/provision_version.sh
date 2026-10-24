@@ -86,10 +86,15 @@ src=$tree
 if [ -n "$rev" ]; then
     src=$work/tree
     mkdir "$src" || exit 1
-    git -C "$tree" archive --format=tar "$rev" -- tools/etude utils/sha256.c utils/sha256.h |
+    set -- tools/etude utils/sha256.c utils/sha256.h
+    if git -C "$tree" cat-file -e "$rev:tests/native" 2>/dev/null; then
+        set -- "$@" tests/native
+    fi
+    git -C "$tree" archive --format=tar "$rev" -- "$@" |
         tar -xf - -C "$src" || fail "cannot read the source of $rev"
 fi
-(cd "$src" && find tools/etude utils/sha256.c utils/sha256.h -type f) |
+(cd "$src" && find tools/etude utils/sha256.c utils/sha256.h -type f
+ if [ -d tests/native ]; then find tests/native -type f; fi) |
     etude_select | LC_ALL=C sort > "$work/files" || exit 1
 [ -s "$work/files" ] || fail "no source in $src"
 etude_list "$src" < "$work/files" > "$work/sources" || exit 1

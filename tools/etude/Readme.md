@@ -141,6 +141,8 @@ The source-check preparation runs `etude check` through [`suitecheck.sh`](../ver
     etude provision version [-r REV] [-c CC] [-C CACHE] -l
     etude provision version [-r REV] [-c CC] [-C CACHE] -s
 
+The source snapshot includes the C, header and Make files of `tests/native/`, which the Rach2 entry links, for both a working tree and a selected revision. Their bytes enter the version identity.
+
 It reaches HOST through ssh(1), a Windows machine with `-w`; `-l` builds on this machine and `-s` prints the script it would send. `-c` gives the compiler's command line and `-C` the cache, each by default the platform's. It prints `etude provision: result: built KEY DIR` or `etude provision: result: reused KEY DIR`, DIR being the version's directory on the machine, whose `bin/` has etude, and exits 0; it exits 1 when the version is neither built nor found.
 
 `etude provision machine` makes a machine ready to run etude: it checks the machine for the prerequisites of [`tools/setup/prereqs`](../setup/prereqs) and installs those the account may, builds etude there with `etude provision version`, prepares the ledger of the machine's claims, and records what the machine can do:

@@ -339,3 +339,7 @@ Review of #1003 against the completed run09 measurements found that its ceiling-
 ## Agent controllers copied private keys twice
 
 The first native agent acceptance cases stopped before their workload boot because the scenario and its acceptance controller each created the same private key with exclusive creation (#1011). The ordinary agent setup repeated the test key in the same way. The scenario now creates both files once and passes their paths to the controllers. Exclusive creation, the case's private permissions and its cleanup remain in force. The existing acceptance, agent and fake API cases check the complete use of those keys in the common repair run.
+
+## Version archives omitted the native collection
+
+The first complete collection reached the TinyCC executor case and both architectures failed because tests/native/collection.c was absent (#1012). The Rach2 source list included the new collection, but neither the case archive nor the version provisioner's working-tree and revision snapshots included its directory. Both snapshots now include those sources. The version fixture checks their delivered bytes, a changed source's new key, reuse after restoration and a selected revision that differs from the working tree. The actual TinyCC build and executor remain required on both architectures.

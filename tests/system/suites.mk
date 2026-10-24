@@ -131,7 +131,7 @@ $(PTYDRIVE): tests/system/runner/ptydrive.c
 # extended attributes.
 ETUDEEXEC_DISK = $(IMAGES_DIR)/etudeexec-test.disk
 ETUDEEXEC_ARCHIVE = $(CASE_DIR)/etudeexec/etude.tar
-ETUDEEXEC_FILES = $(shell find tools/etude -type f) utils/sha256.c utils/sha256.h \
+ETUDEEXEC_FILES = $(shell find tools/etude tests/native -type f) utils/sha256.c utils/sha256.h \
                   tests/host/etude_exec_hosttest.c tests/host/compat/fixdir_host.c \
                   tests/host/compat/fixdir_host.h tests/host/compat/pathmax_host.h \
                   tests/auxvprobe.c tests/cases/machine/etudeexec_guest.sh \

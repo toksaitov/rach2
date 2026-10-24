@@ -58,8 +58,9 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-etude-version-test.XXXXXX") || exit 1
 TREE=$work/tree
 FIX=$work/fix
 export TREE FIX
-mkdir -p "$TREE/tools" "$TREE/utils" "$work/bin" "$work/windows" || exit 1
+mkdir -p "$TREE/tools" "$TREE/utils" "$TREE/tests" "$work/bin" "$work/windows" || exit 1
 cp -R "$repo/tools/etude" "$TREE/tools/" || exit 1
+cp -R "$repo/tests/native" "$TREE/tests/" || exit 1
 cp "$repo/utils/sha256.c" "$repo/utils/sha256.h" "$TREE/utils/" || exit 1
 
 windows_command='C:\msys64\usr\bin\env.exe PATH=/usr/bin:/ucrt64/bin sh -s'

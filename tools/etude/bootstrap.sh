@@ -41,8 +41,8 @@ etude_hash()
 
 # etude_select: copy from standard input to standard output the paths that
 # belong to etude's source: the C sources, headers and make files under
-# tools/etude but its fixtures, the schemas its programs read, and the SHA-256
-# of utils/.
+# tools/etude but its fixtures, the native collection's C, headers and make
+# files, the schemas its programs read, and the SHA-256 of utils/.
 etude_select()
 {
     while read -r path; do
