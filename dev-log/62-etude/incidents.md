@@ -932,3 +932,7 @@ The focused regression passed across freshly loaded preparation modules. It chec
 The bounded native compiler audit before Windows preparation found that prosecheck and setidcheck compiled as plain POSIX programs. Both used lstat and S_ISLNK, which the installed UCRT64 headers do not declare, and setidcheck passed a mode to the one-argument CRT mkdir. Both ordinary strict compiler invocations exited 1. The source checkers now use the existing Windows file adapter, including its reparse-point status and UTF-8 directory operations. Their Make targets bind the adapter sources and headers; POSIX links are unchanged.
 
 The diagnostic Jobs and their independent identity checks ended successfully, and both real admission ledgers were empty. The first pagecache probe in that audit passed an absolute MSYS include path directly to native GCC and stopped before linking. That probe operand was corrected in a fresh Job; its failure is retained as an orchestration error, not a product finding.
+
+## The native pagecache fixture required POSIX dprintf (#1091)
+
+The production-relative native Windows fixture recipe compiled the pagecache model but failed at link time: the installed UCRT64 CRT has no dprintf. The extracted fixture now uses the same native CRT diagnostic pattern as usbstamp, writing failed assertions to descriptor 2 and the final result to stdout. POSIX diagnostics and every pagecache assertion are unchanged. The actual failing link, command, output and confirmed Job cleanup are retained in native-portability-ca6-02.

@@ -27,7 +27,12 @@ void k_panic(const char *s);
 
 #include "mm/pagecache.c"
 
+#ifdef _WIN32
+extern int printf(const char *format, ...);
+extern int _write(int fd, const void *bytes, unsigned size);
+#else
 extern int dprintf(int fd, const char *format, ...);
+#endif
 
 /** The kernel's panic: stop the test with a trap. */
 void k_panic(const char *s)
@@ -38,12 +43,28 @@ void k_panic(const char *s)
 
 static int fails;
 
-#define CHECK(cond)                                                \
-    do {                                                           \
-        if (!(cond)) {                                             \
-            dprintf(2, "pagecache-hosttest: failed: %s\n", #cond); \
-            fails++;                                               \
-        }                                                          \
+/** Write a failure without including host headers over the kernel types. */
+static void failed_check(const char *condition)
+{
+#ifdef _WIN32
+    static const char prefix[] = "pagecache-hosttest: failed: ";
+    unsigned size = 0;
+    while (condition[size])
+        size++;
+    _write(2, prefix, sizeof(prefix) - 1);
+    _write(2, condition, size);
+    _write(2, "\n", 1);
+#else
+    dprintf(2, "pagecache-hosttest: failed: %s\n", condition);
+#endif
+}
+
+#define CHECK(cond)              \
+    do {                         \
+        if (!(cond)) {           \
+            failed_check(#cond); \
+            fails++;             \
+        }                        \
     } while (0)
 
 /* A model disk of 64 pages, with read and write counts for each page, so the
@@ -460,6 +481,10 @@ int main(void)
 #ifdef PAGECACHE_SYNC_HOSTTEST
     test_sync_wait();
 #endif
+#ifdef _WIN32
+    printf("pagecache-hosttest: result: %s: %d failures\n", fails ? "fail" : "pass", fails);
+#else
     dprintf(1, "pagecache-hosttest: result: %s: %d failures\n", fails ? "fail" : "pass", fails);
+#endif
     return fails ? 1 : 0;
 }
