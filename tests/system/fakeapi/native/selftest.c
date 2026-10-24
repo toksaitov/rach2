@@ -5,6 +5,7 @@
 #define _DARWIN_C_SOURCE
 #endif
 #include "api.h"
+#include <openssl/rand.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,6 +59,19 @@ static int test_fputs(const char *text, FILE *file)
 #ifndef _WIN32
 #undef fputs
 #endif
+static const unsigned char *serial_input;
+static int test_serial_random(unsigned char *data, int n)
+{
+    if (!serial_input)
+        return RAND_bytes(data, n);
+    if (n != 8)
+        return 0;
+    memcpy(data, serial_input, 8);
+    return 1;
+}
+#define RAND_bytes test_serial_random
+#include "tls.c"
+#undef RAND_bytes
 static int failures;
 static void check(int held, const char *what)
 {
@@ -65,6 +79,52 @@ static void check(int held, const char *what)
         fprintf(stderr, "fakeapi-test: FAIL: %s\n", what);
         failures++;
     }
+}
+static void serial_test(void)
+{
+    static const unsigned char inputs[][8] = {
+        {0, 1, 2, 3, 4, 5, 6, 7},
+        {0, 128, 2, 3, 4, 5, 6, 7},
+        {0, 0, 1, 2, 3, 4, 5, 6},
+        {0, 0, 0, 0, 0, 0, 0, 0},
+        {127, 255, 255, 255, 255, 255, 255, 255},
+        {255, 255, 255, 255, 255, 255, 255, 255}
+    };
+    EVP_PKEY *pkey = key();
+    size_t i;
+
+    check(pkey != NULL, "certificate serial test key");
+    if (!pkey)
+        return;
+    for (i = 0; i < sizeof(inputs) / sizeof(inputs[0]); i++) {
+        X509 *cert, *decoded = NULL;
+        unsigned char *der = NULL;
+        const unsigned char *p;
+        uint64_t expected = 0, actual = 0;
+        size_t j;
+        int length = 0;
+
+        serial_input = inputs[i];
+        cert = certificate(pkey, NULL, "serial test");
+        if (cert && X509_sign(cert, pkey, EVP_sha256()))
+            length = i2d_X509(cert, &der);
+        p = der;
+        if (length > 0)
+            decoded = d2i_X509(NULL, &p, length);
+        for (j = 0; j < sizeof(inputs[i]); j++)
+            expected = (expected << 8) | (j ? inputs[i][j] : inputs[i][j] & 127);
+        if (!expected)
+            expected = 1;
+        check(decoded && p == der + length &&
+                  ASN1_INTEGER_get_uint64(&actual, X509_get_serialNumber(decoded)) &&
+                  actual == expected,
+              "certificate serial has canonical positive encoding");
+        X509_free(decoded);
+        OPENSSL_free(der);
+        X509_free(cert);
+    }
+    serial_input = NULL;
+    EVP_PKEY_free(pkey);
 }
 static void setup(struct server *s, const char *script)
 {
@@ -622,6 +682,7 @@ static void audit_test(void)
 
 int main(void)
 {
+    serial_test();
 #ifndef _WIN32
     stop_test();
 #endif

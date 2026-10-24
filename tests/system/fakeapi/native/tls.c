@@ -4,6 +4,7 @@
 #include <openssl/x509v3.h>
 #include <openssl/rand.h>
 #include <errno.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #ifndef _WIN32
@@ -37,10 +38,16 @@ static X509 *certificate(EVP_PKEY *subject, X509 *issuer, const char *cn)
     X509 *cert = X509_new();
     X509_NAME *name = NULL;
     unsigned char serial[8];
+    uint64_t number = 0;
+    size_t i;
     if (!cert || RAND_bytes(serial, sizeof(serial)) != 1)
         goto bad;
     serial[0] &= 0x7f;
-    if (!ASN1_STRING_set(X509_get_serialNumber(cert), serial, sizeof(serial)) ||
+    for (i = 0; i < sizeof(serial); i++)
+        number = (number << 8) | serial[i];
+    if (!number)
+        number = 1;
+    if (!ASN1_INTEGER_set_uint64(X509_get_serialNumber(cert), number) ||
         !X509_set_version(cert, 2) || !X509_gmtime_adj(X509_getm_notBefore(cert), -60) ||
         !X509_gmtime_adj(X509_getm_notAfter(cert), 2 * 86400) || !X509_set_pubkey(cert, subject))
         goto bad;
