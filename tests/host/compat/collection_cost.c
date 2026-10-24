@@ -98,8 +98,8 @@ static void cost_attempt_cpu(struct json *data, const struct cost_sample *sample
     struct json *resources = (struct json *)json_member(data, "resources");
     int combined = sample->loaded;
     char value[1200], ref[1800];
-    const char *quality = combined && sample->cpu_mode != COST_CPU_TOTAL_LOWER ? "exact"
-                                                                                            : "lower_bound";
+    const char *quality =
+        combined && sample->cpu_mode != COST_CPU_TOTAL_LOWER ? "exact" : "lower_bound";
     unsigned cpu = seconds * (combined ? 1500000 : 500000);
     if (combined && sample->cpu_mode == COST_CPU_UNDERFLOW)
         cpu = seconds * 500000;
@@ -119,13 +119,15 @@ static void cost_attempt_cpu(struct json *data, const struct cost_sample *sample
              "{\"role\":\"keeper\",\"pid\":1,\"start\":%s},"
              "{\"role\":\"case\",\"pid\":%u,\"start\":%s}]}",
              sample->cpu_mode == COST_CPU_FOREIGN_SCOPE ? "foreign-attempt"
-                                                       : json_text(data, "attempt_id"),
+                                                        : json_text(data, "attempt_id"),
              keeper, pid, process);
-    CHECK(!load_fixture_store(ref, sizeof ref, fix_dir(), value), "combined scope binds its attempt");
+    CHECK(!load_fixture_store(ref, sizeof ref, fix_dir(), value),
+          "combined scope binds its attempt");
     cost_field(resources, "scope", ref);
     if (sample->cpu_mode == COST_CPU_HASH) {
         struct json *scope = (struct json *)json_member(resources, "scope");
-        scheduling_string(scope, "sha256", "0000000000000000000000000000000000000000000000000000000000000000");
+        scheduling_string(scope, "sha256",
+                          "0000000000000000000000000000000000000000000000000000000000000000");
     }
 }
 
@@ -160,8 +162,8 @@ static void cost_applied(struct json *load, const struct cost_sample *sample)
     cost_field(record, "process", value);
 }
 
-static void cost_run_load(struct json *data, const struct cost_sample *sample,
-                          const char *old, const char *id, const char *interval)
+static void cost_run_load(struct json *data, const struct cost_sample *sample, const char *old,
+                          const char *id, const char *interval)
 {
     struct json *source = cost_blob_json(json_member(data, "load"));
     struct json *applied = (struct json *)json_member(source, "applied");
@@ -176,7 +178,8 @@ static void cost_run_load(struct json *data, const struct cost_sample *sample,
             cost_applied(applied->item[i], sample);
         struct json *base = NULL;
         char error[256];
-        CHECK(!json_parse(ref, strlen(ref), 1, &base, error, sizeof error), "load reference parses");
+        CHECK(!json_parse(ref, strlen(ref), 1, &base, error, sizeof error),
+              "load reference parses");
         struct json *summary = cost_blob_json(base);
         struct jbuf bytes = {0}, entries = {0};
         json_canonical(summary, &bytes);
@@ -184,8 +187,8 @@ static void cost_run_load(struct json *data, const struct cost_sample *sample,
         struct cmp_text text = {0};
         if (sample->cpu_mode == COST_CPU_DUPLICATE)
             cmp_printf(&text, "%.*s,\"applied\":[%.*s,%.*s]}", (int)bytes.len - 1, bytes.data,
-                       (int)entries.len - 2, entries.data + 1,
-                       (int)entries.len - 2, entries.data + 1);
+                       (int)entries.len - 2, entries.data + 1, (int)entries.len - 2,
+                       entries.data + 1);
         else
             cmp_printf(&text, "%.*s,\"applied\":%s}", (int)bytes.len - 1, bytes.data, entries.data);
         CHECK(!text.failed && !load_fixture_store(ref, sizeof ref, fix_dir(), text.data),
@@ -267,11 +270,12 @@ static void cost_stream(const char *source, const char *history, const struct co
         CHECK(!fclose(out), "cost history closes");
 }
 
-static void cost_histories(const char *template, const char *history, unsigned mode, unsigned loaded)
+static void cost_histories(const char *template, const char *history, unsigned mode,
+                           unsigned loaded)
 {
-    static const struct cost_sample samples[] = {{"first", 8, 0, 0, 0}, {"middle", 10, 0, 0, 0},
-                                                {"last", 12, 0, 0, 0}, {"failed", 100, 1, 0, 0},
-                                                {"disrupted", 100, 2, 0, 0}, {"foreign", 100, 3, 0, 0}};
+    static const struct cost_sample samples[] = {
+        {"first", 8, 0, 0, 0},    {"middle", 10, 0, 0, 0},     {"last", 12, 0, 0, 0},
+        {"failed", 100, 1, 0, 0}, {"disrupted", 100, 2, 0, 0}, {"foreign", 100, 3, 0, 0}};
     char path[PATH_MAX];
     snprintf(path, sizeof path, "%s/%s/history", tree, template);
     DIR *dir = opendir(path);
@@ -297,15 +301,14 @@ static void cost_histories(const char *template, const char *history, unsigned m
 
 static void cost_capacity(char *out, size_t room)
 {
-    char *learned[] = {"-A", "tcg", "-j", "1", "-H", (char *)fix_path("cost-history"),
+    char *learned[] = {"-A",   "tcg", "-j", "1", "-H", (char *)fix_path("cost-history"),
                        "host", NULL};
     fixture_policy(800);
     setenv("ETUDE_COLLECTION_CPU", "625", 1);
     CHECK(!run(learned, NULL, NULL, NULL, out, room),
           "eligible625 fits site800 despite initial1000");
     CHECK(!mkdir(fix_path("cost-empty"), 0700), "the empty history directory is made");
-    char *initial[] = {"-A", "tcg", "-j", "1", "-H", (char *)fix_path("cost-empty"),
-                       "host", NULL};
+    char *initial[] = {"-A", "tcg", "-j", "1", "-H", (char *)fix_path("cost-empty"), "host", NULL};
     CHECK(run(initial, NULL, NULL, NULL, out, room) == 2 && !strstr(out, ": starting"),
           "unlearned initial1000 cannot fit site800");
     fixture_policy(2000);
@@ -318,8 +321,9 @@ static void cost_unsafe_loads(char *out, size_t room)
         char history[80];
         snprintf(history, sizeof history, "cost-unsafe-%u", mode);
         cost_histories("cost-loaded-template", history, mode, 1);
-        char *loaded[] = {"-A", "tcg", "-j", "1", "-S", "42", "-L", "cpu:1", "-H",
-                          (char *)fix_path(history), "host", NULL};
+        char *loaded[] = {"-A",   "tcg", "-j",    "1",  "-S",
+                          "42",   "-L",  "cpu:1", "-H", (char *)fix_path(history),
+                          "host", NULL};
         CHECK(run(loaded, NULL, NULL, NULL, out, room) == 2 && !strstr(out, ": starting") &&
                   strstr(out, "10000000 us (3 samples), CPU 1000 (0 samples)"),
               "unsafe combined/load accounting preserves elapsed cost and initial CPU");
@@ -329,12 +333,14 @@ static void cost_unsafe_loads(char *out, size_t room)
 /* Match the actual seeded load identity before exercising its reservation. */
 static void cost_loaded(char *out, size_t room)
 {
-    char *template[] = {"-A", "tcg", "-j", "1", "-S", "42", "-L", "cpu:1", "-o",
-                        (char *)fix_path("cost-loaded-template"), "host", NULL};
+    char *template[] = {"-A",   "tcg", "-j",    "1",  "-S",
+                        "42",   "-L",  "cpu:1", "-o", (char *)fix_path("cost-loaded-template"),
+                        "host", NULL};
     CHECK(!run(template, NULL, NULL, NULL, out, room), "the loaded identity template passes");
     cost_histories("cost-loaded-template", "cost-loaded-history", COST_CPU_EXACT, 1);
-    char *loaded[] = {"-A", "tcg", "-j", "1", "-S", "42", "-L", "cpu:1", "-H",
-                      (char *)fix_path("cost-loaded-history"), "host", NULL};
+    char *loaded[] = {"-A",   "tcg", "-j",    "1",  "-S",
+                      "42",   "-L",  "cpu:1", "-H", (char *)fix_path("cost-loaded-history"),
+                      "host", NULL};
     setenv("ETUDE_COLLECTION_CPU", "1625", 1);
     fixture_policy(1800);
     CHECK(!run(loaded, NULL, NULL, NULL, out, room),
@@ -351,8 +357,7 @@ static void cost_loaded(char *out, size_t room)
 /* A cost history must not change the seed allocator's exact order. */
 static void cost_seed(char *out, size_t room)
 {
-    char *allocate[] = {"-N", "-S", "42", "-J", (char *)fix_path("cost-seed.json"),
-                        "host", NULL};
+    char *allocate[] = {"-N", "-S", "42", "-J", (char *)fix_path("cost-seed.json"), "host", NULL};
     CHECK(!run(allocate, NULL, NULL, NULL, out, room), "the measured seed order exports");
     char text[32768], error[256];
     FILE *f = fopen(fix_path("cost-seed.json"), "rb");
@@ -361,8 +366,8 @@ static void cost_seed(char *out, size_t room)
         fclose(f);
     struct json *doc = NULL;
     CHECK(n && !json_parse(text, n, 1, &doc, error, sizeof error), "the seed export parses");
-    char *execute[] = {"-A", "tcg", "-j", "1", "-S", "42", "-H",
-                       (char *)fix_path("cost-history"), "host", NULL};
+    char *execute[] = {"-A",   "tcg", "-j", "1", "-S", "42", "-H", (char *)fix_path("cost-history"),
+                       "host", NULL};
     setenv("ETUDE_COLLECTION_CPU", "1000", 1);
     CHECK(!run(execute, NULL, NULL, NULL, out, room),
           "the distinct seeded profile keeps its initial CPU claim");
@@ -390,11 +395,12 @@ static void scheduling_history(char *out, size_t room)
     scheduling_initial = scheduling_ceiling = 0;
     setenv("ETUDE_COLLECTION_COST_ROOT", tree, 1);
     fixture_policy(2000);
-    char *template[] = {"-A", "tcg", "-j", "1", "-a", "both", "-o",
-                        (char *)fix_path("cost-template"), "host", NULL};
+    char *template[] = {"-A",   "tcg",  "-j", "1",
+                        "-a",   "both", "-o", (char *)fix_path("cost-template"),
+                        "host", NULL};
     CHECK(!run(template, NULL, NULL, NULL, out, room), "the cost identity template passes");
     cost_histories("cost-template", "cost-history", COST_CPU_EXACT, 0);
-    char *measured[] = {"-A", "tcg", "-j", "1", "-H", (char *)fix_path("cost-history"),
+    char *measured[] = {"-A",   "tcg", "-j", "1", "-H", (char *)fix_path("cost-history"),
                         "host", NULL};
     setenv("ETUDE_COLLECTION_CPU", "625", 1);
     CHECK(!run(measured, NULL, NULL, NULL, out, room), "history teaches actual CPU claims");
@@ -405,14 +411,13 @@ static void scheduling_history(char *out, size_t room)
     CHECK(strstr(out, "host.host.tests i686: 10000000 us (3 samples), CPU 625 (3 samples)") &&
               strstr(out, "host.host.checkers i686: 4000000 us (3 samples), CPU 625 (3 samples)"),
           "failed, disrupted and incompatible samples do not teach costs");
-    char *both[] = {"-A", "tcg", "-j", "1", "-a", "both", "-H",
-                    (char *)fix_path("cost-history"), "host", NULL};
+    char *both[] = {"-A",   "tcg", "-j", "1", "-a", "both", "-H", (char *)fix_path("cost-history"),
+                    "host", NULL};
     CHECK(!run(both, NULL, NULL, NULL, out, room), "both architectures use learned claims");
     const char *cursor = out;
-    const char *order[] = {"host.host.tests on i686: starting",
-                           "host.host.tests on x86_64: starting",
-                           "host.host.checkers on i686: starting",
-                           "host.host.checkers on x86_64: starting"};
+    const char *order[] = {
+        "host.host.tests on i686: starting", "host.host.tests on x86_64: starting",
+        "host.host.checkers on i686: starting", "host.host.checkers on x86_64: starting"};
     for (size_t i = 0; i < 4; i++) {
         const char *next = cursor ? strstr(cursor, order[i]) : NULL;
         CHECK(next != NULL, "both architectures share measured order with stable ties");

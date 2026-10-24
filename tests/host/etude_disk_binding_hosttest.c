@@ -120,19 +120,19 @@ static void image_work_paths(void)
     const char *copy[] = {"mcopy", "-n", "-i", "disk", "::/large", "/host/result", NULL};
 
     memset(&v, 0, sizeof v);
-    check_binding(image_request(dump, 2, 1, &v) == ETUDE_OK &&
-                      v.destination && !strcmp(v.destination, "/host/result") &&
-                      v.args[2] && !strcmp(v.args[2], "dump \"/large\" \"/dev/shm/image-file\""),
+    check_binding(image_request(dump, 2, 1, &v) == ETUDE_OK && v.destination &&
+                      !strcmp(v.destination, "/host/result") && v.args[2] &&
+                      !strcmp(v.args[2], "dump \"/large\" \"/dev/shm/image-file\""),
                   "debugfs dump must use tmpfs and retain the host destination");
     memset(&v, 0, sizeof v);
-    check_binding(image_request(write, 3, 1, &v) == ETUDE_OK &&
-                      v.input && !strcmp(v.input, "/host/input") &&
-                      v.args[3] && !strcmp(v.args[3], "write \"/dev/shm/image-file\" \"/large\""),
+    check_binding(image_request(write, 3, 1, &v) == ETUDE_OK && v.input &&
+                      !strcmp(v.input, "/host/input") && v.args[3] &&
+                      !strcmp(v.args[3], "write \"/dev/shm/image-file\" \"/large\""),
                   "debugfs write must use tmpfs and retain the host input");
     memset(&v, 0, sizeof v);
-    check_binding(image_copy_arguments(copy, 6, 3, &v) == ETUDE_OK &&
-                      v.destination && !strcmp(v.destination, "/host/result") &&
-                      v.args[7] && !strcmp(v.args[7], "/dev/shm/image-file"),
+    check_binding(image_copy_arguments(copy, 6, 3, &v) == ETUDE_OK && v.destination &&
+                      !strcmp(v.destination, "/host/result") && v.args[7] &&
+                      !strcmp(v.args[7], "/dev/shm/image-file"),
                   "mcopy output must use the same tmpfs endpoint");
     memset(&decl, 0, sizeof decl);
     memset(&machine, 0, sizeof machine);

@@ -51,11 +51,12 @@ static int same_load(const struct eh_json *declared, const struct eh_json *obser
     const char *method = cmp_text(observed, "cpu_method");
     int64_t amount = number_of(declared, "amount");
     const struct eh_json *failed = eh_json_get(observed, "failed");
-    return id && *id && kind && (!strcmp(kind, "cpu") || !strcmp(kind, "memory") || !strcmp(kind, "disk")) &&
-           amount > 0 && text_is(observed, "load_id", id) &&
-           text_is(observed, "kind", kind) && number_of(observed, "amount") == amount &&
-           text_is(observed, "cleanup", "confirmed") && failed && failed->type == 'f' &&
-           text_is(observed, "cpu_quality", "exact") && method && *method;
+    return id && *id && kind &&
+           (!strcmp(kind, "cpu") || !strcmp(kind, "memory") || !strcmp(kind, "disk")) &&
+           amount > 0 && text_is(observed, "load_id", id) && text_is(observed, "kind", kind) &&
+           number_of(observed, "amount") == amount && text_is(observed, "cleanup", "confirmed") &&
+           failed && failed->type == 'f' && text_is(observed, "cpu_quality", "exact") && method &&
+           *method;
 }
 
 struct cost_identity {
@@ -116,7 +117,8 @@ static int load_scope(const struct cmp_sample *s, const struct eh_json *scope,
     const struct eh_json *time = eh_json_get(s->attempt->data, "time");
     int64_t start = number_of(time, "start_us"), end = number_of(time, "end_us");
     int64_t ready = number_of(load, "ready_us"), ended = number_of(load, "ended_us");
-    if (!case_scope(s, scope, cases) || !identity(eh_json_get(load, "keeper"), "creation", &keeper) ||
+    if (!case_scope(s, scope, cases) ||
+        !identity(eh_json_get(load, "keeper"), "creation", &keeper) ||
         !identity(eh_json_get(load, "process"), "creation", &process))
         return 0;
     if (keeper.pid == process.pid || process.pid == cases[0].pid || process.pid == cases[1].pid ||
@@ -149,7 +151,8 @@ static int64_t base_cpu(const struct cmp_sample *s, int64_t total)
 /** Give case-only CPU, or -1 when no safe case measurement exists. */
 static int64_t cpu_of(const struct cmp_sample *s)
 {
-    const struct eh_json *cpu = eh_json_get(eh_json_get(s->attempt->data, "resources"), "tree_cpu_us");
+    const struct eh_json *cpu =
+        eh_json_get(eh_json_get(s->attempt->data, "resources"), "tree_cpu_us");
     int64_t total = number_of(cpu, "value");
     if (!text_is(cpu, "method", "case-and-reserved-load-v1"))
         return total;

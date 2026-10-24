@@ -2140,8 +2140,8 @@ static enum etude_status start_guest(struct etude_case_machine *m)
         return st;
     if (t.at < 0)
         return ETUDE_LOST;
-    snprintf(command, sizeof(command), GUEST_EXEC "%llu\n",
-             guest_state_options(m), (unsigned long long)((c->resend_us + 999) / 1000));
+    snprintf(command, sizeof(command), GUEST_EXEC "%llu\n", guest_state_options(m),
+             (unsigned long long)((c->resend_us + 999) / 1000));
     if (etude_machine_type(m->m, command, strlen(command)) != 0)
         return ETUDE_LOST;
     m->fed = (size_t)t.at;
@@ -3434,7 +3434,7 @@ static enum etude_status image_arguments(struct etude_case *c, char *const argv[
 static enum etude_status image_directory(struct etude_case *c, struct etude_case_machine *m,
                                          const char *directory, const char *output)
 {
-    const char *args[] = {"/bin/busybox", "tar",  "-xf", "/dev/shm/image-directory.tar",
+    const char *args[] = {"/bin/busybox", "tar",      "-xf", "/dev/shm/image-directory.tar",
                           "-C",           "/dev/shm", NULL};
     char path[4096], why[256], name[200];
     struct etude_volume *v;
