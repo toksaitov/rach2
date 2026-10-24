@@ -45,7 +45,11 @@ alter_errors() {
 }
 
 alter_functions() {
-    replace_function 'int tb_get_fds'                      <<<'    return TB_ERR_WIN_UNSUPPORTED;'
+    replace_function 'int tb_get_fds' <<'EOD'
+    (void)ttyfd;
+    (void)resizefd;
+    return TB_ERR_WIN_UNSUPPORTED;
+EOD
     replace_function 'static int update_term_size_via_esc' <<<'    return TB_ERR;'
     replace_function 'static int load_terminfo'            <<<'    return TB_ERR;'
     replace_function 'static void handle_resize'           <<<'    (void)sig;';
@@ -64,6 +68,7 @@ EOD
 EOD
 
     my_sed 's/^(\s+)global\.(rfd|wfd|ttyfd) = -1;$/\1global.\2 = NULL;/'
+    my_sed 's/global\.wfd >= 0/global.wfd != NULL \&\& global.wfd != INVALID_HANDLE_VALUE/'
     alter_function 'int tb_init_rwfd' <<'EOD'
     if (rfd != -1 || wfd != -1) return TB_ERR_WIN_UNSUPPORTED;
     global.rfd = GetStdHandle(STD_INPUT_HANDLE);
@@ -117,7 +122,10 @@ EOD
 
     replace_function 'static int init_term_caps' <<'EOD'
     (void)load_terminfo;
+    (void)load_terminfo_from_path;
     (void)parse_terminfo_caps;
+    (void)update_term_size_via_esc;
+    (void)handle_resize;
     return load_builtin_caps();
 EOD
 

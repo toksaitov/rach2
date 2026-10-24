@@ -5,16 +5,89 @@
 #include "krffs_platform.h"
 
 #ifdef WINDOWS
+#include <direct.h>
 #include <io.h>
 #else
 #include <sys/mman.h>
 #endif
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+int krffs_host_mkdir(const char *path)
+{
+#ifdef WINDOWS
+    return _mkdir(path);
+#else
+    return mkdir(path, 0755);
+#endif
+}
+
+int krffs_host_lstat(const char *path, struct stat *st)
+{
+#ifdef WINDOWS
+    DWORD attributes = GetFileAttributesA(path);
+
+    if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+        memset(st, 0, sizeof(*st));
+        st->st_mode = 0120000;
+        return 0;
+    }
+    return stat(path, st);
+#else
+    return lstat(path, st);
+#endif
+}
+
+int krffs_host_create(const char *path)
+{
+#ifdef WINDOWS
+    return _open(path, _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY | _O_NOINHERIT, 0644);
+#else
+    return open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
+#endif
+}
+
+int krffs_host_stamp(const char *path)
+{
+#ifdef WINDOWS
+    HANDLE file =
+        CreateFileA(path, FILE_WRITE_ATTRIBUTES | FILE_READ_ATTRIBUTES,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                    FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    BY_HANDLE_FILE_INFORMATION info;
+    ULARGE_INTEGER ticks;
+    FILETIME time;
+    int ok;
+
+    if (file == INVALID_HANDLE_VALUE) {
+        errno = EIO;
+        return -1;
+    }
+    ticks.QuadPart = 116444736010000000ULL;
+    time.dwLowDateTime = ticks.LowPart;
+    time.dwHighDateTime = ticks.HighPart;
+    ok = GetFileInformationByHandle(file, &info) &&
+         !(info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
+         SetFileTime(file, NULL, &time, &time);
+    if (!CloseHandle(file))
+        ok = 0;
+    if (!ok)
+        errno = EIO;
+    return ok ? 0 : -1;
+#else
+    struct timespec times[2];
+
+    times[0].tv_sec = 1;
+    times[0].tv_nsec = 0;
+    times[1] = times[0];
+    return utimensat(AT_FDCWD, path, times, AT_SYMLINK_NOFOLLOW);
+#endif
+}
 
 /**
  * Reads `s` as one number in any C base, as `strtoull` does, into `*out`.
@@ -192,6 +265,7 @@ int krffs_sync_mapping(void *address, size_t size)
 int krffs_unmap_file(void *address, size_t size)
 {
 #ifdef WINDOWS
+    (void)size;
     return UnmapViewOfFile(address) == 0 ? -1 : 0;
 #else
     return munmap(address, size);

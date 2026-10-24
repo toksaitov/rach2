@@ -106,6 +106,7 @@ static const struct user_arch *const arch_x86_64 = &user_arches[1];
 
 /* The number of findings so far, over every file checked. */
 static int user_problems;
+static int user_quiet;
 
 /* The findings of the last user check, for the selftest to match. */
 static char problem_log[1024];
@@ -118,15 +119,17 @@ static void problem(const char *name, const char *fmt, ...)
 {
     va_list ap;
 
-    fprintf(stderr, "  - %s: ", name);
-    va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
-    va_end(ap);
+    if (!user_quiet) {
+        fprintf(stderr, "  - %s: ", name);
+        va_start(ap, fmt);
+        vfprintf(stderr, fmt, ap);
+        va_end(ap);
+        fputc('\n', stderr);
+    }
     va_start(ap, fmt);
     vsnprintf(problem_log + strlen(problem_log), sizeof(problem_log) - strlen(problem_log), fmt,
               ap);
     va_end(ap);
-    fputc('\n', stderr);
     user_problems++;
 }
 
@@ -191,9 +194,8 @@ static void user_window_problem(const struct user_arch *a, const char *name)
  * Check the user executable `d` of `n` bytes, called `name` in the
  * findings, against the loader of `a` and this project's policy, and return
  * the number of findings. The fields are read at the offsets of `a`'s ELF
- * class, so one walk serves both classes. `quiet` sends the findings to
- * /dev/null in place of stderr, so that the selftest can count them without
- * printing; `problem_log` has them either way.
+ * class, so one walk serves both classes. `quiet` suppresses printing so the
+ * selftest can count findings; `problem_log` has them either way.
  */
 static int user_check(const struct user_arch *a, const char *name, const unsigned char *d, size_t n,
                       int quiet)
@@ -203,17 +205,10 @@ static int user_check(const struct user_arch *a, const char *name, const unsigne
     uint32_t i, loads, phdr_covered;
     int wide = a->elf_class == 2;
     int before = user_problems;
-    FILE *hold = NULL;
+    int saved_quiet = user_quiet;
 
     problem_log[0] = '\0';
-    if (quiet) {
-        FILE *sink = fopen("/dev/null", "w");
-
-        if (sink != NULL) {
-            hold = stderr;
-            stderr = sink;
-        }
-    }
+    user_quiet = quiet;
     if (n < a->ehsize) {
         problem(name, "shorter than an ELF header");
         goto out;
@@ -308,10 +303,7 @@ static int user_check(const struct user_arch *a, const char *name, const unsigne
         problem(name, "the entry point is outside the window exec loads "
                       "into");
 out:
-    if (hold != NULL) {
-        fclose(stderr);
-        stderr = hold;
-    }
+    user_quiet = saved_quiet;
     return user_problems - before;
 }
 

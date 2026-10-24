@@ -2615,6 +2615,8 @@ int tb_poll_event(struct tb_event *event) {
 }
 
 int tb_get_fds(int *ttyfd, int *resizefd) {
+    (void)ttyfd;
+    (void)resizefd;
     return TB_ERR_WIN_UNSUPPORTED;
 }
 
@@ -2917,7 +2919,10 @@ int tb_printf_inner(int x, int y, uintattr_t fg, uintattr_t bg, size_t *out_w,
 
 static int init_term_caps(void) {
     (void)load_terminfo;
+    (void)load_terminfo_from_path;
     (void)parse_terminfo_caps;
+    (void)update_term_size_via_esc;
+    (void)handle_resize;
     return load_builtin_caps();
 }
 
@@ -3090,7 +3095,7 @@ static int init_cellbuf(void) {
 }
 
 static int tb_deinit(void) {
-    if (global.caps[0] != NULL && global.wfd >= 0) {
+    if (global.caps[0] != NULL && global.wfd != NULL && global.wfd != INVALID_HANDLE_VALUE) {
         bytebuf_puts(&global.out, global.caps[TB_CAP_SHOW_CURSOR]);
         bytebuf_puts(&global.out, global.caps[TB_CAP_SGR0]);
         bytebuf_puts(&global.out, global.caps[TB_CAP_CLEAR_SCREEN]);

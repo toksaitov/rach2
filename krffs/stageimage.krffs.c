@@ -497,7 +497,7 @@ static bool tree_mkdir_p(const char *host_path, bool note_last)
     for (i = 1; buf[i] != '\0'; i++) {
         if (buf[i] == '/') {
             buf[i] = '\0';
-            if (mkdir(buf, 0755) == 0) {
+            if (krffs_host_mkdir(buf) == 0) {
                 if (i > skip) {
                     tree_note((uint16_t)(S_IFDIR | 0755), 0, 0, buf + skip);
                 }
@@ -507,7 +507,7 @@ static bool tree_mkdir_p(const char *host_path, bool note_last)
             buf[i] = '/';
         }
     }
-    if (mkdir(buf, 0755) == 0) {
+    if (krffs_host_mkdir(buf) == 0) {
         if (note_last && strlen(buf) > skip) {
             tree_note((uint16_t)(S_IFDIR | 0755), 0, 0, buf + skip);
         }
@@ -540,8 +540,8 @@ static bool tree_dir(const char *path, uint16_t mode, uint32_t uid, uint32_t gid
  * Writes `data_size` bytes of `data` as the host file of `path` under
  * `tree_root`, making its directories, and notes it with `mode` and the owner
  * `uid`:`gid`. A file already there is the same path staged twice, as in an
- * image; the create with `O_EXCL` and `O_NOFOLLOW` finds that in one step and
- * follows no link. Returns false, with a message, for that or a failed write.
+ * image; exclusive creation finds that in one step and follows no link.
+ * Returns false, with a message, for that or a failed write.
  */
 static bool tree_file(const char *path, uint16_t mode, uint32_t uid, uint32_t gid, const char *data,
                       uint64_t data_size)
@@ -564,7 +564,7 @@ static bool tree_file(const char *path, uint16_t mode, uint32_t uid, uint32_t gi
         return false;
     }
     *slash = '/';
-    fd = open(host, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
+    fd = krffs_host_create(host);
     if (fd < 0 && errno == EEXIST) {
         fprintf(stderr, "stageimage: '%s' is staged more than once.\n", path);
 
@@ -593,13 +593,9 @@ static bool tree_stamp(const char *host_path)
     DIR *d;
     struct dirent *e;
     struct stat st;
-    struct timespec times[2];
     bool ok = true;
 
-    times[0].tv_sec = 1;
-    times[0].tv_nsec = 0;
-    times[1] = times[0];
-    if (lstat(host_path, &st) != 0) {
+    if (krffs_host_lstat(host_path, &st) != 0) {
         return false;
     }
     if (S_ISDIR(st.st_mode)) {
@@ -622,7 +618,7 @@ static bool tree_stamp(const char *host_path)
         closedir(d);
     }
 
-    return ok && utimensat(AT_FDCWD, host_path, times, AT_SYMLINK_NOFOLLOW) == 0;
+    return ok && krffs_host_stamp(host_path) == 0;
 }
 
 /**
@@ -909,7 +905,7 @@ static bool stage_exec_dir(struct krffs_file_system *file_system, const char *gu
             ok = false;
             break;
         }
-        if (lstat(hostpath, &st) != 0 || !S_ISREG(st.st_mode) ||
+        if (krffs_host_lstat(hostpath, &st) != 0 || !S_ISREG(st.st_mode) ||
             !(st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))) {
             continue;
         }
@@ -972,7 +968,7 @@ static bool stage_dir_if_absent(struct krffs_file_system *file_system, const cha
         if (snprintf(host, sizeof(host), "%s%s", tree_root, path) >= (int)sizeof(host)) {
             return false;
         }
-        if (lstat(host, &st) == 0) {
+        if (krffs_host_lstat(host, &st) == 0) {
             if (!S_ISDIR(st.st_mode)) {
                 fprintf(stderr, "stageimage: '%s' already exists as a non-directory.\n", path);
 
@@ -1051,7 +1047,7 @@ static bool stage_tree(struct krffs_file_system *file_system, const char *guestd
         return false;
     }
 
-    if (lstat(hostdir, &root_st) != 0 || !S_ISDIR(root_st.st_mode)) {
+    if (krffs_host_lstat(hostdir, &root_st) != 0 || !S_ISDIR(root_st.st_mode)) {
         fprintf(stderr,
                 "stageimage: '%s' is not a directory; 'tree' takes "
                 "one, and follows no symlink to reach it.\n",
@@ -1121,7 +1117,7 @@ static bool stage_tree(struct krffs_file_system *file_system, const char *guestd
             break;
         }
 
-        if (lstat(hostpath, &st) != 0) {
+        if (krffs_host_lstat(hostpath, &st) != 0) {
             fprintf(stderr, "stageimage: cannot stat '%s'.\n", hostpath);
             ok = false;
             break;
@@ -1323,7 +1319,7 @@ int main(int argc, char **argv)
     uint64_t free_after;
 
     if (argc == 4 && strcmp(argv[2], "--tree") == 0 && argv[1][0] != '-') {
-        if (mkdir(argv[3], 0755) != 0) {
+        if (krffs_host_mkdir(argv[3]) != 0) {
             fprintf(stderr, "stageimage: cannot make '%s' (it must not exist): %s.\n", argv[3],
                     strerror(errno));
 

@@ -69,10 +69,22 @@
 #define fsfilcnt_t fsfilcnt64_t
 #endif
 
-/** `S_ISREG`, which Windows lacks. */
-#ifdef WINDOWS
+/** Supply `S_ISREG` for Windows headers that do not define it. */
+#if defined(WINDOWS) && !defined(S_ISREG)
 #define S_ISREG(MODE) (((MODE) & S_IFMT) == S_IFREG)
 #endif
+
+/** Make a host directory with mode 0755 where the host supports modes. */
+int krffs_host_mkdir(const char *path);
+
+/** Read a host node's status without following its final symbolic link. */
+int krffs_host_lstat(const char *path, struct stat *st);
+
+/** Create a new binary host file, refusing an existing file or link. */
+int krffs_host_create(const char *path);
+
+/** Set a host node's access and modification times to the staged second. */
+int krffs_host_stamp(const char *path);
 
 /**
  * Reads the wall clock into `time_of_day`: `gettimeofday` on Unix, and on
