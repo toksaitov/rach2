@@ -34,6 +34,90 @@ class RouteTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 routine_jobs.listener_active(text)
 
+    def test_listener_boot_reconciliation(self):
+        boot = dict(boot_id='a' * 36, boot_unix_seconds=1792454400)
+        old = '[2026-10-17 22:44:01Z INFO Terminal] Running job: core (i686)\n'
+        old += '[2026-10-18 02:38:51Z INFO Terminal] Running job: bisect\n'
+        current = '[2026-10-22 16:27:44Z INFO Terminal] Running job: ci\n'
+        current += '[2026-10-22 16:28:44Z INFO Terminal] Job ci completed with result: Succeeded\n'
+        state = routine_jobs.listener_boot_state(old + current, boot)
+        self.assertIsNone(state['active'])
+        self.assertEqual(len(state['superseded_by_boot']), 2)
+        self.assertEqual(len(state['current_events']), 2)
+        self.assertEqual(routine_jobs.listener_boot_state(current.splitlines()[0], boot)['active'], 'ci')
+        for text in (old, 'Running job: unknown',
+                     '[2026-10-22 16:27:44Z INFO Terminal] Running job:',
+                     '[2026-10-22 16:27:44Z INFO Terminal] Job ci completed with result: Failed',
+                     '[2026-99-22 16:27:44Z INFO Terminal] Running job: ci',
+                     '[9999-10-22 16:27:44Z INFO Terminal] Running job: ci'):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                routine_jobs.listener_boot_state(text, boot)
+
+    def test_listener_boot_proof(self):
+        identity = '12345678-1234-1234-1234-123456789abc\n'
+        with patch.object(routine_jobs.Path, 'read_text', side_effect=[identity, 'btime 1792454400\n']):
+            self.assertEqual(routine_jobs.boot_snapshot()['boot_id'], identity.strip())
+        for values in (['unknown'], [identity, ''],
+                       [identity, 'btime 1792454400\nbtime 1792454401\n'],
+                       [identity, 'btime 9999999999999\n']):
+            with self.subTest(values=values), \
+                    patch.object(routine_jobs.Path, 'read_text', side_effect=values), \
+                    self.assertRaises(ValueError):
+                routine_jobs.boot_snapshot()
+
+    def test_listener_drain_revalidation(self):
+        boot = dict(boot_id='a', boot_unix_seconds=1792454400)
+        server = dict(runners={'ci': dict(id=1, status='online', busy=False)},
+                      workflows={}, jobs=[], coordinating_job=None)
+        with tempfile.TemporaryDirectory(prefix='rach2-routine-') as name:
+            path = Path(name) / 'Runner_20261022-162559-utc.log'
+            path.write_text('[2026-10-22 16:27:44Z INFO Terminal] Listening for Jobs\n')
+            config = dict(repository='toksaitov/rach2', listeners={'ci': name})
+            with patch('routine_jobs.boot_snapshot', return_value=boot), \
+                    patch('routine_jobs.server_snapshot', return_value=server):
+                result = routine_jobs.drain_snapshot(config, None, None)
+                self.assertEqual(result['boot'], boot)
+                self.assertEqual(result['listeners']['ci']['files'][0]['sha256'], reference(path)['sha256'])
+            with patch('routine_jobs.boot_snapshot', side_effect=[boot, dict(boot, boot_id='b')]), \
+                    patch('routine_jobs.server_snapshot', return_value=server):
+                with self.assertRaises(ValueError):
+                    routine_jobs.drain_snapshot(config, None, None)
+            changed = dict(server, runners={'ci': dict(id=1, status='online', busy=True)})
+            with patch('routine_jobs.boot_snapshot', return_value=boot), \
+                    patch('routine_jobs.server_snapshot', side_effect=[server, changed]):
+                with self.assertRaises(ValueError):
+                    routine_jobs.drain_snapshot(config, None, None)
+            path.write_text('[2026-10-22 16:27:44Z INFO Terminal] Running job: unknown\n')
+            with patch('routine_jobs.boot_snapshot', return_value=boot), \
+                    patch('routine_jobs.server_snapshot', return_value=server):
+                with self.assertRaises(ValueError):
+                    routine_jobs.drain_snapshot(config, None, None)
+
+    def test_current_workflow_and_job_proof(self):
+        def pages(repository, suffix):
+            if suffix == 'runners':
+                return [dict(runners=[dict(name='ci', id=1, status='online', busy=True)])]
+            if suffix.startswith('runs?status='):
+                return [dict(workflow_runs=[dict(id=7, status='in_progress')]
+                             if suffix.endswith('in_progress') else [])]
+            return [dict(jobs=[dict(id=8, name='collection', runner_name='ci',
+                                   runner_id=1, status='in_progress')])]
+        with patch('routine_jobs.api', side_effect=pages):
+            result = routine_jobs.server_snapshot('toksaitov/rach2', '7', 'ci')
+            self.assertEqual(result['coordinating_job'], 'collection')
+            with self.assertRaises(ValueError):
+                routine_jobs.server_snapshot('toksaitov/rach2', None, None)
+            with self.assertRaises(ValueError):
+                routine_jobs.server_snapshot('toksaitov/rach2', '7', 'different-runner')
+        def extra(repository, suffix):
+            result = pages(repository, suffix)
+            if suffix == 'runs/7/jobs':
+                result[0]['jobs'].append(dict(id=9, name='another', runner_name='other',
+                                             runner_id=2, status='queued'))
+            return result
+        with patch('routine_jobs.api', side_effect=extra), self.assertRaises(ValueError):
+            routine_jobs.server_snapshot('toksaitov/rach2', '7', 'ci')
+
     def test_complete_late_proofs(self):
         with tempfile.TemporaryDirectory(prefix='rach2-routine-') as name:
             out = Path(name)
