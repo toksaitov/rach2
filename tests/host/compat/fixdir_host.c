@@ -191,11 +191,3 @@ void fix_format(char *buf, unsigned long size, const char *format, ...)
         exit(1);
     }
 }
-
-#ifdef _WIN32
-/* Windows GCC has no LeakSanitizer runtime. */
-static inline int fix_leaks(void)
-{
-    return 0;
-}
-#endif

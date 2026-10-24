@@ -1200,7 +1200,11 @@ static void driver(const struct run *r)
             claims = -1;
         etude_ledger_close(l);
     }
+#ifdef _WIN32
+    leaks = 0; /* Windows GCC has no LeakSanitizer runtime. */
+#else
     leaks = fix_leaks();
+#endif
     if ((f = fopen(r->side, "w")) != NULL) {
         fprintf(f, "%ld %d\n", claims, leaks);
         fclose(f);
