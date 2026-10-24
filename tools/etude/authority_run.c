@@ -16,8 +16,8 @@
 #include <poll.h>
 #include <fcntl.h>
 #include "posix/posix.h"
-#endif
 extern char **environ;
+#endif
 
 static volatile sig_atomic_t stopped;
 static void stop(int value)
@@ -142,8 +142,9 @@ int authority_run_command(const struct authority_run *run, struct etude_exec_res
     spec.output_max = 64u << 20;
     spec.grace_us = 2000000;
     int status = 125;
-    int writer = -1, original = -1;
+    int writer = -1;
 #ifndef _WIN32
+    int original = -1;
     if (run->dedicated_input) {
         if (input_channel(&writer, &original))
             goto done;

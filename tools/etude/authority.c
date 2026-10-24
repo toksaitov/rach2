@@ -56,7 +56,7 @@ int etude_authority_open(const char *ledger, struct etude_authority **out)
         return -1;
     if (!same_file(a->binding.ledger, ledger)) {
         etude_authority_close(a);
-        errno = ESTALE;
+        errno = EAGAIN;
         return -1;
     }
     *out = a;
