@@ -197,9 +197,10 @@ def checks(group, arch, base):
             yield item
 
 
-def valid_previous(old, item, compiler):
+def valid_previous(old, item, commands):
     """Reuse a prepared binary only while its compiler, inputs and bytes match."""
-    if not old or old.get('command') != [*compiler, *item['command']]:
+    if not old or old.get('command') != commands[-1] or \
+            old.get('compile_commands', []) != commands[:-1]:
         return False
     try:
         return old['sha256'] == digest(Path(item['program'])) and all(
@@ -324,14 +325,18 @@ def prepare(args):
                                    digest, args.print_commands, compiler_identity=identity)
         companions = windows.companions(compiler, base, compiler_inputs, digest,
                                         args.print_commands) if windows_fixture else []
+        commands = []
+        if command:
+            commands = (fixtures.build_commands(compiler, command, item['sources'])
+                        if args.group == 'scripts' and item['assertion_id'] in fixtures.NAMES
+                        else [[*compiler, *command]])
         if args.print_commands:
-            if command:
-                print(shlex.join([*compiler, *command]))
+            for argv in commands:
+                print(shlex.join(argv))
             continue
         if command:
-            probe = dict(item, command=command)
             old = previous.get(item['assertion_id'])
-            if valid_previous(old, probe, compiler):
+            if valid_previous(old, item, commands):
                 item['sha256'], item['inputs'] = old['sha256'], old['inputs']
                 item['compiler_inputs'] = old.get('compiler_inputs', [])
                 data_inputs = {value['path']: value for value in item['inputs']}
@@ -342,9 +347,9 @@ def prepare(args):
                 for source in item['sources']:
                     if not Path(source).is_file():
                         raise ValueError(f"{item['assertion_id']}: missing source {source}")
-                full = [*compiler, *command]
-                print('host prepare: ' + shlex.join(full), flush=True)
-                subprocess.run(full, check=True)
+                for argv in commands:
+                    print('host prepare: ' + shlex.join(argv), flush=True)
+                    subprocess.run(argv, check=True)
                 program = Path(item['program'])
                 fixtures.publish_program(program)
                 item['sha256'] = digest(program)
@@ -372,7 +377,9 @@ def prepare(args):
                 if path:
                     item['unsupported'] = ('a compiled source still requires an interpreter; '
                                            'a native fixture adapter is required: ' + str(path))
-            item['command'] = [*compiler, *command]
+            item['command'] = commands[-1]
+            if len(commands) > 1:
+                item['compile_commands'] = commands[:-1]
         elif item['program']:
             item['sha256'] = digest(Path(item['program']))
         item.pop('sources', None)

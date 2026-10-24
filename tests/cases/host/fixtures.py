@@ -46,6 +46,25 @@ def platform_flags(common):
     return [*flags, '-D_WIN32_WINNT=0x0A00', '-static']
 
 
+def build_commands(compiler, command, sources):
+    """Keep Mac debug-map object paths and timestamps reproducible."""
+    if sys.platform != 'darwin':
+        return [[*compiler, *command]]
+    at = command.index('-o')
+    output = command[at + 1]
+    work = Path(output).parent / (Path(output).name + '-sources')
+    flags = [word for word in command[:at] + command[at + 2:] if word not in sources]
+    commands, objects = [], []
+    for index, source in enumerate(sources):
+        obj = str(work / ('%02d-%s.o' % (index, Path(source).stem)))
+        objects.append(obj)
+        commands.append([*compiler, *flags, '-c', source, '-o', obj])
+    link_flags = [word for word in flags if word.startswith('-fsanitize=') or
+                  word in ('-g', '-pthread')]
+    commands.append([*compiler, *link_flags, '-Wl,-reproducible', '-o', output, *objects])
+    return commands
+
+
 def recipe(name, base, common):
     """Return a compiler invocation, its inputs and the prepared program."""
     work = base / (name + '-sources')
@@ -138,10 +157,13 @@ if __name__ == '__main__':
     if len(sys.argv) != 3:
         raise SystemExit('usage: fixtures.py NAME OUTPUT')
     output = Path(sys.argv[2])
-    command, _, _, program = recipe(sys.argv[1], output.parent, [
+    command, sources, _, program = recipe(sys.argv[1], output.parent, [
         '-std=c99', '-D_DEFAULT_SOURCE', '-D_FORTIFY_SOURCE=0',
         '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-g', '-O1'])
     if program != str(output):
         raise SystemExit('output basename must equal the fixture name')
-    subprocess.run([*shlex.split(os.environ.get('CC', 'cc')), *command], check=True)
+    compiler = shlex.split(os.environ.get('CC', 'cc'))
+    for argv in build_commands(compiler, command, sources):
+        print('fixture prepare: ' + shlex.join(argv), flush=True)
+        subprocess.run(argv, check=True)
     publish_program(output)
