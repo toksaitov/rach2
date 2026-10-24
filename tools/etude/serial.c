@@ -15,6 +15,21 @@
 #include "guest/wire.h"
 #include "serial.h"
 
+int etude_serial_guest_line(char *line, size_t size, int replace, int image_state,
+                             uint64_t resend_us)
+{
+    uint64_t ms = resend_us / 1000 + (resend_us % 1000 != 0);
+    int n = snprintf(line, size, "%s/etude-guest %s-t / -r %llu\n", replace ? "exec " : "",
+                     image_state ? "-s /dev/shm/etude-guest " : "", (unsigned long long)ms);
+    if (!resend_us || ms > INT64_MAX / 1000 || n < 0 || (size_t)n >= size || n > 64) {
+        if (size)
+            line[0] = '\0';
+        errno = EINVAL;
+        return -1;
+    }
+    return 0;
+}
+
 /*
  * The sequenced frames in flight at once. Four frames of 255 bytes and their
  * acknowledgements fit with room in the 4096-byte receive ring of Rach2's

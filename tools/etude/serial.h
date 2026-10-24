@@ -15,6 +15,12 @@
 #include "etude/exec.h"
 #include "etude/frame.h"
 
+/* Format the guest startup line, including LF and NUL. The debug shell
+ * accepts at most 63 bytes before LF. Refuse an empty interval or a line
+ * that does not fit, rather than sending a partial option. */
+int etude_serial_guest_line(char *line, size_t size, int replace, int image_state,
+                             uint64_t resend_us);
+
 /* How the controller reaches the console. */
 struct etude_serial_conf {
     /* A name of this controller's alone, such as the boot's attempt, whose

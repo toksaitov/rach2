@@ -1228,6 +1228,8 @@ Compatibility adapters retain focused regressions for their public forms and old
 
 ### Image checks
 
+The debug-shell startup line uses the guest's compact option aliases: `-s` for `--state`, `-t` for `--stage` and `-r` for `--resend-ms`. Both startup forms use one formatter that rejects a line longer than the kernel shell's 63 characters before LF. Even the maximum schema interval fits with the image helper's exact `/dev/shm/etude-guest` state path and stage `/`. The interval rounds upward to milliseconds without unsigned overflow and is parsed as a checked 64-bit number, including on i686. Long options remain supported.
+
 A machine case that checks or changes an image declares `image-helper`, its recovery kernel and `etude-image.krffs`, and reserves the helper's resources. `etude_host` then runs mtools and e2fsprogs commands in that helper. The command's arguments, exit status and output retain their meaning; the host needs neither program installed. The helper mounts none of the tested volumes. It uses the independent upstream programs on the raw disk and exits before the scenario boots that disk again.
 
 The helper's direct-boot KRFFS module is 16 MiB, with at least 4 MiB free after staging every declared tool. Preparation runs `elfcheck --kernel --initrd` against the actual recovery kernel even when the image is cached. QEMU puts the module after the kernel; rounding both ends to pages must leave 8 MiB below the 32 MiB boot allocator limit for frame metadata, page tables, boot data and low-memory frames. The image must not be enlarged to add tools past that limit; a failing check needs a different boot layout.

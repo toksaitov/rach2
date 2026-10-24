@@ -2933,8 +2933,8 @@ static void raw_tty(void)
 /** Print the usage and return 2. */
 static int usage(void)
 {
-    fprintf(stderr, "usage: etude-guest [--stdio] [--state DIR] [--stage DIR]... "
-                    "[--resend-ms N]\n");
+    fprintf(stderr, "usage: etude-guest [--stdio] [-s|--state DIR] [-t|--stage DIR]... "
+                    "[-r|--resend-ms N]\n");
     return 2;
 }
 
@@ -3101,27 +3101,40 @@ static int serve(void)
     return input_closed && !closing ? 1 : 0;
 }
 
+/** Parse long options and their compact debug-shell aliases. */
+static int options(int argc, char **argv)
+{
+    int i;
+    memset(&opt, 0, sizeof(opt));
+    opt.resend_us = 2000000;
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--stdio") == 0) {
+            opt.stdio = 1;
+        } else if ((!strcmp(argv[i], "--state") || !strcmp(argv[i], "-s")) && i + 1 < argc) {
+            opt.state = argv[++i];
+        } else if ((!strcmp(argv[i], "--stage") || !strcmp(argv[i], "-t")) && i + 1 < argc &&
+                   opt.nstage < STAGE_MAX) {
+            opt.stage[opt.nstage++] = argv[++i];
+        } else if ((!strcmp(argv[i], "--resend-ms") || !strcmp(argv[i], "-r")) && i + 1 < argc) {
+            uint64_t ms;
+            if (!wire_number(argv[++i], &ms) || !ms || ms > INT64_MAX / 1000)
+                return usage();
+            opt.resend_us = (int64_t)ms * 1000;
+        } else {
+            return usage();
+        }
+    }
+    return 0;
+}
+
 /** etude-guest's main: the options, the state, the transport, the loop. */
 int etude_guest_main(int argc, char **argv)
 {
     struct sigaction sa;
     int i;
 
-    opt.state = NULL;
-    opt.resend_us = 2000000;
-    for (i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--stdio") == 0) {
-            opt.stdio = 1;
-        } else if (strcmp(argv[i], "--state") == 0 && i + 1 < argc) {
-            opt.state = argv[++i];
-        } else if (strcmp(argv[i], "--stage") == 0 && i + 1 < argc && opt.nstage < STAGE_MAX) {
-            opt.stage[opt.nstage++] = argv[++i];
-        } else if (strcmp(argv[i], "--resend-ms") == 0 && i + 1 < argc && atol(argv[i + 1]) > 0) {
-            opt.resend_us = (int64_t)atol(argv[++i]) * 1000;
-        } else {
-            return usage();
-        }
-    }
+    if (options(argc, argv))
+        return 2;
     if (!opt.state) {
         static char path[PATH_CAP];
         const char *tmp = getenv("TMPDIR");
@@ -3136,6 +3149,7 @@ int etude_guest_main(int argc, char **argv)
         fprintf(stderr, "etude-guest: %s: %s\n", opt.state, strerror(errno));
         return 1;
     }
+    note("options: resend_us=%lld stages=%d", (long long)opt.resend_us, opt.nstage);
     if (find_boot() < 0) {
         note("boot: no token for this boot");
         if (opt.stdio)

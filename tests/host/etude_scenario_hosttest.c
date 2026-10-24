@@ -799,17 +799,18 @@ static void fake_peer(host_socket con, const char *args)
  */
 static long fake_guest(host_socket con, const char *line)
 {
+    const char *resend = strstr(line, " -r ");
+    if (strlen(line) > 63 || !strstr(line, " -t / ") || resend == NULL)
+        return -1;
 #ifdef _WIN32
     long child = scenario_guest_start(self, con);
     FILE *file = fopen(getenv("ETUDE_FAKE_GUEST_PID"), "w");
-    (void)line;
     if (file != NULL) {
         fprintf(file, "%ld\n", child);
         fclose(file);
     }
     return child;
 #else
-    const char *resend = strstr(line, "--resend-ms ");
     char state[PATH_MAX], ms[32], pid[32];
     char *args[] = {
         "etude-guest", "--stage", getenv("ETUDE_FAKE_STAGE"), "--state", state, "--resend-ms", ms,
@@ -817,7 +818,7 @@ static long fake_guest(host_socket con, const char *line)
     pid_t child;
     FILE *f;
 
-    snprintf(ms, sizeof(ms), "%ld", resend != NULL ? strtol(resend + 12, NULL, 10) : 2000L);
+    snprintf(ms, sizeof(ms), "%lld", strtoll(resend + 4, NULL, 10));
     snprintf(state, sizeof(state), "%s.state", getenv("ETUDE_FAKE_GUEST_PID"));
     child = fork();
     if (child == 0) {

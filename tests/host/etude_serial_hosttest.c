@@ -1000,12 +1000,34 @@ static void check_scripted_restart(void)
 
 /* ------------------------------------------------------------ etude-guest */
 
+/** Both startup forms fit the real debug shell, including the largest interval. */
+static void check_guest_line(void)
+{
+    char line[65];
+    const uint64_t max = UINT64_C(9007199254740991);
+    CHECK(etude_serial_guest_line(line, sizeof(line), 1, 1, max) == 0 &&
+              !strcmp(line, "exec /etude-guest -s /dev/shm/etude-guest -t / -r 9007199254741\n") &&
+              strlen(line) == 64 && line[63] == '\n',
+          "the maximum schema interval fits exactly 63 shell characters before LF");
+    CHECK(etude_serial_guest_line(line, sizeof(line), 0, 1, max) == 0 &&
+              !strcmp(line, "/etude-guest -s /dev/shm/etude-guest -t / -r 9007199254741\n"),
+          "explicit guest open preserves state, stage and interval");
+    CHECK(etude_serial_guest_line(line, sizeof(line), 1, 0, 1001) == 0 &&
+              !strcmp(line, "exec /etude-guest -t / -r 2\n"),
+          "a submillisecond remainder rounds upward");
+    CHECK(etude_serial_guest_line(line, 64, 1, 1, max) < 0 && !line[0] &&
+              etude_serial_guest_line(line, sizeof(line), 1, 1, UINT64_MAX) < 0 && !line[0] &&
+              etude_serial_guest_line(line, sizeof(line), 1, 1, 0) < 0 && !line[0],
+          "a short buffer, overflowing interval or zero interval sends no partial line");
+}
+
 /** Start etude-guest on pipes, with the state directory `state`. */
 static void start_guest(struct harness *h, const char *state)
 {
     int in[2], out[2];
     char *argv[10];
     int n = 0;
+    int compact = strstr(state, "state-guest") != NULL;
     pid_t pid;
 
     snprintf(h->state, sizeof(h->state), "%s", state);
@@ -1014,11 +1036,11 @@ static void start_guest(struct harness *h, const char *state)
         exit(2);
     }
     argv[n++] = "etude-guest";
-    argv[n++] = "--state";
+    argv[n++] = compact ? "-s" : "--state";
     argv[n++] = h->state;
-    argv[n++] = "--stage";
+    argv[n++] = compact ? "-t" : "--stage";
     argv[n++] = stage;
-    argv[n++] = "--resend-ms";
+    argv[n++] = compact ? "-r" : "--resend-ms";
     argv[n++] = "50";
     argv[n] = NULL;
     pid = fork();
@@ -1502,6 +1524,19 @@ static void check_guest_bye(struct harness *h)
           "a session opens again after bye");
 }
 
+/** The actual compact option parser keeps the requested resend interval. */
+static void check_guest_options(const char *state)
+{
+    char path[700], line[200];
+    snprintf(path, sizeof(path), "%s/guest.log", state);
+    FILE *f = fopen(path, "r");
+    int ok = f && fgets(line, sizeof(line), f) &&
+             strstr(line, "options: resend_us=50000 stages=1");
+    if (f)
+        ok = fclose(f) == 0 && ok;
+    CHECK(ok, "the actual compact parser retains 50ms and one stage root");
+}
+
 /** The serial transport with etude-guest itself, directly. */
 static void check_guest(void)
 {
@@ -1524,6 +1559,7 @@ static void check_guest(void)
         check_guest_bye(h);
     }
     end_guest(h);
+    check_guest_options(state);
     finish(h);
 }
 
@@ -1644,6 +1680,7 @@ int main(void)
     char path[700];
     FILE *f;
 
+    check_guest_line();
     workload = host_workload_read(&workload_size);
     if (workload == NULL) {
         fputs("etude-serial-test: prepared workload is missing\n", stderr);

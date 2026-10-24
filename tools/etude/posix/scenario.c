@@ -36,10 +36,8 @@
 extern char **environ;
 #endif
 
-/* The text the kernel's debug shell prints when it is ready for a command,
- * and the command that makes etude-guest the boot's designated init. */
+/* The text the kernel's debug shell prints when ready for a command. */
 #define SHELL_READY "Type 'help' for available commands."
-#define GUEST_EXEC  "exec /etude-guest %s--stage / --resend-ms "
 
 /* The most disks, devices, boot options, forwards of each kind and words of
  * a relay a profile gives the launcher, and the most strings of its devices'
@@ -2099,11 +2097,9 @@ static enum etude_status open_guest(struct etude_case_machine *m)
 }
 
 /** Only the small image helper keeps transfer objects outside its RAM root. */
-static const char *guest_state_options(const struct etude_case_machine *m)
+static int guest_image_state(const struct etude_case_machine *m)
 {
-    return m->decl->helper && strcmp(m->decl->id, "image-helper") == 0
-               ? "--state /dev/shm/etude-guest "
-               : "";
+    return m->decl->helper && strcmp(m->decl->id, "image-helper") == 0;
 }
 
 enum etude_status etude_guest_open(struct etude_case_machine *m)
@@ -2115,8 +2111,9 @@ enum etude_status etude_guest_open(struct etude_case_machine *m)
     if (m->c->cur < 0 || !m->decl->console)
         return ETUDE_REFUSED;
     m->fed = mres(m)->console.kept;
-    snprintf(command, sizeof(command), "/etude-guest %s--stage / --resend-ms %llu\n",
-             guest_state_options(m), (unsigned long long)((m->c->resend_us + 999) / 1000));
+    if (etude_serial_guest_line(command, sizeof(command), 0, guest_image_state(m),
+                                  m->c->resend_us))
+        return ETUDE_REFUSED;
     if (etude_machine_type(m->m, command, strlen(command)) != 0)
         return ETUDE_LOST;
     return open_guest(m);
@@ -2140,8 +2137,8 @@ static enum etude_status start_guest(struct etude_case_machine *m)
         return st;
     if (t.at < 0)
         return ETUDE_LOST;
-    snprintf(command, sizeof(command), GUEST_EXEC "%llu\n", guest_state_options(m),
-             (unsigned long long)((c->resend_us + 999) / 1000));
+    if (etude_serial_guest_line(command, sizeof(command), 1, guest_image_state(m), c->resend_us))
+        return ETUDE_REFUSED;
     if (etude_machine_type(m->m, command, strlen(command)) != 0)
         return ETUDE_LOST;
     m->fed = (size_t)t.at;
