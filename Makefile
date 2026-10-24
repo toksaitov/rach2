@@ -1252,8 +1252,8 @@ rach2-recovery: krffs rach2 $(RECOVERY_KERNEL) $(BINFIND) $(CHECKRECOVERY)
 # $(TEST_IMAGE) above is. A phony target would restage the image on every
 # invocation, so each suite that boots it would restage it, and two running at
 # once would restage it under each other.
-$(METAL_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-metal.manifest $(MANIFEST_DEPS_rach2_metal) $(IMAGE_TOOLS) | preflight krffs rach2 rach2-metal utils check-busybox check-setid check-dropbearmulti
-	$(MKIMAGE) krffs/manifests/rach2-metal.manifest $@ 4
+$(METAL_IMAGE): Makefile $(DEMO_CREDS) krffs/manifests/rach2-metal.manifest $(MANIFEST_DEPS_rach2_metal) $(IMAGE_TOOLS) | preflight krffs rach2 rach2-metal utils check-busybox check-setid check-dropbearmulti
+	$(MKIMAGE) krffs/manifests/rach2-metal.manifest $@ 8
 
 rach2-metal-image: $(METAL_IMAGE)
 

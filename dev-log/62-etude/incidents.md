@@ -637,3 +637,7 @@ The Linux run on 2026-10-24 completed all 27 process-link checks on both archite
 ## Image checks tried to bind disks still owned by QEMU (#1060)
 
 The Linux run on 2026-10-24 completed the USB write and metal FAT remount checks, but their independent image reads were refused. Both manifests already declared the image helper. Their controllers tried to give that helper a disk still owned by the original QEMU machine. The USB controller now ends and reaps its machine before mtype reads the written file. The metal controller copies the known 48 MiB FAT partition after a successful unmount and checks that private snapshot; the original machine then remounts its partition to remove the witness. Disk ownership checks and every byte comparison remain unchanged.
+
+## The metal RAM root had no room for the loop acceptance (#1061)
+
+Both metal acceptance cases in the Linux run on 2026-10-24 failed the root-key and su transfers of the 1 MiB loop image with `cat: write error: No space left on device`. The 4 MiB RAM root could stage its programs but lacked the writable space the existing acceptance needs. The metal image is now 8 MiB and depends on the Makefile so that its changed capacity rebuilds the artifact. The acceptance still transfers the whole image onto the root, writes through the loop mount, downloads it and checks its contents independently. The separate FAT host-read ownership failure is recorded in #1060.
