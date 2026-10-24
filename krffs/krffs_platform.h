@@ -69,8 +69,8 @@
 #define fsfilcnt_t fsfilcnt64_t
 #endif
 
-/** Supply `S_ISREG` for Windows headers that do not define it. */
-#if defined(WINDOWS) && !defined(S_ISREG)
+/** Supply `S_ISREG` for Microsoft's C runtime headers. */
+#if defined(WINDOWS) && defined(_MSC_VER)
 #define S_ISREG(MODE) (((MODE) & S_IFMT) == S_IFREG)
 #endif
 

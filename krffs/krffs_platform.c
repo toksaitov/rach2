@@ -60,7 +60,7 @@ int krffs_host_stamp(const char *path)
                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
                     FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, NULL);
     BY_HANDLE_FILE_INFORMATION info;
-    ULARGE_INTEGER ticks;
+    uint64_t ticks;
     FILETIME time;
     int ok;
 
@@ -68,9 +68,9 @@ int krffs_host_stamp(const char *path)
         errno = EIO;
         return -1;
     }
-    ticks.QuadPart = 116444736010000000ULL;
-    time.dwLowDateTime = ticks.LowPart;
-    time.dwHighDateTime = ticks.HighPart;
+    ticks = 116444736010000000ULL;
+    time.dwLowDateTime = (DWORD)ticks;
+    time.dwHighDateTime = (DWORD)(ticks >> 32);
     ok = GetFileInformationByHandle(file, &info) &&
          !(info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
          SetFileTime(file, NULL, &time, &time);
