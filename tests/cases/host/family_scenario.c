@@ -1,7 +1,7 @@
 /* family_scenario.c: native ownership of one prepared product-family check. */
 #include "etude/scenario.h"
 #include "family_rows.h"
-#include "family_metal.h"
+#include "family_transport.h"
 #include "host_assets.h"
 /* The shared library supplies the selected architecture, including none. */
 extern const char *etude_case_architecture(const struct etude_case *c);

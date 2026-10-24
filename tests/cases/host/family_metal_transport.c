@@ -1,6 +1,7 @@
 /* family_metal_transport.c: the complete acceptance script under 34 faults. */
 #define _POSIX_C_SOURCE 200809L
 #include "family_metal.h"
+#include "family_transport.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
