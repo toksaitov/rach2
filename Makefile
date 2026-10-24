@@ -483,7 +483,7 @@ $(ELFCHECK): tools/inspect/elfcheck.c
 # tools/inspect/setid.allow.
 $(SETIDCHECK): tools/inspect/setidcheck.c
 	@mkdir -p $(dir $@)
-	$(HOST_LINK)
+	$(HOST_LINK) $(CHECKER_FILE_FLAGS)
 
 # The configuration checkers (tools/inspect/cfgcheck.c): the GRUB core's
 # embedded configuration and the sealed disk's fixed address.
@@ -495,7 +495,7 @@ $(CFGCHECK): tools/inspect/cfgcheck.c
 # vocabulary, the phrase counts the report tabulates, and the dev-log index.
 $(PROSECHECK): tools/verify/prosecheck.c
 	@mkdir -p $(dir $@)
-	$(HOST_LINK)
+	$(HOST_LINK) $(CHECKER_FILE_FLAGS)
 
 # The size limits (tools/verify/sizecheck.c): function lines, parameters,
 # nesting, and the complexity pmccabe measures, judged against the ceilings
@@ -522,6 +522,14 @@ ETUDECC ?= /ucrt64/bin/gcc
 ETUDE_LINK = sh tools/etude/compile.sh $(ETUDECC) $@ $(HOSTCFLAGS) $(ETUDE_PLATFORM_FLAGS) $(filter %.c,$^) $(ETUDE_PLATFORM_LIBS)
 ETUDE_PLATFORM_FLAGS = -D_WIN32_WINNT=0x0A00 -static
 ETUDE_PLATFORM_LIBS = -lws2_32 -lbcrypt
+endif
+# Native source checkers need files and paths, not a process supervisor.
+ifeq ($(OS),Windows_NT)
+CHECKER_FILE_SRC = tools/etude/win/files.c tools/etude/win/winsys.c \
+                   tools/etude/win/winfmt.c
+CHECKER_FILE_FLAGS = $(ETUDE_PLATFORM_FLAGS) $(ETUDE_PLATFORM_LIBS)
+$(SETIDCHECK) $(PROSECHECK): $(CHECKER_FILE_SRC) tools/host_files.h \
+                           $(wildcard tools/etude/win/*.h)
 endif
 ETUDEVOLUME = build/tools/etude/etude-volume
 ETUDE_HDRS = $(wildcard tools/etude/*.h tools/etude/include/etude/*.h tools/etude/posix/*.h \

@@ -52,6 +52,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "../host_files.h"
 
 #define S_SETID     06000u
 #define PERMBITS    07777u

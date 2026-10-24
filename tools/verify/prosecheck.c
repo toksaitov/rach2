@@ -56,6 +56,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "../host_files.h"
 
 #define LIMIT    80
 #define MAX_FILE (4 * 1024 * 1024)
