@@ -48,6 +48,20 @@ static int counted_vectors(int argc, char **argv)
     return position == argc;
 }
 
+static int completion(void)
+{
+    const char *value = !strcmp(env("CI_NATIVE_MODE"), "completion-relative")   ? "relative\n"
+                        : !strcmp(env("CI_NATIVE_MODE"), "completion-multiple") ? "/one\n/two\n"
+                                                                                : NULL;
+    char pointer[16384];
+    snprintf(pointer, sizeof(pointer), "%s\n", path("routine.completion.json"));
+    return fx_text(path("routine-completion.path"), value ? value : pointer) &&
+                   fx_text(path("routine.completion.json"), "fixture\n") &&
+                   fx_mkdir(path("routine-proofs"))
+               ? 0
+               : 2;
+}
+
 static int sequence(int argc, char **argv)
 {
     if (!counted_vectors(argc, argv) || !argument(argc, argv, "admit") ||
@@ -68,18 +82,8 @@ static int sequence(int argc, char **argv)
         if (!fx_mkdir(path("store")) || !fx_text(path("history/run.jsonl"), "fixture\n"))
             return 2;
     }
-    if (!strncmp(env("CI_NATIVE_MODE"), "completion", 10)) {
-        const char *value = !strcmp(env("CI_NATIVE_MODE"), "completion-relative")   ? "relative\n"
-                            : !strcmp(env("CI_NATIVE_MODE"), "completion-multiple") ? "/one\n/two\n"
-                                                                                    : NULL;
-        char pointer[16384];
-        snprintf(pointer, sizeof(pointer), "%s\n", path("routine.completion.json"));
-        if (!fx_text(path("routine-completion.path"), value ? value : pointer) ||
-            !fx_text(path("routine.completion.json"), "fixture\n") ||
-            !fx_mkdir(path("routine-proofs")))
-            return 2;
-        return 0;
-    }
+    if (!strncmp(env("CI_NATIVE_MODE"), "completion", 10))
+        return completion();
     return !strcmp(env("CI_NATIVE_MODE"), "pass") || push ? 0 : 1;
 }
 

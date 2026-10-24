@@ -18,18 +18,46 @@ static void quoted(FILE *fp, const char *text)
     }
 }
 
-int family_export(const char *root, const char *id)
+static int valid_id(const char *id)
+{
+    return *id && strlen(id) <= 128 &&
+           strspn(id, "abcdefghijklmnopqrstuvwxyz0123456789_.-") == strlen(id) && strcmp(id, ".") &&
+           strcmp(id, "..");
+}
+
+static int export_entry(const char *root, const char *id, const char *name, FILE *list,
+                        FILE *manifest, size_t *budget)
 {
     char path[8192], member[8192];
+    struct stat st;
+    if (snprintf(member, sizeof(member), "%s/%s", id, name) >= (int)sizeof(member) ||
+        snprintf(path, sizeof(path), "%s/%s", root, member) >= (int)sizeof(path) ||
+        lstat(path, &st))
+        return 0;
+    int include = S_ISREG(st.st_mode) && st.st_size >= 0 && st.st_size <= 1048576;
+    size_t charge = include ? 4096 + ((size_t)st.st_size + 511) / 512 * 512 : 0;
+    include &= charge <= *budget;
+    if (include) {
+        *budget -= charge;
+        fwrite(member, 1, strlen(member) + 1, list);
+    }
+    fprintf(manifest, "%s %o %lld ", include ? "archive" : "disk-only", (unsigned)st.st_mode,
+            (long long)st.st_size);
+    quoted(manifest, name);
+    fputc('\n', manifest);
+    return 1;
+}
+
+int family_export(const char *root, const char *id)
+{
+    char path[8192];
     FILE *list = NULL, *manifest = NULL;
     DIR *dir = NULL;
     struct dirent *entry;
     size_t budget = 7 * 1048576;
     unsigned count = 0;
     int ok = 0;
-    if (!*id || strlen(id) > 128 ||
-        strspn(id, "abcdefghijklmnopqrstuvwxyz0123456789_.-") != strlen(id) || !strcmp(id, ".") ||
-        !strcmp(id, "..") || snprintf(path, sizeof(path), "%s/%s", root, id) >= (int)sizeof(path) ||
+    if (!valid_id(id) || snprintf(path, sizeof(path), "%s/%s", root, id) >= (int)sizeof(path) ||
         !(dir = opendir(path)))
         goto done;
     if (snprintf(path, sizeof(path), "%s/family-export.list", root) >= (int)sizeof(path) ||
@@ -45,9 +73,6 @@ int family_export(const char *root, const char *id)
           manifest);
     fwrite("family-export.txt", 1, sizeof("family-export.txt"), list);
     for (;;) {
-        struct stat st;
-        size_t charge;
-        int include;
         errno = 0;
         entry = readdir(dir);
         if (!entry) {
@@ -62,21 +87,8 @@ int family_export(const char *root, const char *id)
                   manifest);
             break;
         }
-        if (snprintf(member, sizeof(member), "%s/%s", id, entry->d_name) >= (int)sizeof(member) ||
-            snprintf(path, sizeof(path), "%s/%s", root, member) >= (int)sizeof(path) ||
-            lstat(path, &st))
+        if (!export_entry(root, id, entry->d_name, list, manifest, &budget))
             goto done;
-        include = S_ISREG(st.st_mode) && st.st_size >= 0 && st.st_size <= 1048576;
-        charge = include ? 4096 + ((size_t)st.st_size + 511) / 512 * 512 : 0;
-        include &= charge <= budget;
-        if (include) {
-            budget -= charge;
-            fwrite(member, 1, strlen(member) + 1, list);
-        }
-        fprintf(manifest, "%s %o %lld ", include ? "archive" : "disk-only", (unsigned)st.st_mode,
-                (long long)st.st_size);
-        quoted(manifest, entry->d_name);
-        fputc('\n', manifest);
     }
     ok = !ferror(list) && !ferror(manifest);
 done:

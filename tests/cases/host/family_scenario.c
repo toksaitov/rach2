@@ -77,6 +77,23 @@ static int fixtures(struct etude_case_machine *m, const char *id)
            execute(m, tar, "family-fixture-archive") &&
            etude_guest_get(m, "/host-work/fixtures.tar", "family-fixtures.tar") == ETUDE_OK;
 }
+static void assertions(struct etude_case *c, const char *const ids[], const int held[], size_t n,
+                       int whole, int exported)
+{
+    for (size_t i = 0; i < n; i++) {
+        if (!whole)
+            etude_notrun(c, ids[i],
+                         exported ? "the controller report is incomplete; see family-fixtures.tar"
+                                  : "the controller report is incomplete; fixture export failed; "
+                                    "see the retained products disk");
+        else
+            etude_assert(c, ids[i], held[i],
+                         held[i]    ? NULL
+                         : exported ? "the product result differs; see family-fixtures.tar"
+                                    : "the product result differs; fixture export failed; "
+                                      "see the retained products disk");
+    }
+}
 int etude_scenario(struct etude_case *c)
 {
     struct etude_case_machine *m = NULL;
@@ -110,18 +127,6 @@ int etude_scenario(struct etude_case *c)
     }
     if (ready && (!whole || failed))
         exported = fixtures(m, id);
-    for (i = 0; i < n; i++) {
-        if (!whole)
-            etude_notrun(c, ids[i],
-                         exported ? "the controller report is incomplete; see family-fixtures.tar"
-                                  : "the controller report is incomplete; fixture export failed; "
-                                    "see the retained products disk");
-        else
-            etude_assert(c, ids[i], held[i],
-                         held[i]    ? NULL
-                         : exported ? "the product result differs; see family-fixtures.tar"
-                                    : "the product result differs; fixture export failed; "
-                                      "see the retained products disk");
-    }
+    assertions(c, ids, held, n, whole, exported);
     return !whole || failed;
 }
