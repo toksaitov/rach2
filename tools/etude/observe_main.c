@@ -101,7 +101,7 @@ int etude_observe_main(int argc, char **argv)
             return etude_observe_parent_main(argc, argv);
         if (!strcmp(argv[1], "identity"))
             return identity_main(argc, argv);
-        if (!strcmp(argv[1], "sequence"))
+        if (!strcmp(argv[1], "sequence") || !strcmp(argv[1], "routine"))
             return etude_observe_sequence_main(argc, argv);
     }
     struct observe_options oargs = {0};

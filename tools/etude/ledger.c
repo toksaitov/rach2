@@ -23,6 +23,7 @@
 #endif
 
 #include "etude/ledger.h"
+#include "authority.h"
 #include "sha256.h"
 
 /* The first line of a ledger of this format. */
@@ -97,6 +98,7 @@ struct ask {
 
 struct etude_ledger {
     char *dir;
+    struct etude_authority *authority;
     char boot[BOOT_MAX];
     struct etude_pid self;
 #ifdef _WIN32
@@ -1190,6 +1192,10 @@ struct etude_ledger *etude_ledger_open(const char *dir)
 #else
     l->lock = -1;
 #endif
+    if (etude_authority_open(dir, &l->authority)) {
+        e = errno;
+        goto out;
+    }
     l->dir = malloc(strlen(dir) + 1);
     if (l->dir == NULL) {
         e = ENOMEM;
@@ -1229,6 +1235,7 @@ void etude_ledger_close(struct etude_ledger *l)
     if (l == NULL)
         return;
     lock_close(l);
+    etude_authority_close(l->authority);
     free(l->dir);
     free(l);
 }
@@ -1475,6 +1482,8 @@ int etude_ledger_reserve(struct etude_ledger *l, const char *id, const struct et
 
     if (!is_id(id) || !res_sound(res, nres))
         return fail(EINVAL);
+    if (etude_authority_claim(l->authority, id, cap, ncap))
+        return -1;
     e = begin(l, &t);
     if (e != 0)
         return fail(e);
@@ -1562,6 +1571,8 @@ int etude_ledger_admit(struct etude_ledger *l, const char *id, const char *accou
 
     if (!is_id(id) || !is_account(account) || !res_sound(res, nres))
         return fail(EINVAL);
+    if (etude_authority_claim(l->authority, id, cap, ncap))
+        return -1;
     e = begin(l, &t);
     if (e != 0)
         return fail(e);

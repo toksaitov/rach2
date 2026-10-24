@@ -12,9 +12,15 @@
 #include "etude/exec.h"
 #include "posix.h"
 #include "../observe_sequence.h"
+#include "../routine_direct.h"
 
 extern char **environ;
 static volatile sig_atomic_t stopped;
+
+int etude_sequence_caller_identity(struct etude_pid *identity)
+{
+    return etude_sequence_parent_identity(getppid(), identity);
+}
 
 int etude_posix_observe_parent_main(int argc, char **argv)
 {
@@ -30,6 +36,7 @@ struct sequence_phase {
     struct etude_proc *process;
     size_t out, err;
     int done, status;
+    struct etude_reading started;
 };
 
 struct sequence {
@@ -146,6 +153,8 @@ static int begin(struct sequence *s, unsigned index, char **argv, int observer)
 {
     struct sequence_phase *p = &s->phases[index];
     if (setenv("PATH", index == 1 ? s->prep_path : s->runtime_path, 1))
+        return -1;
+    if (etude_history_now(&p->started))
         return -1;
     struct etude_exec_spec spec = {0};
     spec.attempt_id = p->name;
@@ -268,6 +277,8 @@ static int end_phase(struct sequence *s, unsigned index)
                 (unsigned long long)r->cpu_us.value) < 0 ||
         fflush(s->record))
         s->error = EIO;
+    if (index && routine_direct_phase(p->name, &s->owner, r, &p->started))
+        s->error = EIO;
     etude_proc_free(p->process);
     p->process = NULL;
     return s->error ? -1 : 0;
@@ -317,6 +328,12 @@ static int run_sequence(struct sequence *s)
         return 125;
     int status = s->phases[1].status;
     if (!status) {
+        int ack;
+        while ((ack = routine_direct_ack()) == 0)
+            if (poll_sequence(s) || observer_ended(s, 1))
+                return 125;
+        if (ack < 0)
+            return 125;
         if (unsetenv("ETUDE_PREPARATION_GRANT") || unsetenv("ETUDE_PREPARATION_IMPORT") ||
             unsetenv("ETUDE_PREPARATION_CLEAN"))
             return 125;

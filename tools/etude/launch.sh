@@ -2,6 +2,16 @@
 # launch.sh: admit a build or an old runner under the installed site policy.
 set -eu
 
+# An enrolled launcher enters the fixed native gate before reading any site.
+# The immutable body is selected by the protected binding, not this checkout.
+authority=/etc/rach2/etude-authority
+case $(uname -s) in MINGW*|MSYS*|UCRT*|CLANG*) authority='C:/ProgramData/rach2/etude-authority' ;; esac
+if [ -e "$authority" ] || [ -L "$authority" ]; then
+    program=$(sed -n 's/^program //p' "$authority")
+    case $program in /*|[A-Za-z]:/*) ;; *) echo 'etude-launch: invalid authority program' >&2; exit 2 ;; esac
+    exec "$program" authority launch "$@"
+fi
+
 # Refuse before execution when the installed authority cannot be used.
 refuse()
 {

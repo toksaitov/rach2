@@ -43,12 +43,19 @@ ETUDE_LOCK_WIN_SRC = tools/etude/etude.c tools/etude/lock_tree.c tools/etude/win
 # `etude show lines`, the compatible formatter, and `etude admit`, the
 # external admission wrapper for old checkouts and new runs. These are the
 # parts with Windows sources as well.
-ETUDE_OBSERVE_SRC = tools/etude/observe_sequence.c tools/etude/posix/observe_sequence.c \
+ETUDE_OBSERVE_SRC = tools/etude/routine_owner.c tools/etude/routine_direct.c \
+                    tools/etude/observe_sequence.c tools/etude/posix/observe_sequence.c \
                     tools/etude/observe_history.c tools/etude/observe.c \
                     tools/etude/observe_main.c tools/etude/observe_scope.c \
                     tools/etude/observe_system.c
 
-ETUDE_RUN_SRC = tools/etude/repeat.c tools/etude/collection_repeat.c tools/etude/collection_load.c \
+# The fixed shared-authority check is also linked by private ledger fixtures.
+ETUDE_AUTHORITY_SRC = tools/etude/authority.c tools/etude/authority_parse.c \
+                      tools/etude/posix/authority_platform.c tools/etude/win/authority_platform.c
+ETUDE_AUTHORITY_RUN_SRC = tools/etude/authority_main.c tools/etude/authority_run.c \
+                          tools/etude/routine_proof.c
+
+ETUDE_RUN_SRC = $(ETUDE_AUTHORITY_SRC) $(ETUDE_AUTHORITY_RUN_SRC) tools/etude/repeat.c tools/etude/collection_repeat.c tools/etude/collection_load.c \
                 tools/etude/posix/load.c $(ETUDE_OBSERVE_SRC) tools/etude/measurement_context.c \
                 tools/etude/boot_identity.c tools/etude/collection.c \
                 tools/etude/posix/run_suites.c tools/etude/posix/legacy.c \
@@ -117,7 +124,7 @@ ETUDE_WIN_FIXTURE_SRC = tools/etude/win/winfixture.c tools/etude/win/winexecfix.
                         tools/etude/win/winledgerfix.c tools/etude/win/winrunfix.c \
                         tools/etude/win/wintoolfix.c tools/etude/win/winholdfix.c \
                         tools/etude/win/winportsfix.c tools/etude/win/wincollectionfix.c \
-                        tools/etude/ledger.c tools/etude/watchdog.c tools/etude/supervise.c \
+                        $(ETUDE_AUTHORITY_SRC) tools/etude/ledger.c tools/etude/watchdog.c tools/etude/supervise.c \
                         tools/etude/history_json.c tools/etude/posix/qemu.c \
                         tools/etude/posix/store.c tools/etude/qemu_profile.c \
                         tools/etude/processor.c $(ETUDE_WIN_EXEC_SRC) utils/sha256.c \

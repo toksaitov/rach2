@@ -10,6 +10,8 @@
  * host-inputs: tools/etude/schemas/budget.schema.json
  * host-inputs: tools/etude/schemas/budget.example.json
  * host-deps: tools/etude/routine_charge.c
+ * host-deps: tools/etude/authority.c tools/etude/authority_parse.c
+ * host-deps: tools/etude/posix/authority_platform.c tools/etude/win/authority_platform.c
  * host-deps: tools/etude/budget.c tools/etude/budget_run.c tools/etude/digest.c
  * host-deps: tools/etude/budget_prepare.c
  * host-deps: tools/etude/compare_load.c tools/etude/observe_import.c

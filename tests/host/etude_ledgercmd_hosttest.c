@@ -3,6 +3,8 @@
  * which list the claims of a ledger and drop one, against a ledger of real
  * processes.
  *
+ * host-deps: tools/etude/authority.c tools/etude/authority_parse.c
+ * host-deps: tools/etude/posix/authority_platform.c tools/etude/win/authority_platform.c
  * host-deps: tools/etude/ledger.c tools/etude/posix/process.c utils/sha256.c
  * host-cflags: -I tools/etude/include -Wall -Wextra -Werror
  *

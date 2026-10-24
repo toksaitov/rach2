@@ -3,6 +3,8 @@
  * POSIX executor, this program run as the case's program, with
  * `--case MODE TOKEN ARG`, and as the workers whose death the test causes.
  *
+ * host-deps: tools/etude/authority.c tools/etude/authority_parse.c
+ * host-deps: tools/etude/posix/authority_platform.c tools/etude/win/authority_platform.c
  * host-deps: tools/etude/ledger.c tools/etude/capture.c utils/sha256.c
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
  * host-deps: tools/etude/posix/process.c

@@ -1,6 +1,8 @@
 /* Own observation, admitted preparation and collection in one native process.
  */
 #include "observe_sequence.h"
+#include "routine_owner.h"
+#include "authority_internal.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -110,6 +112,15 @@ static DWORD observe(struct etude_win_child *child, size_t *count)
     *count = n;
     return 0;
 }
+static DWORD WINAPI caller_input(void *input)
+{
+    char byte;
+    DWORD got;
+    ReadFile((HANDLE)input, &byte, 1, &got, NULL);
+    SetEvent(input_gone);
+    return 0;
+}
+
 static BOOL WINAPI on_console(DWORD type)
 {
     (void)type;
@@ -141,15 +152,18 @@ struct phase {
     int ready, overlong;
     size_t line_used;
     char line[64];
+    struct etude_reading started;
 };
 struct sequence {
     const char *run, *trace, *stop, *observer, *prep_path, *runtime_path;
-    const char *prep_program, *collection_program;
-    char **prep_argv, **collection_argv;
+    const char *prep_program, *collection_program, *quiesce_program, *restore_program;
+    char **prep_argv, **collection_argv, **quiesce_argv, **restore_argv;
     struct etude_win_sup supervisor;
-    struct phase observer_phase, preparation, collection;
+    struct phase observer_phase, preparation, collection, quiesce, restoration;
+    struct etude_routine_owner routine;
+    int routed, restored;
     DWORD error;
-    HANDLE observer_input, parent;
+    HANDLE observer_input, collection_input, caller_input_thread, parent;
     int cancelled, requested;
 };
 
@@ -171,6 +185,11 @@ static DWORD parent_pid(void)
         } while (Process32NextW(snapshot, &entry));
     CloseHandle(snapshot);
     return parent;
+}
+
+int etude_sequence_caller_identity(struct etude_pid *identity)
+{
+    return etude_sequence_parent_identity(parent_pid(), identity);
 }
 
 int etude_observe_parent_main(int argc, char **argv)
@@ -254,16 +273,32 @@ static int sequence_arguments(struct sequence *s, int argc, char **argv)
     s->prep_path = argv[7];
     s->runtime_path = argv[8];
     int position = 9;
+    s->routed = !strcmp(argv[1], "routine");
+    if (s->routed) {
+        if (argc < 22 || routine_owner_open(&s->routine, argv[9], argv[10], s->run, argv[11]))
+            return -1;
+        s->routine.trace = s->trace;
+        position = 12;
+        s->quiesce_argv = vector(argc, argv, &position, &s->quiesce_program);
+        if (!s->quiesce_argv || strcmp(s->quiesce_program, s->observer))
+            return -1;
+    }
     s->prep_argv = vector(argc, argv, &position, &s->prep_program);
     s->collection_argv = vector(argc, argv, &position, &s->collection_program);
+    if (s->routed)
+        s->restore_argv = vector(argc, argv, &position, &s->restore_program);
     if (!s->prep_argv || !s->collection_argv || position != argc || !token(s->run) ||
-        strcmp(s->prep_program, s->observer) || strcmp(s->collection_program, s->observer) ||
-        !s->prep_argv[1] || strcmp(s->prep_argv[1], "admit") || !s->collection_argv[1] ||
-        strcmp(s->collection_argv[1], "run"))
+        strcmp(s->prep_program, s->observer) || (!s->routed && strcmp(s->collection_program, s->observer)) ||
+        !s->prep_argv[1] || strcmp(s->prep_argv[1], s->routed ? "authority" : "admit") ||
+        !s->collection_argv[1] ||
+        (!s->routed && strcmp(s->collection_argv[1], "run")) ||
+        (s->routed && (!s->restore_argv || strcmp(s->restore_program, s->observer))))
         return -1;
     s->observer_phase.name = "observer";
     s->preparation.name = "preparation";
     s->collection.name = "collection";
+    s->quiesce.name = "quiesce";
+    s->restoration.name = "restoration";
     return 0;
 }
 
@@ -311,6 +346,8 @@ static DWORD phase_start(struct sequence *s, struct phase *phase, const char *pr
         return ERROR_CANCELLED;
     if (_putenv_s("PATH", path))
         return ERROR_INVALID_ENVIRONMENT;
+    if (s->routed && etude_history_now(&phase->started))
+        return ERROR_INVALID_DATA;
     spawn.program = program;
     spawn.argv = (const char *const *)argv + 1;
     spawn.registered = sequence_registered;
@@ -320,10 +357,12 @@ static DWORD phase_start(struct sequence *s, struct phase *phase, const char *pr
             (unsigned long long)GetTickCount64());
     if (fflush(record))
         return ERROR_WRITE_FAULT;
-    if (phase != &s->observer_phase)
+    int direct = s->routed && !strcmp(s->routine.mode, "wsl-native") && phase == &s->collection;
+    if (phase != &s->observer_phase && !direct)
         return etude_win_start(&s->supervisor, &spawn, &phase->child);
+    HANDLE *writer = direct ? &s->collection_input : &s->observer_input;
     HANDLE read = NULL, original = GetStdHandle(STD_INPUT_HANDLE);
-    if (!CreatePipe(&read, &s->observer_input, NULL, 0))
+    if (!CreatePipe(&read, writer, NULL, 0))
         return GetLastError();
     DWORD error = 0;
     if (!SetStdHandle(STD_INPUT_HANDLE, read))
@@ -385,7 +424,7 @@ static DWORD request_stop(struct sequence *s)
 
 static void stop_all(struct sequence *s)
 {
-    struct phase *phases[] = {&s->observer_phase, &s->preparation, &s->collection};
+    struct phase *phases[] = {&s->observer_phase, &s->quiesce, &s->preparation, &s->collection, &s->restoration};
     for (size_t i = 0; i < sizeof(phases) / sizeof(*phases); i++)
         if (phases[i]->child && !phases[i]->child->ended) {
             DWORD error = etude_win_stop(phases[i]->child);
@@ -398,6 +437,11 @@ static int sequence_poll(struct sequence *s)
 {
     if (output_failed)
         s->error = ERROR_WRITE_FAULT;
+    if (s->routed && routine_owner_direct_prepared(&s->routine))
+        s->error = ERROR_INVALID_DATA;
+    if (s->routed && !s->restoration.child && !s->restored &&
+        routine_owner_expired(&s->routine))
+        s->error = ERROR_TIMEOUT;
     if (WaitForSingleObject(input_gone, 0) == WAIT_OBJECT_0 ||
         WaitForSingleObject(s->parent, 0) != WAIT_TIMEOUT) {
         s->cancelled = 1;
@@ -408,7 +452,7 @@ static int sequence_poll(struct sequence *s)
         if (!s->error)
             s->error = ERROR_GEN_FAILURE;
     }
-    struct phase *phases[] = {&s->observer_phase, &s->preparation, &s->collection};
+    struct phase *phases[] = {&s->observer_phase, &s->quiesce, &s->preparation, &s->collection, &s->restoration};
     for (size_t i = 0; i < sizeof(phases) / sizeof(*phases); i++)
         if (phases[i]->child) {
             size_t count;
@@ -428,7 +472,7 @@ static int wait_phase(struct sequence *s, struct phase *phase)
             return -1;
         struct etude_win_child *observer = s->observer_phase.child;
         if (observer && observer->ended && phase != &s->observer_phase &&
-            (phase != &s->collection || observer->status || stop_matches(s) != 1)) {
+            ((phase != &s->collection && phase != &s->restoration) || observer->status || stop_matches(s) != 1)) {
             s->error = ERROR_BROKEN_PIPE;
             stop_all(s);
             return -1;
@@ -451,10 +495,22 @@ static DWORD phase_end(struct sequence *s, struct phase *phase, DWORD *status)
             (unsigned long)usage.active, (unsigned long long)(usage.user_us + usage.kernel_us));
     if (fflush(record) && !error)
         error = ERROR_WRITE_FAULT;
+    struct etude_exec_result result = {0};
+    result.process.pid = child->ident.pid;
+    result.process.start = child->ident.created;
+    result.process.start_known = 1;
+    result.end = child->stopped ? ETUDE_END_STOPPED : ETUDE_END_EXITED;
+    result.value = result.exit_value = (int)child->status;
+    result.exit_end = child->main_ended ? ETUDE_END_EXITED : ETUDE_END_LOST;
+    result.cleanup = ETUDE_CLEANUP_CONFIRMED;
+    result.output_error = output_failed ? EIO : 0;
     if (etude_win_release(child, 30000))
         error = ERROR_BUSY;
     else
         phase->child = NULL;
+    if (!error && s->routed && !strcmp(s->routine.mode, "windows-import") &&
+        routine_owner_phase(&s->routine, phase->name, &result, &phase->started))
+        error = ERROR_WRITE_FAULT;
     return error;
 }
 
@@ -504,16 +560,39 @@ static DWORD sequence_run(struct sequence *s)
             return status;
         }
     }
+    if (s->routed) {
+        s->error = phase_start(s, &s->quiesce, s->quiesce_program, s->quiesce_argv, s->prep_path);
+        if (s->error || wait_phase(s, &s->quiesce) || phase_end(s, &s->quiesce, &status) || status)
+            return 125;
+        if (routine_owner_grant(&s->routine)) {
+            s->error = ERROR_ACCESS_DENIED;
+            return 125;
+        }
+    }
     s->error = phase_start(s, &s->preparation, s->prep_program, s->prep_argv, s->prep_path);
     if (s->error || wait_phase(s, &s->preparation))
         return status;
     s->error = phase_end(s, &s->preparation, &status);
     if (s->error)
         return status;
+    if (s->routed && !strcmp(s->routine.mode, "windows-import") &&
+        routine_owner_prepared(&s->routine)) {
+        s->error = ERROR_INVALID_DATA;
+        return 125;
+    }
     if (!status) {
         if (clear_preparation_inputs()) {
             s->error = ERROR_INVALID_ENVIRONMENT;
             return 125;
+        }
+        if (s->routed && !strcmp(s->routine.mode, "windows-import")) {
+            char projection[4096];
+            int n = snprintf(projection, sizeof projection, "%s/consumer.site", s->routine.directory);
+            if (n < 0 || (size_t)n >= sizeof projection || setenv("ETUDE_SITE", projection, 1) ||
+                setenv("ETUDE_AUTHORITY_PHASE", "consumer", 1)) {
+                s->error = ERROR_INVALID_ENVIRONMENT;
+                return 125;
+            }
         }
         s->error = phase_start(s, &s->collection, s->collection_program, s->collection_argv,
                                s->runtime_path);
@@ -526,6 +605,18 @@ static DWORD sequence_run(struct sequence *s)
          */
         if (!status && stop_matches(s) != 1)
             s->error = ERROR_INVALID_DATA;
+    }
+    if (s->routed) {
+        if (routine_owner_observed(&s->routine)) {
+            s->error = ERROR_INVALID_DATA;
+            return 125;
+        }
+        DWORD restore_status;
+        s->error = phase_start(s, &s->restoration, s->restore_program, s->restore_argv, s->prep_path);
+        if (s->error || wait_phase(s, &s->restoration) ||
+            phase_end(s, &s->restoration, &restore_status) || restore_status)
+            return 125;
+        s->restored = 1;
     }
     DWORD error = request_stop(s);
     if (error && !s->error)
@@ -543,7 +634,7 @@ static int sequence_close(struct sequence *s, DWORD status)
 {
     if (s->error || s->cancelled)
         stop_all(s);
-    struct phase *phases[] = {&s->observer_phase, &s->preparation, &s->collection};
+    struct phase *phases[] = {&s->observer_phase, &s->quiesce, &s->preparation, &s->collection, &s->restoration};
     for (size_t i = 0; i < sizeof(phases) / sizeof(*phases); i++)
         if (phases[i]->child) {
             /* release stops and waits even when the main poll failed. */
@@ -560,6 +651,11 @@ static int sequence_close(struct sequence *s, DWORD status)
         output_failed = 1;
     if (output_failed)
         s->error = ERROR_WRITE_FAULT;
+    if (s->routed && routine_owner_direct_prepared(&s->routine))
+        s->error = ERROR_INVALID_DATA;
+    if (s->routed && !s->restoration.child && !s->restored &&
+        routine_owner_expired(&s->routine))
+        s->error = ERROR_TIMEOUT;
     int result = cleanup_error  ? 125
                  : s->cancelled ? 130
                  : s->error     ? 125
@@ -568,16 +664,32 @@ static int sequence_close(struct sequence *s, DWORD status)
     fprintf(record, "error %lu\ncancelled %d\nstatus %d\nactive %s\ncleanup %s\n",
             (unsigned long)s->error, s->cancelled, result, cleanup_error ? "unknown" : "0",
             cleanup_error ? "unconfirmed" : "confirmed");
+    if (s->routed && s->restored && !cleanup_error) {
+        int terminal = routine_owner_complete(&s->routine, result, 1);
+        struct etude_authority_phase phase = {.run_id = s->run, .commit = s->routine.commit,
+            .nonce = getenv("ETUDE_AUTHORITY_NONCE"), .owner = s->routine.owner};
+        if (etude_authority_physical(&phase, 1) || (!result && terminal))
+            result = 125;
+    }
     int receipt_failed = fclose(record) != 0;
     free(known);
     free(s->prep_argv);
     free(s->collection_argv);
+    free(s->quiesce_argv);
+    free(s->restore_argv);
     SetConsoleCtrlHandler(on_console, FALSE);
     if (s->parent)
         CloseHandle(s->parent);
-    CloseHandle(input_gone);
     if (s->observer_input)
         CloseHandle(s->observer_input);
+    if (s->collection_input)
+        CloseHandle(s->collection_input);
+    if (s->caller_input_thread) {
+        CancelSynchronousIo(s->caller_input_thread);
+        WaitForSingleObject(s->caller_input_thread, INFINITE);
+        CloseHandle(s->caller_input_thread);
+    }
+    CloseHandle(input_gone);
     return receipt_failed ? 125 : result;
 }
 
@@ -610,6 +722,12 @@ int etude_observe_sequence_main(int argc, char **argv)
     if (!input_gone) {
         fclose(record);
         return 2;
+    }
+    if (getenv("ETUDE_ROUTINE_INPUT")) {
+        HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+        if (GetFileType(input) != FILE_TYPE_PIPE ||
+            !(s.caller_input_thread = CreateThread(NULL, 0, caller_input, input, 0, NULL)))
+            s.error = ERROR_INVALID_HANDLE;
     }
     SetConsoleCtrlHandler(on_console, TRUE);
     sequence_log = NULL;

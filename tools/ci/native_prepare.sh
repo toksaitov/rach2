@@ -119,6 +119,15 @@ ETUDE_PREPARATION_RECEIPT=$out_native/preparation.receipt.json
 ETUDE_PREPARATION_COMMIT=$commit
 export ETUDE_ADMITTED ETUDE_SITE RACH2_QEMU_ACCEL
 export ETUDE_PREPARATION_RUN_ID ETUDE_PREPARATION_RECEIPT ETUDE_PREPARATION_COMMIT
+if [ -n "${ETUDE_ROUTINE_ENSURE:-}" ]; then
+    # Imported ordinary production is inside this already admitted interval.
+    "$python" "$(python_path "$tree/tools/ci/routine_route.py")" ensure \
+        --config "$(native_path "$ETUDE_ROUTINE_ENSURE")" --tree "$tree_native" \
+        --out "$out_native" --run "$run" --commit "$commit" --purpose "$purpose" \
+        --arches "$arches" --site "$site" --etude "$etude" --accel "$accel" -- "$@"
+    ETUDE_PREPARATION_IMPORT=$out_native/preparation-import.json
+    export ETUDE_PREPARATION_IMPORT
+fi
 "$etude" prepare collection -t "$tree_native" -a "$arches" -p "$out_native/prepare.record" "$@"
 unset ETUDE_PREPARATION_RUN_ID ETUDE_PREPARATION_RECEIPT ETUDE_PREPARATION_COMMIT
 if [ "${ETUDE_PREPARATION_EXPORT:-0}" = 1 ]; then
@@ -175,6 +184,17 @@ if [ -n "${ETUDE_PREPARATION_IMPORT:-}" ]; then
         *) refuse "invalid producer transport: $transport" ;;
     esac
 fi
+case ${ETUDE_ROUTINE_GRANT:+set}/${ETUDE_ROUTINE_UPSTREAM:+set}/${ETUDE_ROUTINE_PROOFS:+set} in
+    //) ;;
+    set//set|set/set/set)
+        set -- "$@" --routine-grant "$(native_path "$ETUDE_ROUTINE_GRANT")" \
+            --routine-proofs "$(native_path "$ETUDE_ROUTINE_PROOFS")"
+        if [ -n "${ETUDE_ROUTINE_UPSTREAM:-}" ]; then
+            set -- "$@" --upstream-preparation "$(native_path "$ETUDE_ROUTINE_UPSTREAM")"
+        fi
+        ;;
+    *) refuse 'routine grant needs its complete proof directory and optional upstream event' ;;
+esac
 if [ -n "${ETUDE_PHYSICAL_TRACE:-}" ]; then
     set -- "$@" --physical-trace "$(native_path "$ETUDE_PHYSICAL_TRACE")" \
         --physical-stop-request "$(native_path "$ETUDE_PHYSICAL_STOP_REQUEST")"
