@@ -14,6 +14,7 @@
  * host-deps: tools/etude/posix/process.c tools/etude/posix/store.c
  * host-deps: tools/etude/capture.c tools/etude/history_json.c
  * host-deps: tools/etude/guest/guest.c tools/etude/guest/fixture.c
+ * host-deps: tools/etude/boot_identity.c
  * host-deps: tools/etude/guest/wire.c
  * host-deps: tools/etude/volume/volume.c
  * host-deps: utils/sha256.c

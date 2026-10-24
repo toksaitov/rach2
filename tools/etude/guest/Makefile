@@ -27,8 +27,9 @@ LINK_POST = $(PREFIX)/lib/libc.a $(LIBGCC) $(CRTN) -Wl,-z,noexecstack $(ARCH_LDF
 # reads the invocations, and the SHA-256 of utils/. They are compiled and
 # linked in one step, as utils/ links ping and nc, so -MF records the headers
 # of the last source only and the sources and headers are named here.
-SRC = guest.c fixture.c wire.c ../history_json.c $(TOP)/utils/sha256.c
-HDR = fixture.h wire.h ../history_json.h ../include/etude/frame.h $(TOP)/utils/sha256.h
+SRC = guest.c fixture.c wire.c ../boot_identity.c ../history_json.c $(TOP)/utils/sha256.c
+HDR = fixture.h wire.h ../boot_identity.h ../history_json.h \
+      ../include/etude/frame.h $(TOP)/utils/sha256.h
 
 CONFIG_TEXT = $(CC) $(CFLAGS) $(LINK_PRE) $(LINK_POST)
 include $(TOP)/mk/fingerprint.mk

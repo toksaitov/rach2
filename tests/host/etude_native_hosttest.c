@@ -12,6 +12,7 @@
  * host-deps: tools/etude/posix/run_native.c tools/etude/posix/remote.c
  * host-deps: tools/etude/posix/process.c tools/etude/json.c
  * host-deps: tools/etude/guest/guest.c tools/etude/guest/fixture.c
+ * host-deps: tools/etude/boot_identity.c
  * host-deps: tools/etude/guest/wire.c tools/etude/history_json.c
  * host-deps: utils/sha256.c
  * host-deps: tests/native/collection.c tests/native/inventory.c
@@ -29,7 +30,7 @@
  * host-inputs: tests/native/bounds.json tools/etude/schemas/history.schema.json
  * host-inputs: tests/native/tccbuild.sh
  * host-cflags: -I tools/etude/include -I tools/etude -I tools/etude/guest
- * host-cflags: -I utils -Wall -Wextra -Werror
+ * host-cflags: -I utils -Wall -Wextra -Werror -Dpoll=native_test_poll
  * host-first: it runs for minutes
  *
  * A build that passes must pass with its output whole and its workspace
@@ -53,6 +54,9 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+/* Other translation units call the fixture wrapper; this one delegates. */
+#undef poll
+extern int poll(struct pollfd *, nfds_t, int);
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>

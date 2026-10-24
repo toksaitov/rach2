@@ -9,6 +9,7 @@
 #define _DEFAULT_SOURCE
 #endif
 #include "wire.h"
+#include "../boot_identity.h"
 #include "fixture.h"
 #include "history_json.h"
 #include "sha256.h"
@@ -382,7 +383,7 @@ static void token_of(const void *p, size_t n, char out[ETUDE_FRAME_TOKEN_LEN + 1
  * need no secure random source; GRND_INSECURE supplies them when Rach2
  * cannot read /dev/urandom. The file is published whole by
  * link(2), so a reader never sees a part, and it is used only when this user
- * owns it and nobody else may write it.
+ * or root owns it and nobody else may write it.
  */
 static int find_boot(void)
 {
@@ -437,14 +438,11 @@ static int find_boot(void)
         }
         unlink(tmp);
     }
-    if (stat(path, &st) < 0 || st.st_uid != geteuid() || (st.st_mode & 022) != 0 ||
-        !S_ISREG(st.st_mode)) {
-        note("boot: %s is not this user's own file", path);
+    if (etude_boot_file_read(path, buf, sizeof(buf)) < 0) {
+        note("boot: %s is not a trusted boot identity", path);
         return -1;
     }
-    n = read_file(path, buf, sizeof(buf));
-    if (n != 64)
-        return -1;
+    n = 64;
     token_of(buf, (size_t)n, boot);
     return 0;
 }

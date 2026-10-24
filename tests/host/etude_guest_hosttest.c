@@ -2,6 +2,7 @@
  * and the serial console, and check the contracts of its commands. Small
  * prepared native workloads exercise each invocation without an interpreter.
  * host-deps: tools/etude/guest/guest.c tools/etude/guest/fixture.c
+ * host-deps: tools/etude/boot_identity.c
  * host-deps: tools/etude/guest/wire.c
  * host-tools: etude-workload
  * host-deps: tools/etude/history_json.c utils/sha256.c

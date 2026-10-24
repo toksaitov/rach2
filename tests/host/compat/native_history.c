@@ -239,12 +239,25 @@ static int nh_stalled_peer(void)
 }
 struct nh_limit {
     uint64_t end;
-    unsigned calls;
+    unsigned blocked, observed;
 };
+static struct nh_limit *nh_writing;
+
+/** Observe real backpressure without changing any poll result or timeout. */
+int native_test_poll(struct pollfd *fds, nfds_t count, int timeout)
+{
+    int rc = poll(fds, count, timeout);
+    if (nh_writing && count == 1 && fds[0].events == POLLOUT && rc == 0 && !fds[0].revents) {
+        nh_writing->blocked++;
+        nh_writing->end = 1;
+    }
+    return rc;
+}
 static uint64_t nh_deadline(void *context)
 {
     struct nh_limit *limit = context;
-    limit->calls++;
+    if (limit->blocked && limit->end == 1)
+        limit->observed++;
     return limit->end;
 }
 static void nh_stalled_write(void)
@@ -265,19 +278,17 @@ static void nh_stalled_write(void)
     CHECK(opened, "stalled reader completes the actual framed handshake");
     if (!opened)
         return;
-    struct etude_reading start, end;
-    CHECK(etude_history_now(&start) == 0, "stalled-reader start clock");
-    limit.end = start.monotonic_us + 50000;
-    unsigned before = limit.calls;
     size_t size = 4 * 1024 * 1024;
     char *data = calloc(1, size);
     CHECK(data != NULL, "stalled-reader transfer bytes");
     if (data) {
+        /* Arm only after the real handshake. The peer consumes no more input. */
+        nh_writing = &limit;
         CHECK(etude_remote_put(remote, "large", data, size, "0600") != ETUDE_REMOTE_OK,
               "a stopped reader cannot leave a successful transfer");
-        CHECK(etude_history_now(&end) == 0 && end.monotonic_us - start.monotonic_us < 1000000,
-              "observed deadline bounds a full pipe before the two-second stage bound");
-        CHECK(limit.calls > before + 1, "a blocked write continues sampling the observer");
+        nh_writing = NULL;
+        CHECK(limit.blocked > 0 && limit.observed > 0,
+              "real pipe backpressure is followed by observed deadline expiry");
     }
     free(data);
     etude_remote_close(remote);
