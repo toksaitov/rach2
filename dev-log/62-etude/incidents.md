@@ -589,3 +589,7 @@ The actual checker source compiled and linked locally with the prepared checker'
 The full Linux collection on ed5953bc2b56 reached `fdexecmusl` in both TinyCC-built kernels, then panicked after the probe made its tmpfs symbolic links. The retained i686 instruction at 0x1e3510 reads an entry's node in `tmpfs_path`; the x86-64 instruction at 0xffffffff802148a0 reads the parent directory's entries. Only directories have the parent pointer that this operation walks. The executable-path reconstruction added for #978 called it with a regular file.
 
 Issue #1047 adds the missing node-type check: a regular file or symbolic link returns `ENOTDIR` before any parent is read. The existing tmpfs host fixture checks both refusals. Issue #1046 retains the exact executable directory entry, whose held parent can be reconstructed by this directory operation. The original descriptor-execution and selfbuild assertions remain unchanged. The combined repair check must run both rebuilt kernels.
+
+## The image dependency fixture passed GCC flags to TinyCC (#1048)
+
+The full Linux collection on ed5953 failed the edited-probe image check before it built the probe. Its private root Makefile selected the prepared TinyCC compiler but retained GCC's build-id and dependency flags and libgcc query. The fixture now supplies TinyCC's architecture, link and dependency flags and an empty libgcc value. It also disables the unrelated GNU host inventory source discovery in that private make invocation. The actual image dependency rules and all byte comparisons remain in the check.

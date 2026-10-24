@@ -38,12 +38,17 @@ int family_image_root_make(struct fixture *f, const char *target, const char *op
                                     "build/krffs/readfile.krffs",
                                     "build/tools/inspect/setidcheck",
                                     NULL};
-    char compiler[4096], arch[80];
+    char compiler[4096], arch[80], flags[256];
     unsigned n = 0, i;
     const char *architecture = !strcmp(family_image_build_path(), "build") ? "i686" : "x86_64";
     snprintf(compiler, sizeof(compiler), "CROSS_CC=/host-products/tcc/%s-tcc",
              !strcmp(architecture, "i686") ? "i386" : "x86_64");
     snprintf(arch, sizeof(arch), "ARCH=%s", architecture);
+    /* The fixture's prepared compiler is TinyCC; the normal build uses GCC. */
+    snprintf(flags, sizeof(flags),
+             "CFLAGS=-m%s -nostdlib -static -ffreestanding -Wl,-Ttext=%s -MD",
+             !strcmp(architecture, "i686") ? "32" : "64",
+             !strcmp(architecture, "i686") ? "0x08048000" : "0x400000");
     a[n++] = "/usr/bin/make";
     a[n++] = "--no-print-directory";
     a[n++] = "-j32";
@@ -55,8 +60,11 @@ int family_image_root_make(struct fixture *f, const char *target, const char *op
     a[n++] = "DEMO_CREDS=";
     a[n++] = "MAN_ALL=";
     a[n++] = "LIBC_STAMP=vendor/musl/.stamp";
+    a[n++] = "MUSL_LIBGCC=";
+    a[n++] = "GNU_HOST_CHECKS_SOURCES=";
     a[n++] = compiler;
     a[n++] = arch;
+    a[n++] = flags;
     if (option)
         a[n++] = option;
     a[n++] = target;
