@@ -94,6 +94,8 @@ def server_snapshot(repository, run_id, own_runner):
                for j in jobs):
             raise ValueError('another job in the coordinating workflow has been accepted')
         own_name = own['name']
+        if not isinstance(own_name, str) or not own_name:
+            raise ValueError('coordinating accepted job has no name')
     return dict(runners=runners, workflows=workflows, jobs=jobs, coordinating_job=own_name)
 
 
@@ -118,7 +120,8 @@ def drain_snapshot(config, run_id, own_runner):
     for name, directory in config['listeners'].items():
         runner = before['runners'].get(name)
         if (not runner or runner['status'] != 'online' or type(runner['busy']) is not bool or
-                (runner['busy'] and name != own_runner)):
+                (runner['busy'] and (not run_id or name != own_runner or
+                                     not before['coordinating_job']))):
             raise ValueError('another accepted job or offline listener: ' + name)
         paths = sorted(Path(directory).glob('Runner_*.log'))
         if not paths:

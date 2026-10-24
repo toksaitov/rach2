@@ -87,6 +87,10 @@ class RouteTests(unittest.TestCase):
                     patch('routine_jobs.server_snapshot', side_effect=[server, changed]):
                 with self.assertRaises(ValueError):
                     routine_jobs.drain_snapshot(config, None, None)
+            with patch('routine_jobs.boot_snapshot', return_value=boot), \
+                    patch('routine_jobs.server_snapshot', return_value=changed):
+                with self.assertRaises(ValueError):
+                    routine_jobs.drain_snapshot(config, None, 'ci')
             path.write_text('[2026-10-22 16:27:44Z INFO Terminal] Running job: unknown\n')
             with patch('routine_jobs.boot_snapshot', return_value=boot), \
                     patch('routine_jobs.server_snapshot', return_value=server):
