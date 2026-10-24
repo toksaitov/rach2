@@ -48,7 +48,14 @@
         "end": "exited",
         "value": 0
       },
-      "progress": [],
+      "progress": [
+        {
+          "witness_id": "transport-rows",
+          "kind": "counter",
+          "means": "a declared fault row has completed its actual command, report and confirmed child cleanup",
+          "limit": 34
+        }
+      ],
       "bounds": {
         "case": {
           "floor_us": 1000000,
@@ -121,6 +128,176 @@
           "step_id": "check",
           "stage": "execute",
           "does": "run the C controller and adopt its complete report"
+        },
+        {
+          "step_id": "transport-01",
+          "stage": "execute",
+          "does": "run and judge transport fault row 1, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-02",
+          "stage": "execute",
+          "does": "run and judge transport fault row 2, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-03",
+          "stage": "execute",
+          "does": "run and judge transport fault row 3, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-04",
+          "stage": "execute",
+          "does": "run and judge transport fault row 4, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-05",
+          "stage": "execute",
+          "does": "run and judge transport fault row 5, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-06",
+          "stage": "execute",
+          "does": "run and judge transport fault row 6, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-07",
+          "stage": "execute",
+          "does": "run and judge transport fault row 7, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-08",
+          "stage": "execute",
+          "does": "run and judge transport fault row 8, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-09",
+          "stage": "execute",
+          "does": "run and judge transport fault row 9, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-10",
+          "stage": "execute",
+          "does": "run and judge transport fault row 10, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-11",
+          "stage": "execute",
+          "does": "run and judge transport fault row 11, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-12",
+          "stage": "execute",
+          "does": "run and judge transport fault row 12, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-13",
+          "stage": "execute",
+          "does": "run and judge transport fault row 13, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-14",
+          "stage": "execute",
+          "does": "run and judge transport fault row 14, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-15",
+          "stage": "execute",
+          "does": "run and judge transport fault row 15, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-16",
+          "stage": "execute",
+          "does": "run and judge transport fault row 16, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-17",
+          "stage": "execute",
+          "does": "run and judge transport fault row 17, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-18",
+          "stage": "execute",
+          "does": "run and judge transport fault row 18, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-19",
+          "stage": "execute",
+          "does": "run and judge transport fault row 19, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-20",
+          "stage": "execute",
+          "does": "run and judge transport fault row 20, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-21",
+          "stage": "execute",
+          "does": "run and judge transport fault row 21, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-22",
+          "stage": "execute",
+          "does": "run and judge transport fault row 22, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-23",
+          "stage": "execute",
+          "does": "run and judge transport fault row 23, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-24",
+          "stage": "execute",
+          "does": "run and judge transport fault row 24, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-25",
+          "stage": "execute",
+          "does": "run and judge transport fault row 25, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-26",
+          "stage": "execute",
+          "does": "run and judge transport fault row 26, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-27",
+          "stage": "execute",
+          "does": "run and judge transport fault row 27, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-28",
+          "stage": "execute",
+          "does": "run and judge transport fault row 28, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-29",
+          "stage": "execute",
+          "does": "run and judge transport fault row 29, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-30",
+          "stage": "execute",
+          "does": "run and judge transport fault row 30, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-31",
+          "stage": "execute",
+          "does": "run and judge transport fault row 31, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-32",
+          "stage": "execute",
+          "does": "run and judge transport fault row 32, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-33",
+          "stage": "execute",
+          "does": "run and judge transport fault row 33, including its confirmed child cleanup"
+        },
+        {
+          "step_id": "transport-34",
+          "stage": "execute",
+          "does": "run and judge transport fault row 34, including its confirmed child cleanup"
         }
       ],
       "machines": [

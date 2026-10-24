@@ -166,11 +166,23 @@ int family_seed(struct fixture *f, const char *name, unsigned mib, const char *g
         NULL};
     return family_sparse(file, (uint64_t)mib * 1048576) && family_run(f, a, f->work, NULL, NULL);
 }
+/* Accept only the explicit one-based transport row numbers of the suite. */
+static unsigned transport_index(const char *text)
+{
+    size_t n = strlen(text);
+    unsigned row;
+    if (!n || n > 2 || text[0] == '0' || strspn(text, "0123456789") != n)
+        return 0;
+    row = (unsigned)atoi(text);
+    return row <= FAMILY_TRANSPORT_ROWS ? row : 0;
+}
 int main(int argc, char **argv)
 {
     struct fixture f;
     const char *name = strrchr(argv[0], '/');
-    char path[8192];
+    char path[8192], work_name[160];
+    const char *id, *root, *work;
+    unsigned transport_row = 0;
     int ok;
     name = name ? name + 1 : argv[0];
     if (strcmp(name, "host-family-check")) {
@@ -182,7 +194,22 @@ int main(int argc, char **argv)
     }
     if (argc == 4 && !strcmp(argv[1], "--export"))
         return family_export(argv[3], argv[2]);
-    if (argc != 3 || !fx_init(&f, argv[2], argv[1], argv[0]))
+    if (argc == 4 && !strcmp(argv[1], "--transport-row")) {
+        transport_row = transport_index(argv[2]);
+        if (!transport_row)
+            return 2;
+        id = "machine.metal.transport";
+        root = argv[3];
+        snprintf(work_name, sizeof(work_name), "%s/row-%02u", id, transport_row);
+        work = work_name;
+    } else {
+        if (argc != 3)
+            return 2;
+        id = argv[1];
+        root = argv[2];
+        work = id;
+    }
+    if (!fx_init(&f, root, work, argv[0]))
         return 2;
     snprintf(path, sizeof(path), "%s:/host-products:/usr/bin:/bin:/usr/sbin:/sbin", f.bin);
     fx_env("PATH", path);
@@ -191,18 +218,18 @@ int main(int argc, char **argv)
     fx_env("E2FSPROGS_FAKE_TIME", "1");
     fx_env("TMPDIR", family_path(&f, "tmp"));
     fx_mkdir(getenv("TMPDIR"));
-    printf("@etude 1 begin %s\n", argv[1]);
+    printf("@etude 1 begin %s\n", id);
     fflush(stdout);
-    if (!strcmp(argv[1], "machine.metal.password"))
+    if (!strcmp(id, "machine.metal.password"))
         ok = family_metal_password(&f);
-    else if (!strcmp(argv[1], "machine.metal.transport"))
-        ok = family_metal_transport(&f);
-    else if (!strcmp(argv[1], "machine.diskpolicy.check"))
+    else if (!strcmp(id, "machine.metal.transport"))
+        ok = family_metal_transport(&f, transport_row);
+    else if (!strcmp(id, "machine.diskpolicy.check"))
         ok = family_diskpolicy(&f);
-    else if (!strncmp(argv[1], "host.imagerace.", 15))
-        ok = family_image(&f, argv[1]);
+    else if (!strncmp(id, "host.imagerace.", 15))
+        ok = family_image(&f, id);
     else
-        ok = family_grow(&f, argv[1]);
+        ok = family_grow(&f, id);
     if (!ok)
         f.failed = 1;
     printf("@etude 1 end %u\n", records);

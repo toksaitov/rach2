@@ -2,8 +2,9 @@
 #ifndef HOST_FAMILY_METAL_H
 #define HOST_FAMILY_METAL_H
 #include "family_check.h"
+#define FAMILY_TRANSPORT_ROWS 34
 int family_metal_password(struct fixture *f);
-int family_metal_transport(struct fixture *f);
+int family_metal_transport(struct fixture *f, unsigned row);
 int family_metal_mock(int argc, char **argv);
 int family_metal_ssh(const char *command);
 #endif

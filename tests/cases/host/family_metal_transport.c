@@ -65,7 +65,7 @@ static int check_stick(struct fixture *f, const char *mode, int expected)
         ok &= strstr(f->out, "stick: host FAT bytes match while unmounted") != NULL;
     return ok;
 }
-static int check(struct fixture *f, const char *mode, int expected, unsigned su)
+static int check_one(struct fixture *f, const char *mode, int expected, unsigned su)
 {
     int stick = !strcmp(mode, "disk-prefix") || !strncmp(mode, "fat-", 4), ok;
     const char *a[] = {"/bin/sh",
@@ -97,13 +97,29 @@ static int check(struct fixture *f, const char *mode, int expected, unsigned su)
     fprintf(stderr, "transport: su=%u %s: %s\n", su, mode, ok ? "passed" : "failed");
     return ok;
 }
-int family_metal_transport(struct fixture *f)
+/* Full-controller callers select zero; the native scenario runs every row
+ * separately so each completed command has its own bounded step. */
+static unsigned selected_row, current_row, executed_rows;
+static int check(struct fixture *f, const char *mode, int expected, unsigned su)
+{
+    current_row++;
+    if (selected_row && current_row != selected_row)
+        return 1;
+    executed_rows++;
+    return check_one(f, mode, expected, su);
+}
+int family_metal_transport(struct fixture *f, unsigned row)
 {
     static const char *faults[] = {"cmdline-fail", "uname-fail", "hash-fail",
                                    "image-fail",   "tmp-fail",   "tmp-empty",
                                    "put-fail",     "live-fault", NULL};
     unsigned su, i;
-    int ok = setup(f);
+    int ok;
+    if (row > FAMILY_TRANSPORT_ROWS)
+        return 0;
+    selected_row = row;
+    current_row = executed_rows = 0;
+    ok = setup(f);
     if (!ok)
         return 0;
     for (su = 0; su < 2; su++) {
@@ -125,6 +141,8 @@ int family_metal_transport(struct fixture *f)
         ok &= check(f, "saved-bootlog", 2, su);
         fx_env("RACH2_ACCEPT_BOOTLOG", NULL);
     }
+    ok &=
+        current_row == FAMILY_TRANSPORT_ROWS && executed_rows == (row ? 1 : FAMILY_TRANSPORT_ROWS);
     family_row(f, "transport", ok);
     return 1;
 }
