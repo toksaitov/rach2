@@ -105,14 +105,7 @@ end=@etude-$nonce
 
 # Each file goes in a here-document, which carries text whose lines all end
 # in a newline, and which the line $end does not end early.
-while read -r f; do
-    case $f in
-        *[!A-Za-z0-9._/-]*) fail "$f: the name is not a plain path" ;;
-    esac
-    [ -z "$(tail -c 1 "$src/$f")" ] || fail "$f: the last line has no newline"
-    [ "$(tr -d '\000' < "$src/$f" | wc -c)" -eq "$(wc -c < "$src/$f")" ] || fail "$f: the file has a NUL byte"
-    ! grep -qx -- "$end" "$src/$f" || fail "$f: a line is $end"
-done < "$work/files"
+etude_text "$src" "$end" < "$work/files" || fail 'cannot encode the source'
 
 {
     echo "ETUDE_NONCE=$nonce"

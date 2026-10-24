@@ -59,11 +59,103 @@ etude_select()
 # etude_list DIR: for each path on standard input, of a file under DIR,
 # print the line `SHA256  PATH`. The digest of the list is the source's.
 etude_list()
-{
-    while read -r path; do
-        sum=$(etude_hash "$1/$path") || { echo "etude provision: cannot read $path" >&2; return 1; }
-        printf '%s  %s\n' "$sum" "$path"
+(
+    cd "$1" || exit 1
+    paths=
+    set --
+    while IFS= read -r path; do
+        case $path in
+            *[!A-Za-z0-9._/-]*|'') exit 1 ;;
+        esac
+        paths="$paths$path
+"
+        set -- "$@" "$path"
     done
+    [ "$#" -gt 0 ] || exit 0
+    if command -v sha256sum >/dev/null 2>&1; then
+        output=$(sha256sum "$@") || exit 1
+    elif command -v shasum >/dev/null 2>&1; then
+        output=$(shasum -a 256 "$@") || exit 1
+    else
+        # Older OpenSSL versions need one digest invocation per file.
+        for path do
+            sum=$(etude_hash "$path") || exit 1
+            printf '%s  %s\n' "$sum" "$path"
+        done
+        exit
+    fi
+    printf '%s\n' "$output" | LC_ALL=C awk -v paths="$paths" '
+        BEGIN { count = split(paths, names, "\n") - 1 }
+        {
+            sum = substr($0, 1, 64)
+            if (NR > count || length(sum) != 64 || sum ~ /[^0-9a-f]/ ||
+                substr($0, 65, 2) != "  " || substr($0, 67) != names[NR])
+                bad = 1
+        }
+        END { if (bad || NR != count) exit 1 }
+        { print }
+    '
+)
+
+# etude_text DIR END: refuse NUL bytes, missing final newlines and a line
+# equal to END in each listed source. Numeric od records preserve every byte;
+# explicit boundaries also distinguish an empty file from a failed read.
+etude_text()
+{
+    (
+        while IFS= read -r path; do
+            printf 'file %s\n' "$path"
+            od -An -v -tu1 "$1/$path" || exit 1
+            printf 'end\n'
+        done
+        printf 'complete\n'
+    ) | LC_ALL=C awk -v marker="$2" '
+        function fail(reason) {
+            print "etude provision: " path ": " reason
+            bad = 1
+            exit 1
+        }
+        /^file / {
+            if (active || complete) fail("invalid byte stream")
+            path = substr($0, 6)
+            active = 1
+            bytes = last = width = 0
+            matchline = 1
+            next
+        }
+        /^end$/ {
+            if (!active) fail("invalid byte stream")
+            if (bytes && last != 10) fail("the last line has no newline")
+            active = 0
+            next
+        }
+        /^complete$/ {
+            if (active || complete) fail("invalid byte stream")
+            complete = 1
+            next
+        }
+        {
+            if (!active || !NF) fail("invalid byte stream")
+            for (i = 1; i <= NF; i++) {
+                if ($i !~ /^[0-9]+$/ || $i > 255) fail("invalid byte stream")
+                last = $i + 0
+                bytes++
+                if (!last) fail("the file has a NUL byte")
+                if (last == 10) {
+                    if (matchline && width == length(marker))
+                        fail("a line is " marker)
+                    width = 0
+                    matchline = 1
+                } else {
+                    width++
+                    if (matchline &&
+                        substr(marker, width, 1) != sprintf("%c", last))
+                        matchline = 0
+                }
+            }
+        }
+        END { if (bad || active || !complete) exit 1 }
+    ' >&2
 }
 
 # etude_platform: print the platform and the machine, the platform named as

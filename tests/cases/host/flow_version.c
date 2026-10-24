@@ -190,6 +190,24 @@ static int version_cygpath_mock(int argc, char **argv)
     puts(vp("appdata"));
     return 0;
 }
+static int version_hash_mock(int argc, char **argv)
+{
+    const char *mode = ev("VERSION_HASH");
+    char hex[65];
+    for (int i = 1; i < argc; i++) {
+        int at = !strcmp(mode, "reverse") ? argc - i : i;
+        if (!digest(argv[at], hex))
+            return 1;
+        if (!strcmp(mode, "short") && i == argc - 1)
+            break;
+        if (!strcmp(mode, "hex"))
+            hex[0] = 'g';
+        printf("%s  %s\n", hex, !strcmp(mode, "path") ? "other" : argv[at]);
+    }
+    if (!strcmp(mode, "extra"))
+        printf("%064d  extra\n", 0);
+    return !strcmp(mode, "status");
+}
 int flow_version_mock(int argc, char **argv)
 {
     const char *name = strrchr(argv[0], '/');
@@ -202,6 +220,8 @@ int flow_version_mock(int argc, char **argv)
         return version_uname_mock(argc, argv);
     if (!strcmp(name, "cygpath"))
         return version_cygpath_mock(argc, argv);
+    if (!strcmp(name, "sha256sum"))
+        return version_hash_mock(argc, argv);
     return 97;
 }
 
@@ -931,12 +951,79 @@ static int version_real_build(struct version *value)
         ok = version_real_native(&v, target) && ok;
     return ok;
 }
+
+/* Check source encoding on small byte inputs before the publication rows. */
+static int version_source_bytes(struct version *v)
+{
+    struct fixture *f = v->f;
+    const char *code =
+        ". \"$1/tools/etude/bootstrap.sh\"; etude_text \"$2\" '@etude-0123456789abcdef'";
+    const char *a[] = {"/bin/sh", "-c", code, "source-bytes", v->tree, f->work, NULL};
+    const char *list = flow_path(f, "byte-files"), *file = flow_path(f, "byte-source");
+    static const struct {
+        const char *bytes;
+        size_t size;
+        int held;
+    } rows[] = {{"", 0, 1},
+                {"a\n\n", 3, 1},
+                {"a", 1, 0},
+                {"a\0\n", 3, 0},
+                {"@etude-0123456789abcdef\n", 24, 0},
+                {"x@etude-0123456789abcdef\n", 25, 1},
+                {"@etude-0123456789abcdefx\n", 25, 1}};
+    int ok = 1;
+    if (!fx_text(list, "byte-source\n"))
+        return 0;
+    for (size_t i = 0; i < sizeof(rows) / sizeof(*rows); i++) {
+        if (!fx_write(file, rows[i].bytes, rows[i].size, 0600))
+            return 0;
+        int status = fx_run(f, a, f->work, NULL, list);
+        ok = fx_check(f, (status == 0) == rows[i].held,
+                      "source byte encoding preserves exact boundaries") &&
+             ok;
+    }
+    unlink(file);
+    return fx_check(f, fx_run(f, a, f->work, NULL, list) != 0,
+                    "unreadable source is not an empty source") &&
+           ok;
+}
+
+static int version_source_hashes(struct version *v)
+{
+    struct fixture *f = v->f;
+    const char *code = ". \"$1/tools/etude/bootstrap.sh\"; etude_list \"$2\"";
+    const char *a[] = {"/bin/sh", "-c", code, "source-hashes", v->tree, f->work, NULL};
+    const char *modes[] = {"good", "reverse", "short", "hex", "path", "extra", "status"};
+    const char *list = flow_path(f, "hash-files");
+    char path[20000], mode[100], expected[200], first[65], second[65];
+    int ok = 1;
+    if (!fx_mkdir(flow_path(f, "hash-tools")) ||
+        !fx_copy(f->self, flow_path(f, "hash-tools/sha256sum")) ||
+        !fx_text(list, "hash-one\nhash-two\n") || !flow_put(f, "hash-one", "one\n") ||
+        !flow_put(f, "hash-two", "two\n") || !digest(flow_path(f, "hash-one"), first) ||
+        !digest(flow_path(f, "hash-two"), second))
+        return 0;
+    snprintf(path, sizeof(path), "PATH=%s:%s", flow_path(f, "hash-tools"), ev("PATH"));
+    snprintf(expected, sizeof(expected), "%s  hash-one\n%s  hash-two\n", first, second);
+    for (size_t i = 0; i < sizeof(modes) / sizeof(*modes); i++) {
+        snprintf(mode, sizeof(mode), "VERSION_HASH=%s", modes[i]);
+        const char *env[] = {path, mode, NULL};
+        int status = fx_run(f, a, f->work, env, list);
+        ok = fx_check(f, i ? status != 0 : status == 0 && !strcmp(f->out, expected),
+                      "source hash batch requires exact ordered records and status") &&
+             ok;
+    }
+    return ok;
+}
+
 int flow_version(struct fixture *f)
 {
     struct version v;
     int ok = 1;
     if (!version_setup(&v, f))
         return 0;
+    ok = version_source_bytes(&v) && ok;
+    ok = version_source_hashes(&v) && ok;
     ok = version_publication_identity(&v) && ok;
     ok = version_native_sources(&v) && ok;
     ok = version_account_shells(&v) && ok;
