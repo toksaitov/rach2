@@ -17,6 +17,7 @@
 #include "compare.h"
 #include "compat/load_history_host.h"
 #include "../../utils/sha256.h"
+#include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
@@ -27,6 +28,7 @@
 #define SECOND UINT64_C(1000000)
 
 static int failures;
+static int passed;
 static char directory[1024];
 static char commits[3][41];
 static const char schema[] = "tools/etude/schemas/history.schema.json";
@@ -54,10 +56,14 @@ struct spec {
         }                                                                    \
     } while (0)
 
-/** Remove the fixtures, even after a failure. */
+/** Remove successful fixtures; retain failures with their exact Git results. */
 static void cleanup(void)
 {
     if (*directory) {
+        if (!passed) {
+            fprintf(stderr, "etude_compare_hosttest: fixtures kept in %s\n", directory);
+            return;
+        }
         if (host_remove_tree(directory) != 0)
             fprintf(stderr, "etude_compare_hosttest: cannot remove %s\n", directory);
     }
@@ -337,22 +343,70 @@ static const char *git_program(void)
     return *resolved ? resolved : NULL;
 }
 
-/** Run Git by argument vector in the fixture directory and keep its output. */
+/** Record the command and every condition used to accept its result. */
+static void git_details(FILE *file, const struct etude_exec_spec *spec,
+                        const struct etude_exec_result *r, size_t size, int error)
+{
+    size_t i;
+
+    fprintf(file, "cwd=%s\nstdout=%s\nstderr=%s\noutput_max=%lu result_buffer=%lu\n",
+            spec->cwd, spec->stdout_path, spec->stderr_path, (unsigned long)spec->output_max,
+            (unsigned long)size);
+    fprintf(file, "PATH=%s\nHOME=%s\n", getenv("PATH") ? getenv("PATH") : "",
+            getenv("HOME") ? getenv("HOME") : "");
+    for (i = 0; spec->argv[i]; i++)
+        fprintf(file, "argv[%lu]=%s\n", (unsigned long)i, spec->argv[i]);
+    if (!r) {
+        fprintf(file, "start_error=%d: %s\n", error, strerror(error));
+        return;
+    }
+    fprintf(file,
+            "end=%d value=%d exit_end=%d exit_value=%d cleanup=%d output_error=%d\n"
+            "end constants: exited=%d signaled=%d stopped=%d lost=%d; confirmed_cleanup=%d\n"
+            "stdout kept=%lu total=%llu closed=%d; stderr kept=%lu total=%llu closed=%d\n"
+            "keeper=%ld:%llu:%d process=%ld:%llu:%d children=%u foreign=%u\n",
+            r->end, r->value, r->exit_end, r->exit_value, r->cleanup, r->output_error,
+            ETUDE_END_EXITED, ETUDE_END_SIGNALED, ETUDE_END_STOPPED, ETUDE_END_LOST,
+            ETUDE_CLEANUP_CONFIRMED, (unsigned long)r->out.kept,
+            (unsigned long long)r->out.total, r->out.closed, (unsigned long)r->err.kept,
+            (unsigned long long)r->err.total, r->err.closed, r->keeper.pid,
+            (unsigned long long)r->keeper.start, r->keeper.start_known, r->process.pid,
+            (unsigned long long)r->process.start, r->process.start_known, r->children,
+            r->foreign);
+}
+
+/** Keep the existing exit, cleanup and capture requirements for real Git. */
+static int git_succeeded(const struct etude_exec_result *r, size_t size)
+{
+    return r->end == ETUDE_END_EXITED && r->value == 0 &&
+           r->cleanup == ETUDE_CLEANUP_CONFIRMED && !r->output_error &&
+           r->out.total == r->out.kept && r->err.total == r->err.kept && r->out.kept < size;
+}
+
+/** Run real Git, keeping full streams and status for each distinct command. */
 static void git(char *const argv[], char *out, size_t size)
 {
+    static unsigned sequence;
     struct etude_exec_spec spec;
     struct etude_exec *ex = etude_exec_new();
     struct etude_proc *p = NULL;
-    const struct etude_exec_result *r;
-    int ok = 0;
+    const struct etude_exec_result *r = NULL;
+    char name[80];
+    FILE *details;
+    int ok = 0, error = 0;
 
     size_t count = 0;
     while (argv[count])
         count++;
     char **arguments = calloc(count + 1, sizeof *arguments);
     const char *program = git_program();
-    if (!arguments || !program) {
+    if (!ex || !arguments || !program) {
+        if (!program)
+            errno = ENOENT;
         perror("etude_compare_hosttest: Git");
+        if (ex)
+            etude_exec_free(ex);
+        free(arguments);
         exit(1);
     }
     memcpy(arguments, argv, count * sizeof *arguments);
@@ -364,19 +418,40 @@ static void git(char *const argv[], char *out, size_t size)
     spec.envp = environ;
     spec.cwd = directory;
     spec.output_max = 4096;
-    if (ex != NULL && etude_exec_start(ex, &spec, &p) == 0) {
+    snprintf(name, sizeof(name), "git-%u.out", ++sequence);
+    spec.stdout_path = path(name);
+    snprintf(name, sizeof(name), "git-%u.err", sequence);
+    spec.stderr_path = path(name);
+    snprintf(name, sizeof(name), "git-%u.result", sequence);
+    details = fopen(path(name), "w");
+    if (!details) {
+        perror("etude_compare_hosttest: Git result file");
+        etude_exec_free(ex);
+        free(arguments);
+        exit(1);
+    }
+    if (etude_exec_start(ex, &spec, &p) == 0) {
         while (etude_exec_wait(ex, -1) != p)
             ;
         r = etude_proc_result(p);
-        ok = r->end == ETUDE_END_EXITED && r->value == 0 && r->cleanup == ETUDE_CLEANUP_CONFIRMED &&
-             r->out.total == r->out.kept && r->err.total == r->err.kept && r->out.kept < size;
+        ok = git_succeeded(r, size);
         if (ok && out != NULL)
             memcpy(out, r->out.data, r->out.kept + 1);
-        if (!ok)
-            fprintf(stderr, "etude_compare_hosttest: Git failed: %s\n", r->err.data);
+    } else
+        error = errno;
+    git_details(details, &spec, r, size, error);
+    if (ferror(details))
+        ok = 0;
+    if (fclose(details))
+        ok = 0;
+    if (!ok) {
+        fputs("etude_compare_hosttest: Git failed:\n", stderr);
+        git_details(stderr, &spec, r, size, error);
+        if (r) {
+            fwrite(r->out.data, 1, r->out.kept, stderr);
+            fwrite(r->err.data, 1, r->err.kept, stderr);
+        }
     }
-    if (!p)
-        perror("etude_compare_hosttest: start Git");
     if (ex != NULL)
         etude_exec_free(ex);
     free(arguments);
@@ -768,5 +843,6 @@ int main(void)
         fprintf(stderr, "etude_compare_hosttest: %d checks failed\n", failures);
     else
         printf("etude_compare_hosttest: result: pass\n");
+    passed = failures == 0;
     return failures != 0;
 }
