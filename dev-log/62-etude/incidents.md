@@ -530,3 +530,7 @@ The fixture now prints both width runs' aggregate and individual attempt results
 The plain Codex startup case on ed5953bc2 passed its program, login, help, screen and process assertions, then failed the C request audit despite its empty script and zero-request server pass (#1038). The audit selected WebSocket metadata, turns and close checks by the codex prefix, which also matched the offline startup row. The original script, empty record, status and output remain in retry-13/agent-failure-evidence.json, with the decisive evidence copied into the issue.
 
 The API audit now selects the codex- workload prefix, preserving its codex-exec and codex-api checks while allowing the plain startup row's declared empty exchange. Every record entry and script step is still judged. The prepared native API fixture covers the empty startup record, rejected empty API exchanges, unexpected entries and undeclared requests. Its actual runtime and the agent case remain in the combined repair check.
+
+## Antigravity pane capture (#1039)
+
+The first Linux collection found the authorization-code prompt before the captured pane contained its instructions. The assertion printed only the pane's final three lines, so it lost the relevant evidence. The row now waits for all three existing OAuth strings in one snapshot, retains each changed complete snapshot in its output, and keeps the collection's progress watchdog. No delay or deadline was increased.

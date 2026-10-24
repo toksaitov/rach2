@@ -7,17 +7,28 @@
 # process of the program exits once tmux has ended. A native run leaves out
 # the screen, which needs QEMU's restricted network to be offline.
 
-# screen WHAT TEXT: wait until the pane shows TEXT, and keep the pane in
-# OUT; fail WHAT when the pane cannot be read first.
+# screen WHAT TEXT...: wait until one pane snapshot contains every TEXT.
+# Keep the complete snapshot in the row output for a failed run or signal.
 screen() {
+    local what=$1 text complete previous=''
+    shift
     while OUT=$(tmux -S "$WORK/tmux" capture-pane -p -J -t agy 2>&1); do
-        case "$OUT" in
-            *"$2"*) return 0 ;;
-        esac
+        if [ "$OUT" != "$previous" ]; then
+            printf 'agy: %s pane:\n%s\n' "$what" "$OUT"
+            previous=$OUT
+        fi
+        complete=1
+        for text in "$@"; do
+            case "$OUT" in
+                *"$text"*) ;;
+                *) complete= ;;
+            esac
+        done
+        [ -z "$complete" ] || return 0
         # interval: a look at the pane each second until it draws
         sleep 1
     done
-    fail "$1: no [$2]: $(printf '%s' "$OUT" | grep . | tail -n 4 | tr '\n' ' ')"
+    fail "$what: the pane could not be read: $OUT"
     return 1
 }
 
@@ -44,10 +55,11 @@ row() {
     mkdir -p "$WORK/home"
     output "tmux" tmux -S "$WORK/tmux" new-session -d -s agy -x 120 -y 40 \
         "env HOME=$WORK/home AGY_CLI_DISABLE_AUTO_UPDATE=true agy"
-    if screen "the sign-in menu" "Select login method"; then
+    if screen "the sign-in menu" "Select login method" "1. Google OAuth"; then
         has "the sign-in menu" "$OUT" "1. Google OAuth"
         tmux -S "$WORK/tmux" send-keys -t agy Enter
-        if screen "Google OAuth" "authorization code"; then
+        if screen "Google OAuth" "authorization code" \
+            "https://accounts.google.com/o/oauth2/auth?" "copy the code displayed in the browser"; then
             has "Google OAuth" "$OUT" "https://accounts.google.com/o/oauth2/auth?"
             has "Google OAuth" "$OUT" "copy the code displayed in the browser"
         fi
