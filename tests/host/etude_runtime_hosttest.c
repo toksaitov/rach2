@@ -1562,6 +1562,116 @@ static void test_blocked(void)
     CHECK(logged("start e") == 0 && empty("dead"), "dead-request");
 }
 
+/* The two actual case processes from the stuck attempt resource scopes. */
+struct stuck_starts {
+    size_t count;
+    char attempt[2][272];
+    long pid[2];
+    uint64_t start[2];
+};
+
+/** Read a hash-checked scope and retain its one actual case identity. */
+static int stuck_scope(const struct eh_json *data, struct stuck_starts *starts)
+{
+    const char *id = cmp_text(data, "attempt_id");
+    const struct eh_json *resources = eh_json_get(data, "resources");
+    size_t length;
+    char *bytes = cmp_blob_bytes(eh_json_get(resources, "scope"), &length);
+    struct eh_json *scope = bytes ? eh_json_parse(bytes) : NULL;
+    const struct eh_json *processes = eh_json_get(scope, "processes");
+    const struct eh_json *process;
+    size_t found = 0, slot = starts->count;
+    int ok = scope && !strcmp(id, cmp_text(scope, "attempt_id")) &&
+             processes && processes->type == 'a' && slot < 2;
+
+    for (process = ok ? processes->child : NULL; process; process = process->next) {
+        if (strcmp(cmp_text(process, "role"), "case"))
+            continue;
+        const struct eh_json *pid = eh_json_get(process, "pid");
+        const struct eh_json *start = eh_json_get(process, "start");
+        if (!pid || pid->type != 'n' || pid->number <= 0 ||
+            !start || start->type != 'n' || start->number <= 0) {
+            ok = 0;
+            break;
+        }
+        starts->pid[slot] = (long)pid->number;
+        starts->start[slot] = (uint64_t)start->number;
+        found++;
+    }
+    ok = ok && found == 1;
+    if (ok) {
+        snprintf(starts->attempt[slot], sizeof(starts->attempt[slot]), "%s", id);
+        starts->count++;
+    }
+    eh_json_free(scope);
+    free(bytes);
+    return ok ? 0 : -1;
+}
+
+/** Select only the two stuck attempts from the validated history stream. */
+static int stuck_start_record(const char *line, void *context)
+{
+    struct stuck_starts *starts = context;
+    struct eh_json *doc = eh_json_parse(line);
+    const struct eh_json *data = eh_json_get(doc, "data");
+    const char *id = cmp_text(data, "attempt_id");
+    int rc = 0;
+
+    if (!doc)
+        return -1;
+    if (!strcmp(cmp_text(doc, "kind"), "attempt") && strstr(id, "test.runtime.stuck:"))
+        rc = stuck_scope(data, starts);
+    eh_json_free(doc);
+    return rc;
+}
+
+/** Every application start emitted must name one distinct recorded process. */
+static int stuck_start_lines(const struct stuck_starts *starts)
+{
+    FILE *file = fopen(shared("log"), "r");
+    char line[256];
+    unsigned seen[2] = {0, 0};
+    int ok = file != NULL;
+
+    while (file && fgets(line, sizeof(line), file)) {
+        long pid;
+        int used = 0;
+        if (strncmp(line, "start stuck", 11))
+            continue;
+        if (sscanf(line, "start stuck %ld%n", &pid, &used) != 1 ||
+            strcmp(line + used, "\n")) {
+            ok = 0;
+            break;
+        }
+        size_t slot;
+        for (slot = 0; slot < 2 && (pid != starts->pid[slot] || seen[slot]); slot++) {
+        }
+        if (slot == 2) {
+            ok = 0;
+            break;
+        }
+        seen[slot]++;
+    }
+    if (file) {
+        ok = ok && !ferror(file);
+        fclose(file);
+    }
+    return ok;
+}
+
+/** Two gap-ended attempts must each have an actual, distinct process scope. */
+static int stuck_started(void)
+{
+    struct stuck_starts starts = {0};
+    uint64_t bad = 0;
+
+    if (etude_history_read(fix_path("stuck.jsonl"), SCHEMA, stuck_start_record, &starts, &bad) ||
+        starts.count != 2 || !strcmp(starts.attempt[0], starts.attempt[1]) ||
+        (starts.pid[0] == starts.pid[1] && starts.start[0] == starts.start[1]))
+        return 0;
+    return stuck_start_lines(&starts);
+}
+
 /**
  * Run a case blocked forever beside one that passes: it runs out of its gap,
  * and so does its retry, each ended with its cleanup confirmed and its claim
@@ -1597,7 +1707,8 @@ static void test_stuck(void)
                   s.a[i].cleanup == ETUDE_CLEANUP_CONFIRMED,
               "stuck");
     }
-    CHECK(stuck == 2 && logged("start stuck") == 2, "stuck");
+    /* The executor can end a started process before it reaches main on GNU. */
+    CHECK(stuck == 2 && stuck_started(), "stuck");
     CHECK(records("stuck", &r) == 0 && r.attempts == 3 && r.runs == 1, "stuck");
     CHECK(empty("stuck"), "stuck");
     gate_open(gate);
