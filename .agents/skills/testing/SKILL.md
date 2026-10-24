@@ -32,6 +32,7 @@ description: Run suites, full sets or analyses on the testing host, or write a s
 
 ## Writing a suite
 
+* When changing a private function or type, search the fixtures that include its implementation as well as ordinary callers. Update those fixtures before the combined build, and include them among the affected checks.
 * A test that kills a controller without cleanup kills and reaps it before closing its pipes. Closing them first can let the controller detect a lost connection and clean up the processes that the test needs orphaned.
 * A suite judges what the kernel counts, never the clock, and sets no time limit of its own. Etude stops a case only when it has made no progress for longer than the case's history on that machine allows. A time is printed for the record, not judged.
 * What would make a row slow (a spin, a wait, a walk over a list, a call per page) is counted by the kernel, and the row checks each count against a bound that is the same on every machine. Where the kernel has no counter for it yet, a multiple of a baseline measured in the same boot is the last resort, and each such row is listed with its reason.

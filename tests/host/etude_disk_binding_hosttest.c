@@ -115,6 +115,7 @@ static void image_work_paths(void)
     struct image_invocation v;
     struct machine_decl decl;
     struct etude_case_machine machine;
+    char startup[128];
     const char *dump[] = {"debugfs", "-R", "dump /large /host/result", "disk", NULL};
     const char *write[] = {"debugfs", "-w", "-R", "write /host/input /large", "disk", NULL};
     const char *copy[] = {"mcopy", "-n", "-i", "disk", "::/large", "/host/result", NULL};
@@ -139,14 +140,23 @@ static void image_work_paths(void)
     machine.decl = &decl;
     decl.id = "image-helper";
     decl.helper = 1;
-    check_binding(!strcmp(guest_state_options(&machine), "--state /dev/shm/etude-guest "),
+    check_binding(guest_image_state(&machine) &&
+                      !etude_serial_guest_line(startup, sizeof(startup), 0,
+                                               guest_image_state(&machine), 2000000) &&
+                      !strcmp(startup, "/etude-guest -s /dev/shm/etude-guest -t / -r 2000\n"),
                   "image-helper responder objects must use tmpfs");
     decl.id = "products";
-    check_binding(!strcmp(guest_state_options(&machine), ""),
+    check_binding(!guest_image_state(&machine) &&
+                      !etude_serial_guest_line(startup, sizeof(startup), 0,
+                                               guest_image_state(&machine), 2000000) &&
+                      !strcmp(startup, "/etude-guest -t / -r 2000\n"),
                   "other helpers must keep their existing responder state");
     decl.id = "image-helper";
     decl.helper = 0;
-    check_binding(!strcmp(guest_state_options(&machine), ""),
+    check_binding(!guest_image_state(&machine) &&
+                      !etude_serial_guest_line(startup, sizeof(startup), 0,
+                                               guest_image_state(&machine), 2000000) &&
+                      !strcmp(startup, "/etude-guest -t / -r 2000\n"),
                   "a non-helper must keep its existing responder state");
 }
 
