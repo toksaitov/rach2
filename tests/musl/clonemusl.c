@@ -321,9 +321,9 @@ static int clone_exec_reset(void)
     pid_t pid = clone(clone_exec_child, clone_stacks[2].bytes + sizeof(clone_stacks[2].bytes),
                       CLONE_VM | CLONE_UNTRACED, NULL);
     memset(&info, 0, sizeof(info));
-    if (pid < 0 || waitid(P_PID, pid, &info, WEXITED | WNOWAIT | __WALL) ||
-        info.si_pid != pid || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
-        WEXITSTATUS(status) != 75 || sigpending(&pending) || !sigismember(&pending, SIGCHLD))
+    if (pid < 0 || waitid(P_PID, pid, &info, WEXITED | WNOWAIT | __WALL) || info.si_pid != pid ||
+        waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 75 ||
+        sigpending(&pending) || !sigismember(&pending, SIGCHLD))
         return fail("exec did not reset zero-signal child notification and wait selection");
     report_held();
     return 0;
@@ -344,8 +344,8 @@ static int zero_signal_rows(void)
     if (waitpid(pid, &status, WNOHANG) != -1 || errno != ECHILD)
         return fail("ordinary wait selected a zero-signal child");
     report_held();
-    if (waitpid(pid, &status, __WCLONE) != pid || !WIFEXITED(status) ||
-        WEXITSTATUS(status) != 73 || clone_shared != 123)
+    if (waitpid(pid, &status, __WCLONE) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 73 ||
+        clone_shared != 123)
         return fail("zero-signal child did not share memory and wake its clone wait");
     report_held();
     if (sigpending(&pending) || sigismember(&pending, SIGCHLD))

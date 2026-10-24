@@ -2178,12 +2178,11 @@ static void fork_signals(process_t *child, const process_t *parent, uint32_t fla
         child->sigacts = child->tg->action;
     } else {
         k_memcpy(child->tg->action, parent->tg->action, sizeof(child->tg->action));
-        child->tg->no_child_signal = (flags & CLONE_PARENT)
-                                        ? parent->tg->no_child_signal
-                                        : (flags & CSIGNAL) == 0;
+        child->tg->no_child_signal =
+            (flags & CLONE_PARENT) ? parent->tg->no_child_signal : (flags & CSIGNAL) == 0;
         child->tg->parent_exec_generation = (flags & CLONE_PARENT)
-                                               ? parent->tg->parent_exec_generation
-                                               : parent->tg->exec_generation;
+                                                ? parent->tg->parent_exec_generation
+                                                : parent->tg->exec_generation;
     }
     child->sig_blocked = parent->sig_blocked;
     child->sig_pending = 0;
@@ -2410,11 +2409,10 @@ static int32_t clone_with(isr_params_t *params, uint32_t flags, uintptr_t newsp,
 {
     struct fork_req req;
 
-    if ((flags &
-         ~(CSIGNAL | CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_VFORK |
-           CLONE_PARENT | CLONE_THREAD | CLONE_SYSVSEM | CLONE_SETTLS | CLONE_PARENT_SETTID |
-           CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID | CLONE_DETACHED | CLONE_UNTRACED |
-           CLONE_NEW_ANY)) != 0 ||
+    if ((flags & ~(CSIGNAL | CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_VFORK |
+                   CLONE_PARENT | CLONE_THREAD | CLONE_SYSVSEM | CLONE_SETTLS |
+                   CLONE_PARENT_SETTID | CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID |
+                   CLONE_DETACHED | CLONE_UNTRACED | CLONE_NEW_ANY)) != 0 ||
         (!(flags & CLONE_THREAD) && (flags & CSIGNAL) != 0 && (flags & CSIGNAL) != SIGCHLD) ||
         ((flags & CLONE_SIGHAND) && !(flags & CLONE_VM)) ||
         ((flags & CLONE_THREAD) && !(flags & CLONE_SIGHAND)) ||
@@ -2681,8 +2679,7 @@ static int wait_selects(int idtype, uint32_t id, int options, const process_t *p
     if (p->state == PROC_UNUSED || p->parent_pid != current_proc->tgid || p->pid != p->tgid) {
         return 0;
     }
-    if (!(options & W_ALL) &&
-        p->tg->no_child_signal != (((uint32_t)options & W_CLONE) != 0)) {
+    if (!(options & W_ALL) && p->tg->no_child_signal != (((uint32_t)options & W_CLONE) != 0)) {
         return 0;
     }
     switch (idtype) {

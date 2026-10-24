@@ -43,9 +43,8 @@ static void host_scripts_order(void)
         if (!*start || *start == '#')
             continue;
         char *bar = strchr(start, '|');
-        const char *step = steps && row < steps->count
-                               ? json_text(steps->item[row], "step_id")
-                               : NULL;
+        const char *step =
+            steps && row < steps->count ? json_text(steps->item[row], "step_id") : NULL;
         if (bar)
             *bar = 0;
         CHECK(bar && step && !strcmp(start, step),

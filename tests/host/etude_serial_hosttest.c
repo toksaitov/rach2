@@ -1377,10 +1377,10 @@ static int installed_frames(struct harness *h, const char *path, const char *sha
     const char *sent[] = {"9999", path, number, sha};
 
     snprintf(number, sizeof(number), "%zu", size);
-    return wire_encode(frame, sizeof(frame), h->session, h->gboot, 9999, 1, 9999,
-                       ETUDE_CMD_PUT, 5, put) != 0 &&
-           wire_encode(frame, sizeof(frame), h->session, h->gboot, 9999, 1, 9999,
-                       ETUDE_EV_SENT, 4, sent) != 0;
+    return wire_encode(frame, sizeof(frame), h->session, h->gboot, 9999, 1, 9999, ETUDE_CMD_PUT, 5,
+                       put) != 0 &&
+           wire_encode(frame, sizeof(frame), h->session, h->gboot, 9999, 1, 9999, ETUDE_EV_SENT, 4,
+                       sent) != 0;
 }
 
 /** Transfer to an absolute destination and back, then run an installed

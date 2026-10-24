@@ -103,8 +103,8 @@ static int scheduling_role(const char *id)
 
 static void scheduling_seed(char *out, size_t room)
 {
-    char *allocate[] = {"-N", "-j", "1", "-S", "42", "-J", (char *)fix_path("quiet-seed.json"),
-                         "host", NULL};
+    char *allocate[] = {"-N",   "-j", "1", "-S", "42", "-J", (char *)fix_path("quiet-seed.json"),
+                        "host", NULL};
     char *execute[] = {"-A", "tcg", "-j", "1", "-S", "42", "host", NULL};
     CHECK(!run(allocate, "host.host.etude host.host.boots", NULL, NULL, out, room),
           "quiet seeded allocator exports");
@@ -137,7 +137,8 @@ static void scheduling_seed(char *out, size_t room)
  * style's stop-on-failure policy without marking either suite serial. */
 static void scheduling_policy(char *out, size_t room)
 {
-    char *options[] = {"-N", "-J", (char *)fix_path("shared-selection.json"), "host", "style", NULL};
+    char *options[] = {"-N",   "-J",    (char *)fix_path("shared-selection.json"),
+                       "host", "style", NULL};
     CHECK(!run(options, NULL, NULL, NULL, out, room), "shared selection exports");
     char text[32768], error[256];
     FILE *f = fopen(fix_path("shared-selection.json"), "rb");
@@ -145,11 +146,9 @@ static void scheduling_policy(char *out, size_t room)
     if (f)
         fclose(f);
     struct json *doc = NULL;
-    CHECK(n && !json_parse(text, n, 1, &doc, error, sizeof(error)),
-          "shared selection parses");
+    CHECK(n && !json_parse(text, n, 1, &doc, error, sizeof(error)), "shared selection parses");
     const char *selected = json_text(doc, "selection_bytes");
-    CHECK(selected && !strstr(selected, "\"serial\":true") &&
-              strstr(selected, "\"stops\":true"),
+    CHECK(selected && !strstr(selected, "\"serial\":true") && strstr(selected, "\"stops\":true"),
           "host and style share capacity while style retains failure stopping");
     json_free(doc);
 }
@@ -165,17 +164,14 @@ static void scheduling_capacity(char *out, size_t room)
     char *fit[] = {"-A", "tcg", "-j", "4", "-C", "2", "host", NULL};
     CHECK(!run(fit, NULL, NULL, NULL, out, room),
           "host ceiling clamps to the actual 8000 capacity in its running claim");
-    char *load[] = {"-A", "tcg", "-j", "4", "-C", "2", "-S", "42", "-L", "cpu:1",
-                      "host", NULL};
-    CHECK(run(load, NULL, NULL, NULL, out, room) == 2 &&
-              !strstr(out, "host.host.etude: starting"),
+    char *load[] = {"-A", "tcg", "-j", "4", "-C", "2", "-S", "42", "-L", "cpu:1", "host", NULL};
+    CHECK(run(load, NULL, NULL, NULL, out, room) == 2 && !strstr(out, "host.host.etude: starting"),
           "a real load beyond the clamped host claim refuses before execution");
     scheduling_floor = 2000;
     scheduling_manifest("host.host", ids);
     fixture_policy(1000);
     char *small[] = {"-A", "tcg", "-j", "1", "-C", "1", "host", NULL};
-    CHECK(run(small, NULL, NULL, NULL, out, room) == 2 &&
-              !strstr(out, "host.host.etude: starting"),
+    CHECK(run(small, NULL, NULL, NULL, out, room) == 2 && !strstr(out, "host.host.etude: starting"),
           "capacity below the host manifest floor refuses before execution");
     unsetenv("ETUDE_COLLECTION_CPU");
     scheduling_floor = scheduling_ceiling = 0;
@@ -185,10 +181,9 @@ static void scheduling_capacity(char *out, size_t room)
 static void scheduling(char *out, size_t room)
 {
     static const char *const ids[] = {"host.host.tests", "host.host.checkers", "host.host.etude",
-                                       "host.host.boots", NULL};
+                                      "host.host.boots", NULL};
     static const char *const style[] = {"fixture.style.ready", NULL};
-    CHECK(unlink(fix_path("tests/cases/fixture.host.json")) == 0,
-          "old host fixture is replaced");
+    CHECK(unlink(fix_path("tests/cases/fixture.host.json")) == 0, "old host fixture is replaced");
     scheduling_manifest("host.host", ids);
     scheduling_manifest("fixture.style", style);
     put("tests/registry", "host|-|core\nstyle|-|core\n");

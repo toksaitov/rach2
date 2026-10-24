@@ -129,13 +129,13 @@ static void measurement_cache_states(struct jbuf *b, int known)
     }
     jbuf_puts(b, "}");
 }
-static void measurement_cache(struct jbuf *context,
-                              const struct etude_preparation_receipt *receipt, int known)
+static void measurement_cache(struct jbuf *context, const struct etude_preparation_receipt *receipt,
+                              int known)
 {
     struct jbuf states = {0}, b = {0};
     measurement_cache_states(&states, known);
     jbuf_puts(&b, known ? "{\"schema_version\":1,\"controlled\":true"
-                       : "{\"schema_version\":1,\"controlled\":false");
+                        : "{\"schema_version\":1,\"controlled\":false");
     jbuf_puts(&b, ",\"method\":\"synthetic context fixture\",\"states\":");
     jbuf_puts(&b, states.data);
     jbuf_puts(&b, "}");

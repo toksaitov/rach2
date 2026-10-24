@@ -197,15 +197,15 @@ static void test_boot_platform(void)
 #ifndef _WIN32
 static void test_boot_files(void)
 {
-    static const char boot[] =
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    static const char boot[] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     char text[128];
     CHECK(etude_boot_file_read(fix_path("missing-boot"), text, sizeof(text)) != 0,
           "a missing boot token is refused");
     put("boot-token", boot);
     CHECK(!chmod(fix_path("boot-token"), 0644) &&
               !etude_boot_file_read(fix_path("boot-token"), text, sizeof(text)) &&
-              !strcmp(text, boot), "a whole caller-owned boot token is read exactly");
+              !strcmp(text, boot),
+          "a whole caller-owned boot token is read exactly");
     CHECK(!chmod(fix_path("boot-token"), 0666) &&
               etude_boot_file_read(fix_path("boot-token"), text, sizeof(text)) != 0,
           "a writable-by-others boot token is refused");
