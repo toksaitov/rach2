@@ -625,3 +625,7 @@ The native cleanup fixture aged the entire scratch tree, including the file inte
 ## Native CI command entry, 2026-10-24
 
 The native CI fixture installed a comment-only, non-executable `tests/run`, while the bisection product executes that path directly. Its command handler recognized only `sh tests/run`, so suite, admission and structured-history rows could not run their fixture workload. Issue #1057 installs the prepared native controller at that path and dispatches its original argument vector to the same workload handler. Every original result, history, admission, retry and refusal assertion remains.
+
+## USB diagnostics counted as measurements (#1059)
+
+The Linux run on 2026-10-24 produced eight valid latency measurements on both architectures, but the native checker also parsed lines beginning `usb: latency:` that described waiting for a read. It rejected those diagnostics for missing measurement fields. The checker now selects the same `usb: latency: msi [01],` records as the original checker. The native fixture surrounds a valid measurement with diagnostics and still rejects diagnostics without a measurement. Field, count, interrupt and work bounds are unchanged.

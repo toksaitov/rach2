@@ -195,9 +195,9 @@ int check_usb_records(const char *text, int random, unsigned keys)
     if (!text || !keys)
         return 0;
     while (*text && (line = line_next(&text)) != NULL) {
-        char *start = strstr(line, "usb: latency:"), *v[64];
+        char *start = strstr(line, "usb: latency: msi "), *v[64];
         long long value[8] = {0};
-        if (start) {
+        if (start && (start[18] == '0' || start[18] == '1') && start[19] == ',') {
             int count = words(start, v, 64);
             bad |= !usb_fields(v, count, value);
             bad |= !usb_counts(value, random);

@@ -81,6 +81,20 @@ static int changed(const char *text, const char *from, const char *to)
     return ok;
 }
 
+static int diagnostics(const char *record)
+{
+    static const char text[] = "usb: latency: waiting for a read\n";
+    size_t n = strlen(record) + 2 * strlen(text) + 1;
+    char *s = malloc(n);
+    int ok;
+    if (!s)
+        return 0;
+    snprintf(s, n, "%s%s%s", text, record, text);
+    ok = check_usb_records(s, 0, 1) && !check_usb_records(text, 0, 1);
+    free(s);
+    return ok;
+}
+
 static int latency(const char *program)
 {
     static const char *const modes[] = {"spin", "timer", "random", "pump", "work", "undispatched"};
@@ -103,6 +117,7 @@ static int latency(const char *program)
         ok &= changed(out[0], " dispatch 1,", " dispatch 1, dispatch 1,");
         ok &= changed(out[0], " pumps 0,", "");
         ok &= !check_usb_records("", 0, 1);
+        ok &= diagnostics(out[0]);
     } else {
         ok = 0;
     }
