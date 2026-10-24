@@ -118,6 +118,8 @@ The optional `ETUDE_PREPARATION_GRANT` names a new absolute file written by `etu
 
 The version-one receipt has format `etude-preparation-receipt`, `outcome: "pass"`, `cleanup: "confirmed"`, `run_id`, `commit`, `record_sha256`, `machine_id`, `boot_id`, `start` and `end`. Each reading has `utc`, `monotonic_us` and `resolution_us`. Elapsed time is computed from those readings in the same machine, boot and clock domain. The receipt measures the complete preparation interval; it does not invent durations for individual steps.
 
+On Rach2, the clock uses the boot identity that `etude-guest` publishes atomically in `/dev/shm/etude-guest-boot` before opening its session. The kernel creates that tmpfs empty at each boot. The reader requires exactly 64 lowercase hexadecimal bytes in a regular file owned by root or the caller and not writable by group or others. Rach2's Linux-compatible `uname` identifies this route by its `-rach2` release suffix and `#1 Rach2 ` version prefix. Ordinary Linux continues to require `/proc/sys/kernel/random/boot_id`; a read failure never selects the Rach2 file.
+
 The source-check preparation runs `etude check` through [`suitecheck.sh`](../verify/suitecheck.sh) over `tests/cases/*.json` and the examples here, and with `--selftest` over [its fixtures](fixtures/expect). Its commands:
 
     etude check [-s SCHEMAS] [-r ROOT] manifest FILE...

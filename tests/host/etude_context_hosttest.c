@@ -1,4 +1,5 @@
 /* Check context input hashes, deployment paths and preparation identity.
+ * host-deps: tools/etude/boot_identity.c
  * host-deps: tools/etude/measurement_context.c tools/etude/json.c
  * host-deps: tools/etude/history.c tools/etude/history_json.c
  * host-deps: tools/etude/history_collect.c utils/sha256.c
@@ -6,10 +7,14 @@
  * host-cflags: -Wall -Wextra -Werror
  */
 #include "../../tools/etude/measurement_context.h"
+#include "../../tools/etude/boot_identity.h"
 #include "../../utils/sha256.h"
 #include "compat/fixdir_host.c"
 #include <stdint.h>
 #include <signal.h>
+#ifndef _WIN32
+#include <sys/utsname.h>
+#endif
 
 static int failures;
 static const char commit[] = "1111111111111111111111111111111111111111";
@@ -178,6 +183,65 @@ static void test_grants(void)
           "a malformed grant is refused");
 }
 
+static void test_boot_platform(void)
+{
+    CHECK(etude_boot_is_rach2("Linux", "6.18.0-rach2", "#1 Rach2 1.0.0") &&
+              etude_boot_is_rach2("Linux", "7.0-rach2", "#1 Rach2 2.0.0"),
+          "Rach2 uname identifies its real boot-token route across releases");
+    CHECK(!etude_boot_is_rach2("Linux", "6.18.0", "#1 Linux") &&
+              !etude_boot_is_rach2("Linux", "6.18.0-rach2", "#1 Linux") &&
+              !etude_boot_is_rach2("Linux", "6.18.0", "#1 Rach2 1.0.0") &&
+              !etude_boot_is_rach2("Other", "6.18.0-rach2", "#1 Rach2 1.0.0"),
+          "ordinary Linux and incomplete uname markers cannot select the Rach2 route");
+}
+#ifndef _WIN32
+static void test_boot_files(void)
+{
+    static const char boot[] =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    char text[128];
+    CHECK(etude_boot_file_read(fix_path("missing-boot"), text, sizeof(text)) != 0,
+          "a missing boot token is refused");
+    put("boot-token", boot);
+    CHECK(!chmod(fix_path("boot-token"), 0644) &&
+              !etude_boot_file_read(fix_path("boot-token"), text, sizeof(text)) &&
+              !strcmp(text, boot), "a whole caller-owned boot token is read exactly");
+    CHECK(!chmod(fix_path("boot-token"), 0666) &&
+              etude_boot_file_read(fix_path("boot-token"), text, sizeof(text)) != 0,
+          "a writable-by-others boot token is refused");
+    CHECK(!chmod(fix_path("boot-token"), 0644), "boot fixture permissions are restored");
+    put("boot-token", "short");
+    CHECK(etude_boot_file_read(fix_path("boot-token"), text, sizeof(text)) != 0,
+          "a truncated boot token is refused");
+    put("boot-token", "z123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+    CHECK(etude_boot_file_read(fix_path("boot-token"), text, sizeof(text)) != 0,
+          "a non-hexadecimal boot token is refused");
+    CHECK(!symlink(fix_path("boot-token"), fix_path("boot-link")) &&
+              etude_boot_file_read(fix_path("boot-link"), text, sizeof(text)) != 0,
+          "a boot-token symlink is refused");
+}
+static void test_linux_clock(void)
+{
+    struct utsname kernel;
+    char text[128];
+    if (uname(&kernel)) {
+        CHECK(0, "the actual kernel identity is read");
+        return;
+    }
+    if (strcmp(kernel.sysname, "Linux") ||
+        etude_boot_is_rach2(kernel.sysname, kernel.release, kernel.version))
+        return;
+    FILE *file = fopen("/proc/sys/kernel/random/boot_id", "r");
+    int ok = file && fgets(text, sizeof(text), file) != NULL;
+    if (file && fclose(file))
+        ok = 0;
+    if (ok)
+        text[strcspn(text, "\r\n")] = '\0';
+    CHECK(ok && !strcmp(receipt.clock.boot_id, text),
+          "ordinary Linux keeps the real proc boot identity");
+}
+#endif
+
 int main(void)
 {
     char descriptor_text[2048], error[256];
@@ -188,6 +252,10 @@ int main(void)
     signal(SIGHUP, stopped);
 #endif
     fix_dir();
+    test_boot_platform();
+#ifndef _WIN32
+    test_boot_files();
+#endif
     put("input", "committed source\n");
     put("tool", "native executable fixture\n");
     put("record", "producer record fixture\n");
@@ -196,6 +264,9 @@ int main(void)
     strcpy(receipt.commit, commit);
     descriptor("record", descriptor_text, receipt.record_sha256);
     CHECK(!etude_context_clock(&receipt.clock), "native clock identity exists");
+#ifndef _WIN32
+    test_linux_clock();
+#endif
     snapshots(0);
     CHECK(!etude_history_now(&receipt.start), "preparation start is read");
     receipt.end = receipt.start;

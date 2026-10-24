@@ -18,6 +18,7 @@
  * host-deps: tests/host/compat/legacyset_process.c
  * host-deps: tools/etude/observe.c tools/etude/observe_history.c
  * host-deps: tools/etude/observe_scope.c tools/etude/observe_system.c
+ * host-deps: tools/etude/boot_identity.c
  * host-deps: tools/etude/measurement_context.c
  * host-deps: tools/etude/repeat.c tools/etude/collection_repeat.c
  * host-deps: tools/etude/collection_load.c

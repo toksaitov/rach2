@@ -3,6 +3,7 @@
  * host-deps: tools/etude/observe_scope.c tools/etude/observe_system.c
  * host-deps: tools/etude/observe_sequence.c
  * host-deps: tools/etude/posix/observe_sequence.c
+ * host-deps: tools/etude/boot_identity.c
  * host-deps: tools/etude/measurement_context.c tools/etude/history.c
  * host-deps: tools/etude/history_json.c tools/etude/history_collect.c
  * host-deps: tools/etude/json.c utils/sha256.c

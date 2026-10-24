@@ -48,7 +48,8 @@ ETUDE_OBSERVE_SRC = tools/etude/observe_sequence.c tools/etude/posix/observe_seq
                     tools/etude/observe_system.c
 
 ETUDE_RUN_SRC = tools/etude/repeat.c tools/etude/collection_repeat.c tools/etude/collection_load.c \
-                tools/etude/posix/load.c $(ETUDE_OBSERVE_SRC) tools/etude/measurement_context.c tools/etude/collection.c \
+                tools/etude/posix/load.c $(ETUDE_OBSERVE_SRC) tools/etude/measurement_context.c \
+                tools/etude/boot_identity.c tools/etude/collection.c \
                 tools/etude/posix/run_suites.c tools/etude/posix/legacy.c \
                 tools/etude/preparation_record.c \
                 tools/etude/posix/legacy_set.c tools/etude/posix/legacy_cases.c \

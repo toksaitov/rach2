@@ -2,6 +2,7 @@
  * Check the bridge against the POSIX record locks used by old runners.
  * host-deps: tools/etude/posix/bridge.c tools/etude/portlock.c
  * host-deps: tools/etude/ledger.c
+ * host-deps: tools/etude/boot_identity.c
  * host-deps: tools/etude/measurement_context.c tools/etude/json.c
  * host-deps: tools/etude/history.c tools/etude/history_json.c
  * host-deps: tools/etude/history_collect.c

@@ -4,6 +4,7 @@
  * `calls`, with the tree's run lock held by this program, which is also the
  * recipe of a preparation graph's node with `--legacy`.
  *
+ * host-deps: tools/etude/boot_identity.c
  * host-deps: tools/etude/measurement_context.c tools/etude/json.c
  * host-deps: tools/etude/history.c tools/etude/history_json.c
  * host-deps: tools/etude/history_collect.c

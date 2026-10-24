@@ -6,6 +6,7 @@
 #endif
 #endif
 #include "measurement_context.h"
+#include "boot_identity.h"
 #include "history_json.h"
 #include "json.h"
 #include "../../utils/sha256.h"
@@ -16,6 +17,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#ifndef _WIN32
+#include <sys/utsname.h>
+#endif
 #include <unistd.h>
 #ifdef __APPLE__
 #include <sys/sysctl.h>
@@ -94,15 +98,24 @@ int etude_context_clock(struct etude_context_clock *clock)
     size_t n = sizeof(clock->boot_id);
     if (sysctlbyname("kern.bootsessionuuid", clock->boot_id, &n, NULL, 0))
         return -1;
-#elif defined(__linux__)
-    FILE *f = fopen("/proc/sys/kernel/random/boot_id", "r");
-    if (!f)
+#elif defined(__linux__) || defined(__rach2__)
+    struct utsname kernel;
+    if (uname(&kernel))
         return -1;
-    int ok = fgets(clock->boot_id, sizeof(clock->boot_id), f) != NULL;
-    fclose(f);
-    if (!ok)
-        return -1;
-    clock->boot_id[strcspn(clock->boot_id, "\r\n")] = 0;
+    if (etude_boot_is_rach2(kernel.sysname, kernel.release, kernel.version)) {
+        if (etude_boot_file_read("/dev/shm/etude-guest-boot", clock->boot_id,
+                                 sizeof(clock->boot_id)))
+            return -1;
+    } else {
+        FILE *f = fopen("/proc/sys/kernel/random/boot_id", "r");
+        if (!f)
+            return -1;
+        int ok = fgets(clock->boot_id, sizeof(clock->boot_id), f) != NULL;
+        fclose(f);
+        if (!ok)
+            return -1;
+        clock->boot_id[strcspn(clock->boot_id, "\r\n")] = 0;
+    }
 #else
     return -1;
 #endif
