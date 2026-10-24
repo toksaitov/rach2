@@ -502,6 +502,33 @@ static void websocket_test(void)
         dispose(&s);
     }
 }
+static void websocket_lengths(void)
+{
+    static const size_t lengths[] = {5, 8, 9, 63, 64, 65, 200};
+    size_t row, i;
+    for (row = 0; row < sizeof(lengths) / sizeof(lengths[0]); row++) {
+        struct server s;
+        struct wire w = {0};
+        struct buffer input = {0};
+        struct peer p;
+        char expected[201], *actual;
+        for (i = 0; i < lengths[row]; i++)
+            expected[i] = (char)('!' + i % 90);
+        expected[i] = 0;
+        setup(&s, "{\"steps\":[]}");
+        input_frame(&input, 1, 1, expected);
+        w.in = (const unsigned char *)input.data;
+        w.left = input.len;
+        p = test_peer(&s, NULL, &w);
+        actual = websocket_receive(&p);
+        check(actual && !strcmp(actual, expected) && !w.left,
+              "WebSocket unmask repeats four bytes across short and vector lengths");
+        free(actual);
+        clear(&input);
+        clear(&w.out);
+        dispose(&s);
+    }
+}
 static void http_test(void)
 {
     const char *bytes =
@@ -700,6 +727,7 @@ int main(void)
     responses_test();
     held_test();
     websocket_test();
+    websocket_lengths();
     http_test();
     if (!failures) {
         fix_passed();

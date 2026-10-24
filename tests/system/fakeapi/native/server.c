@@ -586,6 +586,25 @@ static void frame_trace(struct peer *p, const char *phase, const unsigned char *
              phase, (unsigned)head[0], (unsigned)head[1], (unsigned long long)n, key, prefix);
 }
 
+/* Load the four-byte key once; memcpy permits unaligned payloads. */
+static void mask_payload(unsigned char *out, const unsigned char *in, size_t n,
+                         const unsigned char mask[4])
+{
+    uint32_t key, word;
+    size_t i;
+    memcpy(&key, mask, sizeof(key));
+    while (n >= sizeof(word)) {
+        memcpy(&word, in, sizeof(word));
+        word ^= key;
+        memcpy(out, &word, sizeof(word));
+        in += sizeof(word);
+        out += sizeof(word);
+        n -= sizeof(word);
+    }
+    for (i = 0; i < n; i++)
+        out[i] = in[i] ^ mask[i];
+}
+
 static int read_frame(struct peer *p, struct incoming_frame *f, size_t used)
 {
     unsigned char head[2], mask[4], extra[8], *data;
@@ -622,8 +641,7 @@ static int read_frame(struct peer *p, struct incoming_frame *f, size_t used)
         return 0;
     }
     frame_trace(p, "masked", head, mask, data, n);
-    for (i = 0; i < n; i++)
-        data[i] ^= mask[i % 4];
+    mask_payload(data, data, (size_t)n, mask);
     frame_trace(p, "decoded", head, mask, data, n);
     f->data = data;
     f->n = n;

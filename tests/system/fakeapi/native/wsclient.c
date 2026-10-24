@@ -43,10 +43,29 @@ static int exact(SSL *ssl, void *data, size_t n, int sending, const char *part)
     }
     return 1;
 }
+/* Load the four-byte key once; memcpy permits unaligned payloads. */
+static void mask_payload(unsigned char *out, const unsigned char *in, size_t n,
+                         const unsigned char mask[4])
+{
+    uint32_t key, word;
+    size_t i;
+    memcpy(&key, mask, sizeof(key));
+    while (n >= sizeof(word)) {
+        memcpy(&word, in, sizeof(word));
+        word ^= key;
+        memcpy(out, &word, sizeof(word));
+        in += sizeof(word);
+        out += sizeof(word);
+        n -= sizeof(word);
+    }
+    for (i = 0; i < n; i++)
+        out[i] = in[i] ^ mask[i];
+}
+
 static int send_frame(SSL *ssl, unsigned opcode, const void *data, size_t n)
 {
     unsigned char head[8], mask[4], *payload;
-    size_t i, len = 2;
+    size_t len = 2;
     int ok;
     if (n > 65535)
         return failed("outgoing payload exceeds 65535 bytes");
@@ -66,8 +85,7 @@ static int send_frame(SSL *ssl, unsigned opcode, const void *data, size_t n)
     payload = malloc(n ? n : 1);
     if (!payload)
         return failed("cannot allocate the outgoing payload");
-    for (i = 0; i < n; i++)
-        payload[i] = ((const unsigned char *)data)[i] ^ mask[i % 4];
+    mask_payload(payload, data, n, mask);
     ok = exact(ssl, head, len, 1, "frame header") && exact(ssl, payload, n, 1, "frame payload");
     free(payload);
     return ok;
