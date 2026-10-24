@@ -180,8 +180,8 @@ const char *etude_collection_load_record(struct etude_collection_load *l)
     snprintf(l->record, sizeof(l->record),
              "{\"load_id\":\"%s\",\"kind\":\"%s\",\"amount\":%llu,"
              "\"ready_us\":%llu,\"ended_us\":%llu,\"cleanup\":\"%s\",\"failed\":%s,"
-             "\"keeper\":{\"pid\":%ld,\"creation\":%llu},"
-             "\"process\":{\"pid\":%ld,\"creation\":%llu},\"end\":%d,\"value\":%d,"
+             "\"keeper\":{\"pid\":%ld,\"creation\":\"%llu\"},"
+             "\"process\":{\"pid\":%ld,\"creation\":\"%llu\"},\"end\":%d,\"value\":%d,"
              "\"cpu_us\":%s,\"cpu_quality\":\"%s\",\"cpu_method\":\"%s\","
              "\"peak_bytes\":%s,\"peak_quality\":\"%s\",\"peak_method\":\"%s\"}",
              l->load->load_id, kind(l->load->kind), (unsigned long long)l->load->amount,

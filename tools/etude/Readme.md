@@ -1163,6 +1163,8 @@ Artifacts are checked before execution and again before the run record is comple
 
 ### Native load observations
 
+Process creation identities are opaque unsigned 64-bit values. Observation traces, attempt resource scopes and applied-load records encode them as decimal strings, preserving Windows FILETIME values beyond JSON's exact integer range. Process IDs remain numeric.
+
 `etude observe identity PID` prints the live process's native creation identity as decimal digits and a newline. A wrapper queries its persistent owner before starting preparation and keeps the same PID through execution.
 
 `etude observe -o TRACE -p OWNER_PID -c OWNER_CREATION -r RUN_ID -s STOP_REQUEST` starts a native sampling thread and writes `etude observe: ready` after the trace header and first sample have been flushed. The owner starts ordinary preparation only after this notice, then runs the collection under the same process identity. The collector creates STOP_REQUEST with exactly RUN_ID and a newline after its owned cleanup. The observer writes its final sample and footer, closes the trace and exits. The native owner waits for this exit before removing its process scope. A dedicated standard-input pipe remains open under the native owner. With `-s`, data or EOF on that pipe cancels observation and produces an incomplete footer. Without `-s`, data or EOF requests normal stop. Losing the owner's creation identity ends the trace as incomplete.

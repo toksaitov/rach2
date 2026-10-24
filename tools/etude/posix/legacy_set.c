@@ -593,8 +593,8 @@ static int resources(const struct set *x, const struct command *c, struct cmp_te
     cmp_printf(&d, ",\"processes\":[");
     if (c->ran)
         cmp_printf(&d,
-                   "{\"role\":\"keeper\",\"pid\":%ld,\"start\":%llu},{\"role\":\"case\","
-                   "\"pid\":%ld,\"start\":%llu}",
+                   "{\"role\":\"keeper\",\"pid\":%ld,\"start\":\"%llu\"},{\"role\":\"case\","
+                   "\"pid\":%ld,\"start\":\"%llu\"}",
                    c->keeper.pid, (unsigned long long)c->keeper.start, c->process.pid,
                    (unsigned long long)c->process.start);
     cmp_printf(&d, "]}\n");
