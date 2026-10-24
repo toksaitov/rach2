@@ -26,7 +26,7 @@
  * host-deps: tools/etude/sched.c tools/etude/json.c tools/etude/schema.c
  * host-cflags: -I tools/etude/include -I tools/etude -Wall -Wextra -Werror
  * host-first: it runs for minutes
- * host-alone: the width-2 row meets two cases within a gap of 300 ms
+ * host-alone: gap expiry and load reservations require an idle fixture host
  *
  * The generator gives splitmix64's published outputs, and a number below a
  * bound without bias. A seed gives one plan, the same each time, and the
@@ -105,6 +105,93 @@ enum result_fault {
 static enum result_fault result_fault;
 static int admission_errno;
 
+/* Observe real FIFO events before applying the execution gap. Startup and
+ * the width-two rendezvous retain the ordinary whole-case bound. */
+static unsigned width_mode;
+static struct {
+    struct etude_supervised *attempt;
+    unsigned starts, ready, met, armed;
+} width_peers[2];
+
+/** Count complete event lines in a captured child stream. */
+static unsigned width_events(const char *text, const char *event)
+{
+    unsigned n = 0;
+    size_t len = strlen(event);
+
+    while (text != NULL && (text = strstr(text, event)) != NULL) {
+        n++;
+        text += len;
+    }
+    return n;
+}
+
+/** Read each live child's real output and arm its execution gap. */
+static void width_observe(void)
+{
+    const struct etude_supervised_result *r;
+    unsigned i;
+
+    for (i = 0; i < 2; i++) {
+        if (width_peers[i].attempt == NULL)
+            continue;
+        r = etude_supervised_result(width_peers[i].attempt);
+        if (r->proc == NULL)
+            continue;
+        width_peers[i].ready = width_events(r->proc->out.data, "pair ready\n");
+        width_peers[i].met = width_events(r->proc->out.data, "pair met\n");
+        if (!width_peers[i].armed &&
+            (width_mode == 1 ? width_peers[i].ready : width_peers[i].met)) {
+            etude_supervised_stage(width_peers[i].attempt, ETUDE_STAGE_EXECUTE);
+            width_peers[i].armed = 1;
+        }
+    }
+}
+
+/** Put only the real pair cases in their event-driven preparation stage. */
+static int width_start(struct etude_supervisor *s, const struct etude_exec_spec *spec,
+                       const struct etude_watchdog_spec *wd, struct etude_supervised **out)
+{
+    int rc = etude_supervise_host(s, spec, wd, out);
+    unsigned i;
+
+    if (rc != 0 || width_mode == 0)
+        return rc;
+    for (i = 0; i < 2; i++) {
+        const char *id = i == 0 ? ":test.repeat.pair-r:" : ":test.repeat.pair-w:";
+        if (strstr(spec->attempt_id, id) != NULL) {
+            CHECK(width_peers[i].attempt == NULL, "width ownership");
+            width_peers[i].attempt = *out;
+            width_peers[i].starts++;
+            etude_supervised_stage(*out, ETUDE_STAGE_PREPARE);
+        }
+    }
+    return rc;
+}
+
+/** Serve real executor events, then inspect the captured readiness bytes. */
+static struct etude_supervised *width_wait(struct etude_supervisor *s, int timeout_ms)
+{
+    struct etude_supervised *done;
+
+    width_observe();
+    done = etude_supervise_wait(s, timeout_ms);
+    width_observe();
+    return done;
+}
+
+/** Keep the final events before the real supervisor frees its capture. */
+static void width_free(struct etude_supervised *a)
+{
+    unsigned i;
+
+    width_observe();
+    for (i = 0; i < 2; i++)
+        if (width_peers[i].attempt == a)
+            width_peers[i].attempt = NULL;
+    etude_supervised_free(a);
+}
+
 /** Supply one finished result with a lost end or unconfirmed cleanup. */
 static const struct etude_supervised_result *driver_result(const struct etude_supervised *a)
 {
@@ -139,10 +226,16 @@ static void driver_repeat_free(struct etude_repeat_result *r);
 #define etude_repeat_run           driver_repeat_run
 #define etude_repeat_result_free   driver_repeat_free
 #define etude_supervised_result(a) driver_result(a)
+#define etude_supervise_host       width_start
+#define etude_supervise_wait       width_wait
+#define etude_supervised_free      width_free
 #define etude_ledger_admit(...) \
     (admission_errno ? (errno = admission_errno, -1) : etude_ledger_admit(__VA_ARGS__))
 #include "posix/repeat.c"
 #undef etude_ledger_admit
+#undef etude_supervised_free
+#undef etude_supervise_wait
+#undef etude_supervise_host
 #undef etude_supervised_result
 #undef etude_repeat_result_free
 #undef etude_repeat_run
@@ -223,12 +316,18 @@ static int case_main(const char *name)
     if (strcmp(name, "pair-w") == 0 || strcmp(name, "pair-r") == 0) {
         if (mkfifo(shared("fifo"), 0600) != 0 && errno != EEXIST)
             return 3;
+        if (printf("pair ready\n") < 0 || fflush(stdout) != 0)
+            return 3;
         if (name[5] == 'w') {
             fd = open(shared("fifo"), O_WRONLY);
-            return fd >= 0 && write(fd, "x", 1) == 1 && close(fd) == 0 ? 0 : 1;
+            if (fd < 0 || write(fd, "x", 1) != 1 || close(fd) != 0)
+                return 1;
+        } else {
+            fd = open(shared("fifo"), O_RDONLY);
+            if (fd < 0 || read(fd, &c, 1) != 1 || c != 'x' || close(fd) != 0)
+                return 1;
         }
-        fd = open(shared("fifo"), O_RDONLY);
-        return fd >= 0 && read(fd, &c, 1) == 1 && c == 'x' && close(fd) == 0 ? 0 : 1;
+        return printf("pair met\n") >= 0 && fflush(stdout) == 0 ? 0 : 3;
     }
     if (strcmp(name, "witness") == 0)
         return look(&s) == 0 && s.loads == 1 && s.load_ok && s.cases == 1 ? 0 : 1;
@@ -470,8 +569,9 @@ static int run(const char *run_id, const struct etude_repeat_spec *spec,
     site.boot_id = "b1";
     site.budget_policy = policy_ref;
     site.budget_limits = &policy.limits[ETUDE_BUDGET_FOCUSED];
-    rc = result_fault != ORDINARY || admission_errno ? driver_repeat_run(spec, &site, r)
-                                                     : etude_repeat_run(spec, &site, r);
+    rc = result_fault != ORDINARY || admission_errno || width_mode
+             ? driver_repeat_run(spec, &site, r)
+             : etude_repeat_run(spec, &site, r);
     if (rc != 0)
         printf("etude-repeat-test: run %s: %s\n", run_id, strerror(errno));
     if (etude_history_close(h) != 0)
@@ -1055,9 +1155,22 @@ static void width_result(const char *run_id, const struct etude_repeat_result *r
     printf("etude-repeat-test: history: %s/%s.jsonl\n", fix_dir(), run_id);
 }
 
+/** Require both independently started peers and their exact FIFO events. */
+static void width_peer_check(unsigned met)
+{
+    size_t i;
+
+    for (i = 0; i < 2; i++)
+        CHECK(width_peers[i].starts == 1 && width_peers[i].ready == 1 &&
+                  width_peers[i].met == met && width_peers[i].armed == 1 &&
+                  width_peers[i].attempt == NULL,
+              "width FIFO events and cleanup");
+}
+
 /**
- * Two cases meet at a FIFO: two at a time both pass; one at a time each
- * runs out of its gap, and nothing is retried that was not asked for.
+ * Two cases meet at a FIFO: two at a time both exchange the byte; one at
+ * a time each runs out of its gap after reporting readiness. The pair's
+ * rendezvous is preparation, not a measure of host process startup speed.
  */
 static void test_width(void)
 {
@@ -1074,21 +1187,28 @@ static void test_width(void)
     spec.cases = cases;
     spec.ncases = 2;
     fresh_shared();
+    memset(width_peers, 0, sizeof(width_peers));
+    width_mode = 2;
     CHECK(run("width-2", &spec, CAP, 3, load_argv, &r) == 0, "width");
     width_result("width-2", &r);
     CHECK(r.outcome == ETUDE_REPEAT_PASS && r.nattempts == 2, "width");
     CHECK(r.cleanup == ETUDE_CLEANUP_CONFIRMED, "width");
+    width_peer_check(1);
     for (i = 0; i < r.nattempts; i++)
         CHECK(r.attempts[i].outcome == ETUDE_REPEAT_PASS &&
                   r.attempts[i].cleanup == ETUDE_CLEANUP_CONFIRMED,
               "width");
+    disrupted_history("width-2", &r, "", 0);
     etude_repeat_result_free(&r);
     spec.width = 1;
     fresh_shared();
+    memset(width_peers, 0, sizeof(width_peers));
+    width_mode = 1;
     CHECK(run("width-1", &spec, CAP, 3, load_argv, &r) == 0, "width");
     width_result("width-1", &r);
     CHECK(r.outcome == ETUDE_REPEAT_INCOMPLETE && r.nattempts == 2, "width");
     CHECK(r.cleanup == ETUDE_CLEANUP_CONFIRMED, "width");
+    width_peer_check(0);
     for (i = 0; i < r.nattempts; i++)
         CHECK(r.attempts[i].outcome == ETUDE_REPEAT_INCOMPLETE &&
                   strstr(r.attempts[i].reason, "gap bound") != NULL &&
@@ -1096,6 +1216,7 @@ static void test_width(void)
               "width");
     disrupted_history("width-1", &r, "", 0);
     etude_repeat_result_free(&r);
+    width_mode = 0;
 }
 
 /** Say whether the loads' scratch directory is empty. */
