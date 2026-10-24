@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -129,6 +130,49 @@ class ImportTests(unittest.TestCase):
             self.assertEqual(len(commands), 1)
             product.validate_native(tree, roles)
             self.assertNotEqual(target.read_bytes(), b'old foreign executable')
+
+    def test_forced_openssl_dependency(self):
+        repo = Path(__file__).resolve().parents[2]
+        real_make = Path(os.environ.get('ETUDE_MAKE_REAL') or shutil.which('make')).resolve()
+        with tempfile.TemporaryDirectory(prefix='rach2-import-') as work:
+            tree = Path(work)
+            script = tree / 'tests/system/fakeapi/build_openssl.sh'
+            script.parent.mkdir(parents=True)
+            shutil.copy2(repo / 'tests/system/fakeapi/build_openssl.sh', script)
+            wrapper = tree / 'bin/make'
+            wrapper.parent.mkdir()
+            shutil.copy2(repo / 'tools/etude/make.sh', wrapper)
+            wrapper.chmod(0o755)
+            uname = wrapper.parent / 'uname'
+            uname.write_text('case "$1" in -s) echo Linux;; -m) echo x86_64;; *) exit 2;; esac\n')
+            uname.chmod(0o755)
+            vendor = tree / 'vendor/gnu'
+            vendor.mkdir(parents=True)
+            (vendor / 'fetch.sh').write_text("printf '%s\\n' unused-archive\n")
+            pin = 'a' * 64
+            (vendor / 'sources.txt').write_text('openssl 1 unused ' + pin + '\n')
+            source = tree / ('build/vendor/host-openssl/source-' + pin)
+            (source / 'include/openssl').mkdir(parents=True)
+            (source / 'Configure').write_text('exit 0;\n')
+            (source / 'configdata.mk').write_text('# configured\n')
+            os.utime(source / 'Configure', (1, 1))
+            os.utime(source / 'configdata.mk', (2, 2))
+            (source / 'Makefile').write_text(
+                'include configdata.mk\n'
+                'configdata.mk: Configure\n\t@echo forced-upstream-configuration; exit 17\n'
+                '.PHONY: build_libs\n'
+                'build_libs:\n'
+                '\t@printf "%s\\n" "$$ETUDE_BUILD_JOBS" "$$ETUDE_MAKE_REAL" > policy\n'
+                '\t@printf ssl > libssl.a; printf crypto > libcrypto.a\n')
+            (tree / 'Makefile').write_text(
+                '.PHONY: all\nall:\n\tsh tests/system/fakeapi/build_openssl.sh\n')
+            env = dict(os.environ, PATH=str(wrapper.parent) + os.pathsep + os.environ['PATH'],
+                       ETUDE_BUILD_JOBS='2', ETUDE_MAKE_REAL=str(real_make),
+                       MAKEFLAGS='', MFLAGS='', MAKELEVEL='0', OS='')
+            subprocess.run([str(real_make), '-B', '-k', '-j2'], cwd=tree, env=env, check=True)
+            self.assertEqual((source / 'policy').read_text().splitlines(), ['2', str(real_make)])
+            self.assertEqual((tree / 'build/vendor/host-openssl/lib/libssl.a').read_bytes(), b'ssl')
+            self.assertTrue((tree / 'build/vendor/host-openssl/ready').is_file())
 
     def test_idle_local_producer(self):
         with tempfile.TemporaryDirectory(prefix='rach2-import-') as work:

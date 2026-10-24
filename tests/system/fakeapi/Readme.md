@@ -2,6 +2,8 @@
 
 `native/` implements the test service in C11. `make build/tests/cases/machine/agent_server` builds it with static OpenSSL libraries from the GNU layer's pinned source. The preparation may use the compiler, Perl and Make; the service loads no host library or module and runs no command. `agent_relay` is the same compiled program under the name QEMU's restricted guest forward uses. `sntpserver.c`, one directory above, uses the same portable socket and process-lifetime code without TLS.
 
+The OpenSSL submake clears inherited Make flags and runs one job within its parent's reserved recipe job. A forced native rebuild therefore does not force upstream configuration regeneration. The installed Make wrapper, actual Make path and admission limits remain in effect.
+
 The service accepts these commands:
 
 * `agent_server ca DIR NAME...` creates a private authority and an ECDSA server certificate for the DNS names and IP addresses. The certificates expire after two days. The caller owns `DIR` and removes it.

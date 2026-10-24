@@ -27,7 +27,12 @@ fi
 cd "$source_dir"
 CC="$compiler" perl ./Configure "$target" no-shared no-module no-dso no-tests \
     no-zlib no-legacy --prefix="$output/install" --libdir=lib
-make build_libs
+# The parent's forced rebuild must not remake upstream configuration files.
+# This serial submake occupies the single recipe job the parent reserved.
+(
+    unset MAKEFLAGS MFLAGS
+    make -j1 build_libs
+)
 # Publish fresh copies so read-only headers from the pinned archive are never
 # opened for replacement. Keep the preceding generation until both moves end.
 stage=
