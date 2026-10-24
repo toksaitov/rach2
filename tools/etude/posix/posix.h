@@ -12,6 +12,7 @@
 #define ETUDE_POSIX_H
 
 #include <stdint.h>
+#include <stdio.h>
 
 #include "etude/exec.h"
 
@@ -90,6 +91,13 @@ int posix_fd_high(int fd);
  *         such record.
  */
 int posix_children(long *pids, int max);
+
+/**
+ * Read and close a proc stream into a nonempty buffer of `size` bytes.
+ * Return 1 with terminated text, 0 for ENOENT or ESRCH, -1 for other errors.
+ * Preserve the read error even when closing the stream changes errno.
+ */
+int posix_proc_read(FILE *f, char *buf, size_t size);
 
 /** Ask to be the reaper of every orphan below this process; 0 on success. */
 int posix_subreaper(void);

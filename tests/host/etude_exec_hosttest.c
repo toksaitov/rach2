@@ -28,8 +28,12 @@
  * ended by the keeper. A case that holds memory and has used processor time
  * must be sampled with
  * both while it runs on Linux and Rach2, and with neither elsewhere, and not
- * once it has ended.
+ * once it has ended. Proc reads distinguish disappearance from other errors,
+ * preserving the read error when closing the stream changes errno.
  */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -60,6 +64,7 @@
 #include "compat/pathmax_host.h"
 #include "compat/fixdir_host.c"
 #include "etude/exec.h"
+#include "../../tools/etude/posix/posix.h"
 
 extern char **environ;
 
@@ -1107,6 +1112,65 @@ static void test_output_files(struct etude_exec *ex)
     }
 }
 
+/* A proc stream can lose its process after open but before its first read. */
+#if defined(__APPLE__)
+static int proc_read_failure(void *cookie, char *buf, int size)
+#else
+static ssize_t proc_read_failure(void *cookie, char *buf, size_t size)
+#endif
+{
+    (void)buf;
+    (void)size;
+    errno = *(int *)cookie;
+    return -1;
+}
+
+static int proc_close_changed(void *cookie)
+{
+    (void)cookie;
+    errno = EACCES;
+    return 0;
+}
+
+static FILE *proc_error_stream(int *error)
+{
+#if defined(__APPLE__)
+    return funopen(error, proc_read_failure, NULL, NULL, proc_close_changed);
+#else
+    cookie_io_functions_t io = {proc_read_failure, NULL, NULL, proc_close_changed};
+    return fopencookie(error, "r", io);
+#endif
+}
+
+static void test_proc_reads(void)
+{
+    static const int errors[] = {ENOENT, ESRCH, EIO, EACCES, EINTR};
+    char buf[64];
+    FILE *f;
+    size_t i;
+    int error, expected, result;
+
+    for (i = 0; i < sizeof(errors) / sizeof(errors[0]); i++) {
+        error = errors[i];
+        f = proc_error_stream(&error);
+        CHECK(f != NULL, "proc read error stream");
+        if (f == NULL)
+            continue;
+        expected = error == ENOENT || error == ESRCH ? 0 : -1;
+        result = posix_proc_read(f, buf, sizeof(buf));
+        CHECK(result == expected, "only a vanished proc read means ended");
+        CHECK(errno == error, "proc read errno survives close");
+    }
+    f = tmpfile();
+    CHECK(f != NULL, "proc readable stream");
+    if (f != NULL) {
+        CHECK(fputs("123 (child) R", f) >= 0 && fseek(f, 0, SEEK_SET) == 0,
+              "proc readable bytes");
+        CHECK(posix_proc_read(f, buf, sizeof(buf)) == 1 && !strcmp(buf, "123 (child) R"),
+              "proc successful read preserves bytes");
+    }
+}
+
 int main(int argc, char **argv)
 {
     struct etude_exec *ex;
@@ -1120,6 +1184,7 @@ int main(int argc, char **argv)
     ex = etude_exec_new();
     if (ex == NULL)
         return 1;
+    test_proc_reads();
     test_output_files(ex);
     test_concurrent(ex);
     test_posix_only(ex, 1);

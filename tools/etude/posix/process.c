@@ -151,6 +151,26 @@ void posix_close_others(const int *keep, int n)
             close((int)fd);
 }
 
+/** Close a proc stream, preserving read errors across fclose. */
+int posix_proc_read(FILE *f, char *buf, size_t size)
+{
+    size_t n;
+    int error, failed;
+
+    errno = 0;
+    n = fread(buf, 1, size - 1, f);
+    error = errno;
+    failed = ferror(f);
+    if (fclose(f) != 0 && !failed)
+        return -1;
+    if (failed) {
+        errno = error ? error : EIO;
+        return errno == ENOENT || errno == ESRCH ? 0 : -1;
+    }
+    buf[n] = '\0';
+    return 1;
+}
+
 #if defined(ETUDE_PROC_LINUX)
 
 int posix_subreaper(void)
@@ -184,27 +204,30 @@ int etude_process_state(long pid, struct etude_pid *id)
 {
     char path[64], buf[1024], *p;
     unsigned long long start;
-    size_t n;
     FILE *f;
-    int i;
+    int i, read;
 
     snprintf(path, sizeof(path), "/proc/%ld/stat", pid);
     f = fopen(path, "r");
     if (f == NULL)
-        return errno == ENOENT ? 0 : -1;
-    n = fread(buf, 1, sizeof(buf) - 1, f);
-    fclose(f);
-    buf[n] = '\0';
+        return errno == ENOENT || errno == ESRCH ? 0 : -1;
+    read = posix_proc_read(f, buf, sizeof(buf));
+    if (read != 1)
+        return read;
     p = strrchr(buf, ')');
-    if (p == NULL || p[1] != ' ')
+    if (p == NULL || p[1] != ' ') {
+        errno = EINVAL;
         return -1;
+    }
     p += 2;
     if (*p == 'Z' || *p == 'X')
         return 0;
     for (i = 0; i < 19 && p != NULL; i++)
         p = strchr(p + 1, ' ');
-    if (p == NULL || sscanf(p, " %llu", &start) != 1)
+    if (p == NULL || sscanf(p, " %llu", &start) != 1) {
+        errno = EINVAL;
         return -1;
+    }
     id->pid = pid;
     id->start = start;
     id->start_known = 1;
@@ -222,17 +245,16 @@ int posix_usage(const struct etude_pid *id, uint64_t *cpu_us, uint64_t *rss_byte
     unsigned long long v[21];
     long tick = sysconf(_SC_CLK_TCK), page = sysconf(_SC_PAGESIZE);
     char path[64], buf[1024], *p;
-    size_t n;
     FILE *f;
-    int i;
+    int i, read;
 
     snprintf(path, sizeof(path), "/proc/%ld/stat", id->pid);
     f = fopen(path, "r");
     if (f == NULL)
-        return errno == ENOENT ? 0 : -1;
-    n = fread(buf, 1, sizeof(buf) - 1, f);
-    fclose(f);
-    buf[n] = '\0';
+        return errno == ENOENT || errno == ESRCH ? 0 : -1;
+    read = posix_proc_read(f, buf, sizeof(buf));
+    if (read != 1)
+        return read;
     p = strrchr(buf, ')');
     if (p == NULL || p[1] != ' ' || tick <= 0 || page <= 0)
         return -1;
