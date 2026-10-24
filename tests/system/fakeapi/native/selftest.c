@@ -1,6 +1,9 @@
 /* selftest.c: protocol state and wire checks without a network or client.
  * SSL reads and writes use byte buffers here. The server and each protocol
  * are the production C; the integration case supplies real TLS sockets. */
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE
+#endif
 #include "api.h"
 #include <signal.h>
 #include <stdlib.h>
