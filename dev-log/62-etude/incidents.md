@@ -617,3 +617,7 @@ The launch-script fixture saved a pointer into its rotating path buffer across a
 ## Native board comparisons, 2026-10-24
 
 The GNU board fixture failed nine rows while the actual board operations returned their expected state. Its C port compared archive lists with trailing spaces, an owner-only diagnostic without its explanatory suffix, and the complete human-readable start comment against the single phase record. Issue #1056 restores the original shell fixture's whitespace and line selection, while requiring exactly one start record with the original commit. Status, membership, archive state and rejected mutations remain checked.
+
+## Cleanup fixture timestamps, 2026-10-24
+
+The native cleanup fixture aged the entire scratch tree, including the file intended to make its parent young. Reopening that empty file did not restore its timestamp on Rach2. Issue #1058 sets its timestamp explicitly after aging the tree, matching the original fixture, which never aged the young file. The cleanup program and its checks for old, young, active and unrelated paths are unchanged.

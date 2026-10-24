@@ -475,8 +475,7 @@ static int tidy_files(struct fixture *f, const char *base)
     symlink(flow_path(f, "target"), flow_path(f, "tmp/rach2-link.Li9kLi"));
     if (!age_tree(flow_path(f, "tmp"), time(NULL) - 172800))
         return 0;
-    flow_put(f, "tmp/rach2-young.Yy3Yy3/now", "");
-    return 1;
+    return age_tree(flow_path(f, "tmp/rach2-young.Yy3Yy3/now"), time(NULL));
 }
 static int tidy_setup(struct fixture *f)
 {
