@@ -141,7 +141,7 @@ static int together_tree(struct fixture *f)
                            NULL};
     const char *target = bp(f->work, "tree");
     for (size_t i = 0; files[i]; i++)
-        if (!fx_copy(bp(f->tree, files[i]), bp(target, files[i])))
+        if (!fx_check(f, fx_copy(bp(f->tree, files[i]), bp(target, files[i])), files[i]))
             return 0;
     if (!fx_tree(bp(f->tree, "mk"), bp(target, "mk")) ||
         !copy_pattern(f, "krffs/manifests", "*.manifest", target))
