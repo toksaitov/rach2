@@ -1678,6 +1678,45 @@ static void boot_write(struct build *b, uint64_t first)
         wr32(b_sector(b, first + 11) + i, sum);
 }
 
+/** Open one NAME=PATH input and obtain its wide byte length. */
+static FILE *volume_input(const char *add, char *name, size_t capacity, uint64_t *bytes)
+{
+    const char *eq = strchr(add, '=');
+    size_t ni;
+    FILE *in;
+    int64_t length;
+
+    if (!eq || (size_t)(eq - add) >= capacity) {
+        fprintf(stderr, "mkexfatfixture: --add takes NAME=PATH\n");
+        return NULL;
+    }
+    memcpy(name, add, (size_t)(eq - add));
+    name[eq - add] = '\0';
+    for (ni = 0; name[ni] != '\0'; ni++) {
+        if ((unsigned char)name[ni] < 0x20 || (unsigned char)name[ni] > 0x7E) {
+            fprintf(stderr, "mkexfatfixture: %s: a name here is printable ASCII\n", name);
+            return NULL;
+        }
+    }
+    if (ni > 200) {
+        fprintf(stderr, "mkexfatfixture: %s: a name here is at most 200 characters\n", name);
+        return NULL;
+    }
+    in = fopen(eq + 1, "rb");
+    if (!in) {
+        fprintf(stderr, "mkexfatfixture: cannot open %s\n", eq + 1);
+        return NULL;
+    }
+    if (host_image_seek(in, 0, SEEK_END) != 0 || (length = host_image_tell(in)) < 0 ||
+        host_image_seek(in, 0, SEEK_SET) != 0) {
+        fprintf(stderr, "mkexfatfixture: cannot size %s\n", eq + 1);
+        fclose(in);
+        return NULL;
+    }
+    *bytes = (uint64_t)length;
+    return in;
+}
+
 /**
  * Build a volume of `sectors` at `offset` with the files `adds` name, each
  * NAME=PATH, into `bp->img`, which the caller writes out and frees. Returns
@@ -1789,40 +1828,11 @@ static int build_volume_image(struct build *bp, uint64_t sectors, uint64_t offse
         char name[256];
         const char *eq = strchr(adds[k], '=');
         uint64_t bytes, want;
-        size_t ni;
         FILE *in;
 
-        if (!eq || (size_t)(eq - adds[k]) >= sizeof(name)) {
-            fprintf(stderr, "mkexfatfixture: --add takes NAME=PATH\n");
+        in = volume_input(adds[k], name, sizeof(name), &bytes);
+        if (!in)
             return 2;
-        }
-        memcpy(name, adds[k], (size_t)(eq - adds[k]));
-        name[eq - adds[k]] = '\0';
-        for (ni = 0; name[ni] != '\0'; ni++) {
-            if ((unsigned char)name[ni] < 0x20 || (unsigned char)name[ni] > 0x7E) {
-                fprintf(stderr, "mkexfatfixture: %s: a name here is printable ASCII\n", name);
-                return 2;
-            }
-        }
-        if (ni > 200) {
-            fprintf(stderr, "mkexfatfixture: %s: a name here is at most 200 characters\n", name);
-            return 2;
-        }
-        in = fopen(eq + 1, "rb");
-        if (!in) {
-            fprintf(stderr, "mkexfatfixture: cannot open %s\n", eq + 1);
-            return 2;
-        }
-        {
-            int64_t length;
-            if (host_image_seek(in, 0, SEEK_END) != 0 || (length = host_image_tell(in)) < 0 ||
-                host_image_seek(in, 0, SEEK_SET) != 0) {
-                fprintf(stderr, "mkexfatfixture: cannot size %s\n", eq + 1);
-                fclose(in);
-                return 2;
-            }
-            bytes = (uint64_t)length;
-        }
         want = (bytes + b_cbytes(&b) - 1) / b_cbytes(&b);
         if (b.next + want + 1 > b.clusters + 2) {
             fprintf(stderr, "mkexfatfixture: %s does not fit the volume\n", name);
@@ -1919,6 +1929,31 @@ static void b_full_set(struct build *b, struct dw *root)
     dw_put_set(root, set, n);
 }
 
+/** Normalize fixture options before allocating the volume. */
+static int build_option(struct build *b, const char *opt)
+{
+    b->opt = opt;
+    if (opt && strncmp(opt, "--offset=", 9) == 0) {
+        if (host_image_number(opt + 9, &b->partition_offset) != 0)
+            return 2;
+        b->opt = 0;
+    }
+    if (opt && strncmp(opt, "--dirty-", 8) == 0 && strcmp(opt, "--dirty-orphan") != 0 &&
+        strcmp(opt, "--dirty-surplus") != 0 && strcmp(opt, "--dirty-lost") != 0 &&
+        strcmp(opt, "--dirty-dup") != 0 && strcmp(opt, "--dirty-critical") != 0 &&
+        strcmp(opt, "--dirty-all") != 0 && strcmp(opt, "--dirty-nofat-orphan") != 0 &&
+        strcmp(opt, "--dirty-dup-checksum") != 0 && strcmp(opt, "--dirty-label-below") != 0) {
+        static char plain[64];
+
+        snprintf(plain, sizeof(plain), "--%s", opt + 8);
+        b->opt = plain;
+        b->dirty = 1;
+    }
+    if (opt && strncmp(opt, "--dirty", 7) == 0)
+        b->dirty = 1;
+    return 0;
+}
+
 /**
  * Build the fixture volume, changed by the option `opt` or NULL, and write
  * it to `out`. Returns 0, or 2 when memory or the write fails.
@@ -2000,25 +2035,8 @@ static int build(const char *out, const char *opt)
     FILE *f;
 
     memset(&b, 0, sizeof(b));
-    b.opt = opt;
-    if (opt && strncmp(opt, "--offset=", 9) == 0) {
-        if (host_image_number(opt + 9, &b.partition_offset) != 0)
-            return 2;
-        b.opt = 0;
-    }
-    if (opt && strncmp(opt, "--dirty-", 8) == 0 && strcmp(opt, "--dirty-orphan") != 0 &&
-        strcmp(opt, "--dirty-surplus") != 0 && strcmp(opt, "--dirty-lost") != 0 &&
-        strcmp(opt, "--dirty-dup") != 0 && strcmp(opt, "--dirty-critical") != 0 &&
-        strcmp(opt, "--dirty-all") != 0 && strcmp(opt, "--dirty-nofat-orphan") != 0 &&
-        strcmp(opt, "--dirty-dup-checksum") != 0 && strcmp(opt, "--dirty-label-below") != 0) {
-        static char plain[64];
-
-        snprintf(plain, sizeof(plain), "--%s", opt + 8);
-        b.opt = plain;
-        b.dirty = 1;
-    }
-    if (opt && strncmp(opt, "--dirty", 7) == 0)
-        b.dirty = 1;
+    if (build_option(&b, opt) != 0)
+        return 2;
     b.bps_shift = b_is(&b, "--sector-4k") ? 12 : B_BPS_SHIFT;
     b.spc_shift = b_is(&b, "--sector-4k") ? 0 : B_SPC_SHIFT;
     b.sectors = B_SECTORS >> (b.bps_shift - B_BPS_SHIFT);

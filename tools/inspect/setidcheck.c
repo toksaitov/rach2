@@ -4130,6 +4130,20 @@ static void st_image(const struct allow *img_allow, const char *name, const char
     st_case(name, &got, want_ok, fragment);
 }
 
+/** Write one sparse selftest region after native sparse setup succeeds. */
+static int st_write_wide(FILE *file, int64_t offset, const unsigned char *region, size_t size)
+{
+#ifdef _WIN32
+    DWORD transferred;
+    HANDLE handle = (HANDLE)_get_osfhandle(_fileno(file));
+    if (!DeviceIoControl(handle, FSCTL_SET_SPARSE, NULL, 0, NULL, 0, &transferred, NULL))
+        return -1;
+#endif
+    if (image_seek(file, offset) != 0 || fwrite(region, 1, size, file) != size)
+        return -1;
+    return 0;
+}
+
 /** Keep image parsing, KRFFS reads and ext2 reads wide on LLP64 hosts. */
 static void st_wide_region(void)
 {
@@ -4141,24 +4155,14 @@ static void st_wide_region(void)
     struct list got = {NULL, 0, 0};
     FILE *file;
     int64_t parsed;
-    int bad = 0;
+    int bad;
 
     snprintf(path, sizeof(path), "%s/wide-region", st_tmp);
     fixture(-1, NULL, NULL, 0, region);
     file = fopen(path, "wb");
     if (file == NULL)
         exit(2);
-#ifdef _WIN32
-    {
-        DWORD transferred;
-        HANDLE handle = (HANDLE)_get_osfhandle(_fileno(file));
-        if (!DeviceIoControl(handle, FSCTL_SET_SPARSE, NULL, 0, NULL, 0, &transferred, NULL))
-            bad = 1;
-    }
-#endif
-    if (bad || image_seek(file, offset) != 0 ||
-        fwrite(region, 1, sizeof(region), file) != sizeof(region))
-        bad = 1;
+    bad = st_write_wide(file, offset, region, sizeof(region)) != 0;
     if (fclose(file) != 0)
         bad = 1;
     if (bad)
@@ -4663,6 +4667,20 @@ static void st_stems(const struct allow *allow)
     list_free(&found);
 }
 
+/** Report malformed declarations before checking fixture manifests. */
+static void st_validate_allow(const struct allow *allow)
+{
+    struct list got = {NULL, 0, 0};
+    int i;
+
+    validate_table(allow, &got);
+    for (i = 0; i < got.n; i++) {
+        printf("  FAIL: the allowlist itself: %s\n", got.items[i]);
+        st_bad++;
+    }
+    list_free(&got);
+}
+
 /**
  * Run every case over fixtures in a temporary directory and print a summary
  * line. Return 0 when every case passes, 1 when one fails or the
@@ -4702,12 +4720,7 @@ static int selftest(struct allow *allow)
     }
     atexit(st_clean);
     st_wide_region();
-    validate_table(allow, &got);
-    for (i = 0; i < got.n; i++) {
-        printf("  FAIL: the allowlist itself: %s\n", got.items[i]);
-        st_bad++;
-    }
-    list_free(&got);
+    st_validate_allow(allow);
 
     /* The minimal accepted manifests, generated from the allow file. */
     trusted_lines(os_real, tl, sizeof(tl));

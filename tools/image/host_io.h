@@ -64,6 +64,18 @@ static inline int host_image_sparse(FILE *file)
     return 0;
 }
 
+/** Extend a sparse image before writing any other far byte. */
+static inline int host_image_sparse_extend(FILE *file, int64_t length)
+{
+#ifdef _WIN32
+    if (host_image_sparse(file) != 0)
+        return -1;
+#endif
+    if (host_image_seek(file, length - 1, SEEK_SET) != 0 || fputc(0, file) == EOF)
+        return -1;
+    return 0;
+}
+
 /** Parse a complete unsigned field without a sign or overflow. */
 static inline int host_image_number(const char *text, uint64_t *out)
 {

@@ -231,6 +231,25 @@ static const char *slot_refusal(int logical, int primaries, int have_extended, i
     return NULL;
 }
 
+/** Convert units and check the disk and 32-bit table field bounds. */
+static int partition_extent(unsigned long start, unsigned long size, int lba_units,
+                            uint64_t disk_sectors, uint64_t *lba, uint64_t *count)
+{
+    if (lba_units) {
+        *lba = start;
+        *count = size;
+    } else {
+        if (start > 0x1FFFFFul || size > 0x1FFFFFul)
+            return -1;
+        *lba = (uint64_t)start * 2048;
+        *count = (uint64_t)size * 2048;
+    }
+    if (*lba > UINT32_MAX || *count == 0 || *count > UINT32_MAX || *lba > UINT32_MAX - *count ||
+        *lba + *count > disk_sectors)
+        return -1;
+    return 0;
+}
+
 /**
  * Write the table the arguments describe, as the opening comment says, or
  * list one with `--list`. The first sector is written back only after
@@ -322,24 +341,7 @@ int main(int argc, char **argv)
             fclose(f);
             return 2;
         }
-        /* The LBA fields are 32 bits, so a partition must end below 2 TiB. */
-        if (lba_units) {
-            lba = start_mib;
-            count = size_mib;
-        } else {
-            if (start_mib > 0x1FFFFFul || size_mib > 0x1FFFFFul) {
-                fprintf(stderr,
-                        "mkmbr: partition '%s' runs past the image "
-                        "(%llu sectors)\n",
-                        argv[i], (unsigned long long)disk_sectors);
-                fclose(f);
-                return 2;
-            }
-            lba = (uint64_t)start_mib * 2048;
-            count = (uint64_t)size_mib * 2048;
-        }
-        if (lba > UINT32_MAX || count == 0 || count > UINT32_MAX || lba > UINT32_MAX - count ||
-            lba + count > disk_sectors) {
+        if (partition_extent(start_mib, size_mib, lba_units, disk_sectors, &lba, &count) != 0) {
             fprintf(stderr,
                     "mkmbr: partition '%s' runs past the image "
                     "(%llu sectors)\n",
