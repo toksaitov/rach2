@@ -74,6 +74,11 @@ ssize_t __real_pwrite(int fd, const void *buffer, size_t size, long offset)
     return __real_pwrite64(fd, buffer, size, offset);
 }
 
+/* Some desktop CRT headers make fstat an ABI-selecting macro. The model
+ * supplies its own descriptor classification and uses no host block device. */
+#ifdef fstat
+#undef fstat
+#endif
 #define fstat model_stat
 #define pread64 model_pread64
 #include "../../vendor/gnu/fstools/positional_io.c"

@@ -281,6 +281,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "fstool_io",
+          "checks": "tests/host/fstool_io_hosttest.c checks sector-only positional writes, preserved bytes, both offset ABIs and failure returns under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "futex",
           "checks": "tests/host/futex_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
