@@ -256,15 +256,19 @@ static int written(struct usb_case *u)
     char *argv[5];
     struct usb_boot b;
     struct etude_termination end;
-    char *text;
+    enum etude_status st;
+    char *text, *reply = NULL;
 
     boot(u, &b, USB_SHELL);
     probe(u, &b, "probe", "/usbdiskprobe write", "write");
     no_fail(u, &b);
     usb_step(u, "read");
-    usb_qmp(&b, "quit", NULL);
+    st = usb_ok(u) ? etude_qmp(b.m, "quit", NULL, &reply) : ETUDE_REFUSED;
+    free(reply);
+    if (st != ETUDE_OK && st != ETUDE_LOST)
+        usb_fail(u, "the USB machine could not be ended before the host read");
     if (usb_end_of(&b, &end) == ETUDE_OK &&
-        (end.end != ETUDE_END_EXITED || end.value != 0))
+        (end.end != ETUDE_END_QEMU_EXITED || end.value != 0))
         usb_fail(u, "the USB machine did not exit cleanly before the host read");
     keep_path(u, image, etude_private_copy(u->c, "stick"), "the stick's copy");
     snprintf(spec, sizeof(spec), "%s@@1048576", image);
