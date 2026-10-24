@@ -1581,16 +1581,16 @@ static int stuck_scope(const struct eh_json *data, struct stuck_starts *starts)
     const struct eh_json *processes = eh_json_get(scope, "processes");
     const struct eh_json *process;
     size_t found = 0, slot = starts->count;
-    int ok = scope && !strcmp(id, cmp_text(scope, "attempt_id")) &&
-             processes && processes->type == 'a' && slot < 2;
+    int ok = scope && !strcmp(id, cmp_text(scope, "attempt_id")) && processes &&
+             processes->type == 'a' && slot < 2;
 
     for (process = ok ? processes->child : NULL; process; process = process->next) {
         if (strcmp(cmp_text(process, "role"), "case"))
             continue;
         const struct eh_json *pid = eh_json_get(process, "pid");
         const struct eh_json *start = eh_json_get(process, "start");
-        if (!pid || pid->type != 'n' || pid->number <= 0 ||
-            !start || start->type != 'n' || start->number <= 0) {
+        if (!pid || pid->type != 'n' || pid->number <= 0 || !start || start->type != 'n' ||
+            start->number <= 0) {
             ok = 0;
             break;
         }
@@ -1638,8 +1638,7 @@ static int stuck_start_lines(const struct stuck_starts *starts)
         int used = 0;
         if (strncmp(line, "start stuck", 11))
             continue;
-        if (sscanf(line, "start stuck %ld%n", &pid, &used) != 1 ||
-            strcmp(line + used, "\n")) {
+        if (sscanf(line, "start stuck %ld%n", &pid, &used) != 1 || strcmp(line + used, "\n")) {
             ok = 0;
             break;
         }

@@ -513,8 +513,7 @@ static void make_tree(void)
     int n = snprintf(search, sizeof(search), "%s/tree/bin:%s", directory, old ? old : "");
     if (!fx_mkdir(path("tree/tests")) || !fx_mkdir(path("tree/bin")) ||
         !fx_copy("tests/registry", path("tree/tests/registry")) ||
-        !fx_replace("tools/ci/run.sh", path("run.sh"), "results=native\n",
-                    "results=lines\n") ||
+        !fx_replace("tools/ci/run.sh", path("run.sh"), "results=native\n", "results=lines\n") ||
         !fx_copy(self, path("tree/tests/run")) || symlink(self, path("tree/bin/make")) ||
         symlink(self, path("tree/bin/git")) || !bisect_functions() || n < 0 ||
         n >= (int)sizeof(search) || setenv("PATH", search, 1))

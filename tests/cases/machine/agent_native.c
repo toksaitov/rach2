@@ -960,8 +960,7 @@ static void api_verdict(struct api_case *a)
 static void api_verify(struct api_case *a)
 {
     net_step(&a->u, "verify");
-    if (net_ok(&a->u) &&
-        !run(&a->s, "chown -R root:root /tmp/agents/verify", "own-api-result"))
+    if (net_ok(&a->u) && !run(&a->s, "chown -R root:root /tmp/agents/verify", "own-api-result"))
         net_fail(&a->u, "the completed repository could not be prepared for verification");
     if (a->refusal) {
         net_assert(&a->u, "refused", a->service_ok && a->muse_live,

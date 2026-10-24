@@ -349,8 +349,8 @@ static void git_details(FILE *file, const struct etude_exec_spec *spec,
 {
     size_t i;
 
-    fprintf(file, "cwd=%s\nstdout=%s\nstderr=%s\noutput_max=%lu result_buffer=%lu\n",
-            spec->cwd, spec->stdout_path, spec->stderr_path, (unsigned long)spec->output_max,
+    fprintf(file, "cwd=%s\nstdout=%s\nstderr=%s\noutput_max=%lu result_buffer=%lu\n", spec->cwd,
+            spec->stdout_path, spec->stderr_path, (unsigned long)spec->output_max,
             (unsigned long)size);
     fprintf(file, "PATH=%s\nHOME=%s\n", getenv("PATH") ? getenv("PATH") : "",
             getenv("HOME") ? getenv("HOME") : "");
@@ -367,20 +367,19 @@ static void git_details(FILE *file, const struct etude_exec_spec *spec,
             "keeper=%ld:%llu:%d process=%ld:%llu:%d children=%u foreign=%u\n",
             r->end, r->value, r->exit_end, r->exit_value, r->cleanup, r->output_error,
             ETUDE_END_EXITED, ETUDE_END_SIGNALED, ETUDE_END_STOPPED, ETUDE_END_LOST,
-            ETUDE_CLEANUP_CONFIRMED, (unsigned long)r->out.kept,
-            (unsigned long long)r->out.total, r->out.closed, (unsigned long)r->err.kept,
-            (unsigned long long)r->err.total, r->err.closed, r->keeper.pid,
-            (unsigned long long)r->keeper.start, r->keeper.start_known, r->process.pid,
-            (unsigned long long)r->process.start, r->process.start_known, r->children,
-            r->foreign);
+            ETUDE_CLEANUP_CONFIRMED, (unsigned long)r->out.kept, (unsigned long long)r->out.total,
+            r->out.closed, (unsigned long)r->err.kept, (unsigned long long)r->err.total,
+            r->err.closed, r->keeper.pid, (unsigned long long)r->keeper.start,
+            r->keeper.start_known, r->process.pid, (unsigned long long)r->process.start,
+            r->process.start_known, r->children, r->foreign);
 }
 
 /** Keep the existing exit, cleanup and capture requirements for real Git. */
 static int git_succeeded(const struct etude_exec_result *r, size_t size)
 {
-    return r->end == ETUDE_END_EXITED && r->value == 0 &&
-           r->cleanup == ETUDE_CLEANUP_CONFIRMED && !r->output_error &&
-           r->out.total == r->out.kept && r->err.total == r->err.kept && r->out.kept < size;
+    return r->end == ETUDE_END_EXITED && r->value == 0 && r->cleanup == ETUDE_CLEANUP_CONFIRMED &&
+           !r->output_error && r->out.total == r->out.kept && r->err.total == r->err.kept &&
+           r->out.kept < size;
 }
 
 /** Run real Git, keeping full streams and status for each distinct command. */

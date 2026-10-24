@@ -303,8 +303,7 @@ static void cost_histories(const char *template, const char *history, unsigned m
 static int cost_refused(char *const *options, char *out, size_t room)
 {
     int status = run(options, NULL, NULL, NULL, out, room);
-    int refused = status == 2 && !strstr(out, ": starting\n") &&
-                  strstr(out, strerror(ERANGE));
+    int refused = status == 2 && !strstr(out, ": starting\n") && strstr(out, strerror(ERANGE));
     if (!refused)
         fprintf(stderr, "capacity refusal: exit %d\n%s", status, out);
     return refused;
@@ -320,8 +319,7 @@ static void cost_capacity(char *out, size_t room)
           "eligible625 fits site800 despite initial1000");
     CHECK(!mkdir(fix_path("cost-empty"), 0700), "the empty history directory is made");
     char *initial[] = {"-A", "tcg", "-j", "1", "-H", (char *)fix_path("cost-empty"), "host", NULL};
-    CHECK(cost_refused(initial, out, room),
-          "unlearned initial1000 cannot fit site800");
+    CHECK(cost_refused(initial, out, room), "unlearned initial1000 cannot fit site800");
     fixture_policy(2000);
     unsetenv("ETUDE_COLLECTION_CPU");
 }
@@ -358,8 +356,7 @@ static void cost_loaded(char *out, size_t room)
           "learned625 plus declared load1000 fits site1800");
     cost_unsafe_loads(out, room);
     fixture_policy(1500);
-    CHECK(cost_refused(loaded, out, room) &&
-              strstr(out, "CPU 625 (3 samples)"),
+    CHECK(cost_refused(loaded, out, room) && strstr(out, "CPU 625 (3 samples)"),
           "learned CPU plus load is refused instead of clamped to site1500");
     unsetenv("ETUDE_COLLECTION_CPU");
     fixture_policy(2000);
