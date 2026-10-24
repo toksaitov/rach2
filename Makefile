@@ -465,7 +465,7 @@ $(filter $(ARCH_BUILD)/tools/etude/guest/%,$(MANIFEST_INPUTS)): tools/etude/gues
 	+@:
 
 # The byte searcher (tools/inspect/binfind.c) the TinyCC policy check runs.
-$(BINFIND): tools/inspect/binfind.c
+$(BINFIND): tools/inspect/binfind.c tools/image/host_io.h
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
 

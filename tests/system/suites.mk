@@ -88,13 +88,13 @@ $(PCAPCHECK): tests/system/checkers/pcapcheck.c
 	$(HOST_LINK)
 # The disk fixtures (tests/system/fixtures/mkfixture.c): the bootprobe partition
 # pattern and the 260 GB sparse disk.
-$(MKFIXTURE): tests/system/fixtures/mkfixture.c
+$(MKFIXTURE): tests/system/fixtures/mkfixture.c tools/image/host_io.h
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
 # The FAT32 fixture builder and its volume check (tests/host/mkfatfixture.c):
 # the suites walk a volume the kernel wrote with `--check`.
 MKFATFIXTURE = build/tests/host/mkfatfixture
-$(MKFATFIXTURE): tests/host/mkfatfixture.c
+$(MKFATFIXTURE): tests/host/mkfatfixture.c tools/image/host_io.h
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
 # The host end of a connection (tests/system/runner/hostpeer.c): the echo
@@ -872,9 +872,13 @@ $(IMAGES_DIR)/exfat-volume.disk: krffs/manifests/disk-test.manifest $(MANIFEST_D
 # a grow writes, checked against what the grow in QEMU changed. The tool
 # includes utils/growset.c, so that file is a dependency and not a link
 # input.
-$(GROWSET): tools/inspect/growset.c utils/growset.c
+$(GROWSET): tools/inspect/growset.c utils/growset.c tools/image/host_io.h
 	@mkdir -p $(dir $@)
+ifeq ($(OS),Windows_NT)
+	sh tools/etude/compile.sh $(HOSTCC) $@ $(HOSTCFLAGS) $<
+else
 	$(HOSTCC) $(HOSTCFLAGS) -o $@ $<
+endif
 # A stick of the same shape carrying a 138 MiB disk instead of the sealed one,
 # so the rows that install do not each write a gibibyte and a half. The image it
 # carries has the shape the sealed disk has, a boot partition, a recovery

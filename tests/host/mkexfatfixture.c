@@ -21,6 +21,7 @@
  * this file, with its usage.
  */
 
+#include "../../tools/image/host_io.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1151,8 +1152,10 @@ static int check_args(int argc, char **argv, struct vol *v, struct check_args *a
             v->dump = 1;
         else if (!a->image)
             a->image = argv[i];
-        else
-            a->offset = strtoull(argv[i], 0, 10);
+        else if (host_image_number(argv[i], &a->offset) != 0) {
+            fprintf(stderr, "mkexfatfixture: invalid sector offset: %s\n", argv[i]);
+            return 2;
+        }
     }
     if (!a->image || (a->out && !a->read_what)) {
         fprintf(stderr, "usage: mkexfatfixture --check IMAGE [OFFSET-SECTORS] [--list] [--dump]\n"
@@ -1180,6 +1183,7 @@ static int check_main(int argc, char **argv)
     FILE *f;
     const char *image;
     uint64_t offset;
+    int64_t length;
     long n;
     uint64_t c, allocated = 0, reached = 0;
     char text[200];
@@ -1194,12 +1198,18 @@ static int check_main(int argc, char **argv)
         fprintf(stderr, "mkexfatfixture: cannot open %s\n", image);
         return 2;
     }
-    fseek(f, 0, SEEK_END);
-    v.bytes = (size_t)ftell(f) - (size_t)(offset * SECTOR);
-    v.img = malloc(v.bytes);
-    if (!v.img || fseek(f, (long)(offset * SECTOR), SEEK_SET) != 0 ||
-        fread(v.img, 1, v.bytes, f) != v.bytes) {
+    if (host_image_seek(f, 0, SEEK_END) != 0 || (length = host_image_tell(f)) < 0 ||
+        offset > (uint64_t)length / SECTOR || (uint64_t)length - offset * SECTOR > SIZE_MAX) {
+        fprintf(stderr, "mkexfatfixture: invalid image region: %s\n", image);
+        fclose(f);
+        return 2;
+    }
+    v.bytes = (size_t)((uint64_t)length - offset * SECTOR);
+    v.img = malloc(v.bytes ? v.bytes : 1);
+    if (!v.img || host_image_sector(f, offset) != 0 || fread(v.img, 1, v.bytes, f) != v.bytes) {
         fprintf(stderr, "mkexfatfixture: cannot read %s\n", image);
+        fclose(f);
+        free(v.img);
         return 2;
     }
     fclose(f);
@@ -1708,6 +1718,11 @@ static int build_volume_image(struct build *bp, uint64_t sectors, uint64_t offse
     unsigned n, i;
     int k;
 
+    if (sectors < 2048 || sectors > SIZE_MAX / (1u << B_BPS_SHIFT) ||
+        sectors > (uint64_t)(UINT32_MAX - 2) << B_SPC_SHIFT) {
+        fprintf(stderr, "mkexfatfixture: volume size is out of range\n");
+        return 2;
+    }
     memset(&b, 0, sizeof(b));
     b.partition_offset = offset;
     b.bps_shift = B_BPS_SHIFT;
@@ -1798,9 +1813,16 @@ static int build_volume_image(struct build *bp, uint64_t sectors, uint64_t offse
             fprintf(stderr, "mkexfatfixture: cannot open %s\n", eq + 1);
             return 2;
         }
-        fseek(in, 0, SEEK_END);
-        bytes = (uint64_t)ftell(in);
-        fseek(in, 0, SEEK_SET);
+        {
+            int64_t length;
+            if (host_image_seek(in, 0, SEEK_END) != 0 || (length = host_image_tell(in)) < 0 ||
+                host_image_seek(in, 0, SEEK_SET) != 0) {
+                fprintf(stderr, "mkexfatfixture: cannot size %s\n", eq + 1);
+                fclose(in);
+                return 2;
+            }
+            bytes = (uint64_t)length;
+        }
         want = (bytes + b_cbytes(&b) - 1) / b_cbytes(&b);
         if (b.next + want + 1 > b.clusters + 2) {
             fprintf(stderr, "mkexfatfixture: %s does not fit the volume\n", name);
@@ -1980,7 +2002,8 @@ static int build(const char *out, const char *opt)
     memset(&b, 0, sizeof(b));
     b.opt = opt;
     if (opt && strncmp(opt, "--offset=", 9) == 0) {
-        b.partition_offset = strtoull(opt + 9, 0, 10);
+        if (host_image_number(opt + 9, &b.partition_offset) != 0)
+            return 2;
         b.opt = 0;
     }
     if (opt && strncmp(opt, "--dirty-", 8) == 0 && strcmp(opt, "--dirty-orphan") != 0 &&
@@ -2372,12 +2395,14 @@ int main(int argc, char **argv)
             for (k = 1; k < argc; k++) {
                 if (strcmp(argv[k], "--make") == 0 && k + 1 < argc)
                     out = argv[++k];
-                else if (strcmp(argv[k], "--sectors") == 0 && k + 1 < argc)
-                    sectors = strtoull(argv[++k], 0, 10);
-                else if (strcmp(argv[k], "--offset") == 0 && k + 1 < argc)
-                    offset = strtoull(argv[++k], 0, 10);
-                else if (strcmp(argv[k], "--add") == 0 && k + 1 < argc &&
-                         nadds < (int)(sizeof(adds) / sizeof(adds[0])))
+                else if (strcmp(argv[k], "--sectors") == 0 && k + 1 < argc) {
+                    if (host_image_number(argv[++k], &sectors) != 0)
+                        return 2;
+                } else if (strcmp(argv[k], "--offset") == 0 && k + 1 < argc) {
+                    if (host_image_number(argv[++k], &offset) != 0)
+                        return 2;
+                } else if (strcmp(argv[k], "--add") == 0 && k + 1 < argc &&
+                           nadds < (int)(sizeof(adds) / sizeof(adds[0])))
                     adds[nadds++] = argv[++k];
                 else {
                     fprintf(stderr, "mkexfatfixture: %s: not an option of --make\n", argv[k]);

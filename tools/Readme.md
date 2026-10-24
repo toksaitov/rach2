@@ -110,6 +110,8 @@ done
 
 Copy the cache to `/home/ghrunner/action-archives` on the testing host, preserving its directory names and making it readable by `ghrunner`. Set the variable in each runner's `.env` and restart its service when it has no job; later cache additions need no restart. The runner's `_diag/Worker_*.log` records `Found action archive` when it uses an entry. An action download failure has no test artifact: read it with `gh run view RUN --log-failed`.
 
+The native disk-image tools use checked 64-bit byte positions on every host. On Windows, mkfixture must mark an image sparse before extending it for the authority or wide-offset cases; failure stops the write. Partition fields retain their format limits independently of the host integer widths.
+
 ### Checking a machine: `setup/`
 
 * [preflight.sh](setup/preflight.sh) is the build's tool check, an order-only prerequisite of the root Makefile's build targets, so every `make` and `tests/run` runs it. It checks the build's tools and the cross toolchain of `RACH2_ARCH`, and caches the result in `build/.preflight` or `build/x86_64/.preflight`, so that a check with nothing changed runs none of the tools. A missing tool fails the build by name before the cross toolchain compiles anything. When `RACH2_MIN_FREE_GIB` is set above 0, it also refuses a build while `space.sh` finds fewer GiB free, read on every run; the loops, ci and `dev/testing.sh run` set it to 40. `--report` prints a line for each tool.

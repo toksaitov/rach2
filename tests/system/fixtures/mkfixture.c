@@ -35,6 +35,7 @@
  * etude reads the whole artifact to take its digest and to copy it for each
  * case, so it is no larger than the probe needs.
  */
+#include "../../../tools/image/host_io.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -142,7 +143,8 @@ static int make_wide(const char *path)
         fprintf(stderr, "mkfixture: wide: cannot open %s\n", path);
         return 1;
     }
-    if (fseeko(f, (off_t)WIDE_SIZE - 1, SEEK_SET) != 0 || fputc(0, f) == EOF) {
+    if (host_image_sparse(f) != 0 || host_image_seek(f, (int64_t)WIDE_SIZE - 1, SEEK_SET) != 0 ||
+        fputc(0, f) == EOF) {
         fprintf(stderr, "mkfixture: wide: cannot size %s\n", path);
         fclose(f);
         return 1;
@@ -152,13 +154,14 @@ static int make_wide(const char *path)
 
         for (j = 0; j < SECTOR; j++)
             marker[j] = (unsigned char)(((unsigned long)j * 7 + 3 + tag) & 0xFF);
-        if (fseeko(f, (off_t)at[i], SEEK_SET) != 0 || fwrite(marker, 1, SECTOR, f) != SECTOR) {
+        if (host_image_seek(f, (int64_t)at[i], SEEK_SET) != 0 ||
+            fwrite(marker, 1, SECTOR, f) != SECTOR) {
             fprintf(stderr, "mkfixture: wide: cannot write a marker\n");
             fclose(f);
             return 1;
         }
     }
-    if (fseeko(f, 510, SEEK_SET) != 0 || fputc(0x55, f) == EOF || fputc(0xAA, f) == EOF ||
+    if (host_image_seek(f, 510, SEEK_SET) != 0 || fputc(0x55, f) == EOF || fputc(0xAA, f) == EOF ||
         fclose(f) != 0) {
         fprintf(stderr, "mkfixture: wide: cannot write %s\n", path);
         return 1;
@@ -186,8 +189,9 @@ static int make_auth(const char *path)
         fprintf(stderr, "mkfixture: auth: cannot create %s\n", path);
         return 1;
     }
-    if (fseeko(f, (off_t)AUTH_SIZE - 1, SEEK_SET) != 0 || fputc(0, f) == EOF ||
-        fseeko(f, 0, SEEK_SET) != 0 || fwrite(mbr, 1, SECTOR, f) != SECTOR || fclose(f) != 0) {
+    if (host_image_sparse(f) != 0 || host_image_seek(f, (int64_t)AUTH_SIZE - 1, SEEK_SET) != 0 ||
+        fputc(0, f) == EOF || host_image_seek(f, 0, SEEK_SET) != 0 ||
+        fwrite(mbr, 1, SECTOR, f) != SECTOR || fclose(f) != 0) {
         fprintf(stderr, "mkfixture: auth: cannot write %s\n", path);
         return 1;
     }

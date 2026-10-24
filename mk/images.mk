@@ -13,10 +13,10 @@
 # it applies are the kernel's; and the exFAT builder and reader, which the exfat
 # suite uses too and which the sticks' volume is written with. What builds them
 # is here.
-$(MKMBR): tools/image/mkmbr.c
+$(MKMBR): tools/image/mkmbr.c tools/image/host_io.h
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
-$(MKGPT): tools/image/mkgpt.c
+$(MKGPT): tools/image/mkgpt.c tools/image/host_io.h
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
 $(FATCHAINS): tools/image/fatchains.c
@@ -28,7 +28,7 @@ $(GRUBEMBED): tools/image/grubembed.c utils/grubslot.c utils/grubslot.h utils/bo
 $(STICKCHECK): tools/image/stickcheck.c rach2/sys/block/mbr.c rach2/sys/block/mbr.h
 	@mkdir -p $(dir $@)
 	$(HOST_LINK) -I rach2/sys -I rach2/sys/lib
-$(MKEXFATFIXTURE): tests/host/mkexfatfixture.c tests/host/exfat_upcase.inc
+$(MKEXFATFIXTURE): tests/host/mkexfatfixture.c tests/host/exfat_upcase.inc tools/image/host_io.h
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
 

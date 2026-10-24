@@ -32,6 +32,7 @@
  * `mkmbr --list DISK` reads instead of writing: one line per non-empty
  * entry, `INDEX TYPE START SIZE`, the type in hex and the extent in bytes.
  */
+#include "host_io.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -118,7 +119,8 @@ static int list_table(const char *path)
 
         if (start == 0 || count == 0)
             continue;
-        printf("%d %02x %lu %lu\n", i + 1, e[4], start * 512, count * 512);
+        printf("%d %02x %llu %llu\n", i + 1, e[4], (unsigned long long)start * 512,
+               (unsigned long long)count * 512);
     }
     return 0;
 }
@@ -181,11 +183,12 @@ static int write_logical(FILE *f, int lba_units, unsigned long ext_lba, unsigned
     int i;
 
     for (i = 0; i < n; i++) {
-        if (log[i].lba < ext_lba + 1 || log[i].lba + log[i].count > ext_lba + ext_count) {
+        if ((uint64_t)log[i].lba < (uint64_t)ext_lba + 1 ||
+            (uint64_t)log[i].lba + log[i].count > (uint64_t)ext_lba + ext_count) {
             fprintf(stderr, "mkmbr: logical partition %d is outside the extended one\n", i + 5);
             return -1;
         }
-        if (i > 0 && log[i].lba < log[i - 1].lba + log[i - 1].count + 1) {
+        if (i > 0 && (uint64_t)log[i].lba < (uint64_t)log[i - 1].lba + log[i - 1].count + 1) {
             fprintf(stderr, "mkmbr: logical partition %d overlaps the one before\n", i + 5);
             return -1;
         }
@@ -204,7 +207,7 @@ static int write_logical(FILE *f, int lba_units, unsigned long ext_lba, unsigned
         }
         ebr[510] = 0x55;
         ebr[511] = 0xaa;
-        if (fseek(f, (long)at * 512, SEEK_SET) != 0 || fwrite(ebr, 1, 512, f) != 512) {
+        if (host_image_sector(f, at) != 0 || fwrite(ebr, 1, 512, f) != 512) {
             fprintf(stderr, "mkmbr: cannot write the extended boot record\n");
             return -1;
         }
@@ -239,10 +242,10 @@ int main(int argc, char **argv)
 {
     unsigned char sector[512];
     unsigned long ends[4], starts[4];
-    unsigned long disk_sectors;
+    uint64_t disk_sectors;
     unsigned long disk_id = 0, ext_lba = 0, ext_count = 0;
     struct logical log[16] = {{0, 0, 0}};
-    long disk_bytes;
+    int64_t disk_bytes;
     FILE *f;
     int i, active = 0, lba_units = 0, have_id = 0, primaries = 0, logicals = 0;
 
@@ -277,12 +280,13 @@ int main(int argc, char **argv)
         fprintf(stderr, "mkmbr: cannot open %s\n", argv[1]);
         return 1;
     }
-    if (fseek(f, 0, SEEK_END) != 0 || (disk_bytes = ftell(f)) < 0 || fseek(f, 0, SEEK_SET) != 0) {
+    if (host_image_seek(f, 0, SEEK_END) != 0 || (disk_bytes = host_image_tell(f)) < 0 ||
+        host_image_seek(f, 0, SEEK_SET) != 0) {
         fprintf(stderr, "mkmbr: cannot size %s\n", argv[1]);
         fclose(f);
         return 1;
     }
-    disk_sectors = (unsigned long)disk_bytes / 512;
+    disk_sectors = (uint64_t)disk_bytes / 512;
     if (fread(sector, 1, sizeof(sector), f) != sizeof(sector)) {
         fprintf(stderr, "mkmbr: %s is shorter than one sector\n", argv[1]);
         fclose(f);
@@ -297,7 +301,7 @@ int main(int argc, char **argv)
     }
     for (i = 2; i < argc; i++) {
         unsigned long start_mib, size_mib, type;
-        unsigned long lba, count;
+        uint64_t lba, count;
         unsigned char *e = sector + 0x1be + 16 * primaries;
         const char *p = argv[i];
         const char *why;
@@ -323,22 +327,23 @@ int main(int argc, char **argv)
             lba = start_mib;
             count = size_mib;
         } else {
-            if (start_mib > 0x1FFFFFul || size_mib > 0x200000ul) {
+            if (start_mib > 0x1FFFFFul || size_mib > 0x1FFFFFul) {
                 fprintf(stderr,
                         "mkmbr: partition '%s' runs past the image "
-                        "(%lu sectors)\n",
-                        argv[i], disk_sectors);
+                        "(%llu sectors)\n",
+                        argv[i], (unsigned long long)disk_sectors);
                 fclose(f);
                 return 2;
             }
-            lba = start_mib * 2048;
-            count = size_mib * 2048;
+            lba = (uint64_t)start_mib * 2048;
+            count = (uint64_t)size_mib * 2048;
         }
-        if (lba > 0xFFFFFFFFul - count || lba + count > disk_sectors) {
+        if (lba > UINT32_MAX || count == 0 || count > UINT32_MAX || lba > UINT32_MAX - count ||
+            lba + count > disk_sectors) {
             fprintf(stderr,
                     "mkmbr: partition '%s' runs past the image "
-                    "(%lu sectors)\n",
-                    argv[i], disk_sectors);
+                    "(%llu sectors)\n",
+                    argv[i], (unsigned long long)disk_sectors);
             fclose(f);
             return 2;
         }
@@ -376,7 +381,8 @@ int main(int argc, char **argv)
     }
     sector[510] = 0x55;
     sector[511] = 0xaa;
-    if (fseek(f, 0, SEEK_SET) != 0 || fwrite(sector, 1, sizeof(sector), f) != sizeof(sector)) {
+    if (host_image_seek(f, 0, SEEK_SET) != 0 ||
+        fwrite(sector, 1, sizeof(sector), f) != sizeof(sector)) {
         fprintf(stderr, "mkmbr: cannot write the table back\n");
         fclose(f);
         return 1;

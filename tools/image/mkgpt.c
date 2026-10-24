@@ -36,6 +36,7 @@
  * The kernel reads such tables (`rach2/sys/block/gpt.c`), the suites need
  * them to read, and the disk builder lays out an installed disk with one.
  */
+#include "host_io.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -206,7 +207,7 @@ static int read_table(FILE *f, unsigned long long lba, unsigned char *header, un
     unsigned char copy[SECTOR];
     unsigned long size;
 
-    if (fseek(f, (long)(lba * SECTOR), SEEK_SET) != 0 || fread(header, 1, SECTOR, f) != SECTOR ||
+    if (host_image_sector(f, lba) != 0 || fread(header, 1, SECTOR, f) != SECTOR ||
         memcmp(header, "EFI PART", 8) != 0 || get32(header + 80) != ENTRIES ||
         get32(header + 84) != ENTRY_SIZE) {
         return -1;
@@ -218,7 +219,7 @@ static int read_table(FILE *f, unsigned long long lba, unsigned char *header, un
     memcpy(copy, header, SECTOR);
     memset(copy + 16, 0, 4);
     if (crc32_of(copy, size) != get32(header + 16) ||
-        fseek(f, (long)(get64(header + 72) * SECTOR), SEEK_SET) != 0 ||
+        host_image_sector(f, get64(header + 72)) != 0 ||
         fread(array, 1, ARRAY_BYTES, f) != ARRAY_BYTES ||
         crc32_of(array, ARRAY_BYTES) != get32(header + 88)) {
         return -1;
@@ -235,10 +236,11 @@ static int list_table(const char *path)
     static unsigned char array[ARRAY_BYTES];
     unsigned char header[SECTOR];
     FILE *f = fopen(path, "rb");
-    long size;
+    int64_t size;
     unsigned int i;
 
-    if (!f || fseek(f, 0, SEEK_END) != 0 || (size = ftell(f)) < (long)(3 * SECTOR)) {
+    if (!f || host_image_seek(f, 0, SEEK_END) != 0 ||
+        (size = host_image_tell(f)) < (long)(3 * SECTOR)) {
         return fail("the image would not open or is too small for a table");
     }
     if (read_table(f, 1, header, array) != 0 &&
@@ -262,10 +264,46 @@ static int list_table(const char *path)
         if (k == 16) {
             continue;
         }
+        if (get64(e + 40) < get64(e + 32) || get64(e + 40) >= (uint64_t)size / SECTOR)
+            return fail("a partition is outside the image");
         printf("%u %s %llu %llu\n", i + 1, name, get64(e + 32) * SECTOR,
                (get64(e + 40) - get64(e + 32) + 1) * SECTOR);
     }
     return 0;
+}
+
+/** Read both sector counts, the kind and optional index without overflow. */
+static int parse_spec(const char *spec, unsigned long long *start, unsigned long long *count,
+                      char *kind, unsigned int *at)
+{
+    char *end;
+    const char *p = spec;
+    size_t n = 0;
+    uint64_t index;
+    if (*p < '0' || *p > '9')
+        return -1;
+    errno = 0;
+    *start = strtoull(p, &end, 10);
+    if (errno || *end != ':')
+        return -1;
+    p = end + 1;
+    if (*p < '0' || *p > '9')
+        return -1;
+    errno = 0;
+    *count = strtoull(p, &end, 10);
+    if (errno || *end != ':')
+        return -1;
+    p = end + 1;
+    while (*p && *p != '@' && n < 15)
+        kind[n++] = *p++;
+    kind[n] = 0;
+    if (*p == '@') {
+        if (host_image_number(p + 1, &index) != 0 || index >= ENTRIES)
+            return -1;
+        *at = (unsigned int)index;
+    } else if (*p)
+        return -1;
+    return n ? 0 : -1;
 }
 
 /**
@@ -286,7 +324,6 @@ static int put_entry(unsigned char *array, const char *arg, int used,
     char *label = 0;
     unsigned int at;
     int slot;
-    int fields;
     unsigned char *e;
     size_t k;
 
@@ -301,19 +338,17 @@ static int put_entry(unsigned char *array, const char *arg, int used,
             return fail("a label is longer than 36 characters");
         }
     }
-    fields = sscanf(spec, "%llu:%llu:%15[^@]@%u", &start, &count, kind, &at);
-    if (fields == 3) {
-        at = (unsigned int)used;
-    } else if (fields != 4) {
+    at = (unsigned int)used;
+    if (parse_spec(spec, &start, &count, kind, &at) != 0)
         return fail("a partition is not START:SIZE:KIND[@INDEX][=LABEL]");
-    }
     if (at >= ENTRIES) {
         return fail("an entry index is past the array");
     }
     if (used >= MAX_PARTS) {
         return fail("more partitions than this writes");
     }
-    if (count == 0 || start < first_usable || start + count - 1u > last_usable) {
+    if (count == 0 || start < first_usable || start > last_usable ||
+        count - 1u > last_usable - start) {
         return fail("a partition is outside the usable range");
     }
     slot = (int)at;
@@ -361,7 +396,7 @@ int main(int argc, char **argv)
     unsigned long long backup_array;
     unsigned long array_crc;
     FILE *f;
-    long size;
+    int64_t size;
     unsigned char disk_guid[16];
     int given_guid = 0;
     int used = 0;
@@ -403,10 +438,10 @@ int main(int argc, char **argv)
     if (!f) {
         return fail("the image would not open");
     }
-    if (fseek(f, 0, SEEK_END) != 0) {
+    if (host_image_seek(f, 0, SEEK_END) != 0) {
         return fail("the image would not seek");
     }
-    size = ftell(f);
+    size = host_image_tell(f);
     if (size <= 0 || (size % (long)SECTOR) != 0) {
         return fail("the image is not a whole number of sectors");
     }
@@ -465,17 +500,16 @@ int main(int argc, char **argv)
         if (primary && damage) {
             header[20] ^= 0xFF; /* the checksum no longer covers the header */
         }
-        if (fseek(f, (long)((primary ? 1u : sectors - 1u) * SECTOR), SEEK_SET) != 0 ||
+        if (host_image_sector(f, primary ? 1u : sectors - 1u) != 0 ||
             fwrite(header, 1, SECTOR, f) != SECTOR) {
             return fail("a header would not be written");
         }
-        if (fseek(f, (long)((primary ? (unsigned long long)ARRAY_LBA : backup_array) * SECTOR),
-                  SEEK_SET) != 0 ||
+        if (host_image_sector(f, primary ? (unsigned long long)ARRAY_LBA : backup_array) != 0 ||
             fwrite(array, 1, ARRAY_BYTES, f) != ARRAY_BYTES) {
             return fail("an entry array would not be written");
         }
     }
-    if (fseek(f, 0, SEEK_SET) != 0 || fwrite(mbr, 1, SECTOR, f) != SECTOR) {
+    if (host_image_seek(f, 0, SEEK_SET) != 0 || fwrite(mbr, 1, SECTOR, f) != SECTOR) {
         return fail("the protective MBR would not be written");
     }
     if (fclose(f) != 0) {

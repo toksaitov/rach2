@@ -66,6 +66,7 @@
  *
  * An unknown option is refused: the maker writes no image and exits 2.
  */
+#include "../../tools/image/host_io.h"
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -890,27 +891,28 @@ int mkfatfixture_check(const unsigned char *data, unsigned long bytes, int list,
 
 #ifndef FIXTURE_NO_MAIN
 /** Read a volume from PATH and run the same checker as the in-memory entry. */
-static int check_image(const char *path, unsigned long offset_sectors, int list)
+static int check_image(const char *path, uint64_t offset_sectors, int list)
 {
     struct chk c;
     FILE *f = fopen(path, "rb");
     unsigned char *data = NULL;
-    long len;
+    int64_t len;
     int status = 2;
 
     memset(&c, 0, sizeof(c));
     c.list = list;
-    if (f == NULL || fseek(f, 0, SEEK_END) != 0 || (len = ftell(f)) < 0) {
+    if (f == NULL || host_image_seek(f, 0, SEEK_END) != 0 || (len = host_image_tell(f)) < 0) {
         fprintf(stderr, "mkfatfixture: cannot read %s\n", path);
         goto done;
     }
-    if ((unsigned long)len < offset_sectors * SECTOR) {
+    if (offset_sectors > (uint64_t)len / SECTOR ||
+        (uint64_t)len - offset_sectors * SECTOR > SIZE_MAX) {
         fprintf(stderr, "mkfatfixture: offset past the end of %s\n", path);
         goto done;
     }
-    c.bytes = (size_t)len - offset_sectors * SECTOR;
+    c.bytes = (size_t)((uint64_t)len - offset_sectors * SECTOR);
     data = malloc(c.bytes ? c.bytes : 1);
-    if (data == NULL || fseek(f, (long)(offset_sectors * SECTOR), SEEK_SET) != 0 ||
+    if (data == NULL || host_image_sector(f, offset_sectors) != 0 ||
         fread(data, 1, c.bytes, f) != c.bytes) {
         fprintf(stderr, "mkfatfixture: cannot read %s\n", path);
         goto done;
@@ -1408,14 +1410,16 @@ int main(int argc, char **argv)
     FILE *f;
 
     if (argc >= 3 && strcmp(argv[1], "--check") == 0) {
-        unsigned long off = 0;
+        uint64_t off = 0;
         int list = 0, i;
 
         for (i = 3; i < argc; i++) {
             if (strcmp(argv[i], "--list") == 0)
                 list = 1;
-            else
-                off = strtoul(argv[i], NULL, 10);
+            else if (host_image_number(argv[i], &off) != 0) {
+                fprintf(stderr, "mkfatfixture: invalid sector offset: %s\n", argv[i]);
+                return 2;
+            }
         }
         return check_image(argv[2], off, list);
     }

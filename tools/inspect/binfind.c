@@ -15,6 +15,7 @@
  * the callers are suite scripts marking a kernel's banner or finding a
  * staged menu, where every offset after the edit has to stay where it was.
  */
+#include "../image/host_io.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,10 +28,10 @@
  * cannot be allocated. Each read keeps the last `need - 1` bytes of the one
  * before, so a match across two reads is found.
  */
-static long find_in(FILE *f, const char *needle, size_t need)
+static int64_t find_in(FILE *f, const char *needle, size_t need)
 {
     unsigned char *buf = malloc(CHUNK + need);
-    long base = 0;
+    int64_t base = 0;
     size_t keep = 0, have;
 
     if (buf == NULL)
@@ -42,12 +43,16 @@ static long find_in(FILE *f, const char *needle, size_t need)
         for (i = 0; i + need <= total; i++) {
             if (memcmp(buf + i, needle, need) == 0) {
                 free(buf);
-                return base + (long)i;
+                return base + (int64_t)i;
             }
         }
         keep = need - 1 < total ? need - 1 : total;
         memmove(buf, buf + total - keep, keep);
-        base += (long)(total - keep);
+        if ((uint64_t)(total - keep) > (uint64_t)(INT64_MAX - base)) {
+            free(buf);
+            return -2;
+        }
+        base += (int64_t)(total - keep);
     }
     free(buf);
     return -1;
@@ -62,7 +67,7 @@ int main(int argc, char **argv)
 {
     const char *needle, *path;
     size_t need;
-    long at;
+    int64_t at;
     FILE *f;
     int offset_mode = 0, replace_mode = 0;
 
@@ -110,9 +115,10 @@ int main(int argc, char **argv)
         return 1;
     }
     if (offset_mode)
-        printf("%ld\n", at);
+        printf("%lld\n", (long long)at);
     if (replace_mode) {
-        if (fseek(f, at, SEEK_SET) != 0 || fwrite(argv[3], 1, need, f) != need || fclose(f) != 0) {
+        if (host_image_seek(f, at, SEEK_SET) != 0 || fwrite(argv[3], 1, need, f) != need ||
+            fclose(f) != 0) {
             fprintf(stderr, "binfind: cannot write %s\n", path);
             return 2;
         }
