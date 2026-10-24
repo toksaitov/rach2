@@ -1164,8 +1164,7 @@ static void test_proc_reads(void)
     f = tmpfile();
     CHECK(f != NULL, "proc readable stream");
     if (f != NULL) {
-        CHECK(fputs("123 (child) R", f) >= 0 && fseek(f, 0, SEEK_SET) == 0,
-              "proc readable bytes");
+        CHECK(fputs("123 (child) R", f) >= 0 && fseek(f, 0, SEEK_SET) == 0, "proc readable bytes");
         CHECK(posix_proc_read(f, buf, sizeof(buf)) == 1 && !strcmp(buf, "123 (child) R"),
               "proc successful read preserves bytes");
     }

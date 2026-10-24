@@ -861,3 +861,9 @@ The controller now records its own and its child's process and group identities 
 ## Native boot case retained its removed helper bound (#1072)
 
 The fresh macOS runner compiled from a140d3df6, but its first public allocation check rejected host.host.boots: the host-domain case still declared a boot-stage bound for its removed outer helper. The schema correctly rejects a host case with that stage. The repair now removes the obsolete bound as well. All five program assertions, both architecture variants, nested boot fixtures, whole-case and progress bounds, resources and prepared inputs remain unchanged. The failed allocation log and successful compiler receipt are retained under build/tests/portable-runtime-macos-a140d3df6 in the channel worktree. No collection or artifact import started.
+
+## Repair preparation rejected formatting before runtime
+
+The cached preparation of 69a99bdf4 completed the i686 component build and its active native fixture compilations, then stopped on three style results. The text check found an 81-column comment in family_metal_password.c. The recorded clang-format 21.1.8 found four changed C files needing formatting. ShellCheck found three consecutive redirects to the same products file in tooling_image.sh. The formatter's output, a shorter comment and one shared redirection repair these results without changing the assertions or product arguments. Cppcheck, Sparse, source lists, build inputs and checker validation passed. No collection or portable import started.
+
+Before preparation, the private compiler-receipt script rejected Make's continued command line because it parsed physical lines separately. The coordinator retained that failed admission and corrected the parser to join backslash-newline pairs. The next admitted build recorded the actual fresh link, verified every captured source and compiler input, and released its claim. Neither private script result is a runtime result.

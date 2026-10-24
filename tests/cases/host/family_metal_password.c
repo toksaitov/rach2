@@ -29,7 +29,7 @@ static int transcripts(struct fixture *f, const char *audit)
     (void)f;
     return 1;
 }
-/* A successful conversation must retain readable normalized transcript bytes. */
+/* Require a readable, nonempty normalized transcript. */
 static int text_present(const char *path)
 {
     FILE *fp = fopen(path, "rb");
@@ -38,8 +38,8 @@ static int text_present(const char *path)
 
     if (!fp)
         return 0;
-    ok = fstat(fileno(fp), &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0 &&
-         fgetc(fp) != EOF && !ferror(fp);
+    ok = fstat(fileno(fp), &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0 && fgetc(fp) != EOF &&
+         !ferror(fp);
     if (fclose(fp) != 0)
         ok = 0;
     return ok;

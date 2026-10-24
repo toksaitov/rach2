@@ -210,11 +210,10 @@ static int leftovers_setup(struct fixture *f)
     if (!age_tree(flow_path(f, "home.noindex"), time(NULL) - 172800))
         return 0;
     snprintf(p, sizeof(p), "%s/home.noindex/rach2-young/a", f->work);
-    if (!age_tree(p, time(NULL)) ||
-        !flow_put(f,
-                  "home.noindex/rach2/build/tests/failed/"
-                  "tests.i686.20261020T000000Z.400.machine.e.r0/now",
-                  ""))
+    if (!age_tree(p, time(NULL)) || !flow_put(f,
+                                              "home.noindex/rach2/build/tests/failed/"
+                                              "tests.i686.20261020T000000Z.400.machine.e.r0/now",
+                                              ""))
         return 0;
     return age_tree(flow_path(f, "home.noindex/young.log"), time(NULL));
 }

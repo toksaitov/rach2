@@ -19,15 +19,14 @@ static struct json *scripts_manifest(void)
     return doc;
 }
 
-static int scripts_step(const struct json *steps, size_t row, const char *id,
-                        const char *stage, const char *machine)
+static int scripts_step(const struct json *steps, size_t row, const char *id, const char *stage,
+                        const char *machine)
 {
     const struct json *step = steps && row < steps->count ? steps->item[row] : NULL;
     const char *actual_id = json_text(step, "step_id");
     const char *actual_stage = json_text(step, "stage");
     const char *actual_machine = json_text(step, "machine");
-    return actual_id && !strcmp(actual_id, id) && actual_stage &&
-           !strcmp(actual_stage, stage) &&
+    return actual_id && !strcmp(actual_id, id) && actual_stage && !strcmp(actual_stage, stage) &&
            (!machine || (actual_machine && !strcmp(actual_machine, machine)));
 }
 
