@@ -1,6 +1,7 @@
 #!/bin/sh
 #
-# fstool.sh: the host's own exFAT and FAT tools, for the machine cases that
+# fstool.sh: compatibility entry for host exFAT and FAT tools. Prepared
+# machine cases use fstool.c in their declared GNU helper instead. Older cases
 # judge a volume the kernel wrote with a formatter or a checker that shares
 # nothing with it: macOS's newfs_exfat and fsck_exfat, exfatprogs and
 # dosfstools on Linux, and the same programs in etude's tooling machine

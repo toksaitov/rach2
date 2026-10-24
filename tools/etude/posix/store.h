@@ -9,6 +9,10 @@
 
 #include "etude/artifact.h"
 
+/* Copy exactly LENGTH bytes at OFFSET into a new sparse private file.
+ * Reject a short or changing source; remove only our output on failure. */
+int store_copy_range(const char *source, uint64_t offset, uint64_t length, const char *dest);
+
 /** Give a copy of `a`, `/` and `b` from malloc, or NULL. */
 char *store_join(const char *a, const char *b);
 

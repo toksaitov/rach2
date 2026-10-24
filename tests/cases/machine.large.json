@@ -77,16 +77,16 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"file_mib": 256, "volume_mib": 6144, "limit_offset": "9223372036854775807"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "large_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
-        "isolation": [{"fixture": "scratch"}],
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["fstool-disk"]}],
         "children": "none",
-        "cleanup": "libetude-case ends the machines and removes the empty disk, which it keeps after a failure; fstool removes the copy of the volume it checks"
+        "cleanup": "libetude-case ends the machines and removes the empty disk, which it keeps after a failure; libetude-case removes the sparse private copy of the volume it checks after confirmed helper shutdown"
       },
       "steps": [
         {"step_id": "volume", "stage": "prepare",
-         "does": "write the disk's MBR, with identity 1a26e001 and its ext2, exFAT and FAT32 partitions, with mkmbr, and make the exFAT volume in the second with the host's own formatter through fstool; the disk stays sparse"},
+         "does": "write the disk's MBR, with identity 1a26e001 and its ext2, exFAT and FAT32 partitions, with mkmbr, and make the exFAT volume in the second with exfatprogs' formatter through the declared GNU fstool helper; the disk stays sparse"},
         {"step_id": "write", "stage": "execute", "machine": "write",
          "does": "boot the test image on the disk, run bigfileprobe write at the debug shell and end the machine"},
         {"step_id": "verify", "stage": "execute", "machine": "check",
@@ -94,7 +94,7 @@
         {"step_id": "limit", "stage": "execute", "machine": "check",
          "does": "run bigfileprobe limit at the largest offset a seek can name"},
         {"step_id": "fsck", "stage": "execute",
-         "does": "end the machine and check the volume with the host's own exFAT checker through fstool"}
+         "does": "end the machine and check the volume with exfatprogs' checker through the declared GNU fstool helper"}
       ],
       "machines": [
         {"machine_id": "write",
@@ -108,10 +108,11 @@
                   "disks": [{"name": "large", "bus": "ahci", "size_bytes": 12954107904}],
                   "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [],
                   "boot_options": ["rach2.rescue"]},
-         "console": "serial", "qmp": true, "helper": false}
+         "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "fstool-helper", "qemu": {"architecture": "x86_64", "kernel": "fstool-kernel", "initrd": null, "disks": [{"name": "fstool-root", "base": "fstool-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "fstool-disk", "bus": "ahci", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 1073741824, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
-        {"assertion_id": "volume", "checks": "mkmbr writes the disk's table and the host's own exFAT formatter, which fstool finds, makes the 6 GiB volume in its second partition, each exiting 0; a host with no formatter and no made tooling machine fails it", "source": "scenario"},
+        {"assertion_id": "volume", "checks": "mkmbr writes the disk's table and the prepared exfatprogs formatter in the declared GNU helper makes the 6 GiB volume in its second partition, each exiting 0; a missing formatter fails preparation", "source": "scenario"},
         {"assertion_id": "write-exit", "checks": "bigfileprobe write returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
         {"assertion_id": "write-ok", "checks": "bigfileprobe write says BIGFILE OK (write) and never BIGFILE FAIL: the file of 256 MiB written and synced, its size, a seek to its end and back, its blocks at the middle and near the end, an offset shared with a duplicate and not with a second open, a truncate to three quarters that takes at most 8 disk commands for each 4 MiB it frees and 64 more, and an appended mebibyte read back", "source": "scenario"},
         {"assertion_id": "verify-exit", "checks": "bigfileprobe verify, in a second boot, returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
@@ -119,7 +120,7 @@
         {"assertion_id": "limit-exit", "checks": "bigfileprobe limit at offset 9223372036854775807 returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
         {"assertion_id": "limit-ok", "checks": "bigfileprobe limit says BIGFILE OK (limit) and never BIGFILE FAIL: a one-byte write at the format's limit of 2^63 - 1 bytes is refused with EFBIG and the file stays empty", "source": "scenario"},
         {"assertion_id": "limit-named", "checks": "the kernel's log says exfat: write: offset past the format's limit", "source": "scenario"},
-        {"assertion_id": "fsck", "checks": "the host's own exFAT checker, which fstool finds, exits 0 on a copy of the volume after the machine, finding it consistent; a host with no checker and no made tooling machine fails it", "source": "scenario"}
+        {"assertion_id": "fsck", "checks": "the prepared exfatprogs checker in the declared GNU helper exits 0 on a private copy of the volume after the machine, finding it consistent; a missing checker fails preparation", "source": "scenario"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
@@ -135,14 +136,14 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 536870912, "tooling_memory_bytes": 3355443200, "disk_bytes": 536870912,
-                    "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 2147483648, "disk_bytes": 33285996544, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
         {"name": "mkmbr", "node": "tools/image/mkmbr", "per_architecture": false},
-        {"name": "fstool", "node": "tests/cases/host/fstool", "per_architecture": false},
-        {"name": "large_scenario", "node": "tests/cases/machine/large_scenario", "per_architecture": false}
+        {"name": "large_scenario", "node": "tests/cases/machine/large_scenario", "per_architecture": false},
+        {"name": "fstool-kernel", "node": "x86_64/rach2-recovery/kernel", "per_architecture": false},
+        {"name": "fstool-image", "node": "x86_64/images/gnu-test.disk", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "none", "class": "layout", "reason": "it boots an empty AHCI disk of its own whose partitions the host's tools format before the boots and check after them"}

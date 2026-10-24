@@ -9,6 +9,7 @@
  * host-deps: utils/sha256.c
  * host-cflags: -I tools/etude/include -I tools/etude/posix
  * host-cflags: -Wall -Wextra -Werror
+ * host-cflags: -D_FILE_OFFSET_BITS=64
  *
  * An object is published read-only under its digest, once, and refused
  * when its digest is not the one expected. A sparse file is published and
@@ -779,6 +780,54 @@ static void test_sparse(void)
     CHECK(etude_store_put(s, copy, want, d, NULL) == 0, "sparse: copy: the same content");
     etude_store_close(s);
     free(data);
+}
+
+/** A rejected range leaves both an existing copy and its source unchanged. */
+static void range_refused(const char *src, const char *copy, uint64_t offset, uint64_t length)
+{
+    const char *bad = fix_path("range-bad");
+    struct stat st;
+    char buf[9];
+    int fd;
+    CHECK(store_copy_range(src, offset + length - 1, 2, bad) < 0 &&
+              store_copy_range(src, UINT64_MAX, 1, bad) < 0 && access(bad, F_OK) != 0,
+          "range: out-of-bounds requests create nothing");
+    CHECK(store_copy_range(src, offset, length, copy) < 0 &&
+              read_text(copy, buf, sizeof(buf)) == 8 && !memcmp(buf, "abc\0\0\0\0\0", 8),
+          "range: an existing destination is unchanged");
+    fd = open(src, O_RDONLY);
+    CHECK(fd >= 0 && lseek(fd, (off_t)offset, SEEK_SET) == (off_t)offset &&
+              read(fd, buf, 3) == 3 && !memcmp(buf, "abc", 3) && fstat(fd, &st) == 0 &&
+              (uint64_t)st.st_size == offset + length,
+          "range: the source disk is unchanged");
+    if (fd >= 0)
+        CHECK(close(fd) == 0, "range: close source");
+}
+
+/** Copy a bounded sparse volume past 4 GiB, without its surrounding disk. */
+static void test_range(void)
+{
+    const char *src = fix_path("range-src"), *copy = fix_path("range-copy");
+    uint64_t offset = UINT64_C(4294967296) + 7, length = 8u << 20, bytes;
+    struct stat st;
+    char buf[9];
+    int fd = open(src, O_WRONLY | O_CREAT | O_EXCL, 0600), ready;
+
+    CHECK(fd >= 0, "range: create private source");
+    if (fd < 0)
+        return;
+    ready = lseek(fd, (off_t)offset, SEEK_SET) == (off_t)offset &&
+            put_all(fd, "abc", 3) == 0 && ftruncate(fd, (off_t)(offset + length)) == 0;
+    CHECK(close(fd) == 0 && ready, "range: data past 4 GiB and a trailing hole");
+    if (!ready)
+        return;
+    CHECK(store_copy_range(src, offset, length, copy) == 0 && stat(copy, &st) == 0 &&
+              (uint64_t)st.st_size == length && read_text(copy, buf, sizeof(buf)) == 8 &&
+              !memcmp(buf, "abc\0\0\0\0\0", 8),
+          "range: exact offset, bytes and length");
+    CHECK(disk_bytes(copy, &bytes) == 0 && bytes < length / 2,
+          "range: the private volume keeps its trailing hole");
+    range_refused(src, copy, offset, length);
 }
 
 /** Give the `n` bytes at `p` as a number, most significant first. */
@@ -1624,6 +1673,7 @@ int main(int argc, char **argv)
     test_digests_put();
     test_digests_objects();
     test_sparse();
+    test_range();
     test_overlay();
     test_interrupt();
     test_graph();

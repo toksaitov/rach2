@@ -5,6 +5,7 @@
  * digests file keeps the digests of files that have not changed since they
  * were read, so that a file is not read again to be hashed.
  */
+#define _FILE_OFFSET_BITS 64
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -194,15 +195,16 @@ static int all_zero(const unsigned char *buf, size_t n)
 }
 
 /**
- * Read `from` to its end, hashing it unless `hex` is NULL, and write it to
- * `to` unless `to` is negative; 0 with the digest and size, or -1 with errno
- * set.
+ * Read `from` to its end or `limit`, hashing it unless `hex` is NULL, and
+ * write it to `to` unless `to` is negative; 0 with the digest and size, or
+ * -1 with errno set.
  *
  * `to` is a new regular file. A chunk of zeros is passed over with
  * lseek(2), which leaves a hole in `to`, so that a sparse file stays
  * sparse; `to` is then given the size read, for a file that ends in zeros.
  */
-static int copy_hash(int from, int to, char hex[ETUDE_DIGEST_HEX + 1], uint64_t *size)
+static int copy_stream(int from, int to, char hex[ETUDE_DIGEST_HEX + 1], uint64_t *size,
+                       uint64_t limit)
 {
     unsigned char *buf = malloc(COPY_CHUNK);
     unsigned char sum[32];
@@ -221,13 +223,23 @@ static int copy_hash(int from, int to, char hex[ETUDE_DIGEST_HEX + 1], uint64_t 
     if (to >= 0)
         COUNT(etude_store_copied);
     for (;;) {
-        r = read(from, buf, COPY_CHUNK);
+        size_t want = COPY_CHUNK;
+        if (total == limit)
+            break;
+        if (limit - total < want)
+            want = (size_t)(limit - total);
+        r = read(from, buf, want);
         if (r < 0 && errno == EINTR)
             continue;
         if (r < 0)
             goto fail;
-        if (r == 0)
+        if (r == 0) {
+            if (limit != UINT64_MAX) {
+                errno = EIO;
+                goto fail;
+            }
             break;
+        }
         if (hex != NULL)
             sha256_update(&h, buf, (size_t)r);
         total += (uint64_t)r;
@@ -253,6 +265,11 @@ static int copy_hash(int from, int to, char hex[ETUDE_DIGEST_HEX + 1], uint64_t 
 fail:
     free(buf);
     return -1;
+}
+
+static int copy_hash(int from, int to, char hex[ETUDE_DIGEST_HEX + 1], uint64_t *size)
+{
+    return copy_stream(from, to, hex, size, UINT64_MAX);
 }
 
 /** Lock all of `fd` for `type` without waiting; 0, or -1 with errno set. */
@@ -399,6 +416,49 @@ static int status_same(const struct status *a, const struct status *b)
 {
     return a->dev == b->dev && a->ino == b->ino && a->size == b->size && a->mtime == b->mtime &&
            a->ctime == b->ctime;
+}
+
+int store_copy_range(const char *source, uint64_t offset, uint64_t length, const char *dest)
+{
+    struct stat st;
+    struct status before, after;
+    int in = -1, out = -1, ok = 0, saved;
+
+    in = open(source, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (in < 0 || fstat(in, &st))
+        goto done;
+    if (!S_ISREG(st.st_mode) || st.st_size < 0 ||
+        offset > (uint64_t)st.st_size || length > (uint64_t)st.st_size - offset) {
+        errno = EINVAL;
+        goto done;
+    }
+    status_of(&st, &before);
+    out = open(dest, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (out < 0)
+        goto done;
+    if (lseek(in, (off_t)offset, SEEK_SET) < 0 ||
+        copy_stream(in, out, NULL, NULL, length) || fsync(out) || fstat(in, &st))
+        goto done;
+    status_of(&st, &after);
+    if (!status_same(&before, &after)) {
+        errno = EBADMSG;
+        goto done;
+    }
+    ok = 1;
+done:
+    saved = errno;
+    if (in >= 0 && close(in)) {
+        saved = errno;
+        ok = 0;
+    }
+    if (out >= 0 && close(out)) {
+        saved = errno;
+        ok = 0;
+    }
+    if (!ok && out >= 0)
+        unlink(dest);
+    errno = saved;
+    return ok ? 0 : -1;
 }
 
 /** Give the time of the realtime clock, which stamps the files, in

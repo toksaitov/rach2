@@ -98,6 +98,9 @@
 # * libuv: Santiago Gimeno's key, 612F0EAD9401622379DF4402F28C3C8DA33C03BE,
 #   which libuv's MAINTAINERS.md lists; Debian's libuv is a git archive of
 #   the tag, and neither has the files autoconf generates.
+# * exfatprogs: Hyunchul Lee's release key from github.com/hclee.gpg,
+#   D58529CC5376E36D6E1E6F6234F230FAF78E48D3; gpgv verified the detached
+#   signature of the 1.3.2 release tarball before recording its digest.
 binutils 2.47 https://ftp.gnu.org/gnu/binutils/binutils-2.47.tar.xz 154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff
 gcc 16.2.0 https://ftp.gnu.org/gnu/gcc/gcc-16.2.0/gcc-16.2.0.tar.xz e6738e29597f733270731aa90600f37ffdc045079dfc27ec7e8192cc81085c3e
 gmp 6.3.0 https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898
@@ -209,3 +212,4 @@ libuv 1.52.1 https://dist.libuv.org/dist/v1.52.1/libuv-v1.52.1.tar.gz 66d511b9e6
 liburcu 0.15.7 https://lttng.org/files/urcu/userspace-rcu-0.15.7.tar.bz2 2556b83adc0f9b3ac8024e613e17d014d04c4c49110604ce55fcb14eae32edd3
 libcap 2.75 https://kernel.org/pub/linux/libs/security/linux-privs/libcap2/libcap-2.75.tar.xz de4e7e064c9ba451d5234dd46e897d7c71c96a9ebf9a0c445bc04f4742d83632
 bind9 9.20.4 https://downloads.isc.org/isc/bind9/9.20.4/bind-9.20.4.tar.xz 3a8e1a05e00e3e9bc02bdffded7862faf7726ba76ba997f42ab487777bd8210b
+exfatprogs 1.3.2 https://github.com/exfatprogs/exfatprogs/releases/download/1.3.2/exfatprogs-1.3.2.tar.xz 67ddb50543636292df8fde58117eefd54210d6cd7bf1eea5e91d2c4dccbc425e

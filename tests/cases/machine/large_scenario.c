@@ -2,7 +2,7 @@
  * large_scenario.c: the scenario of machine.large, a file of 256 MiB on ext2
  * and on exFAT, a mebibyte astride the 4 GiB line of a sparse ext2 file and
  * a write past each format's limit refused by name, on volumes that the
- * host's own tools make in an empty AHCI disk and check after the machine.
+ * independent tools make in an empty AHCI disk and check after the machine.
  */
 #include <stdio.h>
 #include <stdlib.h>

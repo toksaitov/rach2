@@ -348,7 +348,7 @@ static int decide(struct fs *f, const char *out, const struct etude_termination 
 /**
  * Run fstool's external checker over a copy of the volume, keeping its
  * output as evidence `name`, and report the branch of the group `checker`
- * and, when the host has a checker, assertion `id`: the checker calls the
+ * and, when the helper has a checker, assertion `id`: the checker calls the
  * copy clean. With `repair` it repairs the copy first and must call the
  * repaired copy clean.
  */
@@ -375,7 +375,7 @@ static void checker(struct fs *f, const char *name, int repair, const char *id)
 
 /**
  * Before the scenario ends, report the checker's branch where no check
- * reported it, by fstool's answer over the disk's artifact, and each
+ * reported it, by fstool's answer over the disk's private copy, and each
  * assertion of a present checker not reported as not run.
  */
 static void checker_finish(struct fs *f)
@@ -385,7 +385,7 @@ static void checker_finish(struct fs *f)
     struct etude_termination end;
     size_t i;
 
-    argv[2] = (char *)etude_artifact(f->l.c, f->k->disk);
+    argv[2] = (char *)etude_private_copy(f->l.c, f->k->disk);
     if (f->branch == 0 && !f->l.stopped && argv[2] != NULL &&
         etude_host(f->l.c, argv, "fstool-branch", &end) == ETUDE_OK) {
         out = slurp(evidence(f, "fstool-branch", path, sizeof(path)), NULL);

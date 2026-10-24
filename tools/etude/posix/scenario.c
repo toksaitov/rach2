@@ -21,6 +21,7 @@
 #endif
 
 #include "../history_json.h"
+#include "../guest/wire.h"
 #include "../serial.h"
 #include "../volume/volume.h"
 #include "etude/artifact.h"
@@ -28,6 +29,7 @@
 #include "etude/report.h"
 #include "etude/scenario.h"
 #include "posix.h"
+#include "store.h"
 #include "sha256.h"
 
 #ifndef _WIN32
@@ -3536,6 +3538,137 @@ done:
     return st == ETUDE_OK ? stop_status : st;
 }
 
+/* The fixed independent filesystem command and its optional private copy. */
+struct fstool_invocation {
+    const char *args[8];
+    char disk[4096];
+    uint64_t start, count;
+    int format;
+};
+
+static int fstool_kind(char *const argv[], size_t n, struct fstool_invocation *v)
+{
+    if (n == 7 && !strcmp(argv[1], "exfat-mkfs")) {
+        v->format = 1;
+        return 1;
+    }
+    if (n == 5 && !strcmp(argv[1], "fat-fsck"))
+        return 1;
+    return (n == 5 || (n == 6 && !strcmp(argv[5], "repair"))) &&
+           !strcmp(argv[1], "exfat-fsck");
+}
+
+static enum etude_status fstool_copy(struct etude_case *c, const char *original,
+                                    const char *output, struct fstool_invocation *v)
+{
+    char name[200];
+    const char *copy;
+    if ((size_t)snprintf(name, sizeof(name), "fstool-volume.%s", output) >= sizeof(name) ||
+        (copy = etude_evidence(c, name)) == NULL || strlen(copy) >= sizeof(v->disk))
+        return ETUDE_REFUSED;
+    strcpy(v->disk, copy);
+    if (store_copy_range(original, v->start * 512, v->count * 512, v->disk))
+        return ETUDE_FAILED;
+    made(c, v->disk, 0);
+    return ETUDE_OK;
+}
+
+static enum etude_status fstool_arguments(struct etude_case *c, char *const argv[],
+                                           const char *output, struct fstool_invocation *v)
+{
+    size_t n = 0, at;
+    char original[4096];
+    enum etude_status st;
+    while (n < 8 && argv[n])
+        n++;
+    if (n < 2 || n == 8 || !fstool_kind(argv, n, v))
+        return ETUDE_REFUSED;
+    at = v->format ? 4 : 3;
+    if (!wire_number(argv[at], &v->start) || !wire_number(argv[at + 1], &v->count) ||
+        !v->count || v->start > INT64_MAX / 512 || v->count > INT64_MAX / 512 - v->start ||
+        !private_disk_path(c, argv[2], original) || disk_active(c, original))
+        return ETUDE_REFUSED;
+    if (v->format) {
+        strcpy(v->disk, original);
+        for (at = 3; at < n; at++)
+            v->args[at] = argv[at];
+    } else {
+        st = fstool_copy(c, original, output, v);
+        if (st != ETUDE_OK)
+            return st;
+        if (n == 6)
+            v->args[3] = "repair";
+    }
+    v->args[0] = "/host-products/fstool";
+    v->args[1] = argv[1];
+    v->args[2] = "/dev/disk1";
+    return ETUDE_OK;
+}
+
+static enum etude_status fstool_command(struct etude_case *c, struct etude_case_machine *m,
+                                         const struct fstool_invocation *v, const char *output,
+                                         struct etude_termination *end)
+{
+    const char *sync_args[] = {"/bin/busybox", "sync", NULL};
+    struct etude_guest_result result;
+    char name[200];
+    enum etude_status st;
+    memset(&result, 0, sizeof(result));
+    st = etude_guest_command(m, v->args, NULL, NULL, output, &result);
+    *end = result.termination;
+    if (st != ETUDE_OK)
+        return st;
+    if (!result.complete || result.cleanup != ETUDE_CLEANUP_CONFIRMED) {
+        c->unconfirmed |= result.cleanup != ETUDE_CLEANUP_CONFIRMED;
+        return ETUDE_LOST;
+    }
+    snprintf(name, sizeof(name), "fstool-sync.%s", output);
+    st = etude_guest_command(m, sync_args, NULL, NULL, name, &result);
+    if (st != ETUDE_OK)
+        return st;
+    if (!result.complete || result.cleanup != ETUDE_CLEANUP_CONFIRMED) {
+        c->unconfirmed |= result.cleanup != ETUDE_CLEANUP_CONFIRMED;
+        return ETUDE_LOST;
+    }
+    return result.termination.end == ETUDE_END_EXITED && !result.termination.value
+               ? ETUDE_OK : ETUDE_FAILED;
+}
+
+static enum etude_status fstool_host(struct etude_case *c, char *const argv[], const char *output,
+                                      struct etude_termination *end)
+{
+    const char *disks[] = {"fstool-root", "fstool-disk", NULL};
+    struct fstool_invocation v;
+    struct etude_case_machine *m = NULL;
+    struct etude_termination stopped;
+    char *reply = NULL;
+    enum etude_status st, stop;
+    if (c->cur < 0 || !file_name(output))
+        return ETUDE_REFUSED;
+    memset(&v, 0, sizeof(v));
+    st = fstool_arguments(c, argv, output, &v);
+    if (st != ETUDE_OK)
+        return st;
+    st = etude_bind_disk(c, "fstool-helper", "fstool-disk", v.disk);
+    if (st != ETUDE_OK)
+        goto done;
+    st = etude_boot(c, "fstool-helper", disks, &m, &stopped);
+    if (st != ETUDE_OK)
+        goto done;
+    st = fstool_command(c, m, &v, output, end);
+    stop = etude_qmp(m, "quit", NULL, &reply);
+    free(reply);
+    if (stop == ETUDE_OK)
+        stop = etude_wait_end(m, &stopped);
+    if (st == ETUDE_OK)
+        st = stop;
+done:
+    if (!v.format && st == ETUDE_OK && end->end == ETUDE_END_EXITED && !end->value &&
+        unlink(v.disk))
+        return ETUDE_FAILED;
+    return st;
+}
+
 enum etude_status etude_host(struct etude_case *c, char *const argv[], const char *output,
                              struct etude_termination *end)
 {
@@ -3552,6 +3685,9 @@ enum etude_status etude_host(struct etude_case *c, char *const argv[], const cha
     end->console_offset = 0;
     if (stop_asked)
         return ETUDE_STOPPED;
+    if (argv != NULL && argv[0] != NULL && !strcmp(argv[0], "fstool"))
+        return etude_has_machine(c, "fstool-helper") ? fstool_host(c, argv, output, end)
+                                                    : ETUDE_REFUSED;
     if (argv != NULL && image_tool(argv[0]) && etude_has_machine(c, "image-helper"))
         return image_host(c, argv, output, end);
     program = argv != NULL ? program_path(c, argv[0]) : NULL;

@@ -152,6 +152,11 @@ if [ "${GNU_TEST_PRODUCTS:-}" = 1 ]; then
     chmod 0700 "$TREE/host-work"
     mkdir "$TREE/host-products"
     cp -a "$OUT/host-products/." "$TREE/host-products/"
+    # Independent filesystem commands are required prepared inputs.
+    for tool in mkfs.exfat fsck.exfat fsck.fat; do
+        test -x "$TREE/usr/sbin/$tool"
+    done
+    test -x "$TREE/host-products/fstool"
     if [ "$RACH2_ARCH" = x86_64 ]; then
         # The store's directory mode must permit the nested fixture copy.
         chmod u+w "$TREE/host-products"
