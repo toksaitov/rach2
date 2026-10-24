@@ -6,7 +6,8 @@
  * host-deps: tools/etude/history_collect.c
  * host-deps: tools/etude/history_json.c
  * host-deps: tools/etude/authority.c tools/etude/authority_parse.c
- * host-deps: tools/etude/posix/authority_platform.c tools/etude/win/authority_platform.c
+ * host-deps: tools/etude/posix/authority_platform.c
+ * host-deps: tools/etude/win/authority_platform.c
  * host-deps: tools/etude/ledger.c tools/etude/capture.c utils/sha256.c
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
  * host-deps: tools/etude/posix/process.c

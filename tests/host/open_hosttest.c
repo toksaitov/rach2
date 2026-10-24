@@ -1355,7 +1355,8 @@ int vfs_resolve_real(const char *path, int flags, struct vfs_ref *out, char *rea
     return vfs_resolve(0, path, flags, out, 0, 0);
 }
 
-/** This resolver model has no captured entry; its original walk is unchanged. */
+/** This resolver model has no captured entry; its original walk is unchanged.
+ */
 int vfs_resolve_entry(const char *path, int flags, struct vfs_ref *out, char *real,
                       struct vfs_name **entry)
 {

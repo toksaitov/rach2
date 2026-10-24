@@ -888,7 +888,8 @@ static void entry_root_row(struct vfs_name *name)
     current_proc = saved;
 }
 
-/** A name survives sharing, file and parent renames, and removal of its link. */
+/** A name survives sharing, file and parent renames, and removal of its link.
+ */
 static void entry_alias_rows(struct vfs_ref *parent)
 {
     struct vfs_name *name = NULL, *alias = NULL;

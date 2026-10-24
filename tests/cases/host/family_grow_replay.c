@@ -114,7 +114,9 @@ int family_grow_replay(struct fixture *f)
     fx_env("work", f->work);
     fx_env("saved", f->work);
     fx_env("disk", family_path(f, "target"));
-    /* The product replays its plan in one shell, with one logged call per range. */
+    /* The product replays its plan in one shell, with one logged call per
+     * range.
+     */
     if (ok)
         ok = family_eval(f, "offset=0; records=0\n"
                             "while read -r first sectors; do\n"

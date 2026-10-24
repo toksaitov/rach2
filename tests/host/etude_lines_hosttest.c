@@ -3,7 +3,8 @@
  * claims.
  * host-inputs: tools/etude/schemas/history.schema.json
  * host-deps: tools/etude/authority.c tools/etude/authority_parse.c
- * host-deps: tools/etude/posix/authority_platform.c tools/etude/win/authority_platform.c
+ * host-deps: tools/etude/posix/authority_platform.c
+ * host-deps: tools/etude/win/authority_platform.c
  * host-deps: tools/etude/lines.c tools/etude/history.c
  * host-deps: tools/etude/history_json.c tools/etude/history_collect.c
  * host-deps: utils/sha256.c tools/etude/posix/status.c tools/etude/watchdog.c

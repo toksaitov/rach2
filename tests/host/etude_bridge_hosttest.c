@@ -3,7 +3,8 @@
  * host-deps: tools/etude/routine_charge.c
  * host-deps: tools/etude/observe_import.c
  * host-deps: tools/etude/authority.c tools/etude/authority_parse.c
- * host-deps: tools/etude/posix/authority_platform.c tools/etude/win/authority_platform.c
+ * host-deps: tools/etude/posix/authority_platform.c
+ * host-deps: tools/etude/win/authority_platform.c
  * host-deps: tools/etude/posix/bridge.c tools/etude/portlock.c
  * host-deps: tools/etude/ledger.c
  * host-deps: tools/etude/boot_identity.c

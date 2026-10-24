@@ -282,7 +282,8 @@ static void nh_stalled_write(void)
     char *data = calloc(1, size);
     CHECK(data != NULL, "stalled-reader transfer bytes");
     if (data) {
-        /* Arm only after the real handshake. The peer consumes no more input. */
+        /* Arm only after the real handshake. The peer consumes no more input.
+         */
         nh_writing = &limit;
         CHECK(etude_remote_put(remote, "large", data, size, "0600") != ETUDE_REMOTE_OK,
               "a stopped reader cannot leave a successful transfer");

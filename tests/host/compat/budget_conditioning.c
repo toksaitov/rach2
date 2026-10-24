@@ -60,7 +60,8 @@ static void conditioning_node_forecast(const char *state)
     fix_format(name, sizeof(name), "conditioning-%s", state);
     r.id = name;
     conditioning_receipt(receipt, sizeof(receipt), state, NULL);
-    /* The extra node prevents aggregate matching, exercising per-node fallback. */
+    /* The extra node prevents aggregate matching, exercising per-node fallback.
+     */
     conditioning_declaration(proof, receipt, 1);
     preparation_artifacts = proof;
     r.purpose = "phase_first_run";

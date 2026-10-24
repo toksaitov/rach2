@@ -1,4 +1,5 @@
-/* Real private authority files exercise policy races without installed writes. */
+/* Real private authority files exercise policy races without installed writes.
+ */
 #include "../../../tools/etude/authority_internal.h"
 
 static void authority_put(const char *name, const char *bytes)
