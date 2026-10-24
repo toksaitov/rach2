@@ -32,6 +32,8 @@ The collection and host-driver regression fixtures write script bytes only to te
 
 The interpreter check ignores C comments and verifies suspect included sources against the compiler's preprocessed output. This excludes inactive branches, such as init's shell fallback in a console-login build. Doom's platform source includes its shell-based error dialog and runs in the GNU helper. The set-driver fixture links the history reader it uses, without the unused Git comparison reporter.
 
+The prepared tests, checkers, fuzz and scripts groups share collection capacity with other cases. The etude and boots groups run alone within the collection because their host-alone checks use short response windows. Ordinary collections schedule these quiet groups first; seeded repetitions retain their allocated order. Composite host groups reserve the established ceiling of 16 processors, with their existing memory and disk reservations. Style reads prepared evidence and may run beside other cases.
+
 `RACH2_WORKERS` limits concurrency, default four. A check marked alone starts with no other check running. Each child receives its own `TMPDIR`, fatal ASan and UBSan options, and the tree as its current directory. Its output is retained whole in `NAME.log`. The executor registers children before release and confirms cleanup before the driver accepts a pass. A signal cancels and reaps active checks. Unconfirmed cleanup keeps the evidence directory.
 
 A completed check writes one assertion and one `progress checks N` record. The case has no clock limit. Etude's case and progress bounds apply. A passing case removes its workspace; a failing case prints the path it keeps.

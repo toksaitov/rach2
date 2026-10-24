@@ -247,7 +247,7 @@ struct set {
     struct etude_repeat_item *repeat_items;
     size_t repeat_count;
     char *repeat_selection;
-    struct member *mem; /* the serial suites' members first, as given, then
+    struct member *mem; /* serial suites and quiet host groups first, then
                            the rest: as given in a set of one architecture,
                            and in a set of both in etude_sched_order's
                            order */
@@ -923,10 +923,17 @@ static void names(const struct set *x, struct cmp_text *d, int (*pick)(const str
     cmp_printf(d, "]");
 }
 
-/** Say whether member `m` is serial. */
+/* These prepared groups contain host-alone checks with short response windows.
+ * Their exclusivity is within this collection, as for an explicit serial suite. */
+static int quiet_case(const struct legacy_case *k)
+{
+    return !strcmp(k->case_id, "host.host.etude") || !strcmp(k->case_id, "host.host.boots");
+}
+
+/** Say whether suite or quiet-group policy makes member `m` serial. */
 static int is_serial(const struct member *m)
 {
-    return m->m->serial;
+    return m->m->serial || quiet_case(m->k);
 }
 
 /** Say whether member `m` runs with nothing else of the run beside it. */
@@ -3686,7 +3693,7 @@ static int case_command(struct set *x, struct member *m)
         c->alone = c->ports && k->memory_bytes > x->cap[ETUDE_LEGACY_MEMORY].amount / 2;
         memcpy(c->wd.stage_us, k->stage_us, sizeof(c->wd.stage_us));
     }
-    c->exclusive = m->m->serial || c->alone;
+    c->exclusive = is_serial(m) || c->alone;
     c->is_case = 1;
     c->live = x->n == 1;
     c->grace_us = CASE_GRACE_US + (k->machine ? k->stage_us[ETUDE_STAGE_CLEANUP] : 0);
@@ -4005,6 +4012,26 @@ static int order_members(struct set *x, size_t from)
     return 0;
 }
 
+/* Keep explicit serial suites and quiet host groups before the shared tail.
+ * Seeded plans bypass this partition and retain their allocated item order. */
+static int quiet_members(struct set *x, size_t *prefix)
+{
+    struct member *ordered = calloc(x->n, sizeof(*ordered));
+    size_t i, k = 0;
+    if (ordered == NULL)
+        return -1;
+    for (i = 0; i < x->n; i++)
+        if (is_serial(&x->mem[i]))
+            ordered[k++] = x->mem[i];
+    *prefix = k;
+    for (i = 0; i < x->n; i++)
+        if (!is_serial(&x->mem[i]))
+            ordered[k++] = x->mem[i];
+    memcpy(x->mem, ordered, x->n * sizeof(*ordered));
+    free(ordered);
+    return 0;
+}
+
 /** Mark the first item of each member of the request, and give the machine
  * cases their local ports, in the order of the plan; 0, or -1. */
 static int number_members(struct set *x)
@@ -4125,6 +4152,8 @@ static int prepare_members(struct set *x)
             k = take_members(x, i, k);
     if (repeat_members(x))
         return refuse(x, "the seeded repetition plan could not be allocated");
+    if (!o->repeat && quiet_members(x, &serial))
+        return refuse(x, "the quiet-case order could not be allocated");
     if (o->repeat)
         for (i = 0; i < x->n; i++) {
             struct member *m = &x->mem[i];

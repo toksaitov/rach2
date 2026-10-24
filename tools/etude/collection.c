@@ -379,7 +379,7 @@ static int selection_document(struct collection *c, struct suite_entry *s, const
         m->suite = s->name;
         m->arch = arch;
         m->cases = strdup(path);
-        m->serial = !strcmp(s->name, "style") || !strcmp(s->name, "host");
+        m->serial = s->alone;
         m->stops = !strcmp(s->name, "style");
     }
     return 0;

@@ -1,5 +1,6 @@
 /* Check native collection selection, prepared execution and learned bounds.
- * host-deps: utils/sha256.c tools/etude/posix/process.c
+ * host-deps: utils/sha256.c tools/etude/posix/process.c tools/etude/json.c
+ * host-inputs: tests/host/compat/collection_scheduling.c
  * host-cflags: -I utils -I tools/etude/include -I tools/etude/posix -Wall
  * host-cflags: -Wextra -Werror
  * host-inputs: build/tools/etude/etude
@@ -359,6 +360,8 @@ static void fixture(void)
     fixture_policy();
 }
 
+#include "compat/collection_scheduling.c"
+
 int main(int argc, char **argv)
 {
     static char out[131072];
@@ -368,6 +371,11 @@ int main(int argc, char **argv)
     char *unknown[] = {"-N", "absent", NULL};
     char *native[] = {"-A", "tcg", "-C", "2", "host", NULL};
     char *other[] = {"-A", "tcg", "-C", "3", "host", NULL};
+    if (argc == 1 && getenv("ETUDE_CASE")) {
+        int role = scheduling_role(getenv("ETUDE_CASE"));
+        if (role >= 0)
+            return role;
+    }
     if (argc == 1 && getenv("ETUDE_CASE") &&
         !strcmp(getenv("ETUDE_CASE"), "fixture.host.vectors")) {
         printf("@etude 1 begin fixture.host.vectors\n");
@@ -432,6 +440,9 @@ int main(int argc, char **argv)
     put("build/tests/host/sha256_hosttest", "changed\n");
     CHECK(run(native, NULL, NULL, NULL, out, sizeof(out)) == 3 && strstr(out, "changed"),
           "prepared artifacts are checked by digest before launch");
+    copy(self, fix_path("build/tests/host/sha256_hosttest"));
+    make_record();
+    scheduling(out, sizeof(out));
     if (failures)
         return 1;
     fix_passed();

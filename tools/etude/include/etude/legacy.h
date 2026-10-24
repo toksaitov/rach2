@@ -164,8 +164,9 @@ struct etude_legacy_set_opts {
  * resources, each held within the limit. With `o->locks`, its claim also
  * takes the old host lock, shared, or alone for a guest case whose memory is
  * more than half the limit, and a guest case's claim takes a port block as
- * well. The serial members run first, one at a time; the others run in the
- * order given, or for both architectures in etude_sched_order's, the
+ * well. Explicit serial members and the quiet host etude and boots groups run
+ * first, one at a time, unless a seeded plan fixes their order. The others
+ * run in the order given, or for both architectures in etude_sched_order's, the
  * costlier case first, so that the long cases of the two run side by side,
  * as many at once as the ledger and `o->width` admit. A suite
  * that `stops` and did not pass cancels what runs and what has not started,
