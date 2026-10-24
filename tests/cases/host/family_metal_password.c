@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 static int count_lines(const char *path)
 {
     char *text = fx_read(path), *p;
@@ -27,6 +28,21 @@ static int transcripts(struct fixture *f, const char *audit)
     }
     (void)f;
     return 1;
+}
+/* A successful conversation must retain readable normalized transcript bytes. */
+static int text_present(const char *path)
+{
+    FILE *fp = fopen(path, "rb");
+    struct stat st;
+    int ok;
+
+    if (!fp)
+        return 0;
+    ok = fstat(fileno(fp), &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0 &&
+         fgetc(fp) != EOF && !ferror(fp);
+    if (fclose(fp) != 0)
+        ok = 0;
+    return ok;
 }
 static int check(struct fixture *f, const char *mode, int expected, const char *command,
                  const char *output)
@@ -68,7 +84,7 @@ static int check(struct fixture *f, const char *mode, int expected, const char *
         snprintf(path, sizeof(path), "%s/raw", audit);
         ok &= fx_has(path, "PROMPTED=1\n") && fx_has(path, "ANSWERED=1\n");
         snprintf(path, sizeof(path), "%s/text", audit);
-        ok &= !fx_empty(path) && !strcmp(f->out, output);
+        ok &= text_present(path) && !strcmp(f->out, output);
     }
     fprintf(stderr, "password: %s: %s\n", mode, ok ? "passed" : "failed");
     return ok;
