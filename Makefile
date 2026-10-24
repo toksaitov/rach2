@@ -571,7 +571,8 @@ build/tools/etude/image-command: tools/etude/win/image_command.c tools/etude/win
 
 # A native scenario combines each group's native and declared GNU checks.
 build/tests/cases/host/host_checks_scenario: tests/cases/host/host_checks_scenario.c \
-    tests/cases/host/host.c tools/etude/json.c $(ETUDE_CASE_LIB_SRC) $(ETUDE_HDRS)
+    $(ETUDE_HOSTCASE_SRC) $(ETUDE_CASE_LIB_SRC) $(ETUDE_HDRS) \
+    tests/cases/host/sanitizer_tool.h
 	@mkdir -p $(@D)
 	$(filter-out tests/cases/host/host.c,$(ETUDE_LINK)) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Iutils $(ETUDE_PLATFORM_FLAGS) $(ETUDE_PLATFORM_LIBS)
