@@ -22,12 +22,20 @@ int etude_context_grant_read(const char *path, const char *claim_id,
                              struct etude_preparation_grant *grant);
 
 /* A receipt is valid only after preparation and owned cleanup succeeded. */
+enum etude_preparation_conditioning {
+    ETUDE_PREPARATION_UNKNOWN,
+    ETUDE_PREPARATION_RETAINED,
+    ETUDE_PREPARATION_CLEAN
+};
 struct etude_preparation_receipt {
     char run_id[256], commit[41], record_sha256[65];
     struct etude_context_clock clock;
     struct etude_reading start, end;
     struct etude_measurement elapsed;
     int passed, cleanup_confirmed, same_run;
+    enum etude_preparation_conditioning conditioning;
+    /* Empty for ordinary production; otherwise the actual import proof. */
+    char import_provenance[4096];
 };
 
 /* Use the same platform observer for preparation and runtime clocks. */

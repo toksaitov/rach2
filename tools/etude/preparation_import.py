@@ -163,6 +163,16 @@ def receipt_check(receipt, commit, record):
             'producer interval is invalid')
 
 
+def clean_goals(receipt, roles, conditioning):
+    """A clean import cannot replace portable production with retained bytes."""
+    if conditioning != 'clean' or 'portable' not in roles.values():
+        return
+    profile = receipt.get('conditioning', {})
+    require(profile.get('inhouse') == 'clean' and profile.get('backend') == 'ordinary' and
+            profile.get('provenance') is None,
+            'clean portable goals need a clean ordinary producer receipt')
+
+
 def inventory_texts(tree, files):
     return {name: (tree / name).read_text() for name in files if role(name) == 'inventory'}
 
@@ -422,6 +432,7 @@ def prepare(args):
     files = record_files(metadata['record'])
     require(goals <= files.keys(), 'producer record does not cover every selected goal')
     receipt_check(metadata['receipt'], commit, metadata['record'])
+    clean_goals(metadata['receipt'], roles, args.conditioning)
     imported = {name: files[name] for name, kind in roles.items() if kind == 'portable'}
     for name, value in metadata['auxiliary'].items():
         require(name in AUXILIARY, 'undeclared auxiliary input')
@@ -463,6 +474,7 @@ def main():
     p = commands.add_parser('prepare')
     for name in ('tree', 'config', 'request', 'work', 'provenance', 'commit', 'arches'):
         p.add_argument('--' + name, required=True)
+    p.add_argument('--conditioning', choices=('clean', 'retained'), default='retained')
     args = parser.parse_args()
     try:
         globals()[args.action](args)

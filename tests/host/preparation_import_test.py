@@ -16,6 +16,27 @@ import preparation_import as product
 
 
 class ImportTests(unittest.TestCase):
+    def test_clean_goal_conditioning(self):
+        original = dict(format='etude-preparation-receipt', run_id='original-production',
+                        start=dict(monotonic_us=10), end=dict(monotonic_us=20))
+        for state in ('clean', 'retained', 'unknown', None):
+            receipt = dict(original)
+            if state:
+                receipt['conditioning'] = dict(inhouse=state, backend='ordinary', provenance=None)
+            before = json.dumps(receipt, sort_keys=True)
+            if state == 'clean':
+                product.clean_goals(receipt, {'image': 'portable'}, 'clean')
+            else:
+                with self.assertRaises(ValueError):
+                    product.clean_goals(receipt, {'image': 'portable'}, 'clean')
+            product.clean_goals(receipt, {'image': 'portable'}, 'retained')
+            product.clean_goals(receipt, {'program': 'native', 'checks': 'inventory'}, 'clean')
+            self.assertEqual(json.dumps(receipt, sort_keys=True), before)
+        receipt = dict(original, conditioning=dict(inhouse='clean', backend='import',
+                                                   provenance={'sha256': 'fixture'}))
+        with self.assertRaises(ValueError):
+            product.clean_goals(receipt, {'image': 'portable'}, 'clean')
+
     def test_roles(self):
         for value in ('build/tests/cases/machine/install.disk',
                       'build/x86_64/tests/cases/machine/install.disk',

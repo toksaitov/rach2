@@ -1230,7 +1230,8 @@ static int preparation_nodes(struct set *x, struct cmp_text *t)
                 nodes[count++] = k->goals[j];
             }
     }
-    cmp_printf(&d, "]}\n");
+    const char *preparation = etude_context_text(x->o->context, "preparation");
+    cmp_printf(&d, "],\"preparation\":%s}\n", preparation ? preparation : "null");
     free(nodes);
     cmp_printf(t, ",");
     int rc = keep_doc(x, &d, t);

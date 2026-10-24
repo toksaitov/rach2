@@ -44,6 +44,56 @@ static struct eh_json *document(const struct eh_json *ref)
     return NULL;
 }
 
+static int completed_clean(const struct eh_json *receipt)
+{
+    const struct eh_json *c = eh_json_get(receipt, "conditioning");
+    const char *commit = cmp_text(receipt, "commit"), *record = cmp_text(receipt, "record_sha256");
+    return same(cmp_text(receipt, "format"), "etude-preparation-receipt") &&
+           same(cmp_text(receipt, "outcome"), "pass") &&
+           same(cmp_text(receipt, "cleanup"), "confirmed") && commit && strlen(commit) == 40 &&
+           record && strlen(record) == 64 && same(cmp_text(c, "inhouse"), "clean");
+}
+
+/* Native goals are rebuilt locally. Portable goals retain their producer. */
+static int imported_goal(const struct eh_json *proof, const char *node)
+{
+    const char *role = cmp_text(eh_json_get(proof, "roles"), node);
+    if (same(role, "native") || same(role, "inventory"))
+        return 1;
+    const struct eh_json *producer = eh_json_get(proof, "ordinary_production");
+    const struct eh_json *c = eh_json_get(producer, "conditioning");
+    const struct eh_json *input = eh_json_get(eh_json_get(proof, "imported"), node);
+    const struct eh_json *artifact = eh_json_get(eh_json_get(proof, "artifacts"), node);
+    const char *hash = cmp_text(input, "sha256");
+    return same(role, "portable") && input && artifact && hash && strlen(hash) == 64 &&
+           same(hash, cmp_text(artifact, "sha256")) && completed_clean(producer) &&
+           same(cmp_text(c, "backend"), "ordinary") && eh_json_get(c, "provenance") &&
+           eh_json_get(c, "provenance")->type == 'z' &&
+           same(cmp_text(producer, "commit"), cmp_text(proof, "commit"));
+}
+
+static int conditioned(const struct eh_json *receipt, const char *const *nodes, size_t count,
+                       int aggregate)
+{
+    const struct eh_json *c = eh_json_get(receipt, "conditioning");
+    if (!completed_clean(receipt))
+        return 0;
+    if (same(cmp_text(c, "backend"), "ordinary"))
+        return eh_json_get(c, "provenance") && eh_json_get(c, "provenance")->type == 'z';
+    if (!same(cmp_text(c, "backend"), "import"))
+        return 0;
+    struct eh_json *proof = document(eh_json_get(c, "provenance"));
+    int ok = proof && same(cmp_text(proof, "format"), "etude-preparation-import-provenance") &&
+             same(cmp_text(proof, "commit"), cmp_text(receipt, "commit"));
+    for (size_t i = 0; ok && i < count; i++)
+        ok = imported_goal(proof, nodes[i]);
+    const struct eh_json *roles = eh_json_get(proof, "roles");
+    for (const struct eh_json *r = aggregate && roles ? roles->child : NULL; ok && r; r = r->next)
+        ok = imported_goal(proof, r->key);
+    eh_json_free(proof);
+    return ok;
+}
+
 static int nodes_match(const struct eh_json *doc, const struct etude_preparation_selection *s)
 {
     const struct eh_json *nodes = eh_json_get(doc, "nodes");
@@ -73,7 +123,30 @@ static int nodes_match(const struct eh_json *doc, const struct etude_preparation
             return 0;
         count++;
     }
-    return count == s->count;
+    return count == s->count &&
+           (s->cls != ETUDE_BUDGET_RELEASE ||
+            conditioned(eh_json_get(doc, "preparation"), s->nodes, s->count, 1));
+}
+
+int etude_budget_preparation_eligible(const struct cmp_record *plan, enum etude_budget_class cls,
+                                      const char *node)
+{
+    if (cls != ETUDE_BUDGET_RELEASE)
+        return 1;
+    const struct eh_json *refs = eh_json_get(plan->data, "artifacts");
+    for (const struct eh_json *r = refs ? refs->child : NULL; r; r = r->next) {
+        struct eh_json *doc = document(r);
+        const struct eh_json *nodes = eh_json_get(doc, "nodes");
+        int found = 0;
+        for (const struct eh_json *n = nodes ? nodes->child : NULL; n; n = n->next)
+            found |= n->type == 's' && same(n->string, node);
+        int ok = found && same(cmp_text(doc, "format"), "etude-preparation-nodes") &&
+                 conditioned(eh_json_get(doc, "preparation"), &node, 1, 0);
+        eh_json_free(doc);
+        if (ok)
+            return 1;
+    }
+    return 0;
 }
 
 static int declares(const struct cmp_record *plan, const struct etude_preparation_selection *s)

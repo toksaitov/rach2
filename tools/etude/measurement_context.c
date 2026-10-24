@@ -319,7 +319,33 @@ static int valid_receipt(const struct etude_preparation_receipt *r)
            hex(r->record_sha256, 64) && eh_identity(r->clock.machine_id) &&
            eh_identity(r->clock.boot_id) && eh_utc(r->start.utc) && eh_utc(r->end.utc) &&
            r->start.resolution_us && r->end.resolution_us &&
-           r->end.monotonic_us >= r->start.monotonic_us && r->end.monotonic_us <= ETUDE_HISTORY_MAX;
+           r->end.monotonic_us >= r->start.monotonic_us &&
+           r->end.monotonic_us <= ETUDE_HISTORY_MAX &&
+           r->conditioning >= ETUDE_PREPARATION_UNKNOWN &&
+           r->conditioning <= ETUDE_PREPARATION_CLEAN;
+}
+
+/* Record conditioning only after the preparer has completed its steps. */
+static int put_conditioning(struct jbuf *b, const struct etude_preparation_receipt *r)
+{
+    const char *states[] = {"unknown", "retained", "clean"};
+    char hash[65], text[160];
+    uint64_t size;
+    jbuf_puts(b, ",\"conditioning\":{\"inhouse\":");
+    quote(b, states[r->conditioning]);
+    jbuf_puts(b, *r->import_provenance ? ",\"backend\":\"import\",\"provenance\":"
+                                       : ",\"backend\":\"ordinary\",\"provenance\":null");
+    if (*r->import_provenance) {
+        if (!absolute(r->import_provenance) || hash_file(r->import_provenance, hash, &size))
+            return -1;
+        snprintf(text, sizeof(text), "{\"sha256\":\"%s\",\"size_bytes\":%llu,\"locations\":[", hash,
+                 (unsigned long long)size);
+        jbuf_puts(b, text);
+        quote(b, r->import_provenance);
+        jbuf_puts(b, "]}");
+    }
+    jbuf_puts(b, "}");
+    return 0;
 }
 int etude_context_receipt_write(const char *path, const struct etude_preparation_receipt *r)
 {
@@ -343,6 +369,10 @@ int etude_context_receipt_write(const char *path, const struct etude_preparation
     put_reading(&b, &r->start);
     jbuf_puts(&b, ",\"end\":");
     put_reading(&b, &r->end);
+    if (put_conditioning(&b, r)) {
+        jbuf_free(&b);
+        return -1;
+    }
     jbuf_puts(&b, "}\n");
     return create_document(path, &b);
 }
@@ -414,6 +444,34 @@ static int receipt_fields(const struct json *doc, struct etude_preparation_recei
            !reading(json_member(doc, "start"), &r->start) &&
            !reading(json_member(doc, "end"), &r->end);
 }
+
+/* Older receipts retain unknown conditioning and cannot teach a release. */
+static int receipt_conditioning(struct etude_measurement_context *c, const struct json *doc,
+                                struct etude_preparation_receipt *r)
+{
+    const struct json *v = json_member(doc, "conditioning");
+    const char *state = json_text(v, "inhouse"), *backend = json_text(v, "backend");
+    const struct json *proof = json_member(v, "provenance");
+    if (!v)
+        return 0;
+    if (!state || !backend || !proof)
+        return -1;
+    if (!strcmp(state, "clean"))
+        r->conditioning = ETUDE_PREPARATION_CLEAN;
+    else if (!strcmp(state, "retained"))
+        r->conditioning = ETUDE_PREPARATION_RETAINED;
+    else if (strcmp(state, "unknown"))
+        return -1;
+    if (!strcmp(backend, "ordinary"))
+        return proof->type == JSON_NULL ? 0 : -1;
+    const struct json *paths = json_member(proof, "locations");
+    if (strcmp(backend, "import") || !paths || paths->type != JSON_ARRAY || paths->count != 1 ||
+        paths->item[0]->type != JSON_STRING || !absolute(paths->item[0]->string) ||
+        strlen(paths->item[0]->string) >= sizeof(r->import_provenance))
+        return -1;
+    strcpy(r->import_provenance, paths->item[0]->string);
+    return bound(c, proof, r->import_provenance);
+}
 static int preparation(struct etude_measurement_context *c, const struct json *root,
                        const char *commit, const char *record_hash)
 {
@@ -425,7 +483,7 @@ static int preparation(struct etude_measurement_context *c, const struct json *r
     struct etude_preparation_receipt *r = &c->preparation;
     struct etude_context_clock clock;
     struct etude_reading now;
-    int ok = receipt_fields(doc, r);
+    int ok = receipt_fields(doc, r) && !receipt_conditioning(c, doc, r);
     r->passed = r->cleanup_confirmed = ok;
     ok = ok && valid_receipt(r) && !strcmp(c->run_id, r->run_id) && !strcmp(commit, r->commit) &&
          !strcmp(record_hash, r->record_sha256) && !etude_context_clock(&clock) &&

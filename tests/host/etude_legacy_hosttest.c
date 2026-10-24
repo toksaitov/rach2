@@ -348,6 +348,14 @@ static void check_receipt(const char *path, const char *record,
     CHECK(start && start->type == JSON_INTEGER &&
               (uint64_t)start->integer == grant->start.monotonic_us,
           "receipt: interval begins at the first admission grant");
+    const struct json *conditioning = json_member(doc, "conditioning");
+    CHECK(json_text(conditioning, "inhouse") &&
+              !strcmp(json_text(conditioning, "inhouse"), "retained") &&
+              json_text(conditioning, "backend") &&
+              !strcmp(json_text(conditioning, "backend"), "ordinary") &&
+              json_member(conditioning, "provenance") &&
+              json_member(conditioning, "provenance")->type == JSON_NULL,
+          "receipt: ordinary retained build is not labelled clean");
     json_free(doc);
 }
 

@@ -6,7 +6,11 @@ static void test_aggregate_preparation(void)
     static const char declaration[] =
         "{\"schema_version\":1,\"format\":\"etude-preparation-nodes\","
         "\"architectures\":[\"i686\",\"x86_64\"],\"kernel\":null,"
-        "\"nodes\":[\"build/tests/host/sha256_hosttest\"]}\n";
+        "\"nodes\":[\"build/tests/host/sha256_hosttest\"],\"preparation\":"
+        "{\"format\":\"etude-preparation-receipt\",\"outcome\":\"pass\",\"cleanup\":\"confirmed\","
+        "\"commit\":\"1111111111111111111111111111111111111111\",\"record_sha256\":"
+        "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\","
+        "\"conditioning\":{\"inhouse\":\"clean\",\"backend\":\"ordinary\",\"provenance\":null}}}\n";
     const char *path = put("aggregate.nodes", declaration);
     char hex[65], text[8192];
     struct cmp_record plan = {0}, run = {0}, step = {0};

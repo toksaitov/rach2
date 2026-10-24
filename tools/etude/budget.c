@@ -856,7 +856,8 @@ static int node_sample(const struct cmp_history *h, const struct etude_budget_po
     if (plan == NULL || run == NULL || !same(cmp_text(run->data, "plan_id"), plan->id) ||
         !listed(eh_json_get(run->data, "preparation_steps"), r->id) ||
         !clean_pass(eh_json_get(run->data, "result")) ||
-        !teaches(cls, cmp_text(plan->data, "purpose"))) {
+        !teaches(cls, cmp_text(plan->data, "purpose")) ||
+        !etude_budget_preparation_eligible(plan, cls, node)) {
         return 0;
     }
     x->env = eh_json_get(plan->data, "environment");

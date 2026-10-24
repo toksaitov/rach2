@@ -1085,6 +1085,8 @@ static int clean_inhouse(struct prep *p)
     *slash = '\0';
     args[4] = output;
     status = preparation_adapter(p, "clean-inhouse", args);
+    if (!status)
+        p->receipt.conditioning = ETUDE_PREPARATION_CLEAN;
     free(output);
     return status;
 }
@@ -1113,6 +1115,8 @@ static int import_artifacts(struct prep *p, const char *config)
                     p->receipt_path ? p->receipt.commit : "",
                     "--arches",
                     (char *)(p->o->arch ? p->o->arch : "i686"),
+                    "--conditioning",
+                    p->receipt.conditioning == ETUDE_PREPARATION_CLEAN ? "clean" : "retained",
                     NULL};
     FILE *f = request ? fopen(request, "wx") : NULL;
     size_t i;
@@ -1141,6 +1145,12 @@ static int import_artifacts(struct prep *p, const char *config)
         status = preparation_adapter(p, "import", args);
     if (!status && (list_add(&p->required, config_path) || list_add(&p->required, provenance)))
         status = failed(p, "import: memory ran out");
+    if (!status) {
+        if (strlen(provenance) >= sizeof(p->receipt.import_provenance))
+            status = failed(p, "import: the provenance path is too long");
+        else
+            strcpy(p->receipt.import_provenance, provenance);
+    }
     free(record);
     free(provenance);
     free(config_path);
@@ -1156,6 +1166,7 @@ static int prepare(struct prep *p)
     int status = find_path(p);
     const char *config = getenv("ETUDE_PREPARATION_IMPORT");
 
+    p->receipt.conditioning = ETUDE_PREPARATION_RETAINED;
     if (status == 0)
         status = clean_inhouse(p);
     if (status == 0 && config) {

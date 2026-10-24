@@ -75,6 +75,7 @@ static const struct json *the_case;
 
 /* The policy of the rows that judge runs. */
 static struct etude_budget_policy policy;
+static const char *preparation_artifacts;
 
 /** Leave through the fixtures' cleanup after a signal, in the parent. */
 static void stopped(int sig)
@@ -518,9 +519,10 @@ static int write_plan(struct writer *w)
     fix_format(w->data, sizeof(w->data),
                "{\"purpose\":\"%s\",\"selection\":%s,\"items\":[%s],\"commit\":"
                "\"1111111111111111111111111111111111111111\",\"source\":%s,\"runner\":%s,"
-               "\"artifacts\":[],\"environment\":%s,\"concurrency\":%s,\"policies\":%s,"
+               "\"artifacts\":[%s],\"environment\":%s,\"concurrency\":%s,\"policies\":%s,"
                "\"exemption\":%s,\"reproduce\":%s}",
-               r->purpose, b, items, b, b, env, b, b, ex, b);
+               r->purpose, b, items, b, b, preparation_artifacts ? preparation_artifacts : "", env,
+               b, b, ex, b);
     return append(w, "plan");
 }
 
@@ -1428,6 +1430,7 @@ static void test_unjudged(void)
 }
 
 #include "compat/budget_preparation.c"
+#include "compat/budget_conditioning.c"
 
 int main(void)
 {
@@ -1451,6 +1454,8 @@ int main(void)
     test_services();
     test_schedule();
     test_aggregate_preparation();
+    test_conditioned_preparation();
+    test_implicit_preparation();
     test_forecast();
     test_unknown_cost();
     test_deadline();

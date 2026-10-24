@@ -139,6 +139,41 @@ static int open_context(struct etude_measurement_context **c)
                                                 commit, fix_path("tool")};
     return etude_context_open(fix_path("context"), &inputs, c, error, sizeof(error));
 }
+static void test_receipt_conditioning(void)
+{
+    static const enum etude_preparation_conditioning states[] = {
+        ETUDE_PREPARATION_UNKNOWN, ETUDE_PREPARATION_RETAINED, ETUDE_PREPARATION_CLEAN};
+    for (size_t i = 0; i < sizeof(states) / sizeof(states[0]); i++) {
+        char name[64];
+        struct etude_measurement_context *c = NULL;
+        receipt.conditioning = states[i];
+        snprintf(name, sizeof(name), "conditioning-%lu", (unsigned long)i);
+        CHECK(!etude_context_receipt_write(fix_path(name), &receipt),
+              "actual conditioning receipt writes");
+        context(name);
+        CHECK(!open_context(&c), "conditioning receipt opens");
+        const struct etude_preparation_receipt *r = etude_context_preparation(c);
+        CHECK(r && r->conditioning == states[i], "conditioning survives the receipt round trip");
+        CHECK(etude_context_eligible(c), "preparation conditioning does not relabel warm caches");
+        etude_context_close(c);
+    }
+    put("import-proof", "original independent production evidence\n");
+    strcpy(receipt.import_provenance, fix_path("import-proof"));
+    CHECK(!etude_context_receipt_write(fix_path("import-receipt"), &receipt),
+          "import receipt binds actual provenance bytes");
+    context("import-receipt");
+    struct etude_measurement_context *c = NULL;
+    CHECK(!open_context(&c), "import receipt opens");
+    const struct etude_preparation_receipt *r = etude_context_preparation(c);
+    CHECK(r && !strcmp(r->import_provenance, receipt.import_provenance),
+          "original import proof locator survives");
+    put("import-proof", "changed production evidence\n");
+    char error[256];
+    CHECK(c && etude_context_recheck(c, error, sizeof(error)),
+          "changed independent production proof is refused");
+    etude_context_close(c);
+    receipt.import_provenance[0] = '\0';
+}
 static void bad_receipt(const char *name, int kind)
 {
     struct etude_preparation_receipt r = receipt;
@@ -288,6 +323,7 @@ int main(void)
              platform, receipt.clock.machine_id, receipt.clock.boot_id);
     put("trace", header);
     receipt.passed = receipt.cleanup_confirmed = 1;
+    receipt.conditioning = ETUDE_PREPARATION_CLEAN;
     CHECK(!etude_context_receipt_write(fix_path("receipt"), &receipt), "successful receipt writes");
     CHECK(etude_context_receipt_write(fix_path("receipt"), &receipt) != 0,
           "an existing receipt is never replaced");
@@ -320,6 +356,7 @@ int main(void)
         CHECK(etude_context_recheck(c, error, sizeof(error)) != 0, "context mutation is refused");
     }
     etude_context_close(c);
+    test_receipt_conditioning();
     bad_receipt("other-run", 0);
     bad_receipt("other-boot", 1);
     bad_receipt("future", 2);

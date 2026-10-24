@@ -92,6 +92,9 @@ struct etude_preparation_selection {
 int etude_budget_preparation(const struct cmp_history *h, const struct etude_budget_policy *p,
                              const struct etude_preparation_selection *selection, uint64_t *us,
                              size_t *count);
+/* Release costs require actual clean production of the selected goal. */
+int etude_budget_preparation_eligible(const struct cmp_record *plan, enum etude_budget_class cls,
+                                      const char *node);
 
 int etude_budget_class_of(const char *name);
 const char *etude_budget_class_name(enum etude_budget_class cls);
