@@ -23,6 +23,9 @@ site=${ETUDE_SITE:-/etc/rach2/etude-site}
 . "$tree/tools/ci/native_site.sh"
 native_site_load "$site"
 etude=${ETUDE:-$native_site_etude}
+[ -z "$native_site_routed" ] || [ "$etude" = "$native_site_authority_program" ] || {
+    echo 'ci: refused: routine route requires its installed authority program' >&2; exit 2;
+}
 [ -x "$etude" ] || { echo 'ci: refused: preinstalled immutable native etude is unavailable' >&2; exit 2; }
 case $native_site_endpoint in
     windows)
@@ -112,6 +115,21 @@ if [ ! -f "$out/log" ]; then
     printf 'ci: native sequence stopped before its output log opened (status %s)\n' "$status" > "$out/log"
 fi
 [ "$status" -lt 128 ] || exit 125
+routine_completion='' routine_problem=''
+if [ -n "${ETUDE_ROUTINE_ROUTE:-}" ] || [ -e "$out/routine-completion.path" ]; then
+    pointer=$out/routine-completion.path
+    if [ -f "$pointer" ] && [ ! -L "$pointer" ] &&
+        [ "$(wc -c < "$pointer")" -le 4096 ] &&
+        awk 'END { exit !(NR == 1 && length($0) > 0) }' "$pointer" &&
+        IFS= read -r routine_completion < "$pointer"; then
+        case $routine_completion in
+            /*|[A-Za-z]:/*) ;;
+            *) routine_problem='routine completion path is not absolute' ;;
+        esac
+    else
+        routine_problem='routine completion record is missing or malformed'
+    fi
+fi
 : > "$out/failed"
 result_status=0
 for arch in $selected; do
@@ -129,11 +147,16 @@ for arch in $selected; do
     fi
     printf '%s\n' "$suites" > "$result/suites"
     verdict=2
-    if [ -n "$suites" ]; then
+    if [ -n "$routine_problem" ]; then
+        printf 'ci: %s\n' "$routine_problem" > "$result/verdict"
+    elif [ -n "$suites" ]; then
         if [ "$kind" = push ]; then
             set -- --selection "$out/selection.export.json"
         else
             set --
+        fi
+        if [ -n "$routine_completion" ]; then
+            set -- "$@" --routine-completion "$routine_completion" --routine-proofs "$out/routine-proofs"
         fi
         "$etude" check verdict "$@" --project-architecture --require-budget -b "$out/store" \
             -c "$sha" "$arch" "$kind" "$suites" "$out/history" > "$result/verdict" 2>&1 && verdict=0 || verdict=$?

@@ -23,14 +23,27 @@ case $purpose/${ETUDE_PHASE_SELECTION_EXPORT:+set} in
     *) echo 'native-sequence: a routine run cannot use a first-measurement selection' >&2; exit 2 ;;
 esac
 case $arches in i686|x86_64|both) ;; *) exit 2 ;; esac
+[ -z "${ETUDE_ADMITTED:-}" ] || { echo 'native-sequence: an enclosing claim prevents case admission' >&2; exit 2; }
+if [ -n "${ETUDE_ROUTINE_ROUTE:-}" ]; then
+    routine_entry=$tree/tools/ci/routine_entry.py
+    case $(uname -s) in
+        MINGW*|MSYS*|UCRT*|CLANG*) routine_entry=$(cygpath -au "$routine_entry") ;;
+    esac
+    exec python3 "$routine_entry" "$purpose" "$tree" "$out" "$arches" "$run" \
+        "$site" "$etude" "$accel" "$@"
+fi
 . "$tree/tools/ci/native_site.sh"
 native_site_load "$site"
-[ -z "${ETUDE_ADMITTED:-}" ] || { echo 'native-sequence: an enclosing claim prevents case admission' >&2; exit 2; }
 [ "$limit" -le "$native_site_seconds" ] || limit=$native_site_seconds
 ETUDE_BUILD_JOBS=$native_site_jobs JOBS=$native_site_jobs
 RACH2_MIN_FREE_GIB=${RACH2_MIN_FREE_GIB:-40}
 ETUDE_SITE=$site
 ETUDE_SEQUENCE_LOG=$out/log
+sequence_receipt=$out/sequence.receipt
+if [ "${ETUDE_ROUTINE_DIRECT:-}" = 1 ]; then
+    ETUDE_SEQUENCE_LOG=$out/linux.log
+    sequence_receipt=$out/linux.sequence.receipt
+fi
 ETUDE_PREPARATION_GRANT=$out/preparation.grant.json
 export ETUDE_BUILD_JOBS JOBS RACH2_MIN_FREE_GIB ETUDE_SITE ETUDE_SEQUENCE_LOG ETUDE_PREPARATION_GRANT
 # Only release production discards in-house products. Explicit repair suites
@@ -63,7 +76,7 @@ for program in "$shell_program" "$env_program"; do
 done
 # Each counted vector includes argv[0]. The shell only constructs arguments.
 count=$#
-exec "$etude" observe sequence "$out/sequence.receipt" "$run" \
+exec "$etude" observe sequence "$sequence_receipt" "$run" \
     "$out/outer-load.jsonl" "$out/outer-stop.request" "$etude" \
     "$prepare_path" "$runtime_path" \
     "$etude" "$((27 + count))" "$etude" admit \

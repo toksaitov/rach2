@@ -657,3 +657,7 @@ The native scripts scenario now runs each unchanged fixture on its matching kern
 ## Source archives belong in the prepared helper disk (#1051)
 
 The completed Linux run showed the same upload failure in cases whose progress bounds were 60 or 120 seconds, as well as the earlier 600-second cases. Serial acknowledgments continued, but no controller work had begun. Compression alone does not remove that repeated transfer. The prepared GNU test disk now includes the compressed source archive. Both native controller families compare its guest SHA-256 with the declared archive before unpacking it, and fail on any mismatch. Linux image dependencies and the tooling input list include the archive. This removes the serial upload while retaining the whole source inventory and every case bound.
+
+## Routine entry requires the physical owner's completion (#1037)
+
+The routine shell entry now checks a physical route through the installed authority before reading its disabled endpoint, and dispatches the unchanged selection to the route owner. Direct WSL logs and sequence receipts have separate paths from the physical owner's evidence. The final architecture projections pass the terminal completion and retained proof directory to the native verdict; missing, relative and multiline completion pointers fail both projections. The existing native entry fixture covers valid and malformed pointers while retaining ordinary, interrupted, foreign-architecture and budget failures.

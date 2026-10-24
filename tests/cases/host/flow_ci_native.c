@@ -68,6 +68,18 @@ static int sequence(int argc, char **argv)
         if (!fx_mkdir(path("store")) || !fx_text(path("history/run.jsonl"), "fixture\n"))
             return 2;
     }
+    if (!strncmp(env("CI_NATIVE_MODE"), "completion", 10)) {
+        const char *value = !strcmp(env("CI_NATIVE_MODE"), "completion-relative")   ? "relative\n"
+                            : !strcmp(env("CI_NATIVE_MODE"), "completion-multiple") ? "/one\n/two\n"
+                                                                                    : NULL;
+        char pointer[16384];
+        snprintf(pointer, sizeof(pointer), "%s\n", path("routine.completion.json"));
+        if (!fx_text(path("routine-completion.path"), value ? value : pointer) ||
+            !fx_text(path("routine.completion.json"), "fixture\n") ||
+            !fx_mkdir(path("routine-proofs")))
+            return 2;
+        return 0;
+    }
     return !strcmp(env("CI_NATIVE_MODE"), "pass") || push ? 0 : 1;
 }
 
@@ -78,6 +90,12 @@ static int verdict(int argc, char **argv)
         !argument(argc, argv, "-c"))
         return 2;
     if (!strcmp(env("CI_NATIVE_MODE"), "push") && !argument(argc, argv, "--selection"))
+        return 2;
+    if (!strcmp(env("CI_NATIVE_MODE"), "completion") &&
+        (!argument(argc, argv, "--routine-completion") ||
+         !argument(argc, argv, path("routine.completion.json")) ||
+         !argument(argc, argv, "--routine-proofs") ||
+         !argument(argc, argv, path("routine-proofs"))))
         return 2;
     int bad = !strcmp(env("CI_NATIVE_MODE"), "budget") ||
               !strcmp(env("CI_NATIVE_MODE"), "cleanup") || !fx_exists(path("history/run.jsonl"));
@@ -145,6 +163,7 @@ static int setup(struct fixture *f)
     fx_env("RACH2_QEMU_ACCEL", "tcg");
     fx_env("ARCH", "i686 x86_64");
     fx_env("SUITES", "");
+    fx_env("ETUDE_ROUTINE_ROUTE", NULL);
     return flow_ci_retention_setup(f);
 }
 
@@ -158,7 +177,8 @@ static int row(struct fixture *f, const char *mode, unsigned number)
     fx_env("CI_NATIVE_MODE", mode);
     const char *argv[] = {"/bin/sh", "tools/ci/run.sh", "core", out, NULL};
     fx_run(f, argv, flow_path(f, "tree"), NULL, NULL);
-    int ok = f->status == (!strcmp(mode, "pass") ? 0 : !strcmp(mode, "cancel") ? 125 : 1);
+    int passed = !strcmp(mode, "pass") || !strcmp(mode, "completion");
+    int ok = f->status == (passed ? 0 : !strcmp(mode, "cancel") ? 125 : 1);
     for (unsigned i = 0; i < 2; i++) {
         const char *arch = i ? "x86_64" : "i686";
         snprintf(file, sizeof(file), "%s/core-%s/done", out, arch);
@@ -166,7 +186,7 @@ static int row(struct fixture *f, const char *mode, unsigned number)
         if (!strcmp(mode, "cancel"))
             continue;
         snprintf(file, sizeof(file), "%s/core-%s/failed", out, arch);
-        const char *failed = !strcmp(mode, "pass")      ? ""
+        const char *failed = passed                     ? ""
                              : !strcmp(mode, "foreign") ? (i ? "default\n" : "")
                                                         : "runner\n";
         ok = ok && fx_equal(file, failed);
@@ -195,7 +215,15 @@ static int push_row(struct fixture *f)
 
 int flow_ci_native(struct fixture *f)
 {
-    const char *modes[] = {"pass", "foreign", "budget", "cleanup", "missing-history", "cancel"};
+    const char *modes[] = {"pass",
+                           "foreign",
+                           "budget",
+                           "cleanup",
+                           "missing-history",
+                           "cancel",
+                           "completion",
+                           "completion-relative",
+                           "completion-multiple"};
     if (!setup(f))
         return 0;
     int ok = 1;

@@ -13,9 +13,36 @@ native_site_positive()
     [ "${#1}" -le 15 ]
 }
 
+# A disabled physical endpoint can be inspected through its fixed authority.
+# This probe grants no work; only the native owner can open a phase.
+native_site_route()
+{
+    native_site_routed=''
+    native_site_authority_program=''
+    [ -n "${ETUDE_ROUTINE_ROUTE:-}" ] || return 0
+    native_site_binding=/etc/rach2/etude-authority
+    case $(uname -s) in
+        MINGW*|MSYS*|UCRT*|CLANG*) native_site_binding=C:/ProgramData/rach2/etude-authority ;;
+    esac
+    native_site_authority_program=$(awk '
+        /^program / { value=substr($0,9); count++ }
+        END { if (count != 1 || value == "") exit 2; print value }
+    ' "$native_site_binding") || return 2
+    case $native_site_authority_program in
+        /*|[A-Za-z]:/*) ;;
+        *) native_site_refuse 'invalid authority program'; return 2 ;;
+    esac
+    if [ ! -x "$native_site_authority_program" ] ||
+        ! "$native_site_authority_program" authority route "$1"; then
+        native_site_refuse 'routine route does not match the installed authority'; return 2;
+    fi
+    native_site_routed=1
+}
+
 # This uses the same version-two fields and bounds as etude/launch.sh.
 native_site_load() # native_site_load ABSOLUTE_SITE
 {
+    native_site_route "$1" || return 2
     native_site_file=$1
     native_site_header='' native_site_endpoint='' native_site_launcher=''
     native_site_ledger='' native_site_locks='' native_site_etude=''
@@ -48,6 +75,18 @@ native_site_validate()
 {
     [ "$native_site_header" = 2 ] || { native_site_refuse 'incompatible site format'; return 2; }
     case $native_site_boundary in ''|bigmem-boundary-v1) ;; *) native_site_refuse 'invalid boundary profile'; return 2 ;; esac
+    if [ -n "$native_site_routed" ]; then
+        [ "$native_site_etude" = "$native_site_authority_program" ] || {
+            native_site_refuse 'site program differs from the installed authority'; return 2;
+        }
+        if [ "$native_site_endpoint" = disabled ]; then
+            case $(uname -s) in
+                Linux) native_site_endpoint=linux ;;
+                Darwin) native_site_endpoint=macos ;;
+                MINGW*|MSYS*|UCRT*|CLANG*) native_site_endpoint=windows ;;
+            esac
+        fi
+    fi
     case $(uname -s)/$native_site_endpoint in
         Linux/linux|Darwin/macos|MINGW*/windows|MSYS*/windows|UCRT*/windows|CLANG*/windows) ;;
         *) native_site_refuse 'endpoint is disabled or incompatible'; return 2 ;;
