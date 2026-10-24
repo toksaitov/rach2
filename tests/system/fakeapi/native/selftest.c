@@ -33,6 +33,11 @@ static int test_read(SSL *tls, void *bytes, int n)
     w->left -= (size_t)n;
     return n;
 }
+static int test_tls_error(const SSL *tls, int result)
+{
+    (void)tls;
+    return result == 0 ? SSL_ERROR_ZERO_RETURN : SSL_ERROR_SSL;
+}
 #ifndef _WIN32
 static int interrupt_verdict, repeated_stop;
 static struct buffer stopped_verdict;
@@ -51,11 +56,13 @@ static int test_fputs(const char *text, FILE *file)
 #endif
 #define SSL_write test_write
 #define SSL_read  test_read
+#define SSL_get_error test_tls_error
 #define main      fakeapi_program
 #include "server.c"
 #undef main
 #undef SSL_write
 #undef SSL_read
+#undef SSL_get_error
 #ifndef _WIN32
 #undef fputs
 #endif

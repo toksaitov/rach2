@@ -2,6 +2,7 @@
 #include "api.h"
 #include <openssl/evp.h>
 #include <openssl/sha.h>
+#include <openssl/err.h>
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
@@ -132,13 +133,29 @@ const char *header(const struct request *r, const char *name)
             return text(p->child->next);
     return "";
 }
+static void websocket_tls_error(struct peer *p, int result, int sending)
+{
+    int saved_errno = errno;
+    int error = SSL_get_error(p->tls, result);
+    log_line("%u: WebSocket %s returned %d, SSL_get_error %d, errno %d (%s)", p->n,
+             sending ? "SSL_write" : "SSL_read", result, error, saved_errno,
+             strerror(saved_errno));
+    ERR_print_errors_fp(stderr);
+}
+
 int write_peer(struct peer *p, const void *data, size_t n)
 {
     const char *bytes = data;
     while (n) {
-        int sent = SSL_write(p->tls, bytes, (int)(n > INT_MAX ? INT_MAX : n));
-        if (sent <= 0)
+        int sent;
+        ERR_clear_error();
+        errno = 0;
+        sent = SSL_write(p->tls, bytes, (int)(n > INT_MAX ? INT_MAX : n));
+        if (sent <= 0) {
+            if (p->websocket && !p->finished)
+                websocket_tls_error(p, sent, 1);
             return 0;
+        }
         bytes += sent;
         n -= (size_t)sent;
     }
@@ -148,9 +165,15 @@ static int read_peer(struct peer *p, void *data, size_t n)
 {
     char *bytes = data;
     while (n) {
-        int got = SSL_read(p->tls, bytes, (int)(n > INT_MAX ? INT_MAX : n));
-        if (got <= 0)
+        int got;
+        ERR_clear_error();
+        errno = 0;
+        got = SSL_read(p->tls, bytes, (int)(n > INT_MAX ? INT_MAX : n));
+        if (got <= 0) {
+            if (p->websocket && !p->finished)
+                websocket_tls_error(p, got, 0);
             return 0;
+        }
         bytes += got;
         n -= (size_t)got;
     }
@@ -544,6 +567,26 @@ struct incoming_frame {
     int final;
 };
 
+static void frame_trace(struct peer *p, const char *phase, const unsigned char *head,
+                        const unsigned char *mask, const unsigned char *data, uint64_t n)
+{
+    static const char digits[] = "0123456789abcdef";
+    char key[9], prefix[17];
+    unsigned i;
+    for (i = 0; i < 4; i++) {
+        key[i * 2] = digits[mask[i] >> 4];
+        key[i * 2 + 1] = digits[mask[i] & 15];
+    }
+    key[8] = 0;
+    for (i = 0; i < 8 && i < n; i++) {
+        prefix[i * 2] = digits[data[i] >> 4];
+        prefix[i * 2 + 1] = digits[data[i] & 15];
+    }
+    prefix[i * 2] = 0;
+    log_line("%u: WebSocket frame %s: flags %02x %02x, length %llu, mask %s, prefix %s", p->n,
+             phase, (unsigned)head[0], (unsigned)head[1], (unsigned long long)n, key, prefix);
+}
+
 static int read_frame(struct peer *p, struct incoming_frame *f, size_t used)
 {
     unsigned char head[2], mask[4], extra[8], *data;
@@ -567,8 +610,11 @@ static int read_frame(struct peer *p, struct incoming_frame *f, size_t used)
             n = (n << 8) | extra[i];
     }
     if (!(head[1] & 128) || (head[0] & 0x70) || n > BODY_MAX || used + n > BODY_MAX ||
-        ((op & 8) && (!final || n > 125)))
+        ((op & 8) && (!final || n > 125))) {
+        log_line("%u: WebSocket frame refused: flags %02x %02x, length %llu, used %zu", p->n,
+                 (unsigned)head[0], (unsigned)head[1], (unsigned long long)n, used);
         return 0;
+    }
     if (!read_peer(p, mask, 4))
         return 0;
     data = allocate((size_t)n + 1);
@@ -576,8 +622,10 @@ static int read_frame(struct peer *p, struct incoming_frame *f, size_t used)
         free(data);
         return 0;
     }
+    frame_trace(p, "masked", head, mask, data, n);
     for (i = 0; i < n; i++)
         data[i] ^= mask[i % 4];
+    frame_trace(p, "decoded", head, mask, data, n);
     f->data = data;
     f->n = n;
     f->op = op;
@@ -934,27 +982,64 @@ static int prepare_steps(struct server *s, const struct value *steps)
     }
     return 1;
 }
+static void setup_failure(const char *operation, const char *path)
+{
+    int saved_errno = errno;
+    fprintf(stderr, "fakeapi: setup: %s: %s: errno %d (%s)\n", operation, path, saved_errno,
+            strerror(saved_errno));
+    ERR_print_errors_fp(stderr);
+}
+
+static service_socket prepare_service(struct server *s, const char *script,
+                                      const char *record_path, const char *certdir, unsigned *port)
+{
+    const struct value *steps;
+    service_socket listener;
+    ERR_clear_error();
+    errno = 0;
+    s->script = read_json(script);
+    steps = get(s->script, "steps");
+    if (!s->script || !steps || steps->type != 'a') {
+        setup_failure("read script and steps", script);
+        return SERVICE_INVALID;
+    }
+    ERR_clear_error();
+    errno = 0;
+    s->tls = server_context(certdir);
+    if (!s->tls) {
+        setup_failure("load TLS certificate and key", certdir);
+        return SERVICE_INVALID;
+    }
+    if (!prepare_steps(s, steps)) {
+        setup_failure("validate script steps", script);
+        return SERVICE_INVALID;
+    }
+    errno = 0;
+    s->record = fopen(record_path, "ab");
+    if (!s->record) {
+        setup_failure("open record", record_path);
+        return SERVICE_INVALID;
+    }
+    errno = 0;
+    listener = service_bind(*port, 0, port);
+    if (listener == SERVICE_INVALID) {
+        char endpoint[64];
+        snprintf(endpoint, sizeof(endpoint), "127.0.0.1:%u", *port);
+        setup_failure("bind listening socket", endpoint);
+    }
+    return listener;
+}
+
 static int serve(const char *script, const char *record_path, const char *certdir, unsigned port)
 {
     struct server s;
     struct connection *connections = NULL, *c;
-    const struct value *steps;
     int result = 2;
     service_socket listener;
     memset(&s, 0, sizeof(s));
     service_mutex_init(&s.lock);
     service_condition_init(&s.condition);
-    s.script = read_json(script);
-    s.tls = server_context(certdir);
-    steps = get(s.script, "steps");
-    if (!s.script || !steps || steps->type != 'a' || !s.tls)
-        goto done;
-    if (!prepare_steps(&s, steps))
-        goto done;
-    s.record = fopen(record_path, "ab");
-    if (!s.record)
-        goto done;
-    listener = service_bind(port, 0, &port);
+    listener = prepare_service(&s, script, record_path, certdir, &port);
     if (listener == SERVICE_INVALID)
         goto done;
     log_line("listening on 127.0.0.1:%u", port);
@@ -1077,8 +1162,10 @@ int main(int argc, char **argv)
 {
     const char *name = strrchr(argv[0], '/');
     name = name ? name + 1 : argv[0];
-    if (initialize())
+    if (initialize()) {
+        setup_failure("initialize process and socket service", argv[0]);
         return 2;
+    }
     if (strstr(name, "agent_relay") && argc == 2)
         return relay(service_port(argv[1]));
     if (argc == 6 && !strcmp(argv[1], "accept-prepare"))
