@@ -8,8 +8,10 @@
 struct vpath;
 struct fd_entry;
 struct vfs_ref;
+struct vfs_name;
 /* The functions procfs.c defines for other files, declared static so that
  * they have internal linkage in this test, which includes procfs.c. */
+static struct vfs_name *procfs_exe_entry(int pid);
 static int procfs_resolve_pid(int pid);
 static int procfs_resolve_id(const struct vpath *vp);
 static int procfs_open(const struct vpath *vp, int flags);

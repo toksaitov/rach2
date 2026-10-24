@@ -705,6 +705,12 @@ The first local admitted transport probe completed its wire command and child cl
 
 The exact cdaaf Windows build stopped on ESTALE, a duplicate environ declaration and a POSIX-only saved-input variable. MinGW does not define ESTALE and declares its environment accessor with an import attribute. The changed-identity refusal now uses portable EAGAIN, and the environment declaration and saved-input descriptor are confined to the POSIX branch. The failed source archive, complete compiler log and owned cleanup receipt remain separate from the replacement build. No collection or installed policy change occurred.
 
+## The audio fixture retained an unused procfs export (#1069)
+
+The clean run 15 preparation failed before runtime at 13:15 when hda_hosttest linked procfs_exe_entry without vfs_name_ref. The audio fixture includes procfs.c for /proc/audio and declares its other unused exports static, allowing the compiler to discard them without replacement implementations. The new executable-entry accessor lacked that declaration. The earlier focused pathname compile covered the procfs and descriptor fixtures but omitted this audio fixture, despite the existing rule to inspect every source inclusion.
+
+hda_hosttest now forward-declares struct vfs_name and gives the unused accessor internal linkage, matching the existing fixture convention. The other source inclusion, procfs_hosttest, already declares the accessor static and links the real name-record implementation for its executable-entry assertions. The kernel consumer remains linked through the normal source manifest. No stub or production behavior changed. The complete host inventory will be compiled in the coordinated batch.
+
 ## Clean preparation finds omitted products and source-check failures
 
 The first clean preparation of `34d88dbc0` stopped after 127 seconds, before any case ran. The repetition fixture exceeded its existing complexity limit (#1064); host inventory preparation required an exFAT writer absent from its build dependencies (#1065); twenty comment lines exceeded 80 columns (#1066); and the host Cppcheck run reported 75 findings in the new authority, routine-reader and fixture code (#1067). The earlier retained-products preparation could not reveal the missing product dependency. Both lifetime owners reported confirmed cleanup, and both resource ledgers were empty.
