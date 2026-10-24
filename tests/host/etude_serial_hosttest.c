@@ -132,6 +132,7 @@ struct harness {
 static struct harness H;
 static char work[512];
 static char stage[600];
+static char alias_dir[700];
 
 /* Processes to end at exit: etude-guests, and the groups of their attempts. */
 static pid_t guests[32];
@@ -175,6 +176,12 @@ static void cleanup(void)
         }
     for (i = 0; i < ngroups; i++)
         kill(-(pid_t)groups[i], SIGKILL);
+    if (*alias_dir) {
+        char path[720];
+        snprintf(path, sizeof(path), "%s/w", alias_dir);
+        if ((unlink(path) != 0 && errno != ENOENT) || rmdir(alias_dir) != 0)
+            fprintf(stderr, "etude-serial-test: could not remove alias %s\n", alias_dir);
+    }
     if (*work) {
         if (host_remove_tree(work) != 0)
             fprintf(stderr, "etude-serial-test: could not remove %s\n", work);
@@ -1286,6 +1293,7 @@ static void check_guest_stores(struct harness *h, const char *state)
     char sha[65], path[700], stored[64];
     FILE *f;
     size_t n;
+    int read_ok;
 
     CHECK(store(h, "staged.txt", "staged\n", 7, 1, sha) == ETUDE_SERIAL_DONE,
           "a staged file is stored without data");
@@ -1294,9 +1302,10 @@ static void check_guest_stores(struct harness *h, const char *state)
     snprintf(path, sizeof(path), "%s/f/%s", state, sha);
     f = fopen(path, "rb");
     n = f ? fread(stored, 1, sizeof(stored), f) : 0;
-    if (f)
-        fclose(f);
-    CHECK(n == sizeof(stored) && memcmp(stored, pass, sizeof(stored)) == 0,
+    read_ok = f && feof(f) && !ferror(f);
+    if (f && fclose(f) != 0)
+        read_ok = 0;
+    CHECK(read_ok && n == strlen(pass) && memcmp(stored, pass, n) == 0,
           "a file sent in data frames is stored");
     CHECK(store(h, "absent.txt", "abc", 3, 1, sha) == ETUDE_SERIAL_REFUSED &&
               strstr(etude_serial_why(h->s), ETUDE_ERR_DAMAGED) != NULL,
@@ -1335,6 +1344,45 @@ static int transfer_write(void *ctx, const void *bytes, size_t n)
     return 0;
 }
 
+/** Keep data in TMPDIR, with a short owned alias for bounded serial paths. */
+static int installed_alias(char path[700], char program[700])
+{
+    char link[720];
+    char *base = realpath("build/tests", NULL);
+    int n;
+
+    if (base == NULL)
+        return 0;
+    n = snprintf(alias_dir, sizeof(alias_dir), "%s/es.XXXXXX", base);
+    free(base);
+    if (n < 0 || n >= (int)sizeof(alias_dir) || mkdtemp(alias_dir) == NULL) {
+        alias_dir[0] = '\0';
+        return 0;
+    }
+    snprintf(link, sizeof(link), "%s/w", alias_dir);
+    if (symlink(work, link) != 0)
+        return 0;
+    n = snprintf(path, 700, "%s/f", link);
+    if (n < 0 || n >= 160)
+        return 0;
+    n = snprintf(program, 700, "%s/p", link);
+    return n > 0 && n < 160;
+}
+
+/** These transfers precede large workloads; allow four-digit frame counters. */
+static int installed_frames(struct harness *h, const char *path, const char *sha, size_t size)
+{
+    char frame[ETUDE_FRAME_SERIAL_MAX + 1], number[24];
+    const char *put[] = {"9999", path, number, sha, "0600"};
+    const char *sent[] = {"9999", path, number, sha};
+
+    snprintf(number, sizeof(number), "%zu", size);
+    return wire_encode(frame, sizeof(frame), h->session, h->gboot, 9999, 1, 9999,
+                       ETUDE_CMD_PUT, 5, put) != 0 &&
+           wire_encode(frame, sizeof(frame), h->session, h->gboot, 9999, 1, 9999,
+                       ETUDE_EV_SENT, 4, sent) != 0;
+}
+
 /** Transfer to an absolute destination and back, then run an installed
  * program with no stored executable in its invocation. */
 static void check_installed(struct harness *h)
@@ -1346,7 +1394,10 @@ static void check_installed(struct harness *h)
     FILE *file;
     int n;
 
-    snprintf(program, sizeof(program), "%s/installed", work);
+    if (!installed_alias(path, program)) {
+        CHECK(0, "the installed paths have a private absolute alias");
+        return;
+    }
     file = fopen(program, "wb");
     if (file == NULL || fwrite(workload, 1, workload_size, file) != workload_size) {
         if (file != NULL)
@@ -1361,8 +1412,11 @@ static void check_installed(struct harness *h)
     memset(&t, 0, sizeof(t));
     t.text = "a file transferred through the guest channel\n";
     t.len = strlen(t.text);
-    snprintf(path, sizeof(path), "%s/channel-file", work);
     digest_hex(t.text, t.len, sha);
+    if (!installed_frames(h, path, sha, t.len)) {
+        CHECK(0, "the absolute transfer paths fit serial frames");
+        return;
+    }
     CHECK(etude_serial_put_reader(h->s, path, t.len, sha, "0600", transfer_read, &t, now_us()) ==
                   0 &&
               serve(h, UNTIL_END) && etude_serial_status(h->s) == ETUDE_SERIAL_DONE,
