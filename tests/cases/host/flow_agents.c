@@ -10,7 +10,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
-static int secret_log(struct fixture *f)
+static int secret_log(struct fixture *f, int copied)
 {
     DIR *d = opendir(getenv("TMPDIR"));
     struct dirent *e;
@@ -21,7 +21,7 @@ static int secret_log(struct fixture *f)
         if (!strncmp(e->d_name, "rach2-accept-secrets.", 21)) {
             char file[4096];
             snprintf(file, sizeof(file), "%s/%s/log", getenv("TMPDIR"), e->d_name);
-            if (fx_exists(file)) {
+            if (copied ? fx_equal(file, "x") : fx_exists(file)) {
                 found = 1;
                 break;
             }
@@ -31,9 +31,9 @@ static int secret_log(struct fixture *f)
     (void)f;
     return found;
 }
-static int until_log(struct fixture *f, struct fx_child *p)
+static int until_log(struct fixture *f, struct fx_child *p, int copied)
 {
-    while (!secret_log(f)) {
+    while (!secret_log(f, copied)) {
         if (fx_poll(p))
             return 0;
         fx_pause();
@@ -246,6 +246,30 @@ static void agent_term(struct fixture *f, struct fx_child *p)
     fflush(stderr);
 }
 
+static int agent_input(struct fixture *f, struct fx_child *p, int input)
+{
+    ssize_t sent;
+    do {
+        sent = write(input, "x", 1);
+    } while (sent < 0 && errno == EINTR);
+    if (sent != 1)
+        return 0;
+    agent_boundary(f, p, "input-sent");
+    return 1;
+}
+
+static int agent_ready(struct fixture *f, struct fx_child *p, int copied)
+{
+    const char *stage = "ended-before-log";
+    int held;
+    agent_boundary(f, p, copied ? "waiting-copy" : "waiting-log");
+    held = until_log(f, p, copied);
+    if (held)
+        stage = copied ? "copy-observed" : "log-observed";
+    agent_boundary(f, p, stage);
+    return held;
+}
+
 static int agent_wait(struct fixture *f, unsigned i, struct agent_row *r)
 {
     struct fx_child *p = &r->p;
@@ -258,6 +282,10 @@ static int agent_wait(struct fixture *f, unsigned i, struct agent_row *r)
             return 0;
         agent_boundary(f, p, "input-open");
     }
+    if (i == 3 && !agent_input(f, p, in)) {
+        close(in);
+        return 0;
+    }
     if (i == 5) {
         agent_boundary(f, p, "opening-output");
         out = open(flow_path(f, "output"), O_RDONLY);
@@ -267,11 +295,8 @@ static int agent_wait(struct fixture *f, unsigned i, struct agent_row *r)
         }
         agent_boundary(f, p, "output-open");
     }
-    if (i == 3 || i == 5) {
-        agent_boundary(f, p, "waiting-log");
-        held = until_log(f, p);
-        agent_boundary(f, p, held ? "log-observed" : "ended-before-log");
-    }
+    if (i == 3 || i == 5)
+        held = agent_ready(f, p, i == 3);
     if (i == 4) {
         agent_boundary(f, p, "waiting-mark");
         held = fx_until(p, flow_path(f, "mark"));
