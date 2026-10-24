@@ -109,6 +109,47 @@ static void invocation_architectures(void)
     case_free(&c);
 }
 
+/** Keep large image operands in the permanent tmpfs, not the boot module. */
+static void image_work_paths(void)
+{
+    struct image_invocation v;
+    struct machine_decl decl;
+    struct etude_case_machine machine;
+    const char *dump[] = {"debugfs", "-R", "dump /large /host/result", "disk", NULL};
+    const char *write[] = {"debugfs", "-w", "-R", "write /host/input /large", "disk", NULL};
+    const char *copy[] = {"mcopy", "-n", "-i", "disk", "::/large", "/host/result", NULL};
+
+    memset(&v, 0, sizeof v);
+    check_binding(image_request(dump, 2, 1, &v) == ETUDE_OK &&
+                      v.destination && !strcmp(v.destination, "/host/result") &&
+                      v.args[2] && !strcmp(v.args[2], "dump \"/large\" \"/dev/shm/image-file\""),
+                  "debugfs dump must use tmpfs and retain the host destination");
+    memset(&v, 0, sizeof v);
+    check_binding(image_request(write, 3, 1, &v) == ETUDE_OK &&
+                      v.input && !strcmp(v.input, "/host/input") &&
+                      v.args[3] && !strcmp(v.args[3], "write \"/dev/shm/image-file\" \"/large\""),
+                  "debugfs write must use tmpfs and retain the host input");
+    memset(&v, 0, sizeof v);
+    check_binding(image_copy_arguments(copy, 6, 3, &v) == ETUDE_OK &&
+                      v.destination && !strcmp(v.destination, "/host/result") &&
+                      v.args[7] && !strcmp(v.args[7], "/dev/shm/image-file"),
+                  "mcopy output must use the same tmpfs endpoint");
+    memset(&decl, 0, sizeof decl);
+    memset(&machine, 0, sizeof machine);
+    machine.decl = &decl;
+    decl.id = "image-helper";
+    decl.helper = 1;
+    check_binding(!strcmp(guest_state_options(&machine), "--state /dev/shm/etude-guest "),
+                  "image-helper responder objects must use tmpfs");
+    decl.id = "products";
+    check_binding(!strcmp(guest_state_options(&machine), ""),
+                  "other helpers must keep their existing responder state");
+    decl.id = "image-helper";
+    decl.helper = 0;
+    check_binding(!strcmp(guest_state_options(&machine), ""),
+                  "a non-helper must keep its existing responder state");
+}
+
 int main(void)
 {
     struct etude_case c;
@@ -128,6 +169,7 @@ int main(void)
     if (mkdtemp(fixture) == NULL)
         return 2;
     invocation_architectures();
+    image_work_paths();
     path_of(scratch, fixture, "attempt");
     path_of(disk_file, scratch, "disk");
     path_of(alias, scratch, "alias");

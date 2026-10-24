@@ -39,7 +39,7 @@ extern char **environ;
 /* The text the kernel's debug shell prints when it is ready for a command,
  * and the command that makes etude-guest the boot's designated init. */
 #define SHELL_READY "Type 'help' for available commands."
-#define GUEST_EXEC  "exec /etude-guest --stage / --resend-ms "
+#define GUEST_EXEC  "exec /etude-guest %s--stage / --resend-ms "
 
 /* The most disks, devices, boot options, forwards of each kind and words of
  * a relay a profile gives the launcher, and the most strings of its devices'
@@ -2098,6 +2098,14 @@ static enum etude_status open_guest(struct etude_case_machine *m)
     return st != ETUDE_OK ? st : session_status(m);
 }
 
+/** Only the small image helper keeps transfer objects outside its RAM root. */
+static const char *guest_state_options(const struct etude_case_machine *m)
+{
+    return m->decl->helper && strcmp(m->decl->id, "image-helper") == 0
+               ? "--state /dev/shm/etude-guest "
+               : "";
+}
+
 enum etude_status etude_guest_open(struct etude_case_machine *m)
 {
     char command[96];
@@ -2107,8 +2115,8 @@ enum etude_status etude_guest_open(struct etude_case_machine *m)
     if (m->c->cur < 0 || !m->decl->console)
         return ETUDE_REFUSED;
     m->fed = mres(m)->console.kept;
-    snprintf(command, sizeof(command), "/etude-guest --stage / --resend-ms %llu\n",
-             (unsigned long long)((m->c->resend_us + 999) / 1000));
+    snprintf(command, sizeof(command), "/etude-guest %s--stage / --resend-ms %llu\n",
+             guest_state_options(m), (unsigned long long)((m->c->resend_us + 999) / 1000));
     if (etude_machine_type(m->m, command, strlen(command)) != 0)
         return ETUDE_LOST;
     return open_guest(m);
@@ -2133,7 +2141,7 @@ static enum etude_status start_guest(struct etude_case_machine *m)
     if (t.at < 0)
         return ETUDE_LOST;
     snprintf(command, sizeof(command), GUEST_EXEC "%llu\n",
-             (unsigned long long)((c->resend_us + 999) / 1000));
+             guest_state_options(m), (unsigned long long)((c->resend_us + 999) / 1000));
     if (etude_machine_type(m->m, command, strlen(command)) != 0)
         return ETUDE_LOST;
     m->fed = (size_t)t.at;
@@ -3322,7 +3330,7 @@ static enum etude_status image_request(const char *const argv[], int request_at,
                 v->input = words[file_at];
             else
                 v->destination = words[file_at];
-            words[file_at] = "/tmp/image-file";
+            words[file_at] = "/dev/shm/image-file";
             if (strchr(words[1], '"') != NULL || strchr(words[2], '"') != NULL ||
                 (size_t)snprintf(v->request, sizeof(v->request), "%s \"%s\" \"%s\"", words[0],
                                  words[1], words[2]) >= sizeof(v->request))
@@ -3347,7 +3355,7 @@ static enum etude_status image_copy_arguments(const char *const argv[], size_t c
                 v->destination = argv[i];
             else
                 v->input = argv[i];
-            v->args[prefix + i - 1] = "/tmp/image-file";
+            v->args[prefix + i - 1] = "/dev/shm/image-file";
         }
     }
     if (v->input != NULL && v->destination != NULL)
@@ -3413,7 +3421,7 @@ static enum etude_status image_arguments(struct etude_case *c, char *const argv[
             if (i + 1 == count || v->directory != NULL)
                 return ETUDE_REFUSED;
             v->directory = argv[++i];
-            v->args[prefix + i - 1] = "/tmp/image-directory";
+            v->args[prefix + i - 1] = "/dev/shm/image-directory";
         }
     }
     v->args[prefix + count - 1] = NULL;
@@ -3426,8 +3434,8 @@ static enum etude_status image_arguments(struct etude_case *c, char *const argv[
 static enum etude_status image_directory(struct etude_case *c, struct etude_case_machine *m,
                                          const char *directory, const char *output)
 {
-    const char *args[] = {"/bin/busybox", "tar",  "-xf", "/tmp/image-directory.tar",
-                          "-C",           "/tmp", NULL};
+    const char *args[] = {"/bin/busybox", "tar",  "-xf", "/dev/shm/image-directory.tar",
+                          "-C",           "/dev/shm", NULL};
     char path[4096], why[256], name[200];
     struct etude_volume *v;
     struct etude_guest_result result;
@@ -3446,7 +3454,7 @@ static enum etude_status image_directory(struct etude_case *c, struct etude_case
         diag("image directory: %s", why);
         return ETUDE_FAILED;
     }
-    st = etude_guest_put(m, path, "/tmp/image-directory.tar", "0600");
+    st = etude_guest_put(m, path, "/dev/shm/image-directory.tar", "0600");
     if (st != ETUDE_OK)
         return st;
     snprintf(name, sizeof(name), "image-directory.%s", output);
@@ -3461,7 +3469,7 @@ static enum etude_status image_directory(struct etude_case *c, struct etude_case
 static enum etude_status image_fetch(struct etude_case *c, struct etude_case_machine *m,
                                      const char *destination, const char *output, int succeeded)
 {
-    const char *args[] = {"/bin/busybox", "test", "-f", "/tmp/image-file", NULL};
+    const char *args[] = {"/bin/busybox", "test", "-f", "/dev/shm/image-file", NULL};
     struct etude_guest_result result;
     char name[200];
     const char *path;
@@ -3477,7 +3485,7 @@ static enum etude_status image_fetch(struct etude_case *c, struct etude_case_mac
     if (result.termination.value != 0)
         return result.termination.value == 1 && !succeeded ? ETUDE_OK : ETUDE_FAILED;
     snprintf(name, sizeof(name), "image-file.%s", output);
-    st = etude_guest_get(m, "/tmp/image-file", name);
+    st = etude_guest_get(m, "/dev/shm/image-file", name);
     if (st != ETUDE_OK)
         return st;
     path = etude_evidence(c, name);
@@ -3507,7 +3515,7 @@ static enum etude_status image_host(struct etude_case *c, char *const argv[], co
     if (st != ETUDE_OK)
         return st;
     if (v.input != NULL &&
-        (st = etude_guest_put(m, v.input, "/tmp/image-file", "0600")) != ETUDE_OK)
+        (st = etude_guest_put(m, v.input, "/dev/shm/image-file", "0600")) != ETUDE_OK)
         goto done;
     if (v.directory != NULL && (st = image_directory(c, m, v.directory, output)) != ETUDE_OK)
         goto done;
