@@ -211,9 +211,16 @@ typedef __SIZE_TYPE__ size_t;
 static __inline__ long syscall6(long n, long a, long b, long c, long d, long e, long f)
 {
     long r;
+    /* TinyCC 0.9.27 recognizes fixed-register names with a '%' prefix. */
+#ifdef __TINYC__
+    register long r10 __asm__("%r10") = d;
+    register long r8 __asm__("%r8") = e;
+    register long r9 __asm__("%r9") = f;
+#else
     register long r10 __asm__("r10") = d;
     register long r8 __asm__("r8") = e;
     register long r9 __asm__("r9") = f;
+#endif
 
     __asm__ __volatile__("syscall"
                          : "=a"(r)
