@@ -1,7 +1,7 @@
 # Independent filesystem helper tools, without changing GNU ports or root.
 GNU_FSTOOLS_STAMP = $(GNU_OUT)/fstools.stamp
 GNU_FSTOOLS_SOURCES = vendor/gnu/fstools/build.sh vendor/gnu/fstools/sources.txt \
-                      vendor/gnu/arch.sh mk/arch.sh
+                      vendor/gnu/fstools/positional_io.c vendor/gnu/arch.sh mk/arch.sh
 GNU_STEP_STAMPS += $(GNU_FSTOOLS_STAMP)
 
 .PHONY: gnu-fstools

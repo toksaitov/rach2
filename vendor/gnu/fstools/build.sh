@@ -63,8 +63,13 @@ SOURCE=$WORK/source/exfatprogs-$VERSION
 BUILD=$(cc -dumpmachine)
 PATH=$GNU_PATH$CROSS/bin:$PATH
 export PATH
+# Both positional-write ABIs are wrapped, including direct mkfs FAT writes.
+# The object has no dependency on upstream headers or generated files.
+"$CROSS/bin/$GNU_TARGET-gcc" --sysroot="$SYSROOT" -std=c99 -O2 -fPIC \
+    -Wall -Wextra -Werror -c "$DIR/positional_io.c" -o "$WORK/build/positional_io.o"
 cd "$WORK/build"
-env CC="$CROSS/bin/$GNU_TARGET-gcc --sysroot=$SYSROOT" \
+env LDFLAGS="$WORK/build/positional_io.o -Wl,--wrap=pwrite -Wl,--wrap=pwrite64" \
+    CC="$CROSS/bin/$GNU_TARGET-gcc --sysroot=$SYSROOT" \
     AR="$CROSS/bin/$GNU_TARGET-ar" RANLIB="$CROSS/bin/$GNU_TARGET-ranlib" \
     "$SOURCE/configure" --build="$BUILD" --host="$GNU_TARGET" --prefix=/usr --disable-shared
 make
