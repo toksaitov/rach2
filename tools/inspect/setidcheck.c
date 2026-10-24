@@ -2756,8 +2756,12 @@ static int host_headers(const char *root, const char *guest_root, struct hset *o
 
         if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
             continue;
-        snprintf(host, sizeof(host), "%s/%s", root, ent->d_name);
-        snprintf(guest, sizeof(guest), "%s/%s", guest_root, ent->d_name);
+        if ((size_t)snprintf(host, sizeof(host), "%s/%s", root, ent->d_name) >= sizeof(host) ||
+            (size_t)snprintf(guest, sizeof(guest), "%s/%s", guest_root, ent->d_name) >=
+                sizeof(guest)) {
+            addf(problems, "%s/%s: header path is too long to compare", root, ent->d_name);
+            continue;
+        }
         if (lstat(host, &st) != 0) {
             addf(problems,
                  "%s: %s; the staged tree cannot be compared "
@@ -3764,7 +3768,7 @@ static int run(int argc, char **argv, struct allow *allow)
             size_t n = strlen(ent->d_name);
 
             if (n > 9 && strcmp(ent->d_name + n - 9, ".manifest") == 0) {
-                char full[512];
+                char full[sizeof("krffs/manifests/") + sizeof(ent->d_name)];
 
                 snprintf(full, sizeof(full), "krffs/manifests/%s", ent->d_name);
                 list_push(&manifests, xstrdup(full));
