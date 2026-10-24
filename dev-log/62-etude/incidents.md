@@ -605,3 +605,7 @@ The edited-probe image fixture failed, but exporting its complete source and bui
 ## Product fixtures spent their progress bound uploading sources (#1051)
 
 The full Linux collection stopped several product-family cases during their initial source upload. Their consoles still acknowledged new transfer records at the 600-second progress bound, before a fixture command ran. Preparation now compresses the immutable source tar with gzip. GNU tar reads that format directly in the existing helper. The archive retains the same source files, and the case and progress bounds are unchanged.
+
+## The KRFFS case declarations rejected native child records (#1052)
+
+All eight KRFFS checker cases execute their tools through the native executor and report each child before release. Their declarations still said that children were reaped without reports. The full Linux collection therefore rejected passing assertions as malformed reports. The declarations now require the existing child records and cleanup verification.

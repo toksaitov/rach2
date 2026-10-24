@@ -11,7 +11,7 @@
       "architectures": "none",
       "workload": {"arguments": ["fresh"], "inputs": {"image_mib": 4}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
-      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
+      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reported", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
       "assertions": [
         {"assertion_id": "strict", "checks": "fsck.krffs --strict passes a fresh image", "source": "program"},
         {"assertion_id": "plain", "checks": "fsck.krffs passes a fresh image", "source": "program"}
@@ -39,7 +39,7 @@
       "architectures": "none",
       "workload": {"arguments": ["repairable"], "inputs": {"image_mib": 4}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
-      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
+      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reported", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
       "assertions": [
         {"assertion_id": "backlink-refused", "checks": "fsck.krffs --strict refuses an image with a node's backward link that names the wrong node", "source": "program"},
         {"assertion_id": "backlink-repaired", "checks": "fsck.krffs repairs a node's backward link that names the wrong node and exits 0", "source": "program"},
@@ -74,7 +74,7 @@
       "architectures": "none",
       "workload": {"arguments": ["fatal"], "inputs": {"image_mib": 4}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
-      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
+      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reported", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
       "assertions": [
         {"assertion_id": "magic-strict", "checks": "fsck.krffs --strict refuses a node whose signature is wrong", "source": "program"},
         {"assertion_id": "magic-refused", "checks": "fsck.krffs refuses a node whose signature is wrong", "source": "program"},
@@ -106,7 +106,7 @@
       "architectures": "none",
       "workload": {"arguments": ["sizes"], "inputs": {"image_mib": 4}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
-      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
+      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reported", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
       "assertions": [
         {"assertion_id": "zerosize-strict", "checks": "fsck.krffs --strict refuses a root whose size is zero", "source": "program"},
         {"assertion_id": "zerosize-refused", "checks": "fsck.krffs refuses a root whose size is zero", "source": "program"},
@@ -141,7 +141,7 @@
       "architectures": "none",
       "workload": {"arguments": ["free"], "inputs": {"image_mib": 4}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
-      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
+      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reported", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
       "assertions": [
         {"assertion_id": "accepted", "checks": "fsck.krffs --strict passes an image whose free node's data length is the node's whole size", "source": "program"}
       ],
@@ -168,7 +168,7 @@
       "architectures": "none",
       "workload": {"arguments": ["dirdup"], "inputs": {"image_mib": 4}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
-      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
+      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reported", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
       "assertions": [
         {"assertion_id": "refused", "checks": "fsck.krffs --strict refuses an image with one name on a file and a directory", "source": "program"},
         {"assertion_id": "repaired", "checks": "fsck.krffs repairs the repeated name and exits 0", "source": "program"},
@@ -197,7 +197,7 @@
       "architectures": "none",
       "workload": {"arguments": ["prefixes"], "inputs": {"image_mib": 4}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
-      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
+      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reported", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
       "assertions": [
         {"assertion_id": "prefix-create", "checks": "every prefix of a create", "source": "program"},
         {"assertion_id": "prefix-grow", "checks": "every prefix of a growth past a header", "source": "program"},
@@ -230,7 +230,7 @@
       "architectures": "none",
       "workload": {"arguments": ["orders"], "inputs": {"image_mib": 4}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
-      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
+      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reported", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
       "assertions": [
         {"assertion_id": "order-split", "checks": "a split published before the tail header was written is caught", "source": "program"},
         {"assertion_id": "order-length", "checks": "a length published before the bytes it counts is caught", "source": "program"},
