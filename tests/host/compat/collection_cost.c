@@ -299,8 +299,17 @@ static void cost_histories(const char *template, const char *history, unsigned m
     }
 }
 
-/* The collection's "run: starting" banner precedes capacity validation.
- * Only a suite-prefixed line indicates activity of a selected host case. */
+/* A refused plan has an incomplete suite summary, but no case start. */
+static int cost_refused(char *const *options, char *out, size_t room)
+{
+    int status = run(options, NULL, NULL, NULL, out, room);
+    int refused = status == 2 && !strstr(out, ": starting\n") &&
+                  strstr(out, strerror(ERANGE));
+    if (!refused)
+        fprintf(stderr, "capacity refusal: exit %d\n%s", status, out);
+    return refused;
+}
+
 static void cost_capacity(char *out, size_t room)
 {
     char *learned[] = {"-A",   "tcg", "-j", "1", "-H", (char *)fix_path("cost-history"),
@@ -311,7 +320,7 @@ static void cost_capacity(char *out, size_t room)
           "eligible625 fits site800 despite initial1000");
     CHECK(!mkdir(fix_path("cost-empty"), 0700), "the empty history directory is made");
     char *initial[] = {"-A", "tcg", "-j", "1", "-H", (char *)fix_path("cost-empty"), "host", NULL};
-    CHECK(run(initial, NULL, NULL, NULL, out, room) == 2 && !strstr(out, "run: host: "),
+    CHECK(cost_refused(initial, out, room),
           "unlearned initial1000 cannot fit site800");
     fixture_policy(2000);
     unsetenv("ETUDE_COLLECTION_CPU");
@@ -326,7 +335,7 @@ static void cost_unsafe_loads(char *out, size_t room)
         char *loaded[] = {"-A",   "tcg", "-j",    "1",  "-S",
                           "42",   "-L",  "cpu:1", "-H", (char *)fix_path(history),
                           "host", NULL};
-        CHECK(run(loaded, NULL, NULL, NULL, out, room) == 2 && !strstr(out, "run: host: ") &&
+        CHECK(cost_refused(loaded, out, room) &&
                   strstr(out, "10000000 us (3 samples), CPU 1000 (0 samples)"),
               "unsafe combined/load accounting preserves elapsed cost and initial CPU");
     }
@@ -349,7 +358,7 @@ static void cost_loaded(char *out, size_t room)
           "learned625 plus declared load1000 fits site1800");
     cost_unsafe_loads(out, room);
     fixture_policy(1500);
-    CHECK(run(loaded, NULL, NULL, NULL, out, room) == 2 && !strstr(out, "run: host: ") &&
+    CHECK(cost_refused(loaded, out, room) &&
               strstr(out, "CPU 625 (3 samples)"),
           "learned CPU plus load is refused instead of clamped to site1500");
     unsetenv("ETUDE_COLLECTION_CPU");
