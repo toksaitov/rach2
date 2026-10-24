@@ -2449,6 +2449,11 @@
           "does": "stage immutable product sources"
         },
         {
+          "step_id": "mkext2_overlay",
+          "stage": "execute",
+          "does": "run every native regression row of mkext2_overlay"
+        },
+        {
           "step_id": "machine_measure",
           "stage": "execute",
           "does": "run every native regression row of machine_measure"
@@ -2524,11 +2529,6 @@
           "does": "run every native regression row of board"
         },
         {
-          "step_id": "progress",
-          "stage": "execute",
-          "does": "run every native regression row of progress"
-        },
-        {
           "step_id": "limited",
           "stage": "execute",
           "does": "run every native regression row of limited"
@@ -2572,11 +2572,6 @@
           "step_id": "prereq",
           "stage": "execute",
           "does": "run every native regression row of prereq"
-        },
-        {
-          "step_id": "collection_tools",
-          "stage": "execute",
-          "does": "run every native regression row of collection_tools"
         },
         {
           "step_id": "etude_version",
@@ -2629,11 +2624,6 @@
           "does": "run every native regression row of install_accounts"
         },
         {
-          "step_id": "mkext2_overlay",
-          "stage": "execute",
-          "does": "run every native regression row of mkext2_overlay"
-        },
-        {
           "step_id": "check_asm",
           "stage": "execute",
           "does": "run every native regression row of check_asm"
@@ -2649,16 +2639,6 @@
           "does": "run every native regression row of together"
         },
         {
-          "step_id": "host_suite",
-          "stage": "execute",
-          "does": "run every native regression row of host_suite"
-        },
-        {
-          "step_id": "case_select",
-          "stage": "execute",
-          "does": "run every native regression row of case_select"
-        },
-        {
           "step_id": "tooling_image",
           "stage": "execute",
           "does": "run every native regression row of tooling_image"
@@ -2672,6 +2652,26 @@
           "step_id": "gnu_port_resume",
           "stage": "execute",
           "does": "run every native regression row of gnu_port_resume"
+        },
+        {
+          "step_id": "host_suite",
+          "stage": "execute",
+          "does": "run every native regression row of host_suite"
+        },
+        {
+          "step_id": "case_select",
+          "stage": "execute",
+          "does": "run every native regression row of case_select"
+        },
+        {
+          "step_id": "collection_tools",
+          "stage": "execute",
+          "does": "run every native regression row of collection_tools"
+        },
+        {
+          "step_id": "progress",
+          "stage": "execute",
+          "does": "run every native regression row of progress"
         }
       ],
       "machines": [

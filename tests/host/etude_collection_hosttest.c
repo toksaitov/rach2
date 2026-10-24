@@ -1,6 +1,8 @@
 /* Check native collection selection, prepared execution and learned bounds.
  * host-deps: utils/sha256.c tools/etude/posix/process.c tools/etude/json.c
  * host-inputs: tests/host/compat/collection_scheduling.c
+ * host-inputs: tests/cases/host.host.json tests/cases/host/host.list
+ * host-inputs: tests/host/compat/host_scripts_order.c
  * host-cflags: -I utils -I tools/etude/include -I tools/etude/posix -Wall
  * host-cflags: -Wextra -Werror
  * host-inputs: build/tools/etude/etude
@@ -361,6 +363,7 @@ static void fixture(void)
 }
 
 #include "compat/collection_scheduling.c"
+#include "compat/host_scripts_order.c"
 
 int main(int argc, char **argv)
 {
@@ -392,6 +395,7 @@ int main(int argc, char **argv)
                getenv("ETUDE_COLLECTION_FAIL") ? "fail" : "pass");
         return getenv("ETUDE_COLLECTION_FAIL") ? 1 : 0;
     }
+    host_scripts_order();
     if (!realpath(argv[0], self) || !realpath("build/tools/etude/etude", etude))
         return 1;
     signal(SIGINT, stopped);
