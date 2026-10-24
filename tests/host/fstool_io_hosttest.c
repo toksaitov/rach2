@@ -7,6 +7,10 @@
  */
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
+#ifdef __APPLE__
+/* Clang's freestanding limits.h omits the system POSIX limits. */
+#include <machine/limits.h>
+#endif
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
