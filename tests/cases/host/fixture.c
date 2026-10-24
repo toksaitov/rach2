@@ -523,8 +523,14 @@ int fx_sh(struct fixture *f, const char *command)
 int fx_mock(struct fixture *f, const char *name)
 {
     char path[4096];
-    return path_format(path, sizeof(path), "%s/%s", f->bin, name) &&
-           (!link(f->self, path) || fx_copy(f->self, path));
+    if (!path_format(path, sizeof(path), "%s/%s", f->bin, name))
+        return 0;
+    errno = 0;
+    if (fx_copy(f->self, path))
+        return 1;
+    fprintf(stderr, "fixture: copy mock %s to %s: %s\n", f->self, path,
+            errno ? strerror(errno) : "incomplete copy");
+    return 0;
 }
 int fx_until(struct fx_child *p, const char *path)
 {

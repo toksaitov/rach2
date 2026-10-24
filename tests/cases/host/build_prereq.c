@@ -206,23 +206,55 @@ static int malformed(struct fixture *f)
     return 1;
 }
 
+static int setup_error(const char *operation, const char *path)
+{
+    fprintf(stderr, "prereq: setup: %s %s: %s (uid %lu)\n", operation, path, strerror(errno),
+            (unsigned long)geteuid());
+    return 0;
+}
+
+static int setup_mode(const char *path, mode_t mode)
+{
+    return chmod(path, mode) == 0 || setup_error("chmod", path);
+}
+
 static int permissive(const char *path)
 {
     struct stat st;
     if (lstat(path, &st))
-        return 0;
+        return setup_error("lstat", path);
+    if (S_ISLNK(st.st_mode))
+        return 1;
     if (!S_ISDIR(st.st_mode))
-        return chmod(path, st.st_mode & 0111 ? 0755 : 0644) == 0;
-    if (chmod(path, 0755))
+        return setup_mode(path, st.st_mode & 0111 ? 0755 : 0644);
+    if (!setup_mode(path, 0755))
         return 0;
     DIR *d = opendir(path);
     struct dirent *e;
-    int ok = d != NULL;
-    while (d && (e = readdir(d)))
-        if (strcmp(e->d_name, ".") && strcmp(e->d_name, ".."))
-            ok &= permissive(bp(path, e->d_name));
-    if (d)
-        closedir(d);
+    int ok = 1;
+    if (!d)
+        return setup_error("opendir", path);
+    for (;;) {
+        char child[4096];
+        int n;
+        errno = 0;
+        e = readdir(d);
+        if (!e) {
+            if (errno)
+                ok = setup_error("readdir", path);
+            break;
+        }
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, ".."))
+            continue;
+        n = snprintf(child, sizeof(child), "%s/%s", path, e->d_name);
+        if (n < 0 || (size_t)n >= sizeof(child)) {
+            errno = ENAMETOOLONG;
+            ok = setup_error("join directory entry", path);
+        } else
+            ok &= permissive(child);
+    }
+    if (closedir(d))
+        ok = setup_error("closedir", path);
     return ok;
 }
 
@@ -250,12 +282,17 @@ static int firmware(struct fixture *f, const char *platform)
     }
     free(recipe);
     fclose(out);
-    if (!state(f, "") || !fx_mkdir(bp(f->work, "fix/firmware/bin")) ||
-        !fx_text(bp(f->work, "fix/firmware/share/qemu/edk2-x86_64-code.fd"), "") ||
-        !fx_text(bp(f->work, "fix/firmware/share/qemu/edk2-i386-vars.fd"), "") ||
-        !fx_text(bp(f->work, "fix/unreadable"), ""))
-        return 0;
-    if (!permissive(f->work) || chmod(f->root, 0755) || chmod(bp(f->work, "fix/unreadable"), 0000))
+    if (!state(f, ""))
+        return setup_error("reset firmware state", bp(f->work, "fix"));
+    const char *files[] = {"fix/firmware/share/qemu/edk2-x86_64-code.fd",
+                           "fix/firmware/share/qemu/edk2-i386-vars.fd", "fix/unreadable"};
+    if (!fx_mkdir(bp(f->work, "fix/firmware/bin")))
+        return setup_error("mkdir", bp(f->work, "fix/firmware/bin"));
+    for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++)
+        if (!fx_text(bp(f->work, files[i]), ""))
+            return setup_error("write", bp(f->work, files[i]));
+    if (!permissive(f->work) || !setup_mode(f->root, 0755) ||
+        !setup_mode(bp(f->work, "fix/unreadable"), 0000))
         return 0;
     const char *variants[] = {"missing", "directory", "unreadable", "readable", "discovered"};
     const char *override[] = {"fix/missing", "fix/firmware", "fix/unreadable",
