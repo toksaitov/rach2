@@ -30,6 +30,8 @@
  * both while it runs on Linux and Rach2, and with neither elsewhere, and not
  * once it has ended. Proc reads distinguish disappearance from other errors,
  * preserving the read error when closing the stream changes errno.
+ * Three hundred sequential child reports must leave room for a final live
+ * descendant, which cleanup must end even with POSIX interfaces alone.
  */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -83,6 +85,9 @@ static int fails;
 /* The processor time and memory the `burn` and `orphan` cases use. */
 #define BURN_US    200000u
 #define BURN_BYTES (64u << 20)
+
+/* Sequential child records before the last descendant stays alive. */
+#define REPORTED_CHILDREN 300
 
 /* This program, by an absolute path. */
 static char self[PATH_MAX];
@@ -160,6 +165,23 @@ static void name_descendant(const char *token, pid_t pid, int report, int fd)
     snprintf(line, sizeof(line), "%s pid %ld\n", token, (long)pid);
     if (write(fd, line, strlen(line)) < 0)
         _exit(120);
+}
+
+/** Report children one at a time, leaving the last in its own session. */
+static void many_descendants(const char *token)
+{
+    char line[128];
+    pid_t pid;
+    int i, st;
+
+    for (i = 0; i < REPORTED_CHILDREN; i++) {
+        pid = descendant(1);
+        snprintf(line, sizeof(line), "@etude 1 child %ld\n", (long)pid);
+        say(line);
+        if (waitpid(pid, &st, 0) != pid || !WIFSIGNALED(st) || WTERMSIG(st) != SIGTERM)
+            _exit(126);
+    }
+    name_descendant(token, descendant(1), 1, 2);
 }
 
 /** Write `count` bytes of x and a newline to standard output. */
@@ -335,6 +357,8 @@ static int run_case(const char *mode, const char *token, const char *arg)
     } else if (strcmp(mode, "flood") == 0) {
         flood(atol(arg));
         name_descendant(token, descendant(1), 1, 2);
+    } else if (strcmp(mode, "many") == 0) {
+        many_descendants(token);
     } else if (strcmp(mode, "burn") == 0) {
         burn_tree();
     } else if (strcmp(mode, "orphan") == 0) {
@@ -711,6 +735,51 @@ static void check_gone(const struct attempt *a)
 #define SIGNALED  ETUDE_END_SIGNALED
 #define STOPPED   ETUDE_END_STOPPED
 #define CONFIRMED ETUDE_CLEANUP_CONFIRMED
+
+static int reports_seen;
+
+/** End each sequential child after its identity has reached the controller. */
+static int end_reported(void *ctx, const char *attempt_id, const struct etude_pid *child)
+{
+    (void)ctx;
+    (void)attempt_id;
+    reports_seen++;
+    if (reports_seen <= REPORTED_CHILDREN && kill((pid_t)child->pid, SIGTERM) != 0)
+        return errno;
+    return 0;
+}
+
+/** Retain more than 256 reports and clean up the last live descendant. */
+static void test_many_reports(struct etude_exec *ex, int posix_only)
+{
+    struct want w = {"many", "many", NULL, LONG_GRACE, 0, EXITED, 0, EXITED, 0, CONFIRMED};
+    const struct etude_exec_result *r;
+    struct etude_exec_spec s;
+    struct attempt a;
+    long pid;
+
+    memset(&a, 0, sizeof(a));
+    a.w = w;
+    a.w.token = posix_only ? "many-posix" : "many-native";
+    spec_for(&s, &a, posix_only);
+    s.child = end_reported;
+    reports_seen = 0;
+    CHECK(etude_exec_start(ex, &s, &a.p) == 0, a.w.token);
+    if (a.p == NULL)
+        return;
+    while (etude_exec_wait(ex, -1) != a.p) {
+    }
+    a.done = 1;
+    check_attempt(&a);
+    check_gone(&a);
+    r = etude_proc_result(a.p);
+    CHECK(reports_seen == REPORTED_CHILDREN + 1, a.w.token);
+    CHECK(r->children == REPORTED_CHILDREN + 1 && r->foreign == 0, a.w.token);
+    pid = printed_pid(r, a.w.token);
+    if (pid > 0 && r->cleanup != CONFIRMED)
+        kill((pid_t)pid, SIGKILL);
+    etude_proc_free(a.p);
+}
 
 /** Check the processor time and memory of the `burn` case. */
 static void check_usage(const struct attempt *a, enum etude_quality cpu_quality)
@@ -1212,6 +1281,8 @@ int main(int argc, char **argv)
     test_proc_reads();
     test_output_files(ex);
     test_concurrent(ex);
+    test_many_reports(ex, 0);
+    test_many_reports(ex, 1);
     test_posix_only(ex, 1);
     test_reaper(ex);
     test_unrun(ex);

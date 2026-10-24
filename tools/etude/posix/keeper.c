@@ -15,8 +15,8 @@
 
 #include "posix.h"
 
-/* The most descendants a keeper names at once. */
-#define KEEPER_MAX 256
+/* The number of orphaned children read in one query. */
+#define KEEPER_BATCH 256
 
 /* The interval at which a keeper looks again for processes it cannot be
  * told of: members of the case's group that are not its children. */
@@ -37,9 +37,9 @@ struct keeper {
     int held;         /* 1 once SIGSTOP is sent, 2 once the stop is seen */
     int resuming;     /* SIGCONT sent after a stop seen; not yet seen to act */
     uint64_t kill_at; /* when a cancellation sends SIGKILL; 0 for none */
-    struct etude_pid reported[KEEPER_MAX];
-    int nreported;
-    int lost_reports; /* reported descendants beyond KEEPER_MAX */
+    struct etude_pid *reported;
+    size_t nreported, capacity;
+    int lost_reports; /* a reported identity could not be allocated */
 };
 
 /* The write end of the pipe that SIGCHLD wakes the keeper through. */
@@ -143,6 +143,31 @@ static int reported_runs(const struct etude_pid *r)
     return now.start == r->start;
 }
 
+/** Keep each reported identity until cleanup, growing the array as needed. */
+static void report_child(struct keeper *kp, const struct keeper_msg *m)
+{
+    struct etude_pid *ids;
+    size_t capacity;
+
+    if (kp->nreported == kp->capacity) {
+        if (kp->capacity > SIZE_MAX / 2 / sizeof(*ids)) {
+            kp->lost_reports = 1;
+            return;
+        }
+        capacity = kp->capacity ? kp->capacity * 2 : 32;
+        ids = realloc(kp->reported, capacity * sizeof(*ids));
+        if (ids == NULL) {
+            kp->lost_reports = 1;
+            return;
+        }
+        kp->reported = ids;
+        kp->capacity = capacity;
+    }
+    kp->reported[kp->nreported].pid = (long)m->a;
+    kp->reported[kp->nreported].start = (uint64_t)m->b;
+    kp->reported[kp->nreported++].start_known = 1;
+}
+
 /**
  * Send `sig` to every process of the case the keeper knows of: the case's
  * group, each reported descendant still the same process, and, where the
@@ -150,16 +175,17 @@ static int reported_runs(const struct etude_pid *r)
  */
 static void signal_all(struct keeper *kp, int sig)
 {
-    long kids[KEEPER_MAX];
+    long kids[KEEPER_BATCH];
     int i, n;
+    size_t j;
 
     kill(-kp->pid, sig);
-    for (i = 0; i < kp->nreported; i++)
-        if (reported_runs(&kp->reported[i]))
-            kill((pid_t)kp->reported[i].pid, sig);
+    for (j = 0; j < kp->nreported; j++)
+        if (reported_runs(&kp->reported[j]))
+            kill((pid_t)kp->reported[j].pid, sig);
     if (!kp->reaper)
         return;
-    n = posix_children(kids, KEEPER_MAX);
+    n = posix_children(kids, KEEPER_BATCH);
     for (i = 0; i < n; i++) {
         kill((pid_t)kids[i], sig);
         kill((pid_t)-kids[i], sig);
@@ -172,7 +198,7 @@ static void signal_all(struct keeper *kp, int sig)
  */
 static int anything_left(struct keeper *kp)
 {
-    int i;
+    size_t i;
 
     reap(kp);
     if (kp->alive || kill(-kp->pid, 0) == 0 || errno != ESRCH)
@@ -373,12 +399,8 @@ static void keeper_command(struct keeper *kp)
         signal_all(kp, SIGCONT);
     } else if (m.type == KEEP_STOP || m.type == KEEP_CONT) {
         keeper_hold(kp, m.type);
-    } else if (m.type == KEEP_CHILD && kp->nreported < KEEPER_MAX) {
-        kp->reported[kp->nreported].pid = (long)m.a;
-        kp->reported[kp->nreported].start = (uint64_t)m.b;
-        kp->reported[kp->nreported++].start_known = 1;
     } else if (m.type == KEEP_CHILD) {
-        kp->lost_reports = 1;
+        report_child(kp, &m);
     } else if (m.type == KEEP_CLEAN && !kp->alive) {
         keeper_finish(kp);
     }
