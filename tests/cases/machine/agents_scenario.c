@@ -30,10 +30,11 @@ static void action(struct agent_case *s, const char *verb, const char *assertion
     int ok = 0;
     if (net_ok(&s->u)) {
         if (!strncmp(etude_case_id(s->u.c), "machine.agentsaccept.", 21))
-            ok = agent_accept_action(&s->u, s->work, s->row, verb);
+            ok = agent_accept_action(&s->u, s->work, s->row, verb, s->root_key, s->test_key);
         else
             ok = agent_native_action(&s->u, &s->b, s->work, s->row, verb,
-                                     !strncmp(etude_case_id(s->u.c), "machine.fakeapi.", 16));
+                                     !strncmp(etude_case_id(s->u.c), "machine.fakeapi.", 16),
+                                     s->test_key);
     }
     if (!ok)
         net_fail(&s->u, "%s failed; see its output", verb);

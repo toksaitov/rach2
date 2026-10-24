@@ -915,7 +915,8 @@ static int finish(struct acceptance *s)
     s->screen = NULL;
     return ok;
 }
-int agent_accept_action(struct net_case *u, const char *work, const char *agent, const char *verb)
+int agent_accept_action(struct net_case *u, const char *work, const char *agent, const char *verb,
+                        const char *root_key, const char *test_key)
 {
     struct acceptance *s = &state;
     int ok;
@@ -930,8 +931,8 @@ int agent_accept_action(struct net_case *u, const char *work, const char *agent,
         s->u = u;
         snprintf(s->port, sizeof(s->port), "%u", etude_port(u->c, 0));
         snprintf(s->target, sizeof(s->target), "accept:%s", agent);
-        net_key(u, "demo-key", s->root_key, sizeof(s->root_key));
-        net_key(u, "test-key", s->key, sizeof(s->key));
+        snprintf(s->root_key, sizeof(s->root_key), "%s", root_key);
+        snprintf(s->key, sizeof(s->key), "%s", test_key);
         s->model_selected = strcmp(agent, "codex") != 0;
         s->loading = "";
         s->after_cancel = "";

@@ -9,7 +9,7 @@
 struct row {
     struct net_case *u;
     struct net_boot *b;
-    const char *work, *name;
+    const char *work, *name, *test_key;
     char assets[4096], script[4096], version[100], package[100], verifier[100];
     char hosts[32][256];
     unsigned nhosts, sequence;
@@ -205,7 +205,7 @@ static int prepare(struct row *s)
 }
 static int setup(struct row *s)
 {
-    char password[128], ca[4096], line[16384], key[4096];
+    char password[128], ca[4096], line[16384];
     size_t used;
     unsigned i;
     struct net_run r;
@@ -240,8 +240,7 @@ static int setup(struct row *s)
             (int)(sizeof(line) - used) ||
         !run(s, line, "api-hosts"))
         return 0;
-    net_key(s->u, "test-key", key, sizeof(key));
-    if (!put(s, key, "/tmp/agents/test.key", "0600"))
+    if (!put(s, s->test_key, "/tmp/agents/test.key", "0600"))
         return 0;
     if (!shell(s,
                "ssh -F /dev/null -i /tmp/agents/test.key -o StrictHostKeyChecking=no "
@@ -674,7 +673,7 @@ static int curl_case(struct row *s)
     }
 }
 int agent_native_action(struct net_case *u, struct net_boot *b, const char *work, const char *name,
-                        const char *verb, int fake)
+                        const char *verb, int fake, const char *test_key)
 {
     struct row s;
     memset(&s, 0, sizeof(s));
@@ -683,6 +682,7 @@ int agent_native_action(struct net_case *u, struct net_boot *b, const char *work
     s.work = work;
     s.name = name;
     s.fake = fake;
+    s.test_key = test_key;
     if (!path(s.assets, sizeof(s.assets), "%s/assets", work))
         return 0;
     if (!strcmp(verb, "prepare"))
