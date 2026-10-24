@@ -112,6 +112,14 @@ static int input_channel(int *writer, int *original)
 }
 #endif
 
+static void require_complete_output(struct etude_exec_result *r)
+{
+    if (r->out.total != r->out.kept || r->err.total != r->err.kept) {
+        r->output_error = EOVERFLOW;
+        fputs("etude authority: owned output exceeded its retained bound\n", stderr);
+    }
+}
+
 int authority_run_command(const struct authority_run *run, struct etude_exec_result *result)
 {
     struct etude_pid parent;
@@ -166,10 +174,7 @@ int authority_run_command(const struct authority_run *run, struct etude_exec_res
     }
     *result = *etude_proc_result(child);
     result->out.data = result->err.data = NULL;
-    if (result->out.total != result->out.kept || result->err.total != result->err.kept) {
-        result->output_error = EOVERFLOW;
-        fputs("etude authority: owned output exceeded its retained bound\n", stderr);
-    }
+    require_complete_output(result);
     if (receipt(run, result, &start))
         goto done;
     if (result->cleanup == ETUDE_CLEANUP_CONFIRMED && !result->output_error &&
