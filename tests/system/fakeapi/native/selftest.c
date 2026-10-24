@@ -5,6 +5,7 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../../../host/compat/fixdir_host.c"
 struct wire {
     struct buffer out;
     const unsigned char *in;
@@ -583,11 +584,45 @@ static void stop_test(void)
     stopped = 0;
 }
 #endif
+/** Write an owned audit input, closing it on every path. */
+static int audit_write(const char *path, const char *text)
+{
+    FILE *file = fopen(path, "wb");
+    int ok;
+    if (!file)
+        return 0;
+    ok = fputs(text, file) >= 0;
+    return fclose(file) == 0 && ok;
+}
+
+/** Exercise the file audit with an offline row and missing API exchanges. */
+static void audit_test(void)
+{
+    const char *script = fix_path("script.json"), *record_path = fix_path("record.jsonl");
+    const char *bad[] = {"{\"unexpected\":true}\n",
+                         "{\"method\":\"GET\",\"path\":\"/v1/responses\",\"step\":1}\n"};
+    size_t i;
+
+    check(audit_write(script, "{\"steps\":[]}\n") && audit_write(record_path, ""),
+          "offline audit inputs are written");
+    check(!verify_record(script, record_path, "codex", "test"),
+          "Codex startup accepts its declared empty exchange");
+    check(verify_record(script, record_path, "codex-exec", "test") != 0 &&
+              verify_record(script, record_path, "codex-api", "test") != 0,
+          "Codex API workloads still require their actual WebSocket exchange");
+    for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        check(audit_write(record_path, bad[i]), "invalid offline audit record writes");
+        check(verify_record(script, record_path, "codex", "test") != 0,
+              "offline startup rejects unexpected entries and undeclared requests");
+    }
+}
+
 int main(void)
 {
 #ifndef _WIN32
     stop_test();
 #endif
+    audit_test();
     parser();
     selection();
     literal();
@@ -597,7 +632,9 @@ int main(void)
     held_test();
     websocket_test();
     http_test();
-    if (!failures)
+    if (!failures) {
+        fix_passed();
         puts("fakeapi-test: PASS");
+    }
     return failures ? 1 : 0;
 }

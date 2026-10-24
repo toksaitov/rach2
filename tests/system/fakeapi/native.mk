@@ -36,7 +36,8 @@ build/tests/cases/gnu/sntpserver: tests/system/sntpserver.c $(FAKEAPI_NATIVE)/pl
 	$(FAKEAPI_LINK) $(filter %.c,$^) $(FAKEAPI_LIBS)
 
 # The native protocol regression is a prepared program, with no interpreter.
-build/tests/system/fakeapi_test: $(FAKEAPI_NATIVE)/selftest.c $(filter-out $(FAKEAPI_NATIVE)/server.c,$(FAKEAPI_SRC)) $(FAKEAPI_HDR) $(FAKEAPI_NATIVE)/server.c $(FAKEAPI_SSL)/ready
+build/tests/system/fakeapi_test: $(FAKEAPI_NATIVE)/selftest.c $(filter-out $(FAKEAPI_NATIVE)/server.c,$(FAKEAPI_SRC)) $(FAKEAPI_HDR) $(FAKEAPI_NATIVE)/server.c $(FAKEAPI_SSL)/ready \
+    tests/host/compat/fixdir_host.c tests/host/compat/fixdir_host.h tests/host/compat/tree_host.h
 	@mkdir -p $(@D)
 	$(FAKEAPI_LINK) -I$(FAKEAPI_SSL)/include \
 	    $(FAKEAPI_NATIVE)/selftest.c $(filter-out $(FAKEAPI_NATIVE)/server.c,$(FAKEAPI_SRC)) \

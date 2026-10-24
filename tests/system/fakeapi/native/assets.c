@@ -266,7 +266,7 @@ static int audit_metadata(struct audit *a, const char *version)
 {
     const char *row = a->row;
     const struct value *e, *entries = a->entries;
-    if (!strncmp(row, "codex", 5)) {
+    if (!strncmp(row, "codex-", 6)) {
         for (e = first(entries); e; e = e->next)
             if (get(e, "method") && number(e, "step", 0) == 1)
                 a->socket_n = (unsigned)number(e, "n", 0);
@@ -341,7 +341,7 @@ static int audit_request(struct audit *a, const struct value *e)
 static int audit_socket(struct audit *a, const struct value *e)
 {
     const char *row = a->row;
-    if (get(e, "received") && number(e, "n", 0) == a->socket_n && !strncmp(row, "codex", 5)) {
+    if (get(e, "received") && number(e, "n", 0) == a->socket_n && !strncmp(row, "codex-", 6)) {
         struct value *body = parse(field(e, "received"));
         if (!body || strcmp(field(body, "type"), "response.create") ||
             flag(body, "generate", 1) != (a->turns != 0)) {
@@ -351,7 +351,7 @@ static int audit_socket(struct audit *a, const struct value *e)
         a->turns++;
         destroy(body);
     }
-    if (!strncmp(row, "codex", 5) && number(e, "n", 0) == a->socket_n && get(e, "sent_close")) {
+    if (!strncmp(row, "codex-", 6) && number(e, "n", 0) == a->socket_n && get(e, "sent_close")) {
         if (number(e, "sent_close", 0) != 1000)
             return 0;
         a->closes++;
@@ -375,7 +375,7 @@ static int audit_complete(struct audit *a)
         if (!flag(step, "repeat", 0) && a->seen[n] != 1)
             return 0;
     }
-    if (!strncmp(row, "codex", 5) && (a->turns != 3 || a->closes != 1))
+    if (!strncmp(row, "codex-", 6) && (a->turns != 3 || a->closes != 1))
         return 0;
     return !(a->requests == 0 && steps->child);
 }
