@@ -1039,6 +1039,22 @@ static void test_budget(void)
 
 /* ---- Width and loads. ---- */
 
+/** Keep each width attempt's actual result beside its retained history. */
+static void width_result(const char *run_id, const struct etude_repeat_result *r)
+{
+    printf("etude-repeat-test: %s: outcome=%d items=%lu attempts=%lu cleanup=%d\n", run_id,
+           r->outcome, (unsigned long)r->nitems, (unsigned long)r->nattempts, r->cleanup);
+    for (size_t i = 0; i < r->nattempts; i++) {
+        const struct etude_repeat_attempt *a = &r->attempts[i];
+        printf("etude-repeat-test: %s: item=%lu try=%u outcome=%d end=%d value=%d cleanup=%d "
+               "start=%llu end=%llu record=%s reason=%s disruption=%s\n",
+               a->attempt_id, (unsigned long)a->item, a->try, a->outcome, a->end, a->value,
+               a->cleanup, (unsigned long long)a->started_us, (unsigned long long)a->ended_us,
+               a->record_id, a->reason, a->disruption);
+    }
+    printf("etude-repeat-test: history: %s/%s.jsonl\n", fix_dir(), run_id);
+}
+
 /**
  * Two cases meet at a FIFO: two at a time both pass; one at a time each
  * runs out of its gap, and nothing is retried that was not asked for.
@@ -1059,12 +1075,20 @@ static void test_width(void)
     spec.ncases = 2;
     fresh_shared();
     CHECK(run("width-2", &spec, CAP, 3, load_argv, &r) == 0, "width");
+    width_result("width-2", &r);
     CHECK(r.outcome == ETUDE_REPEAT_PASS && r.nattempts == 2, "width");
+    CHECK(r.cleanup == ETUDE_CLEANUP_CONFIRMED, "width");
+    for (i = 0; i < r.nattempts; i++)
+        CHECK(r.attempts[i].outcome == ETUDE_REPEAT_PASS &&
+                  r.attempts[i].cleanup == ETUDE_CLEANUP_CONFIRMED,
+              "width");
     etude_repeat_result_free(&r);
     spec.width = 1;
     fresh_shared();
     CHECK(run("width-1", &spec, CAP, 3, load_argv, &r) == 0, "width");
+    width_result("width-1", &r);
     CHECK(r.outcome == ETUDE_REPEAT_INCOMPLETE && r.nattempts == 2, "width");
+    CHECK(r.cleanup == ETUDE_CLEANUP_CONFIRMED, "width");
     for (i = 0; i < r.nattempts; i++)
         CHECK(r.attempts[i].outcome == ETUDE_REPEAT_INCOMPLETE &&
                   strstr(r.attempts[i].reason, "gap bound") != NULL &&
