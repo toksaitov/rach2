@@ -119,7 +119,7 @@ class Route:
         # Re-read accepted jobs after BOTH policies are disabled. Any newly
         # accepted ordinary job prevents the grant rather than being ignored.
         checked = self.remote('facts', label='facts-grant')
-        self.local('physical')
+        self.local('physical', native_path(self.out / 'physical-grant.json'))
         facts = json.loads((windows / 'facts.json').read_text())
         endpoints = []
         for name, directory in (('linux', linux), ('windows', windows)):
@@ -141,7 +141,9 @@ class Route:
     def produce(self):
         before = self.clock('producer-start.json')
         bundle = self.work / 'candidate.bundle'
-        command(['git', '-C', self.tree, 'bundle', 'create', bundle, self.args.commit])
+        command(['git', '-C', self.tree, 'bundle', 'create', bundle, 'HEAD'])
+        head = subprocess.check_output(['git', 'bundle', 'list-heads', bundle, 'HEAD'], text=True).split()
+        require(head == [self.args.commit, 'HEAD'], 'candidate changed during source transfer')
         produced = self.remote('produce', bundle)
         after = self.clock('producer-end.json')
         metadata = json.loads((produced / 'producer.json').read_text())

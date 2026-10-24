@@ -271,7 +271,8 @@ int etude_authority_reopen(const struct etude_authority_phase *p, struct etude_a
 }
 
 
-int etude_authority_physical(const struct etude_authority_phase *p, int release)
+int etude_authority_physical(const struct etude_authority_phase *p, int release,
+                              struct etude_reading *grant)
 {
     struct etude_authority *a = binding_open(1);
     if (!a)
@@ -297,6 +298,8 @@ int etude_authority_physical(const struct etude_authority_phase *p, int release)
         error = access(a->binding.physical_block, F_OK) == 0 || errno != ENOENT ||
                 authority_state_read(&a->binding, &a->state) || strcmp(a->state.phase, "blocked") ||
                 strcmp(a->state.run, p->run_id) || strcmp(a->state.nonce, p->nonce);
+        if (!error && (!grant || etude_history_now(grant)))
+            error = 1;
         if (!error)
             error = authority_publish(a->binding.physical_block, expected, (size_t)n, 0);
     }

@@ -66,7 +66,7 @@ def main(argv):
         os.environ['ETUDE_ROUTINE_COMPLETION_LOCATOR'] = out + '/routine.completion.json'
         # WSLENV passes only fixed configuration and the same current commit.
         names = ['ETUDE_ROUTINE_ROUTE', 'ETUDE_ROUTINE_COMMIT', 'ETUDE_ROUTINE_COMPLETION_LOCATOR',
-                 'GITHUB_RUN_ID', 'RUNNER_NAME']
+                 'GITHUB_RUN_ID', 'RUNNER_NAME', 'ETUDE_ROUTINE_INPUT']
         os.environ['WSLENV'] = ':'.join(filter(None, [os.environ.get('WSLENV', ''), *names]))
         native_script = native_tree + '/tools/ci/routine_entry.py'
         child = [physical['etude'], 'authority', 'helper', physical['python'], native_script,

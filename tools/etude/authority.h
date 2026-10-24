@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "include/etude/exec.h"
+#include "include/etude/history.h"
 
 struct etude_ledger_res;
 struct etude_authority;
@@ -31,6 +32,7 @@ int etude_authority_restore(struct etude_authority *authority);
 int etude_authority_reopen(const struct etude_authority_phase *phase,
                             struct etude_authority **authority);
 int etude_authority_main(int argc, char **argv);
-int etude_authority_physical(const struct etude_authority_phase *phase, int release);
+int etude_authority_physical(const struct etude_authority_phase *phase, int release,
+                              struct etude_reading *grant);
 
 #endif

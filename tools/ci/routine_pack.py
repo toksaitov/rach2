@@ -21,17 +21,35 @@ def pack(out, roots=()):
                     digest, size = file_hash(path), path.stat().st_size
                     known.setdefault((digest, size), path)
     pending = []
-    for name in ('routine.grant.json', 'routine.upstream.json'):
+    for name in ('routine.grant.json', 'routine.upstream.json', 'routine.completion.json'):
         if (out / name).is_file():
             pending.append((out / name).read_bytes())
+    history = out / 'history'
+    if history.is_dir():
+        pending += [path.read_bytes() for path in sorted(history.iterdir())
+                    if path.is_file() and not path.is_symlink()]
     seen = set()
     while pending:
         data = pending.pop()
         try:
-            document = json.loads(data)
+            documents = [json.loads(data)]
         except (ValueError, UnicodeDecodeError):
-            continue
-        for proof in references(document):
+            documents = []
+            for line in data.splitlines():
+                try:
+                    documents.append(json.loads(line))
+                except (ValueError, UnicodeDecodeError):
+                    continue
+        proofs = []
+        for document in documents:
+            if isinstance(document, dict) and document.get('kind') in ('plan', 'run'):
+                body = document.get('data', {})
+                document = body.get('artifacts', []) if document['kind'] == 'plan' else body.get('load')
+            elif isinstance(document, dict) and document.get('format') == 'etude-preparation-nodes':
+                document = {key: document.get(key) for key in
+                            ('routine_grant', 'upstream_preparation', 'preparation')}
+            proofs += list(references(document))
+        for proof in proofs:
             sha, size, locations = (proof.get(name) for name in ('sha256', 'size_bytes', 'locations'))
             if (not isinstance(sha, str) or len(sha) != 64 or
                     any(c not in '0123456789abcdef' for c in sha) or type(size) is not int or
@@ -42,6 +60,18 @@ def pack(out, roots=()):
             if key in seen:
                 continue
             candidates = [filesystem_path(value) for value in proof['locations']]
+            candidates += [target / sha, out / 'store/objects' / sha]
+            # Cross-OS proof locators remain unchanged. Only this known shared
+            # OUT is mapped, then every selected byte is checked by hash/size.
+            request = out / 'routine.request.json'
+            if request.is_file():
+                original = json.loads(request.read_text()).get('out')
+                if isinstance(original, str):
+                    for value in proof['locations']:
+                        if value.startswith(original.rstrip('/') + '/'):
+                            candidates.append(out / value[len(original.rstrip('/')) + 1:])
+            candidates += [root / Path(value.replace('\\', '/')).name
+                           for root in (out, out / 'history') for value in proof['locations']]
             candidates += [known[key]] if key in known else []
             source = next((path for path in candidates if path.is_file() and not path.is_symlink()
                            and (file_hash(path), path.stat().st_size) == key), None)
@@ -60,3 +90,13 @@ def pack(out, roots=()):
             seen.add(key)
             pending.append(destination.read_bytes())
     return target
+
+
+if __name__ == '__main__':
+    try:
+        if len(sys.argv) != 2:
+            raise ValueError('expected the retained routine OUT directory')
+        pack(sys.argv[1])
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        print('routine proof pack: ' + str(error), file=sys.stderr)
+        raise SystemExit(2)

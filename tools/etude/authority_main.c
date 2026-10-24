@@ -33,7 +33,7 @@ static int capability(struct etude_authority_phase *p, const char *run, const ch
         for (size_t i = 0; i < sizeof input_nonce; i++) {
             char byte;
             if (read(STDIN_FILENO, &byte, 1) != 1 ||
-                (i < 64 ? !strchr("0123456789abcdef", byte) : byte != '\n'))
+                (i < 64 ? !byte || !strchr("0123456789abcdef", byte) : byte != '\n'))
                 return -1;
             input_nonce[i] = i == 64 ? 0 : byte;
         }
@@ -92,16 +92,32 @@ failed:
 
 static int command_switch(int argc, char **argv)
 {
-    if (argc != 4 && !(argc == 5 && !strcmp(argv[1], "permit")))
+    if (argc != 4 && !(argc == 5 && (!strcmp(argv[1], "permit") || !strcmp(argv[1], "physical"))))
         return 2;
     struct etude_authority_phase phase;
     struct etude_authority *authority = NULL;
     if (capability(&phase, argv[2], argv[3]))
         return 125;
     int status;
-    if (!strcmp(argv[1], "physical"))
-        status = etude_authority_physical(&phase, 0);
-    else if (!strcmp(argv[1], "freeze"))
+    if (!strcmp(argv[1], "physical")) {
+        if (argc != 5)
+            return 2;
+        struct etude_reading grant;
+        struct etude_context_clock clock;
+        status = etude_context_clock(&clock) || etude_authority_physical(&phase, 0, &grant);
+        if (!status) {
+            struct jbuf b = {0};
+            jbuf_puts(&b, "{\"machine_id\":");
+            routine_quote(&b, clock.machine_id);
+            jbuf_puts(&b, ",\"boot_id\":");
+            routine_quote(&b, clock.boot_id);
+            jbuf_puts(&b, ",\"reading\":");
+            routine_reading(&b, &grant);
+            jbuf_puts(&b, "}\n");
+            status = routine_create(argv[4], &b);
+            jbuf_free(&b);
+        }
+    } else if (!strcmp(argv[1], "freeze"))
         status = etude_authority_freeze(&phase, &authority);
     else {
         status = etude_authority_reopen(&phase, &authority);

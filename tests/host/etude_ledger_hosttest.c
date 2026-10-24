@@ -3,6 +3,8 @@
  * POSIX executor, this program run as the case's program, with
  * `--case MODE TOKEN ARG`, and as the workers whose death the test causes.
  *
+ * host-deps: tools/etude/history_collect.c
+ * host-deps: tools/etude/history_json.c
  * host-deps: tools/etude/authority.c tools/etude/authority_parse.c
  * host-deps: tools/etude/posix/authority_platform.c tools/etude/win/authority_platform.c
  * host-deps: tools/etude/ledger.c tools/etude/capture.c utils/sha256.c
@@ -952,6 +954,8 @@ static void test_workers(void)
 #endif
 }
 
+#include "compat/authority_fixture.c"
+
 int main(int argc, char **argv)
 {
     if (argc == 5 && strcmp(argv[1], "--case") == 0)
@@ -966,6 +970,7 @@ int main(int argc, char **argv)
     test_damaged();
     test_identities();
     test_workers();
+    test_authority();
     if (fails != 0)
         return 1;
     fix_passed();

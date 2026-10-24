@@ -125,7 +125,7 @@ ETUDE_WIN_FIXTURE_SRC = tools/etude/win/winfixture.c tools/etude/win/winexecfix.
                         tools/etude/win/wintoolfix.c tools/etude/win/winholdfix.c \
                         tools/etude/win/winportsfix.c tools/etude/win/wincollectionfix.c \
                         $(ETUDE_AUTHORITY_SRC) tools/etude/ledger.c tools/etude/watchdog.c tools/etude/supervise.c \
-                        tools/etude/history_json.c tools/etude/posix/qemu.c \
+                        tools/etude/history_json.c tools/etude/history_collect.c tools/etude/posix/qemu.c \
                         tools/etude/posix/store.c tools/etude/qemu_profile.c \
                         tools/etude/processor.c $(ETUDE_WIN_EXEC_SRC) utils/sha256.c \
                         tests/host/compat/output_sinks.c

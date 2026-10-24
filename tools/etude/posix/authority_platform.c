@@ -9,6 +9,11 @@
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <copyfile.h>
+#else
+#include <sys/xattr.h>
+#endif
 #include "../authority_platform.h"
 
 const char *authority_installed_binding(void)
@@ -84,6 +89,40 @@ void authority_gate_close(struct authority_gate *gate)
     gate->value = -1;
 }
 
+/* Replace policy bytes only after preserving the original access metadata.
+ * An unsupported or inaccessible attribute fails before publication. */
+static int copy_access(int original, int target)
+{
+#ifdef __APPLE__
+    return fcopyfile(original, target, NULL, COPYFILE_METADATA);
+#else
+    ssize_t size = flistxattr(original, NULL, 0);
+    if (size < 0)
+        return errno == ENOTSUP ? 0 : -1;
+    char *names = malloc((size_t)size + 1);
+    if (!names)
+        return -1;
+    int error = flistxattr(original, names, (size_t)size) != size;
+    for (ssize_t at = 0; !error && at < size;) {
+        const char *name = names + at;
+        size_t n = strnlen(name, (size_t)(size - at));
+        if (!n || n == (size_t)(size - at)) {
+            error = 1;
+            break;
+        }
+        ssize_t bytes = fgetxattr(original, name, NULL, 0);
+        void *value = bytes < 0 ? NULL : malloc((size_t)bytes + 1);
+        if (!value || fgetxattr(original, name, value, (size_t)bytes) != bytes ||
+            fsetxattr(target, name, value, (size_t)bytes, 0))
+            error = 1;
+        free(value);
+        at += (ssize_t)n + 1;
+    }
+    free(names);
+    return error ? -1 : 0;
+#endif
+}
+
 int authority_publish(const char *path, const void *data, size_t size, int private_file)
 {
     char temporary[4096];
@@ -107,6 +146,15 @@ int authority_publish(const char *path, const void *data, size_t size, int priva
         fchown(fd, previous.st_uid, previous.st_gid) ||
         fchmod(fd, private_file ? 0600 : previous.st_mode & 0777)))
         error = errno ? errno : EACCES;
+    if (existed && !error) {
+        int original = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+        struct stat actual;
+        if (original < 0 || fstat(original, &actual) || actual.st_dev != previous.st_dev ||
+            actual.st_ino != previous.st_ino || copy_access(original, fd))
+            error = errno ? errno : ESTALE;
+        if (original >= 0)
+            close(original);
+    }
     while (!error && at < size) {
         ssize_t wrote = write(fd, bytes + at, size - at);
         if (wrote < 0 && errno == EINTR)

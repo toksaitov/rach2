@@ -102,6 +102,9 @@ int routine_owner_open(struct etude_routine_owner *r, const char *route, const c
     return setenv("ETUDE_AUTHORITY_OWNER", id, 1);
 }
 
+static int physical_reading(const struct etude_routine_owner *r, const char *name,
+                            struct etude_reading *start);
+
 static int write_lease(struct etude_routine_owner *r)
 {
     char inputs[4096], output[4096];
@@ -141,7 +144,8 @@ int routine_owner_grant(struct etude_routine_owner *r)
         return -1;
     int error = strcmp(authority->state.phase, "blocked") ||
                 authority->state.owner.pid != r->owner.pid ||
-                authority->state.owner.start != r->owner.start || etude_history_now(&r->start);
+                authority->state.owner.start != r->owner.start ||
+                physical_reading(r, "physical-grant.json", &r->start);
     etude_authority_close(authority);
     if (error || write_lease(r))
         return -1;
@@ -248,11 +252,12 @@ static int phase_result(struct jbuf *b, const struct etude_exec_result *result)
     return result->cleanup != ETUDE_CLEANUP_CONFIRMED;
 }
 
-static int preparation_start(const struct etude_routine_owner *r, struct etude_reading *start)
+static int physical_reading(const struct etude_routine_owner *r, const char *name,
+                            struct etude_reading *start)
 {
     char file[4096];
     struct json *doc = NULL;
-    if (path(r, "routine-proofs-input/consumer-start.json", file) || routine_json(file, &doc))
+    if (path(r, name, file) || routine_json(file, &doc))
         return -1;
     const struct json *reading = json_member(doc, "reading");
     const char *machine = json_text(doc, "machine_id"), *boot = json_text(doc, "boot_id");
@@ -279,7 +284,7 @@ int routine_owner_phase(struct etude_routine_owner *r, const char *name,
         return 0;
     struct etude_reading end, actual_start = *start;
     if (etude_history_now(&end) || (!strcmp(name, "preparation") &&
-        preparation_start(r, &actual_start)))
+        physical_reading(r, "routine-proofs-input/consumer-start.json", &actual_start)))
         return -1;
     start = &actual_start;
     if (!strcmp(name, "collection")) {

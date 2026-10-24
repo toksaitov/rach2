@@ -665,10 +665,11 @@ static int sequence_close(struct sequence *s, DWORD status)
             (unsigned long)s->error, s->cancelled, result, cleanup_error ? "unknown" : "0",
             cleanup_error ? "unconfirmed" : "confirmed");
     if (s->routed && s->restored && !cleanup_error) {
-        int terminal = routine_owner_complete(&s->routine, result, 1);
         struct etude_authority_phase phase = {.run_id = s->run, .commit = s->routine.commit,
             .nonce = getenv("ETUDE_AUTHORITY_NONCE"), .owner = s->routine.owner};
-        if (etude_authority_physical(&phase, 1) || (!result && terminal))
+        if (etude_authority_physical(&phase, 1, NULL))
+            result = 125;
+        else if (routine_owner_complete(&s->routine, result, 1) && !result)
             result = 125;
     }
     int receipt_failed = fclose(record) != 0;
