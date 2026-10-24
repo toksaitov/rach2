@@ -276,3 +276,7 @@ The first complete collection reached the grouped-build fixture, but its prepare
 ## GNU host checks selected the musl make program
 
 The GNU check driver inherited a PATH that selected /bin/make, the musl pdpmake, before the GNU make required by its preparation fixtures. The complete collection reported unrecognized options. Issue #1004 gives the driver the GNU root's normal /usr/local/bin and /usr/bin precedence before /bin. This does not change the collection host's prepared executable path. The same issue records the separate Rach2 preparation-clock identity repair. LeakSanitizer remains enabled; its rejected clone options are tracked in #1005.
+
+## Follow-up assignments again reached idle helpers
+
+At the 06:45 process check the coordinator found that the serial and runner helpers had completed their first repairs, but subsequent messages had not restarted them for the clock and stale-expectation repairs. The coordinator had again treated message delivery as an active assignment. Explicit follow-up dispatch started both tasks immediately; several minutes were lost. Before recording an assignment, inspect the helper state and use a follow-up operation when it has completed, then confirm it is running. A plain message is only for a helper already running.
