@@ -21,7 +21,7 @@ static int integer(const struct eh_json *v, const char *key, uint64_t *out)
 }
 
 /* A location is a hint. Its bytes must satisfy both the size and digest. */
-static char *blob(const struct eh_json *ref, size_t *length)
+char *cmp_blob_bytes(const struct eh_json *ref, size_t *length)
 {
     uint64_t size;
     const char *expected = cmp_text(ref, "sha256");
@@ -55,7 +55,7 @@ static int observation(const struct eh_json *v, const char *run, uint64_t start,
     if (!v || !yes(eh_json_get(v, "summary"), "comparison_available"))
         return 0;
     size_t size;
-    char *bytes = blob(eh_json_get(v, "trace"), &size);
+    char *bytes = cmp_blob_bytes(eh_json_get(v, "trace"), &size);
     if (!bytes)
         return 0;
     char *summary = etude_observe_import(bytes, size, run, start, end);
@@ -73,7 +73,7 @@ void cmp_check_load(struct cmp_record *run)
     const struct eh_json *ref = eh_json_get(run->data, "load");
     const struct eh_json *time = eh_json_get(run->data, "time");
     size_t size;
-    char *bytes = blob(ref, &size);
+    char *bytes = cmp_blob_bytes(ref, &size);
     struct eh_json *load = bytes && !memchr(bytes, 0, size) ? eh_json_parse(bytes) : NULL;
     uint64_t start = etude_observe_utc(cmp_text(time, "start_utc"));
     uint64_t end = etude_observe_utc(cmp_text(time, "end_utc")), runtime;

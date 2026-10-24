@@ -131,6 +131,8 @@ void cmp_printf(struct cmp_text *text, const char *format, ...);
 void cmp_item_key(const struct eh_json *plan, const struct eh_json *item, struct cmp_key *key);
 void cmp_check_load(struct cmp_record *run);
 int cmp_read_file(const char *path, size_t limit, char **bytes, size_t *length);
+/* Read a blob hint only after verifying its bounded size and SHA-256. */
+char *cmp_blob_bytes(const struct eh_json *ref, size_t *length);
 int cmp_store(const char *store, const char *bytes, size_t length, char *path, size_t size,
               char hex[65]);
 int cmp_report(const struct cmp_history *history, const struct cmp_options *options,
