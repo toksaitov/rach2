@@ -16,5 +16,5 @@ LIBS =
 all: $(OUT)/etude$(EXE)
 
 $(OUT)/etude$(EXE): $(SRC)
-	$(CC) $(CFLAGS) $(FLAGS) -Itools/etude/include -Itools/etude -Itools/etude/posix -Iutils \
+	$(CC) $(CFLAGS) $(FLAGS) -Itools/etude/include -Itools/etude -Itools/etude/posix -Itools/etude/guest -Iutils \
 	    -o $@ $(SRC) $(LIBS)
