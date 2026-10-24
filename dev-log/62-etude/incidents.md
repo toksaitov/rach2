@@ -629,3 +629,7 @@ The native CI fixture installed a comment-only, non-executable `tests/run`, whil
 ## USB diagnostics counted as measurements (#1059)
 
 The Linux run on 2026-10-24 produced eight valid latency measurements on both architectures, but the native checker also parsed lines beginning `usb: latency:` that described waiting for a read. It rejected those diagnostics for missing measurement fields. The checker now selects the same `usb: latency: msi [01],` records as the original checker. The native fixture surrounds a valid measurement with diagnostics and still rejects diagnostics without a measurement. Field, count, interrupt and work bounds are unchanged.
+
+## The process-link probe repeated its first assertion (#1062)
+
+The Linux run on 2026-10-24 completed all 27 process-link checks on both architectures, but its report repeated `fd-directory` and omitted `cleanup`. The first check reported its name directly without advancing the planned assertion cursor. It now advances the cursor with `report_held`, as each later check does. The filesystem operations and their judgments are unchanged.

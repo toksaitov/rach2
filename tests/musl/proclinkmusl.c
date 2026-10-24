@@ -567,7 +567,7 @@ int main(int argc, char **argv)
     if (!is_dir("/proc/self/fd")) {
         return fail("/proc/self/fd is not a directory");
     }
-    report_pass("fd-directory");
+    report_held();
 
     mkdir(TOP, 0755);
     if (mount("none", TOP, "tmpfs", 0, NULL) != 0 || chmod(TOP, 0755) != 0 ||
