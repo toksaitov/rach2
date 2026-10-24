@@ -146,7 +146,7 @@ int etude_scenario(struct etude_case *c)
     native_count = h.reported;
     if (need_guest && etude_step(c, "products") == ETUDE_OK &&
         etude_boot(c, "products", NULL, &products, &end) == ETUDE_OK)
-        ready = 1;
+        ready = etude_step(c, "gnu") == ETUDE_OK;
     for (size_t i = 0; i < h.nchecks; i++) {
         struct check *check = &h.checks[i];
         if (check->selected)
@@ -154,8 +154,7 @@ int etude_scenario(struct etude_case *c)
         const char *backend = json_text(check->entry, "backend");
         if (!backend || strcmp(backend, "gnu"))
             continue;
-        int held = ready && etude_step(c, "gnu") == ETUDE_OK &&
-                   guest_check(products, group, check->id, arch);
+        int held = ready && guest_check(products, group, check->id, arch);
         etude_assert(c, check->id, held,
                      held ? "the GNU fixture passed every row"
                           : "the GNU fixture failed or did not complete");
