@@ -6,6 +6,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 static int extent(const char *source, uint64_t from, const char *target, uint64_t to, size_t bytes)
 {
     unsigned char data[65536];
@@ -72,6 +73,21 @@ static int initial(struct fixture *f, int cluster8, uint64_t *offset)
            extent(family_path(f, "good-env"), 0, family_path(f, "disk"), 1048576 + *offset, 1024) &&
            fx_text(family_path(f, "writes"), "");
 }
+/* The no-write witness must be a readable regular file with no bytes. */
+static int no_writes(struct fixture *f)
+{
+    FILE *fp = fopen(family_path(f, "writes"), "rb");
+    struct stat st;
+    int ok;
+
+    if (!fp)
+        return 0;
+    ok = fstat(fileno(fp), &st) == 0 && S_ISREG(st.st_mode) && st.st_size == 0 &&
+         fgetc(fp) == EOF && !ferror(fp);
+    if (fclose(fp) != 0)
+        ok = 0;
+    return ok;
+}
 static int geometry(struct fixture *f, int cluster8, int held[7])
 {
     uint64_t offset;
@@ -81,7 +97,7 @@ static int geometry(struct fixture *f, int cluster8, int held[7])
                          family_path(f, "saved/boot.img"), NULL};
     if (!initial(f, cluster8, &offset))
         return 0;
-    held[0] &= family_eval(f, "keep_recovery") && fx_empty(family_path(f, "writes"));
+    held[0] &= family_eval(f, "keep_recovery") && no_writes(f);
     memset(zeros, 0, sizeof(zeros));
     if (!fx_write(family_path(f, "zero-env"), zeros, sizeof(zeros), 0600) ||
         !extent(family_path(f, "zero-env"), 0, family_path(f, "disk"), 1048576 + offset, 1024))
@@ -109,8 +125,9 @@ static int geometry(struct fixture *f, int cluster8, int held[7])
                extent(family_path(f, "recovery.env"), 0, family_path(f, "expected-boot.img"),
                       offset, 1024) &&
                fx_same(family_path(f, "expected-boot.img"), family_path(f, "current-boot.img"));
-    fx_text(family_path(f, "writes"), "");
-    held[4] &= family_eval(f, "keep_recovery") && fx_empty(family_path(f, "writes"));
+    if (!fx_text(family_path(f, "writes"), ""))
+        return 0;
+    held[4] &= family_eval(f, "keep_recovery") && no_writes(f);
     if (!extent(family_path(f, "boot.original"), offset, family_path(f, "disk"), 1048576 + offset,
                 1024))
         return 0;

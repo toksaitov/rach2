@@ -783,3 +783,9 @@ The complete Linux collection found the same timestamp error in the separate lef
 ## Prerequisite fixture path lifetime, 2026-10-24
 
 The prerequisite controller retained its script and recipe paths in the rotating buffer that creates each row's fixture paths (#1075). The fifth row overwrote the script path with the temporary sudo marker; the three Windows rows then tried the same removed file. The controller now owns both path arrays through the entire loop. All eight exact-output checks and their installation and unchanged-state assertions remain. Paths retained across calls that reuse a rotating buffer must be copied into storage owned by their caller.
+
+## Grow boot no-write assertions used a directory predicate (#1073)
+
+Run 16 reported only the unchanged and retry-unchanged assertions failed in machine.grow.boot. Both FAT geometries had successful product commands, with prefix, environment and suffix reported unchanged. The torn repair, complete byte comparison, candidate repair and own-input refusal passed. The C controller called fx_empty on its regular writes file; that helper counts directory entries and returns false when opendir rejects a regular file. The old shell assertions checked file length instead.
+
+The controller now requires an existing, readable, empty regular write log, checks read and close errors, and refuses failure to clear the log before retry. The shared directory helper is unchanged. All product invocations, both FAT layouts and every existing assertion remain. The complete report and archived fixture entries are retained under build/tests/portable-batch/windows-final-preflight/physical-first-wsl/retry-16/new-failures-1442/machine.grow.boot.none.r0/evidence. No build or check was started while the whole run owned the testing PC.
