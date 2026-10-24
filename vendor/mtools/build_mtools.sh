@@ -24,6 +24,7 @@ tar xzf "$TARBALL" -C "$WORK"
 cd "$SRC"
 # musl has 64-bit file offsets on i686, whose long remains 32 bits.
 patch -p1 -F 0 --batch --forward < "$SCRIPT_DIR/offset64.patch"
+# Linux-musl needs block size without the unavailable Linux floppy headers.
 # Offset validation needs the whole block device, not mformat's -T length.
 patch -p1 -F 0 --batch --forward < "$SCRIPT_DIR/block-geometry.patch"
 ./configure --host="$HOST_TRIPLE" --without-x --disable-floppyd \

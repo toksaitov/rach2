@@ -80,7 +80,7 @@ static void first_line(struct lc *l, const char *name, char *buf, size_t size)
 /**
  * Run host tool or artifact `argv[0]` with its standard output kept as
  * evidence `output`, and say in `why` how it ended when not with status 0,
- * with the first line it printed.
+ * with its first stdout line, or stderr when stdout is empty.
  *
  * @return 1 when it exited 0; 0 otherwise, after which the scenario cannot
  *         go on when the library could not run it to its end.
@@ -89,7 +89,7 @@ static int host(struct lc *l, char *argv[], const char *output, char *why, size_
 {
     struct etude_termination end;
     enum etude_status st;
-    char said[120];
+    char said[120], error[256];
 
     if (!lc_ok(l))
         return 0;
@@ -102,6 +102,11 @@ static int host(struct lc *l, char *argv[], const char *output, char *why, size_
     if (end.end == ETUDE_END_EXITED && end.value == 0)
         return 1;
     first_line(l, output, said, sizeof(said));
+    if (said[0] == '\0') {
+        int n = snprintf(error, sizeof(error), "%s.err", output);
+        if (n > 0 && (size_t)n < sizeof(error))
+            first_line(l, error, said, sizeof(said));
+    }
     snprintf(why, size, "%s ended %s %d: %s", argv[0],
              end.end == ETUDE_END_EXITED ? "with status" : "by signal", end.value, said);
     return 0;
