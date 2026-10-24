@@ -5,7 +5,8 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
 output=$repo/build/vendor/host-openssl
 compiler=${FAKEAPI_CC:-cc}
-archive=$(sh "$repo/vendor/gnu/fetch.sh" --path openssl)
+# MSYS must translate the archive path for the native checksum program.
+archive=$(MSYS2_ARG_CONV_EXCL= sh "$repo/vendor/gnu/fetch.sh" --path openssl)
 case ${OS:-}:$(uname -s):$(uname -m) in
     Windows_NT:*|*:MINGW*:*|*:MSYS*:*) target=mingw64 ;;
     *:Darwin:arm64) target=darwin64-arm64-cc ;;

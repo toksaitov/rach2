@@ -23,11 +23,7 @@ SHA="$REPO/build/tools/verify/sha256"
 sha256_of()
 {
     make -s -C "$REPO" build/tools/verify/sha256 || return 1
-    sha_path=$1
-    case $(uname -s) in
-        MINGW*|MSYS*|UCRT*|CLANG*) sha_path=$(cygpath -am -- "$sha_path") ;;
-    esac
-    "$SHA" "$sha_path" | awk '{print $1}'
+    "$SHA" "$1" | awk '{print $1}'
 }
 
 # download URL FILE: write URL to FILE, trying up to three times. Every
