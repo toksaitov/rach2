@@ -89,8 +89,7 @@ static int attempt(struct etude_exec *ex, struct etude_exec_spec *spec, int merg
     if (r->end != ETUDE_END_EXITED || r->value != 0 || r->output_error != 0 ||
         r->cleanup != ETUDE_CLEANUP_CONFIRMED || r->out.kept != 17 || r->out.total != BYTES ||
         r->err.total != 9 || r->out.data == NULL || r->err.data == NULL ||
-        memcmp(r->out.data, "abcdefghijklmnopq", 17) != 0 ||
-        strcmp(r->err.data, "big done\n") != 0)
+        memcmp(r->out.data, "abcdefghijklmnopq", 17) != 0 || strcmp(r->err.data, "big done\n") != 0)
         goto done;
     out = contents(spec->stdout_path, &nout);
     if (!merged) {
@@ -104,23 +103,23 @@ static int attempt(struct etude_exec *ex, struct etude_exec_spec *spec, int merg
     }
 done:
     if (!ok) {
-        fprintf(stderr,
-                "output-sinks: result: end %d, value %d, output error %d, cleanup %d\n",
+        fprintf(stderr, "output-sinks: result: end %d, value %d, output error %d, cleanup %d\n",
                 (int)r->end, r->value, r->output_error, (int)r->cleanup);
         fprintf(stderr,
                 "output-sinks: predicates: exited %d, zero status %d, no output error %d, "
                 "cleanup confirmed %d, stdout kept %d, stdout total %d, stderr total %d, "
                 "stdout prefix %d, stderr marker %d\n",
                 r->end == ETUDE_END_EXITED, r->value == 0, r->output_error == 0,
-                r->cleanup == ETUDE_CLEANUP_CONFIRMED, r->out.kept == 17,
-                r->out.total == BYTES, r->err.total == 9,
+                r->cleanup == ETUDE_CLEANUP_CONFIRMED, r->out.kept == 17, r->out.total == BYTES,
+                r->err.total == 9,
                 r->out.data != NULL && r->out.kept >= 17 &&
                     memcmp(r->out.data, "abcdefghijklmnopq", 17) == 0,
                 r->err.data != NULL && strcmp(r->err.data, "big done\n") == 0);
         capture_detail("stdout", &r->out);
         capture_detail("stderr", &r->err);
-        fprintf(stderr, "output-sinks: files: merged %d, stdout read %d (%lu bytes), "
-                        "stderr read %d (%lu bytes)\n",
+        fprintf(stderr,
+                "output-sinks: files: merged %d, stdout read %d (%lu bytes), "
+                "stderr read %d (%lu bytes)\n",
                 merged, out != NULL, (unsigned long)nout, err != NULL, (unsigned long)nerr);
     }
     free(out);
@@ -182,8 +181,9 @@ done:
     if (ex != NULL)
         etude_exec_free(ex);
     if (!ok) {
-        fprintf(stderr, "output-sinks: %s: complete output, capture or file ownership differed "
-                        "(errno %d: %s)\n",
+        fprintf(stderr,
+                "output-sinks: %s: complete output, capture or file ownership differed "
+                "(errno %d: %s)\n",
                 stage, saved, strerror(saved));
         fprintf(stderr, "output-sinks: evidence: %s and %s\n", out, err);
     } else {

@@ -47,11 +47,9 @@ int host_sanitizer_source(const char *snapshot, char *source, size_t size)
         return -1;
     const char *native = json_text(record, "source");
     const char *digest = json_text(record, "sha256");
-    if (native && native[0] == '/' &&
-        digest && strlen(digest) == 64 && strlen(native) < size &&
-        realpath(native, resolved) && !strcmp(native, resolved) &&
-        !tool_digest(snapshot, saved) && !strcmp(saved, digest) &&
-        !tool_digest(native, actual) && !strcmp(actual, digest)) {
+    if (native && native[0] == '/' && digest && strlen(digest) == 64 && strlen(native) < size &&
+        realpath(native, resolved) && !strcmp(native, resolved) && !tool_digest(snapshot, saved) &&
+        !strcmp(saved, digest) && !tool_digest(native, actual) && !strcmp(actual, digest)) {
         strcpy(source, native);
         ok = 1;
     }
