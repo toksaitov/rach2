@@ -3,6 +3,7 @@
 #include "host_image.h"
 #include "host_build.h"
 #include "host_doom.h"
+#include "host_assets.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -109,17 +110,15 @@ static int execute(struct etude_case_machine *m, const char *const args[], const
 }
 static int prepare(struct etude_case *c, struct etude_case_machine *m)
 {
-    const char *archive = etude_artifact(c, "scripts-assets");
     const char *mkdir[] = {"/bin/mkdir", "-p", "/tmp/etude-host-scripts/tree", NULL};
     const char *untar[] = {"/bin/tar",
                            "-xf",
-                           "/tmp/etude-host-scripts/assets.tar",
+                           "/host-products/scripts-assets.tar",
                            "-C",
                            "/tmp/etude-host-scripts/tree",
                            NULL};
     const char *readable[] = {"/bin/chmod", "-R", "a+rX", "/tmp/etude-host-scripts/tree", NULL};
-    return archive && execute(m, mkdir, "products-workspace") &&
-           etude_guest_put(m, archive, "/tmp/etude-host-scripts/assets.tar", "0600") == ETUDE_OK &&
+    return host_assets_match(c, m) && execute(m, mkdir, "products-workspace") &&
            execute(m, untar, "products-assets") && execute(m, readable, "products-source-modes");
 }
 static int native(struct etude_case *c, const char *id)

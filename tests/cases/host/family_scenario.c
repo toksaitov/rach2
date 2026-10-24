@@ -1,6 +1,7 @@
 /* family_scenario.c: native ownership of one prepared product-family check. */
 #include "etude/scenario.h"
 #include "family_rows.h"
+#include "host_assets.h"
 /* The shared library supplies the selected architecture, including none. */
 extern const char *etude_case_architecture(const struct etude_case *c);
 #include <stdio.h>
@@ -15,13 +16,11 @@ static int execute(struct etude_case_machine *m, const char *const a[], const ch
 }
 static int prepare(struct etude_case *c, struct etude_case_machine *m)
 {
-    const char *archive = etude_artifact(c, "scripts-assets");
     const char *mkdir[] = {"/bin/mkdir", "-p", "/host-work/tree", NULL};
-    const char *untar[] = {"/bin/tar",        "-xf", "/host-work/assets.tar", "-C",
+    const char *untar[] = {"/bin/tar",        "-xf", "/host-products/scripts-assets.tar", "-C",
                            "/host-work/tree", NULL};
     const char *modes[] = {"/bin/chmod", "-R", "a+rX", "/host-work/tree", NULL};
-    return archive && execute(m, mkdir, "family-workspace") &&
-           etude_guest_put(m, archive, "/host-work/assets.tar", "0600") == ETUDE_OK &&
+    return host_assets_match(c, m) && execute(m, mkdir, "family-workspace") &&
            execute(m, untar, "family-assets") && execute(m, modes, "family-source-modes");
 }
 static int inputs(struct etude_case *c, struct etude_case_machine *m)
