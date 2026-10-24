@@ -804,8 +804,7 @@ static int stick_copy(struct acceptance *a, const char *source, const char *actu
     char name[180], snapshot[4096];
     char *copy[] = {"mcopy", "-n", "-i", snapshot, (char *)source, (char *)actual, NULL};
     snprintf(name, sizeof(name), "%s.stick.snapshot", a->prefix);
-    if (net_path(a->u, name, snapshot, sizeof(snapshot)) == NULL ||
-        !a->request->fat_bytes ||
+    if (net_path(a->u, name, snapshot, sizeof(snapshot)) == NULL || !a->request->fat_bytes ||
         case_copy_range(a->request->fat_image, a->request->fat_offset, a->request->fat_bytes,
                         snapshot, 0, 1) != 0)
         return 0;

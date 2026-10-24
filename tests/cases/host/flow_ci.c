@@ -1539,8 +1539,7 @@ static int prepare(struct fixture *f)
         !flow_put(f, "tree/tools/ci/core.env",
                   "# The environment of a core run.\nJOBS=3\nMAKEFLAGS=-j3 "
                   "--output-sync\nRACH2_WORKERS=5\n") ||
-        !fx_copy(f->self, path("tree/tests/run")) ||
-        !fx_mkdir(path("tree/tests/cases")))
+        !fx_copy(f->self, path("tree/tests/run")) || !fx_mkdir(path("tree/tests/cases")))
         return 0;
     for (i = 0; i < 3; i++) {
         snprintf(source, sizeof(source), "tools/etude/schemas/%s.schema.json", schemas[i]);

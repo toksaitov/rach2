@@ -69,10 +69,10 @@ static int report(struct etude_case *c, const char *id, const char *const ids[],
 }
 static int fixtures(struct etude_case_machine *m, const char *id)
 {
-    const char *select[] = {"/host-products/host-family-check", "--export", id,
-                            "/host-work", NULL};
-    const char *tar[] = {"/bin/tar", "-cf", "/host-work/fixtures.tar", "-C", "/host-work",
-                         "--null", "--no-recursion", "-T", "/host-work/family-export.list", NULL};
+    const char *select[] = {"/host-products/host-family-check", "--export", id, "/host-work", NULL};
+    const char *tar[] = {
+        "/bin/tar",       "-cf", "/host-work/fixtures.tar",       "-C", "/host-work", "--null",
+        "--no-recursion", "-T",  "/host-work/family-export.list", NULL};
     return execute(m, select, "family-fixture-selection") &&
            execute(m, tar, "family-fixture-archive") &&
            etude_guest_get(m, "/host-work/fixtures.tar", "family-fixtures.tar") == ETUDE_OK;
@@ -118,9 +118,10 @@ int etude_scenario(struct etude_case *c)
                                     "see the retained products disk");
         else
             etude_assert(c, ids[i], held[i],
-                         held[i] ? NULL : exported ? "the product result differs; see family-fixtures.tar"
-                                                   : "the product result differs; fixture export failed; "
-                                                     "see the retained products disk");
+                         held[i]    ? NULL
+                         : exported ? "the product result differs; see family-fixtures.tar"
+                                    : "the product result differs; fixture export failed; "
+                                      "see the retained products disk");
     }
     return !whole || failed;
 }

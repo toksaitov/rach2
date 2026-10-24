@@ -27,10 +27,10 @@ int family_export(const char *root, const char *id)
     size_t budget = 7 * 1048576;
     unsigned count = 0;
     int ok = 0;
-    if (!*id || strlen(id) > 128 || strspn(id, "abcdefghijklmnopqrstuvwxyz0123456789_.-") !=
-                                      strlen(id) || !strcmp(id, ".") || !strcmp(id, "..") ||
-        snprintf(path, sizeof(path), "%s/%s", root, id) >=
-                                (int)sizeof(path) || !(dir = opendir(path)))
+    if (!*id || strlen(id) > 128 ||
+        strspn(id, "abcdefghijklmnopqrstuvwxyz0123456789_.-") != strlen(id) || !strcmp(id, ".") ||
+        !strcmp(id, "..") || snprintf(path, sizeof(path), "%s/%s", root, id) >= (int)sizeof(path) ||
+        !(dir = opendir(path)))
         goto done;
     if (snprintf(path, sizeof(path), "%s/family-export.list", root) >= (int)sizeof(path) ||
         !(list = fopen(path, "wb")))
@@ -41,7 +41,8 @@ int family_export(const char *root, const char *id)
     fputs("Complete selected files are in this archive. All other files, including\n"
           "directory contents, remain on the retained private products disk.\n"
           "The inventory below describes the fixture directory's direct entries.\n"
-          "Storage, mode, bytes, name:\n", manifest);
+          "Storage, mode, bytes, name:\n",
+          manifest);
     fwrite("family-export.txt", 1, sizeof("family-export.txt"), list);
     for (;;) {
         struct stat st;
@@ -61,8 +62,7 @@ int family_export(const char *root, const char *id)
                   manifest);
             break;
         }
-        if (snprintf(member, sizeof(member), "%s/%s", id, entry->d_name) >=
-                (int)sizeof(member) ||
+        if (snprintf(member, sizeof(member), "%s/%s", id, entry->d_name) >= (int)sizeof(member) ||
             snprintf(path, sizeof(path), "%s/%s", root, member) >= (int)sizeof(path) ||
             lstat(path, &st))
             goto done;
@@ -73,8 +73,8 @@ int family_export(const char *root, const char *id)
             budget -= charge;
             fwrite(member, 1, strlen(member) + 1, list);
         }
-        fprintf(manifest, "%s %o %lld ", include ? "archive" : "disk-only",
-                (unsigned)st.st_mode, (long long)st.st_size);
+        fprintf(manifest, "%s %o %lld ", include ? "archive" : "disk-only", (unsigned)st.st_mode,
+                (long long)st.st_size);
         quoted(manifest, entry->d_name);
         fputc('\n', manifest);
     }

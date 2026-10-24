@@ -267,8 +267,7 @@ static int written(struct usb_case *u)
     free(reply);
     if (st != ETUDE_OK && st != ETUDE_LOST)
         usb_fail(u, "the USB machine could not be ended before the host read");
-    if (usb_end_of(&b, &end) == ETUDE_OK &&
-        (end.end != ETUDE_END_QEMU_EXITED || end.value != 0))
+    if (usb_end_of(&b, &end) == ETUDE_OK && (end.end != ETUDE_END_QEMU_EXITED || end.value != 0))
         usb_fail(u, "the USB machine did not exit cleanly before the host read");
     keep_path(u, image, etude_private_copy(u->c, "stick"), "the stick's copy");
     snprintf(spec, sizeof(spec), "%s@@1048576", image);

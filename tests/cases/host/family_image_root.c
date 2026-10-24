@@ -45,8 +45,7 @@ int family_image_root_make(struct fixture *f, const char *target, const char *op
              !strcmp(architecture, "i686") ? "i386" : "x86_64");
     snprintf(arch, sizeof(arch), "ARCH=%s", architecture);
     /* The fixture's prepared compiler is TinyCC; the normal build uses GCC. */
-    snprintf(flags, sizeof(flags),
-             "CFLAGS=-m%s -nostdlib -static -ffreestanding -Wl,-Ttext=%s -MD",
+    snprintf(flags, sizeof(flags), "CFLAGS=-m%s -nostdlib -static -ffreestanding -Wl,-Ttext=%s -MD",
              !strcmp(architecture, "i686") ? "32" : "64",
              !strcmp(architecture, "i686") ? "0x08048000" : "0x400000");
     a[n++] = "/usr/bin/make";

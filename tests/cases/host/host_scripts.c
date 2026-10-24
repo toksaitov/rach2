@@ -16,20 +16,28 @@ int host_guest_check(struct etude_case *c, struct etude_case_machine *products, 
         snprintf(label, sizeof(label), "%s-export", assertion);
         const char *select[] = {"/host-products/host-family-check", "--export", assertion,
                                 "/tmp/etude-host-scripts", NULL};
-        const char *pack[] = {"/bin/tar", "-cf", archive, "-C", "/tmp/etude-host-scripts",
-                              "--null", "--no-recursion", "-T",
-                              "/tmp/etude-host-scripts/family-export.list", NULL};
+        const char *pack[] = {"/bin/tar",
+                              "-cf",
+                              archive,
+                              "-C",
+                              "/tmp/etude-host-scripts",
+                              "--null",
+                              "--no-recursion",
+                              "-T",
+                              "/tmp/etude-host-scripts/family-export.list",
+                              NULL};
         struct etude_guest_result exported;
         int selected = etude_guest_command(products, select, NULL, NULL, "fixture-selection",
-                                          &exported) == ETUDE_OK &&
+                                           &exported) == ETUDE_OK &&
                        exported.complete && exported.termination.end == ETUDE_END_EXITED &&
                        !exported.termination.value && exported.cleanup == ETUDE_CLEANUP_CONFIRMED;
         if (!selected ||
             !(etude_guest_command(products, pack, NULL, NULL, label, &exported) == ETUDE_OK &&
-            exported.complete && exported.termination.end == ETUDE_END_EXITED &&
-            !exported.termination.value && exported.cleanup == ETUDE_CLEANUP_CONFIRMED &&
-            etude_guest_get(products, archive, evidence) == ETUDE_OK))
-            fprintf(stderr, "host scripts: %s: fixture export failed; see the retained products disk\n",
+              exported.complete && exported.termination.end == ETUDE_END_EXITED &&
+              !exported.termination.value && exported.cleanup == ETUDE_CLEANUP_CONFIRMED &&
+              etude_guest_get(products, archive, evidence) == ETUDE_OK))
+            fprintf(stderr,
+                    "host scripts: %s: fixture export failed; see the retained products disk\n",
                     assertion);
     }
     (void)c;
