@@ -162,7 +162,8 @@ int source_snapshot(const char *tree, char hex[65])
     char path[4096];
     int bad = scan(&v, "");
     sha256_init(&h);
-    qsort(v.paths, v.count, sizeof(*v.paths), order);
+    if (v.count > 1)
+        qsort(v.paths, v.count, sizeof(*v.paths), order);
     for (size_t i = 0; i < v.count; i++) {
         if (!bad && (join(path, tree, v.paths[i]) || file_hash(path, file)))
             bad = 1;

@@ -280,3 +280,16 @@ The GNU check driver inherited a PATH that selected /bin/make, the musl pdpmake,
 ## Follow-up assignments again reached idle helpers
 
 At the 06:45 process check the coordinator found that the serial and runner helpers had completed their first repairs, but subsequent messages had not restarted them for the clock and stale-expectation repairs. The coordinator had again treated message delivery as an active assignment. Explicit follow-up dispatch started both tasks immediately; several minutes were lost. Before recording an assignment, inspect the helper state and use a follow-up operation when it has completed, then confirm it is running. A plain message is only for a helper already running.
+
+## Empty source inventories passed a null array to qsort
+
+The combined Linux collection on e1ad882cc found #998 in the existing source-evidence regression. Removing its last source left a null path array, which the reader passed to qsort with a zero count. The i686 host log reported:
+
+```text
+FAIL: style_evidence_hosttest: the check exited with status 1
+tests/cases/host/source_snapshot.c:165:5: runtime error: null pointer passed as argument 1, which is declared to never be null
+#0 source_snapshot tests/cases/host/source_snapshot.c:165
+#1 snapshot_cases tests/host/style_evidence_hosttest.c:67
+```
+
+The source reader and the analogous flow directory snapshot now sort only when there are at least two entries. Empty and single-entry inventories keep their digest and cleanup behavior. The original log is retained at build/tests/portable-runtime-linux-run09/host-tests-i686-live.log. The collection continues on its frozen source to gather failures; the repair and existing sanitizer fixture wait for the integrated batch.

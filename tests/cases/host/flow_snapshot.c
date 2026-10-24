@@ -65,7 +65,8 @@ static int snapshot(struct sha256 *hash, const char *path)
             names[count++] = strdup(e->d_name);
         }
         closedir(d);
-        qsort(names, count, sizeof(*names), order);
+        if (count > 1)
+            qsort(names, count, sizeof(*names), order);
         for (i = 0; i < count; i++) {
             if (snprintf(record, sizeof(record), "%s/%s", path, names[i]) >= (int)sizeof(record) ||
                 !snapshot(hash, record))
