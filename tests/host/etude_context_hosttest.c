@@ -279,6 +279,24 @@ static void test_linux_clock(void)
 }
 #endif
 
+#ifdef _WIN32
+static void test_windows_clock(void)
+{
+    ULONG sequence = 0;
+    SIZE_T got = 0;
+    char suffix[32];
+    const char *actual = strrchr(receipt.clock.boot_id, '.');
+
+    CHECK(ReadProcessMemory(GetCurrentProcess(), (const void *)(uintptr_t)0x7ffe02c4, &sequence,
+                            sizeof sequence, &got) &&
+              got == sizeof sequence,
+          "the native loader boot sequence is readable");
+    snprintf(suffix, sizeof suffix, ".boot-%08lx", (unsigned long)sequence);
+    CHECK(actual && !strcmp(actual, suffix),
+          "Windows clock identity uses the loader sequence, not mutable boot time");
+}
+#endif
+
 int main(void)
 {
     char descriptor_text[2048], error[256];
@@ -303,6 +321,8 @@ int main(void)
     CHECK(!etude_context_clock(&receipt.clock), "native clock identity exists");
 #ifndef _WIN32
     test_linux_clock();
+#else
+    test_windows_clock();
 #endif
     snapshots(0);
     CHECK(!etude_history_now(&receipt.start), "preparation start is read");

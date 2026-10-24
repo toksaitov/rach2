@@ -591,26 +591,32 @@ void etude_win_version(char *out, size_t size)
                  (unsigned long)version.dwMinorVersion, (unsigned long)version.dwBuildNumber);
 }
 
-/** Read the native boot environment's identifier. */
+/** Read the boot environment and the loader's boot sequence. */
 int etude_win_boot_id(char *out, size_t size)
 {
     typedef LONG(NTAPI * query_fn)(ULONG, void *, ULONG, ULONG *);
-    uint64_t boot[4], times[6];
+    uint64_t boot[4];
+    ULONG sequence;
+    SIZE_T got;
     GUID id;
     query_fn fn = (query_fn)(void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"),
                                                    "NtQuerySystemInformation");
     int n;
-    /* Native classes 90 and 3 begin with the boot GUID and boot time. */
+    /* KUSER_SHARED_DATA.BootId is at 0x2c4 in the shared user page.
+     * The loader increments it at boot; clock corrections cannot change it.
+     * SystemTimeOfDayInformation.BootTime changes with the wall clock. */
     if (fn == NULL || fn(90, &boot, sizeof boot, NULL) < 0 ||
-        fn(3, times, sizeof times, NULL) < 0) {
+        !ReadProcessMemory(GetCurrentProcess(), (const void *)(uintptr_t)0x7ffe02c4, &sequence,
+                           sizeof sequence, &got) ||
+        got != sizeof sequence) {
         errno = EIO;
         return -1;
     }
     memcpy(&id, boot, sizeof id);
-    n = snprintf(out, size, "%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x.%016llx",
+    n = snprintf(out, size, "%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x.boot-%08lx",
                  (unsigned long)id.Data1, id.Data2, id.Data3, id.Data4[0], id.Data4[1], id.Data4[2],
                  id.Data4[3], id.Data4[4], id.Data4[5], id.Data4[6], id.Data4[7],
-                 (unsigned long long)times[0]);
+                 (unsigned long)sequence);
     if (n < 0 || (size_t)n >= size) {
         errno = ENAMETOOLONG;
         return -1;

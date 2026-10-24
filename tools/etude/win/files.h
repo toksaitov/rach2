@@ -76,7 +76,7 @@ int etude_win_file_error(void);
 int etude_win_absolute(const char *path);
 /** Return the native temporary directory as UTF-8. */
 const char *etude_win_temp(void);
-/** Read the boot environment and kernel start time as one identifier. */
+/** Read the boot environment and loader's boot sequence as one identifier. */
 int etude_win_boot_id(char *out, size_t size);
 /** Record the Windows kernel version and build, or an unavailable value. */
 void etude_win_version(char *out, size_t size);
