@@ -293,3 +293,9 @@ tests/cases/host/source_snapshot.c:165:5: runtime error: null pointer passed as 
 ```
 
 The source reader and the analogous flow directory snapshot now sort only when there are at least two entries. Empty and single-entry inventories keep their digest and cleanup behavior. The original log is retained at build/tests/portable-runtime-linux-run09/host-tests-i686-live.log. The collection continues on its frozen source to gather failures; the repair and existing sanitizer fixture wait for the integrated batch.
+
+## Private host fixtures used the enclosing launch environment
+
+The combined Linux collection on e1ad882cc found four fixture failures (#999). The collection fixture removed ETUDE_SITE, then read the real installed format-1 policy instead of a private native format-2 policy. The tree-lock takeover rows still launched touch, and the port-lock success row launched true; neither program was in the declared native runtime PATH. The nested observation owner inherited ETUDE_SEQUENCE_INPUT=pipe but received /dev/null as input, so it cancelled at EOF before its phases ran.
+
+The collection fixture now declares its own policy, ledger and locks. The lock fixtures reexecute compiled marker and exit roles by absolute path. The observation fixture uses its actual parent identity without inheriting another owner's pipe contract. Production policy validation, restricted runtime PATH and cancellation remain unchanged. The original diagnostics are retained in build/tests/portable-batch/windows-final-preflight/physical-first-wsl/retry-09/controller-transcript.log, with the copied host logs indexed by build/tests/portable-runtime-linux-run09/host-first-results.json. No check was started during the continuing frozen collection; the existing four fixtures await the integrated repair batch.

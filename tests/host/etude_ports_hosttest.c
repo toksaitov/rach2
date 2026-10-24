@@ -566,27 +566,27 @@ static int status_of(int argc, char **argv, const char *host)
 static void refusals(void)
 {
     char dir[4096], bad[4096], path[4096], target[4096];
-    char *good[] = {"etude", dir, "1", "true", NULL};
-    char *none[] = {"etude", dir, "0", "true", NULL};
-    char *many[] = {"etude", dir, "11", "true", NULL};
-    char *word[] = {"etude", dir, "1x", "true", NULL};
+    char *good[] = {"etude", dir, "1", self, "--port-command", "exit0", NULL};
+    char *none[] = {"etude", dir, "0", self, "--port-command", "exit0", NULL};
+    char *many[] = {"etude", dir, "11", self, "--port-command", "exit0", NULL};
+    char *word[] = {"etude", dir, "1x", self, "--port-command", "exit0", NULL};
     char *lost[] = {"etude", dir, "1", "/nonexistent/command", NULL};
-    char *odd[] = {"etude", bad, "1", "true", NULL};
+    char *odd[] = {"etude", bad, "1", self, "--port-command", "exit0", NULL};
 
     in(dir, fix_dir(), "refusals");
     in(bad, fix_dir(), "bad");
     CHECK(mkdir(dir, 0700) == 0 && mkdir(bad, 0700) == 0, "refusals");
-    CHECK(status_of(4, good, "both") == 2, "refusals");
-    CHECK(status_of(4, none, NULL) == 2 && status_of(4, many, NULL) == 2 &&
-              status_of(4, word, NULL) == 2 && status_of(3, good, NULL) == 2,
+    CHECK(status_of(6, good, "both") == 2, "refusals");
+    CHECK(status_of(6, none, NULL) == 2 && status_of(6, many, NULL) == 2 &&
+              status_of(6, word, NULL) == 2 && status_of(3, good, NULL) == 2,
           "refusals");
     CHECK(status_of(4, lost, NULL) == 127, "refusals");
-    CHECK(status_of(4, good, NULL) == 0, "refusals");
+    CHECK(status_of(6, good, NULL) == 0, "refusals");
     CHECK(mkdir(in(path, bad, "rach2-ports.0"), 0700) == 0, "refusals");
-    CHECK(status_of(4, odd, NULL) == 2, "refusals");
+    CHECK(status_of(6, odd, NULL) == 2, "refusals");
     in(target, bad, "elsewhere");
     CHECK(symlink(target, in(path, bad, "rach2-host.lock")) == 0, "refusals");
-    CHECK(status_of(4, odd, "shared") == 2 && access(target, F_OK) != 0, "refusals");
+    CHECK(status_of(6, odd, "shared") == 2 && access(target, F_OK) != 0, "refusals");
 }
 
 /**
@@ -639,6 +639,8 @@ static int command(int argc, char **argv)
     char pending[4096], ready[4096], go[4096];
     const char *offset = getenv("RACH2_PORT_OFFSET"), *host = getenv("RACH2_HOST_LOCK");
     FILE *file;
+    if (argc == 3 && !strcmp(argv[2], "exit0"))
+        return 0;
     if (argc != 5)
         return 125;
     if (!strcmp(argv[4], "exit7"))

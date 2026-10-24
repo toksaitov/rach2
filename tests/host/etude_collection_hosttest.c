@@ -147,7 +147,8 @@ static void case_environment(const char *cases, const char *rows, const char *fa
     unsetenv("RACH2_ACCEPT_AGENTS");
     unsetenv("RACH2_PORT_OFFSET");
     unsetenv("SSH_TEST_PORT");
-    unsetenv("ETUDE_SITE");
+    CHECK(setenv("ETUDE_SITE", fix_path("site"), 1) == 0,
+          "nested collection uses its private authority");
     unsetenv("ETUDE_ADMITTED");
     unsetenv("RACH2_TREE_HELD");
     setenv("RACH2_PORT_DIR", tree, 1);
@@ -318,6 +319,22 @@ static void repetitions(char *out, size_t room)
     }
 }
 
+/* Never fall back to an installed authority when exercising private cases. */
+static void fixture_policy(void)
+{
+    char text[PATH_MAX * 4 + 256];
+#ifdef __APPLE__
+    const char *endpoint = "macos";
+#else
+    const char *endpoint = "linux";
+#endif
+    fix_format(text, sizeof(text),
+               "etude-site 2\nendpoint %s\nlauncher %s\nledger %s\nlocks %s\netude %s\n"
+               "capacity 4000,536870912,1073741824\nwait 60\nseconds 60\n",
+               endpoint, etude, fix_path("build/tests/results/ledger"), tree, etude);
+    put("site", text);
+}
+
 static void fixture(void)
 {
     static const char *const dirs[] = {"tests",       "tests/cases",         "tools",
@@ -339,6 +356,7 @@ static void fixture(void)
     CHECK(chmod(fix_path("build/tests/host/sha256_hosttest"), 0700) == 0,
           "prepared binary is executable");
     make_record();
+    fixture_policy();
 }
 
 int main(int argc, char **argv)

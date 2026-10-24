@@ -157,6 +157,9 @@ static void sequence_fixture_row(const char *mode, unsigned expected)
     snprintf(trace_path, sizeof(trace_path), "%s/%s.trace", fix_dir(), mode);
     snprintf(stop, sizeof(stop), "%s/%s.stop", fix_dir(), mode);
     CHECK(sequence_environment("SEQUENCE_FIXTURE_MODE", mode) == 0);
+    /* This owner watches our identity; its executor gives it /dev/null,
+     * not the enclosing sequence owner's cancellation pipe. */
+    CHECK(sequence_environment("ETUDE_SEQUENCE_INPUT", NULL) == 0);
     sequence_caller(receipt);
     const char *path = getenv("PATH");
     const char *args[] = {self, "observe", "sequence", receipt, "fixture", trace_path, stop,

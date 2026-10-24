@@ -178,6 +178,10 @@ static int fixture_command(int argc, char **argv)
         return 99;
     if (strcmp(argv[2], "exit") == 0 && argc == 4)
         return atoi(argv[3]);
+    if (strcmp(argv[2], "mark") == 0 && argc == 4) {
+        put(argv[3], "");
+        return 0;
+    }
     if (strcmp(argv[2], "kill") == 0) {
         raise(SIGKILL);
         return 99;
@@ -464,7 +468,7 @@ static void test_busy(void)
 static void refused(const char *row, const char *record, const char *says)
 {
     char tree[1024], before[1024], after[1024], path[1200];
-    char *argv[] = {"etude", "-r", tree, "next", "true", NULL};
+    char *argv[] = {"etude", "-r", tree, "next", executable, "--hold-command", "exit", "0", NULL};
     struct ran r;
 
     make_tree(row, tree, sizeof tree);
@@ -531,7 +535,7 @@ static void test_refusals(void)
 static void taken(const char *row, const char *record, int age, const char *says)
 {
     char tree[1024], path[1200], ran[1200];
-    char *argv[] = {"etude", tree, "next", "touch", ran, NULL};
+    char *argv[] = {"etude", tree, "next", executable, "--hold-command", "mark", ran, NULL};
     struct timeval tv[2];
     struct ran r;
 
