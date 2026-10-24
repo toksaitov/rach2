@@ -272,3 +272,7 @@ The first complete native Linux run failed every GNU check after the first becau
 ## The GNU grouped-build fixture lacked its source inputs
 
 The first complete collection reached the grouped-build fixture, but its prepared source archive omitted the kernel, shell, utility and Doom component Makefiles and manifests. The retained fixture stopped copying at rach2/Makefile and reported only a failed controller. Issue #1007 adds those tracked component trees to the prepared archive and reports the exact input on a failed copy. The fixture still uses private scratch and executes the real grouped-build rules.
+
+## GNU host checks selected the musl make program
+
+The GNU check driver inherited a PATH that selected /bin/make, the musl pdpmake, before the GNU make required by its preparation fixtures. The complete collection reported unrecognized options. Issue #1004 gives the driver the GNU root's normal /usr/local/bin and /usr/bin precedence before /bin. This does not change the collection host's prepared executable path. The same issue records the separate Rach2 preparation-clock identity repair. LeakSanitizer remains enabled; its rejected clone options are tracked in #1005.

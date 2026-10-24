@@ -58,6 +58,7 @@ static int environment(const char *root)
     return n < 0 || n >= (int)sizeof(tools) || size < 0 || size >= (int)sizeof(scratch) ||
                    !fx_mkdir(scratch) || setenv("HOST_TEST_WORKDIR", scratch, 1) || chdir(root) ||
                    setenv("ETUDE_TREE", root, 1) || setenv("HOST_TEST_TOOLS", tools, 1) ||
+                   setenv("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin", 1) ||
                    unsetenv("ETUDE_CASE") || unsetenv("RUNNER_TRACKING_ID")
                ? -1
                : 0;
