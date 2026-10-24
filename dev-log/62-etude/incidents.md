@@ -542,3 +542,7 @@ The API scenarios created their Git repository as test and inspected it as root.
 ## Muse API dummy credential (#1041)
 
 Muse withheld its dummy bearer because the API scenario supplied a command-line endpoint without an explicit bearer setting. All six requests completed, then the credential audit failed. The scenario now configures the endpoint, bearer authorization and private certificate together in its isolated settings file, as the passing Muse session row does. The request credential and user-agent assertions are unchanged.
+
+## Worker archive pathname (#1045)
+
+The worker-session row and all nine API requests passed, but its evidence verifier read an empty file. The scenario kept the temporary pointer returned by etude_evidence; starting the verifier reused that buffer for its stderr pathname, so the verifier opened its own empty error output. The scenario now copies the archive pathname before starting the command. The returned bytes and all worker assertions are unchanged.

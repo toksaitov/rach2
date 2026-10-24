@@ -425,7 +425,7 @@ static int closing(const char *message, unsigned wanted)
 }
 static int verify_worker(struct row *s)
 {
-    char directory[4096];
+    char directory[4096], archive_path[4096];
     struct net_run r;
     char *history, *save = NULL, *hash;
     unsigned n = 0;
@@ -435,9 +435,11 @@ static int verify_worker(struct row *s)
         ETUDE_OK)
         return 0;
     archive = etude_evidence(s->u->c, "worker-result.tar");
+    if (!archive || !path(archive_path, sizeof(archive_path), "%s", archive))
+        return 0;
     path(directory, sizeof(directory), "%s/worker", s->work);
     {
-        char *args[] = {"agent_server", "worker-proof", (char *)archive, directory, NULL};
+        char *args[] = {"agent_server", "worker-proof", archive_path, directory, NULL};
         if (!host(s, args, "worker-proof"))
             return 0;
     }
