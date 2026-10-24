@@ -19,7 +19,7 @@
  * accepts at most 63 bytes before LF. Refuse an empty interval or a line
  * that does not fit, rather than sending a partial option. */
 int etude_serial_guest_line(char *line, size_t size, int replace, int image_state,
-                             uint64_t resend_us);
+                            uint64_t resend_us);
 
 /* How the controller reaches the console. */
 struct etude_serial_conf {

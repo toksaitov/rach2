@@ -504,7 +504,8 @@ static int version_native_sources(struct version *value)
     snprintf(staged, sizeof(staged), "%s/src/tools/etude/guest/wire.h", v.dir);
     ok = fx_check(f, fx_same(source, staged), "framed transport header reaches the builder") && ok;
     ok = fx_check(f, fx_has(vp("cc.log"), "-Itools/etude/guest "),
-                  "cached build searches the framed transport headers") && ok;
+                  "cached build searches the framed transport headers") &&
+         ok;
     snprintf(source, sizeof(source), "%s/tests/native/collection.c", v.tree);
     saved = fx_read(source);
     append(source, "/* A native collection change. */\n");

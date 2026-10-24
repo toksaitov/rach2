@@ -904,8 +904,8 @@ static void test_import_product(void)
               "import product: identity, receipt, fixture chain and native build vectors");
         if (result->end != ETUDE_END_EXITED || result->value ||
             result->cleanup != ETUDE_CLEANUP_CONFIRMED || result->output_error)
-            printf("import product: end=%d value=%d cleanup=%d output_error=%d\n%s%s",
-                   result->end, result->value, result->cleanup, result->output_error,
+            printf("import product: end=%d value=%d cleanup=%d output_error=%d\n%s%s", result->end,
+                   result->value, result->cleanup, result->output_error,
                    result->out.data ? result->out.data : "",
                    result->err.data ? result->err.data : "");
         etude_proc_free(proc);

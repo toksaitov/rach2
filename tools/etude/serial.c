@@ -16,7 +16,7 @@
 #include "serial.h"
 
 int etude_serial_guest_line(char *line, size_t size, int replace, int image_state,
-                             uint64_t resend_us)
+                            uint64_t resend_us)
 {
     uint64_t ms = resend_us / 1000 + (resend_us % 1000 != 0);
     int n = snprintf(line, size, "%s/etude-guest %s-t / -r %llu\n", replace ? "exec " : "",

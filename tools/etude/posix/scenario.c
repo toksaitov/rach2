@@ -2111,8 +2111,7 @@ enum etude_status etude_guest_open(struct etude_case_machine *m)
     if (m->c->cur < 0 || !m->decl->console)
         return ETUDE_REFUSED;
     m->fed = mres(m)->console.kept;
-    if (etude_serial_guest_line(command, sizeof(command), 0, guest_image_state(m),
-                                  m->c->resend_us))
+    if (etude_serial_guest_line(command, sizeof(command), 0, guest_image_state(m), m->c->resend_us))
         return ETUDE_REFUSED;
     if (etude_machine_type(m->m, command, strlen(command)) != 0)
         return ETUDE_LOST;

@@ -1530,8 +1530,7 @@ static void check_guest_options(const char *state)
     char path[700], line[200];
     snprintf(path, sizeof(path), "%s/guest.log", state);
     FILE *f = fopen(path, "r");
-    int ok = f && fgets(line, sizeof(line), f) &&
-             strstr(line, "options: resend_us=50000 stages=1");
+    int ok = f && fgets(line, sizeof(line), f) && strstr(line, "options: resend_us=50000 stages=1");
     if (f)
         ok = fclose(f) == 0 && ok;
     CHECK(ok, "the actual compact parser retains 50ms and one stage root");

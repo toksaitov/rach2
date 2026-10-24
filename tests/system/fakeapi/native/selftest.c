@@ -496,10 +496,10 @@ static void stop_case(int refused)
     FILE *file, *record_file;
     char status[8] = {0};
     int i, result;
-    const char *expected = refused
-        ? "fakeapi: result: fail: 1 failed, the first request 1: GET /nothing: "
-          "step 1: the path is /nothing, not /last\n"
-        : "fakeapi: result: pass: 1 steps played by 1 requests\n";
+    const char *expected =
+        refused ? "fakeapi: result: fail: 1 failed, the first request 1: GET /nothing: "
+                  "step 1: the path is /nothing, not /last\n"
+                : "fakeapi: result: pass: 1 steps played by 1 requests\n";
 
     record_file = fopen(stop_record, "w+b");
     check(record_file != NULL, "shutdown fixture opens its owned request record");
@@ -526,8 +526,8 @@ static void stop_case(int refused)
     check(write_status(stop_record, result) == refused,
           "service returns its exact pass or intentional refusal exit status");
     file = fopen(stop_status, "rb");
-    check(file && fgets(status, sizeof(status), file) &&
-              !strcmp(status, refused ? "1\n" : "0\n") && fgetc(file) == EOF && !ferror(file),
+    check(file && fgets(status, sizeof(status), file) && !strcmp(status, refused ? "1\n" : "0\n") &&
+              fgetc(file) == EOF && !ferror(file),
           "a printed verdict also has its complete exact status file");
     if (file)
         fclose(file);

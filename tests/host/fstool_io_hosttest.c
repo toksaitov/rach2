@@ -79,7 +79,7 @@ ssize_t __real_pwrite(int fd, const void *buffer, size_t size, long offset)
 #ifdef fstat
 #undef fstat
 #endif
-#define fstat model_stat
+#define fstat   model_stat
 #define pread64 model_pread64
 #include "../../vendor/gnu/fstools/positional_io.c"
 #undef pread64
@@ -118,7 +118,8 @@ static void preservation(void)
     reset();
     memcpy(expected + 13, data, sizeof(data));
     check(__wrap_pwrite64(7, data, sizeof(data), 13) == sizeof(data) &&
-              !memcmp(disk, expected, sizeof(disk)), "head middle and tail preserve bytes");
+              !memcmp(disk, expected, sizeof(disk)),
+          "head middle and tail preserve bytes");
     check(reads == 2 && writes == 3, "aligned middle is one direct write");
     reset();
     check(__wrap_pwrite64(7, data, 1024, 512) == 1024 && !reads && writes == 1,
@@ -137,7 +138,8 @@ static void failures(void)
     reset();
     short_read = 1;
     check(__wrap_pwrite64(7, data, 4, 3) == -1 && errno == EIO && !writes &&
-              !memcmp(disk, expected, sizeof(disk)), "short sector read writes nothing");
+              !memcmp(disk, expected, sizeof(disk)),
+          "short sector read writes nothing");
     reset();
     short_write = 1;
     check(__wrap_pwrite64(7, data, 4, 3) == -1 && errno == EIO,
@@ -150,11 +152,11 @@ static void failures(void)
     short_read = 2;
     expected[511] = data[0];
     check(__wrap_pwrite64(7, data, 2, 511) == 1 && writes == 1 &&
-              !memcmp(disk, expected, sizeof(disk)), "later read error returns prior progress");
+              !memcmp(disk, expected, sizeof(disk)),
+          "later read error returns prior progress");
     reset();
     fail_write = 1;
-    check(__wrap_pwrite64(7, data, 4, 3) == -1 && errno == EIO,
-          "write error reaches the caller");
+    check(__wrap_pwrite64(7, data, 4, 3) == -1 && errno == EIO, "write error reaches the caller");
     reset();
     check(__wrap_pwrite64(7, data, 4, -1) == -1 && errno == EINVAL && !writes && !reads,
           "negative offset rejected before transfer");
@@ -169,7 +171,8 @@ static void failures(void)
     reset();
     expected[2047] = data[0];
     check(__wrap_pwrite64(7, data, 4, 2047) == 1 && writes == 1 &&
-              !memcmp(disk, expected, sizeof(disk)), "end boundary returns only completed bytes");
+              !memcmp(disk, expected, sizeof(disk)),
+          "end boundary returns only completed bytes");
     reset();
     write_interrupt = 1;
     check(__wrap_pwrite64(7, data, 512, 0) == 512 && !reads && writes == 2,

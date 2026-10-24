@@ -304,11 +304,9 @@ The collection fixture now declares its own policy, ledger and locks. The lock f
 
 The first complete native collection reached host.host.tests with sixteen worker slots but ran no other case beside it. The public adapter still marked every host and style member serial, a policy inherited from source checks and host tests that built or changed shared files during execution. The prepared drivers now use immutable inputs, private scratch and separate writable GNU copies. Issue #1003 removes that implicit suite-wide serialization. The etude and boots groups retain collection exclusivity for their host-alone response checks, and ordinary scheduling puts them before shared work; seeded plans retain their allocated order. Composite host groups reserve the established sixteen-processor ceiling instead of one processor while the native driver can run four checks. Their memory and disk reservations do not change. Style still stops the collection on failure, but its prepared evidence reader can share capacity. The focused fixture checks a blocking rendezvous between prepared host cases, quiet-group ordering and exact seeded order.
 
-
 ## The host script scenario and manifest used different step orders
 
 The first complete collection ran mkext2_overlay first, following host.list, while the manifest still declared it near the end. Advancing to that step made earlier declared steps unavailable; thirty-two following checks were refused, and later reordered checks failed in the same way. Issue #1006 orders the manifest's execution steps exactly as host.list after the unchanged listed, products and prepare prefix. Every identity and assertion remains. The collection fixture now reads the real source list and manifest and checks their complete step order before creating its private execution fixtures.
-
 
 Review of the scheduling repair found that making the sixteen-processor ceiling the manifest floor would prevent use on the Mac's smaller admitted capacity. The coordinator had approved that floor without checking every platform. The manifest keeps its one-processor floor; prepared composite host groups reserve the lesser of their declared ceiling and the selected capacity. Capacity below the floor is refused, and a repeated load must still fit beside the actual reservation. The focused regression inspects an actual 8000-unit private claim for a 1000-floor, 16000-ceiling case, and checks refusal below the floor and when a load exceeds capacity. No Mac or Windows collection was launched with the incorrect floor.
 
@@ -331,7 +329,6 @@ The original GNU failure output is retained in `build/tests/portable-runtime-lin
 
 The first GNU host checks reached process exit and LeakSanitizer failed before it could inspect leaks. Its stop-the-world helper uses CLONE_VM, CLONE_FS, CLONE_FILES and CLONE_UNTRACED with exit signal zero. The kernel rejected both CLONE_UNTRACED and a zero signal outside a thread group (#1005). The repair accepts the supported zero or SIGCHLD signal subset, prevents inherited tracing when requested, wakes a zero-signal child's real parent without posting SIGCHLD, and preserves Linux clone-child wait selection. Tracer waits include all tracees. Exec, orphan adoption and a changed parent exec generation restore ordinary notification, with deterministic generation wrap. Guest clone and ptrace regressions and host notification and wrap rows preserve these contracts. Leak detection remains enabled and fatal; the later actual GNU run must establish whether its remaining tracing path completes.
 
-
 ## Peak child concurrency was mistaken for sustained CPU demand
 
 Review of #1003 against the completed run09 measurements found that its ceiling-based host reservation did not implement the plan's CPU policy. cpu_millis is the declared first reservation, not a floor or a peak fanout count; compatible successful CPU-to-wall samples later supply a median with headroom under cpu_ceiling_millis. The measured whole host groups used about one processor despite running four native checks during their shorter native phase. Reserving sixteen throughout would again serialize them on smaller machines. The correction uses the declared first value, leaves the ceiling available for learning, and checks an actual 1000-unit claim under a 16000 ceiling, concurrent prepared cases on a small site, and fitting and excessive loads. The failed run09 attempts establish this planning error but are not accepted as scheduler history or performance baselines.
@@ -350,11 +347,9 @@ The #1003 reservation review found that the native collection loaded history onl
 
 The focused collection fixture supplies clearly synthetic complete observation histories with successful, failed, disrupted and incompatible samples. It checks actual single- and dual-architecture start order, live private-ledger CPU claims and unchanged seeded order. The failed run09 measurements are not imported as eligible history. Local strict component compilation and size checks cover the source; execution remains for the integrated batch after the frozen run has cleaned up.
 
-
 ## The version fixture expected desktop flags and verbs on Rach2
 
 The GNU host-products audit found two stale assumptions in the version controller (#1013). Its record check required the old `-std=c99 -O2` flags, and its real build expected desktop service, admission, lock and build commands even when bootstrap selected ETUDE_RACH2_SRC on Rach2. The fixture now derives the expected platform and machine from the actual uname identity, checks the current platform flags and retains the program digest and version-key checks. Shared schema and history checks remain. Desktop builds still require their command usage; Rach2 builds must reject those unsupported commands and list a private inventory through the real `etude run native list` entry. No fake platform is used for the real compilation. Strict local object compilation and exact size checks passed; execution waits for the combined repair batch.
-
 
 ## A learned CPU estimate was still checked against its initial declaration
 
@@ -370,14 +365,11 @@ The first complete native collection on e1ad882cc failed machine.large.exfat on 
 
 The four affected large, exFAT and FAT-write cases now declare a GNU Rach2 recovery helper and reserve its resources. A fixed C guest product executes independent exfatprogs or dosfstools, preserving the format, repair, read-only check, output, status and checker branch contracts. The native controller checks range arithmetic, makes a sparse private copy for checking, verifies its source identity, binds the private file, then syncs and confirms helper shutdown. Only formatting writes the original private disk's validated MBR partition. The existing small mtools helper remains. GNU preparation requires all three independent tools. Exfatprogs 1.3.2 is pinned by its actual release digest, verified with Hyunchul Lee's published release key; its signature and inspection evidence are retained in the worker's build/tests/1009-fstool/upstream. No host PATH was widened. Source review and new sparse-range regression source precede the combined compilation and runtime checks; no new machine was run during this repair.
 
-
 ## A queue reorder reset an assigned repair to Ready
 
 The 07:37 process check found the assigned image-helper repair (#1010) marked Ready. The coordinating session had put it at the top of the queue after taking it; the ordering command reset its Status. The same session took it again and kept the existing writer. Assigned work must be reordered before it is taken, or its In progress Status restored in the same action. No second worker started it.
 
-
 Source inspection of #1010 also found that the existing ext2 case dumps a 14 MiB FAT volume through the image helper. That exceeds the smaller module's free space. Changing only the final transfer pathname would still leave incoming objects in the responder's default /tmp store. The image adapter now uses /dev/shm for file and archive operands, and only image-helper starts its existing responder with --state /dev/shm/etude-guest. The permanent tmpfs exists before user processes start; no mount command or kernel change is added. A regular 14 MiB transfer needs at most 28 MiB for the stored and published copies; a 14 MiB archive needs at most 42 MiB for its stored object, published archive and expanded file data, plus the responder's bounded 1 MiB queue and small copy buffers. The 256 MiB profile is unchanged, and replacing the 64 MiB resident module with 16 MiB releases more RAM than that storage needs. All state ends with the confirmed helper cleanup. The existing binding fixture checks translated input/output paths and confines the state override to image-helper.
-
 
 ## Windows process identities exceeded the JSON integer limit
 
@@ -391,11 +383,9 @@ The collection fixture now uses the real applied-load shape with explicit synthe
 
 Before the #1009 batch started a build, dependency review found that adding exfatprogs to the shared GNU source list would invalidate all port outputs and the native compiler and GDB steps, although those products had not changed. The helper tools now have a separate source pin, verifier, cached step and output. The original shared source list is restored byte for byte and the added port recipe is removed. The new step reads only the existing cross compiler and sysroot, and only GNU test image assembly copies its two executables. Both local Linux and tooling-based test image prerequisites declare this step's actual inputs. No stale dependency hash or incompatible output was reused; no broad GNU rebuild was started.
 
-
 ## A copy check overlapped producer preparation
 
 The coordinating session released the bounded Windows build and checks beside Linux preparation at 07:52. The last Windows check copies an 8 MiB fixture from the Linux tree and requires that producer to be idle. It correctly found the preparation lock and stopped before copying. All five Windows links and the earlier checks passed; the native owner confirmed cleanup. Only the copy check must run again after preparation ends. A batch that ends with a producer read must reserve that idle interval before any build is scheduled there; its short duration does not permit overlap. The frozen candidate and its prepared evidence were unchanged.
-
 
 ## The focused launcher omitted its scratch directories
 
@@ -408,26 +398,28 @@ The focused repair run passed the real GNU leak-free probe and the exact 64-byte
 
 The fixture now declares its Python tool, uses the prepared tool path and passes the complete fixture environment and source-tree working directory explicitly. GNU inventory preparation already copies that interpreter from the declared GNU root and hashes it as an input. Native desktop execution gains no interpreter dependency. All importer assertions remain. A launch failure prints its executable and error; an unsuccessful child prints its termination, cleanup, output error and captured diagnostics. The integrated focused check must rerun this existing GNU fixture after preparation; no runtime pass is claimed by this source repair.
 
-
 The independent filesystem check initially failed before starting because the same disposable materializer removed execute permission from fstool-smoke while making its JSON inputs read-only. The coordinator preserved that failed launch, confirmed an empty ledger and no remaining process, and restored mode 0555 on the unchanged executable. JSON inputs remain mode 0444. The source helper now treats executable products separately. The actual retry reached mkfs.exfat and exposed the separate partition-write failure; neither setup failure is counted as acceptance.
+
 ## The image helper startup exceeded the debug shell's line limit
 
-The bounded image-helper check booted its 16 MiB RAM image on i686, then etude-guest exited with usage status2 (#1018). Adding the required /dev/shm transfer state had made its debug-shell command longer than the kernel's 63-character input bound. The shell discarded the rest of `--resend-ms` and its value. The fixture's stand-in had accepted longer lines and did not expose this production boundary.
+The bounded image-helper check booted its 16 MiB RAM image on i686, then etude-guest exited with usage status 2 (#1018). Adding the required /dev/shm transfer state had made its debug-shell command longer than the kernel's 63-character input bound. The shell discarded the rest of `--resend-ms` and its value. The fixture's stand-in had accepted longer lines and did not expose this production boundary.
 
-The guest retains all long options and adds compact state, stage and resend aliases. Both scenario startup forms use one checked formatter; the exec form with the exact state path, stage / and largest schema interval is exactly63 characters before LF. Interval rounding cannot overflow, the guest parses the value with checked 64-bit arithmetic on both architectures, and an overlong line is refused before typing. Existing serial fixture coverage now checks both line forms, maximum interval, rounding and refusal, then starts the real guest through compact options and verifies its actual parsed interval and staged-file behavior. The scenario stand-in rejects an overlong or incomplete startup. No kernel input policy changed. Source-only checks precede the combined compilation and actual helper boot; no new runtime check ran during this repair.
-### Independent exFAT FAT-entry writes on the recovery helper
+The guest retains all long options and adds compact state, stage and resend aliases. Both scenario startup forms use one checked formatter; the exec form with the exact state path, stage / and largest schema interval is exactly 63 characters before LF. Interval rounding cannot overflow, the guest parses the value with checked 64-bit arithmetic on both architectures, and an overlong line is refused before typing. Existing serial fixture coverage now checks both line forms, maximum interval, rounding and refusal, then starts the real guest through compact options and verifies its actual parsed interval and staged-file behavior. The scenario stand-in rejects an overlong or incomplete startup. No kernel input policy changed. Source-only checks precede the combined compilation and actual helper boot; no new runtime check ran during this repair.
+
+## Independent exFAT FAT-entry writes on the recovery helper
 
 The focused f8 fstool smoke reached exfatprogs 1.3.2, wrote both boot records, then failed at FAT entry zero. The formatter issues a four-byte positional write; recovery block nodes require whole-sector writes. The independent formatter had been compiled and staged, but its raw-device write contract had not been exercised. Issue #1019 adds a package-local positional-write adapter for both GNU offset ABIs. Only partial boundary sectors use read/modify/write; aligned writes and regular files pass through. The unchanged formatter and repair checker retain their decisions and statuses. A model checks byte preservation, boundaries, interrupted/short/error returns and both ABIs; the existing 64 MiB production smoke remains required after integration. No kernel or shared libc policy is changed.
-
 
 ## Publication checks assumed declaration-order scheduling
 
 The focused native legacy-set fixture on f8de101093 failed its port and artifact-publication assertions (#1021). The driver assigns ports and publishes artifacts in the recorded plan order. The scheduler now orders equal-cost cases by identity, so allowed preceded clean; the fixture still assigned the first ports and first disk publication to clean from declaration order. The injected first-copy mutation and failure behaved as intended, but their asserted case identities were stale.
 
 The fixture now parses the actual plan, requires all five distinct known case identities in deterministic equal-cost order, and checks each exact disjoint port slice, including every empty slice. Publication checks bind the original digest or failed copy to the plan's explicit first case identity, require the changed or retried digest in every other invocation, and verify a later case's success. Failed publication still requires the exact incomplete reason and no invocation. Copy counts, complete histories, resource release and leak checks remain. Production scheduling, port allocation and fault injection are unchanged. No fixture or testing-PC command ran during the source repair; the focused regression remains for the combined batch.
-### Cached Rach2 build omitted the framed transport include path
+
+## Cached Rach2 build omitted the framed transport include path
 
 The focused f8 public etudeexec cases failed on both architectures before linking: tests/native/cut_transport.c could not include wire.h. The prepared archive already included the complete native collection and guest transport sources and headers. Its cached-version recipe omitted tools/etude/guest from the include search, although tests/native/local.mk supplied it. Issue #1022 aligns that search path and extends the existing version-publication fixture to check the staged protocol header and actual compiler arguments. The Rach2 manifest has 34 distinct sources; their 57 reachable project sources and headers resolve with the corrected search path. No further source or library omission was established by source inspection. The executor, history and cached-reuse assertions are retained; both actual TinyCC builds remain required after integration.
+
 The #1019 source review found that the new modeled fixture was absent from host.host.tests. That omission would fail the inventory's listed assertion and leave the model unexecuted. The followup registers fstool_io explicitly, documents its native Linux/macOS and GNU Windows placement, and avoids a fixture mock macro collision with desktop CRT headers. Actual fixture and independent-tool execution remain part of the combined check.
 
 ## Early collection refusal left its port claim uncertain
@@ -435,7 +427,6 @@ The #1019 source review found that the new modeled fixture was absent from host.
 The focused native collection fixture reached the learned CPU checks, then left fourteen private collection port claims uncertain (#1020). Capacity validation refused the requested case or its reserved load before any case started. Commands later in the allocated array still had zero-initialized cleanup state, ETUDE_CLEANUP_PENDING, because case_command had not reached their initialization. cleanup_owned treated those never-started commands as unconfirmed and retained the collection claim. The actual failed private ledger and complete fixture output are retained with the focused f8 repair evidence. No claim is removed from that evidence by this repair.
 
 Every allocated command now starts with confirmed cleanup before any fallible member setup. Admission and execution still replace that state with their actual results, and an actually unconfirmed case or load still retains its claim. The existing fixture checks the ledger after every run, including each capacity refusal. Those refusal checks now distinguish the public collection-start banner from the suite-prefixed case output; the capacity error path already returns 2. The fixture also keeps every complete child stream as output.N and records its exact arguments and wait/exit status in runs.log, so later rows do not overwrite earlier refusal evidence. All cleanup, resource and refusal assertions remain. Local strict C99 syntax checks cover both changed translation units; runtime validation remains in the coordinator's integrated batch.
-
 
 ## Repeated service stop signals interrupted API verdict publication
 
