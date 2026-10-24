@@ -16,7 +16,8 @@ mkdir -p "$TREE"
 cd "$REPO"
 # Tracked sources and the extracted sources the tests compile enter this tree.
 if git rev-parse --git-dir > /dev/null 2>&1; then
-    git ls-files -z -- Makefile tests tools mk utils krffs rach2 ish ports vendor > "$OUT/sources.list"
+    git ls-files -z -- Makefile CLAUDE.md AGENTS.md Readme.md tests tools mk utils krffs \
+        rach2 ish ports vendor > "$OUT/sources.list"
 else
     cp build/gnu-source-files "$OUT/sources.list"
 fi
@@ -55,6 +56,9 @@ for prefix in ('vendor', 'build/x86_64/vendor-work'):
             output.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, output)
 PY
+for name in CLAUDE.md AGENTS.md Readme.md; do
+    [ -f "$TREE/$name" ] || { echo "host inventory: missing root input $name" >&2; exit 1; }
+done
 mkdir -p "$TREE/build/tools/etude" "$TREE/build/tests/cases/host"
 cp "$GNU_OUT/host-products/etude" "$TREE/build/tools/etude/etude"
 cp "$GNU_OUT/host-products/host" "$TREE/build/tests/cases/host/host"

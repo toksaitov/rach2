@@ -194,8 +194,8 @@ stage_tree()
     fi
     git ls-files -z -c -o --exclude-standard | tr '\0' '\n' > "$STAGE/git"
     mkdir -p "$STAGE/build"
-    git ls-files -z -c -o --exclude-standard -- Makefile tests tools mk utils krffs rach2 ish ports \
-        vendor > "$STAGE/build/gnu-source-files"
+    git ls-files -z -c -o --exclude-standard -- Makefile CLAUDE.md AGENTS.md Readme.md \
+        tests tools mk utils krffs rach2 ish ports vendor > "$STAGE/build/gnu-source-files"
     sh krffs/manifest_deps.sh krffs/manifests/os-real-gnu.manifest > "$STAGE/products" || :
     echo "$MUSL_CRYPT_SRC" >> "$STAGE/products"
     if [ "${GNU_TEST_PRODUCTS:-}" = 1 ] && [ "$RACH2_ARCH" = x86_64 ]; then

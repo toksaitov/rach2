@@ -150,6 +150,8 @@ def checks(group, arch, base):
             out = str(base / (name + '_selftest'))
             item = entry(name, name + ' selftest under the sanitizers', out, [source], ['--selftest'])
             item['command'] = [*COMMON, '-Wall', '-Wextra', '-Werror', '-o', out, source]
+            if name == 'prosecheck':
+                item['data'] = ['CLAUDE.md', 'AGENTS.md']
             yield item
     elif group == 'fuzz':
         for source in sorted(Path('tests/fuzz').glob('*_fuzz.c')):
