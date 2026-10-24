@@ -969,13 +969,17 @@ static void tmpfs_unmount(struct vfs_mount *mnt)
 /** The `path` of tmpfs: the path of the directory `node` from the mount's
  * root, built from the end of `buf`, each directory's name in front of the
  * path so far, and moved to its start. -ENOENT for a directory taken out of
- * its parent, or -ENAMETOOLONG when the path does not fit `cap`. */
+ * its parent, -ENOTDIR for another kind of node, or -ENAMETOOLONG when
+ * the path does not fit `cap`. */
 static int tmpfs_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
     struct tmpfs_node *root = ((struct tmpfs_mount *)mnt->priv)->root;
     struct tmpfs_node *n = (struct tmpfs_node *)node;
     uint32_t len = 0;
 
+    if (!is_dir(n)) {
+        return -ENOTDIR;
+    }
     if (cap < 2) {
         return -ENAMETOOLONG;
     }

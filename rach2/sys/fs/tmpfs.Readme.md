@@ -20,6 +20,8 @@ A directory's names are a list of `struct tmpfs_dirent` in the order they were m
 
 `tmpfs_rename` replaces a file or an empty directory, and answers `EINVAL` for a directory moved below itself. It takes the new name's entry from the heap before it changes either directory, so a rename the heap cannot serve answers `ENOSPC` and changes nothing.
 
+`tmpfs_path` reconstructs a directory's path through its held parents. Other nodes have no parent pointer and return `ENOTDIR`; their names belong to the directory entries that refer to them.
+
 ### File bytes
 
 A regular file's bytes are a `struct shmem` (`../mm/shmem.c`, in [../mm/Readme.md](../mm/Readme.md)): a directory of leaves of `SHMEM_LEAF`, 1024, frames, a page made when it is first written or mapped, so a hole costs nothing, up to `SHMEM_MAX_SIZE`, 16 TiB less a page, on both architectures. A shared mapping maps the file's frames, and a truncation takes the pages it frees out of every mapping first. Each mount counts its files' pages against its limit (`struct shmem_quota`), half the machine's frames unless `size=` gives another, and a page past it fails a write with `ENOSPC`.

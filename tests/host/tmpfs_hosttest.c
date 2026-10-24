@@ -335,7 +335,8 @@ static void directories(void)
  * directory moved under itself, EISDIR for a file over a directory, ENOTDIR
  * for a directory over a file and ENOTEMPTY for a directory over one that
  * is not empty. A directory's path is written back, and is ENAMETOOLONG in
- * a buffer too small for it. A rename over "c" replaces it, and the
+ * a buffer too small for it; a regular file has no parent path and gives
+ * ENOTDIR. A rename over "c" replaces it, and the
  * replaced node, still held, reads its bytes with a link count of 0.
  */
 static void links_and_renames(void)
@@ -369,6 +370,7 @@ static void links_and_renames(void)
 
         CHECK(tmpfs_path(&mnt, y, path, sizeof(path)) == 0 && same(path, "/x/y"));
         CHECK(tmpfs_path(&mnt, y, path, 4) == -ENAMETOOLONG);
+        CHECK(tmpfs_path(&mnt, held, path, sizeof(path)) == -ENOTDIR);
     }
     {
         void *r = make(NULL, "r", 0644);
@@ -402,6 +404,7 @@ static void kinds(void)
     s = look(NULL, "s");
     CHECK(tmpfs_readlink(&mnt, s, buf, sizeof(buf)) == 1 && buf[0] == 'c');
     CHECK(tmpfs_getattr(&mnt, s, &st) == 0 && (st.mode & T_IFMT) == T_IFLNK && st.size == 1);
+    CHECK(tmpfs_path(&mnt, s, buf, sizeof(buf)) == -ENOTDIR);
     p = make(NULL, "p", T_IFIFO | 0600);
     CHECK(tmpfs_getattr(&mnt, p, &st) == 0 && (st.mode & T_IFMT) == T_IFIFO && st.rdev == 0);
     c = NULL;
