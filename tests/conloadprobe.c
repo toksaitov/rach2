@@ -70,7 +70,8 @@ struct pollfd {
 static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, status);
-    __builtin_unreachable();
+    for (;;) {
+    }
 }
 
 /** The length of the string `s`. */

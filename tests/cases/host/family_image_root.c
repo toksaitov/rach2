@@ -59,8 +59,12 @@ int family_image_root_make(struct fixture *f, const char *target, const char *op
     a[n++] = "DEMO_CREDS=";
     a[n++] = "MAN_ALL=";
     a[n++] = "LIBC_STAMP=vendor/musl/.stamp";
+    /* Make expands the unused musl compiler query before its override. */
+    a[n++] = "MUSL_CC=/usr/bin/gcc";
     a[n++] = "MUSL_LIBGCC=";
     a[n++] = "GNU_HOST_CHECKS_SOURCES=";
+    a[n++] = "HOST_SCRIPT_ASSETS=";
+    a[n++] = "AGENT_ASSET_FILES=";
     a[n++] = compiler;
     a[n++] = arch;
     a[n++] = flags;
