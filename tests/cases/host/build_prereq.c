@@ -123,7 +123,9 @@ static int prereq_rows(struct fixture *f)
                            "windows-install", "windows-elevated"};
     const char *states[] = {
         "alpha beta gamma delta", "", "root gamma", "", "sudo", "wa", "", "elevated"};
-    const char *script = bp(f->work, "tree/tools/setup/prereq.sh"), *recipe = bp(f->work, "recipe");
+    char script[4096], recipe[4096];
+    snprintf(script, sizeof(script), "%s", bp(f->work, "tree/tools/setup/prereq.sh"));
+    snprintf(recipe, sizeof(recipe), "%s", bp(f->work, "recipe"));
     for (int row = 0; row < 8; row++) {
         if (!state(f, states[row]))
             return 0;

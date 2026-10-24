@@ -779,3 +779,7 @@ The probe now follows its exit system call with a portable infinite loop, preser
 ## Loose cleanup fixture timestamps, 2026-10-24
 
 The complete Linux collection found the same timestamp error in the separate leftovers fixture (#1058). It aged every input, then reopened the empty young.log without restoring its modification time. Both architectures therefore removed that file as old. The fixture now sets that timestamp explicitly and checks the timestamp operation on the young repository too. The old-file removal, recent-file preservation, active-process, protected-file and repository checks remain unchanged. The preceding repair covered the tidy fixture only; both callers of the aging helper must establish their recent inputs after aging.
+
+## Prerequisite fixture path lifetime, 2026-10-24
+
+The prerequisite controller retained its script and recipe paths in the rotating buffer that creates each row's fixture paths (#1075). The fifth row overwrote the script path with the temporary sudo marker; the three Windows rows then tried the same removed file. The controller now owns both path arrays through the entire loop. All eight exact-output checks and their installation and unchanged-state assertions remain. Paths retained across calls that reuse a rotating buffer must be copied into storage owned by their caller.
