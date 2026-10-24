@@ -373,10 +373,47 @@ def native_binary(path):
             'not a native executable: ' + str(path))
 
 
+def sanitizer_tools(tree, name):
+    """Verify the native tool manifest and its resolved-source binding."""
+    manifest = read_json(tree / name)
+    require(set(manifest) == {'schema_version', 'platform', 'inputs'} and
+            manifest['schema_version'] == 1 and manifest['platform'] == sys.platform and
+            isinstance(manifest['inputs'], list), 'invalid native sanitizer tool manifest')
+    parent = Path(name).parent
+    expected = {str(parent / leaf) for leaf in ('atos', 'atos.provenance.json')} \
+        if sys.platform == 'darwin' else set()
+    artifacts = {name: describe(tree / name)}
+    for item in manifest['inputs']:
+        require(set(item) == {'path', 'sha256'} and item['path'] in expected,
+                'unexpected or repeated sanitizer input')
+        path = relative(item['path'])
+        expected.remove(path)
+        artifacts[path] = describe(tree / path)
+        require(artifacts[path]['sha256'] == item['sha256'], 'sanitizer input changed: ' + path)
+    require(not expected, 'native sanitizer input is missing')
+    if sys.platform == 'darwin':
+        snapshot = tree / parent / 'atos'
+        provenance = read_json(tree / parent / 'atos.provenance.json')
+        require(set(provenance) == {'source', 'sha256'}, 'invalid sanitizer source provenance')
+        source = filesystem_path(provenance['source'])
+        require(source.is_absolute() and source == source.resolve(strict=True) and
+                source == Path('/usr/bin/atos').resolve(strict=True),
+                'sanitizer source is not the resolved native atos')
+        require(describe(source) == describe(snapshot) and
+                provenance['sha256'] == artifacts[str(parent / 'atos')]['sha256'],
+                'sanitizer native source differs from its snapshot')
+        native_binary(snapshot)
+    return artifacts
+
+
 def validate_native(tree, roles):
+    artifacts = {}
     for name, kind in roles.items():
         if kind == 'native':
-            native_binary(tree / name)
+            if Path(name).parts[-2:] == ('sanitizer', 'tools.json'):
+                artifacts.update(sanitizer_tools(tree, name))
+            else:
+                native_binary(tree / name)
         if kind != 'inventory':
             continue
         inventory = read_json(tree / name)
@@ -397,6 +434,7 @@ def validate_native(tree, roles):
                 path = tree / relative(check['program'])
                 require(digest(path) == check['sha256'], 'native program differs')
                 native_binary(path)
+    return artifacts
 
 
 def prepare(args):
@@ -464,7 +502,7 @@ def prepare(args):
     require(args.arches in ('i686', 'x86_64', 'i686,x86_64'), 'invalid native build architectures')
     default_arch = 'x86_64' if args.arches == 'x86_64' else 'i686'
     commands = build_native(tree, roles, imported, default_arch)
-    validate_native(tree, roles)
+    native_data = validate_native(tree, roles)
     for name, value in imported.items():
         verify(tree / name, value)
     require(source(tree, commit) == inputs and config_path.read_bytes() == config_bytes and
@@ -473,7 +511,7 @@ def prepare(args):
                            commit=commit, producer_sha256=producer['sha256'],
                            ordinary_production=metadata['receipt'], imported=imported,
                            roles=roles, native_build=commands,
-                           artifacts={name: describe(tree / name) for name in roles}))
+                           artifacts={**native_data, **{name: describe(tree / name) for name in roles}}))
 
 
 def main():

@@ -50,9 +50,80 @@ class ImportTests(unittest.TestCase):
                       'build/tests/style/sparse.json', 'build/tests/hello'):
             self.assertEqual(product.role(value), 'portable', value)
         for value in ('build/tests/cases/machine/disk', 'build/tools/etude/etude',
-                      'build/krffs/readfile.krffs', 'build/tests/host-suite/scripts/kstack'):
+                      'build/krffs/readfile.krffs', 'build/tests/host-suite/scripts/kstack',
+                      'build/tests/host-suite/sanitizer/tools.json'):
             self.assertEqual(product.role(value), 'native', value)
         self.assertEqual(product.role('build/tests/host-suite/tests.inventory.json'), 'inventory')
+
+    def test_sanitizer_file_goal(self):
+        repo = Path(__file__).resolve().parents[2]
+        name = 'build/tests/host-suite/sanitizer/tools.json'
+        goals = product.manifest_goals(repo)
+        self.assertIn(name, goals)
+        self.assertNotIn(str(Path(name).parent), goals)
+        recipe = (repo / 'Makefile').read_text().split('.PHONY: host-sanitizer-force\n')[1].split('\n\n')[0]
+        with tempfile.TemporaryDirectory(prefix='rach2-sanitizer-goal.') as work:
+            tree = Path(work)
+            (tree / 'tests/cases').mkdir(parents=True)
+            (tree / 'tests/cases/host').symlink_to(repo / 'tests/cases/host', target_is_directory=True)
+            (tree / 'tests/host').symlink_to(repo / 'tests/host', target_is_directory=True)
+            (tree / 'Makefile').write_text('.PHONY: host-sanitizer-force\n' + recipe + '\n')
+            with patch.dict(os.environ, {'MAKEFLAGS': '', 'MFLAGS': '', 'MAKELEVEL': ''}):
+                product.build_native(tree, {name: 'native'}, [])
+            self.assertTrue((tree / name).is_file())
+            artifacts = product.validate_native(tree, {name: 'native'})
+            self.assertEqual(artifacts[name], product.describe(tree / name))
+            manifest = json.loads((tree / name).read_text())
+            manifest['platform'] = 'foreign'
+            (tree / name).write_text(json.dumps(manifest))
+            with self.assertRaises(ValueError):
+                product.validate_native(tree, {name: 'native'})
+
+    def test_sanitizer_source_binding(self):
+        repo = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(repo / 'tests/cases/host'))
+        spec = importlib.util.spec_from_file_location('sanitizer_fixture_tools', repo / 'tests/cases/host/tools.py')
+        tools = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tools)
+        name = 'build/tests/host-suite/sanitizer/tools.json'
+        resolve = Path.resolve
+        with tempfile.TemporaryDirectory(prefix='rach2-sanitizer-source.') as work:
+            tree = Path(work).resolve()
+            source = tree / 'system-atos'
+            source.write_bytes(b'\xcf\xfa\xed\xfenative fixture bytes')
+            previous = Path.cwd()
+            try:
+                os.chdir(tree)
+                def native_path(path, *args, **kwargs):
+                    return source if path == Path('/usr/bin/atos') else resolve(path, *args, **kwargs)
+                with patch.object(sys, 'platform', 'darwin'), \
+                        patch.object(product, 'windows_host', return_value=False), \
+                        patch.object(tools, 'external_tool', return_value=source), \
+                        patch.object(Path, 'resolve', native_path):
+                    tools.sanitizer_tools(Path(name).parent, product.digest)
+                    expected = {name, str(Path(name).parent / 'atos'),
+                                str(Path(name).parent / 'atos.provenance.json')}
+                    self.assertEqual(set(product.validate_native(tree, {name: 'native'})), expected)
+                    for changed in (tree / Path(name).parent / 'atos', source):
+                        before = changed.read_bytes()
+                        changed.write_bytes(before + b'changed')
+                        with self.assertRaises(ValueError):
+                            product.validate_native(tree, {name: 'native'})
+                        changed.write_bytes(before)
+                    manifest = json.loads((tree / name).read_text())
+                    for rows in ([], manifest['inputs'] * 2,
+                                 [dict(path='../elsewhere', sha256='a' * 64)]):
+                        (tree / name).write_text(json.dumps(dict(manifest, inputs=rows)))
+                        with self.assertRaises(ValueError):
+                            product.validate_native(tree, {name: 'native'})
+                    (tree / name).write_text(json.dumps(manifest))
+                    snapshot = tree / Path(name).parent / 'atos'
+                    snapshot.unlink()
+                    snapshot.symlink_to(source)
+                    with self.assertRaises(ValueError):
+                        product.validate_native(tree, {name: 'native'})
+            finally:
+                os.chdir(previous)
 
     def test_record_identity(self):
         line = 'file ' + 'a' * 64 + ' 5 1 0 build/images/root.disk\n'

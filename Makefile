@@ -624,8 +624,8 @@ build/tests/host-suite/vfs_unmount: tests/cases/host/fixtures.py tests/cases/hos
 
 .PHONY: host-sanitizer-force
 host-sanitizer-force:
-build/tests/host-suite/sanitizer: tests/cases/host/tools.py host-sanitizer-force
-	python3 -B tests/cases/host/tools.py --sanitizer $@
+build/tests/host-suite/sanitizer/tools.json: tests/cases/host/tools.py host-sanitizer-force
+	python3 -B tests/cases/host/tools.py --sanitizer $(@D)
 
 build/tests/host-suite/scripts.inventory.json: build/tests/system/fakeapi_test
 build/tests/host-suite/etude.inventory.json: $(ETUDE) build/tests/cases/host/host
