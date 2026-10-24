@@ -534,3 +534,7 @@ The API audit now selects the codex- workload prefix, preserving its codex-exec 
 ## Antigravity pane capture (#1039)
 
 The first Linux collection found the authorization-code prompt before the captured pane contained its instructions. The assertion printed only the pane's final three lines, so it lost the relevant evidence. The row now waits for all three existing OAuth strings in one snapshot, retains each changed complete snapshot in its output, and keeps the collection's progress watchdog. No delay or deadline was increased.
+
+## API repository ownership (#1040)
+
+The API scenarios created their Git repository as test and inspected it as root. Git rejected this ownership mismatch after otherwise successful exchanges. Once the CLI has ended, the scenario gives its private verification tree to root before checking the unchanged refusal or the exact resulting commit. The ordinary agent rows already did this after unpacking their returned archive. Git's ownership checks remain enabled.
