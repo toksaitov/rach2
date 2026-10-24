@@ -1923,6 +1923,9 @@ static int attempts_of(const struct run *r, const char *id, const char *arch)
     return n;
 }
 
+/* Defined with the parsed measurement/selection fixture helpers below. */
+static int plan_suite_architectures(const struct run *r, const char *name);
+
 /** A set of both architectures runs the cases of each in one plan, in the
  * scheduler's order, its case of no architecture once. */
 static void test_cases_both(void)
@@ -1953,7 +1956,7 @@ static void test_cases_both(void)
     CHECK(attempts_of(&r, "fixture.good.none", "none") == 1 &&
               attempts_of(&r, "fixture.good.arch", "i686") == 0,
           "both: the case of none once, and no case off its architecture");
-    CHECK(plan_has(&r, "{\"suite\":\"good\",\"architecture\":\"x86_64\""),
+    CHECK(plan_suite_architectures(&r, "good"),
           "both: the plan gives each suite's architecture");
     fix_format(line, sizeof(line), "program: %s/build/x86_64/cases/probe pass", tree);
     CHECK(output_has(&r, "fixture.good.arch.x86_64.r0", line),

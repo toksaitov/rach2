@@ -113,12 +113,84 @@ static void measurement_snapshots(void)
     measurement_descriptor(&b, in(path, sizeof path, "site.permits"), NULL);
     jbuf_puts(&b, "}");
     measurement_file(fix_path("measurement-site.json"), &b);
-    CHECK(!write_text(fix_path("measurement-cache.json"),
-                      "{\"schema_version\":1,\"controlled\":true,\"method\":\"verified fixture "
-                      "artifacts; natural OS cache\"}",
-                      0644),
-          "context: cache procedure writes");
 }
+/* These synthetic cache inputs exercise binding, not actual cache residency. */
+static void measurement_cache_states(struct jbuf *b, int known)
+{
+    static const char *const names[] = {"artifacts", "build", "tools", "os"};
+    jbuf_puts(b, "{");
+    for (size_t i = 0; i < 4; i++) {
+        if (i)
+            jbuf_puts(b, ",");
+        measurement_quote(b, names[i]);
+        jbuf_puts(b, ":{\"state\":");
+        measurement_quote(b, known ? "cold" : "unknown");
+        jbuf_puts(b, ",\"procedure\":\"synthetic context fixture\"}");
+    }
+    jbuf_puts(b, "}");
+}
+static void measurement_cache(struct jbuf *context,
+                              const struct etude_preparation_receipt *receipt, int known)
+{
+    struct jbuf states = {0}, b = {0};
+    measurement_cache_states(&states, known);
+    jbuf_puts(&b, known ? "{\"schema_version\":1,\"controlled\":true"
+                       : "{\"schema_version\":1,\"controlled\":false");
+    jbuf_puts(&b, ",\"method\":\"synthetic context fixture\",\"states\":");
+    jbuf_puts(&b, states.data);
+    jbuf_puts(&b, "}");
+    measurement_file(fix_path("measurement-cache.json"), &b);
+    if (known) {
+        /* The witness is actual fixture receipt bytes with their exact hash. */
+        char path[PATH_LEN], hash[65], size[100];
+        struct stat st;
+        fix_format(path, sizeof path, "%s/%s.receipt", fix_dir(), receipt->run_id);
+        CHECK(!etude_digest_file(NULL, path, &st, hash), "context: conditioning witness hashes");
+        jbuf_puts(&b, "{\"format\":\"etude-cache-protocol\",\"schema_version\":1,\"run_id\":");
+        measurement_quote(&b, receipt->run_id);
+        jbuf_puts(&b, ",\"commit\":");
+        measurement_quote(&b, receipt->commit);
+        jbuf_puts(&b, ",\"machine_id\":");
+        measurement_quote(&b, receipt->clock.machine_id);
+        jbuf_puts(&b, ",\"boot_id\":");
+        measurement_quote(&b, receipt->clock.boot_id);
+        jbuf_puts(&b, ",\"states\":");
+        jbuf_puts(&b, states.data);
+        jbuf_puts(&b, ",\"evidence\":[{\"sha256\":");
+        measurement_quote(&b, hash);
+        fix_format(size, sizeof size, ",\"size_bytes\":%llu,\"locations\":[",
+                   (unsigned long long)st.st_size);
+        jbuf_puts(&b, size);
+        measurement_quote(&b, path);
+        jbuf_puts(&b, "]}]}");
+        measurement_file(fix_path("measurement-cache-evidence.json"), &b);
+        jbuf_puts(context, ",\"cache_evidence\":");
+        measurement_descriptor(context, fix_path("measurement-cache-evidence.json"), NULL);
+    }
+    jbuf_free(&states);
+}
+
+static int plan_suite_architectures(const struct run *r, const char *name)
+{
+    struct eh_json *plan = measurement_record(r, "plan");
+    const struct eh_json *data = eh_json_get(plan, "data");
+    struct eh_json *selection = measurement_blob(eh_json_get(data, "selection"));
+    const struct eh_json *suites = eh_json_get(selection, "suites");
+    int count = 0, mask = 0;
+    for (const struct eh_json *suite = suites ? suites->child : NULL; suite; suite = suite->next) {
+        const struct eh_json *s = eh_json_get(suite, "suite"),
+                             *a = eh_json_get(suite, "architecture");
+        if (!s || s->type != 's' || strcmp(s->string, name))
+            continue;
+        count++;
+        if (a && a->type == 's')
+            mask |= !strcmp(a->string, "i686") ? 1 : !strcmp(a->string, "x86_64") ? 2 : 0;
+    }
+    eh_json_free(selection);
+    eh_json_free(plan);
+    return count == 2 && mask == 3;
+}
+
 static void measurement_exemption(struct jbuf *b, const struct etude_legacy_set_opts *o,
                                   const char *id, int bad)
 {
@@ -240,6 +312,7 @@ measurement_context(struct etude_legacy_set_opts *o, const char *id, int first, 
     jbuf_puts(&b, ",\"commit\":");
     measurement_quote(&b, measurement_commit);
     jbuf_puts(&b, first ? ",\"purpose\":\"phase_first_run\"" : ",\"purpose\":\"ci\"");
+    measurement_cache(&b, receipt, bad == -1);
     const char *names[] = {"source", "tools", "site_profile", "cache_state"};
     const char *files[] = {"measurement-source.json", "measurement-tools.json",
                            "measurement-site.json", "measurement-cache.json"};
@@ -258,7 +331,7 @@ measurement_context(struct etude_legacy_set_opts *o, const char *id, int first, 
         measurement_exemption(&b, o, id, bad);
     else
         jbuf_puts(&b, "null");
-    if (bad == -1)
+    if (bad < 0)
         measurement_unavailable(&b, id, receipt);
     jbuf_puts(&b, "}");
     fix_format(path, sizeof path, "%s/%s.context", fix_dir(), id);
@@ -269,15 +342,18 @@ measurement_context(struct etude_legacy_set_opts *o, const char *id, int first, 
           "context: bound context opens");
     return ctx;
 }
-static void measurement_unavailable_history(const struct run *r, const struct eh_json *load)
+static void measurement_unavailable_history(const struct run *r, const struct eh_json *load,
+                                            int known_cache)
 {
     const struct eh_json *eligible = eh_json_get(load, "context_eligible");
     const struct eh_json *outer = eh_json_get(load, "outer");
     const struct eh_json *summary = eh_json_get(outer, "summary");
     const struct eh_json *cpu = eh_json_get(eh_json_get(summary, "first"), "system_busy_cpu_us");
     const struct eh_json *ok = eh_json_get(summary, "comparison_available");
-    CHECK(eligible && eligible->type == 't' && ok && ok->type == 'f' && cpu && cpu->type == 'z',
-          "context: valid context retains unavailable CPU measurements without comparison");
+    CHECK(eligible && eligible->type == (known_cache ? 't' : 'f'),
+          "context: only a complete cache protocol permits context eligibility");
+    CHECK(ok && ok->type == 'f' && cpu && cpu->type == 'z',
+          "context: unavailable CPU measurements never permit comparison");
     char path[PATH_LEN], bytes[8192] = {0};
     fix_format(path, sizeof path, "%s/%s.outer-trace", fix_dir(), r->name);
     CHECK(read_text(path, bytes, sizeof bytes) > 0, "context: unavailable trace reads");
@@ -293,7 +369,7 @@ static void measurement_unavailable_history(const struct run *r, const struct eh
 }
 static void measurement_history(struct run *r, const struct etude_measurement_context *ctx,
                                 const struct etude_preparation_receipt *receipt, int first,
-                                int unavailable)
+                                int unavailable, int known_cache)
 {
     struct eh_json *plan = measurement_record(r, "plan"), *run = measurement_record(r, "run");
     const struct eh_json *p = eh_json_get(plan, "data"), *data = eh_json_get(run, "data");
@@ -322,7 +398,7 @@ static void measurement_history(struct run *r, const struct etude_measurement_co
     CHECK(available && available->type == 'f',
           "context: unavailable outer observation is not a baseline");
     if (unavailable)
-        measurement_unavailable_history(r, load);
+        measurement_unavailable_history(r, load, known_cache);
     if (ctx) {
         uint64_t start = measurement_number(time, "start_us"),
                  end = measurement_number(time, "end_us");
@@ -452,7 +528,7 @@ static void test_contexts(void)
     measurement_export_cases();
     catch_stops();
     stop_signal = 0;
-    for (int n = 0; n < 12; n++) {
+    for (int n = 0; n < 13; n++) {
         char id[80], site[PATH_LEN];
         struct run r;
         struct etude_legacy_set_opts o;
@@ -473,12 +549,11 @@ static void test_contexts(void)
         o.commit = measurement_commit;
         o.stop = &stop_signal;
         o.site = in(site, sizeof site, "site.permits");
+        int bad = n >= 3 && n < 8 ? n - 2 : 0;
+        if (n >= 11)
+            bad = n == 11 ? -1 : -2;
         if (n)
-            ctx = measurement_context(&o, id, n >= 2 && n < 8,
-                                      n == 11           ? -1
-                                      : n >= 3 && n < 8 ? n - 2
-                                                        : 0,
-                                      &receipt);
+            ctx = measurement_context(&o, id, n >= 2 && n < 8, bad, &receipt);
         o.context = ctx;
         if (n == 8)
             o.commit = "2222222222222222222222222222222222222222";
@@ -492,9 +567,9 @@ static void test_contexts(void)
         if (o.out)
             fclose(o.out);
         history_read(&r);
-        if (n < 3 || n == 11) {
+        if (n < 3 || n >= 11) {
             CHECK(!r.status && !r.read, "context: valid prepared host run succeeds");
-            measurement_history(&r, ctx, &receipt, n == 2, n == 11);
+            measurement_history(&r, ctx, &receipt, n == 2, n >= 11, n == 11);
         } else {
             CHECK(r.status == 2 && !count_kind(&r.h, "attempt"),
                   "context: unrelated selection, run, commit or attempt refuses work");
