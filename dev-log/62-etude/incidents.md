@@ -609,3 +609,7 @@ The full Linux collection stopped several product-family cases during their init
 ## The KRFFS case declarations rejected native child records (#1052)
 
 All eight KRFFS checker cases execute their tools through the native executor and report each child before release. Their declarations still said that children were reaped without reports. The full Linux collection therefore rejected passing assertions as malformed reports. The declarations now require the existing child records and cleanup verification.
+
+## The launch fixture lost its arguments pathname (#1054)
+
+The launch-script fixture saved a pointer into its rotating path buffer across all 29 rows. Later path calls overwrote that slot with the script pathname, and the next unlink removed run.sh. The full Linux collection then reported status 127 for the x86-64 rows. The fixture now copies its persistent output pathname into owned storage before running any row. All original launch settings and refusals remain.

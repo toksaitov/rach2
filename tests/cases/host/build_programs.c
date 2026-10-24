@@ -108,9 +108,10 @@ static int run_tree(struct fixture *f)
 
 int build_run_scripts(struct fixture *f)
 {
+    char output[4096];
     if (!run_tree(f))
         return 0;
-    const char *output = bp(f->work, "arguments");
+    snprintf(output, sizeof(output), "%s", bp(f->work, "arguments"));
     fx_env("ARGS_OUT", output);
     for (size_t i = 0; i < sizeof(run_rows) / sizeof(*run_rows); i++) {
         const struct run_row *r = &run_rows[i];
