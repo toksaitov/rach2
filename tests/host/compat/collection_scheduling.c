@@ -2,6 +2,7 @@
 #include "../../../tools/etude/json.h"
 
 static unsigned scheduling_initial, scheduling_ceiling;
+static int scheduling_both;
 
 /* Replace only an existing string in the fixture's parsed case. */
 static void scheduling_string(struct json *object, const char *key, const char *value)
@@ -13,6 +14,26 @@ static void scheduling_string(struct json *object, const char *key, const char *
         field->string = strdup(value);
         CHECK(field->string != NULL, "scheduling fixture string allocates");
     }
+}
+
+static void scheduling_architectures(struct json *one)
+{
+    if (!scheduling_both)
+        return;
+    struct json *value = NULL;
+    char error[256];
+    const char text[] = "[\"i686\",\"x86_64\"]";
+    CHECK(!json_parse(text, strlen(text), 1, &value, error, sizeof error),
+          "both scheduling architectures parse");
+    for (size_t i = 0; value && i < one->count; i++)
+        if (!strcmp(one->item[i]->name, "architectures")) {
+            value->name = strdup("architectures");
+            json_free(one->item[i]);
+            one->item[i] = value;
+            return;
+        }
+    json_free(value);
+    CHECK(0, "scheduling architectures exist");
 }
 
 /* Reuse the validated case contract, changing its family and identities only. */
@@ -40,6 +61,7 @@ static void scheduling_manifest(const char *family, const char *const *ids)
         if (i)
             jbuf_puts(&output, ",");
         scheduling_string(one, "case_id", ids[i]);
+        scheduling_architectures(one);
         if (scheduling_ceiling) {
             struct json *r = (struct json *)json_member(one, "resources");
             ((struct json *)json_member(r, "cpu_millis"))->integer = scheduling_initial;
@@ -77,12 +99,15 @@ static int scheduling_claim(const char *root)
 static int scheduling_role(const char *id)
 {
     const char *root = getenv("ETUDE_COLLECTION_MEETING");
+    int meeting = root != NULL;
+    if (!root)
+        root = getenv("ETUDE_COLLECTION_COST_ROOT");
     if (!root || (strncmp(id, "host.host.", 10) && strcmp(id, "fixture.style.ready")))
         return -1;
     printf("@etude 1 begin %s\n", id);
     fflush(stdout);
     int ok = scheduling_claim(root);
-    if (!strcmp(id, "host.host.tests") || !strcmp(id, "host.host.checkers")) {
+    if (meeting && (!strcmp(id, "host.host.tests") || !strcmp(id, "host.host.checkers"))) {
         int writer = !strcmp(id, "host.host.tests");
         char path[PATH_MAX], byte = 'x';
         for (int phase = 0; phase < 2; phase++) {
@@ -182,6 +207,8 @@ static void scheduling_capacity(char *out, size_t room)
     fixture_policy(4000);
 }
 
+static void scheduling_history(char *out, size_t room);
+
 static void scheduling(char *out, size_t room)
 {
     static const char *const ids[] = {"host.host.tests", "host.host.checkers", "host.host.etude",
@@ -213,4 +240,5 @@ static void scheduling(char *out, size_t room)
     scheduling_seed(out, room);
     scheduling_capacity(out, room);
     unsetenv("ETUDE_COLLECTION_MEETING");
+    scheduling_history(out, room);
 }

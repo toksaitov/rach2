@@ -35,6 +35,7 @@
 #endif
 
 #include "../compare.h"
+#include "../cost.h"
 #include "../collection_repeat.h"
 #include "../collection_load.h"
 #include "../measurement_context.h"
@@ -208,6 +209,7 @@ struct member {
     char inventory[65];
     char execution_record[300];
     size_t history_samples, gap_samples;
+    struct etude_cost cost; /* compatible history, before command pointers exist */
     char workload[400], assertions[400], profile[400]; /* blob references */
     const struct etude_load *load;
     struct legacy_case *learned;
@@ -1137,9 +1139,13 @@ static int runner_document(struct set *x, struct cmp_text *t, struct cmp_text *d
         string(d, m->item_id);
         cmp_printf(d,
                    ",\"case_us\":%llu,\"case_samples\":%lu,\"gap_us\":%llu,"
-                   "\"gap_samples\":%lu}",
+                   "\"gap_samples\":%lu,\"expected_us\":%llu,\"cost_samples\":%lu,"
+                   "\"cpu_millis\":%llu,\"cpu_samples\":%lu,\"reserved_cpu_millis\":%llu}",
                    (unsigned long long)m->c.wd.case_us, (unsigned long)m->history_samples,
-                   (unsigned long long)m->c.wd.gap_us, (unsigned long)m->gap_samples);
+                   (unsigned long long)m->c.wd.gap_us, (unsigned long)m->gap_samples,
+                   (unsigned long long)m->cost.elapsed_us, (unsigned long)m->cost.samples,
+                   (unsigned long long)m->cost.cpu_millis, (unsigned long)m->cost.cpu_samples,
+                   (unsigned long long)m->c.res[0].amount);
     }
     cmp_printf(d, "]}\n");
     return part(x, t, "runner", d);
@@ -1231,16 +1237,78 @@ static int preparation_nodes(struct set *x, struct cmp_text *t)
     return rc;
 }
 
+/* Serialize item identities identically for history matching and the plan. */
+static void plan_items(const struct set *x, struct cmp_text *t)
+{
+    size_t i;
+    cmp_printf(t, "\"items\":[");
+    for (i = 0; i < x->n; i++) {
+        const struct member *m = &x->mem[i];
+
+        cmp_printf(t, "%s{\"item_id\":", i ? "," : "");
+        string(t, m->item_id);
+        cmp_printf(t, ",\"case_id\":");
+        string(t, m->case_id);
+        cmp_printf(t, ",\"family_id\":");
+        string(t, family_of(m));
+        cmp_printf(t,
+                   ",\"architecture\":\"%s\",\"domain\":\"%s\",\"workload\":%s,"
+                   "\"assertions\":%s,\"profile\":%s,\"repetition\":%lld,\"attempt_ids\":[",
+                   m->arch, m->k->guest || m->k->machine ? "qemu" : "host", m->workload,
+                   m->assertions, m->profile, m->rep);
+        string(t, m->c.id);
+        cmp_printf(t, "]}");
+    }
+    cmp_printf(t, "]");
+}
+
+/* Read compatible costs before sorting members or retaining command pointers.
+ * Item documents and environment use exactly the final plan's serializers. */
+static int learn_costs(struct set *x)
+{
+    struct cmp_text t = {0}, d = {0};
+    struct eh_json *plan = NULL;
+    int rc = -1;
+    for (size_t i = 0; i < x->n; i++)
+        if (item_docs(x, &x->mem[i]))
+            goto done;
+    cmp_printf(&t, "{");
+    plan_items(x, &t);
+    cmp_printf(&t, ",\"artifacts\":[");
+    if (plan_environment(x, &t, &d))
+        goto done;
+    cmp_printf(&t, "}");
+    plan = t.failed ? NULL : eh_json_parse(t.data);
+    if (!plan)
+        goto done;
+    const struct eh_json *items = eh_json_get(plan, "items"), *item;
+    size_t i = 0;
+    for (item = items ? items->child : NULL; item && i < x->n; item = item->next, i++) {
+        struct member *m = &x->mem[i];
+        struct cmp_key key;
+        cmp_item_key(plan, item, &key);
+        if (etude_cost_of(&x->baseline, &key, m->k->expected_us, m->k->cpu_millis,
+                          m->k->cpu_ceiling_millis, &m->cost))
+            goto done;
+        say(x, "etude run: cost: %s %s: %llu us (%lu samples), CPU %llu (%lu samples)",
+            m->k->case_id, m->k->arch, (unsigned long long)m->cost.elapsed_us,
+            (unsigned long)m->cost.samples, (unsigned long long)m->cost.cpu_millis,
+            (unsigned long)m->cost.cpu_samples);
+    }
+    rc = i == x->n ? 0 : -1;
+done:
+    eh_json_free(plan);
+    free(t.data);
+    free(d.data);
+    return rc;
+}
+
 /** Write the plan record. */
 static int write_plan(struct set *x)
 {
     const struct etude_legacy_set_opts *o = x->o;
     struct cmp_text t = {NULL, 0, 0, 0}, d = {NULL, 0, 0, 0};
-    size_t i;
     int rc = budget_policy(x);
-
-    for (i = 0; i < x->n && rc == 0; i++)
-        rc = item_docs(x, &x->mem[i]);
     cmp_printf(&t, "{\"purpose\":%s", purpose(x));
     selection(x, &d);
     if (!exemption_matches(x, &d)) {
@@ -1250,25 +1318,9 @@ static int write_plan(struct set *x)
         return -1;
     }
     rc |= part(x, &t, "selection", &d);
-    cmp_printf(&t, ",\"items\":[");
-    for (i = 0; i < x->n; i++) {
-        const struct member *m = &x->mem[i];
-
-        cmp_printf(&t, "%s{\"item_id\":", i ? "," : "");
-        string(&t, m->item_id);
-        cmp_printf(&t, ",\"case_id\":");
-        string(&t, m->case_id);
-        cmp_printf(&t, ",\"family_id\":");
-        string(&t, family_of(m));
-        cmp_printf(&t,
-                   ",\"architecture\":\"%s\",\"domain\":\"%s\",\"workload\":%s,"
-                   "\"assertions\":%s,\"profile\":%s,\"repetition\":%lld,\"attempt_ids\":[",
-                   m->arch, m->k->guest || m->k->machine ? "qemu" : "host", m->workload,
-                   m->assertions, m->profile, m->rep);
-        string(&t, m->c.id);
-        cmp_printf(&t, "]}");
-    }
-    cmp_printf(&t, "],\"commit\":\"%s\"",
+    cmp_printf(&t, ",");
+    plan_items(x, &t);
+    cmp_printf(&t, ",\"commit\":\"%s\"",
                o->commit != NULL ? o->commit : "0000000000000000000000000000000000000000");
     cmp_printf(&d, "{\"schema_version\":1,\"tree\":");
     string(&d, o->tree);
@@ -3608,6 +3660,7 @@ static int case_paths(struct set *x, struct member *m)
     size_t v = 0;
     int both = x->narches > 1, arch = both && strcmp(k->arch, "none") != 0;
 
+    m->arch = k->arch;
     if ((both ? fit(tail, sizeof(tail), "%s.%s.r%lld", k->case_id, k->arch, m->rep)
               : fit(tail, sizeof(tail), "%s.r%lld", k->case_id, m->rep)) != 0 ||
         fit(m->case_id, sizeof(m->case_id), "%s", k->case_id) != 0 ||
@@ -3649,7 +3702,7 @@ static int case_paths(struct set *x, struct member *m)
 static int case_cpu(const struct set *x, const struct member *m, uint64_t *amount)
 {
     const struct legacy_case *k = m->k;
-    *amount = k->cpu_millis;
+    *amount = m->cost.cpu_millis;
     if (x->o->prepared && !strcmp(m->manifest->family, "host.host")) {
         uint64_t capacity = x->cap[ETUDE_LEGACY_CPU].amount;
         if (capacity < k->cpu_millis || k->cpu_ceiling_millis < k->cpu_millis) {
@@ -3734,7 +3787,7 @@ static int case_command(struct set *x, struct member *m)
     x->jobs[m - x->mem].id = c->id;
     x->jobs[m - x->mem].case_id = m->case_id;
     x->jobs[m - x->mem].arch = k->arch;
-    x->jobs[m - x->mem].cost_us = k->expected_us;
+    x->jobs[m - x->mem].cost_us = m->cost.elapsed_us;
     x->jobs[m - x->mem].res = c->res;
     x->jobs[m - x->mem].nres = c->nres;
     return 0;
@@ -4015,7 +4068,7 @@ static int order_members(struct set *x, size_t from)
         jobs[i].id = x->mem[from + i].c.id;
         jobs[i].case_id = x->mem[from + i].case_id;
         jobs[i].arch = x->mem[from + i].k->arch;
-        jobs[i].cost_us = x->mem[from + i].k->expected_us;
+        jobs[i].cost_us = x->mem[from + i].cost.elapsed_us;
     }
     etude_sched_order(jobs, n);
     for (i = 0; i < n; i++) {
@@ -4185,7 +4238,9 @@ static int prepare_members(struct set *x)
             say(x, "etude run: result: error: the run: %s", strerror(errno));
             return 2;
         }
-    if ((!o->repeat && x->narches > 1 && order_members(x, serial) != 0) || number_members(x) != 0) {
+    if (learn_costs(x))
+        return refuse(x, "compatible case costs could not be read");
+    if ((!o->repeat && order_members(x, serial) != 0) || number_members(x) != 0) {
         say(x, "etude run: result: error: the run: %s", strerror(errno));
         return 2;
     }
