@@ -613,3 +613,7 @@ All eight KRFFS checker cases execute their tools through the native executor an
 ## The launch fixture lost its arguments pathname (#1054)
 
 The launch-script fixture saved a pointer into its rotating path buffer across all 29 rows. Later path calls overwrote that slot with the script pathname, and the next unlink removed run.sh. The full Linux collection then reported status 127 for the x86-64 rows. The fixture now copies its persistent output pathname into owned storage before running any row. All original launch settings and refusals remain.
+
+## Native board comparisons, 2026-10-24
+
+The GNU board fixture failed nine rows while the actual board operations returned their expected state. Its C port compared archive lists with trailing spaces, an owner-only diagnostic without its explanatory suffix, and the complete human-readable start comment against the single phase record. Issue #1056 restores the original shell fixture's whitespace and line selection, while requiring exactly one start record with the original commit. Status, membership, archive state and rejected mutations remain checked.

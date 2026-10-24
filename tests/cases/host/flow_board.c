@@ -667,6 +667,25 @@ static int is_field(const char *n, unsigned k, const char *wanted)
     return ok;
 }
 
+static int phase_record(const char *n, const char *wanted)
+{
+    char *s = data_field(n, 10), *p = s, *end;
+    unsigned found = 0;
+    int ok = s != NULL;
+    while (p && *p) {
+        end = strchr(p, ';');
+        if (end)
+            *end++ = 0;
+        if (!strncmp(p, "phase: ", 7)) {
+            found++;
+            ok = ok && !strcmp(p, wanted);
+        }
+        p = end;
+    }
+    free(s);
+    return ok && found == 1;
+}
+
 static int calls(const char *text)
 {
     return fx_has(state_path("calls"), text);
@@ -690,26 +709,42 @@ static int left(const char *wanted)
     return ok;
 }
 
-static int first_words(struct fixture *f, const char *wanted)
+static int output_words(struct fixture *f, const char *wanted)
 {
     const char *p = f->out;
     char out[2048] = "";
     size_t n = 0;
     while (p && *p) {
         const char *end = p + strcspn(p, "\t\n");
-        size_t len = (size_t)(end - p);
-        if (n + len + 2 >= sizeof(out))
-            return 0;
-        if (n)
-            out[n++] = ' ';
-        memcpy(out + n, p, len);
-        n += len;
+        while (p < end) {
+            const char *word;
+            size_t len;
+            while (p < end && *p == ' ')
+                p++;
+            word = p;
+            while (p < end && *p != ' ')
+                p++;
+            len = (size_t)(p - word);
+            if (!len)
+                break;
+            if (n + len + 2 >= sizeof(out))
+                return 0;
+            if (n)
+                out[n++] = ' ';
+            memcpy(out + n, word, len);
+            n += len;
+        }
         out[n] = 0;
         p = strchr(p, '\n');
         if (p)
             p++;
     }
-    return f->status == 0 && !strcmp(out, wanted);
+    return !strcmp(out, wanted);
+}
+
+static int first_words(struct fixture *f, const char *wanted)
+{
+    return f->status == 0 && output_words(f, wanted);
 }
 
 static int said(struct fixture *f, const char *line)
@@ -979,7 +1014,7 @@ static int group_phase_rows(struct fixture *f)
         return 0;
     call(f, "group", "fixtures", "10", "25");
     ok = fx_check(f,
-                  f->status && !*f->out && strstr(f->err, "board: #25 is labelled owner-only\n") &&
+                  f->status && !*f->out && strstr(f->err, "board: #25 is labelled owner-only") &&
                       !calls("issue edit") && !calls("issue create"),
                   "group-only") &&
          ok;
@@ -1028,7 +1063,7 @@ static int archive_rows(struct fixture *f)
         call(f, i == 4 ? "done" : "archive", i == 4 ? NULL : "7", NULL, NULL);
         if (i == 2)
             held = f->status && strstr(f->err, "board: #19: cannot archive its card\n") && f->out &&
-                   !strcmp(f->out, "21\n");
+                   output_words(f, "21");
         else
             held = first_words(f, i == 1 ? "7 19 21" : i == 4 ? "19" : "19 21");
         if (i == 0)
@@ -1084,7 +1119,7 @@ static int start_early(struct fixture *f, unsigned i, const char *first, int bef
     if (i == 2)
         held = held && before && is_field("5", 3, "In_progress");
     if (i < 3)
-        held = held && is_field("5", 10, "phase: started at " BOARD_HEAD);
+        held = held && phase_record("5", "phase: started at " BOARD_HEAD);
     return held;
 }
 
