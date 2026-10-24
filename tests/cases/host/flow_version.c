@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/utsname.h>
 #include <unistd.h>
 static const char *ev(const char *n)
 {
@@ -208,6 +209,28 @@ struct version {
     struct fixture *f;
     char tree[4096], fix[4096], key[100], dir[4096], script[4096];
 };
+
+/* Bootstrap chooses its source set and flags from the real uname identity. */
+static const char *version_platform(struct utsname *u)
+{
+    if (uname(u))
+        return NULL;
+    if (!strcmp(u->sysname, "Darwin"))
+        return "macos";
+    if (!strcmp(u->sysname, "Linux")) {
+        size_t n = strlen(u->release);
+        return n >= 6 && !strcmp(u->release + n - 6, "-rach2") ? "rach2" : "linux";
+    }
+    return !strncmp(u->sysname, "MINGW", 5) || !strncmp(u->sysname, "MSYS", 4) ? "windows"
+                                                                                  : NULL;
+}
+
+static const char *version_flags(const char *platform)
+{
+    if (!strcmp(platform, "rach2"))
+        return "-std=c99 -static -D__rach2__";
+    return !strcmp(platform, "windows") ? "-std=c99 -O2 -static" : "-std=c99 -O2 -pthread";
+}
 static int state(struct version *v)
 {
     unsigned i;
@@ -290,18 +313,26 @@ static int empty(const char *path)
 }
 static int record(struct version *v)
 {
-    char file[4096], binary[4096], hex[65], line[200], *text, *at;
+    char file[4096], binary[4096], hex[65], line[200], identity[500], *text, *at;
     struct sha256 h;
+    struct utsname u;
     unsigned char bytes[32];
     int ok;
     unsigned n = 0;
+    const char *platform = version_platform(&u);
+    if (!platform)
+        return 0;
     snprintf(file, sizeof(file), "%s/version", v->dir);
-    snprintf(binary, sizeof(binary), "%s/bin/etude", v->dir);
+    const char *suffix = !strcmp(platform, "windows") ? ".exe" : "";
+    snprintf(binary, sizeof(binary), "%s/bin/etude%s", v->dir, suffix);
     if (!digest(binary, hex))
         return 0;
-    snprintf(line, sizeof(line), "program etude %s\n", hex);
+    snprintf(line, sizeof(line), "program etude%s %s\n", suffix, hex);
+    snprintf(identity, sizeof identity, "platform %s %s\n", platform, u.machine);
     text = fx_read(file);
-    ok = strstr(text, line) && strstr(text, "flags -std=c99 -O2\n") && strstr(text, "cc fakecc\n");
+    ok = strstr(text, line) && strstr(text, identity) && strstr(text, "cc fakecc\n");
+    snprintf(identity, sizeof identity, "flags %s\n", version_flags(platform));
+    ok = ok && strstr(text, identity);
     at = text;
     while (*at && n < 5)
         if (*at++ == '\n')
@@ -795,13 +826,57 @@ static int version_revision(struct version *value)
          ok;
     return ok;
 }
+static int version_real_verbs(struct version *v, const char *target, int rach2)
+{
+    const char *verbs[] = {"serve", "admit", "lock", "lock", "build"};
+    const char *sub[] = {NULL, NULL, "tree", "ports", NULL};
+    int ok = 1;
+    for (unsigned i = 0; i < 5; i++) {
+        const char *a[] = {target, verbs[i], sub[i], NULL};
+        char wanted[200];
+        fx_run(v->f, a, v->f->work, NULL, NULL);
+        if (rach2)
+            snprintf(wanted, sizeof wanted, "etude: %s: no such command\n", verbs[i]);
+        else
+            snprintf(wanted, sizeof wanted, "usage: etude %s%s%s ", verbs[i],
+                     sub[i] ? " " : "", sub[i] ? sub[i] : "");
+        ok = fx_check(v->f, v->f->status == 2 && strstr(v->f->err, wanted), wanted) && ok;
+    }
+    return ok;
+}
+
+/* List a private inventory through the real native public entry. No guest
+ * program or system image is needed to list its declared identities. */
+static int version_real_native(struct version *v, const char *target)
+{
+    char inventory[4096], path[4096];
+    const char *files[] = {"probes.cases", "musl.cases", "rows.cases", "maps"};
+    snprintf(inventory, sizeof inventory, "%s/native-inventory", v->f->work);
+    if (!fx_mkdir(inventory))
+        return 0;
+    for (unsigned i = 0; i < 4; i++) {
+        snprintf(path, sizeof path, "%s/native-inventory/%s", v->f->work, files[i]);
+        if (!fx_text(path, i ? "" : "case fixture.version -- /bin/true\n"))
+            return 0;
+    }
+    const char *a[] = {target, "run", "native", "list", "--tree", v->tree, "--inventory",
+                       inventory, NULL};
+    return fx_check(v->f,
+                    !fx_run(v->f, a, v->f->work, NULL, NULL) &&
+                        !strcmp(v->f->out, "fixture.version\n"),
+                    "built Rach2 native entry lists its declared inventory");
+}
+
 static int version_real_build(struct version *value)
 {
     struct version v = *value;
     struct fixture *f = v.f;
     int ok = 1;
-    char target[4096];
-    unsigned i;
+    char target[4096], published[4096], identity[500];
+    struct utsname u;
+    const char *platform = version_platform(&u);
+    if (!platform)
+        return 0;
     /* Compile the product with the GNU compiler, then invoke its real verbs. */
     if (!state(&v))
         return 0;
@@ -811,6 +886,11 @@ static int version_real_build(struct version *value)
     }
     if (!fx_check(f, result(&v, "built", NULL), "real compiler build"))
         return 0;
+    snprintf(published, sizeof published, "%s/version", v.dir);
+    snprintf(identity, sizeof identity, "platform %s %s\n", platform, u.machine);
+    ok = fx_check(f, fx_has(published, identity), "real compiler uses actual uname identity") && ok;
+    snprintf(identity, sizeof identity, "flags %s\n", version_flags(platform));
+    ok = fx_check(f, fx_has(published, identity), "real compiler uses platform build flags") && ok;
     snprintf(target, sizeof(target), "%s/bin/etude", v.dir);
     {
         char schemas[4096];
@@ -840,18 +920,10 @@ static int version_real_build(struct version *value)
                       "built history checker accepts example") &&
              ok;
     }
-    {
-        const char *verbs[] = {"serve", "admit", "lock", "lock", "build"};
-        const char *sub[] = {NULL, NULL, "tree", "ports", NULL};
-        for (i = 0; i < 5; i++) {
-            const char *a[] = {target, verbs[i], sub[i], NULL};
-            char wanted[200];
-            fx_run(f, a, f->work, NULL, NULL);
-            snprintf(wanted, sizeof(wanted), "usage: etude %s%s%s ", verbs[i], sub[i] ? " " : "",
-                     sub[i] ? sub[i] : "");
-            ok = fx_check(f, f->status == 2 && strstr(f->err, wanted), wanted) && ok;
-        }
-    }
+    int rach2 = !strcmp(platform, "rach2");
+    ok = version_real_verbs(&v, target, rach2) && ok;
+    if (rach2)
+        ok = version_real_native(&v, target) && ok;
     return ok;
 }
 int flow_version(struct fixture *f)
