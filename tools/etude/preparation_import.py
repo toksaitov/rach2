@@ -25,6 +25,9 @@ AUXILIARY = (
     'build/x86_64/vendor-work/musl/musl-1.2.5/src/crypt/crypt_sha512.c',
     'vendor/musl/install/lib/libc.a', 'vendor/musl/.stamp',
 )
+E2FSPROGS_LIBS = ('vendor/e2fsprogs/e2fsprogs-1.47.4/lib/',
+                  'build/x86_64/vendor-work/e2fsprogs/e2fsprogs-1.47.4/lib/')
+ALIGNMENT_CHECKS = {'e2fsprogs_alignment', 'e2fsprogs_alignment64'}
 NATIVE_MAGIC = {'darwin': (b'\xcf\xfa\xed\xfe', b'\xfe\xed\xfa\xcf', b'\xca\xfe\xba\xbe'),
                 'windows': (b'MZ',), 'linux': (b'\x7fELF',)}
 
@@ -191,7 +194,7 @@ def inventory_path(item):
 
 
 def nested_inputs(inventories, files, manifest_hash):
-    """Follow the record-to-inventory-to-independent-fixture digest chain."""
+    """Follow recorded independent fixtures and patched compiler inputs."""
     nested = {}
     for name, text in inventories.items():
         require(name in files and role(name) == 'inventory' and
@@ -200,14 +203,21 @@ def nested_inputs(inventories, files, manifest_hash):
         inventory = json.loads(text)
         require(inventory['manifest_sha256'] == manifest_hash, 'producer inventory manifest differs')
         for check in inventory['checks']:
-            if check['assertion_id'] != 'exfat':
+            assertion = check['assertion_id']
+            if assertion != 'exfat' and assertion not in ALIGNMENT_CHECKS:
                 continue
             for item in check['inputs']:
                 path = inventory_path(item)
-                if path == 'build/tests/host/exfat_writer' or path.startswith('build/tests/host-suite/tools/exfat_external/'):
-                    relative(path)
+                independent = assertion == 'exfat' and (
+                    path == 'build/tests/host/exfat_writer' or
+                    path.startswith('build/tests/host-suite/tools/exfat_external/'))
+                alignment = assertion in ALIGNMENT_CHECKS and (
+                    path.startswith(E2FSPROGS_LIBS) and path.endswith(('.c', '.h')))
+                if independent or alignment:
+                    require(isinstance(item['sha256'], str) and
+                            re.fullmatch('[0-9a-f]{64}', item['sha256']), 'invalid nested input digest')
                     require(path not in nested or nested[path] == item['sha256'],
-                            'independent fixture digests disagree')
+                            'nested fixture or compiler-input digests disagree')
                     nested[path] = item['sha256']
     return nested
 
@@ -234,7 +244,7 @@ def export(args):
     nested_hashes = nested_inputs(inventories, files, digest(tree / 'tests/cases/host.host.json'))
     nested = {name: describe(tree / name) for name in nested_hashes}
     require(all(nested[name]['sha256'] == sha for name, sha in nested_hashes.items()),
-            'independent fixture differs')
+            'nested fixture or compiler input differs')
     data = dict(format=FORMAT, schema_version=1, commit=args.commit, source=inputs,
                 record=text, receipt=receipt, validator=dict(path=native_path(etude), **validator),
                 auxiliary=auxiliary, nested=nested, inventories=inventories)

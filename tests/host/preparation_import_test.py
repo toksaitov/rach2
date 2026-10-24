@@ -104,6 +104,41 @@ class ImportTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 product.nested_inputs({path: changed}, files, manifest)
 
+    def test_alignment_inventory_chain(self):
+        def anchored(checks, arch='i686'):
+            prefix = 'build/x86_64' if arch == 'x86_64' else 'build'
+            name = prefix + '/tests/host-suite/tests.inventory.json'
+            text = json.dumps(dict(manifest_sha256='m', checks=checks))
+            return {name: text}, {name: dict(sha256=hashlib.sha256(text.encode()).hexdigest(),
+                                            size_bytes=len(text.encode()))}
+
+        expected, inventories, files = {}, {}, {}
+        for arch, prefix, sha in [('i686', product.E2FSPROGS_LIBS[0], 'a' * 64),
+                                  ('x86_64', product.E2FSPROGS_LIBS[1], 'b' * 64)]:
+            paths = [prefix + 'ext2fs/unix_io.c', prefix + 'ext2fs/ext2_types.h',
+                     prefix + 'ext2fs/ext2fs.h', prefix + 'et/com_err.h']
+            inputs = [dict(path=path, sha256=sha) for path in paths]
+            inputs += [dict(path='tests/host/compat/e2fsprogs/config.h', sha256='c' * 64),
+                       dict(path=prefix + 'unrelated.o', sha256='d' * 64)]
+            checks = [dict(assertion_id=name, inputs=inputs)
+                      for name in sorted(product.ALIGNMENT_CHECKS)]
+            more, anchors = anchored(checks, arch)
+            inventories.update(more)
+            files.update(anchors)
+            expected.update({path: sha for path in paths})
+        self.assertEqual(product.nested_inputs(inventories, files, 'm'), expected)
+        for bad in ('../escape.h', product.E2FSPROGS_LIBS[0] + '../escape.h'):
+            changed, anchors = anchored([dict(assertion_id='e2fsprogs_alignment',
+                                              inputs=[dict(path=bad, sha256='a' * 64)])])
+            with self.assertRaises(ValueError):
+                product.nested_inputs(changed, anchors, 'm')
+        for inputs in ([dict(path=product.E2FSPROGS_LIBS[0] + 'ext2fs/ext2_types.h', sha256='bad')],
+                       [dict(path=product.E2FSPROGS_LIBS[0] + 'ext2fs/ext2_types.h', sha256=sha)
+                        for sha in ('a' * 64, 'b' * 64)]):
+            changed, anchors = anchored([dict(assertion_id='e2fsprogs_alignment', inputs=inputs)])
+            with self.assertRaises(ValueError):
+                product.nested_inputs(changed, anchors, 'm')
+
     def test_windows_vectors(self):
         goals = ['build/tests/cases/machine/scenario' + str(i) for i in range(900)]
         base = ['make', '-o' + 'a' * 20000]
