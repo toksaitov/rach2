@@ -35,7 +35,20 @@ class Remote:
         require(host and not host.startswith('-') and all(c.isalnum() or c in '@._-' for c in host),
                 'invalid SSH destination')
         state = producer['state_root'] + '/' + run
-        command = [*prefix, producer['etude'], 'serve', '--stdio', '-d', state]
+        command = [producer['etude'], 'serve', '--stdio', '-d', state]
+        admission = producer.get('_transport_admission')
+        if admission:
+            command = ['/usr/bin/env', 'ETUDE_PREPARATION_GRANT=' + admission['grant'],
+                producer['etude'], 'admit', '-i', '-d', producer['policy']['locks'],
+                '-r', admission['result'], producer['policy']['ledger'], admission['claim'],
+                producer['account'], 'shared', producer['preparation_resources'],
+                producer['policy']['capacity'], str(admission['seconds']), '/usr/bin/env',
+                'ETUDE_ADMITTED=' + producer['site'], 'ETUDE_SITE=' + producer['site'], *command]
+        if admission:
+            command = [producer['etude'], 'authority', 'transport', producer['site'],
+                producer['policy']['ledger'], producer['policy']['locks'],
+                producer['policy']['capacity'], str(admission['seconds']), *command]
+        command = [*prefix, *command]
         self.child = subprocess.Popen(['ssh', '-oBatchMode=yes', '--', host, shlex.join(command)],
                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         try:

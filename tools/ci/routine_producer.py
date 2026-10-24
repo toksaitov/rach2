@@ -45,7 +45,8 @@ def stage(args, config):
         raise ValueError('producer worktree is not the exact clean candidate')
     out = Path(p['output_root']) / args.run
     out.mkdir(parents=True, exist_ok=False)
-    site = str(Path('producer.site').absolute())
+    site = (p['site'] if os.environ.get('ETUDE_ROUTINE_TRANSPORT_ADMITTED') == '1'
+            else str(Path('producer.site').absolute()))
     if not Path(site).exists():
         raise ValueError('producer projection was not installed before admission')
     policy = dict(l.split(' ', 1) for l in Path(site).read_text().splitlines())

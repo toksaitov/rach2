@@ -56,7 +56,16 @@ class Route:
     def remote(self, action, bundle=None, label=None):
         label = label or action
         p, a = self.config['producer'], self.args
-        remote = Remote(p, a.run + ':' + label, self.work / (label + '.wire'))
+        admitted = action == 'produce' and self.config['mode'] == 'macos-import'
+        transport = dict(p)
+        grant = p['state_root'] + '/' + a.run + ':produce.grant.json'
+        transport_result = p['state_root'] + '/' + a.run + ':produce.admit.result'
+        if admitted:
+            transport['_transport_admission'] = dict(grant=grant, result=transport_result,
+                claim=a.run + ':producer:prepare',
+                seconds=min({'push': 270, 'ci': 540, 'release': 13800}[a.purpose],
+                            int(p['policy']['seconds'])))
+        remote = Remote(transport, a.run + ':' + label, self.work / (label + '.wire'))
         success = False
         try:
             remote.put('config.json', json.dumps(self.dynamic).encode())
@@ -72,23 +81,31 @@ class Route:
                     'producer environment is not fixed strings')
             remote.put('operation.json', json.dumps(dict(action=action, args=args,
                        producer=p, mode=self.config['mode'], run=a.run, commit=a.commit,
-                       purpose=a.purpose)).encode())
+                       purpose=a.purpose, transport_admitted=admitted,
+                       transport_result=transport_result)).encode())
             launcher = b'#!/bin/sh\nset -eu\nexec "$1" "$2" operation.json\n'
             remote.put('remote.sh', launcher, '0755')
             remote.put('routine_remote_stage.py', (self.tree / 'tools/ci/routine_remote_stage.py').read_bytes())
             environment['WORKSPACE'] = '${WORKSPACE}'
+            if admitted:
+                environment.update(ETUDE_ADMITTED=p['site'], ETUDE_SITE=p['site'],
+                                   ETUDE_PREPARATION_GRANT=grant)
             token = remote.execute(action, 'remote.sh', [p['python'], '${WORKSPACE}/routine_remote_stage.py'],
                                    environment, self.work / (label + '.log'))
-            names = ['ledger-empty']
+            names = [] if admitted else ['ledger-empty']
             if action in ('freeze', 'facts') or (action == 'produce' and self.config['mode'] == 'windows-import'):
                 names += ['binding', 'state', 'policy-before', 'policy-disabled', 'facts.json']
             if action in ('freeze', 'facts'):
                 names += ['jobs-before.json']
             if action == 'freeze':
                 names += ['jobs-after.json']
+            if action == 'transport-cleanup':
+                names += ['producer.admit.result', 'transport.status']
             if action == 'produce':
                 names += ['producer.json', 'prepare.record', 'preparation.receipt.json',
-                          'producer.admit.result', 'produced.json']
+                          'produced.json']
+                if not admitted:
+                    names.append('producer.admit.result')
                 if self.config['mode'] == 'windows-import':
                     names.append('producer.owner.json')
             result = self.work / label
@@ -97,6 +114,10 @@ class Route:
                 (result / name).write_bytes(remote.get(token, name))
             remote.close()
             success = True
+            if admitted:
+                cleanup = self.remote('transport-cleanup', label='produce-cleanup')
+                for name in ('producer.admit.result', 'ledger-empty', 'transport.status'):
+                    (result / name).write_bytes((cleanup / name).read_bytes())
             return result
         finally:
             if not success:

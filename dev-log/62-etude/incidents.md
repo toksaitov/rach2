@@ -694,3 +694,9 @@ An actual local round trip through the native framed responder also exercised th
 ## Mac import entry required an unrelated physical completion (#1037)
 
 The final route review found that any configured import route required a physical owner completion. Mac import uses ordinary Mac admission and retains its separate Linux production event. Entry now retains the validated route mode and requires physical completion only for the WSL and Windows routes, or when a completion pointer exists. The focused entry fixture checks that Mac import succeeds without that pointer and that each physical route fails without it. Malformed pointers and failed proof copies still fail.
+
+### Mac producer transport started outside its preparation grant (#1037)
+
+Review found that the Mac route uploaded source before starting its ordinary Linux preparation claim. The transport now validates the enrolled installed policy, retains the native authority boundary and starts the admitted framed responder with input forwarding before upload. The producer retains that original grant instead of creating another one. A separate read-only operation verifies its completed admission and exact claim absence after the responder exits. Mac route selection reads the protected descriptor mode and uses ordinary Mac site validation without requiring a physical authority binding.
+
+The first local admitted transport probe completed its wire command and child cleanup, but its private SSH adapter also intercepted the final native ledger query. That harness error was retained separately from the successful production admission. The corrected probe uses the same compiled command and only rewrites the SSH vector.

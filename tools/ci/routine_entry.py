@@ -2,6 +2,7 @@
 """Construct the fixed phase vectors for the existing native sequence owner."""
 import json
 import os
+import stat
 from pathlib import Path
 import subprocess
 import sys
@@ -16,6 +17,12 @@ def read_config(path):
     require(doc.get('format') == 'etude-routine-route' and doc.get('schema_version') == 1,
             'invalid installed routine route')
     require(doc.get('mode') in ('wsl-native', 'windows-import', 'macos-import'), 'invalid route mode')
+    if doc['mode'] == 'macos-import':
+        user = getattr(os, 'geteuid', lambda: None)()
+        require(user is not None, 'Mac route requires its native preparation platform')
+        identity = filesystem_path(path).lstat()
+        require(stat.S_ISREG(identity.st_mode) and identity.st_uid in (0, user) and
+                not identity.st_mode & 0o022, 'Mac route descriptor is not protected')
     return doc
 
 
@@ -38,6 +45,9 @@ def counted(program, args):
 
 
 def main(argv):
+    if len(argv) == 3 and argv[1] == 'mode':
+        print(read_config(argv[2])['mode'])
+        return
     require(len(argv) >= 10, 'expected the native sequence fixed operands and selection')
     purpose, tree, out, arches, run, site, etude, accel = argv[1:9]
     selection = argv[9:]

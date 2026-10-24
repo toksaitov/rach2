@@ -18,8 +18,23 @@ native_site_positive()
 native_site_route()
 {
     native_site_routed=''
+    native_site_mode=''
     native_site_authority_program=''
     [ -n "${ETUDE_ROUTINE_ROUTE:-}" ] || return 0
+    native_site_tree=${tree:-}
+    [ -n "$native_site_tree" ] || { native_site_refuse 'caller tree is unavailable'; return 2; }
+    native_site_mode_script=$native_site_tree/tools/ci/routine_entry.py
+    case $(uname -s) in
+        MINGW*|MSYS*|UCRT*|CLANG*) native_site_mode_script=$(cygpath -au "$native_site_mode_script") ;;
+    esac
+    native_site_mode=$(python3 "$native_site_mode_script" mode "$ETUDE_ROUTINE_ROUTE") || return 2
+    case $native_site_mode in
+        macos-import)
+            [ "$(uname -s)" = Darwin ] || { native_site_refuse 'Mac import requires its native site'; return 2; }
+            return 0 ;;
+        windows-import|wsl-native) ;;
+        *) native_site_refuse 'invalid routine route mode'; return 2 ;;
+    esac
     native_site_binding=/etc/rach2/etude-authority
     case $(uname -s) in
         MINGW*|MSYS*|UCRT*|CLANG*) native_site_binding=C:/ProgramData/rach2/etude-authority ;;

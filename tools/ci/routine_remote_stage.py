@@ -23,10 +23,29 @@ def main():
     work = Path.cwd()
     args = [str(work / 'routine_producer.py'),
             *(value.replace('${WORKSPACE}', str(work)) for value in operation['args'])]
+    if action == 'transport-cleanup':
+        result = Path(operation['transport_result']).read_bytes()
+        if result != b'exited 0\n':
+            raise ValueError('transport admission did not confirm cleanup')
+        status = subprocess.check_output([p['etude'], 'status', p['policy']['ledger']])
+        claim = operation['run'] + ':producer:prepare'
+        if any(line.startswith((('claim ' + claim + ':').encode(),
+                                ('request ' + claim + ':').encode())) for line in status.splitlines()):
+            raise ValueError('transport claim remains in the actual ledger')
+        Path('producer.admit.result').write_bytes(result)
+        Path('transport.status').write_bytes(status)
+        shutil.copyfile(Path(p['policy']['ledger']) / 'claims', 'ledger-empty')
+        return
     if action != 'produce':
         run([p['python'], *args])
         if action == 'restore':
             shutil.copyfile(Path(p['policy']['ledger']) / 'claims', 'ledger-empty')
+        return
+    if operation.get('transport_admitted'):
+        if os.environ.get('ETUDE_ADMITTED') != p['site']:
+            raise ValueError('producer transport lost its original admission')
+        os.environ['ETUDE_ROUTINE_TRANSPORT_ADMITTED'] = '1'
+        run([p['etude'], 'lock', 'tree', p['repository'], 'routine-source', p['python'], *args])
         return
     run([p['python'], args[0], 'projection', *args[2:]])
     site = str(work / 'producer.site')

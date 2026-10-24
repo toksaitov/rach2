@@ -279,6 +279,63 @@ static int command_clock(int argc, char **argv)
     return error ? 125 : 0;
 }
 
+static int policy_field(const char *bytes, const char *name, const char *value)
+{
+    char prefix[80];
+    int n = snprintf(prefix, sizeof prefix, "\n%s ", name);
+    if (n < 0 || (size_t)n >= sizeof prefix)
+        return 0;
+    const char *at = strstr(bytes, prefix);
+    if (!at || strstr(at + 1, prefix))
+        return 0;
+    at += n;
+    const char *end = strchr(at, '\n');
+    return end && (size_t)(end - at) == strlen(value) && !memcmp(at, value, strlen(value));
+}
+
+static int transport_policy(struct etude_authority *a, char **argv)
+{
+    struct authority_file_id expected, supplied;
+    if (authority_file_id(a->binding.site, &expected) || authority_file_id(argv[2], &supplied) ||
+        expected.device != supplied.device || expected.inode != supplied.inode)
+        return -1;
+    char *bytes = NULL;
+    size_t size;
+    uint64_t capacity[3];
+    int enabled;
+    if (authority_policy(&a->binding, a->binding.site, &bytes, &size, capacity, &enabled))
+        return -1;
+    int error = !enabled || !policy_field(bytes, "ledger", argv[3]) ||
+                !policy_field(bytes, "locks", argv[4]) || !policy_field(bytes, "capacity", argv[5]);
+    const char *seconds = strstr(bytes, "\nseconds ");
+    char *end;
+    unsigned long bound = strtoul(argv[6], &end, 10);
+    error |= !bound || *end || !seconds || bound > 86400;
+    if (!error) {
+        unsigned long actual = strtoul(seconds + 9, &end, 10);
+        error = *end != '\n' || !actual || actual > 86400 || bound > actual;
+    }
+    free(bytes);
+    return error ? -1 : 0;
+}
+
+static int command_transport(int argc, char **argv)
+{
+    struct etude_authority *authority = NULL;
+    if (argc < 8 || etude_authority_open(argv[3], &authority) || !authority ||
+        etude_authority_claim(authority, "producer-transport", NULL, 0) ||
+        transport_policy(authority, argv)) {
+        etude_authority_close(authority);
+        return 125;
+    }
+    struct authority_run run = {
+        .phase = "producer-transport", .argv = argv + 7, .forward_input = 1};
+    struct etude_exec_result result = {0};
+    int status = authority_run_command(&run, &result);
+    etude_authority_close(authority);
+    return status;
+}
+
 static int command_route(int argc, char **argv)
 {
     struct authority_binding binding;
@@ -297,6 +354,8 @@ static int command_route(int argc, char **argv)
 int etude_authority_main(int argc, char **argv)
 {
     if (argc > 1) {
+        if (!strcmp(argv[1], "transport"))
+            return command_transport(argc, argv);
         if (!strcmp(argv[1], "route"))
             return command_route(argc, argv);
         if (!strcmp(argv[1], "clock"))
