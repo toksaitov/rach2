@@ -189,6 +189,7 @@ class RouteTests(unittest.TestCase):
             descriptor = Path(name) / 'route.json'
             descriptor.write_text(json.dumps(dict(format='etude-routine-route', schema_version=1,
                                                   mode='macos-import')))
+            descriptor.chmod(0o600)
             captured = io.StringIO()
             with redirect_stdout(captured), patch('routine_entry.subprocess.check_output',
                                                   side_effect=AssertionError('no work in mode read')):
