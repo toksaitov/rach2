@@ -10,7 +10,7 @@ GNU_HOST_PRODUCTS_SOURCES = vendor/gnu/build_host_products.sh vendor/gnu/arch.sh
     $(wildcard utils/grow*.c utils/grow*.h utils/boot*.c utils/boot*.h) \
     utils/reflash.c utils/sectorcopy.c utils/sectorcopy.h utils/diskctl.c utils/gptdisk.c \
     utils/gptdisk.h utils/grubslot.c utils/grubslot.h tests/host/mkfatfixture.c \
-    tools/inspect/binfind.c tests/system/fixtures/pty_secret.c
+    tools/inspect/binfind.c tests/system/fixtures/pty_secret.c tests/host/mkfatfixture.h
 GNU_STEP_STAMPS += $(GNU_HOST_PRODUCTS_STAMP)
 
 .PHONY: gnu-host-products

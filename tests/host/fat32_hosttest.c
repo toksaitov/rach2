@@ -4,6 +4,8 @@
  * builds.
  *
  * host-tools: mkfatfixture mdir mcopy
+ * host-deps: tests/host/mkfatfixture.c
+ * host-cflags: -DFIXTURE_NO_MAIN
  * host-deps: tests/host/compat/command_host.c tools/etude/capture.c
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
  * host-deps: tools/etude/posix/process.c
@@ -13,7 +15,7 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/devmodel.c
  * host-deps: tests/host/compat/pressure_host.c tests/host/compat/fixdir_host.c
- * host-first: its interruption matrices run for minutes
+ * host-first: its interruption matrices walk every write and barrier
  *
  * The volumes are mkfatfixture's, built here on first use the way the bootctl
  * test builds them, in the test's own fixture directory (compat/fixdir_host.c),
@@ -37,6 +39,7 @@
 #include "devmodel.h"
 #include "fixdir_host.h"
 #include "command_host.h"
+#include "mkfatfixture.h"
 
 extern int printf(const char *fmt, ...);
 extern int snprintf(char *s, unsigned long n, const char *fmt, ...);
@@ -858,6 +861,35 @@ static int run_check_on(const unsigned char *what, char *out, unsigned long cap)
                               fix_path("fat32_write.img"), 0};
         return host_command(argv, 0, 0, out, cap);
     }
+}
+
+/** The same checker must give the CLI's exact status and complete output. */
+static void checker_equivalence(void)
+{
+    const char *options[] = {"--fsinfo", "--cross-link", "--no-signature", "--fsinfo"};
+    const int expected[] = {0, 1, 1, 0};
+    char cli[16384], memory[16384];
+    unsigned i;
+
+    for (i = 0; i < sizeof(options) / sizeof(options[0]); i++) {
+        int status, repeat;
+
+        load(options[i]);
+        devmodel_copy(image_before, image, IMG_BYTES);
+        status = run_check_on(image, cli, sizeof(cli));
+        repeat = mkfatfixture_check(image, IMG_BYTES, 0, memory, sizeof(memory));
+        check(status == expected[i] && repeat == status && streq(cli, memory),
+              "the memory checker matches the prepared CLI for valid and malformed volumes");
+        repeat = mkfatfixture_check(image, IMG_BYTES, 0, memory, sizeof(memory));
+        check(repeat == status && streq(cli, memory), "each checker call has fresh state");
+        check(__builtin_memcmp(image, image_before, IMG_BYTES) == 0,
+              "the independent checker does not mutate the input volume");
+    }
+    memory[0] = 'x';
+    check(mkfatfixture_check(image, IMG_BYTES, 0, memory, 1) == 2 && !memory[0],
+          "output truncation is an error with a bounded terminator");
+    check(mkfatfixture_check(0, IMG_BYTES, 0, memory, sizeof(memory)) == 2,
+          "a missing nonempty input is refused");
 }
 
 /**
@@ -2228,7 +2260,8 @@ static void judge_stop(int i, const char *stage)
         char what[240];
         const char *name = keep_name(keep, keeps);
 
-        if (run_check_on(snaps[keep], check_out, sizeof(check_out)) < 0 || check_out[0] == '\0') {
+        if (mkfatfixture_check(snaps[keep], IMG_BYTES, 0, check_out, sizeof(check_out)) > 1 ||
+            check_out[0] == '\0') {
             check(0, "the check ran over the state and said something");
         }
         load_snapshot(snaps[keep]);
@@ -2325,7 +2358,8 @@ static void matrix_pass(void)
             check(model.failed, "the barrier failed as asked");
             failed_at = model.failed_at;
             devmodel_snapshot(&model, DEVMODEL_PENDING_MAX, snap);
-            run_check_on(snap, check_out, sizeof(check_out));
+            check(mkfatfixture_check(snap, IMG_BYTES, 0, check_out, sizeof(check_out)) <= 1,
+                  "the independent snapshot checker completed");
             snprintf(what, sizeof(what),
                      "'%s' with barrier %d of %d failed leaves a consistent volume",
                      sequences[i].name, b, barriers);
@@ -2547,6 +2581,7 @@ int main(void)
 {
     proc_a.pid = 1;
     devmodel_init(&model, medium, image, IMG_BYTES);
+    checker_equivalence();
     well_formed_rows();
     small_and_active_rows();
     malformed_rows();

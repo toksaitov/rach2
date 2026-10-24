@@ -66,10 +66,12 @@
  *
  * An unknown option is refused: the maker writes no image and exits 2.
  */
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "mkfatfixture.h"
 
 #define SECTOR 512
 #define TOTAL  8192
@@ -305,21 +307,46 @@ static void chain(unsigned long first, unsigned long count, unsigned long cross_
    last chain id given; the counts of findings, files and directories; and
    whether `--list` prints the entries. */
 struct chk {
-    unsigned char *img;
+    const unsigned char *img;
     size_t bytes;
     unsigned long spc, reserved, nfats, fatsz, root, data_start, clusters, active;
     unsigned long fsinfo_sector;
-    unsigned char *fat;
+    const unsigned char *fat;
     /* For each cluster, 0 when free or the id of the chain that reached it. */
     unsigned short *owner;
     unsigned short chains;
     int findings, files, dirs, list;
+    char *output;
+    size_t capacity, used;
+    int output_error;
 };
+
+/** Print through the CLI, or append complete output to the caller's buffer. */
+static void chk_print(struct chk *c, const char *format, ...)
+{
+    va_list ap;
+    int n;
+
+    va_start(ap, format);
+    if (!c->output) {
+        if (vprintf(format, ap) < 0)
+            c->output_error = 1;
+    } else if (!c->output_error) {
+        n = vsnprintf(c->output + c->used, c->capacity - c->used, format, ap);
+        if (n < 0 || (size_t)n >= c->capacity - c->used) {
+            c->output_error = 1;
+            c->output[c->used] = '\0';
+        } else {
+            c->used += (size_t)n;
+        }
+    }
+    va_end(ap);
+}
 
 /** Print a finding and count it. */
 static void finding(struct chk *c, const char *text)
 {
-    printf("check: %s\n", text);
+    chk_print(c, "check: %s\n", text);
     c->findings++;
 }
 
@@ -336,7 +363,7 @@ static int chk_in_range(const struct chk *c, unsigned long n)
 }
 
 /** The bytes of cluster `n` in the image. */
-static unsigned char *chk_cluster(const struct chk *c, unsigned long n)
+static const unsigned char *chk_cluster(const struct chk *c, unsigned long n)
 {
     return c->img + ((size_t)c->data_start + (n - 2) * c->spc) * SECTOR;
 }
@@ -573,7 +600,7 @@ static void chk_dir(struct chk *c, unsigned long first, unsigned long parent, co
     }
     c->dirs++;
     for (i = 0; i < nclusters; i++) {
-        unsigned char *cl = chk_cluster(c, clusters_seen[i]);
+        const unsigned char *cl = chk_cluster(c, clusters_seen[i]);
         unsigned long e;
 
         for (e = 0; e < c->spc * SECTOR / 32; e++) {
@@ -669,8 +696,8 @@ static void chk_dir(struct chk *c, unsigned long first, unsigned long parent, co
             nnames++;
             snprintf(child, sizeof(child), "%s/%s", path, alias);
             if (c->list)
-                printf("check: entry %s %s %lu %lu%s%s\n", child, is_dir ? "dir" : "file", fc,
-                       (unsigned long)size, longname[0] ? " long " : "", longname);
+                chk_print(c, "check: entry %s %s %lu %lu%s%s\n", child, is_dir ? "dir" : "file", fc,
+                          (unsigned long)size, longname[0] ? " long " : "", longname);
             if (is_dir) {
                 if (fc == 0) {
                     snprintf(text, sizeof(text), "directory with no cluster: %s", child);
@@ -774,60 +801,35 @@ static int chk_bpb(struct chk *c)
             finding(c, text);
         }
     } else if (c->nfats == 2) {
-        printf("check: mirroring off, FAT %lu active\n", c->active);
+        chk_print(c, "check: mirroring off, FAT %lu active\n", c->active);
     }
     return 0;
 }
 
-/**
- * Check the volume `offset_sectors` sectors into the file `path`, printing
- * each finding and a line of result. Returns 0 with no finding, 1 with
- * findings, and 2 when the file cannot be read or memory runs out.
- */
-static int check_image(const char *path, unsigned long offset_sectors, int list)
+/** Check one initialized volume; its owner table is released by the caller. */
+static int check_volume(struct chk *c)
 {
-    struct chk c;
-    FILE *f = fopen(path, "rb");
-    long len;
     unsigned long n, lost = 0, first_lost = 0, freecount = 0;
     char text[120];
 
-    memset(&c, 0, sizeof(c));
-    c.list = list;
-    if (f == NULL || fseek(f, 0, SEEK_END) != 0 || (len = ftell(f)) < 0) {
-        fprintf(stderr, "mkfatfixture: cannot read %s\n", path);
-        return 2;
-    }
-    if ((unsigned long)len < offset_sectors * SECTOR) {
-        fprintf(stderr, "mkfatfixture: offset past the end of %s\n", path);
-        return 2;
-    }
-    c.bytes = (size_t)len - offset_sectors * SECTOR;
-    c.img = malloc(c.bytes ? c.bytes : 1);
-    if (c.img == NULL || fseek(f, (long)(offset_sectors * SECTOR), SEEK_SET) != 0 ||
-        fread(c.img, 1, c.bytes, f) != c.bytes) {
-        fprintf(stderr, "mkfatfixture: cannot read %s\n", path);
-        return 2;
-    }
-    fclose(f);
-    if (chk_bpb(&c) != 0) {
-        printf("check: FAIL: %d finding(s)\n", c.findings);
+    if (chk_bpb(c) != 0) {
+        chk_print(c, "check: FAIL: %d finding(s)\n", c->findings);
         return 1;
     }
-    c.owner = calloc(c.clusters + 2, sizeof(unsigned short));
-    if (c.owner == NULL)
+    c->owner = calloc(c->clusters + 2, sizeof(unsigned short));
+    if (c->owner == NULL)
         return 2;
-    if (!(chk_fat(&c, 1) & 0x08000000u))
-        finding(&c, "dirty: the FAT flag");
-    if (c.img[65] & 1)
-        finding(&c, "dirty: the boot-sector flag");
-    chk_dir(&c, c.root, 0, "", 0);
-    for (n = 2; n < c.clusters + 2; n++) {
-        uint32_t v = chk_fat(&c, n);
+    if (!(chk_fat(c, 1) & 0x08000000u))
+        finding(c, "dirty: the FAT flag");
+    if (c->img[65] & 1)
+        finding(c, "dirty: the boot-sector flag");
+    chk_dir(c, c->root, 0, "", 0);
+    for (n = 2; n < c->clusters + 2; n++) {
+        uint32_t v = chk_fat(c, n);
 
         if (v == 0) {
             freecount++;
-        } else if (v != 0x0FFFFFF7u && c.owner[n] == 0) {
+        } else if (v != 0x0FFFFFF7u && c->owner[n] == 0) {
             if (lost == 0)
                 first_lost = n;
             lost++;
@@ -835,36 +837,96 @@ static int check_image(const char *path, unsigned long offset_sectors, int list)
     }
     if (lost) {
         snprintf(text, sizeof(text), "lost: %lu clusters (first %lu)", lost, first_lost);
-        finding(&c, text);
+        finding(c, text);
     }
-    if (c.fsinfo_sector != 0 && c.fsinfo_sector < c.reserved) {
-        const unsigned char *fi = c.img + c.fsinfo_sector * SECTOR;
+    if (c->fsinfo_sector != 0 && c->fsinfo_sector < c->reserved) {
+        const unsigned char *fi = c->img + c->fsinfo_sector * SECTOR;
 
         if (le32_of(fi) != 0x41615252u || le32_of(fi + 484) != 0x61417272u ||
             le32_of(fi + 508) != 0xAA550000u) {
-            finding(&c, "fsinfo: bad signature");
+            finding(c, "fsinfo: bad signature");
         } else {
             uint32_t said = le32_of(fi + 488), hint = le32_of(fi + 492);
 
             if (said != 0xFFFFFFFFu && said != freecount) {
                 snprintf(text, sizeof(text), "fsinfo: free count %lu, FAT says %lu",
                          (unsigned long)said, freecount);
-                finding(&c, text);
+                finding(c, text);
             }
-            if (hint != 0xFFFFFFFFu && !chk_in_range(&c, hint)) {
+            if (hint != 0xFFFFFFFFu && !chk_in_range(c, hint)) {
                 snprintf(text, sizeof(text), "fsinfo: hint %lu out of range", (unsigned long)hint);
-                finding(&c, text);
+                finding(c, text);
             }
         }
     }
-    if (c.findings == 0) {
-        printf("check: OK: %d files, %d directories, %lu free clusters\n", c.files, c.dirs,
-               freecount);
+    if (c->findings == 0) {
+        chk_print(c, "check: OK: %d files, %d directories, %lu free clusters\n", c->files, c->dirs,
+                  freecount);
         return 0;
     }
-    printf("check: FAIL: %d finding(s)\n", c.findings);
+    chk_print(c, "check: FAIL: %d finding(s)\n", c->findings);
     return 1;
 }
+
+int mkfatfixture_check(const unsigned char *data, unsigned long bytes, int list, char *out,
+                       unsigned long cap)
+{
+    struct chk c;
+    int status;
+
+    if (!out || !cap || (!data && bytes))
+        return 2;
+    memset(&c, 0, sizeof(c));
+    out[0] = '\0';
+    c.img = data;
+    c.bytes = bytes;
+    c.list = list;
+    c.output = out;
+    c.capacity = cap;
+    status = check_volume(&c);
+    free(c.owner);
+    return c.output_error ? 2 : status;
+}
+
+#ifndef FIXTURE_NO_MAIN
+/** Read a volume from PATH and run the same checker as the in-memory entry. */
+static int check_image(const char *path, unsigned long offset_sectors, int list)
+{
+    struct chk c;
+    FILE *f = fopen(path, "rb");
+    unsigned char *data = NULL;
+    long len;
+    int status = 2;
+
+    memset(&c, 0, sizeof(c));
+    c.list = list;
+    if (f == NULL || fseek(f, 0, SEEK_END) != 0 || (len = ftell(f)) < 0) {
+        fprintf(stderr, "mkfatfixture: cannot read %s\n", path);
+        goto done;
+    }
+    if ((unsigned long)len < offset_sectors * SECTOR) {
+        fprintf(stderr, "mkfatfixture: offset past the end of %s\n", path);
+        goto done;
+    }
+    c.bytes = (size_t)len - offset_sectors * SECTOR;
+    data = malloc(c.bytes ? c.bytes : 1);
+    if (data == NULL || fseek(f, (long)(offset_sectors * SECTOR), SEEK_SET) != 0 ||
+        fread(data, 1, c.bytes, f) != c.bytes) {
+        fprintf(stderr, "mkfatfixture: cannot read %s\n", path);
+        goto done;
+    }
+    c.img = data;
+    status = check_volume(&c);
+    if (c.output_error)
+        status = 2;
+done:
+    if (f)
+        fclose(f);
+    free(c.owner);
+    free(data);
+    return status;
+}
+#endif
 
 /**
  * Build the volume for `option` into `img` (TOTAL sectors), with `fat` and
