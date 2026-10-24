@@ -67,8 +67,7 @@ etude_list()
         case $path in
             *[!A-Za-z0-9._/-]*|'') exit 1 ;;
         esac
-        paths="$paths$path
-"
+        paths="$paths$path|"
         set -- "$@" "$path"
     done
     [ "$#" -gt 0 ] || exit 0
@@ -85,7 +84,7 @@ etude_list()
         exit
     fi
     printf '%s\n' "$output" | LC_ALL=C awk -v paths="$paths" '
-        BEGIN { count = split(paths, names, "\n") - 1 }
+        BEGIN { count = split(paths, names, "[|]") - 1 }
         {
             sum = substr($0, 1, 64)
             if (NR > count || length(sum) != 64 || sum ~ /[^0-9a-f]/ ||
@@ -98,48 +97,73 @@ etude_list()
 )
 
 # etude_text DIR END: refuse NUL bytes, missing final newlines and a line
-# equal to END in each listed source. Numeric od records preserve every byte;
-# explicit boundaries also distinguish an empty file from a failed read.
+# equal to END in each listed source. One wc records the file boundaries and
+# one od reads their concatenation. Both must finish successfully.
 etude_text()
-{
+(
+    cd "$1" || exit 1
+    marker=$2
+    paths=
+    set --
+    while IFS= read -r path; do
+        case $path in
+            *[!A-Za-z0-9._/-]*|'') exit 1 ;;
+        esac
+        paths="$paths$path|"
+        set -- "$@" "./$path"
+    done
+    [ "$#" -gt 0 ] || exit 0
     (
-        while IFS= read -r path; do
-            printf 'file %s\n' "$path"
-            od -An -v -tu1 "$1/$path" || exit 1
-            printf 'end\n'
-        done
+        LC_ALL=C wc -c "$@" || exit 1
+        printf 'data\n'
+        od -An -v -tu1 "$@" || exit 1
         printf 'complete\n'
-    ) | LC_ALL=C awk -v marker="$2" '
+    ) | LC_ALL=C awk -v marker="$marker" -v paths="$paths" '
+        BEGIN { count = split(paths, names, "[|]") - 1 }
         function fail(reason) {
             print "etude provision: " path ": " reason
             bad = 1
             exit 1
         }
-        /^file / {
-            if (active || complete) fail("invalid byte stream")
-            path = substr($0, 6)
-            active = 1
-            bytes = last = width = 0
+        function advance() {
+            current++
+            while (current <= count && sizes[current] == 0) current++
+            path = names[current]
+            left = sizes[current]
+            width = 0
             matchline = 1
+        }
+        !data && /^data$/ {
+            if (rows != count + (count > 1)) fail("invalid size records")
+            data = 1
+            advance()
             next
         }
-        /^end$/ {
-            if (!active) fail("invalid byte stream")
-            if (bytes && last != 10) fail("the last line has no newline")
-            active = 0
+        !data {
+            rows++
+            path = names[rows]
+            if (NF != 2 || $1 !~ /^[0-9]+$/ || length($1) > 15)
+                fail("invalid size record")
+            if (rows <= count) {
+                if ($2 != "./" path) fail("invalid size path")
+                sizes[rows] = $1 + 0
+                total += sizes[rows]
+            } else if (count <= 1 || rows != count + 1 ||
+                       $2 != "total" || $1 != total) fail("invalid size total")
             next
         }
         /^complete$/ {
-            if (active || complete) fail("invalid byte stream")
+            if (complete || current <= count) fail("incomplete byte stream")
             complete = 1
             next
         }
         {
-            if (!active || !NF) fail("invalid byte stream")
+            if (complete) fail("invalid byte stream")
+            if (!NF) next
             for (i = 1; i <= NF; i++) {
-                if ($i !~ /^[0-9]+$/ || $i > 255) fail("invalid byte stream")
+                if (current > count || $i !~ /^[0-9]+$/ || $i > 255)
+                    fail("invalid byte stream")
                 last = $i + 0
-                bytes++
                 if (!last) fail("the file has a NUL byte")
                 if (last == 10) {
                     if (matchline && width == length(marker))
@@ -152,10 +176,54 @@ etude_text()
                         substr(marker, width, 1) != sprintf("%c", last))
                         matchline = 0
                 }
+                if (--left == 0) {
+                    if (last != 10) fail("the last line has no newline")
+                    advance()
+                }
             }
         }
-        END { if (bad || active || !complete) exit 1 }
+        END { if (bad || !data || !complete) exit 1 }
     ' >&2
+)
+
+# etude_pack DIR: encode the validated source list with one text reader.
+# A colon distinguishes every source line from a file or completion record.
+etude_pack()
+{
+    LC_ALL=C awk -v root="$1" '
+        {
+            file = root "/" $0
+            print "file " $0
+            while ((status = getline line < file) > 0) print ":" line
+            if (status < 0 || close(file) != 0) { bad = 1; exit 1 }
+        }
+        END { if (bad) exit 1; print "complete" }
+    '
+}
+
+# etude_unpack_text DIR: write a complete encoded source into private DIR.
+# The caller verifies its source digest before invoking the compiler.
+etude_unpack_text()
+{
+    LC_ALL=C awk -v root="$1" '
+        function finish() {
+            if (file && close(file) != 0) { bad = 1; exit 1 }
+            file = ""
+        }
+        /^file / && !complete {
+            finish()
+            path = substr($0, 6)
+            if (path == "" || path ~ /[^A-Za-z0-9._\/-]/ ||
+                path ~ /^\// || path ~ /(^|\/)\.\.?($|\/)/) { bad = 1; exit 1 }
+            file = root "/" path
+            printf "%s", "" > file
+            next
+        }
+        /^:/ && file && !complete { print substr($0, 2) > file; next }
+        /^complete$/ && !complete { finish(); complete = 1; next }
+        { bad = 1; exit 1 }
+        END { finish(); if (bad || !complete) exit 1 }
+    '
 }
 
 # etude_platform: print the platform and the machine, the platform named as

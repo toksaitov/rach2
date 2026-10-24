@@ -103,8 +103,8 @@ nonce=$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
 [ "${#nonce}" -eq 16 ] || fail 'cannot read /dev/urandom'
 end=@etude-$nonce
 
-# Each file goes in a here-document, which carries text whose lines all end
-# in a newline, and which the line $end does not end early.
+# The encoded source goes in one here-document. Validate every file before
+# adding its line prefixes; a missing final newline must not be repaired.
 etude_text "$src" "$end" < "$work/files" || fail 'cannot encode the source'
 
 {
@@ -123,14 +123,16 @@ etude_text "$src" "$end" < "$work/files" || fail 'cannot encode the source'
     echo
     echo 'etude_unpack()'
     echo '{'
+    printf '    mkdir -p'
     sed 's#/[^/]*$##' "$work/files" | LC_ALL=C sort -u | while read -r d; do
-        echo "    mkdir -p \"\$1/$d\" || return 1"
+        # The generated function expands its own directory argument.
+        # shellcheck disable=SC2016
+        printf ' "$1/%s"' "$d"
     done
-    while read -r f; do
-        echo "    cat > \"\$1/$f\" <<'$end' || return 1"
-        cat "$src/$f"
-        echo "$end"
-    done < "$work/files"
+    printf ' || return 1\n'
+    echo "    etude_unpack_text \"\$1\" <<'$end'"
+    etude_pack "$src" < "$work/files" || exit 1
+    echo "$end"
     echo '}'
     echo
     echo 'etude_main < /dev/null'

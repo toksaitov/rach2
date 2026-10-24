@@ -694,15 +694,15 @@ static int version_source_damage(struct version *value)
     }
     saved = strdup(f->out);
     {
-        char *at = strstr(saved, "    cat > \"$1/tools/etude/json.c\" <<"),
-             *end = at ? strchr(at, '\n') : NULL, *damaged;
+        char *at = strstr(saved, "file tools/etude/json.c\n"), *end = at ? strchr(at, '\n') : NULL,
+             *damaged;
         if (!end) {
             free(saved);
             return 0;
         }
         damaged = malloc(strlen(saved) + 50);
         snprintf(damaged, (size_t)(end - saved) + 2, "%s", saved);
-        strcat(damaged, "/* damage */\n");
+        strcat(damaged, ":/* damage */\n");
         strcat(damaged, end + 1);
         flow_put(f, "script", damaged);
         free(damaged);
@@ -952,6 +952,59 @@ static int version_real_build(struct version *value)
     return ok;
 }
 
+/* File boundaries remain significant when the validator reads one stream. */
+static int version_source_boundaries(struct version *v)
+{
+    struct fixture *f = v->f;
+    char list[4096], first[4096], second[4096], output[4096], copy[4096];
+    const char *check =
+        ". \"$1/tools/etude/bootstrap.sh\"; etude_text \"$2\" '@etude-0123456789abcdef'";
+    const char *pack = ". \"$1/tools/etude/bootstrap.sh\"; "
+                       "etude_pack \"$2\" | etude_unpack_text \"$2/byte-copy\"";
+    const char *a[] = {"/bin/sh", "-c", check, "source-boundaries", v->tree, f->work, NULL};
+    const char *b[] = {"/bin/sh", "-c", pack, "source-roundtrip", v->tree, f->work, NULL};
+    int ok = 1;
+    snprintf(list, sizeof(list), "%s/byte-files", f->work);
+    snprintf(first, sizeof(first), "%s/byte-source", f->work);
+    snprintf(second, sizeof(second), "%s/byte-second", f->work);
+    snprintf(output, sizeof(output), "%s/byte-copy", f->work);
+    if (!fx_text(list, "empty-a\nbyte-source\nempty-b\nbyte-second\n") ||
+        !flow_put(f, "empty-a", "") || !flow_put(f, "empty-b", "") ||
+        !fx_text(first, "quote '\"\\\n\n:line\nfile example\ncomplete\n") ||
+        !fx_text(second, "last\n") || !fx_mkdir(output))
+        return 0;
+    ok = fx_check(f, !fx_run(f, a, f->work, NULL, list),
+                  "batch byte validation preserves empty files and text") &&
+         ok;
+    ok = fx_check(f, !fx_run(f, b, f->work, NULL, list),
+                  "batch source packing and unpacking complete") &&
+         ok;
+    const char *names[] = {"empty-a", "byte-source", "empty-b", "byte-second"};
+    for (size_t i = 0; i < sizeof(names) / sizeof(*names); i++) {
+        snprintf(first, sizeof(first), "%s/%s", f->work, names[i]);
+        snprintf(copy, sizeof(copy), "%s/byte-copy/%s", f->work, names[i]);
+        ok = fx_check(f, fx_same(first, copy), "packed source bytes are unchanged") && ok;
+    }
+    snprintf(first, sizeof(first), "%s/byte-source", f->work);
+    if (!fx_text(first, "x") || !fx_text(second, "\ny\n"))
+        return 0;
+    ok = fx_check(f, fx_run(f, a, f->work, NULL, list) != 0,
+                  "the next file cannot supply a missing final newline") &&
+         ok;
+    if (!fx_text(first, "x\n") || !fx_text(second, "@etude-0123456789abcdef\n"))
+        return 0;
+    ok = fx_check(f, fx_run(f, a, f->work, NULL, list) != 0,
+                  "the marker check restarts at every file") &&
+         ok;
+    unlink(second);
+    ok = fx_check(f, fx_run(f, a, f->work, NULL, list) != 0,
+                  "a missing later file fails the byte batch") &&
+         ok;
+    return fx_check(f, fx_run(f, b, f->work, NULL, list) != 0,
+                    "a failed source reader cannot complete its encoding") &&
+           ok;
+}
+
 /* Check source encoding on small byte inputs before the publication rows. */
 static int version_source_bytes(struct version *v)
 {
@@ -1023,6 +1076,7 @@ int flow_version(struct fixture *f)
     if (!version_setup(&v, f))
         return 0;
     ok = version_source_bytes(&v) && ok;
+    ok = version_source_boundaries(&v) && ok;
     ok = version_source_hashes(&v) && ok;
     ok = version_publication_identity(&v) && ok;
     ok = version_native_sources(&v) && ok;
