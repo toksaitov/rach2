@@ -2000,7 +2000,7 @@
           }
         ],
         "children": "reaped",
-        "cleanup": "the C controllers remove their private scratch after success; the case executor stops the GNU products machine and all native processes"
+        "cleanup": "the C controllers remove their private scratch; the Doom ABI helper is ended explicitly and the case executor stops every declared helper and native process"
       },
       "assertions": [
         {
@@ -2050,7 +2050,7 @@
         },
         {
           "assertion_id": "doom_libc",
-          "checks": "Doom C library on both architectures: `sh tests/host/doom_libc_check.sh` exits 0",
+          "checks": "Doom C library on both architectures: each prepared freestanding fixture runs on its matching kernel, exits 0 and prints the exact 64-bit format line",
           "source": "scenario"
         },
         {
@@ -2273,9 +2273,9 @@
         }
       },
       "resources": {
-        "cpu_millis": 1000,
+        "cpu_millis": 2000,
         "cpu_ceiling_millis": 16000,
-        "memory_bytes": 2550136832,
+        "memory_bytes": 2952790016,
         "disk_bytes": 13421772800,
         "locks": [],
         "ports": 0,
@@ -2421,6 +2421,21 @@
           "name": "image-tools",
           "node": "x86_64/images/etude-image.krffs",
           "per_architecture": false
+        },
+        {
+          "name": "doom-i686",
+          "node": "tests/fixtures/doom-libc-i686",
+          "per_architecture": false
+        },
+        {
+          "name": "doom-i686-kernel",
+          "node": "rach2-recovery/kernel",
+          "per_architecture": false
+        },
+        {
+          "name": "doom-i686-image",
+          "node": "images/etude-image.krffs",
+          "per_architecture": false
         }
       ],
       "timing": [
@@ -2535,9 +2550,15 @@
           "does": "run every native regression row of pagecache"
         },
         {
+          "step_id": "doom-i686",
+          "stage": "boot",
+          "does": "boot the matching i686 recovery helper for the freestanding Doom fixture",
+          "machine": "doom-i686"
+        },
+        {
           "step_id": "doom_libc",
           "stage": "execute",
-          "does": "run every native regression row of doom_libc"
+          "does": "run both prepared Doom C library ABIs on matching kernels and check their complete results"
         },
         {
           "step_id": "krffs_tools",
@@ -2767,6 +2788,26 @@
               "rach2.rescue"
             ],
             "architecture": "x86_64"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": true
+        },
+        {
+          "machine_id": "doom-i686",
+          "qemu": {
+            "architecture": "i686",
+            "kernel": "doom-i686-kernel",
+            "initrd": "doom-i686-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 268435456,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.rescue"
+            ]
           },
           "console": "serial",
           "qmp": true,

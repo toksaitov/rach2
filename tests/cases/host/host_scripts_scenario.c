@@ -2,6 +2,7 @@
 #include "host_scripts.h"
 #include "host_image.h"
 #include "host_build.h"
+#include "host_doom.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -147,7 +148,7 @@ int etude_scenario(struct etude_case *c)
     for (i = 0; i < n; i++) {
         const char *id = inventory[i].id;
         int held = 0;
-        if (etude_step(c, id) != ETUDE_OK) {
+        if (etude_step(c, !strcmp(id, "doom_libc") ? "doom-i686" : id) != ETUDE_OK) {
             etude_notrun(c, id, "the case stopped before this check");
             failed = 1;
             continue;
@@ -158,7 +159,9 @@ int etude_scenario(struct etude_case *c)
             etude_notrun(c, id, "the products helper or its source assets did not start");
             failed = 1;
             continue;
-        } else if (in(image, id))
+        } else if (!strcmp(id, "doom_libc"))
+            held = host_doom_check(c, m);
+        else if (in(image, id))
             held = host_image_check(c, m, id);
         else if (in(build, id))
             held = host_build_check(c, m, id);

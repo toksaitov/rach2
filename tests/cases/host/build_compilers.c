@@ -326,19 +326,3 @@ int build_ldscript(struct fixture *f)
     layout(f, "gnu.elf", "gnu.elf");
     return !f->failed;
 }
-
-int build_doom(struct fixture *f)
-{
-    const char *format =
-        "doom-libc-format: -9223372036854775808 18446744073709551615 ffffffffffffffff 37";
-    const char *arches[] = {"i686", "x86_64"};
-    for (size_t i = 0; i < 2; i++) {
-        char relative[128];
-        snprintf(relative, sizeof(relative), "doom_libc-%s", arches[i]);
-        const char *a[] = {product_path(f, relative), bp(f->work, "doom.data"), NULL};
-        fx_remove(a[1]);
-        int status = fx_run(f, a, f->work, NULL, NULL);
-        fx_check(f, status == 0 && f->out && strstr(f->out, format), arches[i]);
-    }
-    return !f->failed;
-}

@@ -6,11 +6,11 @@ static int run_check(struct fixture *f, const char *id)
     static const struct {
         const char *name;
         int (*run)(struct fixture *);
-    } checks[] = {{"commit_msg", build_commit_msg},   {"run_scripts", build_run_scripts},
-                  {"gnu_port_resume", build_resume},  {"gnu_cmake_jobs", build_jobs},
-                  {"doom_libc", build_doom},          {"check_asm", build_asm},
-                  {"check_ldscript", build_ldscript}, {"prereq", build_prereq},
-                  {"together", build_together},       {"host_suite", build_suite}};
+    } checks[] = {{"commit_msg", build_commit_msg},  {"run_scripts", build_run_scripts},
+                  {"gnu_port_resume", build_resume}, {"gnu_cmake_jobs", build_jobs},
+                  {"check_asm", build_asm},          {"check_ldscript", build_ldscript},
+                  {"prereq", build_prereq},          {"together", build_together},
+                  {"host_suite", build_suite}};
     if (!strcmp(id, "case_select"))
         return build_runner(f, id);
     for (size_t i = 0; i < sizeof(checks) / sizeof(checks[0]); i++)

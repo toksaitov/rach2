@@ -1,12 +1,13 @@
 # scripts.mk: one native scenario and immutable sources for host.list.
 HOST_SCRIPT_CASE_SRC = tests/cases/host/host_scripts_scenario.c \
-    tests/cases/host/host_scripts.c tests/cases/host/host_build.c \
+    tests/cases/host/host_scripts.c tests/cases/host/host_build.c tests/cases/host/host_doom.c \
     tests/cases/host/host_image.c tests/cases/host/host_image_accounts.c \
     tests/cases/host/host_image_krffs.c tests/cases/host/host_image_overlay.c \
     tests/cases/host/host_image_tooling.c tests/cases/host/host_image_collection.c \
     tests/cases/machine/netcase.c
 build/tests/cases/host/host_scripts_scenario: $(HOST_SCRIPT_CASE_SRC) \
-    tests/cases/host/host_scripts.h tests/cases/host/host_build.h tests/cases/host/host_image.h \
+    tests/cases/host/host_scripts.h tests/cases/host/host_build.h tests/cases/host/host_doom.h \
+    tests/cases/host/host_image.h \
     tests/cases/machine/netcase.h $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
 	@mkdir -p $(@D)
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
@@ -22,7 +23,7 @@ build/tests/host-suite/sources/%: %
 	@mkdir -p $(@D)
 	cp $< $@
 
-# The products helper executes both x86 ABIs even in an i686-only collection.
+# The GNU products use their declared x86-64 kernel on either collection ABI.
 ifneq ($(ARCH),x86_64)
 .PHONY: prepare-host-products-x86_64
 prepare-host-products-x86_64:
@@ -45,3 +46,18 @@ $(addprefix build/tests/host-suite/scripts/,$(HOST_KERNEL_FIXTURES)): \
     build/tests/host-suite/scripts/%: $(HOST_KERNEL_FIXTURE_INPUTS)
 	@mkdir -p $(@D)
 	CC="$(HOSTCC)" python3 -B tests/cases/host/fixtures.py $* $@
+
+# The i686 freestanding Doom ABI runs on a matching small recovery helper.
+HOST_DOOM_LIBC_SRC = ports/doom/crt0.c tests/host/fixtures/doom_libc.c
+build/tests/fixtures/doom-libc-i686: $(HOST_DOOM_LIBC_SRC) $(wildcard ports/doom/include/*.h ports/doom/include/sys/*.h)
+	@mkdir -p $(@D)
+	i686-elf-gcc -std=gnu99 -Os -ffreestanding -fno-pie -no-pie -nostdlib -static \
+	    -Wl,--build-id=none -Iports/doom/include $(HOST_DOOM_LIBC_SRC) -o $@
+
+ifneq ($(ARCH),i686)
+.PHONY: prepare-host-doom-i686
+prepare-host-doom-i686:
+	+$(MAKE) --no-print-directory ARCH=i686 rach2-recovery build/images/etude-image.krffs
+build/rach2-recovery/kernel build/images/etude-image.krffs: | prepare-host-doom-i686
+	@test -s $@
+endif
