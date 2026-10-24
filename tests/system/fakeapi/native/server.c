@@ -892,7 +892,8 @@ static int verdict(struct server *s)
         log_line("result: pass: %lu steps played by %u requests", (unsigned long)owed, s->requests);
     return s->failures || left ? 1 : 0;
 }
-/** Publish the service's own result, apart from its supervisor's stop reason. */
+/** Publish the service's own result, apart from its supervisor's stop
+ * reason. */
 static int write_status(const char *record_path, int result)
 {
     struct buffer status = {0};
@@ -1060,19 +1061,23 @@ done:
     service_close(job.socket);
     return 0;
 }
-int main(int argc, char **argv)
+static int initialize(void)
 {
-    const char *name = strrchr(argv[0], '/');
-    name = name ? name + 1 : argv[0];
     setvbuf(stdout, NULL, _IOLBF, 0);
     if (stop_handlers())
-        return 2;
+        return -1;
 #ifdef _WIN32
     SetConsoleCtrlHandler(console_stop, TRUE);
     _setmode(0, _O_BINARY);
     _setmode(1, _O_BINARY);
 #endif
-    if (service_init())
+    return service_init();
+}
+int main(int argc, char **argv)
+{
+    const char *name = strrchr(argv[0], '/');
+    name = name ? name + 1 : argv[0];
+    if (initialize())
         return 2;
     if (strstr(name, "agent_relay") && argc == 2)
         return relay(service_port(argv[1]));

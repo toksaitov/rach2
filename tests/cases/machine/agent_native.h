@@ -2,6 +2,12 @@
 #ifndef AGENT_NATIVE_H
 #define AGENT_NATIVE_H
 #include "netcase.h"
-int agent_native_action(struct net_case *u, struct net_boot *b, const char *work, const char *row,
-                        const char *verb, int fake, const char *test_key);
+
+struct agent_native_config {
+    const char *work, *row, *test_key;
+    int fake;
+};
+
+int agent_native_action(struct net_case *u, struct net_boot *b,
+                        const struct agent_native_config *config, const char *verb);
 #endif

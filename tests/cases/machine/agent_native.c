@@ -672,18 +672,18 @@ static int curl_case(struct row *s)
         return guest_expect(s, argv, "last\n", "step-after-refusal");
     }
 }
-int agent_native_action(struct net_case *u, struct net_boot *b, const char *work, const char *name,
-                        const char *verb, int fake, const char *test_key)
+int agent_native_action(struct net_case *u, struct net_boot *b,
+                        const struct agent_native_config *config, const char *verb)
 {
     struct row s;
     memset(&s, 0, sizeof(s));
     s.u = u;
     s.b = b;
-    s.work = work;
-    s.name = name;
-    s.fake = fake;
-    s.test_key = test_key;
-    if (!path(s.assets, sizeof(s.assets), "%s/assets", work))
+    s.work = config->work;
+    s.name = config->row;
+    s.fake = config->fake;
+    s.test_key = config->test_key;
+    if (!path(s.assets, sizeof(s.assets), "%s/assets", s.work))
         return 0;
     if (!strcmp(verb, "prepare"))
         return prepare(&s);
