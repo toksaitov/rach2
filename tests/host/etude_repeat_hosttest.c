@@ -295,6 +295,14 @@ static int look(struct seen *s)
     return rc;
 }
 
+/** Create a shared file for a case; give its exit status. */
+static int create_shared(const char *name)
+{
+    int fd = open(shared(name), O_WRONLY | O_CREAT, 0644);
+
+    return fd >= 0 && close(fd) == 0 ? 0 : 3;
+}
+
 /** Be fixture case `name`; give its exit status. */
 static int case_main(const char *name)
 {
@@ -302,20 +310,16 @@ static int case_main(const char *name)
     char c = 0;
     int fd;
 
-    if (strcmp(name, "seed") == 0) {
-        fd = open(shared("state"), O_WRONLY | O_CREAT, 0644);
-        return fd >= 0 && close(fd) == 0 ? 0 : 3;
-    }
+    if (strcmp(name, "seed") == 0)
+        return create_shared("state");
     if (strcmp(name, "read") == 0) {
         if (access(shared("state"), F_OK) == 0)
             return 0;
         printf("read: the state that seed makes is missing\n");
         return 1;
     }
-    if (strcmp(name, "mark") == 0) {
-        fd = open(shared("marked"), O_WRONLY | O_CREAT, 0644);
-        return fd >= 0 && close(fd) == 0 ? 0 : 3;
-    }
+    if (strcmp(name, "mark") == 0)
+        return create_shared("marked");
     if (strcmp(name, "pair-w") == 0 || strcmp(name, "pair-r") == 0) {
         if (mkfifo(shared("fifo"), 0600) != 0 && errno != EEXIST)
             return 3;
