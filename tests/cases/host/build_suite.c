@@ -284,7 +284,8 @@ static int duplicate_judge(struct fixture *f, const char *tree)
 }
 int build_suite(struct fixture *f)
 {
-    const char *tree = bp(f->work, "suite");
+    char tree[4096];
+    snprintf(tree, sizeof(tree), "%s", bp(f->work, "suite"));
     if (!fx_mkdir(bp(tree, "tests/host")) || !fx_mkdir(bp(f->work, "meet")) ||
         !fx_copy(product_path(f, "host-suite-probe"), bp(tree, "build/tests/host-suite/probe")) ||
         !suite_manifest(tree, script_probes, 2) ||

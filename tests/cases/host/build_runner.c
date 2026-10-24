@@ -237,7 +237,8 @@ int build_runner(struct fixture *f, const char *id)
 {
     if (strcmp(id, "case_select"))
         return 0;
-    const char *tree = bp(f->work, "selection");
+    char tree[4096];
+    snprintf(tree, sizeof(tree), "%s", bp(f->work, "selection"));
     if (!selection_tree(f, tree))
         return 0;
     for (size_t i = 0; i < sizeof(selections) / sizeof(*selections); i++)

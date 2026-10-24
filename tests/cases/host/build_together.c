@@ -139,7 +139,8 @@ static int together_tree(struct fixture *f)
                            "tools/etude/sources.mk",
                            "tests/system/suites.mk",
                            NULL};
-    const char *target = bp(f->work, "tree");
+    char target[4096];
+    snprintf(target, sizeof(target), "%s", bp(f->work, "tree"));
     for (size_t i = 0; files[i]; i++)
         if (!fx_check(f, fx_copy(bp(f->tree, files[i]), bp(target, files[i])), files[i]))
             return 0;
@@ -350,7 +351,8 @@ int build_together(struct fixture *f)
 {
     if (!together_tree(f))
         return 0;
-    const char *tree = bp(f->work, "tree");
+    char tree[4096];
+    snprintf(tree, sizeof(tree), "%s", bp(f->work, "tree"));
     fx_check(f, no_grouped(bp(tree, "Makefile")) && no_grouped(bp(tree, "tests/system/suites.mk")),
              "makefiles contain no grouped targets");
     DIR *d = opendir(bp(tree, "mk"));
