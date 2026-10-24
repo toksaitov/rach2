@@ -152,6 +152,11 @@ if [ "${GNU_TEST_PRODUCTS:-}" = 1 ]; then
     chmod 0700 "$TREE/host-work"
     mkdir "$TREE/host-products"
     cp -a "$OUT/host-products/." "$TREE/host-products/"
+    # Install only the isolated helper tools, without changing root/.
+    for tool in mkfs.exfat fsck.exfat; do
+        test -x "$OUT/fstools/usr/sbin/$tool"
+        cp "$OUT/fstools/usr/sbin/$tool" "$TREE/usr/sbin/$tool"
+    done
     # Independent filesystem commands are required prepared inputs.
     for tool in mkfs.exfat fsck.exfat fsck.fat; do
         test -x "$TREE/usr/sbin/$tool"

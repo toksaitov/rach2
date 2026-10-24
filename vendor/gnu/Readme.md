@@ -1,6 +1,6 @@
 # The GNU layer
 
-The GNU layer builds a GNU system for Rach2: a cross toolchain with glibc, 73 port recipes built with it, a native GCC and GDB, the SpiderMonkey shell, and Debian's chromium-headless-shell, all installed over the os-real system in an ext2 root that the kernel boots. On x86-64 the root can also have the [agents layer](agents/Readme.md), vendors' published builds of coding agents and their tools, such as Anthropic's Claude Code and GitHub's `gh`. It gives Rach2 the dynamically linked programs a person expects of a Linux machine (bash, coreutils, OpenSSH, Python, Git, GCC), which the static musl system does not have. It builds on an x86-64 Linux host; on any other host, such as a Mac, its root images are built in etude's tooling machine, a Linux in QEMU. It is not part of `make`. The targets are `i686-linux-gnu` and `x86_64-rach2-linux-gnu`, as `ARCH` selects.
+The GNU layer builds a GNU system for Rach2: a cross toolchain with glibc, 72 port recipes built with it, a native GCC and GDB, the SpiderMonkey shell, and Debian's chromium-headless-shell, all installed over the os-real system in an ext2 root that the kernel boots. On x86-64 the root can also have the [agents layer](agents/Readme.md), vendors' published builds of coding agents and their tools, such as Anthropic's Claude Code and GitHub's `gh`. It gives Rach2 the dynamically linked programs a person expects of a Linux machine (bash, coreutils, OpenSSH, Python, Git, GCC), which the static musl system does not have. It builds on an x86-64 Linux host; on any other host, such as a Mac, its root images are built in etude's tooling machine, a Linux in QEMU. It is not part of `make`. The targets are `i686-linux-gnu` and `x86_64-rach2-linux-gnu`, as `ARCH` selects.
 
 ## Use
 
@@ -8,6 +8,7 @@ The Make targets build for the architecture `ARCH` names, so `make ARCH=x86_64 g
 
 * `make gnu-toolchain`: the cross toolchain, by `build_toolchain.sh`.
 * `make gnu-ports`: every recipe of `ports/`, by `build_port.sh --all`.
+* `make gnu-fstools`: independent exFAT helper tools, from their separate pin, without rebuilding the GNU ports or native compiler.
 * `make gnu-native` and `make gnu-gdb`: binutils, GCC and GDB that run on Rach2 ([`native/`](native/Readme.md)).
 * `make gnu-js`: the SpiderMonkey shell ([`spidermonkey/`](spidermonkey/Readme.md)).
 * `make gnu-chromium`: Debian's chromium-headless-shell with its libraries ([`chromium/`](chromium/Readme.md)).
@@ -37,7 +38,7 @@ The path finds a GNU program in `/usr/bin` before a file of `/bin`. `make` is GN
 
 ## Sources and license
 
-[`sources.txt`](sources.txt) pins each tarball of the toolchain and the ports, and [`sources-extra.txt`](sources-extra.txt) the sources of the three subdirectories, the Debian archive keys and the CA bundle. A line gives a name, version, URL and SHA-256, and each file's header says which upstream key verified each digest. `fetch.sh` downloads a file once, into `downloads/`, which Git ignores, trying up to three times, and checks its digest every time a script uses it; a file with another digest is removed and refused. Nothing fetched is committed. The exfatprogs recipe supplies independent exFAT formatting and checking beside dosfstools' FAT checker. The GNU test image requires these programs and the compiled `/host-products/fstool` dispatcher before publication; machine cases execute them over the framed guest channel.
+[`sources.txt`](sources.txt) pins each tarball of the toolchain and the ports, and [`sources-extra.txt`](sources-extra.txt) the sources of the three subdirectories, the Debian archive keys and the CA bundle. A line gives a name, version, URL and SHA-256, and each file's header says which upstream key verified each digest. `fetch.sh` downloads a file once, into `downloads/`, which Git ignores, trying up to three times, and checks its digest every time a script uses it; a file with another digest is removed and refused. Nothing fetched is committed. The separate `gnu-fstools` step builds the exfatprogs pin in [`fstools/sources.txt`](fstools/sources.txt) against the existing cross compiler and sysroot. It publishes only the independent helper tools under `fstools/`, without changing the GNU port list, shared source pins or root. GNU test image assembly copies its formatter and checker beside dosfstools' existing FAT checker. The GNU test image requires these programs and the compiled `/host-products/fstool` dispatcher before publication; machine cases execute them over the framed guest channel.
 
 Each port keeps its upstream license, which its tarball has. The scripts, the recipes, `rach2.ti` and the files in `etc/` are in-house.
 

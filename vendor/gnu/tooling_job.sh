@@ -139,7 +139,7 @@ build_layer()
         sh tools/setup/elfwrap.sh x86_64 "$TREE/build/tooling-elf" || exit 1
         PATH=$TREE/build/tooling-elf:$PATH
         export PATH
-        set -- gnu-sanitizers gnu-host-products
+        set -- gnu-sanitizers gnu-host-products gnu-fstools
         [ "$RACH2_ARCH" != x86_64 ] || set -- "$@" gnu-host-checks
     fi
     # shellcheck disable=SC2086 # DRY_RUN is empty or -n

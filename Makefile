@@ -1600,6 +1600,7 @@ include mk/etude-image.mk
 include mk/gnu.mk
 include mk/gnu-extra.mk
 include mk/gnu-sanitizers.mk
+include mk/gnu-fstools.mk
 include mk/gnu-host-products.mk
 include mk/gnu-host-checks.mk
 include mk/gnu-agents.mk
