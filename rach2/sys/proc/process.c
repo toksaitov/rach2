@@ -379,6 +379,9 @@ void reparent_children(uint32_t dead_pid)
         }
         if (init != NULL) {
             p->parent_pid = init->pid;
+            if (p->pid == p->tgid) {
+                p->tg->no_child_signal = 0;
+            }
             if (p->state == PROC_ZOMBIE && p->pid == p->tgid && p->tg->live == 0) {
                 struct k_siginfo info;
 

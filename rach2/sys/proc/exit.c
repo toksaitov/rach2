@@ -88,7 +88,9 @@ int proc_exit_cleanup(int32_t status)
         struct k_siginfo info;
 
         proc_child_info(leader, parent, &info);
-        signal_post_info(parent, SIGCHLD, &info);
+        if (proc_child_signal(leader, parent)) {
+            signal_post_info(parent, SIGCHLD, &info);
+        }
         wq_wake_all(&parent->tg->chld);
         if (parent->state == PROC_BLOCKED) {
             sched_make_ready(parent);

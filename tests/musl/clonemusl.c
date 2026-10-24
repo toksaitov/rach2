@@ -29,6 +29,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <signal.h>
+#include <sched.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -42,10 +43,6 @@
 
 extern char **environ;
 
-#define CLONE_SIGHAND        0x00000800
-#define CLONE_PARENT_SETTID  0x00100000
-#define CLONE_CHILD_CLEARTID 0x00200000
-#define CLONE_CHILD_SETTID   0x01000000
 #define FUTEX_WAIT           0
 #define FUTEX_WAKE           1
 #define FUTEX_REQUEUE        3
@@ -61,6 +58,12 @@ static const char *const assertion_id[] = {"set-tid-address",
                                            "parent-settid",
                                            "parent-word",
                                            "sighand-einval",
+                                           "zero-clone",
+                                           "zero-filter",
+                                           "zero-reap",
+                                           "zero-signal",
+                                           "parent-inherit",
+                                           "exec-reset",
                                            "wake-no-waiter",
                                            "wait-eagain",
                                            "relative-timeout",
@@ -263,7 +266,103 @@ static int futex_rows(volatile uint32_t *word)
     return 0;
 }
 
-int main(void)
+static union {
+    long double alignment;
+    unsigned char bytes[65536];
+} clone_stacks[3];
+
+static volatile int clone_shared;
+static volatile pid_t clone_grandchild;
+static const char *clone_executable;
+
+static int clone_leaf(void *arg)
+{
+    (void)arg;
+    return 74;
+}
+
+/* Match the sanitizer's shared resources, but keep distinct thread groups. */
+static int clone_shared_child(void *arg)
+{
+    (void)arg;
+    clone_shared = 123;
+    clone_grandchild = clone(clone_leaf, clone_stacks[1].bytes + sizeof(clone_stacks[1].bytes),
+                             CLONE_VM | CLONE_PARENT | SIGCHLD, NULL);
+    return clone_grandchild > 0 ? 73 : 72;
+}
+
+static int clone_exec_child(void *arg)
+{
+    char *args[] = {(char *)clone_executable, "--clone-exec", NULL};
+    (void)arg;
+    execve(clone_executable, args, environ);
+    return 71;
+}
+
+/* Drain an earlier, already-reaped fork's notification before this test. */
+static int clone_block_children(sigset_t *old)
+{
+    sigset_t mask;
+    struct timespec zero = {0, 0};
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGCHLD);
+    if (sigprocmask(SIG_BLOCK, &mask, old))
+        return fail("cannot block child notifications");
+    if (sigtimedwait(&mask, NULL, &zero) < 0 && errno != EAGAIN)
+        return fail("cannot inspect earlier child notification");
+    return 0;
+}
+
+static int clone_exec_reset(void)
+{
+    int status;
+    sigset_t pending;
+    siginfo_t info;
+    pid_t pid = clone(clone_exec_child, clone_stacks[2].bytes + sizeof(clone_stacks[2].bytes),
+                      CLONE_VM | CLONE_UNTRACED, NULL);
+    memset(&info, 0, sizeof(info));
+    if (pid < 0 || waitid(P_PID, pid, &info, WEXITED | WNOWAIT | __WALL) ||
+        info.si_pid != pid || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 75 || sigpending(&pending) || !sigismember(&pending, SIGCHLD))
+        return fail("exec did not reset zero-signal child notification and wait selection");
+    report_held();
+    return 0;
+}
+
+static int zero_signal_rows(void)
+{
+    sigset_t old, pending;
+    int status;
+    pid_t pid;
+    if (clone_block_children(&old))
+        return 1;
+    pid = clone(clone_shared_child, clone_stacks[0].bytes + sizeof(clone_stacks[0].bytes),
+                CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_UNTRACED, NULL);
+    if (pid < 0)
+        return fail("sanitizer zero-signal clone was refused");
+    report_held();
+    if (waitpid(pid, &status, WNOHANG) != -1 || errno != ECHILD)
+        return fail("ordinary wait selected a zero-signal child");
+    report_held();
+    if (waitpid(pid, &status, __WCLONE) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 73 || clone_shared != 123)
+        return fail("zero-signal child did not share memory and wake its clone wait");
+    report_held();
+    if (sigpending(&pending) || sigismember(&pending, SIGCHLD))
+        return fail("a zero-signal child posted SIGCHLD");
+    report_held();
+    if (clone_grandchild <= 0 || waitpid(clone_grandchild, &status, WNOHANG) != -1 ||
+        errno != ECHILD || waitpid(clone_grandchild, &status, __WCLONE) != clone_grandchild ||
+        !WIFEXITED(status) || WEXITSTATUS(status) != 74)
+        return fail("CLONE_PARENT did not inherit the caller's zero exit signal");
+    report_held();
+    if (clone_exec_reset())
+        return 1;
+    sigprocmask(SIG_SETMASK, &old, NULL);
+    return 0;
+}
+
+int main(int argc, char **argv)
 {
     static volatile int32_t ctid;
     static volatile int32_t ptid;
@@ -271,6 +370,9 @@ int main(void)
     long pid;
     int status;
 
+    if (argc == 2 && !strcmp(argv[1], "--clone-exec"))
+        return 75;
+    clone_executable = argv[0];
     report_start();
     if (raw(SYS_set_tid_address, (long)&ctid, 0, 0, 0, 0, 0) != getpid()) {
         return fail("set_tid_address did not return the pid");
@@ -314,6 +416,8 @@ int main(void)
     }
     report_held();
 
+    if (zero_signal_rows() != 0)
+        return 1;
     if (futex_rows(&word) != 0) {
         return 1;
     }

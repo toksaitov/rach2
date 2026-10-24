@@ -86,9 +86,9 @@ Bringing a page in, and a copy to or from the tracer's own memory, may sleep, an
 
 * a ptrace stop the wait has not reported, once, with `CLD_TRAPPED`, and `si_status` the status shifted right by 8 bits, the signal with the event above it, so that a caller of `waitid` can tell an event stop from a plain `SIGTRAP`;
 * a traced thread that ended, which the report frees, since such a thread is not freed at another thread's return to user mode as an untraced one is;
-* the end of a process whose parent is another process. The last thread of such a process notifies the tracer and not the parent (`proc_exit_cleanup` in `proc/exit.c`), the parent's wait passes the zombie over while it is traced, and the tracer's report releases the process (`ptrace_exit_release`), which sends the parent `SIGCHLD` and wakes its wait.
+* the end of a process whose parent is another process. The last thread of such a process notifies the tracer and not the parent (`proc_exit_cleanup` in `proc/exit.c`), the parent's wait passes the zombie over while it is traced, and the tracer's report releases the process (`ptrace_exit_release`), which posts `SIGCHLD` when the child requested notification and always wakes its wait.
 
-A thread that is not its process's first is reported only to a wait with `__WALL` or `__WCLONE`. A traced thread's end also sends its tracer `SIGCHLD` (`ptrace_exit_notify`), with the siginfo `proc_child_info` makes for the tracer, translated into the tracer's namespaces as a parent's is into the parent's.
+A tracer's wait selects every tracee as if `__WALL` were set, including nonleader threads and zero-signal children. A traced thread's end also sends its tracer `SIGCHLD` (`ptrace_exit_notify`), with the siginfo `proc_child_info` makes for the tracer, translated into the tracer's namespaces as a parent's is into the parent's.
 
 `ptrace_detach`, for `PTRACE_DETACH`, a tracer's end and the report of a process's end, clears the tracing state, the trap flag the kernel set and the debug registers, and resumes a stopped tracee with the signal given. A tracee whose process is stopped then parks in that stop. When the tracer's process ends (`ptrace_tracer_gone`), each tracee is detached, sent `SIGKILL` first under `PTRACE_O_EXITKILL`, and the parent of a tracee whose process has ended is notified, as the tracer's report would have notified it.
 

@@ -603,6 +603,10 @@ void signal_set_blocked(uint64_t mask);
  * with the signal, from its wait status, and the child's pid and real uid as
  * the receiver's namespaces see them. */
 void proc_child_info(const process_t *child, const process_t *receiver, struct k_siginfo *info);
+/** Advance the group's successful-exec generation, preserving old children. */
+void proc_exec_generation(process_t *parent);
+/** Whether the child's end sends SIGCHLD; account for a new parent image. */
+int proc_child_signal(process_t *child, const process_t *parent);
 
 /**
  * The tick `ticks` after `now` at which a real-time timer is due, never 0,

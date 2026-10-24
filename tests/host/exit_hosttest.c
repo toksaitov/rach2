@@ -1,7 +1,7 @@
 /**
  * Drive exit cleanup through a contended close and working-directory release.
  *
- * host-deps:
+ * host-deps: rach2/sys/proc/child_signal.c
  *
  * The file callbacks wait on a queue of the kernel's wait queue code, which
  * is included whole. The scheduler substitute releases the lock only after
@@ -22,6 +22,7 @@
 
 extern int printf(const char *format, ...);
 
+process_t *proc_list;
 static process_t child;
 static process_t parent;
 static struct tgroup child_group;
@@ -239,7 +240,7 @@ void signal_post_info(process_t *target, int signo, const struct k_siginfo *info
  * is, with a parent when `has_parent` is, and check the order and the count of
  * each step.
  */
-static void run_case(int files, int directory, int has_parent, int32_t status)
+static void run_case(int files, int directory, int has_parent, int32_t status, int quiet)
 {
     fd_wait = files;
     cwd_wait = directory;
@@ -254,6 +255,7 @@ static void run_case(int files, int directory, int has_parent, int32_t status)
     child_group.leader = &child;
     child_group.live = 1;
     child_group.exiting = 0;
+    child_group.no_child_signal = quiet;
     parent.tg = &parent_group;
     child.parent_pid = 7;
     child.state = PROC_RUNNING;
@@ -275,23 +277,24 @@ static void run_case(int files, int directory, int has_parent, int32_t status)
     CHECK(child.state == PROC_ZOMBIE, "cleanup ends as a zombie");
     CHECK(child.exit_code == status, "the encoded wait status is preserved");
     CHECK(child.in_syscall, "remaining teardown cannot be preempted");
-    CHECK(notified == has_parent, "the parent is notified once");
+    CHECK(notified == (has_parent && !quiet), "the parent is notified once");
     CHECK(vfork_released == 1, "a vfork parent is let go once");
     CHECK(parent.state == (has_parent ? PROC_READY : PROC_BLOCKED),
           "a blocked parent becomes ready");
     CHECK(!wq_active(&lock_wait), "cleanup leaves no waiter");
 }
 
-/** Run the five cases; 0 when every check passed, 1 otherwise. */
+/** Run the six cases; 0 when every check passed, 1 otherwise. */
 int main(void)
 {
-    run_case(0, 0, 1, 7 << 8);
-    run_case(1, 0, 1, SIGKILL);
-    run_case(0, 1, 1, SIGSEGV);
-    run_case(1, 1, 1, 0);
-    run_case(1, 1, 0, SIGKILL);
+    run_case(0, 0, 1, 7 << 8, 0);
+    run_case(1, 0, 1, SIGKILL, 0);
+    run_case(0, 1, 1, SIGSEGV, 0);
+    run_case(1, 1, 1, 0, 0);
+    run_case(1, 1, 0, SIGKILL, 0);
+    run_case(0, 0, 1, 0, 1);
     if (!failures) {
-        printf("exit-test: result: five cases passed, six waits completed\n");
+        printf("exit-test: result: six cases passed, six waits completed\n");
     }
     return failures ? 1 : 0;
 }

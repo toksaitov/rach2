@@ -1074,7 +1074,8 @@ static void *usage_thread(void *arg)
 /**
  * Check the usage reported for the end of a traced thread. A child reaps a
  * grandchild that spent user time, then starts a second thread, which the
- * parent attaches to and lets end. The parent's wait4 with __WALL reports the
+ * parent attaches to and lets end. The tracer's wait4 implicitly selects every
+ * tracee, with ordinary flags or __WCLONE, and reports the
  * thread's end with at least the reaped grandchild's time, which the process
  * keeps, not the thread. Returns 0, or 1 after the failure is printed.
  */
@@ -1106,13 +1107,13 @@ static int traced_thread_usage(void)
         return abandon(pid, "the child's thread or its reaped grandchild's time");
     }
     if (ptrace(PTRACE_ATTACH, (pid_t)got[0], NULL, NULL) != 0 ||
-        waitpid((pid_t)got[0], &status, __WALL) != (pid_t)got[0] || !WIFSTOPPED(status) ||
+        waitpid((pid_t)got[0], &status, 0) != (pid_t)got[0] || !WIFSTOPPED(status) ||
         ptrace(PTRACE_CONT, (pid_t)got[0], NULL, NULL) != 0 || write(go_pipe[1], "g", 1) != 1) {
         return abandon(pid, "attaching to the child's second thread");
     }
     held();
     memset(&ru, 0xFF, sizeof(ru));
-    if (syscall(SYS_wait4, got[0], &status, __WALL, &ru) != got[0] || !WIFEXITED(status) ||
+    if (syscall(SYS_wait4, got[0], &status, __WCLONE, &ru) != got[0] || !WIFEXITED(status) ||
         ru.utime_sec * 100 + ru.utime_usec / 10000 < got[1]) {
         return abandon(pid, "a traced thread's end lacks the reaped children's time");
     }

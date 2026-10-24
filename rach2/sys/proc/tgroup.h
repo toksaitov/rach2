@@ -40,6 +40,11 @@ struct tgroup {
     struct process *exec_task; /* the thread whose execve ends the others */
     /* A successful exec since this group was made; fork starts at 0. */
     uint32_t execed;
+    /* clone with exit signal zero is reaped with __WCLONE, without SIGCHLD. */
+    uint32_t no_child_signal;
+    /* Exec generation of this group and of its real parent at clone. */
+    uint32_t exec_generation;
+    uint32_t parent_exec_generation;
     /* The user and system CPU time, in ticks, of the threads that ended. */
     uint32_t utime;
     uint32_t stime;

@@ -62,15 +62,16 @@ Linux's
 .Dv __WALL
 and
 .Dv __WNOTHREAD
-are accepted and change nothing: every thread waits for the children of
-its whole process.
+are accepted: every thread waits for the children of its whole process,
+and __WALL selects ordinary and zero-signal clone children.
 .Dv __WCLONE
 asks for the children that report their end with a signal other than
 .Dv SIGCHLD ,
 unless
 .Dv __WALL
-is beside it, and so selects none: every child here reports with
-.Dv SIGCHLD .
+is beside it.
+A child cloned with exit signal zero is such a child.
+A tracer's wait includes every tracee as if __WALL were set.
 Other option bits are ignored.
 Stop and continue events are reported once and do not reap the child.
 A stop is reported only while the child lives: a child that has ended,

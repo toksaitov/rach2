@@ -16,6 +16,7 @@ A file named without a directory is in `rach2/sys/proc/`; other paths are from t
 | `smp.h`, `smp.c` | The big lock, the requests one processor leaves another, the start of the other processors |
 | `sched.h`, `sched.c` | The run queues, `schedule`, preemption, the idle wait, CPU time and the load averages |
 | `wait_queue.h`, `wait_queue.c` | Wait queues |
+| `child_signal.c` | Child exit notification and parent exec generations |
 | `exit.c` | The end of a thread and of a process, `proc_exit_cleanup` |
 | `elf.h`, `elf.c` | ELF validation and the segment loader |
 | `uimage.h`, `uimage.c` | The initial stack of a new image |
@@ -83,7 +84,7 @@ Process 0, `proc_idle`, is the kernel's own. `kernel_main` (`rach2/kernel.c`) ma
 
 ### Fork and clone
 
-`fork`, `vfork`, `clone` and `clone3` all reach `do_fork` (`rach2/sys/syscall_proc.c`) with a `struct fork_req`: the clone flags, the child's stack pointer, and the addresses of the ids the call stores. `clone_with` refuses a flag it does not know with `EINVAL`, and requires `SIGCHLD` as the exit signal of a new process; `CLONE_THREAD` needs `CLONE_SIGHAND`, which needs `CLONE_VM`. `do_fork` works in this order, and a failure at any step returns to the parent with what was built for the child given back:
+`fork`, `vfork`, `clone` and `clone3` all reach `do_fork` (`rach2/sys/syscall_proc.c`) with a `struct fork_req`: the clone flags, the child's stack pointer, and the addresses of the ids the call stores. `clone_with` refuses a flag it does not know with `EINVAL`, and accepts zero or `SIGCHLD` as the exit signal of a new process; `CLONE_THREAD` needs `CLONE_SIGHAND`, which needs `CLONE_VM`. `do_fork` works in this order, and a failure at any step returns to the parent with what was built for the child given back:
 
 1. It lets the caches give back memory (`mem_balance`), and refuses with `EAGAIN` a caller whose real user already has `RLIMIT_NPROC` records, each thread and each zombie counted (`fork_nproc`).
 2. It takes a record and marks it `PROC_UNUSED` while the child is built, since the building may sleep.
@@ -97,6 +98,10 @@ Process 0, `proc_idle`, is the kernel's own. `kernel_main` (`rach2/kernel.c`) ma
 10. The child takes the parent's processor and affinity and a depth of 1 in the big lock, and `sched_make_ready` puts it on a run queue. A tracer's event is reported ([ptrace](ptrace.Readme.md)). Under `CLONE_VFORK` the parent then waits, in a sleep only SIGKILL ends, until the child calls `execve` or ends (`proc_vfork_wait`).
 
 The parent gets the child's id in the parent's PID namespace.
+
+A zero-signal child sets its group's `no_child_signal`: its end wakes the real parent's wait without posting SIGCHLD, and an ordinary wait does not select it. `__WCLONE` selects it, and `__WALL` selects either kind. `CLONE_PARENT` inherits the caller's exit notification choice and parent generation snapshot. `CLONE_UNTRACED` prevents inherited tracing and the parent's fork event; it does not prevent a later explicit attach. A tracer's wait includes every tracee regardless of these wait flags.
+
+A successful exec and orphan adoption restore SIGCHLD. A child also records its real parent's successful-exec generation; if that generation changed before notification, the child's end restores SIGCHLD and ordinary wait selection. Generation wrap resets existing children's snapshots to zero before setting the parent's next generation to one, so an old child cannot compare equal by wrap. `child_signal.c` implements generation advance and notification choice.
 
 ### execve
 
@@ -216,7 +221,7 @@ A write of `freeze` or `mem` to `/sys/power/state` (`rach2/sys/fs/procfs.c`) cal
 * The kernel runs on at most 64 processors, and an affinity mask has 64 bits.
 * In the first user namespace a thread has all 41 capabilities or none, and the inheritable set is always empty.
 * A thread has at most 8 supplementary groups, where Linux allows 65536.
-* `clone` refuses `CLONE_SIGHAND` without `CLONE_THREAD`, an exit signal other than `SIGCHLD` for a process, `CLONE_PIDFD`, and the cgroup and time namespaces. No descriptor refers to a process, so `waitid`'s `P_PIDFD` fails with `EBADF`, and `__WCLONE` without `__WALL` selects no child.
+* `clone` refuses `CLONE_SIGHAND` without `CLONE_THREAD`, an exit signal other than zero or `SIGCHLD` for a process, `CLONE_PIDFD`, and the cgroup and time namespaces. No descriptor refers to a process, so `waitid`'s `P_PIDFD` fails with `EBADF`.
 * `execve` follows one level of `#!`, and reads a first line of at most 128 bytes.
 * Six resource limits are kept; `RLIMIT_MEMLOCK`, `RLIMIT_NICE`, `RLIMIT_RTPRIO` and Linux's others read as unlimited.
 * `getrusage` and `wait4` report the CPU time and `ru_maxrss` alone, and `ru_maxrss` is sampled where an address space ends, not at every fault.

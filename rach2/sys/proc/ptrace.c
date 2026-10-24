@@ -263,7 +263,7 @@ int ptrace_fork_attach(process_t *child, uint32_t flags)
     process_t *self = current_proc;
     int event;
 
-    if (!(self->ptrace & PT_TRACED)) {
+    if (!(self->ptrace & PT_TRACED) || (flags & 0x00800000u)) { /* CLONE_UNTRACED */
         return 0;
     }
     if (flags & 0x00004000u) { /* CLONE_VFORK */
@@ -315,7 +315,10 @@ void ptrace_exit_notify(process_t *p)
         return;
     }
     proc_child_info(p, tracer, &info);
-    signal_post_info(tracer, SIGCHLD, &info);
+    if (p->pid != p->tgid || p->tg->live != 0 || p->parent_pid != p->tracer ||
+        proc_child_signal(p, tracer)) {
+        signal_post_info(tracer, SIGCHLD, &info);
+    }
     wq_wake_all(&tracer->tg->chld);
 }
 
@@ -325,7 +328,7 @@ void ptrace_exit_notify(process_t *p)
  * parent of a process no other process traces: a SIGCHLD, and a wake of its
  * wait, which passed the process over while it was traced.
  */
-static void ptrace_parent_notify(const process_t *t)
+static void ptrace_parent_notify(process_t *t)
 {
     process_t *parent = get_process(t->parent_pid);
     struct k_siginfo info;
@@ -334,7 +337,9 @@ static void ptrace_parent_notify(const process_t *t)
         return;
     }
     proc_child_info(t, parent, &info);
-    signal_post_info(parent, SIGCHLD, &info);
+    if (proc_child_signal(t, parent)) {
+        signal_post_info(parent, SIGCHLD, &info);
+    }
     wq_wake_all(&parent->tg->chld);
 }
 

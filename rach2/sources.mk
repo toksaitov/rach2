@@ -70,6 +70,7 @@ C_SRC_SHARED = kernel.c \
     sys/mm/modlayout.c \
     sys/proc/process.c \
     sys/proc/exit.c \
+    sys/proc/child_signal.c \
     sys/proc/sched.c \
     sys/proc/smp.c \
     sys/proc/suspend.c \

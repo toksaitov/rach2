@@ -82,9 +82,17 @@ Its i386 arguments are, in order, the flags, a stack pointer for the
 child, the address of the parent's copy of the child's ID, a TLS
 descriptor, and the address of the child's copy.
 The low byte of the flags, the signal the parent receives when the child
-exits, must be
+exits, may be zero or
 .Dv SIGCHLD
 for a process; a thread sends none.
+A zero-signal child's end wakes the parent without posting a signal;
+.Xr wait 2
+selects it with
+.Dv __WCLONE
+or
+.Dv __WALL .
+A successful exec, orphan adoption or a new image of the real parent
+restores ordinary SIGCHLD notification.
 The flags may also contain
 .Dv CLONE_VM ,
 which gives the child the parent's address space itself, so a store, a
@@ -143,7 +151,11 @@ as
 .Xr set_thread_area 2
 takes one;
 .Dv CLONE_PARENT ,
-which makes the child a child of the caller's parent, as a thread is;
+which makes the child a child of the caller's parent, as a thread is,
+and inherits the caller's exit notification choice;
+.Dv CLONE_UNTRACED ,
+which prevents a tracer from inheriting the child or receiving its fork
+event, without preventing a later explicit attach;
 .Dv CLONE_PARENT_SETTID ,
 which stores the child's ID at
 .Fa parent_tid
@@ -255,7 +267,7 @@ run their children.
 .It Bq Er EINVAL
 .Fn clone
 was given a flag other than those above, a process an exit signal other
-than
+than zero or
 .Dv SIGCHLD ,
 .Dv CLONE_THREAD
 and

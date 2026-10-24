@@ -3,6 +3,7 @@
  * stop.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/proc/child_signal.c
  *
  * The copy of a register-set request's iovec can sleep, and the tracee can
  * be resumed meanwhile; the request, in either direction, must then answer
@@ -27,6 +28,7 @@ process_t *proc_list = &self;
 uint32_t proc_dead_threads;
 static int failures, resume_on_copy, register_reads, wakes;
 static int stops, listen_interrupts, kill_on_resume, resume_signo;
+static unsigned notifications_woken;
 static uint32_t stop_status;
 static struct k_siginfo stop_info, posted_info;
 static struct userns self_ns, tracee_ns;
@@ -175,6 +177,7 @@ static void setup(void)
     wakes = register_reads = resume_on_copy = 0;
     stops = listen_interrupts = kill_on_resume = resume_signo = 0;
     posted_to = child_info_receiver = NULL;
+    notifications_woken = 0;
     k_memset(&posted_info, 0, sizeof(posted_info));
 }
 
@@ -244,6 +247,46 @@ static void namespace_ids(void)
     check(child_info_receiver == &self && posted_to == &self, "end notice is made for the tracer");
 }
 
+/* An untraced clone is not inherited by a tracer. A zero-signal child's
+ * real parent still wakes, and a new parent image restores SIGCHLD. */
+static void clone_notifications(void)
+{
+    setup();
+    self.ptrace = PT_TRACED;
+    self.tracer = 99;
+    self.ptrace_opts = 1u << PTRACE_EVENT_CLONE;
+    tracee.ptrace = 0;
+    tracee.tracer = 0;
+    check(ptrace_fork_attach(&tracee, 0x00800000u) == 0 && !tracee.ptrace && !tracee.tracer,
+          "CLONE_UNTRACED prevents inherited tracing");
+    check(ptrace_fork_attach(&tracee, 0) == PTRACE_EVENT_CLONE && tracee.tracer == 99,
+          "ordinary zero-signal clone inherits requested tracing");
+
+    setup();
+    tracee.parent_pid = self.tgid;
+    tracee.tg->no_child_signal = 1;
+    ptrace_parent_notify(&tracee);
+    check(!posted_to && notifications_woken == 1, "zero-signal child wakes without SIGCHLD");
+    tracee.tg->live = 0;
+    ptrace_exit_notify(&tracee);
+    check(!posted_to && notifications_woken == 2,
+          "tracer that is the real parent keeps zero-signal exit notification");
+    self.tg->exec_generation = 1;
+    ptrace_parent_notify(&tracee);
+    check(posted_to == &self && notifications_woken == 3 && !tracee.tg->no_child_signal,
+          "new parent image restores ordinary child notification");
+
+    setup();
+    tracee.parent_pid = self.tgid;
+    tracee.tg->no_child_signal = 1;
+    self.tg->exec_generation = (uint32_t)-1;
+    tracee.tg->parent_exec_generation = (uint32_t)-1;
+    proc_exec_generation(&self);
+    check(self.tg->exec_generation == 1 && !tracee.tg->parent_exec_generation &&
+              proc_child_signal(&tracee, &self),
+          "exec generation wrap keeps old children distinct");
+}
+
 /**
  * Run every row; 0 when each passes, 1 otherwise. A register-set request
  * rechecks the tracee after its copy slept; PTRACE_INTERRUPT releases a
@@ -295,6 +338,7 @@ int main(void)
           "syscall single step reports TRAP_TRACE without syscall marker");
     return_stops();
     namespace_ids();
+    clone_notifications();
     printf("ptrace-hosttest: result: %s\n", failures ? "fail" : "pass");
     return failures != 0;
 }
@@ -352,9 +396,10 @@ void idle_wait_irq_off(void)
     check(0, "unexpected idle wait");
 }
 
-/** Nothing: the tracer is told of a stop through `schedule`. */
+/** Count child-state wakes independently of the model's scheduled stops. */
 void wq_wake_all(wait_queue_t *wq)
 {
+    notifications_woken++;
     (void)wq;
 }
 

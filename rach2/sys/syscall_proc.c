@@ -1754,6 +1754,8 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     }
     ptimer_delete_all(current_proc->tg);
     current_proc->tg->execed = 1;
+    current_proc->tg->no_child_signal = 0;
+    proc_exec_generation(current_proc);
     exec_files(s);
     close_cloexec_fds();
     current_proc->euid = s->euid;
@@ -1996,6 +1998,7 @@ long sys_execve(isr_params_t *params)
 #define CLONE_PARENT_SETTID  0x00100000u
 #define CLONE_CHILD_CLEARTID 0x00200000u
 #define CLONE_DETACHED       0x00400000u
+#define CLONE_UNTRACED       0x00800000u
 #define CLONE_CHILD_SETTID   0x01000000u
 
 /* What a fork or a clone gives `do_fork`: the clone flags, the stack
@@ -2175,6 +2178,12 @@ static void fork_signals(process_t *child, const process_t *parent, uint32_t fla
         child->sigacts = child->tg->action;
     } else {
         k_memcpy(child->tg->action, parent->tg->action, sizeof(child->tg->action));
+        child->tg->no_child_signal = (flags & CLONE_PARENT)
+                                        ? parent->tg->no_child_signal
+                                        : (flags & CSIGNAL) == 0;
+        child->tg->parent_exec_generation = (flags & CLONE_PARENT)
+                                               ? parent->tg->parent_exec_generation
+                                               : parent->tg->exec_generation;
     }
     child->sig_blocked = parent->sig_blocked;
     child->sig_pending = 0;
@@ -2404,8 +2413,9 @@ static int32_t clone_with(isr_params_t *params, uint32_t flags, uintptr_t newsp,
     if ((flags &
          ~(CSIGNAL | CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_VFORK |
            CLONE_PARENT | CLONE_THREAD | CLONE_SYSVSEM | CLONE_SETTLS | CLONE_PARENT_SETTID |
-           CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID | CLONE_DETACHED | CLONE_NEW_ANY)) != 0 ||
-        (!(flags & CLONE_THREAD) && (flags & CSIGNAL) != SIGCHLD) ||
+           CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID | CLONE_DETACHED | CLONE_UNTRACED |
+           CLONE_NEW_ANY)) != 0 ||
+        (!(flags & CLONE_THREAD) && (flags & CSIGNAL) != 0 && (flags & CSIGNAL) != SIGCHLD) ||
         ((flags & CLONE_SIGHAND) && !(flags & CLONE_VM)) ||
         ((flags & CLONE_THREAD) && !(flags & CLONE_SIGHAND)) ||
         ((flags & CLONE_SIGHAND) && !(flags & CLONE_THREAD))) {
@@ -2664,15 +2674,15 @@ static void sig_irq_restore(uint32_t flags);
  * (`PROC_UNUSED`).
  *
  * Linux's __WCLONE selects the children that report their end with a signal
- * other than SIGCHLD, unless __WALL is beside it, and every child here
- * reports with SIGCHLD, so it selects none.
+ * other than SIGCHLD, including zero, unless __WALL is beside it.
  */
 static int wait_selects(int idtype, uint32_t id, int options, const process_t *p)
 {
     if (p->state == PROC_UNUSED || p->parent_pid != current_proc->tgid || p->pid != p->tgid) {
         return 0;
     }
-    if (((uint32_t)options & W_CLONE) && !(options & W_ALL)) {
+    if (!(options & W_ALL) &&
+        p->tg->no_child_signal != (((uint32_t)options & W_CLONE) != 0)) {
         return 0;
     }
     switch (idtype) {
@@ -2728,18 +2738,14 @@ static void wait_reap(process_t *p)
 /**
  * Whether `p` is a thread the caller's process traces that `idtype` and `id`
  * select; a record another reaper has taken is none (`PROC_UNUSED`). A
- * thread that is not its process's leader ends with no signal to its tracer,
- * so, as Linux's __WCLONE and __WALL have it, it is waited for with __WCLONE
- * or __WALL, and a leader without __WCLONE.
+ * tracer's wait includes every tracee as if __WALL were set, independently
+ * of its exit notification signal and whether it is a group leader.
  */
 static int wait_selects_tracee(int idtype, uint32_t id, int options, const process_t *p)
 {
-    int clone = p->pid != p->tgid;
+    (void)options;
 
     if (p->state == PROC_UNUSED || !(p->ptrace & PT_TRACED) || p->tracer != current_proc->tgid) {
-        return 0;
-    }
-    if (!(options & W_ALL) && clone != (((uint32_t)options & W_CLONE) != 0)) {
         return 0;
     }
     switch (idtype) {
