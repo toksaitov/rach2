@@ -19,6 +19,18 @@ static struct json *scripts_manifest(void)
     return doc;
 }
 
+static int scripts_step(const struct json *steps, size_t row, const char *id,
+                        const char *stage, const char *machine)
+{
+    const struct json *step = steps && row < steps->count ? steps->item[row] : NULL;
+    const char *actual_id = json_text(step, "step_id");
+    const char *actual_stage = json_text(step, "stage");
+    const char *actual_machine = json_text(step, "machine");
+    return actual_id && !strcmp(actual_id, id) && actual_stage &&
+           !strcmp(actual_stage, stage) &&
+           (!machine || (actual_machine && !strcmp(actual_machine, machine)));
+}
+
 static void host_scripts_order(void)
 {
     struct json *doc = scripts_manifest();
@@ -29,10 +41,11 @@ static void host_scripts_order(void)
             steps = json_member(cases->item[i], "steps");
     }
     const char *prefix[] = {"listed", "products", "prepare"};
+    const char *stages[] = {"execute", "boot", "execute"};
     CHECK(steps && steps->count >= 3, "scripts scenario declares its steps");
     for (size_t i = 0; steps && i < 3 && i < steps->count; i++) {
-        const char *id = json_text(steps->item[i], "step_id");
-        CHECK(id && !strcmp(id, prefix[i]), "scripts setup prefix remains declared first");
+        CHECK(scripts_step(steps, i, prefix[i], stages[i], i == 1 ? "products" : NULL),
+              "scripts setup prefix remains declared first");
     }
     FILE *f = fopen("tests/cases/host/host.list", "rb");
     CHECK(f != NULL, "real host list opens");
@@ -43,11 +56,14 @@ static void host_scripts_order(void)
         if (!*start || *start == '#')
             continue;
         char *bar = strchr(start, '|');
-        const char *step =
-            steps && row < steps->count ? json_text(steps->item[row], "step_id") : NULL;
         if (bar)
             *bar = 0;
-        CHECK(bar && step && !strcmp(start, step),
+        if (bar && !strcmp(start, "doom_libc")) {
+            CHECK(scripts_step(steps, row, "doom-i686", "boot", "doom-i686"),
+                  "Doom's matching-ABI helper boots immediately before its execution step");
+            row++;
+        }
+        CHECK(bar && scripts_step(steps, row, start, "execute", NULL),
               "every host.list row has the same declared execution step in order");
         row++;
     }
