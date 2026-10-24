@@ -3932,7 +3932,7 @@ static void st_clean(void)
     dir = opendir(st_tmp);
     if (dir != NULL) {
         while ((ent = readdir(dir)) != NULL) {
-            char path[512];
+            char path[sizeof(st_tmp) + sizeof(ent->d_name) + 1];
 
             if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
                 continue;
@@ -4269,16 +4269,20 @@ static void st_rm_tree(const char *path)
 
     if (dir != NULL) {
         while ((ent = readdir(dir)) != NULL) {
-            char child[1024];
+            char *child;
+            size_t size;
             struct stat st;
 
             if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
                 continue;
-            snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
+            size = strlen(path) + strlen(ent->d_name) + 2;
+            child = xmalloc(size);
+            snprintf(child, size, "%s/%s", path, ent->d_name);
             if (lstat(child, &st) == 0 && S_ISDIR(st.st_mode))
                 st_rm_tree(child);
             else
                 unlink(child);
+            free(child);
         }
         closedir(dir);
     }

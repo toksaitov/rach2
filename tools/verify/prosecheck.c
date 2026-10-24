@@ -1387,7 +1387,7 @@ static void st_clean(void)
     dir = opendir(st_dir);
     if (dir != NULL) {
         while ((ent = readdir(dir)) != NULL) {
-            char path[512];
+            char path[sizeof(st_dir) + sizeof(ent->d_name) + 1];
 
             if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
                 continue;
