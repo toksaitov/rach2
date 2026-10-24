@@ -207,6 +207,31 @@ static void interrupt_output(int fd, pid_t child)
         fclose(output);
 }
 
+/* Keep every complete stream, including early refusals before a plan exists. */
+static void save_run(char *const *argv, int status)
+{
+    static unsigned sequence;
+    char name[64], path[PATH_MAX];
+    int ok;
+    FILE *index;
+
+    fix_format(name, sizeof(name), "output.%u", ++sequence);
+    fix_format(path, sizeof(path), "%s/%s", fix_dir(), name);
+    copy(fix_path("output"), path);
+    fix_format(path, sizeof(path), "%s/runs.log", fix_dir());
+    index = fopen(path, "ab");
+    CHECK(index != NULL, "the complete collection stream index opens");
+    if (!index)
+        return;
+    ok = fprintf(index, "%s wait-status=%d exit=%d\n", name, status,
+                 WIFEXITED(status) ? WEXITSTATUS(status) : -1) >= 0;
+    for (size_t i = 0; argv[i]; i++)
+        ok &= fprintf(index, "argv[%lu]=%s\n", (unsigned long)i, argv[i]) >= 0;
+    if (fclose(index))
+        ok = 0;
+    CHECK(ok, "the complete collection stream index is retained");
+}
+
 static int run(char *const *options, const char *cases, const char *rows, const char *failure,
                char *out, size_t room)
 {
@@ -254,6 +279,7 @@ static int run(char *const *options, const char *cases, const char *rows, const 
             return -1;
     collection_child = 0;
     collection_cleanup();
+    save_run(argv, status);
     FILE *ledger = fopen(fix_path("build/tests/results/ledger/claims"), "rb");
     if (ledger) {
         char claims[128];

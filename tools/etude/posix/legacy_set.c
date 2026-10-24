@@ -4203,6 +4203,9 @@ static int prepare_members(struct set *x)
     const struct etude_legacy_set_opts *o = x->o;
     size_t i, k = 0, serial;
     x->mem = calloc(x->n, sizeof(*x->mem));
+    /* No member owns a process until admission and execution begin. */
+    for (i = 0; x->mem && i < x->n; i++)
+        x->mem[i].c.cleanup = ETUDE_CLEANUP_CONFIRMED;
     x->jobs = calloc(x->n, sizeof(*x->jobs));
     x->sup = etude_supervisor_new();
     if (x->mem == NULL || x->jobs == NULL || x->sup == NULL) {
