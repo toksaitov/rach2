@@ -597,3 +597,7 @@ The full Linux collection on ed5953 failed the edited-probe image check before i
 ## The growth replay started a shell for each range (#1050)
 
 The full Linux collection on ed5953 stopped the growth replay at its existing progress bound after 1583 successful commands. The controller started and reaped a shell for each of 1856 ranges and reloaded the same product functions every time. It now reads the entire plan in one shell, as the product does, and still calls the real run_logged and restore_range functions for every range. It checks the shell's range count and byte total, independently sums the plan in C, checks every log record, and compares all 3,037,286,400 restored bytes and both ends of each gap. The run's time bound is unchanged.
+
+## A failure archive exhausted the helper console (#1049)
+
+The edited-probe image fixture failed, but exporting its complete source and build tree exceeded the helper's 64 MiB serial capture limit. The scenario ignored the failed transfer and reported a nonexistent archive. A prepared C selector now exports complete small direct files within a bounded allowance and records selected and omitted entries in an inventory. Larger files and subdirectories remain on the retained private products disk. The family scenario checks the transfer result before it names the archive. Script-controller failures use the same bounded export and report transfer failures. The serial limit is unchanged.

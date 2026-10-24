@@ -180,6 +180,8 @@ int main(int argc, char **argv)
             return family_image_mock(argc, argv);
         return family_grow_mock(argc, argv);
     }
+    if (argc == 4 && !strcmp(argv[1], "--export"))
+        return family_export(argv[3], argv[2]);
     if (argc != 3 || !fx_init(&f, argv[2], argv[1], argv[0]))
         return 2;
     snprintf(path, sizeof(path), "%s:/host-products:/usr/bin:/bin:/usr/sbin:/sbin", f.bin);

@@ -68,13 +68,15 @@ static int report(struct etude_case *c, const char *id, const char *const ids[],
     fclose(fp);
     return begun && ended && !bad;
 }
-static void fixtures(struct etude_case *c, struct etude_case_machine *m, const char *id)
+static int fixtures(struct etude_case_machine *m, const char *id)
 {
+    const char *select[] = {"/host-products/host-family-check", "--export", id,
+                            "/host-work", NULL};
     const char *tar[] = {"/bin/tar", "-cf", "/host-work/fixtures.tar", "-C", "/host-work",
-                         id,         NULL};
-    if (execute(m, tar, "family-fixture-archive"))
-        etude_guest_get(m, "/host-work/fixtures.tar", "family-fixtures.tar");
-    (void)c;
+                         "--null", "--no-recursion", "-T", "/host-work/family-export.list", NULL};
+    return execute(m, select, "family-fixture-selection") &&
+           execute(m, tar, "family-fixture-archive") &&
+           etude_guest_get(m, "/host-work/fixtures.tar", "family-fixtures.tar") == ETUDE_OK;
 }
 int etude_scenario(struct etude_case *c)
 {
@@ -87,7 +89,7 @@ int etude_scenario(struct etude_case *c)
     const char *env[] = {arch, NULL};
     char names[1024], *at;
     size_t n = 0, i;
-    int ready = 0, whole = 0, failed = 0, held[40] = {0};
+    int ready = 0, whole = 0, failed = 0, exported = 0, held[40] = {0};
     snprintf(arch, sizeof(arch), "ARCH=%s", etude_case_architecture(c));
     if (!rows || strlen(rows) >= sizeof(names))
         return 1;
@@ -107,15 +109,19 @@ int etude_scenario(struct etude_case *c)
             failed |= !held[i];
         whole &= r.termination.value == failed;
     }
+    if (ready && (!whole || failed))
+        exported = fixtures(m, id);
     for (i = 0; i < n; i++) {
         if (!whole)
             etude_notrun(c, ids[i],
-                         "the prepared controller did not return a whole confirmed report");
+                         exported ? "the controller report is incomplete; see family-fixtures.tar"
+                                  : "the controller report is incomplete; fixture export failed; "
+                                    "see the retained products disk");
         else
             etude_assert(c, ids[i], held[i],
-                         held[i] ? NULL : "the product result differs; see family-fixtures.tar");
+                         held[i] ? NULL : exported ? "the product result differs; see family-fixtures.tar"
+                                                   : "the product result differs; fixture export failed; "
+                                                     "see the retained products disk");
     }
-    if (ready && (!whole || failed))
-        fixtures(c, m, id);
     return !whole || failed;
 }
