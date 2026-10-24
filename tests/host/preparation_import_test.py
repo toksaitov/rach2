@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check the preparation product's import identities and native build vectors."""
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -138,6 +139,76 @@ class ImportTests(unittest.TestCase):
             changed, anchors = anchored([dict(assertion_id='e2fsprogs_alignment', inputs=inputs)])
             with self.assertRaises(ValueError):
                 product.nested_inputs(changed, anchors, 'm')
+
+    def test_shared_native_tool_reuse(self):
+        repo = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(repo / 'tests/cases/host'))
+        import prepare as inventory
+
+        def tool_module():
+            spec = importlib.util.spec_from_file_location('fixture_tools', repo / 'tests/cases/host/tools.py')
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            module.SOURCES['probe'] = ['probe.c']
+            return module
+
+        original_run = subprocess.run
+        compiles = []
+
+        def execute(argv, **kwargs):
+            if '-o' in argv and '-MM' not in argv and '-M' not in argv:
+                compiles.append(argv)
+            return original_run(argv, **kwargs)
+
+        with tempfile.TemporaryDirectory(prefix='rach2-tool-reuse-') as work, \
+                tempfile.TemporaryDirectory(prefix='rach2-tool-sdk-') as sdk:
+            previous = Path.cwd()
+            try:
+                os.chdir(work)
+                Path('value.h').write_text('#define VALUE 1\n')
+                Path(sdk, 'external.h').write_text('#define EXTERNAL 1\n')
+                Path('probe.c').write_text('#include "value.h"\n#include <external.h>\n'
+                                           'int main(void) { return VALUE + EXTERNAL; }\n')
+                compiler = inventory.compiler_record(['cc'])
+                flags = ['-std=c99', '-g', '-isystem', sdk]
+                args = (['probe'], ['cc'], flags, inventory.compiler_inputs, inventory.digest)
+                with patch.object(inventory, 'ROOT', Path(work)), patch.object(subprocess, 'run', side_effect=execute):
+                    first = tool_module().prepare(*args, compiler_identity=compiler)
+                    target = Path('build/tests/host-suite/tools/probe')
+                    marker = Path(str(target) + '.build.json')
+                    before = target.stat()
+                    second = tool_module().prepare(*args, compiler_identity=compiler)
+                    self.assertEqual(first, second)
+                    self.assertEqual(len(compiles), 1)
+                    self.assertEqual((before.st_ino, before.st_mtime_ns),
+                                     (target.stat().st_ino, target.stat().st_mtime_ns))
+                    self.assertTrue(any(row['path'] == str(marker) for row in first))
+                    Path('value.h').write_text('#define VALUE 2\n')
+                    tool_module().prepare(*args, compiler_identity=compiler)
+                    self.assertEqual(len(compiles), 2)
+                    flags.append('-DSECOND_RECIPE=1')
+                    tool_module().prepare(*args, compiler_identity=compiler)
+                    self.assertEqual(len(compiles), 3)
+                    compiler = dict(compiler, version=compiler['version'] + ' changed')
+                    tool_module().prepare(*args, compiler_identity=compiler)
+                    self.assertEqual(len(compiles), 4)
+                    recorded = json.loads(marker.read_text())['recipe']['compiler_inputs']
+                    self.assertTrue(any(row['path'] == str(Path(sdk, 'external.h')) for row in recorded))
+                    Path(sdk, 'external.h').write_text('#define EXTERNAL 2\n')
+                    tool_module().prepare(*args, compiler_identity=compiler)
+                    self.assertEqual(len(compiles), 5)
+                    whole = target.read_bytes()
+                    target.write_bytes(whole + b'changed')
+                    with self.assertRaisesRegex(ValueError, 'bytes changed'):
+                        tool_module().prepare(*args, compiler_identity=compiler)
+                    self.assertEqual(len(compiles), 5)
+                    target.write_bytes(whole)
+                    marker.write_text('{}')
+                    with self.assertRaisesRegex(ValueError, 'invalid compiled host tool record'):
+                        tool_module().prepare(*args, compiler_identity=compiler)
+                    self.assertEqual(len(compiles), 5)
+            finally:
+                os.chdir(previous)
 
     def test_windows_vectors(self):
         goals = ['build/tests/cases/machine/scenario' + str(i) for i in range(900)]

@@ -223,14 +223,14 @@ def compiler_flags(command, sources):
     return flags
 
 
-def compiler_inputs(compiler, command, sources, external=None):
+def compiler_inputs(compiler, command, sources, external=None, include_system=False):
     """Scan each translation unit; a shared -MF would retain only the last."""
     flags = compiler_flags(command, sources)
     dependencies = set()
     for source in sources:
         if not source.endswith('.c'):
             continue
-        result = subprocess.run([*compiler, *flags, '-MM', '-MT', 'host-input', source],
+        result = subprocess.run([*compiler, *flags, '-M' if include_system else '-MM', '-MT', 'host-input', source],
                                 check=True, text=True, capture_output=True)
         text = result.stdout.replace('\\\n', ' ')
         for name in shlex.split(text.split(':', 1)[1]):
@@ -321,7 +321,7 @@ def prepare(args):
             inventory.append(item)
             continue
         tool_inputs = tools.prepare(item.pop('tools', []), compiler, fixtures.platform_flags(COMMON), compiler_inputs,
-                                   digest, args.print_commands)
+                                   digest, args.print_commands, compiler_identity=identity)
         companions = windows.companions(compiler, base, compiler_inputs, digest,
                                         args.print_commands) if windows_fixture else []
         if args.print_commands:

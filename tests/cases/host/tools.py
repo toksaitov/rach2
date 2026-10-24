@@ -15,7 +15,6 @@ SOURCES = {'mkfatfixture': ['tests/host/mkfatfixture.c'],
            'setidcheck': ['tools/inspect/setidcheck.c'],
            'etude-volume': ['tools/etude/volume/etude_volume.c', 'tools/etude/volume/volume.c']}
 EXTERNAL = {'tar', 'mdir', 'mcopy', 'mke2fs', 'debugfs', 'dumpe2fs', 'e2fsck', 'python3'}
-BUILT = {}
 
 
 def external_tool(name):
@@ -68,14 +67,68 @@ def external_exfat(marker):
             shutil.rmtree(temporary)
 
 
-def prepare(names, compiler, flags, dependencies, digest, print_commands=False):
+def compiled_tool(root, name, compiler, flags, dependencies, digest, identity, print_commands):
+    """Reuse shared tool bytes only for the same compiler, recipe and includes."""
+    output = str(root / name)
+    sources = SOURCES[name]
+    if name == 'etude-workload':
+        # This payload has no test judge or sanitizer fault case.
+        flags = [flag for flag in flags if not flag.startswith((
+            '-fsanitize=', '-fno-sanitize-recover=', '-g'))]
+    command = [*flags, '-Wall', '-Wextra', '-Werror', '-o', output, *sources]
+    if print_commands:
+        print('host prepare: ' + shlex.join([*compiler, *command]), flush=True)
+        return {}
+    if identity is None:
+        raise ValueError('compiled host tool needs the actual compiler identity: ' + name)
+    external = {}
+    paths = sorted(set([*sources, *dependencies(compiler, command, sources, external, include_system=True)]))
+    source_inputs = [dict(path=path, sha256=digest(Path(path))) for path in paths]
+    recipe = dict(compiler=identity, command=[*compiler, *command], inputs=source_inputs,
+                  compiler_inputs=[external[path] for path in sorted(external)])
+    marker = root / (name + '.build.json')
+    if marker.exists():
+        old = json.loads(marker.read_text())
+        if old.get('schema_version') != 1 or 'recipe' not in old or 'sha256' not in old:
+            raise ValueError('invalid compiled host tool record: ' + str(marker))
+        if old['recipe'] == recipe:
+            if not Path(output).is_file() or digest(Path(output)) != old['sha256']:
+                raise ValueError('prepared host tool bytes changed: ' + output)
+            return {path: dict(path=path, sha256=digest(Path(path)))
+                    for path in [*paths, output, str(marker)]}
+    root.mkdir(parents=True, exist_ok=True)
+    temporary = output + f'.{os.getpid()}.tmp'
+    actual = [temporary if word == output else word for word in command]
+    print('host prepare: ' + shlex.join([*compiler, *actual]), flush=True)
+    try:
+        subprocess.run([*compiler, *actual], check=True)
+        made = Path(temporary) if Path(temporary).exists() else Path(temporary + '.exe')
+        after = {}
+        after_paths = sorted(set([*sources, *dependencies(compiler, command, sources, after, include_system=True)]))
+        if after_paths != paths or after != external or any(
+                digest(Path(item['path'])) != item['sha256'] for item in source_inputs):
+            raise ValueError('host tool inputs changed during compilation: ' + name)
+        made.replace(output)
+        value = dict(schema_version=1, recipe=recipe, actual_command=[*compiler, *actual],
+                     sha256=digest(Path(output)))
+        temporary_record = marker.with_name(marker.name + f'.{os.getpid()}.tmp')
+        try:
+            temporary_record.write_text(json.dumps(value, sort_keys=True) + '\n')
+            temporary_record.replace(marker)
+        finally:
+            temporary_record.unlink(missing_ok=True)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+        Path(temporary + '.exe').unlink(missing_ok=True)
+    return {path: dict(path=path, sha256=digest(Path(path)))
+            for path in [*paths, output, str(marker)]}
+
+
+def prepare(names, compiler, flags, dependencies, digest, print_commands=False, compiler_identity=None):
     """Return source and executable fingerprints for all declared tool names."""
     root = Path('build/tests/host-suite/tools')
     inputs = {}
     for name in names:
-        if name in BUILT:
-            inputs.update(BUILT[name])
-            continue
         if name == 'exfat_external':
             marker = Path('build/tests/host/exfat_writer')
             root_data = root / name
@@ -110,26 +163,8 @@ def prepare(names, compiler, flags, dependencies, digest, print_commands=False):
             continue
         if name not in SOURCES:
             raise ValueError(f'no native host tool preparation recipe: {name}')
-        output = str(root / name)
-        sources = SOURCES[name]
-        temporary = output + f'.{os.getpid()}.tmp'
-        tool_flags = flags
-        if name == 'etude-workload':
-            # This payload has no test judge or sanitizer fault case.
-            tool_flags = [f for f in flags if not f.startswith((
-                '-fsanitize=', '-fno-sanitize-recover=', '-g'))]
-        command = [*tool_flags, '-Wall', '-Wextra', '-Werror', '-o', temporary, *sources]
-        print('host prepare: ' + shlex.join([*compiler, *command]), flush=True)
-        if print_commands:
-            continue
-        root.mkdir(parents=True, exist_ok=True)
-        subprocess.run([*compiler, *command], check=True)
-        if not Path(temporary).exists() and Path(temporary + '.exe').exists():
-            Path(temporary + '.exe').replace(temporary)
-        Path(temporary).replace(output)
-        paths = sorted(set([output, *sources, *dependencies(compiler, command, sources)]))
-        BUILT[name] = {p: dict(path=p, sha256=digest(Path(p))) for p in paths}
-        inputs.update(BUILT[name])
+        inputs.update(compiled_tool(root, name, compiler, flags, dependencies, digest,
+                                    compiler_identity, print_commands))
     return [inputs[p] for p in sorted(inputs)]
 
 
