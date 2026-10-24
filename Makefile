@@ -826,7 +826,7 @@ build/tests/cases/machine/grow_measured: tests/system/checkers/records.c \
     tests/system/checkers/records.h
 
 build/tests/cases/machine/metal_scenario: tests/cases/machine/metal_accept.c \
-    tests/cases/machine/metal_accept.h
+    tests/cases/machine/metal_accept.h tests/cases/machine/fileio.c tests/cases/machine/fileio.h
 
 build/tests/cases/host/usbchecks: tests/cases/host/usbchecks.c \
     tests/system/checkers/records.c tests/system/checkers/records.h \
