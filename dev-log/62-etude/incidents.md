@@ -395,3 +395,10 @@ Before the #1009 batch started a build, dependency review found that adding exfa
 ## A copy check overlapped producer preparation
 
 The coordinating session released the bounded Windows build and checks beside Linux preparation at 07:52. The last Windows check copies an 8 MiB fixture from the Linux tree and requires that producer to be idle. It correctly found the preparation lock and stopped before copying. All five Windows links and the earlier checks passed; the native owner confirmed cleanup. Only the copy check must run again after preparation ends. A batch that ends with a producer read must reserve that idle interval before any build is scheduled there; its short duration does not permit overlap. The frozen candidate and its prepared evidence were unchanged.
+
+
+## The focused launcher omitted its scratch directories
+
+The coordinating session's first focused check of f8de101093 stopped before booting GNU. Its disposable native launcher had supplied a scenario invocation without creating the scratch root that the public executor normally creates. The overlay path therefore failed with ENOENT. The ELF checks had passed, the preparation record was unchanged, and the owner confirmed cleanup with an empty admission ledger. This was a validation setup error, not evidence of a failed prepared image.
+
+The original outputs and bindings are preserved under build/tests/portable-batch/runtime-repair-validation-f8de10109325/initial-missing-scratch. The coordinator created fresh private roots for all four scenario invocations, assigned new attempt identities, checked their schemas and bound their actual hashes before retrying the same compiled controller. No source, prepared image, assertion or preparation receipt changed. A disposable launcher must provide the executor's documented scratch setup before it runs a scenario.
