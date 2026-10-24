@@ -43,6 +43,9 @@
  * Exits 0 with no finding, 1 on a finding, and 2 on a usage error or a
  * declaration file that does not read.
  */
+#ifndef _FILE_OFFSET_BITS
+#define _FILE_OFFSET_BITS 64
+#endif
 #include <dirent.h>
 #include <errno.h>
 #include <stdarg.h>
@@ -53,6 +56,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "../host_files.h"
+#ifdef _WIN32
+#include <winioctl.h>
+#endif
 
 #define S_SETID     06000u
 #define PERMBITS    07777u
@@ -1700,22 +1706,32 @@ static int node_paths(struct image *im)
 }
 
 /**
- * Parse a number given on the command line, in any base `strtol` takes, into
+ * Parse a number given on the command line, in any base `strtoll` takes, into
  * `*out`; return 0, or -1 when `s` is not wholly a number in range. A
  * mistyped offset that read as 0 would inventory a different region and
  * report on that one.
  */
-static int parse_num(const char *s, long *out)
+static int parse_num(const char *s, int64_t *out)
 {
     char *end;
-    long v;
+    long long v;
 
     errno = 0;
-    v = strtol(s, &end, 0);
+    v = strtoll(s, &end, 0);
     if (end == s || *end != '\0' || errno != 0)
         return -1;
     *out = v;
     return 0;
+}
+
+/** Seek to an image byte offset without narrowing through Windows long. */
+static int image_seek(FILE *file, int64_t offset)
+{
+#ifdef _WIN32
+    return _fseeki64(file, offset, SEEK_SET);
+#else
+    return fseeko(file, (off_t)offset, SEEK_SET);
+#endif
 }
 
 /**
@@ -1723,7 +1739,7 @@ static int parse_num(const char *s, long *out)
  * checking the bounds; a size of 0 means the rest of the file. Return 0, or
  * -1 with `im->err` set.
  */
-static int read_region(struct image *im, const char *path, long offset, long size)
+static int read_region(struct image *im, const char *path, int64_t offset, int64_t size)
 {
     struct stat st;
     FILE *f;
@@ -1733,23 +1749,25 @@ static int read_region(struct image *im, const char *path, long offset, long siz
         return img_fail(im, "%s", strerror(errno));
     if (offset < 0 || offset > st.st_size)
         return img_fail(im,
-                        "offset %ld is past the end of the %lld-byte "
+                        "offset %lld is past the end of the %lld-byte "
                         "image",
-                        offset, (long long)st.st_size);
+                        (long long)offset, (long long)st.st_size);
     if (size == 0)
-        size = (long)(st.st_size - offset);
-    if (size <= 0 || offset + size > st.st_size)
+        size = st.st_size - offset;
+    if (size <= 0 || size > st.st_size - offset)
         return img_fail(im,
-                        "region (offset %ld, size %ld) does not fit "
+                        "region (offset %lld, size %lld) does not fit "
                         "in the %lld-byte image",
-                        offset, size, (long long)st.st_size);
+                        (long long)offset, (long long)size, (long long)st.st_size);
+    if ((uint64_t)size > SIZE_MAX)
+        return img_fail(im, "region is too large for this host");
     f = fopen(path, "rb");
     if (f == NULL)
         return img_fail(im, "%s", strerror(errno));
     im->region = xmalloc((size_t)size);
-    if (fseek(f, offset, SEEK_SET) != 0 || fread(im->region, 1, (size_t)size, f) != (size_t)size) {
+    if (image_seek(f, offset) != 0 || fread(im->region, 1, (size_t)size, f) != (size_t)size) {
         fclose(f);
-        return img_fail(im, "short read of the region at offset %ld", offset);
+        return img_fail(im, "short read of the region at offset %lld", (long long)offset);
     }
     fclose(f);
     im->size = (size_t)size;
@@ -1902,7 +1920,7 @@ static int trusted_text_matches(const struct image *im, const char *path, const 
 struct ext2 {
     FILE *f;
     /* The volume's byte offset in the file, and its length in bytes. */
-    long base;
+    int64_t base;
     uint64_t size;
     /* Blocks, inodes, blocks per group, inodes per group, groups. */
     unsigned long blocks, inodes, bpg, ipg, groups;
@@ -1939,12 +1957,12 @@ static int ext2_fail(struct ext2 *fs, const char *fmt, ...)
  */
 static int ext2_read(struct ext2 *fs, uint64_t at, void *buf, size_t len)
 {
-    if (at + len > fs->size)
+    if (at > fs->size || len > fs->size - at)
         return ext2_fail(fs,
                          "a read at %llu of %lu bytes runs past the "
                          "%llu-byte volume",
                          (unsigned long long)at, (unsigned long)len, (unsigned long long)fs->size);
-    if (fseek(fs->f, fs->base + (long)at, SEEK_SET) != 0 || fread(buf, 1, len, fs->f) != len)
+    if (image_seek(fs->f, fs->base + (int64_t)at) != 0 || fread(buf, 1, len, fs->f) != len)
         return ext2_fail(fs, "short read at %llu", (unsigned long long)at);
     return 0;
 }
@@ -1981,7 +1999,7 @@ static int ext2_data_block(struct ext2 *fs, unsigned long b, unsigned char *buf,
  * alone), the blocks kept after the descriptors for a grow, which the
  * resize inode owns, and each group's two bitmaps and inode table.
  */
-static int ext2_open(struct ext2 *fs, const char *path, long offset, long size)
+static int ext2_open(struct ext2 *fs, const char *path, int64_t offset, int64_t size)
 {
     unsigned char sb[1024];
     struct stat st;
@@ -1993,16 +2011,16 @@ static int ext2_open(struct ext2 *fs, const char *path, long offset, long size)
         return ext2_fail(fs, "%s", strerror(errno));
     if (offset < 0 || offset > st.st_size)
         return ext2_fail(fs,
-                         "offset %ld is past the end of the %lld-byte "
+                         "offset %lld is past the end of the %lld-byte "
                          "file",
-                         offset, (long long)st.st_size);
+                         (long long)offset, (long long)st.st_size);
     if (size == 0)
-        size = (long)(st.st_size - offset);
-    if (size <= 0 || offset + size > st.st_size)
+        size = st.st_size - offset;
+    if (size <= 0 || size > st.st_size - offset)
         return ext2_fail(fs,
-                         "region (offset %ld, size %ld) does not fit "
+                         "region (offset %lld, size %lld) does not fit "
                          "in the %lld-byte file",
-                         offset, size, (long long)st.st_size);
+                         (long long)offset, (long long)size, (long long)st.st_size);
     fs->f = fopen(path, "rb");
     if (fs->f == NULL)
         return ext2_fail(fs, "%s", strerror(errno));
@@ -2432,7 +2450,7 @@ static int ext2_dir_block(void *ctx, unsigned long index, const unsigned char *b
  * Read the ext2 volume at `offset` of `path` into the node table
  * `check_image` judges. Return 0, or -1 with `im->err` set.
  */
-static int read_ext2(struct image *im, const char *path, long offset, long size)
+static int read_ext2(struct image *im, const char *path, int64_t offset, int64_t size)
 {
     struct ext2 fs;
     int rc;
@@ -2469,8 +2487,8 @@ static void sysroot_checks(const struct allow *allow, const struct image *im, co
  * declared set-id entry is a program, so a set-id link or device under its
  * name is a finding.
  */
-static void check_image(const char *image, const char *manifest, long offset, long size, int ext2,
-                        const struct allow *allow, struct list *problems, char *summary,
+static void check_image(const char *image, const char *manifest, int64_t offset, int64_t size,
+                        int ext2, const struct allow *allow, struct list *problems, char *summary,
                         size_t summary_len)
 {
     const char *iname = base_name(image);
@@ -3568,7 +3586,7 @@ static int run(int argc, char **argv, struct allow *allow)
 {
     struct list problems = {NULL, 0, 0};
     const char *image = NULL, *manifest = NULL, *applets = NULL;
-    long offset = 0, size = 0;
+    int64_t offset = 0, size = 0;
     int i, do_selftest = 0, do_applets = 0, do_free = 0, do_nodes = 0;
     int ext2 = 0;
     struct list manifests = {NULL, 0, 0};
@@ -4108,6 +4126,64 @@ static void st_image(const struct allow *img_allow, const char *name, const char
     st_case(name, &got, want_ok, fragment);
 }
 
+/** Keep image parsing, KRFFS reads and ext2 reads wide on LLP64 hosts. */
+static void st_wide_region(void)
+{
+    const int64_t offset = INT64_C(3221225472);
+    unsigned char region[IMG_TOTAL], bytes[512];
+    char path[512];
+    struct image im;
+    struct ext2 fs;
+    struct list got = {NULL, 0, 0};
+    FILE *file;
+    int64_t parsed;
+    int bad = 0;
+
+    snprintf(path, sizeof(path), "%s/wide-region", st_tmp);
+    fixture(-1, NULL, NULL, 0, region);
+    file = fopen(path, "wb");
+    if (file == NULL)
+        exit(2);
+#ifdef _WIN32
+    {
+        DWORD transferred;
+        HANDLE handle = (HANDLE)_get_osfhandle(_fileno(file));
+        if (!DeviceIoControl(handle, FSCTL_SET_SPARSE, NULL, 0, NULL, 0, &transferred, NULL))
+            bad = 1;
+    }
+#endif
+    if (bad || image_seek(file, offset) != 0 ||
+        fwrite(region, 1, sizeof(region), file) != sizeof(region))
+        bad = 1;
+    if (fclose(file) != 0)
+        bad = 1;
+    if (bad)
+        addf(&got, "cannot write the sparse image fixture");
+    if (parse_num("3221225472", &parsed) != 0 || parsed != offset ||
+        parse_num("9223372036854775808", &parsed) == 0)
+        addf(&got, "image byte counts do not retain their checked 64-bit range");
+    if (read_region(&im, path, offset, sizeof(region)) != 0 || im.size != sizeof(region) ||
+        memcmp(im.region, region, sizeof(region)) != 0)
+        addf(&got, "explicit wide region differs");
+    image_free(&im);
+    if (read_region(&im, path, offset, 0) != 0 || im.size != sizeof(region) ||
+        memcmp(im.region, region, sizeof(region)) != 0)
+        addf(&got, "implicit wide region differs");
+    image_free(&im);
+    memset(&fs, 0, sizeof(fs));
+    fs.f = fopen(path, "rb");
+    fs.base = offset;
+    fs.size = sizeof(region);
+    if (fs.f == NULL || ext2_read(&fs, 100, bytes, sizeof(bytes)) != 0 ||
+        memcmp(bytes, region + 100, sizeof(bytes)) != 0 ||
+        ext2_read(&fs, UINT64_MAX, bytes, sizeof(bytes)) == 0)
+        addf(&got, "wide ext2 reads or overflow bounds differ");
+    if (fs.f != NULL)
+        fclose(fs.f);
+    unlink(path);
+    st_case("a sparse image region beyond 2 GiB", &got, 1, "");
+}
+
 /* ---- the header-comparison fixtures, in memory ---- */
 
 /* A path table for `check_reachable`, built by hand. */
@@ -4617,6 +4693,7 @@ static int selftest(struct allow *allow)
         return 2;
     }
     atexit(st_clean);
+    st_wide_region();
     validate_table(allow, &got);
     for (i = 0; i < got.n; i++) {
         printf("  FAIL: the allowlist itself: %s\n", got.items[i]);

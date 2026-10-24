@@ -936,3 +936,9 @@ The diagnostic Jobs and their independent identity checks ended successfully, an
 ## The native pagecache fixture required POSIX dprintf (#1091)
 
 The production-relative native Windows fixture recipe compiled the pagecache model but failed at link time: the installed UCRT64 CRT has no dprintf. The extracted fixture now uses the same native CRT diagnostic pattern as usbstamp, writing failed assertions to descriptor 2 and the final result to stdout. POSIX diagnostics and every pagecache assertion are unchanged. The actual failing link, command, output and confirmed Job cleanup are retained in native-portability-ca6-02.
+
+## Set-id image regions narrowed through Windows long (#1093)
+
+The native checker audit also found that the public --offset and --size parser and image readers used long and fseek. Windows keeps long at 32 bits in a 64-bit program, so regions beyond 2 GiB were rejected or narrowed even after native stat supplied their full file length. The selected selfbuild case uses a 1 MiB offset and 48 MiB region and did not exercise this fault.
+
+Image positions and lengths now use checked signed 64-bit values, native wide seeks, allocation bounds and subtraction-based range checks. The existing checker selftest writes a sparse region at 3 GiB, compares both explicit and implicit region reads, checks the ext2 reader at that base and rejects overflowing input and read ranges. The bounded Windows check also invokes the real public checker over that sparse region; no smaller image substitutes for its offset.
