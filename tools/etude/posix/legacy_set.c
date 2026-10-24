@@ -925,8 +925,8 @@ static void names(const struct set *x, struct cmp_text *d, int (*pick)(const str
     cmp_printf(d, "]");
 }
 
-/* These prepared groups contain host-alone checks with short response windows.
- * Their exclusivity is within this collection, as for an explicit serial suite. */
+/* These groups contain host-alone checks with short response windows.
+ * They are exclusive within this collection, like an explicit serial suite. */
 static int quiet_case(const struct legacy_case *k)
 {
     return !strcmp(k->case_id, "host.host.etude") || !strcmp(k->case_id, "host.host.boots");
@@ -4197,13 +4197,11 @@ static int start_observer(struct set *x)
     return 0;
 }
 
-/* Allocate and order the members before commands retain pointers into them. */
-static int prepare_members(struct set *x)
+/* No member owns a process until admission and execution begin. */
+static int allocate_members(struct set *x)
 {
-    const struct etude_legacy_set_opts *o = x->o;
-    size_t i, k = 0, serial;
+    size_t i;
     x->mem = calloc(x->n, sizeof(*x->mem));
-    /* No member owns a process until admission and execution begin. */
     for (i = 0; x->mem && i < x->n; i++)
         x->mem[i].c.cleanup = ETUDE_CLEANUP_CONFIRMED;
     x->jobs = calloc(x->n, sizeof(*x->jobs));
@@ -4212,6 +4210,16 @@ static int prepare_members(struct set *x)
         say(x, "etude run: result: error: the run: %s", strerror(ENOMEM));
         return 2;
     }
+    return 0;
+}
+
+/* Allocate and order the members before commands retain pointers into them. */
+static int prepare_members(struct set *x)
+{
+    const struct etude_legacy_set_opts *o = x->o;
+    size_t i, k = 0, serial;
+    if (allocate_members(x))
+        return 2;
     for (i = 0; i < x->nmembers; i++)
         if (o->repeat || x->members[i].serial)
             k = take_members(x, i, k);

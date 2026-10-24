@@ -9,8 +9,8 @@
  * host-inputs: tests/host/compat/load_history_host.h
  * host-inputs: tests/cases/host.host.json tests/cases/host/host.list
  * host-inputs: tests/host/compat/host_scripts_order.c
- * host-cflags: -I utils -I tools/etude -I tools/etude/include -I tools/etude/posix -Wall
- * host-cflags: -Wextra -Werror
+ * host-cflags: -I utils -I tools/etude -I tools/etude/include
+ * host-cflags: -I tools/etude/posix -Wall -Wextra -Werror
  * host-inputs: build/tools/etude/etude
  * host-inputs: tools/etude/fixtures/verdict/cases/fixture.default.json
  * host-inputs: tools/etude/fixtures/verdict/cases/fixture.host.json

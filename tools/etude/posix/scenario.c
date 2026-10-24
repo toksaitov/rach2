@@ -3550,15 +3550,15 @@ struct fstool_invocation {
     int format;
 };
 
-static int fstool_kind(char *const argv[], size_t n, struct fstool_invocation *v)
+static int fstool_kind(const char *kind, size_t n, const char *mode, struct fstool_invocation *v)
 {
-    if (n == 7 && !strcmp(argv[1], "exfat-mkfs")) {
+    if (n == 7 && !strcmp(kind, "exfat-mkfs")) {
         v->format = 1;
         return 1;
     }
-    if (n == 5 && !strcmp(argv[1], "fat-fsck"))
+    if (n == 5 && !strcmp(kind, "fat-fsck"))
         return 1;
-    return (n == 5 || (n == 6 && !strcmp(argv[5], "repair"))) && !strcmp(argv[1], "exfat-fsck");
+    return (n == 5 || (n == 6 && !strcmp(mode, "repair"))) && !strcmp(kind, "exfat-fsck");
 }
 
 static enum etude_status fstool_copy(struct etude_case *c, const char *original, const char *output,
@@ -3584,7 +3584,7 @@ static enum etude_status fstool_arguments(struct etude_case *c, char *const argv
     enum etude_status st;
     while (n < 8 && argv[n])
         n++;
-    if (n < 2 || n == 8 || !fstool_kind(argv, n, v))
+    if (n < 2 || n == 8 || !fstool_kind(argv[1], n, n == 6 ? argv[5] : "", v))
         return ETUDE_REFUSED;
     at = v->format ? 4 : 3;
     if (!wire_number(argv[at], &v->start) || !wire_number(argv[at + 1], &v->count) || !v->count ||

@@ -1340,7 +1340,7 @@ static void st_boot_module(void)
         end = 0;
         if (kernel_check(kernel, n, 0, detail, sizeof detail, &end) || end != 0x101028u) {
             fprintf(stderr, "elfcheck: selftest: physical kernel end of ELF%u is wrong\n",
-                    i ? 64 : 32);
+                    i ? 64u : 32u);
             st_bad++;
         }
     }

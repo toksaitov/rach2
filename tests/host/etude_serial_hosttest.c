@@ -1000,7 +1000,7 @@ static void check_scripted_restart(void)
 
 /* ------------------------------------------------------------ etude-guest */
 
-/** Both startup forms fit the real debug shell, including the largest interval. */
+/** Both startup forms fit the debug shell at the largest interval. */
 static void check_guest_line(void)
 {
     char line[65];

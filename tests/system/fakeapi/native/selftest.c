@@ -37,7 +37,7 @@ static int test_fputs(const char *text, FILE *file)
 {
     if (interrupt_verdict && !strncmp(text, "fakeapi: result:", 16)) {
         interrupt_verdict = 0;
-        repeated_stop = raise(SIGTERM) == 0;
+        repeated_stop = pthread_kill(pthread_self(), SIGTERM) == 0;
         putsb(&stopped_verdict, text);
     }
     return fputs(text, file);
@@ -471,12 +471,12 @@ static void stop_cleanup(void)
 /** Check every recorded request, including the final successful exchange. */
 static void stop_records(struct server *s, int refused)
 {
-    char line[4096];
+    char entry[4096];
     unsigned i, n = refused ? 2 : 1;
 
     rewind(s->record);
     for (i = 0; i < n; i++) {
-        struct value *v = fgets(line, sizeof(line), s->record) ? parse(line) : NULL;
+        struct value *v = fgets(entry, sizeof(entry), s->record) ? parse(entry) : NULL;
         const char *path = refused && !i ? "/nothing" : "/last";
         check(v && number(v, "n", 0) == i + 1 && !strcmp(field(v, "path"), path) &&
                   (refused && !i ? get(v, "unexpected") != NULL : number(v, "step", 0) == 1),
@@ -515,7 +515,8 @@ static void stop_case(int refused)
         free_request(r);
     }
     stopped = 0;
-    check(raise(SIGTERM) == 0 && stopped, "first TERM handler has completed before shutdown");
+    check(pthread_kill(pthread_self(), SIGTERM) == 0 && stopped,
+          "first TERM handler has completed before shutdown");
     repeated_stop = 0;
     interrupt_verdict = 1;
     result = verdict(&s);

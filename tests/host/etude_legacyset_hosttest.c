@@ -2219,7 +2219,7 @@ static int invocations_have(const struct run *r, const char *except, const char 
     return 1;
 }
 
-/** Read the recorded plan, without assuming the manifest's declaration order. */
+/** Read the recorded plan without assuming the manifest's order. */
 static struct json *machine_plan(const struct run *r)
 {
     struct json *doc = NULL;

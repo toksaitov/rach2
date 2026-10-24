@@ -27,7 +27,7 @@ static void cost_field(struct json *object, const char *name, const char *bytes)
     json_free(value);
 }
 
-/* Change stream/item/attempt identities without changing absolute blob paths. */
+/* Change stream/item/attempt identities, retaining absolute blob paths. */
 static void cost_identity(struct json *doc, const char *old, const char *id)
 {
     if (doc->type == JSON_STRING && !strncmp(doc->string, old, strlen(old))) {

@@ -36,7 +36,7 @@ static void scheduling_architectures(struct json *one)
     CHECK(0, "scheduling architectures exist");
 }
 
-/* Reuse the validated case contract, changing its family and identities only. */
+/* Reuse the validated case contract with another family and identities. */
 static void scheduling_manifest(const char *family, const char *const *ids)
 {
     char text[16384], error[256], path[128];
@@ -141,7 +141,7 @@ static void scheduling_seed(char *out, size_t room)
     struct json *doc = NULL;
     CHECK(n && !json_parse(text, n, 1, &doc, error, sizeof(error)),
           "quiet seeded selection parses");
-    /* No meeting cases are selected here: the allocated width is deliberately one. */
+    /* No meeting cases are selected; the allocated width is one. */
     CHECK(!run(execute, "host.host.etude host.host.boots", NULL, NULL, out, room),
           "quiet seeded cases pass");
     const struct json *items = json_member(doc, "items");

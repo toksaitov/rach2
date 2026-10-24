@@ -266,10 +266,7 @@ static int futex_rows(volatile uint32_t *word)
     return 0;
 }
 
-static union {
-    long double alignment;
-    unsigned char bytes[65536];
-} clone_stacks[3];
+static unsigned char clone_stacks[3][65536] __attribute__((aligned(16)));
 
 static volatile int clone_shared;
 static volatile pid_t clone_grandchild;
@@ -286,7 +283,7 @@ static int clone_shared_child(void *arg)
 {
     (void)arg;
     clone_shared = 123;
-    clone_grandchild = clone(clone_leaf, clone_stacks[1].bytes + sizeof(clone_stacks[1].bytes),
+    clone_grandchild = clone(clone_leaf, clone_stacks[1] + sizeof(clone_stacks[1]),
                              CLONE_VM | CLONE_PARENT | SIGCHLD, NULL);
     return clone_grandchild > 0 ? 73 : 72;
 }
@@ -318,7 +315,7 @@ static int clone_exec_reset(void)
     int status;
     sigset_t pending;
     siginfo_t info;
-    pid_t pid = clone(clone_exec_child, clone_stacks[2].bytes + sizeof(clone_stacks[2].bytes),
+    pid_t pid = clone(clone_exec_child, clone_stacks[2] + sizeof(clone_stacks[2]),
                       CLONE_VM | CLONE_UNTRACED, NULL);
     memset(&info, 0, sizeof(info));
     if (pid < 0 || waitid(P_PID, pid, &info, WEXITED | WNOWAIT | __WALL) || info.si_pid != pid ||
@@ -336,7 +333,7 @@ static int zero_signal_rows(void)
     pid_t pid;
     if (clone_block_children(&old))
         return 1;
-    pid = clone(clone_shared_child, clone_stacks[0].bytes + sizeof(clone_stacks[0].bytes),
+    pid = clone(clone_shared_child, clone_stacks[0] + sizeof(clone_stacks[0]),
                 CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_UNTRACED, NULL);
     if (pid < 0)
         return fail("sanitizer zero-signal clone was refused");
