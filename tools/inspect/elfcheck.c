@@ -13,8 +13,8 @@
  * 0x00007FFFFFFFE000), below the stack's base, with file offsets limited to
  * the 32 bits the x86-64 loader reads.
  *
- * `elfcheck --kernel [--tcc] FILE` checks a kernel against what the
- * multiboot loaders (QEMU's -kernel and GRUB) read: the first
+ * `elfcheck --kernel [--tcc] [--initrd IMAGE] FILE` checks a kernel against
+ * what the multiboot loaders (QEMU's -kernel and GRUB) read: the first
  * checksum-valid multiboot header in the search window with exactly the
  * declared flags, exactly two ascending non-overlapping PT_LOAD segments at
  * or above 1 MiB with `p_paddr == p_vaddr`, the entry inside file-backed
@@ -35,6 +35,10 @@
  * moving with it, and the kernel checker's built fixtures, each malformed
  * variant of which must fail for its own rule, as its diagnostic shows.
  *
+ * With --initrd, the validated physical image end and module size must
+ * leave 8 MiB below the 32 MiB boot allocator limit, after rounding both
+ * ends to pages. This is the small direct-boot helper's preparation guard.
+ *
  * Each command exits 0 when everything passes and 1 on a finding; a usage
  * error, an unknown architecture or an unreadable kernel exits 2.
  */
@@ -47,6 +51,8 @@
 #define ELF_MAX_PHNUM 32
 #define ELF_MAX_SEGS  8
 #define PAGE          0x1000u
+#define BOOT_LIMIT    0x2000000u
+#define BOOT_MARGIN   0x800000u
 
 #define MULTIBOOT_MAGIC 0x1BADB002u
 #define MULTIBOOT_FLAGS 0x3u
@@ -373,16 +379,25 @@ static int multiboot_find(const unsigned char *d, size_t n, uint32_t room, uint3
     return 0;
 }
 
+/** Return a validated physical image end when the caller needs its layout. */
+static void kernel_end_save(uint64_t *out, uint64_t end)
+{
+    if (out)
+        *out = end;
+}
+
 static int kernel_check64(const unsigned char *d, size_t n, int tcc, char *detail,
-                          size_t detail_len);
+                          size_t detail_len, uint64_t *physical_end);
 
 /**
  * Check the kernel `d` of `n` bytes against what the multiboot loaders
  * read, as the opening comment says, under the tcc profile when `tcc` is
  * set. An ELF64 file goes to `kernel_check64`. Return 0 with a summary in
- * `detail`, or 1 with the first violation in `kfail`.
+ * `detail` and the optional physical image end, or 1 with the first
+ * violation in `kfail`.
  */
-static int kernel_check(const unsigned char *d, size_t n, int tcc, char *detail, size_t detail_len)
+static int kernel_check(const unsigned char *d, size_t n, int tcc, char *detail,
+                        size_t detail_len, uint64_t *physical_end)
 {
     uint32_t e_type, e_machine, e_entry, e_phoff, e_phentsize, e_phnum;
     uint32_t shoff, e_shentsize, e_shnum;
@@ -402,7 +417,7 @@ static int kernel_check(const unsigned char *d, size_t n, int tcc, char *detail,
                          4) != 0)
         return kf("not an ELF file");
     if (d[4] == 2)
-        return kernel_check64(d, n, tcc, detail, detail_len);
+        return kernel_check64(d, n, tcc, detail, detail_len, physical_end);
     if (d[4] != 1 || d[5] != 1)
         return kf("not a 32-bit little-endian ELF");
     e_type = r16(d + 16);
@@ -558,6 +573,7 @@ static int kernel_check(const unsigned char *d, size_t n, int tcc, char *detail,
         if (loads[0].vaddr != LOAD_FLOOR)
             return kf("tcc profile: first load at 0x%x, not 0x%x", loads[0].vaddr, LOAD_FLOOR);
     }
+    kernel_end_save(physical_end, image_end);
     snprintf(detail, detail_len,
              "%s: 2 loads, entry 0x%x, _end 0x%x, multiboot header at file "
              "offset 0x%x",
@@ -603,7 +619,7 @@ struct load64 {
  * `kfail`.
  */
 static int kernel_check64(const unsigned char *d, size_t n, int tcc, char *detail,
-                          size_t detail_len)
+                          size_t detail_len, uint64_t *physical_end)
 {
     uint64_t e_entry, e_phoff, shoff, start_val = 0, end_val = 0, image_end, file_base;
     uint32_t e_type, e_machine, e_phentsize, e_phnum, e_shentsize, e_shnum;
@@ -774,11 +790,38 @@ static int kernel_check64(const unsigned char *d, size_t n, int tcc, char *detai
             return kf("_end 0x%llx is not the image end 0x%llx", (unsigned long long)end_val,
                       (unsigned long long)image_end);
     }
+    kernel_end_save(physical_end, image_end);
     snprintf(detail, detail_len,
              "x86-64 %sprofile: 2 loads, entry 0x%llx, %s 0x%llx, multiboot header at file "
              "offset 0x%x",
              tcc ? "tcc " : "", (unsigned long long)e_entry, have_symtab ? "_end" : "image end",
              (unsigned long long)image_end, mb_off);
+    return 0;
+}
+
+/**
+ * QEMU puts the Multiboot module after the physical kernel image. Round up
+ * conservatively even for the x86-64 a.out header's unaligned end. The boot
+ * allocator cannot pass 32 MiB: 8 MiB leave room for i686's maximum 4 MiB
+ * frame table, 264 initial page tables and its directory, with over 2 MiB
+ * left for boot data and low-memory frames. The 256 MiB helper needs less.
+ */
+static int kernel_module_check(uint64_t kernel_end, uint64_t bytes, char *detail, size_t size)
+{
+    uint64_t start, end;
+
+    if (bytes == 0)
+        return kf("the boot module is empty");
+    if (kernel_end > BOOT_LIMIT || bytes > BOOT_LIMIT)
+        return kf("the kernel or boot module passes the 32 MiB boot allocator limit");
+    start = (kernel_end + PAGE - 1) & ~(uint64_t)(PAGE - 1);
+    end = (start + bytes + PAGE - 1) & ~(uint64_t)(PAGE - 1);
+    if (end > BOOT_LIMIT - BOOT_MARGIN)
+        return kf("boot module at 0x%llx to 0x%llx leaves less than 8 MiB below 32 MiB",
+                  (unsigned long long)start, (unsigned long long)end);
+    snprintf(detail, size, "boot module: 0x%llx to 0x%llx; %llu bytes below 32 MiB remain",
+             (unsigned long long)start, (unsigned long long)end,
+             (unsigned long long)(BOOT_LIMIT - end));
     return 0;
 }
 
@@ -1073,7 +1116,7 @@ static void st_expect_kernel(const unsigned char *d, size_t n, int tcc, const ch
 {
     char detail[160];
 
-    if (kernel_check(d, n, tcc, detail, sizeof(detail)) == 0) {
+    if (kernel_check(d, n, tcc, detail, sizeof(detail), NULL) == 0) {
         fprintf(stderr, "elfcheck: selftest: accepted %s\n", why);
         st_bad++;
     } else if (strstr(kfail, want) == NULL) {
@@ -1200,11 +1243,11 @@ static void st_kernel64(void)
     uint32_t mb64 = 64 + 2 * 56;
     char detail[160];
 
-    if (kernel_check(k64, k64n, 0, detail, sizeof(detail)) != 0) {
+    if (kernel_check(k64, k64n, 0, detail, sizeof(detail), NULL) != 0) {
         fprintf(stderr, "elfcheck: selftest: the x86-64 fixture was refused: %s\n", kfail);
         st_bad++;
     }
-    if (kernel_check(k64, k64n, 1, detail, sizeof(detail)) != 0) {
+    if (kernel_check(k64, k64n, 1, detail, sizeof(detail), NULL) != 0) {
         fprintf(stderr,
                 "elfcheck: selftest: the x86-64 fixture was refused under the tcc "
                 "profile: %s\n",
@@ -1215,7 +1258,7 @@ static void st_kernel64(void)
     memcpy(m64, k64, k64n);
     w64(m64 + 40, 0);
     w16(m64 + 60, 0);
-    if (kernel_check(m64, k64n, 1, detail, sizeof(detail)) != 0) {
+    if (kernel_check(m64, k64n, 1, detail, sizeof(detail), NULL) != 0) {
         fprintf(stderr,
                 "elfcheck: selftest: the x86-64 fixture without a symbol table was "
                 "refused under the tcc profile: %s\n",
@@ -1261,6 +1304,48 @@ static void st_kernel64(void)
                      "is not the image end");
 }
 
+/** Exercise the real helper size, page boundaries and parsed physical ends. */
+static void st_boot_module(void)
+{
+    static const struct {
+        const char *name;
+        uint64_t kernel_end, bytes;
+        int accepted;
+    } rows[] = {
+        {"run09 i686 with a 16 MiB module", 0x5A2000u, 0x1000000u, 1},
+        {"run09 x86-64 with a 16 MiB module", 0x61C0B0u, 0x1000000u, 1},
+        {"run09 64 MiB module", 0x61C0B0u, 0x4000000u, 0},
+        {"exactly eight MiB remain", 0x800000u, 0x1000000u, 1},
+        {"kernel alignment consumes the margin", 0x800001u, 0x1000000u, 0},
+        {"module alignment consumes the margin", 0x7FFFFFu, 0x1000001u, 0},
+        {"an empty module", 0x61C0B0u, 0, 0},
+        {"a kernel beyond the low pool", 0x100000000ull, 0x1000000u, 0},
+        {"a module size cannot wrap", 0x61C0B0u, 0x100000000ull, 0},
+    };
+    unsigned char kernel[8192];
+    char detail[160];
+    uint64_t end;
+    size_t i, n;
+
+    for (i = 0; i < sizeof rows / sizeof rows[0]; i++) {
+        int accepted = kernel_module_check(rows[i].kernel_end, rows[i].bytes,
+                                           detail, sizeof detail) == 0;
+        if (accepted != rows[i].accepted) {
+            fprintf(stderr, "elfcheck: selftest: boot module: %s: wrong verdict\n", rows[i].name);
+            st_bad++;
+        }
+    }
+    for (i = 0; i < 2; i++) {
+        n = i ? craft_kernel64(kernel) : craft_kernel(kernel, 0, 0, 128);
+        end = 0;
+        if (kernel_check(kernel, n, 0, detail, sizeof detail, &end) || end != 0x101028u) {
+            fprintf(stderr, "elfcheck: selftest: physical kernel end of ELF%u is wrong\n",
+                    i ? 64 : 32);
+            st_bad++;
+        }
+    }
+}
+
 /** Run every case of both checkers; return 0 when all pass, else 1. */
 static int selftest(void)
 {
@@ -1273,8 +1358,8 @@ static int selftest(void)
     st_user();
 
     goodn = craft_kernel(good, 0, 16, 0x100);
-    if (kernel_check(good, goodn, 1, detail, sizeof(detail)) != 0 ||
-        kernel_check(good, goodn, 0, detail, sizeof(detail)) != 0) {
+    if (kernel_check(good, goodn, 1, detail, sizeof(detail), NULL) != 0 ||
+        kernel_check(good, goodn, 0, detail, sizeof(detail), NULL) != 0) {
         fprintf(stderr,
                 "elfcheck: selftest: the good fixture was "
                 "refused: %s\n",
@@ -1282,7 +1367,7 @@ static int selftest(void)
         st_bad++;
     }
     gnun = craft_kernel(gnu, 0x1000, 16, 0x100);
-    if (kernel_check(gnu, gnun, 0, detail, sizeof(detail)) != 0) {
+    if (kernel_check(gnu, gnun, 0, detail, sizeof(detail), NULL) != 0) {
         fprintf(stderr,
                 "elfcheck: selftest: the GNU-shaped fixture was "
                 "refused: %s\n",
@@ -1317,7 +1402,7 @@ static int selftest(void)
 
     last = SEARCH_END - 4;
     bign = craft_kernel(big, 0, last - hdr, 0x2000);
-    if (kernel_check(big, bign, 1, detail, sizeof(detail)) != 0) {
+    if (kernel_check(big, bign, 1, detail, sizeof(detail), NULL) != 0) {
         fprintf(stderr,
                 "elfcheck: selftest: a header at the last searched "
                 "offset was refused: %s\n",
@@ -1332,7 +1417,7 @@ static int selftest(void)
 
     memcpy(mut, good, goodn);
     w32(mut + 32, 0);
-    if (kernel_check(mut, goodn, 1, detail, sizeof(detail)) != 0) {
+    if (kernel_check(mut, goodn, 1, detail, sizeof(detail), NULL) != 0) {
         fprintf(stderr,
                 "elfcheck: selftest: the symbol-free fixture was "
                 "refused under the tcc profile: %s\n",
@@ -1365,13 +1450,14 @@ static int selftest(void)
     }
 
     st_kernel64();
+    st_boot_module();
 
     if (st_bad) {
         fprintf(stderr, "elfcheck: selftest: %d case(s) failed\n", st_bad);
         return 1;
     }
     printf("elfcheck: selftest: ok: 10 i686 and 10 x86_64 window cases, 2 x86_64 offset cases, "
-           "8 accepted kernels, 23 refused, each for its own rule\n");
+           "8 accepted kernels, 23 refused, each for its own rule; 11 boot-module checks\n");
     return 0;
 }
 
@@ -1404,11 +1490,60 @@ static unsigned char *read_file(const char *path, size_t *n)
     return buf;
 }
 
+/** Check the optional module's file size without reading its free space. */
+static int module_file_check(const char *path, uint64_t kernel_end, char *detail, size_t size)
+{
+    FILE *f = fopen(path, "rb");
+    long bytes;
+
+    if (!f)
+        return 2;
+    if (fseek(f, 0, SEEK_END) || (bytes = ftell(f)) < 0) {
+        fclose(f);
+        return 2;
+    }
+    if (fclose(f))
+        return 2;
+    return kernel_module_check(kernel_end, (uint64_t)bytes, detail, size);
+}
+
+static int kernel_file_check(const char *path, int tcc, const char *initrd)
+{
+    size_t n;
+    unsigned char *d = read_file(path, &n);
+    char detail[160];
+    uint64_t end = UINT64_MAX;
+    int status;
+
+    if (!d) {
+        fprintf(stderr, "check-kernel: cannot read %s\n", path);
+        return 2;
+    }
+    status = kernel_check(d, n, tcc, detail, sizeof detail, &end);
+    free(d);
+    if (status) {
+        fprintf(stderr, "check-kernel: fail: %s\n", kfail);
+        return 1;
+    }
+    printf("check-kernel: ok: %s\n", detail);
+    if (!initrd)
+        return 0;
+    status = module_file_check(initrd, end, detail, sizeof detail);
+    if (status) {
+        fprintf(stderr, "check-kernel: %s: %s\n", initrd,
+                status == 2 ? "the boot module cannot be read" : kfail);
+        return status;
+    }
+    printf("check-kernel: ok: %s\n", detail);
+    return 0;
+}
+
 /** Run the command the arguments name, as the opening comment says. */
 int main(int argc, char **argv)
 {
     int i, kernel_mode = 0, tcc = 0, first = 1;
     const struct user_arch *arch = arch_i686;
+    const char *initrd = NULL;
 
     if (argc >= 2 && strcmp(argv[1], "--selftest") == 0)
         return selftest();
@@ -1435,37 +1570,22 @@ int main(int argc, char **argv)
             tcc = 1;
             first = 3;
         }
+        if (first + 1 < argc && strcmp(argv[first], "--initrd") == 0) {
+            initrd = argv[first + 1];
+            first += 2;
+        }
     }
     if (first >= argc) {
         fprintf(stderr, "usage: elfcheck [--arch i686|x86_64] FILE... | elfcheck --kernel "
-                        "[--tcc] KERNEL | elfcheck --selftest\n");
+                        "[--tcc] [--initrd IMAGE] KERNEL | elfcheck --selftest\n");
         return 2;
     }
     if (kernel_mode) {
-        size_t n;
-        unsigned char *d;
-        char detail[160];
-
         if (first != argc - 1) {
-            fprintf(stderr,
-                    "check-kernel: --kernel takes one kernel, not "
-                    "%d\n",
-                    argc - first);
+            fprintf(stderr, "check-kernel: --kernel takes one kernel, not %d\n", argc - first);
             return 2;
         }
-        d = read_file(argv[first], &n);
-        if (d == NULL) {
-            fprintf(stderr, "check-kernel: cannot read %s\n", argv[first]);
-            return 2;
-        }
-        if (kernel_check(d, n, tcc, detail, sizeof(detail)) != 0) {
-            fprintf(stderr, "check-kernel: fail: %s\n", kfail);
-            free(d);
-            return 1;
-        }
-        printf("check-kernel: ok: %s\n", detail);
-        free(d);
-        return 0;
+        return kernel_file_check(argv[first], tcc, initrd);
     }
     for (i = first; i < argc; i++) {
         size_t n;
