@@ -34,6 +34,7 @@ description: Run suites, full sets or analyses on the testing host, or write a s
 
 * Copy a path returned from a rotating or static buffer into caller-owned storage before retaining it across loops or calls that reuse that buffer. When one fixture fails this way, inspect its sibling fixtures for the same lifetime error.
 * Use directory predicates for directory entries and regular-file predicates for byte length. A fixture that ages inputs must restore and check their timestamps after its last write or copy.
+* Derive exact screen text from the pinned program's complete output. When a screen wait fails, preserve the whole pane and distinguish missing output from an expectation that differs from the program's wording.
 * When changing a private function or type, search the fixtures that include its implementation as well as ordinary callers. Update those fixtures before the combined build, and include them among the affected checks.
 * A test that kills a controller without cleanup kills and reaps it before closing its pipes. Closing them first can let the controller detect a lost connection and clean up the processes that the test needs orphaned.
 * A suite judges what the kernel counts, never the clock, and sets no time limit of its own. Etude stops a case only when it has made no progress for longer than the case's history on that machine allows. A time is printed for the record, not judged.

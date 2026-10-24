@@ -59,9 +59,9 @@ row() {
         has "the sign-in menu" "$OUT" "1. Google OAuth"
         tmux -S "$WORK/tmux" send-keys -t agy Enter
         if screen "Google OAuth" "authorization code" \
-            "https://accounts.google.com/o/oauth2/auth?" "copy the code displayed in the browser"; then
+            "https://accounts.google.com/o/oauth2/auth?" "paste the authorization code below"; then
             has "Google OAuth" "$OUT" "https://accounts.google.com/o/oauth2/auth?"
-            has "Google OAuth" "$OUT" "copy the code displayed in the browser"
+            has "Google OAuth" "$OUT" "paste the authorization code below"
         fi
     fi
     tmux -S "$WORK/tmux" kill-server 2> /dev/null
