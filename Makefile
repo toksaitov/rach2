@@ -615,6 +615,13 @@ build/tests/host-suite/vfs_unmount: tests/cases/host/fixtures.py tests/cases/hos
 build/tests/host-suite/scripts.inventory.json: build/tests/system/fakeapi_test
 build/tests/host-suite/etude.inventory.json: $(ETUDE) build/tests/cases/host/host
 
+# The native exFAT check uses one architecture-independent prepared volume.
+# Windows runs that check in the GNU helper, whose image builds it separately.
+ifneq ($(OS),Windows_NT)
+build/tests/host-suite/tests.inventory.json \
+build/x86_64/tests/host-suite/tests.inventory.json: build/tests/host/exfat_writer
+endif
+
 # Runtime inputs of the native QEMU checks, built before their inventory.
 HOST_BOOT_SCHEMA_SOURCES = $(wildcard tools/etude/schemas/*.schema.json)
 HOST_BOOT_SCHEMAS = $(patsubst tools/etude/schemas/%,build/tests/host-suite/schemas/%,$(HOST_BOOT_SCHEMA_SOURCES))
