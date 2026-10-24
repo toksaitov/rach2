@@ -110,18 +110,22 @@ int family_grow_replay(struct fixture *f)
     uint64_t offset = 0;
     unsigned i, lines = 0;
     int ok = ranges(f, r) && fill(f, r) && family_extract(f, "|run_logged|restore_range|");
-    char command[1024], *log, *p;
+    char *log, *p;
     fx_env("work", f->work);
     fx_env("saved", f->work);
     fx_env("disk", family_path(f, "target"));
-    for (i = 0; ok && i < 1856; i++) {
-        snprintf(command, sizeof(command),
-                 "first=%llu; amount=%llu; offset=%llu; run_logged restore.log restore_range",
-                 (unsigned long long)r[i].first, (unsigned long long)(r[i].length * 512),
-                 (unsigned long long)offset);
-        ok = family_eval(f, command);
+    /* The product replays its plan in one shell, with one logged call per range. */
+    if (ok)
+        ok = family_eval(f,
+                         "offset=0; records=0\n"
+                         "while read -r first sectors; do\n"
+                         "    amount=$((sectors * 512))\n"
+                         "    run_logged restore.log restore_range\n"
+                         "    offset=$((offset + amount)); records=$((records + 1))\n"
+                         "done < ranges.txt\n"
+                         "[ \"$records\" = 1856 ] && [ \"$offset\" = 3037286400 ]\n");
+    for (i = 0; ok && i < 1856; i++)
         offset += r[i].length * 512;
-    }
     log = fx_read(family_path(f, "restore.log"));
     for (p = log; p && *p; p++)
         lines += *p == '\n';

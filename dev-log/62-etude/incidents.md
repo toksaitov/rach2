@@ -593,3 +593,7 @@ Issue #1047 adds the missing node-type check: a regular file or symbolic link re
 ## The image dependency fixture passed GCC flags to TinyCC (#1048)
 
 The full Linux collection on ed5953 failed the edited-probe image check before it built the probe. Its private root Makefile selected the prepared TinyCC compiler but retained GCC's build-id and dependency flags and libgcc query. The fixture now supplies TinyCC's architecture, link and dependency flags and an empty libgcc value. It also disables the unrelated GNU host inventory source discovery in that private make invocation. The actual image dependency rules and all byte comparisons remain in the check.
+
+## The growth replay started a shell for each range (#1050)
+
+The full Linux collection on ed5953 stopped the growth replay at its existing progress bound after 1583 successful commands. The controller started and reaped a shell for each of 1856 ranges and reloaded the same product functions every time. It now reads the entire plan in one shell, as the product does, and still calls the real run_logged and restore_range functions for every range. It checks the shell's range count and byte total, independently sums the plan in C, checks every log record, and compares all 3,037,286,400 restored bytes and both ends of each gap. The run's time bound is unchanged.
