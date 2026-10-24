@@ -140,6 +140,23 @@ class ImportTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 product.nested_inputs(changed, anchors, 'm')
 
+    def test_native_program_publication(self):
+        repo = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(repo / 'tests/cases/host'))
+        import fixtures
+        with tempfile.TemporaryDirectory(prefix='rach2-native-publication-') as work:
+            output = Path(work, 'program')
+            output.write_bytes(b'old declared bytes')
+            emitted = Path(str(output) + '.exe')
+            emitted.write_bytes(b'MZnew compiler bytes')
+            self.assertEqual(fixtures.publish_program(output), output)
+            self.assertEqual(output.read_bytes(), b'MZnew compiler bytes')
+            self.assertFalse(emitted.exists())
+            self.assertEqual(fixtures.publish_program(output), output)
+            output.unlink()
+            with self.assertRaises(ValueError):
+                fixtures.publish_program(output)
+
     def test_shared_native_tool_reuse(self):
         repo = Path(__file__).resolve().parents[2]
         sys.path.insert(0, str(repo / 'tests/cases/host'))

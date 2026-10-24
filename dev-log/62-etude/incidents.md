@@ -944,3 +944,9 @@ The native checker audit also found that the public --offset and --size parser a
 Image positions and lengths now use checked signed 64-bit values, native wide seeks, allocation bounds and subtraction-based range checks. The existing checker selftest writes a sparse region at 3 GiB, compares both explicit and implicit region reads, checks the ext2 reader at that base and rejects overflowing input and read ranges. The bounded Windows check also invokes the real public checker over that sparse region; no smaller image substitutes for its offset.
 
 The first repaired checker link exposed a second native-header difference: the Windows directory entry has room for a full native name, while selftest cleanup formatted it into a fixed 512-byte path. Strict GCC rejected the possible truncation. Flat cleanup now sizes its path from both declared arrays, and recursive cleanup allocates the full joined path. No warning is suppressed and no entry is silently truncated.
+
+## MSYS executable aliases skipped native publication (#1094)
+
+All affected links passed, but the bounded native readback could not open the declared suffixless pagecache program. MSYS Python reported that spelling as present while only pagecache.exe existed, so the fixture and inventory publishers skipped their rename. The repaired publishers always prefer a newly emitted explicit .exe before checking the declared path. Shared helper publication uses the same operation; explicitly suffixed Windows companion programs remain unchanged.
+
+The actual readback proof showed both spellings present through MSYS before publication. Unconditional Path.replace and mv each produced a suffixless file which native Windows opened, and removed the explicit .exe name. The failed runtime wrapper stopped before executing any fixture and its complete cleanup is retained separately. The fixture also checks that new emitted bytes replace an existing declared file, and that missing compiler output fails.

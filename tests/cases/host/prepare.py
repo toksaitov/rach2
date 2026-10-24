@@ -346,8 +346,7 @@ def prepare(args):
                 print('host prepare: ' + shlex.join(full), flush=True)
                 subprocess.run(full, check=True)
                 program = Path(item['program'])
-                if not program.exists() and Path(str(program) + '.exe').exists():
-                    Path(str(program) + '.exe').replace(program)
+                fixtures.publish_program(program)
                 item['sha256'] = digest(program)
                 external = {}
                 dependencies = compiler_inputs(compiler, command, item['sources'], external)

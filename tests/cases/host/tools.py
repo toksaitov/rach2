@@ -7,6 +7,7 @@ import shutil
 import sys
 import shlex
 import subprocess
+import fixtures
 
 SOURCES = {'mkfatfixture': ['tests/host/mkfatfixture.c'],
            'etude-workload': ['tests/host/fixtures/etude_workload.c',
@@ -102,7 +103,7 @@ def compiled_tool(root, name, compiler, flags, dependencies, digest, identity, p
     print('host prepare: ' + shlex.join([*compiler, *actual]), flush=True)
     try:
         subprocess.run([*compiler, *actual], check=True)
-        made = Path(temporary) if Path(temporary).exists() else Path(temporary + '.exe')
+        made = fixtures.publish_program(temporary)
         after = {}
         after_paths = sorted(set([*sources, *dependencies(compiler, command, sources, after, include_system=True)]))
         if after_paths != paths or after != external or any(

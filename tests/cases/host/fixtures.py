@@ -27,6 +27,17 @@ def extract(out, groups):
     return origins
 
 
+def publish_program(output):
+    """Publish the emitted PE before MSYS can resolve its suffixless alias."""
+    output = Path(output)
+    emitted = Path(str(output) + '.exe')
+    if emitted.is_file():
+        emitted.replace(output)
+    if not output.is_file():
+        raise ValueError('compiler output is missing: ' + str(output))
+    return output
+
+
 def platform_flags(common):
     """Use native Windows APIs without requesting unavailable sanitizer runtimes."""
     if not routing.windows_host():
@@ -133,5 +144,4 @@ if __name__ == '__main__':
     if program != str(output):
         raise SystemExit('output basename must equal the fixture name')
     subprocess.run([*shlex.split(os.environ.get('CC', 'cc')), *command], check=True)
-    if not output.exists() and Path(str(output) + '.exe').is_file():
-        Path(str(output) + '.exe').replace(output)
+    publish_program(output)

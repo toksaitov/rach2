@@ -32,6 +32,8 @@ description: Run suites, full sets or analyses on the testing host, or write a s
 
 ## Writing a suite
 
+* Check a published native program through its declared native file path. MSYS existence checks may resolve a suffixless name to an unrenamed `.exe`.
+
 * Copy a path returned from a rotating or static buffer into caller-owned storage before retaining it across loops or calls that reuse that buffer. When one fixture fails this way, inspect its sibling fixtures for the same lifetime error.
 * Use directory predicates for directory entries and regular-file predicates for byte length. A fixture that ages inputs must restore and check their timestamps after its last write or copy.
 * Derive exact screen text from the pinned program's complete output. When a screen wait fails, preserve the whole pane and distinguish missing output from an expectation that differs from the program's wording.
