@@ -3644,6 +3644,23 @@ static int case_paths(struct set *x, struct member *m)
     return 0;
 }
 
+/* Composite prepared host groups can run several native checks. Reserve
+ * their ceiling on the selected machine, retaining the manifest's floor. */
+static int case_cpu(const struct set *x, const struct member *m, uint64_t *amount)
+{
+    const struct legacy_case *k = m->k;
+    *amount = k->cpu_millis;
+    if (x->o->prepared && !strcmp(m->manifest->family, "host.host")) {
+        uint64_t capacity = x->cap[ETUDE_LEGACY_CPU].amount;
+        if (capacity < k->cpu_millis || k->cpu_ceiling_millis < k->cpu_millis) {
+            errno = ERANGE;
+            return -1;
+        }
+        *amount = k->cpu_ceiling_millis < capacity ? k->cpu_ceiling_millis : capacity;
+    }
+    return 0;
+}
+
 /**
  * Fill the command of case member `m` from its case, to run in its
  * workspace under the case's own bounds, with a claim of its resources held
@@ -3667,7 +3684,8 @@ static int case_command(struct set *x, struct member *m)
     c->name = m->label;
     c->cwd = m->work;
     m->arch = k->arch;
-    want[ETUDE_LEGACY_CPU] = k->cpu_millis;
+    if (case_cpu(x, m, &want[ETUDE_LEGACY_CPU]))
+        return -1;
     want[ETUDE_LEGACY_MEMORY] = legacy_case_memory(k, x->o->prepared ? 0 : TOOLING_HOST);
     want[ETUDE_LEGACY_DISK] = k->disk_bytes;
     if (m->load) {

@@ -849,7 +849,7 @@
         }
       },
       "resources": {
-        "cpu_millis": 16000,
+        "cpu_millis": 1000,
         "cpu_ceiling_millis": 16000,
         "memory_bytes": 6442450944,
         "disk_bytes": 15032385536,
@@ -1169,7 +1169,7 @@
         }
       },
       "resources": {
-        "cpu_millis": 16000,
+        "cpu_millis": 1000,
         "cpu_ceiling_millis": 16000,
         "memory_bytes": 6442450944,
         "disk_bytes": 15032385536,
@@ -1357,7 +1357,7 @@
         }
       },
       "resources": {
-        "cpu_millis": 16000,
+        "cpu_millis": 1000,
         "cpu_ceiling_millis": 16000,
         "memory_bytes": 6442450944,
         "disk_bytes": 15032385536,
@@ -1622,7 +1622,7 @@
         }
       },
       "resources": {
-        "cpu_millis": 16000,
+        "cpu_millis": 1000,
         "cpu_ceiling_millis": 16000,
         "memory_bytes": 6442450944,
         "disk_bytes": 15032385536,
@@ -1832,7 +1832,7 @@
         }
       },
       "resources": {
-        "cpu_millis": 16000,
+        "cpu_millis": 1000,
         "cpu_ceiling_millis": 16000,
         "memory_bytes": 6442450944,
         "disk_bytes": 15032385536,
@@ -2232,7 +2232,7 @@
         }
       },
       "resources": {
-        "cpu_millis": 16000,
+        "cpu_millis": 1000,
         "cpu_ceiling_millis": 16000,
         "memory_bytes": 2550136832,
         "disk_bytes": 13421772800,

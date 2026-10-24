@@ -259,6 +259,13 @@ static int tooling_of(struct legacy_manifest *m, struct legacy_case *k, const st
     return 0;
 }
 
+/* Older manifests have only a CPU floor. */
+static uint64_t cpu_ceiling(const struct json *resources, uint64_t floor)
+{
+    long long ceiling = count_of(resources, "cpu_ceiling_millis");
+    return ceiling > 0 ? (uint64_t)ceiling : floor;
+}
+
 /** Check what case `k` needs of the driver, and take its claim; 0, or -1
  * after a refusal. */
 static int needs_of(struct legacy_manifest *m, struct legacy_case *k)
@@ -303,6 +310,7 @@ static int needs_of(struct legacy_manifest *m, struct legacy_case *k)
     }
     k->scratch |= k->machine;
     k->cpu_millis = (uint64_t)count_of(r, "cpu_millis");
+    k->cpu_ceiling_millis = cpu_ceiling(r, k->cpu_millis);
     k->memory_bytes = (uint64_t)count_of(r, "memory_bytes");
     k->disk_bytes = (uint64_t)count_of(r, "disk_bytes");
     if (count_of(r, "cpu_millis") < 1 || count_of(r, "memory_bytes") < 1 ||

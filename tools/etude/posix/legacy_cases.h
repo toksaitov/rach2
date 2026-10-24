@@ -52,7 +52,7 @@ struct legacy_case {
     size_t nwitnesses;
     /* The claim: the case's processor and disk, and its memory, which for a
      * guest case is what etude_qemu_memory reserves for its machine. */
-    uint64_t cpu_millis, memory_bytes, disk_bytes;
+    uint64_t cpu_millis, cpu_ceiling_millis, memory_bytes, disk_bytes;
     /* A host or machine case's memory on a host where it runs its work in
      * etude's tooling machine, its `tooling_memory_bytes`, or 0 when it has
      * none. */

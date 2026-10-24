@@ -1,6 +1,8 @@
 /* Public collection scheduling over compiled, prepared fixture cases. */
 #include "../../../tools/etude/json.h"
 
+static unsigned scheduling_floor, scheduling_ceiling;
+
 /* Replace only an existing string in the fixture's parsed case. */
 static void scheduling_string(struct json *object, const char *key, const char *value)
 {
@@ -38,6 +40,11 @@ static void scheduling_manifest(const char *family, const char *const *ids)
         if (i)
             jbuf_puts(&output, ",");
         scheduling_string(one, "case_id", ids[i]);
+        if (scheduling_ceiling) {
+            struct json *r = (struct json *)json_member(one, "resources");
+            ((struct json *)json_member(r, "cpu_millis"))->integer = scheduling_floor;
+            ((struct json *)json_member(r, "cpu_ceiling_millis"))->integer = scheduling_ceiling;
+        }
         json_canonical(one, &output);
     }
     jbuf_puts(&output, "]}\n");
@@ -45,6 +52,24 @@ static void scheduling_manifest(const char *family, const char *const *ids)
     put(path, output.data);
     jbuf_free(&output);
     json_free(doc);
+}
+
+/* Inspect the real private ledger while this compiled case owns its claim. */
+static int scheduling_claim(const char *root)
+{
+    const char *expected = getenv("ETUDE_COLLECTION_CPU");
+    if (!expected)
+        return 1;
+    char path[PATH_MAX], line[512], wanted[80];
+    snprintf(path, sizeof(path), "%s/build/tests/results/ledger/claims", root);
+    snprintf(wanted, sizeof(wanted), "resource cpu_millis %s\n", expected);
+    FILE *f = fopen(path, "rb");
+    int found = 0;
+    while (f && fgets(line, sizeof(line), f))
+        found |= !strcmp(line, wanted);
+    if (f)
+        fclose(f);
+    return found;
 }
 
 /* A FIFO rendezvous has no timing threshold: both prepared cases must start
@@ -56,7 +81,7 @@ static int scheduling_role(const char *id)
         return -1;
     printf("@etude 1 begin %s\n", id);
     fflush(stdout);
-    int ok = 1;
+    int ok = scheduling_claim(root);
     if (!strcmp(id, "host.host.tests") || !strcmp(id, "host.host.checkers")) {
         int writer = !strcmp(id, "host.host.tests");
         char path[PATH_MAX], byte = 'x';
@@ -129,6 +154,31 @@ static void scheduling_policy(char *out, size_t room)
     json_free(doc);
 }
 
+static void scheduling_capacity(char *out, size_t room)
+{
+    static const char *const ids[] = {"host.host.etude", NULL};
+    scheduling_floor = 1000;
+    scheduling_ceiling = 16000;
+    scheduling_manifest("host.host", ids);
+    setenv("ETUDE_COLLECTION_CPU", "8000", 1);
+    char *fit[] = {"-A", "tcg", "-j", "4", "-C", "2", "host", NULL};
+    CHECK(!run(fit, NULL, NULL, NULL, out, room),
+          "host ceiling clamps to the actual 8000 capacity in its running claim");
+    char *load[] = {"-A", "tcg", "-j", "4", "-C", "2", "-S", "42", "-L", "cpu:1",
+                      "host", NULL};
+    CHECK(run(load, NULL, NULL, NULL, out, room) == 2 &&
+              !strstr(out, "host.host.etude: starting"),
+          "a real load beyond the clamped host claim refuses before execution");
+    scheduling_floor = 2000;
+    scheduling_manifest("host.host", ids);
+    char *small[] = {"-A", "tcg", "-j", "1", "-C", "1", "host", NULL};
+    CHECK(run(small, NULL, NULL, NULL, out, room) == 2 &&
+              !strstr(out, "host.host.etude: starting"),
+          "capacity below the host manifest floor refuses before execution");
+    unsetenv("ETUDE_COLLECTION_CPU");
+    scheduling_floor = scheduling_ceiling = 0;
+}
+
 static void scheduling(char *out, size_t room)
 {
     static const char *const ids[] = {"host.host.tests", "host.host.checkers", "host.host.etude",
@@ -155,5 +205,6 @@ static void scheduling(char *out, size_t room)
     CHECK(tests && etude_start && boots && etude_start < tests && boots < tests,
           "quiet host groups precede shared prepared groups");
     scheduling_seed(out, room);
+    scheduling_capacity(out, room);
     unsetenv("ETUDE_COLLECTION_MEETING");
 }
