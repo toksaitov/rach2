@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "flow_check.h"
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
@@ -186,28 +187,99 @@ static int agent_start(struct fixture *f, const char *script, unsigned i, struct
     fx_env("GUEST_TEST_MARK", NULL);
     return 1;
 }
+/* Record only process identities and states, never credential arguments. */
+static void agent_members(pid_t group)
+{
+    DIR *d = opendir("/proc");
+    struct dirent *e;
+    char path[64], buf[4096], *end, state;
+    long pid, parent, pgid;
+    FILE *file;
+    size_t n;
+
+    if (!d) {
+        fprintf(stderr, "agents_guest: group %ld: proc unavailable: %s\n", (long)group,
+                strerror(errno));
+        return;
+    }
+    while ((e = readdir(d))) {
+        pid = strtol(e->d_name, &end, 10);
+        if (pid <= 0 || *end)
+            continue;
+        snprintf(path, sizeof(path), "/proc/%ld/stat", pid);
+        file = fopen(path, "r");
+        if (!file)
+            continue;
+        n = fread(buf, 1, sizeof(buf) - 1, file);
+        fclose(file);
+        buf[n] = 0;
+        end = strrchr(buf, ')');
+        if (end && sscanf(end + 1, " %c %ld %ld", &state, &parent, &pgid) == 3 && pgid == group)
+            fprintf(stderr, "agents_guest: member pid %ld parent %ld group %ld state %c\n", pid,
+                    parent, pgid, state);
+    }
+    closedir(d);
+    fflush(stderr);
+}
+
+static void agent_boundary(struct fixture *f, const struct fx_child *p, const char *stage)
+{
+    pid_t group = getpgid(p->pid);
+    int error = group < 0 ? errno : 0;
+
+    fprintf(stderr,
+            "agents_guest: command %u %s: controller %ld group %ld child %ld group %ld error %d\n",
+            f->command, stage, (long)getpid(), (long)getpgrp(), (long)p->pid, (long)group, error);
+    fflush(stderr);
+}
+
+static void agent_term(struct fixture *f, struct fx_child *p)
+{
+    int result, error;
+
+    agent_boundary(f, p, "sending-term");
+    agent_members(p->pid);
+    result = kill(-p->pid, SIGTERM);
+    error = result < 0 ? errno : 0;
+    fprintf(stderr, "agents_guest: command %u term result %d error %d\n", f->command, result,
+            error);
+    fflush(stderr);
+}
+
 static int agent_wait(struct fixture *f, unsigned i, struct agent_row *r)
 {
     struct fx_child *p = &r->p;
     int in = -1, out = -1, held = 1;
+    agent_boundary(f, p, "started");
     if (i == 3 || i == 5) {
+        agent_boundary(f, p, "opening-input");
         in = open(flow_path(f, "input"), O_WRONLY);
         if (in < 0)
             return 0;
+        agent_boundary(f, p, "input-open");
     }
     if (i == 5) {
+        agent_boundary(f, p, "opening-output");
         out = open(flow_path(f, "output"), O_RDONLY);
         if (out < 0) {
             close(in);
             return 0;
         }
+        agent_boundary(f, p, "output-open");
     }
-    if (i == 3 || i == 5)
+    if (i == 3 || i == 5) {
+        agent_boundary(f, p, "waiting-log");
         held = until_log(f, p);
-    if (i == 4)
+        agent_boundary(f, p, held ? "log-observed" : "ended-before-log");
+    }
+    if (i == 4) {
+        agent_boundary(f, p, "waiting-mark");
         held = fx_until(p, flow_path(f, "mark"));
+        agent_boundary(f, p, held ? "mark-observed" : "ended-before-mark");
+    }
     if (i == 3 || i == 4)
-        fx_stop(p, SIGTERM);
+        agent_term(f, p);
+    agent_boundary(f, p, "waiting-exit");
     if (i == 5) {
         close(out);
         close(in);
@@ -217,10 +289,14 @@ static int agent_wait(struct fixture *f, unsigned i, struct agent_row *r)
         f->status = p->status;
     } else
         fx_wait(f, p);
+    agent_boundary(f, p, "waited");
     if (in >= 0)
         close(in);
+    agent_members(p->pid);
+    agent_boundary(f, p, "waiting-group");
     while (kill(-p->pid, 0) == 0)
         fx_pause();
+    agent_boundary(f, p, "group-gone");
     r->in = in;
     r->out = out;
     r->held = held;
