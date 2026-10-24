@@ -458,23 +458,26 @@ static int ran_case(long pid)
     return argc <= 0;
 }
 
-/* libproc gives the BSD process state without starting another program. */
+/* A sleeping Darwin task can still have BSD status SRUN. Count its runnable
+ * threads rather than treating that process status as a thread state. */
 static char state_of(long pid)
 {
-    struct proc_bsdinfo info;
-    if (proc_pidinfo((int)pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) != sizeof(info))
+    struct proc_taskallinfo info;
+    if (proc_pidinfo((int)pid, PROC_PIDTASKALLINFO, 0, &info, sizeof(info)) != sizeof(info))
         return 0;
-    switch (info.pbi_status) {
+    switch (info.pbsd.pbi_status) {
     case SSLEEP:
         return 'S';
     case SRUN:
-        return 'R';
+        if (info.ptinfo.pti_threadnum <= 0 || info.ptinfo.pti_numrunning < 0)
+            return 0;
+        return info.ptinfo.pti_numrunning == 0 ? 'S' : 'R';
     case SSTOP:
         return 'T';
     case SZOMB:
         return 'Z';
     default:
-        return 'I';
+        return 0;
     }
 }
 
@@ -489,15 +492,25 @@ static char state_of(long pid)
  * process sleeps only in the read(2) that waits for the keeper's go. Waits
  * until it is in one state or has run.
  *
- * @return 1 when held, 0 when it ran first.
+ * @return 1 when held, 0 when it ran first or its state is unavailable.
  */
 static int held_asleep(long pid)
 {
+    struct timespec pause = {0, 1000000};
+    char state;
+
     for (;;) {
         if (ran_case(pid))
             return 0;
-        if (state_of(pid) == 'S')
+        state = state_of(pid);
+        if (state == 'S')
             return !ran_case(pid);
+        if (state == 0 || state == 'Z' || state == 'T') {
+            fprintf(stderr, "etude-exec-test: held process %ld: state %d\n", pid, (int)state);
+            return 0;
+        }
+        /* interval: observe a transitional state again after 1 ms */
+        nanosleep(&pause, NULL);
     }
 }
 
@@ -515,6 +528,7 @@ static int held_asleep(long pid)
 static int held(long pid)
 {
     char path[64], buf[256];
+    struct timespec pause = {0, 1000000};
     long nr;
     size_t n;
     FILE *f;
@@ -525,12 +539,17 @@ static int held(long pid)
         if (f == NULL)
             return errno == EACCES || errno == EPERM ? held_asleep(pid) : 0;
         n = fread(buf, 1, sizeof(buf) - 1, f);
+        int bad = ferror(f) || n == 0;
         fclose(f);
+        if (bad)
+            return 0;
         buf[n] = '\0';
         if (sscanf(buf, "%ld", &nr) == 1 && nr == SYS_read)
             return !ran_case(pid);
         if (ran_case(pid))
             return 0;
+        /* interval: observe a transitional syscall again after 1 ms */
+        nanosleep(&pause, NULL);
     }
 }
 
@@ -560,6 +579,9 @@ static int record(void *ctx, const char *attempt_id, const struct etude_pid *kee
     r->keeper = keeper->pid;
     r->process = process->pid;
     r->held = held(process->pid);
+    CHECK(r->held, attempt_id);
+    if (!r->held)
+        return EIO;
     return ctx != NULL ? *(const int *)ctx : 0;
 }
 
