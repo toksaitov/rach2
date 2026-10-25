@@ -105,8 +105,6 @@ python_path()
 }
 tree_native=$(native_path "$tree")
 out_native=$(native_path "$out")
-generator=$(python_path "$tree/tools/etude/measurement_context.py")
-[ -f "$generator" ] || refuse 'measurement context generator is absent'
 for name in prepare.record preparation.receipt.json selection.list selection.export.json source.json source.descriptor.json context; do
     [ ! -e "$out/$name" ] && [ ! -L "$out/$name" ] || refuse "output exists: $out/$name"
 done
@@ -152,9 +150,9 @@ if [ "$purpose" != phase_first_run ]; then
     "$etude" run -N -J "$out_native/selection.export.json" -t "$tree_native" -a "$arches" -A "$accel" "$@"
 fi
 "$etude" run -N -t "$tree_native" -a "$arches" -p "$out_native/prepare.record" -A "$accel" "$@" > "$out/selection.list"
-"$python" "$generator" source --tree "$tree_native" --commit "$commit" --output "$out_native/source.json" > "$out/source.descriptor.json"
+"$etude" prepare source --tree "$tree_native" --commit "$commit" --output "$out_native/source.json" > "$out/source.descriptor.json"
 source_sha=$("$python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$(python_path "$out/source.descriptor.json")")
-set -- compose --tree "$tree_native" --commit "$commit" \
+set -- prepare context --tree "$tree_native" --commit "$commit" \
     --source-snapshot "$out_native/source.json" --source-sha256 "$source_sha" \
     --record "$out_native/prepare.record" --site "$site" --etude "$etude" \
     --tool "$compiler" --tool "$python" --tool "$qemu_i686" --tool "$qemu_x86_64" \
@@ -165,7 +163,7 @@ set -- compose --tree "$tree_native" --commit "$commit" \
     --ordinary-preparation 'Selected candidate production, verification, source capture and context composition occur inside admission.' \
     --one-time-production 'Existing installed toolchains and pinned download caches are retained; candidate artifact production is ordinary preparation.'
 if [ -n "${ETUDE_CACHE_PROTOCOL:-}" ]; then
-    set -- "$@" --cache-protocol "$(python_path "$ETUDE_CACHE_PROTOCOL")"
+    set -- "$@" --cache-protocol "$(native_path "$ETUDE_CACHE_PROTOCOL")"
 fi
 # A fixed x86-64 helper may also be prepared for an i686-only selection.
 for arch in i686 x86_64; do
@@ -210,5 +208,5 @@ fi
 if [ "$purpose" = phase_first_run ]; then
     set -- "$@" --selection-export "$(native_path "$ETUDE_PHASE_SELECTION_EXPORT")"
 fi
-"$python" "$generator" "$@"
+"$etude" "$@"
 finished=1
