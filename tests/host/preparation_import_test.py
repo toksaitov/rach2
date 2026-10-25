@@ -22,6 +22,34 @@ from routine_route_test import RouteTests
 
 
 class ImportTests(unittest.TestCase):
+    def test_etude_partition_modes(self):
+        repo = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(repo / 'tests/cases/host'))
+        import prepare as inventory
+        import routing
+        manifest = json.loads((repo / 'tests/cases/host.host.json').read_text())
+        cases = {c['case_id']: c for c in manifest['cases'] if
+                 c['case_id'] in ('host.host.etude', 'host.host.etude_quiet')}
+        owners = {}
+        for identity, case in cases.items():
+            limit = next(w['limit'] for w in case['progress'] if w['witness_id'] == 'checks')
+            self.assertEqual(limit, len(case['assertions']))
+            for assertion in case['assertions']:
+                name = assertion['assertion_id']
+                if name != 'listed':
+                    self.assertNotIn(name, owners)
+                    owners[name] = identity
+        self.assertEqual({name for name, owner in owners.items() if owner.endswith('_quiet')},
+                         {'etude_platform', 'etude_remote', 'etude_repeat'})
+        for windows_host in (False, True):
+            with self.subTest(windows=windows_host), \
+                    patch.object(routing, 'windows_host', return_value=windows_host):
+                prepared = list(inventory.checks('etude', 'i686', Path('build/tests/host-suite/etude')))
+            self.assertEqual({item['assertion_id'] for item in prepared}, set(owners))
+            for item in prepared:
+                self.assertEqual(item['mode'], 'alone' if owners[item['assertion_id']].endswith('_quiet')
+                                 else 'shared', item['assertion_id'])
+
     def test_script_partition_routes(self):
         repo = Path(__file__).resolve().parents[2]
         sys.path.insert(0, str(repo / 'tests/cases/host'))

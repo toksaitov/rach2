@@ -1,5 +1,11 @@
 /* Both scheduling partitions validate one complete immutable inventory. */
-enum partition_fault { PARTITION_OK, PARTITION_OVERLAP, PARTITION_OMITTED, PARTITION_EXTRA };
+enum partition_fault {
+    PARTITION_OK,
+    PARTITION_OVERLAP,
+    PARTITION_OMITTED,
+    PARTITION_EXTRA,
+    PARTITION_SHARED_PLATFORM
+};
 
 static void partition_manifest(enum partition_fault fault)
 {
@@ -8,12 +14,15 @@ static void partition_manifest(enum partition_fault fault)
     if (!f)
         return;
     fputs("{\"cases\":[{\"case_id\":\"host.host.etude\",\"assertions\":["
-          "{\"assertion_id\":\"listed\"},{\"assertion_id\":\"etude_a\"}]},"
-          "{\"case_id\":\"host.host.etude_quiet\",\"assertions\":["
+          "{\"assertion_id\":\"listed\"},{\"assertion_id\":\"etude_a\"}",
+          f);
+    if (fault == PARTITION_SHARED_PLATFORM)
+        fputs(",{\"assertion_id\":\"etude_platform\"}", f);
+    fputs("]},{\"case_id\":\"host.host.etude_quiet\",\"assertions\":["
           "{\"assertion_id\":\"listed\"}",
           f);
-    if (fault != PARTITION_OMITTED)
-        fputs(",{\"assertion_id\":\"etude_b\"}", f);
+    if (fault != PARTITION_OMITTED && fault != PARTITION_SHARED_PLATFORM)
+        fputs(",{\"assertion_id\":\"etude_platform\"}", f);
     if (fault == PARTITION_OVERLAP)
         fputs(",{\"assertion_id\":\"etude_a\"}", f);
     if (fault == PARTITION_EXTRA)
@@ -37,14 +46,14 @@ static void partition_inventory(int missing, int wrong_mode)
             manifest);
     for (int i = 0; i < (missing ? 1 : 2); i++) {
         char path[128];
-        snprintf(path, sizeof(path), "tests/host/etude_%c_hosttest.c", 'a' + i);
+        const char *id = i ? "etude_platform" : "etude_a";
+        snprintf(path, sizeof(path), "tests/host/%s_hosttest.c", id);
         hash(path, source);
         fprintf(f,
-                "%s{\"assertion_id\":\"etude_%c\",\"label\":\"partition probe\","
+                "%s{\"assertion_id\":\"%s\",\"label\":\"partition probe\","
                 "\"mode\":\"%s\",\"program\":\"build/tests/probe\",\"sha256\":\"%s\","
                 "\"arguments\":[\"--probe\"],\"inputs\":[{\"path\":\"%s\",\"sha256\":\"%s\"}]}",
-                i ? "," : "", 'a' + i, i && !wrong_mode ? "alone" : "shared", program, path,
-                source);
+                i ? "," : "", id, i && !wrong_mode ? "alone" : "shared", program, path, source);
     }
     fputs("]}\n", f);
     CHECK(!fclose(f), "partition inventory closes");
@@ -66,18 +75,19 @@ static void partitions(void)
     char output[32768];
     copy_probe();
     put("tests/host/etude_a_hosttest.c", "/* shared prepared source */\n");
-    put("tests/host/etude_b_hosttest.c", "/* host-alone: private response check */\n");
+    put("tests/host/etude_platform_hosttest.c",
+        "/* host-alone: native platform fixture isolation */\n");
     partition_manifest(PARTITION_OK);
     partition_inventory(0, 0);
     CHECK(run_group(output, sizeof(output), "etude", NULL) == 0 &&
-              strstr(output, "assert etude_a pass") && !strstr(output, "assert etude_b"),
+              strstr(output, "assert etude_a pass") && !strstr(output, "assert etude_platform"),
           "shared partition executes only its declared fixture");
     CHECK(run_group(output, sizeof(output), "etude_quiet", NULL) == 0 &&
-              strstr(output, "assert etude_b pass") && !strstr(output, "assert etude_a"),
+              strstr(output, "assert etude_platform pass") && !strstr(output, "assert etude_a"),
           "quiet partition executes only its declared fixture from the same inventory");
-    CHECK(run_group(output, sizeof(output), "etude", "etude_b") == 0 &&
+    CHECK(run_group(output, sizeof(output), "etude", "etude_platform") == 0 &&
               strstr(output, "begin host.host.etude_quiet") &&
-              strstr(output, "assert etude_b pass") && !strstr(output, "assert etude_a"),
+              strstr(output, "assert etude_platform pass") && !strstr(output, "assert etude_a"),
           "an existing one-fixture request resolves its owning partition");
     partition_refusal(PARTITION_OVERLAP, 0, 0, "overlapping declarations refuse before launch");
     partition_refusal(PARTITION_OMITTED, 0, 0,
@@ -85,6 +95,8 @@ static void partitions(void)
     partition_refusal(PARTITION_EXTRA, 0, 0, "a missing companion fixture refuses before launch");
     partition_refusal(PARTITION_OK, 1, 0, "an incomplete inventory refuses before shared launch");
     partition_refusal(PARTITION_OK, 0, 1, "a quiet mode mismatch refuses before launch");
+    partition_refusal(PARTITION_SHARED_PLATFORM, 0, 0,
+                      "an alone platform entry in the shared partition refuses before launch");
 }
 
 static void script_driver_manifest(int duplicate)
