@@ -1815,3 +1815,11 @@ The control now derives the exact suite operands from the current registry and c
 The worker checking issue 1168 placed ETUDE_SITE inside the launched command instead of in the launcher's environment. The local host-fixture compiler therefore ran without the intended admission. The general host inventory then requested an unstaged guest image and stopped. No fixture or guest ran; the compiler output and failed wrapper log were retained under build/tests/1168 in the issue's worktree.
 
 The correction supplies the policy to the outer launcher and runs only the required native fixture. A completed compiler output can still be checked against its actual inputs and used; compiling it again cannot change the missing admission of its original event. A direct compiler or bounded host command must put the launcher's required environment before that launcher, and must use the narrow existing target rather than a general inventory that introduces unrelated guest artifacts.
+
+## Stopping on failure skipped cases refused before execution (#1168)
+
+The set driver applied the first-failure policy only after a running case ended. A case refused while publishing artifacts, waiting for admission, taking locks, loading or starting could become incomplete without stopping later work. Its released claim could admit another case while the failed workspace remained retained.
+
+The common policy now checks completed members before admission and checks each member immediately after advancing it. The original incomplete outcome and its evidence remain unchanged. The normal batch still continues when first-failure mode is disabled.
+
+The existing native fixture now puts a regular file in place of the first case's working directory. With first-failure mode enabled, the next case has no attempt and writes no marker; with it disabled, that case passes and writes its marker. The focused native rows passed with AddressSanitizer and UndefinedBehaviorSanitizer. Linking the same regression fixture against the original implementation failed all three next-case cancellation assertions; the ordinary continuation and existing completed-failure row still passed.
