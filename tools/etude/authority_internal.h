@@ -21,6 +21,7 @@ struct etude_authority {
     int exclusive;
 };
 int authority_binding_read(struct authority_binding *binding);
+int authority_route(const char *site, const char *route, struct authority_binding *binding);
 int authority_state_read(const struct authority_binding *binding, struct authority_state *state);
 int authority_state_write(const struct authority_binding *binding,
                           const struct authority_state *state);
