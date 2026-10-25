@@ -972,6 +972,75 @@ static void check_scripted_run(void)
     finish(h);
 }
 
+/* End a scripted ordinary or service attempt with its complete records. */
+static void service_end(struct harness *h, const char *cmd, const char *token, const char *kind,
+                        const char *value, const char *text)
+{
+    event(h, 5000, ETUDE_EV_EXIT, cmd, token, kind, value, (char *)NULL);
+    fake_stream(h, cmd, token, 1, text, strlen(text));
+    fake_stream(h, cmd, token, 2, "", 0);
+    event(h, 5000, ETUDE_EV_USAGE, cmd, token, "12", "service-cpu", "4096", "service-peak",
+          (char *)NULL);
+    event(h, 5000, ETUDE_EV_CLEANED, cmd, token, "confirmed", (char *)NULL);
+}
+
+/* Service events share wire ordering, but never another operation's result. */
+static void check_scripted_service(void)
+{
+    struct harness *h = &H;
+    const struct etude_serial_result *r;
+    const char *service = "00000000000000b1", *ordinary = "00000000000000b2";
+    char first[24], next[24], text[64], copy[LINE_CAP];
+    struct wire_frame f;
+
+    scripted_open(h, "etude-serial-test services", KEEP);
+    CHECK(etude_serial_background(h->s) < 0, "a service must be a started run");
+    fake_run(h, service, first);
+    event(h, 5000, ETUDE_EV_STARTED, first, service, "321", "654", (char *)NULL);
+    CHECK(etude_serial_background(h->s) == 0 && etude_serial_background_running(h->s),
+          "a started run remains owned as a service");
+    CHECK(etude_serial_background(h->s) < 0 && etude_serial_bye(h->s, 5000) < 0,
+          "a second service and bye before its finish are refused");
+    check_staged_put(h);
+    fake_run(h, ordinary, next);
+    event(h, 5000, ETUDE_EV_STARTED, next, ordinary, "322", "655", (char *)NULL);
+    event(h, 5000, ETUDE_EV_OUT, first, service, "1", "0", b64("service", text), (char *)NULL);
+    CHECK(etude_serial_result(h->s)->out.kept == 0 && etude_serial_background_running(h->s),
+          "service output is not ordinary command output");
+    CHECK(etude_serial_foreground(h->s) < 0, "a busy ordinary operation cannot be replaced");
+    service_end(h, first, service, "exited", "0", "service");
+    CHECK(!etude_serial_background_running(h->s) && etude_serial_status(h->s) == ETUDE_SERIAL_BUSY,
+          "service completion does not complete the ordinary command");
+    service_end(h, next, ordinary, "exited", "7", "");
+    CHECK(etude_serial_result(h->s)->value == 7 && etude_serial_result(h->s)->complete,
+          "the ordinary command keeps its own complete result");
+    CHECK(etude_serial_foreground(h->s) == 0 && !etude_serial_has_background(h->s),
+          "a completed service returns through normal result processing");
+    r = etude_serial_result(h->s);
+    CHECK(r->complete && r->value == 0 && r->cleanup == ETUDE_CLEANUP_CONFIRMED &&
+              !strcmp(r->out.data, "service") && !strcmp(r->cpu_us.method, "service-cpu"),
+          "service output, cleanup and measurement strings survive later operations");
+    fake_run(h, service, first);
+    event(h, 5000, ETUDE_EV_STARTED, first, service, "323", "656", (char *)NULL);
+    CHECK(etude_serial_background(h->s) == 0 && etude_serial_foreground(h->s) == 0 &&
+              etude_serial_cancel(h->s, 5000) == 0 && last_of(h, ETUDE_CMD_CANCEL, &f, copy) >= 0 &&
+              !strcmp(f.field[1], service),
+          "service cancellation addresses its original attempt");
+    service_end(h, first, service, "stopped", "15", "");
+    CHECK(etude_serial_result(h->s)->complete &&
+              etude_serial_result(h->s)->cleanup == ETUDE_CLEANUP_CONFIRMED,
+          "a cancelled service still requires its complete cleanup records");
+    fake_run(h, service, first);
+    event(h, 5000, ETUDE_EV_STARTED, first, service, "324", "657", (char *)NULL);
+    CHECK(etude_serial_background(h->s) == 0, "a new service starts after prior cleanup");
+    etude_serial_closed(h->s);
+    CHECK(!etude_serial_background_running(h->s) && etude_serial_foreground(h->s) == 0 &&
+              etude_serial_result(h->s)->end == ETUDE_END_LOST &&
+              etude_serial_result(h->s)->cleanup == ETUDE_CLEANUP_UNCONFIRMED,
+          "console loss cannot confirm a background service cleanup");
+    finish(h);
+}
+
 /** A scripted etude-guest that starts again during a run, and the session
  * opened with it. */
 static void check_scripted_restart(void)
@@ -1508,6 +1577,33 @@ static void check_guest_runs(struct harness *h, const char *run_id)
           "a cancelled run is stopped and its processes are gone");
 }
 
+/* The real responder keeps an owned service alive across another command. */
+static void check_guest_service(struct harness *h, const char *run_id)
+{
+    char inv[65];
+    long pid;
+    const struct etude_serial_result *r;
+
+    CHECK(prepare(h, run_id, "forever", forever, "00000000000000d5", inv) == 0 &&
+              run(h, "00000000000000d5", inv, UNTIL_READY),
+          "a real guest service publishes readiness");
+    pid = etude_serial_result(h->s)->process.pid;
+    note_group(h);
+    CHECK(etude_serial_background(h->s) == 0 && etude_serial_background_running(h->s),
+          "the real service remains below its command owner");
+    CHECK(prepare(h, run_id, "passing", pass, "00000000000000d6", inv) == 0 &&
+              run(h, "00000000000000d6", inv, UNTIL_END) && passed(h) &&
+              etude_serial_background_running(h->s),
+          "a second real command and its transfers complete beside the service");
+    CHECK(etude_serial_foreground(h->s) == 0 && etude_serial_cancel(h->s, now_us()) == 0 &&
+              serve(h, UNTIL_END),
+          "the real service cancels through its original command identity");
+    r = etude_serial_result(h->s);
+    CHECK(r->complete && r->end == ETUDE_END_STOPPED && r->cleanup == ETUDE_CLEANUP_CONFIRMED &&
+              group_gone(pid),
+          "the real service ends and its owned processes are gone");
+}
+
 /** End the session with bye, and open another. */
 static void check_guest_bye(struct harness *h)
 {
@@ -1557,6 +1653,7 @@ static void check_guest(void)
         check_guest_stores(h, state);
         check_installed(h);
         check_guest_runs(h, run_id);
+        check_guest_service(h, run_id);
         check_guest_bye(h);
     }
     end_guest(h);
@@ -1708,6 +1805,7 @@ int main(void)
     check_scripted_session();
     check_scripted_run();
     check_scripted_restart();
+    check_scripted_service();
     check_guest();
     check_relay();
     check_closed();

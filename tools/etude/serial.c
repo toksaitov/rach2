@@ -117,6 +117,7 @@ struct etude_serial {
     /* the console's line being read */
     char line[LINE_KEEP + 1];
     size_t line_len;
+    struct etude_serial *service; /* one owned run beside ordinary operations */
 };
 
 /** Set why the operation stands as it does. */
@@ -199,6 +200,8 @@ static void end_op(struct etude_serial *s, enum etude_serial_status st, const ch
 static void lose(struct etude_serial *s, const char *why)
 {
     end_op(s, ETUDE_SERIAL_LOST, "%s", why);
+    if (s->service != NULL)
+        lose(s->service, why);
     s->live = 0;
     s->open = 0;
     s->need_ack = 0;
@@ -758,6 +761,11 @@ static void take_event(struct etude_serial *s, const struct wire_frame *f)
 {
     uint64_t cmd;
 
+    if (s->service != NULL && f->nfields >= 1 && wire_number(f->field[0], &cmd) &&
+        (cmd == s->service->cmd || cmd == s->service->cancel_cmd)) {
+        take_event(s->service, f);
+        return;
+    }
     if (s->status != ETUDE_SERIAL_BUSY)
         return;
     if (f->nfields < 1 || !wire_number(f->field[0], &cmd) || cmd == 0 || cmd >= s->next_cmd) {
@@ -891,6 +899,7 @@ void etude_serial_free(struct etude_serial *s)
         return;
     capture_free(&s->result.out);
     capture_free(&s->result.err);
+    etude_serial_free(s->service);
     free(s);
 }
 
@@ -1089,6 +1098,81 @@ int etude_serial_run(struct etude_serial *s, const char *attempt, const char *in
     return 0;
 }
 
+/* Keep a started run's command identity and event state, not another wire
+ * session. Its output stays separate from the foreground operation. */
+int etude_serial_background(struct etude_serial *s)
+{
+    struct etude_serial *service;
+
+    if (s->service != NULL || s->op != OP_RUN || s->status != ETUDE_SERIAL_BUSY ||
+        !s->result.started || s->have_exit) {
+        errno = EBUSY;
+        return -1;
+    }
+    service = malloc(sizeof(*service));
+    if (service == NULL)
+        return -1;
+    *service = *s;
+    service->conf.output = NULL;
+    s->service = service;
+    memset(&s->result, 0, sizeof(s->result));
+    s->op = OP_NONE;
+    s->status = ETUDE_SERIAL_DONE;
+    s->why[0] = '\0';
+    return 0;
+}
+
+/* Move only the saved operation back. The live wire counters, queued
+ * frames, console input and current command number must not move. */
+int etude_serial_foreground(struct etude_serial *s)
+{
+    struct etude_serial *service = s->service;
+
+    if (service == NULL || s->status == ETUDE_SERIAL_BUSY) {
+        errno = EBUSY;
+        return -1;
+    }
+    capture_free(&s->result.out);
+    capture_free(&s->result.err);
+    s->op = service->op;
+    s->status = service->status;
+    s->cmd = service->cmd;
+    s->cancel_cmd = service->cancel_cmd;
+    memcpy(s->why, service->why, sizeof(s->why));
+    memcpy(s->attempt, service->attempt, sizeof(s->attempt));
+    s->have_exit = service->have_exit;
+    memcpy(s->have_stream, service->have_stream, sizeof(s->have_stream));
+    s->have_usage = service->have_usage;
+    s->have_cleaned = service->have_cleaned;
+    memcpy(s->sizes_known, service->sizes_known, sizeof(s->sizes_known));
+    s->damaged = service->damaged;
+    memcpy(s->sent, service->sent, sizeof(s->sent));
+    memcpy(s->digest, service->digest, sizeof(s->digest));
+    memcpy(s->got, service->got, sizeof(s->got));
+    memcpy(s->got_sha, service->got_sha, sizeof(s->got_sha));
+    s->result = service->result;
+    if (service->result.cpu_us.method == service->result.cpu_method)
+        s->result.cpu_us.method = s->result.cpu_method;
+    if (service->result.peak_bytes.method == service->result.peak_method)
+        s->result.peak_bytes.method = s->result.peak_method;
+    s->service = NULL;
+    free(service);
+    return 0;
+}
+
+int etude_serial_background_running(const struct etude_serial *s)
+{
+    const struct etude_serial *service = s->service;
+
+    return service != NULL && service->status == ETUDE_SERIAL_BUSY && service->result.started &&
+           !service->have_exit;
+}
+
+int etude_serial_has_background(const struct etude_serial *s)
+{
+    return s->service != NULL;
+}
+
 int etude_serial_cancel(struct etude_serial *s, uint64_t now_us)
 {
     char cmd[24];
@@ -1119,6 +1203,10 @@ int etude_serial_bye(struct etude_serial *s, uint64_t now_us)
     char cmd[24];
     const char *a[1];
 
+    if (s->service != NULL) {
+        errno = EBUSY;
+        return -1;
+    }
     if (!may_begin(s, 1))
         return -1;
     snprintf(cmd, sizeof(cmd), "%llu", (unsigned long long)s->next_cmd);
