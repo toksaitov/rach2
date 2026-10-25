@@ -1080,7 +1080,7 @@ static void test_audio_argv(void)
                       i == 0 ? "intel-hda,id=etude-hda" : "sb16,audiodev=etude-audio"),
               "audio controller");
         if (i == 0)
-            CHECK(has_arg(argv, "-device", "hda-duplex,bus=etude-hda.0,audiodev=etude-audio"),
+            CHECK(has_arg(argv, "-device", "hda-output,bus=etude-hda.0,audiodev=etude-audio"),
                   "audio HDA codec");
     }
     CHECK(etude_qemu_argv(&p, &site, "/c", "/q", NULL, &out) == EINVAL,
