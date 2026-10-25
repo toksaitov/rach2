@@ -313,6 +313,10 @@ static int setup(struct deploy *d, struct fixture *f)
     snprintf(target, sizeof(target), "%s/utils/sha256.h", d->tree);
     if (!fx_copy(flow_source(f, "utils/sha256.h"), target))
         return 0;
+    snprintf(target, sizeof(target), "%s/tools/etude/ledger.c", d->tree);
+    if (!flow_version_mock_source(d->tree) ||
+        !fx_copy(flow_source(f, "tools/etude/ledger.c"), target))
+        return 0;
     fx_env("TREE", d->tree);
     fx_env("FIX", d->fix);
     fx_env("FLOW_DEPLOY", "1");

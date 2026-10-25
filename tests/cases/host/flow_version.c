@@ -405,10 +405,10 @@ static int version_copy_source(struct version *v)
     return 1;
 }
 
-/* Publication rows use fakecc, which hashes its inputs. Keep the real file
- * names and make rules, but use short source text for these repeated rows.
- * The real compiler row restores every source before it builds the product. */
-static int version_mock_source(const char *path)
+/* Mock compiler rows keep paths and build rules but need only short C and
+ * header contents. Callers preserve source parsed as data and restore full
+ * sources before a real compiler row. */
+int flow_version_mock_source(const char *path)
 {
     struct stat st;
     struct dirent *entry;
@@ -429,7 +429,7 @@ static int version_mock_source(const char *path)
         if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
             continue;
         int length = snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
-        if (length < 0 || (size_t)length >= sizeof(child) || !version_mock_source(child))
+        if (length < 0 || (size_t)length >= sizeof(child) || !flow_version_mock_source(child))
             ok = 0;
     }
     return !closedir(dir) && ok;
@@ -444,7 +444,7 @@ static int version_setup(struct version *value, struct fixture *f)
     snprintf(v.tree, sizeof(v.tree), "%s/tree", f->work);
     snprintf(v.fix, sizeof(v.fix), "%s/fix", f->work);
     snprintf(v.script, sizeof(v.script), "%s/tools/etude/provision_version.sh", v.tree);
-    if (!version_copy_source(&v) || !version_mock_source(v.tree))
+    if (!version_copy_source(&v) || !flow_version_mock_source(v.tree))
         return 0;
     fx_env("TREE", v.tree);
     fx_env("FIX", v.fix);
