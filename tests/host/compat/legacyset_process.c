@@ -45,8 +45,15 @@ static void child_cleanup(void)
 }
 
 #ifdef _WIN32
+static PVOID volatile break_acknowledgement;
+
 static BOOL WINAPI ignore_console(DWORD event)
 {
+    if (event == CTRL_BREAK_EVENT) {
+        HANDLE ack = (HANDLE)InterlockedCompareExchangePointer(&break_acknowledgement, NULL, NULL);
+        if (ack != NULL)
+            SetEvent(ack);
+    }
     return event == CTRL_BREAK_EVENT || event == CTRL_C_EVENT;
 }
 
@@ -284,18 +291,31 @@ int legacy_child_stop(struct legacy_child *c)
 #ifdef _WIN32
     DWORD ids[1];
     int original = GetConsoleProcessList(ids, 1) > 0;
+    HANDLE ack = CreateEventW(NULL, TRUE, FALSE, NULL);
     int ok;
+    if (ack == NULL)
+        return -1;
     FreeConsole();
     if (!AttachConsole(c->pid)) {
         if (original)
             AttachConsole(ATTACH_PARENT_PROCESS);
+        if (stop_callback != NULL)
+            SetConsoleCtrlHandler(console_stop, TRUE);
+        CloseHandle(ack);
         return -1;
     }
-    SetConsoleCtrlHandler(ignore_console, TRUE);
-    ok = GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, 0);
+    InterlockedExchangePointer(&break_acknowledgement, ack);
+    ok = SetConsoleCtrlHandler(ignore_console, TRUE) &&
+         GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, 0);
+    if (ok)
+        ok = WaitForSingleObject(ack, INFINITE) == WAIT_OBJECT_0;
+    InterlockedExchangePointer(&break_acknowledgement, NULL);
     FreeConsole();
     if (original)
         AttachConsole(ATTACH_PARENT_PROCESS);
+    if (stop_callback != NULL)
+        SetConsoleCtrlHandler(console_stop, TRUE);
+    CloseHandle(ack);
     return ok ? 0 : -1;
 #else
     return kill(c->pid, SIGTERM);
