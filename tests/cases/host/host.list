@@ -1,10 +1,9 @@
-# host.list: the scripted checks of the host case host.host.scripts
-# (host.sh), one a line, as NAME|LABEL|COMMAND. NAME is the check's
-# assertion in tests/cases/host.host.json and names its log and scratch
-# directory, LABEL is what its result line says it checked, and COMMAND runs
-# it from the root of the tree; its exit status 0 is a pass. No check is
-# ended for its time. The checks start in the order of the lines, the
-# longest first, so that a long check does not run alone at the end.
+# host.list: the complete inventory shared by the five scripted host cases.
+# One row is NAME|LABEL|COMMAND. NAME is the original assertion identifier
+# and names its log and scratch directory. LABEL describes the check.
+# COMMAND is the legacy host.sh interface; prepared adapters execute the
+# collection checks. Each partition preserves its selected rows' order.
+# The ordinary scheduler orders the independent cases and seeded repeats.
 mkext2_overlay|the modes an ext2 overlay adds under umask 002|sh tests/system/mkext2_overlay_test.sh
 machine_measure|the measurement drivers of tools/dev against fake commands|sh tests/system/machine_measure_test.sh
 krffs_open|krffs publication open|sh tests/host/extract_check.sh krffs_open

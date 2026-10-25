@@ -80,21 +80,23 @@ static void copy_probe(void)
     CHECK(chmod(fix_path("build/tests/probe"), 0700) == 0, "probe executable");
 }
 
-static void inventory(int omit, const char *unsupported)
+static void inventory(const char *group, int omit, const char *unsupported)
 {
     char manifest[65], program[65], source[65], extra[65];
     hash("tests/cases/host.host.json", manifest);
     hash("build/tests/probe", program);
     hash("tests/host/a_hosttest.c", source);
     hash("tests/host/\303\251.txt", extra);
-    FILE *f = fopen(fix_path("build/tests/host-suite/tests.inventory.json"), "wb");
+    char path[160];
+    snprintf(path, sizeof(path), "build/tests/host-suite/%s.inventory.json", group);
+    FILE *f = fopen(fix_path(path), "wb");
     CHECK(f != NULL, "inventory opens");
     if (!f)
         return;
     fprintf(f,
-            "{\"schema_version\":1,\"group\":\"tests\",\"architecture\":\"i686\","
+            "{\"schema_version\":1,\"group\":\"%s\",\"architecture\":\"%s\","
             "\"manifest_sha256\":\"%s\",\"checks\":[",
-            manifest);
+            group, !strcmp(group, "tests") ? "i686" : "none", manifest);
     for (int i = 0; i < (omit ? 1 : 2); i++) {
         fprintf(f,
                 "%s{\"assertion_id\":\"%c\",\"label\":\"probe %c\",\"mode\":\"shared\","
@@ -202,14 +204,14 @@ static void encoded_inputs(void)
                                 "\"path\":\"tests/host/a_hosttest.c\",\"path_hex\":\"61\"",
                                 "\"path\":\"tests/host/a_hosttest.c\",\"path_hex\":null"};
     extra_input = "\"path_hex\":\"74657374732f686f73742fc3a92e747874\"";
-    inventory(0, NULL);
+    inventory("tests", 0, NULL);
     CHECK(run(output, sizeof(output)) == 0, "encoded filename bytes are verified");
     put("tests/host/\303\251.txt", "changed fixture\n");
     CHECK(run(output, sizeof(output)) == 1 && strstr(output, "input changed"),
           "changed encoded input is refused before execution");
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
         extra_input = bad[i];
-        inventory(0, NULL);
+        inventory("tests", 0, NULL);
         CHECK(run(output, sizeof(output)) == 1 && strstr(output, "input changed"),
               "malformed or unsafe encoded input is rejected");
     }
@@ -220,12 +222,12 @@ static void checks(void)
 {
     char output[32768];
     CHECK(run(output, sizeof(output)) == 2, "unprepared inventory is rejected");
-    inventory(0, NULL);
+    inventory("tests", 0, NULL);
     CHECK(run(output, sizeof(output)) == 0 && strstr(output, "assert a pass") &&
               strstr(output, "assert b pass") && strstr(output, "assert listed pass"),
           "prepared binaries execute with isolated scratch and fatal sanitizer settings");
     encoded_inputs();
-    inventory(0, NULL);
+    inventory("tests", 0, NULL);
     setenv("HOST_PROBE_FAIL", "1", 1);
     CHECK(run(output, sizeof(output)) == 1 && strstr(output, "assert a fail") &&
               strstr(output, "probe complete"),
@@ -234,21 +236,21 @@ static void checks(void)
     put("tests/host/a_hosttest.c", "/* changed source */\n");
     CHECK(run(output, sizeof(output)) == 1 && strstr(output, "input changed"),
           "changed source is refused before execution");
-    inventory(1, NULL);
+    inventory("tests", 1, NULL);
     CHECK(run(output, sizeof(output)) == 1 && strstr(output, "assert b fail") &&
               strstr(output, "assert listed fail"),
           "missing prepared assertion fails explicitly");
-    inventory(0, "a native adapter is required");
+    inventory("tests", 0, "a native adapter is required");
     CHECK(run(output, sizeof(output)) == 1 && strstr(output, "native adapter is required") &&
               !strstr(output, "probe complete"),
           "unsupported checks cannot become passes");
-    inventory(0, NULL);
+    inventory("tests", 0, NULL);
     put("tests/host/c_hosttest.c", "/* new source */\n");
     CHECK(run(output, sizeof(output)) == 1 && strstr(output, "assert listed fail"),
           "new source cannot disappear behind an old prepared inventory");
     CHECK(unlink(fix_path("tests/host/c_hosttest.c")) == 0, "new source removed");
     put("build/tests/probe", "#!/bin/sh\nexit 0\n");
-    inventory(0, NULL);
+    inventory("tests", 0, NULL);
     CHECK(run(output, sizeof(output)) == 1 && strstr(output, "program is a script"),
           "a matching script digest cannot bypass native execution");
 }
@@ -267,6 +269,7 @@ int main(int argc, char **argv)
         fixtures();
         checks();
         partitions();
+        script_driver_partitions();
     }
     if (!failures)
         fix_passed();
