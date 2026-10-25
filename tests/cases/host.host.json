@@ -701,6 +701,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "sshpeer",
+          "checks": "tests/host/sshpeer_hosttest.c compiles under ASan and UBSan and checks paced readiness retries and unchanged deliberate flooding",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "synthfs",
           "checks": "tests/host/synthfs_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
