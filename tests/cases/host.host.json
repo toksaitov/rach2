@@ -2087,7 +2087,7 @@
             "fixture": "scratch"
           }
         ],
-        "children": "reaped",
+        "children": "reported",
         "cleanup": "the prepared native host driver reaps every fixture child and removes successful private scratch"
       },
       "assertions": [
