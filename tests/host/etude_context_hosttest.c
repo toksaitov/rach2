@@ -305,7 +305,72 @@ static void test_windows_clock(void)
 
 #include "compat/context_compose_host.c"
 
-int main(void)
+/* The external producer's real filename has one UTF-8 canonical spelling. */
+static void test_external_json(void)
+{
+    const char *raw = "{\"nested\":{\"exfat_src/e\303\251t\303\251.txt\":{\"size_bytes\":7}},"
+                      "\"last_used\":1761444000.125}";
+    const char *escaped = "{\"nested\":{\"exfat_src/e\\u00e9t\\u00e9.txt\":{\"size_bytes\":7}},"
+                          "\"last_used\":1761444000.125}";
+    struct json *one = NULL, *two = NULL, *again = NULL;
+    char why[256];
+    CHECK(!json_parse_data(raw, strlen(raw), 1, &one, why, sizeof(why)),
+          "actual exFAT UTF-8 key parses as external data");
+    CHECK(!json_parse_data(escaped, strlen(escaped), 1, &two, why, sizeof(why)),
+          "escaped exFAT key parses as external data");
+    CHECK(one && two && json_equal(one, two), "raw and escaped keys identify the same file");
+    struct jbuf a = {0}, b = {0};
+    if (one)
+        json_canonical(one, &a);
+    if (two)
+        json_canonical(two, &b);
+    CHECK(a.data && b.data && !strcmp(a.data, b.data), "equal keys have equal canonical bytes");
+    CHECK(a.data && !json_parse_data(a.data, a.len, 1, &again, why, sizeof(why)) &&
+              json_equal(one, again),
+          "external canonical bytes round trip");
+    const struct json *number = json_member(one, "last_used");
+    CHECK(number && number->type == JSON_NUMBER && !strcmp(number->string, "1761444000.125"),
+          "fractional registry timestamp retains its exact number token");
+    json_free(again);
+    again = NULL;
+    CHECK(json_parse(raw, strlen(raw), 1, &again, why, sizeof(why)) && !again,
+          "contract reader still refuses UTF-8 data");
+    CHECK(json_parse(escaped, strlen(escaped), 1, &again, why, sizeof(why)) && !again,
+          "contract reader still refuses non-ASCII escapes");
+    CHECK(json_parse("[1.25]", 6, 1, &again, why, sizeof(why)) && !again,
+          "contract reader still refuses fractional numbers");
+    const char *pair = "\"\\ud83d\\ude00\"";
+    CHECK(!json_parse_data(pair, strlen(pair), 1, &again, why, sizeof(why)) &&
+              again->type == JSON_STRING && !strcmp(again->string, "\360\237\230\200"),
+          "a valid surrogate pair becomes the exact UTF-8 scalar");
+    json_free(again);
+    again = NULL;
+    CHECK(!json_parse_data("1.25e+3", 7, 1, &again, why, sizeof(why)) &&
+              again->type == JSON_NUMBER && !strcmp(again->string, "1.25e+3"),
+          "external exponent token is retained without rounding");
+    json_free(again);
+    again = NULL;
+    const char *bad[] = {"\"\300\200\"",
+                         "\"\355\240\200\"",
+                         "\"\\ud800\"",
+                         "\"\\udc00\"",
+                         "\"\\ud800\\u0041\"",
+                         "\"\\u0000\"",
+                         "[01.2]",
+                         "[1.]",
+                         "[1e]",
+                         "[NaN]",
+                         "{\"e\303\251t\303\251.txt\":1,\"e\\u00e9t\\u00e9.txt\":2}"};
+    for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); i++)
+        CHECK(json_parse_data(bad[i], strlen(bad[i]), 1, &again, why, sizeof(why)) && !again,
+              "malformed external scalar, number or repeated decoded key is refused");
+    json_free(one);
+    json_free(two);
+    jbuf_free(&a);
+    jbuf_free(&b);
+}
+
+static int test_context(void)
 {
     char descriptor_text[2048], error[256];
     struct etude_measurement_context *c = NULL;
@@ -421,4 +486,16 @@ int main(void)
     if (!failures)
         fix_passed();
     return failures ? 1 : 0;
+}
+
+int main(int argc, char **argv)
+{
+    test_external_json();
+    if (argc == 2 && !strcmp(argv[1], "--data-only")) {
+        fix_dir();
+        if (!failures)
+            fix_passed();
+        return failures ? 1 : 0;
+    }
+    return test_context();
 }
