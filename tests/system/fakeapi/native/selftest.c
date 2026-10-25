@@ -5,6 +5,9 @@
 #define _DARWIN_C_SOURCE
 #endif
 #include "api.h"
+#ifdef _WIN32
+#include "../../../../tools/etude/volume/volume.h"
+#endif
 #include <openssl/rand.h>
 #include <signal.h>
 #include <stdlib.h>
@@ -712,9 +715,63 @@ static void audit_test(void)
     }
 }
 
+#ifdef _WIN32
+/* Exercise the service's files and OpenSSL filenames beyond MAX_PATH. */
+static void long_path_test(void)
+{
+    struct buffer directory = {0}, filename = {0};
+    struct etude_volume *archive;
+    struct value *json = NULL;
+    SSL_CTX *ctx = NULL;
+    char why[512];
+    char *names[] = {"127.0.0.1"};
+    const char *source = "{\"path\":\"kept\"}";
+    const char *tar = fix_path("long-assets.tar");
+
+    putsb(&directory, fix_dir());
+    while (directory.len <= 300) {
+        putsb(&directory, "/long asset directory abcdefghijklmnopqrstuvwxyz0123456789");
+        if (service_mkdir(directory.data)) {
+            check(0, "long private asset directory creates");
+            goto done;
+        }
+    }
+    archive = etude_volume_create(tar, 0, why, sizeof(why));
+    check(archive != NULL, "long assets archive creates");
+    if (!archive)
+        goto done;
+    check(etude_volume_dir(archive, "tools") == 0 && etude_volume_dir(archive, "vendor") == 0 &&
+              etude_volume_text(archive, "tests/system/accept/agents/agy.json", source,
+                                strlen(source)) == 0,
+          "long assets archive records its complete roots");
+    check(etude_volume_close(archive) == 0, "long assets archive closes");
+    check(unpack_assets(tar, directory.data) == 0, "long assets unpack");
+    putsb(&filename, directory.data);
+    putsb(&filename, "/tests/system/accept/agents/agy.json");
+    json = read_json(filename.data);
+    check(json && !strcmp(text(get(json, "path")), "kept"), "long asset JSON reads exactly");
+    clear(&filename);
+    putsb(&filename, directory.data);
+    putsb(&filename, "/ca");
+    check(make_ca(filename.data, 1, names) == 0, "long certificate files create");
+    ctx = server_context(filename.data);
+    check(ctx != NULL, "OpenSSL loads the long certificate and key filenames");
+done:
+    SSL_CTX_free(ctx);
+    destroy(json);
+    check(remove_assets(directory.data) == 0 && access(directory.data, F_OK) != 0,
+          "long assets and credentials are removed");
+    clear(&filename);
+    clear(&directory);
+}
+#endif
+
 int main(void)
 {
     serial_test();
+#ifdef _WIN32
+    long_path_test();
+#endif
 #ifndef _WIN32
     stop_test();
 #endif

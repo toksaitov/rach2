@@ -182,6 +182,26 @@ static int alpn(SSL *ssl, const unsigned char **out, unsigned char *len, const u
     *out = selected;
     return SSL_TLSEXT_ERR_OK;
 }
+/* OpenSSL opens these files itself, outside the service's file adapter. */
+static int use_pem(SSL_CTX *ctx, const char *name, int private_key)
+{
+#ifdef _WIN32
+    wchar_t *wide = etude_win_long_path(name);
+    char *path = wide ? etude_win_utf8(wide) : NULL;
+    free(wide);
+    if (!path)
+        return 0;
+#else
+    const char *path = name;
+#endif
+    int result = private_key ? SSL_CTX_use_PrivateKey_file(ctx, path, SSL_FILETYPE_PEM)
+                             : SSL_CTX_use_certificate_chain_file(ctx, path);
+#ifdef _WIN32
+    free(path);
+#endif
+    return result == 1;
+}
+
 SSL_CTX *server_context(const char *dir)
 {
     SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
@@ -190,13 +210,12 @@ SSL_CTX *server_context(const char *dir)
         return NULL;
     putsb(&path, dir);
     putsb(&path, "/server.pem");
-    if (SSL_CTX_use_certificate_chain_file(ctx, path.data) != 1)
+    if (!use_pem(ctx, path.data, 0))
         goto bad;
     clear(&path);
     putsb(&path, dir);
     putsb(&path, "/server.key");
-    if (SSL_CTX_use_PrivateKey_file(ctx, path.data, SSL_FILETYPE_PEM) != 1 ||
-        SSL_CTX_check_private_key(ctx) != 1)
+    if (!use_pem(ctx, path.data, 1) || SSL_CTX_check_private_key(ctx) != 1)
         goto bad;
     SSL_CTX_set_alpn_select_cb(ctx, alpn, NULL);
     clear(&path);
