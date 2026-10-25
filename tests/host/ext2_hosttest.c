@@ -4390,14 +4390,21 @@ static void hardlink_check_rows(void)
  * and at 2 KiB, the 1 KiB levels, the failures, the write sequences, the
  * order rows, the writer's failures, the dirty volumes, the matrix and the
  * batch rows. `--times-only` runs only timestamps; `--hardlinks-only` runs
- * only the hard-link check rows. Returns 0,
+ * only the hard-link check rows; `--capture-only` checks independent tool
+ * output capture alone. Returns 0,
  * and calls `fix_passed`, when every row passed.
  */
 int main(int argc, char **argv)
 {
     uint64_t bytes;
 
+    if (argc == 3 && streq(argv[1], "-fn") && streq(argv[2], "--capture-child"))
+        return ext2_fixture_capture_child();
     wimg = fix_path("w.ext2");
+    check(ext2_fixture_capture_test(argv[0], fix_path("")),
+          "e2fsck diagnostics stay separate from stdout repair questions");
+    if (argc == 2 && streq(argv[1], "--capture-only"))
+        goto finish;
     build_tree();
 
     if (argc == 2 && streq(argv[1], "--hardlinks-only")) {
