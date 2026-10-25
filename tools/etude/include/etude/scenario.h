@@ -222,7 +222,8 @@ enum etude_status etude_guest_command_file(struct etude_case_machine *m, const c
 
 /** Start the same command without waiting, for a workload that must stay
  * running while other machines or host tools are observed. One command may
- * run per channel; the machine owns it until finish or cleanup. */
+ * run in the foreground per channel; an explicitly started guest service
+ * may remain beside it. The machine owns both until finish or cleanup. */
 enum etude_status etude_guest_start(struct etude_case_machine *m, const char *const argv[],
                                     const char *const env[], const char *input);
 
@@ -237,6 +238,16 @@ int etude_guest_running(struct etude_case_machine *m);
  * A cancellation uses the existing cancel and cleaned records. */
 enum etude_status etude_guest_finish(struct etude_case_machine *m, int cancel, const char *output,
                                      struct etude_guest_result *result);
+
+/** Start one foreground guest service whose owned command remains alive
+ * beside later guest commands and transfers. OUTPUT names its retained
+ * streams. The machine cancels it on every case cleanup path. */
+enum etude_status etude_guest_service_start(struct etude_case_machine *m, const char *const argv[],
+                                            const char *const env[], const char *input,
+                                            const char *output);
+int etude_guest_service_running(struct etude_case_machine *m);
+enum etude_status etude_guest_service_finish(struct etude_case_machine *m, int cancel,
+                                             struct etude_guest_result *result);
 
 /** Copy a host file to an absolute guest path with octal MODE (such as
  * "0755"). The guest replaces it only after its size and digest match.
