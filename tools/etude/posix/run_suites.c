@@ -24,6 +24,7 @@
 #include "measurement_context.h"
 #include "collection_tools.h"
 #include "preparation_import.h"
+#include "retention.h"
 #include "json.h"
 #include "verbs.h"
 #include "host_prepare.h"
@@ -106,6 +107,12 @@ int etude_prepare_main(int argc, char **argv)
     char program[4096];
     int opt;
 
+    if (argc >= 2 && (!strcmp(argv[1], "retention") || !strcmp(argv[1], "reference"))) {
+        catch_stops();
+        return !strcmp(argv[1], "retention")
+                   ? etude_retention_main(argc - 1, argv + 1, &stop_signal)
+                   : etude_reference_main(argc - 1, argv + 1, &stop_signal);
+    }
     if (argc >= 2 && (!strcmp(argv[1], "import") || !strcmp(argv[1], "export"))) {
         catch_stops();
         return !strcmp(argv[1], "import")
