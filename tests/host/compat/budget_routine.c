@@ -7,6 +7,7 @@ struct routine_fixture {
     unsigned count, serial;
 };
 static unsigned routine_serial;
+static const char *routine_machine = "guest", *routine_boot = "guestboot";
 static const char routine_commit[] = "1111111111111111111111111111111111111111";
 static const char routine_owner[] = "{\"pid\":\"10\",\"creation\":\"100\"}";
 static const char routine_result[] =
@@ -53,8 +54,9 @@ static const char *routine_trace_samples(struct routine_fixture *f, int physical
                "\"observer_pid\":30,\"observer_creation\":\"300\","
                "\"requested_interval_us\":1000000,\"process_limit\":4096}\n",
                physical || imported ? "windows-native-counters-v1" : "linux-proc-counters-v1",
-               physical || imported ? "pc" : "guest", physical || imported ? "boot" : "guestboot",
-               physical ? 10 : 20, physical ? 100 : 200);
+               physical || imported ? "pc" : routine_machine,
+               physical || imported ? "boot" : routine_boot, physical ? 10 : 20,
+               physical ? 100 : 200);
     for (unsigned i = 0; i < samples; i++)
         cmp_printf(&text,
                    "{\"kind\":\"sample\",\"monotonic_us\":%u,\"utc_us\":%llu,"
@@ -109,7 +111,7 @@ static const char *routine_phase(struct routine_fixture *f, const char *name, co
         "\"process\":{\"pid\":\"%u\",\"creation\":\"%u\"},\"owner\":%s,\"result\":%s,"
         "\"machine_id\":\"%s\",\"boot_id\":\"%s\",\"start\":%s,\"end\":%s}",
         collection ? 20U : 15U, collection ? 200U : 150U, routine_owner, routine_result,
-        imported ? "pc" : "guest", imported ? "boot" : "guestboot", first, last);
+        imported ? "pc" : routine_machine, imported ? "boot" : routine_boot, first, last);
     return routine_file(
         f,
         "{\"format\":\"etude-routine-phase\",\"schema_version\":1,\"run_id\":\"routine-fixture\","
@@ -117,8 +119,8 @@ static const char *routine_phase(struct routine_fixture *f, const char *name, co
         "\"child\":{\"pid\":\"%u\",\"creation\":\"%u\"},\"machine_id\":\"%s\","
         "\"boot_id\":\"%s\",\"start\":%s,\"end\":%s,\"admission\":%s,\"receipt\":%s,\"result\":%s}",
         routine_commit, route, lease, name, routine_owner, collection ? 20U : 15U,
-        collection ? 200U : 150U, imported ? "pc" : "guest", imported ? "boot" : "guestboot", first,
-        last, admit, raw, routine_result);
+        collection ? 200U : 150U, imported ? "pc" : routine_machine,
+        imported ? "boot" : routine_boot, first, last, admit, raw, routine_result);
 }
 static void routine_lease(struct routine_fixture *f, const char *route, const char *empty,
                           const char **lease, const char **grant)
@@ -241,7 +243,7 @@ static const char *routine_receipt(struct routine_fixture *f, int imported, cons
         "\"resolution_us\":1},\"end\":{\"utc\":\"2026-10-24T00:00:01.800000Z\","
         "\"monotonic_us\":%u,\"resolution_us\":1},\"conditioning\":{\"inhouse\":\"clean\","
         "\"backend\":\"%s\",\"provenance\":%s}}",
-        routine_commit, imported ? "pc" : "guest", imported ? "boot" : "guestboot",
+        routine_commit, imported ? "pc" : routine_machine, imported ? "boot" : routine_boot,
         imported ? 2200000U : 100000000U, imported ? 2800000U : 102000000U,
         imported ? "import" : "ordinary", imported ? proof : "null");
 }
@@ -254,7 +256,7 @@ static const char *routine_history(struct routine_fixture *f, int imported)
         "{\"run_id\":\"routine-fixture\",\"kind\":\"plan\",\"data\":{\"commit\":\"%s\"}}\n"
         "{\"run_id\":\"routine-fixture\",\"kind\":\"run\",\"data\":{\"time\":{\"clock\":{"
         "\"machine_id\":\"%s\",\"boot_id\":\"%s\"},\"end_us\":%u},\"load\":%s}}\n",
-        routine_commit, imported ? "pc" : "guest", imported ? "boot" : "guestboot",
+        routine_commit, imported ? "pc" : routine_machine, imported ? "boot" : routine_boot,
         imported ? 5000000U : 104000000U, load);
     fix_format(f->history, sizeof(f->history), "%s", f->paths[f->count - 1]);
     return ref;
@@ -492,6 +494,106 @@ static void routine_case(int imported)
     json_free(nodes);
     free(f);
 }
+struct routine_budget_row {
+    int first, exemption, charged, once, terminal, agrees;
+    const char *verdict;
+};
+
+static const char *routine_budget_history(struct routine_fixture *f, struct routine_parts *p,
+                                          const struct routine_budget_row *row)
+{
+    struct run r = CI_RUN("routine-fixture", "2026-10-24T00:00:02.000000Z");
+    r.start = 100;
+    r.end = 104;
+    r.attempt_s = 1;
+    r.steps[0].start = 99;
+    r.steps[0].end = 100;
+    r.purpose = row->first ? "phase_first_run" : "ci";
+    r.exemption = row->exemption;
+    r.charged = row->charged;
+    r.once = row->once;
+    r.verdict = row->verdict;
+    const char *trace = routine_trace(f, 0, 0);
+    runtime_load = routine_file(f, "{\"runtime\":{\"trace\":%s}}", trace);
+    struct json *nodes = routine_nodes(f, p);
+    char *bytes = routine_fragment(nodes);
+    preparation_artifacts = routine_file(f, "%s", bytes);
+    free(bytes);
+    json_free(nodes);
+    const char *path = write_run(&r);
+    preparation_artifacts = runtime_load = NULL;
+    CHECK(path != NULL, "physical budget history writes");
+    fix_format(f->history, sizeof(f->history), "%s/budget-history-%u.jsonl", fix_dir(), f->serial);
+    CHECK(path && rename(path, f->history) == 0, "physical budget history keeps its row");
+    bytes = routine_read(f->history);
+    const char *ref = routine_file(f, "%s", bytes);
+    free(bytes);
+    return ref;
+}
+
+static void routine_budget_case(const struct routine_budget_row *row)
+{
+    struct routine_fixture *f = calloc(1, sizeof(*f));
+    CHECK(f != NULL, "physical budget fixture allocates");
+    if (!f)
+        return;
+    f->serial = ++routine_serial;
+    fix_format(f->completion, sizeof(f->completion), "%s/budget-completion-%u", fix_dir(),
+               f->serial);
+    routine_machine = "m1";
+    routine_boot = "routine-fixture-boot";
+    struct routine_parts p = {0};
+    p.route = routine_file(f, "{\"format\":\"etude-routine-route\",\"schema_version\":1,"
+                              "\"mode\":\"wsl-native\"}");
+    p.empty = routine_file(f, "etude-ledger 1\n");
+    p.admit = routine_file(f, "exited 0\n");
+    routine_lease(f, p.route, p.empty, &p.lease, &p.grant);
+    p.receipt = routine_receipt(f, 0, "null");
+    p.history = routine_budget_history(f, &p, row);
+    if (row->terminal) {
+        char *terminal = routine_terminal(f, &p);
+        FILE *file = fopen(f->completion, "wb");
+        CHECK(file && fputs(terminal, file) >= 0 && !fclose(file), "physical terminal writes");
+        free(terminal);
+        if (row->terminal < 0) {
+            file = fopen(f->completion, "ab");
+            CHECK(file && fputs("invalid", file) >= 0 && !fclose(file), "terminal corrupts");
+        }
+    }
+    struct cmp_history history;
+    char *paths[] = {f->history};
+    CHECK(cmp_load(&history, HISTORY, paths, 1) == 0, "physical budget history loads");
+    struct etude_budget_judgement j;
+    CHECK(judge(&history, "routine-fixture", 0, &j) == 0, "physical budget judges");
+    char label[120];
+    fix_format(label, sizeof(label),
+               "physical budget first%d exemption%d charge%d setup%d terminal%d", row->first,
+               row->exemption, row->charged, row->once, row->terminal);
+    CHECK(j.agrees == row->agrees, label);
+    CHECK(j.charged_known == (row->terminal > 0), "only verified terminal supplies charge");
+    if (row->terminal > 0)
+        CHECK(j.charged_us == 5000000 && j.one_time_us == 0,
+              "full physical charge stays measured under exemption");
+    if (row->first && row->exemption == 1)
+        CHECK(j.report.verdict == ETUDE_BUDGET_EXEMPT, "validated first exemption stays exempt");
+    etude_budget_report_free(&j.report);
+    cmp_free(&history);
+    routine_machine = "guest";
+    routine_boot = "guestboot";
+    free(f);
+}
+
+static void routine_budget(void)
+{
+    static const struct routine_budget_row rows[] = {
+        {1, 1, -1, 0, 1, 1, "exempt"}, {1, 2, -1, 0, 1, 0, "exempt"},
+        {0, 0, -1, 0, 1, 0, "exempt"}, {0, 0, -1, 0, 1, 1, "unknown"},
+        {1, 1, 4, 0, 1, 0, "exempt"},  {1, 1, -1, 1, 1, 0, "exempt"},
+        {1, 1, -1, 0, 0, 0, "exempt"}, {1, 1, -1, 0, -1, 0, "exempt"}};
+    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); i++)
+        routine_budget_case(&rows[i]);
+}
+
 static void routine_local_load(void)
 {
     const char *time = "{\"start_utc\":\"2026-10-24T00:00:00Z\","
@@ -525,6 +627,7 @@ static void test_routine_charge(void)
 {
     routine_case(0);
     routine_case(1);
+    routine_budget();
     routine_local_load();
     uint64_t work = 0;
     const char *path = write_policy("routine-policy.json", &usual);
