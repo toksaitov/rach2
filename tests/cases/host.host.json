@@ -1052,11 +1052,6 @@
           "source": "scenario"
         },
         {
-          "assertion_id": "etude_platform",
-          "checks": "the execution host runs native complete-output checks; Windows also runs the prepared process, path, job, lock, ledger, supervisor and tooling fixtures with no interpreter",
-          "source": "scenario"
-        },
-        {
           "assertion_id": "etude_exec",
           "checks": "tests/host/etude_exec_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -1158,7 +1153,7 @@
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 29
+          "limit": 28
         }
       ],
       "bounds": {
@@ -1275,10 +1270,10 @@
     },
     {
       "case_id": "host.host.etude_quiet",
-      "behavior": "Etude remote and repetition checks retain their short response assertions under fatal sanitizers while no other collection case runs",
+      "behavior": "Etude platform, remote and repetition checks retain their isolation and short response assertions while no other collection case runs",
       "units": [
         "host",
-        "the remote and repetition checks of the complete Etude host inventory, compiled and run under the sanitizers"
+        "the platform, remote and repetition checks of the complete Etude host inventory, with fatal sanitizers where supported"
       ],
       "domain": "machine",
       "architectures": "none",
@@ -1313,6 +1308,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "etude_platform",
+          "checks": "the execution host runs native complete-output checks; Windows also runs the prepared process, path, job, lock, ledger, supervisor and tooling fixtures with no interpreter",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "etude_remote",
           "checks": "tests/host/etude_remote_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -1339,7 +1339,7 @@
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 3
+          "limit": 4
         }
       ],
       "bounds": {
