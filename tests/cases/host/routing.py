@@ -1,4 +1,5 @@
 """Choose the execution host while retaining every declared check identity."""
+import json
 import os
 import re
 import sys
@@ -38,9 +39,23 @@ def interpreter(text, path=None):
             'ETUDE_SHELL' in text)
 
 
+def script_backend(identity):
+    """Require one declared owner before assigning a scripts check's host."""
+    parts = {'host.host.scripts', 'host.host.scripts_native', 'host.host.scripts_images',
+             'host.host.scripts_build', 'host.host.scripts_tools'}
+    cases = json.loads(Path('tests/cases/host.host.json').read_text())['cases']
+    owners = [case['case_id'] for case in cases if case['case_id'] in parts
+              for assertion in case['assertions'] if assertion['assertion_id'] == identity]
+    if len(owners) != 1:
+        raise ValueError('a scripts check needs exactly one declared partition: ' + identity)
+    return 'native' if owners[0] == 'host.host.scripts_native' else 'gnu'
+
+
 def backend(identity, sources, group):
     """The Windows adapter fixtures execute natively, including file checks."""
-    if group == 'scripts' or identity in BOOTS or identity in {'etude_platform', 'etude_context', 'etude_observe', 'usbstamp'}:
+    if group == 'scripts':
+        return script_backend(identity)
+    if identity in BOOTS or identity in {'etude_platform', 'etude_context', 'etude_observe', 'usbstamp'}:
         return 'native'
     if identity in PRODUCTS or windows_host():
         return 'gnu'

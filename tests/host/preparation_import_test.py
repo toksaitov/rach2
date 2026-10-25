@@ -22,6 +22,37 @@ from routine_route_test import RouteTests
 
 
 class ImportTests(unittest.TestCase):
+    def test_script_partition_routes(self):
+        repo = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(repo / 'tests/cases/host'))
+        import fixtures
+        import routing
+        names = [line.split('|', 1)[0] for line in
+                 (repo / 'tests/cases/host/host.list').read_text().splitlines()
+                 if line and not line.startswith('#')]
+        native = set(fixtures.NAMES) | set(json.loads(
+            (repo / 'tests/cases/host/adapters.json').read_text()))
+        self.assertEqual((len(names), len(set(names)), len(native)), (45, 45, 10))
+        for name in names:
+            self.assertEqual(routing.backend(name, [], 'scripts'),
+                             'native' if name in native else 'gnu', name)
+        manifest = json.loads((repo / 'tests/cases/host.host.json').read_text())
+        case = next(c for c in manifest['cases'] if
+                    c['case_id'] == 'host.host.scripts_images')
+        assertion = next(a for a in case['assertions'] if
+                         a['assertion_id'] == 'mkext2_overlay')
+        case['assertions'].remove(assertion)
+        with patch.object(routing, 'Path') as path:
+            path.return_value.read_text.return_value = json.dumps(manifest)
+            with self.assertRaisesRegex(ValueError, 'exactly one declared partition'):
+                routing.backend('mkext2_overlay', [], 'scripts')
+            case['assertions'].extend([assertion, assertion])
+            path.return_value.read_text.return_value = json.dumps(manifest)
+            with self.assertRaisesRegex(ValueError, 'exactly one declared partition'):
+                routing.backend('mkext2_overlay', [], 'scripts')
+        with self.assertRaisesRegex(ValueError, 'exactly one declared partition'):
+            routing.backend('unknown-script', [], 'scripts')
+
     def test_gnu_inventory_predecessor(self):
         repo = Path(__file__).resolve().parents[2]
         sys.path.insert(0, str(repo / 'tests/cases/host'))
