@@ -2,7 +2,12 @@
 # collection-windows.sh: prepare the native collection's image command paths.
 
 collection_root=$(cygpath -u "$REPO") || return 1
-COLLECTION_IMAGE_TOOLS=$(python3 "$collection_root/tools/etude/collection_tools.py" list) || return 1
+COLLECTION_IMAGE_TOOLS=
+
+collection_image_tools()
+{
+    COLLECTION_IMAGE_TOOLS=$("$collection_root/build/tools/etude/etude" prepare tools list) || return 1
+}
 
 # Accept a declared image command before its native entry point is built.
 collection_windows_tool()
@@ -12,6 +17,7 @@ collection_windows_tool()
             tooling_host
             return $? ;;
     esac
+    collection_image_tools || return 1
     case " $COLLECTION_IMAGE_TOOLS " in
         *" $1 "*) tooling_host ;;
         *) return 1 ;;
@@ -23,6 +29,7 @@ collection_windows()
     case $(uname -s) in MINGW*|MSYS*|UCRT*|CLANG*) ;; *) return 0 ;; esac
     make -C "$collection_root" --no-print-directory build/tools/etude/image-command \
         build/tools/etude/etude || return 1
+    collection_image_tools || return 1
     commands=$collection_root/build/tools/etude/commands
     mkdir -p "$commands" || return 1
     for tool in $COLLECTION_IMAGE_TOOLS; do
