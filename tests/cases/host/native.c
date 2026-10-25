@@ -102,9 +102,8 @@ int native_begin(struct native_case *c, const char *id)
         c->work[0] = 0;
         return -1;
     }
-    setvbuf(stdout, NULL, _IOLBF, 0);
-    printf("@etude 1 begin %s\n", id);
-    return 0;
+    /* Reports must reach the parent during a check, including under UCRT. */
+    return setvbuf(stdout, NULL, _IONBF, 0) || printf("@etude 1 begin %s\n", id) < 0 ? -1 : 0;
 }
 
 void native_assert(struct native_case *c, const char *id, int pass, const char *why)
