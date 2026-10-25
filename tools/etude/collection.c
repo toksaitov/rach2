@@ -60,7 +60,7 @@ struct collection {
     unsigned width, cpus;
     uint64_t memory;
     uint64_t cap[3];
-    int stop_on_fail, list;
+    int stop_on_fail, list, boots_machines;
     struct etude_portlock ports;
 };
 
@@ -381,6 +381,9 @@ static int selection_document(struct collection *c, struct suite_entry *s, const
         m->cases = strdup(path);
         m->serial = s->alone;
         m->stops = !strcmp(s->name, "style");
+        for (j = 0; j < count; j++)
+            if (runs_on(picked[j], arch) && strcmp(json_text(picked[j], "domain"), "host"))
+                c->boots_machines = 1;
     }
     return 0;
 }
@@ -994,7 +997,7 @@ static int selection_workspace(struct collection *c)
     return 0;
 }
 
-static int collection_paths(struct collection *c, const struct request *r)
+static int collection_paths(struct collection *c, const struct request *r, int production)
 {
     char status[64];
     int size = snprintf(status, sizeof(status), "build/.run.status.%ld", (long)getpid());
@@ -1027,7 +1030,7 @@ static int collection_paths(struct collection *c, const struct request *r)
     if (statvfs(c->tree, &space) == 0)
         c->cap[2] = (uint64_t)space.f_bavail * space.f_frsize;
 #endif
-    if (!r->dry && c->cap[2] < (UINT64_C(40) << 30)) {
+    if (!r->dry && (production || c->boots_machines) && c->cap[2] < (UINT64_C(40) << 30)) {
         refused("the tree has less than 40 GiB free");
         return 2;
     }
@@ -1168,7 +1171,7 @@ static int collection_main(int argc, char **argv, int production)
             goto done;
         }
     }
-    if (collection_paths(c, &r) != 0)
+    if (collection_paths(c, &r, production) != 0)
         goto done;
     r.accel = collection_accel(r.accel);
     if (!r.accel)
