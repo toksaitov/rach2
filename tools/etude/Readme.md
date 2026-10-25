@@ -894,6 +894,8 @@ A check's environment is that of `etude run host`, with `TMPDIR` set to its scra
 
 The checks start in the order of their bounds, the longest first, and the `alone` checks after the others, each when nothing else runs; nothing starts beside one. A passing check's scratch directory is removed, and a failing one's is kept and named when it is not empty. Under a failure the program prints the lines of the sanitizers' reports in the log, marked `!`, and the log's last 20 lines, marked `|`, so that a failure reads without the log; under a pass it repeats each `NAME: not run: WHAT: WHY` line of the log.
 
+The QEMU launcher drains its connected console and QMP channels after the native process ends, through EOF or the existing machine grace deadline. Process exit alone does not prove that the final loopback TCP bytes have reached their reader. A received SHUTDOWN event alone determines a guest shutdown, reset or panic; without it the original process-based end remains. The final console offset includes the drained bytes.
+
 ### Windows execution
 
 On Windows a host program runs through [`win/winexec.h`](win/winexec.h), which is built with MinGW-w64 against the UCRT and needs no MSYS2 or Cygwin runtime. [`win/pecheck.c`](win/pecheck.c) reads a program's import and delay-load tables and refuses such a runtime and any library that is not Windows's own.
