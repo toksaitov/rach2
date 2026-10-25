@@ -29,6 +29,7 @@
  * host-inputs: tests/host/compat/legacyset_repetition.c
  * host-inputs: tests/host/compat/legacyset_repeat_key.c
  * host-inputs: tests/host/compat/legacyset_context.c
+ * host-inputs: tests/host/compat/legacyset_digests.c
  * host-deps: tools/etude/preparation_record.c tools/etude/posix/legacy_set.c
  * host-deps: tools/etude/cost.c
  * host-deps: tools/etude/posix/legacy_cases.c tools/etude/digest.c
@@ -198,9 +199,9 @@ extern int (*legacy_set_put)(struct etude_store *s, const char *path, const char
                              char digest[ETUDE_DIGEST_HEX + 1], uint64_t *size);
 
 /* A host test build of store.c's settling time, after which a file's digest
- * may be kept, and its count of the copies it made. */
+ * may be kept, and its counts of copies and reads that hash a file. */
 extern long long etude_store_settle_ns;
-extern unsigned long etude_store_copied;
+extern unsigned long etude_store_copied, etude_store_hashed;
 
 static int fails, completed, context_only;
 
@@ -2949,6 +2950,7 @@ static int guest_site(void)
 }
 
 #include "compat/legacyset_context.c"
+#include "compat/legacyset_digests.c"
 #include "compat/legacyset_repeat_key.c"
 #include "compat/legacyset_repetition.c"
 
@@ -3004,6 +3006,7 @@ int main(int argc, char **argv)
     if (repetitions_only)
         return repetition_cases_only();
     test_repetition_loads();
+    test_digest_paths();
     test_contexts();
     if (context_only) {
         if (fails)

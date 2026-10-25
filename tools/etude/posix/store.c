@@ -488,6 +488,16 @@ static int next_line(FILE *f, char *buf, size_t size)
     return 1;
 }
 
+/** Say whether a digests entry names an absolute path on this platform. */
+static int digests_absolute(const char *path)
+{
+#ifdef _WIN32
+    return etude_win_absolute(path);
+#else
+    return path[0] == '/';
+#endif
+}
+
 /** Take a line of a digests file, with its newline, into `k`, `hex` and
  * `*path`; 0, or -1 for a malformed line. */
 static int digests_line(char *line, struct status *k, char hex[ETUDE_DIGEST_HEX + 1], char **path)
@@ -500,7 +510,7 @@ static int digests_line(char *line, struct status *k, char hex[ETUDE_DIGEST_HEX 
     line[n - 1] = '\0';
     if (sscanf(line, "%64s %llu %llu %llu %lld %lld %n", hex, &k->size, &k->dev, &k->ino, &k->mtime,
                &k->ctime, &at) != 6 ||
-        at < 0 || line[at] != '/' || !store_is_digest(hex))
+        at < 0 || !digests_absolute(line + at) || !store_is_digest(hex))
         return -1;
     *path = line + at;
     return 0;
@@ -584,12 +594,7 @@ static void digests_keep(const char *cache, const char *path, const struct statu
     FILE *in, *out = NULL;
     int fd = -1, ok, saved = errno;
 
-    if (lock == NULL || next == NULL ||
-#ifdef _WIN32
-        !etude_win_absolute(path) ||
-#else
-        path[0] != '/' ||
-#endif
+    if (lock == NULL || next == NULL || !digests_absolute(path) ||
         strchr(path, '\n') != NULL || strlen(path) + 6 * 21 + ETUDE_DIGEST_HEX >= DIGESTS_LINE)
         goto done;
     parent_make(cache);
