@@ -1365,3 +1365,7 @@ T95 installs the selected site's policy, measured reference, retained evidence a
 ## CI missed failure directories within one timestamp tick (#1159)
 
 The GNU CI fixture failed the exact retained-directory assertions of both architectures. The driver used strict `find -newer`, while the ext2 inode stores whole seconds: a failure directory made in the start file's second is omitted. The driver now directs the runner to its own `kept` directory through the existing `RACH2_FAILED` interface. The substitute follows that interface, and the same exact per-architecture directory assertions remain. No timestamp delay or relaxed comparison is needed.
+
+## Native CI fixtures inherited the staged lines selection (#1155)
+
+The GNU `ci_run` retry on 1546ebe0f passed its lines, history and exact retained-directory assertions, then failed all fourteen native collection rows. Their private script still selected the production default, now lines until site activation. The native sequence substitute was never called. The launcher's missing-retention row had the same assumption. Both fixtures now copy the script into their private tree, require a recognized selector and explicitly select native mode. All native cancellation, projection, completion, refusal and no-start assertions remain unchanged. The failed retry, complete output and independent four-process cleanup remain under `build/tests/mac-targeted-repairs/ci-runtime-failed`.
