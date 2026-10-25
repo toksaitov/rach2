@@ -1311,3 +1311,9 @@ Run39 reached GNU Make in the parallel-maker fixture, but both architecture quer
 The fixture now copies those five fragments, including the native source list. Both real database queries and all eight parallel maker requests on each architecture remain required. No product Make rule or assertion changes.
 
 The coordinating session also repeated builds and passing checks after corrections that did not affect them. Local formatter checks alone missed a comment-width error and an earlier function-size error. The work rules now require the existing mechanical checks on each changed file before integration, including a helper's changes. A repair repeats only checks it can affect; unchanged binaries and passing results retain their evidence. A new commit alone does not require a new compilation event.
+
+## The launcher fixture retained current CI in a historical checkout (#1120)
+
+Run39 passed deployment, then failed the launcher fixture's bisection assertion. Its current CI row correctly refused the missing retention policy. Command 17 then reported `Bisection on i686 is unresolved: bad could not be tested again.` The mock Git checkout returned success without replacing the current `results=native` CI entry, so the real bisector selected native CI instead of the historical build and test path the fixture declared. Complete output and stderr remain in the run39 `launch-failure-readonly-01.json` record.
+
+The private historical checkout now publishes its historical CI result metadata. The current native CI refusal remains unchanged. The bisection row still invokes the real bisector, requires two distinct real installed-admission claims, and requires the private machine ledger to remain empty. Production CI and bisection code do not change.

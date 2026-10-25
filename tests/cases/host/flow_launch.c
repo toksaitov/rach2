@@ -168,7 +168,14 @@ static int launch_commands(int argc, char **argv, const char *name)
             puts("bad fixture");
         else if (!strcmp(argv[1], "diff") && !strcmp(ev("FLOW_LAUNCH_MODE"), "ci"))
             return 0;
-        else if (strcmp(argv[1], "checkout"))
+        else if (!strcmp(argv[1], "checkout")) {
+            /* The historical tree uses the installed build/run admission. */
+            if (!strcmp(ev("FLOW_LAUNCH_MODE"), "bisect"))
+                return fx_text(lp("checkout/tools/ci/run.sh"),
+                               "# Historical CI fixture; tests/run supplies its results.\n")
+                           ? 0
+                           : 1;
+        } else
             return 2;
         return 0;
     }
