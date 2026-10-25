@@ -207,7 +207,9 @@ int flow_launch_mock(int argc, char **argv)
     if (!strcmp(name, "run"))
         return synthetic_run(argc, argv);
     if (!strcmp(name, "sh")) {
-        if (argc > 1 && !strcmp(argv[1], "tests/run") && strcmp(ev("FLOW_LAUNCH_MODE"), "worker"))
+        if (argc > 1 &&
+            (!strcmp(argv[1], "tests/run") || !strcmp(argv[1], lp("checkout/tests/run"))) &&
+            strcmp(ev("FLOW_LAUNCH_MODE"), "worker"))
             return synthetic_run(argc - 1, argv + 1);
         execv("/bin/sh", argv);
         return 127;
