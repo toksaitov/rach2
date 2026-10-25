@@ -14,7 +14,7 @@ The diagnostic used x86-64, WHPX, one processor, 128 MiB of memory, RTL8139 and 
 * Original test initrd: SHA-256 `1e22e1c336fab284dccd5f3b30668f94e2905be28e32d81b50115ec3781a42b7`, 13,631,488 bytes.
 * Diagnostic probe: SHA-256 `6566720c0b9efa2a48c6e035019307de80b673316d3f010348aab5e0db235b16`, 26,576 bytes. Its source SHA-256 is `7ed51f76e6ccddaac930df1c8fad13818fb23c586b18009ddcda84edd0685688`; its actual compiler receipt SHA-256 is `7772dc999a87d2507d198d57666294b22e60bc637e611bbc8347e8c1228da77f`.
 
-The probe added raw CPUID, XGETBV and signal-frame diagnostics to `tests/probes/xsaveprobe.c`, preserving its assertions. A private copy of the initrd staged this probe as `/sbin/init`, avoiding dependence on debug-shell input. Earlier serial-command attempts did not execute the probe and establish no CPU result.
+The probe added raw CPUID, XGETBV and signal-frame diagnostics to `tests/xsaveprobe.c`, preserving its assertions. The exact diagnostic additions are retained in [qemu-whpx-probe.patch](qemu-whpx-probe.patch), outside the runtime test sources. A private copy of the initrd staged this probe as `/sbin/init`, avoiding dependence on debug-shell input. Earlier serial-command attempts did not execute the probe and establish no CPU result.
 
 ## Decisive output
 
@@ -87,7 +87,7 @@ XSAVEPROBE FAIL: the handler: the frame's extended size is not the image's and t
 panic: init (pid 1) exited; halting (boot rach2.rescue for the debug shell)
 ```
 
-Enabled XCR0 components 2, 5, 6 and 7 have offset-plus-size ends `0x340`, `0x380`, `0x580` and `0x980`. Leaf 0 EBX should describe the currently enabled standard XSAVE area. Its observed `0x240` disagrees with XGETBV and those component bounds. The kernel's `0x980` image plus its four-byte trailing magic gives the observed `0x984` extended size. The failing assertion must remain intact.
+Enabled XCR0 components 2, 5, 6 and 7 have offset-plus-size ends `0x340`, `0x380`, `0x580` and `0x980`. EBX from subleaf 0 of leaf `0xD` should describe the currently enabled standard XSAVE area. Its observed `0x240` disagrees with XGETBV and those component bounds. The kernel's `0x980` image plus its four-byte trailing magic gives the observed `0x984` extended size. The failing assertion must remain intact.
 
 After that panic, QMP `human-monitor-command` with `command-line: info registers` and QMP `query-status` returned these decisive fields:
 
@@ -102,6 +102,45 @@ These are actual observations, not proof that the guest resumed after its halt. 
 
 ## Reproduction and cause
 
+Use a disposable checkout of exact source `0da2f8d327516deaaa26d22232c8004dfe8f76e2` for the diagnostic. Its original `tests/xsaveprobe.c` has SHA-256 `c230fddd2cba3c8f5ab4a76330603fd5dde012c2fd2850826522a997595cead5`, 34,695 bytes. Apply the retained patch there, leaving the collection's source tree untouched:
+
+```sh
+patch -p1 < "$REPORT_DIR/qemu-whpx-probe.patch"
+```
+
+Patch SHA-256 is `c7444ee4a0f640d726c838f58331ce1666814b93c4c02084f48c7db1c9b22cbf`, 1,986 bytes. The resulting source must have SHA-256 `7ed51f76e6ccddaac930df1c8fad13818fb23c586b18009ddcda84edd0685688`. It only adds diagnostic functions and calls; it removes no assertion, result or failure path. The actual compiler commands used these flags, without an optimization flag:
+
+```sh
+/opt/homebrew/bin/x86_64-elf-gcc -m64 -Wl,-Ttext=0x400000 \
+  -Wl,-z,max-page-size=0x1000 -nostdlib -static -ffreestanding \
+  -Wl,--build-id=none -I tests -MMD -MF "$OUT/xsaveprobe-x86_64.d" \
+  -o "$OUT/xsaveprobe-x86_64" tests/xsaveprobe.c
+/opt/homebrew/bin/i686-elf-gcc -m32 -Wl,-Ttext=0x08048000 \
+  -nostdlib -static -ffreestanding -Wl,--build-id=none \
+  -I tests -MMD -MF "$OUT/xsaveprobe-i686.d" \
+  -o "$OUT/xsaveprobe-i686" tests/xsaveprobe.c
+```
+
+`OUT` is an exclusive directory under `build/tests`. The retained compilation used the same source bytes at a scratch filename, `xsaveprobe-diagnostic.c`, with the absolute output paths in its receipt. The x86-64 output is the probe identified above. The i686 output compiled with status 0, SHA-256 `0952eeca15a0b8f3945e3cea11af671dcce8088a5ac2032927beeaa16a32bdfe`, 21,040 bytes; this records compilation, not an i686 diagnostic execution.
+
+Copy the original x86-64 test initrd to a new file, then replace only `/sbin/init` in that copy using the existing stageimage program. Its actual SHA-256 was `ef75a94cc8de13484bc29f4f7b9bf20b5c8108b2c292655226ff49d5546118bc`, 83,883 bytes. The manifest is exactly:
+
+```text
+dir 0755 /sbin
+file 0755 /sbin/init NATIVE_ABSOLUTE_PROBE_PATH
+```
+
+On Windows, the manifest's probe operand and the stageimage arguments use native absolute paths, including drive letters. The actual operation was equivalent to:
+
+```sh
+cp "$ORIGINAL_INITRD" "$OUT/diagnostic.krffs"
+printf 'dir 0755 /sbin\nfile 0755 /sbin/init %s\n' "$NATIVE_PROBE" \
+  > "$OUT/diagnostic.manifest"
+"$STAGER" "$NATIVE_MANIFEST" "$NATIVE_INITRD"
+```
+
+Here `STAGER` is the verified native stageimage executable, and `NATIVE_MANIFEST` and `NATIVE_INITRD` name those two new files. The actual manifest used `C:/ProgramData/rach2-controls/windows-qemu-diagnostic-0da2f8d32751-05/xsaveprobe-diagnostic`. Stageimage exited 0 and produced initrd SHA-256 `022663d7b47de91e5d6e8665177465e4abdce9f4a22519717e04cd394583990c`. A different absolute manifest operand may change the operation's record; retain the generated image hash rather than assuming this historical digest.
+
 The shortest existing reproducer boots the unchanged kernel and the private initrd whose `/sbin/init` is the diagnostic probe. With the matching runtime DLLs and BIOS files, the essential command is:
 
 ```sh
@@ -114,7 +153,7 @@ qemu-system-x86_64.exe -accel whpx -nodefaults \
 
 The retained diagnostic also used `-S` and loopback QMP to issue `cont`, then collected registers and status. Those controls are not required to observe the CPUID discrepancy. A smaller upstream reproducer can query XGETBV and CPUID `0xD` under any guest which actually enables the same components, but that substitute has not been executed here.
 
-In v11.1.0, `target/i386/cpu.c:8880` computes leaf 0 EBX with `xsave_area_size(env->xcr0, false)` outside KVM. The WHPX CPUID exit path calls the common CPU calculation without first refreshing the cached XCR0 for this exit. It already substitutes Hyper-V's `DefaultResultRbx` for subleaves 1 and 2, but omits subleaf 0. In v11.1.2 this block is at `target/i386/whpx/whpx-all.c:2621`. The live Hyper-V result is the existing mechanism for these dynamic return values; adding subleaf 0 avoids a broader register synchronization change.
+In v11.1.0, `target/i386/cpu.c:8880` computes EBX for subleaf 0 of leaf `0xD` with `xsave_area_size(env->xcr0, false)` outside KVM. The WHPX CPUID exit path calls the common CPU calculation without first refreshing the cached XCR0 for this exit. It already substitutes Hyper-V's `DefaultResultRbx` for subleaves 1 and 2, but omits subleaf 0. In v11.1.2 this block is at `target/i386/whpx/whpx-all.c:2621`. The live Hyper-V result is the existing mechanism for these dynamic return values; adding subleaf 0 avoids a broader register synchronization change.
 
 The exact tracked [patch](../../tools/setup/qemu-whpx/whpx-live-xsave-size.patch) is:
 

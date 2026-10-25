@@ -1,0 +1,58 @@
+--- a/tests/xsaveprobe.c
++++ b/tests/xsaveprobe.c
+@@ -286,6 +286,36 @@
+ static unsigned xstate_size;
+ static unsigned avx_offset;
+ 
++static void diagnostic_hex(const char *name, unsigned value)
++{
++    static const char digits[] = "0123456789abcdef";
++    char text[10];
++    unsigned i;
++    for (i = 0; i < 8; i++)
++        text[i] = digits[(value >> (28 - 4 * i)) & 15u];
++    text[8] = '\n';
++    text[9] = 0;
++    say(name);
++    say(text);
++}
++
++static void diagnostic_cpuid(void)
++{
++    unsigned sub, r[4];
++    diagnostic_hex("diagnostic XCR0 low=", xcr0_lo);
++    diagnostic_hex("diagnostic XCR0 high=", xcr0_hi);
++    diagnostic_hex("diagnostic probe image bytes=", xstate_size);
++    for (sub = 0; sub < 8; sub++) {
++        cpuid(13, sub, r);
++        diagnostic_hex("diagnostic leaf 0d subleaf=", sub);
++        diagnostic_hex("  eax=", r[0]);
++        diagnostic_hex("  ebx=", r[1]);
++        diagnostic_hex("  ecx=", r[2]);
++        diagnostic_hex("  edx=", r[3]);
++    }
++}
++
++
+ #define LOAD(n)  __asm__ __volatile__("vmovdqu %0, %%ymm" #n : : "m"(v[n]))
+ #define STORE(n) __asm__ __volatile__("vmovdqu %%ymm" #n ", %0" : "=m"(v[n]))
+ 
+@@ -472,6 +502,10 @@
+     if (get32(img + X_SW) != FP_XSTATE_MAGIC1) {
+         return "the frame's software bytes lack FP_XSTATE_MAGIC1";
+     }
++    diagnostic_hex("diagnostic frame extended bytes=", get32(img + X_SW + 4));
++    diagnostic_hex("diagnostic frame image bytes=", get32(img + X_SW + 16));
++    diagnostic_hex("diagnostic frame XCR0 low=", get32(img + X_SW + 8));
++    diagnostic_hex("diagnostic frame XCR0 high=", get32(img + X_SW + 12));
+     if (get32(img + X_SW + 4) != xstate_size + 4u + FRAME_PREFIX) {
+         return "the frame's extended size is not the image's and the magic's";
+     }
+@@ -643,6 +677,7 @@
+     }
+     report_held();
+     xstate_size = rd[1];
++    diagnostic_cpuid();
+     if (xstate_size < 576u || xstate_size > IMAGE_MAX) {
+         fail("leaf 0xD gives an image size out of range");
+     }
