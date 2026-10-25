@@ -23,6 +23,7 @@
 #include "etude/legacy.h"
 #include "measurement_context.h"
 #include "collection_tools.h"
+#include "preparation_import.h"
 #include "json.h"
 #include "verbs.h"
 #include "host_prepare.h"
@@ -105,6 +106,12 @@ int etude_prepare_main(int argc, char **argv)
     char program[4096];
     int opt;
 
+    if (argc >= 2 && (!strcmp(argv[1], "import") || !strcmp(argv[1], "export"))) {
+        catch_stops();
+        return !strcmp(argv[1], "import")
+                   ? etude_prepare_import_main(argc - 1, argv + 1, &stop_signal)
+                   : etude_prepare_export_main(argc - 1, argv + 1, &stop_signal);
+    }
     if (argc >= 2 && !strcmp(argv[1], "source"))
         return etude_prepare_source_main(argc - 1, argv + 1);
     if (argc >= 2 && !strcmp(argv[1], "context"))
