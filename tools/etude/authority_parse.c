@@ -117,6 +117,22 @@ int authority_binding_read(struct authority_binding *b)
     return error ? -1 : 0;
 }
 
+/* Match protected route and site aliases by identity, before policy access. */
+int authority_route(const char *site, const char *descriptor, struct authority_binding *binding)
+{
+    struct authority_file_id expected, requested, route, configured;
+    if (!site || !descriptor || authority_binding_read(binding) ||
+        !authority_operator(binding->operator_id) || authority_file_id(binding->site, &expected) ||
+        authority_file_id(site, &requested) || expected.device != requested.device ||
+        expected.inode != requested.inode || authority_file_id(binding->route, &route) ||
+        authority_file_id(descriptor, &configured) || route.device != configured.device ||
+        route.inode != configured.inode) {
+        errno = EACCES;
+        return -1;
+    }
+    return 0;
+}
+
 static int positive(const char *text, uint64_t *value)
 {
     if (*text < '1' || *text > '9' || strspn(text, "0123456789") != strlen(text))
