@@ -3091,6 +3091,14 @@ static void stop_all(struct set *x, const char *why, const char *what)
     }
 }
 
+/** Apply the first-failure policy to a completed or refused member. */
+static void stop_after_failure(struct set *x, const struct command *c)
+{
+    if (x->o->stop_on_fail && c->state == DONE &&
+        (c->outcome == FAILURE || c->outcome == INCOMPLETE))
+        stop_all(x, "the run stopped on the first failure", "stopped on the first failure");
+}
+
 /** Give the variables of case member `m`'s program in `vars`, and their
  * count. */
 static size_t case_vars(struct member *m, char **vars)
@@ -3246,8 +3254,7 @@ static void finished(struct set *x, struct etude_supervised *f)
     m->g = NULL;
     write_attempt(x, m);
     status(x, 1);
-    if ((c->outcome == FAILURE || c->outcome == INCOMPLETE) && x->o->stop_on_fail)
-        stop_all(x, "the run stopped on the first failure", "stopped on the first failure");
+    stop_after_failure(x, c);
 }
 
 /** Stop the run once every member of a suite that `stops` has ended and one
@@ -3365,6 +3372,8 @@ static void drive(struct set *x)
         if (signalled(x) && !x->stopping)
             stop_all(x, x->stop_reason, NULL);
         stop_on_suites(x);
+        for (i = 0; x->o->stop_on_fail && !x->stopping && i < x->n; i++)
+            stop_after_failure(x, &x->mem[i].c);
         mark_ready(x);
         if (!x->stopping &&
             etude_sched_admit(x->l, x->o->account, x->jobs, x->n, x->cap, x->ncap, NULL) != 0) {
@@ -3375,8 +3384,10 @@ static void drive(struct set *x)
         for (i = 0, busy = 0, left = 0; i < x->n; i++) {
             struct command *c = &x->mem[i].c;
 
-            if (!x->stopping)
+            if (!x->stopping) {
                 advance(x, i);
+                stop_after_failure(x, c);
+            }
             if (c->state == RUNNING) {
                 busy++;
                 if (c->load && etude_collection_load_poll(c->load) < 0 && !c->cancelled) {
