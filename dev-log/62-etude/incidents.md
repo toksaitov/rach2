@@ -1422,3 +1422,7 @@ Each Rach2 or Linux framed attempt now has a separate child subreaper. It preser
 ## GNU executor fixture selected a Linux-only proc file (#1139)
 
 The first native Windows collection ran the GNU executor fixture on Rach2, where every registration failed its held-child witness. GCC defines `__linux__` for the compatible ABI, but Rach2 does not implement `/proc/PID/syscall`. The fixture now identifies the running kernel with the existing Rach2 uname predicate and uses its process-state and pre-exec command-line witness there. Ordinary Linux retains the syscall-file check; no registration, status or cleanup assertion is removed.
+
+## Fresh artifact digests bypassed the settling rule (#1137)
+
+The GNU artifact fixture accepted an object after a same-size overwrite on Rach2. The store cached a newly published object's digest immediately, assuming chmod would change its recorded change time. On a filesystem with coarse timestamps, chmod and the write can occur in one tick. Newly published objects now obey the existing two-second settling rule. Digest entries have a version prefix so entries made under the earlier rule are read again. The cache-reuse test explicitly establishes a changed timestamp; separate rows require immediate damage to be rejected without a cached digest and earlier-format entries to be ignored.

@@ -59,8 +59,8 @@ void etude_store_close(struct etude_store *s);
 /**
  * Make the store use the digests file `cache`, as etude_digest_file does,
  * for the files it publishes and for its objects, so that a file whose
- * digest is kept is not read to be hashed. An object the store publishes is
- * kept with its digest at once.
+ * digest is kept is not read to be hashed. A newly published object obeys
+ * the same settling rule as a file that was read.
  *
  * @return 0, or -1 with errno ENOMEM.
  */
