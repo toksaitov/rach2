@@ -168,7 +168,8 @@ struct etude_case_machine {
     struct etude_serial *serial; /* etude-guest's session, for a helper */
     uint64_t commands;
     int command_output; /* installed commands do not emit case reports */
-    size_t fed;         /* console bytes fed to the session */
+    char guest_service_output[241];
+    size_t fed; /* console bytes fed to the session */
     int serial_closed;
     char line[ETUDE_REPORT_LINE_MAX + 1]; /* the guest's output line being read */
     size_t line_len;
@@ -3107,6 +3108,65 @@ enum etude_status etude_guest_finish(struct etude_case_machine *m, int cancel, c
     return st;
 }
 
+static int command_started(void *context)
+{
+    struct etude_case_machine *m = context;
+
+    return etude_serial_result(m->serial)->started ||
+           etude_serial_status(m->serial) != ETUDE_SERIAL_BUSY;
+}
+
+enum etude_status etude_guest_service_start(struct etude_case_machine *m, const char *const argv[],
+                                            const char *const env[], const char *input,
+                                            const char *output)
+{
+    enum etude_status st;
+    struct etude_guest_result failed;
+    int begun;
+
+    if (output == NULL || !output[0] || strlen(output) > 240 || m->guest_service_output[0] ||
+        m->serial == NULL || etude_serial_status(m->serial) == ETUDE_SERIAL_BUSY)
+        return ETUDE_REFUSED;
+    st = etude_guest_start(m, argv, env, input);
+    begun = st == ETUDE_OK;
+    if (begun)
+        st = serve_until(m->c, command_started, m, NULL, step_deadline(m->c), 1);
+    if (st == ETUDE_OK && etude_serial_background(m->serial) != 0)
+        st = ETUDE_FAILED;
+    if (st == ETUDE_OK) {
+        strcpy(m->guest_service_output, output);
+        m->command_output = 0;
+    } else if (begun)
+        etude_guest_finish(m, 1, output, &failed);
+    return st;
+}
+
+int etude_guest_service_running(struct etude_case_machine *m)
+{
+    struct etude_proc *finished = NULL;
+
+    if (m->serial == NULL || !m->guest_service_output[0])
+        return 0;
+    etude_qemu_watch(m->c->q, 0, NULL, 0, &finished);
+    if (finished != NULL)
+        host_finished(m->c, finished, NULL);
+    serve_sessions(m->c, posix_now_us());
+    return etude_serial_background_running(m->serial);
+}
+
+enum etude_status etude_guest_service_finish(struct etude_case_machine *m, int cancel,
+                                             struct etude_guest_result *result)
+{
+    enum etude_status st;
+
+    if (m->serial == NULL || !m->guest_service_output[0] || etude_serial_foreground(m->serial) != 0)
+        return ETUDE_REFUSED;
+    m->command_output = 1;
+    st = etude_guest_finish(m, cancel, m->guest_service_output, result);
+    m->guest_service_output[0] = '\0';
+    return st;
+}
+
 enum etude_status etude_guest_command(struct etude_case_machine *m, const char *const argv[],
                                       const char *const env[], const char *input,
                                       const char *output, struct etude_guest_result *result)
@@ -4317,6 +4377,31 @@ static void keep_qemu_error(struct etude_case_machine *m)
     keep_evidence(m->c, name, r->qemu->err.data, r->qemu->err.kept);
 }
 
+/* Finish the retained guest attempt before ending its machine. */
+static void end_guest_service(struct etude_case_machine *m, uint64_t until)
+{
+    const struct etude_serial_result *r;
+    char error[256];
+
+    if (m->serial == NULL || !m->guest_service_output[0])
+        return;
+    if (etude_serial_status(m->serial) == ETUDE_SERIAL_BUSY)
+        cancel_run(m);
+    if (etude_serial_foreground(m->serial) == 0) {
+        if (etude_serial_status(m->serial) == ETUDE_SERIAL_BUSY)
+            etude_serial_cancel(m->serial, posix_now_us());
+        serve_until(m->c, session_done, m, NULL, until, 0);
+        r = etude_serial_result(m->serial);
+        keep_evidence(m->c, m->guest_service_output, r->out.data, r->out.kept);
+        snprintf(error, sizeof(error), "%s.err", m->guest_service_output);
+        keep_evidence(m->c, error, r->err.data, r->err.kept);
+        if (!r->complete || r->cleanup != ETUDE_CLEANUP_CONFIRMED)
+            m->c->faults++;
+    } else
+        m->c->faults++;
+    m->guest_service_output[0] = '\0';
+}
+
 /**
  * End what the attempt owns within the cleanup's bound: after a failure or a
  * stop, collect the machines' diagnostics first; then stop every service and
@@ -4335,8 +4420,10 @@ static void end_all(struct etude_case *c, int failing)
         capture(c, grace < until ? grace : until);
     for (s = c->services; s != NULL; s = s->next)
         etude_exec_cancel(s->p);
-    for (m = c->machines; m != NULL; m = m->next)
+    for (m = c->machines; m != NULL; m = m->next) {
+        end_guest_service(m, until);
         etude_machine_cancel(m->m);
+    }
     serve_until(c, all_ended, c, NULL, until, 0);
     for (m = c->machines; m != NULL; m = m->next) {
         const struct etude_machine_result *r = mres(m);

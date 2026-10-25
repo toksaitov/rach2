@@ -3,7 +3,8 @@
  * console, which libetude-case uses. It reads the console's bytes as its
  * caller feeds them, writes frames through the caller's function,
  * acknowledges what it receives and sends again what is not acknowledged,
- * and runs one command of etude-guest's at a time. It does no I/O of its own
+ * and runs one foreground operation at a time, beside one explicitly retained
+ * service command. It does no I/O of its own
  * and reads no clock: each call is given the time.
  */
 #ifndef ETUDE_SERIAL_H
@@ -160,6 +161,18 @@ int etude_serial_get(struct etude_serial *s, const char *name,
  */
 int etude_serial_run(struct etude_serial *s, const char *attempt, const char *invocation,
                      uint64_t now_us);
+
+/** Keep one started ordinary run as an owned service while other operations
+ * use this same session. Its existing events retain their command identity.
+ * No detached child outlives the run's ordinary cleanup. EBUSY refuses a
+ * second service or a run that has not started or already exited. */
+int etude_serial_background(struct etude_serial *s);
+
+/** Restore that service as the foreground run for its normal cancel, result
+ * and cleanup processing. EBUSY refuses an unfinished foreground operation. */
+int etude_serial_foreground(struct etude_serial *s);
+int etude_serial_background_running(const struct etude_serial *s);
+int etude_serial_has_background(const struct etude_serial *s);
 
 /**
  * Ask etude-guest to end the attempt that the run going on follows, with
