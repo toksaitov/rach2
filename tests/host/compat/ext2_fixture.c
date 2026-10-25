@@ -141,7 +141,76 @@ int ext2_fixture_debugfs(const char *image, const char *request, int write, cons
 int ext2_fixture_fsck(const char *image, const char *flags, const char *output)
 {
     const char *argv[] = {host_tool_path("e2fsck"), flags, image, NULL};
-    return host_command(argv, output, output, NULL, 0);
+    char errors[4096];
+    int n = snprintf(errors, sizeof errors, "%s.err", output);
+    if (n < 0 || (size_t)n >= sizeof errors)
+        return -1;
+    return host_command(argv, output, errors, NULL, 0);
+}
+
+/* A diagnostic on stderr must never become a repair question on stdout. */
+int ext2_fixture_capture_child(void)
+{
+    const char *question = "Free blocks count wrong (9, counted=8).\nFix? no\n";
+    const char *diagnostic = "e2fsck 1.47.4 (6-Mar-2025)\n";
+    int failed = fputs(question, stdout) < 0 || fflush(stdout);
+    failed = fputs(diagnostic, stderr) < 0 || fflush(stderr) || failed;
+    return failed ? 8 : 4;
+}
+
+static int capture_copy(const char *from, const char *to)
+{
+    FILE *in = fopen(from, "rb"), *out = in ? fopen(to, "wbx") : NULL;
+    unsigned char bytes[32768];
+    size_t n;
+    int ok = out != NULL;
+    while (ok && (n = fread(bytes, 1, sizeof bytes, in)))
+        ok = fwrite(bytes, 1, n, out) == n;
+    if (in) {
+        if (ferror(in))
+            ok = 0;
+        if (fclose(in))
+            ok = 0;
+    }
+    if (out && fclose(out))
+        ok = 0;
+    return ok && chmod(to, 0755) == 0;
+}
+
+static int capture_equal(const char *path, const char *expected)
+{
+    FILE *f = fopen(path, "rb");
+    char bytes[256];
+    size_t n = f ? fread(bytes, 1, sizeof bytes, f) : 0;
+    int ok = f && !ferror(f) && feof(f) && n == strlen(expected) && !memcmp(bytes, expected, n);
+    return f && fclose(f) == 0 && ok;
+}
+
+int ext2_fixture_capture_test(const char *self, const char *root)
+{
+    char directory[4096], program[4096], output[4096], errors[4096], findings[4096];
+    const char *old = getenv("HOST_TEST_TOOLS");
+    char *saved = old ? strdup(old) : NULL;
+    if ((old && !saved) || strlen(root) > 4000) {
+        free(saved);
+        return 0;
+    }
+    snprintf(directory, sizeof directory, "%s/capture-tools", root);
+    snprintf(program, sizeof program, "%s/capture-tools/e2fsck", root);
+    snprintf(output, sizeof output, "%s/capture.out", root);
+    snprintf(errors, sizeof errors, "%s/capture.out.err", root);
+    snprintf(findings, sizeof findings, "%s/capture.findings", root);
+    int ok = mkdir(directory, 0700) == 0 && capture_copy(self, program) &&
+             setenv("HOST_TEST_TOOLS", directory, 1) == 0;
+    if (ok)
+        ok = ext2_fixture_fsck("--capture-child", "-fn", output) == 4 &&
+             capture_equal(output, "Free blocks count wrong (9, counted=8).\nFix? no\n") &&
+             ext2_fixture_contains(errors, "e2fsck 1.47.4 (6-Mar-2025)\n") &&
+             ext2_fixture_findings(output, findings) &&
+             capture_equal(findings, "Free blocks count wrong (9, counted=8).\n");
+    int restored = saved ? setenv("HOST_TEST_TOOLS", saved, 1) : unsetenv("HOST_TEST_TOOLS");
+    free(saved);
+    return ok && restored == 0;
 }
 
 int ext2_fixture_findings(const char *input, const char *output)
