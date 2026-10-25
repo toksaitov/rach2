@@ -3735,13 +3735,20 @@ static enum etude_status image_fetch(struct etude_case *c, struct etude_case_mac
     if (result.termination.value != 0)
         return result.termination.value == 1 && !succeeded ? ETUDE_OK : ETUDE_FAILED;
     if (transfer->active) {
-        const char *archive[] = {"/bin/busybox", "tar",      "-cf",        "/dev/disk1",
+        const char *archive[] = {"/bin/busybox", "tar",      "-cf",        "/dev/shm/image-archive",
                                  "-C",           "/dev/shm", "image-file", NULL};
+        const char *copy[] = {"/bin/busybox",  "dd",       "if=/dev/shm/image-archive",
+                              "of=/dev/disk1", "bs=65536", NULL};
         st = image_transfer_hash(c, m, output, transfer->digest);
         if (st != ETUDE_OK)
             return st;
         snprintf(name, sizeof(name), "image-archive.%s", output);
         st = image_input_command(c, m, archive, name);
+        /* tar writes a file's short tail before its sector padding. */
+        if (st == ETUDE_OK) {
+            snprintf(name, sizeof(name), "image-write.%s", output);
+            st = image_input_command(c, m, copy, name);
+        }
         transfer->pending = st == ETUDE_OK;
         return st;
     }
