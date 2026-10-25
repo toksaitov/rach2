@@ -925,11 +925,11 @@ static void names(const struct set *x, struct cmp_text *d, int (*pick)(const str
     cmp_printf(d, "]");
 }
 
-/* These groups contain host-alone checks with short response windows.
+/* These partitions contain host-alone checks with short response windows.
  * They are exclusive within this collection, like an explicit serial suite. */
 static int quiet_case(const struct legacy_case *k)
 {
-    return !strcmp(k->case_id, "host.host.etude") || !strcmp(k->case_id, "host.host.boots");
+    return !strcmp(k->case_id, "host.host.etude_quiet") || !strcmp(k->case_id, "host.host.boots");
 }
 
 /** Say whether suite or quiet-group policy makes member `m` serial. */
