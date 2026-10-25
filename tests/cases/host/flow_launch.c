@@ -107,18 +107,6 @@ static int synthetic_run(int argc, char **argv)
     int i;
     if (!strcmp(mode, "parallel"))
         return waiting_workload(0);
-    if (!strcmp(mode, "ci") && !*ev("ETUDE_ADMITTED")) {
-        char **a = calloc((size_t)argc + 3, sizeof(*a));
-        if (!a)
-            return 2;
-        a[0] = (char *)lp("launch");
-        a[1] = "legacy";
-        for (i = 0; i < argc; i++)
-            a[i + 2] = argv[i];
-        execv(a[0], a);
-        free(a);
-        return 127;
-    }
     if (observer())
         return 3;
     for (i = 1; i < argc; i++)
@@ -157,9 +145,6 @@ static int launch_commands(int argc, char **argv, const char *name)
     if (!strcmp(name, "make")) {
         if (!strcmp(ev("FLOW_LAUNCH_MODE"), "jobs"))
             return record_make(argc, argv);
-        if (!strcmp(ev("FLOW_LAUNCH_MODE"), "ci"))
-            execl(lp("launch"), "launch", "build", ev("FLOW_SELF"), "--launch-observer",
-                  (char *)NULL);
         return observer();
     }
     if (!strcmp(name, "cc"))
@@ -181,6 +166,8 @@ static int launch_commands(int argc, char **argv, const char *name)
             puts("good");
         else if (!strcmp(argv[1], "log"))
             puts("bad fixture");
+        else if (!strcmp(argv[1], "diff") && !strcmp(ev("FLOW_LAUNCH_MODE"), "ci"))
+            return 0;
         else if (strcmp(argv[1], "checkout"))
             return 2;
         return 0;
@@ -281,6 +268,15 @@ static int setup(struct launch_fixture *u)
     struct fixture *f = u->f;
     static const char *clear[] = {"ETUDE_ADMITTED",
                                   "ETUDE_SITE",
+                                  "ETUDE",
+                                  "ETUDE_PURPOSE",
+                                  "ETUDE_RETENTION",
+                                  "ETUDE_ROUTINE_ROUTE",
+                                  "ETUDE_REFERENCE",
+                                  "ETUDE_PREPARATION_IMPORT",
+                                  "RACH2_CASES",
+                                  "RACH2_AGENTS_ROWS",
+                                  "RACH2_ACCEPT_AGENTS",
                                   "RACH2_PORT_OFFSET",
                                   "SSH_TEST_PORT",
                                   "RACH2_RUN_WORK",

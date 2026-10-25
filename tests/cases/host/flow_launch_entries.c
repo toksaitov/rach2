@@ -100,22 +100,30 @@ static int jobs(struct launch_fixture *u)
     fx_env("MAKELEVEL", NULL);
     return 1;
 }
-static int worker_ci(struct launch_fixture *u)
+static int worker(struct launch_fixture *u)
 {
     struct fixture *f = u->f;
-    const char *worker[] = {"sh", "tests/run", "style", NULL};
-    const char *ci[] = {"sh", flow_source(f, "tools/ci/run.sh"), "core", flow_path(f, "ci"), NULL};
+    const char *a[] = {"sh", "tests/run", "style", NULL};
     fx_env("FLOW_LAUNCH_MODE", "worker");
-    if (!flow_copy(f, "tests/run", "checkout/tests/run") ||
-        !flow_copy(f, "tools/etude/hold.sh", "checkout/tools/etude/hold.sh") ||
-        !launch_run(u, worker, 1) || !launch_saw(u, 1, 1))
-        return 0;
+    return flow_copy(f, "tests/run", "checkout/tests/run") &&
+           flow_copy(f, "tools/etude/hold.sh", "checkout/tools/etude/hold.sh") &&
+           launch_run(u, a, 1) && launch_saw(u, 1, 1);
+}
+static int ci_unconfigured(struct launch_fixture *u)
+{
+    struct fixture *f = u->f;
+    const char *a[] = {"sh", flow_source(f, "tools/ci/run.sh"), "core", flow_path(f, "ci"), NULL};
     fx_env("FLOW_LAUNCH_MODE", "ci");
-    if (!fx_copy(f->self, flow_path(f, "checkout/tests/run")))
+    if (!flow_copy(f, "tools/ci/native_entry.sh", "checkout/tools/ci/native_entry.sh") ||
+        !flow_copy(f, "tools/ci/native_site.sh", "checkout/tools/ci/native_site.sh") ||
+        !fx_mkdir(flow_path(f, "ci")) || !launch_run(u, a, 2))
         return 0;
-    chmod(flow_path(f, "checkout/tests/run"), 0755);
-    flow_put(f, "checkout/build/tests/failed/.keep", "");
-    return launch_run(u, ci, 0) && launch_saw(u, 4, 0);
+    return fx_check(f,
+                    strstr(f->err, "ci: refused: selected-site retention policy is absent") &&
+                        !fx_exists(flow_path(f, "ci/start")) &&
+                        !fx_exists(flow_path(f, "observed")),
+                    "native CI refuses missing retention before starting work") &&
+           launch_clear(u);
 }
 static int owner(struct launch_fixture *u)
 {
@@ -220,8 +228,8 @@ static int nested(struct launch_fixture *u)
 }
 int launch_entries(struct launch_fixture *u)
 {
-    return build(u) && jobs(u) && worker_ci(u) && owner(u) && legacy(u) && bisection(u) &&
-           nested(u);
+    return build(u) && jobs(u) && worker(u) && ci_unconfigured(u) && owner(u) && legacy(u) &&
+           bisection(u) && nested(u);
 }
 static int refuse(struct launch_fixture *u, const char *policy)
 {
