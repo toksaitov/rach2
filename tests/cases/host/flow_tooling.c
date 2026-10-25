@@ -674,8 +674,9 @@ static int arm_rows(struct tooling *t)
     fresh(t);
     if (!made(t))
         return 0;
-    if (!fx_check(f, cache_files(t, "tooling-*.qcow2", NULL, old_disk) == 1 &&
-                         cache_files(t, "tooling-*.tools", "provision: ok", old_tools) == 1,
+    if (!fx_check(f,
+                  cache_files(t, "tooling-*.qcow2", NULL, old_disk) == 1 &&
+                      cache_files(t, "tooling-*.tools", "provision: ok", old_tools) == 1,
                   "amd64 image and tool record published"))
         return 0;
     {
@@ -687,12 +688,13 @@ static int arm_rows(struct tooling *t)
         const char *a[] = {"-p", "arm64", "-a", "hvf", "prepare", NULL};
         run(t, a);
     }
-    ok = fx_check(f, !f->status && cache_files(t, "tooling-*.qcow2", NULL, disk) == 1 &&
-                         cache_files(t, "tooling-*.tools", "provision: ok", tools) == 1 &&
-                         strcmp(disk, old_disk) && strcmp(tools, old_tools) &&
-                         strlen(disk) == strlen(tools) &&
-                         !strncmp(disk, tools, strlen(disk) - strlen(".qcow2")) &&
-                         !fx_exists(old_disk) && !fx_exists(old_tools),
+    ok = fx_check(f,
+                  !f->status && cache_files(t, "tooling-*.qcow2", NULL, disk) == 1 &&
+                      cache_files(t, "tooling-*.tools", "provision: ok", tools) == 1 &&
+                      strcmp(disk, old_disk) && strcmp(tools, old_tools) &&
+                      strlen(disk) == strlen(tools) &&
+                      !strncmp(disk, tools, strlen(disk) - strlen(".qcow2")) &&
+                      !fx_exists(old_disk) && !fx_exists(old_tools),
                   "arm64 pair published and unused amd64 pair pruned") &&
          ok;
     {

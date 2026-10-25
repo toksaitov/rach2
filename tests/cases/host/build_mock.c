@@ -45,7 +45,8 @@ int build_mock(int argc, char **argv)
         if (!fx_text("Makefile", "all:\ninstall:\n"))
             return 92;
         snprintf(jobs, sizeof(jobs), "-j%s", parallel ? parallel : "");
-        const char *args[] = {"/usr/bin/make", "-s", "-f", getenv("JOBS_MK"), parallel ? jobs : NULL, NULL};
+        const char *args[] = {"/usr/bin/make",        "-s", "-f", getenv("JOBS_MK"),
+                              parallel ? jobs : NULL, NULL};
         execvp(args[0], (char *const *)args);
         return 93;
     }

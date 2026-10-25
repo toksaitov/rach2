@@ -3370,8 +3370,7 @@ static enum etude_status image_copy_arguments(const char *const argv[], size_t c
                 if (!image_input_path(v, argv[i]))
                     return ETUDE_REFUSED;
             }
-            v->args[prefix + i - 1] =
-                i == count - 1 ? "/dev/shm/image-file" : v->input_file;
+            v->args[prefix + i - 1] = i == count - 1 ? "/dev/shm/image-file" : v->input_file;
         }
     }
     if (v->input != NULL && v->destination != NULL)
@@ -3483,7 +3482,7 @@ static enum etude_status image_directory(struct etude_case *c, struct etude_case
 
 /** Create private input storage before transferring a basename-preserved file. */
 static enum etude_status image_input(struct etude_case *c, struct etude_case_machine *m,
-                                      const struct image_invocation *v, const char *output)
+                                     const struct image_invocation *v, const char *output)
 {
     const char *args[] = {"/bin/busybox", "mkdir", "-m", "0700", "/dev/shm/image-input", NULL};
     struct etude_guest_result result;

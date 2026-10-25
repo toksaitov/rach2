@@ -370,9 +370,17 @@ int build_together(struct fixture *f)
     for (size_t a = 0; a < 2; a++) {
         char arch[64];
         snprintf(arch, sizeof(arch), "ARCH=%s", arches[a]);
-        const char *args[] = {
-            "/usr/bin/make", "--no-print-directory", "-r", "-pn",           "-f", "Makefile",
-            "-f",   bp(f->work, "noop.mk"), arch, "together-noop", NULL};
+        const char *args[] = {"/usr/bin/make",
+                              "--no-print-directory",
+                              "-r",
+                              "-pn",
+                              "-f",
+                              "Makefile",
+                              "-f",
+                              bp(f->work, "noop.mk"),
+                              arch,
+                              "together-noop",
+                              NULL};
         if (!fx_check(f, fx_run(f, args, tree, NULL, NULL) == 0, "make database query"))
             continue;
         char *database = strdup(f->out ? f->out : "");

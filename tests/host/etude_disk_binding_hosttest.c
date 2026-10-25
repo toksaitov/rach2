@@ -114,9 +114,9 @@ static void image_upload_arguments(void)
 {
     static const char *const paths[] = {"/host/Busy Box", "Busy Box", "D:/host/Busy Box",
 #ifdef _WIN32
-                                          "D:\\host\\Busy Box",
+                                        "D:\\host\\Busy Box",
 #endif
-                                          NULL};
+                                        NULL};
     struct image_invocation v;
     const char *upload[] = {"mcopy", "-i", "disk@@1048576", NULL, "::/", NULL};
     char oversized[4096];
@@ -125,8 +125,8 @@ static void image_upload_arguments(void)
     for (size_t i = 0; paths[i] != NULL; i++) {
         upload[3] = paths[i];
         memset(&v, 0, sizeof v);
-        check_binding(image_copy_arguments(upload, 5, 3, &v) == ETUDE_OK &&
-                          v.input == paths[i] && v.destination == NULL && v.args[5] &&
+        check_binding(image_copy_arguments(upload, 5, 3, &v) == ETUDE_OK && v.input == paths[i] &&
+                          v.destination == NULL && v.args[5] &&
                           !strcmp(v.args[5], "/dev/shm/image-input/Busy Box") &&
                           !strcmp(upload[2], "disk@@1048576") && !strcmp(upload[4], "::/"),
                       "mcopy upload changed its basename or another operand");
