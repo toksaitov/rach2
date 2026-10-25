@@ -169,6 +169,10 @@ static int uname_mock(int argc, char **argv)
         puts("Linux");
         return 0;
     }
+    if (argc == 2 && !strcmp(argv[1], "-r")) {
+        puts("6.0.0-fixture");
+        return 0;
+    }
     argv[0] = "/usr/bin/uname";
     execv(argv[0], argv);
     return 127;

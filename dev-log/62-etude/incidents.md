@@ -1232,3 +1232,9 @@ A sparse-copy probe on 4 MiB plus 123 bytes preserved bytes but did not reduce a
 ## The cache repair needed a formatting correction
 
 Linux preparation of daba2ce7 stopped in the style prerequisite because the cache predicate's continuation differed from the pinned formatter. The correction changes two lines of layout only. The native Etude compilation had passed, but preparation, combined checks and export had not. The failed preparation's complete output is retained under build/tests/run35-fresh-controls-daba2ce7e6bbac72c0e738159476437c37a02ded; all captured processes ended, the ledger was empty and the tree lock was absent. The Mac had completed only its admitted Make dry run, so it stopped before compilation. The next candidate resumes ordinary preparation with retained build outputs and gets its own actual receipts.
+
+## The deployment fixture mixed Linux and Rach2 identity
+
+Linux run36 reached deployment after the version-publication fixture exited 0 with confirmed cleanup. Deployment reported `No rule to make target 'tests/native/collection.c'` and failed its private-state and version-directory assertions. Its stand-in returned `Linux` for `uname -s` but delegated `uname -r` to the GNU helper. The helper's release ended in `-rach2`, so prerequisite detection and bootstrap selected Rach2 while the fixture expected Linux records and `tcg`.
+
+The non-Windows stand-in now returns `6.0.0-fixture` for the release and retains the actual architecture and host name. This selects the Linux branch the deployment rows model; copying the native collection sources would only hide the first symptom and leave the record assertions wrong. The Windows stand-in and all deployment assertions remain unchanged. The frozen a35 collection and its failure evidence are retained; the coordinating session validates the repair after that collection ends. This fixes #1117.

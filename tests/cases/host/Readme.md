@@ -54,6 +54,8 @@ The GNU helper supplies the POSIX environment of filesystem, compiler, build, de
 
 The version-publication fixture uses short C and header contents with the real source paths, make rules and bootstrap scripts for its repeated mock-compiler checks. It retains the source-byte, cache identity, shell, interruption and publication assertions. Before the real compiler check, it removes that private tree and copies the complete product source again. The real build and its schema, history and command checks use the full source.
 
+The deployment fixture models Linux with `uname -s` reporting `Linux` and `uname -r` reporting `6.0.0-fixture`, including when it runs in the GNU Rach2 helper. Architecture and host name come from the actual machine. Its separate Windows stand-in supplies the Windows identity. Deployment records and accelerator assertions therefore use the intended platform without inheriting the helper's `-rach2` release suffix.
+
 Native executor, platform and QEMU checks run on the collection host. Preparation rejects an undeclared interpreter or missing adapter; execution reports a missing check as a failure. `host.sh` remains as the legacy build-command interface. The prepared collection does not call it. `etude_hostdriver_hosttest.c` and the compiled host-suite controller check scheduling, interruption and immutable inputs.
 
 ### Source-check evidence
