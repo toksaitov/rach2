@@ -5,6 +5,7 @@
  * recipe of a preparation graph's node with `--legacy`.
  *
  * host-deps: tools/etude/routine_charge.c
+ * host-deps: tools/etude/routine_proof.c
  * host-deps: tools/etude/observe_import.c
  * host-deps: tools/etude/boot_identity.c
  * host-deps: tools/etude/measurement_context.c tools/etude/json.c
@@ -1028,6 +1029,8 @@ static void test_import_product(void)
     etude_exec_free(ex);
 }
 
+#include "compat/context_source_host.c"
+
 int main(int argc, char **argv)
 {
     char held[32];
@@ -1044,6 +1047,14 @@ int main(int argc, char **argv)
     setenv("LC_ALL", "POSIX", 1);
     setenv("MAKEFLAGS", "n", 1);
     setenv("ARCH", "x86_64", 1);
+    if (argc == 2 && !strcmp(argv[1], "--source-only")) {
+        test_source_capture();
+        if (fails)
+            return 1;
+        fix_passed();
+        puts("etude_legacy_hosttest: source pass");
+        return 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--clean-only")) {
         test_clean();
         test_clean_refused();
@@ -1065,6 +1076,7 @@ int main(int argc, char **argv)
     test_again();
     test_clean();
     test_clean_refused();
+    test_source_capture();
     test_machine();
     test_helper_architecture();
     test_refused();

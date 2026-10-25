@@ -5,6 +5,15 @@
 #include <stddef.h>
 
 struct etude_measurement_context;
+struct stat;
+struct jbuf;
+
+/* Capture a clean committed tree and optional prepared inputs in C. */
+int etude_context_source(const char *tree, const char *commit, const char *output,
+                         const char *const extra[]);
+int etude_prepare_source_main(int argc, char **argv);
+int etude_context_digest(const char *path, struct stat *status, char digest[65]);
+int etude_context_descriptor(struct jbuf *buffer, const char *path);
 
 struct etude_context_clock {
     char machine_id[128], boot_id[128];
