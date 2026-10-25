@@ -24,7 +24,7 @@ def require(condition, message):
 def transport_command(producer, command, mode=None, wsl=None):
     transport = producer['transport']
     if transport == 'wsl':
-        require(sys.platform in ('win32', 'msys', 'cygwin') and mode in ('windows-import', 'wsl-native'),
+        require(sys.platform == 'win32' and mode in ('windows-import', 'wsl-native'),
                 'direct WSL requires a native Windows physical route')
         require(isinstance(wsl, str) and ntpath.isabs(wsl) and ntpath.splitdrive(wsl)[0] and
                 not any(c in wsl for c in '\0\r\n'), 'WSL executable is not an absolute native path')
