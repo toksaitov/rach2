@@ -999,7 +999,7 @@ The machine is QEMU's default PC, or its q35 when the profile's `machine` is `q3
 
 | Profile | QEMU's arguments |
 | --- | --- |
-| The site's accelerator | `-accel NAME`, one alone, so that QEMU tries no other |
+| The site's accelerator | `-accel NAME`, one alone, so that QEMU tries no other; WHPX uses `whpx,kernel-irqchip=off` so QEMU observes guest halt instructions |
 | `cpu` | `-cpu` with the processor profile's value |
 | `processors`, `memory_bytes` | `-smp`, and `-m` in bytes, a whole number of mebibytes |
 | `firmware` `direct` | `-kernel`, `-initrd` when there is one, and `-append` with the boot options separated by spaces |

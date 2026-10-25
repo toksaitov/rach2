@@ -13,6 +13,12 @@
 
 static const char *const accel_names[ETUDE_ACCEL_COUNT] = {"tcg", "kvm", "hvf", "whpx"};
 
+/* HMP reads QEMU's halt state, so WHPX must deliver halt exits to QEMU. */
+static const char *accel_option(enum etude_accel accel)
+{
+    return accel == ETUDE_ACCEL_WHPX ? "whpx,kernel-irqchip=off" : etude_accel_name(accel);
+}
+
 /* The network cards a profile may name, each on a user network of its own. */
 static const char *const nic_models[] = {"rtl8139", "e1000", NULL};
 
@@ -1116,7 +1122,7 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     out->argv[0] = NULL;
     add(&l, 0, "%s", program);
     add(&l, 0, "-accel");
-    add(&l, 0, "%s", etude_accel_name(s->accel));
+    add(&l, 0, "%s", accel_option(s->accel));
     add(&l, 0, "-nodefaults");
     add(&l, 0, "-display");
     add(&l, 0, "none");
@@ -1186,17 +1192,20 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
 
 int etude_qemu_accel_refused(const char *err, enum etude_accel accel)
 {
-    char needle[32];
+    char needle[32], configured[64];
     const char *line, *at, *end;
 
     if (err == NULL || etude_accel_name(accel) == NULL)
         return 0;
     snprintf(needle, sizeof(needle), ": -accel %s: ", etude_accel_name(accel));
+    snprintf(configured, sizeof(configured), ": -accel %s: ", accel_option(accel));
     for (line = err; *line != '\0'; line = *end == '\0' ? end : end + 1) {
         end = strchr(line, '\n');
         if (end == NULL)
             end = line + strlen(line);
         at = strstr(line, needle);
+        if (at == NULL)
+            at = strstr(line, configured);
         if (at != NULL && at < end && at > line)
             return 1;
     }
