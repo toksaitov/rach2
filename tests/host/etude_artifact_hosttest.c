@@ -692,8 +692,8 @@ static void test_digests_objects(void)
     CHECK(etude_store_copy(s, other, copy) == 0 && etude_store_hashed == hashed &&
               read_text(copy, buf, sizeof(buf)) == 6 && strcmp(buf, "other\n") == 0,
           "digests: copy: a kept object is copied without being hashed");
-    CHECK(etude_store_path(s, other, path, sizeof(path)) == 0 && chmod(path, 0644) == 0 &&
-              write_text(path, "OTHER\n") == 0,
+    CHECK(etude_store_path(s, other, path, sizeof(path)) == 0 && stat(path, &st) == 0 &&
+              chmod(path, 0644) == 0 && overwrite(path, "OTHER\n", &st) == 0,
           "digests: an object damaged");
     CHECK(etude_store_check(s, other, NULL) == -1 && errno == EBADMSG &&
               etude_store_hashed == hashed + 1,
@@ -703,6 +703,48 @@ static void test_digests_objects(void)
               !has_line(cache, path),
           "digests: the line of a file changed or gone is dropped");
     etude_store_close(s);
+}
+
+/** A fresh object's digest is not kept, even though it was made read-only. */
+static void test_digests_object_settle(void)
+{
+    const char *cache = fix_path("settle-cache"), *src = fix_path("settle-source");
+    struct etude_store *s = etude_store_open(fix_path("settle-store"));
+    char digest[ETUDE_DIGEST_HEX + 1], path[PATH_MAX] = "";
+
+    etude_store_settle_ns = 3600000000000LL;
+    CHECK(s != NULL, "digests: fresh object store");
+    if (s != NULL) {
+        CHECK(etude_store_digests(s, cache) == 0 && write_text(src, "fresh\n") == 0 &&
+                  etude_store_put(s, src, NULL, digest, NULL) == 0 &&
+                  etude_store_path(s, digest, path, sizeof(path)) == 0,
+              "digests: publish fresh object");
+        CHECK(!has_line(cache, path), "digests: fresh object is not kept");
+        CHECK(chmod(path, 0644) == 0 && write_text(path, "OTHER\n") == 0 &&
+                  etude_store_check(s, digest, NULL) == -1 && errno == EBADMSG,
+              "digests: immediate object damage is refused");
+        etude_store_close(s);
+    }
+    etude_store_settle_ns = 0;
+}
+
+/** Entries made before objects obeyed the settling rule are read again. */
+static void test_digests_old_format(void)
+{
+    const char *cache = fix_path("old-cache"), *src = fix_path("old-source");
+    char digest[ETUDE_DIGEST_HEX + 1], line[8192] = "";
+    struct stat st;
+    unsigned long hashed;
+
+    CHECK(write_text(src, "old\n") == 0 && etude_digest_file(cache, src, &st, digest) == 0 &&
+              read_text(cache, line, sizeof(line)) > 2 && strncmp(line, "2 ", 2) == 0,
+          "digests: versioned entry");
+    if (strncmp(line, "2 ", 2))
+        return;
+    hashed = etude_store_hashed;
+    CHECK(write_text(cache, line + 2) == 0 && etude_digest_file(cache, src, &st, digest) == 0 &&
+              etude_store_hashed == hashed + 1,
+          "digests: old entry is read again");
 }
 
 /** Give the allocation of `path`, requiring its expected length; 0 or -1. */
@@ -1674,6 +1716,8 @@ int main(int argc, char **argv)
     test_digests_settle();
     test_digests_put();
     test_digests_objects();
+    test_digests_object_settle();
+    test_digests_old_format();
     test_sparse();
     test_range();
     test_overlay();
