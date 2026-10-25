@@ -34,6 +34,8 @@ Each case has a workspace: a directory of its own, its working directory, remove
 
 `machine` has a line `NAME REASON` for each guest program that has no native case and is staged by none: the reason its checks need a machine of QEMU's, in a few words.
 
+The bind-holder program receives `mounted` for its private KRFFS root. It requires the mounted volume's exact filesystem magic and runs all twenty holder and reclamation assertions. Its virtual-machine case supplies no such argument and still requires the boot root's different magic.
+
 A program learns its native values from its arguments, which `etude-guest` appends after the case's own, as [`probe_args.h`](../probe_args.h) reads them: `ids=OLD:NEW,...` and `ports=OLD:NEW,...` for its maps, `loops=DEVICE,...` for the devices of its volumes in order, `peer=ADDRESS:PORT`, and `root=PATH`, the private root's directory as the machine's `/proc/mounts` names it. A case whose program has checks that need the machine gives `machine=native`, and the program leaves those checks out; a comment above the case names them. The program starts with its absolute path as `argv[0]`. Run with none of these arguments, as the test image runs it, a program uses the ids, ports and paths of the test image and makes every check. The GNU and agents rows, `tests/system/gnu_rows.sh` and `tests/system/agents_rows.sh`, take arguments of the same kind, as their headers say.
 
 ### Local collection
