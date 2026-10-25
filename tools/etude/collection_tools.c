@@ -22,6 +22,7 @@
 #endif
 #include "etude/exec.h"
 #include "json.h"
+#include "collection_tools.h"
 #include "routine_proof.h"
 #include "../../utils/sha256.h"
 
