@@ -659,6 +659,9 @@ static int row_ended(const struct row *r, enum etude_end end, enum etude_expiry 
     if (r->a == NULL)
         return 0;
     res = etude_supervised_result(r->a);
+    if (res->proc != NULL && res->proc->err.kept != 0)
+        printf("etude-watchdog-test: %s: standard error: %.*s\n", r->name, (int)res->proc->err.kept,
+               res->proc->err.data);
     CHECK(res->finished && strcmp(res->attempt_id, r->name) == 0, r->name);
     if (res->end != end || res->expiry != expiry) {
         printf("etude-watchdog-test: fail: %s: ended %s after expiry %s, not %s after %s\n",
