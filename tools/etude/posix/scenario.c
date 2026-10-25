@@ -3480,7 +3480,7 @@ static enum etude_status image_directory(struct etude_case *c, struct etude_case
     return st;
 }
 
-/** Create private input storage before transferring a basename-preserved file. */
+/** Create private input storage before transferring an upload. */
 static enum etude_status image_input(struct etude_case *c, struct etude_case_machine *m,
                                      const struct image_invocation *v, const char *output)
 {
