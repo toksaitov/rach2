@@ -1611,3 +1611,7 @@ The check due at 19:55:06 on 25 October began at 19:58:39 while the coordinating
 ## Follow-up messages did not restart a completed helper
 
 After the Lenovo helper finished its targeted checks, the coordinator sent further work through the message operation, which does not start a new turn. The helper therefore did not resume the remaining native selection or the later source-check correction. A live agent-status read exposed the mistake at 20:23 on 25 October. The coordinator restarted the helper with the follow-up task operation. After a helper finishes, new work must use that operation; a sent message alone proves neither receipt nor execution.
+
+## Native CI fixtures inherited the staged lines selection (#1155)
+
+The GNU `ci_run` retry on 1546ebe0f passed its lines, history and exact retained-directory assertions, then failed all fourteen native collection rows. Their private script still selected the production default, now lines until site activation. The native sequence substitute was never called. The launcher's missing-retention row had the same assumption. Both fixtures now copy the script into their private tree, require a recognized selector and explicitly select native mode. All native cancellation, projection, completion, refusal and no-start assertions remain unchanged. The failed retry, complete output and independent four-process cleanup remain under `build/tests/mac-targeted-repairs/ci-runtime-failed`.
