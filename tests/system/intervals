@@ -20,6 +20,7 @@ tests/host/etude_hold_hosttest.c: retain the parent while the second stop is sen
 tests/cases/host/host_products_drive.c: poll the readiness file every 100 ms
 tests/cases/host/host_products_drive.c: poll the process group every 100 ms
 tests/cases/machine/agent_accept.c: poll the agent pane every two seconds
+tests/cases/machine/sshpeer.c: poll SSH identification without unbounded connection retries
 tests/cases/host/fixture.c: poll the fixture state every 20 ms
 tests/cases/host/host_suite_probe.c: poll the meeting directory every millisecond
 tests/host/etude_step_hosttest.c: a fixture's file is looked at again every 10 ms
