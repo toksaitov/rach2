@@ -1266,3 +1266,9 @@ The exact Windows SSH command now sets a private platform marker, and other SSH 
 The run37 tooling check prepared amd64, then arm64. Both commands succeeded, and the ARM job passed. The fixture nevertheless required two cached images. The current cache removes an unused completed pair after publishing its replacement, and the retained output records that removal. Its 10,049 bytes have SHA-256 `0720cd413ec15a195678739b4a94c776473e9757ee7a8385a356f4fba9a3fefd`.
 
 The fixture now records the first image and tool record, requires one different complete pair after ARM preparation, and verifies that both old files are absent. The platform identity refusal, ARM job and all QEMU argument checks remain. Product pruning is unchanged. This fixes #1121; validation belongs to the combined repair check.
+
+## The maker fixture selected pdpmake for a GNU Make query
+
+The run37 parallel-maker check invoked `make` through PATH. The GNU helper also contains the musl system's pdpmake, which rejected `--no-print-directory` before the database query. The retained `together` error is `make: unrecognized option -`. No maker assertion could run.
+
+Both database queries and parallel requests now invoke the prepared `/usr/bin/make`. The sibling CMake fixture's outer jobserver and bootstrap invocation use the same explicit GNU program, since their contract is GNU Make's jobserver. Every maker and both architectures remain in the check. The testing skill now requires the declared implementation for program-specific behavior. This fixes #1122; validation belongs to the combined repair check.

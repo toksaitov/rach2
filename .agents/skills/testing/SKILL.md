@@ -33,6 +33,8 @@ description: Run suites, full sets or analyses on the testing host, or write a s
 
 ## Writing a suite
 
+* Invoke the declared implementation when a fixture checks program-specific behavior. A helper can provide another implementation under the same command name; GNU Make database and jobserver checks use its prepared absolute path.
+
 * Select a command substitute's platform through explicit fixture state, not a directory in argv[0]. A shell may pass only the basename even when PATH selected an executable in a platform-specific directory.
 
 * Check a published native program through its declared native file path. MSYS existence checks may resolve a suffixless name to an unrenamed `.exe`.

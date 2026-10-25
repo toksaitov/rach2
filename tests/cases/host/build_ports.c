@@ -191,7 +191,7 @@ static int jobs_row(struct fixture *f, int width)
     if (!fx_mkdir(bp(f->work, "build")) || !fx_mkdir(bp(f->work, "running")) ||
         !fx_text(bp(f->work, "build/Makefile"), "all:\n") || !fx_text(bp(f->work, "counts"), ""))
         return 0;
-    const char *jobserver[] = {"make", "-s", "-j2", "-f", bp(f->work, "outer.mk"), NULL};
+    const char *jobserver[] = {"/usr/bin/make", "-s", "-j2", "-f", bp(f->work, "outer.mk"), NULL};
     const char *alone[] = {"/bin/sh", bp(f->work, "port.sh"), NULL};
     const char *settings[] = {width == 3 ? "MAKEFLAGS=-j3" : "MAKEFLAGS=", NULL};
     int ok = fx_run(f, width == 3 ? alone : jobserver, f->work, settings, NULL) == 0;

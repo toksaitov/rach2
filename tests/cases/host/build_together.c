@@ -305,7 +305,7 @@ static int maker_run(struct fixture *f, const char *tree, const char *arch, cons
     snprintf(setting, sizeof(setting), "ARCH=%s", arch);
     const char **args = calloc(2 * n + 4096, sizeof(*args));
     size_t used = 0;
-    args[used++] = "make";
+    args[used++] = "/usr/bin/make";
     args[used++] = "--no-print-directory";
     args[used++] = "-r";
     args[used++] = "-j8";
@@ -371,7 +371,7 @@ int build_together(struct fixture *f)
         char arch[64];
         snprintf(arch, sizeof(arch), "ARCH=%s", arches[a]);
         const char *args[] = {
-            "make", "--no-print-directory", "-r", "-pn",           "-f", "Makefile",
+            "/usr/bin/make", "--no-print-directory", "-r", "-pn",           "-f", "Makefile",
             "-f",   bp(f->work, "noop.mk"), arch, "together-noop", NULL};
         if (!fx_check(f, fx_run(f, args, tree, NULL, NULL) == 0, "make database query"))
             continue;
