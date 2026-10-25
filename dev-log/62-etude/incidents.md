@@ -1414,7 +1414,7 @@ The Windows diagnostic on `0da2f8d327516deaaa26d22232c8004dfe8f76e2` completed d
 
 These cases now declare and reserve a private 64 MiB transfer disk. The shared image adapter uses the existing tar volume reader and BusyBox archive writer, validates input and output SHA-256 digests, and reads the output only after sync and confirmed machine cleanup. Other callers keep their existing serial path. The existing collection regression retains all six assertions and additionally writes and returns an 8 MiB plus 257-byte deterministic binary file, including a basename with spaces. No execution bound changes. Local strict syntax and mechanical checks pass; the affected real helper checks remain required after the active diagnostic ends.
 
-The same diagnostic later completed the KRFFS loop-device probe and durability assertions on both architectures, then exhausted the mcopy transfer step before its independent file-system checks. Those two complete outputs are retained in `operator/new-failures-1912/files.json`. This case now declares the same accounted transfer slot for #1151. Its probes, checker assertions and bounds are unchanged.
+The same diagnostic later completed the KRFFS loop-device probe and durability assertions on both architectures, then exhausted the mcopy transfer step before its independent file-system checks. Those two complete outputs are retained in `operator/new-failures-1912/files.json`. The later VFAT and lag loop-device cases likewise reached their read-back step and exhausted mcopy before the image assertion. These three cases now declare the same accounted transfer slot for #1151. Their probes, checker assertions and bounds are unchanged.
 
 ### A Windows SFTP batch added CR to its return evidence name
 
