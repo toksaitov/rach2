@@ -62,6 +62,9 @@ def main():
         path = archive(cache, item)
         extract(path, deps, out)
         print('prepared ' + path.name, flush=True)
+    for item in pins['python_wheels']:
+        path = archive(cache, item)
+        shutil.copyfile(path, out / path.name)
     source = archive(cache, pins['source'])
     shutil.copyfile(source, out / source.name)
     for name in ['build.sh', 'pins.json', 'whpx-live-xsave-size.patch']:
