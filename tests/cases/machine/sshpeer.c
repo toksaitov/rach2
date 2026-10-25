@@ -12,9 +12,9 @@
  * identification, say that the server itself accepted a connection.
  *
  * `wait` connects until a connection has the server's identification,
- * prints `sshpeer: answered after N refused` and exits 0. Each try follows
- * the guest's refusal of the one before, so the tries go at the pace the
- * guest answers and not the host's.
+ * prints `sshpeer: answered after N refused` and exits 0. A refused attempt
+ * waits 50 milliseconds before opening another connection, so a server
+ * that is still starting cannot fill the host's TCP state with retries.
  *
  * `flood` opens COUNT connections and prints `sshpeer: open N`, N those
  * that connected, then `sshpeer: answered K` each time another has had the
@@ -106,6 +106,22 @@ static peer_socket connect_to(unsigned port)
     return fd;
 }
 
+/** Pace refused readiness attempts without deciding when a server is ready. */
+static int retry_pause(void)
+{
+#ifdef _WIN32
+    Sleep(50);
+    return 0;
+#else
+    int result;
+
+    do
+        result = poll(NULL, 0, 50);
+    while (result < 0 && errno == EINTR);
+    return result < 0 ? -1 : 0;
+#endif
+}
+
 /** Connect to `port` until a connection has the server's identification. */
 static int wait_answer(unsigned port)
 {
@@ -129,6 +145,10 @@ static int wait_answer(unsigned port)
             return 0;
         }
         refused++;
+        if (retry_pause() < 0) {
+            socket_error("wait");
+            return 1;
+        }
     }
 }
 

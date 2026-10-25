@@ -1678,3 +1678,9 @@ The coordinator described missing Python packages without first explaining that 
 ## A partial acceptance record used the completion filename
 
 The current-source preparation on 25 October failed the documentation check because the incomplete acceptance record was named `Readme.md`. The dev-log checker treats that filename as a completed milestone and requires an index entry. The record explicitly left desktop runs, comparisons, review and release unfinished, so adding an index entry would have asserted completion incorrectly. The record is now `acceptance-progress.md`; its contents and the compiled output are preserved. Until the milestone is accepted, keep partial results under a distinct filename and create its final `Readme.md` with the completion entry.
+
+## SSH readiness retries filled native TCP state (#1164)
+
+The frozen e1 Mac collection first reported a reset at 23:23:48 on 25 October, then native socket error 55 and QEMU forwarding failures on distinct ports. It was stopped through its verified owner; all 1,909 captured process identities ended, the admission ledger was empty and every guard was free. Independent loopback checks succeeded before and after cleanup, and a paused QEMU could bind the failed port afterward. Low aggregate mbuf use did not establish the cause.
+
+One unchanged jq/i686 retry passed, but its real SSH readiness helper reported 250,794 refused attempts. Seventy native samples showed TCP control blocks rising from 89 to 35,370 and ending at 16,417. The helper opened another connection immediately after each refusal while the guest generated its host keys. A 50-millisecond interruptible wait now follows each refused identification. The actual SSH banner remains the only readiness success, connection errors remain fatal and deliberate flooding keeps its existing behavior. The host fixture records transport and wait calls without judging wall time.
