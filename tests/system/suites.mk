@@ -134,6 +134,7 @@ ETUDEEXEC_ARCHIVE = $(CASE_DIR)/etudeexec/etude.tar
 # Python imports may create caches beside source. They are not archive inputs.
 ETUDEEXEC_FILES = $(shell find tools/etude tests/native -type d -name __pycache__ -prune -o \
                   -type f ! -name '*.pyc' ! -name '*.pyo' -print) utils/sha256.c utils/sha256.h \
+                  tests/cases/host/host_script_inventory.c tests/cases/host/host_script_inventory.h \
                   tests/host/etude_exec_hosttest.c tests/host/compat/fixdir_host.c \
                   tests/host/compat/fixdir_host.h tests/host/compat/pathmax_host.h \
                   tests/host/compat/tree_host.h tests/host/compat/sanitizer_env_host.h \

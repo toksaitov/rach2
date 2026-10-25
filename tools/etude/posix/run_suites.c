@@ -24,6 +24,7 @@
 #include "measurement_context.h"
 #include "json.h"
 #include "verbs.h"
+#include "host_prepare.h"
 
 /* The longest bound of a step or a run, in seconds: a week. */
 #define SECONDS_MAX 604800ul
@@ -106,6 +107,12 @@ int etude_prepare_main(int argc, char **argv)
         return etude_prepare_source_main(argc - 1, argv + 1);
     if (argc >= 2 && !strcmp(argv[1], "context"))
         return etude_prepare_context_main(argc - 1, argv + 1);
+
+    if (argc >= 2 && strcmp(argv[1], "-H") == 0) {
+        catch_stops();
+        return etude_host_prepare_main(argc - 1, argv + 1, &stop_signal);
+    }
+
     if (argc >= 2 && strcmp(argv[1], "collection") == 0) {
         argv[1] = argv[0];
         return etude_collection_prepare_main(argc - 1, argv + 1);
