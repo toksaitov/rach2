@@ -1430,3 +1430,7 @@ The GNU artifact fixture accepted an object after a same-size overwrite on Rach2
 ## Host-only collections inherited the machine disk floor (#1138)
 
 The GNU collection fixture selected prepared host cases in its private guest filesystem, but execution stopped before its first case because the tree had less than 40 GiB free. The public collection entry applied the machine-launch disk floor to every selection. It now applies that floor to artifact production and to selections that boot guests or machines. Host-only execution still admits each case against the filesystem's measured free bytes. The existing GNU collection fixture exercises this path on the small private filesystem; no capacity override or refusal assertion changes.
+
+## The resource ledger missed Rach2's boot identity (#1140)
+
+The GNU ledger fixture required Linux's boot UUID proc file, which Rach2 does not provide. The production ledger used that same path and recorded an unknown boot, so it could not release a claim proved to belong to an earlier boot. The ledger now recognizes Rach2 by uname and reads the existing trusted boot token from its boot-local tmpfs. Its boot field accepts the full 64-byte token. The fixture reads the platform identity independently and retains the assertion that a different boot releases a claim, including on macOS. Every host fixture linking the ledger declares the boot reader as a source dependency.

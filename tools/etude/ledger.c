@@ -17,6 +17,10 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#if defined(__linux__) || defined(__rach2__)
+#include <sys/utsname.h>
+#include "boot_identity.h"
+#endif
 #if defined(__APPLE__)
 #include <sys/sysctl.h>
 #endif
@@ -33,7 +37,7 @@
 #define LEDGER_FILE_MAX (64u << 20)
 
 /* The longest boot identity, system name, state, resource and account. */
-#define BOOT_MAX     64
+#define BOOT_MAX     128
 #define SYSTEM_MAX   16
 #define STATE_MAX    16
 #define RES_NAME_MAX 64
@@ -525,19 +529,26 @@ static void lock_close(struct etude_ledger *l)
 
 /**
  * Fill `boot` with the identity of this boot, which another boot does not
- * share: Linux's random boot_id, or macOS's boot session UUID. Elsewhere it
- * is "-", which matches no boot.
+ * share: Linux's random boot_id, Rach2's boot-local token, or macOS's boot
+ * session UUID. Elsewhere it is "-", which matches no boot.
  */
 static void boot_read(char *boot)
 {
-#if defined(__linux__)
-    FILE *f = fopen("/proc/sys/kernel/random/boot_id", "r");
-
-    if (f == NULL || fgets(boot, BOOT_MAX, f) == NULL)
+#if defined(__linux__) || defined(__rach2__)
+    struct utsname kernel;
+    if (uname(&kernel)) {
         boot[0] = '\0';
-    if (f != NULL)
-        fclose(f);
-    boot[strcspn(boot, "\n")] = '\0';
+    } else if (etude_boot_is_rach2(kernel.sysname, kernel.release, kernel.version)) {
+        if (etude_boot_file_read("/dev/shm/etude-guest-boot", boot, BOOT_MAX))
+            boot[0] = '\0';
+    } else {
+        FILE *f = fopen("/proc/sys/kernel/random/boot_id", "r");
+        if (f == NULL || fgets(boot, BOOT_MAX, f) == NULL)
+            boot[0] = '\0';
+        if (f != NULL)
+            fclose(f);
+        boot[strcspn(boot, "\n")] = '\0';
+    }
 #elif defined(__APPLE__)
     size_t len = BOOT_MAX;
 

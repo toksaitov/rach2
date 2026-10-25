@@ -9,6 +9,7 @@
  * host-inputs: tools/etude/schemas/case.host.example.json
  * host-inputs: tools/etude/schemas/budget.schema.json
  * host-inputs: tools/etude/schemas/budget.example.json
+ * host-deps: tools/etude/boot_identity.c
  * host-deps: tools/etude/routine_charge.c
  * host-deps: tools/etude/authority.c tools/etude/authority_parse.c
  * host-deps: tools/etude/posix/authority_platform.c
