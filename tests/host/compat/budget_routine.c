@@ -530,6 +530,8 @@ static void test_routine_charge(void)
     const char *path = write_policy("routine-policy.json", &usual);
     CHECK(!etude_routine_work_us(path, "ci", &work) && work == UINT64_C(540000000),
           "owner work deadline uses the actual purpose ceiling and cleanup reserve");
-    CHECK(etude_routine_work_us(path, "phase_first_run", &work) == -1,
-          "experimental exemption is not a routine owner deadline");
+    CHECK(!etude_routine_work_us(path, "phase_first_run", &work) && work == UINT64_C(13800000000),
+          "first whole run uses its declared policy deadline and cleanup reserve");
+    CHECK(etude_routine_work_us(path, "unknown-purpose", &work) == -1,
+          "unknown routine purpose is refused");
 }
