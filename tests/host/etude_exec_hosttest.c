@@ -2,6 +2,7 @@
  * Check etude's POSIX executor (tools/etude/posix/) with this program as
  * the case's program, run with `--case MODE TOKEN`.
  *
+ * host-deps: tools/etude/boot_identity.c
  * host-deps: tools/etude/capture.c tools/etude/posix/exec.c
  * host-deps: tools/etude/posix/keeper.c tools/etude/posix/process.c
  * host-cflags: -I tools/etude/include -Wall -Wextra -Werror
@@ -55,6 +56,7 @@
 
 #if defined(__linux__)
 #include <sys/syscall.h>
+#include <sys/utsname.h>
 #endif
 
 #if defined(__APPLE__)
@@ -68,6 +70,7 @@
 #include "compat/sanitizer_env_host.h"
 #include "etude/exec.h"
 #include "../../tools/etude/posix/posix.h"
+#include "../../tools/etude/boot_identity.h"
 
 static char **case_environment;
 
@@ -557,7 +560,12 @@ static int held(long pid)
     long nr;
     size_t n;
     FILE *f;
+    struct utsname kernel;
 
+    if (uname(&kernel) != 0)
+        return 0;
+    if (etude_boot_is_rach2(kernel.sysname, kernel.release, kernel.version))
+        return held_asleep(pid);
     snprintf(path, sizeof(path), "/proc/%ld/syscall", pid);
     for (;;) {
         f = fopen(path, "r");
