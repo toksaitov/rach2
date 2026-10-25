@@ -113,7 +113,12 @@ static int ci_unconfigured(struct launch_fixture *u)
     struct fixture *f = u->f;
     char script[4096], output[4096];
     const char *a[] = {"sh", script, "core", output, NULL};
-    strcpy(script, flow_source(f, "tools/ci/run.sh"));
+    strcpy(script, flow_path(f, "checkout/tools/ci/run.sh"));
+    if (!flow_copy(f, "tools/ci/run.sh", "checkout/tools/ci/run.sh") ||
+        (!fx_has(script, "results=native\n") && !fx_has(script, "results=lines\n")) ||
+        !fx_replace(script, script, "results=lines\n", "results=native\n") ||
+        !fx_has(script, "results=native\n"))
+        return 0;
     strcpy(output, flow_path(f, "ci"));
     fx_env("FLOW_LAUNCH_MODE", "ci");
     if (!flow_copy(f, "tools/ci/native_entry.sh", "checkout/tools/ci/native_entry.sh") ||

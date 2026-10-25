@@ -169,6 +169,11 @@ static int setup(struct fixture *f)
         if (!flow_copy(f, from, to))
             return 0;
     }
+    const char *script = flow_path(f, "tree/tools/ci/run.sh");
+    if ((!fx_has(script, "results=native\n") && !fx_has(script, "results=lines\n")) ||
+        !fx_replace(script, script, "results=lines\n", "results=native\n") ||
+        !fx_has(script, "results=native\n"))
+        return 0;
     if (!fx_mock(f, "native-etude") || !fx_mock(f, "uname") ||
         !flow_put(f, "native-ledger/claims", "etude-ledger 1\n") ||
         !fx_mkdir(flow_path(f, "native-locks")))
