@@ -198,6 +198,7 @@ static int tests(int argc, char **argv)
 {
     char line[16384] = "tests/run ";
     char *keep, *p;
+    const char *failed = *env("RACH2_FAILED") ? env("RACH2_FAILED") : "build/tests/failed";
     int i;
     for (i = 1; i < argc; i++) {
         if (i > 1)
@@ -216,7 +217,7 @@ static int tests(int argc, char **argv)
     p = strtok(keep ? keep : "", " ");
     while (p) {
         char file[8192];
-        snprintf(file, sizeof(file), "build/tests/failed/%s", p);
+        snprintf(file, sizeof(file), "%s/%s", failed, p);
         if (!fx_mkdir(file)) {
             free(keep);
             return 2;
