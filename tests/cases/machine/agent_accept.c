@@ -16,7 +16,7 @@ struct acceptance {
     char assets[4096], key[4096], root_key[4096], port[20], log[4096], target[100];
     char *screen;
     unsigned output;
-    int model_selected, window;
+    int model_selected, window, terminal_service;
 };
 
 static struct acceptance state;
@@ -149,15 +149,15 @@ static char *client(struct acceptance *s, const char *const args[])
 }
 static int tmux(struct acceptance *s, const char *const extra[])
 {
-    const char *args[12] = {"/usr/bin/tmux", "-L", "etude-agent-accept"};
+    const char *args[13] = {"/usr/bin/tmux", "-N", "-L", "etude-agent-accept"};
     unsigned i = 0;
     char *text;
     int ok;
     while (i < 8 && extra[i]) {
-        args[i + 3] = extra[i];
+        args[i + 4] = extra[i];
         i++;
     }
-    args[i + 3] = NULL;
+    args[i + 4] = NULL;
     text = client(s, args);
     ok = text != NULL;
     free(text);
@@ -166,15 +166,9 @@ static int tmux(struct acceptance *s, const char *const extra[])
 
 static int keys(struct acceptance *s, int literal, const char *key)
 {
-    const char *args[] = {"/usr/bin/tmux",
-                          "-L",
-                          "etude-agent-accept",
-                          "send-keys",
-                          "-t",
-                          s->target,
-                          literal ? "-l" : key,
-                          literal ? key : NULL,
-                          NULL};
+    const char *args[] = {"/usr/bin/tmux",      "-N", "-L",      "etude-agent-accept",
+                          "send-keys",          "-t", s->target, literal ? "-l" : key,
+                          literal ? key : NULL, NULL};
     char *text = client(s, args);
     int ok = text != NULL;
     free(text);
@@ -425,6 +419,7 @@ static int attached(struct acceptance *s)
     unsigned lost = 0;
     while (net_ok(s->u)) {
         const char *args[] = {"/usr/bin/tmux",
+                              "-N",
                               "-L",
                               "etude-agent-accept",
                               "display-message",
@@ -489,11 +484,29 @@ static int has_line(const char *text, const char *wanted)
     }
     return 0;
 }
+/* The foreground server remains in one owned guest attempt. Commands of
+ * later steps connect to it; none may create an unowned daemon. */
+static int terminal_start(struct acceptance *s)
+{
+    const char *args[] = {"/usr/bin/tmux", "-D", "-L", "etude-agent-accept", NULL};
+
+    if (etude_guest_service_start(s->u->client, args, NULL, NULL, "accept-tmux-server") != ETUDE_OK)
+        return 0;
+    s->terminal_service = 1;
+    while (net_ok(s->u) && etude_guest_service_running(s->u->client)) {
+        if (tmux(s, (const char *const[]){"show-options", "-sv", "exit-empty", NULL}))
+            return 1;
+        pause_read();
+    }
+    return 0;
+}
+
 static int session_start(struct acceptance *s)
 {
     char *text, command[300];
     unsigned i;
     const char *init[] = {"/usr/bin/tmux",
+                          "-N",
                           "-L",
                           "etude-agent-accept",
                           "new-session",
@@ -508,6 +521,8 @@ static int session_start(struct acceptance *s)
                           "script",
                           NULL};
     if (etude_guest_put(s->u->client, s->key, "/tmp/etude-accept.key", "0600") != ETUDE_OK)
+        return 0;
+    if (!terminal_start(s))
         return 0;
     text = client(s, init);
     if (!text)
@@ -671,8 +686,18 @@ static int session_resume(struct acceptance *s)
 }
 static int session(struct acceptance *s)
 {
-    return session_start(s) && session_work(s) && session_cancel(s) && session_reconnect(s) &&
-           session_resume(s);
+    struct etude_guest_result result;
+    int ok = session_start(s) && session_work(s) && session_cancel(s) && session_reconnect(s) &&
+             session_resume(s);
+
+    if (s->terminal_service) {
+        enum etude_status st = etude_guest_service_finish(s->u->client, !ok, &result);
+        s->terminal_service = 0;
+        if (st != ETUDE_OK || !result.complete || result.cleanup != ETUDE_CLEANUP_CONFIRMED ||
+            (ok && (result.termination.end != ETUDE_END_EXITED || result.termination.value != 0)))
+            ok = 0;
+    }
+    return ok;
 }
 
 static int version(struct acceptance *s, const char *program, int after)
