@@ -445,7 +445,29 @@ int lc_timing_level(const char *w, size_t len)
     return level;
 }
 
-/** Answer clockmusl's requests on the bound UDP socket `fd` until killed. */
+#ifdef _WIN32
+static SOCKET clockref_socket = INVALID_SOCKET;
+static HANDLE clockref_thread, clockref_stop;
+static WSAEVENT clockref_read = WSA_INVALID_EVENT;
+
+/** Wait for a datagram or for the owner to stop the reference server. */
+static int clockref_ready(clock_socket fd)
+{
+    HANDLE events[2] = {clockref_stop, clockref_read};
+    WSANETWORKEVENTS network;
+
+    for (;;) {
+        if (WaitForMultipleObjects(2, events, FALSE, INFINITE) != WAIT_OBJECT_0 + 1)
+            return 0;
+        if (WSAEnumNetworkEvents((SOCKET)fd, clockref_read, &network) != 0)
+            return 0;
+        if (network.lNetworkEvents & FD_READ)
+            return network.iErrorCode[FD_READ_BIT] == 0;
+    }
+}
+#endif
+
+/** Answer clockmusl's requests on the bound UDP socket `fd` until stopped. */
 static void clockref_serve(clock_socket fd)
 {
     struct sockaddr_in peer;
@@ -456,14 +478,18 @@ static void clockref_serve(clock_socket fd)
     ssize_t n;
 
     for (;;) {
+#ifdef _WIN32
+        if (!clockref_ready(fd))
+            return;
+#endif
         size = sizeof(peer);
         n = recvfrom(fd, packet, sizeof(packet) - 1, 0, (struct sockaddr *)&peer, &size);
         if (n <= 0) {
 #ifdef _WIN32
-            return;
-#else
-            continue;
+            if (n < 0 && WSAGetLastError() != WSAEWOULDBLOCK)
+                return;
 #endif
+            continue;
         }
         packet[n] = '\0';
 #ifdef _WIN32
@@ -490,14 +516,25 @@ static void clockref_serve(clock_socket fd)
 }
 
 #ifdef _WIN32
-static SOCKET clockref_socket = INVALID_SOCKET;
-static HANDLE clockref_thread;
-
-/** Answer clock requests until the owner closes the socket. */
+/** Answer clock requests until the owner signals the stop event. */
 static DWORD WINAPI clockref_worker(void *arg)
 {
     clockref_serve((clock_socket)(uintptr_t)arg);
     return 0;
+}
+
+/** Release the reference server's resources after its worker has ended. */
+static void clockref_close(void)
+{
+    if (clockref_socket != INVALID_SOCKET)
+        closesocket(clockref_socket);
+    if (clockref_read != WSA_INVALID_EVENT)
+        WSACloseEvent(clockref_read);
+    if (clockref_stop != NULL)
+        CloseHandle(clockref_stop);
+    clockref_socket = INVALID_SOCKET;
+    clockref_read = WSA_INVALID_EVENT;
+    clockref_stop = NULL;
 }
 
 pid_t lc_clockref_start(unsigned *port)
@@ -515,26 +552,29 @@ pid_t lc_clockref_start(unsigned *port)
         bind(clockref_socket, (struct sockaddr *)&a, size) != 0 ||
         getsockname(clockref_socket, (struct sockaddr *)&a, &size) != 0)
         goto fail;
+    clockref_stop = CreateEventW(NULL, TRUE, FALSE, NULL);
+    clockref_read = WSACreateEvent();
+    if (clockref_stop == NULL || clockref_read == WSA_INVALID_EVENT ||
+        WSAEventSelect(clockref_socket, clockref_read, FD_READ) != 0)
+        goto fail;
     *port = ntohs(a.sin_port);
     clockref_thread =
         CreateThread(NULL, 0, clockref_worker, (void *)(uintptr_t)clockref_socket, 0, NULL);
     if (clockref_thread != NULL)
         return 1;
 fail:
-    if (clockref_socket != INVALID_SOCKET)
-        closesocket(clockref_socket);
-    clockref_socket = INVALID_SOCKET;
+    clockref_close();
     return -1;
 }
 void lc_clockref_stop(pid_t pid)
 {
     if (pid <= 0 || clockref_thread == NULL)
         return;
-    closesocket(clockref_socket);
+    SetEvent(clockref_stop);
     WaitForSingleObject(clockref_thread, INFINITE);
     CloseHandle(clockref_thread);
     clockref_thread = NULL;
-    clockref_socket = INVALID_SOCKET;
+    clockref_close();
 }
 #else
 pid_t lc_clockref_start(unsigned *port)
