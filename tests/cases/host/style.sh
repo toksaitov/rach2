@@ -46,7 +46,8 @@ case $(uname -s) in
         style_tree=$(cygpath -u "$style_tree") || exit 2
         case "$CASE" in
             sparse|sizes|manual) ETUDE_TREE=$style_tree ;;
-            *) exec python3 "$style_tree/tools/etude/collection_tools.py" style "$style_tree" \
+            *) exec "$style_tree/build/tools/etude/etude" prepare tools style \
+                "$(cygpath -m "$style_tree")" \
                 "${ETUDE_COLLECTION_ARCH:-${ARCH:-i686}}" "$CASE" ;;
         esac ;;
 esac

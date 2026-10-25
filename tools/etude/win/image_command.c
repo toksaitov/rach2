@@ -8,7 +8,7 @@
 /** Run the command named by this executable through the collection adapter. */
 int main(int argc, char **argv)
 {
-    char self[4096], root[4096], script[4096], *part, *name;
+    char self[4096], root[4096], program[4096], *part, *name;
     char **args;
     int i, n;
 
@@ -32,21 +32,20 @@ int main(int argc, char **argv)
             return 2;
         *part = '\0';
     }
-    if (snprintf(script, sizeof(script), "%s/tools/etude/collection_tools.py", root) >=
-        (int)sizeof(script))
+    if (snprintf(program, sizeof(program), "%s/build/tools/etude/etude", root) >=
+        (int)sizeof(program))
         return 2;
     args = calloc((size_t)argc + 9, sizeof(*args));
     if (args == NULL)
         return 2;
-    args[0] = "C:/msys64/usr/bin/sh.exe";
-    args[1] = "-c";
-    args[2] = "script=$(cygpath -u \"$1\"); shift; exec python3 \"$script\" tool \"$@\"";
-    args[3] = "image-command";
-    args[4] = script;
-    args[5] = root;
-    args[6] = name;
+    args[0] = program;
+    args[1] = "prepare";
+    args[2] = "tools";
+    args[3] = "tool";
+    args[4] = root;
+    args[5] = name;
     for (i = 1; i < argc; i++)
-        args[i + 6] = argv[i];
+        args[i + 5] = argv[i];
     hold_exec(args);
     free(args);
     perror("image-command");

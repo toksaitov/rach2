@@ -54,6 +54,8 @@ A path on a `host-deps:` or `host-cflags:` line that begins `vendor/` names a ve
 
 `tools/verify/coverage.sh` reads the same lines to measure which lines of the named sources a test runs.
 
+`etude_platform_hosttest.c --collection-only` checks the native collection adapter without booting a machine. The real C entry stages local operands, preserves mtools offsets and names, returns failed partial output and the original status, translates debugfs requests, selects native goals and builds an isolated style job. Its preparation row uses real Git and tar with small source and product files; it checks the source index, history bundle, supplied WAD and recovery key, retained workspace and ordinary Make commands. Only the tooling transport is substituted by the fixture. The prepared image-helper controller retains its separate real image and bulk-transfer assertions.
+
 ### Shared code
 
 * `compat/pathmax_host.h` includes the host's pathname limit for POSIX tests. On macOS it includes `sys/syslimits.h` explicitly, since Clang's `limits.h` omits the system headers under `-ffreestanding`.

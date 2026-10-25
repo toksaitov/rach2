@@ -2309,7 +2309,7 @@
         },
         {
           "assertion_id": "collection_tools",
-          "checks": "the collection's image transfers preserve filenames, byte offsets, partial output and command statuses: `python3 -B tests/system/collection_tools_test.py` exits 0",
+          "checks": "the collection's image transfers preserve filenames, byte offsets, partial output and command statuses: the native C image controller passes all transfer assertions",
           "source": "scenario"
         },
         {
