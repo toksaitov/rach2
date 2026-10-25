@@ -110,11 +110,13 @@ static peer_socket connect_to(unsigned port)
 static int retry_pause(void)
 {
 #ifdef _WIN32
+    /* interval: poll SSH identification without unbounded connection retries */
     Sleep(50);
     return 0;
 #else
     int result;
 
+    /* interval: poll SSH identification without unbounded connection retries */
     do
         result = poll(NULL, 0, 50);
     while (result < 0 && errno == EINTR);
