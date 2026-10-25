@@ -1232,15 +1232,24 @@ static const char *executable(struct etude_case *c, struct artifact *a)
         return a->exe;
     if (etude_artifact(c, a->name) == NULL)
         return NULL;
-    if (scratch_path(c, "bin", a->name, path, sizeof(path)) != 0 ||
-        etude_store_copy(c->store, a->digest, path) != 0 || chmod(path, 0555) != 0) {
-        diag("artifact %s: no executable copy: %s", a->name, strerror(errno));
-        c->faults++;
-        return NULL;
+    if (scratch_path(c, "bin", a->name, path, sizeof(path)) != 0)
+        goto failed;
+#ifdef _WIN32
+    if (strlen(path) > sizeof(path) - sizeof(".exe")) {
+        errno = ENAMETOOLONG;
+        goto failed;
     }
+    strcat(path, ".exe");
+#endif
+    if (etude_store_copy(c->store, a->digest, path) != 0 || chmod(path, 0555) != 0)
+        goto failed;
     made(c, path, 0);
     a->exe = dup_text(path);
     return a->exe;
+failed:
+    diag("artifact %s: no executable copy: %s", a->name, strerror(errno));
+    c->faults++;
+    return NULL;
 }
 
 const char *etude_evidence(struct etude_case *c, const char *name)
