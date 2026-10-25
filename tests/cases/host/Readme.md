@@ -52,6 +52,8 @@ On macOS these eight fixtures compile each translation unit to a stable object p
 
 The GNU helper supplies the POSIX environment of filesystem, compiler, build, deployment and worker-loop checks. Their C controllers create fixtures and judge results. A product written in shell or Python runs in its own language when its behavior is the subject of the check. The old test driver does not run. TinyCC and Doom checks use binaries prepared for the tested architecture.
 
+The version-publication fixture uses short C and header contents with the real source paths, make rules and bootstrap scripts for its repeated mock-compiler checks. It retains the source-byte, cache identity, shell, interruption and publication assertions. Before the real compiler check, it removes that private tree and copies the complete product source again. The real build and its schema, history and command checks use the full source.
+
 Native executor, platform and QEMU checks run on the collection host. Preparation rejects an undeclared interpreter or missing adapter; execution reports a missing check as a failure. `host.sh` remains as the legacy build-command interface. The prepared collection does not call it. `etude_hostdriver_hosttest.c` and the compiled host-suite controller check scheduling, interruption and immutable inputs.
 
 ### Source-check evidence

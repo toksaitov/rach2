@@ -393,6 +393,48 @@ static int snapshots(struct version *v, char hex[65])
     sha256_hex(bytes, hex);
     return 1;
 }
+static int version_copy_source(struct version *v)
+{
+    char target[4096];
+    const char *names[] = {"tools/etude", "tests/native", "utils/sha256.c", "utils/sha256.h"};
+    for (unsigned i = 0; i < sizeof(names) / sizeof(*names); i++) {
+        snprintf(target, sizeof(target), "%s/%s", v->tree, names[i]);
+        if (!fx_tree(flow_source(v->f, names[i]), target))
+            return 0;
+    }
+    return 1;
+}
+
+/* Publication rows use fakecc, which hashes its inputs. Keep the real file
+ * names and make rules, but use short source text for these repeated rows.
+ * The real compiler row restores every source before it builds the product. */
+static int version_mock_source(const char *path)
+{
+    struct stat st;
+    struct dirent *entry;
+    DIR *dir;
+    char child[4096];
+    size_t n = strlen(path);
+    int ok = 1;
+    if (lstat(path, &st))
+        return 0;
+    if (S_ISREG(st.st_mode)) {
+        if (n >= 2 && (!strcmp(path + n - 2, ".c") || !strcmp(path + n - 2, ".h")))
+            return fx_text(path, "/* Version publication fixture. */\n");
+        return 1;
+    }
+    if (!S_ISDIR(st.st_mode) || (dir = opendir(path)) == NULL)
+        return 0;
+    while ((entry = readdir(dir))) {
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+            continue;
+        int length = snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
+        if (length < 0 || (size_t)length >= sizeof(child) || !version_mock_source(child))
+            ok = 0;
+    }
+    return !closedir(dir) && ok;
+}
+
 static int version_setup(struct version *value, struct fixture *f)
 {
     struct version v;
@@ -402,17 +444,7 @@ static int version_setup(struct version *value, struct fixture *f)
     snprintf(v.tree, sizeof(v.tree), "%s/tree", f->work);
     snprintf(v.fix, sizeof(v.fix), "%s/fix", f->work);
     snprintf(v.script, sizeof(v.script), "%s/tools/etude/provision_version.sh", v.tree);
-    snprintf(target, sizeof(target), "%s/tools/etude", v.tree);
-    if (!fx_tree(flow_source(f, "tools/etude"), target))
-        return 0;
-    snprintf(target, sizeof(target), "%s/tests/native", v.tree);
-    if (!fx_tree(flow_source(f, "tests/native"), target))
-        return 0;
-    snprintf(target, sizeof(target), "%s/utils/sha256.c", v.tree);
-    if (!fx_copy(flow_source(f, "utils/sha256.c"), target))
-        return 0;
-    snprintf(target, sizeof(target), "%s/utils/sha256.h", v.tree);
-    if (!fx_copy(flow_source(f, "utils/sha256.h"), target))
+    if (!version_copy_source(&v) || !version_mock_source(v.tree))
         return 0;
     fx_env("TREE", v.tree);
     fx_env("FIX", v.fix);
@@ -902,8 +934,8 @@ static int version_real_build(struct version *value)
     const char *platform = version_platform(&u);
     if (!platform)
         return 0;
-    /* Compile the product with the GNU compiler, then invoke its real verbs. */
-    if (!state(&v))
+    /* Restore the product, compile it, then invoke its real verbs. */
+    if (!fx_remove(v.tree) || !version_copy_source(&v) || !state(&v))
         return 0;
     {
         const char *a[] = {"-l", "-C", vp("cache"), NULL};

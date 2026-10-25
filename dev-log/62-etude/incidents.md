@@ -1161,6 +1161,12 @@ Other reads assumed the wrong bootstrap subdirectory, treated a preparation reco
 
 The first network absence probes reported zero broadcasts and were not accepted. Bounded broadcast-mode probes then transmitted three requests for each accepted address. Address 192.168.0.251 answered and was rejected; the pending command uses the observed empty address 192.168.0.250. The original insufficient output remains separate from the accepted observation and peer cleanup.
 
+## Repeated version fixtures transported the full product source (#1113)
+
+The Linux collection on 924c737f204230bc8a346c44151711f294945feb finished with 1,020 passing cases and four failures. Besides the missing header in #1112, both host script cases exceeded their existing 1,800,000 ms case bound in etude_version. The retained i686 command log completed source validation and the first publication and shell checks; the outer case then interrupted it. Its cleanup was confirmed. The issue preserves the output and both architecture results. This evidence does not identify a process-group failure.
+
+The mock compiler's publication checks repeatedly encoded and transported about 3 MiB of source, although they only hash it. The fixture now retains every source path, make rule and bootstrap script but uses short C and header contents for those repeated checks. Before its real compiler check, it replaces the private tree with the complete product source. All existing assertions and bounds remain. The failed collection is excluded from site selection; validation of the repair belongs to the combined check.
+
 ## The Mac input-store forecast understated allocation
 
 The five-sample plan estimated 9.948 GiB for its live input store. The actual first collection allocated 12.620 GiB for 334 objects. Adding every unpublished object's full logical size and metadata gave a 16.985 GiB conservative bound and a 3.799 GiB reserve deficit at the full released scratch, retained-evidence and critical-floor allowances. The original estimate, measured correction and active results remain separate. The guard, profile, tests and critical floor were unchanged. Old-image compression proposals preserve every logical byte but establish no recovered space before execution and verification; they remain held while the collection runs. The testing procedure now requires separate allowances and full logical size until destination allocation is measured.
