@@ -51,7 +51,7 @@ int main(int argc, char **argv)
         return 1;
     signal(SIGTERM, stop);
     signal(SIGINT, stop);
-    setvbuf(stdout, NULL, _IOLBF, 0);
+    setvbuf(stdout, NULL, _IONBF, 0);
     printf("sntpserver: port %u\n", port);
     while (!stopped && service_parent_alive()) {
 #ifdef _WIN32
