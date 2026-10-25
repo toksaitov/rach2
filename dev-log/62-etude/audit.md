@@ -100,7 +100,7 @@ On 23 October the owner set aside the proof of a new test by a deliberate fault 
 * T90, #679: the earlier [Ubuntu runs](ubuntu-run.md) are historical adapter results. A complete passing recovered collection remains required on Ubuntu before comparison.
 * T91, #680: waits for the runs.
 * T92, #681: waits for the runs.
-* T93, #682: waits for the runs.
+* T93, #682: [the final Lenovo record](native-final.md) binds all 250 eligible cases to the exact repaired kernel, complete results and independent cleanup. The whole selection passed 249 cases; an ordinary-init reboot and unchanged procps retry passed the remaining case. The original failed attempt and diagnostic histories remain separate. Normal boot, network, root and original account restoration were verified. Met for that native candidate; desktop comparison and release remain separate.
 * T94, #683: waits for the runs.
 * T95, #684: waits for the runs.
 * T96, #685: waits for the runs.
@@ -133,7 +133,7 @@ The original audit at 02661fb8a counted 322 phase issues: 100 sub-issues of #589
 The former T50 gap, #963, is resolved by the [Lenovo SSH acceptance](t50-ssh.md). The source repairs for #961, #962, #950 and #951 are implemented as the task entries describe. Their existence does not establish a full native collection pass.
 
 * T90 to T92 require the complete recovered desktop collection on Ubuntu, macOS and Windows, on the same candidate with both architectures together, complete costs and confirmed cleanup. The large-memory profiles and strengthened #924 assertions remain included.
-* T93 requires every eligible native case on the Lenovo's exact candidate and restoration of its accepted system. #989 repairs missing native history and fixed deadlines before that run. The four T50 SSH outcomes do not replace this collection.
+* T93 is recorded by [the final Lenovo acceptance](native-final.md), including the failed process-name attempt, affected retry on the same kernel, exact 250-case index and independent restoration. The four T50 SSH outcomes remain a separate transport proof.
 * T24 requires public shuffle, repetition and controlled load through #990, followed by focused acceptance of the converted families under those conditions.
 * T94 requires five independent complete passing runs for each ranked configuration, with known cache and load conditions. The historical Ubuntu and Mac adapter records cannot supply these samples. The Lenovo's smaller selection is excluded from the ranking.
 * T95 requires actual reference history, budget forecasts and public push, CI and release entry checks on the selected site. #991 supplies bounded history retention that preserves accepted baselines and evidence of open issues. Activation waits for T94 and for old jobs to finish.
