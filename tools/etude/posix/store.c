@@ -204,7 +204,7 @@ static int all_zero(const unsigned char *buf, size_t n)
  * sparse; `to` is then given the size read, for a file that ends in zeros.
  */
 static int copy_stream(int from, int to, char hex[ETUDE_DIGEST_HEX + 1], uint64_t *size,
-                       uint64_t limit)
+                       uint64_t limit, volatile sig_atomic_t *stop)
 {
     unsigned char *buf = malloc(COPY_CHUNK);
     unsigned char sum[32];
@@ -224,6 +224,10 @@ static int copy_stream(int from, int to, char hex[ETUDE_DIGEST_HEX + 1], uint64_
         COUNT(etude_store_copied);
     for (;;) {
         size_t want = COPY_CHUNK;
+        if (stop && *stop) {
+            errno = ECANCELED;
+            goto fail;
+        }
         if (total == limit)
             break;
         if (limit - total < want)
@@ -269,7 +273,7 @@ fail:
 
 static int copy_hash(int from, int to, char hex[ETUDE_DIGEST_HEX + 1], uint64_t *size)
 {
-    return copy_stream(from, to, hex, size, UINT64_MAX);
+    return copy_stream(from, to, hex, size, UINT64_MAX, NULL);
 }
 
 /** Lock all of `fd` for `type` without waiting; 0, or -1 with errno set. */
@@ -418,7 +422,8 @@ static int status_same(const struct status *a, const struct status *b)
            a->ctime == b->ctime;
 }
 
-int store_copy_range(const char *source, uint64_t offset, uint64_t length, const char *dest)
+int store_copy_range_stop(const char *source, uint64_t offset, uint64_t length, const char *dest,
+                          volatile sig_atomic_t *stop)
 {
     struct stat st;
     struct status before, after;
@@ -436,7 +441,7 @@ int store_copy_range(const char *source, uint64_t offset, uint64_t length, const
     out = open(dest, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
     if (out < 0)
         goto done;
-    if (lseek(in, (off_t)offset, SEEK_SET) < 0 || copy_stream(in, out, NULL, NULL, length) ||
+    if (lseek(in, (off_t)offset, SEEK_SET) < 0 || copy_stream(in, out, NULL, NULL, length, stop) ||
         fsync(out) || fstat(in, &st))
         goto done;
     status_of(&st, &after);
@@ -459,6 +464,11 @@ done:
         unlink(dest);
     errno = saved;
     return ok ? 0 : -1;
+}
+
+int store_copy_range(const char *source, uint64_t offset, uint64_t length, const char *dest)
+{
+    return store_copy_range_stop(source, offset, length, dest, NULL);
 }
 
 /** Give the time of the realtime clock, which stamps the files, in
