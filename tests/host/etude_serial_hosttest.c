@@ -5,6 +5,7 @@
  * host-tools: etude-workload
  * host-deps: tools/etude/serial.c tools/etude/capture.c
  * host-deps: tools/etude/guest/guest.c tools/etude/guest/fixture.c
+ * host-deps: tools/etude/guest/owner.c tools/etude/posix/process.c
  * host-deps: tools/etude/boot_identity.c
  * host-deps: tools/etude/guest/wire.c
  * host-deps: tools/etude/history_json.c utils/sha256.c

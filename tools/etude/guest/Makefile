@@ -19,7 +19,7 @@ CRTI    := $(PREFIX)/lib/crti.o
 CRTN    := $(PREFIX)/lib/crtn.o
 
 CFLAGS  = $(ARCH_CFLAGS) -std=c99 -static -nostdlib -nostartfiles -isystem $(PREFIX)/include \
-          -D__rach2__ -I . -I ../include -I .. -I $(TOP)/utils -O2 -Wall -Wextra -MMD -MP
+          -D__rach2__ -D_DEFAULT_SOURCE -I . -I ../include -I .. -I $(TOP)/utils -O2 -Wall -Wextra -MMD -MP
 LINK_PRE  = $(CRT1) $(CRTI)
 LINK_POST = $(PREFIX)/lib/libc.a $(LIBGCC) $(CRTN) -Wl,-z,noexecstack $(ARCH_LDFLAGS)
 
@@ -27,8 +27,11 @@ LINK_POST = $(PREFIX)/lib/libc.a $(LIBGCC) $(CRTN) -Wl,-z,noexecstack $(ARCH_LDF
 # reads the invocations, and the SHA-256 of utils/. They are compiled and
 # linked in one step, as utils/ links ping and nc, so -MF records the headers
 # of the last source only and the sources and headers are named here.
-SRC = guest.c fixture.c wire.c ../boot_identity.c ../history_json.c $(TOP)/utils/sha256.c
-HDR = fixture.h wire.h ../boot_identity.h ../history_json.h \
+SRC = guest.c owner.c fixture.c wire.c ../posix/process.c ../boot_identity.c \
+      ../history_json.c $(TOP)/utils/sha256.c
+HDR = owner.h ../posix/posix.h ../include/etude/exec.h ../include/etude/contract.h \
+      fixture.h wire.h \
+      ../boot_identity.h ../history_json.h \
       ../include/etude/frame.h $(TOP)/utils/sha256.h
 
 CONFIG_TEXT = $(CC) $(CFLAGS) $(LINK_PRE) $(LINK_POST)
