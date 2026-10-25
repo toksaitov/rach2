@@ -19,6 +19,7 @@ description: Run suites, full sets or analyses on the testing host, or write a s
 ## Running
 
 * Before maintenance that stops the testing host or its CI runners, follow the accepted-job checks in `tools/Readme.md`. A runner can have an active job before its worker process starts; wait for the job to finish before stopping its service.
+* A derived launch control preserves every dependency of its working source. Before changing an endpoint, validate all installed helper paths, native operands and serialized input types, names and bytes. Keep loop variables separate from the objects later written as manifests.
 * Budget the live input store, case scratch and retained evidence separately. Until allocation is measured on the destination filesystem, allow each input's full logical size plus metadata; sparse writes and shared blocks alone do not establish a smaller bound. A repeated run reuses a temporary-store allowance only after cleanup confirms that store is gone. Credit recovered space only after the operation and a fresh filesystem reading.
 * Try a new row (one check in a suite), suite or tool small first, on the smallest inputs that exercise every step: a 64 MiB disk where the real one is 232 GiB. Start it at full size only after it passes there.
 * Never build while a run is in flight. The suites read the kernel and the images from `build/`, so a build part way through changes what the remaining suites boot and what the finished ones were judged on, and the run is void. Check with `ps` for a run in progress before `make`, and wait for it or stop it deliberately.
@@ -34,6 +35,8 @@ description: Run suites, full sets or analyses on the testing host, or write a s
 ## Writing a suite
 
 * Use the established framed loader for native PowerShell collectors. Do not send a large JSON document as one unframed standard-input line. After confirmed transport cleanup, repeat only the collector, preserving its partial output and the original tested work.
+
+* A compiler record covers the dependencies of every source translation unit. Parse each Make dependency rule separately; one shared -MD/-MF output may contain only the final unit. If a recorder fails after compilation, preserve the executable and compiler event and repair only the missing evidence when the actual inputs can still be established.
 
 * Write generated scripts and protocol command files in binary mode when their consumers require LF bytes. A Windows text stream inserts CR even when the source string already contains the intended LF.
 
