@@ -2,6 +2,7 @@
  * host-deps: utils/sha256.c
  * host-cflags: -I utils -Wall -Wextra -Werror
  * host-inputs: build/tests/cases/host/host
+ * host-inputs: tests/cases/host.host.json tests/cases/host/host.list
  */
 #include <fcntl.h>
 #include <signal.h>
@@ -256,6 +257,7 @@ static void checks(void)
 }
 
 #include "compat/host_partition_host.c"
+#include "compat/native_script_partition.c"
 
 int main(int argc, char **argv)
 {
@@ -270,6 +272,7 @@ int main(int argc, char **argv)
         checks();
         partitions();
         script_driver_partitions();
+        native_script_partition();
     }
     if (!failures)
         fix_passed();

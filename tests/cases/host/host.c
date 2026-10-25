@@ -19,6 +19,7 @@ extern char **environ;
 #include "json.h"
 #include "sha256.h"
 #include "sanitizer_tool.h"
+#include "host_script_inventory.h"
 
 #define PATH_SIZE  4096
 #define CHECKS_MAX 1024
@@ -180,21 +181,32 @@ static int declaration(const struct json *assertions, const char *id)
     return 0;
 }
 
+static unsigned script_count(const struct host *h, const char *id)
+{
+    unsigned count = 0;
+    for (size_t i = 0; i < h->nscript_parts; i++)
+        count += declaration(h->script_parts[i], id);
+    return count;
+}
+
+static int script_native(const struct host *h)
+{
+    return !strcmp(h->case_id, "host.host.scripts_native");
+}
+
 static int declared(const struct host *h, const char *id)
 {
-    if (h->nscript_parts) {
-        unsigned count = 0;
-        for (size_t i = 0; i < h->nscript_parts; i++)
-            count += declaration(h->script_parts[i], id);
-        return count == 1;
-    }
+    if (h->nscript_parts && !script_native(h))
+        return script_count(h, id) == 1;
     return declaration(h->declared, id);
 }
 
-/* Both Etude partitions consume the same complete prepared inventory. */
+/* Scheduling partitions consume one complete prepared inventory. */
 static const char *canonical_group(const char *group)
 {
-    return !strcmp(group, "etude_quiet") ? "etude" : group;
+    return !strcmp(group, "etude_quiet")      ? "etude"
+           : !strcmp(group, "scripts_native") ? "scripts"
+                                              : group;
 }
 
 static void progress(struct host *h)
@@ -636,6 +648,8 @@ static int complete_declarations(struct host *h, const struct json *assertions, 
 /* Every prepared entry belongs to exactly one matching scheduling partition. */
 static int partition_matches(const struct host *h, const struct check *c)
 {
+    if (h->nscript_parts)
+        return script_count(h, c->id) == 1;
     int other = declaration(h->companion, c->id);
     if (!h->companion)
         return c->selected;
@@ -664,7 +678,7 @@ static int inventory_declarations(struct host *h)
     listed &= complete_declarations(h, h->companion, 0);
     for (size_t i = 0; i < h->nscript_parts; i++)
         if (h->script_parts[i] != h->declared)
-            listed &= complete_declarations(h, h->script_parts[i], 1);
+            listed &= complete_declarations(h, h->script_parts[i], !script_native(h));
     return listed;
 }
 
@@ -813,6 +827,18 @@ static int script_declarations(struct host *h, const struct json *cases)
     return 0;
 }
 
+static int native_script_inventory(struct host *h)
+{
+    struct host_script_row rows[HOST_SCRIPT_ROWS];
+    size_t count = 0;
+    char list[PATH_SIZE], manifest[PATH_SIZE];
+    return path_of(list, h->tree, "tests/cases/host/host.list") == 0 &&
+                   path_of(manifest, h->tree, "tests/cases/host.host.json") == 0 &&
+                   host_script_inventory(list, manifest, rows, &count)
+               ? 0
+               : -1;
+}
+
 static int load_declarations(struct host *h, const char *group)
 {
     const struct json *cases = json_member(h->manifest, "cases");
@@ -825,7 +851,9 @@ static int load_declarations(struct host *h, const char *group)
         if (etude && id && !strcmp(id, other))
             h->companion = json_member(cases->item[i], "assertions");
     }
-    if (!strcmp(group, "scripts") && script_declarations(h, cases) != 0)
+    if (!strcmp(canonical_group(group), "scripts") && script_declarations(h, cases) != 0)
+        return -1;
+    if (script_native(h) && native_script_inventory(h) != 0)
         return -1;
     if (!h->declared || h->declared->type != JSON_ARRAY)
         return -1;
@@ -904,7 +932,7 @@ static void release_host(struct host *h, int status)
 static int valid_group(const char *group)
 {
     static const char *const groups[] = {"tests",    "etude", "etude_quiet", "boots",
-                                         "checkers", "fuzz",  "scripts"};
+                                         "checkers", "fuzz",  "scripts",     "scripts_native"};
     for (size_t i = 0; i < sizeof groups / sizeof groups[0]; i++)
         if (!strcmp(group, groups[i]))
             return 1;
@@ -928,9 +956,9 @@ static int host_options(struct host *h, int argc, char **argv, const char **sele
             arch = argv[4];
     }
     if (!valid_group(group)) {
-        fputs(
-            "usage: host [--one] tests|etude|etude_quiet|boots|checkers|fuzz|scripts [ASSERTION]\n",
-            stderr);
+        fputs("usage: host [--one] "
+              "tests|etude|etude_quiet|boots|checkers|fuzz|scripts|scripts_native [ASSERTION]\n",
+              stderr);
         return 2;
     }
     if (!tree)
@@ -951,6 +979,8 @@ static int host_options(struct host *h, int argc, char **argv, const char **sele
             return 2;
         *width = (unsigned)n;
     }
+    if (script_native(h))
+        *width = 1;
     *selected_group = group;
     *selected_arch = arch;
     return 0;

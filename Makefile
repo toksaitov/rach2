@@ -574,14 +574,15 @@ build/tools/etude/image-command: tools/etude/win/image_command.c tools/etude/win
 # A native scenario combines each group's native and declared GNU checks.
 build/tests/cases/host/host_checks_scenario: tests/cases/host/host_checks_scenario.c \
     $(ETUDE_HOSTCASE_SRC) $(ETUDE_CASE_LIB_SRC) $(ETUDE_HDRS) \
-    tests/cases/host/sanitizer_tool.h
+    tests/cases/host/sanitizer_tool.h tests/cases/host/host_script_inventory.h
 	@mkdir -p $(@D)
 	$(filter-out tests/cases/host/host.c,$(ETUDE_LINK)) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Iutils $(ETUDE_PLATFORM_FLAGS) $(ETUDE_PLATFORM_LIBS)
 
 # Host checks are compiled during preparation and executed by a native driver.
 # The inventory builder hashes every binary and input and never runs a check.
-build/tests/cases/host/host: $(ETUDE_HOSTCASE_SRC) $(ETUDE_HDRS) tests/cases/host/sanitizer_tool.h
+build/tests/cases/host/host: $(ETUDE_HOSTCASE_SRC) $(ETUDE_HDRS) tests/cases/host/sanitizer_tool.h \
+    tests/cases/host/host_script_inventory.h
 	@mkdir -p $(@D)
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Iutils $(ETUDE_PLATFORM_FLAGS) $(ETUDE_PLATFORM_LIBS)

@@ -96,7 +96,8 @@ $(PREFIX)/etude: $(ETUDE_SRC)
 $(PREFIX)/etude-volume: $(ETUDE_VOLUME_SRC)
 	@mkdir -p $(@D)
 	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
-$(PREFIX)/host: $(ETUDE_HOSTCASE_SRC) tests/cases/host/sanitizer_tool.h
+$(PREFIX)/host: $(ETUDE_HOSTCASE_SRC) tests/cases/host/sanitizer_tool.h \
+    tests/cases/host/host_script_inventory.h
 	@mkdir -p $(@D)
 	$(CC) $(PRODUCT_CFLAGS) -o $@ $(filter %.c,$^)
 $(PREFIX)/host-suite-probe: tests/cases/host/host_suite_probe.c
