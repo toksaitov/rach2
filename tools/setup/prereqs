@@ -241,6 +241,10 @@ need qemu-system-i386 qemu-system-x86_64 qemu-img
 probe Runs "$env:ProgramFiles\qemu\@TOOL@.exe"
 admin winget install --exact --id SoftwareFreedomConservancy.QEMU --scope machine --silent --accept-package-agreements --accept-source-agreements
 
+need qemu-command-helpers
+probe ((Get-FileHash -LiteralPath "$env:ProgramFiles\qemu\libglib-2.0-0.dll" -Algorithm SHA256).Hash -eq '7b5c19f5540857ec2288323f3b1654cbe5655fc3ea21417a25da69bece489eec') -and (Has "$env:ProgramFiles\qemu\gspawn-win64-helper.exe") -and (Has "$env:ProgramFiles\qemu\gspawn-win64-helper-console.exe") -and ((Get-FileHash -LiteralPath "$env:ProgramFiles\qemu\gspawn-win64-helper.exe" -Algorithm SHA256).Hash -eq '87113f2bf18d694910a1e6791282aea4da3611d41a8397434e43fed6deec72a5') -and ((Get-FileHash -LiteralPath "$env:ProgramFiles\qemu\gspawn-win64-helper-console.exe" -Algorithm SHA256).Hash -eq 'c8734364a23a2af11660efba3d4c9b82bcdc604f15816cfd92ed2697ee30cdaf')
+admin Install-QemuSpawn "$env:ProgramFiles\qemu"
+
 need OVMF
 probe Has "$env:ProgramFiles\qemu\share\edk2-x86_64-code.fd"
 admin winget install --exact --id SoftwareFreedomConservancy.QEMU --scope machine --silent --accept-package-agreements --accept-source-agreements

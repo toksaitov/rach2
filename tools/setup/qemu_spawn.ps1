@@ -1,0 +1,77 @@
+# Complete the native QEMU package's GLib command-spawning dependency.
+function Install-QemuSpawn {
+ param([Parameter(Mandatory=$true)][string]$QemuDirectory,
+       [string]$CacheDirectory=([IO.Path]::GetTempPath()))
+ $ErrorActionPreference='Stop'
+ $root=[IO.Path]::GetFullPath($QemuDirectory)
+ $library=Join-Path $root 'libglib-2.0-0.dll'
+ $expectedLibrary='7b5c19f5540857ec2288323f3b1654cbe5655fc3ea21417a25da69bece489eec'
+ $package='mingw-w64-x86_64-glib2-2.88.3-1-any.pkg.tar.zst'
+ $packageSha='5aa850934d0216f5b7237bd54c3ec660ebfc3a42fd992bc7abbd611bd9cc7663'
+ $uri='https://repo.msys2.org/mingw/mingw64/'+$package
+ $helpers=@{
+  'gspawn-win64-helper.exe'='87113f2bf18d694910a1e6791282aea4da3611d41a8397434e43fed6deec72a5'
+  'gspawn-win64-helper-console.exe'='c8734364a23a2af11660efba3d4c9b82bcdc604f15816cfd92ed2697ee30cdaf'
+ }
+ if(!(Test-Path -LiteralPath $library -PathType Leaf) -or
+    (Get-FileHash -LiteralPath $library -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expectedLibrary){
+  throw 'QEMU GLib has no matching pinned command helpers'
+ }
+ foreach($name in $helpers.Keys){
+  $path=Join-Path $root $name
+  if((Test-Path -LiteralPath $path) -and
+     (!(Test-Path -LiteralPath $path -PathType Leaf) -or
+      (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $helpers[$name])){
+   throw ('existing QEMU helper differs: '+$path)
+  }
+ }
+ $cache=[IO.Path]::GetFullPath($CacheDirectory)
+ $null=[IO.Directory]::CreateDirectory($cache)
+ $scratch=Join-Path $cache ('rach2-qemu-spawn.'+[Guid]::NewGuid().ToString('N'))
+ $null=[IO.Directory]::CreateDirectory($scratch)
+ try{
+  $archive=Join-Path $scratch $package
+  Invoke-WebRequest -UseBasicParsing -Uri $uri -OutFile $archive
+  if((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -cne $packageSha){
+   throw 'QEMU helper package digest differs'
+  }
+  $tar='C:/msys64/usr/bin/tar.exe'
+  & $tar --force-local -xf $archive -C $scratch `
+    mingw64/bin/libglib-2.0-0.dll mingw64/bin/gspawn-win64-helper.exe `
+    mingw64/bin/gspawn-win64-helper-console.exe
+  if($LASTEXITCODE -ne 0){throw 'QEMU helper extraction failed'}
+  $stage=Join-Path $scratch 'mingw64/bin'
+  $pins=@{}+$helpers
+  $pins['libglib-2.0-0.dll']=$expectedLibrary
+  foreach($name in $pins.Keys){
+   $path=Join-Path $stage $name
+   $item=Get-Item -LiteralPath $path
+   if($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+      (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $pins[$name]){
+    throw ('extracted QEMU input differs: '+$name)
+   }
+  }
+  if((Get-FileHash -LiteralPath $library -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expectedLibrary){
+   throw 'QEMU GLib changed during helper preparation'
+  }
+  $copied=@();$observed=@{}
+  foreach($name in $helpers.Keys){
+   $path=Join-Path $root $name
+   if(!(Test-Path -LiteralPath $path)){
+    [IO.File]::Copy((Join-Path $stage $name),$path,$false)
+    $copied+=,$name
+   }
+   if((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $helpers[$name]){
+    throw ('installed QEMU helper differs: '+$path)
+   }
+   $observed[$name]=@{path=$path;sha256=$helpers[$name];size_bytes=(Get-Item -LiteralPath $path).Length}
+  }
+  $record=@{format='rach2-qemu-spawn-install';schema_version=1;
+   package=@{url=$uri;sha256=$packageSha;version='2.88.3-1'};
+   library=@{path=$library;sha256=$expectedLibrary};helpers=$observed;
+   copied=$copied;observed_utc=[DateTime]::UtcNow.ToString('o')}
+  $record|ConvertTo-Json -Depth 6
+ }finally{
+  Remove-Item -LiteralPath $scratch -Recurse -Force
+ }
+}
