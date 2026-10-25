@@ -1,5 +1,6 @@
 # scripts.mk: one native scenario and immutable sources for host.list.
 HOST_SCRIPT_CASE_SRC = tests/cases/host/host_scripts_scenario.c \
+    tests/cases/host/host_script_inventory.c \
     tests/cases/host/host_assets.c \
     tests/cases/host/host_scripts.c tests/cases/host/host_build.c tests/cases/host/host_doom.c \
     tests/cases/host/host_image.c tests/cases/host/host_image_accounts.c \
@@ -7,6 +8,7 @@ HOST_SCRIPT_CASE_SRC = tests/cases/host/host_scripts_scenario.c \
     tests/cases/host/host_image_tooling.c tests/cases/host/host_image_collection.c \
     tests/cases/machine/netcase.c
 build/tests/cases/host/host_scripts_scenario: $(HOST_SCRIPT_CASE_SRC) \
+    tests/cases/host/host_script_inventory.h tools/etude/history_json.h \
     tests/cases/host/host_scripts.h tests/cases/host/host_build.h tests/cases/host/host_doom.h \
     tests/cases/host/host_image.h tests/cases/host/host_assets.h \
     tests/cases/machine/netcase.h $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)

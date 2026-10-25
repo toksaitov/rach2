@@ -86,3 +86,45 @@ static void partitions(void)
     partition_refusal(PARTITION_OK, 1, 0, "an incomplete inventory refuses before shared launch");
     partition_refusal(PARTITION_OK, 0, 1, "a quiet mode mismatch refuses before launch");
 }
+
+static void script_driver_manifest(int duplicate)
+{
+    const char *suffixes[] = {"", "_native", "_images", "_build", "_tools"};
+    FILE *f = fopen(fix_path("tests/cases/host.host.json"), "wb");
+    CHECK(f != NULL, "script driver manifest opens");
+    if (!f)
+        return;
+    fputs("{\"cases\":[", f);
+    for (unsigned i = 0; i < 5; i++) {
+        fprintf(f,
+                "%s{\"case_id\":\"host.host.scripts%s\",\"assertions\":["
+                "{\"assertion_id\":\"listed\"}",
+                i ? "," : "", suffixes[i]);
+        if (i < 2 || (duplicate && i == 2))
+            fprintf(f, ",{\"assertion_id\":\"%c\"}", i == 1 ? 'b' : 'a');
+        fputs("]}", f);
+    }
+    fputs("]}\n", f);
+    CHECK(!fclose(f), "script driver manifest closes");
+}
+
+static void script_driver_partitions(void)
+{
+    char output[32768];
+    copy_probe();
+    CHECK(!mkdir(fix_path("tests/cases/host"), 0700), "script list directory created");
+    put("tests/cases/host/host.list", "a|probe a|unused\nb|probe b|unused\n");
+    script_driver_manifest(0);
+    inventory("scripts", 0, NULL);
+    CHECK(!run_group(output, sizeof(output), "scripts", NULL) && strstr(output, "assert a pass") &&
+              strstr(output, "assert b pass"),
+          "standalone scripts driver executes the complete declaration union");
+    CHECK(!run_group(output, sizeof(output), "scripts", "b") && strstr(output, "assert b pass") &&
+              !strstr(output, "assert a"),
+          "standalone script selection preserves its one-check interface");
+    script_driver_manifest(1);
+    inventory("scripts", 0, NULL);
+    CHECK(run_group(output, sizeof(output), "scripts", NULL) != 0 &&
+              strstr(output, "assert listed fail") && !strstr(output, "probe complete"),
+          "overlapping script declarations refuse before any standalone child starts");
+}

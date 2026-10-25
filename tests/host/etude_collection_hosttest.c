@@ -5,6 +5,7 @@
  * host-deps: tools/etude/compare_load.c tools/etude/observe_import.c
  * host-deps: tools/etude/history.c tools/etude/history_json.c
  * host-deps: tools/etude/history_collect.c
+ * host-deps: tests/cases/host/host_script_inventory.c
  * host-inputs: tests/host/compat/collection_scheduling.c
  * host-inputs: tests/host/compat/collection_cost.c
  * host-inputs: tests/host/compat/load_history_host.h
@@ -398,8 +399,9 @@ static void fixture(void)
 #include "compat/collection_scheduling.c"
 #include "compat/collection_cost.c"
 #include "compat/host_scripts_order.c"
+#include "compat/host_scripts_dispatch.c"
 
-int main(int argc, char **argv)
+static int collection_main(int argc, char **argv)
 {
     static char out[131072];
     char *both[] = {"-N", "-a", "both", "core", NULL};
@@ -430,6 +432,7 @@ int main(int argc, char **argv)
         return getenv("ETUDE_COLLECTION_FAIL") ? 1 : 0;
     }
     host_scripts_order();
+    host_scripts_dispatch();
     if (!realpath(argv[0], self) || !realpath("build/tools/etude/etude", etude))
         return 1;
     signal(SIGINT, stopped);
@@ -486,4 +489,16 @@ int main(int argc, char **argv)
     fix_passed();
     puts("etude_collection_hosttest: pass");
     return 0;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc == 2 && !strcmp(argv[1], "--scripts-only")) {
+        host_scripts_order();
+        host_scripts_dispatch();
+        if (!failures)
+            fix_passed();
+        return failures ? 1 : 0;
+    }
+    return collection_main(argc, argv);
 }
