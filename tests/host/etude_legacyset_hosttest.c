@@ -9,7 +9,7 @@
  * wait. Guest cases run rngprobe on the real desktop QEMU and the prepared
  * kernel and test image of ARCH (i686 when unset). Their evidence is below
  * the tree's build/tests. --context-only runs the native measurement rows
- * without QEMU or guest artifacts.
+ * without QEMU or guest artifacts. --stop-only runs the first-failure rows.
  *
  * host-deps: tools/etude/routine_charge.c
  * host-deps: tools/etude/authority.c tools/etude/authority_parse.c
@@ -570,6 +570,7 @@ struct run {
     size_t n;
     unsigned width;
     int locks, stop_on_fail;
+    int block_workspace; /* refuse the first case's working directory */
     const char *accel;  /* the accelerator, or NULL for tcg */
     const char *ledger; /* the ledger, or NULL for the fixtures' */
     const char *unset;  /* a variable the driver runs without, or NULL */
@@ -1106,6 +1107,8 @@ static void opts_for(struct etude_legacy_set_opts *o, const struct run *r)
     o->status = r->status_file;
     o->args = r->name;
     o->site = r->site;
+    if (r->block_workspace)
+        o->run_id = r->name;
 }
 
 /* The run whose set this process drives. */
@@ -1215,7 +1218,7 @@ static void driver(const struct run *r)
 
 /* A private description contains values, never addresses from the parent. */
 struct run_description {
-    unsigned magic, n, width, locks, stop_on_fail, limit_mib, guest, put;
+    unsigned magic, n, width, locks, stop_on_fail, limit_mib, guest, put, block_workspace;
     char fields[8][PATH_LEN];
     char paths[6][PATH_LEN];
     struct {
@@ -1247,6 +1250,7 @@ static int save_run(const char *path, const struct run *r)
     d->limit_mib = r->limit_mib;
     d->guest = r->guest;
     d->put = r->put;
+    d->block_workspace = r->block_workspace;
     for (i = 0; i < 8; i++)
         bad |= snprintf(d->fields[i], PATH_LEN, "%s", fields[i] ? fields[i] : "") >= PATH_LEN;
     for (i = 0; i < 6; i++)
@@ -1328,6 +1332,7 @@ static int driver_role(const char *path)
     r.limit_mib = d.limit_mib;
     r.guest = d.guest;
     r.put = (enum put_fault)d.put;
+    r.block_workspace = d.block_workspace;
     for (i = 0; i < 8; i++)
         *fields[i] = d.fields[i][0] ? d.fields[i] : NULL;
     for (i = 0; i < 6; i++)
@@ -1342,6 +1347,17 @@ static int driver_role(const char *path)
     r.members = members;
     driver(&r);
     return 121;
+}
+
+/** Replace the first case's directory by a file before it can start. */
+static void block_workspace(const struct run *r)
+{
+    char path[PATH_LEN * 2];
+
+    CHECK(mkdir(r->evidence, 0755) == 0, "startup: evidence directory made");
+    fix_format(path, sizeof(path), "%s/%s.fixture.plain.one.r0", r->evidence, r->name);
+    CHECK(write_text(path, "startup refusal evidence\n", 0644) == 0,
+          "startup: the first working directory is a file");
 }
 
 /** Start the set of `r` in a child, with its files named for the row, and
@@ -1359,6 +1375,8 @@ static void set_start(struct run *r)
     fix_format(r->copies, sizeof(r->copies), "%s/%s.copies", dir, r->name);
     r->status = -1;
     r->claims = -1;
+    if (r->block_workspace)
+        block_workspace(r);
     fflush(stdout);
     {
         char description[PATH_LEN];
@@ -1679,6 +1697,43 @@ static void test_first(void)
         has_line(r.out, "run: long: fixture.long.one: stopped before its end; its output so far:"),
         "first: the stopped case's output");
     CHECK(r.claims == 0, "first: the ledger has no claim");
+    show(&r, before);
+}
+
+/** A startup refusal stops later work only when first-failure mode is set. */
+static void test_start_failure(int stop)
+{
+    static const struct etude_legacy_member m[] = {{"plain", 1, 0, ONE("plain"), NULL},
+                                                   {"serial", 0, 0, ONE("serial"), NULL}};
+    struct run r = {0};
+    char path[PATH_LEN], marks[256];
+    int before = fails;
+
+    in(path, sizeof(path), "marks");
+    unlink(path);
+    r.name = stop ? "startup-stop" : "startup-continue";
+    r.members = m;
+    r.n = 2;
+    r.width = 1;
+    r.stop_on_fail = stop;
+    r.block_workspace = 1;
+    set_run(&r);
+    CHECK(r.status == 1 && r.read == 0, "startup: failure and complete history retained");
+    CHECK(case_is(&r, "fixture.plain.one", "i686", 0, "incomplete", "the case could not start"),
+          "startup: original refusal retained");
+    CHECK(kept(&r, "fixture.plain.one.r0"), "startup: refusal evidence retained in place");
+    if (stop) {
+        CHECK(case_attempt(&r, "fixture.serial.one", "i686", 0) == NULL,
+              "startup: no attempt of the later case");
+        CHECK(item_is(&r, "fixture.serial.one", "cancelled"), "startup: later item cancelled");
+        CHECK(!exists(path), "startup: later case never wrote its marker");
+    } else {
+        CHECK(case_is(&r, "fixture.serial.one", "i686", 0, "pass", NULL),
+              "startup: ordinary batch continues");
+        CHECK(read_text(path, marks, sizeof(marks)) > 0 && has_line(marks, "end serial"),
+              "startup: later case actually executed");
+    }
+    CHECK(r.claims == 0 && !r.leaks, "startup: claims and native allocations cleaned");
     show(&r, before);
 }
 
@@ -2954,6 +3009,20 @@ static int guest_site(void)
 #include "compat/legacyset_repeat_key.c"
 #include "compat/legacyset_repetition.c"
 
+/** Run only native first-failure rows, without QEMU or guest artifacts. */
+static int stop_cases_only(void)
+{
+    test_first();
+    test_start_failure(1);
+    test_start_failure(0);
+    if (fails)
+        return 1;
+    completed = 1;
+    fix_passed();
+    puts("etude_legacyset_hosttest: stop pass");
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     char held[32];
@@ -2986,7 +3055,9 @@ int main(int argc, char **argv)
         return 1;
     }
     int repetitions_only = argc == 2 && !strcmp(argv[1], "--repetitions-only");
-    context_only = repetitions_only || (argc == 2 && !strcmp(argv[1], "--context-only"));
+    int stops_only = argc == 2 && !strcmp(argv[1], "--stop-only");
+    context_only =
+        stops_only || repetitions_only || (argc == 2 && !strcmp(argv[1], "--context-only"));
     if (context_only)
         guest_arch = "i686";
     else if (guest_site() != 0)
@@ -3005,6 +3076,8 @@ int main(int argc, char **argv)
         return 1;
     if (repetitions_only)
         return repetition_cases_only();
+    if (stops_only)
+        return stop_cases_only();
     test_repetition_loads();
     test_digest_paths();
     test_contexts();
@@ -3020,6 +3093,8 @@ int main(int argc, char **argv)
     test_width();
     test_serial();
     test_first();
+    test_start_failure(1);
+    test_start_failure(0);
     test_stops();
     test_signal();
     test_prepare();
