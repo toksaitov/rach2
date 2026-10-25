@@ -10,6 +10,8 @@ This record is incomplete. [The plan](plan.md), [recovery contract](recovery.md)
 
 Final Ubuntu, macOS and Windows source, preparation, tool, firmware, allocator and complete runtime records remain to be incorporated from the coordinator's verified evidence. The actual e0db desktop coverage delta contains 1033 selected items, retaining every earlier tuple and adding nine host partitions. Its receipt is SHA-256 `fab89f3577b6d47dfa27088018e8b6b8cdea9ad8db0732f08ad3604dfbd8d0f5`; this does not claim a fresh e1d allocator event or runtime pass.
 
+The [QEMU WHPX report](qemu-whpx-report.md) preserves the Windows processor-state failure, its diagnostic probe, source correction, verified private build and remaining runtime checks. Compilation alone does not establish a runtime pass.
+
 T94 still needs five eligible independent whole-run samples for each ranked configuration, fixed cache and load procedures, complete costs and the resulting recommendation. The 250-case native workload is excluded from that ranking. The existing [comparison](machines.md) contains historical adapter measurements and supplies no current recommendation.
 
 ## Routine entry, review and release
