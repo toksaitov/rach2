@@ -3299,7 +3299,7 @@ done:
 /* The translated command and the storage of its pathname arguments. */
 struct image_invocation {
     const char *args[68], *input, *directory, *destination;
-    char disk[4096], device[4096], program[80], request[8192], parsed[4096];
+    char disk[4096], device[4096], program[80], request[8192], parsed[4096], input_file[4096];
 };
 
 /** Translate the file operand in a debugfs request. */
@@ -3339,6 +3339,22 @@ static enum etude_status image_request(const char *const argv[], int request_at,
     return ETUDE_OK;
 }
 
+/** Keep the basename that mcopy uses for an implicit guest destination. */
+static int image_input_path(struct image_invocation *v, const char *path)
+{
+    const char *name = strrchr(path, '/');
+#ifdef _WIN32
+    const char *backslash = strrchr(path, '\\');
+    if (backslash != NULL && (name == NULL || backslash > name))
+        name = backslash;
+#endif
+    name = name != NULL ? name + 1 : path;
+    if (*name == '\0' || !strcmp(name, ".") || !strcmp(name, ".."))
+        return 0;
+    return (size_t)snprintf(v->input_file, sizeof(v->input_file), "/dev/shm/image-input/%s", name) <
+           sizeof(v->input_file);
+}
+
 static enum etude_status image_copy_arguments(const char *const argv[], size_t count, size_t prefix,
                                               struct image_invocation *v)
 {
@@ -3349,9 +3365,13 @@ static enum etude_status image_copy_arguments(const char *const argv[], size_t c
         if (strncmp(argv[i], "::", 2) != 0) {
             if (i == count - 1)
                 v->destination = argv[i];
-            else
+            else {
                 v->input = argv[i];
-            v->args[prefix + i - 1] = "/dev/shm/image-file";
+                if (!image_input_path(v, argv[i]))
+                    return ETUDE_REFUSED;
+            }
+            v->args[prefix + i - 1] =
+                i == count - 1 ? "/dev/shm/image-file" : v->input_file;
         }
     }
     if (v->input != NULL && v->destination != NULL)
@@ -3461,6 +3481,33 @@ static enum etude_status image_directory(struct etude_case *c, struct etude_case
     return st;
 }
 
+/** Create private input storage before transferring a basename-preserved file. */
+static enum etude_status image_input(struct etude_case *c, struct etude_case_machine *m,
+                                      const struct image_invocation *v, const char *output)
+{
+    const char *args[] = {"/bin/busybox", "mkdir", "-m", "0700", "/dev/shm/image-input", NULL};
+    struct etude_guest_result result;
+    enum etude_status st;
+    char name[200];
+
+    if (v->input == NULL)
+        return ETUDE_OK;
+    if (v->input_file[0] == '\0')
+        return etude_guest_put(m, v->input, "/dev/shm/image-file", "0600");
+    snprintf(name, sizeof(name), "image-input.%s", output);
+    st = etude_guest_command(m, args, NULL, NULL, name, &result);
+    if (st != ETUDE_OK)
+        return st;
+    if (result.cleanup != ETUDE_CLEANUP_CONFIRMED) {
+        c->unconfirmed = 1;
+        return ETUDE_LOST;
+    }
+    if (!result.complete || result.termination.end != ETUDE_END_EXITED ||
+        result.termination.value != 0)
+        return ETUDE_FAILED;
+    return etude_guest_put(m, v->input, v->input_file, "0600");
+}
+
 /** Keep a file an image command wrote, even when the command failed. */
 static enum etude_status image_fetch(struct etude_case *c, struct etude_case_machine *m,
                                      const char *destination, const char *output, int succeeded)
@@ -3510,8 +3557,7 @@ static enum etude_status image_host(struct etude_case *c, char *const argv[], co
     st = etude_boot(c, "image-helper", disks, &m, &stopped);
     if (st != ETUDE_OK)
         return st;
-    if (v.input != NULL &&
-        (st = etude_guest_put(m, v.input, "/dev/shm/image-file", "0600")) != ETUDE_OK)
+    if ((st = image_input(c, m, &v, output)) != ETUDE_OK)
         goto done;
     if (v.directory != NULL && (st = image_directory(c, m, v.directory, output)) != ETUDE_OK)
         goto done;

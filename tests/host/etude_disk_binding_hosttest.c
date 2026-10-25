@@ -109,6 +109,38 @@ static void invocation_architectures(void)
     case_free(&c);
 }
 
+/** Preserve the source basename used by mcopy's directory destination. */
+static void image_upload_arguments(void)
+{
+    static const char *const paths[] = {"/host/Busy Box", "Busy Box", "D:/host/Busy Box",
+#ifdef _WIN32
+                                          "D:\\host\\Busy Box",
+#endif
+                                          NULL};
+    struct image_invocation v;
+    const char *upload[] = {"mcopy", "-i", "disk@@1048576", NULL, "::/", NULL};
+    char oversized[4096];
+    const char *invalid[] = {"", "/", ".", "/host/..", oversized, NULL};
+
+    for (size_t i = 0; paths[i] != NULL; i++) {
+        upload[3] = paths[i];
+        memset(&v, 0, sizeof v);
+        check_binding(image_copy_arguments(upload, 5, 3, &v) == ETUDE_OK &&
+                          v.input == paths[i] && v.destination == NULL && v.args[5] &&
+                          !strcmp(v.args[5], "/dev/shm/image-input/Busy Box") &&
+                          !strcmp(upload[2], "disk@@1048576") && !strcmp(upload[4], "::/"),
+                      "mcopy upload changed its basename or another operand");
+    }
+    memset(oversized, 'a', sizeof(oversized) - 1);
+    oversized[sizeof(oversized) - 1] = '\0';
+    for (size_t i = 0; invalid[i] != NULL; i++) {
+        upload[3] = invalid[i];
+        memset(&v, 0, sizeof v);
+        check_binding(image_copy_arguments(upload, 5, 3, &v) == ETUDE_REFUSED,
+                      "mcopy accepted an empty, dot or oversized staged basename");
+    }
+}
+
 /** Keep large image operands in the permanent tmpfs, not the boot module. */
 static void image_work_paths(void)
 {
@@ -180,6 +212,7 @@ int main(void)
         return 2;
     invocation_architectures();
     image_work_paths();
+    image_upload_arguments();
     path_of(scratch, fixture, "attempt");
     path_of(disk_file, scratch, "disk");
     path_of(alias, scratch, "alias");
