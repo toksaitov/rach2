@@ -37,7 +37,7 @@
  * host-inputs: tools/ci/retention_closure.py tools/ci/retention_issues.py
  * host-inputs: tools/etude/preparation_import.py
  * host-inputs: tools/etude/preparation_paths.py
- * host-inputs: tools/etude/collection_tools.py
+ * host-inputs: tools/etude/collection_tools.c tools/etude/collection_tools.h
  * host-tools: python3
  * host-first: it runs for minutes
  *

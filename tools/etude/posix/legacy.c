@@ -1003,12 +1003,11 @@ static int prepare_target(struct prep *p)
 
     if (args == NULL)
         return failed(p, "tooling: memory ran out");
-    char *program = format("%s/build/tools/etude/etude", p->tree);
-    if (program == NULL) {
+    if (!p->o->program) {
         free(args);
-        return failed(p, "tooling: memory ran out");
+        return refuse(p, "tooling: the current native Etude path is unavailable");
     }
-    args[0] = program;
+    args[0] = (char *)p->o->program;
     args[1] = "prepare";
     args[2] = "tools";
     args[3] = "prepare";
@@ -1025,7 +1024,6 @@ static int prepare_target(struct prep *p)
                "collection_windows && exec \"$@\"";
     s.cmd = args;
     status = run_step(p, &s);
-    free(program);
     free(args);
     return status == 0 ? find_artifacts(p) : status;
 #else
