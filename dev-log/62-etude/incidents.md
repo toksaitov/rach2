@@ -1167,6 +1167,12 @@ The Linux collection on 924c737f204230bc8a346c44151711f294945feb finished with 1
 
 The mock compiler's publication checks repeatedly encoded and transported about 3 MiB of source, although they only hash it. The fixture now retains every source path, make rule and bootstrap script but uses short C and header contents for those repeated checks. Before its real compiler check, it replaces the private tree with the complete product source. All existing assertions and bounds remain. The failed collection is excluded from site selection; validation of the repair belongs to the combined check.
 
+## Windows entry read a temporary caller and retained CRLF (#1115)
+
+The second Windows diagnostic setup allocated all 1,024 cases but stopped before observation. Its shell rejected the final carriage return in the native caller identity. The public native_entry.sh had the same parser. A separate native identity query then established that observe parent reported a temporary MSYS process, which had already ended when the next command queried it. The Windows PID from /proc/$$/winpid and its native creation identity matched the persistent shell handle retained by PowerShell.
+
+Windows entry now reads that persistent shell's Windows PID and queries its creation identity. It removes one trailing carriage return before the existing decimal checks, retains the native output and passes the resulting exact identity to the C owner. The routine-entry fixture also supplies CRLF and checks the identity received by the sequence. The failed setups and their cleanup remain separate evidence; neither ran a test case.
+
 ## The Mac input-store forecast understated allocation
 
 The five-sample plan estimated 9.948 GiB for its live input store. The actual first collection allocated 12.620 GiB for 334 objects. Adding every unpublished object's full logical size and metadata gave a 16.985 GiB conservative bound and a 3.799 GiB reserve deficit at the full released scratch, retained-evidence and critical-floor allowances. The original estimate, measured correction and active results remain separate. The guard, profile, tests and critical floor were unchanged. Old-image compression proposals preserve every logical byte but establish no recovered space before execution and verification; they remain held while the collection runs. The testing procedure now requires separate allowances and full logical size until destination allocation is measured.

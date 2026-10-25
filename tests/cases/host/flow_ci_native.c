@@ -65,7 +65,8 @@ static int completion(void)
 static int sequence(int argc, char **argv)
 {
     if (!counted_vectors(argc, argv) || !argument(argc, argv, "admit") ||
-        !argument(argc, argv, "run") || !argument(argc, argv, "-I") || !argument(argc, argv, "-g"))
+        !argument(argc, argv, "run") || !argument(argc, argv, "-I") ||
+        !argument(argc, argv, "-g") || strcmp(env("ETUDE_SEQUENCE_PARENT"), "1:1"))
         return 2;
     int push = !strcmp(env("CI_NATIVE_MODE"), "push");
     if (push && (!argument(argc, argv, "i686:host") || !argument(argc, argv, "x86_64:default") ||
@@ -84,7 +85,11 @@ static int sequence(int argc, char **argv)
     }
     if (!strncmp(env("CI_NATIVE_MODE"), "completion", 10))
         return completion();
-    return !strcmp(env("CI_NATIVE_MODE"), "pass") || *env("CI_NATIVE_ROUTE_MODE") || push ? 0 : 1;
+    return !strcmp(env("CI_NATIVE_MODE"), "pass") ||
+                   !strcmp(env("CI_NATIVE_MODE"), "parent-crlf") || *env("CI_NATIVE_ROUTE_MODE") ||
+                   push
+               ? 0
+               : 1;
 }
 
 static int verdict(int argc, char **argv)
@@ -118,7 +123,7 @@ static int verdict(int argc, char **argv)
 int flow_ci_native_mock(int argc, char **argv)
 {
     if (argc == 3 && !strcmp(argv[1], "observe") && !strcmp(argv[2], "parent")) {
-        puts("1 1");
+        fputs(!strcmp(env("CI_NATIVE_MODE"), "parent-crlf") ? "1 1\r\n" : "1 1\n", stdout);
         return 0;
     }
     if (argc > 2 && !strcmp(argv[1], "observe") && !strcmp(argv[2], "sequence"))
@@ -203,8 +208,8 @@ static int row(struct fixture *f, const char *mode, unsigned number)
     fx_env("CI_NATIVE_ROUTE_MODE", routed ? mode : "");
     const char *argv[] = {"/bin/sh", "tools/ci/run.sh", "core", out, NULL};
     fx_run(f, argv, flow_path(f, "tree"), NULL, NULL);
-    int passed =
-        !strcmp(mode, "pass") || !strcmp(mode, "completion") || !strcmp(mode, "macos-import");
+    int passed = !strcmp(mode, "pass") || !strcmp(mode, "parent-crlf") ||
+                 !strcmp(mode, "completion") || !strcmp(mode, "macos-import");
     int ok = f->status == (passed ? 0 : !strcmp(mode, "cancel") ? 125 : 1);
     for (unsigned i = 0; i < 2; i++) {
         const char *arch = i ? "x86_64" : "i686";
@@ -243,6 +248,7 @@ static int push_row(struct fixture *f)
 int flow_ci_native(struct fixture *f)
 {
     const char *modes[] = {"pass",
+                           "parent-crlf",
                            "foreign",
                            "budget",
                            "cleanup",

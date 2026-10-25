@@ -99,11 +99,24 @@ for arch in $selected; do
     printf '%s\n' "$sha" > "$result/commit"
     : > "$result/failed"
 done
-"$etude" observe parent > "$out/caller.identity"
-IFS=' ' read -r caller_pid caller_creation caller_extra < "$out/caller.identity"
+if [ "$native_site_endpoint" = windows ]; then
+    # A native command's parent can be a temporary MSYS process. Its proc
+    # entry gives this persistent shell's Windows process ID.
+    caller_pid=$(cat "/proc/$$/winpid")
+    "$etude" observe identity "$caller_pid" > "$out/caller.creation"
+    IFS= read -r caller_creation < "$out/caller.creation"
+    caller_extra=''
+else
+    "$etude" observe parent > "$out/caller.identity"
+    IFS=' ' read -r caller_pid caller_creation caller_extra < "$out/caller.identity"
+fi
+caller_creation=${caller_creation%"$(printf '\r')"}
 case $caller_pid in ''|*[!0-9]*|0) echo 'ci: refused: invalid native caller PID' >&2; exit 2 ;; esac
 case $caller_creation in ''|*[!0-9]*|0) echo 'ci: refused: invalid native caller creation' >&2; exit 2 ;; esac
 [ -z "$caller_extra" ] || exit 2
+if [ "$native_site_endpoint" = windows ]; then
+    printf '%s %s\n' "$caller_pid" "$caller_creation" > "$out/caller.identity"
+fi
 ETUDE_SEQUENCE_PARENT=$caller_pid:$caller_creation
 export ETUDE_SEQUENCE_PARENT
 status=0
