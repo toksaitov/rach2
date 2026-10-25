@@ -1,7 +1,7 @@
 /* Native transport and process operations for desktop controller fixtures. */
 #ifdef _WIN32
 #include "win/files.h"
-#include <process.h>
+#include "win/winfmt.h"
 #else
 #include <sys/resource.h>
 #include <sys/socket.h>
@@ -158,16 +158,67 @@ void host_wait_forever(void)
     }
 }
 
+#ifdef _WIN32
+/** Start the exact prepared PE, including one without an .exe suffix. */
+static int quiet_child(const char *self, const char *mode)
+{
+    const char *const args[] = {"--quiet-child", mode, NULL};
+    char *line = NULL;
+    wchar_t *program = etude_win_wide(self), *command = NULL;
+    STARTUPINFOW startup;
+    PROCESS_INFORMATION process;
+    HANDLE streams[3] = {GetStdHandle(STD_INPUT_HANDLE), GetStdHandle(STD_OUTPUT_HANDLE),
+                         GetStdHandle(STD_ERROR_HANDLE)};
+    HANDLE copies[3] = {NULL, NULL, NULL};
+    DWORD error = ERROR_NOT_ENOUGH_MEMORY, code = 121;
+    int i, started = 0;
+
+    memset(&startup, 0, sizeof(startup));
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    for (i = 0; i < 3; i++)
+        if (!DuplicateHandle(GetCurrentProcess(), streams[i], GetCurrentProcess(), &copies[i], 0,
+                             TRUE, DUPLICATE_SAME_ACCESS)) {
+            error = GetLastError();
+            break;
+        }
+    startup.hStdInput = copies[0];
+    startup.hStdOutput = copies[1];
+    startup.hStdError = copies[2];
+    if (i == 3 && program && etude_win_cmdline(self, args, &line) == 0)
+        command = etude_win_wide(line);
+    if (command) {
+        started = CreateProcessW(program, command, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL,
+                                 &startup, &process);
+        if (!started)
+            error = GetLastError();
+    }
+    for (i = 0; i < 3; i++)
+        if (copies[i])
+            CloseHandle(copies[i]);
+    free(line);
+    free(command);
+    free(program);
+    if (started) {
+        if (WaitForSingleObject(process.hProcess, INFINITE) == WAIT_OBJECT_0 &&
+            GetExitCodeProcess(process.hProcess, &code))
+            error = 0;
+        else
+            error = GetLastError();
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+    }
+    if (error != 0 || code != 0)
+        fprintf(stderr, "watchdog quiet child: mode %s error %lu status %lu\n", mode,
+                (unsigned long)error, (unsigned long)code);
+    return error ? -1 : (int)code;
+}
+#endif
+
 int host_quiet_child(const char *self, const char *mode)
 {
 #ifdef _WIN32
-    wchar_t *program = etude_win_wide(self), *argument = etude_win_wide(mode);
-    intptr_t status = -1;
-    if (program != NULL && argument != NULL)
-        status = _wspawnl(_P_WAIT, program, program, L"--quiet-child", argument, NULL);
-    free(program);
-    free(argument);
-    return (int)status;
+    return quiet_child(self, mode);
 #else
     pid_t pid = fork(), waited;
     int status;
