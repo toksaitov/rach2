@@ -1834,3 +1834,9 @@ The same assertion now belongs to etude_quiet, and its POSIX source explicitly d
 The Windows i686 boots check failed its quiet and quiet-forever rows. Host preparation publishes its native PE under the manifest's suffixless artifact path. The fixture resolved that exact module path, then passed it to _wspawnl, whose extension search tries added executable suffixes instead of that literal file. Both rows exited before their quiet-child work completed. The retained parent case has SHA-256 d20045ae4a29bf01f44aaab46df38d9ad80f6716b9c364278c4f4c2c63e463d5 and 121937 bytes.
 
 The child now starts through CreateProcessW with the exact application path and the existing native argument serializer. It inherits its three standard streams and its current Job, waits for the real child exit, and closes both process handles. The fixture reports native launch errors, child exit status and retained standard error. All quiet, gap, whole-case and descendant-cleanup assertions remain. The affected native Windows fixture retry is required; source checks alone establish no passing runtime result.
+
+## The set fixture rewrote digest inputs through text mode (#1171)
+
+The same Windows i686 boots check failed the changed-disk and failed-copy invocation digest assertions. Its original artifact was written as binary LF bytes, but write_text opened the replacement and restored disk with text mode. Windows added carriage returns while the expected digest still covered the literal LF bytes. The initial disk digest passed; the two subsequent digest assertions failed.
+
+The fixture writer now uses binary mode. The source bytes, store copies, expected hashes, invocation comparisons and cleanup checks remain unchanged. The actual failed log remains retained, and the affected Windows fixture retry must establish the result.
