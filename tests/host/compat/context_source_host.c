@@ -81,6 +81,24 @@ static void check_source_snapshot(const char *output, const char *current, const
     json_free(document);
 }
 
+static void source_memory_snapshot(const char *tree, const char *current, const char *const extra[],
+                                   const char *output)
+{
+    struct jbuf bytes = {0};
+    struct json *memory = NULL, *written = NULL;
+    char error[160];
+    CHECK(!etude_context_source_build(tree, current, extra, &bytes),
+          "source capture builds in memory without a temporary file");
+    CHECK(!json_parse(bytes.data, bytes.len, 1, &memory, error, sizeof error) &&
+              !routine_json(output, &written) && json_equal(memory, written),
+          "in-memory and published snapshots describe identical actual inputs");
+    CHECK(etude_context_source_build(tree, current, extra, &bytes),
+          "source capture refuses a nonempty destination buffer");
+    json_free(memory);
+    json_free(written);
+    jbuf_free(&bytes);
+}
+
 static void test_source_capture(void)
 {
     char tree[4096], current[41] = {0}, output[4096], refused[4096];
@@ -96,6 +114,7 @@ static void test_source_capture(void)
     CHECK(!etude_prepare_source_main((int)(sizeof args / sizeof(*args)) - 1, args),
           "native committed source entry captures");
     check_source_snapshot(output, current, "prepared\n");
+    source_memory_snapshot(tree, current, extra, output);
     CHECK(etude_context_source(tree, current, output, extra),
           "native source never replaces output");
     check_source_snapshot(output, current, "prepared\n");

@@ -100,6 +100,7 @@ int etude_prepare_main(int argc, char **argv)
 {
     static char *goals[GOALS_MAX];
     struct etude_legacy_opts o;
+    char program[4096];
     int opt;
 
     if (argc >= 2 && !strcmp(argv[1], "source"))
@@ -139,6 +140,7 @@ int etude_prepare_main(int argc, char **argv)
         return usage(prepare_usage);
     setvbuf(stdout, NULL, _IOLBF, 0);
     catch_stops();
+    o.program = realpath(argv[0], program);
     return etude_legacy_prepare(&o);
 }
 
