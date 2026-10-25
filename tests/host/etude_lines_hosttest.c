@@ -2,6 +2,7 @@
  * and tell useful work from admission waits, stalled cases and uncertain
  * claims.
  * host-inputs: tools/etude/schemas/history.schema.json
+ * host-deps: tools/etude/boot_identity.c
  * host-deps: tools/etude/authority.c tools/etude/authority_parse.c
  * host-deps: tools/etude/posix/authority_platform.c
  * host-deps: tools/etude/win/authority_platform.c

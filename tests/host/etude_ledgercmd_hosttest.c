@@ -3,6 +3,7 @@
  * which list the claims of a ledger and drop one, against a ledger of real
  * processes.
  *
+ * host-deps: tools/etude/boot_identity.c
  * host-deps: tools/etude/history_collect.c
  * host-deps: tools/etude/history_json.c
  * host-deps: tools/etude/authority.c tools/etude/authority_parse.c
