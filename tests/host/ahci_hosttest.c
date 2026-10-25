@@ -3,7 +3,6 @@
  * of a controller, for the failures QEMU's ich9-ahci does not produce.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
- * host-deps: tests/host/compat/paging_host.c
  *
  * The disk suites boot the driver on QEMU's ich9-ahci, which resets when
  * told, answers the handoff, brings its link up and completes every command.
@@ -541,9 +540,9 @@ struct disk *disk_register(block_device_t *dev, const char *transport, int locat
 
 /* The heap and the DMA pool, for a controller without 64-bit addressing:
    the record of the pages a buffer above 4 GiB moves through, and those
-   pages, from an arena whose pages are counted out and back. A host buffer
-   lies above 4 GiB, as the identity of `paging_virt_to_phys` gives it, so
-   every piece of one moves through a page. */
+   pages, from an arena whose pages are counted out and back. The paging
+   model places ordinary buffers above 4 GiB regardless of where the host
+   maps this program; the DMA pool uses the driver's low physical window. */
 extern void *calloc(unsigned long count, unsigned long size);
 extern void free(void *p);
 
@@ -551,6 +550,12 @@ extern void free(void *p);
 static uint8_t pool[POOL_PAGES][4096] __attribute__((aligned(4096)));
 static int pool_taken[POOL_PAGES];
 static unsigned pool_out;
+
+/** Place ordinary pages above 4 GiB, retaining their offsets and low words. */
+uintptr_t paging_virt_to_phys(uintptr_t va)
+{
+    return va | ((uintptr_t)1 << 32);
+}
 
 /** The kernel heap: zeroed host memory. */
 void *kzalloc(size_t size)
@@ -949,8 +954,8 @@ static int polled_identify(unsigned after, int masked)
  * With it clear a write's pieces are copied into pages of the DMA pool and
  * the table names those pages, each address's high half 0; a read's are
  * copied back from them into the buffer after the command. The pages are
- * taken once and kept for the read after the write. A host buffer lies above
- * 4 GiB, so every piece of one goes through a page.
+ * taken once and kept for the read after the write. The paging model puts
+ * every ordinary buffer above 4 GiB, so every piece goes through a page.
  */
 static void dma32_rows(void)
 {
@@ -969,7 +974,8 @@ static void dma32_rows(void)
           ahci_run_command(d, ATA_READ_DMA_EXT, 0, 16, out + 2048, 2 * 4096, 0) == 0);
     at = ((uint64_t)prdt[1].dbau << 32) | prdt[1].dba;
     CHECK("named by its own pages, both halves",
-          (uintptr_t)(out + 4096) > 0xFFFFFFFFu && at == (uintptr_t)(out + 4096) && pool_out == 0);
+          paging_virt_to_phys((uintptr_t)(out + 4096)) > 0xFFFFFFFFu &&
+              at == paging_virt_to_phys((uintptr_t)(out + 4096)) && pool_out == 0);
 
     ahci_dma64 = 0;
     d->bounce = kzalloc(sizeof(*d->bounce));
