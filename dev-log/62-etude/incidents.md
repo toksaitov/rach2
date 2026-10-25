@@ -1504,3 +1504,8 @@ The missing command-spawn dependency is now separately established: the installe
 ## The native Windows agent asset paths, #1150
 
 All four agent acceptance cases on 0da stopped before boot because the first extracted JSON filename was 263 bytes and the tar reader used the ordinary Windows CRT. The shared volume adapter repair supplies the native path operations; its complete source closure now also links into the API service and selftest. The service's JSON, asset, credential, certificate and record operations use that same adapter, and recursive removal uses its reparse-aware directory operations. OpenSSL receives extended native filenames where it opens the certificate files itself. The native selftest checks actual archive extraction, exact JSON, certificate generation/loading and cleanup beyond MAX_PATH. No evidence path or exchange assertion was shortened. Actual Windows validation remains pending after the unchanged full diagnostic.
+
+
+### Guest protocol expected-output buffers missed the declared path size
+
+The targeted Rach2 build of the existing guest protocol fixture failed under strict GCC 16 warnings at both -O1 and -O2. Two expected-output arrays held 2048 bytes while the resolved path array permits 4096; one string includes that path twice. Issue #1145 sizes those oracle arrays for the complete declared paths and fixed text. Neither expected string nor its exact comparison changes, and compiler warnings remain fatal. Both failed compiler commands and admission cleanup are retained under build/tests/native-targeted-1131 in the native-attempt-session worktree. No fixture executed from those failed builds.
