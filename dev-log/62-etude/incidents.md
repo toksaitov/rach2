@@ -1408,3 +1408,7 @@ The GNU collection fixture selected prepared host cases in its private guest fil
 ## The resource ledger missed Rach2's boot identity (#1140)
 
 The GNU ledger fixture required Linux's boot UUID proc file, which Rach2 does not provide. The production ledger used that same path and recorded an unknown boot, so it could not release a claim proved to belong to an earlier boot. The ledger now recognizes Rach2 by uname and reads the existing trusted boot token from its boot-local tmpfs. Its boot field accepts the full 64-byte token. The fixture reads the platform identity independently and retains the assertion that a different boot releases a claim, including on macOS. Every host fixture linking the ledger declares the boot reader as a source dependency.
+
+## USB probe read only the beginning of a long boot line (#1142)
+
+The first complete Mac diagnostic passed 1020 of 1024 attempts. Alongside the two scripted host groups in #1136, both machine.usb.off cases failed: the kernel logged that rach2.nousb disabled USB, while usbprobe reported that the option was absent. The probe read only255bytes of /proc/cmdline; QEMU's long kernel filename preceded the option. The probe now scans the complete file in bounded chunks, preserving token state across reads and matching whole words. The empty-device and enabled-device assertions remain unchanged.
