@@ -11,6 +11,8 @@
 #include "wire.h"
 #include "../boot_identity.h"
 #include "fixture.h"
+#include "owner.h"
+#include "etude/exec.h"
 #include "history_json.h"
 #include "sha256.h"
 #include <etude/frame.h>
@@ -91,6 +93,7 @@ struct attempt {
     char dir[PATH_CAP]; /* STATE/a/TOKEN */
     pid_t pid;          /* the child, the leader of its own session and group */
     unsigned long long start;
+    struct guest_owner owned;
     int fd[3];                   /* the read ends of the child's 1 and 2, or -1 */
     unsigned long long off[3];   /* the bytes of each kept and sent so far */
     unsigned long long total[3]; /* the bytes of each read, kept or not */
@@ -808,9 +811,10 @@ static void attempt_record(const struct attempt *a, enum state st, const char *f
     if (path_of(path, "%s/record", a->dir) < 0)
         return;
     snprintf(text, sizeof(text),
-             "cmd %s\nsession %s\nowner %ld %llu\nchild %ld %llu\nboot %s\nstate %s\n%s", a->cmd,
-             session, (long)self_pid, self_start, (long)a->pid, a->start, boot, state_name[st],
-             finals ? finals : "");
+             "cmd %s\nsession %s\nowner %ld %llu\nchild %ld %llu\nkeeper %ld %llu\nboot %s\nstate "
+             "%s\n%s",
+             a->cmd, session, (long)self_pid, self_start, (long)a->pid, a->start,
+             (long)a->owned.pid, a->owned.start, boot, state_name[st], finals ? finals : "");
     if (write_file(path, text, strlen(text)) < 0)
         note("record: %s: %s", path, strerror(errno));
 }
@@ -1375,8 +1379,8 @@ static void default_signals(void)
     sigprocmask(SIG_SETMASK, &none, NULL);
 }
 
-/** Close every descriptor from 3 up but `keep`. */
-static void close_from_3(int keep)
+/** Close every descriptor from 3 up except the two kept descriptors. */
+static void close_from_3(int keep, int also)
 {
     long max = sysconf(_SC_OPEN_MAX);
     int fd;
@@ -1384,7 +1388,7 @@ static void close_from_3(int keep)
     if (max < 0 || max > 4096)
         max = 4096;
     for (fd = 3; fd < max; fd++)
-        if (fd != keep)
+        if (fd != keep && fd != also)
             close(fd);
 }
 
@@ -1439,7 +1443,9 @@ static void signal_attempt(struct attempt *a, int sig)
 {
     int i;
 
-    if (a->pid > 0)
+    if (a->owned.enabled)
+        guest_owner_signal(&a->owned, sig);
+    else if (a->pid > 0)
         kill(-a->pid, sig);
     for (i = 0; i < a->nkids; i++)
         if (same_process(a->kid[i], a->kid_start[i]))
@@ -1452,6 +1458,9 @@ static int attempt_gone(const struct attempt *a)
 {
     int i;
 
+    if (a->owned.enabled &&
+        (!a->owned.reaped || !a->owned.complete || !a->owned.clean || a->owned.fault))
+        return 0;
     if (a->pid > 0 && (kill(-a->pid, 0) == 0 || errno != ESRCH))
         return 0;
     for (i = 0; i < a->nkids; i++)
@@ -1612,12 +1621,13 @@ static void run_child(const struct pipes *pp, const struct fixtures *fx, const s
     close(pp->err[0]);
     close(pp->sync[1]);
     close(pp->exe[0]);
-    if (read(pp->sync[0], &byte, 1) != 1)
-        _exit(127);
     in = open(l->input ? l->input : "/dev/null", O_RDONLY);
     if (in < 0 || dup2(in, 0) < 0 || dup2(pp->out[1], 1) < 0 || dup2(pp->err[1], 2) < 0)
         code = errno;
-    close_from_3(pp->exe[1]);
+    close_from_3(pp->exe[1], pp->sync[0]);
+    if (read(pp->sync[0], &byte, 1) != 1)
+        _exit(127);
+    close(pp->sync[0]);
     snprintf(path, sizeof(path), "%s", l->prog);
     if (code == 0)
         code = fixture_enter(fx, l->work, path, sizeof(path), &dir);
@@ -1663,7 +1673,8 @@ static void take_terminal(struct attempt *a, const char *input)
 static int spawn_pipes(struct attempt *a, struct pipes *pp)
 {
     if (pipe(pp->out) < 0 || pipe(pp->err) < 0 || pipe(pp->sync) < 0 || pipe(pp->exe) < 0 ||
-        fcntl(pp->exe[1], F_SETFD, FD_CLOEXEC) < 0 || (a->pid = fork()) < 0) {
+        fcntl(pp->exe[1], F_SETFD, FD_CLOEXEC) < 0 ||
+        (a->pid = guest_owner_fork(&a->owned, a->grace_us, a->dir)) < 0) {
         note("spawn: %s", strerror(errno));
         close_pipes(pp);
         a->pid = 0;
@@ -1767,6 +1778,7 @@ static void drop_attempt(struct attempt *a)
         close(a->fd[1]);
     if (a->fd[2] >= 0)
         close(a->fd[2]);
+    guest_owner_close(&a->owned);
     free(a);
 }
 
@@ -1803,11 +1815,13 @@ static void finish(struct attempt *a)
     int clean = attempt_gone(a);
     int i;
 
-    if (fixture_cleanup(&a->fx, a->dir) < 0) {
+    if (clean && fixture_cleanup(&a->fx, a->dir) < 0) {
         note("attempt %s: a fixture was left", a->token);
         clean = 0;
     }
-    if (a->stopped)
+    if (a->owned.enabled && !a->owned.ended)
+        snprintf(end, sizeof(end), "lost -");
+    else if (a->stopped)
         snprintf(end, sizeof(end), "stopped -");
     else if (WIFSIGNALED(a->status))
         snprintf(end, sizeof(end), "signaled %d", WTERMSIG(a->status));
@@ -1851,10 +1865,18 @@ static void reap(void)
 
     while ((pid = wait4(-1, &status, WNOHANG, &ru)) > 0)
         for (a = attempts; a; a = a->next)
-            if (a->pid == pid && !a->exited) {
+            if (((a->owned.enabled && a->owned.pid == pid) ||
+                 (!a->owned.enabled && a->pid == pid)) &&
+                !a->exited) {
                 a->exited = 1;
-                a->status = status;
-                a->ru = ru;
+                if (a->owned.enabled) {
+                    guest_owner_reaped(&a->owned, status);
+                    a->status = a->owned.status;
+                    a->ru = a->owned.usage;
+                } else {
+                    a->status = status;
+                    a->ru = ru;
+                }
                 /* What the program left in its group, and the children it
                  * reported, end with it. */
                 signal_attempt(a, SIGKILL);
@@ -1885,6 +1907,32 @@ static void tick(void)
     }
 }
 
+/* A failed exec still owns the owner and any fixture children it made. */
+static int abort_spawn(struct attempt *a)
+{
+    int settled = 1;
+    if (a->owned.enabled) {
+        guest_owner_signal(&a->owned, SIGTERM);
+        settled = guest_owner_wait(&a->owned, (uint64_t)a->grace_us + DRAIN_US) == 0;
+    } else if (a->pid > 0) {
+        while (waitpid(a->pid, NULL, 0) < 0 && errno == EINTR) {
+        }
+    }
+    if (settled)
+        a->pid = 0;
+    return settled;
+}
+
+static int failed_fixture(struct attempt *a, int settled)
+{
+    if (settled && fixture_cleanup(&a->fx, a->dir) < 0) {
+        note("run %s: a fixture was left", a->token);
+        settled = 0;
+    }
+    attempt_record(a, settled ? ST_CLEANED : ST_ENDED, NULL);
+    return settled;
+}
+
 /** run CMD ATTEMPT INVOCATION-SHA256 */
 static void do_run(const struct wire_frame *f, const char *text)
 {
@@ -1894,7 +1942,7 @@ static void do_run(const struct wire_frame *f, const char *text)
     const char *code;
     const char *why;
     char line[LINE_CAP];
-    int made = 0;
+    int made = 0, settled = 1;
 
     if (f->nfields != 3) {
         cmd_error(cmd, ETUDE_ERR_UNKNOWN);
@@ -1942,21 +1990,17 @@ static void do_run(const struct wire_frame *f, const char *text)
         code = spawn(a, &inv);
         if (code) {
             attempts = a->next;
-            if (a->pid > 0) {
-                waitpid(a->pid, NULL, 0);
-                a->pid = 0;
-            }
+            settled = abort_spawn(a);
         }
     }
-    if (code && made) {
-        if (fixture_cleanup(&a->fx, a->dir) < 0)
-            note("run %s: a fixture was left", a->token);
-        attempt_record(a, ST_CLEANED, NULL);
-    }
+    if (code && made)
+        failed_fixture(a, settled);
     eh_json_free(inv.root);
     if (code) {
-        if (a && (!attempts || attempts != a))
+        if (a && (!attempts || attempts != a)) {
+            guest_owner_close(&a->owned);
             free(a);
+        }
         cmd_error(cmd, code);
         return;
     }
@@ -2054,7 +2098,7 @@ static void exec_when_acknowledged(void)
     restore_tty();
     if (log_fd >= 0)
         close(log_fd);
-    close_from_3(-1);
+    close_from_3(-1, -1);
     if (chdir(exec_next.work) < 0)
         _exit(127);
     umask(022);
@@ -2233,6 +2277,33 @@ static int attempt_ended(pid_t child, unsigned long long start, int64_t bound_us
     }
 }
 
+/* An owner that lost its responder drains on control-pipe EOF. Its durable
+ * proof, not its absence alone, permits fixture cleanup after a reconnect. */
+static int owner_ended(const char *token, long keeper, unsigned long long start)
+{
+    int64_t until = now_us() + SETTLE_US;
+    char directory[PATH_CAP];
+    if (path_of(directory, "%s/a/%s", opt.state, token) < 0)
+        return 0;
+    do {
+        struct timespec ts = {0, 10000000};
+        struct etude_pid identity;
+        int state = etude_process_state(keeper, &identity);
+        if (state == 0 || (state == 1 && identity.start != start))
+            return guest_owner_confirm(directory, (pid_t)keeper, start);
+        /* interval: the per-attempt owner is checked every 10 ms. */
+        nanosleep(&ts, NULL);
+    } while (now_us() < until);
+    return 0;
+}
+
+static int recorded_active(const char *record)
+{
+    const char *state = strstr(record, "\nstate ");
+    return state && (!strncmp(state + 7, "running", 7) || !strncmp(state + 7, "preparing", 9) ||
+                     (!strncmp(state + 7, "ended", 5) && strstr(record, "\nkeeper ")));
+}
+
 /**
  * Settle the record of an attempt whose owner is gone without writing its
  * end, as when an etude-guest was killed: what is left of the group that its
@@ -2240,8 +2311,9 @@ static int attempt_ended(pid_t child, unsigned long long start, int64_t bound_us
  * attempt is recorded as lost, since neither its end nor its output's sizes
  * were seen. Nothing of an attempt of another boot runs, and nothing is
  * killed for it; a record that gives no boot is taken as this boot's, and
- * its boot is written back as `-`. Its cleanup is confirmed once nothing of
- * the group is left, which a killed group is given SETTLE_US to do.
+ * its boot is written back as `-`. A per-attempt owner must publish its
+ * exact cleanup proof after reaping its descendants. Older records use the
+ * group check, which a killed group is given SETTLE_US to finish.
  * `record` is given the settled record's text.
  *
  * @return 1 when the record was settled, 0 when it needed nothing.
@@ -2252,7 +2324,8 @@ static int settle_orphan(const char *token, char *record)
     char sess[ETUDE_FRAME_TOKEN_LEN + 1];
     char was[ETUDE_FRAME_TOKEN_LEN + 1] = "-";
     long owner = 0;
-    long child = 0;
+    long child = 0, keeper = 0;
+    unsigned long long keeper_start = 0;
     unsigned long long owner_start = 0;
     unsigned long long child_start = 0;
     char *p;
@@ -2267,16 +2340,21 @@ static int settle_orphan(const char *token, char *record)
     if (sscanf(record, "cmd %23s\nsession %16s\nowner %ld %llu\nchild %ld %llu", cmd, sess, &owner,
                &owner_start, &child, &child_start) != 6)
         return 0;
-    p = strstr(record, "\nstate ");
-    if (!p || (strncmp(p + 7, "running", 7) != 0 && strncmp(p + 7, "preparing", 9) != 0) ||
-        same_process((pid_t)owner, owner_start))
+    if (!recorded_active(record) || same_process((pid_t)owner, owner_start))
         return 0;
     p = strstr(record, "\nboot ");
     here = !p || (sscanf(p + 6, "%16s", was) == 1 && strcmp(was, boot) == 0);
-    left = child > 0 && here ? attempt_left((pid_t)child, child_start) : 0;
-    killed = left > 0 && kill(-(pid_t)child, SIGKILL) == 0;
-    gone = left == 0 || attempt_ended((pid_t)child, child_start, killed ? SETTLE_US : 0);
-    if (path_of(path, "%s/a/%s", opt.state, token) < 0 || fixture_settle(path) < 0)
+    p = strstr(record, "\nkeeper ");
+    if (p)
+        sscanf(p + 8, "%ld %llu", &keeper, &keeper_start);
+    if (here && keeper > 0)
+        gone = owner_ended(token, keeper, keeper_start);
+    else {
+        left = child > 0 && here ? attempt_left((pid_t)child, child_start) : 0;
+        killed = left > 0 && kill(-(pid_t)child, SIGKILL) == 0;
+        gone = left == 0 || attempt_ended((pid_t)child, child_start, killed ? SETTLE_US : 0);
+    }
+    if (gone && (path_of(path, "%s/a/%s", opt.state, token) < 0 || fixture_settle(path) < 0))
         gone = 0;
     snprintf(finals, sizeof(finals),
              "%s %s %s lost -\n%s %s %s 1 - - -\n%s %s %s 2 - - -\n%s %s %s - - - -\n%s %s %s %s\n",
@@ -2284,9 +2362,10 @@ static int settle_orphan(const char *token, char *record)
              ETUDE_EV_USAGE, cmd, token, ETUDE_EV_CLEANED, cmd, token,
              gone ? "confirmed" : "unconfirmed");
     snprintf(text, sizeof(text),
-             "cmd %s\nsession %s\nowner %ld %llu\nchild %ld %llu\nboot %s\nstate %s\n%s", cmd, sess,
-             (long)self_pid, self_start, child, child_start, was, gone ? "cleaned" : "ended",
-             finals);
+             "cmd %s\nsession %s\nowner %ld %llu\nchild %ld %llu\nkeeper %ld %llu\nboot %s\nstate "
+             "%s\n%s",
+             cmd, sess, gone ? (long)self_pid : owner, gone ? self_start : owner_start, child,
+             child_start, keeper, keeper_start, was, gone ? "cleaned" : "ended", finals);
     if (path_of(path, "%s/a/%s/record", opt.state, token) == 0)
         write_file(path, text, strlen(text));
     snprintf(record, 4096, "%s", text);
@@ -2406,7 +2485,8 @@ static void do_remove(const struct wire_frame *f, const char *text)
     }
     if (read_file(path, buf, sizeof(buf)) >= 0) {
         settle_orphan(f->field[1], buf);
-        if (!strstr(buf, "\nstate ended\n") && !strstr(buf, "\nstate cleaned\n")) {
+        if ((!strstr(buf, "\nstate ended\n") && !strstr(buf, "\nstate cleaned\n")) ||
+            (strstr(buf, "\nkeeper ") && !strstr(buf, "\nstate cleaned\n"))) {
             cmd_error(cmd, ETUDE_ERR_REFUSED);
             return;
         }
