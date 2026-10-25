@@ -1,8 +1,7 @@
-# Release checks use one measured native collection of both architectures.
+# Release checks use the requested commit's explicitly selected CI entry.
 # The requested commit selects the runner and accelerator. The optional
 # ARCH:SUITE list limits a repair run; otherwise every case is included.
-# Preparation, execution and cleanup share the four-hour release ceiling.
-# Artifacts and per-architecture results come from the same complete history.
+# Native preparation, execution and cleanup share the four-hour ceiling.
 name: Release tests
 run-name: ${{ inputs.title || format('Release tests of {0}', inputs.sha) }}
 
@@ -44,6 +43,7 @@ jobs:
       runner: ${{ steps.site.outputs.runner }}
       labels: ${{ steps.site.outputs.labels }}
       accelerator: ${{ steps.site.outputs.accelerator }}
+      native: ${{ steps.site.outputs.native }}
     steps:
       - name: Check the inputs
         env:
@@ -83,6 +83,11 @@ jobs:
           sh tools/ci/site.sh tools/ci/site > "$RUNNER_TEMP/site" || exit 1
           cat "$RUNNER_TEMP/site"
           cat "$RUNNER_TEMP/site" >> "$GITHUB_OUTPUT"
+          if grep -qx 'results=native' tools/ci/run.sh; then
+              echo 'native=true' >> "$GITHUB_OUTPUT"
+          else
+              echo 'native=false' >> "$GITHUB_OUTPUT"
+          fi
 
   full:
     name: Build and test both architectures on ${{ needs.site.outputs.runner }} under ${{ needs.site.outputs.accelerator }}
@@ -91,6 +96,7 @@ jobs:
     timeout-minutes: 270
     env:
       RACH2_QEMU_ACCEL: ${{ needs.site.outputs.accelerator }}
+      ETUDE_NATIVE_ENTRY: ${{ needs.site.outputs.native }}
     steps:
       - name: Check out the commit
         id: checkout
@@ -100,9 +106,15 @@ jobs:
           clean: false
           fetch-depth: 0
 
-      - name: Allocate retained native evidence
+      - name: Allocate the selected entry's results
         id: retention
-        run: python3 tools/ci/retention.py --policy "$ETUDE_RETENTION" --site "$ETUDE_SITE" allocate --reference "$ETUDE_REFERENCE" --github-env "$GITHUB_ENV"
+        run: |
+          if [ "$ETUDE_NATIVE_ENTRY" = true ]; then
+              python3 tools/ci/retention.py --policy "${ETUDE_RETENTION:?native retention policy is absent}" --site "${ETUDE_SITE:?native site is absent}" allocate --reference "${ETUDE_REFERENCE:?native reference is absent}" --github-env "$GITHUB_ENV"
+          else
+              out=$(mktemp -d "$RUNNER_TEMP/full-results.XXXXXX")
+              echo "ETUDE_RESULTS=$out" >> "$GITHUB_ENV"
+          fi
 
       - name: Build and test both architectures
         env:
@@ -111,11 +123,11 @@ jobs:
         run: sh tools/ci/run.sh full "$ETUDE_RESULTS"
 
       - name: Stage the shared native evidence
-        if: ${{ always() && steps.retention.outcome == 'success' }}
+        if: ${{ always() && needs.site.outputs.native == 'true' && steps.retention.outcome == 'success' }}
         run: python3 tools/ci/native_evidence.py stage "$ETUDE_RESULTS" "$RUNNER_TEMP/native-evidence"
 
       - name: Upload the shared native evidence
-        if: ${{ always() && steps.retention.outcome == 'success' }}
+        if: ${{ always() && needs.site.outputs.native == 'true' && steps.retention.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: full-native-evidence

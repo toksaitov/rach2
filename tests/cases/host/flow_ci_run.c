@@ -309,9 +309,10 @@ static const char lost[] =
 static int install(const char *mode)
 {
     const char *replacement = !strcmp(mode, "lines") ? "results=lines\n" : "results=history\n";
-    return fx_replace(path("run.sh"), path("tree/tools/ci/run.sh"), "results=native\n",
-                      replacement) &&
-           !fx_same(path("run.sh"), path("tree/tools/ci/run.sh"));
+    const char *previous =
+        fx_has(path("run.sh"), "results=native\n") ? "results=native\n" : "results=lines\n";
+    return fx_replace(path("run.sh"), path("tree/tools/ci/run.sh"), previous, replacement) &&
+           fx_has(path("tree/tools/ci/run.sh"), replacement);
 }
 
 static void settings(struct run_fixture *r, const struct run_case *c)
