@@ -21,6 +21,7 @@
 #endif
 
 #include "etude/legacy.h"
+#include "measurement_context.h"
 #include "json.h"
 #include "verbs.h"
 
@@ -101,6 +102,8 @@ int etude_prepare_main(int argc, char **argv)
     struct etude_legacy_opts o;
     int opt;
 
+    if (argc >= 2 && !strcmp(argv[1], "source"))
+        return etude_prepare_source_main(argc - 1, argv + 1);
     if (argc >= 2 && strcmp(argv[1], "collection") == 0) {
         argv[1] = argv[0];
         return etude_collection_prepare_main(argc - 1, argv + 1);

@@ -96,9 +96,9 @@ The context is one JSON object with `format: "etude-measurement-context"`, `sche
 
 `outer_observation` and, for a WSL run, `physical_observation` describe load samplers started before preparation. Each object has absolute `trace` and `stop_request` paths and `header_sha256`, the hash of the first newline-terminated trace line. The stop request must not exist at entry. The immutable header identifies `native-load-v1`, the run, platform, machine, boot, watched owner and sampler processes, including their creation identities, and the sampling configuration. The parser checks the header and file identity while allowing later samples to extend the trace. The run driver owns final trace validation, closure and hashing. A runtime-only trace cannot establish load during earlier preparation, and missing whole-interval coverage excludes a performance baseline. A WSL run needs a separate Windows physical trace beside its Linux trace.
 
-[`measurement_context.py`](measurement_context.py) is a preparation tool, not an execution dependency. Capture the common clean source snapshot once, preserve the printed hash and verify that same snapshot against each deployed tree when composing its native context:
+`etude prepare source` captures the common clean source snapshot in C. It checks the committed tree before and after hashing tracked regular files and optional `--extra` prepared inputs, refuses links and unsafe relative paths, and creates its output once. It prints the resulting descriptor. Preserve that hash and verify the same snapshot against each deployed tree when composing its native context:
 
-    python3 tools/etude/measurement_context.py source --tree TREE --commit COMMIT --output SOURCE.json
+    etude prepare source --tree TREE --commit COMMIT --output SOURCE.json
     python3 tools/etude/measurement_context.py compose --tree TREE --commit COMMIT \
         --source-snapshot SOURCE.json --source-sha256 SOURCE_SHA256 \
         --record RECORD --site SITE --etude ETUDE --tool QEMU \
