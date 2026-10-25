@@ -1480,3 +1480,7 @@ Six KRFFS checker cases failed their rejection assertions in the first Windows d
 ## The artifact bound row expired during instrumented startup (#1137 follow-up)
 
 The targeted GNU artifact retry failed only the hanging recipe's retained partial-product assertion. Its result still reported cancellation past the 300 ms bound. A read-only recovery of the failed private image showed no bad-hang entry in either run's recipe counter and no partial output in its work directories: cancellation preceded instrumented program startup. The bound row now uses a host-test-only preparation clock. It holds that clock until the real hanging recipe has written its partial file and a ready witness, then advances past the same 300 ms comparison. The production clock, executor cancellation, cleanup, sanitizers and retained-file assertions are unchanged.
+
+## A GNU fixture ignored errors while writing its command log
+
+Both Windows imagerace prerequisites controllers exited zero with their reports cut inside the GNU Make database. Their complete guest stream metadata records 861186 and 867145 bytes; the named, waits and terminal report records never arrived. The fixture library ignored the result of its large printf and the following flush. It now checks both operations, snapshots their errno values before later calls, reports an output error with the original child status and refuses success. Image assertions and their input files are unchanged. The precise output errno remains to be established by the affected native Windows case.
