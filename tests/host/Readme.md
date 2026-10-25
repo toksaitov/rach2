@@ -6,14 +6,15 @@ The host tests compile kernel and user sources as ordinary programs for the buil
 
 `etude prepare collection host` builds the programs and immutable input inventory of [`tests/cases/host.host.json`](../cases/host.host.json). `etude run host` executes that prepared suite through the native C driver [`tests/cases/host/host.c`](../cases/host/host.c). The collection holds the tree while its checks run. No compiler, interpreter or Linux tooling machine runs on the execution host. [The driver's Readme](../cases/host/Readme.md) defines preparation, execution and unsupported adapters.
 
-The six cases keep their assertions:
+The seven cases keep their assertion identifiers:
 
 1. `tests`: the host tests outside etude, with the vendored sources of each selected architecture.
-2. `etude`: etude's host tests that boot nothing, once per collection.
-3. `boots`: tests with `host-arch:`, over each selected architecture's kernel and images.
-4. `checkers`: the five checker selftests under the sanitizers.
-5. `fuzz`: each prepared fuzz harness replaying its complete committed corpus. An empty corpus fails preparation.
-6. `scripts`: the behavioral assertions of `host.list`, each through a prepared native adapter. A row awaiting an adapter fails explicitly; it is never a preparation-time pass.
+2. `etude`: the shared checks of Etude's complete inventory, once per collection.
+3. `etude_quiet`: the remote and repetition checks of that same inventory, with no other collection case running beside them.
+4. `boots`: tests with `host-arch:`, over each selected architecture's kernel and images.
+5. `checkers`: the five checker selftests under the sanitizers.
+6. `fuzz`: each prepared fuzz harness replaying its complete committed corpus. An empty corpus fails preparation.
+7. `scripts`: the behavioral assertions of `host.list`, each through a prepared native adapter. A row awaiting an adapter fails explicitly; it is never a preparation-time pass.
 
 The build-only inventory builder reads source metadata, compiles the checks and hashes compiler dependencies, including locally included `.c` files. Its `--print-commands` option prints commands without compiling or executing. The old `HOST_PRINT_COMMANDS=1 sh tests/cases/host/host.sh` interface remains for the coverage and editor command generators.
 

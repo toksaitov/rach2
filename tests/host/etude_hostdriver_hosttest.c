@@ -110,7 +110,7 @@ static void inventory(int omit, const char *unsupported)
     CHECK(fclose(f) == 0, "inventory closes");
 }
 
-static int run(char *output, size_t room)
+static int run_group(char *output, size_t room, const char *group, const char *only)
 {
     pid_t child = fork();
     int status;
@@ -121,13 +121,21 @@ static int run(char *output, size_t room)
             _exit(120);
         close(fd);
         setenv("ETUDE_TREE", tree, 1);
-        setenv("ETUDE_CASE", "host.host.tests", 1);
+        char case_id[128];
+        snprintf(case_id, sizeof(case_id), "host.host.%s", group);
+        if (only)
+            unsetenv("ETUDE_CASE");
+        else
+            setenv("ETUDE_CASE", case_id, 1);
         setenv("ARCH", "i686", 1);
         setenv("TMPDIR", tree, 1);
         setenv("RACH2_WORKERS", "2", 1);
         setenv("ASAN_OPTIONS", "halt_on_error=0:exitcode=0", 1);
         setenv("UBSAN_OPTIONS", "halt_on_error=0:exitcode=0", 1);
-        execl(driver, driver, "tests", (char *)NULL);
+        if (only)
+            execl(driver, driver, "--one", group, only, (char *)NULL);
+        else
+            execl(driver, driver, group, (char *)NULL);
         _exit(121);
     }
     if (child < 0)
@@ -141,6 +149,11 @@ static int run(char *output, size_t room)
     if (f)
         fclose(f);
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+static int run(char *output, size_t room)
+{
+    return run_group(output, room, "tests", NULL);
 }
 
 static int probe(void)
@@ -240,6 +253,8 @@ static void checks(void)
           "a matching script digest cannot bypass native execution");
 }
 
+#include "compat/host_partition_host.c"
+
 int main(int argc, char **argv)
 {
     if (argc == 2 && !strcmp(argv[1], "--probe"))
@@ -251,6 +266,7 @@ int main(int argc, char **argv)
     if (!failures) {
         fixtures();
         checks();
+        partitions();
     }
     if (!failures)
         fix_passed();

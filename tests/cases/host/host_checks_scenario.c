@@ -82,6 +82,8 @@ static int select_native(struct host *h)
 {
     int need_guest = 0;
     for (size_t i = 0; i < h->nchecks; i++) {
+        if (!h->checks[i].selected)
+            continue;
         const char *backend = json_text(h->checks[i].entry, "backend");
         if (backend && !strcmp(backend, "gnu")) {
             h->checks[i].selected = 0;
@@ -160,7 +162,7 @@ int etude_scenario(struct etude_case *c)
         ready = etude_step(c, "gnu") == ETUDE_OK;
     for (size_t i = 0; i < h.nchecks; i++) {
         struct check *check = &h.checks[i];
-        if (check->selected)
+        if (check->selected || !declared(&h, check->id))
             continue;
         const char *backend = json_text(check->entry, "backend");
         if (!backend || strcmp(backend, "gnu"))
