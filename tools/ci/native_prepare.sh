@@ -119,6 +119,12 @@ ETUDE_PREPARATION_RECEIPT=$out_native/preparation.receipt.json
 ETUDE_PREPARATION_COMMIT=$commit
 export ETUDE_ADMITTED ETUDE_SITE RACH2_QEMU_ACCEL
 export ETUDE_PREPARATION_RUN_ID ETUDE_PREPARATION_RECEIPT ETUDE_PREPARATION_COMMIT
+if [ "$purpose" = phase_first_run ]; then
+    # Verify the preallocation before source production or any native build.
+    "$etude" run -N -J "$out_native/selection.export.json" -t "$tree_native" -a "$arches" -A "$accel" "$@"
+    "$python" "$(python_path "$tree/tools/ci/routine_entry.py")" selection \
+        "$(python_path "$ETUDE_PHASE_SELECTION_EXPORT")" "$(python_path "$out/selection.export.json")"
+fi
 if [ -n "${ETUDE_ROUTINE_ENSURE:-}" ]; then
     # Imported ordinary production is inside this already admitted interval.
     "$python" "$(python_path "$tree/tools/ci/routine_route.py")" ensure \
@@ -142,7 +148,9 @@ if [ "$purpose" != phase_first_run ]; then
         --reference "$(native_path "$ETUDE_REFERENCE")" --output "$out_native/reference.forecast" \
         --site "$site" --accelerator "$accel" --preparation "$out_native/preparation.receipt.json"
 fi
-"$etude" run -N -J "$out_native/selection.export.json" -t "$tree_native" -a "$arches" -A "$accel" "$@"
+if [ "$purpose" != phase_first_run ]; then
+    "$etude" run -N -J "$out_native/selection.export.json" -t "$tree_native" -a "$arches" -A "$accel" "$@"
+fi
 "$etude" run -N -t "$tree_native" -a "$arches" -p "$out_native/prepare.record" -A "$accel" "$@" > "$out/selection.list"
 "$python" "$generator" source --tree "$tree_native" --commit "$commit" --output "$out_native/source.json" > "$out/source.descriptor.json"
 source_sha=$("$python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$(python_path "$out/source.descriptor.json")")

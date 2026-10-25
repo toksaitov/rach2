@@ -49,12 +49,9 @@ def stage(args, config):
             else str(Path('producer.site').absolute()))
     if not Path(site).exists():
         raise ValueError('producer projection was not installed before admission')
-    policy = dict(l.split(' ', 1) for l in Path(site).read_text().splitlines())
     os.environ.update(ETUDE_SITE=site, ETUDE_ROUTINE_COMMIT=args.commit)
-    resource = p['preparation_resources']
-    if args.purpose not in ('push', 'ci', 'release'):
+    if args.purpose not in ('push', 'ci', 'release', 'phase_first_run'):
         raise ValueError('invalid routine purpose')
-    bound = {'push': 270, 'ci': 540, 'release': 13800}[args.purpose]
     if os.environ.get('ETUDE_ADMITTED') != site:
         raise ValueError('source staging and production need the enclosing real admission')
     command = ['/bin/sh', str(tree / 'tools/ci/native_producer.sh'), args.purpose,

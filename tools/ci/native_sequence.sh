@@ -18,12 +18,25 @@ case $purpose in
         limit=86400 ;;
     *) echo 'native-sequence: invalid purpose' >&2; exit 2 ;;
 esac
-case $purpose/${ETUDE_PHASE_SELECTION_EXPORT:+set} in
-    phase_first_run/set|push/|ci/|release/) ;;
+case $purpose/${ETUDE_PHASE_SELECTION_EXPORT+x} in
+    phase_first_run/x|push/|ci/|release/) ;;
     *) echo 'native-sequence: a routine run cannot use a first-measurement selection' >&2; exit 2 ;;
 esac
 case $arches in i686|x86_64|both) ;; *) exit 2 ;; esac
 [ -z "${ETUDE_ADMITTED:-}" ] || { echo 'native-sequence: an enclosing claim prevents case admission' >&2; exit 2; }
+# First measurements may use the same clean preparation as release. Other
+# first runs, including loaded focused checks, retain their declared inputs.
+case $purpose/${ETUDE_PREPARATION_CLEAN-} in
+    phase_first_run/|phase_first_run/1) ;;
+    phase_first_run/*) echo 'native-sequence: invalid clean preparation flag' >&2; exit 2 ;;
+esac
+if [ "$purpose" = release ] ||
+    { [ "$purpose" = phase_first_run ] && [ "${ETUDE_PREPARATION_CLEAN:-}" = 1 ]; }; then
+    ETUDE_PREPARATION_CLEAN=1
+    export ETUDE_PREPARATION_CLEAN
+else
+    unset ETUDE_PREPARATION_CLEAN
+fi
 if [ -n "${ETUDE_ROUTINE_ROUTE:-}" ]; then
     routine_entry=$tree/tools/ci/routine_entry.py
     case $(uname -s) in
@@ -46,14 +59,6 @@ if [ "${ETUDE_ROUTINE_DIRECT:-}" = 1 ]; then
 fi
 ETUDE_PREPARATION_GRANT=$out/preparation.grant.json
 export ETUDE_BUILD_JOBS JOBS RACH2_MIN_FREE_GIB ETUDE_SITE ETUDE_SEQUENCE_LOG ETUDE_PREPARATION_GRANT
-# Only release production discards in-house products. Explicit repair suites
-# retain their selection while rebuilding their selected architectures.
-if [ "$purpose" = release ]; then
-    ETUDE_PREPARATION_CLEAN=1
-    export ETUDE_PREPARATION_CLEAN
-else
-    unset ETUDE_PREPARATION_CLEAN
-fi
 unset MAKEFLAGS MFLAGS
 commit=$(git -C "$tree" rev-parse HEAD)
 shell_program=$(command -v sh)
