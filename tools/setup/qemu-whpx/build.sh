@@ -2,36 +2,44 @@
 # Build patched Windows QEMU in one private directory under build/tests.
 set -eu
 if test "$#" -lt 1 || test "$#" -gt 2; then
-    echo 'usage: build.sh PRIVATE_ROOT [--resume-source]' >&2
+    echo 'usage: build.sh PRIVATE_ROOT [--resume-source|--resume-configure]' >&2
     exit 2
 fi
 base=$(cd "$1" && pwd -P)
 input=$base/inputs
+support=$(cd "$(dirname "$0")" && pwd -P)
 resume=${2-}
-case $resume in ''|--resume-source) ;; *) echo 'invalid resume mode' >&2; exit 2;; esac
+case $resume in ''|--resume-source|--resume-configure) ;; *) echo 'invalid resume mode' >&2; exit 2;; esac
 case $base in */build/tests/*) ;; *) echo 'private root must be under build/tests' >&2; exit 2;; esac
 if test -n "$resume"; then
     test -d "$base/deps/ucrt64"
     test -d "$base/qemu-11.1.2"
-    outputs="build install"
+    if test "$resume" = --resume-configure; then
+        test -d "$base/build/pyvenv"
+        test ! -e "$base/build/build.ninja"
+        outputs="install"
+    else
+        outputs="build install"
+    fi
 else
     outputs="deps qemu-11.1.2 build install"
 fi
 for name in $outputs; do
     test ! -e "$base/$name" || { echo "output already exists: $base/$name" >&2; exit 1; }
 done
-/usr/bin/python3 - "$input" <<'PY'
+/usr/bin/python3 - "$input" "$support" <<'PY'
 import hashlib,json,pathlib,sys
-p=pathlib.Path(sys.argv[1]);d=json.loads((p/'pins.json').read_text())
-checks=[(d['source']['filename'],d['source']['sha256'],d['source']['size_bytes']),
-        ('whpx-live-xsave-size.patch',d['patch_sha256'],None)]
+p=pathlib.Path(sys.argv[1]);support=pathlib.Path(sys.argv[2]);d=json.loads((support/'pins.json').read_text())
+checks=[(p/d['source']['filename'],d['source']['sha256'],d['source']['size_bytes']),
+        (p/'whpx-live-xsave-size.patch',d['patch_sha256'],None)]
 b=json.loads((p/'dependencies.json').read_text())
-checks.append((b['filename'],b['sha256'],b['size_bytes']))
-for name,expected,size in checks:
- f=p/name;h=hashlib.sha256()
+checks.append((p/b['filename'],b['sha256'],b['size_bytes']))
+checks.extend((support/x['filename'],x['sha256'],x['size_bytes']) for x in d['python_wheels'])
+for f,expected,size in checks:
+ h=hashlib.sha256()
  with f.open('rb') as stream:
   for data in iter(lambda:stream.read(1048576),b''):h.update(data)
- assert h.hexdigest()==expected and (size is None or f.stat().st_size==size),name
+ assert h.hexdigest()==expected and (size is None or f.stat().st_size==size),str(f)
 print('pinned source, patch and private dependency bundle verified')
 PY
 if test -z "$resume"; then
@@ -69,15 +77,22 @@ if test -z "$resume"; then
         --exclude=qemu-11.1.2/roms --exclude=qemu-11.1.2/tests/lcitool
 fi
 source=$base/qemu-11.1.2
-/usr/bin/python3 - "$source" "$input/pins.json" <<'PY'
+/usr/bin/python3 - "$source" "$support" "$resume" <<'PY'
 from pathlib import Path
-import sys,json,hashlib
-p=Path(sys.argv[1]);d=json.loads(Path(sys.argv[2]).read_text())
+import sys,json,hashlib,shutil
+p=Path(sys.argv[1]);support=Path(sys.argv[2]);d=json.loads((support/'pins.json').read_text())
 assert (p/'VERSION').read_text().strip()==d['version']
-assert hashlib.sha256((p/'target/i386/whpx/whpx-all.c').read_bytes()).hexdigest()==d['source_whpx_sha256']
+key='patched_whpx_sha256' if sys.argv[3]=='--resume-configure' else 'source_whpx_sha256'
+assert hashlib.sha256((p/'target/i386/whpx/whpx-all.c').read_bytes()).hexdigest()==d[key]
+for item in d['python_wheels']:
+ target=p/'python/wheels'/item['filename']
+ if target.exists():assert hashlib.sha256(target.read_bytes()).hexdigest()==item['sha256']
+ else:shutil.copyfile(support/item['filename'],target)
 PY
-patch -p1 -d "$source" < "$input/whpx-live-xsave-size.patch"
-mkdir "$base/build"
+if test "$resume" != --resume-configure; then
+    patch -p1 -d "$source" < "$input/whpx-live-xsave-size.patch"
+    mkdir "$base/build"
+fi
 cd "$base/build"
 CC=/ucrt64/bin/gcc.exe
 CXX=/ucrt64/bin/g++.exe
@@ -89,9 +104,10 @@ export CC CXX
     --python="$dep/bin/python.exe" --ninja="$dep/bin/ninja.exe" \
     --target-list=i386-softmmu,x86_64-softmmu --without-default-features \
     --enable-system --disable-user --enable-whpx --enable-slirp \
-    --enable-pixman --disable-tools --disable-docs --disable-guest-agent \
+    --enable-pixman --enable-tools --disable-docs --disable-guest-agent \
     --disable-rust --disable-download --with-pkgversion=rach2-whpx-d0
-"$dep/bin/ninja.exe" -j8 qemu-system-i386.exe qemu-system-x86_64.exe
+"$dep/bin/ninja.exe" -j8 qemu-system-i386.exe qemu-system-x86_64.exe qemu-img.exe
 ./qemu-system-i386.exe --version
 ./qemu-system-x86_64.exe --version
-sha256sum qemu-system-i386.exe qemu-system-x86_64.exe
+./qemu-img.exe --version
+sha256sum qemu-system-i386.exe qemu-system-x86_64.exe qemu-img.exe
