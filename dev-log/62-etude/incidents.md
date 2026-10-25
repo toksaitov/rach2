@@ -1503,3 +1503,7 @@ The first Windows diagnostic ran the AHCI fixture inside its Rach2 GNU helper. F
 ## The password fixture read its terminal before the slave opened
 
 Both restore-reentry rows failed with no password prompt in the first Windows diagnostic's Rach2 GNU helper. The parent read the pseudo-terminal master immediately after fork, before the helper opened its slave. Rach2 returns EOF while no slave is open, so the parent killed the helper before the restore assertions. The helper now announces completed terminal setup through its existing report pipe before the parent reads the master. The real prompt, both injected signals, restore counts and terminal echo assertions remain unchanged.
+
+## Windows preserved the KRFFS checker's negative status
+
+Six KRFFS checker cases failed their rejection assertions in the first Windows diagnostic while their repair and unchanged-byte assertions passed. Retained child output shows the intended invalid signature, data-length and strict repair refusals. The checker documents statuses -10 through -15. POSIX delivers their low bytes (246 through 241); Windows preserves the signed 32-bit values. The case treated those values as executor failures. Its checker adapter now normalizes only those six documented statuses. The checker, executor, unknown native statuses and every image assertion are unchanged.
