@@ -1379,6 +1379,10 @@ static void test_accel_names(void)
                                    "WHPX: No accelerator found, hr=80070057",
                                    ETUDE_ACCEL_WHPX),
           "whpx refused");
+    CHECK(etude_qemu_accel_refused("qemu-system-x86_64.exe: -accel "
+                                   "whpx,kernel-irqchip=off: WHPX initialization failed",
+                                   ETUDE_ACCEL_WHPX),
+          "configured whpx refused");
     CHECK(!etude_qemu_accel_refused("qemu-system-x86_64: -accel kvm: failed\n", ETUDE_ACCEL_HVF),
           "another accelerator's refusal");
     CHECK(!etude_qemu_accel_refused("qemu-system-i386: -cpu bogus: unknown\n", ETUDE_ACCEL_TCG),
@@ -1511,6 +1515,11 @@ static void test_argv(void)
         printf("etude-qemu-test: fail: the command line is\n  %s\nnot\n  %s\n", line, want);
         fails++;
     }
+    site.accel = ETUDE_ACCEL_WHPX;
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == 0 &&
+              strcmp(argv[2], "whpx,kernel-irqchip=off") == 0,
+          "whpx uses QEMU interrupt-controller emulation");
+    site.accel = ETUDE_ACCEL_KVM;
     CHECK(make_in(&p, &site, argv, 10, buf, sizeof(buf)) == E2BIG, "few arguments");
     CHECK(make_in(&p, &site, argv, ETUDE_QEMU_ARGS_MAX, buf, 100) == E2BIG, "few bytes");
     test_firmware(&p, &site);
@@ -2391,7 +2400,9 @@ int main(int argc, char **argv)
     }
     if (host_environment("TMPDIR", fix_dir()) != 0)
         return 1;
-    if (argc == 2 && strcmp(argv[1], "--host-only") == 0) {
+    if (argc == 2 && strcmp(argv[1], "--argv-only") == 0) {
+        test_argv();
+    } else if (argc == 2 && strcmp(argv[1], "--host-only") == 0) {
         test_host_without_machine();
     } else if (argc == 2 && strcmp(argv[1], "--boundary") == 0) {
         test_real(1);
