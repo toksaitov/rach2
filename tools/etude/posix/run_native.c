@@ -623,7 +623,9 @@ static int run_case(const struct options *o, const struct file *files,
     argv[3] = NULL;
     memset(&conf, 0, sizeof(conf));
     conf.argv = o->transport_argv ? o->transport_argv : argv;
+    /* Each attempt has its own journal; reconnects retain that session. */
     conf.run_id = o->run;
+    conf.session_id = o->attempt;
     conf.journal = o->journal;
     conf.evidence = o->evidence;
     conf.stage_us = o->stage_ms * 1000;

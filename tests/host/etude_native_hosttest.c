@@ -355,6 +355,8 @@ struct row {
     const char *mode;   /* the relay's fault */
     const char *build;  /* tccbuild.sh's argument, or `show` for show.sh */
     const char *cancel; /* etude run native's -x, or NULL */
+    const char *run;    /* shared collection identity, or NULL */
+    const char *state;  /* shared responder state, or NULL */
 };
 
 /* What a row gave. */
@@ -432,7 +434,7 @@ static void run_row(const struct row *w, struct outcome *o)
     int n = 0, fd;
 
     memset(o, 0, sizeof(*o));
-    fix_format(o->state, sizeof(o->state), "%s/%s.state", fix_dir(), w->name);
+    fix_format(o->state, sizeof(o->state), "%s/%s.state", fix_dir(), w->state ? w->state : w->name);
     fix_format(marker, sizeof(marker), "%s/%s.marker", fix_dir(), w->name);
     fix_format(journal, sizeof(journal), "%s/%s.journal", fix_dir(), w->name);
     fix_format(evid, sizeof(evid), "%s/%s.evidence", fix_dir(), w->name);
@@ -446,7 +448,7 @@ static void run_row(const struct row *w, struct outcome *o)
     argv[n++] = self;
     argv[n++] = "--native";
     argv[n++] = "-R";
-    argv[n++] = (char *)w->name;
+    argv[n++] = (char *)(w->run ? w->run : w->name);
     argv[n++] = "-a";
     argv[n++] = attempt;
     argv[n++] = "-c";
@@ -629,14 +631,14 @@ static void test_rows(void)
         struct row w;
         void (*check)(const struct outcome *o);
     } rows[] = {
-        {{"native-pass", "none", "pass", NULL}, check_pass},
-        {{"native-fail", "none", "fail", NULL}, check_fail},
-        {{"native-cancel", "none", "loop", "3000"}, check_cancel},
-        {{"native-cut-running", "cut-running", "loop", NULL}, check_cut_running},
-        {{"native-cut-exit", "cut-exit", "pass", NULL}, check_cut_exit},
-        {{"native-hold", "hold", "loop", NULL}, check_hold},
-        {{"native-kill", "kill", "loop", NULL}, check_kill},
-        {{"native-show", "none", "show", NULL}, check_show},
+        {{"native-pass", "none", "pass", NULL, NULL, NULL}, check_pass},
+        {{"native-fail", "none", "fail", NULL, NULL, NULL}, check_fail},
+        {{"native-cancel", "none", "loop", "3000", NULL, NULL}, check_cancel},
+        {{"native-cut-running", "cut-running", "loop", NULL, NULL, NULL}, check_cut_running},
+        {{"native-cut-exit", "cut-exit", "pass", NULL, NULL, NULL}, check_cut_exit},
+        {{"native-hold", "hold", "loop", NULL, NULL, NULL}, check_hold},
+        {{"native-kill", "kill", "loop", NULL, NULL, NULL}, check_kill},
+        {{"native-show", "none", "show", NULL, NULL, NULL}, check_show},
     };
     static struct outcome o;
     size_t i;
@@ -656,6 +658,23 @@ static void test_rows(void)
             printf("etude-run-native-test: %s: its error output:\n%s", rows[i].w.name, o.err);
         }
     }
+}
+
+/** Independent attempt journals can share a collection and responder state. */
+static void test_shared_run(void)
+{
+    const struct row first = {"shared-pass",     "none", "pass", NULL, "shared-collection",
+                              "shared-responder"};
+    const struct row second = {"shared-fail",     "none", "fail", NULL, "shared-collection",
+                               "shared-responder"};
+    static struct outcome a, b;
+    run_row(&first, &a);
+    check_pass(&a);
+    run_row(&second, &b);
+    check_fail(&b);
+    CHECK(a.process > 0 && b.process > 0 && a.process != b.process,
+          "separate journals in one collection start distinct owned attempts");
+    CHECK(!strcmp(a.state, b.state), "successive attempts use the same responder state");
 }
 
 #include "compat/native_history.c"
@@ -688,6 +707,13 @@ int main(int argc, char **argv)
         fix_passed();
         return 0;
     }
+    if (argc == 2 && !strcmp(argv[1], "--shared-run")) {
+        test_shared_run();
+        if (fails)
+            return 1;
+        fix_passed();
+        return 0;
+    }
     test_native_history();
     if (!exists(CASE_SCRIPT)) {
         printf("etude-run-native-test: fail: %s is not here; run from the root of the tree\n",
@@ -695,6 +721,7 @@ int main(int argc, char **argv)
         return 1;
     }
     test_rows();
+    test_shared_run();
     if (fails != 0)
         return 1;
     fix_passed();
