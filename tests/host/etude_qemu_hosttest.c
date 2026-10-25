@@ -952,6 +952,26 @@ static const char *ovmf_code(char *out, size_t size)
     return host_ovmf_code(out, size);
 }
 
+/** Create the private sparse NVMe image and verify its full byte length. */
+static int uefi_disk(const char *path)
+{
+    struct stat st;
+    int fd, ok, saved;
+
+    errno = 0;
+    fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    ok = fd >= 0 && ftruncate(fd, (off_t)BIG_BYTES) == 0 && fstat(fd, &st) == 0 &&
+         (uint64_t)st.st_size == BIG_BYTES;
+    saved = errno != 0 ? errno : EIO;
+
+    if (fd >= 0)
+        close(fd);
+    CHECK(ok, "an empty sparse disk of 4 TiB");
+    if (!ok)
+        printf("etude-qemu-test: UEFI disk setup: %s\n", strerror(saved));
+    return ok;
+}
+
 /**
  * Boot OVMF's code image, as ovmf_code finds it, in the real qemu-system-x86_64
  * under TCG, with a CD whose medium is the test image of the architecture
@@ -970,7 +990,6 @@ static void test_uefi(void)
     char q32[PATH_MAX], q64[PATH_MAX], code[PATH_MAX], cd[PATH_MAX];
     const char *big = fix_path("big.img");
     struct etude_qemu *q;
-    int fd;
 
     snprintf(cd, sizeof(cd), "%s/images/test.krffs", dir);
     if (host_program("qemu-system-i386", q32, sizeof(q32)) == NULL ||
@@ -982,10 +1001,8 @@ static void test_uefi(void)
         fails++;
         return;
     }
-    fd = open(big, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    CHECK(fd >= 0 && ftruncate(fd, (off_t)BIG_BYTES) == 0, "an empty disk of 4 TiB");
-    if (fd >= 0)
-        close(fd);
+    if (!uefi_disk(big))
+        return;
     memset(disks, 0, sizeof(disks));
     disks[0].path = cd;
     disks[0].cdrom = 1;
