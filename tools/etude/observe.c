@@ -29,7 +29,7 @@ struct etude_observer {
     FILE *file;
     uint64_t samples, max_gap, denied;
     unsigned resets, available;
-    int joined, failed, owner_lost, overflow, cancelled;
+    int joined, thread_joined, terminal, failed, owner_lost, overflow, cancelled;
 #ifdef _WIN32
     HANDLE thread, event, ready_event;
 #else
@@ -145,6 +145,21 @@ static void sample(struct etude_observer *o)
     trace_sample(o, &s);
 }
 
+static void finish_trace(struct etude_observer *o)
+{
+    if (o->cancelled)
+        o->failed = 1;
+    sample(o);
+    fprintf(o->file,
+            "{\"kind\":\"end\",\"utc_us\":%llu,\"monotonic_us\":%llu,"
+            "\"samples\":%llu,\"complete\":%s,\"owner_lost\":%s}\n",
+            (unsigned long long)o->last.utc_us, (unsigned long long)o->last.monotonic_us,
+            (unsigned long long)o->samples, !o->failed && !o->owner_lost ? "true" : "false",
+            o->owner_lost ? "true" : "false");
+    if (fflush(o->file) || ferror(o->file))
+        o->failed = 1;
+}
+
 static void observe(struct etude_observer *o)
 {
     fprintf(o->file,
@@ -175,17 +190,8 @@ static void observe(struct etude_observer *o)
         }
         sample(o);
     }
-    if (o->cancelled)
-        o->failed = 1;
-    sample(o);
-    fprintf(o->file,
-            "{\"kind\":\"end\",\"utc_us\":%llu,\"monotonic_us\":%llu,"
-            "\"samples\":%llu,\"complete\":%s,\"owner_lost\":%s}\n",
-            (unsigned long long)o->last.utc_us, (unsigned long long)o->last.monotonic_us,
-            (unsigned long long)o->samples, !o->failed && !o->owner_lost ? "true" : "false",
-            o->owner_lost ? "true" : "false");
-    if (fflush(o->file) || ferror(o->file))
-        o->failed = 1;
+    if (!o->terminal)
+        finish_trace(o);
 }
 
 #ifdef _WIN32
@@ -206,8 +212,8 @@ static void *worker(void *p)
 }
 #endif
 
-struct etude_observer *etude_observe_start(const char *path, const struct etude_pid *root,
-                                           const char *run_id)
+static struct etude_observer *start(const char *path, const struct etude_pid *root,
+                                    const char *run_id, int terminal)
 {
     struct etude_observer *o = calloc(1, sizeof *o);
     if (!o)
@@ -225,6 +231,7 @@ struct etude_observer *etude_observe_start(const char *path, const struct etude_
         free(o);
         return NULL;
     }
+    o->terminal = terminal;
     strcpy(o->run_id, run_id);
     o->account.root = *root;
     o->available = (1u << LOAD_FIELDS) - 1;
@@ -281,11 +288,21 @@ fail:
     return NULL;
 }
 
-int etude_observe_stop(struct etude_observer *o)
+struct etude_observer *etude_observe_start(const char *path, const struct etude_pid *root,
+                                           const char *run_id)
 {
-    if (!o)
-        return -1;
-    if (!o->joined) {
+    return start(path, root, run_id, 0);
+}
+
+struct etude_observer *etude_observe_start_terminal(const char *path, const struct etude_pid *root,
+                                                    const char *run_id)
+{
+    return start(path, root, run_id, 1);
+}
+
+static void join_worker(struct etude_observer *o)
+{
+    if (!o->thread_joined) {
 #ifdef _WIN32
         SetEvent(o->event);
         WaitForSingleObject(o->thread, INFINITE);
@@ -301,10 +318,41 @@ int etude_observe_stop(struct etude_observer *o)
         pthread_cond_destroy(&o->condition);
         pthread_mutex_destroy(&o->mutex);
 #endif
-        if (fclose(o->file))
+        o->thread_joined = 1;
+    }
+}
+
+static int close_trace(struct etude_observer *o)
+{
+    if (fclose(o->file))
+        o->failed = 1;
+    o->file = NULL;
+    o->joined = 1;
+    return o->failed || o->owner_lost ? -1 : 0;
+}
+
+int etude_observe_finish(struct etude_observer *o, struct etude_reading *end)
+{
+    if (!o || !o->terminal || o->joined || !end)
+        return -1;
+    join_worker(o);
+    if (etude_history_now(end))
+        o->failed = 1;
+    finish_trace(o);
+    return close_trace(o);
+}
+
+int etude_observe_stop(struct etude_observer *o)
+{
+    if (!o)
+        return -1;
+    if (!o->joined) {
+        join_worker(o);
+        if (o->terminal) {
             o->failed = 1;
-        o->file = NULL;
-        o->joined = 1;
+            finish_trace(o);
+        }
+        close_trace(o);
     }
     return o->failed || o->owner_lost ? -1 : 0;
 }

@@ -135,6 +135,42 @@ static void imports(void)
     CHECK(etude_observe_utc("invalid") == 0);
 }
 
+static void terminal_native(const struct etude_pid *self)
+{
+    const char *path = fix_path("terminal");
+    struct etude_observer *o = etude_observe_start_terminal(path, self, "fixture");
+    CHECK(o != NULL);
+    if (!o)
+        return;
+    struct etude_reading cleanup, end;
+    CHECK(etude_history_now(&cleanup) == 0);
+    CHECK(etude_observe_finish(o, &end) == 0 && etude_observe_done(o));
+    CHECK(end.monotonic_us >= cleanup.monotonic_us);
+    uint64_t first, last;
+    etude_observe_bounds(o, &first, &last);
+    CHECK(first <= etude_observe_utc(cleanup.utc) && last >= etude_observe_utc(end.utc));
+    CHECK(etude_observe_finish(o, &end) != 0);
+    FILE *file = fopen(path, "rb");
+    char bytes[8192];
+    size_t size = file ? fread(bytes, 1, sizeof bytes, file) : 0;
+    CHECK(file && size && size < sizeof bytes && !ferror(file));
+    if (file)
+        fclose(file);
+    char *summary = etude_observe_import(bytes, size, "fixture", first, etude_observe_utc(end.utc));
+    CHECK(summary != NULL);
+    free(summary);
+    etude_observe_free(o);
+    o = etude_observe_start_terminal(fix_path("terminal-cancelled"), self, "fixture");
+    CHECK(o != NULL);
+    if (o) {
+        CHECK(etude_observe_stop(o) != 0);
+        summary = etude_observe_summary(o, NULL);
+        CHECK(summary && strstr(summary, "\"comparison_available\":false"));
+        free(summary);
+        etude_observe_free(o);
+    }
+}
+
 static void native(void)
 {
     struct etude_pid self;
@@ -144,6 +180,7 @@ static void native(void)
     long pid = (long)getpid();
 #endif
     CHECK(etude_process_state(pid, &self) == 1 && self.start_known);
+    terminal_native(&self);
     struct etude_pid wrong = self;
     wrong.start++;
     CHECK(etude_observe_start(fix_path("wrong"), &wrong, "fixture") == NULL);
