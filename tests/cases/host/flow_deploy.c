@@ -135,8 +135,11 @@ static int ssh_mock(int argc, char **argv)
                  ev("PATH"));
         fx_env("LOCALAPPDATA", "C:\\Users\\fix\\AppData\\Local");
         fx_env("ProgramFiles", "C:\\Program Files");
-    } else
+        fx_env("FLOW_DEPLOY_WINDOWS", "1");
+    } else {
         snprintf(path, sizeof(path), "%s/mbin:%s", ev("FLOW_WORK"), ev("PATH"));
+        fx_env("FLOW_DEPLOY_WINDOWS", NULL);
+    }
     fx_env("HOME", dp("home"));
     fx_env("TMPDIR", dp("tmp"));
     fx_env("XDG_STATE_HOME", "");
@@ -150,7 +153,7 @@ static int ssh_mock(int argc, char **argv)
 }
 static int uname_mock(int argc, char **argv)
 {
-    if (strstr(argv[0], "/windows/")) {
+    if (!strcmp(ev("FLOW_DEPLOY_WINDOWS"), "1")) {
         if (argc != 2)
             return 1;
         if (!strcmp(argv[1], "-s"))
@@ -320,6 +323,7 @@ static int setup(struct deploy *d, struct fixture *f)
     fx_env("TREE", d->tree);
     fx_env("FIX", d->fix);
     fx_env("FLOW_DEPLOY", "1");
+    fx_env("FLOW_DEPLOY_WINDOWS", NULL);
     fx_mkdir(flow_path(f, "ctl"));
     fx_mkdir(flow_path(f, "mbin"));
     fx_mkdir(flow_path(f, "windows"));

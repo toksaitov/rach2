@@ -1254,3 +1254,9 @@ The run37 combined scripts check reached the installed-launcher fixture after de
 The launcher fixture now invokes the real native entry and site reader against its valid private policy, with retention deliberately absent. It requires the specific refusal, no result start or observed workload, and the unchanged empty ledger. Inherited routine configuration and case filters are cleared. Obsolete CI-only mock admission is removed; build, worker, owner, bisection, nested-identity, parallel and cleanup assertions remain. The separate `ci_run` fixture already executes the real native entry and sequence scripts for success, architecture projections, budget and cleanup failures, cancellation, completion proofs and focused pushes. No native success is substituted in the launcher fixture.
 
 This repair changes fixture code only. The coordinating session validates the completed repair batch after the frozen run ends; no standalone build or test was run for this change. This fixes #1120.
+
+## The deployment fixture lost its Windows identity
+
+The run37 deployment check selected its Windows uname substitute through PATH, but the shell passed only `uname` in argv[0]. The substitute looked for `/windows/` in that argument and reported Linux. Provisioning therefore reused the Linux identity, and the subsequent Windows record checks failed. The retained deployment output is 81,723 bytes, SHA-256 `86bd41b27924a43cdd872d91af04556ea564131e6cb90e00ec44dd4360e631c0`.
+
+The exact Windows SSH command now sets a private platform marker, and other SSH commands clear it. The uname substitute reads that marker. Linux and Windows identity, record, source, firmware and publication checks remain. The testing skill now requires explicit platform state for command substitutes. This fixes #1119; validation belongs to the combined repair check.

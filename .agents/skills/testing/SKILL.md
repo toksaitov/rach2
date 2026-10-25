@@ -33,6 +33,8 @@ description: Run suites, full sets or analyses on the testing host, or write a s
 
 ## Writing a suite
 
+* Select a command substitute's platform through explicit fixture state, not a directory in argv[0]. A shell may pass only the basename even when PATH selected an executable in a platform-specific directory.
+
 * Check a published native program through its declared native file path. MSYS existence checks may resolve a suffixless name to an unrenamed `.exe`.
 
 * Copy a path returned from a rotating or static buffer into caller-owned storage before retaining it across loops or calls that reuse that buffer. When one fixture fails this way, inspect its sibling fixtures for the same lifetime error.
