@@ -64,6 +64,9 @@ static void native_script_partition(void)
     native_script_inventory_fixture();
     CHECK(!run_group(output, sizeof(output), "scripts_native", NULL),
           "host-domain native partition runs through the actual prepared driver");
+    const char *begin = strstr(output, "@etude 1 begin host.host.scripts_native\n");
+    const char *first = strstr(output, "@etude 1 assert ");
+    CHECK(begin && first && begin < first, "native script report begins before its assertions");
     const char *at = output;
     for (unsigned i = 0; i < 10; i++) {
         char expected[128];
