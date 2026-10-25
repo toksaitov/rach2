@@ -78,6 +78,8 @@ Each remote command checks the Lenovo's station address, the booted slot, the ab
 
 The collection's status determines success. The deployment helper retrieves the whole results directory as a compressed archive in LOGS, preserving its JSON results and protocol evidence, then stops and reaps the peers. It leaves the immutable payload, account and recorded results on the machine; it removes neither an existing collection's state nor an unowned process.
 
+Native KRFFS root preparation reserves `/.etude-native-root-padding`, a root-owned file of mode 0444 with a zero-filled payload. The supported stager appends it after the complete root tree, with a size that places the sole free extent on a 4096-byte boundary. A collision with that path fails preparation. The final chain, alignment and requested free-space allowance are checked before publication. This deterministic fixture placement keeps the first runtime metadata allocations independent of the staged executable sizes. The kernel still refuses a metadata update whose changed bytes span physical blocks; the timestamp probes retain their values and assertions.
+
 ## Limits
 
 A case gives its program the init role never: a check that needs the designated init or a boot of its own stays in its suite under QEMU, as the inventory says. The ids and ports of `maps` are the same for every case, so two cases that name the same one do not run at once.

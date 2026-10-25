@@ -9,9 +9,14 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import struct
 import subprocess
 import tempfile
 import tarfile
+
+KRFFS_HEADER = 357
+KRFFS_BLOCK = 4096
+ROOT_PADDING = "/.etude-native-root-padding"
 
 PROFILE = ("sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,"
            "^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,"
@@ -112,16 +117,63 @@ def blank(path, mib):
         stream.truncate(mib * 1048576)
 
 
+def krffs_free_tail(path, *, reject_padding=False):
+    """Read the sole free tail of a packed root and reject a reserved-name collision."""
+    length = path.stat().st_size
+    offset, previous, root_previous, tail = 0, None, None, None
+    with path.open("rb") as image:
+        while offset < length:
+            image.seek(offset)
+            header = image.read(KRFFS_HEADER)
+            if len(header) != KRFFS_HEADER:
+                raise ValueError(f"short KRFFS root header: {path}")
+            magic, kind = struct.unpack_from("<HB", header)
+            size, back, data, parent = struct.unpack_from("<QQQQ", header, 325)
+            if magic != 0x4b52 or kind not in (0, 1, 2) or size < KRFFS_HEADER or \
+                    offset + size > length or (kind == 0) != (offset == 0) or \
+                    (previous is not None and back != previous):
+                raise ValueError(f"invalid KRFFS root chain at {offset}: {path}")
+            if offset == 0:
+                root_previous = back
+            if kind == 2 and parent == 0 and \
+                    header[11:267].split(b"\0", 1)[0] == ROOT_PADDING[1:].encode() and reject_padding:
+                raise ValueError(f"native root reserves {ROOT_PADDING}: {path}")
+            if kind == 1:
+                if offset + size != length:
+                    raise ValueError(f"native KRFFS root is not packed: {path}")
+                tail = offset, size
+            elif data > size - KRFFS_HEADER:
+                raise ValueError(f"invalid KRFFS root data at {offset}: {path}")
+            previous, offset = size, offset + size
+    if tail is None or root_previous != previous:
+        raise ValueError(f"native KRFFS root has no complete free tail: {path}")
+    return tail
+
+
+def align_krffs_root(root, out, env, work, tools):
+    """Stage zero-filled padding so runtime allocations start on a block boundary."""
+    used, _ = krffs_free_tail(out, reject_padding=True)
+    padding = work / "root-padding.bin"
+    padding.write_bytes(b"\0" * ((-used - KRFFS_HEADER) % KRFFS_BLOCK))
+    recipe = work / "root-padding.manifest"
+    recipe.write_text(f"file 0444:0:0 {ROOT_PADDING} {padding.resolve()}\n")
+    invoke([tools["stage"], recipe, out], root=root, env=env)
+    used, free = krffs_free_tail(out)
+    if used % KRFFS_BLOCK:
+        raise ValueError(f"native KRFFS root free extent is not block aligned: {out}")
+    return free
+
+
 def root_image(root, out, kind, mib, text, env, work, tools):
     manifest_file = work / "root.manifest"
     manifest_file.write_text(text)
     if kind == "krffs":
         blank(out, mib + 10)
         invoke([tools["mkfs"], out], root=root, env=env)
-        staged = invoke([tools["stage"], manifest_file, out], root=root, env=env)
-        match = re.search(r"bytes used, ([0-9]+) free", staged)
-        if not match or int(match[1]) < mib * 1048576:
-            raise ValueError(f"root {out.name} has insufficient free space: {staged}")
+        invoke([tools["stage"], manifest_file, out], root=root, env=env)
+        free = align_krffs_root(root, out, env, work, tools)
+        if free < mib * 1048576:
+            raise ValueError(f"root {out.name} has insufficient free space: {free}")
         return
     if kind not in ("ext2", "ext2-dir"):
         raise ValueError(f"unknown root kind: {kind}")
