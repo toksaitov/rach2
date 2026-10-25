@@ -44,7 +44,8 @@ def boot_entry(item, flags):
     # The Windows scenario has a native serial actor for its stand-in row.
     # The real row still runs etude-guest inside the prepared Rach2 image.
     if 'tests/host/etude_scenario_hosttest.c' in sources:
-        guest = {'tools/etude/guest/guest.c', 'tools/etude/guest/fixture.c'}
+        guest = {'tools/etude/guest/guest.c', 'tools/etude/guest/fixture.c',
+                 'tools/etude/guest/owner.c'}
         sources = [s for s in sources if s not in guest]
         sources.append('tests/host/compat/scenario_guest.c')
     sources = list(dict.fromkeys([*sources, *source_list('ETUDE_WIN_EXEC_SRC')]))

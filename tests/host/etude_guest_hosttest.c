@@ -2,6 +2,7 @@
  * and the serial console, and check the contracts of its commands. Small
  * prepared native workloads exercise each invocation without an interpreter.
  * host-deps: tools/etude/guest/guest.c tools/etude/guest/fixture.c
+ * host-deps: tools/etude/guest/owner.c tools/etude/posix/process.c
  * host-deps: tools/etude/boot_identity.c
  * host-deps: tools/etude/guest/wire.c
  * host-tools: etude-workload
@@ -1003,6 +1004,56 @@ static int settled_confirmed(const char *token)
     return expect(&g, ETUDE_EV_CLEANED) == 0 && strcmp(g.field[2], "confirmed") == 0 && ok;
 }
 
+#if defined(__linux__) || defined(__rach2__)
+/* The actual daemon is neither in the program's group nor reported in its
+ * output. Require the same cleanup on normal exit, cancellation and loss of
+ * the responder, including its later durable status reply. */
+static void check_detached(int mode)
+{
+    struct ending e;
+    struct got g;
+    char inv[65], c[24], cancel[24], token[17];
+    int open_end;
+    long daemon;
+    snprintf(token, sizeof(token), "0000000000000a%d1", mode);
+    start_guest("--stdio", (char *)NULL);
+    hello(ETUDE_FRAME_STDIO_MAX);
+    put_case("detached", mode ? "guest-detached-hang" : "guest-detached-pass", token, "ordinary",
+             60000, inv);
+    open_end = watch("marks.open");
+    send_cmd(ETUDE_CMD_RUN, new_cmd(c), token, inv, (char *)NULL);
+    if (!mode) {
+        CHECK(collect(&e, c, token) == 0 && e.pid > 0 && !strcmp(e.kind, "exited") &&
+                  !strcmp(e.value, "7") && !strcmp(e.out, "ready\n") && e.sizes_ok &&
+                  !strcmp(e.cleaned, "confirmed"),
+              "normal exit retains the real status and whole output after daemon cleanup");
+    } else {
+        CHECK(expect(&g, ETUDE_EV_STARTED) == 0 && atol(g.field[2]) > 0 && wait_ready() == 0,
+              "the real program starts and witnesses its unreported daemon");
+        daemon = read_pid("marks.escaped");
+        CHECK(alive(daemon), "the detached daemon is running before cancellation or loss");
+        if (mode == 1) {
+            send_cmd(ETUDE_CMD_CANCEL, new_cmd(cancel), token, (char *)NULL);
+            CHECK(expect(&g, ETUDE_EV_STATE) == 0 && !strcmp(g.field[2], "running"),
+                  "cancellation addresses the still-running program");
+            CHECK(collect(&e, c, token) == 0 && !strcmp(e.kind, "stopped") &&
+                      !strcmp(e.cleaned, "confirmed"),
+                  "cancellation reaps the unreported daemon before confirmed cleanup");
+        } else {
+            end_guest();
+            start_guest("--stdio", (char *)NULL);
+            hello(ETUDE_FRAME_STDIO_MAX);
+            CHECK(settled_confirmed(token),
+                  "a reconnect validates the exact owner's durable descendant cleanup");
+        }
+    }
+    daemon = read_pid("marks.escaped");
+    CHECK(daemon > 0 && !alive(daemon) && all_gone(open_end),
+          "the daemon has been killed and reaped and holds no witness descriptor");
+    bye(0);
+}
+#endif
+
 /** A killed etude-guest whose attempt's first process ends after it, and
  * leaves a process in the attempt's group: the next etude-guest kills what
  * is left of the group and confirms the cleanup. A FIFO releases the first
@@ -1620,6 +1671,11 @@ int main(void)
     check_sizes();
     check_interruptions();
     check_orphan();
+#if defined(__linux__) || defined(__rach2__)
+    check_detached(0);
+    check_detached(1);
+    check_detached(2);
+#endif
     check_orphan_group();
     check_group_records();
     check_unfinished_end();

@@ -100,6 +100,43 @@ static pid_t guest_member(int escape)
     return pid;
 }
 
+#if defined(__linux__) || defined(__rach2__)
+/* Double fork after setsid without a child report. The FIFO descriptor stays
+ * open in the daemon until the responder's per-attempt owner reaps it. */
+static int guest_detached(int hang)
+{
+    int ready[2], status;
+    pid_t middle, daemon = -1;
+    if (guest_file(".open", O_WRONLY) < 0 || pipe(ready) || (middle = fork()) < 0)
+        return 125;
+    if (!middle) {
+        close(ready[0]);
+        if (setsid() < 0 || (daemon = fork()) < 0)
+            _exit(125);
+        if (daemon)
+            _exit(0);
+        daemon = getpid();
+        if (write(ready[1], &daemon, sizeof(daemon)) != sizeof(daemon))
+            _exit(125);
+        close(ready[1]);
+        guest_pause();
+        _exit(125);
+    }
+    close(ready[1]);
+    if (read(ready[0], &daemon, sizeof(daemon)) != sizeof(daemon))
+        daemon = -1;
+    close(ready[0]);
+    if (waitpid(middle, &status, 0) != middle || !WIFEXITED(status) || WEXITSTATUS(status) ||
+        daemon <= 0 || guest_pid(".escaped", daemon))
+        return 125;
+    puts("ready");
+    fflush(stdout);
+    if (hang)
+        guest_pause();
+    return 7;
+}
+#endif
+
 /** Make the group, escaped child and FIFO ownership of the old workloads. */
 static int guest_holding(const char *role)
 {
@@ -207,6 +244,10 @@ int etude_workload_guest(int argc, char **argv, const char *role)
             return 125;
         printf("@etude 1 begin host.etude.guest\npid %ld\n", (long)getpid());
         return 7;
+#if defined(__linux__) || defined(__rach2__)
+    } else if (!strcmp(role, "guest-detached-pass") || !strcmp(role, "guest-detached-hang")) {
+        return guest_detached(!strcmp(role, "guest-detached-hang"));
+#endif
     } else if (!strcmp(role, "guest-ignore") || !strcmp(role, "guest-hang") ||
                !strcmp(role, "guest-leaving")) {
         return guest_holding(role);
