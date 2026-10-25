@@ -170,6 +170,66 @@ int legacy_child_running(struct legacy_child *c)
 }
 
 #ifdef _WIN32
+/** Describe an observed Job member without treating an unknown one as gone. */
+static void census_member(const struct legacy_child *c, const struct etude_win_ident *id)
+{
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, id->pid);
+    FILETIME times[4];
+    wchar_t path[32768];
+    DWORD size = sizeof path / sizeof path[0], error = 0, status = STILL_ACTIVE;
+    uint64_t created = 0;
+    char *image = NULL;
+    const char *state = "unknown";
+
+    if (h == NULL) {
+        error = GetLastError();
+    } else if (!GetProcessTimes(h, &times[0], &times[1], &times[2], &times[3])) {
+        error = GetLastError();
+    } else {
+        created = (uint64_t)times[0].dwHighDateTime << 32 | times[0].dwLowDateTime;
+        if (created == id->created) {
+            state = WaitForSingleObject(h, 0) == WAIT_OBJECT_0 ? "ended" : "present";
+            if (!GetExitCodeProcess(h, &status) || !QueryFullProcessImageNameW(h, 0, path, &size))
+                error = GetLastError();
+            else
+                image = etude_win_utf8(path);
+        } else {
+            state = "identity changed";
+        }
+    }
+    fprintf(stderr,
+            "legacyset: Job member %lu:%llu actual %llu role %s state %s "
+            "exit %lu image %s query_error %lu\n",
+            (unsigned long)id->pid, (unsigned long long)id->created, (unsigned long long)created,
+            id->pid == c->pid ? "controller" : "owned descendant", state, (unsigned long)status,
+            image ? image : "unavailable", (unsigned long)error);
+    free(image);
+    if (h != NULL)
+        CloseHandle(h);
+}
+
+/** Retain the native status and exact member census before forced cleanup. */
+static void job_census(const struct legacy_child *c,
+                       const JOBOBJECT_BASIC_ACCOUNTING_INFORMATION *usage)
+{
+    struct etude_win_child job = {0};
+    size_t count = 0, capacity = usage->TotalProcesses;
+    struct etude_win_ident *ids = calloc(capacity, sizeof *ids);
+    DWORD error = ERROR_NOT_ENOUGH_MEMORY;
+
+    job.job = c->job;
+    if (ids != NULL)
+        error = etude_win_pids(&job, ids, capacity, &count);
+    fprintf(stderr,
+            "legacyset: controller %lu exited %d; Job active %lu total %lu "
+            "observed %lu census_error %lu\n",
+            (unsigned long)c->pid, c->status, (unsigned long)usage->ActiveProcesses,
+            (unsigned long)usage->TotalProcesses, (unsigned long)count, (unsigned long)error);
+    for (size_t i = 0; i < count; i++)
+        census_member(c, &ids[i]);
+    free(ids);
+}
+
 /** Reap the whole owned job; an orphan makes the controller row fail. */
 static void finish_job(struct legacy_child *c)
 {
@@ -178,6 +238,7 @@ static void finish_job(struct legacy_child *c)
                                    sizeof(usage), NULL))
         abort();
     if (usage.ActiveProcesses) {
+        job_census(c, &usage);
         c->status = 121;
         if (!TerminateJobObject(c->job, 121))
             abort();
