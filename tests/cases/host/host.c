@@ -1019,8 +1019,10 @@ int main(int argc, char **argv)
 #ifndef _WIN32
     signal(SIGHUP, on_signal);
 #endif
-    setvbuf(stdout, NULL, _IOLBF, 0);
-    printf("host: logs: %s\n@etude 1 begin %s\n", h.work, h.case_id);
+    /* UCRT treats line buffering as full buffering; assertions use write. */
+    if (setvbuf(stdout, NULL, _IONBF, 0) ||
+        printf("host: logs: %s\n@etude 1 begin %s\n", h.work, h.case_id) < 0)
+        goto done;
     h.executor = etude_exec_new();
     if (!h.executor || check_inventory(&h, group) != 0)
         goto done;
