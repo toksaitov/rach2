@@ -98,6 +98,7 @@ copy() {
 compile() {
     (
         cd "$1/tools/etude/win"
+        files='winsys.c winfmt.c files.c'
         executor='exec.c ../capture.c winexec.c winsys.c winfmt.c files.c'
         # shellcheck disable=SC2086
         "$cc" $2 -I ../include -I ../../../utils -I ../../../tests/host/compat -o winfixture.exe winfixture.c winexecfix.c \
@@ -106,11 +107,11 @@ compile() {
         # shellcheck disable=SC2086
         "$cc" $2 -municode -o wintarget.exe wintarget.c -lws2_32 -lbcrypt
         # shellcheck disable=SC2086
-        "$cc" $2 -I ../volume -o winstand.exe winstand.c ../volume/volume.c
+        "$cc" $2 -I ../include -I ../../../utils -I ../volume -o winstand.exe winstand.c ../volume/volume.c $files -lws2_32 -lbcrypt
         # shellcheck disable=SC2086
         "$cc" $2 -o image-command.exe image_command.c hold.c winfmt.c
         # shellcheck disable=SC2086
-        "$cc" $2 -o etude-volume.exe ../volume/etude_volume.c ../volume/volume.c
+        "$cc" $2 -I ../include -I ../../../utils -o etude-volume.exe ../volume/etude_volume.c ../volume/volume.c $files -lws2_32 -lbcrypt
     ) </dev/null
     (
         cd "$1"

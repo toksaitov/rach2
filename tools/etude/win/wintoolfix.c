@@ -18,6 +18,7 @@
 #include "sha256.h"
 #include "winexec.h"
 #include "winfixture.h"
+#include "files.h"
 
 /* The end of the arguments of tooling(), a null pointer of their type. */
 #define END ((char *)NULL)
@@ -54,27 +55,43 @@ static char *join(char *buf, const char *dir, const char *name)
 /** Remove `path`, a file or a tree, read-only files among them. */
 static void remove_tree(const char *path)
 {
-    char pattern[PATH], child[PATH];
-    WIN32_FIND_DATAA fd;
-    DWORD attrs = GetFileAttributesA(path);
-    HANDLE h;
+    char child[PATH];
+    struct stat st;
+    DIR *dir;
+    struct dirent *entry;
 
-    if (attrs == INVALID_FILE_ATTRIBUTES)
+    if (lstat(path, &st) != 0)
         return;
-    SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
-    if (!(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
-        DeleteFileA(path);
+    if (!S_ISDIR(st.st_mode)) {
+        unlink(path);
         return;
     }
-    h = FindFirstFileA(join(pattern, path, "*"), &fd);
-    if (h != INVALID_HANDLE_VALUE) {
-        do {
-            if (strcmp(fd.cFileName, ".") != 0 && strcmp(fd.cFileName, "..") != 0)
-                remove_tree(join(child, path, fd.cFileName));
-        } while (FindNextFileA(h, &fd));
-        FindClose(h);
+    dir = opendir(path);
+    if (dir != NULL) {
+        while ((entry = readdir(dir)) != NULL) {
+            if (strcmp(entry->d_name, ".") && strcmp(entry->d_name, ".."))
+                remove_tree(join(child, path, entry->d_name));
+        }
+        closedir(dir);
     }
-    RemoveDirectoryA(path);
+    rmdir(path);
+}
+
+/** Copy one fixture executable through the native long-path API. */
+static int copy_file(const char *from, const char *to)
+{
+    wchar_t *a = etude_win_long_path(from), *b = etude_win_long_path(to);
+    int ok = a != NULL && b != NULL && CopyFileW(a, b, FALSE);
+    free(a);
+    free(b);
+    return ok ? 0 : -1;
+}
+
+/** Whether PATH exists and has its read-only attribute set. */
+static int read_only(const char *path)
+{
+    struct stat st;
+    return stat(path, &st) == 0 && !(st.st_mode & 0222);
 }
 
 /** Write `text` to `path`; 0 on success. */
@@ -138,14 +155,21 @@ static const char *cached(const char *glob)
 {
     static char path[PATH];
     char pattern[PATH];
-    WIN32_FIND_DATAA fd;
-    HANDLE h;
+    WIN32_FIND_DATAW fd;
+    wchar_t *wide = etude_win_long_path(join(pattern, cache, glob));
+    HANDLE h = wide != NULL ? FindFirstFileW(wide, &fd) : INVALID_HANDLE_VALUE;
+    char *name;
 
-    h = FindFirstFileA(join(pattern, cache, glob), &fd);
+    free(wide);
     if (h == INVALID_HANDLE_VALUE)
         return NULL;
     FindClose(h);
-    return join(path, cache, fd.cFileName);
+    name = etude_win_utf8(fd.cFileName);
+    if (name == NULL)
+        return NULL;
+    join(path, cache, name);
+    free(name);
+    return path;
 }
 
 /**
@@ -313,8 +337,8 @@ static int fresh(void)
     snprintf(cache, sizeof cache, "%s\\cache\\deep", base);
     snprintf(schema, sizeof schema, "%s\\history.schema.json", binary_dir);
     join(tool, binary_dir, "etude.exe");
-    if (_mkdir(base) != 0 || _mkdir(bin) != 0 || _mkdir(fix) != 0 || _mkdir(recipe) != 0 ||
-        _mkdir(outdir) != 0 || _mkdir(store) != 0)
+    if (mkdir(base, 0700) != 0 || mkdir(bin, 0700) != 0 || mkdir(fix, 0700) != 0 ||
+        mkdir(recipe, 0700) != 0 || mkdir(outdir, 0700) != 0 || mkdir(store, 0700) != 0)
         return failed("%s cannot be made", base);
     for (i = 1; files[i] != NULL; i++)
         if (put(join(path, recipe, files[i]), files[i]) != 0)
@@ -331,7 +355,7 @@ static int fresh(void)
     join(self, binary_dir, "winstand.exe");
     for (i = 0; i < sizeof stand_ins / sizeof stand_ins[0]; i++) {
         snprintf(line, sizeof line, "%s.exe", stand_ins[i]);
-        if (!CopyFileA(self, join(path, bin, line), FALSE))
+        if (copy_file(self, join(path, bin, line)) != 0)
             return failed("%s cannot be copied to %s", self, path);
     }
     return 0;
@@ -376,16 +400,14 @@ static int old_machine(char digit, int complete)
         put(tools, complete ? "etude-tooling: provision: ok\n"
                             : "etude-tooling: provision: failed: fixture\n"))
         return 1;
-    SetFileAttributesA(disk, FILE_ATTRIBUTE_READONLY);
-    SetFileAttributesA(tools, FILE_ATTRIBUTE_READONLY);
-    return 0;
+    return chmod(disk, 0444) != 0 || chmod(tools, 0444) != 0;
 }
 
 static int old_present(char digit)
 {
     char path[PATH];
-    int disk = GetFileAttributesA(old_cache(path, digit, "qcow2")) != INVALID_FILE_ATTRIBUTES;
-    int tools = GetFileAttributesA(old_cache(path, digit, "tools")) != INVALID_FILE_ATTRIBUTES;
+    int disk = access(old_cache(path, digit, "qcow2"), F_OK) == 0;
+    int tools = access(old_cache(path, digit, "tools"), F_OK) == 0;
     return disk + 2 * tools;
 }
 
@@ -418,14 +440,14 @@ static int row_cache(void)
     join(pin, cache, name);
     join(legacy, cache, "job-123-0");
     if (old_machine('a', 1) || old_machine('b', 1) || old_machine('c', 0) ||
-        linked_machine(alias) || _mkdir(pin))
+        linked_machine(alias) || mkdir(pin, 0700))
         return failed("the obsolete cache fixtures cannot be written");
     if (prepare_again())
         return 1;
     if (old_present('a') || old_present('b') != 3 || old_present('c') != 3 ||
         old_present('e') != 3 || !cached("image-*.img"))
         return failed("cache cleanup removed a referenced or incomplete file, or kept old output");
-    if (old_machine('d', 1) || _mkdir(legacy) || prepare_again())
+    if (old_machine('d', 1) || mkdir(legacy, 0700) || prepare_again())
         return 1;
     if (old_present('d') != 3)
         return failed("cache cleanup removed a base beside old-format evidence");
@@ -450,12 +472,11 @@ static int row_made(void)
     disk = cached("tooling-*.qcow2");
     if (r.status != 0 || strstr(r.out, "etude provision: result: made ") == NULL)
         rc = failed("prepare gave %d: %s%s", r.status, r.out, r.err);
-    else if (disk == NULL || !(GetFileAttributesA(disk) & FILE_ATTRIBUTE_READONLY))
+    else if (disk == NULL || !read_only(disk))
         rc = failed("no read-only disk was published");
     else if (!contains(disk, "overlay of image-"))
         rc = failed("the disk does not name its image from the cache");
-    else if (cached("tooling-*.tools") == NULL ||
-             !(GetFileAttributesA(cached("tooling-*.tools")) & FILE_ATTRIBUTE_READONLY) ||
+    else if (cached("tooling-*.tools") == NULL || !read_only(cached("tooling-*.tools")) ||
              !contains(cached("tooling-*.tools"), "provision: ok"))
         rc = failed("no record of the tools");
     else if (cached("prepare-*") != NULL)
@@ -534,7 +555,8 @@ static int row_job(void)
             "cat note.txt\ncat dir/inner.txt\ndisks\ndisk written in the machine\n"
             "write result.txt made\nwrite tree/leaf.txt deep\n",
             script) == NULL ||
-        put(join(note, base, "note.txt"), "the note\n") != 0 || _mkdir(join(dir, base, "dir")) ||
+        put(join(note, base, "note.txt"), "the note\n") != 0 ||
+        mkdir(join(dir, base, "dir"), 0700) ||
         put(join(inner, dir, "inner.txt"), "the inner file\n") != 0 ||
         put(join(disk, base, "disk.img"), "the disk before\n") != 0)
         return failed("the job's files cannot be written");
@@ -619,7 +641,7 @@ static int row_late(void)
     if (r.status != 124 ||
         strstr(r.err, "result: late: the deadline passed before the job ended") == NULL)
         rc = failed("status %d: %s", r.status, r.err);
-    else if (GetFileAttributesA(join(path, fix, "woke")) != INVALID_FILE_ATTRIBUTES)
+    else if (access(join(path, fix, "woke"), F_OK) == 0)
         rc = failed("QEMU was not stopped at the deadline");
     else if (!step(hist, "execute", "incomplete"))
         rc = failed("the late job is not incomplete");

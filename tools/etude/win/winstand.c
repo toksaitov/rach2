@@ -22,6 +22,7 @@
  * `disks N` there, `disk TEXT` writes TEXT to the first disk, `write NAME
  * TEXT` makes the working file NAME, and `exit N` ends the job with N.
  */
+#include <winsock2.h>
 #include <windows.h>
 #include <direct.h>
 #include <stdio.h>
@@ -29,6 +30,7 @@
 #include <string.h>
 
 #include "../volume/volume.h"
+#include "files.h"
 
 /* The longest name of a working file. */
 #define NAME_MAX 512
@@ -118,7 +120,7 @@ static void make_parents(const char *path)
             char c = *p;
 
             *p = '\0';
-            _mkdir(buf);
+            mkdir(buf, 0700);
             *p = c;
         }
     }
@@ -382,7 +384,7 @@ static int run(const struct machine *m)
     snprintf(script, sizeof script, "%s\\job.sh", vol);
     snprintf(outputs, sizeof outputs, "%s\\outputs", vol);
     snprintf(in, sizeof in, "%s\\in", vol);
-    if (_mkdir(vol) != 0 || etude_volume_read(m->job, map, why, sizeof why) != 0) {
+    if (mkdir(vol, 0700) != 0 || etude_volume_read(m->job, map, why, sizeof why) != 0) {
         fprintf(stderr, "winstand: the job volume %s: %s\n", m->job, why);
         return 1;
     }
@@ -455,7 +457,7 @@ static int qemu_img(int argc, char **argv)
         snprintf(base, sizeof base, "%s", argv[6]);
     else
         snprintf(base, sizeof base, "%s%s", dir, argv[6]);
-    if (GetFileAttributesA(base) == INVALID_FILE_ATTRIBUTES) {
+    if (access(base, F_OK) != 0) {
         fprintf(stderr, "qemu-img: %s is not found from %s\n", argv[6], dir);
         return 1;
     }
@@ -465,12 +467,20 @@ static int qemu_img(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
-    char self[MAX_PATH * 2], name[MAX_PATH], *slash, *dot;
+    char self[MAX_PATH * 2], name[MAX_PATH], *slash, *dot, *utf;
+    wchar_t wide[MAX_PATH * 2];
     DWORD n;
 
-    n = GetModuleFileNameA(NULL, self, sizeof self);
-    if (n == 0 || n >= sizeof self)
+    n = GetModuleFileNameW(NULL, wide, sizeof wide / sizeof wide[0]);
+    if (n == 0 || n >= sizeof wide / sizeof wide[0])
         return 2;
+    utf = etude_win_utf8(wide);
+    if (utf == NULL || strlen(utf) >= sizeof self) {
+        free(utf);
+        return 2;
+    }
+    strcpy(self, utf);
+    free(utf);
     base_name(self, name, sizeof name);
     if ((dot = strrchr(name, '.')) != NULL)
         *dot = '\0';

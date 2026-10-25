@@ -522,6 +522,8 @@ ETUDECC ?= /ucrt64/bin/gcc
 ETUDE_LINK = sh tools/etude/compile.sh $(ETUDECC) $@ $(HOSTCFLAGS) $(ETUDE_PLATFORM_FLAGS) $(filter %.c,$^) $(ETUDE_PLATFORM_LIBS)
 ETUDE_PLATFORM_FLAGS = -D_WIN32_WINNT=0x0A00 -static
 ETUDE_PLATFORM_LIBS = -lws2_32 -lbcrypt
+ETUDE_VOLUME_FILE_SRC = $(ETUDE_WIN_FILE_SRC)
+ETUDE_VOLUME_FILE_FLAGS = -Itools/etude/include -Iutils
 endif
 # Native source checkers need files and paths, not a process supervisor.
 ifeq ($(OS),Windows_NT)
@@ -540,9 +542,9 @@ $(ETUDE): $(ETUDE_SRC) $(ETUDE_HDRS) | $(ETUDEVOLUME)
 	@mkdir -p $(dir $@)
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Iutils $(ETUDE_THREAD_FLAGS)
-$(ETUDEVOLUME): $(ETUDE_VOLUME_SRC) tools/etude/volume/volume.h
+$(ETUDEVOLUME): $(ETUDE_VOLUME_SRC) $(ETUDE_VOLUME_FILE_SRC) tools/etude/volume/volume.h
 	@mkdir -p $(@D)
-	$(ETUDE_LINK) -std=c99
+	$(ETUDE_LINK) -std=c99 $(ETUDE_VOLUME_FILE_FLAGS)
 
 # The independent exFAT fixture is produced during preparation. Runtime
 # checks read its image, manifest and expected files without mounting a volume.
