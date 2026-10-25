@@ -1381,3 +1381,9 @@ Native preparation now appends a reserved zero-filled padding file with the supp
 ## The native bind-holder case required the boot root's type (#1130)
 
 The Lenovo diagnostic ran bindholdmusl in its declared private mounted KRFFS root. The program required the boot root's statfs magic, 0x4b524646, while mounted KRFFS correctly reported its documented 0x4b52. The first assertion failed before a holder was exercised; the other nineteen were not run. The case now explicitly requests the mounted mode. That mode requires 0x4b52 and keeps all twenty holder and space-reclamation checks; the existing virtual-machine mode still requires the boot root's magic. No failed result is changed into a pass.
+
+### Scripted host checks exhaust a shared case bound
+
+The first Mac whole run of `403f6d99b` ended both scripted host cases at their 1,800-second case bound. The i686 case passed 38 assertions before the last Bash interruption row of `tooling_image`; the x86-64 case passed that row and reached `gnu_port_resume`. Their tree CPU totals were 1,716 and 1,704 seconds. The final i686 row had only 8.6 seconds left, and both attempts confirmed cleanup. These records show a group that exhausted its bound while progressing, rather than a proven process-group wait failure.
+
+Issue #1136 partitions the original 45 assertions into native, image, build, worker and CI, and Etude tooling cases. The shared immutable list and manifest must declare every identity exactly once before a case starts. Each partition preserves its original row order, helper ownership and cleanup. The assertions and existing bounds remain unchanged. A focused fixture checks omitted and duplicate declarations, the manifest's selected step order and the actual scenario dispatcher.
