@@ -288,6 +288,10 @@ unusedStructMember:*tools/etude/guest/wire.h
 # members are read in fixture.c, guest.c and the guest's host test.
 unusedStructMember:*tools/etude/guest/fixture.h
 
+# The attempt owner's shared state is read by owner.c and guest.c. The
+# header is also checked alone, where those member readers are absent.
+unusedStructMember:*tools/etude/guest/owner.h
+
 # The bridge's request is a public structure read in posix/bridge.c and
 # posix/admit.c, beyond the header's own analysis unit.
 unusedStructMember:*tools/etude/include/etude/bridge.h
