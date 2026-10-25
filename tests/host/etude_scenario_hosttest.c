@@ -1030,6 +1030,8 @@ static int fake_qemu(const char *mode, int argc, char **argv)
         fake_qmp(qmp.fd, qmp.line, accel, mode);
         ok = strstr(qmp.line, "\"cont\"") == NULL;
     }
+    if (audio != NULL)
+        fputs("fake: audio diagnostic\n", stderr);
     if (fake_record(audio, NULL, 0, "recorded samples") != 0 ||
         fake_record(dump, pcap, sizeof(pcap), "captured frames") != 0)
         return 127;
@@ -3514,7 +3516,9 @@ static const struct row audio_rows[] = {
      NULL, 0},
     {"audio-keep", "disk", "boot:fixture reboot:fixture",
      "audio-first audio-second audio-distinct audio-host", NULL, 0, STEP_US, 1, 0, 1, 0, NULL, 0,
-     "fixture.1.wav=recorded samples;fixture.2.wav=recorded samples", 0},
+     "fixture.1.wav=recorded samples;fixture.2.wav=recorded samples;"
+     "fixture.1.qemu.stderr=fake: audio diagnostic;fixture.2.qemu.stderr=fake: audio diagnostic",
+     0},
 };
 
 static const struct row capture_rows[] = {

@@ -4151,6 +4151,18 @@ static int stopped_by_signal(const struct etude_case_service *s)
 #endif
 }
 
+/** Retain the bounded QEMU diagnostic stream of a failed machine. */
+static void keep_qemu_error(struct etude_case_machine *m)
+{
+    const struct etude_machine_result *r = mres(m);
+    char name[200];
+
+    if (r->qemu == NULL)
+        return;
+    snprintf(name, sizeof(name), "%s.%u.qemu.stderr", m->decl->id, m->boot);
+    keep_evidence(m->c, name, r->qemu->err.data, r->qemu->err.kept);
+}
+
 /**
  * End what the attempt owns within the cleanup's bound: after a failure or a
  * stop, collect the machines' diagnostics first; then stop every service and
@@ -4178,6 +4190,8 @@ static void end_all(struct etude_case *c, int failing)
         if (r->state != ETUDE_MACHINE_ENDED || r->qemu == NULL ||
             r->qemu->cleanup != ETUDE_CLEANUP_CONFIRMED)
             c->unconfirmed = 1;
+        if (failing)
+            keep_qemu_error(m);
     }
     for (s = c->services; s != NULL; s = s->next) {
         if (s->finished && !s->seen && !stopped_by_signal(s)) {
