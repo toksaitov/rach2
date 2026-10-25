@@ -1638,3 +1638,7 @@ The coordinating session pushed three checked CI repairs at 20:53 on 25 October.
 ## A shared preparation required an empty global ledger
 
 The first e1d41bc63 preparation attempt stopped before admission because its private controller required the whole machine's ledger to be empty. The active CI job used another tree, but this extra assertion prevented ordinary shared admission from deciding whether both jobs fit. Shared preparation checks its own tree and previous owners; shared admission accounts for unrelated claims. Whole-machine idleness is required by the later exclusive Windows maintenance step. The corrected controller admitted preparation normally. The refused attempt remains recorded, and no failed preparation or runtime was reclassified as successful.
+
+## The focused repetition check waited for unrelated measurements
+
+The private T24 controls required five passing Linux whole-collection samples before the seeded, repeated and loaded selection could start. The plan gives T24 only T07 and T18 as prerequisites; the whole-collection tasks depend on T24. The private condition had reversed that order and was not part of the test contract. The coordinator removed that prerequisite from the follow-up work. T24 needs genuine current preparation, the original seed, load, repetitions and assertions, and retained failed attempts. T94 still requires five independent passing samples of each configuration that it ranks. Windows keeps its current exclusive machine window before the focused Linux run.
