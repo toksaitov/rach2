@@ -199,17 +199,7 @@ def checks(group, arch, base):
 
 def compiler_paths(command):
     """Compare GNU compiler operands through their immutable store links."""
-    result = []
-    for index, word in enumerate(command):
-        prefix, path = '', word
-        for option in ('--sysroot=', '-B', '-L'):
-            if word.startswith(option):
-                prefix, path = option, word[len(option):]
-                break
-        if (index == 0 or prefix) and Path(path).is_absolute():
-            word = prefix + str(Path(path).resolve(strict=True))
-        result.append(word)
-    return result
+    return tools.compiler_paths(command)
 
 
 def previous_inventory(args, identity):
@@ -230,13 +220,15 @@ def previous_inventory(args, identity):
                 continue
             for check in old['checks']:
                 check['inputs'] = [decoded_input(value) for value in check['inputs']]
+                if 'compile_inputs' in check:
+                    check['compile_inputs'] = [decoded_input(value) for value in check['compile_inputs']]
             return {x['assertion_id']: x for x in old['checks']}, origin
         except (OSError, KeyError, TypeError, ValueError):
             continue
     return {}, None
 
 
-def valid_previous(old, item, commands, origin=None):
+def valid_previous(old, item, commands, origin=None, compilation=None, compiler_count=0):
     """Reuse a prepared binary only while its compiler, inputs and bytes match."""
     if not old:
         return False
@@ -249,7 +241,11 @@ def valid_previous(old, item, commands, origin=None):
         program = Path(item['program'])
         if origin:
             program = origin / input_path(program)
-        return previous == expected and old['sha256'] == digest(program) and all(
+        if previous != expected or old['sha256'] != digest(program):
+            return False
+        if compilation is not None:
+            return compilation_matches(old, item, origin, compilation, compiler_count)
+        return all(
             digest(Path(value['path'])) == value['sha256']
             for value in [*old['inputs'], *old.get('compiler_inputs', [])])
     except (KeyError, OSError, TypeError, ValueError):
@@ -270,7 +266,7 @@ def compiler_flags(command, sources):
     return flags
 
 
-def compiler_inputs(compiler, command, sources, external=None, include_system=False):
+def compiler_inputs(compiler, command, sources, external=None, include_system=False, root=None):
     """Scan each translation unit; a shared -MF would retain only the last."""
     flags = compiler_flags(command, sources)
     dependencies = set()
@@ -278,28 +274,48 @@ def compiler_inputs(compiler, command, sources, external=None, include_system=Fa
         if not source.endswith('.c'):
             continue
         result = subprocess.run([*compiler, *flags, '-M' if include_system else '-MM', '-MT', 'host-input', source],
-                                check=True, text=True, capture_output=True)
+                                check=True, text=True, capture_output=True, cwd=root)
         text = result.stdout.replace('\\\n', ' ')
         for name in shlex.split(text.split(':', 1)[1]):
             path = Path(os.path.normpath(name))
-            if path.is_absolute() and not path.is_relative_to(ROOT):
+            base = root or ROOT
+            if path.is_absolute() and not path.is_relative_to(base):
                 if external is not None:
                     external[str(path)] = dict(path=str(path), sha256=digest(path))
             else:
-                dependencies.add(input_path(path))
+                dependencies.add(input_path(path.relative_to(base) if path.is_absolute() else path))
     return dependencies
 
 
-def current_dependencies(old, compiler, command, sources):
-    """Reject reuse when a new header changes the compiler's include search."""
+def compilation_inputs(compiler, command, sources, root=None):
+    """Separate compiler dependencies from files used only by the test."""
     external = {}
-    current = compiler_inputs(compiler, command, sources, external)
-    recorded = {value['path']: value['sha256'] for value in old['inputs']}
-    for value in old.get('compiler_inputs', []):
-        recorded[str(Path(value['path']).resolve(strict=True))] = value['sha256']
-    return all(recorded.get(path) == digest(Path(path)) for path in current) and all(
-        recorded.get(str(Path(path).resolve(strict=True))) == value['sha256']
-        for path, value in external.items())
+    paths = sorted(set([*sources, *compiler_inputs(compiler, command, sources, external, root=root)]))
+    local = [dict(path=p, sha256=digest((root or ROOT) / p)) for p in paths]
+    return local, [external[p] for p in sorted(external)]
+
+
+def canonical_inputs(values):
+    """Compare external dependencies through immutable store aliases."""
+    return sorted([dict(v, path=str(Path(v['path']).resolve(strict=True))) for v in values],
+                  key=lambda v: v['path'])
+
+
+def compilation_matches(old, item, origin, compilation, compiler_count):
+    """Check exact compile dependencies, including an older record's scan."""
+    current, external = compilation
+    recorded = old.get('compile_inputs')
+    if recorded is None:
+        if origin is None:
+            return False
+        command = old['command']
+        recorded, old_external = compilation_inputs(command[:compiler_count], command[compiler_count:],
+                                                    item['sources'], origin)
+        # The earlier tree must still match the inputs its inventory sealed.
+        if any(v not in old['inputs'] for v in recorded) or \
+                canonical_inputs(old_external) != canonical_inputs(old.get('compiler_inputs', [])):
+            return False
+    return recorded == current and canonical_inputs(old.get('compiler_inputs', [])) == canonical_inputs(external)
 
 
 def compiled_interpreter(compiler, command, sources, candidates):
@@ -376,7 +392,7 @@ def prepare(args):
             required_tools.append('atos')
             item['sanitizer_symbolizer'] = 'build/tests/host-suite/sanitizer/atos'
         tool_inputs = tools.prepare(required_tools, compiler, fixtures.platform_flags(COMMON), compiler_inputs,
-                                   digest, args.print_commands, compiler_identity=identity)
+                                   digest, args.print_commands, compiler_identity=identity, previous=origin)
         companions = windows.companions(compiler, base, compiler_inputs, digest,
                                         args.print_commands, compiler_identity=identity) if windows_fixture else []
         commands = []
@@ -390,9 +406,8 @@ def prepare(args):
             continue
         if command:
             old = previous.get(item['assertion_id'])
-            reuse = valid_previous(old, item, commands, origin)
-            if reuse and args.gnu:
-                reuse = current_dependencies(old, compiler, command, item['sources'])
+            compilation = compilation_inputs(compiler, command, item['sources']) if args.gnu else None
+            reuse = valid_previous(old, item, commands, origin, compilation, len(compiler))
             if reuse:
                 if origin:
                     source, target = origin / item['program'], Path(item['program'])
@@ -424,6 +439,14 @@ def prepare(args):
                 item['compiler_inputs'] = [external[p] for p in sorted(external)]
                 sources = sorted(set([*item['sources'], *dependencies, *item.get('data', [])]))
                 item['inputs'] = [dict(path=p, sha256=digest(Path(p))) for p in sources]
+            if compilation is not None:
+                if not reuse and compilation != compilation_inputs(compiler, command, item['sources']):
+                    raise ValueError('host check inputs changed during compilation: ' + item['assertion_id'])
+                item['compile_inputs'], item['compiler_inputs'] = compilation
+                inputs = {v['path']: v for v in item['compile_inputs']}
+                for data in item.get('data', []):
+                    inputs[data] = dict(path=data, sha256=digest(Path(data)))
+                item['inputs'] = [inputs[key] for key in sorted(inputs)]
             all_inputs = {value['path']: value for value in
                           [*item['inputs'], *companions, *tool_inputs]}
             item['inputs'] = [all_inputs[path] for path in sorted(all_inputs)]
@@ -455,6 +478,8 @@ def prepare(args):
         return
     for check in inventory:
         check['inputs'] = [encoded_input(value) for value in check['inputs']]
+        if 'compile_inputs' in check:
+            check['compile_inputs'] = [encoded_input(value) for value in check['compile_inputs']]
     record = dict(schema_version=1, group=args.group, architecture=args.arch if args.group in ('tests', 'boots') else 'none',
                   manifest_sha256=digest(Path('tests/cases/host.host.json')), compiler=identity,
                   checks=inventory)

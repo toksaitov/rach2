@@ -42,6 +42,7 @@ class ImportTests(unittest.TestCase):
                 item = inventory.entry(name, name, program, [source])
                 item['command'] = ['-std=c99', '-O0', '-Iinclude', *flags,
                                    '-o', program, source]
+                item['data'] = ['runtime.txt']
                 yield item
 
         def prepare(tree, previous=None):
@@ -72,6 +73,7 @@ class ImportTests(unittest.TestCase):
                     (tree / 'include/choice.h').write_text('#define VALUE 0\n')
                     (tree / 'first.c').write_text('#include "choice.h"\nint main(void) { return VALUE; }\n')
                     (tree / 'second.c').write_text('int main(void) { return 0; }\n')
+                    (tree / 'runtime.txt').write_text('first runtime input\n')
                 with patch.object(inventory, 'checks', side_effect=checks), \
                         patch.object(subprocess, 'run', side_effect=execute):
                     prepare(old)
@@ -81,6 +83,19 @@ class ImportTests(unittest.TestCase):
                     self.assertEqual([(new / p).read_bytes() for p in programs], originals)
                     self.assertNotEqual((old / programs[0]).stat().st_ino,
                                         (new / programs[0]).stat().st_ino)
+                    (new / 'runtime.txt').write_text('changed runtime input\n')
+                    retry(0, [0, 0])
+                    published = json.loads((new / output).read_text())
+                    for check in published['checks']:
+                        self.assertNotIn('runtime.txt', [v['path'] for v in check['compile_inputs']])
+                        self.assertIn(dict(path='runtime.txt', sha256=inventory.digest(new / 'runtime.txt')),
+                                      check['inputs'])
+                    # Old inventories have no distinct compiler dependency list.
+                    legacy = json.loads((old / output).read_text())
+                    for check in legacy['checks']:
+                        del check['compile_inputs']
+                    (old / output).write_text(json.dumps(legacy))
+                    retry(0, [0, 0])
                     (new / 'include/choice.h').write_text('#define VALUE 1\n')
                     retry(1, [1, 0])
                     (new / 'include/choice.h').write_text('#define VALUE 0\n')
@@ -111,6 +126,66 @@ class ImportTests(unittest.TestCase):
                              '-B' + str(root / name), '-L' + str(root / name)]
                             for name in ('old-sdk', 'new-sdk')]
                 self.assertEqual(*[inventory.compiler_paths(c) for c in commands])
+            finally:
+                os.chdir(cwd)
+
+    def test_shared_tool_predecessor(self):
+        repo = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(repo / 'tests/cases/host'))
+        import prepare as inventory
+        original_run, compiles = subprocess.run, []
+
+        def execute(argv, **kwargs):
+            if '-o' in argv and '-MM' not in argv and '-M' not in argv:
+                compiles.append(argv)
+            return original_run(argv, **kwargs)
+
+        with tempfile.TemporaryDirectory(prefix='rach2-tool-predecessor.') as work:
+            root, cwd = Path(work).resolve(), Path.cwd()
+            old, new = root / 'old', root / 'new'
+            program = Path('build/tests/host-suite/tools/probe')
+            marker = Path(str(program) + '.build.json')
+            compiler = Path(shutil.which('cc')).resolve()
+            sdk = root / 'sdk'
+            sdk.mkdir()
+            (sdk / 'external.h').write_text('#define EXTERNAL 0\n')
+            try:
+                for tree in (old, new):
+                    tree.mkdir()
+                    (tree / 'cc').symlink_to(compiler)
+                    (tree / 'sdk').symlink_to(sdk, target_is_directory=True)
+                    (tree / 'value.h').write_text('#define VALUE 0\n')
+                    (tree / 'probe.c').write_text('#include "value.h"\n#include <external.h>\n'
+                                                'int main(void) { return VALUE + EXTERNAL; }\n')
+
+                def prepare(tree, previous=None):
+                    os.chdir(tree)
+                    cc = [str(tree / 'cc')]
+                    with patch.object(inventory, 'ROOT', tree):
+                        return inventory.tools.prepare(['probe'], cc, ['-std=c99', '-isystem', str(tree / 'sdk')],
+                            inventory.compiler_inputs, inventory.digest,
+                            compiler_identity=inventory.compiler_record(cc), previous=previous)
+
+                with patch.dict(inventory.tools.SOURCES, {'probe': ['probe.c']}), \
+                        patch.object(subprocess, 'run', side_effect=execute):
+                    prepare(old)
+                    self.assertEqual(len(compiles), 1)
+                    before = ((old / program).read_bytes(), (old / marker).read_bytes())
+                    prepare(new, old)
+                    self.assertEqual(len(compiles), 1)
+                    self.assertEqual(((new / program).read_bytes(), (new / marker).read_bytes()), before)
+                    self.assertNotEqual((old / program).stat().st_ino, (new / program).stat().st_ino)
+                    prepare(new, old)
+                    self.assertEqual(len(compiles), 1)
+                    (new / 'value.h').write_text('#define VALUE 1\n')
+                    prepare(new, old)
+                    self.assertEqual(len(compiles), 2)
+                    self.assertEqual(original_run([str(new / program)]).returncode, 1)
+                    (sdk / 'external.h').write_text('#define EXTERNAL 2\n')
+                    prepare(new, old)
+                    self.assertEqual(len(compiles), 3)
+                    self.assertEqual(original_run([str(new / program)]).returncode, 3)
+                    self.assertEqual(((old / program).read_bytes(), (old / marker).read_bytes()), before)
             finally:
                 os.chdir(cwd)
 

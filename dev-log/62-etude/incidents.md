@@ -1615,3 +1615,14 @@ After the Lenovo helper finished its targeted checks, the coordinator sent furth
 ## Native CI fixtures inherited the staged lines selection (#1155)
 
 The GNU `ci_run` retry on 1546ebe0f passed its lines, history and exact retained-directory assertions, then failed all fourteen native collection rows. Their private script still selected the production default, now lines until site activation. The native sequence substitute was never called. The launcher's missing-retention row had the same assumption. Both fixtures now copy the script into their private tree, require a recognized selector and explicitly select native mode. All native cancellation, projection, completion, refusal and no-start assertions remain unchanged. The failed retry, complete output and independent four-process cleanup remain under `build/tests/mac-targeted-repairs/ci-runtime-failed`.
+
+
+## GNU fixture reuse still included relocated tools and runtime data (#1127)
+
+Preparation of e0db2b6ea compiled 25 host-check commands after a four-file change. The retained inventories and tool records showed that unchanged shared tools had no predecessor lookup, and their compiler paths differed only through GNU store aliases. The parent checks also used their complete runtime input list to decide whether compilation was needed, so a copied tool's provenance or a changed product script forced recompilation of unchanged C sources. Shared tools now copy verified predecessor bytes and their original build records after comparing canonical compiler paths and all header hashes. GNU checks record compiler dependencies separately and refresh runtime data independently. Older stored inventories are checked by scanning the original source tree; they are not reclassified from filename suffixes. The regression checks preserve changed-header, changed-compiler, changed-recipe, shadowing-header and damaged-output failures.
+
+## The dry selection omitted the runtime selector environment
+
+The first two-case CI retry supplied comma-separated identities in RACH2_CASES, while the collection interface requires space-separated identities. Its separate dry selection had omitted that environment variable, so it validated a different invocation. The actual command refused the empty suite before any case or admission claim started. The owner process ended, the ledger was header-only and the native guards were free. The corrected attempt retained all compiled products and record bytes, used a fresh output namespace, and validated the exact runtime selector environment before launch.
+
+Validate a collection's dry selection with its complete runtime environment, including selectors. A separate selection without those variables does not establish what the actual command will run. The refused command, output and independent cleanup remain under build/tests/mac-targeted-repairs/ci-runtime-retry02.
