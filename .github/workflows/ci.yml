@@ -72,7 +72,8 @@ jobs:
     needs: head
     if: needs.head.outputs.tested == '0'
     runs-on: ${{ fromJSON(needs.head.outputs.labels) }}
-    timeout-minutes: 30
+    # The legacy entry retains its old job guard until native activation.
+    timeout-minutes: ${{ needs.head.outputs.native == 'true' && 30 || 180 }}
     outputs:
       i686: ${{ steps.verdict.outputs.i686 }}
       x86_64: ${{ steps.verdict.outputs.x86_64 }}
