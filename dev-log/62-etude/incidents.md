@@ -1837,3 +1837,9 @@ Native preparation and the routine test route acquired production Python and she
 The native Windows i686 QEMU fixture's TCG poweroff row exited before boot. Its complete stderr reports that hda-duplex cannot open adc because the WAV backend has no host audio input driver. The profile's audio contract records guest playback to a WAV file; it requests no recording input.
 
 The HDA profile now selects hda-output instead of hda-duplex. The existing exact command-line assertion checks the output-only codec, while recording bytes, isolated paths, refusal to replace an existing file and real shutdown checks remain unchanged. No host audio driver or dependency is added. The actual affected native fixture retry remains required.
+
+## The QEMU stand-in reported accelerator options as its name (#1175)
+
+The native boots fixture's fake panic row received the correct whpx,kernel-irqchip=off launch option, then returned that entire string as the QMP enabled accelerator. The launcher correctly refused it because an accelerator name is whpx, without its command-line options. The stand-in never reached its guest panic event.
+
+The stand-in now strips the WHPX option suffix from its QMP name. Its real launch argument and the exact interrupt-controller option assertion remain unchanged. The existing panic row still requires confirmed acceleration, its complete console and the guest panic end; no production accelerator check is relaxed.
