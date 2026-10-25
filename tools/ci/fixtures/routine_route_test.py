@@ -588,6 +588,7 @@ class RouteTests(unittest.TestCase):
         command = ['/etude', 'serve', '--stdio', '-d', '/state/run']
         program = 'C:/Windows/System32/wsl.exe'
         for platform, mode in (('linux', 'windows-import'), ('darwin', 'wsl-native'),
+                               ('msys', 'windows-import'), ('cygwin', 'wsl-native'),
                                ('win32', 'macos-import'), ('win32', 'native'), ('win32', None)):
             with self.subTest(platform=platform, mode=mode), \
                     patch.object(routine_remote.sys, 'platform', platform), self.assertRaises(ValueError):
