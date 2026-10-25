@@ -165,7 +165,7 @@ int main(int argc, char **argv)
     }
     atexit(socket_cleanup);
 #endif
-    setvbuf(stdout, NULL, _IOLBF, 0);
+    setvbuf(stdout, NULL, _IONBF, 0);
     if (port == 0) {
         fprintf(stderr, "clockpeer: usage: clockpeer PORT\n");
         return 2;
