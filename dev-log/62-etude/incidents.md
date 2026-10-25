@@ -1603,3 +1603,7 @@ T95 installs the selected site's policy, measured reference, retained evidence a
 ## CI missed failure directories within one timestamp tick (#1159)
 
 The GNU CI fixture failed the exact retained-directory assertions of both architectures. The driver used strict `find -newer`, while the ext2 inode stores whole seconds: a failure directory made in the start file's second is omitted. The driver now directs the runner to its own `kept` directory through the existing `RACH2_FAILED` interface. The substitute follows that interface, and the same exact per-architecture directory assertions remain. No timestamp delay or relaxed comparison is needed.
+
+## The coordinating check began after its recorded deadline
+
+The check due at 19:55:06 on 25 October began at 19:58:39 while the coordinating session recovered its current work state. Its complete status and board reads passed, and it corrected the two active CI cards left in Backlog. The next deadline is recorded beside the concrete publication and test actions, so recovering context does not require reconstructing either the schedule or the work already reported.
