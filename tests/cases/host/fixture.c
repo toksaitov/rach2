@@ -490,6 +490,7 @@ void fx_stop(struct fx_child *p, int sig)
 }
 int fx_wait(struct fixture *f, struct fx_child *p)
 {
+    int printed, flushed, print_errno, flush_errno;
     while (!fx_poll(p)) {
         interrupted();
         fx_pause();
@@ -500,9 +501,19 @@ int fx_wait(struct fixture *f, struct fx_child *p)
     f->out = fx_read(p->out);
     f->err = fx_read(p->err);
     f->status = p->status;
-    printf("command %u: status %d\n%s%s", f->command, f->status, f->out ? f->out : "",
-           f->err ? f->err : "");
-    fflush(stdout);
+    printed = printf("command %u: status %d\n%s%s", f->command, f->status, f->out ? f->out : "",
+                     f->err ? f->err : "");
+    print_errno = printed < 0 ? errno : 0;
+    flushed = fflush(stdout);
+    flush_errno = flushed != 0 ? errno : 0;
+    if (printed < 0 || flushed != 0) {
+        fprintf(stderr,
+                "fixture: command %u output failed: printf %d errno %d, "
+                "flush %d errno %d; child status %d\n",
+                f->command, printed, print_errno, flushed, flush_errno, f->status);
+        f->failed = 1;
+        return 255;
+    }
     return f->status;
 }
 int fx_run(struct fixture *f, const char *const a[], const char *cwd, const char *const env[],
