@@ -3,6 +3,7 @@
 
 static unsigned scheduling_initial, scheduling_ceiling;
 static int scheduling_both;
+static struct json *cost_blob_json(const struct json *ref);
 
 /* Replace only an existing string in the fixture's parsed case. */
 static void scheduling_string(struct json *object, const char *key, const char *value)
@@ -107,8 +108,10 @@ static int scheduling_role(const char *id)
     printf("@etude 1 begin %s\n", id);
     fflush(stdout);
     int ok = scheduling_claim(root);
-    if (meeting && (!strcmp(id, "host.host.tests") || !strcmp(id, "host.host.checkers"))) {
-        int writer = !strcmp(id, "host.host.tests");
+    const char *writer_id =
+        getenv("ETUDE_COLLECTION_SHARED_ETUDE") ? "host.host.etude" : "host.host.tests";
+    if (meeting && (!strcmp(id, writer_id) || !strcmp(id, "host.host.checkers"))) {
+        int writer = !strcmp(id, writer_id);
         char path[PATH_MAX], byte = 'x';
         for (int phase = 0; phase < 2; phase++) {
             snprintf(path, sizeof(path), "%s/meeting-%d", root, phase);
@@ -131,7 +134,7 @@ static void scheduling_seed(char *out, size_t room)
     char *allocate[] = {"-N",   "-j", "1", "-S", "42", "-J", (char *)fix_path("quiet-seed.json"),
                         "host", NULL};
     char *execute[] = {"-A", "tcg", "-j", "1", "-S", "42", "host", NULL};
-    CHECK(!run(allocate, "host.host.etude host.host.boots", NULL, NULL, out, room),
+    CHECK(!run(allocate, "host.host.etude_quiet host.host.boots", NULL, NULL, out, room),
           "quiet seeded allocator exports");
     char text[32768], error[256];
     FILE *f = fopen(fix_path("quiet-seed.json"), "rb");
@@ -142,7 +145,7 @@ static void scheduling_seed(char *out, size_t room)
     CHECK(n && !json_parse(text, n, 1, &doc, error, sizeof(error)),
           "quiet seeded selection parses");
     /* No meeting cases are selected; the allocated width is one. */
-    CHECK(!run(execute, "host.host.etude host.host.boots", NULL, NULL, out, room),
+    CHECK(!run(execute, "host.host.etude_quiet host.host.boots", NULL, NULL, out, room),
           "quiet seeded cases pass");
     const struct json *items = json_member(doc, "items");
     const char *cursor = out;
@@ -209,9 +212,69 @@ static void scheduling_capacity(char *out, size_t room)
 
 static void scheduling_history(char *out, size_t room);
 
+static int scheduling_named(const struct json *array, const char *name)
+{
+    if (!array || array->type != JSON_ARRAY)
+        return 0;
+    for (size_t i = 0; i < array->count; i++)
+        if (array->item[i]->type == JSON_STRING && !strcmp(array->item[i]->string, name))
+            return 1;
+    return 0;
+}
+
+/* Inspect the actual recorded policy, including the quiet exclusion. */
+static void scheduling_isolation(const char *output)
+{
+    char path[PATH_MAX], history[PATH_MAX] = "", error[256];
+    fix_format(path, sizeof(path), "%s/history", output);
+    DIR *dir = opendir(path);
+    struct dirent *entry;
+    size_t found = 0;
+    while (dir && (entry = readdir(dir)))
+        if (strstr(entry->d_name, ".jsonl")) {
+            fix_format(history, sizeof(history), "%s/%s", path, entry->d_name);
+            found++;
+        }
+    if (dir)
+        closedir(dir);
+    CHECK(found == 1, "the scheduling run has one complete history");
+    FILE *f = found == 1 ? fopen(history, "rb") : NULL;
+    char *line = NULL;
+    size_t room = 0;
+    ssize_t n = f ? getline(&line, &room, f) : -1;
+    struct json *plan = NULL;
+    CHECK(n > 0 && !json_parse(line, (size_t)n, 1, &plan, error, sizeof(error)),
+          "the scheduling plan parses");
+    if (f)
+        fclose(f);
+    const struct json *data = json_member(plan, "data");
+    const struct json *binding = json_member(data, "concurrency");
+    struct json *policy = binding ? cost_blob_json(binding) : NULL;
+    const struct json *serial = json_member(policy, "serial");
+    const struct json *exclusive = json_member(policy, "exclusive");
+    CHECK(scheduling_named(serial, "host.host.etude_quiet") &&
+              scheduling_named(exclusive, "host.host.etude_quiet") &&
+              scheduling_named(exclusive, "host.host.boots") &&
+              !scheduling_named(exclusive, "host.host.etude"),
+          "only the timed Etude partition and boot group exclude independent cases");
+    json_free(policy);
+    json_free(plan);
+    free(line);
+}
+
+static void scheduling_shared_etude(char *out, size_t room)
+{
+    char *options[] = {"-A", "tcg", "-j", "2", "host", NULL};
+    setenv("ETUDE_COLLECTION_SHARED_ETUDE", "1", 1);
+    CHECK(!run(options, "host.host.etude host.host.checkers", NULL, NULL, out, room),
+          "shared Etude checks rendezvous with an independent prepared case");
+    unsetenv("ETUDE_COLLECTION_SHARED_ETUDE");
+}
+
 static void scheduling(char *out, size_t room)
 {
-    static const char *const ids[] = {"host.host.tests", "host.host.checkers", "host.host.etude",
+    static const char *const ids[] = {"host.host.tests", "host.host.checkers",
+                                      "host.host.etude", "host.host.etude_quiet",
                                       "host.host.boots", NULL};
     static const char *const style[] = {"fixture.style.ready", NULL};
     CHECK(unlink(fix_path("tests/cases/fixture.host.json")) == 0, "old host fixture is replaced");
@@ -229,14 +292,18 @@ static void scheduling(char *out, size_t room)
     }
     scheduling_policy(out, room);
     setenv("ETUDE_COLLECTION_MEETING", tree, 1);
-    char *options[] = {"-A", "tcg", "-j", "3", "host", "style", NULL};
+    char output[PATH_MAX];
+    fix_format(output, sizeof(output), "%s/quiet-scheduling", tree);
+    char *options[] = {"-A", "tcg", "-j", "3", "-o", output, "host", "style", NULL};
     CHECK(!run(options, NULL, NULL, NULL, out, room),
           "prepared host cases meet while style shares collection capacity");
     const char *tests = strstr(out, "host.host.tests: starting");
-    const char *etude_start = strstr(out, "host.host.etude: starting");
+    const char *etude_start = strstr(out, "host.host.etude_quiet: starting");
     const char *boots = strstr(out, "host.host.boots: starting");
     CHECK(tests && etude_start && boots && etude_start < tests && boots < tests,
           "quiet host groups precede shared prepared groups");
+    scheduling_isolation(output);
+    scheduling_shared_etude(out, room);
     scheduling_seed(out, room);
     scheduling_capacity(out, room);
     unsetenv("ETUDE_COLLECTION_MEETING");

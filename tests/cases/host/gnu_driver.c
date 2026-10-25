@@ -11,11 +11,11 @@
 
 static const char prepared[] = "/host-products/host-checks/tree";
 
-/** Only the four declared GNU groups can reserve a workspace. */
+/** Only declared GNU groups and their quiet partition reserve a workspace. */
 static int valid_group(const char *group)
 {
-    return !strcmp(group, "tests") || !strcmp(group, "etude") || !strcmp(group, "checkers") ||
-           !strcmp(group, "fuzz");
+    return !strcmp(group, "tests") || !strcmp(group, "etude") || !strcmp(group, "etude_quiet") ||
+           !strcmp(group, "checkers") || !strcmp(group, "fuzz");
 }
 
 /** Become the ordinary account before copying or running a fixture. */

@@ -959,10 +959,10 @@
     },
     {
       "case_id": "host.host.etude",
-      "behavior": "each of etude's host tests, tests/host/etude_*_hosttest.c, that boots no kernel compiles natively with etude's sources it names and runs under AddressSanitizer and UndefinedBehaviorSanitizer, every report fatal, and exits 0",
+      "behavior": "Etude host checks without host-alone metadata run under their fatal sanitizers and share collection capacity with independent cases",
       "units": [
         "host",
-        "the host tests of the inventory's Etude, each `tests/host/etude_NAME_hosttest.c` that boots no kernel, compiled and run under the sanitizers"
+        "the shared checks of the complete Etude host inventory, compiled and run under the sanitizers"
       ],
       "domain": "machine",
       "architectures": "none",
@@ -993,7 +993,7 @@
       "assertions": [
         {
           "assertion_id": "listed",
-          "checks": "each tests/host/etude_*_hosttest.c with no host-arch: line has an assertion of this case, and each assertion a test of the tree",
+          "checks": "both Etude partitions are disjoint, cover the complete prepared and live inventory, and agree with every host-alone declaration",
           "source": "scenario"
         },
         {
@@ -1107,16 +1107,6 @@
           "source": "scenario"
         },
         {
-          "assertion_id": "etude_remote",
-          "checks": "tests/host/etude_remote_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "etude_repeat",
-          "checks": "tests/host/etude_repeat_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
-          "source": "scenario"
-        },
-        {
           "assertion_id": "etude_runtime",
           "checks": "tests/host/etude_runtime_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -1163,7 +1153,188 @@
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 31
+          "limit": 29
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 400000000,
+            "ceiling_us": 1200000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 16000,
+        "memory_bytes": 6442450944,
+        "disk_bytes": 15032385536,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "checks",
+          "node": "tests/host-suite/etude.inventory.json",
+          "per_architecture": false
+        },
+        {
+          "name": "host_checks_scenario",
+          "node": "tests/cases/host/host_checks_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "products-kernel",
+          "node": "x86_64/rach2/kernel",
+          "per_architecture": false
+        },
+        {
+          "name": "products-image",
+          "node": "x86_64/images/gnu-test.disk",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "system",
+        "reason": "native C executes platform checks and controls the declared GNU POSIX fixtures"
+      },
+      "steps": [
+        {
+          "step_id": "listed",
+          "stage": "execute",
+          "does": "validate all declared and prepared check identities"
+        },
+        {
+          "step_id": "native",
+          "stage": "execute",
+          "does": "run the prepared checks on the collection host"
+        },
+        {
+          "step_id": "products",
+          "stage": "boot",
+          "does": "boot the declared GNU products helper when needed",
+          "machine": "products"
+        },
+        {
+          "step_id": "gnu",
+          "stage": "execute",
+          "does": "run the prepared POSIX fixture on the GNU helper"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "products",
+          "qemu": {
+            "architecture": "x86_64",
+            "kernel": "products-kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "products-disk",
+                "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 4294967296,
+            "firmware": "direct",
+            "devices": [
+              "rtl8139"
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": true
+        }
+      ]
+    },
+    {
+      "case_id": "host.host.etude_quiet",
+      "behavior": "Etude remote and repetition checks retain their short response assertions under fatal sanitizers while no other collection case runs",
+      "units": [
+        "host",
+        "the remote and repetition checks of the complete Etude host inventory, compiled and run under the sanitizers"
+      ],
+      "domain": "machine",
+      "architectures": "none",
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "host_checks_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "reported",
+        "cleanup": "the native executor reports and reaps every child; the case library stops the GNU helper and exports failed fixtures"
+      },
+      "assertions": [
+        {
+          "assertion_id": "listed",
+          "checks": "both Etude partitions are disjoint, cover the complete prepared and live inventory, and agree with every host-alone declaration",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_remote",
+          "checks": "tests/host/etude_remote_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_repeat",
+          "checks": "tests/host/etude_repeat_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a declared scenario step has ended",
+          "limit": 4
+        },
+        {
+          "witness_id": "checks",
+          "kind": "counter",
+          "means": "a check of the case has ended, passed or failed",
+          "limit": 3
         }
       ],
       "bounds": {

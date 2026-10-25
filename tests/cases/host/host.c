@@ -35,7 +35,7 @@ struct check {
 struct host {
     char tree[PATH_SIZE], work[PATH_SIZE], case_id[128];
     struct json *manifest, *inventory;
-    const struct json *declared;
+    const struct json *declared, *companion;
     struct check *checks;
     size_t nchecks, reported, failures, records;
     int uncertain;
@@ -169,14 +169,25 @@ static void assertion(struct host *h, const char *id, int pass, const char *why)
     h->failures += !pass;
 }
 
-static int declared(const struct host *h, const char *id)
+static int declaration(const struct json *assertions, const char *id)
 {
-    for (size_t i = 0; h->declared && i < h->declared->count; i++) {
-        const char *name = json_text(h->declared->item[i], "assertion_id");
+    for (size_t i = 0; assertions && i < assertions->count; i++) {
+        const char *name = json_text(assertions->item[i], "assertion_id");
         if (name && !strcmp(name, id))
             return 1;
     }
     return 0;
+}
+
+static int declared(const struct host *h, const char *id)
+{
+    return declaration(h->declared, id);
+}
+
+/* Both Etude partitions consume the same complete prepared inventory. */
+static const char *canonical_group(const char *group)
+{
+    return !strcmp(group, "etude_quiet") ? "etude" : group;
 }
 
 static void progress(struct host *h)
@@ -590,11 +601,11 @@ static int live_scripts(struct host *h, const char *group)
 }
 
 /* Missing declared entries still produce their own failed assertion. */
-static int complete_inventory(struct host *h)
+static int complete_declarations(struct host *h, const struct json *assertions, int selected)
 {
     int listed = 1;
-    for (size_t i = 0; i < h->declared->count; i++) {
-        const char *id = json_text(h->declared->item[i], "assertion_id");
+    for (size_t i = 0; assertions && i < assertions->count; i++) {
+        const char *id = json_text(assertions->item[i], "assertion_id");
         if (!id || !strcmp(id, "listed"))
             continue;
         size_t j;
@@ -602,13 +613,41 @@ static int complete_inventory(struct host *h)
         }
         if (j == h->nchecks) {
             listed = 0;
-            struct check absent = {0};
-            absent.id = id;
-            absent.label = id;
-            finished(h, &absent, "the prepared inventory has no check for this assertion");
+            if (selected) {
+                struct check absent = {0};
+                absent.id = id;
+                absent.label = id;
+                finished(h, &absent, "the prepared inventory has no check for this assertion");
+            } else {
+                printf("host: listed: companion assertion %s was not prepared\n", id);
+            }
         }
     }
     return listed;
+}
+
+/* Every prepared entry belongs to exactly one matching scheduling partition. */
+static int partition_matches(const struct host *h, const struct check *c)
+{
+    int other = declaration(h->companion, c->id);
+    if (!h->companion)
+        return c->selected;
+    int quiet = !strcmp(h->case_id, "host.host.etude_quiet") ? c->selected : other;
+    return c->selected != other && c->alone == quiet;
+}
+
+static int select_one(struct host *h)
+{
+    if (h->only) {
+        int found = 0;
+        for (size_t i = 0; i < h->nchecks; i++) {
+            h->checks[i].selected &= !strcmp(h->checks[i].id, h->only);
+            found += h->checks[i].selected;
+        }
+        if (found != 1)
+            return -1;
+    }
+    return 0;
 }
 
 static int check_inventory(struct host *h, const char *group)
@@ -637,27 +676,23 @@ static int check_inventory(struct host *h, const char *group)
         for (size_t j = 0; j < i; j++)
             if (!strcmp(c->id, h->checks[j].id))
                 return -1;
-        if (!c->selected) {
+        if (!partition_matches(h, c)) {
             listed = 0;
-            printf("host: listed: unlisted prepared check %s\n", c->id);
+            c->selected = 0;
+            printf("host: listed: unlisted or wrongly partitioned prepared check %s\n", c->id);
         }
     }
-    listed &= complete_inventory(h);
+    listed &= complete_declarations(h, h->declared, 1);
+    listed &= complete_declarations(h, h->companion, 0);
+    group = canonical_group(group);
     int sources = live_sources(h, group), scripts = live_scripts(h, group);
     if (sources < 0 || scripts < 0)
         return -1;
     listed &= sources && scripts;
     assertion(h, "listed", listed, "the declared, source and prepared inventories differ");
-    if (h->only) {
-        int found = 0;
-        for (size_t i = 0; i < h->nchecks; i++) {
-            h->checks[i].selected &= !strcmp(h->checks[i].id, h->only);
-            found += h->checks[i].selected;
-        }
-        if (found != 1)
-            return -1;
-    }
-    return 0;
+    if (h->companion && !listed)
+        return -1;
+    return select_one(h);
 }
 
 static void finish_process(struct host *h, struct check *c, struct etude_proc *p)
@@ -734,20 +769,42 @@ static int execute(struct host *h, unsigned width)
     return stopped ? 128 + stopped : h->failures ? 1 : 0;
 }
 
+static int load_declarations(struct host *h, const char *group)
+{
+    const struct json *cases = json_member(h->manifest, "cases");
+    int etude = !strcmp(canonical_group(group), "etude");
+    const char *other = !strcmp(group, "etude_quiet") ? "host.host.etude" : "host.host.etude_quiet";
+    for (size_t i = 0; cases && i < cases->count; i++) {
+        const char *id = json_text(cases->item[i], "case_id");
+        if (id && !strcmp(id, h->case_id))
+            h->declared = json_member(cases->item[i], "assertions");
+        if (etude && id && !strcmp(id, other))
+            h->companion = json_member(cases->item[i], "assertions");
+    }
+    if (!h->declared || h->declared->type != JSON_ARRAY)
+        return -1;
+    if (etude && (!h->companion || h->companion->type != JSON_ARRAY))
+        return -1;
+    if (h->only && declaration(h->companion, h->only) && !declared(h, h->only)) {
+        const struct json *swap = h->declared;
+        h->declared = h->companion;
+        h->companion = swap;
+        snprintf(h->case_id, sizeof(h->case_id), "%s", other);
+        if (getenv("ETUDE_CASE") && strcmp(getenv("ETUDE_CASE"), h->case_id))
+            return -1;
+    }
+    return 0;
+}
+
 static int load_inventory(struct host *h, const char *group, const char *arch)
 {
     char manifest[PATH_SIZE], inventory[PATH_SIZE], digest[65], node[160];
     if (path_of(manifest, h->tree, "tests/cases/host.host.json") != 0)
         return -1;
     h->manifest = document(manifest);
-    const struct json *cases = json_member(h->manifest, "cases");
-    for (size_t i = 0; cases && i < cases->count; i++) {
-        const char *id = json_text(cases->item[i], "case_id");
-        if (id && !strcmp(id, h->case_id))
-            h->declared = json_member(cases->item[i], "assertions");
-    }
-    if (!h->declared || h->declared->type != JSON_ARRAY)
+    if (load_declarations(h, group) != 0)
         return -1;
+    group = canonical_group(group);
     snprintf(node, sizeof(node), "%s/tests/host-suite/%s.inventory.json",
              !strcmp(arch, "x86_64") && (!strcmp(group, "tests") || !strcmp(group, "boots"))
                  ? "build/x86_64"
@@ -800,7 +857,8 @@ static void release_host(struct host *h, int status)
 
 static int valid_group(const char *group)
 {
-    static const char *const groups[] = {"tests", "etude", "boots", "checkers", "fuzz", "scripts"};
+    static const char *const groups[] = {"tests",    "etude", "etude_quiet", "boots",
+                                         "checkers", "fuzz",  "scripts"};
     for (size_t i = 0; i < sizeof groups / sizeof groups[0]; i++)
         if (!strcmp(group, groups[i]))
             return 1;
@@ -824,7 +882,9 @@ static int host_options(struct host *h, int argc, char **argv, const char **sele
             arch = argv[4];
     }
     if (!valid_group(group)) {
-        fputs("usage: host [--one] tests|etude|boots|checkers|fuzz|scripts [ASSERTION]\n", stderr);
+        fputs(
+            "usage: host [--one] tests|etude|etude_quiet|boots|checkers|fuzz|scripts [ASSERTION]\n",
+            stderr);
         return 2;
     }
     if (!tree)
