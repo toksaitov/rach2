@@ -6,6 +6,8 @@
  * host-deps: tools/etude/boot_identity.c
  * host-deps: tools/etude/history_collect.c
  * host-deps: tools/etude/history_json.c
+ * host-deps: tools/etude/routine_site.c tools/etude/routine_proof.c
+ * host-deps: tools/etude/json.c
  * host-deps: tools/etude/authority.c tools/etude/authority_parse.c
  * host-deps: tools/etude/posix/authority_platform.c
  * host-deps: tools/etude/win/authority_platform.c
@@ -987,6 +989,7 @@ static void test_workers(void)
 }
 
 #include "compat/authority_fixture.c"
+#include "compat/routine_site_host.c"
 
 int main(int argc, char **argv)
 {
@@ -996,6 +999,15 @@ int main(int argc, char **argv)
         printf("etude-ledger-test: fail: %s cannot be found\n", argv[0]);
         return 1;
     }
+    if (argc == 2 && !strcmp(argv[1], "--authority-only")) {
+        test_authority();
+        test_routine_site();
+        if (fails)
+            return 1;
+        fix_passed();
+        puts("etude_ledger_hosttest: authority pass");
+        return 0;
+    }
     test_claims();
     test_register();
     test_contention();
@@ -1003,6 +1015,7 @@ int main(int argc, char **argv)
     test_identities();
     test_workers();
     test_authority();
+    test_routine_site();
     if (fails != 0)
         return 1;
     fix_passed();

@@ -61,6 +61,19 @@ static void test_authority(void)
 {
     char binding[4096], ledger[4096], marker[4096], alias[4096];
     authority_config(binding, ledger, marker);
+    char site_path[4096], route_path[4096], site_alias[4096], route_alias[4096];
+    snprintf(site_path, sizeof site_path, "%s/site", fix_path("authority"));
+    snprintf(route_path, sizeof route_path, "%s/route", fix_path("authority"));
+    snprintf(site_alias, sizeof site_alias, "%s/site-alias", fix_path("authority"));
+    snprintf(route_alias, sizeof route_alias, "%s/route-alias", fix_path("authority"));
+    struct authority_binding route_binding;
+    CHECK(symlink(site_path, site_alias) == 0 && symlink(route_path, route_alias) == 0,
+          "route aliases");
+    CHECK(authority_route(site_alias, route_alias, &route_binding) == 0,
+          "route and site aliases match protected identities");
+    CHECK(authority_route(route_path, route_path, &route_binding) != 0, "different site refused");
+    CHECK(authority_route(site_path, site_path, &route_binding) != 0, "different route refused");
+    CHECK(authority_route(site_path, NULL, &route_binding) != 0, "absent route refused");
     struct etude_authority *normal = NULL, *exclusive = NULL;
     struct etude_authority_phase phase = {
         .run_id = "fixture-authority",
