@@ -13,6 +13,7 @@ Preparation builds and verifies immutable inputs before execution. Compiled help
     etude run SUITE...|core|all ...     run a native collection from prepared artifacts
     etude run native ...                run the local Rach2 collection, or the desktop transport adapter
     etude run suites|host ...           compatibility adapters for suite and host-command selections
+    etude prepare -H ...                prepare host inventories and source-check evidence
     etude prepare collection ...        build and record the selected collection
     etude prepare ...                   compatibility preparation of explicit build goals
     etude check ...                     check manifests, reports, results and histories, and give a run's verdict

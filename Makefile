@@ -535,7 +535,8 @@ $(SETIDCHECK) $(PROSECHECK): $(CHECKER_FILE_SRC) tools/host_files.h \
 endif
 ETUDEVOLUME = build/tools/etude/etude-volume
 ETUDE_HDRS = $(wildcard tools/etude/*.h tools/etude/include/etude/*.h tools/etude/posix/*.h \
-                        tools/etude/guest/*.h tools/etude/volume/*.h) utils/sha256.h
+                        tools/etude/guest/*.h tools/etude/volume/*.h) utils/sha256.h \
+                        tests/cases/host/host_script_inventory.h
 include tests/cases/host/scripts.mk
 include tests/cases/host/family.mk
 $(ETUDE): $(ETUDE_SRC) $(ETUDE_HDRS) | $(ETUDEVOLUME)
@@ -549,9 +550,9 @@ $(ETUDEVOLUME): $(ETUDE_VOLUME_SRC) $(ETUDE_VOLUME_FILE_SRC) tools/etude/volume/
 # The independent exFAT fixture is produced during preparation. Runtime
 # checks read its image, manifest and expected files without mounting a volume.
 .PHONY: build/tests/host/exfat_writer
-build/tests/host/exfat_writer: tests/host/mkexfat_external.sh tests/cases/host/tools.py | $(ETUDE)
+build/tests/host/exfat_writer: tests/host/mkexfat_external.sh | $(ETUDE)
 	@mkdir -p $(@D)
-	python3 -B tests/cases/host/tools.py --external-exfat $@
+	$(ETUDE) prepare -H --only external-exfat tools $@
 
 # This target denotes the complete independent fixture, not just its record.
 build/tests/host-suite/tools/exfat_external/exfat_external.img: build/tests/host/exfat_writer
@@ -603,12 +604,12 @@ STYLE_PREP_TOOLS = build/tests/cases/host/style $(ETUDE) build/tools/verify/asci
     build/tools/inspect/elfcheck build/tools/inspect/cfgcheck build/tools/etude/win/pecheck
 .PHONY: style-evidence-force
 style-evidence-force:
-build/tests/style/%.json: tests/cases/host/prepare_style.py tests/cases/host/style.sh \
+build/tests/style/%.json: tests/cases/host/style.sh \
     tests/cases/host.style.json $(STYLE_PREP_TOOLS) style-evidence-force
-	python3 -B tests/cases/host/prepare_style.py --arch $(ARCH) $* $@
-build/x86_64/tests/style/%.json: tests/cases/host/prepare_style.py tests/cases/host/style.sh \
+	$(ETUDE) prepare -H --arch $(ARCH) --only $* style $@
+build/x86_64/tests/style/%.json: tests/cases/host/style.sh \
     tests/cases/host.style.json $(STYLE_PREP_TOOLS) style-evidence-force
-	python3 -B tests/cases/host/prepare_style.py --arch x86_64 $* $@
+	$(ETUDE) prepare -H --arch x86_64 --only $* style $@
 build/tests/style/abi.json: $(LIBC_STAMP)
 build/x86_64/tests/style/abi.json: $(LIBC_STAMP)
 build/tests/style/sizes.json build/x86_64/tests/style/sizes.json: host-pmccabe
@@ -617,19 +618,14 @@ ifneq ($(OS),Windows_NT)
 build/tests/style/manual.json build/x86_64/tests/style/manual.json: $(BUSYBOX_STAMP)
 endif
 
-build/tests/host-suite/tests/usbstamp_hosttest: tests/cases/host/prepare.py \
-    tests/host/usbstamp_hosttest.c host-inventory-force
-	CC="$(HOSTCC)" python3 -B tests/cases/host/prepare.py --only usbstamp tests build/tests/host-suite/tests.inventory.json
-
-build/tests/host-suite/vfs_unmount: tests/cases/host/fixtures.py tests/cases/host/routing.py \
-    tests/host/fixtures/extract.py \
-    tests/system/fixtures/vfs_unmount.c rach2/sys/fs/vfs.c
-	CC="$(HOSTCC)" python3 -B tests/cases/host/fixtures.py vfs_unmount $@
+build/tests/host-suite/tests/usbstamp_hosttest: tests/host/usbstamp_hosttest.c \
+    host-inventory-force | $(ETUDE)
+	CC="$(HOSTCC)" $(ETUDE) prepare -H --only usbstamp tests build/tests/host-suite/tests.inventory.json
 
 .PHONY: host-sanitizer-force
 host-sanitizer-force:
-build/tests/host-suite/sanitizer/tools.json: tests/cases/host/tools.py host-sanitizer-force
-	python3 -B tests/cases/host/tools.py --sanitizer $(@D)
+build/tests/host-suite/sanitizer/tools.json: host-sanitizer-force | $(ETUDE)
+	$(ETUDE) prepare -H --only sanitizer tools $(@D)
 
 build/tests/host-suite/scripts.inventory.json: build/tests/system/fakeapi_test
 build/tests/host-suite/etude.inventory.json: $(ETUDE) build/tests/cases/host/host
@@ -657,14 +653,12 @@ build/x86_64/tests/host-suite/boots.inventory.json: $(ETUDE) $(HOST_BOOT_SCHEMAS
 
 .PHONY: host-inventory-force
 host-inventory-force:
-build/tests/host-suite/%.inventory.json: tests/cases/host/prepare.py tests/cases/host/fixtures.py tests/cases/host/windows.py tests/cases/host/tools.py tests/cases/host/routing.py tests/cases/host/boot_inputs.py \
-    tests/cases/host/host.list tests/cases/host/adapters.json \
-    tests/cases/host.host.json host-inventory-force
-	CC="$(HOSTCC)" python3 -B tests/cases/host/prepare.py --arch $(ARCH) $* $@
-build/x86_64/tests/host-suite/%.inventory.json: tests/cases/host/prepare.py tests/cases/host/fixtures.py tests/cases/host/windows.py tests/cases/host/tools.py tests/cases/host/routing.py tests/cases/host/boot_inputs.py \
-    tests/cases/host/host.list tests/cases/host/adapters.json \
-    tests/cases/host.host.json host-inventory-force
-	CC="$(HOSTCC)" python3 -B tests/cases/host/prepare.py --arch x86_64 $* $@
+build/tests/host-suite/%.inventory.json: tests/cases/host/host.list \
+    tests/cases/host/adapters.json tests/cases/host.host.json host-inventory-force | $(ETUDE)
+	CC="$(HOSTCC)" $(ETUDE) prepare -H --arch $(ARCH) $* $@
+build/x86_64/tests/host-suite/%.inventory.json: tests/cases/host/host.list \
+    tests/cases/host/adapters.json tests/cases/host.host.json host-inventory-force | $(ETUDE)
+	CC="$(HOSTCC)" $(ETUDE) prepare -H --arch x86_64 $* $@
 
 # The programs of etude's host cases (tests/cases/host), which the cases'
 # preparation names, one for both architectures.

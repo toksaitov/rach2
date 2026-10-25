@@ -19,9 +19,12 @@
  * host-cflags: -I tools/etude/include -I tools/etude/posix
  * host-cflags: -Wall -Wextra -Werror
  * host-inputs: tests/host/preparation_import_test.py tests/native/prepare.py
- * host-inputs: tests/cases/host/prepare.py tests/cases/host/fixtures.py
- * host-inputs: tests/cases/host/tools.py tests/cases/host/routing.py
- * host-inputs: tests/cases/host/windows.py tests/cases/host/boot_inputs.py
+ * host-inputs: tools/etude/host_prepare.c tools/etude/host_prepare.h
+ * host-inputs: tools/etude/host_prepare_io.c tools/etude/host_prepare_build.c
+ * host-inputs: tools/etude/host_prepare_tools.c
+ * host-inputs: tools/etude/host_prepare_style.c
+ * host-inputs: tools/etude/host_prepare_scripts.c mk/host-check.mk
+ * host-inputs: mk/host-fixtures.mk build/tools/etude/etude
  * host-inputs: tests/host/fixtures/extract.py
  * host-inputs: tools/ci/fixtures/routine_route_test.py
  * host-inputs: tools/ci/routine_entry.py

@@ -23,6 +23,7 @@
 #include "etude/legacy.h"
 #include "json.h"
 #include "verbs.h"
+#include "host_prepare.h"
 
 /* The longest bound of a step or a run, in seconds: a week. */
 #define SECONDS_MAX 604800ul
@@ -100,6 +101,11 @@ int etude_prepare_main(int argc, char **argv)
     static char *goals[GOALS_MAX];
     struct etude_legacy_opts o;
     int opt;
+
+    if (argc >= 2 && strcmp(argv[1], "-H") == 0) {
+        catch_stops();
+        return etude_host_prepare_main(argc - 1, argv + 1, &stop_signal);
+    }
 
     if (argc >= 2 && strcmp(argv[1], "collection") == 0) {
         argv[1] = argv[0];

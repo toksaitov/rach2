@@ -22,231 +22,210 @@ from routine_route_test import RouteTests
 
 
 class ImportTests(unittest.TestCase):
+    @staticmethod
+    def native_tree(tree):
+        repo = Path(__file__).resolve().parents[2]
+        for name in ('mk', 'tools/etude', 'tests/host', 'tests/cases/host'):
+            (tree / name).mkdir(parents=True, exist_ok=True)
+        shutil.copy2(repo / 'mk/host-check.mk', tree / 'mk/host-check.mk')
+        (tree / 'tools/etude/sources.mk').write_text('')
+        (tree / 'tests/cases/host.host.json').write_text('{}\n')
+        (tree / 'cc').symlink_to(Path(shutil.which('cc')).resolve())
+
+    @staticmethod
+    def native_source(tree, name, metadata='', body='int main(void) { return 0; }\n'):
+        (tree / 'tests/host' / name).write_text('/* ' + metadata.replace('\n', '\n * ') + '*/\n' + body)
+
+    def native_prepare(self, tree, group='tests', args=(), env=None, expected=0):
+        repo = Path(__file__).resolve().parents[2]
+        binary = Path(os.environ.get('ETUDE_HOST_PREPARE', str(repo / 'build/tools/etude/etude'))).resolve()
+        output = 'build/tests/host-suite/' + group + '.inventory.json'
+        actual = os.environ.copy()
+        actual.update(CC=str(tree / 'cc'))
+        actual.pop('HOST_TEST_PLATFORM', None)
+        actual.update(env or {})
+        if actual.get('HOST_TEST_PLATFORM') == 'windows':
+            actual['CC'] = subprocess.list2cmdline([sys.executable, str(tree / 'compiler.py')])
+            actual['OS'] = 'Windows_NT'
+        result = subprocess.run([str(binary), 'prepare', '-H', *args, group, output],
+                                cwd=tree, env=actual, text=True, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT)
+        self.assertEqual(result.returncode, expected, result.stdout)
+        record = json.loads((tree / output).read_text()) if not expected and '--print-commands' not in args else None
+        return record, result.stdout
+
+    @staticmethod
+    def windows_tree(tree):
+        compiler = Path(shutil.which('cc')).resolve()
+        sdk = tree.parent / 'sdk'
+        sdk.mkdir(exist_ok=True)
+        (sdk / 'external.h').write_text('#define EXTERNAL 0\n')
+        (tree / 'include').mkdir(exist_ok=True)
+        (tree / 'include/shadow.h').write_text('#define SHADOW 0\n')
+        win = tree / 'tools/etude/win'
+        win.mkdir(exist_ok=True)
+        (tree / 'tools/etude/volume').mkdir(exist_ok=True)
+        (tree / 'tools/etude/schemas').mkdir(exist_ok=True)
+        (tree / 'tools/etude/schemas/history.schema.json').write_text('{}\n')
+        (win / 'value.h').write_text('#define VALUE 0\n')
+        (win / 'wintarget.c').write_text('#include "value.h"\n#include <shadow.h>\n'
+                                       '#include <external.h>\nint main(void) { return VALUE + SHADOW + EXTERNAL; }\n')
+        for name in ('winstand.c', 'fixture.c', 'main.c', 'image_command.c'):
+            (win / name).write_text('int main(void) { return 0; }\n')
+        for name in ('hold.c', 'winfmt.c', 'files.c'):
+            (win / name).write_text('typedef int fixture_declaration;\n')
+        (tree / 'tools/etude/volume/volume.c').write_text('typedef int fixture_declaration;\n')
+        (tree / 'tools/etude/volume/etude_volume.c').write_text('int main(void) { return 0; }\n')
+        (tree / 'tools/etude/sources.mk').write_text(
+            'ETUDE_WIN_FIXTURE_SRC = tools/etude/win/fixture.c\n'
+            'ETUDE_WIN_EXEC_SRC = tools/etude/win/files.c\n'
+            'ETUDE_WIN_FILE_SRC = tools/etude/win/files.c\n'
+            'ETUDE_WIN_SRC = tools/etude/win/main.c\n'
+            'ETUDE_VOLUME_SRC = tools/etude/volume/etude_volume.c tools/etude/volume/volume.c\n')
+        # A test compiler models Win32 flags and automatic executable suffixes.
+        wrapper = tree / 'compiler.py'
+        wrapper.write_text('import os, subprocess, sys\n'
+                           'args = [a for a in sys.argv[1:] if a not in '
+                           "(\'-static\', \'-municode\', \'-lws2_32\', \'-lbcrypt\')]\n"
+                           'args += ["-Iinclude", "-isystem", ' + repr(str(sdk)) + ']\n'
+                           'result = subprocess.run([' + repr(str(compiler)) + ', *args])\n'
+                           'if result.returncode == 0 and "-o" in args:\n'
+                           '    output = args[args.index("-o") + 1]\n'
+                           '    os.replace(output, output + ".exe")\n'
+                           'sys.exit(result.returncode)\n')
+        (tree / 'cc').unlink(missing_ok=True)
+        (tree / 'cc').symlink_to(compiler)
+        return wrapper
+
     def test_etude_partition_modes(self):
         repo = Path(__file__).resolve().parents[2]
-        sys.path.insert(0, str(repo / 'tests/cases/host'))
-        import prepare as inventory
-        import routing
         manifest = json.loads((repo / 'tests/cases/host.host.json').read_text())
-        cases = {c['case_id']: c for c in manifest['cases'] if
-                 c['case_id'] in ('host.host.etude', 'host.host.etude_quiet')}
         owners = {}
-        for identity, case in cases.items():
+        for case in manifest['cases']:
+            if case['case_id'] not in ('host.host.etude', 'host.host.etude_quiet'):
+                continue
             limit = next(w['limit'] for w in case['progress'] if w['witness_id'] == 'checks')
             self.assertEqual(limit, len(case['assertions']))
-            for assertion in case['assertions']:
-                name = assertion['assertion_id']
-                if name != 'listed':
-                    self.assertNotIn(name, owners)
-                    owners[name] = identity
-        self.assertEqual({name for name, owner in owners.items() if owner.endswith('_quiet')},
+            for row in case['assertions']:
+                if row['assertion_id'] != 'listed':
+                    self.assertNotIn(row['assertion_id'], owners)
+                    owners[row['assertion_id']] = case['case_id'].endswith('_quiet')
+        self.assertEqual({name for name, alone in owners.items() if alone},
                          {'etude_platform', 'etude_remote', 'etude_repeat'})
-        for windows_host in (False, True):
-            with self.subTest(windows=windows_host), \
-                    patch.object(routing, 'windows_host', return_value=windows_host):
-                prepared = list(inventory.checks('etude', 'i686', Path('build/tests/host-suite/etude')))
-            self.assertEqual({item['assertion_id'] for item in prepared}, set(owners))
-            for item in prepared:
-                self.assertEqual(item['mode'], 'alone' if owners[item['assertion_id']].endswith('_quiet')
-                                 else 'shared', item['assertion_id'])
+        with tempfile.TemporaryDirectory(prefix='rach2-partition.') as work:
+            tree = Path(work)
+            self.native_tree(tree)
+            for source in (repo / 'tests/host').glob('etude_*_hosttest.c'):
+                if 'host-arch:' in source.read_text():
+                    continue
+                identity = source.stem.removesuffix('_hosttest')
+                self.assertIn(identity, owners)
+                alone = 'host-alone: native isolation\n' if 'host-alone:' in source.read_text() else ''
+                self.native_source(tree, source.name, alone)
+            for windows in (False, True):
+                env = {'HOST_TEST_PLATFORM': 'windows'} if windows else {}
+                if windows:
+                    self.windows_tree(tree)
+                record, _ = self.native_prepare(tree, 'etude', env=env)
+                self.assertEqual({row['assertion_id'] for row in record['checks']}, set(owners))
+                for row in record['checks']:
+                    self.assertEqual(row['mode'], 'alone' if owners[row['assertion_id']] else 'shared')
 
     def test_script_partition_routes(self):
         repo = Path(__file__).resolve().parents[2]
-        sys.path.insert(0, str(repo / 'tests/cases/host'))
-        import fixtures
-        import routing
-        names = [line.split('|', 1)[0] for line in
-                 (repo / 'tests/cases/host/host.list').read_text().splitlines()
-                 if line and not line.startswith('#')]
-        native = set(fixtures.NAMES) | set(json.loads(
-            (repo / 'tests/cases/host/adapters.json').read_text()))
-        self.assertEqual((len(names), len(set(names)), len(native)), (45, 45, 10))
-        for name in names:
-            self.assertEqual(routing.backend(name, [], 'scripts'),
-                             'native' if name in native else 'gnu', name)
-        manifest = json.loads((repo / 'tests/cases/host.host.json').read_text())
-        case = next(c for c in manifest['cases'] if
-                    c['case_id'] == 'host.host.scripts_images')
-        assertion = next(a for a in case['assertions'] if
-                         a['assertion_id'] == 'mkext2_overlay')
-        case['assertions'].remove(assertion)
-        with patch.object(routing, 'Path') as path:
-            path.return_value.read_text.return_value = json.dumps(manifest)
-            with self.assertRaisesRegex(ValueError, 'exactly one declared partition'):
-                routing.backend('mkext2_overlay', [], 'scripts')
-            case['assertions'].extend([assertion, assertion])
-            path.return_value.read_text.return_value = json.dumps(manifest)
-            with self.assertRaisesRegex(ValueError, 'exactly one declared partition'):
-                routing.backend('mkext2_overlay', [], 'scripts')
-        with self.assertRaisesRegex(ValueError, 'exactly one declared partition'):
-            routing.backend('unknown-script', [], 'scripts')
+        with tempfile.TemporaryDirectory(prefix='rach2-script-route.') as work:
+            tree = Path(work)
+            self.native_tree(tree)
+            for name in ('host.list', 'adapters.json'):
+                shutil.copy2(repo / 'tests/cases/host' / name, tree / 'tests/cases/host' / name)
+            shutil.copy2(repo / 'tests/cases/host.host.json', tree / 'tests/cases/host.host.json')
+            import re
+            recipe = (repo / 'mk/host-fixtures.mk').read_text()
+            for name in set(re.findall(r'(?:rach2|tests)/[A-Za-z0-9_./-]+\.(?:c|h|py)', recipe)):
+                source = repo / name
+                if source.is_file():
+                    (tree / name).parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, tree / name)
+            shutil.copy2(repo / 'mk/host-fixtures.mk', tree / 'mk/host-fixtures.mk')
+            _, output = self.native_prepare(tree, 'scripts', ['--print-commands'])
+            self.assertIn('fixtures/chown_plan.c', output)
+            manifest = json.loads((tree / 'tests/cases/host.host.json').read_text())
+            names = [line.split('|', 1)[0] for line in
+                     (tree / 'tests/cases/host/host.list').read_text().splitlines()
+                     if line and not line.startswith('#')]
+            self.assertEqual((len(names), len(set(names))), (45, 45))
+            case = next(row for row in manifest['cases'] if row['case_id'] == 'host.host.scripts_images')
+            assertion = next(row for row in case['assertions'] if row['assertion_id'] == 'mkext2_overlay')
+            case['assertions'].remove(assertion)
+            for extra in ([], [assertion, assertion]):
+                case['assertions'].extend(extra)
+                (tree / 'tests/cases/host.host.json').write_text(json.dumps(manifest))
+                self.native_prepare(tree, 'scripts', ['--print-commands'], expected=1)
 
     def test_gnu_inventory_predecessor(self):
-        repo = Path(__file__).resolve().parents[2]
-        sys.path.insert(0, str(repo / 'tests/cases/host'))
-        import prepare as inventory
-        compiler = Path(shutil.which('cc')).resolve()
-        output = 'build/tests/host-suite/checkers.inventory.json'
-        compiles, flags = [], []
-        real_run = subprocess.run
-
-        def execute(argv, **kwargs):
-            if '-o' in argv and '-MM' not in argv and '-M' not in argv:
-                compiles.append(argv)
-            return real_run(argv, **kwargs)
-
-        def checks(group, arch, base):
-            for name in ('first', 'second'):
-                source, program = name + '.c', str(base / name)
-                item = inventory.entry(name, name, program, [source])
-                item['command'] = ['-std=c99', '-O0', '-Iinclude', *flags,
-                                   '-o', program, source]
-                item['data'] = ['runtime.txt']
-                yield item
-
-        def prepare(tree, previous=None):
-            args = SimpleNamespace(output=output, group='checkers', arch='i686', gnu=True,
-                                   print_commands=False, only=None, previous=previous)
-            with patch.object(inventory, 'ROOT', tree), \
-                    patch.dict(os.environ, {'CC': str(tree / 'cc')}):
-                inventory.prepare(args)
-
-        with tempfile.TemporaryDirectory(prefix='rach2-gnu-reuse.') as directory:
-            root, cwd = Path(directory).resolve(), Path.cwd()
+        with tempfile.TemporaryDirectory(prefix='rach2-gnu-reuse.') as work:
+            root = Path(work)
             old, new = root / 'old', root / 'new'
-            programs = [Path(output).parent / 'checkers' / n for n in ('first', 'second')]
-
+            for tree in (old, new):
+                self.native_tree(tree)
+                (tree / 'include').mkdir()
+                (tree / 'include/choice.h').write_text('#define VALUE 0\n')
+                self.native_source(tree, 'first_hosttest.c', 'host-cflags: -Iinclude\n'
+                                   'host-inputs: runtime.txt\n',
+                                   '#include "choice.h"\nint main(void) { return VALUE; }\n')
+                self.native_source(tree, 'second_hosttest.c')
+                (tree / 'runtime.txt').write_text('initial runtime bytes\n')
+            record, _ = self.native_prepare(old, args=['--gnu'])
+            original = [(old / row['program']).read_bytes() for row in record['checks']]
             def retry(expected, statuses):
-                (new / output).unlink(missing_ok=True)
-                count = len(compiles)
-                prepare(new, old)
-                self.assertEqual(len(compiles) - count, expected)
-                self.assertEqual([real_run([str(new / p)]).returncode for p in programs], statuses)
-
-            try:
-                for tree in (old, new):
-                    (tree / 'tests/cases').mkdir(parents=True)
-                    (tree / 'tests/cases/host.host.json').write_text('{}\n')
-                    (tree / 'cc').symlink_to(compiler)
-                    (tree / 'include').mkdir()
-                    (tree / 'include/choice.h').write_text('#define VALUE 0\n')
-                    (tree / 'first.c').write_text('#include "choice.h"\nint main(void) { return VALUE; }\n')
-                    (tree / 'second.c').write_text('int main(void) { return 0; }\n')
-                    (tree / 'runtime.txt').write_text('first runtime input\n')
-                with patch.object(inventory, 'checks', side_effect=checks), \
-                        patch.object(subprocess, 'run', side_effect=execute):
-                    prepare(old)
-                    self.assertEqual(len(compiles), 2)
-                    originals = [(old / p).read_bytes() for p in programs]
-                    retry(0, [0, 0])
-                    self.assertEqual([(new / p).read_bytes() for p in programs], originals)
-                    self.assertNotEqual((old / programs[0]).stat().st_ino,
-                                        (new / programs[0]).stat().st_ino)
-                    (new / 'runtime.txt').write_text('changed runtime input\n')
-                    retry(0, [0, 0])
-                    published = json.loads((new / output).read_text())
-                    for check in published['checks']:
-                        self.assertNotIn('runtime.txt', [v['path'] for v in check['compile_inputs']])
-                        self.assertIn(dict(path='runtime.txt', sha256=inventory.digest(new / 'runtime.txt')),
-                                      check['inputs'])
-                    # Old inventories have no distinct compiler dependency list.
-                    legacy = json.loads((old / output).read_text())
-                    for check in legacy['checks']:
-                        del check['compile_inputs']
-                    (old / output).write_text(json.dumps(legacy))
-                    retry(0, [0, 0])
-                    (new / 'include/choice.h').write_text('#define VALUE 1\n')
-                    retry(1, [1, 0])
-                    (new / 'include/choice.h').write_text('#define VALUE 0\n')
-                    (new / 'choice.h').write_text('#define VALUE 2\n')
-                    retry(1, [2, 0])
-                    (new / 'choice.h').unlink()
-                    (new / 'second.c').write_text('int main(void) { return 3; }\n')
-                    retry(1, [0, 3])
-                    (new / 'second.c').write_text('int main(void) { return 0; }\n')
-                    flags.append('-DCHANGED_RECIPE=1')
-                    retry(2, [0, 0])
-                    flags.clear()
-                    identity = inventory.compiler_record
-
-                    def changed_identity(command):
-                        value = identity(command)
-                        value['version'] = 'a different compiler identity'
-                        return value
-
-                    with patch.object(inventory, 'compiler_record', side_effect=changed_identity):
-                        retry(2, [0, 0])
-                    self.assertEqual([(old / p).read_bytes() for p in programs], originals)
-                    (old / programs[0]).write_bytes(b'corrupt predecessor')
-                    retry(1, [0, 0])
-                for name in ('old-sdk', 'new-sdk'):
-                    (root / name).symlink_to(old, target_is_directory=True)
-                commands = [[str(compiler), '--sysroot=' + str(root / name),
-                             '-B' + str(root / name), '-L' + str(root / name)]
-                            for name in ('old-sdk', 'new-sdk')]
-                self.assertEqual(*[inventory.compiler_paths(c) for c in commands])
-            finally:
-                os.chdir(cwd)
+                (new / 'build/tests/host-suite/tests.inventory.json').unlink(missing_ok=True)
+                current, output = self.native_prepare(new, args=['--gnu', '--previous', str(old)])
+                self.assertEqual(output.count(' -o '), expected)
+                self.assertEqual([subprocess.run([str(new / row['program'])]).returncode
+                                  for row in current['checks']], statuses)
+                return current
+            retry(0, [0, 0])
+            (new / 'runtime.txt').write_text('new runtime bytes\n')
+            current = retry(0, [0, 0])
+            self.assertNotIn('runtime.txt', [row.get('path') for row in current['checks'][0]['compile_inputs']])
+            (new / 'include/choice.h').write_text('#define VALUE 1\n')
+            retry(1, [1, 0])
+            (new / 'include/choice.h').write_text('#define VALUE 0\n')
+            (new / 'tests/host/choice.h').write_text('#define VALUE 2\n')
+            retry(1, [2, 0])
+            (new / 'tests/host/choice.h').unlink()
+            self.native_source(new, 'second_hosttest.c', body='int main(void) { return 3; }\n')
+            retry(1, [0, 3])
+            self.native_source(new, 'first_hosttest.c', 'host-cflags: -Iinclude -DCHANGED=1\n',
+                               '#include "choice.h"\nint main(void) { return VALUE; }\n')
+            retry(2, [0, 3])
+            self.assertEqual([(old / row['program']).read_bytes() for row in record['checks']], original)
+            (old / record['checks'][0]['program']).write_bytes(b'corrupt predecessor')
+            retry(2, [0, 3])
 
     def test_shared_tool_predecessor(self):
-        repo = Path(__file__).resolve().parents[2]
-        sys.path.insert(0, str(repo / 'tests/cases/host'))
-        import prepare as inventory
-        original_run, compiles = subprocess.run, []
-
-        def execute(argv, **kwargs):
-            if '-o' in argv and '-MM' not in argv and '-M' not in argv:
-                compiles.append(argv)
-            return original_run(argv, **kwargs)
-
         with tempfile.TemporaryDirectory(prefix='rach2-tool-predecessor.') as work:
-            root, cwd = Path(work).resolve(), Path.cwd()
+            root = Path(work)
             old, new = root / 'old', root / 'new'
-            program = Path('build/tests/host-suite/tools/probe')
+            for tree in (old, new):
+                self.native_tree(tree)
+                self.native_source(tree, 'probe_hosttest.c', 'host-tools: mkfatfixture\n')
+                (tree / 'tests/host/value.h').write_text('#define VALUE 0\n')
+                (tree / 'tests/host/mkfatfixture.c').write_text(
+                    '#include "value.h"\nint main(void) { return VALUE; }\n')
+            self.native_prepare(old, args=['--gnu'])
+            program = Path('build/tests/host-suite/tools/mkfatfixture')
             marker = Path(str(program) + '.build.json')
-            compiler = Path(shutil.which('cc')).resolve()
-            sdk = root / 'sdk'
-            sdk.mkdir()
-            (sdk / 'external.h').write_text('#define EXTERNAL 0\n')
-            try:
-                for tree in (old, new):
-                    tree.mkdir()
-                    (tree / 'cc').symlink_to(compiler)
-                    (tree / 'sdk').symlink_to(sdk, target_is_directory=True)
-                    (tree / 'value.h').write_text('#define VALUE 0\n')
-                    (tree / 'probe.c').write_text('#include "value.h"\n#include <external.h>\n'
-                                                'int main(void) { return VALUE + EXTERNAL; }\n')
-
-                def prepare(tree, previous=None):
-                    os.chdir(tree)
-                    cc = [str(tree / 'cc')]
-                    with patch.object(inventory, 'ROOT', tree):
-                        return inventory.tools.prepare(['probe'], cc, ['-std=c99', '-isystem', str(tree / 'sdk')],
-                            inventory.compiler_inputs, inventory.digest,
-                            compiler_identity=inventory.compiler_record(cc), previous=previous)
-
-                with patch.dict(inventory.tools.SOURCES, {'probe': ['probe.c']}), \
-                        patch.object(subprocess, 'run', side_effect=execute):
-                    prepare(old)
-                    self.assertEqual(len(compiles), 1)
-                    before = ((old / program).read_bytes(), (old / marker).read_bytes())
-                    prepare(new, old)
-                    self.assertEqual(len(compiles), 1)
-                    self.assertEqual(((new / program).read_bytes(), (new / marker).read_bytes()), before)
-                    self.assertNotEqual((old / program).stat().st_ino, (new / program).stat().st_ino)
-                    prepare(new, old)
-                    self.assertEqual(len(compiles), 1)
-                    (new / 'value.h').write_text('#define VALUE 1\n')
-                    prepare(new, old)
-                    self.assertEqual(len(compiles), 2)
-                    self.assertEqual(original_run([str(new / program)]).returncode, 1)
-                    (sdk / 'external.h').write_text('#define EXTERNAL 2\n')
-                    prepare(new, old)
-                    self.assertEqual(len(compiles), 3)
-                    self.assertEqual(original_run([str(new / program)]).returncode, 3)
-                    self.assertEqual(((old / program).read_bytes(), (old / marker).read_bytes()), before)
-            finally:
-                os.chdir(cwd)
+            before = ((old / program).read_bytes(), (old / marker).read_bytes())
+            _, output = self.native_prepare(new, args=['--gnu', '--previous', str(old)])
+            self.assertEqual(output.count(' -o '), 0)
+            self.assertEqual(((new / program).read_bytes(), (new / marker).read_bytes()), before)
+            self.assertNotEqual((old / program).stat().st_ino, (new / program).stat().st_ino)
+            (new / 'tests/host/value.h').write_text('#define VALUE 1\n')
+            _, output = self.native_prepare(new, args=['--gnu'])
+            self.assertEqual(output.count(' -o '), 1)
+            self.assertEqual(subprocess.run([str(new / program)]).returncode, 1)
+            self.assertEqual(((old / program).read_bytes(), (old / marker).read_bytes()), before)
 
     def test_clean_goal_conditioning(self):
         original = dict(format='etude-preparation-receipt', run_id='original-production',
@@ -309,10 +288,6 @@ class ImportTests(unittest.TestCase):
 
     def test_sanitizer_source_binding(self):
         repo = Path(__file__).resolve().parents[2]
-        sys.path.insert(0, str(repo / 'tests/cases/host'))
-        spec = importlib.util.spec_from_file_location('sanitizer_fixture_tools', repo / 'tests/cases/host/tools.py')
-        tools = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(tools)
         name = 'build/tests/host-suite/sanitizer/tools.json'
         resolve = Path.resolve
         with tempfile.TemporaryDirectory(prefix='rach2-sanitizer-source.') as work:
@@ -326,9 +301,15 @@ class ImportTests(unittest.TestCase):
                     return source if path == Path('/usr/bin/atos') else resolve(path, *args, **kwargs)
                 with patch.object(sys, 'platform', 'darwin'), \
                         patch.object(product, 'windows_host', return_value=False), \
-                        patch.object(tools, 'external_tool', return_value=source), \
                         patch.object(Path, 'resolve', native_path):
-                    tools.sanitizer_tools(Path(name).parent, product.digest)
+                    snapshot = tree / Path(name).parent / 'atos'
+                    snapshot.parent.mkdir(parents=True)
+                    shutil.copy2(source, snapshot)
+                    provenance = Path(str(snapshot) + '.provenance.json')
+                    provenance.write_text(json.dumps(dict(source=str(source), sha256=product.digest(source))))
+                    bound = [dict(path=str(p.relative_to(tree)), sha256=product.digest(p))
+                             for p in (snapshot, provenance)]
+                    (tree / name).write_text(json.dumps(dict(schema_version=1, platform='darwin', inputs=bound)))
                     expected = {name, str(Path(name).parent / 'atos'),
                                 str(Path(name).parent / 'atos.provenance.json')}
                     self.assertEqual(set(product.validate_native(tree, {name: 'native'})), expected)
@@ -440,209 +421,83 @@ class ImportTests(unittest.TestCase):
                 product.nested_inputs(changed, anchors, 'm')
 
     def test_native_program_publication(self):
-        repo = Path(__file__).resolve().parents[2]
-        sys.path.insert(0, str(repo / 'tests/cases/host'))
-        import fixtures
-        with tempfile.TemporaryDirectory(prefix='rach2-native-publication-') as work:
-            output = Path(work, 'program')
-            output.write_bytes(b'old declared bytes')
-            emitted = Path(str(output) + '.exe')
-            emitted.write_bytes(b'MZnew compiler bytes')
-            self.assertEqual(fixtures.publish_program(output), output)
-            self.assertEqual(output.read_bytes(), b'MZnew compiler bytes')
-            self.assertFalse(emitted.exists())
-            self.assertEqual(fixtures.publish_program(output), output)
-            output.unlink()
-            with self.assertRaises(ValueError):
-                fixtures.publish_program(output)
+        with tempfile.TemporaryDirectory(prefix='rach2-native-publication.') as work:
+            tree = Path(work)
+            self.native_tree(tree)
+            self.native_source(tree, 'etude_platform_hosttest.c', 'host-alone: native isolation\n')
+            self.windows_tree(tree)
+            record, _ = self.native_prepare(tree, 'etude', env={'HOST_TEST_PLATFORM': 'windows'})
+            program = tree / record['checks'][0]['program']
+            self.assertTrue(program.is_file())
+            self.assertFalse(Path(str(program) + '.exe').exists())
 
     def test_shared_native_tool_reuse(self):
-        repo = Path(__file__).resolve().parents[2]
-        sys.path.insert(0, str(repo / 'tests/cases/host'))
-        import prepare as inventory
-
-        def tool_module():
-            spec = importlib.util.spec_from_file_location('fixture_tools', repo / 'tests/cases/host/tools.py')
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            module.SOURCES['probe'] = ['probe.c']
-            return module
-
-        original_run = subprocess.run
-        compiles = []
-
-        def execute(argv, **kwargs):
-            if '-o' in argv and '-MM' not in argv and '-M' not in argv:
-                compiles.append(argv)
-            return original_run(argv, **kwargs)
-
-        with tempfile.TemporaryDirectory(prefix='rach2-tool-reuse-') as work, \
-                tempfile.TemporaryDirectory(prefix='rach2-tool-sdk-') as sdk:
-            previous = Path.cwd()
-            try:
-                os.chdir(work)
-                Path('value.h').write_text('#define VALUE 1\n')
-                Path(sdk, 'external.h').write_text('#define EXTERNAL 1\n')
-                Path('probe.c').write_text('#include "value.h"\n#include <external.h>\n'
-                                           'int main(void) { return VALUE + EXTERNAL; }\n')
-                compiler = inventory.compiler_record(['cc'])
-                flags = ['-std=c99', '-g', '-isystem', sdk]
-                args = (['probe'], ['cc'], flags, inventory.compiler_inputs, inventory.digest)
-                with patch.object(inventory, 'ROOT', Path(work)), patch.object(subprocess, 'run', side_effect=execute):
-                    first = tool_module().prepare(*args, compiler_identity=compiler)
-                    target = Path('build/tests/host-suite/tools/probe')
-                    marker = Path(str(target) + '.build.json')
-                    before = target.stat()
-                    second = tool_module().prepare(*args, compiler_identity=compiler)
-                    self.assertEqual(first, second)
-                    self.assertEqual(len(compiles), 1)
-                    self.assertEqual((before.st_ino, before.st_mtime_ns),
-                                     (target.stat().st_ino, target.stat().st_mtime_ns))
-                    self.assertTrue(any(row['path'] == str(marker) for row in first))
-                    Path('value.h').write_text('#define VALUE 2\n')
-                    tool_module().prepare(*args, compiler_identity=compiler)
-                    self.assertEqual(len(compiles), 2)
-                    flags.append('-DSECOND_RECIPE=1')
-                    tool_module().prepare(*args, compiler_identity=compiler)
-                    self.assertEqual(len(compiles), 3)
-                    compiler = dict(compiler, version=compiler['version'] + ' changed')
-                    tool_module().prepare(*args, compiler_identity=compiler)
-                    self.assertEqual(len(compiles), 4)
-                    recorded = json.loads(marker.read_text())['recipe']['compiler_inputs']
-                    self.assertTrue(any(row['path'] == str(Path(sdk, 'external.h')) for row in recorded))
-                    Path(sdk, 'external.h').write_text('#define EXTERNAL 2\n')
-                    tool_module().prepare(*args, compiler_identity=compiler)
-                    self.assertEqual(len(compiles), 5)
-                    whole = target.read_bytes()
-                    target.write_bytes(whole + b'changed')
-                    with self.assertRaisesRegex(ValueError, 'bytes changed'):
-                        tool_module().prepare(*args, compiler_identity=compiler)
-                    self.assertEqual(len(compiles), 5)
-                    target.write_bytes(whole)
-                    marker.write_text('{}')
-                    with self.assertRaisesRegex(ValueError, 'invalid compiled host tool record'):
-                        tool_module().prepare(*args, compiler_identity=compiler)
-                    self.assertEqual(len(compiles), 5)
-            finally:
-                os.chdir(previous)
+        with tempfile.TemporaryDirectory(prefix='rach2-native-tool.') as work:
+            tree = Path(work)
+            self.native_tree(tree)
+            self.native_source(tree, 'probe_hosttest.c', 'host-tools: mkfatfixture\n')
+            (tree / 'tests/host/mkfatfixture.c').write_text('int main(void) { return 0; }\n')
+            first, _ = self.native_prepare(tree, args=['--gnu'])
+            program = tree / 'build/tests/host-suite/tools/mkfatfixture'
+            marker = Path(str(program) + '.build.json')
+            before = (program.read_bytes(), marker.read_bytes(), program.stat().st_mtime_ns)
+            second, output = self.native_prepare(tree, args=['--gnu'])
+            self.assertEqual(first, second)
+            self.assertEqual(output.count(' -o '), 0)
+            self.assertEqual(before, (program.read_bytes(), marker.read_bytes(), program.stat().st_mtime_ns))
+            program.write_bytes(before[0] + b'changed')
+            self.native_prepare(tree, args=['--gnu'], expected=1)
+            program.write_bytes(before[0])
+            for invalid in ({}, dict(schema_version=1, recipe={}, sha256=hashlib.sha256(before[0]).hexdigest())):
+                marker.write_text(json.dumps(invalid))
+                self.native_prepare(tree, args=['--gnu'], expected=1)
+            marker.write_bytes(before[1])
+            (tree / 'tests/host/mkfatfixture.c').write_text('invalid C syntax\n')
+            self.native_prepare(tree, args=['--gnu'], expected=1)
+            self.assertEqual((program.read_bytes(), marker.read_bytes()), before[:2])
 
     def test_windows_companion_reuse(self):
-        repo = Path(__file__).resolve().parents[2]
-        sys.path.insert(0, str(repo / 'tests/cases/host'))
-        import prepare as inventory
-        windows = inventory.windows
-        names = [row[0] for row in windows.companion_recipes()]
-        self.assertEqual(names, ['wintarget.exe', 'winstand.exe', 'etude.exe',
-                                 'etude-volume.exe', 'image-command.exe'])
-        recipes = [(name, [f'program{i}.c'], []) for i, name in enumerate(names)]
-        real_run, compiles = subprocess.run, []
-
-        def execute(argv, **kwargs):
-            linking = '-o' in argv and '-MM' not in argv and '-M' not in argv
-            if linking:
-                compiles.append(argv)
-            result = real_run(argv, **kwargs)
-            if linking:
-                # Model the Windows compiler's automatic executable suffix.
-                output = Path(argv[argv.index('-o') + 1])
-                output.replace(str(output) + '.exe')
-            return result
-
         with tempfile.TemporaryDirectory(prefix='rach2-companion-cache.') as work:
-            tree, previous = Path(work).resolve() / 'tree', Path.cwd()
-            tree.mkdir()
-            try:
-                os.chdir(tree)
-                Path('include').mkdir()
-                Path('include/choice.h').write_text('#define VALUE 0\n')
-                sdk = tree.parent / 'sdk'
-                sdk.mkdir()
-                (sdk / 'external.h').write_text('#define EXTERNAL 0\n')
-                Path('program0.c').write_text('#include "choice.h"\n#include <external.h>\n'
-                                              'int main(void) { return VALUE + EXTERNAL; }\n')
-                for i in range(1, 5):
-                    Path(f'program{i}.c').write_text('int main(void) { return 0; }\n')
-                schema = Path('tools/etude/schemas/history.schema.json')
-                schema.parent.mkdir(parents=True)
-                schema.write_text('{}\n')
-                flags = ['-std=c99', '-O0', '-Iinclude', '-isystem', str(sdk)]
-                identity = inventory.compiler_record(['cc'])
-                base = Path('build/tests/host-suite/etude')
-                root = base / 'platform'
-                programs = [root / name for name in names]
-
-                def prepare(expected, statuses):
-                    count = len(compiles)
-                    inputs = windows.companions(['cc'], base, inventory.compiler_inputs,
-                                                inventory.digest, compiler_identity=identity)
-                    self.assertEqual(len(compiles) - count, expected)
-                    self.assertEqual([real_run([str(p.resolve())]).returncode for p in programs], statuses)
-                    return inputs
-
-                with patch.object(inventory, 'ROOT', tree), \
-                        patch.object(windows, 'FLAGS', flags), \
-                        patch.object(windows, 'companion_recipes', return_value=recipes), \
-                        patch.object(subprocess, 'run', side_effect=execute):
-                    self.assertEqual(windows.companions(['cc'], base, inventory.compiler_inputs,
-                                                         inventory.digest, print_commands=True), [])
-                    self.assertFalse(root.exists())
-                    with patch.dict(inventory.tools.SOURCES, {'probe': ['program4.c']}):
-                        count = len(compiles)
-                        args = (Path('shared'), 'probe', ['cc'], ['-std=c99'],
-                                inventory.compiler_inputs, inventory.digest, identity, False)
-                        shared = inventory.tools.compiled_tool(*args)
-                        self.assertEqual(inventory.tools.compiled_tool(*args), shared)
-                        self.assertEqual(len(compiles) - count, 1)
-                    first = prepare(5, [0] * 5)
-                    self.assertTrue({str(schema), str(root / schema.name)} <=
-                                    {row['path'] for row in first})
-                    before = [(p.stat().st_ino, p.stat().st_mtime_ns) for p in programs]
-                    self.assertEqual(prepare(0, [0] * 5), first)
-                    self.assertEqual([(p.stat().st_ino, p.stat().st_mtime_ns) for p in programs], before)
-                    self.assertTrue(all(str(p) + '.build.json' in {v['path'] for v in first}
-                                        for p in programs))
-                    Path('include/choice.h').write_text('#define VALUE 1\n')
-                    prepare(1, [1, 0, 0, 0, 0])
-                    Path('include/choice.h').write_text('#define VALUE 0\n')
-                    Path('choice.h').write_text('#define VALUE 2\n')
-                    prepare(1, [2, 0, 0, 0, 0])
-                    Path('program1.c').write_text('int main(void) { return 3; }\n')
-                    statuses = [2, 3, 0, 0, 0]
-                    prepare(1, statuses)
-                    flags.append('-DCHANGED_RECIPE=1')
-                    prepare(5, statuses)
-                    identity = dict(identity, version=identity['version'] + ' changed')
-                    prepare(5, statuses)
-                    marker = Path(str(programs[0]) + '.build.json')
-                    recorded = json.loads(marker.read_text())['recipe']['compiler_inputs']
-                    self.assertTrue(any(v['path'] == str(sdk / 'external.h') for v in recorded))
-                    (sdk / 'external.h').write_text('#define EXTERNAL 3\n')
-                    prepare(1, [5, 3, 0, 0, 0])
-                    schema.write_text('{"changed":true}\n')
-                    changed = prepare(0, [5, 3, 0, 0, 0])
-                    self.assertEqual((root / schema.name).read_bytes(), schema.read_bytes())
-                    self.assertNotEqual(changed, first)
-                    whole, record = programs[0].read_bytes(), marker.read_bytes()
-                    count = len(compiles)
-                    programs[0].write_bytes(whole + b'changed')
-                    with self.assertRaisesRegex(ValueError, 'bytes changed'):
-                        prepare(0, [])
-                    self.assertEqual(len(compiles), count)
-                    programs[0].write_bytes(whole)
-                    marker.write_text('{}')
-                    with self.assertRaisesRegex(ValueError, 'invalid compiled host tool record'):
-                        prepare(0, [])
-                    marker.write_bytes(record)
-                    count = len(compiles)
-                    Path('program0.c').write_text('int main(void) { invalid C syntax; }\n')
-                    with self.assertRaises(subprocess.CalledProcessError):
-                        prepare(0, [])
-                    self.assertEqual(len(compiles) - count, 1)
-                    self.assertEqual(programs[0].read_bytes(), whole)
-                    self.assertEqual(marker.read_bytes(), record)
-                    self.assertFalse(list(root.glob('*.tmp*')))
-            finally:
-                os.chdir(previous)
+            tree = Path(work)
+            self.native_tree(tree)
+            self.native_source(tree, 'etude_platform_hosttest.c', 'host-alone: native isolation\n')
+            self.windows_tree(tree)
+            env = {'HOST_TEST_PLATFORM': 'windows'}
+            first, _ = self.native_prepare(tree, 'etude', env=env)
+            root = tree / 'build/tests/host-suite/etude/platform'
+            names = ['wintarget.exe', 'winstand.exe', 'etude.exe', 'etude-volume.exe', 'image-command.exe']
+            programs = [root / name for name in names]
+            before = [(p.read_bytes(), p.stat().st_mtime_ns) for p in programs]
+            second, output = self.native_prepare(tree, 'etude', env=env)
+            self.assertEqual(first, second)
+            self.assertEqual(output.count(' -o '), 0)
+            self.assertEqual(before, [(p.read_bytes(), p.stat().st_mtime_ns) for p in programs])
+            header = tree / 'tools/etude/win/value.h'
+            header.write_text('#define VALUE 1\n')
+            _, output = self.native_prepare(tree, 'etude', env=env)
+            self.assertEqual(output.count(' -o '), 1)
+            self.assertEqual(subprocess.run([str(programs[0])]).returncode, 1)
+            header.write_text('#define VALUE 0\n')
+            (tree / 'tools/etude/win/shadow.h').write_text('#define SHADOW 2\n')
+            _, output = self.native_prepare(tree, 'etude', env=env)
+            self.assertEqual(output.count(' -o '), 1)
+            self.assertEqual(subprocess.run([str(programs[0])]).returncode, 2)
+            sdk = tree.parent / 'sdk'
+            (sdk / 'external.h').write_text('#define EXTERNAL 3\n')
+            _, output = self.native_prepare(tree, 'etude', env=env)
+            self.assertEqual(output.count(' -o '), 1)
+            self.assertEqual(subprocess.run([str(programs[0])]).returncode, 5)
+            marker = Path(str(programs[0]) + '.build.json')
+            before = (programs[0].read_bytes(), marker.read_bytes())
+            programs[0].write_bytes(before[0] + b'changed')
+            self.native_prepare(tree, 'etude', env=env, expected=1)
+            programs[0].write_bytes(before[0])
+            marker.write_text('{}')
+            self.native_prepare(tree, 'etude', env=env, expected=1)
+            marker.write_bytes(before[1])
+            (tree / 'tools/etude/win/wintarget.c').write_text('invalid C syntax\n')
+            self.native_prepare(tree, 'etude', env=env, expected=1)
+            self.assertEqual((programs[0].read_bytes(), marker.read_bytes()), before)
 
     def test_windows_vectors(self):
         goals = ['build/tests/cases/machine/scenario' + str(i) for i in range(900)]

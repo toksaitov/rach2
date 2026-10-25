@@ -55,7 +55,12 @@ ETUDE_AUTHORITY_SRC = tools/etude/authority.c tools/etude/authority_parse.c \
 ETUDE_AUTHORITY_RUN_SRC = tools/etude/authority_main.c tools/etude/authority_run.c \
                           tools/etude/routine_proof.c
 
-ETUDE_RUN_SRC = $(ETUDE_AUTHORITY_SRC) $(ETUDE_AUTHORITY_RUN_SRC) tools/etude/repeat.c tools/etude/collection_repeat.c tools/etude/collection_load.c \
+ETUDE_HOST_PREPARE_SRC = tools/etude/host_prepare.c tools/etude/host_prepare_io.c \
+    tools/etude/host_prepare_build.c tools/etude/host_prepare_tools.c \
+    tools/etude/host_prepare_style.c tools/etude/host_prepare_scripts.c \
+    tests/cases/host/host_script_inventory.c
+
+ETUDE_RUN_SRC = $(ETUDE_AUTHORITY_SRC) $(ETUDE_AUTHORITY_RUN_SRC) $(ETUDE_HOST_PREPARE_SRC) tools/etude/repeat.c tools/etude/collection_repeat.c tools/etude/collection_load.c \
                 tools/etude/posix/load.c $(ETUDE_OBSERVE_SRC) tools/etude/measurement_context.c \
                 tools/etude/boot_identity.c tools/etude/collection.c \
                 tools/etude/posix/run_suites.c tools/etude/posix/legacy.c \
