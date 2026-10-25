@@ -137,35 +137,41 @@ static int count_in_log(const char *needle)
     return found;
 }
 
-/** Whether the boot line has `word` on it. */
+/** Whether the whole boot line has the token `word` on it. */
 static int cmdline_has(const char *word)
 {
-    static char line[256];
+    char line[256];
     int fd;
     int n;
     int i;
+    int matched = 0;
+    int equal = 1;
+    int found = 0;
 
     fd = syscall3(SYS_OPEN, (long)"/proc/cmdline", O_RDONLY, 0);
     if (fd < 0) {
         return 0;
     }
-    n = syscall3(SYS_READ, fd, (long)line, (int)sizeof(line) - 1);
+    while (!found && (n = syscall3(SYS_READ, fd, (long)line, (int)sizeof(line))) > 0) {
+        for (i = 0; i < n; i++) {
+            if (line[i] == ' ' || line[i] == '\t' || line[i] == '\n') {
+                if (equal && word[matched] == '\0') {
+                    found = 1;
+                    break;
+                }
+                matched = 0;
+                equal = 1;
+            } else if (equal) {
+                if (word[matched] != '\0' && word[matched] == line[i]) {
+                    matched++;
+                } else {
+                    equal = 0;
+                }
+            }
+        }
+    }
     syscall3(SYS_CLOSE, fd, 0, 0);
-    if (n <= 0) {
-        return 0;
-    }
-    line[n] = '\0';
-    for (i = 0; i < n; i++) {
-        int k = 0;
-
-        while (word[k] && i + k < n && line[i + k] == word[k]) {
-            k++;
-        }
-        if (word[k] == '\0') {
-            return 1;
-        }
-    }
-    return 0;
+    return found || (n == 0 && equal && word[matched] == '\0');
 }
 
 /** Whether the boot line switched USB off. */
