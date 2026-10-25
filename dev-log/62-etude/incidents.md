@@ -1478,3 +1478,9 @@ The fixture now writes every dynamic invocation pathname with the existing JSON 
 The native set-driver fixture rejected its mixed and width child statuses even though the driver output reported the expected suite results and the side files reported zero claims and leaks. The fixture changes a controller status to 121 when its native Job still has active processes, but did not record which processes caused that decision. Side files alone cannot distinguish an owned descendant from native console teardown, and no such distinction has yet been measured.
 
 The fixture now records the original controller status and each observed Job member's PID, creation identity, executable, controller or descendant role, process state and query error before its existing forced cleanup. The 121 refusal remains unchanged, as do all child and ledger checks. This is diagnostic evidence for a targeted native fixture rerun after the active collection, not a completed repair or a passing result.
+
+## A native stop sender detached before its event was handled (#1143)
+
+The native legacyset fixture ended with Windows status `0xC000013A` while exercising Ctrl-Break delivery. Its sender attached itself to the child's console, registered an ignore callback, generated the asynchronous event and immediately detached. Console reassignment resets the callback table, so the sender could lose that callback before receiving its own event.
+
+The sender now keeps the callback installed until a private native event confirms that it handled its Ctrl-Break. It then detaches, restores its prior callback when one was registered, and closes the event handle. The real child still receives the same console event. No timing bound or stop/history/ledger assertion changes. The targeted native legacyset rerun remains pending, and its independent child-status diagnostics do not accept any unknown Job member.
