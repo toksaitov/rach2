@@ -77,4 +77,4 @@ The image and installer checks of `host.host.scripts` use `host/host_image.c` an
 
 The grow scenarios read saved exFAT files directly with the prepared native `mkexfatfixture`, whose complete output goes to a file. The native archive reader extracts `ranges.txt` from the grow plan and requires exactly one regular entry with that name. The drill runs the prepared C recovery-authority checker; its shell entry is used only during artifact preparation.
 
-The GNU login controller writes its SFTP batch in binary mode. The Rach2 client adapter reads these command bytes without native newline translation; a destination's basename must not contain a CR from a Windows text-mode writer. The real SFTP command, returned bytes and confirmed client cleanup remain the assertions.
+The GNU login controller writes its SFTP batch in binary mode, as the UEFI controller writes its install-answer script. The Rach2 client adapter reads these command bytes without native newline translation; a destination's basename or shell token must not contain a CR from a Windows text-mode writer. The real commands, returned bytes and confirmed client cleanup remain the assertions.
