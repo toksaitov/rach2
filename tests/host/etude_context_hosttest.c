@@ -16,6 +16,7 @@
  */
 #include "../../tools/etude/measurement_context.h"
 #include "../../tools/etude/boot_identity.h"
+#include "../../tools/etude/posix/store.h"
 #include "../../utils/sha256.h"
 #include "compat/fixdir_host.c"
 #include <stdint.h>
@@ -488,9 +489,35 @@ static int test_context(void)
     return failures ? 1 : 0;
 }
 
+/* Cancellation uses the existing copy owner, leaving no partial output. */
+static void test_import_copy(void)
+{
+    char source[4096], target[4096], before[65], after[65], text[2048];
+    snprintf(source, sizeof(source), "%s", fix_path("copy-source"));
+    snprintf(target, sizeof(target), "%s", fix_path("copy-target"));
+    put("copy-source", "source payload\n");
+    descriptor("copy-source", text, before);
+    volatile sig_atomic_t stop = SIGTERM;
+    CHECK(store_copy_range_stop(source, 0, 15, target, &stop) == -1 && errno == ECANCELED,
+          "native import copy honors an already received stop");
+    CHECK(access(target, F_OK) == -1 && errno == ENOENT,
+          "cancelled native import removes its partial destination");
+    CHECK(!store_copy_range(source, 0, 15, target), "ordinary sparse copy remains unchanged");
+    descriptor("copy-target", text, after);
+    CHECK(!strcmp(before, after), "ordinary copy preserves every source byte");
+    CHECK(store_copy_range_stop(source, 0, 15, target, NULL) == -1 && errno == EEXIST,
+          "native import copy refuses an existing private destination");
+    descriptor("copy-target", text, after);
+    CHECK(!strcmp(before, after), "refusal preserves the existing destination");
+    descriptor("copy-source", text, after);
+    CHECK(!strcmp(before, after), "stop, success and refusal preserve the source");
+}
+
 int main(int argc, char **argv)
 {
+    fix_dir();
     test_external_json();
+    test_import_copy();
     if (argc == 2 && !strcmp(argv[1], "--data-only")) {
         fix_dir();
         if (!failures)

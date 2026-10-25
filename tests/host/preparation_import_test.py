@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shlex
 import struct
 import shutil
 import subprocess
@@ -16,9 +17,10 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'tools/etude'))
-import preparation_import as product
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'tools/ci/fixtures'))
-from routine_route_test import RouteTests
+if not [a for a in sys.argv[1:] if not a.startswith('-')] or any(
+        a.startswith('RouteTests') for a in sys.argv[1:]):
+    from routine_route_test import RouteTests
 
 
 class ImportTests(unittest.TestCase):
@@ -227,198 +229,347 @@ class ImportTests(unittest.TestCase):
             self.assertEqual(subprocess.run([str(new / program)]).returncode, 1)
             self.assertEqual(((old / program).read_bytes(), (old / marker).read_bytes()), before)
 
-    def test_clean_goal_conditioning(self):
-        original = dict(format='etude-preparation-receipt', run_id='original-production',
-                        start=dict(monotonic_us=10), end=dict(monotonic_us=20))
-        for state in ('clean', 'retained', 'unknown', None):
-            receipt = dict(original)
-            if state:
-                receipt['conditioning'] = dict(inhouse=state, backend='ordinary', provenance=None)
-            before = json.dumps(receipt, sort_keys=True)
-            if state == 'clean':
-                product.clean_goals(receipt, {'image': 'portable'}, 'clean')
+    def test_native_exfat_filename(self):
+        with tempfile.TemporaryDirectory(prefix='rach2-exfat-record.') as work:
+            tree = Path(work)
+            self.native_tree(tree)
+            root = tree / 'build/tests/host-suite/tools/exfat_external'
+            source = tree / 'tests/host/mkexfat_external.sh'
+            source.write_text('exit 91\n')
+            paths = ['exfat_external.img', 'exfat_external.manifest', 'writer',
+                     'exfat_src/hello.txt', 'exfat_src/pattern.bin', 'exfat_src/Sub Dir/inner.txt',
+                     'exfat_src/empty', 'exfat_src/e\u00e9t\u00e9.txt',
+                     'exfat_src/A name of some length that takes more than one name entry.txt']
+            for name in paths:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'fixture bytes\n')
+            marker = tree / 'build/tests/host/exfat_writer'
+            marker.parent.mkdir(parents=True)
+            expected = dict(producer_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+                            files={name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+                                   for name in paths})
+            marker.write_text(json.dumps(expected, sort_keys=True) + '\n')
+            original = marker.read_bytes()
+            repo = Path(__file__).resolve().parents[2]
+            binary = Path(os.environ.get('ETUDE_HOST_PREPARE', str(repo / 'build/tools/etude/etude'))).resolve()
+            result = subprocess.run([str(binary), 'prepare', '-H', '--only', 'external-exfat',
+                                     'tools', str(marker)], cwd=tree, text=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertEqual(marker.read_bytes(), original)
+            name = 'tests/host/e\u00e9t\u00e9.txt'
+            (tree / name).write_bytes(b'input bytes\n')
+            self.native_source(tree, 'probe_hosttest.c', 'host-inputs: ' + name + '\n')
+            record, _ = self.native_prepare(tree, args=['--gnu'])
+            inputs = record['checks'][0]['inputs']
+            self.assertIn(dict(path_hex=os.fsencode(name).hex(),
+                               sha256=hashlib.sha256((tree / name).read_bytes()).hexdigest()), inputs)
+            self.assertTrue(all('path' not in row or row['path'].isascii() for row in inputs))
+
+    @staticmethod
+    def describe_file(path):
+        return dict(sha256=hashlib.sha256(path.read_bytes()).hexdigest(), size_bytes=path.stat().st_size)
+
+    def import_fixture(self, directory, goals=None, checks=None):
+        repo = Path(__file__).resolve().parents[2]
+        tree, producer = Path(directory) / 'native', Path(directory) / 'producer'
+        tree.mkdir()
+        producer.mkdir()
+        goals = list(goals or ['build/images/root.disk'])
+        (tree / 'tests/cases').mkdir(parents=True)
+        (tree / '.gitignore').write_text('build/\nvendor/\n')
+        (tree / 'source.c').write_text('#include "value.h"\nint main(void) { return VALUE; }\n')
+        (tree / 'value.h').write_text('#define VALUE 0\n')
+        artifacts = [dict(node=name.removeprefix('build/x86_64/').removeprefix('build/'),
+                          per_architecture=name.startswith('build/x86_64/')) for name in goals]
+        manifest = dict(cases=[dict(architectures=['i686', 'x86_64'], prepare=artifacts)])
+        manifest_path = tree / 'tests/cases/host.host.json'
+        manifest_path.write_text(json.dumps(manifest))
+        native = 'build/tests/cases/machine/a'
+        (tree / 'Makefile').write_text(
+            native + ': source.c value.h build/images/root.disk\n'
+            '\t@mkdir -p $(@D)\n\t@printf "compile\\n" >> build/compile.calls\n'
+            '\t$(CC) -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -o $@ $<\n'
+            '.PHONY: build/images/root.disk\nbuild/images/root.disk:\n\t@mkdir -p $(@D)\n\t@printf changed > $@\n')
+        files, texts, nested = {}, {}, {}
+        compiler = Path(shutil.which('cc')).resolve()
+        for name in goals:
+            path = producer / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if name.endswith('.inventory.json'):
+                inventory = dict(schema_version=1, manifest_sha256=self.describe_file(manifest_path)['sha256'],
+                                 compiler=dict(executable=str(compiler), sha256=self.describe_file(compiler)['sha256']),
+                                 checks=checks or [])
+                text = json.dumps(inventory)
+                path.write_text(text)
+                texts[name] = text
+                fixture = 'inventory-' + str(len(texts)) + '.json'
+                (tree / fixture).write_text(text)
+                with (tree / 'Makefile').open('a') as stream:
+                    stream.write(name + ': ' + fixture + '\n\t@mkdir -p $(@D)\n\tcp $< $@\n')
+                for check in checks or []:
+                    for row in check['inputs']:
+                        relative = os.fsdecode(bytes.fromhex(row['path_hex'])) if 'path_hex' in row else row['path']
+                        if Path(relative).is_absolute() or relative.startswith('../') or '/..' in relative:
+                            continue
+                        item = producer / relative
+                        item.parent.mkdir(parents=True, exist_ok=True)
+                        item.write_bytes(b'nested fixture bytes\n')
+                        nested[relative] = self.describe_file(item)
             else:
-                with self.assertRaises(ValueError):
-                    product.clean_goals(receipt, {'image': 'portable'}, 'clean')
-            product.clean_goals(receipt, {'image': 'portable'}, 'retained')
-            product.clean_goals(receipt, {'program': 'native', 'checks': 'inventory'}, 'clean')
-            self.assertEqual(json.dumps(receipt, sort_keys=True), before)
-        receipt = dict(original, conditioning=dict(inhouse='clean', backend='import',
-                                                   provenance={'sha256': 'fixture'}))
-        with self.assertRaises(ValueError):
-            product.clean_goals(receipt, {'image': 'portable'}, 'clean')
+                path.write_bytes(b'producer bytes\n')
+            files[name] = self.describe_file(path)
+        subprocess.run(['git', 'init', '-q', str(tree)], check=True)
+        subprocess.run(['git', '-C', str(tree), 'config', 'user.name', 'Preparation fixture'], check=True)
+        subprocess.run(['git', '-C', str(tree), 'config', 'user.email', 'fixture@example.invalid'], check=True)
+        binary = Path(os.environ.get('ETUDE_HOST_PREPARE', str(repo / 'build/tools/etude/etude'))).resolve()
+        state = SimpleNamespace(tree=tree, producer=producer, binary=binary, goals=goals, files=files,
+                                texts=texts, nested=nested, count=0)
+        self.import_source(state)
+        state.record = 'etude-prepare 1\ntree /fixture-producer\n' + ''.join(
+            'file {sha256} {size_bytes} 1 0 '.format(**value) + name + '\n'
+            for name, value in files.items())
+        state.receipt = dict(format='etude-preparation-receipt', schema_version=1,
+                             outcome='pass', cleanup='confirmed', commit=state.commit,
+                             run_id='fixture-ordinary-production', machine_id='fixture-machine', boot_id='fixture-boot',
+                             record_sha256=hashlib.sha256(state.record.encode()).hexdigest(),
+                             start=dict(utc='2026-10-24T00:00:00Z', monotonic_us=1, resolution_us=1),
+                             end=dict(utc='2026-10-24T00:00:01Z', monotonic_us=5, resolution_us=1),
+                             conditioning=dict(inhouse='clean', backend='ordinary', provenance=None))
+        state.metadata = dict(format='etude-preparation-producer', schema_version=1, commit=state.commit,
+                              source=state.source, record=state.record, receipt=state.receipt,
+                              validator=dict(path=str(binary), **self.describe_file(binary)),
+                              auxiliary={}, nested=nested, inventories=texts)
+        return state
+
+    def import_source(self, state):
+        subprocess.run(['git', '-C', str(state.tree), 'add', '.'], check=True)
+        subprocess.run(['git', '-C', str(state.tree), 'commit', '-qm', 'Fixture source',
+                        '--allow-empty'], check=True)
+        state.commit = subprocess.check_output(['git', '-C', str(state.tree), 'rev-parse', 'HEAD'],
+                                               text=True).strip()
+        snapshot = state.tree.parent / ('source-' + state.commit + '.json')
+        subprocess.run([str(state.binary), 'prepare', 'source', '--tree', str(state.tree), '--commit',
+                        state.commit, '--output', str(snapshot)], check=True, stdout=subprocess.PIPE)
+        state.source = {row['path']: {key: value for key, value in row.items() if key != 'path'}
+                        for row in json.loads(snapshot.read_text())['inputs']}
+        if hasattr(state, 'metadata'):
+            state.metadata.update(commit=state.commit, source=state.source)
+            state.receipt['commit'] = state.commit
+
+    def import_run(self, state, expected=0, conditioning='retained', producer=None, env=None, arches='i686', newline='\n'):
+        state.count += 1
+        output = state.tree / 'build/import-proof' / str(state.count)
+        work = output / 'work'
+        work.mkdir(parents=True)
+        metadata = state.producer / 'producer.json'
+        metadata.write_text(json.dumps(state.metadata))
+        config = dict(format='etude-preparation-import', schema_version=1, commit=state.commit,
+                      producer=dict(transport='local', tree=str(state.producer), metadata=str(metadata),
+                                    sha256=self.describe_file(metadata)['sha256']))
+        if producer:
+            config['producer'].update(producer)
+        (output / 'config.json').write_text(json.dumps(config))
+        request = output / 'request'
+        request.write_bytes((newline.join(state.goals) + newline).encode())
+        provenance = output / 'provenance.json'
+        actual = dict(os.environ, CC=str(Path(shutil.which('cc')).resolve()),
+                      MAKEFLAGS='', MFLAGS='', MAKELEVEL='')
+        actual.update(env or {})
+        result = subprocess.run(
+            [str(state.binary), 'prepare', 'import', '--tree', str(state.tree),
+             '--config', str(output / 'config.json'), '--request', str(request), '--work', str(work),
+             '--provenance', str(provenance), '--commit', state.commit, '--arches', arches,
+             '--conditioning', conditioning], env=actual, text=True, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT)
+        self.assertEqual(result.returncode, expected, result.stdout)
+        self.assertEqual(provenance.exists(), expected == 0)
+        return json.loads(provenance.read_text()) if not expected else None
+
+    def test_request_lines(self):
+        with tempfile.TemporaryDirectory(prefix='rach2-request-lines.') as work:
+            state = self.import_fixture(work)
+            self.import_run(state, newline='\r\n')
+            original = state.goals[:]
+            state.goals = [original[0].replace('images', 'ima\rges')]
+            self.import_run(state, expected=1)
+
+    def test_clean_goal_conditioning(self):
+        with tempfile.TemporaryDirectory(prefix='rach2-clean-import.') as work:
+            state = self.import_fixture(work)
+            original = dict(state.receipt)
+            for regime in ('clean', 'retained', 'unknown', None):
+                state.receipt.clear()
+                state.receipt.update(original)
+                state.receipt.pop('conditioning', None)
+                if regime:
+                    state.receipt['conditioning'] = dict(inhouse=regime, backend='ordinary', provenance=None)
+                before = json.dumps(state.receipt, sort_keys=True)
+                self.import_run(state, expected=0 if regime == 'clean' else 1, conditioning='clean')
+                self.import_run(state)
+                self.assertEqual(json.dumps(state.receipt, sort_keys=True), before)
+            state.receipt['conditioning'] = dict(inhouse='clean', backend='import', provenance={'sha256': 'fixture'})
+            self.import_run(state, expected=1, conditioning='clean')
 
     def test_roles(self):
-        for value in ('build/tests/cases/machine/install.disk',
-                      'build/x86_64/tests/cases/machine/install.disk',
-                      'build/tests/cases/machine/test-password',
-                      'build/tests/cases/host/fstool',
-                      'build/tests/host-suite/schemas/case.schema.json',
-                      'build/tests/style/sparse.json', 'build/tests/hello'):
-            self.assertEqual(product.role(value), 'portable', value)
-        for value in ('build/tests/cases/machine/disk', 'build/tools/etude/etude',
-                      'build/krffs/readfile.krffs', 'build/tests/host-suite/scripts/kstack',
-                      'build/tests/host-suite/sanitizer/tools.json'):
-            self.assertEqual(product.role(value), 'native', value)
-        self.assertEqual(product.role('build/tests/host-suite/tests.inventory.json'), 'inventory')
+        portable = ['build/tests/cases/machine/install.disk', 'build/x86_64/tests/cases/machine/install.disk',
+                    'build/tests/cases/machine/test-password', 'build/tests/cases/host/fstool',
+                    'build/tests/host-suite/schemas/case.schema.json', 'build/tests/hello']
+        native = ['build/tests/cases/machine/disk', 'build/tools/etude/etude', 'build/krffs/readfile.krffs',
+                  'build/tests/host-suite/scripts/kstack', 'build/tests/host-suite/sanitizer/tools.json']
+        with tempfile.TemporaryDirectory(prefix='rach2-import-roles.') as work:
+            state = self.import_fixture(work, portable + native)
+            with (state.tree / 'Makefile').open('a') as stream:
+                stream.write('%:\n\t@mkdir -p $(@D)\n\tcp /usr/bin/true $@\n')
+                name = native[-1]
+                stream.write('.PHONY: ' + name + '\n' + name + ':\n\t@mkdir -p $(@D)\n\t' +
+                             str(state.binary) + ' prepare -H --only sanitizer tools $(@D)\n')
+            self.import_source(state)
+            proof = self.import_run(state)
+            self.assertEqual(proof['roles'], dict.fromkeys(portable, 'portable') | dict.fromkeys(native, 'native'))
 
     def test_sanitizer_file_goal(self):
         repo = Path(__file__).resolve().parents[2]
         name = 'build/tests/host-suite/sanitizer/tools.json'
-        goals = product.manifest_goals(repo)
-        self.assertIn(name, goals)
-        self.assertNotIn(str(Path(name).parent), goals)
-        recipe = (repo / 'Makefile').read_text().split('.PHONY: host-sanitizer-force\n')[1].split('\n\n')[0]
+        declarations = [json.loads(path.read_text()) for path in (repo / 'tests/cases').glob('*.json')]
+        self.assertTrue(any(a['node'] == 'tests/host-suite/sanitizer/tools.json'
+                            for document in declarations for case in document['cases']
+                            for a in case.get('prepare', [])))
         with tempfile.TemporaryDirectory(prefix='rach2-sanitizer-goal.') as work:
-            tree = Path(work)
-            (tree / 'tests/cases').mkdir(parents=True)
-            (tree / 'tests/cases/host').symlink_to(repo / 'tests/cases/host', target_is_directory=True)
-            (tree / 'tests/host').symlink_to(repo / 'tests/host', target_is_directory=True)
-            (tree / 'Makefile').write_text('.PHONY: host-sanitizer-force\n' + recipe + '\n')
-            with patch.dict(os.environ, {'MAKEFLAGS': '', 'MFLAGS': '', 'MAKELEVEL': ''}):
-                product.build_native(tree, {name: 'native'}, [])
-            self.assertTrue((tree / name).is_file())
-            artifacts = product.validate_native(tree, {name: 'native'})
-            self.assertEqual(artifacts[name], product.describe(tree / name))
-            manifest = json.loads((tree / name).read_text())
+            state = self.import_fixture(work, [name])
+            with (state.tree / 'Makefile').open('a') as stream:
+                stream.write('.PHONY: ' + name + '\n' + name + ':\n\t@mkdir -p $(@D)\n\t' +
+                             str(state.binary) + ' prepare -H --only sanitizer tools $(@D)\n')
+            self.import_source(state)
+            proof = self.import_run(state)
+            self.assertEqual(proof['artifacts'][name], self.describe_file(state.tree / name))
+            manifest = json.loads((state.tree / name).read_text())
             manifest['platform'] = 'foreign'
-            (tree / name).write_text(json.dumps(manifest))
-            with self.assertRaises(ValueError):
-                product.validate_native(tree, {name: 'native'})
+            (state.tree / name).write_text(json.dumps(manifest))
+            with (state.tree / 'Makefile').open('a') as stream:
+                stream.write(name + ': ; @true\n')
+            self.import_source(state)
+            self.import_run(state, expected=1)
 
     def test_sanitizer_source_binding(self):
-        repo = Path(__file__).resolve().parents[2]
         name = 'build/tests/host-suite/sanitizer/tools.json'
-        resolve = Path.resolve
-        with tempfile.TemporaryDirectory(prefix='rach2-sanitizer-source.') as work:
-            tree = Path(work).resolve()
-            source = tree / 'system-atos'
-            source.write_bytes(b'\xcf\xfa\xed\xfenative fixture bytes')
-            previous = Path.cwd()
-            try:
-                os.chdir(tree)
-                def native_path(path, *args, **kwargs):
-                    return source if path == Path('/usr/bin/atos') else resolve(path, *args, **kwargs)
-                with patch.object(sys, 'platform', 'darwin'), \
-                        patch.object(product, 'windows_host', return_value=False), \
-                        patch.object(Path, 'resolve', native_path):
-                    snapshot = tree / Path(name).parent / 'atos'
-                    snapshot.parent.mkdir(parents=True)
-                    shutil.copy2(source, snapshot)
-                    provenance = Path(str(snapshot) + '.provenance.json')
-                    provenance.write_text(json.dumps(dict(source=str(source), sha256=product.digest(source))))
-                    bound = [dict(path=str(p.relative_to(tree)), sha256=product.digest(p))
-                             for p in (snapshot, provenance)]
-                    (tree / name).write_text(json.dumps(dict(schema_version=1, platform='darwin', inputs=bound)))
-                    expected = {name, str(Path(name).parent / 'atos'),
-                                str(Path(name).parent / 'atos.provenance.json')}
-                    self.assertEqual(set(product.validate_native(tree, {name: 'native'})), expected)
-                    for changed in (tree / Path(name).parent / 'atos', source):
-                        before = changed.read_bytes()
-                        changed.write_bytes(before + b'changed')
-                        with self.assertRaises(ValueError):
-                            product.validate_native(tree, {name: 'native'})
-                        changed.write_bytes(before)
-                    manifest = json.loads((tree / name).read_text())
-                    for rows in ([], manifest['inputs'] * 2,
-                                 [dict(path='../elsewhere', sha256='a' * 64)]):
-                        (tree / name).write_text(json.dumps(dict(manifest, inputs=rows)))
-                        with self.assertRaises(ValueError):
-                            product.validate_native(tree, {name: 'native'})
-                    (tree / name).write_text(json.dumps(manifest))
-                    snapshot = tree / Path(name).parent / 'atos'
-                    snapshot.unlink()
-                    snapshot.symlink_to(source)
-                    with self.assertRaises(ValueError):
-                        product.validate_native(tree, {name: 'native'})
-            finally:
-                os.chdir(previous)
+        with tempfile.TemporaryDirectory(prefix='rach2-sanitizer-binding.') as work:
+            state = self.import_fixture(work, [name])
+            (state.tree / name).parent.mkdir(parents=True)
+            subprocess.run([str(state.binary), 'prepare', '-H', '--only', 'sanitizer',
+                            'tools', str((state.tree / name).parent)], cwd=state.tree, check=True)
+            with (state.tree / 'Makefile').open('a') as stream:
+                stream.write(name + ': ; @true\n')
+            self.import_source(state)
+            manifest = json.loads((state.tree / name).read_text())
+            self.import_run(state)
+            for rows in (manifest['inputs'] * 2, [dict(path='../elsewhere', sha256='a' * 64)]):
+                (state.tree / name).write_text(json.dumps(dict(manifest, inputs=rows)))
+                self.import_run(state, expected=1)
+            (state.tree / name).write_text(json.dumps(manifest))
+            if sys.platform == 'darwin':
+                snapshot = (state.tree / name).parent / 'atos'
+                before = snapshot.read_bytes()
+                snapshot.write_bytes(before + b'changed')
+                self.import_run(state, expected=1)
+                snapshot.write_bytes(before)
+                proof = Path(str(snapshot) + '.provenance.json')
+                previous = proof.read_bytes()
+                value = json.loads(previous)
+                value['source'] = str(Path('/usr/bin/true').resolve())
+                proof.write_text(json.dumps(value))
+                self.import_run(state, expected=1)
+                proof.write_bytes(previous)
+                snapshot.unlink()
+                snapshot.symlink_to('/usr/bin/atos')
+                self.import_run(state, expected=1)
 
     def test_record_identity(self):
-        line = 'file ' + 'a' * 64 + ' 5 1 0 build/images/root.disk\n'
-        good = 'etude-prepare 1\ntree /producer\n' + line
-        self.assertEqual(product.record_files(good)['build/images/root.disk']['size_bytes'], 5)
-        for bad in (good + line, good.replace('build/images/root.disk', '../root'),
-                    good.replace('a' * 64, 'z' * 64), 'etude-prepare 2\n'):
-            with self.assertRaises(ValueError):
-                product.record_files(bad)
+        with tempfile.TemporaryDirectory(prefix='rach2-record-identity.') as work:
+            state = self.import_fixture(work)
+            good = state.record
+            line = good.splitlines()[-1] + '\n'
+            self.import_run(state)
+            for bad in (good + line, good.replace('build/images/root.disk', '../root'),
+                        good.replace(state.files[state.goals[0]]['sha256'], 'z' * 64),
+                        'etude-prepare 2\n', good.replace(' 15 1 0 ', ' 99999999999999999999999 1 0 ')):
+                state.metadata['record'] = bad
+                self.import_run(state, expected=1)
+            state.metadata['record'] = good
 
     def test_receipt_binding(self):
-        record = 'etude-prepare 1\ntree /producer\n'
-        receipt = dict(format='etude-preparation-receipt', schema_version=1,
-                       outcome='pass', cleanup='confirmed', commit='1' * 40,
-                       run_id='production-1', machine_id='linux', boot_id='boot-1',
-                       record_sha256=hashlib.sha256(record.encode()).hexdigest(),
-                       start=dict(utc='2026-10-24T00:00:00Z', monotonic_us=1, resolution_us=1),
-                       end=dict(utc='2026-10-24T00:00:01Z', monotonic_us=5, resolution_us=1))
-        product.receipt_check(receipt, '1' * 40, record)
-        for key, value in [('cleanup', 'unknown'), ('outcome', 'fail'),
-                           ('commit', '2' * 40), ('record_sha256', '0' * 64),
-                           ('end', dict(receipt['end'], monotonic_us=0)),
-                           ('run_id', ''), ('boot_id', 'other boot'),
-                           ('start', dict(receipt['start'], resolution_us=0))]:
-            with self.subTest(key=key), self.assertRaises(ValueError):
-                product.receipt_check(dict(receipt, **{key: value}), '1' * 40, record)
+        with tempfile.TemporaryDirectory(prefix='rach2-receipt-binding.') as work:
+            state = self.import_fixture(work)
+            original = dict(state.receipt)
+            self.import_run(state)
+            for key, value in [('cleanup', 'unknown'), ('outcome', 'fail'), ('commit', '2' * 40),
+                               ('record_sha256', '0' * 64), ('end', dict(state.receipt['end'], monotonic_us=0)),
+                               ('run_id', ''), ('boot_id', 'other boot'),
+                               ('start', dict(state.receipt['start'], resolution_us=0))]:
+                state.receipt.clear()
+                state.receipt.update(original)
+                state.receipt[key] = value
+                self.import_run(state, expected=1)
 
     def test_changed_file(self):
-        with tempfile.TemporaryDirectory(prefix='rach2-import-', dir=None) as work:
-            path = Path(work) / 'image'
-            path.write_bytes(b'one')
-            expected = product.describe(path)
-            product.verify(path, expected)
-            path.write_bytes(b'two')
-            with self.assertRaises(ValueError):
-                product.verify(path, expected)
+        with tempfile.TemporaryDirectory(prefix='rach2-changed-import.') as work:
+            state = self.import_fixture(work)
+            self.import_run(state)
+            path = state.producer / state.goals[0]
+            path.write_bytes(b'different bytes\n')
+            self.import_run(state, expected=1)
             path.unlink()
             path.symlink_to('/dev/null')
-            with self.assertRaises(ValueError):
-                product.describe(path)
+            self.import_run(state, expected=1)
 
     def test_inventory_chain(self):
         path = 'build/tests/host-suite/tests.inventory.json'
-        text = json.dumps(dict(manifest_sha256='m', checks=[dict(assertion_id='exfat', inputs=[
-            dict(path='build/tests/host-suite/tools/exfat_external/image', sha256='f' * 64)])]))
-        files = {path: dict(sha256=hashlib.sha256(text.encode()).hexdigest(), size_bytes=len(text))}
-        self.assertEqual(product.nested_inputs({path: text}, files, 'm'),
-                         {'build/tests/host-suite/tools/exfat_external/image': 'f' * 64})
-        for changed, manifest in ((text + ' ', 'm'), (text, 'different')):
-            with self.assertRaises(ValueError):
-                product.nested_inputs({path: changed}, files, manifest)
+        nested = 'build/tests/host-suite/tools/exfat_external/exfat_src/e\u00e9t\u00e9.txt'
+        digest = hashlib.sha256(b'nested fixture bytes\n').hexdigest()
+        checks = [dict(assertion_id='exfat', backend='gnu',
+                       inputs=[dict(path_hex=os.fsencode(nested).hex(), sha256=digest)])]
+        with tempfile.TemporaryDirectory(prefix='rach2-inventory-chain.') as work:
+            state = self.import_fixture(work, [path], checks)
+            proof = self.import_run(state)
+            self.assertEqual(proof['roles'][path], 'inventory')
+            self.assertEqual(proof['imported'][nested], state.nested[nested])
+            self.assertEqual((state.tree / nested).read_bytes(), b'nested fixture bytes\n')
+            original = state.metadata['inventories'][path]
+            state.metadata['inventories'][path] = original + ' '
+            self.import_run(state, expected=1)
+            changed = json.loads(original)
+            changed['manifest_sha256'] = '0' * 64
+            state.metadata['inventories'][path] = json.dumps(changed)
+            self.import_run(state, expected=1)
 
     def test_alignment_inventory_chain(self):
-        def anchored(checks, arch='i686'):
-            prefix = 'build/x86_64' if arch == 'x86_64' else 'build'
-            name = prefix + '/tests/host-suite/tests.inventory.json'
-            text = json.dumps(dict(manifest_sha256='m', checks=checks))
-            return {name: text}, {name: dict(sha256=hashlib.sha256(text.encode()).hexdigest(),
-                                            size_bytes=len(text.encode()))}
-
-        expected, inventories, files = {}, {}, {}
-        for arch, prefix, sha in [('i686', product.E2FSPROGS_LIBS[0], 'a' * 64),
-                                  ('x86_64', product.E2FSPROGS_LIBS[1], 'b' * 64)]:
-            paths = [prefix + 'ext2fs/unix_io.c', prefix + 'ext2fs/ext2_types.h',
-                     prefix + 'ext2fs/ext2fs.h', prefix + 'et/com_err.h']
-            inputs = [dict(path=path, sha256=sha) for path in paths]
-            inputs += [dict(path='tests/host/compat/e2fsprogs/config.h', sha256='c' * 64),
-                       dict(path=prefix + 'unrelated.o', sha256='d' * 64)]
-            checks = [dict(assertion_id=name, inputs=inputs)
-                      for name in sorted(product.ALIGNMENT_CHECKS)]
-            more, anchors = anchored(checks, arch)
-            inventories.update(more)
-            files.update(anchors)
-            expected.update({path: sha for path in paths})
-        self.assertEqual(product.nested_inputs(inventories, files, 'm'), expected)
-        for bad in ('../escape.h', product.E2FSPROGS_LIBS[0] + '../escape.h'):
-            changed, anchors = anchored([dict(assertion_id='e2fsprogs_alignment',
-                                              inputs=[dict(path=bad, sha256='a' * 64)])])
-            with self.assertRaises(ValueError):
-                product.nested_inputs(changed, anchors, 'm')
-        for inputs in ([dict(path=product.E2FSPROGS_LIBS[0] + 'ext2fs/ext2_types.h', sha256='bad')],
-                       [dict(path=product.E2FSPROGS_LIBS[0] + 'ext2fs/ext2_types.h', sha256=sha)
-                        for sha in ('a' * 64, 'b' * 64)]):
-            changed, anchors = anchored([dict(assertion_id='e2fsprogs_alignment', inputs=inputs)])
-            with self.assertRaises(ValueError):
-                product.nested_inputs(changed, anchors, 'm')
+        prefix = 'vendor/e2fsprogs/e2fsprogs-1.47.4/lib/'
+        other = 'build/x86_64/vendor-work/e2fsprogs/e2fsprogs-1.47.4/lib/'
+        inputs = [dict(path=root + name, sha256=hashlib.sha256(b'nested fixture bytes\n').hexdigest())
+                  for root in (prefix, other) for name in
+                  ('ext2fs/unix_io.c', 'ext2fs/ext2_types.h', 'ext2fs/ext2fs.h', 'et/com_err.h')]
+        checks = [dict(assertion_id=name, backend='gnu', inputs=inputs)
+                  for name in ('e2fsprogs_alignment', 'e2fsprogs_alignment64')]
+        with tempfile.TemporaryDirectory(prefix='rach2-alignment-chain.') as work:
+            path = 'build/tests/host-suite/tests.inventory.json'
+            state = self.import_fixture(work, [path], checks)
+            proof = self.import_run(state)
+            self.assertTrue({row['path'] for row in inputs} <= proof['imported'].keys())
+            original = state.metadata['inventories'][path]
+            for rows in ([dict(path='../escape.h', sha256='a' * 64)],
+                         [dict(path=prefix + '../escape.h', sha256='a' * 64)],
+                         [dict(path=prefix + 'ext2fs/ext2fs.h', sha256='bad')],
+                         [dict(path=prefix + 'ext2fs/ext2fs.h', sha256=sha) for sha in ('a' * 64, 'b' * 64)]):
+                document = json.loads(original)
+                document['checks'][0]['inputs'] = rows
+                text = json.dumps(document)
+                state.metadata['inventories'][path] = text
+                state.metadata['record'] = state.record.replace(
+                    '{sha256} {size_bytes}'.format(**state.files[path]),
+                    hashlib.sha256(text.encode()).hexdigest() + ' ' + str(len(text)))
+                state.receipt['record_sha256'] = hashlib.sha256(state.metadata['record'].encode()).hexdigest()
+                self.import_run(state, expected=1)
 
     def test_native_program_publication(self):
         with tempfile.TemporaryDirectory(prefix='rach2-native-publication.') as work:
@@ -501,13 +652,22 @@ class ImportTests(unittest.TestCase):
 
     def test_windows_vectors(self):
         goals = ['build/tests/cases/machine/scenario' + str(i) for i in range(900)]
-        base = ['make', '-o' + 'a' * 20000]
-        commands = list(product.batches(base, goals))
-        self.assertGreater(len(commands), 1)
-        self.assertEqual([goal for argv in commands for goal in argv[len(base):]], goals)
-        self.assertTrue(all(len(subprocess.list2cmdline(argv)) < 28000 for argv in commands))
-        with self.assertRaises(ValueError):
-            list(product.batches(['make', 'a' * 29000], goals))
+        with tempfile.TemporaryDirectory(prefix='rach2-native-argv.') as work:
+            state = self.import_fixture(work, goals)
+            with (state.tree / 'Makefile').open('a') as stream:
+                stream.write('%:\n\t@mkdir -p $(@D)\n\tcp /usr/bin/true $@\n')
+            self.import_source(state)
+            proof = self.import_run(state)
+            commands = proof['native_build']
+            self.assertGreater(len(commands), 1)
+            selected = [arg for command in commands for arg in command if arg in goals]
+            self.assertEqual(selected, sorted(goals))
+            self.assertTrue(all(len(subprocess.list2cmdline(command)) < 28000 for command in commands))
+        portable = ['build/images/' + str(i) + '-' + 'a' * 220 + '.disk' for i in range(130)]
+        with tempfile.TemporaryDirectory(prefix='rach2-frozen-argv.') as work:
+            state = self.import_fixture(work, portable + ['build/tests/cases/machine/a'])
+            self.import_run(state, expected=1)
+            self.assertFalse((state.tree / 'build/compile.calls').exists())
 
     def test_native_krffs_root_alignment(self):
         repo = Path(__file__).resolve().parents[2]
@@ -572,9 +732,9 @@ class ImportTests(unittest.TestCase):
                             new_time = used + 4 * 357 + file_bytes + 277
                             self.assertNotEqual(old_time // 4096, (old_time + 15) // 4096)
                             self.assertEqual(new_time // 4096, (new_time + 15) // 4096)
-                    digest = product.digest(image)
+                    digest = self.describe_file(image)['sha256']
                     native.root_image(tree, image, 'krffs', 1, text, os.environ.copy(), work, tools)
-                    self.assertEqual(product.digest(image), digest)
+                    self.assertEqual(self.describe_file(image)['sha256'], digest)
                 for line in (f'file 0444 {native.ROOT_PADDING} {payload}\n',
                              f'dir 0755 {native.ROOT_PADDING}\n'):
                     with self.assertRaisesRegex(ValueError, 'native root reserves'):
@@ -584,44 +744,30 @@ class ImportTests(unittest.TestCase):
                     native.root_image(tree, image, 'krffs', 1, text, os.environ.copy(), work, tools)
 
     def test_native_compilation(self):
-        with tempfile.TemporaryDirectory(prefix='rach2-import-') as work:
-            tree = Path(work)
-            source, header = tree / 'source.c', tree / 'value.h'
-            source.write_text('#include "value.h"\nint main(void) { return VALUE; }\n')
-            header.write_text('#define VALUE 0\n')
-            portable = tree / 'portable'
-            portable.write_bytes(b'producer bytes')
-            (tree / 'Makefile').write_text(
-                'build/tests/cases/machine/a: source.c value.h portable\n'
-                '\tmkdir -p $(@D)\n\tprintf "compile\\n" >> compile.calls\n'
-                '\t$(CC) -o $@ $<\n'
-                '.PHONY: portable\nportable:\n\tprintf changed > $@\n')
-            target = tree / 'build/tests/cases/machine/a'
+        goals = ['build/images/root.disk', 'build/tests/cases/machine/a']
+        with tempfile.TemporaryDirectory(prefix='rach2-native-build.') as work:
+            state = self.import_fixture(work, goals)
+            target = state.tree / goals[1]
             target.parent.mkdir(parents=True)
             target.write_bytes(b'old foreign executable')
-            newest = max(source.stat().st_mtime_ns, header.stat().st_mtime_ns) + 2000000000
-            os.utime(target, ns=(newest, newest))
-            roles = {'build/tests/cases/machine/a': 'native'}
-            with patch.dict(os.environ, {'MAKEFLAGS': '', 'MFLAGS': '', 'MAKELEVEL': ''}):
-                commands = product.build_native(tree, roles, ['portable'])
-                self.assertEqual(len(commands), 1)
-                product.validate_native(tree, roles)
-                self.assertNotEqual(target.read_bytes(), b'old foreign executable')
-                before = target.stat()
-                product.build_native(tree, roles, ['portable'])
-                self.assertEqual((before.st_ino, before.st_mtime_ns),
-                                 (target.stat().st_ino, target.stat().st_mtime_ns))
-                self.assertEqual((tree / 'compile.calls').read_text().splitlines(), ['compile'])
-                for changed, text in ((header, '#define VALUE 1\n'),
-                                      (source, '#include "value.h"\nint main(void) { return VALUE + 1; }\n')):
-                    changed.write_text(text)
-                    newer = target.stat().st_mtime_ns + 2000000000
-                    os.utime(changed, ns=(newer, newer))
-                    product.build_native(tree, roles, ['portable'])
-                    product.validate_native(tree, roles)
-                    os.utime(changed, ns=(1, 1))
-            self.assertEqual((tree / 'compile.calls').read_text().splitlines(), ['compile'] * 3)
-            self.assertEqual(portable.read_bytes(), b'producer bytes')
+            future = max((state.tree / name).stat().st_mtime_ns for name in ('source.c', 'value.h')) + 2000000000
+            os.utime(target, ns=(future, future))
+            self.import_run(state)
+            self.assertNotEqual(target.read_bytes(), b'old foreign executable')
+            before = target.stat()
+            self.import_run(state)
+            self.assertEqual((before.st_ino, before.st_mtime_ns), (target.stat().st_ino, target.stat().st_mtime_ns))
+            for name, text, status in [('value.h', '#define VALUE 1\n', 1),
+                                      ('source.c', '#include "value.h"\nint main(void) { return VALUE + 1; }\n', 2)]:
+                path = state.tree / name
+                path.write_text(text)
+                newer = target.stat().st_mtime_ns + 2000000000
+                os.utime(path, ns=(newer, newer))
+                self.import_source(state)
+                self.import_run(state)
+                self.assertEqual(subprocess.run([str(target)]).returncode, status)
+            self.assertEqual((state.tree / 'build/compile.calls').read_text().splitlines(), ['compile'] * 3)
+            self.assertEqual((state.tree / goals[0]).read_bytes(), b'producer bytes\n')
 
     def test_forced_openssl_dependency(self):
         repo = Path(__file__).resolve().parents[2]
@@ -667,117 +813,131 @@ class ImportTests(unittest.TestCase):
             self.assertTrue((tree / 'build/vendor/host-openssl/ready').is_file())
 
     def test_idle_local_producer(self):
-        with tempfile.TemporaryDirectory(prefix='rach2-import-') as work:
-            tree = Path(work)
-            root = tree / 'producer'
-            dest = tree / 'native'
-            root.mkdir()
-            dest.mkdir()
-            producer = dict(transport='local', tree=str(root))
-            self.assertEqual(product.idle_local(producer, dest), root.resolve())
-            with self.assertRaises(ValueError):
-                product.idle_local(producer, root)
-            alias = tree / 'alias'
-            alias.symlink_to(root, target_is_directory=True)
-            with self.assertRaises(ValueError):
-                product.idle_local(dict(producer, tree=str(alias)), root)
-            (root / 'build').mkdir()
-            (root / 'build/.run.lock').symlink_to(root / 'absent')
-            with self.assertRaises(ValueError):
-                product.idle_local(producer, dest)
+        with tempfile.TemporaryDirectory(prefix='rach2-idle-producer.') as work:
+            state = self.import_fixture(work)
+            self.import_run(state)
+            self.import_run(state, expected=1, producer=dict(tree=str(state.tree)))
+            alias = state.tree.parent / 'alias'
+            alias.symlink_to(state.tree, target_is_directory=True)
+            self.import_run(state, expected=1, producer=dict(tree=str(alias)))
+            (state.producer / 'build/.run.lock').symlink_to(state.producer / 'absent')
+            self.import_run(state, expected=1)
 
     def test_refused_wsl_transports(self):
-        for mode in ('wsl',):
-            with self.subTest(mode=mode), self.assertRaises(ValueError):
-                product.validate_producer(dict(transport=mode))
+        with tempfile.TemporaryDirectory(prefix='rach2-wsl-refusal.') as work:
+            state = self.import_fixture(work)
+            for mode in ('wsl', 'other'):
+                self.import_run(state, expected=1, producer=dict(transport=mode))
+
+    def import_remote(self, state, transport):
+        directory = state.tree.parent / 'commands'
+        directory.mkdir(exist_ok=True)
+        log = directory / 'calls.jsonl'
+        common = 'import hashlib,json,pathlib,shlex,shutil,sys\n'
+        common += 'log=pathlib.Path(' + repr(str(log)) + ')\n'
+        common += 'with log.open("a") as out:out.write(json.dumps([pathlib.Path(sys.argv[0]).name,*sys.argv[1:]])+"\\n")\n'
+        metadata = state.producer / 'producer.json'
+        ssh = common + 'words=shlex.split(sys.argv[-1])\n'
+        ssh += 'if words[0]=="env":\n'
+        ssh += ' assert words[:8]==["env","MSYS_NO_PATHCONV=1","wsl.exe","--distribution","Ubuntu-26.04","--user","testing","--exec"]\n'
+        ssh += ' words=words[8:]\n'
+        ssh += 'if words==["/immutable/etude","lock","tree","/producer","prepare-import","/bin/cat","/metadata"]:\n'
+        ssh += ' sys.stdout.buffer.write(pathlib.Path(' + repr(str(metadata)) + ').read_bytes())\n'
+        ssh += 'elif words==["/usr/bin/sha256sum","/immutable/etude"]:\n'
+        ssh += ' print(hashlib.sha256(pathlib.Path(' + repr(str(state.binary)) + ').read_bytes()).hexdigest()+"  /immutable/etude")\n'
+        ssh += 'else:raise SystemExit(91)\n'
+        rsync = common + 'assert sys.argv.count("--compress")==1 and "--sparse" in sys.argv and "--protect-args" in sys.argv\n'
+        rsync += 'server=shlex.split(next(a.split("=",1)[1] for a in sys.argv if a.startswith("--rsync-path=")))\n'
+        rsync += 'assert server[-6:]==["/immutable/etude","lock","tree","/producer","prepare-import","/usr/bin/rsync"]\n'
+        rsync += 'assert sys.argv[-2]=="fixture:/producer/"\n'
+        rsync += 'listing=pathlib.Path(next(a.split("=",1)[1] for a in sys.argv if a.startswith("--files-from=")))\n'
+        rsync += 'destination=pathlib.Path(sys.argv[-1])\n'
+        rsync += 'for name in listing.read_text().splitlines():\n'
+        rsync += ' source=pathlib.Path(' + repr(str(state.producer)) + ')/name\n'
+        rsync += ' target=destination/name\n target.parent.mkdir(parents=True,exist_ok=True)\n shutil.copy2(source,target)\n'
+        for name, text in [('ssh', ssh), ('rsync', rsync)]:
+            path = directory / name
+            path.write_text('#!' + sys.executable + '\n' + text)
+            path.chmod(0o755)
+        state.metadata['validator']['path'] = '/immutable/etude'
+        fields = dict(transport=transport, host='fixture', etude='/immutable/etude',
+                      tree='/producer', metadata='/metadata')
+        if transport == 'wsl-ssh':
+            fields.update(distribution='Ubuntu-26.04', user='testing')
+        return fields, dict(PATH=str(directory) + os.pathsep + os.environ['PATH']), log
 
     def test_posix_wsl_ssh(self):
-        producer = dict(transport='wsl-ssh', tree='/producer',
-                        metadata='/producer/build/producer.json', etude='/immutable/etude',
-                        host='testing', distribution='Ubuntu-26.04', user='testing')
-        with patch.object(product, 'windows_host', return_value=False):
-            product.validate_producer(producer)
-            words = product.remote_command(producer, ['/bin/cat', '/metadata'])
-            self.assertEqual(words[:4], ['ssh', '-o', 'BatchMode=yes', 'testing'])
-            self.assertEqual(words[4], 'env MSYS_NO_PATHCONV=1 wsl.exe --distribution '
-                             'Ubuntu-26.04 --user testing --exec /bin/cat /metadata')
-            with tempfile.TemporaryDirectory(prefix='rach2-import-') as work:
-                with patch.object(product, 'run') as run:
-                    product.transfer(producer, ['build/images/a.disk'], Path(work), Path(work))
-                argv = run.call_args.args[0]
-                self.assertEqual(argv.count('--compress'), 1)
-                server = next(arg for arg in argv if arg.startswith('--rsync-path='))
-                self.assertIn('--exec /immutable/etude lock tree /producer '
-                              'prepare-import /usr/bin/rsync', server)
-        for key in ('distribution', 'user'):
-            for bad in (None, '', '-bad', 'bad value', 'bad;command'):
-                with self.subTest(key=key, bad=bad), self.assertRaises(ValueError):
-                    product.validate_producer(dict(producer, **{key: bad}))
-        with patch.object(product, 'windows_host', return_value=True):
-            with self.assertRaises(ValueError):
-                product.validate_producer(producer)
+        with tempfile.TemporaryDirectory(prefix='rach2-wsl-command.') as work:
+            state = self.import_fixture(work)
+            producer, env, log = self.import_remote(state, 'wsl-ssh')
+            self.import_run(state, producer=producer, env=env)
+            calls = [json.loads(line) for line in log.read_text().splitlines()]
+            self.assertEqual([row[0] for row in calls], ['ssh', 'ssh', 'rsync'])
+            query = shlex.split(calls[0][-1])
+            self.assertEqual(query[:8], ['env', 'MSYS_NO_PATHCONV=1', 'wsl.exe', '--distribution',
+                                        'Ubuntu-26.04', '--user', 'testing', '--exec'])
+            for key in ('distribution', 'user'):
+                for value in ('', '-bad', 'bad value', 'bad;command'):
+                    self.import_run(state, expected=1, producer=dict(producer, **{key: value}), env=env)
+            self.assertEqual(len(log.read_text().splitlines()), 3)
 
     def test_ssh_compression(self):
-        producer = dict(transport='ssh', tree='/producer',
-                        metadata='/producer/metadata', etude='/immutable/etude', host='testing')
-        with tempfile.TemporaryDirectory(prefix='rach2-import-') as work:
-            with patch.object(product, 'run') as run:
-                product.transfer(producer, ['build/images/a.disk'], Path(work), Path(work))
-            argv = run.call_args.args[0]
+        with tempfile.TemporaryDirectory(prefix='rach2-ssh-command.') as work:
+            state = self.import_fixture(work)
+            producer, env, log = self.import_remote(state, 'ssh')
+            self.import_run(state, producer=producer, env=env)
+            calls = [json.loads(line) for line in log.read_text().splitlines()]
+            argv = calls[-1]
             self.assertEqual(argv.count('--compress'), 1)
             self.assertIn('--sparse', argv)
-            self.assertIn('--rsync-path=/immutable/etude lock tree /producer '
-                          'prepare-import /usr/bin/rsync', argv)
-            self.assertEqual(argv[-3:], ['--', 'testing:/producer/', work + '/'])
+            server = next(word.split('=', 1)[1] for word in argv if word.startswith('--rsync-path='))
+            self.assertEqual(shlex.split(server), ['/immutable/etude', 'lock', 'tree',
+                                                  '/producer', 'prepare-import', '/usr/bin/rsync'])
+            self.assertEqual(argv[-3:], ['--', 'fixture:/producer/', str(state.tree) + '/'])
+            state.metadata['validator']['path'] = '/different/etude'
+            self.import_run(state, expected=1, producer=producer, env=env)
 
     def test_native_local_copy(self):
-        with tempfile.TemporaryDirectory(prefix='rach2-import-') as work:
-            tree = Path(work)
-            root = tree / 'producer'
-            dest = tree / 'native'
-            root.mkdir()
-            dest.mkdir()
-            producer = dict(transport='local', tree=str(root))
-            with patch.object(product, 'windows_host', return_value=True), \
-                 patch.object(product, 'native_path', side_effect=lambda p: str(p)), \
-                 patch.object(product, 'cygpath', side_effect=lambda option, value: value) as cygpath, \
-                 patch.object(product, 'run') as run:
-                product.transfer(producer, ['build/images/a.disk'], dest, tree)
-            argv = run.call_args.args[0]
-            self.assertNotIn('--compress', argv)
-            self.assertNotIn('--force-local', argv)
-            self.assertEqual(argv[-3:], ['--', str(root.resolve()) + '/', str(dest) + '/'])
-            self.assertEqual(cygpath.call_count, 3)
-            self.assertNotIn('ssh', argv)
-            self.assertNotIn('wsl.exe', argv)
-            with patch.object(product, 'windows_host', return_value=True):
-                with self.assertRaises(ValueError):
-                    product.validate_producer(dict(transport='ssh', tree='/producer',
-                                                   metadata='/producer/metadata', etude='/etude', host='x'))
+        with tempfile.TemporaryDirectory(prefix='rach2-local-copy.') as work:
+            state = self.import_fixture(work)
+            proof = self.import_run(state)
+            self.assertEqual(proof['imported'][state.goals[0]], state.files[state.goals[0]])
+            self.assertNotEqual((state.tree / state.goals[0]).stat().st_ino,
+                                (state.producer / state.goals[0]).stat().st_ino)
+            self.assertEqual((state.tree / state.goals[0]).read_bytes(), (state.producer / state.goals[0]).read_bytes())
 
     def test_encoded_inputs(self):
-        value = 'build/tests/na' + chr(239) + 've'
-        self.assertEqual(product.inventory_path(dict(path_hex=os.fsencode(value).hex())), value)
+        path = 'build/tests/host-suite/tests.inventory.json'
         for item in (dict(path='/outside'), dict(path_hex='0'), dict(path_hex='XX'),
                      dict(path_hex='00'), dict(path_hex='61', path='a'), dict(path='../escape')):
-            with self.assertRaises(ValueError):
-                product.inventory_path(item)
+            with tempfile.TemporaryDirectory(prefix='rach2-encoded-input.') as work:
+                checks = [dict(assertion_id='exfat', backend='gnu', inputs=[])]
+                state = self.import_fixture(work, [path], checks)
+                document = json.loads(state.metadata['inventories'][path])
+                document['checks'][0]['inputs'] = [dict(item, sha256='a' * 64)]
+                text = json.dumps(document)
+                state.metadata['inventories'][path] = text
+                state.metadata['record'] = state.record.replace(
+                    '{sha256} {size_bytes}'.format(**state.files[path]),
+                    hashlib.sha256(text.encode()).hexdigest() + ' ' + str(len(text)))
+                state.receipt['record_sha256'] = hashlib.sha256(state.metadata['record'].encode()).hexdigest()
+                self.import_run(state, expected=1)
 
     def test_actual_architecture_buckets(self):
-        roles = {'build/tests/cases/machine/a': 'native',
-                 'build/x86_64/tests/cases/machine/b': 'native',
-                 'build/tests/host-suite/tests.inventory.json': 'inventory'}
-        with patch.object(product, 'run') as run, patch.object(product, 'windows_host', return_value=True):
-            commands = product.build_native(Path('.'), roles, ['build/x86_64/images/root.disk'])
-        self.assertEqual(run.call_count, 3)
-        self.assertEqual([next(x for x in argv if x.startswith('ARCH=')) for argv in commands],
-                         ['ARCH=i686', 'ARCH=x86_64', 'ARCH=i686'])
-        self.assertTrue(all('OS=Windows_NT' in argv and
-                            '-obuild/x86_64/images/root.disk' in argv for argv in commands))
-        self.assertTrue(all('-B' not in argv for argv in commands))
-        with patch.object(product, 'run'):
-            commands = product.build_native(Path('.'), roles, [], 'x86_64')
-        self.assertTrue(all('ARCH=x86_64' in argv for argv in commands))
+        goals = ['build/tests/cases/machine/a', 'build/x86_64/tests/cases/machine/b',
+                 'build/tests/host-suite/tests.inventory.json']
+        with tempfile.TemporaryDirectory(prefix='rach2-architecture-buckets.') as work:
+            state = self.import_fixture(work, goals)
+            with (state.tree / 'Makefile').open('a') as stream:
+                stream.write(goals[1] + ': source.c value.h\n\t@mkdir -p $(@D)\n\t$(CC) -o $@ $<\n')
+            self.import_source(state)
+            proof = self.import_run(state)
+            self.assertEqual([next(a for a in argv if a.startswith('ARCH=')) for argv in proof['native_build']],
+                             ['ARCH=i686', 'ARCH=x86_64', 'ARCH=i686'])
+            self.assertTrue(all('-B' not in argv for argv in proof['native_build']))
+            proof = self.import_run(state, arches='x86_64')
+            self.assertTrue(all('ARCH=x86_64' in argv for argv in proof['native_build']))
+
 
 
 if __name__ == '__main__':

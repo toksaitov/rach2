@@ -47,22 +47,58 @@ static int completed_clean(const struct eh_json *receipt)
            record && strlen(record) == 64 && same(cmp_text(c, "inhouse"), "clean");
 }
 
-/* Native goals are rebuilt locally. Portable goals retain their producer. */
-static int imported_goal(const struct eh_json *proof, const char *node)
+/* Provenance is external preparation data, including real UTF-8 paths. */
+static struct json *provenance_document(const struct eh_json *ref)
 {
-    const char *role = cmp_text(eh_json_get(proof, "roles"), node);
+    const char *hex = cmp_text(ref, "sha256");
+    const struct eh_json *size = eh_json_get(ref, "size_bytes");
+    const struct eh_json *locations = eh_json_get(ref, "locations");
+    if (!hex || strlen(hex) != 64 || !size || size->type != 'n' || size->number < 0 ||
+        size->number > 16 * 1024 * 1024 || !locations || locations->type != 'a')
+        return NULL;
+    for (const struct eh_json *at = locations->child; at; at = at->next) {
+        if (at->type != 's')
+            continue;
+        size_t length;
+        char *bytes = etude_routine_blob(hex, (uint64_t)size->number, at->string, &length);
+        struct json *doc = NULL;
+        char why[256];
+        if (bytes)
+            json_parse_data(bytes, length, 1, &doc, why, sizeof(why));
+        free(bytes);
+        if (doc)
+            return doc;
+    }
+    return NULL;
+}
+
+static int clean_producer(const struct json *receipt)
+{
+    const struct json *c = json_member(receipt, "conditioning");
+    const char *commit = json_text(receipt, "commit"),
+               *record = json_text(receipt, "record_sha256");
+    return same(json_text(receipt, "format"), "etude-preparation-receipt") &&
+           same(json_text(receipt, "outcome"), "pass") &&
+           same(json_text(receipt, "cleanup"), "confirmed") && commit && strlen(commit) == 40 &&
+           record && strlen(record) == 64 && same(json_text(c, "inhouse"), "clean");
+}
+
+/* Native goals are rebuilt locally. Portable goals retain their producer. */
+static int imported_goal(const struct json *proof, const char *node)
+{
+    const char *role = json_text(json_member(proof, "roles"), node);
     if (same(role, "native") || same(role, "inventory"))
         return 1;
-    const struct eh_json *producer = eh_json_get(proof, "ordinary_production");
-    const struct eh_json *c = eh_json_get(producer, "conditioning");
-    const struct eh_json *input = eh_json_get(eh_json_get(proof, "imported"), node);
-    const struct eh_json *artifact = eh_json_get(eh_json_get(proof, "artifacts"), node);
-    const char *hash = cmp_text(input, "sha256");
+    const struct json *producer = json_member(proof, "ordinary_production");
+    const struct json *c = json_member(producer, "conditioning");
+    const struct json *input = json_member(json_member(proof, "imported"), node);
+    const struct json *artifact = json_member(json_member(proof, "artifacts"), node);
+    const char *hash = json_text(input, "sha256");
     return same(role, "portable") && input && artifact && hash && strlen(hash) == 64 &&
-           same(hash, cmp_text(artifact, "sha256")) && completed_clean(producer) &&
-           same(cmp_text(c, "backend"), "ordinary") && eh_json_get(c, "provenance") &&
-           eh_json_get(c, "provenance")->type == 'z' &&
-           same(cmp_text(producer, "commit"), cmp_text(proof, "commit"));
+           same(hash, json_text(artifact, "sha256")) && clean_producer(producer) &&
+           same(json_text(c, "backend"), "ordinary") && json_member(c, "provenance") &&
+           json_member(c, "provenance")->type == JSON_NULL &&
+           same(json_text(producer, "commit"), json_text(proof, "commit"));
 }
 
 static int conditioned(const struct eh_json *receipt, const char *const *nodes, size_t count,
@@ -75,15 +111,15 @@ static int conditioned(const struct eh_json *receipt, const char *const *nodes, 
         return eh_json_get(c, "provenance") && eh_json_get(c, "provenance")->type == 'z';
     if (!same(cmp_text(c, "backend"), "import"))
         return 0;
-    struct eh_json *proof = document(eh_json_get(c, "provenance"));
-    int ok = proof && same(cmp_text(proof, "format"), "etude-preparation-import-provenance") &&
-             same(cmp_text(proof, "commit"), cmp_text(receipt, "commit"));
+    struct json *proof = provenance_document(eh_json_get(c, "provenance"));
+    int ok = proof && same(json_text(proof, "format"), "etude-preparation-import-provenance") &&
+             same(json_text(proof, "commit"), cmp_text(receipt, "commit"));
     for (size_t i = 0; ok && i < count; i++)
         ok = imported_goal(proof, nodes[i]);
-    const struct eh_json *roles = eh_json_get(proof, "roles");
-    for (const struct eh_json *r = aggregate && roles ? roles->child : NULL; ok && r; r = r->next)
-        ok = imported_goal(proof, r->key);
-    eh_json_free(proof);
+    const struct json *roles = json_member(proof, "roles");
+    for (size_t i = 0; ok && aggregate && roles && i < roles->count; i++)
+        ok = imported_goal(proof, roles->item[i]->name);
+    json_free(proof);
     return ok;
 }
 
