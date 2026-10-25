@@ -23,7 +23,7 @@
 # describe; such a source passes when that script names it, or when
 # tools/etude/sources.mk lists it for the Windows etude that the script
 # builds.
-# The Windows scenario actor is selected by host/windows.py. The native
+# The Windows scenario actor is selected by the native host preparation adapter. The native
 # mandoc build copies its entry and mapping adapter to batch_main.c and
 # batch_mmap.c, compiled by tools/setup/mandoc-batch.mk; these two sources
 # have no POSIX translation-unit command.
@@ -87,7 +87,7 @@ windows() {
         tools/etude/win/*) grep -qF "${1##*/}" tools/etude/wincheck.sh ||
             grep -qF "$1" tools/etude/sources.mk ;;
         tests/host/compat/scenario_guest.c)
-            grep -qF "'$1'" tests/cases/host/windows.py ;;
+            grep -qF "\"$1\"" tools/etude/host_prepare.c ;;
         tools/setup/mandoc-win/main.c|tools/setup/mandoc-win/mmap.c)
             mapped=batch_${1##*/}
             grep -qF "compat=\$TREE/tools/setup/mandoc-win" tools/setup/build_host_tool.sh &&

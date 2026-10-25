@@ -2,7 +2,7 @@
 
 `make host-source-tools` prepares pmccabe 2.8 and mandoc 1.14.6 under `build/host-tools/native`. `SOURCE_TOOL_PREFIX` selects another private prefix. The recipe verifies pinned downloads, runs the bounded semantic fixtures and records each source digest, the recipe digest, the executable digest and the fixture-result digest. A changed or missing executable rebuilds the tool. Nothing is installed outside the prefix. Windows preparation uses MSYS2 to build native UCRT executables; those executables require no MSYS or Linux runtime.
 
-`prepare_style.py` uses these tools for the `sizes` and `manual` cases. Their recorded identities enter the source-check evidence. Changing a judge invalidates that evidence. The collection's native reader checks the evidence and sources; it never runs these preparation programs.
+Native Etude preparation uses these tools for the `sizes` and `manual` cases. Their recorded identities enter the source-check evidence. Changing a judge invalidates that evidence. The collection's native reader checks the evidence and sources; it never runs these preparation programs.
 
 ## Complexity
 

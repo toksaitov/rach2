@@ -375,7 +375,7 @@ host_commands() {
     shift
     for group in "$@"; do
         # shellcheck disable=SC2086 # route supplies zero or one fixed option
-        python3 -B tests/cases/host/prepare.py --print-commands ${route:+--gnu} "$group" \
+        "$REPO/build/tools/etude/etude" prepare -H --print-commands ${route:+--gnu} "$group" \
             "$DBDIR/host-inputs/$group.inventory.json" || return
     done
 }

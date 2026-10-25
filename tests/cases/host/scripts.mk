@@ -39,8 +39,8 @@ endif
 
 # These native binaries are preparation goals of host.host.scripts themselves.
 HOST_KERNEL_FIXTURES = chown krffs_open krffs_root_lock krffs_stat pagecache kstack endothers
-HOST_KERNEL_FIXTURE_INPUTS = tests/cases/host/fixtures.py tests/cases/host/routing.py \
-    tests/host/fixtures/extract.py $(wildcard tests/host/fixtures/*.c tests/host/fixtures/*.h) \
+HOST_KERNEL_FIXTURE_INPUTS = tests/host/fixtures/extract.py \
+    $(wildcard tests/host/fixtures/*.c tests/host/fixtures/*.h) \
     tests/host/pagecache_hosttest.c tests/host/krffs_hosttest.c \
     tests/host/krffsmount_hosttest.c tests/host/krffs_hash_vectors.h \
     tests/host/compat/vfs_name_none.c rach2/sys/fs/vfs.c rach2/sys/fs/vfs.h \
@@ -55,9 +55,11 @@ HOST_KERNEL_FIXTURE_INPUTS = tests/cases/host/fixtures.py tests/cases/host/routi
     rach2/sys/proc/process.h rach2/sys/arch/i686/cpu.h rach2/sys/arch/i686/uabi.h \
     $(wildcard rach2/sys/lib/*.h rach2/sys/fs/*.h rach2/sys/proc/*.h)
 $(addprefix build/tests/host-suite/scripts/,$(HOST_KERNEL_FIXTURES)): \
-    build/tests/host-suite/scripts/%: $(HOST_KERNEL_FIXTURE_INPUTS)
-	@mkdir -p $(@D)
-	CC="$(HOSTCC)" python3 -B tests/cases/host/fixtures.py $* $@
+    build/tests/host-suite/scripts.inventory.json
+	@test -x $@
+
+build/tests/host-suite/vfs_unmount: $(HOST_KERNEL_FIXTURE_INPUTS) mk/host-fixtures.mk
+	$(MAKE) -f mk/host-fixtures.mk HOSTCC="$(HOSTCC)" $@
 
 # The i686 freestanding Doom ABI runs on a matching small recovery helper.
 HOST_DOOM_LIBC_SRC = ports/doom/crt0.c tests/host/fixtures/doom_libc.c

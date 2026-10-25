@@ -65,3 +65,4 @@ tests/musl/timerfdmusl.c: a process's state is looked at again every 10 ms
 tests/musl/unixmusl.c: a process's state is looked at again every 10 ms
 tests/musl/pollmusl.c: the parent's state is looked at again every millisecond
 tests/host/pwauth_hosttest.c: the pipe is drained and the reader checked every 50 ms
+tools/etude/host_prepare_io.c: observe preparation stop requests every 100 ms
