@@ -12,6 +12,7 @@ struct jbuf;
 int etude_context_source(const char *tree, const char *commit, const char *output,
                          const char *const extra[]);
 int etude_prepare_source_main(int argc, char **argv);
+int etude_prepare_context_main(int argc, char **argv);
 int etude_context_digest(const char *path, struct stat *status, char digest[65]);
 int etude_context_descriptor(struct jbuf *buffer, const char *path);
 
