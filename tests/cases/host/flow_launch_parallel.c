@@ -64,7 +64,7 @@ static int concurrent_start(struct launch_fixture *u, struct fx_child *p, unsign
 {
     struct fixture *f = u->f;
     char account[100], ready[4096], release[4096], workers[40];
-    const char *a[] = {flow_path(f, "launch"), "legacy", "tests/run", suite, NULL};
+    const char *a[] = {u->launcher, "legacy", "tests/run", suite, NULL};
     const char *env[] = {account, ready, release, workers, NULL};
     snprintf(account, sizeof(account), "TEST_ACCOUNT=account-%s%u", i == 2 ? "exclusive-" : "", i);
     snprintf(ready, sizeof(ready), "TEST_READY=%s/ready-%s-%u", f->work, kind, i);
@@ -135,8 +135,8 @@ static int cancellation(struct launch_fixture *u)
 {
     struct fixture *f = u->f;
     struct fx_child children[2];
-    const char *first[] = {flow_path(f, "launch"), "alone", f->self, "--launch-wait", NULL};
-    const char *second[] = {flow_path(f, "launch"), "alone", f->self, "--launch-observer", NULL};
+    const char *first[] = {u->launcher, "alone", f->self, "--launch-wait", NULL};
+    const char *second[] = {u->launcher, "alone", f->self, "--launch-observer", NULL};
     char *observed;
     int ok;
     fx_env("TEST_ACCOUNT", "account-cancel");

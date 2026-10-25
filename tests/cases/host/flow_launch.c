@@ -302,6 +302,7 @@ static int setup(struct launch_fixture *u)
     unsigned i;
     for (i = 0; clear[i]; i++)
         fx_env(clear[i], NULL);
+    strcpy(u->launcher, flow_path(f, "launch"));
     snprintf(u->tree, sizeof(u->tree), "%s/checkout", f->work);
     fx_mkdir(u->tree);
     fx_mkdir(flow_path(f, "ledger"));

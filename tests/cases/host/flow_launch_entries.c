@@ -13,10 +13,8 @@ static int build(struct launch_fixture *u)
     struct fixture *f = u->f;
     char *text = fx_read(flow_source(f, "Makefile")), *at, *output;
     const char *plain[] = {"/usr/bin/make", "ARG=two words", NULL};
-    const char *seven[] = {flow_path(f, "launch"), "build", "/usr/bin/make", "-j", "7",
-                           "ARG=two words",        NULL};
-    const char *sixteen[] = {flow_path(f, "launch"), "build", "/usr/bin/make", "-j16",
-                             "ARG=two words",        NULL};
+    const char *seven[] = {u->launcher, "build", "/usr/bin/make", "-j", "7", "ARG=two words", NULL};
+    const char *sixteen[] = {u->launcher, "build", "/usr/bin/make", "-j16", "ARG=two words", NULL};
     int ok;
     if (!text || !(at = strstr(text, "# The architecture (mk/arch.mk):"))) {
         free(text);
@@ -54,7 +52,7 @@ static int job_row(struct launch_fixture *u, const char *const args[], const cha
 static int jobs(struct launch_fixture *u)
 {
     struct fixture *f = u->f;
-    const char *wrapper = flow_path(f, "etude-bin/make");
+    char wrapper[4096];
     const char *unbounded[] = {wrapper, "-j", "components", NULL};
     const char *plain[] = {wrapper, "components", NULL};
     const char *one[] = {wrapper, "-j", "1", "components", NULL};
@@ -63,6 +61,7 @@ static int jobs(struct launch_fixture *u)
     const char *twelve[] = {wrapper, "-j12", "components", NULL};
     const char *nested[] = {wrapper, "all", NULL};
     char path[16384];
+    strcpy(wrapper, flow_path(f, "etude-bin/make"));
     fx_env("FLOW_LAUNCH_MODE", "jobs");
     fx_copy(f->self, flow_path(f, "record-make"));
     chmod(flow_path(f, "record-make"), 0755);
@@ -112,7 +111,10 @@ static int worker(struct launch_fixture *u)
 static int ci_unconfigured(struct launch_fixture *u)
 {
     struct fixture *f = u->f;
-    const char *a[] = {"sh", flow_source(f, "tools/ci/run.sh"), "core", flow_path(f, "ci"), NULL};
+    char script[4096], output[4096];
+    const char *a[] = {"sh", script, "core", output, NULL};
+    strcpy(script, flow_source(f, "tools/ci/run.sh"));
+    strcpy(output, flow_path(f, "ci"));
     fx_env("FLOW_LAUNCH_MODE", "ci");
     if (!flow_copy(f, "tools/ci/native_entry.sh", "checkout/tools/ci/native_entry.sh") ||
         !flow_copy(f, "tools/ci/native_site.sh", "checkout/tools/ci/native_site.sh") ||
@@ -128,9 +130,10 @@ static int ci_unconfigured(struct launch_fixture *u)
 static int owner(struct launch_fixture *u)
 {
     struct fixture *f = u->f;
-    char command[32768];
-    const char *a[] = {"sh", flow_path(f, "owner/tools/dev/testing.sh"), "run", command, NULL};
+    char command[32768], script[4096];
+    const char *a[] = {"sh", script, "run", command, NULL};
     int ok;
+    strcpy(script, flow_path(f, "owner/tools/dev/testing.sh"));
     if (!flow_copy(f, "tools/dev/testing.sh", "owner/tools/dev/testing.sh"))
         return 0;
     fx_env("FLOW_LAUNCH_MODE", "owner");
@@ -148,12 +151,14 @@ static int owner(struct launch_fixture *u)
 static int legacy(struct launch_fixture *u)
 {
     struct fixture *f = u->f;
-    const char *a[] = {flow_path(f, "launch"),  "-r", flow_path(f, "result"), "legacy",
-                       flow_path(f, "old-run"), NULL};
+    char result[4096], program[4096];
+    const char *a[] = {u->launcher, "-r", result, "legacy", program, NULL};
     struct flock lock;
     int fd, ok;
     char *seen;
-    fx_copy(f->self, flow_path(f, "old-run"));
+    strcpy(result, flow_path(f, "result"));
+    strcpy(program, flow_path(f, "old-run"));
+    fx_copy(f->self, program);
     chmod(flow_path(f, "old-run"), 0755);
     fd = open(flow_path(f, "locks/rach2-ports.0"), O_CREAT | O_RDWR, 0600);
     if (fd < 0)
@@ -175,14 +180,12 @@ static int legacy(struct launch_fixture *u)
 static int bisection(struct launch_fixture *u)
 {
     struct fixture *f = u->f;
-    const char *a[] = {"sh",   flow_source(f, "tools/ci/bisect.sh"),
-                       "-e",   "/host-products/etude",
-                       "core", "i686",
-                       "good", "bad",
-                       "1",    "default",
-                       NULL};
+    char script[4096];
+    const char *a[] = {"sh", script,    "-e", "/host-products/etude", "core", "i686", "good", "bad",
+                       "1",  "default", NULL};
     char machine[8192];
     int ok;
+    strcpy(script, flow_source(f, "tools/ci/bisect.sh"));
     fx_env("FLOW_LAUNCH_MODE", "bisect");
     flow_put(f, "private-ledger/claims", "etude-ledger 1\n");
     snprintf(machine, sizeof(machine),
@@ -203,7 +206,7 @@ static int nested(struct launch_fixture *u)
 {
     struct fixture *f = u->f;
     char command[32768];
-    const char *a[] = {flow_path(f, "launch"), "build", "/bin/sh", "-c", command, NULL};
+    const char *a[] = {u->launcher, "build", "/bin/sh", "-c", command, NULL};
     snprintf(command, sizeof(command),
              "'%s' --launch-observer && '%s/launch' -r '%s/result' "
              "legacy '%s' --launch-observer",
@@ -234,7 +237,7 @@ int launch_entries(struct launch_fixture *u)
 static int refuse(struct launch_fixture *u, const char *policy)
 {
     struct fixture *f = u->f;
-    const char *a[] = {flow_path(f, "launch"), "build", f->self, "--launch-observer", NULL};
+    const char *a[] = {u->launcher, "build", f->self, "--launch-observer", NULL};
     flow_put(f, "site", policy);
     return launch_run(u, a, 2) && fx_check(f, !fx_exists(flow_path(f, "observed")),
                                            "refused launch never executes command");
@@ -287,8 +290,8 @@ static int bad_environment(struct launch_fixture *u)
 int launch_refusals(struct launch_fixture *u)
 {
     struct fixture *f = u->f;
-    const char *a[] = {flow_path(f, "launch"), "legacy", f->self, "--launch-observer", NULL};
-    const char *build[] = {flow_path(f, "launch"), "build", f->self, "--launch-observer", NULL};
+    const char *a[] = {u->launcher, "legacy", f->self, "--launch-observer", NULL};
+    const char *build[] = {u->launcher, "build", f->self, "--launch-observer", NULL};
     static const char *value[] = {"bigmem-boundary-v1", "yes", "bigmem-boundary-v2"};
     char policy[33000];
     unsigned i;

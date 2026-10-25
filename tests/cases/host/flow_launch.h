@@ -4,7 +4,7 @@
 #include "flow_check.h"
 struct launch_fixture {
     struct fixture *f;
-    char tree[4096], policy[32768];
+    char tree[4096], launcher[4096], policy[32768];
 };
 int flow_launch(struct fixture *f);
 int flow_launch_mock(int argc, char **argv);
