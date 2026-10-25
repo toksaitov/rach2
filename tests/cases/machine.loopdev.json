@@ -59,7 +59,7 @@
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"command": "exec /loopdevprobe krffs", "durable_writes": 128}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
-      "execution": {"program": "loopdev_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["loopdev-disk"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure; the scenario removes the images it takes out of the copy after a pass"},
+      "execution": {"program": "loopdev_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["loopdev-disk"]}, {"fixture": "disk", "names": ["image-disk", "image-transfer"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure; the scenario removes the images it takes out of the copy after a pass"},
       "steps": [
         {"step_id": "krffs", "stage": "execute", "machine": "volume", "does": "boot the copy, run loopdevprobe krffs at the debug shell: an image of type KRFFS on the disk's FAT32 volume attached to loop0, mounted, read, written, unmounted, detached, attached again and read back, everything an attachment refuses, and Linux's loop ioctls, and end the machine with QMP's quit"},
         {"step_id": "durable", "stage": "execute", "machine": "volume", "does": "boot the copy again, run loopdevprobe durable, 128 writes to a file of the KRFFS image through loop0, each counted written and synced in /proc/loop, and end the machine with QMP's quit"},
@@ -67,7 +67,7 @@
       ],
       "machines": [
         {"machine_id": "volume", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["loopdev-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false},
-        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}, {"name": "image-transfer", "bus": "ide", "size_bytes": 67108864}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {"assertion_id": "probe-ok", "checks": "loopdevprobe's line says LOOPPROBE OK (krffs), never LOOPPROBE FAIL", "source": "scenario"},
@@ -90,7 +90,7 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 671088640, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 671088640, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
