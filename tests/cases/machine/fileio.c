@@ -1,12 +1,13 @@
 /* Copy a disk range with native file APIs, preserving bytes outside it. */
+#ifdef _WIN32
+#include "../../../tools/etude/win/files.h"
+#endif
+#include "../../../tools/image/host_io.h"
 #include "fileio.h"
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
-#ifdef _WIN32
-#include "../../../tools/etude/win/files.h"
-#endif
 
 static int copy_bounds(const char *source, uint64_t offset, uint64_t *length,
                        const char *destination, uint64_t at)
@@ -37,7 +38,8 @@ int case_copy_range(const char *source, uint64_t offset, uint64_t length, const 
     if (!in)
         return -1;
     out = fopen(destination, truncate ? "wb" : "r+b");
-    if (!out || fseeko(in, (off_t)offset, SEEK_SET) != 0 || fseeko(out, (off_t)at, SEEK_SET) != 0)
+    if (!out || host_image_seek(in, (int64_t)offset, SEEK_SET) != 0 ||
+        host_image_seek(out, (int64_t)at, SEEK_SET) != 0)
         goto done;
     while (length) {
         size_t n = length < sizeof(buffer) ? (size_t)length : sizeof(buffer);

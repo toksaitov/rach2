@@ -13,6 +13,7 @@
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
  * host-deps: tools/etude/posix/process.c tools/etude/posix/store.c
  * host-deps: tools/etude/capture.c tools/etude/history_json.c
+ * host-deps: tests/cases/machine/fileio.c
  * host-deps: tools/etude/json.c
  * host-deps: tools/etude/guest/guest.c tools/etude/guest/fixture.c
  * host-deps: tools/etude/guest/owner.c
@@ -113,6 +114,8 @@
 #include "etude/report.h"
 #include "etude/scenario.h"
 #include "sha256.h"
+#include "../../tools/image/host_io.h"
+#include "../cases/machine/fileio.h"
 #include "json.h"
 
 #ifndef _WIN32
@@ -3750,6 +3753,53 @@ static void test_suspend(const struct site *s)
 #endif
 }
 
+/** Seed or inspect the actual far position through an independent wide seek. */
+static int far_bytes(const char *path, uint64_t offset, char *bytes, size_t length, int write)
+{
+    FILE *file = fopen(path, write ? "w+b" : "rb");
+    int ok;
+
+    if (file == NULL)
+        return 0;
+    ok = (!write || host_image_sparse(file) == 0) &&
+         host_image_seek(file, (int64_t)offset, SEEK_SET) == 0;
+    if (ok)
+        ok = write ? fwrite(bytes, 1, length, file) == length
+                   : fread(bytes, 1, length, file) == length;
+    if (fclose(file) != 0)
+        ok = 0;
+    return ok;
+}
+
+/** Copy both ways at the USB far partition, preserving neighboring bytes. */
+static void test_disk_ranges(void)
+{
+    const uint64_t offset = UINT64_C(4294969344) * 512;
+    char image[PATH_MAX], output[PATH_MAX], source[PATH_MAX];
+    char seeded[] = "xold\0bytesy", replacement[] = "new\0data!";
+    char got[sizeof(seeded)];
+
+    fix_format(image, sizeof(image), "%s/range-image", fix_dir());
+    fix_format(output, sizeof(output), "%s/range-output", fix_dir());
+    fix_format(source, sizeof(source), "%s/range-source", fix_dir());
+    CHECK(far_bytes(image, offset - 1, seeded, sizeof(seeded), 1), "far range: sparse seed");
+    CHECK(case_copy_range(image, offset, sizeof(replacement), output, 0, 1) == 0 &&
+              far_bytes(output, 0, got, sizeof(replacement), 0) &&
+              memcmp(got, seeded + 1, sizeof(replacement)) == 0,
+          "far range: extraction uses the full source offset");
+    CHECK(write_file(source, replacement, sizeof(replacement)) == 0 &&
+              case_copy_range(source, 0, UINT64_MAX, image, offset, 0) == 0 &&
+              far_bytes(image, offset - 1, got, sizeof(got), 0) && got[0] == seeded[0] &&
+              memcmp(got + 1, replacement, sizeof(replacement)) == 0 &&
+              memcmp(got + 1 + sizeof(replacement), seeded + 1 + sizeof(replacement),
+                     sizeof(got) - 1 - sizeof(replacement)) == 0,
+          "far range: insertion uses the full destination offset and preserves neighbors");
+    CHECK(case_copy_range(image, offset + sizeof(seeded), 1, output, 0, 1) != 0,
+          "far range: read past the extent is refused");
+    CHECK(case_copy_range(source, 0, 1, source, offset, 0) != 0,
+          "far range: same-file copy is refused");
+}
+
 /** Run the audio rows, the capture rows, the stand-in rows, the fault row,
  * the stop row, the suspension rows, the pair and isolation rows, the forward
  * row and the damaged row. */
@@ -3773,6 +3823,7 @@ static void test_stand_in(void)
     run_row(fault_row, &s, NULL);
     run_row(stop_row, &s, WAITING);
     test_process_paths();
+    test_disk_ranges();
     test_suspend(&s);
     run_row(pair_row, &s, NULL);
     test_isolation(&s);

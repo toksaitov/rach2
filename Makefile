@@ -772,6 +772,7 @@ $(LIFECYCLE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 	    -Itools/etude/posix -Iutils
 $(DISK_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
                    tests/cases/machine/fileio.c tests/cases/machine/fileio.h \
+                   tools/image/host_io.h \
                    $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
 	@mkdir -p $(@D)
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
@@ -841,6 +842,7 @@ build/tests/cases/machine/credpersist_scenario: tests/creddisk_rows.h
 USB_SCENARIOS = build/tests/cases/machine/usb_scenario build/tests/cases/machine/usbdisk_scenario
 $(USB_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
                   tests/cases/machine/fileio.c tests/cases/machine/fileio.h \
+                  tools/image/host_io.h \
                   tests/system/checkers/records.c tests/system/checkers/records.h \
                   tests/cases/machine/usbcase.c tests/cases/machine/usbcase.h \
                   $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
@@ -852,7 +854,8 @@ build/tests/cases/machine/grow_measured: tests/system/checkers/records.c \
     tests/system/checkers/records.h
 
 build/tests/cases/machine/metal_scenario: tests/cases/machine/metal_accept.c \
-    tests/cases/machine/metal_accept.h tests/cases/machine/fileio.c tests/cases/machine/fileio.h
+    tests/cases/machine/metal_accept.h tests/cases/machine/fileio.c tests/cases/machine/fileio.h \
+    tools/image/host_io.h
 
 build/tests/cases/host/usbchecks: tests/cases/host/usbchecks.c \
     tests/cases/host/sanitizer_tool.h \
