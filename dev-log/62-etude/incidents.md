@@ -1700,3 +1700,7 @@ The helper used `/Users/toksaitov/flow/claude/r680/site/etude-site` and its hist
 ## A direct compile supplied an unqualified executable name
 
 The local component compile for #1163 passed `cc` to the direct executor, which requires an executable path and does not search PATH. It ended incomplete before starting a compiler. The corrected command used `/usr/bin/cc` under the same current shared admission authority and compiled successfully. Both command records remain under `build/tests/selfbuild-1163`, and neither owner left an admission claim. Direct executor commands must use resolved executable paths.
+
+## A question about the QEMU build was treated as a stop instruction
+
+The coordinator described missing Python packages without first explaining that the measured Windows emulator bug required a QEMU source repair and that QEMU's own build system uses Python. When the owner asked who authorized that build, the coordinator issued a stop instruction instead of answering the question and continuing the active task. The owner immediately corrected that interpretation. No QEMU compilation was live: the previous configure attempt had ended, its restoration check was already required, and the next retry had only been staged. The coordinator withdrew the stop and continued after that restoration check. A question about an action is not an instruction to cancel it; explain the decision and preserve the active work unless the owner changes it.
