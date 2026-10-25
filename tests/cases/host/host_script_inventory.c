@@ -129,7 +129,7 @@ static struct eh_json *document(const char *path)
     struct eh_json *doc = NULL;
     char *bytes = NULL;
     long length;
-    if (f && !fseek(f, 0, SEEK_END) && (length = ftell(f)) > 0 && length <= EH_MAX_LINE &&
+    if (f && !fseek(f, 0, SEEK_END) && (length = ftell(f)) > 0 && (size_t)length <= EH_MAX_LINE &&
         !fseek(f, 0, SEEK_SET) && (bytes = malloc((size_t)length + 1)) != NULL &&
         fread(bytes, 1, (size_t)length, f) == (size_t)length && !ferror(f)) {
         bytes[length] = 0;
