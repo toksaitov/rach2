@@ -1,7 +1,6 @@
-# Core checks use one measured native collection for both architectures.
-# The selected commit supplies its runner label and accelerator through
-# tools/ci/site.sh. Preparation, execution and cleanup share the ten-minute
-# budget; the job limit also leaves time for checkout and artifact upload.
+# The selected commit supplies its runner label, accelerator and CI entry.
+# Native entry is activated with its installed site, reference and retention
+# policy. Its preparation, execution and cleanup share the ten-minute budget.
 # Only the newest waiting master commit runs after the active check ends.
 name: Core tests
 
@@ -34,6 +33,7 @@ jobs:
       runner: ${{ steps.site.outputs.runner }}
       labels: ${{ steps.site.outputs.labels }}
       accelerator: ${{ steps.site.outputs.accelerator }}
+      native: ${{ steps.site.outputs.native }}
     steps:
       - name: Find master's newest commit and whether it was tested
         id: head
@@ -61,6 +61,11 @@ jobs:
         run: |
           sh tools/ci/site.sh tools/ci/site > "$RUNNER_TEMP/core-site"
           cat "$RUNNER_TEMP/core-site" >> "$GITHUB_OUTPUT"
+          if grep -qx 'results=native' tools/ci/run.sh; then
+              echo 'native=true' >> "$GITHUB_OUTPUT"
+          else
+              echo 'native=false' >> "$GITHUB_OUTPUT"
+          fi
 
   core:
     name: Test both architectures on ${{ needs.head.outputs.runner }}
@@ -74,6 +79,7 @@ jobs:
     env:
       ARCH: i686 x86_64
       RACH2_QEMU_ACCEL: ${{ needs.head.outputs.accelerator }}
+      ETUDE_NATIVE_ENTRY: ${{ needs.head.outputs.native }}
     steps:
       - name: Check out the commit
         uses: actions/checkout@v5
@@ -85,9 +91,15 @@ jobs:
       - name: Take the environment of a core run
         run: grep -E '^[A-Z_][A-Z0-9_]*=' tools/ci/core.env >> "$GITHUB_ENV"
 
-      - name: Allocate retained native evidence
+      - name: Allocate the selected entry's results
         id: retention
-        run: python3 tools/ci/retention.py --policy "$ETUDE_RETENTION" --site "$ETUDE_SITE" allocate --reference "$ETUDE_REFERENCE" --github-env "$GITHUB_ENV"
+        run: |
+          if [ "$ETUDE_NATIVE_ENTRY" = true ]; then
+              python3 tools/ci/retention.py --policy "${ETUDE_RETENTION:?native retention policy is absent}" --site "${ETUDE_SITE:?native site is absent}" allocate --reference "${ETUDE_REFERENCE:?native reference is absent}" --github-env "$GITHUB_ENV"
+          else
+              out=$(mktemp -d "$RUNNER_TEMP/core-results.XXXXXX")
+              echo "ETUDE_RESULTS=$out" >> "$GITHUB_ENV"
+          fi
 
       - name: Prepare and run style, host and core
         run: sh tools/ci/run.sh core "$ETUDE_RESULTS"
@@ -104,11 +116,11 @@ jobs:
           done
 
       - name: Stage the shared native evidence
-        if: ${{ always() && steps.retention.outcome == 'success' }}
+        if: ${{ always() && needs.head.outputs.native == 'true' && steps.retention.outcome == 'success' }}
         run: python3 tools/ci/native_evidence.py stage "$ETUDE_RESULTS" "$RUNNER_TEMP/native-evidence"
 
       - name: Upload the shared native evidence
-        if: ${{ always() && steps.retention.outcome == 'success' }}
+        if: ${{ always() && needs.head.outputs.native == 'true' && steps.retention.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: core-native-evidence
@@ -154,6 +166,7 @@ jobs:
           path: ${{ runner.temp }}/results
 
       - name: Restore the shared native evidence
+        if: needs.head.outputs.native == 'true'
         run: python3 tools/ci/native_evidence.py restore "$RUNNER_TEMP/results/core-native-evidence" "$RUNNER_TEMP/results"
 
       - name: Set the commit's status and file failures as issues

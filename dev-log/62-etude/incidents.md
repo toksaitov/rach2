@@ -1355,3 +1355,9 @@ The fixture now writes each generated measurement buffer in binary mode and chec
 ## USB probe read only the beginning of a long boot line (#1142)
 
 The first complete Mac diagnostic passed 1020 of 1024 attempts. Alongside the two scripted host groups in #1136, both machine.usb.off cases failed: the kernel logged that rach2.nousb disabled USB, while usbprobe reported that the option was absent. The probe read only255bytes of /proc/cmdline; QEMU's long kernel filename preceded the option. The probe now scans the complete file in bounded chunks, preserving token state across reads and matching whole words. The empty-device and enabled-device assertions remain unchanged.
+
+## Native CI was selected before its site was activated (#1155, #1156)
+
+The first core job after publication selected 964e34269 and stopped before any compiler or test ran. Its new retention command received empty ETUDE_RETENTION, ETUDE_SITE and ETUDE_REFERENCE variables and tried to read the checkout directory as its policy. The actual installed authority receipt still said routine_activated=false, and its route was null. A later workflow skipped both test and report jobs because the failed commit already had a status; that workflow success was not a core pass.
+
+T95 installs the selected site's policy, measured reference, retained evidence and reporting reader before switching ordinary checks. The source had switched run.sh and both workflows first. The existing results=lines entry is now selected explicitly until that activation. Workflow allocation and native evidence transfer follow the committed selection; a selected native entry still refuses absent configuration and cannot fall back. The existing run-driver fixture now tests its lines and history modes from either committed selection. Native diagnostic results remain separate from compatibility CI, and the hold stays open until the actual two-architecture core run passes.

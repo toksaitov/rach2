@@ -1,10 +1,11 @@
 #!/bin/sh
-# Run a prepared native CI collection and preserve both architecture results.
+# Run the selected CI entry and preserve both architecture results.
 # core selects style, host and core; full selects all suites, including bigmem.
 # SUITES may select ARCH:SUITE operands for a full rerun. One history and store
 # describe the whole collection; strict C verdicts project architecture results.
-# An installed immutable ETUDE and version-two site policy are required.
-# Historical lines/history paths remain for old-commit bisection fixtures.
+# Native entry requires an installed immutable ETUDE and version-two site.
+# The lines entry remains active until native activation; history supports
+# old-commit bisection fixtures.
 set -u
 
 
@@ -30,9 +31,10 @@ if [ "$kind" = full ]; then
     RACH2_STORE=
     export RACH2_STORE
 fi
-# How this tree's tests/run gives its results, `lines` or `history`, as the
-# header says.
-results=native
+# Keep the existing entry until selected-site activation supplies the native
+# policy, measured reference and retention root. Activation changes this one
+# value to native; missing native configuration never selects a fallback.
+results=lines
 if [ "$results" = native ]; then
     exec sh tools/ci/native_entry.sh "$kind" "$out"
 fi
