@@ -20,7 +20,9 @@
 struct owner_message {
     int kind, status, clean;
     pid_t child;
+#if defined(__linux__) || defined(__rach2__)
     unsigned long long start;
+#endif
     struct rusage usage;
 };
 
@@ -97,7 +99,7 @@ static void owner_signal(pid_t child, unsigned long long start, int signo)
 /* Close the inherited responder/other-attempt pipes in this owner only. */
 static void owner_fds(int control, int events)
 {
-    int keep[2] = {control, events};
+    const int keep[2] = {control, events};
     posix_close_others(keep, 2);
 }
 struct owner_loop {
