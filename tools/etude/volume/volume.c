@@ -470,20 +470,26 @@ static int add_tree(struct etude_volume *v, char *name, char *path, int depth)
     struct stat st;
     struct dirent *d;
     DIR *dp;
+    uint64_t modified;
     size_t nlen = strlen(name), plen = strlen(path);
 
     if (stat(path, &st) != 0)
         return vfail(v, "%s cannot be read: %s", path, strerror(errno));
+#ifdef _WIN32
+    modified = st.st_mtim.tv_sec > 0 ? (uint64_t)st.st_mtim.tv_sec : 0;
+#else
+    modified = st.st_mtime > 0 ? (uint64_t)st.st_mtime : 0;
+#endif
     if (S_ISREG(st.st_mode))
         return header(v, name, '0', (st.st_mode & S_IXUSR) ? 0755 : 0644, (uint64_t)st.st_size,
-                      st.st_mtime > 0 ? (uint64_t)st.st_mtime : 0) != 0
+                      modified) != 0
                    ? -1
                    : add_file(v, path, (uint64_t)st.st_size);
     if (!S_ISDIR(st.st_mode))
         return vfail(v, "%s is neither a file nor a directory", path);
     if (depth == DEPTH_MAX)
         return vfail(v, "%s is more than %d directories deep", path, DEPTH_MAX);
-    if (header(v, name, '5', 0755, 0, st.st_mtime > 0 ? (uint64_t)st.st_mtime : 0) != 0)
+    if (header(v, name, '5', 0755, 0, modified) != 0)
         return -1;
     if ((dp = opendir(path)) == NULL)
         return vfail(v, "%s cannot be read: %s", path, strerror(errno));

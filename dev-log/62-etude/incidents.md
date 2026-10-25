@@ -1437,3 +1437,7 @@ The machine library now appends `.exe` to native Windows executable copies, chec
 ## QEMU helper extraction passed native paths to MSYS tar, #1147
 
 The first isolated WHPX diagnostic stopped before QEMU. The committed helper passed its native `C:\ProgramData\...` extraction directory to MSYS2 tar, which reported `Cannot open: No such file or directory`. The protected child and Linux owner ended with confirmed cleanup; the guarded recovery restored both endpoint policies and all installed files and permissions. Both CI services returned online and idle. The installer now converts both the archive and extraction directory through the existing MSYS2 cygpath before invoking tar. Package and extracted-file digests remain required. The failed setup produced no processor or halt evidence.
+
+## The native volume writer used the old status timestamp, #1134
+
+The current-source e1 native preparation compiled and inspected Etude and the legacyset fixture successfully, then refused the disk-binding fixture: volume.c still read `st_mtime`, while the native wide-file status adapter provides `st_mtim`. No fixture ran. The protected child ended with confirmed cleanup; guarded recovery restored both endpoint policies. The tar writer now reads the seconds member of that native timestamp and uses the same nonnegative value for regular-file and directory headers. POSIX timestamp access and all volume checks remain unchanged. The two successful compiler events are retained; only the affected disk fixture needs another compile.
