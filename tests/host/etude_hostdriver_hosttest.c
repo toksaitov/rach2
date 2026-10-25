@@ -227,6 +227,11 @@ static void checks(void)
     CHECK(run(output, sizeof(output)) == 0 && strstr(output, "assert a pass") &&
               strstr(output, "assert b pass") && strstr(output, "assert listed pass"),
           "prepared binaries execute with isolated scratch and fatal sanitizer settings");
+    const char *begin = strstr(output, "@etude 1 begin host.host.tests\n");
+    const char *assertion = strstr(output, "@etude 1 assert ");
+    const char *child = strstr(output, "@etude 1 child ");
+    CHECK(begin && assertion && child && begin < assertion && begin < child,
+          "the report begins before direct assertion and child writes");
     encoded_inputs();
     inventory("tests", 0, NULL);
     setenv("HOST_PROBE_FAIL", "1", 1);
