@@ -1357,3 +1357,9 @@ The fixture now writes each generated measurement buffer in binary mode and chec
 The first native Windows diagnostic on 0da2f8d32751 reached the real platform fixtures. The path row created its Unicode directory and ran the child there, but compared the child's backslash-separated `GetCurrentDirectoryW` output with a request derived from a forward-slash collection scratch prefix. The fixture now normalizes only its expected report to the native separator; the requested path, Unicode bytes, process assertions and deep-file checks remain.
 
 The complete first platform log is retained under `build/tests/windows-first-diagnostic-0da2f8d32751-controls-02/operator/live-etude-01.log`, SHA-256 `97d6f099d41172062b3b0af118ae1ebfcbb0332f4cd0baf60b728ccd6c68383c`. The diagnostic continues on its frozen source while this fixture repair is checked separately.
+
+## Windows completed attempts retained their output files (#1133)
+
+The native `exec-sinks` row passed separate output, repeated truncation and merged output, then failed to remove the merged file with errno 13. The Windows executor closed its capture files only when the attempt was freed, although `etude_exec_wait` had already returned its completed result. Three completed attempts in the same executor therefore retained handles on the file. The existing output fixture deliberately keeps those attempts alive through replacement and already exposes this fault.
+
+The Windows completion path now closes both complete output streams after the job and pipes have ended, before returning the attempt. A shared stream is closed once, and later release is safe because the capture helper clears both pointers. Bounded captures, byte counts, process accounting, cleanup and all output fixture assertions remain. The actual failed source stays frozen in the running diagnostic; only the affected Windows executor and fixture need rebuilding for the follow-up.

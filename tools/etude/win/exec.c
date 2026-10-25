@@ -315,6 +315,7 @@ static void proc_settle(struct etude_proc *p)
         p->r.end = ETUDE_END_EXITED;
         p->r.value = (int)c->status;
     }
+    capture_files_close(&p->files);
     p->r.out.closed = p->r.err.closed = 1;
     if (etude_win_usage(c, &u) == 0) {
         p->r.cpu_us.quality = ETUDE_QUALITY_EXACT;
