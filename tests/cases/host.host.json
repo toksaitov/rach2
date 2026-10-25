@@ -2059,13 +2059,15 @@
       "units": [
         "the native kernel and protocol checks partition of the complete immutable host.list"
       ],
-      "domain": "machine",
+      "domain": "host",
       "architectures": [
         "i686",
         "x86_64"
       ],
       "workload": {
-        "arguments": [],
+        "arguments": [
+          "scripts_native"
+        ],
         "inputs": {},
         "repetitions": 1,
         "seed": null
@@ -2076,7 +2078,7 @@
         "features": {}
       },
       "execution": {
-        "program": "host_scripts_scenario",
+        "program": "host",
         "stdin": null,
         "role": "ordinary",
         "privileges": "an ordinary user",
@@ -2086,63 +2088,63 @@
           }
         ],
         "children": "reaped",
-        "cleanup": "the C controllers remove private scratch; the case executor stops every owned helper and native process"
+        "cleanup": "the prepared native host driver reaps every fixture child and removes successful private scratch"
       },
       "assertions": [
         {
           "assertion_id": "listed",
           "checks": "all five scripted host partitions are disjoint and cover host.list exactly once with matching compiled dispatch",
-          "source": "scenario"
+          "source": "program"
         },
         {
           "assertion_id": "krffs_open",
           "checks": "krffs publication open: `sh tests/host/extract_check.sh krffs_open` exits 0",
-          "source": "scenario"
+          "source": "program"
         },
         {
           "assertion_id": "krffs_root_lock",
           "checks": "krffs root data operations under the mount's lock: `sh tests/host/extract_check.sh krffs_root_lock` exits 0",
-          "source": "scenario"
+          "source": "program"
         },
         {
           "assertion_id": "krffs_stat",
           "checks": "the inode number of the krffs root in the stat calls: `sh tests/host/extract_check.sh krffs_stat` exits 0",
-          "source": "scenario"
+          "source": "program"
         },
         {
           "assertion_id": "kstack",
           "checks": "a new kernel stack is cleared and guarded: `sh tests/host/kstack_check.sh` exits 0",
-          "source": "scenario"
+          "source": "program"
         },
         {
           "assertion_id": "endothers",
           "checks": "an init's end waits for the processes still ending: `sh tests/host/endothers_check.sh` exits 0",
-          "source": "scenario"
+          "source": "program"
         },
         {
           "assertion_id": "chown",
           "checks": "the set-id rules of a mounted chown: `sh tests/host/extract_check.sh chown` exits 0",
-          "source": "scenario"
+          "source": "program"
         },
         {
           "assertion_id": "pagecache",
           "checks": "the page cache with sys_sync's bounded wait: `sh tests/host/extract_check.sh pagecache` exits 0",
-          "source": "scenario"
+          "source": "program"
         },
         {
           "assertion_id": "anthropic",
           "checks": "Messages tool results and streamed replies: `python3 -B tests/system/fakeapi/anthropic_test.py` exits 0",
-          "source": "scenario"
+          "source": "program"
         },
         {
           "assertion_id": "gemini",
           "checks": "Gemini function responses and unordered steps: `python3 -B tests/system/fakeapi/gemini_test.py` exits 0",
-          "source": "scenario"
+          "source": "program"
         },
         {
           "assertion_id": "fakeapi",
           "checks": "the fake API server's unordered and repeated steps: `python3 -B tests/system/fakeapi/fakeapi_test.py` exits 0",
-          "source": "scenario"
+          "source": "program"
         }
       ],
       "branches": [],
@@ -2152,16 +2154,10 @@
       },
       "progress": [
         {
-          "witness_id": "stage",
-          "kind": "step",
-          "means": "a declared scenario step has ended",
-          "limit": 11
-        },
-        {
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 11
+          "limit": 10
         }
       ],
       "bounds": {
@@ -2175,13 +2171,7 @@
           "initial_us": 1800000000,
           "ceiling_us": 3600000000
         },
-        "stages": {
-          "boot": {
-            "floor_us": 1000000,
-            "initial_us": 400000000,
-            "ceiling_us": 1200000000
-          }
-        }
+        "stages": {}
       },
       "resources": {
         "cpu_millis": 2000,
@@ -2193,21 +2183,6 @@
         "loop_devices": 0
       },
       "prepare": [
-        {
-          "name": "host_scripts_scenario",
-          "node": "tests/cases/host/host_scripts_scenario",
-          "per_architecture": false
-        },
-        {
-          "name": "products-kernel",
-          "node": "x86_64/rach2/kernel",
-          "per_architecture": false
-        },
-        {
-          "name": "products-image",
-          "node": "x86_64/images/gnu-test.disk",
-          "per_architecture": false
-        },
         {
           "name": "host-list",
           "node": "tests/host-suite/sources/tests/cases/host/host.list",
@@ -2257,103 +2232,22 @@
           "name": "host-cases",
           "node": "tests/host-suite/sources/tests/cases/host.host.json",
           "per_architecture": false
+        },
+        {
+          "name": "host",
+          "node": "tests/cases/host/host",
+          "per_architecture": false
+        },
+        {
+          "name": "checks",
+          "node": "tests/host-suite/scripts.inventory.json",
+          "per_architecture": false
         }
       ],
       "timing": [],
       "native": {
-        "plan": "none",
-        "class": "system",
-        "reason": "native C executes the prepared kernel and API protocol checks on each supported host"
-      },
-      "steps": [
-        {
-          "step_id": "listed",
-          "stage": "execute",
-          "does": "check all source list identities"
-        },
-        {
-          "step_id": "krffs_open",
-          "stage": "execute",
-          "does": "run every native regression row of krffs_open"
-        },
-        {
-          "step_id": "krffs_root_lock",
-          "stage": "execute",
-          "does": "run every native regression row of krffs_root_lock"
-        },
-        {
-          "step_id": "krffs_stat",
-          "stage": "execute",
-          "does": "run every native regression row of krffs_stat"
-        },
-        {
-          "step_id": "kstack",
-          "stage": "execute",
-          "does": "run every native regression row of kstack"
-        },
-        {
-          "step_id": "endothers",
-          "stage": "execute",
-          "does": "run every native regression row of endothers"
-        },
-        {
-          "step_id": "chown",
-          "stage": "execute",
-          "does": "run every native regression row of chown"
-        },
-        {
-          "step_id": "pagecache",
-          "stage": "execute",
-          "does": "run every native regression row of pagecache"
-        },
-        {
-          "step_id": "anthropic",
-          "stage": "execute",
-          "does": "run every native regression row of anthropic"
-        },
-        {
-          "step_id": "gemini",
-          "stage": "execute",
-          "does": "run every native regression row of gemini"
-        },
-        {
-          "step_id": "fakeapi",
-          "stage": "execute",
-          "does": "run every native regression row of fakeapi"
-        }
-      ],
-      "machines": [
-        {
-          "machine_id": "products",
-          "qemu": {
-            "architecture": "x86_64",
-            "kernel": "products-kernel",
-            "initrd": null,
-            "disks": [
-              {
-                "name": "products-disk",
-                "base": "products-image",
-                "cluster_bytes": 65536,
-                "bus": "ahci"
-              }
-            ],
-            "cpu": "max",
-            "processors": 1,
-            "memory_bytes": 1073741824,
-            "firmware": "direct",
-            "devices": [
-              "rtl8139"
-            ],
-            "boot_options": [
-              "rach2.root=ext2",
-              "rach2.rescue"
-            ]
-          },
-          "console": "serial",
-          "qmp": true,
-          "helper": true
-        }
-      ]
+        "plan": "host"
+      }
     },
     {
       "case_id": "host.host.scripts_images",
