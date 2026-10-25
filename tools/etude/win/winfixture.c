@@ -839,6 +839,7 @@ static int fx_paths(void)
     char dir[sizeof scratch + 64];
     char prog[sizeof dir + 16];
     char want[sizeof dir + 16];
+    char *slash;
     char deep[sizeof scratch + 1024];
     char file[sizeof deep + 16];
     wchar_t *wt;
@@ -869,6 +870,9 @@ static int fx_paths(void)
     if (err == 0)
         err = wait_end(c);
     snprintf(want, sizeof want, "cwd %s\n", dir);
+    for (slash = want; *slash != '\0'; slash++)
+        if (*slash == '/')
+            *slash = '\\';
     r = err != 0 ? failed("run: %s", errtext(err))
         : cap.out.data == NULL || strcmp(cap.out.data, want) != 0
             ? failed("the child said %s", cap.out.data ? cap.out.data : "nothing")
