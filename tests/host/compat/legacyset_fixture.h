@@ -20,6 +20,8 @@ int legacy_fixture_copy(const char *from, const char *to);
 
 struct legacy_child;
 struct legacy_child *legacy_child_start(const char *self, const char *description);
+/* Hold a reexecuted driver until the parent records its native console. */
+int legacy_child_ready(void);
 int legacy_child_running(struct legacy_child *child);
 int legacy_child_wait(struct legacy_child *child);
 int legacy_child_stop(struct legacy_child *child);
