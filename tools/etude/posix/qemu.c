@@ -387,6 +387,99 @@ static int boundary_check(const struct etude_machine_spec *spec, int *boundary)
     return 0;
 }
 
+#ifdef _WIN32
+/* Temporary native names remain owned until the command line copies them. */
+struct native_paths {
+    struct etude_qemu_disk disks[ETUDE_QEMU_DISKS + 1];
+    struct etude_qemu_capture captures[ETUDE_QEMU_ARGS_MAX];
+    char *owned[ETUDE_QEMU_DISKS + ETUDE_QEMU_ARGS_MAX + 5];
+    size_t nowned;
+};
+
+/** Convert one file operand with the same API used to create it. */
+static int native_file(struct native_paths *n, const char *path, const char **out)
+{
+    wchar_t *wide;
+    char *utf;
+
+    if (path == NULL) {
+        *out = NULL;
+        return 0;
+    }
+    if (n->nowned == sizeof n->owned / sizeof n->owned[0])
+        return E2BIG;
+    wide = etude_win_long_path(path);
+    if (wide == NULL) {
+        etude_win_file_error();
+        return errno;
+    }
+    utf = etude_win_utf8(wide);
+    if (utf == NULL) {
+        int error;
+        etude_win_file_error();
+        error = errno;
+        free(wide);
+        return error;
+    }
+    free(wide);
+    *out = n->owned[n->nowned++] = utf;
+    return 0;
+}
+
+/** Copy validated file operands; keep profile identities and devices intact. */
+static int native_profile(struct native_paths *n, struct etude_qemu_profile *p)
+{
+    size_t i;
+    int e;
+
+    if (p->firmware == ETUDE_FIRMWARE_DIRECT && ((e = native_file(n, p->kernel, &p->kernel)) != 0 ||
+                                                 (e = native_file(n, p->initrd, &p->initrd)) != 0))
+        return e;
+    for (i = 0; p->disks != NULL && p->disks[i].path != NULL; i++) {
+        if (i >= ETUDE_QEMU_DISKS)
+            return E2BIG;
+        n->disks[i] = p->disks[i];
+        if ((e = native_file(n, p->disks[i].path, &n->disks[i].path)) != 0)
+            return e;
+    }
+    p->disks = p->disks != NULL ? n->disks : NULL;
+    for (i = 0; p->captures != NULL && p->captures[i].path != NULL; i++) {
+        if (i + 1 >= ETUDE_QEMU_ARGS_MAX)
+            return E2BIG;
+        n->captures[i] = p->captures[i];
+        if ((e = native_file(n, p->captures[i].path, &n->captures[i].path)) != 0)
+            return e;
+    }
+    p->captures = p->captures != NULL ? n->captures : NULL;
+    return 0;
+}
+
+/** Preserve the portable serializer and convert files at native launch only. */
+static int launch_argv(const struct etude_qemu_profile *p, const struct etude_qemu_site *site,
+                       const char *console, const char *qmp, const char *audio,
+                       const struct etude_qemu_line *line)
+{
+    struct native_paths n = {0};
+    struct etude_qemu_profile native = *p;
+    struct etude_qemu_site selected = *site;
+    int e = etude_qemu_argv(p, site, console, qmp, audio, line);
+
+    if (e == 0)
+        e = native_profile(&n, &native);
+    if (e == 0 && p->firmware == ETUDE_FIRMWARE_OVMF)
+        e = native_file(&n, site->ovmf_x86_64, &selected.ovmf_x86_64);
+    if (e == 0 && p->audio != NULL)
+        e = native_file(&n, audio, &audio);
+    if (e == 0)
+        e = etude_qemu_argv(&native, &selected, console, qmp, audio, line);
+    for (size_t i = 0; i < n.nowned; i++)
+        free(n.owned[i]);
+    return e;
+}
+#else
+#define launch_argv etude_qemu_argv
+#endif
+
 int etude_qemu_start(struct etude_qemu *q, const struct etude_machine_spec *spec,
                      struct etude_machine **mp)
 {
@@ -415,8 +508,7 @@ int etude_qemu_start(struct etude_qemu *q, const struct etude_machine_spec *spec
     if ((m->console_listen = listen_at(m->console_path)) < 0 ||
         (m->qmp_listen = listen_at(m->qmp_path)) < 0)
         goto fail;
-    e = etude_qemu_argv(spec->profile, spec->site, m->console_path, m->qmp_path, m->audio_path,
-                        &line);
+    e = launch_argv(spec->profile, spec->site, m->console_path, m->qmp_path, m->audio_path, &line);
     if (e != 0) {
         errno = e;
         goto fail;

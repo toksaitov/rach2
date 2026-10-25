@@ -194,10 +194,25 @@ static int refused_accel(struct etude_qemu *q, struct etude_machine_spec *spec,
     return etude_ledger_finish(ledger, spec->attempt_id, r->qemu->cleanup);
 }
 
+/** Make the real QEMU disk exceed the legacy Windows path limit. */
+static int long_directory(char *path, size_t size, const char *root)
+{
+    char next[4096];
+
+    if (path_of(path, size, "%s", root) != 0)
+        return -1;
+    while (strlen(path) < MAX_PATH) {
+        if (path_of(next, sizeof next, "%s/long-file-operands", path) != 0 ||
+            mkdir(next, 0700) != 0 || path_of(path, size, "%s", next) != 0)
+            return -1;
+    }
+    return 0;
+}
+
 /** Check registration, accelerator selection, suspension and cleanup. */
 int fx_collection_qemu(void)
 {
-    char work[4096], disk[4096], ledger[4096], program[4096];
+    char work[4096], diskdir[4096], disk[4096], ledger[4096], program[4096];
     struct etude_qemu *q = NULL;
     struct etude_machine *m = NULL;
     struct etude_qemu_profile p;
@@ -218,7 +233,10 @@ int fx_collection_qemu(void)
             goto done;
         given = program;
     }
-    path_of(disk, sizeof disk, "%s/empty.raw", work);
+    why = "the long private disk directory could not be made";
+    if (long_directory(diskdir, sizeof diskdir, work) != 0)
+        goto done;
+    path_of(disk, sizeof disk, "%s/empty.raw", diskdir);
     path_of(ledger, sizeof ledger, "%s/ledger", work);
     fd = open(disk, O_RDWR | O_CREAT | O_EXCL, 0600);
     why = "the private disk or ledger could not be made";
