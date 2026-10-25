@@ -133,4 +133,3 @@ ifeq ($(OS),Windows_NT)
 	@if test -f $@.exe; then mv $@.exe $@; fi
 endif
 -include $(HOST_VFS_PREFIX)/vfs_unmount-sources/00-vfs_unmount.o.d
-
