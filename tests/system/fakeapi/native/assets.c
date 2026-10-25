@@ -81,7 +81,7 @@ int render_script(const char *source, const char *destination, const char *row)
         last = last->next;
     if (last &&
         (!strcmp(row, "codex-exec") || !strcmp(row, "claude-print") || !strcmp(row, "agy-print")))
-        set(last, "hold", boolean(1));
+        set(last, "hold", json_boolean(1));
     encoded = encode(script, 0);
     f = fopen(destination, "wb");
     ok = f && fputs(encoded, f) >= 0;

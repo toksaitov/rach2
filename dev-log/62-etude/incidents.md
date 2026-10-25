@@ -1764,3 +1764,7 @@ The budget reader also rejected a completed first-measurement route whose collec
 ## Windows rejected the inventory reader's signed length (#1165)
 
 The f02 ordinary Windows preparation imported its portable artifacts, then failed five native host-check targets because document() compared ftell's signed 32-bit long with the unsigned EH_MAX_LINE limit. Warnings remain errors. The reader now converts the length to size_t after checking that it is positive, preserving the same upper bound and file checks. The build continued through the remaining targets to collect the complete failure set. Its original log remains under windows-targeted-production-f02f889c3-03/operator/launch.log; no case ran from this failed preparation.
+
+## The JSON constructor conflicted with a Windows SDK type (#1166)
+
+The same preparation failed agent_server and fakeapi_test when the JSON implementation's native file adapter included the Windows SDK. Its RPC header defines the type boolean, which conflicted with the JSON constructor of that name. The constructor and all callers now use json_boolean; the native file adapter, JSON values and protocol assertions stay unchanged. The complete keep-going build ended at 01:25 on 26 October with seven failed targets from these two causes and 82 successful compile commands. Its 143354-byte log has SHA-256 fae338a7af080c6c4ad984c33881c6243cacb407766ae7281b0802987513dbe7. The successful products and imported artifacts remain available for checked reuse after cleanup.
