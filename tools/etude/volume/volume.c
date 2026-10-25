@@ -18,7 +18,7 @@
 #include <sys/types.h>
 
 #ifdef _WIN32
-#include <direct.h>
+#include "../win/files.h"
 #endif
 
 #include "volume.h"
@@ -69,7 +69,7 @@ static int fmt(char *buf, size_t size, const char *format, ...)
 static int make_dir(const char *path)
 {
 #ifdef _WIN32
-    return _mkdir(path);
+    return etude_win_mkdir(path, 0755);
 #else
     return mkdir(path, 0755);
 #endif

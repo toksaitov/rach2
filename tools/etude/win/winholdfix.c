@@ -13,6 +13,7 @@
 #include "winexec.h"
 #include "winfixture.h"
 #include "winfmt.h"
+#include "files.h"
 
 /* The longest path a fixture makes. */
 #define PATH 2048
@@ -66,33 +67,32 @@ static char *join(char *buf, const char *dir, const char *name)
 /** Say whether `path` names a file or a directory. */
 static int exists(const char *path)
 {
-    return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+    return access(path, F_OK) == 0;
 }
 
 /** Remove `path`, a file or a tree, read-only files among them. */
 static void remove_tree(const char *path)
 {
-    char pattern[PATH], child[PATH];
-    WIN32_FIND_DATAA fd;
-    DWORD attrs = GetFileAttributesA(path);
-    HANDLE h;
+    char child[PATH];
+    struct stat st;
+    DIR *dir;
+    struct dirent *entry;
 
-    if (attrs == INVALID_FILE_ATTRIBUTES)
+    if (lstat(path, &st) != 0)
         return;
-    SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
-    if (!(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
-        DeleteFileA(path);
+    if (!S_ISDIR(st.st_mode)) {
+        unlink(path);
         return;
     }
-    h = FindFirstFileA(join(pattern, path, "*"), &fd);
-    if (h != INVALID_HANDLE_VALUE) {
-        do {
-            if (strcmp(fd.cFileName, ".") != 0 && strcmp(fd.cFileName, "..") != 0)
-                remove_tree(join(child, path, fd.cFileName));
-        } while (FindNextFileA(h, &fd));
-        FindClose(h);
+    dir = opendir(path);
+    if (dir != NULL) {
+        while ((entry = readdir(dir)) != NULL) {
+            if (strcmp(entry->d_name, ".") && strcmp(entry->d_name, ".."))
+                remove_tree(join(child, path, entry->d_name));
+        }
+        closedir(dir);
     }
-    RemoveDirectoryA(path);
+    rmdir(path);
 }
 
 /** Write `text` to `path`; 0 on success. */
@@ -201,10 +201,14 @@ static unsigned long long created(HANDLE h)
 static HANDLE stream(const char *path, int out)
 {
     SECURITY_ATTRIBUTES sa = {sizeof sa, NULL, TRUE};
-
-    return CreateFileA(path, out ? GENERIC_WRITE : GENERIC_READ,
-                       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, &sa,
-                       out ? CREATE_ALWAYS : OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    wchar_t *wide = strcmp(path, "NUL") == 0 ? etude_win_wide(path) : etude_win_long_path(path);
+    HANDLE h = wide != NULL
+                   ? CreateFileW(wide, out ? GENERIC_WRITE : GENERIC_READ,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, &sa,
+                                 out ? CREATE_ALWAYS : OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
+                   : INVALID_HANDLE_VALUE;
+    free(wide);
+    return h;
 }
 
 /**
@@ -353,9 +357,9 @@ static int record(HANDLE h, int held)
              "pid %lu\npgid 0\nidentity %lu 0 %llu 0\njob 0\nsince 2026-10-23 00:00:00\n"
              "args fixture\n%s",
              pid, pid, created(h), held ? "held script\n" : "");
-    if (!exists(build) && !CreateDirectoryA(build, NULL))
+    if (!exists(build) && mkdir(build, 0700) != 0)
         return failed("%s cannot be made", build);
-    if (!exists(lock) && !CreateDirectoryA(lock, NULL))
+    if (!exists(lock) && mkdir(lock, 0700) != 0)
         return failed("%s cannot be made", lock);
     return put(owner, text) != 0 ? failed("%s cannot be written", owner) : 0;
 }
@@ -440,7 +444,7 @@ static int fresh(void)
     setvar("PATH", path);
     free(path);
     setvar("RACH2_TREE_HELD", NULL);
-    if (!CreateDirectoryA(base, NULL) || !CreateDirectoryA(tree, NULL))
+    if (mkdir(base, 0700) != 0 || mkdir(tree, 0700) != 0)
         return failed("%s cannot be made", tree);
     return 0;
 }
@@ -491,8 +495,8 @@ static int gate_run(int run)
     struct gate g;
     DWORD status;
 
-    DeleteFileA(ready);
-    DeleteFileA(go);
+    unlink(ready);
+    unlink(go);
     if (hold(&r, run ? "run" : "script", run ? runs : script) != 0 || gated(&r, &g) != 0)
         return 1;
     snprintf(line, sizeof line, "%lu", (unsigned long)r.pid);
@@ -579,13 +583,16 @@ static int row_busy(void)
 /** Set the last write time of the directory `path` an hour back. */
 static int age(const char *path)
 {
-    HANDLE h = CreateFileA(path, FILE_WRITE_ATTRIBUTES,
-                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
-                           OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    wchar_t *wide = etude_win_long_path(path);
+    HANDLE h = wide != NULL ? CreateFileW(wide, FILE_WRITE_ATTRIBUTES,
+                                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                          NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL)
+                            : INVALID_HANDLE_VALUE;
     unsigned long long t;
     FILETIME ft;
     BOOL ok;
 
+    free(wide);
     if (h == INVALID_HANDLE_VALUE)
         return failed("%s cannot be opened", path);
     GetSystemTimeAsFileTime(&ft);
@@ -601,8 +608,11 @@ static int age(const char *path)
 static int moved_left(void)
 {
     char pattern[PATH];
-    WIN32_FIND_DATAA fd;
-    HANDLE h = FindFirstFileA(join(pattern, build, ".run.lock.old.*"), &fd);
+    WIN32_FIND_DATAW fd;
+    wchar_t *wide = etude_win_long_path(join(pattern, build, ".run.lock.old.*"));
+    HANDLE h = wide != NULL ? FindFirstFileW(wide, &fd) : INVALID_HANDLE_VALUE;
+
+    free(wide);
 
     if (h == INVALID_HANDLE_VALUE)
         return 0;
@@ -630,7 +640,7 @@ static int left_unheld(void)
     if (st != 1 || !said(&r, "a script's hold on this tree was left") ||
         !has_line(owner, "held script"))
         return failed("a script's hold left: the helper exits %ld: %s", st, errors(&r));
-    if (!DeleteFileA(owner))
+    if (unlink(owner) != 0)
         return failed("%s cannot be removed", owner);
     if ((st = run_hold(&r, "taking", left_run)) < 0)
         return 1;

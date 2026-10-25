@@ -100,9 +100,9 @@ ETUDE_CASE_LIB_SRC = tools/etude/posix/scenario.c tools/etude/posix/case_main.c 
                      tools/etude/guest/wire.c tools/etude/volume/volume.c utils/sha256.c
 
 # The native Windows executor, which etude and the scenarios link there.
+ETUDE_WIN_FILE_SRC = tools/etude/win/winsys.c tools/etude/win/winfmt.c tools/etude/win/files.c
 ETUDE_WIN_EXEC_SRC = tools/etude/win/exec.c tools/etude/win/winexec.c \
-                     tools/etude/win/winsys.c tools/etude/win/winfmt.c \
-                     tools/etude/win/files.c tools/etude/capture.c
+                     $(ETUDE_WIN_FILE_SRC) tools/etude/capture.c
 ETUDE_WIN_SRC = $(ETUDE_CHECK_SRC) $(ETUDE_RUN_SRC) $(ETUDE_WIN_EXEC_SRC) \
                 tools/etude/posix/qemu.c tools/etude/win/bridge.c tools/etude/win/hold.c
 ETUDE_CASE_LIB_WIN_SRC = tools/etude/posix/scenario.c tools/etude/posix/case_main.c \
