@@ -90,11 +90,17 @@ if [ -n "$rev" ]; then
     if git -C "$tree" cat-file -e "$rev:tests/native" 2>/dev/null; then
         set -- "$@" tests/native
     fi
+    if git -C "$tree" cat-file -e "$rev:tests/cases/host/host_script_inventory.c" 2>/dev/null; then
+        set -- "$@" tests/cases/host/host_script_inventory.c tests/cases/host/host_script_inventory.h
+    fi
     git -C "$tree" archive --format=tar "$rev" -- "$@" |
         tar -xf - -C "$src" || fail "cannot read the source of $rev"
 fi
 (cd "$src" && find tools/etude utils/sha256.c utils/sha256.h -type f
- if [ -d tests/native ]; then find tests/native -type f; fi) |
+ if [ -d tests/native ]; then find tests/native -type f; fi
+ if [ -f tests/cases/host/host_script_inventory.c ]; then
+     printf '%s\n' tests/cases/host/host_script_inventory.c tests/cases/host/host_script_inventory.h
+ fi) |
     etude_select | LC_ALL=C sort > "$work/files" || exit 1
 [ -s "$work/files" ] || fail "no source in $src"
 etude_list "$src" < "$work/files" > "$work/sources" || exit 1
