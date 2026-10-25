@@ -1,14 +1,23 @@
 #!/bin/sh
 # Build patched Windows QEMU in one private directory under build/tests.
 set -eu
-if test "$#" != 1; then
-    echo 'usage: build.sh PRIVATE_ROOT' >&2
+if test "$#" -lt 1 || test "$#" -gt 2; then
+    echo 'usage: build.sh PRIVATE_ROOT [--resume-source]' >&2
     exit 2
 fi
 base=$(cd "$1" && pwd -P)
 input=$base/inputs
+resume=${2-}
+case $resume in ''|--resume-source) ;; *) echo 'invalid resume mode' >&2; exit 2;; esac
 case $base in */build/tests/*) ;; *) echo 'private root must be under build/tests' >&2; exit 2;; esac
-for name in deps qemu-11.1.2 build install; do
+if test -n "$resume"; then
+    test -d "$base/deps/ucrt64"
+    test -d "$base/qemu-11.1.2"
+    outputs="build install"
+else
+    outputs="deps qemu-11.1.2 build install"
+fi
+for name in $outputs; do
     test ! -e "$base/$name" || { echo "output already exists: $base/$name" >&2; exit 1; }
 done
 /usr/bin/python3 - "$input" <<'PY'
@@ -25,8 +34,10 @@ for name,expected,size in checks:
  assert h.hexdigest()==expected and (size is None or f.stat().st_size==size),name
 print('pinned source, patch and private dependency bundle verified')
 PY
-mkdir "$base/deps"
-tar -xzf "$input/qemu-ucrt-dependencies.tar.gz" -C "$base/deps"
+if test -z "$resume"; then
+    mkdir "$base/deps"
+    tar -xzf "$input/qemu-ucrt-dependencies.tar.gz" -C "$base/deps"
+fi
 dep=$base/deps/ucrt64
 PATH=$dep/bin:/ucrt64/bin:/usr/bin
 export PATH
@@ -35,13 +46,14 @@ unset PYTHONHOME PYTHONPATH
 PYTHONNOUSERSITE=1
 export PYTHONNOUSERSITE
 native_dep=$(cygpath -am "$dep")
-"$dep/bin/python.exe" - "$native_dep" <<'PY'
+"$dep/bin/python.exe" - "$native_dep" "$resume" <<'PY'
 from pathlib import Path
 import sys
 root=Path(sys.argv[1]);assert Path(sys.prefix).resolve()==root.resolve()
-for p in (root/'lib/pkgconfig').glob('*.pc'):
- text=p.read_text();assert '/mingw64' not in text,p
- if '/ucrt64' in text:p.write_text(text.replace('/ucrt64',root.as_posix()),newline='\n')
+if not sys.argv[2]:
+ for p in (root/'lib/pkgconfig').glob('*.pc'):
+  text=p.read_text();assert '/mingw64' not in text,p
+  if '/ucrt64' in text:p.write_text(text.replace('/ucrt64',root.as_posix()),newline='\n')
 print('private Python prefix:',sys.prefix)
 PY
 PKG_CONFIG=$dep/bin/pkgconf.exe
@@ -52,7 +64,10 @@ for package in glib-2.0 gthread-2.0 pixman-1 slirp zlib; do
     "$PKG_CONFIG" --modversion "$package"
     "$PKG_CONFIG" --variable=prefix "$package"
 done
-tar -xJf "$input/qemu-11.1.2.tar.xz" -C "$base"
+if test -z "$resume"; then
+    tar -xJf "$input/qemu-11.1.2.tar.xz" -C "$base" \
+        --exclude=qemu-11.1.2/roms --exclude=qemu-11.1.2/tests/lcitool
+fi
 source=$base/qemu-11.1.2
 /usr/bin/python3 - "$source" "$input/pins.json" <<'PY'
 from pathlib import Path
