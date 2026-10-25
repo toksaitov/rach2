@@ -102,6 +102,26 @@ int routine_owner_open(struct etude_routine_owner *r, const char *route, const c
     return setenv("ETUDE_AUTHORITY_OWNER", id, 1);
 }
 
+int routine_owner_observation_start(struct etude_routine_owner *r)
+{
+    if (path(r, "physical-owner-load.jsonl", r->owner_trace))
+        return -1;
+    r->trace = r->owner_trace;
+    r->observer = etude_observe_start_terminal(r->trace, &r->owner, r->run);
+    return r->observer ? 0 : -1;
+}
+
+int routine_owner_observation_finish(struct etude_routine_owner *r, int confirmed)
+{
+    if (!r->observer)
+        return -1;
+    int error =
+        confirmed ? etude_observe_finish(r->observer, &r->end) : etude_observe_cancel(r->observer);
+    etude_observe_free(r->observer);
+    r->observer = NULL;
+    return error;
+}
+
 static int physical_reading(const struct etude_routine_owner *r, const char *name,
                             struct etude_reading *start);
 
@@ -367,8 +387,8 @@ int routine_owner_complete(struct etude_routine_owner *r, int status, int confir
 {
     if (!r->granted || !confirmed)
         return -1;
-    struct etude_reading end;
-    if (etude_history_now(&end))
+    const struct etude_reading *end = &r->end;
+    if (!end->monotonic_us || r->observer)
         return -1;
     if (!strcmp(r->mode, "wsl-native")) {
         char file[4096];
@@ -412,7 +432,7 @@ int routine_owner_complete(struct etude_routine_owner *r, int status, int confir
     jbuf_puts(&b, ",\"observation_end\":");
     routine_reading(&b, &r->observation_end);
     jbuf_puts(&b, ",\"end\":");
-    routine_reading(&b, &end);
+    routine_reading(&b, end);
     jbuf_puts(&b, ",\"history\":");
     char history[4096];
     int hn = snprintf(history, sizeof history, "%s/history/%s.jsonl", r->directory, r->run);

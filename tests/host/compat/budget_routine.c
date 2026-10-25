@@ -42,7 +42,8 @@ static void routine_reading(char out[160], unsigned microseconds)
                "\"resolution_us\":1}",
                (microseconds - 1000000) / 1000000, microseconds % 1000000, microseconds);
 }
-static const char *routine_trace(struct routine_fixture *f, int physical, int imported)
+static const char *routine_trace_samples(struct routine_fixture *f, int physical, int imported,
+                                         unsigned samples)
 {
     struct cmp_text text = {0};
     cmp_printf(&text,
@@ -54,7 +55,7 @@ static const char *routine_trace(struct routine_fixture *f, int physical, int im
                physical || imported ? "windows-native-counters-v1" : "linux-proc-counters-v1",
                physical || imported ? "pc" : "guest", physical || imported ? "boot" : "guestboot",
                physical ? 10 : 20, physical ? 100 : 200);
-    for (unsigned i = 0; i < 5; i++)
+    for (unsigned i = 0; i < samples; i++)
         cmp_printf(&text,
                    "{\"kind\":\"sample\",\"monotonic_us\":%u,\"utc_us\":%llu,"
                    "\"system_busy_cpu_us\":%u,\"outside_cpu_lower_us\":0,"
@@ -66,13 +67,21 @@ static const char *routine_trace(struct routine_fixture *f, int physical, int im
                        i * UINT64_C(1000000),
                    i * 1000);
     cmp_printf(&text,
-               "{\"kind\":\"end\",\"monotonic_us\":5000000,\"utc_us\":%llu,"
-               "\"samples\":5,\"complete\":true,\"owner_lost\":false}\n",
-               (unsigned long long)etude_observe_utc("2026-10-24T00:00:04.000000Z"));
+               "{\"kind\":\"end\",\"monotonic_us\":%u,\"utc_us\":%llu,"
+               "\"samples\":%u,\"complete\":true,\"owner_lost\":false}\n",
+               samples * 1000000,
+               (unsigned long long)etude_observe_utc("2026-10-24T00:00:00.000000Z") +
+                   (samples - 1) * UINT64_C(1000000),
+               samples);
     const char *ref = routine_file(f, "%s", text.data);
     free(text.data);
     return ref;
 }
+static const char *routine_trace(struct routine_fixture *f, int physical, int imported)
+{
+    return routine_trace_samples(f, physical, imported, 5);
+}
+
 static const char *routine_phase(struct routine_fixture *f, const char *name, const char *route,
                                  const char *lease, const char *admit, int imported)
 {
@@ -408,6 +417,27 @@ static void routine_transport(struct routine_fixture *f, struct etude_routine_in
     free(bytes);
     json_free(ref);
 }
+static char *routine_full_observation(struct routine_fixture *f,
+                                      const struct etude_routine_input *in, const char *terminal,
+                                      int imported)
+{
+    struct json *document = routine_json(terminal);
+    struct json *observers = (struct json *)json_member(document, "observers");
+    const char *ref = routine_trace_samples(f, 1, imported, 6);
+    json_free(observers->item[0]);
+    observers->item[0] = routine_json(ref);
+    struct jbuf text = {0};
+    json_canonical(document, &text);
+    FILE *file = fopen(f->completion, "wb");
+    CHECK(file && fputs(text.data, file) >= 0 && !fclose(file), "full owner trace writes");
+    struct etude_routine_cost cost;
+    CHECK(etude_routine_charge(in, &cost) == 1 && cost.load_available &&
+              cost.preparation_load_available && cost.charged_us == 5000000,
+          "actual terminal observation covers unchanged physical charge");
+    json_free(document);
+    return text.data;
+}
+
 static void routine_case(int imported)
 {
     struct routine_fixture *f = calloc(1, sizeof(*f));
@@ -447,6 +477,9 @@ static void routine_case(int imported)
           "one physical interval charged without producer clock addition");
     CHECK(!cost.load_available && cost.preparation_load_available,
           "unobserved cleanup tail excludes ranking but covered preparation remains eligible");
+    char *full = routine_full_observation(f, &in, terminal, imported);
+    free(terminal);
+    terminal = full;
     CHECK(etude_routine_context(grant, upstream, "routine-fixture", routine_commit) == -1,
           "preexisting terminal refused at preflight");
     routine_changed(f, &in, terminal, "\"cleanup\":\"confirmed\"", "\"cleanup\":\"unknown\"");
