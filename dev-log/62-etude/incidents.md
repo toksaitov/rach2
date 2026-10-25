@@ -1652,3 +1652,7 @@ The first read-only post-reboot health command expected the responder boot token
 ## A commit step continued after a failed conflict-resolution check
 
 The coordinator grouped an incident-file resolution, staging and commit into one tool invocation. The resolution's prefix check failed because earlier integrations had inserted other sections, but the later commands still staged and committed the conflict markers locally. The next diff read found them before publication. The coordinator restored the exact preceding file, appended only the reviewed native section, checked the resulting diff and corrected the unpublished commit. A dependent mutation starts only after the preceding result has been inspected; awaiting commands in order does not enforce success.
+
+## QEMU helper extraction passed native paths to MSYS tar, #1147
+
+The first isolated WHPX diagnostic stopped before QEMU. The committed helper passed its native `C:\ProgramData\...` extraction directory to MSYS2 tar, which reported `Cannot open: No such file or directory`. The protected child and Linux owner ended with confirmed cleanup; the guarded recovery restored both endpoint policies and all installed files and permissions. Both CI services returned online and idle. The installer now converts both the archive and extraction directory through the existing MSYS2 cygpath before invoking tar. Package and extracted-file digests remain required. The failed setup produced no processor or halt evidence.

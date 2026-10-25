@@ -36,7 +36,12 @@ function Install-QemuSpawn {
    throw 'QEMU helper package digest differs'
   }
   $tar='C:/msys64/usr/bin/tar.exe'
-  & $tar --force-local -xf $archive -C $scratch `
+  $cygpath='C:/msys64/usr/bin/cygpath.exe'
+  $archivePosix=(& $cygpath -u $archive).Trim()
+  if($LASTEXITCODE -ne 0 -or !$archivePosix){throw 'QEMU archive path conversion failed'}
+  $scratchPosix=(& $cygpath -u $scratch).Trim()
+  if($LASTEXITCODE -ne 0 -or !$scratchPosix){throw 'QEMU scratch path conversion failed'}
+  & $tar --force-local -xf $archivePosix -C $scratchPosix `
     mingw64/bin/libglib-2.0-0.dll mingw64/bin/gspawn-win64-helper.exe `
     mingw64/bin/gspawn-win64-helper-console.exe
   if($LASTEXITCODE -ne 0){throw 'QEMU helper extraction failed'}
