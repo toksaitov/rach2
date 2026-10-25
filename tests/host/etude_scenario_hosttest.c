@@ -3131,6 +3131,51 @@ struct matching_processes {
     int n;
 };
 
+/** Compare native path separators without changing a private row identity. */
+static int process_path_contains(const char *text, const char *need)
+{
+#ifdef _WIN32
+    for (;;) {
+        const char *at = text, *word = need;
+        while (*at && *word) {
+            char a = *at == '\\' ? '/' : *at;
+            char b = *word == '\\' ? '/' : *word;
+            if (a != b)
+                break;
+            at++;
+            word++;
+            if (a == '/') {
+                while (*at == '/' || *at == '\\')
+                    at++;
+                while (*word == '/' || *word == '\\')
+                    word++;
+            }
+        }
+        if (*word == '\0')
+            return 1;
+        if (*text == '\0')
+            return 0;
+        text++;
+    }
+#else
+    return strstr(text, need) != NULL;
+#endif
+}
+
+/** Native canonical spelling must retain the exact private fixture row. */
+static void test_process_paths(void)
+{
+#ifdef _WIN32
+    static const char native[] = "\\\\?\\C:\\tmp\\fixture.a\\hold.scratch\\bin\\qemu";
+    CHECK(process_path_contains(native, "C:/tmp//fixture.a/hold.scratch/"),
+          "process census: native separators and doubled temporary separator");
+    CHECK(!process_path_contains(native, "C:/tmp/fixture.b/hold.scratch/"),
+          "process census: another fixture is not owned");
+    CHECK(!process_path_contains(native, "C:/tmp/fixture.a/hold-other.scratch/"),
+          "process census: another row is not owned");
+#endif
+}
+
 /* Every matching argument contains this run's private fixture path. */
 static int match_process(long pid, const char *arguments, void *ctx)
 {
@@ -3138,13 +3183,16 @@ static int match_process(long pid, const char *arguments, void *ctx)
     int i;
 
     for (i = 0; m->any[i] != NULL; i++)
-        if (strstr(arguments, m->any[i]) != NULL)
+        if (process_path_contains(arguments, m->any[i]))
             break;
-    if (m->any[i] == NULL || (m->need != NULL && strstr(arguments, m->need) == NULL))
+    if (m->any[i] == NULL || (m->need != NULL && !process_path_contains(arguments, m->need)))
         return 0;
     if (m->n == ROW_PROCS)
         return -1;
     m->pids[m->n++] = pid;
+#ifdef _WIN32
+    printf("etude-scenario-test: owned process %ld: %s\n", pid, arguments);
+#endif
     return 0;
 }
 
@@ -3724,6 +3772,7 @@ static void test_stand_in(void)
         run_row(&stand_in_rows[i], &s, NULL);
     run_row(fault_row, &s, NULL);
     run_row(stop_row, &s, WAITING);
+    test_process_paths();
     test_suspend(&s);
     run_row(pair_row, &s, NULL);
     test_isolation(&s);
