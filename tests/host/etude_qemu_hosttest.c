@@ -238,6 +238,8 @@ static void fake_start(host_socket qmp, const char *mode, const char *accel)
     char line[512], name[64], text[256];
     long id;
 
+    if (strncmp(accel, "whpx,", 5) == 0)
+        accel = "whpx";
     put(qmp, "{\"QMP\": {\"version\": {\"qemu\": {\"micro\": 0, \"minor\": 0, \"major\": 9}, "
              "\"package\": \"\"}, \"capabilities\": [\"oob\"]}}\r\n");
     while (fake_line(qmp, line, sizeof(line)) == 0) {
