@@ -42,6 +42,8 @@ extern int printf(const char *fmt, ...);
 extern int snprintf(char *s, unsigned long n, const char *fmt, ...);
 extern int symlink(const char *target, const char *path);
 extern int unlink(const char *path);
+extern int link(const char *oldpath, const char *newpath);
+extern int mkdir(const char *path, unsigned mode);
 extern void exit(int status);
 extern void *fopen(const char *path, const char *mode);
 extern int fseek(void *f, long off, int whence);
@@ -4294,12 +4296,101 @@ static void executable_path_row(void)
     check(unmount_rw() == 0, "the executable path fixture unmounts");
 }
 
+/** Make 600 linked files through the host, for mke2fs to stage unchanged. */
+static int hardlink_tree(void)
+{
+    const char *tree = fix_path("hardlink-tree");
+    char file[512], alias[512];
+    unsigned i;
+    void *f;
+    int ok;
+
+    if (mkdir(tree, 0700) != 0) {
+        return 0;
+    }
+    for (i = 0; i < 600; i++) {
+        snprintf(file, sizeof(file), "%s/a%03u", tree, i);
+        snprintf(alias, sizeof(alias), "%s/b%03u", tree, i);
+        f = fopen(file, "wb");
+        if (!f) {
+            return 0;
+        }
+        ok = fwrite("x", 1, 1, f) == 1;
+        if (fclose(f) != 0 || !ok || link(file, alias) != 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** Compare all 600 name pairs with the driver's exact inode and link count. */
+static unsigned hardlink_pairs(void)
+{
+    struct vfs_stat a, b;
+    char path[32];
+    void *first, *second;
+    unsigned i, matched = 0;
+    int rc;
+
+    for (i = 0; i < 600; i++) {
+        snprintf(path, sizeof(path), "/a%03u", i);
+        first = walk(path, &rc);
+        snprintf(path, sizeof(path), "/b%03u", i);
+        second = walk(path, &rc);
+        if (first && second && OPS->getattr(&mnt, first, &a) == 0 &&
+            OPS->getattr(&mnt, second, &b) == 0 && a.ino == b.ino && a.nlink == 2 && b.nlink == 2) {
+            matched++;
+        }
+        if (first) {
+            OPS->put(&mnt, first);
+        }
+        if (second) {
+            OPS->put(&mnt, second);
+        }
+    }
+    return matched;
+}
+
+/** More than the old 512-file capacity is valid; a wrong count remains bad. */
+static void hardlink_check_rows(void)
+{
+    const char *img = fix_path("hardlinks.ext2");
+    uint64_t bytes = 16u << 20;
+    int rc;
+
+    check(hardlink_tree(), "the host prepares 600 files with two names each");
+    if (!ext2_fixture_image(img, 4096, 128, PROFILE, 16, fix_path("hardlink-tree"))) {
+        check(0, "mke2fs stages the actual hard links in a private volume");
+        return;
+    }
+    check(e2fsck_clean(img), "independent e2fsck accepts all prepared hard-link counts");
+    check(debugfs_script(img, "ssv state 0\n"), "the valid hard-link volume is marked dirty");
+    use_image(img, bytes);
+    last_check[0] = 0;
+    rc = mount_rw();
+    check(rc == 0 && !(mnt.flags & VFS_MS_RDONLY) && streq(last_check, "check: clean"),
+          "the dirty volume with 600 linked files checks clean and mounts writable");
+    if (rc != 0) {
+        return;
+    }
+    check(hardlink_pairs() == 600, "all 600 inode pairs retain their exact two-link counts");
+    check(unmount_rw() == 0 && e2fsck_clean(img),
+          "the checked volume unmounts cleanly and independent e2fsck still accepts it");
+    check(debugfs_script(img, "sif /a599 links_count 3\nssv state 0\n"),
+          "the independent tool gives the last linked file an incorrect count");
+    check(e2fsck_status(img) == 4, "independent e2fsck rejects the incorrect link count");
+    fault_on(img, bytes, "a link count that does not match its names",
+             "the same large link inventory with a wrong count mounts read-only");
+    printf("ext2-hardlinks: checked 600 exact two-name pairs and rejected the bad count\n");
+}
+
 /**
  * Make the native fixture tree using the prepared independent tools,
  * and run the rows: the reads at 4 KiB blocks with 128- and 256-byte inodes
  * and at 2 KiB, the 1 KiB levels, the failures, the write sequences, the
  * order rows, the writer's failures, the dirty volumes, the matrix and the
- * batch rows. With `--times-only`, only the timestamp rows run. Returns 0,
+ * batch rows. `--times-only` runs only timestamps; `--hardlinks-only` runs
+ * only the hard-link check rows. Returns 0,
  * and calls `fix_passed`, when every row passed.
  */
 int main(int argc, char **argv)
@@ -4308,6 +4399,11 @@ int main(int argc, char **argv)
 
     wimg = fix_path("w.ext2");
     build_tree();
+
+    if (argc == 2 && streq(argv[1], "--hardlinks-only")) {
+        hardlink_check_rows();
+        goto finish;
+    }
 
     if (argc == 2 && streq(argv[1], "--times-only")) {
         time_row();
@@ -4329,6 +4425,7 @@ int main(int argc, char **argv)
     order_row();
     refusal_write_rows();
     dirty_rows();
+    hardlink_check_rows();
     attr_rows();
     matrix_rows();
     batch_rows();

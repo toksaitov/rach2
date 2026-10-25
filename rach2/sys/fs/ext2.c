@@ -4650,17 +4650,18 @@ static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
  * met with their expected and found counts, the reached-inode set, one bit
  * per inode of the volume, and one bitmap block; the block bitmap is the
  * one the FAT walks share. A dirty volume whose set or bitmap the free
- * memory cannot hold, a directory deeper than the levels, or more
- * hard-linked files or shared attribute blocks than the tables hold mounts
- * read-only and says which.
+ * memory cannot hold, a directory deeper than the levels, or more shared
+ * attribute blocks than its table holds mounts read-only and says
+ * which. Hard-link records are allocated as files are met.
  */
-#define EXT2_CHECK_DEPTH 32  /* the directory levels the walk holds */
-#define EXT2_CHECK_LINKS 512 /* the files with more than one link it counts */
-#define EXT2_CHECK_ATTRS 512 /* the shared attribute blocks it counts */
+#define EXT2_CHECK_DEPTH        32  /* the directory levels the walk holds */
+#define EXT2_CHECK_LINK_BUCKETS 512 /* the index, not a limit on linked files */
+#define EXT2_CHECK_ATTRS        512 /* the shared attribute blocks it counts */
 
 /* A file with more than one link: its inode, its link count, and the names
  * the walk has found for it. */
 struct ext2_link {
+    struct ext2_link *next;
     uint32_t ino;
     uint32_t expect, found;
 };
@@ -4675,7 +4676,7 @@ struct ext2_attr {
 /*
  * The check's state: the first fault and its inode; the lost blocks, the
  * orphans, the shared attribute blocks counting more references than the
- * inodes that name them (`stale`), the `links` entries of `link` and the
+ * inodes that name them (`stale`), the chained records of `link` and the
  * `attrs` entries of `attr`; the inode of each directory level being
  * walked; the set of reached inodes; and one bitmap block.
  */
@@ -4683,8 +4684,9 @@ struct ext2_check {
     struct ext2_mount *em;
     const char *fault;
     uint32_t fault_ino;
-    uint32_t lost, orphans, stale, links, attrs;
-    struct ext2_link link[EXT2_CHECK_LINKS];
+    uint32_t lost, orphans, stale, attrs;
+    int link_nomem;
+    struct ext2_link *link[EXT2_CHECK_LINK_BUCKETS];
     struct ext2_attr attr[EXT2_CHECK_ATTRS];
     struct ext2_node node[EXT2_CHECK_DEPTH];
     uint8_t *seen; /* `(inodes + 7) / 8` bytes */
@@ -4723,6 +4725,15 @@ static struct ext2_check *check_state(struct ext2_mount *em)
  * apart, by `fat_walk_release`. */
 static void check_state_free(struct ext2_check *c)
 {
+    uint32_t i;
+    struct ext2_link *link, *next;
+
+    for (i = 0; i < EXT2_CHECK_LINK_BUCKETS; i++) {
+        for (link = c->link[i]; link; link = next) {
+            next = link->next;
+            kfree(link);
+        }
+    }
     kfree(c->seen);
     kfree(c);
 }
@@ -4940,6 +4951,53 @@ static int check_blocks(struct ext2_check *c, const struct ext2_node *n, int as_
 
 static int check_dir(struct ext2_check *c, uint32_t ino, uint32_t parent, int depth);
 
+/** Find the exact inode's link counts in the check's index. */
+static struct ext2_link *check_link_find(struct ext2_check *c, uint32_t ino)
+{
+    struct ext2_link *link;
+
+    for (link = c->link[ino % EXT2_CHECK_LINK_BUCKETS]; link; link = link->next) {
+        if (link->ino == ino) {
+            return link;
+        }
+    }
+    return 0;
+}
+
+/** Remember a linked file once; no fixed number of such files is corrupt. */
+static int check_link_add(struct ext2_check *c, const struct ext2_node *n)
+{
+    uint32_t bucket = n->ino % EXT2_CHECK_LINK_BUCKETS;
+    struct ext2_link *link = kzalloc(sizeof(*link));
+
+    if (!link) {
+        c->link_nomem = 1;
+        return -ENOMEM;
+    }
+    link->ino = n->ino;
+    link->expect = n->nlink;
+    link->found = 1;
+    link->next = c->link[bucket];
+    c->link[bucket] = link;
+    return 0;
+}
+
+/** Require every remembered inode's expected count to match all its names. */
+static int check_link_counts(struct ext2_check *c)
+{
+    uint32_t i;
+    struct ext2_link *link;
+
+    for (i = 0; i < EXT2_CHECK_LINK_BUCKETS; i++) {
+        for (link = c->link[i]; link; link = link->next) {
+            if (link->expect != link->found) {
+                return check_fault(c, link->ino, "a link count that does not match its names");
+            }
+        }
+    }
+    return 0;
+}
+
 /**
  * Check the inode `ino` an entry of directory `dir` names, with the entry's
  * type byte `ft`, at `depth`: a directory is walked once, counted in
@@ -4954,7 +5012,8 @@ static int check_child(struct ext2_check *c, uint32_t ino, uint32_t dir, uint32_
 {
     struct ext2_mount *em = c->em;
     struct ext2_node *n;
-    uint32_t type, i;
+    uint32_t type;
+    struct ext2_link *link;
     int rc;
 
     if (ino > em->inodes) {
@@ -4981,11 +5040,13 @@ static int check_child(struct ext2_check *c, uint32_t ino, uint32_t dir, uint32_
         return check_dir(c, ino, dir, depth);
     }
     if (seen_test(c, ino)) {
-        for (i = 0; i < c->links; i++) {
-            if (c->link[i].ino == ino) {
-                c->link[i].found++;
-                return 0;
+        link = check_link_find(c, ino);
+        if (link) {
+            if (link->found >= link->expect) {
+                return check_fault(c, ino, "a link count that does not match its names");
             }
+            link->found++;
+            return 0;
         }
         return check_fault(c, ino, "named twice with one link");
     }
@@ -4997,16 +5058,7 @@ static int check_child(struct ext2_check *c, uint32_t ino, uint32_t dir, uint32_
     if (rc != 0) {
         return rc;
     }
-    if (n->nlink != 1) {
-        if (c->links >= EXT2_CHECK_LINKS) {
-            return check_fault(c, ino, "more hard links than the check's table");
-        }
-        c->link[c->links].ino = ino;
-        c->link[c->links].expect = n->nlink;
-        c->link[c->links].found = 1;
-        c->links++;
-    }
-    return 0;
+    return n->nlink != 1 ? check_link_add(c, n) : 0;
 }
 
 /**
@@ -5271,15 +5323,19 @@ static int ext2_check_volume(struct ext2_mount *em, const char **why)
     if (rc == 0) {
         rc = check_dir(c, EXT2_ROOT_INO, EXT2_ROOT_INO, 0);
     }
-    for (g = 0; g < c->links && rc == 0; g++) {
-        if (c->link[g].expect != c->link[g].found) {
-            rc = check_fault(c, c->link[g].ino, "a link count that does not match its names");
-        }
+    if (rc == 0) {
+        rc = check_link_counts(c);
     }
     if (rc == 0) {
         rc = check_bitmaps(c);
     }
     fat_walk_release();
+    if (rc == -ENOMEM && c->link_nomem) {
+        check_state_free(c);
+        klog(KLOG_WARN, "ext2", "check: no memory to count the hard links");
+        *why = "not unmounted cleanly and no memory for the check's hard links";
+        return 1;
+    }
     if (rc != 0 && !c->fault) {
         check_state_free(c);
         return rc;
