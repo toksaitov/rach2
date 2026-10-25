@@ -1,5 +1,6 @@
 """Prepare native tools used by C host fixtures; never run a fixture here."""
 from pathlib import Path
+from functools import lru_cache
 import os
 import hashlib
 import json
@@ -9,6 +10,9 @@ import shlex
 import subprocess
 import fixtures
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'tools/etude'))
+from preparation_paths import canonical_path, filesystem_path as preparation_path
+
 SOURCES = {'mkfatfixture': ['tests/host/mkfatfixture.c'],
            'etude-workload': ['tests/host/fixtures/etude_workload.c',
                               'tests/host/fixtures/guest_workload.c'],
@@ -16,6 +20,12 @@ SOURCES = {'mkfatfixture': ['tests/host/mkfatfixture.c'],
            'setidcheck': ['tools/inspect/setidcheck.c'],
            'etude-volume': ['tools/etude/volume/etude_volume.c', 'tools/etude/volume/volume.c']}
 EXTERNAL = {'tar', 'mdir', 'mcopy', 'mke2fs', 'debugfs', 'dumpe2fs', 'e2fsck', 'python3'}
+
+
+@lru_cache(maxsize=4096)
+def filesystem_path(value):
+    """Reuse path conversion within preparation; callers rehash file bytes."""
+    return preparation_path(value)
 
 
 def external_tool(name):
@@ -115,8 +125,10 @@ def compiler_paths(command):
                 prefix, path = option, word[len(option):]
                 break
         operand = index > 0 and command[index - 1] in ('-isystem', '-iquote', '-I', '-L', '-B', '--sysroot')
-        if (index == 0 or prefix or operand) and Path(path).is_absolute():
-            word = prefix + str(Path(path).resolve(strict=True))
+        if index == 0 or prefix or operand:
+            mapped = filesystem_path(path)
+            if mapped.is_absolute():
+                word = prefix + str(canonical_path(mapped))
         result.append(word)
     return result
 
@@ -128,7 +140,7 @@ def canonical_recipe(recipe):
     value['compiler'] = dict(value['compiler'])
     value['compiler']['command'] = compiler_paths(value['compiler']['command'])
     value['compiler_inputs'] = sorted(
-        [dict(item, path=str(Path(item['path']).resolve(strict=True)))
+        [dict(item, path=str(canonical_path(filesystem_path(item['path']))))
          for item in value['compiler_inputs']], key=lambda item: item['path'])
     return value
 

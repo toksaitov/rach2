@@ -49,7 +49,7 @@ def digest(path):
 
 def input_path(path):
     """Normalize compiler spellings without resolving the build store's links."""
-    path = Path(os.path.normpath(path))
+    path = Path(os.path.normpath(tools.filesystem_path(path)))
     if path.is_absolute():
         path = path.relative_to(ROOT)
     if not path.parts or '..' in path.parts or any(':' in part or '\\' in part for part in path.parts):
@@ -246,7 +246,7 @@ def valid_previous(old, item, commands, origin=None, compilation=None, compiler_
         if compilation is not None:
             return compilation_matches(old, item, origin, compilation, compiler_count)
         return all(
-            digest(Path(value['path'])) == value['sha256']
+            digest(tools.filesystem_path(value['path'])) == value['sha256']
             for value in [*old['inputs'], *old.get('compiler_inputs', [])])
     except (KeyError, OSError, TypeError, ValueError):
         return False
@@ -270,15 +270,15 @@ def compiler_inputs(compiler, command, sources, external=None, include_system=Fa
     """Scan each translation unit; a shared -MF would retain only the last."""
     flags = compiler_flags(command, sources)
     dependencies = set()
+    base = Path(os.path.normpath(tools.filesystem_path(root or ROOT)))
     for source in sources:
         if not source.endswith('.c'):
             continue
         result = subprocess.run([*compiler, *flags, '-M' if include_system else '-MM', '-MT', 'host-input', source],
-                                check=True, text=True, capture_output=True, cwd=root)
+                                check=True, text=True, capture_output=True, cwd=base if root else None)
         text = result.stdout.replace('\\\n', ' ')
         for name in shlex.split(text.split(':', 1)[1]):
-            path = Path(os.path.normpath(name))
-            base = root or ROOT
+            path = Path(os.path.normpath(tools.filesystem_path(name)))
             if path.is_absolute() and not path.is_relative_to(base):
                 if external is not None:
                     external[str(path)] = dict(path=str(path), sha256=digest(path))
@@ -291,13 +291,13 @@ def compilation_inputs(compiler, command, sources, root=None):
     """Separate compiler dependencies from files used only by the test."""
     external = {}
     paths = sorted(set([*sources, *compiler_inputs(compiler, command, sources, external, root=root)]))
-    local = [dict(path=p, sha256=digest((root or ROOT) / p)) for p in paths]
+    local = [dict(path=p, sha256=digest(tools.filesystem_path(root or ROOT) / p)) for p in paths]
     return local, [external[p] for p in sorted(external)]
 
 
 def canonical_inputs(values):
     """Compare external dependencies through immutable store aliases."""
-    return sorted([dict(v, path=str(Path(v['path']).resolve(strict=True))) for v in values],
+    return sorted([dict(v, path=str(tools.canonical_path(tools.filesystem_path(v['path'])))) for v in values],
                   key=lambda v: v['path'])
 
 
@@ -418,7 +418,7 @@ def prepare(args):
                 item['sha256'], item['inputs'] = old['sha256'], old['inputs']
                 item['compiler_inputs'] = old.get('compiler_inputs', [])
                 if origin:
-                    item['compiler_inputs'] = [dict(value, path=str(Path(value['path']).resolve(strict=True)))
+                    item['compiler_inputs'] = [dict(value, path=str(tools.canonical_path(tools.filesystem_path(value['path']))))
                                                for value in item['compiler_inputs']]
                 data_inputs = {value['path']: value for value in item['inputs']}
                 for data in item.get('data', []):
