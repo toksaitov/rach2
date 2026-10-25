@@ -101,7 +101,10 @@ static int walk(const unsigned char *img, size_t size, struct node out[MAX_NODES
 static int check(int strict)
 {
     const char *args[] = {fsck, image, strict ? "--strict" : NULL, NULL};
-    return native_run(&test, args);
+    int status = native_run(&test, args);
+    /* The checker documents -10 through -15. Windows preserves all 32 bits;
+     * POSIX returns their low byte. Keep execution failures distinct. */
+    return status >= -15 && status <= -10 ? 256 + status : status;
 }
 
 static void assertion(const char *prefix, const char *suffix, int pass)
