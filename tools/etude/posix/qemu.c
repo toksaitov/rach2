@@ -90,6 +90,7 @@ struct etude_machine {
     int audio_created, audio_temporary;
     struct etude_proc *proc;
     int proc_done; /* the executor has finished QEMU's attempt */
+    uint64_t drain_until; /* the existing grace bounds final socket delivery */
     enum qmp_state qmp_state;
     char *line; /* a QMP line being read */
     size_t line_len, line_cap;
@@ -928,11 +929,12 @@ static void machine_serve(struct etude_machine *m)
         return;
     console_read(m, 0);
     qmp_read(m);
+    if ((m->console >= 0 || m->qmp >= 0) && posix_now_us() < m->drain_until)
+        return;
     m->r.end = machine_end(m);
-    if (!m->shutdown || m->r.end == ETUDE_END_STOPPED || m->r.end == ETUDE_END_ACCEL_FAILED) {
-        m->r.end_console = m->r.console.total;
+    m->r.end_console = m->r.console.total;
+    if (!m->shutdown || m->r.end == ETUDE_END_STOPPED || m->r.end == ETUDE_END_ACCEL_FAILED)
         m->r.ended_us = posix_now_us();
-    }
     m->r.state = ETUDE_MACHINE_ENDED;
     machine_close(m);
     m->finished = 1;
@@ -966,8 +968,10 @@ static size_t watch_set(struct etude_qemu *q, struct etude_watch *w, uint64_t *s
     for (m = q->machines; m != NULL; m = m->next) {
         if (m->finished)
             continue;
-        if (m->kill_at != 0 && (*soonest == 0 || m->kill_at < *soonest))
+        if (!m->proc_done && m->kill_at != 0 && (*soonest == 0 || m->kill_at < *soonest))
             *soonest = m->kill_at;
+        if (m->drain_until != 0 && (*soonest == 0 || m->drain_until < *soonest))
+            *soonest = m->drain_until;
         if (m->console_listen >= 0) {
             w[n].fd = m->console_listen;
             w[n++].events = ETUDE_WATCH_IN;
@@ -1033,6 +1037,7 @@ static struct etude_proc *machine_proc(struct etude_qemu *q, struct etude_proc *
     for (m = q->machines; p != NULL && m != NULL; m = m->next) {
         if (m->proc == p) {
             m->proc_done = 1;
+            m->drain_until = m->r.qemu->finished_us + m->grace_us;
             return NULL;
         }
     }

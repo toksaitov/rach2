@@ -1869,3 +1869,11 @@ The HDA profile now selects hda-output instead of hda-duplex. The existing exact
 The native boots fixture's fake panic row received the correct whpx,kernel-irqchip=off launch option, then returned that entire string as the QMP enabled accelerator. The launcher correctly refused it because an accelerator name is whpx, without its command-line options. The stand-in never reached its guest panic event.
 
 The stand-in now strips the WHPX option suffix from its QMP name. Its real launch argument and the exact interrupt-controller option assertion remain unchanged. The existing panic row still requires confirmed acceleration, its complete console and the guest panic end; no production accelerator check is relaxed.
+
+## QEMU process exit preceded the final channel drain (#1178)
+
+The native Windows boots diagnostic reported qemu_exited for the fast HDA stand-in even though its recording bytes passed. The real suspended guest also printed its complete clean poweroff console but was not classified as a shutdown. Neither retained output includes a raw final QMP event, so these observations alone do not prove which event arrived.
+
+Source review found that the launcher finalized a machine immediately after process cleanup and one nonblocking socket read, even when console or QMP still returned EAGAIN. Native process exit does not order the reader's receipt of the final loopback TCP bytes or EOF. The launcher now drains its connected channels through EOF or the existing machine grace deadline, served by its existing watch loop. The deadline starts at actual process cleanup, and an old cancellation timer cannot spin while draining.
+
+Only an actually received SHUTDOWN event determines guest shutdown, reset or panic. Without it, the original process-based end remains. The final console offset includes drained bytes, while a received event retains its observed time. Existing fast stand-ins now also require console EOF, and mismatched ends print the native exit, QMP parse count, reason and console state. The affected native fixture retry must establish the runtime result.

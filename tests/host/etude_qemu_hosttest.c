@@ -605,6 +605,10 @@ static void row_check(struct row *r)
     if (res->end != r->want) {
         printf("etude-qemu-test: fail: %s: ended %s, not %s; QEMU's standard error: %s\n", r->name,
                ends[res->end], ends[r->want], res->qemu->err.data);
+        printf("etude-qemu-test: %s: exit %d value %d, QMP bad %u reason %s, "
+               "console %llu bytes closed %d\n",
+               r->name, res->qemu->exit_end, res->qemu->exit_value, res->qmp_bad, res->reason,
+               (unsigned long long)res->console.total, res->console.closed);
         fails++;
     }
     CHECK(strcmp(res->attempt_id, r->name) == 0, r->name);
@@ -683,6 +687,7 @@ static void check_ran(const struct row *r, const struct etude_machine_result *re
 {
     CHECK(res->running_us >= res->started_us && res->running_us != 0, r->name);
     CHECK(find(&res->console, "fake: running\r\nfake: got go\r\n", 0) >= 0, r->name);
+    CHECK(res->console.closed, "the final console reached EOF");
     CHECK(res->end_console == res->console.total, r->name);
     CHECK(res->accel != NULL && strcmp(res->accel, etude_accel_name(r->accel)) == 0, r->name);
 }
