@@ -67,7 +67,8 @@ class Route:
                 claim=a.run + ':producer:prepare',
                 seconds=min({'push': 270, 'ci': 540, 'release': 13800, 'phase_first_run': 86400}[a.purpose],
                             int(p['policy']['seconds'])))
-        remote = Remote(transport, a.run + ':' + label, self.work / (label + '.wire'))
+        remote = Remote(transport, a.run + ':' + label, self.work / (label + '.wire'),
+                        mode=self.config['mode'], wsl=self.config.get('physical', {}).get('wsl'))
         success = False
         try:
             remote.put('config.json', json.dumps(self.dynamic).encode())
