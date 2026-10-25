@@ -105,8 +105,36 @@ def external_exfat(marker):
             shutil.rmtree(temporary)
 
 
+def compiler_paths(command):
+    """Compare GNU compiler operands through their immutable store links."""
+    result = []
+    for index, word in enumerate(command):
+        prefix, path = '', word
+        for option in ('--sysroot=', '-B', '-L'):
+            if word.startswith(option):
+                prefix, path = option, word[len(option):]
+                break
+        operand = index > 0 and command[index - 1] in ('-isystem', '-iquote', '-I', '-L', '-B', '--sysroot')
+        if (index == 0 or prefix or operand) and Path(path).is_absolute():
+            word = prefix + str(Path(path).resolve(strict=True))
+        result.append(word)
+    return result
+
+
+def canonical_recipe(recipe):
+    """Retain every recipe input while resolving aliases of stored tools."""
+    value = dict(recipe)
+    value['command'] = compiler_paths(value['command'])
+    value['compiler'] = dict(value['compiler'])
+    value['compiler']['command'] = compiler_paths(value['compiler']['command'])
+    value['compiler_inputs'] = sorted(
+        [dict(item, path=str(Path(item['path']).resolve(strict=True)))
+         for item in value['compiler_inputs']], key=lambda item: item['path'])
+    return value
+
+
 def compiled_program(root, name, compiler, command, sources, dependencies, digest,
-                     identity, print_commands):
+                     identity, print_commands, previous=None):
     """Publish or reuse a program only for its complete current build recipe."""
     output = str(root / name)
     if print_commands:
@@ -120,13 +148,25 @@ def compiled_program(root, name, compiler, command, sources, dependencies, diges
     recipe = dict(compiler=identity, command=[*compiler, *command], inputs=source_inputs,
                   compiler_inputs=[external[path] for path in sorted(external)])
     marker = root / (name + '.build.json')
-    if marker.exists():
-        old = json.loads(marker.read_text())
+    candidates = [(marker, Path(output))]
+    if previous:
+        candidates.append((previous / marker, previous / output))
+    for record, program in candidates:
+        if not record.exists():
+            continue
+        old = json.loads(record.read_text())
         if old.get('schema_version') != 1 or 'recipe' not in old or 'sha256' not in old:
-            raise ValueError('invalid compiled host tool record: ' + str(marker))
-        if old['recipe'] == recipe:
-            if not Path(output).is_file() or digest(Path(output)) != old['sha256']:
-                raise ValueError('prepared host tool bytes changed: ' + output)
+            raise ValueError('invalid compiled host tool record: ' + str(record))
+        if canonical_recipe(old['recipe']) == canonical_recipe(recipe):
+            if not program.is_file() or digest(program) != old['sha256']:
+                raise ValueError('prepared host tool bytes changed: ' + str(program))
+            if record != marker:
+                root.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(program, output)
+                Path(output).chmod((program.stat().st_mode & 0o777) | 0o200)
+                shutil.copyfile(record, marker)
+                if digest(Path(output)) != old['sha256'] or digest(marker) != digest(record):
+                    raise ValueError('previous host tool changed during its copy: ' + name)
             return {path: dict(path=path, sha256=digest(Path(path)))
                     for path in [*paths, output, str(marker)]}
     root.mkdir(parents=True, exist_ok=True)
@@ -157,7 +197,8 @@ def compiled_program(root, name, compiler, command, sources, dependencies, diges
             for path in [*paths, output, str(marker)]}
 
 
-def compiled_tool(root, name, compiler, flags, dependencies, digest, identity, print_commands):
+def compiled_tool(root, name, compiler, flags, dependencies, digest, identity, print_commands,
+                  previous=None):
     """Reuse shared tool bytes only for the same compiler, recipe and includes."""
     output = str(root / name)
     sources = SOURCES[name]
@@ -167,10 +208,11 @@ def compiled_tool(root, name, compiler, flags, dependencies, digest, identity, p
             '-fsanitize=', '-fno-sanitize-recover=', '-g'))]
     command = [*flags, '-Wall', '-Wextra', '-Werror', '-o', output, *sources]
     return compiled_program(root, name, compiler, command, sources, dependencies, digest,
-                            identity, print_commands)
+                            identity, print_commands, previous)
 
 
-def prepare(names, compiler, flags, dependencies, digest, print_commands=False, compiler_identity=None):
+def prepare(names, compiler, flags, dependencies, digest, print_commands=False, compiler_identity=None,
+            previous=None):
     """Return source and executable fingerprints for all declared tool names."""
     root = Path('build/tests/host-suite/tools')
     inputs = {}
@@ -203,7 +245,7 @@ def prepare(names, compiler, flags, dependencies, digest, print_commands=False, 
         if name not in SOURCES:
             raise ValueError(f'no native host tool preparation recipe: {name}')
         inputs.update(compiled_tool(root, name, compiler, flags, dependencies, digest,
-                                    compiler_identity, print_commands))
+                                    compiler_identity, print_commands, previous))
     return [inputs[p] for p in sorted(inputs)]
 
 
