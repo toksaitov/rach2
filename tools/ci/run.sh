@@ -41,10 +41,11 @@ fi
 top=$$
 parent=$PPID
 mkdir -p "$out/kept"
+RACH2_FAILED=$out/kept
+export RACH2_FAILED
 : > "$out/failed"
 : > "$out/log"
 : > "$out/err"
-: > "$out/start"
 
 # End the run without `done`, as stopped.
 stop() {
@@ -301,8 +302,6 @@ if [ -n "$both" ]; then
             run_set bigmem bigmem
         fi
     fi
-    find build/tests/failed -mindepth 1 -maxdepth 1 -newer "$out/start" \
-        -exec cp -R {} "$out/kept/" \; 2> /dev/null
     share finished
     : > "$out/done"
     if [ -s "$out/failed" ]; then
@@ -357,8 +356,6 @@ else
             fi ;;
     esac
 fi
-find build/tests/failed -mindepth 1 -maxdepth 1 -newer "$out/start" \
-    -exec cp -R {} "$out/kept/" \; 2> /dev/null
 : > "$out/done"
 if [ -s "$out/failed" ]; then
     echo "ci: $kind: result: failed on $ARCH: $(tr '\n' ' ' < "$out/failed")"
