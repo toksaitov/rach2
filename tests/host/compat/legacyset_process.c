@@ -2,6 +2,7 @@
 #ifdef _WIN32
 #include "win/files.h"
 #include "win/winfmt.h"
+#include <wchar.h>
 #else
 #include <sys/wait.h>
 #include <unistd.h>
@@ -177,16 +178,32 @@ int legacy_child_running(struct legacy_child *c)
 }
 
 #ifdef _WIN32
-/** Describe an observed Job member without treating an unknown one as gone. */
-static void census_member(const struct legacy_child *c, const struct etude_win_ident *id)
+/** Match the native system console host, never an arbitrary basename. */
+static int system_console(const wchar_t *path)
+{
+    wchar_t system[32768];
+    static const wchar_t tail[] = L"\\conhost.exe";
+    UINT size = sizeof(system) / sizeof(system[0]);
+    UINT n = GetSystemDirectoryW(system, size);
+
+    if (n == 0 || n >= size || n + sizeof(tail) / sizeof(tail[0]) > size)
+        return 0;
+    memcpy(system + n, tail, sizeof(tail));
+    return _wcsicmp(system, path) == 0;
+}
+
+/** Describe a member and identify only an exact, owned system console host. */
+static int census_member(const struct legacy_child *c, const struct etude_win_ident *id)
 {
     HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, id->pid);
     FILETIME times[4];
     wchar_t path[32768];
     DWORD size = sizeof path / sizeof path[0], error = 0, status = STILL_ACTIVE;
+    DWORD wait = WAIT_FAILED;
     uint64_t created = 0;
     char *image = NULL;
     const char *state = "unknown";
+    int console = 0;
 
     if (h == NULL) {
         error = GetLastError();
@@ -194,35 +211,46 @@ static void census_member(const struct legacy_child *c, const struct etude_win_i
         error = GetLastError();
     } else {
         created = (uint64_t)times[0].dwHighDateTime << 32 | times[0].dwLowDateTime;
-        if (created == id->created) {
-            state = WaitForSingleObject(h, 0) == WAIT_OBJECT_0 ? "ended" : "present";
-            if (!GetExitCodeProcess(h, &status) || !QueryFullProcessImageNameW(h, 0, path, &size))
+        if (created != 0 && created == id->created) {
+            wait = WaitForSingleObject(h, 0);
+            state = wait == WAIT_OBJECT_0 ? "ended" : wait == WAIT_TIMEOUT ? "present" : "unknown";
+            if (wait != WAIT_OBJECT_0 && wait != WAIT_TIMEOUT)
+                error = wait == WAIT_FAILED ? GetLastError() : ERROR_INVALID_DATA;
+            else if (!GetExitCodeProcess(h, &status) ||
+                     !QueryFullProcessImageNameW(h, 0, path, &size))
                 error = GetLastError();
-            else
+            else {
                 image = etude_win_utf8(path);
+                if (image == NULL)
+                    error = ERROR_NOT_ENOUGH_MEMORY;
+                else
+                    console = id->pid != c->pid && system_console(path);
+            }
         } else {
             state = "identity changed";
         }
     }
     fprintf(stderr,
             "legacyset: Job member %lu:%llu actual %llu role %s state %s "
-            "exit %lu image %s query_error %lu\n",
+            "wait %lu exit %lu image %s query_error %lu\n",
             (unsigned long)id->pid, (unsigned long long)id->created, (unsigned long long)created,
-            id->pid == c->pid ? "controller" : "owned descendant", state, (unsigned long)status,
-            image ? image : "unavailable", (unsigned long)error);
+            id->pid == c->pid ? "controller" : "owned descendant", state, (unsigned long)wait,
+            (unsigned long)status, image ? image : "unavailable", (unsigned long)error);
     free(image);
     if (h != NULL)
         CloseHandle(h);
+    return console;
 }
 
-/** Retain the native status and exact member census before forced cleanup. */
-static void job_census(const struct legacy_child *c,
-                       const JOBOBJECT_BASIC_ACCOUNTING_INFORMATION *usage)
+/** Retain the census; accept only known console hosts for owned teardown. */
+static int job_census(const struct legacy_child *c,
+                      const JOBOBJECT_BASIC_ACCOUNTING_INFORMATION *usage)
 {
     struct etude_win_child job = {0};
     size_t count = 0, capacity = usage->TotalProcesses;
     struct etude_win_ident *ids = calloc(capacity, sizeof *ids);
     DWORD error = ERROR_NOT_ENOUGH_MEMORY;
+    int consoles;
 
     job.job = c->job;
     if (ids != NULL)
@@ -232,12 +260,15 @@ static void job_census(const struct legacy_child *c,
             "observed %lu census_error %lu\n",
             (unsigned long)c->pid, c->status, (unsigned long)usage->ActiveProcesses,
             (unsigned long)usage->TotalProcesses, (unsigned long)count, (unsigned long)error);
+    consoles = error == 0 && count != 0;
     for (size_t i = 0; i < count; i++)
-        census_member(c, &ids[i]);
+        if (!census_member(c, &ids[i]))
+            consoles = 0;
     free(ids);
+    return consoles;
 }
 
-/** Reap the whole owned job; an orphan makes the controller row fail. */
+/** Reap the owned Job; any non-console or unknown orphan fails the row. */
 static void finish_job(struct legacy_child *c)
 {
     JOBOBJECT_BASIC_ACCOUNTING_INFORMATION usage;
@@ -245,8 +276,8 @@ static void finish_job(struct legacy_child *c)
                                    sizeof(usage), NULL))
         abort();
     if (usage.ActiveProcesses) {
-        job_census(c, &usage);
-        c->status = 121;
+        if (!job_census(c, &usage))
+            c->status = 121;
         if (!TerminateJobObject(c->job, 121))
             abort();
         do {

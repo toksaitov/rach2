@@ -1836,3 +1836,9 @@ The child now starts through CreateProcessW with the exact application path and 
 The same Windows i686 boots check failed the changed-disk and failed-copy invocation digest assertions. Its original artifact was written as binary LF bytes, but write_text opened the replacement and restored disk with text mode. Windows added carriage returns while the expected digest still covered the literal LF bytes. The initial disk digest passed; the two subsequent digest assertions failed.
 
 The fixture writer now uses binary mode. The source bytes, store copies, expected hashes, invocation comparisons and cleanup checks remain unchanged. The actual failed log remains retained, and the affected Windows fixture retry must establish the result.
+
+## Native console teardown replaced correct set-driver statuses (#1172)
+
+The Windows i686 boots fixture reported 49 child-status failures although its controllers produced the expected suite results and claim counts. Every retained Job census contained exactly one descendant, the native system conhost.exe, with its matching creation identity and exit status zero. The fixture queried Job accounting immediately after its controller process ended and treated console teardown as an orphaned case. The census did not retain the zero-time process wait result.
+
+The fixture now preserves the controller status only when every remaining member has its current recorded creation identity and its full image path matches conhost.exe in the native system directory. It retains the complete census, including the wait result, terminates that owned Job and still requires its process count to reach zero. A different executable, reused identity, failed query or unknown member retains the failure. No child is ignored, no process escapes the Job, and no watchdog or case bound changes. The affected Windows fixture retry remains required.
