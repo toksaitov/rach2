@@ -1371,3 +1371,9 @@ The GNU ledger fixture required Linux's boot UUID proc file, which Rach2 does no
 ## USB probe read only the beginning of a long boot line (#1142)
 
 The first complete Mac diagnostic passed 1020 of 1024 attempts. Alongside the two scripted host groups in #1136, both machine.usb.off cases failed: the kernel logged that rach2.nousb disabled USB, while usbprobe reported that the option was absent. The probe read only255bytes of /proc/cmdline; QEMU's long kernel filename preceded the option. The probe now scans the complete file in bounded chunks, preserving token state across reads and matching whole words. The empty-device and enabled-device assertions remain unchanged.
+
+## The native exFAT reader translated binary output (#1149)
+
+Both Windows interrupted-GPT grow cases failed the host checksum of the saved backup. Each host backup was 10,654,232 bytes instead of 10,654,208; removing the carriage return added before each line feed reproduced its guest-recorded SHA-256 exactly. The boot images had the same change: the i686 copy had 10,201 extra bytes and the x86-64 copy had 9,279. Both normalized images were exactly 64 MiB and matched their recorded hashes. The actual raw files remain failure evidence; normalization was a diagnosis, never an accepted copy.
+
+`mkexfatfixture --check --read` wrote through the Windows C runtime's text stdout. Its `--out` form already reopened stdout in binary mode. Both forms now select binary output before exporting bytes; a mode-setting failure ends the command. The grow's independent checksum and byte comparisons are unchanged. Existing exFAT reader checks already compare complete LF-bearing text and binary byte sequences, including fragmented files and zero-filled tails. The affected Windows reader and grow reruns remain pending after the active diagnostic.
