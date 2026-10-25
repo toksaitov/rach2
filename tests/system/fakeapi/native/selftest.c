@@ -281,9 +281,9 @@ static void messages(void)
     {
         struct value *body = r->json, *history = (struct value *)get(body, "messages");
         struct value *result = (struct value *)get(history->child->next, "content")->child;
-        set(result, "is_error", boolean(1));
+        set(result, "is_error", json_boolean(1));
         check(protocol_check("anthropic", step, r) != NULL, "Messages rejects failed tool result");
-        set(result, "is_error", boolean(0));
+        set(result, "is_error", json_boolean(0));
         set(result, "content", string("wrong"));
         check(protocol_check("anthropic", step, r) != NULL,
               "Messages rejects incorrect tool result");
@@ -295,7 +295,7 @@ static void messages(void)
               strstr(w.out.data, "event: message_stop\n"),
           "Messages stream includes split tool JSON and completion");
     clear(&w.out);
-    set(step, "stream", boolean(0));
+    set(step, "stream", json_boolean(0));
     p = test_peer(&s, r, &w);
     check(protocol_reply("anthropic", step, &p) &&
               strstr(w.out.data, "\"stop_reason\": \"tool_use\""),
@@ -338,7 +338,7 @@ static void gemini(void)
               strstr(w.out.data, "finishReason") && strstr(w.out.data, "usageMetadata"),
           "Gemini streamed content has signature, completion and usage");
     clear(&w.out);
-    set(step, "stream", boolean(0));
+    set(step, "stream", json_boolean(0));
     p = test_peer(&s, r, &w);
     check(protocol_reply("gemini", step, &p) &&
               strstr(w.out.data, "Content-Type: application/json"),
@@ -377,7 +377,7 @@ static void responses_test(void)
           "Responses stream has all output variants and completion");
     set(r->json, "previous_response_id", string("unknown"));
     check(protocol_check("responses", step, r) != NULL, "HTTPS cannot continue unstored response");
-    set(r->json, "generate", boolean(0));
+    set(r->json, "generate", json_boolean(0));
     check(protocol_check("responses", step, r) != NULL, "HTTPS rejects warmup");
     clear(&w.out);
     destroy(step);
