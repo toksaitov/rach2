@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Construct the fixed phase vectors for the existing native sequence owner."""
+import hashlib
 import json
 import os
 import stat
@@ -26,12 +27,60 @@ def read_config(path):
     return doc
 
 
+def phase_inputs(purpose):
+    """Bind the optional first-measurement allocation before crossing hosts."""
+    require(purpose in ('push', 'ci', 'release', 'phase_first_run'), 'invalid routine purpose')
+    path = os.environ.get('ETUDE_PHASE_SELECTION_EXPORT')
+    clean = os.environ.get('ETUDE_PREPARATION_CLEAN')
+    if purpose != 'phase_first_run':
+        require('ETUDE_PHASE_SELECTION_EXPORT' not in os.environ,
+                'a routine run cannot use a first-measurement selection')
+        return dict(clean=purpose == 'release', selection_export=None)
+    require(path and clean in (None, '1'), 'invalid first-measurement preparation inputs')
+    path = filesystem_path(path)
+    require(path.is_absolute() and path.is_file(), 'first measurements need an absolute selection export')
+    raw = path.read_bytes()
+    export = json.loads(raw)
+    require(isinstance(export, dict), 'allocator export is not an object')
+    selected = export['selection_bytes'].encode('ascii')
+    require(export.get('schema_version') == 1 and selected and
+            len(selected) == export['selection_size_bytes'] and
+            hashlib.sha256(selected).hexdigest() == export['selection_sha256'],
+            'allocator selection bytes/hash disagree')
+    allocation = json.loads(selected)
+    require(isinstance(allocation, dict) and allocation.get('schema_version') == 1 and export.get('items'),
+            'allocator selection is empty or invalid')
+    return dict(clean=clean == '1', selection_export=dict(path=native_path(path),
+                sha256=hashlib.sha256(raw).hexdigest(), size_bytes=len(raw)))
+
+
+def validate_selection(expected, actual):
+    require(json.loads(filesystem_path(expected).read_bytes()) ==
+            json.loads(filesystem_path(actual).read_bytes()),
+            'preallocated selection differs from the current public allocator')
+
+
+def request_matches(request, purpose, commit, run, arches, accel, selection, phase):
+    expected = dict(purpose=purpose, commit=commit, run=run, arches=arches,
+                    accel=accel, selection=selection, preparation=phase)
+    require(all(request.get(key) == value for key, value in expected.items()),
+            'direct request or first-measurement allocation changed')
+
+
 def wsl_native(path):
     value = subprocess.check_output(['wslpath', '-w', str(path)], text=True).strip()
     require(value and '\n' not in value, 'invalid native path round trip')
     reverse = subprocess.check_output(['wslpath', '-u', value], text=True).strip()
     require(os.path.samefile(path, reverse), 'Windows path round trip changed file identity')
     return value.replace('\\', '/')
+
+
+def wsl_environment(names):
+    # These values already have their verified consumer spelling. Inherited
+    # WSLENV path/direction flags must not translate or suppress them again.
+    previous = [v for v in os.environ.get('WSLENV', '').split(':')
+                if v and v.split('/', 1)[0] not in names]
+    os.environ['WSLENV'] = ':'.join([*previous, *names])
 
 
 def execute(program, argv):
@@ -45,12 +94,16 @@ def counted(program, args):
 
 
 def main(argv):
+    if len(argv) == 4 and argv[1] == 'selection':
+        validate_selection(argv[2], argv[3])
+        return
     if len(argv) == 3 and argv[1] == 'mode':
         print(read_config(argv[2])['mode'])
         return
     require(len(argv) >= 10, 'expected the native sequence fixed operands and selection')
     purpose, tree, out, arches, run, site, etude, accel = argv[1:9]
     selection = argv[9:]
+    phase = phase_inputs(purpose)
     route = os.environ.get('ETUDE_ROUTINE_ROUTE')
     require(route, 'selected site has no installed routine route')
     config = read_config(route)
@@ -67,7 +120,13 @@ def main(argv):
     if not windows:
         require(config['mode'] == 'wsl-native', 'physical route requires its native Windows entry')
         request = dict(run=run, commit=commit, tree=tree, out=out, site=site, etude=etude,
-                       purpose=purpose, arches=arches, accel=accel, selection=selection)
+                       purpose=purpose, arches=arches, accel=accel, selection=selection, preparation=phase)
+        if phase['selection_export']:
+            original = phase['selection_export']['path']
+            native = wsl_native(original)
+            request['selection_export_linux'] = original
+            phase['selection_export']['path'] = native
+            os.environ['ETUDE_PHASE_SELECTION_EXPORT'] = native
         with (Path(out) / 'routine.request.json').open('x') as stream:
             json.dump(request, stream)
             stream.write('\n')
@@ -76,8 +135,9 @@ def main(argv):
         os.environ['ETUDE_ROUTINE_COMPLETION_LOCATOR'] = out + '/routine.completion.json'
         # WSLENV passes only fixed configuration and the same current commit.
         names = ['ETUDE_ROUTINE_ROUTE', 'ETUDE_ROUTINE_COMMIT', 'ETUDE_ROUTINE_COMPLETION_LOCATOR',
-                 'GITHUB_RUN_ID', 'RUNNER_NAME', 'ETUDE_ROUTINE_INPUT']
-        os.environ['WSLENV'] = ':'.join(filter(None, [os.environ.get('WSLENV', ''), *names]))
+                 'GITHUB_RUN_ID', 'RUNNER_NAME', 'ETUDE_ROUTINE_INPUT',
+                 'ETUDE_PHASE_SELECTION_EXPORT', 'ETUDE_PREPARATION_CLEAN']
+        wsl_environment(names)
         native_script = native_tree + '/tools/ci/routine_entry.py'
         child = [physical['etude'], 'authority', 'helper', physical['python'], native_script,
                  purpose, native_tree, native_out, arches, run, wsl_native(site),
@@ -104,7 +164,7 @@ def main(argv):
     else:
         prepare = helper('direct-setup')
         request = json.loads((filesystem_path(out) / 'routine.request.json').read_text())
-        require(request['run'] == run and request['commit'] == commit, 'direct request changed')
+        request_matches(request, purpose, commit, run, arches, accel, selection, phase)
         lo = request['out']
         trace, stop = out + '/physical-load.jsonl', out + '/physical-stop.request'
         p = config['producer']
@@ -114,12 +174,16 @@ def main(argv):
             ETUDE_ROUTINE_RUN=run, ETUDE_PHYSICAL_TRACE=lo + '/physical-load.jsonl',
             ETUDE_PHYSICAL_STOP_REQUEST=lo + '/physical-stop.request',
             ETUDE_ROUTINE_COMMIT=commit)
+        if phase['selection_export']:
+            environment['ETUDE_PHASE_SELECTION_EXPORT'] = request['selection_export_linux']
+        if phase['clean']:
+            environment['ETUDE_PREPARATION_CLEAN'] = '1'
         # The capability is inherited through WSLENV, never printed on argv.
-        os.environ['WSLENV'] = ':'.join(filter(None, [os.environ.get('WSLENV', ''),
-            'ETUDE_AUTHORITY_NONCE', 'ETUDE_AUTHORITY_RUN']))
+        wsl_environment(['ETUDE_AUTHORITY_NONCE', 'ETUDE_AUTHORITY_RUN'])
         inner = [request['etude'], 'authority', 'phase', run, commit, 'consumer',
                  lo + '/direct.owner.json', '/usr/bin/env', '-u', 'ETUDE_ROUTINE_ROUTE',
                  '-u', 'ETUDE_ROUTINE_INPUT', '-u', 'ETUDE_SEQUENCE_PARENT',
+                 '-u', 'ETUDE_PHASE_SELECTION_EXPORT', '-u', 'ETUDE_PREPARATION_CLEAN',
                  *[key + '=' + value for key, value in environment.items()], '/bin/sh',
                  request['tree'] + '/tools/ci/native_sequence.sh', purpose, request['tree'], lo,
                  arches, run, lo + '/consumer.linux.site', request['etude'], request['accel'], *selection]
