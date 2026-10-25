@@ -594,8 +594,8 @@ static void digests_keep(const char *cache, const char *path, const struct statu
     FILE *in, *out = NULL;
     int fd = -1, ok, saved = errno;
 
-    if (lock == NULL || next == NULL || !digests_absolute(path) ||
-        strchr(path, '\n') != NULL || strlen(path) + 6 * 21 + ETUDE_DIGEST_HEX >= DIGESTS_LINE)
+    if (lock == NULL || next == NULL || !digests_absolute(path) || strchr(path, '\n') != NULL ||
+        strlen(path) + 6 * 21 + ETUDE_DIGEST_HEX >= DIGESTS_LINE)
         goto done;
     parent_make(cache);
     if ((fd = open(lock, O_RDWR | O_CREAT | O_CLOEXEC, 0644)) < 0 || store_wait_lock(fd) != 0 ||
