@@ -15,6 +15,11 @@ struct etude_observer;
 /* Start a bounded trace, observing the descendants of root as owned. */
 struct etude_observer *etude_observe_start(const char *path, const struct etude_pid *root,
                                            const char *run_id);
+/* Keep this owner trace open until finish, after its worker has joined. */
+struct etude_observer *etude_observe_start_terminal(const char *path, const struct etude_pid *root,
+                                                    const char *run_id);
+/* Join, take the actual terminal reading, then sample counters and close. */
+int etude_observe_finish(struct etude_observer *observer, struct etude_reading *end);
 /* Stop and join the sampling thread; its final sample ends the trace. */
 int etude_observe_stop(struct etude_observer *observer);
 /* Cancellation closes the trace with an incomplete footer. */

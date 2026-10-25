@@ -277,7 +277,6 @@ static int sequence_arguments(struct sequence *s, int argc, char **argv)
     if (s->routed) {
         if (argc < 22 || routine_owner_open(&s->routine, argv[9], argv[10], s->run, argv[11]))
             return -1;
-        s->routine.trace = s->trace;
         position = 12;
         s->quiesce_argv = vector(argc, argv, &position, &s->quiesce_program);
         if (!s->quiesce_argv || strcmp(s->quiesce_program, s->observer))
@@ -621,7 +620,8 @@ static int sequence_collection(struct sequence *s, DWORD *status)
 static DWORD sequence_run(struct sequence *s)
 {
     DWORD status = 125, observer_status;
-    if (sequence_observer(s) || sequence_preparation(s, &status))
+    if ((s->routed && routine_owner_observation_start(&s->routine)) || sequence_observer(s) ||
+        sequence_preparation(s, &status))
         return 125;
     if (!status && sequence_collection(s, &status))
         return 125;
@@ -681,9 +681,12 @@ static int sequence_terminal(struct sequence *s, int result)
                                               .owner = s->routine.owner};
         if (etude_authority_physical(&phase, 1, NULL))
             result = 125;
-        else if (routine_owner_complete(&s->routine, result, 1) && !result)
+        else if (routine_owner_observation_finish(&s->routine, 1) ||
+                 routine_owner_complete(&s->routine, result, 1))
             result = 125;
     }
+    if (s->routed && s->routine.observer)
+        routine_owner_observation_finish(&s->routine, 0);
     return result;
 }
 
@@ -716,6 +719,8 @@ static int sequence_close(struct sequence *s, DWORD status)
                                 : (int)status;
     if (!cleanup_error)
         result = sequence_terminal(s, result);
+    else if (s->routed && s->routine.observer)
+        routine_owner_observation_finish(&s->routine, 0);
     fprintf(record, "error %lu\ncancelled %d\nstatus %d\nactive %s\ncleanup %s\n",
             (unsigned long)s->error, s->cancelled, result, cleanup_error ? "unknown" : "0",
             cleanup_error ? "unconfirmed" : "confirmed");

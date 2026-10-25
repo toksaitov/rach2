@@ -3,10 +3,13 @@
 #define ETUDE_ROUTINE_OWNER_H
 #include "measurement_context.h"
 #include "authority.h"
+#include "etude/observe.h"
 struct etude_routine_owner {
     const char *route, *directory, *run, *commit, *purpose, *trace;
     struct etude_context_clock clock;
-    struct etude_reading start, preparation_end, observation_end;
+    struct etude_reading start, preparation_end, observation_end, end;
+    struct etude_observer *observer;
+    char owner_trace[4096];
     struct etude_pid owner, collector;
     char mode[24];
     uint64_t work_us;
@@ -14,6 +17,8 @@ struct etude_routine_owner {
 };
 int routine_owner_open(struct etude_routine_owner *owner, const char *route, const char *directory,
                        const char *run, const char *purpose);
+int routine_owner_observation_start(struct etude_routine_owner *owner);
+int routine_owner_observation_finish(struct etude_routine_owner *owner, int confirmed);
 int routine_owner_grant(struct etude_routine_owner *owner);
 int routine_owner_expired(const struct etude_routine_owner *owner);
 int routine_owner_prepared(struct etude_routine_owner *owner);
