@@ -457,8 +457,8 @@ tests/host/pwauth_hosttest.c:check_restore_reentry lines 110 a test's rows, each
 tests/host/pwauth_hosttest.c:check_rewrite complexity 48 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:check_rewrite lines 163 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:check_teardown lines 130 a test's rows, each a case, read as one table
-tests/host/pwauth_hosttest.c:main complexity 51 a test's rows, each a case, read as one table
-tests/host/pwauth_hosttest.c:main lines 209 a test's rows, each a case, read as one table
+tests/host/pwauth_hosttest.c:main complexity 52 a test's rows, each a case, read as one table
+tests/host/pwauth_hosttest.c:main lines 219 a test's rows, each a case, read as one table
 
 tests/host/readfile_hosttest.c:put_node params 8 a test's rows, each a case, read as one table
 
