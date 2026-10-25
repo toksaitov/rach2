@@ -1028,7 +1028,7 @@ The machine is QEMU's default PC, or its q35 when the profile's `machine` is `q3
 | A card's `guest_forwards` | `,guestfwd=tcp:ADDRESS:GUEST_PORT-cmd:'WORD' ... PORT` for each, appended to that card's `-netdev` after its forwards |
 | `netN` of `captures` | `-object filter-dump,id=netN-dump,netdev=netN,file=PATH` after that card's `-device`, PATH being the file the caller gives |
 | A device `vga`, with no other member | `-vga std` |
-| Optional `audio` `hda` | `intel-hda` and `hda-duplex` on the `wav` backend |
+| Optional `audio` `hda` | `intel-hda` and output-only `hda-output` on the `wav` backend |
 | Optional `audio` `sb16` | `sb16` on the `wav` backend |
 | Any other device | `-device MODEL`, then `,id=`, `,bus=`, `,port=` and `,drive=` with the members given, and `,NAME=VALUE` for each property |
 | `smbios_vendor` | `-smbios type=0,vendor=TEXT`, the commas of TEXT doubled; printable ASCII of 1 to 64 bytes |

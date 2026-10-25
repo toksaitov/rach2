@@ -860,7 +860,7 @@ static void add_audio(struct line *l, const char *card, const char *path)
             add(l, 0, "-device");
             add(l, 0, "intel-hda,id=etude-hda");
             add(l, 0, "-device");
-            add(l, 0, "hda-duplex,bus=etude-hda.0,audiodev=etude-audio");
+            add(l, 0, "hda-output,bus=etude-hda.0,audiodev=etude-audio");
         } else {
             add(l, 0, "-device");
             add(l, 0, "sb16,audiodev=etude-audio");

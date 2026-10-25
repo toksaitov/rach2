@@ -1831,3 +1831,9 @@ The mock forward row also expected a suffixless scanner path although the scenar
 ## Native execution acquired an added script layer (#1176, #1177)
 
 Native preparation and the routine test route acquired production Python and shell helpers despite the owner's requirement to put this work in etude. These are tracked execution dependencies, separate from temporary launch tools under build/tests and from the programs the collection tests. The coordinator also continued implementation after the owner had assigned that role to the helpers. Both decisions repeated instructions already given and delayed delivery. Services owns moving native preparation into the existing C and Make mechanisms; runner owns the route, import and context operations. The coordinator owns scheduling and integration. The work preserves existing assertions and verified outputs, adds no dependency or separate framework, and batches the affected checks after the source changes.
+
+## WAV playback requested an input codec (#1174)
+
+The native Windows i686 QEMU fixture's TCG poweroff row exited before boot. Its complete stderr reports that hda-duplex cannot open adc because the WAV backend has no host audio input driver. The profile's audio contract records guest playback to a WAV file; it requests no recording input.
+
+The HDA profile now selects hda-output instead of hda-duplex. The existing exact command-line assertion checks the output-only codec, while recording bytes, isolated paths, refusal to replace an existing file and real shutdown checks remain unchanged. No host audio driver or dependency is added. The actual affected native fixture retry remains required.
