@@ -662,6 +662,7 @@ static int command_rows(struct tooling *t)
 static int arm_rows(struct tooling *t)
 {
     struct fixture *f = t->f;
+    char old_disk[4096], old_tools[4096], disk[4096], tools[4096];
     const char *want[] = {"qemu-system-aarch64",
                           "virt",
                           "edk2-aarch64-code.fd",
@@ -673,6 +674,10 @@ static int arm_rows(struct tooling *t)
     fresh(t);
     if (!made(t))
         return 0;
+    if (!fx_check(f, cache_files(t, "tooling-*.qcow2", NULL, old_disk) == 1 &&
+                         cache_files(t, "tooling-*.tools", "provision: ok", old_tools) == 1,
+                  "amd64 image and tool record published"))
+        return 0;
     {
         const char *a[] = {"-p", "arm64", "-a", "hvf", "check", NULL};
         run(t, a);
@@ -682,8 +687,13 @@ static int arm_rows(struct tooling *t)
         const char *a[] = {"-p", "arm64", "-a", "hvf", "prepare", NULL};
         run(t, a);
     }
-    ok = fx_check(f, !f->status && cache_files(t, "tooling-*.qcow2", NULL, NULL) == 2,
-                  "two platform images published") &&
+    ok = fx_check(f, !f->status && cache_files(t, "tooling-*.qcow2", NULL, disk) == 1 &&
+                         cache_files(t, "tooling-*.tools", "provision: ok", tools) == 1 &&
+                         strcmp(disk, old_disk) && strcmp(tools, old_tools) &&
+                         strlen(disk) == strlen(tools) &&
+                         !strncmp(disk, tools, strlen(disk) - strlen(".qcow2")) &&
+                         !fx_exists(old_disk) && !fx_exists(old_tools),
+                  "arm64 pair published and unused amd64 pair pruned") &&
          ok;
     {
         const char *a[] = {"-p", "arm64", "-a", "hvf", "run", flow_path(f, "job.sh"), NULL};

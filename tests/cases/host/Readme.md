@@ -58,6 +58,8 @@ The deployment fixture models Linux with `uname -s` reporting `Linux` and `uname
 
 Native executor, platform and QEMU checks run on the collection host. Preparation rejects an undeclared interpreter or missing adapter; execution reports a missing check as a failure. `host.sh` remains as the legacy build-command interface. The prepared collection does not call it. `etude_hostdriver_hosttest.c` and the compiled host-suite controller check scheduling, interruption and immutable inputs.
 
+The tooling cache fixture records the completed amd64 image and tool record before preparing arm64. It requires a different complete arm64 pair and removal of the unused amd64 pair, then runs the ARM job and checks its QEMU arguments. The cache keeps the current pair and pairs used by active jobs or retained evidence.
+
 ### Source-check evidence
 
 `style.c` reads source-check evidence made by `prepare_style.py` during artifact preparation. The preparation host runs the existing checks, requires every assertion to pass, and requires the recorded compiler and formatter versions, the Clang user-pointer contract and a judged complexity result. The evidence records the command, architecture, judge versions, assertions, branches, preparation time and source digest. The pinned pmccabe and mandoc receipts and the actual Clang executable digest enter that record; a changed judge requires new evidence. [Native source judges](../../../tools/setup/source-tools.md) describes the portable tools and the user-pointer contract. The native case reports that these checks ran during preparation.

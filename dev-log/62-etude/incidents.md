@@ -1260,3 +1260,9 @@ This repair changes fixture code only. The coordinating session validates the co
 The run37 deployment check selected its Windows uname substitute through PATH, but the shell passed only `uname` in argv[0]. The substitute looked for `/windows/` in that argument and reported Linux. Provisioning therefore reused the Linux identity, and the subsequent Windows record checks failed. The retained deployment output is 81,723 bytes, SHA-256 `86bd41b27924a43cdd872d91af04556ea564131e6cb90e00ec44dd4360e631c0`.
 
 The exact Windows SSH command now sets a private platform marker, and other SSH commands clear it. The uname substitute reads that marker. Linux and Windows identity, record, source, firmware and publication checks remain. The testing skill now requires explicit platform state for command substitutes. This fixes #1119; validation belongs to the combined repair check.
+
+## The tooling fixture expected an obsolete cache pair to remain
+
+The run37 tooling check prepared amd64, then arm64. Both commands succeeded, and the ARM job passed. The fixture nevertheless required two cached images. The current cache removes an unused completed pair after publishing its replacement, and the retained output records that removal. Its 10,049 bytes have SHA-256 `0720cd413ec15a195678739b4a94c776473e9757ee7a8385a356f4fba9a3fefd`.
+
+The fixture now records the first image and tool record, requires one different complete pair after ARM preparation, and verifies that both old files are absent. The platform identity refusal, ARM job and all QEMU argument checks remain. Product pruning is unchanged. This fixes #1121; validation belongs to the combined repair check.
