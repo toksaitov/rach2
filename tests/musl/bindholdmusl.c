@@ -135,37 +135,96 @@ static void check(int ok, const char *what)
     }
 }
 
-/** Copy this staged executable into a writable file on the selected root. */
+/* A mounted KRFFS node has a 357-byte header. Keep each copied file's
+ * whole extent block-sized, so splitting the aligned free tail never places
+ * a live size field across two medium blocks. Boot-root copies stay exact. */
+#define KRFFS_HEADER_BYTES 357u
+#define KRFFS_BLOCK_BYTES  4096u
+
+/** Bytes of zero padding after the executable in the mounted fixture. */
+static size_t padding(off_t length)
+{
+    size_t used = ((size_t)(length % KRFFS_BLOCK_BYTES) + KRFFS_HEADER_BYTES) % KRFFS_BLOCK_BYTES;
+
+    return filesystem_magic == 0x4b52 ? (KRFFS_BLOCK_BYTES - used) % KRFFS_BLOCK_BYTES : 0;
+}
+
+/** Whether every byte in the fixture's explicit padding is zero. */
+static int zeroes(const void *data, size_t size)
+{
+    const unsigned char *p = data;
+    size_t i;
+
+    for (i = 0; i < size; i++) {
+        if (p[i] != 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** Copy the exact staged ELF prefix and, on a volume, verified zero padding.
+ * The first write includes the header in its block count. Later writes
+ * keep that extent alignment, including intermediate allocation splits. */
 static void copy(const char *to)
 {
-    char buf[4096];
-    ssize_t n;
+    char buf[KRFFS_BLOCK_BYTES];
+    size_t capacity = filesystem_magic == 0x4b52 ? sizeof(buf) - KRFFS_HEADER_BYTES : sizeof(buf);
+    int first = 1;
     int in = open("/musl/bindholdmusl", O_RDONLY);
     int out = open(to, O_CREAT | O_TRUNC | O_WRONLY, 0755);
 
     check(in >= 0 && out >= 0, "copy open");
-    while ((n = read(in, buf, sizeof(buf))) > 0) {
-        check(write(out, buf, n) == n, "copy write");
+    for (;;) {
+        size_t used = 0;
+        ssize_t n = 0;
+
+        while (used < capacity) {
+            n = read(in, buf + used, capacity - used);
+            if (n < 0 && errno == EINTR) {
+                continue;
+            }
+            check(n >= 0, "copy read");
+            if (n == 0) {
+                break;
+            }
+            used += n;
+        }
+        if (used == 0 && !first) {
+            break;
+        }
+        if (filesystem_magic == 0x4b52) {
+            memset(buf + used, 0, capacity - used);
+            used = capacity;
+        }
+        check(write(out, buf, used) == (ssize_t)used, "copy write");
+        if (n == 0) {
+            break;
+        }
+        first = 0;
+        capacity = sizeof(buf);
     }
-    check(n == 0, "copy read");
-    close(out);
-    close(in);
+    check(close(out) == 0 && close(in) == 0, "copy close");
 }
 
-/** Check every byte of a surviving descriptor against the staged file. */
+/** Check the exact source prefix, every padding byte and the final EOF. */
 static void contents(int fd, const char *what)
 {
     char want[4096], got[4096];
     off_t offset = 0;
+    size_t tail;
     ssize_t n;
     int in = open("/musl/bindholdmusl", O_RDONLY);
 
     check(in >= 0, "reference open");
     while ((n = read(in, want, sizeof(want))) > 0) {
-        check(pread(fd, got, sizeof(got), offset) == n && memcmp(want, got, n) == 0, what);
+        check(pread(fd, got, n, offset) == n && memcmp(want, got, n) == 0, what);
         offset += n;
     }
-    check(n == 0 && pread(fd, got, 1, offset) == 0, what);
+    check(n == 0, what);
+    tail = padding(offset);
+    check(pread(fd, got, tail, offset) == (ssize_t)tail && zeroes(got, tail), what);
+    check(pread(fd, got, 1, offset + tail) == 0, what);
     close(in);
 }
 
@@ -264,7 +323,9 @@ static void mapping(int rename_over)
               "bind mapping contents");
         offset += n;
     }
-    check(n == 0 && offset == mapped_len, "mapping length");
+    check(n == 0 && offset <= mapped_len && mapped_len - offset == padding(offset),
+          "mapping length");
+    check(zeroes((char *)mapped + offset, mapped_len - offset), "mapping padding");
     close(in);
     held = freeblocks();
     check(munmap(mapped, mapped_len) == 0, "mapping release");
