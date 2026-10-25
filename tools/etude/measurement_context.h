@@ -11,6 +11,9 @@ struct jbuf;
 /* Capture a clean committed tree and optional prepared inputs in C. */
 int etude_context_source(const char *tree, const char *commit, const char *output,
                          const char *const extra[]);
+/* Build the same snapshot in memory; the caller frees its buffer. */
+int etude_context_source_build(const char *tree, const char *commit, const char *const extra[],
+                               struct jbuf *buffer);
 int etude_prepare_source_main(int argc, char **argv);
 int etude_prepare_context_main(int argc, char **argv);
 int etude_context_digest(const char *path, struct stat *status, char digest[65]);
