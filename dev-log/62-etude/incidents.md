@@ -1869,3 +1869,7 @@ The 03af affected collection passed all ten `scripts_native` checks on both arch
 ### Windows clock reference teardown after guest exit (#1181)
 
 The Windows clockmusl cases and three self-build cases completed their guest assertions and recorded QEMU's exit, then reached their case bounds without termination. Their next call closed the UDP reference socket from the owner thread while its worker blocked in recvfrom, then waited indefinitely for that worker. Winsock forbids a concurrent close. The reference now waits on socket-read and stop events; the owner signals stop, joins the worker, then closes its socket and events. The protocol, assertions, bounds and POSIX child lifecycle stay unchanged. The retained Windows cases distinguish this native cleanup wait from a guest or QMP wait; their affected retry remains required.
+
+### Windows scenario range copies narrowed the USB far offset (#1182)
+
+Both USB-big cases found their GUID partition past sector 2^32 but failed to mount its FAT volume. The shared disk-range copier called the Windows CRT's default fseeko, whose offset is 32 bits; replacing the caller's off_t token did not change the previously declared parameter. The 2 TiB plus 1 MiB byte position narrowed to 1 MiB on both insertion and extraction. The copier now uses the image tools' existing wide seek. The scenario host fixture independently seeds and inspects sparse extents at the actual position, checking both directions and neighboring bytes. All USB assertions and bounds remain unchanged; the affected native retry remains required.
