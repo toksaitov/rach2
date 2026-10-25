@@ -18,6 +18,8 @@ struct legacy_child {
 #ifdef _WIN32
     HANDLE process, job;
     DWORD pid;
+    struct etude_win_ident *consoles;
+    size_t nconsoles;
 #else
     pid_t pid;
 #endif
@@ -85,12 +87,50 @@ void legacy_child_catch(void (*stop)(int))
 }
 
 #ifdef _WIN32
+/** Open the private ready and release events for this controller process. */
+static int console_events(DWORD pid, HANDLE events[2], int create)
+{
+    wchar_t name[80];
+    int i;
+
+    for (i = 0; i < 2; i++) {
+        swprintf(name, sizeof(name) / sizeof(name[0]), L"Local\\rach2-legacy-%lu-%d",
+                 (unsigned long)pid, i);
+        events[i] = create ? CreateEventW(NULL, TRUE, FALSE, name)
+                           : OpenEventW(SYNCHRONIZE | EVENT_MODIFY_STATE, FALSE, name);
+        if (!events[i] || (create && GetLastError() == ERROR_ALREADY_EXISTS)) {
+            while (i >= 0) {
+                if (events[i])
+                    CloseHandle(events[i]);
+                events[i--] = NULL;
+            }
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int remember_consoles(struct legacy_child *c);
+static void finish_job(struct legacy_child *c);
+
+/** Hold the child before fixture work until its console identity is saved. */
+static int console_ready(struct legacy_child *c, HANDLE ready, HANDLE release)
+{
+    HANDLE waits[2] = {c->process, ready};
+
+    if (WaitForMultipleObjects(2, waits, FALSE, INFINITE) != WAIT_OBJECT_0 + 1 ||
+        remember_consoles(c) != 0)
+        return -1;
+    return SetEvent(release) ? 0 : -1;
+}
+
 /** Give this controller a separate console without visible windows. */
 static int start_child(struct legacy_child *c, const char *self, const char *description)
 {
     STARTUPINFOW startup;
     PROCESS_INFORMATION process;
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
+    HANDLE events[2] = {NULL, NULL};
     const char *const args[] = {"--legacy-driver", description, NULL};
     char *line = NULL;
     wchar_t *command, *program = etude_win_wide(self);
@@ -117,19 +157,34 @@ static int start_child(struct legacy_child *c, const char *self, const char *des
         if (AssignProcessToJobObject(c->job, process.hProcess)) {
             c->process = process.hProcess;
             c->pid = process.dwProcessId;
-            ok = ResumeThread(process.hThread) != (DWORD)-1;
+            ok = console_events(c->pid, events, 1) == 0 &&
+                 ResumeThread(process.hThread) != (DWORD)-1 &&
+                 console_ready(c, events[0], events[1]) == 0;
         }
         if (!ok) {
-            TerminateProcess(process.hProcess, 121);
+            if (c->process != NULL) {
+                if (!TerminateJobObject(c->job, 121))
+                    abort();
+            } else {
+                TerminateProcess(process.hProcess, 121);
+            }
             WaitForSingleObject(process.hProcess, INFINITE);
+            if (c->process != NULL)
+                finish_job(c);
             CloseHandle(process.hProcess);
         }
         CloseHandle(process.hThread);
     }
     free(command);
     free(program);
-    if (!ok && c->job)
-        CloseHandle(c->job);
+    for (int i = 0; i < 2; i++)
+        if (events[i])
+            CloseHandle(events[i]);
+    if (!ok) {
+        if (c->job)
+            CloseHandle(c->job);
+        free(c->consoles);
+    }
     return ok ? 0 : -1;
 }
 #else
@@ -143,6 +198,24 @@ static int start_child(struct legacy_child *c, const char *self, const char *des
     return c->pid > 0 ? 0 : -1;
 }
 #endif
+
+/** Let the parent observe this console before a short controller can exit. */
+int legacy_child_ready(void)
+{
+#ifdef _WIN32
+    HANDLE events[2] = {NULL, NULL};
+    int ok;
+
+    if (console_events(GetCurrentProcessId(), events, 0) != 0)
+        return -1;
+    ok = SetEvent(events[0]) && WaitForSingleObject(events[1], INFINITE) == WAIT_OBJECT_0;
+    CloseHandle(events[0]);
+    CloseHandle(events[1]);
+    return ok ? 0 : -1;
+#else
+    return 0;
+#endif
+}
 
 struct legacy_child *legacy_child_start(const char *self, const char *description)
 {
@@ -192,6 +265,15 @@ static int system_console(const wchar_t *path)
     return _wcsicmp(system, path) == 0;
 }
 
+/** Whether an earlier query proved this exact Job member's native image. */
+static int recorded_console(const struct legacy_child *c, const struct etude_win_ident *id)
+{
+    for (size_t i = 0; i < c->nconsoles; i++)
+        if (c->consoles[i].pid == id->pid && c->consoles[i].created == id->created)
+            return 1;
+    return 0;
+}
+
 /** Describe a member and identify only an exact, owned system console host. */
 static int census_member(const struct legacy_child *c, const struct etude_win_ident *id)
 {
@@ -216,10 +298,12 @@ static int census_member(const struct legacy_child *c, const struct etude_win_id
             state = wait == WAIT_OBJECT_0 ? "ended" : wait == WAIT_TIMEOUT ? "present" : "unknown";
             if (wait != WAIT_OBJECT_0 && wait != WAIT_TIMEOUT)
                 error = wait == WAIT_FAILED ? GetLastError() : ERROR_INVALID_DATA;
-            else if (!GetExitCodeProcess(h, &status) ||
-                     !QueryFullProcessImageNameW(h, 0, path, &size))
+            else if (!GetExitCodeProcess(h, &status))
                 error = GetLastError();
-            else {
+            else if (!QueryFullProcessImageNameW(h, 0, path, &size)) {
+                error = GetLastError();
+                console = error == ERROR_ACCESS_DENIED && recorded_console(c, id);
+            } else {
                 image = etude_win_utf8(path);
                 if (image == NULL)
                     error = ERROR_NOT_ENOUGH_MEMORY;
@@ -232,14 +316,48 @@ static int census_member(const struct legacy_child *c, const struct etude_win_id
     }
     fprintf(stderr,
             "legacyset: Job member %lu:%llu actual %llu role %s state %s "
-            "wait %lu exit %lu image %s query_error %lu\n",
+            "wait %lu exit %lu image %s query_error %lu recorded_console %d\n",
             (unsigned long)id->pid, (unsigned long long)id->created, (unsigned long long)created,
             id->pid == c->pid ? "controller" : "owned descendant", state, (unsigned long)wait,
-            (unsigned long)status, image ? image : "unavailable", (unsigned long)error);
+            (unsigned long)status, image ? image : "unavailable", (unsigned long)error,
+            recorded_console(c, id));
     free(image);
     if (h != NULL)
         CloseHandle(h);
     return console;
+}
+
+/** Record console hosts while the controller is held at its entry. */
+static int remember_consoles(struct legacy_child *c)
+{
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION usage;
+    struct etude_win_child job = {0};
+    struct etude_win_ident *ids;
+    size_t count = 0;
+    DWORD error;
+
+    if (!QueryInformationJobObject(c->job, JobObjectBasicAccountingInformation, &usage,
+                                   sizeof(usage), NULL))
+        return -1;
+    ids = calloc(usage.TotalProcesses, sizeof(*ids));
+    c->consoles = calloc(usage.TotalProcesses, sizeof(*c->consoles));
+    if (ids == NULL || c->consoles == NULL) {
+        free(ids);
+        return -1;
+    }
+    job.job = c->job;
+    error = etude_win_pids(&job, ids, usage.TotalProcesses, &count);
+    if (error == 0)
+        for (size_t i = 0; i < count; i++)
+            if (census_member(c, &ids[i]))
+                c->consoles[c->nconsoles++] = ids[i];
+    free(ids);
+    if (error != 0 || c->nconsoles == 0) {
+        fprintf(stderr, "legacyset: console identity unavailable before release: %lu\n",
+                (unsigned long)error);
+        return -1;
+    }
+    return 0;
 }
 
 /** Retain the census; accept only known console hosts for owned teardown. */
@@ -367,6 +485,7 @@ void legacy_child_free(struct legacy_child *c)
 #ifdef _WIN32
     CloseHandle(c->process);
     CloseHandle(c->job);
+    free(c->consoles);
 #endif
     free(c);
 }
