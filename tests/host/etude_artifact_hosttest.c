@@ -3,7 +3,8 @@
  * store.c and prepare.c) with the POSIX executor, this program run as the
  * recipes, with `--recipe MODE COUNT TAG OUT ARG...`.
  *
- * host-deps: tools/etude/posix/store.c tools/etude/posix/prepare.c
+ * host-deps: tools/etude/posix/store.c
+ * host-deps: tests/host/compat/artifact_prepare_host.c
  * host-deps: tools/etude/capture.c tools/etude/posix/exec.c
  * host-deps: tools/etude/posix/keeper.c tools/etude/posix/process.c
  * host-deps: utils/sha256.c
@@ -43,6 +44,7 @@
 #include "compat/pathmax_host.h"
 #include "compat/fixdir_host.c"
 #include "etude/artifact.h"
+#include "posix.h"
 #include "sha256.h"
 #include "store.h"
 
@@ -69,6 +71,22 @@ extern unsigned long etude_store_hashed, etude_store_copied;
 
 /* The bound of the recipe that hangs. */
 #define SHORT_BOUND 300000u
+
+static uint64_t (*preparation_clock)(void);
+static char hang_ready[PATH_MAX];
+static uint64_t hang_clock_at;
+
+/** The real monotonic clock, except while the bound row controls its time. */
+uint64_t etude_artifact_prep_now_us(void)
+{
+    return preparation_clock ? preparation_clock() : posix_now_us();
+}
+
+/** Expire the unchanged bound only after the recipe made its partial file. */
+static uint64_t hang_clock(void)
+{
+    return hang_clock_at + (access(hang_ready, F_OK) == 0 ? SHORT_BOUND + 1 : 0);
+}
 
 /* The processes that prepare one node at once. */
 #define RACERS 6
@@ -294,7 +312,7 @@ static int recipe_cat(const char *out, const char *tag, char **args, int n)
 }
 
 /** Leave a partial `out`, then exit 3, be killed or hang, as `mode` says. */
-static int recipe_partial(const char *mode, const char *out)
+static int recipe_partial(const char *mode, const char *out, const char *ready)
 {
     if (write_text(out, "partial") != 0)
         return 126;
@@ -303,6 +321,8 @@ static int recipe_partial(const char *mode, const char *out)
         return 3;
     if (strcmp(mode, "kill") == 0)
         raise(SIGKILL);
+    if (ready == NULL || write_text(ready, "") != 0)
+        return 126;
     for (;;)
         pause();
 }
@@ -357,7 +377,7 @@ static int recipe(int argc, char **argv)
     if (strcmp(mode, "cat") == 0)
         return recipe_cat(out, argv[4], args, n);
     if (strcmp(mode, "fail") == 0 || strcmp(mode, "kill") == 0 || strcmp(mode, "hang") == 0)
-        return recipe_partial(mode, out);
+        return recipe_partial(mode, out, n == 1 ? args[0] : NULL);
     if (strcmp(mode, "none") == 0)
         return 0;
     if (strcmp(mode, "link") == 0 && n == 1)
@@ -1315,7 +1335,7 @@ static struct etude_prep *graph_failures(const char *count)
 
     for (i = 0; i < 3 && r == 0; i++)
         r = add(g, names[i], argv_of(v[i], modes[i], count, names[i], NULL), NULL);
-    hang = node_of("bad-hang", argv_of(v[3], "hang", count, "bad-hang", NULL), NULL);
+    hang = node_of("bad-hang", argv_of(v[3], "hang", count, "bad-hang", ARGS(hang_ready)), NULL);
     hang.bound_us = SHORT_BOUND;
     if (r != 0 || etude_prep_add(g, &hang) != 0 ||
         add(g, "bad-link", argv_of(v[4], "link", count, "bad-link", ARGS(count)), NULL) != 0 ||
@@ -1329,6 +1349,20 @@ static struct etude_prep *graph_failures(const char *count)
     return g;
 }
 
+/** Keep startup outside the bound comparison, then cancel the real recipe. */
+static int run_failures(struct etude_prep *g, struct etude_store *s, const char *scratch)
+{
+    int result;
+
+    unlink(hang_ready);
+    hang_clock_at = posix_now_us();
+    preparation_clock = hang_clock;
+    result = run(g, s, scratch, 4);
+    preparation_clock = NULL;
+    unlink(hang_ready);
+    return result;
+}
+
 /** Fail each way a recipe can, publish nothing, and block the dependents. */
 static void test_failures(void)
 {
@@ -1336,17 +1370,19 @@ static void test_failures(void)
     const char *count = fix_path("fail-count");
     const char *scratch = fix_path("fail-work");
     struct etude_store *s = etude_store_open(dir);
-    struct etude_prep *g = graph_failures(count);
+    struct etude_prep *g;
     char partial[ETUDE_DIGEST_HEX + 1], path[PATH_MAX];
     const struct etude_prep_result *r;
 
+    fix_format(hang_ready, sizeof(hang_ready), "%s", fix_path("hang-ready"));
+    g = graph_failures(count);
     CHECK(s != NULL && g != NULL && mkdir(scratch, 0755) == 0, "failures");
     if (s == NULL || g == NULL) {
         etude_prep_free(g);
         etude_store_close(s);
         return;
     }
-    CHECK(run(g, s, scratch, 4) == 1, "failures: the run fails");
+    CHECK(run_failures(g, s, scratch) == 1, "failures: the run fails");
     CHECK(failed_so(g, "bad-exit", "exited 3", 1), "failures: bad-exit");
     r = etude_prep_result(g, "bad-exit");
     CHECK(r->err.data != NULL && strstr(r->err.data, "fail: on purpose") != NULL,
@@ -1366,7 +1402,7 @@ static void test_failures(void)
           "failures: no partial product is an object");
     CHECK(in_store(dir, "objects") == 1 && in_store(dir, "nodes") == 1 && in_store(dir, "tmp") == 0,
           "failures: only the good node is published");
-    CHECK(run(g, s, scratch, 4) == 1 && lines_of(count, "bad-exit") == 2 && reused(g, "good"),
+    CHECK(run_failures(g, s, scratch) == 1 && lines_of(count, "bad-exit") == 2 && reused(g, "good"),
           "failures: a failure is not kept");
     etude_prep_free(g);
     etude_store_close(s);

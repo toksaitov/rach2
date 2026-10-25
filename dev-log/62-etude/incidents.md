@@ -1533,3 +1533,7 @@ Both restore-reentry rows failed with no password prompt in the first Windows di
 ## Windows preserved the KRFFS checker's negative status
 
 Six KRFFS checker cases failed their rejection assertions in the first Windows diagnostic while their repair and unchanged-byte assertions passed. Retained child output shows the intended invalid signature, data-length and strict repair refusals. The checker documents statuses -10 through -15. POSIX delivers their low bytes (246 through 241); Windows preserves the signed 32-bit values. The case treated those values as executor failures. Its checker adapter now normalizes only those six documented statuses. The checker, executor, unknown native statuses and every image assertion are unchanged.
+
+## The artifact bound row expired during instrumented startup (#1137 follow-up)
+
+The targeted GNU artifact retry failed only the hanging recipe's retained partial-product assertion. Its result still reported cancellation past the 300 ms bound. A read-only recovery of the failed private image showed no bad-hang entry in either run's recipe counter and no partial output in its work directories: cancellation preceded instrumented program startup. The bound row now uses a host-test-only preparation clock. It holds that clock until the real hanging recipe has written its partial file and a ready witness, then advances past the same 300 ms comparison. The production clock, executor cancellation, cleanup, sanitizers and retained-file assertions are unchanged.
