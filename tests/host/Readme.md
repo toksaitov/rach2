@@ -10,7 +10,7 @@ The cases keep their assertion identifiers:
 
 1. `tests`: the host tests outside etude, with the vendored sources of each selected architecture.
 2. `etude`: the shared checks of Etude's complete inventory, once per collection.
-3. `etude_quiet`: the remote and repetition checks of that same inventory, with no other collection case running beside them.
+3. `etude_quiet`: the platform, remote and repetition checks of that same inventory, with no other collection case running beside them.
 4. `boots`: tests with `host-arch:`, over each selected architecture's kernel and images.
 5. `checkers`: the five checker selftests under the sanitizers.
 6. `fuzz`: each prepared fuzz harness replaying its complete committed corpus. An empty corpus fails preparation.
@@ -47,7 +47,7 @@ A test's opening comment may have five kinds of line, which the preparation tool
 * `host-deps: PATH ...`: sources, by path from the repository root, compiled and linked with the test. The line repeats, one list per line. A list wrapped onto a following comment line without its own `host-deps:` prefix fails the test, since the rest of the list would be lost, and so does a named file that does not exist.
 * `host-cflags: FLAGS`: more compiler flags, also repeatable: the include paths and warnings of a source outside the kernel tree, or a `-D` the test needs. 57 tests have one.
 * `host-first: REASON`: the test starts before the tests of its case without the line, for the reason given, so that a test that runs for minutes does not run alone at the end. The interruption matrices of `ext2_hosttest.c`, `fat32_hosttest.c` and `exfat_hosttest.c`, which run external checkers on copies of the volumes, have one, and so do eight of etude's tests.
-* `host-alone: REASON`: the test runs when no other check runs, after the others, for the reason given: a window of a fraction of a second that a machine busy with the other checks could miss. `etude_qemu_hosttest.c`, `etude_remote_hosttest.c`, `etude_repeat_hosttest.c` and `etude_watchdog_hosttest.c` have one.
+* `host-alone: REASON`: the test runs when no other check runs, after the others, for its declared platform isolation or a window of a fraction of a second that a busy machine could miss. `etude_platform_hosttest.c`, `etude_qemu_hosttest.c`, `etude_remote_hosttest.c`, `etude_repeat_hosttest.c` and `etude_watchdog_hosttest.c` have one.
 * `host-arch: REASON`: the test boots the kernel of the architecture `ARCH` names, for the reason given, and so is the `boots` case's, which runs once for each architecture. `etude_qemu_hosttest.c`, `etude_watchdog_hosttest.c`, `etude_scenario_hosttest.c` and `etude_legacyset_hosttest.c` have one.
 
 A path on a `host-deps:` or `host-cflags:` line that begins `vendor/` names a vendored port's extracted tree as i686 has it, such as `vendor/musl/musl-1.2.5/`. For a run with `ARCH=x86_64`, the preparation tool reads it from `build/x86_64/vendor-work/` instead, where an x86-64 build extracts the same sources, so a tree that has built only x86-64 runs the test.

@@ -3,6 +3,7 @@
  * On Windows preparation substitutes winfixture and its declared helpers,
  * including these same complete-output assertions.
  *
+ * host-alone: native platform fixture isolation
  * host-deps: tests/host/compat/output_sinks.c tools/etude/capture.c
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
  * host-deps: tools/etude/posix/process.c tools/etude/tooling_cache.c
