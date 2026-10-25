@@ -606,7 +606,7 @@ static const char *in(char *buf, size_t size, const char *name)
 /** Make file `path` hold `text` with mode `mode`; 0 or -1. */
 static int write_text(const char *path, const char *text, mode_t mode)
 {
-    FILE *f = fopen(path, "w");
+    FILE *f = fopen(path, "wb");
     int r;
 
     if (f == NULL)
