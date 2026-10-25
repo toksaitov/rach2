@@ -91,15 +91,16 @@ struct etude_remote_observer {
 /* How the controller reaches a responder. The connection keeps the strings
  * and the vector until it is closed. */
 struct etude_remote_conf {
-    char *const *argv;    /* the command whose standard input and output are
-                             the responder's, such as ssh(1) running
-                             `etude serve --stdio` */
-    const char *run_id;   /* the run, whose digest is the session */
-    const char *journal;  /* a file where each command is recorded before it
-                             is sent, so that a later controller of the run
-                             never reuses its number; NULL keeps none */
-    const char *evidence; /* a file where lines not acted on are appended,
-                             or NULL */
+    char *const *argv;      /* the command whose standard input and output are
+                               the responder's, such as ssh(1) running
+                               `etude serve --stdio` */
+    const char *run_id;     /* the run named by each invocation */
+    const char *session_id; /* independent journal identity; NULL uses run_id */
+    const char *journal;    /* a file where each command is recorded before it
+                               is sent, so that a later controller of the run
+                               never reuses its number; NULL keeps none */
+    const char *evidence;   /* a file where lines not acted on are appended,
+                               or NULL */
     const struct etude_remote_observer *observer;
     size_t max_frame;    /* the largest frame offered; 0 gives
                             ETUDE_FRAME_STDIO_MAX */

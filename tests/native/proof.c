@@ -15,6 +15,7 @@ static int remove_ended(struct nc_attempt *a, struct etude_native_result *r)
     memset(&conf, 0, sizeof(conf));
     conf.argv = a->spec.transport_argv;
     conf.run_id = a->spec.run;
+    conf.session_id = a->spec.attempt;
     conf.journal = a->spec.journal;
     conf.evidence = a->spec.evidence;
     conf.observer = a->spec.observer;

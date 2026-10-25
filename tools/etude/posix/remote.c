@@ -599,7 +599,7 @@ enum etude_remote_status etude_remote_open(const struct etude_remote_conf *conf,
     r->to = r->from = r->journal = -1;
     r->own_max = conf->max_frame != 0 ? conf->max_frame : ETUDE_FRAME_STDIO_MAX;
     r->in = malloc(r->own_max + 1);
-    token_of(conf->run_id, r->session);
+    token_of(conf->session_id ? conf->session_id : conf->run_id, r->session);
     if (r->in == NULL || r->own_max < ETUDE_FRAME_MIN) {
         snprintf(why, whylen, "cannot make a connection with frames of %lu bytes",
                  (unsigned long)r->own_max);
