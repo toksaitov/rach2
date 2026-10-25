@@ -1607,3 +1607,7 @@ The GNU CI fixture failed the exact retained-directory assertions of both archit
 ## The coordinating check began after its recorded deadline
 
 The check due at 19:55:06 on 25 October began at 19:58:39 while the coordinating session recovered its current work state. Its complete status and board reads passed, and it corrected the two active CI cards left in Backlog. The next deadline is recorded beside the concrete publication and test actions, so recovering context does not require reconstructing either the schedule or the work already reported.
+
+## Follow-up messages did not restart a completed helper
+
+After the Lenovo helper finished its targeted checks, the coordinator sent further work through the message operation, which does not start a new turn. The helper therefore did not resume the remaining native selection or the later source-check correction. A live agent-status read exposed the mistake at 20:23 on 25 October. The coordinator restarted the helper with the follow-up task operation. After a helper finishes, new work must use that operation; a sent message alone proves neither receipt nor execution.
