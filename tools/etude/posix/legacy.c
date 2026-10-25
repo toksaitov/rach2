@@ -997,18 +997,24 @@ static int prepare_target(struct prep *p)
 {
 #ifdef _WIN32
     struct step s;
-    char **args = calloc(p->o->ngoals + 7, sizeof(*args));
-    size_t i, n = 6;
+    char **args = calloc(p->o->ngoals + 8, sizeof(*args));
+    size_t i, n = 7;
     int status;
 
     if (args == NULL)
         return failed(p, "tooling: memory ran out");
-    args[0] = "python3";
-    args[1] = "tools/etude/collection_tools.py";
-    args[2] = "prepare";
-    args[3] = p->tree;
-    args[4] = (char *)p->at->arch;
-    args[5] = (char *)(p->o->kernel != NULL ? p->o->kernel : "");
+    char *program = format("%s/build/tools/etude/etude", p->tree);
+    if (program == NULL) {
+        free(args);
+        return failed(p, "tooling: memory ran out");
+    }
+    args[0] = program;
+    args[1] = "prepare";
+    args[2] = "tools";
+    args[3] = "prepare";
+    args[4] = p->tree;
+    args[5] = (char *)p->at->arch;
+    args[6] = (char *)(p->o->kernel != NULL ? p->o->kernel : "");
     for (i = 0; i < p->o->ngoals; i++)
         if (goal_of(p, p->at, p->o->goals[i]))
             args[n++] = (char *)p->o->goals[i];
@@ -1019,6 +1025,7 @@ static int prepare_target(struct prep *p)
                "collection_windows && exec \"$@\"";
     s.cmd = args;
     status = run_step(p, &s);
+    free(program);
     free(args);
     return status == 0 ? find_artifacts(p) : status;
 #else
