@@ -5,7 +5,7 @@ case musl/atcallmusl root:ext2-dir stage:native/hello.txt -- musl/atcallmusl
 # Left out: root's step of the real-time clock and the refusal of an
 # unprivileged one.
 case musl/authmusl root:ext2-dir ids:1000 utsns -- musl/authmusl machine=native
-case musl/bindholdmusl root:krffs -- musl/bindholdmusl
+case musl/bindholdmusl root:krffs -- musl/bindholdmusl mounted
 case musl/budgetmusl -- musl/budgetmusl
 # Left out: adjtimex's unsynchronized clock.
 case musl/callsmusl root:krffs ids:4242,4243 ports:47 alone -- musl/callsmusl machine=native

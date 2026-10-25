@@ -1,4 +1,5 @@
-/* Check KRFFS boot-root holders opened through a bind mount.
+/* Check KRFFS root holders opened through a bind mount.
+ * With `mounted`, require a mounted volume; otherwise require the boot root.
  *
  * Twenty rows, each a kind of holder whose file loses its name by unlink or
  * by a rename over it, through the original directory and then through its
@@ -55,6 +56,7 @@ static const char *const rows[20] = {
     "forked-image-rename-bind",
 };
 static int rows_done;
+static unsigned long filesystem_magic = 0x4b524646;
 
 static char work[256], original[320], alias[320];
 static char program[384], replacement[384], churn[384], bound[384], bound_replacement[384];
@@ -133,7 +135,7 @@ static void check(int ok, const char *what)
     }
 }
 
-/** Copy this staged executable into a writable file on the boot root. */
+/** Copy this staged executable into a writable file on the selected root. */
 static void copy(const char *to)
 {
     char buf[4096];
@@ -172,7 +174,7 @@ static unsigned long freeblocks(void)
 {
     struct statfs st;
 
-    check(statfs(original, &st) == 0 && st.f_type == 0x4b524646, "boot root statfs");
+    check(statfs(original, &st) == 0 && st.f_type == filesystem_magic, "KRFFS root statfs");
     return st.f_bfree;
 }
 
@@ -417,6 +419,9 @@ int main(int argc, char **argv)
 
     if (argc == 4) {
         return child_mode(argv);
+    }
+    if (argc > 1 && strcmp(argv[1], "mounted") == 0) {
+        filesystem_magic = 0x4b52;
     }
     atexit(cleanup);
     signal(SIGTERM, interrupted);
