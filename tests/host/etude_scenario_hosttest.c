@@ -1873,10 +1873,18 @@ static int scenario_media(struct etude_case *c, int real)
 {
     static const char *const ids[2][3] = {{"sparse", "drives", "stopped"},
                                           {"same-disk", "drives-again", "second-stop"}};
+    static const char drive_format[] =
+        "fake: device ich9-ahci,id=etude-ahci\r\n"
+        "fake: drive file=%s,format=raw,if=none,id=etude-disk0,discard=unmap,"
+        "detect-zeroes=unmap\r\nfake: device nvme,drive=etude-disk0,"
+        "serial=rach2big\r\nfake: drive file=%s,format=raw,if=ide,index=0,"
+        "media=cdrom,readonly=on\r\nfake: drive file=%s,format=raw,if=none,"
+        "id=etude-disk2,cache=unsafe\r\nfake: device ide-hd,drive=etude-disk2,"
+        "bus=etude-ahci.0\r\n";
     const char *big = NULL, *again, *cd, *blank, *shell = real ? "\n> " : "> ";
     struct etude_case_machine *m;
     struct etude_termination end;
-    char text[PATH_MAX + 256];
+    char text[3 * PATH_MAX + sizeof(drive_format)];
     struct stat st;
     uint64_t at = 0, allocated;
     int boot;
@@ -1898,15 +1906,8 @@ static int scenario_media(struct etude_case *c, int real)
         if (real)
             fix_format(text, sizeof(text), ": namespace 1: 4194304 MiB");
         else
-            fix_format(text, sizeof(text),
-                       "fake: device ich9-ahci,id=etude-ahci\r\n"
-                       "fake: drive file=%s,format=raw,if=none,id=etude-disk0,discard=unmap,"
-                       "detect-zeroes=unmap\r\nfake: device nvme,drive=etude-disk0,"
-                       "serial=rach2big\r\nfake: drive file=%s,format=raw,if=ide,index=0,"
-                       "media=cdrom,readonly=on\r\nfake: drive file=%s,format=raw,if=none,"
-                       "id=etude-disk2,cache=unsafe\r\nfake: device ide-hd,drive=etude-disk2,"
-                       "bus=etude-ahci.0\r\n",
-                       big != NULL ? big : "", cd != NULL ? cd : "", blank != NULL ? blank : "");
+            fix_format(text, sizeof(text), drive_format, big != NULL ? big : "",
+                       cd != NULL ? cd : "", blank != NULL ? blank : "");
         etude_assert(c, ids[boot][1], etude_console_wait(m, text, 0, &at) == ETUDE_OK, text);
         at = wait_for(c, m, ids[boot][2], "Type 'help'", at);
         wait_for(c, m, ids[boot][2], shell, at);
@@ -2003,7 +2004,11 @@ static int scenario_forward(struct etude_case *c, int real)
     fix_format(line, sizeof(line),
                "fake: netdev user,id=net0,restrict=on,hostfwd=tcp:127.0.0.1:%u-:22,"
                "hostfwd=udp:127.0.0.1:%u-:9999,guestfwd=tcp:10.0.2.100:7777-cmd:"
-               "'%s.scratch/bin/scanner' 'tool' 'relay' %u\r",
+               "'%s.scratch/bin/scanner"
+#ifdef _WIN32
+               ".exe"
+#endif
+               "' 'tool' 'relay' %u\r",
                etude_port(c, 0), etude_port(c, 1), getenv("ETUDE_TEST_MARK"), etude_port(c, 2));
     expect(c, "forwarded", etude_console_wait(m, line, 0, &at), ETUDE_OK);
     expect(c, "second-card", etude_console_wait(m, "fake: netdev user,id=net1\r", 0, &at),
