@@ -1051,20 +1051,161 @@ static int preparation_adapter(struct prep *p, const char *name, char **argv)
     return run_step(p, &s);
 }
 
+/** Remove products without following links or removing retained evidence. */
+static int clean_product(const char *path, const char *keep)
+{
+    struct stat st;
+    size_t n = strlen(path);
+    DIR *dir;
+    struct dirent *entry;
+    int status = 0;
+
+    if (!strcmp(path, keep))
+        return 0;
+    if (strncmp(path, keep, n) || keep[n] != '/')
+        return remove_tree(path);
+    if (lstat(path, &st) || !S_ISDIR(st.st_mode))
+        return -1;
+    if (!(dir = opendir(path)))
+        return -1;
+    while ((entry = readdir(dir))) {
+        char *child;
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+            continue;
+        child = format("%s/%s", path, entry->d_name);
+        if (!child || clean_product(child, keep))
+            status = -1;
+        free(child);
+    }
+    if (closedir(dir))
+        status = -1;
+    return status;
+}
+
+/** Read the literal probe names before removing any product. */
+static int clean_probes(struct prep *p, struct list *probes)
+{
+    char *path = format("%s/tests/Makefile", p->tree), line[4096];
+    FILE *file = path ? fopen(path, "r") : NULL;
+    int found = 0, more = 0, status = -1;
+
+    free(path);
+    if (!file)
+        return -1;
+    while (fgets(line, sizeof(line), file)) {
+        char *at = line, *word;
+        if (!strchr(line, '\n') && !feof(file))
+            break;
+        if (!found) {
+            if (strncmp(line, "PROGS = ", 8))
+                continue;
+            at += 8;
+            found = 1;
+        }
+        more = 0;
+        while ((word = strtok(at, " \t\r\n"))) {
+            at = NULL;
+            if (!strcmp(word, "\\")) {
+                more = 1;
+                break;
+            }
+            if (!*word ||
+                strspn(word, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") !=
+                    strlen(word) ||
+                list_add(probes, word))
+                goto done;
+        }
+        if (!more) {
+            status = probes->n ? 0 : -1;
+            break;
+        }
+    }
+done:
+    if (ferror(file))
+        status = -1;
+    if (fclose(file))
+        status = -1;
+    return status;
+}
+
+static const char *const clean_products[] = {
+    "utils",       "ish",        "ports",        "doom",       "images",           "iso",
+    "man",         ".preflight", "tests/cases",  "tests/host", "tests/host-suite", "tests/system",
+    "tests/style", "tests/fuzz", "tests/native", "tests/musl", "tests/.config"};
+
+/** Clean the declared products of one architecture, retaining vendor caches. */
+static int clean_architecture(const char *base, const char *keep, const struct list *probes)
+{
+    struct stat st;
+    char *path;
+    DIR *dir;
+    struct dirent *entry;
+    size_t i;
+    int status = 0;
+
+    if (lstat(base, &st))
+        return errno == ENOENT ? 0 : -1;
+    if (!S_ISDIR(st.st_mode) || !(dir = opendir(base)))
+        return -1;
+    while ((entry = readdir(dir))) {
+        if (strcmp(entry->d_name, "rach2") && strncmp(entry->d_name, "rach2-", 6))
+            continue;
+        path = format("%s/%s", base, entry->d_name);
+        if (!path || clean_product(path, keep))
+            status = -1;
+        free(path);
+    }
+    if (closedir(dir))
+        status = -1;
+    for (i = 0; !status && i < sizeof(clean_products) / sizeof(*clean_products); i++) {
+        path = format("%s/%s", base, clean_products[i]);
+        status = !path || clean_product(path, keep);
+        free(path);
+    }
+    for (i = 0; !status && i < probes->n; i++) {
+        path = format("%s/tests/%s", base, probes->v[i]);
+        char *dep = path ? format("%s.d", path) : NULL;
+        status = !path || !dep || clean_product(path, keep) || clean_product(dep, keep);
+        free(path);
+        free(dep);
+    }
+    return status;
+}
+
+/** Remove the selected architecture products and the shared native tools. */
+static int clean_outputs(struct prep *p, const char *keep, const struct list *probes)
+{
+    char *build = format("%s/build", p->tree);
+    struct stat st;
+    size_t i;
+    int status = 0;
+    if (!build || lstat(build, &st) || !S_ISDIR(st.st_mode))
+        status = refuse(p, "clean needs real build directories and literal probe declarations");
+    const char *arch = p->o->arch ? p->o->arch : "i686";
+    size_t count = !strcmp(arch, "i686,x86_64") ? 2 : 1;
+    for (i = 0; !status && i < count; i++) {
+        int x64 = i || !strcmp(arch, "x86_64");
+        char *base = format("%s/build%s", p->tree, x64 ? "/x86_64" : "");
+        status = !base || clean_architecture(base, keep, probes);
+        free(base);
+    }
+    static const char *const shared[] = {"tools", "krffs"};
+    for (i = 0; !status && i < sizeof(shared) / sizeof(*shared); i++) {
+        char *path = format("%s/%s", build, shared[i]);
+        status = !path || clean_product(path, keep);
+        free(path);
+    }
+    free(build);
+    return status;
+}
+
 /** Clean only the declared in-house outputs before ordinary preparation. */
 static int clean_inhouse(struct prep *p)
 {
     const char *clean = getenv("ETUDE_PREPARATION_CLEAN");
     char *output, *slash;
-    char *args[] = {"python3",
-                    "tools/ci/clean_inhouse.py",
-                    p->tree,
-                    (char *)(p->o->arch && !strcmp(p->o->arch, "i686,x86_64") ? "both"
-                             : p->o->arch                                     ? p->o->arch
-                                                                              : "i686"),
-                    NULL,
-                    NULL};
-    int status;
+    struct list probes = {0};
+    int status = 0;
 
     if (!clean)
         return 0;
@@ -1082,11 +1223,21 @@ static int clean_inhouse(struct prep *p)
         free(output);
         return refuse(p, "the preparation receipt must have an absolute directory");
     }
-    *slash = '\0';
-    args[4] = output;
-    status = preparation_adapter(p, "clean-inhouse", args);
+    if (slash == output || (slash == output + 2 && output[1] == ':'))
+        slash[1] = '\0';
+    else
+        *slash = '\0';
+    char *keep = realpath(output, NULL);
+    if (!keep || clean_probes(p, &probes))
+        status = refuse(p, "clean needs a real output directory and literal probe declarations");
+    else
+        status = clean_outputs(p, keep, &probes);
     if (!status)
         p->receipt.conditioning = ETUDE_PREPARATION_CLEAN;
+    else if (status != 2)
+        status = failed(p, "clean: an in-house product could not be removed");
+    list_free(&probes);
+    free(keep);
     free(output);
     return status;
 }
