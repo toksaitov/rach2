@@ -35,7 +35,14 @@ static void measurement_descriptor(struct jbuf *b, const char *path, const char 
 }
 static void measurement_file(const char *path, struct jbuf *b)
 {
-    CHECK(!write_text(path, b->data, 0644), "context: snapshot writes");
+    FILE *f = fopen(path, "wb");
+    int r = -1;
+    if (f) {
+        r = fwrite(b->data, 1, b->len, f) == b->len ? 0 : -1;
+        if (fclose(f))
+            r = -1;
+    }
+    CHECK(!r && !chmod(path, 0644), "context: snapshot bytes write unchanged");
     jbuf_free(b);
 }
 static struct eh_json *measurement_record(const struct run *r, const char *kind)
