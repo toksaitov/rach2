@@ -26,6 +26,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <fcntl.h>
+#endif
 
 #define SECTOR 512u
 
@@ -1166,6 +1169,22 @@ static int check_args(int argc, char **argv, struct vol *v, struct check_args *a
     return 0;
 }
 
+/** Send exported file bytes unchanged to stdout or its named replacement. */
+static int read_output(const char *path)
+{
+    if (path && !freopen(path, "wb", stdout)) {
+        fprintf(stderr, "mkexfatfixture: cannot write %s\n", path);
+        return 2;
+    }
+#ifdef _WIN32
+    if (_setmode(_fileno(stdout), _O_BINARY) < 0) {
+        fprintf(stderr, "mkexfatfixture: cannot set binary output\n");
+        return 2;
+    }
+#endif
+    return 0;
+}
+
 /**
  * The `--check` command over the image and the optional sector offset in
  * `argv`. After the boot regions and the root's objects, it walks the
@@ -1218,10 +1237,8 @@ static int check_main(int argc, char **argv)
         return 1;
     }
     if (a.read_what) {
-        if (a.out && !freopen(a.out, "wb", stdout)) {
-            fprintf(stderr, "mkexfatfixture: cannot write %s\n", a.out);
+        if (read_output(a.out) != 0)
             return 2;
-        }
         return read_path(&v, a.read_what);
     }
     n = walk_chain(&v, v.bitmap_first, v.bitmap_length, 0, "(bitmap)");
