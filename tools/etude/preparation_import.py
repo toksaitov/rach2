@@ -350,11 +350,22 @@ def batches(base, goals, limit=28000):
 
 
 def build_native(tree, roles, imported, default_arch='i686'):
+    # A copied foreign target may be newer than all its native prerequisites.
+    # Remove only that output; ordinary Make dependencies decide the rest.
+    for name, kind in roles.items():
+        path = tree / name
+        if kind != 'native' or Path(name).parts[-2:] == ('sanitizer', 'tools.json') or not path.exists():
+            continue
+        require(stat.S_ISREG(path.lstat().st_mode), 'not a regular native output: ' + name)
+        try:
+            native_binary(path)
+        except ValueError:
+            path.unlink()
     frozen = ['-o' + name for name in sorted(imported)]
     settings = ['HOSTCC=/ucrt64/bin/gcc', 'CC=/ucrt64/bin/gcc', 'ETUDECC=/ucrt64/bin/gcc',
                 'HOST_TEST_PLATFORM=windows', 'OS=Windows_NT'] if windows_host() else []
     commands = []
-    for kind, flags in [('native', ['-B', '-j2']), ('inventory', ['-j1'])]:
+    for kind, flags in [('native', ['-j2']), ('inventory', ['-j1'])]:
         for arch in ('i686', 'x86_64'):
             goals = sorted(name for name, value in roles.items() if value == kind and
                            ('x86_64' if name.startswith('build/x86_64/') else default_arch) == arch)

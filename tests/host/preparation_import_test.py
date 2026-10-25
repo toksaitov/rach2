@@ -311,19 +311,42 @@ class ImportTests(unittest.TestCase):
     def test_native_compilation(self):
         with tempfile.TemporaryDirectory(prefix='rach2-import-') as work:
             tree = Path(work)
-            (tree / 'source.c').write_text('int main(void) { return 0; }\n')
+            source, header = tree / 'source.c', tree / 'value.h'
+            source.write_text('#include "value.h"\nint main(void) { return VALUE; }\n')
+            header.write_text('#define VALUE 0\n')
+            portable = tree / 'portable'
+            portable.write_bytes(b'producer bytes')
             (tree / 'Makefile').write_text(
-                'build/tests/cases/machine/a: source.c\n'
-                '\tmkdir -p $(@D)\n\t$(CC) -o $@ $<\n')
+                'build/tests/cases/machine/a: source.c value.h portable\n'
+                '\tmkdir -p $(@D)\n\tprintf "compile\\n" >> compile.calls\n'
+                '\t$(CC) -o $@ $<\n'
+                '.PHONY: portable\nportable:\n\tprintf changed > $@\n')
             target = tree / 'build/tests/cases/machine/a'
             target.parent.mkdir(parents=True)
             target.write_bytes(b'old foreign executable')
+            newest = max(source.stat().st_mtime_ns, header.stat().st_mtime_ns) + 2000000000
+            os.utime(target, ns=(newest, newest))
             roles = {'build/tests/cases/machine/a': 'native'}
             with patch.dict(os.environ, {'MAKEFLAGS': '', 'MFLAGS': '', 'MAKELEVEL': ''}):
-                commands = product.build_native(tree, roles, [])
-            self.assertEqual(len(commands), 1)
-            product.validate_native(tree, roles)
-            self.assertNotEqual(target.read_bytes(), b'old foreign executable')
+                commands = product.build_native(tree, roles, ['portable'])
+                self.assertEqual(len(commands), 1)
+                product.validate_native(tree, roles)
+                self.assertNotEqual(target.read_bytes(), b'old foreign executable')
+                before = target.stat()
+                product.build_native(tree, roles, ['portable'])
+                self.assertEqual((before.st_ino, before.st_mtime_ns),
+                                 (target.stat().st_ino, target.stat().st_mtime_ns))
+                self.assertEqual((tree / 'compile.calls').read_text().splitlines(), ['compile'])
+                for changed, text in ((header, '#define VALUE 1\n'),
+                                      (source, '#include "value.h"\nint main(void) { return VALUE + 1; }\n')):
+                    changed.write_text(text)
+                    newer = target.stat().st_mtime_ns + 2000000000
+                    os.utime(changed, ns=(newer, newer))
+                    product.build_native(tree, roles, ['portable'])
+                    product.validate_native(tree, roles)
+                    os.utime(changed, ns=(1, 1))
+            self.assertEqual((tree / 'compile.calls').read_text().splitlines(), ['compile'] * 3)
+            self.assertEqual(portable.read_bytes(), b'producer bytes')
 
     def test_forced_openssl_dependency(self):
         repo = Path(__file__).resolve().parents[2]
@@ -476,8 +499,7 @@ class ImportTests(unittest.TestCase):
                          ['ARCH=i686', 'ARCH=x86_64', 'ARCH=i686'])
         self.assertTrue(all('OS=Windows_NT' in argv and
                             '-obuild/x86_64/images/root.disk' in argv for argv in commands))
-        self.assertTrue(all('-B' in argv for argv in commands[:2]))
-        self.assertNotIn('-B', commands[-1])
+        self.assertTrue(all('-B' not in argv for argv in commands))
         with patch.object(product, 'run'):
             commands = product.build_native(Path('.'), roles, [], 'x86_64')
         self.assertTrue(all('ARCH=x86_64' in argv for argv in commands))
