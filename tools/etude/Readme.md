@@ -1226,6 +1226,8 @@ Execution requires a complete preparation record and every selected artifact. It
 
 A local Rach2 case gets no new boot, command line or machine. Checks that require a different kernel, designated init, unavailable device or whole-machine reconfiguration remain in the QEMU collection. The native inventory records each exclusion and its reason. [The local collection](../../tests/native/Readme.md#local-collection) describes its fixtures, peer configuration and prepared payload.
 
+A failed scenario retains each machine's bounded QEMU standard error as `MACHINE.N.qemu.stderr`, after owned cleanup, beside its console and QMP diagnostics. This includes errors from command relays and runtime helpers that do not appear on the guest console.
+
 The serial controller and machine library are used from one thread. Output past the configured console or stream bound is unavailable to waits and progress checks. A failed channel, missing termination record or unconfirmed cleanup cannot establish a pass. Serial frames are bounded and acknowledged; a new responder session cannot reuse the prior session's command identities.
 
 POSIX processor-time and peak-memory measurements have the scope and limitations described under [The POSIX executor](#the-posix-executor); Windows Job Object accounting has those under [Windows execution](#windows-execution). An unavailable measurement is recorded as unavailable. The installed Windows GCC's lack of sanitizer runtimes is explicit in its native fixture inventories; GNU helper inventories retain the prepared sanitizer runtimes.
