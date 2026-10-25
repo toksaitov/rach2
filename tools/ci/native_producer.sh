@@ -26,6 +26,6 @@ else
     unset ETUDE_PREPARATION_CLEAN
 fi
 "$etude" prepare collection -t "$tree" -a "$arches" -p "$out/prepare.record" "$@"
-python3 "$tree/tools/etude/preparation_import.py" export --tree "$tree" --commit "$ETUDE_ROUTINE_COMMIT" \
+"$etude" prepare export --tree "$tree" --commit "$ETUDE_ROUTINE_COMMIT" \
     --record "$out/prepare.record" --receipt "$out/preparation.receipt.json" --etude "$etude" \
     --output "$out/producer.json"

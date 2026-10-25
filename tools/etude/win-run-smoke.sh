@@ -54,8 +54,7 @@ mkdir -p "$tree/tests/cases" "$tree/tools/setup" "$tree/tools/etude/win" \
     "$tree/tools/etude/include/etude" "$work/bin"
 cp "$repo/tests/run" "$tree/tests/"
 for file in etude.c verbs.h lock_tree.c hold.h hold.sh lock_ports.c portlock.c \
-    include/etude/portlock.h win/hold.c win/winfmt.c win/winfmt.h collection-windows.sh \
-    collection_tools.py; do
+    include/etude/portlock.h win/hold.c win/winfmt.c win/winfmt.h collection-windows.sh; do
     cp "$repo/tools/etude/$file" "$tree/tools/etude/$file"
 done
 for file in hostcheck.c e2fsprogs_path.sh ovmf_path.sh space.sh; do

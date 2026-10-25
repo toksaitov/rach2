@@ -136,7 +136,7 @@ fi
 unset ETUDE_PREPARATION_RUN_ID ETUDE_PREPARATION_RECEIPT ETUDE_PREPARATION_COMMIT
 if [ "${ETUDE_PREPARATION_EXPORT:-0}" = 1 ]; then
     [ "$windows" -eq 0 ] && [ "$(uname -s)" = Linux ] || refuse 'producer export requires Linux'
-    "$python" "$(python_path "$tree/tools/etude/preparation_import.py")" export \
+    "$etude" prepare export \
         --tree "$tree_native" --commit "$commit" --record "$out_native/prepare.record" \
         --receipt "$out_native/preparation.receipt.json" --etude "$etude" --output "$out_native/producer.json"
 fi
