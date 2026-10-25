@@ -1468,3 +1468,7 @@ The host-domain retry again passed every native row and exposed one remaining de
 ## The AHCI host fixture assumed high virtual addresses
 
 The first Windows diagnostic ran the AHCI fixture inside its Rach2 GNU helper. Four DMA assertions failed because the fixture assumed that static host buffers had virtual addresses above 4 GiB. The helper mapped them below that boundary, so the real driver correctly used direct DMA instead of the expected bounce pages. The fixture now maps ordinary buffers to modeled physical pages above 4 GiB while retaining their offsets and low address words. The DMA pool retains the driver's low physical window. All address, copy and page-ownership assertions remain. The kernel driver is unchanged.
+
+## The password fixture read its terminal before the slave opened
+
+Both restore-reentry rows failed with no password prompt in the first Windows diagnostic's Rach2 GNU helper. The parent read the pseudo-terminal master immediately after fork, before the helper opened its slave. Rach2 returns EOF while no slave is open, so the parent killed the helper before the restore assertions. The helper now announces completed terminal setup through its existing report pipe before the parent reads the master. The real prompt, both injected signals, restore counts and terminal echo assertions remain unchanged.
