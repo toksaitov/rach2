@@ -1,6 +1,6 @@
 # WHPX returns a stale XSAVE area size
 
-QEMU's WHPX CPUID exit path returned `0x240` for leaf `0xD`, subleaf 0, EBX after the guest had set XCR0 to `0xe7`. The enabled components ended at `0x980`. Rach2 allocated and reported a `0x980`-byte signal image, which its unchanged XSAVE assertion rejected against the stale CPUID size. Issue [#1161](https://github.com/toksaitov/rach2/issues/1161) tracks the local repair. No upstream report or patch has been submitted. The patched executables have compiled; their actual guest validation remains pending.
+QEMU's WHPX CPUID exit path returned `0x240` for leaf `0xD`, subleaf 0, EBX after the guest had set XCR0 to `0xe7`. The enabled components ended at `0x980`. Rach2 allocated and reported a `0x980`-byte signal image, which its unchanged XSAVE assertion rejected against the stale CPUID size. Issue [#1161](https://github.com/toksaitov/rach2/issues/1161) tracks the local repair. No upstream report or patch has been submitted. The patched x86-64 executable now passes the unchanged diagnostic probe. Explicit IRQ-chip configuration separately makes HMP report the unchanged kernel halt. Broader public-case validation and the new outer phase cleanup remain pending.
 
 ## Versions and inputs
 
@@ -98,7 +98,7 @@ qemu-system-x86_64.exe: warning: Ignoring request for interrupt vector 0
 qemu-system-x86_64.exe: failed to get xsave state: No error
 ```
 
-These are actual observations, not proof that the guest resumed after its halt. QEMU's HMP `HLT` field reflects its software CPU state. WHPX's in-kernel interrupt controller can handle halt without setting that field through QEMU's halt-exit handler. Explicit `kernel-irqchip=off` is a separate halt-observation setting under validation; it does not repair CPUID EBX. Neither a running QMP status nor the stderr text alone establishes another guest defect.
+These are actual observations, not proof that the guest resumed after its halt. QEMU's HMP `HLT` field reflects its software CPU state. WHPX's in-kernel interrupt controller can handle halt without setting that field through QEMU's halt-exit handler. Explicit `kernel-irqchip=off` is a separate halt-observation setting, verified below; it does not repair CPUID EBX. Neither a running QMP status nor the stderr text alone establishes another guest defect.
 
 ## Reproduction and cause
 
@@ -172,7 +172,7 @@ The exact tracked [patch](../../tools/setup/qemu-whpx/whpx-live-xsave-size.patch
 
 Patch SHA-256 is `bd8def6f2773d33eaa850ab0aa50296c62b103f464601085376b2754acef2de0`. Pristine v11.1.2 `whpx-all.c` is `0352cafd1a7294b1d0fdeb29ce12b52a86ebd11950d8ea3a5c81653f573ca0a2`; patched bytes are `a9d80bb3340083bebcc30519178c782844ab3f0254999c177177bc1eccf54c3e`. No feature mask, kernel allocator or probe assertion changes.
 
-## Verified build and pending validation
+## Verified build
 
 The tracked [build recipe](../../tools/setup/qemu-whpx/Readme.md), `build.sh`, `prepare.py` and `pins.json` retain source, package and wheel identities. The actual private build used MSYS2 UCRT GCC 16.2.0, GLib 2.90.1, pixman 0.46.4, libslirp 4.9.3, zlib 1.3.2, Python 3.14.9, Meson 1.12.1 and Ninja 1.13.2. GCC executable SHA-256 was `70325d325c126905fc04c5bc57727969f4529173a139c129e3ff92b7adc2941e`. The dependency bundle was SHA-256 `f41ff53b7571985081d1e4edaa65e5b5e3e0ab19b3e1be5ede403aab8a64e9a8`, 154,953,858 bytes. The three offline Python wheels are pinned separately in `pins.json`.
 
@@ -186,4 +186,88 @@ The actual Windows configuration is relocatable, with executables in the prefix 
 
 Raw evidence is retained under `build/tests/windows-qemu-diagnostic-0da2f8d32751-05-controls` and `build/tests/windows-qemu-build-11.1.2-whpx-05/controls/operator/terminal` in the runner worktree. The decisive data needed to reconstruct the report is embedded above because those scratch directories are not permanent storage.
 
-Before submission, run the unchanged raw CPUID diagnostic and complete XSAVE probe with these exact executables, retaining XGETBV, all component bounds, signal frames, every assertion and owned cleanup. Check the halt assertion separately with explicit IRQ-chip configuration. Record the Windows build and processor model, Hyper-V/WHPX versions, matching runtime DLL closure and final command. Reduce the CPUID case for an upstream maintainer if needed, verify it on an unpatched pinned build, and check the current upstream branch before preparing the patch submission. No runtime pass, upstream acceptance or phase completion is claimed here.
+## Verified guest diagnostic
+
+The final-f02 Windows bounded phase booted the original 0da kernel and exactly the same diagnostic probe and private initrd identified above. No kernel or assertion was changed for this check. The runtime executable was `D:/rach2-services/build/tests/qemu-build-11.1.2-whpx-01/runtime-11.1.2-whpx-01/qemu-system-x86_64.exe`, SHA-256 `95035dfbebd79233102ef5049d075bafbc4859f905e1cdca0ed5a95cedd92b32`, matching the compiled output. The actual runtime copy record has SHA-256 `819b2159415d5cdd87ad36e2906a89f2326e5c32929bbed10c7bc620085906e9`; it records status 0, no global installation change and no MSYS/Cygwin runtime import.
+
+Its runtime directory contains the matching UCRT DLLs and GLib spawn helpers from the pinned inputs. BIOS bytes were copied unchanged from the original runtime: `share/bios-256k.bin` is SHA-256 `ae6f6aa973aaccc143f57aa960fb035fd9de4daee4ad0cd713322f8c259e7650`, 262,144 bytes; `share/edk2-x86_64-code.fd` is SHA-256 `33090cc07675baa5190d9f1e84bf5176b33bcbfa9bacac522961150cdb6dbb2a`, 3,653,632 bytes. This diagnostic uses the BIOS path; recording the copied OVMF identity does not claim an OVMF execution.
+
+The actual argv, with only the executable and evidence directory assigned to variables for display, was:
+
+```sh
+QEMU=D:/rach2-services/build/tests/qemu-build-11.1.2-whpx-01/runtime-11.1.2-whpx-01/qemu-system-x86_64.exe
+EVIDENCE=C:/ProgramData/rach2-controls/windows-collection-f02f889c3c59-02/diagnostic-evidence
+"$QEMU" -accel whpx,kernel-irqchip=off -nodefaults -S \
+  -cpu max,rdrand=on,rdseed=on,xsave=on,avx=on,enforce=on \
+  -smp 1 -m 134217728B -display none -no-reboot -monitor none \
+  -kernel "$EVIDENCE/kernel" -initrd "$EVIDENCE/diagnostic.krffs" \
+  -serial stdio -qmp tcp:127.0.0.1:50813,server=on,wait=off \
+  -netdev user,id=net0 -device rtl8139,netdev=net0
+```
+
+QMP issued `qmp_capabilities`, the property query described below, and `cont`, then collected registers and status before `quit`. The full command record has SHA-256 `30ab7fdfed8d17d2a0e7ce4116a4f99de406f00c07877de05a4ce26857a410b0`. Stageimage again exited 0; the private initrd remained SHA-256 `022663d7b47de91e5d6e8665177465e4abdce9f4a22519717e04cd394583990c`.
+
+The decisive repaired console output is:
+
+```text
+fpu: fxsr: on, sse: on, xsave: on, xcr0: 0xe7, area: 2432 bytes
+@etude 1 begin guest.default.xsaveprobe
+@etude 1 branch save xsave
+@etude 1 branch avx avx
+@etude 1 assert osxsave pass
+@etude 1 assert xcr0 pass
+diagnostic XCR0 low=000000e7
+diagnostic XCR0 high=00000000
+diagnostic probe image bytes=00000980
+diagnostic leaf 0d subleaf=00000000
+  eax=000000e7
+  ebx=00000980
+  ecx=00000980
+  edx=00000000
+@etude 1 assert image-size pass
+xsaveprobe: cpuid: OSXSAVE, XCR0 has x87, SSE, AVX and AVX-512
+@etude 1 assert switches pass
+diagnostic frame extended bytes=00000984
+diagnostic frame image bytes=00000980
+diagnostic frame XCR0 low=000000e7
+diagnostic frame XCR0 high=00000000
+@etude 1 assert signals pass
+@etude 1 assert header pass
+@etude 1 assert exec pass
+@etude 1 assert ptrace pass
+@etude 1 assert core pass
+@etude 1 end 11
+XSAVEPROBE OK
+panic: init (pid 1) exited; halting (boot rach2.rescue for the debug shell)
+```
+
+Subleaves 1 through 7 retained the same values as the original diagnostic. All nine assertions and both branch records passed. In particular, signal restoration, damaged-header rejection, exec, ptrace and core checks ran to completion instead of remaining unrun after the earlier size failure. Console SHA-256 is `5e5856e125dae3f49f0f6a3201abdd7b86420ea0da9ca60386b5e27ea2d46b8c`, 5,966 bytes.
+
+With the separate `kernel-irqchip=off` operand, HMP reported the same original kernel halt address and flags with `HLT=1`, instead of the stock run's `HLT=0`:
+
+```text
+RIP=ffffffff8020d844 RFL=00000046 [---Z-P-] CPL=0 II=0 A20=1 SMM=0 HLT=1
+{"return": {"status": "running", "running": true}, "id": 5}
+```
+
+The HMP reply SHA-256 is `5a099903efba3053463711a7d52f445eecbaa17b7f33d906304ec52617c19bb8`. A running QMP status still does not mean the halted guest is executing instructions. The CPUID patch and the IRQ-chip operand were used together in this check; it establishes the observed results under that pair, not an isolated test of either change without the other.
+
+Two limitations remain observable and unrepaired:
+
+```text
+{"id": 2, "error": {"class": "GenericError", "desc": "Property 'pc-i440fx-11.1-machine.kernel-irqchip' not found"}}
+qemu-system-x86_64.exe: failed to get xsave state: No error
+qemu-system-x86_64.exe: failed to get xsave state: No error
+```
+
+The property-query reply is SHA-256 `60b73d075b3273e2dd1e016da10158fd27385d8e754532445f47e23a8e185ebe`. Stderr is SHA-256 `dcdfa818cc9d8e88b09d412d7bd259e51320e58f01d8c277672f6873df63ab71`, 280 bytes. The two warnings and unavailable QOM property are not reported as fixed by the CPUID patch or the launch option.
+
+The diagnostic wrapper itself failed its final string wait. It expected `panic: init(pid1) exited; halting`, which omits the spaces present in the actual `panic: init (pid 1) exited; halting`. Its original result remains SHA-256 `8e2e9985d25d6f8aca673d2e8e838adb1dec1e6dd8c0c0443d7c6174d8d384fd`, with `errors` containing that exact wait failure, `qemu_status` 0 and `public_case_pass_claimed` false. That wrapper failure is retained; it was not rerun or rewritten into a passing wrapper result. The complete console records and HMP reply independently establish the guest assertion and halt observations.
+
+These files were read from the existing `windows-cache-proof-f02f889c3c593bc6485b2c41c60b46694164d37a-02/operator/actual-probe` evidence. The base64 console, stderr and wrapper-result rows in `live-probe-01.json` were decoded locally and matched those extracted files byte for byte. No new guest run was started to write this record. The outer native phase continued with separate current-source compilation, so its independent terminal cleanup is still pending here. The successful earlier QEMU build cleanup does not substitute for this new phase's cleanup.
+
+## Remaining acceptance and upstream report
+
+The unchanged raw diagnostic has now passed under the patched runtime and explicit IRQ-chip profile. The broader public 99-affected-tuple diagnostic, whole collection, current-source processor assertions and this phase's independent terminal cleanup remain pending; none is inferred from the raw probe. Retain those actual results when available.
+
+Before submission, record the Windows build and processor model, Hyper-V/WHPX versions, complete matching runtime closure and final command. Reduce the CPUID case for an upstream maintainer if needed, reproduce on an unpatched pinned build, separate the CPUID patch from the IRQ-chip setting in the report, and check the current upstream branch before preparing the submission. The exact diagnostic source patch and compile/staging commands above survive scratch cleanup. No upstream submission, upstream acceptance or phase completion is claimed here.
