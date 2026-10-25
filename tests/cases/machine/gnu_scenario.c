@@ -307,7 +307,7 @@ static void transfer(struct gnu_case *s)
         net_assert(&s->u, "sftp", 0, "");
         return;
     }
-    if ((f = fopen(batch, "w")) == NULL || fprintf(f, "get /tmp/gnu/rows.sh %s\n", back) < 0 ||
+    if ((f = fopen(batch, "wb")) == NULL || fprintf(f, "get /tmp/gnu/rows.sh %s\n", back) < 0 ||
         fclose(f) != 0) {
         net_fail(&s->u, "the batch of sftp could not be written");
         net_assert(&s->u, "sftp", 0, "");
