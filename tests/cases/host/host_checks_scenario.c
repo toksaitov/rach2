@@ -36,9 +36,12 @@ static int guest_evidence(struct etude_case_machine *m, const char *group, const
     char name[100];
     const char *args[] = {"/bin/tar", "-Scf", "/host-work/host-fixtures.tar", "-C", "/host-work",
                           name,       NULL};
+    const char *compress[] = {"/usr/bin/xz", "-9", "-T1", "/host-work/host-fixtures.tar", NULL};
     int n = snprintf(name, sizeof name, "host-checks.%s.%s/.checks", group, arch);
     return n > 0 && n < (int)sizeof name && guest_run(m, args, "host-fixture-archive") &&
-           etude_guest_get(m, "/host-work/host-fixtures.tar", "host-fixtures.tar") == ETUDE_OK;
+           guest_run(m, compress, "host-fixture-compress") &&
+           etude_guest_get(m, "/host-work/host-fixtures.tar.xz", "host-fixtures.tar.xz") ==
+               ETUDE_OK;
 }
 
 static void (*prior_int)(int), (*prior_term)(int);
