@@ -1138,3 +1138,9 @@ The Mac import notes incorrectly said that the preparation receipt had not start
 The full preparation on 5aa9ad0ff completed compilation and artifact reads, then rejected its final receipt because the recorded boot identity changed. Grant and final phase have the same environment GUID, but their boot-wall-clock suffixes differ by 1.4057947 seconds. No retained event proves why the wall clock changed. The failed preparation, its grant and all output remain unchanged. Both public endpoint states were restored and the full nine Windows and eleven Linux file readbacks and empty ledgers passed.
 
 The native boot identity must use a value fixed across processes for one boot and changed by another boot. The repair reads the OS loader's documented boot sequence from the checked shared-data field and keeps the environment GUID. The Windows context fixture checks that actual native value. Strict machine, boot and receipt matching remain required. No failed preparation receipt is converted into a pass.
+
+## Guest executor archive omitted a shared header (#1112)
+
+The Mac collection on 924c737f204230bc8a346c44151711f294945feb failed both architectures of machine.etudeexec.build. Etude itself built on Rach2 and passed its version, platform, recipe and history checks. TinyCC then failed to compile tests/host/etude_exec_hosttest.c because compat/sanitizer_env_host.h was absent from the source archive. The executor's exit status 127 followed that missing executable. Both case cleanups were confirmed. Issue #1112 retains the compiler excerpts and the complete console digests.
+
+The archive's explicit auxiliary list omitted the header added to the host fixture. The repair adds it to ETUDEEXEC_FILES, which supplies both the Make prerequisite and the archive contents. The testing procedure now requires checking archived fixtures' included headers when their dependencies change. The failed run is excluded from site selection.
