@@ -58,6 +58,7 @@ ETUDE_AUTHORITY_RUN_SRC = tools/etude/authority_main.c tools/etude/authority_run
 ETUDE_RUN_SRC = $(ETUDE_AUTHORITY_SRC) $(ETUDE_AUTHORITY_RUN_SRC) tools/etude/repeat.c tools/etude/collection_repeat.c tools/etude/collection_load.c \
                 tools/etude/posix/load.c $(ETUDE_OBSERVE_SRC) tools/etude/measurement_context.c \
                 tools/etude/boot_identity.c tools/etude/collection.c tools/etude/measurement_prepare.c \
+                tools/etude/measurement_compose.c \
                 tools/etude/posix/run_suites.c tools/etude/posix/legacy.c \
                 tools/etude/preparation_record.c \
                 tools/etude/posix/legacy_set.c tools/etude/posix/legacy_cases.c \
