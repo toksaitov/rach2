@@ -1630,3 +1630,11 @@ Validate a collection's dry selection with its complete runtime environment, inc
 ## The complete scripts inventory kept a stale host route (#1136)
 
 Final Mac preparation on e0db2b6ea compiled its native products, then the public importer rejected `mkext2_overlay` as an unsupported native check. The native partition had made the complete scripts inventory a declared artifact, while preparation still marked all scripted rows native. The seven extracted kernel fixtures and three API rows are native; the other 35 run through the GNU helper. Preparation now derives that placement from the five case declarations and refuses a missing or repeated owner. All 45 assertions and the public native validator remain unchanged. The complete rejected inventory, import log and confirmed cleanup remain in `build/tests/portable-runtime-macos-e0db2b6ea/preparation`.
+
+## An automatic core run delayed the Windows checks
+
+The coordinating session pushed three checked CI repairs at 20:53 on 25 October. That push started the GitHub Core tests workflow while the native Windows checks still needed exclusive use of the testing PC. The accepted job reached its host tests, and Windows could not stop WSL while it ran. The coordinator should have included the automatically triggered job in the machine schedule before publishing. It cancelled its own workflow 40204300330 after the owner challenged the delay. Cancellation completed at 21:24; the independent check at 21:28 found all ten recorded process identities absent and its admission claim released. Cancellation is not a passing core result. The Windows checks have priority, and core resumes after that exclusive use ends.
+
+## A shared preparation required an empty global ledger
+
+The first e1d41bc63 preparation attempt stopped before admission because its private controller required the whole machine's ledger to be empty. The active CI job used another tree, but this extra assertion prevented ordinary shared admission from deciding whether both jobs fit. Shared preparation checks its own tree and previous owners; shared admission accounts for unrelated claims. Whole-machine idleness is required by the later exclusive Windows maintenance step. The corrected controller admitted preparation normally. The refused attempt remains recorded, and no failed preparation or runtime was reclassified as successful.
