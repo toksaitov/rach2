@@ -3,6 +3,12 @@
  * host-deps: tools/etude/observe_import.c
  * host-deps: tools/etude/boot_identity.c
  * host-deps: tools/etude/measurement_context.c tools/etude/json.c
+ * host-deps: tools/etude/measurement_prepare.c
+ * host-deps: tools/etude/measurement_compose.c
+ * host-deps: tools/etude/routine_proof.c tools/etude/preparation_record.c
+ * host-deps: tools/etude/posix/store.c tools/etude/digest.c
+ * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
+ * host-deps: tools/etude/posix/process.c tools/etude/capture.c
  * host-deps: tools/etude/history.c tools/etude/history_json.c
  * host-deps: tools/etude/history_collect.c utils/sha256.c
  * host-cflags: -I tools/etude -I tools/etude/include -I utils
@@ -297,6 +303,8 @@ static void test_windows_clock(void)
 }
 #endif
 
+#include "compat/context_compose_host.c"
+
 int main(void)
 {
     char descriptor_text[2048], error[256];
@@ -409,6 +417,7 @@ int main(void)
     c = NULL;
     CHECK(open_context(&c) != 0 && !c, "source paths cannot escape the deployment tree");
     etude_context_close(c);
+    test_context_compose();
     if (!failures)
         fix_passed();
     return failures ? 1 : 0;
