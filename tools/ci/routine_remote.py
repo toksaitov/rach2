@@ -7,9 +7,12 @@ import base64
 import hashlib
 import json
 import os
+import ntpath
+import re
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import zlib
 
 
@@ -18,22 +21,38 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def transport_command(producer, command, mode=None, wsl=None):
+    transport = producer['transport']
+    if transport == 'wsl':
+        require(sys.platform in ('win32', 'msys', 'cygwin') and mode in ('windows-import', 'wsl-native'),
+                'direct WSL requires a native Windows physical route')
+        require(isinstance(wsl, str) and ntpath.isabs(wsl) and ntpath.splitdrive(wsl)[0] and
+                not any(c in wsl for c in '\0\r\n'), 'WSL executable is not an absolute native path')
+        for name in ('distribution', 'user'):
+            require(isinstance(producer.get(name), str) and
+                    re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', producer[name]),
+                    'invalid WSL ' + name)
+        require(not producer.get('_transport_admission'), 'direct WSL is inside the physical lease')
+        return [wsl, '--distribution', producer['distribution'], '--user', producer['user'],
+                '--exec', *command]
+    require(transport in ('ssh', 'wsl-ssh'), 'producer requires native responder transport')
+    prefix = []
+    if transport == 'wsl-ssh':
+        prefix = ['MSYS_NO_PATHCONV=1', 'wsl.exe', '--distribution', producer['distribution'],
+                  '--user', producer['user'], '--exec']
+    host = producer['host']
+    require(host and not host.startswith('-') and all(c.isalnum() or c in '@._-' for c in host),
+            'invalid SSH destination')
+    return ['ssh', '-oBatchMode=yes', '--', host, shlex.join([*prefix, *command])]
+
+
 class Remote:
-    def __init__(self, producer, run, evidence):
+    def __init__(self, producer, run, evidence, *, mode=None, wsl=None):
         self.run = run
         self.session = hashlib.sha256(run.encode()).hexdigest()[:16]
         self.seq = self.cmd = 0
         self.received = -1
         self.boot = '0' * 16
-        self.transcript = Path(evidence).open('xb')
-        prefix = []
-        if producer['transport'] == 'wsl-ssh':
-            prefix = ['MSYS_NO_PATHCONV=1', 'wsl.exe', '--distribution', producer['distribution'],
-                      '--user', producer['user'], '--exec']
-        require(producer['transport'] in ('ssh', 'wsl-ssh'), 'producer requires native responder transport')
-        host = producer['host']
-        require(host and not host.startswith('-') and all(c.isalnum() or c in '@._-' for c in host),
-                'invalid SSH destination')
         state = producer['state_root'] + '/' + run
         command = [producer['etude'], 'serve', '--stdio', '-d', state]
         admission = producer.get('_transport_admission')
@@ -48,13 +67,21 @@ class Remote:
             command = [producer['etude'], 'authority', 'transport', producer['site'],
                 producer['policy']['ledger'], producer['policy']['locks'],
                 producer['policy']['capacity'], str(admission['seconds']), *command]
-        command = [*prefix, *command]
-        self.child = subprocess.Popen(['ssh', '-oBatchMode=yes', '--', host, shlex.join(command)],
-                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        command = transport_command(producer, command, mode, wsl)
+        environment = None
+        if producer['transport'] == 'wsl':
+            environment = dict(os.environ, MSYS2_ARG_CONV_EXCL='*')
+        self.transcript = Path(evidence).open('xb')
+        self.child = None
         try:
+            self.child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                          env=environment)
             self.handshake()
         except BaseException:
-            self.abandon()
+            if self.child is not None:
+                self.abandon()
+            else:
+                self.transcript.close()
             raise
         self.files = {}
 
@@ -185,7 +212,7 @@ class Remote:
         kind, fields = self.answer(cmd)
         require(kind == 'bye' and fields == [cmd], 'responder did not confirm connection end')
         self.child.stdin.close()
-        require(self.child.wait() == 0, 'SSH responder cleanup failed')
+        require(self.child.wait() == 0, 'responder transport cleanup failed')
         self.transcript.close()
 
     def abandon(self):

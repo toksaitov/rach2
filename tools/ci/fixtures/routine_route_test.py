@@ -553,6 +553,102 @@ class RouteTests(unittest.TestCase):
             finally:
                 os.chdir(original)
 
+    def test_direct_wsl_keeps_responder_vectors_and_pipes(self):
+        class Child:
+            def __init__(self):
+                self.stdin, self.stdout = io.BytesIO(), io.BytesIO()
+                self.waited = False
+            def wait(self):
+                self.waited = True
+                return 0
+        producer = dict(transport='wsl', etude='/immutable tools/etude', state_root='/state',
+                        distribution='Ubuntu-26.04', user='root')
+        program = 'C:/Windows/System32/wsl.exe'
+        with tempfile.TemporaryDirectory(prefix='rach2-routine.') as name:
+            for mode in ('windows-import', 'wsl-native'):
+                child = Child()
+                with patch.object(routine_remote.sys, 'platform', 'win32'), \
+                        patch.object(routine_remote.subprocess, 'Popen', return_value=child) as start, \
+                        patch.object(routine_remote.Remote, 'handshake'):
+                    remote = routine_remote.Remote(producer, 'sample:freeze', Path(name) / mode,
+                                                   mode=mode, wsl=program)
+                argv, kwargs = start.call_args.args[0], start.call_args.kwargs
+                self.assertEqual(argv, [program, '--distribution', 'Ubuntu-26.04', '--user', 'root',
+                    '--exec', '/immutable tools/etude', 'serve', '--stdio', '-d', '/state/sample:freeze'])
+                self.assertEqual(kwargs['stdin'], subprocess.PIPE)
+                self.assertEqual(kwargs['stdout'], subprocess.PIPE)
+                self.assertEqual(kwargs['env']['MSYS2_ARG_CONV_EXCL'], '*')
+                with patch.object(remote, 'command', return_value='9'), \
+                        patch.object(remote, 'answer', return_value=('bye', ['9'])):
+                    remote.close()
+                self.assertTrue(child.stdin.closed and child.waited and remote.transcript.closed)
+
+    def test_direct_wsl_refuses_other_hosts_modes_and_operands(self):
+        producer = dict(transport='wsl', distribution='Ubuntu-26.04', user='root')
+        command = ['/etude', 'serve', '--stdio', '-d', '/state/run']
+        program = 'C:/Windows/System32/wsl.exe'
+        for platform, mode in (('linux', 'windows-import'), ('darwin', 'wsl-native'),
+                               ('win32', 'macos-import'), ('win32', 'native'), ('win32', None)):
+            with self.subTest(platform=platform, mode=mode), \
+                    patch.object(routine_remote.sys, 'platform', platform), self.assertRaises(ValueError):
+                routine_remote.transport_command(producer, command, mode, program)
+        with patch.object(routine_remote.sys, 'platform', 'win32'):
+            for path in (None, 'wsl.exe', '/usr/bin/wsl.exe', 'C:relative.exe', 'C:/bad\nname.exe'):
+                with self.subTest(path=path), self.assertRaises(ValueError):
+                    routine_remote.transport_command(producer, command, 'windows-import', path)
+            for key, value in (('distribution', ''), ('distribution', '-distribution'),
+                               ('distribution', 'Ubuntu;command'), ('user', ''), ('user', 'root\ncommand')):
+                with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                    routine_remote.transport_command(dict(producer, **{key: value}), command,
+                                                     'windows-import', program)
+            with self.assertRaises(ValueError):
+                routine_remote.transport_command(dict(producer, _transport_admission={'claim': 'other'}),
+                                                 command, 'windows-import', program)
+
+    def test_direct_wsl_lost_protocol_and_failed_exit_never_pass(self):
+        class Child:
+            def __init__(self):
+                self.stdin, self.stdout = io.BytesIO(), io.BytesIO()
+                self.waited = False
+            def wait(self):
+                self.waited = True
+                return 7
+        producer = dict(transport='wsl', etude='/etude', state_root='/state',
+                        distribution='Ubuntu-26.04', user='root')
+        program = 'C:/Windows/System32/wsl.exe'
+        with tempfile.TemporaryDirectory(prefix='rach2-routine.') as name:
+            child = Child()
+            with patch.object(routine_remote.sys, 'platform', 'win32'), \
+                    patch.object(routine_remote.subprocess, 'Popen', return_value=child), \
+                    self.assertRaisesRegex(ValueError, 'connection lost'):
+                routine_remote.Remote(producer, 'run', Path(name) / 'lost', mode='wsl-native', wsl=program)
+            self.assertTrue(child.waited and child.stdin.closed)
+            child = Child()
+            with patch.object(routine_remote.sys, 'platform', 'win32'), \
+                    patch.object(routine_remote.subprocess, 'Popen', return_value=child), \
+                    patch.object(routine_remote.Remote, 'handshake'):
+                remote = routine_remote.Remote(producer, 'run', Path(name) / 'bad-exit',
+                                               mode='windows-import', wsl=program)
+            try:
+                with patch.object(remote, 'command', return_value='9'), \
+                        patch.object(remote, 'answer', return_value=('bye', ['9'])), \
+                        self.assertRaisesRegex(ValueError, 'cleanup failed'):
+                    remote.close()
+            finally:
+                remote.abandon()
+            self.assertTrue(child.waited and child.stdin.closed and remote.transcript.closed)
+
+    def test_ssh_transports_keep_existing_outer_command(self):
+        command = ['/etude', 'serve', '--stdio', '-d', '/state/run']
+        producer = dict(transport='ssh', host='testing', distribution='Ubuntu-26.04', user='testing')
+        self.assertEqual(routine_remote.transport_command(producer, command),
+                         ['ssh', '-oBatchMode=yes', '--', 'testing', shlex.join(command)])
+        producer['transport'] = 'wsl-ssh'
+        expected = ['MSYS_NO_PATHCONV=1', 'wsl.exe', '--distribution', 'Ubuntu-26.04',
+                    '--user', 'testing', '--exec', *command]
+        self.assertEqual(routine_remote.transport_command(producer, command),
+                         ['ssh', '-oBatchMode=yes', '--', 'testing', shlex.join(expected)])
+
     def test_counted_vectors(self):
         program = '/immutable/etude'
         for vector in ([program], [program, 'run', '-S', 'saved', 'all']):
