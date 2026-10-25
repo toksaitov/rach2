@@ -3,6 +3,7 @@
  * POSIX executor, this program run as the case's program, with
  * `--case MODE TOKEN ARG`, and as the workers whose death the test causes.
  *
+ * host-deps: tools/etude/boot_identity.c
  * host-deps: tools/etude/history_collect.c
  * host-deps: tools/etude/history_json.c
  * host-deps: tools/etude/authority.c tools/etude/authority_parse.c
@@ -45,6 +46,13 @@
 
 #if defined(__linux__)
 #include <sys/prctl.h>
+#endif
+#if defined(__linux__) || defined(__rach2__)
+#include <sys/utsname.h>
+#include "../../tools/etude/boot_identity.h"
+#endif
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
 #endif
 
 #include "compat/pathmax_host.h"
@@ -612,27 +620,50 @@ static pid_t orphaned_group(struct etude_pid *leader)
     return member;
 }
 
+/** Read the current platform's boot identity independently of its ledger. */
+static void current_boot(char *boot, size_t size)
+{
+    strcpy(boot, "-");
+#if defined(__linux__) || defined(__rach2__)
+    struct utsname kernel;
+    if (uname(&kernel))
+        return;
+    if (etude_boot_is_rach2(kernel.sysname, kernel.release, kernel.version)) {
+        CHECK(etude_boot_file_read("/dev/shm/etude-guest-boot", boot, size) == 0,
+              "Rach2 boot identity");
+        return;
+    }
+    FILE *f = fopen("/proc/sys/kernel/random/boot_id", "r");
+    if (f != NULL) {
+        if (fgets(boot, (int)size, f) == NULL)
+            strcpy(boot, "-");
+        boot[strcspn(boot, "\n")] = '\0';
+        fclose(f);
+    }
+#elif defined(__APPLE__)
+    size_t n = size;
+    if (sysctlbyname("kern.bootsessionuuid", boot, &n, NULL, 0))
+        strcpy(boot, "-");
+    boot[size - 1] = '\0';
+#else
+    (void)size;
+#endif
+}
+
 /** Judge claims of reused, unknown and ended identities, boots and systems. */
 static void test_identities(void)
 {
     const char *dir = fix_path("identities");
     struct etude_ledger *l = etude_ledger_open(dir);
     struct etude_pid me = ident((long)getpid()), reused, unknown, sl, sl_reused, sl_unknown, leader;
-    char claims[1024], boot[64] = "-", text[8192] = "etude-ledger 1\n";
+    char claims[1024], boot[128], text[8192] = "etude-ledger 1\n";
     pid_t s = sleeper(), member = orphaned_group(&leader);
     size_t freed = 0;
-    FILE *f;
 
     CHECK(l != NULL && me.pid != 0 && s > 0 && member > 0, "identities");
     if (l == NULL || me.pid == 0 || s <= 0 || member <= 0)
         goto out;
-    f = fopen("/proc/sys/kernel/random/boot_id", "r");
-    if (f != NULL) {
-        if (fgets(boot, sizeof(boot), f) == NULL)
-            strcpy(boot, "-");
-        boot[strcspn(boot, "\n")] = '\0';
-        fclose(f);
-    }
+    current_boot(boot, sizeof(boot));
     snprintf(claims, sizeof(claims), "%s/claims", dir);
     reused = me;
     reused.start += 7;
@@ -691,7 +722,7 @@ static void test_identities(void)
     CHECK(status_is(l, "unconfirmed", ETUDE_CLAIM_UNCERTAIN, "keeper"), "unconfirmed");
     CHECK(status_is(l, "cut-short", ETUDE_CLAIM_UNCERTAIN, "keeper"), "cut-short");
     CHECK(status_is(l, "owned", ETUDE_CLAIM_OWNED, NULL), "owned");
-#if defined(__linux__)
+#if defined(__linux__) || defined(__rach2__) || defined(__APPLE__)
     CHECK(strcmp(boot, "-") != 0, "other-boot");
 #endif
 
