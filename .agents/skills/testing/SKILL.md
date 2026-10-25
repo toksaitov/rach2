@@ -33,6 +33,8 @@ description: Run suites, full sets or analyses on the testing host, or write a s
 
 ## Writing a suite
 
+* Use the established framed loader for native PowerShell collectors. Do not send a large JSON document as one unframed standard-input line. After confirmed transport cleanup, repeat only the collector, preserving its partial output and the original tested work.
+
 * Write generated scripts and protocol command files in binary mode when their consumers require LF bytes. A Windows text stream inserts CR even when the source string already contains the intended LF.
 
 * Invoke the declared implementation when a fixture checks program-specific behavior. A helper can provide another implementation under the same command name; GNU Make database and jobserver checks use its prepared absolute path.
