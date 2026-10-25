@@ -109,8 +109,8 @@ enum result_fault {
 static enum result_fault result_fault;
 static int admission_errno;
 
-/* Observe real FIFO events before applying the execution gap. Startup and
- * the width-two rendezvous retain the ordinary whole-case bound. */
+/* Start the blocked pair's execution gap at readiness. A completed exchange
+ * enters cleanup under the unchanged whole-case bound. */
 static unsigned width_mode;
 static struct {
     struct etude_supervised *attempt;
@@ -130,7 +130,7 @@ static unsigned width_events(const char *text, const char *event)
     return n;
 }
 
-/** Read each live child's real output and arm its execution gap. */
+/** Read each live child's real output and select its witnessed stage. */
 static void width_observe(void)
 {
     const struct etude_supervised_result *r;
@@ -146,7 +146,8 @@ static void width_observe(void)
         width_peers[i].met = width_events(r->proc->out.data, "pair met\n");
         if (!width_peers[i].armed &&
             (width_mode == 1 ? width_peers[i].ready : width_peers[i].met)) {
-            etude_supervised_stage(width_peers[i].attempt, ETUDE_STAGE_EXECUTE);
+            etude_supervised_stage(width_peers[i].attempt,
+                                   width_mode == 1 ? ETUDE_STAGE_EXECUTE : ETUDE_STAGE_CLEANUP);
             width_peers[i].armed = 1;
         }
     }
@@ -1178,7 +1179,8 @@ static void width_peer_check(unsigned met)
 /**
  * Two cases meet at a FIFO: two at a time both exchange the byte; one at
  * a time each runs out of its gap after reporting readiness. The pair's
- * rendezvous is preparation, not a measure of host process startup speed.
+ * rendezvous is preparation; the completed exchange starts cleanup while
+ * the supervisor still requires a successful exit and confirmed cleanup.
  */
 static void test_width(void)
 {
