@@ -375,6 +375,99 @@ static void check_receipt(const char *path, const char *record,
 
 /* ---- Rows. ---- */
 
+/** Seed products and evidence together for a clean preparation. */
+static void clean_products(const char *tree)
+{
+    static const char *const dirs[] = {
+        "tests",        "build/tests",  "build/tests/host-suite", "build/tests/host-suite/current",
+        "build/vendor", "build/x86_64", "build/x86_64/tests"};
+    static const char *const files[] = {"build/tests/probe",
+                                        "build/tests/probe.d",
+                                        "build/x86_64/tests/probe",
+                                        "build/x86_64/tests/probe.d",
+                                        "build/tests/host-suite/stale",
+                                        "build/tests/host-suite/current/keep",
+                                        "build/vendor/keep"};
+    char path[PATH_LEN];
+    size_t i;
+    for (i = 0; i < sizeof(dirs) / sizeof(*dirs); i++)
+        CHECK(!mkdir(in(path, sizeof(path), tree, dirs[i]), 0755), "clean: product directory");
+    for (i = 0; i < sizeof(files) / sizeof(*files); i++)
+        CHECK(!write_text(in(path, sizeof(path), tree, files[i]), "retained\n", 0644),
+              "clean: product file");
+    CHECK(!write_text(in(path, sizeof(path), tree, "tests/Makefile"), "PROGS = probe \\\n other\n",
+                      0644),
+          "clean: literal probe list");
+    CHECK(!symlink("../src", in(path, sizeof(path), tree, "build/tools")),
+          "clean: linked product directory");
+}
+
+/** Rebuild products without removing caches or evidence. */
+static void test_clean(void)
+{
+    char *goals[] = {"build/images/a.img", "build/x86_64/images/a.img", NULL};
+    static const char *const removed[] = {
+        "build/tests/probe",          "build/tests/probe.d",          "build/x86_64/tests/probe",
+        "build/x86_64/tests/probe.d", "build/tests/host-suite/stale", "build/tools"};
+    static const char *const retained[] = {"build/tests/host-suite/current/keep",
+                                           "build/vendor/keep",
+                                           "build/.run.lock/owner",
+                                           "src/in.c",
+                                           "build/images/a.img",
+                                           "build/x86_64/images/a.img"};
+    char tree[PATH_LEN], path[PATH_LEN], receipt[PATH_LEN], text[4096];
+    struct etude_legacy_opts o;
+    struct outcome r;
+    size_t i;
+    int before = fails;
+    make_tree("clean", tree, sizeof(tree));
+    clean_products(tree);
+    opts_for(&o, tree, "clean", goals);
+    o.arch = "i686,x86_64";
+    fix_format(receipt, sizeof(receipt), "%s/build/tests/host-suite/current/receipt", tree);
+    receipt_env(receipt);
+    setenv("ETUDE_PREPARATION_CLEAN", "1", 1);
+    run(&o, &r);
+    unsetenv("ETUDE_PREPARATION_CLEAN");
+    receipt_env(NULL);
+    CHECK(!r.status, "clean: normal preparation completed");
+    for (i = 0; i < sizeof(removed) / sizeof(*removed); i++)
+        CHECK(!exists(in(path, sizeof(path), tree, removed[i])), "clean: obsolete product removed");
+    for (i = 0; i < sizeof(retained) / sizeof(*retained); i++)
+        CHECK(exists(in(path, sizeof(path), tree, retained[i])),
+              "clean: retained input or new product");
+    CHECK(read_text(receipt, text, sizeof(text)) > 0 && strstr(text, "\"inhouse\":\"clean\""),
+          "clean: actual removal recorded in the receipt");
+    show(&r, before);
+}
+
+/** Refuse an evaluated probe declaration before deleting any product. */
+static void test_clean_refused(void)
+{
+    char *goals[] = {"build/images/a.img", NULL};
+    char tree[PATH_LEN], path[PATH_LEN], receipt[PATH_LEN];
+    struct etude_legacy_opts o;
+    struct outcome r;
+    int before = fails;
+    make_tree("clean-refused", tree, sizeof(tree));
+    clean_products(tree);
+    CHECK(
+        !write_text(in(path, sizeof(path), tree, "tests/Makefile"), "PROGS = $(computed)\n", 0644),
+        "clean: nonliteral probe declaration");
+    opts_for(&o, tree, "clean-refused", goals);
+    fix_format(receipt, sizeof(receipt), "%s/clean-refused.receipt", fix_dir());
+    receipt_env(receipt);
+    setenv("ETUDE_PREPARATION_CLEAN", "1", 1);
+    run(&o, &r);
+    unsetenv("ETUDE_PREPARATION_CLEAN");
+    receipt_env(NULL);
+    CHECK(r.status == 2 && !exists(receipt), "clean: no receipt for refused declaration");
+    CHECK(exists(in(path, sizeof(path), tree, "build/tests/probe")),
+          "clean: product remains after declaration refusal");
+    CHECK(!exists(in(path, sizeof(path), tree, "calls")), "clean: no build after refusal");
+    show(&r, before);
+}
+
 /** Goals: the steps in order, the goals built, the record. */
 static void test_alone(void)
 {
@@ -951,6 +1044,15 @@ int main(int argc, char **argv)
     setenv("LC_ALL", "POSIX", 1);
     setenv("MAKEFLAGS", "n", 1);
     setenv("ARCH", "x86_64", 1);
+    if (argc == 2 && !strcmp(argv[1], "--clean-only")) {
+        test_clean();
+        test_clean_refused();
+        if (fails)
+            return 1;
+        fix_passed();
+        puts("etude_legacy_hosttest: clean pass");
+        return 0;
+    }
     test_alone();
     if (argc == 2 && !strcmp(argv[1], "--receipt-only")) {
         test_refused();
@@ -961,6 +1063,8 @@ int main(int argc, char **argv)
         return 0;
     }
     test_again();
+    test_clean();
+    test_clean_refused();
     test_machine();
     test_helper_architecture();
     test_refused();
