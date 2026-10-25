@@ -119,6 +119,51 @@ static uint32_t little32(const unsigned char *p)
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
+/** Exercise a bulk file beyond the serial channel's small control frames. */
+static int bulk_file(const char *path, int writing)
+{
+    unsigned char block[4096];
+    size_t at, i, n, size = 8u * 1024 * 1024 + 257;
+    FILE *f = fopen(path, writing ? "wb" : "rb");
+    int ok = f != NULL;
+
+    for (at = 0; ok && at < size; at += n) {
+        n = size - at < sizeof(block) ? size - at : sizeof(block);
+        if (writing) {
+            for (i = 0; i < n; i++)
+                block[i] = (unsigned char)((at + i) % 251);
+            ok = fwrite(block, 1, n, f) == n;
+        } else {
+            ok = fread(block, 1, n, f) == n;
+            for (i = 0; ok && i < n; i++)
+                ok = block[i] == (unsigned char)((at + i) % 251);
+        }
+    }
+    if (ok && !writing)
+        ok = fgetc(f) == EOF && !ferror(f);
+    return f != NULL && fclose(f) == 0 && ok;
+}
+
+/** Write and return the same bulk bytes through the declared helper disk. */
+static int bulk_roundtrip(struct image_check *t, const char *disk, const char *directory)
+{
+    char source[4400], returned[4400], request[9000];
+    struct net_run r = {0};
+    char *write_args[] = {"debugfs", "-w", "-R", request, (char *)disk, NULL};
+    char *read_args[] = {"debugfs", "-R", request, (char *)disk, NULL};
+    int ok;
+
+    snprintf(source, sizeof(source), "%s/bulk input", directory);
+    snprintf(returned, sizeof(returned), "%s/bulk return", directory);
+    snprintf(request, sizeof(request), "write \"%s\" /bulk", source);
+    ok = bulk_file(source, 1) && run(t, write_args, &r) && net_exited0(&r);
+    net_run_free(&r);
+    snprintf(request, sizeof(request), "dump /bulk \"%s\"", returned);
+    ok = ok && run(t, read_args, &r) && net_exited0(&r);
+    net_run_free(&r);
+    return ok && bulk_file(returned, 0);
+}
+
 static void ext2(struct image_check *t, const char *disk, const char *directory)
 {
     char seed[4400], output[4400], command[8192], *text;
@@ -147,7 +192,7 @@ static void ext2(struct image_check *t, const char *disk, const char *directory)
     }
     text = net_file(output);
     image_row(t, "populated ext2 directory crosses the native helper transport",
-              ok && text && strcmp(text, "seed bytes") == 0);
+              ok && text && strcmp(text, "seed bytes") == 0 && bulk_roundtrip(t, disk, directory));
     free(text);
 }
 

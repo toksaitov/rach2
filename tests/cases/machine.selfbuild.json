@@ -11,7 +11,7 @@
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
-      "execution": {"program": "selfbuild_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["selfbuild-disk", "grub-disk"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machines and removes the disk copies and the evidence, which it keeps after a failure"},
+      "execution": {"program": "selfbuild_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["selfbuild-disk", "grub-disk"]}, {"fixture": "disk", "names": ["image-disk", "image-transfer"]}], "children": "none", "cleanup": "libetude-case ends the machines and removes the disk copies and the evidence, which it keeps after a failure"},
       "steps": [
         {"step_id": "room", "stage": "execute", "does": "read the free space of the root of a copy of the os-real disk on the host, with setidcheck from its free-node chain"},
         {"step_id": "boot", "stage": "execute", "machine": "build", "does": "boot the copy and wait for the console's login prompt"},
@@ -28,7 +28,7 @@
         {"machine_id": "build", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["selfbuild-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.fsdisk"]}, "console": "serial", "qmp": true, "helper": false},
         {"machine_id": "grub", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["grub-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "seabios", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
         {"machine_id": "probes", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["grub-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "seabios", "devices": ["rtl8139"], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
-        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}, {"name": "image-transfer", "bus": "ide", "size_bytes": 67108864}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {"assertion_id": "room", "checks": "the root has the 16 MiB a build needs free before the machine starts", "source": "scenario"},
@@ -53,7 +53,7 @@
         {"witness_id": "probe", "kind": "counter", "means": "a probe has handed the debug shell back", "limit": 256}
       ],
       "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 10800000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 3600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
-      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1207959552, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1207959552, "disk_bytes": 335544320, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "selfbuild-disk", "node": "images/selfbuild-test.disk", "per_architecture": true},

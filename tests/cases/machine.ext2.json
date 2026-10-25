@@ -633,7 +633,7 @@
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"root_mib": 96, "second_mib": 32, "lost_block": 20000, "freed": "/etc/hostname", "sector": 16383}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
-      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["root-disk"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machines and removes the disk copy, the second disk and the volumes read out of the copy, which it keeps after a failure"},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["root-disk"]}, {"fixture": "disk", "names": ["image-disk", "image-transfer"]}], "children": "none", "cleanup": "libetude-case ends the machines and removes the disk copy, the second disk and the volumes read out of the copy, which it keeps after a failure"},
       "steps": [
         {"step_id": "first", "stage": "execute", "machine": "root", "does": "boot the copy, log in as root, read /proc/mounts, write /root/first and sync, write to the second partition's node, and end the machine with QMP's quit"},
         {"step_id": "mkfs", "stage": "execute", "machine": "root", "does": "boot the copy, make an ext2 and a FAT volume in files on the second partition, mount each through a loop device, write it, unmount the partition and end the machine"},
@@ -651,7 +651,7 @@
         {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false},
         {"machine_id": "look", "qemu": {"kernel": "recovery-kernel", "initrd": "recovery-image", "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
         {"machine_id": "repair", "qemu": {"kernel": "recovery-kernel", "initrd": "recovery-image", "disks": ["root-disk", {"name": "root-copy", "bus": "ide", "size_bytes": 136314880}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.fsck"]}, "console": "serial", "qmp": true, "helper": false},
-        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
+        {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}, {"name": "image-transfer", "bus": "ide", "size_bytes": 67108864}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
         {"assertion_id": "first-mounted", "checks": "/proc/mounts has /dev/disk0p1 / ext2 rw,relatime 0 0", "source": "scenario"},
@@ -712,7 +712,7 @@
           "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
         }
       },
-      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1207959552, "disk_bytes": 402653184, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1207959552, "disk_bytes": 469762048, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "root-disk", "node": "images/ext2-root.disk", "per_architecture": true},
