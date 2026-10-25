@@ -3499,19 +3499,142 @@ static enum etude_status image_input_command(struct etude_case *c, struct etude_
     return ETUDE_OK;
 }
 
+/* A declared disk for bulk image-command inputs and outputs. */
+struct image_transfer {
+    char disk[4096], digest[65];
+    int active, pending;
+};
+
+#define IMAGE_TRANSFER_BYTES (64u * 1024 * 1024)
+
+/** Prepare only the transfer slot the case explicitly declared. */
+static enum etude_status image_transfer_create(struct etude_case *c,
+                                               const struct image_invocation *v,
+                                               struct image_transfer *t)
+{
+    struct machine_decl *d = find_decl(c, "image-helper");
+    const struct eh_json *disks = d != NULL ? eh_json_get(d->qemu, "disks") : NULL, *item;
+    struct etude_volume *volume;
+    struct stat st;
+    char why[256];
+    int added = 0, closed;
+
+    for (item = disks != NULL ? disks->child : NULL; item != NULL; item = item->next)
+        if (jtext(item, "name") != NULL && !strcmp(jtext(item, "name"), "image-transfer"))
+            break;
+    if (item == NULL || (v->input == NULL && v->destination == NULL))
+        return ETUDE_OK;
+    if (jnum(item, "size_bytes") != IMAGE_TRANSFER_BYTES ||
+        (jtext(item, "bus") != NULL && strcmp(jtext(item, "bus"), "ide") != 0))
+        return ETUDE_REFUSED;
+    if ((size_t)snprintf(t->disk, sizeof(t->disk), "%s/image-transfer.%u", c->scratch,
+                         d->boots + 1) >= sizeof(t->disk))
+        return ETUDE_FAILED;
+    volume = etude_volume_create(t->disk, IMAGE_TRANSFER_BYTES, why, sizeof(why));
+    if (volume == NULL)
+        return ETUDE_FAILED;
+    made(c, t->disk, 0);
+    if (v->input != NULL) {
+        added = etude_digest_file(NULL, v->input, &st, t->digest);
+        if (added == 0)
+            added = etude_volume_add(volume, "image-file", v->input);
+    }
+    closed = etude_volume_close(volume);
+    if (added != 0 || closed != 0 ||
+        etude_bind_disk(c, "image-helper", "image-transfer", t->disk) != ETUDE_OK)
+        return ETUDE_FAILED;
+    t->active = 1;
+    return ETUDE_OK;
+}
+
+/** Read the guest's digest through the bounded command-result channel. */
+static enum etude_status image_transfer_hash(struct etude_case *c, struct etude_case_machine *m,
+                                             const char *output, char digest[65])
+{
+    const char *args[] = {"/bin/busybox", "sha256sum", "/dev/shm/image-file", NULL};
+    char name[200], *text;
+    const char *path;
+    enum etude_status st;
+    size_t n, i;
+
+    snprintf(name, sizeof(name), "image-hash.%s", output);
+    st = image_input_command(c, m, args, name);
+    if (st != ETUDE_OK)
+        return st;
+    path = etude_evidence(c, name);
+    text = path != NULL ? read_whole(path, &n) : NULL;
+    if (text == NULL)
+        return ETUDE_FAILED;
+    if (n != 64 + strlen("  /dev/shm/image-file\n") ||
+        strcmp(text + 64, "  /dev/shm/image-file\n") != 0) {
+        free(text);
+        return ETUDE_FAILED;
+    }
+    for (i = 0; i < 64; i++)
+        if (!((text[i] >= '0' && text[i] <= '9') || (text[i] >= 'a' && text[i] <= 'f'))) {
+            free(text);
+            return ETUDE_FAILED;
+        }
+    memcpy(digest, text, 64);
+    digest[64] = '\0';
+    free(text);
+    return ETUDE_OK;
+}
+
+/** Read a complete output archive only after its machine has ended. */
+static enum etude_status image_transfer_finish(struct etude_case *c,
+                                               const struct image_invocation *v,
+                                               const struct image_transfer *t, const char *output)
+{
+    char name[200], path[4096], digest[65], why[256];
+    struct stat st;
+    const char *target;
+
+    if (!t->pending)
+        return !t->active || unlink(t->disk) == 0 ? ETUDE_OK : ETUDE_FAILED;
+    snprintf(name, sizeof(name), "image-file.%s", output);
+    target = etude_evidence(c, name);
+    if (target == NULL || strlen(target) >= sizeof(path))
+        return ETUDE_FAILED;
+    strcpy(path, target);
+    if (etude_volume_file(t->disk, "image-file", path, why, sizeof(why)) != 0) {
+        diag("image output: %s", why);
+        return ETUDE_FAILED;
+    }
+    made(c, path, 0);
+    if (etude_digest_file(NULL, path, &st, digest) != 0 || strcmp(digest, t->digest) != 0) {
+        diag("image output: the guest and host digests differ");
+        return ETUDE_FAILED;
+    }
+    if (image_output(c, path, v->destination) != 0 || unlink(t->disk) != 0)
+        return ETUDE_FAILED;
+    return ETUDE_OK;
+}
+
 /** Transfer through one protocol field, then place the exact basename. */
 static enum etude_status image_input(struct etude_case *c, struct etude_case_machine *m,
-                                     const struct image_invocation *v, const char *output)
+                                     const struct image_invocation *v, const char *output,
+                                     const struct image_transfer *transfer)
 {
+    const char *extract[] = {"/bin/busybox", "tar", "-xf", "/dev/disk1", "-C", "/dev/shm", NULL};
     const char *mkdir_args[] = {"/bin/busybox",         "mkdir", "-m", "0700",
                                 "/dev/shm/image-input", NULL};
     const char *move_args[] = {"/bin/busybox", "mv", "/dev/shm/image-file", v->input_file, NULL};
     enum etude_status st;
-    char name[200];
+    char name[200], digest[65];
 
     if (v->input == NULL)
         return ETUDE_OK;
-    st = etude_guest_put(m, v->input, "/dev/shm/image-file", "0600");
+    if (transfer->active) {
+        snprintf(name, sizeof(name), "image-extract.%s", output);
+        st = image_input_command(c, m, extract, name);
+        if (st == ETUDE_OK)
+            st = image_transfer_hash(c, m, output, digest);
+        if (st == ETUDE_OK && strcmp(digest, transfer->digest) != 0)
+            st = ETUDE_FAILED;
+    } else {
+        st = etude_guest_put(m, v->input, "/dev/shm/image-file", "0600");
+    }
     if (st != ETUDE_OK || v->input_file[0] == '\0')
         return st;
     snprintf(name, sizeof(name), "image-input.%s", output);
@@ -3524,7 +3647,8 @@ static enum etude_status image_input(struct etude_case *c, struct etude_case_mac
 
 /** Keep a file an image command wrote, even when the command failed. */
 static enum etude_status image_fetch(struct etude_case *c, struct etude_case_machine *m,
-                                     const char *destination, const char *output, int succeeded)
+                                     const char *destination, const char *output, int succeeded,
+                                     struct image_transfer *transfer)
 {
     const char *args[] = {"/bin/busybox", "test", "-f", "/dev/shm/image-file", NULL};
     struct etude_guest_result result;
@@ -3541,6 +3665,17 @@ static enum etude_status image_fetch(struct etude_case *c, struct etude_case_mac
         return ETUDE_LOST;
     if (result.termination.value != 0)
         return result.termination.value == 1 && !succeeded ? ETUDE_OK : ETUDE_FAILED;
+    if (transfer->active) {
+        const char *archive[] = {"/bin/busybox", "tar",      "-cf",        "/dev/disk1",
+                                 "-C",           "/dev/shm", "image-file", NULL};
+        st = image_transfer_hash(c, m, output, transfer->digest);
+        if (st != ETUDE_OK)
+            return st;
+        snprintf(name, sizeof(name), "image-archive.%s", output);
+        st = image_input_command(c, m, archive, name);
+        transfer->pending = st == ETUDE_OK;
+        return st;
+    }
     snprintf(name, sizeof(name), "image-file.%s", output);
     st = etude_guest_get(m, "/dev/shm/image-file", name);
     if (st != ETUDE_OK)
@@ -3554,8 +3689,9 @@ static enum etude_status image_host(struct etude_case *c, char *const argv[], co
                                     struct etude_termination *end)
 {
     struct image_invocation v;
+    struct image_transfer transfer;
     const char *sync_args[] = {"/bin/busybox", "sync", NULL};
-    const char *disks[] = {"image-disk", NULL};
+    const char *disks[] = {"image-disk", "image-transfer", NULL};
     char sync_output[200], *reply = NULL;
     struct etude_case_machine *m = NULL;
     struct etude_termination stopped;
@@ -3563,15 +3699,21 @@ static enum etude_status image_host(struct etude_case *c, char *const argv[], co
     enum etude_status st, stop_status;
 
     memset(&v, 0, sizeof(v));
+    memset(&transfer, 0, sizeof(transfer));
     st = image_arguments(c, argv, output, &v);
     if (st != ETUDE_OK)
         return st;
     if (etude_bind_disk(c, "image-helper", "image-disk", v.disk) != ETUDE_OK)
         return ETUDE_REFUSED;
+    st = image_transfer_create(c, &v, &transfer);
+    if (st != ETUDE_OK)
+        return st;
+    if (!transfer.active)
+        disks[1] = NULL;
     st = etude_boot(c, "image-helper", disks, &m, &stopped);
     if (st != ETUDE_OK)
         return st;
-    if ((st = image_input(c, m, &v, output)) != ETUDE_OK)
+    if ((st = image_input(c, m, &v, output, &transfer)) != ETUDE_OK)
         goto done;
     if (v.directory != NULL && (st = image_directory(c, m, v.directory, output)) != ETUDE_OK)
         goto done;
@@ -3586,7 +3728,8 @@ static enum etude_status image_host(struct etude_case *c, char *const argv[], co
     }
     if (v.destination != NULL && (st = image_fetch(c, m, v.destination, output,
                                                    result.termination.end == ETUDE_END_EXITED &&
-                                                       result.termination.value == 0)) != ETUDE_OK)
+                                                       result.termination.value == 0,
+                                                   &transfer)) != ETUDE_OK)
         goto done;
     snprintf(sync_output, sizeof(sync_output), "image-sync.%s", output);
     st = etude_guest_command(m, sync_args, NULL, NULL, sync_output, &synced);
@@ -3599,6 +3742,8 @@ done:
     free(reply);
     if (stop_status == ETUDE_OK)
         stop_status = etude_wait_end(m, &stopped);
+    if (st == ETUDE_OK && stop_status == ETUDE_OK)
+        return image_transfer_finish(c, &v, &transfer, output);
     return st == ETUDE_OK ? stop_status : st;
 }
 

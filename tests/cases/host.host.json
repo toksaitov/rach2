@@ -1918,7 +1918,8 @@
           {
             "fixture": "disk",
             "names": [
-              "image-disk"
+              "image-disk",
+              "image-transfer"
             ]
           }
         ],
@@ -2199,7 +2200,7 @@
         "cpu_millis": 2000,
         "cpu_ceiling_millis": 16000,
         "memory_bytes": 2952790016,
-        "disk_bytes": 13421772800,
+        "disk_bytes": 13488881664,
         "locks": [],
         "ports": 0,
         "loop_devices": 0
@@ -2700,6 +2701,11 @@
                 "name": "image-disk",
                 "bus": "ide",
                 "size_bytes": 512
+              },
+              {
+                "name": "image-transfer",
+                "bus": "ide",
+                "size_bytes": 67108864
               }
             ],
             "cpu": "max",
