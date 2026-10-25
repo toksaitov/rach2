@@ -133,8 +133,12 @@ static void cleanup(void)
     end_guest();
     end_groups();
     free(workload);
-    if (*work)
-        remove_tree(work);
+    if (*work) {
+        if (failures)
+            fprintf(stderr, "etude_guest_hosttest: kept %s\n", resolved);
+        else
+            remove_tree(work);
+    }
 }
 
 /** Exit through the cleanup after a signal. */
@@ -1642,9 +1646,16 @@ static void check_serial(void)
     end_guest();
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     char *tmp = getenv("TMPDIR");
+    int detached = argc == 2 && !strcmp(argv[1], "--detached-only");
+    if (argc != 1 && !detached)
+        return 2;
+#if !defined(__linux__) && !defined(__rach2__)
+    if (detached)
+        return 2;
+#endif
 
     workload = host_workload_read(&workload_size);
     if (!workload) {
@@ -1667,26 +1678,30 @@ int main(void)
         perror(work);
         return 2;
     }
-    check_pass_fail_repeat();
-    check_sizes();
-    check_interruptions();
-    check_orphan();
+    if (!detached) {
+        check_pass_fail_repeat();
+        check_sizes();
+        check_interruptions();
+        check_orphan();
+    }
 #if defined(__linux__) || defined(__rach2__)
     check_detached(0);
     check_detached(1);
     check_detached(2);
 #endif
-    check_orphan_group();
-    check_group_records();
-    check_unfinished_end();
-    check_record_first();
-    check_stdio_damage();
-    check_fixtures();
-    check_serial();
+    if (!detached) {
+        check_orphan_group();
+        check_group_records();
+        check_unfinished_end();
+        check_record_first();
+        check_stdio_damage();
+        check_fixtures();
+        check_serial();
+    }
     if (failures) {
         fprintf(stderr, "etude_guest_hosttest: %d checks failed\n", failures);
         return 1;
     }
-    printf("etude_guest_hosttest: all checks passed\n");
+    printf("etude_guest_hosttest: %s checks passed\n", detached ? "detached" : "all");
     return 0;
 }
