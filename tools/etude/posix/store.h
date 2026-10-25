@@ -6,12 +6,16 @@
 #define ETUDE_STORE_H
 
 #include <stdint.h>
+#include <signal.h>
 
 #include "etude/artifact.h"
 
 /* Copy exactly LENGTH bytes at OFFSET into a new sparse private file.
  * Reject a short or changing source; remove only our output on failure. */
 int store_copy_range(const char *source, uint64_t offset, uint64_t length, const char *dest);
+/* The same copy, cancelled between chunks by its native owner. */
+int store_copy_range_stop(const char *source, uint64_t offset, uint64_t length, const char *dest,
+                          volatile sig_atomic_t *stop);
 
 /** Give a copy of `a`, `/` and `b` from malloc, or NULL. */
 char *store_join(const char *a, const char *b);

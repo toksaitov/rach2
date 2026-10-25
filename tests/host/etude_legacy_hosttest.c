@@ -35,7 +35,10 @@
  * host-inputs: tools/ci/native_evidence.py tools/ci/retention_access.py
  * host-inputs: tools/ci/retention_io.py tools/ci/retention_registry.py
  * host-inputs: tools/ci/retention_closure.py tools/ci/retention_issues.py
- * host-inputs: tools/etude/preparation_import.py
+ * host-inputs: tools/etude/preparation_import.c
+ * host-inputs: tools/etude/preparation_import_data.c
+ * host-inputs: tools/etude/preparation_import_transfer.c
+ * host-inputs: tools/etude/preparation_import.h
  * host-inputs: tools/etude/preparation_paths.py
  * host-inputs: tools/etude/collection_tools.c tools/etude/collection_tools.h
  * host-tools: python3
