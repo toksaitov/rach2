@@ -39,7 +39,10 @@ static void conditioning_import(char out[2048], const char *state, const char *r
                "\"commit\":\"1111111111111111111111111111111111111111\","
                "\"producer_sha256\":\"retained-producer-identity\",\"ordinary_production\":%s,"
                "\"roles\":{\"%s\":\"%s\"%s},\"imported\":{\"%s\":{\"sha256\":"
-               "\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}},"
+               "\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},"
+               "\"build/tests/host-suite/tools/exfat_external/exfat_src/e\303\251t\303\251.txt\":"
+               "{\"sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\","
+               "\"size_bytes\":7}},"
                "\"artifacts\":{\"%s\":{\"sha256\":"
                "\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}}}",
                receipt, NODE, role ? role : "native",

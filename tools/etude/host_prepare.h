@@ -14,6 +14,7 @@ struct hp_context {
     const char *arch, *group, *output, *only, *previous, *origin;
     int gnu, print;
     volatile sig_atomic_t *stop;
+    char *const *environment;
     struct hp_words compiler;
     char *compiler_requested;
     struct json *identity, *old;

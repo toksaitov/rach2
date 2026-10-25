@@ -23,10 +23,10 @@
 # describe; such a source passes when that script names it, or when
 # tools/etude/sources.mk lists it for the Windows etude that the script
 # builds.
-# The Windows scenario actor is selected by the native host preparation adapter. The native
-# mandoc build copies its entry and mapping adapter to batch_main.c and
-# batch_mmap.c, compiled by tools/setup/mandoc-batch.mk; these two sources
-# have no POSIX translation-unit command.
+# The Windows scenario actor uses the native host preparation adapter.
+# The native mandoc build copies its entry and mapping adapter to
+# batch_main.c and batch_mmap.c, compiled by tools/setup/mandoc-batch.mk;
+# these two sources have no POSIX translation-unit command.
 #
 # Usage: dbcheck.sh [DBDIR]
 set -u

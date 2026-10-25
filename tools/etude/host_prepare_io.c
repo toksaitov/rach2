@@ -209,15 +209,20 @@ void hp_member(struct json *object, const char *name, struct json *value)
 
 struct json *hp_clone(const struct json *value)
 {
-    struct jbuf bytes = {0};
-    struct json *copy = NULL;
-    char why[256];
-    if (value) {
-        json_canonical(value, &bytes);
-        json_parse(bytes.data, bytes.len, 1, &copy, why, sizeof(why));
-        jbuf_free(&bytes);
+    if (!value)
+        return hp_value(JSON_NULL);
+    struct json *copy = hp_value(value->type);
+    copy->integer = value->integer;
+    copy->line = value->line;
+    if (value->string)
+        copy->string = strdup(value->string);
+    for (size_t i = 0; i < value->count; i++) {
+        struct json *child = hp_clone(value->item[i]);
+        if (value->item[i]->name)
+            child->name = strdup(value->item[i]->name);
+        hp_item(copy, child);
     }
-    return copy ? copy : hp_value(JSON_NULL);
+    return copy;
 }
 
 struct json *hp_array(const struct hp_words *words)
@@ -287,7 +292,7 @@ int hp_run(struct hp_context *c, char *const argv[], const char *out, const char
     for (size_t i = 1; argv[i]; i++)
         hp_add(&command, argv[i]);
     spec.argv = command.v;
-    spec.envp = environ;
+    spec.envp = c->environment ? c->environment : environ;
     spec.cwd = c->tree;
     spec.stdout_path = out;
     spec.stderr_path = err;
