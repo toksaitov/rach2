@@ -1,5 +1,8 @@
 /* json.c: bounded JSON parsing and object-subset comparison for API bodies. */
 #include "json.h"
+#ifdef _WIN32
+#include "../../../../tools/etude/win/files.h"
+#endif
 #include <ctype.h>
 #include <math.h>
 #include <stdio.h>
