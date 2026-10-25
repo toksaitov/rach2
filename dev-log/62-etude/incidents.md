@@ -1634,3 +1634,9 @@ The first isolated WHPX diagnostic stopped before QEMU. The committed helper pas
 ## A diagnostic command exceeded the guest serial input rate
 
 The next isolated Windows boot reached the kernel, but its operator wrote the probe command to the serial port at once. The echoed command lost characters, and the probe never ran. The controller's zero exit recorded restoration, not a successful probe. The failed output and confirmed cleanup remain under `windows-qemu-diagnostic-0da2f8d32751-03-controls`. The retry uses the existing paced serial-input method and the same prepared probe and kernel. A diagnostic must check its own terminal result separately from its controller's cleanup result.
+
+## WHPX reported stale processor save and halt state (#1161)
+
+The direct-boot Windows probe measured XCR0=0xe7 and enabled component ends at 2432 bytes. The kernel and signal frame used that size, but CPUID leaf 0xD, subleaf 0 reported 576 bytes in EBX. QEMU's WHPX path replaced the dynamic EBX result only for subleaves 1 and 2. The unchanged probe therefore failed its signal-frame size assertion. The QEMU correction adds subleaf 0 to that existing use of Hyper-V's current result, preserving the advertised features.
+
+The same boot printed its explicit kernel halt after the diagnostic PID 1 exited, but HMP reported HLT=0. WHPX's default in-hypervisor interrupt controller handles halt without updating the state HMP reads. The launcher now requests `whpx,kernel-irqchip=off`, keeping halt exits in QEMU. Accelerator refusal parsing accepts the configured argument as well as the bare name. The raw failures remain under `windows-qemu-diagnostic-0da2f8d32751-05-controls`; argument checks and the affected real Windows cases verify the repair separately. No kernel, probe, feature or halt assertion is weakened.
