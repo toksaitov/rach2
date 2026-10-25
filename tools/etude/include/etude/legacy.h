@@ -38,6 +38,7 @@ struct etude_legacy_opts {
     FILE *out;                   /* the progress and the result */
     volatile sig_atomic_t *stop; /* the number of a stop signal once one has
                                     come, or NULL */
+    const char *program;         /* the resolved native Etude for an import step */
 };
 
 /**
