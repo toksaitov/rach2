@@ -11,6 +11,7 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <direct.h>
+#include "../../../../tools/etude/win/files.h"
 typedef SOCKET service_socket;
 typedef HANDLE service_thread;
 typedef CRITICAL_SECTION service_mutex;
@@ -18,7 +19,7 @@ typedef CONDITION_VARIABLE service_condition;
 #define SERVICE_INVALID     INVALID_SOCKET
 #define service_close       closesocket
 #define service_shutdown(s) shutdown(s, SD_BOTH)
-#define service_mkdir(p)    _mkdir(p)
+#define service_mkdir(p)    etude_win_mkdir(p, 0700)
 #define service_mode(p)     ((void)(p))
 #else
 #include <pthread.h>
