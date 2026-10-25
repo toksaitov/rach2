@@ -738,7 +738,7 @@ static void check_pass_fail_repeat(void)
     char inv2[65];
     char c[24];
     char c2[24];
-    char expected[2048];
+    char expected[2 * PATH_CAP + 256];
 
     start_guest("--stdio", (char *)NULL);
     hello(ETUDE_FRAME_STDIO_MAX);
@@ -1014,6 +1014,8 @@ static int settled_confirmed(const char *token)
  * the responder, including its later durable status reply. */
 static void check_detached(int mode)
 {
+    static const char *const names[] = {"normal", "cancel", "responder-loss"};
+    int before = failures;
     struct ending e;
     struct got g;
     char inv[65], c[24], cancel[24], token[17];
@@ -1055,6 +1057,8 @@ static void check_detached(int mode)
     CHECK(daemon > 0 && !alive(daemon) && all_gone(open_end),
           "the daemon has been killed and reaped and holds no witness descriptor");
     bye(0);
+    printf("etude_guest_hosttest: detached %s: %s\n", names[mode],
+           failures == before ? "pass" : "fail");
 }
 #endif
 
@@ -1463,7 +1467,7 @@ static void check_fixtures(void)
     struct ending e;
     struct stat st;
     char fixtures[1024];
-    char expected[2048];
+    char expected[PATH_CAP + 256];
     char token[ETUDE_FRAME_TOKEN_LEN + 1];
     char inv[65];
     char c[24];
