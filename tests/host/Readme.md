@@ -56,6 +56,8 @@ A path on a `host-deps:` or `host-cflags:` line that begins `vendor/` names a ve
 
 `etude_platform_hosttest.c --collection-only` checks the native collection adapter without booting a machine. The real C entry stages local operands, preserves mtools offsets and names, returns failed partial output and the original status, translates debugfs requests, selects native goals and builds an isolated style job. Its preparation row uses real Git and tar with small source and product files; it checks the source index, history bundle, supplied WAD and recovery key, retained workspace and ordinary Make commands. Only the tooling transport is substituted by the fixture. The prepared image-helper controller retains its separate real image and bulk-transfer assertions.
 
+`etude_platform_hosttest.c --retention-only` checks native retention and selected-site reference commands in temporary owned directories. It covers unchanged old bundles, active and unknown evidence, failed or incomplete histories, changed and missing proof closure, accepted baselines, open issues, stale snapshots, logical byte limits, reader use, fractional timestamps, native Windows sequence receipts, concurrent allocation, site mismatch and create-once forecast outputs. The same compiled fixture supplies the read-only GitHub response and estimator roles. No real evidence root or GitHub state is changed.
+
 ### Shared code
 
 * `compat/pathmax_host.h` includes the host's pathname limit for POSIX tests. On macOS it includes `sys/syslimits.h` explicitly, since Clang's `limits.h` omits the system headers under `-ffreestanding`.
