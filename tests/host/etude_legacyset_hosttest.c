@@ -1321,6 +1321,10 @@ static int driver_role(const char *path)
     size_t i;
     if (!f)
         return 121;
+    if (legacy_child_ready() != 0) {
+        fclose(f);
+        return 121;
+    }
     i = fread(&d, sizeof(d), 1, f);
     fclose(f);
     if (i != 1 || d.magic != 0x65747564 || d.n > 32 || fixture_environment(1) != 0)
