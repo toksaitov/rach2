@@ -13,6 +13,13 @@
  * host-deps: tests/host/compat/command_host.c tools/etude/collection_tools.c
  * host-deps: tools/etude/json.c tools/etude/routine_proof.c
  * host-deps: tools/etude/digest.c utils/sha256.c
+ * host-deps: tests/host/compat/retention_host.c
+ * host-deps: tools/etude/retention.c tools/etude/retention_io.c
+ * host-deps: tools/etude/retention_proof.c tools/etude/retention_issues.c
+ * host-deps: tools/etude/reference.c tools/etude/measurement_prepare.c
+ * host-deps: tools/etude/preparation_record.c tools/etude/posix/store.c
+ * host-deps: tools/etude/posix/authority_platform.c
+ * host-deps: tools/etude/history_collect.c tools/etude/history_json.c
  * host-cflags: -I tools/etude -I tests/host/compat -I utils
  * host-cflags: -I tools/etude/include -Wall -Wextra -Werror
  */
@@ -26,6 +33,8 @@
 int etude_test_tooling_cache(const char *tmp);
 int etude_test_collection_tools(const char *self, const char *tmp);
 int etude_test_collection_child(int argc, char **argv);
+int etude_test_retention(const char *self);
+int etude_test_retention_child(int argc, char **argv);
 
 int main(int argc, char **argv)
 {
@@ -34,6 +43,9 @@ int main(int argc, char **argv)
     size_t i;
 
     int child = etude_test_collection_child(argc, argv);
+    if (child >= 0)
+        return child;
+    child = etude_test_retention_child(argc, argv);
     if (child >= 0)
         return child;
     if (argc == 3 && strcmp(argv[1], "--big") == 0) {
@@ -45,9 +57,13 @@ int main(int argc, char **argv)
     }
     if (tmp == NULL || tmp[0] == '\0')
         tmp = "/tmp";
+    if (argc == 2 && !strcmp(argv[1], "--retention-only"))
+        return etude_test_retention(argv[0]);
     if (argc == 2 && !strcmp(argv[1], "--collection-only"))
         return etude_test_collection_tools(argv[0], tmp);
     if (etude_test_collection_tools(argv[0], tmp))
+        return 1;
+    if (etude_test_retention(argv[0]))
         return 1;
     if (etude_test_tooling_cache(tmp))
         return 1;
