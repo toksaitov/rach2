@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -20,6 +21,98 @@ from routine_route_test import RouteTests
 
 
 class ImportTests(unittest.TestCase):
+    def test_gnu_inventory_predecessor(self):
+        repo = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(repo / 'tests/cases/host'))
+        import prepare as inventory
+        compiler = Path(shutil.which('cc')).resolve()
+        output = 'build/tests/host-suite/checkers.inventory.json'
+        compiles, flags = [], []
+        real_run = subprocess.run
+
+        def execute(argv, **kwargs):
+            if '-o' in argv and '-MM' not in argv and '-M' not in argv:
+                compiles.append(argv)
+            return real_run(argv, **kwargs)
+
+        def checks(group, arch, base):
+            for name in ('first', 'second'):
+                source, program = name + '.c', str(base / name)
+                item = inventory.entry(name, name, program, [source])
+                item['command'] = ['-std=c99', '-O0', '-Iinclude', *flags,
+                                   '-o', program, source]
+                yield item
+
+        def prepare(tree, previous=None):
+            args = SimpleNamespace(output=output, group='checkers', arch='i686', gnu=True,
+                                   print_commands=False, only=None, previous=previous)
+            with patch.object(inventory, 'ROOT', tree), \
+                    patch.dict(os.environ, {'CC': str(tree / 'cc')}):
+                inventory.prepare(args)
+
+        with tempfile.TemporaryDirectory(prefix='rach2-gnu-reuse.') as directory:
+            root, cwd = Path(directory).resolve(), Path.cwd()
+            old, new = root / 'old', root / 'new'
+            programs = [Path(output).parent / 'checkers' / n for n in ('first', 'second')]
+
+            def retry(expected, statuses):
+                (new / output).unlink(missing_ok=True)
+                count = len(compiles)
+                prepare(new, old)
+                self.assertEqual(len(compiles) - count, expected)
+                self.assertEqual([real_run([str(new / p)]).returncode for p in programs], statuses)
+
+            try:
+                for tree in (old, new):
+                    (tree / 'tests/cases').mkdir(parents=True)
+                    (tree / 'tests/cases/host.host.json').write_text('{}\n')
+                    (tree / 'cc').symlink_to(compiler)
+                    (tree / 'include').mkdir()
+                    (tree / 'include/choice.h').write_text('#define VALUE 0\n')
+                    (tree / 'first.c').write_text('#include "choice.h"\nint main(void) { return VALUE; }\n')
+                    (tree / 'second.c').write_text('int main(void) { return 0; }\n')
+                with patch.object(inventory, 'checks', side_effect=checks), \
+                        patch.object(subprocess, 'run', side_effect=execute):
+                    prepare(old)
+                    self.assertEqual(len(compiles), 2)
+                    originals = [(old / p).read_bytes() for p in programs]
+                    retry(0, [0, 0])
+                    self.assertEqual([(new / p).read_bytes() for p in programs], originals)
+                    self.assertNotEqual((old / programs[0]).stat().st_ino,
+                                        (new / programs[0]).stat().st_ino)
+                    (new / 'include/choice.h').write_text('#define VALUE 1\n')
+                    retry(1, [1, 0])
+                    (new / 'include/choice.h').write_text('#define VALUE 0\n')
+                    (new / 'choice.h').write_text('#define VALUE 2\n')
+                    retry(1, [2, 0])
+                    (new / 'choice.h').unlink()
+                    (new / 'second.c').write_text('int main(void) { return 3; }\n')
+                    retry(1, [0, 3])
+                    (new / 'second.c').write_text('int main(void) { return 0; }\n')
+                    flags.append('-DCHANGED_RECIPE=1')
+                    retry(2, [0, 0])
+                    flags.clear()
+                    identity = inventory.compiler_record
+
+                    def changed_identity(command):
+                        value = identity(command)
+                        value['version'] = 'a different compiler identity'
+                        return value
+
+                    with patch.object(inventory, 'compiler_record', side_effect=changed_identity):
+                        retry(2, [0, 0])
+                    self.assertEqual([(old / p).read_bytes() for p in programs], originals)
+                    (old / programs[0]).write_bytes(b'corrupt predecessor')
+                    retry(1, [0, 0])
+                for name in ('old-sdk', 'new-sdk'):
+                    (root / name).symlink_to(old, target_is_directory=True)
+                commands = [[str(compiler), '--sysroot=' + str(root / name),
+                             '-B' + str(root / name), '-L' + str(root / name)]
+                            for name in ('old-sdk', 'new-sdk')]
+                self.assertEqual(*[inventory.compiler_paths(c) for c in commands])
+            finally:
+                os.chdir(cwd)
+
     def test_clean_goal_conditioning(self):
         original = dict(format='etude-preparation-receipt', run_id='original-production',
                         start=dict(monotonic_us=10), end=dict(monotonic_us=20))
