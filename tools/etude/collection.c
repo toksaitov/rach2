@@ -711,6 +711,7 @@ static int prepare_collection(struct collection *c)
     }
     memset(&o, 0, sizeof(o));
     o.tree = c->tree;
+    o.program = c->program;
     o.arch = c->arches;
     o.kernel = getenv("RACH2_KERNEL");
     o.record = c->record;

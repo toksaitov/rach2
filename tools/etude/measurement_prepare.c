@@ -218,48 +218,56 @@ static int source_input(struct jbuf *buffer, const char *tree, const char *name)
     return 0;
 }
 
-static int source_write(const char *tree, const char *commit, const char *output,
-                        struct source_names *names)
+static int source_document(const char *tree, const char *commit, struct source_names *names,
+                           struct jbuf *buffer)
 {
-    struct jbuf buffer = {0};
     int error = 0;
     qsort(names->paths, names->count, sizeof(*names->paths), source_by_path);
-    jbuf_puts(&buffer, "{\"commit\":");
-    routine_quote(&buffer, commit);
-    jbuf_puts(&buffer, ",\"inputs\":[");
+    jbuf_puts(buffer, "{\"commit\":");
+    routine_quote(buffer, commit);
+    jbuf_puts(buffer, ",\"inputs\":[");
     size_t written = 0;
     for (size_t i = 0; !error && i < names->count; i++) {
         if (i && !strcmp(names->paths[i - 1], names->paths[i]))
             continue;
         if (written++)
-            jbuf_puts(&buffer, ",");
-        error = source_input(&buffer, tree, names->paths[i]);
+            jbuf_puts(buffer, ",");
+        error = source_input(buffer, tree, names->paths[i]);
     }
-    jbuf_puts(&buffer, "],\"schema_version\":1,\"scope\":\"all tracked regular files and "
-                       "explicitly listed prepared source inputs\"}\n");
+    jbuf_puts(buffer, "],\"schema_version\":1,\"scope\":\"all tracked regular files and "
+                      "explicitly listed prepared source inputs\"}\n");
     if (!error)
-        error = source_frozen(tree, commit) || routine_create(output, &buffer);
-    jbuf_free(&buffer);
+        error = source_frozen(tree, commit);
+    return error ? -1 : 0;
+}
+
+int etude_context_source_build(const char *tree, const char *commit, const char *const extra[],
+                               struct jbuf *buffer)
+{
+    struct source_names names = {0};
+    char *root = tree ? realpath(tree, NULL) : NULL;
+    int error = !root || !commit || strlen(commit) != 40 ||
+                strspn(commit, "0123456789abcdef") != 40 || !buffer || buffer->len;
+    if (!error)
+        error = source_frozen(root, commit) || source_list(root, &names);
+    for (size_t i = 0; !error && extra && extra[i]; i++)
+        error = source_add(&names, extra[i]);
+    if (!error)
+        error = source_document(root, commit, &names, buffer);
+    for (size_t i = 0; i < names.count; i++)
+        free(names.paths[i]);
+    free(names.paths);
+    free(root);
     return error ? -1 : 0;
 }
 
 int etude_context_source(const char *tree, const char *commit, const char *output,
                          const char *const extra[])
 {
-    struct source_names names = {0};
-    char *root = tree ? realpath(tree, NULL) : NULL;
-    int error = !root || !commit || strlen(commit) != 40 ||
-                strspn(commit, "0123456789abcdef") != 40 || !output;
-    if (!error)
-        error = source_frozen(root, commit) || source_list(root, &names);
-    for (size_t i = 0; !error && extra && extra[i]; i++)
-        error = source_add(&names, extra[i]);
-    if (!error)
-        error = source_write(root, commit, output, &names);
-    for (size_t i = 0; i < names.count; i++)
-        free(names.paths[i]);
-    free(names.paths);
-    free(root);
+    struct jbuf buffer = {0};
+    int error = !output || etude_context_source_build(tree, commit, extra, &buffer) ||
+                routine_create(output, &buffer);
+    jbuf_free(&buffer);
     return error ? -1 : 0;
 }
 
