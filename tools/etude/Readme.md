@@ -1246,6 +1246,8 @@ The native guest transport fixture tests the framed command/file protocol under 
 
 Compatibility adapters retain focused regressions for their public forms and old checkout admission. The scripts beside the implementation are reference or explicit compatibility interfaces where the prepared C inventories have replaced their test control flow. [The system-case documentation](../../tests/system/Readme.md) describes the suites without repeating their assertion lists here.
 
+Windows executable copies have an explicit `.exe` suffix in the attempt's private `bin/` directory. Artifact identities and bytes do not change. This permits a copied native program to be called either directly or through the Windows C runtime's spawn functions, which search executable extensions for a suffixless pathname. POSIX copies retain their existing paths.
+
 ### Image checks
 
 The debug-shell startup line uses the guest's compact option aliases: `-s` for `--state`, `-t` for `--stage` and `-r` for `--resend-ms`. Both startup forms use one formatter that rejects a line longer than the kernel shell's 63 characters before LF. Even the maximum schema interval fits with the image helper's exact `/dev/shm/etude-guest` state path and stage `/`. The interval rounds upward to milliseconds without unsigned overflow and is parsed as a checked 64-bit number, including on i686. Long options remain supported.
