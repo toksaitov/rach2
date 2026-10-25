@@ -22,7 +22,7 @@ void destroy(struct value *v);
 struct value *value(char type);
 struct value *string(const char *s);
 struct value *integer(long long n);
-struct value *boolean(int n);
+struct value *json_boolean(int n);
 struct value *clone(const struct value *v);
 void add(struct value *v, const char *key, struct value *item);
 void set(struct value *v, const char *key, struct value *item);

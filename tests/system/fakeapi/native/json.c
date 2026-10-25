@@ -64,7 +64,7 @@ struct value *integer(long long n)
     v->number = (double)n;
     return v;
 }
-struct value *boolean(int n)
+struct value *json_boolean(int n)
 {
     return value(n ? 't' : 'f');
 }
