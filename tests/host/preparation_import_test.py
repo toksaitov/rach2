@@ -391,6 +391,124 @@ class ImportTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
 
+    def test_windows_companion_reuse(self):
+        repo = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(repo / 'tests/cases/host'))
+        import prepare as inventory
+        windows = inventory.windows
+        names = [row[0] for row in windows.companion_recipes()]
+        self.assertEqual(names, ['wintarget.exe', 'winstand.exe', 'etude.exe',
+                                 'etude-volume.exe', 'image-command.exe'])
+        recipes = [(name, [f'program{i}.c'], []) for i, name in enumerate(names)]
+        real_run, compiles = subprocess.run, []
+
+        def execute(argv, **kwargs):
+            linking = '-o' in argv and '-MM' not in argv and '-M' not in argv
+            if linking:
+                compiles.append(argv)
+            result = real_run(argv, **kwargs)
+            if linking:
+                # Model the Windows compiler's automatic executable suffix.
+                output = Path(argv[argv.index('-o') + 1])
+                output.replace(str(output) + '.exe')
+            return result
+
+        with tempfile.TemporaryDirectory(prefix='rach2-companion-cache.') as work:
+            tree, previous = Path(work).resolve() / 'tree', Path.cwd()
+            tree.mkdir()
+            try:
+                os.chdir(tree)
+                Path('include').mkdir()
+                Path('include/choice.h').write_text('#define VALUE 0\n')
+                sdk = tree.parent / 'sdk'
+                sdk.mkdir()
+                (sdk / 'external.h').write_text('#define EXTERNAL 0\n')
+                Path('program0.c').write_text('#include "choice.h"\n#include <external.h>\n'
+                                              'int main(void) { return VALUE + EXTERNAL; }\n')
+                for i in range(1, 5):
+                    Path(f'program{i}.c').write_text('int main(void) { return 0; }\n')
+                schema = Path('tools/etude/schemas/history.schema.json')
+                schema.parent.mkdir(parents=True)
+                schema.write_text('{}\n')
+                flags = ['-std=c99', '-O0', '-Iinclude', '-isystem', str(sdk)]
+                identity = inventory.compiler_record(['cc'])
+                base = Path('build/tests/host-suite/etude')
+                root = base / 'platform'
+                programs = [root / name for name in names]
+
+                def prepare(expected, statuses):
+                    count = len(compiles)
+                    inputs = windows.companions(['cc'], base, inventory.compiler_inputs,
+                                                inventory.digest, compiler_identity=identity)
+                    self.assertEqual(len(compiles) - count, expected)
+                    self.assertEqual([real_run([str(p.resolve())]).returncode for p in programs], statuses)
+                    return inputs
+
+                with patch.object(inventory, 'ROOT', tree), \
+                        patch.object(windows, 'FLAGS', flags), \
+                        patch.object(windows, 'companion_recipes', return_value=recipes), \
+                        patch.object(subprocess, 'run', side_effect=execute):
+                    self.assertEqual(windows.companions(['cc'], base, inventory.compiler_inputs,
+                                                         inventory.digest, print_commands=True), [])
+                    self.assertFalse(root.exists())
+                    with patch.dict(inventory.tools.SOURCES, {'probe': ['program4.c']}):
+                        count = len(compiles)
+                        args = (Path('shared'), 'probe', ['cc'], ['-std=c99'],
+                                inventory.compiler_inputs, inventory.digest, identity, False)
+                        shared = inventory.tools.compiled_tool(*args)
+                        self.assertEqual(inventory.tools.compiled_tool(*args), shared)
+                        self.assertEqual(len(compiles) - count, 1)
+                    first = prepare(5, [0] * 5)
+                    self.assertTrue({str(schema), str(root / schema.name)} <=
+                                    {row['path'] for row in first})
+                    before = [(p.stat().st_ino, p.stat().st_mtime_ns) for p in programs]
+                    self.assertEqual(prepare(0, [0] * 5), first)
+                    self.assertEqual([(p.stat().st_ino, p.stat().st_mtime_ns) for p in programs], before)
+                    self.assertTrue(all(str(p) + '.build.json' in {v['path'] for v in first}
+                                        for p in programs))
+                    Path('include/choice.h').write_text('#define VALUE 1\n')
+                    prepare(1, [1, 0, 0, 0, 0])
+                    Path('include/choice.h').write_text('#define VALUE 0\n')
+                    Path('choice.h').write_text('#define VALUE 2\n')
+                    prepare(1, [2, 0, 0, 0, 0])
+                    Path('program1.c').write_text('int main(void) { return 3; }\n')
+                    statuses = [2, 3, 0, 0, 0]
+                    prepare(1, statuses)
+                    flags.append('-DCHANGED_RECIPE=1')
+                    prepare(5, statuses)
+                    identity = dict(identity, version=identity['version'] + ' changed')
+                    prepare(5, statuses)
+                    marker = Path(str(programs[0]) + '.build.json')
+                    recorded = json.loads(marker.read_text())['recipe']['compiler_inputs']
+                    self.assertTrue(any(v['path'] == str(sdk / 'external.h') for v in recorded))
+                    (sdk / 'external.h').write_text('#define EXTERNAL 3\n')
+                    prepare(1, [5, 3, 0, 0, 0])
+                    schema.write_text('{"changed":true}\n')
+                    changed = prepare(0, [5, 3, 0, 0, 0])
+                    self.assertEqual((root / schema.name).read_bytes(), schema.read_bytes())
+                    self.assertNotEqual(changed, first)
+                    whole, record = programs[0].read_bytes(), marker.read_bytes()
+                    count = len(compiles)
+                    programs[0].write_bytes(whole + b'changed')
+                    with self.assertRaisesRegex(ValueError, 'bytes changed'):
+                        prepare(0, [])
+                    self.assertEqual(len(compiles), count)
+                    programs[0].write_bytes(whole)
+                    marker.write_text('{}')
+                    with self.assertRaisesRegex(ValueError, 'invalid compiled host tool record'):
+                        prepare(0, [])
+                    marker.write_bytes(record)
+                    count = len(compiles)
+                    Path('program0.c').write_text('int main(void) { invalid C syntax; }\n')
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        prepare(0, [])
+                    self.assertEqual(len(compiles) - count, 1)
+                    self.assertEqual(programs[0].read_bytes(), whole)
+                    self.assertEqual(marker.read_bytes(), record)
+                    self.assertFalse(list(root.glob('*.tmp*')))
+            finally:
+                os.chdir(previous)
+
     def test_windows_vectors(self):
         goals = ['build/tests/cases/machine/scenario' + str(i) for i in range(900)]
         base = ['make', '-o' + 'a' * 20000]
