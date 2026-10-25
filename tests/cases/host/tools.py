@@ -105,15 +105,10 @@ def external_exfat(marker):
             shutil.rmtree(temporary)
 
 
-def compiled_tool(root, name, compiler, flags, dependencies, digest, identity, print_commands):
-    """Reuse shared tool bytes only for the same compiler, recipe and includes."""
+def compiled_program(root, name, compiler, command, sources, dependencies, digest,
+                     identity, print_commands):
+    """Publish or reuse a program only for its complete current build recipe."""
     output = str(root / name)
-    sources = SOURCES[name]
-    if name == 'etude-workload':
-        # This payload has no test judge or sanitizer fault case.
-        flags = [flag for flag in flags if not flag.startswith((
-            '-fsanitize=', '-fno-sanitize-recover=', '-g'))]
-    command = [*flags, '-Wall', '-Wextra', '-Werror', '-o', output, *sources]
     if print_commands:
         print('host prepare: ' + shlex.join([*compiler, *command]), flush=True)
         return {}
@@ -160,6 +155,19 @@ def compiled_tool(root, name, compiler, flags, dependencies, digest, identity, p
         Path(temporary + '.exe').unlink(missing_ok=True)
     return {path: dict(path=path, sha256=digest(Path(path)))
             for path in [*paths, output, str(marker)]}
+
+
+def compiled_tool(root, name, compiler, flags, dependencies, digest, identity, print_commands):
+    """Reuse shared tool bytes only for the same compiler, recipe and includes."""
+    output = str(root / name)
+    sources = SOURCES[name]
+    if name == 'etude-workload':
+        # This payload has no test judge or sanitizer fault case.
+        flags = [flag for flag in flags if not flag.startswith((
+            '-fsanitize=', '-fno-sanitize-recover=', '-g'))]
+    command = [*flags, '-Wall', '-Wextra', '-Werror', '-o', output, *sources]
+    return compiled_program(root, name, compiler, command, sources, dependencies, digest,
+                            identity, print_commands)
 
 
 def prepare(names, compiler, flags, dependencies, digest, print_commands=False, compiler_identity=None):

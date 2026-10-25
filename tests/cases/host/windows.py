@@ -3,7 +3,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
-import subprocess
+import tools
 
 FLAGS = ['-std=c99', '-O2', '-D_DEFAULT_SOURCE', '-D_WIN32_WINNT=0x0A00', '-static',
          '-Itools/etude/include', '-Itools/etude', '-Itools/etude/win', '-Iutils',
@@ -55,10 +55,9 @@ def boot_entry(item, flags):
     return item
 
 
-def companions(compiler, base, dependencies, digest, print_commands=False):
-    """Compile helpers without executing them; hash sources and resulting bytes."""
-    root = base / 'platform'
-    recipes = [
+def companion_recipes():
+    """Keep every Windows fixture helper's sources and link operands explicit."""
+    return [
         ('wintarget.exe', ['tools/etude/win/wintarget.c'], ['-municode', *LIBS]),
         ('winstand.exe', ['tools/etude/win/winstand.c', 'tools/etude/volume/volume.c'], []),
         ('etude.exe', source_list('ETUDE_WIN_SRC'), LIBS),
@@ -66,20 +65,23 @@ def companions(compiler, base, dependencies, digest, print_commands=False):
         ('image-command.exe', ['tools/etude/win/image_command.c', 'tools/etude/win/hold.c',
                                'tools/etude/win/winfmt.c'], []),
     ]
-    inputs = set()
-    if not print_commands:
-        root.mkdir(parents=True, exist_ok=True)
-    for name, sources, libraries in recipes:
+
+
+def companions(compiler, base, dependencies, digest, print_commands=False,
+               compiler_identity=None):
+    """Reuse helpers only after checking the full current recipe and bytes."""
+    root = base / 'platform'
+    inputs = {}
+    for name, sources, libraries in companion_recipes():
         output = str(root / name)
         command = [*FLAGS, '-o', output, *sources, *libraries]
-        print('host prepare: ' + shlex.join([*compiler, *command]), flush=True)
-        if print_commands:
-            continue
-        subprocess.run([*compiler, *command], check=True)
-        inputs.update([output, *sources, *dependencies(compiler, command, sources)])
+        inputs.update(tools.compiled_program(root, name, compiler, command, sources,
+                                            dependencies, digest, compiler_identity,
+                                            print_commands))
     if print_commands:
         return []
     schema = root / 'history.schema.json'
     shutil.copyfile('tools/etude/schemas/history.schema.json', schema)
-    inputs.update([str(schema), 'tools/etude/schemas/history.schema.json'])
-    return [dict(path=p, sha256=digest(Path(p))) for p in sorted(inputs)]
+    for path in (str(schema), 'tools/etude/schemas/history.schema.json'):
+        inputs[path] = dict(path=path, sha256=digest(Path(path)))
+    return [inputs[path] for path in sorted(inputs)]

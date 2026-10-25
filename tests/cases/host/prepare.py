@@ -378,7 +378,7 @@ def prepare(args):
         tool_inputs = tools.prepare(required_tools, compiler, fixtures.platform_flags(COMMON), compiler_inputs,
                                    digest, args.print_commands, compiler_identity=identity)
         companions = windows.companions(compiler, base, compiler_inputs, digest,
-                                        args.print_commands) if windows_fixture else []
+                                        args.print_commands, compiler_identity=identity) if windows_fixture else []
         commands = []
         if command:
             commands = (fixtures.build_commands(compiler, command, item['sources'])
