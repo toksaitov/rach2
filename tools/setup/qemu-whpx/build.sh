@@ -54,6 +54,7 @@ unset PYTHONHOME PYTHONPATH
 PYTHONNOUSERSITE=1
 export PYTHONNOUSERSITE
 native_dep=$(cygpath -am "$dep")
+native_base=$(cygpath -am "$base")
 "$dep/bin/python.exe" - "$native_dep" "$resume" <<'PY'
 from pathlib import Path
 import sys
@@ -64,7 +65,7 @@ if not sys.argv[2]:
   if '/ucrt64' in text:p.write_text(text.replace('/ucrt64',root.as_posix()),newline='\n')
 print('private Python prefix:',sys.prefix)
 PY
-PKG_CONFIG=$dep/bin/pkgconf.exe
+PKG_CONFIG=$native_dep/bin/pkgconf.exe
 PKG_CONFIG_PATH=$native_dep/lib/pkgconfig
 PKG_CONFIG_LIBDIR=$PKG_CONFIG_PATH
 export PKG_CONFIG PKG_CONFIG_PATH PKG_CONFIG_LIBDIR
@@ -94,14 +95,28 @@ if test "$resume" != --resume-configure; then
     mkdir "$base/build"
 fi
 cd "$base/build"
-CC=/ucrt64/bin/gcc.exe
-CXX=/ucrt64/bin/g++.exe
+CC=$(cygpath -am /ucrt64/bin/gcc.exe)
+CXX=$(cygpath -am /ucrt64/bin/g++.exe)
 export CC CXX
-"$CC" --version
-"$dep/bin/python.exe" --version
-"$dep/bin/ninja.exe" --version
-"$source/configure" --prefix="$base/install" \
-    --python="$dep/bin/python.exe" --ninja="$dep/bin/ninja.exe" \
+"$dep/bin/python.exe" - "$CC" "$CXX" "$PKG_CONFIG" \
+    "$native_dep/bin/ninja.exe" "$native_base" <<'PY'
+from pathlib import Path
+import json,subprocess,sys
+assert Path(sys.argv[5]).is_dir(),sys.argv[5]
+rows=[];failed=False
+for path in [sys.executable]+sys.argv[1:5]:
+ try:
+  r=subprocess.run([path,'--version'],capture_output=True,text=True)
+  rows.append({'argv':[path,'--version'],'status':r.returncode,
+               'stdout':r.stdout,'stderr':r.stderr})
+  failed=failed or r.returncode!=0
+ except OSError as e:
+  rows.append({'argv':[path,'--version'],'error':str(e)});failed=True
+print(json.dumps({'native_tool_preflight':rows},indent=2),flush=True)
+assert not failed,'a native build tool could not execute'
+PY
+"$source/configure" --prefix="$native_base/install" \
+    --python="$native_dep/bin/python.exe" --ninja="$native_dep/bin/ninja.exe" \
     --target-list=i386-softmmu,x86_64-softmmu --without-default-features \
     --enable-system --disable-user --enable-whpx --enable-slirp \
     --enable-pixman --enable-tools --disable-docs --disable-guest-agent \
