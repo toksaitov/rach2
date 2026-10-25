@@ -337,14 +337,7 @@ static int command_transport(int argc, char **argv)
 static int command_route(int argc, char **argv)
 {
     struct authority_binding binding;
-    struct authority_file_id expected, requested, route, configured;
-    const char *descriptor = getenv("ETUDE_ROUTINE_ROUTE");
-    if (!descriptor || argc != 3 || authority_binding_read(&binding) ||
-        !authority_operator(binding.operator_id) || authority_file_id(binding.site, &expected) ||
-        authority_file_id(argv[2], &requested) || expected.device != requested.device ||
-        expected.inode != requested.inode || authority_file_id(binding.route, &route) ||
-        authority_file_id(descriptor, &configured) || route.device != configured.device ||
-        route.inode != configured.inode)
+    if (argc != 3 || authority_route(argv[2], getenv("ETUDE_ROUTINE_ROUTE"), &binding))
         return 125;
     return 0;
 }
