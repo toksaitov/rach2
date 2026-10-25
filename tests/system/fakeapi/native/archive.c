@@ -4,12 +4,8 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
-#ifdef _WIN32
-#include <direct.h>
-#else
 #include <dirent.h>
 #include <sys/stat.h>
-#endif
 int unpack_assets(const char *archive, const char *destination)
 {
     struct buffer tests = {0}, tools = {0}, vendor = {0};
@@ -39,33 +35,6 @@ int unpack_assets(const char *archive, const char *destination)
 }
 int remove_assets(const char *path)
 {
-#ifdef _WIN32
-    WIN32_FIND_DATA data;
-    HANDLE search;
-    struct buffer pattern = {0};
-    putsb(&pattern, path);
-    putsb(&pattern, "/*");
-    search = FindFirstFile(pattern.data, &data);
-    clear(&pattern);
-    if (search != INVALID_HANDLE_VALUE)
-        do {
-            struct buffer child = {0};
-            if (!strcmp(data.cFileName, ".") || !strcmp(data.cFileName, ".."))
-                continue;
-            putsb(&child, path);
-            putsb(&child, "/");
-            putsb(&child, data.cFileName);
-            if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
-                !(data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
-                remove_assets(child.data);
-            else
-                DeleteFile(child.data);
-            clear(&child);
-        } while (FindNextFile(search, &data));
-    if (search != INVALID_HANDLE_VALUE)
-        FindClose(search);
-    return RemoveDirectory(path) ? 0 : 1;
-#else
     struct stat st;
     DIR *dir;
     struct dirent *entry;
@@ -92,5 +61,4 @@ int remove_assets(const char *path)
     }
     closedir(dir);
     return rmdir(path) != 0;
-#endif
 }

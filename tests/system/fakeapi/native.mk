@@ -16,7 +16,9 @@ FAKEAPI_LIBS += -ldl
 endif
 ifeq ($(OS),Windows_NT)
 FAKEAPI_CC = $(ETUDECC)
-FAKEAPI_FLAGS += -D_WIN32_WINNT=0x0A00 -static
+FAKEAPI_FLAGS += -D_WIN32_WINNT=0x0A00 -static -Itools/etude/include -Itools/etude -Iutils
+FAKEAPI_SRC += $(ETUDE_WIN_FILE_SRC)
+FAKEAPI_HDR += $(wildcard tools/etude/win/*.h tools/etude/include/etude/*.h)
 FAKEAPI_LIBS = -lws2_32 -lcrypt32 -ladvapi32 -lbcrypt
 FAKEAPI_LINK = sh tools/etude/compile.sh $(FAKEAPI_CC) $@ $(HOSTCFLAGS) $(FAKEAPI_FLAGS)
 endif
