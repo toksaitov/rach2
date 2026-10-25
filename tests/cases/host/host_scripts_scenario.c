@@ -43,8 +43,9 @@ int etude_scenario(struct etude_case *c)
     size_t n = 0, i, completed = 0;
     int part = host_script_case_part(etude_case_id(c));
     int listed, ready = 0, failed = 0;
-    listed = part >= 0 && host_script_inventory(etude_artifact(c, "host-list"),
-                                                etude_artifact(c, "host-cases"), inventory, &n);
+    listed = part >= 0 && part != SCRIPT_NATIVE_PART &&
+             host_script_inventory(etude_artifact(c, "host-list"), etude_artifact(c, "host-cases"),
+                                   inventory, &n);
     etude_step(c, "listed");
     etude_assert(c, "listed", listed,
                  "all script partitions cover host.list exactly once with matching dispatch");

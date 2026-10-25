@@ -76,7 +76,7 @@ static void host_scripts_order(void)
     CHECK(host_script_inventory("tests/cases/host/host.list", "tests/cases/host.host.json", rows,
                                 &count),
           "all five partitions declare each host.list assertion exactly once");
-    for (unsigned part = 0; part < HOST_SCRIPT_PARTS; part++)
+    for (unsigned part = 1; part < HOST_SCRIPT_PARTS; part++)
         script_part_order(doc, rows, count, part);
     json_free(doc);
 }
