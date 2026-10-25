@@ -508,8 +508,8 @@ static int digests_line(char *line, struct status *k, char hex[ETUDE_DIGEST_HEX 
     if (n == 0 || line[n - 1] != '\n')
         return -1;
     line[n - 1] = '\0';
-    if (sscanf(line, "%64s %llu %llu %llu %lld %lld %n", hex, &k->size, &k->dev, &k->ino, &k->mtime,
-               &k->ctime, &at) != 6 ||
+    if (sscanf(line, "2 %64s %llu %llu %llu %lld %lld %n", hex, &k->size, &k->dev, &k->ino,
+               &k->mtime, &k->ctime, &at) != 6 ||
         at < 0 || !digests_absolute(line + at) || !store_is_digest(hex))
         return -1;
     *path = line + at;
@@ -520,7 +520,7 @@ static int digests_line(char *line, struct status *k, char hex[ETUDE_DIGEST_HEX 
  * `f`; 0, or -1. */
 static int digests_put(FILE *f, const struct status *k, const char *hex, const char *path)
 {
-    return fprintf(f, "%s %llu %llu %llu %lld %lld %s\n", hex, k->size, k->dev, k->ino, k->mtime,
+    return fprintf(f, "2 %s %llu %llu %llu %lld %lld %s\n", hex, k->size, k->dev, k->ino, k->mtime,
                    k->ctime, path) < 0
                ? -1
                : 0;
@@ -702,10 +702,8 @@ static int object_known(const struct etude_store *s, const char *digest)
  * Keep the digest of object `digest` when the object is `mine`, the file
  * this process copied and published under that name.
  *
- * Its content is what the copy wrote, and it had mode 0444 before it had a
- * name, so a later write needs its mode changed, which changes its change
- * time. The digest is therefore kept although the object has only just
- * changed.
+ * The same settling rule applies as after a read: chmod and a later write
+ * within one file-system tick can leave the object's change time unchanged.
  */
 static void object_written(const struct etude_store *s, const char *digest, const struct stat *mine)
 {
@@ -716,7 +714,8 @@ static void object_written(const struct etude_store *s, const char *digest, cons
     if (s->digests != NULL && path != NULL && stat(path, &st) == 0 && st.st_dev == mine->st_dev &&
         st.st_ino == mine->st_ino) {
         status_of(&st, &k);
-        digests_keep(s->digests, path, &k, digest);
+        if (k.ctime + SETTLE <= now_ns())
+            digests_keep(s->digests, path, &k, digest);
     }
     free(path);
 }
