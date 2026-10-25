@@ -1656,3 +1656,7 @@ The coordinator grouped an incident-file resolution, staging and commit into one
 ## QEMU helper extraction passed native paths to MSYS tar, #1147
 
 The first isolated WHPX diagnostic stopped before QEMU. The committed helper passed its native `C:\ProgramData\...` extraction directory to MSYS2 tar, which reported `Cannot open: No such file or directory`. The protected child and Linux owner ended with confirmed cleanup; the guarded recovery restored both endpoint policies and all installed files and permissions. Both CI services returned online and idle. The installer now converts both the archive and extraction directory through the existing MSYS2 cygpath before invoking tar. Package and extracted-file digests remain required. The failed setup produced no processor or halt evidence.
+
+## A diagnostic command exceeded the guest serial input rate
+
+The next isolated Windows boot reached the kernel, but its operator wrote the probe command to the serial port at once. The echoed command lost characters, and the probe never ran. The controller's zero exit recorded restoration, not a successful probe. The failed output and confirmed cleanup remain under `windows-qemu-diagnostic-0da2f8d32751-03-controls`. The retry uses the existing paced serial-input method and the same prepared probe and kernel. A diagnostic must check its own terminal result separately from its controller's cleanup result.
