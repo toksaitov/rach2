@@ -13,6 +13,7 @@
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
  * host-deps: tools/etude/posix/process.c tools/etude/posix/store.c
  * host-deps: tools/etude/capture.c tools/etude/history_json.c
+ * host-deps: tools/etude/json.c
  * host-deps: tools/etude/guest/guest.c tools/etude/guest/fixture.c
  * host-deps: tools/etude/guest/owner.c
  * host-deps: tools/etude/boot_identity.c
@@ -112,6 +113,7 @@
 #include "etude/report.h"
 #include "etude/scenario.h"
 #include "sha256.h"
+#include "json.h"
 
 #ifndef _WIN32
 extern char **environ;
@@ -2543,10 +2545,19 @@ static int write_scenario(const char *path, const struct row *r, const struct si
                           const char *manifest, const char *scratch)
 {
     char steps[1024] = "", one[160], word[64], text[8192], ports[48] = "";
-    char tools[PATH_MAX + 32] = "";
+    const char *paths[] = {manifest,     s->store_dir,   s->qemu_img,
+                           s->qemu_i686, s->qemu_x86_64, scratch};
+    struct jbuf quoted[6] = {{0}};
+    int result;
     const char *p = r->steps;
     size_t n;
 
+    for (size_t i = 0; i < sizeof paths / sizeof paths[0]; i++) {
+        struct json value = {0};
+        value.type = JSON_STRING;
+        value.string = (char *)paths[i];
+        json_canonical(&value, &quoted[i]);
+    }
     while (*p != '\0') {
         n = strcspn(p, " :");
         snprintf(word, sizeof(word), "%.*s", (int)n, p);
@@ -2562,25 +2573,28 @@ static int write_scenario(const char *path, const struct row *r, const struct si
     if (forward_row(r))
         fix_format(ports, sizeof(ports), "%u, %u, %u", forward_ports[0], forward_ports[1],
                    row_port);
-    if (overlay_row(r))
-        fix_format(tools, sizeof(tools), "\"qemu-img\": \"%s\"", s->qemu_img);
     fix_format(text, sizeof(text),
                "{\"schema_version\": 1, \"run_id\": \"test-run\", \"attempt_id\": \"test-%s\", "
-               "\"manifest\": \"%s\", \"case_id\": \"test.scenario.%s\", \"architecture\": "
-               "\"%s\", \"store\": \"%s\", \"artifacts\": {\"kernel\": \"%s\", \"disk\": \"%s\", "
+               "\"manifest\": %s, \"case_id\": \"test.scenario.%s\", \"architecture\": "
+               "\"%s\", \"store\": %s, \"artifacts\": {\"kernel\": \"%s\", \"disk\": \"%s\", "
                "\"initrd\": \"%s\", \"scanner\": \"%s\", \"invocation\": \"%s\", \"killer\": "
-               "\"%s\", \"disk2\": \"%s\", \"broken\": \"%s\"}, \"tools\": {%s}, \"site\": "
-               "{\"accel\": \"tcg\", \"boundary_lazy\": %s, \"qemu_i686\": \"%s\", "
-               "\"qemu_x86_64\": \"%s\", \"ovmf_i686\": null, \"ovmf_x86_64\": null}, "
-               "\"steps\": {%s}, \"ports\": [%s], \"cleanup_us\": 30000000, \"scratch\": \"%s\", "
+               "\"%s\", \"disk2\": \"%s\", \"broken\": \"%s\"}, \"tools\": {%s%s}, \"site\": "
+               "{\"accel\": \"tcg\", \"boundary_lazy\": %s, \"qemu_i686\": %s, "
+               "\"qemu_x86_64\": %s, \"ovmf_i686\": null, \"ovmf_x86_64\": null}, "
+               "\"steps\": {%s}, \"ports\": [%s], \"cleanup_us\": 30000000, \"scratch\": %s, "
                "\"grace_us\": %u, "
                "\"console_max_bytes\": 16777216, \"output_max_bytes\": 1048576, "
                "\"resend_us\": 200000}",
-               r->name, manifest, r->name, boundary_pair(r) ? "x86_64" : s->arch, s->store_dir,
-               s->kernel, s->disk, s->initrd, s->scanner, s->inv, s->killer, s->disk, s->broken,
-               tools, boundary_pair(r) ? "true" : "false", s->qemu_i686, s->qemu_x86_64, steps,
-               ports, scratch, r->mode != NULL ? 300000u : 5000000u);
-    return write_file(path, text, strlen(text));
+               r->name, quoted[0].data, r->name, boundary_pair(r) ? "x86_64" : s->arch,
+               quoted[1].data, s->kernel, s->disk, s->initrd, s->scanner, s->inv, s->killer,
+               s->disk, s->broken, overlay_row(r) ? "\"qemu-img\": " : "",
+               overlay_row(r) ? quoted[2].data : "", boundary_pair(r) ? "true" : "false",
+               quoted[3].data, quoted[4].data, steps, ports, quoted[5].data,
+               r->mode != NULL ? 300000u : 5000000u);
+    result = write_file(path, text, strlen(text));
+    for (size_t i = 0; i < sizeof quoted / sizeof quoted[0]; i++)
+        jbuf_free(&quoted[i]);
+    return result;
 }
 
 /* What one attempt gave. */
