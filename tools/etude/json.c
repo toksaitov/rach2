@@ -25,7 +25,7 @@ struct parser {
     int depth;
     char *err;
     size_t errlen;
-    int failed;
+    int failed, external_data;
 };
 
 const char *json_program = "etude";
@@ -146,6 +146,94 @@ static int hex4(const char *p)
     return code;
 }
 
+/* Encode one validated scalar so raw UTF-8 and escapes compare identically. */
+static void put_scalar(struct jbuf *out, unsigned code)
+{
+    char bytes[4];
+    size_t n;
+    if (code < 128) {
+        bytes[0] = (char)code;
+        n = 1;
+    } else if (code < 2048) {
+        bytes[0] = (char)(0xc0 | (code >> 6));
+        bytes[1] = (char)(0x80 | (code & 63));
+        n = 2;
+    } else if (code < 65536) {
+        bytes[0] = (char)(0xe0 | (code >> 12));
+        bytes[1] = (char)(0x80 | ((code >> 6) & 63));
+        bytes[2] = (char)(0x80 | (code & 63));
+        n = 3;
+    } else {
+        bytes[0] = (char)(0xf0 | (code >> 18));
+        bytes[1] = (char)(0x80 | ((code >> 12) & 63));
+        bytes[2] = (char)(0x80 | ((code >> 6) & 63));
+        bytes[3] = (char)(0x80 | (code & 63));
+        n = 4;
+    }
+    jbuf_put(out, bytes, n);
+}
+
+static int scalar(unsigned code)
+{
+    return code && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff);
+}
+
+static int read_utf8(struct parser *ps, struct jbuf *out)
+{
+    const unsigned char *p = (const unsigned char *)ps->p;
+    unsigned first = p[0], code, n, minimum;
+    if (first >= 0xc2 && first <= 0xdf) {
+        n = 2;
+        minimum = 128;
+        code = first & 31;
+    } else if (first >= 0xe0 && first <= 0xef) {
+        n = 3;
+        minimum = 2048;
+        code = first & 15;
+    } else if (first >= 0xf0 && first <= 0xf4) {
+        n = 4;
+        minimum = 65536;
+        code = first & 7;
+    } else
+        goto invalid;
+    if ((size_t)(ps->end - ps->p) < n)
+        goto invalid;
+    for (unsigned i = 1; i < n; i++) {
+        if ((p[i] & 0xc0) != 0x80)
+            goto invalid;
+        code = (code << 6) | (p[i] & 63);
+    }
+    if (code < minimum || !scalar(code))
+        goto invalid;
+    jbuf_put(out, ps->p, n);
+    ps->p += n;
+    return 0;
+invalid:
+    fail(ps, "external data has invalid UTF-8");
+    return -1;
+}
+
+static int escaped_scalar(struct parser *ps, struct jbuf *out, unsigned code)
+{
+    size_t length = 5;
+    if (code >= 0xd800 && code <= 0xdbff) {
+        int low;
+        if (ps->end - ps->p < 11 || ps->p[5] != '\\' || ps->p[6] != 'u' ||
+            (low = hex4(ps->p + 7)) < 0xdc00 || low > 0xdfff)
+            goto invalid;
+        code = 0x10000 + ((code - 0xd800) << 10) + (unsigned)low - 0xdc00;
+        length = 11;
+    }
+    if (!scalar(code))
+        goto invalid;
+    put_scalar(out, code);
+    ps->p += length;
+    return 0;
+invalid:
+    fail(ps, "external data escapes an invalid Unicode scalar");
+    return -1;
+}
+
 /** Reads one escape after its backslash into `out`; returns 0 or -1. */
 static int read_escape(struct parser *ps, struct jbuf *out)
 {
@@ -169,10 +257,12 @@ static int read_escape(struct parser *ps, struct jbuf *out)
         fail(ps, "a string has an escape JSON does not define");
         return -1;
     }
-    if (code == 0 || code > 0x7f) {
+    if (code == 0 || (!ps->external_data && code > 0x7f)) {
         fail(ps, "a string escapes a NUL or a character outside ASCII");
         return -1;
     }
+    if (ps->external_data)
+        return escaped_scalar(ps, out, (unsigned)code);
     c = (char)code;
     jbuf_put(out, &c, 1);
     ps->p += 5;
@@ -189,6 +279,13 @@ static char *read_string(struct parser *ps)
     while (ps->p < ps->end && *ps->p != '"') {
         unsigned char c = (unsigned char)*ps->p;
 
+        if (c > 0x7f && ps->external_data) {
+            if (read_utf8(ps, &out)) {
+                jbuf_free(&out);
+                return NULL;
+            }
+            continue;
+        }
         if (c < 0x20 || c > 0x7f) {
             fail(ps, c < 0x20 ? "a string has a control character" : "a byte outside ASCII");
             jbuf_free(&out);
@@ -244,6 +341,57 @@ static struct json *read_integer(struct parser *ps)
     v = new_value(ps, JSON_INTEGER);
     v->integer = negative ? -value : value;
     return v;
+}
+
+static int data_digits(struct parser *ps, const char **cursor)
+{
+    const char *at = *cursor;
+    if (at == ps->end || *at < '0' || *at > '9')
+        return -1;
+    do {
+        at++;
+    } while (at < ps->end && *at >= '0' && *at <= '9');
+    *cursor = at;
+    return 0;
+}
+
+/* External registries retain decimal tokens; contracts still allow integers. */
+static struct json *read_data_number(struct parser *ps)
+{
+    const char *start = ps->p, *at = start;
+    if (at < ps->end && *at == '-')
+        at++;
+    if (at == ps->end || *at < '0' || *at > '9')
+        goto invalid;
+    if (*at == '0')
+        at++;
+    else if (data_digits(ps, &at))
+        goto invalid;
+    int decimal = 0;
+    if (at < ps->end && *at == '.') {
+        decimal = 1;
+        at++;
+        if (data_digits(ps, &at))
+            goto invalid;
+    }
+    if (at < ps->end && (*at == 'e' || *at == 'E')) {
+        decimal = 1;
+        at++;
+        if (at < ps->end && (*at == '+' || *at == '-'))
+            at++;
+        if (data_digits(ps, &at))
+            goto invalid;
+    }
+    if (!decimal)
+        return read_integer(ps);
+    struct json *value = new_value(ps, JSON_NUMBER);
+    value->string = json_alloc((size_t)(at - start) + 1);
+    memcpy(value->string, start, (size_t)(at - start));
+    ps->p = at;
+    return value;
+invalid:
+    fail(ps, "external data has an invalid JSON number");
+    return NULL;
 }
 
 static struct json *read_value(struct parser *ps);
@@ -398,7 +546,7 @@ static struct json *read_value(struct parser *ps)
     case 'n':
         return read_word(ps, "null", JSON_NULL, 0);
     default:
-        return read_integer(ps);
+        return ps->external_data ? read_data_number(ps) : read_integer(ps);
     }
 }
 
@@ -410,32 +558,40 @@ static struct json *read_value(struct parser *ps)
  * json_free, or -1 with the first error written to `err` as `line N: WHAT`.
  * Anything but white space after the document is an error.
  */
-int json_parse(const char *text, size_t len, int first_line, struct json **out, char *err,
-               size_t errlen)
+static int parse_document(struct parser *ps, struct json **out)
 {
-    struct parser ps;
-    struct json *v;
-
-    ps.p = text;
-    ps.end = text + len;
-    ps.line = first_line;
-    ps.depth = 0;
-    ps.err = err;
-    ps.errlen = errlen;
-    ps.failed = 0;
     *out = NULL;
-    v = read_value(&ps);
-    if (v == NULL) {
+    struct json *v = read_value(ps);
+    if (!v)
         return -1;
-    }
-    skip_space(&ps);
-    if (ps.p < ps.end) {
-        fail(&ps, "text follows the document");
+    skip_space(ps);
+    if (ps->p < ps->end) {
+        fail(ps, "text follows the document");
         json_free(v);
         return -1;
     }
     *out = v;
     return 0;
+}
+
+int json_parse(const char *text, size_t len, int first_line, struct json **out, char *err,
+               size_t errlen)
+{
+    struct parser ps = {
+        .p = text, .end = text + len, .line = first_line, .err = err, .errlen = errlen};
+    return parse_document(&ps, out);
+}
+
+int json_parse_data(const char *text, size_t len, int first_line, struct json **out, char *err,
+                    size_t errlen)
+{
+    struct parser ps = {.p = text,
+                        .end = text + len,
+                        .line = first_line,
+                        .err = err,
+                        .errlen = errlen,
+                        .external_data = 1};
+    return parse_document(&ps, out);
 }
 
 /** Frees `v` and every value inside it. */
@@ -489,6 +645,7 @@ int json_equal(const struct json *a, const struct json *b)
     }
     switch (a->type) {
     case JSON_STRING:
+    case JSON_NUMBER:
         return strcmp(a->string, b->string) == 0;
     case JSON_ARRAY:
         for (i = 0; i < a->count; i++) {
@@ -605,6 +762,9 @@ void json_canonical(const struct json *v, struct jbuf *b)
         snprintf(number, sizeof number, "%lld", v->integer);
         jbuf_puts(b, number);
         break;
+    case JSON_NUMBER:
+        jbuf_puts(b, v->string);
+        break;
     case JSON_STRING:
         put_string(b, v->string);
         break;
@@ -627,7 +787,8 @@ void json_canonical(const struct json *v, struct jbuf *b)
 /** Returns the JSON Schema name of `type`. */
 const char *json_type_name(enum json_type type)
 {
-    static const char *const names[] = {"null", "boolean", "integer", "string", "array", "object"};
+    static const char *const names[] = {"null",  "boolean", "integer", "string",
+                                        "array", "object",  "number"};
 
     return names[type];
 }
