@@ -197,16 +197,62 @@ def checks(group, arch, base):
             yield item
 
 
-def valid_previous(old, item, commands):
+def compiler_paths(command):
+    """Compare GNU compiler operands through their immutable store links."""
+    result = []
+    for index, word in enumerate(command):
+        prefix, path = '', word
+        for option in ('--sysroot=', '-B', '-L'):
+            if word.startswith(option):
+                prefix, path = option, word[len(option):]
+                break
+        if (index == 0 or prefix) and Path(path).is_absolute():
+            word = prefix + str(Path(path).resolve(strict=True))
+        result.append(word)
+    return result
+
+
+def previous_inventory(args, identity):
+    """Use the local inventory first, then a previous GNU store output."""
+    candidates = [(Path(args.output), None)]
+    if args.previous:
+        if not args.gnu or Path(args.output).is_absolute():
+            raise ValueError('a previous tree requires a relative GNU inventory')
+        candidates.append((Path(args.previous) / args.output, Path(args.previous)))
+    for path, origin in candidates:
+        try:
+            old = json.loads(path.read_text())
+            compiler, current = dict(old['compiler']), dict(identity)
+            if origin:
+                compiler['command'] = compiler_paths(compiler['command'])
+                current['command'] = compiler_paths(current['command'])
+            if compiler != current:
+                continue
+            for check in old['checks']:
+                check['inputs'] = [decoded_input(value) for value in check['inputs']]
+            return {x['assertion_id']: x for x in old['checks']}, origin
+        except (OSError, KeyError, TypeError, ValueError):
+            continue
+    return {}, None
+
+
+def valid_previous(old, item, commands, origin=None):
     """Reuse a prepared binary only while its compiler, inputs and bytes match."""
-    if not old or old.get('command') != commands[-1] or \
-            old.get('compile_commands', []) != commands[:-1]:
+    if not old:
         return False
     try:
-        return old['sha256'] == digest(Path(item['program'])) and all(
+        previous = [*old.get('compile_commands', []), old['command']]
+        expected = commands
+        if origin:
+            previous = [compiler_paths(argv) for argv in previous]
+            expected = [compiler_paths(argv) for argv in expected]
+        program = Path(item['program'])
+        if origin:
+            program = origin / input_path(program)
+        return previous == expected and old['sha256'] == digest(program) and all(
             digest(Path(value['path'])) == value['sha256']
             for value in [*old['inputs'], *old.get('compiler_inputs', [])])
-    except (KeyError, OSError):
+    except (KeyError, OSError, TypeError, ValueError):
         return False
 
 
@@ -244,6 +290,18 @@ def compiler_inputs(compiler, command, sources, external=None, include_system=Fa
     return dependencies
 
 
+def current_dependencies(old, compiler, command, sources):
+    """Reject reuse when a new header changes the compiler's include search."""
+    external = {}
+    current = compiler_inputs(compiler, command, sources, external)
+    recorded = {value['path']: value['sha256'] for value in old['inputs']}
+    for value in old.get('compiler_inputs', []):
+        recorded[str(Path(value['path']).resolve(strict=True))] = value['sha256']
+    return all(recorded.get(path) == digest(Path(path)) for path in current) and all(
+        recorded.get(str(Path(path).resolve(strict=True))) == value['sha256']
+        for path, value in external.items())
+
+
 def compiled_interpreter(compiler, command, sources, candidates):
     """Inspect active C code with the compiler's actual defines and includes."""
     wanted = {path.resolve(): path for path in candidates}
@@ -276,15 +334,7 @@ def prepare(args):
     identity = compiler_record(compiler) if not args.print_commands else None
     if not args.print_commands:
         base.mkdir(parents=True, exist_ok=True)
-    previous = {}
-    try:
-        old = json.loads(Path(args.output).read_text())
-        if old.get('compiler') == identity:
-            for check in old['checks']:
-                check['inputs'] = [decoded_input(value) for value in check['inputs']]
-            previous = {x['assertion_id']: x for x in old['checks']}
-    except (OSError, KeyError, ValueError):
-        pass
+    previous, origin = previous_inventory(args, identity) if not args.print_commands else ({}, None)
     inventory = []
     for item in checks(args.group, args.arch, base):
         if args.only and item['assertion_id'] != args.only:
@@ -340,9 +390,21 @@ def prepare(args):
             continue
         if command:
             old = previous.get(item['assertion_id'])
-            if valid_previous(old, item, commands):
+            reuse = valid_previous(old, item, commands, origin)
+            if reuse and args.gnu:
+                reuse = current_dependencies(old, compiler, command, item['sources'])
+            if reuse:
+                if origin:
+                    source, target = origin / item['program'], Path(item['program'])
+                    shutil.copyfile(source, target)
+                    target.chmod((source.stat().st_mode & 0o777) | 0o200)
+                    if digest(target) != old['sha256']:
+                        raise ValueError('the previous program changed during its copy')
                 item['sha256'], item['inputs'] = old['sha256'], old['inputs']
                 item['compiler_inputs'] = old.get('compiler_inputs', [])
+                if origin:
+                    item['compiler_inputs'] = [dict(value, path=str(Path(value['path']).resolve(strict=True)))
+                                               for value in item['compiler_inputs']]
                 data_inputs = {value['path']: value for value in item['inputs']}
                 for data in item.get('data', []):
                     data_inputs[data] = dict(path=data, sha256=digest(Path(data)))
@@ -409,6 +471,7 @@ def main():
     parser.add_argument('--gnu', action='store_true', help='prepare the declared GNU helper checks')
     parser.add_argument('--print-commands', action='store_true')
     parser.add_argument('--only', help='prepare one check for a component build')
+    parser.add_argument('--previous', help='reuse verified programs from a previous GNU prepared tree')
     parser.add_argument('group', choices=GROUPS)
     parser.add_argument('output')
     args = parser.parse_args()

@@ -87,12 +87,16 @@ cd "$TREE"
 export HOST_TEST_PLATFORM=posix
 export HOST_TEST_PREPARED_TOOLS="$TOOLS"
 export CC="$CC --sysroot=$GNU_OUT/root -B$SAN/compiler/ -L$SAN/root/usr/lib"
+set --
+if [ -n "${RACH2_HOST_CHECKS_PREVIOUS:-}" ]; then
+    set -- --previous "$RACH2_HOST_CHECKS_PREVIOUS/tree"
+fi
 for arch in i686 x86_64; do
     case $arch in i686) base=build ;; *) base=build/x86_64 ;; esac
-    python3 -B tests/cases/host/prepare.py --gnu --arch "$arch" tests "$base/tests/host-suite/tests.inventory.json"
+    python3 -B tests/cases/host/prepare.py --gnu "$@" --arch "$arch" tests "$base/tests/host-suite/tests.inventory.json"
 done
 for group in etude checkers fuzz; do
-    python3 -B tests/cases/host/prepare.py --gnu "$group" "build/tests/host-suite/$group.inventory.json"
+    python3 -B tests/cases/host/prepare.py --gnu "$@" "$group" "build/tests/host-suite/$group.inventory.json"
 done
 make --no-print-directory -C "$REPO" -f tests/cases/host/products.mk \
     CC="$GNU_OUT/cross/bin/$GNU_TARGET-gcc --sysroot=$GNU_OUT/root" \
