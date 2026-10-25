@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'etude'))
 from preparation_paths import filesystem_path, native_path
 from preparation_import import source, describe, verify
 from routine_remote import Remote, require
+from routine_entry import phase_inputs, request_matches, validate_selection
 from routine_pack import pack
 
 
@@ -39,6 +40,7 @@ def command(argv, **kwargs):
 class Route:
     def __init__(self, args):
         self.args = args
+        self.preparation = phase_inputs(args.purpose)
         self.tree, self.out = filesystem_path(args.tree), filesystem_path(args.out)
         self.config_path = filesystem_path(args.config)
         self.config = json.loads(self.config_path.read_text())
@@ -63,7 +65,7 @@ class Route:
         if admitted:
             transport['_transport_admission'] = dict(grant=grant, result=transport_result,
                 claim=a.run + ':producer:prepare',
-                seconds=min({'push': 270, 'ci': 540, 'release': 13800}[a.purpose],
+                seconds=min({'push': 270, 'ci': 540, 'release': 13800, 'phase_first_run': 86400}[a.purpose],
                             int(p['policy']['seconds'])))
         remote = Remote(transport, a.run + ':' + label, self.work / (label + '.wire'))
         success = False
@@ -81,7 +83,7 @@ class Route:
                     'producer environment is not fixed strings')
             remote.put('operation.json', json.dumps(dict(action=action, args=args,
                        producer=p, mode=self.config['mode'], run=a.run, commit=a.commit,
-                       purpose=a.purpose, transport_admitted=admitted,
+                       purpose=a.purpose, clean=self.preparation['clean'], transport_admitted=admitted,
                        transport_result=transport_result)).encode())
             launcher = b'#!/bin/sh\nset -eu\nexec "$1" "$2" operation.json\n'
             remote.put('remote.sh', launcher, '0755')
@@ -173,6 +175,10 @@ class Route:
                 'producer metadata does not bind this invocation')
         require(before['machine_id'] == after['machine_id'] and before['boot_id'] == after['boot_id'],
                 'physical clock changed during production')
+        if self.preparation['clean']:
+            condition = metadata['receipt'].get('conditioning', {})
+            require(condition.get('inhouse') == 'clean' and condition.get('backend') == 'ordinary' and
+                    condition.get('provenance') is None, 'fresh producer did not perform clean ordinary preparation')
         if self.config['mode'] == 'windows-import':
             require((produced / 'ledger-empty').read_bytes() == b'etude-ledger 1\n', 'Linux cleanup is not empty')
             native_tree = self.config['producer']['unc_tree_root'].rstrip('/') + '/' + self.args.commit
@@ -217,8 +223,17 @@ class Route:
         return path
 
     def prepare(self):
+        if self.preparation['selection_export']:
+            allocation = self.out / 'routine.selection.export.json'
+            command([self.args.etude, 'run', '-N', '-J', native_path(allocation, strict=False),
+                     '-t', self.args.tree, '-a', self.args.arches, '-A', self.args.accel,
+                     *self.args.selection])
+            validate_selection(self.preparation['selection_export']['path'], allocation)
         importer = self.produce()
         environment = dict(os.environ, ETUDE_PREPARATION_IMPORT=native_path(importer))
+        environment.pop('ETUDE_PREPARATION_CLEAN', None)
+        if self.preparation['clean']:
+            environment['ETUDE_PREPARATION_CLEAN'] = '1'
         if self.config['mode'] == 'windows-import':
             environment.update(ETUDE_ROUTINE_GRANT=native_path(self.out / 'routine.grant.json'),
                                ETUDE_ROUTINE_UPSTREAM=native_path(self.out / 'routine.upstream.json'),
@@ -234,7 +249,8 @@ class Route:
         env_program = self.config['consumer']['env']
         shell = self.config['consumer']['shell']
         claim = self.args.run + ':prepare'
-        bound = {'push': 270, 'ci': 540, 'release': 13800}[self.args.purpose]
+        bound = min({'push': 270, 'ci': 540, 'release': 13800,
+                     'phase_first_run': 86400}[self.args.purpose], int(policy['seconds']))
         environment.update(ETUDE_SITE=native_path(projection),
                            ETUDE_PREPARATION_GRANT=native_path(self.out / 'preparation.grant.json'))
         self.clock('consumer-start.json')
@@ -256,8 +272,8 @@ class Route:
             stream.write('\n'.join('endpoint linux' if line.startswith('endpoint ') else line
                                    for line in policy.splitlines()) + '\n')
         request = json.loads((self.out / 'routine.request.json').read_text())
-        require(request['run'] == self.args.run and request['commit'] == self.args.commit,
-                'direct request differs from physical invocation')
+        request_matches(request, self.args.purpose, self.args.commit, self.args.run,
+                        self.args.arches, self.args.accel, self.args.selection, self.preparation)
         # The Windows and Linux spellings must designate the same existing
         # shared NTFS directory. An explicit round trip is part of setup.
         expected = self.config['physical']['linux_output_root'].rstrip('/')

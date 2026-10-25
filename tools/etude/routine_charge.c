@@ -500,7 +500,8 @@ static struct json *completion_document(const char *path)
 }
 int etude_routine_work_us(const char *path, const char *purpose, uint64_t *work_us)
 {
-    if (!same(purpose, "push") && !same(purpose, "ci") && !same(purpose, "release"))
+    if (!same(purpose, "push") && !same(purpose, "ci") && !same(purpose, "release") &&
+        !same(purpose, "phase_first_run"))
         return -1;
     struct json *doc = completion_document(path);
     const struct json *cls = json_member(json_member(doc, "classes"), purpose);

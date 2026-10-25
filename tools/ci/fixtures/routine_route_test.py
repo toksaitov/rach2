@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import sys
 import subprocess
+import shlex
 from contextlib import redirect_stdout
 import tempfile
 import unittest
@@ -17,6 +18,10 @@ import routine_entry
 import routine_jobs
 import routine_pack
 import routine_remote
+import routine_route
+import routine_producer
+import routine_remote_stage
+from types import SimpleNamespace
 
 
 def reference(path, location=None):
@@ -228,6 +233,325 @@ class RouteTests(unittest.TestCase):
                 self.assertIn(' admit -i ', command)
                 self.assertIn(' authority transport /site /ledger /locks 4,5,6 60 ', command)
                 remote.abandon()
+
+    def allocation(self, path):
+        raw = json.dumps(dict(schema_version=1, architecture='both', suites=[dict(suite='fixture',
+            architecture='x86_64', serial=False, stops=False, cases=[dict(case_id='fixture.case',
+            architecture='x86_64', repetitions=1)])], stop_on_fail=False)) + '\n'
+        doc = dict(schema_version=1, selection_bytes=raw,
+                   selection_size_bytes=len(raw), selection_sha256=hashlib.sha256(raw.encode()).hexdigest(),
+                   items=[dict(case_id='fixture.case', architecture='x86_64', repetition=0)])
+        path.write_text(json.dumps(doc))
+        return doc
+
+    def test_first_measurement_inputs(self):
+        with tempfile.TemporaryDirectory(prefix='rach2-routine.') as name:
+            path = Path(name) / 'selection.json'
+            doc = self.allocation(path)
+            with patch.dict(os.environ, dict(ETUDE_PHASE_SELECTION_EXPORT=str(path)), clear=True):
+                retained = routine_entry.phase_inputs('phase_first_run')
+                self.assertFalse(retained['clean'])
+                self.assertEqual(retained['selection_export']['sha256'], reference(path)['sha256'])
+                os.environ['ETUDE_PREPARATION_CLEAN'] = '1'
+                self.assertTrue(routine_entry.phase_inputs('phase_first_run')['clean'])
+                for purpose in ('push', 'ci', 'release'):
+                    with self.subTest(purpose=purpose), self.assertRaises(ValueError):
+                        routine_entry.phase_inputs(purpose)
+                os.environ['ETUDE_PREPARATION_CLEAN'] = '0'
+                with self.assertRaises(ValueError):
+                    routine_entry.phase_inputs('phase_first_run')
+                os.environ.pop('ETUDE_PREPARATION_CLEAN')
+                doc['selection_sha256'] = '0' * 64
+                path.write_text(json.dumps(doc))
+                with self.assertRaisesRegex(ValueError, 'bytes/hash'):
+                    routine_entry.phase_inputs('phase_first_run')
+            with patch.dict(os.environ, {}, clear=True):
+                with self.assertRaises(ValueError):
+                    routine_entry.phase_inputs('phase_first_run')
+                self.assertEqual(routine_entry.phase_inputs('ci'), dict(clean=False, selection_export=None))
+                self.assertEqual(routine_entry.phase_inputs('release'), dict(clean=True, selection_export=None))
+                os.environ['ETUDE_PHASE_SELECTION_EXPORT'] = ''
+                with self.assertRaises(ValueError):
+                    routine_entry.phase_inputs('ci')
+
+    def test_current_allocator_must_match_preallocation(self):
+        with tempfile.TemporaryDirectory(prefix='rach2-routine.') as name:
+            expected, actual = (Path(name) / leaf for leaf in ('expected', 'actual'))
+            doc = self.allocation(expected)
+            actual.write_bytes(expected.read_bytes())
+            routine_entry.validate_selection(expected, actual)
+            doc['items'][0]['repetition'] = 1
+            actual.write_text(json.dumps(doc))
+            with self.assertRaisesRegex(ValueError, 'current public allocator'):
+                routine_entry.validate_selection(expected, actual)
+
+    def test_wsl_first_measurement_round_trip(self):
+        with tempfile.TemporaryDirectory(prefix='rach2-routine.') as name:
+            out = Path(name)
+            allocated = out / 'allocated.json'
+            self.allocation(allocated)
+            route = out / 'route.json'
+            route.write_text('{}')
+            config = dict(mode='wsl-native', physical=dict(etude='/etude', python='/python',
+                          wsl='/wsl', preparation_path='/prep', runtime_path='/runtime'),
+                          producer=dict(distribution='Ubuntu', user='testing', environment={}))
+            argv = ['entry', 'phase_first_run', '/tree', str(out), 'both', 'sample-01',
+                    '/site', '/etude', 'kvm', 'all']
+            environment = dict(ETUDE_ROUTINE_ROUTE=str(route), ETUDE_PHASE_SELECTION_EXPORT=str(allocated),
+                               ETUDE_PREPARATION_CLEAN='1',
+                               WSLENV='ETUDE_PHASE_SELECTION_EXPORT/p:ETUDE_PREPARATION_CLEAN/u:KEEP')
+            with patch.dict(os.environ, environment, clear=True), \
+                    patch.object(routine_entry, 'read_config', return_value=config), \
+                    patch.object(routine_entry.subprocess, 'check_output', return_value='a' * 40), \
+                    patch.object(routine_entry, 'wsl_native', side_effect=str), \
+                    patch.object(routine_entry, 'native_path', side_effect=str), \
+                    patch.object(routine_entry, 'execute', side_effect=StopIteration) as launch:
+                with patch.object(routine_entry.sys, 'platform', 'linux'), self.assertRaises(StopIteration):
+                    routine_entry.main(argv)
+                self.assertIn('ETUDE_PHASE_SELECTION_EXPORT', os.environ['WSLENV'].split(':'))
+                self.assertIn('ETUDE_PREPARATION_CLEAN', os.environ['WSLENV'].split(':'))
+                self.assertEqual(os.environ['WSLENV'].split(':').count('ETUDE_PHASE_SELECTION_EXPORT'), 1)
+                self.assertNotIn('ETUDE_PHASE_SELECTION_EXPORT/p', os.environ['WSLENV'].split(':'))
+                self.assertNotIn('ETUDE_PREPARATION_CLEAN/u', os.environ['WSLENV'].split(':'))
+                self.assertIn('KEEP', os.environ['WSLENV'].split(':'))
+                request = json.loads((out / 'routine.request.json').read_text())
+                self.assertEqual(request['selection_export_linux'], str(allocated))
+                self.assertEqual(request['preparation']['selection_export']['sha256'], reference(allocated)['sha256'])
+                with patch.object(routine_entry.sys, 'platform', 'win32'), self.assertRaises(StopIteration):
+                    routine_entry.main(argv)
+                command = launch.call_args.args[1]
+                self.assertIn('ETUDE_PHASE_SELECTION_EXPORT=' + str(allocated), command)
+                self.assertIn('ETUDE_PREPARATION_CLEAN=1', command)
+                request['selection'] = ['host']
+                (out / 'routine.request.json').write_text(json.dumps(request))
+                with patch.object(routine_entry.sys, 'platform', 'win32'), self.assertRaisesRegex(ValueError, 'changed'):
+                    routine_entry.main(argv)
+
+    def test_first_measurement_consumer_preflight(self):
+        with tempfile.TemporaryDirectory(prefix='rach2-routine.') as name:
+            out = Path(name)
+            allocated = out / 'allocated.json'
+            self.allocation(allocated)
+            site = out / 'site'
+            site.write_text('etude-site 2\nendpoint windows\nlocks /locks\nledger /ledger\n'
+                            'capacity 8000,20000000000,50000000000\nseconds 1234\n')
+            route = object.__new__(routine_route.Route)
+            route.args = SimpleNamespace(etude='/etude', tree='/tree', out=str(out), arches='both',
+                run='sample-01', purpose='phase_first_run', accel='whpx', selection=['all'], site=str(site))
+            route.tree, route.out = Path('/tree'), out
+            route.preparation = dict(clean=True, selection_export=dict(path=str(allocated)))
+            route.config = dict(mode='windows-import', consumer=dict(env='/env', shell='/shell',
+                                account='fixture', preparation_resources='1000,2000,3000'))
+            calls = []
+            def command(argv, **kwargs):
+                calls.append((argv, kwargs))
+                if argv[1:4] == ['run', '-N', '-J']:
+                    Path(argv[4]).write_bytes(allocated.read_bytes())
+            def produce():
+                self.assertEqual(len(calls), 1, 'public allocation precedes fresh production')
+                return out / 'import.json'
+            with patch.object(routine_route, 'command', side_effect=command), \
+                    patch.object(routine_route, 'native_path', side_effect=lambda p, **kw: str(p)), \
+                    patch.object(route, 'clock'), patch.object(route, 'produce', side_effect=produce):
+                route.prepare()
+            argv, options = calls[-1]
+            self.assertEqual(argv[argv.index('shared') + 3], '1234')
+            self.assertEqual(options['env']['ETUDE_PREPARATION_CLEAN'], '1')
+            self.assertIn('phase_first_run', argv)
+            self.assertIn('/tree/tools/ci/native_prepare.sh', argv)
+            self.assertEqual(argv[-1], 'all')
+
+            def wrong_allocation(argv, **kwargs):
+                doc = json.loads(allocated.read_text())
+                doc['items'][0]['case_id'] = 'fixture.other'
+                Path(argv[4]).write_text(json.dumps(doc))
+            with patch.object(routine_route, 'command', side_effect=wrong_allocation), \
+                    patch.object(routine_route, 'native_path', side_effect=lambda p, **kw: str(p)), \
+                    patch.object(route, 'produce', side_effect=AssertionError('production must not start')):
+                with self.assertRaisesRegex(ValueError, 'current public allocator'):
+                    route.prepare()
+
+    def test_sequence_preserves_only_declared_first_clean(self):
+        if sys.platform not in ('linux', 'darwin'):
+            self.skipTest('native POSIX shell fixture')
+        tree = Path(__file__).resolve().parents[3]
+        with tempfile.TemporaryDirectory(prefix='rach2-routine.') as name:
+            out = Path(name)
+            for leaf in ('locks', 'ledger'):
+                (out / leaf).mkdir()
+            (out / 'ledger/claims').write_text('etude-ledger 1\n')
+            tool = out / 'etude'
+            tool.write_text('#!/bin/sh\nprintf "%s\\n" "${ETUDE_PREPARATION_CLEAN-unset}" "$@" > "$CAPTURE"\n')
+            tool.chmod(0o755)
+            site = out / 'site'
+            endpoint = 'macos' if sys.platform == 'darwin' else 'linux'
+            site.write_text(f'etude-site 2\nendpoint {endpoint}\nlauncher {tool}\netude {tool}\n'
+                f'locks {out}/locks\nledger {out}/ledger\ncapacity 8000,20000000000,50000000000\n'
+                'wait 30\nseconds 86400\n')
+            allocated = out / 'allocated.json'
+            self.allocation(allocated)
+            for purpose, clean, expected in (('phase_first_run', None, 'unset'),
+                    ('phase_first_run', '1', '1'), ('release', None, '1'), ('ci', '1', 'unset')):
+                env = dict(os.environ, CAPTURE=str(out / 'captured'), JOBS='2')
+                for key in ('ETUDE_ROUTINE_ROUTE', 'ETUDE_ADMITTED', 'ETUDE_PHASE_SELECTION_EXPORT',
+                            'ETUDE_PREPARATION_CLEAN', 'ETUDE_REFERENCE', 'ETUDE_PREPARATION_IMPORT'):
+                    env.pop(key, None)
+                if purpose == 'phase_first_run':
+                    env['ETUDE_PHASE_SELECTION_EXPORT'] = str(allocated)
+                if clean is not None:
+                    env['ETUDE_PREPARATION_CLEAN'] = clean
+                result = subprocess.run(['/bin/sh', str(tree / 'tools/ci/native_sequence.sh'), purpose,
+                    str(tree), str(out), 'both', 'sample', str(site), str(tool), 'tcg', 'all'],
+                    env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                captured = (out / 'captured').read_text().splitlines()
+                self.assertEqual(captured[0], expected)
+                self.assertEqual(captured[1:3], ['observe', 'sequence'])
+                self.assertIn('sample:prepare', captured)
+
+            for purpose, clean, export in (('ci', None, ''), ('phase_first_run', '0', str(allocated))):
+                if (out / 'captured').exists():
+                    (out / 'captured').unlink()
+                env['ETUDE_PHASE_SELECTION_EXPORT'] = export
+                env.pop('ETUDE_PREPARATION_CLEAN', None)
+                if clean is not None:
+                    env['ETUDE_PREPARATION_CLEAN'] = clean
+                result = subprocess.run(['/bin/sh', str(tree / 'tools/ci/native_sequence.sh'), purpose,
+                    str(tree), str(out), 'both', 'sample', str(site), str(tool), 'tcg', 'all'],
+                    env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertFalse((out / 'captured').exists())
+
+    def test_native_preallocation_precedes_remote_production(self):
+        if sys.platform not in ('linux', 'darwin'):
+            self.skipTest('native POSIX shell fixture')
+        tree = Path(__file__).resolve().parents[3]
+        with tempfile.TemporaryDirectory(prefix='rach2-routine.') as name:
+            base = Path(name)
+            bins = base / 'bin'
+            bins.mkdir()
+            allocated, actual = base / 'allocated', base / 'actual'
+            doc = self.allocation(allocated)
+            tool = bins / 'etude'
+            tool.write_text('#!/bin/sh\n[ "$1/$2/$3" = run/-N/-J ] || exit 91\n'
+                            'printf "allocation\\n" >> "$CAPTURE"\ncp "$ACTUAL_EXPORT" "$4"\n')
+            tool.chmod(0o755)
+            for leaf in ('qemu-system-i386', 'qemu-system-x86_64'):
+                (bins / leaf).symlink_to(tool)
+            python = bins / 'python3'
+            python.write_text('#!/bin/sh\ncase $1 in */routine_route.py) '
+                'printf "ensure\\n" >> "$CAPTURE"; exit 37 ;; esac\nexec ' +
+                shlex.quote(sys.executable) + ' "$@"\n')
+            python.chmod(0o755)
+            site = base / 'site'
+            site.write_text('fixture policy\n')
+            for matches in (True, False):
+                out = base / ('valid' if matches else 'changed')
+                out.mkdir()
+                (out / 'outer-load.jsonl').write_text('{}\n')
+                if not matches:
+                    doc['items'][0]['case_id'] = 'fixture.other'
+                actual.write_text(json.dumps(doc))
+                capture = out / 'capture'
+                env = dict(os.environ, PATH=str(bins) + os.pathsep + os.environ['PATH'],
+                    ETUDE_ADMITTED=str(site), ETUDE_PHASE_SELECTION_EXPORT=str(allocated),
+                    ETUDE_ROUTINE_ENSURE='/fixed/route', ACTUAL_EXPORT=str(actual), CAPTURE=str(capture))
+                for key in ('ETUDE_PHYSICAL_TRACE', 'ETUDE_PHYSICAL_STOP_REQUEST',
+                            'ETUDE_PREPARATION_IMPORT', 'ETUDE_PREPARATION_EXPORT'):
+                    env.pop(key, None)
+                result = subprocess.run(['/bin/sh', str(tree / 'tools/ci/native_prepare.sh'),
+                    'phase_first_run', str(tree), str(out), 'both', 'sample', str(site), str(tool),
+                    'tcg', 'all'], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                self.assertEqual(result.returncode, 37 if matches else 2, result.stderr)
+                self.assertEqual(capture.read_text().splitlines(),
+                                 ['allocation', 'ensure'] if matches else ['allocation'])
+                self.assertFalse((out / 'prepare.record').exists())
+
+    def test_native_producer_preserves_clean_declaration(self):
+        if sys.platform not in ('linux', 'darwin'):
+            self.skipTest('native POSIX shell fixture')
+        tree = Path(__file__).resolve().parents[3]
+        commit = subprocess.check_output(['git', '-C', str(tree), 'rev-parse', 'HEAD'], text=True).strip()
+        with tempfile.TemporaryDirectory(prefix='rach2-routine.') as name:
+            out = Path(name)
+            tool = out / 'etude'
+            tool.write_text('#!/bin/sh\nprintf "%s\\n" "${ETUDE_PREPARATION_CLEAN-unset}" '
+                            '"$@" > "$CAPTURE"\nexit 37\n')
+            tool.chmod(0o755)
+            for purpose, clean, expected in (('phase_first_run', None, 'unset'),
+                    ('phase_first_run', '1', '1'), ('release', None, '1'), ('ci', '1', 'unset')):
+                env = dict(os.environ, CAPTURE=str(out / 'captured'), ETUDE_ADMITTED='/site',
+                           ETUDE_ROUTINE_COMMIT=commit)
+                env.pop('ETUDE_PHASE_SELECTION_EXPORT', None)
+                env.pop('ETUDE_PREPARATION_CLEAN', None)
+                if clean is not None:
+                    env['ETUDE_PREPARATION_CLEAN'] = clean
+                result = subprocess.run(['/bin/sh', str(tree / 'tools/ci/native_producer.sh'), purpose,
+                    str(tree), str(out), 'both', 'sample:producer', '/site', str(tool), 'kvm', 'all'],
+                    env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                self.assertEqual(result.returncode, 37, result.stderr)
+                captured = (out / 'captured').read_text().splitlines()
+                self.assertEqual(captured[0], expected)
+                self.assertEqual(captured[1:3], ['prepare', 'collection'])
+                self.assertEqual(captured[-1], 'all')
+
+    def test_fresh_producer_per_run(self):
+        with tempfile.TemporaryDirectory(prefix='rach2-routine.') as name:
+            base = Path(name)
+            tree = base / 'trees' / ('a' * 40)
+            tree.mkdir(parents=True)
+            site = base / 'site'
+            site.write_text('installed fixture policy\n')
+            args = SimpleNamespace(commit='a' * 40, purpose='phase_first_run', arches='both',
+                                   selection=['all'], run='sample-01')
+            config = dict(producer=dict(tree_root=str(tree.parent), repository=str(tree),
+                output_root=str(base / 'outputs'), site=str(site), etude='/etude', accelerator='kvm'))
+            with patch.dict(os.environ, dict(ETUDE_ADMITTED=str(site), ETUDE_ROUTINE_TRANSPORT_ADMITTED='1'), clear=True), \
+                    patch.object(routine_producer, 'execute') as execute, \
+                    patch.object(routine_producer.subprocess, 'check_output', side_effect=lambda argv:
+                        b'a' * 40 if argv[-1] == 'HEAD' else b''), \
+                    patch.object(routine_producer.shutil, 'copyfile'), patch.object(routine_producer, 'write'):
+                for run in ('sample-01', 'sample-02'):
+                    args.run = run
+                    routine_producer.stage(args, config)
+                    command = execute.call_args.args[0]
+                    self.assertEqual(command[2], 'phase_first_run')
+                    self.assertEqual(command[4], str(base / 'outputs' / run))
+                    self.assertEqual(command[6], run + ':producer')
+                with self.assertRaises(FileExistsError):
+                    routine_producer.stage(args, config)
+
+    def test_remote_stage_declares_clean_without_exemption(self):
+        with tempfile.TemporaryDirectory(prefix='rach2-routine.') as name:
+            base = Path(name)
+            (base / 'nonce').write_text('\n')
+            operation = base / 'operation.json'
+            producer = dict(site='/site', etude='/etude', repository='/repository', python='/python')
+            original = Path.cwd()
+            try:
+                os.chdir(base)
+                for purpose, clean in (('phase_first_run', True), ('phase_first_run', False),
+                                       ('release', True), ('ci', False)):
+                    operation.write_text(json.dumps(dict(action='produce', mode='macos-import',
+                        purpose=purpose, clean=clean, producer=producer, transport_admitted=True,
+                        args=['produce', '--purpose', purpose])))
+                    with patch.dict(os.environ, dict(ETUDE_ADMITTED='/site',
+                            ETUDE_PHASE_SELECTION_EXPORT='/unrelated', ETUDE_PREPARATION_CLEAN='stale'), clear=True), \
+                            patch.object(routine_remote_stage.sys, 'argv', ['stage', str(operation)]), \
+                            patch.object(routine_remote_stage, 'run') as run:
+                        routine_remote_stage.main()
+                        self.assertEqual(os.environ.get('ETUDE_PREPARATION_CLEAN'), '1' if clean else None)
+                        self.assertNotIn('ETUDE_PHASE_SELECTION_EXPORT', os.environ)
+                        self.assertEqual(run.call_args.args[0][:3], ['/etude', 'lock', 'tree'])
+                bad = json.loads(operation.read_text())
+                bad['clean'] = True
+                operation.write_text(json.dumps(bad))
+                with patch.object(routine_remote_stage.sys, 'argv', ['stage', str(operation)]), \
+                        patch.object(routine_remote_stage, 'run', side_effect=AssertionError('invalid operation')):
+                    with self.assertRaisesRegex(ValueError, 'preparation condition'):
+                        routine_remote_stage.main()
+            finally:
+                os.chdir(original)
 
     def test_counted_vectors(self):
         program = '/immutable/etude'

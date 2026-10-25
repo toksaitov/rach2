@@ -20,6 +20,14 @@ def main():
         raise ValueError('invalid phase capability')
     if nonce:
         os.environ['ETUDE_AUTHORITY_NONCE'] = nonce
+    purpose, clean = operation['purpose'], operation['clean']
+    if purpose not in ('push', 'ci', 'release', 'phase_first_run') or type(clean) is not bool or (
+            purpose != 'phase_first_run' and clean != (purpose == 'release')):
+        raise ValueError('invalid declared preparation condition')
+    os.environ.pop('ETUDE_PHASE_SELECTION_EXPORT', None)
+    os.environ.pop('ETUDE_PREPARATION_CLEAN', None)
+    if clean:
+        os.environ['ETUDE_PREPARATION_CLEAN'] = '1'
     work = Path.cwd()
     args = [str(work / 'routine_producer.py'),
             *(value.replace('${WORKSPACE}', str(work)) for value in operation['args'])]
@@ -52,7 +60,7 @@ def main():
     policy = dict(line.split(' ', 1) for line in Path(site).read_text().splitlines())
     if policy['ledger'] != p['policy']['ledger'] or policy['capacity'] != p['policy']['capacity']:
         raise ValueError('installed producer authority differs from fixed route')
-    bound = {'push': 270, 'ci': 540, 'release': 13800}[operation['purpose']]
+    bound = {'push': 270, 'ci': 540, 'release': 13800, 'phase_first_run': 86400}[operation['purpose']]
     os.environ['ETUDE_PREPARATION_GRANT'] = str(work / 'producer.grant.json')
     command = [p['etude'], 'admit', '-d', policy['locks'], '-r', str(work / 'producer.admit.result'),
                policy['ledger'], operation['run'] + ':producer:prepare', p['account'], 'shared',
