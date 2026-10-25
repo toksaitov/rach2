@@ -208,7 +208,7 @@ int main(int argc, char **argv)
     }
 #endif
 
-    setvbuf(stdout, NULL, _IOLBF, 0);
+    setvbuf(stdout, NULL, _IONBF, 0);
     if (argc >= 3)
         port = (unsigned)number(argv[2], 65535);
     if (argc == 3 && port != 0 && strcmp(argv[1], "wait") == 0)
