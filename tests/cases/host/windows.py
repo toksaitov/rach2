@@ -58,11 +58,12 @@ def boot_entry(item, flags):
 
 def companion_recipes():
     """Keep every Windows fixture helper's sources and link operands explicit."""
+    file_sources = source_list('ETUDE_WIN_FILE_SRC')
     return [
         ('wintarget.exe', ['tools/etude/win/wintarget.c'], ['-municode', *LIBS]),
-        ('winstand.exe', ['tools/etude/win/winstand.c', 'tools/etude/volume/volume.c'], []),
+        ('winstand.exe', ['tools/etude/win/winstand.c', 'tools/etude/volume/volume.c', *file_sources], LIBS),
         ('etude.exe', source_list('ETUDE_WIN_SRC'), LIBS),
-        ('etude-volume.exe', source_list('ETUDE_VOLUME_SRC'), []),
+        ('etude-volume.exe', [*source_list('ETUDE_VOLUME_SRC'), *file_sources], LIBS),
         ('image-command.exe', ['tools/etude/win/image_command.c', 'tools/etude/win/hold.c',
                                'tools/etude/win/winfmt.c'], []),
     ]
