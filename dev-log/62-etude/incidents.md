@@ -1442,3 +1442,8 @@ The GNU ledger fixture required Linux's boot UUID proc file, which Rach2 does no
 ## USB probe read only the beginning of a long boot line (#1142)
 
 The first complete Mac diagnostic passed 1020 of 1024 attempts. Alongside the two scripted host groups in #1136, both machine.usb.off cases failed: the kernel logged that rach2.nousb disabled USB, while usbprobe reported that the option was absent. The probe read only255bytes of /proc/cmdline; QEMU's long kernel filename preceded the option. The probe now scans the complete file in bounded chunks, preserving token state across reads and matching whole words. The empty-device and enabled-device assertions remain unchanged.
+### Scripted host checks exhaust a shared case bound
+
+The first Mac whole run of `403f6d99b` ended both scripted host cases at their 1,800-second case bound. The i686 case passed 38 assertions before the last Bash interruption row of `tooling_image`; the x86-64 case passed that row and reached `gnu_port_resume`. Their tree CPU totals were 1,716 and 1,704 seconds. The final i686 row had only 8.6 seconds left, and both attempts confirmed cleanup. These records show a group that exhausted its bound while progressing, rather than a proven process-group wait failure.
+
+Issue #1136 partitions the original 45 assertions into native, image, build, worker and CI, and Etude tooling cases. The shared immutable list and manifest must declare every identity exactly once before a case starts. Each partition preserves its original row order, helper ownership and cleanup. The assertions and existing bounds remain unchanged. A focused fixture checks omitted and duplicate declarations, the manifest's selected step order and the actual scenario dispatcher.

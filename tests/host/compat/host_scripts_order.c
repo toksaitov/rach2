@@ -1,4 +1,5 @@
-/* The compiled scripts scenario follows host.list, so its steps must too. */
+/* Each partition preserves its selected host.list order and setup steps. */
+#include "../../../tests/cases/host/host_script_inventory.h"
 static struct json *scripts_manifest(void)
 {
     FILE *f = fopen("tests/cases/host.host.json", "rb");
@@ -30,46 +31,52 @@ static int scripts_step(const struct json *steps, size_t row, const char *id, co
            (!machine || (actual_machine && !strcmp(actual_machine, machine)));
 }
 
-static void host_scripts_order(void)
+static const struct json *script_steps(const struct json *doc, const char *id)
 {
-    struct json *doc = scripts_manifest();
-    const struct json *cases = json_member(doc, "cases"), *steps = NULL;
+    const struct json *cases = json_member(doc, "cases");
     for (size_t i = 0; cases && i < cases->count; i++) {
-        const char *id = json_text(cases->item[i], "case_id");
-        if (id && !strcmp(id, "host.host.scripts"))
-            steps = json_member(cases->item[i], "steps");
+        const char *actual = json_text(cases->item[i], "case_id");
+        if (actual && !strcmp(actual, id))
+            return json_member(cases->item[i], "steps");
     }
+    return NULL;
+}
+
+static void script_part_order(const struct json *doc, const struct host_script_row *rows,
+                              size_t count, unsigned part)
+{
+    const struct json *steps = script_steps(doc, host_script_case(part));
     const char *prefix[] = {"listed", "products", "prepare"};
     const char *stages[] = {"execute", "boot", "execute"};
-    CHECK(steps && steps->count >= 3, "scripts scenario declares its steps");
-    for (size_t i = 0; steps && i < 3 && i < steps->count; i++) {
+    size_t row = part == SCRIPT_NATIVE_PART ? 1 : 3;
+    CHECK(steps && steps->count >= row, "script partition declares its setup steps");
+    for (size_t i = 0; i < row; i++)
         CHECK(scripts_step(steps, i, prefix[i], stages[i], i == 1 ? "products" : NULL),
-              "scripts setup prefix remains declared first");
-    }
-    FILE *f = fopen("tests/cases/host/host.list", "rb");
-    CHECK(f != NULL, "real host list opens");
-    char line[4096];
-    size_t row = 3;
-    while (f && fgets(line, sizeof(line), f)) {
-        char *start = line + strspn(line, " \t\r\n");
-        if (!*start || *start == '#')
+              "script partition setup prefix remains first");
+    for (size_t i = 0; i < count; i++) {
+        if ((unsigned)rows[i].part != part)
             continue;
-        char *bar = strchr(start, '|');
-        if (bar)
-            *bar = 0;
-        if (bar && !strcmp(start, "doom_libc")) {
+        if (!strcmp(rows[i].id, "doom_libc")) {
             CHECK(scripts_step(steps, row, "doom-i686", "boot", "doom-i686"),
                   "Doom's matching-ABI helper boots immediately before its execution step");
             row++;
         }
-        CHECK(bar && scripts_step(steps, row, start, "execute", NULL),
-              "every host.list row has the same declared execution step in order");
+        CHECK(scripts_step(steps, row, rows[i].id, "execute", NULL),
+              "each selected host.list row retains its execution step in order");
         row++;
     }
-    if (f) {
-        CHECK(!ferror(f), "real host list reads whole");
-        fclose(f);
-    }
-    CHECK(steps && row == steps->count, "no script execution step is omitted or extra");
+    CHECK(steps && row == steps->count, "no partition execution step is omitted or extra");
+}
+
+static void host_scripts_order(void)
+{
+    struct json *doc = scripts_manifest();
+    struct host_script_row rows[HOST_SCRIPT_ROWS];
+    size_t count = 0;
+    CHECK(host_script_inventory("tests/cases/host/host.list", "tests/cases/host.host.json", rows,
+                                &count),
+          "all five partitions declare each host.list assertion exactly once");
+    for (unsigned part = 0; part < HOST_SCRIPT_PARTS; part++)
+        script_part_order(doc, rows, count, part);
     json_free(doc);
 }

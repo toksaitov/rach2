@@ -35,7 +35,8 @@ struct check {
 struct host {
     char tree[PATH_SIZE], work[PATH_SIZE], case_id[128];
     struct json *manifest, *inventory;
-    const struct json *declared, *companion;
+    const struct json *declared, *companion, *script_parts[5];
+    size_t nscript_parts;
     struct check *checks;
     size_t nchecks, reported, failures, records;
     int uncertain;
@@ -181,6 +182,12 @@ static int declaration(const struct json *assertions, const char *id)
 
 static int declared(const struct host *h, const char *id)
 {
+    if (h->nscript_parts) {
+        unsigned count = 0;
+        for (size_t i = 0; i < h->nscript_parts; i++)
+            count += declaration(h->script_parts[i], id);
+        return count == 1;
+    }
     return declaration(h->declared, id);
 }
 
@@ -650,6 +657,17 @@ static int select_one(struct host *h)
     return 0;
 }
 
+static int inventory_declarations(struct host *h)
+{
+    int listed = 1;
+    listed &= complete_declarations(h, h->declared, 1);
+    listed &= complete_declarations(h, h->companion, 0);
+    for (size_t i = 0; i < h->nscript_parts; i++)
+        if (h->script_parts[i] != h->declared)
+            listed &= complete_declarations(h, h->script_parts[i], 1);
+    return listed;
+}
+
 static int check_inventory(struct host *h, const char *group)
 {
     const struct json *entries = json_member(h->inventory, "checks");
@@ -682,15 +700,14 @@ static int check_inventory(struct host *h, const char *group)
             printf("host: listed: unlisted or wrongly partitioned prepared check %s\n", c->id);
         }
     }
-    listed &= complete_declarations(h, h->declared, 1);
-    listed &= complete_declarations(h, h->companion, 0);
+    listed &= inventory_declarations(h);
     group = canonical_group(group);
     int sources = live_sources(h, group), scripts = live_scripts(h, group);
     if (sources < 0 || scripts < 0)
         return -1;
     listed &= sources && scripts;
     assertion(h, "listed", listed, "the declared, source and prepared inventories differ");
-    if (h->companion && !listed)
+    if ((h->companion || h->nscript_parts) && !listed)
         return -1;
     return select_one(h);
 }
@@ -769,6 +786,33 @@ static int execute(struct host *h, unsigned width)
     return stopped ? 128 + stopped : h->failures ? 1 : 0;
 }
 
+/* The legacy scripts driver executes the union; scenarios own partitions. */
+static int script_declarations(struct host *h, const struct json *cases)
+{
+    static const char *ids[] = {"host.host.scripts", "host.host.scripts_native",
+                                "host.host.scripts_images", "host.host.scripts_build",
+                                "host.host.scripts_tools"};
+    for (size_t i = 0; cases && i < cases->count; i++) {
+        const char *id = json_text(cases->item[i], "case_id");
+        if (!id || strncmp(id, "host.host.scripts", 17))
+            continue;
+        size_t j;
+        for (j = 0; j < 5 && strcmp(id, ids[j]); j++) {
+        }
+        if (j == 5 || h->script_parts[j])
+            return -1;
+        h->script_parts[j] = json_member(cases->item[i], "assertions");
+        if (!h->script_parts[j] || h->script_parts[j]->type != JSON_ARRAY)
+            return -1;
+        h->nscript_parts++;
+    }
+    if (h->nscript_parts == 1 && h->script_parts[0])
+        h->nscript_parts = 0;
+    else if (h->nscript_parts != 5)
+        return -1;
+    return 0;
+}
+
 static int load_declarations(struct host *h, const char *group)
 {
     const struct json *cases = json_member(h->manifest, "cases");
@@ -781,6 +825,8 @@ static int load_declarations(struct host *h, const char *group)
         if (etude && id && !strcmp(id, other))
             h->companion = json_member(cases->item[i], "assertions");
     }
+    if (!strcmp(group, "scripts") && script_declarations(h, cases) != 0)
+        return -1;
     if (!h->declared || h->declared->type != JSON_ARRAY)
         return -1;
     if (etude && (!h->companion || h->companion->type != JSON_ARRAY))

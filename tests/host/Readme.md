@@ -6,7 +6,7 @@ The host tests compile kernel and user sources as ordinary programs for the buil
 
 `etude prepare collection host` builds the programs and immutable input inventory of [`tests/cases/host.host.json`](../cases/host.host.json). `etude run host` executes that prepared suite through the native C driver [`tests/cases/host/host.c`](../cases/host/host.c). The collection holds the tree while its checks run. No compiler, interpreter or Linux tooling machine runs on the execution host. [The driver's Readme](../cases/host/Readme.md) defines preparation, execution and unsupported adapters.
 
-The seven cases keep their assertion identifiers:
+The cases keep their assertion identifiers:
 
 1. `tests`: the host tests outside etude, with the vendored sources of each selected architecture.
 2. `etude`: the shared checks of Etude's complete inventory, once per collection.
@@ -14,7 +14,7 @@ The seven cases keep their assertion identifiers:
 4. `boots`: tests with `host-arch:`, over each selected architecture's kernel and images.
 5. `checkers`: the five checker selftests under the sanitizers.
 6. `fuzz`: each prepared fuzz harness replaying its complete committed corpus. An empty corpus fails preparation.
-7. `scripts`: the behavioral assertions of `host.list`, each through a prepared native adapter. A row awaiting an adapter fails explicitly; it is never a preparation-time pass.
+7. `scripts_native`, `scripts_images`, `scripts_build`, `scripts` and `scripts_tools`: disjoint partitions of all 45 behavioral assertions of `host.list`, preserving each assertion and its position relative to the other rows of its partition. A row awaiting an adapter fails explicitly; it is never a preparation-time pass.
 
 The build-only inventory builder reads source metadata, compiles the checks and hashes compiler dependencies, including locally included `.c` files. Its `--print-commands` option prints commands without compiling or executing. The old `HOST_PRINT_COMMANDS=1 sh tests/cases/host/host.sh` interface remains for the coverage and editor command generators.
 

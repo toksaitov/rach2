@@ -2054,12 +2054,10 @@
       ]
     },
     {
-      "case_id": "host.host.scripts",
-      "behavior": "each scripted check tests/cases/host/host.list names exits 0: the host tests over kernel functions extracted from their sources and of the KRFFS host tools, the tests of the loops, ci, etude's tools and the machine measurement drivers, the fake API servers, and TinyCC's comparisons with the GNU tools",
+      "case_id": "host.host.scripts_native",
+      "behavior": "The native kernel and protocol checks run once in host.list order with their original judgments and confirmed cleanup",
       "units": [
-        "host",
-        "`tests/system/machine_measure_test.sh`",
-        "the scripts of the inventory that the host suite runs, each a line of `tests/cases/host/host.list`"
+        "the native kernel and protocol checks partition of the complete immutable host.list"
       ],
       "domain": "machine",
       "architectures": [
@@ -2085,26 +2083,15 @@
         "isolation": [
           {
             "fixture": "scratch"
-          },
-          {
-            "fixture": "disk",
-            "names": [
-              "image-disk"
-            ]
           }
         ],
         "children": "reaped",
-        "cleanup": "the C controllers remove their private scratch; the Doom ABI helper is ended explicitly and the case executor stops every declared helper and native process"
+        "cleanup": "the C controllers remove private scratch; the case executor stops every owned helper and native process"
       },
       "assertions": [
         {
           "assertion_id": "listed",
-          "checks": "each check tests/cases/host/host.list names has an assertion of this case, and each assertion a check of the list",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "machine_measure",
-          "checks": "the measurement drivers of tools/dev against fake commands: `sh tests/system/machine_measure_test.sh` exits 0",
+          "checks": "all five scripted host partitions are disjoint and cover host.list exactly once with matching compiled dispatch",
           "source": "scenario"
         },
         {
@@ -2143,126 +2130,6 @@
           "source": "scenario"
         },
         {
-          "assertion_id": "doom_libc",
-          "checks": "Doom C library on both architectures: each prepared freestanding fixture runs on its matching kernel, exits 0 and prints the exact 64-bit format line",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "krffs_tools",
-          "checks": "krffs host tools' refusals, replace and edits: `sh tests/host/krffs_tools_test.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "run_scripts",
-          "checks": "run scripts' command lines: `sh tests/system/run_scripts_test.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "commit_msg",
-          "checks": "commit-msg hook's refusals: `sh tests/system/commit_msg_test.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "ci",
-          "checks": "ci reports and bisection: `sh tests/system/ci_test.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "ci_run",
-          "checks": "ci's reading of the runner's lines and of etude's history, and its stop after a killed step: `sh tests/system/ci_run_test.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "board",
-          "checks": "board groups, take and the phase in progress: `sh tests/system/board_test.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "progress",
-          "checks": "the manager reports delayed phase work and unassigned failures: `python3 -B tests/system/progress_test.py` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "limited",
-          "checks": "the loops' reading of a usage limit: `sh tests/system/limited_test.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "worker_park",
-          "checks": "the worker loop's parking during a hold and rest of a handed-back intermittent issue: `sh tests/system/worker_park_test.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "release_resume",
-          "checks": "a release resumed from its record, with its runs, reruns and acceptance: `sh tests/system/release_resume_test.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "tidy",
-          "checks": "the loops' cleanup of finished work: `sh tests/system/tidy_test.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "leftovers",
-          "checks": "the manager's removal of failed tests, home files and landed copies: `sh tests/system/leftovers_test.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "agents_guest",
-          "checks": "the agents guest's scratch removed on every exit: `sh tests/system/agents_guest_test.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "testing_run",
-          "checks": "testing.sh run's quoted commands, a worktree's sync and wait's reports: `sh tests/system/testing_run_test.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "space",
-          "checks": "disk admission requires a Windows reading: `sh tests/system/space_test.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "prereq",
-          "checks": "prereq.sh's reports, installs and recipe: `sh tests/system/prereq_test.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "collection_tools",
-          "checks": "the collection's image transfers preserve filenames, byte offsets, partial output and command statuses: `python3 -B tests/system/collection_tools_test.py` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "etude_version",
-          "checks": "etude's versions built once, reused and kept side by side: `sh tests/system/etude_version_test.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "etude_deploy",
-          "checks": "etude deployed again and after a cut, changing no clone, key or running test: `sh tests/system/etude_deploy_test.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "etude_launch",
-          "checks": "installed admission before builds, worker checks, owner commands and CI: `python3 -B tests/system/etude_launch_test.py` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "test_status",
-          "checks": "the status reader against waits for the host and ports and live and stale claims: `sh tests/system/test_status_check.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "etude_tooling",
-          "checks": "etude's tooling machine made once, its jobs run and their boots recorded: `sh tests/system/etude_tooling_test.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "agents_credentials",
-          "checks": "the agents' credential files and log scan: `python3 -B tests/system/agents_credentials_test.py` exits 0",
-          "source": "scenario"
-        },
-        {
           "assertion_id": "anthropic",
           "checks": "Messages tool results and streamed replies: `python3 -B tests/system/fakeapi/anthropic_test.py` exits 0",
           "source": "scenario"
@@ -2276,6 +2143,274 @@
           "assertion_id": "fakeapi",
           "checks": "the fake API server's unordered and repeated steps: `python3 -B tests/system/fakeapi/fakeapi_test.py` exits 0",
           "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a declared scenario step has ended",
+          "limit": 11
+        },
+        {
+          "witness_id": "checks",
+          "kind": "counter",
+          "means": "a check of the case has ended, passed or failed",
+          "limit": 11
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 400000000,
+            "ceiling_us": 1200000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 2000,
+        "cpu_ceiling_millis": 16000,
+        "memory_bytes": 2952790016,
+        "disk_bytes": 13421772800,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "host_scripts_scenario",
+          "node": "tests/cases/host/host_scripts_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "products-kernel",
+          "node": "x86_64/rach2/kernel",
+          "per_architecture": false
+        },
+        {
+          "name": "products-image",
+          "node": "x86_64/images/gnu-test.disk",
+          "per_architecture": false
+        },
+        {
+          "name": "host-list",
+          "node": "tests/host-suite/sources/tests/cases/host/host.list",
+          "per_architecture": false
+        },
+        {
+          "name": "fakeapi",
+          "node": "tests/system/fakeapi_test",
+          "per_architecture": false
+        },
+        {
+          "name": "chown",
+          "node": "tests/host-suite/scripts/chown",
+          "per_architecture": false
+        },
+        {
+          "name": "krffs_open",
+          "node": "tests/host-suite/scripts/krffs_open",
+          "per_architecture": false
+        },
+        {
+          "name": "krffs_root_lock",
+          "node": "tests/host-suite/scripts/krffs_root_lock",
+          "per_architecture": false
+        },
+        {
+          "name": "krffs_stat",
+          "node": "tests/host-suite/scripts/krffs_stat",
+          "per_architecture": false
+        },
+        {
+          "name": "pagecache",
+          "node": "tests/host-suite/scripts/pagecache",
+          "per_architecture": false
+        },
+        {
+          "name": "kstack",
+          "node": "tests/host-suite/scripts/kstack",
+          "per_architecture": false
+        },
+        {
+          "name": "endothers",
+          "node": "tests/host-suite/scripts/endothers",
+          "per_architecture": false
+        },
+        {
+          "name": "host-cases",
+          "node": "tests/host-suite/sources/tests/cases/host.host.json",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "system",
+        "reason": "native C executes the prepared kernel and API protocol checks on each supported host"
+      },
+      "steps": [
+        {
+          "step_id": "listed",
+          "stage": "execute",
+          "does": "check all source list identities"
+        },
+        {
+          "step_id": "krffs_open",
+          "stage": "execute",
+          "does": "run every native regression row of krffs_open"
+        },
+        {
+          "step_id": "krffs_root_lock",
+          "stage": "execute",
+          "does": "run every native regression row of krffs_root_lock"
+        },
+        {
+          "step_id": "krffs_stat",
+          "stage": "execute",
+          "does": "run every native regression row of krffs_stat"
+        },
+        {
+          "step_id": "kstack",
+          "stage": "execute",
+          "does": "run every native regression row of kstack"
+        },
+        {
+          "step_id": "endothers",
+          "stage": "execute",
+          "does": "run every native regression row of endothers"
+        },
+        {
+          "step_id": "chown",
+          "stage": "execute",
+          "does": "run every native regression row of chown"
+        },
+        {
+          "step_id": "pagecache",
+          "stage": "execute",
+          "does": "run every native regression row of pagecache"
+        },
+        {
+          "step_id": "anthropic",
+          "stage": "execute",
+          "does": "run every native regression row of anthropic"
+        },
+        {
+          "step_id": "gemini",
+          "stage": "execute",
+          "does": "run every native regression row of gemini"
+        },
+        {
+          "step_id": "fakeapi",
+          "stage": "execute",
+          "does": "run every native regression row of fakeapi"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "products",
+          "qemu": {
+            "architecture": "x86_64",
+            "kernel": "products-kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "products-disk",
+                "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 1073741824,
+            "firmware": "direct",
+            "devices": [
+              "rtl8139"
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": true
+        }
+      ]
+    },
+    {
+      "case_id": "host.host.scripts_images",
+      "behavior": "The image and installer checks run once in host.list order with their original judgments and confirmed cleanup",
+      "units": [
+        "the image and installer checks partition of the complete immutable host.list"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "host_scripts_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "image-disk"
+            ]
+          }
+        ],
+        "children": "reaped",
+        "cleanup": "the C controllers remove private scratch; the case executor stops every owned helper and native process"
+      },
+      "assertions": [
+        {
+          "assertion_id": "listed",
+          "checks": "all five scripted host partitions are disjoint and cover host.list exactly once with matching compiled dispatch",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "krffs_tools",
+          "checks": "krffs host tools' refusals, replace and edits: `sh tests/host/krffs_tools_test.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "collection_tools",
+          "checks": "the collection's image transfers preserve filenames, byte offsets, partial output and command statuses: `python3 -B tests/system/collection_tools_test.py` exits 0",
+          "source": "scenario"
         },
         {
           "assertion_id": "install_accounts",
@@ -2288,43 +2423,8 @@
           "source": "scenario"
         },
         {
-          "assertion_id": "check_asm",
-          "checks": "TinyCC's assemblers against GNU as: `sh vendor/tcc/check_asm.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "check_ldscript",
-          "checks": "TinyCC's linker script reader against GNU ld: `sh vendor/tcc/check_ldscript.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "together",
-          "checks": "the makers of several fixture files run once for a parallel request of their files: `sh tests/system/together_test.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "host_suite",
-          "checks": "the host cases run their checks at once, each in its own scratch, with one result and one assertion each: `sh tests/system/host_suite_test.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "case_select",
-          "checks": "tests/run runs the cases chosen, in their order, and refuses a wrong choice before it builds: `python3 -B tests/system/case_select_test.py` exits 0",
-          "source": "scenario"
-        },
-        {
           "assertion_id": "tooling_image",
           "checks": "the GNU root's tooling job leaves no stage and no lock when a signal stops it: `sh tests/system/tooling_image_test.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "gnu_cmake_jobs",
-          "checks": "the cmake port's bootstrap runs no more jobs at once than its make allows: `sh tests/system/gnu_cmake_jobs_test.sh` exits 0",
-          "source": "scenario"
-        },
-        {
-          "assertion_id": "gnu_port_resume",
-          "checks": "a stopped build of the GNU ports goes on from the last port it finished: `sh tests/system/gnu_port_resume_test.sh` exits 0",
           "source": "scenario"
         }
       ],
@@ -2338,13 +2438,13 @@
           "witness_id": "stage",
           "kind": "step",
           "means": "a declared scenario step has ended",
-          "limit": 49
+          "limit": 8
         },
         {
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 46
+          "limit": 6
         }
       ],
       "bounds": {
@@ -2399,46 +2499,6 @@
         {
           "name": "host-list",
           "node": "tests/host-suite/sources/tests/cases/host/host.list",
-          "per_architecture": false
-        },
-        {
-          "name": "fakeapi",
-          "node": "tests/system/fakeapi_test",
-          "per_architecture": false
-        },
-        {
-          "name": "chown",
-          "node": "tests/host-suite/scripts/chown",
-          "per_architecture": false
-        },
-        {
-          "name": "krffs_open",
-          "node": "tests/host-suite/scripts/krffs_open",
-          "per_architecture": false
-        },
-        {
-          "name": "krffs_root_lock",
-          "node": "tests/host-suite/scripts/krffs_root_lock",
-          "per_architecture": false
-        },
-        {
-          "name": "krffs_stat",
-          "node": "tests/host-suite/scripts/krffs_stat",
-          "per_architecture": false
-        },
-        {
-          "name": "pagecache",
-          "node": "tests/host-suite/scripts/pagecache",
-          "per_architecture": false
-        },
-        {
-          "name": "kstack",
-          "node": "tests/host-suite/scripts/kstack",
-          "per_architecture": false
-        },
-        {
-          "name": "endothers",
-          "node": "tests/host-suite/scripts/endothers",
           "per_architecture": false
         },
         {
@@ -2517,46 +2577,12 @@
           "per_architecture": false
         },
         {
-          "name": "doom-i686",
-          "node": "tests/fixtures/doom-libc-i686",
-          "per_architecture": false
-        },
-        {
-          "name": "doom-i686-kernel",
-          "node": "rach2-recovery/kernel",
-          "per_architecture": false
-        },
-        {
-          "name": "doom-i686-image",
-          "node": "images/etude-image.krffs",
+          "name": "host-cases",
+          "node": "tests/host-suite/sources/tests/cases/host.host.json",
           "per_architecture": false
         }
       ],
       "timing": [
-        {
-          "kind": "injected_delay",
-          "where": "tests/cases/host/flow_status.c:109",
-          "assumes": "The wait fixture crosses one retry before comparing the stored start. The assertion compares records, not elapsed time.",
-          "uncertainty_us": null
-        },
-        {
-          "kind": "injected_delay",
-          "where": "tests/cases/host/build_ports.c:157",
-          "assumes": "A one-second job workload allows concurrent jobs to overlap. The assertion counts jobs.",
-          "uncertainty_us": null
-        },
-        {
-          "kind": "injected_delay",
-          "where": "tests/cases/host/host_suite_probe.c:118",
-          "assumes": "The child lingers so the driver can observe and cancel it.",
-          "uncertainty_us": null
-        },
-        {
-          "kind": "injected_delay",
-          "where": "tests/cases/host/flow_tooling.c:240",
-          "assumes": "The mock machine has a delayed workload for the product deadline and cancellation checks. The controller gives no completion deadline of its own.",
-          "uncertainty_us": null
-        },
         {
           "kind": "injected_delay",
           "where": "tests/cases/host/host_products_drive.c:140",
@@ -2604,175 +2630,9 @@
           "does": "run every native regression row of mkext2_overlay"
         },
         {
-          "step_id": "machine_measure",
-          "stage": "execute",
-          "does": "run every native regression row of machine_measure"
-        },
-        {
-          "step_id": "krffs_open",
-          "stage": "execute",
-          "does": "run every native regression row of krffs_open"
-        },
-        {
-          "step_id": "krffs_root_lock",
-          "stage": "execute",
-          "does": "run every native regression row of krffs_root_lock"
-        },
-        {
-          "step_id": "krffs_stat",
-          "stage": "execute",
-          "does": "run every native regression row of krffs_stat"
-        },
-        {
-          "step_id": "kstack",
-          "stage": "execute",
-          "does": "run every native regression row of kstack"
-        },
-        {
-          "step_id": "endothers",
-          "stage": "execute",
-          "does": "run every native regression row of endothers"
-        },
-        {
-          "step_id": "chown",
-          "stage": "execute",
-          "does": "run every native regression row of chown"
-        },
-        {
-          "step_id": "pagecache",
-          "stage": "execute",
-          "does": "run every native regression row of pagecache"
-        },
-        {
-          "step_id": "doom-i686",
-          "stage": "boot",
-          "does": "boot the matching i686 recovery helper for the freestanding Doom fixture",
-          "machine": "doom-i686"
-        },
-        {
-          "step_id": "doom_libc",
-          "stage": "execute",
-          "does": "run both prepared Doom C library ABIs on matching kernels and check their complete results"
-        },
-        {
           "step_id": "krffs_tools",
           "stage": "execute",
           "does": "run every native regression row of krffs_tools"
-        },
-        {
-          "step_id": "run_scripts",
-          "stage": "execute",
-          "does": "run every native regression row of run_scripts"
-        },
-        {
-          "step_id": "commit_msg",
-          "stage": "execute",
-          "does": "run every native regression row of commit_msg"
-        },
-        {
-          "step_id": "ci",
-          "stage": "execute",
-          "does": "run every native regression row of ci"
-        },
-        {
-          "step_id": "ci_run",
-          "stage": "execute",
-          "does": "run every native regression row of ci_run"
-        },
-        {
-          "step_id": "board",
-          "stage": "execute",
-          "does": "run every native regression row of board"
-        },
-        {
-          "step_id": "limited",
-          "stage": "execute",
-          "does": "run every native regression row of limited"
-        },
-        {
-          "step_id": "worker_park",
-          "stage": "execute",
-          "does": "run every native regression row of worker_park"
-        },
-        {
-          "step_id": "release_resume",
-          "stage": "execute",
-          "does": "run every native regression row of release_resume"
-        },
-        {
-          "step_id": "tidy",
-          "stage": "execute",
-          "does": "run every native regression row of tidy"
-        },
-        {
-          "step_id": "leftovers",
-          "stage": "execute",
-          "does": "run every native regression row of leftovers"
-        },
-        {
-          "step_id": "agents_guest",
-          "stage": "execute",
-          "does": "run every native regression row of agents_guest"
-        },
-        {
-          "step_id": "testing_run",
-          "stage": "execute",
-          "does": "run every native regression row of testing_run"
-        },
-        {
-          "step_id": "space",
-          "stage": "execute",
-          "does": "run every native regression row of space"
-        },
-        {
-          "step_id": "prereq",
-          "stage": "execute",
-          "does": "run every native regression row of prereq"
-        },
-        {
-          "step_id": "etude_version",
-          "stage": "execute",
-          "does": "run every native regression row of etude_version"
-        },
-        {
-          "step_id": "etude_deploy",
-          "stage": "execute",
-          "does": "run every native regression row of etude_deploy"
-        },
-        {
-          "step_id": "etude_launch",
-          "stage": "execute",
-          "does": "run every native regression row of etude_launch"
-        },
-        {
-          "step_id": "test_status",
-          "stage": "execute",
-          "does": "run every native regression row of test_status"
-        },
-        {
-          "step_id": "etude_tooling",
-          "stage": "execute",
-          "does": "run every native regression row of etude_tooling"
-        },
-        {
-          "step_id": "agents_credentials",
-          "stage": "execute",
-          "does": "run every native regression row of agents_credentials"
-        },
-        {
-          "step_id": "anthropic",
-          "stage": "execute",
-          "does": "run every native regression row of anthropic"
-        },
-        {
-          "step_id": "gemini",
-          "stage": "execute",
-          "does": "run every native regression row of gemini"
-        },
-        {
-          "step_id": "fakeapi",
-          "stage": "execute",
-          "does": "run every native regression row of fakeapi"
         },
         {
           "step_id": "install_accounts",
@@ -2780,54 +2640,14 @@
           "does": "run every native regression row of install_accounts"
         },
         {
-          "step_id": "check_asm",
-          "stage": "execute",
-          "does": "run every native regression row of check_asm"
-        },
-        {
-          "step_id": "check_ldscript",
-          "stage": "execute",
-          "does": "run every native regression row of check_ldscript"
-        },
-        {
-          "step_id": "together",
-          "stage": "execute",
-          "does": "run every native regression row of together"
-        },
-        {
           "step_id": "tooling_image",
           "stage": "execute",
           "does": "run every native regression row of tooling_image"
         },
         {
-          "step_id": "gnu_cmake_jobs",
-          "stage": "execute",
-          "does": "run every native regression row of gnu_cmake_jobs"
-        },
-        {
-          "step_id": "gnu_port_resume",
-          "stage": "execute",
-          "does": "run every native regression row of gnu_port_resume"
-        },
-        {
-          "step_id": "host_suite",
-          "stage": "execute",
-          "does": "run every native regression row of host_suite"
-        },
-        {
-          "step_id": "case_select",
-          "stage": "execute",
-          "does": "run every native regression row of case_select"
-        },
-        {
           "step_id": "collection_tools",
           "stage": "execute",
           "does": "run every native regression row of collection_tools"
-        },
-        {
-          "step_id": "progress",
-          "stage": "execute",
-          "does": "run every native regression row of progress"
         }
       ],
       "machines": [
@@ -2886,6 +2706,328 @@
           "console": "serial",
           "qmp": true,
           "helper": true
+        }
+      ]
+    },
+    {
+      "case_id": "host.host.scripts_build",
+      "behavior": "The compiler and build checks run once in host.list order with their original judgments and confirmed cleanup",
+      "units": [
+        "the compiler and build checks partition of the complete immutable host.list"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "host_scripts_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "reaped",
+        "cleanup": "the C controllers remove private scratch; the case executor stops every owned helper and native process"
+      },
+      "assertions": [
+        {
+          "assertion_id": "listed",
+          "checks": "all five scripted host partitions are disjoint and cover host.list exactly once with matching compiled dispatch",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "doom_libc",
+          "checks": "Doom C library on both architectures: each prepared freestanding fixture runs on its matching kernel, exits 0 and prints the exact 64-bit format line",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "run_scripts",
+          "checks": "run scripts' command lines: `sh tests/system/run_scripts_test.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "commit_msg",
+          "checks": "commit-msg hook's refusals: `sh tests/system/commit_msg_test.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "prereq",
+          "checks": "prereq.sh's reports, installs and recipe: `sh tests/system/prereq_test.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "check_asm",
+          "checks": "TinyCC's assemblers against GNU as: `sh vendor/tcc/check_asm.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "check_ldscript",
+          "checks": "TinyCC's linker script reader against GNU ld: `sh vendor/tcc/check_ldscript.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "together",
+          "checks": "the makers of several fixture files run once for a parallel request of their files: `sh tests/system/together_test.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "host_suite",
+          "checks": "the host cases run their checks at once, each in its own scratch, with one result and one assertion each: `sh tests/system/host_suite_test.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "case_select",
+          "checks": "tests/run runs the cases chosen, in their order, and refuses a wrong choice before it builds: `python3 -B tests/system/case_select_test.py` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "gnu_cmake_jobs",
+          "checks": "the cmake port's bootstrap runs no more jobs at once than its make allows: `sh tests/system/gnu_cmake_jobs_test.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "gnu_port_resume",
+          "checks": "a stopped build of the GNU ports goes on from the last port it finished: `sh tests/system/gnu_port_resume_test.sh` exits 0",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a declared scenario step has ended",
+          "limit": 15
+        },
+        {
+          "witness_id": "checks",
+          "kind": "counter",
+          "means": "a check of the case has ended, passed or failed",
+          "limit": 12
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 400000000,
+            "ceiling_us": 1200000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 2000,
+        "cpu_ceiling_millis": 16000,
+        "memory_bytes": 2952790016,
+        "disk_bytes": 13421772800,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "host_scripts_scenario",
+          "node": "tests/cases/host/host_scripts_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "products-kernel",
+          "node": "x86_64/rach2/kernel",
+          "per_architecture": false
+        },
+        {
+          "name": "products-image",
+          "node": "x86_64/images/gnu-test.disk",
+          "per_architecture": false
+        },
+        {
+          "name": "scripts-assets",
+          "node": "tests/host-suite/scripts-assets.tar",
+          "per_architecture": false
+        },
+        {
+          "name": "host-list",
+          "node": "tests/host-suite/sources/tests/cases/host/host.list",
+          "per_architecture": false
+        },
+        {
+          "name": "doom-i686",
+          "node": "tests/fixtures/doom-libc-i686",
+          "per_architecture": false
+        },
+        {
+          "name": "doom-i686-kernel",
+          "node": "rach2-recovery/kernel",
+          "per_architecture": false
+        },
+        {
+          "name": "doom-i686-image",
+          "node": "images/etude-image.krffs",
+          "per_architecture": false
+        },
+        {
+          "name": "host-cases",
+          "node": "tests/host-suite/sources/tests/cases/host.host.json",
+          "per_architecture": false
+        }
+      ],
+      "timing": [
+        {
+          "kind": "injected_delay",
+          "where": "tests/cases/host/build_ports.c:157",
+          "assumes": "A one-second job workload allows concurrent jobs to overlap. The assertion counts jobs.",
+          "uncertainty_us": null
+        },
+        {
+          "kind": "injected_delay",
+          "where": "tests/cases/host/host_suite_probe.c:118",
+          "assumes": "The child lingers so the driver can observe and cancel it.",
+          "uncertainty_us": null
+        }
+      ],
+      "native": {
+        "plan": "none",
+        "class": "system",
+        "reason": "native C controls the prepared GNU products and their POSIX process fixtures on each supported host"
+      },
+      "steps": [
+        {
+          "step_id": "listed",
+          "stage": "execute",
+          "does": "check all source list identities"
+        },
+        {
+          "step_id": "products",
+          "stage": "boot",
+          "does": "boot the prepared GNU products helper once",
+          "machine": "products"
+        },
+        {
+          "step_id": "prepare",
+          "stage": "execute",
+          "does": "stage immutable product sources"
+        },
+        {
+          "step_id": "doom-i686",
+          "stage": "boot",
+          "does": "boot the matching i686 recovery helper for the freestanding Doom fixture",
+          "machine": "doom-i686"
+        },
+        {
+          "step_id": "doom_libc",
+          "stage": "execute",
+          "does": "run both prepared Doom C library ABIs on matching kernels and check their complete results"
+        },
+        {
+          "step_id": "run_scripts",
+          "stage": "execute",
+          "does": "run every native regression row of run_scripts"
+        },
+        {
+          "step_id": "commit_msg",
+          "stage": "execute",
+          "does": "run every native regression row of commit_msg"
+        },
+        {
+          "step_id": "prereq",
+          "stage": "execute",
+          "does": "run every native regression row of prereq"
+        },
+        {
+          "step_id": "check_asm",
+          "stage": "execute",
+          "does": "run every native regression row of check_asm"
+        },
+        {
+          "step_id": "check_ldscript",
+          "stage": "execute",
+          "does": "run every native regression row of check_ldscript"
+        },
+        {
+          "step_id": "together",
+          "stage": "execute",
+          "does": "run every native regression row of together"
+        },
+        {
+          "step_id": "gnu_cmake_jobs",
+          "stage": "execute",
+          "does": "run every native regression row of gnu_cmake_jobs"
+        },
+        {
+          "step_id": "gnu_port_resume",
+          "stage": "execute",
+          "does": "run every native regression row of gnu_port_resume"
+        },
+        {
+          "step_id": "host_suite",
+          "stage": "execute",
+          "does": "run every native regression row of host_suite"
+        },
+        {
+          "step_id": "case_select",
+          "stage": "execute",
+          "does": "run every native regression row of case_select"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "products",
+          "qemu": {
+            "architecture": "x86_64",
+            "kernel": "products-kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "products-disk",
+                "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 1073741824,
+            "firmware": "direct",
+            "devices": [
+              "rtl8139"
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": true
         },
         {
           "machine_id": "doom-i686",
@@ -2900,6 +3042,565 @@
             "firmware": "direct",
             "devices": [],
             "boot_options": [
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": true
+        }
+      ]
+    },
+    {
+      "case_id": "host.host.scripts",
+      "behavior": "The worker and CI checks run once in host.list order with their original judgments and confirmed cleanup",
+      "units": [
+        "the worker and CI checks partition of the complete immutable host.list"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "host_scripts_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "reaped",
+        "cleanup": "the C controllers remove private scratch; the case executor stops every owned helper and native process"
+      },
+      "assertions": [
+        {
+          "assertion_id": "listed",
+          "checks": "all five scripted host partitions are disjoint and cover host.list exactly once with matching compiled dispatch",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "machine_measure",
+          "checks": "the measurement drivers of tools/dev against fake commands: `sh tests/system/machine_measure_test.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ci",
+          "checks": "ci reports and bisection: `sh tests/system/ci_test.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ci_run",
+          "checks": "ci's reading of the runner's lines and of etude's history, and its stop after a killed step: `sh tests/system/ci_run_test.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "board",
+          "checks": "board groups, take and the phase in progress: `sh tests/system/board_test.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "progress",
+          "checks": "the manager reports delayed phase work and unassigned failures: `python3 -B tests/system/progress_test.py` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "limited",
+          "checks": "the loops' reading of a usage limit: `sh tests/system/limited_test.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "worker_park",
+          "checks": "the worker loop's parking during a hold and rest of a handed-back intermittent issue: `sh tests/system/worker_park_test.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "release_resume",
+          "checks": "a release resumed from its record, with its runs, reruns and acceptance: `sh tests/system/release_resume_test.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "tidy",
+          "checks": "the loops' cleanup of finished work: `sh tests/system/tidy_test.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "leftovers",
+          "checks": "the manager's removal of failed tests, home files and landed copies: `sh tests/system/leftovers_test.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "agents_guest",
+          "checks": "the agents guest's scratch removed on every exit: `sh tests/system/agents_guest_test.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "testing_run",
+          "checks": "testing.sh run's quoted commands, a worktree's sync and wait's reports: `sh tests/system/testing_run_test.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "space",
+          "checks": "disk admission requires a Windows reading: `sh tests/system/space_test.sh` exits 0",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a declared scenario step has ended",
+          "limit": 16
+        },
+        {
+          "witness_id": "checks",
+          "kind": "counter",
+          "means": "a check of the case has ended, passed or failed",
+          "limit": 14
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 400000000,
+            "ceiling_us": 1200000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 2000,
+        "cpu_ceiling_millis": 16000,
+        "memory_bytes": 2952790016,
+        "disk_bytes": 13421772800,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "host_scripts_scenario",
+          "node": "tests/cases/host/host_scripts_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "products-kernel",
+          "node": "x86_64/rach2/kernel",
+          "per_architecture": false
+        },
+        {
+          "name": "products-image",
+          "node": "x86_64/images/gnu-test.disk",
+          "per_architecture": false
+        },
+        {
+          "name": "scripts-assets",
+          "node": "tests/host-suite/scripts-assets.tar",
+          "per_architecture": false
+        },
+        {
+          "name": "host-list",
+          "node": "tests/host-suite/sources/tests/cases/host/host.list",
+          "per_architecture": false
+        },
+        {
+          "name": "host-cases",
+          "node": "tests/host-suite/sources/tests/cases/host.host.json",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "system",
+        "reason": "native C controls the prepared GNU products and their POSIX process fixtures on each supported host"
+      },
+      "steps": [
+        {
+          "step_id": "listed",
+          "stage": "execute",
+          "does": "check all source list identities"
+        },
+        {
+          "step_id": "products",
+          "stage": "boot",
+          "does": "boot the prepared GNU products helper once",
+          "machine": "products"
+        },
+        {
+          "step_id": "prepare",
+          "stage": "execute",
+          "does": "stage immutable product sources"
+        },
+        {
+          "step_id": "machine_measure",
+          "stage": "execute",
+          "does": "run every native regression row of machine_measure"
+        },
+        {
+          "step_id": "ci",
+          "stage": "execute",
+          "does": "run every native regression row of ci"
+        },
+        {
+          "step_id": "ci_run",
+          "stage": "execute",
+          "does": "run every native regression row of ci_run"
+        },
+        {
+          "step_id": "board",
+          "stage": "execute",
+          "does": "run every native regression row of board"
+        },
+        {
+          "step_id": "limited",
+          "stage": "execute",
+          "does": "run every native regression row of limited"
+        },
+        {
+          "step_id": "worker_park",
+          "stage": "execute",
+          "does": "run every native regression row of worker_park"
+        },
+        {
+          "step_id": "release_resume",
+          "stage": "execute",
+          "does": "run every native regression row of release_resume"
+        },
+        {
+          "step_id": "tidy",
+          "stage": "execute",
+          "does": "run every native regression row of tidy"
+        },
+        {
+          "step_id": "leftovers",
+          "stage": "execute",
+          "does": "run every native regression row of leftovers"
+        },
+        {
+          "step_id": "agents_guest",
+          "stage": "execute",
+          "does": "run every native regression row of agents_guest"
+        },
+        {
+          "step_id": "testing_run",
+          "stage": "execute",
+          "does": "run every native regression row of testing_run"
+        },
+        {
+          "step_id": "space",
+          "stage": "execute",
+          "does": "run every native regression row of space"
+        },
+        {
+          "step_id": "progress",
+          "stage": "execute",
+          "does": "run every native regression row of progress"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "products",
+          "qemu": {
+            "architecture": "x86_64",
+            "kernel": "products-kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "products-disk",
+                "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 1073741824,
+            "firmware": "direct",
+            "devices": [
+              "rtl8139"
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": true
+        }
+      ]
+    },
+    {
+      "case_id": "host.host.scripts_tools",
+      "behavior": "The Etude and credential checks run once in host.list order with their original judgments and confirmed cleanup",
+      "units": [
+        "the Etude and credential checks partition of the complete immutable host.list"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "host_scripts_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "reaped",
+        "cleanup": "the C controllers remove private scratch; the case executor stops every owned helper and native process"
+      },
+      "assertions": [
+        {
+          "assertion_id": "listed",
+          "checks": "all five scripted host partitions are disjoint and cover host.list exactly once with matching compiled dispatch",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_version",
+          "checks": "etude's versions built once, reused and kept side by side: `sh tests/system/etude_version_test.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_deploy",
+          "checks": "etude deployed again and after a cut, changing no clone, key or running test: `sh tests/system/etude_deploy_test.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_launch",
+          "checks": "installed admission before builds, worker checks, owner commands and CI: `python3 -B tests/system/etude_launch_test.py` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "test_status",
+          "checks": "the status reader against waits for the host and ports and live and stale claims: `sh tests/system/test_status_check.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "etude_tooling",
+          "checks": "etude's tooling machine made once, its jobs run and their boots recorded: `sh tests/system/etude_tooling_test.sh` exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "agents_credentials",
+          "checks": "the agents' credential files and log scan: `python3 -B tests/system/agents_credentials_test.py` exits 0",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a declared scenario step has ended",
+          "limit": 9
+        },
+        {
+          "witness_id": "checks",
+          "kind": "counter",
+          "means": "a check of the case has ended, passed or failed",
+          "limit": 7
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 3600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 400000000,
+            "ceiling_us": 1200000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 2000,
+        "cpu_ceiling_millis": 16000,
+        "memory_bytes": 2952790016,
+        "disk_bytes": 13421772800,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "host_scripts_scenario",
+          "node": "tests/cases/host/host_scripts_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "products-kernel",
+          "node": "x86_64/rach2/kernel",
+          "per_architecture": false
+        },
+        {
+          "name": "products-image",
+          "node": "x86_64/images/gnu-test.disk",
+          "per_architecture": false
+        },
+        {
+          "name": "scripts-assets",
+          "node": "tests/host-suite/scripts-assets.tar",
+          "per_architecture": false
+        },
+        {
+          "name": "host-list",
+          "node": "tests/host-suite/sources/tests/cases/host/host.list",
+          "per_architecture": false
+        },
+        {
+          "name": "host-cases",
+          "node": "tests/host-suite/sources/tests/cases/host.host.json",
+          "per_architecture": false
+        }
+      ],
+      "timing": [
+        {
+          "kind": "injected_delay",
+          "where": "tests/cases/host/flow_status.c:109",
+          "assumes": "The wait fixture crosses one retry before comparing the stored start. The assertion compares records, not elapsed time.",
+          "uncertainty_us": null
+        },
+        {
+          "kind": "injected_delay",
+          "where": "tests/cases/host/flow_tooling.c:240",
+          "assumes": "The mock machine has a delayed workload for the product deadline and cancellation checks. The controller gives no completion deadline of its own.",
+          "uncertainty_us": null
+        }
+      ],
+      "native": {
+        "plan": "none",
+        "class": "system",
+        "reason": "native C controls the prepared GNU products and their POSIX process fixtures on each supported host"
+      },
+      "steps": [
+        {
+          "step_id": "listed",
+          "stage": "execute",
+          "does": "check all source list identities"
+        },
+        {
+          "step_id": "products",
+          "stage": "boot",
+          "does": "boot the prepared GNU products helper once",
+          "machine": "products"
+        },
+        {
+          "step_id": "prepare",
+          "stage": "execute",
+          "does": "stage immutable product sources"
+        },
+        {
+          "step_id": "etude_version",
+          "stage": "execute",
+          "does": "run every native regression row of etude_version"
+        },
+        {
+          "step_id": "etude_deploy",
+          "stage": "execute",
+          "does": "run every native regression row of etude_deploy"
+        },
+        {
+          "step_id": "etude_launch",
+          "stage": "execute",
+          "does": "run every native regression row of etude_launch"
+        },
+        {
+          "step_id": "test_status",
+          "stage": "execute",
+          "does": "run every native regression row of test_status"
+        },
+        {
+          "step_id": "etude_tooling",
+          "stage": "execute",
+          "does": "run every native regression row of etude_tooling"
+        },
+        {
+          "step_id": "agents_credentials",
+          "stage": "execute",
+          "does": "run every native regression row of agents_credentials"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "products",
+          "qemu": {
+            "architecture": "x86_64",
+            "kernel": "products-kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "products-disk",
+                "base": "products-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 1073741824,
+            "firmware": "direct",
+            "devices": [
+              "rtl8139"
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
               "rach2.rescue"
             ]
           },
