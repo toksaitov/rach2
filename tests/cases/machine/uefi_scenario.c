@@ -754,7 +754,7 @@ static int wide(struct etude_case *c, int uefi)
     begin(&s, c, 0);
     net_step(&s.u, "install");
     if (net_path(&s.u, "answers.sh", script, sizeof(script)) != NULL) {
-        f = fopen(script, "w");
+        f = fopen(script, "wb");
         if (f == NULL || fputs(answers, f) == EOF || fclose(f) != 0)
             net_fail(&s.u, "the answers could not be written");
     }
