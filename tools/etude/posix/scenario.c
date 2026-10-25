@@ -3480,21 +3480,13 @@ static enum etude_status image_directory(struct etude_case *c, struct etude_case
     return st;
 }
 
-/** Create private input storage before transferring an upload. */
-static enum etude_status image_input(struct etude_case *c, struct etude_case_machine *m,
-                                     const struct image_invocation *v, const char *output)
+/** Require a complete command and confirmed cleanup while placing an input. */
+static enum etude_status image_input_command(struct etude_case *c, struct etude_case_machine *m,
+                                             const char *const args[], const char *output)
 {
-    const char *args[] = {"/bin/busybox", "mkdir", "-m", "0700", "/dev/shm/image-input", NULL};
     struct etude_guest_result result;
-    enum etude_status st;
-    char name[200];
+    enum etude_status st = etude_guest_command(m, args, NULL, NULL, output, &result);
 
-    if (v->input == NULL)
-        return ETUDE_OK;
-    if (v->input_file[0] == '\0')
-        return etude_guest_put(m, v->input, "/dev/shm/image-file", "0600");
-    snprintf(name, sizeof(name), "image-input.%s", output);
-    st = etude_guest_command(m, args, NULL, NULL, name, &result);
     if (st != ETUDE_OK)
         return st;
     if (result.cleanup != ETUDE_CLEANUP_CONFIRMED) {
@@ -3504,7 +3496,30 @@ static enum etude_status image_input(struct etude_case *c, struct etude_case_mac
     if (!result.complete || result.termination.end != ETUDE_END_EXITED ||
         result.termination.value != 0)
         return ETUDE_FAILED;
-    return etude_guest_put(m, v->input, v->input_file, "0600");
+    return ETUDE_OK;
+}
+
+/** Transfer through one protocol field, then place the exact basename. */
+static enum etude_status image_input(struct etude_case *c, struct etude_case_machine *m,
+                                     const struct image_invocation *v, const char *output)
+{
+    const char *mkdir_args[] = {"/bin/busybox",         "mkdir", "-m", "0700",
+                                "/dev/shm/image-input", NULL};
+    const char *move_args[] = {"/bin/busybox", "mv", "/dev/shm/image-file", v->input_file, NULL};
+    enum etude_status st;
+    char name[200];
+
+    if (v->input == NULL)
+        return ETUDE_OK;
+    st = etude_guest_put(m, v->input, "/dev/shm/image-file", "0600");
+    if (st != ETUDE_OK || v->input_file[0] == '\0')
+        return st;
+    snprintf(name, sizeof(name), "image-input.%s", output);
+    st = image_input_command(c, m, mkdir_args, name);
+    if (st != ETUDE_OK)
+        return st;
+    snprintf(name, sizeof(name), "image-place.%s", output);
+    return image_input_command(c, m, move_args, name);
 }
 
 /** Keep a file an image command wrote, even when the command failed. */
