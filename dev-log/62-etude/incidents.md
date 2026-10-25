@@ -1742,3 +1742,15 @@ The f02 ordinary Windows preparation imported its portable artifacts, then faile
 ## The JSON constructor conflicted with a Windows SDK type (#1166)
 
 The same preparation failed agent_server and fakeapi_test when the JSON implementation's native file adapter included the Windows SDK. Its RPC header defines the type boolean, which conflicted with the JSON constructor of that name. The constructor and all callers now use json_boolean; the native file adapter, JSON values and protocol assertions stay unchanged. The complete keep-going build ended at 01:25 on 26 October with seven failed targets from these two causes and 82 successful compile commands. Its 143354-byte log has SHA-256 fae338a7af080c6c4ad984c33881c6243cacb407766ae7281b0802987513dbe7. The successful products and imported artifacts remain available for checked reuse after cleanup.
+
+## The affected-case list missed assertions moved to new cases
+
+The Windows retry reused a 99-attempt selector from before the host checks were split. The old host.host.scripts case contained 46 assertions; its current namesake contains 14, with the remainder in four new cases. Two former host.host.etude checks had also moved to host.host.etude_quiet. Keeping the old case names would have omitted these obligations. The audit found this before the retry launched. Its selector now includes all five additional cases and retains every original case and architecture pair. The public allocation determines the resulting attempt count.
+
+An affected-run selector must preserve the failed assertions as well as case identities. When a case is split or renamed, compare the old assertion inventory with the union of its replacements. A retained case name does not prove retained coverage. The complete audit of the 66 formerly failing case identities is retained under windows-targeted-diagnostic-ebad-plan/case-identity-assertion-audit.json in the runner's build/tests.
+
+## Clean-run checks assumed byte-identical rebuilt artifacts
+
+The private comparison controls verified both the old and new preparation records against the new artifacts after a clean build. That required ordinary clean builds to reproduce every byte. Source inspection showed that mkiso.sh generates an ISO date and embedded GRUB UUID from the current time, while the independent exFAT fixture records newly created file timestamps. SOURCE_DATE_EPOCH alone does not fix those fields. No whole comparison run had started with this control.
+
+The old record must be verified before cleaning and the genuine new record afterward. The controls must retain both records and every changed path, length and digest. A changed artifact requires a retained equivalence review that identifies both hashes, the unchanged candidate, workload and assertions, and evidence explaining its differences. Unexplained differences prevent ranking. The comparison schema stores the review's digest, length and location; it does not validate that review's semantic claims. Ordinary production recipes must not be changed merely to satisfy a private check's assumption.
