@@ -1611,7 +1611,9 @@ static void check_background_prompt(void)
  * because the resume touches the modes only while the process is the
  * foreground group; without that it would return early and prove nothing.
  *
- * The prompt on the master shows that the reader has taken echo away, the
+ * The report pipe first announces that the slave is open. Reading the master
+ * before then can return EOF on a host with no slave yet. The prompt on the
+ * master shows that the reader has taken echo away, the
  * first `tcsetattr`; the restore the signal provokes is the second. After a
  * death three calls are due: the echo-off, the restore the death began, and
  * the restore the second death made because the flag was still up; two means
@@ -1660,7 +1662,7 @@ static void check_restore_reentry(const char *inject)
 
         return;
     }
-    if (!read_until(master, "Password: ")) {
+    if (!read_ready(fds[0]) || !read_until(master, "Password: ")) {
         fail("the reader the restore-reentry case interrupts never prompted");
         kill(child, SIGKILL);
         (void)reap(child, &status);
@@ -3347,6 +3349,9 @@ int main(int argc, char **argv)
             Tcs_raise_sig = SIGCONT;
         }
         Tcs_raise_at = 2;
+        if (write(1, "r", 1) != 1) {
+            return 98;
+        }
         (void)pwauth_read_password("Password: ", secret, sizeof(secret));
 
         return 0;
