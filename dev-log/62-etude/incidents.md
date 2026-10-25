@@ -1430,3 +1430,7 @@ The first native Windows collection ran the GNU executor fixture on Rach2, where
 ## Fresh artifact digests bypassed the settling rule (#1137)
 
 The GNU artifact fixture accepted an object after a same-size overwrite on Rach2. The store cached a newly published object's digest immediately, assuming chmod would change its recorded change time. On a filesystem with coarse timestamps, chmod and the write can occur in one tick. Newly published objects now obey the existing two-second settling rule. Digest entries have a version prefix so entries made under the earlier rule are read again. The cache-reuse test explicitly establishes a changed timestamp; separate rows require immediate damage to be rejected without a cached digest and earlier-format entries to be ignored.
+
+## Host-only collections inherited the machine disk floor (#1138)
+
+The GNU collection fixture selected prepared host cases in its private guest filesystem, but execution stopped before its first case because the tree had less than 40 GiB free. The public collection entry applied the machine-launch disk floor to every selection. It now applies that floor to artifact production and to selections that boot guests or machines. Host-only execution still admits each case against the filesystem's measured free bytes. The existing GNU collection fixture exercises this path on the small private filesystem; no capacity override or refusal assertion changes.
