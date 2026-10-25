@@ -1690,10 +1690,11 @@ static void value_text(int64_t value, char out[32])
 /**
  * Say whether the run's recorded budget is the judgement's: the same
  * verdict or an unevaluated verdict (`unknown`), and, when the judgement
- * has a charge, the same charge and one-time setup. A line of kind
- * `record` says how it differs.
+ * has a charge, the same charge and one-time setup. A verified physical
+ * first run may retain a null charge with its validated exemption while
+ * owner cleanup was pending. A line of kind `record` says how it differs.
  */
-static int agrees(const struct run_view *v, struct etude_budget_judgement *j)
+static int agrees(const struct run_view *v, int exempt, struct etude_budget_judgement *j)
 {
     const struct eh_json *b = eh_json_get(v->run->data, "budget");
     int64_t charged = number_of(eh_json_get(b, "charged_us"), "value");
@@ -1702,7 +1703,15 @@ static int agrees(const struct run_view *v, struct etude_budget_judgement *j)
     char x[32], y[32];
     int ok = same(verdict, "unknown") || same(verdict, verdict_names[j->report.verdict]);
 
-    if (j->charged_known && !(v->routine && same(verdict, "unknown") && charged < 0)) {
+    const struct eh_json *value = eh_json_get(eh_json_get(b, "charged_us"), "value");
+    int first_pending = v->routine && j->charged_known && exempt &&
+                        j->cls == ETUDE_BUDGET_FIRST_RUN &&
+                        j->report.verdict == ETUDE_BUDGET_EXEMPT && same(verdict, "exempt") &&
+                        value && value->type == 'z' && once == (int64_t)j->one_time_us;
+    if (same(verdict, "exempt") && charged < 0)
+        ok = ok && first_pending;
+    if (j->charged_known && !first_pending &&
+        !(v->routine && same(verdict, "unknown") && charged < 0)) {
         ok = ok && charged == (int64_t)j->charged_us && once == (int64_t)j->one_time_us;
     }
     if (!ok) {
@@ -1755,7 +1764,7 @@ int etude_budget_judge(const struct cmp_history *h, const struct etude_budget_po
     check_preparation(&v, manifests, n, j);
     if (charge(&v, j) == 0) {
         judge_verdict(&v, exempt, j);
-        j->agrees = agrees(&v, j);
+        j->agrees = agrees(&v, exempt, j);
         rc = j->report.lines.failed ? -1 : 0;
     }
     if (rc != 0) {

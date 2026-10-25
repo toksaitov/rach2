@@ -80,7 +80,7 @@ static const struct json *the_case;
 
 /* The policy of the rows that judge runs. */
 static struct etude_budget_policy policy;
-static const char *preparation_artifacts;
+static const char *preparation_artifacts, *runtime_load;
 
 /** Leave through the fixtures' cleanup after a signal, in the parent. */
 static void stopped(int sig)
@@ -640,7 +640,11 @@ static int write_summary(struct writer *w, const char *plan_id, char ids[][300],
                "{\"plan_id\":\"%s\",\"items\":[%s],\"preparation_steps\":[%s],\"time\":%s,"
                "\"resources\":%s,\"stage_totals\":%s,\"family_totals\":%s,"
                "\"useful_concurrency\":%s,\"load\":%s,\"budget\":%s,\"result\":%s}",
-               plan_id, items, prep, time, RESOURCES, b, b, b, r->end < 0 ? b : load, budget,
+               plan_id, items, prep, time, RESOURCES, b, b, b,
+               r->end < 0     ? b
+               : runtime_load ? runtime_load
+                              : load,
+               budget,
                r->end < 0 ? "{\"outcome\":\"incomplete\",\"reason\":\"the executor was lost\","
                             "\"cleanup\":\"unconfirmed\",\"evidence\":[],\"capture_errors\":[],"
                             "\"disruptions\":[]}"
