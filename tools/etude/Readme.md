@@ -148,7 +148,7 @@ The source-check preparation runs `etude check` through [`suitecheck.sh`](../ver
     etude provision version [-r REV] [-c CC] [-C CACHE] -l
     etude provision version [-r REV] [-c CC] [-C CACHE] -s
 
-The source snapshot includes the C, header and Make files of `tests/native/`, which the Rach2 entry links, for both a working tree and a selected revision. Their bytes enter the version identity.
+The source snapshot includes the C, header and Make files of `tests/native/`, which the Rach2 entry links, and `tests/cases/host/host_script_inventory.c` with its header, which host preparation links, for both a working tree and a selected revision. Their bytes enter the version identity.
 
 Source validation reads the file sizes and bytes in batches while preserving each file's boundary. It rejects NUL bytes, a missing final newline and the transfer delimiter as a complete line. One encoded text stream transfers the files, including empty ones; the receiver verifies their complete digest before compiling. A truncated transfer never reaches the build call.
 

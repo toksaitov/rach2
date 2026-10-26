@@ -42,7 +42,8 @@ etude_hash()
 # etude_select: copy from standard input to standard output the paths that
 # belong to etude's source: the C sources, headers and make files under
 # tools/etude but its fixtures, the native collection's C, headers and make
-# files, the schemas its programs read, and the SHA-256 of utils/.
+# files, the schemas its programs read, the host script inventory of
+# tests/cases/host, and the SHA-256 of utils/.
 etude_select()
 {
     while read -r path; do
@@ -51,6 +52,7 @@ etude_select()
             tools/etude/*.c|tools/etude/*.h|tools/etude/*.mk) printf '%s\n' "$path" ;;
             tools/etude/schemas/*.schema.json) printf '%s\n' "$path" ;;
             tests/native/*.c|tests/native/*.h|tests/native/*.mk) printf '%s\n' "$path" ;;
+            tests/cases/host/host_script_inventory.[ch]) printf '%s\n' "$path" ;;
             utils/sha256.c|utils/sha256.h) printf '%s\n' "$path" ;;
         esac
     done
