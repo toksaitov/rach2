@@ -178,11 +178,23 @@ static void translated(const char *s, char from, char to)
         putchar(*s == from ? to : *s);
 }
 
+/* The time an issue last changed, which the fixture derives from its body. */
+static const char *updated(const struct issue *r)
+{
+    static char out[64];
+    const char *p = clean_field(r, 8);
+    unsigned long h = 5381;
+    while (*p)
+        h = h * 33 + (unsigned char)*p++;
+    snprintf(out, sizeof(out), "2026-10-02T00:00:00Z/%lx", h & 0xffffffffUL);
+    return out;
+}
+
 static int listing(struct board *b, const char *form)
 {
     unsigned i, count = 0;
     int board = !strcmp(form, "board"), repo = !strcmp(form, "repo"),
-        openrepo = !strcmp(form, "repo-open");
+        openrepo = !strcmp(form, "repo-open"), closed = !strcmp(form, "closed");
     const char *lost = board ? "board" : repo || openrepo ? "repo" : "issues";
     for (i = 0; i < b->count; i++) {
         const struct issue *r = &b->issues[i];
@@ -193,6 +205,8 @@ static int listing(struct board *b, const char *form)
             continue;
         if ((openrepo || !strcmp(form, "open")) && !isopen)
             continue;
+        if (closed && isopen)
+            continue;
         if (count++ == 2 && !strcmp(env("BOARD_TEST_LOST"), lost))
             return 1;
         if (board || repo || openrepo) {
@@ -200,6 +214,10 @@ static int listing(struct board *b, const char *form)
             translated(clean_field(r, 3), '_', ' ');
             printf("\t%s\t%s\t%s\t%u\t%s\t%s\t", field(r, 1), field(r, 2), clean_field(r, 4),
                    count_csv(clean_field(r, 5)), clean_field(r, 7), clean_field(r, 6));
+        } else if (closed) {
+            printf("%s\t%s\t2026-10-01T00:00:00Z\t%s\t%s\t%s\n", field(r, 1), updated(r),
+                   clean_field(r, 4), clean_field(r, 6), clean_field(r, 9));
+            continue;
         } else
             printf("%s\t%s\t%s\t%s\t%s\t", field(r, 1), field(r, 2),
                    isopen ? "-" : "2026-10-01T00:00:00Z", clean_field(r, 4), clean_field(r, 6));
@@ -273,6 +291,29 @@ static struct request request(int argc, char **argv)
     return r;
 }
 
+/* Answer a lookup of closed issues' bodies, as board.sh's issues prints it. */
+static int bodies(struct board *b, const char *query)
+{
+    const char *p = query;
+    if (!strcmp(env("BOARD_TEST_FAIL"), "bodies"))
+        return 1;
+    while ((p = strstr(p, "issue(number: ")) != NULL) {
+        char n[32];
+        const struct issue *i;
+        p += 14;
+        snprintf(n, sizeof(n), "%ld", strtol(p, NULL, 10));
+        i = issue(b, n);
+        if (!i)
+            return 1;
+        if (!strcmp(env("BOARD_TEST_FAIL"), "short") && !strcmp(n, "21"))
+            continue;
+        printf("%s\t%s\t", n, updated(i));
+        print_named(clean_field(i, 8));
+        printf("\t%s\n", *env("BOARD_TEST_FRESH") ? "new" : "kept");
+    }
+    return 0;
+}
+
 static int graphql(struct board *b, const struct request *r)
 {
     const char *fail = env("BOARD_TEST_FAIL");
@@ -284,14 +325,16 @@ static int graphql(struct board *b, const struct request *r)
             return 1;
         if (strcmp(fail, "project") && strcmp(fail, "remove") && strcmp(fail, "close"))
             printf("I%s\n", r->n);
-    } else if (strstr(r->query, "includeArchived: false"))
+    } else if (strstr(r->query, "issue(number: "))
+        return bodies(b, r->query);
+    else if (strstr(r->query, "includeArchived: false"))
         return listing(b, strstr(r->query, "states: [OPEN]") ? "repo-open" : "repo");
     else if (strstr(r->query, "items(first: 100"))
         return listing(b, "board");
     else if (strstr(r->query, "states: [OPEN]"))
         return listing(b, "open");
-    else if (strstr(r->query, "issues(first: 100"))
-        return listing(b, "all");
+    else if (strstr(r->query, "states: [CLOSED]"))
+        return listing(b, "closed");
     else
         return 2;
     return 0;
@@ -615,11 +658,13 @@ static const char board_review[] =
 
 static int use(struct fixture *f, const char *data)
 {
-    static const char *const names[] = {"FAIL", "LOST",  "FULL",     "CORE",  "ME",
-                                        "NOW",  "STALE", "TIMELINE", "STATE", NULL};
-    static const char *const values[] = {"none", "", "no", "success", "", "", "", "", "OPEN"};
+    static const char *const names[] = {"FAIL",  "LOST",     "FULL",  "CORE",  "ME", "NOW",
+                                        "STALE", "TIMELINE", "STATE", "FRESH", NULL};
+    static const char *const values[] = {"none", "", "no", "success", "", "", "", "", "OPEN", ""};
     unsigned i;
     char name[80];
+    if (!fx_remove(flow_path(f, "cache")))
+        return 0;
     for (i = 0; names[i]; i++) {
         snprintf(name, sizeof(name), "BOARD_TEST_%s", names[i]);
         fx_env(name, values[i]);
@@ -1229,6 +1274,61 @@ static int phase_rows(struct fixture *f)
     return ok;
 }
 
+/* Bodies of closed issues are read once, and again only after they change. */
+static int cache_rows(struct fixture *f)
+{
+    static const char *const all = "10 11 16 17 18 19 23 24";
+    char *first;
+    int ok;
+    if (!use(f, board_main))
+        return 0;
+    call(f, "members", "7", NULL, NULL);
+    first = strdup(f->out ? f->out : "");
+    ok = fx_check(f,
+                  first_words(f, all) && calls("issue(number: 19)") && calls("issue(number: 21)") &&
+                      !calls("issue(number: 10)") &&
+                      fx_has(flow_path(f, "cache/rach2/issue-parts"), "19\t2026-10-02T"),
+                  "members-read");
+    call(f, "members", "7", NULL, NULL);
+    ok = fx_check(
+             f, first && first_words(f, all) && !strcmp(f->out, first) && !calls("issue(number: "),
+             "members-cached") &&
+         ok;
+    free(first);
+    if (!alter("21", 8, "Moved. Part of #7."))
+        return 0;
+    call(f, "members", "7", NULL, NULL);
+    ok = fx_check(f,
+                  first_words(f, "10 11 16 17 18 19 21 23 24") && calls("issue(number: 21)") &&
+                      !calls("issue(number: 19)") && !calls("issue(number: 20)"),
+                  "members-edited") &&
+         ok;
+    return ok;
+}
+
+/* A lost or short read of bodies fails, and a body just changed is not kept. */
+static int cache_fault_rows(struct fixture *f)
+{
+    static const char *const faults[] = {"bodies", "short"};
+    unsigned i;
+    int ok = 1;
+    for (i = 0; i < sizeof(faults) / sizeof(faults[0]); i++) {
+        if (!use(f, board_main))
+            return 0;
+        fx_env("BOARD_TEST_FAIL", faults[i]);
+        call(f, "members", "7", NULL, NULL);
+        ok = fx_check(f, f->status && !*f->out && *f->err, faults[i]) && ok;
+    }
+    if (!use(f, board_main))
+        return 0;
+    fx_env("BOARD_TEST_FRESH", "yes");
+    call(f, "members", "7", NULL, NULL);
+    call(f, "members", "7", NULL, NULL);
+    return fx_check(f, first_words(f, "10 11 16 17 18 19 23 24") && calls("issue(number: 19)"),
+                    "members-fresh") &&
+           ok;
+}
+
 int flow_board(struct fixture *f)
 {
     static const char *const groups[] = {
@@ -1246,6 +1346,7 @@ int flow_board(struct fixture *f)
     fx_env("FLOW_BOARD", "1");
     fx_env("BOARD_TEST_WORK", flow_path(f, "state"));
     fx_env("BOARD_TEST_DATA", flow_path(f, "data"));
+    fx_env("XDG_CACHE_HOME", flow_path(f, "cache"));
     if (!flow_copy(f, "tools/flow/board.sh", "board.sh") || !fx_mock(f, "gh") ||
         !fx_mkdir(flow_path(f, "state")))
         return 0;
@@ -1261,5 +1362,7 @@ int flow_board(struct fixture *f)
     ok = archive_rows(f) && ok;
     ok = start_rows(f) && ok;
     ok = phase_rows(f) && ok;
+    ok = cache_rows(f) && ok;
+    ok = cache_fault_rows(f) && ok;
     return ok;
 }

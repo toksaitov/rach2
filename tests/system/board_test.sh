@@ -55,7 +55,8 @@ done
 
 # lines FORM: print the issues as board.sh's items reads them from the list of
 # the board's items, for FORM `board`, or from the repository's issues, for
-# `repo` and `repo-open`, or as its issues reads them, for `all` and `open`.
+# `repo` and `repo-open`, or as its issues reads them, for `open` and
+# `closed`. The time an issue last changed is made from its body.
 lines()
 {
     awk -F '|' -v form="$1" '
@@ -80,10 +81,12 @@ lines()
                 (f[5] == "" ? 0 : split(f[5], a, ",")) "\t" f[7] "\t" f[6] "\t" \
                 named(f[8]) "\t" f[9]
         }
-        form == "all" || form == "open" && f[2] == "OPEN" {
-            print f[1] "\t" f[2] "\t" \
-                (f[2] == "CLOSED" ? "2026-10-01T00:00:00Z" : "-") "\t" f[4] "\t" \
-                f[6] "\t" named(f[8]) "\t" f[9]
+        form == "closed" && f[2] == "CLOSED" {
+            print f[1] "\t2026-10-02T00:00:00Z/" f[8] "\t2026-10-01T00:00:00Z\t" \
+                f[4] "\t" f[6] "\t" f[9]
+        }
+        form == "open" && f[2] == "OPEN" {
+            print f[1] "\t" f[2] "\t-\t" f[4] "\t" f[6] "\t" named(f[8]) "\t" f[9]
         }' "$data"
 }
 
@@ -155,11 +158,22 @@ case "$1 $2" in
                     project|remove|close) exit 0 ;;
                 esac
                 echo "I$n" ;;
+            *'issue(number: '*)
+                printf '%s\n' "$query" | tr ' ' '\n' | sed -n 's/^\([0-9][0-9]*\))$/\1/p' |
+                    while read -r k; do
+                        body=$(field "$k" 8)
+                        printf '%s\t2026-10-02T00:00:00Z/%s\t%s\tkept\n' "$k" "$body" \
+                            "$(printf '%s\n' "$body" | awk '{
+                                while (match($0, /Part of #[0-9]+/)) {
+                                    printf "%s%s", (n++ ? "," : ""), substr($0, RSTART + 9, RLENGTH - 9)
+                                    $0 = substr($0, RSTART + RLENGTH)
+                                } }')"
+                    done ;;
             *'states: [OPEN]'*'includeArchived: false'*) lines repo-open | pages repo ;;
             *'includeArchived: false'*) lines repo | pages repo ;;
             *'items(first: 100'*) lines board | pages board ;;
             *'states: [OPEN]'*) lines open | pages issues ;;
-            *'issues(first: 100'*) lines all | pages issues ;;
+            *'states: [CLOSED]'*) lines closed | pages issues ;;
             *) exit 2 ;;
         esac ;;
     'api -X')
@@ -294,10 +308,11 @@ B=1111111111111111111111111111111111111111
 H=2222222222222222222222222222222222222222
 C=3333333333333333333333333333333333333333
 BOARD_TEST_HEAD=$H
+XDG_CACHE_HOME=$work/cache
 PATH=$work/bin:$PATH
 export BOARD_TEST_WORK BOARD_TEST_DATA BOARD_TEST_ME BOARD_TEST_NOW \
     BOARD_TEST_STALE BOARD_TEST_TIMELINE BOARD_TEST_STATE BOARD_TEST_FAIL BOARD_TEST_LOST \
-    BOARD_TEST_FULL BOARD_TEST_CORE BOARD_TEST_HEAD PATH
+    BOARD_TEST_FULL BOARD_TEST_CORE BOARD_TEST_HEAD XDG_CACHE_HOME PATH
 tab=$(printf '\t')
 
 # An issue that only the owner's accounts can do, a member of phase 7.
@@ -363,6 +378,7 @@ review="7|OPEN|In_progress|phase|-|-|0|-|phase: seven|phase: started at $B;Looks
 use()
 {
     printf '%s\n' "$1" | sed "${2:-}" > "$BOARD_TEST_DATA"
+    rm -rf "$XDG_CACHE_HOME"
     BOARD_TEST_FAIL=none BOARD_TEST_LOST='' BOARD_TEST_FULL=no
     BOARD_TEST_CORE=success BOARD_TEST_ME='' BOARD_TEST_NOW=''
     BOARD_TEST_STALE='' BOARD_TEST_TIMELINE='' BOARD_TEST_STATE=OPEN

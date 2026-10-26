@@ -122,7 +122,8 @@
 # number, one a line: the number, the state, the time it closed or `-`, the
 # labels joined by commas, and the title, separated by tabs. It reads the
 # repository's issues through GraphQL, every page, and not through the search
-# API, whose index lags behind the issues.
+# API, whose index lags behind the issues; the closed issues' bodies come from
+# a cache, as `issues` below says.
 #
 # `link N...` makes each N a sub-issue of the phase In progress P. When GitHub
 # refuses, as it does past a hundred sub-issues, it adds the line `Part of
@@ -326,14 +327,23 @@ items()
 # closed or `-`, the labels joined by commas, the parent's number or nothing,
 # the numbers that `Part of #N` gives in the body joined by commas, and the
 # title. Fail when any page of the answer is lost.
+#
+# Bodies are the slow part of the answer, some seconds for each hundred, and
+# most issues are closed, so the closed issues are read without them. The
+# numbers that a closed issue's body gives are kept in the account's cache,
+# `$XDG_CACHE_HOME/rach2/issue-parts` or `~/.cache/rach2/issue-parts`, one
+# line each with the issue's number and the time it last changed, which an
+# edit of its body moves; only the bodies of the closed issues the cache lacks
+# at that time are read, a hundred to a query. An issue that changed in the
+# last minute is not kept, since two edits within one second leave that time
+# as it was. The open issues are read first, so that an issue closed between
+# the two reads is printed once, as closed.
 issues()
 {
-    states='OPEN, CLOSED'
-    [ "$1" != open ] || states=OPEN
-    gh api graphql --paginate -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='
+    open=$(gh api graphql --paginate -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='
         query($o: String!, $r: String!, $endCursor: String) {
             repository(owner: $o, name: $r) {
-                issues(first: 100, after: $endCursor, states: ['"$states"']) {
+                issues(first: 100, after: $endCursor, states: [OPEN]) {
                     pageInfo { hasNextPage endCursor }
                     nodes { number state closedAt title body
                         labels(first: 20) { nodes { name } }
@@ -344,7 +354,89 @@ issues()
              (.parent.number // "" | tostring),
              ([.body // "" | scan("Part of #([0-9]+)") | .[0]] |
               unique | join(",")),
-             (.title | gsub("\t"; " "))] | join("\t")'
+             (.title | gsub("\t"; " "))] | join("\t")') || return 1
+    if [ "$1" = open ]; then
+        [ -z "$open" ] || printf '%s\n' "$open"
+        return 0
+    fi
+    closed=$(gh api graphql --paginate -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='
+        query($o: String!, $r: String!, $endCursor: String) {
+            repository(owner: $o, name: $r) {
+                issues(first: 100, after: $endCursor, states: [CLOSED]) {
+                    pageInfo { hasNextPage endCursor }
+                    nodes { number updatedAt closedAt title
+                        labels(first: 20) { nodes { name } }
+                        parent { number } } } } }' \
+        --jq '.data.repository.issues.nodes[] |
+            [(.number | tostring), .updatedAt, (.closedAt // "-"),
+             ([.labels.nodes[].name] | join(",")),
+             (.parent.number // "" | tostring),
+             (.title | gsub("\t"; " "))] | join("\t")') || return 1
+    cache=${XDG_CACHE_HOME:-$HOME/.cache}/rach2/issue-parts
+    missing=$(printf '%s\n' "$closed" | awk -F '\t' -v cache="$cache" '
+        BEGIN {
+            while ((getline line < cache) > 0) {
+                split(line, f, "\t")
+                at[f[1]] = f[2]
+            }
+        }
+        NF > 0 && at[$1] != $2 { print $1 }')
+    fetched=
+    while [ -n "$missing" ]; do
+        lookups=$(printf '%s\n' "$missing" | head -n 100 | awk '
+            { printf "i%s: issue(number: %s) { number updatedAt body } ", $1, $1 }')
+        missing=$(printf '%s\n' "$missing" | sed '1,100d')
+        got=$(gh api graphql -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='
+            query($o: String!, $r: String!) {
+                repository(owner: $o, name: $r) { '"$lookups"'} }' \
+            --jq '.data.repository[] |
+                [(.number | tostring), .updatedAt,
+                 ([.body // "" | scan("Part of #([0-9]+)") | .[0]] |
+                  unique | join(",")),
+                 (if (.updatedAt | fromdateiso8601) < now - 60
+                  then "kept" else "new" end)] | join("\t")') || return 1
+        fetched="$fetched$got
+"
+    done
+    merged=$(printf '%s\n' "$closed" | OPEN=$open FETCHED=$fetched awk -F '\t' -v cache="$cache" '
+        BEGIN {
+            while ((getline line < cache) > 0) {
+                split(line, f, "\t")
+                at[f[1]] = f[2]
+                parts[f[1]] = f[3]
+            }
+            n = split(ENVIRON["FETCHED"], l, "\n")
+            for (i = 1; i <= n; i++)
+                if (split(l[i], f, "\t") == 4) {
+                    got[f[1]] = 1
+                    at[f[1]] = f[2]
+                    parts[f[1]] = f[3]
+                    fresh[f[1]] = f[4] == "new"
+                }
+        }
+        NF == 0 { next }
+        !got[$1] && at[$1] != $2 { lost = 1; exit }
+        {
+            seen[$1] = 1
+            print "L\t" $1 "\tCLOSED\t" $3 "\t" $4 "\t" $5 "\t" parts[$1] "\t" $6
+            if (!fresh[$1])
+                print "C\t" $1 "\t" at[$1] "\t" parts[$1]
+        }
+        END {
+            if (lost)
+                exit 1
+            n = split(ENVIRON["OPEN"], l, "\n")
+            for (i = 1; i <= n; i++)
+                if (split(l[i], f, "\t") > 0 && !(f[1] in seen))
+                    print "L\t" l[i]
+        }') || return 1
+    if mkdir -p "${cache%/*}" 2> /dev/null &&
+        printf '%s\n' "$merged" | sed -n 's/^C.//p' > "$cache.$$" 2> /dev/null; then
+        mv -f "$cache.$$" "$cache" 2> /dev/null || rm -f "$cache.$$"
+    else
+        rm -f "$cache.$$"
+    fi
+    printf '%s\n' "$merged" | sed -n 's/^L.//p'
 }
 
 # read_board [all]: read the board into `board`, as `items` prints it, or say
