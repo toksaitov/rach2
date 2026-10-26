@@ -17,23 +17,53 @@
 # vocabulary, and a person checks the rest of the register rule in review.
 # The script uses grep, find, awk and sed, and python3 for the Python files.
 #
+# It checks the tree it is in, or the one -C names, which the git hooks'
+# tools/verify/hookcheck.sh gives as a copy of what a commit has. FILE
+# arguments, relative to the tree's root, limit the checks to those of the
+# files it would read anyway, each judged by the rules of its kind.
+#
+# Usage: textcheck.sh [-C DIR] [FILE ...]
+#
 set -u
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+TREE=$REPO
+while getopts C: opt; do
+    case $opt in
+        C) TREE=$OPTARG ;;
+        *) echo 'textcheck: usage: textcheck.sh [-C DIR] [FILE ...]' >&2; exit 2 ;;
+    esac
+done
+shift $((OPTIND - 1))
 
 # The byte scanner beside this script, built by make when missing or older
 # than its source: the shell text tools disagree across platforms about NUL
 # and high bytes, and C does not.
 ASCIISCAN="$REPO/build/tools/verify/asciiscan"
 make -s -C "$REPO" build/tools/verify/asciiscan || exit 1
-cd "$REPO" || exit 1
+cd "$TREE" || exit 1
 
 findings=
-trap 'rm -f ${findings:+"$findings"}' EXIT
+only=
+trap 'rm -f ${findings:+"$findings"} ${only:+"$only"}' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 findings=$(mktemp)
+if [ "$#" -gt 0 ]; then
+    only=$(mktemp)
+    printf '%s\n' "$@" >"$only"
+fi
+
+# Pass on the paths of the input that the FILE arguments name, without a
+# leading ./, or every path when there are none.
+pick() {
+    if [ -n "$only" ]; then
+        sed 's|^\./||' | grep -Fx -f "$only"
+    else
+        cat
+    fi
+}
 
 # Find in-house files under the source roots; the arguments are the name
 # filter and -print. The extracted vendor trees and their built output
@@ -118,7 +148,7 @@ config_files() {
     # C, headers and other code, and the configuration files. The style
     # check's conventions case checks the C files and headers too.
     { md_files; script_files; ch_files; other_code_files; py_files; config_files; } |
-        sort -u | while IFS= read -r f; do
+        pick | sort -u | while IFS= read -r f; do
         [ -f "$f" ] || continue
         "$ASCIISCAN" "$f" || true
     done
@@ -127,7 +157,7 @@ config_files() {
     # Double-quoted strings are removed first so a usage string is not
     # flagged; bare code never has a spaced "--", so what remains is in a
     # comment.
-    { ch_files; other_code_files; } | sort -u | while IFS= read -r f; do
+    { ch_files; other_code_files; } | pick | sort -u | while IFS= read -r f; do
         [ -f "$f" ] || continue
         sed 's/"[^"]*"//g' "$f" | grep -n ' -- ' | sed "s|^|$f:|; s|\$|  [prose em-dash]|"
     done
@@ -138,7 +168,7 @@ config_files() {
     # end-of-options "set -- ..." and a "--flag" in bare code are not flagged;
     # the $(...) check matches the prose the directive prints, where a spaced
     # "--" is likewise an em-dash, not a flag.
-    script_files | sort -u | while IFS= read -r f; do
+    script_files | pick | sort -u | while IFS= read -r f; do
         [ -f "$f" ] || continue
         grep -nE '^[[:space:]]*@?(echo|printf).*"[^"]* -- ' "$f" \
             | sed "s|^|$f:|; s|\$|  [prose em-dash in a message]|"
@@ -150,13 +180,13 @@ config_files() {
     # docstring or a message. pyprose.py parses each file to tell these from
     # the other strings, so that a command the program runs or generates may
     # end its options with "--".
-    py_files | sort -u | python3 tools/verify/pyprose.py \
+    py_files | pick | sort -u | python3 tools/verify/pyprose.py \
         || echo "tools/verify/pyprose.py:0:  [check did not finish]"
 
     # A spaced "--" on any line of a configuration file. None of these
     # formats writes an option or an operator that way, so the spaced form is
     # prose, in a comment or in text a file stages.
-    config_files | sort -u | while IFS= read -r f; do
+    config_files | pick | sort -u | while IFS= read -r f; do
         [ -f "$f" ] || continue
         grep -n ' -- ' "$f" \
             | sed "s|^|$f:|; s|\$|  [prose em-dash]|"
@@ -166,12 +196,12 @@ config_files() {
     # configuration file. Strings are stripped from the code first, so a
     # capitalized "Phase" or "Part" followed by a number in what remains is a
     # comment marker. Phases are recorded in commit messages and dev-log/.
-    { ch_files; other_code_files; } | sort -u | while IFS= read -r f; do
+    { ch_files; other_code_files; } | pick | sort -u | while IFS= read -r f; do
         [ -f "$f" ] || continue
         sed 's/"[^"]*"//g' "$f" | grep -nE '\b(Phase|Part) [0-9]' \
             | sed "s|^|$f:|; s|\$|  [Phase/Part diary tag]|"
     done
-    config_files | sort -u | while IFS= read -r f; do
+    config_files | pick | sort -u | while IFS= read -r f; do
         [ -f "$f" ] || continue
         grep -nE '\b(Phase|Part) [0-9]' "$f" \
             | sed "s|^|$f:|; s|\$|  [Phase/Part diary tag]|"
@@ -180,7 +210,7 @@ config_files() {
     # In Markdown, flag a spaced "--" and a "-" bullet, skipping fenced and
     # indented code so that a command example is not read as prose. A fence is
     # ``` or ~~~ after any leading blanks.
-    md_files | sort -u | while IFS= read -r f; do
+    md_files | pick | sort -u | while IFS= read -r f; do
         [ -f "$f" ] || continue
         awk -v file="$f" '
             /^[ \t]*```/ { fence = !fence; next }
@@ -195,7 +225,7 @@ config_files() {
     # A component document's "##" headings come from the list in the
     # Documentation section of AGENTS.md, in its order, each at most once;
     # "Use" and "Running" share the first place. Fenced code is skipped.
-    doc_files | sort -u | while IFS= read -r f; do
+    doc_files | pick | sort -u | while IFS= read -r f; do
         [ -f "$f" ] || continue
         awk -v file="$f" '
             BEGIN {
@@ -224,7 +254,7 @@ config_files() {
 
     # A component document cites no milestone by number: no "milestone N"
     # and no link into a milestone's directory under dev-log/.
-    doc_files | sort -u | while IFS= read -r f; do
+    doc_files | pick | sort -u | while IFS= read -r f; do
         [ -f "$f" ] || continue
         awk -v file="$f" '
             tolower($0) ~ /milestones? +[0-9]/ ||
