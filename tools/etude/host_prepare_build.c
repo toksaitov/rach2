@@ -416,6 +416,12 @@ static int scan_inputs(struct hp_context *c, struct hp_check *check, const char 
         struct hp_words words = {0};
         if (!text)
             goto failed;
+        /* A Windows compiler's text-mode output ends each line with CR LF. */
+        char *kept = text;
+        for (char *p = text; *p; p++)
+            if (p[0] != '\r' || p[1] != '\n')
+                *kept++ = *p;
+        *kept = 0;
         for (char *p = text; *p; p++)
             if (p[0] == '\\' && p[1] == '\n')
                 p[0] = p[1] = ' ';
