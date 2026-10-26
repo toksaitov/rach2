@@ -8,12 +8,16 @@
  */
 #include <errno.h>
 #include <fcntl.h>
+#ifndef _WIN32
 #include <poll.h>
+#endif
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
 #include <sys/wait.h>
+#endif
 #include <time.h>
 #include <unistd.h>
 
@@ -21,7 +25,13 @@
 #include "../guest/wire.h"
 #include "../json.h"
 #include "etude/remote.h"
+#ifdef _WIN32
+#include "../win/files.h"
+#include <wchar.h>
+#define posix_now_us etude_win_mono_us
+#else
 #include "posix.h"
+#endif
 
 /* The bytes of a frame besides a `data` frame's base64. */
 #define FRAME_OVERHEAD 160
@@ -38,7 +48,17 @@ struct etude_remote {
     struct etude_remote_conf conf;
     char session[ETUDE_FRAME_TOKEN_LEN + 1];
     char boot[ETUDE_FRAME_TOKEN_LEN + 1]; /* the responder's, or "" */
-    pid_t child;                          /* the transport, or -1 */
+#ifdef _WIN32
+    struct etude_win_sup supervisor;
+    struct etude_win_child *child;
+    HANDLE input;
+    struct jbuf incoming;
+    int supervisor_open, transport_closing, transport_error;
+#else
+    pid_t child; /* the transport, or -1 */
+#endif
+    int transport_ok, transport_done;
+    FILE *transcript;
     int to, from;
     int connected, bounded_writes;
     uint64_t seq_out; /* the SEQ of the next frame sent */
@@ -101,6 +121,7 @@ static uint64_t write_limit(struct etude_remote *r, uint64_t until)
 }
 
 /** Write a frame without blocking observation or cancellation. */
+#ifndef _WIN32
 static int write_observed(struct etude_remote *r, const char *p, size_t n)
 {
     uint64_t now = posix_now_us(), until = now + r->conf.stage_us;
@@ -130,6 +151,8 @@ static int write_observed(struct etude_remote *r, const char *p, size_t n)
     }
     return 0;
 }
+
+#endif
 
 /** Write the SHA-256 of `n` bytes as hexadecimal into `hex`. */
 static void digest_hex(const void *p, size_t n, char hex[65])
@@ -187,6 +210,7 @@ static int offers(const char *list, unsigned long version)
 }
 
 /** Start the transport command, with pipes for its I/O; 0 on success. */
+#ifndef _WIN32
 static int transport_start(struct etude_remote *r)
 {
     static const int keep[3] = {0, 1, 2};
@@ -220,6 +244,10 @@ static int transport_start(struct etude_remote *r)
         if (dup2(to[0], 0) < 0 || dup2(from[1], 1) < 0)
             _exit(127);
         posix_close_others(keep, 3);
+        if (r->conf.envp) {
+            extern char **environ;
+            environ = (char **)r->conf.envp;
+        }
         execvp(r->conf.argv[0], r->conf.argv);
         _exit(127);
     }
@@ -227,6 +255,7 @@ static int transport_start(struct etude_remote *r)
     close(from[1]);
     fcntl(to[1], F_SETFD, FD_CLOEXEC);
     fcntl(from[0], F_SETFD, FD_CLOEXEC);
+    r->transport_ok = r->transport_done = 0;
     r->child = pid;
     r->to = to[1];
     r->from = from[0];
@@ -237,6 +266,15 @@ static int transport_start(struct etude_remote *r)
     return 0;
 }
 
+static pid_t transport_wait(pid_t child, int *status, int flags)
+{
+    pid_t result;
+    do {
+        result = waitpid(child, status, flags);
+    } while (result < 0 && errno == EINTR);
+    return result;
+}
+
 /**
  * Close the transport and wait for its command to end: by itself within the
  * stage's bound once its input has ended, by SIGTERM within another, and by
@@ -245,7 +283,8 @@ static int transport_start(struct etude_remote *r)
 static void transport_stop(struct etude_remote *r)
 {
     uint64_t until;
-    int sig = 0, status;
+    int sig = 0, status = -1;
+    pid_t waited;
     struct timespec ts = {0, 10000000};
 
     if (r->to >= 0)
@@ -257,10 +296,10 @@ static void transport_stop(struct etude_remote *r)
     if (r->child < 0)
         return;
     until = write_limit(r, posix_now_us() + r->conf.stage_us);
-    while (waitpid(r->child, &status, WNOHANG) == 0) {
+    while ((waited = transport_wait(r->child, &status, WNOHANG)) == 0) {
         if (posix_now_us() >= until) {
             if (sig == SIGKILL) {
-                waitpid(r->child, &status, 0);
+                waited = transport_wait(r->child, &status, 0);
                 break;
             }
             sig = sig == 0 ? SIGTERM : SIGKILL;
@@ -269,7 +308,186 @@ static void transport_stop(struct etude_remote *r)
         }
         nanosleep(&ts, NULL);
     }
+    r->transport_done = waited == r->child;
+    r->transport_ok = r->transport_done && WIFEXITED(status) && WEXITSTATUS(status) == 0;
     r->child = -1;
+}
+#endif
+
+#ifdef _WIN32
+/* The supervisor owns the transport Job and delivers both complete streams. */
+static void transport_output(void *context, struct etude_win_child *child,
+                             enum etude_win_stream stream, const char *bytes, size_t size)
+{
+    struct etude_remote *r = context;
+    (void)child;
+    if (stream == ETUDE_WIN_STDERR) {
+        DWORD written = 0;
+        if (size > UINT32_MAX ||
+            !WriteFile(GetStdHandle(STD_ERROR_HANDLE), bytes, (DWORD)size, &written, NULL) ||
+            written != size)
+            r->transport_error = 1;
+    } else if (!r->transport_closing)
+        jbuf_put(&r->incoming, bytes, size);
+}
+
+/* A noninherited overlapped writer and a borrowed synchronous child reader. */
+static int transport_input(struct etude_remote *r, HANDLE *reader)
+{
+    static LONG serial;
+    wchar_t name[128];
+    swprintf(name, sizeof name / sizeof *name, L"\\\\.\\pipe\\etude-remote-%lu-%lu",
+             (unsigned long)GetCurrentProcessId(), (unsigned long)InterlockedIncrement(&serial));
+    r->input = CreateNamedPipeW(
+        name, PIPE_ACCESS_OUTBOUND | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1,
+        ETUDE_FRAME_STDIO_MAX, 0, 0, NULL);
+    if (r->input == INVALID_HANDLE_VALUE)
+        return -1;
+    *reader = CreateFileW(name, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
+    return *reader == INVALID_HANDLE_VALUE ? -1 : 0;
+}
+
+static void transport_stop(struct etude_remote *r)
+{
+    if (r->input != INVALID_HANDLE_VALUE) {
+        CloseHandle(r->input);
+        r->input = INVALID_HANDLE_VALUE;
+    }
+    r->to = r->from = -1;
+    r->connected = 0;
+    r->transport_closing = 1;
+    if (r->child) {
+        uint64_t until = write_limit(r, posix_now_us() + r->conf.stage_us);
+        while (!r->child->ended && posix_now_us() < until &&
+               !(r->conf.cancel_requested && *r->conf.cancel_requested))
+            if (etude_win_poll(&r->supervisor, 50) < 0)
+                break;
+        if (!r->child->ended)
+            etude_win_stop(r->child);
+        r->transport_ok = r->child->ended && !r->child->stopped && r->child->status == 0 &&
+                          !r->child->out.error && !r->child->err.error;
+        DWORD error = etude_win_release(r->child, 2000);
+        if (error)
+            r->transport_error = 1;
+        else
+            r->child = NULL;
+    }
+    if (r->supervisor_open) {
+        DWORD error = etude_win_sup_close(&r->supervisor, 2000);
+        if (error)
+            r->transport_error = 1;
+        else {
+            r->supervisor_open = 0;
+            r->child = NULL;
+        }
+    }
+    r->transport_done = !r->supervisor_open && !r->transport_error;
+    jbuf_free(&r->incoming);
+}
+
+static int transport_start(struct etude_remote *r)
+{
+    if (r->supervisor_open)
+        return -1;
+    struct etude_win_spawn spawn = {0};
+    HANDLE reader = INVALID_HANDLE_VALUE;
+    r->transport_error = r->transport_closing = r->transport_ok = r->transport_done = 0;
+    if (etude_win_sup_open(&r->supervisor))
+        return -1;
+    r->supervisor_open = 1;
+    if (transport_input(r, &reader)) {
+        transport_stop(r);
+        return -1;
+    }
+    char executable[32768];
+    spawn.program = r->conf.argv[0];
+    if (!etude_win_absolute(spawn.program)) {
+        if (etude_win_program(spawn.program, executable, sizeof executable)) {
+            CloseHandle(reader);
+            transport_stop(r);
+            return -1;
+        }
+        spawn.program = executable;
+    }
+    spawn.argv = (const char *const *)(r->conf.argv + 1);
+    spawn.envp = (const char *const *)r->conf.envp;
+    spawn.stdin_handle = reader;
+    spawn.output = transport_output;
+    spawn.ctx = r;
+    DWORD error = etude_win_start(&r->supervisor, &spawn, &r->child);
+    CloseHandle(reader);
+    if (error) {
+        transport_stop(r);
+        return -1;
+    }
+    r->to = r->from = 0;
+    r->bounded_writes = 1;
+    r->seq_out = 0;
+    r->has_peer = 0;
+    r->inlen = r->used = 0;
+    r->max = r->own_max;
+    return 0;
+}
+
+/* Keep the OVERLAPPED and its bytes alive until cancellation is completed. */
+static int transport_write(struct etude_remote *r, const char *bytes, DWORD size, uint64_t until,
+                           DWORD *written)
+{
+    OVERLAPPED operation = {0};
+    operation.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!operation.hEvent)
+        return -1;
+    int rc = 0;
+    if (!WriteFile(r->input, bytes, size, written, &operation)) {
+        if (GetLastError() != ERROR_IO_PENDING) {
+            CloseHandle(operation.hEvent);
+            return -1;
+        }
+        DWORD ready = WAIT_TIMEOUT;
+        while (!rc && (ready = WaitForSingleObject(operation.hEvent, 0)) == WAIT_TIMEOUT) {
+            if (posix_now_us() >= write_limit(r, until) || r->transport_error ||
+                (r->conf.cancel_requested && *r->conf.cancel_requested) ||
+                etude_win_poll(&r->supervisor, 50) < 0)
+                rc = -1;
+        }
+        if (ready != WAIT_OBJECT_0)
+            rc = -1;
+        if (rc) {
+            CancelIoEx(r->input, &operation);
+            GetOverlappedResult(r->input, &operation, written, TRUE);
+        } else if (!GetOverlappedResult(r->input, &operation, written, TRUE))
+            rc = -1;
+    }
+    CloseHandle(operation.hEvent);
+    return rc || !*written ? -1 : 0;
+}
+
+static int write_observed(struct etude_remote *r, const char *bytes, size_t size)
+{
+    uint64_t until = posix_now_us() + r->conf.stage_us;
+    while (size) {
+        if ((r->conf.cancel_requested && *r->conf.cancel_requested) ||
+            posix_now_us() >= write_limit(r, until))
+            return -1;
+        DWORD written = 0, part = size > UINT32_MAX ? UINT32_MAX : (DWORD)size;
+        if (transport_write(r, bytes, part, until, &written))
+            return -1;
+        bytes += written;
+        size -= written;
+    }
+    return 0;
+}
+#endif
+
+static int transcript(struct etude_remote *r, const char *direction, const char *bytes, size_t size)
+{
+    if (!r->transcript)
+        return 0;
+    return fputs(direction, r->transcript) < 0 || fwrite(bytes, 1, size, r->transcript) != size ||
+                   fflush(r->transcript)
+               ? -1
+               : 0;
 }
 
 /** Send one frame; a failed write loses the connection. */
@@ -289,7 +507,8 @@ static int send_frame(struct etude_remote *r, const char *type, const char *cons
         return -1;
     }
     r->seq_out++;
-    if ((r->bounded_writes ? write_observed(r, buf, len) : write_all(r->to, buf, len)) != 0) {
+    if (transcript(r, "> ", buf, len) ||
+        (r->bounded_writes ? write_observed(r, buf, len) : write_all(r->to, buf, len)) != 0) {
         free(buf);
         fail(r, "the connection was lost while a %s was sent", type);
         transport_stop(r);
@@ -330,6 +549,11 @@ static int take_line(struct etude_remote *r, size_t len, struct wire_frame *f)
     int other;
 
     r->used = len + 1;
+    if (transcript(r, "< ", line, len + 1)) {
+        fail(r, "cannot retain %s", "the transport transcript");
+        transport_stop(r);
+        return READ_FAULT;
+    }
     if (len < 2 || line[0] != '#' || line[1] != 'E') {
         evidence(r, "not a frame", line, len);
         return READ_AGAIN;
@@ -370,6 +594,7 @@ static int take_line(struct etude_remote *r, size_t len, struct wire_frame *f)
  * @return READ_AGAIN when bytes arrived or the wait ended early; READ_TIME
  *         when `until` passed; or READ_LOST with the connection stopped.
  */
+#ifndef _WIN32
 static int fill(struct etude_remote *r, uint64_t until)
 {
     struct pollfd pfd;
@@ -399,6 +624,39 @@ static int fill(struct etude_remote *r, uint64_t until)
     r->inlen += (size_t)n;
     return READ_AGAIN;
 }
+
+#endif
+
+#ifdef _WIN32
+static int fill(struct etude_remote *r, uint64_t until)
+{
+    uint64_t now = posix_now_us();
+    if (until && now >= until) {
+        fail(r, "no answer came within %s", "the time allowed");
+        return READ_TIME;
+    }
+    if (!r->incoming.len && r->child && !r->child->out.eof) {
+        DWORD wait = !until || until - now > 50000 ? 50 : (DWORD)((until - now + 999) / 1000);
+        if (etude_win_poll(&r->supervisor, wait) < 0)
+            r->transport_error = 1;
+    }
+    if (r->transport_error || (!r->incoming.len && (!r->child || r->child->out.eof))) {
+        fail(r, "the connection %s", "ended");
+        transport_stop(r);
+        return READ_LOST;
+    }
+    size_t size = r->own_max - r->inlen;
+    if (size > r->incoming.len)
+        size = r->incoming.len;
+    if (size) {
+        memcpy(r->in + r->inlen, r->incoming.data, size);
+        r->inlen += size;
+        memmove(r->incoming.data, r->incoming.data + size, r->incoming.len - size);
+        r->incoming.len -= size;
+    }
+    return READ_AGAIN;
+}
+#endif
 
 /**
  * Read the next frame, until monotonic time `until`, 0 setting none.
@@ -579,6 +837,8 @@ static enum etude_remote_status connect_once(struct etude_remote *r)
     return ETUDE_REMOTE_OK;
 }
 
+static void remote_free(struct etude_remote *r);
+
 enum etude_remote_status etude_remote_open(const struct etude_remote_conf *conf,
                                            struct etude_remote **out, char *why, size_t whylen)
 {
@@ -593,9 +853,13 @@ enum etude_remote_status etude_remote_open(const struct etude_remote_conf *conf,
         snprintf(why, whylen, "out of memory");
         return ETUDE_REMOTE_SYSTEM;
     }
+#ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
-    r->conf = *conf;
     r->child = -1;
+#else
+    r->input = INVALID_HANDLE_VALUE;
+#endif
+    r->conf = *conf;
     r->to = r->from = r->journal = -1;
     r->own_max = conf->max_frame != 0 ? conf->max_frame : ETUDE_FRAME_STDIO_MAX;
     r->in = malloc(r->own_max + 1);
@@ -624,15 +888,23 @@ enum etude_remote_status etude_remote_open(const struct etude_remote_conf *conf,
             return ETUDE_REMOTE_SYSTEM;
         }
     }
+    if (conf->transcript) {
+        r->transcript = fopen(conf->transcript, "wbx");
+        if (!r->transcript) {
+            snprintf(why, whylen, "cannot create transcript: %s", conf->transcript);
+            if (r->journal >= 0)
+                close(r->journal);
+            free(r->in);
+            free(r);
+            return ETUDE_REMOTE_SYSTEM;
+        }
+    }
     r->next_cmd = top + 1;
     st = connect_once(r);
     if (st != ETUDE_REMOTE_OK) {
         snprintf(why, whylen, "%s", r->why);
         transport_stop(r);
-        if (r->journal >= 0)
-            close(r->journal);
-        free(r->in);
-        free(r);
+        remote_free(r);
         return st;
     }
     *out = r;
@@ -992,6 +1264,24 @@ static int take_cleaned(struct collect *c, struct wire_frame *f)
     return 0;
 }
 
+static int take_observed_output(struct etude_remote *r, struct collect *c, struct wire_frame *frame)
+{
+    size_t before[2] = {c->res->out.kept, c->res->err.kept};
+    int status = c->res->started ? take_output(c, frame) : -1;
+    const struct etude_remote_observer *observer = r->conf.observer;
+    if (status || !observer)
+        return status;
+    const struct etude_output *streams[] = {&c->res->out, &c->res->err};
+    for (size_t i = 0; i < 2; i++)
+        if (observer->stream && streams[i]->kept > before[i])
+            observer->stream(observer->context, (int)i + 1, streams[i]->data + before[i],
+                             streams[i]->kept - before[i]);
+    if (observer->output && streams[0]->kept > before[0])
+        observer->output(observer->context, streams[0]->data + before[0],
+                         streams[0]->kept - before[0]);
+    return 0;
+}
+
 /**
  * Take one event of the run's command.
  *
@@ -1015,13 +1305,9 @@ static int take_event(struct etude_remote *r, struct collect *c, struct wire_fra
         ok = -1;
     else if (strcmp(t, ETUDE_EV_STARTED) == 0)
         ok = take_started(c, f);
-    else if (strcmp(t, ETUDE_EV_OUT) == 0) {
-        size_t before = c->res->out.kept;
-        ok = c->res->started ? take_output(c, f) : -1;
-        if (!ok && c->res->out.kept > before && r->conf.observer && r->conf.observer->output)
-            r->conf.observer->output(r->conf.observer->context, c->res->out.data + before,
-                                     c->res->out.kept - before);
-    } else if (strcmp(t, ETUDE_EV_EXIT) == 0) {
+    else if (strcmp(t, ETUDE_EV_OUT) == 0)
+        ok = take_observed_output(r, c, f);
+    else if (strcmp(t, ETUDE_EV_EXIT) == 0) {
         int had = c->have_exit;
         ok = take_exit(c, f);
         if (!ok && !had && r->conf.observer && r->conf.observer->stage)
@@ -1442,6 +1728,29 @@ enum etude_remote_status etude_remote_remove(struct etude_remote *r, const char 
     return st;
 }
 
+/* Do not discard an unconfirmed native Job's pending overlapped buffers. */
+static void remote_free(struct etude_remote *r)
+{
+    if (r->journal >= 0)
+        close(r->journal);
+    if (r->transcript)
+        fclose(r->transcript);
+#ifdef _WIN32
+    if (r->supervisor_open)
+        return;
+#endif
+    free(r->in);
+    free(r);
+}
+
+enum etude_remote_status etude_remote_abandon(struct etude_remote *r)
+{
+    transport_stop(r);
+    enum etude_remote_status status = r->transport_done ? ETUDE_REMOTE_OK : ETUDE_REMOTE_SYSTEM;
+    remote_free(r);
+    return status;
+}
+
 enum etude_remote_status etude_remote_close(struct etude_remote *r)
 {
     enum etude_remote_status st = ETUDE_REMOTE_LOST;
@@ -1457,10 +1766,11 @@ enum etude_remote_status etude_remote_close(struct etude_remote *r)
             st = ETUDE_REMOTE_OK;
     }
     transport_stop(r);
-    if (r->journal >= 0)
-        close(r->journal);
-    free(r->in);
-    free(r);
+    if (r->conf.require_transport_cleanup && !r->transport_ok)
+        st = ETUDE_REMOTE_SYSTEM;
+    if (r->transcript && fflush(r->transcript))
+        st = ETUDE_REMOTE_SYSTEM;
+    remote_free(r);
     return st;
 }
 
