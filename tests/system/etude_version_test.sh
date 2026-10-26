@@ -297,7 +297,7 @@ row()
             [ "$(cd "$dir/bin" && echo *)" = etude ] ||
                 { why "the programs are $(cd "$dir/bin" && echo *)"; return 1; }
             [ "$(compiles)" = 1 ] || { why "$(compiles) compiles, wanted 1"; return 1; }
-            [ "$(sed -n 's/^cc //p;s/^flags //p' "$dir/version" | tr '\n' ' ')" = '-std=c99 -O2 fakecc ' ] ||
+            [ "$(sed -n 's/^cc //p;s/^flags //p' "$dir/version" | tr '\n' ' ')" = '-std=c99 -O2 -pthread fakecc ' ] ||
                 { why 'the record does not give the compiler and its flags'; return 1; }
             [ "$(grep '^program ' "$dir/version")" = "program etude $(sha "$dir/bin/etude")" ] ||
                 { why "the record does not give etude's digest alone"; return 1; }
@@ -400,7 +400,7 @@ row()
         damaged)
             state
             run -c fakecc -C "$FIX/cache" -s
-            awk '{ print } /^    cat > "\$1\/tools\/etude\/json.c" <</ { print "/* damage */" }' "$work/out" > "$work/script"
+            awk '{ print } /^file tools\/etude\/json.c$/ { print ":/* damage */" }' "$work/out" > "$work/script"
             cmp -s "$work/out" "$work/script" && { why 'no damage made'; return 1; }
             PATH="$work/bin:$PATH" HOME="$FIX/home" sh -s < "$work/script" > "$work/out" 2> "$work/err"
             echo "$?" > "$work/status"
