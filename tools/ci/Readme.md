@@ -26,6 +26,9 @@ Release preparation sets `ETUDE_PREPARATION_CLEAN=1`. The C preparation removes 
 
 An admitted Linux preparation may set `ETUDE_PREPARATION_EXPORT=1` to write `OUT/producer.json` with the fixed exporter. This validates the successful selected producer record and its ordinary production receipt; it starts no build or transfer. Export failure prevents collection. Its verification remains in the contiguous charged interval. Importing a previous Linux product does not make that production one-time setup. Retain its own receipt and report the upstream production cost separately from the local import/build/run interval; do not combine unrelated monotonic clocks or count one producer invocation as five independent measurements.
 
+`etude prepare producer OPERATION.json` performs the fixed operations in an existing responder workspace: source projection, fresh production, authority freeze, restore, facts and transport cleanup. It reads the same route, nonce and candidate bundle, retains the real repository lock and admission, and invokes the native collection preparer and exporter. Every sample has a new output directory; the exact clean candidate can reuse its vendor and compiler caches. The accepted-job check compares GitHub state before and after reading current-boot listener logs. Missing boot evidence, an unfinished accepted job or a changed server snapshot refuses an authority transition. Transport cleanup requires the actual zero-status admission receipt and absence of both the producer claim and its child claims.
+
+
 ### Reference costs
 
 `ETUDE_REFERENCE` names an immutable version-one JSON object with `format: "etude-site-reference"`, `schema_version: 1`, `policy` and a nonempty `histories` array. Each descriptor has absolute `path`, `sha256` and `size_bytes`. The policy follows etude's budget schema. Activation supplies measured reference data for the selected machine; this repository supplies no invented site costs.
