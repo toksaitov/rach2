@@ -22,7 +22,9 @@
 # Status In progress. The members of phase P are its sub-issues and the
 # issues whose body says `Part of #P` with no digit after P, since GitHub links
 # at most a hundred sub-issues to one parent. Workers take only the issues
-# labelled `ci`, which ci files, and the members of the phase In progress.
+# labelled `ci`, which ci files, and the members of the phase In progress,
+# except an incident, a hold and a day report, which are no work even when
+# their bodies name the phase.
 # An issue labelled `owner-only` has work that only the owner's accounts can
 # do, such as a step on the testing host through `ssh testing` from the
 # owner's computer; `next` and `take` offer it only to the account OWNER below.
@@ -36,22 +38,24 @@
 #
 # `next` prints the issues a worker may take, one line each with the number,
 # a tab and the title. Each is open, unassigned, with no open blocker and
-# without the labels `grouped`, `owner` and `phase`, and without `owner-only`
-# unless this account is OWNER. First come the issues
-# labelled `ci` and not `intermittent`, whatever their Status; then the
-# members of the phase In progress whose Status is Ready; then, while that
-# phase has an open member not labelled `intermittent`, the issues labelled
-# both `ci` and `intermittent`. Each tier is in the board's order. `gh project
-# item-list` does not return that order, so the query asks for the items by
-# position. With no phase In progress, `next` lists only the first tier.
+# without the labels `grouped`, `owner`, `phase`, `incident`, `hold` and
+# `day-report`, and without `owner-only` unless this account is OWNER. First
+# come the issues labelled `ci` and not `intermittent`, whatever their Status;
+# then the members of the phase In progress whose Status is Ready; then,
+# while that phase has an open member not labelled `intermittent`, the issues
+# labelled both `ci` and `intermittent`. Each tier is in the board's order.
+# `gh project item-list` does not return that order, so the query asks for the
+# items by position. With no phase In progress, `next` lists only the first
+# tier.
 #
 # `take N [GROUP]` refuses a closed issue, setting it Done and changing
 # nothing else, since a close between `next` and `take` would otherwise leave
 # it In progress. Before it assigns anything, it also refuses a phase, an
-# issue with an open blocker, one labelled `owner`, one labelled `owner-only`
-# when this account is not OWNER and, without GROUP, an
-# issue that is neither labelled `ci` nor a member of the phase In progress,
-# and a member whose Status is neither Ready nor In progress.
+# incident, a hold, a day report, an issue with an open blocker, one labelled
+# `owner`, one labelled `owner-only` when this account is not OWNER and,
+# without GROUP, an issue that is neither labelled `ci` nor a member of the
+# phase In progress, and a member whose Status is neither Ready nor In
+# progress.
 # Otherwise it assigns N to this account and reads the issue's timeline.
 # Of the accounts assigned now, the one whose latest assignment is the
 # earliest keeps the issue. When that is another account, `take` unassigns
@@ -534,6 +538,7 @@ next()
         $4 == "OPEN" && member && !has($5, "intermittent") { work = 1 }
         $4 != "OPEN" || $6 > 0 || $7 > 0 { next }
         has($5, "grouped") || has($5, "owner") || has($5, "phase") { next }
+        has($5, "incident") || has($5, "hold") || has($5, "day-report") { next }
         has($5, "owner-only") && me != owner { next }
         has($5, "ci") && !has($5, "intermittent") { ci = ci $3 "\t" $10 "\n"; next }
         has($5, "ci") { flaky = flaky $3 "\t" $10 "\n"; next }
@@ -635,6 +640,9 @@ kind()
         $3 != n { next }
         { found = 1 }
         has($5, "phase") { print "it is a phase"; exit }
+        has($5, "incident") || has($5, "hold") || has($5, "day-report") {
+            print "it is an incident, a hold or a day report, which is no work"
+            exit }
         $7 > 0 { print "it has an open blocker"; exit }
         has($5, "owner") { print "it waits for the owner"; exit }
         has($5, "owner-only") && me != owner {

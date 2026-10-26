@@ -3,9 +3,9 @@
 # and rollback, take's choice of the first assignee, assignee changes that a
 # list read before another account's change would undo, take and release of a
 # closed issue, and the phase subcommands, which are current, members, next,
-# start, the checks take and group make of the phase and of an issue labelled
-# owner-only, archive and phase, with issues that GitHub's list of the
-# board's items lacks.
+# start, the checks take and group make of the phase, of an issue labelled
+# owner-only and of one that is no work, archive and phase, with issues that
+# GitHub's list of the board's items lacks.
 
 set -eu
 [ "$#" -eq 0 ] || { echo 'board-test: usage: board_test.sh' >&2; exit 2; }
@@ -329,6 +329,11 @@ tab=$(printf '\t')
 # An issue that only the owner's accounts can do, a member of phase 7.
 only='25|OPEN|Ready|bug,owner-only|-|7|0|-|owner-only member'
 
+# An incident, a hold and a day report that name phase 7, which are no work.
+report='26|OPEN|Ready|incident,triaged|-|7|0|-|incident of seven
+27|OPEN|Ready|hold|-|-|0|Part of #7.|hold of seven
+28|OPEN|Ready|day-report,triaged|-|7|0|-|day report of seven'
+
 # The issues of the group, take and release rows, each filed by ci.
 old='1|OPEN|Ready|ci|-|-|0|-|ci: one
 2|OPEN|Ready|ci|-|-|0|-|ci: two
@@ -601,6 +606,11 @@ $only"
                 next-only) [ "$result" -eq 0 ] && [ "$(words)" = '14 22 10 11 15' ] ;;
                 *) [ "$result" -eq 0 ] && [ "$(words)" = '14 22 10 11 25 15' ] ;;
             esac ;;
+        next-report)
+            use "$main
+$report"
+            run next
+            [ "$result" -eq 0 ] && [ "$(words)" = '14 22 10 11 15' ] ;;
         next-idle)
             use "$main" 's/^7|OPEN|In_progress|/7|OPEN|Ready|/'
             run next
@@ -639,9 +649,11 @@ $only"
             esac
             run take "$n"
             [ "$result" -eq 0 ] && [ "$(field "$n" 3)" = In_progress ] ;;
-        take-stranger|take-blocked|take-owner|take-only|take-phase|take-backlog)
+        take-stranger|take-blocked|take-owner|take-only|take-phase|\
+        take-backlog|take-incident|take-hold|take-report)
             use "$main
-$only" 's/^10|OPEN|Ready|/10|OPEN|Backlog|/'
+$only
+$report" 's/^10|OPEN|Ready|/10|OPEN|Backlog|/'
             BOARD_TEST_ME=alpha BOARD_TEST_NOW=alpha BOARD_TEST_TIMELINE=alpha
             case $1 in
                 take-stranger) n=13 why='neither labelled ci nor a member of #7' ;;
@@ -649,6 +661,9 @@ $only" 's/^10|OPEN|Ready|/10|OPEN|Backlog|/'
                 take-owner) n=16 why='it waits for the owner' ;;
                 take-only) n=25 why="only the owner's accounts can do its work" ;;
                 take-backlog) n=10 why='its Status is Backlog, not Ready' ;;
+                take-incident) n=26 why='which is no work' ;;
+                take-hold) n=27 why='which is no work' ;;
+                take-report) n=28 why='which is no work' ;;
                 *) n=8 why='it is a phase' ;;
             esac
             run take "$n"
@@ -845,10 +860,12 @@ ROWS
     done
     for test in current-none current-one current-two \
         members-all members-open members-lost \
-        next-tiers next-only next-owner next-idle next-done next-lost \
+        next-tiers next-only next-owner next-report next-idle next-done \
+        next-lost \
         next-unlisted next-unlisted-lost take-unlisted \
         take-member take-ci take-owner-only take-stranger take-blocked \
         take-owner take-only take-phase take-backlog \
+        take-incident take-hold take-report \
         group-stranger group-only group-ci archive-other archive-closed archive-fail \
         archive-unlisted done-unlisted \
         start-first start-again start-retry start-full start-other \
@@ -865,4 +882,4 @@ ROWS
 }
 
 rows || exit 1
-echo 'board-test: result: pass: 70 rows'
+echo 'board-test: result: pass: 74 rows'
