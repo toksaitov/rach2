@@ -21,7 +21,9 @@ gnu-host-checks: $(GNU_HOST_CHECKS_STAMP)
 # Both ABI inventories compile the actual patched upstream source trees.
 # The step rechecks their bytes after preparation, including generated headers
 # and every independent exFAT fixture file, before taking a cached output.
-gnu-host-check-inputs:
+# This make builds musl and e2fsprogs of its own architecture first, so that
+# the sub-make of that architecture finds them built and does not race it.
+gnu-host-check-inputs: $(LIBC_STAMP) $(E2FSPROGS_STAMP)
 	+$(MAKE) --no-print-directory ARCH=i686 musl e2fsprogs
 	+$(MAKE) --no-print-directory ARCH=x86_64 musl e2fsprogs
 
