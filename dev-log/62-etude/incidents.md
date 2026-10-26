@@ -1961,3 +1961,7 @@ The final route-fixture collector asserted a header-only shared ledger rather th
 ### Windows SSH peer progress used text-mode output (#1188)
 
 The standalone SSH peer left stdout in the Windows CRT's default text mode. Its unbuffered stream still translated LF to CRLF, while the SSH scenario matched exact LF service records. The peer now sets binary stdout before any progress output. Its existing fixture captures the real entry's readiness and flood records as raw bytes, retaining retry counts, fatal transport errors and the flood's ownership wait. The retained Windows failure had no recoverable peer output, so this source defect is not recorded as the proven cause of that historical attempt. Actual Windows peer acceptance remains part of the affected platform batch.
+
+### Native CI preparation fixture callers
+
+The CI preparation fixture still invoked the removed Python helpers for cleaning, evidence, reader verification and retention. It now invokes the actual prepared Etude and preserves each existing assertion. The first local check exposed invalid fixture setup: ordinary preparation requires its real tree lock, and retention refuses roots inside a source checkout or below a symbolic-link parent. The corrected fixture invocation uses the tree-lock entry; the local check uses canonical scratch outside the checkout. Both failed observations remain separate from the successful check.
