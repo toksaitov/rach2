@@ -573,6 +573,8 @@ static const char unfinished_streams[] =
 static const char cut_streams[] =
     "pass/plan.jsonl item-d0-failure.jsonl item-d1-lost.jsonl pass/item-h.jsonl run-failure.jsonl";
 
+static const char culprit[] = "is the first commit that fails .*; its parent, good, passes";
+
 static int log_has(const char *name, const char *text)
 {
     return fx_has(path(name), text);
@@ -805,8 +807,7 @@ static int bisect_row(struct fixture *f, const char *item, const char *command, 
         snprintf(expected, sizeof(expected), "make\n%s\n", command);
     ok = ok && log_equal("events", expected);
     ok = ok && limits_match(kind);
-    ok = ok &&
-         log_has("gh.log", fail ? "is the first commit that fails" : "--add-label intermittent");
+    ok = ok && log_regex("gh.log", fail ? culprit : "--add-label intermittent");
     snprintf(label, sizeof(label), "bisect %s fail=%d %s", item, fail, ghfail);
     return fx_check(f, ok, label);
 }
@@ -814,8 +815,10 @@ static int bisect_row(struct fixture *f, const char *item, const char *command, 
 static int lost_row(struct fixture *f)
 {
     int ok = report_row(f, "core", "lost-runner", "default runner") &&
-             log_has("gh.log", "--title Core tests fail on i686: default, runner ") &&
-             log_has("gh.log", "The run's output was not kept;");
+             log_regex("gh.log", " --title Core tests fail on i686: default, runner .* --body "
+                                 "The core tests of commit bad failed on i686: `default`, "
+                                 "`runner`\\.$") &&
+             log_regex("gh.log", "The run.s output was not kept; .gh run view 1 ");
     clear();
     ok = results(f, "core", "lost") && ok;
     return fx_check(
@@ -1039,9 +1042,9 @@ static int suite_row(struct fixture *f, const char *mode)
     if (!start(f))
         return 0;
     ok = bisect(f, args) == untested && log_equal("events", expected) &&
-         log_has("gh.log", untested                ? "unresolved: bad could not be tested again"
-                           : !strcmp(mode, "fail") ? "is the first commit that fails"
-                                                   : "--add-label intermittent");
+         log_regex("gh.log", untested                ? "unresolved: bad could not be tested again"
+                             : !strcmp(mode, "fail") ? culprit
+                                                     : "--add-label intermittent");
     return fx_check(f, ok, mode);
 }
 
@@ -1100,7 +1103,7 @@ static int admits_row(struct fixture *f, const char *name)
              log_equal(
                  "events",
                  "make\ntests bigmem bad\nmake\ntests bigmem bad\nmake\ntests bigmem good\n") &&
-             log_has("gh.log", "is the first commit that fails") &&
+             log_regex("gh.log", culprit) &&
              matching_lines(s, "^make offset= workers=2 jobs=3 makeflags=-j3 --output-sync "
                                "memory=1536 claim=2147483648$") == 3 &&
              matching_lines(s, "^tests offset=[0-9]+ workers=2 jobs=3 makeflags=-j3 --output-sync "
@@ -1138,7 +1141,7 @@ static int environ_row(struct fixture *f)
         if (!start(f))
             return 0;
         unlink(path("admitted"));
-        ok = bisect(f, args) == 0 && ok && log_has("gh.log", "is the first commit that fails");
+        ok = bisect(f, args) == 0 && ok && log_regex("gh.log", culprit);
         s = fx_read(path("admitted"));
         if (!s || !*s)
             ok = 0;
@@ -1230,7 +1233,7 @@ static int structured_row(struct fixture *f, const char *name)
              log_equal(
                  "events",
                  "make\ntests default bad\nmake\ntests default bad\nmake\ntests default good\n") &&
-             log_has("gh.log", "is the first commit that fails");
+             log_regex("gh.log", culprit);
         for (i = 0; i < 3; i++) {
             char p[256];
             snprintf(p, sizeof(p), "logs/bisect/%s.history.1/history/plan.jsonl", boots[i]);
@@ -1266,8 +1269,7 @@ static int faulted_row(struct fixture *f, const char *item)
     if (!start(f))
         return 0;
     ok = bisect(f, args) == !runner &&
-         log_has("gh.log", runner ? "is the first commit that fails"
-                                  : "unresolved: bad could not be tested again");
+         log_regex("gh.log", runner ? culprit : "unresolved: bad could not be tested again");
     return fx_check(f, ok,
                     runner ? "runner failure is bisected"
                            : "suite plus runner fault leaves range unresolved");
@@ -1289,8 +1291,7 @@ static int late_row(struct fixture *f, const char *result)
              "events",
              failed ? "make\ntests default bad\nmake\ntests default bad\nmake\ntests default good\n"
                     : "make\ntests default bad\n") &&
-         log_has("gh.log", failed ? "is the first commit that fails"
-                                  : "unresolved: bad could not be tested again");
+         log_regex("gh.log", failed ? culprit : "unresolved: bad could not be tested again");
     return fx_check(f, ok, mode);
 }
 
