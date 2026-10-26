@@ -617,10 +617,12 @@ static int old_has_inputs(const struct json *old, const struct json *current)
     return 1;
 }
 
-static int old_matches(struct hp_context *c, struct hp_check *check, const struct json *old,
-                       const struct json *recipe, const struct json *local,
-                       const struct json *external)
+/* The recipe has the local and compiler inputs that the scan found. */
+static int old_matches(struct hp_context *c, struct hp_check *check, const char *program,
+                       const struct json *old, const struct json *recipe)
 {
+    const struct json *local = json_member(recipe, "inputs");
+    const struct json *external = json_member(recipe, "compiler_inputs");
     const struct json *made = json_member(old, "make_recipe");
     const struct json *recorded = json_member(old, "compile_inputs");
     const struct json *sdk = json_member(old, "compiler_inputs");
@@ -632,8 +634,7 @@ static int old_matches(struct hp_context *c, struct hp_check *check, const struc
         json_free(canonical);
         return equal;
     }
-    if (!legacy_recipe(c, check, old, json_text(check->entry, "program")) || !sdk ||
-        !sdk_equal(sdk, external))
+    if (!legacy_recipe(c, check, old, program) || !sdk || !sdk_equal(sdk, external))
         return 0;
     if (recorded)
         return json_equal(recorded, local);
@@ -709,7 +710,7 @@ int hp_build(struct hp_context *c, struct hp_check *check, const char *program, 
     int path_ok = c->origin ? !path_join(old_program, c->origin, program)
                             : snprintf(old_program, sizeof(old_program), "%s", program) <
                                   (int)sizeof(old_program);
-    int reuse = old && path_ok && old_matches(c, check, old, recipe, local, external) &&
+    int reuse = old && path_ok && old_matches(c, check, program, old, recipe) &&
                 !hp_hash(old_program, hash) && json_text(old, "sha256") &&
                 !strcmp(hash, json_text(old, "sha256"));
     if (reuse && c->origin &&

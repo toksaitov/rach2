@@ -234,6 +234,24 @@ class ImportTests(unittest.TestCase):
             self.assertEqual(subprocess.run([str(new / program)]).returncode, 1)
             self.assertEqual(((old / program).read_bytes(), (old / marker).read_bytes()), before)
 
+    def test_legacy_tool_predecessor(self):
+        with tempfile.TemporaryDirectory(prefix='rach2-tool-legacy.') as work:
+            root = Path(work)
+            old, new = root / 'old', root / 'new'
+            for tree in (old, new):
+                self.native_tree(tree)
+                self.native_source(tree, 'probe_hosttest.c', 'host-tools: mkfatfixture\n')
+                (tree / 'tests/host/mkfatfixture.c').write_text('int main(void) { return 4; }\n')
+            self.native_prepare(old, args=['--gnu'])
+            program = Path('build/tests/host-suite/tools/mkfatfixture')
+            marker = old / (str(program) + '.build.json')
+            # An older tool record has its recipe and no sealed entry.
+            record = json.loads(marker.read_text())
+            del record['inventory_entry']
+            marker.write_text(json.dumps(record))
+            self.native_prepare(new, args=['--gnu', '--previous', str(old)])
+            self.assertEqual(subprocess.run([str(new / program)]).returncode, 4)
+
     def test_native_exfat_filename(self):
         with tempfile.TemporaryDirectory(prefix='rach2-exfat-record.') as work:
             tree = Path(work)
