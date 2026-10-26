@@ -25,6 +25,8 @@
 #include "collection_tools.h"
 #include "preparation_import.h"
 #include "retention.h"
+#include "routine_evidence.h"
+#include "routine_producer.h"
 #include "json.h"
 #include "verbs.h"
 #include "host_prepare.h"
@@ -107,6 +109,14 @@ int etude_prepare_main(int argc, char **argv)
     char program[4096];
     int opt;
 
+    if (argc >= 2 && (!strcmp(argv[1], "evidence") || !strcmp(argv[1], "producer"))) {
+        catch_stops();
+        return !strcmp(argv[1], "evidence")
+                   ? etude_prepare_evidence_main(argc - 1, argv + 1, &stop_signal)
+                   : etude_routine_producer_main(argc - 1, argv + 1, &stop_signal);
+    }
+    if (argc >= 2 && !strcmp(argv[1], "reader"))
+        return etude_prepare_reader_main(argc - 1, argv + 1);
     if (argc >= 2 && (!strcmp(argv[1], "retention") || !strcmp(argv[1], "reference"))) {
         catch_stops();
         return !strcmp(argv[1], "retention")
