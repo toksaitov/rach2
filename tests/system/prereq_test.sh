@@ -419,7 +419,7 @@ coverage()
         done < "$work/required"
     done
     names rach2 | grep -qx cc || echo 'coverage: rach2 lacks cc' >> "$work/why"
-    version=$(sed -n 's/^CODEX_VERSION=//p' "$repo/tests/cases/host/agentapi.sh")
+    version=$(sed -n 's/^VERSION=//p' "$repo/vendor/gnu/agents/packages/codex.sh")
     sh "$repo/tools/setup/prereq.sh" --list --platform linux |
         grep -q "	admin	npm install -g @openai/codex@$version\$" ||
         echo "coverage: linux does not install Codex $version, the codexapi cases'" >> "$work/why"

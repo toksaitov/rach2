@@ -391,13 +391,13 @@ static void required(struct fixture *f, char *have[4], const char *need)
 }
 static int version_coverage(struct fixture *f)
 {
-    char *agent = fx_read(bp(f->tree, "tests/cases/host/agentapi.sh"));
-    char *at = agent ? strstr(agent, "CODEX_VERSION=") : NULL;
+    char *agent = fx_read(bp(f->tree, "vendor/gnu/agents/packages/codex.sh"));
+    char *at = agent ? strstr(agent, "\nVERSION=") : NULL;
     if (!at) {
         free(agent);
         return 0;
     }
-    at += 14;
+    at += 9;
     size_t n = strcspn(at, "\n");
     char version[128];
     if (n >= sizeof(version)) {
