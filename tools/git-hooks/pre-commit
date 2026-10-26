@@ -1,0 +1,10 @@
+#!/bin/sh
+#
+# pre-commit: format the staged in-house C files with the clang-format
+# version tools/setup/judges records, stage the result, and refuse a commit
+# whose staged files fail the text rules of `tests/run style`.
+#
+# tools/verify/hookcheck.sh does the work; its header says how, and what the
+# setting RACH2_STYLE_GATE=strict of the worker loops changes.
+#
+exec sh "$(dirname "$0")/../verify/hookcheck.sh" commit

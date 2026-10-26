@@ -297,8 +297,8 @@
     },
     {
       "case_id": "host.style.checkers",
-      "behavior": "the checkers and the build rules pass their own tests: elfcheck, cfgcheck, pecheck, the compilation-database generator, suitecheck, etude check, the recovery key, the dry-run guard, the build rules, the scope of the style checks, the faults the style cases must fail and the private log directory of this program",
-      "units": ["style", "`elfcheck --selftest` and `cfgcheck --selftest`", "`tools/dev/gen_compile_commands.sh --selftest`", "`tests/system/recovery_key_test.sh`", "`tests/system/dryrun_test.sh`", "`tests/system/build_rules_test.sh`", "`tests/system/style_scope_test.sh`", "`tests/system/style_cases_test.sh`", "`tests/system/verify_temp_test.sh`"],
+      "behavior": "the checkers and the build rules pass their own tests: elfcheck, cfgcheck, pecheck, the compilation-database generator, suitecheck, etude check, the recovery key, the dry-run guard, the build rules, the scope of the style checks, the faults the style cases must fail, the private log directory of this program and the git hooks",
+      "units": ["style", "`elfcheck --selftest` and `cfgcheck --selftest`", "`tools/dev/gen_compile_commands.sh --selftest`", "`tests/system/recovery_key_test.sh`", "`tests/system/dryrun_test.sh`", "`tests/system/build_rules_test.sh`", "`tests/system/style_scope_test.sh`", "`tests/system/style_cases_test.sh`", "`tests/system/verify_temp_test.sh`", "`tests/system/style_hooks_test.sh`"],
       "domain": "host",
       "architectures": "none",
       "workload": {"arguments": ["checkers"], "inputs": {}, "repetitions": 1, "seed": null},
@@ -316,7 +316,8 @@
         {"assertion_id": "build-rules", "checks": "tests/system/build_rules_test.sh passes", "source": "program"},
         {"assertion_id": "style-scope", "checks": "tests/system/style_scope_test.sh passes", "source": "program"},
         {"assertion_id": "style-cases", "checks": "tests/system/style_cases_test.sh finds each planted source and manifest fault fatal", "source": "program"},
-        {"assertion_id": "verify-temp", "checks": "tests/system/verify_temp_test.sh passes", "source": "program"}
+        {"assertion_id": "verify-temp", "checks": "tests/system/verify_temp_test.sh passes", "source": "program"},
+        {"assertion_id": "style-hooks", "checks": "tests/system/style_hooks_test.sh finds the pre-commit hook formatting a staged C file and refusing a dash and a long comment line, and the pre-push hook refusing a commit with faults", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
@@ -330,6 +331,7 @@
         {"name": "pecheck", "node": "tools/etude/win/pecheck", "per_architecture": false},
         {"name": "etude", "node": "tools/etude/etude", "per_architecture": false},
         {"name": "asciiscan", "node": "tools/verify/asciiscan", "per_architecture": false},
+        {"name": "prosecheck", "node": "tools/verify/prosecheck", "per_architecture": false},
         {"name": "style-evidence", "node": "tests/style/checkers.json", "per_architecture": false}
       ],
       "timing": [],

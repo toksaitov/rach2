@@ -531,8 +531,9 @@ case_repro() {
 # form of a guessed duration and of a skip reported as a pass; etude check
 # refuses each fault its fixtures plant; and the scripts check the recovery
 # credentials, the vendor stamps' dry-run guard, the build rules in a private
-# tree, the scope of the ShellCheck and text cases, and this program's
-# private log directory.
+# tree, the scope of the ShellCheck and text cases, this program's private
+# log directory, and the git hooks, which must format a staged C file and
+# refuse a commit or a push with a text fault in a scratch repository.
 case_checkers() {
     built elfcheck "$ELFCHECK" && check elfcheck verify_elfcheck.log "$ELFCHECK" --selftest
     built cfgcheck "$CFGCHECK" && check cfgcheck verify_cfgcheck.log "$CFGCHECK" --selftest
@@ -548,6 +549,8 @@ case_checkers() {
     built style-cases "$ETUDE" && built style-cases "$ASCIISCAN" &&
         check style-cases verify_style_cases.log sh "$REPO/tests/system/style_cases_test.sh"
     check verify-temp verify_temp.log sh "$REPO/tests/system/verify_temp_test.sh"
+    built style-hooks "$PROSECHECK" && built style-hooks "$ASCIISCAN" &&
+        check style-hooks verify_style_hooks.log sh "$REPO/tests/system/style_hooks_test.sh"
 }
 
 # The dev-log index against the directories it lists. AGENTS.md sends a
