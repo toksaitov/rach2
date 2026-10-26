@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "machine.sealed",
-  "summary": "The disk that make rach2-sealed-disk writes, booted by SeaBIOS on AHCI and operated over SSH alone, as it is once it is in the laptop: a fault case that walks the machine's life on one copy and a control case that injects nothing; the program is tests/cases/machine/sealed_scenario.c",
+  "summary": "The disk that make rach2-sealed-disk writes, booted by SeaBIOS on AHCI and operated over SSH alone, as it is once it is in the laptop: one case that walks the machine's life on a copy of the disk; the program is tests/cases/machine/sealed_scenario.c",
   "cases": [
     {
       "case_id": "machine.sealed.fault",
