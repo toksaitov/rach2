@@ -22,6 +22,7 @@
 #include "sys/mm/kheap.h"
 #include "sys/mm/frame.h"
 #include "sys/mm/pagecache.h"
+#include "sys/mm/filecache.h"
 #include "sys/mm/modlayout.h"
 #include "sys/block/mbr.h"
 #include "sys/fs/devfs.h"
@@ -3673,6 +3674,7 @@ void kernel_main(const struct boot_info *boot)
 
     init_pagecache();
     klog(KLOG_DEBUG, "boot", "page cache: ready");
+    init_filecache();
 
     platform_firmware_init(boot);
 

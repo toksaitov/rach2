@@ -11,6 +11,11 @@
 struct vfs_mount;
 struct fd_entry;
 
+/** Make the tables that find a file's pages, sized for the frames the machine
+ * has. The boot calls it once, after `init_paging`; when the heap cannot give
+ * them, it logs a warning and the cache keeps no page. */
+void init_filecache(void);
+
 /** Copy page `pgoff` of the file `e` is open on into the frame `phys` when
  * the cache has it as the file is now: 1 then, and 0 when it has not. */
 int filecache_read(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys);

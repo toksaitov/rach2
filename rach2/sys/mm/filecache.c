@@ -18,6 +18,11 @@
  * machine's free memory: the cache takes one only while a quarter of the
  * frames are free, and gives them back, the least recently used first, when
  * memory runs short (`mem_reclaim`).
+ *
+ * The table of the pages and the table of the files each have a list for
+ * every four to eight frames the machine has, a power of two set at boot, so
+ * that a list stays a few entries long when the cache holds all the frames it
+ * may take.
  */
 
 #include "filecache.h"
@@ -29,9 +34,10 @@
 #include "../fs/fd.h"
 #include "../fs/vfs.h"
 #include "../lib/kirq.h"
+#include "../klog.h"
 
-#define FC_BUCKETS 1024u
-#define FC_FILES   256u
+/* The fewest lists that each table has. */
+#define FC_MIN_LISTS 1024u
 
 /* A file that has pages in the cache, and the list of those pages, so that a
  * change to the file drops them without a search of the other files' pages.
@@ -57,8 +63,9 @@ struct fc_page {
     uintptr_t phys;
 };
 
-static struct fc_page *buckets[FC_BUCKETS];
-static struct fc_inode *files[FC_FILES];
+static struct fc_page **buckets;
+static struct fc_inode **files;
+static uint32_t table_mask; /* the lists of each table, less one */
 static struct fc_page *oldest, *youngest;
 static uint32_t pages;
 static uint32_t changes; /* `filecache_epoch` */
@@ -90,17 +97,49 @@ static int fc_file_of(struct vfs_mount *mnt, void *node, struct fc_file *f)
     return 1;
 }
 
-/** The bucket of page `pgoff` of the file `ino` of `mnt`. */
+void init_filecache(void)
+{
+    uint32_t lists = FC_MIN_LISTS;
+
+    while (lists < 0x40000000u && (size_t)lists * 2u <= frame_total_count() / 4u) {
+        lists *= 2u;
+    }
+    buckets = kzalloc(lists * sizeof(*buckets));
+    files = kzalloc(lists * sizeof(*files));
+    if (!buckets || !files) {
+        kfree(buckets);
+        kfree(files);
+        buckets = NULL;
+        files = NULL;
+        klog(KLOG_WARN, "filecache", "tables: no room for %u lists; no page is cached",
+             (unsigned)lists);
+        return;
+    }
+    table_mask = lists - 1u;
+}
+
+/** A hash of the file `ino` of `mnt`, its bits spread over the whole word. */
+static uint32_t fc_hash(const struct vfs_mount *mnt, uint64_t ino)
+{
+    uint32_t h = (uint32_t)(uintptr_t)mnt >> 4 ^ (uint32_t)ino ^ (uint32_t)(ino >> 32) * 40503u;
+
+    h ^= h >> 16;
+    h *= 0x45d9f3bu;
+    h ^= h >> 16;
+    return h;
+}
+
+/** The bucket of page `pgoff` of the file `ino` of `mnt`; a file's pages
+ * take consecutive buckets. */
 static uint32_t fc_bucket(const struct vfs_mount *mnt, uint64_t ino, uint32_t pgoff)
 {
-    return ((uint32_t)(uintptr_t)mnt >> 4 ^ (uint32_t)ino * 2654435761u ^ pgoff * 40503u) %
-           FC_BUCKETS;
+    return (fc_hash(mnt, ino) + pgoff) & table_mask;
 }
 
 /** The slot of `files` for the file `ino` of `mnt`. */
 static uint32_t fc_slot(const struct vfs_mount *mnt, uint64_t ino)
 {
-    return ((uint32_t)ino * 2654435761u >> 24 ^ (uint32_t)(uintptr_t)mnt >> 6) % FC_FILES;
+    return fc_hash(mnt, ino) & table_mask;
 }
 
 /** The record of the file `ino` of `mnt`, or NULL when the cache has none
@@ -243,7 +282,7 @@ static void fc_store(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, co
     struct fc_inode *file, *spare;
     uint32_t flags;
 
-    if (frame_free_count() < frame_total_count() / 4u) {
+    if (!buckets || frame_free_count() < frame_total_count() / 4u) {
         return;
     }
     p = kzalloc(sizeof(*p));
@@ -364,7 +403,7 @@ static void fc_forget(const struct vfs_mount *mnt, uint64_t ino)
             fc_drop_file(file);
         }
     } else {
-        for (i = 0; pages && i < FC_FILES; i++) {
+        for (i = 0; pages && i <= table_mask; i++) {
             for (file = files[i]; file; file = next) {
                 next = file->next;
                 if (file->mnt == mnt) {
