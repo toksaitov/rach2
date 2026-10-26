@@ -441,11 +441,21 @@ static int interpreter_string(const char *code, const char *path)
     return found;
 }
 
+/*
+ * Compiled sources whose interpreter names appear only in guest argument
+ * vectors: a Rach2 machine runs those commands, or a stand-in for the guest
+ * compares them, and the host starts none.
+ */
+#define GUEST_VECTORS                \
+    "tests/cases/machine/netcase.c " \
+    "tests/host/compat/netcase_bulk_host.c"
+
 static int interpreter(const char *text, const char *path)
 {
     struct jbuf code = {0};
     uncomment(text, &code);
-    int found = interpreter_call(code.data) || interpreter_string(code.data, path);
+    int found = interpreter_call(code.data) ||
+                (!member(GUEST_VECTORS, path) && interpreter_string(code.data, path));
     jbuf_free(&code);
     return found;
 }
