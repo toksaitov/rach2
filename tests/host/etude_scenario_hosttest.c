@@ -715,6 +715,9 @@ static void fake_shutdown(host_socket qmp, int guest, const char *reason)
 static unsigned fake_cpus = 1;
 static unsigned fake_halted;
 
+/* QEMU's `-no-shutdown`: the stand-in answers QMP after `poweroff`. */
+static int fake_kept;
+
 /** Put in `text` the human monitor's `info registers -a` of the stand-in's
  * processors, escaped for a JSON string, as QEMU gives it for i686: a section
  * from `CPU#` for each, with HLT=1 and the flags' IF set unless it halted. */
@@ -872,6 +875,7 @@ static void fake_console(struct fake_in *con, struct fake_in *qmp, const char *d
                          const char *mode)
 {
     char text[600], read_back[128];
+    int got;
 
     if (strncmp(con->line, "write ", 6) == 0 && disk != NULL) {
         fake_disk(disk, con->line + 6, NULL, 0);
@@ -885,6 +889,9 @@ static void fake_console(struct fake_in *con, struct fake_in *qmp, const char *d
         if (strcmp(mode, "lost") == 0)
             _exit(0);
         fake_shutdown(qmp->fd, 1, "guest-shutdown");
+        while (fake_kept && (got = fake_read(qmp)) >= 0)
+            if (got > 0)
+                fake_qmp(qmp->fd, qmp->line, "", mode);
         _exit(0);
     } else if (strcmp(con->line, "nmi") == 0) {
         put(con->fd, "<2>[    1.000000] isr: hardware fault: non-maskable interrupt (vector 2, "
@@ -1030,6 +1037,8 @@ static int fake_qemu(const char *mode, int argc, char **argv)
         return 125;
     if (fake_arg(argc, argv, "-smp", "") != NULL)
         fake_cpus = (unsigned)atoi(fake_arg(argc, argv, "-smp", ""));
+    for (r = 1; r < argc; r++)
+        fake_kept |= strcmp(argv[r], "-no-shutdown") == 0;
     fake_arm(mode);
     if (disk != NULL) {
         snprintf(path, sizeof(path), "%s", disk);

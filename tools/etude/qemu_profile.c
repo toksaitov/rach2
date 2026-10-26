@@ -1183,6 +1183,10 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
 #endif
     add(&l, 0, "-mon");
     add(&l, 0, "chardev=etude-qmp,mode=control");
+#ifdef _WIN32
+    /* A Windows process that exits resets its sockets; see posix/qemu.c. */
+    add(&l, 0, "-no-shutdown");
+#endif
     if (count(p->boot_options) > 0) {
         add(&l, 0, "-append");
         add_joined(&l, p->boot_options);

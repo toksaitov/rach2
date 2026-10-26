@@ -2063,3 +2063,9 @@ The ledger host test bound its authority's program and launcher body to the test
 ## The Windows launcher read a different policy (#1275)
 
 The owner enabled native Windows admission in MSYS2's `/etc/rach2/etude-site`, but the installed authority read `C:/ProgramData/rach2/etude-site`, which still disabled it. The launcher rejected even `/usr/bin/true` before creating a claim. The worker applied the authorized share to the protected policy while holding its native authority gate, with an empty ledger and no blocked authority state or physical lease. The policy's owner and access controls were unchanged. The installed launcher then admitted the command and returned the ledger to its empty header. Read the policy named by the installed authority binding; changing a separate policy does not enable that endpoint.
+
+## Windows reset discarded the final QMP event (#1178)
+
+The drain of the channels to EOF did not end the misclassification: on native Windows, 7 of 8 runs of `etude_qemu_hosttest` still ended a guest's shutdown as `qemu_exited`, with the stand-in and with QEMU 11.1.2. A diagnostic build showed that every QMP connection, of the stand-in and of the real QEMU, ended with `WSAECONNRESET` and never with EOF, and that the rows that failed had lost the `SHUTDOWN` line. A Windows process that exits resets its loopback connections, and the reset discards what the reader has not yet read. The launcher polls every 10 ms, so a QEMU that writes the event and exits at once can lose it before any read; no drain after the exit can recover it.
+
+On Windows QEMU now runs with `-no-shutdown`, which stops the guest at its shutdown, reset or panic and keeps QEMU, and the launcher sends `quit` once the event of a guest's end has arrived. Both stand-ins answer QMP after a guest shutdown until the quit when their arguments have `-no-shutdown`, as QEMU does. Linux and macOS keep their command line and behaviour.

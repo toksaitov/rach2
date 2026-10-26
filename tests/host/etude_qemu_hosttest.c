@@ -121,13 +121,15 @@ static int fails;
 #define UEFI_CD   "UEFI QEMU DVD-ROM"
 #define UEFI_NVME "UEFI QEMU NVMe Ctrl rach2big"
 
-/* Exact chardev arguments use the transport of the native launcher. */
+/* Exact chardev arguments use the transport of the native launcher, which on
+ * Windows adds -no-shutdown after them. */
 #ifdef _WIN32
 #define TEST_CONSOLE "27001"
 #define TEST_QMP     "27002"
-#define TEST_CHANNELS                                                                           \
-    "-chardev socket,id=etude-console,host=127.0.0.1,port=27001 -serial chardev:etude-console " \
-    "-chardev socket,id=etude-qmp,host=127.0.0.1,port=27002 -mon chardev=etude-qmp,mode=control "
+#define TEST_CHANNELS                                                                             \
+    "-chardev socket,id=etude-console,host=127.0.0.1,port=27001 -serial chardev:etude-console "   \
+    "-chardev socket,id=etude-qmp,host=127.0.0.1,port=27002 -mon chardev=etude-qmp,mode=control " \
+    "-no-shutdown "
 #else
 #define TEST_CONSOLE "/s/c"
 #define TEST_QMP     "/s/q"
@@ -297,12 +299,13 @@ static const char *fake_socket(int argc, char **argv, const char *id)
 
 /**
  * Be QEMU, as ETUDE_FAKE_QEMU's `mode` says: connect to the console and
- * QMP, answer QMP's start, write to the console, and end.
+ * QMP, answer QMP's start, write to the console, and end. With
+ * `-no-shutdown` it answers QMP after a shutdown of the guest until its quit.
  */
 static int fake_qemu(const char *mode, int argc, char **argv)
 {
     const char *accel = NULL, *reason = NULL;
-    int i, guest = 1, stopped = 0;
+    int i, guest = 1, stopped = 0, kept = 0;
     host_socket con, qmp;
     const char *audio = NULL;
     FILE *wav;
@@ -314,6 +317,8 @@ static int fake_qemu(const char *mode, int argc, char **argv)
         if (strcmp(argv[i], "-audiodev") == 0)
             audio = strstr(argv[i + 1], "path=");
     }
+    for (i = 1; i < argc; i++)
+        kept |= strcmp(argv[i], "-no-shutdown") == 0;
     if (accel == NULL || !stopped)
         return 125;
     if (strcmp(mode, "early") == 0) {
@@ -364,6 +369,8 @@ static int fake_qemu(const char *mode, int argc, char **argv)
     fake_wait_go(con);
     put(con, "fake: got go\r\n");
     fake_shutdown(qmp, guest, reason);
+    if (kept && guest)
+        fake_obey(qmp);
     return 0;
 }
 

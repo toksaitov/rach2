@@ -720,6 +720,11 @@ static void qmp_reply(struct etude_machine *m, long id, const struct eh_json *re
  * Act on QMP's event `ev`: only SHUTDOWN tells the launcher anything. The
  * console is read first, so that the offset of the end counts every byte
  * QEMU wrote before it sent the event.
+ *
+ * On Windows a process that exits resets its loopback connections, and the
+ * reset discards what the launcher has not yet read of them. QEMU runs there
+ * with `-no-shutdown`, which stops the guest at its shutdown, reset or panic
+ * and keeps QEMU, so the launcher asks it to quit once it has the event.
  */
 static void qmp_event(struct etude_machine *m, const struct eh_json *ev)
 {
@@ -738,6 +743,10 @@ static void qmp_event(struct etude_machine *m, const struct eh_json *ev)
     m->r.by_guest = guest != NULL && guest->type == 't';
     if (reason != NULL && reason->type == 's')
         snprintf(m->r.reason, sizeof(m->r.reason), "%s", reason->string);
+#ifdef _WIN32
+    if (m->r.by_guest && m->qmp_state >= QMP_ACCEL && m->qmp_state <= QMP_READY)
+        machine_quit(m);
+#endif
 }
 
 /** Keep the reply `text` to the caller's command `id`. */
