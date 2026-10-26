@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "../../etude/routine_route.c"
+#include "../../../tests/host/compat/fixdir_host.c"
 
 static int failures, put_calls, get_calls, fail_get;
 static char names[32][128];
@@ -153,15 +154,21 @@ static void request_contract(struct route *r)
     json_free(request);
 }
 
-int main(void)
+static void interrupted(int number)
 {
-    char scratch[4096];
-    const char *tmp = getenv("TMPDIR");
-    if (!tmp)
-        tmp = "/tmp";
-    CHECK(!path(scratch, tmp, "rach2-route.XXXXXX"));
-    if (!mkdtemp(scratch))
-        return 1;
+    exit(128 + number);
+}
+
+int main(int argc, char **argv)
+{
+    signal(SIGTERM, interrupted);
+    signal(SIGINT, interrupted);
+#ifndef _WIN32
+    signal(SIGHUP, interrupted);
+#endif
+    const char *scratch = fix_dir();
+    if (argc == 2 && !strcmp(argv[1], "--signal-exit"))
+        raise(SIGTERM);
     struct route r = {0};
     r.mode = "macos-import";
     r.in.run = "fixture";
@@ -187,7 +194,7 @@ int main(void)
     json_free(r.config);
     json_free(r.preparation);
     if (!failures)
-        CHECK(!rmdir(scratch));
+        fix_passed();
     if (failures)
         fprintf(stderr, "route fixture evidence: %s\n", scratch);
     else
