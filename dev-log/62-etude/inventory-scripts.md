@@ -50,6 +50,55 @@ Make runs these to build artifacts before any case starts. Preparation records w
 
 The commands are 26 shell tests under `tests/system/`, seven Python tests (`progress_test.py`, `case_select_test.py`, `etude_launch_test.py`, `agents_credentials_test.py` and the three of `tests/system/fakeapi/`), seven kernel fixture scripts under `tests/host/` (`extract_check.sh` five times, `kstack_check.sh`, `endothers_check.sh`), `tests/host/krffs_tools_test.sh`, `tests/host/doom_libc_check.sh`, the two TinyCC checks of `vendor/tcc/`, and `etude_platform_hosttest --collection-only`, a prepared program. Their removal waits for a comparison of each with its controller, so that an assertion the controller lacks is added or recorded as redundant before the script goes. The comparisons are issues #1252 (the kernel fixtures and the fake API), #1253 (images), #1254 (build), #1255 (ci, board and release), #1256 (the loops' and the testing host's tools) and #1257 (etude's deployment, versions and tooling machine); each records its result below. Issue #1251 then removes the column and the scripts.
 
+### Etude deployment, versions and tooling
+
+Issue #1257 compares the six commands of `host.host.scripts_tools`. Their controllers are in `tests/cases/host/` and run through `host-flow-check`. No script is removed by this comparison.
+
+`etude_version_test.sh`, all 15 rows, against `flow_version.c`:
+
+* `build`, `reuse` and `versions`: `version_reuse_identity` and `version_publication_identity` check the SSH command, publication paths, compile counts, compiler and flags, program digest, record key, unrelated changes, distinct source and compiler keys, and three versions with the first unchanged. `version_program` restores the exact single executable and single program-record checks for POSIX and Windows.
+* `shells` and `busybox`: `version_account_shells` and `shell_row` build and reuse under sh, bash, each available optional shell, and BusyBox's shell and applets, with startup noise and a false result line. The script's fallback tooling transport is unnecessary because this controller already runs in the GNU helper with BusyBox.
+* `term`, `kill` and `failed`: `version_interruption` checks unpublished failures, TERM cleanup, an abandoned KILL build without a version record, a fresh build after either signal, and the compiler failure diagnostic.
+* `truncated`, `damaged`, `race` and `makeflags`: `version_truncation`, `version_source_damage`, `version_racing_publication` and `version_make_settings` retain all four truncation points, the whole-script control, damage refusal before compilation, both racing requests' result and one published build, and removal of inherited parallel make settings.
+* `windows`, `revision` and `real`: `version_windows_version`, `version_revision` and `version_real_build` check the Windows command, cache, platform and executable; committed versus changed working source and restoration with two compiles; and the real compiler, schema and history examples, five argument-error forms and their diagnostics. The revision row changes native collection source, which the same version key includes. The controller also checks the native source set, exact byte boundaries and ordered source hashes.
+
+`etude_deploy_test.sh`, all 18 rows, against `flow_deploy.c`:
+
+* `deploy` and `again`: `basic_rows` checks installation, the three SSH calls, version path, exact machine record, initial ledger and state entries, clone and key snapshots, scratch removal, reuse without a compile, and an unchanged second deployment.
+* `admin`, `sudo` and `check`: `prerequisite_rows` checks the printed administrator and account commands, missing prerequisites, installation through sudo, check-only refusal to install, and successful completion after repair.
+* `busy`, `format` and `rights`: `busy_row` and `format_rights_rows` compare the active ledger, verdict, old version and process; preserve the machine record on an incompatible ledger; and check the permission diagnostic, unchanged refused ledger, and repair. The helper runs as an ordinary account, so the rights row always runs.
+* `lost` and `stopped`: `interrupted_rows` loses each of the three SSH calls and resumes each, interrupts compilation before state publication, and interrupts replacement of the machine record while preserving the old record, then completes with the new version.
+* `local` and `revision`: `local_revision_rows` checks no local SSH, an unchanged source clone with an untracked file, the chosen state directory, and use of committed ledger-format source despite a changed working file.
+* `kvm-open`, `kvm-unavailable`, `kvm-missing`, `ovmf-discovery`, `ovmf-missing` and `windows`: `feature_rows` and `windows_row` check each KVM open result without changing or creating the device, firmware discovery and an absent override, and Windows prerequisite installation, both MSYS SSH calls, version path and exact machine record.
+
+`etude_launch_test.py` against `flow_launch.c`, `flow_launch_entries.c` and `flow_launch_parallel.c`:
+
+* `observer`, `launch_saw` and `launch_clear` check durable registration before execution, running state, memory and worker limits, absent processor and disk reservations, aligned port offsets, actual host and port locks, claim counts and shared or distinct identities, and release after each row.
+* `build`, `jobs` and `worker` retain the real Makefile entry, quoted argument, explicit parallel limits, all eight make-wrapper argument cases, recursive make, and admission before the worker's compiler starts. `architectures` restores the missing `ARCH='i686 x86_64'` launch of `x86_64:default`.
+* `owner`, `legacy`, `bisection` and `nested` retain quotes, stdin and exit 7; an occupied first port block and result file; installed policy before a private ledger; a shared nested claim and its separate result; signal status and incomplete result; and nested refusal of an old fixed-port runner.
+* `bad_policies`, `bad_environment` and `launch_refusals` retain all five invalid policies, four invalid inherited settings, a bad ledger format, a fixed-port checkout, and the accepted boundary profile plus both refused alternatives, without executing a refused command.
+* `parallel_row` and `cancellation` retain both ordinary accounts running together with distinct port blocks, serial and large jobs waiting then taking whole-site memory, the serial worker limit, and cancellation of waiting and running launches with all claims released.
+* The old CI row's four shell-entry claims tested the retired driver; `ci_unconfigured` checks native CI's refusal before work, while `etude_platform_hosttest --routine-entry-only` checks native projections, refusals and preparation order, and `flow_ci_run.c` checks CI result entries.
+
+`test_status_check.sh` and `test_status_test.py` against `flow_status.c`:
+
+* `claim_row` checks port, shared-host and exclusive-host waits, the UTC wait record, actual holder identity and path, an unchanged wait start across retries, and removal after admission. `two_holders` checks both shared holders.
+* `pool_rows`, `owner_rows` and `zombie_row` check live and dead memory holders, fault reporting, reused run and tree-lock PIDs, stale and live tree locks, and an unreaped zombie reported dead. `flow_status` checks the final empty-run report.
+* The shell wrapper's compile and Linux-tooling fallback are preparation work: the collection supplies the compiled Etude and runs this controller in the GNU helper, so neither wrapper branch is needed during execution.
+
+`etude_tooling_test.sh`, all 12 rows, against `flow_tooling.c`:
+
+* `made`, `digest`, `provision` and `unmade`: `preparation_rows` checks the read-only published overlay and tool record, relative backing image, scratch removal, setup history, check and reuse, refusal of a bad digest without publication, failed provisioning without publication, and status 126 before setup.
+* `job` and `status`: `job_rows` checks file and directory inputs, exact stdout, stderr and cost report, attached disk contents, file and nested outputs, scratch removal, all three passing history stages, and exit 3 with failed execution and passing cleanup.
+* `late`, `stop`, `crash` and `lie`: `late_stop_rows` and `crash_lie_rows` check statuses 124, 143 and 125, their diagnostics, QEMU termination, retained deadline evidence, removed cancellation scratch, incomplete and cancelled history, a crashed emulator, and disagreement with the volume's status.
+* `line` and `arm64`: `command_rows` and `arm_rows` check all original PC and ARM arguments, firmware, accelerator, processor, disk and network settings, the default absence of a network, a distinct ARM cache key and successful job, and an unknown architecture refused. The old count of two cached disks is obsolete: the current cache prunes unused pairs after preparation, so `arm_rows` checks a distinct ARM pair and removal of the unused amd64 pair, as [the cache contract](../../tools/etude/Readme.md#the-tooling-machine) requires.
+
+`agents_credentials_test.py`, all five tests, against `flow_basic.c` and `flow_agents.c`:
+
+* `test_antigravity` and `test_antigravity_scan`: `credentials` and `credential_single` check the token's SHA-256, its absence, clean and leaking scans in both modes, filtered output and exact redaction.
+* `test_selected_credentials` and `test_selected_secrets`: `credential_files` and `credential_scans` check each selected agent plus GitHub, both missing-file reports, exact row counts, clean and leaking scans, ignored unused credentials, a selected pair and the full set, in both modes.
+* `test_redact_arguments`: `flow_credential_arguments` waits for the real awk descendant, inspects every descendant's arguments for the dummy token, and checks exact redacted output through its input pipe.
+
 ## The fake API's Python
 
 `tests/system/fakeapi/*.py` and `tests/system/agents/*_verify.py` are run by no case of the collection, apart from the three `host.list` commands above; issue #975 replaces the fake API's services with C.

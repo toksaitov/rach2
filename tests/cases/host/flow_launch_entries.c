@@ -108,6 +108,20 @@ static int worker(struct launch_fixture *u)
            flow_copy(f, "tools/etude/hold.sh", "checkout/tools/etude/hold.sh") &&
            launch_run(u, a, 1) && launch_saw(u, 1, 1);
 }
+/** Admit a suite qualified by architecture when both architectures are set. */
+static int architectures(struct launch_fixture *u)
+{
+    struct fixture *f = u->f;
+    const char *a[] = {u->launcher, "legacy", "sh", "tests/run", "x86_64:default", NULL};
+    int ok;
+    if (!fx_copy(f->self, flow_path(f, "checkout/tests/run")))
+        return 0;
+    fx_env("FLOW_LAUNCH_MODE", "arches");
+    fx_env("ARCH", "i686 x86_64");
+    ok = launch_run(u, a, 0) && launch_saw(u, 1, 1);
+    fx_env("ARCH", NULL);
+    return fx_check(f, ok, "architecture-qualified suite admission");
+}
 static int ci_unconfigured(struct launch_fixture *u)
 {
     struct fixture *f = u->f;
@@ -234,8 +248,8 @@ static int nested(struct launch_fixture *u)
 }
 int launch_entries(struct launch_fixture *u)
 {
-    return build(u) && jobs(u) && worker(u) && ci_unconfigured(u) && owner(u) && legacy(u) &&
-           bisection(u) && nested(u);
+    return build(u) && jobs(u) && worker(u) && ci_unconfigured(u) && architectures(u) && owner(u) &&
+           legacy(u) && bisection(u) && nested(u);
 }
 static int refuse(struct launch_fixture *u, const char *policy)
 {

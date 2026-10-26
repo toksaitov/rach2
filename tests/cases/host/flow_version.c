@@ -330,6 +330,23 @@ static int empty(const char *path)
     int n = fx_count(path);
     return n == 0 || n == -1;
 }
+/** Require one published executable and its sole program digest record. */
+static int version_program(struct version *v, const char *name)
+{
+    char bin[4096], file[4096], hex[65], line[200], *text, *program;
+    int ok;
+    snprintf(bin, sizeof(bin), "%s/bin", v->dir);
+    snprintf(file, sizeof(file), "%s/bin/%s", v->dir, name);
+    if (fx_count(bin) != 1 || !digest(file, hex))
+        return 0;
+    snprintf(line, sizeof(line), "program %s %s\n", name, hex);
+    snprintf(file, sizeof(file), "%s/version", v->dir);
+    text = fx_read(file);
+    program = strstr(text, "\nprogram ");
+    ok = program && !strcmp(program + 1, line);
+    free(text);
+    return ok;
+}
 static int record(struct version *v)
 {
     char file[4096], binary[4096], hex[65], line[200], identity[500], *text, *at;
@@ -361,7 +378,8 @@ static int record(struct version *v)
     sha256_final(&h, bytes);
     sha256_hex(bytes, hex);
     free(text);
-    return ok && n == 5 && !strcmp(hex, v->key);
+    return ok && n == 5 && !strcmp(hex, v->key) &&
+           version_program(v, !strcmp(platform, "windows") ? "etude.exe" : "etude");
 }
 static int shell_row(struct version *v, const char *shell, const char *path)
 {
@@ -821,10 +839,10 @@ static int version_windows_version(struct version *value)
                   "Windows remote command") &&
          ok;
     snprintf(target, sizeof(target), "%s/version", v.dir);
-    ok = fx_check(
-             f, fx_has(target, "platform windows x86_64\n") && fx_has(target, "program etude.exe "),
-             "Windows program and platform") &&
-         ok;
+    ok =
+        fx_check(f, fx_has(target, "platform windows x86_64\n") && version_program(&v, "etude.exe"),
+                 "Windows program and platform") &&
+        ok;
     return ok;
 }
 static int version_revision(struct version *value)
