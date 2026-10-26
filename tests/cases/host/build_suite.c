@@ -193,22 +193,25 @@ static int tests_judge(struct fixture *f, const char *text, int status)
                  strstr(text, "assert linger pass"),
              "alone checks wait for shared checks");
     fx_check(f,
-             strstr(text, "assert asan fail") && strstr(text, "assert ubsan fail") &&
+             strstr(text, "assert asan fail the check exited with status") &&
+                 strstr(text, "assert ubsan fail the check exited with status") &&
                  strstr(text, "AddressSanitizer"),
              "sanitizers override inherited success settings");
 #ifdef __linux__
-    fx_check(f, strstr(text, "assert leak fail") != NULL,
+    fx_check(f, strstr(text, "assert leak fail the check exited with status") != NULL,
              "LeakSanitizer overrides inherited success settings");
 #endif
     fx_check(f, strstr(text, "assert gone fail") && strstr(text, "tests/host/gone.c"),
              "missing source fails and is named");
     fx_check(f,
              strstr(text, "assert signals pass") &&
-                 strstr(text, "signals_hosttest: not run: nothing:"),
+                 strstr(text, "  PASS: signals\n    | signals_hosttest: not run: nothing: this "
+                              "line is repeated under the pass\n"),
              "signal defaults and repeated probe diagnostic");
     fx_check(f,
              !strstr(text, "FAIL: unlisted") && strstr(text, "assert listed fail") &&
-                 strstr(text, "assert ghost fail"),
+                 strstr(text, "prepared check unlisted\n") &&
+                 strstr(text, "assert ghost fail the prepared inventory has no check"),
              "unlisted check stays unexecuted and missing check fails");
     fx_check(f, reports(text, sizeof(probes) / sizeof(*probes)),
              "each named check gives one result, assertion and progress");
@@ -260,7 +263,7 @@ static int stop_judge(struct fixture *f, const char *tree)
     const char *text = f->out ? f->out : "";
     fx_check(f,
              status == 143 && strstr(text, "  STOPPED: script_stuck") &&
-                 strstr(text, "stopped by signal 15"),
+                 strstr(text, "stopped by signal 15: 0 of 1 checks finished"),
              "stop is reported with exit143");
     fx_check(f, !strstr(text, "@etude 1 progress "),
              "interrupted probe contributes no completed progress");
@@ -279,8 +282,9 @@ static int duplicate_judge(struct fixture *f, const char *tree)
         !suite_inventory(tree, "scripts", twice, 2))
         return 0;
     int status = suite_run(f, tree, "scripts", NULL);
-    return fx_check(f, status == 2 && !output_has(f, "fine"),
-                    "duplicate prepared selection is refused before execution");
+    return fx_check(
+        f, status == 2 && !output_has(f, "  PASS: twice") && !output_has(f, "  FAIL: twice"),
+        "duplicate prepared selection is refused before execution");
 }
 int build_suite(struct fixture *f)
 {
