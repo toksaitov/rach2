@@ -157,14 +157,14 @@ fi
 pwsh()
 {
     case $1 in
-        *Install-QemuSpawn*) [ -s "$here/qemu_spawn.ps1" ] || return 1 ;;
+        *QemuDirectory*|*QemuSpawn*) [ -s "$here/qemu_spawn.ps1" ] || return 1 ;;
     esac
     # shellcheck disable=SC2016 # the dollars are PowerShell's
     {
         printf '%s\n' \
             '$ErrorActionPreference = "Stop"; $ProgressPreference = "SilentlyContinue"; $env:Path = "$env:LOCALAPPDATA\Microsoft\WindowsApps;$env:Path"; function Runs($exe) { try { & $exe --version *> $null; $LASTEXITCODE -eq 0 } catch { $false } }; function Has($path) { Test-Path -LiteralPath $path }'
         case $1 in
-            *Install-QemuSpawn*) cat "$here/qemu_spawn.ps1" || return 1 ;;
+            *QemuDirectory*|*QemuSpawn*) cat "$here/qemu_spawn.ps1" || return 1 ;;
         esac
         printf '%s\n' "$1"
     } | iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\n' > "$tmp/encoded" || return 1

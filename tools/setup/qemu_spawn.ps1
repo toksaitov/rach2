@@ -1,4 +1,39 @@
 # Complete the native QEMU package's GLib command-spawning dependency.
+
+# Return the selected native runtime, using the package default off PATH.
+function Get-QemuDirectory {
+ $program=Get-Command qemu-system-x86_64.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+ if($program){return Split-Path -Parent $program.Source}
+ return Join-Path $env:ProgramFiles 'qemu'
+}
+
+# Require the command helpers from the selected GLib's own package.
+function Test-QemuSpawn {
+ param([Parameter(Mandatory=$true)][string]$QemuDirectory)
+ $packages=@{
+  '7b5c19f5540857ec2288323f3b1654cbe5655fc3ea21417a25da69bece489eec'=@(
+   '87113f2bf18d694910a1e6791282aea4da3611d41a8397434e43fed6deec72a5',
+   'c8734364a23a2af11660efba3d4c9b82bcdc604f15816cfd92ed2697ee30cdaf');
+  '3a1abec0184b238db54399cb9243393d9436d96b8fdb9bd9f2875da207c5b458'=@(
+   'c95201fa81637687c1a5bd70d68f438f2a7c2aab79e261f9781e5b424cb210d6',
+   '38113f6dedf7a367bcf629abdc256ffb33e5d2a2f1a05476580303cfeb03a533')
+ }
+ try{
+  $library=Get-FileHash -LiteralPath (Join-Path $QemuDirectory 'libglib-2.0-0.dll') -Algorithm SHA256 -ErrorAction Stop
+  $helpers=$packages[$library.Hash.ToLowerInvariant()]
+  if(!$helpers){return $false}
+  $names=@('gspawn-win64-helper.exe','gspawn-win64-helper-console.exe')
+  for($i=0;$i -lt $names.Count;$i++){
+   $path=Join-Path $QemuDirectory $names[$i]
+   if(!(Test-Path -LiteralPath $path -PathType Leaf) -or
+      (Get-FileHash -LiteralPath $path -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant() -cne $helpers[$i]){
+    return $false
+   }
+  }
+  return $true
+ }catch{return $false}
+}
+
 function Install-QemuSpawn {
  param([Parameter(Mandatory=$true)][string]$QemuDirectory,
        [string]$CacheDirectory=([IO.Path]::GetTempPath()))
