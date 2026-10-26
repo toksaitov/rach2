@@ -21,7 +21,7 @@ The owner authorized this Codex-led recovery on 23 October, with GPT-6.1 Sol wor
 | Guest command/file channel and exact SSH cases | Codex channel worker | #974, with #969 and #970 portability repairs |
 | Native API and time fixtures, protocol drivers and verifiers | Codex service worker | #975 |
 | Independent image operations and prepared helper images | Coordinating chat | #976 |
-| Remaining host and machine drivers, source verification and dependency audit | Coordinating chat, assigned by file as workers finish | #977 |
+| Remaining host and machine drivers, source verification and dependency audit | Coordinating chat, assigned by file as workers finish | #977, from [the scripts left](inventory-scripts.md) |
 | Saved native/kernel fixes, redundant tests, cache repairs and acceptance runs | Coordinating chat | Existing open members of #589 |
 
 The channel uses the existing framed protocol. SSH assertions use the exact client in a declared Rach2 helper where necessary; control-only operations use the target's framed channel. Image operations attach private raw images to a small Rach2 helper and invoke independent compiled file-system tools. Native services link their required libraries during preparation. Helpers have declared resources and owned cleanup; none is an unaccounted background machine.
