@@ -83,6 +83,8 @@ Some kernel functions are in files no host test can compile whole. The files in 
 
 `etude_guest_hosttest --detached-only` runs its three unreported-daemon cleanup paths on Rach2 or Linux: normal exit, cancellation and responder loss. Its ordinary entry still runs every protocol check. A failed check retains and names its private evidence directory. macOS refuses this focused entry because its guest adapter has no child subreaper.
 
+`etude_platform_hosttest.c --evidence-only` checks native evidence staging, restoration, routine proof packing and installed-reader verification. It retains original locators across transport, including foreign native paths, follows late history and load proofs, excludes executable artifact objects and refuses changed, ambiguous, missing, duplicated or escaping members. Restoration verifies every member before creating any destination file. All files are private fixture data.
+
 ## Adding tests
 
 Name the file `NAME_hosttest.c` and put the sources it links on `host-deps:` lines in its opening comment:
