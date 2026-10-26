@@ -3229,7 +3229,7 @@ static void test_process_paths(void)
 {
 #ifdef _WIN32
     static const char native[] = "\\\\?\\C:\\tmp\\fixture.a\\hold.scratch\\bin\\qemu";
-    CHECK(process_path_contains(native, "C:/tmp//fixture.a/hold.scratch/"),
+    CHECK(process_path_contains(native, "C:/tmp/\057fixture.a/hold.scratch/"),
           "process census: native separators and doubled temporary separator");
     CHECK(!process_path_contains(native, "C:/tmp/fixture.b/hold.scratch/"),
           "process census: another fixture is not owned");

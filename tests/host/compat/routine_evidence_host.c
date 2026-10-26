@@ -295,7 +295,8 @@ static void evidence_restore_refusals(void)
 {
     char *source = evidence_path("refusals"), *out = evidence_path("refusal-output");
     EVIDENCE_CHECK(!ret_dirs(source));
-    const char *names[] = {"../escape", "/absolute", "C:/foreign", "bad\\name", "a//b", "member"};
+    const char *names[] = {"../escape", "/absolute", "C:/foreign",
+                           "bad\\name", "a/\057b",   "member"};
     char *index = ret_format("%s/evidence.json", source);
     for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
         struct json *inventory = evidence_inventory(source, names[i]);
