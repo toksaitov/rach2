@@ -146,7 +146,8 @@ static void routine_test_execute(struct json *producer, const char *root, const 
 
 /**
  * Check routine staging and cleanup with this executable as the SSH stand-in.
- * A symbolic link works when the executable and scratch use different filesystems.
+ * A symbolic link works when the executable and scratch use different
+ * filesystems.
  */
 int etude_test_routine_remote(const char *self)
 {
