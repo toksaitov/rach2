@@ -39,7 +39,7 @@ endif
 
 # These native binaries are preparation goals of host.host.scripts themselves.
 HOST_KERNEL_FIXTURES = chown krffs_open krffs_root_lock krffs_stat pagecache kstack endothers
-HOST_KERNEL_FIXTURE_INPUTS = tests/host/fixtures/extract.py \
+HOST_KERNEL_FIXTURE_INPUTS = \
     $(wildcard tests/host/fixtures/*.c tests/host/fixtures/*.h) \
     tests/host/pagecache_hosttest.c tests/host/krffs_hosttest.c \
     tests/host/krffsmount_hosttest.c tests/host/krffs_hash_vectors.h \

@@ -26,7 +26,7 @@
  * host-inputs: tools/etude/host_prepare_style.c
  * host-inputs: tools/etude/host_prepare_scripts.c mk/host-check.mk
  * host-inputs: mk/host-fixtures.mk build/tools/etude/etude
- * host-inputs: tests/host/fixtures/extract.py
+ * host-inputs: tests/host/fixtures/extract.c
  * host-inputs: tools/etude/preparation_import.c
  * host-inputs: tools/etude/preparation_import_data.c
  * host-inputs: tools/etude/preparation_import_transfer.c

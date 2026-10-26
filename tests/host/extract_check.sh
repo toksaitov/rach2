@@ -22,8 +22,8 @@
 #                    PAGECACHE_SYNC_HOSTTEST: the page cache with the
 #                    bounded wait of the sys_sync of rach2/sys/syscall_fs.c
 #
-# The KRFFS and page cache tests extract their functions with
-# tests/host/fixtures/extract.py. Every test is compiled under ASan and
+# The KRFFS and page cache tests extract their functions with the program
+# of tests/host/fixtures/extract.c. Every test is compiled under ASan and
 # UBSan in a scratch directory under build/tests, which also has the
 # extracted files and which the script removes on every exit, so the tree's
 # sources are only read. The script runs the test and exits with its
@@ -55,7 +55,8 @@ work=$(mktemp -d "$repo/build/tests/extract-check.XXXXXX")
 cc=${CC:-cc}
 san='-fsanitize=address,undefined -fno-sanitize-recover=all'
 s=rach2/sys
-extract='python3 tests/host/fixtures/extract.py'
+"$cc" -std=c99 -O1 -Wall -Wextra -Werror tests/host/fixtures/extract.c -o "$work/extract"
+extract=$work/extract
 # The flags of a fixture compiled over kernel headers. The extracted files
 # are in $work, which every compile puts first on the include path.
 kernel="-std=c99 -DRACH2_HOSTTEST -g -O1 -ffreestanding"

@@ -8,7 +8,7 @@ The root Makefile consults the [installed etude site policy](../tools/etude/Read
 
 The native boot inventory names the `hello` and `rngprobe` guest programs directly. Their root rules always depend on the `tests` component, including when neither file exists yet. The manifest-derived rules alone cannot supply that ordering, since manifest scanning omits missing build outputs.
 
-Native host preparation uses `host-check.mk` for compiler recipes, per-translation-unit dependency scans and extracted fixture objects. `host-fixtures.mk` declares the existing kernel extractor and fixture compiler recipes. Etude selects the checks and seals their inputs and results; Make retains compilation and header dependencies.
+Native host preparation uses `host-check.mk` for compiler recipes, per-translation-unit dependency scans and extracted fixture objects. `host-fixtures.mk` builds the kernel extractor, `tests/host/fixtures/extract.c`, and declares the extraction and fixture compiler recipes. Etude selects the checks and seals their inputs and results; Make retains compilation and header dependencies.
 
 The fragments a component Makefile includes:
 

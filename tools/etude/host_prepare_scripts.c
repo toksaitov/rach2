@@ -25,7 +25,7 @@ static int add_option(struct hp_words *words, const char *key, const char *value
 }
 
 static int kernel_line(struct hp_context *c, struct hp_check *check, const char *line,
-                       struct hp_words *generated)
+                       const char *extractor, struct hp_words *generated)
 {
     struct hp_words words = {0}, flags = {0};
     int bad = hp_split(&words, line);
@@ -52,9 +52,8 @@ static int kernel_line(struct hp_context *c, struct hp_check *check, const char 
                 memset(&flags, 0, sizeof(flags));
             }
         }
-    } else if (words.n > 3 && same(words.v[0], "python3") && same(words.v[1], "-B") &&
-               same(words.v[2], "tests/host/fixtures/extract.py")) {
-        hp_add(generated, words.v[3]);
+    } else if (words.n > 2 && same(words.v[0], extractor) && same(words.v[2], "-f")) {
+        hp_add(generated, words.v[1]);
     }
     hp_words_free(&words);
     hp_words_free(&flags);
@@ -66,7 +65,9 @@ static int kernel_recipe(struct hp_context *c, struct hp_check *check, const cha
                          const char *program)
 {
     struct hp_words argv = {0}, generated = {0};
-    char output[4096], error[4096];
+    char output[4096], error[4096], extractor[4096];
+    if (hp_path(extractor, sizeof(extractor), "%s/extract", base))
+        return -1;
     char *compiler = hp_make_words(&c->compiler);
     hp_add(&argv, getenv("MAKE") ? getenv("MAKE") : "make");
     hp_add(&argv, "--no-print-directory");
@@ -82,7 +83,7 @@ static int kernel_recipe(struct hp_context *c, struct hp_check *check, const cha
         char *next = strchr(line, '\n');
         if (next)
             *next++ = 0;
-        bad = kernel_line(c, check, line, &generated);
+        bad = kernel_line(c, check, line, extractor, &generated);
         line = next;
     }
     if (!check->sources.n)
@@ -99,7 +100,7 @@ static int kernel_recipe(struct hp_context *c, struct hp_check *check, const cha
         bad = hp_run(c, argv.v, output, error);
     }
     hp_add(&check->data, "mk/host-fixtures.mk");
-    hp_add(&check->data, "tests/host/fixtures/extract.py");
+    hp_add(&check->data, "tests/host/fixtures/extract.c");
     free(compiler);
     free(text);
     hp_words_free(&generated);
