@@ -302,13 +302,13 @@ static int collection_prepared_job(const struct etude_tooling_job *job)
     script[n] = 0;
     if (file)
         fclose(file);
-    char make[64];
-    snprintf(make, sizeof make, "make -j%u ARCH='i686' 'components'", collection_cpus);
+    char components[64];
+    snprintf(components, sizeof components, "make -j%u ARCH='i686' 'components'", collection_cpus);
     if (!job->network || job->cpus != collection_cpus ||
         job->memory_mib != (collection_cpus > 4 ? collection_cpus * 1024 : 4096) ||
         collection_provisioned != collection_cpus || job->volume_mib < 512 || !job->disks ||
         !job->disks[0] || !job->disks[1] || job->disks[2] || !strstr(script, "rsync -rc") ||
-        !strstr(script, "git --literal-pathspecs add -f") || !strstr(script, make) ||
+        !strstr(script, "git --literal-pathspecs add -f") || !strstr(script, components) ||
         strstr(script, "make -B") || !strstr(script, "tar --sparse -cf"))
         return 1;
     if (collection_source_archive(job))
