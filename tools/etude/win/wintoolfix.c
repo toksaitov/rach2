@@ -427,7 +427,7 @@ static int linked_machine(char *alias)
 {
     char disk[PATH];
     join(alias, cache, "retained-alias");
-    return old_machine('e', 1) || !CreateHardLinkA(alias, old_cache(disk, 'e', "qcow2"), NULL);
+    return old_machine('e', 1) || link(old_cache(disk, 'e', "qcow2"), alias) != 0;
 }
 
 /** Keep pinned bases, incomplete pairs, downloads and old-format evidence. */
@@ -452,7 +452,7 @@ static int row_cache(void)
     if (old_present('d') != 3)
         return failed("cache cleanup removed a base beside old-format evidence");
     remove_tree(alias);
-    if (_rmdir(legacy) || _rmdir(pin) || prepare_again())
+    if (rmdir(legacy) || rmdir(pin) || prepare_again())
         return 1;
     return !old_present('b') && !old_present('d') && !old_present('e') && old_present('c') == 3
                ? 0
