@@ -13,6 +13,7 @@
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
  * host-deps: tools/etude/posix/process.c tools/etude/posix/store.c
  * host-deps: tools/etude/capture.c tools/etude/history_json.c
+ * host-deps: tests/cases/machine/agent_terminal.h
  * host-deps: tests/cases/machine/fileio.c
  * host-deps: tools/etude/json.c
  * host-deps: tools/etude/guest/guest.c tools/etude/guest/fixture.c
@@ -116,6 +117,7 @@
 #include "sha256.h"
 #include "../../tools/image/host_io.h"
 #include "../cases/machine/fileio.h"
+#include "../cases/machine/agent_terminal.h"
 #include "json.h"
 
 #ifndef _WIN32
@@ -183,6 +185,7 @@ static int fails;
 static char self[PATH_MAX];
 
 /* ---- The host tool and the guest program. ---- */
+static int tell_peer(unsigned port, const char *text);
 
 /** Say whether the file at `path` has the bytes of `text` anywhere. */
 static int file_has(const char *path, const char *text)
@@ -527,6 +530,10 @@ static int tool(int argc, char **argv)
     FILE *f;
     long pid = 0;
 
+    if (argc == 3 && strcmp(argv[2], "fail-client") == 0)
+        return 1;
+    if (argc == 4 && strcmp(argv[2], "request-peer") == 0)
+        return tell_peer((unsigned)strtoul(argv[3], NULL, 10), "client-request\n");
     if (argc == 5 && strcmp(argv[2], "scan") == 0)
         return file_has(argv[3], argv[4]) ? 0 : 1;
     if (argc == 6 && strcmp(argv[2], "peer") == 0)
@@ -1715,6 +1722,46 @@ static int scenario_pair(struct etude_case *c)
     return 0;
 }
 
+/* A service can remain alive after the client that had to reach it ends. */
+static int scenario_client_wait(struct etude_case *c)
+{
+    struct etude_case_service *service = NULL;
+    struct etude_case_machine *m;
+    struct etude_termination end;
+    struct etude_guest_result result;
+    struct peer_args pa;
+    uint64_t at;
+    const char *failed[] = {self, "tool", "fail-client", NULL};
+    const char *request[] = {self, "tool", "request-peer", pa.port, NULL};
+
+    if (etude_step(c, "serve") != ETUDE_OK ||
+        etude_service(c, "peer", peer_args(c, &pa, "serve"), &service, &end) != ETUDE_OK ||
+        (m = boot_shell(c, "first", "alpha")) == NULL)
+        return 1;
+    expect(c, "guest-open", etude_guest_open(m), ETUDE_OK);
+    expect(c, "client-start", etude_guest_start(m, failed, NULL, NULL), ETUDE_OK);
+    expect(c, "client-ended", etude_service_wait_guest(service, m, "never requested", 0, &at),
+           ETUDE_LOST);
+    expect(c, "client-result", etude_guest_finish(m, 0, "failed-client", &result), ETUDE_OK);
+    etude_assert(c, "client-failed",
+                 result.complete && result.termination.end == ETUDE_END_EXITED &&
+                     result.termination.value == 1 && result.cleanup == ETUDE_CLEANUP_CONFIRMED,
+                 "the failing client's actual result was lost");
+    expect(c, "request-start", etude_guest_start(m, request, NULL, NULL), ETUDE_OK);
+    expect(c, "request-saw",
+           etude_service_wait_guest(service, m, "peer: got client-request", 0, &at), ETUDE_OK);
+    expect(c, "request-complete", etude_guest_output_wait(m, "never printed"), ETUDE_LOST);
+    expect(c, "text-wins", etude_service_wait_guest(service, m, "peer: got client-request", 0, &at),
+           ETUDE_OK);
+    expect(c, "request-result", etude_guest_finish(m, 0, "request-client", &result), ETUDE_OK);
+    etude_assert(c, "request-exit",
+                 result.complete && result.termination.end == ETUDE_END_EXITED &&
+                     result.termination.value == 0 && result.cleanup == ETUDE_CLEANUP_CONFIRMED,
+                 "the asynchronous client's result was lost");
+    expect(c, "service-stopped", etude_service_stop(service, &end), ETUDE_OK);
+    return 0;
+}
+
 /** Run the unready row: a service that ends before it is ready, an
  * undeclared one, and one that is never ready within its step. */
 static int scenario_unready(struct etude_case *c)
@@ -2030,6 +2077,8 @@ static int scenario_services(struct etude_case *c, const char *row)
 {
     if (strncmp(row, "capture-", 8) == 0)
         return scenario_capture(c, strcmp(row, "capture-keep") == 0);
+    if (strcmp(row, "client-wait") == 0)
+        return scenario_client_wait(c);
     if (strcmp(row, "pair") == 0)
         return scenario_pair(c);
     if (strcmp(row, "unready") == 0)
@@ -2495,19 +2544,19 @@ static int write_pair_manifest(const char *path, const struct row *r)
 
     json_list(steps, sizeof(steps), r->steps, 1);
     json_list(asserts, sizeof(asserts), r->asserts, 0);
-    fix_format(
-        machines, sizeof(machines),
-        "[{\"machine_id\": \"alpha\", \"qemu\": {\"kernel\": \"kernel\", \"initrd\": %s, "
-        "\"disks\": %s, \"cpu\": \"max\", \"processors\": 1, \"memory_bytes\": 134217728, "
-        "\"firmware\": \"direct\", \"devices\": %s, \"boot_options\": []%s}, \"console\": "
-        "\"serial\", \"qmp\": true, \"helper\": false}, {\"machine_id\": \"beta\", \"qemu\": "
-        "{\"kernel\": \"kernel\", \"initrd\": %s, \"disks\": %s, \"cpu\": \"max\", "
-        "\"processors\": 1, \"memory_bytes\": 134217728, \"firmware\": \"direct\", "
-        "\"devices\": %s, \"boot_options\": []}, \"console\": \"serial\", \"qmp\": true, "
-        "\"helper\": false}]",
-        real ? "\"initrd\"" : "null", real ? "[]" : "[\"disk\"]", real ? "[\"rtl8139\"]" : "[]",
-        real ? ", \"captures\": [\"net0\"]" : "", real ? "\"initrd\"" : "null",
-        real ? "[]" : "[\"disk2\"]", real ? "[\"rtl8139\"]" : "[]");
+    fix_format(machines, sizeof(machines),
+               "[{\"machine_id\": \"alpha\", \"qemu\": {\"kernel\": \"kernel\", \"initrd\": %s, "
+               "\"disks\": %s, \"cpu\": \"max\", \"processors\": 1, \"memory_bytes\": 134217728, "
+               "\"firmware\": \"direct\", \"devices\": %s, \"boot_options\": []%s}, \"console\": "
+               "\"serial\", \"qmp\": true, \"helper\": %s}, {\"machine_id\": \"beta\", \"qemu\": "
+               "{\"kernel\": \"kernel\", \"initrd\": %s, \"disks\": %s, \"cpu\": \"max\", "
+               "\"processors\": 1, \"memory_bytes\": 134217728, \"firmware\": \"direct\", "
+               "\"devices\": %s, \"boot_options\": []}, \"console\": \"serial\", \"qmp\": true, "
+               "\"helper\": false}]",
+               real || r->helper ? "\"initrd\"" : "null", real ? "[]" : "[\"disk\"]",
+               real ? "[\"rtl8139\"]" : "[]", real ? ", \"captures\": [\"net0\"]" : "",
+               r->helper ? "true" : "false", real ? "\"initrd\"" : "null",
+               real ? "[]" : "[\"disk2\"]", real ? "[\"rtl8139\"]" : "[]");
     fix_format(
         text, sizeof(text),
         "{\"schema_version\": 1, \"family_id\": \"test.scenario\", \"summary\": \"rows\", "
@@ -3269,6 +3318,13 @@ static const struct row pair_row[] = {
      "disk", 0, STEP_US, 0, 1, 1, 1, NULL, 0, NULL, 0},
 };
 
+static const struct row client_wait_row[] = {
+    {"client-wait", "disk", "serve first:alpha",
+     "guest-open client-start client-ended client-result client-failed request-start request-saw "
+     "request-complete request-result request-exit text-wins service-stopped",
+     "disk", 1, STEP_US, 0, 1, 0, 1, NULL, 0, NULL, 0},
+};
+
 /* The row that runs while the others fail. */
 static const struct row hold_row[] = {
     {"hold", "disk", "serve first:alpha second:beta wait",
@@ -3800,6 +3856,20 @@ static void test_disk_ranges(void)
           "far range: same-file copy is refused");
 }
 
+static void test_terminal_status(void)
+{
+    CHECK(agent_terminal_failed("ready\nrach2-accept: ended with status 1\n") == 1,
+          "a completed failing client ends the pane wait");
+    CHECK(agent_terminal_failed("rach2-accept: ended with status 143\r\n") == 143,
+          "a signalled client ends the pane wait");
+    CHECK(!agent_terminal_failed("rach2-accept: ended with status 0\nready\n"),
+          "a successful earlier session can resume");
+    CHECK(!agent_terminal_failed("echo rach2-accept: ended with status 1\n") &&
+              !agent_terminal_failed("rach2-accept: ended with status 1 pending\n") &&
+              !agent_terminal_failed("rach2-accept: ended with status 9999999999999999\n"),
+          "only the exact exit line is terminal");
+}
+
 /** Run the audio rows, the capture rows, the stand-in rows, the fault row,
  * the stop row, the suspension rows, the pair and isolation rows, the forward
  * row and the damaged row. */
@@ -3822,10 +3892,12 @@ static void test_stand_in(void)
         run_row(&stand_in_rows[i], &s, NULL);
     run_row(fault_row, &s, NULL);
     run_row(stop_row, &s, WAITING);
+    test_terminal_status();
     test_process_paths();
     test_disk_ranges();
     test_suspend(&s);
     run_row(pair_row, &s, NULL);
+    run_row(client_wait_row, &s, NULL);
     test_isolation(&s);
     run_row(&forward_rows[0], &s, NULL);
     CHECK(etude_store_check(s.store, s.disk, NULL) == 0, "the disk artifact is unchanged");
@@ -3853,6 +3925,20 @@ static void test_real(void)
     etude_store_close(s.store);
 }
 
+static void test_client_waits(void)
+{
+    struct site s;
+    memset(&s, 0, sizeof(s));
+    test_terminal_status();
+    if (stand_in_site(&s) != 0) {
+        fails++;
+        return;
+    }
+    run_row(client_wait_row, &s, NULL);
+    CHECK(!machines_left(), "client waits leave no owned machine or responder");
+    etude_store_close(s.store);
+}
+
 /**
  * Run the test, or this program as the host tool or the stand-in for QEMU,
  * and exit; with one argument, the invocation, enter the library's ordinary
@@ -3876,6 +3962,14 @@ int main(int argc, char **argv)
     for (char *path = self; *path; path++)
         if (*path == '\\')
             *path = '/';
+    if (argc == 2 && !strcmp(argv[1], "--client-waits-only")) {
+        if (setenv("TMPDIR", fix_dir(), 1) != 0)
+            return 1;
+        test_client_waits();
+        if (!fails)
+            fix_passed();
+        return fails != 0;
+    }
     if (argc == 2)
         return etude_case_main(argc, argv);
     if (argc >= 3 && strcmp(argv[1], "tool") == 0)

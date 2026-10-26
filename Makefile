@@ -811,7 +811,7 @@ $(NET_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils
 
 build/tests/cases/machine/agents_scenario build/tests/cases/machine/agentapi_scenario: tests/cases/machine/agent_native.c tests/cases/machine/agent_native.h
-build/tests/cases/machine/agents_scenario: tests/cases/machine/agent_accept.c tests/cases/machine/agent_accept.h
+build/tests/cases/machine/agents_scenario: tests/cases/machine/agent_accept.c tests/cases/machine/agent_accept.h tests/cases/machine/agent_terminal.h
 
 # The fake API and SNTP services are compiled portable helpers.
 include tests/system/fakeapi/native.mk
