@@ -2069,3 +2069,23 @@ The owner enabled native Windows admission in MSYS2's `/etc/rach2/etude-site`, b
 The drain of the channels to EOF did not end the misclassification: on native Windows, 7 of 8 runs of `etude_qemu_hosttest` still ended a guest's shutdown as `qemu_exited`, with the stand-in and with QEMU 11.1.2. A diagnostic build showed that every QMP connection, of the stand-in and of the real QEMU, ended with `WSAECONNRESET` and never with EOF, and that the rows that failed had lost the `SHUTDOWN` line. A Windows process that exits resets its loopback connections, and the reset discards what the reader has not yet read. The launcher polls every 10 ms, so a QEMU that writes the event and exits at once can lose it before any read; no drain after the exit can recover it.
 
 On Windows QEMU now runs with `-no-shutdown`, which stops the guest at its shutdown, reset or panic and keeps QEMU, and the launcher sends `quit` once the event of a guest's end has arrived. Both stand-ins answer QMP after a guest shutdown until the quit when their arguments have `-no-shutdown`, as QEMU does. Linux and macOS keep their command line and behaviour.
+
+## A core run started against the owner's condition (27 October)
+
+The owner's order of 26 October allows one whole core run only when no open or unpushed work would change its result, and asks for that work to be listed first. At 03:33 the coordinating session dispatched core on c0538acea, the 47-commit repair batch, without the list. The removal of the old `host.list` scripts landed 17 minutes later, and #1277 was rewriting `tests/run` itself, so the run's result was stale before its host tier ended. The session cancelled the run at 04:22 and confirmed that the runner's processes were gone and that its claim had left the ledger. List the open work against the run's selection before any whole run; a pushed batch is not by itself the condition.
+
+## A host test was checked with a group that does not compile it (#1286)
+
+The repair of #1281, 6a5f5849a, changed `tests/host/compat/collection_tools_host.c` and declared `char make[64]` in a function where the repair batch's 5b5feb360 already declared `const char *make[]`. The worker checked the change with `RACH2_CASES=host.host.scripts_images`, which does not build that file, so master's host tier stopped compiling. The Mac worker found it while it prepared the whole collection for #680. A change to a host test's source is checked by the host case that builds it; `git grep -lF FILE tests/host tests/cases/host` finds the test and its case.
+
+## The preparation machine got one processor, then too little memory per processor (#1281, #1287)
+
+Collection tool jobs started their tooling machine with `-smp 1`. On Windows the GNU layer's i686 workspace grew 11 GiB in 76 minutes on one of 32 processors, a projected eight hours for both architectures, while the Mac built the same layer through `vendor/gnu/tooling_image.sh` with eight processors in about 50 minutes per architecture. #1281 gave the machine the claim's build jobs and 1 GiB of memory per processor above four. With eight processors and 8 GiB the guest killed two C++ compilers and Cargo for memory. The coordinating session's fallback instruction, four processors, gave 4096 MiB, the same ratio; it was corrected to two processors with 4096 MiB before the four-processor run went far. The Mac's build passes with 1.5 GiB per processor. Size a build machine's memory from its heaviest jobs, not from its processor count alone.
+
+## A preparation restarted on a tree without the repair batch (#680)
+
+The Mac preparation for #680 failed at 03:45 on 27 October, and the worker restarted it at 03:47 on 69526d1c3, a tree from before the 47-commit batch landed at 03:32. Every program it built would have been measured against recipes that master no longer had. The coordinating session stopped it at 03:51 and the worker restarted at 03:52 on f81036b73 with its own fix. A preparation or run starts from master's head, or from a named commit with the reason recorded on its issue; a restart after a failure fetches first.
+
+## The coordinating session kept its files outside the project
+
+The coordinating session wrote its record, its helpers' prompts and notes, and its stop hook under `~/flow`, the directory the worker loops use, in the owner's home directory. The owner never approved a directory outside the repository and took `~/flow` for something foreign. On 27 October the session moved its own files to the ignored `build/coordinator/` and pointed the hook and the manager's record at them. The loops' state stays in `~/flow` until the owner decides, since moving it restarts every loop. A session writes its records, scratch and hooks inside the repository, under `build/`.
