@@ -330,8 +330,6 @@ On Windows, the set driver, preparation adapter, artifact store and machine libr
 
 The compatibility script `sh tools/etude/win-smoke.sh TREE [ARCH]` checks the driver against artifacts of a built tree visible to Windows. It makes a preparation fixture with copies of the kernel, test image and errno probe, builds the SHA-256 host test and default machine scenario with MinGW, checks the binaries' imports, and runs the host vectors, `guest.default.errnoprobe` and `guest.default.timing` with their assertions unchanged. `ETUDE_WIN_ACCEL` is `whpx` by default. The fixture's preparation records existing files; a collection's preparation uses the real tree's make rules. The two fixtures `collection-files` and `collection-qemu` of `wincheck.sh` check native artifact bytes, read-only publication, Unicode file names, offsets beyond 4 GiB, QEMU registration, refused starts, suspension, accelerator confirmation, job costs and cleanup. The QEMU fixture needs QEMU on PATH or its Windows path in `ETUDE_WIN_QEMU`.
 
-The legacy adapter smoke script `sh tools/etude/win-tooling-smoke.sh [ARCH]`, in an admitted Windows shell with QEMU on PATH and mtools, mandoc and the cross compilers absent, checks real preparation. It builds the disk scenario, prepares its FAT fixture and guest artifacts in the local tooling machine, runs `machine.parts.tables` in native Windows QEMU under WHPX, reads the guest's write back through the image adapter, and runs `host.style.manual` with Linux's mandoc. It removes its private ledgers and results after a pass and prints their directory after a failure.
-
 ## Interfaces
 
 ### The files

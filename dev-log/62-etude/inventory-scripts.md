@@ -172,8 +172,7 @@ Against a copy of etude with seven faults put in, in two batches (the receipt's 
 * `tests/system/agents/fakegh.py`, the stand-in `gh` of the `worker-session` agent row, runs inside the machine under test with the GNU root's Python.
 * `tools/flow/test_status.py`, the status reader, is a product that `etude_lines_hosttest.c` runs in the GNU helper as the subject of its check.
 * The two source checks of preparation above.
-* `tests/system/case_select.py`, which only `tools/etude/win-tooling-smoke.sh` runs, below.
 
 ## The routine entry
 
-`tests/run` builds etude and starts `etude run -B`, which chooses, prepares and runs the cases in C. The shell entries of `tools/etude`, such as `collection-windows.sh`, are the deployment route, and `win-tooling-smoke.sh`, a check of the Windows tooling machine that a person runs in an MSYS2 shell, is the one program left that runs `tests/system/case_select.py`. Issue #1177 removed the scripts the routine route had gained: native ci's branch of `tools/ci/run.sh` replaces itself with the installed etude, and a push check runs `etude run routine push`. None of these is a host driver of a case. Issue #1037 concerns the routine's production of imported artifacts and the ownership of physical hosts, not scripts.
+`tests/run` builds etude and starts `etude run -B`, which chooses, prepares and runs the cases in C. The shell entries of `tools/etude`, such as `collection-windows.sh`, are the deployment route; issue #1278 removed `win-tooling-smoke.sh` and `tests/system/case_select.py`, the last Python it ran. Issue #1177 removed the scripts the routine route had gained: native ci's branch of `tools/ci/run.sh` replaces itself with the installed etude, and a push check runs `etude run routine push`. None of these is a host driver of a case. Issue #1037 concerns the routine's production of imported artifacts and the ownership of physical hosts, not scripts.
