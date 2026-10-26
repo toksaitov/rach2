@@ -158,6 +158,7 @@ struct command {
     struct etude_exec_spec spec;
     char verdict[PATH_LEN];
     struct etude_supervised *sup;
+    struct cmp_text captures, capture_errors; /* kept before the supervisor is freed */
     struct etude_collection_load *load;
     int load_stopped;
     struct etude_reading queued, admitted, done;
@@ -607,6 +608,39 @@ static int resources(const struct set *x, const struct command *c, struct cmp_te
     return rc;
 }
 
+/** Keep the supervisor's existing QMP replies before its result is freed. */
+static void captured(const struct set *x, struct command *c,
+                     const struct etude_supervised_result *r)
+{
+    const char *names[] = {"query-status", "query-cpus-fast", "info registers -a"};
+    const char *replies[] = {r->qmp_status, r->qmp_cpus, r->qmp_registers};
+    struct cmp_text doc = {0};
+    int rc = 0;
+
+    if (r->capture_error[0] != '\0')
+        string(&c->capture_errors, r->capture_error);
+    if (replies[0] == NULL && replies[1] == NULL && replies[2] == NULL)
+        return;
+    cmp_printf(&doc, "{");
+    for (size_t i = 0; i < 3; i++) {
+        if (i)
+            cmp_printf(&doc, ",");
+        string(&doc, names[i]);
+        cmp_printf(&doc, ":");
+        if (replies[i] != NULL)
+            rc |= keep(x, replies[i], strlen(replies[i]), &doc);
+        else
+            cmp_printf(&doc, "null");
+    }
+    cmp_printf(&doc, "}\n");
+    if (!rc)
+        rc = keep_doc(x, &doc, &c->captures);
+    else
+        free(doc.data);
+    if (rc)
+        c->captures.failed = 1;
+}
+
 /** Append the result of command `c`, with its output kept as the evidence
  * when it ran and did not pass. */
 static int result(const struct set *x, const struct command *c, struct cmp_text *t)
@@ -634,7 +668,14 @@ static int result(const struct set *x, const struct command *c, struct cmp_text 
         }
         free(bytes);
     }
-    cmp_printf(t, "],\"capture_errors\":[],\"disruptions\":[");
+    if (c->captures.length) {
+        if (kept)
+            cmp_printf(t, ",");
+        cmp_printf(t, "%s", c->captures.data);
+    }
+    rc |= c->captures.failed || c->capture_errors.failed;
+    cmp_printf(t, "],\"capture_errors\":[%s],\"disruptions\":[",
+               c->capture_errors.data != NULL ? c->capture_errors.data : "");
     if (c->disruption[0] != '\0')
         string(t, c->disruption);
     cmp_printf(t, "]}");
@@ -1787,8 +1828,9 @@ static void judge_exit(struct command *c, const char *line, int v)
 
 /** Take the end of command `c` from its result `r`: a host process's, or
  * a machine's, whose processor time is QEMU's. */
-static void took(struct command *c, const struct etude_supervised_result *r)
+static void took(const struct set *x, struct command *c, const struct etude_supervised_result *r)
 {
+    captured(x, c, r);
     c->end = r->end;
     c->value = r->value;
     c->cleanup = r->cleanup;
@@ -1824,7 +1866,7 @@ static void judge_prep(struct set *x, struct command *c)
     char line[REASON_LEN];
     int v = r->value;
 
-    took(c, r);
+    took(x, c, r);
     last_result(c, line, sizeof(line));
     if (r->incomplete && r->expiry != ETUDE_EXPIRY_NONE)
         came_out(c, INCOMPLETE, 1, "etude prepare did not end within its %s bound of %llu s",
@@ -1918,7 +1960,7 @@ static void judge_case(struct set *x, struct member *m)
     struct legacy_judgement v;
     size_t i;
 
-    took(c, r);
+    took(x, c, r);
     memset(&j, 0, sizeof(j));
     j.etude = x->o->program;
     j.schemas = x->o->schemas;
@@ -4480,6 +4522,8 @@ static void tear_down(struct set *x)
         etude_collection_load_free(x->mem[i].c.load);
         free(x->mem[i].c.argv);
         free(x->mem[i].c.envp);
+        free(x->mem[i].c.captures.data);
+        free(x->mem[i].c.capture_errors.data);
         free(x->mem[i].judged);
         free(x->mem[i].digests);
         free(x->mem[i].learned);
@@ -4492,6 +4536,8 @@ static void tear_down(struct set *x)
     free(x->again);
     free(x->prep.argv);
     free(x->prep.envp);
+    free(x->prep.captures.data);
+    free(x->prep.capture_errors.data);
     free(x->repeat_cases);
     free(x->repeat_items);
     free(x->repeat_selection);

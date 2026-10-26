@@ -11,6 +11,7 @@
  * the tree's build/tests. --context-only runs the native measurement rows
  * without QEMU or guest artifacts. --stop-only runs the first-failure rows.
  * --streams-only checks separate reports and diagnostics without QEMU.
+ * --capture-only checks retained watchdog evidence without starting a case.
  *
  * host-deps: tools/etude/routine_charge.c
  * host-deps: tools/etude/authority.c tools/etude/authority_parse.c
@@ -32,7 +33,9 @@
  * host-inputs: tests/host/compat/legacyset_streams.c
  * host-inputs: tests/host/compat/legacyset_context.c
  * host-inputs: tests/host/compat/legacyset_digests.c
- * host-deps: tools/etude/preparation_record.c tools/etude/posix/legacy_set.c
+ * host-deps: tools/etude/preparation_record.c
+ * host-deps: tests/host/compat/legacyset_capture_host.c
+ * host-inputs: tools/etude/posix/legacy_set.c
  * host-deps: tools/etude/cost.c
  * host-deps: tools/etude/posix/legacy_cases.c tools/etude/digest.c
  * host-deps: tools/etude/posix/legacy_guest.c tools/etude/serial.c
@@ -3051,6 +3054,16 @@ static int native_selection(const char *argument)
            !strcmp(argument, "--repetitions-only") || !strcmp(argument, "--context-only");
 }
 
+int etude_test_legacy_captures(void);
+
+/* Keep the native capture row beside the fixture's other compiled roles. */
+static int fixture_role(int argc, char **argv)
+{
+    if (argc == 2 && !strcmp(argv[1], "--capture-only"))
+        return etude_test_legacy_captures();
+    return legacy_fixture_role(argc, argv);
+}
+
 int main(int argc, char **argv)
 {
     char held[32];
@@ -3063,7 +3076,7 @@ int main(int argc, char **argv)
 #endif
     if (argc == 4 && !strcmp(argv[1], "stress"))
         return repetition_load_role(argv[2]);
-    role = legacy_fixture_role(argc, argv);
+    role = fixture_role(argc, argv);
     if (role >= 0)
         return role;
     if (argc == 3 && !strcmp(argv[1], "--legacy-driver"))
@@ -3111,6 +3124,7 @@ int main(int argc, char **argv)
     test_repetition_loads();
     test_digest_paths();
     test_contexts();
+    CHECK(etude_test_legacy_captures() == 0, "watchdog capture evidence");
     if (context_only) {
         if (fails)
             return 1;
