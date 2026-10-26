@@ -766,6 +766,23 @@ static void retention_reference(void)
     json_free(ref);
 }
 
+/** Whether a directory above `path` has a `.git`, which makes `retention init`
+ * refuse a root under `path`. */
+static int retention_in_checkout(const char *path)
+{
+    char *dir = strdup(path), *slash;
+    int found = 0;
+    while (dir && !found && (slash = strrchr(dir, '/')) != NULL) {
+        *slash = 0;
+        char *git = ret_format("%s/.git", dir);
+        struct stat st;
+        found = git && !lstat(git, &st);
+        free(git);
+    }
+    free(dir);
+    return found;
+}
+
 int etude_test_retention(const char *self)
 {
     char *canonical = realpath(fix_dir(), NULL);
@@ -776,6 +793,13 @@ int etude_test_retention(const char *self)
     }
     strcpy(retention_base, canonical);
     free(canonical);
+    if (retention_in_checkout(retention_base)) {
+        fprintf(stderr,
+                "retention fixture: %s is inside a git checkout, where retention refuses a "
+                "root; set TMPDIR to a directory outside the checkout\n",
+                retention_base);
+        return 1;
+    }
     snprintf(retention_policy, sizeof retention_policy, "%s/policy.json", retention_base);
     snprintf(retention_site, sizeof retention_site, "%s/site", retention_base);
     snprintf(retention_issues, sizeof retention_issues, "%s/issues.json", retention_base);

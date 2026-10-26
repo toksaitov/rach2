@@ -769,7 +769,12 @@ static int ret_initialize(const char *policy_path, const char *site)
     const char *given = json_text(policy, "root");
     struct stat st;
     char *root = given && ret_absolute(given) ? ret_path(given, 0) : NULL;
-    int rc = !root || !lstat(root, &st) || errno != ENOENT || retained_parent_check(root);
+    int rc = !root || !lstat(root, &st) || errno != ENOENT;
+    if (!rc && retained_parent_check(root)) {
+        free(root);
+        json_free(policy);
+        return -1;
+    }
     if (!rc)
         rc = ret_dirs(root);
     const char *names[] = {"registry", "runs", "accepted"};
