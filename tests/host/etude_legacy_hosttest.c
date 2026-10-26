@@ -2,7 +2,10 @@
  * Check etude's preparation adapter (tools/etude/posix/legacy.c) on fixture
  * trees, each a Makefile whose recipes append their goals to the file
  * `calls`, with the tree's run lock held by this program, which is also the
- * recipe of a preparation graph's node with `--legacy`.
+ * recipe of a preparation graph's node with `--legacy`. It also runs etude's
+ * host preparation and its import of a producer's goals on fixture trees
+ * (compat/prepare_host_rows.c and compat/prepare_import_rows.c), and plays
+ * the commands those run (compat/prepare_fixture.c).
  *
  * host-deps: tools/etude/routine_charge.c
  * host-deps: tools/etude/routine_proof.c
@@ -17,9 +20,11 @@
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
  * host-deps: tools/etude/posix/process.c utils/sha256.c
  * host-deps: tests/host/compat/command_host.c
+ * host-deps: tests/host/compat/prepare_fixture.c
+ * host-deps: tests/host/compat/prepare_host_rows.c
+ * host-deps: tests/host/compat/prepare_import_rows.c
  * host-cflags: -I tools/etude/include -I tools/etude/posix
  * host-cflags: -Wall -Wextra -Werror
- * host-inputs: tests/host/preparation_import_test.py
  * host-inputs: tools/etude/host_prepare.c tools/etude/host_prepare.h
  * host-inputs: tools/etude/host_prepare_io.c tools/etude/host_prepare_build.c
  * host-inputs: tools/etude/host_prepare_tools.c
@@ -32,7 +37,9 @@
  * host-inputs: tools/etude/preparation_import_transfer.c
  * host-inputs: tools/etude/preparation_import.h
  * host-inputs: tools/etude/collection_tools.c tools/etude/collection_tools.h
- * host-tools: python3
+ * host-inputs: tests/cases/host.host.json tests/cases/host/host.list
+ * host-inputs: tests/cases/host/adapters.json tools/etude/make.sh
+ * host-inputs: tests/system/fakeapi/build_openssl.sh
  * host-first: it runs for minutes
  *
  * Goals have the recovery key minted, the components and then the goals
@@ -60,13 +67,12 @@
 
 #include "compat/fixdir_host.c"
 #include "compat/command_host.h"
+#include "compat/prepare_fixture.h"
 #include "etude/artifact.h"
 #include "etude/legacy.h"
 #include "sha256.h"
 #include "../../tools/etude/json.h"
 #include "../../tools/etude/measurement_context.h"
-
-extern char **environ;
 
 static int fails;
 
@@ -985,53 +991,15 @@ static void test_graph(void)
         etude_store_close(s);
 }
 
-/* Check the preparation importer in the GNU fixture. */
-static void test_import_product(void)
-{
-    char *args[] = {(char *)host_tool_path("python3"), "-B",
-                    "tests/host/preparation_import_test.py", NULL};
-    struct etude_exec *ex = etude_exec_new();
-    struct etude_proc *proc = NULL;
-    struct etude_exec_spec spec;
-    const struct etude_exec_result *result;
-    int started;
-
-    memset(&spec, 0, sizeof(spec));
-    spec.attempt_id = "preparation-import";
-    spec.argv = args;
-    spec.envp = environ;
-    spec.cwd = getenv("ETUDE_TREE");
-    spec.output_max = 65536;
-    spec.grace_us = 5000000;
-    started = ex && !etude_exec_start(ex, &spec, &proc);
-    if (!started)
-        fprintf(stderr, "import product: %s: %s\n", args[0],
-                ex ? strerror(errno) : "cannot create the native executor");
-    CHECK(started, "import product: started");
-    if (proc) {
-        while (etude_exec_wait(ex, 1000) != proc)
-            ;
-        result = etude_proc_result(proc);
-        CHECK(result->end == ETUDE_END_EXITED && !result->value &&
-                  result->cleanup == ETUDE_CLEANUP_CONFIRMED && !result->output_error,
-              "import product: identity, receipt, fixture chain and native build vectors");
-        if (result->end != ETUDE_END_EXITED || result->value ||
-            result->cleanup != ETUDE_CLEANUP_CONFIRMED || result->output_error)
-            printf("import product: end=%d value=%d cleanup=%d output_error=%d\n%s%s", result->end,
-                   result->value, result->cleanup, result->output_error,
-                   result->out.data ? result->out.data : "",
-                   result->err.data ? result->err.data : "");
-        etude_proc_free(proc);
-    }
-    etude_exec_free(ex);
-}
-
 #include "compat/context_source_host.c"
 
 int main(int argc, char **argv)
 {
     char held[32];
+    int standin = pf_standin(argc, argv);
 
+    if (standin >= 0)
+        return standin;
     if (argc >= 5 && strcmp(argv[1], "--legacy") == 0)
         return recipe(argc, argv);
     if (realpath(argv[0], self) == NULL) {
@@ -1083,7 +1051,13 @@ int main(int argc, char **argv)
     test_stop();
     test_check();
     test_graph();
-    test_import_product();
+    if (pf_start(argv[0]) != 0) {
+        fails++;
+    } else {
+        pf_host_rows();
+        pf_import_rows();
+        fails += pf_fails;
+    }
     if (fails != 0)
         return 1;
     fix_passed();
