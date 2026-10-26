@@ -84,9 +84,8 @@ static enum etude_status account_mode(struct acceptance *a, const char *command,
     snprintf(who, sizeof(who), "%s@127.0.0.1", a->request->login.user);
     for (tries = 0;; tries++) {
         const char *error;
-        st = download == 2 ? net_ssh_download_disk(a->u, argv, output, r)
-             : download    ? net_ssh_download(a->u, argv, output, r)
-                           : net_ssh_input(a->u, argv, input, output, r);
+        st = download ? net_ssh_download(a->u, argv, output, r)
+                      : net_ssh_input(a->u, argv, input, output, r);
         error = r->err != NULL ? r->err : "";
         if (st != ETUDE_OK || tries == 3 || r->end.end != ETUDE_END_EXITED || r->end.value != 255 ||
             (strstr(error, "kex_exchange_identification") == NULL &&
@@ -273,7 +272,7 @@ static int get_file(struct acceptance *a, const char *guest, const char *host)
     snprintf(command, sizeof(command), "cat %s%s", a->request->use_su ? a->transfer : guest,
              a->request->use_su ? "/data" : "");
     snprintf(output, sizeof(output), "%s.get-%u", a->prefix, ++a->commands);
-    st = account_mode(a, command, NULL, output, &r, 2);
+    st = account_mode(a, command, NULL, output, &r, 1);
     evidence = etude_evidence(a->u->c, output);
     ok = st == ETUDE_OK && net_exited0(&r) && evidence != NULL && copy_file(evidence, host);
     net_run_free(&r);
