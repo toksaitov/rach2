@@ -5,7 +5,8 @@
  * with a Windows implementation on Windows, `check` and local native runs
  * on Rach2, and `lock`
  * alone where ETUDE_LOCK_ONLY is defined, as the first process of tests/run
- * builds it. tools/etude/Readme.md gives each verb's usage.
+ * builds it. Run under the name `make`, as the installed make wrapper is,
+ * etude is `etude make`. tools/etude/Readme.md gives each verb's usage.
  */
 #include <errno.h>
 #include <stdio.h>
@@ -233,6 +234,8 @@ static const struct verb verbs[] = {
     {"stress", etude_load_main, "apply a processor, memory or disk load"},
     {"observe", etude_observe_main, "record native system and process load"},
     {"admit", etude_admit_main, "start a command once the ledger admits it"},
+    {"launch", etude_launch_main, "admit a build or a test run under the installed site policy"},
+    {"make", etude_make_main, "run make within the job count its claim admitted"},
     {"authority", etude_authority_main, "hold the enrolled endpoint through a routine route"},
 #ifndef _WIN32
     {"status", etude_status_main, "list the claims in a machine's ledger"},
@@ -246,8 +249,23 @@ static const struct verb verbs[] = {
 #endif
 };
 
+#if !defined(ETUDE_LOCK_ONLY) && !defined(__rach2__)
+/** Say whether etude runs as `make`, the installed make wrapper. */
+static int as_make(const char *path)
+{
+    const char *name = path + strlen(path);
+    while (name > path && name[-1] != '/' && name[-1] != '\\')
+        name--;
+    return strcmp(name, "make") == 0 || strcmp(name, "make.exe") == 0;
+}
+#endif
+
 int main(int argc, char **argv)
 {
+#if !defined(ETUDE_LOCK_ONLY) && !defined(__rach2__)
+    if (argc > 0 && as_make(argv[0]))
+        return etude_make_main(argc, argv);
+#endif
 #if defined(__rach2__) && !defined(ETUDE_LOCK_ONLY)
     if (argc > 1 && strcmp(argv[1], "--cut-transport") == 0)
         return etude_native_collection_main(argc, argv);

@@ -85,6 +85,7 @@ ETUDE_RUN_SRC = $(ETUDE_AUTHORITY_SRC) $(ETUDE_AUTHORITY_RUN_SRC) $(ETUDE_HOST_P
                 tools/etude/sched.c tools/etude/portlock.c tools/etude/posix/status.c \
                 tools/etude/compare.c tools/etude/compare_load.c tools/etude/baseline.c tools/etude/compare_report.c \
                 tools/etude/compare_run.c tools/etude/lines.c tools/etude/posix/admit.c \
+                tools/etude/launch.c tools/etude/launch_make.c \
                 tools/etude/posix/run_host.c tools/etude/lock_tree.c tools/etude/lock_ports.c \
                 tools/etude/provision_tooling.c tools/etude/tooling.c tools/etude/tooling_cache.c \
                 tools/etude/budget_run.c tools/etude/budget.c tools/etude/budget_prepare.c tools/etude/cost.c

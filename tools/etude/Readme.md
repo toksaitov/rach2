@@ -28,6 +28,8 @@ Preparation builds and verifies immutable inputs before execution. Compiled help
     etude estimate forecast|check ...   forecast a selection's time, or check a run's budget
     etude lock tree|ports ...           hold a tree's run lock, or the host lock and a block of ports, while a command runs
     etude admit ...                     start a command once a machine's ledger admits it
+    etude launch ...                    admit a build or a test run under the installed site policy
+    etude make ...                      run make within the job count its claim admitted
     etude status LEDGER                 list the claims of a machine's ledger
     etude release LEDGER ID             drop a claim whose processes have ended
     etude serve ...                     respond to remote execution over ssh(1)
@@ -36,7 +38,7 @@ Preparation builds and verifies immutable inputs before execution. Compiled help
                                         make a machine ready, build etude in its cache, or run its tooling machine
     etude build ...                     run one stamped step of the build through the host's store
 
-Linux and macOS have every verb. Windows has `stress`, `estimate`, the native collection entry, `run suites`, the host-command adapter, `prepare`, `check`, `show lines`, `lock`, `admit` and `provision tooling`. Rach2 has `check` and the local `run native` collection, with no `check record`. The desktop `run native -t TRANSPORT` form is a separate explicit transport adapter. `etude` with no verb, or a verb with no form, prints the list on standard error and exits 2. A verb's messages begin `etude VERB:`, except those of `etude lock tree`, which begin with the NAME it is given. The paragraphs below give each verb's usage; `etude-guest`, the helper inside Rach2, and `etude-volume`, which `etude provision tooling` runs, are programs of their own.
+Linux and macOS have every verb. Windows has `stress`, `estimate`, the native collection entry, `run suites`, the host-command adapter, `prepare`, `check`, `show lines`, `lock`, `admit`, `launch`, `make` and `provision tooling`. Rach2 has `check` and the local `run native` collection, with no `check record`. The desktop `run native -t TRANSPORT` form is a separate explicit transport adapter. `etude` with no verb, or a verb with no form, prints the list on standard error and exits 2. A verb's messages begin `etude VERB:`, except those of `etude lock tree`, which begin with the NAME it is given, and those of `etude launch` and `etude make`, which begin `etude-launch:` and `etude-make:`, the names of the installed programs. The paragraphs below give each verb's usage; `etude-guest`, the helper inside Rach2, and `etude-volume`, which `etude provision tooling` runs, are programs of their own.
 
 ### Native collection execution
 

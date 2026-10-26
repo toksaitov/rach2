@@ -24,6 +24,8 @@ int etude_budget_main(int argc, char **argv);
 int etude_lock_tree_main(int argc, char **argv);
 int etude_lock_ports_main(int argc, char **argv);
 int etude_admit_main(int argc, char **argv);
+int etude_launch_main(int argc, char **argv);
+int etude_make_main(int argc, char **argv);
 int etude_status_main(int argc, char **argv);
 int etude_release_main(int argc, char **argv);
 int etude_serve_main(int argc, char **argv);

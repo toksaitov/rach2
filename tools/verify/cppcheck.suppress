@@ -223,6 +223,10 @@ unusedStructMember:*tools/etude/observe_history.h
 unusedStructMember:*tools/etude/observe_scope.h
 unusedStructMember:*tools/etude/observe_system.h
 
+# launch.h is also checked alone; launch.c and launch_make.c read and set the
+# members of `struct launch_jobs`.
+unusedStructMember:*tools/etude/launch.h
+
 # The headers of the executor, the QEMU launcher, the watchdog, the ledger,
 # the schedule, the artifact store and the serial controller declare the
 # structures that their sources and their callers fill and read. cppcheck judges each header as a

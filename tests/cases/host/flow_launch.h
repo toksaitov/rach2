@@ -15,4 +15,5 @@ int launch_run(struct launch_fixture *u, const char *const argv[], int status);
 int launch_entries(struct launch_fixture *u);
 int launch_parallel(struct launch_fixture *u);
 int launch_refusals(struct launch_fixture *u);
+int launch_claims(struct launch_fixture *u);
 #endif

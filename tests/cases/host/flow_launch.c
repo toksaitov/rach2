@@ -139,6 +139,45 @@ static int record_make(int argc, char **argv)
             ok = 0;
     return fclose(out) || !ok;
 }
+/* The policy's etude in the claim rows: check the form of the arguments and
+ * the environment `etude admit` is given, and record the claim. */
+/** Check the arguments of `etude admit` that every claim gives alike. */
+static int admit_shape(int argc, char **argv, int at)
+{
+    const char *id = argc > at + 1 ? argv[at + 1] : "";
+    return argc > at + 8 && !strcmp(argv[1], "admit") && !strcmp(argv[2], "-i") &&
+           !strcmp(argv[3], "-p") && !strcmp(argv[4], "-d") && !strcmp(argv[5], lp("locks")) &&
+           !strcmp(argv[6], "-w") && !strcmp(argv[7], "3") && !strcmp(argv[at], lp("ledger")) &&
+           strlen(id) == 39 && !strncmp(id, "launch:", 7) &&
+           strspn(id + 7, "0123456789abcdef") == 32 && *argv[at + 2] &&
+           !strcmp(argv[at + 5], "24000,103079215104,171798691840") &&
+           !strcmp(argv[at + 6], "30") && argv[at + 7][0] == '/';
+}
+/** Check the environment the launcher exports to the admitted command. */
+static int admit_environment(void)
+{
+    char prefix[4200];
+    snprintf(prefix, sizeof(prefix), "%s/etude-bin:", ev("FLOW_LAUNCH"));
+    return !strcmp(ev("ETUDE_ADMITTED"), ev("ETUDE_SITE")) &&
+           !strcmp(ev("JOBS"), ev("ETUDE_BUILD_JOBS")) && ev("ETUDE_MAKE_REAL")[0] == '/' &&
+           !strncmp(ev("PATH"), prefix, strlen(prefix));
+}
+static int record_claim(int argc, char **argv)
+{
+    int at = argc > 8 && !strcmp(argv[8], "-r") ? 10 : 8, i;
+    int ok = admit_shape(argc, argv, at) && admit_environment();
+    FILE *out = fopen(lp("record"), "w");
+    if (!out)
+        return 1;
+    if (ok)
+        fprintf(out, "%s %s jobs=%s workers=%s pool=%s:", argv[at + 3], argv[at + 4],
+                ev("ETUDE_BUILD_JOBS"), ev("RACH2_WORKERS"), ev("RACH2_MEMORY_MIB"));
+    else
+        fputs("malformed admission:", out);
+    for (i = ok ? at + 8 : 1; i < argc; i++)
+        fprintf(out, " %s", argv[i]);
+    return fclose(out) != 0;
+}
 /* The root make of the worker entry: outside a claim it enters the installed
  * launcher as a build, as the Makefile's site wrapper does, and inside the
  * claim it observes the claim and fails, as a build of etude that does not
@@ -174,6 +213,8 @@ static int launch_commands(int argc, char **argv, const char *name)
         return observer();
     if (!strcmp(name, "record-make"))
         return record_make(argc, argv);
+    if (!strcmp(name, "etude-record"))
+        return record_claim(argc, argv);
     if (!strcmp(name, "gh")) {
         for (i = 1; i + 1 < argc; i++)
             if (!strcmp(argv[i], "--json") && !strcmp(argv[i + 1], "state"))
@@ -359,7 +400,7 @@ int flow_launch(struct fixture *f)
     u.f = f;
     if (!setup(&u))
         return 0;
-    if (!launch_entries(&u) || !launch_refusals(&u))
+    if (!launch_entries(&u) || !launch_refusals(&u) || !launch_claims(&u))
         return 0;
     return launch_parallel(&u);
 }
