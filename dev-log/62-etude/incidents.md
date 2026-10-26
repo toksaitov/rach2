@@ -2059,3 +2059,7 @@ The [handoff](handoff-2026-10-26.md) states the unanswered Windows library decis
 ## Authority fixture used the build account's executable mode (#1230)
 
 The ledger host test bound its authority's program and launcher body to the test executable. Two workers built that executable with mode 0775, so the authority correctly rejected its group-write permission before comparing site and route aliases. The dependent admission checks then failed too. The fixture now creates a private program file with explicit protection and checks that group-write permission prevents admission before restoring that protection. A fixture supplies the metadata its contract needs; it does not depend on the build account's umask or change an immutable prepared executable.
+
+## The Windows launcher read a different policy (#1275)
+
+The owner enabled native Windows admission in MSYS2's `/etc/rach2/etude-site`, but the installed authority read `C:/ProgramData/rach2/etude-site`, which still disabled it. The launcher rejected even `/usr/bin/true` before creating a claim. The worker applied the authorized share to the protected policy while holding its native authority gate, with an empty ledger and no blocked authority state or physical lease. The policy's owner and access controls were unchanged. The installed launcher then admitted the command and returned the ledger to its empty header. Read the policy named by the installed authority binding; changing a separate policy does not enable that endpoint.
