@@ -105,6 +105,22 @@ static int arguments(struct producer *c)
     return bad ? -1 : 0;
 }
 
+static int installed_actor(const struct json *producer)
+{
+    const struct json *actor = json_member(producer, "actor");
+    if (!actor)
+        return 0;
+    const char *program = field(producer, "etude");
+    const struct json *size = json_member(actor, "size_bytes");
+    struct json *actual = program ? pi_describe(program) : NULL;
+    int bad = actor->type != JSON_OBJECT || actor->count != 3 || !field(actor, "path") || !actual ||
+              !pi_hex(field(actor, "sha256"), 64) || !size || size->type != JSON_INTEGER ||
+              !json_equal(size, json_member(actual, "size_bytes")) ||
+              !pi_same(field(actor, "sha256"), field(actual, "sha256"));
+    json_free(actual);
+    return bad ? -1 : 0;
+}
+
 static int producer_fields(const struct json *p)
 {
     const char *paths[] = {"etude", "site", "repository", "tree_root", "output_root"};
@@ -120,7 +136,7 @@ static int producer_fields(const struct json *p)
             return -1;
     }
     const struct json *policy = json_member(p, "policy");
-    return !field(policy, "ledger") || !field(policy, "capacity") ? -1 : 0;
+    return !field(policy, "ledger") || !field(policy, "capacity") || installed_actor(p) ? -1 : 0;
 }
 
 static int condition(struct producer *c, const struct json *clean, const struct json *transport)
