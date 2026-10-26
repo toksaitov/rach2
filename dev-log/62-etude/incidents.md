@@ -2045,3 +2045,5 @@ Review found that the first repair was based on an older parent without the inte
 ## Grouping an assigned CI repair
 
 The coordinator assigned both new host-script failures before grouping them. The group command correctly refused assigned members without changing the board. The coordinator removed only its own assignments, created the group, restored the assignments and took the group and its members in order. Group related unclaimed failures before assigning their one writer; verify the final board state after the commands complete.
+
+The same check found that the assigned Git-preparation repair #1198 was still Ready while its worker had finished the change. Assignment alone had not updated the board. The coordinator took the issue explicitly and repeated the status check. An assignment during coordination includes its In progress status in the same step.
