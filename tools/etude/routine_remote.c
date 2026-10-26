@@ -238,7 +238,6 @@ static char **routine_vector(const struct json *words)
 #ifdef _WIN32
 static char **routine_environment(void)
 {
-    extern char **environ;
     size_t count = 0, used = 0;
     while (environ[count])
         count++;

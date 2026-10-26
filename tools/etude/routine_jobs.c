@@ -5,6 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef _WIN32
+#include "win/files.h"
+#endif
 #include "routine_producer.h"
 #include "preparation_import.h"
 #include "history_json.h"

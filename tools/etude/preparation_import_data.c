@@ -9,6 +9,8 @@
 #include <unistd.h>
 #ifdef _WIN32
 #include "win/files.h"
+#else
+extern char **environ;
 #endif
 #include "preparation_import.h"
 #include "measurement_context.h"
@@ -434,7 +436,6 @@ int pi_native_data(const char *name)
 
 static int native_style(struct pi_context *c, const char *name)
 {
-    extern char **environ;
     const char *leaf = strrchr(name, '/');
     size_t n = leaf ? strlen(leaf + 1) : 0;
     if (n < 6 || n >= 80)

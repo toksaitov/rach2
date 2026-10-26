@@ -891,10 +891,11 @@ struct retention_options {
 };
 static int retention_options_valid(const struct retention_options *o)
 {
-    enum { OUT = 1, RUN = 2, REF = 4, ENV = 8, APPLY = 16, REPO = 32, MAP = 64 };
+    enum { OUTPUT = 1, RUN = 2, REF = 4, ENV = 8, APPLY = 16, REPO = 32, MAP = 64 };
     const char *names[] = {"init", "allocate", "prune", "begin", "seal", "touch", "issues"};
-    const unsigned allowed[] = {0, REF | ENV, REF | APPLY, OUT | RUN, OUT, OUT, OUT | REPO | MAP};
-    const unsigned required[] = {0, 0, 0, OUT | RUN, OUT, OUT, OUT | REPO | MAP};
+    const unsigned allowed[] = {0,      REF | ENV, REF | APPLY,        OUTPUT | RUN,
+                                OUTPUT, OUTPUT,    OUTPUT | REPO | MAP};
+    const unsigned required[] = {0, 0, 0, OUTPUT | RUN, OUTPUT, OUTPUT, OUTPUT | REPO | MAP};
     if (!o->action)
         return -1;
     size_t action;
