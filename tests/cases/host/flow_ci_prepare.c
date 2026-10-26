@@ -44,6 +44,72 @@ int flow_ci_reader_record(struct fixture *f, const char *program)
     return 1;
 }
 
+/* Keep the prepared helper distinct from the subject reader stand-in. */
+static int native_helper(struct fixture *f, char program[4096])
+{
+    const char *root = getenv("HOST_PRODUCTS");
+    if (!root || !*root)
+        root = "/host-products";
+    int n = snprintf(program, 4096, "%s/native-helper-etude", f->work);
+    if (n < 0 || n >= 4096)
+        return 0;
+    if (fx_exists(program))
+        return 1;
+    char source[4096];
+    n = snprintf(source, sizeof source, "%s/etude", root);
+    return n >= 0 && n < (int)sizeof source && fx_copy(source, program);
+}
+
+static int clean_prepare(struct fixture *f, const char *program)
+{
+    const char makefile[] = "ARCH ?= i686\n"
+                            "B = build\n"
+                            "ifeq ($(ARCH),x86_64)\nB = build/x86_64\nendif\n"
+                            ".PHONY: components ubsan-kernel\ncomponents: ; @true\n"
+                            "ubsan-kernel:\n\t@mkdir -p $(B)/rach2-ubsan\n"
+                            "\t@printf 'new kernel\\n' > $(B)/rach2-ubsan/kernel\n"
+                            "build/clean.done:\n\t@printf 'new output\\n' > $@\n";
+    if (!flow_put(f, "tree/tests/Makefile", "PROGS = probe\n") ||
+        !flow_put(f, "tree/Makefile", makefile))
+        return 0;
+    char receipt[8192];
+    int n = snprintf(receipt, sizeof receipt, "ETUDE_PREPARATION_RECEIPT=%s",
+                     flow_path(f, "tree/build/tests/host-suite/current/receipt"));
+    if (n < 0 || n >= (int)sizeof receipt)
+        return 0;
+    const char *environment[] = {
+        "PATH=/usr/bin:/bin",
+        "ETUDE_PREPARATION_CLEAN=1",
+        "ETUDE_PREPARATION_RUN_ID=fixture-clean",
+        receipt,
+        "ETUDE_PREPARATION_COMMIT=1111111111111111111111111111111111111111",
+        "ETUDE_PREPARATION_GRANT",
+        "ETUDE_PREPARATION_IMPORT",
+        "RACH2_TREE_HELD",
+        NULL};
+    const char *argv[] = {program,
+                          "lock",
+                          "tree",
+                          flow_path(f, "tree"),
+                          "fixture-clean",
+                          program,
+                          "prepare",
+                          "-t",
+                          flow_path(f, "tree"),
+                          "-a",
+                          "i686,x86_64",
+                          "-n",
+                          "ubsan",
+                          "-o",
+                          flow_path(f, "tree/build/tests/host-suite/current/record"),
+                          "-b",
+                          "build/clean.done",
+                          NULL};
+    fx_run(f, argv, NULL, environment, NULL);
+    return f->status == 0 && fx_has(flow_path(f, "tree/build/tests/host-suite/current/receipt"),
+                                    "\"inhouse\":\"clean\"");
+}
+
 static int clean_row(struct fixture *f)
 {
     const char *files[] = {"build/rach2/kernel",
@@ -61,14 +127,8 @@ static int clean_row(struct fixture *f)
         if (!flow_put(f, name, "bytes"))
             return 0;
     }
-    if (!flow_put(f, "tree/tests/Makefile", "PROGS = probe\n") ||
-        !flow_put(f, "tree/Makefile", "# fixture\n"))
-        return 0;
-    const char *argv[] = {
-        "python3", flow_source(f, "tools/ci/clean_inhouse.py"),         flow_path(f, "tree"),
-        "both",    flow_path(f, "tree/build/tests/host-suite/current"), NULL};
-    fx_run(f, argv, NULL, NULL, NULL);
-    int ok = f->status == 0;
+    char program[4096];
+    int ok = native_helper(f, program) && clean_prepare(f, program);
     for (size_t i = 0; i < sizeof files / sizeof *files; i++) {
         char name[256];
         snprintf(name, sizeof name, "tree/%s", files[i]);
@@ -84,13 +144,17 @@ static int transfer_row(struct fixture *f)
         !flow_put(f, "transfer/context/context.json", "bound context\n") ||
         !flow_put(f, "transfer/objects/large-image", "artifact object\n"))
         return 0;
-    const char *script = flow_source(f, "tools/ci/native_evidence.py");
+    char program[4096];
+    if (!native_helper(f, program))
+        return 0;
     const char *stage[] = {
-        "python3", script, "stage", flow_path(f, "transfer"), flow_path(f, "shared"), NULL};
+        program, "prepare", "evidence", "stage", flow_path(f, "transfer"), flow_path(f, "shared"),
+        NULL};
     fx_run(f, stage, NULL, NULL, NULL);
     int ok = f->status == 0 && !fx_exists(flow_path(f, "shared/objects/large-image"));
     const char *restore[] = {
-        "python3", script, "restore", flow_path(f, "shared"), flow_path(f, "restored"), NULL};
+        program, "prepare", "evidence", "restore", flow_path(f, "shared"), flow_path(f, "restored"),
+        NULL};
     fx_run(f, restore, NULL, NULL, NULL);
     ok = ok && f->status == 0 &&
          fx_equal(flow_path(f, "restored/history/run.jsonl"), "complete history\n") &&
@@ -98,9 +162,13 @@ static int transfer_row(struct fixture *f)
     ok = fx_check(f, ok, "shared evidence survives transfer without executable objects");
     if (!flow_put(f, "shared/store/blob", "corrupt\n"))
         return 0;
-    const char *bad[] = {
-        "python3", script, "restore", flow_path(f, "shared"), flow_path(f, "corrupt-restored"),
-        NULL};
+    const char *bad[] = {program,
+                         "prepare",
+                         "evidence",
+                         "restore",
+                         flow_path(f, "shared"),
+                         flow_path(f, "corrupt-restored"),
+                         NULL};
     fx_run(f, bad, NULL, NULL, NULL);
     return fx_check(f, f->status != 0 && !fx_exists(flow_path(f, "corrupt-restored")),
                     "corrupt shared evidence is refused before publication") &&
@@ -111,8 +179,11 @@ static int reader_row(struct fixture *f)
 {
     if (!flow_ci_reader_record(f, f->self))
         return 0;
-    const char *script = flow_source(f, "tools/ci/native_reader.py");
-    const char *argv[] = {"python3", script, f->self, flow_path(f, "reader.record"), NULL};
+    char program[4096];
+    if (!native_helper(f, program))
+        return 0;
+    const char *argv[] = {program, "prepare", "reader", f->self, flow_path(f, "reader.record"),
+                          NULL};
     fx_run(f, argv, NULL, NULL, NULL);
     int ok = fx_check(f, f->status == 0, "native local reader matches installed receipt");
     if (!flow_put(f, "reader.record", "etude-prepare 1\ntree /\n"))
@@ -130,16 +201,8 @@ int flow_ci_preparation(struct fixture *f)
 
 int flow_ci_retention_setup(struct fixture *f)
 {
-    const char *names[] = {"retention.py",          "retention_io.py",     "retention_closure.py",
-                           "retention_registry.py", "retention_access.py", "retention_issues.py"};
-    for (size_t i = 0; i < sizeof(names) / sizeof(*names); i++) {
-        char from[160], to[200];
-        snprintf(from, sizeof from, "tools/ci/%s", names[i]);
-        snprintf(to, sizeof to, "tree/tools/ci/%s", names[i]);
-        if (!flow_copy(f, from, to))
-            return 0;
-    }
-    if (!flow_copy(f, "tools/etude/preparation_paths.py", "tree/tools/etude/preparation_paths.py"))
+    char program[4096];
+    if (!native_helper(f, program))
         return 0;
     char hex[65], text[32768];
     size_t bytes;
@@ -155,20 +218,33 @@ int flow_ci_retention_setup(struct fixture *f)
     if (n < 0 || (size_t)n >= sizeof text || !flow_put(f, "retention.policy", text))
         return 0;
     fx_env("ETUDE_RETENTION", flow_path(f, "retention.policy"));
-    const char *argv[] = {"python3",  flow_path(f, "tree/tools/ci/retention.py"),
-                          "--policy", flow_path(f, "retention.policy"),
-                          "--site",   flow_path(f, "native.site"),
-                          "init",     NULL};
+    const char *argv[] = {program,
+                          "prepare",
+                          "retention",
+                          "--policy",
+                          flow_path(f, "retention.policy"),
+                          "--site",
+                          flow_path(f, "native.site"),
+                          "init",
+                          NULL};
     fx_run(f, argv, NULL, NULL, NULL);
     return f->status == 0;
 }
 
 int flow_ci_retained_out(struct fixture *f, char *out, size_t size)
 {
-    const char *argv[] = {"python3",  flow_path(f, "tree/tools/ci/retention.py"),
-                          "--policy", flow_path(f, "retention.policy"),
-                          "--site",   flow_path(f, "native.site"),
-                          "allocate", NULL};
+    char program[4096];
+    if (!native_helper(f, program))
+        return 0;
+    const char *argv[] = {program,
+                          "prepare",
+                          "retention",
+                          "--policy",
+                          flow_path(f, "retention.policy"),
+                          "--site",
+                          flow_path(f, "native.site"),
+                          "allocate",
+                          NULL};
     fx_run(f, argv, NULL, NULL, NULL);
     if (f->status != 0 || !f->out)
         return 0;
