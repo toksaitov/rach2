@@ -40,6 +40,7 @@
 
 #include "fixdir_host.h"
 #include "native_prepare.h"
+#include "pathmax_host.h"
 
 extern char **environ;
 
