@@ -133,10 +133,9 @@ static void fc_unlink_use(struct fc_page *p)
     p->older = p->younger = NULL;
 }
 
-/** Make `p` the most recently used. */
-static void fc_use(struct fc_page *p)
+/** Put `p`, which is not in the use order, at its young end. */
+static void fc_add_use(struct fc_page *p)
 {
-    fc_unlink_use(p);
     p->older = youngest;
     if (youngest) {
         youngest->younger = p;
@@ -144,6 +143,13 @@ static void fc_use(struct fc_page *p)
         oldest = p;
     }
     youngest = p;
+}
+
+/** Make `p`, which is in the use order, the most recently used. */
+static void fc_use(struct fc_page *p)
+{
+    fc_unlink_use(p);
+    fc_add_use(p);
 }
 
 /** Free `p`, and its file's record when it was the file's last page. */
@@ -301,7 +307,7 @@ static void fc_store(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, co
         p->sibling->sibling_link = &p->sibling;
     }
     file->pages = p;
-    fc_use(p);
+    fc_add_use(p);
     pages++;
     kirq_restore(flags);
     kfree(spare);
