@@ -638,12 +638,12 @@ static int tidy_stems(struct fixture *f)
     if (!lib_command(f, cwd, "stems HEAD", "stateA", ""))
         return 0;
     stems = f->out;
-    ok =
-        fx_check(f,
-                 fx_regex(stems, "^rach2_verify$") && fx_regex(stems, "^rach2-measure$") &&
-                     fx_regex(stems, "^rach2-muse-verify$") && !fx_regex(stems, "[^A-Za-z0-9_\n-]"),
-                 "scratch stems") &&
-        ok;
+    ok = fx_check(f,
+                  fx_regex(stems, "^rach2_verify$") && fx_regex(stems, "^rach2-measure$") &&
+                      fx_regex(stems, "^rach2-accept-secrets$") &&
+                      !fx_regex(stems, "[^A-Za-z0-9_\n-]"),
+                  "scratch stems") &&
+         ok;
     {
         const char *line = stems;
         while (*line) {
