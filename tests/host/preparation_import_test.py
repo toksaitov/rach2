@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """Check the preparation product's import identities and native build vectors."""
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
 import signal
 import shlex
-import struct
 import shutil
 import subprocess
 import sys
@@ -730,80 +728,6 @@ class ImportTests(unittest.TestCase):
             state = self.import_fixture(work, portable + ['build/tests/cases/machine/a'])
             self.import_run(state, expected=1)
             self.assertFalse((state.tree / 'build/compile.calls').exists())
-
-    def test_native_krffs_root_alignment(self):
-        repo = Path(__file__).resolve().parents[2]
-        spec = importlib.util.spec_from_file_location('native_prepare_fixture', repo / 'tests/native/prepare.py')
-        native = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(native)
-        products = Path(os.environ.get('HOST_PRODUCTS', '/host-products'))
-        tools = {'mkfs': products / 'mkfs.krffs', 'stage': products / 'stageimage.krffs'}
-        self.assertTrue(all(os.access(path, os.X_OK) for path in tools.values()))
-
-        def nodes(path):
-            result, offset = [], 0
-            with path.open('rb') as image:
-                while offset < path.stat().st_size:
-                    image.seek(offset)
-                    head = image.read(357)
-                    size, back, data, parent = struct.unpack_from('<QQQQ', head, 325)
-                    self.assertGreaterEqual(size, 357)
-                    self.assertLessEqual(offset + size, path.stat().st_size)
-                    if head[2] != 1:
-                        result.append((offset, head[11:267].split(b'\0', 1)[0],
-                                       struct.unpack_from('<HII', head, 267),
-                                       head[277:325], size, data, parent, image.read(data)))
-                    offset += size
-            return result
-
-        with tempfile.TemporaryDirectory(prefix='rach2-native-root.') as directory:
-            tree = Path(directory).resolve()
-            work = tree / 'work'
-            work.mkdir()
-            image, payload = tree / 'root.img', tree / 'program'
-            before = []
-            invoke = native.invoke
-
-            def stage(args, **kwargs):
-                result = invoke(args, **kwargs)
-                if str(args[0]) == str(tools['stage']) and Path(args[1]).name == 'root.manifest':
-                    before[:] = nodes(image)
-                return result
-
-            text = (f'dir 0750:51000:52000 /owned\n'
-                    f'file 04755:51000:52000 /program {payload}\n')
-            with patch.object(native, 'invoke', side_effect=stage):
-                for length in (0, 1, 1318, 2668, 3025):
-                    payload.write_bytes(b'x' * length)
-                    native.root_image(tree, image, 'krffs', 1, text, os.environ.copy(), work, tools)
-                    used, free = native.krffs_free_tail(image)
-                    self.assertEqual(used % 4096, 0)
-                    self.assertGreaterEqual(free, 1048576)
-                    after = nodes(image)
-                    self.assertEqual(after[:-1], before)
-                    pad = after[-1]
-                    self.assertEqual(pad[1], native.ROOT_PADDING[1:].encode())
-                    self.assertEqual(pad[2], (0o444, 0, 0))
-                    self.assertEqual(pad[-1], bytes(pad[5]))
-                    self.assertLess(pad[5], 4096)
-                    original_free = before[-1][0] + before[-1][4]
-                    if length == 1318:
-                        self.assertEqual(original_free % 4096, 2389)
-                        for file_bytes in (0, 1):
-                            old_time = original_free + 4 * 357 + file_bytes + 277
-                            new_time = used + 4 * 357 + file_bytes + 277
-                            self.assertNotEqual(old_time // 4096, (old_time + 15) // 4096)
-                            self.assertEqual(new_time // 4096, (new_time + 15) // 4096)
-                    digest = self.describe_file(image)['sha256']
-                    native.root_image(tree, image, 'krffs', 1, text, os.environ.copy(), work, tools)
-                    self.assertEqual(self.describe_file(image)['sha256'], digest)
-                for line in (f'file 0444 {native.ROOT_PADDING} {payload}\n',
-                             f'dir 0755 {native.ROOT_PADDING}\n'):
-                    with self.assertRaisesRegex(ValueError, 'native root reserves'):
-                        native.root_image(tree, image, 'krffs', 1, line, os.environ.copy(), work, tools)
-                payload.write_bytes(bytes(10 * 1048576 - 3 * 357))
-                with self.assertRaisesRegex(ValueError, 'insufficient free space'):
-                    native.root_image(tree, image, 'krffs', 1, text, os.environ.copy(), work, tools)
 
     def test_native_compilation(self):
         goals = ['build/images/root.disk', 'build/tests/cases/machine/a']

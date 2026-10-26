@@ -343,10 +343,12 @@ unusedStructMember:*tools/etude/authority_run.h
 unusedStructMember:*tools/etude/routine_charge.h
 unusedStructMember:*tools/etude/routine_owner.h
 
-# The host check inventory, preparation import, retention and routine input
-# headers are also checked alone. Their members are read by host_prepare*.c,
-# preparation_import*.c, retention*.c and reference.c, and routine_*.c.
+# The host check inventory, native preparation, preparation import, retention
+# and routine input headers are also checked alone. Their members are read by
+# host_prepare*.c, native_prepare*.c, preparation_import*.c, retention*.c and
+# reference.c, and routine_*.c.
 unusedStructMember:*tools/etude/host_prepare.h
+unusedStructMember:*tools/etude/native_prepare.h
 unusedStructMember:*tools/etude/preparation_import.h
 unusedStructMember:*tools/etude/retention.h
 unusedStructMember:*tools/etude/routine_entry.h

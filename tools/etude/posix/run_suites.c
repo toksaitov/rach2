@@ -32,6 +32,9 @@
 #include "json.h"
 #include "verbs.h"
 #include "host_prepare.h"
+#ifndef _WIN32
+#include "native_prepare.h"
+#endif
 
 /* The longest bound of a step or a run, in seconds: a week. */
 #define SECONDS_MAX 604800ul
@@ -117,6 +120,9 @@ static int prepare_native(int argc, char **argv, int *matched)
                  {"reference", etude_reference_main},
                  {"import", etude_prepare_import_main},
                  {"export", etude_prepare_export_main},
+#ifndef _WIN32
+                 {"native", etude_native_prepare_main},
+#endif
                  {"-H", etude_host_prepare_main}};
     if (argc < 2)
         return 0;

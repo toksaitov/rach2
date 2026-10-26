@@ -18,6 +18,7 @@ Preparation builds and verifies immutable inputs before execution. Compiled help
     etude prepare routine ...           prepare its source, record and context
     etude prepare route ACTION ...      perform a fixed physical route phase
     etude prepare -H ...                prepare host inventories and source-check evidence
+    etude prepare native ...            prepare the payload of the local Rach2 collection
     etude prepare collection ...        build and record the selected collection
     etude prepare ...                   compatibility preparation of explicit build goals
     etude check ...                     check manifests, reports, results and histories, and give a run's verdict

@@ -90,8 +90,8 @@ ETUDE_RUN_SRC = $(ETUDE_AUTHORITY_SRC) $(ETUDE_AUTHORITY_RUN_SRC) $(ETUDE_HOST_P
                 tools/etude/budget_run.c tools/etude/budget.c tools/etude/budget_prepare.c tools/etude/cost.c
 
 # The verbs of Linux and macOS alone: `etude run native`, `etude show
-# failures`, `etude status` and `etude release`, `etude
-# serve` and `etude build`, with the host executor, which
+# failures`, `etude status` and `etude release`, `etude serve`, `etude build`
+# and `etude prepare native`, with the host executor, which
 # ETUDE_WIN_EXEC_SRC replaces on Windows.
 ETUDE_POSIX_SRC = tools/etude/posix/run_native.c tools/etude/posix/remote.c \
                   tools/etude/failures.c tools/etude/posix/claims.c tools/etude/posix/responder.c \
@@ -99,7 +99,9 @@ ETUDE_POSIX_SRC = tools/etude/posix/run_native.c tools/etude/posix/remote.c \
                   tools/etude/posix/exec.c tools/etude/posix/keeper.c \
                   tools/etude/posix/process.c tools/etude/posix/qemu.c \
                   tools/etude/posix/bridge.c tools/etude/posix/hold.c \
-                  tools/etude/capture.c tools/etude/win/winfmt.c
+                  tools/etude/capture.c tools/etude/win/winfmt.c \
+                  tools/etude/native_prepare.c tools/etude/native_prepare_image.c \
+                  tools/etude/native_prepare_archive.c
 
 ETUDE_SRC = $(ETUDE_CHECK_SRC) $(ETUDE_RUN_SRC) $(ETUDE_POSIX_SRC)
 

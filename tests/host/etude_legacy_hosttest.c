@@ -19,7 +19,7 @@
  * host-deps: tests/host/compat/command_host.c
  * host-cflags: -I tools/etude/include -I tools/etude/posix
  * host-cflags: -Wall -Wextra -Werror
- * host-inputs: tests/host/preparation_import_test.py tests/native/prepare.py
+ * host-inputs: tests/host/preparation_import_test.py
  * host-inputs: tools/etude/host_prepare.c tools/etude/host_prepare.h
  * host-inputs: tools/etude/host_prepare_io.c tools/etude/host_prepare_build.c
  * host-inputs: tools/etude/host_prepare_tools.c

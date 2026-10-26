@@ -10,8 +10,8 @@ native-assets: tests musl-programs utils ish check-dropbearmulti tools/etude/gue
     build/tests/system/loopdev/fat.img build/tests/system/loopdev/ext2.img \
     build/tests/system/loopdev/krffs.img build/tests/system/krffsvol/volume.krffs \
     build/tests/system/krffsvol/badchain.krffs build/tests/system/krffsvol/badmagic.krffs \
-    build/tests/cases/gnu/sed.tar.xz krffs/authorized_keys krffs/shadow
-	python3 tests/native/prepare.py --architecture $(ARCH) --output $(ARCH_BUILD)/tests/native/prepared
+    build/tests/cases/gnu/sed.tar.xz krffs/authorized_keys krffs/shadow $(ETUDE)
+	$(ETUDE) prepare native --architecture $(ARCH) --output $(ARCH_BUILD)/tests/native/prepared
 
 # Deployment is built on the owner's Mac and is never an execution fixture.
 build/tools/dev/native-deploy: $(NATIVE_DEPLOY_SRC) tests/native/deploy.h $(ETUDE_HDRS)
