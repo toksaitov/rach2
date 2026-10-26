@@ -68,7 +68,11 @@ The descriptor is JSON with `format: "etude-routine-route"`, `schema_version: 1`
 * `consumer`: actual native `env`, `account` and `preparation_resources`.
 * `accepted_jobs`: actual Actions `repository` and a `listeners` object mapping every enrolled PC runner name to its retained diagnostic directory.
 
-The fixed native route actions use `etude prepare route ACTION --config ROUTE --tree TREE --out OUT --run RUN --commit COMMIT --purpose PURPOSE --arches ARCHES --site SITE --etude ETUDE --accel ACCEL -- SELECTION...`. ACTION is `quiesce`, `prepare`, `direct-setup`, `restore` or `ensure`. These operations retain the existing physical owner and observer. Consumer preparation is the existing native `prepare routine` invocation under its actual admission; the route does not implement another preparer.
+The fixed native route actions use this command:
+
+    etude prepare route ACTION --config ROUTE --tree TREE --out OUT --run RUN --commit COMMIT --purpose PURPOSE --arches ARCHES --site SITE --etude ETUDE --accel ACCEL -- SELECTION...
+
+ACTION is `quiesce`, `prepare`, `direct-setup`, `restore` or `ensure`. These operations retain the existing physical owner and observer. Consumer preparation is the existing native `prepare routine` invocation under its actual admission; the route does not implement another preparer.
 
 The native remote wrapper retains the existing framed responder and sealed-program contract. The route checks the actor's complete bytes against its descriptor, stages them as `producer-etude` with mode 0755, and executes only `prepare producer operation.json` in the owned workspace. The installed `producer.etude` remains the responder and authority command. When the operation carries the actor descriptor, the producer compares its hash and size with that actual installed program. No script or arbitrary external program is substituted. Retain the original compiler and installation evidence with this ordinary external tool; changing the candidate does not relabel the tool's compilation.
 
