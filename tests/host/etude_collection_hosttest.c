@@ -45,6 +45,10 @@
 
 static int failures;
 static pid_t collection_child;
+/* What the next collection inherits: a port block alone, or one inside a
+ * claim of the site, and a temporary directory of the fixture's own. */
+static enum { NO_CLAIM, PORTS_ALONE, PORTS_CLAIMED } claim;
+static const char *temporary;
 static char etude[PATH_MAX], self[PATH_MAX], tree[PATH_MAX];
 #define CHECK(ok, why)                                      \
     do {                                                    \
@@ -163,6 +167,12 @@ static void case_environment(const char *cases, const char *rows, const char *fa
     CHECK(setenv("ETUDE_SITE", fix_path("site"), 1) == 0,
           "nested collection uses its private authority");
     unsetenv("ETUDE_ADMITTED");
+    if (claim != NO_CLAIM)
+        setenv("RACH2_PORT_OFFSET", "0", 1);
+    if (claim == PORTS_CLAIMED)
+        setenv("ETUDE_ADMITTED", fix_path("site"), 1);
+    if (temporary)
+        setenv("TMPDIR", temporary, 1);
     unsetenv("RACH2_TREE_HELD");
     setenv("RACH2_PORT_DIR", tree, 1);
     unsetenv("RACH2_WORKERS");
@@ -496,6 +506,36 @@ static void host_selection(char *out, size_t room)
     put("tests/registry", "default|-|core\nhost|-|core\nagents|-|full|||x86_64\n");
 }
 
+/**
+ * Check what the run entry does beyond a selection: a port block inside and
+ * outside a claim of the site, the inventory, and a preparation that fails.
+ */
+static void run_entry(char *out, size_t size)
+{
+    char *native[] = {"-A", "tcg", "-C", "2", "host", NULL};
+    char *inventory[] = {"inventory", NULL};
+    char *prepared[] = {"-B", "-A", "tcg", "host", NULL};
+    claim = PORTS_ALONE;
+    CHECK(run(native, NULL, NULL, NULL, out, size) == 2 &&
+              strstr(out, "port overrides bypass native admission"),
+          "a port block from outside a claim of the site is refused");
+    claim = PORTS_CLAIMED;
+    CHECK(run(native, NULL, NULL, NULL, out, size) == 0 &&
+              strstr(out, "run: result: all 1 suites passed"),
+          "a run inside a claim of the site takes that claim's port block");
+    claim = NO_CLAIM;
+    CHECK(run(inventory, NULL, NULL, NULL, out, size) == 0 &&
+              strstr(out, "* `agents` (full tier; needs nothing beyond the build; no machine; "
+                          "x86_64 only): (no sentence in suites.mk names this suite)\n"),
+          "the inventory gives each suite's tier, tools, memory and architectures");
+    CHECK(mkdir(fix_path("tmp"), 0700) == 0, "the preparation's temporary directory is made");
+    temporary = fix_path("tmp");
+    CHECK(run(prepared, NULL, NULL, NULL, out, size) == 1 &&
+              strstr(out, "run: result: refused: preparation failed"),
+          "a preparation that fails ends the run before any case");
+    temporary = NULL;
+}
+
 static int collection_main(int argc, char **argv)
 {
     static char out[131072];
@@ -568,6 +608,7 @@ static int collection_main(int argc, char **argv)
           "a native failed assertion remains a failure");
     CHECK(run(native, NULL, NULL, NULL, out, sizeof(out)) == 0 && strstr(out, "(6 samples)"),
           "the failed attempt adds no successful sample");
+    run_entry(out, sizeof(out));
     repetitions(out, sizeof(out));
     put("build/tests/host/sha256_hosttest", "#!/bin/sh\nexit 0\n");
     make_record();

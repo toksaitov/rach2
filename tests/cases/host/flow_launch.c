@@ -139,12 +139,33 @@ static int record_make(int argc, char **argv)
             ok = 0;
     return fclose(out) || !ok;
 }
+/* The root make of the worker entry: outside a claim it enters the installed
+ * launcher as a build, as the Makefile's site wrapper does, and inside the
+ * claim it observes the claim and fails, as a build of etude that does not
+ * compile would. */
+static int worker_make(int argc, char **argv)
+{
+    char **args;
+    int i;
+    if (*ev("ETUDE_ADMITTED"))
+        return observer() ? 3 : 19;
+    if (!(args = calloc((size_t)argc + 2, sizeof(*args))))
+        return 2;
+    args[0] = (char *)lp("launch");
+    args[1] = "build";
+    for (i = 0; i < argc; i++)
+        args[i + 2] = argv[i];
+    execv(args[0], args);
+    return 127;
+}
 static int launch_commands(int argc, char **argv, const char *name)
 {
     int i;
     if (!strcmp(name, "make")) {
         if (!strcmp(ev("FLOW_LAUNCH_MODE"), "jobs"))
             return record_make(argc, argv);
+        if (!strcmp(ev("FLOW_LAUNCH_MODE"), "worker"))
+            return worker_make(argc, argv);
         return observer();
     }
     if (!strcmp(name, "cc"))

@@ -104,9 +104,8 @@ static int worker(struct launch_fixture *u)
     struct fixture *f = u->f;
     const char *a[] = {"sh", "tests/run", "style", NULL};
     fx_env("FLOW_LAUNCH_MODE", "worker");
-    return flow_copy(f, "tests/run", "checkout/tests/run") &&
-           flow_copy(f, "tools/etude/hold.sh", "checkout/tools/etude/hold.sh") &&
-           launch_run(u, a, 1) && launch_saw(u, 1, 1);
+    return flow_copy(f, "tests/run", "checkout/tests/run") && launch_run(u, a, 1) &&
+           launch_saw(u, 1, 1);
 }
 /** Admit a suite qualified by architecture when both architectures are set. */
 static int architectures(struct launch_fixture *u)

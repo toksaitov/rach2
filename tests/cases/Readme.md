@@ -6,11 +6,11 @@ This directory has the case manifests of the suites that etude runs as cases, on
 
 ## Running
 
-`tests/run NAME` runs a family's cases as it runs any suite, and prints a line for each case as it starts and the suite's result at the end. Before any suite runs, `etude check families` checks every manifest here against its schema and its rules, and a manifest at fault refuses the run, whatever suites it names. The source checks can also be run alone, from the root of a tree that `make` has built:
+`tests/run NAME` runs a family's cases as it runs any suite, and prints a line for each case as it starts and the suite's result at the end. Before the cases run, etude checks the manifest of each suite named against its schema and its rules, and a manifest at fault refuses the run; `tests/run style` checks every manifest here. The source checks can also be run alone, from the root of a tree that `make` has built:
 
     sh tests/cases/host/style.sh conventions
 
-`RACH2_CASES` chooses cases of any suite by identity, as [the tests' Readme](../Readme.md) says. `RACH2_AGENTS_ROWS` chooses rows of `agents`, and `RACH2_ACCEPT_AGENTS` agents of `agentsaccept`, by the last part of their identities, in the order given. Each refuses a repeated name or an unknown name; unset or empty, the suite runs every case. [`case_select.py`](../system/case_select.py) makes all three choices.
+`RACH2_CASES` chooses cases of any suite by identity, as [the tests' Readme](../Readme.md) says. `RACH2_AGENTS_ROWS` chooses rows of `agents`, and `RACH2_ACCEPT_AGENTS` agents of `agentsaccept`, by the last part of their identities, in the order given. Each refuses a repeated name or an unknown name; unset or empty, the suite runs every case. Etude makes all three choices, as [its Readme](../../tools/etude/Readme.md#native-collection-execution) says.
 
 A machine case's scenario runs alone with a scenario invocation, as [Machine scenarios](../../tools/etude/Readme.md#machine-scenarios) gives it, whose `case_id` names the case; a scenario of several cases reads it to choose its work:
 

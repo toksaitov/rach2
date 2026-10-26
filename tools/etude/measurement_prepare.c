@@ -53,8 +53,9 @@ static int source_git_program(const char *tree, char out[SOURCE_PATH_MAX])
 #endif
 }
 
-/* A query cannot publish a snapshot after output loss or uncertain cleanup. */
-static char *source_query(const char *tree, char *const args[], size_t *size)
+/* A query cannot publish a snapshot after output loss or uncertain cleanup.
+ * A quiet query keeps git's diagnostics to itself. */
+static char *source_query(const char *tree, char *const args[], size_t *size, int quiet)
 {
     struct etude_exec *executor = etude_exec_new();
     struct etude_proc *process = NULL;
@@ -83,7 +84,7 @@ static char *source_query(const char *tree, char *const args[], size_t *size)
     const struct etude_exec_result *result = etude_proc_result(process);
     if (result->end != ETUDE_END_EXITED || result->value || result->output_error ||
         result->cleanup != ETUDE_CLEANUP_CONFIRMED || result->out.total != result->out.kept) {
-        if (result->err.kept)
+        if (result->err.kept && !quiet)
             fwrite(result->err.data, 1, result->err.kept, stderr);
         goto done;
     }
@@ -100,12 +101,12 @@ done:
     return bytes;
 }
 
-int etude_context_candidate(const char *tree, char commit[41])
+/* Read HEAD's commit as 40 hexadecimal digits. */
+static int source_head(const char *tree, char commit[41], int quiet)
 {
     char *head_args[] = {"git", "rev-parse", "HEAD", NULL};
-    char *status_args[] = {"git", "status", "--porcelain", "--untracked-files=all", NULL};
     size_t size = 0;
-    char *bytes = source_query(tree, head_args, &size);
+    char *bytes = source_query(tree, head_args, &size, quiet);
     while (size && (bytes[size - 1] == '\n' || bytes[size - 1] == '\r'))
         size--;
     int valid = bytes && size == 40 && strspn(bytes, "0123456789abcdef") == 40;
@@ -114,10 +115,28 @@ int etude_context_candidate(const char *tree, char commit[41])
         commit[40] = 0;
     }
     free(bytes);
-    if (!valid)
+    return valid ? 0 : -1;
+}
+
+int etude_context_head(const char *tree, char commit[41])
+{
+    char *prefix_args[] = {"git", "rev-parse", "--show-prefix", NULL};
+    size_t size = 0;
+    char *bytes = source_query(tree, prefix_args, &size, 1);
+    int top = bytes && strspn(bytes, "\r\n") == size;
+    free(bytes);
+    return top ? source_head(tree, commit, 1) : -1;
+}
+
+int etude_context_candidate(const char *tree, char commit[41])
+{
+    char *status_args[] = {"git", "status", "--porcelain", "--untracked-files=all", NULL};
+    size_t size = 0;
+    char *bytes;
+    if (source_head(tree, commit, 0))
         return -1;
-    bytes = source_query(tree, status_args, &size);
-    valid = bytes && !size;
+    bytes = source_query(tree, status_args, &size, 0);
+    int valid = bytes && !size;
     free(bytes);
     return valid ? 0 : -1;
 }
@@ -174,7 +193,7 @@ static int source_list(const char *tree, struct source_names *names)
 {
     char *args[] = {"git", "ls-files", "-z", NULL};
     size_t size = 0, at = 0;
-    char *bytes = source_query(tree, args, &size);
+    char *bytes = source_query(tree, args, &size, 0);
     int error = !bytes || !size || bytes[size - 1] != 0;
     while (!error && at < size) {
         error = source_add(names, bytes + at);

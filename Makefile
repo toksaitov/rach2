@@ -1122,11 +1122,12 @@ krffs/shadow: krffs/gen_demo_password.sh | build/krffs/mkfs.krffs
 # `make recovery-key`: put the development key into the recovery system, so a
 # machine built here can be updated over the network. An image built without
 # that key starts no SSH server at all and the only way in is the keyboard,
-# which is what its absence means. `tests/run` mints it before it builds
-# anything, since the suites that update a machine do it through recovery over
-# SSH; a plain `make` does not. RECOVERY_EXTRA_KEYS names an operator's public
-# key file; when set, recovery-key replaces the recovery list with this tree's
-# keys and that file. Without it, an existing recovery list is preserved.
+# which is what its absence means. A test run's preparation, `etude prepare`,
+# mints it before it builds anything, since the suites that update a machine
+# do it through recovery over SSH; a plain `make` does not.
+# RECOVERY_EXTRA_KEYS names an operator's public key file; when set,
+# recovery-key replaces the recovery list with this tree's keys and that file.
+# Without it, an existing recovery list is preserved.
 .PHONY: recovery-key
 recovery-key: krffs/authorized_keys
 	sh krffs/gen_recovery_key.sh krffs/authorized_keys krffs/recovery_authorized_keys "$(RECOVERY_EXTRA_KEYS)"

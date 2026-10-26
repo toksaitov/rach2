@@ -33,7 +33,7 @@
 #define PATH_SIZE      4096
 
 struct suite_entry {
-    char *name, *tier, *arches;
+    char *name, *tools, *tier, *arches;
     char manifest[PATH_SIZE];
     struct json *doc;
     int selected, alone;
@@ -54,7 +54,7 @@ struct collection {
     char tree[PATH_SIZE], program[PATH_SIZE], work[PATH_SIZE];
     char results[PATH_SIZE], evidence[PATH_SIZE], schemas[PATH_SIZE];
     char record[PATH_SIZE], ledger[PATH_SIZE], locks[PATH_SIZE], status[PATH_SIZE];
-    char account[128], site[PATH_SIZE];
+    char account[128], site[PATH_SIZE], head[41];
     const char *arches, *history, *commit, *context_path, *selection_export;
     struct etude_measurement_context *context;
     struct etude_collection_repeat repeat;
@@ -199,11 +199,12 @@ static int registry(struct collection *c)
         }
         struct suite_entry *s = &c->suites[c->nsuites++];
         s->name = strdup(field[0]);
+        s->tools = strdup(field[1]);
         s->tier = strdup(field[2]);
         s->arches = strdup(field[5]);
         s->alone = !strcmp(field[6], "serial");
         s->memory_mib = *field[4] ? positive(field[4]) : 128;
-        if (!s->name || !s->tier || !s->arches) {
+        if (!s->name || !s->tools || !s->tier || !s->arches) {
             fclose(f);
             return refused("out of memory");
         }
@@ -211,6 +212,156 @@ static int registry(struct collection *c)
     int bad = ferror(f);
     fclose(f);
     return bad ? refused("cannot read suite registry whole") : 0;
+}
+
+/* Append `n` bytes of `text` to `out`, which has `size` bytes, as far as
+ * they fit. */
+static void append(char *out, size_t size, const char *text, size_t n)
+{
+    size_t used = strlen(out);
+    if (used + 1 >= size)
+        return;
+    if (n > size - used - 1)
+        n = size - used - 1;
+    memcpy(out + used, text, n);
+    out[used + n] = 0;
+}
+
+/**
+ * Find what the suite NAME proves: the comment of `mk`, the text of
+ * tests/system/suites.mk, that begins with `tests/run NAME` in backticks,
+ * read to the end of its first sentence, without that name. `out` is empty
+ * when no comment names the suite.
+ */
+static void suite_proves(const char *mk, const char *name, char *out, size_t size)
+{
+    char head[256];
+    const char *p = mk, *stop;
+    size_t n, skip;
+    int on = 0;
+    out[0] = 0;
+    snprintf(head, sizeof(head), "`tests/run %s`", name);
+    while (p && *p) {
+        const char *line = p;
+        n = strcspn(p, "\n");
+        p += n + (p[n] == '\n');
+        if (line[0] != '#') {
+            if (on)
+                break;
+            continue;
+        }
+        line++, n--;
+        if (n && line[0] == ' ')
+            line++, n--;
+        if (!on) {
+            if (n >= strlen(head) && !strncmp(line, head, strlen(head))) {
+                on = 1;
+                append(out, size, line, n);
+            }
+            continue;
+        }
+        if (n >= 11 && !strncmp(line, "`tests/run ", 11))
+            break;
+        append(out, size, " ", 1);
+        append(out, size, line, n);
+    }
+    if (!on)
+        return;
+    if (name[strspn(name, "abcdefghijklmnopqrstuvwxyz0123456789-")] == 0) {
+        skip = strlen(head);
+        skip += out[skip] == ':';
+        skip += strspn(out + skip, " ");
+        memmove(out, out + skip, strlen(out + skip) + 1);
+    }
+    if ((stop = strstr(out, ". ")) != NULL)
+        out[stop - out + 1] = 0;
+}
+
+/**
+ * Write the registry's tools field `tools` in words: `a,b+c/d+e` is "a,
+ * either b and c or d and e", and `tooling` is etude's tooling machine.
+ */
+static void tools_prose(const char *tools, char *out, size_t size)
+{
+    const char *p = tools;
+    out[0] = 0;
+    while (*p) {
+        char entry[512], words[1024] = "";
+        size_t n = strcspn(p, ",");
+        snprintf(entry, sizeof(entry), "/%.*s/", (int)n, p);
+        p += n + (p[n] == ',');
+        for (char *e = entry; *e;) {
+            if (!strncmp(e, "/tooling/", 9)) {
+                append(words, sizeof(words), "/etude's tooling machine/", 25);
+                e += 9;
+            } else {
+                append(words, sizeof(words), e++, 1);
+            }
+        }
+        words[strlen(words) - 1] = 0;
+        int either = strchr(words + 1, '/') != NULL;
+        if (out[0])
+            append(out, size, ", ", 2);
+        if (either)
+            append(out, size, "either ", 7);
+        for (char *w = words + 1; *w; w++) {
+            if (*w == '+')
+                append(out, size, " and ", 5);
+            else if (*w == '/')
+                append(out, size, " or ", 4);
+            else
+                append(out, size, w, 1);
+        }
+    }
+}
+
+/**
+ * Print the suites as Markdown, one line each in the registry's order: the
+ * tier, the tools, the most guest memory, the architectures of a suite that
+ * does not run on both, and what it proves. tests/system/suites.md is this
+ * output, and the style checks compare the two.
+ */
+static int inventory(const struct collection *c)
+{
+    char path[PATH_SIZE];
+    char *mk;
+    size_t length;
+    if (path_of(path, c->tree, "tests/system/suites.mk") != 0)
+        return refused("the path of tests/system/suites.mk is too long");
+    mk = access(path, R_OK) == 0 ? read_file(path, &length) : NULL;
+    puts("# The suites\n\nOne line per suite, in the order the pool starts them, from "
+         "`tests/run inventory`: the tier, the external commands the suite needs, `qemu` being "
+         "the emulator of the architecture `ARCH` names, the most guest memory its machines "
+         "ask for at once, the architectures it runs on when it does not run on both, and what "
+         "it proves, which is the sentence in `tests/system/suites.mk` that names it. "
+         "`tests/run style` compares this file with that output.\n");
+    for (size_t i = 0; i < c->nsuites; i++) {
+        const struct suite_entry *s = &c->suites[i];
+        char tools[2048] = "needs nothing beyond the build", memory[64] = "no machine";
+        char arches[256] = "", proves[8192], machines[1024];
+        if (strcmp(s->tools, "-")) {
+            snprintf(tools, sizeof(tools), "needs ");
+            tools_prose(s->tools, tools + 6, sizeof(tools) - 6);
+        }
+        snprintf(machines, sizeof(machines), ",%s,", s->tools);
+        if (strstr(machines, ",qemu,") || strstr(machines, "qemu-system-"))
+            snprintf(memory, sizeof(memory), "%llu MiB", (unsigned long long)s->memory_mib);
+        if (s->arches[0]) {
+            append(arches, sizeof(arches), "; ", 2);
+            for (const char *a = s->arches; *a; a++)
+                if (*a == ',')
+                    append(arches, sizeof(arches), " and ", 5);
+                else
+                    append(arches, sizeof(arches), a, 1);
+            append(arches, sizeof(arches), " only", 5);
+        }
+        suite_proves(mk, s->name, proves, sizeof(proves));
+        if (!proves[0])
+            snprintf(proves, sizeof(proves), "(no sentence in suites.mk names this suite)");
+        printf("* `%s` (%s tier; %s; %s%s): %s\n", s->name, s->tier, tools, memory, arches, proves);
+    }
+    free(mk);
+    return fflush(stdout) || ferror(stdout) ? 1 : 0;
 }
 
 static int arch_mask(const char *arches)
@@ -814,10 +965,141 @@ static int export_selection(struct collection *c, const char *accel)
     return etude_legacy_selection_export(&o, c->selection_export);
 }
 
+/* Say whether `a` and `b` are both regular files. */
+static int regular_files(const char *a, const char *b)
+{
+    struct stat st;
+    return stat(a, &st) == 0 && S_ISREG(st.st_mode) && stat(b, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+/**
+ * Set RACH2_OVMF_CODE, when it is unset, to the x86-64 UEFI firmware that
+ * the cases booted by UEFI take, where tools/setup/ovmf_path.sh finds it:
+ * QEMU's own beside the first directory of PATH that has it, or the
+ * distribution's OVMF. A firmware is taken only with its variables file.
+ */
+static void find_firmware(void)
+{
+    static const char *const system[][2] = {
+        {"/usr/share/OVMF/OVMF_CODE_4M.fd", "/usr/share/OVMF/OVMF_VARS_4M.fd"},
+        {"/usr/share/OVMF/OVMF_CODE.fd", "/usr/share/OVMF/OVMF_VARS.fd"}};
+#ifdef _WIN32
+    const char *separator = ";";
+#else
+    const char *separator = ":";
+#endif
+    const char *path = getenv("PATH"), *code = NULL;
+    char found[PATH_SIZE], vars[PATH_SIZE];
+    if (getenv("RACH2_OVMF_CODE") && *getenv("RACH2_OVMF_CODE"))
+        return;
+    for (const char *p = path; p && *p;) {
+        int n = (int)strcspn(p, separator);
+        int a = snprintf(found, sizeof(found), "%.*s/../share/qemu/edk2-x86_64-code.fd", n, p);
+        int b = snprintf(vars, sizeof(vars), "%.*s/../share/qemu/edk2-i386-vars.fd", n, p);
+        p += n + (p[n] != 0);
+        if (a <= 0 || a >= (int)sizeof(found) || b <= 0 || b >= (int)sizeof(vars) ||
+            !regular_files(found, found))
+            continue;
+        if (regular_files(found, vars))
+            code = found;
+        break;
+    }
+    for (size_t i = 0; !code && i < sizeof(system) / sizeof(system[0]); i++)
+        if (regular_files(system[i][0], system[i][1]))
+            code = system[i][0];
+    if (!code)
+        return;
+#ifdef _WIN32
+    _putenv_s("RACH2_OVMF_CODE", code);
+#else
+    setenv("RACH2_OVMF_CODE", code, 1);
+#endif
+}
+
+/**
+ * Apply the site's policy to the run and say whether the run is inside a
+ * claim of the installed launcher.
+ *
+ * With an installed site, each case is a claim of the site's ledger, unless
+ * ETUDE_ADMITTED names that site already: the run is then inside a claim of
+ * the installed launcher, which holds the host lock and the port block
+ * RACH2_PORT_OFFSET names, and its cases are claims of the run's own ledger
+ * under the results, bounded by its workers, processors and memory.
+ *
+ * @return 1 inside a launcher claim, 0 outside one, or -1 after a refusal.
+ */
+static int run_admission(struct collection *c)
+{
+    char outer[PATH_SIZE] = "", ledger[PATH_SIZE];
+    uint64_t own[3];
+    if (getenv("ETUDE_ADMITTED") && copy_path(outer, getenv("ETUDE_ADMITTED")) != 0) {
+        refused("ETUDE_ADMITTED is too long");
+        return -1;
+    }
+    memcpy(own, c->cap, sizeof(own));
+    strcpy(ledger, c->ledger);
+    if (site_policy(c) != 0)
+        return -1;
+    if (!c->site[0] || strcmp(outer, c->site))
+        return 0;
+    memcpy(c->cap, own, sizeof(own));
+    strcpy(c->ledger, ledger);
+    return 1;
+}
+
+/**
+ * Find whether a selected case boots a machine, and whether a selected suite
+ * needs the host alone.
+ */
+static void run_needs(const struct collection *c, int *machines, int *alone)
+{
+    *machines = *alone = 0;
+    for (size_t i = 0; i < c->nsuites; i++) {
+        const struct suite_entry *s = &c->suites[i];
+        if (!s->selected)
+            continue;
+        *alone |= s->alone || s->memory_mib > c->cap[1] / 2 / 1048576;
+        const struct json *a = json_member(s->doc, "cases");
+        for (size_t j = 0; a && j < a->count; j++) {
+            const char *domain = json_text(a->item[j], "domain");
+            *machines |= domain && strcmp(domain, "host");
+        }
+    }
+}
+
+/**
+ * Print the result line the set driver's status calls for and return the
+ * run's status: 0 when every case passed, 1 when one failed, and 2 or 3 when
+ * the set did not run.  `lines` is the formatter's status, nonzero when a
+ * case failed.
+ */
+static int run_result(int rc, int lines)
+{
+    if (interrupted)
+        return rc;
+    if (rc == 2) {
+        fputs("run: result: refused: etude did not run the set\n", stderr);
+    } else if (rc == 3) {
+        fputs("run: result: refused: the prepared artifacts failed their check\n", stderr);
+    } else if (rc && !lines) {
+        fprintf(stderr, "run: runner: the set driver exited with status %d\n", rc);
+        fputs("run: result: failed: runner\n", stderr);
+        rc = 1;
+    } else if (lines && !rc) {
+        rc = 1;
+    }
+    return rc;
+}
+
+/**
+ * Run the selected cases on the prepared artifacts and print the run's
+ * lines, ending with its result.  run_admission() says how the cases are
+ * admitted.
+ */
 static int run_collection(struct collection *c, const char *accel, int dry)
 {
     struct etude_legacy_set_opts o;
-    int rc, machines = 0, alone = 0;
+    int rc, machines, alone, enclosed;
     char stream[PATH_SIZE] = "";
     if (dry)
         return c->selection_export ? export_selection(c, accel) : print_selection(c);
@@ -828,19 +1110,13 @@ static int run_collection(struct collection *c, const char *accel, int dry)
                 c->record);
         return 2;
     }
-    if (site_policy(c) != 0)
+    enclosed = run_admission(c);
+    if (enclosed < 0)
         return 2;
-    for (size_t i = 0; i < c->nsuites; i++) {
-        const struct suite_entry *s = &c->suites[i];
-        if (!s->selected)
-            continue;
-        alone |= s->alone || s->memory_mib > c->cap[1] / 2 / 1048576;
-        const struct json *a = json_member(s->doc, "cases");
-        for (size_t j = 0; a && j < a->count; j++) {
-            const char *domain = json_text(a->item[j], "domain");
-            machines |= domain && strcmp(domain, "host");
-        }
-    }
+    if (!c->commit && etude_context_head(c->tree, c->head) == 0)
+        c->commit = c->head;
+    find_firmware();
+    run_needs(c, &machines, &alone);
     if (!c->locks[0]) {
         const char *dir = getenv("RACH2_PORT_DIR");
 #ifdef _WIN32
@@ -852,14 +1128,14 @@ static int run_collection(struct collection *c, const char *accel, int dry)
 #endif
         snprintf(c->locks, sizeof(c->locks), "%s", dir);
     }
-    if (getenv("RACH2_PORT_OFFSET") || getenv("SSH_TEST_PORT"))
+    if (!enclosed && (getenv("RACH2_PORT_OFFSET") || getenv("SSH_TEST_PORT")))
         return refused("port overrides bypass native admission");
     memset(&o, 0, sizeof(o));
     o.repeat = c->repeat.seeded ? &c->repeat : NULL;
     o.tree = c->tree;
     o.arch = c->arches;
     o.program = c->program;
-    o.native_locks = c->locks;
+    o.native_locks = enclosed ? NULL : c->locks;
     o.native_ports = machines;
     o.host_alone = alone;
     o.members = c->members;
@@ -897,21 +1173,34 @@ static int run_collection(struct collection *c, const char *accel, int dry)
                c->selection_cases == 1 ? "" : "s");
     putchar('\n');
     rc = etude_legacy_set(&o);
-    if (format_collection(c, stream) != 0 && !rc)
-        rc = 1;
-    return rc;
+    return run_result(rc, format_collection(c, stream));
+}
+
+/* Prepare the selected artifacts, and run the cases on them when that
+ * succeeded. */
+static int prepare_and_run(struct collection *c, const char *accel)
+{
+    int rc = prepare_collection(c);
+    if (rc == 0)
+        return run_collection(c, accel, 0);
+    if (interrupted)
+        return rc;
+    fputs(rc == 2 ? "run: result: refused: the preparation refused the request\n"
+                  : "run: result: refused: preparation failed\n",
+          stderr);
+    return rc == 2 ? 2 : 1;
 }
 
 struct request {
     const char *tree, *results, *evidence, *record, *accel;
-    int dry;
+    int dry, build;
 };
 
 static int collection_options(struct collection *c, struct request *r, int argc, char **argv)
 {
     int opt;
     optind = 1;
-    while ((opt = getopt(argc, argv, "+t:a:o:e:p:j:M:H:g:A:C:I:J:R:S:L:kN")) != -1) {
+    while ((opt = getopt(argc, argv, "+t:a:o:e:p:j:M:H:g:A:C:I:J:R:S:L:kNB")) != -1) {
         switch (opt) {
         case 'R':
         case 'S':
@@ -963,6 +1252,9 @@ static int collection_options(struct collection *c, struct request *r, int argc,
             break;
         case 'N':
             r->dry = 1;
+            break;
+        case 'B':
+            r->build = 1;
             break;
         default:
             return 2;
@@ -1039,8 +1331,15 @@ static int collection_paths(struct collection *c, const struct request *r, int p
     if (statvfs(c->tree, &space) == 0)
         c->cap[2] = (uint64_t)space.f_bavail * space.f_frsize;
 #endif
-    if (!r->dry && (production || c->boots_machines) && c->cap[2] < (UINT64_C(40) << 30)) {
-        refused("the tree has less than 40 GiB free");
+    const char *floor = getenv("RACH2_MIN_FREE_GIB");
+    uint64_t gib = !floor ? 40 : strcmp(floor, "0") ? positive(floor) : 0;
+    if (floor && ((!gib && strcmp(floor, "0")) || gib > (UINT64_C(1) << 20))) {
+        refused("RACH2_MIN_FREE_GIB must be a whole number of GiB");
+        return 2;
+    }
+    if (!r->dry && (production || c->boots_machines) && c->cap[2] < (gib << 30)) {
+        fprintf(stderr, "run: result: refused: the tree has less than %llu GiB free\n",
+                (unsigned long long)gib);
         return 2;
     }
     if (!r->dry && (mkdirs(c->results) != 0 || mkdirs(c->evidence) != 0)) {
@@ -1059,6 +1358,10 @@ static const char *collection_accel(const char *accel)
             return NULL;
         }
         accel = access("/dev/kvm", R_OK | W_OK) == 0 ? "kvm" : "tcg";
+#elif defined(__APPLE__) && defined(__x86_64__)
+        int hv = 0;
+        size_t size = sizeof(hv);
+        accel = sysctlbyname("kern.hv_support", &hv, &size, NULL, 0) == 0 && hv ? "hvf" : "tcg";
 #else
         accel = "tcg";
 #endif
@@ -1096,6 +1399,7 @@ static void collection_free(struct collection *c)
     }
     for (size_t i = 0; i < c->nsuites; i++) {
         free(c->suites[i].name);
+        free(c->suites[i].tools);
         free(c->suites[i].tier);
         free(c->suites[i].arches);
         json_free(c->suites[i].doc);
@@ -1127,36 +1431,79 @@ static int collection_context(struct collection *c, int production, int dry)
     return 0;
 }
 
+/** Record the command's arguments in `c->args` for the run's history. */
+static int collection_args(struct collection *c, int argc, char **argv)
+{
+    for (int i = 1; i < argc; i++) {
+        size_t used = strlen(c->args);
+        if (used + strlen(argv[i]) + 2 >= sizeof(c->args))
+            return refused("arguments are too long");
+        snprintf(c->args + used, sizeof(c->args) - used, "%s%s", i > 1 ? " " : "", argv[i]);
+    }
+    return 0;
+}
+
+/**
+ * Prepare the selection, run it, or both, as the request asks, with the
+ * signals that stop a run caught.
+ */
+static int collection_dispatch(struct collection *c, const struct request *r, int production)
+{
+    signal(SIGINT, on_signal);
+    signal(SIGTERM, on_signal);
+#ifndef _WIN32
+    signal(SIGHUP, on_signal);
+#endif
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    if (production)
+        return prepare_collection(c);
+    if (r->build && !r->dry)
+        return prepare_and_run(c, r->accel);
+    return run_collection(c, r->accel, r->dry);
+}
+
+/** Print the line that ends a run a signal stopped, and return its status. */
+static int collection_interrupted(int production)
+{
+    if (!production)
+        fprintf(stderr, "run: result: interrupted by %s\n",
+                interrupted == SIGINT    ? "int"
+                : interrupted == SIGTERM ? "term"
+                                         : "hup");
+    return 128 + interrupted;
+}
+
 static int collection_main(int argc, char **argv, int production)
 {
     struct collection *c = calloc(1, sizeof(*c));
-    struct request r = {".",  getenv("RACH2_RESULTS"),    getenv("RACH2_FAILED"),
-                        NULL, getenv("RACH2_QEMU_ACCEL"), 0};
+    struct request r = {0};
     int rc = 2;
     if (!c)
         return refused("out of memory");
     if (argc < 2) {
         fputs("usage: etude run [-t TREE] [-a ARCH|both] [-p RECORD] [-o RESULTS] "
-              "[-j WORKERS] [-M MIB] [-H HISTORY] [-A ACCEL] [-I CONTEXT] [-k] [-N [-J FILE]] "
+              "[-j WORKERS] [-M MIB] [-H HISTORY] [-A ACCEL] [-I CONTEXT] [-k] [-B] [-N [-J FILE]] "
               "[-S SEED [-R COUNT] [-L cpu:N|memory:BYTES|disk:BYTES]...] "
               "SUITE...|core|all|inventory\n",
               stderr);
         free(c);
         return 2;
     }
+    r.tree = ".";
+    r.results = getenv("RACH2_RESULTS");
+    r.evidence = getenv("RACH2_FAILED");
+    r.accel = getenv("RACH2_QEMU_ACCEL");
     defaults(c);
-    for (int i = 1; i < argc; i++) {
-        size_t used = strlen(c->args);
-        if (used + strlen(argv[i]) + 2 >= sizeof(c->args)) {
-            free(c);
-            return refused("arguments are too long");
-        }
-        snprintf(c->args + used, sizeof(c->args) - used, "%s%s", i > 1 ? " " : "", argv[i]);
-    }
+    if (collection_args(c, argc, argv) != 0)
+        goto done;
     if (collection_options(c, &r, argc, argv) != 0)
         goto done;
     if (c->selection_export && (production || !r.dry)) {
         refused("-J selection export requires -N on the native run entry");
+        goto done;
+    }
+    if (production && r.build) {
+        refused("-B is an option of the run entry");
         goto done;
     }
     if (path_of(c->schemas, c->tree, "tools/etude/schemas") != 0) {
@@ -1166,9 +1513,7 @@ static int collection_main(int argc, char **argv, int production)
     if (registry(c) != 0 || select_suites(c, argc - optind, argv + optind) != 0)
         goto done;
     if (c->list) {
-        for (size_t i = 0; i < c->nsuites; i++)
-            printf("%s|%s|%s\n", c->suites[i].name, c->suites[i].tier, c->suites[i].arches);
-        rc = 0;
+        rc = inventory(c);
         goto done;
     }
     if (manifests(c) != 0 || selection_workspace(c) != 0 || choose_cases(c) != 0)
@@ -1187,16 +1532,10 @@ static int collection_main(int argc, char **argv, int production)
         goto done;
     if (collection_context(c, production, r.dry))
         goto done;
-    signal(SIGINT, on_signal);
-    signal(SIGTERM, on_signal);
-#ifndef _WIN32
-    signal(SIGHUP, on_signal);
-#endif
-    setvbuf(stdout, NULL, _IOLBF, 0);
-    rc = production ? prepare_collection(c) : run_collection(c, r.accel, r.dry);
+    rc = collection_dispatch(c, &r, production);
 done:
     if (interrupted)
-        rc = 128 + interrupted;
+        rc = collection_interrupted(production);
     collection_free(c);
     return rc;
 }

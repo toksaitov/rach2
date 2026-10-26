@@ -251,7 +251,7 @@ if [ ! -f "$stamp" ]; then
     echo "doccheck: this tree has no BusyBox build, whose applets the manual's check reads; run doccheck on the testing host" >&2
     exit 2
 fi
-make -s build/tools/verify/prosecheck >/dev/null || exit 2
+make -s build/tools/verify/prosecheck build/tools/etude/etude >/dev/null || exit 2
 fail=0
 run() {
     what=$1; shift
@@ -275,7 +275,7 @@ run "links" sh tools/verify/linkcheck.sh
 # shellcheck disable=SC2046 # one path a word
 run "dev-log checklists' links" sh tools/verify/linkcheck.sh $(find dev-log -name checklist.md | sort)
 run "manual" make -s -o "$stamp" mancheck
-sh tests/run inventory > "$work/suites.md" 2>/dev/null
+build/tools/etude/etude run inventory > "$work/suites.md" 2>/dev/null
 run "tests/system/suites.md is tests/run inventory" same "$work/suites.md" tests/system/suites.md
 make -s -o "$stamp" programs-md PROGRAMS_MD="$work/programs.md" >/dev/null 2>&1
 run "man/programs.md is make programs-md" same "$work/programs.md" man/programs.md

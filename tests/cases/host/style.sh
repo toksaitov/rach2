@@ -586,7 +586,7 @@ case_registry() {
     # The generated inventory: tests/system/suites.md must be the output of
     # `tests/run inventory`, and suites.mk must have a sentence for every
     # suite.
-    sh "$REPO/tests/run" inventory >"$VDIR/_inventory.md" 2>"$VDIR/verify_inventory.log"
+    "$ETUDE" run -t "$REPO" inventory >"$VDIR/_inventory.md" 2>"$VDIR/verify_inventory.log"
     if cmp -s "$VDIR/_inventory.md" "$REPO/tests/system/suites.md"; then
         pass inventory
     else

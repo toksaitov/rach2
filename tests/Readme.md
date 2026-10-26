@@ -16,7 +16,7 @@ tests/run inventory        # every suite with what it proves, as Markdown
 ARCH='i686 x86_64' tests/run default fifo   # both architectures, one schedule
 ```
 
-`tests/registry` lists the suites, one line each, with the external commands each needs and its tier, `core` or `full`; [`system/suites.md`](system/suites.md) is that list with the sentence that says what each suite proves. The core tier exercises every subsystem of the kernel at least once. A suite named `NAME` is the cases of a family in [`cases/`](cases/Readme.md) whose identity ends in `NAME`, which etude runs. The runner refuses an unknown name, a name with no family, a name given twice, a missing command and a set given with another name before it builds anything.
+`tests/registry` lists the suites, one line each, with the external commands each needs and its tier, `core` or `full`; [`system/suites.md`](system/suites.md) is that list with the sentence that says what each suite proves. The core tier exercises every subsystem of the kernel at least once. A suite named `NAME` is the cases of a family in [`cases/`](cases/Readme.md) whose identity ends in `NAME`, which etude runs. The runner refuses an unknown name, a name with no family, a name given twice and a set given with another name before it builds anything but etude itself.
 
 `ARCH` chooses the architecture, as it does for the build: unset or `i686`, the run builds into `build/` and boots `qemu-system-i386`; `x86_64`, it builds into `build/x86_64/` and boots `qemu-system-x86_64`. `all` and `core` are then the suites the registry lists for that architecture, and naming a suite that does not run on it is refused.
 
@@ -26,18 +26,18 @@ These variables change a run:
 
 | Variable | Default | Effect |
 |---|---|---|
-| `RACH2_WORKERS` | twice the host's processors divided by `RACH2_CPUS`, at least 4 | suites run at once |
-| `RACH2_MEMORY_MIB` | three quarters of the host's memory | guest memory the running suites may declare together |
+| `RACH2_WORKERS` | the host's processors, at least 4 | cases run at once |
+| `RACH2_MEMORY_MIB` | three quarters of the host's memory | guest memory the running cases may declare together |
 | `RACH2_CPUS` | 2 | processors of every machine, 1 to 64; a suite that names its own count keeps it |
 | `RACH2_STOP_ON_FAIL` | unset | when set, the first failure stops the set |
 | `RACH2_CASES` | unset | case identities separated by blanks, such as `guest.default.vforkmusl machine.ext2.cost`: each suite of the run runs only the cases listed of its own, in its manifest's order, and the start line says the run is a selection; an identity that is no case of a suite of the run, or of the architecture, one given twice and a suite left with no case are refused before anything is built; in a run of both architectures a case must run on each |
 | `RACH2_KERNEL` | unset | `ubsan` or `o2`: a suite that boots the kernel directly boots that build instead; a disk keeps `rach2/kernel` |
 | `RACH2_QEMU_ACCEL` | `kvm` where `/dev/kvm` opens, `hvf` on an x86 Mac that supports it, `tcg` where neither exists; a `/dev/kvm` the user cannot open is refused | the accelerator every machine uses: `kvm`, `hvf` or `tcg` |
-| `RACH2_MIN_FREE_GIB` | 40 | free space a run of any suite besides `style` and `host` needs before it builds; 0 skips the check; when set, `make` too refuses to build with less |
-| `RACH2_RESULTS` | unset | a directory that keeps the run's history, `history/` and `store/`, and each command's output, `output/`; unset, they are in the run's scratch and removed with it |
+| `RACH2_MIN_FREE_GIB` | 40 | free space a run whose cases boot machines needs before it runs them; 0 skips the check; when set, `make` too refuses to build with less |
+| `RACH2_RESULTS` | `build/tests/results` | the directory that keeps the run's history, `history/` and `store/`, and each command's output, `output/`; the successful runs of its history set the bounds of later runs' cases |
 | `RACH2_FAILED` | `build/tests/failed` | the directory that keeps the workspace of each case that fails |
 
-On an enrolled host, the [installed launcher](../tools/etude/Readme.md#installed-launch-admission) preserves explicit worker and memory limits for ordinary selections and supplies defaults of 8 workers and 16384 MiB. It reserves the resources of the selected suites, permitting ordinary runs in different accounts to overlap. Large-memory and explicitly serial suites take the host alone.
+On an enrolled host, the build is a claim of the [installed launcher](../tools/etude/Readme.md#installed-launch-admission), which the root `make` enters, and each case is a claim of the site's ledger, so runs in different accounts overlap within the site's capacity. A run with a large-memory or explicitly serial suite takes the host lock alone.
 
 A run that boots machines claims a block of host ports, so several clones on one host can run the same network suite at once; [the system tests' Readme](system/Readme.md) describes the claim and the other rules the runner keeps.
 

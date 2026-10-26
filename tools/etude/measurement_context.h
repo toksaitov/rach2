@@ -10,6 +10,9 @@ struct jbuf;
 
 /* Read the actual clean candidate through the same native Git queries. */
 int etude_context_candidate(const char *tree, char commit[41]);
+/* Read HEAD's commit of the tree that is the root of a work tree; -1 when
+ * the tree is no such root, has no commit or git cannot be run. */
+int etude_context_head(const char *tree, char commit[41]);
 
 /* Capture a clean committed tree and optional prepared inputs in C. */
 int etude_context_source(const char *tree, const char *commit, const char *output,

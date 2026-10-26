@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Choose the cases a run of tests/run runs: RACH2_CASES and the agents' rows.
+"""Choose the cases of a selection of suites: RACH2_CASES and the agents' rows.
 
 Usage: case_select.py [-c IDENTITIES] [-r SUITE ROWS]... ARCH CASES OUT SUITE...
 

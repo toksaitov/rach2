@@ -14,7 +14,7 @@ static void source_fixture_put(const char *name, const char *text)
 static int source_git(const char *tree, char *const argv[])
 {
     size_t size = 0;
-    char *bytes = source_query(tree, argv, &size);
+    char *bytes = source_query(tree, argv, &size, 0);
     int ok = bytes != NULL;
     free(bytes);
     return ok;
@@ -44,7 +44,7 @@ static void source_repository(char tree[4096], char current[41])
           "source repository commits actual fixture bytes");
     char *head[] = {"git", "rev-parse", "HEAD", NULL};
     size_t size = 0;
-    char *bytes = source_query(tree, head, &size);
+    char *bytes = source_query(tree, head, &size, 0);
     CHECK(bytes && size >= 40, "source repository commit is read");
     if (bytes && size >= 40) {
         memcpy(current, bytes, 40);
@@ -106,7 +106,11 @@ static void test_source_capture(void)
     char candidate[41];
     CHECK(!etude_context_candidate(tree, candidate) && !strcmp(candidate, current),
           "native candidate query binds the real clean commit");
+    CHECK(!etude_context_head(tree, candidate) && !strcmp(candidate, current),
+          "the run's commit is the head of the tree's work tree");
     CHECK(!mkdir(fix_path("source-repo/build"), 0700), "prepared source directory");
+    CHECK(etude_context_head(fix_path("source-repo/build"), candidate),
+          "a directory below the work tree's top gives the run no commit");
     source_fixture_put("source-repo/build/prepared.h", "prepared\n");
     snprintf(output, sizeof output, "%s", fix_path("source-snapshot"));
     snprintf(refused, sizeof refused, "%s", fix_path("source-refused"));
