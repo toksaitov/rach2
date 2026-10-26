@@ -144,12 +144,16 @@ static void routine_test_execute(struct json *producer, const char *root, const 
     free(output);
 }
 
+/**
+ * Check routine staging and cleanup with this executable as the SSH stand-in.
+ * A symbolic link works when the executable and scratch use different filesystems.
+ */
 int etude_test_routine_remote(const char *self)
 {
     char *root = ret_path(fix_dir(), 1), *bin = ret_format("%s/bin", root);
     ROUTINE_CHECK(!ret_dirs(bin));
     char *ssh = ret_format("%s/ssh", bin);
-    ROUTINE_CHECK(!link(self, ssh));
+    ROUTINE_CHECK(!symlink(self, ssh));
     char *old_path = getenv("PATH") ? strdup(getenv("PATH")) : NULL;
     char *path = ret_format("%s:%s", bin, old_path ? old_path : "");
     setenv("PATH", path, 1);
