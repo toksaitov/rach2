@@ -22,6 +22,14 @@ Three actual Windows compiles and the context and disk-binding fixtures passed o
 
 T94 still needs five eligible independent whole-run samples for each ranked configuration, fixed cache and load procedures, complete costs and the resulting recommendation. The 250-case native workload is excluded from that ranking. The existing [comparison](machines.md) contains historical adapter measurements and supplies no current recommendation.
 
+## Etude scheduling repair (#1125)
+
+The focused Linux checks passed on source `17b6cdc8ee073b7cf6a7b3e54eb7dae8ad0f5364` on 26 October. The partition implementation is `fe778b904`, with the platform isolation correction in `614a9165e`. The current Etude, host driver and mixed native/GNU controller passed their Make compile checks. Fresh `etude_collection_hosttest` and `etude_hostdriver_hosttest` binaries passed under fatal AddressSanitizer, LeakSanitizer and UndefinedBehaviorSanitizer settings through the testing host's installed admission launcher.
+
+The collection fixture required shared Etude work to rendezvous with an independent prepared case, checked the recorded exclusivity policy, and checked quiet-first and exported seeded execution order. The driver fixture executed both partitions and refused overlapping, omitted, extra and incomplete inventories and mismatched isolation modes before execution. `ImportTests.test_etude_partition_modes` passed for POSIX and Windows preparation modes against the complete current manifest. The GNU driver's strict C99 syntax check and `tools/verify/suitecheck.sh` also passed. These checks preserve the timed assertions and boot-group isolation; they do not establish a complete desktop collection pass.
+
+The focused logs and compilation inventories were retained in `/home/testing/rach2-codex/build/tests/1125-validation/`. The collection log has SHA-256 `0bbacce021341cb1358e47fe951c48ed0ed17693ddbfaabe8b43bce57458acb6`; its binary has SHA-256 `290c9f6d5ed14d749e2d5f489ae44a85e6eb8bc0fbeb1d67fed5a906b1873e44`. The host-driver fixture exited zero with empty output; its binary has SHA-256 `b91766d44039da78e85248ee3f92127332703860f2df06e408c8c954faa6cb93`. The tested Etude has SHA-256 `4d2dedbf7914b2dcb9e911cd5be1d3404e89189fb1e48977281eb1a808e49ac4`.
+
 ## Routine entry, review and release
 
 T95's selected site, actual reference history, forecasts and push, CI and release entry results remain pending verified records. T24's seeded, repeated and controlled-load family acceptance remains separate. Final coverage reconciliation, reviewer coverage through the accepted source, fix rereviews and the selected site's clean release remain unfilled. This record does not close the phase or replace the release's final installation and Lenovo acceptance.
