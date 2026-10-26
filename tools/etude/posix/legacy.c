@@ -580,6 +580,28 @@ static void print_tail(FILE *out, const char *path)
     }
 }
 
+/**
+ * Print, indented, every line of a log that begins with `prefix`. A step that
+ * runs many jobs at once leaves the lines that say why one failed anywhere in
+ * its log, and the last lines alone may not reach them.
+ */
+static void print_marked(FILE *out, const char *path, const char *prefix)
+{
+    FILE *f = fopen(path, "r");
+    char line[1024];
+    int shown = 0;
+
+    if (f == NULL)
+        return;
+    while (shown < 60 && fgets(line, sizeof(line), f) != NULL) {
+        if (strncmp(line, prefix, strlen(prefix)) == 0) {
+            fprintf(out, "    > %s%s", line, strchr(line, '\n') != NULL ? "" : "\n");
+            shown++;
+        }
+    }
+    fclose(f);
+}
+
 /** Give the arguments that run step `s` under sh(1) with its log `log`. */
 static char **step_argv(const struct step *s, const char *log)
 {
@@ -699,6 +721,7 @@ static int judge(struct prep *p, struct step *s, const struct etude_exec_result 
         fprintf(p->out, "    | %s%s", r->err.data,
                 r->err.data[r->err.kept - 1] == '\n' ? "" : "\n");
     print_tail(p->out, log);
+    print_marked(p->out, log, "host preparation: ");
     return failed(p, "%s: %s", s->name, why);
 }
 

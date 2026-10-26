@@ -304,6 +304,34 @@ static int write_style(struct hp_context *c, struct json *record, const char *id
     return bad;
 }
 
+/**
+ * Print on stderr each failed assertion in the log of the style check
+ * `c->only`, with the indented lines under it that name the files and lines
+ * at fault, so that the run's own output says what to fix. Print the log's
+ * path when it has no failed assertion.
+ */
+static void show_failures(const struct hp_context *c, const char *log)
+{
+    char *text = hp_read(log), *line = text;
+    int under = 0, shown = 0;
+    while (line && *line && shown < 40) {
+        size_t n = strcspn(line, "\n");
+        int failed = !strncmp(line, "@etude 1 assert ", 16) && strstr(line, " fail") &&
+                     (size_t)(strstr(line, " fail") - line) < n;
+        under = failed || (under && line[0] == ' ');
+        if (under) {
+            size_t skip = failed ? 16 : strspn(line, " ");
+            fprintf(stderr, "host preparation: style %s: %.*s\n", c->only, (int)(n - skip),
+                    line + skip);
+            shown++;
+        }
+        line += n + (line[n] == '\n');
+    }
+    if (!shown)
+        fprintf(stderr, "host preparation: style %s: failed; see %s\n", c->only, log);
+    free(text);
+}
+
 static int run_style(struct hp_context *c, const char *prefix, const char *id, const char *arch,
                      const char *source, const struct json *actual_judges)
 {
@@ -322,8 +350,14 @@ static int run_style(struct hp_context *c, const char *prefix, const char *id, c
     jbuf_free(&path);
     snprintf(log, sizeof(log), "%s.log", c->output);
     char *argv[] = {"sh", "tests/cases/host/style.sh", (char *)c->only, NULL};
-    bad = bad || hp_run(c, argv, log, log) || collect(c, id, arch, log, record) ||
-          fingerprint(c, after) || strcmp(source, after);
+    if (!bad && (hp_run(c, argv, log, log) || collect(c, id, arch, log, record))) {
+        show_failures(c, log);
+        bad = 1;
+    }
+    if (!bad && (fingerprint(c, after) || strcmp(source, after))) {
+        fprintf(stderr, "host preparation: style %s: the source changed while it ran\n", c->only);
+        bad = 1;
+    }
     struct json *final_judges = judges(c, prefix);
     bad = bad || !final_judges || !json_equal(actual_judges, final_judges);
     json_free(final_judges);
