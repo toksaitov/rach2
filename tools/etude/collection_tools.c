@@ -1263,20 +1263,39 @@ static int col_products(struct col_job *job, char *products, const struct col_li
 }
 
 /**
- * Give the processors of a preparation's machine: the build jobs that its
- * admission claim covers, `ETUDE_BUILD_JOBS`, or, for a preparation that no
- * claim admitted, the processors the collection gives one machine,
- * `RACH2_CPUS`, 2 by default. A count above 64 is cut to 64.
+ * Size a preparation's machine, in processors and MiB of memory.
+ *
+ * A preparation that a claim admitted has the build jobs that the claim
+ * covers, `ETUDE_BUILD_JOBS`, and the claim has a GiB of memory for each job
+ * and one more, which QEMU and the controller take. The machine has a third of
+ * the jobs as processors and a GiB for each job, so 3 GiB for each processor,
+ * since the GNU layer's SpiderMonkey build runs a pool of its own beside the
+ * outer make and so two compilers of up to 1.5 GiB each run on a processor.
+ * A claim of fewer than three jobs is refused. A preparation that no claim
+ * admitted has the processors the collection gives one machine, `RACH2_CPUS`,
+ * 2 by default, and 3 GiB for each. A machine has at most 64 processors.
+ *
+ * @return 0, or -1 after a refusal.
  */
-static unsigned col_preparation_cpus(void)
+static int col_preparation_machine(unsigned *cpus, unsigned *memory)
 {
     static const char *const names[] = {"ETUDE_BUILD_JOBS", "RACH2_CPUS"};
+    unsigned jobs = 6;
     for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
         const char *text = getenv(names[i]);
-        if (text && col_decimal(text) && *text != '0' && strlen(text) <= 4)
-            return atoi(text) > 64 ? 64 : (unsigned)atoi(text);
+        if (text && col_decimal(text) && *text != '0' && strlen(text) <= 4) {
+            jobs = (unsigned)atoi(text) * (i ? 3 : 1);
+            break;
+        }
     }
-    return 2;
+    if (jobs < 3)
+        return col_error("a claim of fewer than three build jobs leaves the preparation's "
+                         "machine less than 3 GiB; claim three jobs at least");
+    if (jobs > 192)
+        jobs = 192;
+    *cpus = jobs / 3;
+    *memory = jobs * 1024;
+    return 0;
 }
 
 static int col_prepare(struct col_job *job, const char *arch, const char *kernel, int count,
@@ -1285,12 +1304,13 @@ static int col_prepare(struct col_job *job, const char *arch, const char *kernel
     struct col_list native = {0}, guest = {0}, components = {0};
     struct jbuf script = {0};
     char *disk = NULL, *products = NULL;
+    unsigned memory;
     int rc = 2;
     if (strspn(kernel, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") !=
             strlen(kernel) ||
-        col_prepare_goals(&native, &guest, arch, kernel, count, args))
+        col_prepare_goals(&native, &guest, arch, kernel, count, args) ||
+        col_preparation_machine(&job->cpus, &memory))
         goto done;
-    job->cpus = col_preparation_cpus();
     rc = col_tooling(job, 1, 0, 0, 0);
     if (rc)
         goto done;
@@ -1339,8 +1359,7 @@ static int col_prepare(struct col_job *job, const char *arch, const char *kernel
     uint64_t volume = (bytes + 1048575) / 1048576 + 64;
     if (volume > 65536)
         goto error;
-    rc = col_run(job, &script, volume < 512 ? 512 : (unsigned)volume,
-                 job->cpus > 4 ? job->cpus * 1024 : 4096, 1);
+    rc = col_run(job, &script, volume < 512 ? 512 : (unsigned)volume, memory, 1);
     if (!rc)
         rc = col_products(job, products, &guest);
     if (!rc)

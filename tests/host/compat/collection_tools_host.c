@@ -20,9 +20,9 @@ int etude_collection_native_goal(const char *goal);
 int etude_collection_tools_main(int argc, char **argv);
 static char collection_root[4096], collection_self[4096];
 static int collection_failures, collection_style;
-/* The processors a preparation row expects, those its provisioning got, and
- * those of the last job. */
-static unsigned collection_cpus, collection_provisioned, collection_job_cpus;
+/* The processors and MiB of memory a preparation row expects, the processors
+ * its provisioning got, and those of the last job. */
+static unsigned collection_cpus, collection_memory, collection_provisioned, collection_job_cpus;
 
 #define COLLECTION_CHECK(test)                                                                     \
     do {                                                                                           \
@@ -304,8 +304,7 @@ static int collection_prepared_job(const struct etude_tooling_job *job)
         fclose(file);
     char components[64];
     snprintf(components, sizeof components, "make -j%u ARCH='i686' 'components'", collection_cpus);
-    if (!job->network || job->cpus != collection_cpus ||
-        job->memory_mib != (collection_cpus > 4 ? collection_cpus * 1024 : 4096) ||
+    if (!job->network || job->cpus != collection_cpus || job->memory_mib != collection_memory ||
         collection_provisioned != collection_cpus || job->volume_mib < 512 || !job->disks ||
         !job->disks[0] || !job->disks[1] || job->disks[2] || !strstr(script, "rsync -rc") ||
         !strstr(script, "git --literal-pathspecs add -f") || !strstr(script, components) ||
@@ -538,16 +537,27 @@ static void collection_prepare_row(void)
     char *jobs = getenv("ETUDE_BUILD_JOBS"), *cpus = getenv("RACH2_CPUS");
     jobs = jobs ? strdup(jobs) : NULL;
     cpus = cpus ? strdup(cpus) : NULL;
-    static const char *const counts[][2] = {{NULL, "3"}, {"6", "3"}};
+    /* Build jobs, the collection's processors, and the machine expected. */
+    static const struct {
+        const char *jobs, *cpus;
+        unsigned machine_cpus, memory;
+    } counts[] = {
+        {NULL, "3", 3, 9216}, {"12", "3", 4, 12288}, {"5", "3", 1, 5120}, {"2", "3", 0, 0}};
     for (size_t i = 0; i < sizeof counts / sizeof *counts; i++) {
-        if (counts[i][0])
-            setenv("ETUDE_BUILD_JOBS", counts[i][0], 1);
+        if (counts[i].jobs)
+            setenv("ETUDE_BUILD_JOBS", counts[i].jobs, 1);
         else
             unsetenv("ETUDE_BUILD_JOBS");
-        setenv("RACH2_CPUS", counts[i][1], 1);
-        collection_cpus = (unsigned)atoi(counts[i][0] ? counts[i][0] : counts[i][1]);
+        setenv("RACH2_CPUS", counts[i].cpus, 1);
+        collection_cpus = counts[i].machine_cpus;
+        collection_memory = counts[i].memory;
         collection_provisioned = 0;
         char *args[] = {"prepare", collection_root, "i686", "", "build/images/one.img"};
+        if (!collection_cpus) {
+            COLLECTION_CHECK(etude_collection_tools_main(5, args) == 2);
+            COLLECTION_CHECK(!collection_provisioned);
+            continue;
+        }
         COLLECTION_CHECK(!etude_collection_tools_main(5, args));
         COLLECTION_CHECK(collection_bytes(collection_path("build/images/one.img"), "image bytes"));
         COLLECTION_CHECK(collection_bytes(collection_path("build/rach2/kernel"), "kernel bytes"));
