@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the native fixed producer entry with small private Git sources."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -130,6 +131,21 @@ class ProducerTests(unittest.TestCase):
                                    environment=dict(ETUDE_PRODUCER_TEST_STATUS=status))
                 self.assertEqual((state[1] / 'producer.admit.result').exists(), expected == 0)
                 self.assertEqual((state[1] / 'transport.status').read_text().strip(), status)
+
+    def test_actor_matches_installed_tool(self):
+        for changed in (False, True):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory(prefix='rach2-native-producer.') as name:
+                state = self.fixture(name)
+                actor = Path(state[3]['etude'])
+                state[3]['actor'] = dict(path=str(actor), size_bytes=actor.stat().st_size,
+                                        sha256=hashlib.sha256(actor.read_bytes()).hexdigest())
+                if changed:
+                    state[3]['actor']['sha256'] = '0' * 64
+                config = state[1] / 'config.json'
+                value = json.loads(config.read_text())
+                value['producer'] = state[3]
+                config.write_text(json.dumps(value))
+                self.run_operation(state, expected=1 if changed else 0)
 
     def test_projection(self):
         with tempfile.TemporaryDirectory(prefix='rach2-native-producer.') as name:
