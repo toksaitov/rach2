@@ -39,9 +39,19 @@ EOF
 }
 
 # The program writes nothing for --version, but runs with a home of its own
-# all the same.
+# all the same. It needs glibc's x86-64 loader, which QEMU's user-mode
+# emulator lacks on a build host that is not x86, as etude's tooling machine
+# on a Mac is not, so such a host does not run it; the agents suite runs it
+# on Rach2.
 package_check()
 {
+    case "$(uname -m)" in
+        x86_64 | i?86) ;;
+        *)
+            echo "agy: --version is not run on this $(uname -m) host, which has no x86-64 glibc loader"
+            return 0
+            ;;
+    esac
     out=$(HOME="$SCRATCH" AGY_CLI_DISABLE_AUTO_UPDATE=true "$1/opt/agy/bin/agy" --version)
     if [ "$out" != "$VERSION" ]; then
         echo "agy: --version printed [$out], not $VERSION" >&2
