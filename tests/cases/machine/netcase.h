@@ -182,6 +182,11 @@ enum etude_status net_ssh_input(struct net_case *u, char *const argv[], const ch
 enum etude_status net_ssh_download(struct net_case *u, char *const argv[], const char *output,
                                    struct net_run *r);
 
+/* Fetch an exact-size binary result through the declared raw input disk,
+ * verify its reported digest after client exit, then restart the client. */
+enum etude_status net_ssh_download_disk(struct net_case *u, char *const argv[], const char *output,
+                                        struct net_run *r);
+
 /** Restart the declared client with private INPUT bound to its raw
  * channel-input disk. Call in the client's declared transfer boot step.
  * A subsequent net_ssh_input of that file reads /dev/disk1 directly. */

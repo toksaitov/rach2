@@ -330,3 +330,5 @@ The scenario fixture also copies ranges to and from a sparse file at the USB far
 `etude_platform_hosttest --routine-entry-only` calls the native routine input, phase, preparation, sequence and result-projection implementations. Its command substitutes preserve all fourteen projection and refusal modes, focused push filters, declared clean preparation, allocation before production, counted vectors and the Windows/WSL request identity. It creates only private fixture files. The GNU CI fixture calls this same prepared binary.
 
 `etude_platform_hosttest --routine-listener-only` runs the existing listener regression through its native entry. The ordinary platform fixture runs it too, including boot identity, accepted jobs and changed-listener readback refusals.
+
+`etude_scenario_hosttest --net-bulk-only` checks the existing network-case raw disk path with a full patterned 4 MiB file. It requires the input to bypass serial copying, the complete returned bytes and digest, and client stop/read/restart order. Short or changed returns and unconfirmed client exit publish no result. It boots no machine.
