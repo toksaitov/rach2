@@ -396,7 +396,12 @@ static int snapshots(struct version *v, char hex[65])
 static int version_copy_source(struct version *v)
 {
     char target[4096];
-    const char *names[] = {"tools/etude", "tests/native", "utils/sha256.c", "utils/sha256.h"};
+    const char *names[] = {"tools/etude",
+                           "tests/native",
+                           "tests/cases/host/host_script_inventory.c",
+                           "tests/cases/host/host_script_inventory.h",
+                           "utils/sha256.c",
+                           "utils/sha256.h"};
     for (unsigned i = 0; i < sizeof(names) / sizeof(*names); i++) {
         snprintf(target, sizeof(target), "%s/%s", v->tree, names[i]);
         if (!fx_tree(flow_source(v->f, names[i]), target))

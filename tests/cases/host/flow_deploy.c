@@ -294,6 +294,9 @@ static int setup(struct deploy *d, struct fixture *f)
 {
     char target[4096], source[4096];
     const char *copy[] = {"prereq.sh", "e2fsprogs_path.sh", "ovmf_path.sh", "elfwrap.sh"};
+    const char *files[] = {"tests/cases/host/host_script_inventory.c",
+                           "tests/cases/host/host_script_inventory.h", "utils/sha256.c",
+                           "utils/sha256.h"};
     unsigned i;
     struct utsname u;
     memset(d, 0, sizeof(*d));
@@ -310,12 +313,11 @@ static int setup(struct deploy *d, struct fixture *f)
         if (!fx_copy(flow_source(f, source), target))
             return 0;
     }
-    snprintf(target, sizeof(target), "%s/utils/sha256.c", d->tree);
-    if (!fx_copy(flow_source(f, "utils/sha256.c"), target))
-        return 0;
-    snprintf(target, sizeof(target), "%s/utils/sha256.h", d->tree);
-    if (!fx_copy(flow_source(f, "utils/sha256.h"), target))
-        return 0;
+    for (i = 0; i < sizeof(files) / sizeof(*files); i++) {
+        snprintf(target, sizeof(target), "%s/%s", d->tree, files[i]);
+        if (!fx_copy(flow_source(f, files[i]), target))
+            return 0;
+    }
     snprintf(target, sizeof(target), "%s/tools/etude/ledger.c", d->tree);
     if (!flow_version_mock_source(d->tree) ||
         !fx_copy(flow_source(f, "tools/etude/ledger.c"), target))
