@@ -58,9 +58,11 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-etude-version-test.XXXXXX") || exit 1
 TREE=$work/tree
 FIX=$work/fix
 export TREE FIX
-mkdir -p "$TREE/tools" "$TREE/utils" "$TREE/tests" "$work/bin" "$work/windows" || exit 1
+mkdir -p "$TREE/tools" "$TREE/utils" "$TREE/tests/cases/host" "$work/bin" "$work/windows" || exit 1
 cp -R "$repo/tools/etude" "$TREE/tools/" || exit 1
 cp -R "$repo/tests/native" "$TREE/tests/" || exit 1
+cp "$repo/tests/cases/host/host_script_inventory.c" "$repo/tests/cases/host/host_script_inventory.h" \
+    "$TREE/tests/cases/host/" || exit 1
 cp "$repo/utils/sha256.c" "$repo/utils/sha256.h" "$TREE/utils/" || exit 1
 
 windows_command='C:\msys64\usr\bin\env.exe PATH=/usr/bin:/ucrt64/bin sh -s'
@@ -475,6 +477,7 @@ busybox_elsewhere()
 {
     rm -rf "$work/job" && mkdir -p "$work/job/tests/system" || exit 1
     cp "$repo/tests/system/etude_version_test.sh" "$work/job/tests/system/" &&
+        cp -R "$TREE/tests/native" "$TREE/tests/cases" "$work/job/tests/" &&
         cp -R "$TREE/tools" "$TREE/utils" "$work/job/" &&
         COPYFILE_DISABLE=1 tar -c --format ustar -f "$work/job.tar" -C "$work/job" tests tools utils || exit 1
     echo 'tar -x -f job.tar && sh tests/system/etude_version_test.sh --busybox' > "$work/job.sh"

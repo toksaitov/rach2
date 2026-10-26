@@ -42,11 +42,13 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-etude-deploy-test.XXXXXX") || exit 1
 TREE=$work/tree
 FIX=$work/fix
 export TREE FIX
-mkdir -p "$TREE/tools/setup" "$TREE/utils" "$work/bin" "$work/mbin" "$work/windows" "$work/linux" "$work/ctl" || exit 1
+mkdir -p "$TREE/tools/setup" "$TREE/utils" "$TREE/tests/cases/host" "$work/bin" "$work/mbin" "$work/windows" "$work/linux" "$work/ctl" || exit 1
 cp -R "$repo/tools/etude" "$TREE/tools/" || exit 1
 for f in prereq.sh e2fsprogs_path.sh ovmf_path.sh elfwrap.sh; do
     cp "$repo/tools/setup/$f" "$TREE/tools/setup/" || exit 1
 done
+cp "$repo/tests/cases/host/host_script_inventory.c" "$repo/tests/cases/host/host_script_inventory.h" \
+    "$TREE/tests/cases/host/" || exit 1
 cp "$repo/utils/sha256.c" "$repo/utils/sha256.h" "$TREE/utils/" || exit 1
 realuname=$(command -v uname) || exit 1
 realmv=$(command -v mv) || { echo 'etude-deploy-test: no mv on this host' >&2; exit 1; }
