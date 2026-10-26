@@ -641,6 +641,8 @@ static int tidy_stems(struct fixture *f)
     snprintf(cwd, sizeof(cwd), "%s/stems-source", f->work);
     if (!fx_tree(flow_source(f, "tools"), flow_path(f, "stems-source/tools")) ||
         !fx_tree(flow_source(f, "tests"), flow_path(f, "stems-source/tests")) ||
+        !fx_text(flow_path(f, "stems-source/tests/stem_prefix.py"),
+                 "work = tempfile.mkdtemp(prefix='rach2-stem-prefix.')\n") ||
         !g(f, cwd, "init", "-q", NULL) || !g(f, cwd, "add", "tools", "tests", NULL) ||
         !g(f, cwd, "commit", "-q", "-m", "Prepared source fixtures", NULL))
         return 0;
@@ -648,7 +650,7 @@ static int tidy_stems(struct fixture *f)
         return 0;
     stems = f->out;
     ok = fx_check(f,
-                  fx_regex(stems, "^rach2_verify$") && fx_regex(stems, "^rach2-measure$") &&
+                  fx_regex(stems, "^rach2_verify$") && fx_regex(stems, "^rach2-stem-prefix$") &&
                       fx_regex(stems, "^rach2-accept-secrets$") &&
                       !fx_regex(stems, "[^A-Za-z0-9_\n-]"),
                   "scratch stems") &&
