@@ -491,7 +491,8 @@ static struct json *ret_reclaim(struct retention *r, const char *reference, int 
             rc = retained_delete(r, removed);
     }
     if (!rc) {
-        qsort(keep->item, keep->count, sizeof(*keep->item), retained_string_order);
+        if (keep->count > 1)
+            qsort(keep->item, keep->count, sizeof(*keep->item), retained_string_order);
         ret_set(report, "bytes", ret_integer((int64_t)total));
         ret_set(report, "limit_bytes", ret_integer(limit));
         ret_set(report, "reserved_next_bytes", ret_integer(reserve));
