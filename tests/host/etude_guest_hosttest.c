@@ -62,8 +62,11 @@ static char boot[ETUDE_FRAME_TOKEN_LEN + 1];
 static unsigned long seq;
 static unsigned long cmd_no = 1;
 
-/* Over the serial console the test acknowledges each frame it reads, as a
- * controller does, and drops a frame sent again below `seen`. */
+/* Over the serial console the test acknowledges each frame it reads in order,
+ * as a controller does, and drops a frame sent again below `seen`. It drops a
+ * frame past `seen` without an ack, since acks are cumulative: an ack of it
+ * would also cover the missing frames before it, and etude-guest would not
+ * send them again. */
 static int serial_acks;
 static unsigned long long seen;
 
@@ -280,8 +283,10 @@ again:
         snprintf(boot, sizeof(boot), "%s", f.boot);
     if (serial_acks && strcmp(f.type, ETUDE_EV_ALIVE) != 0 && strcmp(f.type, ETUDE_CMD_ACK) != 0) {
         char ack[300];
-        size_t n =
-            wire_encode(ack, sizeof(ack), session, boot, seq, 1, f.seq, ETUDE_CMD_ACK, 0, NULL);
+        size_t n;
+        if (f.seq > seen)
+            goto again;
+        n = wire_encode(ack, sizeof(ack), session, boot, seq, 1, f.seq, ETUDE_CMD_ACK, 0, NULL);
         if (write(to_guest, ack, n) != (ssize_t)n)
             failures++;
         if (f.seq < seen)
