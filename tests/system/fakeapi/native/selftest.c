@@ -281,12 +281,38 @@ static void messages(void)
     {
         struct value *body = r->json, *history = (struct value *)get(body, "messages");
         struct value *result = (struct value *)get(history->child->next, "content")->child;
+        const char *why;
         set(result, "is_error", json_boolean(1));
         check(protocol_check("anthropic", step, r) != NULL, "Messages rejects failed tool result");
         set(result, "is_error", json_boolean(0));
         set(result, "content", string("wrong"));
         check(protocol_check("anthropic", step, r) != NULL,
               "Messages rejects incorrect tool result");
+        set(result, "content", parse("[{\"type\":\"text\",\"text\":\"expected\\n\"}]"));
+        add((struct value *)get(history->child->next, "content"), NULL, clone(result));
+        why = protocol_check("anthropic", step, r);
+        check(why && strstr(why, "duplicated"), "Messages rejects a duplicated tool result");
+        destroy(result->next);
+        result->next = NULL;
+        set(history->child, "content", value('a'));
+        why = protocol_check("anthropic", step, r);
+        check(why && strstr(why, "no preceding call"),
+              "Messages rejects a tool result with no preceding call");
+        set(history->child, "content",
+            parse("[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{}}]"));
+        set(step, "body", parse("{\"tools\":[],\"output_config\":{\"format\":{}}}"));
+        why = protocol_check("anthropic", step, r);
+        check(why && strstr(why, "unexpected body: $ has no member"),
+              "Messages rejects a body without the step's members");
+        set(body, "tools", parse("[{\"name\":\"Bash\",\"input_schema\":{}}]"));
+        set(body, "output_config", parse("{\"effort\":\"high\",\"format\":{}}"));
+        why = protocol_check("anthropic", step, r);
+        check(why && strstr(why, "unexpected body: $.tools"),
+              "Messages rejects a body whose member differs");
+        set(body, "tools", value('a'));
+        check(!protocol_check("anthropic", step, r),
+              "Messages takes a body that includes the step's");
+        set(step, "body", NULL);
     }
     setup(&s, "{\"steps\":[]}");
     p = test_peer(&s, r, &w);
@@ -327,6 +353,30 @@ static void gemini(void)
           "Gemini validates signature and function response");
     {
         struct value *contents = (struct value *)get(r->json, "contents");
+        struct value *turn = contents->child->next->next;
+        struct value *reply = (struct value *)get(get(turn, "parts")->child, "functionResponse");
+        struct value *output = (struct value *)get(reply, "response");
+        const char *why;
+        set(output, "output", string("wrong"));
+        why = protocol_check("gemini", step, r);
+        check(why && strstr(why, "wrong function response"),
+              "Gemini rejects an incorrect function response");
+        set(output, "output", string("ok"));
+        set(output, "error", string("failed"));
+        why = protocol_check("gemini", step, r);
+        check(why && strstr(why, "failed function response"),
+              "Gemini rejects a failed function response");
+        set(output, "error", NULL);
+        add(contents, NULL, clone(turn));
+        why = protocol_check("gemini", step, r);
+        check(why && strstr(why, "duplicated"), "Gemini rejects a duplicated function response");
+        destroy(turn->next);
+        turn->next = NULL;
+        set(reply, "name", string("other"));
+        why = protocol_check("gemini", step, r);
+        check(why && strstr(why, "no preceding call"),
+              "Gemini rejects a response to another function");
+        set(reply, "name", string("read"));
         set((struct value *)get(contents->child->next, "parts")->child, "thoughtSignature",
             string("wrong"));
         check(protocol_check("gemini", step, r) != NULL,
