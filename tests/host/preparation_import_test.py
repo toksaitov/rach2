@@ -120,7 +120,7 @@ class ImportTests(unittest.TestCase):
         self.assertEqual({name for name, alone in owners.items() if alone},
                          {'etude_platform', 'etude_remote', 'etude_repeat'})
         with tempfile.TemporaryDirectory(prefix='rach2-partition.') as work:
-            tree = Path(work)
+            tree = Path(work) / 'tree'
             self.native_tree(tree)
             for source in (repo / 'tests/host').glob('etude_*_hosttest.c'):
                 if 'host-arch:' in source.read_text():
@@ -579,7 +579,7 @@ class ImportTests(unittest.TestCase):
 
     def test_native_program_publication(self):
         with tempfile.TemporaryDirectory(prefix='rach2-native-publication.') as work:
-            tree = Path(work)
+            tree = Path(work) / 'tree'
             self.native_tree(tree)
             self.native_source(tree, 'etude_platform_hosttest.c', 'host-alone: native isolation\n')
             self.windows_tree(tree)
@@ -658,7 +658,7 @@ class ImportTests(unittest.TestCase):
 
     def test_windows_companion_reuse(self):
         with tempfile.TemporaryDirectory(prefix='rach2-companion-cache.') as work:
-            tree = Path(work)
+            tree = Path(work) / 'tree'
             self.native_tree(tree)
             self.native_source(tree, 'etude_platform_hosttest.c', 'host-alone: native isolation\n')
             self.windows_tree(tree)
