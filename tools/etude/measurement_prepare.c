@@ -100,7 +100,7 @@ done:
     return bytes;
 }
 
-static int source_frozen(const char *tree, const char *commit)
+int etude_context_candidate(const char *tree, char commit[41])
 {
     char *head_args[] = {"git", "rev-parse", "HEAD", NULL};
     char *status_args[] = {"git", "status", "--porcelain", "--untracked-files=all", NULL};
@@ -108,7 +108,11 @@ static int source_frozen(const char *tree, const char *commit)
     char *bytes = source_query(tree, head_args, &size);
     while (size && (bytes[size - 1] == '\n' || bytes[size - 1] == '\r'))
         size--;
-    int valid = bytes && size == 40 && !memcmp(bytes, commit, 40);
+    int valid = bytes && size == 40 && strspn(bytes, "0123456789abcdef") == 40;
+    if (valid) {
+        memcpy(commit, bytes, 40);
+        commit[40] = 0;
+    }
     free(bytes);
     if (!valid)
         return -1;
@@ -116,6 +120,12 @@ static int source_frozen(const char *tree, const char *commit)
     valid = bytes && !size;
     free(bytes);
     return valid ? 0 : -1;
+}
+
+static int source_frozen(const char *tree, const char *commit)
+{
+    char actual[41];
+    return etude_context_candidate(tree, actual) || strcmp(actual, commit) ? -1 : 0;
 }
 
 static int source_relative(const char *path)

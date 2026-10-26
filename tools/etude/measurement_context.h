@@ -8,6 +8,9 @@ struct etude_measurement_context;
 struct stat;
 struct jbuf;
 
+/* Read the actual clean candidate through the same native Git queries. */
+int etude_context_candidate(const char *tree, char commit[41]);
+
 /* Capture a clean committed tree and optional prepared inputs in C. */
 int etude_context_source(const char *tree, const char *commit, const char *output,
                          const char *const extra[]);

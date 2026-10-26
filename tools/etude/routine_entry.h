@@ -14,6 +14,28 @@ struct routine_site {
     unsigned wait, seconds, jobs;
 };
 
+struct hp_words;
+struct json;
+struct routine_input {
+    const char *purpose, *arches, *run, *accel;
+    char tree[ROUTINE_PATH], out[ROUTINE_PATH], site[ROUTINE_PATH];
+    char program[ROUTINE_PATH], commit[41];
+    int count;
+    char **selection;
+};
+
+int routine_input_read(int argc, char **argv, struct routine_input *input);
+int routine_path(char out[ROUTINE_PATH], const char *root, const char *name);
+int routine_command(struct hp_words *args, volatile sig_atomic_t *stop);
+int routine_query(const struct routine_input *input, struct hp_words *args, const char *name,
+                  volatile sig_atomic_t *stop);
+int routine_selection(const char *expected, const char *actual);
+int routine_phase_inputs(const char *purpose, struct json **value);
+int etude_prepare_routine_main(int argc, char **argv, volatile sig_atomic_t *stop);
+int etude_routine_entry_main(int argc, char **argv);
+int etude_routine_sequence_main(int argc, char **argv);
+int etude_routine_owner_main(int argc, char **argv);
+
 /* A route may inspect its disabled endpoint only after fixed-binding checks. */
 int routine_site_read(const char *path, const char *route, struct routine_site *site);
 int routine_route_mode(const char *path, char mode[24]);
