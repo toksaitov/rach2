@@ -22,6 +22,8 @@
  * host-deps: tools/etude/volume/volume.c
  * host-deps: utils/sha256.c
  * host-inputs: tests/host/compat/scenario_service_stop.c
+ * host-deps: tests/host/compat/netcase_bulk_host.c
+ * host-inputs: tests/cases/machine/netcase.c tests/cases/machine/netcase.h
  * host-cflags: -I tools/etude/include -I tools/etude -I tools/etude/guest
  * host-cflags: -I utils -Wall -Wextra -Werror
  * host-first: it runs for minutes
@@ -3890,6 +3892,8 @@ static void test_real(void)
  * and exit; with one argument, the invocation, enter the library's ordinary
  * scenario entry point. Windows constructors do not receive argc and argv.
  */
+int etude_test_netcase_bulk(void);
+
 int main(int argc, char **argv)
 {
     const char *fake = getenv("ETUDE_FAKE_QEMU");
@@ -3913,6 +3917,8 @@ int main(int argc, char **argv)
             return 1;
         return service_cases_only();
     }
+    if (argc == 2 && !strcmp(argv[1], "--net-bulk-only"))
+        return etude_test_netcase_bulk();
     if (argc == 2)
         return etude_case_main(argc, argv);
     if (argc >= 3 && strcmp(argv[1], "tool") == 0)

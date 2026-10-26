@@ -666,20 +666,133 @@ enum etude_status net_ssh_download(struct net_case *u, char *const argv[], const
     return failed(u, st, "the SSH file download or its cleanup failed: %s", status_text(st));
 }
 
-enum etude_status net_ssh_attach(struct net_case *u, const char *input)
+/** End the owned client before rebinding or reading its raw transfer disk. */
+static enum etude_status client_end(struct net_case *u)
 {
     struct etude_termination end;
     char *reply = NULL;
+    enum etude_status st = etude_qmp(u->client, "quit", NULL, &reply);
+    free(reply);
+    return st == ETUDE_OK ? etude_wait_end(u->client, &end) : st;
+}
+
+/** Check and flush all returned bytes, including zero-filled blocks. */
+static int client_disk_stream(FILE *in, FILE *out, uint64_t size, const char *expected)
+{
+    struct sha256 digest;
+    unsigned char block[65536], sum[32];
+    char hash[65];
+    uint64_t total = 0;
+    size_t n;
+    sha256_init(&digest);
+    while ((n = fread(block, 1, sizeof(block), in)) != 0) {
+        total += n;
+        if (total > size || fwrite(block, 1, n, out) != n)
+            return 0;
+        sha256_update(&digest, block, n);
+    }
+    sha256_final(&digest, sum);
+    sha256_hex(sum, hash);
+    return !ferror(in) && total == size && !memcmp(hash, expected, 64) && !fflush(out) &&
+           !fsync(fileno(out));
+}
+
+/** Copy a stopped client's complete disk, checking its declared file digest. */
+static int client_disk_copy(const char *source, const char *target, uint64_t size,
+                            const char *expected)
+{
+    struct stat before, after;
+    FILE *in = NULL, *out = NULL;
+    int flags = O_WRONLY | O_CREAT | O_EXCL;
+#ifdef _WIN32
+    flags |= O_BINARY;
+#endif
+    if (!expected || strspn(expected, "0123456789abcdef") != 64 || expected[64] != ' ' ||
+        lstat(source, &before) || !S_ISREG(before.st_mode) || before.st_nlink != 1 ||
+        before.st_size < 0 || (uint64_t)before.st_size != size || !(in = fopen(source, "rb")))
+        return 0;
+    int fd = open(target, flags, 0600);
+    if (fd >= 0)
+        out = fdopen(fd, "wb");
+    if (!out && fd >= 0)
+        close(fd);
+    int ok = out && client_disk_stream(in, out, size, expected) && !fstat(fileno(in), &after) &&
+             before.st_dev == after.st_dev && before.st_ino == after.st_ino &&
+             before.st_size == after.st_size;
+    if (out && fclose(out))
+        ok = 0;
+    if (fclose(in))
+        ok = 0;
+    if (!ok && fd >= 0)
+        unlink(target);
+    return ok;
+}
+
+/** Return a known-size binary file through the client's existing raw disk. */
+enum etude_status net_ssh_download_disk(struct net_case *u, char *const argv[], const char *output,
+                                        struct net_run *r)
+{
+    struct client_command a;
+    struct etude_guest_result result;
+    struct etude_termination end;
+    struct stat disk;
+    const char *env[5], *words[CLIENT_WORDS + 8], *target;
+    char password[512], path[160], evidence[256], bytes[32];
+    enum etude_status st;
+    memset(r, 0, sizeof(*r));
+    r->end.end = ETUDE_END_LOST;
+    r->end.value = -1;
+    if (!net_ok(u))
+        return u->st;
+    if (!u->client || !u->client_input[0] || strcmp(argv[0], "ssh") ||
+        stat(u->client_input, &disk) || disk.st_size <= 0 ||
+        strlen(output) > sizeof(evidence) - sizeof(".command.err"))
+        return failed(u, ETUDE_REFUSED, "the raw SSH download has no declared input disk");
+    if (!client_arguments(u, argv, &a)) {
+        client_free(&a);
+        return u->st;
+    }
+    snprintf(path, sizeof(path), "/tmp/etude-download-%u", ++u->client_files);
+    snprintf(evidence, sizeof(evidence), "%s.command", output);
+    snprintf(bytes, sizeof(bytes), "%llu", (unsigned long long)disk.st_size);
+    words[0] = "/bin/sh";
+    words[1] = "-c";
+    words[2] = "umask 077; set -C; file=$1; bytes=$2; shift 2; "
+               "trap 'rm -f \"$file\"' EXIT; \"$@\" > \"$file\" || exit; "
+               "[ \"$(wc -c < \"$file\")\" = \"$bytes\" ] && "
+               "dd if=\"$file\" of=/dev/disk1 bs=65536 conv=notrunc >/dev/null 2>&1 && "
+               "sync && sha256sum \"$file\"";
+    words[3] = "etude-raw-download";
+    words[4] = path;
+    words[5] = bytes;
+    for (size_t i = 0; i <= a.count; i++)
+        words[i + 6] = a.argv[i];
+    client_environment(env, password);
+    st = etude_guest_command(u->client, words, env, NULL, evidence, &result);
+    client_free(&a);
+    st = client_result(u, evidence, st, &result, r);
+    if (st != ETUDE_OK || !net_exited0(r))
+        return st;
+    st = client_end(u);
+    target = st == ETUDE_OK ? etude_evidence(u->c, output) : NULL;
+    if (st == ETUDE_OK &&
+        (!target || !client_disk_copy(u->client_input, target, (uint64_t)disk.st_size, r->out)))
+        st = ETUDE_FAILED;
+    if (st == ETUDE_OK)
+        st = etude_boot(u->c, "channel-client", NULL, &u->client, &end);
+    return failed(u, st, "the raw SSH return or client restart failed: %s", status_text(st));
+}
+
+enum etude_status net_ssh_attach(struct net_case *u, const char *input)
+{
+    struct etude_termination end;
     enum etude_status st;
 
     if (!net_ok(u))
         return u->st;
     if (u->client == NULL || input == NULL || strlen(input) >= sizeof(u->client_input))
         return failed(u, ETUDE_REFUSED, "the SSH client has no raw input attachment");
-    st = etude_qmp(u->client, "quit", NULL, &reply);
-    free(reply);
-    if (st == ETUDE_OK)
-        st = etude_wait_end(u->client, &end);
+    st = client_end(u);
     if (st == ETUDE_OK)
         st = etude_bind_disk(u->c, "channel-client", "channel-input", input);
     if (st == ETUDE_OK)
