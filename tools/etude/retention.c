@@ -438,6 +438,43 @@ static int retained_delete(struct retention *r, const struct json *removed)
     return 0;
 }
 
+static int retained_select(struct retention *r, const struct json *records, const struct json *keep,
+                           uint64_t *total, struct json *warnings, struct json *removed)
+{
+    int64_t reserve = ret_number(r->policy, "reserve_bytes"),
+            limit = ret_number(r->policy, "max_bytes"),
+            days = ret_number(r->policy, "max_age_days");
+    const struct json **ordered = json_alloc((records->count + 1) * sizeof(*ordered));
+    int rc = 0;
+    for (size_t i = 0; i < records->count; i++)
+        ordered[i] = records->item[i];
+    qsort(ordered, records->count, sizeof(*ordered), retained_order);
+    for (size_t i = 0; !rc && i < records->count; i++) {
+        const struct json *item = ordered[i];
+        if (ret_has(keep, item->name))
+            continue;
+        int64_t sealed = ret_seconds(json_text(item, "sealed_utc")), age = ret_now() - sealed;
+        if (sealed < 0) {
+            rc = ret_fail("invalid bundle sealing timestamp");
+            break;
+        }
+        if (age < 86400 || (age / 86400 < days && *total <= (uint64_t)(limit - reserve)))
+            continue;
+        uint64_t size = 0;
+        int64_t latest = 0;
+        struct json *files = ret_files(json_text(item, "path"), &size, &latest);
+        if (!files || retained_candidate(item, files, latest))
+            ret_push(warnings, ret_string(ret_error()));
+        else {
+            ret_push(removed, ret_string(json_text(item, "path")));
+            *total -= size;
+        }
+        json_free(files);
+    }
+    free(ordered);
+    return rc;
+}
+
 static struct json *ret_reclaim(struct retention *r, const char *reference, int apply)
 {
     struct json *records = ret_records(r), *keep = ret_new(JSON_ARRAY),
@@ -448,37 +485,10 @@ static struct json *ret_reclaim(struct retention *r, const char *reference, int 
     int rc = !records || retained_protection(r, records, reference, keep, external, warnings) ||
              retained_usage(r, records, external, &total);
     original = total;
-    const struct json **ordered =
-        json_alloc(((records ? records->count : 0) + 1) * sizeof(*ordered));
-    for (size_t i = 0; records && i < records->count; i++)
-        ordered[i] = records->item[i];
-    if (records)
-        qsort(ordered, records->count, sizeof(*ordered), retained_order);
     int64_t reserve = ret_number(r->policy, "reserve_bytes"),
             limit = ret_number(r->policy, "max_bytes");
-    for (size_t i = 0; !rc && i < records->count; i++) {
-        const struct json *item = ordered[i];
-        if (ret_has(keep, item->name))
-            continue;
-        int64_t sealed = ret_seconds(json_text(item, "sealed_utc")), age = ret_now() - sealed;
-        int64_t days = ret_number(r->policy, "max_age_days");
-        if (sealed < 0) {
-            rc = ret_fail("invalid bundle sealing timestamp");
-            break;
-        }
-        if (age < 86400 || (age / 86400 < days && total <= (uint64_t)(limit - reserve)))
-            continue;
-        uint64_t size = 0;
-        int64_t latest = 0;
-        struct json *files = ret_files(json_text(item, "path"), &size, &latest);
-        if (!files || retained_candidate(item, files, latest))
-            ret_push(warnings, ret_string(ret_error()));
-        else {
-            ret_push(removed, ret_string(json_text(item, "path")));
-            total -= size;
-        }
-        json_free(files);
-    }
+    if (!rc)
+        rc = retained_select(r, records, keep, &total, warnings, removed);
     if (!rc && apply && removed->count) {
         if (retained_live(r)) {
             for (size_t i = 0; i < records->count; i++)
@@ -505,7 +515,6 @@ static struct json *ret_reclaim(struct retention *r, const char *reference, int 
         removed = NULL;
         ret_set(report, apply ? "would_remove" : "removed", ret_new(JSON_ARRAY));
     }
-    free(ordered);
     json_free(records);
     json_free(keep);
     json_free(external);
