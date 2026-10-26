@@ -17,10 +17,13 @@ struct wire {
     struct buffer out;
     const unsigned char *in;
     size_t left;
+    int broken; /* the client has reset: every write fails */
 };
 static int test_write(SSL *tls, const void *bytes, int n)
 {
     struct wire *w = (struct wire *)tls;
+    if (w->broken)
+        return -1;
     append(&w->out, bytes, (size_t)n);
     return n;
 }
@@ -434,6 +437,322 @@ static void responses_test(void)
     free_request(r);
     dispose(&s);
 }
+/** Return whether two JSON values are equal. */
+static int same(const struct value *a, const struct value *b)
+{
+    return a && b && !subset(a, b) && !subset(b, a);
+}
+/** Return the JSON body of a whole response on the wire, or NULL. */
+static struct value *wire_json(const struct buffer *out)
+{
+    const char *at = out->data ? strstr(out->data, "\r\n\r\n") : NULL;
+    return at ? parse(at + 4) : NULL;
+}
+/** Return the events of a chunked event stream on the wire, one per chunk,
+ * as objects with the event's name and its parsed data; NULL when the
+ * chunks do not reach their end. */
+static struct value *wire_events(const struct buffer *out)
+{
+    const char *at = out->data ? strstr(out->data, "\r\n\r\n") : NULL;
+    struct value *events = value('a');
+    if (at)
+        at += 4;
+    while (at) {
+        char *end, *chunk, *row, *next;
+        unsigned long n = strtoul(at, &end, 16);
+        size_t offset = (size_t)(end - out->data) + 2;
+        struct value *e, *data;
+        if (end == at || strncmp(end, "\r\n", 2) || offset > out->len)
+            break;
+        if (!n)
+            return events;
+        if (n + 2 > out->len - offset || strncmp(end + 2 + n, "\r\n", 2))
+            break;
+        chunk = allocate(n + 1);
+        memcpy(chunk, end + 2, n);
+        chunk[n] = 0;
+        e = value('o');
+        for (row = chunk; (next = strchr(row, '\n')) != NULL; row = next + 1) {
+            *next = 0;
+            if (!strncmp(row, "event: ", 7))
+                add(e, "event", string(row + 7));
+            else if (!strncmp(row, "data: ", 6) && (data = parse(row + 6)) != NULL)
+                add(e, "data", data);
+        }
+        free(chunk);
+        add(events, NULL, e);
+        at = end + 2 + n + 2;
+    }
+    destroy(events);
+    return NULL;
+}
+/** Play GETs of the NULL-terminated PATHS against SCRIPT. Return the
+ * verdict, and in PLAYED the step each request played, 0 for none. */
+static int play(const char *script, const char *const paths[], unsigned played[])
+{
+    struct server s;
+    struct wire w = {0};
+    size_t i;
+    int result;
+    setup(&s, script);
+    for (i = 0; paths[i]; i++) {
+        struct request *r = get_request("GET", paths[i], "", "[]");
+        struct peer p = test_peer(&s, r, &w);
+        serve_request(&p);
+        played[i] = p.step;
+        free_request(r);
+    }
+    result = verdict(&s);
+    clear(&w.out);
+    dispose(&s);
+    return result;
+}
+static void steps_test(void)
+{
+    const char *unordered = "{\"steps\":[{\"unordered\":true,\"request\":{\"path\":\"/title\"},"
+                            "\"reply\":{\"status\":404}},{\"request\":{\"path\":\"/turn\"},"
+                            "\"reply\":{\"status\":404}}]}";
+    const char *repeated = "{\"steps\":[{\"unordered\":true,\"repeat\":true,\"request\":{\"path\":"
+                           "\"/log\"},\"reply\":{\"status\":404}},{\"request\":{\"path\":"
+                           "\"/turn\"},\"reply\":{\"status\":404}}]}";
+    const char *twice[] = {"/title", "/turn", "/title", NULL}, *turn[] = {"/turn", NULL};
+    const char *logs[] = {"/log", "/turn", "/log", "/log", NULL}, *alone[] = {"/log", NULL};
+    const char *steps[] = {"{\"steps\":[{\"unordered\":true,\"repeat\":true,\"request\":{\"path\":"
+                           "\"/log\"},\"reply\":{\"status\":404}}]}",
+                           "{\"steps\":[{\"repeat\":true,\"request\":{\"path\":\"/log\"},"
+                           "\"reply\":{\"status\":404}}]}"};
+    unsigned played[4];
+    size_t i;
+
+    check(play(unordered, twice, played) && played[0] == 1 && played[1] == 2 && !played[2],
+          "an unordered step plays once");
+    check(play(unordered, turn, played) && played[0] == 2,
+          "an unordered step that never plays fails the verdict");
+    check(!play(repeated, logs, played) && played[0] == 1 && played[1] == 2 && played[2] == 1 &&
+              played[3] == 1,
+          "a repeated step plays before and after the ordered step");
+    check(!play(repeated, turn, played) && played[0] == 2,
+          "a repeated step that never plays is not owed");
+    check(play(repeated, alone, played) && played[0] == 1,
+          "an ordered step that never plays fails the verdict");
+    for (i = 0; i < 2; i++) {
+        struct server s;
+        int prepared;
+        memset(&s, 0, sizeof(s));
+        s.script = parse(steps[i]);
+        prepared = prepare_steps(&s, get(s.script, "steps"));
+        check(prepared == !i, i ? "a repeated step that is not unordered is refused"
+                                : "a repeated unordered step is accepted");
+        destroy(s.script);
+        free(s.steps);
+    }
+}
+/** Check a Messages result given as text blocks, and rebuild both forms of
+ * a reply from the bytes on the wire. */
+static void messages_replies(void)
+{
+    struct value *step = parse(
+        "{\"results\":[{\"id\":\"t1\",\"equals\":\"expected\\n\"}],\"reply\":[{\"type\":\"text\","
+        "\"text\":\"Checking the fixture.\"},{\"type\":\"tool_use\",\"id\":\"t2\",\"name\":"
+        "\"Bash\",\"input\":{\"command\":\"printf expected\"}}]}");
+    struct request *r = get_request(
+        "POST", "/v1/messages?beta=true",
+        "{\"model\":\"claude-sonnet-4-6\",\"stream\":true,\"max_tokens\":512,\"messages\":[{"
+        "\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":"
+        "\"Bash\",\"input\":{}}]},{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\","
+        "\"tool_use_id\":\"t1\",\"content\":[{\"type\":\"text\",\"text\":\"wrong\"}]}]}]}",
+        "[[\"x-api-key\",\"rach2-offline-dummy-key\"],[\"anthropic-version\",\"2023-06-01\"],"
+        "[\"Content-Type\",\"application/json\"]]");
+    const struct value *reply = get(step, "reply");
+    const char *why = protocol_check("anthropic", step, r);
+    struct server s;
+    struct wire w = {0};
+    struct peer p;
+    int stream;
+
+    check(why && !strcmp(why, "wrong tool result: t1"),
+          "Messages rejects a wrong result in text blocks");
+    setup(&s, "{\"steps\":[]}");
+    for (stream = 1; stream >= 0; stream--) {
+        struct value *events, *whole;
+        const struct value *e, *last = NULL, *before = NULL;
+        struct buffer body = {0}, arguments = {0};
+        struct value *input = NULL;
+        size_t deltas = 0;
+
+        set(step, "stream", json_boolean(stream));
+        p = test_peer(&s, NULL, &w);
+        check(!protocol_validate("anthropic", step) && protocol_reply("anthropic", step, &p),
+              "Messages writes both forms of a reply");
+        if (!stream) {
+            whole = wire_json(&w.out);
+            check(whole && same(get(whole, "content"), reply) &&
+                      !strcmp(field(whole, "stop_reason"), "tool_use"),
+                  "Messages whole response has the step's content and the call's stop");
+            destroy(whole);
+            clear(&w.out);
+            continue;
+        }
+        events = wire_events(&w.out);
+        for (e = events ? events->child : NULL; e; e = e->next) {
+            const struct value *data = get(e, "data"), *delta = get(data, "delta");
+            before = last;
+            last = e;
+            if (strcmp(field(e, "event"), "content_block_delta"))
+                continue;
+            deltas++;
+            if (number(data, "index", -1) == 0)
+                putsb(&body, field(delta, "text"));
+            else if (number(data, "index", -1) == 1)
+                putsb(&arguments, field(delta, "partial_json"));
+        }
+        if (arguments.data)
+            input = parse(arguments.data);
+        check(events && events->child && !strcmp(field(events->child, "event"), "message_start") &&
+                  !strcmp(field(last, "event"), "message_stop") &&
+                  !strcmp(field(get(get(before, "data"), "delta"), "stop_reason"), "tool_use"),
+              "Messages stream starts, gives the call's stop and stops");
+        check(deltas > 2 && body.data && !strcmp(body.data, field(reply->child, "text")) &&
+                  same(input, get(reply->child->next, "input")),
+              "Messages stream deltas rebuild the text and the call's arguments");
+        destroy(input);
+        destroy(events);
+        clear(&body);
+        clear(&arguments);
+        clear(&w.out);
+    }
+    free_request(r);
+    destroy(step);
+    dispose(&s);
+}
+/** Return whether the Gemini RESPONSES, N of them, rebuild the text
+ * "Checking the fixture." and the one CALL with its signature, and whether
+ * the last finishes. */
+static int gemini_rebuilt(const struct value *responses, size_t n, const struct value *call)
+{
+    const struct value *r, *candidate = NULL;
+    struct buffer body = {0};
+    size_t calls = 0, total = 0;
+    int ok = 1;
+    for (r = responses->child; r; r = r->next, total++) {
+        const struct value *candidates = get(r, "candidates"), *parts, *part;
+        candidate = candidates && candidates->type == 'a' ? candidates->child : NULL;
+        parts = get(get(candidate, "content"), "parts");
+        for (part = parts && parts->type == 'a' ? parts->child : NULL; part; part = part->next)
+            if (get(part, "functionCall"))
+                ok &= !calls++ && same(part, call);
+            else
+                putsb(&body, field(part, "text"));
+    }
+    ok &= calls == 1 && total == n && body.data && !strcmp(body.data, "Checking the fixture.") &&
+          !strcmp(field(candidate, "finishReason"), "STOP");
+    clear(&body);
+    return ok;
+}
+/** Check a Gemini request's model, prompt, system instruction and
+ * declarations, and rebuild both forms of a reply from the wire. */
+static void gemini_replies(void)
+{
+    const char *body =
+        "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"hello\"}]},{\"role\":\"model\","
+        "\"parts\":[{\"functionCall\":{\"id\":\"c1\",\"name\":\"read\",\"args\":{}},"
+        "\"thoughtSignature\":\"cmFjaDItc2lnbmF0dXJlLWMx\"}]},{\"role\":\"user\",\"parts\":[{"
+        "\"functionResponse\":{\"id\":\"c1\",\"name\":\"read\",\"response\":{\"output\":\"ok\"}}}]}"
+        "],\"tools\":[{\"functionDeclarations\":[{\"name\":\"read\"}]}]}";
+    const char *headers_json = "[[\"x-goog-api-key\",\"rach2-offline-dummy-key\"],"
+                               "[\"Content-Type\",\"application/json\"]]";
+    static const char *const fields[][3] = {{"prompt", "absent", "prompt"},
+                                            {"system", "absent", "system"},
+                                            {"tools", NULL, "declaration"}};
+    struct value *step = parse(
+        "{\"results\":[{\"id\":\"c1\",\"equals\":\"ok\"}],\"reply\":[{\"text\":\"Checking the "
+        "fixture.\"},{\"functionCall\":{\"id\":\"c2\",\"name\":\"read\",\"args\":{\"path\":"
+        "\"x\"}}}]}");
+    struct value *call =
+        parse("{\"functionCall\":{\"id\":\"c2\",\"name\":\"read\",\"args\":{"
+              "\"path\":\"x\"}},\"thoughtSignature\":\"cmFjaDItc2lnbmF0dXJlLWMy\"}");
+    struct request *r = get_request("POST", "/v1beta/models/other:streamGenerateContent?alt=sse",
+                                    body, headers_json);
+    const char *why = protocol_check("gemini", step, r);
+    struct server s;
+    struct wire w = {0};
+    struct peer p;
+    size_t i;
+    int stream;
+
+    check(why && strstr(why, "expected POST"), "Gemini rejects another model's path");
+    free_request(r);
+    r = get_request("POST", "/v1beta/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse",
+                    body, headers_json);
+    check(!protocol_check("gemini", step, r), "Gemini takes the step's model");
+    for (i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+        struct value *changed = clone(step);
+        set(changed, fields[i][0], fields[i][1] ? string(fields[i][1]) : parse("[\"view_file\"]"));
+        why = protocol_check("gemini", changed, r);
+        check(why && strstr(why, fields[i][2]),
+              "Gemini rejects a request without the step's prompt, system or declaration");
+        destroy(changed);
+    }
+    setup(&s, "{\"steps\":[]}");
+    for (stream = 1; stream >= 0; stream--) {
+        struct value *responses = value('a'), *events = NULL;
+        const struct value *e;
+
+        set(step, "stream", json_boolean(stream));
+        p = test_peer(&s, NULL, &w);
+        check(!protocol_validate("gemini", step) && protocol_reply("gemini", step, &p),
+              "Gemini writes both forms of a reply");
+        if (stream) {
+            events = wire_events(&w.out);
+            for (e = events ? events->child : NULL; e; e = e->next)
+                add(responses, NULL, clone(get(e, "data")));
+        } else
+            add(responses, NULL, wire_json(&w.out));
+        check(gemini_rebuilt(responses, stream ? 4 : 1, call),
+              "Gemini responses rebuild the text and the signed call, and the last finishes");
+        destroy(events);
+        destroy(responses);
+        clear(&w.out);
+    }
+    free_request(r);
+    destroy(call);
+    destroy(step);
+    dispose(&s);
+}
+/** Play an unordered Gemini step, chosen by its model, before and after the
+ * ordered one. */
+static void gemini_unordered(void)
+{
+    static const char *const orders[][3] = {{"main", "lite", "main"}, {"lite", "main", "main"}};
+    size_t i, j;
+    for (i = 0; i < 2; i++) {
+        struct server s;
+        struct wire w = {0};
+        unsigned played[3];
+        setup(&s, "{\"protocol\":\"gemini\",\"steps\":[{\"unordered\":true,\"model\":\"lite\","
+                  "\"reply\":[{\"text\":\"Title\"}]},{\"model\":\"main\",\"reply\":[{\"text\":"
+                  "\"done\"}]}]}");
+        for (j = 0; j < 3; j++) {
+            char path[100];
+            struct request *r;
+            struct peer p;
+            snprintf(path, sizeof(path), "/v1beta/models/%s:streamGenerateContent?alt=sse",
+                     orders[i][j]);
+            r = get_request("POST", path, "{\"contents\":[{\"role\":\"user\",\"parts\":[]}]}",
+                            "[[\"x-goog-api-key\",\"rach2-offline-dummy-key\"],"
+                            "[\"Content-Type\",\"application/json\"]]");
+            p = test_peer(&s, r, &w);
+            serve_request(&p);
+            played[j] = p.step;
+            free_request(r);
+            clear(&w.out);
+        }
+        check(played[0] == (i ? 1u : 2u) && played[1] == (i ? 2u : 1u) && !played[2] &&
+                  s.steps[0].taken && s.steps[1].taken,
+              "a Gemini unordered step plays when its model is asked, before or after");
+        dispose(&s);
+    }
+}
 static void parser(void)
 {
     const char *bad[] = {"{",  "[",  "{\"a\"",       "{\"a\":",           "[1,",        "01",
@@ -491,6 +810,8 @@ static void held_test(void)
     service_thread_join(thread);
     check(s.requests == 1 && !verdict(&s) && strstr(turn.out.data, "404 Not Found"),
           "release plays the held step without numbering control requests");
+    check(release.out.data && strstr(release.out.data, "released\n"),
+          "release control answers that it released the reply");
     free_request(control);
     free_request(r);
     clear(&turn.out);
@@ -581,6 +902,32 @@ static void websocket_lengths(void)
         clear(&w.out);
         dispose(&s);
     }
+}
+/** A client that sends the expected message and resets before the upgrade's
+ * reply is written fails the step once, and does not play it. */
+static void websocket_reset_test(void)
+{
+    struct server s;
+    struct wire w = {0};
+    struct buffer input = {0};
+    struct request *r;
+    struct peer p;
+    setup(&s, "{\"steps\":[{\"request\":{\"path\":\"/"
+              "ws\"},\"reply\":{\"websocket\":[{\"expect\":\"hello\"},{\"send\":\"bye\"}]}}]}");
+    r = get_request(
+        "GET", "/ws", "",
+        "[[\"Upgrade\",\"websocket\"],[\"Sec-WebSocket-Key\",\"dGhlIHNhbXBsZSBub25jZQ==\"]]");
+    input_frame(&input, 1, 1, "hello");
+    w.in = (const unsigned char *)input.data;
+    w.left = input.len;
+    w.broken = 1;
+    p = test_peer(&s, r, &w);
+    serve_request(&p);
+    check(verdict(&s) && s.failures == 1 && !s.steps[0].played,
+          "reset before the upgrade's reply fails the WebSocket step once");
+    clear(&input);
+    free_request(r);
+    dispose(&s);
 }
 static void http_test(void)
 {
@@ -828,12 +1175,17 @@ int main(void)
     audit_test();
     parser();
     selection();
+    steps_test();
     literal();
     messages();
+    messages_replies();
     gemini();
+    gemini_replies();
+    gemini_unordered();
     responses_test();
     held_test();
     websocket_test();
+    websocket_reset_test();
     websocket_lengths();
     http_test();
     if (!failures) {
