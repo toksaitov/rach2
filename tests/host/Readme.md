@@ -58,6 +58,8 @@ A path on a `host-deps:` or `host-cflags:` line that begins `vendor/` names a ve
 
 `etude_platform_hosttest.c --retention-only` checks native retention and selected-site reference commands in temporary owned directories. It covers unchanged old bundles, active and unknown evidence, failed or incomplete histories, changed and missing proof closure, accepted baselines, open issues, stale snapshots, logical byte limits, reader use, fractional timestamps, native Windows sequence receipts, concurrent allocation, site mismatch and create-once forecast outputs. The same compiled fixture supplies the read-only GitHub response and estimator roles. No real evidence root or GitHub state is changed.
 
+`etude_scenario_hosttest --real-forward-only` runs only the existing real command-forwarding row, including its exchange, relay closure, restricted-network assertions and cleanup checks. It uses the prepared kernel and images for `ARCH` and the QEMU programs on `PATH`.
+
 ### Shared code
 
 * `compat/pathmax_host.h` includes the host's pathname limit for POSIX tests. On macOS it includes `sys/syslimits.h` explicitly, since Clang's `limits.h` omits the system headers under `-ffreestanding`.

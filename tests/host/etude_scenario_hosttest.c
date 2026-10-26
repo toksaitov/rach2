@@ -4035,8 +4035,9 @@ static void test_stand_in(void)
     etude_store_close(s.store);
 }
 
-/** Run the real rows and the real forward row. */
-static void test_real(void)
+/** Run the real rows and the real forward row; with `forward_only` nonzero,
+ * skip the real rows and run only the forward row. */
+static void test_real(int forward_only)
 {
     struct site s;
     size_t i;
@@ -4046,8 +4047,9 @@ static void test_real(void)
         fails++;
         return;
     }
-    for (i = 0; i < sizeof(real_rows) / sizeof(real_rows[0]); i++)
-        run_row(&real_rows[i], &s, NULL);
+    if (!forward_only)
+        for (i = 0; i < sizeof(real_rows) / sizeof(real_rows[0]); i++)
+            run_row(&real_rows[i], &s, NULL);
     run_row(&forward_rows[1], &s, NULL);
     CHECK(etude_store_check(s.store, s.disk, NULL) == 0, "the real disk artifact is unchanged");
     etude_store_close(s.store);
@@ -4072,6 +4074,32 @@ static void test_client_waits(void)
  * and exit; with one argument, the invocation, enter the library's ordinary
  * scenario entry point. Windows constructors do not receive argc and argv.
  */
+/** Run one group of rows alone, in the scratch directory of the fixtures,
+ * for an option that asks for that group only. */
+static int run_only(void (*group)(void))
+{
+    if (setenv("TMPDIR", fix_dir(), 1) != 0)
+        return 1;
+    group();
+    if (!fails)
+        fix_passed();
+    return fails != 0;
+}
+
+/** Run the real forward row without the other real rows. */
+static void test_real_forward(void)
+{
+    test_real(1);
+}
+
+/** Write the backslashes of `path` as forward slashes. */
+static void forward_slashes(char *path)
+{
+    for (; *path; path++)
+        if (*path == '\\')
+            *path = '/';
+}
+
 int main(int argc, char **argv)
 {
     const char *fake = getenv("ETUDE_FAKE_QEMU");
@@ -4087,9 +4115,7 @@ int main(int argc, char **argv)
     if (argc == 4 && strcmp(argv[1], "--scenario-guest") == 0)
         return scenario_guest_actor(argv[2]);
 #endif
-    for (char *path = self; *path; path++)
-        if (*path == '\\')
-            *path = '/';
+    forward_slashes(self);
     if (argc == 2 && !strcmp(argv[1], "--service-stop-only")) {
         if (setenv("TMPDIR", fix_dir(), 1))
             return 1;
@@ -4097,14 +4123,10 @@ int main(int argc, char **argv)
     }
     if (argc == 2 && !strcmp(argv[1], "--net-bulk-only"))
         return etude_test_scenario_cleanup() || etude_test_netcase_bulk();
-    if (argc == 2 && !strcmp(argv[1], "--client-waits-only")) {
-        if (setenv("TMPDIR", fix_dir(), 1) != 0)
-            return 1;
-        test_client_waits();
-        if (!fails)
-            fix_passed();
-        return fails != 0;
-    }
+    if (argc == 2 && !strcmp(argv[1], "--client-waits-only"))
+        return run_only(test_client_waits);
+    if (argc == 2 && !strcmp(argv[1], "--real-forward-only"))
+        return run_only(test_real_forward);
     if (argc == 2)
         return etude_case_main(argc, argv);
     if (argc >= 3 && strcmp(argv[1], "tool") == 0)
@@ -4118,7 +4140,7 @@ int main(int argc, char **argv)
     if (setenv("TMPDIR", fix_dir(), 1) != 0)
         exit(1);
     test_stand_in();
-    test_real();
+    test_real(0);
     if (fails != 0)
         exit(1);
     fix_passed();

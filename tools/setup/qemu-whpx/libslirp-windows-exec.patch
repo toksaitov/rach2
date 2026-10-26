@@ -1,0 +1,287 @@
+--- a/src/misc.c
++++ b/src/misc.c
+@@ -4,6 +4,10 @@
+  */
+ 
+ #include "slirp.h"
++#ifdef _WIN32
++#include <windows.h>
++#include <wchar.h>
++#endif
+ #ifdef G_OS_UNIX
+ #include <sys/un.h>
+ #endif
+@@ -133,6 +137,7 @@
+     return -1;
+ }
+ 
++#ifndef _WIN32
+ static void fork_exec_child_setup(gpointer data)
+ {
+ #ifndef _WIN32
+@@ -209,6 +214,245 @@
+ #pragma GCC diagnostic pop
+ #endif
+ 
++#endif /* !_WIN32 */
++
++#ifdef _WIN32
++/* Quote the parsed argv by the native CRT's command-line rules. */
++static wchar_t *fork_exec_command(gchar **argv)
++{
++    GString *line = g_string_new(NULL);
++    wchar_t *wide;
++
++    for (size_t i = 0; argv[i]; i++) {
++        const char *at = argv[i];
++        if (i) {
++            g_string_append_c(line, ' ');
++        }
++        g_string_append_c(line, '"');
++        while (*at) {
++            size_t slashes = 0;
++            while (*at == '\\') {
++                slashes++;
++                at++;
++            }
++            if (*at == '"' || !*at) {
++                slashes = 2 * slashes + (*at == '"');
++            }
++            while (slashes--) {
++                g_string_append_c(line, '\\');
++            }
++            if (*at) {
++                g_string_append_c(line, *at++);
++            }
++        }
++        g_string_append_c(line, '"');
++    }
++    wide = (wchar_t *)g_utf8_to_utf16(line->str, -1, NULL, NULL, NULL);
++    g_string_free(line, TRUE);
++    return wide;
++}
++
++struct fork_exec_bridge {
++    SOCKET socket;
++    HANDLE input, output, gate;
++    LONG references;
++    gboolean ready;
++};
++
++/* The last worker closes the native socket and the startup event. */
++static void fork_exec_bridge_release(struct fork_exec_bridge *bridge)
++{
++    if (InterlockedDecrement(&bridge->references) != 0) {
++        return;
++    }
++    if (bridge->input) {
++        CloseHandle(bridge->input);
++    }
++    if (bridge->output) {
++        CloseHandle(bridge->output);
++    }
++    if (bridge->gate) {
++        CloseHandle(bridge->gate);
++    }
++    if (bridge->socket != INVALID_SOCKET) {
++        closesocket(bridge->socket);
++    }
++    g_free(bridge);
++}
++
++/* Deliver guest bytes to the child's pipe, then publish EOF to the child. */
++static DWORD WINAPI fork_exec_bridge_input(void *argument)
++{
++    struct fork_exec_bridge *bridge = argument;
++    char buffer[4096];
++    int count;
++
++    if (WaitForSingleObject(bridge->gate, INFINITE) == WAIT_OBJECT_0 && bridge->ready) {
++        while ((count = recv(bridge->socket, buffer, sizeof(buffer), 0)) > 0) {
++            DWORD at = 0, written;
++            while (at < (DWORD)count) {
++                if (!WriteFile(bridge->input, buffer + at, count - at, &written, NULL) ||
++                    !written) {
++                    goto done;
++                }
++                at += written;
++            }
++        }
++    }
++done:
++    CloseHandle(bridge->input);
++    bridge->input = NULL;
++    shutdown(bridge->socket, SD_RECEIVE);
++    fork_exec_bridge_release(bridge);
++    return 0;
++}
++
++/* Deliver child output to the guest, retaining the independent half-close. */
++static DWORD WINAPI fork_exec_bridge_output(void *argument)
++{
++    struct fork_exec_bridge *bridge = argument;
++    char buffer[4096];
++    DWORD count;
++
++    if (WaitForSingleObject(bridge->gate, INFINITE) == WAIT_OBJECT_0 && bridge->ready) {
++        while (ReadFile(bridge->output, buffer, sizeof(buffer), &count, NULL) && count) {
++            DWORD at = 0;
++            while (at < count) {
++                int written = send(bridge->socket, buffer + at, count - at, 0);
++                if (written <= 0) {
++                    goto done;
++                }
++                at += written;
++            }
++        }
++    }
++done:
++    CloseHandle(bridge->output);
++    bridge->output = NULL;
++    shutdown(bridge->socket, SD_SEND);
++    fork_exec_bridge_release(bridge);
++    return 0;
++}
++
++/* The child receives pipes; only the bridge workers use native SOCKETs. */
++static gboolean fork_exec_windows(gchar **argv, SOCKET socket, GError **err)
++{
++    WSAPROTOCOL_INFOW protocol;
++    struct fork_exec_bridge *bridge = g_new0(struct fork_exec_bridge, 1);
++    SECURITY_ATTRIBUTES security = { sizeof(security), NULL, TRUE };
++    HANDLE inherit[2] = { NULL, NULL };
++    HANDLE workers[2] = { NULL, NULL };
++    STARTUPINFOEXW startup = {0};
++    PROCESS_INFORMATION child = {0};
++    SIZE_T bytes = 0;
++    DWORD error = ERROR_INVALID_PARAMETER;
++    gboolean started = FALSE, attributes_ready = FALSE, created = FALSE;
++    gchar *file = g_path_is_absolute(argv[0]) ? g_strdup(argv[0])
++                                             : g_find_program_in_path(argv[0]);
++    wchar_t *program = file ? (wchar_t *)g_utf8_to_utf16(file, -1, NULL, NULL, NULL) : NULL;
++    wchar_t *command = fork_exec_command(argv);
++
++    bridge->socket = INVALID_SOCKET;
++    bridge->references = 1;
++    if (!program || !command || wcslen(command) >= 32767) {
++        goto done;
++    }
++    if (WSADuplicateSocketW(socket, GetCurrentProcessId(), &protocol)) {
++        error = WSAGetLastError();
++        goto done;
++    }
++    bridge->socket = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO,
++                                FROM_PROTOCOL_INFO, &protocol, 0, WSA_FLAG_NO_HANDLE_INHERIT);
++    if (bridge->socket == INVALID_SOCKET) {
++        error = WSAGetLastError();
++        goto done;
++    }
++    bridge->gate = CreateEventW(NULL, TRUE, FALSE, NULL);
++    if (!bridge->gate || !CreatePipe(&inherit[0], &bridge->input, &security, 0) ||
++        !CreatePipe(&bridge->output, &inherit[1], &security, 0) ||
++        !SetHandleInformation(bridge->input, HANDLE_FLAG_INHERIT, 0) ||
++        !SetHandleInformation(bridge->output, HANDLE_FLAG_INHERIT, 0)) {
++        error = GetLastError();
++        goto done;
++    }
++    InitializeProcThreadAttributeList(NULL, 1, 0, &bytes);
++    startup.lpAttributeList = g_malloc0(bytes);
++    if (!InitializeProcThreadAttributeList(startup.lpAttributeList, 1, 0, &bytes)) {
++        error = GetLastError();
++        goto done;
++    }
++    attributes_ready = TRUE;
++    if (!UpdateProcThreadAttribute(startup.lpAttributeList, 0,
++                                  PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
++                                  inherit, sizeof(inherit), NULL, NULL)) {
++        error = GetLastError();
++        goto done;
++    }
++    startup.StartupInfo.cb = sizeof(startup);
++    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
++    startup.StartupInfo.hStdInput = inherit[0];
++    startup.StartupInfo.hStdOutput = inherit[1];
++    startup.StartupInfo.hStdError = inherit[1];
++    created = CreateProcessW(program, command, NULL, NULL, TRUE,
++                            CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
++                            NULL, NULL, &startup.StartupInfo, &child);
++    if (!created) {
++        error = GetLastError();
++        goto done;
++    }
++    for (size_t i = 0; i < G_N_ELEMENTS(workers); i++) {
++        InterlockedIncrement(&bridge->references);
++        workers[i] = CreateThread(NULL, 0,
++                                  i ? fork_exec_bridge_output : fork_exec_bridge_input,
++                                  bridge, 0, NULL);
++        if (!workers[i]) {
++            error = GetLastError();
++            fork_exec_bridge_release(bridge);
++            goto done;
++        }
++    }
++    if (ResumeThread(child.hThread) == (DWORD)-1) {
++        error = GetLastError();
++        goto done;
++    }
++    bridge->ready = TRUE;
++    started = TRUE;
++done:
++    if (created) {
++        if (!started) {
++            TerminateProcess(child.hProcess, 1);
++            WaitForSingleObject(child.hProcess, INFINITE);
++        }
++        CloseHandle(child.hThread);
++        CloseHandle(child.hProcess);
++    }
++    for (size_t i = 0; i < G_N_ELEMENTS(inherit); i++) {
++        if (inherit[i]) {
++            CloseHandle(inherit[i]);
++        }
++        if (workers[i]) {
++            CloseHandle(workers[i]);
++        }
++    }
++    if (attributes_ready) {
++        DeleteProcThreadAttributeList(startup.lpAttributeList);
++    }
++    g_free(startup.lpAttributeList);
++    if (bridge->gate) {
++        SetEvent(bridge->gate);
++    }
++    fork_exec_bridge_release(bridge);
++    g_free(program);
++    g_free(command);
++    g_free(file);
++    if (!started) {
++        g_set_error(err, G_SPAWN_ERROR, G_SPAWN_ERROR_FAILED,
++                    "native relay launch failed: %lu", (unsigned long)error);
++    }
++    return started;
++}
++#endif
++
+ int fork_exec(struct socket *so, const char *ex)
+ {
+     GError *err = NULL;
+@@ -228,13 +472,19 @@
+     if (!g_shell_parse_argv(ex, &argc, &argv, &err)) {
+         g_critical("fork_exec invalid command: %s\nerror: %s", ex, err->message);
+         g_error_free(err);
++        closesocket(sp[0]);
++        closesocket(sp[1]);
+         return 0;
+     }
+ 
++#ifdef _WIN32
++    fork_exec_windows(argv, sp[1], &err);
++#else
+     g_spawn_async_with_fds(NULL /* cwd */, argv, NULL /* env */,
+                            G_SPAWN_SEARCH_PATH, fork_exec_child_setup,
+                            NULL /* data */, NULL /* child_pid */, sp[1], sp[1],
+                            sp[1], &err);
++#endif
+     g_strfreev(argv);
+ 
+     if (err) {
