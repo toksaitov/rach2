@@ -93,8 +93,13 @@ static int make_dirs(const char *path, int parents)
 
     if (fmt(buf, sizeof(buf), "%s", path) != 0)
         return -1;
-    /* A drive's root, as in C:\, is there and is not made. */
-    p = buf[0] != '\0' && buf[1] == ':' ? buf + 2 : buf;
+    /* A drive's root, as in C:\ or \\?\C:\, is there and is not made. */
+    p = buf;
+#ifdef _WIN32
+    if (strncmp(p, "\\\\?\\", 4) == 0)
+        p += 4;
+#endif
+    p = p[0] != '\0' && p[1] == ':' ? p + 2 : p;
     for (p++; *p; p++) {
         char sep = *p;
 
