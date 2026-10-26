@@ -72,6 +72,10 @@ ETUDE_RUN_SRC = $(ETUDE_AUTHORITY_SRC) $(ETUDE_AUTHORITY_RUN_SRC) $(ETUDE_HOST_P
                 tools/etude/reference.c \
                 tools/etude/routine_evidence.c tools/etude/routine_reader.c \
                 tools/etude/routine_producer.c tools/etude/routine_jobs.c \
+                tools/etude/routine_inputs.c tools/etude/routine_prepare.c \
+                tools/etude/routine_entry.c tools/etude/routine_sequence.c \
+                tools/etude/routine_owner_entry.c tools/etude/routine_route.c \
+                tools/etude/routine_remote.c \
                 tools/etude/posix/run_suites.c tools/etude/posix/legacy.c \
                 tools/etude/preparation_record.c \
                 tools/etude/posix/legacy_set.c tools/etude/posix/legacy_cases.c \
@@ -118,7 +122,8 @@ ETUDE_WIN_FILE_SRC = tools/etude/win/winsys.c tools/etude/win/winfmt.c tools/etu
 ETUDE_WIN_EXEC_SRC = tools/etude/win/exec.c tools/etude/win/winexec.c \
                      $(ETUDE_WIN_FILE_SRC) tools/etude/capture.c
 ETUDE_WIN_SRC = $(ETUDE_CHECK_SRC) $(ETUDE_RUN_SRC) $(ETUDE_WIN_EXEC_SRC) \
-                tools/etude/posix/qemu.c tools/etude/win/bridge.c tools/etude/win/hold.c
+                tools/etude/posix/qemu.c tools/etude/posix/remote.c \
+                tools/etude/win/bridge.c tools/etude/win/hold.c
 ETUDE_CASE_LIB_WIN_SRC = tools/etude/posix/scenario.c tools/etude/posix/case_main.c \
                          tools/etude/serial.c tools/etude/processor.c \
                          tools/etude/posix/qemu.c tools/etude/qemu_profile.c \
