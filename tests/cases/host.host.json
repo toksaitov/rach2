@@ -2819,7 +2819,7 @@
         },
         {
           "kind": "injected_delay",
-          "where": "tests/cases/host/host_suite_probe.c:118",
+          "where": "tests/cases/host/host_suite_probe.c:137",
           "assumes": "The child lingers so the driver can observe and cancel it.",
           "uncertainty_us": null
         }

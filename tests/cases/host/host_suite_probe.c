@@ -88,6 +88,25 @@ static int signal_probe(void)
     return a.sa_handler != SIG_DFL || b.sa_handler != SIG_DFL || sigismember(&mask, SIGINT);
 }
 
+/**
+ * Record the process ID in `MEET/stuck` and wait until a signal ends the
+ * process. The record appears by rename, complete, since the fixture reads it
+ * as soon as the name exists. Return 4 when it cannot be written.
+ */
+static int stuck(const char *meet)
+{
+    char part[8192], path[8192];
+    snprintf(part, sizeof(part), "%s/stuck.part", meet);
+    snprintf(path, sizeof(path), "%s/stuck", meet);
+    FILE *f = fopen(part, "w");
+    if (!f)
+        return 4;
+    if (fprintf(f, "%ld\n", (long)getpid()) < 0 || fclose(f) != 0 || rename(part, path))
+        return 4;
+    for (;;)
+        pause();
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 2 && !strcmp(argv[1], "--selftest"))
@@ -127,16 +146,8 @@ int main(int argc, char **argv)
         puts("script: it failed");
         return 4;
     }
-    if (!strcmp(mode, "stuck")) {
-        snprintf(path, sizeof(path), "%s/stuck", meet);
-        FILE *f = fopen(path, "w");
-        if (!f)
-            return 4;
-        fprintf(f, "%ld\n", (long)getpid());
-        fclose(f);
-        for (;;)
-            pause();
-    }
+    if (!strcmp(mode, "stuck"))
+        return stuck(meet);
     if (!strcmp(mode, "meet")) {
         snprintf(path, sizeof(path), "%s/mine", tmp);
         if (!touch(path, 1))
