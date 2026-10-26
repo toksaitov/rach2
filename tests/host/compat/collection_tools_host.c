@@ -315,7 +315,8 @@ static int collection_prepared_job(const struct etude_tooling_job *job)
     return host_command(make, NULL, NULL, NULL, 0);
 }
 
-/* Replace only the existing tooling transport, not staging or translation. */
+/* Replace only the existing tooling transport, not staging or translation.
+ * Only preparation may ask for a network; any other job ends with status 3. */
 int etude_tooling_run(const struct etude_tooling_site *site, const struct etude_tooling_job *job,
                       struct etude_tooling_result *result)
 {
@@ -344,6 +345,8 @@ int etude_tooling_run(const struct etude_tooling_site *site, const struct etude_
     }
     if (getenv("COLLECTION_TEST_ROW") && !strcmp(getenv("COLLECTION_TEST_ROW"), "prepare"))
         rc = collection_prepared_job(job);
+    else if (job->network)
+        rc = 3;
     else if (getenv("COLLECTION_TEST_ROW") && !strcmp(getenv("COLLECTION_TEST_ROW"), "style")) {
         FILE *file = fopen(job->script, "rb");
         char text[8192];
