@@ -1107,6 +1107,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "etude_route",
+          "checks": "tests/host/etude_route_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "etude_runtime",
           "checks": "tests/host/etude_runtime_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
