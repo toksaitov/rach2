@@ -1063,6 +1063,10 @@ static int serve(const char *script, const char *record_path, const char *certdi
     result = 0;
     while (!stopped && service_parent_alive()) {
         service_socket fd;
+        if (service_stop_requested()) {
+            stop(SIGTERM);
+            break;
+        }
         if (!service_ready(listener, 200))
             continue;
         fd = accept(listener, NULL, NULL);
@@ -1173,7 +1177,7 @@ static int initialize(void)
     _setmode(0, _O_BINARY);
     _setmode(1, _O_BINARY);
 #endif
-    return service_init();
+    return service_init() || service_stop_listen() ? -1 : 0;
 }
 int main(int argc, char **argv)
 {

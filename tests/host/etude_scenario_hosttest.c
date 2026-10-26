@@ -21,6 +21,7 @@
  * host-deps: tools/etude/guest/wire.c
  * host-deps: tools/etude/volume/volume.c
  * host-deps: utils/sha256.c
+ * host-inputs: tests/host/compat/scenario_service_stop.c
  * host-cflags: -I tools/etude/include -I tools/etude -I tools/etude/guest
  * host-cflags: -I utils -Wall -Wextra -Werror
  * host-first: it runs for minutes
@@ -521,12 +522,16 @@ static int relay(const char *port)
  * directory, so that the test finds it among the processes; and `relay
  * PORT` is the relay of a guest forward.
  */
+#include "compat/scenario_service_stop.c"
+
 static int tool(int argc, char **argv)
 {
     char line[256];
     FILE *f;
     long pid = 0;
 
+    if (argc == 4 && strcmp(argv[2], "service-stop") == 0)
+        return service_stop_tool(argv[3]);
     if (argc == 5 && strcmp(argv[2], "scan") == 0)
         return file_has(argv[3], argv[4]) ? 0 : 1;
     if (argc == 6 && strcmp(argv[2], "peer") == 0)
@@ -2028,6 +2033,8 @@ static int scenario_forward(struct etude_case *c, int real)
  * unknown row. */
 static int scenario_services(struct etude_case *c, const char *row)
 {
+    if (strncmp(row, "service-stop-", 13) == 0)
+        return scenario_service_stop(c, row);
     if (strncmp(row, "capture-", 8) == 0)
         return scenario_capture(c, strcmp(row, "capture-keep") == 0);
     if (strcmp(row, "pair") == 0)
@@ -3269,6 +3276,15 @@ static const struct row pair_row[] = {
      "disk", 0, STEP_US, 0, 1, 1, 1, NULL, 0, NULL, 0},
 };
 
+static const struct row service_stop_rows[] = {
+    {"service-stop-pass", "disk", "serve finish", "ready verdict status cleanup", NULL, 0, STEP_US,
+     0, 1, 0, 1, NULL, 0, NULL, 0},
+    {"service-stop-fail", "disk", "serve finish", "ready verdict status cleanup", NULL, 0, STEP_US,
+     0, 1, 0, 1, NULL, 0, NULL, 0},
+    {"service-stop-ignore", "disk", "serve finish", "ready verdict status cleanup", NULL, 0,
+     STEP_US, 0, 1, 0, 1, NULL, 0, NULL, 0},
+};
+
 /* The row that runs while the others fail. */
 static const struct row hold_row[] = {
     {"hold", "disk", "serve first:alpha second:beta wait",
@@ -3481,6 +3497,20 @@ static int stand_in_site(struct site *s)
            stored(s->store, fix_path("initrd"), s->initrd) || stored(s->store, self, s->scanner) ||
            stored(s->store, inv, s->inv) || stored(s->store, kill_inv, s->killer) ||
            stored(s->store, fix_path("broken"), s->broken) || damage(s->store, s->broken);
+}
+
+static int service_cases_only(void)
+{
+    struct site site = {0};
+    if (stand_in_site(&site))
+        return 1;
+    for (size_t i = 0; i < sizeof service_stop_rows / sizeof *service_stop_rows; i++)
+        run_row(&service_stop_rows[i], &site, NULL);
+    etude_store_close(site.store);
+    if (!fails)
+        fix_passed();
+    puts(fails ? "service-stop: failed" : "service-stop: pass");
+    return fails != 0;
 }
 
 /** Give the path of `name` on PATH in `out`, or NULL when it is not there. */
@@ -3814,6 +3844,8 @@ static void test_stand_in(void)
         fails++;
         return;
     }
+    for (i = 0; i < sizeof service_stop_rows / sizeof *service_stop_rows; i++)
+        run_row(&service_stop_rows[i], &s, NULL);
     for (i = 0; i < sizeof(audio_rows) / sizeof(audio_rows[0]); i++)
         run_row(&audio_rows[i], &s, NULL);
     for (i = 0; i < sizeof(capture_rows) / sizeof(capture_rows[0]); i++)
@@ -3876,6 +3908,11 @@ int main(int argc, char **argv)
     for (char *path = self; *path; path++)
         if (*path == '\\')
             *path = '/';
+    if (argc == 2 && !strcmp(argv[1], "--service-stop-only")) {
+        if (setenv("TMPDIR", fix_dir(), 1))
+            return 1;
+        return service_cases_only();
+    }
     if (argc == 2)
         return etude_case_main(argc, argv);
     if (argc >= 3 && strcmp(argv[1], "tool") == 0)

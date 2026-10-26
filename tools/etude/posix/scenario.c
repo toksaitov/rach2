@@ -18,6 +18,7 @@
 
 #ifdef _WIN32
 #include "../win/files.h"
+#include "../win/winexec.h"
 #endif
 
 #include "../history_json.h"
@@ -4127,8 +4128,19 @@ static void service_end(struct etude_case_service *s, struct etude_termination *
 static void service_halt(struct etude_case_service *s)
 {
     if (!s->finished) {
-        etude_exec_cancel(s->p);
-        serve_until(s->c, service_finished, s, NULL, UINT64_MAX, 0);
+#ifdef _WIN32
+        const struct etude_exec_result *result = etude_proc_result(s->p);
+        const struct etude_pid *id = &result->process;
+        if (id->start_known && !etude_win_service_stop((DWORD)id->pid, id->start)) {
+            uint64_t now = posix_now_us(), grace = s->c->grace_us;
+            uint64_t until = grace < UINT64_MAX - now ? now + grace : UINT64_MAX;
+            serve_until(s->c, service_finished, s, NULL, until, 0);
+        }
+#endif
+        if (!s->finished) {
+            etude_exec_cancel(s->p);
+            serve_until(s->c, service_finished, s, NULL, UINT64_MAX, 0);
+        }
     }
 }
 

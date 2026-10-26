@@ -293,3 +293,59 @@ fail:
     close_socket(s);
     return INVALID_SOCKET;
 }
+
+/* The process identity is part of the event name, so PID reuse cannot stop
+ * a later service. The open process handle also verifies the birth. */
+static DWORD service_stop_name(HANDLE process, DWORD pid, wchar_t name[96], uint64_t *created)
+{
+    FILETIME birth, end, kernel, user;
+    if (!GetProcessTimes(process, &birth, &end, &kernel, &user))
+        return GetLastError();
+    *created = (uint64_t)birth.dwHighDateTime << 32 | birth.dwLowDateTime;
+    int n = swprintf(name, 96, L"Local\\rach2-etude-service-stop-%lu-%llu", (unsigned long)pid,
+                     (unsigned long long)*created);
+    return n < 0 || n >= 96 ? ERROR_INVALID_PARAMETER : 0;
+}
+
+DWORD etude_win_service_listen(HANDLE *event)
+{
+    wchar_t name[96];
+    uint64_t created;
+    if (!event)
+        return ERROR_INVALID_PARAMETER;
+    *event = NULL;
+    DWORD error = service_stop_name(GetCurrentProcess(), GetCurrentProcessId(), name, &created);
+    if (error)
+        return error;
+    SetLastError(ERROR_SUCCESS);
+    HANDLE opened = CreateEventW(NULL, TRUE, FALSE, name);
+    if (!opened)
+        return GetLastError();
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        CloseHandle(opened);
+        return ERROR_ALREADY_EXISTS;
+    }
+    *event = opened;
+    return 0;
+}
+
+DWORD etude_win_service_stop(DWORD pid, uint64_t created)
+{
+    wchar_t name[96];
+    uint64_t actual;
+    if (!pid || !created)
+        return ERROR_INVALID_PARAMETER;
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
+    if (!process)
+        return GetLastError();
+    DWORD error = service_stop_name(process, pid, name, &actual);
+    if (!error && (actual != created || WaitForSingleObject(process, 0) != WAIT_TIMEOUT))
+        error = ERROR_INVALID_PARAMETER;
+    HANDLE event = !error ? OpenEventW(EVENT_MODIFY_STATE, FALSE, name) : NULL;
+    if (!error)
+        error = !event || !SetEvent(event) ? GetLastError() : 0;
+    if (event)
+        CloseHandle(event);
+    CloseHandle(process);
+    return error;
+}

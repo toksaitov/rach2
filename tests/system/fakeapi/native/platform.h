@@ -38,6 +38,8 @@ typedef pthread_cond_t service_condition;
 #endif
 int service_init(void);
 int service_parent_alive(void);
+int service_stop_listen(void);
+int service_stop_requested(void);
 uint64_t service_monotonic(void);
 void service_pause(unsigned ms);
 int service_thread_start(service_thread *thread, void (*fn)(void *), void *arg);
