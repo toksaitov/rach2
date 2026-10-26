@@ -12,7 +12,10 @@
 #
 # Two kinds of source are compiled without an entry of their own. A fragment
 # that another source includes by name, as `ish/ish_syscalls.c` includes
-# `ish_syscalls.i386.c`, is compiled as part of that source's entry. A
+# `ish_syscalls.i386.c`, is compiled as part of that source's entry, and so is
+# one that a source of a database includes by a path relative to itself, as
+# `tests/host/etude_route_hosttest.c` includes
+# `../../tools/ci/fixtures/routine_route_actions_test.c`. A
 # fixture under tests/system/fixtures or tests/host/fixtures is compiled by
 # the test script that names it, with the flags the script sets, so no fixed
 # command describes it; such a source passes when a script under that same
@@ -41,7 +44,8 @@ fi
 # file that is already absolute taken as it is. The generator writes one
 # entry per line, and this reads that shape.
 known=
-trap 'rm -f ${known:+"$known"}' EXIT
+fragments=
+trap 'rm -f ${known:+"$known"} ${fragments:+"$fragments"}' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -56,15 +60,30 @@ cat "$DBDIR"/*.json | LC_ALL=C awk -F'"' '
     }' | python3 -c 'from pathlib import Path; import sys
 for line in sys.stdin:
     print(Path(line.rstrip("\n")).resolve())' | sort -u >"$known"
+# The absolute path of every C file that a source of a database includes by a
+# path relative to the source's own directory.
+fragments=$(mktemp) || exit 2
+python3 -c 'import re, sys
+from pathlib import Path
+for line in open(sys.argv[1]):
+    source = Path(line.rstrip("\n"))
+    try:
+        text = source.read_text(errors="replace")
+    except OSError:
+        continue
+    for name in re.findall(r"^#include \"([^\"]*/[^\"]*\.c)\"", text, re.M):
+        print((source.parent / name).resolve())' "$known" | sort -u >"$fragments"
 sources=$( {
     find rach2 -name '*.c'
     find krffs utils ish tests -path '*/vendor' -prune -o -path '*/vs-dokany' -prune -o -name '*.c' -print
     find tools -name '*.c'
     find ports/doom -maxdepth 1 -name '*.c'
 } 2>/dev/null | sort -u )
-# included FILE: true when a C file in FILE's directory includes FILE by name.
+# included FILE: true when a C file in FILE's directory includes FILE by name,
+# or a source of a database includes it by a relative path.
 included() {
     grep -rqF --include='*.c' "#include \"${1##*/}\"" "$(dirname "$1")" && return 0
+    grep -qxF "$REPO/$1" "$fragments" && return 0
     case $1 in
         tests/host/compat/*)
             grep -qF "#include \"compat/${1##*/}\"" tests/host/*.c ;;
