@@ -83,7 +83,7 @@
       "domain": "machine",
       "architectures": ["x86_64"],
       "workload": {"arguments": [], "inputs": {"memory_mib": 73728, "holes_kib": 513, "usable_plus_holes_kib": 66060288, "unreachable_kib": 9437184, "resident_mib": 2048, "reserved_mib": 4096}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {"pdpe1gb": "absent"}},
+      "requirements": {"host_api": "c", "tools": [], "features": {"pdpe1gb": "absent"}, "hosts": ["linux", "macos"]},
       "execution": {"program": "memory_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
       "steps": [
         {"step_id": "accounting", "stage": "execute", "machine": "boundary", "does": "boot the test image in 73728 MiB without 1 GiB pages to the debug shell, read the memory report, run exec /memprobe total once and end the machine"}
