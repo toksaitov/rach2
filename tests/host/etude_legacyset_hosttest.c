@@ -12,6 +12,9 @@
  * without QEMU or guest artifacts. --stop-only runs the first-failure rows.
  * --streams-only checks separate reports and diagnostics without QEMU.
  * --capture-only checks retained watchdog evidence without starting a case.
+ * --children-only checks the statuses of controllers whose cases pass, fail
+ * and run side by side, and on Windows the status of a controller that
+ * leaves a process in its Job, without QEMU or guest artifacts.
  *
  * host-deps: tools/etude/routine_charge.c
  * host-deps: tools/etude/authority.c tools/etude/authority_parse.c
@@ -3128,10 +3131,43 @@ static int stop_cases_only(void)
     return 0;
 }
 
+/** Run only the rows that judge a controller's exit status, without QEMU or
+ * guest artifacts. */
+static int child_cases_only(void)
+{
+    test_mixed();
+    test_width();
+#ifdef _WIN32
+    test_orphan();
+#endif
+    if (fails)
+        return 1;
+    completed = 1;
+    fix_passed();
+    puts("etude_legacyset_hosttest: children pass");
+    return 0;
+}
+
+/** Run the selection `argument` names that needs none of the shared rows, or
+ * return -1 for another. */
+static int early_selection(const char *argument)
+{
+    if (!strcmp(argument, "--streams-only"))
+        return stream_cases_only();
+    if (!strcmp(argument, "--repetitions-only"))
+        return repetition_cases_only();
+    if (!strcmp(argument, "--stop-only"))
+        return stop_cases_only();
+    if (!strcmp(argument, "--children-only"))
+        return child_cases_only();
+    return -1;
+}
+
 static int native_selection(const char *argument)
 {
     return !strcmp(argument, "--streams-only") || !strcmp(argument, "--stop-only") ||
-           !strcmp(argument, "--repetitions-only") || !strcmp(argument, "--context-only");
+           !strcmp(argument, "--repetitions-only") || !strcmp(argument, "--context-only") ||
+           !strcmp(argument, "--children-only");
 }
 
 int etude_test_legacy_captures(void);
@@ -3175,9 +3211,6 @@ int main(int argc, char **argv)
         printf("etude-legacyset-test: fail: build/tools/etude/etude is not built\n");
         return 1;
     }
-    int repetitions_only = argc == 2 && !strcmp(argv[1], "--repetitions-only");
-    int stops_only = argc == 2 && !strcmp(argv[1], "--stop-only");
-    int streams_only = argc == 2 && !strcmp(argv[1], "--streams-only");
     context_only = argc == 2 && native_selection(argv[1]);
     if (context_only)
         guest_arch = "i686";
@@ -3195,12 +3228,8 @@ int main(int argc, char **argv)
     make_tree();
     if (fixture_environment(0) != 0)
         return 1;
-    if (streams_only)
-        return stream_cases_only();
-    if (repetitions_only)
-        return repetition_cases_only();
-    if (stops_only)
-        return stop_cases_only();
+    if (argc == 2 && (role = early_selection(argv[1])) >= 0)
+        return role;
     test_repetition_loads();
     test_digest_paths();
     test_hosts();
