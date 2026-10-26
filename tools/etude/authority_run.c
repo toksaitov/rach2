@@ -19,10 +19,10 @@
 extern char **environ;
 #endif
 
-static volatile sig_atomic_t stopped;
+static volatile sig_atomic_t stopped, signalled;
 static void stop(int value)
 {
-    stopped = value;
+    stopped = signalled = value;
 }
 
 static int input_lost(void)
@@ -126,6 +126,15 @@ static int cancelled(const struct authority_run *run, const struct etude_pid *pa
            (run->watch_input && input_lost());
 }
 
+/**
+ * Run `run->argv` as one owned child, streaming its output, and cancel it
+ * when the owner gets SIGTERM or SIGINT, loses its parent or input, or
+ * `run->stop` is set.
+ *
+ * @return the child's exit status, or 128 plus the signal after the owner's
+ *         own cancellation, as `etude admit` gives, when its cleanup is
+ *         confirmed and its output whole; otherwise 125.
+ */
 int authority_run_command(const struct authority_run *run, struct etude_exec_result *result)
 {
     struct etude_pid parent;
@@ -136,7 +145,7 @@ int authority_run_command(const struct authority_run *run, struct etude_exec_res
         return 125;
     if (run->clear_parent && unsetenv("ETUDE_SEQUENCE_PARENT"))
         return 125;
-    stopped = 0;
+    stopped = signalled = 0;
     void (*oldterm)(int) = signal(SIGTERM, stop), (*oldint)(int) = signal(SIGINT, stop);
     struct etude_exec *executor = etude_exec_new();
     struct etude_proc *child = NULL;
@@ -184,8 +193,10 @@ int authority_run_command(const struct authority_run *run, struct etude_exec_res
     require_complete_output(result);
     if (receipt(run, result, &start))
         goto done;
-    if (result->cleanup == ETUDE_CLEANUP_CONFIRMED && !result->output_error &&
-        result->end == ETUDE_END_EXITED)
+    if (result->cleanup == ETUDE_CLEANUP_CONFIRMED && !result->output_error && signalled)
+        status = 128 + signalled;
+    else if (result->cleanup == ETUDE_CLEANUP_CONFIRMED && !result->output_error &&
+             result->end == ETUDE_END_EXITED)
         status = result->value;
 done:
 #ifndef _WIN32

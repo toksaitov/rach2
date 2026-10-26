@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include "../../etude/routine_route.c"
+#include "../../etude/authority_run.h"
 #include "../../../tests/host/compat/fixdir_host.c"
 
 static int failures, put_calls, get_calls, fail_get;
@@ -244,6 +245,23 @@ static void direct_setup_contract(const char *scratch, const char *self, const c
     CHECK(!path(file, out, "routine-proofs") && !lstat(file, &st) == !change);
 }
 
+#ifndef _WIN32
+/* An owner stopped by SIGTERM gives 128 plus the signal, as `etude admit`. */
+static void owner_contract(char *self)
+{
+    char owner[32];
+    snprintf(owner, sizeof owner, "%ld", (long)getpid());
+    char *stopped[] = {self, "--stop-owner", owner, NULL};
+    char *exits[] = {self, "--exit-seven", NULL};
+    struct authority_run run = {.phase = "fixture-owner", .argv = stopped};
+    struct etude_exec_result result;
+    CHECK(authority_run_command(&run, &result) == 128 + SIGTERM);
+    CHECK(result.end == ETUDE_END_STOPPED && result.cleanup == ETUDE_CLEANUP_CONFIRMED);
+    run.argv = exits;
+    CHECK(authority_run_command(&run, &result) == 7);
+}
+#endif
+
 static void interrupted(int number)
 {
     exit(128 + number);
@@ -251,6 +269,15 @@ static void interrupted(int number)
 
 int main(int argc, char **argv)
 {
+#ifndef _WIN32
+    if (argc == 3 && !strcmp(argv[1], "--stop-owner")) {
+        kill((pid_t)atol(argv[2]), SIGTERM);
+        for (;;)
+            pause();
+    }
+#endif
+    if (argc == 2 && !strcmp(argv[1], "--exit-seven"))
+        return 7;
     signal(SIGTERM, interrupted);
     signal(SIGINT, interrupted);
 #ifndef _WIN32
@@ -288,6 +315,9 @@ int main(int argc, char **argv)
     const char *changes[] = {NULL, "selection", "out"};
     for (size_t i = 0; i < 3; i++)
         direct_setup_contract(scratch, self, changes[i]);
+#ifndef _WIN32
+    owner_contract(self);
+#endif
     if (!failures)
         fix_passed();
     if (failures)
