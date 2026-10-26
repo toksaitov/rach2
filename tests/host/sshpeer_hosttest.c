@@ -8,9 +8,11 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <signal.h>
+#include "compat/fixdir_host.c"
 
 static int failures, attempts, refusals, waits, waited, closes, idle;
-static int connect_fails, wait_fails, interrupted, receive_interrupted, flooding;
+static int connect_fails, wait_fails, interrupted, receive_interrupted, flooding, flood_heard;
 
 /** Record a failed expectation without stopping the remaining checks. */
 static void check(int condition, const char *message)
@@ -55,7 +57,11 @@ static ssize_t model_recv(int fd, void *buffer, size_t size, int flags)
         errno = EINTR;
         return -1;
     }
-    if (flooding || attempts <= refusals)
+    if (flooding) {
+        if (flood_heard)
+            return 0;
+        flood_heard = 1;
+    } else if (attempts <= refusals)
         return 0;
     check(size >= 4, "the identification buffer is too short");
     memcpy(buffer, "SSH-", 4);
@@ -116,7 +122,7 @@ static int model_poll(struct pollfd *fds, nfds_t count, int timeout)
 static void reset(int rejected)
 {
     attempts = waits = waited = closes = idle = 0;
-    connect_fails = wait_fails = interrupted = receive_interrupted = flooding = 0;
+    connect_fails = wait_fails = interrupted = receive_interrupted = flooding = flood_heard = 0;
     refusals = rejected;
 }
 
@@ -152,11 +158,68 @@ static void errors_and_flood(void)
           "the flood must retain its indefinite ownership wait without retry pacing");
 }
 
+static int saved_stdout = -1;
+static FILE *captured;
+
+/** Restore the caller's stream before normal or interrupted fixture cleanup. */
+static void restore_output(void)
+{
+    if (saved_stdout >= 0) {
+        fflush(stdout);
+        if (dup2(saved_stdout, STDOUT_FILENO) < 0)
+            failures++;
+        close(saved_stdout);
+        saved_stdout = -1;
+    }
+    if (captured) {
+        fclose(captured);
+        captured = NULL;
+    }
+}
+
+static void stop_fixture(int number)
+{
+    exit(128 + number);
+}
+
 int main(void)
 {
+    signal(SIGTERM, stop_fixture);
+    signal(SIGINT, stop_fixture);
+#ifndef _WIN32
+    signal(SIGHUP, stop_fixture);
+#endif
+    const char *output = fix_path("peer-output");
+    atexit(restore_output);
+    captured = fopen(output, "w+");
+    saved_stdout = dup(STDOUT_FILENO);
+    if (!captured || saved_stdout < 0 || fflush(stdout) ||
+        dup2(fileno(captured), STDOUT_FILENO) < 0) {
+        restore_output();
+        return 1;
+    }
+    char *args[] = {"sshpeer", "invalid", NULL};
+    check(peer_main(2, args) == 2, "the real peer entry must retain usage refusal");
     readiness();
     errors_and_flood();
-    if (!failures)
+    check(!fflush(stdout), "the peer output must flush completely");
+#ifdef _WIN32
+    check(_setmode(_fileno(captured), _O_BINARY) >= 0, "capture must read the raw peer bytes");
+#endif
+    rewind(captured);
+    char actual[1024];
+    size_t size = fread(actual, 1, sizeof actual, captured);
+    const char expected[] = "sshpeer: answered after 0 refused\n"
+                            "sshpeer: answered after 3 refused\n"
+                            "sshpeer: answered after 1 refused\n"
+                            "sshpeer: open 1\nsshpeer: answered 1\nsshpeer: ended 1\n";
+    check(!ferror(captured) && size == sizeof expected - 1 &&
+              !memcmp(actual, expected, sizeof expected - 1),
+          "readiness and flood records must retain exact LF bytes");
+    restore_output();
+    if (!failures) {
+        fix_passed();
         puts("sshpeer-test: result: pass");
+    }
     return failures ? 1 : 0;
 }

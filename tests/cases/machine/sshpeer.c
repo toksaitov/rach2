@@ -31,6 +31,8 @@
 #include <string.h>
 
 #ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 typedef SOCKET peer_socket;
@@ -224,6 +226,10 @@ int main(int argc, char **argv)
 #ifdef _WIN32
     WSADATA data;
 
+    if (_setmode(_fileno(stdout), _O_BINARY) < 0) {
+        perror("sshpeer: stdout");
+        return 1;
+    }
     if (WSAStartup(MAKEWORD(2, 2), &data) != 0) {
         fprintf(stderr, "sshpeer: Winsock could not start\n");
         return 1;

@@ -1950,3 +1950,11 @@ The responder requires a sealed workspace program. The route therefore verifies 
 ### Native routine responder client
 
 The ordinary physical route still used a Python client of Etude's existing framed serve protocol. The native route now shares the C client's framing, staged-file validation, stream digests, result and cleanup checks. Windows adds only the existing Job supervisor's input-pipe connection; POSIX retains its ordinary command transport. The route records a complete transcript and each operation's actual result, and requires both responder cleanup and a zero-exit transport. The existing remote fixture checks native staging, output, returned proof, connection loss and transport cleanup under #1177. The Windows adapter still requires its actual affected check.
+
+### A cleanup collector required the entire shared ledger to be empty
+
+The final route-fixture collector asserted a header-only shared ledger rather than checking whether its own claims had ended. That assertion failed before it retained a ledger snapshot. Another admitted task is not this task's cleanup failure. The corrected read-only collector retained the actual ledger and checked the four exact owned claim identities. The successful commands, failed collector and corrected observation remain separate; no build or fixture was repeated.
+
+### Windows SSH peer progress used text-mode output (#1188)
+
+The standalone SSH peer left stdout in the Windows CRT's default text mode. Its unbuffered stream still translated LF to CRLF, while the SSH scenario matched exact LF service records. The peer now sets binary stdout before any progress output. Its existing fixture captures the real entry's readiness and flood records as raw bytes, retaining retry counts, fatal transport errors and the flood's ownership wait. The retained Windows failure had no recoverable peer output, so this source defect is not recorded as the proven cause of that historical attempt. Actual Windows peer acceptance remains part of the affected platform batch.
