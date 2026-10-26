@@ -63,6 +63,11 @@ unset ARCH MAKEFLAGS MFLAGS
 REPO=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 . "$REPO/tools/etude/hold.sh"
 etude_hold "$REPO" build-rules-test "$REPO/tests/system/build_rules_test.sh" "$@"
+# The private trees' makes run outside any admission of this tree, so that on
+# an enrolled site the root Makefile reads its rules instead of sending every
+# goal to the site's launcher.
+ETUDE_SITE=/nonexistent ETUDE_ADMITTED=/nonexistent
+export ETUDE_SITE ETUDE_ADMITTED
 cd "$REPO"
 mkdir -p build/tests
 WORK=
