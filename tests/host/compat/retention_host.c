@@ -240,13 +240,31 @@ static void retention_age_tree(const char *path, time_t old)
     struct timespec times[] = {{old, 0}, {old, 0}};
     RET_CHECK(!utimensat(AT_FDCWD, path, times, 0));
 }
+/**
+ * Opens the registry and reads the record of `bundle`, counting a failure of
+ * either as the fixture's. On success the registry stays open and the caller
+ * frees `*path` and `*item` and closes it; on failure nothing is left to free.
+ */
+static int retention_record(struct retention *registry, const char *bundle, char **path,
+                            struct json **item)
+{
+    *path = NULL;
+    *item = NULL;
+    int opened = !ret_registry_open(registry, retention_policy, retention_site, NULL);
+    RET_CHECK(opened);
+    int found = opened && !ret_record(registry, bundle, path, item);
+    RET_CHECK(!opened || found);
+    if (opened && !found)
+        ret_registry_close(registry);
+    return found ? 0 : -1;
+}
 static void retention_old(const char *bundle)
 {
     struct retention registry;
-    RET_CHECK(!ret_registry_open(&registry, retention_policy, retention_site, NULL));
-    char *path = NULL;
-    struct json *item = NULL;
-    RET_CHECK(!ret_record(&registry, bundle, &path, &item));
+    char *path;
+    struct json *item;
+    if (retention_record(&registry, bundle, &path, &item))
+        return;
     ret_set(item, "sealed_utc", ret_string("2000-01-01T00:00:00Z"));
     ret_set(item, "last_used", ret_integer(ret_now() - 3 * 86400));
     RET_CHECK(!ret_write(path, item, 1));
@@ -477,15 +495,15 @@ static void retention_external_proof(void)
     char *bundle = retention_bundle(1, text.data);
     RET_CHECK(retention_state(bundle, "protected"));
     struct retention registry;
-    RET_CHECK(!ret_registry_open(&registry, retention_policy, retention_site, NULL));
-    char *path = NULL;
-    struct json *item = NULL;
-    RET_CHECK(!ret_record(&registry, bundle, &path, &item));
-    const struct json *proofs = json_member(item, "proofs");
-    RET_CHECK(proofs && json_member(proofs, leaf));
-    free(path);
-    json_free(item);
-    ret_registry_close(&registry);
+    char *path;
+    struct json *item;
+    if (!retention_record(&registry, bundle, &path, &item)) {
+        const struct json *proofs = json_member(item, "proofs");
+        RET_CHECK(proofs && json_member(proofs, leaf));
+        free(path);
+        json_free(item);
+        ret_registry_close(&registry);
+    }
     free(bundle);
     free(leaf);
     json_free(ref);
@@ -532,19 +550,19 @@ static void retention_live_and_reader(void)
     free(fresh);
     unsetenv("RETENTION_GH_FAIL");
     struct retention registry;
-    RET_CHECK(!ret_registry_open(&registry, retention_policy, retention_site, NULL));
-    char *path = NULL;
-    struct json *item = NULL;
-    RET_CHECK(!ret_record(&registry, sample, &path, &item));
+    char *path;
+    struct json *item;
     char fraction[64];
     snprintf(fraction, sizeof fraction, "%lld.125", (long long)(ret_now() - 3 * 86400));
-    struct json *used = ret_new(JSON_NUMBER);
-    used->string = strdup(fraction);
-    ret_set(item, "last_used", used);
-    RET_CHECK(!ret_write(path, item, 1));
-    free(path);
-    json_free(item);
-    ret_registry_close(&registry);
+    if (!retention_record(&registry, sample, &path, &item)) {
+        struct json *used = ret_new(JSON_NUMBER);
+        used->string = strdup(fraction);
+        ret_set(item, "last_used", used);
+        RET_CHECK(!ret_write(path, item, 1));
+        free(path);
+        json_free(item);
+        ret_registry_close(&registry);
+    }
     const char *old_policy = getenv("ETUDE_RETENTION"), *old_site = getenv("ETUDE_SITE");
     char *saved_policy = old_policy ? strdup(old_policy) : NULL,
          *saved_site = old_site ? strdup(old_site) : NULL;
@@ -567,16 +585,16 @@ static void retention_live_and_reader(void)
     free(saved_site);
     const char *apply[] = {"--apply", NULL};
     RET_CHECK(!retention_call("prune", apply) && !access(sample, F_OK));
-    RET_CHECK(!ret_registry_open(&registry, retention_policy, retention_site, NULL));
-    RET_CHECK(!ret_record(&registry, sample, &path, &item));
-    const struct json *previous = json_member(item, "last_used_previous");
-    RET_CHECK(previous && previous->type == JSON_NUMBER && !strcmp(previous->string, fraction));
-    RET_CHECK(ret_number(item, "last_used") >= ret_now());
-    RET_CHECK(json_text(item, "last_used_normalization") &&
-              !strcmp(json_text(item, "last_used_normalization"), "ceil-epoch-seconds-v1"));
-    free(path);
-    json_free(item);
-    ret_registry_close(&registry);
+    if (!retention_record(&registry, sample, &path, &item)) {
+        const struct json *previous = json_member(item, "last_used_previous");
+        RET_CHECK(previous && previous->type == JSON_NUMBER && !strcmp(previous->string, fraction));
+        RET_CHECK(ret_number(item, "last_used") >= ret_now());
+        RET_CHECK(json_text(item, "last_used_normalization") &&
+                  !strcmp(json_text(item, "last_used_normalization"), "ceil-epoch-seconds-v1"));
+        free(path);
+        json_free(item);
+        ret_registry_close(&registry);
+    }
     const char *touch[] = {sample, NULL};
     RET_CHECK(!retention_call("touch", touch));
     RET_CHECK(!ret_registry_open(&registry, retention_policy, retention_site, NULL));
