@@ -9,6 +9,13 @@
  * host-deps: tools/etude/posix/serve.c tools/etude/posix/remote.c
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
  * host-deps: tools/etude/posix/process.c utils/sha256.c
+ * host-deps: tools/etude/routine_remote.c tools/etude/retention_io.c
+ * host-deps: tests/host/compat/routine_remote_host.c
+ * host-deps: tools/etude/measurement_prepare.c tools/etude/preparation_record.c
+ * host-deps: tools/etude/routine_proof.c tools/etude/posix/store.c
+ * host-deps: tools/etude/posix/authority_platform.c
+ * host-deps: tools/etude/history_collect.c
+ * host-deps: tools/etude/history_json.c
  * host-cflags: -I tools/etude/include -Wall -Wextra -Werror
  * host-tools: etude-workload
  * host-alone: a run must start and write within a deadline of 300 ms
@@ -53,6 +60,9 @@
 #include "compat/directory_host.h"
 #include "compat/workload_host.h"
 #include "etude/remote.h"
+
+int etude_test_routine_remote(const char *self);
+int etude_test_routine_remote_child(int argc, char **argv);
 
 static int fails;
 
@@ -1157,6 +1167,9 @@ int main(int argc, char **argv)
 {
     struct etude_serve_conf conf;
 
+    int child = etude_test_routine_remote_child(argc, argv);
+    if (child >= 0)
+        return child;
     if (argc == 4 && strcmp(argv[1], "--serve") == 0) {
         memset(&conf, 0, sizeof(conf));
         conf.in = 0;
@@ -1172,6 +1185,12 @@ int main(int argc, char **argv)
         printf("etude-remote-test: fail: %s cannot be found\n", argv[0]);
         return 1;
     }
+    if (argc == 2 && !strcmp(argv[1], "--routine-only")) {
+        if (etude_test_routine_remote(self))
+            return 1;
+        fix_passed();
+        return 0;
+    }
     prog = host_workload_read(&prog_size);
     if (prog == NULL) {
         fputs("etude-remote-test: prepared workload is missing\n", stderr);
@@ -1183,6 +1202,7 @@ int main(int argc, char **argv)
     test_raw_faults();
     test_raw_recovery();
     test_client();
+    fails += etude_test_routine_remote(self);
     free(prog);
     if (fails != 0)
         return 1;

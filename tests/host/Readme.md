@@ -322,3 +322,5 @@ The serial transport fixture also keeps one real responder command running as an
 The native observer fixture checks that a joined owner sampler records a real terminal counter sample covering its cleanup reading; an unfinished terminal trace cannot supply comparison evidence.
 
 The scenario fixture also copies ranges to and from a sparse file at the USB far partition's actual position past two terabytes. Independent wide writes seed extraction, and independent wide reads judge insertion and neighboring bytes, so two narrowed calls cannot conceal the wrong location. Only the short payload extents are allocated.
+
+`etude_remote_hosttest --routine-only` exercises the ordinary route wrapper through the existing C responder. The same compiled fixture supplies its private SSH stand-in and staged native child. It checks file staging, both output streams, a returned proof, failure results, handshake loss, a nonzero transport exit and control-input abandonment, and requires all children reaped. It uses no real remote endpoint. The Windows pipe and Job adaptation retains its platform acceptance check.
