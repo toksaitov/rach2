@@ -12,10 +12,12 @@
  * through the VFS drop the file's pages after they change it, and an unmount
  * every page of its files; each counts as a change, and a page read while a
  * change ran is not kept, since the read may have seen part of it. A mapping
- * gets a copy of a cached page, so nothing it does reaches the cache. The
- * frames are the machine's free memory: the cache takes one only while a
- * quarter of the frames are free, and gives them back, the least recently used
- * first, when memory runs short (`mem_reclaim`).
+ * gets a copy of a cached page, so nothing it does reaches the cache. Each
+ * file that has pages has a record that lists them, so a change drops that
+ * file's pages without a search of every other file's. The frames are the
+ * machine's free memory: the cache takes one only while a quarter of the
+ * frames are free, and gives them back, the least recently used first, when
+ * memory runs short (`mem_reclaim`).
  */
 
 #include "filecache.h"
@@ -31,13 +33,23 @@
 #define FC_BUCKETS 1024u
 #define FC_FILES   256u
 
+/* A file that has pages in the cache, and the list of those pages, so that a
+ * change to the file drops them without a search of the other files' pages.
+ * The record lives while the file has a page. */
+struct fc_inode {
+    struct fc_inode *next, **link; /* the slot's list, and what points here */
+    const struct vfs_mount *mnt;
+    uint64_t ino;
+    struct fc_page *pages;
+};
+
 /* A cached page: which page of which file, the size and the modification
  * time the file had when the page was read, and the frame of the copy. */
 struct fc_page {
-    struct fc_page *next;            /* the bucket's list */
-    struct fc_page *older, *younger; /* the use order */
-    const struct vfs_mount *mnt;
-    uint64_t ino;
+    struct fc_page *next, **link;            /* the bucket's list */
+    struct fc_page *sibling, **sibling_link; /* the file's list */
+    struct fc_page *older, *younger;         /* the use order */
+    struct fc_inode *file;
     uint32_t generation;
     uint32_t pgoff;
     uint64_t size;
@@ -46,10 +58,10 @@ struct fc_page {
 };
 
 static struct fc_page *buckets[FC_BUCKETS];
+static struct fc_inode *files[FC_FILES];
 static struct fc_page *oldest, *youngest;
 static uint32_t pages;
-static uint32_t file_pages[FC_FILES]; /* the pages of the files of each `fc_slot` */
-static uint32_t changes;              /* `filecache_epoch` */
+static uint32_t changes; /* `filecache_epoch` */
 
 /* What finds a file's pages and what they must still match. */
 struct fc_file {
@@ -85,10 +97,24 @@ static uint32_t fc_bucket(const struct vfs_mount *mnt, uint64_t ino, uint32_t pg
            FC_BUCKETS;
 }
 
-/** The slot of `file_pages` for the file `ino` of `mnt`. */
+/** The slot of `files` for the file `ino` of `mnt`. */
 static uint32_t fc_slot(const struct vfs_mount *mnt, uint64_t ino)
 {
     return ((uint32_t)ino * 2654435761u >> 24 ^ (uint32_t)(uintptr_t)mnt >> 6) % FC_FILES;
+}
+
+/** The record of the file `ino` of `mnt`, or NULL when the cache has none
+ * of its pages. Interrupts must be off. */
+static struct fc_inode *fc_find(const struct vfs_mount *mnt, uint64_t ino)
+{
+    struct fc_inode *file;
+
+    for (file = files[fc_slot(mnt, ino)]; file; file = file->next) {
+        if (file->mnt == mnt && file->ino == ino) {
+            return file;
+        }
+    }
+    return NULL;
 }
 
 /** Take `p` out of the use order. */
@@ -120,17 +146,41 @@ static void fc_use(struct fc_page *p)
     youngest = p;
 }
 
-/** Free `p`, which `link` points to in its bucket. */
-static void fc_drop(struct fc_page **link)
+/** Free `p`, and its file's record when it was the file's last page. */
+static void fc_drop(struct fc_page *p)
 {
-    struct fc_page *p = *link;
+    struct fc_inode *file = p->file;
 
-    *link = p->next;
+    *p->link = p->next;
+    if (p->next) {
+        p->next->link = p->link;
+    }
+    *p->sibling_link = p->sibling;
+    if (p->sibling) {
+        p->sibling->sibling_link = p->sibling_link;
+    }
     fc_unlink_use(p);
-    file_pages[fc_slot(p->mnt, p->ino)]--;
     free_frame(p->phys);
     kfree(p);
     pages--;
+    if (!file->pages) {
+        *file->link = file->next;
+        if (file->next) {
+            file->next->link = file->link;
+        }
+        kfree(file);
+    }
+}
+
+/** Drop every page of `file`, and with the last of them the record. */
+static void fc_drop_file(struct fc_inode *file)
+{
+    struct fc_page *p, *next;
+
+    for (p = file->pages; p; p = next) {
+        next = p->sibling;
+        fc_drop(p);
+    }
 }
 
 /** Copy a page to the frame `to`, or to `to_buf` when it is 0, from the
@@ -164,7 +214,7 @@ static int fc_read(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, void
     int hit = 0;
 
     for (p = buckets[fc_bucket(f->mnt, f->ino, pgoff)]; p; p = p->next) {
-        if (p->mnt == f->mnt && p->ino == f->ino && p->pgoff == pgoff &&
+        if (p->file->mnt == f->mnt && p->file->ino == f->ino && p->pgoff == pgoff &&
             p->generation == f->generation && p->size == f->size && p->mtime == f->mtime) {
             hit = fc_copy(phys, buf, p->phys, NULL);
             if (hit) {
@@ -183,14 +233,18 @@ static int fc_read(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, void
 static void fc_store(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, const void *buf,
                      uint32_t epoch)
 {
-    struct fc_page *p, **link;
+    struct fc_page *p, *old, **bucket;
+    struct fc_inode *file, *spare;
     uint32_t flags;
 
     if (frame_free_count() < frame_total_count() / 4u) {
         return;
     }
     p = kzalloc(sizeof(*p));
-    if (!p) {
+    spare = kzalloc(sizeof(*spare));
+    if (!p || !spare) {
+        kfree(p);
+        kfree(spare);
         return;
     }
     p->phys = alloc_user_frame();
@@ -199,10 +253,9 @@ static void fc_store(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, co
             free_frame(p->phys);
         }
         kfree(p);
+        kfree(spare);
         return;
     }
-    p->mnt = f->mnt;
-    p->ino = f->ino;
     p->generation = f->generation;
     p->pgoff = pgoff;
     p->size = f->size;
@@ -212,20 +265,46 @@ static void fc_store(const struct fc_file *f, uint32_t pgoff, uintptr_t phys, co
         kirq_restore(flags);
         free_frame(p->phys);
         kfree(p);
+        kfree(spare);
         return;
     }
-    for (link = &buckets[fc_bucket(f->mnt, f->ino, pgoff)]; *link; link = &(*link)->next) {
-        if ((*link)->mnt == f->mnt && (*link)->ino == f->ino && (*link)->pgoff == pgoff) {
-            fc_drop(link);
+    bucket = &buckets[fc_bucket(f->mnt, f->ino, pgoff)];
+    for (old = *bucket; old; old = old->next) {
+        if (old->file->mnt == f->mnt && old->file->ino == f->ino && old->pgoff == pgoff) {
+            fc_drop(old);
             break;
         }
     }
-    p->next = buckets[fc_bucket(f->mnt, f->ino, pgoff)];
-    buckets[fc_bucket(f->mnt, f->ino, pgoff)] = p;
+    file = fc_find(f->mnt, f->ino);
+    if (!file) {
+        file = spare;
+        spare = NULL;
+        file->mnt = f->mnt;
+        file->ino = f->ino;
+        file->link = &files[fc_slot(f->mnt, f->ino)];
+        file->next = *file->link;
+        if (file->next) {
+            file->next->link = &file->next;
+        }
+        *file->link = file;
+    }
+    p->file = file;
+    p->link = bucket;
+    p->next = *bucket;
+    if (p->next) {
+        p->next->link = &p->next;
+    }
+    *bucket = p;
+    p->sibling_link = &file->pages;
+    p->sibling = file->pages;
+    if (p->sibling) {
+        p->sibling->sibling_link = &p->sibling;
+    }
+    file->pages = p;
     fc_use(p);
-    file_pages[fc_slot(f->mnt, f->ino)]++;
     pages++;
     kirq_restore(flags);
+    kfree(spare);
 }
 
 int filecache_read(const struct fd_entry *e, uint32_t pgoff, uintptr_t phys)
@@ -270,16 +349,21 @@ void filecache_store_node(struct vfs_mount *mnt, void *node, uint32_t pgoff, con
 /** Drop every page that `mnt` and, unless it is 0, `ino` name. */
 static void fc_forget(const struct vfs_mount *mnt, uint64_t ino)
 {
+    struct fc_inode *file, *next;
     uint32_t i, flags = kirq_save();
 
-    for (i = 0; pages && i < FC_BUCKETS; i++) {
-        struct fc_page **link = &buckets[i];
-
-        while (*link) {
-            if ((*link)->mnt == mnt && (ino == 0 || (*link)->ino == ino)) {
-                fc_drop(link);
-            } else {
-                link = &(*link)->next;
+    if (ino != 0) {
+        file = fc_find(mnt, ino);
+        if (file) {
+            fc_drop_file(file);
+        }
+    } else {
+        for (i = 0; pages && i < FC_FILES; i++) {
+            for (file = files[i]; file; file = next) {
+                next = file->next;
+                if (file->mnt == mnt) {
+                    fc_drop_file(file);
+                }
             }
         }
     }
@@ -291,7 +375,7 @@ void filecache_forget(struct vfs_mount *mnt, void *node)
     struct fc_file f;
 
     changes++;
-    if (pages && fc_file_of(mnt, node, &f) && file_pages[fc_slot(f.mnt, f.ino)]) {
+    if (pages && fc_file_of(mnt, node, &f)) {
         fc_forget(f.mnt, f.ino);
     }
 }
@@ -314,13 +398,7 @@ uint32_t filecache_shrink(uint32_t want)
     uint32_t given = 0, flags = kirq_save();
 
     while (oldest && given < want) {
-        struct fc_page *p = oldest;
-        struct fc_page **link = &buckets[fc_bucket(p->mnt, p->ino, p->pgoff)];
-
-        while (*link != p) {
-            link = &(*link)->next;
-        }
-        fc_drop(link);
+        fc_drop(oldest);
         given++;
     }
     kirq_restore(flags);
