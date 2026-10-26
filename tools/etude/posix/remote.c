@@ -1766,7 +1766,7 @@ enum etude_remote_status etude_remote_close(struct etude_remote *r)
             st = ETUDE_REMOTE_OK;
     }
     transport_stop(r);
-    if (r->conf.require_transport_cleanup && !r->transport_ok)
+    if (r->conf.require_transport_cleanup && (!r->transport_ok || !r->transport_done))
         st = ETUDE_REMOTE_SYSTEM;
     if (r->transcript && fflush(r->transcript))
         st = ETUDE_REMOTE_SYSTEM;
