@@ -48,9 +48,21 @@ $(GNU_OUT)/agents/%.stamp: vendor/gnu/agents/packages/%.sh $(GNU_AGENTS_SOURCES)
 	    -- sh -c 'RACH2_ARCH=$(ARCH) RACH2_GNU_OUT="$$ETUDE_STEP_ROOT" ./vendor/gnu/agents/fetch_agents.sh $*'
 
 # The agent rows compare the running binary with the verified package bytes.
-# Reading the archive needs no target executable or GNU image on the host.
+# Reading the archive needs no target executable or GNU image on the host:
+# the package must list one bin/codex, a regular file that is not empty, which
+# is extracted into scratch and hashed, and the digest is published whole.
 build/tests/cases/machine/codex.sha256: vendor/gnu/agents/packages/codex.sh \
-    $(GNU_AGENTS_SOURCES) tests/cases/machine/prepare_codex_digest.py | $(SHA256TOOL)
+    $(GNU_AGENTS_SOURCES) | $(SHA256TOOL)
 	@set -e; . vendor/gnu/agents/packages/codex.sh; \
 	    archive=$$(RACH2_ARCH=x86_64 sh vendor/gnu/agents/fetch_agents.sh -f codex "$$PACKAGE"); \
-	    python3 -B tests/cases/machine/prepare_codex_digest.py "$$archive" "$@"
+	    listed=$$(tar -tvzf "$$archive" | awk '$$NF == "bin/codex" || $$NF == "./bin/codex"'); \
+	    name=$${listed##* }; work=; \
+	    trap '[ -z "$$work" ] || rm -rf "$$work"; rm -f $@.tmp' EXIT; \
+	    mkdir -p build/tests $(@D); work=$$(mktemp -d build/tests/rach2-codex-digest.XXXXXX); \
+	    if [ "$$(printf '%s\n' "$$listed" | wc -l)" -ne 1 ] || [ "$${listed%"$${listed#?}"}" != - ] || \
+	        ! tar -xzf "$$archive" -C "$$work" "$$name" || [ -h "$$work/$$name" ] || \
+	        [ ! -f "$$work/$$name" ] || [ ! -s "$$work/$$name" ]; then \
+	        echo "codex digest: $$archive must have one regular bin/codex" >&2; exit 1; \
+	    fi; \
+	    digest=$$($(SHA256TOOL) "$$work/$$name"); \
+	    printf '%s\n' "$${digest%% *}" > $@.tmp; mv $@.tmp $@
