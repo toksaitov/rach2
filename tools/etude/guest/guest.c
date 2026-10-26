@@ -113,7 +113,8 @@ struct attempt {
     int exited;
     int status;
     struct rusage ru;
-    int64_t drain_until; /* the end of the wait for the pipes and the processes */
+    int64_t drain_until;  /* the end of the wait for the pipes and the processes */
+    int64_t drain_paused; /* only transport backpressure after owned processes end */
     struct fixtures fx;
     struct attempt *next;
 };
@@ -1472,9 +1473,11 @@ static int attempt_gone(const struct attempt *a)
 /** Ask an attempt to stop: SIGTERM now, SIGKILL after its grace period. */
 static void stop_attempt(struct attempt *a)
 {
-    if (a->exited || a->stopped)
+    if (a->stopped)
         return;
     a->stopped = 1;
+    if (a->exited)
+        return;
     signal_attempt(a, SIGTERM);
     a->kill_at = now_us() + a->grace_us;
 }
@@ -1812,7 +1815,7 @@ static void finish(struct attempt *a)
     char peak[64];
     long long cpu;
     long long rss = (long long)a->ru.ru_maxrss;
-    int clean = attempt_gone(a);
+    int clean = a->fd[1] < 0 && a->fd[2] < 0 && attempt_gone(a);
     int i;
 
     if (clean && fixture_cleanup(&a->fx, a->dir) < 0) {
@@ -1884,6 +1887,25 @@ static void reap(void)
             }
 }
 
+/* A full wire queue prevents the reader from reaching pipe EOF. Charge
+ * the existing drain allowance only while that reading can proceed. */
+static int drain_ready(struct attempt *a, int64_t t)
+{
+    int closed = a->fd[1] < 0 && a->fd[2] < 0;
+    int gone = attempt_gone(a);
+    if (!closed && gone && !a->stopped && !input_closed && !output_broken && !queue_room()) {
+        if (!a->drain_paused)
+            a->drain_paused = t;
+        return 0;
+    }
+    if (a->drain_paused) {
+        if (gone && !a->stopped && !input_closed && !output_broken)
+            a->drain_until += t - a->drain_paused;
+        a->drain_paused = 0;
+    }
+    return (closed && gone) || t >= a->drain_until;
+}
+
 /** Move each attempt on by the clock: its deadline, the SIGKILL after a
  * SIGTERM, and its end. */
 static void tick(void)
@@ -1894,7 +1916,7 @@ static void tick(void)
 
     for (a = attempts; a; a = next) {
         next = a->next;
-        if (!a->exited && !a->stopped && t >= a->deadline) {
+        if (!a->stopped && (!a->exited || a->drain_paused) && t >= a->deadline) {
             note("attempt %s: past its deadline", a->token);
             stop_attempt(a);
         }
@@ -1902,7 +1924,7 @@ static void tick(void)
             signal_attempt(a, SIGKILL);
             a->kill_at = 0;
         }
-        if (a->exited && ((a->fd[1] < 0 && a->fd[2] < 0 && attempt_gone(a)) || t >= a->drain_until))
+        if (a->exited && drain_ready(a, t))
             finish(a);
     }
 }
@@ -3092,6 +3114,8 @@ static int next_timeout(int64_t t)
     for (a = attempts; a; a = a->next) {
         if (a->exited && a->fd[1] < 0 && a->fd[2] < 0)
             sooner(&timeout, t + 19000, t);
+        else if (a->drain_paused)
+            sooner(&timeout, a->deadline, t);
         else
             sooner(&timeout, a->exited ? a->drain_until : a->kill_at ? a->kill_at : a->deadline, t);
     }
