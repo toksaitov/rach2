@@ -326,7 +326,7 @@ Each entry names a test, the code it compiles, and its cases. The reasoning of a
 
 The serial transport fixture also keeps one real responder command running as an owned service while a second command and its file transfers complete. It requires cancellation to finish the original service owner with no surviving process group. Scripted frames check interleaved output, normal service completion, refusal of a second service, preserved measurement strings and unconfirmed cleanup after console loss.
 
-The native observer fixture checks that a joined owner sampler records a real terminal counter sample covering its cleanup reading; an unfinished terminal trace cannot supply comparison evidence.
+The native observer fixture checks that a joined owner sampler records a real terminal counter sample covering its cleanup reading, and that its trace imports. A terminal sampler that is stopped or cancelled, or whose owner exits before the terminal reading, writes an incomplete footer that cannot supply comparison evidence; the lost owner is a POSIX row, since it forks the owner.
 
 The scenario fixture also copies ranges to and from a sparse file at the USB far partition's actual position past two terabytes. Independent wide writes seed extraction, and independent wide reads judge insertion and neighboring bytes, so two narrowed calls cannot conceal the wrong location. Only the short payload extents are allocated.
 

@@ -24,6 +24,9 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #include <windows.h>
+#else
+#include <poll.h>
+#include <sys/wait.h>
 #endif
 #include "compat/fixdir_host.c"
 #include "etude/observe.h"
@@ -135,6 +138,61 @@ static void imports(void)
     CHECK(etude_observe_utc("invalid") == 0);
 }
 
+/* Read a closed trace whole; return its size, or 0 when it cannot be read. */
+static size_t trace_bytes(const char *path, char *bytes, size_t limit)
+{
+    FILE *file = fopen(path, "rb");
+    size_t size = file ? fread(bytes, 1, limit - 1, file) : 0;
+    int bad = !file || ferror(file) || !feof(file);
+    if (file && fclose(file))
+        bad = 1;
+    bytes[size] = 0;
+    return bad ? 0 : size;
+}
+
+#ifndef _WIN32
+/* An owner that exits before its last reading leaves an incomplete trace. */
+static void terminal_lost(void)
+{
+    int gate[2];
+    CHECK(pipe(gate) == 0);
+    pid_t child = fork();
+    if (child == 0) {
+        char c;
+        close(gate[1]);
+        while (read(gate[0], &c, 1) > 0)
+            ;
+        _exit(0);
+    }
+    close(gate[0]);
+    struct etude_pid owner;
+    struct etude_observer *o = NULL;
+    const char *path = fix_path("terminal-lost");
+    if (child > 0 && etude_process_state(child, &owner) == 1 && owner.start_known)
+        o = etude_observe_start_terminal(path, &owner, "fixture");
+    CHECK(o != NULL);
+    close(gate[1]);
+    int status;
+    CHECK(child > 0 && waitpid(child, &status, 0) == child);
+    if (!o)
+        return;
+    while (!etude_observe_done(o))
+        poll(NULL, 0, 10);
+    struct etude_reading end;
+    CHECK(etude_observe_finish(o, &end) != 0);
+    char *summary = etude_observe_summary(o, NULL);
+    CHECK(summary && strstr(summary, "\"comparison_available\":false"));
+    free(summary);
+    uint64_t first, last;
+    etude_observe_bounds(o, &first, &last);
+    char bytes[8192];
+    size_t size = trace_bytes(path, bytes, sizeof bytes);
+    CHECK(size && strstr(bytes, "\"complete\":false,\"owner_lost\":true}"));
+    CHECK(etude_observe_import(bytes, size, "fixture", first, last) == NULL);
+    etude_observe_free(o);
+}
+#endif
+
 static void terminal_native(const struct etude_pid *self)
 {
     const char *path = fix_path("terminal");
@@ -150,12 +208,9 @@ static void terminal_native(const struct etude_pid *self)
     etude_observe_bounds(o, &first, &last);
     CHECK(first <= etude_observe_utc(cleanup.utc) && last >= etude_observe_utc(end.utc));
     CHECK(etude_observe_finish(o, &end) != 0);
-    FILE *file = fopen(path, "rb");
     char bytes[8192];
-    size_t size = file ? fread(bytes, 1, sizeof bytes, file) : 0;
-    CHECK(file && size && size < sizeof bytes && !ferror(file));
-    if (file)
-        fclose(file);
+    size_t size = trace_bytes(path, bytes, sizeof bytes);
+    CHECK(size && strstr(bytes, "\"complete\":true,\"owner_lost\":false}"));
     char *summary = etude_observe_import(bytes, size, "fixture", first, etude_observe_utc(end.utc));
     CHECK(summary != NULL);
     free(summary);
@@ -169,6 +224,20 @@ static void terminal_native(const struct etude_pid *self)
         free(summary);
         etude_observe_free(o);
     }
+    path = fix_path("terminal-cancel");
+    o = etude_observe_start_terminal(path, self, "fixture");
+    CHECK(o != NULL);
+    if (o) {
+        CHECK(etude_observe_cancel(o) != 0 && etude_observe_finish(o, &end) != 0);
+        etude_observe_bounds(o, &first, &last);
+        size = trace_bytes(path, bytes, sizeof bytes);
+        CHECK(size && strstr(bytes, "\"complete\":false,\"owner_lost\":false}"));
+        CHECK(etude_observe_import(bytes, size, "fixture", first, last) == NULL);
+        etude_observe_free(o);
+    }
+#ifndef _WIN32
+    terminal_lost();
+#endif
 }
 
 static void native(void)
