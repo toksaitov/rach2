@@ -26,6 +26,10 @@ int legacy_child_running(struct legacy_child *child);
 int legacy_child_wait(struct legacy_child *child);
 int legacy_child_stop(struct legacy_child *child);
 void legacy_child_free(struct legacy_child *child);
+#ifdef _WIN32
+/* Leave a suspended copy of this program in the caller's Job; 0 or -1. */
+int legacy_child_orphan(void);
+#endif
 /* Catch a real console break on Windows, and SIGTERM on POSIX. */
 void legacy_child_catch(void (*stop)(int));
 #endif

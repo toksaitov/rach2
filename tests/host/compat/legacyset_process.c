@@ -199,6 +199,40 @@ static int start_child(struct legacy_child *c, const char *self, const char *des
 }
 #endif
 
+#ifdef _WIN32
+/**
+ * Start a copy of this program suspended, in the caller's Job, and leave it
+ * there. It never runs; were it resumed, its empty description would make
+ * it exit at once with 121.
+ */
+int legacy_child_orphan(void)
+{
+    static const char *const args[] = {"--legacy-driver", "", NULL};
+    static wchar_t path[32768];
+    DWORD size = sizeof(path) / sizeof(path[0]), n = GetModuleFileNameW(NULL, path, size);
+    STARTUPINFOW startup;
+    PROCESS_INFORMATION process;
+    char *self = n > 0 && n < size ? etude_win_utf8(path) : NULL, *line = NULL;
+    wchar_t *command = NULL;
+    int ok = 0;
+
+    if (self != NULL && etude_win_cmdline(self, args, &line) == 0)
+        command = etude_win_wide(line);
+    memset(&startup, 0, sizeof(startup));
+    startup.cb = sizeof(startup);
+    if (command != NULL && CreateProcessW(path, command, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL,
+                                          NULL, &startup, &process)) {
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+        ok = 1;
+    }
+    free(command);
+    free(line);
+    free(self);
+    return ok ? 0 : -1;
+}
+#endif
+
 /** Let the parent observe this console before a short controller can exit. */
 int legacy_child_ready(void)
 {

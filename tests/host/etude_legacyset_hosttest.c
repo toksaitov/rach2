@@ -592,6 +592,7 @@ struct run {
     const char *site;    /* the site's policy, or NULL for none */
     unsigned limit_mib;  /* the ledger's memory limit, or 0 for MEMORY_MIB */
     int guest;           /* it runs guest cases, on the real QEMU */
+    int orphan;          /* the driver leaves a suspended process and exits */
     enum put_fault put;  /* the fault of the driver's copies */
     struct legacy_child *child;
     int status;  /* the driver's, or -1 when a signal ended it */
@@ -1233,7 +1234,7 @@ static void driver(const struct run *r)
 
 /* A private description contains values, never addresses from the parent. */
 struct run_description {
-    unsigned magic, n, width, locks, stop_on_fail, limit_mib, guest, put, block_workspace;
+    unsigned magic, n, width, locks, stop_on_fail, limit_mib, guest, put, block_workspace, orphan;
     char fields[8][PATH_LEN];
     char paths[6][PATH_LEN];
     struct {
@@ -1266,6 +1267,7 @@ static int save_run(const char *path, const struct run *r)
     d->guest = r->guest;
     d->put = r->put;
     d->block_workspace = r->block_workspace;
+    d->orphan = r->orphan;
     for (i = 0; i < 8; i++)
         bad |= snprintf(d->fields[i], PATH_LEN, "%s", fields[i] ? fields[i] : "") >= PATH_LEN;
     for (i = 0; i < 6; i++)
@@ -1356,6 +1358,15 @@ static int driver_role(const char *path)
         *fields[i] = d.fields[i][0] ? d.fields[i] : NULL;
     for (i = 0; i < 6; i++)
         memcpy(paths[i], d.paths[i], PATH_LEN);
+#ifdef _WIN32
+    if (d.orphan) {
+        FILE *side = legacy_child_orphan() == 0 ? fopen(r.side, "w") : NULL;
+        if (side == NULL)
+            return 3;
+        fputs("orphan\n", side);
+        return fclose(side) == 0 ? 0 : 3;
+    }
+#endif
     for (i = 0; i < r.n; i++) {
         members[i].suite = d.members[i].suite;
         members[i].cases = d.members[i].cases[0] ? d.members[i].cases : NULL;
@@ -1655,6 +1666,26 @@ static void test_width(void)
         show(&r[i], before);
     }
 }
+
+#ifdef _WIN32
+/** A controller that exits 0 while a process other than its console host is
+ * left in its Job ends with 121, and the wait returns only once the Job is
+ * empty. */
+static void test_orphan(void)
+{
+    static struct run r;
+    char side[64];
+    int before = fails;
+
+    r.name = "orphan";
+    r.orphan = 1;
+    set_run(&r);
+    CHECK(read_text(r.side, side, sizeof(side)) > 0 && !strcmp(side, "orphan\n"),
+          "orphan: the driver left a process in its Job");
+    CHECK(r.status == 121, "orphan: the process left in the Job fails the driver");
+    show(&r, before);
+}
+#endif
 
 /** A serial member, though named second, runs first with nothing beside
  * it. */
@@ -3185,6 +3216,9 @@ int main(int argc, char **argv)
     }
     test_mixed();
     test_width();
+#ifdef _WIN32
+    test_orphan();
+#endif
     test_serial();
     test_first();
     test_start_failure(1);
