@@ -2302,7 +2302,7 @@ static void test_memory(void)
     for (i = 0; argv[i] != NULL; i++) {
         backend |= strcmp(argv[i], "memory-backend-ram,id=etude-ram,size=77309411328B,"
                                    "prealloc=off,merge=off"
-#if !defined(__APPLE__)
+#if !defined(__APPLE__) && !defined(_WIN32)
                                    ",dump=off"
 #endif
                           ) == 0;
@@ -2409,6 +2409,8 @@ int main(int argc, char **argv)
         return 1;
     if (argc == 2 && strcmp(argv[1], "--argv-only") == 0) {
         test_argv();
+    } else if (argc == 2 && strcmp(argv[1], "--memory-only") == 0) {
+        test_memory();
     } else if (argc == 2 && strcmp(argv[1], "--host-only") == 0) {
         test_host_without_machine();
     } else if (argc == 2 && strcmp(argv[1], "--boundary") == 0) {
