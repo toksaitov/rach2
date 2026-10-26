@@ -190,40 +190,64 @@ static const char *updated(const struct issue *r)
     return out;
 }
 
-static int listing(struct board *b, const char *form)
+static int listed(const struct issue *r, const char *form)
 {
-    unsigned i, count = 0;
-    int board = !strcmp(form, "board"), repo = !strcmp(form, "repo"),
-        openrepo = !strcmp(form, "repo-open"), closed = !strcmp(form, "closed");
-    const char *lost = board ? "board" : repo || openrepo ? "repo" : "issues";
-    for (i = 0; i < b->count; i++) {
-        const struct issue *r = &b->issues[i];
-        int isopen = !strcmp(field(r, 2), "OPEN");
-        if ((board || repo || openrepo) && !strcmp(field(r, 11), "archived"))
-            continue;
-        if (board && !strcmp(field(r, 12), "unlisted"))
-            continue;
-        if ((openrepo || !strcmp(form, "open")) && !isopen)
-            continue;
-        if (closed && isopen)
-            continue;
-        if (count++ == 2 && !strcmp(env("BOARD_TEST_LOST"), lost))
-            return 1;
-        if (board || repo || openrepo) {
-            printf("I%s\t", field(r, 1));
-            translated(clean_field(r, 3), '_', ' ');
-            printf("\t%s\t%s\t%s\t%u\t%s\t%s\t", field(r, 1), field(r, 2), clean_field(r, 4),
-                   count_csv(clean_field(r, 5)), clean_field(r, 7), clean_field(r, 6));
-        } else if (closed) {
-            printf("%s\t%s\t2026-10-01T00:00:00Z\t%s\t%s\t%s\n", field(r, 1), updated(r),
-                   clean_field(r, 4), clean_field(r, 6), clean_field(r, 9));
-            continue;
-        } else
-            printf("%s\t%s\t%s\t%s\t%s\t", field(r, 1), field(r, 2),
-                   isopen ? "-" : "2026-10-01T00:00:00Z", clean_field(r, 4), clean_field(r, 6));
-        print_named(clean_field(r, 8));
-        printf("\t%s\n", clean_field(r, 9));
+    int isopen = !strcmp(field(r, 2), "OPEN");
+    if (strcmp(form, "open") && strcmp(form, "closed") && !strcmp(field(r, 11), "archived"))
+        return 0;
+    if (!strcmp(form, "board") && !strcmp(field(r, 12), "unlisted"))
+        return 0;
+    if (!strcmp(form, "repo-open") || !strcmp(form, "open"))
+        return isopen;
+    return strcmp(form, "closed") || !isopen;
+}
+
+static void row(const struct issue *r, const char *form)
+{
+    if (!strcmp(form, "closed")) {
+        printf("%s\t%s\t2026-10-01T00:00:00Z\t%s\t%s\t%s\n", field(r, 1), updated(r),
+               clean_field(r, 4), clean_field(r, 6), clean_field(r, 9));
+        return;
     }
+    if (strcmp(form, "open")) {
+        printf("I%s\t", field(r, 1));
+        translated(clean_field(r, 3), '_', ' ');
+        printf("\t%s\t%s\t%s\t%u\t%s\t%s\t", field(r, 1), field(r, 2), clean_field(r, 4),
+               count_csv(clean_field(r, 5)), clean_field(r, 7), clean_field(r, 6));
+    } else
+        printf("%s\t%s\t-\t%s\t%s\t", field(r, 1), field(r, 2), clean_field(r, 4),
+               clean_field(r, 6));
+    print_named(clean_field(r, 8));
+    printf("\t%s\n", clean_field(r, 9));
+}
+
+/* Answer one page, two issues long, that starts after AFTER issues; with
+ * BOARD_TEST_LOST naming the list, a page after the first is lost, and with
+ * BOARD_TEST_FAIL `flaky`, each page fails once in a run of board.sh. */
+static int listing(struct board *b, const char *form, const char *cursor)
+{
+    unsigned i, count = 0, after = (unsigned)strtoul(cursor, NULL, 10);
+    const char *lost = !strcmp(form, "board")                                ? "board"
+                       : !strcmp(form, "repo") || !strcmp(form, "repo-open") ? "repo"
+                                                                             : "issues";
+    char once[96];
+    if (after && !strcmp(env("BOARD_TEST_LOST"), lost))
+        return 1;
+    snprintf(once, sizeof(once), "flaky-%s-%u", form, after);
+    if (!strcmp(env("BOARD_TEST_FAIL"), "flaky") && !fx_exists(state_path(once))) {
+        fx_text(state_path(once), "");
+        return 1;
+    }
+    for (i = 0; i < b->count; i++) {
+        if (!listed(&b->issues[i], form) || count++ < after)
+            continue;
+        if (count > after + 2) {
+            printf("@page true %u\n", after + 2);
+            return 0;
+        }
+        row(&b->issues[i], form);
+    }
+    puts("@page false null");
     return 0;
 }
 
@@ -263,12 +287,12 @@ static int reassign(const char *list, int add, const char *login)
     return f && fclose(f) == 0 && ok;
 }
 struct request {
-    const char *query, *body, *item, *login, *n, *id;
+    const char *query, *body, *item, *login, *n, *id, *after;
 };
 
 static struct request request(int argc, char **argv)
 {
-    struct request r = {"", "", "", "", "", ""};
+    struct request r = {"", "", "", "", "", "", ""};
     int i;
     for (i = 2; i < argc; i++) {
         if (!strcmp(argv[i - 1], "--body"))
@@ -286,6 +310,8 @@ static struct request request(int argc, char **argv)
                 r.login = argv[i] + 12;
             if (!strncmp(argv[i], "n=", 2))
                 r.n = argv[i] + 2;
+            if (!strncmp(argv[i], "endCursor=", 10))
+                r.after = argv[i] + 10;
         }
     }
     return r;
@@ -330,13 +356,13 @@ static int graphql(struct board *b, const struct request *r)
     else if (strstr(r->query, " body") && !strstr(r->query, "states: [OPEN]) {"))
         return 2; /* only the open issues' bodies are read in pages */
     else if (strstr(r->query, "includeArchived: false"))
-        return listing(b, strstr(r->query, "states: [OPEN]") ? "repo-open" : "repo");
+        return listing(b, strstr(r->query, "states: [OPEN]") ? "repo-open" : "repo", r->after);
     else if (strstr(r->query, "items(first: 100"))
-        return listing(b, "board");
+        return listing(b, "board", r->after);
     else if (strstr(r->query, "states: [OPEN]"))
-        return listing(b, "open");
+        return listing(b, "open", r->after);
     else if (strstr(r->query, "states: [CLOSED]"))
-        return listing(b, "closed");
+        return listing(b, "closed", r->after);
     else
         return 2;
     return 0;
@@ -963,6 +989,8 @@ static int select_prepare(struct fixture *f, const struct simple_row *r)
     }
     if (r->extra && !strcmp(r->extra, "owner"))
         fx_env("BOARD_TEST_ME", "toksaitov");
+    if (r->extra && !strcmp(r->extra, "flaky"))
+        fx_env("BOARD_TEST_FAIL", "flaky");
     if (r->extra &&
         (!strcmp(r->extra, "issues") || !strcmp(r->extra, "board") || !strcmp(r->extra, "repo")))
         fx_env("BOARD_TEST_LOST", r->extra);
@@ -978,12 +1006,14 @@ static int select_rows(struct fixture *f)
         {"members-all", board_main, "members", "7", NULL, "10 11 16 17 18 19 23 24"},
         {"members-open", board_main, "members", "7", "open", "10 11 16 17 18 23 24"},
         {"members-lost", board_main, "members", "7", "issues", NULL},
+        {"members-flaky", board_main, "members", "7", "flaky", "10 11 16 17 18 19 23 24"},
         {"next-tiers", board_main, "next", NULL, NULL, "14 22 10 11 15"},
         {"next-only", board_main, "next", NULL, "only", "14 22 10 11 15"},
         {"next-owner", board_main, "next", NULL, "owner", "14 22 10 11 25 15"},
         {"next-idle", board_main, "next", NULL, "7:3:Ready", "14 22"},
         {"next-done", board_quiet, "next", NULL, NULL, "14"},
         {"next-lost", board_main, "next", NULL, "board", NULL},
+        {"next-flaky", board_main, "next", NULL, "flaky", "14 22 10 11 15"},
         {"next-unlisted", board_main, "next", NULL, "unlisted", "22 14 11 10 15"},
         {"next-unlisted-lost", board_main, "next", NULL, "repo", NULL}};
     unsigned i;
@@ -1374,6 +1404,7 @@ int flow_board(struct fixture *f)
     fx_env("BOARD_TEST_WORK", flow_path(f, "state"));
     fx_env("BOARD_TEST_DATA", flow_path(f, "data"));
     fx_env("XDG_CACHE_HOME", flow_path(f, "cache"));
+    fx_env("BOARD_WAIT", "0");
     if (!flow_copy(f, "tools/flow/board.sh", "board.sh") || !fx_mock(f, "gh") ||
         !fx_mkdir(flow_path(f, "state")))
         return 0;

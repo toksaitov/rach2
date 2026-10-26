@@ -36,7 +36,7 @@ cat > "$work/bin/gh" <<'EOF'
 set -eu
 printf '%s\n' "$*" >> "$BOARD_TEST_WORK/calls"
 data=$BOARD_TEST_DATA
-query='' body='' id='' item='' login='' n='' prev=''
+query='' body='' id='' item='' login='' n='' after=0 prev=''
 for a; do
     case $prev in
         --body) body=$a ;;
@@ -48,6 +48,7 @@ for a; do
                 sub_issue_id=*) id=${a#sub_issue_id=} ;;
                 'assignees[]='*) login=${a#*=} ;;
                 n=*) n=${a#n=} ;;
+                endCursor=*) after=${a#endCursor=} ;;
             esac ;;
     esac
     prev=$a
@@ -90,13 +91,18 @@ lines()
         }' "$data"
 }
 
-# pages NAME: print standard input as gh --paginate prints an answer two
-# lines a page, failing after the first page when BOARD_TEST_LOST is NAME.
+# pages NAME: print the page of standard input, two lines long, that starts
+# after the line that endCursor gives, and the page's line `@page`, as
+# board.sh's pages asks for; fail on a page after the first when
+# BOARD_TEST_LOST is NAME.
 pages()
 {
-    awk -v lost="$BOARD_TEST_LOST" -v name="$1" '
-        NR > 2 && lost == name { exit 1 }
-        { print }'
+    [ "$after" -eq 0 ] || [ "$BOARD_TEST_LOST" != "$1" ] || exit 1
+    awk -v after="$after" '
+        NR <= after { next }
+        NR > after + 2 { print "@page true " after + 2; more = 1; exit }
+        { print }
+        END { if (!more) print "@page false null" }'
 }
 
 # field N K: print field K of issue N.
@@ -313,10 +319,11 @@ H=2222222222222222222222222222222222222222
 C=3333333333333333333333333333333333333333
 BOARD_TEST_HEAD=$H
 XDG_CACHE_HOME=$work/cache
+BOARD_WAIT=0
 PATH=$work/bin:$PATH
 export BOARD_TEST_WORK BOARD_TEST_DATA BOARD_TEST_ME BOARD_TEST_NOW \
     BOARD_TEST_STALE BOARD_TEST_TIMELINE BOARD_TEST_STATE BOARD_TEST_FAIL BOARD_TEST_LOST \
-    BOARD_TEST_FULL BOARD_TEST_CORE BOARD_TEST_HEAD XDG_CACHE_HOME PATH
+    BOARD_TEST_FULL BOARD_TEST_CORE BOARD_TEST_HEAD XDG_CACHE_HOME BOARD_WAIT PATH
 tab=$(printf '\t')
 
 # An issue that only the owner's accounts can do, a member of phase 7.

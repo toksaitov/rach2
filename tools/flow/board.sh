@@ -27,8 +27,9 @@
 # do, such as a step on the testing host through `ssh testing` from the
 # owner's computer; `next` and `take` offer it only to the account OWNER below.
 # Each subcommand that reads the board or the issues fails, with a diagnostic
-# on stderr and nothing on stdout, when any page of the answer is lost, so
-# that a caller does not take a part of the board for the whole.
+# on stderr and nothing on stdout, when a page of the answer is lost five
+# times, as `ask` below says, so that a caller does not take a part of the
+# board for the whole.
 # Assignees are added and removed with the REST calls that change only the
 # login given. `gh issue edit` writes back the whole list it read, and so puts
 # back an account that another `take` removed in the meantime.
@@ -197,6 +198,46 @@ LIB='function has(l, x) { return index("," l ",", "," x ",") > 0 }
     function in_phase(n, parent, partof, p) {
         return p != "" && n != p && (parent == p || has(partof, p)) }'
 
+# ask ARGS...: print the answer of the read `gh api graphql ARGS...`. GitHub
+# at times answers a query with an error page, for minutes at a time, so a
+# read that fails is made again, five tries in all, BOARD_WAIT seconds apart,
+# ten unless it is set; fail when the fifth fails.
+ask()
+{
+    ask_try=1
+    until ask_out=$(gh api graphql "$@"); do
+        [ "$ask_try" -lt 5 ] || return 1
+        ask_try=$((ask_try + 1))
+        sleep "${BOARD_WAIT:-10}"
+    done
+    [ -z "$ask_out" ] || printf '%s\n' "$ask_out"
+}
+
+# pages CONNECTION FILTER ARGS...: print what the jq FILTER prints for each
+# node of the connection at the path CONNECTION, such as
+# `.data.repository.issues`, in the answer to the query that ARGS give, every
+# page, each read by `ask`, so that one lost page costs a try and not the
+# whole read. The query takes `$endCursor` and asks for the connection's
+# `pageInfo { hasNextPage endCursor }`.
+pages()
+{
+    pages_jq="($1.nodes[] | $2),
+        \"@page \\($1.pageInfo.hasNextPage) \\($1.pageInfo.endCursor)\""
+    shift 2
+    pages_after=
+    while :; do
+        pages_got=$(ask ${pages_after:+-f endCursor="$pages_after"} "$@" \
+            --jq "$pages_jq") || return 1
+        pages_last=$(printf '%s\n' "$pages_got" | tail -n 1)
+        printf '%s\n' "$pages_got" | sed '$d'
+        case $pages_last in
+            '@page true '?*) pages_after=${pages_last#@page true } ;;
+            '@page false '*) return 0 ;;
+            *) echo "board: a page of the answer has no pageInfo" >&2; return 1 ;;
+        esac
+    done
+}
+
 # ids: print the board's id as `project=ID`, its Status field's as `field=ID`,
 # and each option of Status as `NAME=ID`, spaces in NAME written as `_`.
 ids()
@@ -281,7 +322,10 @@ items()
 {
     states=OPEN
     [ "$1" != all ] || states='OPEN, CLOSED'
-    listed=$(gh api graphql --paginate -F n="$BOARD" -f o="$OWNER" -f query='
+    listed=$(pages .data.user.projectV2.items '
+            select(.content.number != null and (.isArchived | not)) |
+            {id, status: (.fieldValueByName.name // ""), issue: .content} |
+            '"$FIELDS" -F n="$BOARD" -f o="$OWNER" -f query='
         query($o: String!, $n: Int!, $endCursor: String) {
             user(login: $o) { projectV2(number: $n) {
                 items(first: 100, after: $endCursor,
@@ -294,12 +338,14 @@ items()
                             assignees(first: 1) { totalCount }
                             labels(first: 20) { nodes { name } }
                             parent { number }
-                            issueDependenciesSummary { blockedBy } } } } } } } }' \
-        --jq '.data.user.projectV2.items.nodes[] |
-            select(.content.number != null and (.isArchived | not)) |
-            {id, status: (.fieldValueByName.name // ""), issue: .content} |
-            '"$FIELDS") || return 1
-    found=$(gh api graphql --paginate -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='
+                            issueDependenciesSummary { blockedBy } } } } } } } }') ||
+        return 1
+    found=$(pages .data.repository.issues '. as $issue |
+            .projectItems.nodes[] |
+            select(.project.number == '"$BOARD"' and
+                   .project.owner.login == "'"$OWNER"'") |
+            {id, status: (.fieldValueByName.name // ""), issue: $issue} |
+            '"$FIELDS" -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='
         query($o: String!, $r: String!, $endCursor: String) {
             repository(owner: $o, name: $r) {
                 issues(first: 100, after: $endCursor, states: ['"$states"'],
@@ -315,13 +361,7 @@ items()
                                     owner { ... on User { login } } }
                                 fieldValueByName(name: "Status") {
                                     ... on ProjectV2ItemFieldSingleSelectValue {
-                                        name } } } } } } } }' \
-        --jq '.data.repository.issues.nodes[] | . as $issue |
-            .projectItems.nodes[] |
-            select(.project.number == '"$BOARD"' and
-                   .project.owner.login == "'"$OWNER"'") |
-            {id, status: (.fieldValueByName.name // ""), issue: $issue} |
-            '"$FIELDS") || return 1
+                                        name } } } } } } } }') || return 1
     if [ "$1" = all ]; then
         parts=$(issues) || return 1
     else
@@ -355,38 +395,38 @@ items()
 # the two reads is printed once, as closed.
 issues()
 {
-    open=$(gh api graphql --paginate -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='
+    open=$(pages .data.repository.issues '
+            [(.number | tostring), .state, (.closedAt // "-"),
+             ([.labels.nodes[].name] | join(",")),
+             (.parent.number // "" | tostring),
+             ([.body // "" | scan("Part of #([0-9]+)") | .[0]] |
+              unique | join(",")),
+             (.title | gsub("\t"; " "))] | join("\t")' \
+        -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='
         query($o: String!, $r: String!, $endCursor: String) {
             repository(owner: $o, name: $r) {
                 issues(first: 100, after: $endCursor, states: [OPEN]) {
                     pageInfo { hasNextPage endCursor }
                     nodes { number state closedAt title body
                         labels(first: 20) { nodes { name } }
-                        parent { number } } } } }' \
-        --jq '.data.repository.issues.nodes[] |
-            [(.number | tostring), .state, (.closedAt // "-"),
-             ([.labels.nodes[].name] | join(",")),
-             (.parent.number // "" | tostring),
-             ([.body // "" | scan("Part of #([0-9]+)") | .[0]] |
-              unique | join(",")),
-             (.title | gsub("\t"; " "))] | join("\t")') || return 1
+                        parent { number } } } } }') || return 1
     if [ "$1" = open ]; then
         [ -z "$open" ] || printf '%s\n' "$open"
         return 0
     fi
-    closed=$(gh api graphql --paginate -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='
+    closed=$(pages .data.repository.issues '
+            [(.number | tostring), .updatedAt, (.closedAt // "-"),
+             ([.labels.nodes[].name] | join(",")),
+             (.parent.number // "" | tostring),
+             (.title | gsub("\t"; " "))] | join("\t")' \
+        -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='
         query($o: String!, $r: String!, $endCursor: String) {
             repository(owner: $o, name: $r) {
                 issues(first: 100, after: $endCursor, states: [CLOSED]) {
                     pageInfo { hasNextPage endCursor }
                     nodes { number updatedAt closedAt title
                         labels(first: 20) { nodes { name } }
-                        parent { number } } } } }' \
-        --jq '.data.repository.issues.nodes[] |
-            [(.number | tostring), .updatedAt, (.closedAt // "-"),
-             ([.labels.nodes[].name] | join(",")),
-             (.parent.number // "" | tostring),
-             (.title | gsub("\t"; " "))] | join("\t")') || return 1
+                        parent { number } } } } }') || return 1
     cache=${XDG_CACHE_HOME:-$HOME/.cache}/rach2/issue-parts
     missing=$(printf '%s\n' "$closed" | awk -F '\t' -v cache="$cache" '
         BEGIN {
@@ -401,7 +441,7 @@ issues()
         lookups=$(printf '%s\n' "$missing" | head -n 100 | awk '
             { printf "i%s: issue(number: %s) { number updatedAt body } ", $1, $1 }')
         missing=$(printf '%s\n' "$missing" | sed '1,100d')
-        got=$(gh api graphql -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='
+        got=$(ask -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='
             query($o: String!, $r: String!) {
                 repository(owner: $o, name: $r) { '"$lookups"'} }' \
             --jq '.data.repository[] |
