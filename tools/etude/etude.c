@@ -16,6 +16,9 @@
 #endif
 
 #include "verbs.h"
+#if !defined(__rach2__) && !defined(ETUDE_LOCK_ONLY)
+#include "routine_entry.h"
+#endif
 #include "authority.h"
 
 /* A verb, or a form of one, and the command that runs it. */
@@ -115,6 +118,8 @@ static int run_main(int argc, char **argv)
 static int run_main(int argc, char **argv)
 {
     static const struct verb forms[] = {
+        {"routine", etude_routine_entry_main, "prepare and run one installed routine collection"},
+        {"routine-sequence", etude_routine_sequence_main, "own routine preparation and collection"},
         {"suites", etude_suites_main, "run a selection of suites by their cases"},
         {"host", etude_host_main, "run the host checks several at once"},
 #ifndef _WIN32
@@ -122,7 +127,8 @@ static int run_main(int argc, char **argv)
 #endif
     };
 
-    if (argc >= 2 && (strcmp(argv[1], "suites") == 0 ||
+    if (argc >= 2 && (strcmp(argv[1], "routine") == 0 || strcmp(argv[1], "routine-sequence") == 0 ||
+                      strcmp(argv[1], "suites") == 0 ||
                       (strcmp(argv[1], "host") == 0 && argc > 2) || strcmp(argv[1], "native") == 0))
         return dispatch(forms, COUNT(forms), argc, argv, "etude run");
     return etude_collection_main(argc, argv);
