@@ -31,7 +31,6 @@
  * host-inputs: tools/etude/preparation_import_data.c
  * host-inputs: tools/etude/preparation_import_transfer.c
  * host-inputs: tools/etude/preparation_import.h
- * host-inputs: tools/etude/preparation_paths.py
  * host-inputs: tools/etude/collection_tools.c tools/etude/collection_tools.h
  * host-tools: python3
  * host-first: it runs for minutes
