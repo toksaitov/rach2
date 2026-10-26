@@ -11,6 +11,7 @@
 #include "win/files.h"
 #endif
 #include "host_prepare.h"
+#include "posix/legacy_cases.h"
 
 struct inventory {
     struct hp_check *checks;
@@ -914,6 +915,8 @@ int etude_host_prepare_main(int argc, char **argv, volatile sig_atomic_t *stop)
     }
     if (bad)
         fprintf(stderr, "host preparation: %s failed; evidence: %s\n", c.group, c.work);
+    else if (legacy_remove_tree(c.work))
+        fprintf(stderr, "host preparation: %s: cannot remove %s\n", c.group, c.work);
     hp_words_free(&c.compiler);
     free(c.compiler_requested);
     json_free(c.identity);

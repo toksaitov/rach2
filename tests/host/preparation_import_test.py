@@ -54,10 +54,14 @@ class ImportTests(unittest.TestCase):
         if actual.get('HOST_TEST_PLATFORM') == 'windows':
             actual['CC'] = subprocess.list2cmdline([sys.executable, str(tree / 'compiler.py')])
             actual['OS'] = 'Windows_NT'
+        scratch = (tree / output).parent
+        before = set(scratch.glob('.' + group + '-prepare.*'))
         result = subprocess.run([str(binary), 'prepare', '-H', *args, group, output],
                                 cwd=tree, env=actual, text=True, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT)
         self.assertEqual(result.returncode, expected, result.stdout)
+        if not expected:
+            self.assertEqual(set(scratch.glob('.' + group + '-prepare.*')), before, result.stdout)
         record = json.loads((tree / output).read_text()) if not expected and '--print-commands' not in args else None
         return record, result.stdout
 
