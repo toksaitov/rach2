@@ -1,0 +1,87 @@
+issue	disposition	title
+589	open: unfinished	etude: build etude and replace the test runner
+680	open: unfinished	etude: run the whole collection on the Mac
+681	open: unfinished	etude: run the whole collection on Windows
+682	closed: accepted evidence	etude: run every eligible case on the Lenovo
+683	open: unfinished	etude: select the fastest test machine
+684	open: unfinished	etude: move routine testing to the selected machine
+685	open: unfinished	etude: audit the phase for its review
+798	open: unfinished	Phase #589's tasks are given out by hand while the testing PC runs one job at a time
+844	open: separate task, unchanged	The installed Lenovo keeps 2 MiB kernel slots, which a kernel built on the machine does not fit
+924	open: unfinished	Delete the boot, install, account, GNU and agent machine tests that add nothing
+967	open: unfinished	Windows GNU preparation starts its local Linux machine without a network
+972	open: unfinished	The Windows tooling machine loses its network during GNU preparation
+973	open: unfinished	Run the collection through native etude with learned watchdog bounds
+974	open: unfinished	Run guest commands and transfer files without host SSH clients
+975	open: unfinished	Replace Python API and time fixtures with portable C services
+976	open: unfinished	Run independent disk-image tools through portable C scenarios
+977	open: unfinished	Convert the remaining host drivers and preserve collection coverage
+980	open: unfinished	Native collection runs lack the outside-load evidence needed for comparison
+981	open: unfinished	Native run history omits preparation and comparison provenance
+982	open: unfinished	Run routine checks through the native collection entry
+1037	open: unfinished	Routine entry omits current imported production and physical ownership
+1125	open: unfinished	Etude host checks serialize the whole collection beyond their quiet rows
+1126	closed: accepted evidence	Native attempts reuse a responder command journal
+1127	open: unfinished	GNU host-check preparation recompiles unchanged fixtures
+1128	open: unfinished	Windows preparation recompiles unchanged platform companions
+1129	closed: accepted evidence	Native directory timestamp checks fail on mounted KRFFS
+1130	closed: accepted evidence	Native bind-holder fixture uses a different KRFFS root
+1131	closed: accepted evidence	Native cleanup leaves a detached D-Bus daemon running
+1132	open: unfinished	Windows cwd fixture compares different separator spellings
+1133	open: unfinished	Windows executor keeps output files open after reporting completion
+1134	open: unfinished	Windows tooling and tree-lock fixtures bypass long-path helpers
+1135	open: unfinished	Native QEMU receives an unextended disk pathname beyond MAX_PATH
+1136	open: unfinished	Mac scripted host checks exceed one shared case bound on both architectures
+1137	open: unfinished	GNU artifact check reuses a digest after a same-size overwrite
+1138	open: unfinished	GNU collection fixtures fail the desktop disk-space floor
+1139	open: unfinished	GNU executor fixture assumes a Linux syscall proc file
+1140	open: unfinished	GNU ledger fixture requires the Linux boot UUID proc file
+1141	open: unfinished	Windows scenario fixture inserts unescaped native paths into JSON
+1143	open: unfinished	Windows set-driver fixture receives its own asynchronous stop event
+1144	open: unfinished	Windows set-driver fixture rejects successful child statuses
+1145	open: unfinished	Guest protocol fixture truncates expected path text
+1146	open: unfinished	Windows QEMU fixture extends a non-sparse image to 4 TiB
+1147	open: unfinished	Windows guest forward resets before its command relay reaches the service
+1148	open: unfinished	Lenovo stops answering after native payload staging
+1149	open: unfinished	Windows binary readback expands LF bytes and corrupts saved disk files
+1150	open: unfinished	Windows agent services fail on fixture files beyond MAX_PATH
+1151	open: unfinished	Image command file transfer exhausts the existing serial step bound
+1152	open: unfinished	Windows command-file writers add CR bytes to guest scripts
+1153	closed: accepted evidence	Ext2 check rejects roots with more than 512 hard-linked files
+1154	open: unfinished	Windows peer services buffer the readiness lines their controllers await
+1157	open: unfinished	CI cannot start before the selected entry is configured
+1158	open: unfinished	Windows executable copies lack the extension required by spawned tools
+1160	open: unfinished	The AHCI fixture leaves an unused paging shim in source coverage
+1161	open: unfinished	Windows QEMU reports stale processor state under WHPX
+1162	closed: accepted evidence	Agent acceptance loses its tmux server between commands
+1163	closed: accepted evidence	Image-helper tar writes violate raw-disk sector alignment
+1164	closed: accepted evidence	Mac QEMU forwarding and SSH peer sockets fail during the whole collection
+1165	open: unfinished	Windows host inventory rejects its signed file-length comparison
+1166	open: unfinished	The native API JSON constructor conflicts with the Windows SDK
+1167	open: unfinished	Windows host preparation misclassifies native compiler header paths
+1168	open: unfinished	Stop-on-failure continues after a case cannot start
+1169	open: unfinished	Match the Windows platform fixture to its host partition
+1170	open: unfinished	Launch the exact Windows watchdog fixture executable
+1171	open: unfinished	Write Windows fixture disk bytes without newline translation
+1172	open: unfinished	Finish the Windows fixture console Job after its controller exits
+1173	open: unfinished	Correct Windows scenario fixture path expectations
+1174	open: unfinished	Use output-only HDA for WAV recordings
+1175	open: unfinished	Report only the accelerator name from the QEMU stand-in
+1176	open: unfinished	Remove added Python from native test preparation
+1177	open: unfinished	Remove added script orchestration from the routine test route
+1178	open: unfinished	Drain QEMU channels before classifying process exit
+1179	open: unfinished	Match native Windows paths in the scenario process census
+1180	open: unfinished	Native Windows host report begins after its assertions
+1181	open: unfinished	Windows clock reference teardown waits after the guest has ended
+1182	open: unfinished	Windows scenario range copies narrow far disk offsets
+1183	open: unfinished	Failed GNU fixture evidence export consumes the host case allowance
+1184	open: unfinished	Ext2 fixture mistakes an e2fsck banner for a repair question
+1188	open: unfinished	Preserve LF bytes in Windows SSH peer progress output
+1189	open: unfinished	Etude-guest seals output before buffered bytes cross a full frame queue
+1190	open: unfinished	Windows boundary profile asks QEMU to disable unsupported memory dumps
+1191	open: unfinished	Keep native collection diagnostics out of report judgement
+1193	open: unfinished	Allow native Windows services to publish their final verdict
+1194	open: unfinished	Agent scenarios wait after a failed client has ended
+1195	open: unfinished	Machine scenarios reuse disks without confirmed process cleanup
+1198	open: unfinished	Native host preparation omits declared Git tool
+1199	open: unfinished	Collection drops watchdog QMP replies and capture errors

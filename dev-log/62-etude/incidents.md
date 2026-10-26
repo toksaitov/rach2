@@ -2047,3 +2047,9 @@ Review found that the first repair was based on an older parent without the inte
 The coordinator assigned both new host-script failures before grouping them. The group command correctly refused assigned members without changing the board. The coordinator removed only its own assignments, created the group, restored the assignments and took the group and its members in order. Group related unclaimed failures before assigning their one writer; verify the final board state after the commands complete.
 
 The same check found that the assigned Git-preparation repair #1198 was still Ready while its worker had finished the change. Assignment alone had not updated the board. The coordinator took the issue explicitly and repeated the status check. An assignment during coordination includes its In progress status in the same step.
+
+## Owner stopped the recovery on 26 October
+
+At 09:00 local time the owner stopped implementation and testing, citing unclear reports, buried decisions, repeated instruction failures, incorrect board state, added script orchestration and excessive allowance use. The owner requested publication of intermediate work on master and a handoff to another LLM. The running CI job was cancelled, its available evidence retained, and its processes, claims and tree locks independently confirmed absent. Helpers stopped with their evidence intact.
+
+The [handoff](handoff-2026-10-26.md) states the unanswered Windows library decision, accepted results and remaining checks. Publication preserves the source, without claiming that the integrated head passed. Closing references for unfinished issues were corrected before publication; completed tasks close on their existing evidence, and stopped unfinished tasks remain on the board without active assignments. The personal loop stops remain. No new test or automatic restart is authorized by this handoff.

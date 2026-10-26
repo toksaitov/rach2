@@ -2,6 +2,8 @@
 
 This record is incomplete. [The plan](plan.md), [recovery contract](recovery.md) and [task audit](audit.md) define the remaining desktop, comparison, routine-entry, review and release evidence. A prepared artifact or passing component check is not a complete environment run.
 
+The owner stopped execution on 26 October. [The handoff](handoff-2026-10-26.md) records the published intermediate source, finished tasks, remaining checks, pending owner decision and preserved evidence. Work does not resume from this record alone.
+
 ## Native Lenovo
 
 [The final native record](native-final.md) accepts all 250 eligible cases on kernel SHA-256 `5c922e7da6ba5849ae830f5e05b289d37405c71957baf79caae710d0bf149e80`, with exact source and compiler events, result digests, owned cleanup and normal-system restoration. It preserves the 249-pass/one-failure whole selection and the sole passing ordinary-init retry. [The earlier diagnostics](native-diagnostic.md) retain their original failures and mixed-kernel history separately.
