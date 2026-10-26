@@ -6,7 +6,7 @@ Core's Actions job retains the historical 180-minute outer guard while `results=
 
 `run.sh core OUT` prepares and runs style, host and the core tier. `run.sh full OUT` runs every suite on the architectures that `ARCH` selects. `ARCH='i686 x86_64'` gives both architectures one schedule. For a release repair, `SUITES='i686:NAME x86_64:NAME'` retains the exact failed-suite selection. Only the selected architectures are prepared.
 
-`push.sh OUT SUITE...` checks explicit affected suites, including `ARCH:SUITE` operands. It accepts the native selector's `RACH2_CASES`, `RACH2_AGENTS_ROWS` and `RACH2_ACCEPT_AGENTS` filters. The public allocator exports the complete selected case, architecture and repetition set before execution. `check verdict --selection EXPORT --require-budget` requires exactly those planned items and their selection digest, while still checking every result and the current manifests. CI and release refuse inherited case filters and retain whole-suite coverage. A documents-only check keeps its separate document-check command; selecting a site does not turn it into a core run.
+`etude run routine push OUT SUITE...` checks explicit affected suites, including `ARCH:SUITE` operands. Only the installed `ETUDE`, the program on the site's `etude` line, runs it; the entry refuses any other copy. It accepts the native selector's `RACH2_CASES`, `RACH2_AGENTS_ROWS` and `RACH2_ACCEPT_AGENTS` filters. The public allocator exports the complete selected case, architecture and repetition set before execution. `check verdict --selection EXPORT --require-budget` requires exactly those planned items and their selection digest, while still checking every result and the current manifests. CI and release refuse inherited case filters and retain whole-suite coverage. A documents-only check keeps its separate document-check command; selecting a site does not turn it into a core run.
 
 The commit's `site` selects the Actions runner label and accelerator. Activation supplies the installed `ETUDE_SITE` version-two admission policy and immutable `ETUDE` outside mutable build outputs. The native routine site reader checks its endpoint, paths, ledger, capacity and time bounds. The selected profile also fixes `JOBS`, `RACH2_WORKERS`, `RACH2_CPUS` and `RACH2_MEMORY_MIB` where needed. The machine's ledger bounds aggregate reservations even when more workers are configured. Changing a site or restarting its services waits for accepted jobs and their cleanup; this code does neither.
 
@@ -60,7 +60,7 @@ The persistent root must be new, outside disposable checkouts and free of symlin
     etude prepare retention --policy "$ETUDE_RETENTION" --site "$ETUDE_SITE" init
     etude prepare retention --policy "$ETUDE_RETENTION" --site "$ETUDE_SITE" allocate --reference "$ETUDE_REFERENCE" > new-output.path
     IFS= read -r out < new-output.path
-    sh tools/ci/push.sh "$out" host
+    "$ETUDE" run routine push "$out" host
 
 CI and full use the same allocator's `--github-env` output, `ETUDE_RESULTS`, for execution, result projection and staging. The separate report job still restores its downloaded temporary output. An arbitrary or previously used output is refused by native entry. No symlink or post-run relocation is involved: the original absolute history and observation locators remain valid in the persistent bundle. Actions artifacts are reporting copies with their existing expiration, not the retained source of accepted references or issue evidence.
 
@@ -76,4 +76,4 @@ A physical Windows/WSL routine owner retains `routine.grant.json`, `routine.leas
 
 [Routine route provisioning](routine-route.md) describes the fixed physical authority, fresh producer event, retained proof files and selected-site activation checks.
 
-The routine contract tests run in the existing native platform fixture, `etude_platform_hosttest --routine-entry-only`. The fixture keeps the input validators, preparation ordering, sequence vectors and result projections in C and substitutes only their lower-level process boundaries. Listener and producer tests retain their separate accepted-job, boot-revalidation, fresh-workspace and clean-condition checks.
+The routine contract tests run in the existing native platform fixture, `etude_platform_hosttest --routine-entry-only`. The fixture keeps the input validators, preparation ordering, sequence vectors and result projections in C and substitutes only their lower-level process boundaries. The listener fixture and `etude_producer_hosttest` keep their separate accepted-job, boot-revalidation, fresh-workspace and clean-condition checks, and `etude_route_hosttest` the fixed route actions.
