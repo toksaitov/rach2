@@ -7,7 +7,8 @@
  *
  * host-deps: tests/host/compat/process_host.c
  * host-deps: tests/host/compat/desktop_host.c tests/host/compat/scenario_host.c
- * host-deps: tools/etude/posix/scenario.c
+ * host-deps: tests/host/compat/scenario_cleanup_host.c
+ * host-inputs: tools/etude/posix/scenario.c
  * host-deps: tools/etude/serial.c tools/etude/processor.c
  * host-deps: tools/etude/posix/qemu.c tools/etude/qemu_profile.c
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
@@ -3832,6 +3833,9 @@ static void test_disk_ranges(void)
           "far range: same-file copy is refused");
 }
 
+int etude_test_scenario_cleanup(void);
+int etude_test_netcase_bulk(void);
+
 /** Run the audio rows, the capture rows, the stand-in rows, the fault row,
  * the stop row, the suspension rows, the pair and isolation rows, the forward
  * row and the damaged row. */
@@ -3856,6 +3860,8 @@ static void test_stand_in(void)
         run_row(&stand_in_rows[i], &s, NULL);
     run_row(fault_row, &s, NULL);
     run_row(stop_row, &s, WAITING);
+    CHECK(etude_test_scenario_cleanup() == 0, "machine cleanup contract");
+    CHECK(etude_test_netcase_bulk() == 0, "raw SSH bulk transfer");
     test_process_paths();
     test_disk_ranges();
     test_suspend(&s);
@@ -3892,8 +3898,6 @@ static void test_real(void)
  * and exit; with one argument, the invocation, enter the library's ordinary
  * scenario entry point. Windows constructors do not receive argc and argv.
  */
-int etude_test_netcase_bulk(void);
-
 int main(int argc, char **argv)
 {
     const char *fake = getenv("ETUDE_FAKE_QEMU");
@@ -3918,7 +3922,7 @@ int main(int argc, char **argv)
         return service_cases_only();
     }
     if (argc == 2 && !strcmp(argv[1], "--net-bulk-only"))
-        return etude_test_netcase_bulk();
+        return etude_test_scenario_cleanup() || etude_test_netcase_bulk();
     if (argc == 2)
         return etude_case_main(argc, argv);
     if (argc >= 3 && strcmp(argv[1], "tool") == 0)

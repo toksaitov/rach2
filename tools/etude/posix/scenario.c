@@ -1546,6 +1546,15 @@ static void machine_end(struct etude_case_machine *m, struct etude_termination *
     record_end(m, end->end);
 }
 
+/** Say whether the machine ended and every owned process is confirmed gone. */
+static int machine_released(const struct etude_case_machine *m)
+{
+    const struct etude_machine_result *r = mres(m);
+
+    return r->state == ETUDE_MACHINE_ENDED && r->qemu != NULL &&
+           r->qemu->cleanup == ETUDE_CLEANUP_CONFIRMED;
+}
+
 /** Say whether machine `arg` runs or has ended. */
 static int machine_started(void *arg)
 {
@@ -1614,7 +1623,7 @@ static int disk_active(struct etude_case *c, const char *file)
     struct etude_case_machine *m;
     size_t i;
     for (m = c->machines; m != NULL; m = m->next) {
-        if (mres(m)->state == ETUDE_MACHINE_ENDED)
+        if (machine_released(m))
             continue;
         for (i = 0; m->disks[i].path != NULL; i++)
             if (strcmp(m->disks[i].path, file) == 0)
@@ -1633,8 +1642,8 @@ enum etude_status etude_bind_disk(struct etude_case *c, const char *machine, con
 
     if (d == NULL || slot == NULL || path == NULL || find_disk(d->qemu, slot, &disk) != 0 ||
         disk.size == 0 || disk.cdrom || disk.base != NULL ||
-        (d->now != NULL && mres(d->now)->state != ETUDE_MACHINE_ENDED) ||
-        !private_disk_path(c, path, file) || disk_active(c, file))
+        (d->now != NULL && !machine_released(d->now)) || !private_disk_path(c, path, file) ||
+        disk_active(c, file))
         return ETUDE_REFUSED;
     for (b = c->bindings; b != NULL; b = b->next)
         if (b->machine == d && strcmp(b->name, slot) == 0)
@@ -1947,7 +1956,7 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
         m->disks[i].path = bound_disk(c, m->decl, name);
         if (m->disks[i].path == NULL)
             m->disks[i].path = d.cdrom ? etude_artifact(c, name) : etude_private_copy(c, name);
-        if (m->disks[i].path == NULL)
+        if (m->disks[i].path == NULL || (!d.cdrom && disk_active(c, m->disks[i].path)))
             return ETUDE_REFUSED;
         m->disks[i].bus = d.bus;
         m->disks[i].cdrom = d.cdrom;
@@ -2188,8 +2197,8 @@ enum etude_status etude_boot(struct etude_case *c, const char *machine, const ch
         c->faults++;
         return ETUDE_REFUSED;
     }
-    if (d->now != NULL && mres(d->now)->state != ETUDE_MACHINE_ENDED) {
-        diag("machine %s runs already", machine);
+    if (d->now != NULL && !machine_released(d->now)) {
+        diag("machine %s has not confirmed its cleanup", machine);
         c->faults++;
         return ETUDE_REFUSED;
     }
@@ -2433,6 +2442,10 @@ enum etude_status etude_wait_end(struct etude_case_machine *m, struct etude_term
     if (st != ETUDE_OK)
         return st;
     machine_end(m, end);
+    if (!machine_released(m)) {
+        m->c->unconfirmed = 1;
+        return ETUDE_LOST;
+    }
     return end->end == ETUDE_END_LOST ? ETUDE_LOST : ETUDE_OK;
 }
 

@@ -27,7 +27,7 @@ struct etude_case_service;
 enum etude_status {
     ETUDE_OK,      /* the operation completed as asked */
     ETUDE_FAILED,  /* it completed with another result, which is reported */
-    ETUDE_LOST,    /* the machine or its transport was lost; nothing is known */
+    ETUDE_LOST,    /* machine, transport or owned cleanup could not be confirmed */
     ETUDE_BOUND,   /* the step's completion bound expired */
     ETUDE_STOPPED, /* the executor stopped the case */
     ETUDE_REFUSED  /* the manifest does not declare what was asked */
@@ -116,9 +116,10 @@ int etude_has_machine(const struct etude_case *c, const char *name);
 
 /** Bind a private regular file to a declared empty disk SLOT of MACHINE.
  * PATH must be inside this attempt's scratch, with no links to other files.
- * The machine and any other machine using the file must have ended. The
- * binding lasts until replaced or until the attempt ends; it does not copy
- * the file. Immutable artifacts and host disks cannot be bound. */
+ * The machine and any other machine using the file must have ended with
+ * confirmed process cleanup. The binding lasts until replaced or until the
+ * attempt ends; it does not copy the file. Immutable artifacts and host
+ * disks cannot be bound. */
 enum etude_status etude_bind_disk(struct etude_case *c, const char *machine, const char *slot,
                                   const char *path);
 
@@ -265,7 +266,8 @@ enum etude_status etude_guest_get(struct etude_case_machine *m, const char *gues
  * a panic are reported only from QEMU's own event, and QEMU's exit without
  * one is ETUDE_END_QEMU_EXITED, with its exit status or signal; a machine
  * whose QEMU or QMP the launcher lost ends ETUDE_END_LOST, and the wait
- * returns ETUDE_LOST.
+ * returns ETUDE_LOST. Unconfirmed process cleanup also returns ETUDE_LOST,
+ * preserving the observed end in `end`; it cannot authorize disk reuse.
  *
  * The end it observes, as the one etude_boot observes of a machine that ends
  * while it starts, is written in the report as the record
