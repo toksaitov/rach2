@@ -207,6 +207,10 @@ case "$1 $2" in
             *'--json body --jq .body'*)
                 field "$3" 8 | sed 's/^-$//' | awk '{ gsub(/\\n/, "\n"); print }'
                 exit 0 ;;
+            *'--json state,body '*)
+                [ "$(field "$3" 2)" = OPEN ] ||
+                    field "$3" 8 | sed 's/^-$//' | awk '{ gsub(/\\n/, "\n"); print }'
+                exit 0 ;;
         esac
         if [ -n "$BOARD_TEST_ME" ]; then
             case "$*" in

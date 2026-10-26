@@ -254,14 +254,12 @@ move()
 
 # FIELDS is the jq filter that prints the ten fields of `items` from an
 # object with the item's id and Status as `id` and `status` and the issue as
-# `issue`.
+# `issue`, with the ninth, which comes from the body, left empty.
 FIELDS='[.id, .status, (.issue.number | tostring), .issue.state,
     ([.issue.labels.nodes[].name] | join(",")),
     (.issue.assignees.totalCount | tostring),
     (.issue.issueDependenciesSummary.blockedBy | tostring),
-    (.issue.parent.number // "" | tostring),
-    ([.issue.body // "" | scan("Part of #([0-9]+)") | .[0]] |
-     unique | join(",")),
+    (.issue.parent.number // "" | tostring), "",
     (.issue.title | gsub("\t"; " "))] | join("\t")'
 
 # items [all]: print the issues on the board in the board's order, one a
@@ -274,6 +272,11 @@ FIELDS='[.id, .status, (.issue.number | tostring), .issue.state,
 # issue, are read as well, and an issue whose item the list lacks follows the
 # others, in the order the issues were opened. Fail when any page of either
 # answer is lost.
+#
+# Neither list asks for the bodies, since a page of a hundred of them takes
+# GitHub long enough that it answers with an error page instead. The `Part
+# of #N` numbers come from `issues`, of the open issues, or with `all` of
+# every issue; a closed issue has none without `all`.
 items()
 {
     states=OPEN
@@ -287,7 +290,7 @@ items()
                     nodes { id isArchived
                         fieldValueByName(name: "Status") {
                             ... on ProjectV2ItemFieldSingleSelectValue { name } }
-                        content { ... on Issue { number title state body
+                        content { ... on Issue { number title state
                             assignees(first: 1) { totalCount }
                             labels(first: 20) { nodes { name } }
                             parent { number }
@@ -302,7 +305,7 @@ items()
                 issues(first: 100, after: $endCursor, states: ['"$states"'],
                        orderBy: {field: CREATED_AT, direction: ASC}) {
                     pageInfo { hasNextPage endCursor }
-                    nodes { number title state body
+                    nodes { number title state
                         assignees(first: 1) { totalCount }
                         labels(first: 20) { nodes { name } }
                         parent { number }
@@ -319,7 +322,19 @@ items()
                    .project.owner.login == "'"$OWNER"'") |
             {id, status: (.fieldValueByName.name // ""), issue: $issue} |
             '"$FIELDS") || return 1
-    printf '%s\n' "$listed" "$found" | awk -F '\t' 'NF > 0 && !seen[$1]++'
+    if [ "$1" = all ]; then
+        parts=$(issues) || return 1
+    else
+        parts=$(issues open) || return 1
+    fi
+    printf '%s\n' "$listed" "$found" | PARTS=$parts awk -F '\t' -v OFS='\t' '
+        BEGIN {
+            n = split(ENVIRON["PARTS"], l, "\n")
+            for (i = 1; i <= n; i++)
+                if (split(l[i], f, "\t") >= 6)
+                    part[f[1]] = f[6]
+        }
+        NF > 0 && !seen[$1]++ { $9 = part[$3]; print }'
 }
 
 # issues [open]: print the repository's issues, or only the open ones, one a
@@ -857,6 +872,15 @@ attach()
     return 1
 }
 
+# named N P: succeed when N's body says `Part of #P`, which the board read
+# into `board` does not give for a closed issue.
+named()
+{
+    gh issue view "$1" --repo "$REPO" --json state,body --jq '
+        select(.state != "OPEN") | .body' 2> /dev/null |
+        grep -Eq "Part of #$2([^0-9]|\$)"
+}
+
 link()
 {
     read_board
@@ -869,7 +893,7 @@ link()
     for n; do
         linked=$(printf '%s\n' "$board" | awk -F '\t' -v n="$n" -v p="$p" "$LIB"'
             $3 == n && in_phase($3, $8, $9, p) { print "yes" }')
-        [ -n "$linked" ] || attach "$n" "$p" || status=1
+        [ -n "$linked" ] || named "$n" "$p" || attach "$n" "$p" || status=1
     done
     return "$status"
 }

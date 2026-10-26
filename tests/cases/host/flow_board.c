@@ -327,6 +327,8 @@ static int graphql(struct board *b, const struct request *r)
             printf("I%s\n", r->n);
     } else if (strstr(r->query, "issue(number: "))
         return bodies(b, r->query);
+    else if (strstr(r->query, " body") && !strstr(r->query, "states: [OPEN]) {"))
+        return 2; /* only the open issues' bodies are read in pages */
     else if (strstr(r->query, "includeArchived: false"))
         return listing(b, strstr(r->query, "states: [OPEN]") ? "repo-open" : "repo");
     else if (strstr(r->query, "items(first: 100"))
@@ -346,7 +348,8 @@ static int issue_view(struct board *b, int argc, char **argv, const char *all)
     struct issue *r = argc > 3 ? issue(b, argv[3]) : NULL;
     if (strstr(all, "--json state --jq .state"))
         puts(env("BOARD_TEST_STATE"));
-    else if (strstr(all, "--json body --jq .body")) {
+    else if (strstr(all, "--json body --jq .body") ||
+             (strstr(all, "--json state,body ") && r && strcmp(field(r, 2), "OPEN"))) {
         const char *p = r ? clean_field(r, 8) : "";
         while (*p) {
             if (p[0] == '\\' && p[1] == 'n') {
@@ -1078,6 +1081,30 @@ static int group_phase_rows(struct fixture *f)
     return ok;
 }
 
+/* An issue the board shows as a member, or a closed one whose body names the
+ * phase, is left as it is; another becomes a sub-issue. */
+static int link_rows(struct fixture *f)
+{
+    static const struct {
+        const char *name, *n;
+        int attached;
+    } rows[] = {{"link-member", "11", 0}, {"link-closed", "21", 0}, {"link-other", "13", 1}};
+    unsigned i;
+    int ok = 1;
+    for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        if (!use(f, board_main) || !alter("21", 8, "Done. Part of #7."))
+            return 0;
+        call(f, "link", rows[i].n, NULL, NULL);
+        ok = fx_check(f,
+                      !f->status && !calls("issue edit") &&
+                          !calls("/sub_issues") == !rows[i].attached &&
+                          (!rows[i].attached || calls("issues/7/sub_issues")),
+                      rows[i].name) &&
+             ok;
+    }
+    return ok;
+}
+
 static int archive_prepare(struct fixture *f, unsigned i)
 {
     if (!use(f, board_main))
@@ -1359,6 +1386,7 @@ int flow_board(struct fixture *f)
     ok = select_rows(f) && ok;
     ok = take_phase_rows(f) && ok;
     ok = group_phase_rows(f) && ok;
+    ok = link_rows(f) && ok;
     ok = archive_rows(f) && ok;
     ok = start_rows(f) && ok;
     ok = phase_rows(f) && ok;
