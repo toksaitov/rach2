@@ -134,6 +134,14 @@ The five checks of `host.host.scripts_images`, whose controllers `host_image_che
 * `vendor/tcc/check_asm.sh`, against `build_compilers.c`: every check is in the controller. The script's build of both TinyCCs from the tarball is preparation's now, in `vendor/gnu/build_host_products.sh`, with the same six patches in the same order.
 * `vendor/tcc/check_ldscript.sh`, against `build_compilers.c`: every check is in the controller, the layout rows read from the link without `-g` and the symbol rows from the link with it.
 
+### Ci, board and release (#1255)
+
+* `tests/system/ci_test.sh`, against `flow_ci.c`: every row is in the controller. The controller lacked two checks, which it now makes: in each row where a bisection reports the first commit that fails, that the same line reports its parent, `good`, as passing; and, for a core run whose i686 result was lost with `default` and `runner` failed, that the first sentence of the issue's body lists both steps and that the body gives the `gh run view 1` command for the log.
+* `tests/system/ci_run_test.sh`, against `flow_ci_run.c` and `flow_ci_prepare.c`: every check is in the controller. `flow_ci_prepare.c` adds checks that the script never made: the clean build of a release, the transfer of shared evidence and the record of the report's reader.
+* `tests/system/board_test.sh`, against `flow_board.c`: every row is in the controller. A refused `take` must now print the issue's number, as `board: #N: REASON`; the controller matched the reason alone.
+* `tests/system/release_resume_test.sh`, against `flow_release.c`: every row is in the controller. It now also checks the order of the calls of board.sh when a record with `closing` is resumed (`phase`, `done`, then `archive`), that the chosen rerun is the fourth line of the record, and that each row that starts a run dispatches `full.yml` once.
+* `tests/system/worker_park_test.sh`, against `flow_worker.c`: every check is in the controller.
+
 ## The fake API's Python
 
 `tests/system/fakeapi/*.py` and `tests/system/agents/*_verify.py` are run by no case of the collection, apart from the three `host.list` commands above; issue #975 replaces the fake API's services with C.
