@@ -1921,6 +1921,25 @@ static int scenario_real_peer(struct etude_case *c)
 }
 
 /**
+ * Put in `out` the spelling of the file `path` that a machine's QEMU gets:
+ * on Windows the extended native path that the launch makes of each file
+ * operand, elsewhere `path` itself; an empty string for none.
+ */
+static void qemu_file(char *out, unsigned long size, const char *path)
+{
+#ifdef _WIN32
+    wchar_t *wide = path != NULL ? etude_win_long_path(path) : NULL;
+    char *native = wide != NULL ? etude_win_utf8(wide) : NULL;
+
+    fix_format(out, size, "%s", native != NULL ? native : "");
+    free(native);
+    free(wide);
+#else
+    fix_format(out, size, "%s", path != NULL ? path : "");
+#endif
+}
+
+/**
  * Run the media rows: a machine whose disks are an empty sparse disk of 4 TiB
  * on NVMe, a CD whose medium is the artifact `disk` and an empty disk of 1 MiB
  * on AHCI without flushes. Under the stand-in the machine boots twice, each
@@ -1942,7 +1961,7 @@ static int scenario_media(struct etude_case *c, int real)
     const char *big = NULL, *again, *cd, *blank, *shell = real ? "\n> " : "> ";
     struct etude_case_machine *m;
     struct etude_termination end;
-    char text[3 * PATH_MAX + sizeof(drive_format)];
+    char files[3][PATH_MAX + 8], text[sizeof(files) + sizeof(drive_format)];
     struct stat st;
     uint64_t at = 0, allocated;
     int boot;
@@ -1963,9 +1982,12 @@ static int scenario_media(struct etude_case *c, int real)
                      "no sparse empty disk of 4 TiB, or another at the second boot");
         if (real)
             fix_format(text, sizeof(text), ": namespace 1: 4194304 MiB");
-        else
-            fix_format(text, sizeof(text), drive_format, big != NULL ? big : "",
-                       cd != NULL ? cd : "", blank != NULL ? blank : "");
+        else {
+            qemu_file(files[0], sizeof(files[0]), big);
+            qemu_file(files[1], sizeof(files[1]), cd);
+            qemu_file(files[2], sizeof(files[2]), blank);
+            fix_format(text, sizeof(text), drive_format, files[0], files[1], files[2]);
+        }
         etude_assert(c, ids[boot][1], etude_console_wait(m, text, 0, &at) == ETUDE_OK, text);
         at = wait_for(c, m, ids[boot][2], "Type 'help'", at);
         wait_for(c, m, ids[boot][2], shell, at);
