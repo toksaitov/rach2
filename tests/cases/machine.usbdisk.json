@@ -1227,12 +1227,12 @@
         "privileges": "an ordinary user",
         "isolation": [{"fixture": "scratch"}],
         "children": "reaped",
-        "cleanup": "vfs_unmount_test.sh removes its work directory on every exit"
+        "cleanup": "usbchecks keeps the prepared fixture's output in memory and confirms its cleanup; it writes no file"
       },
       "assertions": [
         {
           "assertion_id": "unmount-cases",
-          "checks": "tests/system/vfs_unmount_test.sh compiles the unmount functions of vfs.c with fixtures/vfs_unmount.c under the sanitizers, and its 18 cases pass",
+          "checks": "the fixture prepared from the unmount functions of vfs.c and fixtures/vfs_unmount.c under the sanitizers exits 0 after its 18 cases pass",
           "source": "program"
         }
       ],

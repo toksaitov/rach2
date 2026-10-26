@@ -39,7 +39,7 @@
       "assertions": [
         {
           "assertion_id": "transport",
-          "checks": "tests/system/accept/transport_test.sh exits 0: the script passes the right answers and fails or refuses each fault",
+          "checks": "metal_accept.sh passes the right answers and fails or refuses each fault, with root's key and through su, and the fixture's other stick is left as it was",
           "source": "scenario"
         }
       ],
@@ -369,7 +369,7 @@
       "assertions": [
         {
           "assertion_id": "password",
-          "checks": "tests/system/accept/password_test.sh exits 0 in each of its cases of prompt and echo, and of a connection reset or refused before the session",
+          "checks": "su_command.sh answers each case of prompt and echo once, and refuses a repeated prompt and a connection refused before the session, and no transcript has the password",
           "source": "scenario"
         }
       ],

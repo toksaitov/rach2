@@ -1,9 +1,9 @@
 /**
  * vfs_unmount: the unmount functions of rach2/sys/fs/vfs.c, compiled whole
  * with substitutes for the calls they make, and checked in 18 cases, for
- * vfs_unmount_test.sh.
+ * the vfs-unmount case of tests/run usbdisk.
  *
- * The test copies the functions into unmount.inc. The substitutes for the
+ * Preparation copies the functions into unmount.inc. The substitutes for the
  * file system, the block cache and the scheduler count what the path does,
  * so that a case can check which mounts it releases and that nothing is
  * written to a device that is gone. The model is a root, a mount at /mnt/a

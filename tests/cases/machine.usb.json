@@ -2941,7 +2941,7 @@
     },
     {
       "case_id": "machine.usb.latency-checker",
-      "behavior": "records.c, the judge of the latency cases' records, accepts and refuses the records of a host test built with the kernel's recorder as tests/system/usb_latency_test.sh requires",
+      "behavior": "records.c, the judge of the latency cases' records, accepts and refuses the records of the prepared host test built with the kernel's recorder, tests/usbstamp_hosttest.c",
       "units": ["usb", "`tests/system/usb_latency_test.sh`"],
       "domain": "host",
       "architectures": "none",
@@ -2954,12 +2954,12 @@
         "privileges": "an ordinary user",
         "isolation": [{"fixture": "scratch"}],
         "children": "reaped",
-        "cleanup": "usb_latency_test.sh removes its work directory, which it keeps after a failure that names it"
+        "cleanup": "usbchecks keeps the prepared test's output in memory and confirms the cleanup of each of its runs; it writes no file"
       },
       "assertions": [
         {
           "assertion_id": "checker",
-          "checks": "tests/system/usb_latency_test.sh exits 0: the checker accepts each valid set of records and refuses each invalid one",
+          "checks": "the prepared test exits 0 in each of its modes, and the checker accepts each valid set of records and refuses each invalid one",
           "source": "program"
         }
       ],

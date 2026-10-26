@@ -17,9 +17,10 @@
 # `tests/host/etude_route_hosttest.c` includes
 # `../../tools/ci/fixtures/routine_route_actions_test.c`. A
 # fixture under tests/system/fixtures or tests/host/fixtures is compiled by
-# the test script that names it, with the flags the script sets, so no fixed
-# command describes it; such a source passes when a script under that same
-# tree names it.
+# the test script that names it, with the flags the script sets, or by a rule
+# of mk/host-fixtures.mk that preparation runs, so no fixed command describes
+# it; such a source passes when a script under that same tree names it or a
+# rule of that file compiles it.
 #
 # A Windows program's source under tools/etude/win is compiled by
 # tools/etude/wincheck.sh with MinGW-w64, which the host's databases cannot
@@ -91,14 +92,16 @@ included() {
     esac
 }
 # fixture FILE: true when FILE is under tests/system/fixtures or
-# tests/host/fixtures and a script under tests/system or tests/host names it.
+# tests/host/fixtures and a script under tests/system or tests/host names it,
+# or a rule of mk/host-fixtures.mk compiles it.
 fixture() {
     case $1 in
         tests/system/fixtures/*) tree=tests/system ;;
         tests/host/fixtures/*) tree=tests/host ;;
         *) return 1 ;;
     esac
-    grep -rqF --include='*.sh' "fixtures/${1##*/}" "$tree"
+    grep -rqF --include='*.sh' "fixtures/${1##*/}" "$tree" ||
+        grep -qF -- "-c $1 " mk/host-fixtures.mk
 }
 # windows FILE: true for the exact Windows-only build routes described above.
 windows() {

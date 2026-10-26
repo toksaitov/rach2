@@ -1,7 +1,7 @@
 /**
- * pty_secret: the ssh that accept/password_test.sh puts on the PATH, which
- * asks for a password on the pseudo-terminal runner/ptydrive gives it and
- * then runs the command su_command.sh passed.
+ * pty_secret: the ssh that the metal family's password case puts on the
+ * PATH, which asks for a password on the pseudo-terminal runner/ptydrive
+ * gives it and then runs the command su_command.sh passed.
  *
  * It writes that it received one answer to $PTY_SECRET_AUDIT/first, never
  * the answer itself, and runs the command through the test's su, which

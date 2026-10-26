@@ -1,5 +1,5 @@
 # The image of the private trees of the `imagerace` cases
-# (tests/cases/host/imagerace.sh): the programs of one directory. Each case
+# (tests/cases/host/family_image_tree.c): the programs of one directory. Each case
 # stages a copy, under the name the set-id allowlist knows, whose `exec-dir`
 # line names the bin directory of the case's own tree in place of this one.
 exec-dir 0755 / build/tests/system/imagerace.tree/bin

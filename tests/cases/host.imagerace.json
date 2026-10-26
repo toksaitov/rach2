@@ -739,7 +739,6 @@
       "workload": {
         "arguments": [],
         "inputs": {
-          "script": "tests/system/imagerace_probe.sh",
           "probe": "tests/conloadprobe.c"
         },
         "repetitions": 1,
@@ -766,7 +765,7 @@
       "assertions": [
         {
           "assertion_id": "staged",
-          "checks": "imagerace_probe.sh passes: after an edit of the probe one make stages the new probe, and a third make and a dry run rebuild nothing",
+          "checks": "after an edit of the probe one make stages the new probe, and a third make and a dry run rebuild nothing",
           "source": "scenario"
         }
       ],
