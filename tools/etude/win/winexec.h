@@ -165,6 +165,12 @@ int etude_win_poll(struct etude_win_sup *s, DWORD timeout);
  */
 DWORD etude_win_stop(struct etude_win_child *c);
 
+/* A cooperative service listens for a request bound to its native birth.
+ * The listener owns *event until it exits or closes it. Other children keep
+ * the ordinary immediate Job cancellation contract. */
+DWORD etude_win_service_listen(HANDLE *event);
+DWORD etude_win_service_stop(DWORD pid, uint64_t created);
+
 /**
  * Read what the child's job has used, its ended processes included.
  *
