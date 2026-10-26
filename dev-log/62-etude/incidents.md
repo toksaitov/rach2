@@ -1981,3 +1981,7 @@ The responder now excludes that transport wait from the existing drain allowance
 ### Collection stderr interrupted a saved report (#1191)
 
 The Windows clock scenario completed its five assertions, but a diagnostic interrupted the saved `stopped` assertion. The set driver gave stdout and stderr the same file, then judged that merged file even though the native executor read live progress from stdout alone. Every command now allocates adjacent stdout and stderr files, including preparation and guest commands. The judge and progress reader use stdout; diagnostics remain visible and failed history retains both streams separately. The existing set-driver fixture checks misleading stderr beside passing and failing stdout reports, preparation diagnostics and owned cleanup. Its local native selection passed with fatal sanitizers. The actual Windows acceptance remains pending; the original failed report is retained unchanged.
+
+### A progress counter was reported as another case
+
+The 06:35 manager record described `stage` as if it were a case beside `host.host.scripts`. It is that case's progress counter. The retained script log ends with `end 46`; the next active case is `host.host.tests` on x86-64. The corrected process record distinguishes a case identity, its progress counters and its final report. No test was repeated or its result changed.
