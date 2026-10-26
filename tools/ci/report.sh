@@ -437,7 +437,7 @@ $held
 
 Run: $run_url
 
-While this issue is open, push to master only a repair toward a passing core run, and name it here. The next core run that passes on both architectures closes the issue."
+While this issue is open, push to master only a repair toward a passing core run, and name it here. The push that repairs its last cause closes the issue, with the check that shows the repair; a core run that passes on both architectures also closes it."
         hold=$(echo "$holds" | head -n 1)
         if [ -n "$hold" ]; then
             gh issue comment "$hold" --repo "$repo" --body "$body" > /dev/null || lost "the comment on #$hold"
