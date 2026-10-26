@@ -4,12 +4,12 @@
 # Asked to, it reads the fixture with view_file, runs a command with
 # run_command, edits the file with replace_file_content and commits it with
 # git through run_command, and the fake server checks each function
-# response before it answers. The row makes a home with the settings of
-# agy_test.py's client on Linux and the fixture's repository, and returns in
+# response before it answers. The row makes a home with the program's
+# headless settings and the fixture's repository, and returns in
 # /tmp/agents/results/agy-print.tar the repository, the program's digest
 # before and after the session, the free frames sampled each second and the
-# time of each step; agy_session_verify.py judges them on the host with every
-# recorded request. The Gemini API is the fake server, which
+# time of each step; the case judges them on the host with every recorded
+# request. The Gemini API is the fake server, which
 # GOOGLE_GEMINI_BASE_URL names. The names of the program's other services,
 # which it asks for feature flags and sends usage logs to even with
 # telemetry off, and of the Gemini API as shipped, are the fake server's too:
@@ -21,9 +21,7 @@
 # hosts: fakeapi.test generativelanguage.googleapis.com
 # hosts: antigravity-unleash.goog play.googleapis.com
 # script: fakeapi/agy-session.json
-# script-filter: agy_session_verify.py
 # package: agy
-# verifier: agy_session_verify.py
 
 PROMPT="Read fixture.txt, check it with the shell, change answer=before to answer=after, and commit the change."
 
@@ -75,7 +73,8 @@ session_end() {
 }
 
 # session_env: print the environment of the session, a variable to a line:
-# the settings of agy_test.py's client.
+# the fake server as the Gemini API, a dummy key, the test authority, and no
+# update.
 session_env() {
     printf '%s\n' PATH=/usr/bin:/bin "HOME=$SESSION/home" LC_ALL=C TERM=dumb \
         "TMPDIR=$SESSION/tmp" GEMINI_API_KEY=rach2-offline-dummy-key \

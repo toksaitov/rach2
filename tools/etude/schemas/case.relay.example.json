@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "machine.fakeapi.curl",
-      "behavior": "curl in the guest plays the server's script at https://10.0.2.100/, which QEMU joins to the server's port through `fakeapi.py relay`, while the host reaches the guest's SSH port and nothing else is reachable",
+      "behavior": "curl in the guest plays the server's script at https://10.0.2.100/, which QEMU joins to the server's port through `agent_relay`, while the host reaches the guest's SSH port and nothing else is reachable",
       "units": ["fakeapi", "tcp"],
       "domain": "machine",
       "architectures": ["x86_64"],
@@ -32,12 +32,12 @@
                   "devices": [{"model": "rtl8139", "restrict": true,
                                "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}],
                                "guest_forwards": [{"address": "10.0.2.100", "guest_port": 443, "port": 1,
-                                                   "relay": ["fakeapi", "relay"]}]}],
+                                                   "relay": ["agent_relay"]}]}],
                   "boot_options": ["rach2.root=ext2"]},
          "console": "serial", "qmp": true, "helper": false}
       ],
       "services": [
-        {"service_id": "fakeapi", "program": "fakeapi", "ready": "fakeapi: listening on",
+        {"service_id": "fakeapi", "program": "agent_server", "ready": "fakeapi: listening on",
          "does": "play the script to each connection that reaches its port and record what it got"}
       ],
       "assertions": [
@@ -63,7 +63,8 @@
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "gnu-disk", "node": "vendor/gnu/root.disk", "per_architecture": true},
-        {"name": "fakeapi", "node": "tests/system/fakeapi/fakeapi.py", "per_architecture": false},
+        {"name": "agent_server", "node": "tests/cases/machine/agent_server", "per_architecture": false},
+        {"name": "agent_relay", "node": "tests/cases/machine/agent_relay", "per_architecture": false},
         {"name": "fakeapi_scenario", "node": "tests/cases/machine/fakeapi_scenario", "per_architecture": false}
       ],
       "timing": [],

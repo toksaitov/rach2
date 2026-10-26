@@ -2143,17 +2143,17 @@
         },
         {
           "assertion_id": "anthropic",
-          "checks": "Messages tool results and streamed replies: `python3 -B tests/system/fakeapi/anthropic_test.py` exits 0",
+          "checks": "Messages tool results and streamed replies: `build/tests/system/fakeapi_test` exits 0",
           "source": "program"
         },
         {
           "assertion_id": "gemini",
-          "checks": "Gemini function responses and unordered steps: `python3 -B tests/system/fakeapi/gemini_test.py` exits 0",
+          "checks": "Gemini function responses and unordered steps: `build/tests/system/fakeapi_test` exits 0",
           "source": "program"
         },
         {
           "assertion_id": "fakeapi",
-          "checks": "the fake API server's unordered and repeated steps: `python3 -B tests/system/fakeapi/fakeapi_test.py` exits 0",
+          "checks": "the fake API server's unordered and repeated steps: `build/tests/system/fakeapi_test` exits 0",
           "source": "program"
         }
       ],

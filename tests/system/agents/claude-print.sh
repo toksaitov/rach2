@@ -7,21 +7,18 @@
 # an empty home and the fixture's repository, and returns in
 # /tmp/agents/results/claude-print.tar the repository, the program's digest
 # before and after the session, the free frames sampled each second and the
-# time of each step; claude_session_verify.py judges them on the host with
-# every recorded request. The settings are those of claude_test.py's client
-# on Linux, with the fake server as the gateway ANTHROPIC_BASE_URL names. Every
-# name Claude Code reaches as shipped is the fake server's too, so a request
-# to any of them that the script does not have fails the row, and the
-# machine has no route anywhere else. The row's script has the last answer
-# held, and while the program waits for it the row requires the process to
-# run Anthropic's file with nothing preloaded.
+# time of each step; the case judges them on the host with every recorded
+# request. The session's environment names the fake server as the gateway,
+# ANTHROPIC_BASE_URL. Every name Claude Code reaches as shipped is the fake
+# server's too, so a request to any of them that the script does not have
+# fails the row, and the machine has no route anywhere else. The row's
+# script has the last answer held, and while the program waits for it the
+# row requires the process to run Anthropic's file with nothing preloaded.
 # hosts: fakeapi.test api.anthropic.com platform.claude.com claude.com
 # hosts: downloads.claude.ai raw.githubusercontent.com
 # hosts: http-intake.logs.us5.datadoghq.com
 # script: fakeapi/claude-session.json
-# script-filter: claude_session_verify.py
 # package: claude
-# verifier: claude_session_verify.py
 
 PROMPT="Read fixture.txt, check it with the shell, change answer=before to answer=after, and commit the change."
 
@@ -70,7 +67,8 @@ session_end() {
 }
 
 # session_env: print the environment of the session, a variable to a line:
-# the settings of claude_test.py's client.
+# the fake server as the gateway, a dummy key, the test authority, and no
+# update or other traffic that is not needed.
 session_env() {
     printf '%s\n' PATH=/usr/bin:/bin "HOME=$SESSION/home" LC_ALL=C TERM=dumb \
         "TMPDIR=$SESSION/tmp" ANTHROPIC_BASE_URL=https://fakeapi.test \

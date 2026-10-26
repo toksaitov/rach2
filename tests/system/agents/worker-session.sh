@@ -14,14 +14,14 @@
 # the loop's stop file and waits for the loop to exit. It returns in
 # /tmp/agents/results/worker-session.tar the loop's state directory, the
 # board, the calls made to gh, the origin and the program's digest before
-# and after the loop; worker_session_verify.py judges them on the host with
-# every recorded request. The loop's environment has the settings of the
+# and after the loop; the case judges them on the host with every recorded
+# request. The loop's environment has the settings of the
 # claude-print row and the model, which worker.sh does not choose.
 # hosts: fakeapi.test api.anthropic.com platform.claude.com claude.com
 # hosts: downloads.claude.ai raw.githubusercontent.com
 # hosts: http-intake.logs.us5.datadoghq.com
 # package: claude
-# verifier: worker_session_verify.py
+# script: agents/worker-session.json
 
 LOOP=
 

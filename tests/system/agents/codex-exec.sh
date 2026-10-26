@@ -22,14 +22,12 @@
 # session has ended, every process Codex started must exit.
 # The row returns in /tmp/agents/results/codex-exec.tar the repository, the
 # program's digest before and after the session, the free frames sampled each
-# second and the time of each step; codex_session_verify.py judges them on the
-# host with every recorded request.
+# second and the time of each step; the case judges them on the host with
+# every recorded request.
 # hosts: fakeapi.test api.openai.com chatgpt.com auth.openai.com api.github.com
 # hosts: raw.githubusercontent.com
 # script: fakeapi/codex.json
-# script-filter: codex_session_verify.py
 # package: codex
-# verifier: codex_session_verify.py
 
 PROMPT="Read notes.txt and do what it says. Check the change with check.sh, then commit it."
 

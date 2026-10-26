@@ -35,9 +35,9 @@ etude_launch|installed admission before builds, worker checks, owner commands an
 test_status|the status reader against waits for the host and ports and live and stale claims|sh tests/system/test_status_check.sh
 etude_tooling|etude's tooling machine made once, its jobs run and their boots recorded|sh tests/system/etude_tooling_test.sh
 agents_credentials|the agents' credential files and log scan|python3 -B tests/system/agents_credentials_test.py
-anthropic|Messages tool results and streamed replies|python3 -B tests/system/fakeapi/anthropic_test.py
-gemini|Gemini function responses and unordered steps|python3 -B tests/system/fakeapi/gemini_test.py
-fakeapi|the fake API server's unordered and repeated steps|python3 -B tests/system/fakeapi/fakeapi_test.py
+anthropic|Messages tool results and streamed replies|build/tests/system/fakeapi_test
+gemini|Gemini function responses and unordered steps|build/tests/system/fakeapi_test
+fakeapi|the fake API server's unordered and repeated steps|build/tests/system/fakeapi_test
 install_accounts|the installer's kept image accounts|sh tests/system/install_accounts_test.sh
 check_asm|TinyCC's assemblers against GNU as|sh vendor/tcc/check_asm.sh
 check_ldscript|TinyCC's linker script reader against GNU ld|sh vendor/tcc/check_ldscript.sh

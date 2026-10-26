@@ -10,10 +10,11 @@ struct row {
     struct net_case *u;
     struct net_boot *b;
     const char *work, *name, *test_key;
-    char assets[4096], script[4096], version[100], package[100], verifier[100];
+    char assets[4096], script[4096], version[100], package[100];
     char hosts[32][256];
     unsigned nhosts, sequence;
     int fake;
+    int session; /* the row names its script and returns a result to judge */
 };
 
 static int path(char *out, size_t size, const char *format, ...)
@@ -147,23 +148,13 @@ static int metadata(struct row *s)
                     free(file);
                     return 0;
                 }
-        } else if (!strncmp(line, "# script: ", 10))
+        } else if (!strncmp(line, "# script: ", 10)) {
             path(s->script, sizeof(s->script), "%s/tests/system/%s", s->assets, line + 10);
-        else if (!strncmp(line, "# package: ", 11))
+            s->session = 1;
+        } else if (!strncmp(line, "# package: ", 11))
             snprintf(s->package, sizeof(s->package), "%s", line + 11);
-        else if (!strncmp(line, "# verifier: ", 12))
-            snprintf(s->verifier, sizeof(s->verifier), "%s", line + 12);
     }
     free(file);
-    if (!*s->verifier) {
-        FILE *candidate;
-        path(filename, sizeof(filename), "%s/tests/system/agents/%s_verify.py", s->assets, s->name);
-        candidate = fopen(filename, "rb");
-        if (candidate) {
-            snprintf(s->verifier, sizeof(s->verifier), "%s_verify.py", s->name);
-            fclose(candidate);
-        }
-    }
     if (!s->nhosts)
         add_host(s, "fakeapi.test");
     path(filename, sizeof(filename), "%s/vendor/gnu/agents/packages/%s.sh", s->assets, s->package);
@@ -560,7 +551,7 @@ static int verify(struct row *s)
     args[6] = NULL;
     if (!host(s, args, "audit"))
         return 0;
-    if (!*s->verifier || s->fake)
+    if (!s->session || s->fake)
         return 1;
     snprintf(line, sizeof(line),
              "mkdir -p /tmp/agents/verify && tar -xf /tmp/agents/results/%s.tar -C "
