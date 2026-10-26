@@ -1962,3 +1962,7 @@ The standalone SSH peer left stdout in the Windows CRT's default text mode. Its 
 ### Native CI preparation fixture callers
 
 The CI preparation fixture still invoked the removed Python helpers for cleaning, evidence, reader verification and retention. It now invokes the actual prepared Etude and preserves each existing assertion. The first local check exposed invalid fixture setup: ordinary preparation requires its real tree lock, and retention refuses roots inside a source checkout or below a symbolic-link parent. The corrected fixture invocation uses the tree-lock entry; the local check uses canonical scratch outside the checkout. Both failed observations remain separate from the successful check.
+
+### Collection stderr interrupted a saved report (#1191)
+
+The Windows clock scenario completed its five assertions, but a diagnostic interrupted the saved `stopped` assertion. The set driver gave stdout and stderr the same file, then judged that merged file even though the native executor read live progress from stdout alone. Every command now allocates adjacent stdout and stderr files, including preparation and guest commands. The judge and progress reader use stdout; diagnostics remain visible and failed history retains both streams separately. The existing set-driver fixture checks misleading stderr beside passing and failing stdout reports, preparation diagnostics and owned cleanup. Its local native selection passed with fatal sanitizers. The actual Windows acceptance remains pending; the original failed report is retained unchanged.
