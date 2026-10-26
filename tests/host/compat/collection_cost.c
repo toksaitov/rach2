@@ -243,15 +243,19 @@ static void cost_record(struct json *doc, const struct cost_sample *sample)
 static void cost_stream(const char *source, const char *history, const struct cost_sample *sample)
 {
     char path[PATH_MAX];
-    snprintf(path, sizeof path, "%s/%s/%s.jsonl", tree, history, sample->name);
+    int n = snprintf(path, sizeof path, "%s/%s/%s.jsonl", tree, history, sample->name);
+    if (n <= 0 || n >= (int)sizeof path) {
+        CHECK(0, "cost history path fits");
+        return;
+    }
     FILE *in = fopen(source, "rb"), *out = fopen(path, "wb");
     CHECK(in && out, "cost history files open");
     char *line = NULL, error[256];
     size_t cap = 0;
-    ssize_t n;
-    while (in && out && (n = getline(&line, &cap, in)) > 0) {
+    ssize_t got;
+    while (in && out && (got = getline(&line, &cap, in)) > 0) {
         struct json *doc = NULL;
-        if (json_parse(line, (size_t)n, 1, &doc, error, sizeof error)) {
+        if (json_parse(line, (size_t)got, 1, &doc, error, sizeof error)) {
             CHECK(0, "source cost history parses");
             break;
         }
@@ -277,13 +281,14 @@ static void cost_histories(const char *template, const char *history, unsigned m
         {"first", 8, 0, 0, 0},    {"middle", 10, 0, 0, 0},     {"last", 12, 0, 0, 0},
         {"failed", 100, 1, 0, 0}, {"disrupted", 100, 2, 0, 0}, {"foreign", 100, 3, 0, 0}};
     char path[PATH_MAX];
-    snprintf(path, sizeof path, "%s/%s/history", tree, template);
+    int n = snprintf(path, sizeof path, "%s/%s/history", tree, template);
+    CHECK(n > 0 && n < (int)sizeof path, "cost template path fits");
     DIR *dir = opendir(path);
     struct dirent *entry;
     char source[PATH_MAX] = "";
     while (dir && (entry = readdir(dir)))
         if (strstr(entry->d_name, ".jsonl")) {
-            int n = snprintf(source, sizeof source, "%s/%s", path, entry->d_name);
+            n = snprintf(source, sizeof source, "%s/%s", path, entry->d_name);
             CHECK(n > 0 && n < (int)sizeof source, "cost source path fits");
             break;
         }
