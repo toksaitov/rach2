@@ -147,8 +147,8 @@ struct command {
     int ports;     /* its claim takes a port block, as a guest case's does */
     int claim;     /* its claim is in the ledger */
     struct etude_bridge *bridge;
-    uint64_t tried_us;  /* when the old locks were last tried */
-    char out[PATH_LEN]; /* the file of its output */
+    uint64_t tried_us;                 /* when the old locks were last tried */
+    char out[PATH_LEN], err[PATH_LEN]; /* complete stdout and stderr */
     char **argv;
     char **envp;
     const char *cwd; /* its working directory: the tree's root, or a case's
@@ -175,6 +175,7 @@ struct command {
     int is_case;                               /* it is a case's program */
     int live;                                  /* its output is printed as it comes */
     long printed;                              /* the bytes of its output read for printing */
+    long err_printed;                          /* the bytes of stderr printed */
     long fed;                                  /* the bytes of its output fed to its watchdog */
     char line[LINE_LEN];                       /* an output line not yet whole */
     size_t nline;
@@ -200,7 +201,6 @@ struct member {
     char vars[CASE_VARS][PATH_LEN + 32]; /* the variables a case's program is
                                             given */
     struct legacy_guest *g;              /* a guest case's attempt while it runs */
-    char guest_err[PATH_LEN];            /* the standard error of a guest's program */
     /* A machine case's scenario invocation, and the digests of its artifacts
      * by its goals once they are published. */
     char invocation[PATH_LEN];
@@ -622,9 +622,18 @@ static int result(const struct set *x, const struct command *c, struct cmp_text 
         string(t, c->reason[0] != '\0' ? c->reason : outcome_names[c->outcome]);
     cmp_printf(t, ",\"cleanup\":\"%s\",\"evidence\":[",
                c->cleanup == ETUDE_CLEANUP_CONFIRMED ? "confirmed" : "unconfirmed");
-    if (c->outcome != PASS && c->ran && read_tail(c->out, EVIDENCE_BYTES, &bytes, &n) == 0 && n > 0)
-        rc = keep(x, bytes, n, t);
-    free(bytes);
+    const char *paths[] = {c->out, c->err};
+    size_t kept = 0;
+    for (size_t i = 0; c->outcome != PASS && c->ran && i < 2; i++) {
+        bytes = NULL;
+        if (read_tail(paths[i], EVIDENCE_BYTES, &bytes, &n) == 0 && n > 0) {
+            if (kept++)
+                cmp_printf(t, ",");
+            if (keep(x, bytes, n, t))
+                rc = -1;
+        }
+        free(bytes);
+    }
     cmp_printf(t, "],\"capture_errors\":[],\"disruptions\":[");
     if (c->disruption[0] != '\0')
         string(t, c->disruption);
@@ -1622,7 +1631,7 @@ static int start(struct set *x, struct command *c, char *const *vars, size_t n)
     c->spec.cwd = c->cwd;
     c->spec.output_max = 0;
     c->spec.stdout_path = c->out;
-    c->spec.stderr_path = c->out;
+    c->spec.stderr_path = c->err;
     c->spec.grace_us = c->grace_us;
     c->spec.reg = c->load ? etude_collection_load_register_case : etude_ledger_register;
     c->spec.child = etude_ledger_child;
@@ -1669,6 +1678,22 @@ static void feed(struct command *c)
     fclose(f);
 }
 
+/** Print diagnostic bytes separately from the report stream. */
+static void drain_error(struct set *x, struct command *c)
+{
+    char buf[4096];
+    size_t got;
+    FILE *f = fopen(c->err, "rb");
+    if (!f)
+        return;
+    if (fseek(f, c->err_printed, SEEK_SET) == 0)
+        while ((got = fread(buf, 1, sizeof(buf), f)) > 0) {
+            c->err_printed += (long)got;
+            fwrite(buf, 1, got, x->out);
+        }
+    fclose(f);
+}
+
 /** Print the whole lines of command `c`'s output not printed yet, and with
  * `all` the rest as well. */
 static void drain(struct set *x, struct command *c, int all)
@@ -1695,6 +1720,7 @@ static void drain(struct set *x, struct command *c, int all)
     fclose(f);
     if (all && c->nline > 0)
         flush_line(x, c);
+    drain_error(x, c);
     fflush(x->out);
 }
 
@@ -3141,7 +3167,7 @@ static int start_guest(struct set *x, struct member *m, char *const *vars, size_
     s.store = x->objects;
     s.work = m->work;
     s.out = c->out;
-    s.err = m->guest_err;
+    s.err = c->err;
     s.envp = c->envp;
     s.memory_bytes = m->k->memory_bytes;
     s.grace_us = c->grace_us;
@@ -3698,7 +3724,7 @@ static int case_paths(struct set *x, struct member *m)
         fit(c->out, sizeof(c->out), "%s/%s.log", x->output, tail) != 0 ||
         fit(m->judged_out, sizeof(m->judged_out), "%s/%s.results", x->output, tail) != 0 ||
         fit(m->judge_err, sizeof(m->judge_err), "%s/%s.judge", x->output, tail) != 0 ||
-        fit(m->guest_err, sizeof(m->guest_err), "%s/%s.err", x->output, tail) != 0 ||
+        fit(c->err, sizeof(c->err), "%s/%s.err", x->output, tail) != 0 ||
         fit(m->invocation, sizeof(m->invocation), "%s/%s.invocation", x->output, tail) != 0 ||
         fit(m->program, sizeof(m->program), "%s/%s", x->tree, k->goals[k->program]) != 0)
         return -1;
@@ -3861,7 +3887,8 @@ static int prep_command(struct set *x)
     size_t i, k = 0;
 
     if (fit(c->id, sizeof(c->id), "%s:prepare", x->run_id) != 0 ||
-        fit(c->out, sizeof(c->out), "%s/prepare.log", x->output) != 0)
+        fit(c->out, sizeof(c->out), "%s/prepare.log", x->output) != 0 ||
+        fit(c->err, sizeof(c->err), "%s/prepare.err", x->output) != 0)
         return -1;
     c->name = "prepare";
     for (i = 0; i < x->ncap; i++)

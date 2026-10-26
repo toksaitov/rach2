@@ -221,8 +221,12 @@ static int probe_role(int argc, char **argv)
         puts("plain ran");
     if (!strcmp(mode, "claim"))
         claims();
-    puts(!strcmp(mode, "fail") ? "@etude 1 assert ran fail the count was 2"
-                               : "@etude 1 assert ran pass");
+    if (!strncmp(mode, "streams-", 8))
+        fprintf(stderr, "stream diagnostic\n@etude 1 assert ran %s\n",
+                !strcmp(mode, "streams-fail") ? "pass" : "fail diagnostic only");
+    puts(!strcmp(mode, "fail") || !strcmp(mode, "streams-fail")
+             ? "@etude 1 assert ran fail the count was 2"
+             : "@etude 1 assert ran pass");
     if (strcmp(mode, "cut"))
         puts("@etude 1 end 1");
     return 0;
@@ -310,6 +314,7 @@ static int prepare_role(int argc, char **argv)
     FILE *file;
     int i, bad = 0;
     if (getenv("FIXTURE_BREAK")) {
+        fputs("preparation diagnostic\n", stderr);
         puts("broken components\netude prepare: result: failed: broken components");
         return 1;
     }

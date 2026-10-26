@@ -10,6 +10,7 @@
  * kernel and test image of ARCH (i686 when unset). Their evidence is below
  * the tree's build/tests. --context-only runs the native measurement rows
  * without QEMU or guest artifacts. --stop-only runs the first-failure rows.
+ * --streams-only checks separate reports and diagnostics without QEMU.
  *
  * host-deps: tools/etude/routine_charge.c
  * host-deps: tools/etude/authority.c tools/etude/authority_parse.c
@@ -28,6 +29,7 @@
  * host-deps: tools/etude/collection_load.c
  * host-inputs: tests/host/compat/legacyset_repetition.c
  * host-inputs: tests/host/compat/legacyset_repeat_key.c
+ * host-inputs: tests/host/compat/legacyset_streams.c
  * host-inputs: tests/host/compat/legacyset_context.c
  * host-inputs: tests/host/compat/legacyset_digests.c
  * host-deps: tools/etude/preparation_record.c tools/etude/posix/legacy_set.c
@@ -412,6 +414,11 @@ static const struct fcase mixed_cases[] = {
     {"fixture.mixed.cut", "[\"i686\"]", "\"cut\"", 1, "null", 1, 30000, 30000, 0},
     {"fixture.mixed.slow", "[\"i686\"]", "\"slow\"", 1, "null", 1, 3000, 2000, 0}};
 
+/* stderr carries valid report syntax with the opposite result. */
+static const struct fcase stream_cases[] = {
+    {"fixture.streams.pass", "[\"i686\"]", "\"streams-pass\"", 1, "null", 1, 30000, 30000, 0},
+    {"fixture.streams.fail", "[\"i686\"]", "\"streams-fail\"", 1, "null", 1, 30000, 30000, 0}};
+
 /* The family `bad`, whose one case the refused manifests change. */
 static const struct fcase bad_cases[] = {
     {"fixture.bad.one", "[\"i686\"]", "\"pass\"", 1, "null", 1, 30000, 30000, 0}};
@@ -571,16 +578,16 @@ struct run {
     unsigned width;
     int locks, stop_on_fail;
     int block_workspace; /* refuse the first case's working directory */
-    const char *accel;  /* the accelerator, or NULL for tcg */
-    const char *ledger; /* the ledger, or NULL for the fixtures' */
-    const char *unset;  /* a variable the driver runs without, or NULL */
-    const char *var;    /* a variable the driver runs with, or NULL */
-    const char *arch;   /* the architecture, or NULL for i686 */
-    const char *kernel; /* the NAME of `-n NAME`, or NULL */
-    const char *site;   /* the site's policy, or NULL for none */
-    unsigned limit_mib; /* the ledger's memory limit, or 0 for MEMORY_MIB */
-    int guest;          /* it runs guest cases, on the real QEMU */
-    enum put_fault put; /* the fault of the driver's copies */
+    const char *accel;   /* the accelerator, or NULL for tcg */
+    const char *ledger;  /* the ledger, or NULL for the fixtures' */
+    const char *unset;   /* a variable the driver runs without, or NULL */
+    const char *var;     /* a variable the driver runs with, or NULL */
+    const char *arch;    /* the architecture, or NULL for i686 */
+    const char *kernel;  /* the NAME of `-n NAME`, or NULL */
+    const char *site;    /* the site's policy, or NULL for none */
+    unsigned limit_mib;  /* the ledger's memory limit, or 0 for MEMORY_MIB */
+    int guest;           /* it runs guest cases, on the real QEMU */
+    enum put_fault put;  /* the fault of the driver's copies */
     struct legacy_child *child;
     int status;  /* the driver's, or -1 when a signal ended it */
     long claims; /* the claims the ledger kept after it, or -1 */
@@ -958,6 +965,8 @@ static int make_cases(void)
            write_text(in(path, sizeof(path), "cases/good/good.json"), text, 0644) != 0;
     bad |= manifest_text(text, sizeof(text), "fixture.mixed", mixed_cases, 4) != 0 ||
            write_text(in(path, sizeof(path), "cases/mixed/mixed.json"), text, 0644) != 0;
+    bad |= manifest_text(text, sizeof(text), "fixture.streams", stream_cases, 2) != 0 ||
+           write_text(in(path, sizeof(path), "cases/streams/streams.json"), text, 0644) != 0;
     for (i = 0; i < sizeof(ones) / sizeof(ones[0]); i++) {
         fix_format(family, sizeof(family), "fixture.%s", ones[i].suite);
         fix_format(id, sizeof(id), "fixture.%s.one", ones[i].suite);
@@ -1015,6 +1024,7 @@ static void make_tree(void)
                                        "cases/one",
                                        "cases/good",
                                        "cases/mixed",
+                                       "cases/streams",
                                        "cases/bad",
                                        "cases/guest",
                                        "cases/badguest",
@@ -1845,6 +1855,13 @@ static void test_prepare(void)
               item_is(&r, "fixture.fail.one", "cancelled"),
           "prepare: every item cancelled");
     CHECK(has_start(r.out, "etude run: result: preparation failed: "), "prepare: the result");
+    char diagnostic_path[PATH_LEN * 2], diagnostic[256];
+    fix_format(diagnostic_path, sizeof(diagnostic_path), "%s/output/prepare.err", r.results);
+    CHECK(read_text(diagnostic_path, diagnostic, sizeof(diagnostic)) > 0 &&
+              has_line(diagnostic, "preparation diagnostic") &&
+              !output_has(&r, "prepare", "preparation diagnostic") &&
+              has_line(r.out, "preparation diagnostic"),
+          "prepare: separate diagnostics remain visible");
     CHECK(r.claims == 0, "prepare: the ledger has no claim");
     show(&r, before);
 }
@@ -3012,6 +3029,7 @@ static int guest_site(void)
 #include "compat/legacyset_digests.c"
 #include "compat/legacyset_repeat_key.c"
 #include "compat/legacyset_repetition.c"
+#include "compat/legacyset_streams.c"
 
 /** Run only native first-failure rows, without QEMU or guest artifacts. */
 static int stop_cases_only(void)
@@ -3025,6 +3043,12 @@ static int stop_cases_only(void)
     fix_passed();
     puts("etude_legacyset_hosttest: stop pass");
     return 0;
+}
+
+static int native_selection(const char *argument)
+{
+    return !strcmp(argument, "--streams-only") || !strcmp(argument, "--stop-only") ||
+           !strcmp(argument, "--repetitions-only") || !strcmp(argument, "--context-only");
 }
 
 int main(int argc, char **argv)
@@ -3060,8 +3084,8 @@ int main(int argc, char **argv)
     }
     int repetitions_only = argc == 2 && !strcmp(argv[1], "--repetitions-only");
     int stops_only = argc == 2 && !strcmp(argv[1], "--stop-only");
-    context_only =
-        stops_only || repetitions_only || (argc == 2 && !strcmp(argv[1], "--context-only"));
+    int streams_only = argc == 2 && !strcmp(argv[1], "--streams-only");
+    context_only = argc == 2 && native_selection(argv[1]);
     if (context_only)
         guest_arch = "i686";
     else if (guest_site() != 0)
@@ -3078,6 +3102,8 @@ int main(int argc, char **argv)
     make_tree();
     if (fixture_environment(0) != 0)
         return 1;
+    if (streams_only)
+        return stream_cases_only();
     if (repetitions_only)
         return repetition_cases_only();
     if (stops_only)
@@ -3109,6 +3135,7 @@ int main(int argc, char **argv)
     test_cases_both();
     test_cases_one();
     test_cases_mixed();
+    test_streams();
     test_cases_stops();
     test_machine();
     test_publish();
