@@ -50,7 +50,11 @@
 #                        at the speed of the host, and amd64 elsewhere
 #   RACH2_QEMU_ACCEL     QEMU's accelerator: hvf on a Mac that can accelerate
 #                        the machine, an arm64 one on Apple silicon or an amd64
-#                        one on an Intel Mac, and tcg elsewhere
+#                        one on an Intel Mac, and tcg elsewhere. On Apple
+#                        silicon, unless ETUDE_TOOLING_ARCH is given, the arm64
+#                        machine runs under hvf whatever this says, since the
+#                        test machines' accelerator, which a caller such as the
+#                        routine sets here, is tcg there
 #   ETUDE_TOOLING_CACHE  the machine's cache, build/tooling
 #
 
@@ -82,6 +86,9 @@ if [ -z "${ETUDE_TOOLING_ARCH:-}" ]; then
     ETUDE_TOOLING_ARCH=amd64
     if [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ]; then
         ETUDE_TOOLING_ARCH=arm64
+        if [ "$(sysctl -n kern.hv_support 2>/dev/null)" = 1 ]; then
+            RACH2_QEMU_ACCEL=hvf
+        fi
     fi
 fi
 if [ -z "${RACH2_QEMU_ACCEL:-}" ]; then
