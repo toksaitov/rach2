@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include "../../etude/routine_route.c"
 #include "../../../tests/host/compat/fixdir_host.c"
@@ -165,6 +166,84 @@ static void request_contract(struct route *r)
     json_free(request);
 }
 
+static int git(const char *tree, const char *const words[])
+{
+    char *argv[16] = {"git", "-C", (char *)tree};
+    size_t n = 3;
+    for (; *words && n < 15; words++)
+        argv[n++] = (char *)*words;
+    argv[n] = NULL;
+    pid_t pid = fork();
+    if (pid == 0) {
+        execvp(argv[0], argv);
+        _exit(127);
+    }
+    int status;
+    return pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status) && !WEXITSTATUS(status)
+               ? 0
+               : -1;
+}
+
+/*
+ * Run `etude prepare route direct-setup` on a committed tree whose request
+ * differs from the invocation by CHANGE: nothing, the selection or the
+ * output root. Each projects the frozen policy for Linux and keeps the
+ * original; only the matching request packs the routine proofs.
+ */
+static void direct_setup_contract(const char *scratch, const char *self, const char *change)
+{
+    char root[4096], tree[4096], out[4096], freeze[4096], file[4096], config[4096], site[4096];
+    char commit[41];
+    const char *init[] = {"init", "-q", NULL}, *add[] = {"add", ".", NULL};
+    const char *save[] = {
+        "-c",  "user.name=Etude fixture", "-c", "user.email=fixture@example.invalid", "commit",
+        "-qm", "Route fixture",           NULL};
+    const char original[] = "etude-site 2\nendpoint disabled\nledger /fixture\n";
+    const char projected[] = "etude-site 2\nendpoint linux\nledger /fixture\n";
+    snprintf(file, sizeof file, "direct-%s", change ? change : "same");
+    CHECK(!path(root, scratch, file) && !mkdir(root, 0700));
+    CHECK(!path(tree, root, "tree") && !mkdir(tree, 0700));
+    CHECK(!path(file, tree, ".gitignore") && !hp_write(file, "build/\n", 7));
+    CHECK(!path(file, tree, "source") && !hp_write(file, "route source fixture\n", 21));
+    CHECK(!git(tree, init) && !git(tree, add) && !git(tree, save));
+    CHECK(!etude_context_candidate(tree, commit));
+    CHECK(!path(out, tree, "build/result") && !hp_mkdir(out));
+    CHECK(!path(freeze, out, "routine-proofs-input/freeze") && !hp_mkdir(freeze));
+    CHECK(!path(file, freeze, "policy-before") && !hp_write(file, original, sizeof original - 1));
+    CHECK(!path(config, root, "route.json"));
+    const char route[] = "{\"format\":\"etude-routine-route\",\"schema_version\":1,"
+                         "\"mode\":\"wsl-native\","
+                         "\"physical\":{\"linux_output_root\":\"/shared/retained\"}}";
+    CHECK(!hp_write(config, route, sizeof route - 1));
+    char request[1024];
+    int n = snprintf(request, sizeof request,
+                     "{\"purpose\":\"ci\",\"commit\":\"%s\",\"run\":\"fixture\","
+                     "\"arches\":\"both\",\"accel\":\"kvm\",\"selection\":[\"%s\"],"
+                     "\"preparation\":{\"clean\":false,\"selection_export\":null},"
+                     "\"out\":\"/shared/%s/fixture\"}",
+                     commit, change && !strcmp(change, "selection") ? "host" : "all",
+                     change && !strcmp(change, "out") ? "retained-other" : "retained");
+    CHECK(n > 0 && n < (int)sizeof request);
+    CHECK(!path(file, out, "routine.request.json") && !hp_write(file, request, (size_t)n));
+    CHECK(!path(site, root, "site") && !hp_write(site, "fixture site file\n", 18));
+    char *argv[] = {
+        "route",  "direct-setup", "--config", config,       "--tree",    tree,  "--out",    out,
+        "--run",  "fixture",      "--commit", commit,       "--purpose", "ci",  "--arches", "both",
+        "--site", site,           "--etude",  (char *)self, "--accel",   "kvm", "--",       "all"};
+    volatile sig_atomic_t stop = 0;
+    unsetenv("ETUDE_PHASE_SELECTION_EXPORT");
+    CHECK(etude_prepare_route_main((int)(sizeof argv / sizeof *argv), argv, &stop) ==
+          (change ? 1 : 0));
+    char *policy = !path(file, freeze, "policy-before") ? hp_read(file) : NULL;
+    CHECK(policy && !strcmp(policy, original));
+    free(policy);
+    char *consumer = !path(file, out, "consumer.linux.site") ? hp_read(file) : NULL;
+    CHECK(consumer && !strcmp(consumer, projected));
+    free(consumer);
+    struct stat st;
+    CHECK(!path(file, out, "routine-proofs") && !lstat(file, &st) == !change);
+}
+
 static void interrupted(int number)
 {
     exit(128 + number);
@@ -204,6 +283,11 @@ int main(int argc, char **argv)
     request_contract(&r);
     json_free(r.config);
     json_free(r.preparation);
+    char self[4096];
+    CHECK(realpath(argv[0], self) != NULL);
+    const char *changes[] = {NULL, "selection", "out"};
+    for (size_t i = 0; i < 3; i++)
+        direct_setup_contract(scratch, self, changes[i]);
     if (!failures)
         fix_passed();
     if (failures)

@@ -2,8 +2,9 @@
  * Check the fixed native route actions of tools/etude/routine_route.c with
  * tools/ci/fixtures/routine_route_actions_test.c, which replaces the path
  * and remote transport functions the route calls and needs no endpoint or
- * authority.
+ * authority. Its direct setup runs on small committed trees.
  *
+ * host-tools: git
  * host-deps: tools/etude/authority_parse.c tools/etude/authority_run.c
  * host-deps: tools/etude/boot_identity.c tools/etude/capture.c
  * host-deps: tools/etude/collection_tools.c tools/etude/guest/wire.c

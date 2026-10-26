@@ -1107,6 +1107,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "etude_producer",
+          "checks": "tests/host/etude_producer_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "etude_route",
           "checks": "tests/host/etude_route_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -1158,7 +1163,7 @@
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 29
+          "limit": 30
         }
       ],
       "bounds": {

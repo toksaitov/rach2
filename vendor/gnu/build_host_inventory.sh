@@ -66,7 +66,7 @@ cp "$GNU_OUT/host-products/host" "$TREE/build/tests/cases/host/host"
 # dependencies of the desktop running the collection.
 TOOLS=$OUT/tool-inputs
 mkdir -p "$TOOLS"
-for name in tar mdir mcopy mke2fs debugfs dumpe2fs e2fsck python3; do
+for name in git tar mdir mcopy mke2fs debugfs dumpe2fs e2fsck python3; do
     source=
     for dir in "$GNU_OUT/root/usr/bin" "$GNU_OUT/root/usr/sbin" "$GNU_OUT/root/bin" \
         "$GNU_OUT/root/sbin" "$GNU_OUT/host-products"; do
