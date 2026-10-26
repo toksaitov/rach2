@@ -142,6 +142,11 @@ static int nguests;
 static long groups[32];
 static int ngroups;
 
+/* The owners of attempts whose etude-guest was killed: each writes its proof
+ * into the attempt's directory once it has reaped the command. */
+static struct etude_pid keepers[8];
+static int nkeepers;
+
 /** Give the monotonic time in microseconds. */
 static uint64_t now_us(void)
 {
@@ -163,8 +168,9 @@ static void digest_hex(const void *p, size_t n, char hex[65])
     sha256_hex(d, hex);
 }
 
-/** End every etude-guest and attempt the test started, and remove the
- * scratch, on every exit path. */
+/** End every etude-guest and attempt the test started, wait for the owners
+ * of the attempts of killed etude-guests, and remove the scratch, on every
+ * exit path. */
 static void cleanup(void)
 {
     int i;
@@ -178,6 +184,14 @@ static void cleanup(void)
         }
     for (i = 0; i < ngroups; i++)
         kill(-(pid_t)groups[i], SIGKILL);
+    for (i = 0; i < nkeepers; i++) {
+        struct etude_pid now;
+
+        while (etude_process_state(keepers[i].pid, &now) == 1 && now.start == keepers[i].start) {
+            /* interval: the attempt's owner is looked at again every 10 ms */
+            poll(NULL, 0, 10);
+        }
+    }
     if (*alias_dir) {
         char path[720];
         snprintf(path, sizeof(path), "%s/w", alias_dir);
@@ -1329,6 +1343,33 @@ static void note_group(struct harness *h)
         groups[ngroups++] = r->process.pid;
 }
 
+/** Note the owner of attempt `token` from its record in the state directory
+ * `state`, so that the cleanup waits for it to end before it removes the
+ * scratch that the owner writes. */
+static void note_keeper(const char *state, const char *token)
+{
+    char path[700], text[2048], *p;
+    long pid;
+    unsigned long long start;
+    size_t n;
+    FILE *f;
+
+    snprintf(path, sizeof(path), "%s/a/%s/record", state, token);
+    if ((f = fopen(path, "r")) == NULL)
+        return;
+    n = fread(text, 1, sizeof(text) - 1, f);
+    fclose(f);
+    text[n] = '\0';
+    p = strstr(text, "\nkeeper ");
+    if (p != NULL && sscanf(p + 8, "%ld %llu", &pid, &start) == 2 && pid > 0 &&
+        nkeepers < (int)(sizeof(keepers) / sizeof(keepers[0]))) {
+        keepers[nkeepers].pid = pid;
+        keepers[nkeepers].start = start;
+        keepers[nkeepers].start_known = 1;
+        nkeepers++;
+    }
+}
+
 /** Say whether the process group `pgid` has no process left. */
 static int group_gone(long pgid)
 {
@@ -1754,6 +1795,7 @@ static void check_restart(void)
               etude_serial_status(h->s) == ETUDE_SERIAL_BUSY,
           "a run goes on before its etude-guest is killed");
     note_group(h);
+    note_keeper(state, "00000000000000f2");
     end_guest(h);
     if (r->process.pid > 0)
         kill(-(pid_t)r->process.pid, SIGKILL);
