@@ -97,8 +97,13 @@ static int entry_inputs(struct entry *e, int argc, char **argv)
 static int entry_policy(struct entry *e)
 {
     const char *path = getenv("ETUDE_SITE"), *route = getenv("ETUDE_ROUTINE_ROUTE");
-    if (!path)
+    if (!path) {
+#ifdef _WIN32
+        path = "C:/ProgramData/rach2/etude-site";
+#else
         path = "/etc/rach2/etude-site";
+#endif
+    }
     if (!route || !*route)
         route = NULL;
     if (!authority_absolute(path) || strlen(path) >= sizeof e->in.site ||
@@ -128,7 +133,7 @@ static int entry_accelerator(struct entry *e)
         FILE *file = fopen(path, "rb");
         if (!file)
             return -1;
-        int found = 0, error = 0;
+        int found = 0, runner = 0, error = 0;
         while (fgets(line, sizeof line, file)) {
             if (*line == '#' || *line == '\n')
                 continue;
@@ -142,12 +147,14 @@ static int entry_accelerator(struct entry *e)
                     break;
                 }
                 strcpy(e->accel, value);
-            } else if (strcmp(name, "runner")) {
+            } else if (strcmp(name, "runner") || runner++ ||
+                       !strchr("abcdefghijklmnopqrstuvwxyz0123456789", value[0]) ||
+                       strspn(value, "abcdefghijklmnopqrstuvwxyz0123456789-") != strlen(value)) {
                 error = 1;
                 break;
             }
         }
-        error |= ferror(file) || !found;
+        error |= ferror(file) || !found || !runner;
         if (fclose(file))
             error = 1;
         if (error)
@@ -555,6 +562,9 @@ static int entry_start(struct entry *e, int argc, char **argv, char run[256])
 {
     char start[ROUTINE_PATH];
     struct stat st;
+    const char *retention = getenv("ETUDE_RETENTION");
+    if (!retention || !*retention)
+        return entry_refuse("selected-site retention policy is absent");
     if (entry_inputs(e, argc, argv) || entry_policy(e) || entry_environment(e, run) ||
         routine_path(start, e->in.out, "start") || !lstat(start, &st) || errno != ENOENT)
         return entry_refuse("invalid, changed or previously used routine inputs");

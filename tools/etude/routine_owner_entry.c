@@ -206,14 +206,26 @@ static int proxy(struct owner_entry *e)
                                         NULL};
     if (wsl_environment(names))
         return 2;
+    char *execution = NULL;
+#ifndef _WIN32
+    char *wslpath = hp_program("wslpath");
+    if (wslpath)
+        execution = path_query(e, wslpath, "-u", program, "physical-program");
+    free(wslpath);
+#endif
+    if (!execution || *execution != '/' || access(execution, X_OK)) {
+        free(execution);
+        return 2;
+    }
     struct hp_words args = {0};
-    const char *const fixed[] = {e->in.program, "proxy", program, "authority",
-                                 "helper",      program, "run",   "routine-sequence"};
+    const char *const fixed[] = {e->in.program, "proxy", execution, "authority",
+                                 "helper",      program, "run",     "routine-sequence"};
     for (size_t i = 0; i < sizeof fixed / sizeof *fixed; i++)
         hp_add(&args, fixed[i]);
     arguments(&args, &native);
     int result = etude_authority_main((int)args.n, args.v);
     hp_words_free(&args);
+    free(execution);
     return result;
 }
 
@@ -259,9 +271,12 @@ static int request_read(struct owner_entry *e)
     const char *const keys[] = {"purpose", "commit",    "run",        "arches",
                                 "accel",   "selection", "preparation"};
     int error = 0;
-    for (size_t i = 0; i < sizeof keys / sizeof *keys; i++)
-        if (!json_equal(json_member(e->request, keys[i]), json_member(expected, keys[i])))
+    for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) {
+        const struct json *actual = json_member(e->request, keys[i]);
+        const struct json *wanted = json_member(expected, keys[i]);
+        if (!actual || !wanted || !json_equal(actual, wanted))
             error = 1;
+    }
     const char *const required[] = {"tree", "out", "site", "etude"};
     for (size_t i = 0; i < sizeof required / sizeof *required; i++) {
         const char *value = field(e->request, required[i]);
@@ -456,6 +471,7 @@ int etude_routine_owner_main(int argc, char **argv)
     e.physical = json_member(e.config, "physical");
     e.producer = json_member(e.config, "producer");
 #ifdef _WIN32
+    (void)proxy;
     int result = physical_owner(&e);
 #else
     int result = !strcmp(e.site.mode, "wsl-native") ? proxy(&e) : 2;
