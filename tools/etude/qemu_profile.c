@@ -1082,7 +1082,7 @@ static int boundary(const struct etude_qemu_profile *p)
 static void add_boundary_memory(struct line *l, const char *size)
 {
     add(l, 0, "-object");
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(_WIN32)
     add(l, 0, "memory-backend-ram,id=etude-ram,size=%s,prealloc=off,merge=off", size);
 #else
     add(l, 0, "memory-backend-ram,id=etude-ram,size=%s,prealloc=off,merge=off,dump=off", size);
