@@ -270,6 +270,11 @@ static int exists(struct fixture *f, const char *name)
 {
     return fx_exists(flow_path(f, name));
 }
+static int is_link(struct fixture *f, const char *name)
+{
+    struct stat st;
+    return !lstat(flow_path(f, name), &st) && S_ISLNK(st.st_mode);
+}
 static int leftovers_previews(struct fixture *f)
 {
     int ok = 1;
@@ -376,7 +381,7 @@ int flow_leftovers(struct fixture *f)
     if (!g(f, cwd, "worktree", "list", NULL))
         return 0;
     ok = fx_check(f, !strstr(f->out, "/clean"), "clean worktree registration removed") && ok;
-    return ok;
+    return fx_check(f, is_link(f, "home.noindex/link"), "loose link kept as a link") && ok;
 }
 static int file_at(const char *dir, const char *name, const char *text)
 {
@@ -622,7 +627,11 @@ static int tidy_checks(struct fixture *f)
         ok = fx_check(f, exists(f, kept[i]), kept[i]) && ok;
     for (i = 0; i < 8; i++)
         ok = fx_check(f, !exists(f, gone[i]), gone[i]) && ok;
-    return ok;
+    return fx_check(f,
+                    is_link(f, "clone/build/x86_64/vendor/gnu/cross") &&
+                        is_link(f, "tmp/rach2-link.Li9kLi"),
+                    "store and scratch links kept as links") &&
+           ok;
 }
 static int tidy_stems(struct fixture *f)
 {
