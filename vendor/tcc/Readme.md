@@ -61,15 +61,15 @@ The manifests `os-real`, `os-real-gnu`, `grub-test` and `rach2-metal-disk` in [`
 ## Updating
 
 1. Put the new release tarball in this directory and remove the old one.
-2. Change `VERSION` and `TARBALL_SHA256` in `build_tcc.sh`, `TCC_TARBALL` in the root `Makefile`, the tarball and tree names in `check_asm.sh` and `check_ldscript.sh`, and the extracted tree's name in `.gitignore`.
+2. Change `VERSION` and `TARBALL_SHA256` in `build_tcc.sh`, `TCC_TARBALL` in the root `Makefile`, the tarball and tree names in `vendor/gnu/build_host_products.sh`, and the extracted tree's name in `.gitignore`.
 3. Rebase each patch onto the new source, or drop it when the release has made the change, and update the line `build_tcc.sh` checks for it.
 4. Check the configure result, the runtime's build rule and the libgcc helpers musl refers to; `check_link.sh` names any helper that is missing.
 5. Build both architectures and run the tests below.
 
 ## Tests
 
-* `tests/run host` runs [`check_asm.sh`](check_asm.sh), which builds both assemblers for the host and compares them with GNU as on the files of [`asm-test/`](asm-test): 16-bit and 32-bit code instruction for instruction, the 64-bit system instructions, and a trampoline and fields of a constant less a label, linked by GNU ld and by TinyCC, byte for byte. The 32-bit comparison leaves out four forms the i386 assembler encodes its own way: `movw` to a segment register with an operand-size prefix, and `sldt`, `smsw`, `str`, and `jmp` and `call` through a 16-bit register without one.
-* `tests/run host` runs [`check_ldscript.sh`](check_ldscript.sh), which builds the x86-64 compiler for the host, links [`ld-test/prog.s`](ld-test/prog.s) by [`ld-test/script.ld`](ld-test/script.ld) with TinyCC and with GNU ld, and requires the same layout and symbols of both.
+* The `check_asm` check of `tests/run host`, in [`tests/cases/host/build_compilers.c`](../../tests/cases/host/build_compilers.c), runs both assemblers that preparation builds for the host (`vendor/gnu/build_host_products.sh`) and compares them with GNU as on the files of [`asm-test/`](asm-test): 16-bit and 32-bit code instruction for instruction, the 64-bit system instructions, and a trampoline and fields of a constant less a label, linked by GNU ld and by TinyCC, byte for byte. The 32-bit comparison leaves out four forms the i386 assembler encodes its own way: `movw` to a segment register with an operand-size prefix, and `sldt`, `smsw`, `str`, and `jmp` and `call` through a 16-bit register without one.
+* The `check_ldscript` check, in the same file, links [`ld-test/prog.s`](ld-test/prog.s) by [`ld-test/script.ld`](ld-test/script.ld) with TinyCC and with GNU ld, and requires the same layout and symbols of both.
 * `tests/run tcc` compiles and runs a program on Rach2 as an unprivileged user, requires each of the four refusals with its message and no output file, compiles an object, builds `cat` from `/src/utils` and compares it with BusyBox's, and links `ping` from two sources. The boot traces each system call the kernel does not implement, and the suite fails if the compiler asked for one.
 * `tests/run make` builds a program with pdpmake and TinyCC across an incremental rebuild and a reboot.
 * `tests/run selfbuild` builds the kernel twice on Rach2 and requires the two to be equal, builds the utilities and the shell, and runs the default probes on the kernel it built.

@@ -1,8 +1,8 @@
 /*
  * winstand.c: the stand-ins that the tooling fixtures of winfixture put on
  * the PATH of `etude provision tooling` for curl, qemu-img and QEMU, as
- * tests/system/etude_tooling_test.sh does with shell scripts on POSIX
- * systems. One program plays each, by the name it is run under.
+ * tests/cases/host/flow_tooling.c does on POSIX systems. One program plays
+ * each, by the name it is run under.
  *
  * The fixture's files are in FIX, the directory `fix` beside the directory
  * of the program. `curl` copies FIX/image. `qemu-img create` writes an

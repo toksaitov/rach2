@@ -2,7 +2,7 @@
  * The KRFFS root's data operations under the mount's lock, and the order the
  * lock is taken in.
  *
- * `tests/host/extract_check.sh` extracts from `rach2/sys/fs/vfs.c`,
+ * The rule of `mk/host-fixtures.mk` extracts from `rach2/sys/fs/vfs.c`,
  * unchanged, the root adapter's five data operations, `kfs_read`,
  * `kfs_write`, `kfs_truncate`, `kfs_fsync` and `kfs_readdir`, the bodies they
  * call, and the namespace lock they take, and compiles them here over the

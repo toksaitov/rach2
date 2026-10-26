@@ -86,7 +86,7 @@ int runtime_controller(const char *id, const char *gap);
 /*
  * The tooling fixtures. Each runs `etude provision tooling`, from etude.exe
  * beside winfixture.exe, against the stand-ins of winstand.exe, as a row of
- * tests/system/etude_tooling_test.sh does: a machine made, recorded and
+ * tests/cases/host/flow_tooling.c does: a machine made, recorded and
  * reused; an image of another digest; a provision that fails; a job with its
  * inputs, a disk and its outputs; a job that exits 3; a run before the
  * machine is made; a hang past the deadline; QEMU's crash; a runner whose

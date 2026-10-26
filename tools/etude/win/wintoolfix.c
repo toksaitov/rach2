@@ -2,9 +2,9 @@
  * wintoolfix.c: the tooling fixtures of winfixture. Each runs `etude
  * provision tooling`, from etude.exe beside winfixture.exe, through
  * etude/exec.h, with copies of winstand.exe in place of curl, qemu-img and
- * QEMU, and judges a row of tests/system/etude_tooling_test.sh by the
- * command's status and output, the cache, the stand-ins' files and the
- * history it wrote. One more row requires a job's steps to have QEMU's
+ * QEMU, and judges a row of tests/cases/host/flow_tooling.c by the command's
+ * status and output, the cache, the stand-ins' files and the history it
+ * wrote. One more row requires a job's steps to have QEMU's
  * processor time and working set, sampled through its job.
  */
 #include <direct.h>

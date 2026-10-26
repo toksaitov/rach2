@@ -1,9 +1,9 @@
 /**
  * The set-id rules of a chown on a mounted file system.
  *
- * chown_plan.sh, which tests/host/extract_check.sh runs, extracts
- * `vfs_chown_plan` and the three credential helpers it calls unchanged
- * from a copy of rach2/sys/syscall_fs.c into chown_plan.inc, with the
+ * The rule of mk/host-fixtures.mk extracts `vfs_chown_plan` and the
+ * three credential helpers it calls unchanged from rach2/sys/syscall_fs.c
+ * into chown_plan.inc, with the
  * `proc_privileged` macro from rach2/sys/proc/process.h, `struct vfs_stat`
  * and the `VFS_SET_` masks from rach2/sys/fs/vfs.h and `EPERM` from
  * rach2/sys/lib/kerrno.h. The chown by path and the chown by descriptor

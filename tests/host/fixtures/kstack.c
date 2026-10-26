@@ -2,7 +2,7 @@
  * A kernel stack taken from a heap whose pages held a finished process's
  * code, with a guard page below it.
  *
- * tests/host/kstack_check.sh extracts `kstack_alloc`, `kstack_free` and
+ * The rule of mk/host-fixtures.mk extracts `kstack_alloc`, `kstack_free` and
  * `kstack_overrun_pid` unchanged from rach2/sys/syscall_proc.c into
  * kstack.inc, with the two sizes they use. The heap here fills every page it
  * hands out with 0xC3, an x86 `ret`, which stands for the code a

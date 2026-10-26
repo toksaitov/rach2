@@ -3,7 +3,7 @@
  * wide stat calls, through the stat functions of rach2/sys/syscall_fs.c and
  * vfs.c's kfs_getattr, over krffs_hosttest.c's core and image.
  *
- * tests/host/extract_check.sh extracts the functions unchanged with
+ * The rules of mk/host-fixtures.mk extract the functions unchanged with
  * extract.c: krffs_stat_types.inc has the stat structures of
  * arch/i686/uabi.h, fs/vfs.h and syscall_fs.c, and krffs_stat_funcs.inc the
  * stat functions of syscall_fs.c and kfs_getattr. This file supplies the user

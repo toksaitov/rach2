@@ -1,5 +1,5 @@
 # Instructions of the code a processor runs before long mode, which
-# check_asm.sh assembles as 16-bit code and as 32-bit code.
+# the check_asm check assembles as 16-bit code and as 32-bit code.
     cli
     cld
     xorw %ax, %ax
