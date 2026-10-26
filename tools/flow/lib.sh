@@ -86,11 +86,13 @@ limited()
 # run_session OUT ERR LIMIT COMMAND...: run COMMAND with its output in OUT and
 # its errors in ERR under `session.pl`, in a process group of its own that
 # STATE/session records before COMMAND starts, and stop the whole group when
-# it is still running after LIMIT seconds: TERM, then KILL half a minute
-# later. Return COMMAND's status once it ends and what it left in its group,
-# such as a suite it started in the background, has been stopped and logged;
-# 124 when the limit stopped it; and 125 when the group could not be recorded,
-# and COMMAND did not run.
+# it is still running after LIMIT seconds or the supervisor gets TERM or INT:
+# TERM, then KILL half a minute later. Return COMMAND's status once it ends
+# and what it left in its group, such as a suite it started in the
+# background, has been stopped and logged; 124 when the limit stopped it; 128
+# plus the signal's number, once the group is gone, when a signal to the
+# supervisor stopped it; and 125 when the group could not be recorded, and
+# COMMAND did not run.
 #
 # The supervisor that `session.pl` runs leaves the loop's group before it
 # starts anything, so a hangup that ends the loop reaches neither it nor the
