@@ -27,14 +27,8 @@
  * host-inputs: tools/etude/host_prepare_scripts.c mk/host-check.mk
  * host-inputs: mk/host-fixtures.mk build/tools/etude/etude
  * host-inputs: tests/host/fixtures/extract.py
- * host-inputs: tools/ci/fixtures/routine_route_test.py
- * host-inputs: tools/ci/routine_entry.py
- * host-inputs: tools/ci/routine_jobs.py tools/ci/routine_pack.py
- * host-inputs: tools/ci/routine_remote.py
- * host-inputs: tools/ci/native_site.sh
- * host-inputs: tools/ci/native_evidence.py tools/ci/retention_access.py
- * host-inputs: tools/ci/retention_io.py tools/ci/retention_registry.py
- * host-inputs: tools/ci/retention_closure.py tools/ci/retention_issues.py
+ * host-inputs: tools/ci/fixtures/routine_producer_test.py
+ * host-inputs: tools/ci/fixtures/routine_route_actions_test.py
  * host-inputs: tools/etude/preparation_import.c
  * host-inputs: tools/etude/preparation_import_data.c
  * host-inputs: tools/etude/preparation_import_transfer.c

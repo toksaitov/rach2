@@ -95,7 +95,10 @@ jobs:
         id: retention
         run: |
           if [ "$ETUDE_NATIVE_ENTRY" = true ]; then
-              python3 tools/ci/retention.py --policy "${ETUDE_RETENTION:?native retention policy is absent}" --site "${ETUDE_SITE:?native site is absent}" allocate --reference "${ETUDE_REFERENCE:?native reference is absent}" --github-env "$GITHUB_ENV"
+              program=${ETUDE:-$(sed -n 's/^etude //p' "${ETUDE_SITE:?native site is absent}")}
+              case $program in /*|[A-Za-z]:/*) ;; *) echo 'ci: installed Etude is absent' >&2; exit 2 ;; esac
+              "$program" prepare retention --policy "${ETUDE_RETENTION:?native retention policy is absent}" --site "${ETUDE_SITE:?native site is absent}" allocate --reference "${ETUDE_REFERENCE:?native reference is absent}" --github-env "$GITHUB_ENV"
+              echo "ETUDE=$program" >> "$GITHUB_ENV"
           else
               out=$(mktemp -d "$RUNNER_TEMP/core-results.XXXXXX")
               echo "ETUDE_RESULTS=$out" >> "$GITHUB_ENV"
@@ -117,7 +120,8 @@ jobs:
 
       - name: Stage the shared native evidence
         if: ${{ always() && needs.head.outputs.native == 'true' && steps.retention.outcome == 'success' }}
-        run: python3 tools/ci/native_evidence.py stage "$ETUDE_RESULTS" "$RUNNER_TEMP/native-evidence"
+        run: |
+          "${ETUDE:?native Etude is absent}" prepare evidence stage "$ETUDE_RESULTS" "$RUNNER_TEMP/native-evidence"
 
       - name: Upload the shared native evidence
         if: ${{ always() && needs.head.outputs.native == 'true' && steps.retention.outcome == 'success' }}
@@ -167,7 +171,10 @@ jobs:
 
       - name: Restore the shared native evidence
         if: needs.head.outputs.native == 'true'
-        run: python3 tools/ci/native_evidence.py restore "$RUNNER_TEMP/results/core-native-evidence" "$RUNNER_TEMP/results"
+        run: |
+          program=${ETUDE:-$(sed -n 's/^etude //p' "${ETUDE_SITE:?native site is absent}")}
+          case $program in /*|[A-Za-z]:/*) ;; *) echo 'ci: installed Etude is absent' >&2; exit 2 ;; esac
+          "$program" prepare evidence restore "$RUNNER_TEMP/results/core-native-evidence" "$RUNNER_TEMP/results"
 
       - name: Set the commit's status and file failures as issues
         if: always()
