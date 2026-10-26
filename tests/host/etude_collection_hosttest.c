@@ -374,9 +374,16 @@ static void fixture_policy(unsigned cpu)
 
 static void fixture(void)
 {
-    static const char *const dirs[] = {"tests",       "tests/cases",         "tools",
-                                       "tools/etude", "tools/etude/schemas", "build",
-                                       "build/tests", "build/tests/host"};
+    static const char *const dirs[] = {"tests",
+                                       "tests/cases",
+                                       "tools",
+                                       "tools/etude",
+                                       "tools/etude/schemas",
+                                       "build",
+                                       "build/tests",
+                                       "build/tests/host",
+                                       "build/tests/results",
+                                       "build/tests/results/ledger"};
     for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++)
         CHECK(mkdir(fix_path(dirs[i]), 0700) == 0, "fixture directory is made");
     put("tests/registry", "default|-|core\nhost|-|core\nagents|-|full|||x86_64\n");
@@ -393,6 +400,7 @@ static void fixture(void)
     CHECK(chmod(fix_path("build/tests/host/sha256_hosttest"), 0700) == 0,
           "prepared binary is executable");
     make_record();
+    put("build/tests/results/ledger/claims", "etude-ledger 1\n");
     fixture_policy(4000);
 }
 
