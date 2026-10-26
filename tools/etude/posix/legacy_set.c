@@ -1719,19 +1719,32 @@ static void feed(struct command *c)
     fclose(f);
 }
 
-/** Print diagnostic bytes separately from the report stream. */
-static void drain_error(struct set *x, struct command *c)
+/**
+ * Print the whole lines of command `c`'s standard error not printed yet,
+ * and with `all` the rest as well, separately from the report stream.
+ *
+ * A line not yet ended waits for its newline, so that a diagnostic written
+ * in two parts is never joined to the next line of the report; a line
+ * longer than the buffer of 4096 bytes is printed in parts.
+ */
+static void drain_error(struct set *x, struct command *c, int all)
 {
     char buf[4096];
-    size_t got;
+    size_t got, n;
     FILE *f = fopen(c->err, "rb");
     if (!f)
         return;
-    if (fseek(f, c->err_printed, SEEK_SET) == 0)
-        while ((got = fread(buf, 1, sizeof(buf), f)) > 0) {
-            c->err_printed += (long)got;
-            fwrite(buf, 1, got, x->out);
-        }
+    while (fseek(f, c->err_printed, SEEK_SET) == 0 && (got = fread(buf, 1, sizeof(buf), f)) > 0) {
+        n = got;
+        while (!all && n > 0 && buf[n - 1] != '\n')
+            n--;
+        if (n == 0 && got < sizeof(buf))
+            break;
+        if (n == 0)
+            n = got;
+        c->err_printed += (long)n;
+        fwrite(buf, 1, n, x->out);
+    }
     fclose(f);
 }
 
@@ -1761,7 +1774,7 @@ static void drain(struct set *x, struct command *c, int all)
     fclose(f);
     if (all && c->nline > 0)
         flush_line(x, c);
-    drain_error(x, c);
+    drain_error(x, c, all);
     fflush(x->out);
 }
 
