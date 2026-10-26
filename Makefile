@@ -651,14 +651,28 @@ build/x86_64/tests/host-suite/boots.inventory.json: $(ETUDE) $(HOST_BOOT_SCHEMAS
     build/x86_64/images/host-etude-scenario.disk build/x86_64/tests/hello \
     build/x86_64/tests/rngprobe build/x86_64/tools/etude/guest/etude-guest
 
-.PHONY: host-inventory-force
+# The desktop's own Git and tar, which the native platform check runs.
+# Preparation copies each into build/tests/host-suite/tools and records the
+# file the link resolves to; the GNU helper names its own directory instead.
+HOST_PREPARED_TOOLS = build/tests/host-suite/prepared-tools
+.PHONY: host-inventory-force host-prepared-tools
 host-inventory-force:
+host-prepared-tools:
+	@mkdir -p $(HOST_PREPARED_TOOLS)
+	@for tool in git tar; do \
+	    path=$$(command -v $$tool) || { echo "host preparation: no $$tool on PATH" >&2; exit 1; }; \
+	    ln -sf "$$path" $(HOST_PREPARED_TOOLS)/$$tool || exit 1; \
+	done
 build/tests/host-suite/%.inventory.json: tests/cases/host/host.list \
-    tests/cases/host/adapters.json tests/cases/host.host.json host-inventory-force | $(ETUDE)
-	CC="$(HOSTCC)" $(ETUDE) prepare -H --arch $(ARCH) $* $@
+    tests/cases/host/adapters.json tests/cases/host.host.json host-inventory-force \
+    | $(ETUDE) host-prepared-tools
+	HOST_TEST_PREPARED_TOOLS=$(HOST_PREPARED_TOOLS) CC="$(HOSTCC)" \
+	    $(ETUDE) prepare -H --arch $(ARCH) $* $@
 build/x86_64/tests/host-suite/%.inventory.json: tests/cases/host/host.list \
-    tests/cases/host/adapters.json tests/cases/host.host.json host-inventory-force | $(ETUDE)
-	CC="$(HOSTCC)" $(ETUDE) prepare -H --arch x86_64 $* $@
+    tests/cases/host/adapters.json tests/cases/host.host.json host-inventory-force \
+    | $(ETUDE) host-prepared-tools
+	HOST_TEST_PREPARED_TOOLS=$(HOST_PREPARED_TOOLS) CC="$(HOSTCC)" \
+	    $(ETUDE) prepare -H --arch x86_64 $* $@
 
 # The programs of etude's host cases (tests/cases/host), which the cases'
 # preparation names, one for both architectures.

@@ -604,7 +604,16 @@ int hp_tools(struct hp_context *c, struct hp_check *check)
             if (c->print)
                 continue;
             char *source = external_tool(name);
-            bad = !source || copied_tool(c, "build/tests/host-suite/tools", name, source, inputs);
+            if (!source) {
+                const char *prepared = getenv("HOST_TEST_PREPARED_TOOLS");
+                fprintf(stderr, "host preparation: %s: %s\n", name,
+                        prepared ? "not in HOST_TEST_PREPARED_TOOLS"
+                                 : "HOST_TEST_PREPARED_TOOLS is not set");
+                bad = 1;
+            } else if (copied_tool(c, "build/tests/host-suite/tools", name, source, inputs)) {
+                fprintf(stderr, "host preparation: %s: cannot copy native tool %s\n", name, source);
+                bad = 1;
+            }
             free(source);
         } else
             bad = compiled_tool(c, name, &common, inputs);
