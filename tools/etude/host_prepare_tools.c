@@ -598,9 +598,9 @@ int hp_tools(struct hp_context *c, struct hp_check *check)
             for (size_t j = 0; !bad && j < paths.n; j++)
                 bad = hp_input(c, paths.v[j], inputs, 0);
             hp_words_free(&paths);
-        } else if (same(name, "tar") || same(name, "mdir") || same(name, "mcopy") ||
-                   same(name, "mke2fs") || same(name, "debugfs") || same(name, "dumpe2fs") ||
-                   same(name, "e2fsck") || same(name, "python3")) {
+        } else if (same(name, "git") || same(name, "tar") || same(name, "mdir") ||
+                   same(name, "mcopy") || same(name, "mke2fs") || same(name, "debugfs") ||
+                   same(name, "dumpe2fs") || same(name, "e2fsck") || same(name, "python3")) {
             if (c->print)
                 continue;
             char *source = external_tool(name);
