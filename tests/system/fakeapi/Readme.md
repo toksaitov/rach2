@@ -9,7 +9,7 @@ The OpenSSL submake clears inherited Make flags and runs one job within its pare
 The service accepts these commands:
 
 * `agent_server ca DIR NAME...` creates a private authority and an ECDSA server certificate for the DNS names and IP addresses. The certificates expire after two days. The caller owns `DIR` and removes it.
-* `agent_server serve SCRIPT RECORD CERTDIR [PORT]` serves HTTP/1.1 over TLS on loopback, using a free port when none is given. It prints its listening port, appends JSON records for requests and WebSocket messages, and prints its verdict on SIGTERM, SIGINT or a Windows console stop. It also writes `RECORD.status`. The verdict fails for an unexpected request, a failed exchange or any nonrepeated step left unplayed.
+* `agent_server serve SCRIPT RECORD CERTDIR [PORT]` serves HTTP/1.1 over TLS on loopback, using a free port when none is given. It prints its listening port, appends JSON records for requests and WebSocket messages, and prints its verdict on SIGTERM, SIGINT or a Windows console stop. Windowless native services also poll Etude's process-identity-bound stop event into the same handler. It also writes `RECORD.status`. The verdict fails for an unexpected request, a failed exchange or any nonrepeated step left unplayed.
 * `agent_server relay PORT`, or `agent_relay PORT`, copies the connection on its standard streams to the service. It joins its copy thread before returning.
 * `agent_server render SOURCE DESTINATION ROW` makes the selected row's script, including its repository paths, unordered service calls, screen requests and held final answer.
 * `agent_server accept-prepare AGENTJSON GHJSON DIR AGENT` creates the acceptance scripts and authority for both programs' declared hosts.

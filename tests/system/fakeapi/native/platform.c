@@ -7,7 +7,8 @@
 #ifdef _WIN32
 #include <tlhelp32.h>
 #include <direct.h>
-static HANDLE parent;
+#include "../../../../tools/etude/win/winexec.h"
+static HANDLE parent, stop_event;
 #else
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -49,6 +50,23 @@ int service_parent_alive(void)
     return WaitForSingleObject(parent, 0) == WAIT_TIMEOUT;
 #else
     return getppid() == parent;
+#endif
+}
+/* Only a service that polls this event advertises cooperative stopping. */
+int service_stop_listen(void)
+{
+#ifdef _WIN32
+    return stop_event ? 0 : etude_win_service_listen(&stop_event) ? -1 : 0;
+#else
+    return 0;
+#endif
+}
+int service_stop_requested(void)
+{
+#ifdef _WIN32
+    return stop_event && WaitForSingleObject(stop_event, 0) == WAIT_OBJECT_0;
+#else
+    return 0;
 #endif
 }
 uint64_t service_monotonic(void)

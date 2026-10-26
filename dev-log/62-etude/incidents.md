@@ -2003,3 +2003,7 @@ The producer and route fixtures had passed their focused checks but were not inc
 ### Board maintenance overlapped before completion
 
 The coordinating check started the board start operation while its earlier done operation was still running. A returned command session did not mean the operation had completed. Both commands ended successfully; start was then repeated after done had ended, followed by a fresh read of the affected cards. Dependent administrative operations must wait for the command's terminal status before the next begins. No test, worker or machine was started by these board operations.
+
+### Windows services lost their own final verdict (#1193)
+
+The agy, codex and claude application rows passed, but each fake API service retained only its listening line and no final status. Their empty request scripts required no API connection, and their QEMU errors contained no Slirp failure. Windows service stop used immediate Job termination, which could not run the service's handler and verdict writer. An explicitly cooperative service now listens on a native event named by its PID and creation time. The scenario verifies that identity, requests the handler and waits only its existing cleanup grace before ordinary forced Job cleanup. The actual server verdict and exact status assertions remain. The focused service fixture covers a real pass, an intentional failed verdict and refusal to manufacture a verdict after forced cleanup. Actual Windows event acceptance remains part of the affected platform batch.
