@@ -51,6 +51,7 @@ struct col_job {
     struct col_list inputs, disks, outputs, back, dest;
     int uncertain;
     unsigned commands;
+    unsigned cpus; /* the processors of the job's machine, and make's jobs in it */
 };
 
 static int col_error(const char *format, ...)
@@ -549,7 +550,7 @@ static int col_tooling(struct col_job *job, int prepare, unsigned volume, unsign
                                         .inputs = (const char *const *)job->inputs.v,
                                         .disks = (const char *const *)job->disks.v,
                                         .outputs = (const char *const *)job->outputs.v,
-                                        .cpus = 1,
+                                        .cpus = job->cpus,
                                         .memory_mib = memory,
                                         .volume_mib = volume,
                                         .network = network};
@@ -565,7 +566,7 @@ static int col_tooling(struct col_job *job, int prepare, unsigned volume, unsign
         site.volume = volume_tool = native;
     }
 #endif
-    int status = prepare ? etude_tooling_prepare(&site, 1, 0, &result)
+    int status = prepare ? etude_tooling_prepare(&site, job->cpus, 0, &result)
                          : etude_tooling_run(&site, &request, &result);
     rc = col_tooling_status(job, prepare, status, &result);
     etude_tooling_result_free(&result);
@@ -944,9 +945,12 @@ static int col_workspace_ready(struct col_job *job, const char *disk)
     return rc;
 }
 
-static int col_make_line(struct jbuf *script, const char *arch, const struct col_list *goals)
+static int col_make_line(struct col_job *job, struct jbuf *script, const char *arch,
+                         const struct col_list *goals)
 {
-    jbuf_puts(script, "make -j1 ARCH=");
+    char jobs[32];
+    snprintf(jobs, sizeof jobs, "make -j%u ARCH=", job->cpus);
+    jbuf_puts(script, jobs);
     col_quote(script, arch);
     for (size_t i = 0; i < goals->n; i++) {
         jbuf_puts(script, " ");
@@ -1027,7 +1031,7 @@ static int col_style(struct col_job *job, const char *arch, const char *id)
     jbuf_puts(&script, col_mount);
     jbuf_puts(&script, "cd /mnt/collection/tree\n");
     jbuf_puts(&script, col_compilers);
-    col_make_line(&script, arch, &goals);
+    col_make_line(job, &script, arch, &goals);
     jbuf_puts(&script, "sh tests/cases/host/style.sh ");
     col_quote(&script, id);
     jbuf_puts(&script, "\n");
@@ -1258,6 +1262,23 @@ static int col_products(struct col_job *job, char *products, const struct col_li
     return col_exec(job, extract, NULL, NULL);
 }
 
+/**
+ * Give the processors of a preparation's machine: the build jobs that its
+ * admission claim covers, `ETUDE_BUILD_JOBS`, or, for a preparation that no
+ * claim admitted, the processors the collection gives one machine,
+ * `RACH2_CPUS`, 2 by default. A count above 64 is cut to 64.
+ */
+static unsigned col_preparation_cpus(void)
+{
+    static const char *const names[] = {"ETUDE_BUILD_JOBS", "RACH2_CPUS"};
+    for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
+        const char *text = getenv(names[i]);
+        if (text && col_decimal(text) && *text != '0' && strlen(text) <= 4)
+            return atoi(text) > 64 ? 64 : (unsigned)atoi(text);
+    }
+    return 2;
+}
+
 static int col_prepare(struct col_job *job, const char *arch, const char *kernel, int count,
                        char *const args[])
 {
@@ -1269,6 +1290,7 @@ static int col_prepare(struct col_job *job, const char *arch, const char *kernel
             strlen(kernel) ||
         col_prepare_goals(&native, &guest, arch, kernel, count, args))
         goto done;
+    job->cpus = col_preparation_cpus();
     rc = col_tooling(job, 1, 0, 0, 0);
     if (rc)
         goto done;
@@ -1291,7 +1313,7 @@ static int col_prepare(struct col_job *job, const char *arch, const char *kernel
     jbuf_puts(&script, col_compilers);
     if (col_add(&components, "components"))
         goto error;
-    col_make_line(&script, arch, &components);
+    col_make_line(job, &script, arch, &components);
     col_free(&components);
     if (*kernel) {
         char *goal = col_format("%s-kernel", kernel);
@@ -1299,9 +1321,9 @@ static int col_prepare(struct col_job *job, const char *arch, const char *kernel
         free(goal);
         if (bad)
             goto error;
-        col_make_line(&script, arch, &components);
+        col_make_line(job, &script, arch, &components);
     }
-    col_make_line(&script, arch, &guest);
+    col_make_line(job, &script, arch, &guest);
     jbuf_puts(&script, "tar --sparse -cf \"$ETUDE_DISK2\"");
     for (size_t i = 0; i < guest.n; i++) {
         jbuf_puts(&script, " ");
@@ -1317,7 +1339,8 @@ static int col_prepare(struct col_job *job, const char *arch, const char *kernel
     uint64_t volume = (bytes + 1048575) / 1048576 + 64;
     if (volume > 65536)
         goto error;
-    rc = col_run(job, &script, volume < 512 ? 512 : (unsigned)volume, 4096, 1);
+    rc = col_run(job, &script, volume < 512 ? 512 : (unsigned)volume,
+                 job->cpus > 4 ? job->cpus * 1024 : 4096, 1);
     if (!rc)
         rc = col_products(job, products, &guest);
     if (!rc)
@@ -1362,7 +1385,7 @@ int etude_collection_tools_main(int argc, char **argv)
     }
     if (argc < 3)
         return col_error("usage: etude prepare tools list|tool|prepare|style [TREE ...]"), 2;
-    struct col_job job = {0};
+    struct col_job job = {.cpus = 1};
     char *root = realpath(argv[1], NULL);
     int rc = 2;
     if (!root || strlen(root) >= sizeof job.root)
