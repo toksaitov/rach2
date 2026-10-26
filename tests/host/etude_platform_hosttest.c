@@ -28,6 +28,10 @@
  * host-inputs: tools/etude/routine_inputs.c tools/etude/routine_sequence.c
  * host-inputs: tools/etude/routine_entry.c tools/etude/routine_owner_entry.c
  * host-inputs: tools/etude/routine_prepare.c tools/etude/routine_site.c
+ * host-deps: tests/host/compat/routine_listener_host.c
+ * host-deps: tools/etude/preparation_import_data.c
+ * host-inputs: tools/ci/fixtures/routine_listener_test.c
+ * host-inputs: tools/etude/routine_jobs.c
  * host-cflags: -I tools/etude -I tests/host/compat -I utils
  * host-cflags: -I tools/etude/include -Wall -Wextra -Werror
  */
@@ -45,6 +49,22 @@ int etude_test_retention(const char *self);
 int etude_test_retention_child(int argc, char **argv);
 int etude_test_routine_evidence(void);
 int etude_test_routine_entry(const char *self);
+int etude_test_routine_listener(void);
+
+static int platform_focused(int argc, char **argv, const char *tmp)
+{
+    if (argc == 2 && !strcmp(argv[1], "--routine-listener-only"))
+        return etude_test_routine_listener();
+    if (argc == 2 && !strcmp(argv[1], "--routine-entry-only"))
+        return etude_test_routine_entry(argv[0]);
+    if (argc == 2 && !strcmp(argv[1], "--evidence-only"))
+        return etude_test_routine_evidence();
+    if (argc == 2 && !strcmp(argv[1], "--retention-only"))
+        return etude_test_retention(argv[0]);
+    if (argc == 2 && !strcmp(argv[1], "--collection-only"))
+        return etude_test_collection_tools(argv[0], tmp);
+    return -1;
+}
 
 int main(int argc, char **argv)
 {
@@ -67,17 +87,14 @@ int main(int argc, char **argv)
     }
     if (tmp == NULL || tmp[0] == '\0')
         tmp = "/tmp";
-    if (argc == 2 && !strcmp(argv[1], "--routine-entry-only"))
-        return etude_test_routine_entry(argv[0]);
-    if (argc == 2 && !strcmp(argv[1], "--evidence-only"))
-        return etude_test_routine_evidence();
-    if (argc == 2 && !strcmp(argv[1], "--retention-only"))
-        return etude_test_retention(argv[0]);
-    if (argc == 2 && !strcmp(argv[1], "--collection-only"))
-        return etude_test_collection_tools(argv[0], tmp);
+    int focused = platform_focused(argc, argv, tmp);
+    if (focused >= 0)
+        return focused;
     if (etude_test_collection_tools(argv[0], tmp))
         return 1;
     if (etude_test_retention(argv[0]))
+        return 1;
+    if (etude_test_routine_listener())
         return 1;
     if (etude_test_routine_entry(argv[0]))
         return 1;
