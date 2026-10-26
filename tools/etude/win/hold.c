@@ -340,6 +340,16 @@ int hold_rename(const char *from, const char *to)
     return rc;
 }
 
+FILE *hold_fopen(const char *path, const char *mode)
+{
+    wchar_t *w = path_w(path), *m = wide(mode);
+    FILE *f = w != NULL && m != NULL ? _wfopen(w, m) : NULL;
+
+    free(w);
+    free(m);
+    return f;
+}
+
 /**
  * Remove the file or tree `w`, a wide path of path_w's form, clearing the
  * read-only attribute of each entry. A link to a directory is removed, not

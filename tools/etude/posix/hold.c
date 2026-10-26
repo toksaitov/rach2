@@ -210,6 +210,11 @@ int hold_rename(const char *from, const char *to)
     return rename(from, to);
 }
 
+FILE *hold_fopen(const char *path, const char *mode)
+{
+    return fopen(path, mode);
+}
+
 int hold_remove(const char *path)
 {
     struct stat st;

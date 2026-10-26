@@ -73,7 +73,7 @@ static int field(const char *line, const char *key, char *out, size_t size)
 static void read_record(const char *path, struct record *r)
 {
     char line[ARGS_MAX + 64], word[ARGS_MAX + 1];
-    FILE *f = fopen(path, "r");
+    FILE *f = hold_fopen(path, "r");
 
     memset(r, 0, sizeof *r);
     while (f != NULL && fgets(line, sizeof line, f) != NULL) {
@@ -263,7 +263,7 @@ static int write_record(const struct hold *h, long job)
         snprintf(since, sizeof since, "unknown");
     join_args(h, args);
     snprintf(path, sizeof path, "%s.new", h->owner);
-    if ((f = fopen(path, "w")) == NULL)
+    if ((f = hold_fopen(path, "w")) == NULL)
         return -1;
     fprintf(f, "pid %ld\npgid %ld\nidentity %ld %ld %llu %llu\njob %ld\nsince %s\nargs %s\n",
             me.pid, me.group, me.pid, me.group, me.start, me.fraction, job, since, args);

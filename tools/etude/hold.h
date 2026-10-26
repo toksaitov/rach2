@@ -7,6 +7,7 @@
 #define ETUDE_HOLD_H
 
 #include <stddef.h>
+#include <stdio.h>
 
 /* A process as the lock's owner record gives it in its `identity` line. */
 struct hold_proc {
@@ -69,6 +70,10 @@ int hold_mkdir(const char *path);
 
 /** Rename `from` to `to`, replacing a file there; 0, or -1 with errno. */
 int hold_rename(const char *from, const char *to);
+
+/** Open the file `path` in `mode`, as fopen does, on Windows also a path
+ * longer than 260 characters; NULL with errno set. */
+FILE *hold_fopen(const char *path, const char *mode);
 
 /** Remove `path`, a file or a tree; 0, or -1 when something is left. */
 int hold_remove(const char *path);
