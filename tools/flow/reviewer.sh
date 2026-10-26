@@ -20,10 +20,11 @@
 # the only one, it is `codex exec` with gpt-6-astra at xhigh effort as the lead,
 # which decides how to review and may start at most three subagents at a time,
 # gpt-6.1-sol at high effort, in a read-only sandbox in a worktree of this clone
-# at HEAD, for at most three hours. Its prompt is reviewer.txt with the range
-# filled in, and the text of the phase and its issues in a file beside the
-# output, since the sandbox has no network; its answer is JSON in the form
-# reviewer.json gives. Each finding becomes a `bug` issue that says
+# at HEAD, for at most three hours. Codex reads at most DOC_BYTES of AGENTS.md,
+# since its own limit, 32 KiB, cuts the file short. Its prompt is reviewer.txt
+# with the range filled in, and the text of the phase and its issues in a file
+# beside the output, since the sandbox has no network; its answer is JSON in
+# the form reviewer.json gives. Each finding becomes a `bug` issue that says
 # `Part of #P`, linked as a sub-issue while the phase has room, and the
 # summary becomes a comment on the phase. A review that read the whole range
 # ends that comment with the line `review: BASE..HEAD complete`, which
@@ -70,6 +71,7 @@ LEAD_EFFORT=xhigh
 SUB=gpt-6.1-sol
 SUB_EFFORT=high
 SUBAGENTS=3
+DOC_BYTES=65536
 DEADLINE=10800
 PERIOD=300
 RUNS=3
@@ -242,6 +244,7 @@ review()
             run_session "$base.jsonl" "$base.err" "$DEADLINE" \
                 codex exec -m "$LEAD" -c model_reasoning_effort="\"$LEAD_EFFORT\"" \
                 -c agents.max_threads=$((SUBAGENTS + 1)) -c agents.max_depth=1 \
+                -c project_doc_max_bytes="$DOC_BYTES" \
                 -c agents.default_subagent_model="\"$SUB\"" \
                 -c agents.default_subagent_reasoning_effort="\"$SUB_EFFORT\"" \
                 -s read-only --output-schema "$state/run/reviewer.json" \

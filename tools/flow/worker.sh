@@ -27,7 +27,8 @@
 # the testing host that RACH2_TESTING_COPY names for testing.sh, if any; `touch
 # STATE/stop` ends the loop after the session that is running. Sessions run with
 # RACH2_MIN_FREE_GIB at 40 unless the environment gives another, so that a build
-# they start stops before it fills the disk.
+# they start stops before it fills the disk. Codex reads at most
+# DOC_BYTES of AGENTS.md, since its own limit, 32 KiB, cuts the file short.
 #
 # A session that ends on the account's usage limit makes the loop wait fifteen
 # minutes. One shorter than two minutes for another reason, such as a lost
@@ -66,6 +67,7 @@
 REPO=toksaitov/rach2
 REASONING=high
 CODEX_MODEL=gpt-6.1-sol
+DOC_BYTES=65536
 DEADLINE=21600
 REST=86400
 
@@ -223,6 +225,7 @@ session()
             run_session "$state/s-$t.jsonl" "$state/s-$t.err" "$DEADLINE" \
                 codex exec -m "$CODEX_MODEL" \
                 -c model_reasoning_effort="$REASONING" \
+                -c project_doc_max_bytes="$DOC_BYTES" \
                 --dangerously-bypass-approvals-and-sandbox --json \
                 -C "$repo" "$prompt" ;;
     esac
