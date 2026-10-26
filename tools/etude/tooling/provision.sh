@@ -2,9 +2,9 @@
 #
 # provision.sh: make the tooling machine on its first boot from the cloud
 # image. cloud-init runs it as root, with the seed volume mounted at SEED.
-# It installs the packages that give the commands of SEED/tools and the
-# pinned Codex, lets an ordinary user make user namespaces, installs the job
-# runner and its service, turns off what would slow a later boot, and checks
+# It installs the packages that give the commands of SEED/tools, lets an
+# ordinary user make user namespaces, installs the job runner and its
+# service, turns off what would slow a later boot, and checks
 # that every command is found. cloud-init then powers the machine off.
 #
 # On arm64 it also installs QEMU's user-mode emulators and registers them
@@ -23,11 +23,8 @@ set -u
 SEED=${1:?seed}
 CHAN=/dev/ttyS1
 [ ! -c /dev/ttyAMA1 ] || CHAN=/dev/ttyAMA1
-# The version of Codex that the codexapi cases run,
-# vendor/gnu/agents/packages/codex.sh.
-CODEX_VERSION=0.162.1
 PACKAGES='util-linux iproute2 exfatprogs dosfstools e2fsprogs python3 openssl git
-curl wget ca-certificates nodejs npm build-essential gawk bison flex m4 perl
+curl wget ca-certificates build-essential gawk bison flex m4 perl
 texinfo xz-utils patch gzip bzip2 tar gnupg gpgv binutils mandoc mtools xorriso
 openssh-client rsync cppcheck shellcheck clang clang-format gcc-i686-linux-gnu binutils-i686-linux-gnu
 gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu sparse'
@@ -88,11 +85,6 @@ run_logged apt-get install -y -q --no-install-recommends $PACKAGES ||
     fail 'apt-get install'
 run_logged /usr/lib/systemd/systemd-networkd-wait-online --any ||
     fail 'the network after package service restarts'
-say "provision: codex $CODEX_VERSION"
-run_logged env NODE_OPTIONS=--dns-result-order=ipv4first npm install -g --loglevel=http \
-    "@openai/codex@$CODEX_VERSION" ||
-    fail "npm install codex $CODEX_VERSION"
-
 say 'provision: the job runner'
 echo 'kernel.apparmor_restrict_unprivileged_userns = 0' > /etc/sysctl.d/60-etude-userns.conf
 sysctl -q -p /etc/sysctl.d/60-etude-userns.conf || fail 'the sysctl of user namespaces'
@@ -111,8 +103,6 @@ while read -r tool; do
     version=$(printf '%s\n' "$version" | head -n 1 | tr -c '[:print:]\n' ' ')
     say "tool $tool $path ${version:--}"
 done < /run/etude-tools
-[ "$(codex --version 2>/dev/null)" = "codex-cli $CODEX_VERSION" ] ||
-    fail "codex is not version $CODEX_VERSION"
 modprobe exfat || fail 'the exFAT driver does not load'
 for f in $X86; do
     grep -q '^flags: .*F' "/proc/sys/fs/binfmt_misc/$f" 2>/dev/null ||

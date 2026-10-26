@@ -707,13 +707,6 @@ build/tests/cases/machine/%: tests/cases/machine/%.sh
 	@mkdir -p $(@D)
 	cp $< $@.tmp && chmod 755 $@.tmp && mv $@.tmp $@
 
-# Muse Code, which the museapi cases run (tests/cases/host.museapi.json):
-# tests/system/fakeapi/fetch_muse.sh downloads it once into
-# build/downloads/muse/ and checks it against Meta's digest, and this name is
-# a link to the file it checked.
-build/downloads/muse/muse: tests/system/fakeapi/fetch_muse.sh $(SHA256TOOL)
-	f=$$(sh tests/system/fakeapi/fetch_muse.sh) && ln -f "$$f" $@
-
 # The passwords of the images' root and test accounts, as artifacts that the
 # machine scenarios which log in type at the console. The rule of krffs/shadow
 # makes the plain-text files of the source tree that these copy.

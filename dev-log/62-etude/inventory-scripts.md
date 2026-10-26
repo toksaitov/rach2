@@ -17,7 +17,7 @@ These 20 scripts were the programs of cases, or the tests those programs ran, be
 * `tests/cases/host/fstool.sh`: replaced by `host/fstool.c`, run in the declared GNU helper machine.
 * `tests/cases/machine/agent_accept.sh`, `agent_fakeapi.sh`, `agent_relay.sh`, `agent_rows.sh` and `agent_server.sh`: replaced by `machine/agents_scenario.c`, `agent_accept.c` and `agent_native.c`.
 * `tests/cases/machine/grow_read.sh` and `installer_volume.sh`: replaced by calls of the compiled `mkexfatfixture` from the grow and installer scenarios, which keep its output whole.
-* `tests/cases/host/agentapi.sh`: replaced by `machine/agentapi_scenario.c`. The prerequisite check that read its `CODEX_VERSION` reads `VERSION` of `vendor/gnu/agents/packages/codex.sh`, the Codex that the cases run.
+* `tests/cases/host/agentapi.sh`: replaced by `machine/agentapi_scenario.c`. The agents layer supplies both clients; host prerequisites and the tooling machine install neither.
 
 ## Products run in their own language
 
@@ -36,7 +36,7 @@ These run on Rach2, in the machine a case boots, and exercise that system: `test
 Make runs these to build artifacts before any case starts. Preparation records what it made; a desktop that runs the collection does not run them.
 
 * Disk and stick builders of `tests/system/suites.mk`: `agent_disk.sh`, `rehearse_fixture.sh`, `grow_fixture.sh`, `fixtures/grow_tool.sh`, `krffsvol.sh`, `loopdev_disks.sh`, `metal_sticks.sh`, `metal_installed_disks.sh`, `parts_disks.sh`, `usbdisk_sticks.sh`, `mkext2fixture.sh` and `mkrootdisk.sh`.
-* Build helpers: `tests/musl/build.sh`, `tests/fuzz/build.sh`, `tests/system/fakeapi/build_openssl.sh` and `fetch_muse.sh`, `tests/host/mkexfat_external.sh` and `tests/system/tooling_ready.sh`.
+* Build helpers: `tests/musl/build.sh`, `tests/fuzz/build.sh`, `tests/system/fakeapi/build_openssl.sh`, `tests/host/mkexfat_external.sh` and `tests/system/tooling_ready.sh`.
 * Source checks: `tests/cases/host/style.sh`, which `tools/etude/host_prepare_style.c` runs to record the evidence that `host/style.c` reads, and the tests it runs, `tests/system/*_test.sh` of the style list in [`tests/system/Readme.md`](../../tests/system/Readme.md).
 * Python in preparation, which issue #1176 removes: `tests/host/fixtures/extract.py`, `tests/native/prepare.py`, `tests/cases/machine/prepare_codex_digest.py` and `tools/setup/prepare_clang.py`.
 

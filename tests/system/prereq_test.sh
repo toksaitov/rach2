@@ -17,9 +17,8 @@
 # tool check and of the style check is named on linux, macos and windows,
 # but for the Linux-only commands named below, which etude's tooling machine
 # must provide, with what the machine itself needs named on macos and
-# windows; and the Codex version of the linux recipe and of the tooling
-# machine is the one the codexapi cases run. The OVMF rows run each POSIX
-# platform's real probe with missing, directory, unreadable and readable
+# windows. The OVMF rows run each POSIX platform's real probe with missing,
+# directory, unreadable and readable
 # overrides, and with a readable pair found beside a directory of PATH.
 #
 # Usage: sh tests/system/prereq_test.sh
@@ -43,13 +42,12 @@ FIX=$work/fix
 export FIX
 
 # The Linux-only commands, which macos and windows do not install: unshare
-# and ip make the network namespaces of the codexapi and museapi cases, which
-# run Codex and Muse in them, and exfatprogs has no Windows port. On those
-# platforms etude's tooling machine supplies them
+# supplies user namespaces, ip supplies network tools, and exfatprogs has
+# no Windows port. On those platforms etude's tooling machine supplies them
 # (tools/etude/tooling/tools), and the commands it runs on the host are named
 # in their recipes.
-linux_only_macos='unshare ip codex'
-linux_only_windows='unshare ip codex mkfs.exfat fsck.exfat mformat mmd mcopy mdir mtype mdel mdeltree minfo xorriso mke2fs debugfs e2fsck mandoc cppcheck shellcheck clang clang-format'
+linux_only_macos='unshare ip'
+linux_only_windows='unshare ip mkfs.exfat fsck.exfat mformat mmd mcopy mdir mtype mdel mdeltree minfo xorriso mke2fs debugfs e2fsck mandoc cppcheck shellcheck clang clang-format'
 tooling_needs='qemu-system-x86_64 qemu-img curl'
 
 # Stand-ins: `id` answers as the account `fixuser`, uid 0 when FIX/root
@@ -419,12 +417,6 @@ coverage()
         done < "$work/required"
     done
     names rach2 | grep -qx cc || echo 'coverage: rach2 lacks cc' >> "$work/why"
-    version=$(sed -n 's/^VERSION=//p' "$repo/vendor/gnu/agents/packages/codex.sh")
-    sh "$repo/tools/setup/prereq.sh" --list --platform linux |
-        grep -q "	admin	npm install -g @openai/codex@$version\$" ||
-        echo "coverage: linux does not install Codex $version, the codexapi cases'" >> "$work/why"
-    grep -qx "CODEX_VERSION=$version" "$repo/tools/etude/tooling/provision.sh" ||
-        echo "coverage: the tooling machine does not install Codex $version, the codexapi cases'" >> "$work/why"
     grep -o 'tools/setup/[a-z_]*\.sh' "$repo/tools/setup/prereqs" | sort -u | while read -r script; do
         [ -f "$repo/$script" ] || echo "coverage: the recipe runs $script, which is missing" >> "$work/why"
     done

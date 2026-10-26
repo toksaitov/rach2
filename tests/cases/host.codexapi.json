@@ -8,7 +8,9 @@
       "behavior": "Codex, in a fresh home and an isolated GNU Rach2 machine, reads a file and runs a command over a WebSocket, then, refused a second WebSocket with 426, edits a file, runs the command and commits over HTTPS, signed in to the fake API server with a dummy key",
       "units": [
         "codexapi",
-        "`tests/system/suites/codexapi.sh`, the first run"
+        "tests/cases/machine/agentapi_scenario.c",
+        "tests/cases/machine/agent_native.c",
+        "vendor/gnu/agents/packages/codex.sh"
       ],
       "domain": "machine",
       "architectures": [
@@ -286,7 +288,9 @@
       "behavior": "the fake API server refuses Codex's tool result when notes.txt asks for another change, and the repository stays as it was",
       "units": [
         "codexapi",
-        "`tests/system/suites/codexapi.sh`, the second run, with other notes"
+        "tests/cases/machine/agentapi_scenario.c",
+        "tests/cases/machine/agent_native.c",
+        "vendor/gnu/agents/packages/codex.sh"
       ],
       "domain": "machine",
       "architectures": [

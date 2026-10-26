@@ -348,9 +348,9 @@ static int name_present(const char *list, const char *name)
 
 static int skipped(const char *platform, const char *name)
 {
-    const char *macos = " unshare ip codex ";
+    const char *macos = " unshare ip ";
     const char *windows =
-        " unshare ip codex mkfs.exfat fsck.exfat mformat mmd mcopy mdir mtype mdel mdeltree minfo "
+        " unshare ip mkfs.exfat fsck.exfat mformat mmd mcopy mdir mtype mdel mdeltree minfo "
         "xorriso mke2fs debugfs e2fsck mandoc cppcheck shellcheck clang clang-format ";
     char token[512];
     snprintf(token, sizeof(token), " %s ", name);
@@ -388,36 +388,6 @@ static void required(struct fixture *f, char *have[4], const char *need)
         } else
             fx_check(f, choice_present(have[p], platforms[p], need), need);
     }
-}
-static int version_coverage(struct fixture *f)
-{
-    char *agent = fx_read(bp(f->tree, "vendor/gnu/agents/packages/codex.sh"));
-    char *at = agent ? strstr(agent, "\nVERSION=") : NULL;
-    if (!at) {
-        free(agent);
-        return 0;
-    }
-    at += 9;
-    size_t n = strcspn(at, "\n");
-    char version[128];
-    if (n >= sizeof(version)) {
-        free(agent);
-        return 0;
-    }
-    memcpy(version, at, n);
-    version[n] = 0;
-    char *list = NULL;
-    int ok = listed(f, "linux", &list);
-    char wanted[512];
-    snprintf(wanted, sizeof(wanted), "\tadmin\tnpm install -g @openai/codex@%s\n", version);
-    fx_check(f, ok && list && strstr(list, wanted),
-             "Linux recipe installs the agents' Codex version");
-    free(list);
-    snprintf(wanted, sizeof(wanted), "CODEX_VERSION=%s\n", version);
-    fx_check(f, fx_has(bp(f->tree, "tools/etude/tooling/provision.sh"), wanted),
-             "tooling Codex version matches agent cases");
-    free(agent);
-    return 1;
 }
 static int recipe_sources(struct fixture *f)
 {
@@ -511,8 +481,8 @@ static int coverage(struct fixture *f)
         for (size_t i = 0; i < 3; i++)
             fx_check(f, name_present(have[p], needs[i]), needs[i]);
         char *recipe = fx_read(bp(f->tree, "tools/etude/tooling/tools"));
-        const char *skip = p == 1 ? "unshare ip codex"
-                                  : "unshare ip codex mkfs.exfat fsck.exfat mformat mmd mcopy mdir "
+        const char *skip = p == 1 ? "unshare ip"
+                                  : "unshare ip mkfs.exfat fsck.exfat mformat mmd mcopy mdir "
                                     "mtype mdel mdeltree minfo xorriso mke2fs debugfs e2fsck "
                                     "mandoc cppcheck shellcheck clang clang-format";
         char *words = strdup(skip), *parts;
@@ -525,7 +495,7 @@ static int coverage(struct fixture *f)
         free(recipe);
     }
     fx_check(f, name_present(have[3], "cc"), "Rach2 prerequisite recipe declares cc");
-    int ok = version_coverage(f) && recipe_sources(f);
+    int ok = recipe_sources(f);
     for (size_t i = 0; i < 4; i++)
         free(have[i]);
     return ok && !f->failed;

@@ -8,8 +8,9 @@
       "behavior": "Muse Code, in a fresh home and an isolated GNU Rach2 machine, fetches the model catalog, then reads a file, runs a command, edits a file and commits over HTTPS, each a function of its namespace tool, signed in to the fake API server with a dummy key",
       "units": [
         "museapi",
-        "`tests/system/suites/museapi.sh`, the first run",
-        "`tests/system/fakeapi/fetch_muse.sh`"
+        "tests/cases/machine/agentapi_scenario.c",
+        "tests/cases/machine/agent_native.c",
+        "vendor/gnu/agents/packages/muse.sh"
       ],
       "domain": "machine",
       "architectures": [
@@ -56,7 +57,7 @@
         },
         {
           "assertion_id": "version",
-          "checks": "muse --version is Muse Code 1.4.10-R6427.1, the version the case pins, whose file fetch_muse.sh checked by Meta's digest",
+          "checks": "muse --version is Muse Code 1.4.10-R6427.1, the version the case pins, whose package the agents layer checks against Meta's digest",
           "source": "scenario"
         },
         {
@@ -287,8 +288,9 @@
       "behavior": "the fake API server refuses Muse's tool result when notes.txt asks for another change, and the repository stays as it was",
       "units": [
         "museapi",
-        "`tests/system/suites/museapi.sh`, the second run, with other notes",
-        "`tests/system/fakeapi/fetch_muse.sh`"
+        "tests/cases/machine/agentapi_scenario.c",
+        "tests/cases/machine/agent_native.c",
+        "vendor/gnu/agents/packages/muse.sh"
       ],
       "domain": "machine",
       "architectures": [
@@ -335,7 +337,7 @@
         },
         {
           "assertion_id": "version",
-          "checks": "muse --version is Muse Code 1.4.10-R6427.1, the version the case pins, whose file fetch_muse.sh checked by Meta's digest",
+          "checks": "muse --version is Muse Code 1.4.10-R6427.1, the version the case pins, whose package the agents layer checks against Meta's digest",
           "source": "scenario"
         },
         {

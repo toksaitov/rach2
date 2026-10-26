@@ -148,12 +148,6 @@ need ip
 probe ip -V
 admin apt-get install -y iproute2
 
-# The codexapi cases run the version of Codex their program names.
-need codex
-probe codex --version
-admin apt-get install -y nodejs npm
-admin npm install -g @openai/codex@0.162.1
-
 platform macos
 
 # Xcode's command line tools supply the C compiler, make, clang, python3 and

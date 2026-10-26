@@ -12,8 +12,6 @@ This directory has the case manifests of the suites that etude runs as cases, on
 
 `RACH2_CASES` chooses cases of any suite by identity, as [the tests' Readme](../Readme.md) says. `RACH2_AGENTS_ROWS` chooses rows of `agents`, and `RACH2_ACCEPT_AGENTS` agents of `agentsaccept`, by the last part of their identities, in the order given. Each refuses a repeated name or an unknown name; unset or empty, the suite runs every case. [`case_select.py`](../system/case_select.py) makes all three choices.
 
-The Muse cases also need Muse Code, which `make build/downloads/muse/muse` fetches.
-
 A machine case's scenario runs alone with a scenario invocation, as [Machine scenarios](../../tools/etude/Readme.md#machine-scenarios) gives it, whose `case_id` names the case; a scenario of several cases reads it to choose its work:
 
     build/tests/cases/machine/raw_scenario invocation.json
