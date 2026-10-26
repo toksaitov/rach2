@@ -2,7 +2,7 @@
 
 This is the inventory that issue #977 starts from: every shell, Python or Perl script under `tests/` that the native collection still runs, and where each runs, at `master` 04153d8e8. Every case of every manifest in `tests/cases/` names a C program as its `execution.program`; the scripts below are run by those programs, by preparation, or by nothing in the collection.
 
-Four groups are allowed by [the recovery's acceptance](recovery.md#acceptance): a product run in its own language when its behavior is what a case checks, a command run inside a Rach2 machine that is the system under test, a step of preparation, which may keep its declared build tools, and a host test that preparation places in the GNU helper machine. Two are the work left: the fake API's Python and the routine entry. Issue #1251 removed the third, the legacy commands of `host.list`, as [its section](#the-legacy-hostlist-commands) records.
+Four groups are allowed by [the recovery's acceptance](recovery.md#acceptance): a product run in its own language when its behavior is what a case checks, a command run inside a Rach2 machine that is the system under test, a step of preparation, which may keep its declared build tools, and a host test that preparation places in the GNU helper machine. No host script driver is left. Issue #1251 removed the legacy commands of `host.list`, as [its section](#the-legacy-hostlist-commands) records; issue #975 removed the fake API's Python, issue #1176 the Python of preparation and issue #1177 the scripts of the routine route; and issue #977 converted the last Python test of a host test, [the preparation import test](#the-preparation-import-test-977).
 
 ## Removed with this inventory
 
@@ -38,7 +38,7 @@ Make runs these to build artifacts before any case starts. Preparation records w
 * Disk and stick builders of `tests/system/suites.mk`: `agent_disk.sh`, `rehearse_fixture.sh`, `grow_fixture.sh`, `fixtures/grow_tool.sh`, `krffsvol.sh`, `loopdev_disks.sh`, `metal_sticks.sh`, `metal_installed_disks.sh`, `parts_disks.sh`, `usbdisk_sticks.sh`, `mkext2fixture.sh` and `mkrootdisk.sh`.
 * Build helpers: `tests/musl/build.sh`, `tests/fuzz/build.sh`, `tests/system/fakeapi/build_openssl.sh`, `tests/host/mkexfat_external.sh` and `tests/system/tooling_ready.sh`.
 * Source checks: `tests/cases/host/style.sh`, which `tools/etude/host_prepare_style.c` runs to record the evidence that `host/style.c` reads, and the tests it runs, `tests/system/*_test.sh` of the style list in [`tests/system/Readme.md`](../../tests/system/Readme.md).
-* Python in preparation, which issue #1176 removes: `tests/host/fixtures/extract.py`, `tests/native/prepare.py`, `tests/cases/machine/prepare_codex_digest.py` and `tools/setup/prepare_clang.py`.
+* Source checks in Python, of the same style list: `tests/system/source_tools_test.py` and `tests/system/usercheck_test.py`, which test the user-pointer checker `tools/verify/usercheck.py` and prepare the vectors of the pinned complexity and manual judges ([`tools/setup/source-tools.md`](../../tools/setup/source-tools.md)). Issue #1176 removed the Python that built artifacts: `tests/host/fixtures/extract.py`, `tests/native/prepare.py`, `tests/cases/machine/prepare_codex_digest.py` and `tools/setup/prepare_clang.py`.
 
 ## Host tests in the GNU helper machine
 
@@ -161,10 +161,19 @@ The five checks of `host.host.scripts_images`, whose controllers `host_image_che
 * `tests/cases/host/host.sh`, whole. No case ran it, and its print mode served `tools/verify/coverage.sh` alone, which now takes the compile commands from `etude prepare -H --print-commands`, as `tools/dev/gen_compile_commands.sh` does: the native route first, and the GNU route, with the same compiler, for a test the native route leaves to the GNU helper, so that every host test is listed once. `tests/fuzz/build.sh` no longer reads `HOST_PRINT_COMMANDS`, which only `host.sh` set.
 * Kept: `tests/system/tooling.sh`, which `tests/cases/host/style.sh` and `tests/system/tooling_ready.sh` source; `tests/system/case_select.py`, which `tests/run` runs; `tests/host/fixtures/*.c`, which `mk/host-fixtures.mk` and `tests/cases/host/products.mk` build; and `vendor/tcc/asm-test/` and `ld-test/`, which `build_compilers.c` reads. The adapter `etude run host SELECTION`, `tools/etude/posix/run_host.c`, ran only the selections of `host.sh` and has no caller left.
 
-## The fake API's Python
+## The preparation import test (#977)
 
-`tests/system/fakeapi/*.py` and `tests/system/agents/*_verify.py` are run by no case of the collection; issue #975 replaces the fake API's services with C.
+`tests/host/preparation_import_test.py`, 30 Python tests of `etude prepare -H` and `etude prepare import`, was the last verdict program in Python: `etude_legacy_hosttest.c` ran it with the GNU helper's Python and judged only its exit status. Its rows are now C, in `tests/host/compat/prepare_host_rows.c` (the ten of host preparation) and `prepare_import_rows.c` (the twenty of import), with their fixtures in `prepare_fixture.c`, and the test calls them in place of the interpreter. Every row and every assertion of the Python test is kept. Its stand-ins, a Python `ssh`, `rsync`, `uname` and Windows compiler, are the test program itself, copied under those names or started with `--windows-cc`; host preparation resolves each command it runs to its real path, so a link would lose the name. The Python wrote the exFAT fixture's marker with `json.dumps`, and etude reuses the marker only when its bytes match its own text, so the row writes that form. The macOS rows of the sanitizer's `atos` snapshot stay under `__APPLE__`; the test runs in the GNU helper, as before, since its subject, `tools/etude/posix/legacy.c`, runs `/bin/sh`.
+
+Against a copy of etude with seven faults put in, in two batches (the receipt's boot identity unchecked, every check shared, rsync without compression, a busy local producer accepted, a request's carriage return kept, the exFAT marker never reused and the inventory's manifest digest unchecked), the C rows and the Python test failed on the same six and passed on the same one, the manifest digest, which other checks of the import cover.
+
+## Python left in the collection
+
+* `tests/system/agents/fakegh.py`, the stand-in `gh` of the `worker-session` agent row, runs inside the machine under test with the GNU root's Python.
+* `tools/flow/test_status.py`, the status reader, is a product that `etude_lines_hosttest.c` runs in the GNU helper as the subject of its check.
+* The two source checks of preparation above.
+* `tests/system/case_select.py`, which only `tools/etude/win-tooling-smoke.sh` runs, below.
 
 ## The routine entry
 
-`tests/run`, `tools/etude/collection-windows.sh` and the other shell entries of `tools/etude` are the routine and deployment route, which issues #1177 and #1037 own. They are not host drivers of a case.
+`tests/run` builds etude and starts `etude run -B`, which chooses, prepares and runs the cases in C. The shell entries of `tools/etude`, such as `collection-windows.sh`, are the deployment route, and `win-tooling-smoke.sh`, a check of the Windows tooling machine that a person runs in an MSYS2 shell, is the one program left that runs `tests/system/case_select.py`. Issue #1177 removed the scripts the routine route had gained: native ci's branch of `tools/ci/run.sh` replaces itself with the installed etude, and a push check runs `etude run routine push`. None of these is a host driver of a case. Issue #1037 concerns the routine's production of imported artifacts and the ownership of physical hosts, not scripts.
