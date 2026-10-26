@@ -120,6 +120,12 @@ static void require_complete_output(struct etude_exec_result *r)
     }
 }
 
+static int cancelled(const struct authority_run *run, const struct etude_pid *parent)
+{
+    return stopped || (run->stop && *run->stop) || !identity(parent) ||
+           (run->watch_input && input_lost());
+}
+
 int authority_run_command(const struct authority_run *run, struct etude_exec_result *result)
 {
     struct etude_pid parent;
@@ -168,7 +174,7 @@ int authority_run_command(const struct authority_run *run, struct etude_exec_res
         const struct etude_exec_result *r = etude_proc_result(child);
         output(&r->out, &out, stdout);
         output(&r->err, &err, stderr);
-        if (stopped || !identity(&parent) || (run->watch_input && input_lost()))
+        if (cancelled(run, &parent))
             etude_exec_cancel(child);
         if (finished == child)
             break;
