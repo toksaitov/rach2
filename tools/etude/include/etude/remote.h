@@ -84,6 +84,7 @@ struct etude_remote_observer {
     void *context;
     void (*stage)(void *context, const char *stage);
     void (*output)(void *context, const char *bytes, size_t length);
+    void (*stream)(void *context, int fd, const char *bytes, size_t length);
     uint64_t (*deadline)(void *context);
     int (*expired)(void *context);
 };
@@ -91,16 +92,19 @@ struct etude_remote_observer {
 /* How the controller reaches a responder. The connection keeps the strings
  * and the vector until it is closed. */
 struct etude_remote_conf {
-    char *const *argv;      /* the command whose standard input and output are
-                               the responder's, such as ssh(1) running
-                               `etude serve --stdio` */
-    const char *run_id;     /* the run named by each invocation */
-    const char *session_id; /* independent journal identity; NULL uses run_id */
-    const char *journal;    /* a file where each command is recorded before it
-                               is sent, so that a later controller of the run
-                               never reuses its number; NULL keeps none */
-    const char *evidence;   /* a file where lines not acted on are appended,
-                               or NULL */
+    char *const *envp;             /* optional complete transport environment */
+    const char *transcript;        /* optional create-once complete framed transcript */
+    int require_transport_cleanup; /* close also requires transport exit 0 */
+    char *const *argv;             /* the command whose standard input and output are
+                                      the responder's, such as ssh(1) running
+                                      `etude serve --stdio` */
+    const char *run_id;            /* the run named by each invocation */
+    const char *session_id;        /* independent journal identity; NULL uses run_id */
+    const char *journal;           /* a file where each command is recorded before it
+                                      is sent, so that a later controller of the run
+                                      never reuses its number; NULL keeps none */
+    const char *evidence;          /* a file where lines not acted on are appended,
+                                      or NULL */
     const struct etude_remote_observer *observer;
     size_t max_frame;    /* the largest frame offered; 0 gives
                             ETUDE_FRAME_STDIO_MAX */
@@ -185,6 +189,9 @@ enum etude_remote_status etude_remote_remove(struct etude_remote *r, const char 
 
 /** End the session with a bye, stop the transport and free the connection. */
 enum etude_remote_status etude_remote_close(struct etude_remote *r);
+
+/* End control input without claiming a successful remote phase; consumes R. */
+enum etude_remote_status etude_remote_abandon(struct etude_remote *r);
 
 /** Say what the last failure of the connection was. */
 const char *etude_remote_why(const struct etude_remote *r);

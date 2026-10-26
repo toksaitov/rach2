@@ -66,6 +66,7 @@ struct etude_win_spawn {
     const char *const *envp;           /* NAME=VALUE entries ending in NULL; NULL inherits */
     const char *cwd;                   /* the working directory; NULL inherits */
     const char *stdin_path;            /* the file of standard input; NULL is the NUL device */
+    HANDLE stdin_handle;               /* optional borrowed input, duplicated before launch */
     etude_win_register_fn *registered; /* NULL lets the child run at once */
     etude_win_output_fn *output;       /* NULL discards the output */
     void *ctx;                         /* given to both functions */
