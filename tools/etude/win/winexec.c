@@ -205,6 +205,18 @@ static DWORD open_stdin(const char *path, HANDLE *in)
     return 0;
 }
 
+/* The caller retains its pipe handle; the child inherits only our duplicate. */
+static DWORD spawn_stdin(const struct etude_win_spawn *sp, HANDLE *in)
+{
+    if (sp->stdin_handle && sp->stdin_handle != INVALID_HANDLE_VALUE) {
+        if (!DuplicateHandle(GetCurrentProcess(), sp->stdin_handle, GetCurrentProcess(), in, 0,
+                             TRUE, DUPLICATE_SAME_ACCESS))
+            return GetLastError();
+        return 0;
+    }
+    return open_stdin(sp->stdin_path, in);
+}
+
 /** Free a child that never ran, with everything it holds. */
 static void discard(struct etude_win_child *c)
 {
@@ -384,7 +396,7 @@ DWORD etude_win_start(struct etude_win_sup *s, const struct etude_win_spawn *sp,
     if ((err = convert(sp, &l)) != 0 || (err = make_job(s, c)) != 0 ||
         (err = make_pipe(s, c, ETUDE_WIN_STDOUT, &l.outw)) != 0 ||
         (err = make_pipe(s, c, ETUDE_WIN_STDERR, &l.errw)) != 0 ||
-        (err = open_stdin(sp->stdin_path, &l.in)) != 0 || (err = create(&l, &pi)) != 0 ||
+        (err = spawn_stdin(sp, &l.in)) != 0 || (err = create(&l, &pi)) != 0 ||
         (err = enter_job(c, &pi)) != 0) {
         launch_free(&l);
         discard(c);
