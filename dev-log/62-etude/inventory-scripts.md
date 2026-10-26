@@ -142,6 +142,17 @@ The five checks of `host.host.scripts_images`, whose controllers `host_image_che
 * `tests/system/release_resume_test.sh`, against `flow_release.c`: every row is in the controller. It now also checks the order of the calls of board.sh when a record with `closing` is resumed (`phase`, `done`, then `archive`), that the chosen rerun is the fourth line of the record, and that each row that starts a run dispatches `full.yml` once.
 * `tests/system/worker_park_test.sh`, against `flow_worker.c`: every check is in the controller.
 
+### The loops' and the testing host's tools (#1256)
+
+* `machine_measure`: `tests/system/machine_measure_test.sh`, against `flow_measure.c`. Every check is in the controller: the eight identity states, the refusals of both drivers before any timing, the five inbound cleanups, the three load windows and the one-second pause between session starts.
+* `progress`: `tests/system/progress_test.py`, against `flow_progress.c`. The controller had every row and lacked two checks of the script's fixture, which are added. Its fake `gh` and `board.sh` now answer only the exact requests the report makes: the repository's paths with `per_page=100`, and `members` of the phase that `current` gave. A row that expects a failure now requires the report's own `progress: unknown:` diagnostic, so that a crash of the report does not pass as a refused read.
+* `limited`: `tests/system/limited_test.sh`, against `flow_basic.c`. Every check is in the controller, which compares the whole message, newline included.
+* `tidy`: `tests/system/tidy_test.sh`, against `flow_cleanup.c`. Every row is in the controller. It checked the store's `cross` link and the scratch link only for existence, and now also requires that each is still a symbolic link, as the script's `-L` did.
+* `leftovers`: `tests/system/leftovers_test.sh`, against `flow_cleanup.c`. Every check is in the controller, and the loose link's `-L` is added in the same way. The controller also requires the sweep without the issues' text to fail, which the script only logged.
+* `space`: `tests/system/space_test.sh`, against `flow_space.c`. Every check is in the controller but one, set aside: the marker file that the script's wrapper writes after `space.sh` succeeds repeats the check of its exit status.
+* `agents_guest`: `tests/system/agents_guest_test.sh`, against `flow_agents.c`, to which `flow_basic.c` dispatches. Every check is in the controller: the six rows' statuses, outputs and empty TMPDIR, and the wait until no process of the group is left.
+* `testing_run`: `tests/system/testing_run_test.sh`, against `flow_testing.c`. Every check is in the controller: the eight quoted commands, the synced worktree and the four reports of `wait`.
+
 ## The fake API's Python
 
 `tests/system/fakeapi/*.py` and `tests/system/agents/*_verify.py` are run by no case of the collection, apart from the three `host.list` commands above; issue #975 replaces the fake API's services with C.
