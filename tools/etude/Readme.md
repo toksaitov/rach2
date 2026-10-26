@@ -182,7 +182,7 @@ TRANSPORT is a command, run by `/bin/sh -c`, whose standard input and output rea
 
 TOKEN is the attempt's token, PID the case's process, CLEANUP `confirmed` or `unconfirmed`, and N the connections made again during the run. It removes the workspace after a pass unless `-k` keeps it. VERDICT is `pass`, with exit status 0, for an exit with status 0 whose cleanup is confirmed; `failure`, 1, for another exit, a signal, or a stop at the attempt's own deadline; `cancelled`, 3, for a stop at the controller's deadline; and `incomplete`, 4, when the whole end did not arrive, when it was lost with an `etude-guest` that was killed, when the attempt stopped because its connection was lost, or when it exited 0 with its cleanup unconfirmed. END says which, and a line `etude run: why: WHAT` follows a run whose end did not arrive. A wrong usage exits 2.
 
-The compatibility host-command adapter runs the selection produced by [`tests/cases/host/host.sh`](../../tests/cases/host/host.sh). It accepts compile and run commands, unlike the native host suite, which executes prepared binaries and verifies their inventory:
+The host-command adapter, `etude run host` with a SELECTION, runs host checks given as compile and run commands, unlike the native host suite, which executes prepared binaries and verifies their inventory:
 
     etude run host [-j JOBS] [-p WITNESS] -l LOGS -s SCRATCH SELECTION
 
@@ -364,7 +364,7 @@ The legacy adapter smoke script `sh tools/etude/win-tooling-smoke.sh [ARCH]`, in
 | [`include/etude/status.h`](include/etude/status.h), [`posix/status.c`](posix/status.c) | The status record of a run, which `tools/flow/test_status.py` reads, and its writer on POSIX systems |
 | [`digest.h`](digest.h), [`digest.c`](digest.c) | The workload, inventory and profile digests of a case, by which a plan's item names it |
 | [`budget.h`](budget.h), [`budget.c`](budget.c), [`budget_run.c`](budget_run.c) | The budget: its policy, the forecast of a selection, the check of a run, and `etude estimate` |
-| [`posix/run_host.c`](posix/run_host.c) | `etude run host`, which runs the host checks of `tests/run host` several at once |
+| [`posix/run_host.c`](posix/run_host.c) | `etude run host SELECTION`, which runs host checks given as commands several at once |
 | [`watchdog.c`](watchdog.c), [`supervise.c`](supervise.c) | The watchdog in plain C, and the supervisor on POSIX systems and Windows |
 | [`include/etude/artifact.h`](include/etude/artifact.h) | The artifact store and the preparation graph: objects by digest, private copies, nodes and their products |
 | [`posix/store.c`](posix/store.c), [`posix/prepare.c`](posix/prepare.c) | The store and the graph on POSIX systems |

@@ -49,10 +49,10 @@ done
 if TMPDIR="$WORK/missing" sh "$WORK/setup.sh" "$WORK/no-path" > "$WORK/failure" 2>&1; then
     fail "directory creation failure was ignored"
 fi
-# The host cases and the other verify scripts keep their files in a private
+# The verify scripts keep their files in a private
 # directory or the tree's build directory, not in a directory of /tmp that
 # every tree and every user shares.
-for script in tests/cases/host/host.sh tools/verify/analyze.sh tools/verify/coverage.sh; do
+for script in tools/verify/analyze.sh tools/verify/coverage.sh; do
     ! grep -q '/tmp/rach2_verify' "$REPO/$script" || fail "$script writes to the shared /tmp/rach2_verify"
 done
 echo "verify-temp-test: passed: private, distinct, retained directories and failed creation"

@@ -1,8 +1,8 @@
 /*
- * run_host.c: `etude run host`, which runs the host checks of `tests/run host`
- * several at once on the host executor, each with a scratch directory of its
- * own, and prints one result for every check of its selection, with a report
- * record of progress as each ends.
+ * run_host.c: `etude run host SELECTION`, which runs host checks given as
+ * compile and run commands several at once on the host executor, each with a
+ * scratch directory of its own, and prints one result for every check of its
+ * selection, with a report record of progress as each ends.
  */
 #include <dirent.h>
 #include <errno.h>

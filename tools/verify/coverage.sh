@@ -22,7 +22,26 @@ COV="$REPO/build/verify/coverage"
 GCOV="${GCOV:-gcov}"
 rm -rf "$COV"
 mkdir -p "$COV"
-HOST_PRINT_COMMANDS=1 sh tests/cases/host/host.sh 2>/dev/null | grep "_hosttest" >"$COV/commands"
+# The host tier's compile commands, as etude's host preparation prints them
+# without compiling: each test once, from the native route or, for a test
+# that route leaves to the GNU helper, from the GNU route with the same
+# compiler.
+ETUDE="$REPO/build/tools/etude/etude"
+[ -x "$ETUDE" ] || { echo "coverage: $ETUDE is not built; make builds it" >&2; exit 1; }
+for route in "" --gnu; do
+    for group in tests etude boots; do
+        # shellcheck disable=SC2086 # route is empty or one option
+        if ! "$ETUDE" prepare -H --print-commands $route "$group" \
+            "$COV/prepare$route/$group.inventory.json" >>"$COV/printed" 2>>"$COV/prepare.log"; then
+            echo "coverage: the commands of the $group host tests were not printed; see $COV/prepare.log" >&2
+            exit 1
+        fi
+    done
+done
+awk 'match($0, / tests\/host\/[a-z0-9_]*_hosttest\.c/) {
+         name = substr($0, RSTART, RLENGTH)
+         if (!(name in seen)) { seen[name] = 1; print }
+     }' "$COV/printed" >"$COV/commands"
 if [ $# -eq 0 ]; then
     while read -r n; do
         set -- "$@" "$n"

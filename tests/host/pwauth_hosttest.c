@@ -23,7 +23,7 @@
  * `/etc/shadow`; and `getrandom`, which no host call can stand in for,
  * since the property that matters is the kernel's refusal to hand out untrusted
  * entropy. Their declarations come from `tests/host/compat`, on the include
- * path of `tests/cases/host/host.sh` alone.
+ * path of the host tests alone.
  *
  * A fourth, `fsync`, is supplied for a different reason: it is the one step of
  * the replacement whose failure cannot be provoked by arranging the file

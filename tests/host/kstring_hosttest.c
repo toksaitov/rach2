@@ -9,8 +9,8 @@
  * against known results. The same file is linked into the freestanding
  * kernel, so a bounds fault shows here, with the sanitizer's report, rather
  * than as a fault in QEMU. The test prints nothing; it returns the number of
- * failed checks as its exit status, 0 when all passed, which is what
- * tests/cases/host/host.sh reads.
+ * failed checks as its exit status, 0 when all passed, which is what the
+ * host driver, tests/cases/host/host.c, reads.
  */
 
 #include "kstring.h"

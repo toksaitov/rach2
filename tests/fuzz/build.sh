@@ -12,8 +12,6 @@
 #   fuzz     the libFuzzer program, built with clang, for the long runs
 #
 # The compiler writes the programs to build/tests/fuzz as NAME and NAME-fuzz.
-# With HOST_PRINT_COMMANDS set, the replay build prints its compile commands and
-# compiles nothing, for the compilation database.
 set -u
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO" || exit 1
@@ -44,10 +42,6 @@ for name in "$@"; do
     *)
         echo "fuzz: usage: build.sh replay|fuzz [NAME...]" >&2; exit 2 ;;
     esac
-    if [ -n "${HOST_PRINT_COMMANDS:-}" ]; then
-        echo "$cmd"
-        continue
-    fi
     if ! $cmd; then
         echo "fuzz: $name: did not build" >&2; fail=1
     fi

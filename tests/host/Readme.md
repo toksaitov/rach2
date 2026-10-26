@@ -16,7 +16,7 @@ The cases keep their assertion identifiers:
 6. `fuzz`: each prepared fuzz harness replaying its complete committed corpus. An empty corpus fails preparation.
 7. `scripts_native`, `scripts_images`, `scripts_build`, `scripts` and `scripts_tools`: disjoint partitions of all 45 behavioral assertions of `host.list`, preserving each assertion and its position relative to the other rows of its partition. A row awaiting an adapter fails explicitly; it is never a preparation-time pass.
 
-The build-only inventory builder reads source metadata, compiles the checks and hashes compiler dependencies, including locally included `.c` files. Its `--print-commands` option prints commands without compiling or executing. The old `HOST_PRINT_COMMANDS=1 sh tests/cases/host/host.sh` interface remains for the coverage and editor command generators.
+The build-only inventory builder reads source metadata, compiles the checks and hashes compiler dependencies, including locally included `.c` files. Its `--print-commands` option prints commands without compiling or executing. `tools/dev/gen_compile_commands.sh` and `tools/verify/coverage.sh` read the commands it prints.
 
 The `icmp_hosttest.c` model sends pings with timer interrupts still pending at each attempt. It checks the deadline before and at its expiry, the tick count's wrap, release of the deadline, and a reply received before the timer handler catches up.
 
