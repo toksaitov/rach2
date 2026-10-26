@@ -3,6 +3,7 @@
 #if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
 #define _DARWIN_C_SOURCE
 #endif
+#include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
@@ -168,11 +169,87 @@ int etude_test_collection_child(int argc, char **argv)
     return collection_disk_child(argc, argv, row, disk);
 }
 
-static int collection_script(const char *run, const char *script)
+/* Read one word of a translated command: single quotes, a backslash outside
+ * them, and the disk variables of the tooling job inside double quotes. */
+static int collection_word(const char **cursor, char *word, size_t size)
 {
+    const char *p = *cursor;
+    size_t n = 0;
+    int quote = 0;
+    while (*p && (quote || *p != ' ')) {
+        const char *piece = p;
+        size_t length = 1;
+        if (*p == quote || (!quote && (*p == '\'' || *p == '"'))) {
+            quote = *p == quote ? 0 : *p;
+            p++;
+            continue;
+        }
+        if (quote != '\'' && *p == '$') {
+            char name[32];
+            if (quote != '"' || strncmp(p, "$ETUDE_DISK", 11))
+                return -1;
+            size_t digits = strspn(p + 11, "0123456789");
+            if (!digits || digits > 2)
+                return -1;
+            snprintf(name, sizeof name, "%.*s", (int)(10 + digits), p + 1);
+            if (!(piece = getenv(name)))
+                return -1;
+            length = strlen(piece);
+            p += 11 + digits;
+        } else if (!quote && *p == '\\' && p[1]) {
+            piece = ++p;
+            p++;
+        } else if (!quote && !isalnum((unsigned char)*p) && !strchr("@:/._-+=", *p))
+            return -1;
+        else
+            p++;
+        if (n + length >= size)
+            return -1;
+        memcpy(word + n, piece, length);
+        n += length;
+    }
+    if (quote)
+        return -1;
+    word[n] = 0;
+    *cursor = *p ? p + 1 : p;
+    return 0;
+}
+
+/**
+ * Run the one tool command of a translated request's job script.
+ *
+ * The script is `set +e`, the command, and an exit with its status. The
+ * command's first word names a stand-in under the fixture's `bin`, which
+ * runs by absolute path with the remaining words as its arguments, in the
+ * job's directory. Any other script is refused with status 2.
+ */
+static int collection_script(const char *run, const char *path)
+{
+    static char words[16][8192];
+    static const char head[] = "set +e\n", tail[] = "\nstatus=$?\nexit \"$status\"\n";
+    char text[16384], program[4096], *argv[17];
+    FILE *file = fopen(path, "rb");
+    size_t n = file ? fread(text, 1, sizeof text - 1, file) : 0, argc = 0;
+    text[n] = 0;
+    if (file)
+        fclose(file);
+    char *end = strncmp(text, head, sizeof head - 1) ? NULL : strchr(text + sizeof head - 1, '\n');
+    if (!end || strcmp(end, tail))
+        return 2;
+    *end = 0;
+    for (const char *cursor = text + sizeof head - 1; *cursor; argc++)
+        if (argc == 16 || collection_word(&cursor, words[argc], sizeof words[argc]))
+            return 2;
+    if (!argc || !*words[0] || strchr(words[0], '/') ||
+        snprintf(program, sizeof program, "%s/bin/%s", collection_root, words[0]) >=
+            (int)sizeof program)
+        return 2;
+    argv[0] = program;
+    for (size_t i = 1; i < argc; i++)
+        argv[i] = words[i];
+    argv[argc] = NULL;
     struct etude_exec *executor = etude_exec_new();
     struct etude_proc *process = NULL;
-    char *argv[] = {"/bin/sh", (char *)script, NULL};
     struct etude_exec_spec spec = {.attempt_id = "collection-fixture-job",
                                    .argv = argv,
                                    .envp = environ,
