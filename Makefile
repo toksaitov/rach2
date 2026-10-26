@@ -723,11 +723,10 @@ build/tests/cases/machine/test-password: krffs/shadow
 	@mkdir -p $(@D)
 	cp krffs/rach2_test_password $@
 
-# The byte scanner (tools/verify/asciiscan.c) the text checks run, the host
-# check (tools/setup/hostcheck.c) `tests/run` compiles for itself before a
-# build, and the TCP transfer measurer (tools/dev/machine_net.c). They are
-# built here so that `make` compiles them under the host flags and the
-# compilation database lists them.
+# The byte scanner (tools/verify/asciiscan.c) the text checks run and the TCP
+# transfer measurer (tools/dev/machine_net.c). They are built here so that
+# `make` compiles them under the host flags and the compilation database lists
+# them.
 ASCIISCAN  = build/tools/verify/asciiscan
 
 # The machine scenarios of etude's cases (tests/cases/machine/), each linked
@@ -927,14 +926,10 @@ $(CONSOLE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c $(CON
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils -Itests/cases/machine
 
-HOSTCHECK  = build/tools/setup/hostcheck
 MACHINENET = build/tools/dev/machine_net
 $(ASCIISCAN): tools/verify/asciiscan.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
-$(HOSTCHECK): tools/setup/hostcheck.c
-	@mkdir -p $(dir $@)
-	$(ETUDE_LINK)
 $(MACHINENET): tools/dev/machine_net.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
@@ -1678,7 +1673,7 @@ HOST_TOOLS = $(BINFIND) $(CHECKRECOVERY) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $
              $(ETUDE) $(SHA256TOOL) $(MANCHECK) $(MKMBR) $(FATCHAINS) $(GRUBEMBED) $(STICKCHECK) \
              $(MKEXFATFIXTURE) $(PCAPCHECK) $(MKFIXTURE) $(MKFATFIXTURE) \
              $(HOSTPEER) $(WAVCHECK) $(PTYDRIVE) \
-             $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT) \
+             $(MKGPT) $(GROWSET) $(ASCIISCAN) $(MACHINENET) $(SCREENTEXT) \
              $(ETUDEVOLUME) $(PECHECK) \
              $(MACHINE_SCENARIOS) $(PROBE_SCENARIOS) $(NET_SCENARIOS) $(NETPROBE_SCENARIOS) \
              $(USB_SCENARIOS) $(CONSOLE_SCENARIOS) \

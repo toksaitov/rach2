@@ -128,7 +128,6 @@ The native disk-image tools use checked 64-bit byte positions on every host. On 
 * [doctor.sh](setup/doctor.sh) is the wider report, run by hand, in five groups: the build and boot of both architectures, OVMF, e2fsprogs and mandoc included; the tools of `tests/run style`; the mtools commands and xorriso for image preparation; the optional tools; and the version of each tool in [judges](setup/judges) beside the one recorded there from the testing host, whose version decides a check that depends on one. It runs each required tool, and exits nonzero when one is missing or broken.
 * [e2fsprogs_path.sh](setup/e2fsprogs_path.sh) adds Homebrew's keg, `/sbin` and `/usr/sbin` to the path and puts first the directory that has all of `mke2fs`, `debugfs` and `e2fsck`, so that the three come from one installation.
 * [ovmf_path.sh](setup/ovmf_path.sh) finds OVMF for `doctor.sh` and the UEFI suites: `RACH2_OVMF_CODE` and `RACH2_OVMF_VARS`, else QEMU's own pair, else the `ovmf` package's. It leaves out the Secure Boot builds, since the pinned GRUB is unsigned.
-* [hostcheck.c](setup/hostcheck.c) tries what a run needs: for any suite but `style` and `host`, TCP and UDP sockets bound on loopback, with WinSock on Windows, and a Unix socket in the run's directory on POSIX hosts. Windows QEMU uses TCP for its console and monitor. The runner compiles the Windows check with UCRT64 GCC, or `ETUDE_WIN_CC`, and links WinSock; a failed initialization, socket, bind or listen stops the run before a build.
 
 ### Running on the testing host: `dev/testing.sh`
 
