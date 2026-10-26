@@ -36,22 +36,26 @@ static int pressure_frame(struct pressure_result *result, const struct got *fram
     return 0;
 }
 
+/** Read the attempt's record until it says the attempt ended, or until the
+ * guest exits, and check that the stop left it stopped and unconfirmed. */
 static void pressure_stopped(const char *token)
 {
     char path[800], text[4096] = {0};
-    long long until = deadline(5000);
     snprintf(path, sizeof path, "%s/state/a/%s/record", work, token);
-    do {
+    for (;;) {
+        int gone = waitpid(guest, NULL, WNOHANG) == guest;
         FILE *file = fopen(path, "rb");
         size_t n = file ? fread(text, 1, sizeof text - 1, file) : 0;
         text[n] = 0;
         if (file)
             fclose(file);
-        if (strstr(text, "\nstate ended\n"))
+        if (gone)
+            guest = -1;
+        if (gone || strstr(text, "\nstate ended\n"))
             break;
         struct got discarded;
-        next_frame(&discarded, left(until) < 20 ? left(until) : 20);
-    } while (left(until));
+        next_frame(&discarded, 20);
+    }
     CHECK(strstr(text, "\nstate ended\n") && strstr(text, " stopped -\n") &&
               strstr(text, " unconfirmed\n"),
           "stopping a full exited queue records stopped and unconfirmed without ACKs");
@@ -74,7 +78,7 @@ static void check_backpressure_row(int stop)
     put_case("backpressure", "guest-backpressure", token, "ordinary", stop == 2 ? 500 : 30000,
              invocation);
     send_cmd(ETUDE_CMD_RUN, new_cmd(command), token, invocation, (char *)NULL);
-    while (!prefix && next_frame(&frame, 5000) == 0) {
+    while (!prefix && next_frame(&frame, -1) == 0) {
         status = pressure_frame(&result, &frame, command, token);
         if (status)
             break;
@@ -100,7 +104,7 @@ static void check_backpressure_row(int stop)
         return;
     }
     serial_acks = 1;
-    while (!status && next_frame(&frame, 5000) == 0)
+    while (!status && next_frame(&frame, -1) == 0)
         status = pressure_frame(&result, &frame, command, token);
     CHECK(status == 1, "the complete streams precede confirmed cleanup");
     CHECK(strlen(result.out) == 8206 && strspn(result.out, "0") == 8192 &&
