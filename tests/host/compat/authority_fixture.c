@@ -39,13 +39,37 @@ static void authority_config(char binding[4096], char ledger[4096], char marker[
     authority_put(site, "etude-site 2\nendpoint linux\ncapacity 1000,4096,8192\n");
     char bytes[32768];
     n = snprintf(bytes, sizeof bytes,
-                 "etude-authority 1\nledger %s\nsite %s\ngate %s\nstate %s\narchive %s\n"
-                 "operator %lu\nprogram %s\nlauncher_body %s\nphysical_block %s\nroute %s\n",
-                 ledger, site, gate, state, archive, (unsigned long)geteuid(), program, program,
-                 marker, route);
+                 "etude-authority 2\nledger %s\nsite %s\ngate %s\nstate %s\narchive %s\n"
+                 "operator %lu\nprogram %s\nphysical_block %s\nroute %s\n",
+                 ledger, site, gate, state, archive, (unsigned long)geteuid(), program, marker,
+                 route);
     CHECK(n > 0 && (size_t)n < sizeof bytes, "authority binding size");
     authority_put(binding, bytes);
     CHECK(setenv("ETUDE_TEST_AUTHORITY", binding, 1) == 0, "authority fixture binding");
+}
+
+/** Check that a binding of format 1 is read with its unused `launcher_body`,
+ * and that neither format is read with the other's fields. */
+static void authority_formats(const char *binding)
+{
+    static const char *const rows[][3] = {
+        {"one", "etude-authority 1", "launcher_body /launch_body.sh\n"},
+        {"one-short", "etude-authority 1", ""},
+        {"two-long", "etude-authority 2", "launcher_body /launch_body.sh\n"}};
+    char fields[32768], bytes[33000], path[4096];
+    struct authority_binding b;
+    FILE *file = fopen(binding, "r");
+    size_t n = file ? fread(fields, 1, sizeof fields - 1, file) : 0;
+    CHECK(file && fclose(file) == 0 && n, "authority binding read back");
+    fields[n] = 0;
+    for (size_t i = 0; i < sizeof rows / sizeof *rows; i++) {
+        snprintf(path, sizeof path, "%s/binding-%s", fix_path("authority"), rows[i][0]);
+        snprintf(bytes, sizeof bytes, "%s%s%s", rows[i][1], strchr(fields, '\n'), rows[i][2]);
+        authority_put(path, bytes);
+        CHECK(setenv("ETUDE_TEST_AUTHORITY", path, 1) == 0, "authority format binding");
+        CHECK((authority_binding_read(&b) == 0) == (i == 0), rows[i][0]);
+    }
+    CHECK(setenv("ETUDE_TEST_AUTHORITY", binding, 1) == 0, "authority fixture binding restored");
 }
 
 static void authority_env(const struct etude_authority_phase *phase, const char *name)
@@ -84,6 +108,7 @@ static void test_authority(void)
     CHECK(authority_route(route_path, route_path, &route_binding) != 0, "different site refused");
     CHECK(authority_route(site_path, site_path, &route_binding) != 0, "different route refused");
     CHECK(authority_route(site_path, NULL, &route_binding) != 0, "absent route refused");
+    authority_formats(binding);
     struct etude_authority *normal = NULL, *exclusive = NULL;
     struct etude_authority_phase phase = {
         .run_id = "fixture-authority",

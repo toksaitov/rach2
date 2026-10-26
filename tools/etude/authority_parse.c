@@ -84,6 +84,7 @@ static int fields(char *bytes, const char *header, struct field *fields, size_t 
 
 int authority_binding_read(struct authority_binding *b)
 {
+    char body[AUTHORITY_PATH];
     struct field f[] = {{"ledger", b->ledger, sizeof b->ledger},
                         {"site", b->site, sizeof b->site},
                         {"gate", b->gate, sizeof b->gate},
@@ -91,17 +92,20 @@ int authority_binding_read(struct authority_binding *b)
                         {"archive", b->archive, sizeof b->archive},
                         {"operator", b->operator_id, sizeof b->operator_id},
                         {"program", b->program, sizeof b->program},
-                        {"launcher_body", b->launcher_body, sizeof b->launcher_body},
                         {"physical_block", b->physical_block, sizeof b->physical_block},
-                        {"route", b->route, sizeof b->route}};
+                        {"route", b->route, sizeof b->route},
+                        {"launcher_body", body, sizeof body}};
     char *bytes;
     size_t size;
     const char *path = authority_installed_binding();
     if (authority_read(path, &bytes, &size))
         return -1;
-    int error = fields(bytes, "etude-authority 1", f, sizeof f / sizeof *f);
+    /* Format 1 also has launcher_body, which etude reads and does not use. */
+    int one = !strncmp(bytes, "etude-authority 1\n", 18);
+    size_t count = sizeof f / sizeof *f - !one;
+    int error = fields(bytes, one ? "etude-authority 1" : "etude-authority 2", f, count);
     free(bytes);
-    for (size_t i = 0; !error && i < sizeof f / sizeof *f; i++)
+    for (size_t i = 0; !error && i < count; i++)
         if (i != 5 && !authority_absolute(f[i].value))
             error = 1;
     if (!error)
@@ -109,7 +113,6 @@ int authority_binding_read(struct authority_binding *b)
                 authority_protected(b->gate, b->operator_id, 0) ||
                 authority_protected(b->site, b->operator_id, 0) ||
                 authority_protected(b->program, b->operator_id, 0) ||
-                authority_protected(b->launcher_body, b->operator_id, 0) ||
                 authority_protected(b->route, b->operator_id, 0) ||
                 authority_protected(b->archive, b->operator_id, -1);
     if (error)

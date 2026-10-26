@@ -293,12 +293,14 @@ static int text_header(const char *bytes, size_t size, const char *header, size_
 }
 static int authority_binding(const struct proof *p, const struct json *authority)
 {
-    static const char *const paths[] = {"ledger",        "site",           "gate",
-                                        "state",         "archive",        "program",
-                                        "launcher_body", "physical_block", "route"};
+    static const char *const paths[] = {"ledger",  "site",    "gate",           "state",
+                                        "archive", "program", "physical_block", "route"};
     size_t size = 0;
     char *bytes = etude_routine_bytes(json_member(authority, "binding"), &size), value[4096];
-    int ok = text_header(bytes, size, "etude-authority 1\n", 10);
+    int one = bytes && size > 18 && !memcmp(bytes, "etude-authority 1\n", 18);
+    int ok = one ? text_header(bytes, size, "etude-authority 1\n", 10) &&
+                       field(bytes, "launcher_body", value, sizeof(value)) && absolute(value)
+                 : text_header(bytes, size, "etude-authority 2\n", 9);
     for (size_t i = 0; ok && i < sizeof(paths) / sizeof(paths[0]); i++)
         ok = field(bytes, paths[i], value, sizeof(value)) && absolute(value);
     ok = ok && field(bytes, "operator", value, sizeof(value)) &&

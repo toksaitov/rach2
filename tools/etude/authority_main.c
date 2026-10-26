@@ -151,21 +151,15 @@ static int command_launch(int argc, char **argv)
         etude_authority_close(authority);
         return 125;
     }
-    /* This is the installed immutable body, not the caller's checkout.
+    /* The binding's etude, not the caller's checkout, runs the launcher.
      * The shared gate spans its policy read and every owned descendant. */
-#ifdef _WIN32
-    const char *shell = etude_win_shell();
-#else
-    const char *shell = "/bin/sh";
-#endif
     char **args = calloc((size_t)argc + 1, sizeof *args);
-    if (!shell || !args) {
-        free(args);
+    if (!args) {
         etude_authority_close(authority);
         return 125;
     }
-    args[0] = (char *)shell;
-    args[1] = binding.launcher_body;
+    args[0] = binding.program;
+    args[1] = "launch";
     memcpy(args + 2, argv + 2, (size_t)(argc - 2) * sizeof *args);
     struct authority_run run = {.phase = "launcher", .argv = args, .forward_input = 1};
     struct etude_exec_result result;

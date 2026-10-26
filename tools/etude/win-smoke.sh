@@ -52,8 +52,9 @@ cp "$work/sha256.exe" "$work/tree/build/tests/host/sha256_hosttest"
 mkdir -p "$work/site/ledger" "$work/site/locks" "$work/site/etude-bin"
 printf 'etude-ledger 1\n' >"$work/site/ledger/claims"
 cp tools/etude/launch.sh "$work/site/etude-launch"
-cp tools/etude/make.sh "$work/site/etude-bin/make"
-chmod +x "$work/site/etude-launch" "$work/site/etude-bin/make"
+cp "$bin/etude.exe" "$work/site/etude.exe"
+cp "$bin/etude.exe" "$work/site/etude-bin/make.exe"
+chmod +x "$work/site/etude-launch"
 cat >"$work/site/policy" <<SITE
 etude-site 2
 endpoint windows

@@ -38,7 +38,7 @@
  * host-inputs: tools/etude/preparation_import.h
  * host-inputs: tools/etude/collection_tools.c tools/etude/collection_tools.h
  * host-inputs: tests/cases/host.host.json tests/cases/host/host.list
- * host-inputs: tests/cases/host/adapters.json tools/etude/make.sh
+ * host-inputs: tests/cases/host/adapters.json
  * host-inputs: tests/system/fakeapi/build_openssl.sh
  * host-first: it runs for minutes
  *

@@ -41,9 +41,9 @@ Installation is selected-site setup. No route is activated and no site value is 
 * POSIX: `/etc/rach2/etude-authority`.
 * Windows: `C:/ProgramData/rach2/etude-authority`.
 
-A binding is strict LF-terminated text with these ten unique fields:
+A binding is strict LF-terminated text with its header and these nine unique fields:
 
-    etude-authority 1
+    etude-authority 2
     ledger ABSOLUTE_REAL_LEDGER_DIRECTORY
     site ABSOLUTE_INSTALLED_VERSION_TWO_POLICY
     gate ABSOLUTE_NATIVE_GATE_FILE
@@ -51,13 +51,12 @@ A binding is strict LF-terminated text with these ten unique fields:
     archive ABSOLUTE_PRIVATE_POLICY_ARCHIVE_DIRECTORY
     operator POSIX_UID_OR_WINDOWS_SID
     program ABSOLUTE_IMMUTABLE_ETUDE
-    launcher_body ABSOLUTE_IMMUTABLE_LAUNCH_BODY
     physical_block ABSOLUTE_SHARED_PHYSICAL_BLOCK
     route ABSOLUTE_PROTECTED_ROUTE_JSON
 
-The gate is an existing protected regular file. The state and physical block must be absent when first provisioned. The archive is a private existing directory. `launcher_body` is the installed `tools/etude/launch_body.sh`; the installed `launch.sh` is the small enrolled wrapper plus its unchanged compatibility fallback. All normal installed shared-ledger entry paths must use the updated command and wrapper before enrollment. A partial deployment cannot establish physical exclusivity.
+A binding of format 1, `etude-authority 1`, also has a tenth field, `launcher_body`, an absolute path that etude accepts and does not use. The gate is an existing protected regular file. The state and physical block must be absent when first provisioned. The archive is a private existing directory. The installed `tools/etude/launch.sh` is the enrolled wrapper: it runs `PROGRAM authority launch`, which takes the shared gate and runs `PROGRAM launch` under it. All normal installed shared-ledger entry paths must use the updated command and wrapper before enrollment. A partial deployment cannot establish physical exclusivity.
 
-The POSIX policy publisher preserves owner, mode and extended access metadata before atomic publication. Windows preserves the original owner and DACL. An unsupported or inaccessible metadata operation fails before replacing the policy. The original bytes and policy snapshots remain evidence. Bindings, snapshots, route, immutable command and launcher are checked for protected ownership and write permissions.
+The POSIX policy publisher preserves owner, mode and extended access metadata before atomic publication. Windows preserves the original owner and DACL. An unsupported or inaccessible metadata operation fails before replacing the policy. The original bytes and policy snapshots remain evidence. Bindings, snapshots, route and the immutable command are checked for protected ownership and write permissions.
 
 The descriptor is JSON with `format: "etude-routine-route"`, `schema_version: 1` and these required settings. All program and filesystem paths are absolute. No command fragments or arbitrary shell command strings occur in it.
 

@@ -747,9 +747,8 @@ static void forced_openssl_dependency(void)
     fix_format(bin, sizeof(bin), "%s/bin", work);
     PF_CHECK(!pf_copy(pf_at(pf_repo, "tests/system/fakeapi/build_openssl.sh"),
                       pf_at(work, "tests/system/fakeapi/build_openssl.sh")) &&
-                 !pf_copy(pf_at(pf_repo, "tools/etude/make.sh"), pf_at(bin, "make")) &&
-                 !chmod(pf_at(bin, "make"), 0755) && !pf_copy(pf_self, pf_at(bin, "uname")) &&
-                 !chmod(pf_at(bin, "uname"), 0755),
+                 !pf_copy(pf_etude, pf_at(bin, "make")) && !chmod(pf_at(bin, "make"), 0755) &&
+                 !pf_copy(pf_self, pf_at(bin, "uname")) && !chmod(pf_at(bin, "uname"), 0755),
              "openssl: the build script, the make wrapper and uname");
     PF_CHECK(!pf_write_text(pf_at(work, "vendor/gnu/fetch.sh"), "printf '%s\\n' unused-archive\n"),
              "openssl: fetch");

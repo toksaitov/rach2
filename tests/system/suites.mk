@@ -57,9 +57,9 @@ together = $(addprefix %/,$(patsubst build/%,%,$(1)))
 # holds the lock. etude's set driver gives the machine cases ports 2400 to
 # 2999 of the block (tools/etude/Readme.md, The set driver), so no port of one
 # block is a port of another, and the highest, 2999 + 9000, is below the
-# ephemeral ports. The installed launcher, tools/etude/launch.sh, refuses to
-# run tests/run in a checkout whose suites.mk does not name RACH2_PORT_OFFSET,
-# the sign of a tree whose runs claim such a block.
+# ephemeral ports. The installed launcher, `etude launch`, refuses to run
+# tests/run in a checkout whose suites.mk does not name RACH2_PORT_OFFSET, the
+# sign of a tree whose runs claim such a block.
 
 PCAPCHECK       = build/tests/system/pcapcheck
 MKFIXTURE       = build/tests/system/mkfixture

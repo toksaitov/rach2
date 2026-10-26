@@ -250,7 +250,7 @@ static int platform_mock(int argc, char **argv, const char *name)
         return 0;
     }
     if (!strcmp(name, "id") && argc == 2 && !strcmp(argv[1], "-un")) {
-        puts(*ev("TEST_ACCOUNT") ? ev("TEST_ACCOUNT") : "test");
+        puts("test");
         return 0;
     }
     if (!strcmp(name, "uname") || !strcmp(name, "id")) {
@@ -371,9 +371,11 @@ static int setup(struct launch_fixture *u)
     fx_mkdir(flow_path(f, "locks"));
     flow_put(f, "ledger/claims", "etude-ledger 1\n");
     if (!flow_copy(f, "tools/etude/launch.sh", "launch") ||
-        !flow_copy(f, "tools/etude/make.sh", "etude-bin/make"))
+        !fx_copy("/host-products/etude", flow_path(f, "etude")) ||
+        !fx_copy("/host-products/etude", flow_path(f, "etude-bin/make")))
         return 0;
     chmod(flow_path(f, "launch"), 0755);
+    chmod(flow_path(f, "etude"), 0755);
     chmod(flow_path(f, "etude-bin/make"), 0755);
     snprintf(u->policy, sizeof(u->policy),
              "etude-site 2\nendpoint linux\nlauncher %s/launch\nledger %s/ledger\nlocks %s/locks\n"

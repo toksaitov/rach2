@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 #define _DARWIN_C_SOURCE
 #include "flow_launch.h"
+#include <pwd.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,10 +64,9 @@ static int concurrent_start(struct launch_fixture *u, struct fx_child *p, unsign
                             const char *kind, const char *suite)
 {
     struct fixture *f = u->f;
-    char account[100], ready[4096], release[4096], workers[40];
+    char ready[4096], release[4096], workers[40];
     const char *a[] = {u->launcher, "legacy", "tests/run", suite, NULL};
-    const char *env[] = {account, ready, release, workers, NULL};
-    snprintf(account, sizeof(account), "TEST_ACCOUNT=account-%s%u", i == 2 ? "exclusive-" : "", i);
+    const char *env[] = {ready, release, workers, NULL};
     snprintf(ready, sizeof(ready), "TEST_READY=%s/ready-%s-%u", f->work, kind, i);
     snprintf(release, sizeof(release), "TEST_RELEASE=%s/release-%s-%s", f->work,
              i == 2 ? "only" : "shared", kind);
@@ -74,12 +74,14 @@ static int concurrent_start(struct launch_fixture *u, struct fx_child *p, unsign
              i == 2 && !strcmp(kind, "serial") ? 1 : 2);
     return fx_start(f, p, a, u->tree, env, NULL);
 }
+/** Check that two launches hold claims of their own, each of this account. */
 static int ordinary_claims(struct launch_fixture *u)
 {
-    char *text = fx_read(flow_path(u->f, "ledger/claims"));
-    int ok = text && count(text, "state running") == 2 && strstr(text, "account account-0\n") &&
-             strstr(text, "account account-1\n") &&
-             count(text, "resource memory_bytes 5368709120\n") == 2;
+    char *text = fx_read(flow_path(u->f, "ledger/claims")), account[300];
+    struct passwd *pw = getpwuid(geteuid());
+    snprintf(account, sizeof(account), "account %s\n", pw ? pw->pw_name : "");
+    int ok = text && pw && count(text, "state running") == 2 && count(text, "claim launch:") == 2 &&
+             count(text, account) == 2 && count(text, "resource memory_bytes 5368709120\n") == 2;
     free(text);
     return fx_check(u->f, ok, "two ordinary launches hold independent shared claims");
 }
@@ -139,7 +141,6 @@ static int cancellation(struct launch_fixture *u)
     const char *second[] = {u->launcher, "alone", f->self, "--launch-observer", NULL};
     char *observed;
     int ok;
-    fx_env("TEST_ACCOUNT", "account-cancel");
     fx_env("EXPECT_MEMORY", "103079215104");
     fx_env("TEST_READY", flow_path(f, "ready"));
     fx_env("TEST_RELEASE", flow_path(f, "release"));

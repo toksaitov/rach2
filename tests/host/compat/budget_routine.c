@@ -130,9 +130,9 @@ static void routine_lease(struct routine_fixture *f, const char *route, const ch
     const char *snapshot_path = f->paths[f->count - 1];
     const char *binding = routine_file(
         f,
-        "etude-authority 1\nledger /authority/ledger\nsite /authority/site\ngate /authority/gate\n"
+        "etude-authority 2\nledger /authority/ledger\nsite /authority/site\ngate /authority/gate\n"
         "state /authority/state\narchive /authority/archive\noperator S-1-5-21\n"
-        "program /authority/program\nlauncher_body /authority/launcher\n"
+        "program /authority/program\n"
         "physical_block /authority/block\nroute %s\n",
         f->paths[0]);
     const char *state =

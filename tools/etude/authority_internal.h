@@ -7,7 +7,7 @@
 struct authority_binding {
     char ledger[AUTHORITY_PATH], site[AUTHORITY_PATH], gate[AUTHORITY_PATH];
     char state[AUTHORITY_PATH], archive[AUTHORITY_PATH], operator_id[256];
-    char program[AUTHORITY_PATH], launcher_body[AUTHORITY_PATH];
+    char program[AUTHORITY_PATH];
     char physical_block[AUTHORITY_PATH], route[AUTHORITY_PATH];
 };
 struct authority_state {

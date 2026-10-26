@@ -124,17 +124,15 @@ static int claim_check(struct launch_fixture *u, const char *const launcher[],
 }
 
 /**
- * Give each row to each launcher under a policy whose etude is the
+ * Give each row to the installed launcher under a policy whose etude is the
  * recorder, from a checkout with the rows' registry.
  */
 int launch_claims(struct launch_fixture *u)
 {
     struct fixture *f = u->f;
-    char body[4096], recorder[4200], *saved = fx_read(flow_path(f, "checkout/tests/registry"));
-    const char *shell[] = {"sh", body, NULL}, *native[] = {"/host-products/etude", "launch", NULL};
-    const char *const *launchers[] = {shell, native};
+    char recorder[4200], *saved = fx_read(flow_path(f, "checkout/tests/registry"));
+    const char *launcher[] = {u->launcher, NULL};
     int ok;
-    snprintf(body, sizeof body, "%s", flow_source(f, "tools/etude/launch_body.sh"));
     snprintf(recorder, sizeof recorder, "etude %s\n", flow_path(f, "etude-record"));
     ok = saved && fx_copy(f->self, flow_path(f, "etude-record")) &&
          !chmod(flow_path(f, "etude-record"), 0755) &&
@@ -142,9 +140,8 @@ int launch_claims(struct launch_fixture *u)
                     "etude /host-products/etude\n", recorder) &&
          flow_put(f, "checkout/tests/registry", registry);
     fx_env("ETUDE_SITE", flow_path(f, "claims-site"));
-    for (size_t i = 0; ok && i < sizeof launchers / sizeof *launchers; i++)
-        for (size_t j = 0; ok && j < sizeof rows / sizeof *rows; j++)
-            ok = claim_check(u, launchers[i], &rows[j]);
+    for (size_t i = 0; ok && i < sizeof rows / sizeof *rows; i++)
+        ok = claim_check(u, launcher, &rows[i]);
     fx_env("ETUDE_SITE", flow_path(f, "site"));
     ok = saved && flow_put(f, "checkout/tests/registry", saved) && ok;
     free(saved);

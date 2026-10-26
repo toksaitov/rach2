@@ -49,11 +49,11 @@ static int job_row(struct launch_fixture *u, const char *const args[], const cha
     return launch_run(u, args, 0) &&
            fx_check(u->f, fx_equal(flow_path(u->f, "job-args"), wanted), "make job count cap");
 }
-/** Check the job count the make wrapper in `dir` gives each make. */
-static int jobs_in(struct launch_fixture *u, const char *dir)
+/** Check the job count the installed make wrapper gives each make. */
+static int jobs(struct launch_fixture *u)
 {
     struct fixture *f = u->f;
-    char wrapper[4096], name[64];
+    char wrapper[4096];
     const char *unbounded[] = {wrapper, "-j", "components", NULL};
     const char *plain[] = {wrapper, "components", NULL};
     const char *one[] = {wrapper, "-j", "1", "components", NULL};
@@ -62,8 +62,7 @@ static int jobs_in(struct launch_fixture *u, const char *dir)
     const char *twelve[] = {wrapper, "-j12", "components", NULL};
     const char *nested[] = {wrapper, "all", NULL};
     char path[16384];
-    snprintf(name, sizeof(name), "%s/make", dir);
-    strcpy(wrapper, flow_path(f, name));
+    strcpy(wrapper, flow_path(f, "etude-bin/make"));
     fx_env("FLOW_LAUNCH_MODE", "jobs");
     fx_copy(f->self, flow_path(f, "record-make"));
     chmod(flow_path(f, "record-make"), 0755);
@@ -84,8 +83,8 @@ static int jobs_in(struct launch_fixture *u, const char *dir)
     fx_env("ETUDE_MAKE_REAL", NULL);
     fx_copy(f->self, flow_path(f, "unwrapped-bin/make"));
     chmod(flow_path(f, "unwrapped-bin/make"), 0755);
-    snprintf(path, sizeof(path), "%s/%s:%s/unwrapped-bin:%s:/usr/bin:/bin:/usr/sbin:/sbin", f->work,
-             dir, f->work, f->bin);
+    snprintf(path, sizeof(path), "%s/etude-bin:%s/unwrapped-bin:%s:/usr/bin:/bin:/usr/sbin:/sbin",
+             f->work, f->work, f->bin);
     fx_env("PATH", path);
     if (!job_row(u, unbounded, "-j\ncomponents\n-j1\n"))
         return 0;
@@ -100,14 +99,6 @@ static int jobs_in(struct launch_fixture *u, const char *dir)
     fx_env("ETUDE_BUILD_JOBS", NULL);
     fx_env("MAKELEVEL", NULL);
     return 1;
-}
-/** Give the shell's make wrapper and etude's the same rows. */
-static int jobs(struct launch_fixture *u)
-{
-    struct fixture *f = u->f;
-    return fx_copy("/host-products/etude", flow_path(f, "native-bin/make")) &&
-           !chmod(flow_path(f, "native-bin/make"), 0755) && jobs_in(u, "etude-bin") &&
-           jobs_in(u, "native-bin");
 }
 static int worker(struct launch_fixture *u)
 {
