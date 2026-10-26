@@ -101,7 +101,8 @@ fixture() {
         *) return 1 ;;
     esac
     grep -rqF --include='*.sh' "fixtures/${1##*/}" "$tree" ||
-        grep -qF -- "-c $1 " mk/host-fixtures.mk
+        awk -v f="$1" '$1 == "$(HOSTCC)" { for (i = 2; i <= NF; i++) if ($i == f) found = 1 }
+            END { exit !found }' mk/host-fixtures.mk
 }
 # windows FILE: true for the exact Windows-only build routes described above.
 windows() {
