@@ -2829,6 +2829,12 @@
         },
         {
           "kind": "injected_delay",
+          "where": "tests/cases/host/build_together.c:285",
+          "assumes": "A one-second maker workload lets a second run of one maker overlap the first. The assertion counts runs.",
+          "uncertainty_us": null
+        },
+        {
+          "kind": "injected_delay",
           "where": "tests/cases/host/host_suite_probe.c:137",
           "assumes": "The child lingers so the driver can observe and cancel it.",
           "uncertainty_us": null

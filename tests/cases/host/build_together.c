@@ -1,6 +1,7 @@
 /* Check grouped maker rules with the actual make database and requests. */
 #include "build_support.h"
 #include <fnmatch.h>
+#include <time.h>
 
 #define RULES_MAX 128
 struct maker_rule {
@@ -252,6 +253,9 @@ static int write_makers(struct fixture *f, const char *tree)
         fprintf(out, "%s|%s\n", rules[i].key, rules[i].targets ? rules[i].targets : "");
     return fclose(out) == 0;
 }
+/* A maker records its key and waits a second before it writes its files, so
+ * that a make that would run it once for each file finds them missing and
+ * runs it again. The wait is a workload, never an assertion or a bound. */
 int build_maker_process(int argc, char **argv)
 {
     if (argc < 1)
@@ -277,6 +281,9 @@ int build_maker_process(int argc, char **argv)
         }
         fprintf(log, "%s\n", key);
         fclose(log);
+        struct timespec remaining = {1, 0};
+        while (nanosleep(&remaining, &remaining) && errno == EINTR) {
+        }
         char *parts;
         for (char *path = strtok_r(bar, " \t", &parts); path; path = strtok_r(NULL, " \t", &parts))
             if (!fx_text(path, "")) {
