@@ -93,6 +93,37 @@ class ProducerTests(unittest.TestCase):
             self.run_operation(state, expected=1)
             self.assertFalse((Path(state[3]['repository']) / 'build/.run.lock').exists())
 
+    def test_distinct_run_outputs(self):
+        with tempfile.TemporaryDirectory(prefix='rach2-native-producer.') as name:
+            state = self.fixture(name)
+            self.run_operation(state)
+            base, work, binary, producer, commit = state
+            second = base / 'workspace-02'
+            second.mkdir()
+            for leaf in ('candidate.bundle', 'config.json', 'nonce'):
+                (second / leaf).write_bytes((work / leaf).read_bytes())
+            later = base, second, binary, producer, commit
+            self.run_operation(later, run='sample-02')
+            for run in ('sample-01', 'sample-02'):
+                actual = json.loads((base / 'outputs' / run / 'actual.json').read_text())
+                self.assertEqual(actual['run'], run + ':producer')
+                self.assertEqual(actual['commit'], commit)
+            self.run_operation(later, run='sample-02', expected=1)
+            self.assertFalse((Path(producer['repository']) / 'build/.run.lock').exists())
+
+    def test_clean_purpose_matrix(self):
+        for purpose, clean in (('phase_first_run', True), ('phase_first_run', False),
+                               ('release', True), ('ci', False)):
+            with self.subTest(purpose=purpose, clean=clean), \
+                    tempfile.TemporaryDirectory(prefix='rach2-native-producer.') as name:
+                state = self.fixture(name)
+                self.run_operation(state, purpose=purpose, clean=clean)
+                actual = json.loads((state[0] / 'outputs/sample-01/actual.json').read_text())
+                self.assertEqual(actual['clean'], '1' if clean else None)
+                self.assertIsNone(actual['selected'])
+                self.assertEqual(actual['args'][:2], ['prepare', 'collection'])
+                self.assertEqual(actual['args'][-1], 'all')
+
     def test_declared_condition_refusal(self):
         with tempfile.TemporaryDirectory(prefix='rach2-native-producer.') as name:
             state = self.fixture(name)
