@@ -10,8 +10,12 @@ REPO = "toksaitov/rach2"
 
 
 def command(argv):
-    """Read one command's output; an incomplete read fails the report."""
-    return subprocess.check_output(argv, text=True, timeout=120)
+    """Read one command's output; an incomplete read fails the report.
+
+    The limit is ten minutes, five times the longest read of the phase's
+    members seen, so that a slow answer from GitHub still gives a report.
+    """
+    return subprocess.check_output(argv, text=True, timeout=600)
 
 
 def pages(path):
