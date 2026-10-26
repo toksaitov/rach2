@@ -89,7 +89,7 @@ struct etude_machine {
     char *audio_path;
     int audio_created, audio_temporary;
     struct etude_proc *proc;
-    int proc_done; /* the executor has finished QEMU's attempt */
+    int proc_done;        /* the executor has finished QEMU's attempt */
     uint64_t drain_until; /* the existing grace bounds final socket delivery */
     enum qmp_state qmp_state;
     char *line; /* a QMP line being read */
