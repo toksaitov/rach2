@@ -126,13 +126,16 @@ static int finish_run(struct actor *a, const struct wire_frame *frame, int statu
     return event(a, ETUDE_EV_CLEANED, 3, fields);
 }
 
-/* The actor executes the actual native report or killer program. No verdict
- * is synthesized from the requested invocation or from a cached pass. */
+/* The actor executes the actual native report, killer or client program, a
+ * file of the stage, which is the guest's root, named bare or as `/NAME`. No
+ * verdict is synthesized from the requested invocation or from a cached
+ * pass. */
 static int execute(struct actor *a, const struct wire_frame *f)
 {
     struct eh_json *document = NULL;
     const struct eh_json *arguments, *item;
     struct sh_child child;
+    const char *name;
     char program[4096], error[4096], pid[24];
     char *argv[32];
     unsigned char bytes[8192];
@@ -146,12 +149,13 @@ static int execute(struct actor *a, const struct wire_frame *f)
     if (document == NULL)
         return -1;
     item = eh_json_get(document, "program");
-    if (item == NULL || item->type != 's' || strchr(item->string, '/') != NULL ||
-        strchr(item->string, '\\') != NULL) {
+    name = item != NULL && item->type == 's' ? item->string + (item->string[0] == '/') : NULL;
+    if (name == NULL || name[0] == '\0' || strchr(name, '/') != NULL ||
+        strchr(name, '\\') != NULL) {
         eh_json_free(document);
         return -1;
     }
-    snprintf(program, sizeof(program), "%s/%s", getenv("ETUDE_FAKE_STAGE"), item->string);
+    snprintf(program, sizeof(program), "%s/%s", getenv("ETUDE_FAKE_STAGE"), name);
     snprintf(error, sizeof(error), "%s.actor.err", getenv("ETUDE_FAKE_GUEST_PID"));
     argv[0] = program;
     arguments = eh_json_get(document, "arguments");

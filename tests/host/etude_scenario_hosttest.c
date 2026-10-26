@@ -1730,7 +1730,9 @@ static int scenario_pair(struct etude_case *c)
     return 0;
 }
 
-/* A service can remain alive after the client that had to reach it ends. */
+/* A service can remain alive after the client that had to reach it ends.
+ * The client is this program, which the Windows stand-in guest runs only as
+ * the copy staged at the guest's root. */
 static int scenario_client_wait(struct etude_case *c)
 {
     struct etude_case_service *service = NULL;
@@ -1739,8 +1741,13 @@ static int scenario_client_wait(struct etude_case *c)
     struct etude_guest_result result;
     struct peer_args pa;
     uint64_t at;
-    const char *failed[] = {self, "tool", "fail-client", NULL};
-    const char *request[] = {self, "tool", "request-peer", pa.port, NULL};
+#ifdef _WIN32
+    const char *client = "/etude-scenario-hosttest";
+#else
+    const char *client = self;
+#endif
+    const char *failed[] = {client, "tool", "fail-client", NULL};
+    const char *request[] = {client, "tool", "request-peer", pa.port, NULL};
 
     if (etude_step(c, "serve") != ETUDE_OK ||
         etude_service(c, "peer", peer_args(c, &pa, "serve"), &service, &end) != ETUDE_OK ||
