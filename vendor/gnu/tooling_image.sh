@@ -218,8 +218,10 @@ stage_tree()
         *bsdtar*) set -- --no-xattrs --no-mac-metadata ;;
         *) set -- ;;
     esac
-    COPYFILE_DISABLE=1 tar -c -z -f "$STAGE/tree.tar.gz" "$@" -T "$STAGE/list" \
-        -C "$STAGE" build/gnu-source-files
+    # bsdtar applies a later -C to the list of -T, so this file is appended.
+    COPYFILE_DISABLE=1 tar -c -f "$STAGE/tree.tar" "$@" -T "$STAGE/list"
+    COPYFILE_DISABLE=1 tar -r -f "$STAGE/tree.tar" "$@" -C "$STAGE" build/gnu-source-files
+    gzip -n "$STAGE/tree.tar"
     echo "gnu: tooling: staged $(wc -l < "$STAGE/list" | tr -d ' ') files," \
         "$(($(wc -c < "$STAGE/tree.tar.gz") / 1048576)) MiB compressed"
 }
