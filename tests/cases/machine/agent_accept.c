@@ -1,5 +1,6 @@
 /* agent_accept.c: SSH sessions, terminal changes, persistent sign-in. */
 #include "agent_accept.h"
+#include "agent_terminal.h"
 #include <ctype.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -177,10 +178,17 @@ static int keys(struct acceptance *s, int literal, const char *key)
 static char *get_screen(struct acceptance *s, int all)
 {
     char extra[100], *screen;
+    int status;
     snprintf(extra, sizeof(extra), "%s all", s->agent);
     screen = guest(s, "screen", all ? extra : NULL);
     if (!screen)
         return NULL;
+    status = agent_terminal_failed(screen);
+    if (status) {
+        net_fail(s->u, "the acceptance client ended with status %d", status);
+        free(screen);
+        return NULL;
+    }
     if (!all) {
         free(s->screen);
         s->screen = screen;
@@ -393,6 +401,8 @@ static int wait_guest(struct acceptance *s, const char *verb, const char *wanted
         free(text);
         if (ok)
             return 1;
+        if (!get_screen(s, 0))
+            return 0;
         pause_read();
     }
     return 0;

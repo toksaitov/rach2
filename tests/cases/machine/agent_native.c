@@ -916,7 +916,7 @@ static void api_execute(struct api_case *a)
     if (a->running) {
         uint64_t at;
         if (a->refusal && !a->codex &&
-            etude_service_wait(a->server, ": unexpected:", 0, &at) != ETUDE_OK)
+            etude_service_wait_guest(a->server, a->b.m, ": unexpected:", 0, &at) != ETUDE_OK)
             net_fail(&a->u, "the API did not reject Muse's incorrect tool result");
         if (a->refusal && !a->codex)
             a->muse_live = etude_guest_running(a->b.m);
