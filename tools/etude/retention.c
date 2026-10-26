@@ -990,7 +990,7 @@ int etude_retention_main(int argc, char **argv, volatile sig_atomic_t *stop)
         return 128 + *stop;
     int rc = retention_options(argc, argv, &options);
     if (rc)
-        ret_fail("usage: etude retention --policy POLICY --site SITE "
+        ret_fail("usage: etude prepare retention --policy POLICY --site SITE "
                  "init|allocate|begin|seal|touch|prune");
     else if (!strcmp(options.action, "init"))
         rc = ret_initialize(options.policy, options.site);

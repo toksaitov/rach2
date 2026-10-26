@@ -280,8 +280,9 @@ int etude_reference_main(int argc, char **argv, volatile sig_atomic_t *stop)
         return 128 + *stop;
     int rc = reference_options(argc, argv, &o);
     if (rc)
-        ret_fail("usage: etude reference --tree TREE --etude ETUDE --reference REF --output LOG "
-                 "--site SITE --preparation RECEIPT --accelerator ACCEL");
+        ret_fail(
+            "usage: etude prepare reference --tree TREE --etude ETUDE --reference REF --output LOG "
+            "--site SITE --preparation RECEIPT --accelerator ACCEL");
     else {
         rc = reference_paths(&o, owned);
         if (!rc)
