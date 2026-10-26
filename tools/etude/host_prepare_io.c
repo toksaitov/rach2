@@ -158,7 +158,8 @@ int hp_mkdir(const char *path)
         char b = *p;
         *p = 0;
         if (!(strlen(copy) == 2 && copy[1] == ':') &&
-            (stat(copy, &st) != 0 ? mkdir(copy, 0755) != 0 : !S_ISDIR(st.st_mode))) {
+            ((stat(copy, &st) != 0 && mkdir(copy, 0755) != 0 && errno != EEXIST) ||
+             stat(copy, &st) != 0 || !S_ISDIR(st.st_mode))) {
             result = -1;
             break;
         }
