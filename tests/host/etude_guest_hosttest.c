@@ -1067,7 +1067,13 @@ static void check_detached(int mode)
  * leaves a process in the attempt's group: the next etude-guest kills what
  * is left of the group and confirms the cleanup. A FIFO releases the first
  * process after etude-guest ends; another, opened after the member starts,
- * reports its exit even while its new parent has not reaped it. */
+ * reports its exit even while its new parent has not reaped it.
+ *
+ * On Linux and Rach2 the attempt's owner sees its control pipe close when
+ * etude-guest is killed, and ends and reaps the group itself, perhaps before
+ * the first process reads its release. There the member is not required to
+ * outlive the first process, and the next etude-guest must find the owner's
+ * proof of the cleanup. */
 static void check_orphan_group(void)
 {
     static const char leaving[] = "guest-leaving";
@@ -1101,7 +1107,9 @@ static void check_orphan_group(void)
     CHECK(release >= 0 && write(release, "exit\n", 5) == 5,
           "the first process is released after etude-guest ends");
     CHECK(all_gone(leader_end), "the first process ends after etude-guest");
+#if !defined(__linux__) && !defined(__rach2__)
     CHECK(alive(member), "the ended first process leaves a process in its group");
+#endif
     if (release >= 0)
         close(release);
     start_guest("--stdio", (char *)NULL);
