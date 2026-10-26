@@ -453,6 +453,17 @@ static unsigned count(const char *path, const char *pattern)
     free(s);
     return n;
 }
+static int boards(struct release *r, const char *wanted)
+{
+    char *s = fx_read(flow_path(r->f, "calls")), *line, *save = NULL, got[1000] = "";
+    for (line = strtok_r(s, "\n", &save); line; line = strtok_r(NULL, "\n", &save))
+        if (!strncmp(line, "board ", 6) && strlen(got) + strlen(line) + 2 < sizeof(got)) {
+            strcat(got, line);
+            strcat(got, ",");
+        }
+    free(s);
+    return !strcmp(got, wanted);
+}
 static int check(struct release *r, int held, const char *label)
 {
     return fx_check(r->f, held, label);
@@ -500,16 +511,15 @@ static int closing_rows(struct release *r)
     run(r, &(struct release_row){.record = record, .board = "ready: yes " H});
     ok = check(r,
                !f->status && archived(r, "7-11111111-") && count(r->retired, "^closing ") == 2 &&
-                   called(r, "^board phase$") && called(r, "^board done$") &&
-                   called(r, "^board archive 7$") && count(flow_path(f, "calls"), "^board ") == 3 &&
+                   boards(r, "board phase,board done,board archive 7,") &&
                    called(r, "^gh issue close 7$"),
                "open closing phase checked again") &&
          ok;
     run(r, &(struct release_row){.record = record, .board = "ready: no: work: #14"});
     ok = check(r,
                !f->status && last_is(flow_path(f, "state/record"), "void: ready: no: work: #14") &&
-                   count(flow_path(f, "calls"), "^board ") == 1 && called(r, "^board phase$") &&
-                   called(r, "^gh issue comment 7$") && !called(r, "^gh issue close"),
+                   boards(r, "board phase,") && called(r, "^gh issue comment 7$") &&
+                   !called(r, "^gh issue close"),
                "unready closing phase remains open") &&
          ok;
     {
@@ -522,8 +532,7 @@ static int closing_rows(struct release *r)
         ok = check(r,
                    !f->status && archived(r, "6-11111111-") &&
                        !fx_exists(flow_path(f, "state/record")) && !strncmp(line, "closed ", 7) &&
-                       count(flow_path(f, "calls"), "^board ") == 2 && called(r, "^board done$") &&
-                       called(r, "^board archive 6$") &&
+                       boards(r, "board done,board archive 6,") &&
                        !called(r, "^(gh issue close|gh issue comment|machine)"),
                    "closing previous phase resumes its record") &&
              ok;
@@ -561,7 +570,11 @@ static int new_candidate_rows(struct release *r)
              "^dispatch workflow run full.yml --repo toksaitov/rach2 --ref master -f sha=%s -f "
              "title=Release tests of 22222222 for phase #7$",
              C);
-    return check(r, f->status == 75 && called(r, expected), "new candidate runs every suite") && ok;
+    return check(r,
+                 f->status == 75 && called(r, expected) &&
+                     count(flow_path(f, "calls"), "^dispatch ") == 1,
+                 "new candidate runs every suite") &&
+           ok;
 }
 static int interrupted_install_records(struct release *r)
 {
@@ -659,8 +672,8 @@ static int rerun_rows(struct release *r)
         ok = check(r,
                    f->status == 75 && fx_has(flow_path(f, "state/record"), "sha " C "\n") &&
                        (i ? !fx_has(flow_path(f, "state/record"), "rerun ")
-                          : fx_has(flow_path(f, "state/record"),
-                                   "rerun 101 " H " x86_64:agents x86_64:bigmem\n")),
+                          : fourth_is(flow_path(f, "state/record"),
+                                      "rerun 101 " H " x86_64:agents x86_64:bigmem")),
                    i == 0   ? "only failure repairs select rerun"
                    : i == 1 ? "unrelated commit selects full run"
                    : i == 2 ? "additional issue selects full run"
@@ -677,7 +690,11 @@ static int rerun_rows(struct release *r)
              "title=Release tests of 22222222 for phase #7: again only agents on x86_64 -f "
              "suites=x86_64:agents$",
              C);
-    return check(r, f->status == 75 && called(r, expected), "selective rerun dispatch") && ok;
+    return check(r,
+                 f->status == 75 && called(r, expected) &&
+                     count(flow_path(f, "calls"), "^dispatch ") == 1,
+                 "selective rerun dispatch") &&
+           ok;
 }
 static int intermittent_build_rows(struct release *r)
 {
@@ -703,6 +720,7 @@ static int intermittent_build_rows(struct release *r)
                    fx_has(flow_path(f, "state/record"), "phase 7\nsha " H "\n") &&
                    fourth_is(flow_path(f, "state/record"), "touched " T) &&
                    !count(flow_path(f, "state/record"), "^(rerun|run) ") && called(r, expected) &&
+                   count(flow_path(f, "calls"), "^dispatch ") == 1 &&
                    !called(r, "^gh issue (close|edit|reopen)"),
                "intermittent failure repeats full run without changing issue") &&
          ok;
