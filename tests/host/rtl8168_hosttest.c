@@ -1061,6 +1061,44 @@ static int find_eri_write(unsigned from, unsigned addr)
 static struct netdev model_iface;
 
 /**
+ * Check the summary's last line, how the card is served: a polled card says
+ * so, and a card with messages on says that none has arrived, counts them, or
+ * says that a storm masked its sources.
+ */
+static void check_summary(void)
+{
+    model_reset();
+    model_lapic = 0;
+    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP && r8168_msi_vector == -1,
+          "the bring-up completes polled for the summary rows");
+    last_klog = 0;
+    rtl8168_print_info(model_iface.dev);
+    CHECK(has(last_klog, "polled by the tick"), "the summary of a polled card says it is polled");
+
+    model_reset();
+    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP && r8168_msi_vector == 48,
+          "the bring-up completes with messages for the summary rows");
+    r8168_msi_entries = 0;
+    r8168_msi_storms = 0;
+    last_klog = 0;
+    rtl8168_print_info(model_iface.dev);
+    CHECK(has(last_klog, "messages on vector %d: none yet"),
+          "a summary before the first message says that none has arrived");
+    r8168_msi_entries = 3;
+    last_klog = 0;
+    rtl8168_print_info(model_iface.dev);
+    CHECK(has(last_klog, "messages on vector %d: %d, %d idle") && !has(last_klog, "storm"),
+          "and one after it counts the messages");
+    r8168_msi_storms = 1;
+    last_klog = 0;
+    rtl8168_print_info(model_iface.dev);
+    CHECK(has(last_klog, "masked after %d storm(s)"),
+          "and one after a storm says the sources are masked");
+    r8168_msi_entries = 0;
+    r8168_msi_storms = 0;
+}
+
+/**
  * Run the rows against the model, most of them after model_reset:
  *
  *   * the bring-up completes on a healthy model: decoding and bus mastering on,
@@ -1124,7 +1162,9 @@ static struct netdev model_iface;
  *     R8168_STORM_ENTRIES such entries in a row mask the sources and count a
  *     storm, and the tick still drains the ring. Stop masks the sources before
  *     it turns the messages off. A card whose messages do not enable, or a
- *     machine with no usable APIC, is polled;
+ *     machine with no usable APIC, is polled, and its summary says so; the
+ *     summary of a card with messages on that has had none says that none has
+ *     arrived;
  *   * the link: the port advertises pause in both directions with its speeds,
  *     so a switch with a slower far port asks it to wait rather than drop a run
  *     of frames, and the advertisement is written before negotiation is
@@ -1671,6 +1711,7 @@ int main(void)
     model_lapic = 0;
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP && r8168_msi_vector == -1,
           "a machine with no usable APIC stays polled");
+    check_summary();
 
     model_reset();
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes for the link rows");

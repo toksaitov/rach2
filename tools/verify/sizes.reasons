@@ -466,7 +466,7 @@ tests/host/rtc_hosttest.c:bcd_sample params 7 a test's rows, each a case, read a
 tests/host/rtc_hosttest.c:main lines 169 a test's rows, each a case, read as one table
 
 tests/host/rtl8168_hosttest.c:main complexity 99 a test's rows, each a case, read as one table
-tests/host/rtl8168_hosttest.c:main lines 691 a test's rows, each a case, read as one table
+tests/host/rtl8168_hosttest.c:main lines 692 a test's rows, each a case, read as one table
 
 
 tests/host/synthfs_hosttest.c:main complexity 41 a test's rows, each a case, read as one table

@@ -1590,7 +1590,9 @@ static int rtl8168_counters(void *dev, struct netdev_counters *out)
  * The chip revision, the window and the address are a debug record, since
  * the station address is on the interface's `net: ethN:` line above. The
  * link follows, then the counters once they count something, then how the
- * card is served: its messages and what the tick took, or the tick alone.
+ * card is served: its messages and what the tick took, or the tick alone. At
+ * boot no message has arrived yet, and the line of a card with messages on
+ * says that none has.
  */
 static void rtl8168_print_info(void *dev)
 {
@@ -1620,18 +1622,21 @@ static void rtl8168_print_info(void *dev)
              r8168_rx_packets, r8168_rx_errors, r8168_rx_dropped, r8168_rxerr_reports,
              r8168_tx_packets, r8168_tx_stalls, r8168_txerr_reports);
     }
-    if (r8168_msi_vector >= 0 && r8168_msi_storms == 0 && r8168_msi_entries > 0) {
-        klog(KLOG_INFO, "rtl8168",
-             "messages on vector %d: %d, %d idle, %d deferred, %d by the tick", r8168_msi_vector,
-             r8168_msi_entries, r8168_msi_idle, r8168_msi_deferred, r8168_tick_work);
-    } else if (r8168_msi_vector >= 0 && r8168_msi_storms > 0) {
+    if (r8168_msi_vector < 0) {
+        klog(KLOG_INFO, "rtl8168", "polled by the tick");
+    } else if (r8168_msi_storms > 0) {
         klog(KLOG_INFO, "rtl8168",
              "messages on vector %d: %d, %d idle, %d deferred, masked after %d storm(s), %d by the "
              "tick",
              r8168_msi_vector, r8168_msi_entries, r8168_msi_idle, r8168_msi_deferred,
              r8168_msi_storms, r8168_tick_work);
+    } else if (r8168_msi_entries > 0) {
+        klog(KLOG_INFO, "rtl8168",
+             "messages on vector %d: %d, %d idle, %d deferred, %d by the tick", r8168_msi_vector,
+             r8168_msi_entries, r8168_msi_idle, r8168_msi_deferred, r8168_tick_work);
     } else {
-        klog(KLOG_INFO, "rtl8168", "polled by the tick");
+        klog(KLOG_INFO, "rtl8168", "messages on vector %d: none yet, %d by the tick",
+             r8168_msi_vector, r8168_tick_work);
     }
 }
 
