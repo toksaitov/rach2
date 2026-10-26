@@ -6,6 +6,7 @@ FAKEAPI_SRC = $(FAKEAPI_NATIVE)/json.c $(FAKEAPI_NATIVE)/platform.c \
               $(FAKEAPI_NATIVE)/assets.c $(FAKEAPI_NATIVE)/archive.c \
               $(FAKEAPI_NATIVE)/worker.c tools/etude/volume/volume.c
 FAKEAPI_HDR = $(wildcard $(FAKEAPI_NATIVE)/*.h)
+SNTP_SRC = tests/system/sntpserver.c $(FAKEAPI_NATIVE)/platform.c
 FAKEAPI_SSL = build/vendor/host-openssl
 FAKEAPI_CC = $(HOSTCC)
 FAKEAPI_LIBS = -lpthread
@@ -18,6 +19,7 @@ ifeq ($(OS),Windows_NT)
 FAKEAPI_CC = $(ETUDECC)
 FAKEAPI_FLAGS += -D_WIN32_WINNT=0x0A00 -static -Itools/etude/include -Itools/etude -Iutils
 FAKEAPI_SRC += $(ETUDE_WIN_FILE_SRC)
+SNTP_SRC += $(ETUDE_WIN_FILE_SRC)
 FAKEAPI_HDR += $(wildcard tools/etude/win/*.h tools/etude/include/etude/*.h)
 FAKEAPI_LIBS = -lws2_32 -lcrypt32 -ladvapi32 -lbcrypt
 FAKEAPI_LINK = sh tools/etude/compile.sh $(FAKEAPI_CC) $@ $(HOSTCFLAGS) $(FAKEAPI_FLAGS)
@@ -33,9 +35,9 @@ build/tests/cases/machine/agent_server: $(FAKEAPI_SRC) $(FAKEAPI_HDR) $(FAKEAPI_
 build/tests/cases/machine/agent_relay: build/tests/cases/machine/agent_server
 	@mkdir -p $(@D)
 	cp $< $@
-build/tests/cases/gnu/sntpserver: tests/system/sntpserver.c $(FAKEAPI_NATIVE)/platform.c $(FAKEAPI_NATIVE)/platform.h
+build/tests/cases/gnu/sntpserver: $(SNTP_SRC) $(FAKEAPI_NATIVE)/platform.h
 	@mkdir -p $(@D)
-	$(FAKEAPI_LINK) $(filter %.c,$^) $(FAKEAPI_LIBS)
+	$(FAKEAPI_LINK) $(SNTP_SRC) $(FAKEAPI_LIBS)
 
 # The native protocol regression is a prepared program, with no interpreter.
 build/tests/system/fakeapi_test: $(FAKEAPI_NATIVE)/selftest.c $(filter-out $(FAKEAPI_NATIVE)/server.c $(FAKEAPI_NATIVE)/tls.c,$(FAKEAPI_SRC)) $(FAKEAPI_HDR) $(FAKEAPI_NATIVE)/server.c $(FAKEAPI_NATIVE)/tls.c $(FAKEAPI_SSL)/ready \
