@@ -18,6 +18,7 @@ static void authority_config(char binding[4096], char ledger[4096], char marker[
     const char *directory = fix_path("authority");
     CHECK(mkdir(directory, 0700) == 0, "authority directory");
     char site[4096], gate[4096], archive[4096], state[4096], route[4096], claims[4096];
+    char program[4096];
     snprintf(binding, 4096, "%s/binding", directory);
     snprintf(ledger, 4096, "%s/ledger", directory);
     snprintf(marker, 4096, "%s/physical", directory);
@@ -26,19 +27,22 @@ static void authority_config(char binding[4096], char ledger[4096], char marker[
     snprintf(archive, sizeof archive, "%s/archive", directory);
     snprintf(state, sizeof state, "%s/state", directory);
     snprintf(route, sizeof route, "%s/route", directory);
+    snprintf(program, sizeof program, "%s/program", directory);
     CHECK(mkdir(ledger, 0700) == 0 && mkdir(archive, 0700) == 0, "authority roots");
     int n = snprintf(claims, sizeof claims, "%s/claims", ledger);
     CHECK(n > 0 && (size_t)n < sizeof claims, "authority claims path");
     authority_put(claims, "etude-ledger 1\n");
     authority_put(gate, "");
     authority_put(route, "{}\n");
+    authority_put(program, "authority fixture program\n");
+    CHECK(chmod(program, 0700) == 0, "authority program protect");
     authority_put(site, "etude-site 2\nendpoint linux\ncapacity 1000,4096,8192\n");
     char bytes[32768];
     n = snprintf(bytes, sizeof bytes,
                  "etude-authority 1\nledger %s\nsite %s\ngate %s\nstate %s\narchive %s\n"
                  "operator %lu\nprogram %s\nlauncher_body %s\nphysical_block %s\nroute %s\n",
-                 ledger, site, gate, state, archive, (unsigned long)geteuid(), self, self, marker,
-                 route);
+                 ledger, site, gate, state, archive, (unsigned long)geteuid(), program, program,
+                 marker, route);
     CHECK(n > 0 && (size_t)n < sizeof bytes, "authority binding size");
     authority_put(binding, bytes);
     CHECK(setenv("ETUDE_TEST_AUTHORITY", binding, 1) == 0, "authority fixture binding");
@@ -69,6 +73,12 @@ static void test_authority(void)
     struct authority_binding route_binding;
     CHECK(symlink(site_path, site_alias) == 0 && symlink(route_path, route_alias) == 0,
           "route aliases");
+    char program[4096];
+    snprintf(program, sizeof program, "%s/program", fix_path("authority"));
+    CHECK(chmod(program, 0720) == 0, "authority program group writable");
+    CHECK(authority_route(site_alias, route_alias, &route_binding) != 0,
+          "group writable authority program refused");
+    CHECK(chmod(program, 0700) == 0, "authority program protection restored");
     CHECK(authority_route(site_alias, route_alias, &route_binding) == 0,
           "route and site aliases match protected identities");
     CHECK(authority_route(route_path, route_path, &route_binding) != 0, "different site refused");
