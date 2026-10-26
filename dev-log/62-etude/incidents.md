@@ -1965,3 +1965,9 @@ The standalone SSH peer left stdout in the Windows CRT's default text mode. Its 
 ### Native CI preparation fixture callers
 
 The CI preparation fixture still invoked the removed Python helpers for cleaning, evidence, reader verification and retention. It now invokes the actual prepared Etude and preserves each existing assertion. The first local check exposed invalid fixture setup: ordinary preparation requires its real tree lock, and retention refuses roots inside a source checkout or below a symbolic-link parent. The corrected fixture invocation uses the tree-lock entry; the local check uses canonical scratch outside the checkout. Both failed observations remain separate from the successful check.
+
+## Windows boundary memory option
+
+The completed Windows03 boundary attempt exited before boot because QEMU rejected `dump=off`: `Dumping guest memory cannot be disabled on this host`. Its retained stderr was 235 bytes, SHA-256 `f82795ae152d9479535c4a323127d7ac82e811bd1869666edc91c7bc67da0534`; its console was empty. The profile now omits that option on Windows as on macOS. The existing memory fixture retains the full 72 GiB argument, lazy allocation, reservation and workload checks. Native Windows boundary acceptance remains pending (#1190).
+
+The first read-only retained-directory collector constructed a PowerShell array without parenthesizing a concatenated path. It listed the case directory twice and then an unrelated `/evidence` pathname. The original output remains retained; the corrected bounded read found `boundary.1.qemu.stderr` and the empty console in the actual case evidence directory. This collector error did not run or change the tested artifacts.
