@@ -195,11 +195,9 @@ static struct json *judges(struct hp_context *c, const char *prefix)
     const char *command = getenv("USERCHECK_CLANG");
     char *program = hp_program(command ? command : "clang");
     char output[4096], error[4096];
-    snprintf(output, sizeof(output), "%s/clang.out", c->work);
-    snprintf(error, sizeof(error), "%s/clang.err", c->work);
     char *argv[] = {program, "--version", NULL};
     char *version = NULL;
-    if (program && !hp_run(c, argv, output, error))
+    if (program && !hp_work_files(c, "clang", output, error) && !hp_run(c, argv, output, error))
         version = hp_read(output);
     struct json *found = NULL;
     if (version && *version) {
@@ -221,8 +219,8 @@ static struct json *judges(struct hp_context *c, const char *prefix)
 static int fingerprint(struct hp_context *c, char hash[65])
 {
     char output[4096], error[4096];
-    snprintf(output, sizeof(output), "%s/fingerprint.out", c->work);
-    snprintf(error, sizeof(error), "%s/fingerprint.err", c->work);
+    if (hp_work_files(c, "fingerprint", output, error))
+        return -1;
     char *argv[] = {"build/tests/cases/host/style", "--fingerprint", c->tree, NULL};
     if (hp_run(c, argv, output, error))
         return -1;
@@ -378,10 +376,8 @@ int hp_style(struct hp_context *c)
     const struct json *old_judges = json_member(old, "actual_judges");
     char *reader[] = {"build/tests/cases/host/style", (char *)c->only, NULL};
     char scratch[4096], error[4096];
-    snprintf(scratch, sizeof(scratch), "%s/reader.out", c->work);
-    snprintf(error, sizeof(error), "%s/reader.err", c->work);
-    if (setenv("ARCH", c->arch, 1) || setenv("ETUDE_TREE", c->tree, 1) ||
-        setenv("ETUDE_CASE", id, 1))
+    if (hp_work_files(c, "reader", scratch, error) || setenv("ARCH", c->arch, 1) ||
+        setenv("ETUDE_TREE", c->tree, 1) || setenv("ETUDE_CASE", id, 1))
         bad = 1;
     int reused = !bad && old_judges && json_equal(old_judges, actual_judges) &&
                  same(json_text(old, "source_sha256"), source) &&

@@ -167,9 +167,9 @@ void hp_windows_flags(struct hp_words *flags)
 int hp_source_list(struct hp_context *c, struct hp_words *sources, const char *name)
 {
     char option[128], output[4096], error[4096];
-    snprintf(option, sizeof(option), "HOST_CHECK_SOURCE_LIST=%s", name);
-    snprintf(output, sizeof(output), "%s/sources.out", c->work);
-    snprintf(error, sizeof(error), "%s/sources.err", c->work);
+    if (hp_path(option, sizeof(option), "HOST_CHECK_SOURCE_LIST=%s", name) ||
+        hp_work_files(c, "sources", output, error))
+        return -1;
     char *argv[] = {getenv("MAKE") ? getenv("MAKE") : "make",
                     "--no-print-directory",
                     "-f",
@@ -294,8 +294,8 @@ static int host_checks(struct hp_context *c, struct inventory *inventory, const 
     int bad = names(&files, "tests/host", "_hosttest.c");
     for (size_t i = 0; !bad && i < files.n; i++) {
         char path[4096], program[4096], id[256];
-        snprintf(path, sizeof(path), "tests/host/%s", files.v[i]);
-        char *text = hp_read(path);
+        char *text =
+            !hp_path(path, sizeof(path), "tests/host/%s", files.v[i]) ? hp_read(path) : NULL;
         if (!text) {
             bad = 1;
             break;
@@ -315,12 +315,16 @@ static int host_checks(struct hp_context *c, struct inventory *inventory, const 
         }
         memcpy(id, files.v[i], n);
         id[n] = 0;
-        snprintf(program, sizeof(program), "%s/%.*s", base, (int)strlen(files.v[i]) - 2,
-                 files.v[i]);
-        if (hp_windows_host() && !strcmp(id, "etude_platform"))
-            snprintf(program, sizeof(program), "%s/platform/winfixture.exe", base);
         char label[256];
-        snprintf(label, sizeof(label), "%s_hosttest", id);
+        int windows = hp_windows_host() && !strcmp(id, "etude_platform");
+        if ((windows ? hp_path(program, sizeof(program), "%s/platform/winfixture.exe", base)
+                     : hp_path(program, sizeof(program), "%s/%.*s", base,
+                               (int)strlen(files.v[i]) - 2, files.v[i])) ||
+            hp_path(label, sizeof(label), "%s_hosttest", id)) {
+            free(text);
+            bad = 1;
+            break;
+        }
         struct hp_check *check =
             new_check(inventory, id, label, program, strstr(text, "host-alone:") != NULL);
         check->first = strstr(text, "host-first:") != NULL;
@@ -626,9 +630,10 @@ static int extra_checks(struct hp_context *c, struct inventory *inventory, const
         for (size_t i = 0; i < sizeof(sources) / sizeof(sources[0]); i++) {
             char id[128], program[4096], label[256];
             const char *name = strrchr(sources[i], '/') + 1;
-            snprintf(id, sizeof(id), "%.*s", (int)strlen(name) - 2, name);
-            snprintf(program, sizeof(program), "%s/%s_selftest", base, id);
-            snprintf(label, sizeof(label), "%s selftest under the sanitizers", id);
+            if (hp_path(id, sizeof(id), "%.*s", (int)strlen(name) - 2, name) ||
+                hp_path(program, sizeof(program), "%s/%s_selftest", base, id) ||
+                hp_path(label, sizeof(label), "%s selftest under the sanitizers", id))
+                return -1;
             struct hp_check *check = new_check(inventory, id, label, program, 0);
             hp_add(&check->sources, sources[i]);
             hp_common_flags(&check->flags);
@@ -649,11 +654,14 @@ static int extra_checks(struct hp_context *c, struct inventory *inventory, const
     int bad = names(&files, "tests/fuzz", "_fuzz.c");
     for (size_t i = 0; !bad && i < files.n; i++) {
         char source[4096], id[256], program[4096], corpus[4096], label[512];
-        snprintf(id, sizeof(id), "%.*s", (int)strlen(files.v[i]) - 7, files.v[i]);
-        snprintf(source, sizeof(source), "tests/fuzz/%s", files.v[i]);
-        snprintf(program, sizeof(program), "%s/%s", base, id);
-        snprintf(corpus, sizeof(corpus), "tests/fuzz/corpus/%s", id);
-        snprintf(label, sizeof(label), "%s corpus replayed", id);
+        if (hp_path(id, sizeof(id), "%.*s", (int)strlen(files.v[i]) - 7, files.v[i]) ||
+            hp_path(source, sizeof(source), "tests/fuzz/%s", files.v[i]) ||
+            hp_path(program, sizeof(program), "%s/%s", base, id) ||
+            hp_path(corpus, sizeof(corpus), "tests/fuzz/corpus/%s", id) ||
+            hp_path(label, sizeof(label), "%s corpus replayed", id)) {
+            bad = 1;
+            break;
+        }
         struct hp_check *check = new_check(inventory, id, label, program, 0);
         hp_add(&check->sources, source);
         char *text = hp_read(source);

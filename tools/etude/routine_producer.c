@@ -31,10 +31,14 @@ static const char *field(const struct json *o, const char *key)
 static int execute(struct producer *c, struct hp_words *command, char **capture)
 {
     char output[4096], error[4096];
-    snprintf(output, sizeof output, "%s/producer.command.%ld.%u.out", c->host.tree, (long)getpid(),
-             c->serial);
-    snprintf(error, sizeof error, "%s/producer.command.%ld.%u.err", c->host.tree, (long)getpid(),
-             c->serial++);
+    unsigned serial = c->serial++;
+    if (hp_path(output, sizeof output, "%s/producer.command.%ld.%u.out", c->host.tree,
+                (long)getpid(), serial) ||
+        hp_path(error, sizeof error, "%s/producer.command.%ld.%u.err", c->host.tree, (long)getpid(),
+                serial)) {
+        hp_words_free(command);
+        return -1;
+    }
     fputs("etude prepare producer:", stdout);
     for (size_t i = 0; i < command->n; i++)
         printf(" %s", command->v[i]);

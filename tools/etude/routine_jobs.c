@@ -165,9 +165,11 @@ static struct json *api(struct jobs_api *a, const char *suffix)
 {
     struct hp_words command = {0};
     char endpoint[4096], output[4096], error[4096];
-    snprintf(endpoint, sizeof endpoint, "repos/%s/actions/%s", a->repository, suffix);
-    snprintf(output, sizeof output, "%s/%s.api.%u.json", a->host->tree, a->tag, a->serial);
-    snprintf(error, sizeof error, "%s/%s.api.%u.err", a->host->tree, a->tag, a->serial++);
+    unsigned serial = a->serial++;
+    if (hp_path(endpoint, sizeof endpoint, "repos/%s/actions/%s", a->repository, suffix) ||
+        hp_path(output, sizeof output, "%s/%s.api.%u.json", a->host->tree, a->tag, serial) ||
+        hp_path(error, sizeof error, "%s/%s.api.%u.err", a->host->tree, a->tag, serial))
+        return NULL;
     hp_split(&command, "gh api --paginate --slurp");
     hp_add(&command, endpoint);
     int bad = hp_run(a->host, command.v, output, error);

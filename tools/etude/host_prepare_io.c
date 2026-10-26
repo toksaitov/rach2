@@ -1,5 +1,6 @@
 /* Native file and process operations used by host inventory preparation. */
 #include <errno.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -113,6 +114,35 @@ char *hp_read(const char *path)
         return NULL;
     }
     return text.data ? text.data : strdup("");
+}
+
+/**
+ * Format a path into `path`, a buffer of `size` bytes, as snprintf does.
+ *
+ * Return 0, or -1 when the path does not fit; the truncated text left in
+ * `path` then names some other file and must not be used.
+ */
+int hp_path(char *path, size_t size, const char *format, ...)
+{
+    va_list ap;
+    va_start(ap, format);
+    int n = vsnprintf(path, size, format, ap);
+    va_end(ap);
+    return n < 0 || (size_t)n >= size ? -1 : 0;
+}
+
+/**
+ * Name the files in the work directory that capture a command's output and
+ * errors, `NAME.out` and `NAME.err`.
+ *
+ * Return 0, or -1 when either path does not fit in its 4096 bytes.
+ */
+int hp_work_files(const struct hp_context *c, const char *name, char output[4096], char error[4096])
+{
+    if (hp_path(output, 4096, "%s/%s.out", c->work, name) ||
+        hp_path(error, 4096, "%s/%s.err", c->work, name))
+        return -1;
+    return 0;
 }
 
 int hp_mkdir(const char *path)

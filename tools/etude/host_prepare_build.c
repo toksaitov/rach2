@@ -64,8 +64,6 @@ static int compiler_path(struct hp_context *c)
         jbuf_puts(&option, "HOST_CHECK_COMPILER_NAME=");
         jbuf_puts(&option, c->compiler.v[0]);
         char output[4096], error[4096];
-        snprintf(output, sizeof(output), "%s/compiler-path.out", c->work);
-        snprintf(error, sizeof(error), "%s/compiler-path.err", c->work);
         char *argv[] = {getenv("MAKE") ? getenv("MAKE") : "make",
                         "--no-print-directory",
                         "-f",
@@ -73,7 +71,8 @@ static int compiler_path(struct hp_context *c)
                         option.data,
                         "print-compiler",
                         NULL};
-        int bad = hp_run(c, argv, output, error);
+        int bad =
+            hp_work_files(c, "compiler-path", output, error) || hp_run(c, argv, output, error);
         char *text = !bad ? hp_read(output) : NULL;
         if (text)
             text[strcspn(text, "\r\n")] = 0;

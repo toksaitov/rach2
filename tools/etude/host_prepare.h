@@ -32,6 +32,9 @@ int hp_split(struct hp_words *words, const char *text);
 void hp_words_free(struct hp_words *words);
 int hp_hash(const char *path, char hex[65]);
 char *hp_read(const char *path);
+int hp_path(char *path, size_t size, const char *format, ...);
+int hp_work_files(const struct hp_context *c, const char *name, char output[4096],
+                  char error[4096]);
 int hp_mkdir(const char *path);
 int hp_write(const char *path, const void *bytes, size_t size);
 struct json *hp_document(const char *path);

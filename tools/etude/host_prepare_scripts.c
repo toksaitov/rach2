@@ -76,9 +76,7 @@ static int kernel_recipe(struct hp_context *c, struct hp_check *check, const cha
     add_option(&argv, "HOSTCC", compiler);
     add_option(&argv, "HOST_FIXTURE_PREFIX", base);
     hp_add(&argv, program);
-    snprintf(output, sizeof(output), "%s/kernel-plan.out", c->work);
-    snprintf(error, sizeof(error), "%s/kernel-plan.err", c->work);
-    int bad = hp_run(c, argv.v, output, error);
+    int bad = hp_work_files(c, "kernel-plan", output, error) || hp_run(c, argv.v, output, error);
     char *text = !bad ? hp_read(output) : NULL;
     for (char *line = text; line && !bad;) {
         char *next = strchr(line, '\n');
@@ -173,11 +171,10 @@ static int append_script(struct hp_context *c, struct json *checks, const char *
     char program[4096];
     int kernel = row->kind == SCRIPT_KERNEL;
     const struct json *adapter = json_member(adapters, fields[0]);
-    if (kernel)
-        snprintf(program, sizeof(program), "%s/%s", base, fields[0]);
-    else
-        snprintf(program, sizeof(program), "%s",
-                 json_text(adapter, "program") ? json_text(adapter, "program") : "");
+    if (kernel ? hp_path(program, sizeof(program), "%s/%s", base, fields[0])
+               : hp_path(program, sizeof(program), "%s",
+                         json_text(adapter, "program") ? json_text(adapter, "program") : ""))
+        return 1;
     int active = c->gnu ? same(route, "gnu") : same(route, "native");
     check.entry = entry(fields[0], fields[1], active && *program ? program : NULL, route);
     if (active)

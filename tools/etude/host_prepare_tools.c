@@ -288,12 +288,10 @@ static int external_exfat(struct hp_context *c)
     /* The existing independent formatter owns its normal fixture directory.
      * A failed production is kept, never replaced by a fabricated marker. */
     char temporary[4096], writer[4096], output[4096], error[4096];
-    snprintf(temporary, sizeof(temporary), "%s.%ld.tmp", root, (long)getpid());
-    snprintf(writer, sizeof(writer), "%s/writer", temporary);
-    snprintf(output, sizeof(output), "%s/exfat.out", c->work);
-    snprintf(error, sizeof(error), "%s/exfat.err", c->work);
     struct stat st;
-    if (!lstat(temporary, &st) || hp_mkdir(temporary))
+    if (hp_path(temporary, sizeof(temporary), "%s.%ld.tmp", root, (long)getpid()) ||
+        hp_path(writer, sizeof(writer), "%s/writer", temporary) ||
+        hp_work_files(c, "exfat", output, error) || !lstat(temporary, &st) || hp_mkdir(temporary))
         return -1;
     char *absolute = realpath(temporary, NULL);
     char *first[] = {"sh", (char *)source, "-p", writer, NULL};
