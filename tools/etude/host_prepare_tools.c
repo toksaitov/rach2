@@ -576,6 +576,45 @@ static int companions(struct hp_context *c, struct hp_check *owner, struct json 
     return bad ? -1 : 0;
 }
 
+static int external_exfat_tools(struct hp_context *c, struct json *inputs)
+{
+    struct hp_words paths = {0};
+    hp_split(&paths, "build/tests/host/exfat_writer tests/host/mkexfat_external.sh");
+    int bad = hp_files(&paths, "build/tests/host-suite/tools/exfat_external");
+    for (size_t i = 0; !bad && i < paths.n; i++)
+        bad = hp_input(c, paths.v[i], inputs, 0);
+    hp_words_free(&paths);
+    return bad ? -1 : 0;
+}
+
+static int native_tool_name(const char *name)
+{
+    static const char *const names[] = {"git",     "tar",      "mdir",   "mcopy",  "mke2fs",
+                                        "debugfs", "dumpe2fs", "e2fsck", "python3"};
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+        if (same(name, names[i]))
+            return 1;
+    return 0;
+}
+
+static int native_tool(struct hp_context *c, const char *name, struct json *inputs)
+{
+    char *source = external_tool(name);
+    int bad = 0;
+    if (!source) {
+        const char *prepared = getenv("HOST_TEST_PREPARED_TOOLS");
+        fprintf(stderr, "host preparation: %s: %s\n", name,
+                prepared ? "not in HOST_TEST_PREPARED_TOOLS"
+                         : "HOST_TEST_PREPARED_TOOLS is not set");
+        bad = 1;
+    } else if (copied_tool(c, "build/tests/host-suite/tools", name, source, inputs)) {
+        fprintf(stderr, "host preparation: %s: cannot copy native tool %s\n", name, source);
+        bad = 1;
+    }
+    free(source);
+    return bad ? -1 : 0;
+}
+
 int hp_tools(struct hp_context *c, struct hp_check *check)
 {
     struct json *inputs = hp_value(JSON_ARRAY);
@@ -590,31 +629,11 @@ int hp_tools(struct hp_context *c, struct hp_check *check)
             if (!c->print)
                 bad = sanitizer(c, "build/tests/host-suite/sanitizer", inputs);
         } else if (same(name, "exfat_external")) {
-            if (c->print)
-                continue;
-            struct hp_words paths = {0};
-            hp_split(&paths, "build/tests/host/exfat_writer tests/host/mkexfat_external.sh");
-            bad = hp_files(&paths, "build/tests/host-suite/tools/exfat_external");
-            for (size_t j = 0; !bad && j < paths.n; j++)
-                bad = hp_input(c, paths.v[j], inputs, 0);
-            hp_words_free(&paths);
-        } else if (same(name, "git") || same(name, "tar") || same(name, "mdir") ||
-                   same(name, "mcopy") || same(name, "mke2fs") || same(name, "debugfs") ||
-                   same(name, "dumpe2fs") || same(name, "e2fsck") || same(name, "python3")) {
-            if (c->print)
-                continue;
-            char *source = external_tool(name);
-            if (!source) {
-                const char *prepared = getenv("HOST_TEST_PREPARED_TOOLS");
-                fprintf(stderr, "host preparation: %s: %s\n", name,
-                        prepared ? "not in HOST_TEST_PREPARED_TOOLS"
-                                 : "HOST_TEST_PREPARED_TOOLS is not set");
-                bad = 1;
-            } else if (copied_tool(c, "build/tests/host-suite/tools", name, source, inputs)) {
-                fprintf(stderr, "host preparation: %s: cannot copy native tool %s\n", name, source);
-                bad = 1;
-            }
-            free(source);
+            if (!c->print)
+                bad = external_exfat_tools(c, inputs);
+        } else if (native_tool_name(name)) {
+            if (!c->print)
+                bad = native_tool(c, name, inputs);
         } else
             bad = compiled_tool(c, name, &common, inputs);
     }
