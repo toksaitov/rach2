@@ -4079,6 +4079,7 @@ static int service_gone(const struct etude_case_service *s)
 /* A wait for text on a service's standard output. */
 struct out_wait {
     struct etude_case_service *s;
+    struct etude_case_machine *guest;
     const char *text;
     uint64_t from;
     long at; /* the offset past the text once found, else -1 */
@@ -4098,7 +4099,8 @@ static int out_found(void *arg)
             return 1;
         }
     }
-    return service_gone(t->s);
+    return service_gone(t->s) ||
+           (t->guest != NULL && etude_serial_status(t->guest->serial) != ETUDE_SERIAL_BUSY);
 }
 
 /** Say whether service `arg` has finished. */
@@ -4233,28 +4235,23 @@ enum etude_status etude_service(struct etude_case *c, const char *service, char 
     return st == ETUDE_OK ? ETUDE_FAILED : st;
 }
 
-enum etude_status etude_service_wait(struct etude_case_service *s, const char *text, uint64_t from,
-                                     uint64_t *at)
+static enum etude_status service_wait(struct out_wait *t, uint64_t *at)
 {
+    struct etude_case_service *s = t->s;
     const struct etude_exec_result *r = etude_proc_result(s->p);
-    struct out_wait t;
     enum etude_status st;
 
-    if (s->c->cur < 0 || text == NULL || *text == '\0') {
+    if (s->c->cur < 0 || t->text == NULL || *t->text == '\0') {
         diag("service %s: no text to wait for, or no step", s->decl->id);
         s->c->faults++;
         return ETUDE_REFUSED;
     }
-    memset(&t, 0, sizeof(t));
-    t.s = s;
-    t.text = text;
-    t.from = from;
-    t.at = -1;
-    st = serve_until(s->c, out_found, &t, NULL, step_deadline(s->c), 1);
+    t->at = -1;
+    st = serve_until(s->c, out_found, t, NULL, step_deadline(s->c), 1);
     if (st != ETUDE_OK)
         return st;
-    if (t.at >= 0) {
-        *at = (uint64_t)t.at;
+    if (t->at >= 0) {
+        *at = (uint64_t)t->at;
         return ETUDE_OK;
     }
     if (r->out.total > r->out.kept) {
@@ -4262,8 +4259,28 @@ enum etude_status etude_service_wait(struct etude_case_service *s, const char *t
              (unsigned long long)s->c->output_max);
         return ETUDE_FAILED;
     }
-    s->seen = 1;
+    if (service_gone(s))
+        s->seen = 1;
     return ETUDE_LOST;
+}
+
+enum etude_status etude_service_wait(struct etude_case_service *s, const char *text, uint64_t from,
+                                     uint64_t *at)
+{
+    struct out_wait t = {s, NULL, text, from, -1};
+
+    return service_wait(&t, at);
+}
+
+enum etude_status etude_service_wait_guest(struct etude_case_service *s,
+                                           struct etude_case_machine *guest, const char *text,
+                                           uint64_t from, uint64_t *at)
+{
+    struct out_wait t = {s, guest, text, from, -1};
+
+    if (guest == NULL || guest->c != s->c || guest->serial == NULL || !guest->command_output)
+        return ETUDE_REFUSED;
+    return service_wait(&t, at);
 }
 
 enum etude_status etude_service_end(struct etude_case_service *s, struct etude_termination *end)

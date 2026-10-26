@@ -396,6 +396,13 @@ enum etude_status etude_service(struct etude_case *c, const char *service, char 
 enum etude_status etude_service_wait(struct etude_case_service *s, const char *text, uint64_t from,
                                      uint64_t *at);
 
+/** As etude_service_wait, but return ETUDE_LOST if the same case's guest
+ * command ends before the text arrives. Already received text wins. The
+ * caller must still collect the guest command's result and cleanup. */
+enum etude_status etude_service_wait_guest(struct etude_case_service *s,
+                                           struct etude_case_machine *guest, const char *text,
+                                           uint64_t from, uint64_t *at);
+
 /** Wait for the service to end by itself, within the step's bound, and give
  * how it ended. */
 enum etude_status etude_service_end(struct etude_case_service *s, struct etude_termination *end);
