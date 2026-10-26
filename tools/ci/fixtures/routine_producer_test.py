@@ -31,7 +31,7 @@ class ProducerTests(unittest.TestCase):
         site.write_text('etude-site 2\nendpoint linux\nledger /fixture\ncapacity 1,1,1\n')
         binary = Path(os.environ['ETUDE_PRODUCER_TEST_BINARY']).resolve()
         actor = base / 'actor'
-        actor.write_text('#!' + os.environ.get('PYTHON', '/opt/homebrew/bin/python3') + '\n'
+        actor.write_text('#!' + os.environ.get('PYTHON', sys.executable) + '\n'
             'import json,os,sys\nfrom pathlib import Path\n'
             'a=sys.argv[1:]\n'
             'if a[:2]==["prepare","collection"]:\n'

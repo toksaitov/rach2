@@ -267,6 +267,11 @@ static int mock_reader(int argc, char **argv)
 {
     char *s;
     int i;
+    if (argc == 5 && !strcmp(argv[1], "prepare") && !strcmp(argv[2], "reader")) {
+        char *args[] = {(char *)path("etude"), "prepare", "reader", argv[3], argv[4], NULL};
+        execv(args[0], args);
+        return 127;
+    }
     if (argc > 2 && !strcmp(argv[1], "check") && !strcmp(argv[2], "record"))
         return 0;
     if (argc > 2 && !strcmp(argv[1], "check") && !strcmp(argv[2], "verdict"))
@@ -1521,9 +1526,6 @@ static int prepare(struct fixture *f)
     fx_env("CI_TEST_PASS", pass_streams);
     if (!fx_mkdir(path("state")) || !fx_mkdir(path("locks")) ||
         !flow_copy(f, "tools/ci/report.sh", "report.sh") ||
-        !flow_copy(f, "tools/ci/native_reader.py", "tree/tools/ci/native_reader.py") ||
-        !flow_copy(f, "tools/etude/preparation_paths.py",
-                   "tree/tools/etude/preparation_paths.py") ||
         !fx_replace(flow_source(f, "tools/ci/bisect.sh"), path("bisect.sh"),
                     "/etc/rach2/etude-site", path("no-installed-site")) ||
         !fx_copy("/host-products/etude", path("etude")))
