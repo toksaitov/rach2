@@ -316,7 +316,7 @@ struct etude_machine_spec {
 enum etude_machine_state {
     ETUDE_MACHINE_STARTING, /* QEMU runs, and QMP has not started the machine */
     ETUDE_MACHINE_RUNNING,  /* QMP confirmed the accelerator and started it */
-    ETUDE_MACHINE_ENDED     /* QEMU has ended and its cleanup is done */
+    ETUDE_MACHINE_ENDED     /* executor ended; inspect qemu->cleanup separately */
 };
 
 /* What the launcher observed of one machine. */
