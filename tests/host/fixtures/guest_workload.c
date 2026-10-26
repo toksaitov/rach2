@@ -44,6 +44,18 @@ static int guest_file(const char *suffix, int flags)
     return !marks || n < 0 || n >= (int)sizeof(path) ? -1 : open(path, flags, 0600);
 }
 
+/* Hold the FIFO until exit, after writing more than one responder read. */
+static int guest_backpressure(void)
+{
+    int witness = guest_file(".pressure", O_WRONLY);
+    if (witness < 0 || write(witness, "r", 1) != 1)
+        return 125;
+    if (guest_bytes(1, '0', 8192) || write(1, "\nFINAL OUTPUT\n", 14) != 14 ||
+        write(2, "FINAL ERROR\n", 12) != 12)
+        return 125;
+    return 0;
+}
+
 static int guest_mark(void)
 {
     int fd = guest_file("", O_WRONLY | O_CREAT | O_APPEND);
@@ -225,6 +237,8 @@ int etude_workload_guest(int argc, char **argv, const char *role)
     } else if (!strcmp(role, "guest-both")) {
         puts("out");
         fputs("err\n", stderr);
+    } else if (!strcmp(role, "guest-backpressure")) {
+        return guest_backpressure();
     } else if (!strcmp(role, "guest-flood")) {
         return guest_bytes(1, '0', 1200);
     } else if (!strcmp(role, "guest-long")) {

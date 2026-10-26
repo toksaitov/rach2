@@ -7,6 +7,7 @@
  * host-deps: tools/etude/guest/wire.c
  * host-tools: etude-workload
  * host-deps: tools/etude/history_json.c utils/sha256.c
+ * host-inputs: tests/host/compat/guest_backpressure.c
  * host-cflags: -I tools/etude/include -I tools/etude -I tools/etude/guest
  * host-cflags: -I utils
  */
@@ -491,7 +492,7 @@ struct ending {
 
 /** Whether the fields of a `stream` from its size, from `field`, give the
  * size and digest of `text`, and a total no smaller than the size. */
-static int stream_agrees(char field[][8192], const char *text)
+static int stream_agrees(const char field[][8192], const char *text)
 {
     char hex[65];
 
@@ -1650,11 +1651,14 @@ static void check_serial(void)
     end_guest();
 }
 
+#include "compat/guest_backpressure.c"
+
 int main(int argc, char **argv)
 {
     char *tmp = getenv("TMPDIR");
     int detached = argc == 2 && !strcmp(argv[1], "--detached-only");
-    if (argc != 1 && !detached)
+    int pressure = argc == 2 && !strcmp(argv[1], "--backpressure-only");
+    if (argc != 1 && !detached && !pressure)
         return 2;
 #if !defined(__linux__) && !defined(__rach2__)
     if (detached)
@@ -1682,18 +1686,22 @@ int main(int argc, char **argv)
         perror(work);
         return 2;
     }
-    if (!detached) {
+    if (pressure)
+        check_backpressure();
+    if (!detached && !pressure) {
         check_pass_fail_repeat();
         check_sizes();
         check_interruptions();
         check_orphan();
     }
 #if defined(__linux__) || defined(__rach2__)
-    check_detached(0);
-    check_detached(1);
-    check_detached(2);
+    if (!pressure) {
+        check_detached(0);
+        check_detached(1);
+        check_detached(2);
+    }
 #endif
-    if (!detached) {
+    if (!detached && !pressure) {
         check_orphan_group();
         check_group_records();
         check_unfinished_end();
@@ -1701,11 +1709,14 @@ int main(int argc, char **argv)
         check_stdio_damage();
         check_fixtures();
         check_serial();
+        check_backpressure();
     }
     if (failures) {
         fprintf(stderr, "etude_guest_hosttest: %d checks failed\n", failures);
         return 1;
     }
-    printf("etude_guest_hosttest: %s checks passed\n", detached ? "detached" : "all");
+    printf("etude_guest_hosttest: %s checks passed\n", detached   ? "detached"
+                                                       : pressure ? "backpressure"
+                                                                  : "all");
     return 0;
 }
