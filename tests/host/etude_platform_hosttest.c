@@ -14,6 +14,8 @@
  * host-deps: tools/etude/json.c tools/etude/routine_proof.c
  * host-deps: tools/etude/digest.c utils/sha256.c
  * host-deps: tests/host/compat/retention_host.c
+ * host-deps: tests/host/compat/routine_evidence_host.c
+ * host-deps: tools/etude/routine_evidence.c tools/etude/routine_reader.c
  * host-deps: tools/etude/retention.c tools/etude/retention_io.c
  * host-deps: tools/etude/retention_proof.c tools/etude/retention_issues.c
  * host-deps: tools/etude/reference.c tools/etude/measurement_prepare.c
@@ -35,6 +37,7 @@ int etude_test_collection_tools(const char *self, const char *tmp);
 int etude_test_collection_child(int argc, char **argv);
 int etude_test_retention(const char *self);
 int etude_test_retention_child(int argc, char **argv);
+int etude_test_routine_evidence(void);
 
 int main(int argc, char **argv)
 {
@@ -57,6 +60,8 @@ int main(int argc, char **argv)
     }
     if (tmp == NULL || tmp[0] == '\0')
         tmp = "/tmp";
+    if (argc == 2 && !strcmp(argv[1], "--evidence-only"))
+        return etude_test_routine_evidence();
     if (argc == 2 && !strcmp(argv[1], "--retention-only"))
         return etude_test_retention(argv[0]);
     if (argc == 2 && !strcmp(argv[1], "--collection-only"))
@@ -64,6 +69,8 @@ int main(int argc, char **argv)
     if (etude_test_collection_tools(argv[0], tmp))
         return 1;
     if (etude_test_retention(argv[0]))
+        return 1;
+    if (etude_test_routine_evidence())
         return 1;
     if (etude_test_tooling_cache(tmp))
         return 1;
