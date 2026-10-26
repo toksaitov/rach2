@@ -640,6 +640,12 @@ build/tests/host-suite/etude.inventory.json: $(ETUDE) build/tests/cases/host/hos
 ifneq ($(OS),Windows_NT)
 build/tests/host-suite/tests.inventory.json \
 build/x86_64/tests/host-suite/tests.inventory.json: build/tests/host/exfat_writer
+# The alignment check includes its architecture's configured e2fsprogs tree.
+ifeq ($(ARCH),x86_64)
+build/x86_64/tests/host-suite/tests.inventory.json: $(E2FSPROGS_STAMP)
+else
+build/tests/host-suite/tests.inventory.json: $(E2FSPROGS_STAMP)
+endif
 endif
 
 # Runtime inputs of the native QEMU checks, built before their inventory.
