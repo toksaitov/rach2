@@ -173,6 +173,24 @@ static int prereq_rows(struct fixture *f)
     return 1;
 }
 
+/* A refusal of a recipe line begins `prereq: FILE:LINE: `. */
+static int line_refused(const char *text, const char *path)
+{
+    char prefix[4200];
+    snprintf(prefix, sizeof(prefix), "prereq: %s:", path);
+    size_t n = strlen(prefix);
+    for (const char *p = text; p && *p;) {
+        if (!strncmp(p, prefix, n)) {
+            size_t digits = strspn(p + n, "0123456789");
+            if (digits && !strncmp(p + n + digits, ": ", 2))
+                return 1;
+        }
+        p = strchr(p, '\n');
+        p = p ? p + 1 : NULL;
+    }
+    return 0;
+}
+
 static int malformed(struct fixture *f)
 {
     const char *bad[] = {"probe",
@@ -195,8 +213,8 @@ static int malformed(struct fixture *f)
             return 0;
         const char *a[] = {"/bin/sh", script, "--recipe", path, "--platform", "linux", NULL};
         fx_check(f,
-                 fx_run(f, a, f->work, NULL, NULL) == 2 && output_has(f, "prereq: ") &&
-                     output_has(f, path),
+                 fx_run(f, a, f->work, NULL, NULL) == 2 &&
+                     (line_refused(f->out, path) || line_refused(f->err, path)),
                  bad[i]);
     }
     fx_text(path, "platform macos\nneed x\nprobe y\nuser z\n");
@@ -327,6 +345,25 @@ static int listed(struct fixture *f, const char *platform, char **result)
     *result = strdup(f->out ? f->out : "");
     return *result != NULL;
 }
+static int line_in(const char *text, const char *line)
+{
+    size_t n = strlen(line);
+    for (const char *p = text; p && *p;) {
+        const char *end = strchr(p, '\n');
+        size_t z = end ? (size_t)(end - p) : strlen(p);
+        if (z == n && !memcmp(p, line, n))
+            return 1;
+        p += z + (end != NULL);
+    }
+    return 0;
+}
+static int file_line(const char *path, const char *line)
+{
+    char *text = fx_read(path);
+    int found = text && line_in(text, line);
+    free(text);
+    return found;
+}
 static int name_present(const char *list, const char *name)
 {
     char *copy = strdup(list), *save;
@@ -384,7 +421,7 @@ static void required(struct fixture *f, char *have[4], const char *need)
         if (p == 2 && (!strncmp(need, "i686-elf-", 9) || !strncmp(need, "x86_64-elf-", 11))) {
             const char *target =
                 !strncmp(need, "i686", 4) ? "i686-linux-gnu-gcc" : "x86_64-linux-gnu-gcc";
-            fx_check(f, fx_has(bp(f->tree, "tools/etude/tooling/tools"), target), target);
+            fx_check(f, file_line(bp(f->tree, "tools/etude/tooling/tools"), target), target);
         } else
             fx_check(f, choice_present(have[p], platforms[p], need), need);
     }
@@ -486,11 +523,8 @@ static int coverage(struct fixture *f)
                                     "mtype mdel mdeltree minfo xorriso mke2fs debugfs e2fsck "
                                     "mandoc cppcheck shellcheck clang clang-format";
         char *words = strdup(skip), *parts;
-        for (char *word = strtok_r(words, " ", &parts); word; word = strtok_r(NULL, " ", &parts)) {
-            char token[512];
-            snprintf(token, sizeof(token), "%s\n", word);
-            fx_check(f, recipe && strstr(recipe, token), word);
-        }
+        for (char *word = strtok_r(words, " ", &parts); word; word = strtok_r(NULL, " ", &parts))
+            fx_check(f, recipe && line_in(recipe, word), word);
         free(words);
         free(recipe);
     }
