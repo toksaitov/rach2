@@ -62,7 +62,8 @@ static int report(struct fixture *f, const char *label, const char *want, const 
     fx_run(f, a, f->work, NULL, NULL);
     return fx_check(f,
                     (f->status != 0) == error && (!want || strstr(f->out, want)) &&
-                        (!absent || !strstr(f->out, absent)),
+                        (!absent || !strstr(f->out, absent)) &&
+                        (!error || strstr(f->err, "progress: unknown: ")),
                     label);
 }
 static int member_rows(struct fixture *f)
@@ -181,19 +182,20 @@ int flow_progress_mock(int argc, char **argv)
     const char *name = strrchr(argv[0], '/'), *file = NULL, *work = getenv("FLOW_WORK");
     char p[4096], *s;
     name = name ? name + 1 : argv[0];
-    if (!strcmp(name, "sh") && argc >= 3) {
-        if (!strcmp(argv[2], "current"))
-            file = "phase";
-        else if (!strcmp(argv[2], "members"))
-            file = "members";
-    }
+    if (!strcmp(name, "sh") && argc == 3 && !strcmp(argv[2], "current"))
+        file = "phase";
+    if (!strcmp(name, "sh") && argc == 4 && !strcmp(argv[2], "members") && !strcmp(argv[3], "589"))
+        file = "members";
     if (!strcmp(name, "gh") && argc == 5 && !strcmp(argv[1], "api") &&
         !strcmp(argv[2], "--paginate") && !strcmp(argv[3], "--slurp")) {
-        if (strstr(argv[4], "issues?state=open"))
+        const char *issues = "repos/toksaitov/rach2/issues", *timeline = "/timeline?per_page=100";
+        size_t n = strlen(argv[4]);
+        if (!strcmp(argv[4], "repos/toksaitov/rach2/issues?state=open&per_page=100"))
             file = "opened";
-        else if (strstr(argv[4], "/589/comments?"))
+        else if (!strcmp(argv[4], "repos/toksaitov/rach2/issues/589/comments?per_page=100"))
             file = "comments";
-        else if (strstr(argv[4], "/timeline?"))
+        else if (!strncmp(argv[4], issues, strlen(issues)) && n > strlen(timeline) &&
+                 !strcmp(argv[4] + n - strlen(timeline), timeline))
             file = "timeline";
     }
     if (!file || !work) {
