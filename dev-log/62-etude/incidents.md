@@ -1985,3 +1985,7 @@ The Windows clock scenario completed its five assertions, but a diagnostic inter
 ### A progress counter was reported as another case
 
 The 06:35 manager record described `stage` as if it were a case beside `host.host.scripts`. It is that case's progress counter. The retained script log ends with `end 46`; the next active case is `host.host.tests` on x86-64. The corrected process record distinguishes a case identity, its progress counters and its final report. No test was repeated or its result changed.
+
+### Preserve routine contracts during the native conversion (#1177)
+
+The obsolete script fixture still held assertions for phase selection, clean preparation, current allocation and native result projections. Removing its callers before those rows had native equivalents would have dropped those checks. The existing platform fixture now calls the actual native implementations with the former command substitutes. It retains all fourteen projection and refusal modes, focused push filters, the phase hash and clean declaration, counted preparation and collection vectors, Windows/WSL request equality and allocator refusal before production. The GNU CI controller invokes that same prepared fixture. The script test is removed only with the separate listener and producer regressions that preserve its remaining rows.
