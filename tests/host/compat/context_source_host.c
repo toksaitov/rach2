@@ -103,6 +103,9 @@ static void test_source_capture(void)
 {
     char tree[4096], current[41] = {0}, output[4096], refused[4096];
     source_repository(tree, current);
+    char candidate[41];
+    CHECK(!etude_context_candidate(tree, candidate) && !strcmp(candidate, current),
+          "native candidate query binds the real clean commit");
     CHECK(!mkdir(fix_path("source-repo/build"), 0700), "prepared source directory");
     source_fixture_put("source-repo/build/prepared.h", "prepared\n");
     snprintf(output, sizeof output, "%s", fix_path("source-snapshot"));
