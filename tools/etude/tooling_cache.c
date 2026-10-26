@@ -11,7 +11,10 @@
 #include <stdlib.h>
 #include <string.h>
 #ifdef _WIN32
+#include <winsock2.h>
 #include <windows.h>
+
+#include "win/files.h"
 #else
 #include <dirent.h>
 #include <fcntl.h>
@@ -101,11 +104,15 @@ static int cache_enter(const struct etude_tooling_site *site, const char *name, 
     if ((site->stop && *site->stop) || !path_of(path, site->cache, name))
         return -1;
 #ifdef _WIN32
+    wchar_t *w = etude_win_long_path(path);
+    if (w == NULL)
+        return -1;
     HANDLE file =
-        CreateFileA(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+        CreateFileW(w, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                     OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
     BY_HANDLE_FILE_INFORMATION info;
     OVERLAPPED overlap = {0};
+    free(w);
     if (file == INVALID_HANDLE_VALUE)
         return -1;
     if (!GetFileInformationByHandle(file, &info) || info.nNumberOfLinks != 1 ||
@@ -228,21 +235,28 @@ static int scan(const char *cache, struct catalog *c)
 {
     char path[CACHE_PATH];
 #ifdef _WIN32
-    WIN32_FIND_DATAA data;
+    WIN32_FIND_DATAW data;
     HANDLE find;
-    int ok;
-    if (!path_of(path, cache, "*"))
+    wchar_t *w;
+    char *name;
+    int ok = 1;
+    if (!path_of(path, cache, "*") || (w = etude_win_long_path(path)) == NULL)
         return 0;
-    find = FindFirstFileA(path, &data);
+    find = FindFirstFileW(w, &data);
+    free(w);
     if (find == INVALID_HANDLE_VALUE)
         return 0;
     do {
         DWORD a = data.dwFileAttributes;
-        entry(c, data.cFileName,
-              (a & FILE_ATTRIBUTE_DIRECTORY) && !(a & FILE_ATTRIBUTE_REPARSE_POINT),
+        if ((name = etude_win_utf8(data.cFileName)) == NULL) {
+            ok = 0;
+            break;
+        }
+        entry(c, name, (a & FILE_ATTRIBUTE_DIRECTORY) && !(a & FILE_ATTRIBUTE_REPARSE_POINT),
               !(a & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)));
-    } while (FindNextFileA(find, &data));
-    ok = GetLastError() == ERROR_NO_MORE_FILES;
+        free(name);
+    } while (FindNextFileW(find, &data));
+    ok = ok && GetLastError() == ERROR_NO_MORE_FILES;
     FindClose(find);
     return ok;
 #else
@@ -271,11 +285,15 @@ static int scan(const char *cache, struct catalog *c)
 static int regular(const char *path)
 {
 #ifdef _WIN32
-    HANDLE f = CreateFileA(path, FILE_READ_ATTRIBUTES,
-                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
-                           OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    wchar_t *w = etude_win_long_path(path);
+    if (w == NULL)
+        return 0;
+    HANDLE f =
+        CreateFileW(w, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    NULL, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, NULL);
     BY_HANDLE_FILE_INFORMATION info;
     int ok;
+    free(w);
     if (f == INVALID_HANDLE_VALUE)
         return 0;
     ok = GetFileInformationByHandle(f, &info) && info.nNumberOfLinks == 1 &&
@@ -306,19 +324,11 @@ static int completed(const char *disk, const char *tools)
     return witnessed;
 }
 
-/** Windows requires clearing read-only before deleting an obsolete output. */
+/** Remove an obsolete output, which is read-only. */
 static int discard(const char *path)
 {
 #ifdef _WIN32
-    DWORD attrs = GetFileAttributesA(path);
-    DWORD writable = attrs & ~FILE_ATTRIBUTE_READONLY;
-    if (attrs == INVALID_FILE_ATTRIBUTES ||
-        !SetFileAttributesA(path, writable ? writable : FILE_ATTRIBUTE_NORMAL))
-        return -1;
-    if (DeleteFileA(path))
-        return 0;
-    SetFileAttributesA(path, attrs);
-    return -1;
+    return unlink(path);
 #else
     return remove(path);
 #endif

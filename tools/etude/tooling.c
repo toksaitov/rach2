@@ -15,10 +15,13 @@
 #include <sys/stat.h>
 
 #ifdef _WIN32
+#include <winsock2.h>
 #include <windows.h>
 #include <direct.h>
 #include <io.h>
 #include <process.h>
+
+#include "win/files.h"
 #else
 #include <unistd.h>
 #endif
@@ -206,23 +209,23 @@ static int file_sha256(const char *path, char hex[65])
 /** Say whether `path` exists. */
 static int exists(const char *path)
 {
-#ifdef _WIN32
-    return _access(path, 0) == 0;
-#else
     struct stat st;
 
     return stat(path, &st) == 0;
-#endif
 }
 
 /** Give the bytes of storage `path` uses, or its size where that is unknown. */
 static uint64_t used_bytes(const char *path)
 {
 #ifdef _WIN32
+    wchar_t *w = etude_win_long_path(path);
     DWORD high, low;
 
+    if (w == NULL)
+        return 0;
     SetLastError(NO_ERROR);
-    low = GetCompressedFileSizeA(path, &high);
+    low = GetCompressedFileSizeW(w, &high);
+    free(w);
     if (low == INVALID_FILE_SIZE && GetLastError() != NO_ERROR)
         return 0;
     return ((uint64_t)high << 32) | low;
@@ -238,11 +241,7 @@ static uint64_t used_bytes(const char *path)
 /** Make directory `path`; 0 when it was made, -1 with errno otherwise. */
 static int make_dir(const char *path)
 {
-#ifdef _WIN32
-    return _mkdir(path);
-#else
     return mkdir(path, 0700);
-#endif
 }
 
 /** Make `path` and the directories above it that are missing. */
@@ -290,14 +289,10 @@ static int remove_dir(const char *dir, const char *const *names)
     for (; *names != NULL; names++) {
         if (fmt(path, sizeof(path), "%s/%s", dir, *names) != 0)
             return -1;
-        if (remove(path) != 0 && errno != ENOENT)
+        if (unlink(path) != 0 && errno != ENOENT)
             rc = -1;
     }
-#ifdef _WIN32
-    if (_rmdir(dir) != 0)
-#else
     if (rmdir(dir) != 0)
-#endif
         rc = -1;
     return rc;
 }
@@ -305,11 +300,7 @@ static int remove_dir(const char *dir, const char *const *names)
 /** Make `path` read-only. */
 static int read_only(const char *path)
 {
-#ifdef _WIN32
-    return _chmod(path, _S_IREAD);
-#else
     return chmod(path, 0444);
-#endif
 }
 
 /**
@@ -942,11 +933,11 @@ static int download(const struct etude_tooling_site *site, const struct etude_to
         return failure(why, whylen, "the cache's path is too long");
     fprintf(stderr, "etude provision: tooling: downloading %s\n", m->url);
     if (run_program(site, argv, why, whylen) != 0) {
-        remove(part);
+        unlink(part);
         return -1;
     }
     if (file_sha256(part, hex) != 0 || strcmp(hex, m->image_sha256) != 0) {
-        remove(part);
+        unlink(part);
         return failure(why, whylen, "%s has the digest %s, not %s", m->url, hex, m->image_sha256);
     }
     if (read_only(part))
@@ -957,10 +948,7 @@ static int download(const struct etude_tooling_site *site, const struct etude_to
     if (file_sha256(m->image, hex) || strcmp(hex, m->image_sha256))
         return failure(why, whylen, "%s cannot be published; verified download retained: %s",
                        m->image, part);
-#ifdef _WIN32
-    _chmod(part, _S_IREAD | _S_IWRITE);
-#endif
-    remove(part);
+    unlink(part);
     return 0;
 }
 
@@ -1158,7 +1146,7 @@ static int prepare_once(const struct etude_tooling_site *site, unsigned cpus, ui
     if (w.root[0] != '\0' && exists(w.root)) {
         res->cost.disk_bytes += used_bytes(w.root);
         if (res->cost.cleanup == ETUDE_CLEANUP_CONFIRMED)
-            remove(w.root);
+            unlink(w.root);
     }
     boot_free(&w.b);
     if (w.dir[0] != '\0' &&
