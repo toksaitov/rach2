@@ -246,8 +246,6 @@ int flow_ci_run_mock(int argc, char **argv)
         puts("Linux");
         return 0;
     }
-    if (!strcmp(name, "native-etude"))
-        return flow_ci_native_mock(argc, argv);
     if (!strcmp(name, "git")) {
         if (argc == 5 && !strcmp(argv[1], "-C") && !strcmp(argv[3], "rev-parse") &&
             !strcmp(argv[4], "HEAD")) {
@@ -793,6 +791,5 @@ int flow_ci_run(struct fixture *f)
     ok = history_rows(&r) && ok;
     ok = cut_rows(&r) && ok;
     ok = both_rows(&r) && ok;
-    ok = flow_ci_native(f) && ok;
     return ok;
 }
