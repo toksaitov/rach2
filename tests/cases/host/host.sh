@@ -86,7 +86,8 @@ FREESTANDING="-ffreestanding"
 # <sys/random.h>). Any -I precedes the system directories, so on a host that
 # does have them these declarations are the ones used; they are musl's, so the
 # interface is the same either way. See tests/host/compat/crypt.h.
-INC="-I rach2/sys -I rach2/sys/arch/x86 -I rach2/sys/arch/i686 -I rach2/sys/lib -I rach2/sys/proc -I utils -I krffs -I tests/host/compat"
+INC="-I utils -I krffs -I tests/host/compat"
+KERNEL_INC="-iquote rach2/sys -iquote rach2/sys/arch/x86 -iquote rach2/sys/arch/i686 -iquote rach2/sys/lib -iquote rach2/sys/proc"
 # A test names a source of a vendored port's extracted tree, on a
 # `host-deps:` or `host-cflags:` line, by its i686 path under vendor/. The
 # tree is read from the architecture ARCH names, which etude gives the tests
@@ -298,7 +299,11 @@ hosttest()
     mode=shared
     ! grep -q 'host-alone:' "$t" || mode=alone
     out="$W/$base"
-    cmd="$CC -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST $SAN -g -O1 -Wno-empty-body $FREESTANDING $INC $extra -o $out $t $deps"
+    inc=$INC
+    if [ "$(group_of "$t")" = tests ]; then
+        inc="$KERNEL_INC $inc"
+    fi
+    cmd="$CC -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST $SAN -g -O1 -Wno-empty-body $FREESTANDING $inc $extra -o $out $t $deps"
     missing=""
     hint=""
     for d in $deps; do
