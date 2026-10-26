@@ -3291,6 +3291,56 @@ static int find_procs(const char *need, const char *const any[], long pids[ROW_P
     return m.n;
 }
 
+#ifdef _WIN32
+/* A census of the job of one row's scenario. */
+struct job_processes {
+    HANDLE job;
+    long *pids;
+    int n;
+    int machines; /* the stand-ins for QEMU among them */
+};
+
+/* Every process in the job matches, whatever its arguments name. */
+static int match_job(long pid, const char *arguments, void *ctx)
+{
+    struct job_processes *j = ctx;
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+    BOOL member = FALSE;
+    int ok;
+
+    if (process == NULL)
+        return 0;
+    ok = IsProcessInJob(process, j->job, &member);
+    CloseHandle(process);
+    if (!ok)
+        return -1;
+    if (!member)
+        return 0;
+    if (j->n == ROW_PROCS)
+        return -1;
+    j->pids[j->n++] = pid;
+    j->machines += strstr(arguments, " -accel ") != NULL;
+    printf("etude-scenario-test: owned process %ld: %s\n", pid, arguments);
+    return 0;
+}
+
+/**
+ * Put in `pids` the processes of the job `job`, which holds a row's scenario
+ * and every process it starts, the stand-ins for QEMU among them, whose
+ * arguments may name no path of the row; give their count, or -1 when
+ * native process queries fail, and in `machines` how many are stand-ins.
+ */
+static int job_procs(HANDLE job, long pids[ROW_PROCS], int *machines)
+{
+    struct job_processes j = {job, pids, 0, 0};
+
+    if (host_process_arguments(match_job, &j) != 0)
+        return -1;
+    *machines = j.machines;
+    return j.n;
+}
+#endif
+
 /**
  * Put in `pids`, sorted, the processes of row `name` in this run, found by
  * their arguments: the scenario and its keepers by its invocation, the
@@ -3824,7 +3874,7 @@ static void test_suspend(const struct site *s)
     long pids[ROW_PROCS];
     HANDLE processes[ROW_PROCS];
     DWORD status;
-    int count = 0, i, ended_count = 0, killed_scenario = 0;
+    int count = 0, i, ended_count = 0, killed_scenario = 0, machines = 0;
 #else
     char ended[PATH_MAX];
 #endif
@@ -3835,7 +3885,7 @@ static void test_suspend(const struct site *s)
     row_start(&killed, &suspend_rows[3], s);
 #ifdef _WIN32
     if (killed.started && attempt_read(&killed.a, STALLED, NULL)) {
-        count = row_procs("suspend-kill", pids);
+        count = job_procs(killed.a.child.job, pids, &machines);
         for (i = 0; i < count; i++)
             processes[i] =
                 OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pids[i]);
@@ -3856,7 +3906,7 @@ static void test_suspend(const struct site *s)
             CloseHandle(processes[i]);
         }
     }
-    CHECK(count >= 2 && ended_count == count && killed_scenario,
+    CHECK(count >= 2 && machines >= 1 && ended_count == count && killed_scenario,
           "suspend-kill: the scenario was killed and every stopped QEMU ended");
 #else
     fix_format(ended, sizeof(ended), "%s/suspend-kill.ended", fix_dir());
