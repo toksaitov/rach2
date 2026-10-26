@@ -17,10 +17,6 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'tools/etude'))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'tools/ci/fixtures'))
-if not [a for a in sys.argv[1:] if not a.startswith('-')] or any(
-        a.startswith('RouteTests') for a in sys.argv[1:]):
-    from routine_route_test import RouteTests
 
 
 class ImportTests(unittest.TestCase):

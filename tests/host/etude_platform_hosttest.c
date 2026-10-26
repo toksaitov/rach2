@@ -22,6 +22,12 @@
  * host-deps: tools/etude/preparation_record.c tools/etude/posix/store.c
  * host-deps: tools/etude/posix/authority_platform.c
  * host-deps: tools/etude/history_collect.c tools/etude/history_json.c
+ * host-deps: tests/host/compat/routine_entry_host.c
+ * host-deps: tools/etude/host_prepare_io.c
+ * host-deps: tools/etude/host_prepare_build.c tools/etude/authority_parse.c
+ * host-inputs: tools/etude/routine_inputs.c tools/etude/routine_sequence.c
+ * host-inputs: tools/etude/routine_entry.c tools/etude/routine_owner_entry.c
+ * host-inputs: tools/etude/routine_prepare.c tools/etude/routine_site.c
  * host-cflags: -I tools/etude -I tests/host/compat -I utils
  * host-cflags: -I tools/etude/include -Wall -Wextra -Werror
  */
@@ -38,6 +44,7 @@ int etude_test_collection_child(int argc, char **argv);
 int etude_test_retention(const char *self);
 int etude_test_retention_child(int argc, char **argv);
 int etude_test_routine_evidence(void);
+int etude_test_routine_entry(const char *self);
 
 int main(int argc, char **argv)
 {
@@ -60,6 +67,8 @@ int main(int argc, char **argv)
     }
     if (tmp == NULL || tmp[0] == '\0')
         tmp = "/tmp";
+    if (argc == 2 && !strcmp(argv[1], "--routine-entry-only"))
+        return etude_test_routine_entry(argv[0]);
     if (argc == 2 && !strcmp(argv[1], "--evidence-only"))
         return etude_test_routine_evidence();
     if (argc == 2 && !strcmp(argv[1], "--retention-only"))
@@ -69,6 +78,8 @@ int main(int argc, char **argv)
     if (etude_test_collection_tools(argv[0], tmp))
         return 1;
     if (etude_test_retention(argv[0]))
+        return 1;
+    if (etude_test_routine_entry(argv[0]))
         return 1;
     if (etude_test_routine_evidence())
         return 1;
