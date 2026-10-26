@@ -267,7 +267,8 @@ static DWORD convert(const struct etude_win_spawn *sp, struct launch *l)
         return err == ENOMEM ? ERROR_NOT_ENOUGH_MEMORY : ERROR_INVALID_PARAMETER;
     l->line = etude_win_wide(line);
     free(line);
-    l->prog = etude_win_wide(sp->program);
+    l->prog = strlen(sp->program) < MAX_PATH ? etude_win_wide(sp->program)
+                                             : etude_win_long_path(sp->program);
     if (l->prog == NULL || l->line == NULL)
         return GetLastError();
     if (wcslen(l->line) >= ETUDE_WIN_CMDLINE_MAX)
