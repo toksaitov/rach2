@@ -4,7 +4,8 @@
 # agents_accept.sh: the acceptance of the coding agents of the agents layer
 # (vendor/gnu/agents/Readme.md) on an installed machine, run from the
 # owner's computer over SSH once the owner has signed in to each program on
-# it, and rehearsed in QEMU against the fake API server.
+# it. The agentsaccept cases, tests/cases/machine/agent_accept.c, rehearse the
+# same steps in QEMU against the fake API server.
 #
 # Usage: agents_accept.sh lenovo USER [ADDRESS]
 #
@@ -58,12 +59,6 @@
 # ~/.gemini/antigravity-cli/antigravity-oauth-token, ~/.config/muse/auth.json
 # and ~/.config/gh/hosts.yml. The log is build/images/agents-accept-lenovo.log.
 #
-# Etude calls the internal `etude ACTION AGENT` mode on private GNU roots.
-# Its scenario boots the machine and starts and stops each API script; these
-# actions run the same SSH, session and credential assertions as on Lenovo.
-# Waits end on session state, with no completion deadline in this script.
-# Etude supervises each action with its existing watchdog and case bounds.
-#
 # It prints a line for each step, `agents-accept: PASS` and exits 0, or
 # `agents-accept: FAIL (N)` and exits 1; a usage error exits 2.
 #
@@ -85,18 +80,6 @@ case $MODE in
         mkdir -p "$REPO/build/images"
         LOG=$REPO/build/images/agents-accept-lenovo.log
         ;;
-    etude)
-        [ $# -eq 3 ] || exit 2
-        GUEST_MODE=qemu
-        ACTION=$2
-        AGENTS=$3
-        USERNAME="test"
-        HOST=127.0.0.1
-        PORT=${AGENT_PORT:?}
-        KEY=${AGENT_TEST_KEY:?}
-        ROOT_KEY=${AGENT_ROOT_KEY:?}
-        LOG=${AGENT_WORK:?}/accept.log
-        ;;
     *)
         echo "usage: agents_accept.sh lenovo USER [ADDRESS]" >&2
         exit 2
@@ -110,24 +93,16 @@ for agent in $AGENTS; do
 done
 MAC=${RACH2_MACHINE_MAC:-28:d2:44:7e:e0:af}
 PACKAGES=$REPO/vendor/gnu/agents/packages
-FAKEAPI=$REPO/tests/system/fakeapi/fakeapi.py
-SCRIPTS=$REPO/tests/system/accept/agents
 CANCEL="Run the shell command sleep 600 in the foreground and wait for it to finish."
 WORK_PROMPT="Read notes.txt and do what it says. Check the change with check.sh, then commit it."
 
 work=""
-TMUX_PID=""
-SOCKET_DIR=""
 HOME_M=""
 FAILS=0
 
-# Use a relative socket name within the private directory of an etude case.
+# h COMMAND: run COMMAND in this host's tmux, which runs the agents' clients.
 h() {
-    if [ -n "$SOCKET_DIR" ]; then
-        (cd "$SOCKET_DIR" && tmux -S tmux "$@")
-    else
-        tmux -S "$work/tmux" "$@"
-    fi
+    tmux -S "$work/tmux" "$@"
 }
 
 # m COMMAND: run COMMAND as the account, over SSH, with no input.
@@ -137,29 +112,19 @@ m() {
 
 # mi COMMAND: run COMMAND as m does, with this script's input as its own.
 mi() {
-    if [ "$MODE" = etude ]; then
-        ssh_mode_options='-F /dev/null -o IdentitiesOnly=yes'
-        ssh_control=none
-    else
-        ssh_mode_options='-o ControlMaster=auto -o ControlPersist=yes'
-        ssh_control=$work/ssh
-    fi
-    # shellcheck disable=SC2086 # fixed SSH options, without paths
     ssh -p "$PORT" ${KEY:+-i "$KEY"} -o BatchMode=yes -o StrictHostKeyChecking=no \
         -o "UserKnownHostsFile=$work/known" \
         -o LogLevel=ERROR \
-        $ssh_mode_options -o "ControlPath=$ssh_control" "$USERNAME@$HOST" "$@"
+        -o ControlMaster=auto -o ControlPersist=yes -o "ControlPath=$work/ssh" \
+        "$USERNAME@$HOST" "$@"
 }
 
 # root COMMAND: run COMMAND on the machine as root, by the development key.
 root() {
-    ssh_root_options=""
-    [ "$MODE" != etude ] || ssh_root_options='-F /dev/null -o IdentitiesOnly=yes'
-    # shellcheck disable=SC2086 # fixed SSH options, without paths
     ssh -n -p "$PORT" -i "$ROOT_KEY" -o BatchMode=yes -o StrictHostKeyChecking=no \
         -o "UserKnownHostsFile=$work/known" \
         -o LogLevel=ERROR \
-        $ssh_root_options "root@$HOST" "$@"
+        "root@$HOST" "$@"
 }
 
 # say TEXT: print TEXT as a line of the log.
@@ -182,14 +147,12 @@ record() {
 # shellcheck disable=SC2329 # the traps call it
 cleanup() {
     [ -z "$work" ] || h kill-server 2> /dev/null
-    [ -z "$TMUX_PID" ] || wait "$TMUX_PID" 2>/dev/null
-    [ -z "$SOCKET_DIR" ] || rm -rf "$SOCKET_DIR"
     if [ -n "$work" ]; then
-        if [ "$MODE" = lenovo ] && [ -n "$HOME_M" ]; then
+        if [ -n "$HOME_M" ]; then
             m 'tmux -L rach2-accept kill-server' 2> /dev/null
         fi
         ssh -o "ControlPath=$work/ssh" -O exit "$USERNAME@$HOST" 2> /dev/null
-        [ "$MODE" = etude ] || rm -rf "$work"
+        rm -rf "$work"
         work=""
     fi
 }
@@ -205,23 +168,16 @@ give_up() {
     exit 1
 }
 
-if [ "$MODE" = etude ]; then
-    work=${AGENT_WORK:?}
-    mkdir -p "$work"
-else
-    : > "$LOG"
-    work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept.XXXXXX") || exit 1
-fi
+: > "$LOG"
+work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept.XXXXXX") || exit 1
 
 # The agent's own words and keys: its prompt, by a text the screen shows only
 # while the agent waits for a request; the text it shows only while it works,
 # and any it shows while it starts, when it may yet ask a question;
 # the mark before the selected answer of a question; how it ends; what more it
 # needs after a cancelled turn; and the menu it shows when nobody is signed in.
-# A fresh etude Codex home must select its model before its prompt is ready.
 agent_set() {
     LOADING=""
-    MODEL_SELECTED=yes
     case $1 in
         claude)
             READY="bypass permissions on"
@@ -232,7 +188,6 @@ agent_set() {
             SIGNIN="Select login method"
             ;;
         codex)
-            [ "$MODE" != etude ] || MODEL_SELECTED=""
             READY="? for shortcuts"
             BUSY="esc to interrupt"
             LOADING="loading"
@@ -378,9 +333,7 @@ question() {
         claude.*"Yes, I trust this folder"*) choose "Yes, I trust this folder" Down ;;
         claude.*"Yes, I accept"*) choose "Yes, I accept" Down ;;
         codex.*"Trust and continue"*) choose "1. Trust and continue" Up ;;
-        codex.*"Use existing model"*)
-            choose "2. Use existing model" Down && MODEL_SELECTED=yes
-            ;;
+        codex.*"Use existing model"*) choose "2. Use existing model" Down ;;
         agy.*"Choose your color scheme"*) leave "Choose your color scheme" ;;
         agy.*"Terms of Service & Data Use"*)
             press Enter "[ ] Yes, I agree" && press Down ">  Previous" &&
@@ -408,7 +361,7 @@ idle() {
             calm=0
             continue
         fi
-        if [ -n "$MODEL_SELECTED" ] && shows "$READY" && ! shows "$BUSY" &&
+        if shows "$READY" && ! shows "$BUSY" &&
             { [ -z "$LOADING" ] || ! shows "$LOADING"; }; then
             calm=$((calm + 1))
             [ "$calm" -lt 2 ] || return 0
@@ -502,7 +455,6 @@ until_guest() {
 attach() {
     # shellcheck disable=SC2016 # the quotes are the client's, around the path
     client="exec ssh -tt -p $PORT ${KEY:+-i '$KEY'} -o BatchMode=yes -o StrictHostKeyChecking=no"
-    [ "$MODE" != etude ] || client="$client -F /dev/null -o IdentitiesOnly=yes"
     client="$client -o 'UserKnownHostsFile=$work/known' -o ControlPath=none"
     client="$client -o LogLevel=ERROR"
     client="$client $USERNAME@$HOST tmux -u -L rach2-accept new-session -A -s rach2-accept-$agent"
@@ -652,7 +604,8 @@ answer() {
     done
 }
 
-# Stage the shared guest driver, versions and credentials for either mode.
+# acceptance_setup: put the guest driver and the fixture on the machine, and
+# record each program's version and the credential files before the sessions.
 acceptance_setup() {
 # shellcheck disable=SC2016 # the machine's shell expands it
 HOME_M=$(m 'printf %s "$HOME"') || give_up "the account's home"
@@ -668,11 +621,6 @@ for file in "$REPO"/tests/system/fakeapi/repo/*; do
     mi "cat > ~/rach2-accept/fixture/${file##*/}" < "$file" ||
         give_up "the script's files on the machine"
 done
-if [ "$MODE" = etude ]; then
-    if ! mi 'cat > ~/rach2-accept/ca.pem' < "$work/ca/ca.pem" || ! guest setup; then
-        give_up "the settings for the fake server"
-    fi
-fi
 
 # The versions and programs, and the credential files, before the reboot.
 for program in $AGENTS gh; do
@@ -691,106 +639,18 @@ for program in $AGENTS gh; do
     esac
 done
 # shellcheck disable=SC2086 # AGENTS is the validated list of program names
-guest credentials "${GUEST_MODE:-$MODE}" $AGENTS > "$work/credentials.before" || give_up "the credential files"
+guest credentials "$MODE" $AGENTS > "$work/credentials.before" || give_up "the credential files"
 while read -r file digest; do
     [ "$digest" != missing ] || bad "no credential file $file"
 done < "$work/credentials.before"
 # shellcheck disable=SC2086 # AGENTS is the validated list of program names
-OUT=$(guest filtered "${GUEST_MODE:-$MODE}" $AGENTS)
+OUT=$(guest filtered "$MODE" $AGENTS)
 case $OUT in
     "0 of "[1-9]*) say "the machine's filter removes every credential string: OK" ;;
     *) give_up "the machine's filter leaves [$OUT] of the credential files' strings" ;;
 esac
 }
 
-if [ "$MODE" = etude ]; then
-    HOME_M=/home/test
-    case $ACTION in
-        prepare)
-            hosts=$(python3 -B -c 'import json,sys; print(" ".join(sorted({n for f in sys.argv[1:] for n in json.load(open(f))["hosts"]})))' "$SCRIPTS/$AGENTS.json" "$SCRIPTS/gh.json") || exit 1
-            # shellcheck disable=SC2086 # DNS names from the scripts
-            python3 -B "$FAKEAPI" ca "$work/ca" $hosts || exit 1
-            for part in session after; do
-                python3 -B -c 'import json,sys; s=json.load(open(sys.argv[1]))[sys.argv[2]]; open(sys.argv[4],"w").write(json.dumps(s).replace("@REPO@",sys.argv[3]))' "$SCRIPTS/$AGENTS.json" "$part" "$HOME_M/rach2-accept/$AGENTS" "$work/$part.json" || exit 1
-            done
-            python3 -B -c 'import json,sys; json.dump(json.load(open(sys.argv[1]))["after"],open(sys.argv[2],"w"))' "$SCRIPTS/gh.json" "$work/gh.json" || exit 1
-            ;;
-        setup)
-            hosts=$(python3 -B -c 'import json,sys; print(" ".join(sorted({n for f in sys.argv[1:] for n in json.load(open(f))["hosts"]})))' "$SCRIPTS/$AGENTS.json" "$SCRIPTS/gh.json") || exit 1
-            lines=""
-            for name in $hosts; do lines="${lines}10.0.2.100 $name\\n"; done
-            root "printf '$lines' >> /etc/hosts" || give_up "the fake server's names"
-            acceptance_setup
-            ;;
-        session)
-            SOCKET_DIR=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept.XXXXXX") || exit 1
-            (cd "$SOCKET_DIR" && exec tmux -f /dev/null -D -S tmux) > "$work/tmux.log" 2>&1 &
-            TMUX_PID=$!
-            # interval: wait for the foreground server's socket
-            until [ -S "$SOCKET_DIR/tmux" ]; do kill -0 "$TMUX_PID" || exit 1; sleep 0.1; done
-            h new-session -d -s accept -x 120 -y 40 -n script
-            h set-option -g remain-on-exit on
-            h set-option -g default-terminal tmux-256color
-            agent=$AGENTS
-    agent_set "$agent"
-    say "$agent: the session"
-    step_session
-    h kill-window -t "accept:$agent" 2> /dev/null
-    m "tmux -L rach2-accept kill-session -t rach2-accept-$agent" 2> /dev/null
-            h kill-server 2>/dev/null
-            wait "$TMUX_PID" || :
-            TMUX_PID=""
-            ;;
-        credentials)
-# shellcheck disable=SC2086 # AGENTS is the validated list of program names
-guest credentials "${GUEST_MODE:-$MODE}" $AGENTS > "$work/credentials.after" || give_up "the credential files after the reboot"
-if cmp -s "$work/credentials.before" "$work/credentials.after"; then
-    say "the credential files are as they were before the reboot: OK"
-else
-    bad "the credential files changed in the reboot: $(cut -d ' ' -f 1 "$work/credentials.after" |
-        tr '\n' ' ')"
-fi
-            ;;
-        after|gh)
-            if [ "$ACTION" = gh ]; then program=gh; else program=$AGENTS; fi
-    OUT=$(guest version "$program")
-    if [ "$OUT" = "$(cat "$work/version.$program")" ]; then
-        say "$program: the version and the program are as they were: OK"
-    else
-        bad "$program: changed: [$(printf '%s' "$OUT" | tr '\n' ' ')]"
-    fi
-    agent=$program
-    OUT=$(guest run "$program" once 2>&1)
-    record "$program: its answer after the reboot" "$OUT"
-    case $program.$OUT in
-        gh.*"rach2-accept: ended with status 0") say "gh: signed in after the reboot: OK" ;;
-        gh.*) bad "gh: gh auth status failed after the reboot" ;;
-        *"rach2-accept: ended with status 0")
-            if printf '%s\n' "$OUT" | grep -qi "signed in"; then
-                say "$program: answered a request after the reboot: OK"
-            else
-                bad "$program: its answer after the reboot does not say it is signed in"
-            fi
-            ;;
-        *) bad "$program: no answer after the reboot: $(printf '%s\n' "$OUT" | tail -n 1)" ;;
-    esac
-            ;;
-        finish)
-
-OUT=$(mi "bash ~/rach2-accept/guest.sh secrets ${GUEST_MODE:-$MODE} $AGENTS" < "$LOG")
-case $OUT in
-    "0 of "*) say "the log has none of the credential files' strings: OK" ;;
-    *) bad "the log has $OUT of the credential files' strings" ;;
-esac
-m 'rm -rf ~/rach2-accept' || bad "$HOME_M/rach2-accept was not removed"
-            ;;
-        *) exit 2 ;;
-    esac
-    [ "$FAILS" -eq 0 ] || exit 1
-    echo "agents-accept: $ACTION: PASS"
-    [ "$ACTION" != finish ] || echo "agents-accept: PASS"
-    exit 0
-fi
 
 say "accepting the agents $AGENTS on $USERNAME@$HOST, in the mode $MODE"
 answer
@@ -826,7 +686,7 @@ done
 say "the machine rebooted: OK"
 
 # shellcheck disable=SC2086 # AGENTS is the validated list of program names
-guest credentials "${GUEST_MODE:-$MODE}" $AGENTS > "$work/credentials.after" || give_up "the credential files after the reboot"
+guest credentials "$MODE" $AGENTS > "$work/credentials.after" || give_up "the credential files after the reboot"
 if cmp -s "$work/credentials.before" "$work/credentials.after"; then
     say "the credential files are as they were before the reboot: OK"
 else
@@ -857,7 +717,7 @@ for program in $AGENTS gh; do
     esac
 done
 
-OUT=$(mi "bash ~/rach2-accept/guest.sh secrets ${GUEST_MODE:-$MODE} $AGENTS" < "$LOG")
+OUT=$(mi "bash ~/rach2-accept/guest.sh secrets $MODE $AGENTS" < "$LOG")
 case $OUT in
     "0 of "*) say "the log has none of the credential files' strings: OK" ;;
     *) bad "the log has $OUT of the credential files' strings" ;;
