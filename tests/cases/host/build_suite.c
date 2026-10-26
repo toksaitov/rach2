@@ -242,7 +242,7 @@ static int stop_judge(struct fixture *f, const char *tree)
     const struct suite_probe stuck = {"script_stuck", "stuck", 0};
     if (!suite_manifest(tree, &stuck, 1) ||
         !fx_text(bp(tree, "tests/cases/host/host.list"),
-                 "script_stuck|an endless native probe|prepared\n") ||
+                 "script_stuck|an endless native probe\n") ||
         !suite_inventory(tree, "scripts", &stuck, 1))
         return 0;
     const char *mark = bp(f->work, "meet/stuck");
@@ -278,7 +278,7 @@ static int duplicate_judge(struct fixture *f, const char *tree)
 {
     const struct suite_probe twice[] = {{"twice", "script_pass", 0}, {"twice", "script_pass", 0}};
     if (!suite_manifest(tree, twice, 1) ||
-        !fx_text(bp(tree, "tests/cases/host/host.list"), "twice|duplicate probe|prepared\n") ||
+        !fx_text(bp(tree, "tests/cases/host/host.list"), "twice|duplicate probe\n") ||
         !suite_inventory(tree, "scripts", twice, 2))
         return 0;
     int status = suite_run(f, tree, "scripts", NULL);
@@ -294,8 +294,7 @@ int build_suite(struct fixture *f)
         !fx_copy(product_path(f, "host-suite-probe"), bp(tree, "build/tests/host-suite/probe")) ||
         !suite_manifest(tree, script_probes, 2) ||
         !fx_text(bp(tree, "tests/cases/host/host.list"),
-                 "script_pass|passing native probe|prepared\nscript_fail|failing native "
-                 "probe|prepared\n"))
+                 "script_pass|passing native probe\nscript_fail|failing native probe\n"))
         return 0;
     if (!suite_inventory(tree, "tests", probes, sizeof(probes) / sizeof(*probes)) ||
         !suite_inventory(tree, "checkers", checker_probes, 5) ||

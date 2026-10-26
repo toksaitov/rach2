@@ -159,7 +159,7 @@ static int script_program(struct hp_context *c, struct hp_check *check, const ch
 
 static int append_script(struct hp_context *c, struct json *checks, const char *base,
                          const struct host_script_row *row, const struct json *adapters,
-                         char *const fields[3])
+                         char *const fields[2])
 {
     int bad = 0;
     const char *route = row->part == SCRIPT_NATIVE_PART ? "native" : "gnu";
@@ -183,7 +183,7 @@ static int append_script(struct hp_context *c, struct json *checks, const char *
     if (!adapter && !kernel) {
         struct jbuf detail = {0};
         jbuf_puts(&detail, "no native adapter for the behavioral check: ");
-        jbuf_puts(&detail, fields[2]);
+        jbuf_puts(&detail, fields[0]);
         hp_member(check.entry, "unsupported", hp_string(detail.data));
         jbuf_free(&detail);
     }
@@ -220,19 +220,18 @@ int hp_scripts(struct hp_context *c, struct json *checks, const char *base)
     while (!bad && fgets(line, sizeof(line), list)) {
         if (!*line || *line == '#' || *line == '\n')
             continue;
-        char *label = strchr(line, '|'), *old = label ? strchr(label + 1, '|') : NULL;
-        if (!old || row == count) {
+        char *label = strchr(line, '|');
+        if (!label || row == count) {
             bad = 1;
             break;
         }
         *label++ = 0;
-        *old++ = 0;
-        old[strcspn(old, "\r\n")] = 0;
-        if (strcmp(rows[row].id, line)) {
+        label[strcspn(label, "\r\n")] = 0;
+        if (strchr(label, '|') || strcmp(rows[row].id, line)) {
             bad = 1;
             break;
         }
-        char *fields[] = {line, label, old};
+        char *fields[] = {line, label};
         bad = append_script(c, checks, base, &rows[row++], adapters, fields);
     }
     if (list) {

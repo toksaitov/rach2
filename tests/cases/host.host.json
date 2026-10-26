@@ -2118,37 +2118,37 @@
         },
         {
           "assertion_id": "krffs_open",
-          "checks": "krffs publication open: `sh tests/host/extract_check.sh krffs_open` exits 0",
+          "checks": "krffs publication open: its prepared kernel fixture exits 0",
           "source": "program"
         },
         {
           "assertion_id": "krffs_root_lock",
-          "checks": "krffs root data operations under the mount's lock: `sh tests/host/extract_check.sh krffs_root_lock` exits 0",
+          "checks": "krffs root data operations under the mount's lock: its prepared kernel fixture exits 0",
           "source": "program"
         },
         {
           "assertion_id": "krffs_stat",
-          "checks": "the inode number of the krffs root in the stat calls: `sh tests/host/extract_check.sh krffs_stat` exits 0",
+          "checks": "the inode number of the krffs root in the stat calls: its prepared kernel fixture exits 0",
           "source": "program"
         },
         {
           "assertion_id": "kstack",
-          "checks": "a new kernel stack is cleared and guarded: `sh tests/host/kstack_check.sh` exits 0",
+          "checks": "a new kernel stack is cleared and guarded: its prepared kernel fixture exits 0",
           "source": "program"
         },
         {
           "assertion_id": "endothers",
-          "checks": "an init's end waits for the processes still ending: `sh tests/host/endothers_check.sh` exits 0",
+          "checks": "an init's end waits for the processes still ending: its prepared kernel fixture exits 0",
           "source": "program"
         },
         {
           "assertion_id": "chown",
-          "checks": "the set-id rules of a mounted chown: `sh tests/host/extract_check.sh chown` exits 0",
+          "checks": "the set-id rules of a mounted chown: its prepared kernel fixture exits 0",
           "source": "program"
         },
         {
           "assertion_id": "pagecache",
-          "checks": "the page cache with sys_sync's bounded wait: `sh tests/host/extract_check.sh pagecache` exits 0",
+          "checks": "the page cache with sys_sync's bounded wait: its prepared kernel fixture exits 0",
           "source": "program"
         },
         {
@@ -2319,7 +2319,7 @@
         },
         {
           "assertion_id": "krffs_tools",
-          "checks": "krffs host tools' refusals, replace and edits: `sh tests/host/krffs_tools_test.sh` exits 0",
+          "checks": "krffs host tools' refusals, replace and edits: its native C controller passes every row",
           "source": "scenario"
         },
         {
@@ -2329,17 +2329,17 @@
         },
         {
           "assertion_id": "install_accounts",
-          "checks": "the installer's kept image accounts: `sh tests/system/install_accounts_test.sh` exits 0",
+          "checks": "the installer's kept image accounts: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "mkext2_overlay",
-          "checks": "the modes an ext2 overlay adds under umask 002: `sh tests/system/mkext2_overlay_test.sh` exits 0",
+          "checks": "the modes an ext2 overlay adds under umask 002: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "tooling_image",
-          "checks": "the GNU root's tooling job leaves no stage and no lock when a signal stops it: `sh tests/system/tooling_image_test.sh` exits 0",
+          "checks": "the GNU root's tooling job leaves no stage and no lock when a signal stops it: its native C controller passes every row",
           "source": "scenario"
         }
       ],
@@ -2677,52 +2677,52 @@
         },
         {
           "assertion_id": "run_scripts",
-          "checks": "run scripts' command lines: `sh tests/system/run_scripts_test.sh` exits 0",
+          "checks": "run scripts' command lines: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "commit_msg",
-          "checks": "commit-msg hook's refusals: `sh tests/system/commit_msg_test.sh` exits 0",
+          "checks": "commit-msg hook's refusals: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "prereq",
-          "checks": "prereq.sh's reports, installs and recipe: `sh tests/system/prereq_test.sh` exits 0",
+          "checks": "prereq.sh's reports, installs and recipe: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "check_asm",
-          "checks": "TinyCC's assemblers against GNU as: `sh vendor/tcc/check_asm.sh` exits 0",
+          "checks": "TinyCC's assemblers against GNU as: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "check_ldscript",
-          "checks": "TinyCC's linker script reader against GNU ld: `sh vendor/tcc/check_ldscript.sh` exits 0",
+          "checks": "TinyCC's linker script reader against GNU ld: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "together",
-          "checks": "the makers of several fixture files run once for a parallel request of their files: `sh tests/system/together_test.sh` exits 0",
+          "checks": "the makers of several fixture files run once for a parallel request of their files: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "host_suite",
-          "checks": "the host cases run their checks at once, each in its own scratch, with one result and one assertion each: `sh tests/system/host_suite_test.sh` exits 0",
+          "checks": "the host cases run their checks at once, each in its own scratch, with one result and one assertion each: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "case_select",
-          "checks": "tests/run runs the cases chosen, in their order, and refuses a wrong choice before it builds: `python3 -B tests/system/case_select_test.py` exits 0",
+          "checks": "tests/run runs the cases chosen, in their order, and refuses a wrong choice before it builds: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "gnu_cmake_jobs",
-          "checks": "the cmake port's bootstrap runs no more jobs at once than its make allows: `sh tests/system/gnu_cmake_jobs_test.sh` exits 0",
+          "checks": "the cmake port's bootstrap runs no more jobs at once than its make allows: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "gnu_port_resume",
-          "checks": "a stopped build of the GNU ports goes on from the last port it finished: `sh tests/system/gnu_port_resume_test.sh` exits 0",
+          "checks": "a stopped build of the GNU ports goes on from the last port it finished: its native C controller passes every row",
           "source": "scenario"
         }
       ],
@@ -3020,67 +3020,67 @@
         },
         {
           "assertion_id": "machine_measure",
-          "checks": "the measurement drivers of tools/dev against fake commands: `sh tests/system/machine_measure_test.sh` exits 0",
+          "checks": "the measurement drivers of tools/dev against fake commands: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "ci",
-          "checks": "ci reports and bisection: `sh tests/system/ci_test.sh` exits 0",
+          "checks": "ci reports and bisection: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "ci_run",
-          "checks": "ci's reading of the runner's lines and of etude's history, and its stop after a killed step: `sh tests/system/ci_run_test.sh` exits 0",
+          "checks": "ci's reading of the runner's lines and of etude's history, and its stop after a killed step: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "board",
-          "checks": "board groups, take and the phase in progress: `sh tests/system/board_test.sh` exits 0",
+          "checks": "board groups, take and the phase in progress: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "progress",
-          "checks": "the manager reports delayed phase work and unassigned failures: `python3 -B tests/system/progress_test.py` exits 0",
+          "checks": "the manager reports delayed phase work and unassigned failures: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "limited",
-          "checks": "the loops' reading of a usage limit: `sh tests/system/limited_test.sh` exits 0",
+          "checks": "the loops' reading of a usage limit: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "worker_park",
-          "checks": "the worker loop's parking during a hold and rest of a handed-back intermittent issue: `sh tests/system/worker_park_test.sh` exits 0",
+          "checks": "the worker loop's parking during a hold and rest of a handed-back intermittent issue: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "release_resume",
-          "checks": "a release resumed from its record, with its runs, reruns and acceptance: `sh tests/system/release_resume_test.sh` exits 0",
+          "checks": "a release resumed from its record, with its runs, reruns and acceptance: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "tidy",
-          "checks": "the loops' cleanup of finished work: `sh tests/system/tidy_test.sh` exits 0",
+          "checks": "the loops' cleanup of finished work: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "leftovers",
-          "checks": "the manager's removal of failed tests, home files and landed copies: `sh tests/system/leftovers_test.sh` exits 0",
+          "checks": "the manager's removal of failed tests, home files and landed copies: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "agents_guest",
-          "checks": "the agents guest's scratch removed on every exit: `sh tests/system/agents_guest_test.sh` exits 0",
+          "checks": "the agents guest's scratch removed on every exit: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "testing_run",
-          "checks": "testing.sh run's quoted commands, a worktree's sync and wait's reports: `sh tests/system/testing_run_test.sh` exits 0",
+          "checks": "testing.sh run's quoted commands, a worktree's sync and wait's reports: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "space",
-          "checks": "disk admission requires a Windows reading: `sh tests/system/space_test.sh` exits 0",
+          "checks": "disk admission requires a Windows reading: its native C controller passes every row",
           "source": "scenario"
         }
       ],
@@ -3328,32 +3328,32 @@
         },
         {
           "assertion_id": "etude_version",
-          "checks": "etude's versions built once, reused and kept side by side: `sh tests/system/etude_version_test.sh` exits 0",
+          "checks": "etude's versions built once, reused and kept side by side: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "etude_deploy",
-          "checks": "etude deployed again and after a cut, changing no clone, key or running test: `sh tests/system/etude_deploy_test.sh` exits 0",
+          "checks": "etude deployed again and after a cut, changing no clone, key or running test: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "etude_launch",
-          "checks": "installed admission before builds, worker checks, owner commands and CI: `python3 -B tests/system/etude_launch_test.py` exits 0",
+          "checks": "installed admission before builds, worker checks, owner commands and CI: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "test_status",
-          "checks": "the status reader against waits for the host and ports and live and stale claims: `sh tests/system/test_status_check.sh` exits 0",
+          "checks": "the status reader against waits for the host and ports and live and stale claims: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "etude_tooling",
-          "checks": "etude's tooling machine made once, its jobs run and their boots recorded: `sh tests/system/etude_tooling_test.sh` exits 0",
+          "checks": "etude's tooling machine made once, its jobs run and their boots recorded: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "agents_credentials",
-          "checks": "the agents' credential files and log scan: `python3 -B tests/system/agents_credentials_test.py` exits 0",
+          "checks": "the agents' credential files and log scan: its native C controller passes every row",
           "source": "scenario"
         }
       ],

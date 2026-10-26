@@ -125,7 +125,7 @@ static void script_driver_partitions(void)
     char output[32768];
     copy_probe();
     CHECK(!mkdir(fix_path("tests/cases/host"), 0700), "script list directory created");
-    put("tests/cases/host/host.list", "a|probe a|unused\nb|probe b|unused\n");
+    put("tests/cases/host/host.list", "a|probe a\nb|probe b\n");
     script_driver_manifest(0);
     inventory("scripts", 0, NULL);
     CHECK(!run_group(output, sizeof(output), "scripts", NULL) && strstr(output, "assert a pass") &&
