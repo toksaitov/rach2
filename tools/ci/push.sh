@@ -9,4 +9,16 @@ out=$1
 shift
 ETUDE_PURPOSE=push
 export ETUDE_PURPOSE
-exec sh tools/ci/native_entry.sh push "$out" "$@"
+program=${ETUDE:-}
+if [ -z "$program" ]; then
+    site=${ETUDE_SITE:-}
+    if [ -z "$site" ]; then
+        case $(uname -s) in
+            MINGW*|MSYS*|UCRT*|CLANG*|CYGWIN*) site=C:/ProgramData/rach2/etude-site ;;
+            *) site=/etc/rach2/etude-site ;;
+        esac
+    fi
+    program=$(sed -n 's/^etude //p' "$site") || exit 2
+fi
+case $program in /*|[A-Za-z]:/*) ;; *) echo 'ci: installed Etude is absent' >&2; exit 2 ;; esac
+exec "$program" run routine push "$out" "$@"

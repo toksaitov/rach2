@@ -17,6 +17,15 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'tools/etude'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'tools/ci/fixtures'))
+selected = [a for a in sys.argv[1:] if not a.startswith('-')]
+if not selected or any(a.startswith(('ProducerTests', 'RouteActionTests')) for a in selected):
+    from routine_producer_test import ProducerTests
+    from routine_route_actions_test import RouteActionTests
+    binary = os.environ.get('ETUDE_HOST_PREPARE',
+        str(Path(__file__).resolve().parents[2] / 'build/tools/etude/etude'))
+    os.environ.setdefault('ETUDE_PRODUCER_TEST_BINARY', binary)
+    os.environ.setdefault('ETUDE_ROUTE_TEST_BINARY', binary)
 
 
 class ImportTests(unittest.TestCase):

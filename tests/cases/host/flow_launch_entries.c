@@ -121,9 +121,7 @@ static int ci_unconfigured(struct launch_fixture *u)
         return 0;
     strcpy(output, flow_path(f, "ci"));
     fx_env("FLOW_LAUNCH_MODE", "ci");
-    if (!flow_copy(f, "tools/ci/native_entry.sh", "checkout/tools/ci/native_entry.sh") ||
-        !flow_copy(f, "tools/ci/native_site.sh", "checkout/tools/ci/native_site.sh") ||
-        !fx_mkdir(flow_path(f, "ci")) || !launch_run(u, a, 2))
+    if (!fx_mkdir(flow_path(f, "ci")) || !launch_run(u, a, 2))
         return 0;
     return fx_check(f,
                     strstr(f->err, "ci: refused: selected-site retention policy is absent") &&

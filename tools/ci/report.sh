@@ -223,8 +223,16 @@ read_history() { # read_history RESULT
     fi
     reader=${ETUDE_REPORT_READER:-${ETUDE:-build/tools/etude/etude}}
     if [ -n "$native" ]; then
+        native_site=${ETUDE_SITE:-}
+        if [ -z "$native_site" ]; then
+            case $(uname -s) in
+                MINGW*|MSYS*|UCRT*|CLANG*|CYGWIN*) native_site=C:/ProgramData/rach2/etude-site ;;
+                *) native_site=/etc/rach2/etude-site ;;
+            esac
+        fi
+        native_program=${ETUDE:-$(sed -n 's/^etude //p' "$native_site")}
         if [ -z "${ETUDE_REPORT_READER_RECORD:-}" ] ||
-            ! reader=$(python3 tools/ci/native_reader.py "$reader" "$ETUDE_REPORT_READER_RECORD") ||
+            ! reader=$("$native_program" prepare reader "$reader" "$ETUDE_REPORT_READER_RECORD") ||
             ! "$reader" check record -d "$ETUDE_REPORT_READER_RECORD" >&2; then
             history='ci: report: installed native reader did not verify'
             hstatus=2
