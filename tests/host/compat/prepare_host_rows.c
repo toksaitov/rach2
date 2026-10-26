@@ -767,8 +767,9 @@ static void windows_again(const char *tree, size_t compiled)
 
 /** Check that the Windows companion programs are reused while their
  * sources, the tree's headers and the SDK's are unchanged, and rebuilt
- * alone when one changes; and that a changed program, an invalid record or
- * a source that does not compile fails the preparation and keeps them. */
+ * alone when one changes or when a program or its record is changed,
+ * damaged or missing; and that a source that does not compile fails the
+ * preparation and keeps them. */
 static void windows_companion_reuse(void)
 {
     static const char *const names[] = {"wintarget.exe", "winstand.exe", "etude.exe",
@@ -781,7 +782,7 @@ static void windows_companion_reuse(void)
     long long times[N];
     struct json *first = NULL, *second = NULL;
     struct jbuf out = {0};
-    char *target, *record;
+    char *target, *record, *source, *edit;
     size_t target_size;
 
     pf_scratch("companion-cache", work);
@@ -819,15 +820,38 @@ static void windows_companion_reuse(void)
     pf_write_text(pf_at(work, "sdk/external.h"), "#define EXTERNAL 3\n");
     windows_again(tree, 1);
     PF_CHECK(pf_status(programs[0]) == 5, "companions: a changed header of the SDK");
+    source = pf_read(pf_at(tree, "tools/etude/win/wintarget.c"), NULL);
+    edit = source ? strstr(source, "EXTERNAL;") : NULL;
+    PF_CHECK(edit != NULL, "companions: the fixture's source");
+    if (edit) {
+        *edit = '\0';
+        pf_write_text(pf_at(tree, "tools/etude/win/wintarget.c"), source);
+        pf_append_text(pf_at(tree, "tools/etude/win/wintarget.c"), "EXTERNAL + 1;");
+        pf_append_text(pf_at(tree, "tools/etude/win/wintarget.c"), edit + strlen("EXTERNAL;"));
+    }
+    free(source);
+    windows_again(tree, 1);
+    PF_CHECK(pf_status(programs[0]) == 6, "companions: a changed source");
     fix_format(marker, sizeof(marker), "%s.build.json", programs[0]);
+    for (i = 0; i < 3; i++) {
+        char sha[65];
+        struct json *built;
+
+        if (i == 0)
+            pf_append_text(programs[0], "changed");
+        else if (i == 1)
+            pf_write_text(marker, "{}");
+        else
+            unlink(marker);
+        windows_again(tree, 1);
+        built = pf_jload(marker);
+        PF_CHECK(pf_status(programs[0]) == 6 && built && !pf_sha_file(programs[0], sha) &&
+                     json_text(built, "sha256") && !strcmp(json_text(built, "sha256"), sha),
+                 "companions: a changed program or a damaged or missing record is rebuilt");
+        json_free(built);
+    }
     target = pf_read(programs[0], &target_size);
     record = pf_read(marker, NULL);
-    pf_append_text(programs[0], "changed");
-    json_free(pf_native_prepare(tree, "etude", NULL, env, 1, NULL));
-    pf_write(programs[0], target, target_size);
-    pf_write_text(marker, "{}");
-    json_free(pf_native_prepare(tree, "etude", NULL, env, 1, NULL));
-    pf_write_text(marker, record);
     pf_write_text(pf_at(tree, "tools/etude/win/wintarget.c"), "invalid C syntax\n");
     json_free(pf_native_prepare(tree, "etude", NULL, env, 1, NULL));
     {

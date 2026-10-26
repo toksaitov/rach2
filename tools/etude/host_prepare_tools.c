@@ -404,25 +404,66 @@ static int tool_bytes(const struct json *marker, const char *origin, const char 
             snprintf(path, sizeof(path), "%s/%s", origin, program);
         else
             snprintf(path, sizeof(path), "%s", program);
-        if (hp_hash(path, hash) || !same(hash, json_text(marker, "sha256"))) {
-            fprintf(stderr, "host preparation: prepared host tool bytes changed: %s\n", path);
+        if (hp_hash(path, hash) || !same(hash, json_text(marker, "sha256")))
             return -1;
-        }
     }
     return 0;
 }
 
+/**
+ * Reports a local tool record that does not describe the program beside it.
+ *
+ * The record is invalid when it exists but is not a complete version 1 record,
+ * and the program has changed when its SHA-256 differs from the record's. With
+ * `repair` set, the record is discarded and the program rebuilt; otherwise the
+ * fault stops the preparation.
+ *
+ * @return 0 when the record is valid or absent, 1 when it was discarded, and -1
+ * on a fault without `repair`.
+ */
+static int local_record(const char *program, const char *marker_path, const char *name, int repair,
+                        struct json **marker)
+{
+    struct json *old = *marker ? tool_inventory(*marker, name) : NULL;
+    struct stat metadata;
+    const char *fault = NULL, *path = marker_path;
+    if (*marker ? !old : lstat(marker_path, &metadata) == 0)
+        fault = "invalid compiled tool record";
+    else if (tool_bytes(*marker, NULL, program)) {
+        fault = "prepared host tool bytes changed";
+        path = program;
+    }
+    json_free(old);
+    if (!fault)
+        return 0;
+    fprintf(stderr, "host preparation: %s%s: %s\n", fault, repair ? ", rebuilding" : "", path);
+    if (!repair)
+        return -1;
+    json_free(*marker);
+    *marker = NULL;
+    return 1;
+}
+
+/**
+ * Compiles `program`, or reuses it when its `.build.json` record matches.
+ *
+ * A record is reused only when the compiler identity, the command, the current
+ * dependency scan and the program's SHA-256 all match it. A record from the
+ * imported preparation in `c->origin` is used when there is no local one. A
+ * local record that is invalid or does not match the program's bytes stops the
+ * preparation, or with `repair` set is discarded so that the program is
+ * rebuilt.
+ */
 static int prepared_program(struct hp_context *c, struct hp_check *check, const char *program,
-                            const char *name, struct json *inputs)
+                            const char *name, int repair, struct json *inputs)
 {
     char marker_path[4096], previous[4096];
     if (snprintf(marker_path, sizeof(marker_path), "%s.build.json", program) >=
         (int)sizeof(marker_path))
         return -1;
     struct json *marker = c->print ? NULL : hp_document(marker_path);
-    struct stat metadata;
-    if (!c->print && !marker && lstat(marker_path, &metadata) == 0) {
-        fprintf(stderr, "host preparation: invalid compiled tool record: %s\n", marker_path);
+    if (!c->print && local_record(program, marker_path, name, repair, &marker) < 0) {
+        json_free(marker);
         return -1;
     }
     const char *origin = NULL;
@@ -435,11 +476,13 @@ static int prepared_program(struct hp_context *c, struct hp_check *check, const 
     }
     struct json *old = marker ? tool_inventory(marker, name) : NULL;
     if (marker && !old) {
-        fprintf(stderr, "host preparation: invalid compiled tool record: %s\n", marker_path);
+        fprintf(stderr, "host preparation: invalid compiled tool record: %s\n", previous);
         json_free(marker);
         return -1;
     }
-    if (tool_bytes(marker, origin, program)) {
+    if (origin && tool_bytes(marker, origin, program)) {
+        fprintf(stderr, "host preparation: prepared host tool bytes changed: %s/%s\n", origin,
+                program);
         json_free(old);
         json_free(marker);
         return -1;
@@ -506,7 +549,7 @@ static int compiled_tool(struct hp_context *c, const char *name, const struct hp
     }
     hp_split(&check.flags, "-Wall -Wextra -Werror");
     int bad = hp_mkdir("build/tests/host-suite/tools") ||
-              prepared_program(c, &check, program, name, inputs);
+              prepared_program(c, &check, program, name, 0, inputs);
     hp_words_free(&check.sources);
     hp_words_free(&check.flags);
     hp_words_free(&check.libraries);
@@ -555,7 +598,7 @@ static int companions(struct hp_context *c, struct hp_check *owner, struct json 
         if (snprintf(output, sizeof(output), "%s/%s", root, names[i]) >= (int)sizeof(output))
             bad = 1;
         if (!bad)
-            bad = prepared_program(c, &check, output, names[i], inputs);
+            bad = prepared_program(c, &check, output, names[i], 1, inputs);
         json_free(check.entry);
         hp_words_free(&check.sources);
         hp_words_free(&check.flags);
