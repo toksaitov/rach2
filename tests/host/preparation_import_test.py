@@ -587,6 +587,49 @@ class ImportTests(unittest.TestCase):
             self.assertTrue(program.is_file())
             self.assertFalse(Path(str(program) + '.exe').exists())
 
+    def test_external_git_preparation(self):
+        with tempfile.TemporaryDirectory(prefix='rach2-native-git.') as work:
+            tree = Path(work)
+            self.native_tree(tree)
+            self.native_source(tree, 'probe_hosttest.c', 'host-tools: git tar\n')
+            prepared = tree / 'prepared'
+            prepared.mkdir()
+            sources = {name: Path(shutil.which(name)).resolve() for name in ('git', 'tar')}
+            with patch.dict(os.environ):
+                os.environ.pop('HOST_TEST_PREPARED_TOOLS', None)
+                self.native_prepare(tree, expected=1)
+                for name, source in sources.items():
+                    shutil.copyfile(source, prepared / name)
+                    (prepared / name).chmod(source.stat().st_mode & 0o777)
+                record, _ = self.native_prepare(tree, env={'HOST_TEST_PREPARED_TOOLS': str(prepared)})
+                self.check_external_tools(tree, record,
+                                          {name: prepared / name for name in sources})
+                for name in sources:
+                    (prepared / name).rename(prepared / (name + '.exe'))
+                record, _ = self.native_prepare(tree, env={'HOST_TEST_PREPARED_TOOLS': str(prepared)})
+                self.check_external_tools(tree, record,
+                                          {name: prepared / (name + '.exe') for name in sources})
+                (prepared / 'git.exe').unlink()
+                self.native_prepare(tree, env={'HOST_TEST_PREPARED_TOOLS': str(prepared)}, expected=1)
+                (prepared / 'git.exe').write_text('not a native executable\n')
+                self.native_prepare(tree, env={'HOST_TEST_PREPARED_TOOLS': str(prepared)}, expected=1)
+                self.native_source(tree, 'probe_hosttest.c', 'host-tools: mdir\n')
+                self.native_prepare(tree, expected=1)
+
+    def check_external_tools(self, tree, record, sources):
+        inputs = {entry['path']: entry['sha256'] for entry in record['checks'][0]['inputs']}
+        for name, source in sources.items():
+            relative = 'build/tests/host-suite/tools/' + name
+            binary = tree / relative
+            provenance = tree / (relative + '.provenance.json')
+            digest = hashlib.sha256(source.read_bytes()).hexdigest()
+            self.assertEqual(binary.read_bytes(), source.read_bytes())
+            self.assertEqual(json.loads(provenance.read_text()),
+                             dict(source=str(source.resolve()), sha256=digest))
+            self.assertEqual(inputs[relative], digest)
+            self.assertEqual(inputs[relative + '.provenance.json'],
+                             hashlib.sha256(provenance.read_bytes()).hexdigest())
+
     def test_shared_native_tool_reuse(self):
         with tempfile.TemporaryDirectory(prefix='rach2-native-tool.') as work:
             tree = Path(work)
