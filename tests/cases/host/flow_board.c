@@ -1062,6 +1062,7 @@ static int take_phase_rows(struct fixture *f)
     unsigned i;
     int ok = 1;
     for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        char refusal[200];
         int held;
         if (!setup_data(f, board_main, board_only))
             return 0;
@@ -1071,7 +1072,9 @@ static int take_phase_rows(struct fixture *f)
         if (!strcmp(rows[i].name, "take-unlisted") && !alter("10", 12, "unlisted"))
             return 0;
         call(f, "take", rows[i].n, NULL, NULL);
-        held = rows[i].why ? f->status && strstr(f->err, rows[i].why) && !calls("issue edit") &&
+        snprintf(refusal, sizeof(refusal), "^board: #%s: .*%s", rows[i].n,
+                 rows[i].why ? rows[i].why : "");
+        held = rows[i].why ? f->status && fx_regex(f->err, refusal) && !calls("issue edit") &&
                                  !calls("item-edit")
                            : !f->status && is_field(rows[i].n, 3, "In_progress");
         ok = fx_check(f, held, rows[i].name) && ok;
