@@ -17,6 +17,8 @@ static const struct accounts machine = {
     "root:x:0:\nowner:x:1001:\n", "root:$6$a:0:0:99999:7:::\nowner:$6$b:0:0:99999:7:::\n"};
 static const struct accounts sshd = {"sshd:x:74:74::/var/empty:/usr/bin/false\n", "sshd:x:74:\n",
                                      "sshd:!:0:0:99999:7:::\n"};
+static const struct accounts nobody = {"nobody:x:65534:65534::/nonexistent:/usr/sbin/nologin\n",
+                                       "nogroup:x:65534:\n", "nobody:*:0:0:99999:7:::\n"};
 
 /** Copy the complete product function, rejecting a missing closing line. */
 static char *function(const char *source, const char *name)
@@ -188,6 +190,24 @@ int image_accounts(struct image_check *t)
     free((void *)changed.passwd);
     free((void *)changed.shadow);
     free((void *)from.passwd);
+    free((void *)expected.shadow);
+    changed.passwd = append(image.passwd, nobody.passwd);
+    changed.group = append(image.group, nobody.group);
+    changed.shadow = append(image.shadow, nobody.shadow);
+    expected.passwd = append(joined[0], nobody.passwd);
+    expected.group = append(joined[1], nobody.group);
+    expected.shadow = append(joined[2], nobody.shadow);
+    if (changed.passwd && changed.group && changed.shadow && expected.passwd && expected.group &&
+        expected.shadow)
+        fixture(t, "image nobody and nogroup of ID 65534 are appended with their shadow line",
+                &changed, &machine, &expected);
+    else
+        t->failed++;
+    free((void *)changed.passwd);
+    free((void *)changed.group);
+    free((void *)changed.shadow);
+    free((void *)expected.passwd);
+    free((void *)expected.group);
     free((void *)expected.shadow);
 end:
     for (i = 0; i < 8; i++)
