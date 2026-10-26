@@ -16,9 +16,13 @@
 #   pmccabe               the recorded 2.8 complexity parser
 #
 # and it is installed under PREFIX, which is made if absent, with its programs
-# in PREFIX/bin. Each upstream tarball is downloaded with curl or wget into
-# build/downloads/host-tools/ of the tree, kept there for the next build, and
-# used only when its SHA-256 is the one pinned below. The build runs in
+# in PREFIX/bin. Each upstream tarball is kept in build/downloads/host-tools/
+# of the tree for the next build, and used only when its SHA-256 is the one
+# pinned below. A tarball the tree lacks is copied from the directory that the
+# trees of a host share, RACH2_DOWNLOADS, or /var/cache/rach2-downloads where
+# that exists, when the copy there has the pinned SHA-256; otherwise it is
+# downloaded with curl or wget and added there. RACH2_DOWNLOADS set empty turns
+# the shared directory off. The build runs in
 # build/host-tools/NAME/, which is removed when the script exits, whether it
 # succeeded or not. It needs a C and a C++ compiler, GNU Make, m4, gzip, bzip2
 # and tar.
@@ -90,6 +94,10 @@ esac
 
 TREE=$(cd "$(dirname "$0")/../.." && pwd) || die "cannot find the tree"
 DOWNLOADS=$TREE/build/downloads/host-tools
+SHARED=${RACH2_DOWNLOADS-}
+if [ -z "${RACH2_DOWNLOADS+set}" ] && [ -d /var/cache/rach2-downloads ]; then
+    SHARED=/var/cache/rach2-downloads
+fi
 mkdir -p "$2" || die "cannot make $2"
 PREFIX=$(cd "$2" && pwd) || die "cannot enter $2"
 case "$TREE$PREFIX" in
@@ -130,11 +138,13 @@ MAKEINFO=true
 export MAKEINFO
 
 work=
-trap 'rm -rf ${work:+"$work"}' EXIT
+part=
+trap 'rm -rf ${work:+"$work"} ${part:+"$part"}' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 mkdir -p "$TREE/build/host-tools" "$DOWNLOADS" || die "cannot make the build directories"
+[ -z "$SHARED" ] || mkdir -p "$SHARED" || die "cannot make $SHARED"
 
 sha256_of() {
     if command -v sha256sum >/dev/null 2>&1; then
@@ -156,13 +166,42 @@ check() {
     return 1
 }
 
+# share FILE [new]: add the checked FILE of DOWNLOADS to SHARED, unless SHARED
+# has a file of its name and the second argument is absent. The file is
+# written under a name of its own and renamed into place, so that a tree
+# reading SHARED meanwhile never sees part of it. Failing to add it is no
+# error.
+share() {
+    [ -n "$SHARED" ] || return 0
+    s=$SHARED/${1##*/}
+    [ $# -eq 1 ] && [ -f "$s" ] && return 0
+    if ! part=$(mktemp "$SHARED/.${1##*/}.XXXXXX") ||
+        ! cp "$1" "$part" || ! chmod 664 "$part" || ! mv "$part" "$s"; then
+        say "cannot add ${1##*/} to $SHARED"
+    fi
+    rm -f "$part"
+    part=
+}
+
 # fetch URL SHA256: put the file URL names in DOWNLOADS, checked against
-# SHA256. A partial or wrong download never takes the file's name.
+# SHA256, from SHARED when it has the file and otherwise from URL. A partial
+# or wrong file never takes the file's name.
 fetch() {
     f=$DOWNLOADS/${1##*/}
     if [ -f "$f" ]; then
         check "$f" "$2" || die "remove $f and run again"
+        share "$f"
         return 0
+    fi
+    s=$SHARED/${1##*/}
+    if [ -n "$SHARED" ] && [ -f "$s" ]; then
+        if check "$s" "$2"; then
+            say "copying ${1##*/} from $SHARED"
+            rm -f "$f.part"
+            cp "$s" "$f.part" && mv "$f.part" "$f" && return 0
+            rm -f "$f.part"
+            die "cannot copy $s"
+        fi
     fi
     say "downloading $1"
     rm -f "$f.part"
@@ -175,6 +214,7 @@ fetch() {
     fi || { rm -f "$f.part"; die "cannot download $1"; }
     check "$f.part" "$2" || { rm -f "$f.part"; die "refusing $1"; }
     mv "$f.part" "$f" || die "cannot rename $f.part"
+    share "$f" new
 }
 
 # unpack TARBALL DIR: extract TARBALL, compressed by gzip or bzip2, into DIR.
