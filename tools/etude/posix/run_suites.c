@@ -27,6 +27,8 @@
 #include "retention.h"
 #include "routine_evidence.h"
 #include "routine_producer.h"
+#include "routine_route.h"
+#include "routine_entry.h"
 #include "json.h"
 #include "verbs.h"
 #include "host_prepare.h"
@@ -101,6 +103,55 @@ static unsigned number_of(const char *s, unsigned long max)
     return *end == '\0' && v >= 1 && v <= max ? (unsigned)v : 0;
 }
 
+/* These forms share the existing preparation stop handler. */
+static int prepare_native(int argc, char **argv, int *matched)
+{
+    static const struct {
+        const char *name;
+        int (*main)(int, char **, volatile sig_atomic_t *);
+    } forms[] = {{"route", etude_prepare_route_main},
+                 {"routine", etude_prepare_routine_main},
+                 {"evidence", etude_prepare_evidence_main},
+                 {"producer", etude_routine_producer_main},
+                 {"retention", etude_retention_main},
+                 {"reference", etude_reference_main},
+                 {"import", etude_prepare_import_main},
+                 {"export", etude_prepare_export_main},
+                 {"-H", etude_host_prepare_main}};
+    if (argc < 2)
+        return 0;
+    for (size_t i = 0; i < sizeof forms / sizeof *forms; i++) {
+        if (!strcmp(argv[1], forms[i].name)) {
+            *matched = 1;
+            catch_stops();
+            return forms[i].main(argc - 1, argv + 1, &stop_signal);
+        }
+    }
+    return 0;
+}
+
+static int prepare_form(int argc, char **argv, int *matched)
+{
+    int status = prepare_native(argc, argv, matched);
+    if (*matched || argc < 2)
+        return status;
+    *matched = 1;
+    if (!strcmp(argv[1], "source"))
+        return etude_prepare_source_main(argc - 1, argv + 1);
+    if (!strcmp(argv[1], "context"))
+        return etude_prepare_context_main(argc - 1, argv + 1);
+    if (!strcmp(argv[1], "reader"))
+        return etude_prepare_reader_main(argc - 1, argv + 1);
+    if (!strcmp(argv[1], "tools"))
+        return etude_collection_tools_main(argc - 2, argv + 2);
+    if (!strcmp(argv[1], "collection")) {
+        argv[1] = argv[0];
+        return etude_collection_prepare_main(argc - 1, argv + 1);
+    }
+    *matched = 0;
+    return 0;
+}
+
 /** Run `etude prepare` with the arguments after it. */
 int etude_prepare_main(int argc, char **argv)
 {
@@ -109,42 +160,10 @@ int etude_prepare_main(int argc, char **argv)
     char program[4096];
     int opt;
 
-    if (argc >= 2 && (!strcmp(argv[1], "evidence") || !strcmp(argv[1], "producer"))) {
-        catch_stops();
-        return !strcmp(argv[1], "evidence")
-                   ? etude_prepare_evidence_main(argc - 1, argv + 1, &stop_signal)
-                   : etude_routine_producer_main(argc - 1, argv + 1, &stop_signal);
-    }
-    if (argc >= 2 && !strcmp(argv[1], "reader"))
-        return etude_prepare_reader_main(argc - 1, argv + 1);
-    if (argc >= 2 && (!strcmp(argv[1], "retention") || !strcmp(argv[1], "reference"))) {
-        catch_stops();
-        return !strcmp(argv[1], "retention")
-                   ? etude_retention_main(argc - 1, argv + 1, &stop_signal)
-                   : etude_reference_main(argc - 1, argv + 1, &stop_signal);
-    }
-    if (argc >= 2 && (!strcmp(argv[1], "import") || !strcmp(argv[1], "export"))) {
-        catch_stops();
-        return !strcmp(argv[1], "import")
-                   ? etude_prepare_import_main(argc - 1, argv + 1, &stop_signal)
-                   : etude_prepare_export_main(argc - 1, argv + 1, &stop_signal);
-    }
-    if (argc >= 2 && !strcmp(argv[1], "source"))
-        return etude_prepare_source_main(argc - 1, argv + 1);
-    if (argc >= 2 && !strcmp(argv[1], "context"))
-        return etude_prepare_context_main(argc - 1, argv + 1);
-
-    if (argc >= 2 && strcmp(argv[1], "-H") == 0) {
-        catch_stops();
-        return etude_host_prepare_main(argc - 1, argv + 1, &stop_signal);
-    }
-
-    if (argc >= 2 && !strcmp(argv[1], "tools"))
-        return etude_collection_tools_main(argc - 2, argv + 2);
-    if (argc >= 2 && strcmp(argv[1], "collection") == 0) {
-        argv[1] = argv[0];
-        return etude_collection_prepare_main(argc - 1, argv + 1);
-    }
+    int matched = 0;
+    int status = prepare_form(argc, argv, &matched);
+    if (matched)
+        return status;
     memset(&o, 0, sizeof(o));
     o.tree = ".";
     o.seconds = ETUDE_LEGACY_SECONDS;
