@@ -17,7 +17,7 @@ ETUDE_CHECK_SRC = tools/etude/etude.c tools/etude/check.c tools/etude/cases.c \
                   tools/etude/processor.c tools/etude/qemu_profile.c tools/etude/schema.c \
                   tools/etude/verdict.c tools/etude/verdict_budget.c tools/etude/routine_charge.c \
                   tools/etude/observe_import.c tools/etude/history.c tools/etude/history_json.c \
-                  tools/etude/history_collect.c utils/sha256.c
+                  tools/etude/history_collect.c tools/etude/hosts.c utils/sha256.c
 # The local Rach2 collection shares its framed transport with the desktop
 # single-attempt command; its public entry remains etude.
 NATIVE_COLLECTION_DRIVER_SRC = tests/native/collection.c tests/native/inventory.c \

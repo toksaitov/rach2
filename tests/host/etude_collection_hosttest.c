@@ -24,7 +24,9 @@
  * then runs this binary as its prepared host case. Successful runs teach
  * its bounds; a failure and a different processor profile do not. The
  * complete output survives the executor's capture bound. A script artifact
- * and a changed artifact are refused before execution.
+ * and a changed artifact are refused before execution. A case whose hosts
+ * leave out this host is left out of the selection, and a manifest whose
+ * hosts are empty, unknown or repeated is refused.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -409,6 +411,91 @@ static void fixture(void)
 #include "compat/host_scripts_order.c"
 #include "compat/host_scripts_dispatch.c"
 
+#ifdef __APPLE__
+#define HOSTS_HERE      "macos"
+#define HOSTS_ELSEWHERE "[\"linux\",\"windows\"]"
+#else
+#define HOSTS_HERE      "linux"
+#define HOSTS_ELSEWHERE "[\"macos\",\"windows\"]"
+#endif
+
+/* Write the suite `hosts` of three copies of the host template's case, each
+ * named for its `requirements.hosts`: `here`, `elsewhere` and `anywhere`,
+ * which has none, or of one case of the given `hosts` alone. */
+static void hosts_manifest(const char *hosts)
+{
+    static const char *const ids[] = {"here", "elsewhere", "anywhere"};
+    const char *lists[] = {"[\"windows\",\"" HOSTS_HERE "\"]", HOSTS_ELSEWHERE, NULL};
+    char text[16384], error[256], id[64];
+    FILE *f = fopen("tools/etude/fixtures/verdict/cases/fixture.host.json", "rb");
+    struct json *doc = NULL;
+    size_t n = f ? fread(text, 1, sizeof(text), f) : 0;
+    if (f)
+        fclose(f);
+    CHECK(n && !json_parse(text, n, 1, &doc, error, sizeof(error)), "hosts case template parses");
+    const struct json *cases = json_member(doc, "cases");
+    struct json *one = cases && cases->count == 1 ? cases->item[0] : NULL;
+    struct jbuf output = {0};
+    jbuf_puts(&output, "{\"schema_version\":1,\"summary\":\"Cases of some host systems\","
+                       "\"family_id\":\"fixture.hosts\",\"cases\":[");
+    for (size_t i = 0; one && i < (hosts ? 1 : 3); i++) {
+        struct jbuf c = {0};
+        const char *list = hosts ? hosts : lists[i];
+        snprintf(id, sizeof(id), "fixture.hosts.%s", ids[i]);
+        scheduling_string(one, "case_id", id);
+        json_canonical(one, &c);
+        char *requirements = c.data ? strstr(c.data, "\"requirements\":{") : NULL;
+        CHECK(requirements != NULL, "hosts case template has requirements");
+        if (requirements) {
+            requirements += strlen("\"requirements\":{");
+            jbuf_puts(&output, i ? "," : "");
+            jbuf_put(&output, c.data, (size_t)(requirements - c.data));
+            if (list) {
+                jbuf_puts(&output, "\"hosts\":");
+                jbuf_puts(&output, list);
+                jbuf_puts(&output, ",");
+            }
+            jbuf_puts(&output, requirements);
+        }
+        jbuf_free(&c);
+    }
+    jbuf_puts(&output, "]}\n");
+    put("tests/cases/fixture.hosts.json", output.data);
+    jbuf_free(&output);
+    json_free(doc);
+}
+
+/* A case whose hosts leave out this host is neither selected nor refused,
+ * and is said once to be left out; one that lists this host and one with no
+ * hosts are selected. A wrong `hosts` refuses the manifest. */
+static void host_selection(char *out, size_t room)
+{
+    char *options[] = {"-N", "hosts", NULL};
+    static const char *const wrong[][2] = {{"[]", "fewer than 1"},
+                                           {"[\"solaris\"]", "is not one of the values"},
+                                           {"[\"" HOSTS_HERE "\",\"" HOSTS_HERE "\"]", "equal"}};
+    put("tests/registry", "default|-|core\nhost|-|core\nagents|-|full|||x86_64\nhosts|-|full\n");
+    hosts_manifest(NULL);
+    CHECK(run(options, NULL, NULL, NULL, out, room) == 0 &&
+              strstr(out, "hosts none fixture.hosts.here\n") &&
+              strstr(out, "hosts none fixture.hosts.anywhere\n") &&
+              !strstr(out, "hosts none fixture.hosts.elsewhere\n"),
+          "the selection keeps the cases of this host and of every host and leaves out another");
+    CHECK(occurrences(out, "etude: case fixture.hosts.elsewhere: not run on " HOSTS_HERE "\n") == 1,
+          "the selection says once that it leaves out the case of another host");
+    CHECK(run(options, "fixture.hosts.elsewhere", NULL, NULL, out, room) == 2 &&
+              strstr(out, "a chosen case does not run on this host"),
+          "an identity of a case of another host is refused");
+    for (size_t i = 0; i < sizeof(wrong) / sizeof(wrong[0]); i++) {
+        hosts_manifest(wrong[i][0]);
+        CHECK(run(options, NULL, NULL, NULL, out, room) == 2 &&
+                  strstr(out, "/requirements/hosts") && strstr(out, wrong[i][1]),
+              "an empty, unknown or repeated host refuses the manifest");
+    }
+    CHECK(unlink(fix_path("tests/cases/fixture.hosts.json")) == 0, "hosts fixture is removed");
+    put("tests/registry", "default|-|core\nhost|-|core\nagents|-|full|||x86_64\n");
+}
+
 static int collection_main(int argc, char **argv)
 {
     static char out[131072];
@@ -463,6 +550,7 @@ static int collection_main(int argc, char **argv)
           "duplicate identities are refused");
     CHECK(run(duplicate, NULL, NULL, NULL, out, sizeof(out)) == 2, "duplicate suites are refused");
     CHECK(run(unknown, NULL, NULL, NULL, out, sizeof(out)) == 2, "unknown suites are refused");
+    host_selection(out, sizeof(out));
     for (size_t i = 0; i < 6; i++) {
         int rc = run(native, NULL, NULL, NULL, out, sizeof(out));
         if (rc != 0)

@@ -38,6 +38,7 @@
  * host-inputs: tools/etude/posix/legacy_set.c
  * host-deps: tools/etude/cost.c
  * host-deps: tools/etude/posix/legacy_cases.c tools/etude/digest.c
+ * host-deps: tools/etude/hosts.c
  * host-deps: tools/etude/posix/legacy_guest.c tools/etude/serial.c
  * host-deps: tools/etude/guest/wire.c tools/etude/posix/store.c
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
@@ -77,7 +78,8 @@
  * driver leaks no memory.
  *
  * A suite run by its cases gives an item of each repetition of each case that
- * runs on the architecture, or on none, with its staged program recorded
+ * runs on the architecture, or on none, and on this host, as its hosts say,
+ * with its staged program recorded
  * by preparation: the tree's `build/NODE`, or `build/x86_64/NODE` for an
  * artifact of each architecture on x86_64. The program runs in its workspace,
  * which is removed after a pass and kept otherwise, with the driver's
@@ -2688,6 +2690,53 @@ static uint64_t tooling_claim(const char *suite, const char *name, int tooling, 
     return bytes;
 }
 
+#ifdef _WIN32
+#define HOSTS_HERE      "windows"
+#define HOSTS_ELSEWHERE "[\"linux\", \"macos\"]"
+#elif defined(__APPLE__)
+#define HOSTS_HERE      "macos"
+#define HOSTS_ELSEWHERE "[\"linux\", \"windows\"]"
+#else
+#define HOSTS_HERE      "linux"
+#define HOSTS_ELSEWHERE "[\"macos\", \"windows\"]"
+#endif
+#define HOSTS_FROM " \"requirements\": {\"host_api\""
+
+/** The set driver reads a manifest without a case whose hosts leave out this
+ * host, as without a case of another architecture, and with a case whose
+ * hosts list this host and one with no hosts. */
+static void test_hosts(void)
+{
+    static const char *const ids[] = {"fixture.hosts.here", "fixture.hosts.elsewhere",
+                                      "fixture.hosts.anywhere"};
+    static char text[16384], once[16384], twice[16384];
+    struct fcase c[3];
+    struct legacy_manifest m;
+    char path[PATH_LEN];
+    size_t i;
+    int bad;
+
+    for (i = 0; i < 3; i++) {
+        struct fcase one = {ids[i], "[\"i686\"]", "\"plain\"", 1, "null", 1, 30000, 30000, 0};
+        c[i] = one;
+    }
+    bad = manifest_text(text, sizeof(text), "fixture.hosts", c, 3) != 0 ||
+          replaced(once, sizeof(once), text, HOSTS_FROM,
+                   " \"requirements\": {\"hosts\": [\"windows\", \"" HOSTS_HERE "\"], "
+                   "\"host_api\"") != 0 ||
+          replaced(twice, sizeof(twice), once, HOSTS_FROM,
+                   " \"requirements\": {\"hosts\": " HOSTS_ELSEWHERE ", \"host_api\"") != 0 ||
+          write_text(in(path, sizeof(path), "cases/one/hosts.json"), twice, 0644) != 0;
+    CHECK(!bad, "hosts: the manifest is written");
+    CHECK(!bad &&
+              legacy_manifest_read(&m, tree, "cases/one/hosts.json", "hosts", "i686", NULL) == 0 &&
+              m.ncases == 2 && !strcmp(m.cases[0].case_id, ids[0]) &&
+              !strcmp(m.cases[1].case_id, ids[2]),
+          "hosts: the cases of this host and of every host are read, and another's is not");
+    if (!bad)
+        legacy_manifest_free(&m);
+}
+
 /** A host case with tooling memory claims its `memory_bytes` on Linux and
  * its tooling memory on another host, where its work runs in the tooling
  * machine; a case without tooling memory claims its `memory_bytes` on both,
@@ -3123,6 +3172,7 @@ int main(int argc, char **argv)
         return stop_cases_only();
     test_repetition_loads();
     test_digest_paths();
+    test_hosts();
     test_contexts();
     CHECK(etude_test_legacy_captures() == 0, "watchdog capture evidence");
     if (context_only) {

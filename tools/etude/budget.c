@@ -14,6 +14,7 @@
 #include "../../utils/sha256.h"
 #include "cost.h"
 #include "digest.h"
+#include "hosts.h"
 #include "schema.h"
 #ifdef _WIN32
 #include "win/files.h"
@@ -692,7 +693,8 @@ static int select_arch(const struct etude_budget_policy *p, const struct cmp_his
     return add_prepare(s, c, arch);
 }
 
-/** Add the items of every case of `manifest` to `s`; 0 or -1. */
+/** Add the items of every case of `manifest` that runs on the site's system
+ * to `s`; 0 or -1. */
 static int select_manifest(const struct etude_budget_policy *p, const struct cmp_history *h,
                            const struct json *manifest, struct selection *s,
                            struct etude_budget_report *r)
@@ -703,6 +705,9 @@ static int select_manifest(const struct etude_budget_policy *p, const struct cmp
     for (i = 0; cases != NULL && i < cases->count; i++) {
         const struct json *c = cases->item[i], *archs = json_member(c, "architectures");
 
+        if (!etude_case_hosted(c, p->os)) {
+            continue;
+        }
         if (archs->type == JSON_STRING) {
             if (select_arch(p, h, c, "none", s, r) != 0) {
                 return -1;

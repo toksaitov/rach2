@@ -20,6 +20,7 @@
 #include "win/files.h"
 #endif
 #include "check.h"
+#include "hosts.h"
 #include "posix/legacy_cases.h"
 #include "etude/legacy.h"
 #include "etude/portlock.h"
@@ -424,6 +425,11 @@ static int choose_identities(struct collection *c, const struct suite_entry *s,
         if (!selected_architecture(s, selection->cases->item[j])) {
             return refused("a chosen case does not run on the selected architecture");
         }
+        if (identities != NULL &&
+            !etude_case_hosted(selection->cases->item[j], etude_host_system()))
+            return refused("a chosen case does not run on this host");
+        if (!etude_case_runs_here(selection->cases->item[j]))
+            continue;
         selection->picked[selection->count++] = selection->cases->item[j];
     }
     return 0;
@@ -446,6 +452,8 @@ static int choose_rows(const struct suite_entry *s, struct case_selection *selec
         if (j == selection->cases->count || !selected_architecture(s, selection->cases->item[j])) {
             return refused("an unknown row or a row of another architecture was chosen");
         }
+        if (!etude_case_hosted(selection->cases->item[j], etude_host_system()))
+            return refused("a chosen row does not run on this host");
         selection->picked[selection->count++] = selection->cases->item[j];
     }
     return 0;

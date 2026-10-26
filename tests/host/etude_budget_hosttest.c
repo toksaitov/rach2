@@ -15,7 +15,7 @@
  * host-deps: tools/etude/posix/authority_platform.c
  * host-deps: tools/etude/win/authority_platform.c
  * host-deps: tools/etude/budget.c tools/etude/budget_run.c tools/etude/digest.c
- * host-deps: tools/etude/budget_prepare.c
+ * host-deps: tools/etude/budget_prepare.c tools/etude/hosts.c
  * host-deps: tools/etude/compare_load.c tools/etude/observe_import.c
  * host-deps: tools/etude/json.c
  * host-deps: tools/etude/cost.c tools/etude/sched.c tools/etude/ledger.c
@@ -28,9 +28,10 @@
  * A policy whose limits do not nest is refused. The schedule keeps a job
  * from passing a costlier one that waits. A forecast charges every
  * repetition of every selected case and every node its cases prepare, at
- * the costs recorded on the policy's site; a case or a node with no cost
- * recorded there is unknown, and costs recorded past the deadline fail,
- * even beside unknown ones. A run's check leaves unknown a charge that was
+ * the costs recorded on the policy's site, and selects no case whose hosts
+ * leave out the site's system; a case or a node with no cost recorded
+ * there is unknown, and costs recorded past the deadline fail, even beside
+ * unknown ones. A run's check leaves unknown a charge that was
  * not observed and work that was not done; it fails attempts taken from
  * another run, preparation another run did or the run's record leaves out,
  * an exemption that does not hold, and limits that are not the policy's;
@@ -721,6 +722,66 @@ static int forecast(const struct etude_budget_policy *p, enum etude_budget_class
     return etude_budget_forecast(p, cls, h, &manifest, 1, f);
 }
 
+/** Read into `*doc` the host example's manifest with `hosts` in its case's
+ * requirements and three repetitions of the case; 0, or -1 when it is
+ * refused. */
+static int hosted_manifest(const char *hosts, struct json **doc)
+{
+    static const char key[] = "\"requirements\": {";
+    char text[16384], with[16600], name[64], err[1200];
+    FILE *f = fopen(CASES, "rb");
+    size_t n = f != NULL ? fread(text, 1, sizeof(text) - 1, f) : 0;
+    const char *at;
+    struct json *c;
+
+    if (f != NULL) {
+        fclose(f);
+    }
+    text[n] = '\0';
+    if ((at = strstr(text, key)) == NULL) {
+        return -1;
+    }
+    at += strlen(key);
+    fix_format(with, sizeof(with), "%.*s\"hosts\": %s, %s", (int)(at - text), text, hosts, at);
+    fix_format(name, sizeof(name), "hosted-%u.json", (unsigned)strlen(hosts));
+    if (put(name, with) == NULL ||
+        etude_budget_manifest_read(SCHEMAS, fix_path(name), doc, err, sizeof(err)) != 0) {
+        return -1;
+    }
+    c = json_member(*doc, "cases")->item[0];
+    ((struct json *)json_member(json_member(c, "workload"), "repetitions"))->integer = 3;
+    return 0;
+}
+
+/**
+ * A forecast leaves out a case whose hosts do not list the site's system,
+ * linux, and keeps the items of one whose hosts list it, whose cost is
+ * unknown, since its profile is another; a manifest with no host in its
+ * hosts is refused.
+ */
+static void test_hosted_forecast(const struct cmp_history *h)
+{
+    struct etude_budget_forecast f;
+    struct json *doc = NULL;
+
+    memset(&f, 0, sizeof(f));
+    CHECK(hosted_manifest("[\"windows\", \"macos\"]", &doc) == 0 &&
+              etude_budget_forecast(&policy, ETUDE_BUDGET_CI, h, &doc, 1, &f) == 0 && f.items == 0,
+          "hosted-forecast");
+    etude_budget_report_free(&f.report);
+    json_free(doc);
+    doc = NULL;
+    memset(&f, 0, sizeof(f));
+    CHECK(hosted_manifest("[\"windows\", \"linux\"]", &doc) == 0 &&
+              etude_budget_forecast(&policy, ETUDE_BUDGET_CI, h, &doc, 1, &f) == 0 && f.items == 3,
+          "hosted-forecast");
+    etude_budget_report_free(&f.report);
+    json_free(doc);
+    doc = NULL;
+    CHECK(hosted_manifest("[]", &doc) != 0, "hosted-forecast");
+    json_free(doc);
+}
+
 /**
  * A forecast charges each repetition at the median recorded on the site
  * and the node at its recorded preparation, on the site's capacity: all at
@@ -754,6 +815,7 @@ static void test_forecast(void)
     CHECK(f.report.verdict == ETUDE_BUDGET_PASS && f.items == 3 && f.nodes == 1, "forecast");
     CHECK(f.prep_us == 4 * (uint64_t)SECOND && f.cases_us == 10 * (uint64_t)SECOND, "forecast");
     etude_budget_report_free(&f.report);
+    test_hosted_forecast(&h);
     one.cpu_millis = 1000;
     CHECK(read_policy("policy-one.json", &one, &small, err, sizeof(err)) == 0, "forecast");
     CHECK(forecast(&small, ETUDE_BUDGET_CI, &h, &f) == 0, "forecast");

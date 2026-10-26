@@ -100,6 +100,7 @@
           "propertyNames": {"$ref": "#/$defs/name"},
           "additionalProperties": {"enum": ["present", "absent", "either"]}
         },
+        "hosts": {"type": "array", "items": {"enum": ["linux", "macos", "windows"]}, "minItems": 1, "uniqueItems": true},
         "qemu": {"allOf": [{"$ref": "#/$defs/qemu"}, {"not": {"required": ["architecture"]}}]}
       }
     },

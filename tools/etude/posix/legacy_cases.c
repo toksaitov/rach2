@@ -27,6 +27,7 @@
 #endif
 
 #include "digest.h"
+#include "hosts.h"
 #include "etude/qemu.h"
 #include "legacy_cases.h"
 #include "posix.h"
@@ -187,7 +188,7 @@ static int of_suite(const char *family, const char *suite)
 
 /** Give the architecture of the item of case `c` on `arch`: "none", `arch`,
  * or NULL when the case does not run there. */
-static const char *runs_on(const struct json *c, const char *arch)
+static const char *of_architecture(const struct json *c, const char *arch)
 {
     const struct json *a = json_member(c, "architectures");
     size_t i;
@@ -198,6 +199,15 @@ static const char *runs_on(const struct json *c, const char *arch)
         if (a->item[i]->type == JSON_STRING && strcmp(a->item[i]->string, arch) == 0)
             return arch;
     return NULL;
+}
+
+/** Give the architecture of the item of case `c` on `arch` and on this host,
+ * as `of_architecture` does, or NULL when the case does not run on both. */
+static const char *runs_on(const struct json *c, const char *arch)
+{
+    const char *where = of_architecture(c, arch);
+
+    return where != NULL && etude_case_runs_here(c) ? where : NULL;
 }
 
 /** Say whether a card of guest case `c`'s profile forwards a local port. */

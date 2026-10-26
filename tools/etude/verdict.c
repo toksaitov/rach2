@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "etude/history.h"
+#include "hosts.h"
 #include "schema.h"
 #include "sha256.h"
 #include "routine_charge.h"
@@ -626,11 +627,23 @@ static void expect(const struct json *doc, const char *field, const char *want, 
 }
 
 /** Returns 1 when the case `c` runs on `arch`, none for a host case. */
-static int runs_on(const struct json *c, const char *arch)
+static int of_architecture(const struct json *c, const char *arch)
 {
     const struct json *archs = json_member(c, "architectures");
 
     return archs->type == JSON_STRING ? same(arch, "none") : listed(archs, arch);
+}
+
+/** Returns the host system the plan's environment names, or NULL. */
+static const char *plan_host(const struct verdict *v)
+{
+    return v->plan != NULL ? json_text(json_member(v->plan->data, "environment"), "os") : NULL;
+}
+
+/** Returns 1 when the case `c` runs on `arch` and on the plan's host system. */
+static int runs_on(const struct verdict *v, const struct json *c, const char *arch)
+{
+    return of_architecture(c, arch) && etude_case_hosted(c, plan_host(v));
 }
 
 /** Match a results document to its planned item and attempt. */
@@ -646,9 +659,13 @@ static int results_identity(const struct verdict *v, const struct item *it, cons
     expect(doc, "case_id", it->case_id, path);
     expect(doc, "placement", json_text(it->j, "domain"), path);
     expect(doc, "inventory_sha256", json_text(json_member(it->j, "assertions"), "sha256"), path);
-    if (c != NULL && !runs_on(c, json_text(it->j, "architecture"))) {
+    if (c != NULL && !of_architecture(c, json_text(it->j, "architecture"))) {
         finding(path, 0, "%s does not run on %s, the architecture of the item %s", it->case_id,
                 json_text(it->j, "architecture"), it->id);
+    }
+    if (c != NULL && !etude_case_hosted(c, plan_host(v))) {
+        finding(path, 0, "%s does not run on %s, the host system of the plan of the item %s",
+                it->case_id, plan_host(v) != NULL ? plan_host(v) : "(none)", it->id);
     }
     return findings() == before;
 }
@@ -964,7 +981,7 @@ static void check_coverage(struct verdict *v)
             long long want = json_member(json_member(k, "workload"), "repetitions")->integer;
             size_t have = repetitions(v, json_text(k, "case_id"), arch);
 
-            if (runs_on(k, arch) && (long long)have < want) {
+            if (runs_on(v, k, arch) && (long long)have < want) {
                 finding(v->set->m[m].path, k->line,
                         "the plan has %lu of the %lld items of %s on %s", (unsigned long)have, want,
                         json_text(k, "case_id"), arch);
