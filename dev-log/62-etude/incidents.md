@@ -1999,3 +1999,7 @@ The listener regression initially had only a standalone manual invocation. Befor
 ### Native producer and route fixture discovery
 
 The producer and route fixtures had passed their focused checks but were not included in the default host inventory. Removing their old Python regression would therefore have removed later CI coverage. Their classes now join the legacy fixture's ordinary test discovery, beside the listener's native platform wiring. Default discovery contains 29 import, nine producer and one route methods. The ten newly connected producer and route checks passed in the focused invocation; actual cross-host route acceptance remains separate.
+
+### Board maintenance overlapped before completion
+
+The coordinating check started the board start operation while its earlier done operation was still running. A returned command session did not mean the operation had completed. Both commands ended successfully; start was then repeated after done had ended, followed by a fresh read of the affected cards. Dependent administrative operations must wait for the command's terminal status before the next begins. No test, worker or machine was started by these board operations.
