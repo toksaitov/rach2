@@ -2167,7 +2167,7 @@
           "witness_id": "stage",
           "kind": "step",
           "means": "a declared scenario step has ended",
-          "limit": 48
+          "limit": 49
         },
         {
           "witness_id": "checks",
