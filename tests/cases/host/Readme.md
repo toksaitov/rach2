@@ -121,3 +121,5 @@ The set-driver regression (`etude_legacyset`) reexecutes compiled roles for its 
 The KRFFS checker cases interpret the checker's documented negative statuses (-10 through -15) as their POSIX low-byte values when Windows preserves the full native status. The executor's execution-failure sentinel and other native statuses retain their meanings; neither an unknown exception nor failed cleanup becomes an expected image rejection.
 
 The GNU fixture library checks both the write and flush of complete command output. A failed write records each errno and the actual child status on stderr, marks the fixture failed and keeps its evidence. A successful child cannot make a truncated controller report pass.
+
+The CI preparation fixture invokes the prepared native Etude for clean preparation, evidence transfer, reader verification and retention allocation. Its clean check holds the private tree through the ordinary tree-lock entry and checks that vendor caches, failed evidence and the current grant survive. Retention scratch is outside a source checkout, as the real retention policy requires.
