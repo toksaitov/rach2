@@ -182,7 +182,7 @@ static int local_file(struct pi_context *c, const char *root, const struct json 
         return bad;
     }
     json_free(current);
-    struct stat source_status;
+    struct stat source_status = {0};
     char *temporary = calloc(strlen(destination) + 40, 1), *parent = strdup(destination);
     int bad = !temporary || !parent;
     if (!bad) {

@@ -342,3 +342,11 @@ unusedStructMember:*tools/etude/authority_run.h
 # routine_owner.c reads every owner field, including the direct phase state.
 unusedStructMember:*tools/etude/routine_charge.h
 unusedStructMember:*tools/etude/routine_owner.h
+
+# The host check inventory, preparation import, retention and routine input
+# headers are also checked alone. Their members are read by host_prepare*.c,
+# preparation_import*.c, retention*.c and reference.c, and routine_*.c.
+unusedStructMember:*tools/etude/host_prepare.h
+unusedStructMember:*tools/etude/preparation_import.h
+unusedStructMember:*tools/etude/retention.h
+unusedStructMember:*tools/etude/routine_entry.h

@@ -4142,8 +4142,8 @@ static void service_end(struct etude_case_service *s, struct etude_termination *
 /** Stop service `s` and wait until the executor has ended it. */
 static void service_halt(struct etude_case_service *s)
 {
-    if (!s->finished) {
 #ifdef _WIN32
+    if (!s->finished) {
         const struct etude_exec_result *result = etude_proc_result(s->p);
         const struct etude_pid *id = &result->process;
         if (id->start_known && !etude_win_service_stop((DWORD)id->pid, id->start)) {
@@ -4151,11 +4151,11 @@ static void service_halt(struct etude_case_service *s)
             uint64_t until = grace < UINT64_MAX - now ? now + grace : UINT64_MAX;
             serve_until(s->c, service_finished, s, NULL, until, 0);
         }
+    }
 #endif
-        if (!s->finished) {
-            etude_exec_cancel(s->p);
-            serve_until(s->c, service_finished, s, NULL, UINT64_MAX, 0);
-        }
+    if (!s->finished) {
+        etude_exec_cancel(s->p);
+        serve_until(s->c, service_finished, s, NULL, UINT64_MAX, 0);
     }
 }
 

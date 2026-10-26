@@ -125,8 +125,10 @@ static int entry_policy(struct entry *e)
 
 static int entry_accelerator(struct entry *e)
 {
-    const char *accel = getenv("RACH2_QEMU_ACCEL");
-    if (!accel || !*accel) {
+    const char *given = getenv("RACH2_QEMU_ACCEL"), *accel = e->accel;
+    if (given && *given)
+        accel = given;
+    else {
         char path[ROUTINE_PATH], line[512], name[64], value[256], extra;
         if (routine_path(path, e->in.tree, "tools/ci/site"))
             return -1;
@@ -159,7 +161,6 @@ static int entry_accelerator(struct entry *e)
             error = 1;
         if (error)
             return -1;
-        accel = e->accel;
     }
     e->in.accel = accel;
     return strcmp(accel, "tcg") && strcmp(accel, "kvm") && strcmp(accel, "hvf") &&

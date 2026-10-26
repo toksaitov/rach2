@@ -8,7 +8,10 @@
 #include "../../../tests/host/compat/fixdir_host.c"
 
 static int failures, put_calls, get_calls, fail_get;
-static char names[32][128];
+static char fetched[32][128];
+/* The route passes the remote only to the stubs below, which do not read it. */
+static char remote_stub;
+#define REMOTE ((struct etude_routine_remote *)&remote_stub)
 #define CHECK(c)                                              \
     do {                                                      \
         if (!(c)) {                                           \
@@ -37,8 +40,12 @@ int etude_routine_remote_get(struct etude_routine_remote *remote, const char *to
                              const char *name, size_t maximum, char **bytes, size_t *size)
 {
     CHECK(remote != NULL && !strcmp(token, "fixture-token") && maximum > 64);
-    CHECK(get_calls < 32 && strlen(name) < sizeof names[0]);
-    snprintf(names[get_calls++], sizeof names[0], "%s", name);
+    if (get_calls >= 32 || strlen(name) >= sizeof fetched[0]) {
+        fprintf(stderr, "route: %d: no room for the fetched name %s\n", __LINE__, name);
+        failures++;
+        return -1;
+    }
+    snprintf(fetched[get_calls++], sizeof fetched[0], "%s", name);
     if (fail_get && !strcmp(name, "producer.json"))
         return -1;
     *bytes = strdup("fixture proof bytes\n");
@@ -90,11 +97,11 @@ static void fetched_contract(struct route *r, const char *root, const char *mode
     CHECK(!path(directory, root, "fetched") && !mkdir(directory, 0700));
     r->mode = mode;
     get_calls = 0;
-    CHECK(!fetch_results(r, (void *)1, "fixture-token", action, admitted, directory));
+    CHECK(!fetch_results(r, REMOTE, "fixture-token", action, admitted, directory));
     CHECK(get_calls == expected);
     for (int i = 0; i < get_calls; i++) {
         char file[4096];
-        CHECK(!path(file, directory, names[i]));
+        CHECK(!path(file, directory, fetched[i]));
         CHECK(!unlink(file));
     }
     CHECK(!rmdir(directory));
@@ -107,7 +114,7 @@ static void failed_fetch(struct route *r, const char *root)
     r->mode = "macos-import";
     get_calls = 0;
     fail_get = 1;
-    CHECK(fetch_results(r, (void *)1, "fixture-token", "produce", 1, directory));
+    CHECK(fetch_results(r, REMOTE, "fixture-token", "produce", 1, directory));
     CHECK(get_calls == 1);
     CHECK(!rmdir(directory));
     fail_get = 0;
@@ -121,14 +128,18 @@ static void actor_contract(struct route *r, const char *root)
     CHECK(!hp_write(file, bytes, sizeof bytes - 1));
     struct json *actor = pi_describe(file);
     CHECK(actor != NULL);
+    if (!actor) {
+        unlink(file);
+        return;
+    }
     hp_member(actor, "path", hp_string(file));
     struct json *p = (struct json *)json_member(r->config, "producer");
     hp_member(p, "actor", actor);
     put_calls = 0;
-    CHECK(!put_actor(r, (void *)1) && put_calls == 1);
+    CHECK(!put_actor(r, REMOTE) && put_calls == 1);
     hp_member(actor, "sha256",
               hp_string("0000000000000000000000000000000000000000000000000000000000000000"));
-    CHECK(put_actor(r, (void *)1) && put_calls == 1);
+    CHECK(put_actor(r, REMOTE) && put_calls == 1);
     CHECK(!unlink(file));
 }
 

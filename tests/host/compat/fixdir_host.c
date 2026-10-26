@@ -33,8 +33,8 @@
  * room for the paths in it. */
 #define FIX_TMP_MAX 100
 
-static char own[FIX_PATH_MAX]; /* the test's own directory; empty until made */
-static int passed;             /* set by fix_passed */
+static char fix_own[FIX_PATH_MAX]; /* the test's own directory; empty until made */
+static int passed;                 /* set by fix_passed */
 
 /** Whether $TMPDIR, `tmp`, can hold the fixture directory: an absolute path
  * of at most FIX_TMP_MAX characters, each one a shell passes unchanged. */
@@ -83,11 +83,11 @@ static void fix_remove(void)
         keep = fix_leaks();
 #endif
     if (keep) {
-        printf("fixtures: kept in %s\n", own);
+        printf("fixtures: kept in %s\n", fix_own);
         return;
     }
-    if (fix_remove_tree(own) != 0)
-        printf("fixtures: %s could not be removed\n", own);
+    if (fix_remove_tree(fix_own) != 0)
+        printf("fixtures: %s could not be removed\n", fix_own);
 }
 
 #ifdef _WIN32
@@ -114,8 +114,8 @@ const char *fix_dir(void)
     const char *tmp;
     size_t len;
 
-    if (own[0] != '\0') {
-        return own;
+    if (fix_own[0] != '\0') {
+        return fix_own;
     }
     tmp = getenv("TMPDIR");
     if (!fix_plain(tmp)) {
@@ -135,22 +135,22 @@ const char *fix_dir(void)
     while (len > 0 && tmp[len - 1] == '/') {
         len--;
     }
-    snprintf(own, sizeof(own), "%.*s/rach2_fixtures.XXXXXX", (int)len, tmp);
+    snprintf(fix_own, sizeof(fix_own), "%.*s/rach2_fixtures.XXXXXX", (int)len, tmp);
 #ifdef _WIN32
-    if (fix_mkdtemp(own) == NULL) {
+    if (fix_mkdtemp(fix_own) == NULL) {
 #else
-    if (mkdtemp(own) == NULL) {
+    if (mkdtemp(fix_own) == NULL) {
 #endif
         printf("fixtures: no directory could be made under %s\n", tmp);
         exit(1);
     }
 #ifdef _WIN32
-    for (char *path = own; *path; path++)
-        if (*path == '\\')
-            *path = '/';
+    for (char *p = fix_own; *p; p++)
+        if (*p == '\\')
+            *p = '/';
 #endif
     atexit(fix_remove);
-    return own;
+    return fix_own;
 }
 
 const char *fix_path(const char *name)

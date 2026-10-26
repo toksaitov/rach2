@@ -721,7 +721,7 @@ static int inactive(struct hp_context *c, struct hp_check *check, const char *ro
 
 static int instrumentation(struct hp_check *check)
 {
-    struct json *names = hp_value(JSON_ARRAY);
+    struct json *sanitizers = hp_value(JSON_ARRAY);
     for (size_t i = 0; i < check->flags.n; i++) {
         const char *flag = check->flags.v[i];
         if (!strncmp(flag, "-fsanitize=", 11)) {
@@ -730,14 +730,14 @@ static int instrumentation(struct hp_check *check)
                 char *next = strchr(p, ',');
                 if (next)
                     *next++ = 0;
-                hp_item(names, hp_string(p));
+                hp_item(sanitizers, hp_string(p));
                 p = next;
             }
             free(copy);
         }
     }
-    int instrumented = names->count != 0;
-    hp_member(check->entry, "instrumentation", names);
+    int instrumented = sanitizers->count != 0;
+    hp_member(check->entry, "instrumentation", sanitizers);
     return instrumented;
 }
 

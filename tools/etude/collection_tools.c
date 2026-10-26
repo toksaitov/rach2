@@ -817,7 +817,7 @@ static int col_translate(struct col_job *job, const char *tool, int count, char 
     return rc;
 }
 
-static int col_native_case(char *const parts[], size_t count)
+static int col_native_case(const char *const parts[], size_t count)
 {
     if (!strcmp(parts[3], "gnu"))
         return count == 5 && !strcmp(parts[4], "sntpserver");
@@ -827,7 +827,7 @@ static int col_native_case(char *const parts[], size_t count)
            strcmp(parts[4], "root-password") && strcmp(parts[4], "test-password");
 }
 
-static int col_native_suite(char *const parts[], size_t count)
+static int col_native_suite(const char *const parts[], size_t count)
 {
     const char *tail = count > 3 ? parts[count - 1] : "";
     size_t n = strlen(tail), suffix = strlen(".inventory.json");
@@ -841,7 +841,8 @@ static int col_native_suite(char *const parts[], size_t count)
 /* Keep native programs apart from prepared guest programs and data. */
 int etude_collection_native_goal(const char *goal)
 {
-    char text[COL_PATH], *parts[16], *save = NULL;
+    char text[COL_PATH], *save = NULL;
+    const char *parts[16];
     if (snprintf(text, sizeof text, "%s", goal) >= (int)sizeof text)
         return 0;
     size_t count = 0;

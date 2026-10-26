@@ -87,12 +87,10 @@ static char *path_query(const struct owner_entry *e, const char *program, const 
         answer[strcspn(answer, "\r\n")] = 0;
     return answer;
 }
-#endif
 
 static int wsl_path(const struct owner_entry *e, const char *path, char native[ROUTINE_PATH],
                     const char *label)
 {
-#ifndef _WIN32
     char *program = hp_program("wslpath"), back[128];
     if (!program)
         return -1;
@@ -115,14 +113,8 @@ static int wsl_path(const struct owner_entry *e, const char *path, char native[R
     free(reverse);
     free(program);
     return error ? -1 : 0;
-#else
-    (void)e;
-    (void)path;
-    (void)native;
-    (void)label;
-    return -1;
-#endif
 }
+#endif
 
 static void arguments(struct hp_words *args, const struct routine_input *in)
 {
@@ -150,6 +142,7 @@ static struct json *request_json(const struct routine_input *in, struct json *ph
     return doc;
 }
 
+#ifndef _WIN32
 static int request_write(struct owner_entry *e)
 {
     const struct json *export = json_member(e->phase, "selection_export");
@@ -207,12 +200,10 @@ static int proxy(struct owner_entry *e)
     if (wsl_environment(names))
         return 2;
     char *execution = NULL;
-#ifndef _WIN32
     char *wslpath = hp_program("wslpath");
     if (wslpath)
         execution = path_query(e, wslpath, "-u", program, "physical-program");
     free(wslpath);
-#endif
     if (!execution || *execution != '/' || access(execution, X_OK)) {
         free(execution);
         return 2;
@@ -228,6 +219,7 @@ static int proxy(struct owner_entry *e)
     free(execution);
     return result;
 }
+#endif
 
 static int phase_helper(struct owner_entry *e, struct hp_words *args, const char *action)
 {
@@ -471,7 +463,6 @@ int etude_routine_owner_main(int argc, char **argv)
     e.physical = json_member(e.config, "physical");
     e.producer = json_member(e.config, "producer");
 #ifdef _WIN32
-    (void)proxy;
     int result = physical_owner(&e);
 #else
     int result = !strcmp(e.site.mode, "wsl-native") ? proxy(&e) : 2;

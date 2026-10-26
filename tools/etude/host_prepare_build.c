@@ -56,9 +56,9 @@ char *hp_program(const char *name)
     return result;
 }
 
+#ifdef _WIN32
 static int compiler_path(struct hp_context *c)
 {
-#ifdef _WIN32
     if (c->compiler.v[0][0] == '/' && c->compiler.v[0][1] != '/') {
         struct jbuf option = {0};
         jbuf_puts(&option, "HOST_CHECK_COMPILER_NAME=");
@@ -87,19 +87,19 @@ static int compiler_path(struct hp_context *c)
         free(text);
         return native ? 0 : -1;
     }
-#else
-    (void)c;
-#endif
     return 0;
 }
+#endif
 
 int hp_compiler(struct hp_context *c)
 {
     char output[4096], error[4096], hash[65];
     struct hp_words argv = {0};
     char *program = NULL, *version = NULL;
+#ifdef _WIN32
     if (compiler_path(c))
         goto failed;
+#endif
     program = hp_program(c->compiler.v[0]);
     if (!program || hp_hash(program, hash) || path_join(output, c->work, "compiler.out") ||
         path_join(error, c->work, "compiler.err"))
@@ -170,7 +170,7 @@ static char *input_name(struct hp_context *c, const char *path, int external)
                 goto done;
             free(parts.v[--parts.n]);
             parts.v[parts.n] = NULL;
-        } else if (*p && strcmp(p, ".")) {
+        } else if (end != p && strcmp(p, ".")) {
             if (strchr(p, ':') || strchr(p, '\\'))
                 goto done;
             hp_add(&parts, p);
@@ -229,7 +229,7 @@ int hp_input(struct hp_context *c, const char *path, struct json *inputs, int ex
     else {
         static const char digits[] = "0123456789abcdef";
         for (const unsigned char *p = (const unsigned char *)name; *p; p++) {
-            char pair[2] = {digits[*p >> 4], digits[*p & 15]};
+            const char pair[2] = {digits[*p >> 4], digits[*p & 15]};
             jbuf_put(&encoded, pair, 2);
         }
         hp_member(value, "path_hex", hp_string(encoded.data));

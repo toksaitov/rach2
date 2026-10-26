@@ -136,7 +136,8 @@ static int routine_site_resources(struct routine_site *site)
             *end = 0;
         if (routine_positive(part, &site->capacity[i]))
             return -1;
-        part = end ? end + 1 : NULL;
+        if (end)
+            part = end + 1;
     }
     const char *given = getenv("JOBS");
     uint64_t jobs;

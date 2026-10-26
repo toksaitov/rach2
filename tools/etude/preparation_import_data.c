@@ -518,7 +518,7 @@ static int sanitizer_source(const char *tree, const char *parent)
 static int sanitizer_manifest(const char *tree, const char *name, struct json *artifacts)
 {
     char *path = pi_path(tree, name), *parent = strdup(name);
-    char *slash = strrchr(parent, '/');
+    char *slash = parent ? strrchr(parent, '/') : NULL;
     if (!slash) {
         free(path);
         free(parent);

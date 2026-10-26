@@ -178,7 +178,7 @@ static int export_producer(struct pi_context *c)
 
 static char *new_output(const char *path)
 {
-    char *parent = strdup(path), *slash = strrchr(parent, '/'), *output = NULL;
+    char *parent = strdup(path), *slash = parent ? strrchr(parent, '/') : NULL, *output = NULL;
     struct stat st;
     if (!slash || !slash[1] || !lstat(path, &st) || errno != ENOENT)
         goto done;
@@ -188,7 +188,7 @@ static char *new_output(const char *path)
     else
         *slash = 0;
     char *resolved = realpath(parent, NULL);
-    if (resolved)
+    if (resolved && leaf)
         output = pi_path(resolved, leaf);
     free(resolved);
     free(leaf);

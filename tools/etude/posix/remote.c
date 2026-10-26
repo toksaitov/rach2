@@ -1266,7 +1266,7 @@ static int take_cleaned(struct collect *c, struct wire_frame *f)
 
 static int take_observed_output(struct etude_remote *r, struct collect *c, struct wire_frame *frame)
 {
-    size_t before[2] = {c->res->out.kept, c->res->err.kept};
+    const size_t before[2] = {c->res->out.kept, c->res->err.kept};
     int status = c->res->started ? take_output(c, frame) : -1;
     const struct etude_remote_observer *observer = r->conf.observer;
     if (status || !observer)

@@ -419,13 +419,13 @@ static int lease_inputs(struct route *r, const char *linux, const char *windows,
     char file[4096];
     if (path(file, windows, "facts.json"))
         return -1;
-    struct json *facts = hp_document(file), *authority = hp_value(JSON_OBJECT);
+    struct json *found = hp_document(file), *authority = hp_value(JSON_OBJECT);
     struct json *jobs = hp_value(JSON_ARRAY), *endpoints = hp_value(JSON_ARRAY);
-    int bad = !facts || member_ref(authority, "binding", windows, "binding") ||
-              member_ref(authority, "state", windows, "state") || !field(facts, "snapshot") ||
-              !field(facts, "gate");
-    hp_member(authority, "snapshot", hp_clone(json_member(facts, "snapshot")));
-    hp_member(authority, "gate", hp_clone(json_member(facts, "gate")));
+    int bad = !found || member_ref(authority, "binding", windows, "binding") ||
+              member_ref(authority, "state", windows, "state") || !field(found, "snapshot") ||
+              !field(found, "gate");
+    hp_member(authority, "snapshot", hp_clone(json_member(found, "snapshot")));
+    hp_member(authority, "gate", hp_clone(json_member(found, "gate")));
     const char *roots[] = {linux, linux, checked};
     const char *names[] = {"jobs-before.json", "jobs-after.json", "jobs-before.json"};
     for (size_t i = 0; !bad && i < 3; i++) {
@@ -444,7 +444,7 @@ static int lease_inputs(struct route *r, const char *linux, const char *windows,
     if (!bad)
         bad = path(file, r->in.out, "lease.inputs.json") || create(file, value);
     json_free(value);
-    json_free(facts);
+    json_free(found);
     return bad;
 }
 

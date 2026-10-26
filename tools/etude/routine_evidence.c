@@ -555,7 +555,7 @@ static int evidence_stage(const char *source, const char *out, volatile sig_atom
     if (!strcmp(source, out) || ret_inside(source, out) || evidence_parents(out) ||
         etude_retention_read_begin(paths, 1, stop, &guard))
         return ret_fail("evidence staging needs a separate, available destination");
-    char *parent = strdup(out), *slash = strrchr(parent, '/');
+    char *parent = strdup(out), *slash = parent ? strrchr(parent, '/') : NULL;
     int rc = !slash;
     if (slash) {
         *slash = 0;

@@ -462,5 +462,5 @@ struct json *etude_routine_jobs_snapshot(struct hp_context *host, const struct j
     json_free(last_boot);
     json_free(old_id);
     json_free(new_id);
-    return bad ? failed(proof) : proof;
+    return proof;
 }

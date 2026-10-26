@@ -15,18 +15,8 @@ void ret_python_json(const struct json *value, struct jbuf *out)
     for (size_t i = 0; i < canonical.len; i++) {
         unsigned char ch = (unsigned char)canonical.data[i];
         if (ch >= 127) {
-            unsigned code = ch;
-            size_t n = 1;
-            if (ch >= 0xf0) {
-                code = ch & 7;
-                n = 4;
-            } else if (ch >= 0xe0) {
-                code = ch & 15;
-                n = 3;
-            } else if (ch >= 0xc0) {
-                code = ch & 31;
-                n = 2;
-            }
+            size_t n = ch >= 0xf0 ? 4 : ch >= 0xe0 ? 3 : ch >= 0xc0 ? 2 : 1;
+            unsigned code = n == 1 ? ch : ch & (0x7fu >> n);
             for (size_t k = 1; k < n; k++)
                 code = (code << 6) | ((unsigned char)canonical.data[i + k] & 63);
             char text[16];
