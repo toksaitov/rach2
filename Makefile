@@ -369,11 +369,16 @@ _ := $(shell [ ! -f $(BUSYBOX_STAMP) ] || { [ -s $(BUSYBOX_BIN) ] && [ -s $(BUSY
 # fixtures under build/tests/system are host files and stay where they are.
 # The map is exported to the recipes and given by name to the parse-time
 # reads below, since whether $(shell) sees an exported variable has differed
-# between versions of GNU Make.
+# between versions of GNU Make. An i686 build reads every path as written and
+# takes no map from its caller, which may be an x86-64 make that builds an
+# i686 helper.
 ifneq ($(ARCH_SUFFIX),)
 RACH2_PATH_MAP = build/man/=build/man/ build/tests/system/=build/tests/system/ \
                  build/=$(ARCH_BUILD)/ vendor/musl/install/=$(ARCH_MUSL)/
 export RACH2_PATH_MAP
+else
+override RACH2_PATH_MAP :=
+unexport RACH2_PATH_MAP
 endif
 MANIFEST_DEPS = RACH2_PATH_MAP='$(RACH2_PATH_MAP)' sh krffs/manifest_deps.sh
 MANIFEST_DEPS_test := $(shell $(MANIFEST_DEPS) krffs/manifests/test.manifest)
