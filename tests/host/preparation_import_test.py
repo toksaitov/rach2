@@ -48,7 +48,7 @@ class ImportTests(unittest.TestCase):
         binary = Path(os.environ.get('ETUDE_HOST_PREPARE', str(repo / 'build/tools/etude/etude'))).resolve()
         output = 'build/tests/host-suite/' + group + '.inventory.json'
         actual = os.environ.copy()
-        actual.update(CC=str(tree / 'cc'))
+        actual.update(CC=str(tree / 'cc'), MAKEFLAGS='', MFLAGS='', MAKELEVEL='')
         actual.pop('HOST_TEST_PLATFORM', None)
         actual.update(env or {})
         if actual.get('HOST_TEST_PLATFORM') == 'windows':
@@ -469,7 +469,8 @@ class ImportTests(unittest.TestCase):
             self.import_source(state)
             manifest = json.loads((state.tree / name).read_text())
             self.import_run(state)
-            for rows in (manifest['inputs'] * 2, [dict(path='../elsewhere', sha256='a' * 64)]):
+            refused = [manifest['inputs'] * 2] if manifest['inputs'] else []
+            for rows in refused + [[dict(path='../elsewhere', sha256='a' * 64)]]:
                 (state.tree / name).write_text(json.dumps(dict(manifest, inputs=rows)))
                 self.import_run(state, expected=1)
             (state.tree / name).write_text(json.dumps(manifest))
