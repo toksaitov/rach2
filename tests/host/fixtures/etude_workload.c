@@ -6,6 +6,7 @@
 int etude_workload_guest(int argc, char **argv, const char *role);
 
 #ifndef _WIN32
+#include <signal.h>
 #include <unistd.h>
 
 /** Wait for the controller to end this process. */
@@ -64,6 +65,12 @@ static int serial_workload(const char *role)
     if (strcmp(role, "serial-forever") == 0) {
         puts("ready");
         return wait_for_stop();
+    }
+    if (strcmp(role, "serial-signal") == 0) {
+        puts("killed");
+        fflush(NULL);
+        raise(SIGKILL);
+        return 125;
     }
     if (strcmp(role, "serial-pass") != 0)
         return 125;

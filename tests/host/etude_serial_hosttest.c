@@ -35,10 +35,11 @@
  * serial transport, the test opens a session; stores a staged file without
  * data and a program with data, checked by digest, and is refused a staged
  * file that is not staged; runs a pass, whose output arrives whole and in
- * order, and an intended failure with its status; ignores a frame of another
- * session and one of another boot during a run; cancels a program that runs
- * until it is stopped, and finds its processes gone; ends the session with
- * bye and opens another. Through a relay that drops, repeats, damages and
+ * order, an intended failure with its status, and a program that kills
+ * itself with its signal; ignores a frame of another session and one of
+ * another boot during a run; cancels a program that runs until it is
+ * stopped, and finds its processes gone; ends the session with bye and opens
+ * another. Through a relay that drops, repeats, damages and
  * reorders frames both ways, the same operations complete, with frames sent
  * again by both sides. A console closed during a run, and an etude-guest
  * killed and started again during one, end the run LOST and never EXITED.
@@ -1377,9 +1378,10 @@ static int group_gone(long pgid)
 }
 
 /* The programs: a pass with output on both streams, an intended failure,
- * and a program that runs until it is stopped. */
+ * a program that kills itself, and a program that runs until it is stopped. */
 static const char pass[] = "serial-pass";
 static const char failing[] = "serial-fail";
+static const char killed[] = "serial-signal";
 static const char forever[] = "serial-forever";
 
 /** Give what the pass writes on its standard output. */
@@ -1580,9 +1582,9 @@ static void check_installed(struct harness *h)
     unlink(program);
 }
 
-/** Run a pass, an intended failure, a pass beside frames that etude-guest
- * did not send, and a program cancelled, of the run `run_id`. */
-static void check_guest_runs(struct harness *h, const char *run_id)
+/** Check the three ways a program ends by itself: a pass, an intended
+ * failure with its status, and a kill by its own signal. */
+static void check_guest_endings(struct harness *h, const char *run_id)
 {
     const struct etude_serial_result *r = etude_serial_result(h->s);
     char inv[65];
@@ -1598,7 +1600,23 @@ static void check_guest_runs(struct harness *h, const char *run_id)
               r->end == ETUDE_END_EXITED && r->value == 3 && strcmp(h->out[1], "broken\n") == 0,
           "an intended failure gives its exit status");
     note_group(h);
+    CHECK(prepare(h, run_id, "killed", killed, "00000000000000d7", inv) == 0 &&
+              run(h, "00000000000000d7", inv, UNTIL_END) &&
+              etude_serial_status(h->s) == ETUDE_SERIAL_DONE && r->complete &&
+              r->end == ETUDE_END_SIGNALED && r->value == SIGKILL &&
+              r->cleanup == ETUDE_CLEANUP_CONFIRMED && strcmp(h->out[0], "killed\n") == 0,
+          "a program killed by a signal gives the signal, not an exit status");
+    note_group(h);
+}
 
+/** Run the programs that end by themselves, a pass beside frames that
+ * etude-guest did not send, and a program cancelled, of the run `run_id`. */
+static void check_guest_runs(struct harness *h, const char *run_id)
+{
+    const struct etude_serial_result *r = etude_serial_result(h->s);
+    char inv[65];
+
+    check_guest_endings(h, run_id);
     CHECK(prepare(h, run_id, "passing", pass, "00000000000000d3", inv) == 0 &&
               run(h, "00000000000000d3", inv, UNTIL_STARTED) && r->started,
           "a run starts");
