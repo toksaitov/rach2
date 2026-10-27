@@ -12,6 +12,7 @@ oomprobe the whole machine run out of frames
 orphanprobe grandchildren reaped by the designated init
 partsprobe four disks of crafted partition tables, booted with rach2.diskdiag
 persistprobe a second boot of the same disk
+sockettest the count of the machine's UDP sockets, which no other process may change
 survivorprobe the designated init's exit and the debug shell's return
 tlsprobe set_thread_area and %gs of the i686 kernel
 ttyprobe lines and keys typed at the console, and its own window and screen

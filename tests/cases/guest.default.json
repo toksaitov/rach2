@@ -1239,7 +1239,7 @@
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
       ],
       "timing": [],
-      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
+      "native": {"plan": "none", "class": "count", "reason": "every check counts the machine's UDP sockets in /proc/net/sockstat, which a native machine's services move"}
     },
     {
       "case_id": "guest.default.xsaveprobe",

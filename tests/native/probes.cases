@@ -144,7 +144,6 @@ case searchprobe root:krffs ids:1000 -- searchprobe
 case shelltest stage:hello -- shelltest hello=./hello
 # machine=native leaves out the two checks of sleeps_interrupted.
 case sigprobe -- sigprobe machine=native
-case sockettest -- sockettest
 # machine=native leaves out the checks that the stamps never go back.
 case stattest root:krffs -- stattest machine=native
 case stdintest pty:stdintest.in -- stdintest
