@@ -29,7 +29,8 @@
  * answers gives its state, and one whose QMP never greets runs out of its
  * boot stage; and remote cases end lost when their transport is lost or
  * silent, with their claims kept, or stopped when the case confirms its
- * end. A case that ends while its caller is away past its bounds passes.
+ * end. A case that ends within its bounds while its caller is away past
+ * them passes; one that ended past its gap, seen as late, does not.
  * With the real QEMU, a kernel idle at its debug shell runs out of its
  * gap, and QMP gives its status and its registers before it is stopped.
  */
@@ -164,6 +165,13 @@ static int case_main(const char *role)
         endless();
     if (strcmp(role, "prompt") == 0) {
         say("@etude 1 begin host.watchdog.prompt\n@etude 1 end 0\n");
+        return 0;
+    }
+    if (strcmp(role, "slow") == 0) {
+        say("@etude 1 begin host.watchdog.slow\n");
+        /* interval: silent for three seconds, past a gap of two */
+        host_sleep_ms(3000);
+        say("@etude 1 end 0\n");
         return 0;
     }
     return 125;
@@ -363,10 +371,11 @@ static void feed(struct etude_watchdog *w, const char *text, uint64_t t)
 }
 
 /**
- * Check the cleanup after a case's end, with `spec`'s case bound of 600 s: a
- * case that ended within it has met it, though its end was seen later, and
- * its cleanup has its stage's bound, or the case's, from the time the end was
- * seen; one that ended past it has run out.
+ * Check the cleanup after a case's end, with `spec`'s case bound of 600 s and
+ * a gap longer than it: a case that ended within the case's bound has met
+ * it, though its end was seen later, and its cleanup has its stage's bound,
+ * or the case's, from the time the end was seen; one that ended past it has
+ * run out.
  */
 static void test_cleanup_bounds(struct etude_watchdog_spec *spec)
 {
@@ -490,6 +499,16 @@ static void test_watchdog(void)
         return;
     CHECK(etude_watchdog_check(w, 30 * S) == ETUDE_EXPIRY_STAGE, "the boot stage runs out");
     etude_watchdog_free(w);
+    w = etude_watchdog_new(&spec, ETUDE_STAGE_EXECUTE, 0);
+    CHECK(w != NULL, "watchdog");
+    if (w == NULL)
+        return;
+    etude_watchdog_end(w, 30 * S, 40 * S);
+    CHECK(etude_watchdog_check(w, 40 * S) == ETUDE_EXPIRY_GAP, "an end past the gap, seen late");
+    CHECK(etude_watchdog_expired(w) != NULL && etude_watchdog_expired(w)->max_gap_us == 30 * S,
+          "an end past the gap, seen late");
+    etude_watchdog_free(w);
+    spec.gap_us = 700 * S;
     test_cleanup_bounds(&spec);
 }
 
@@ -862,13 +881,15 @@ static void test_host_and_remote(void)
 }
 
 /**
- * Run a case that ends at once while the caller stays away for twice its
- * bounds, as a caller does while it writes other attempts' records: the case
- * ended within them, as its keeper saw, so it passes.
+ * Run a case that ends at once and one that ends silent after three seconds,
+ * past its gap of two, while the caller stays away for four, as a caller
+ * does while it writes other attempts' records. The first ended within its
+ * bounds, as its keeper saw, so it passes; the second ran out of its gap
+ * before its end, so it cannot pass.
  */
 static void test_late_caller(void)
 {
-    static struct row row;
+    static struct row rows[2];
     struct etude_supervisor *s = etude_supervisor_new();
     const struct etude_supervised_result *res;
     uint64_t started, back;
@@ -876,26 +897,35 @@ static void test_late_caller(void)
     CHECK(s != NULL, "supervisor");
     if (s == NULL)
         return;
-    memset(&row, 0, sizeof(row));
-    row.name = row.mode = "prompt";
-    row.kind = ETUDE_SUPERVISED_HOST;
-    row_bounds(&row, 2 * S, 2 * S);
-    start_host(s, &row);
-    if (row.a != NULL) {
-        started = etude_watchdog_progress(etude_supervised_watchdog(row.a))->started_us;
-        /* interval: the caller stays away past the case's bound */
+    memset(rows, 0, sizeof(rows));
+    rows[0].name = rows[0].mode = "prompt";
+    rows[1].name = rows[1].mode = "slow";
+    rows[0].kind = rows[1].kind = ETUDE_SUPERVISED_HOST;
+    row_bounds(&rows[0], 2 * S, 2 * S);
+    row_bounds(&rows[1], 30 * S, 2 * S);
+    start_host(s, &rows[0]);
+    start_host(s, &rows[1]);
+    if (rows[0].a != NULL && rows[1].a != NULL) {
+        started = etude_watchdog_progress(etude_supervised_watchdog(rows[0].a))->started_us;
+        /* interval: the caller stays away past the cases' bounds */
         host_sleep_ms(4000);
         back = now_us();
-        run_rows(s, &row, 1);
-        if (row_ended(&row, ETUDE_END_EXITED, ETUDE_EXPIRY_NONE)) {
-            res = etude_supervised_result(row.a);
+        run_rows(s, rows, 2);
+        if (row_ended(&rows[0], ETUDE_END_EXITED, ETUDE_EXPIRY_NONE)) {
+            res = etude_supervised_result(rows[0].a);
             CHECK(res->value == 0 && !res->incomplete && res->cleanup == ETUDE_CLEANUP_CONFIRMED,
                   "prompt");
-            CHECK(res->proc->ended_us < started + row.spec.case_us && res->proc->ended_us < back,
+            CHECK(res->proc->ended_us < started + rows[0].spec.case_us &&
+                      res->proc->ended_us < back,
                   "prompt: the keeper's time of the end");
         }
+        if (row_ended(&rows[1], ETUDE_END_EXITED, ETUDE_EXPIRY_GAP)) {
+            res = etude_supervised_result(rows[1].a);
+            CHECK(res->value == 0 && res->bound_us == 2 * S, "slow");
+            CHECK(res->proc->ended_us < back, "slow: the keeper's time of the end");
+        }
     }
-    rows_free(s, &row, 1);
+    rows_free(s, rows, 2);
 }
 
 /** Run the stand-in machines and a remote case that confirms its end. */

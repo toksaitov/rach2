@@ -63,7 +63,8 @@ struct etude_supervised {
     enum phase phase;
     uint64_t until; /* when the capture or the grace of the ask runs out */
     long qmp_id[3];
-    int reported; /* the guest or the transport reported the case's end */
+    int reported;         /* the guest or the transport reported the case's end */
+    uint64_t reported_us; /* monotonic time of the report */
     enum etude_end reported_end;
     int reported_value;
     enum etude_cleanup reported_cleanup;
@@ -401,8 +402,8 @@ static void capture_serve(struct etude_supervised *a, uint64_t now)
     ask_case(a, now);
 }
 
-/** Start the end of an attempt whose watchdog has run out. */
-static void expire(struct etude_supervised *a, uint64_t now)
+/** Keep in the result the expiry of the watchdog, seen at `now`. */
+static void keep_expiry(struct etude_supervised *a, uint64_t now)
 {
     a->r.expiry = etude_watchdog_check(a->wd, now);
     a->r.expired = etude_watchdog_expired(a->wd);
@@ -410,6 +411,12 @@ static void expire(struct etude_supervised *a, uint64_t now)
     a->r.expired_us = now;
     a->r.incomplete = 1;
     a->changed = 1;
+}
+
+/** Start the end of an attempt whose watchdog has run out. */
+static void expire(struct etude_supervised *a, uint64_t now)
+{
+    keep_expiry(a, now);
     if (a->r.kind == ETUDE_SUPERVISED_HOST) {
         sample(a, a->r.proc);
         a->r.asked = 1;
@@ -492,8 +499,8 @@ static int owned_ended(const struct etude_supervised *a)
 }
 
 /**
- * Give when the case of attempt `a` ended, as its keeper or launcher saw it,
- * or 0 while it runs.
+ * Give when the case of attempt `a` ended, as its keeper or launcher saw it
+ * or its transport reported it, or 0 while it runs.
  */
 static uint64_t case_ended(const struct etude_supervised *a, uint64_t now)
 {
@@ -501,6 +508,8 @@ static uint64_t case_ended(const struct etude_supervised *a, uint64_t now)
         return a->r.proc->ended_us;
     if (a->r.kind == ETUDE_SUPERVISED_MACHINE && a->r.machine->state == ETUDE_MACHINE_ENDED)
         return a->r.machine->ended_us != 0 ? a->r.machine->ended_us : now;
+    if (a->r.kind == ETUDE_SUPERVISED_REMOTE && a->reported)
+        return a->reported_us;
     return 0;
 }
 
@@ -519,6 +528,8 @@ static void serve(struct etude_supervised *a, uint64_t now)
     if ((ended = case_ended(a, now)) != 0)
         etude_watchdog_end(a->wd, ended, now);
     if (owned_ended(a)) {
+        if (a->phase == PHASE_RUN && etude_watchdog_expired(a->wd) != NULL)
+            keep_expiry(a, now);
         finish(a, now);
         return;
     }
@@ -692,6 +703,7 @@ void etude_supervised_end(struct etude_supervised *a, enum etude_end end, int va
     if (a->reported || a->r.finished)
         return;
     a->reported = 1;
+    a->reported_us = now_us();
     a->reported_end = end;
     a->reported_value = value;
     a->reported_cleanup = cleanup;

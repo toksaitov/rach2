@@ -157,6 +157,7 @@ void etude_watchdog_end(struct etude_watchdog *w, uint64_t ended_us, uint64_t no
     if (w->p.stage == ETUDE_STAGE_CLEANUP)
         return;
     w->p.ended_us = ended_us != 0 && ended_us < now_us ? ended_us : now_us;
+    etude_watchdog_check(w, w->p.ended_us);
     close_gap(w, w->p.ended_us);
     w->p.stage = ETUDE_STAGE_CLEANUP;
     w->p.stage_started_us = now_us;
