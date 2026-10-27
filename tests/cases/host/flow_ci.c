@@ -263,6 +263,25 @@ static int mock_native_reader(int argc, char **argv)
     return failed;
 }
 
+/* Stands for the retention policy's `allocate`: a new output for each run. */
+static int mock_allocate(int argc, char **argv)
+{
+    char name[64];
+    int i, asked = 0;
+    for (i = 3; i < argc; i++)
+        asked |= !strcmp(argv[i], "allocate");
+    for (i = 1; asked && i < 1000; i++) {
+        snprintf(name, sizeof(name), "retained/run-%d", i);
+        if (fx_exists(path(name)))
+            continue;
+        if (!fx_mkdir(path(name)) || !event("allocate"))
+            return 2;
+        puts(path(name));
+        return 0;
+    }
+    return 2;
+}
+
 static int mock_reader(int argc, char **argv)
 {
     char *s;
@@ -272,6 +291,8 @@ static int mock_reader(int argc, char **argv)
         execv(args[0], args);
         return 127;
     }
+    if (argc > 2 && !strcmp(argv[1], "prepare") && !strcmp(argv[2], "retention"))
+        return mock_allocate(argc, argv);
     if (argc > 2 && !strcmp(argv[1], "check") && !strcmp(argv[2], "record"))
         return 0;
     if (argc > 2 && !strcmp(argv[1], "check") && !strcmp(argv[2], "verdict"))
@@ -1601,7 +1622,8 @@ static int native_bisect_row(struct fixture *f, int runner)
     fx_env("CI_TEST_FAILED", runner ? "runner" : "default");
     int code = bisect(f, args);
     int ok = code == (runner ? 1 : 0) && !log_has("events", "make") &&
-             log_has("events", "native bad") && log_equal("limits", "");
+             log_has("events", "allocate") && log_has("events", "native bad") &&
+             log_equal("limits", "");
     ok = ok && log_has("gh.log", runner ? "unresolved: bad could not be tested again"
                                         : "is the first commit that fails");
     return fx_check(f, ok, "native bisection uses the public entry without a legacy timeout");
