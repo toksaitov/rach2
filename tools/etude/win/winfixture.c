@@ -1171,6 +1171,7 @@ static const struct {
     {"hold-left", fx_hold_left},
     {"hold-ancestor", fx_hold_ancestor},
     {"hold-killed", fx_hold_killed},
+    {"hold-unicode", fx_hold_unicode},
     {"ports", fx_ports},
 };
 

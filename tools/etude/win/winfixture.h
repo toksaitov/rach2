@@ -109,13 +109,15 @@ int fx_tooling_sample(void);
  * The fixtures of `etude lock tree`, from etude.exe beside winfixture.exe,
  * each on a tree of its own: a command run under the hold and its record; a
  * second helper on a held tree; locks that were left, refused or taken
- * over; the hold of an ancestor; and a helper killed under its command.
+ * over; the hold of an ancestor; a helper killed under its command; and a
+ * tree and an argument whose names are outside the legacy code page.
  */
 int fx_hold_run(void);
 int fx_hold_busy(void);
 int fx_hold_left(void);
 int fx_hold_ancestor(void);
 int fx_hold_killed(void);
+int fx_hold_unicode(void);
 
 /**
  * The fixture of `etude lock ports`, from etude.exe beside winfixture.exe: a

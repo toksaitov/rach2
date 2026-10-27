@@ -755,6 +755,38 @@ static int row_killed(void)
     return 0;
 }
 
+/**
+ * Arguments outside the legacy code page reach the helper and its command
+ * whole: the helper holds a tree whose name has them, and the command reports
+ * the same UTF-8 bytes it was given.
+ */
+static int row_unicode(void)
+{
+    static const char name[] = "\xc3\xa9t\xc3\xa9 \xd0\xb6 \xe4\xb8\xad";
+    char named[PATH], built[PATH], want[64];
+    const char *const argv[] = {named, "fixture", "wintarget", "args", name, NULL};
+    struct run r;
+    long status;
+
+    if (mkdir(join(named, base, name), 0700) != 0)
+        return failed("%s cannot be made", named);
+    if ((status = run_hold(&r, "unicode", argv)) < 0)
+        return 1;
+    if (status != 0)
+        return failed("the helper exits %ld: %s", status, errors(&r));
+    snprintf(want, sizeof want, "arg 0 %s\nargs 1\n", name);
+    if (!has(r.out, want)) {
+        char *got = get(r.out);
+
+        status = failed("the command reported other arguments:\n%s", got != NULL ? got : "");
+        free(got);
+        return (int)status;
+    }
+    if (!exists(join(built, named, "build\\.run.guard")))
+        return failed("%s was not made", built);
+    return 0;
+}
+
 int fx_hold_run(void)
 {
     return fixture(row_run);
@@ -778,4 +810,9 @@ int fx_hold_ancestor(void)
 int fx_hold_killed(void)
 {
     return fixture(row_killed);
+}
+
+int fx_hold_unicode(void)
+{
+    return fixture(row_unicode);
 }
