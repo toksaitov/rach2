@@ -127,8 +127,8 @@ static int leftovers_setup(struct fixture *f)
 {
     char cwd[4096], origin[4096], target[4096], p[4096];
     unsigned i;
-    const char *copies[] = {"landed", "dirty",    "untracked", "unique", "ignored",
-                            "cited",  "evidence", "young",     "named"};
+    const char *copies[] = {"landed",   "dirty", "untracked", "unique",  "ignored",  "cited",
+                            "evidence", "young", "named",     "stashed", "branched", "linked"};
     const char *failed[] = {"100.machine.a", "30.machine.d",  "200.machine.b",
                             "300.machine.c", "400.machine.e", "500.machine.f"};
     const char *files[] = {"c160.log",      "trial/sub/f", "flow/log",        ".hidden",
@@ -167,7 +167,7 @@ static int leftovers_setup(struct fixture *f)
     G("push", "-q", "origin", "master");
     snprintf(target, sizeof(target), "%s/home.noindex/rach2", f->work);
     G("clone", "-q", "--no-hardlinks", origin, target);
-    for (i = 0; i < 9; i++) {
+    for (i = 0; i < 12; i++) {
         char name[100];
         snprintf(name, sizeof(name), "rach2-%s", copies[i]);
         if (!copy_clone(f, name, NULL))
@@ -191,6 +191,18 @@ static int leftovers_setup(struct fixture *f)
     G("add", "u");
     G("commit", "-q", "-m", "Add u");
     flow_put(f, "home.noindex/rach2-ignored/game.wad", "");
+    flow_put(f, "home.noindex/rach2-stashed/a", "stashed\n");
+    snprintf(cwd, sizeof(cwd), "%s/home.noindex/rach2-stashed", f->work);
+    G("stash", "-q");
+    snprintf(cwd, sizeof(cwd), "%s/home.noindex/rach2-branched", f->work);
+    G("switch", "-q", "-c", "side");
+    flow_put(f, "home.noindex/rach2-branched/s", "s\n");
+    G("add", "s");
+    G("commit", "-q", "-m", "Add s");
+    G("checkout", "-q", "--detach", "origin/master");
+    snprintf(cwd, sizeof(cwd), "%s/home.noindex/rach2-linked", f->work);
+    fx_remove(flow_path(f, "linked"));
+    G("worktree", "add", "-q", "--detach", flow_path(f, "linked"));
     snprintf(cwd, sizeof(cwd), "%s/home.noindex/rach2", f->work);
     G("worktree", "add", "-q", "--detach", ".claude/worktrees/clean");
     G("worktree", "add", "-q", "--detach", ".claude/worktrees/locked");
@@ -315,6 +327,9 @@ int flow_leftovers(struct fixture *f)
         "rach2-evidence/build/tests/failed/tests.i686.20261020T000000Z.700.machine.h.r0",
         "rach2-young",
         "rach2-named",
+        "rach2-stashed",
+        "rach2-branched",
+        "rach2-linked",
         "rach2/.claude/worktrees/locked",
         "rach2/build/tests/failed/tests.i686.20261020T000000Z.200.machine.b.r0",
         "rach2/build/tests/failed/tests.i686.20261020T000000Z.300.machine.c.r0",
@@ -361,7 +376,7 @@ int flow_leftovers(struct fixture *f)
         fx_stop(&busy[i], SIGTERM);
         fx_wait(f, &busy[i]);
     }
-    for (i = 0; i < 24; i++) {
+    for (i = 0; i < 27; i++) {
         char name[4096];
         snprintf(name, sizeof(name), "home.noindex/%s", keep[i]);
         ok = fx_check(f, exists(f, name), keep[i]) && ok;

@@ -41,11 +41,15 @@
 #   for an open issue or a process, git status finds nothing uncommitted or
 #   untracked in it, every file git ignores in it is build output that the
 #   build makes again, and a merge of its HEAD into SHA would leave SHA's tree
-#   as it is, as `merged` in lib.sh decides for a branch.
+#   as it is, as `merged` in lib.sh decides for a branch;
+# * a copy with a repository of its own, which goes with it, has no stash and
+#   no linked worktree, and a merge of each of its refs into SHA, but the
+#   remote-tracking ones, whose work the remote has, would leave SHA's tree
+#   as it is too.
 #
 # Git reads a copy with no hook or file system monitor, and as the copy's
 # owner when this runs as root, so that a filter the copy configures runs
-# with no more than its owner's rights. It fetches the copy's HEAD, through
+# with no more than its owner's rights. It fetches the copy's commits, through
 # an upload-pack run as that owner too, into a scratch repository that
 # borrows the objects of the GITDIR that has SHA, and makes the merge there,
 # since git writing an object that a repository has already sets that
@@ -246,6 +250,17 @@ sub unmerged {
     for (split /\0/, $ignored) {
         return "its ignored $_ is not build output" unless built($_);
     }
+    my @tips = ($head);
+    if ($own eq $common) {
+        my $refs = git($p, {}, 'for-each-ref', '--format=%(objectname) %(refname)');
+        return 'git cannot list its refs' unless defined $refs;
+        return 'it has a stash' if $refs =~ m{ refs/stash$}m;
+        my @linked = entries("$common/worktrees");
+        return 'it has linked worktrees' if @linked;
+        push @tips, map { m{^(\S+) (?!refs/remotes/)} ? $1 : () } split /\n/, $refs;
+    }
+    my %seen;
+    @tips = grep { !$seen{$_}++ } @tips;
     return 'no commit of master was given' if $master eq '';
     return "master's commit is in no repository here" unless defined $objects;
     my $r = "$scratch/repo.git";
@@ -263,12 +278,15 @@ sub unmerged {
             . "setuid($st[4]) or exit 127; \$ENV{HOME} = (getpwuid $st[4])[7]; "
             . "exec qw(git upload-pack), \@ARGV'") if $st[4] != 0;
     }
-    defined git($r, {}, '-c', 'gc.auto=0', 'fetch', '-q', '--no-tags', @up, $p, $head)
-        or return 'its commit cannot be fetched';
+    defined git($r, {}, '-c', 'gc.auto=0', 'fetch', '-q', '--no-tags', @up, $p, @tips)
+        or return 'its commits cannot be fetched';
     my $tree = git($r, {}, 'rev-parse', '-q', '--verify', "$master^{tree}");
-    my $merge = git($r, {}, 'merge-tree', '--write-tree', '--no-messages', $master, $head);
-    return 'it has work that master lacks'
-        unless defined $tree and defined $merge and (split /\n/, $merge)[0] eq (split /\n/, $tree)[0];
+    return "master's tree cannot be read" unless defined $tree;
+    for my $t (@tips) {
+        my $merge = git($r, {}, 'merge-tree', '--write-tree', '--no-messages', $master, $t);
+        return $t eq $head ? 'it has work that master lacks' : "a ref at $t has work that master lacks"
+            unless defined $merge and (split /\n/, $merge)[0] eq (split /\n/, $tree)[0];
+    }
     return;
 }
 
