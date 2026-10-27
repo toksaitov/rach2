@@ -1083,9 +1083,9 @@ static int store_dir(const char *dir)
 }
 
 /**
- * Open the store's directory `part`, tmp or entries, without following a
- * symbolic link, since any account of the store's group may put a link in its
- * place and `etude build -e` runs as root: its descriptor, or -1.
+ * Open the store's directory `part`, tmp, entries or locks, without following
+ * a symbolic link, since any account of the store's group may put a link in
+ * its place and `etude build -e` runs as root: its descriptor, or -1.
  */
 static int open_part(const struct step *s, const char *part)
 {
@@ -1326,19 +1326,26 @@ static int build_in_store(struct step *s, const char *entry)
  * held; -1 on an error or a stop. A lock file that `etude build -e` removed
  * while this process waited for it is opened again, so that every holder
  * holds the file the path names. `made` is 1 when this process made the file.
+ * The lock is opened through the store's locks/, refusing a link in its place
+ * or in the lock's.
  */
 static int lock_key(const struct step *s, const char *key, int wait, int *made)
 {
     char lock[PATH_LEN];
     struct stat a, b;
-    int fd;
+    int fd, dir;
 
     if (path_fmt(lock, "%s/locks/%s", s->shelf, key) != 0)
         return -1;
+    if ((dir = open_part(s, "locks")) < 0) {
+        say(s, "cannot open %s/locks: %s", s->shelf, strerror(errno));
+        return -1;
+    }
     for (;;) {
         *made = 0;
-        if ((fd = open(lock, O_RDWR)) < 0 && errno == ENOENT) {
-            if ((fd = open(lock, O_RDWR | O_CREAT | O_EXCL, 0664)) < 0 && errno == EEXIST)
+        if ((fd = openat(dir, key, O_RDWR | O_NOFOLLOW)) < 0 && errno == ENOENT) {
+            fd = openat(dir, key, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW, 0664);
+            if (fd < 0 && errno == EEXIST)
                 continue;
             if (fd >= 0) {
                 *made = 1;
@@ -1347,11 +1354,13 @@ static int lock_key(const struct step *s, const char *key, int wait, int *made)
         }
         if (fd < 0) {
             say(s, "cannot open %s: %s", lock, strerror(errno));
+            close(dir);
             return -1;
         }
         if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
             if (!wait) {
                 close(fd);
+                close(dir);
                 return -2;
             }
             printf("etude build: %s: waiting for another build of %.12s\n", s->name, key);
@@ -1359,12 +1368,15 @@ static int lock_key(const struct step *s, const char *key, int wait, int *made)
             while (flock(fd, LOCK_EX) != 0)
                 if (errno != EINTR || stop_signal) {
                     close(fd);
+                    close(dir);
                     return -1;
                 }
         }
-        if (fstat(fd, &a) == 0 && stat(lock, &b) == 0 && a.st_dev == b.st_dev &&
-            a.st_ino == b.st_ino)
+        if (fstat(fd, &a) == 0 && fstatat(dir, key, &b, AT_SYMLINK_NOFOLLOW) == 0 &&
+            a.st_dev == b.st_dev && a.st_ino == b.st_ino) {
+            close(dir);
             return fd;
+        }
         close(fd);
     }
 }
@@ -1680,13 +1692,12 @@ static time_t entry_used(const struct step *s, const char *key)
  */
 static int drop_entry(const struct step *s, const struct doomed *d, double *freed)
 {
-    char entry[PATH_LEN], lock[PATH_LEN], name[PATH_LEN], what[300];
+    char entry[PATH_LEN], name[PATH_LEN], what[300];
     struct stat st;
     double bytes;
     int tmp, ents;
 
     if (path_fmt(entry, "%s/entries/%s", s->shelf, d->key) != 0 ||
-        path_fmt(lock, "%s/locks/%s", s->shelf, d->key) != 0 ||
         path_fmt(name, "%s.gone.%ld", d->key, (long)getpid()) != 0)
         return -1;
     if ((ents = open_part(s, "entries")) < 0 ||
@@ -1716,7 +1727,10 @@ static int drop_entry(const struct step *s, const struct doomed *d, double *free
         if (remove_at(tmp, name) != 0)
             say(s, "some of %s/tmp/%s is not this account's and stays", s->shelf, name);
         close(tmp);
-        unlink(lock);
+        if ((tmp = open_part(s, "locks")) >= 0) {
+            unlinkat(tmp, d->key, 0);
+            close(tmp);
+        }
     }
     close(ents);
     *freed += bytes;
@@ -1730,25 +1744,30 @@ static int drop_entry(const struct step *s, const struct doomed *d, double *free
  * has used since `before`. */
 static void drop_locks(const struct step *s, time_t before)
 {
-    char dir[PATH_LEN], lock[PATH_LEN], entry[PATH_LEN];
+    char entry[PATH_LEN];
     DIR *d;
     struct dirent *e;
+    int dir = open_part(s, "locks");
 
-    if (path_fmt(dir, "%s/locks", s->shelf) != 0 || (d = opendir(dir)) == NULL)
+    if (dir < 0)
         return;
+    if ((d = fdopendir(dir)) == NULL) {
+        close(dir);
+        return;
+    }
     while ((e = readdir(d)) != NULL) {
         struct stat st;
         int fd, made;
 
         if (!keyed_name(e->d_name) || e->d_name[64] != '\0' ||
-            path_fmt(lock, "%s/%s", dir, e->d_name) != 0 ||
-            path_fmt(entry, "%s/entries/%s", s->shelf, e->d_name) != 0 || stat(lock, &st) != 0 ||
+            path_fmt(entry, "%s/entries/%s", s->shelf, e->d_name) != 0 ||
+            fstatat(dir, e->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0 || !S_ISREG(st.st_mode) ||
             st.st_mtime > before || lstat(entry, &st) == 0)
             continue;
         if ((fd = lock_key(s, e->d_name, 0, &made)) < 0)
             continue;
         if (made || (fstat(fd, &st) == 0 && st.st_mtime <= before && lstat(entry, &st) != 0))
-            unlink(lock);
+            unlinkat(dir, e->d_name, 0);
         close(fd);
     }
     closedir(d);
