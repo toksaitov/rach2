@@ -1683,7 +1683,7 @@ static int drop_entry(const struct step *s, const struct doomed *d, double *free
     char entry[PATH_LEN], lock[PATH_LEN], name[PATH_LEN], what[300];
     struct stat st;
     double bytes;
-    int tmp = -1, ents;
+    int tmp, ents;
 
     if (path_fmt(entry, "%s/entries/%s", s->shelf, d->key) != 0 ||
         path_fmt(lock, "%s/locks/%s", s->shelf, d->key) != 0 ||
