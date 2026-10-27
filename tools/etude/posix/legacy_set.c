@@ -2018,6 +2018,9 @@ static void judge_case(struct set *x, struct member *m)
     if (r->proc != NULL && r->proc->output_error != 0)
         came_out(c, INCOMPLETE, 1, "its output could not be saved: %s",
                  strerror(r->proc->output_error));
+    if (m->g != NULL && legacy_guest_console_error(m->g) != 0)
+        came_out(c, INCOMPLETE, 1, "its console could not be saved: %s",
+                 strerror(legacy_guest_console_error(m->g)));
     settle(x, c);
 }
 

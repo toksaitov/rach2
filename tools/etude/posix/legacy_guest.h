@@ -96,6 +96,9 @@ const char *legacy_guest_why(const struct legacy_guest *g);
 /** Give the path of the machine's console. */
 const char *legacy_guest_console(const struct legacy_guest *g);
 
+/** Give the error that ended the writes to the machine's console, or 0. */
+int legacy_guest_console_error(const struct legacy_guest *g);
+
 /** Free the attempt, whose supervised attempt the caller frees. */
 void legacy_guest_free(struct legacy_guest *g);
 

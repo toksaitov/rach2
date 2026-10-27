@@ -222,6 +222,7 @@ struct etude_case {
     int faults;          /* misuse, failed assertions and lost work */
     int unconfirmed;     /* a process's cleanup could not be confirmed */
     int unseen;          /* a service ended without the scenario seeing it */
+    int unsaved;         /* a machine's console could not be written whole */
     struct etude_qemu *q;
     struct etude_case_machine *machines;
     struct etude_case_service *services;
@@ -4451,6 +4452,20 @@ static void end_guest_service(struct etude_case_machine *m, uint64_t until)
     m->guest_service_output[0] = '\0';
 }
 
+/** Count a fault of the case, and fail its exit, when boot `m`'s console
+ * could not be written whole to its file, which the judge reads. */
+static void console_saved(struct etude_case *c, const struct etude_case_machine *m)
+{
+    const struct etude_machine_result *r = mres(m);
+
+    if (r->console_file_error == 0)
+        return;
+    diag("machine %s.%u: its console could not be saved: %s", m->decl->id, m->boot,
+         strerror(r->console_file_error));
+    c->faults++;
+    c->unsaved = 1;
+}
+
 /**
  * End what the attempt owns within the cleanup's bound: after a failure or a
  * stop, collect the machines' diagnostics first; then stop every service and
@@ -4480,6 +4495,7 @@ static void end_all(struct etude_case *c, int failing)
         if (r->state != ETUDE_MACHINE_ENDED || r->qemu == NULL ||
             r->qemu->cleanup != ETUDE_CLEANUP_CONFIRMED)
             c->unconfirmed = 1;
+        console_saved(c, m);
         if (failing)
             keep_qemu_error(m);
     }
@@ -4601,7 +4617,7 @@ int etude_case_main(int argc, char **argv)
     else
         diag("kept: %s", c.scratch);
     etude_qemu_free(c.q);
-    rc = rc || stopped || c.unconfirmed || c.unseen;
+    rc = rc || stopped || c.unconfirmed || c.unseen || c.unsaved;
     case_free(&c);
     return rc;
 }

@@ -779,6 +779,11 @@ const char *legacy_guest_console(const struct legacy_guest *g)
     return g->console;
 }
 
+int legacy_guest_console_error(const struct legacy_guest *g)
+{
+    return etude_machine_result(g->m)->console_file_error;
+}
+
 int legacy_guest_start(struct etude_supervisor *s, const struct legacy_guest_spec *spec,
                        struct legacy_guest **out, struct etude_supervised **a, char *why,
                        size_t size)

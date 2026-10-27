@@ -85,6 +85,14 @@ int etude_test_scenario_cleanup(void)
     process.cleanup = ETUDE_CLEANUP_CONFIRMED;
     CLEANUP_CHECK(etude_wait_end(&m, &end) == ETUDE_OK && end.end == ETUDE_END_SHUTDOWN);
     CLEANUP_CHECK(!disk_active(&c, file));
+    result.console_file_error = ENOSPC;
+    console_saved(&c, &m);
+    CLEANUP_CHECK(c.unsaved && c.faults > 0);
+    result.console_file_error = 0;
+    c.unsaved = 0;
+    c.faults = 0;
+    console_saved(&c, &m);
+    CLEANUP_CHECK(!c.unsaved && c.faults == 0);
     CLEANUP_CHECK(etude_bind_disk(&c, "owner", "disk", file) == ETUDE_OK);
     CLEANUP_CHECK(etude_bind_disk(&c, "other", "disk", file) == ETUDE_OK);
     while (c.bindings != NULL) {
