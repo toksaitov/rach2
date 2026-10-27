@@ -45,7 +45,8 @@
  *
  * `loopdevprobe vfat`, `ext2` and `krffs` name the type inside the image,
  * `vfat` with no argument. Prints "LOOPPROBE OK (type)", the type or the
- * mode, and exits 0, or "LOOPPROBE FAIL: " and the reason and exits 1.
+ * mode, and exits 0, or "LOOPPROBE FAIL: " and the reason, unmounts what it
+ * mounted, detaches what it attached and exits 1.
  *
  * The probe works in /m, where it mounts the volume, in /l and /r, where it
  * mounts the images, and on the root, where it puts the copy. A native run
@@ -57,7 +58,9 @@
  * on which the probe mounts a tmpfs of its own for the copy, which has no
  * device under it, as the root of the test image has none; the tmpfs allows
  * an unlink of the attached copy and a rename over it, which the KRFFS root
- * refuses. A relative path is taken from the working directory.
+ * refuses. The run uses the first two devices that /proc/loop does not name
+ * in place of loop0 and loop1, and leaves the machine's own alone. A relative
+ * path is taken from the working directory.
  */
 
 #include "probe.h"
@@ -110,16 +113,94 @@ static void puts(const char *s)
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
-/** Print "LOOPPROBE FAIL: " and `why`, and exit 1. */
+/* The two devices the rows attach, A and B: loop0 and loop1 on the test
+ * image, and in a native run the first two that /proc/loop does not name,
+ * so that the machine's own attachments are left alone. `choose_devices`
+ * sets the digit of each string below. */
+static char attach_a[] = "attach 0 ", detach_a[] = "detach 0", node_a[] = "/dev/loop0",
+            line_a[] = "loop0 ", detach_junk[] = "detach 0junk", detach_word[] = "detach 0 junk";
+static char attach_b[] = "attach 1 ", attach_ro_b[] = "attach ro 1 ", detach_b[] = "detach 1",
+            node_b[] = "/dev/loop1", line_b[] = "loop1 ";
+
+/* What a failed check undoes: the places the probe has mounted, oldest
+ * first, a null pointer for one unmounted since, and the devices it has
+ * attached, a bit each. */
+#define MOUNTS_CAP 8
+static const char *mounts[MOUNTS_CAP];
+static int mount_count;
+static unsigned attached;
+
+/** mount(2), which keeps `target` for `undo` when it succeeds; the errno,
+ * or 0. `target` is one of the probe's static paths. */
+static int mount_at(long source, long target, long type, long flags, long data)
+{
+    int rc = syscall5(SYS_MOUNT, source, target, type, flags, data);
+
+    if (rc == 0 && mount_count < MOUNTS_CAP) {
+        mounts[mount_count++] = (const char *)target;
+    }
+    return rc;
+}
+
+/** umount2(2) of `target`, which `undo` then leaves alone; the errno, or
+ * 0. */
+static int unmount(long target, long flags)
+{
+    int rc = syscall2(SYS_UMOUNT2, target, flags);
+    int i;
+
+    for (i = mount_count - 1; rc == 0 && i >= 0; i--) {
+        if (mounts[i] == (const char *)target) {
+            mounts[i] = 0;
+            break;
+        }
+    }
+    return rc;
+}
+
+/**
+ * Take back what the probe made on the machine: unmount its mounts, newest
+ * first, detach its devices, and unmount again what a device on a file of it
+ * kept busy the first time. Errors are passed over, since this runs only
+ * after a check has failed.
+ */
+static void undo(void)
+{
+    char line[] = "detach 0";
+    int pass, fd, i;
+
+    for (pass = 0; pass < 2; pass++) {
+        for (i = mount_count - 1; i >= 0; i--) {
+            if (mounts[i] != 0 && syscall2(SYS_UMOUNT2, (long)mounts[i], 0) == 0) {
+                mounts[i] = 0;
+            }
+        }
+        fd = syscall3(SYS_OPEN, (long)"/dev/loop-control", O_WRONLY, 0);
+        for (i = 0; fd >= 0 && i < 4; i++) {
+            line[7] = (char)('0' + i);
+            if ((attached & 1u << i) && syscall3(SYS_WRITE, fd, (long)line, 8) >= 0) {
+                attached &= ~(1u << i);
+            }
+        }
+        if (fd >= 0) {
+            syscall1(SYS_CLOSE, fd);
+        }
+    }
+}
+
+/** Print "LOOPPROBE FAIL: " and `why`, undo the probe's mounts and
+ * attachments, and exit 1. */
 static void fail(const char *why) __attribute__((noreturn));
 static void fail(const char *why)
 {
     syscall3(SYS_WRITE, 1, (long)"LOOPPROBE FAIL: ", 16);
     puts(why);
+    undo();
     sys_exit(1);
 }
 
-/** Print "LOOPPROBE FAIL: ", `why` and the number `n` it got, and exit 1. */
+/** Print "LOOPPROBE FAIL: ", `why` and the number `n` it got, undo the
+ * probe's mounts and attachments, and exit 1. */
 static void fail_with(const char *why, int n) __attribute__((noreturn));
 static void fail_with(const char *why, int n)
 {
@@ -140,6 +221,7 @@ static void fail_with(const char *why, int n)
     syscall3(SYS_WRITE, 1, (long)" (got ", 6);
     syscall3(SYS_WRITE, 1, (long)(digits + i), (int)strlen(digits + i));
     puts(")");
+    undo();
     sys_exit(1);
 }
 
@@ -167,10 +249,22 @@ static int streq(const char *a, const char *b)
 #define INFO_NAME   56
 #define CONFIG_INFO 8
 
-/** One command to /dev/loop-control; the errno, or 0. */
+/** Whether the string `s` begins with the string `prefix`. */
+static int starts(const char *s, const char *prefix)
+{
+    while (*prefix && *s == *prefix) {
+        s++;
+        prefix++;
+    }
+    return *prefix == '\0';
+}
+
+/** One command to /dev/loop-control, whose attach or detach `undo` then
+ * knows of when it succeeds; the errno, or 0. */
 static int control(const char *line)
 {
     int fd = syscall3(SYS_OPEN, (long)"/dev/loop-control", O_WRONLY, 0);
+    const char *index = line + 7;
     int rc;
 
     if (fd < 0) {
@@ -178,7 +272,19 @@ static int control(const char *line)
     }
     rc = syscall3(SYS_WRITE, fd, (long)line, (int)strlen(line));
     syscall1(SYS_CLOSE, fd);
-    return rc < 0 ? rc : 0;
+    if (rc < 0) {
+        return rc;
+    }
+    if (starts(line, "attach ro ")) {
+        index += 3;
+    }
+    if (starts(line, "attach ") && *index >= '0' && *index <= '3') {
+        attached |= 1u << (*index - '0');
+    }
+    if (starts(line, "detach ") && *index >= '0' && *index <= '3') {
+        attached &= ~(1u << (*index - '0'));
+    }
+    return 0;
 }
 
 /** What /proc/loop says, into `buffer` of `cap` bytes and NUL-ended; the
@@ -200,22 +306,6 @@ static int loop_lines(char *buffer, int cap)
     return n;
 }
 
-/** Whether the string `hay` contains the string `needle`. */
-static int contains(const char *hay, const char *needle)
-{
-    int i;
-    int j;
-
-    for (i = 0; hay[i]; i++) {
-        for (j = 0; needle[j] && hay[i + j] == needle[j]; j++) {
-        }
-        if (!needle[j]) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
 /** The decimal number `text` starts with. */
 static int read_number(const char *text)
 {
@@ -228,22 +318,52 @@ static int read_number(const char *text)
     return value;
 }
 
-/** The `writes` and `syncs` counts /proc/loop gives loop0, into `writes`
+/** The line of the text of /proc/loop, `lines`, that begins with `name`,
+ * such as "loop0 ", or a null pointer when no line does. */
+static const char *device_line(const char *lines, const char *name)
+{
+    while (*lines) {
+        if (starts(lines, name)) {
+            return lines;
+        }
+        while (*lines && *lines != '\n') {
+            lines++;
+        }
+        if (*lines) {
+            lines++;
+        }
+    }
+    return 0;
+}
+
+/** Whether `line` of /proc/loop, a null pointer for none, has `text`
+ * before its end. */
+static int line_has(const char *line, const char *text)
+{
+    for (; line != 0 && *line && *line != '\n'; line++) {
+        if (starts(line, text)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** The `writes` and `syncs` counts /proc/loop gives device A, into `writes`
  * and `syncs`; a count it does not give is left -1. */
 static void loop_counts(int *writes, int *syncs)
 {
-    char line[256];
-    int n = loop_lines(line, (int)sizeof(line));
-    int i;
+    char lines[512];
+    const char *line;
 
     *writes = -1;
     *syncs = -1;
-    for (i = 0; i + 7 <= n; i++) {
-        if (line[i] == 'w' && line[i + 1] == 'r' && line[i + 2] == 'i' && line[i + 6] == ' ') {
-            *writes = read_number(line + i + 7);
+    loop_lines(lines, (int)sizeof(lines));
+    for (line = device_line(lines, line_a); line != 0 && *line && *line != '\n'; line++) {
+        if (*writes < 0 && starts(line, " writes ")) {
+            *writes = read_number(line + 8);
         }
-        if (line[i] == 's' && line[i + 1] == 'y' && line[i + 2] == 'n' && line[i + 5] == ' ') {
-            *syncs = read_number(line + i + 6);
+        if (*syncs < 0 && starts(line, " syncs ")) {
+            *syncs = read_number(line + 7);
         }
     }
 }
@@ -492,7 +612,7 @@ static void mount_images(const char *fs, const char *why)
         stage_images();
         return;
     }
-    rc = syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)images_dir, (long)fs, 0, 0);
+    rc = mount_at((long)"/dev/disk0p1", (long)images_dir, (long)fs, 0, 0);
     if (rc != 0) {
         fail_with(why, rc);
     }
@@ -502,7 +622,7 @@ static void mount_images(const char *fs, const char *why)
  * the errno, or 0. */
 static int unmount_images(void)
 {
-    return native_images ? 0 : syscall2(SYS_UMOUNT2, (long)images_dir, 0);
+    return native_images ? 0 : unmount((long)images_dir, 0);
 }
 
 PROBE_SP_ENTRY;
@@ -543,17 +663,20 @@ static void set_fd_rows(int index)
     if (loop_status(dev, info) != -ENXIO) {
         fail("the device set to clear itself was still attached after the unmount");
     }
+    attached &= ~(1u << index);
     file = syscall3(SYS_OPEN, (long)image, O_RDONLY, 0);
     rc = syscall3(SYS_IOCTL, dev, LOOP_SET_FD, file);
     if (rc != 0) {
         fail_with("LOOP_SET_FD of an image open for reading", rc);
     }
+    attached |= 1u << index;
     if (loop_status(dev, info) != 0 || info_flags(info) != LO_FLAGS_READ_ONLY) {
         fail("LOOP_SET_FD of a file open for reading did not attach it read-only");
     }
     if (syscall3(SYS_IOCTL, dev, LOOP_CLR_FD, 0) != 0 || loop_status(dev, info) != -ENXIO) {
         fail("LOOP_CLR_FD did not detach the device");
     }
+    attached &= ~(1u << index);
     syscall1(SYS_CLOSE, dev);
     syscall1(SYS_CLOSE, file);
 }
@@ -597,6 +720,7 @@ static void ioctl_rows(const char *type)
     if (rc != 0) {
         fail_with("LOOP_CONFIGURE of an image open on a descriptor", rc);
     }
+    attached |= 1u << index;
     if (loop_status(dev, info) != 0 || !streq((const char *)info + INFO_NAME, shown) ||
         info_flags(info) != LO_FLAGS_AUTOCLEAR) {
         fail("LOOP_GET_STATUS64 did not name the file and its flags");
@@ -609,14 +733,14 @@ static void ioctl_rows(const char *type)
     if (i != 512) {
         fail("the device's first sector is not the image's");
     }
-    rc = syscall5(SYS_MOUNT, (long)node, (long)mount_dir, (long)type, 0, 0);
+    rc = mount_at((long)node, (long)mount_dir, (long)type, 0, 0);
     if (rc != 0) {
         fail_with("mounting a device LOOP_CONFIGURE attached", rc);
     }
     syscall1(SYS_CLOSE, dev);
     syscall1(SYS_CLOSE, file);
     expect_file(join(path, mount_dir, "hello.txt"), "hello from inside an image");
-    rc = syscall2(SYS_UMOUNT2, (long)mount_dir, 0);
+    rc = unmount((long)mount_dir, 0);
     if (rc != 0) {
         fail_with("unmounting the device LOOP_CONFIGURE attached", rc);
     }
@@ -637,11 +761,11 @@ static void durable_mode(void)
     int writes_before, syncs_before, writes, syncs;
 
     mount_images("vfat", "mounting the volume that holds the image");
-    rc = control_on("attach 0 ", join(path, images_dir, "krffs.img"));
+    rc = control_on(attach_a, join(path, images_dir, "krffs.img"));
     if (rc != 0) {
         fail_with("attaching the image", rc);
     }
-    rc = syscall5(SYS_MOUNT, (long)"/dev/loop0", (long)mount_dir, (long)"krffs", 0, 0);
+    rc = mount_at((long)node_a, (long)mount_dir, (long)"krffs", 0, 0);
     if (rc != 0) {
         fail_with("mounting the image", rc);
     }
@@ -653,7 +777,7 @@ static void durable_mode(void)
     }
     loop_counts(&writes_before, &syncs_before);
     if (writes_before < 0 || syncs_before < 0) {
-        fail("/proc/loop gives loop0 no write and sync counts");
+        fail("/proc/loop gives the device no write and sync counts");
     }
     for (block_at = 0; block_at < DURABLE_WRITES; block_at++) {
         char block[1024];
@@ -675,10 +799,10 @@ static void durable_mode(void)
         fail_with("the writes the device did not sync",
                   (writes - writes_before) - (syncs - syncs_before));
     }
-    if (syscall2(SYS_UMOUNT2, (long)mount_dir, 0) != 0) {
+    if (unmount((long)mount_dir, 0) != 0) {
         fail("unmounting the image after writing it");
     }
-    if (control("detach 0") != 0) {
+    if (control(detach_a) != 0) {
         fail("detaching after writing it");
     }
     if (unmount_images() != 0) {
@@ -704,14 +828,14 @@ static void ext2back_mode(void)
     if (syscall2(SYS_LINK, (long)path, (long)join(alias, images_dir, "alias.img")) != 0) {
         fail("a second name for the image");
     }
-    rc = control_on("attach 0 ", path);
+    rc = control_on(attach_a, path);
     if (rc != 0) {
         fail_with("attaching an image on an ext2 volume", rc);
     }
-    if (control_on("attach 1 ", alias) != -EBUSY) {
+    if (control_on(attach_b, alias) != -EBUSY) {
         fail("the same file was attached twice under two names");
     }
-    rc = syscall5(SYS_MOUNT, (long)"/dev/loop0", (long)mount_dir, (long)"krffs", 0, 0);
+    rc = mount_at((long)node_a, (long)mount_dir, (long)"krffs", 0, 0);
     if (rc != 0) {
         fail_with("mounting the image on the ext2 volume", rc);
     }
@@ -723,10 +847,10 @@ static void ext2back_mode(void)
     }
     syscall1(SYS_FSYNC, made);
     syscall1(SYS_CLOSE, made);
-    if (syscall2(SYS_UMOUNT2, (long)mount_dir, 0) != 0) {
+    if (unmount((long)mount_dir, 0) != 0) {
         fail("unmounting the image on an ext2 volume");
     }
-    if (control("detach 0") != 0) {
+    if (control(detach_a) != 0) {
         fail("detaching the image on an ext2 volume");
     }
     if (syscall1(SYS_UNLINK, (long)alias) != 0) {
@@ -752,11 +876,11 @@ static void pull_mode(void)
     int opens = 0, rc;
 
     mount_images("vfat", "mounting the stick's volume");
-    rc = control_on("attach 0 ", join(path, images_dir, "fat.img"));
+    rc = control_on(attach_a, join(path, images_dir, "fat.img"));
     if (rc != 0) {
         fail_with("attaching an image on a stick", rc);
     }
-    rc = syscall5(SYS_MOUNT, (long)"/dev/loop0", (long)mount_dir, (long)"vfat", 0, 0);
+    rc = mount_at((long)node_a, (long)mount_dir, (long)"vfat", 0, 0);
     if (rc != 0) {
         fail_with("mounting an image on a stick", rc);
     }
@@ -779,14 +903,14 @@ static void pull_mode(void)
         syscall0(SYS_SCHED_YIELD);
     }
     /* The slot is still taken. */
-    if (control_on("attach 0 ", path) != -EBUSY) {
+    if (control_on(attach_a, path) != -EBUSY) {
         fail("a device whose stick went took another file");
     }
-    rc = syscall2(SYS_UMOUNT2, (long)mount_dir, 0);
+    rc = unmount((long)mount_dir, 0);
     if (rc != 0) {
         fail_with("unmounting an image whose stick has gone", rc);
     }
-    rc = control("detach 0");
+    rc = control(detach_a);
     if (rc != 0 && rc != -ENOENT) {
         fail_with("detaching a device whose stick has gone", rc);
     }
@@ -798,27 +922,27 @@ static void pull_mode(void)
     sys_exit(0);
 }
 
-/** Attach `image` to loop0 and mount it as `type`, with /proc/loop naming
- * nothing before and the image after, and read its file through a private
- * mapping and then with read(2). */
+/** Attach `image` to device A and mount it as `type`, with /proc/loop not
+ * naming the device before and naming the image after, and read its file
+ * through a private mapping and then with read(2). */
 static void attach_rows(const char *type)
 {
     char lines[512], path[PATH_CAP];
     int rc;
 
     loop_lines(lines, (int)sizeof(lines));
-    if (lines[0] != '\0') {
-        fail("/proc/loop names a device before anything is attached");
+    if (device_line(lines, line_a) != 0) {
+        fail("/proc/loop names the device before it is attached");
     }
-    rc = control_on("attach 0 ", image);
+    rc = control_on(attach_a, image);
     if (rc != 0) {
         fail_with("attaching the image", rc);
     }
     loop_lines(lines, (int)sizeof(lines));
-    if (!contains(lines, "loop0 ") || !contains(lines, shown)) {
+    if (!line_has(device_line(lines, line_a), shown)) {
         fail("/proc/loop does not name what was attached");
     }
-    rc = syscall5(SYS_MOUNT, (long)"/dev/loop0", (long)mount_dir, (long)type, 0, 0);
+    rc = mount_at((long)node_a, (long)mount_dir, (long)type, 0, 0);
     if (rc != 0) {
         fail_with("mounting the image through the device", rc);
     }
@@ -834,11 +958,11 @@ static void refusal_rows(void)
     int fd, rc;
 
     /* The same file, asked for on another device. */
-    if (control_on("attach 1 ", image) != -EBUSY) {
+    if (control_on(attach_b, image) != -EBUSY) {
         fail("the same file was attached twice");
     }
     /* Another file, on the device that is taken. */
-    if (control_on("attach 0 ", join(path, images_dir, "odd2.img")) != -EBUSY) {
+    if (control_on(attach_a, join(path, images_dir, "odd2.img")) != -EBUSY) {
         fail("the device that is taken took another file");
     }
     fd = syscall3(SYS_OPEN, (long)image, O_WRONLY, 0);
@@ -854,25 +978,25 @@ static void refusal_rows(void)
         fail_with("truncating a file that backs a device", rc);
     }
     syscall1(SYS_CLOSE, fd);
-    if (control("detach 0") != -EBUSY) {
+    if (control(detach_a) != -EBUSY) {
         fail("a device with a mount on it was detached");
     }
-    if (syscall2(SYS_UMOUNT2, (long)images_dir, 0) != -EBUSY) {
+    if (unmount((long)images_dir, 0) != -EBUSY) {
         fail("the volume holding an attached file was unmounted");
     }
-    if (control_on("attach 1 ", images_dir) != -EINVAL) {
+    if (control_on(attach_b, images_dir) != -EINVAL) {
         fail("a directory was attached");
     }
-    if (control_on("attach 1 ", join(path, images_dir, "odd.bin")) != -EINVAL) {
+    if (control_on(attach_b, join(path, images_dir, "odd.bin")) != -EINVAL) {
         fail("a file whose length is not whole sectors was attached");
     }
     /* A device on a file on a device on a disk is ELOOP; on a tmpfs, which
      * has no device, the chain is one device long, which is allowed. */
-    rc = control_on("attach 1 ", join(path, mount_dir, "inner.bin"));
+    rc = control_on(attach_b, join(path, mount_dir, "inner.bin"));
     if (!native_images && rc != -ELOOP) {
         fail("a device was made to stand on another one");
     }
-    if (native_images && (rc != 0 || control("detach 1") != 0)) {
+    if (native_images && (rc != 0 || control(detach_b) != 0)) {
         fail_with("a device on a file of a device on a tmpfs", rc);
     }
 
@@ -881,10 +1005,10 @@ static void refusal_rows(void)
     if (control("detach x") != -EINVAL) {
         fail("a detach with no number was taken");
     }
-    if (control("detach 0junk") != -EINVAL) {
+    if (control(detach_junk) != -EINVAL) {
         fail("a detach with something after the number was taken");
     }
-    if (control("detach 0 junk") != -EINVAL) {
+    if (control(detach_word) != -EINVAL) {
         fail("a detach with a word after the number was taken");
     }
     if (control_on("attach 9 ", path) != -EINVAL) {
@@ -904,15 +1028,15 @@ static void read_only_rows(void)
     char lines[512], path[PATH_CAP];
     int rc;
 
-    if (control_on("attach ro 1 ", join(path, images_dir, "odd2.img")) != 0) {
+    if (control_on(attach_ro_b, join(path, images_dir, "odd2.img")) != 0) {
         fail("attaching a device that will not write");
     }
     loop_lines(lines, (int)sizeof(lines));
-    if (!contains(lines, "loop1 ") || !contains(lines, " ro ")) {
+    if (!line_has(device_line(lines, line_b), " ro ")) {
         fail("/proc/loop does not say the device will not write");
     }
     syscall2(SYS_MKDIR, (long)ro_dir, 0755);
-    rc = syscall5(SYS_MOUNT, (long)"/dev/loop1", (long)ro_dir, (long)"vfat", 0, 0);
+    rc = mount_at((long)node_b, (long)ro_dir, (long)"vfat", 0, 0);
     if (rc != 0) {
         fail_with("mounting a device that will not write", rc);
     }
@@ -920,11 +1044,11 @@ static void read_only_rows(void)
     if (rc != -EROFS) {
         fail_with("creating a file on a device that will not write", rc);
     }
-    rc = syscall2(SYS_UMOUNT2, (long)ro_dir, 0);
+    rc = unmount((long)ro_dir, 0);
     if (rc != 0) {
         fail_with("unmounting the device that will not write", rc);
     }
-    if (control("detach 1") != 0) {
+    if (control(detach_b) != 0) {
         fail("detaching the device that will not write");
     }
 }
@@ -948,32 +1072,32 @@ static void read_back_rows(const char *type)
         fail("fsync inside the image");
     }
     syscall1(SYS_CLOSE, fd);
-    rc = syscall2(SYS_UMOUNT2, (long)mount_dir, 0);
+    rc = unmount((long)mount_dir, 0);
     if (rc != 0) {
         fail_with("unmounting the image", rc);
     }
-    rc = control("detach 0");
+    rc = control(detach_a);
     if (rc != 0) {
         fail_with("detaching", rc);
     }
     loop_lines(lines, (int)sizeof(lines));
-    if (lines[0] != '\0') {
-        fail("/proc/loop still names a device after the detach");
+    if (device_line(lines, line_a) != 0) {
+        fail("/proc/loop still names the device after the detach");
     }
-    rc = control_on("attach 0 ", image);
+    rc = control_on(attach_a, image);
     if (rc != 0) {
         fail_with("attaching the image again", rc);
     }
-    rc = syscall5(SYS_MOUNT, (long)"/dev/loop0", (long)mount_dir, (long)type, MS_RDONLY, 0);
+    rc = mount_at((long)node_a, (long)mount_dir, (long)type, MS_RDONLY, 0);
     if (rc != 0) {
         fail_with("mounting the image again", rc);
     }
     expect_file(made, "written through a loop device\n");
-    rc = syscall2(SYS_UMOUNT2, (long)mount_dir, 0);
+    rc = unmount((long)mount_dir, 0);
     if (rc != 0) {
         fail_with("unmounting the image the second time", rc);
     }
-    if (control("detach 0") != 0) {
+    if (control(detach_a) != 0) {
         fail("detaching the second time");
     }
     /* The file the device stood on is an ordinary file again. */
@@ -988,13 +1112,13 @@ static void read_back_rows(const char *type)
 static void attached_contents(const char *type)
 {
     char path[PATH_CAP];
-    int rc = syscall5(SYS_MOUNT, (long)"/dev/loop0", (long)mount_dir, (long)type, MS_RDONLY, 0);
+    int rc = mount_at((long)node_a, (long)mount_dir, (long)type, MS_RDONLY, 0);
 
     if (rc != 0) {
         fail_with("mounting the attached image after unlink", rc);
     }
     expect_file(join(path, mount_dir, "hello.txt"), "hello from inside an image");
-    rc = syscall2(SYS_UMOUNT2, (long)mount_dir, 0);
+    rc = unmount((long)mount_dir, 0);
     if (rc != 0) {
         fail_with("unmounting the attached image after unlink", rc);
     }
@@ -1010,12 +1134,12 @@ static void native_copy_names(const char *type, const char *ram)
         fail("unlinking the attached tmpfs image");
     }
     attached_contents(type);
-    if (control("detach 0") != 0) {
+    if (control(detach_a) != 0) {
         fail("detaching the unlinked tmpfs image");
     }
     copy_file(image, ram, "opening the image to copy it again", "copying the image again",
               "reading the image to copy it again");
-    rc = control_on("attach 0 ", ram);
+    rc = control_on(attach_a, ram);
     if (rc != 0) {
         fail_with("attaching the second tmpfs image", rc);
     }
@@ -1043,15 +1167,14 @@ static void copy_rows(const char *type)
 
     if (copy_dir[0] != '\0') {
         syscall2(SYS_MKDIR, (long)copy_dir, 0755);
-        rc = syscall5(SYS_MOUNT, (long)"tmpfs", (long)copy_dir, (long)"tmpfs", 0,
-                      (long)"size=8388608");
+        rc = mount_at((long)"tmpfs", (long)copy_dir, (long)"tmpfs", 0, (long)"size=8388608");
         if (rc != 0) {
             fail_with("mounting the tmpfs of the copy", rc);
         }
     }
     copy_file(image, join(ram, copy_dir, "ram.img"), "opening the image to copy it onto the root",
               "copying the image onto the root", "reading the image to copy it");
-    rc = control_on("attach 0 ", ram);
+    rc = control_on(attach_a, ram);
     if (rc != 0) {
         fail_with("attaching an image that lives in memory", rc);
     }
@@ -1079,22 +1202,22 @@ static void copy_rows(const char *type)
     } else {
         native_copy_names(type, ram);
     }
-    rc = syscall5(SYS_MOUNT, (long)"/dev/loop0", (long)mount_dir, (long)type, MS_RDONLY, 0);
+    rc = mount_at((long)node_a, (long)mount_dir, (long)type, MS_RDONLY, 0);
     if (rc != 0) {
         fail_with("mounting an image that lives in memory", rc);
     }
     expect_file(join(path, mount_dir, "hello.txt"), "hello from inside an image");
-    rc = syscall2(SYS_UMOUNT2, (long)mount_dir, 0);
+    rc = unmount((long)mount_dir, 0);
     if (rc != 0) {
         fail_with("unmounting the image in memory", rc);
     }
-    if (control("detach 0") != 0) {
+    if (control(detach_a) != 0) {
         fail("detaching the image in memory");
     }
     if (syscall1(SYS_UNLINK, (long)ram) != 0) {
         fail("removing the copy from the root");
     }
-    if (copy_dir[0] != '\0' && syscall2(SYS_UMOUNT2, (long)copy_dir, 0) != 0) {
+    if (copy_dir[0] != '\0' && unmount((long)copy_dir, 0) != 0) {
         fail("unmounting the tmpfs of the copy");
     }
 }
@@ -1142,6 +1265,30 @@ static void type_mode(const char *type)
     sys_exit(0);
 }
 
+/** Set devices A and B, as the comment of their strings says. A native
+ * machine with fewer than two devices free fails the probe. */
+static void choose_devices(void)
+{
+    char lines[512], name[] = "loop0 ", pick[2] = {'0', '1'};
+    int found = 0, i;
+
+    if (native_images) {
+        loop_lines(lines, (int)sizeof(lines));
+        for (i = 0; i < 4 && found < 2; i++) {
+            name[4] = (char)('0' + i);
+            if (device_line(lines, name) == 0) {
+                pick[found++] = name[4];
+            }
+        }
+        if (found < 2) {
+            fail("fewer than two loop devices are free");
+        }
+    }
+    attach_a[7] = detach_a[7] = node_a[9] = line_a[4] = pick[0];
+    detach_junk[7] = detach_word[7] = pick[0];
+    attach_b[7] = attach_ro_b[10] = detach_b[7] = node_b[9] = line_b[4] = pick[1];
+}
+
 /** The probe, entered with `sp` at argc: the mode or the type the first
  * argument without `=` names, `vfat` with none, in the places the
  * arguments name. */
@@ -1159,6 +1306,7 @@ void probe_main(unsigned long *sp)
     if (copy[0] != '\0') {
         absolute(copy_dir, copy);
     }
+    choose_devices();
     syscall2(SYS_MKDIR, (long)images_dir, 0755);
     syscall2(SYS_MKDIR, (long)mount_dir, 0755);
     if (streq(type, "durable")) {
