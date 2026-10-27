@@ -1063,7 +1063,7 @@ static int fx_reset(void)
     unsigned short port;
     SOCKET l, a;
     DWORD err;
-    int n = 0, k = 0, ended = 0, r;
+    int n = 0, k, ended = 0, r;
 
     CHECK(etude_win_net_start() == 0, "Winsock did not start");
     in = malloc(sizeof(*in));
@@ -1092,12 +1092,14 @@ static int fx_reset(void)
     began = GetTickCount64();
     while (n < (int)sizeof got - 1 && GetTickCount64() - began <= BOUND) {
         k = socket_read(in, (etude_socket)a, got + n, sizeof got - 1 - (size_t)n);
-        if (k > 0)
+        if (k > 0) {
             n += k;
-        else if ((ended = k == 0 || errno != EAGAIN))
+        } else if (k == 0 || errno != EAGAIN) {
+            ended = 1;
             break;
-        else
+        } else {
             Sleep(1);
+        }
     }
     got[n] = '\0';
     socket_in_stop(in, (etude_socket)a);

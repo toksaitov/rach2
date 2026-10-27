@@ -27,7 +27,7 @@ typedef int etude_socket;
 /* A POSIX socket keeps what has arrived until it is read, and needs no
  * receive of the launcher's own. */
 struct socket_in {
-    char unused;
+    int fd; /* the connection it reads, or -1 */
 };
 #define socket_read(in, fd, buf, n) read(fd, buf, n)
 #define socket_write                write
@@ -35,14 +35,13 @@ struct socket_in {
 
 static void socket_in_start(struct socket_in *in, int fd)
 {
-    (void)in;
-    (void)fd;
+    in->fd = fd;
 }
 
 static void socket_in_stop(struct socket_in *in, int fd)
 {
-    (void)in;
     (void)fd;
+    in->fd = -1;
 }
 
 static void socket_in_pump(struct socket_in *in, int fd)
