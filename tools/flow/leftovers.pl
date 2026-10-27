@@ -43,12 +43,14 @@
 #   build makes again, and a merge of its HEAD into SHA would leave SHA's tree
 #   as it is, as `merged` in lib.sh decides for a branch.
 #
-# Git reads a copy as root, with no hook or file system monitor. It fetches
-# the copy's HEAD into a scratch repository that borrows the objects of the
-# GITDIR that has SHA, and makes the merge there, since git writing an object
-# that a repository has already sets that object's time, and a copy so
-# touched would never stay unchanged for SECONDS. A copy's age is read before
-# the failed tests in it are removed. A copy that is a git worktree goes with
+# Git reads a copy with no hook or file system monitor, and as the copy's
+# owner when this runs as root, so that a filter the copy configures runs
+# with no more than its owner's rights. It fetches the copy's HEAD, through
+# an upload-pack run as that owner too, into a scratch repository that
+# borrows the objects of the GITDIR that has SHA, and makes the merge there,
+# since git writing an object that a repository has already sets that
+# object's time, and a copy so touched would never stay unchanged for
+# SECONDS. A copy's age is read before the failed tests in it are removed. A copy that is a git worktree goes with
 # its entry in its repository; one that testing.sh made goes with its lock and
 # owner files beside it.
 #
@@ -65,6 +67,7 @@ use File::Find;
 use File::Path qw(remove_tree);
 use File::Temp qw(tempdir);
 use Getopt::Long qw(:config no_ignore_case bundling);
+use POSIX ();
 
 $SIG{$_} = sub { die "leftovers: stopped by SIG$_[0]\n" } for qw(ALRM HUP INT TERM);
 alarm 540;
@@ -162,15 +165,33 @@ sub guarded {
     return $hit;
 }
 
+# become UID: take the identity of the account UID, with its group alone and
+# its home as HOME, and say whether that was done.
+sub become {
+    my $uid = shift;
+    my @pw = getpwuid $uid or return 0;
+    $) = "$pw[3] $pw[3]";
+    POSIX::setgid($pw[3]) and POSIX::setuid($uid) or return 0;
+    return 0 if $< != $uid or $> != $uid or $) ne "$pw[3] $pw[3]";
+    $ENV{HOME} = $pw[7];
+    return 1;
+}
+
 # git DIR ENV ARG...: run git in DIR with the variables of the hash ENV added,
 # no optional lock, hook or file system monitor, and any owner trusted, and
-# return its output, or undef when it fails.
+# return its output, or undef when it fails. Run as root, git runs as DIR's
+# owner, with that owner's home, so that a filter or other command that the
+# repository configures runs with no more than its owner's rights.
 sub git {
     my ($dir, $env, @arg) = @_;
     my $pid = open my $fh, '-|';
     return unless defined $pid;
     if (!$pid) {
         open STDERR, '>', '/dev/null';
+        if ($> == 0) {
+            my @st = stat $dir or exit 127;
+            become($st[4]) or exit 127 if $st[4] != 0;
+        }
         delete @ENV{qw(GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY
             GIT_ALTERNATE_OBJECT_DIRECTORIES)};
         %ENV = (%ENV, GIT_OPTIONAL_LOCKS => 0, %$env);
@@ -233,7 +254,16 @@ sub unmerged {
     open my $alt, '>', "$r/objects/info/alternates" or return "no scratch for git: $!";
     print $alt "$objects\n";
     close $alt or return "no scratch for git: $!";
-    defined git($r, {}, '-c', 'gc.auto=0', 'fetch', '-q', '--no-tags', $p, $head)
+    my @up;
+    if ($> == 0) {
+        my @st = stat $p or return 'its owner cannot be read';
+        my $gid = (getpwuid $st[4])[3];
+        return 'its owner has no account' unless defined $gid;
+        @up = ("--upload-pack=perl -MPOSIX -e '\$) = \"$gid $gid\"; setgid($gid) and "
+            . "setuid($st[4]) or exit 127; \$ENV{HOME} = (getpwuid $st[4])[7]; "
+            . "exec qw(git upload-pack), \@ARGV'") if $st[4] != 0;
+    }
+    defined git($r, {}, '-c', 'gc.auto=0', 'fetch', '-q', '--no-tags', @up, $p, $head)
         or return 'its commit cannot be fetched';
     my $tree = git($r, {}, 'rev-parse', '-q', '--verify', "$master^{tree}");
     my $merge = git($r, {}, 'merge-tree', '--write-tree', '--no-messages', $master, $head);
