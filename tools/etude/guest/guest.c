@@ -117,6 +117,10 @@ struct attempt {
     int64_t drain_paused;          /* only transport backpressure after owned processes end */
     unsigned long long drain_read; /* both pipes' bytes read as the allowance began */
     struct fixtures fx;
+    int tty_in;         /* the input file not yet written to the terminal, or -1 */
+    char tty_buf[4096]; /* bytes read from `tty_in` and not yet written */
+    size_t tty_len;     /* the bytes in `tty_buf` */
+    size_t tty_off;     /* the bytes of `tty_buf` written */
     struct attempt *next;
 };
 
@@ -1657,28 +1661,52 @@ static void run_child(const struct pipes *pp, const struct fixtures *fx, const s
 
 /**
  * Read a case's output from the master side of its pseudo-terminal, as
- * standard output, in place of the pipe its slave side replaced, and write
- * the file `input`, when there is one, to the master side as the case's
- * input.
+ * standard output, in place of the pipe its slave side replaced, and open
+ * the file `input`, when there is one, for the loop to write to the master
+ * side as the case's input, while the terminal takes it.
  */
 static void take_terminal(struct attempt *a, const char *input)
 {
-    char buf[4096];
-    ssize_t r;
-    int fd;
-
     close(a->fd[1]);
     a->fd[1] = a->fx.pty_master;
     a->fx.pty_master = -1;
-    fd = input ? open(input, O_RDONLY | O_CLOEXEC) : -1;
-    while (fd >= 0 && (r = read(fd, buf, sizeof(buf))) > 0)
-        if (write_all(a->fd[1], buf, (size_t)r) < 0) {
-            note("spawn: the terminal's input: %s", strerror(errno));
-            break;
-        }
-    if (fd >= 0)
-        close(fd);
     fcntl(a->fd[1], F_SETFL, O_NONBLOCK);
+    a->tty_in = input ? open(input, O_RDONLY | O_CLOEXEC) : -1;
+}
+
+/** Write what the terminal of attempt `a` takes of its input file without
+ * blocking, and close the file once it is written whole or the terminal
+ * refuses it. */
+static void write_terminal(struct attempt *a)
+{
+    ssize_t r;
+
+    if (a->fd[1] < 0)
+        return;
+    if (a->tty_off == a->tty_len) {
+        r = read(a->tty_in, a->tty_buf, sizeof(a->tty_buf));
+        if (r < 0 && errno == EINTR)
+            return;
+        if (r <= 0) {
+            if (r < 0)
+                note("attempt %s: the terminal's input: %s", a->token, strerror(errno));
+            close(a->tty_in);
+            a->tty_in = -1;
+            return;
+        }
+        a->tty_len = (size_t)r;
+        a->tty_off = 0;
+    }
+    r = write(a->fd[1], a->tty_buf + a->tty_off, a->tty_len - a->tty_off);
+    if (r < 0 && (errno == EINTR || errno == EAGAIN))
+        return;
+    if (r < 0) {
+        note("attempt %s: the terminal's input: %s", a->token, strerror(errno));
+        close(a->tty_in);
+        a->tty_in = -1;
+        return;
+    }
+    a->tty_off += (size_t)r;
 }
 
 static int spawn_pipes(struct attempt *a, struct pipes *pp)
@@ -1798,6 +1826,8 @@ static void drop_attempt(struct attempt *a)
         close(a->fd[1]);
     if (a->fd[2] >= 0)
         close(a->fd[2]);
+    if (a->tty_in >= 0)
+        close(a->tty_in);
     guest_owner_close(&a->owned);
     free(a);
 }
@@ -2026,6 +2056,7 @@ static void do_run(const struct wire_frame *f, const char *text)
         snprintf(a->token, sizeof(a->token), "%s", f->field[1]);
         snprintf(a->cmd, sizeof(a->cmd), "%s", cmd);
         a->fd[1] = a->fd[2] = -1;
+        a->tty_in = -1;
         sha256_init(&a->sent[1]);
         sha256_init(&a->sent[2]);
         a->keep_max = (unsigned long long)inv.output_max;
@@ -3191,14 +3222,14 @@ static int next_timeout(int64_t t)
 /** The descriptors the loop waits on. */
 struct waits {
     struct pollfd p[64];
-    struct attempt *who[64]; /* the attempt of an output pipe */
-    int which[64];           /* 0 the signal pipe, -1 input, -2 output, or the FD */
+    struct attempt *who[64]; /* the attempt of an output pipe or a terminal */
+    int which[64]; /* 0 the signal pipe, -1 input, -2 output, the FD, or 3 a terminal's input */
     int n;
 };
 
 /** Fill `w` with the signal pipe, the input, the output while frames wait
- * over standard I/O, and the attempts' output pipes while the queue has
- * room for what they write. */
+ * over standard I/O, the attempts' output pipes while the queue has room
+ * for what they write, and the terminals that input waits for. */
 static void wait_set(struct waits *w)
 {
     struct attempt *a;
@@ -3218,7 +3249,7 @@ static void wait_set(struct waits *w)
         w->p[w->n].events = POLLOUT;
         w->which[w->n++] = -2;
     }
-    for (a = attempts; a && w->n < 62; a = a->next)
+    for (a = attempts; a && w->n < 62; a = a->next) {
         for (i = 1; i <= 2; i++)
             if (a->fd[i] >= 0 && (queue_room() || output_broken || input_closed)) {
                 w->p[w->n].fd = a->fd[i];
@@ -3226,6 +3257,13 @@ static void wait_set(struct waits *w)
                 w->who[w->n] = a;
                 w->which[w->n++] = i;
             }
+        if (a->tty_in >= 0 && a->fd[1] >= 0 && w->n < 64) {
+            w->p[w->n].fd = a->fd[1];
+            w->p[w->n].events = POLLOUT;
+            w->who[w->n] = a;
+            w->which[w->n++] = 3;
+        }
+    }
 }
 
 /** The loop: send what is due, wait for input, output or a deadline, and
@@ -3258,6 +3296,8 @@ static int serve(void)
                     ;
             else if (w.which[i] == -1)
                 read_input();
+            else if (w.which[i] == 3)
+                write_terminal(w.who[i]);
             else if (w.which[i] > 0)
                 read_output(w.who[i], w.which[i]);
         }

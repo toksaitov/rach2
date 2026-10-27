@@ -1529,6 +1529,7 @@ static void check_fixtures(void)
 {
     static const char args[] = "guest-args";
     static const char term[] = "guest-term";
+    static char big_input[1 << 20];
     static const char *const bad[] = {
         "[{\"fixture\": \"ids\", \"given\": [\"1000\"]}]",
         "[{\"fixture\": \"ids\", \"given\": [\"1000:314159001\", \"1001:314159001\"]}]",
@@ -1613,6 +1614,17 @@ static void check_fixtures(void)
               strcmp(e.value, "0") == 0 && strstr(e.out, "got hello") != NULL &&
               strcmp(e.cleaned, "confirmed") == 0,
           "a case on a pseudo-terminal reads its input there and writes its output");
+    memset(big_input, 'x', sizeof(big_input) - 1);
+    for (i = 63; i < sizeof(big_input) - 1; i += 64)
+        big_input[i] = '\n';
+    case_keep = 1000;
+    put_case_with("terminput", "guest-long", "000000000000fa21",
+                  "[{\"fixture\": \"pty\", \"given\": []}]", big_input, inv);
+    case_keep = 65536;
+    send_cmd(ETUDE_CMD_RUN, new_cmd(c), "000000000000fa21", inv, (char *)NULL);
+    CHECK(collect(&e, c, "000000000000fa21") == 0 && strcmp(e.kind, "signaled") == 0 &&
+              strcmp(e.value, "15") == 0 && strtoull(e.total[0], NULL, 10) >= 20000000,
+          "a case that writes before it reads its terminal's input is not held by that input");
     bye(0);
     close(busy);
 }
