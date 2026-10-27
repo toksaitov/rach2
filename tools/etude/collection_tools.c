@@ -1218,6 +1218,78 @@ static const char col_sync[] =
     "git --literal-pathspecs add -f --pathspec-from-file=\"$ETUDE_WORK/source-index\" "
     "--pathspec-file-nul\n";
 
+/* The archive of tracked sources that the GNU test image stages. */
+static const char col_assets[] = "build/tests/host-suite/scripts-assets.tar";
+
+/* Take the host's archive when it holds the same files, bytes and modes. */
+static const char col_assets_adopt[] =
+    "given=\"$ETUDE_WORK/scripts-assets.tar\" built=build/tests/host-suite/scripts-assets.tar\n"
+    "if cmp -s \"$given\" \"$built\"; then\n"
+    "    echo 'etude prepare tools: source archive: the host copy'\n"
+    "elif tar -tzf \"$given\" > \"$ETUDE_WORK/assets.given\" 2> /dev/null &&\n"
+    "    tar -tzf \"$built\" > \"$ETUDE_WORK/assets.built\" &&\n"
+    "    cmp -s \"$ETUDE_WORK/assets.given\" \"$ETUDE_WORK/assets.built\" &&\n"
+    "    ! LC_ALL=C tar -dzf \"$given\" 2>&1 | grep -v ': Mod time differs$' | grep -q .; then\n"
+    "    cp \"$given\" \"$built\"\n"
+    "    echo 'etude prepare tools: source archive: the host copy'\n"
+    "else\n"
+    "    echo 'etude prepare tools: source archive: a new build'\n"
+    "fi\n";
+
+static int col_stages_assets(const char *goal)
+{
+    const char *base = strrchr(goal, '/');
+    base = base ? base + 1 : goal;
+    return !strcmp(goal, col_assets) || !strcmp(base, "gnu-test.disk") ||
+           !strcmp(base, "gnu-test.ext2");
+}
+
+/**
+ * Make the GNU test images of every workspace stage one source archive.
+ *
+ * Each architecture's workspace builds `col_assets` itself, with its own file
+ * times, so the images of two workspaces would stage different bytes, and
+ * neither need equal the archive the host records. When a guest goal stages
+ * the archive, the job is given the host's copy, if there is one, builds its
+ * own before the images, and takes the host's in its place when the two
+ * differ only in their times. The archive is then returned with the images.
+ * `etude prepare` runs the x86-64 job after the i686 one, so the x86-64
+ * images stage the archive that the i686 job returned.
+ *
+ * @return 0, or -1 when memory runs out or the host's copy is not a file.
+ */
+static int col_assets_job(struct col_job *job, struct jbuf *script, const char *arch,
+                          struct col_list *guest)
+{
+    int staged = 0, listed = 0;
+    for (size_t i = 0; i < guest->n; i++) {
+        staged |= col_stages_assets(guest->v[i]);
+        listed |= !strcmp(guest->v[i], col_assets);
+    }
+    if (!staged)
+        return 0;
+    if (!listed && col_add(guest, col_assets))
+        return -1;
+    char *given = col_format("%s/%s", job->root, col_assets);
+    struct col_list goal = {0};
+    struct stat st;
+    int present = 0, rc = !given;
+    if (!rc && !lstat(given, &st)) {
+        present = 1;
+        rc = !S_ISREG(st.st_mode);
+    } else if (!rc)
+        rc = errno != ENOENT;
+    if (!rc && present)
+        rc = col_add(&job->inputs, given) || col_add(&goal, col_assets);
+    if (!rc && present) {
+        col_make_line(job, script, arch, &goal);
+        jbuf_puts(script, col_assets_adopt);
+    }
+    col_free(&goal);
+    free(given);
+    return rc ? -1 : 0;
+}
+
 /** Declare the musl products returned for native builds. */
 static int col_native_inputs(struct col_job *job, const char *arch, const struct col_list *native,
                              struct col_list *guest)
@@ -1281,6 +1353,49 @@ static int col_native_make(struct col_job *job, const char *arch, const struct c
     free(architecture);
     col_free(&args);
     return rc;
+}
+
+/**
+ * Write the script of a preparation's job: make its workspace's file system
+ * and update the source there, build the components, the kernel that `kernel`
+ * names when it is not empty and the guest goals, and archive the goals on the
+ * job's second disk. `col_assets_job` may add the source archive to `guest`.
+ *
+ * @return 0, or -1 when memory runs out.
+ */
+static int col_prepare_script(struct col_job *job, struct jbuf *script, const char *arch,
+                              const char *kernel, struct col_list *guest)
+{
+    struct col_list components = {0};
+    jbuf_puts(script, "set -eu\nblkid -s TYPE -o value \"$ETUDE_DISK1\" | "
+                      "grep -qx ext4 || mkfs.ext4 -q -F \"$ETUDE_DISK1\"\n");
+    jbuf_puts(script, col_mount);
+    jbuf_puts(script, col_sync);
+    jbuf_puts(script, col_compilers);
+    int rc = col_add(&components, "components");
+    if (!rc)
+        col_make_line(job, script, arch, &components);
+    col_free(&components);
+    if (!rc && *kernel) {
+        char *goal = col_format("%s-kernel", kernel);
+        rc = !goal || col_add(&components, goal);
+        free(goal);
+        if (!rc)
+            col_make_line(job, script, arch, &components);
+        col_free(&components);
+    }
+    if (!rc)
+        rc = col_assets_job(job, script, arch, guest);
+    if (rc)
+        return -1;
+    col_make_line(job, script, arch, guest);
+    jbuf_puts(script, "tar --sparse -cf \"$ETUDE_DISK2\"");
+    for (size_t i = 0; i < guest->n; i++) {
+        jbuf_puts(script, " ");
+        col_quote(script, guest->v[i]);
+    }
+    jbuf_puts(script, "\n");
+    return 0;
 }
 
 /** Validate the complete declared archive before native extraction. */
@@ -1371,7 +1486,7 @@ static int col_preparation_machine(unsigned *cpus, unsigned *memory)
 static int col_prepare(struct col_job *job, const char *arch, const char *kernel, int count,
                        char *const args[])
 {
-    struct col_list native = {0}, guest = {0}, components = {0};
+    struct col_list native = {0}, guest = {0};
     struct jbuf script = {0};
     char *disk = NULL, *products = NULL;
     unsigned memory;
@@ -1397,30 +1512,8 @@ static int col_prepare(struct col_job *job, const char *arch, const char *kernel
     if (col_disk_create(products, 64ull << 30) || col_add(&job->disks, disk) ||
         col_add(&job->disks, products))
         goto error;
-    jbuf_puts(&script, "set -eu\nblkid -s TYPE -o value \"$ETUDE_DISK1\" | "
-                       "grep -qx ext4 || mkfs.ext4 -q -F \"$ETUDE_DISK1\"\n");
-    jbuf_puts(&script, col_mount);
-    jbuf_puts(&script, col_sync);
-    jbuf_puts(&script, col_compilers);
-    if (col_add(&components, "components"))
+    if (col_prepare_script(job, &script, arch, kernel, &guest))
         goto error;
-    col_make_line(job, &script, arch, &components);
-    col_free(&components);
-    if (*kernel) {
-        char *goal = col_format("%s-kernel", kernel);
-        int bad = !goal || col_add(&components, goal);
-        free(goal);
-        if (bad)
-            goto error;
-        col_make_line(job, &script, arch, &components);
-    }
-    col_make_line(job, &script, arch, &guest);
-    jbuf_puts(&script, "tar --sparse -cf \"$ETUDE_DISK2\"");
-    for (size_t i = 0; i < guest.n; i++) {
-        jbuf_puts(&script, " ");
-        col_quote(&script, guest.v[i]);
-    }
-    jbuf_puts(&script, "\n");
     uint64_t bytes = 0;
     for (size_t i = 0; i < job->inputs.n; i++) {
         if (stat(job->inputs.v[i], &st) || st.st_size < 0)
@@ -1443,7 +1536,6 @@ done:
     free(products);
     col_free(&native);
     col_free(&guest);
-    col_free(&components);
     jbuf_free(&script);
     return rc;
 }

@@ -295,6 +295,58 @@ static int collection_source_archive(const struct etude_tooling_job *job)
     return 0;
 }
 
+/**
+ * Check a job whose goal is a GNU test image and return its products.
+ *
+ * The image stages the source archive, so the job builds the archive before
+ * the image, takes the host's copy in its place when the host has one, and
+ * returns the archive with the image. The stand-in returns the host's copy
+ * when it was given one, and otherwise the seed's.
+ */
+static int collection_assets_job(const struct etude_tooling_job *job, const char *script)
+{
+    static const char assets[] = "build/tests/host-suite/scripts-assets.tar";
+    const char *given = NULL;
+    for (size_t i = 0; job->inputs && job->inputs[i]; i++) {
+        const char *base = strrchr(job->inputs[i], '/');
+        if (base && !strcmp(base, "/scripts-assets.tar"))
+            given = job->inputs[i];
+    }
+    char own[128], images[256], back[256];
+    snprintf(own, sizeof own, "make -j%u ARCH='x86_64' '%s'\n", collection_cpus, assets);
+    snprintf(images, sizeof images,
+             "make -j%u ARCH='x86_64' 'build/x86_64/images/gnu-test.disk' "
+             "'build/x86_64/rach2/kernel' '%s'\n",
+             collection_cpus, assets);
+    snprintf(back, sizeof back,
+             "tar --sparse -cf \"$ETUDE_DISK2\" 'build/x86_64/images/gnu-test.disk' "
+             "'build/x86_64/rach2/kernel' '%s'\n",
+             assets);
+    const char *built = strstr(script, own), *adopt = strstr(script, "tar -dzf \"$given\"");
+    const char *made = strstr(script, images);
+    if (!made || !strstr(made, back))
+        return 1;
+    if (given ? !collection_bytes(given, "host archive") || !built || !adopt || built > adopt ||
+                    adopt > made
+              : built || adopt)
+        return 1;
+    char seed[4096], returned[4096];
+    snprintf(seed, sizeof seed, "%s/seed", collection_root);
+    snprintf(returned, sizeof returned, "%s/seed/%s", collection_root, assets);
+    if (given)
+        collection_put(returned, "host archive");
+    const char *make[] = {host_tool_path("tar"),
+                          "-cf",
+                          job->disks[1],
+                          "-C",
+                          seed,
+                          "build/x86_64/images/gnu-test.disk",
+                          "build/x86_64/rach2/kernel",
+                          assets,
+                          NULL};
+    return host_command(make, NULL, NULL, NULL, 0);
+}
+
 static int collection_prepared_job(const struct etude_tooling_job *job)
 {
     FILE *file = fopen(job->script, "rb");
@@ -315,6 +367,8 @@ static int collection_prepared_job(const struct etude_tooling_job *job)
         return 1;
     if (collection_source_archive(job))
         return 1;
+    if (!strcmp(getenv("COLLECTION_TEST_ROW"), "prepare-assets"))
+        return collection_assets_job(job, script);
     char seed[4096];
     snprintf(seed, sizeof seed, "%s/seed", collection_root);
     char kernel[128], paths[4][128];
@@ -600,6 +654,28 @@ static void collection_native_inputs_row(void)
     }
 }
 
+/** Check that a GNU test image's job returns the source archive it stages. */
+static void collection_assets_row(void)
+{
+    const char *directories[] = {"seed/build/x86_64/images", "seed/build/tests",
+                                 "seed/build/tests/host-suite"};
+    for (size_t i = 0; i < sizeof directories / sizeof(*directories); i++)
+        COLLECTION_CHECK(!mkdir(collection_path(directories[i]), 0700));
+    collection_put(collection_path("seed/build/x86_64/images/gnu-test.disk"), "image bytes");
+    collection_put(collection_path("seed/build/tests/host-suite/scripts-assets.tar"),
+                   "workspace archive");
+    const char *archive = collection_path("build/tests/host-suite/scripts-assets.tar");
+    setenv("COLLECTION_TEST_ROW", "prepare-assets", 1);
+    char *args[] = {"prepare", collection_root, "x86_64", "", "build/x86_64/images/gnu-test.disk"};
+    COLLECTION_CHECK(!etude_collection_tools_main(5, args));
+    COLLECTION_CHECK(collection_bytes(archive, "workspace archive"));
+    collection_put(archive, "host archive");
+    COLLECTION_CHECK(!etude_collection_tools_main(5, args));
+    COLLECTION_CHECK(collection_bytes(archive, "host archive"));
+    COLLECTION_CHECK(
+        collection_bytes(collection_path("build/x86_64/images/gnu-test.disk"), "image bytes"));
+}
+
 static void collection_prepare_row(void)
 {
     const char *directories[] = {"ports",      "ports/doom",        "krffs",           "seed",
@@ -651,6 +727,7 @@ static void collection_prepare_row(void)
         COLLECTION_CHECK(collection_bytes(collection_path("build/rach2/kernel"), "kernel bytes"));
     }
     collection_native_inputs_row();
+    collection_assets_row();
     if (jobs)
         setenv("ETUDE_BUILD_JOBS", jobs, 1);
     else
