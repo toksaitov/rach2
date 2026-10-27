@@ -710,18 +710,18 @@ static int apply_changes(const char *changes, const char *host)
 /**
  * Make in the host file `host` the image the machine wrote at `guest`. It
  * is the host's copy of the bytes sent, `sent`, with the bytes that `cmp -l`
- * on the machine finds changed against `guest`.sent, its copy of the same
- * bytes, and it must have the SHA-256 the machine gives for `guest`. Only
- * the changes cross the Rach2 SSH client's serial console, where the whole
- * image would take minutes.
+ * on the machine finds changed against `copy`, its copy of the same bytes,
+ * and it must have the SHA-256 the machine gives for `guest`. Only the
+ * changes cross the Rach2 SSH client's serial console, where the whole image
+ * would take minutes.
  */
-static int changed_image(struct acceptance *a, const char *guest, const char *sent,
-                         const char *host)
+static int changed_image(struct acceptance *a, const char *guest, const char *copy,
+                         const char *sent, const char *host)
 {
     int earlier = a->command_failed, ok;
     char *changes, *sum, hex[65];
     a->command_failed = 0;
-    changes = read_format(a, "cmp -l %s.sent %s; [ $? -le 1 ]", guest, guest);
+    changes = read_format(a, "cmp -l %s %s; [ $? -le 1 ]", copy, guest);
     sum = read_format(a, "sha256sum < %s", guest);
     ok = !a->command_failed && copy_file(sent, host) && apply_changes(changes, host) &&
          file_sha256(host, hex) && strlen(sum) >= 64 && memcmp(sum, hex, 64) == 0;
@@ -738,7 +738,7 @@ static void loop_image(struct acceptance *a)
 {
     char *text = read_command(a, "cat /proc/filesystems");
     const char *image;
-    char guest[320], after[4096], file[4096], input[4096], name[180], size[32];
+    char guest[320], copy[360], after[4096], file[4096], input[4096], name[180], size[32];
     char *fsck[] = {"fsck-krffs", after, "--strict", NULL};
     char *readfile[] = {"readfile-krffs", after, "/accept.txt", file, NULL};
     struct stat before;
@@ -760,6 +760,7 @@ static void loop_image(struct acceptance *a)
     }
     snprintf(size, sizeof(size), "%llu", (unsigned long long)before.st_size);
     snprintf(guest, sizeof(guest), "%s/loop.img", a->temporary);
+    snprintf(copy, sizeof(copy), "/dev/shm/%s.sent", a->temporary + strlen("/tmp/"));
     snprintf(name, sizeof(name), "%s.loop.input", a->prefix);
     if (net_path(a->u, name, input, sizeof(input)) == NULL || !copy_file(image, input) ||
         !same_file(image, input) || net_ssh_attach(a->u, input) != ETUDE_OK ||
@@ -767,7 +768,7 @@ static void loop_image(struct acceptance *a)
         message(a, 1, "image: the transfer failed");
         return;
     }
-    text = read_format(a, "wc -c < %s && cp %s %s.sent", guest, guest, guest);
+    text = read_format(a, "wc -c < %s && cp %s %s", guest, guest, copy);
     message(a, strcmp(text, size) != 0, "image: the transfer has %s bytes (expected %s)", text,
             size);
     free(text);
@@ -797,7 +798,7 @@ static void loop_image(struct acceptance *a)
     snprintf(name, sizeof(name), "%s.loop.accept", a->prefix);
     if (net_path(a->u, name, file, sizeof(file)) == NULL)
         return;
-    if (!changed_image(a, guest, image, after))
+    if (!changed_image(a, guest, copy, image, after))
         message(a, 1, "the image the machine wrote could not be made from its changes");
     else {
         ok = image_tool(a, fsck, "loop.fsck");
@@ -809,7 +810,7 @@ static void loop_image(struct acceptance *a)
                 "with the file the machine wrote inside it");
         free(text);
     }
-    text = read_format(a, "rm -rf %s", a->temporary);
+    text = read_format(a, "rm -rf %s %s", a->temporary, copy);
     free(text);
     a->temporary[0] = '\0';
 }
@@ -1192,7 +1193,8 @@ static void cleanup(struct acceptance *a)
         free(text);
     }
     if (a->temporary[0] != '\0' && a->mounted[0] == '\0') {
-        text = read_format(a, "rm -rf %s", a->temporary);
+        text = read_format(a, "rm -rf %s /dev/shm/%s.sent", a->temporary,
+                           a->temporary + strlen("/tmp/"));
         free(text);
     }
     transfer_end(a);
