@@ -43,6 +43,7 @@ struct slot {
     enum stage stage;
     struct etude_supervised *load, *cas;
     int load_claim, case_claim; /* a claim, or a request, is in the ledger */
+    int load_admitted;          /* the load's is a claim, not a request */
     int load_ran, load_cancelled, load_done, ran, refused;
     char load_id[288];
     char amount[24];
@@ -485,11 +486,12 @@ static int admit(struct run *x, size_t ai)
         s->stage = DONE;
         return 1;
     }
-    if (l != NULL && !s->load_claim) {
+    if (l != NULL && !s->load_admitted) {
         load_res(l, &lr);
         rc = ask(x, ai, s->load_id, &lr, 1, &s->load_claim);
         if (rc != 1)
             return rc == 2 ? 1 : rc;
+        s->load_admitted = 1;
     }
     rc = ask(x, ai, a->attempt_id, c->res, c->nres, &s->case_claim);
     if (rc != 1)

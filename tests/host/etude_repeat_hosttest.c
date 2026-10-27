@@ -48,6 +48,7 @@
  * beside their cases, reserved in the ledger while the case runs, and end
  * with their cleanup confirmed; a load that is never ready, one that ends
  * before its case and one that cannot fit beside its case are told apart.
+ * A load that waits for room starts once admitted.
  * Modelled supervisor results cover lost and stopped ends and unconfirmed
  * cleanup; modelled admission covers a ledger with no recoverable room.
  * Each records a disruption in the history, while a case's timeout does not.
@@ -62,6 +63,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "compat/pathmax_host.h"
@@ -1242,6 +1244,75 @@ static int scratch_empty(void)
  * cleanup confirmed and its file gone. A load never ready, one that ends
  * before its case, and one that cannot fit beside its case are told apart.
  */
+/** Count the reserved claims of loads, which hold their room. */
+static int held_visit(const struct etude_ledger_claim *c, void *ctx)
+{
+    size_t n = strlen(c->id);
+
+    if (n > 5 && strcmp(c->id + n - 5, ":load") == 0 && strcmp(c->state, "reserved") == 0)
+        ++*(unsigned *)ctx;
+    return 0;
+}
+
+/**
+ * Start a process that reserves `cpu` thousandths of a processor beside the
+ * runs, reads the ledger ten times 100 ms apart, and then releases the
+ * reservation and exits with the count of readings that found a load's
+ * claim reserved. Returns its process once the reservation is made, or -1.
+ */
+static pid_t blocker(uint64_t cpu)
+{
+    const struct etude_ledger_res res[] = {{"cpu_millis", cpu}};
+    int fds[2], i;
+    unsigned held = 0;
+    pid_t pid;
+    char c;
+
+    if (pipe(fds) != 0)
+        return -1;
+    pid = fork();
+    if (pid == 0) {
+        struct etude_ledger *l = etude_ledger_open(fix_path("ledger"));
+        unsigned found = 0;
+
+        close(fds[0]);
+        if (l == NULL || etude_ledger_reserve(l, "test-blocker", res, 1, SMALL, 1) != 0)
+            _exit(255);
+        if (write(fds[1], "r", 1) != 1)
+            _exit(255);
+        for (i = 0; i < 10; i++) {
+            usleep(100 * 1000);
+            held = 0;
+            if (etude_ledger_list(l, held_visit, &held) != 0)
+                _exit(255);
+            found += held > 0;
+        }
+        if (etude_ledger_finish(l, "test-blocker", ETUDE_CLEANUP_CONFIRMED) != 0)
+            _exit(255);
+        etude_ledger_close(l);
+        _exit((int)found);
+    }
+    close(fds[1]);
+    if (pid < 0 || read(fds[0], &c, 1) != 1) {
+        close(fds[0]);
+        if (pid > 0)
+            waitpid(pid, NULL, 0);
+        return -1;
+    }
+    close(fds[0]);
+    return pid;
+}
+
+/** Give the exit status of blocker `pid`, or 255. */
+static int blocker_end(pid_t pid)
+{
+    int status;
+
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status))
+        return 255;
+    return WEXITSTATUS(status);
+}
+
 static void test_load(void)
 {
     struct etude_repeat_case cases[1];
@@ -1251,6 +1322,7 @@ static void test_load(void)
     struct stat st;
     size_t i, n;
     int kinds;
+    pid_t pid;
 
     cases[0] = make_case(4, "witness", "none", 3, &WD, CASE_RES);
     memset(&spec, 0, sizeof(spec));
@@ -1324,6 +1396,17 @@ static void test_load(void)
     CHECK(r.nattempts == 1 && strstr(r.attempts[0].reason, "exceed") != NULL, "load-wide");
     CHECK(stat(shared("marked"), &st) != 0, "load-wide");
     disrupted_history("load-wide", &r, "exceed", 1);
+    etude_repeat_result_free(&r);
+
+    /* A load that waits for room is asked again, and starts once admitted. */
+    cases[0] = make_case(7, "mark", "none", 1, &WD, CASE_RES);
+    spec.retries = 0;
+    fresh_shared();
+    pid = blocker(600);
+    CHECK(pid > 0, "load-waits");
+    CHECK(run("load-waits", &spec, SMALL, 1, load_argv, &r) == 0, "load-waits");
+    CHECK(blocker_end(pid) < 255, "load-waits");
+    CHECK(r.outcome == ETUDE_REPEAT_PASS && r.nattempts == 1, "load-waits");
     etude_repeat_result_free(&r);
 }
 
