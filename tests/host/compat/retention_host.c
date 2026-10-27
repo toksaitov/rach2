@@ -584,6 +584,7 @@ static void retention_live_and_reader(void)
     setenv("ETUDE_SITE", retention_site, 1);
     const char *paths[] = {sample, NULL};
     struct etude_retention_guard *guard = NULL;
+    int64_t first = ret_now();
     RET_CHECK(!etude_retention_read_begin(paths, 1, NULL, &guard) && guard);
     RET_CHECK(!access(sample, F_OK));
     etude_retention_read_end(guard);
@@ -599,10 +600,12 @@ static void retention_live_and_reader(void)
     free(saved_site);
     const char *apply[] = {"--apply", NULL};
     RET_CHECK(!retention_call("prune", apply) && !access(sample, F_OK));
+    int64_t last = ret_now();
     if (!retention_record(&registry, sample, &path, &item)) {
         const struct json *previous = json_member(item, "last_used_previous");
         RET_CHECK(previous && previous->type == JSON_NUMBER && !strcmp(previous->string, fraction));
-        RET_CHECK(ret_number(item, "last_used") >= ret_now());
+        RET_CHECK(ret_number(item, "last_used") > first &&
+                  ret_number(item, "last_used") <= last + 1);
         RET_CHECK(json_text(item, "last_used_normalization") &&
                   !strcmp(json_text(item, "last_used_normalization"), "ceil-epoch-seconds-v1"));
         free(path);
