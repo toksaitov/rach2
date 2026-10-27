@@ -57,9 +57,9 @@
 # borrows the objects of the GITDIR that has SHA, and makes the merge there,
 # since git writing an object that a repository has already sets that
 # object's time, and a copy so touched would never stay unchanged for
-# SECONDS. A copy's age is read before the failed tests in it are removed. A copy that is a git worktree goes with
-# its entry in its repository; one that testing.sh made goes with its lock and
-# owner files beside it.
+# SECONDS. A copy's age is read before the failed tests in it are removed.
+# A copy that is a git worktree goes with its entry in its repository; one
+# that testing.sh made goes with its lock and owner files beside it.
 #
 # With -n it removes nothing and says what it would remove. It prints a line
 # for each entry it removes or keeps, but not for a failed test or a loose
