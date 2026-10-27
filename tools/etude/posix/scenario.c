@@ -4039,6 +4039,12 @@ enum etude_status etude_host(struct etude_case *c, char *const argv[], const cha
     end->value = r->value;
     if (r->cleanup != ETUDE_CLEANUP_CONFIRMED)
         c->unconfirmed = 1;
+    if (r->output_error) {
+        diag("%s: its output could not be kept: %s", argv[0], strerror(r->output_error));
+        c->faults++;
+        if (st == ETUDE_OK)
+            st = ETUDE_FAILED;
+    }
     etude_proc_free(p);
     if (st == ETUDE_OK && end->end == ETUDE_END_LOST)
         st = ETUDE_LOST;
