@@ -4,7 +4,7 @@
 
 On Windows the service uses the collection's wide file adapter for asset archives, JSON, credentials, certificates, records and recursive cleanup. OpenSSL receives the corresponding extended native certificate paths. The native selftest unpacks and reads JSON beyond `MAX_PATH`, generates and loads the real certificate and key there, then removes that private tree without following reparse points.
 
-The OpenSSL submake clears inherited Make flags and runs one job within its parent's reserved recipe job. A forced native rebuild therefore does not force upstream configuration regeneration. The installed Make wrapper, actual Make path and admission limits remain in effect.
+The OpenSSL archive fetch restores MSYS path conversion for the native checksum helper. The submake clears inherited Make flags and runs one job within its parent's reserved recipe job. A forced native rebuild therefore does not force upstream configuration regeneration. The installed Make wrapper, actual Make path and admission limits remain in effect.
 
 The service accepts these commands:
 
