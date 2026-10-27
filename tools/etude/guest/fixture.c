@@ -951,6 +951,22 @@ static int detach(int n)
 }
 
 /**
+ * Give the file of a /proc/loop line, `loopN SIZE rw writes N syncs N FILE`,
+ * whose FILE is the rest of the line and may have spaces; or NULL.
+ */
+static const char *loop_file(const char *line)
+{
+    int field;
+
+    for (field = 0; field < 7 && line; field++) {
+        line = strchr(line, ' ');
+        if (line)
+            line++;
+    }
+    return line;
+}
+
+/**
  * Detach each loop device that /proc/loop lists on a file under `dir`: those
  * the case's program attached itself and left. A device whose file is on
  * another such device's volume must go first, so each pass detaches what it
@@ -982,13 +998,13 @@ static int detach_left(const char *dir)
             return -1;
         text[n] = '\0';
         for (line = text; *line; line = next) {
-            char *file;
+            const char *file;
 
             next = strchr(line, '\n');
             next = next ? (*next = '\0', next + 1) : line + strlen(line);
-            file = strrchr(line, ' ');
-            if (strncmp(line, "loop", 4) != 0 || !file || strncmp(file + 1, full, len) != 0 ||
-                file[1 + len] != '/')
+            file = loop_file(line);
+            if (strncmp(line, "loop", 4) != 0 || !file || strncmp(file, full, len) != 0 ||
+                file[len] != '/')
                 continue;
             if (detach(atoi(line + 4)) == 0)
                 gone++;
