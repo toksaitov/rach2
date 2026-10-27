@@ -1,6 +1,6 @@
 # The comparison of the test machines
 
-This is the comparison report of T94 of [the plan](plan.md), #683: what each test machine measured when it ran the whole collection, set side by side under the site comparison of [the measurements](measurements.md#comparisons-and-noise) and the plan's [environments of the first run](plan.md#the-environments-of-the-first-run), with the recommendation and the proposed site profile. The site comparison asks for five complete passing runs of each configuration; the owner has decided that the whole runs of 27 October are the measurements, one complete run of each machine. The earlier runs of the adapter on the fixed candidate are in [the runs on Ubuntu](ubuntu-run.md) and [the runs on the Mac](mac-run.md). Times of day are the owner's local time, UTC+6.
+This is the comparison report of T94 of [the plan](plan.md), #683: what each test machine measured when it ran the whole collection, set side by side under the site comparison of [the measurements](measurements.md#comparisons-and-noise) and the plan's [environments of the first run](plan.md#the-environments-of-the-first-run), with the profile of each run. The choice of the machine for routine testing is the owner's, and is outside this phase. The site comparison asks for five complete passing runs of each configuration; the owner has decided that the whole runs of 27 October are the measurements, one complete run of each machine. The earlier runs of the adapter on the fixed candidate are in [the runs on Ubuntu](ubuntu-run.md) and [the runs on the Mac](mac-run.md). Times of day are the owner's local time, UTC+6.
 
 ## The machines
 
@@ -17,7 +17,7 @@ This is the comparison report of T94 of [the plan](plan.md), #683: what each tes
 
 ## The runs
 
-Each run is one `etude run routine-sequence phase_first_run` of the whole selection, 1033 cases of both architectures in one schedule, with a clean preparation (`ETUDE_PREPARATION_CLEAN=1`). The selection is the same on every machine, byte for byte: sha256 `ad5b945c996174ace12663016842598999913683f6b7ae1be6505b17af4d8e42`. Every guest had 2 processors and every run 8 workers and `JOBS=8`; guest memory was 16 GiB on Ubuntu and 10 GiB on the Mac. Windows differs in two ways. Its run had 20 workers, `JOBS=18` and 40 GiB, the width its site admits. Its selection has 1032 cases, sha256 `ea1a38e6087fb79ffb333b217ecb0c124b1c9a953bd1311847550db3090ceffd`: it leaves out `machine.bigmem.boundary-73728`, whose 72 GiB guest its site's 64 GiB cannot admit.
+Each run is one `etude run routine-sequence phase_first_run` of the whole selection, 1033 cases of both architectures in one schedule, with a clean preparation (`ETUDE_PREPARATION_CLEAN=1`). The selection is the same on every machine, byte for byte: sha256 `ad5b945c996174ace12663016842598999913683f6b7ae1be6505b17af4d8e42`. Every run had 8 workers, `JOBS=8` and `RACH2_CPUS=2`, the processors of a guest whose case gives no count of its own; a case's manifest or machine profile may give one, such as tlsprobe's single processor; guest memory was 16 GiB on Ubuntu and 10 GiB on the Mac. Windows differs in two ways. Its run had 20 workers, `JOBS=18` and 40 GiB, the width its site admits. Its selection has 1032 cases, sha256 `ea1a38e6087fb79ffb333b217ecb0c124b1c9a953bd1311847550db3090ceffd`: it leaves out `machine.bigmem.boundary-73728`, whose 72 GiB guest its site's 64 GiB cannot admit.
 
 | Machine | Run | Commit | Start | End | Cases | Result |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -26,7 +26,7 @@ Each run is one `etude run routine-sequence phase_first_run` of the whole select
 | Mac, run 4 | `phase589-macos-4c323664a065-clean-01` | 4c323664a | 15:14:25 | 17:54:47 | 1033: 1033 passed | every case passed |
 | Windows | `phase589-windows-c929152daead-clean-01` | c929152da | 20:42:10 | 22:12:43 | 1032: 1029 passed, 2 failed, 1 incomplete | `host.host.scripts` failed on both architectures, and `guest.default.tlsprobe` on i686 did not finish |
 
-Every case of each finished run reached a result, and every failure was a fault of its test, since fixed on `master`. The Ubuntu run's failed case collided with the host's progress probe, whose `git status` held the repository's index lock while the guest's agent committed; etude stopped the case at its 40-minute progress bound, and a25201d5e removed the collision. On Windows the ci fixture's stand-in for etude lacked the retention policy's `allocate` that a native bisection had come to ask for (ef54e95fe), and tlsprobe's spin beside its child reported no progress for longer than its gap bound allows (f58e6fe83). Each sequence receipt ends with `error 0`, `cancelled 0`, `active 0` and `cleanup confirmed`.
+Every case of each finished run reached a result, and every failure was a fault of its test. Each is fixed on `master` except tlsprobe on i686 under WHPX, which #1412 keeps open. The Ubuntu run's failed case collided with the host's progress probe, whose `git status` held the repository's index lock while the guest's agent committed; etude stopped the case at its 40-minute progress bound, and a25201d5e removed the collision. On Windows the ci fixture's stand-in for etude lacked the retention policy's `allocate` that a native bisection had come to ask for (ef54e95fe), and tlsprobe's spin beside its child reported no progress for longer than its gap bound allows. f58e6fe83 made each rise of the child's time count as progress, but the case ran past its bound again on Windows; run alone it passed in 157 s under WHPX and in 8 s under TCG. Each sequence receipt ends with `error 0`, `cancelled 0`, `active 0` and `cleanup confirmed`.
 
 ## The time and cost of the collection
 
@@ -41,7 +41,7 @@ Seconds are the sequence receipt's intervals. Processor seconds are the receipt'
 
 time(1) around the whole sequence agrees: 36254 s user and 4115 s system on Ubuntu, 27639 s and 1952 s on the Mac in run 3, 28480 s and 2086 s in run 4.
 
-Ubuntu took 732 s less than the Mac, 8% of the Mac's time, and used 36% more processor time. Under `median-mad-v1` a single run's band is 1% of its time, 88 s for Ubuntu and 95 s for the Mac; the difference is four times their combined 183 s, so it is not noise. Ubuntu was faster in both parts: by 66 s in preparation and by 664 s in the collection.
+Ubuntu took 732 s less than the Mac, 8% of the Mac's time, and used 36% more processor time. With one run of each machine nothing measures how much a run's time varies: `median-mad-v1` needs five samples, and its 1% is a floor, not an estimate of that variation. The difference is the measured one. Ubuntu was faster in both parts: by 66 s in preparation and by 664 s in the collection.
 
 The conditions of the two runs differed in ways that favour the Mac, not Ubuntu:
 
@@ -55,7 +55,7 @@ No machine meets the routine run's goal of 3600 s; all are within its ceiling of
 
 ## Where the time goes
 
-Neither run used the width it was given. The collection kept 4.9 processors busy on average on Ubuntu and 3.3 on the Mac, against 16 guest processors of 8 workers: its time is set by its longest chains of cases, not by the number of workers. The Mac's history gives each case's elapsed and processor time. Its costliest families, by the sum of their cases' elapsed seconds, were these:
+Neither run used the width it was given. The collection kept 4.9 processors busy on average on Ubuntu and 3.3 on the Mac, with 8 workers: its time is set by its longest chains of cases, not by the number of workers. The Mac's history gives each case's elapsed and processor time. Its costliest families, by the sum of their cases' elapsed seconds, were these:
 
 | Family | Architecture | Cases | Elapsed s | Processor s |
 | --- | --- | ---: | ---: | ---: |
@@ -70,15 +70,15 @@ Neither run used the width it was given. The collection kept 4.9 processors busy
 
 Its longest cases were `machine.gnu.autotools`, 1661 s on i686 and 1348 s on x86_64, and `host.host.etude`, 969 s. The Ubuntu run's per-case record is its history stream on the testing PC, named in #1314.
 
-## The recommendation
+## The fastest run
 
-Of the runs made, Windows 11 on the testing PC, under WHPX, ran the collection fastest: 5432 s, against 8815 s for Ubuntu in WSL and 9547 s for the Mac. The comparison is not the plan's: the Windows run had 20 workers against 8, and one case fewer. Most of the difference is in the collection, 3065 s against 7559 s, where a guest under WHPX runs on the processor and one under TCG is translated; Ubuntu's collection kept only 4.9 of its 16 guest processors busy, so more workers would not close that gap.
+Of the runs made, Windows 11 on the testing PC, under WHPX, ran the collection fastest: 5432 s, against 8815 s for Ubuntu in WSL and 9547 s for the Mac. The comparison is not the plan's: the Windows run had 20 workers against 8, and one case fewer. Most of the difference is in the collection, 3065 s against 7559 s, where a guest under WHPX runs on the processor and one under TCG is translated; Ubuntu's collection kept only 4.9 processors busy on average with its 8 workers, so more workers would not close that gap.
 
-The selected site stays Ubuntu in WSL for now. ci, its runners and the native results of #684 are installed there, and moving them to Windows is a change of the test machine that the owner decides. A run of Windows at Ubuntu's width, 8 workers, would make the comparison the plan asks for.
+A run of Windows at Ubuntu's width, 8 workers, would make the comparison the plan asks for. The owner chooses the machine for routine testing.
 
-## The proposed site profile
+## The profile of the Ubuntu run
 
-The profile is what the selected run used:
+The Ubuntu run, the one made under the testing PC's installed site policy, used:
 
 * Machine: the testing PC, Ubuntu 26.04.1 LTS in WSL2.
 * Accelerator: TCG.
