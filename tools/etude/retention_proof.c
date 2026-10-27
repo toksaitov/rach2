@@ -20,7 +20,34 @@ static int retained_hash(const char *hash)
     return hash && strlen(hash) == 64 && strspn(hash, "0123456789abcdef") == 64;
 }
 
-static struct json *ret_resolve(const struct json *ref)
+/**
+ * The copy of a foreign proof that a bundle keeps as `routine-proofs/SHA` in
+ * the directory of `from`, the document that refers to it, or in one above
+ * it, when the copy has the digest `hash` and `size` bytes; NULL otherwise.
+ */
+static struct json *ret_kept_copy(const char *from, const char *hash, int64_t size)
+{
+    char *dir = from ? ret_format("%s", from) : NULL, *slash;
+    struct json *actual = NULL;
+    while (dir && !actual && ((slash = strrchr(dir, '/')) || (slash = strrchr(dir, '\\')))) {
+        *slash = 0;
+        char *candidate = ret_format("%s/routine-proofs/%s", dir, hash);
+        struct stat st;
+        if (candidate && !stat(candidate, &st) && S_ISREG(st.st_mode)) {
+            actual = ret_descriptor(candidate);
+            if (actual && (ret_number(actual, "size_bytes") != size ||
+                           strcmp(json_text(actual, "sha256"), hash))) {
+                json_free(actual);
+                actual = NULL;
+            }
+        }
+        free(candidate);
+    }
+    free(dir);
+    return actual;
+}
+
+static struct json *ret_resolve(const struct json *ref, const char *from)
 {
     const char *hash = json_text(ref, "sha256");
     const struct json *locations = json_member(ref, "locations");
@@ -41,23 +68,26 @@ static struct json *ret_resolve(const struct json *ref)
             return actual;
         json_free(actual);
     }
+    struct json *kept = ret_kept_copy(from, hash, size);
+    if (kept)
+        return kept;
     ret_fail("no retained blob location satisfies its digest");
     return NULL;
 }
 
-static int ret_references(const struct json *value, struct json *pending)
+static int ret_references(const struct json *value, struct json *pending, const char *from)
 {
     if (!value)
         return -1;
     if (value->type == JSON_OBJECT && json_member(value, "sha256") &&
         json_member(value, "size_bytes") && json_member(value, "locations")) {
-        struct json *actual = ret_resolve(value);
+        struct json *actual = ret_resolve(value, from);
         if (!actual || ret_push(pending, actual))
             return -1;
     }
     if (value->type == JSON_OBJECT || value->type == JSON_ARRAY)
         for (size_t i = 0; i < value->count; i++)
-            if (ret_references(value->item[i], pending))
+            if (ret_references(value->item[i], pending, from))
                 return -1;
     return 0;
 }
@@ -75,7 +105,7 @@ static int ret_proof_lines(const char *path, struct json *pending)
         struct json *value = NULL;
         if (!size || line[size - 1] != '\n' ||
             json_parse_data(line, (size_t)size, 1, &value, error, sizeof error) ||
-            ret_references(value, pending))
+            ret_references(value, pending, path))
             rc = -1;
         json_free(value);
         if (rc)
@@ -110,7 +140,7 @@ static int ret_proof_document(const char *path, struct json *pending)
     /* A store blob is named by its digest, so a stream there has no suffix. */
     if (!document)
         return ret_proof_lines(path, pending);
-    rc = ret_references(document, pending);
+    rc = ret_references(document, pending, path);
     json_free(document);
     return rc;
 }

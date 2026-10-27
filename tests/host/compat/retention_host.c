@@ -346,6 +346,20 @@ static void retention_closures(void)
     proofs = ret_closure(roots);
     RET_CHECK(!proofs);
     json_free(proofs);
+    char *kept = ret_format("%s/routine-proofs", retention_base),
+         *copy = ret_format("%s/%s", kept, json_text(ref, "sha256"));
+    RET_CHECK(!mkdir(kept, 0700));
+    retention_put(copy, "changed");
+    proofs = ret_closure(roots);
+    RET_CHECK(!proofs);
+    json_free(proofs);
+    retention_put(copy, "trace");
+    proofs = ret_closure(roots);
+    RET_CHECK(proofs && proofs->count == 2);
+    json_free(proofs);
+    RET_CHECK(!unlink(copy) && !rmdir(kept));
+    free(kept);
+    free(copy);
     free(leaf);
     free(nested);
     json_free(ref);
