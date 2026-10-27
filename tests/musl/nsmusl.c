@@ -226,14 +226,15 @@ static int child_failed(int ok, int status, int row)
 static int in_child(int (*fn)(void), int row)
 {
     pid_t pid;
-    int status;
+    int ok, status;
 
     fflush(stdout);
     pid = fork();
     if (pid == 0) {
         _exit(fn() ? failed_status() : 0);
     }
-    return child_failed(waitpid(pid, &status, 0) == pid, status, row);
+    ok = waitpid(pid, &status, 0) == pid;
+    return child_failed(ok, status, row);
 }
 
 /** Report each row: held before the failed one, failed, or not run after. */
@@ -589,7 +590,7 @@ static int pid_ns(void)
 {
     pid_t self = getpid(), first;
     char want[32], who[16], c = 'x';
-    int go[2], status, rc = 0;
+    int go[2], ok, status, rc = 0;
 
     if (unshare(CLONE_NEWPID) != 0 || getpid() != self || pipe(go) != 0) {
         return fail(R_PID_KEEP, "unshare of a pid namespace keeps the caller's pid");
@@ -607,7 +608,8 @@ static int pid_ns(void)
         rc = fail(R_PID_BOTH, "its parent's status file shows both numbers");
     }
     write(go[1], &c, 1);
-    if (child_failed(waitpid(first, &status, 0) == first, status, R_PID_ONE)) {
+    ok = waitpid(first, &status, 0) == first;
+    if (child_failed(ok, status, R_PID_ONE)) {
         rc = 1;
     }
     return rc;
@@ -642,7 +644,7 @@ static int mnt(void)
 {
     int up[2], down[2];
     pid_t pid;
-    int fd, status, rc = 0;
+    int fd, ok, status, rc = 0;
     char c = 'x';
     struct stat st;
 
@@ -673,7 +675,8 @@ static int mnt(void)
     }
     close(up[0]);
     close(down[1]);
-    if (child_failed(waitpid(pid, &status, 0) == pid, status, R_MNT)) {
+    ok = waitpid(pid, &status, 0) == pid;
+    if (child_failed(ok, status, R_MNT)) {
         rc = 1;
     }
     return rc;

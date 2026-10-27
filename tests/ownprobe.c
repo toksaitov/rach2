@@ -413,7 +413,7 @@ PROBE_SP_ENTRY;
  */
 void probe_main(unsigned long *sp)
 {
-    int i, pid, status = 0;
+    int i, pid, got, status = 0;
 
     probe_args((int)sp[0], (char **)(sp + 1));
     report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.ownprobe"));
@@ -429,7 +429,8 @@ void probe_main(unsigned long *sp)
     if (pid == 0) {
         child_main();
     }
-    child_verdict(syscall3(SYS_WAITPID, pid, (long)&status, 0), pid, status);
+    got = syscall3(SYS_WAITPID, pid, (long)&status, 0);
+    child_verdict(got, pid, status);
 
     /* The saved-uid case: 1000 in the parent's saved slot. */
     if (syscall3(SYS_SETRESUID, 0, 0, ID(1000)) != 0) {
