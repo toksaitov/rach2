@@ -3837,8 +3837,8 @@ static const struct row suspend_rows[] = {
     {"suspend-bound", "tick", "stall:fixture after:fixture",
      "suspend-bounded answers stopped shutdown", NULL, 0, LOSS_US, 0, 1, 0, 0, "stall",
      STALL_BOUND_US, NULL, 0},
-    {"suspend-kill", "tick", "stall:fixture", "suspend-stopped", NULL, 0, STALL_STEP_US, -1, 0, 0,
-     0, NULL, 0, NULL, SIGKILL},
+    {"suspend-kill", "tick", "stall:fixture", "suspend-stopped", NULL, 0, LONG_STOP_US, -1, 0, 0, 0,
+     NULL, 0, NULL, SIGKILL},
 };
 
 /* What stops or kills a suspension row during its first stop. */
@@ -3922,8 +3922,9 @@ static void test_suspend(const struct site *s)
             CloseHandle(processes[i]);
         }
     }
-    CHECK(count >= 2 && machines >= 1 && ended_count == count && killed_scenario,
-          "suspend-kill: the scenario was killed and every stopped QEMU ended");
+    CHECK(count >= 2 && machines >= 1, "suspend-kill: the census found the scenario and its QEMU");
+    CHECK(ended_count == count, "suspend-kill: every process of the scenario ended");
+    CHECK(killed_scenario, "suspend-kill: the scenario ended by the kill, not by itself");
 #else
     fix_format(ended, sizeof(ended), "%s/suspend-kill.ended", fix_dir());
     CHECK(file_has(ended, "fake: terminated"), "suspend-kill: the stopped QEMU took its SIGTERM");
