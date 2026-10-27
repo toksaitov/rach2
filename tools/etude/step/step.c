@@ -1672,12 +1672,13 @@ struct sweep {
     struct lines live; /* the keys kept: named, recent, or used by one kept */
     struct doomed *v;  /* the entries that may go */
     size_t n, cap;
-    time_t before; /* an entry used after this time stays */
+    time_t before; /* an entry used at or after this time stays */
     int entries;   /* the entries the store had */
 };
 
 /** Read the store's entries/ into `w`: each entry not in `w->live` that no
- * step has used since `w->before` is a candidate, and the rest are kept. */
+ * step has used at or after `w->before` is a candidate, and the rest are
+ * kept. */
 static int find_doomed(const struct step *s, struct sweep *w)
 {
     char dir[PATH_LEN];
@@ -1697,7 +1698,7 @@ static int find_doomed(const struct step *s, struct sweep *w)
         w->entries++;
         if (has_key(&w->live, e->d_name) || (used = entry_used(s, e->d_name)) == (time_t)-1)
             continue;
-        if (used > w->before) {
+        if (used >= w->before) {
             rc = keep_key(&w->live, e->d_name);
             continue;
         }
@@ -1740,7 +1741,7 @@ static int lock_doomed(const struct step *s, struct sweep *w)
             d->used = st.st_mtime;
         if (d->fd == -1)
             rc = 1;
-        if (d->fd < 0 || d->used > w->before)
+        if (d->fd < 0 || d->used >= w->before)
             keep_key(&w->live, d->key);
     }
     return rc;
@@ -1752,8 +1753,9 @@ static int lock_doomed(const struct step *s, struct sweep *w)
  * that are gone; the lock files of keys with no entry; and what tmp/ has kept
  * for a day. An entry that stays keeps each entry it uses, since a link-mode
  * entry has links to them. Each entry that may go is locked, without
- * waiting, and its date read again before any is removed, so that a step that
- * takes or builds one meanwhile keeps it and what it uses. With -p, list the
+ * waiting, and its date and the stamps read again before any is removed, so
+ * that a step that takes or builds one meanwhile, and records its stamp
+ * before it lets the lock go, keeps it and what it uses. With -p, list the
  * entries that would go and remove nothing. The exit status: 0, or 1 when
  * something cannot be read or removed.
  */
@@ -1762,7 +1764,7 @@ static int expire(struct step *s)
     struct sweep w;
     size_t i;
     double freed = 0;
-    int dropped = 0, removed = 0, rc;
+    int dropped = 0, again = 0, removed = 0, unread = 0, rc;
 
     memset(&w, 0, sizeof(w));
     w.before = time(NULL) - atol(s->days) * 86400L;
@@ -1774,14 +1776,22 @@ static int expire(struct step *s)
         return 1;
     }
     rc = lock_doomed(s, &w);
+    if (read_stamps(s, &w.live, &again) != 0) {
+        say(s, "cannot read %s: %s", s->shelf, strerror(errno));
+        unread = rc = 1;
+    }
+    if (!s->print)
+        dropped += again;
     add_uses(s, &w.live);
     for (i = 0; i < w.n; i++) {
         if (w.v[i].fd < 0)
             continue;
-        if (!has_key(&w.live, w.v[i].key) && drop_entry(s, &w.v[i], &freed) != 0)
-            rc = 1;
-        else if (!has_key(&w.live, w.v[i].key))
-            removed++;
+        if (!unread && !has_key(&w.live, w.v[i].key)) {
+            if (drop_entry(s, &w.v[i], &freed) == 0)
+                removed++;
+            else
+                rc = 1;
+        }
         close(w.v[i].fd);
     }
     if (!s->print) {
