@@ -2117,3 +2117,7 @@ Windows collection preparation on `7626314e7` compiled mandoc, then passed `D:/d
 ## The Windows C runtime changed a fingerprint line ending (#1309)
 
 The native style reader on `27d66a65a` used `puts` for its source fingerprint while stdout remained in text mode. The Windows C runtime changed its LF to CRLF. Preparation requires exactly 64 lowercase hex digits and LF, so it rejected the 66-byte result before running the manual check. The fingerprint branch now sets stdout to binary mode; the parser still requires the original 65-byte contract. The testing skill requires native byte checks for this runtime boundary.
+
+## A native checker received POSIX absolute filenames (#1312)
+
+The Windows source checks passed by hand with ordinary MSYS argument conversion, but collection preparation disables that conversion. A cold check under both inherited conversion controls passed the manual and failed sizes because native sizecheck could not read `/d/diadochi/681-windows/tools/verify/sizes.reasons`. The sizes case now converts its reasons and complexity-table filenames explicitly and keeps each as one argument. Check native preparation under the parent's actual environment; a standalone check with different path conversion does not establish that boundary.

@@ -708,18 +708,25 @@ case_sparse() {
 case_sizes() {
     built within-limits "$SIZECHECK" || return 0
     _files=$(inhouse_ch | grep '\.c$' | sort)
+    _reasons="$REPO/tools/verify/sizes.reasons"
+    _table="$VDIR/verify_pmccabe.txt"
+    case $(uname -s) in
+        MINGW*|MSYS*|UCRT*|CLANG*)
+            _reasons=$(cygpath -m "$_reasons") || return 1
+            _table=$(cygpath -m "$_table") || return 1 ;;
+    esac
+    set --
     if command -v pmccabe >/dev/null 2>&1; then
         branch complexity judged
         # shellcheck disable=SC2086
         pmccabe $_files >"$VDIR/verify_pmccabe.txt" 2>/dev/null
-        _table="--pmccabe $VDIR/verify_pmccabe.txt"
+        set -- --pmccabe "$_table"
     else
         branch complexity unjudged
         echo "style: sizes: complexity not judged; pmccabe is absent here, and the testing host judges"
-        _table=""
     fi
     # shellcheck disable=SC2086
-    check within-limits verify_sizes.log "$SIZECHECK" $_table "$REPO/tools/verify/sizes.reasons" $_files
+    check within-limits verify_sizes.log "$SIZECHECK" "$@" "$_reasons" $_files
 }
 
 # The links between the documents: a link to a file that a commit moved
