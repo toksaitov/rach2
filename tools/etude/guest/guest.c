@@ -131,6 +131,8 @@ struct receiving {
     uint64_t size;
     uint64_t got;
     int fd;
+    /* The temporary file, named by this process and the command, so that
+     * another etude-guest with the same command number never replaces it. */
     char part[PATH_CAP];
     struct sha256 digest;
 };
@@ -933,7 +935,7 @@ static int from_stage(const char *name, uint64_t size, const char *sha)
     struct stat st;
     int i;
 
-    if (store_path(to, sha) < 0 || path_of(part, "%s.stage", to) < 0)
+    if (store_path(to, sha) < 0 || path_of(part, "%s.stage-%ld", to, (long)self_pid) < 0)
         return -1;
     for (i = 0; i < opt.nstage; i++) {
         if (path_of(from, "%s/%s", opt.stage[i], name) < 0 || stat(from, &st) < 0 ||
@@ -1003,7 +1005,7 @@ static void do_put(const struct wire_frame *f, const char *text)
         recv_file.active = 1;
         return;
     }
-    if (path_of(recv_file.part, "%s/f/.part-%s", opt.state, cmd) < 0) {
+    if (path_of(recv_file.part, "%s/f/.part-%ld-%s", opt.state, (long)self_pid, cmd) < 0) {
         cmd_error(cmd, ETUDE_ERR_LIMIT);
         return;
     }
