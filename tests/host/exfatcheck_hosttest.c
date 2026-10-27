@@ -227,9 +227,10 @@ static void directory_rows(unsigned char *img, size_t bytes)
 
 /**
  * The rows of `--read` over the default volume: a contiguous, a nested and
- * an empty file; a component of 599, 600, 601 or 2048 bytes, which is not
- * found; zeros past the valid length; a fragmented file, with its tail
- * zeroed past the valid length in a partial last cluster, and with a chain
+ * an empty file; two names given in UTF-8, one outside Latin-1; a
+ * component of 599, 600, 601 or 2048 bytes, which is not found; zeros past
+ * the valid length; a fragmented file, with its tail zeroed past the valid
+ * length in a partial last cluster, and with a chain
  * shorter than its length, which fails; a file with no valid bytes; a valid
  * length past the length, which fails; and the rows of `directory_rows`.
  */
@@ -266,6 +267,8 @@ static void read_rows(void)
     read_row("hello.txt", (const unsigned char *)"hello exfat\n", 12, NULL, "read contiguous file");
     read_row("/dir/sub/leaf.txt", (const unsigned char *)"leaf\n", 5, NULL, "read nested file");
     read_row("empty", NULL, 0, NULL, "read empty file");
+    read_row("caf\xc3\xa9.txt", (const unsigned char *)"cafe\n", 5, NULL, "read Latin-1 name");
+    read_row("\xe1\xb8\x81.txt", (const unsigned char *)"ring\n", 5, NULL, "read non-Latin-1 name");
     for (i = 0; i < sizeof(path_lengths) / sizeof(path_lengths[0]); i++) {
         memset(path, 'a', path_lengths[i]);
         path[path_lengths[i]] = 0;

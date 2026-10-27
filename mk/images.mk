@@ -28,7 +28,8 @@ $(GRUBEMBED): tools/image/grubembed.c utils/grubslot.c utils/grubslot.h utils/bo
 $(STICKCHECK): tools/image/stickcheck.c rach2/sys/block/mbr.c rach2/sys/block/mbr.h
 	@mkdir -p $(dir $@)
 	$(HOST_LINK) -I rach2/sys -I rach2/sys/lib
-$(MKEXFATFIXTURE): tests/host/mkexfatfixture.c tests/host/exfat_upcase.inc tools/image/host_io.h
+$(MKEXFATFIXTURE): tests/host/mkexfatfixture.c tests/host/exfat_upcase.inc tools/image/host_io.h \
+                   tools/etude/include/etude/args.h
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
 

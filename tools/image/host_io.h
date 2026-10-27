@@ -1,4 +1,4 @@
-/* Wide byte positions and sparse image writes on each preparation host. */
+/* Wide byte positions, UTF-8 paths and sparse image writes on each host. */
 #ifndef RACH2_HOST_IMAGE_IO_H
 #define RACH2_HOST_IMAGE_IO_H
 #ifndef _FILE_OFFSET_BITS
@@ -17,6 +17,45 @@
 #include <windows.h>
 #include <winioctl.h>
 #endif
+
+#ifdef _WIN32
+/** Give the UTF-16 form of the UTF-8 string `text` from malloc, or NULL. */
+static inline wchar_t *host_image_wide(const char *text)
+{
+    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, NULL, 0);
+    wchar_t *wide = n > 0 ? malloc((size_t)n * sizeof *wide) : NULL;
+
+    if (wide != NULL &&
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, wide, n) != n) {
+        free(wide);
+        wide = NULL;
+    }
+    if (wide == NULL)
+        errno = EINVAL;
+    return wide;
+}
+#endif
+
+/**
+ * Open a stream on the UTF-8 path `path`, as fopen does; with `stream`, reopen
+ * that stream on it, as freopen does. Windows's narrow functions read a path
+ * in the legacy code page.
+ */
+static inline FILE *host_image_open(const char *path, const char *mode, FILE *stream)
+{
+#ifdef _WIN32
+    wchar_t *wpath = host_image_wide(path), *wmode = host_image_wide(mode);
+    FILE *file = NULL;
+
+    if (wpath != NULL && wmode != NULL)
+        file = stream != NULL ? _wfreopen(wpath, wmode, stream) : _wfopen(wpath, wmode);
+    free(wpath);
+    free(wmode);
+    return file;
+#else
+    return stream != NULL ? freopen(path, mode, stream) : fopen(path, mode);
+#endif
+}
 
 /** Seek without narrowing a Windows position through long or off_t. */
 static inline int host_image_seek(FILE *file, int64_t offset, int origin)

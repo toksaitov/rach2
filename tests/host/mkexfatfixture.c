@@ -29,6 +29,7 @@
 #ifdef _WIN32
 #include <fcntl.h>
 #endif
+#include "../../tools/etude/include/etude/args.h"
 
 #define SECTOR 512u
 
@@ -1172,7 +1173,7 @@ static int check_args(int argc, char **argv, struct vol *v, struct check_args *a
 /** Send exported file bytes unchanged to stdout or its named replacement. */
 static int read_output(const char *path)
 {
-    if (path && !freopen(path, "wb", stdout)) {
+    if (path && !host_image_open(path, "wb", stdout)) {
         fprintf(stderr, "mkexfatfixture: cannot write %s\n", path);
         return 2;
     }
@@ -1212,7 +1213,7 @@ static int check_main(int argc, char **argv)
         return 2;
     image = a.image;
     offset = a.offset;
-    f = fopen(image, "rb");
+    f = host_image_open(image, "rb", NULL);
     if (!f) {
         fprintf(stderr, "mkexfatfixture: cannot open %s\n", image);
         return 2;
@@ -1719,7 +1720,7 @@ static FILE *volume_input(const char *add, char *name, size_t capacity, uint64_t
         fprintf(stderr, "mkexfatfixture: %s: a name here is at most 200 characters\n", name);
         return NULL;
     }
-    in = fopen(eq + 1, "rb");
+    in = host_image_open(eq + 1, "rb", NULL);
     if (!in) {
         fprintf(stderr, "mkexfatfixture: cannot open %s\n", eq + 1);
         return NULL;
@@ -1903,7 +1904,7 @@ static int build_volume(const char *out, uint64_t sectors, uint64_t offset, char
     if (rc != 0) {
         return rc;
     }
-    f = fopen(out, "wb");
+    f = host_image_open(out, "wb", NULL);
     if (!f || fwrite(b.img, 1, (size_t)b.sectors * b_bps(&b), f) != (size_t)b.sectors * b_bps(&b)) {
         fprintf(stderr, "mkexfatfixture: cannot write %s\n", out);
         return 2;
@@ -2395,7 +2396,7 @@ finish:
     }
     boot_write(&b, 0);
     boot_write(&b, 12);
-    f = fopen(out, "wb");
+    f = host_image_open(out, "wb", NULL);
     if (!f || fwrite(b.img, 1, (size_t)b.sectors * b_bps(&b), f) != (size_t)b.sectors * b_bps(&b)) {
         fprintf(stderr, "mkexfatfixture: cannot write %s\n", out);
         return 2;
@@ -2416,6 +2417,7 @@ int main(int argc, char **argv)
 {
     int i;
 
+    etude_utf8_args(argc, argv, "mkexfatfixture");
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--check") == 0)
             return check_main(argc, argv);
