@@ -736,7 +736,8 @@ int np_output_path(const struct np_context *c, const char *given, char out[4096]
         strstr(out, "/../") || has_suffix(out, "/.") || has_suffix(out, "/..") ||
         has_suffix(out, "/"))
         return refuse_output();
-    snprintf(build, sizeof(build), "%s/build", c->tree);
+    if (snprintf(build, sizeof(build), "%s/build", c->tree) >= (int)sizeof(build))
+        return refuse_output();
     strcpy(prefix, out);
     while (lstat(prefix, &st) != 0) {
         if (errno != ENOENT)
