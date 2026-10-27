@@ -85,6 +85,8 @@ static int source_file(const char *name)
     return 0;
 }
 
+/** Report whether the file at `path`, named `name`, is a script with no
+ * extension: no dot in its name and `#!` at its start. */
 static int shell_script(const char *path, const char *name)
 {
     char magic[2];
