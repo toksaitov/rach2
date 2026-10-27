@@ -2097,3 +2097,7 @@ At 04:36 on 27 October the coordinating session stopped the Codex loop's session
 ## A measured run built the GNU layer under emulation (#1289)
 
 The routine's preparation sets `RACH2_QEMU_ACCEL` to the test machines' accelerator, which is `tcg` on the Mac, since its guests are x86. `vendor/gnu/tooling_image.sh` took that variable for its arm64 tooling machine, which Apple's hypervisor can run, so the Mac's measured run of #680 built the GNU layer under TCG, while the preparation run by hand an hour earlier had used hvf. The coordinating session found the console line fifteen minutes in and stopped the run, whose preparation cost would have misstated the Mac's in the selection of #683; f947059f1 applies the rule that the style case already followed. Before a measured run is kept, read the accelerator that each of its machines reports against the one the site can use.
+
+## A POSIX launcher callback stopped the Windows build (#1294)
+
+The native Windows check of the child-status and companion-cache repairs stopped while compiling launch_make.c. Its first callback was defined on every platform but used only by the POSIX branch of launch_find, so the ordinary warning-as-error build failed. The callback now has the same platform guard as its caller. The Windows lookup and the build flags stay unchanged. Platform-specific helpers must be compiled under the conditions that compile their callers.

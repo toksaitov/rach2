@@ -160,6 +160,7 @@ static int each_on_path(const char *name, const char *fallback,
     }
 }
 
+#ifndef _WIN32
 /** Copy the first program found into the `struct launch_path` of `data`. */
 static int first(const char *dir, const char *path, void *data)
 {
@@ -170,6 +171,7 @@ static int first(const char *dir, const char *path, void *data)
     strcpy(out->text, path);
     return 0;
 }
+#endif
 
 int launch_find(const char *name, char *out, size_t size)
 {
