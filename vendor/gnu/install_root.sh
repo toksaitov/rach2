@@ -342,6 +342,9 @@ printf 'Etc/UTC\n' > "$TREE/etc/timezone"
 # reads, which it looks in after the project's own pages.
 sh "$DIR/render_man.sh" "$TREE/usr/share/man"
 
+# Screen's private session sockets need no set-id privilege.
+chmod 0755 "$TREE/usr/bin/screen"
+
 # ssh-keysign is set-id root so that host-based authentication can read the
 # host keys. The system uses no host-based authentication, and a set-id file
 # the manifest does not declare fails the set-id guard, so it has no bit.

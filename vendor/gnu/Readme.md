@@ -104,7 +104,7 @@ A port installs into `stage/NAME`. There the target's `strip --strip-debug` runs
 * The ports' manual pages of sections 1, 5, 7 and 8, rendered by [`render_man.sh`](render_man.sh) with the host's mandoc to `/usr/share/man/gnu/catN`. A page dated `$Mdocdate$` alone is refused, so that two builds render alike.
 * A locked `/etc/shadow` line for each account of `/etc/passwd` that has none, and `/etc/ld.so.cache`, written by the root's static `ldconfig` from the staged `/etc/ld.so.conf`.
 
-It also removes the set-id bit of `ssh-keysign`, since the system uses no host-based authentication.
+It also removes the set-id bits of screen, whose sessions use private sockets, and `ssh-keysign`, since the system uses no host-based authentication.
 
 ## Building
 
