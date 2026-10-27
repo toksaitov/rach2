@@ -12,8 +12,6 @@
 # that Windows's TEMP, since a Windows program cannot write a WSL account's
 # home. ETUDE_WIN_CC names the compiler; by default it is
 # x86_64-w64-mingw32-gcc where that is on the path, then MSYS2's UCRT64 gcc.
-# In WSL a compiler that is a Windows program runs through a wrapper that gives
-# it, and it alone, the Windows PATH and GCC_EXEC_PREFIX it needs.
 # The sources are copied to the build directory, in the layout of the tree,
 # and compiled there; the directory is removed on every exit.
 # A machine with no Windows fails the check.
@@ -48,10 +46,6 @@ MINGW* | MSYS* | UCRT* | CLANG*)
     ;;
 esac
 
-# The import check and, in WSL, the compiler's wrapper are made where the shell
-# runs.
-pe=$(mktemp -d "${TMPDIR:-/tmp}/etude-pecheck.XXXXXX")
-
 cc=${ETUDE_WIN_CC:-}
 if [ -z "$cc" ]; then
     if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
@@ -69,35 +63,9 @@ case $cc in
 */*) PATH=$(dirname "$cc"):$PATH ;;
 esac
 
-# wslwrap: in WSL, replace $cc by a wrapper when it is a Windows program. WSL
-# gives a Windows program only the variables that WSLENV names, so MSYS2's gcc
-# started from WSL finds no DLLs for cc1 on the Windows PATH, and derives its
-# prefix from the working directory. Exporting either here would break the
-# host's cc, which builds the import check.
-wslwrap() {
-    case $(uname -s) in
-    MINGW* | MSYS* | UCRT* | CLANG*) return ;;
-    esac
-    exe=$(command -v "$cc") || return 0
-    case $exe in
-    *.exe | *.EXE) ;;
-    *) return ;;
-    esac
-    bin=$(CDPATH='' cd -- "$(dirname -- "$exe")" && pwd)
-    prefix=$(wslpath -m "$(dirname -- "$bin")/lib/gcc")/
-    sys=$(dirname -- "$cmd")
-    {
-        echo '#!/bin/sh'
-        echo "PATH='$bin':'$sys' GCC_EXEC_PREFIX='$prefix' WSLENV=GCC_EXEC_PREFIX/w:PATH/l \\"
-        echo "    exec '$exe' \"\$@\""
-    } >"$pe/cc"
-    chmod +x "$pe/cc"
-    cc=$pe/cc
-}
-wslwrap
-
-# The import check is built by the host's compiler, or by MinGW's in MSYS2,
-# where the host has none.
+# The import check runs where the shell runs, built by the host's compiler,
+# or by MinGW's in MSYS2, where the host has none.
+pe=$(mktemp -d "${TMPDIR:-/tmp}/etude-pecheck.XXXXXX")
 if command -v cc >/dev/null 2>&1; then
     cc -std=c99 -O2 -o "$pe/pecheck" "$src/win/pecheck.c"
     pecheck=$pe/pecheck
@@ -160,16 +128,12 @@ compile() {
 
 flags='-std=c99 -O2 -D_WIN32_WINNT=0x0A00 -static'
 
-# fixtures DIR LOG [NAME...]: run the fixtures built in DIR, writing LOG. In
-# WSL, WSLENV passes the QEMU fixture's variables to Windows.
+# fixtures DIR LOG [NAME...]: run the fixtures built in DIR, writing LOG.
 fixtures() {
     dir=$1
     log=$2
     shift 2
-    (
-        cd "$dir/tools/etude/win"
-        WSLENV=${WSLENV:+$WSLENV:}ETUDE_WIN_QEMU:ETUDE_WIN_ACCEL ./winfixture.exe "$@"
-    ) </dev/null >"$log" 2>&1
+    (cd "$dir/tools/etude/win" && ./winfixture.exe "$@") </dev/null >"$log" 2>&1
 }
 
 # Build the sources, require the programs' imports to be clean, and run the

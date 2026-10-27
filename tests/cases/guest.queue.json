@@ -44,8 +44,8 @@
       "execution": {"program": "ahciprobe", "stdin": null, "role": "ordinary", "privileges": "root, which writes the root directory", "isolation": [{"fixture": "disk", "names": ["queue-root"]}], "children": "reaped", "cleanup": "blockprobe removes its files and is reaped; the disk is the attempt's private copy"},
       "assertions": [
         {"assertion_id": "counter", "checks": "/proc/disk has the count disk-drains", "source": "program"},
-        {"assertion_id": "raw-reads", "checks": "every read of /dev/disk0p2 in chunks of 32 KiB while blockprobe runs succeeds", "source": "program"},
-        {"assertion_id": "blockprobe", "checks": "blockprobe, run on the root beside the raw reads, exits normally with status 0", "source": "program"},
+        {"assertion_id": "raw-reads", "checks": "every read of /dev/disk0p2 in chunks of 1 MiB while blockprobe runs succeeds", "source": "program"},
+        {"assertion_id": "blockprobe", "checks": "blockprobe, run on the root beside the raw reads up to three times until disk-drains has risen, exits normally with status 0 each time", "source": "program"},
         {"assertion_id": "drained", "checks": "disk-drains has risen: a fault's polled command found a raw read active on the port and finished it first", "source": "program"}
       ],
       "branches": [],

@@ -14,6 +14,8 @@
 #define FIRST_BYTES  (1024 * 1024)
 #define SECOND_BYTES (256 * 1024)
 #define CHUNK        (32 * 1024)
+#define FAULT_CHUNK  (1024 * 1024)
+#define FAULT_RUNS   3
 #define WNOHANG      1
 #define SIGKILL      9
 
@@ -244,21 +246,30 @@ static long disk_drains(void)
  * disk's second partition beside it until the child exits. The child must
  * pass, and `disk-drains` must have risen: a page fault's polled command
  * found a raw read active on the port and finished it first, the meeting of
- * the fault path and the queue that the row is for. How many raw reads ran
- * beside the child depends on the speeds of the two, and is printed, not
- * judged.
+ * the fault path and the queue that the row is for.
+ *
+ * A raw read's completion switches to this process at once while blockprobe
+ * runs in user mode, so blockprobe computes there while a raw read is in
+ * flight. A meeting needs that read to be still active when blockprobe's
+ * next call reaches its first polled command, as at the first fault of a
+ * write to a new file; a run has a few dozen such calls, and whether the read
+ * outlasts the call's start depends on the host's speed. Reads of a
+ * mebibyte, the most that devfs gives one command, keep each read active
+ * longest. blockprobe runs again, up to FAULT_RUNS times, until the count has
+ * risen, though a later run finds most of its pages cached and faults less.
+ * How many raw reads and runs that took is printed, not judged.
  *
  * Its assertions are `counter`, /proc/disk's `disk-drains`; `raw-reads`,
- * every raw read beside the child; `blockprobe`, the child's exit with
- * status 0; and `drained`, the count risen. blockprobe's output goes to
- * standard error, so that its report records are not taken for this one's.
+ * every raw read beside the runs; `blockprobe`, each run's exit with status
+ * 0; and `drained`, the count risen. blockprobe's output goes to standard
+ * error, so that its report records are not taken for this one's.
  */
 static void fault_row(void)
 {
-    static char buf[CHUNK];
+    static char buf[FAULT_CHUNK];
     static const char *const argv[] = {"/blockprobe", 0};
     static const char *const envp[] = {0};
-    int child, status = -1, fd, reads = 0;
+    int child, runs, waited, status = 0, fd, reads = 0;
     long before, after;
 
     report_plan("counter");
@@ -271,34 +282,43 @@ static void fault_row(void)
         fail("/proc/disk has no disk-drains");
     }
     report_held();
-    child = syscall1(SYS_FORK, 0);
-    if (child < 0) {
-        fail("fork");
-    }
-    if (child == 0) {
-        syscall2(SYS_DUP2, 2, 1);
-        syscall3(SYS_EXECVE, (long)"/blockprobe", (long)argv, (long)envp);
-        syscall2(SYS_EXIT, 4, 0);
-    }
-    children[0] = child;
     fd = syscall3(SYS_OPEN, (long)"/dev/disk0p2", O_RDONLY, 0);
     if (fd < 0) {
         fail("/dev/disk0p2");
     }
-    while (syscall3(SYS_WAITPID, child, (long)&status, 1) == 0) {
-        int n = syscall3(SYS_READ, fd, (long)buf, CHUNK);
-
-        if (n < 0) {
-            fail("a raw read beside the faults");
+    after = before;
+    for (runs = 0; status == 0 && runs < FAULT_RUNS && after <= before; runs++) {
+        child = syscall1(SYS_FORK, 0);
+        if (child < 0) {
+            fail("fork");
         }
-        if (n == 0) {
+        if (child == 0) {
             syscall2(SYS_CLOSE, fd, 0);
-            fd = syscall3(SYS_OPEN, (long)"/dev/disk0p2", O_RDONLY, 0);
-            if (fd < 0) {
-                fail("/dev/disk0p2 again");
-            }
+            syscall2(SYS_DUP2, 2, 1);
+            syscall3(SYS_EXECVE, (long)"/blockprobe", (long)argv, (long)envp);
+            syscall2(SYS_EXIT, 4, 0);
         }
-        reads++;
+        children[0] = child;
+        while ((waited = syscall3(SYS_WAITPID, child, (long)&status, WNOHANG)) == 0) {
+            int n = syscall3(SYS_READ, fd, (long)buf, FAULT_CHUNK);
+
+            if (n < 0) {
+                fail("a raw read beside the faults");
+            }
+            if (n == 0) {
+                syscall2(SYS_CLOSE, fd, 0);
+                fd = syscall3(SYS_OPEN, (long)"/dev/disk0p2", O_RDONLY, 0);
+                if (fd < 0) {
+                    fail("/dev/disk0p2 again");
+                }
+            }
+            reads++;
+        }
+        children[0] = 0;
+        if (waited != child) {
+            status = -1;
+        }
+        after = disk_drains();
     }
     syscall2(SYS_CLOSE, fd, 0);
     report_held();
@@ -306,7 +326,9 @@ static void fault_row(void)
         fail("blockprobe on the root beside the queue");
     }
     report_held();
-    after = disk_drains();
+    puts("AHCIPROBE READ runs of blockprobe:");
+    putnum(runs);
+    puts("");
     puts("AHCIPROBE READ raw reads beside the faults:");
     putnum(reads);
     puts("");
