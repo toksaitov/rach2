@@ -2101,3 +2101,7 @@ The routine's preparation sets `RACH2_QEMU_ACCEL` to the test machines' accelera
 ## A POSIX launcher callback stopped the Windows build (#1294)
 
 The native Windows check of the child-status and companion-cache repairs stopped while compiling launch_make.c. Its first callback was defined on every platform but used only by the POSIX branch of launch_find, so the ordinary warning-as-error build failed. The callback now has the same platform guard as its caller. The Windows lookup and the build flags stay unchanged. Platform-specific helpers must be compiled under the conditions that compile their callers.
+
+## Unused guest paths stopped native fixture selections (#1295)
+
+The native child-status check compiled, but every controller exited 121 before running its cases. Its environment restore required three unused guest paths that the parent exported as empty. Windows removes an environment variable when _putenv_s sets an empty value. The fixture now restores an absent optional guest path as empty for a row without guests; guest rows still require all three paths. Required controller locations stay required. Environment transfers must distinguish optional empty values from missing required fields on every supported host.

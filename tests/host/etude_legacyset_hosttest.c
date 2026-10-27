@@ -1293,30 +1293,36 @@ static int save_run(const char *path, const struct run *r)
     return bad ? -1 : 0;
 }
 
-/** Restore or export only the controller's fixture locations. */
-static int fixture_environment(int restore)
+/** Restore or export the fixture locations; guest rows require guest paths.
+ * Windows removes variables with empty values, so unused guest paths may be
+ * absent when a controller restores its environment. */
+static int fixture_environment(int restore, int guest)
 {
     struct entry {
         const char *name;
         char *text;
         size_t size;
+        int optional;
     };
-    struct entry entries[] = {{"LEGACY_SELF", self, sizeof(self)},
-                              {"LEGACY_ETUDE", etude, sizeof(etude)},
-                              {"LEGACY_TREE", tree, sizeof(tree)},
-                              {"LEGACY_SCHEMAS", schemas, sizeof(schemas)},
-                              {"LEGACY_LEDGER", ledger, sizeof(ledger)},
-                              {"LEGACY_LOCKS", locks, sizeof(locks)},
-                              {"LEGACY_GUEST_BUILD", guest_build, sizeof(guest_build)},
-                              {"LEGACY_GUEST_EVIDENCE", guest_evidence, sizeof(guest_evidence)},
-                              {"LEGACY_GUEST_BIN", guest_bin, sizeof(guest_bin)},
-                              {"LEGACY_REAL_PATH", real_path, sizeof(real_path)}};
+    struct entry entries[] = {{"LEGACY_SELF", self, sizeof(self), 0},
+                              {"LEGACY_ETUDE", etude, sizeof(etude), 0},
+                              {"LEGACY_TREE", tree, sizeof(tree), 0},
+                              {"LEGACY_SCHEMAS", schemas, sizeof(schemas), 0},
+                              {"LEGACY_LEDGER", ledger, sizeof(ledger), 0},
+                              {"LEGACY_LOCKS", locks, sizeof(locks), 0},
+                              {"LEGACY_GUEST_BUILD", guest_build, sizeof(guest_build), 1},
+                              {"LEGACY_GUEST_EVIDENCE", guest_evidence, sizeof(guest_evidence), 1},
+                              {"LEGACY_GUEST_BIN", guest_bin, sizeof(guest_bin), 1},
+                              {"LEGACY_REAL_PATH", real_path, sizeof(real_path), 0}};
     size_t i;
     for (i = 0; i < sizeof(entries) / sizeof(entries[0]); i++) {
         struct entry *e = &entries[i];
         const char *value = getenv(e->name);
         if (restore) {
-            if (!value || snprintf(e->text, e->size, "%s", value) >= (int)e->size)
+            if (!value && e->optional && !guest)
+                value = "";
+            if (!value || (guest && e->optional && !*value) ||
+                snprintf(e->text, e->size, "%s", value) >= (int)e->size)
                 return -1;
         } else if (setenv(e->name, e->text, 1) != 0)
             return -1;
@@ -1347,7 +1353,7 @@ static int driver_role(const char *path)
     }
     i = fread(&d, sizeof(d), 1, f);
     fclose(f);
-    if (i != 1 || d.magic != 0x65747564 || d.n > 32 || fixture_environment(1) != 0)
+    if (i != 1 || d.magic != 0x65747564 || d.n > 32 || fixture_environment(1, d.guest) != 0)
         return 121;
     r.n = d.n;
     r.width = d.width;
@@ -3226,7 +3232,7 @@ int main(int argc, char **argv)
     unsetenv("RACH2_OVMF_CODE");
     unsetenv("FIXTURE_BREAK");
     make_tree();
-    if (fixture_environment(0) != 0)
+    if (fixture_environment(0, 0) != 0)
         return 1;
     if (argc == 2 && (role = early_selection(argv[1])) >= 0)
         return role;
