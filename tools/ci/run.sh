@@ -3,9 +3,9 @@
 # core selects style, host and core; full selects all suites, including bigmem.
 # SUITES may select ARCH:SUITE operands for a full rerun. One history and store
 # describe the whole collection; strict C verdicts project architecture results.
-# The native entry is selected; it requires an installed immutable ETUDE, a
-# version-two site, a measured reference and a retention policy. The lines
-# and history entries remain for old-commit bisection fixtures.
+# Native entry requires an installed immutable ETUDE and version-two site.
+# The lines entry remains active until native activation; history supports
+# old-commit bisection fixtures.
 set -u
 
 
@@ -31,9 +31,10 @@ if [ "$kind" = full ]; then
     RACH2_STORE=
     export RACH2_STORE
 fi
-# The selected site's native entry; missing native configuration never
-# selects a fallback.
-results=native
+# Keep the existing entry until selected-site activation supplies the native
+# policy, measured reference and retention root. Activation changes this one
+# value to native; missing native configuration never selects a fallback.
+results=lines
 if [ "$results" = native ]; then
     program=${ETUDE:-}
     if [ -z "$program" ]; then
