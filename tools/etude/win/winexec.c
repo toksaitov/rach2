@@ -450,6 +450,24 @@ static struct etude_win_pipe *find_pipe(struct etude_win_sup *s, ULONG_PTR key)
 }
 
 /**
+ * The monotonic time at which the process H, which has exited, exited. The
+ * exit time is on the wall clock, so it is carried back from the present; a
+ * process whose exit time cannot be read is taken to have exited now.
+ */
+static uint64_t exit_mono_us(HANDLE h)
+{
+    FILETIME ft[4];
+    uint64_t mono = etude_win_mono_us();
+    int64_t wall = etude_win_utc_us();
+
+    if (!GetProcessTimes(h, &ft[0], &ft[1], &ft[2], &ft[3]))
+        return mono;
+    return etude_win_wall_mono_us(
+        etude_win_filetime_unix_us((uint64_t)ft[1].dwHighDateTime << 32 | ft[1].dwLowDateTime),
+        mono, wall);
+}
+
+/**
  * Ask C's process and job for their state, and mark C ended when its first
  * process has exited, its job is empty and its pipes are at their end.
  *
@@ -463,6 +481,7 @@ static int refresh(struct etude_win_child *c)
         return 0;
     if (!c->main_ended && WaitForSingleObject(c->process, 0) == WAIT_OBJECT_0) {
         GetExitCodeProcess(c->process, &c->status);
+        c->ended_us = exit_mono_us(c->process);
         c->main_ended = 1;
     }
     if (!c->main_ended || !c->out.eof || !c->err.eof)

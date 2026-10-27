@@ -57,4 +57,12 @@ uint64_t etude_win_ticks_us(uint64_t ticks, uint64_t freq);
  */
 int64_t etude_win_filetime_unix_us(uint64_t filetime);
 
+/**
+ * Carry WALL_US, a past time of the wall clock, onto the monotonic clock,
+ * given NOW_MONO_US and NOW_WALL_US, the two clocks read together; all are in
+ * microseconds. A time not before NOW_WALL_US gives NOW_MONO_US, and one
+ * further back than NOW_MONO_US gives 0.
+ */
+uint64_t etude_win_wall_mono_us(int64_t wall_us, uint64_t now_mono_us, int64_t now_wall_us);
+
 #endif

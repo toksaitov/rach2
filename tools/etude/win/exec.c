@@ -301,7 +301,7 @@ static void proc_settle(struct etude_proc *p)
     struct etude_win_child *c = p->child;
 
     if (c->main_ended && p->r.ended_us == 0) {
-        p->r.ended_us = etude_win_mono_us();
+        p->r.ended_us = c->ended_us > p->r.started_us ? c->ended_us : p->r.started_us;
         p->r.exit_end = ETUDE_END_EXITED;
         p->r.exit_value = (int)c->status;
         etude_win_stop(c);

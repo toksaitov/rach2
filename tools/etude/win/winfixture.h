@@ -50,6 +50,12 @@ int fx_exec_sample(void);
 /** Waits of no time serve an attempt until it finishes, with its output. */
 int fx_exec_poll(void);
 
+/**
+ * A case that exits while its caller is away ends at the time it exited, not
+ * when the caller next waits.
+ */
+int fx_exec_late(void);
+
 /** Complete output files preserve bytes, truncate and close shared streams. */
 int fx_exec_sinks(void);
 

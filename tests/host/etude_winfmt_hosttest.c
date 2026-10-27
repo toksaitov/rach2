@@ -233,6 +233,14 @@ static void test_time(void)
         fail("FILETIME", "2022-06-18");
     if (etude_win_filetime_unix_us(ETUDE_WIN_EPOCH_SECONDS * 10000000u - 10u) != -1)
         fail("FILETIME", "a microsecond before 1970");
+    if (etude_win_wall_mono_us(1700000000000000ll, 5000000u, 1700000003000000ll) != 2000000u)
+        fail("wall to monotonic", "three seconds back");
+    if (etude_win_wall_mono_us(1700000003000001ll, 5000000u, 1700000003000000ll) != 5000000u)
+        fail("wall to monotonic", "a time after now");
+    if (etude_win_wall_mono_us(1700000000000000ll, 2000000u, 1700000003000000ll) != 0u)
+        fail("wall to monotonic", "a time before the monotonic clock began");
+    if (etude_win_wall_mono_us(-1000000ll, 5000000u, 1000000ll) != 3000000u)
+        fail("wall to monotonic", "a time before 1970");
 }
 
 int main(void)

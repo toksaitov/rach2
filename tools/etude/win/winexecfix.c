@@ -29,7 +29,7 @@ struct seen {
 };
 
 /* The registrations, one for each attempt started. */
-static struct seen seen[ATTEMPTS + 3];
+static struct seen seen[ATTEMPTS + 4];
 static int nseen;
 
 /** The registration: record what it saw, and refuse the attempt `refuse`. */
@@ -321,6 +321,46 @@ int fx_exec_poll(void)
                    (unsigned long)etude_proc_result(p)->out.kept);
     else if (strcmp(etude_proc_result(p)->out.data, "arg 0 polled\nargs 1\n") != 0)
         r = failed("the attempt gave other output: %s", etude_proc_result(p)->out.data);
+    etude_exec_free(ex);
+    return r;
+}
+
+int fx_exec_late(void)
+{
+    char *argv[] = {target, "exit", "0", NULL};
+    struct etude_exec_spec spec;
+    const struct etude_exec_result *res;
+    struct etude_proc *p = NULL;
+    struct etude_proc *done = NULL;
+    struct etude_exec *ex;
+    ULONGLONG t0 = GetTickCount64();
+    uint64_t back;
+    int r = 0;
+
+    ex = etude_exec_new();
+    CHECK(ex != NULL, "no executor");
+    spec_of(&spec, "late", argv);
+    if (etude_exec_start(ex, &spec, &p) != 0) {
+        r = failed("start: %s", strerror(errno));
+        etude_exec_free(ex);
+        return r;
+    }
+    res = etude_proc_result(p);
+    while (!gone(&res->process) && GetTickCount64() - t0 < BOUND)
+        Sleep(10);
+    Sleep(1000);
+    back = etude_win_mono_us();
+    while (done != p && GetTickCount64() - t0 < BOUND)
+        done = etude_exec_wait(ex, 1000);
+    if (done != p)
+        r = failed("the attempt did not finish");
+    else if (res->exit_end != ETUDE_END_EXITED || res->exit_value != 0)
+        r = failed("the attempt ended %d with %d", (int)res->exit_end, res->exit_value);
+    else if (res->ended_us < res->started_us || res->ended_us + 500000u > back)
+        r = failed("the end at %llu us is not between the start at %llu us and %llu us, half a "
+                   "second before the caller came back",
+                   (unsigned long long)res->ended_us, (unsigned long long)res->started_us,
+                   (unsigned long long)(back - 500000u));
     etude_exec_free(ex);
     return r;
 }

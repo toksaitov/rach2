@@ -1146,6 +1146,7 @@ static const struct {
     {"exec-unrun", fx_exec_unrun},
     {"exec-sample", fx_exec_sample},
     {"exec-poll", fx_exec_poll},
+    {"exec-late", fx_exec_late},
     {"exec-sinks", fx_exec_sinks},
     {"collection-files", fx_collection_files},
     {"collection-qemu", fx_collection_qemu},

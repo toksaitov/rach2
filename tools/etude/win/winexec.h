@@ -87,7 +87,8 @@ struct etude_win_pipe {
 
 /*
  * One child and its job. A caller reads `ident`, `job`, `process`, `ended`,
- * `main_ended`, `status` and `stopped`; the other members are the adapter's.
+ * `main_ended`, `status`, `ended_us` and `stopped`; the other members are the
+ * adapter's.
  */
 struct etude_win_child {
     struct etude_win_sup *sup;
@@ -95,10 +96,11 @@ struct etude_win_child {
     struct etude_win_ident ident;
     HANDLE job;
     HANDLE process;
-    int main_ended; /* the first process has exited, with `status` */
+    int main_ended; /* the first process has exited, with `status`, */
     DWORD status;
-    int stopped; /* etude_win_stop ended the job, or the registration failed */
-    int ended;   /* the job is empty and both pipes are at their end */
+    uint64_t ended_us; /* at this monotonic time, read from its exit time */
+    int stopped;       /* etude_win_stop ended the job, or the registration failed */
+    int ended;         /* the job is empty and both pipes are at their end */
     struct etude_win_pipe out;
     struct etude_win_pipe err;
     etude_win_output_fn *output;

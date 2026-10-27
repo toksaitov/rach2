@@ -144,3 +144,13 @@ int64_t etude_win_filetime_unix_us(uint64_t filetime)
 {
     return (int64_t)(filetime / 10u) - (int64_t)(ETUDE_WIN_EPOCH_SECONDS * 1000000u);
 }
+
+uint64_t etude_win_wall_mono_us(int64_t wall_us, uint64_t now_mono_us, int64_t now_wall_us)
+{
+    uint64_t back;
+
+    if (wall_us >= now_wall_us)
+        return now_mono_us;
+    back = (uint64_t)now_wall_us - (uint64_t)wall_us;
+    return back < now_mono_us ? now_mono_us - back : 0;
+}
