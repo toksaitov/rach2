@@ -1,4 +1,5 @@
-/* POSIX cache mutex permissions, serialization and kernel owner cleanup. */
+/* POSIX cache mutex permissions, serialization, kernel owner cleanup and the
+ * retirement of obsolete machines. */
 #define _POSIX_C_SOURCE 200809L
 #ifdef __APPLE__
 #define _DARWIN_C_SOURCE
@@ -18,6 +19,32 @@ static char cache[4096], mutex[4096];
 static pid_t child;
 static volatile sig_atomic_t stopped;
 static const char key[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+/* The made machine, the recipe's machine of the other architecture, and a
+ * machine of an obsolete recipe. */
+static const char made[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+static const char other[] = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+static const char old[] = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+
+/* Give CACHE/PREFIX K SUFFIX, or "" when it is too long. */
+static char *in_cache(char path[4096], const char *prefix, const char *k, const char *suffix)
+{
+    int n = snprintf(path, 4096, "%s/%s%s%s", cache, prefix, k, suffix);
+    if (n < 0 || n >= 4096)
+        path[0] = '\0';
+    return path;
+}
+
+static void remove_machines(void)
+{
+    const char *const keys[] = {made, other, old};
+    char path[4096];
+    for (size_t i = 0; i < 3; i++) {
+        unlink(in_cache(path, "tooling-", keys[i], ".qcow2"));
+        unlink(in_cache(path, "tooling-", keys[i], ".tools"));
+        unlink(in_cache(path, ".tooling-", keys[i], ".lock"));
+    }
+    unlink(in_cache(path, ".tooling-cache", "", ".lock"));
+}
 
 static void cleanup(void)
 {
@@ -26,6 +53,7 @@ static void cleanup(void)
         waitpid(child, NULL, 0);
         child = 0;
     }
+    remove_machines();
     unlink(mutex);
     rmdir(cache);
 }
@@ -140,6 +168,42 @@ static int owner_loss(struct etude_tooling_site *site)
     return ok;
 }
 
+/* Write a completed machine of key K; 0 on success. */
+static int machine(const char *k)
+{
+    static const char *const text[] = {"overlay\n", "etude-tooling: provision: ok\n"};
+    static const char *const suffix[] = {".qcow2", ".tools"};
+    char path[4096];
+    for (size_t i = 0; i < 2; i++) {
+        FILE *f = fopen(in_cache(path, "tooling-", k, suffix[i]), "w");
+        if (!f)
+            return -1;
+        int bad = fputs(text[i], f) == EOF;
+        if (fclose(f) || bad || chmod(path, 0444))
+            return -1;
+    }
+    return 0;
+}
+
+static int present(const char *k)
+{
+    char path[4096];
+    return !access(in_cache(path, "tooling-", k, ".qcow2"), F_OK) &&
+           !access(in_cache(path, "tooling-", k, ".tools"), F_OK);
+}
+
+/* Pruning keeps every machine it is told to and retires the obsolete one. */
+static int retired(struct etude_tooling_site *site)
+{
+    const char *const keep[] = {made, other, NULL};
+    if (machine(made) || machine(other) || machine(old))
+        return 0;
+    tooling_cache_prune(site, keep);
+    int ok = present(made) && present(other) && !present(old);
+    remove_machines();
+    return ok;
+}
+
 int etude_test_tooling_cache(const char *tmp)
 {
     struct etude_tooling_site site = {0};
@@ -165,7 +229,7 @@ int etude_test_tooling_cache(const char *tmp)
     ok = !lstat(mutex, &st) && S_ISREG(st.st_mode) && st.st_nlink == 1 &&
          (st.st_mode & 0777) == 0660;
     tooling_cache_leave(guard);
-    ok &= serialized(&site, 0) && serialized(&site, 1) && owner_loss(&site);
+    ok &= retired(&site) && serialized(&site, 0) && serialized(&site, 1) && owner_loss(&site);
     cleanup();
     return ok ? 0 : 1;
 }

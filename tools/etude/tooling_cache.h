@@ -10,5 +10,7 @@ int tooling_cache_prepare_enter(const struct etude_tooling_site *site, const cha
                                 intptr_t *guard);
 int tooling_cache_enter(const struct etude_tooling_site *site, intptr_t *guard);
 void tooling_cache_leave(intptr_t guard);
-void tooling_cache_prune(const struct etude_tooling_site *site, const char *current);
+/* Remove completed machines that no key of `keep` names, once keep[0], the
+ * machine just made or reused, is complete; `keep` ends with NULL. */
+void tooling_cache_prune(const struct etude_tooling_site *site, const char *const *keep);
 #endif

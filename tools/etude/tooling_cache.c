@@ -342,8 +342,16 @@ static int pinned(const struct catalog *c, const char *key)
     return 0;
 }
 
+static int kept(const char *const *keep, const char *key)
+{
+    for (; *keep != NULL; keep++)
+        if (!strcmp(*keep, key))
+            return 1;
+    return 0;
+}
+
 /** Keep downloads, incomplete files, active jobs and retained evidence. */
-void tooling_cache_prune(const struct etude_tooling_site *site, const char *current)
+void tooling_cache_prune(const struct etude_tooling_site *site, const char *const *keep)
 {
     struct catalog *c = calloc(1, sizeof(*c));
     intptr_t guard;
@@ -354,14 +362,14 @@ void tooling_cache_prune(const struct etude_tooling_site *site, const char *curr
         free(c);
         return;
     }
-    snprintf(name, sizeof(name), "tooling-%s.qcow2", current);
+    snprintf(name, sizeof(name), "tooling-%s.qcow2", keep[0]);
     int paths = path_of(disk, site->cache, name);
-    snprintf(name, sizeof(name), "tooling-%s.tools", current);
+    snprintf(name, sizeof(name), "tooling-%s.tools", keep[0]);
     paths &= path_of(tools, site->cache, name);
     if (paths && completed(disk, tools) && scan(site->cache, c) && !c->uncertain)
         for (size_t n = 0; n < c->nmachines; n++) {
             const char *key = c->machines[n];
-            if (!strcmp(key, current) || pinned(c, key))
+            if (kept(keep, key) || pinned(c, key))
                 continue;
             snprintf(name, sizeof(name), "tooling-%s.qcow2", key);
             if (!path_of(disk, site->cache, name))

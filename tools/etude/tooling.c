@@ -1107,6 +1107,31 @@ static int prepare_publish(struct work *w, int late, struct etude_tooling_result
     return publish_files(w, res);
 }
 
+/**
+ * Retire the machines of other recipes, keeping `made` and the recipe's
+ * machine of each architecture, since one host may use both: a Mac builds the
+ * GNU layer in the arm64 machine and judges source checks in the amd64 one.
+ */
+static void prune(const struct etude_tooling_site *site, const char *made)
+{
+    static const char *const arches[] = {"amd64", "arm64"};
+    struct etude_tooling_machine m[2];
+    const char *keep[4];
+    char why[256];
+    size_t i, n = 0;
+
+    keep[n++] = made;
+    for (i = 0; i < 2; i++) {
+        struct etude_tooling_site other = *site;
+
+        other.arch = arches[i];
+        if (etude_tooling_machine(&other, &m[i], why, sizeof(why)) == 0)
+            keep[n++] = m[i].key;
+    }
+    keep[n] = NULL;
+    tooling_cache_prune(site, keep);
+}
+
 static int prepare_once(const struct etude_tooling_site *site, unsigned cpus, uint64_t deadline_us,
                         struct etude_tooling_result *res)
 {
@@ -1124,7 +1149,7 @@ static int prepare_once(const struct etude_tooling_site *site, unsigned cpus, ui
     if (exists(w.m.disk)) {
         res->outcome = ETUDE_TOOLING_ENDED;
         res->reused = 1;
-        tooling_cache_prune(site, w.m.key);
+        prune(site, w.m.key);
         return 0;
     }
     if (make_dirs(site->cache) != 0)
@@ -1159,7 +1184,7 @@ static int prepare_once(const struct etude_tooling_site *site, unsigned cpus, ui
         step_end(&w.b, &now, 0, 0, res->outcome == ETUDE_TOOLING_ENDED);
     res->cost.steps[0].cpu_us = from_exec(&res->cost.cpu_us, 0);
     if (res->outcome == ETUDE_TOOLING_ENDED && res->cost.cleanup == ETUDE_CLEANUP_CONFIRMED)
-        tooling_cache_prune(site, w.m.key);
+        prune(site, w.m.key);
     return res->outcome == ETUDE_TOOLING_ENDED ? 0 : -1;
 }
 
