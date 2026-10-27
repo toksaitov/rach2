@@ -703,6 +703,18 @@ static void check_accepted(char *out, size_t size)
     CHECK(verdict && !strncmp(verdict, "verdict: within_noise", 21),
           "a new baseline takes the slow runs since the accepted one");
     has(out, "6 samples, median 110.000000 s", "the new baseline has the six slow runs");
+    CHECK(compare(out, size,
+                  "-n -b @store -o @accepted2 -i cmp-2 slow7 " HISTORY
+                  " @slow @accepted @slow2 @slow3 @slow4 @slow5 @slow6 @slow7") == 0,
+          "a new baseline of the slow runs is recorded");
+    CHECK(compare(out, size,
+                  "slow3 " HISTORY
+                  " @slow @accepted @accepted2 @slow2 @slow3 @slow4 @slow5 @slow6 @slow7") == 0,
+          "an earlier run is compared again");
+    verdict = strstr(out, "verdict: ");
+    CHECK(verdict && !strncmp(verdict, "verdict: regression", 19),
+          "a later baseline that has the candidate's run is not used");
+    has(out, "accepted by comparison cmp-1/0", "the baseline that precedes the candidate is used");
 }
 
 /** Damaged streams are noted, and the others still compared. */

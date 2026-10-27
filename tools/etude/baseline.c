@@ -79,18 +79,37 @@ static int decided(const struct cmp_record *c, const char *subject)
 }
 
 /**
+ * Return whether every sample a comparison accepted is of another run than
+ * the candidates' and placed before `start`, when the candidates start.
+ */
+static int precedes(const struct cmp_history *h, const struct cmp_record *c,
+                    const struct cmp_sample *reference, const char *start)
+{
+    const struct eh_json *id = eh_json_get(eh_json_get(c->data, "baseline"), "samples")->child;
+    for (; id; id = id->next) {
+        const struct cmp_record *a = cmp_find(h, id->string);
+        if (a && (!strcmp(a->run, reference->attempt->run) ||
+                  (a->sample && strcmp(placed(a->sample), start) > 0)))
+            return 0;
+    }
+    return 1;
+}
+
+/**
  * Find the newest comparison whose accepted baseline is of the candidate's
- * series, and the newest whose baseline has the candidate's whole key.
+ * series, and the newest whose baseline has the candidate's whole key, of
+ * those whose baseline precedes the candidates' `start`.
  */
 static void find_accepted(const struct cmp_history *h, const struct cmp_sample *reference,
-                          const struct cmp_record **series, const struct cmp_record **match)
+                          const char *start, const struct cmp_record **series,
+                          const struct cmp_record **match)
 {
     size_t i;
     *series = *match = NULL;
     for (i = h->comparison_count; i-- > 0;) {
         const struct cmp_record *c = h->comparisons[i], *first;
         const struct eh_json *samples;
-        if (!decided(c, reference->key.value[0]))
+        if (!decided(c, reference->key.value[0]) || !precedes(h, c, reference, start))
             continue;
         samples = eh_json_get(eh_json_get(c->data, "baseline"), "samples");
         first = cmp_find(h, samples->child->string);
@@ -311,7 +330,8 @@ static int finish(struct cmp_result *r)
  * their series: the same case, architecture, domain, machine and accelerator.
  *
  * The baseline is the one the newest earlier comparison of the candidate's
- * whole key accepted, unless options->new_baseline asks for a new one. A new
+ * whole key accepted, of those whose samples are of other runs and precede
+ * the candidates, unless options->new_baseline asks for a new one. A new
  * baseline has the eligible samples of that key since the newest sample of
  * the series' last accepted baseline, or since the start of the history. The
  * verdict is not_comparable when no candidate is eligible, or when no sample
@@ -325,7 +345,7 @@ int cmp_compare(const struct cmp_history *h, const struct cmp_options *options,
     const struct cmp_record *series, *match;
     struct cmp_sample *reference;
     size_t first = 0, room = 0;
-    char after[CMP_UTC] = "";
+    char after[CMP_UTC] = "", start[CMP_UTC];
     memset(r, 0, sizeof(*r));
     r->candidates = candidates;
     r->candidate_count = count;
@@ -345,7 +365,8 @@ int cmp_compare(const struct cmp_history *h, const struct cmp_options *options,
                  r->excluded[0].reason);
         return 0;
     }
-    find_accepted(h, reference, &series, &match);
+    candidate_start(r, start);
+    find_accepted(h, reference, start, &series, &match);
     if (!match || options->new_baseline || !use_accepted(h, match, reference, r, room)) {
         size_t used = strlen(r->origin);
         if (series)
