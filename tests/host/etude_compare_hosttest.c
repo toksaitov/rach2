@@ -43,7 +43,7 @@ static const char reproduce_doc[] =
 /* One run of the synthetic history: its case, timing and faults. */
 struct spec {
     const char *run, *commit, *architecture, *accelerator, *workload, *case_id, *outcome;
-    int hour, items, disrupted, no_run_record, retry;
+    int hour, items, disrupted, no_run_record, retry, duplicate;
     uint64_t boot_us, execute_us;
     const char *reproduce;
     int unknown_load;
@@ -253,13 +253,13 @@ static void write_run(struct etude_history *h, const struct spec *r, const char 
     static char data[65536];
     char items[16384], time[1200], res[600], ok[400], b[200], m[200], id[300], load[1800];
     size_t used = 0;
-    int i;
+    int i, second = r->retry || r->duplicate;
     for (i = 0; i < r->items; i++)
         used += (size_t)snprintf(items + used, sizeof(items) - used,
                                  "%s{\"item_id\":\"%s-i%d\",\"attempt_records\":[\"%s\"%s%s%s],"
                                  "\"outcome\":\"%s\"}",
-                                 i ? "," : "", r->run, i, attempts[2 * i], r->retry ? ",\"" : "",
-                                 r->retry ? attempts[2 * i + 1] : "", r->retry ? "\"" : "",
+                                 i ? "," : "", r->run, i, attempts[2 * i], second ? ",\"" : "",
+                                 second ? attempts[2 * i + 1] : "", second ? "\"" : "",
                                  r->outcome ? r->outcome : "pass");
     interval(time, sizeof(time), r, 0, end);
     resources(res, sizeof(res), end / 2);
@@ -308,8 +308,8 @@ static void write_spec(const struct spec *given)
         p.plan_id = plan_id;
         p.item = i;
         at = write_attempt(&p, 0, at, attempts[2 * i]);
-        if (r.retry)
-            at = write_attempt(&p, 1, at, attempts[2 * i + 1]);
+        if (r.retry || r.duplicate)
+            at = write_attempt(&p, r.retry, at, attempts[2 * i + 1]);
     }
     if (!r.no_run_record)
         write_run(h, &r, plan_id, attempts, at);
@@ -788,6 +788,33 @@ static void check_load_evidence(char *out, size_t size)
     has(out, "verdict: not_comparable", "a trace digest mismatch excludes the run");
 }
 
+/** Two records of one attempt are not two samples. */
+static void check_repeats(char *out, size_t size)
+{
+    struct spec r;
+    struct cmp_history h;
+    char *stream;
+    memset(&r, 0, sizeof r);
+    r.run = "twice";
+    r.hour = 13;
+    r.boot_us = 90 * SECOND;
+    r.execute_us = 10 * SECOND;
+    r.duplicate = 1;
+    write_spec(&r);
+    stream = (char *)path(r.run);
+    CHECK(cmp_load(&h, schema, &stream, 1) == 0 && h.sample_count == 2,
+          "two records of one attempt are read");
+    if (h.sample_count == 2)
+        CHECK(strstr(h.samples[0].reason, "has more than one record") &&
+                  strstr(h.samples[1].reason, "has more than one record") &&
+                  !h.samples[0].watchdog_eligible && !h.samples[1].watchdog_eligible,
+              "each record of a repeated attempt is left out");
+    cmp_free(&h);
+    CHECK(compare(out, size, "slow @b2 @b3 @b4 @twice @slow") == 0,
+          "a repeated attempt does not fail the comparison");
+    has(out, "verdict: insufficient_history", "a repeated attempt does not make five samples");
+}
+
 /** Check the statistics against the examples of the measurement record. */
 static void check_statistics(void)
 {
@@ -841,6 +868,7 @@ int main(void)
     check_accepted(out, sizeof(out));
     check_damage(out, sizeof(out));
     check_load_evidence(out, sizeof(out));
+    check_repeats(out, sizeof(out));
     if (failures)
         fprintf(stderr, "etude_compare_hosttest: %d checks failed\n", failures);
     else

@@ -354,8 +354,40 @@ static int index_kinds(struct cmp_history *h)
 
 static void sample_of(const struct cmp_history *h, const struct cmp_record *attempt,
                       struct cmp_sample *s);
+static void exclude(struct cmp_sample *s, const char *format, ...);
 
-/** Make a sample of each attempt, and list those with a case by case. */
+static int by_attempt(const void *a, const void *b)
+{
+    const struct cmp_sample *x = *(struct cmp_sample *const *)a;
+    const struct cmp_sample *y = *(struct cmp_sample *const *)b;
+    int order = strcmp(x->plan->id, y->plan->id);
+    return order ? order
+                 : strcmp(cmp_text(x->attempt->data, "attempt_id"),
+                          cmp_text(y->attempt->data, "attempt_id"));
+}
+
+/** Exclude every sample of an attempt that has more than one record. */
+static void exclude_repeats(struct cmp_history *h)
+{
+    size_t i;
+    qsort(h->by_case, h->cased, sizeof(*h->by_case), by_attempt);
+    for (i = 1; i < h->cased; i++) {
+        struct cmp_sample *a = h->by_case[i - 1], *b = h->by_case[i];
+        if (by_attempt(&h->by_case[i - 1], &h->by_case[i]))
+            continue;
+        exclude(a, "its attempt %s has more than one record",
+                cmp_text(a->attempt->data, "attempt_id"));
+        exclude(b, "its attempt %s has more than one record",
+                cmp_text(b->attempt->data, "attempt_id"));
+        a->watchdog_eligible = b->watchdog_eligible = 0;
+    }
+}
+
+/**
+ * Make a sample of each attempt, and list those with a case by case. The
+ * records of one attempt are excluded together, since they are not
+ * independent samples.
+ */
 static int index_samples(struct cmp_history *h)
 {
     size_t i, attempts = 0;
@@ -374,6 +406,7 @@ static int index_samples(struct cmp_history *h)
         if (r->sample->key.value[0])
             h->by_case[h->cased++] = r->sample;
     }
+    exclude_repeats(h);
     qsort(h->by_case, h->cased, sizeof(*h->by_case), by_case);
     return 0;
 }
