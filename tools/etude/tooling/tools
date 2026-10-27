@@ -45,6 +45,7 @@ mmd
 mcopy
 mtype
 xorriso
+qemu-img
 ssh-keygen
 i686-linux-gnu-gcc
 x86_64-linux-gnu-gcc
