@@ -694,6 +694,7 @@ static void test_expire_removal(void)
     char p[1200], buf[256], victim[1200];
     struct ran r;
     struct stat st;
+    int fd;
 
     fix_format(p, sizeof p, "%s/locks/%s", shelf, ports_e + strlen(shelf) + 9);
     run(copy_a, ex_list, &r);
@@ -710,8 +711,19 @@ static void test_expire_removal(void)
     unlink(fix_path("copy-b/e/demo.stamp"));
     put(fix_path("copy-a/e/demo.stamp"),
         "etude-step 1 1111111111111111111111111111111111111111111111111111111111111111 here\n");
+    fix_format(p, sizeof p, "%s/locks/%s", shelf, demo_e + strlen(shelf) + 9);
+    fd = open(p, O_RDWR);
+    CHECK(fd >= 0 && flock(fd, LOCK_EX) == 0, "expire: the test holds the lock of a stamp");
     run(copy_a, ex_go, &r);
-    CHECK(r.status == 0 && strstr(r.out, "result: removed 1 entries") != NULL && !exists(demo_e),
+    CHECK(r.status == 0 && strstr(r.out, "result: removed 0 entries") != NULL &&
+              recorded(shelf, demo_e + strlen(shelf) + 9) == 2,
+          "expire: the links of a key whose lock is held stay, since a step may be writing "
+          "its stamp");
+    if (fd >= 0)
+        close(fd);
+    run(copy_a, ex_go, &r);
+    CHECK(r.status == 0 && strstr(r.out, "result: removed 1 entries") != NULL && !exists(demo_e) &&
+              recorded(shelf, demo_e + strlen(shelf) + 9) == 0,
           "expire: a stamp that names another key no longer keeps the entry");
 
     fix_format(victim, sizeof victim, "%s/victim", fix_dir());

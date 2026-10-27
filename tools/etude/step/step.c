@@ -1503,10 +1503,44 @@ static int named_key(const char *path, char key[65])
 }
 
 /**
+ * Remove the link `link` of stamps/, named `name` for its key, whose stamp
+ * was gone or named another key, holding the key's lock without waiting and
+ * reading the stamp again under it. A step holds that lock while it writes
+ * its stamp and records it, and keeps a link already there, so the link
+ * stays while the lock is held. 1 when the link was removed; 2 when the
+ * stamp now names the key, or cannot be read, and the key stays; 0 when the
+ * link stays for a later run.
+ */
+static int drop_link(const struct step *s, const char *name, const char *link)
+{
+    char key[65], now[65], to[PATH_LEN];
+    ssize_t n;
+    int fd, made, got, rc = 0;
+
+    memcpy(key, name, 64);
+    key[64] = '\0';
+    if ((fd = lock_key(s, key, 0, &made)) < 0)
+        return 0;
+    if ((n = readlink(link, to, sizeof(to) - 1)) >= 0) {
+        to[n] = '\0';
+        got = named_key(to, now);
+        if ((got == 1 && strcmp(now, key) == 0) || (got < 0 && errno != ENOENT && errno != ENOTDIR))
+            rc = 2;
+        else if (unlink(link) == 0)
+            rc = 1;
+    }
+    if (made && path_fmt(to, "%s/locks/%s", s->shelf, key) == 0)
+        unlink(to);
+    close(fd);
+    return rc;
+}
+
+/**
  * Add to `live` the key of each link of the store's stamps/ whose stamp still
  * names it, and remove each link whose stamp is gone or names another key,
- * counting them in `dropped`. A stamp that cannot be read for another reason,
- * such as a home directory this account may not search, keeps its key.
+ * as drop_link does, counting them in `dropped`. A stamp that cannot be read
+ * for another reason, such as a home directory this account may not search,
+ * keeps its key.
  */
 static int read_stamps(const struct step *s, struct lines *live, int *dropped)
 {
@@ -1532,8 +1566,12 @@ static int read_stamps(const struct step *s, struct lines *live, int *dropped)
         if ((got == 1 && strncmp(key, e->d_name, 64) == 0) ||
             (got < 0 && errno != ENOENT && errno != ENOTDIR)) {
             rc = keep_key(live, e->d_name);
-        } else if (s->print || unlink(link) == 0) {
+        } else if (s->print) {
             (*dropped)++;
+        } else if ((got = drop_link(s, e->d_name, link)) == 1) {
+            (*dropped)++;
+        } else if (got == 2) {
+            rc = keep_key(live, e->d_name);
         }
     }
     closedir(d);
