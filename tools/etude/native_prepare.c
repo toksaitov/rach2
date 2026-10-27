@@ -5,6 +5,7 @@
  */
 #include <dirent.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -704,20 +705,51 @@ static void usage(void)
           stderr);
 }
 
-/* Give the output's absolute path, which must be below the tree's build
- * directory and have no `.` or `..` component. */
-static int output_path(const struct np_context *c, const char *given, char out[4096])
+/* Say that the output is refused; return -1. */
+static int refuse_output(void)
 {
+    fprintf(stderr, "etude prepare native: output must be below this tree's build directory\n");
+    return -1;
+}
+
+/**
+ * Give in `out` the absolute path of the output `given`, which must be below
+ * the tree's build directory and have no `.` or `..` component.
+ *
+ * The longest part of the path that exists must also resolve, through any
+ * symbolic links, to the build directory or below it, since preparation
+ * makes the rest and removes an earlier preparation at the path. Only a
+ * tree with no build directory yet may leave the tree itself as that part.
+ *
+ * @return 0, or -1 after a message.
+ */
+int np_output_path(const struct np_context *c, const char *given, char out[4096])
+{
+    char build[4096], prefix[4096], real_build[PATH_MAX], real[PATH_MAX];
+    struct stat st;
+
     if (snprintf(out, 4096, "%s%s%s", given[0] == '/' ? "" : c->tree, given[0] == '/' ? "" : "/",
                  given) >= 4096)
         return -1;
     size_t n = strlen(c->tree);
     if (strncmp(out, c->tree, n) || strncmp(out + n, "/build/", 7) || strstr(out, "/./") ||
         strstr(out, "/../") || has_suffix(out, "/.") || has_suffix(out, "/..") ||
-        has_suffix(out, "/")) {
-        fprintf(stderr, "etude prepare native: output must be below this tree's build directory\n");
-        return -1;
+        has_suffix(out, "/"))
+        return refuse_output();
+    snprintf(build, sizeof(build), "%s/build", c->tree);
+    strcpy(prefix, out);
+    while (lstat(prefix, &st) != 0) {
+        if (errno != ENOENT)
+            return refuse_output();
+        *strrchr(prefix, '/') = 0;
     }
+    if (strlen(prefix) < strlen(build))
+        return 0;
+    if (!realpath(build, real_build) || !realpath(prefix, real))
+        return refuse_output();
+    size_t b = strlen(real_build);
+    if (strncmp(real, real_build, b) || (real[b] != 0 && real[b] != '/'))
+        return refuse_output();
     return 0;
 }
 
@@ -884,7 +916,7 @@ int etude_native_prepare_main(int argc, char **argv, volatile sig_atomic_t *stop
     if (arguments(argc, argv, &c, given, &output))
         return 2;
     c.build = !strcmp(c.arch, "x86_64") ? "build/x86_64" : "build";
-    if (!getcwd(c.tree, sizeof(c.tree)) || output_path(&c, output, destination) ||
+    if (!getcwd(c.tree, sizeof(c.tree)) || np_output_path(&c, output, destination) ||
         choose_tools(&c, given))
         return 1;
     strcpy(parent, destination);

@@ -20,7 +20,8 @@
  * unchanged, and the padding must be one file of fewer than a block of
  * zeros, owned by root with mode 0444; a root made again must have the same
  * bytes. A manifest that names the padding's path, and one whose files leave
- * less free space than the root asks for, must be refused.
+ * less free space than the root asks for, must be refused. An output reached
+ * through a symbolic link out of the build directory must be refused.
  */
 #define main krffs_mkfs_main
 #include "../../krffs/mkfs.krffs.c"
@@ -259,6 +260,35 @@ static void check_refusals(struct np_context *c, const char *image, const char *
           "a root with too little free space is refused");
 }
 
+/* Check that an output reached through a symbolic link that leaves the build
+ * directory is refused, and one whose links stay inside it is accepted. */
+static void check_output(struct np_context *c)
+{
+    char path[4096], out[4096];
+
+    fix_format(path, sizeof(path), "%s/build", c->tree);
+    mkdir(path, 0777);
+    fix_format(path, sizeof(path), "%s/build/real", c->tree);
+    mkdir(path, 0777);
+    mkdir(fix_path("outside"), 0777);
+    mkdir(fix_path("outside/run"), 0777);
+    write_bytes(fix_path("outside/run/prepared.json"), 1);
+    fix_format(path, sizeof(path), "%s/build/link", c->tree);
+    CHECK(symlink(fix_path("outside"), path) == 0, "the outside link is made");
+    fix_format(path, sizeof(path), "%s/build/inside", c->tree);
+    CHECK(symlink("real", path) == 0, "the inside link is made");
+    CHECK(np_output_path(c, "build/link/run", out) != 0,
+          "an earlier output through a link out of the build directory is refused");
+    CHECK(np_output_path(c, "build/link/new/run", out) != 0,
+          "a new output through a link out of the build directory is refused");
+    CHECK(np_output_path(c, "build/inside/run", out) == 0,
+          "an output through a link inside the build directory is accepted");
+    CHECK(np_output_path(c, "build/fresh/run", out) == 0,
+          "an output below a new directory of the build directory is accepted");
+    CHECK(np_output_path(c, "build/../outside/run", out) != 0,
+          "an output with a `..` component is refused");
+}
+
 /* Run as stageimage.krffs, and keep a copy of a root its manifest made. */
 static int stager(int argc, char **argv)
 {
@@ -324,6 +354,7 @@ int main(int argc, char **argv)
 
     check_alignment(&c, fix_path("root.img"), fix_path("program"));
     check_refusals(&c, fix_path("root.img"), fix_path("program"));
+    check_output(&c);
     printf("etude-nativeprep-test: result: %d failures\n", failures);
     if (failures == 0)
         fix_passed();

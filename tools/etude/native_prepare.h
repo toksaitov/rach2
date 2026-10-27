@@ -44,6 +44,7 @@ struct np_case {
 };
 
 int etude_native_prepare_main(int argc, char **argv, volatile sig_atomic_t *stop);
+int np_output_path(const struct np_context *c, const char *given, char out[4096]);
 int np_run(struct np_context *c, char *const argv[], struct jbuf *output);
 int np_blank(const char *path, long mib);
 int np_krffs_free_tail(const char *path, int reject_padding, uint64_t *used, uint64_t *free_bytes);
