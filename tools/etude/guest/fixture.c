@@ -1179,7 +1179,8 @@ int fixture_cleanup(struct fixtures *fx, const char *dir)
  * passed by. Only the fixtures that need the kernel write the record, so
  * where FIX_KERNEL is 0 there is nothing to remove.
  *
- * @return 0, or -1 when something is left.
+ * @return 0, or -1 when something is left, or when the record exists and
+ * cannot be read, since the mounts it names are then unknown.
  */
 int fixture_settle(const char *dir)
 {
@@ -1190,8 +1191,10 @@ int fixture_settle(const char *dir)
     int n = 0, rc = 0, fd;
     ssize_t len;
 
-    if (fpath(path, "%s/fixtures%s", dir, "") < 0 || (fd = open(path, O_RDONLY | O_CLOEXEC)) < 0)
-        return detach_left(dir);
+    if (fpath(path, "%s/fixtures%s", dir, "") < 0)
+        return -1;
+    if ((fd = open(path, O_RDONLY | O_CLOEXEC)) < 0)
+        return errno == ENOENT ? detach_left(dir) : -1;
     len = read(fd, text, sizeof(text) - 1);
     close(fd);
     if (len < 0)
