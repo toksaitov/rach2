@@ -37,9 +37,10 @@
  * that reads the same attempt, with the same process, from the responder's
  * ledger; a cut while the program runs must give its cancellation, and a cut
  * followed by a new boot a lost end; a cut transfer must leave no partial file;
- * a deadline must cancel the run; and a hello of another version, a ready with
- * a version that was not offered, and frames of another format must refuse the
- * connection before anything runs.
+ * a deadline, and a stop asked for while the program runs, must cancel the
+ * run; and a hello of another version, a ready with a version that was not
+ * offered, and frames of another format must refuse the connection before
+ * anything runs.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -947,6 +948,7 @@ struct row {
     const char *code; /* the program's exit status, or `wait` */
     uint64_t deadline_us;
     void (*check)(const struct row *w);
+    int stops; /* a stop is asked for once output arrives */
 };
 
 /* What a row's run gave. */
@@ -954,6 +956,23 @@ static struct etude_remote_result res;
 static enum etude_remote_status st;
 static struct etude_remote *conn;
 static int runs;
+
+static volatile sig_atomic_t stop;
+
+static void stop_stream(void *context, int fd, const char *bytes, size_t length)
+{
+    (void)context;
+    (void)fd;
+    (void)bytes;
+    if (length)
+        stop = 1;
+}
+
+static int stop_expired(void *context)
+{
+    (void)context;
+    return stop;
+}
 
 /**
  * Open a connection through the relay, store the program and run it, setting
@@ -965,6 +984,8 @@ static void client_row(const struct row *w)
     static char marker[PATH_MAX], counter[PATH_MAX], journal[PATH_MAX], evid[PATH_MAX];
     static char *argv[10];
     static struct etude_remote_conf conf;
+    static struct etude_remote_observer observer = {NULL,        NULL, NULL,
+                                                    stop_stream, NULL, stop_expired};
     char attempt[96], why[256];
     const char *inv;
 
@@ -990,6 +1011,11 @@ static void client_row(const struct row *w)
     conf.max_frame = 512;
     conf.stage_us = STAGE_US;
     conf.reconnects = 3;
+    stop = 0;
+    if (w->stops) {
+        conf.observer = &observer;
+        conf.cancel_requested = &stop;
+    }
     memset(&res, 0, sizeof(res));
     conn = NULL;
     runs = 0;
@@ -1131,25 +1157,35 @@ static void check_deadline(const struct row *w)
           "a deadline cancels the run");
 }
 
+static void check_stop(const struct row *w)
+{
+    (void)w;
+    CHECK(st == ETUDE_REMOTE_OK && res.complete && res.cancelled && res.end == ETUDE_END_STOPPED &&
+              runs == 1,
+          "a stop asked for while the program runs cancels the run");
+    stop = 0;
+}
+
 static void test_client(void)
 {
     static const struct row rows[] = {
-        {"remote-pass", "none", "0", 0, check_pass},
-        {"remote-fail", "none", "3", 0, check_fail},
-        {"remote-dup-run", "dup-run", "0", 0, check_dup_run},
-        {"remote-conflict", "conflict", "0", 0, check_conflict},
-        {"remote-flip-data-once", "flip-data-once", "0", 0, check_flip_once},
-        {"remote-flip-data-all", "flip-data-all", "0", 0, check_flip_all},
-        {"remote-flip-out", "flip-out", "0", 0, check_flip_out},
-        {"remote-crc", "crc", "0", 0, check_lost_end},
-        {"remote-cut-exit", "cut-exit", "0", 0, check_lost_end},
-        {"remote-cut-running", "cut-running", "wait", 0, check_cut_running},
-        {"remote-reboot", "reboot", "wait", 0, check_reboot},
-        {"remote-hello-v2", "hello-v2", "0", 0, check_version},
-        {"remote-ready-v2", "ready-v2", "0", 0, check_version},
-        {"remote-magic", "magic", "0", 0, check_version},
-        {"remote-cut-put", "cut-put", "0", 0, check_cut_put},
-        {"remote-deadline", "none", "wait", 300000, check_deadline},
+        {"remote-pass", "none", "0", 0, check_pass, 0},
+        {"remote-fail", "none", "3", 0, check_fail, 0},
+        {"remote-dup-run", "dup-run", "0", 0, check_dup_run, 0},
+        {"remote-conflict", "conflict", "0", 0, check_conflict, 0},
+        {"remote-flip-data-once", "flip-data-once", "0", 0, check_flip_once, 0},
+        {"remote-flip-data-all", "flip-data-all", "0", 0, check_flip_all, 0},
+        {"remote-flip-out", "flip-out", "0", 0, check_flip_out, 0},
+        {"remote-crc", "crc", "0", 0, check_lost_end, 0},
+        {"remote-cut-exit", "cut-exit", "0", 0, check_lost_end, 0},
+        {"remote-cut-running", "cut-running", "wait", 0, check_cut_running, 0},
+        {"remote-reboot", "reboot", "wait", 0, check_reboot, 0},
+        {"remote-hello-v2", "hello-v2", "0", 0, check_version, 0},
+        {"remote-ready-v2", "ready-v2", "0", 0, check_version, 0},
+        {"remote-magic", "magic", "0", 0, check_version, 0},
+        {"remote-cut-put", "cut-put", "0", 0, check_cut_put, 0},
+        {"remote-deadline", "none", "wait", 300000, check_deadline, 0},
+        {"remote-stop", "none", "wait", 0, check_stop, 1},
     };
     size_t i;
 

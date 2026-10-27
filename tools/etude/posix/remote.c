@@ -61,6 +61,7 @@ struct etude_remote {
     FILE *transcript;
     int to, from;
     int connected, bounded_writes;
+    int cancelling;   /* a CANCEL is sent past the caller's cancellation */
     uint64_t seq_out; /* the SEQ of the next frame sent */
     int has_peer;     /* a frame of the responder's arrived */
     uint64_t seq_in;  /* the SEQ of the last one */
@@ -112,6 +113,12 @@ static int write_all(int fd, const char *p, size_t n)
     return 0;
 }
 
+/** Say whether the caller's cancellation stops a write other than a CANCEL. */
+static int cancel_asked(const struct etude_remote *r)
+{
+    return !r->cancelling && r->conf.cancel_requested && *r->conf.cancel_requested;
+}
+
 /** The observed deadline also bounds a pipe whose reader has stopped. */
 static uint64_t write_limit(struct etude_remote *r, uint64_t until)
 {
@@ -129,7 +136,7 @@ static int write_observed(struct etude_remote *r, const char *p, size_t n)
     while (n) {
         uint64_t limit = write_limit(r, until);
         now = posix_now_us();
-        if (now >= limit || (r->conf.cancel_requested && *r->conf.cancel_requested)) {
+        if (now >= limit || cancel_asked(r)) {
             errno = ETIMEDOUT;
             return -1;
         }
@@ -446,8 +453,7 @@ static int transport_write(struct etude_remote *r, const char *bytes, DWORD size
         }
         DWORD ready = WAIT_TIMEOUT;
         while (!rc && (ready = WaitForSingleObject(operation.hEvent, 0)) == WAIT_TIMEOUT) {
-            if (posix_now_us() >= write_limit(r, until) || r->transport_error ||
-                (r->conf.cancel_requested && *r->conf.cancel_requested) ||
+            if (posix_now_us() >= write_limit(r, until) || r->transport_error || cancel_asked(r) ||
                 etude_win_poll(&r->supervisor, 50) < 0)
                 rc = -1;
         }
@@ -467,8 +473,7 @@ static int write_observed(struct etude_remote *r, const char *bytes, size_t size
 {
     uint64_t until = posix_now_us() + r->conf.stage_us;
     while (size) {
-        if ((r->conf.cancel_requested && *r->conf.cancel_requested) ||
-            posix_now_us() >= write_limit(r, until))
+        if (cancel_asked(r) || posix_now_us() >= write_limit(r, until))
             return -1;
         DWORD written = 0, part = size > UINT32_MAX ? UINT32_MAX : (DWORD)size;
         if (transport_write(r, bytes, part, until, &written))
@@ -1430,7 +1435,9 @@ static enum etude_remote_status rejoin(struct etude_remote *r, struct etude_remo
 
 /**
  * Cancel the attempt, its caller's deadline having passed, and bring the
- * limit to the grace period and two stages from now.
+ * limit to the grace period and two stages from now. The CANCEL is written
+ * within a stage of its own, past the cancellation and the observer that
+ * asked for it.
  *
  * @return 0 when sent, 1 when the connection was lost, or -1 when the
  *         journal could not record the cancel.
@@ -1439,18 +1446,25 @@ static int send_cancel(struct etude_remote *r, struct collect *c, struct run_clo
 {
     char cmd[24];
     const char *a[2];
+    const struct etude_remote_observer *observer = r->conf.observer;
     uint64_t end;
+    int lost;
 
     a[0] = c->res->attempt;
     if (new_cmd(r, cmd, ETUDE_CMD_CANCEL, a, 1) != 0)
         return -1;
     a[0] = cmd;
     a[1] = c->res->attempt;
-    if (send_frame(r, ETUDE_CMD_CANCEL, a, 2) != 0)
+    r->conf.observer = NULL;
+    r->cancelling = 1;
+    lost = send_frame(r, ETUDE_CMD_CANCEL, a, 2) != 0;
+    r->cancelling = 0;
+    if (lost) {
+        r->conf.observer = observer;
         return 1;
+    }
     k->cancelled = 1;
     c->res->cancelled = 1;
-    r->conf.observer = NULL;
     end = posix_now_us() + k->grace + 2 * r->conf.stage_us;
     if (end < k->limit)
         k->limit = end;
