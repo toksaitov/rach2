@@ -446,13 +446,19 @@ static int admit(struct prep *p)
 
 /* ---- The work directory and the steps' environment. ---- */
 
-/** Say whether `var` is one of the inherited variables a step does not get. */
+/** Say whether `var` is one of the inherited variables a step does not get.
+ * Windows matches names without regard to case, so there an inherited `Path`
+ * is dropped as `PATH` is. */
 static int dropped(const char *var)
 {
     size_t i;
 
     for (i = 0; i < sizeof(dropped_env) / sizeof(dropped_env[0]); i++) {
+#ifdef _WIN32
+        if (_strnicmp(var, dropped_env[i], strlen(dropped_env[i])) == 0)
+#else
         if (strncmp(var, dropped_env[i], strlen(dropped_env[i])) == 0)
+#endif
             return 1;
     }
     return 0;

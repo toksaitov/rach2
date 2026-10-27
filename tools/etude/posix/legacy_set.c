@@ -1504,14 +1504,19 @@ static unsigned wait_left_ms(const struct set *x, const struct command *c)
 }
 
 /** Say whether `var`, `NAME=VALUE`, has the name of one of the `n`
- * variables `vars`. */
+ * variables `vars`. Windows matches names without regard to case, so there
+ * an inherited `Path` has the name of `PATH`. */
 static int named(const char *var, char *const *vars, size_t n)
 {
     size_t i, k;
 
     for (i = 0; i < n; i++) {
         k = strcspn(vars[i], "=") + 1;
+#ifdef _WIN32
+        if (_strnicmp(var, vars[i], k) == 0)
+#else
         if (strncmp(var, vars[i], k) == 0)
+#endif
             return 1;
     }
     return 0;
