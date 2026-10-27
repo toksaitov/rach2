@@ -102,7 +102,7 @@ for f in rach2/sys/arch/*/sources.mk rach2/sys/arch/*/cpu.h; do
     cp "$f" "$S/$f"
 done
 cp -R mk "$S/mk"
-listed=$(MAKEFLAGS='' MFLAGS='' make --no-print-directory -C "$S/rach2" print-c-src) || {
+listed=$(MAKEFLAGS='' MFLAGS='' make --no-print-directory -C "$S/rach2" CROSS_CC=true print-c-src) || {
     echo 'build-rules-test: the kernel makefile would not print its sources' >&2
     exit 1
 }
@@ -196,6 +196,41 @@ sources_rows()
         1:*'do NOT exist on disk'*"  $last"*) pass sources-missing ;;
         *) fail sources-missing "status $rc: $out" ;;
     esac
+}
+
+# Source manifests need no compiler; ordinary and mixed build goals do.
+source_query_rows()
+{
+    for arch in i686 x86_64; do
+        for goal in print-c-src print-asm-src; do
+            expected=$(MAKEFLAGS='' MFLAGS='' make -s -C "$S/rach2" \
+                ARCH="$arch" CROSS_CC=true "$goal")
+            rc=0
+            out=$(MAKEFLAGS='' MFLAGS='' make -s -C "$S/rach2" \
+                ARCH="$arch" CROSS_CC= CC= "$goal" 2>&1) || rc=$?
+            if [ "$rc" -eq 0 ] && [ -n "$expected" ] && [ "$out" = "$expected" ]; then
+                pass "source-query-$arch-$goal"
+            else
+                fail "source-query-$arch-$goal" "status $rc: $out"
+            fi
+        done
+        for goals in '' all 'print-c-src all'; do
+            rc=0
+            # shellcheck disable=SC2086
+            out=$(MAKEFLAGS='' MFLAGS='' make -s -C "$S/rach2" \
+                ARCH="$arch" CROSS_CC= CC= $goals 2>&1) || rc=$?
+            if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -qF 'no cross compiler found'; then
+                pass "build-needs-compiler-$arch-${goals:-default}"
+            else
+                fail "build-needs-compiler-$arch-${goals:-default}" "status $rc: $out"
+            fi
+        done
+    done
+    if [ ! -e "$S/build" ]; then
+        pass source-queries-write-nothing
+    else
+        fail source-queries-write-nothing 'a source-list query created build output'
+    fi
 }
 
 # Plant a marker in each directory under the build tree's build/, run the
@@ -516,6 +551,7 @@ rows()
 {
     failed=
     sources_rows
+    source_query_rows
     clean_row
     database base.db
     if [ "$rc" -ne 0 ]; then

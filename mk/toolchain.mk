@@ -30,12 +30,12 @@ CROSS_CC := $(or $(CROSS_CC),\
                  $(shell command -v $(CROSS_PREFIX)gcc 2>/dev/null))
 
 # With no compiler found, make stops here and says what to install, rather
-# than run an empty command later. Only `clean` needs no toolchain, so the
-# error is for the default goal and for any goal other than `clean`;
+# than run an empty command later. Cleaning and source-list queries need no
+# toolchain; every other goal, including a default build, requires one.
 # `$(or $(MAKECMDGOALS),build)` stands for the empty goal list of a default
 # build.
 ifeq ($(strip $(CROSS_CC)),)
-ifneq ($(filter-out clean,$(or $(MAKECMDGOALS),build)),)
+ifneq ($(filter-out clean print-c-src print-asm-src,$(or $(MAKECMDGOALS),build)),)
 $(error no cross compiler found for ARCH=$(ARCH): install $(CROSS_PREFIX)gcc, or pass CROSS_CC=/path/to/gcc; see `sh tools/setup/doctor.sh`)
 endif
 endif
