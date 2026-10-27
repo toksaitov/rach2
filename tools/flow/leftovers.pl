@@ -22,8 +22,11 @@
 # * copy: a directory HOME/rach2-* or HOME/rach2/.claude/worktrees/* with a
 #   `.git` of its own, which is a clone, a copy that tools/dev/testing.sh
 #   made or a git worktree;
-# * loose: with -l, any other entry of HOME whose name begins neither with a
-#   dot nor with `rach2`, such as a log or a script a session left there.
+# * loose: with -l, an entry of HOME named as scratch is: `tmp.` and ten
+#   letters or digits, as mktemp(1) names one, or `rach2`, more of a name, a
+#   dot and six to eight letters, digits or underscores, as the templates of
+#   the tests and tools name theirs, with a digit, a capital letter or an
+#   underscore among the last part, as a word seldom has.
 #
 # An entry is removed when all of these hold:
 #
@@ -151,6 +154,14 @@ sub size {
 sub cites {
     my $n = shift;
     return $cited =~ /(?<![A-Za-z0-9_.-])\Q$n\E(?![A-Za-z0-9_-]|\.[A-Za-z0-9_-])/;
+}
+
+# scratch NAME: whether NAME is named as test scratch is, as a loose entry
+# must be.
+sub scratch {
+    my $n = shift;
+    return $n =~ /^(?:tmp\.[A-Za-z0-9]{10}|rach2[A-Za-z0-9_-]*\.[A-Za-z0-9_]{6,8})$/
+        && (split /\./, $n)[1] =~ /[0-9A-Z_]/;
 }
 
 # guarded PATH: the first name under PATH that keeps a loose entry, if any:
@@ -374,7 +385,7 @@ for my $h (@homes) {
         sweep('copy', $c, $why{$c} // unmerged($c));
     }
     next unless $loose;
-    for my $e (grep { !/^(?:\.|rach2)/ } entries($h)) {
+    for my $e (grep { scratch($_) } entries($h)) {
         my $p = "$h/$e";
         my $why = verdict('loose', $p);
         if (!defined $why) {

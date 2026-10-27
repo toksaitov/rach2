@@ -131,9 +131,20 @@ static int leftovers_setup(struct fixture *f)
                             "evidence", "young", "named",     "stashed", "branched", "linked"};
     const char *failed[] = {"100.machine.a", "30.machine.d",  "200.machine.b",
                             "300.machine.c", "400.machine.e", "500.machine.f"};
-    const char *files[] = {"c160.log",      "trial/sub/f", "flow/log",        ".hidden",
-                           "rach2-notes",   "doom1.wad",   "keys/id_ed25519", "pkg.tar.gz",
-                           "src/.git/HEAD", "young.log",   "cited.out"};
+    const char *files[] = {"tmp.C160l0g000",
+                           "rach2-trial.Tr1al0/sub/f",
+                           "flow/log",
+                           ".hidden",
+                           "rach2-notes",
+                           "tmp.W4dW4dW4dW/doom1.wad",
+                           "tmp.K3ysK3ysK3/id_ed25519",
+                           "tmp.P4kgP4kgP4/pkg.tar.gz",
+                           "tmp.Src0Src0Sr/.git/HEAD",
+                           "tmp.Y0ungY0ung",
+                           "tmp.C1tedC1ted",
+                           "notes.c",
+                           "plain/x.c",
+                           "rach2-run.backup/f"};
     fx_remove(flow_path(f, "origin.git"));
     fx_remove(flow_path(f, "seed"));
     fx_remove(flow_path(f, "home.noindex"));
@@ -213,12 +224,13 @@ static int leftovers_setup(struct fixture *f)
                  failed[i]);
         flow_put(f, p, "");
     }
-    for (i = 0; i < 11; i++) {
+    for (i = 0; i < 14; i++) {
         snprintf(p, sizeof(p), "home.noindex/%s", files[i]);
         flow_put(f, p, "");
     }
-    fx_mkdir(flow_path(f, "home.noindex/busy"));
-    symlink(flow_path(f, "home.noindex/trial"), flow_path(f, "home.noindex/link"));
+    fx_mkdir(flow_path(f, "home.noindex/tmp.Bu5yBu5yBu"));
+    symlink(flow_path(f, "home.noindex/rach2-trial.Tr1al0"),
+            flow_path(f, "home.noindex/tmp.L1nkL1nkL1"));
     if (!age_tree(flow_path(f, "home.noindex"), time(NULL) - 172800))
         return 0;
     snprintf(p, sizeof(p), "%s/home.noindex/rach2-young/a", f->work);
@@ -227,7 +239,7 @@ static int leftovers_setup(struct fixture *f)
                                               "tests.i686.20261020T000000Z.400.machine.e.r0/now",
                                               ""))
         return 0;
-    return age_tree(flow_path(f, "home.noindex/young.log"), time(NULL));
+    return age_tree(flow_path(f, "home.noindex/tmp.Y0ungY0ung"), time(NULL));
 }
 static int leftovers_sweep(struct fixture *f, int dry, int text)
 {
@@ -240,7 +252,8 @@ static int leftovers_sweep(struct fixture *f, int dry, int text)
         "~toksaitov-d/rach2/build/tests/failed/tests.i686.20261020T000000Z.200.machine.b.r0 on the "
         "host.\nThe run tests.i686.20261020T000000Z.300 failed twice, and the copy "
         "/home/testing/rach2-cited has the fix.\nIts evidence is "
-        "tests.i686.20261020T000000Z.700.machine.h.r0 in a copy.\nIts output is in cited.out.\n";
+        "tests.i686.20261020T000000Z.700.machine.h.r0 in a copy.\nIts output is in "
+        "tmp.C1tedC1ted.\n";
     if (!script)
         return 0;
     input = malloc(strlen(script) + strlen(cites) + 1);
@@ -294,7 +307,7 @@ static int leftovers_previews(struct fixture *f)
         return 0;
     ok = fx_check(f,
                   !leftovers_sweep(f, 0, 0) && exists(f, "home.noindex/rach2-landed") &&
-                      exists(f, "home.noindex/c160.log") &&
+                      exists(f, "home.noindex/tmp.C160l0g000") &&
                       exists(f, "home.noindex/rach2/build/tests/failed/"
                                 "tests.i686.20261020T000000Z.100.machine.a.r0"),
                   "no text removes nothing") &&
@@ -303,7 +316,7 @@ static int leftovers_previews(struct fixture *f)
         return 0;
     ok = fx_check(f,
                   leftovers_sweep(f, 1, 1) && exists(f, "home.noindex/rach2-landed") &&
-                      exists(f, "home.noindex/c160.log") &&
+                      exists(f, "home.noindex/tmp.C160l0g000") &&
                       fx_regex(f->out, "leftovers: would remove copy .*/rach2-landed: [0-9]+ KiB"),
                   "dry run removes nothing") &&
          ok;
@@ -338,14 +351,17 @@ int flow_leftovers(struct fixture *f)
         ".hidden",
         "rach2-notes",
         "flow/log",
-        "doom1.wad",
-        "keys/id_ed25519",
-        "pkg.tar.gz",
-        "src/.git/HEAD",
-        "young.log",
-        "cited.out",
-        "link",
-        "busy"};
+        "tmp.W4dW4dW4dW/doom1.wad",
+        "tmp.K3ysK3ysK3/id_ed25519",
+        "tmp.P4kgP4kgP4/pkg.tar.gz",
+        "tmp.Src0Src0Sr/.git/HEAD",
+        "tmp.Y0ungY0ung",
+        "tmp.C1tedC1ted",
+        "notes.c",
+        "plain/x.c",
+        "rach2-run.backup/f",
+        "tmp.L1nkL1nkL1",
+        "tmp.Bu5yBu5yBu"};
     const char *gone[] = {
         "rach2-landed",
         "rach2-landed.sync.lock",
@@ -355,15 +371,15 @@ int flow_leftovers(struct fixture *f)
         "rach2/build/tests/failed/tests.i686.20261020T000000Z.100.machine.a.r0",
         "rach2/build/tests/failed/tests.i686.20261020T000000Z.30.machine.d.r0",
         "rach2-dirty/build/tests/failed/tests.i686.20261020T000000Z.600.machine.g.r0",
-        "c160.log",
-        "trial"};
+        "tmp.C160l0g000",
+        "rach2-trial.Tr1al0"};
     if (!leftovers_previews(f))
         return 0;
     {
         const char *a[] = {f->self, "--hold", NULL};
         const char *dirs[] = {
             "home.noindex/rach2/build/tests/failed/tests.i686.20261020T000000Z.500.machine.f.r0",
-            "home.noindex/busy"};
+            "home.noindex/tmp.Bu5yBu5yBu"};
         for (i = 0; i < 2; i++)
             if (!fx_start(f, &busy[i], a, flow_path(f, dirs[i]), NULL, NULL) ||
                 !link_ready(&busy[i], "cwd", flow_path(f, dirs[i])))
@@ -376,7 +392,7 @@ int flow_leftovers(struct fixture *f)
         fx_stop(&busy[i], SIGTERM);
         fx_wait(f, &busy[i]);
     }
-    for (i = 0; i < 27; i++) {
+    for (i = 0; i < 30; i++) {
         char name[4096];
         snprintf(name, sizeof(name), "home.noindex/%s", keep[i]);
         ok = fx_check(f, exists(f, name), keep[i]) && ok;
@@ -396,7 +412,8 @@ int flow_leftovers(struct fixture *f)
     if (!g(f, cwd, "worktree", "list", NULL))
         return 0;
     ok = fx_check(f, !strstr(f->out, "/clean"), "clean worktree registration removed") && ok;
-    return fx_check(f, is_link(f, "home.noindex/link"), "loose link kept as a link") && ok;
+    return fx_check(f, is_link(f, "home.noindex/tmp.L1nkL1nkL1"), "loose link kept as a link") &&
+           ok;
 }
 static int file_at(const char *dir, const char *name, const char *text)
 {
