@@ -336,6 +336,8 @@ historic() {
 
 # Native commits retain their public preparation, context and one collection.
 # The current commit's native owner supplies the purpose deadline and cleanup.
+# Each run writes to a new output that the site's retention policy allocates,
+# as ci.yml's does; one it cannot allocate leaves the commit untestable.
 # Old commits below retain their historical runner and timeout protocol.
 native_commit() {
     grep -qx 'results=native' tools/ci/run.sh 2> /dev/null
@@ -354,10 +356,17 @@ native_tested() {
             selected="$selected $ARCH:$suite"
         done
     fi
+    program=${ETUDE:-$(sed -n 's/^etude //p' "${ETUDE_SITE:-/etc/rach2/etude-site}" 2> /dev/null)}
+    if ! native_out=$("$program" prepare retention --policy "${ETUDE_RETENTION:-}" \
+        --site "${ETUDE_SITE:-/etc/rach2/etude-site}" allocate --reference "${ETUDE_REFERENCE:-}" \
+        2>> "$log.log"); then
+        echo 'ci: bisect: untestable: the retention policy allocated no output' >> "$log.log"
+        return 2
+    fi
     code=0
-    ETUDE_PURPOSE=$native_purpose SUITES=$selected sh tools/ci/run.sh "$native_kind" "$log.run" \
+    ETUDE_PURPOSE=$native_purpose SUITES=$selected sh tools/ci/run.sh "$native_kind" "$native_out" \
         >> "$log.log" 2>&1 || code=$?
-    native_result=$log.run/$native_kind-$ARCH
+    native_result=$native_out/$native_kind-$ARCH
     if [ ! -f "$native_result/done" ] || [ ! -f "$native_result/native" ] ||
         [ ! -f "$native_result/failed" ]; then
         echo 'ci: bisect: untestable: native collection left no complete result' >> "$log.log"
