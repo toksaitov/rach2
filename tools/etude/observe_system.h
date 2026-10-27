@@ -32,6 +32,8 @@ struct load_snapshot {
 
 /* Read exclusive per-process CPU, never a parent's reaped-child accounting. */
 int etude_load_snapshot(struct load_snapshot *s, struct load_process *p, size_t capacity);
+/* Read a sample's clocks. UTC comes from the clock that etude_history_now
+ * reads, so a trace's bounds compare with its caller's readings. */
 void etude_load_clock(uint64_t *monotonic_us, uint64_t *utc_us);
 const char *etude_load_platform(void);
 const char *etude_load_field_name(unsigned field);

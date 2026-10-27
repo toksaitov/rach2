@@ -40,7 +40,7 @@ void etude_load_clock(uint64_t *mono, uint64_t *utc)
     QueryPerformanceFrequency(&frequency);
     *mono = (uint64_t)(counter.QuadPart / frequency.QuadPart) * 1000000u +
             (uint64_t)(counter.QuadPart % frequency.QuadPart) * 1000000u / frequency.QuadPart;
-    GetSystemTimeAsFileTime(&now);
+    GetSystemTimePreciseAsFileTime(&now);
     *utc = (filetime_value(now) - UINT64_C(116444736000000000)) / 10;
 }
 
