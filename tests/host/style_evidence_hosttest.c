@@ -72,7 +72,7 @@ static void snapshot_cases(void)
 }
 
 /** The files a source check reads by their content or place, not their name:
- * extensionless scripts and the native inventories. */
+ * extensionless scripts, Makefile variants and the native inventories. */
 static void unnamed_cases(void)
 {
     char before[65], after[65], path[4096];
@@ -84,13 +84,17 @@ static void unnamed_cases(void)
               !file("tests/blob", "data 1\n") && !source_snapshot(work, after) &&
               !strcmp(before, after),
           "an extensionless file without a script line is outside the inventory");
+    check(!file("tests/Makefile.linux", "all:\n") && !source_snapshot(work, before) &&
+              !file("tests/Makefile.linux", "all: x\n") && !source_snapshot(work, after) &&
+              strcmp(before, after),
+          "a Makefile variant invalidates evidence");
     snprintf(path, sizeof(path), "%s/tests/native", work);
     check(!mkdir(path, 0700) && !file("tests/native/probes.cases", "hello\n") &&
               !source_snapshot(work, before) && !file("tests/native/probes.cases", "other\n") &&
               !source_snapshot(work, after) && strcmp(before, after),
           "a native case list invalidates evidence");
-    check(!file("tests/native/machine", "hello\n") && !source_snapshot(work, after) &&
-              strcmp(before, after),
+    check(!source_snapshot(work, before) && !file("tests/native/machine", "hello\n") &&
+              !source_snapshot(work, after) && strcmp(before, after),
           "an added native inventory invalidates evidence");
 }
 

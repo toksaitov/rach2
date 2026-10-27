@@ -102,12 +102,12 @@ static int shell_script(const char *path, const char *name)
  * Report whether a source check reads the file at `path`.
  *
  * Besides the named source classes, `scripts.sh` checks every extensionless
- * script with a `#!` line and `nativecheck.sh` reads every file under
- * `tests/native`, whatever its name.
+ * script with a `#!` line, `textcheck.sh` reads every `Makefile.*`, and
+ * `nativecheck.sh` reads every file under `tests/native`, whatever its name.
  */
 static int checked_file(const char *relative, const char *name, const char *path)
 {
-    if (source_file(name))
+    if (source_file(name) || !strncmp(name, "Makefile.", 9))
         return 1;
     if (!strcmp(relative, "tests/native") || !strncmp(relative, "tests/native/", 13))
         return 1;
