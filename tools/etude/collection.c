@@ -55,6 +55,8 @@ struct collection {
     char results[PATH_SIZE], evidence[PATH_SIZE], schemas[PATH_SIZE];
     char record[PATH_SIZE], ledger[PATH_SIZE], locks[PATH_SIZE], status[PATH_SIZE];
     char account[128], site[PATH_SIZE], head[41];
+    char outer[PATH_SIZE + 1]; /* ETUDE_ADMITTED as etude inherited it,
+                                  before site_policy() sets it */
     const char *arches, *history, *commit, *context_path, *selection_export;
     struct etude_measurement_context *context;
     struct etude_collection_repeat repeat;
@@ -1021,7 +1023,8 @@ static void find_firmware(void)
  * claim of the installed launcher.
  *
  * With an installed site, each case is a claim of the site's ledger, unless
- * ETUDE_ADMITTED names that site already: the run is then inside a claim of
+ * ETUDE_ADMITTED named that site when etude started, before site_policy()
+ * set it for the run's children: the run is then inside a claim of
  * the installed launcher, which holds the host lock and the port block
  * RACH2_PORT_OFFSET names, and its cases are claims of the run's own ledger
  * under the results, bounded by its workers, processors and memory.
@@ -1030,9 +1033,9 @@ static void find_firmware(void)
  */
 static int run_admission(struct collection *c)
 {
-    char outer[PATH_SIZE] = "", ledger[PATH_SIZE];
+    char ledger[PATH_SIZE];
     uint64_t own[3];
-    if (getenv("ETUDE_ADMITTED") && copy_path(outer, getenv("ETUDE_ADMITTED")) != 0) {
+    if (strlen(c->outer) >= PATH_SIZE) {
         refused("ETUDE_ADMITTED is too long");
         return -1;
     }
@@ -1040,7 +1043,7 @@ static int run_admission(struct collection *c)
     strcpy(ledger, c->ledger);
     if (site_policy(c) != 0)
         return -1;
-    if (!c->site[0] || strcmp(outer, c->site))
+    if (!c->site[0] || strcmp(c->outer, c->site))
         return 0;
     memcpy(c->cap, own, sizeof(own));
     strcpy(c->ledger, ledger);
@@ -1414,12 +1417,24 @@ static void collection_free(struct collection *c)
     free(c);
 }
 
+/**
+ * Open the measurement context that `-I` names, bound to the tree, the
+ * record, the site and the commit.  The site's policy is read here for the
+ * site's path alone: the run's own capacity and ledger stay as they were, for
+ * run_admission() to apply the policy once.
+ */
 static int collection_context(struct collection *c, int production, int dry)
 {
     if (production || dry || !c->context_path)
         return 0;
-    char error[256];
-    if (site_policy(c)) {
+    char error[256], ledger[PATH_SIZE];
+    uint64_t own[3];
+    memcpy(own, c->cap, sizeof(own));
+    strcpy(ledger, c->ledger);
+    int bad = site_policy(c);
+    memcpy(c->cap, own, sizeof(own));
+    strcpy(c->ledger, ledger);
+    if (bad) {
         refused("the measurement context or a bound input is invalid");
         return -1;
     }
@@ -1493,6 +1508,8 @@ static int collection_main(int argc, char **argv, int production)
     r.results = getenv("RACH2_RESULTS");
     r.evidence = getenv("RACH2_FAILED");
     r.accel = getenv("RACH2_QEMU_ACCEL");
+    snprintf(c->outer, sizeof(c->outer), "%s",
+             getenv("ETUDE_ADMITTED") ? getenv("ETUDE_ADMITTED") : "");
     defaults(c);
     if (collection_args(c, argc, argv) != 0)
         goto done;
