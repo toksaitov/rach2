@@ -1403,6 +1403,9 @@ static void check_state_refused(void)
     CHECK(state_status(link) == 1, "a log that is a symbolic link is refused");
     CHECK(stat(victim, &st) == 0 && st.st_size == 0, "nothing is written through a linked log");
     unlink(path);
+    CHECK(mkfifo(path, 0600) == 0, "the test makes a log that is a FIFO");
+    CHECK(state_status(link) == 1, "a log that is a FIFO is refused at once");
+    unlink(path);
     unlink(victim);
     rmdir(target);
 }

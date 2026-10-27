@@ -3097,7 +3097,8 @@ static int owned(const struct stat *st, mode_t type)
  * Each that exists already must be a directory, or for the log a regular
  * file, of the effective user, and is never reached through a symbolic link,
  * since the default directory is in `/tmp`, where another user may make it
- * first. Below a directory so checked no other user can make a name.
+ * first. Below a directory so checked no other user can make a name. The log
+ * is opened without blocking, so that a FIFO there is refused at once.
  */
 static int make_state(void)
 {
@@ -3114,7 +3115,8 @@ static int make_state(void)
             return -1;
     if (path_of(path, "%s/guest.log", opt.state) < 0)
         return -1;
-    log_fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_NOCTTY | O_CLOEXEC, 0600);
+    log_fd = open(
+        path, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_NOCTTY | O_CLOEXEC | O_NONBLOCK, 0600);
     if (log_fd < 0)
         return -1;
     if (fstat(log_fd, &st) < 0 || owned(&st, S_IFREG) < 0) {
