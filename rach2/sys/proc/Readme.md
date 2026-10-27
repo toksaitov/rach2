@@ -225,7 +225,7 @@ A write of `freeze` or `mem` to `/sys/power/state` (`rach2/sys/fs/procfs.c`) cal
 * `execve` follows one level of `#!`, and reads a first line of at most 128 bytes.
 * Six resource limits are kept; `RLIMIT_MEMLOCK`, `RLIMIT_NICE`, `RLIMIT_RTPRIO` and Linux's others read as unlimited.
 * `getrusage` and `wait4` report the CPU time and `ru_maxrss` alone, and `ru_maxrss` is sampled where an address space ends, not at every fault.
-* `prctl` takes ten options, the parent-death signal, the dumpable flag, the name, `no_new_privs` and the seccomp mode, each set and read; any other is `EINVAL`.
+* `prctl` takes twelve options, the parent-death signal, the dumpable flag, the name, the child subreaper flag, `no_new_privs` and the seccomp mode, each set and read; any other is `EINVAL`.
 * seccomp has no user notification: a filter cannot be installed with a listener, and `SECCOMP_RET_USER_NOTIF` fails the call with `ENOSYS`. `SECCOMP_RET_LOG` allows the call and logs nothing.
 * `personality` takes only `PER_LINUX` and `PER_LINUX32`, and its flags change nothing; the kernel places no address at random.
 * Suspend to idle powers nothing down. A write of `mem` to `/sys/power/state` suspends to idle as `freeze` does, and the kernel has no suspend to memory or to disk.
