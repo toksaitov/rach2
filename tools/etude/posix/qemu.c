@@ -1244,8 +1244,14 @@ int etude_machine_type(struct etude_machine *m, const char *text, size_t n)
 
 void etude_machine_cancel(struct etude_machine *m)
 {
-    if (m->finished || m->cancelled || m->shutdown || m->proc_done)
+    if (m->finished || m->cancelled || m->proc_done)
         return;
+    if (m->shutdown) {
+        etude_exec_resume(m->proc);
+        if (m->kill_at == 0)
+            m->kill_at = posix_now_us() + m->grace_us;
+        return;
+    }
     m->cancelled = 1;
     etude_exec_resume(m->proc);
     machine_quit(m);

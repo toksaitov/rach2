@@ -18,7 +18,7 @@
  * checked as text, disks on IDE, AHCI and NVMe, a CD, disks that boot first,
  * qcow2 overlays, an IDE disk with a serial and the firmware's flash among
  * them. A capture of a card's frames is a filter-dump after the card, and a
- * capture of a card the profile lacks is refused. Fourteen stand-in machines
+ * capture of a card the profile lacks is refused. Fifteen stand-in machines
  * then run at once, each with an end of its own, and each must keep its own
  * console and end: a QEMU that fails before it connects is an unexpected exit,
  * and one that reports that it could not start the accelerator is a failed
@@ -28,16 +28,17 @@
  * host, or an exit without an event, is an unexpected exit; a cancellation of a
  * machine that obeys QMP's quit, of one that ignores both quit and SIGTERM, of
  * one that never answers QMP, and of one that obeys quit while its QEMU is
- * suspended, which the cancellation resumes, is a cancellation. Each leaves no
- * process and no socket behind. With the real QEMU, the kernel of the
- * architecture ARCH names boots under TCG to the debug shell, the first boot
- * with an empty disk on IDE and two on AHCI that the kernel must find where the
- * profile put them,
- * and its `poweroff` must give a shutdown; a cancellation at the prompt must
- * give a cancellation, and an accelerator this host's QEMU does not have must
- * give a failed accelerator. OVMF's code image, as tools/setup/ovmf_path.sh
- * finds it, boots from the launcher's read-only flash with a CD and an empty
- * disk of 4 TiB on NVMe, and its boot manager must name both.
+ * suspended, which the cancellation resumes, is a cancellation; a cancellation
+ * of one that ignores SIGTERM after its guest's shutdown ends its QEMU and
+ * keeps the shutdown. Each leaves no process and no socket behind. With the
+ * real QEMU, the kernel of the architecture ARCH names boots under TCG to the
+ * debug shell, the first boot with an empty disk on IDE and two on AHCI that
+ * the kernel must find where the profile put them, and its `poweroff` must
+ * give a shutdown; a cancellation at the prompt must give a cancellation, and
+ * an accelerator this host's QEMU does not have must give a failed
+ * accelerator. OVMF's code image, as tools/setup/ovmf_path.sh finds it, boots
+ * from the launcher's read-only flash with a CD and an empty disk of 4 TiB on
+ * NVMe, and its boot manager must name both.
  *
  * The memory rows check the reservations of an ordinary profile and of the
  * boundary profile, refuse a changed boundary profile and a site that has not
@@ -354,7 +355,7 @@ static int fake_qemu(const char *mode, int argc, char **argv)
         put(con, "fake: deaf\r\n");
         host_wait_forever();
     }
-    if (strcmp(mode, "shutdown") == 0 || strcmp(mode, "old") == 0)
+    if (strcmp(mode, "shutdown") == 0 || strcmp(mode, "old") == 0 || strcmp(mode, "linger") == 0)
         reason = "guest-shutdown";
     else if (strcmp(mode, "reset") == 0)
         reason = "guest-reset";
@@ -369,6 +370,10 @@ static int fake_qemu(const char *mode, int argc, char **argv)
     fake_wait_go(con);
     put(con, "fake: got go\r\n");
     fake_shutdown(qmp, guest, reason);
+    if (strcmp(mode, "linger") == 0) {
+        signal(SIGTERM, SIG_IGN);
+        host_wait_forever();
+    }
     if (kept && guest)
         fake_obey(qmp);
     return 0;
@@ -398,7 +403,8 @@ struct row {
                 running, 'C' cancels at once, 'p' types poweroff
                 at the prompt, 'P' cancels at the prompt, 'b' runs the boundary probe,
                 'u' boots by OVMF and cancels once it names the CD and the NVMe disk,
-                's' suspends QEMU when running and cancels once it is seen stopped */
+                's' suspends QEMU when running and cancels once it is seen stopped,
+                'L' types go and cancels once QMP has reported SHUTDOWN */
     int acted;
     struct etude_qemu_profile profile;
     struct etude_qemu_site site;
@@ -466,6 +472,10 @@ static void row_act(struct row *r)
     if (r->act == 's') {
         row_hold(r, res);
         return;
+    }
+    if (r->act == 'L' && !r->acted && res->reason[0] != '\0') {
+        r->acted = 1;
+        etude_machine_cancel(r->m);
     }
     if (r->act == 'a' && r->acted == 1 && find(&res->console, "Done.", 0) >= 0) {
         r->acted = 2;
@@ -556,7 +566,7 @@ static int row_start(struct etude_qemu *q, struct row *r, const char *q32, const
         r->m = NULL;
         return -1;
     }
-    if (r->act == 'g')
+    if (r->act == 'g' || r->act == 'L')
         CHECK(etude_machine_type(r->m, "go\r", 3) == 0, r->name);
     if (r->act == 'C')
         etude_machine_cancel(r->m);
@@ -676,6 +686,9 @@ static void check_details(const struct row *r, const struct etude_machine_result
         CHECK(find(&res->console, "fake: crashing\r\n", 0) >= 0, "crash");
     } else if (strcmp(r->name, "deaf") == 0) {
         CHECK(host_process_stopped(res->qemu, 1), "deaf");
+    } else if (strcmp(r->name, "linger") == 0) {
+        CHECK(host_process_stopped(res->qemu, 1), "linger");
+        CHECK(strcmp(res->reason, "guest-shutdown") == 0, "linger");
     } else if (strcmp(r->name, "obey") == 0) {
         CHECK(res->qemu->exit_end == ETUDE_END_EXITED && res->qemu->exit_value == 0, "obey");
         CHECK(strcmp(res->reason, "host-qmp-quit") == 0, "obey");
@@ -699,7 +712,7 @@ static void check_ran(const struct row *r, const struct etude_machine_result *re
     CHECK(res->accel != NULL && strcmp(res->accel, etude_accel_name(r->accel)) == 0, r->name);
 }
 
-/** Run the fourteen stand-in machines at once and check each one's end. */
+/** Run the fifteen stand-in machines at once and check each one's end. */
 static void test_ends(void)
 {
     static struct row rows[] = {
@@ -717,6 +730,7 @@ static void test_ends(void)
         ROW("deaf", "deaf", ETUDE_ACCEL_TCG, "x86_64", ETUDE_END_STOPPED, 'c'),
         ROW("held", "obey", ETUDE_ACCEL_TCG, "i686", ETUDE_END_STOPPED, 's'),
         ROW("silent", "silent", ETUDE_ACCEL_TCG, "i686", ETUDE_END_STOPPED, 'C'),
+        ROW("linger", "linger", ETUDE_ACCEL_TCG, "x86_64", ETUDE_END_SHUTDOWN, 'L'),
     };
     int n = (int)(sizeof(rows) / sizeof(rows[0])), i;
     struct etude_qemu *q = etude_qemu_new();
@@ -734,7 +748,7 @@ static void test_ends(void)
             continue;
         }
         check_details(&rows[i], etude_machine_result(rows[i].m));
-        if (rows[i].act == 'g')
+        if (rows[i].act == 'g' || rows[i].act == 'L')
             check_ran(&rows[i], etude_machine_result(rows[i].m));
         row_free(&rows[i]);
     }

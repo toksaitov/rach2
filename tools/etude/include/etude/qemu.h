@@ -411,7 +411,9 @@ int etude_machine_type(struct etude_machine *m, const char *text, size_t n);
  * Stop the machine: QMP's quit when QMP is ready, and the executor's
  * cancellation of QEMU after the grace period, or at once without QMP. A
  * suspended QEMU is resumed first, since a stopped one cannot answer the
- * quit. Its end becomes ETUDE_END_STOPPED unless it had ended before.
+ * quit. Its end becomes ETUDE_END_STOPPED unless it had ended before. A
+ * machine whose QMP has reported SHUTDOWN keeps that end, and its QEMU, if
+ * it has not exited after the grace period, is cancelled.
  */
 void etude_machine_cancel(struct etude_machine *m);
 
