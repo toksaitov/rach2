@@ -135,14 +135,15 @@
  * machine declares; a console with a panic fails at the panic's line, and keeps
  * the workspace with its console; a scenario whose report stops short and that
  * exits 1, as one whose machine's transport was lost does, fails; and a
- * scenario that keeps no console is incomplete. Each attempt is placed qemu.
+ * scenario that keeps no console is incomplete, as is one that keeps more
+ * consoles than the judge takes. Each attempt is placed qemu.
  * A case's invocation gives the local ports it declares, from 2400 past the
  * caller's port block on, none given twice, and a set of machine cases with
  * ports and `locks` is refused.
  * Their invocations, of a run that no site policy admitted, do not permit
  * the lazy boundary memory profile.
  *
- * The kernel, the disk and the scenario that the five machine cases share
+ * The kernel, the disk and the scenario that the six machine cases share
  * are each copied to the store once, which the test counts by putting a
  * copy of its own in the driver's place, `legacy_set_put`, with the
  * store's settling time made zero so that a digest is kept as soon as it is
@@ -304,7 +305,8 @@ static const struct {
                      {"fixture.machine.panic", "", 0},
                      {"fixture.machine.allowed", ", \"critical\": \"init: exited\"", 1},
                      {"fixture.machine.lost", "", 0},
-                     {"fixture.machine.noconsole", "", 0}};
+                     {"fixture.machine.noconsole", "", 0},
+                     {"fixture.machine.many", "", 0}};
 
 enum { MACHINE_COUNT = sizeof(machine_cases) / sizeof(machine_cases[0]) };
 
@@ -2466,7 +2468,7 @@ static void test_machine(void)
     unsetenv("RACH2_OVMF_CODE");
     CHECK(r.status == 1, "machine: a case did not pass");
     CHECK(r.read == 0, "machine: the history is whole");
-    CHECK(count_kind(&r.h, "attempt") == 5, "machine: an attempt of each case");
+    CHECK(count_kind(&r.h, "attempt") == MACHINE_COUNT, "machine: an attempt of each case");
     CHECK(case_is(&r, "fixture.machine.clean", "i686", 0, "pass", NULL),
           "machine: a clean console passes");
     CHECK(case_is(&r, "fixture.machine.allowed", "i686", 0, "pass", NULL),
@@ -2479,6 +2481,9 @@ static void test_machine(void)
     CHECK(case_is(&r, "fixture.machine.noconsole", "i686", 0, "incomplete",
                   "etude.kernel is missing: etude check attempt was given no console"),
           "machine: no console is incomplete");
+    CHECK(case_is(&r, "fixture.machine.many", "i686", 0, "incomplete",
+                  "its consoles could not be judged: there are more than 64"),
+          "machine: more consoles than the judge takes is incomplete");
     fix_format(text, sizeof(text),
                "scenario: %s/build/cases/scenario %s/output/"
                "fixture.machine.clean.r0.invocation",

@@ -1929,30 +1929,40 @@ static int by_name(const void *a, const void *b)
 /**
  * Give in `out` the consoles of machine case member `m`, the files
  * `MACHINE.N.console` that its scenario keeps in `evidence/` of its
- * workspace, in the order of their names, at most LEGACY_CONSOLES of them,
- * from malloc; their count, or 0 for none or a directory that cannot be
- * read.
+ * workspace, in the order of their names, from malloc. Returns their count,
+ * 0 when there is no `evidence/`, or -1 with none kept when there are more
+ * than LEGACY_CONSOLES or the directory cannot be read.
  */
-static size_t consoles_of(const struct member *m, char **out)
+static int consoles_of(const struct member *m, char **out)
 {
     char dir[PATH_LEN];
     struct dirent *e;
     size_t n = 0, len;
+    int failed = 0;
     DIR *d;
 
-    if (fit(dir, sizeof(dir), "%s/evidence", m->work) != 0 || (d = opendir(dir)) == NULL)
-        return 0;
-    while ((e = readdir(d)) != NULL && n < LEGACY_CONSOLES) {
+    if (fit(dir, sizeof(dir), "%s/evidence", m->work) != 0)
+        return -1;
+    if ((d = opendir(dir)) == NULL)
+        return errno == ENOENT ? 0 : -1;
+    for (errno = 0; !failed && (e = readdir(d)) != NULL; errno = 0) {
         len = strlen(e->d_name);
-        if (len > 8 && strcmp(e->d_name + len - 8, ".console") == 0 &&
-            (out[n] = malloc(strlen(dir) + len + 2)) != NULL) {
-            snprintf(out[n], strlen(dir) + len + 2, "%s/%s", dir, e->d_name);
-            n++;
-        }
+        if (len <= 8 || strcmp(e->d_name + len - 8, ".console") != 0)
+            continue;
+        if (n == LEGACY_CONSOLES || (out[n] = malloc(strlen(dir) + len + 2)) == NULL)
+            failed = 1;
+        else
+            snprintf(out[n++], strlen(dir) + len + 2, "%s/%s", dir, e->d_name);
     }
+    failed |= errno != 0;
     closedir(d);
+    if (failed) {
+        while (n > 0)
+            free(out[--n]);
+        return -1;
+    }
     qsort(out, n, sizeof(*out), by_name);
-    return n;
+    return (int)n;
 }
 
 /**
@@ -1971,6 +1981,7 @@ static void judge_case(struct set *x, struct member *m)
     char *consoles[LEGACY_CONSOLES];
     struct legacy_judge j;
     struct legacy_judgement v;
+    int kept = 0;
     size_t i;
 
     took(x, c, r);
@@ -1986,8 +1997,8 @@ static void judge_case(struct set *x, struct member *m)
     j.attempt_id = c->id;
     j.item_id = m->item_id;
     j.placement = m->k->machine ? "qemu" : "host";
-    if (m->k->machine)
-        j.nconsoles = consoles_of(m, consoles);
+    if (m->k->machine && (kept = consoles_of(m, consoles)) > 0)
+        j.nconsoles = (size_t)kept;
     if (m->g != NULL) {
         j.placement = "qemu";
         consoles[0] = (char *)legacy_guest_console(m->g);
@@ -2015,6 +2026,11 @@ static void judge_case(struct set *x, struct member *m)
         came_out(c, outcome_of(v.outcome), 1, "%s; %s", why, v.reason);
     else
         came_out(c, outcome_of(v.outcome), 0, "%s", v.reason);
+    if (kept < 0)
+        came_out(c, INCOMPLETE, 1,
+                 "its consoles could not be judged: there are more than %d, or they could not be "
+                 "read",
+                 LEGACY_CONSOLES);
     if (r->proc != NULL && r->proc->output_error != 0)
         came_out(c, INCOMPLETE, 1, "its output could not be saved: %s",
                  strerror(r->proc->output_error));

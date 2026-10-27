@@ -258,6 +258,10 @@ static int scenario_role(int argc, char **argv)
         rc |= text_file(path, "<2>[    0.500000] panic: page fault\n", 1) != 0;
     if (strstr(id, ".allowed"))
         rc |= text_file(path, "<2>[    1.250000] init: exited with status 1\n", 1) != 0;
+    for (int i = 2; strstr(id, ".many") && i <= 65; i++) {
+        snprintf(path, sizeof(path), "%s/evidence/vm.%d.console", scratch, i);
+        rc |= text_file(path, "Rach2 kernel booting\n", 0) != 0;
+    }
     if (strstr(id, ".noconsole")) {
         snprintf(path, sizeof(path), "%s/evidence", scratch);
         rc |= host_remove_tree(path) != 0;
