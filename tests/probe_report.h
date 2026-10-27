@@ -161,6 +161,14 @@ static __inline__ char *report_decimal(char *buf, int n)
     return buf;
 }
 
+/** Report that the counter witness `id` has reached `n`. */
+static __inline__ void report_progress(const char *id, int n)
+{
+    char count[12];
+
+    report_record(ETUDE_REPORT_PROGRESS, id, report_decimal(count, n), 0);
+}
+
 /** End the report with the count of its records. */
 static __inline__ void report_end(void)
 {

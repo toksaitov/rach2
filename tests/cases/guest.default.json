@@ -280,7 +280,9 @@
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
-      "progress": [],
+      "progress": [
+        {"witness_id": "child-rises", "kind": "counter", "means": "the child's user time has risen at one more of the parent's looks during the spin beside it", "limit": 20}
+      ],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [

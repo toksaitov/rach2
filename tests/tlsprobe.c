@@ -571,6 +571,9 @@ static int iso_switches(int pid, const int to_child[2], const int to_parent[2], 
         if (now != last) {
             rises++;
             last = now;
+            if (rises <= ISO_SWITCHES) {
+                report_progress("child-rises", rises);
+            }
         }
     }
     report_spin(clobbered, ended);
