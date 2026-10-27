@@ -836,7 +836,9 @@ static int admit(struct launch *l)
         free(args);
         return refuse(l, "launch exceeds site capacity");
     }
-    rc = export(l, "ETUDE_ADMITTED", l->site) || export_number(l, "RACH2_WORKERS", l->workers) ||
+    rc = export(l, "ETUDE_ADMITTED", l->site) ||
+         export(l, "ETUDE_SITE", getenv("ETUDE_ADMITTED")) ||
+         export_number(l, "RACH2_WORKERS", l->workers) ||
          export_number(l, "RACH2_MEMORY_MIB", l->pool);
     if (!rc && authority_nonce(nonce))
         rc = refuse(l, "cannot make an attempt identity");
