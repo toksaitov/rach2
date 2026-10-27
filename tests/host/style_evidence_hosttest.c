@@ -66,6 +66,9 @@ static void snapshot_cases(void)
     snprintf(path, sizeof(path), "%s/tests/example.c", work);
     check(!unlink(path) && !source_snapshot(work, after) && strcmp(before, after),
           "a removed source invalidates evidence");
+    check(!source_snapshot(work, before) && !file("tests/probe-suites", "hello default\n") &&
+              !source_snapshot(work, after) && strcmp(before, after),
+          "a probe assignment list invalidates evidence");
 }
 
 static struct json *parse(const char *text)
