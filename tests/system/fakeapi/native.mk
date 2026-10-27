@@ -52,7 +52,7 @@ build/tests/system/fakeapi_test: $(FAKEAPI_NATIVE)/selftest.c $(filter-out $(FAK
 AGENT_ASSET_PATHS = tests/system/agents_rows.sh tests/system/agents \
     tests/system/accept/agents_guest.sh tests/system/accept/agents \
     'tests/system/fakeapi/*.json' tests/system/fakeapi/repo \
-    tools/flow tools/git-hooks vendor/gnu/agents/packages
+    tools/flow tools/git-hooks/commit-msg vendor/gnu/agents/packages
 AGENT_ASSET_FILES := $(shell git ls-files -- $(AGENT_ASSET_PATHS))
 build/tests/cases/machine/agents-assets.tar: $(AGENT_ASSET_FILES) tests/system/fakeapi/native.mk
 	@mkdir -p $(@D)
