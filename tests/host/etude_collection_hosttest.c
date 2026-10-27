@@ -26,7 +26,8 @@
  * complete output survives the executor's capture bound. A script artifact
  * and a changed artifact are refused before execution. A case whose hosts
  * leave out this host is left out of the selection, and a manifest whose
- * hosts are empty, unknown or repeated is refused.
+ * hosts are empty, unknown or repeated is refused. A run of one
+ * architecture leaves out a case of the other unless an identity names it.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -506,6 +507,54 @@ static void host_selection(char *out, size_t room)
     put("tests/registry", "default|-|core\nhost|-|core\nagents|-|full|||x86_64\n");
 }
 
+/* A suite run on one architecture leaves out its case of the other
+ * architecture, and an identity of that case is refused. */
+static void architecture_selection(char *out, size_t room)
+{
+    char *options[] = {"-N", "-a", "x86_64", "arches", NULL};
+    static const char *const ids[] = {"fixture.arches.both", "fixture.arches.i686"};
+    char text[16384], error[256];
+    FILE *f = fopen("tools/etude/fixtures/verdict/cases/fixture.default.json", "rb");
+    struct json *doc = NULL;
+    size_t n = f ? fread(text, 1, sizeof(text), f) : 0;
+    if (f)
+        fclose(f);
+    CHECK(n && !json_parse(text, n, 1, &doc, error, sizeof(error)),
+          "architectures case template parses");
+    const struct json *cases = json_member(doc, "cases");
+    struct json *one = cases && cases->count == 1 ? cases->item[0] : NULL;
+    struct json *arches = (struct json *)json_member(one, "architectures");
+    CHECK(arches && arches->type == JSON_ARRAY && arches->count == 2,
+          "architectures case template runs on both");
+    struct jbuf output = {0};
+    jbuf_puts(&output, "{\"schema_version\":1,\"summary\":\"Cases of one or both "
+                       "architectures\",\"family_id\":\"fixture.arches\",\"cases\":[");
+    for (size_t i = 0; arches && arches->count == 2 && i < 2; i++) {
+        scheduling_string(one, "case_id", ids[i]);
+        if (i) {
+            json_free(arches->item[1]);
+            arches->count = 1;
+            jbuf_puts(&output, ",");
+        }
+        json_canonical(one, &output);
+    }
+    jbuf_puts(&output, "]}\n");
+    put("tests/cases/fixture.arches.json", output.data);
+    jbuf_free(&output);
+    json_free(doc);
+    put("tests/registry", "default|-|core\nhost|-|core\nagents|-|full|||x86_64\narches|-|full\n");
+    CHECK(run(options, NULL, NULL, NULL, out, room) == 0 &&
+              strstr(out, "arches x86_64 fixture.arches.both\n") &&
+              !strstr(out, "fixture.arches.i686"),
+          "a run of one architecture leaves out a case of the other");
+    CHECK(run(options, "fixture.arches.i686", NULL, NULL, out, room) == 2 &&
+              strstr(out, "a chosen case does not run on the selected architecture"),
+          "an identity of a case of the other architecture is refused");
+    CHECK(unlink(fix_path("tests/cases/fixture.arches.json")) == 0,
+          "architectures fixture is removed");
+    put("tests/registry", "default|-|core\nhost|-|core\nagents|-|full|||x86_64\n");
+}
+
 /**
  * Check what the run entry does beyond a selection: a port block inside and
  * outside a claim of the site, the inventory, and a preparation that fails.
@@ -591,6 +640,7 @@ static int collection_main(int argc, char **argv)
     CHECK(run(duplicate, NULL, NULL, NULL, out, sizeof(out)) == 2, "duplicate suites are refused");
     CHECK(run(unknown, NULL, NULL, NULL, out, sizeof(out)) == 2, "unknown suites are refused");
     host_selection(out, sizeof(out));
+    architecture_selection(out, sizeof(out));
     for (size_t i = 0; i < 6; i++) {
         int rc = run(native, NULL, NULL, NULL, out, sizeof(out));
         if (rc != 0)

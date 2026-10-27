@@ -577,6 +577,8 @@ static int choose_identities(struct collection *c, const struct suite_entry *s,
         if (!wanted)
             continue;
         if (!selected_architecture(s, selection->cases->item[j])) {
+            if (identities == NULL)
+                continue;
             return refused("a chosen case does not run on the selected architecture");
         }
         if (identities != NULL &&
