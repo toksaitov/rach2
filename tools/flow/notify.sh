@@ -37,9 +37,9 @@ steps="This session carries a notice to the owner of Rach2. The owner's first me
 3. When the timer's notice arrives, call the PushNotification tool at once, whether or not the reply is written, with the status \"proactive\" and the notice's text exactly as its message. If the reply is written, end the turn without text; otherwise finish the reply first.
 
 Then wait for the owner, who may ask about the notice. Answer from the repository, the board (\`gh\`) and \`sh tools/flow/status.sh\`, and change nothing unless the owner asks."
-tmux kill-session -t rach2-incident 2> /dev/null
+env -u TMUX tmux kill-session -t rach2-incident 2> /dev/null
 # The prompt comes first, since --allowedTools takes every word after it.
-tmux new-session -d -s rach2-incident -x 200 -y 50 -e "PATH=$PATH" \
+env -u TMUX tmux new-session -d -s rach2-incident -x 200 -y 50 -e "PATH=$PATH" \
     claude "$*" --remote-control "rach2 incident" \
     --append-system-prompt "$steps" \
     --allowedTools 'Bash(sleep:*)' 'Bash(gh issue view:*)' \

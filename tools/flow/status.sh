@@ -9,9 +9,10 @@
 # It prints master's newest commit; the phase In progress as `board.sh phase`
 # reports it, whose last line says whether the phase is ready for its release;
 # the record of the release under way and whether its tmux session
-# `rach2-release` runs; ci's last eight runs, each with the commit it started
-# at and the commit whose status it set, or `?` while that is not known, since
-# a core run tests the newest master when its first job runs; the open issues
+# `rach2-release` runs on the default tmux server, whichever server the caller
+# is in; ci's last eight runs, each with the commit it started at and the
+# commit whose status it set, or `?` while that is not known, since a core run
+# tests the newest master when its first job runs; the open issues
 # with their Status on the board, assignees and labels; a line for each
 # worker loop that `workers` lists and one for the reviewer loop of this
 # machine; and the testing host's load, memory and emulators. A worker's line
@@ -241,7 +242,7 @@ sh "$(dirname "$0")/board.sh" phase 2>&1
 echo "== progress"
 python3 -B "$(dirname "$0")/progress.py" 2>&1 || echo "status: progress could not be read; investigate before acting"
 echo "== release"
-if tmux has-session -t rach2-release 2> /dev/null; then echo "release.sh runs"; else echo "release.sh is not running"; fi
+if env -u TMUX tmux has-session -t rach2-release 2> /dev/null; then echo "release.sh runs"; else echo "release.sh is not running"; fi
 r=$HOME/flow/manager/release/record
 if [ -f "$r" ]; then
     echo "record $r:"
