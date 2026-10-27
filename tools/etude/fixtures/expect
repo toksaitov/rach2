@@ -107,6 +107,7 @@
 1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-undeclared.out | enoent-stat is not an assertion of the case
 1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-twice.out | ebadf-read is reported twice
 1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-after-end.out | a record follows end
+1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-nul.out | a record follows end
 1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-count.out | end counts records that the report does not have
 1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-othercase.out | the first record is not begin guest.default.errnoprobe
 1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-long.out | a record is longer than 255 bytes

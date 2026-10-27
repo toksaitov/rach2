@@ -318,22 +318,27 @@ static int printable(const char *s)
 }
 
 /**
- * Reads the records among the lines of `text`, the rest being the program's own
- * output.
+ * Reads the records among the lines of the `size` bytes of `text`, the rest
+ * being the program's own output. A NUL byte ends no line, and a record that
+ * has one does not parse.
  */
-static void read_records(struct judging *j, char *text)
+static void read_records(struct judging *j, char *text, size_t size)
 {
     static const char prefix[] = "@etude 1 ";
-    char *line = text, *next;
+    char *line = text, *end = text + size, *next;
     int number = 1;
 
-    for (; line != NULL && *line != '\0'; line = next, number++) {
+    for (; line < end; line = next, number++) {
         size_t len;
+        int nul;
 
-        next = strchr(line, '\n');
-        len = next != NULL ? (size_t)(next - line) + 1 : strlen(line) + 1;
+        next = memchr(line, '\n', (size_t)(end - line));
+        len = next != NULL ? (size_t)(next - line) + 1 : (size_t)(end - line) + 1;
+        nul = memchr(line, '\0', len - 1) != NULL;
         if (next != NULL) {
             *next++ = '\0';
+        } else {
+            next = end;
         }
         if (len > 1 && line[len - 2] == '\r') {
             line[len - 2] = '\0';
@@ -344,7 +349,7 @@ static void read_records(struct judging *j, char *text)
         if (len > LINE_MAX_BYTES) {
             report_error(j, number, "a record is longer than 255 bytes");
             j->parse_errors++;
-        } else if (strncmp(line, prefix, sizeof prefix - 1) != 0 || !printable(line) ||
+        } else if (nul || strncmp(line, prefix, sizeof prefix - 1) != 0 || !printable(line) ||
                    j->n >= RECORDS_MAX ||
                    parse_record(line + sizeof prefix - 1, &j->rec[j->n]) != 0) {
             report_error(j, number, "the record \"%s\" does not parse", line);
@@ -956,7 +961,7 @@ static int judge_text(struct judging *j, const char *path)
         return 2;
     }
     j->rec = json_alloc(RECORDS_MAX * sizeof *j->rec);
-    read_records(j, text);
+    read_records(j, text, len);
     judge_records(j);
     judge_groups(j);
     judge_required(j);
