@@ -663,7 +663,7 @@ struct etude_supervised *etude_supervise_wait(struct etude_supervisor *s, int ti
             a->changed = 0;
         }
         done = take_finished(s);
-        if (done != NULL || (polled && changed))
+        if (done != NULL || changed)
             return done;
         next = soonest(s, &procs, &machines, &any);
         if (!any || (polled && timeout_ms >= 0 && now >= until))
