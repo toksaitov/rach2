@@ -7,6 +7,7 @@
 #ifdef _WIN32
 #include "win/files.h"
 #endif
+#include "../../../tools/etude/include/etude/args.h"
 
 static struct json *read_json(const char *path)
 {
@@ -132,6 +133,7 @@ int main(int argc, char **argv)
     struct json *manifest = NULL, *record = NULL;
     const struct json *definition, *architectures;
     int rc = 2;
+    etude_utf8_args(argc, argv, "style");
     if (!tree)
         tree = ".";
     if (argc == 3 && !strcmp(argv[1], "--fingerprint")) {

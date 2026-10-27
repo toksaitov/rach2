@@ -5,7 +5,7 @@ FAKEAPI_SRC = $(FAKEAPI_NATIVE)/json.c $(FAKEAPI_NATIVE)/platform.c \
               $(FAKEAPI_NATIVE)/protocols.c $(FAKEAPI_NATIVE)/responses.c \
               $(FAKEAPI_NATIVE)/assets.c $(FAKEAPI_NATIVE)/archive.c \
               $(FAKEAPI_NATIVE)/worker.c tools/etude/volume/volume.c
-FAKEAPI_HDR = $(wildcard $(FAKEAPI_NATIVE)/*.h)
+FAKEAPI_HDR = $(wildcard $(FAKEAPI_NATIVE)/*.h) tools/etude/include/etude/args.h
 SNTP_SRC = tests/system/sntpserver.c $(FAKEAPI_NATIVE)/platform.c
 FAKEAPI_SSL = build/vendor/host-openssl
 FAKEAPI_CC = $(HOSTCC)

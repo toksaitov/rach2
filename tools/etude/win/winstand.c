@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../include/etude/args.h"
 #include "../volume/volume.h"
 #include "files.h"
 
@@ -471,6 +472,7 @@ int main(int argc, char **argv)
     wchar_t wide[MAX_PATH * 2];
     DWORD n;
 
+    etude_utf8_args(argc, argv, "winstand");
     n = GetModuleFileNameW(NULL, wide, sizeof wide / sizeof wide[0]);
     if (n == 0 || n >= sizeof wide / sizeof wide[0])
         return 2;

@@ -57,6 +57,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "../host_files.h"
+#include "../etude/include/etude/args.h"
 
 #define LIMIT    80
 #define MAX_FILE (4 * 1024 * 1024)
@@ -1762,13 +1763,21 @@ static int check_devlog(const char *dir)
     return 0;
 }
 
+/** Reads the `argc` arguments of `argv` as UTF-8, then sets `repo` as
+   set_repo does; either failure exits with status 2. */
+static void start(int argc, char **argv)
+{
+    etude_utf8_args(argc, argv, "prosecheck");
+    set_repo();
+}
+
 /** Runs the subcommand `argv[1]` names; the file's header describes each
    and the exit status. */
 int main(int argc, char **argv)
 {
     int i;
 
-    set_repo();
+    start(argc, argv);
 
     if (argc >= 2 && strcmp(argv[1], "--selftest") == 0)
         return selftest();

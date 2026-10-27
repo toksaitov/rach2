@@ -4,16 +4,21 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../hold.h"
+#include "../include/etude/args.h"
 
 /** Run the command named by this executable through the collection adapter. */
 int main(int argc, char **argv)
 {
     char self[4096], root[4096], program[4096], *part, *name;
+    wchar_t wide[4096];
     char **args;
     int i, n;
 
-    n = (int)GetModuleFileNameA(NULL, self, sizeof(self));
-    if (n <= 0 || n >= (int)sizeof(self))
+    etude_utf8_args(argc, argv, "image-command");
+    n = (int)GetModuleFileNameW(NULL, wide, sizeof(wide) / sizeof(wide[0]));
+    if (n <= 0 || n >= (int)(sizeof(wide) / sizeof(wide[0])) ||
+        WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, -1, self, sizeof(self), NULL,
+                            NULL) == 0)
         return 2;
     for (i = 0; self[i]; i++)
         if (self[i] == '\\')

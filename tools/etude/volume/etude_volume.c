@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "volume.h"
+#include "../include/etude/args.h"
 
 static int usage(void)
 {
@@ -49,6 +50,7 @@ int main(int argc, char **argv)
     char why[1024];
     int rc;
 
+    etude_utf8_args(argc, argv, "etude-volume");
     why[0] = '\0';
     if (argc >= 6 && strcmp(argv[1], "seed") == 0)
         rc = etude_volume_seed(argv[2], argv[3], argv[4], (const char *const *)argv + 5, why,

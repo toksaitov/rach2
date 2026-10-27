@@ -10,6 +10,8 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "../../../../tools/etude/include/etude/args.h"
 #ifndef _WIN32
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -1181,7 +1183,9 @@ static int initialize(void)
 }
 int main(int argc, char **argv)
 {
-    const char *name = strrchr(argv[0], '/');
+    const char *name;
+    etude_utf8_args(argc, argv, "fakeapi");
+    name = strrchr(argv[0], '/');
     name = name ? name + 1 : argv[0];
     if (initialize()) {
         setup_failure("initialize process and socket service", argv[0]);

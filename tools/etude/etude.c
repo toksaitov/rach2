@@ -21,6 +21,7 @@
 #include "routine_entry.h"
 #endif
 #include "authority.h"
+#include "etude/args.h"
 
 /* A verb, or a form of one, and the command that runs it. */
 struct verb {
@@ -262,6 +263,7 @@ static int as_make(const char *path)
 
 int main(int argc, char **argv)
 {
+    etude_utf8_args(argc, argv, "etude");
 #if !defined(ETUDE_LOCK_ONLY) && !defined(__rach2__)
     if (argc > 0 && as_make(argv[0]))
         return etude_make_main(argc, argv);

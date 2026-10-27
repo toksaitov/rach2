@@ -486,7 +486,7 @@ $(ELFCHECK): tools/inspect/elfcheck.c
 
 # The set-id guard (tools/inspect/setidcheck.c), reading its declarations from
 # tools/inspect/setid.allow.
-$(SETIDCHECK): tools/inspect/setidcheck.c
+$(SETIDCHECK): tools/inspect/setidcheck.c tools/etude/include/etude/args.h
 	@mkdir -p $(dir $@)
 	$(HOST_LINK) $(CHECKER_FILE_FLAGS)
 
@@ -498,7 +498,7 @@ $(CFGCHECK): tools/inspect/cfgcheck.c
 
 # The prose checks (tools/verify/prosecheck.c): comment width, the banned
 # vocabulary, the phrase counts the report tabulates, and the dev-log index.
-$(PROSECHECK): tools/verify/prosecheck.c
+$(PROSECHECK): tools/verify/prosecheck.c tools/etude/include/etude/args.h
 	@mkdir -p $(dir $@)
 	$(HOST_LINK) $(CHECKER_FILE_FLAGS)
 
@@ -548,7 +548,8 @@ $(ETUDE): $(ETUDE_SRC) $(ETUDE_HDRS) | $(ETUDEVOLUME)
 	@mkdir -p $(dir $@)
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Iutils $(ETUDE_THREAD_FLAGS)
-$(ETUDEVOLUME): $(ETUDE_VOLUME_SRC) $(ETUDE_VOLUME_FILE_SRC) tools/etude/volume/volume.h
+$(ETUDEVOLUME): $(ETUDE_VOLUME_SRC) $(ETUDE_VOLUME_FILE_SRC) tools/etude/volume/volume.h \
+                tools/etude/include/etude/args.h
 	@mkdir -p $(@D)
 	$(ETUDE_LINK) -std=c99 $(ETUDE_VOLUME_FILE_FLAGS)
 
@@ -573,7 +574,8 @@ build/tests/host/tooling_machine: tests/system/tooling_ready.sh | $(ETUDE)
 # The stand-in for a command that a Windows host runs in the tooling machine
 # (tools/etude/collection-windows.sh).
 build/tools/etude/image-command: tools/etude/win/image_command.c tools/etude/win/hold.c \
-                               tools/etude/win/winfmt.c tools/etude/hold.h tools/etude/win/winfmt.h
+                               tools/etude/win/winfmt.c tools/etude/hold.h tools/etude/win/winfmt.h \
+                               tools/etude/include/etude/args.h
 	@mkdir -p $(@D)
 	$(ETUDE_LINK) -std=c99
 
@@ -594,8 +596,8 @@ build/tests/cases/host/host: $(ETUDE_HOSTCASE_SRC) $(ETUDE_HDRS) tests/cases/hos
 	    -Itools/etude/posix -Iutils $(ETUDE_PLATFORM_FLAGS) $(ETUDE_PLATFORM_LIBS)
 
 build/tests/cases/host/style: tests/cases/host/style.c tests/cases/host/source_snapshot.c \
-    tests/cases/host/source_snapshot.h tools/etude/json.c utils/sha256.c \
-    $(if $(filter Windows_NT,$(OS)),$(ETUDE_WIN_EXEC_SRC))
+    tests/cases/host/source_snapshot.h tools/etude/include/etude/args.h tools/etude/json.c \
+    utils/sha256.c $(if $(filter Windows_NT,$(OS)),$(ETUDE_WIN_EXEC_SRC))
 	@mkdir -p $(@D)
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Iutils $(ETUDE_PLATFORM_FLAGS) $(ETUDE_PLATFORM_LIBS)
@@ -772,6 +774,7 @@ build/tests/native/%: tests/native/%
 	@mkdir -p $(@D)
 	cp $< $@
 ETUDE_CASE_LIB_HDRS = tools/etude/include/etude/scenario.h tools/etude/include/etude/contract.h \
+                      tools/etude/include/etude/args.h \
                       tools/etude/include/etude/qemu.h tools/etude/include/etude/exec.h \
                       tools/etude/include/etude/artifact.h tools/etude/include/etude/processor.h \
                       tools/etude/include/etude/report.h tools/etude/posix/posix.h tools/etude/posix/store.h tools/etude/serial.h \

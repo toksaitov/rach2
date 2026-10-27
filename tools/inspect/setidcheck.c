@@ -56,6 +56,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "../host_files.h"
+#include "../etude/include/etude/args.h"
 #ifdef _WIN32
 #include <winioctl.h>
 #endif
@@ -3824,8 +3825,12 @@ static int reads_allow(int argc, char **argv)
  * run. */
 int main(int argc, char **argv)
 {
-    struct allow *allow = reads_allow(argc, argv) ? read_allow(allow_path_beside(argv[0])) : NULL;
-    int rc = run(argc, argv, allow);
+    struct allow *allow;
+    int rc;
+
+    etude_utf8_args(argc, argv, "setidcheck");
+    allow = reads_allow(argc, argv) ? read_allow(allow_path_beside(argv[0])) : NULL;
+    rc = run(argc, argv, allow);
 
     if (allow != NULL)
         allow_free(allow);
