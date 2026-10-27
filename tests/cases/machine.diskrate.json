@@ -71,10 +71,11 @@
       "branches": [],
       "termination": {"end": "exited", "value": 0},
       "progress": [
-        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4},
+        {"witness_id": "lines", "kind": "counter", "means": "a line typed at a machine's console has printed its text, its row done", "limit": 50}
       ],
       "bounds": {
-        "case": {"floor_us": 10000000, "initial_us": 1800000000, "ceiling_us": 3600000000},
+        "case": {"floor_us": 10000000, "initial_us": 3600000000, "ceiling_us": 3600000000},
         "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000},
         "stages": {
           "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},

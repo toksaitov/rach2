@@ -146,6 +146,10 @@ static const struct line ahci_lines[] = {
 /* The console of the boot being judged, carriage returns dropped. */
 static char console[CONSOLE_BYTES];
 
+/* The lines of the three machines whose text has come, the `lines` witness
+ * of the manifest. */
+static uint64_t lines_done;
+
 /**
  * Read the console of boot 1 of machine `machine` into `console`; the
  * empty string when it cannot be read.
@@ -349,10 +353,10 @@ static void exact(struct etude_case *c, const char *id, const char *held_id, con
 
 /**
  * Boot machine `machine` in the step of that name, wait for `ready`, type
- * `lines` in turn, each after the text the one before prints, and end the
- * machine with QMP's `quit`; then read its console. A wait that fails stops
- * the typing and is said on standard error; the caller judges what the
- * console has.
+ * `lines` in turn, each after the text the one before prints, reporting the
+ * `lines` witness as each text comes, and end the machine with QMP's `quit`;
+ * then read its console. A wait that fails stops the typing and is said on
+ * standard error; the caller judges what the console has.
  *
  * @return 0 when every line's text came, -1 otherwise.
  */
@@ -378,6 +382,8 @@ static int drive(struct etude_case *c, const char *machine, const struct line *r
             break;
         if (etude_console_wait(m, l->expect, at, &at) != ETUDE_OK)
             break;
+        if (i >= nready)
+            etude_progress(c, "lines", ++lines_done);
     }
     if (i == nready + n)
         rc = 0;
