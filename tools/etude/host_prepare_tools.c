@@ -58,6 +58,23 @@ static int native_magic(const char *path)
             !memcmp(bytes, "MZ", 2));
 }
 
+/**
+ * Place the native tool `source` at `to`: a copy, or on macOS a link for a
+ * program of the sealed system volume, which macOS kills when a copy of it
+ * runs from any other path. That volume does not change while the system runs.
+ */
+static int place_tool(const char *source, const char *to)
+{
+#ifdef __APPLE__
+    static const char *const sealed[] = {"/bin/", "/sbin/", "/usr/bin/", "/usr/sbin/",
+                                         "/usr/libexec/"};
+    for (size_t i = 0; i < sizeof(sealed) / sizeof(sealed[0]); i++)
+        if (!strncmp(source, sealed[i], strlen(sealed[i])))
+            return symlink(source, to) ? -1 : 0;
+#endif
+    return copy_file(source, to);
+}
+
 static int copied_tool(struct hp_context *c, const char *root, const char *name, const char *source,
                        struct json *inputs)
 {
@@ -67,7 +84,7 @@ static int copied_tool(struct hp_context *c, const char *root, const char *name,
             (int)sizeof(temporary) ||
         snprintf(provenance, sizeof(provenance), "%s.provenance.json", output) >=
             (int)sizeof(provenance) ||
-        hp_mkdir(root) || hp_hash(source, before) || copy_file(source, temporary) ||
+        hp_mkdir(root) || hp_hash(source, before) || place_tool(source, temporary) ||
         !native_magic(temporary) || hp_hash(temporary, copy) || hp_hash(source, after) ||
         strcmp(before, after) || strcmp(before, copy)) {
         if (temporary[0])

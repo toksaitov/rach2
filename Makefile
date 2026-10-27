@@ -663,8 +663,9 @@ build/x86_64/tests/host-suite/boots.inventory.json: $(ETUDE) $(HOST_BOOT_SCHEMAS
     build/x86_64/tests/rngprobe build/x86_64/tools/etude/guest/etude-guest
 
 # The desktop's own Git and tar, which the native platform check runs.
-# Preparation copies each into build/tests/host-suite/tools and records the
-# file the link resolves to; the GNU helper names its own directory instead.
+# Preparation copies each into build/tests/host-suite/tools, or links one of
+# macOS's sealed system volume, and records the file the link resolves to; the
+# GNU helper names its own directory instead.
 HOST_PREPARED_TOOLS = build/tests/host-suite/prepared-tools
 .PHONY: host-inventory-force host-prepared-tools
 host-inventory-force:
