@@ -107,7 +107,10 @@ static int ret_proof_document(const char *path, struct json *pending)
     if (n >= 6 && !strcmp(path + n - 6, ".jsonl"))
         return ret_proof_lines(path, pending);
     struct json *document = ret_document(path);
-    rc = !document || ret_references(document, pending);
+    /* A store blob is named by its digest, so a stream there has no suffix. */
+    if (!document)
+        return ret_proof_lines(path, pending);
+    rc = ret_references(document, pending);
     json_free(document);
     return rc;
 }
