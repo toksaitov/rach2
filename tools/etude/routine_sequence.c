@@ -42,8 +42,10 @@ static unsigned sequence_limit(const char *purpose)
 static int sequence_environment(const struct routine_input *in, const struct routine_site *site)
 {
     const char *admitted = getenv("ETUDE_ADMITTED");
-    if (admitted && *admitted)
+    if (admitted && *admitted) {
+        fputs("etude routine: ETUDE_ADMITTED: set; a sequence starts outside admission\n", stderr);
         return -1;
+    }
     char jobs[32], path[ROUTINE_PATH];
     snprintf(jobs, sizeof jobs, "%u", site->jobs);
     if (setenv("ETUDE_BUILD_JOBS", jobs, 1) || setenv("JOBS", jobs, 1) ||
@@ -170,8 +172,13 @@ int etude_routine_sequence_main(int argc, char **argv)
     struct routine_input in;
     struct routine_site site;
     struct json *phase = NULL;
-    if (routine_input_read(argc, argv, &in) || !sequence_limit(in.purpose) ||
-        routine_phase_inputs(in.purpose, &phase))
+    if (routine_input_read(argc, argv, &in))
+        return 2;
+    if (!sequence_limit(in.purpose)) {
+        fprintf(stderr, "etude routine: PURPOSE: %s has no sequence\n", in.purpose);
+        return 2;
+    }
+    if (routine_phase_inputs(in.purpose, &phase))
         return 2;
     json_free(phase);
     const char *route = getenv("ETUDE_ROUTINE_ROUTE");

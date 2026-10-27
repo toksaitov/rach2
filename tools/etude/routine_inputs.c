@@ -22,16 +22,36 @@ int routine_path(char out[ROUTINE_PATH], const char *root, const char *name)
     return n < 0 || n >= ROUTINE_PATH ? -1 : 0;
 }
 
-static int input_path(const char *path, char out[ROUTINE_PATH], int directory)
+/**
+ * Print on stderr why the routine input `name` was refused, and return -1.
+ */
+static int refused(const char *name, const char *why)
+{
+    fprintf(stderr, "etude routine: %s: %s\n", name, why);
+    return -1;
+}
+
+/**
+ * Resolve `path`, which must name an existing directory or regular file.
+ *
+ * Nothing is made: an OUT directory must exist before the command runs. A
+ * refusal says on stderr which input, `name`, was wrong.
+ */
+static int input_path(const char *name, const char *path, char out[ROUTINE_PATH], int directory)
 {
     char *absolute = realpath(path, NULL);
     struct stat st;
-    int error = !absolute || strlen(absolute) >= ROUTINE_PATH || stat(absolute, &st) ||
-                (directory ? !S_ISDIR(st.st_mode) : !S_ISREG(st.st_mode));
-    if (!error)
+    const char *why = NULL;
+    if (!absolute || stat(absolute, &st))
+        why = strerror(errno);
+    else if (strlen(absolute) >= ROUTINE_PATH)
+        why = strerror(ENAMETOOLONG);
+    else if (directory ? !S_ISDIR(st.st_mode) : !S_ISREG(st.st_mode))
+        why = directory ? "not a directory" : "not a regular file";
+    else
         strcpy(out, absolute);
     free(absolute);
-    return error ? -1 : 0;
+    return why ? refused(name, why) : 0;
 }
 
 static int selection_words(int argc, char **argv)
@@ -54,26 +74,38 @@ static int selection_words(int argc, char **argv)
 int routine_input_read(int argc, char **argv, struct routine_input *input)
 {
     memset(input, 0, sizeof *input);
-    if (argc < 10 || input_path(argv[2], input->tree, 1) || input_path(argv[3], input->out, 1) ||
-        input_path(argv[6], input->site, 0) || input_path(argv[7], input->program, 0) ||
-        access(input->program, X_OK))
+    if (argc < 10)
+        return refused("usage",
+                       "PURPOSE TREE OUT ARCHES RUN_ID SITE IMMUTABLE_ETUDE ACCEL SELECTION...");
+    if (input_path("TREE", argv[2], input->tree, 1) || input_path("OUT", argv[3], input->out, 1) ||
+        input_path("SITE", argv[6], input->site, 0) ||
+        input_path("IMMUTABLE_ETUDE", argv[7], input->program, 0))
         return -1;
+    if (access(input->program, X_OK))
+        return refused("IMMUTABLE_ETUDE", strerror(errno));
     input->purpose = argv[1];
     input->arches = argv[4];
     input->run = argv[5];
     input->accel = argv[8];
     input->count = argc - 9;
     input->selection = argv + 9;
-    if ((strcmp(input->purpose, "push") && strcmp(input->purpose, "ci") &&
-         strcmp(input->purpose, "release") && strcmp(input->purpose, "focused") &&
-         strcmp(input->purpose, "phase_first_run")) ||
-        (strcmp(input->arches, "both") && strcmp(input->arches, "i686") &&
-         strcmp(input->arches, "x86_64")) ||
-        (strcmp(input->accel, "tcg") && strcmp(input->accel, "kvm") &&
-         strcmp(input->accel, "hvf") && strcmp(input->accel, "whpx")) ||
-        !authority_token(input->run) || selection_words(input->count, input->selection))
-        return -1;
-    return etude_context_candidate(input->tree, input->commit);
+    if (strcmp(input->purpose, "push") && strcmp(input->purpose, "ci") &&
+        strcmp(input->purpose, "release") && strcmp(input->purpose, "focused") &&
+        strcmp(input->purpose, "phase_first_run"))
+        return refused("PURPOSE", "not push, ci, release, focused or phase_first_run");
+    if (strcmp(input->arches, "both") && strcmp(input->arches, "i686") &&
+        strcmp(input->arches, "x86_64"))
+        return refused("ARCHES", "not both, i686 or x86_64");
+    if (strcmp(input->accel, "tcg") && strcmp(input->accel, "kvm") && strcmp(input->accel, "hvf") &&
+        strcmp(input->accel, "whpx"))
+        return refused("ACCEL", "not tcg, kvm, hvf or whpx");
+    if (!authority_token(input->run))
+        return refused("RUN_ID", "not a run token");
+    if (selection_words(input->count, input->selection))
+        return refused("SELECTION", "not -S, -R or -L pairs followed by suite names");
+    if (etude_context_candidate(input->tree, input->commit))
+        return refused("TREE", "not a git checkout without changes or untracked files");
+    return 0;
 }
 
 int routine_command(struct hp_words *args, volatile sig_atomic_t *stop)
@@ -177,11 +209,16 @@ int routine_phase_inputs(const char *purpose, struct json **value)
     const char *path = getenv("ETUDE_PHASE_SELECTION_EXPORT");
     const char *clean = getenv("ETUDE_PREPARATION_CLEAN");
     int first = !strcmp(purpose, "phase_first_run");
-    if ((!first && path) || (first && (!path || (clean && strcmp(clean, "1")))))
-        return -1;
+    if (!first && path)
+        return refused("ETUDE_PHASE_SELECTION_EXPORT",
+                       "set for a purpose other than phase_first_run");
+    if (first && !path)
+        return refused("ETUDE_PHASE_SELECTION_EXPORT", "phase_first_run needs it");
+    if (first && clean && strcmp(clean, "1"))
+        return refused("ETUDE_PREPARATION_CLEAN", "set to a value other than 1");
     struct json *descriptor = first && authority_absolute(path) ? phase_export(path) : NULL;
     if (first && !descriptor)
-        return -1;
+        return refused("ETUDE_PHASE_SELECTION_EXPORT", "not an absolute path to a valid export");
     struct json *doc = hp_value(JSON_OBJECT);
     struct json *condition = hp_value(JSON_BOOLEAN);
     condition->integer = first ? clean != NULL : !strcmp(purpose, "release");

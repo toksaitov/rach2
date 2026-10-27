@@ -547,6 +547,35 @@ static void entry_counted_rows(void)
     free(site);
     free(out);
 }
+static void entry_refusal_rows(void)
+{
+    char *tree = entry_path("tree"), *site = entry_path("site"), *out = entry_path("missing");
+    char *log = entry_path("refusal.stderr");
+    char *argv[] = {"routine-sequence", "ci",  tree,  out, "both", "sample", site,
+                    entry_self,         "tcg", "all", NULL};
+    FILE *file = fopen(log, "wb");
+    int saved = dup(2);
+    ENTRY_CHECK(file && saved >= 0);
+    fflush(stderr);
+    if (file && saved >= 0 && dup2(fileno(file), 2) >= 0) {
+        entry_observed = 0;
+        ENTRY_CHECK(etude_routine_sequence_main(10, argv) == 2 && !entry_observed);
+        fflush(stderr);
+        dup2(saved, 2);
+    }
+    if (saved >= 0)
+        close(saved);
+    if (file)
+        fclose(file);
+    char *bytes = hp_read(log);
+    ENTRY_CHECK(bytes && !strncmp(bytes, "etude routine: OUT: ", 20) && strchr(bytes, '\n') &&
+                !strchr(bytes, '\n')[1]);
+    free(bytes);
+    free(log);
+    free(out);
+    free(site);
+    free(tree);
+}
 static void entry_preallocation_rows(void)
 {
     char *expected = entry_allocation("preallocated.json");
@@ -742,6 +771,7 @@ int etude_test_routine_entry(const char *self)
     entry_phase_rows();
     entry_selection_rows();
     entry_counted_rows();
+    entry_refusal_rows();
     entry_request_rows();
     entry_preallocation_rows();
     ENTRY_CHECK(!chdir(cwd));

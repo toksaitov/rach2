@@ -188,20 +188,38 @@ static int routine_site_paths(const char *path, const struct routine_site *site)
     return error ? -1 : 0;
 }
 
+/**
+ * Print on stderr why the routine input `name` was refused, and return -1.
+ */
+static int routine_site_refused(const char *name, const char *why)
+{
+    fprintf(stderr, "etude routine: %s: %s\n", name, why);
+    return -1;
+}
+
 int routine_site_read(const char *path, const char *route, struct routine_site *site)
 {
     struct authority_binding binding;
     memset(site, 0, sizeof *site);
-    if (!authority_absolute(path) || (route && routine_route_mode(route, site->mode)))
-        return -1;
+    if (!authority_absolute(path))
+        return routine_site_refused("SITE", "not an absolute path");
+    if (route && routine_route_mode(route, site->mode))
+        return routine_site_refused("ETUDE_ROUTINE_ROUTE", "not a valid route");
     int routed = route && strcmp(site->mode, "macos-import");
     if (routed && authority_route(path, route, &binding))
-        return -1;
-    if (routine_site_fields(path, site) || (routed && strcmp(binding.program, site->program)))
-        return -1;
+        return routine_site_refused("ETUDE_ROUTINE_ROUTE", "not bound to SITE");
+    if (routine_site_fields(path, site))
+        return routine_site_refused("SITE", "not a version-two admission policy");
+    if (routed && strcmp(binding.program, site->program))
+        return routine_site_refused("ETUDE_ROUTINE_ROUTE", "names another program than SITE");
     if (routed && !strcmp(site->endpoint, "disabled"))
         strcpy(site->endpoint, routine_endpoint());
     if (strcmp(site->endpoint, routine_endpoint()))
-        return -1;
-    return routine_site_paths(path, site) || routine_site_resources(site) ? -1 : 0;
+        return routine_site_refused("SITE", "its endpoint is not this host's");
+    if (routine_site_paths(path, site))
+        return routine_site_refused("SITE", "a program, ledger, lock directory, ETUDE_REFERENCE "
+                                            "or ETUDE_PREPARATION_IMPORT is missing");
+    if (routine_site_resources(site))
+        return routine_site_refused("SITE", "its capacity does not admit JOBS jobs, or no account");
+    return 0;
 }
