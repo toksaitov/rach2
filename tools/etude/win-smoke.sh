@@ -73,7 +73,7 @@ ETUDE_SITE=$work/site/policy JOBS=2 make -j2 build/tools/etude/etude \
 }
 "$work/pecheck.exe" build/tools/etude/etude build/tests/cases/machine/default_scenario
 mkdir -p "$work/host-logs" "$work/host-scratch"
-printf 'sha256\t60\tshared\tSHA-256 vectors\t\t%s\n' \
+printf 'sha256\tshared\tSHA-256 vectors\t\t%s\n' \
     "\"$(cygpath -m "$work/sha256.exe")\"" >"$work/host-selection"
 MSYS2_ARG_CONV_EXCL='*' build/tools/etude/etude run host -j 1 \
     -l "$(cygpath -m "$work/host-logs")" -s "$(cygpath -m "$work/host-scratch")" \
