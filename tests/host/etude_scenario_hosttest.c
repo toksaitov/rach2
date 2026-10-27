@@ -3312,6 +3312,7 @@ static int find_procs(const char *need, const char *const any[], long pids[ROW_P
 struct job_processes {
     HANDLE job;
     long *pids;
+    HANDLE *processes; /* held open from the census, so that none ends unseen */
     int n;
     int machines; /* the stand-ins for QEMU among them */
 };
@@ -3320,20 +3321,19 @@ struct job_processes {
 static int match_job(long pid, const char *arguments, void *ctx)
 {
     struct job_processes *j = ctx;
-    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+    HANDLE process =
+        OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
     BOOL member = FALSE;
     int ok;
 
     if (process == NULL)
         return 0;
     ok = IsProcessInJob(process, j->job, &member);
-    CloseHandle(process);
-    if (!ok)
-        return -1;
-    if (!member)
-        return 0;
-    if (j->n == ROW_PROCS)
-        return -1;
+    if (!ok || !member || j->n == ROW_PROCS) {
+        CloseHandle(process);
+        return ok && !member ? 0 : -1;
+    }
+    j->processes[j->n] = process;
     j->pids[j->n++] = pid;
     j->machines += strstr(arguments, " -accel ") != NULL;
     printf("etude-scenario-test: owned process %ld: %s\n", pid, arguments);
@@ -3343,15 +3343,19 @@ static int match_job(long pid, const char *arguments, void *ctx)
 /**
  * Put in `pids` the processes of the job `job`, which holds a row's scenario
  * and every process it starts, the stand-ins for QEMU among them, whose
- * arguments may name no path of the row; give their count, or -1 when
- * native process queries fail, and in `machines` how many are stand-ins.
+ * arguments may name no path of the row, and in `processes` a handle to each
+ * that the caller closes; give their count, or -1 when native process
+ * queries fail, and in `machines` how many are stand-ins.
  */
-static int job_procs(HANDLE job, long pids[ROW_PROCS], int *machines)
+static int job_procs(HANDLE job, long pids[ROW_PROCS], HANDLE processes[ROW_PROCS], int *machines)
 {
-    struct job_processes j = {job, pids, 0, 0};
+    struct job_processes j = {job, pids, processes, 0, 0};
 
-    if (host_process_arguments(match_job, &j) != 0)
+    if (host_process_arguments(match_job, &j) != 0) {
+        while (j.n > 0)
+            CloseHandle(processes[--j.n]);
         return -1;
+    }
     *machines = j.machines;
     return j.n;
 }
@@ -3900,12 +3904,8 @@ static void test_suspend(const struct site *s)
     run_row(&suspend_rows[2], s, NULL);
     row_start(&killed, &suspend_rows[3], s);
 #ifdef _WIN32
-    if (killed.started && attempt_read(&killed.a, STALLED, NULL)) {
-        count = job_procs(killed.a.child.job, pids, &machines);
-        for (i = 0; i < count; i++)
-            processes[i] =
-                OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pids[i]);
-    }
+    if (killed.started && attempt_read(&killed.a, STALLED, NULL))
+        count = job_procs(killed.a.child.job, pids, processes, &machines);
 #endif
     row_finish(&killed, STALLED, 0);
     CHECK(killed.a.stopped, "suspend-kill: killed during its stop");
