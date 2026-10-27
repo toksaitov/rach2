@@ -98,7 +98,7 @@ On 23 October the owner set aside the proof of a new test by a deliberate fault 
 * T88, #677, 2470763f8: no suite is a make target, and `tests/run` runs only cases. Met.
 * T89, #678, 4b82fa153: the old harness, runtests, runutil and their tests, with the `runner` and `drive` suites, removed (9da97a088, #875). Met.
 * T90, #679: the whole run `phase589-linux-a720d347d8ba-clean-01` on a720d347d (#1314), both architectures in one schedule: 1033 cases, 1032 passed. The one failure, `machine.agentsaccept.claude` on x86_64, was a fault of the test, fixed by a25201d5e (#1322). Met under the owner's ruling of 27 October; the earlier [Ubuntu runs](ubuntu-run.md) are historical adapter results.
-* T91, #680: the final Mac run `phase589-macos-4c323664a065-clean-01` on 4c323664a: MACRESULT. The Mac's run 3 had failed three cases, whose fixes are on master.
+* T91, #680: the final Mac run `phase589-macos-4c323664a065-clean-01` on 4c323664a: every one of its 1033 cases passed, in 9622 s, with cleanup confirmed (closed 27 October). The Mac's run 3 had failed three cases, whose fixes are on master.
 * T92, #681: WINRESULT
 * T93, #682: [the final Lenovo record](native-final.md) binds all 250 eligible cases to the exact repaired kernel, complete results and independent cleanup. The whole selection passed 249 cases; an ordinary-init reboot and unchanged procps retry passed the remaining case. The original failed attempt and diagnostic histories remain separate. Normal boot, network, root and original account restoration were verified. Met for that native candidate; desktop comparison and release remain separate.
 * T94, #683: [the comparison of the test machines](machines.md) recommends RECO and proposes its site profile. The Lenovo's smaller selection is not ranked.
