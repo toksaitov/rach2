@@ -687,11 +687,13 @@ static void test_expire(void)
 }
 
 /** The removal of entries, what goes: -p removes nothing; an entry that no
- * stamp names goes with its lock file and is built again; and the refusals. */
+ * stamp names goes with its lock file and is built again; an entry that is a
+ * link stays, with its target untouched; and the refusals. */
 static void test_expire_removal(void)
 {
-    char p[1200], buf[256];
+    char p[1200], buf[256], victim[1200];
     struct ran r;
+    struct stat st;
 
     fix_format(p, sizeof p, "%s/locks/%s", shelf, ports_e + strlen(shelf) + 9);
     run(copy_a, ex_list, &r);
@@ -711,6 +713,21 @@ static void test_expire_removal(void)
     run(copy_a, ex_go, &r);
     CHECK(r.status == 0 && strstr(r.out, "result: removed 1 entries") != NULL && !exists(demo_e),
           "expire: a stamp that names another key no longer keeps the entry");
+
+    fix_format(victim, sizeof victim, "%s/victim", fix_dir());
+    put(victim, "secret\n");
+    chmod(victim, 0600);
+    fix_format(p, sizeof p, "%s/entries/%s", shelf,
+               "2222222222222222222222222222222222222222222222222222222222222222");
+    CHECK(symlink(victim, p) == 0, "expire: the test links an entry to a file");
+    age(shelf, "entries");
+    run(copy_a, ex_go, &r);
+    CHECK(r.status == 1 && strstr(r.out, "is not a directory, and stays") != NULL &&
+              lstat(p, &st) == 0 && S_ISLNK(st.st_mode) && stat(victim, &st) == 0 &&
+              (st.st_mode & 07777) == 0600,
+          "expire: an entry that is a link stays, and the mode of its target is kept");
+    unlink(p);
+    unlink(victim);
 
     run(copy_a, ex_tc, &r);
     CHECK(r.status == 0 && strstr(r.out, "built in the store") != NULL && exists(tc_e) &&

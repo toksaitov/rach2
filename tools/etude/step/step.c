@@ -540,6 +540,22 @@ static int write_stamp(const struct step *s, const char *origin)
 }
 
 /**
+ * Set the mode of the directory `path` through a descriptor opened without
+ * following a symbolic link, so that a link put in the directory's place
+ * changes nothing. 0, or -1.
+ */
+static int chmod_dir(const char *path, mode_t mode)
+{
+    int fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW), rc;
+
+    if (fd < 0)
+        return -1;
+    rc = fchmod(fd, mode);
+    close(fd);
+    return rc;
+}
+
+/**
  * Remove `path` and everything under it. A directory of the caller's that it
  * may not write is made writable first, so that a sealed entry of its own
  * can go. 0, or -1 when something stayed.
@@ -556,7 +572,7 @@ static int remove_tree(const char *path)
         struct dirent *e;
 
         if ((st.st_mode & S_IRWXU) != S_IRWXU)
-            chmod(path, (st.st_mode & 07777) | S_IRWXU);
+            chmod_dir(path, (st.st_mode & 07777) | S_IRWXU);
         if ((d = opendir(path)) == NULL)
             return -1;
         while ((e = readdir(d)) != NULL) {
@@ -1585,7 +1601,7 @@ static time_t entry_used(const struct step *s, const char *key)
 /**
  * Remove the entry `d`, whose lock this process holds, and its lock file,
  * adding its size to `freed`; with -p only report it. 0, or -1 when the entry
- * cannot be moved out of entries/.
+ * is not a directory or cannot be moved out of entries/.
  */
 static int drop_entry(const struct step *s, const struct doomed *d, double *freed)
 {
@@ -1598,13 +1614,17 @@ static int drop_entry(const struct step *s, const struct doomed *d, double *free
         path_fmt(aside, "%s/tmp/%s.gone.%ld", s->shelf, d->key, (long)getpid()) != 0 ||
         lstat(entry, &st) != 0)
         return -1;
+    if (!S_ISDIR(st.st_mode)) {
+        say(s, "%s is not a directory, and stays", entry);
+        return -1;
+    }
     bytes = tree_bytes(entry);
     entry_what(entry, what, sizeof(what));
     if (!s->print) {
-        chmod(entry, (st.st_mode & 07777) | S_IRWXU);
+        chmod_dir(entry, (st.st_mode & 07777) | S_IRWXU);
         if (rename(entry, aside) != 0) {
             say(s, "cannot remove %s: %s", entry, strerror(errno));
-            chmod(entry, st.st_mode & 07777);
+            chmod_dir(entry, st.st_mode & 07777);
             return -1;
         }
         if (remove_tree(aside) != 0)
