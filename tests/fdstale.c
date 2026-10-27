@@ -973,7 +973,6 @@ static void reap(int pid, const char *what)
     int reaped = syscall3(SYS_WAITPID, pid, (long)&status, 0);
 
     child_reached(reaped == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0);
-    held(what);
 
     if (reaped != pid) {
         fail(what, reaped);
@@ -989,6 +988,7 @@ static void reap(int pid, const char *what)
     if (WEXITSTATUS(status) != 0) {
         fail(what, WEXITSTATUS(status));
     }
+    held(what);
 }
 
 /** Nothing happens to this descriptor, so what it reads is what every later
