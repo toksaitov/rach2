@@ -643,7 +643,7 @@ static int fx_stop(void)
         err = wait_end(c);
     if (err != 0)
         r = failed("stop: %s", errtext(err));
-    else if (!tree_ended(h, k, 0))
+    else if (!tree_ended(h, k, BOUND))
         r = failed("a process of the tree outlived its job's end");
     else if (!c->stopped || c->status != ETUDE_WIN_STOP_STATUS)
         r = failed("status %#lx, stopped %d", (unsigned long)c->status, c->stopped);

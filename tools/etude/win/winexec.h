@@ -151,6 +151,11 @@ DWORD etude_win_start(struct etude_win_sup *s, const struct etude_win_spawn *sp,
  * also asks each job and process for its state, and a wait is never longer
  * than a tenth of a second between those questions.
  *
+ * Windows counts a process out of its job while the process's last thread
+ * exits, before the process's handle is signalled, so a handle to a process
+ * of the tree may be signalled a moment after its child is `ended`. The
+ * process runs none of its own code in that time.
+ *
  * @return the number of children that ended during the call, or -1 when the
  *         port failed, with the error in GetLastError.
  */
