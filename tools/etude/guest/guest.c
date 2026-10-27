@@ -3014,24 +3014,52 @@ static void on_signal(int sig)
     errno = saved;
 }
 
-/** Make the state directories under `opt.state`: the state directory and
+/** 0 when `st` is of the type `type` and owned by the effective user;
+ * otherwise -1 with `errno` EPERM. */
+static int owned(const struct stat *st, mode_t type)
+{
+    if ((st->st_mode & S_IFMT) == type && st->st_uid == geteuid())
+        return 0;
+    errno = EPERM;
+    return -1;
+}
+
+/**
+ * Make the state directories under `opt.state`: the state directory and
  * `a`, mode 0711, which a case's other ids search to reach their workspaces,
- * and `f` and `s`, 0700. */
+ * and `f` and `s`, 0700, and open `guest.log` in it.
+ *
+ * Each that exists already must be a directory, or for the log a regular
+ * file, of the effective user, and is never reached through a symbolic link,
+ * since the default directory is in `/tmp`, where another user may make it
+ * first. Below a directory so checked no other user can make a name.
+ */
 static int make_state(void)
 {
     static const char *const sub[] = {"", "/a", "/f", "/s"};
     static const mode_t mode[] = {0711, 0711, 0700, 0700};
     char path[PATH_CAP];
+    struct stat st;
     size_t i;
 
     for (i = 0; i < sizeof(sub) / sizeof(sub[0]); i++)
         if (path_of(path, "%s%s", opt.state, sub[i]) < 0 ||
-            (mkdir(path, mode[i]) < 0 && errno != EEXIST) || chmod(path, mode[i]) < 0)
+            (mkdir(path, mode[i]) < 0 && errno != EEXIST) || lstat(path, &st) < 0 ||
+            owned(&st, S_IFDIR) < 0 || chmod(path, mode[i]) < 0)
             return -1;
     if (path_of(path, "%s/guest.log", opt.state) < 0)
         return -1;
-    log_fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
-    return log_fd < 0 ? -1 : 0;
+    log_fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_NOCTTY | O_CLOEXEC, 0600);
+    if (log_fd < 0)
+        return -1;
+    if (fstat(log_fd, &st) < 0 || owned(&st, S_IFREG) < 0) {
+        int e = errno;
+        close(log_fd);
+        log_fd = -1;
+        errno = e;
+        return -1;
+    }
+    return 0;
 }
 
 /** Put the console in raw mode, so that a frame passes through it as bytes:

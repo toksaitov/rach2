@@ -1348,6 +1348,65 @@ static void check_record_first(void)
     bye(0);
 }
 
+/** The status of etude-guest started with `--state DIR` and nothing on its
+ * input, or -1 when it did not exit. */
+static int state_status(const char *dir)
+{
+    char *argv[] = {"etude-guest", "--stdio", "--state", (char *)dir, NULL};
+    pid_t pid = fork();
+    int st;
+
+    if (pid == 0) {
+        int null = open("/dev/null", O_RDWR);
+        dup2(null, 0);
+        dup2(null, 1);
+        dup2(null, 2);
+        _exit(etude_guest_main(4, argv));
+    }
+    if (pid < 0 || waitpid(pid, &st, 0) != pid || !WIFEXITED(st))
+        return -1;
+    return WEXITSTATUS(st);
+}
+
+/** A state directory, or a log in it, that is a symbolic link or not of
+ * its type is refused, and nothing is written through it. */
+static void check_state_refused(void)
+{
+    char target[600];
+    char link[600];
+    char path[700];
+    char victim[700];
+    struct stat st;
+    int fd;
+
+    snprintf(target, sizeof(target), "%s/target", work);
+    snprintf(link, sizeof(link), "%s/link", work);
+    CHECK(mkdir(target, 0755) == 0 && symlink(target, link) == 0,
+          "the test makes a linked state directory");
+    CHECK(state_status(link) == 1, "a state directory that is a symbolic link is refused");
+    snprintf(path, sizeof(path), "%s/guest.log", target);
+    CHECK(lstat(path, &st) < 0 && stat(target, &st) == 0 && (st.st_mode & 07777) == 0755,
+          "nothing is made or changed through a linked state directory");
+    unlink(link);
+    fd = open(link, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (fd >= 0)
+        close(fd);
+    CHECK(state_status(link) == 1, "a state path that is a file is refused");
+    unlink(link);
+    snprintf(victim, sizeof(victim), "%s/victim", target);
+    snprintf(path, sizeof(path), "%s/guest.log", link);
+    fd = open(victim, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (fd >= 0)
+        close(fd);
+    CHECK(fd >= 0 && mkdir(link, 0700) == 0 && symlink(victim, path) == 0,
+          "the test makes a linked log");
+    CHECK(state_status(link) == 1, "a log that is a symbolic link is refused");
+    CHECK(stat(victim, &st) == 0 && st.st_size == 0, "nothing is written through a linked log");
+    unlink(path);
+    unlink(victim);
+    rmdir(target);
+}
+
 /** A frame with a bad CRC ends a standard-I/O connection. */
 static void check_stdio_damage(void)
 {
@@ -1722,6 +1781,7 @@ int main(int argc, char **argv)
         check_group_records();
         check_unfinished_end();
         check_record_first();
+        check_state_refused();
         check_stdio_damage();
         check_fixtures();
         check_serial();
