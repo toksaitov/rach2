@@ -55,7 +55,7 @@ No machine meets the routine run's goal of 3600 s; all are within its ceiling of
 
 ## Where the time goes
 
-Neither run used the width it was given. The collection kept 4.9 processors busy on average on Ubuntu and 3.3 on the Mac, with 8 workers: its time is set by its longest chains of cases, not by the number of workers. The Mac's history gives each case's elapsed and processor time. Its costliest families, by the sum of their cases' elapsed seconds, were these:
+The collection kept 4.9 processors busy on average on Ubuntu and 3.3 on the Mac, each with 8 workers. A worker counts as busy while its case locks, loads or runs, so these averages do not show how many workers were in use. The Mac's history gives each case's elapsed and processor time. Its costliest families, by the sum of their cases' elapsed seconds, were these:
 
 | Family | Architecture | Cases | Elapsed s | Processor s |
 | --- | --- | ---: | ---: | ---: |
@@ -72,7 +72,7 @@ Its longest cases were `machine.gnu.autotools`, 1661 s on i686 and 1348 s on x86
 
 ## The fastest run
 
-Of the runs made, Windows 11 on the testing PC, under WHPX, ran the collection fastest: 5432 s, against 8815 s for Ubuntu in WSL and 9547 s for the Mac. The comparison is not the plan's: the Windows run had 20 workers against 8, and one case fewer. Most of the difference is in the collection, 3065 s against 7559 s, where a guest under WHPX runs on the processor and one under TCG is translated; Ubuntu's collection kept only 4.9 processors busy on average with its 8 workers, so more workers would not close that gap.
+Of the runs made, Windows 11 on the testing PC, under WHPX, ran the collection fastest: 5432 s, against 8815 s for Ubuntu in WSL and 9547 s for the Mac. The comparison is not the plan's: the Windows run had 20 workers against 8, and one case fewer. Most of the difference is in the collection, 3065 s against 7559 s. A guest under WHPX runs on the processor and one under TCG is translated, and the Windows run had more workers; one run of each does not separate the two causes.
 
 A run of Windows at Ubuntu's width, 8 workers, would make the comparison the plan asks for. The owner chooses the machine for routine testing.
 
