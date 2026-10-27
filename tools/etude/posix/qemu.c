@@ -24,9 +24,32 @@
 #include "../win/sockets.h"
 #else
 typedef int etude_socket;
-#define socket_read  read
-#define socket_write write
-#define socket_close close
+/* A POSIX socket keeps what has arrived until it is read, and needs no
+ * receive of the launcher's own. */
+struct socket_in {
+    char unused;
+};
+#define socket_read(in, fd, buf, n) read(fd, buf, n)
+#define socket_write                write
+#define socket_close                close
+
+static void socket_in_start(struct socket_in *in, int fd)
+{
+    (void)in;
+    (void)fd;
+}
+
+static void socket_in_stop(struct socket_in *in, int fd)
+{
+    (void)in;
+    (void)fd;
+}
+
+static void socket_in_pump(struct socket_in *in, int fd)
+{
+    (void)in;
+    (void)fd;
+}
 #endif
 
 #include "../capture.h"
@@ -85,6 +108,7 @@ struct etude_machine {
     char qmp_path[128];
     etude_socket console_listen, qmp_listen; /* -1 once QEMU has connected */
     etude_socket console, qmp;               /* QEMU's connections; -1 once closed */
+    struct socket_in console_in, qmp_in;     /* their reading sides */
     int console_file;
     char *audio_path;
     int audio_created, audio_temporary;
@@ -211,13 +235,21 @@ static void close_socket_fd(etude_socket *fd)
     *fd = -1;
 }
 
+/** Stop reading connection `*fd` through `in`, close it, and mark it closed. */
+static void close_channel(etude_socket *fd, struct socket_in *in)
+{
+    if (*fd >= 0)
+        socket_in_stop(in, *fd);
+    close_socket_fd(fd);
+}
+
 /** Remove the machine's sockets and close what is open. */
 static void machine_close(struct etude_machine *m)
 {
     close_socket_fd(&m->console_listen);
     close_socket_fd(&m->qmp_listen);
-    close_socket_fd(&m->console);
-    close_socket_fd(&m->qmp);
+    close_channel(&m->console, &m->console_in);
+    close_channel(&m->qmp, &m->qmp_in);
     close_fd(&m->console_file);
     if (m->dir[0] != '\0') {
 #ifndef _WIN32
@@ -582,13 +614,13 @@ static void console_read(struct etude_machine *m, size_t limit)
     ssize_t n;
 
     while (m->console >= 0 && (limit == 0 || total < limit)) {
-        n = socket_read(m->console, buf, sizeof(buf));
+        n = socket_read(&m->console_in, m->console, buf, sizeof(buf));
         if (n < 0 && errno == EINTR)
             continue;
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
             return;
         if (n <= 0) {
-            close_socket_fd(&m->console);
+            close_channel(&m->console, &m->console_in);
             m->r.console.closed = 1;
             m->changed = 1;
             return;
@@ -598,7 +630,11 @@ static void console_read(struct etude_machine *m, size_t limit)
     }
 }
 
-/** Write QMP command `json`; a failed or short write makes QMP unusable. */
+/**
+ * Write QMP command `json`; a failed or short write makes QMP unusable. A
+ * receive is posted first, so that the reply is kept even when QEMU ends at
+ * once after it, as it does after `quit`.
+ */
 static int qmp_write(struct etude_machine *m, const char *json)
 {
     size_t len = strlen(json);
@@ -606,6 +642,7 @@ static int qmp_write(struct etude_machine *m, const char *json)
 
     if (m->qmp < 0)
         return -1;
+    socket_in_pump(&m->qmp_in, m->qmp);
     do {
         n = socket_write(m->qmp, json, len);
     } while (n < 0 && errno == EINTR);
@@ -827,13 +864,13 @@ static void qmp_read(struct etude_machine *m)
     ssize_t n, i;
 
     while (m->qmp >= 0) {
-        n = socket_read(m->qmp, buf, sizeof(buf));
+        n = socket_read(&m->qmp_in, m->qmp, buf, sizeof(buf));
         if (n < 0 && errno == EINTR)
             continue;
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
             return;
         if (n <= 0) {
-            close_socket_fd(&m->qmp);
+            close_channel(&m->qmp, &m->qmp_in);
             if (m->qmp_state != QMP_QUIT)
                 m->qmp_state = QMP_GONE;
             return;
@@ -870,8 +907,12 @@ static void console_write(struct etude_machine *m)
     }
 }
 
-/** Take QEMU's connection to listening socket `*listener`, and remove it. */
-static void take_connection(etude_socket *listener, etude_socket *conn, const char *path)
+/**
+ * Take QEMU's connection to listening socket `*listener`, start reading it
+ * through `in`, and remove the listener.
+ */
+static void take_connection(etude_socket *listener, etude_socket *conn, struct socket_in *in,
+                            const char *path)
 {
     etude_socket fd;
 
@@ -882,6 +923,7 @@ static void take_connection(etude_socket *listener, etude_socket *conn, const ch
         return;
     fd_flags(fd);
     *conn = fd;
+    socket_in_start(in, fd);
     close_socket_fd(listener);
 #ifndef _WIN32
     unlink(path);
@@ -925,8 +967,8 @@ static void machine_serve(struct etude_machine *m)
 {
     if (m->finished)
         return;
-    take_connection(&m->console_listen, &m->console, m->console_path);
-    take_connection(&m->qmp_listen, &m->qmp, m->qmp_path);
+    take_connection(&m->console_listen, &m->console, &m->console_in, m->console_path);
+    take_connection(&m->qmp_listen, &m->qmp, &m->qmp_in, m->qmp_path);
     console_read(m, CONSOLE_PASS_MAX);
     console_write(m);
     qmp_read(m);
@@ -1053,6 +1095,34 @@ static struct etude_proc *machine_proc(struct etude_qemu *q, struct etude_proc *
     return p;
 }
 
+#ifdef _WIN32
+/* The interval at which the launcher looks at the receives posted on QEMU's
+ * connections, whose completions the sockets' readiness does not show. */
+#define POSTED_POLL_US 10000
+
+/**
+ * Give the time by which the launcher must serve the machines for their
+ * posted receives, from `now`: `now` itself when one has taken bytes or an end
+ * not yet read, POSTED_POLL_US later while a connection is open, or 0.
+ */
+static uint64_t posted_due(struct etude_qemu *q, uint64_t now)
+{
+    struct etude_machine *m;
+    uint64_t due = 0;
+
+    for (m = q->machines; m != NULL; m = m->next) {
+        if (m->finished)
+            continue;
+        if ((m->console >= 0 && socket_in_ready(&m->console_in, m->console)) ||
+            (m->qmp >= 0 && socket_in_ready(&m->qmp_in, m->qmp)))
+            return now;
+        if (m->console >= 0 || m->qmp >= 0)
+            due = now + POSTED_POLL_US;
+    }
+    return due;
+}
+#endif
+
 /* What ended one wait of etude_qemu_watch. */
 struct round {
     struct etude_proc *p; /* an attempt that finished, not a machine's QEMU */
@@ -1073,6 +1143,9 @@ static int watch_once(struct etude_qemu *q, uint64_t until, struct etude_watch *
     struct etude_machine *m;
     struct etude_watch *w;
     uint64_t soonest;
+#ifdef _WIN32
+    uint64_t due;
+#endif
     size_t i, n;
     int own = 0;
 
@@ -1084,6 +1157,11 @@ static int watch_once(struct etude_qemu *q, uint64_t until, struct etude_watch *
         w[n + i] = cw[i];
     if (until != 0 && (soonest == 0 || until < soonest))
         soonest = until;
+#ifdef _WIN32
+    due = posted_due(q, posix_now_us());
+    if (due != 0 && (soonest == 0 || due < soonest))
+        soonest = due;
+#endif
     r->p = etude_exec_watch(q->ex, wait_for(soonest, posix_now_us()), w, n + cn);
     for (i = 0; i < cn; i++) {
         cw[i].revents = w[n + i].revents;
