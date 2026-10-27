@@ -2105,3 +2105,7 @@ The native Windows check of the child-status and companion-cache repairs stopped
 ## Unused guest paths stopped native fixture selections (#1295)
 
 The native child-status check compiled, but every controller exited 121 before running its cases. Its environment restore required three unused guest paths that the parent exported as empty. Windows removes an environment variable when _putenv_s sets an empty value. The fixture now restores an absent optional guest path as empty for a row without guests; guest rows still require all three paths. Required controller locations stay required. Environment transfers must distinguish optional empty values from missing required fields on every supported host.
+
+## The coordinating session waited on the process table (27 October)
+
+At 07:34 on 27 October the coordinating session started a background watcher for the Mac's measured run of #680 that ended when `pgrep -f "routine-sequence phase_first_run"` found nothing. The watcher's own command line contains that text, so pgrep would always have found the watcher and the end of the run would never have been seen; AGENTS.md forbids this kind of wait. The session stopped the watcher two minutes later and replaced the test with one on the run's `.times` file, to which the run's script appends an `end` line when the routine exits. Wait for a file that the job writes when it ends, or for the job itself, never for the process table.
