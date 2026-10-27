@@ -1723,6 +1723,30 @@ static int spawn_pipes(struct attempt *a, struct pipes *pp)
 }
 
 /**
+ * Give attempt `a` the paths of its working directory, `work`, of the
+ * program of `inv`, `prog`, and of its standard input, `input`, each of
+ * PATH_CAP bytes; a relative program or input is taken from `work`.
+ *
+ * @return 0, or -1 when the attempt's directory cannot be resolved or a path
+ *         does not fit.
+ */
+static int spawn_paths(const struct attempt *a, const struct invocation *inv, char *work,
+                       char *prog, char *input)
+{
+    const char *in = inv->stdin_name ? inv->stdin_name : "";
+    char dir[PATH_MAX];
+
+    if (!realpath(a->dir, dir) || path_of(work, "%s/work", dir) < 0)
+        return -1;
+    if (path_of(prog, inv->program[0] == '/' ? "%s%s" : "%s/%s", inv->program[0] == '/' ? "" : work,
+                inv->program) < 0)
+        return -1;
+    if (path_of(input, in[0] == '/' ? "%s%s" : "%s/%s", in[0] == '/' ? "" : work, in) < 0)
+        return -1;
+    return 0;
+}
+
+/**
  * Start the child of attempt `a` from `inv`. The child leads a session and
  * a group of its own and waits until its identity is in the attempt's
  * record, so that no process of the attempt runs unregistered; then it
@@ -1737,7 +1761,6 @@ static const char *spawn(struct attempt *a, const struct invocation *inv)
 {
     char *argv[ARGS_MAX + 1];
     char *envp[ARGS_MAX + 1];
-    char dir[PATH_MAX];
     char work[PATH_CAP];
     char prog[PATH_CAP];
     char input[PATH_CAP];
@@ -1746,12 +1769,7 @@ static const char *spawn(struct attempt *a, const struct invocation *inv)
     int n;
     ssize_t r;
 
-    if (!realpath(a->dir, dir) || path_of(work, "%s/work", dir) < 0 ||
-        path_of(prog, inv->program[0] == '/' ? "%s%s" : "%s/%s", inv->program[0] == '/' ? "" : work,
-                inv->program) < 0 ||
-        path_of(input, inv->stdin_name && inv->stdin_name[0] == '/' ? "%s%s" : "%s/%s",
-                inv->stdin_name && inv->stdin_name[0] == '/' ? "" : work,
-                inv->stdin_name ? inv->stdin_name : "") < 0)
+    if (spawn_paths(a, inv, work, prog, input) < 0)
         return ETUDE_ERR_LIMIT;
     argv[0] = NULL;
     envp[0] = NULL;

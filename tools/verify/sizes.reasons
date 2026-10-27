@@ -287,7 +287,7 @@ tests/cases/machine/lib_installer_repair.c:repair_volume params 7 the parameters
 tests/credprobe.c:child_main complexity 46 a probe, one sequence of steps in the order the log records them
 tests/credprobe.c:child_main lines 105 a probe, one sequence of steps in the order the log records them
 
-tests/dgramprobe.c:probe_main complexity 79 a probe, one sequence of steps in the order the log records them
+tests/dgramprobe.c:probe_main complexity 80 a probe, one sequence of steps in the order the log records them
 tests/dgramprobe.c:probe_main lines 522 a probe, one sequence of steps in the order the log records them
 
 
@@ -771,4 +771,5 @@ utils/pwauth.c:pwauth_read_password lines 116 one procedure over a file format, 
 tools/etude/serial.c:begin_put params 9 the parameters are one stored file's identity and data source, and the time each controller call takes
 tools/etude/serial.c:etude_serial_put_reader params 8 the parameters are one stored file's identity and streaming callback, and the time each controller call takes
 tools/etude/posix/scenario.c:command_invocation params 8 the parameters are the fields of one installed command's invocation, written in the document's order
+tools/etude/posix/repeat.c:ask params 7 the parameters are one request to the ledger: the run, the attempt, the claim, its resources and their count, whether it waits, and where its hold is kept
 tests/cases/machine/netcase.c:net_guest params 7 the case, machine, arguments, environment, input, evidence and result describe one guest command

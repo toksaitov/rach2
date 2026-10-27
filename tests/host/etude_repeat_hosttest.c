@@ -1314,14 +1314,32 @@ static int blocker_end(pid_t pid)
     return WEXITSTATUS(status);
 }
 
+/** Choose the first seed whose plan gives every kind of load to an attempt. */
+static void load_seed(struct etude_repeat_spec *spec)
+{
+    struct etude_repeat_item *it;
+    size_t i, n;
+    int kinds;
+
+    for (spec->seed = 1; spec->seed < 1000; spec->seed++) {
+        if (etude_repeat_plan(spec, &it, &n) != 0)
+            break;
+        for (i = 0, kinds = 0; i < n; i++)
+            if (it[i].load != ETUDE_REPEAT_NO_LOAD)
+                kinds |= 1 << it[i].load;
+        free(it);
+        if (kinds == 7)
+            break;
+    }
+}
+
 static void test_load(void)
 {
     struct etude_repeat_case cases[1];
     struct etude_repeat_spec spec;
     struct etude_repeat_result r;
-    struct etude_repeat_item *it;
     struct stat st;
-    size_t i, n;
+    size_t i;
     int kinds;
     pid_t pid;
 
@@ -1333,16 +1351,7 @@ static void test_load(void)
     spec.ncases = 1;
     spec.loads = LOADS;
     spec.nloads = 3;
-    for (spec.seed = 1; spec.seed < 1000; spec.seed++) {
-        if (etude_repeat_plan(&spec, &it, &n) != 0)
-            break;
-        for (i = 0, kinds = 0; i < n; i++)
-            if (it[i].load != ETUDE_REPEAT_NO_LOAD)
-                kinds |= 1 << it[i].load;
-        free(it);
-        if (kinds == 7)
-            break;
-    }
+    load_seed(&spec);
     fresh_shared();
     CHECK(run("load", &spec, CAP, 3, load_argv, &r) == 0, "load");
     CHECK(r.outcome == ETUDE_REPEAT_PASS && r.nattempts == 3, "load");

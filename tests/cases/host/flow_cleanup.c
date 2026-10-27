@@ -123,28 +123,14 @@ static int copy_clone(struct fixture *f, const char *name, const char *ref)
     return g(f, f->work, "clone", "-q", "--no-hardlinks", origin, target, NULL) &&
            g(f, target, "checkout", "-q", "--detach", ref ? ref : "origin/master", NULL);
 }
-static int leftovers_setup(struct fixture *f)
+/**
+ * Make the fixture's origin, a bare repository whose master has the commit
+ * of branch 1-picked picked onto it, from the repository `seed`, and the
+ * clone rach2-stale of that branch.
+ */
+static int leftovers_origin(struct fixture *f)
 {
-    char cwd[4096], origin[4096], target[4096], p[4096];
-    unsigned i;
-    const char *copies[] = {"landed",   "dirty", "untracked", "unique",  "ignored",  "cited",
-                            "evidence", "young", "named",     "stashed", "branched", "linked"};
-    const char *failed[] = {"100.machine.a", "30.machine.d",  "200.machine.b",
-                            "300.machine.c", "400.machine.e", "500.machine.f"};
-    const char *files[] = {"tmp.C160l0g000",
-                           "rach2-trial.Tr1al0/sub/f",
-                           "flow/log",
-                           ".hidden",
-                           "rach2-notes",
-                           "tmp.W4dW4dW4dW/doom1.wad",
-                           "tmp.K3ysK3ysK3/id_ed25519",
-                           "tmp.P4kgP4kgP4/pkg.tar.gz",
-                           "tmp.Src0Src0Sr/.git/HEAD",
-                           "tmp.Y0ungY0ung",
-                           "tmp.C1tedC1ted",
-                           "notes.c",
-                           "plain/x.c",
-                           "rach2-run.backup/f"};
+    char cwd[4096], origin[4096], p[4096];
     fx_remove(flow_path(f, "origin.git"));
     fx_remove(flow_path(f, "seed"));
     fx_remove(flow_path(f, "home.noindex"));
@@ -176,6 +162,34 @@ static int leftovers_setup(struct fixture *f)
     G("commit", "-q", "-m", "Add m");
     G("cherry-pick", "1-picked");
     G("push", "-q", "origin", "master");
+    return 1;
+}
+static int leftovers_setup(struct fixture *f)
+{
+    char cwd[4096], origin[4096], target[4096], p[4096];
+    unsigned i;
+    const char *copies[] = {"landed",   "dirty", "untracked", "unique",  "ignored",  "cited",
+                            "evidence", "young", "named",     "stashed", "branched", "linked"};
+    const char *failed[] = {"100.machine.a", "30.machine.d",  "200.machine.b",
+                            "300.machine.c", "400.machine.e", "500.machine.f"};
+    const char *files[] = {"tmp.C160l0g000",
+                           "rach2-trial.Tr1al0/sub/f",
+                           "flow/log",
+                           ".hidden",
+                           "rach2-notes",
+                           "tmp.W4dW4dW4dW/doom1.wad",
+                           "tmp.K3ysK3ysK3/id_ed25519",
+                           "tmp.P4kgP4kgP4/pkg.tar.gz",
+                           "tmp.Src0Src0Sr/.git/HEAD",
+                           "tmp.Y0ungY0ung",
+                           "tmp.C1tedC1ted",
+                           "notes.c",
+                           "plain/x.c",
+                           "rach2-run.backup/f"};
+    if (!leftovers_origin(f))
+        return 0;
+    snprintf(cwd, sizeof(cwd), "%s/seed", f->work);
+    snprintf(origin, sizeof(origin), "%s/origin.git", f->work);
     snprintf(target, sizeof(target), "%s/home.noindex/rach2", f->work);
     G("clone", "-q", "--no-hardlinks", origin, target);
     for (i = 0; i < 12; i++) {

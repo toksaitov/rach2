@@ -3968,12 +3968,35 @@ done:
     return st;
 }
 
+/**
+ * Take the end of the host command `p`, which ran `program`, into `end`, and
+ * give the status `st` of its run as the command's: a cleanup that was not
+ * confirmed marks the case, and output that could not be kept fails it.
+ */
+static enum etude_status host_result(struct etude_case *c, struct etude_proc *p,
+                                     const char *program, enum etude_status st,
+                                     struct etude_termination *end)
+{
+    const struct etude_exec_result *r = etude_proc_result(p);
+
+    end->end = r->end;
+    end->value = r->value;
+    if (r->cleanup != ETUDE_CLEANUP_CONFIRMED)
+        c->unconfirmed = 1;
+    if (r->output_error) {
+        diag("%s: its output could not be kept: %s", program, strerror(r->output_error));
+        c->faults++;
+        if (st == ETUDE_OK)
+            st = ETUDE_FAILED;
+    }
+    return st;
+}
+
 enum etude_status etude_host(struct etude_case *c, char *const argv[], const char *output,
                              struct etude_termination *end)
 {
     struct etude_exec_spec spec;
     struct etude_proc *p, *running;
-    const struct etude_exec_result *r;
     const char *program, *evidence;
     enum etude_status st;
     char attempt[300], err_name[160], out_path[4096], err_path[4096];
@@ -4034,17 +4057,7 @@ enum etude_status etude_host(struct etude_case *c, char *const argv[], const cha
         etude_exec_cancel(p);
         serve_until(c, host_done, &running, &running, UINT64_MAX, 0);
     }
-    r = etude_proc_result(p);
-    end->end = r->end;
-    end->value = r->value;
-    if (r->cleanup != ETUDE_CLEANUP_CONFIRMED)
-        c->unconfirmed = 1;
-    if (r->output_error) {
-        diag("%s: its output could not be kept: %s", argv[0], strerror(r->output_error));
-        c->faults++;
-        if (st == ETUDE_OK)
-            st = ETUDE_FAILED;
-    }
+    st = host_result(c, p, argv[0], st, end);
     etude_proc_free(p);
     if (st == ETUDE_OK && end->end == ETUDE_END_LOST)
         st = ETUDE_LOST;
