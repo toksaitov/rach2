@@ -56,10 +56,13 @@ int nd_stage(struct nd_deploy *d)
             "test \"$(id -g '%s')\" = '%u'; else "
             "/bin/busybox addgroup -g %u '%s'; "
             "/bin/busybox adduser -D -u %u -G '%s' -h '%s/account' '%s'; fi; "
+            "home=$(awk -F: -v u='%s' '$1 == u { print $6 }' /etc/passwd); test -n \"$home\"; "
+            "if test ! -d \"$home\"; then mkdir -p \"$home\"; chown %u:%u \"$home\"; fi; "
             "made=; printf 'native-deploy: staged %%s\\n' \"$dest\"; ",
             guard, c->target, c->target, c->target, c->target, c->target, c->run, c->target,
             c->archive_sha, c->archive_sha, c->archive_sha, c->account, c->account, c->uid,
-            c->account, c->uid, c->uid, c->account, c->uid, c->account, c->target, c->account))
+            c->account, c->uid, c->uid, c->account, c->uid, c->account, c->target, c->account,
+            c->account, c->uid, c->uid))
         return 0;
     return nd_ssh(d, "stage", command, c->archive, &process) == 0;
 }
