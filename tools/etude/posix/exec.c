@@ -341,7 +341,7 @@ static void keeper_message(struct etude_proc *p, const struct keeper_msg *m)
 {
     if (m->type == KEEP_EXIT && !p->exited) {
         p->exited = 1;
-        p->r.ended_us = posix_now_us();
+        p->r.ended_us = m->c > 0 ? (uint64_t)m->c : posix_now_us();
         p->r.exit_end = (enum etude_end)m->a;
         p->r.exit_value = (int)m->b;
         p->r.end = p->cancelled ? ETUDE_END_STOPPED : p->r.exit_end;

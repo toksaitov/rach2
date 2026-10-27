@@ -29,7 +29,8 @@
  * answers gives its state, and one whose QMP never greets runs out of its
  * boot stage; and remote cases end lost when their transport is lost or
  * silent, with their claims kept, or stopped when the case confirms its
- * end. With the real QEMU, a kernel idle at its debug shell runs out of its
+ * end. A case that ends while its caller is away past its bounds passes.
+ * With the real QEMU, a kernel idle at its debug shell runs out of its
  * gap, and QMP gives its status and its registers before it is stopped.
  */
 #ifdef _WIN32
@@ -161,6 +162,10 @@ static int case_main(const char *role)
         return quiet(strcmp(role, "quiet-forever") == 0);
     if (strcmp(role, "endless") == 0)
         endless();
+    if (strcmp(role, "prompt") == 0) {
+        say("@etude 1 begin host.watchdog.prompt\n@etude 1 end 0\n");
+        return 0;
+    }
     return 125;
 }
 
@@ -357,6 +362,50 @@ static void feed(struct etude_watchdog *w, const char *text, uint64_t t)
     etude_watchdog_feed(w, text, strlen(text), t);
 }
 
+/**
+ * Check the cleanup after a case's end, with `spec`'s case bound of 600 s: a
+ * case that ended within it has met it, though its end was seen later, and
+ * its cleanup has its stage's bound, or the case's, from the time the end was
+ * seen; one that ended past it has run out.
+ */
+static void test_cleanup_bounds(struct etude_watchdog_spec *spec)
+{
+    struct etude_watchdog *w;
+
+    w = etude_watchdog_new(spec, ETUDE_STAGE_EXECUTE, 0);
+    CHECK(w != NULL, "watchdog");
+    if (w == NULL)
+        return;
+    etude_watchdog_end(w, 500 * S, 700 * S);
+    CHECK(etude_watchdog_progress(w)->ended_us == 500 * S, "the end's time");
+    CHECK(etude_watchdog_max_gap(w, 900 * S) == 500 * S, "the gap ends with the case");
+    CHECK(etude_watchdog_check(w, 900 * S) == ETUDE_EXPIRY_NONE, "an end within the case's bound");
+    CHECK(etude_watchdog_deadline(w) == 1300 * S, "the cleanup has the case's bound");
+    etude_watchdog_end(w, 800 * S, 800 * S);
+    CHECK(etude_watchdog_deadline(w) == 1300 * S, "a second end changes nothing");
+    CHECK(etude_watchdog_check(w, 1300 * S) == ETUDE_EXPIRY_STAGE, "a cleanup that does not end");
+    CHECK(etude_watchdog_bound(w) == 600 * S, "a cleanup that does not end");
+    etude_watchdog_free(w);
+    spec->stage_us[ETUDE_STAGE_CLEANUP] = 30 * S;
+    w = etude_watchdog_new(spec, ETUDE_STAGE_EXECUTE, 0);
+    CHECK(w != NULL, "watchdog");
+    if (w == NULL)
+        return;
+    etude_watchdog_end(w, 590 * S, 650 * S);
+    CHECK(etude_watchdog_deadline(w) == 680 * S, "the cleanup stage's bound");
+    CHECK(etude_watchdog_check(w, 679 * S) == ETUDE_EXPIRY_NONE, "the cleanup stage's bound");
+    CHECK(etude_watchdog_check(w, 680 * S) == ETUDE_EXPIRY_STAGE, "the cleanup stage's bound");
+    etude_watchdog_free(w);
+    w = etude_watchdog_new(spec, ETUDE_STAGE_EXECUTE, 0);
+    CHECK(w != NULL, "watchdog");
+    if (w == NULL)
+        return;
+    etude_watchdog_end(w, 650 * S, 650 * S);
+    CHECK(etude_watchdog_check(w, 650 * S) == ETUDE_EXPIRY_CASE, "an end past the case's bound");
+    etude_watchdog_free(w);
+    spec->stage_us[ETUDE_STAGE_CLEANUP] = 0;
+}
+
 /** Read records, heartbeats, quiet work and stages at times the test gives. */
 static void test_watchdog(void)
 {
@@ -441,6 +490,7 @@ static void test_watchdog(void)
         return;
     CHECK(etude_watchdog_check(w, 30 * S) == ETUDE_EXPIRY_STAGE, "the boot stage runs out");
     etude_watchdog_free(w);
+    test_cleanup_bounds(&spec);
 }
 
 /* ---- The supervisor. ---- */
@@ -811,6 +861,43 @@ static void test_host_and_remote(void)
     rows_free(s, rows, n);
 }
 
+/**
+ * Run a case that ends at once while the caller stays away for twice its
+ * bounds, as a caller does while it writes other attempts' records: the case
+ * ended within them, as its keeper saw, so it passes.
+ */
+static void test_late_caller(void)
+{
+    static struct row row;
+    struct etude_supervisor *s = etude_supervisor_new();
+    const struct etude_supervised_result *res;
+    uint64_t started, back;
+
+    CHECK(s != NULL, "supervisor");
+    if (s == NULL)
+        return;
+    memset(&row, 0, sizeof(row));
+    row.name = row.mode = "prompt";
+    row.kind = ETUDE_SUPERVISED_HOST;
+    row_bounds(&row, 2 * S, 2 * S);
+    start_host(s, &row);
+    if (row.a != NULL) {
+        started = etude_watchdog_progress(etude_supervised_watchdog(row.a))->started_us;
+        /* interval: the caller stays away past the case's bound */
+        host_sleep_ms(4000);
+        back = now_us();
+        run_rows(s, &row, 1);
+        if (row_ended(&row, ETUDE_END_EXITED, ETUDE_EXPIRY_NONE)) {
+            res = etude_supervised_result(row.a);
+            CHECK(res->value == 0 && !res->incomplete && res->cleanup == ETUDE_CLEANUP_CONFIRMED,
+                  "prompt");
+            CHECK(res->proc->ended_us < started + row.spec.case_us && res->proc->ended_us < back,
+                  "prompt: the keeper's time of the end");
+        }
+    }
+    rows_free(s, &row, 1);
+}
+
 /** Run the stand-in machines and a remote case that confirms its end. */
 static void test_machines(void)
 {
@@ -958,6 +1045,7 @@ int main(int argc, char **argv)
     test_bounds();
     test_watchdog();
     test_host_and_remote();
+    test_late_caller();
     test_machines();
     test_real();
     if (fails != 0)

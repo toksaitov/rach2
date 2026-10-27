@@ -21,7 +21,8 @@ enum keeper_type {
     /* From the keeper. */
     KEEP_STARTED, /* a, b, c: the case's pid, start and whether it is known */
     KEEP_EXEC,    /* a: 0, or the error of the exec */
-    KEEP_EXIT,    /* a: ETUDE_END_EXITED or ETUDE_END_SIGNALED; b: the value */
+    KEEP_EXIT,    /* a: ETUDE_END_EXITED or ETUDE_END_SIGNALED; b: the value;
+                     c: when the keeper reaped the case's process */
     KEEP_USAGE,   /* a: processor microseconds; b: 1 when exact; c: peak bytes */
     KEEP_CLEANED, /* a: 1 when every process is confirmed ended */
     KEEP_STOPPED, /* a: when the case's process was seen to stop */

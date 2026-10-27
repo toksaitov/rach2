@@ -105,6 +105,8 @@ struct etude_progress {
     uint64_t bytes_since; /* of them, since the last progress */
     uint64_t max_gap_us;  /* the longest gap of execution so far, ended
                              gaps alone */
+    uint64_t ended_us;    /* the case ended, as etude_watchdog_end gave it;
+                             0 while it runs */
 };
 
 /* The watchdog of one attempt. */
@@ -127,6 +129,16 @@ void etude_watchdog_free(struct etude_watchdog *w);
  * it ends one.
  */
 void etude_watchdog_stage(struct etude_watchdog *w, enum etude_stage stage, uint64_t now_us);
+
+/**
+ * Record that the case ended at `ended_us`, as its keeper or launcher saw it,
+ * and move the attempt to its cleanup at `now_us`, when the caller saw the
+ * end and asked for the cleanup. A case that ended within the whole case's
+ * bound has met it, however late the caller saw the end; its cleanup then has
+ * the cleanup stage's bound, or the case's when it declares none, from
+ * `now_us`. An attempt already in its cleanup is not changed.
+ */
+void etude_watchdog_end(struct etude_watchdog *w, uint64_t ended_us, uint64_t now_us);
 
 /**
  * Read `n` bytes of the case's standard output, which carries its report

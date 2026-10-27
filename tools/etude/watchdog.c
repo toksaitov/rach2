@@ -152,6 +152,16 @@ void etude_watchdog_stage(struct etude_watchdog *w, enum etude_stage stage, uint
         w->p.last_us = now_us;
 }
 
+void etude_watchdog_end(struct etude_watchdog *w, uint64_t ended_us, uint64_t now_us)
+{
+    if (w->p.stage == ETUDE_STAGE_CLEANUP)
+        return;
+    w->p.ended_us = ended_us != 0 && ended_us < now_us ? ended_us : now_us;
+    close_gap(w, w->p.ended_us);
+    w->p.stage = ETUDE_STAGE_CLEANUP;
+    w->p.stage_started_us = now_us;
+}
+
 /** Give the index of witness `id`, of `len` bytes, or -1. */
 static long witness_of(const struct etude_watchdog *w, const char *id, size_t len)
 {
@@ -289,12 +299,23 @@ static uint64_t stage_deadline(const struct etude_watchdog *w, enum etude_expiry
     return w->p.last_us + w->spec->gap_us;
 }
 
-/** Give the earliest deadline, with its expiry and bound. */
+/**
+ * Give the earliest deadline, with its expiry and bound. A case that ended
+ * within the whole case's bound has met it, and its cleanup has the cleanup
+ * stage's bound, or the case's when it declares none, from the start of the
+ * cleanup.
+ */
 static uint64_t next_deadline(const struct etude_watchdog *w, enum etude_expiry *e, uint64_t *bound)
 {
     uint64_t whole = w->p.started_us + w->spec->case_us, stage;
 
     stage = stage_deadline(w, e, bound);
+    if (w->p.stage == ETUDE_STAGE_CLEANUP && w->p.ended_us != 0 && w->p.ended_us < whole) {
+        if (stage != 0)
+            return stage;
+        *bound = w->spec->case_us;
+        return w->p.stage_started_us + w->spec->case_us;
+    }
     if (stage != 0 && stage < whole)
         return stage;
     *e = ETUDE_EXPIRY_CASE;

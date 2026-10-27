@@ -491,15 +491,33 @@ static int owned_ended(const struct etude_supervised *a)
     return a->reported || a->lost || a->phase == PHASE_END;
 }
 
-/** Serve one attempt at `now`: read, check its watchdog, move its end on. */
+/**
+ * Give when the case of attempt `a` ended, as its keeper or launcher saw it,
+ * or 0 while it runs.
+ */
+static uint64_t case_ended(const struct etude_supervised *a, uint64_t now)
+{
+    if (a->r.kind == ETUDE_SUPERVISED_HOST && a->r.proc->ended_us != 0)
+        return a->r.proc->ended_us;
+    if (a->r.kind == ETUDE_SUPERVISED_MACHINE && a->r.machine->state == ETUDE_MACHINE_ENDED)
+        return a->r.machine->ended_us != 0 ? a->r.machine->ended_us : now;
+    return 0;
+}
+
+/**
+ * Serve one attempt at `now`: read, check its watchdog, move its end on. The
+ * case's end is judged at the time its keeper or launcher saw it, which may
+ * be before `now` when the caller was busy elsewhere.
+ */
 static void serve(struct etude_supervised *a, uint64_t now)
 {
+    uint64_t ended;
+
     if (a->phase == PHASE_DONE)
         return;
     feed_new(a, now);
-    if ((a->r.kind == ETUDE_SUPERVISED_HOST && a->r.proc->ended_us != 0) ||
-        (a->r.kind == ETUDE_SUPERVISED_MACHINE && a->r.machine->state == ETUDE_MACHINE_ENDED))
-        etude_watchdog_stage(a->wd, ETUDE_STAGE_CLEANUP, now);
+    if ((ended = case_ended(a, now)) != 0)
+        etude_watchdog_end(a->wd, ended, now);
     if (owned_ended(a)) {
         finish(a, now);
         return;
@@ -592,6 +610,22 @@ static int ms_until(uint64_t until, uint64_t now)
 }
 
 /**
+ * Take what the executor and the launcher have ready, without waiting: the
+ * output, the ends and the cleanups that came while the caller was not
+ * waiting, so that no watchdog is checked before it has seen them.
+ */
+static void take_ready(struct etude_supervisor *s)
+{
+    struct etude_proc *p;
+    struct etude_machine *m;
+
+    while ((p = etude_exec_wait(s->ex, 0)) != NULL)
+        proc_returned(s, p);
+    while ((m = etude_qemu_wait(s->q, 0)) != NULL)
+        machine_returned(s, m);
+}
+
+/**
  * Wait up to `ms` milliseconds, -1 for no limit, for the executor and the
  * launcher; when both have work, each in turn for a short slice.
  */
@@ -619,6 +653,8 @@ struct etude_supervised *etude_supervise_wait(struct etude_supervisor *s, int ti
     int polled = 0, changed, any;
 
     for (;;) {
+        if (!polled)
+            take_ready(s);
         now = now_us();
         changed = 0;
         for (a = s->list; a != NULL; a = a->next) {

@@ -127,9 +127,11 @@ static void reap(struct keeper *kp)
             continue;
         kp->alive = 0;
         if (WIFSIGNALED(st))
-            keeper_send(kp->args->ev, KEEP_EXIT, ETUDE_END_SIGNALED, WTERMSIG(st), 0);
+            keeper_send(kp->args->ev, KEEP_EXIT, ETUDE_END_SIGNALED, WTERMSIG(st),
+                        (int64_t)posix_now_us());
         else
-            keeper_send(kp->args->ev, KEEP_EXIT, ETUDE_END_EXITED, WEXITSTATUS(st), 0);
+            keeper_send(kp->args->ev, KEEP_EXIT, ETUDE_END_EXITED, WEXITSTATUS(st),
+                        (int64_t)posix_now_us());
     }
 }
 
