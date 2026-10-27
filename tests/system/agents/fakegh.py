@@ -115,7 +115,7 @@ def graphql(board, flags):
                   "fieldValueByName": {"name": i["status"]} if i["status"] else None,
                   "content": node(i)} for i in board["issues"]]
         return {"data": {"user": {"projectV2": {"items": {"pageInfo": page, "nodes": nodes}}}}}
-    if "issues(first: 100" in query and "projectItems(first: 10, includeArchived: false)" in query:
+    if "issues(first: 100" in query:
         states = re.search(r"states: \[([A-Z, ]*)\]", query).group(1).split(", ")
         nodes = [dict(node(i), projectItems={"nodes": [
                      {"id": item_id(i), "project": {"number": BOARD, "owner": {"login": OWNER}},
