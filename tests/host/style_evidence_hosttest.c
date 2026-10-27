@@ -69,6 +69,22 @@ static void snapshot_cases(void)
     check(!source_snapshot(work, before) && !file("tests/probe-suites", "hello default\n") &&
               !source_snapshot(work, after) && strcmp(before, after),
           "a probe assignment list invalidates evidence");
+    check(!file("tests/install", "#!/bin/sh\nexit 0\n") && !source_snapshot(work, before) &&
+              !file("tests/install", "#!/bin/sh\nexit 1\n") && !source_snapshot(work, after) &&
+              strcmp(before, after),
+          "an extensionless script invalidates evidence");
+    check(!file("tests/blob", "data 0\n") && !source_snapshot(work, before) &&
+              !file("tests/blob", "data 1\n") && !source_snapshot(work, after) &&
+              !strcmp(before, after),
+          "an extensionless file without a script line is outside the inventory");
+    snprintf(path, sizeof(path), "%s/tests/native", work);
+    check(!mkdir(path, 0700) && !file("tests/native/probes.cases", "hello\n") &&
+              !source_snapshot(work, before) && !file("tests/native/probes.cases", "other\n") &&
+              !source_snapshot(work, after) && strcmp(before, after),
+          "a native case list invalidates evidence");
+    check(!file("tests/native/machine", "hello\n") && !source_snapshot(work, after) &&
+              strcmp(before, after),
+          "an added native inventory invalidates evidence");
 }
 
 static struct json *parse(const char *text)

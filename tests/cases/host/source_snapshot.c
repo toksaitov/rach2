@@ -85,6 +85,33 @@ static int source_file(const char *name)
     return 0;
 }
 
+static int shell_script(const char *path, const char *name)
+{
+    char magic[2];
+    FILE *f;
+    if (strchr(name, '.') || !(f = fopen(path, "rb")))
+        return 0;
+    int script = fread(magic, 1, 2, f) == 2 && magic[0] == '#' && magic[1] == '!';
+    fclose(f);
+    return script;
+}
+
+/**
+ * Report whether a source check reads the file at `path`.
+ *
+ * Besides the named source classes, `scripts.sh` checks every extensionless
+ * script with a `#!` line and `nativecheck.sh` reads every file under
+ * `tests/native`, whatever its name.
+ */
+static int checked_file(const char *relative, const char *name, const char *path)
+{
+    if (source_file(name))
+        return 1;
+    if (!strcmp(relative, "tests/native") || !strncmp(relative, "tests/native/", 13))
+        return 1;
+    return shell_script(path, name);
+}
+
 static int append(struct inventory *v, const char *path)
 {
     char **next = realloc(v->paths, (v->count + 1) * sizeof(*v->paths));
@@ -120,7 +147,7 @@ static int scan(struct inventory *v, const char *relative)
                 bad = 1;
                 break;
             }
-        } else if (S_ISREG(st.st_mode) && source_file(name)) {
+        } else if (S_ISREG(st.st_mode) && checked_file(relative, name, path)) {
             if (append(v, child)) {
                 bad = 1;
                 break;
