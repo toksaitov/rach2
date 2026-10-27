@@ -1,6 +1,8 @@
-/* Prerequisite reports, installs, malformed recipes and firmware probes. */
+/* Prerequisite reports, installs, malformed recipes, firmware probes and elf
+   compiler wrappers. */
 #include "build_support.h"
 #include <stdarg.h>
+#include <utime.h>
 
 static const char recipe_text[] =
     "platform linux\nneed alpha beta\nprobe [ -e \"$FIX/have/@TOOL@\" ]\n"
@@ -539,6 +541,129 @@ done:
     return 0;
 }
 
+/* The date elfwrap_age gives a wrapper, which only a replaced one loses. */
+#define ELFWRAP_AGE 1000000000
+
+static int elfwrap_age(const char *path)
+{
+    struct utimbuf t = {ELFWRAP_AGE, ELFWRAP_AGE};
+    return !utime(path, &t);
+}
+
+static int elfwrap_kept(const char *path)
+{
+    struct stat st;
+    return !stat(path, &st) && st.st_mtime == ELFWRAP_AGE && (st.st_mode & 0777) == 0755;
+}
+
+/* Succeed when PATH has the date of the newer of the files GCC and CC1. */
+static int elfwrap_dated(const char *path, const char *gcc, const char *cc1)
+{
+    struct stat w, g, c;
+    return !stat(path, &w) && !stat(gcc, &g) && !stat(cc1, &c) &&
+           w.st_mtime == (g.st_mtime > c.st_mtime ? g.st_mtime : c.st_mtime);
+}
+
+static int elfwrap_run(struct fixture *f, const char *arch, const char *dir)
+{
+    const char *args[] = {"/bin/sh", bp(f->tree, "tools/setup/elfwrap.sh"), arch, dir, NULL};
+    return fx_run(f, args, f->work, NULL, NULL) == 0;
+}
+
+/* The paths of one architecture's elfwrap.sh rows. */
+struct elfwrap_paths {
+    const char *arch;
+    char dir[4096], gcc[4096], cc1[4096], wrapper[4096];
+    char first[4096]; /* a copy of the wrapper the last change wrote */
+};
+
+/* Make a stand-in Linux toolchain for W's architecture under FROM. */
+static int elfwrap_toolchain(struct fixture *f, struct elfwrap_paths *w, const char *from)
+{
+    const char *tools[] = {"ld",      "ar", "objcopy", "strip", "nm",      "objdump",
+                           "readelf", "as", "ranlib",  "size",  "strings", "c++filt"};
+    snprintf(w->gcc, sizeof(w->gcc), "%s/%s-linux-gnu-gcc", from, w->arch);
+    snprintf(w->cc1, sizeof(w->cc1), "%s.cc1", w->gcc);
+    snprintf(w->wrapper, sizeof(w->wrapper), "%s/%s-elf-gcc", w->dir, w->arch);
+    snprintf(w->first, sizeof(w->first), "%s/%s-elf-gcc.first", f->work, w->arch);
+    for (size_t i = 0; i < sizeof(tools) / sizeof(tools[0]); i++) {
+        char tool[4096];
+        snprintf(tool, sizeof(tool), "%s/%s-linux-gnu-%s", from, w->arch, tools[i]);
+        if (!fx_write(tool, "", 0, 0755))
+            return 0;
+    }
+    return fx_copy(f->self, w->gcc) && fx_text(w->cc1, "cc1 1\n");
+}
+
+static void elfwrap_check(struct fixture *f, const struct elfwrap_paths *w, int held,
+                          const char *what)
+{
+    char label[128];
+    snprintf(label, sizeof(label), "elfwrap %s: %s", w->arch, what);
+    fx_check(f, held, label);
+}
+
+/* Run elfwrap.sh over an aged wrapper and succeed when it kept the wrapper. */
+static int elfwrap_keeps(struct fixture *f, const struct elfwrap_paths *w)
+{
+    return elfwrap_age(w->wrapper) && elfwrap_run(f, w->arch, w->dir) && elfwrap_kept(w->wrapper) &&
+           fx_same(w->wrapper, w->first);
+}
+
+/* Run elfwrap.sh over an aged wrapper and succeed when it wrote a new one. */
+static int elfwrap_replaces(struct fixture *f, const struct elfwrap_paths *w)
+{
+    return elfwrap_age(w->wrapper) && elfwrap_run(f, w->arch, w->dir) &&
+           !elfwrap_kept(w->wrapper) && !fx_same(w->wrapper, w->first) &&
+           fx_copy(w->wrapper, w->first);
+}
+
+/* Append a byte to the program PATH, which leaves it runnable. */
+static int elfwrap_grow(const char *path)
+{
+    FILE *s = fopen(path, "ab");
+    int ok = s && fputc(0, s) == 0;
+    if (s && fclose(s))
+        ok = 0;
+    return ok;
+}
+
+/**
+ * Check elfwrap.sh for ARCH against a stand-in Linux toolchain: a second run
+ * keeps the wrapper, so mk/fingerprint.mk sees the same file; a run in an
+ * empty directory, as in a fresh tooling machine, writes the same bytes with
+ * the compiler's date; and a changed cc1 or compiler driver replaces it.
+ */
+static int elfwrap(struct fixture *f, const char *arch)
+{
+    char from[4096];
+    struct elfwrap_paths w = {arch, "", "", "", "", ""};
+    snprintf(from, sizeof(from), "%s/cross", f->work);
+    snprintf(w.dir, sizeof(w.dir), "%s/elf", f->work);
+    if (!elfwrap_toolchain(f, &w, from))
+        return 0;
+    fx_env("RACH2_ELFWRAP_FROM", from);
+    char *text = elfwrap_run(f, arch, w.dir) ? fx_read(w.wrapper) : NULL;
+    elfwrap_check(f, &w,
+                  text && strstr(text, w.gcc) && strstr(text, w.cc1) &&
+                      elfwrap_dated(w.wrapper, w.gcc, w.cc1) && fx_copy(w.wrapper, w.first),
+                  "the first run writes the wrapper");
+    free(text);
+    elfwrap_check(f, &w,
+                  fx_remove(w.dir) && elfwrap_run(f, arch, w.dir) && fx_same(w.wrapper, w.first) &&
+                      elfwrap_dated(w.wrapper, w.gcc, w.cc1),
+                  "a fresh directory gets the same wrapper");
+    elfwrap_check(f, &w, elfwrap_keeps(f, &w) && output_has(f, "the wrapper unchanged"),
+                  "a second run keeps the wrapper");
+    elfwrap_check(f, &w, fx_text(w.cc1, "cc1 2\n") && elfwrap_replaces(f, &w),
+                  "a changed cc1 replaces the wrapper");
+    elfwrap_check(f, &w, elfwrap_grow(w.gcc) && elfwrap_replaces(f, &w),
+                  "a changed driver replaces the wrapper");
+    elfwrap_check(f, &w, elfwrap_keeps(f, &w), "a run after the change keeps the wrapper");
+    fx_env("RACH2_ELFWRAP_FROM", NULL);
+    return !f->failed;
+}
+
 int build_prereq(struct fixture *f)
 {
     const char *files[] = {"prereq.sh", "e2fsprogs_path.sh", "ovmf_path.sh", NULL};
@@ -558,5 +683,7 @@ int build_prereq(struct fixture *f)
     ok &= coverage(f);
     ok &= firmware(f, "linux");
     ok &= firmware(f, "macos");
+    ok &= elfwrap(f, "i686");
+    ok &= elfwrap(f, "x86_64");
     return ok && !f->failed;
 }

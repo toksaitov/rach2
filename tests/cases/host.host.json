@@ -2687,7 +2687,7 @@
         },
         {
           "assertion_id": "prereq",
-          "checks": "prereq.sh's reports, installs and recipe: its native C controller passes every row",
+          "checks": "prereq.sh's reports, installs and recipe, and elfwrap.sh's kept and replaced wrappers: its native C controller passes every row",
           "source": "scenario"
         },
         {

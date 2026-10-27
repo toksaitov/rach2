@@ -1,4 +1,4 @@
-/* Native identity, privilege and PowerShell prerequisite substitutes. */
+/* Native identity, privilege, PowerShell and cross compiler substitutes. */
 #include "build_support.h"
 
 static int log_line(const char *prefix, int argc, char **argv)
@@ -89,6 +89,12 @@ int build_prereq_mock(int argc, char **argv)
 {
     const char *name = strrchr(argv[0], '/');
     name = name ? name + 1 : argv[0];
+    size_t n = strlen(name);
+    if (n > 14 && !strcmp(name + n - 14, "-linux-gnu-gcc") && argc == 2 &&
+        !strcmp(argv[1], "-print-prog-name=cc1")) {
+        printf("%s.cc1\n", argv[0]);
+        return 0;
+    }
     if (strcmp(name, "id") && strcmp(name, "sudo") && strcmp(name, "pwsh"))
         return -1;
     const char *fix = getenv("FIX");
