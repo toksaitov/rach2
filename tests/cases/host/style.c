@@ -123,6 +123,7 @@ static void report(const struct json *record, const char *id)
     printf("@etude 1 end %lu\n", (unsigned long)(assertions->count + branches->count));
 }
 
+/** Verify prepared source evidence or print its exact source fingerprint. */
 int main(int argc, char **argv)
 {
     const char *tree = getenv("ETUDE_TREE"), *arch = getenv("ARCH"),
@@ -134,6 +135,12 @@ int main(int argc, char **argv)
     if (!tree)
         tree = ".";
     if (argc == 3 && !strcmp(argv[1], "--fingerprint")) {
+#ifdef _WIN32
+        if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
+            fputs("style: cannot set binary fingerprint output\n", stderr);
+            return 2;
+        }
+#endif
         if (source_snapshot(argv[2], snapshot))
             return 2;
         puts(snapshot);

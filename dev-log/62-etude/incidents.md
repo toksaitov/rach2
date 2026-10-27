@@ -2113,3 +2113,7 @@ At 07:34 on 27 October the coordinating session started a background watcher for
 ## A native working directory became an MSYS Python script path (#1307)
 
 Windows collection preparation on `7626314e7` compiled mandoc, then passed `D:/diadochi/681-windows/tests/system/source_tools_test.py` to MSYS Python. Python resolved it relative to the POSIX working directory and could not open it. The source-tool recipe used logical `pwd`, which preserves a valid drive-letter `PWD` inherited from a native parent. Physical `pwd -P` returns the POSIX path. The recipe now resolves both its tree and prefix physically, while retaining explicit conversions for native compiler and PowerShell operands. Both native judges passed all 21 semantic vectors under the inherited conversion controls and reused their complete identity records on a second Make invocation. The testing skill records the boundary rule.
+
+## The Windows C runtime changed a fingerprint line ending (#1309)
+
+The native style reader on `27d66a65a` used `puts` for its source fingerprint while stdout remained in text mode. The Windows C runtime changed its LF to CRLF. Preparation requires exactly 64 lowercase hex digits and LF, so it rejected the 66-byte result before running the manual check. The fingerprint branch now sets stdout to binary mode; the parser still requires the original 65-byte contract. The testing skill requires native byte checks for this runtime boundary.
