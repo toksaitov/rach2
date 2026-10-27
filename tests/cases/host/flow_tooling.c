@@ -395,6 +395,27 @@ static unsigned cache_files(struct tooling *t, const char *pattern, const char *
     closedir(d);
     return n;
 }
+/* Find a file of the cache that matches PATTERN and TEXT and is not EXCEPT. */
+static int cache_other(struct tooling *t, const char *pattern, const char *text, const char *except,
+                       char out[4096])
+{
+    DIR *d = opendir(t->cache);
+    struct dirent *e;
+    char path[4096];
+    int found = 0;
+    if (!d)
+        return 0;
+    while (!found && (e = readdir(d)))
+        if (!fnmatch(pattern, e->d_name, 0)) {
+            snprintf(path, sizeof(path), "%s/%s", t->cache, e->d_name);
+            if (strcmp(path, except) && (!text || fx_has(path, text))) {
+                snprintf(out, 4096, "%s", path);
+                found = 1;
+            }
+        }
+    closedir(d);
+    return found;
+}
 static int history(struct tooling *t, const char *name, const char *stage, const char *outcome)
 {
     char file[4096], pattern[500];
@@ -689,13 +710,14 @@ static int arm_rows(struct tooling *t)
         run(t, a);
     }
     ok = fx_check(f,
-                  !f->status && cache_files(t, "tooling-*.qcow2", NULL, disk) == 1 &&
-                      cache_files(t, "tooling-*.tools", "provision: ok", tools) == 1 &&
-                      strcmp(disk, old_disk) && strcmp(tools, old_tools) &&
+                  !f->status && cache_files(t, "tooling-*.qcow2", NULL, NULL) == 2 &&
+                      cache_files(t, "tooling-*.tools", "provision: ok", NULL) == 2 &&
+                      cache_other(t, "tooling-*.qcow2", NULL, old_disk, disk) &&
+                      cache_other(t, "tooling-*.tools", "provision: ok", old_tools, tools) &&
                       strlen(disk) == strlen(tools) &&
                       !strncmp(disk, tools, strlen(disk) - strlen(".qcow2")) &&
-                      !fx_exists(old_disk) && !fx_exists(old_tools),
-                  "arm64 pair published and unused amd64 pair pruned") &&
+                      fx_exists(old_disk) && fx_exists(old_tools),
+                  "arm64 pair published beside the kept amd64 pair") &&
          ok;
     {
         const char *a[] = {"-p", "arm64", "-a", "hvf", "run", flow_path(f, "job.sh"), NULL};
