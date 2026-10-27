@@ -2121,3 +2121,7 @@ The native style reader on `27d66a65a` used `puts` for its source fingerprint wh
 ## A native checker received POSIX absolute filenames (#1312)
 
 The Windows source checks passed by hand with ordinary MSYS argument conversion, but collection preparation disables that conversion. A cold check under both inherited conversion controls passed the manual and failed sizes because native sizecheck could not read `/d/diadochi/681-windows/tools/verify/sizes.reasons`. The sizes case now converts its reasons and complexity-table filenames explicitly and keeps each as one argument. Check native preparation under the parent's actual environment; a standalone check with different path conversion does not establish that boundary.
+
+## The independent exFAT writer tried to start a nested machine (#1315)
+
+Fresh x86-64 collection preparation on a720d347d reached the independent exFAT fixture inside its Linux tooling job. The writer selected another tooling machine on every non-Mac host, so preparation stopped at its request for an accelerator. The writer now recognizes the existing root Linux job by its workspace and attached disk, and uses that job's formatter and Linux driver for the private image. Its exit trap removes the loop mount and scratch. Other callers retain their existing writer route. A preparation helper must use the capabilities of the environment in which it already runs before requesting another machine.

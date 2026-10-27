@@ -9,13 +9,15 @@
 # DIR/exfat_external.manifest (name|size|mtime as an epoch second) and the
 # source files under DIR/exfat_src/. Exits 3 when the host has neither
 # hdiutil and newfs_exfat nor a made tooling machine, which the test reports
-# as a failure, and 1 when the volume cannot be made.
+# as a failure, and 1 when the volume cannot be made. An existing root Linux
+# tooling job uses its own formatter and driver without another machine.
 #
 # mkexfat_external.sh -p FILE readies the writer, as the host case's
 # preparation does through `make build/tests/host/exfat_writer`: on a host
 # without hdiutil and newfs_exfat it makes the tooling machine when it is not
 # made, and FILE has its `made` line, as tests/system/tooling_ready.sh writes
-# it; on macOS FILE has `hdiutil`. FILE is written only when its line
+# it; on macOS FILE has `hdiutil`, and in an existing Linux tooling job it
+# has `linux-tooling`. FILE is written only when its line
 # changes, so that the preparation's record of it stays the same. Exits 0, 1
 # when the machine cannot be made, and 3 when the host has neither hdiutil
 # and newfs_exfat nor etude.
@@ -37,8 +39,48 @@ MAKE_SRC='make_src() {
 }'
 eval "$MAKE_SRC"
 
+# Remove the private Linux mount and scratch after any exit.
+# shellcheck disable=SC2329 # the exit trap calls it
+cleanup_linux() {
+    _rc=$?
+    if [ -n "$_linux_work" ]; then
+        if mountpoint -q "$_linux_work/mnt"; then
+            umount "$_linux_work/mnt" || exit 1
+        fi
+        rm -rf "$_linux_work" || exit 1
+    fi
+    exit "$_rc"
+}
+
+# Format a private image inside the existing root Linux tooling job.
+linux_fixture() {
+    command -v mountpoint >/dev/null 2>&1 || exit 1
+    _linux_work=
+    trap cleanup_linux 0
+    trap 'exit 130' INT
+    trap 'exit 143' TERM HUP
+    _linux_work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-exfat.XXXXXX") || exit 1
+    mkdir "$_linux_work/mnt" || exit 1
+    truncate -s 16M "$IMG" || exit 1
+    mkfs.exfat -L EXTGATE "$IMG" >/dev/null || exit 1
+    mount -t exfat -o loop,iocharset=utf8 "$IMG" "$_linux_work/mnt" || exit 1
+    cp -R "$SRC/." "$_linux_work/mnt/" || exit 1
+    sync
+    (cd "$_linux_work/mnt" &&
+        for f in hello.txt pattern.bin "Sub Dir/inner.txt" empty "$ACCENT" "$LONG"; do
+            _size=$(stat -c %s "$f") || exit 1
+            _mtime=$(stat -c %Y "$f") || exit 1
+            printf '%s|%s|%s\n' "$f" "$_size" "$_mtime" || exit 1
+        done) > "$DIR/exfat_external.manifest" || exit 1
+    exit 0
+}
+
 if command -v hdiutil >/dev/null 2>&1 && command -v newfs_exfat >/dev/null 2>&1; then
     host=mac
+elif [ "$(uname -s)" = Linux ] && [ "$(id -u)" = 0 ] &&
+     [ -n "${ETUDE_WORK:-}" ] && [ -d "$ETUDE_WORK" ] &&
+     [ -b "${ETUDE_DISK1:-}" ]; then
+    host=linux
 elif [ -x "$ETUDE" ]; then
     host=tooling
 else
@@ -46,17 +88,22 @@ else
 fi
 if [ "${1:-}" = -p ]; then
     OUT=${2:?file}
-    [ "$host" = mac ] || exec sh tests/system/tooling_ready.sh "$OUT"
-    [ "$(cat "$OUT" 2>/dev/null)" = hdiutil ] && exit 0
-    echo hdiutil > "$OUT.tmp" && mv "$OUT.tmp" "$OUT" || exit 1
+    case $host in
+        tooling) exec sh tests/system/tooling_ready.sh "$OUT" ;;
+        mac) line=hdiutil ;;
+        linux) command -v mkfs.exfat >/dev/null 2>&1 || exit 1; line=linux-tooling ;;
+    esac
+    [ "$(cat "$OUT" 2>/dev/null)" = "$line" ] && exit 0
+    echo "$line" > "$OUT.tmp" && mv "$OUT.tmp" "$OUT" || exit 1
     exit 0
 fi
 DIR=${1:?directory}
 IMG="$DIR/exfat_external.img"
 SRC="$DIR/exfat_src"
-[ "$host" = mac ] || "$ETUDE" provision tooling check >/dev/null 2>&1 || exit 3
+[ "$host" != tooling ] || "$ETUDE" provision tooling check >/dev/null 2>&1 || exit 3
 rm -rf "$IMG" "$SRC" "$DIR/exfat_external.manifest" "$DIR/exfat_job.sh"
 make_src "$SRC" || exit 1
+[ "$host" != linux ] || linux_fixture
 if [ "$host" = mac ]; then
     hdiutil create -size 16m -layout NONE -fs ExFAT -volname EXTGATE "$IMG" >/dev/null 2>&1 || exit 1
     mv "$IMG.dmg" "$IMG" 2>/dev/null || true
