@@ -23,10 +23,13 @@
  * `fork`, `child`, `parent-unchanged` and `regrant-write`, reported once
  * the cycles end, and `memfree`, the reads of MemFree and its fall. The
  * first failure fails its assertion and leaves those not yet reported not
- * run. Freestanding; direct system calls (probe.h).
+ * run. Given `machine=native` (probe_args.h), as a native run on a machine
+ * that other processes share starts it, it leaves out the fall of MemFree,
+ * which their allocations move. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
 #include "probe_report.h"
 
 #define STDOUT_FILENO 1
@@ -129,11 +132,12 @@ void probe_main(unsigned long *sp)
     int pid, status, i;
     unsigned free_kb = 0, end_kb;
 
+    probe_args((int)sp[0], (char **)(sp + 1));
     report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.cowregrant"));
     for (i = 0; i < WARMUP + CYCLES; i++) {
         unsigned base = 0x10000u + (unsigned)i;
 
-        if (i == WARMUP) {
+        if (i == WARMUP && !probe_native()) {
             free_kb = probe_meminfo("MemFree:");
             if (free_kb == 0xFFFFFFFFu) {
                 fail(MEMFREE, "MemFree in /proc/meminfo");
@@ -175,7 +179,7 @@ void probe_main(unsigned long *sp)
     for (; held < MEMFREE; held++) {
         report_pass(ids[held]);
     }
-    end_kb = probe_meminfo("MemFree:");
+    end_kb = probe_native() ? free_kb : probe_meminfo("MemFree:");
     if (end_kb == 0xFFFFFFFFu || (free_kb > end_kb && free_kb - end_kb > SLACK)) {
         fail(MEMFREE, "MemFree fell across the cycles: the re-grant arm leaks a frame");
     }

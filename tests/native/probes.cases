@@ -15,7 +15,8 @@ case bigfileprobe.vfat-limit volume:vfat:big-vfat:attached mountns log -- \
 # bootprobe leaves out the boot line's rach2.fsdisk and the modes of
 # rach2.bootprobe=, each of which needs a boot of its own.
 case bootprobe -- bootprobe machine=native
-case cowregrant -- cowregrant
+# machine=native leaves out the fall of MemFree across the cycles.
+case cowregrant -- cowregrant machine=native
 case credprobe ids:1000,1001,1002,2000,3000 -- credprobe
 case devprobe console -- devprobe console=open
 # eth0 is the Lenovo's one card; the probe reads its address and broadcast.
