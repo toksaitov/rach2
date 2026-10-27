@@ -205,26 +205,30 @@ static int entry_completion_mock(const char *out)
     free(value);
     return result;
 }
+/* Answer the allocation mode's commands: the export, then the ensure. */
+static int mocked_allocation(struct hp_words *args)
+{
+    ENTRY_CHECK(getenv("ETUDE_PREPARATION_CLEAN") &&
+                !strcmp(getenv("ETUDE_PREPARATION_CLEAN"), "1"));
+    ENTRY_CHECK(!strcmp(args->v[args->n - 1], "all"));
+    if (entry_has(args->v, "-J")) {
+        entry_allocations++;
+        for (size_t i = 0; i + 1 < args->n; i++)
+            if (!strcmp(args->v[i], "-J"))
+                return routine_copy(entry_export, args->v[i + 1]);
+    }
+    if (entry_has(args->v, "ensure")) {
+        ENTRY_CHECK(entry_allocations == 1);
+        entry_ensures++;
+        return 37;
+    }
+    return 91;
+}
 static int mocked_command(struct hp_words *args, volatile sig_atomic_t *stop)
 {
     (void)stop;
-    if (!strcmp(entry_mode, "allocation")) {
-        ENTRY_CHECK(getenv("ETUDE_PREPARATION_CLEAN") &&
-                    !strcmp(getenv("ETUDE_PREPARATION_CLEAN"), "1"));
-        ENTRY_CHECK(!strcmp(args->v[args->n - 1], "all"));
-        if (entry_has(args->v, "-J")) {
-            entry_allocations++;
-            for (size_t i = 0; i + 1 < args->n; i++)
-                if (!strcmp(args->v[i], "-J"))
-                    return routine_copy(entry_export, args->v[i + 1]);
-        }
-        if (entry_has(args->v, "ensure")) {
-            ENTRY_CHECK(entry_allocations == 1);
-            entry_ensures++;
-            return 37;
-        }
-        return 91;
-    }
+    if (!strcmp(entry_mode, "allocation"))
+        return mocked_allocation(args);
     if (entry_has(args->v, "retention"))
         return 0;
     if (entry_has(args->v, "pack"))

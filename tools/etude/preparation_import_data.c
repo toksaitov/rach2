@@ -540,6 +540,27 @@ static int sanitizer_source(const char *tree, const char *parent)
 #endif
 }
 
+/*
+ * Check the sanitizer input `input` below `tree`, the atos program when
+ * `matched` is 0 and its provenance when it is 1, against the digest
+ * `expected`, and add its descriptor to `artifacts`. Give 0, or -1 after a
+ * message.
+ */
+static int sanitizer_input(const char *tree, const char *input, int matched, const char *expected,
+                           struct json *artifacts)
+{
+    char *native = pi_path(tree, input);
+    struct json *value = matched ? pi_describe(native) : describe_atos(native);
+    int bad = !value || !pi_hex(expected, 64) || !pi_same(json_text(value, "sha256"), expected);
+    if (bad) {
+        fprintf(stderr, "etude prepare import: changed native input: %s\n", native);
+        json_free(value);
+    } else
+        hp_member(artifacts, input, value);
+    free(native);
+    return bad ? -1 : 0;
+}
+
 static int sanitizer_manifest(const char *tree, const char *name, struct json *artifacts)
 {
     char *path = pi_path(tree, name), *parent = strdup(name);
@@ -580,16 +601,8 @@ static int sanitizer_manifest(const char *tree, const char *name, struct json *a
         bad = inputs->item[i]->count != 2 || matched < 0 || (seen & (1u << matched));
         if (!bad) {
             seen |= 1u << matched;
-            char *native = pi_path(tree, input);
-            struct json *value = matched ? pi_describe(native) : describe_atos(native);
-            const char *expected = json_text(inputs->item[i], "sha256");
-            bad = !value || !pi_hex(expected, 64) || !pi_same(json_text(value, "sha256"), expected);
-            if (bad) {
-                fprintf(stderr, "etude prepare import: changed native input: %s\n", native);
-                json_free(value);
-            } else
-                hp_member(artifacts, input, value);
-            free(native);
+            bad = sanitizer_input(tree, input, matched, json_text(inputs->item[i], "sha256"),
+                                  artifacts);
         }
     }
     if (!bad)
