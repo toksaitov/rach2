@@ -17,16 +17,18 @@
  *
  *   2. Isolation phase: fork a child that points its own TLS descriptor at a
  *      different TCB with different sentinels. Parent and child then spin
- *      until the parent has seen the child's user time (/proc/PID/stat) rise
- *      at ISO_SWITCHES of its looks: on one processor, each rise is a switch
- *      from the parent to the child and one back, both made by the
- *      scheduler while neither process waited. Then they hand a byte back
- *      and forth over two pipes, so that each round takes one switch to the
- *      child and one back; each must always read back its own sentinels.
- *      This holds only if the context switch reprograms the shared TLS GDT
- *      descriptor for each process. Both are bound to processor 0 first: on
- *      two processors each could keep one to itself, and no switch would go
- *      from one to the other.
+ *      until the parent has seen the child's processor time, user and system
+ *      (/proc/PID/stat), rise at ISO_SWITCHES of its looks: on one processor,
+ *      each rise is a switch from the parent to the child and one back, both
+ *      made by the scheduler while neither process waited. The system time
+ *      counts too, since under a hypervisor such as WHPX most ticks can land
+ *      in the kernel rather than in the spin.
+ *      Then they hand a byte back and forth over two pipes, so that each
+ *      round takes one switch to the child and one back; each must always
+ *      read back its own sentinels. This holds only if the context switch
+ *      reprograms the shared TLS GDT descriptor for each process. Both are
+ *      bound to processor 0 first: on two processors each could keep one to
+ *      itself, and no switch would go from one to the other.
  *
  * The counts are of events the kernel records, so a slow or loaded machine
  * spins longer and a fast one shorter, and the number of rounds decides
@@ -79,7 +81,7 @@ typedef unsigned char u8;
 
 /* The witnessed events each phase waits for: looks at which the probe's own
  * user time had risen, each a timer interrupt from user mode, and looks at
- * which the child's had, each a switch to the child and back. */
+ * which the child's processor time had, each a switch to the child and back. */
 #define SOLO_INTERRUPTS 10
 #define ISO_SWITCHES    20
 
@@ -308,15 +310,16 @@ static u32 own_user_ticks(void)
 }
 
 /**
- * The state letter of the child `pid` from /proc/PID/stat, with its user
- * ticks, field 14, in `*user`; 0 when the file cannot be read or is short.
+ * The state letter of the child `pid` from /proc/PID/stat, with its user and
+ * system ticks, fields 14 and 15, summed in `*ticks`; 0 when the file cannot
+ * be read or is short.
  */
-static char child_user_ticks(int pid, u32 *user)
+static char child_ticks(int pid, u32 *ticks)
 {
     char path[32], text[256];
     char digits[12];
     int n = 0, at = 0, fd, len, i, state, field;
-    u32 v = (u32)pid;
+    u32 v = (u32)pid, sum = 0;
     const char *p;
 
     for (p = "/proc/"; *p; p++) {
@@ -354,13 +357,19 @@ static char child_user_ticks(int pid, u32 *user)
             field++;
         }
     }
-    if (field != 14 || text[i] < '0' || text[i] > '9') {
-        return 0;
+    for (; field <= 15; field++) {
+        if (text[i] < '0' || text[i] > '9') {
+            return 0;
+        }
+        for (v = 0; text[i] >= '0' && text[i] <= '9'; i++) {
+            v = v * 10 + (u32)(text[i] - '0');
+        }
+        sum += v;
+        if (text[i] == ' ') {
+            i++;
+        }
     }
-    for (v = 0; text[i] >= '0' && text[i] <= '9'; i++) {
-        v = v * 10 + (u32)(text[i] - '0');
-    }
-    *user = v;
+    *ticks = sum;
     return text[state];
 }
 
@@ -388,6 +397,9 @@ static int solo_phase(int fails)
             if (now != last) {
                 rises++;
                 last = now;
+                if (rises <= SOLO_INTERRUPTS) {
+                    report_progress("solo-rises", rises);
+                }
             }
         }
         if (tls_check(0xA5A50000u) != 0) {
@@ -502,14 +514,15 @@ static void report_rounds(int ran, int returned, int kept)
 
 /**
  * Report the assertions of the spin beside the child: `clobbered` is 1 when
- * a sentinel of the parent changed, and `ended` 1 when the child's user time
- * could not be read or the child ended first. Either stops the spin, which
+ * a sentinel of the parent changed, and `ended` 1 when the child's processor
+ * time could not be read or the child ended first. Either stops the spin, which
  * leaves the other assertion not run.
  */
 static void report_spin(int clobbered, int ended)
 {
     if (ended) {
-        report_fail("child-runs", "the child's user time could not be read, or it ended first");
+        report_fail("child-runs",
+                    "the child's processor time could not be read, or it ended first");
         report_notrun("parent-switch-sentinels", "the spin stopped when the child ended");
     } else if (clobbered) {
         report_notrun("child-runs", "the spin stopped at a changed sentinel");
@@ -526,12 +539,12 @@ static void report_spin(int clobbered, int ended)
  * checks its sentinels across switches to the child, then across each
  * round of the byte it sends the child and gets back.
  *
- * The parent spins ISO_ITERS rounds, and on until the user time of the child
- * `pid` has risen at ISO_SWITCHES of the looks it takes after each round.
- * Both are on processor 0 and the parent waits for nothing while it spins,
- * so a rise between two of its looks is the child having run in user mode
- * between them: a switch away from the parent and one back, after which the
- * parent checks. A child that has ended, or whose stat cannot be read, ends
+ * The parent spins ISO_ITERS rounds, and on until the processor time of the
+ * child `pid` has risen at ISO_SWITCHES of the looks it takes after each
+ * round. Both are on processor 0 and the parent waits for nothing while it
+ * spins, so a rise between two of its looks is the child having run between
+ * them: a switch away from the parent and one back, after which the parent
+ * checks. A child that has ended, or whose stat cannot be read, ends
  * the spin as a failure, since it can no longer run. `fails` is the count
  * of failures so far, and the new count is returned.
  */
@@ -542,8 +555,8 @@ static int iso_switches(int pid, const int to_child[2], const int to_parent[2], 
     u32 last = 0, now = 0;
     int i, rises = 0, clobbered = 0, ended = 0, returned = 1, kept = 1, ran;
 
-    if (child_user_ticks(pid, &last) == 0) {
-        puts_("FAIL: the child's user time cannot be read\n");
+    if (child_ticks(pid, &last) == 0) {
+        puts_("FAIL: the child's processor time cannot be read\n");
         report_spin(0, 1);
         report_rounds(0, 1, 1);
         return fails + 1;
@@ -561,7 +574,7 @@ static int iso_switches(int pid, const int to_child[2], const int to_parent[2], 
             }
             break;
         }
-        state = child_user_ticks(pid, &now);
+        state = child_ticks(pid, &now);
         if (state == 0 || state == 'Z') {
             puts_("FAIL: the child ended before it ran beside the parent\n");
             fails++;
