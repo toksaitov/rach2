@@ -167,8 +167,13 @@ static int mocked_query(const struct routine_input *input, struct hp_words *args
     if (!strcmp(name, "suites")) {
         ENTRY_CHECK(entry_has(args->v, "inventory"));
         char *path = ret_format("%s/suites.stdout", input->out);
-        entry_put(path, "style|full|\nhost|full|\ndefault|core|\nshutdown|core|\n"
-                        "fpu|core|x86_64\nbigmem|full|x86_64\n");
+        entry_put(path, "# The suites\n\nOne line per suite, in the order the pool starts them.\n\n"
+                        "* `style` (full tier; needs clang, python3; no machine): the checks.\n"
+                        "* `host` (full tier; needs qemu; 384 MiB): the host tests.\n"
+                        "* `default` (core tier; needs qemu; 128 MiB): every probe (each alone).\n"
+                        "* `shutdown` (core tier; needs qemu; 128 MiB): the end; i686 only.\n"
+                        "* `fpu` (core tier; needs qemu; 128 MiB; x86_64 only): the FPU.\n"
+                        "* `bigmem` (full tier; needs qemu; 8320 MiB; x86_64 only): memory.\n");
         free(path);
         return 0;
     }
@@ -229,7 +234,11 @@ static int mocked_command(struct hp_words *args, volatile sig_atomic_t *stop)
     entry_calls++;
     ENTRY_CHECK(entry_calls == 1 && args->n >= 12);
     ENTRY_CHECK(!strcmp(args->v[3], !strcmp(entry_mode, "push") ? "push" : "ci"));
-    if (!strcmp(entry_mode, "push")) {
+    if (strcmp(entry_mode, "push")) {
+        ENTRY_CHECK(args->n == 16 && !strcmp(args->v[11], "style") &&
+                    !strcmp(args->v[12], "host") && !strcmp(args->v[13], "default") &&
+                    !strcmp(args->v[14], "shutdown") && !strcmp(args->v[15], "fpu"));
+    } else {
         ENTRY_CHECK(entry_has(args->v, "i686:host") && entry_has(args->v, "x86_64:default"));
         ENTRY_CHECK(!strcmp(getenv("RACH2_CASES"), "host.fixture.host,machine.fixture.default"));
     }

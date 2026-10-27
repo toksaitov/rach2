@@ -223,6 +223,31 @@ static int entry_inventory(struct entry *e)
                : 0;
 }
 
+/**
+ * Split a suite's line of the inventory, "* `NAME` (TIER tier; ...): ...",
+ * as tests/system/suites.md has it, into its name, its tier and the
+ * architectures before " only" of a suite that does not run on both, ""
+ * for one that does. Give the name, or NULL for a line of another form.
+ */
+static char *entry_suite(char *line, char **tier, char **arches)
+{
+    char *tick = strstr(line + 3, "` ("), *end, *close, *last;
+    if (!tick)
+        return NULL;
+    *tick = 0;
+    *tier = tick + 3;
+    if (!(end = strstr(*tier, " tier;")) || !(close = strstr(end, "): ")))
+        return NULL;
+    *end = *close = 0;
+    last = strrchr(end + 1, ';');
+    *arches = "";
+    if (last && close - last > 7 && !strcmp(close - 5, " only")) {
+        close[-5] = 0;
+        *arches = last + 2;
+    }
+    return line + 3;
+}
+
 static int entry_core(struct entry *e)
 {
     char path[ROUTINE_PATH];
@@ -231,20 +256,18 @@ static int entry_core(struct entry *e)
     FILE *file = fopen(path, "rb");
     if (!file)
         return -1;
-    char line[512];
-    int error = 0;
+    char line[4096], *name, *tier, *arches;
+    int error = 0, start = 1, head;
     while (!error && fgets(line, sizeof line, file)) {
-        char *tier = strchr(line, '|'), *arches = tier ? strchr(tier + 1, '|') : NULL;
-        error = !tier || !arches || !strchr(arches + 1, '\n');
-        if (error)
-            break;
-        *tier++ = 0;
-        *arches++ = 0;
-        arches[strcspn(arches, "\r\n")] = 0;
-        if ((strcmp(tier, "core") && strcmp(line, "style") && strcmp(line, "host")) ||
+        head = start;
+        start = strchr(line, '\n') != NULL;
+        if (!head || strncmp(line, "* `", 3))
+            continue;
+        error = !(name = entry_suite(line, &tier, &arches));
+        if (error || (strcmp(tier, "core") && strcmp(name, "style") && strcmp(name, "host")) ||
             (*arches && strcmp(e->in.arches, "both") && !strstr(arches, e->in.arches)))
             continue;
-        hp_add(&e->selection, line);
+        hp_add(&e->selection, name);
     }
     error = error || ferror(file) || !e->selection.n;
     if (fclose(file))
