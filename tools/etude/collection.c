@@ -1,6 +1,7 @@
 /* collection.c: select and run native collections on prepared artifacts. */
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
 #include <stdint.h>
@@ -1356,11 +1357,17 @@ static const char *collection_accel(const char *accel)
 {
     if (!accel || !*accel) {
 #ifdef __linux__
-        if (access("/dev/kvm", F_OK) == 0 && access("/dev/kvm", R_OK | W_OK) != 0) {
-            refused("/dev/kvm exists but is not accessible; choose tcg explicitly");
+        int kvm = open("/dev/kvm", O_RDWR);
+        if (kvm < 0 && errno != ENOENT) {
+            fprintf(stderr,
+                    "run: result: refused: /dev/kvm cannot be opened for reading and writing: "
+                    "%s; set RACH2_QEMU_ACCEL=tcg to run under the emulator\n",
+                    strerror(errno));
             return NULL;
         }
-        accel = access("/dev/kvm", R_OK | W_OK) == 0 ? "kvm" : "tcg";
+        if (kvm >= 0)
+            close(kvm);
+        accel = kvm >= 0 ? "kvm" : "tcg";
 #elif defined(__APPLE__) && defined(__x86_64__)
         int hv = 0;
         size_t size = sizeof(hv);
