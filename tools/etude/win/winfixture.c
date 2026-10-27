@@ -1049,7 +1049,8 @@ static int fx_sockets(void)
 /**
  * The QEMU launcher's posted receive keeps what a child sent before it exited
  * with the connection open, which resets it, although the launcher reads only
- * after the exit, and then reads the connection's end.
+ * after the exit, and then reads the connection's end. The child exits only
+ * after a byte that the fixture sends once its receive is posted.
  */
 static int fx_reset(void)
 {
@@ -1063,7 +1064,7 @@ static int fx_reset(void)
     unsigned short port;
     SOCKET l, a;
     DWORD err;
-    int n = 0, k, ended = 0, r;
+    int n = 0, k, ended = 0, unreleased = 0, r;
 
     CHECK(etude_win_net_start() == 0, "Winsock did not start");
     in = malloc(sizeof(*in));
@@ -1088,9 +1089,11 @@ static int fx_reset(void)
                                 : failed("accept: %d", WSAGetLastError()));
     }
     socket_in_start(in, (etude_socket)a);
-    err = wait_end(c);
+    if (send(a, "r", 1, 0) != 1)
+        unreleased = WSAGetLastError();
+    err = unreleased != 0 ? 0 : wait_end(c);
     began = GetTickCount64();
-    while (n < (int)sizeof got - 1 && GetTickCount64() - began <= BOUND) {
+    while (!unreleased && n < (int)sizeof got - 1 && GetTickCount64() - began <= BOUND) {
         k = socket_read(in, (etude_socket)a, got + n, sizeof got - 1 - (size_t)n);
         if (k > 0) {
             n += k;
@@ -1105,7 +1108,8 @@ static int fx_reset(void)
     socket_in_stop(in, (etude_socket)a);
     closesocket(a);
     free(in);
-    r = err != 0                 ? failed("run: %s", errtext(err))
+    r = unreleased != 0          ? failed("release: %d", unreleased)
+        : err != 0               ? failed("run: %s", errtext(err))
         : c->status != 0         ? failed("status %lu", (unsigned long)c->status)
         : strcmp(got, text) != 0 ? failed("the launcher read '%s' of the reset connection", got)
         : !ended                 ? failed("the reset connection did not end")

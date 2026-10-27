@@ -139,13 +139,16 @@ static void spawn_n(HANDLE *h, int n, const wchar_t *args)
 
 /**
  * Connect to PORT on 127.0.0.1 and send TEXT; then end the connection, or
- * when `reset` is set exit at once with it open, which resets it.
+ * when `reset` is set wait for one byte from the peer and exit with the
+ * connection open, which resets it. The peer sends that byte once its
+ * receive is posted, so that the reset cannot come before it.
  */
 static int connect_send(unsigned short port, const char *text, int reset)
 {
     struct sockaddr_in a;
     WSADATA d;
     SOCKET s;
+    char release;
 
     if (WSAStartup(MAKEWORD(2, 2), &d) != 0)
         return 96;
@@ -159,8 +162,10 @@ static int connect_send(unsigned short port, const char *text, int reset)
     if (connect(s, (struct sockaddr *)&a, sizeof a) != 0 ||
         send(s, text, (int)strlen(text), 0) != (int)strlen(text))
         return 98;
-    if (reset)
+    if (reset) {
+        recv(s, &release, 1, 0);
         ExitProcess(0);
+    }
     shutdown(s, SD_SEND);
     closesocket(s);
     return 0;
@@ -474,8 +479,8 @@ static int do_connect(int argc, wchar_t **argv)
     return connect_send((unsigned short)_wtoi(argv[2]), utf8(argv[3]), 0);
 }
 
-/** reset PORT TEXT: send TEXT to PORT on 127.0.0.1 and exit with the
- * connection open. */
+/** reset PORT TEXT: send TEXT to PORT on 127.0.0.1, wait for a byte back and
+ * exit with the connection open. */
 static int do_reset(int argc, wchar_t **argv)
 {
     (void)argc;
