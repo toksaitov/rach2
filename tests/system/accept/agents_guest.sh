@@ -339,7 +339,7 @@ main() {
             git archive HEAD | tar -x -C "$dir"
             printf 'check %s\n' "$(cd "$dir" && sh check.sh 2>&1)"
             rm -rf "$dir"
-            printf 'status %s\n' "$(git status --porcelain | tr '\n' ' ')"
+            printf 'status %s\n' "$(git --no-optional-locks status --porcelain | tr '\n' ' ')"
             ;;
         credentials)
             credential_files "${@:2}" | while read -r file; do
