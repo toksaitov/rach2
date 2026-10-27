@@ -928,6 +928,17 @@ static void websocket_reset_test(void)
     clear(&input);
     free_request(r);
     dispose(&s);
+    setup(&s, "{\"steps\":[{\"request\":{\"path\":\"/"
+              "echo\"},\"reply\":{\"json\":{\"a\":1}}}]}");
+    r = get_request("GET", "/echo", "", "[]");
+    w = (struct wire){0};
+    w.broken = 1;
+    p = test_peer(&s, r, &w);
+    serve_request(&p);
+    check(verdict(&s) && s.failures == 1 && !s.steps[0].played && !p.keep,
+          "reset during an HTTP reply fails its step once");
+    free_request(r);
+    dispose(&s);
 }
 static void http_test(void)
 {

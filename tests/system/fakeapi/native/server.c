@@ -868,8 +868,9 @@ static void serve_request(struct peer *p)
     if (flag(selected, "hold", 0) && !held_reply(p))
         return;
     if (!protocol_reply(s->steps[p->step - 1].protocol, selected, p)) {
-        if (p->websocket && !p->failed && !p->finished)
-            fail_peer(p, "the connection ended in the WebSocket exchange");
+        if (!p->failed && !p->finished)
+            fail_peer(p, p->websocket ? "the connection ended in the WebSocket exchange"
+                                      : "the connection ended in the reply");
         p->keep = 0;
     }
     finish(p);
