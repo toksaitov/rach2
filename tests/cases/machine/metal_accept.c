@@ -11,6 +11,8 @@
 #include <string.h>
 #include "metal_accept.h"
 #include "fileio.h"
+#include "sha256.h"
+#include <limits.h>
 #include <sys/stat.h>
 
 /* Each command has evidence. Every guest mount and temporary directory is
@@ -66,9 +68,10 @@ static void message(struct acceptance *a, int failed, const char *format, ...)
         a->fails++;
 }
 
-/** Run or download through the login account with the same SSH retries. */
-static enum etude_status account_mode(struct acceptance *a, const char *command, const char *input,
-                                      const char *output, struct net_run *r, int download)
+/** Run a command as the login account, without su or a terminal, trying
+ * again while the server does not yet take connections. */
+static enum etude_status account(struct acceptance *a, const char *command, const char *input,
+                                 const char *output, struct net_run *r)
 {
     char who[128];
     unsigned tries;
@@ -84,8 +87,7 @@ static enum etude_status account_mode(struct acceptance *a, const char *command,
     snprintf(who, sizeof(who), "%s@127.0.0.1", a->request->login.user);
     for (tries = 0;; tries++) {
         const char *error;
-        st = download ? net_ssh_download(a->u, argv, output, r)
-                      : net_ssh_input(a->u, argv, input, output, r);
+        st = net_ssh_input(a->u, argv, input, output, r);
         error = r->err != NULL ? r->err : "";
         if (st != ETUDE_OK || tries == 3 || r->end.end != ETUDE_END_EXITED || r->end.value != 255 ||
             (strstr(error, "kex_exchange_identification") == NULL &&
@@ -106,13 +108,6 @@ static enum etude_status account_mode(struct acceptance *a, const char *command,
             }
         }
     }
-}
-
-/** Run a command as the login account, without su or a terminal. */
-static enum etude_status account(struct acceptance *a, const char *command, const char *input,
-                                 const char *output, struct net_run *r)
-{
-    return account_mode(a, command, input, output, r, 0);
 }
 
 /** Run a required root command, retaining its status even when the caller
@@ -248,38 +243,6 @@ static int put_file(struct acceptance *a, const char *host, const char *guest)
         text = read_format(a, "mv %s/data %s", a->transfer, guest);
         free(text);
         ok = !a->command_failed;
-    }
-    transfer_end(a);
-    return ok;
-}
-
-/** Fetch binary output, moving a root-owned image through the account's
- * directory when su is used, and restoring its original path afterwards. */
-static int get_file(struct acceptance *a, const char *guest, const char *host)
-{
-    struct net_run r;
-    char command[640], output[180], *text;
-    const char *evidence;
-    int ok;
-    enum etude_status st;
-    if (a->request->use_su) {
-        if (!transfer_directory(a))
-            return 0;
-        text =
-            read_format(a, "mv %s %s/data && chmod 644 %s/data", guest, a->transfer, a->transfer);
-        free(text);
-    }
-    snprintf(command, sizeof(command), "cat %s%s", a->request->use_su ? a->transfer : guest,
-             a->request->use_su ? "/data" : "");
-    snprintf(output, sizeof(output), "%s.get-%u", a->prefix, ++a->commands);
-    st = account_mode(a, command, NULL, output, &r, 1);
-    evidence = etude_evidence(a->u->c, output);
-    ok = st == ETUDE_OK && net_exited0(&r) && evidence != NULL && copy_file(evidence, host);
-    net_run_free(&r);
-    if (a->request->use_su) {
-        text = read_format(a, "if [ -f %s/data ]; then mv %s/data %s; fi", a->transfer, a->transfer,
-                           guest);
-        free(text);
     }
     transfer_end(a);
     return ok;
@@ -700,8 +663,77 @@ static int temporary_directory(struct acceptance *a)
 
 static int same_file(const char *one, const char *two);
 
+/** Give the SHA-256 of the host file at `path` in `hex`; 1, or 0 when it
+ * cannot be read. */
+static int file_sha256(const char *path, char hex[65])
+{
+    unsigned char bytes[65536], digest[32];
+    struct sha256 h;
+    FILE *f = fopen(path, "rb");
+    size_t n;
+    int ok;
+    if (f == NULL)
+        return 0;
+    sha256_init(&h);
+    while ((n = fread(bytes, 1, sizeof(bytes), f)) != 0)
+        sha256_update(&h, bytes, n);
+    ok = !ferror(f);
+    fclose(f);
+    sha256_final(&h, digest);
+    sha256_hex(digest, hex);
+    return ok;
+}
+
+/** Apply `changes`, lines of `cmp -l` with 1-based offsets and octal bytes,
+ * to the host file `host`; each old byte must be the one the file has. */
+static int apply_changes(const char *changes, const char *host)
+{
+    unsigned long long at;
+    unsigned was, now;
+    const char *line;
+    FILE *f = fopen(host, "r+b");
+    int ok = f != NULL;
+    for (line = changes; ok && *line != '\0'; line += strcspn(line, "\n")) {
+        line += strspn(line, "\n");
+        if (*line == '\0')
+            break;
+        ok = sscanf(line, "%llu %o %o", &at, &was, &now) == 3 && at > 0 && at <= LONG_MAX &&
+             was < 256 && now < 256 && fseek(f, (long)(at - 1), SEEK_SET) == 0 &&
+             fgetc(f) == (int)was && fseek(f, (long)(at - 1), SEEK_SET) == 0 &&
+             fputc((int)now, f) != EOF;
+    }
+    if (f != NULL && fclose(f) != 0)
+        ok = 0;
+    return ok;
+}
+
+/**
+ * Make in the host file `host` the image the machine wrote at `guest`. It
+ * is the host's copy of the bytes sent, `sent`, with the bytes that `cmp -l`
+ * on the machine finds changed against `guest`.sent, its copy of the same
+ * bytes, and it must have the SHA-256 the machine gives for `guest`. Only
+ * the changes cross the Rach2 SSH client's serial console, where the whole
+ * image would take minutes.
+ */
+static int changed_image(struct acceptance *a, const char *guest, const char *sent,
+                         const char *host)
+{
+    int earlier = a->command_failed, ok;
+    char *changes, *sum, hex[65];
+    a->command_failed = 0;
+    changes = read_format(a, "cmp -l %s.sent %s; [ $? -le 1 ]", guest, guest);
+    sum = read_format(a, "sha256sum < %s", guest);
+    ok = !a->command_failed && copy_file(sent, host) && apply_changes(changes, host) &&
+         file_sha256(host, hex) && strlen(sum) >= 64 && memcmp(sum, hex, 64) == 0;
+    a->command_failed |= earlier;
+    free(changes);
+    free(sum);
+    return ok;
+}
+
 /** Attach, mount, write, unmount and detach a filesystem in a file, then
- * judge its downloaded bytes with the independent native KRFFS tools. */
+ * judge the bytes the machine wrote with the independent native KRFFS
+ * tools. */
 static void loop_image(struct acceptance *a)
 {
     char *text = read_command(a, "cat /proc/filesystems");
@@ -709,7 +741,7 @@ static void loop_image(struct acceptance *a)
     char guest[320], after[4096], file[4096], input[4096], name[180], size[32];
     char *fsck[] = {"fsck-krffs", after, "--strict", NULL};
     char *readfile[] = {"readfile-krffs", after, "/accept.txt", file, NULL};
-    struct stat before, downloaded;
+    struct stat before;
     int ok;
     if (text[0] == '\0')
         message(a, 1, "the machine gave no file-system list");
@@ -735,7 +767,7 @@ static void loop_image(struct acceptance *a)
         message(a, 1, "image: the transfer failed");
         return;
     }
-    text = read_format(a, "wc -c < %s", guest);
+    text = read_format(a, "wc -c < %s && cp %s %s.sent", guest, guest, guest);
     message(a, strcmp(text, size) != 0, "image: the transfer has %s bytes (expected %s)", text,
             size);
     free(text);
@@ -765,9 +797,8 @@ static void loop_image(struct acceptance *a)
     snprintf(name, sizeof(name), "%s.loop.accept", a->prefix);
     if (net_path(a->u, name, file, sizeof(file)) == NULL)
         return;
-    if (!get_file(a, guest, after) || stat(after, &downloaded) != 0 ||
-        downloaded.st_size != before.st_size)
-        message(a, 1, "the image the machine wrote could not be downloaded");
+    if (!changed_image(a, guest, image, after))
+        message(a, 1, "the image the machine wrote could not be made from its changes");
     else {
         ok = image_tool(a, fsck, "loop.fsck");
         message(a, !ok, "the host's checker finds the image the machine wrote %s",
