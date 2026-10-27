@@ -92,14 +92,14 @@ case "$NAME" in
     *) usage ;;
 esac
 
-TREE=$(cd "$(dirname "$0")/../.." && pwd) || die "cannot find the tree"
+TREE=$(cd "$(dirname "$0")/../.." && pwd -P) || die "cannot find the tree"
 DOWNLOADS=$TREE/build/downloads/host-tools
 SHARED=${RACH2_DOWNLOADS-}
 if [ -z "${RACH2_DOWNLOADS+set}" ] && [ -d /var/cache/rach2-downloads ]; then
     SHARED=/var/cache/rach2-downloads
 fi
 mkdir -p "$2" || die "cannot make $2"
-PREFIX=$(cd "$2" && pwd) || die "cannot enter $2"
+PREFIX=$(cd "$2" && pwd -P) || die "cannot enter $2"
 case "$TREE$PREFIX" in
     *[[:space:]]*) die "the tree and PREFIX must not contain spaces: $TREE, $PREFIX" ;;
 esac
