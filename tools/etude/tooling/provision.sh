@@ -7,7 +7,8 @@
 # service, turns off what would slow a later boot, and checks
 # that every command is found. cloud-init then powers the machine off.
 #
-# On arm64 it also installs QEMU's user-mode emulators and registers them
+# On amd64 it installs the i386 runtime for programs the GNU build runs.
+# On arm64 it installs QEMU's user-mode emulators and registers them
 # with the kernel for i386 and x86-64 programs, with the flag F, which opens
 # the emulator once, so that a program in a chroot or another namespace runs
 # too; the GNU layer's build runs the programs it builds.
@@ -32,6 +33,8 @@ X86=
 if [ "$(uname -m)" = aarch64 ]; then
     X86='qemu-i386 qemu-x86_64'
     PACKAGES="$PACKAGES qemu-user qemu-user-binfmt"
+else
+    PACKAGES="$PACKAGES libc6-i386"
 fi
 # What a boot of the tooling machine does not need: the network's services,
 # the package timers, snapd and cloud-init itself.
@@ -83,6 +86,9 @@ run_logged apt-get update -q || fail 'apt-get update'
 # shellcheck disable=SC2086 # the list is words
 run_logged apt-get install -y -q --no-install-recommends $PACKAGES ||
     fail 'apt-get install'
+if [ "$(uname -m)" = x86_64 ]; then
+    /lib/ld-linux.so.2 --version > /dev/null || fail 'the i386 dynamic loader does not run'
+fi
 run_logged /usr/lib/systemd/systemd-networkd-wait-online --any ||
     fail 'the network after package service restarts'
 say 'provision: the job runner'
