@@ -452,15 +452,15 @@ static char *password(struct etude_case *c, char *buf, size_t size)
 }
 
 /** Step `paths`: the os-real boot with a raw disk, an exFAT and a FAT32
- * disk, all on IDE, and its rows. */
-static void paths(struct etude_case *c)
+ * disk, all on IDE, and its rows. Returns what `drive` returned. */
+static int paths(struct etude_case *c)
 {
     static const char *const drives[] = {"primary master", "primary slave", "secondary master"};
     char pass[128], send[160], want[64];
     struct line login[3];
     const char *p, *q;
     size_t i;
-    int dma;
+    int rc, dma;
 
     snprintf(send, sizeof(send), "%s\r", password(c, pass, sizeof(pass)));
     login[0].send = NULL;
@@ -469,7 +469,7 @@ static void paths(struct etude_case *c)
     login[1].expect = "Password:";
     login[2].send = send;
     login[2].expect = "# ";
-    drive(c, "paths", login, 3, paths_lines, sizeof(paths_lines) / sizeof(paths_lines[0]));
+    rc = drive(c, "paths", login, 3, paths_lines, sizeof(paths_lines) / sizeof(paths_lines[0]));
     for (dma = 1, i = 0; i < sizeof(drives) / sizeof(drives[0]); i++) {
         snprintf(want, sizeof(want), "ata: %s: ", drives[i]);
         for (p = console; (p = strstr(p, want)) != NULL; p++) {
@@ -503,27 +503,34 @@ static void paths(struct etude_case *c)
     counts(c, "counts-exsmall", "exsmall", 82000, 120000);
     counts(c, "counts-fatsmall", "fatsmall", 99600, 350000);
     counts(c, "counts-exfiles", "exfiles", 35500, 65000);
+    return rc;
 }
 
 /* The recovery system's greeting and prompt, which needs no login. */
 static const struct line recovery[] = {{NULL, "recovery image"}, {NULL, "~ #"}};
 
-/** Step `stick`: the recovery boot with a USB stick, written and read raw. */
-static void stick(struct etude_case *c)
+/** Step `stick`: the recovery boot with a USB stick, written and read raw.
+ * Returns what `drive` returned. */
+static int stick(struct etude_case *c)
 {
-    drive(c, "stick", recovery, 2, stick_lines, sizeof(stick_lines) / sizeof(stick_lines[0]));
+    int rc =
+        drive(c, "stick", recovery, 2, stick_lines, sizeof(stick_lines) / sizeof(stick_lines[0]));
+
     etude_assert(c, "stick-same", has_line("SAME"), "the stick did not read back what was written");
     exact(c, "stick-write-commands", "stick-write-held", "stickwrite0", "stickwrite1", 128);
     exact(c, "stick-read-commands", "stick-read-held", "stickwrite1", "stickread1", 128);
     exact(c, "stick-big-commands", "stick-big-held", "stickread1", "stickbig1", 8);
     etude_assert(c, "stick-big-same", has_line("SAMEBIG"),
                  "the 512 KiB reads did not read what the 32 KiB reads read");
+    return rc;
 }
 
-/** Step `ahci`: the recovery boot with an AHCI disk, written and read raw. */
-static void ahci(struct etude_case *c)
+/** Step `ahci`: the recovery boot with an AHCI disk, written and read raw.
+ * Returns what `drive` returned. */
+static int ahci(struct etude_case *c)
 {
-    drive(c, "ahci", recovery, 2, ahci_lines, sizeof(ahci_lines) / sizeof(ahci_lines[0]));
+    int rc = drive(c, "ahci", recovery, 2, ahci_lines, sizeof(ahci_lines) / sizeof(ahci_lines[0]));
+
     etude_assert(c, "ahci-pattern", has_line("PATDONE"),
                  "the pattern was not written to the AHCI disk");
     exact(c, "ahci-write-commands", "ahci-write-held", "ahciwrite0", "ahciwrite1", 96);
@@ -531,14 +538,20 @@ static void ahci(struct etude_case *c)
     exact(c, "ahci-small-commands", "ahci-small-held", "ahciread1", "ahcismall1", 1024);
     etude_assert(c, "ahci-same", has_line("SAMEAHCI"),
                  "the AHCI disk did not read back what was written");
+    return rc;
 }
 
+/** Run the steps in turn and report every assertion. Returns 1 when a step's
+ * machine did not print every line's text, since the counters it printed
+ * before then do not show that its commands ended. */
 int etude_scenario(struct etude_case *c)
 {
+    int incomplete;
+
     if (etude_step(c, "volumes") != ETUDE_OK || volumes(c) != 0)
         return 1;
-    paths(c);
-    stick(c);
-    ahci(c);
-    return 0;
+    incomplete = paths(c) != 0;
+    incomplete |= stick(c) != 0;
+    incomplete |= ahci(c) != 0;
+    return incomplete;
 }
