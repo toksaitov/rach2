@@ -806,21 +806,26 @@ static int cmd_begin(const char *cmd, const char *text)
  * Write the record of an attempt, STATE/a/TOKEN/record: its command, its
  * owner, its child, the boot they run in, its state and its final events. A
  * later etude-guest reads it to answer `status`.
+ *
+ * @return 0, or -1 when the record could not be written, which is noted.
  */
-static void attempt_record(const struct attempt *a, enum state st, const char *finals)
+static int attempt_record(const struct attempt *a, enum state st, const char *finals)
 {
     char path[PATH_CAP];
     char text[2048];
 
     if (path_of(path, "%s/record", a->dir) < 0)
-        return;
+        return -1;
     snprintf(text, sizeof(text),
              "cmd %s\nsession %s\nowner %ld %llu\nchild %ld %llu\nkeeper %ld %llu\nboot %s\nstate "
              "%s\n%s",
              a->cmd, session, (long)self_pid, self_start, (long)a->pid, a->start,
              (long)a->owned.pid, a->owned.start, boot, state_name[st], finals ? finals : "");
-    if (write_file(path, text, strlen(text)) < 0)
+    if (write_file(path, text, strlen(text)) < 0) {
         note("record: %s: %s", path, strerror(errno));
+        return -1;
+    }
+    return 0;
 }
 
 /* ------------------------------------------------------------------- files */
@@ -1694,7 +1699,9 @@ static int spawn_pipes(struct attempt *a, struct pipes *pp)
  * a group of its own and waits until its identity is in the attempt's
  * record, so that no process of the attempt runs unregistered; then it
  * takes its descriptors, workspace, umask and signal state and executes the
- * program.
+ * program. When the record cannot be written, the start pipe is closed
+ * unwritten, and the child exits without executing the program for the
+ * caller to reap.
  *
  * @return NULL once the program runs, or the error code.
  */
@@ -1746,7 +1753,14 @@ static const char *spawn(struct attempt *a, const struct invocation *inv)
     close(pp.sync[0]);
     close(pp.exe[1]);
     a->start = proc_start(a->pid);
-    attempt_record(a, ST_RUNNING, NULL);
+    if (attempt_record(a, ST_RUNNING, NULL) < 0) {
+        close(pp.sync[1]);
+        close(pp.exe[0]);
+        close(pp.out[0]);
+        close(pp.err[0]);
+        free_vectors(argv, envp);
+        return ETUDE_ERR_FAILED;
+    }
     if (write(pp.sync[1], "x", 1) != 1)
         note("spawn: the child did not take its start");
     close(pp.sync[1]);
