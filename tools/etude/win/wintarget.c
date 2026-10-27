@@ -3,7 +3,8 @@
  * first argument chooses what it does: exit, crash, report its arguments,
  * directory, environment or job, use processor time or memory, start a tree
  * of its own copies, leave children and grandchildren behind, try to leave
- * its job, connect to a socket, or wait for a file.
+ * its job, connect to a socket and end or reset the connection, or wait for
+ * a file.
  *
  * It writes its reports with WriteFile, so that the C library's text mode does
  * not turn a newline into two bytes, and it parses its arguments with the
@@ -136,8 +137,11 @@ static void spawn_n(HANDLE *h, int n, const wchar_t *args)
     }
 }
 
-/** Connect to PORT on 127.0.0.1 and send TEXT. */
-static int connect_send(unsigned short port, const char *text)
+/**
+ * Connect to PORT on 127.0.0.1 and send TEXT; then end the connection, or
+ * when `reset` is set exit at once with it open, which resets it.
+ */
+static int connect_send(unsigned short port, const char *text, int reset)
 {
     struct sockaddr_in a;
     WSADATA d;
@@ -155,6 +159,8 @@ static int connect_send(unsigned short port, const char *text)
     if (connect(s, (struct sockaddr *)&a, sizeof a) != 0 ||
         send(s, text, (int)strlen(text), 0) != (int)strlen(text))
         return 98;
+    if (reset)
+        ExitProcess(0);
     shutdown(s, SD_SEND);
     closesocket(s);
     return 0;
@@ -465,7 +471,15 @@ static int do_family(int argc, wchar_t **argv)
 static int do_connect(int argc, wchar_t **argv)
 {
     (void)argc;
-    return connect_send((unsigned short)_wtoi(argv[2]), utf8(argv[3]));
+    return connect_send((unsigned short)_wtoi(argv[2]), utf8(argv[3]), 0);
+}
+
+/** reset PORT TEXT: send TEXT to PORT on 127.0.0.1 and exit with the
+ * connection open. */
+static int do_reset(int argc, wchar_t **argv)
+{
+    (void)argc;
+    return connect_send((unsigned short)_wtoi(argv[2]), utf8(argv[3]), 1);
 }
 
 /** cat: copy the standard input to the standard output. */
@@ -550,6 +564,7 @@ static const struct {
     {L"parent", 1, do_parent},
     {L"family", 2, do_family},
     {L"connect", 2, do_connect},
+    {L"reset", 2, do_reset},
     {L"cat", 0, do_cat},
     {L"envcat", 0, do_envcat},
     {L"big", 1, do_big},

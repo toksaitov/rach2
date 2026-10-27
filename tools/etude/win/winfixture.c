@@ -4,7 +4,8 @@
  * judges what the adapter reports against what the target and Windows say:
  * the suspended start and the registration, the accounting of a tree of
  * processes, the end of a tree by its job and by the death of its
- * controller, output, arguments, paths, the environment, sockets and clocks.
+ * controller, output, arguments, paths, the environment, sockets, the
+ * reading of a reset connection, and clocks.
  * Others run the executor of etude/exec.h, the ledger, the supervisor with
  * both, and etude.exe, which must also be beside this program: `etude
  * provision tooling` with winstand.exe, `etude lock tree`, `etude lock
@@ -26,6 +27,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "sockets.h"
 #include "winexec.h"
 #include "winfixture.h"
 #include "winfmt.h"
@@ -1044,6 +1046,72 @@ static int fx_sockets(void)
     return 0;
 }
 
+/**
+ * The QEMU launcher's posted receive keeps what a child sent before it exited
+ * with the connection open, which resets it, although the launcher reads only
+ * after the exit, and then reads the connection's end.
+ */
+static int fx_reset(void)
+{
+    static const char text[] = "{\"return\": {}, \"id\": 100}";
+    struct etude_win_child *c = NULL;
+    struct socket_in *in;
+    struct cap cap = {0};
+    const char *argv[4];
+    char port_text[16], got[64];
+    ULONGLONG began;
+    unsigned short port;
+    SOCKET l, a;
+    DWORD err;
+    int n = 0, k = 0, ended = 0, r;
+
+    CHECK(etude_win_net_start() == 0, "Winsock did not start");
+    in = malloc(sizeof(*in));
+    CHECK(in != NULL, "no memory");
+    l = etude_win_listen(&port);
+    if (l == INVALID_SOCKET) {
+        free(in);
+        return failed("listen: %d", WSAGetLastError());
+    }
+    snprintf(port_text, sizeof port_text, "%u", port);
+    argv[0] = "reset";
+    argv[1] = port_text;
+    argv[2] = text;
+    argv[3] = NULL;
+    err = start(target, argv, &cap, &c);
+    a = err != 0 ? INVALID_SOCKET : etude_win_accept(l, BOUND);
+    closesocket(l);
+    if (a == INVALID_SOCKET) {
+        free(in);
+        cap_free(&cap);
+        return done(c, err != 0 ? failed("start: %s", errtext(err))
+                                : failed("accept: %d", WSAGetLastError()));
+    }
+    socket_in_start(in, (etude_socket)a);
+    err = wait_end(c);
+    began = GetTickCount64();
+    while (n < (int)sizeof got - 1 && GetTickCount64() - began <= BOUND) {
+        k = socket_read(in, (etude_socket)a, got + n, sizeof got - 1 - (size_t)n);
+        if (k > 0)
+            n += k;
+        else if ((ended = k == 0 || errno != EAGAIN))
+            break;
+        else
+            Sleep(1);
+    }
+    got[n] = '\0';
+    socket_in_stop(in, (etude_socket)a);
+    closesocket(a);
+    free(in);
+    r = err != 0                 ? failed("run: %s", errtext(err))
+        : c->status != 0         ? failed("status %lu", (unsigned long)c->status)
+        : strcmp(got, text) != 0 ? failed("the launcher read '%s' of the reset connection", got)
+        : !ended                 ? failed("the reset connection did not end")
+                                 : 0;
+    cap_free(&cap);
+    return done(c, r);
+}
+
 /** The monotonic clock does not go back, and UTC agrees with the C library. */
 static int fx_clocks(void)
 {
@@ -1140,6 +1208,7 @@ static const struct {
     {"paths", fx_paths},
     {"environment", fx_environment},
     {"sockets", fx_sockets},
+    {"reset", fx_reset},
     {"clocks", fx_clocks},
     {"concurrent", fx_concurrent},
     {"exec-attempts", fx_exec_attempts},
