@@ -21,6 +21,9 @@
 #define METHOD_CPU_LOWER "posix-rusage-children-v1"
 #define METHOD_PEAK      "posix-maxrss-v1"
 
+/* The most bytes read from one output stream in one pass of the loop. */
+#define OUTPUT_PASS 65536
+
 struct etude_proc {
     struct etude_exec *ex;
     struct etude_proc *next;
@@ -304,9 +307,12 @@ static void child_found(void *ctx, long pid)
 }
 
 /**
- * Read what output stream `*fd` holds now, until it would wait or ends.
+ * Read what output stream `*fd` holds now, until it would wait, ends, or
+ * has given `OUTPUT_PASS` bytes, so that a writer that never pauses does
+ * not hold the loop away from the other attempts and the keeper's messages.
  *
- * @return the count of bytes read.
+ * @return the count of bytes read; at least `OUTPUT_PASS`, with `*fd` still
+ * open, when more may be waiting.
  */
 static size_t read_output(struct etude_proc *p, int *fd, struct etude_output *o, int scan)
 {
@@ -314,7 +320,7 @@ static size_t read_output(struct etude_proc *p, int *fd, struct etude_output *o,
     char buf[4096];
     ssize_t n;
 
-    while (*fd >= 0) {
+    while (*fd >= 0 && total < OUTPUT_PASS) {
         n = read(*fd, buf, sizeof(buf));
         if (n < 0 && errno == EINTR)
             continue;
@@ -408,18 +414,20 @@ static void read_keeper(struct etude_proc *p)
 /**
  * Finish an attempt whose keeper has been reaped, once its output has ended.
  * Output still open after the grace period has a writer that outlived the
- * cleanup, so the cleanup is unconfirmed; once it is, nothing is waited for.
+ * cleanup, so the cleanup is unconfirmed; once it is, output is read only
+ * while more than one pass of it waits, and at most for the grace period.
  */
 static void proc_settle(struct etude_proc *p)
 {
-    int open_output;
+    int open_output, more;
 
     if (!p->reaped || p->finished)
         return;
-    read_output(p, &p->out, &p->r.out, 1);
-    read_output(p, &p->err, &p->r.err, 0);
+    more = read_output(p, &p->out, &p->r.out, 1) >= OUTPUT_PASS;
+    more |= read_output(p, &p->err, &p->r.err, 0) >= OUTPUT_PASS;
     open_output = p->out >= 0 || p->err >= 0;
-    if (open_output && p->r.cleanup == ETUDE_CLEANUP_CONFIRMED && posix_now_us() < p->drain_until)
+    if (open_output && (more || p->r.cleanup == ETUDE_CLEANUP_CONFIRMED) &&
+        posix_now_us() < p->drain_until)
         return;
     if (open_output) {
         fprintf(stderr, "etude exec: %s: output open after keeper cleanup (stdout %d, stderr %d)\n",

@@ -27,9 +27,10 @@
  * during registration must leave its held child ended by EOF; one killed
  * after exec must give a lost end. A controller that ends must have its case
  * ended by the keeper. A case that holds memory and has used processor time
- * must be sampled with
- * both while it runs on Linux and Rach2, and with neither elsewhere, and not
- * once it has ended. Proc reads distinguish disappearance from other errors,
+ * must be sampled with both while it runs on Linux and Rach2, and with
+ * neither elsewhere, and not once it has ended. A case that writes without a
+ * pause must be read a bounded amount at a time, and must end when
+ * cancelled. Proc reads distinguish disappearance from other errors,
  * preserving the read error when closing the stream changes errno.
  * Three hundred sequential child reports must leave room for a final live
  * descendant, which cleanup must end even with POSIX interfaces alone.
@@ -280,6 +281,18 @@ static void keep_busy(const char *token)
     idle();
 }
 
+/** Say ready, then write to standard output without a pause until ended. */
+static void stream(const char *token)
+{
+    static char buf[65536];
+
+    memset(buf, 'y', sizeof(buf));
+    ready(token);
+    for (;;)
+        if (write(1, buf, sizeof(buf)) < 0)
+            _exit(124);
+}
+
 /**
  * Start a child that handles SIGTERM and stops itself, say ready once it is
  * seen stopped, and exit with the child's status. This process ignores
@@ -360,6 +373,8 @@ static int run_case(const char *mode, const char *token, const char *arg)
     } else if (strcmp(mode, "flood") == 0) {
         flood(atol(arg));
         name_descendant(token, descendant(1), 1, 2);
+    } else if (strcmp(mode, "stream") == 0) {
+        stream(token);
     } else if (strcmp(mode, "many") == 0) {
         many_descendants(token);
     } else if (strcmp(mode, "burn") == 0) {
@@ -1082,6 +1097,41 @@ static void test_sample(struct etude_exec *ex)
 }
 
 /**
+ * Cancel a case that writes without a pause: each wait must return after at
+ * most one pass of the executor's bound on the stream (64 KiB, and the read
+ * that crosses it), so that the cancellation is sent and the case ends.
+ */
+static void test_stream(struct etude_exec *ex)
+{
+    struct want w = {"stream", "s", NULL, LONG_GRACE, 1, STOPPED, -1, SIGNALED, SIGTERM, CONFIRMED};
+    const struct etude_exec_result *r;
+    struct etude_exec_spec s;
+    struct attempt a;
+    uint64_t last = 0, most = 0;
+    int passes = 0;
+
+    memset(&a, 0, sizeof(a));
+    a.w = w;
+    spec_for(&s, &a, 0);
+    CHECK(etude_exec_start(ex, &s, &a.p) == 0, "stream");
+    if (a.p == NULL)
+        return;
+    r = etude_proc_result(a.p);
+    while (etude_exec_wait(ex, -1) != a.p) {
+        if (r->out.total - last > most)
+            most = r->out.total - last;
+        last = r->out.total;
+        if (!a.cancelled && strstr(r->out.data, "ready") != NULL && ++passes >= 64) {
+            a.cancelled = 1;
+            etude_exec_cancel(a.p);
+        }
+    }
+    CHECK(most <= 65536 + 4096, "stream: a pass reads at most its bound");
+    CHECK(r->end == STOPPED && r->cleanup == CONFIRMED, "stream: cancelled");
+    etude_proc_free(a.p);
+}
+
+/**
  * Kill an attempt's keeper while its case runs: the end is lost, the cleanup
  * unconfirmed and the usage unavailable. The test then ends the case itself.
  */
@@ -1296,6 +1346,7 @@ int main(int argc, char **argv)
     test_unrun(ex);
     test_held_keeper(ex);
     test_sample(ex);
+    test_stream(ex);
     test_lost_keeper(ex);
     test_controller_gone();
     etude_exec_free(ex);
