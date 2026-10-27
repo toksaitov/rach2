@@ -553,20 +553,23 @@ static void pair_arg(char *out, const char *name, const long *from, const long *
 #if FIX_KERNEL
 
 /** Append `line` and a newline to the attempt's record of what its
- * fixtures made, `DIR/fixtures`, which `fixture_settle` reads. */
-static void remember(const char *dir, const char *line)
+ * fixtures made, `DIR/fixtures`, which `fixture_settle` reads; 0, or -1
+ * when the line is not in the record whole. */
+static int remember(const char *dir, const char *line)
 {
     char path[FIX_PATH];
-    int fd;
+    size_t n = strlen(line);
+    int fd, rc = 0;
 
     if (fpath(path, "%s/fixtures%s", dir, "") < 0)
-        return;
+        return -1;
     fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
     if (fd < 0)
-        return;
-    if (write(fd, line, strlen(line)) < 0 || write(fd, "\n", 1) < 0 || fsync(fd) < 0) {
-    }
+        return -1;
+    if (write(fd, line, n) != (ssize_t)n || write(fd, "\n", 1) != 1 || fsync(fd) < 0)
+        rc = -1;
     close(fd);
+    return rc;
 }
 
 /** The first loop device that /proc/loop does not list, or -1. */
@@ -665,7 +668,9 @@ static char *read_log(long *len)
 
 /** Make the directory `name` of the workspace in `dir` and, for a case
  * without a mount namespace, mount volume `v`, or the tmpfs when `v` is
- * NULL, on it, recording the mount; 0 or -1. */
+ * NULL, on it; 0 or -1. The mount is recorded before it is made, so that a
+ * later etude-guest finds every mount of an attempt whose etude-guest
+ * ended, and is not made when the record cannot be written. */
 static int mount_point(struct fixtures *fx, const char *dir, const char *name, struct fix_volume *v)
 {
     char path[FIX_PATH];
@@ -675,14 +680,15 @@ static int mount_point(struct fixtures *fx, const char *dir, const char *name, s
         return -1;
     if (fx->mountns)
         return 0;
+    snprintf(line, sizeof(line), "mount %s", path);
+    if (remember(dir, line) < 0)
+        return -1;
     if (v ? mount_volume(v, path, 0) < 0 : mount_tmpfs(fx->tmpfs_bytes, path, 0) < 0)
         return -1;
     if (v)
         v->global_mount = 1;
     else
         fx->tmpfs_global = 1;
-    snprintf(line, sizeof(line), "mount %s", path);
-    remember(dir, line);
     return 0;
 }
 
@@ -1152,9 +1158,10 @@ int fixture_cleanup(struct fixtures *fx, const char *dir)
 /**
  * Remove what an attempt whose etude-guest ended before it could left: the
  * mounts the record `DIR/fixtures` names, in the order opposite to their
- * making, then every loop device on a file under `DIR`. Only the fixtures
- * that need the kernel write the record, so where FIX_KERNEL is 0 there is
- * nothing to remove.
+ * making, then every loop device on a file under `DIR`. A mount is recorded
+ * before it is made, so a name of the record that is not a mount point is
+ * passed by. Only the fixtures that need the kernel write the record, so
+ * where FIX_KERNEL is 0 there is nothing to remove.
  *
  * @return 0, or -1 when something is left.
  */
@@ -1178,7 +1185,8 @@ int fixture_settle(const char *dir)
     while (n < 63 && line[n])
         line[++n] = strtok(NULL, "\n");
     while (n-- > 0)
-        if (strncmp(line[n], "mount ", 6) == 0 && umount2(line[n] + 6, 0) < 0 && errno != EINVAL)
+        if (strncmp(line[n], "mount ", 6) == 0 && umount2(line[n] + 6, 0) < 0 && errno != EINVAL &&
+            errno != ENOENT)
             rc = -1;
     if (detach_left(dir) < 0)
         rc = -1;
