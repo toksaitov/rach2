@@ -20,9 +20,11 @@ case cowregrant -- cowregrant machine=native
 case credprobe ids:1000,1001,1002,2000,3000 -- credprobe
 case devprobe console -- devprobe console=open
 # eth0 is the Lenovo's one card; the probe reads its address and broadcast.
+# machine=native leaves out the check that the connected socket refused the
+# outsider, which waits on the machine's count of refused datagrams.
 case dgramprobe ids:1000 \
     ports:7500,7501,7502,7503,7511,7600,7601,7602,7603,7604,7605,7606,7607 \
-    peer:dgram-outside -- dgramprobe ifname=eth0
+    peer:dgram-outside -- dgramprobe ifname=eth0 machine=native
 case dirgrow volume:krffs:dirgrow-krffs mountns -- dirgrow dir=vol0
 case dirprobe.ext2 root:ext2-dir -- dirprobe
 case dirprobe.krffs root:krffs -- dirprobe
