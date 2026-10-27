@@ -540,13 +540,13 @@ static int write_stamp(const struct step *s, const char *origin)
 }
 
 /**
- * Set the mode of the directory `path` through a descriptor opened without
- * following a symbolic link, so that a link put in the directory's place
- * changes nothing. 0, or -1.
+ * Set the mode of the directory `name` of the directory `dir` through a
+ * descriptor opened without following a symbolic link, so that a link put in
+ * the directory's place changes nothing. 0, or -1.
  */
-static int chmod_dir(const char *path, mode_t mode)
+static int chmod_dir(int dir, const char *name, mode_t mode)
 {
-    int fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW), rc;
+    int fd = openat(dir, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW), rc;
 
     if (fd < 0)
         return -1;
@@ -1083,15 +1083,15 @@ static int store_dir(const char *dir)
 }
 
 /**
- * Open the store's tmp/ without following a symbolic link, since any account
- * of the store's group may put a link in its place and `etude build -e` runs
- * as root: its descriptor, or -1.
+ * Open the store's directory `part`, tmp or entries, without following a
+ * symbolic link, since any account of the store's group may put a link in its
+ * place and `etude build -e` runs as root: its descriptor, or -1.
  */
-static int open_tmp(const struct step *s)
+static int open_part(const struct step *s, const char *part)
 {
     char dir[PATH_LEN];
 
-    if (path_fmt(dir, "%s/tmp", s->shelf) != 0)
+    if (path_fmt(dir, "%s/%s", s->shelf, part) != 0)
         return -1;
     return open(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
 }
@@ -1102,7 +1102,7 @@ static void clear_stale(const struct step *s)
     DIR *d;
     struct dirent *e;
     time_t now = time(NULL);
-    int fd = open_tmp(s);
+    int fd = open_part(s, "tmp");
 
     if (fd < 0)
         return;
@@ -1683,25 +1683,34 @@ static int drop_entry(const struct step *s, const struct doomed *d, double *free
     char entry[PATH_LEN], lock[PATH_LEN], name[PATH_LEN], what[300];
     struct stat st;
     double bytes;
-    int tmp;
+    int tmp = -1, ents;
 
     if (path_fmt(entry, "%s/entries/%s", s->shelf, d->key) != 0 ||
         path_fmt(lock, "%s/locks/%s", s->shelf, d->key) != 0 ||
-        path_fmt(name, "%s.gone.%ld", d->key, (long)getpid()) != 0 || lstat(entry, &st) != 0)
+        path_fmt(name, "%s.gone.%ld", d->key, (long)getpid()) != 0)
         return -1;
+    if ((ents = open_part(s, "entries")) < 0 ||
+        fstatat(ents, d->key, &st, AT_SYMLINK_NOFOLLOW) != 0) {
+        say(s, "cannot read %s: %s", entry, strerror(errno));
+        if (ents >= 0)
+            close(ents);
+        return -1;
+    }
     if (!S_ISDIR(st.st_mode)) {
         say(s, "%s is not a directory, and stays", entry);
+        close(ents);
         return -1;
     }
     bytes = tree_bytes(entry);
     entry_what(entry, what, sizeof(what));
     if (!s->print) {
-        chmod_dir(entry, (st.st_mode & 07777) | S_IRWXU);
-        if ((tmp = open_tmp(s)) < 0 || renameat(AT_FDCWD, entry, tmp, name) != 0) {
+        chmod_dir(ents, d->key, (st.st_mode & 07777) | S_IRWXU);
+        if ((tmp = open_part(s, "tmp")) < 0 || renameat(ents, d->key, tmp, name) != 0) {
             say(s, "cannot remove %s: %s", entry, strerror(errno));
-            chmod_dir(entry, st.st_mode & 07777);
+            chmod_dir(ents, d->key, st.st_mode & 07777);
             if (tmp >= 0)
                 close(tmp);
+            close(ents);
             return -1;
         }
         if (remove_at(tmp, name) != 0)
@@ -1709,6 +1718,7 @@ static int drop_entry(const struct step *s, const struct doomed *d, double *free
         close(tmp);
         unlink(lock);
     }
+    close(ents);
     *freed += bytes;
     printf("etude build: %s: %s %.12s, %s, %.0f MiB, unused for %ld days\n", s->name,
            s->print ? "would remove" : "removed", d->key, what, bytes / 1048576,
@@ -1754,20 +1764,21 @@ struct sweep {
     int entries;   /* the entries the store had */
 };
 
-/** Read the store's entries/ into `w`: each entry not in `w->live` that no
- * step has used at or after `w->before` is a candidate, and the rest are
- * kept. */
+/** Read the store's entries/, refusing a link in its place, into `w`: each
+ * entry not in `w->live` that no step has used at or after `w->before` is a
+ * candidate, and the rest are kept. */
 static int find_doomed(const struct step *s, struct sweep *w)
 {
-    char dir[PATH_LEN];
     DIR *d;
     struct dirent *e;
-    int rc = 0;
+    int rc = 0, fd = open_part(s, "entries");
 
-    if (path_fmt(dir, "%s/entries", s->shelf) != 0)
-        return -1;
-    if ((d = opendir(dir)) == NULL)
+    if (fd < 0)
         return errno == ENOENT ? 0 : -1;
+    if ((d = fdopendir(fd)) == NULL) {
+        close(fd);
+        return -1;
+    }
     while (rc == 0 && (e = readdir(d)) != NULL) {
         time_t used;
 
