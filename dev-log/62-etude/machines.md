@@ -9,24 +9,24 @@ This is the comparison report of T94 of [the plan](plan.md), #683: what each tes
 | Machine | The testing PC: AMD Ryzen 9 7950X3D, 16 cores and 32 threads, 125.8 GiB | Apple M4 Mac mini, arm64, 10 processors, 24 GiB | The testing PC | Lenovo G50-70: Intel Core i3-4030U, 4 logical processors, 16 GiB |
 | System | Ubuntu 26.04.1 LTS in WSL2, Linux 6.18.54.1 | macOS 27.0.1, build 26A434 | Windows 11 | Rach2, its x86-64 kernel booted by UEFI |
 | Accelerator | TCG, since KVM does not work in this WSL (#878) | TCG | WHPX | none: the cases run natively |
-| QEMU | 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.2) | Homebrew QEMU 11.1.2 | QEMU for Windows | none |
-| Host compiler | GCC 15.2.0 | Apple clang 21.0.0 | MinGW-w64 | TinyCC |
-| Kernel compiler | `i686-elf-gcc` and `x86_64-elf-gcc`, GCC 15.2.0 | Homebrew's `i686-elf-gcc` and `x86_64-elf-gcc` 16.2.0 | waits for #681 | not used |
-| Admission | The installed site policy, `/etc/rach2/etude-site`: 24 processors, 96 GiB of memory, 160 GiB of disk, with the ledger shared with the other accounts and ci | A private site policy: 10 processors, 20 GiB of memory, 40 GiB of disk | waits for #681 | none |
+| QEMU | 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.2) | Homebrew QEMU 11.1.2 | QEMU 11.1.2 built with WHPX for this PC | none |
+| Host compiler | GCC 15.2.0 | Apple clang 21.0.0 | MSYS2 UCRT64 GCC 16.2.0, MinGW-w64 | TinyCC |
+| Kernel compiler | `i686-elf-gcc` and `x86_64-elf-gcc`, GCC 15.2.0 | Homebrew's `i686-elf-gcc` and `x86_64-elf-gcc` 16.2.0 | those of etude's tooling machines, Linux guests of QEMU, which build the kernel and the guest programs | not used |
+| Admission | The installed site policy, `/etc/rach2/etude-site`: 24 processors, 96 GiB of memory, 160 GiB of disk, with the ledger shared with the other accounts and ci | A private site policy: 10 processors, 20 GiB of memory, 40 GiB of disk | The installed site policy, `C:/ProgramData/rach2/etude-site`: 28 processors, 64 GiB of memory, 160 GiB of disk, with a ledger of its own | none |
 | Record | #1314 | #680 | #681 | [native-final.md](native-final.md), #682 |
 
 ## The runs
 
-Each run is one `etude run routine-sequence phase_first_run` of the whole selection, 1033 cases of both architectures in one schedule, with a clean preparation (`ETUDE_PREPARATION_CLEAN=1`). The selection is the same on every machine, byte for byte: sha256 `ad5b945c996174ace12663016842598999913683f6b7ae1be6505b17af4d8e42`. Every guest had 2 processors and every run 8 workers and `JOBS=8`; guest memory was 16 GiB on Ubuntu and 10 GiB on the Mac.
+Each run is one `etude run routine-sequence phase_first_run` of the whole selection, 1033 cases of both architectures in one schedule, with a clean preparation (`ETUDE_PREPARATION_CLEAN=1`). The selection is the same on every machine, byte for byte: sha256 `ad5b945c996174ace12663016842598999913683f6b7ae1be6505b17af4d8e42`. Every guest had 2 processors and every run 8 workers and `JOBS=8`; guest memory was 16 GiB on Ubuntu and 10 GiB on the Mac. Windows differs in two ways. Its run had 20 workers, `JOBS=18` and 40 GiB, the width its site admits. Its selection has 1032 cases, sha256 `ea1a38e6087fb79ffb333b217ecb0c124b1c9a953bd1311847550db3090ceffd`: it leaves out `machine.bigmem.boundary-73728`, whose 72 GiB guest its site's 64 GiB cannot admit.
 
 | Machine | Run | Commit | Start | End | Cases | Result |
 | --- | --- | --- | --- | --- | --- | --- |
 | Ubuntu | `phase589-linux-a720d347d8ba-clean-01` | a720d347d | 12:15:50 | 14:42:45 | 1033: 1032 passed, 1 failed | `machine.agentsaccept.claude` on x86_64 failed (#1322) |
 | Mac, run 3 | `phase589-macos-f93479221ad2-clean-01` | f93479221 | 12:33:36 | 15:12:43 | 1033: 1030 passed, 3 failed | `host.host.scripts_tools` on both architectures and `guest.queue.fault` on x86_64 failed |
 | Mac, run 4 | `phase589-macos-4c323664a065-clean-01` | 4c323664a | 15:14:25 | 17:54:47 | 1033: 1033 passed | every case passed |
-| Windows | waits for #681 | | | | | |
+| Windows | `phase589-windows-c929152daead-clean-01` | c929152da | 20:42:10 | 22:12:43 | 1032: 1029 passed, 2 failed, 1 incomplete | `host.host.scripts` failed on both architectures, and `guest.default.tlsprobe` on i686 did not finish |
 
-Every case of each finished run reached a result, and every failure was a fault of its test, since fixed on `master`. The Ubuntu run's failed case collided with the host's progress probe, whose `git status` held the repository's index lock while the guest's agent committed; etude stopped the case at its 40-minute progress bound, and a25201d5e removed the collision. Each sequence receipt ends with `error 0`, `cancelled 0`, `active 0` and `cleanup confirmed`.
+Every case of each finished run reached a result, and every failure was a fault of its test, since fixed on `master`. The Ubuntu run's failed case collided with the host's progress probe, whose `git status` held the repository's index lock while the guest's agent committed; etude stopped the case at its 40-minute progress bound, and a25201d5e removed the collision. On Windows the ci fixture's stand-in for etude lacked the retention policy's `allocate` that a native bisection had come to ask for (ef54e95fe), and tlsprobe's spin beside its child reported no progress for longer than its gap bound allows (f58e6fe83). Each sequence receipt ends with `error 0`, `cancelled 0`, `active 0` and `cleanup confirmed`.
 
 ## The time and cost of the collection
 
@@ -37,7 +37,7 @@ Seconds are the sequence receipt's intervals. Processor seconds are the receipt'
 | Ubuntu | `phase589-linux-a720d347d8ba-clean-01` | 1257 | 7559 | 8815 | 3361 | 36976 | 40337 |
 | Mac, run 3 | `phase589-macos-f93479221ad2-clean-01` | 1323 | 8223 | 9547 | 2829 | 26740 | 29569 |
 | Mac, run 4 | `phase589-macos-4c323664a065-clean-01` | 1329 | 8293 | 9622 | 2850 | 27691 | 30541 |
-| Windows | waits for #681 | | | | | | |
+| Windows | `phase589-windows-c929152daead-clean-01` | 2366 | 3065 | 5432 | 2929 | 30146 | 33075 |
 
 time(1) around the whole sequence agrees: 36254 s user and 4115 s system on Ubuntu, 27639 s and 1952 s on the Mac in run 3, 28480 s and 2086 s in run 4.
 
@@ -49,7 +49,9 @@ The conditions of the two runs differed in ways that favour the Mac, not Ubuntu:
 * The Mac ran little else: its observer counted 97 s of processor time outside the run over its 9547 s, a lower bound.
 * On Ubuntu the GNU layers of both architectures came from the host's step store, not built. The Mac's preparation built neither: each GNU root takes more than 3000 s to build in its arm64 tooling machine, over twice the 1323 s that the whole preparation took.
 
-Neither machine meets the routine run's goal of 3600 s; both are within its ceiling of 14400 s.
+Windows took 5432 s, 3383 s less than Ubuntu, in a run with 20 workers instead of 8 and one case fewer. Its preparation was the slowest, 2366 s, almost all of it in the two steps that build inside its tooling machines, one for each architecture; its collection was the fastest, 3065 s against Ubuntu's 7559 s, with 9.8 processors busy on average.
+
+No machine meets the routine run's goal of 3600 s; all are within its ceiling of 14400 s.
 
 ## Where the time goes
 
@@ -70,7 +72,9 @@ Its longest cases were `machine.gnu.autotools`, 1661 s on i686 and 1348 s on x86
 
 ## The recommendation
 
-Select the testing PC's Ubuntu in WSL under TCG. Its whole collection took 8815 s against the Mac's 9547 s, beyond the two runs' noise, while it shared its host with other work; its higher processor cost fits the 24 processors of its site, where the Mac's run had 10. Windows is selected instead only if its whole run of the 1033 cases under WHPX (#681) takes less than 8640 s, the time that is faster than Ubuntu's beyond their combined band; otherwise this selection stands.
+Of the runs made, Windows 11 on the testing PC, under WHPX, ran the collection fastest: 5432 s, against 8815 s for Ubuntu in WSL and 9547 s for the Mac. The comparison is not the plan's: the Windows run had 20 workers against 8, and one case fewer. Most of the difference is in the collection, 3065 s against 7559 s, where a guest under WHPX runs on the processor and one under TCG is translated; Ubuntu's collection kept only 4.9 of its 16 guest processors busy, so more workers would not close that gap.
+
+The selected site stays Ubuntu in WSL for now. ci, its runners and the native results of #684 are installed there, and moving them to Windows is a change of the test machine that the owner decides. A run of Windows at Ubuntu's width, 8 workers, would make the comparison the plan asks for.
 
 ## The proposed site profile
 
