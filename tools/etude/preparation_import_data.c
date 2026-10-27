@@ -486,13 +486,37 @@ static int input_digest(const char *tree, const char *name, const char *expected
     return bad ? -1 : 0;
 }
 
+/*
+ * Describe the prepared atos at `path`. On macOS preparation places a
+ * symbolic link to the sealed system's atos instead of a copy
+ * (host_prepare_tools.c), and only a link whose text is that program's
+ * resolved path is described, by the program it names.
+ */
+static struct json *describe_atos(const char *path)
+{
+#ifdef __APPLE__
+    struct stat st;
+    char target[4096];
+    if (lstat(path, &st) == 0 && S_ISLNK(st.st_mode)) {
+        char *native = realpath("/usr/bin/atos", NULL);
+        ssize_t n = readlink(path, target, sizeof(target) - 1);
+        if (n > 0)
+            target[n] = 0;
+        struct json *value = n > 0 && pi_same(target, native) ? pi_describe(target) : NULL;
+        free(native);
+        return value;
+    }
+#endif
+    return pi_describe(path);
+}
+
 static int sanitizer_source(const char *tree, const char *parent)
 {
 #ifdef __APPLE__
     char *snapshot_name = pi_path(parent, "atos"),
          *proof_name = pi_path(parent, "atos.provenance.json");
     char *snapshot = pi_path(tree, snapshot_name), *proof_path = pi_path(tree, proof_name);
-    struct json *proof = pi_document(proof_path), *copied = pi_describe(snapshot);
+    struct json *proof = pi_document(proof_path), *copied = describe_atos(snapshot);
     const char *source = json_text(proof, "source");
     char *native = realpath("/usr/bin/atos", NULL),
          *resolved = source ? realpath(source, NULL) : NULL;
@@ -556,10 +580,14 @@ static int sanitizer_manifest(const char *tree, const char *name, struct json *a
         bad = inputs->item[i]->count != 2 || matched < 0 || (seen & (1u << matched));
         if (!bad) {
             seen |= 1u << matched;
-            bad = input_digest(tree, input, json_text(inputs->item[i], "sha256"));
             char *native = pi_path(tree, input);
-            struct json *value = !bad ? pi_describe(native) : NULL;
-            if (value)
+            struct json *value = matched ? pi_describe(native) : describe_atos(native);
+            const char *expected = json_text(inputs->item[i], "sha256");
+            bad = !value || !pi_hex(expected, 64) || !pi_same(json_text(value, "sha256"), expected);
+            if (bad) {
+                fprintf(stderr, "etude prepare import: changed native input: %s\n", native);
+                json_free(value);
+            } else
                 hp_member(artifacts, input, value);
             free(native);
         }

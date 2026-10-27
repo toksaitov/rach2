@@ -1,7 +1,9 @@
 /*
  * Check native execution on the desktop that runs the collection.
  * On Windows preparation substitutes winfixture and its declared helpers,
- * including these same complete-output assertions.
+ * including these same complete-output assertions. On macOS the native
+ * import must accept the symbolic link to the system's atos that the
+ * sanitizer's preparation places, and refuse one to another program.
  *
  * host-alone: native platform fixture isolation
  * host-tools: git tar
@@ -35,12 +37,15 @@
  * host-cflags: -I tools/etude -I tests/host/compat -I utils
  * host-cflags: -I tools/etude/include -Wall -Wextra -Werror
  */
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "output_sinks.h"
+#include "preparation_import.h"
 
 int etude_test_tooling_cache(const char *tmp);
 int etude_test_collection_tools(const char *self, const char *tmp);
@@ -50,6 +55,127 @@ int etude_test_retention_child(int argc, char **argv);
 int etude_test_routine_evidence(void);
 int etude_test_routine_entry(const char *self);
 int etude_test_routine_listener(void);
+
+#ifdef __APPLE__
+#define SANITIZER "build/tests/host-suite/sanitizer"
+
+static char atos_tree[4096];
+
+static void atos_path(char *path, size_t size, const char *leaf)
+{
+    snprintf(path, size, "%s/%s%s%s", atos_tree, leaf[0] ? SANITIZER : "", leaf[0] ? "/" : "",
+             leaf);
+}
+
+static void atos_cleanup(void)
+{
+    static const char *const leaves[] = {"atos", "atos.provenance.json", "tools.json"};
+    static const char *const dirs[] = {SANITIZER, "build/tests/host-suite", "build/tests", "build",
+                                       ""};
+    char path[4096];
+
+    if (!atos_tree[0])
+        return;
+    for (size_t i = 0; i < sizeof(leaves) / sizeof(leaves[0]); i++) {
+        atos_path(path, sizeof(path), leaves[i]);
+        unlink(path);
+    }
+    for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
+        snprintf(path, sizeof(path), "%s%s%s", atos_tree, dirs[i][0] ? "/" : "", dirs[i]);
+        rmdir(path);
+    }
+}
+
+static void atos_interrupted(int sig)
+{
+    atos_cleanup();
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+/* Import a sanitizer preparation whose atos is a link to `target`. */
+static int atos_import(const char *target)
+{
+    char link[4096], proof[4096], manifest[4096], digest[65];
+    struct json *record = hp_value(JSON_OBJECT), *inputs = hp_value(JSON_ARRAY),
+                *roles = hp_value(JSON_OBJECT), *artifacts = NULL;
+    const char *leaves[] = {"atos", "atos.provenance.json"};
+    struct pi_context c;
+
+    atos_path(link, sizeof(link), "atos");
+    atos_path(proof, sizeof(proof), "atos.provenance.json");
+    atos_path(manifest, sizeof(manifest), "tools.json");
+    unlink(link);
+    int bad = symlink(target, link) || hp_hash(link, digest);
+    hp_member(record, "source", hp_string(target));
+    hp_member(record, "sha256", hp_string(digest));
+    bad = bad || hp_publish(proof, record);
+    for (size_t i = 0; !bad && i < 2; i++) {
+        char path[4096], hash[65];
+        struct json *input = hp_value(JSON_OBJECT);
+        atos_path(path, sizeof(path), leaves[i]);
+        bad = hp_hash(path, hash);
+        snprintf(path, sizeof(path), SANITIZER "/%s", leaves[i]);
+        hp_member(input, "path", hp_string(path));
+        hp_member(input, "sha256", hp_string(hash));
+        hp_item(inputs, input);
+    }
+    json_free(record);
+    record = hp_value(JSON_OBJECT);
+    hp_member(record, "schema_version", hp_number(1));
+    hp_member(record, "platform", hp_string("darwin"));
+    hp_member(record, "inputs", inputs);
+    bad = bad || hp_publish(manifest, record);
+    hp_member(roles, SANITIZER "/tools.json", hp_string("native"));
+    memset(&c, 0, sizeof(c));
+    c.tree = atos_tree;
+    if (!bad)
+        artifacts = pi_native(&c, roles);
+    bad = bad || !artifacts;
+    json_free(artifacts);
+    json_free(roles);
+    json_free(record);
+    return bad ? -1 : 0;
+}
+
+/* The native import accepts only a link to the system's own atos. */
+static int sanitizer_import(const char *tmp)
+{
+    char path[4096], *atos = realpath("/usr/bin/atos", NULL), *other = realpath("/bin/ls", NULL);
+    int bad = 0;
+
+    snprintf(atos_tree, sizeof(atos_tree), "%s/etude-atos.XXXXXX", tmp);
+    if (!atos || !other || !mkdtemp(atos_tree)) {
+        atos_tree[0] = 0;
+        fprintf(stderr, "etude-platform-test: the atos fixture could not be made\n");
+        bad = 1;
+    } else {
+        atexit(atos_cleanup);
+        signal(SIGHUP, atos_interrupted);
+        signal(SIGINT, atos_interrupted);
+        signal(SIGTERM, atos_interrupted);
+        snprintf(path, sizeof(path), "%s/" SANITIZER, atos_tree);
+        bad = hp_mkdir(path);
+    }
+    if (!bad && atos_import(atos)) {
+        fprintf(stderr, "etude-platform-test: failed: the link to atos is refused\n");
+        bad = 1;
+    }
+    if (!bad && !atos_import(other)) {
+        fprintf(stderr, "etude-platform-test: failed: a link to another program is accepted\n");
+        bad = 1;
+    }
+    free(atos);
+    free(other);
+    return bad;
+}
+#else
+static int sanitizer_import(const char *tmp)
+{
+    (void)tmp;
+    return 0;
+}
+#endif
 
 static int platform_focused(int argc, char **argv, const char *tmp)
 {
@@ -63,6 +189,8 @@ static int platform_focused(int argc, char **argv, const char *tmp)
         return etude_test_retention(argv[0]);
     if (argc == 2 && !strcmp(argv[1], "--collection-only"))
         return etude_test_collection_tools(argv[0], tmp);
+    if (argc == 2 && !strcmp(argv[1], "--sanitizer-import-only"))
+        return sanitizer_import(tmp);
     return -1;
 }
 
@@ -101,6 +229,8 @@ int main(int argc, char **argv)
     if (etude_test_routine_evidence())
         return 1;
     if (etude_test_tooling_cache(tmp))
+        return 1;
+    if (sanitizer_import(tmp))
         return 1;
     if (argv[0][0] == '/')
         return etude_test_output_sinks(argv[0], "--big", tmp);
