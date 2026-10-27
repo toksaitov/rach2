@@ -302,6 +302,12 @@ const char *hp_input_path(const struct json *value, char path[4096])
     return path;
 }
 
+/**
+ * Run a preparation command in the tree, capturing output in `out` and `err`.
+ *
+ * The caller owns admission and the tree lock. Return the observed exit
+ * status, or -1 without a confirmed exit and process cleanup.
+ */
 int hp_run(struct hp_context *c, char *const argv[], const char *out, const char *err)
 {
     struct etude_exec *executor = etude_exec_new();
@@ -340,7 +346,12 @@ int hp_run(struct hp_context *c, char *const argv[], const char *out, const char
         const struct etude_exec_result *r = etude_proc_result(process);
         if (r && r->cleanup == ETUDE_CLEANUP_CONFIRMED && r->exit_end == ETUDE_END_EXITED)
             result = r->exit_value;
+        if (result)
+            fprintf(stderr, "host preparation: %s: end %d, status %d, cleanup %d\n", command.v[0],
+                    r ? (int)r->exit_end : -1, r ? r->exit_value : -1, r ? (int)r->cleanup : -1);
         etude_proc_free(process);
+    } else {
+        fprintf(stderr, "host preparation: %s: start failed: %s\n", command.v[0], strerror(errno));
     }
     if (executor)
         etude_exec_free(executor);

@@ -905,7 +905,7 @@ The processor time of the tree is the keeper's `RUSAGE_CHILDREN` after the clean
 
 ### The host checks
 
-The native host suite uses [`tests/cases/host/host.c`](../../tests/cases/host/host.c) and its scenario adapters to execute prepared inventories. Every declared assertion remains visible. The driver checks source and binary identities before and after execution and confirms process cleanup. GNU-specific controllers and products run in a declared Rach2 helper; the desktop executor, QEMU and Windows platform fixtures remain native. [The host-case Readme](../../tests/cases/host/Readme.md) describes the inventories and individual controller groups.
+The native host suite uses [`tests/cases/host/host.c`](../../tests/cases/host/host.c) and its scenario adapters to execute prepared inventories. Every declared assertion remains visible. The driver checks source and binary identities before and after execution and confirms process cleanup. GNU-specific controllers and products run in a declared Rach2 helper; the desktop executor, QEMU and Windows platform fixtures remain native. Windows preparation uses native executable lookup for bare program names, so an earlier shell script on PATH cannot replace a native build tool. [The host-case Readme](../../tests/cases/host/Readme.md) describes the inventories and individual controller groups.
 
 The following command-selection behavior belongs to the compatibility `etude run host ... SELECTION` adapter, not `etude run host` as a native suite selection.
 

@@ -17,6 +17,11 @@ static int path_join(char out[4096], const char *a, const char *b)
     return n < 0 || n >= 4096 ? -1 : 0;
 }
 
+/**
+ * Resolve a program path, using native executable lookup on Windows.
+ *
+ * Return an allocated absolute path, or NULL when the program is unavailable.
+ */
 char *hp_program(const char *name)
 {
     if (strchr(name, '/') || strchr(name, '\\')) {
@@ -28,32 +33,25 @@ char *hp_program(const char *name)
 #endif
         return result;
     }
+#ifdef _WIN32
+    char path[32768];
+    return etude_win_program(name, path, sizeof path) ? NULL : realpath(path, NULL);
+#else
     const char *env = getenv("PATH");
     char *paths = strdup(env ? env : ""), *cursor = paths;
     char *result = NULL;
-#ifdef _WIN32
-    const char *separator = ";";
-#else
     const char *separator = ":";
-#endif
     while (cursor && !result) {
         char *next = strpbrk(cursor, separator), path[4096];
         if (next)
             *next++ = 0;
         if (!path_join(path, *cursor ? cursor : ".", name) && access(path, X_OK) == 0)
             result = realpath(path, NULL);
-#ifdef _WIN32
-        if (!result && !path_join(path, *cursor ? cursor : ".", name) &&
-            strlen(path) < sizeof(path) - 4) {
-            strcat(path, ".exe");
-            if (access(path, X_OK) == 0)
-                result = realpath(path, NULL);
-        }
-#endif
         cursor = next;
     }
     free(paths);
     return result;
+#endif
 }
 
 #ifdef _WIN32
