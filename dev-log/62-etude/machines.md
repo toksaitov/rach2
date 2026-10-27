@@ -23,7 +23,7 @@ Each run is one `etude run routine-sequence phase_first_run` of the whole select
 | --- | --- | --- | --- | --- | --- | --- |
 | Ubuntu | `phase589-linux-a720d347d8ba-clean-01` | a720d347d | 12:15:50 | 14:42:45 | 1033: 1032 passed, 1 failed | `machine.agentsaccept.claude` on x86_64 failed (#1322) |
 | Mac, run 3 | `phase589-macos-f93479221ad2-clean-01` | f93479221 | 12:33:36 | 15:12:43 | 1033: 1030 passed, 3 failed | `host.host.scripts_tools` on both architectures and `guest.queue.fault` on x86_64 failed |
-| Mac, run 4 | `phase589-macos-4c323664a065-clean-01` | 4c323664a | 15:14:25 | to be filled | to be filled | in progress; to be filled when it ends |
+| Mac, run 4 | `phase589-macos-4c323664a065-clean-01` | 4c323664a | 15:14:25 | 17:54:47 | 1033: 1033 passed | every case passed |
 | Windows | waits for #681 | | | | | |
 
 Every case of each finished run reached a result, and every failure was a fault of its test, since fixed on `master`. The Ubuntu run's failed case collided with the host's progress probe, whose `git status` held the repository's index lock while the guest's agent committed; etude stopped the case at its 40-minute progress bound, and a25201d5e removed the collision. Each sequence receipt ends with `error 0`, `cancelled 0`, `active 0` and `cleanup confirmed`.
@@ -36,10 +36,10 @@ Seconds are the sequence receipt's intervals. Processor seconds are the receipt'
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Ubuntu | `phase589-linux-a720d347d8ba-clean-01` | 1257 | 7559 | 8815 | 3361 | 36976 | 40337 |
 | Mac, run 3 | `phase589-macos-f93479221ad2-clean-01` | 1323 | 8223 | 9547 | 2829 | 26740 | 29569 |
-| Mac, run 4 | `phase589-macos-4c323664a065-clean-01` | to be filled | to be filled | to be filled | to be filled | to be filled | to be filled |
+| Mac, run 4 | `phase589-macos-4c323664a065-clean-01` | 1329 | 8293 | 9622 | 2850 | 27691 | 30541 |
 | Windows | waits for #681 | | | | | | |
 
-time(1) around the whole sequence agrees: 36254 s user and 4115 s system on Ubuntu, 27639 s and 1952 s on the Mac.
+time(1) around the whole sequence agrees: 36254 s user and 4115 s system on Ubuntu, 27639 s and 1952 s on the Mac in run 3, 28480 s and 2086 s in run 4.
 
 Ubuntu took 732 s less than the Mac, 8% of the Mac's time, and used 36% more processor time. Under `median-mad-v1` a single run's band is 1% of its time, 88 s for Ubuntu and 95 s for the Mac; the difference is four times their combined 183 s, so it is not noise. Ubuntu was faster in both parts: by 66 s in preparation and by 664 s in the collection.
 
