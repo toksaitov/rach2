@@ -515,7 +515,7 @@ static int gate_run(int run)
         return 1;
     if (status != 0)
         return failed("the helper exits %lu: %s", (unsigned long)status, errors(&r));
-    if (WaitForSingleObject(g.process[1], 0) != WAIT_OBJECT_0)
+    if (WaitForSingleObject(g.process[1], BOUND) != WAIT_OBJECT_0)
         return failed("the command's copy outlived the hold");
     if (exists(lock))
         return failed("%s was left", lock);

@@ -74,13 +74,26 @@ static int gone(const struct etude_pid *id)
     return state == 0 || (state == 1 && now.start != id->start);
 }
 
+/** Whether the process PID has ended, or ends within BOUND milliseconds. */
+static int ends(long pid)
+{
+    HANDLE h = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)pid);
+    int r;
+
+    if (h == NULL)
+        return 1;
+    r = WaitForSingleObject(h, BOUND) == WAIT_OBJECT_0;
+    CloseHandle(h);
+    return r;
+}
+
 /**
  * Whether every process that the lines `child PID` of OUT name has ended; the
- * target writes one for each copy it starts.
+ * target writes one for each copy it starts. A process of a stopped tree may
+ * be signalled a moment after its attempt has ended, so each gets BOUND.
  */
 static int children_gone(const char *out, int *count)
 {
-    struct etude_pid id;
     const char *p;
     long pid;
 
@@ -92,7 +105,7 @@ static int children_gone(const char *out, int *count)
         if (pid <= 0)
             continue;
         (*count)++;
-        if (etude_process_state(pid, &id) == 1)
+        if (!ends(pid))
             return 0;
     }
     return 1;
