@@ -371,12 +371,14 @@ items()
     else
         parts=$(issues open) || return 1
     fi
-    printf '%s\n' "$listed" "$found" | PARTS=$parts awk -F '\t' -v OFS='\t' '
-        BEGIN {
-            n = split(ENVIRON["PARTS"], l, "\n")
-            for (i = 1; i <= n; i++)
-                if (split(l[i], f, "\t") >= 6)
-                    part[f[1]] = f[6]
+    {
+        printf '%s\n' "$parts" | awk '{ print "P\t" $0 }'
+        printf '%s\n' "$listed" "$found"
+    } | awk -F '\t' -v OFS='\t' '
+        $1 == "P" {
+            if (NF >= 7)
+                part[$2] = $7
+            next
         }
         NF > 0 && !seen[$1]++ { $9 = part[$3]; print }'
 }
@@ -457,21 +459,31 @@ issues()
         fetched="$fetched$got
 "
     done
-    merged=$(printf '%s\n' "$closed" | OPEN=$open FETCHED=$fetched awk -F '\t' -v cache="$cache" '
+    merged=$({
+        printf '%s' "$fetched" | awk '{ print "F\t" $0 }'
+        printf '%s\n' "$closed"
+        printf '%s\n' "$open" | awk '{ print "O\t" $0 }'
+    } | awk -F '\t' -v cache="$cache" '
         BEGIN {
             while ((getline line < cache) > 0) {
                 split(line, f, "\t")
                 at[f[1]] = f[2]
                 parts[f[1]] = f[3]
             }
-            n = split(ENVIRON["FETCHED"], l, "\n")
-            for (i = 1; i <= n; i++)
-                if (split(l[i], f, "\t") == 4) {
-                    got[f[1]] = 1
-                    at[f[1]] = f[2]
-                    parts[f[1]] = f[3]
-                    fresh[f[1]] = f[4] == "new"
-                }
+        }
+        $1 == "F" {
+            if (NF == 5) {
+                got[$2] = 1
+                at[$2] = $3
+                parts[$2] = $4
+                fresh[$2] = $5 == "new"
+            }
+            next
+        }
+        $1 == "O" {
+            if (NF > 1)
+                open[++opened] = substr($0, 3)
+            next
         }
         NF == 0 { next }
         !got[$1] && at[$1] != $2 { lost = 1; exit }
@@ -484,10 +496,9 @@ issues()
         END {
             if (lost)
                 exit 1
-            n = split(ENVIRON["OPEN"], l, "\n")
-            for (i = 1; i <= n; i++)
-                if (split(l[i], f, "\t") > 0 && !(f[1] in seen))
-                    print "L\t" l[i]
+            for (i = 1; i <= opened; i++)
+                if (split(open[i], f, "\t") > 0 && !(f[1] in seen))
+                    print "L\t" open[i]
         }') || return 1
     if mkdir -p "${cache%/*}" 2> /dev/null &&
         printf '%s\n' "$merged" | sed -n 's/^C.//p' > "$cache.$$" 2> /dev/null; then

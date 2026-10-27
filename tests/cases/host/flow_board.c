@@ -1183,6 +1183,35 @@ static int archive_rows(struct fixture *f)
     return ok;
 }
 
+/* A board whose issue list is longer than Linux lets one argument or
+ * environment string be, 128 KiB, still moves its closed issues to Done. */
+static int large_row(struct fixture *f)
+{
+    enum { ISSUES = 100, TITLE = 1400 };
+    char *extra = malloc(ISSUES * (TITLE + 32) + 1), *p = extra;
+    char wanted[ISSUES * 5 + 1] = "";
+    unsigned i;
+    int ok;
+    if (!extra)
+        return 0;
+    for (i = 0; i < ISSUES; i++) {
+        p += sprintf(p, "%u|CLOSED|Ready|bug|-|7|0|-|", 100 + i);
+        memset(p, 'x', TITLE);
+        p += TITLE;
+        *p++ = '\n';
+        sprintf(wanted + strlen(wanted), "%s%u", i ? " " : "", 100 + i);
+    }
+    *p = 0;
+    ok = setup_data(f, board_main, extra);
+    free(extra);
+    if (!ok)
+        return 0;
+    call(f, "done", NULL, NULL, NULL);
+    return fx_check(
+        f, first_words(f, wanted) && is_field("100", 3, "Done") && is_field("199", 3, "Done"),
+        "done-large");
+}
+
 static int statuses(const char *wanted)
 {
     struct board b;
@@ -1422,6 +1451,7 @@ int flow_board(struct fixture *f)
     ok = group_phase_rows(f) && ok;
     ok = link_rows(f) && ok;
     ok = archive_rows(f) && ok;
+    ok = large_row(f) && ok;
     ok = start_rows(f) && ok;
     ok = phase_rows(f) && ok;
     ok = cache_rows(f) && ok;
