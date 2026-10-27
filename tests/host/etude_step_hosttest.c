@@ -686,6 +686,49 @@ static void test_expire(void)
         close(fd);
 }
 
+/** Expiry keeps the links of a stamp whose key's lock a step holds, since
+ * the step may be writing that stamp. */
+static void test_expire_held_lock(void)
+{
+    char p[1200];
+    struct ran r;
+    int fd;
+
+    fix_format(p, sizeof p, "%s/locks/%s", shelf, demo_e + strlen(shelf) + 9);
+    fd = open(p, O_RDWR);
+    CHECK(fd >= 0 && flock(fd, LOCK_EX) == 0, "expire: the test holds the lock of a stamp");
+    run(copy_a, ex_go, &r);
+    CHECK(r.status == 0 && strstr(r.out, "result: removed 0 entries") != NULL &&
+              recorded(shelf, demo_e + strlen(shelf) + 9) == 2,
+          "expire: the links of a key whose lock is held stay, since a step may be writing "
+          "its stamp");
+    if (fd >= 0)
+        close(fd);
+}
+
+/** Expiry run as the store's owner removes nothing that a link put in place
+ * of the store's tmp/ points to. */
+static void test_expire_tmp_link(void)
+{
+    char p[1200], buf[1200], victim[1200];
+    struct ran r;
+
+    fix_format(p, sizeof p, "%s/tmp", shelf);
+    fix_format(victim, sizeof victim, "%s/outside", fix_dir());
+    fix_format(buf, sizeof buf, "%s/tmp.real", shelf);
+    mkdir(victim, 0700);
+    put(fix_path("outside/old"), "kept\n");
+    age(fix_dir(), "outside");
+    CHECK(rename(p, buf) == 0 && symlink(victim, p) == 0,
+          "expire: the test puts a link in place of tmp");
+    run(copy_a, ex_go, &r);
+    CHECK(r.status == 0 && exists(fix_path("outside/old")),
+          "expire: a link in place of tmp leaves what it points to");
+    unlink(p);
+    rename(buf, p);
+    remove_tree(victim);
+}
+
 /** The removal of entries, what goes: -p removes nothing; an entry that no
  * stamp names goes with its lock file and is built again; an entry that is a
  * link stays, with its target untouched; and the refusals. */
@@ -694,7 +737,6 @@ static void test_expire_removal(void)
     char p[1200], buf[256], victim[1200];
     struct ran r;
     struct stat st;
-    int fd;
 
     fix_format(p, sizeof p, "%s/locks/%s", shelf, ports_e + strlen(shelf) + 9);
     run(copy_a, ex_list, &r);
@@ -711,16 +753,7 @@ static void test_expire_removal(void)
     unlink(fix_path("copy-b/e/demo.stamp"));
     put(fix_path("copy-a/e/demo.stamp"),
         "etude-step 1 1111111111111111111111111111111111111111111111111111111111111111 here\n");
-    fix_format(p, sizeof p, "%s/locks/%s", shelf, demo_e + strlen(shelf) + 9);
-    fd = open(p, O_RDWR);
-    CHECK(fd >= 0 && flock(fd, LOCK_EX) == 0, "expire: the test holds the lock of a stamp");
-    run(copy_a, ex_go, &r);
-    CHECK(r.status == 0 && strstr(r.out, "result: removed 0 entries") != NULL &&
-              recorded(shelf, demo_e + strlen(shelf) + 9) == 2,
-          "expire: the links of a key whose lock is held stay, since a step may be writing "
-          "its stamp");
-    if (fd >= 0)
-        close(fd);
+    test_expire_held_lock();
     run(copy_a, ex_go, &r);
     CHECK(r.status == 0 && strstr(r.out, "result: removed 1 entries") != NULL && !exists(demo_e) &&
               recorded(shelf, demo_e + strlen(shelf) + 9) == 0,
@@ -746,20 +779,7 @@ static void test_expire_removal(void)
               strcmp(in_copy(copy_a, "e/tc.stamp", buf, sizeof buf), "") != 0,
           "expire: a removed entry is built again");
 
-    fix_format(p, sizeof p, "%s/tmp", shelf);
-    fix_format(victim, sizeof victim, "%s/outside", fix_dir());
-    fix_format(buf, sizeof buf, "%s/tmp.real", shelf);
-    mkdir(victim, 0700);
-    put(fix_path("outside/old"), "kept\n");
-    age(fix_dir(), "outside");
-    CHECK(rename(p, buf) == 0 && symlink(victim, p) == 0,
-          "expire: the test puts a link in place of tmp");
-    run(copy_a, ex_go, &r);
-    CHECK(r.status == 0 && exists(fix_path("outside/old")),
-          "expire: a link in place of tmp leaves what it points to");
-    unlink(p);
-    rename(buf, p);
-    remove_tree(victim);
+    test_expire_tmp_link();
 
     run(copy_a, ex_named, &r);
     CHECK(r.status == 2, "expire: -e takes no option of a step");

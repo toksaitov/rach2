@@ -69,6 +69,13 @@ static void snapshot_cases(void)
     check(!source_snapshot(work, before) && !file("tests/probe-suites", "hello default\n") &&
               !source_snapshot(work, after) && strcmp(before, after),
           "a probe assignment list invalidates evidence");
+}
+
+/** The files a source check reads by their content or place, not their name:
+ * extensionless scripts and the native inventories. */
+static void unnamed_cases(void)
+{
+    char before[65], after[65], path[4096];
     check(!file("tests/install", "#!/bin/sh\nexit 0\n") && !source_snapshot(work, before) &&
               !file("tests/install", "#!/bin/sh\nexit 1\n") && !source_snapshot(work, after) &&
               strcmp(before, after),
@@ -140,6 +147,7 @@ int main(void)
         !mkdtemp(work))
         return 1;
     snapshot_cases();
+    unnamed_cases();
     record_cases();
     return failures != 0;
 }
