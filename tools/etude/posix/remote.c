@@ -61,7 +61,7 @@ struct etude_remote {
     FILE *transcript;
     int to, from;
     int connected, bounded_writes;
-    int cancelling;   /* a CANCEL is sent past the caller's cancellation */
+    int cancelling;   /* a CANCEL or BYE goes past a cancellation */
     uint64_t seq_out; /* the SEQ of the next frame sent */
     int has_peer;     /* a frame of the responder's arrived */
     uint64_t seq_in;  /* the SEQ of the last one */
@@ -113,7 +113,7 @@ static int write_all(int fd, const char *p, size_t n)
     return 0;
 }
 
-/** Say whether the caller's cancellation stops a write other than a CANCEL. */
+/** Say whether cancellation stops a write other than a CANCEL or BYE. */
 static int cancel_asked(const struct etude_remote *r)
 {
     return !r->cancelling && r->conf.cancel_requested && *r->conf.cancel_requested;
@@ -1774,6 +1774,7 @@ enum etude_remote_status etude_remote_close(struct etude_remote *r)
 
     if (r->connected && new_cmd(r, cmd, ETUDE_CMD_BYE, a, 0) == 0) {
         a[0] = cmd;
+        r->cancelling = 1;
         if (send_frame(r, ETUDE_CMD_BYE, a, 1) == 0 &&
             wait_answer(r, cmd, posix_now_us() + r->conf.stage_us, &f) == READ_FRAME &&
             strcmp(f.type, ETUDE_CMD_BYE) == 0)

@@ -38,9 +38,9 @@
  * ledger; a cut while the program runs must give its cancellation, and a cut
  * followed by a new boot a lost end; a cut transfer must leave no partial file;
  * a deadline, and a stop asked for while the program runs, must cancel the
- * run; and a hello of another version, a ready with a version that was not
- * offered, and frames of another format must refuse the connection before
- * anything runs.
+ * run, and the session must still close with the stop asked for; and a hello
+ * of another version, a ready with a version that was not offered, and frames
+ * of another format must refuse the connection before anything runs.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -1163,7 +1163,6 @@ static void check_stop(const struct row *w)
     CHECK(st == ETUDE_REMOTE_OK && res.complete && res.cancelled && res.end == ETUDE_END_STOPPED &&
               runs == 1,
           "a stop asked for while the program runs cancels the run");
-    stop = 0;
 }
 
 static void test_client(void)
