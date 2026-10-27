@@ -212,9 +212,9 @@ static int failed_status(void)
  */
 static int child_failed(int ok, int status, int row)
 {
-    int code = ok && WIFEXITED(status) ? WEXITSTATUS(status) : 0;
+    int code = ok && WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 
-    if (ok && code == 0) {
+    if (code == 0) {
         return 0;
     }
     row_failed(code >= 1 && code <= ROWS ? code - 1 : row,
