@@ -42,7 +42,7 @@
 #
 # The boot partition is what an install rewrites (dev-log/23-install/plan.md):
 # /boot/kernel is the candidate, the kernel padded with zeros to a fixed
-# 2 MiB slot whose data sectors bootctl rewrites in place on the
+# SLOT_BYTES slot whose data sectors bootctl rewrites in place on the
 # machine itself; /boot/fallback is the same kernel, padded the same, which
 # `bootctl fallback` rewrites from a committed candidate and nothing else;
 # and /boot/grub/grubenv is the 1024-byte state block that selects between

@@ -356,6 +356,23 @@ to work after the conversion, since an older kernel publishes no
 .Pa /dev/bootpart
 for a boot partition of type 0xEF.
 .Pp
+A kernel slot,
+.Pa /boot/kernel
+or
+.Pa /boot/fallback ,
+smaller than 4 MiB, the size of the slots on the disks this version
+makes, is then grown to 4 MiB, since
+.Xr bootctl 8
+rewrites a slot in place and never grows it.
+The slot is copied beside itself as
+.Pa kernel.new
+or
+.Pa fallback.new ,
+padded with zeros, and renamed over the old one, one slot at a time;
+a stop part way costs at most the slot being grown, and the machine,
+saved to recovery, starts the recovery system.
+A boot partition with no room for the copy keeps its slot, with a note.
+.Pp
 Both kernel entries boot the same root; recovery runs from RAM.
 After the update, the new root is armed for one trial boot.
 A failed trial or an interrupted write returns the machine to recovery.

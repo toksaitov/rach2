@@ -33,7 +33,8 @@
 # into its partition. The machine is saved to its recovery system for the whole
 # of the write and the new root is armed for one trial boot, so an update cut
 # off by a power cut, or one that does not come up, costs a reboot into recovery
-# and not a visit to the machine. An MBR disk is converted on the way to boot by
+# and not a visit to the machine. Kernel slots smaller than SLOT_BYTES are
+# grown to it. An MBR disk is converted on the way to boot by
 # UEFI as well, when GRUB's EFI image is beside IMAGE: it keeps its MBR, and its
 # boot partition becomes the EFI system partition.
 #
@@ -53,6 +54,9 @@ CONFIG_FILES="etc/passwd etc/group etc/shadow etc/rach2/sshd.conf"
 ARCHIVE_NEEDS="etc/passwd etc/group etc/shadow"
 # The recovery system's key, on the recovery partition, where its init reads it.
 RECOVERY_KEYS_FILE=boot/recovery_authorized_keys
+# The size of each kernel slot on the disks tools/image/mkdisk_grub.sh makes,
+# which an update grows an older disk's slots to.
+SLOT_BYTES=4194304
 
 # Prints MESSAGE on stdout as `rach2-install: MESSAGE`, a note of progress.
 say() { echo "$ME: $1"; }
@@ -674,6 +678,39 @@ resume_boot_partition() { # resume_boot_partition BOOT
     mounted_recovery=""
 }
 
+# Grow each kernel slot of the boot partition BOOT, /boot/kernel and
+# /boot/fallback, that is smaller than SLOT_BYTES, as a disk installed before
+# the slots grew has them, so that `bootctl kernel` can write a kernel of that
+# size. `bootctl` rewrites a slot in place and never grows it. A slot is copied
+# beside itself, padded with zeros, and renamed over the old one, one slot at
+# a time: a stop part way costs at most the one slot being grown, and the
+# machine, saved to its recovery system for the update, starts that. A volume
+# without room for the copy keeps its slot, with a note.
+grow_slots() { # grow_slots BOOT
+    mkdir -p "$BOOT_MNT" 2>/dev/null
+    mount -t vfat "$1" "$BOOT_MNT" || die "$1 would not mount to grow its kernel slots"
+    mounted_boot=$BOOT_MNT
+    for slot in kernel fallback; do
+        file="$BOOT_MNT/boot/$slot"
+        size=$(wc -c < "$file") || die "$file could not be read"
+        [ "$size" -lt "$SLOT_BYTES" ] || continue
+        if ! { cp "$file" "$file.new" &&
+            dd if=/dev/zero bs=512 count=$(((SLOT_BYTES - size) / 512)) 2>/dev/null >> "$file.new" &&
+            [ "$(wc -c < "$file.new")" -eq "$SLOT_BYTES" ] && sync; }; then
+            rm -f "$file.new"
+            say "$1 has no room to grow its $slot slot to $SLOT_BYTES bytes; it keeps $size"
+            continue
+        fi
+        { mv "$file.new" "$file" && sync; } ||
+            die "the grown $slot slot did not take the place of the old one"
+        say "grew the $slot slot of $1 from $size to $SLOT_BYTES bytes"
+    done
+    umount "$BOOT_MNT" || die "$1 would not unmount"
+    mounted_boot=""
+    bootctl --target "$1" status > /dev/null ||
+        die "$1, its slots grown, is not a boot partition bootctl reads"
+}
+
 # Convert the MBR disk being updated, $update_disk, to boot by UEFI as well,
 # with the bootx64.efi beside $update_image; a bootx64.efi.sha256 beside that
 # must agree with it. A disk that cannot be converted is left to boot by BIOS
@@ -984,6 +1021,7 @@ whole configuration archived on its recovery partition; its accounts are not the
     if [ "$(disk_field "$target" 6)" = mbr ]; then
         convert_mbr_disk
     fi
+    grow_slots "${update_disk}p1"
 
     echo "$update_disk $root_entry" > "$keep/root-written" ||
         die "the copy of the configuration could not be marked; the root was not written"
