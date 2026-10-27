@@ -164,12 +164,28 @@ static void check_slow_console(void)
 }
 #endif
 
+#if defined(F_SETPIPE_SZ)
+/** Whether a pipe here can be made one page long, which Rach2, where the
+ * Windows site runs these checks, refuses with `EINVAL`. */
+static int pipe_page_settable(void)
+{
+    int p[2], ok;
+    if (pipe(p) != 0)
+        return 0;
+    ok = fcntl(p[0], F_SETPIPE_SZ, 4096) == 4096;
+    close(p[0]);
+    close(p[1]);
+    return ok;
+}
+#endif
+
 static void check_backpressure(void)
 {
     check_backpressure_row(0);
     check_backpressure_row(1);
     check_backpressure_row(2);
 #if defined(F_SETPIPE_SZ)
-    check_slow_console();
+    if (pipe_page_settable())
+        check_slow_console();
 #endif
 }
