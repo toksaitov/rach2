@@ -75,10 +75,12 @@ else
     pecheck=$work/pecheck.exe
 fi
 
-# copy DIR: copy the sources to DIR/tools/etude and DIR/utils.
+# copy DIR: copy the sources to DIR/tools/etude, DIR/utils and the files of
+# DIR/tests that they include.
 copy() {
     e=$1/tools/etude
-    mkdir -p "$e/win" "$e/posix" "$e/guest" "$e/volume" "$e/include/etude" "$e/schemas" "$1/utils" "$1/tests/host/compat"
+    mkdir -p "$e/win" "$e/posix" "$e/guest" "$e/volume" "$e/include/etude" "$e/schemas" "$1/utils" "$1/tests/host/compat" \
+        "$1/tests/cases/host"
     cp "$repo"/utils/sha256.h "$repo"/utils/sha256.c "$1/utils/"
     cp "$src"/*.c "$src"/*.h "$src"/sources.mk "$src"/version.mk "$e/"
     cp "$src"/posix/*.c "$src"/posix/*.h "$e/posix/"
@@ -88,7 +90,9 @@ copy() {
     cp "$src"/include/etude/*.h "$e/include/etude/"
     cp "$src"/schemas/history.schema.json "$e/schemas/"
     cp "$src"/schemas/history.schema.json "$e/win/"
-    cp "$repo"/tests/host/compat/output_sinks.[ch] "$1/tests/host/compat/"
+    cp "$repo"/tests/host/compat/output_sinks.[ch] "$repo"/tests/host/compat/sanitizer_env_host.h \
+        "$1/tests/host/compat/"
+    cp "$repo"/tests/cases/host/host_script_inventory.[ch] "$1/tests/cases/host/"
 }
 
 # compile DIR FLAGS: build the programs in DIR/tools/etude/win, etude.exe
@@ -103,7 +107,8 @@ compile() {
         # shellcheck disable=SC2086
         "$cc" $2 -I ../include -I ../../../utils -I ../../../tests/host/compat -o winfixture.exe winfixture.c winexecfix.c \
             winledgerfix.c winrunfix.c wintoolfix.c winholdfix.c winportsfix.c ../ledger.c ../watchdog.c \
-            ../supervise.c ../history_json.c ../posix/qemu.c ../posix/store.c ../qemu_profile.c ../processor.c wincollectionfix.c $executor ../../../utils/sha256.c ../../../tests/host/compat/output_sinks.c -lws2_32 -lbcrypt
+            ../supervise.c ../history_json.c ../history_collect.c ../posix/qemu.c ../posix/store.c ../qemu_profile.c ../processor.c wincollectionfix.c \
+            ../authority.c ../authority_parse.c ../posix/authority_platform.c authority_platform.c $executor ../../../utils/sha256.c ../../../tests/host/compat/output_sinks.c -lws2_32 -lbcrypt
         # shellcheck disable=SC2086
         "$cc" $2 -municode -o wintarget.exe wintarget.c -lws2_32 -lbcrypt
         # shellcheck disable=SC2086
