@@ -556,37 +556,57 @@ static int chmod_dir(const char *path, mode_t mode)
 }
 
 /**
- * Remove `path` and everything under it. A directory of the caller's that it
- * may not write is made writable first, so that a sealed entry of its own
- * can go. 0, or -1 when something stayed.
+ * Remove the name `name` of the directory `dir` and everything under it.
+ * Each directory below is opened without following a symbolic link and
+ * removed through its descriptor, so that a link put in place of a directory
+ * meanwhile is removed itself, and nothing it points to. A directory of the
+ * caller's that it may not write is made writable first, so that a sealed
+ * entry of its own can go. 0, or -1 when something stayed.
  */
-static int remove_tree(const char *path)
+static int remove_at(int dir, const char *name)
 {
     struct stat st;
-    int rc = 0;
+    struct dirent *e;
+    DIR *d;
+    int fd, rc = 0;
 
-    if (lstat(path, &st) != 0)
+    if (fstatat(dir, name, &st, AT_SYMLINK_NOFOLLOW) != 0)
         return errno == ENOENT ? 0 : -1;
-    if (S_ISDIR(st.st_mode)) {
-        DIR *d;
-        struct dirent *e;
-
-        if ((st.st_mode & S_IRWXU) != S_IRWXU)
-            chmod_dir(path, (st.st_mode & 07777) | S_IRWXU);
-        if ((d = opendir(path)) == NULL)
-            return -1;
-        while ((e = readdir(d)) != NULL) {
-            char sub[PATH_LEN];
-
-            if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)
-                continue;
-            if (path_fmt(sub, "%s/%s", path, e->d_name) != 0 || remove_tree(sub) != 0)
-                rc = -1;
-        }
-        closedir(d);
-        return rmdir(path) == 0 ? rc : -1;
+    if (!S_ISDIR(st.st_mode))
+        return unlinkat(dir, name, 0) == 0 ? 0 : -1;
+    if ((fd = openat(dir, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)) < 0)
+        return -1;
+    if (fstat(fd, &st) == 0 && (st.st_mode & S_IRWXU) != S_IRWXU)
+        fchmod(fd, (st.st_mode & 07777) | S_IRWXU);
+    if ((d = fdopendir(fd)) == NULL) {
+        close(fd);
+        return -1;
     }
-    return unlink(path) == 0 ? 0 : -1;
+    while ((e = readdir(d)) != NULL)
+        if (strcmp(e->d_name, ".") != 0 && strcmp(e->d_name, "..") != 0 &&
+            remove_at(dirfd(d), e->d_name) != 0)
+            rc = -1;
+    closedir(d);
+    return unlinkat(dir, name, AT_REMOVEDIR) == 0 ? rc : -1;
+}
+
+/** Remove `path` and everything under it, as remove_at does. 0, or -1 when
+ * something stayed. */
+static int remove_tree(const char *path)
+{
+    char parent[PATH_LEN];
+    const char *base = strrchr(path, '/');
+    int dir, rc;
+
+    if (base == NULL)
+        return remove_at(AT_FDCWD, path);
+    if (path_fmt(parent, "%.*s", base == path ? 1 : (int)(base - path), path) != 0)
+        return -1;
+    if ((dir = open(parent, O_RDONLY | O_DIRECTORY)) < 0)
+        return errno == ENOENT ? 0 : -1;
+    rc = remove_at(dir, base + 1);
+    close(dir);
+    return rc;
 }
 
 /** 1 when the name `name` matches a pattern of -x. */
@@ -1062,23 +1082,40 @@ static int store_dir(const char *dir)
     return errno == EEXIST ? 0 : -1;
 }
 
+/**
+ * Open the store's tmp/ without following a symbolic link, since any account
+ * of the store's group may put a link in its place and `etude build -e` runs
+ * as root: its descriptor, or -1.
+ */
+static int open_tmp(const struct step *s)
+{
+    char dir[PATH_LEN];
+
+    if (path_fmt(dir, "%s/tmp", s->shelf) != 0)
+        return -1;
+    return open(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+}
+
 /** Remove what was left in the store's tmp/ a day ago or earlier. */
 static void clear_stale(const struct step *s)
 {
-    char dir[PATH_LEN], p[PATH_LEN];
     DIR *d;
     struct dirent *e;
     time_t now = time(NULL);
+    int fd = open_tmp(s);
 
-    if (path_fmt(dir, "%s/tmp", s->shelf) != 0 || (d = opendir(dir)) == NULL)
+    if (fd < 0)
         return;
+    if ((d = fdopendir(fd)) == NULL) {
+        close(fd);
+        return;
+    }
     while ((e = readdir(d)) != NULL) {
         struct stat st;
 
-        if (e->d_name[0] == '.' || path_fmt(p, "%s/%s", dir, e->d_name) != 0)
-            continue;
-        if (lstat(p, &st) == 0 && now - st.st_mtime > STALE_SECONDS)
-            remove_tree(p);
+        if (e->d_name[0] != '.' && fstatat(dirfd(d), e->d_name, &st, AT_SYMLINK_NOFOLLOW) == 0 &&
+            now - st.st_mtime > STALE_SECONDS)
+            remove_at(dirfd(d), e->d_name);
     }
     closedir(d);
 }
@@ -1605,14 +1642,14 @@ static time_t entry_used(const struct step *s, const char *key)
  */
 static int drop_entry(const struct step *s, const struct doomed *d, double *freed)
 {
-    char entry[PATH_LEN], lock[PATH_LEN], aside[PATH_LEN], what[300];
+    char entry[PATH_LEN], lock[PATH_LEN], name[PATH_LEN], what[300];
     struct stat st;
     double bytes;
+    int tmp;
 
     if (path_fmt(entry, "%s/entries/%s", s->shelf, d->key) != 0 ||
         path_fmt(lock, "%s/locks/%s", s->shelf, d->key) != 0 ||
-        path_fmt(aside, "%s/tmp/%s.gone.%ld", s->shelf, d->key, (long)getpid()) != 0 ||
-        lstat(entry, &st) != 0)
+        path_fmt(name, "%s.gone.%ld", d->key, (long)getpid()) != 0 || lstat(entry, &st) != 0)
         return -1;
     if (!S_ISDIR(st.st_mode)) {
         say(s, "%s is not a directory, and stays", entry);
@@ -1622,13 +1659,16 @@ static int drop_entry(const struct step *s, const struct doomed *d, double *free
     entry_what(entry, what, sizeof(what));
     if (!s->print) {
         chmod_dir(entry, (st.st_mode & 07777) | S_IRWXU);
-        if (rename(entry, aside) != 0) {
+        if ((tmp = open_tmp(s)) < 0 || renameat(AT_FDCWD, entry, tmp, name) != 0) {
             say(s, "cannot remove %s: %s", entry, strerror(errno));
             chmod_dir(entry, st.st_mode & 07777);
+            if (tmp >= 0)
+                close(tmp);
             return -1;
         }
-        if (remove_tree(aside) != 0)
-            say(s, "some of %s is not this account's and stays", aside);
+        if (remove_at(tmp, name) != 0)
+            say(s, "some of %s/tmp/%s is not this account's and stays", s->shelf, name);
+        close(tmp);
         unlink(lock);
     }
     *freed += bytes;

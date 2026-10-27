@@ -734,6 +734,21 @@ static void test_expire_removal(void)
               strcmp(in_copy(copy_a, "e/tc.stamp", buf, sizeof buf), "") != 0,
           "expire: a removed entry is built again");
 
+    fix_format(p, sizeof p, "%s/tmp", shelf);
+    fix_format(victim, sizeof victim, "%s/outside", fix_dir());
+    fix_format(buf, sizeof buf, "%s/tmp.real", shelf);
+    mkdir(victim, 0700);
+    put(fix_path("outside/old"), "kept\n");
+    age(fix_dir(), "outside");
+    CHECK(rename(p, buf) == 0 && symlink(victim, p) == 0,
+          "expire: the test puts a link in place of tmp");
+    run(copy_a, ex_go, &r);
+    CHECK(r.status == 0 && exists(fix_path("outside/old")),
+          "expire: a link in place of tmp leaves what it points to");
+    unlink(p);
+    rename(buf, p);
+    remove_tree(victim);
+
     run(copy_a, ex_named, &r);
     CHECK(r.status == 2, "expire: -e takes no option of a step");
     run(copy_a, ex_word, &r);
