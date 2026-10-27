@@ -32,7 +32,8 @@
 # the script alone, stops the job: etude is given SIGTERM, and once
 # it has ended the script removes its stage directory beside the disk and the
 # lock, and exits with 128 plus the signal's number. A script killed outright
-# leaves both, and the next one removes them.
+# leaves both, and its etude may go on; the next script waits until that
+# etude has ended too, and then removes them.
 #
 # The environment sets the machine's shape:
 #
@@ -155,15 +156,32 @@ tooling()
     "$ETUDE" provision tooling -r "$REPO/tools/etude/tooling" -C "$CACHE" -p "$ETUDE_TOOLING_ARCH" -a "$RACH2_QEMU_ACCEL" "$@"
 }
 
+# running: print the process ID of an etude that a stage beside the disk
+# records and that is still running, and fail when there is none.
+running()
+{
+    for old in "$GNU_OUT"/.tooling.*; do
+        [ -s "$old/pid" ] || continue
+        pid=$(cat "$old/pid")
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "$pid"
+            return 0
+        fi
+    done
+    return 1
+}
+
 # take_lock: wait until no other job uses the build disk, and take it. The
 # lock is a symbolic link whose target is the holder's process ID, which a
-# holder that is gone leaves for the next to remove.
+# holder that is gone leaves for the next to remove once no etude that a
+# stage records is running, since a holder killed outright leaves its etude
+# and machine writing the disk.
 take_lock()
 {
     said=
     until ln -s "$$" "$LOCK" 2>/dev/null; do
         holder=$(readlink "$LOCK" 2>/dev/null) || continue
-        if ! kill -0 "$holder" 2>/dev/null; then
+        if ! kill -0 "$holder" 2>/dev/null && ! holder=$(running); then
             rm -f "$LOCK"
             continue
         fi
@@ -177,15 +195,17 @@ take_lock()
 }
 
 # sweep: remove the stages that jobs killed outright left, with the job
-# directories they name whose etude has gone. Only the lock's holder
-# has a stage, so once the lock is taken every stage here is such a one.
+# directories they name, but not a stage whose etude is still running. Only
+# the lock's holder has a stage, so once the lock is taken every stage here
+# is such a one.
 sweep()
 {
     for old in "$GNU_OUT"/.tooling.*; do
         [ -d "$old" ] || continue
         if [ -s "$old/pid" ]; then
             pid=$(cat "$old/pid")
-            kill -0 "$pid" 2>/dev/null || rm -rf "$CACHE/job-$pid-"*
+            kill -0 "$pid" 2>/dev/null && continue
+            rm -rf "$CACHE/job-$pid-"*
         fi
         rm -rf "$old"
     done
