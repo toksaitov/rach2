@@ -38,13 +38,19 @@ static int alive(struct fx_child *children, unsigned n)
             return 0;
     return 1;
 }
+/** Wait until a payload has written its whole ready line, its port offset and
+ * a newline, since the file exists before its text does. Fail when one of the
+ * `n` launches ends first. */
 static int published(struct launch_fixture *u, struct fx_child *p, unsigned n, const char *path)
 {
-    while (!fx_exists(path)) {
+    char *text;
+    while (!(text = fx_read(path)) || !strchr(text, '\n')) {
+        free(text);
         if (!alive(p, n))
             return fx_check(u->f, 0, "launch ended before publishing ready state");
         fx_pause();
     }
+    free(text);
     return 1;
 }
 static int blocked(struct launch_fixture *u, struct fx_child *p, unsigned n)

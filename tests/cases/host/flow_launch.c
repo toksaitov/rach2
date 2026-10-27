@@ -81,11 +81,13 @@ static int observer(void)
 }
 static int waiting_workload(int observe)
 {
+    char line[64];
     if (observe && observer())
         return 1;
     if (!observe && strcmp(ev("RACH2_WORKERS"), *ev("TEST_WORKERS") ? ev("TEST_WORKERS") : "2"))
         return 1;
-    if (!fx_text(ev("TEST_READY"), ev("RACH2_PORT_OFFSET")))
+    if (snprintf(line, sizeof(line), "%s\n", ev("RACH2_PORT_OFFSET")) >= (int)sizeof(line) ||
+        !fx_text(ev("TEST_READY"), line))
         return 1;
     while (!fx_exists(ev("TEST_RELEASE")))
         fx_pause();
