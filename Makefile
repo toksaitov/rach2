@@ -619,7 +619,6 @@ build/x86_64/tests/style/%.json: tests/cases/host/style.sh \
 	$(ETUDE) prepare -H --arch x86_64 --only $* style $@
 build/tests/style/abi.json: $(LIBC_STAMP)
 build/x86_64/tests/style/abi.json: $(LIBC_STAMP)
-build/tests/style/sources.json build/x86_64/tests/style/sources.json: $(LIBC_STAMP)
 build/tests/style/sizes.json build/x86_64/tests/style/sizes.json: host-pmccabe
 build/tests/style/manual.json build/x86_64/tests/style/manual.json: host-mandoc
 ifneq ($(OS),Windows_NT)
