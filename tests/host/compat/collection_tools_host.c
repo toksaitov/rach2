@@ -6,6 +6,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -473,6 +474,31 @@ static void collection_rows(const char *disk)
     COLLECTION_CHECK(collection_bytes(dest, "dump bytes"));
 }
 
+/* A tool job without an accelerator is refused with the setting it lacks. */
+static void collection_accel_row(const char *disk)
+{
+    static const char expected[] =
+        "etude prepare tools: name QEMU's accelerator with RACH2_QEMU_ACCEL\n"
+        "etude prepare tools: the collection request failed\n";
+    char *log = collection_path("accel.stderr");
+    char *args[] = {"tool", collection_root, "mtype", "-i", (char *)disk, "::/a file"};
+    unsetenv("RACH2_QEMU_ACCEL");
+    setenv("COLLECTION_TEST_ROW", "offset", 1);
+    fflush(stderr);
+    int saved = dup(2), fd = open(log, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (saved < 0 || fd < 0 || dup2(fd, 2) < 0)
+        exit(2);
+    close(fd);
+    int rc = etude_collection_tools_main(6, args);
+    fflush(stderr);
+    if (dup2(saved, 2) < 0)
+        exit(2);
+    close(saved);
+    setenv("RACH2_QEMU_ACCEL", "whpx", 1);
+    COLLECTION_CHECK(rc == 2);
+    COLLECTION_CHECK(collection_bytes(log, expected));
+}
+
 static void collection_style_row(void)
 {
     char cache[4096], tests[4096], cases[4096], manifest[4096], disk[4096];
@@ -616,6 +642,7 @@ int etude_test_collection_tools(const char *self, const char *tmp)
     collection_put(disk, "disk bytes");
     collection_goals();
     collection_rows(disk);
+    collection_accel_row(disk);
     collection_style_row();
     collection_prepare_row();
     if (saved)

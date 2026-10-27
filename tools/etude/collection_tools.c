@@ -37,6 +37,7 @@ extern char **environ;
 #define COL_MAX     64
 #define COL_CAPTURE (16u << 20)
 static volatile sig_atomic_t col_stop;
+static int col_reported; /* a message has given the reason of a refusal */
 static const char *const col_tools[] = {
     "mattrib", "mcopy",  "mdel",     "mdeltree", "mdir",       "mformat",    "minfo",
     "mlabel",  "mmd",    "mmove",    "mrd",      "mren",       "mtype",      "mke2fs",
@@ -62,6 +63,7 @@ static int col_error(const char *format, ...)
     vfprintf(stderr, format, ap);
     va_end(ap);
     fputc('\n', stderr);
+    col_reported = 1;
     return -1;
 }
 
@@ -105,7 +107,7 @@ static int col_dirs(const char *path, int parent)
 {
     char text[COL_PATH];
     if (snprintf(text, sizeof text, "%s", path) >= (int)sizeof text)
-        return -1;
+        return errno = ENAMETOOLONG, -1;
     for (char *p = text + (text[0] && text[1] == ':' ? 3 : 1); *p; p++) {
         if (*p != '/' && *p != '\\')
             continue;
@@ -117,10 +119,12 @@ static int col_dirs(const char *path, int parent)
         if (rc && errno != EEXIST)
             return -1;
         *p = 0;
-        rc = stat(text, &st) || !S_ISDIR(st.st_mode);
+        rc = stat(text, &st);
         *p = saved;
         if (rc)
             return -1;
+        if (!S_ISDIR(st.st_mode))
+            return errno = ENOTDIR, -1;
     }
     return parent || !mkdir(text, 0700) || errno == EEXIST ? 0 : -1;
 }
@@ -536,7 +540,7 @@ static int col_tooling(struct col_job *job, int prepare, unsigned volume, unsign
     char *script = col_format("%s/job.sh", job->work);
     const char *given_cache = getenv("ETUDE_TOOLING_CACHE");
     char *cache = given_cache && *given_cache ? col_path(given_cache) : NULL;
-    int rc = 2;
+    int cache_error = errno, rc = 2;
     struct etude_tooling_result result;
     struct etude_tooling_site site = {.recipe = recipe,
                                       .volume = volume_tool,
@@ -554,14 +558,29 @@ static int col_tooling(struct col_job *job, int prepare, unsigned volume, unsign
                                         .memory_mib = memory,
                                         .volume_mib = volume,
                                         .network = network};
-    if (!recipe || !volume_tool || !out || !script || !site.accel || !*site.accel ||
-        (given_cache && *given_cache && !cache) || (!prepare && col_dirs(out, 0)))
+    if (!recipe || !volume_tool || !out || !script) {
+        col_error("out of memory");
         goto done;
+    }
+    if (!site.accel || !*site.accel) {
+        col_error("name QEMU's accelerator with RACH2_QEMU_ACCEL");
+        goto done;
+    }
+    if (given_cache && *given_cache && !cache) {
+        col_error("cannot resolve ETUDE_TOOLING_CACHE %s: %s", given_cache, strerror(cache_error));
+        goto done;
+    }
+    if (!prepare && col_dirs(out, 0)) {
+        col_error("cannot make %s: %s", out, strerror(errno));
+        goto done;
+    }
 #ifdef _WIN32
     if (access(volume_tool, F_OK)) {
         char *native = col_format("%s.exe", volume_tool);
-        if (!native)
+        if (!native) {
+            col_error("out of memory");
             goto done;
+        }
         free(volume_tool);
         site.volume = volume_tool = native;
     }
@@ -1405,6 +1424,8 @@ int etude_collection_tools_main(int argc, char **argv)
     if (argc < 3)
         return col_error("usage: etude prepare tools list|tool|prepare|style [TREE ...]"), 2;
     struct col_job job = {.cpus = 1};
+    col_reported = 0;
+    errno = 0;
     char *root = realpath(argv[1], NULL);
     int rc = 2;
     if (!root || strlen(root) >= sizeof job.root)
@@ -1425,7 +1446,9 @@ int etude_collection_tools_main(int argc, char **argv)
     else if (col_remove(job.work))
         rc = 2;
 done:
-    if (rc == 2)
+    if (rc == 2 && (col_reported || !errno))
+        col_error("the collection request failed");
+    else if (rc == 2)
         col_error("the collection request failed: %s", strerror(errno));
     free(root);
     col_free(&job.inputs);
