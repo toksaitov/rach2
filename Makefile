@@ -1698,6 +1698,10 @@ $(HOST_TOOLS) $(filter-out $(ARCH_BUILD)/tests/cases/host/image-channel-fixture 
     $(ARCH_BUILD)/tests/cases/machine/installer-repair-fixture,$(COLLECTION_TOOLS)) \
     build/tests/cases/host/host build/tools/etude/image-command: tools/etude/compile.sh
 endif
+.PHONY: print-native-libc-inputs
+print-native-libc-inputs:
+	@printf '%s\n' '$(ARCH_MUSL)' '$(MUSL_CRYPT_SRC)' '$(LIBC_STAMP)' '$(LIBC_OUTPUTS_LIST)'
+
 .PHONY: print-collection-tools
 print-collection-tools:
 	@echo $(COLLECTION_TOOLS)

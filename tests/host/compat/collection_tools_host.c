@@ -303,8 +303,10 @@ static int collection_prepared_job(const struct etude_tooling_job *job)
     script[n] = 0;
     if (file)
         fclose(file);
-    char components[64];
-    snprintf(components, sizeof components, "make -j%u ARCH='i686' 'components'", collection_cpus);
+    const char *arch = strstr(script, "ARCH='x86_64'") ? "x86_64" : "i686";
+    char components[80];
+    snprintf(components, sizeof components, "make -j%u ARCH='%s' 'components'", collection_cpus,
+             arch);
     if (!job->network || job->cpus != collection_cpus || job->memory_mib != collection_memory ||
         collection_provisioned != collection_cpus || job->volume_mib < 512 || !job->disks ||
         !job->disks[0] || !job->disks[1] || job->disks[2] || !strstr(script, "rsync -rc") ||
@@ -315,9 +317,21 @@ static int collection_prepared_job(const struct etude_tooling_job *job)
         return 1;
     char seed[4096];
     snprintf(seed, sizeof seed, "%s/seed", collection_root);
-    const char *make[] = {
-        host_tool_path("tar"), "-cf", job->disks[1], "-C", seed, "build/images/one.img",
-        "build/rach2/kernel",  NULL};
+    char kernel[128], paths[4][128];
+    snprintf(kernel, sizeof kernel, "build/%srach2/kernel",
+             !strcmp(arch, "x86_64") ? "x86_64/" : "");
+    const char *make[16] = {host_tool_path("tar"),  "-cf", job->disks[1], "-C", seed,
+                            "build/images/one.img", kernel};
+    size_t count = 7;
+    if (strstr(script, "'build/inputs/")) {
+        const char *tails[] = {"include", "source.c", "stamp", "outputs"};
+        for (size_t i = 0; i < 4; i++) {
+            snprintf(paths[i], sizeof paths[i], "build/inputs/%s/%s", arch, tails[i]);
+            if (i != 1 || strcmp(getenv("COLLECTION_TEST_ROW"), "prepare-missing"))
+                make[count++] = paths[i];
+        }
+    }
+    make[count] = NULL;
     return host_command(make, NULL, NULL, NULL, 0);
 }
 
@@ -350,7 +364,7 @@ int etude_tooling_run(const struct etude_tooling_site *site, const struct etude_
             rc = 2;
     }
     collection_job_cpus = job->cpus;
-    if (getenv("COLLECTION_TEST_ROW") && !strcmp(getenv("COLLECTION_TEST_ROW"), "prepare"))
+    if (getenv("COLLECTION_TEST_ROW") && !strncmp(getenv("COLLECTION_TEST_ROW"), "prepare", 7))
         rc = collection_prepared_job(job);
     else if (job->network)
         rc = 3;
@@ -538,6 +552,54 @@ static int collection_git(const char *const extra[])
     return host_command(argv, NULL, NULL, NULL, 0);
 }
 
+/** Check native inputs and archive completeness on both architectures. */
+static void collection_native_inputs_row(void)
+{
+    collection_put(collection_path("Makefile"),
+                   "base = build/inputs/$(ARCH)\n"
+                   ".PHONY: print-native-libc-inputs check-libc preflight\n"
+                   "print-native-libc-inputs:\n"
+                   "\t@printf '%s\\n' $(base)/include $(base)/source.c $(base)/stamp "
+                   "$(base)/outputs\n"
+                   "preflight:\n\t@echo 'guest compilation on the native host' >&2; exit 1\n"
+                   "$(base)/stamp: preflight\n"
+                   "build/images/one.img: preflight\n"
+                   "check-libc: $(base)/stamp $(base)/source.c $(base)/include/header.h\n"
+                   "\t@test -f $(base)/outputs\n"
+                   "build/krffs/readfile.krffs: check-libc\n"
+                   "\t@mkdir -p build/krffs; printf '%s' '$(ARCH)' > $@\n");
+    COLLECTION_CHECK(!mkdir(collection_path("seed/build/inputs"), 0700));
+    COLLECTION_CHECK(!mkdir(collection_path("seed/build/x86_64"), 0700));
+    COLLECTION_CHECK(!mkdir(collection_path("seed/build/x86_64/rach2"), 0700));
+    collection_put(collection_path("seed/build/x86_64/rach2/kernel"), "kernel bytes");
+    static const char *const arches[] = {"i686", "x86_64"};
+    for (size_t i = 0; i < 2; i++) {
+        char path[128];
+        snprintf(path, sizeof path, "seed/build/inputs/%s", arches[i]);
+        COLLECTION_CHECK(!mkdir(collection_path(path), 0700));
+        snprintf(path, sizeof path, "seed/build/inputs/%s/include", arches[i]);
+        COLLECTION_CHECK(!mkdir(collection_path(path), 0700));
+        const char *tails[] = {"source.c", "stamp", "outputs", "include/header.h"};
+        for (size_t j = 0; j < 4; j++) {
+            snprintf(path, sizeof path, "seed/build/inputs/%s/%s", arches[i], tails[j]);
+            collection_put(collection_path(path), "prepared bytes");
+        }
+        collection_cpus = 4;
+        collection_memory = 12288;
+        setenv("ETUDE_BUILD_JOBS", "12", 1);
+        setenv("COLLECTION_TEST_ROW", "prepare-inputs", 1);
+        char *args[] = {"prepare", collection_root,        (char *)arches[i],
+                        "",        "build/images/one.img", "build/krffs/readfile.krffs"};
+        COLLECTION_CHECK(!etude_collection_tools_main(6, args));
+        COLLECTION_CHECK(
+            collection_bytes(collection_path("build/krffs/readfile.krffs"), arches[i]));
+        setenv("COLLECTION_TEST_ROW", "prepare-missing", 1);
+        COLLECTION_CHECK(etude_collection_tools_main(6, args) == 2);
+        COLLECTION_CHECK(
+            collection_bytes(collection_path("build/krffs/readfile.krffs"), arches[i]));
+    }
+}
+
 static void collection_prepare_row(void)
 {
     const char *directories[] = {"ports",      "ports/doom",        "krffs",           "seed",
@@ -588,6 +650,7 @@ static void collection_prepare_row(void)
         COLLECTION_CHECK(collection_bytes(collection_path("build/images/one.img"), "image bytes"));
         COLLECTION_CHECK(collection_bytes(collection_path("build/rach2/kernel"), "kernel bytes"));
     }
+    collection_native_inputs_row();
     if (jobs)
         setenv("ETUDE_BUILD_JOBS", jobs, 1);
     else

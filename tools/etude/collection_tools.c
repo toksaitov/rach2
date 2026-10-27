@@ -1218,7 +1218,35 @@ static const char col_sync[] =
     "git --literal-pathspecs add -f --pathspec-from-file=\"$ETUDE_WORK/source-index\" "
     "--pathspec-file-nul\n";
 
-static int col_native_make(struct col_job *job, const char *arch, const struct col_list *goals)
+/** Declare the musl products returned for native builds. */
+static int col_native_inputs(struct col_job *job, const char *arch, const struct col_list *native,
+                             struct col_list *guest)
+{
+    if (!native->n)
+        return 0;
+    char *architecture = col_format("ARCH=%s", arch), *text = NULL;
+    size_t length = 0, count = 0;
+    char *args[] = {"make",    "-s",         "--no-print-directory",     "-C",
+                    job->root, architecture, "print-native-libc-inputs", NULL};
+    int rc = !architecture || col_exec(job, args, &text, &length);
+    if (!rc) {
+        rc = !length || text[length - 1] != '\n';
+        char *save = NULL;
+        for (char *path = strtok_r(text, "\r\n", &save); !rc && path;
+             path = strtok_r(NULL, "\r\n", &save)) {
+            rc = !col_relative(path) || col_add(guest, path);
+            count++;
+        }
+        rc |= !count;
+    }
+    free(architecture);
+    free(text);
+    return rc ? col_error("the native musl inputs could not be declared") : 0;
+}
+
+/** Build native goals from the returned guest products. */
+static int col_native_make(struct col_job *job, const char *arch, const struct col_list *goals,
+                           const struct col_list *guest)
 {
     if (!goals->n)
         return 0;
@@ -1237,6 +1265,15 @@ static int col_native_make(struct col_job *job, const char *arch, const struct c
     int rc = !architecture;
     for (size_t i = 0; !rc && prefix[i]; i++)
         rc = col_add(&args, prefix[i]);
+    for (size_t i = 0; !rc && i < guest->n; i++) {
+        char *path = col_format("%s/%s", job->root, guest->v[i]);
+        char *old = col_format("-o%s", guest->v[i]);
+        struct stat st;
+        rc = !path || !old || stat(path, &st) || (!S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode)) ||
+             col_add(&args, old);
+        free(path);
+        free(old);
+    }
     for (size_t i = 0; !rc && i < goals->n; i++)
         rc = col_add(&args, goals->v[i]);
     if (!rc)
@@ -1246,13 +1283,18 @@ static int col_native_make(struct col_job *job, const char *arch, const struct c
     return rc;
 }
 
-/* Validate every returned archive name before native extraction. */
+/** Validate the complete declared archive before native extraction. */
 static int col_products(struct col_job *job, char *products, const struct col_list *goals)
 {
     char *args[] = {"tar", "-tf", products, NULL}, *names = NULL;
     size_t size = 0;
     if (col_exec(job, args, &names, &size))
         return -1;
+    unsigned char *seen = calloc(goals->n ? goals->n : 1, 1);
+    if (!seen) {
+        free(names);
+        return col_error("out of memory");
+    }
     int rc = 0;
     for (char *name = names; *name && !rc;) {
         char *end = strchr(name, '\n');
@@ -1269,14 +1311,22 @@ static int col_products(struct col_job *job, char *products, const struct col_li
             size_t prefix = strlen(goals->v[i]);
             found |= n >= prefix && !strncmp(name, goals->v[i], prefix) &&
                      (!name[prefix] || name[prefix] == '/');
+            seen[i] |= n == prefix && !strcmp(name, goals->v[i]);
         }
         if (!col_relative(name) || !found)
             rc = -1;
         name = end + 1;
     }
     free(names);
+    const char *missing = NULL;
+    for (size_t i = 0; i < goals->n && !missing; i++)
+        if (!seen[i])
+            missing = goals->v[i];
+    free(seen);
     if (rc)
         return col_error("the products archive has an undeclared path");
+    if (missing)
+        return col_error("the products archive omits %s", missing);
     char *extract[] = {"tar", "-xf", products, "-C", job->root, NULL};
     return col_exec(job, extract, NULL, NULL);
 }
@@ -1317,6 +1367,7 @@ static int col_preparation_machine(unsigned *cpus, unsigned *memory)
     return 0;
 }
 
+/** Build guest products in the tooling machine and native goals on the host. */
 static int col_prepare(struct col_job *job, const char *arch, const char *kernel, int count,
                        char *const args[])
 {
@@ -1328,7 +1379,8 @@ static int col_prepare(struct col_job *job, const char *arch, const char *kernel
     if (strspn(kernel, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") !=
             strlen(kernel) ||
         col_prepare_goals(&native, &guest, arch, kernel, count, args) ||
-        col_preparation_machine(&job->cpus, &memory))
+        col_preparation_machine(&job->cpus, &memory) ||
+        col_native_inputs(job, arch, &native, &guest))
         goto done;
     rc = col_tooling(job, 1, 0, 0, 0);
     if (rc)
@@ -1382,7 +1434,7 @@ static int col_prepare(struct col_job *job, const char *arch, const char *kernel
     if (!rc)
         rc = col_products(job, products, &guest);
     if (!rc)
-        rc = col_native_make(job, arch, &native);
+        rc = col_native_make(job, arch, &native, &guest);
     goto done;
 error:
     rc = 2;
