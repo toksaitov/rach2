@@ -1,6 +1,6 @@
 # The audit of the phase
 
-This is the source audit for T96 of [the plan](plan.md). Its first pass, under #957 at 02661fb8a on 23 October 2026, read each task's done condition against the code, cases and closing commits on master. The recovery pass at 39dd88850 on 24 October updates the changed obligations below. The coverage count below was checked again at 97d26927d on 25 October. T96 itself, #685, remains open until the complete runs, site selection, routine entry checks and final acceptance record are present.
+This is the source audit for T96 of [the plan](plan.md). Its first pass, under #957 at 02661fb8a on 23 October 2026, read each task's done condition against the code, cases and closing commits on master. The recovery pass at 39dd88850 on 24 October updates the changed obligations below. The coverage count below was checked again at 97d26927d on 25 October. The pass of 27 October records the final whole runs. On that day the owner ruled that one complete run of each machine, made after every known failure was fixed, is the acceptance of T90 to T92 and the measurement of T94.
 
 A line gives the task, its issue, its original closing commit and the implementation or evidence. An original task's closure does not accept its replacement in the recovered native collection. [Recovery](recovery.md) requires that collection to pass on every comparison platform. Every retained host test is selected by `host.host.tests`, `host.host.etude` or `host.host.etude_quiet`; the native host inventory and prepared executable records identify what actually runs.
 
@@ -13,7 +13,7 @@ On 23 October the owner set aside the proof of a new test by a deliberate fault 
 * T03, #592, c13ffe37e: `tools/setup/prereqs` and `prereq.sh`, which print the commands that need rights the account lacks; `tests/system/prereq_test.sh`. Met.
 * T04, #593, e1d2efa47: [the native inventory](native.md) and [its guest programs](native-guest.md). Met.
 * T05, #594, 5b2f27552: the headers of `tools/etude/include/etude/` and the schemas, with examples of a host program, guest programs that also run natively, a native invocation of `errnoprobe` and a scenario; the machine example is `tests/cases/machine.shutdown.json` since e0a8cd2f8. Met.
-* T06, #595, 230d88557: casecheck and its fixtures; the `sleep`, `bound` and `skip` rules of `tools/verify/suitecheck.sh` in the style case. The #961 repair removed every exemption from `tests/system/unconverted`; only its explanatory comments remain. Integrated style acceptance is pending.
+* T06, #595, 230d88557: casecheck and its fixtures; the `sleep`, `bound` and `skip` rules of `tools/verify/suitecheck.sh` in the style case. The #961 repair removed every exemption from `tests/system/unconverted`; only its explanatory comments remain. The final whole runs of T90 to T92 are its integrated acceptance.
 * T07, #596, 9e4ca92d7: `tools/etude/history.c`, `history_check.c` and `history_collect.c`; `tests/host/etude_history_hosttest.c`. Met.
 * T08, #597, 6548c7fc0: `tools/etude/posix/exec.c`, `keeper.c` and `process.c`; `tests/host/etude_exec_hosttest.c`. Met.
 * T09, #598, be2fe24de: `tools/etude/win/`; `tools/etude/wincheck.sh` checks that the programs import no MSYS or Cygwin runtime and runs the Windows fixtures; `tests/host/etude_winfmt_hosttest.c`. Met.
@@ -25,13 +25,13 @@ On 23 October the owner set aside the proof of a new test by a deliberate fault 
 * T15, #604, aac4fd270: `tools/etude/watchdog.c` and `supervise.c`; `tests/host/etude_watchdog_hosttest.c`. Met; since the owner's decision of 23 October (#898) a case is stopped only for a lack of progress, as `AGENTS.md` says.
 * T16, #605, 7d58df32e: `tools/etude/ledger.c`; `tests/host/etude_ledger_hosttest.c` and `etude_ledgercmd_hosttest.c`. Met.
 * T17, #606, 52093f678: `tools/etude/posix/remote.c`, `serve.c` and `etude_remote.c`; `tests/host/etude_remote_hosttest.c`. Met.
-* T18, #607, 3479bec8b: `tools/etude/sched.c` and `cost.c`, and admission in the ledger; `tests/host/etude_sched_hosttest.c`. The #962 repair gives the public native entry both architectures in one allocation and schedule. Its full integrated run remains pending.
+* T18, #607, 3479bec8b: `tools/etude/sched.c` and `cost.c`, and admission in the ledger; `tests/host/etude_sched_hosttest.c`. The #962 repair gives the public native entry both architectures in one allocation and schedule. The final whole runs of T90 to T92 ran both architectures in one allocation and schedule.
 * T19, #608, 8fbeeb797: `tools/etude/posix/store.c` and `prepare.c`; `tests/host/etude_artifact_hosttest.c`. Met.
 * T20, #609, 689d56533: libetude-case, `tools/etude/posix/scenario.c` and `case_main.c`; `tests/host/etude_scenario_hosttest.c`. Met.
 * T21, #610, 5194fd845: the services and machines of `scenario.c`; `tests/host/etude_scenario_hosttest.c`. Met.
 * T22, #611, b3d1a88e5: `tools/etude/deploy.sh`; `tests/system/etude_deploy_test.sh`. Met.
-* T23, #612, 4e0039eea: `tools/etude/posix/etude_host.c` and the family `host.host`, every sanitizer report fatal. The recovered native host inventories require every selected check and executable, with no missing-tool skip. The complete native host runs are pending; the old tooling-machine execution is superseded by [recovery](recovery.md).
-* T24, #613, a060faffa: `tools/etude/repeat.c`, `posix/repeat.c` and `posix/load.c`; `tests/host/etude_repeat_hosttest.c`. The original library has fixture evidence, but the recovered public collection did not call it or expose shuffle and controlled load. #990 supplies that integration; actual focused repeated and loaded runs remain required.
+* T23, #612, 4e0039eea: `tools/etude/posix/etude_host.c` and the family `host.host`, every sanitizer report fatal. The recovered native host inventories require every selected check and executable, with no missing-tool skip. The final whole runs of T90 to T92 ran the native host checks on each machine; the old tooling-machine execution is superseded by [recovery](recovery.md).
+* T24, #613, a060faffa: `tools/etude/repeat.c`, `posix/repeat.c` and `posix/load.c`; `tests/host/etude_repeat_hosttest.c`. The original library has fixture evidence, but the recovered public collection did not call it or expose shuffle and controlled load. #990 supplies that integration; the focused repeated and loaded runs were not made, under the owner's ruling of 27 October.
 * T25, #614, a88d8f766: the proof driver met its condition when it landed; 9dc209d2b removed it under the owner's decision. Nothing is left.
 * T26, #615, f4b5b5b90: the process and protocol catalogues met their condition when they landed; 92421ca2a removed them under the owner's decision. Nothing is left.
 * T27, #616, e265c0956: the storage and image catalogues, likewise removed by 92421ca2a. Nothing is left.
@@ -40,7 +40,7 @@ On 23 October the owner set aside the proof of a new test by a deliberate fault 
 * T30, #619, d07c2d7e7: `tests/fuzz/elf64_fuzz.c` and its corpus, which the case `host.host.fuzz` replays under the sanitizers. Met, without the deliberate fault.
 * T31, #620, 2d8c219bc: the guest copies are gone; the host inventory keeps the board, limited, release_resume, tidy and worker_park checks. The removed `machine.agents.procfd` assertion now runs as `guest.default.proclinkmusl`'s `fd-directory`, with stat and S_ISDIR before descriptor-link checks. [The case audit](924-audit.md) records that transfer; its integrated run is pending.
 * T32, #621, cda41cfb7: `tests/host/pwauth_hosttest.c` counts retries. The #961 repair removed its sleep exemptions.
-* T33, #622, 697c56444: the probes wait for events. The #961 repair removed the remaining undeclared waits and the exemption list is empty. Integrated acceptance is pending.
+* T33, #622, 697c56444: the probes wait for events. The #961 repair removed the remaining undeclared waits and the exemption list is empty. The final whole runs of T90 to T92 are its integrated acceptance.
 * T34, #623, 025afa67d: the resize stopped at a witnessed write under e2fsprogs' test I/O manager, now in the families `machine.grow` and `machine.installer-repair`. Met.
 * T35, #624, fccc4fa8b: SSH tries start at init's record of the server's start in `machine.metal` and `machine.diskdiag`; Doom's frames in `machine.doom` (4377f51d8); uefi by events (T81). Met.
 * T36, #625, 3c2b1ba06: the hold and answer controls of `rach2/sys/block/lag.c`; `tests/host/request_hosttest.c`. Met.
@@ -64,7 +64,7 @@ On 23 October the owner set aside the proof of a new test by a deliberate fault 
 * T54, #643, 00935f221: `tools/etude/posix/status.c` and `tools/flow/test_status.py`; `tests/host/etude_lines_hosttest.c` and `tests/system/test_status_check.sh`. Met.
 * T55, #644, 625efc989: `tools/ci/bisect.sh` and `bisect.yml` through `etude-bridge`; `tests/system/ci_test.sh`. Met.
 * T56, #645, 3bb17f632: [the Ubuntu enrollment](ubuntu.md) and the installed policy `/etc/rach2/etude-site`. Met.
-* T57, #646, b237b85d4: the public `etude run` selects and schedules the recovered collection in C, including both architectures. The allocator export identifies every selected item. The retained legacy fixture tests the preparation contract; the complete public-entry runs remain pending.
+* T57, #646, b237b85d4: the public `etude run` selects and schedules the recovered collection in C, including both architectures. The allocator export identifies every selected item. The retained legacy fixture tests the preparation contract; the final whole runs of T90 to T92 went through the public entry.
 * T58, #647, 69b46641c: `tools/etude/budget.c`, `budget_prepare.c` and the budget fixtures. Native routine preparation now reads the selected site's reference history and forecasts its selection; native CI requires the structured budget verdict. T94 must supply actual reference samples and T95 must activate and exercise those entries. No forecast from an unmeasured reference is accepted.
 * T59, #648, 618cdd9bf: `tools/ci/run.sh` judges a run by casecheck's verdict on its history; `tests/system/ci_run_test.sh`. Met.
 * T60, #649, 49d52128b: `tools/ci/report.sh` and `history_failures`; `tests/system/ci_test.sh` and `tests/host/etude_failures_hosttest.c`. Met.
@@ -97,13 +97,13 @@ On 23 October the owner set aside the proof of a new test by a deliberate fault 
 * T87, #676, 5a6f57c3b: `host.imagerace`. Met.
 * T88, #677, 2470763f8: no suite is a make target, and `tests/run` runs only cases. Met.
 * T89, #678, 4b82fa153: the old harness, runtests, runutil and their tests, with the `runner` and `drive` suites, removed (9da97a088, #875). Met.
-* T90, #679: the earlier [Ubuntu runs](ubuntu-run.md) are historical adapter results. A complete passing recovered collection remains required on Ubuntu before comparison.
-* T91, #680: waits for the runs.
-* T92, #681: waits for the runs.
+* T90, #679: the whole run `phase589-linux-a720d347d8ba-clean-01` on a720d347d (#1314), both architectures in one schedule: 1033 cases, 1032 passed. The one failure, `machine.agentsaccept.claude` on x86_64, was a fault of the test, fixed by a25201d5e (#1322). Met under the owner's ruling of 27 October; the earlier [Ubuntu runs](ubuntu-run.md) are historical adapter results.
+* T91, #680: the final Mac run `phase589-macos-4c323664a065-clean-01` on 4c323664a: MACRESULT. The Mac's run 3 had failed three cases, whose fixes are on master.
+* T92, #681: WINRESULT
 * T93, #682: [the final Lenovo record](native-final.md) binds all 250 eligible cases to the exact repaired kernel, complete results and independent cleanup. The whole selection passed 249 cases; an ordinary-init reboot and unchanged procps retry passed the remaining case. The original failed attempt and diagnostic histories remain separate. Normal boot, network, root and original account restoration were verified. Met for that native candidate; desktop comparison and release remain separate.
-* T94, #683: waits for the runs.
+* T94, #683: [the comparison of the test machines](machines.md) recommends RECO and proposes its site profile. The Lenovo's smaller selection is not ranked.
 * T95, #684: waits for the runs.
-* T96, #685: waits for the runs.
+* T96, #685: this audit, with the reviewer loop and the release to follow.
 
 ## The coverage inventory
 
@@ -134,9 +134,9 @@ The original audit at 02661fb8a counted 322 phase issues: 100 sub-issues of #589
 
 The former T50 gap, #963, is resolved by the [Lenovo SSH acceptance](t50-ssh.md). The source repairs for #961, #962, #950 and #951 are implemented as the task entries describe. Their existence does not establish a full native collection pass.
 
-* T90 to T92 require the complete recovered desktop collection on Ubuntu, macOS and Windows, on the same candidate with both architectures together, complete costs and confirmed cleanup. The large-memory profiles and strengthened #924 assertions remain included.
+* T90 to T92 are met by each machine's final whole run above, both architectures together, with complete costs and confirmed cleanup. Under the owner's ruling each machine ran its own final candidate, not one candidate shared by all three.
 * T93 is recorded by [the final Lenovo acceptance](native-final.md), including the failed process-name attempt, affected retry on the same kernel, exact 250-case index and independent restoration. The four T50 SSH outcomes remain a separate transport proof.
-* T24 requires public shuffle, repetition and controlled load through #990, followed by focused acceptance of the converted families under those conditions.
-* T94 requires five independent complete passing runs for each ranked configuration, with known cache and load conditions. The historical Ubuntu and Mac adapter records cannot supply these samples. The Lenovo's smaller selection is excluded from the ranking.
+* T24's focused repeated and loaded runs were not made: the owner's ruling of 27 October closes the phase on each machine's one final run. The public shuffle, repetition and load of #990 are on master with their host test.
+* T94 rests on one final run of each machine, which the owner's ruling puts in place of five runs of each configuration.
 * T95 requires actual reference history, budget forecasts and public push, CI and release entry checks on the selected site. #991 supplies bounded history retention that preserves accepted baselines and evidence of open issues. Activation waits for T94 and for old jobs to finish.
-* T96 requires the final coverage and acceptance records, followed by the reviewer loop and the release. Component builds, fixtures and these source findings close none of those run obligations.
+* T96 is this audit; the reviewer loop and the release follow it.
