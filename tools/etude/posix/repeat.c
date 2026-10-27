@@ -430,25 +430,26 @@ static int fits(const struct run *x, const struct etude_repeat_attempt *a)
 }
 
 /**
- * Ask the ledger for one claim of attempt `ai`.
+ * Ask the ledger for one claim of attempt `ai`, leaving a request that waits
+ * when `wait` is set.
  *
  * @return 1 when admitted, 0 when it waits, 2 when it is refused, which ends
  *         the attempt, and -1 with errno set for a ledger that failed.
  */
 static int ask(struct run *x, size_t ai, const char *id, const struct etude_ledger_res *res,
-               size_t nres, int *held)
+               size_t nres, int wait, int *held)
 {
     const struct etude_repeat_site *site = x->site;
     char reason[200];
 
     *held = 1;
-    if (etude_ledger_admit(site->ledger, id, site->account, res, nres, site->cap, site->ncap, 1) ==
-        0) {
-        granted(x, &x->slots[ai]);
+    if (etude_ledger_admit(site->ledger, id, site->account, res, nres, site->cap, site->ncap,
+                           wait) == 0)
         return 1;
-    }
-    if (errno == EAGAIN)
+    if (errno == EAGAIN) {
+        *held = wait;
         return 0;
+    }
     *held = 0;
     if (errno != ERANGE && errno != ENOSPC)
         return -1;
@@ -464,7 +465,9 @@ static int ask(struct run *x, size_t ai, const char *id, const struct etude_ledg
 
 /**
  * Admit attempt `ai` at the head of the queue, its load first and then its
- * case, and start it.
+ * case, and start it. The load's request waits in the ledger; once it is
+ * admitted, a case that does not fit at once releases the load's claim, so
+ * that no attempt holds a claim while it waits.
  *
  * @return 1 when it started or ended, 0 when it waits for room, and -1 with
  *         errno set for a ledger that failed.
@@ -488,14 +491,20 @@ static int admit(struct run *x, size_t ai)
     }
     if (l != NULL && !s->load_admitted) {
         load_res(l, &lr);
-        rc = ask(x, ai, s->load_id, &lr, 1, &s->load_claim);
+        rc = ask(x, ai, s->load_id, &lr, 1, 1, &s->load_claim);
         if (rc != 1)
             return rc == 2 ? 1 : rc;
         s->load_admitted = 1;
     }
-    rc = ask(x, ai, a->attempt_id, c->res, c->nres, &s->case_claim);
+    rc = ask(x, ai, a->attempt_id, c->res, c->nres, l == NULL, &s->case_claim);
+    if (rc == 0 && l != NULL) {
+        if (etude_ledger_finish(x->site->ledger, s->load_id, ETUDE_CLEANUP_CONFIRMED) != 0)
+            return -1;
+        s->load_claim = s->load_admitted = 0;
+    }
     if (rc != 1)
         return rc == 2 ? 1 : rc;
+    granted(x, s);
     if (l != NULL)
         start_load(x, ai);
     else

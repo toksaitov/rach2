@@ -48,7 +48,8 @@
  * beside their cases, reserved in the ledger while the case runs, and end
  * with their cleanup confirmed; a load that is never ready, one that ends
  * before its case and one that cannot fit beside its case are told apart.
- * A load that waits for room starts once admitted.
+ * A load that waits for room starts once admitted, and a case that waits
+ * for room holds no claim of its load meanwhile.
  * Modelled supervisor results cover lost and stopped ends and unconfirmed
  * cleanup; modelled admission covers a ledger with no recoverable room.
  * Each records a disruption in the history, while a case's timeout does not.
@@ -1407,6 +1408,15 @@ static void test_load(void)
     CHECK(run("load-waits", &spec, SMALL, 1, load_argv, &r) == 0, "load-waits");
     CHECK(blocker_end(pid) < 255, "load-waits");
     CHECK(r.outcome == ETUDE_REPEAT_PASS && r.nattempts == 1, "load-waits");
+    etude_repeat_result_free(&r);
+
+    /* A case that waits for room keeps no claim of its load meanwhile. */
+    fresh_shared();
+    pid = blocker(450);
+    CHECK(pid > 0, "load-released");
+    CHECK(run("load-released", &spec, SMALL, 1, load_argv, &r) == 0, "load-released");
+    CHECK(blocker_end(pid) < 5, "load-released");
+    CHECK(r.outcome == ETUDE_REPEAT_PASS && r.nattempts == 1, "load-released");
     etude_repeat_result_free(&r);
 }
 
