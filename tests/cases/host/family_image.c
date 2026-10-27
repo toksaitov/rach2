@@ -72,7 +72,16 @@ static int restage(struct fixture *f)
     family_row(f, "settled", family_image_make(f, image) && !strstr(f->out, "mkimage.sh"));
     return 1;
 }
-static int snapshot(struct fixture *f, const char *to, const char *from)
+/**
+ * Copy the image, its dependency file and its list of programs from the
+ * directory `from` to `to`, each dated `back` seconds before its source.
+ *
+ * A file system that keeps whole seconds, as the ext2 of the Windows site's
+ * tooling machine does, gives a list that make rewrites in the second the
+ * image was built the image's own time, and make then keeps the image; the
+ * old image is dated back so that any later write is newer than it.
+ */
+static int snapshot(struct fixture *f, const char *to, const char *from, time_t back)
 {
     static const char *suffix[] = {"", ".d", ".programs"};
     unsigned i;
@@ -84,7 +93,7 @@ static int snapshot(struct fixture *f, const char *to, const char *from)
         snprintf(target, sizeof(target), "%s/%s/tree.krffs%s", f->work, to, suffix[i]);
         if (stat(source, &st) || !fx_copy(source, target))
             return 0;
-        times[0].tv_sec = times[1].tv_sec = st.st_mtime;
+        times[0].tv_sec = times[1].tv_sec = st.st_mtime - back;
         times[0].tv_nsec = times[1].tv_nsec = 0;
         if (utimensat(AT_FDCWD, target, times, 0))
             return 0;
@@ -157,7 +166,7 @@ static int interrupted(struct fixture *f)
     snprintf(image, sizeof(image), "%s/tree/tree.krffs", f->work);
     unsigned i, steps;
     int status = 1, left = 1, matched = 1, current = 1;
-    if (!family_image_tree(f) || !family_image_make(f, image) || !snapshot(f, "old", "tree") ||
+    if (!family_image_tree(f) || !family_image_make(f, image) || !snapshot(f, "old", "tree", 2) ||
         !fx_write(family_path(f, "tree/bin/prog2"), "#!/bin/sh\necho IMAGERACE SECOND PROGRAM\n",
                   40, 0755))
         return 0;
@@ -167,12 +176,12 @@ static int interrupted(struct fixture *f)
     fx_env("IMAGERACE_OUT", image);
     fx_env("FAMILY_IMAGE", "1");
     if (!stopped(f, 0) || f->status || !family_contains(image, "IMAGERACE SECOND PROGRAM") ||
-        !snapshot(f, "new", "tree"))
+        !snapshot(f, "new", "tree", 0))
         return 0;
     family_row(f, "counted", counted(f, &steps));
     for (i = 1; i <= steps; i++) {
         char path[8192];
-        if (!clear_temporaries(f) || !snapshot(f, "tree", "old") || !stopped(f, i))
+        if (!clear_temporaries(f) || !snapshot(f, "tree", "old", 0) || !stopped(f, i))
             return 0;
         snprintf(path, sizeof(path), "%s/steps.%u/%u/stopped", f->work, i, i);
         status &= f->status != 0 && fx_exists(path);
