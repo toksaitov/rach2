@@ -1,8 +1,10 @@
 /*
- * winportsfix.c: the fixture of `etude lock ports` on Windows. It runs
- * etude.exe, beside winfixture.exe, with wintarget.exe as its command, and
- * checks the blocks and the host lock it takes by LockFileEx on the same
- * files, as tests/host/etude_ports_hosttest.c checks them on POSIX systems.
+ * winportsfix.c: the fixtures of `etude lock ports` and of the host lock
+ * that `etude admit` takes on Windows. They run etude.exe, beside
+ * winfixture.exe, with wintarget.exe as its command, and check the blocks
+ * and the host lock it takes by LockFileEx on the same files, as
+ * tests/host/etude_ports_hosttest.c and etude_bridge_hosttest.c check them
+ * on POSIX systems.
  */
 #include <stdio.h>
 #include <string.h>
@@ -22,19 +24,19 @@ struct run {
     size_t len;
 };
 
-/* etude.exe, and the directory of its lock files. */
-static char etude[MAX_PATH * 4 + 32], dir[MAX_PATH * 4 + 32];
+/* etude.exe, the directory of its lock files, and that of its ledger. */
+static char etude[MAX_PATH * 4 + 32], dir[MAX_PATH * 4 + 32], ledger[MAX_PATH * 4 + 32];
 
 /* The runs of the fixture, which it ends whatever its result. */
 static struct run runs[3];
 
 /**
- * Start `etude lock ports` with RACH2_HOST_LOCK set to `host` and two
- * blocks, to run `command`. Only the child's ends of the pipes are
+ * Start etude.exe with the arguments `args`, and RACH2_HOST_LOCK set to
+ * `host`, or unset for NULL. Only the child's ends of the pipes are
  * inheritable, and only until it has started, so that no other run holds
  * them open.
  */
-static int spawn(struct run *r, const char *host, const char *command)
+static int start(struct run *r, const char *host, const char *args)
 {
     SECURITY_ATTRIBUTES sa = {sizeof sa, NULL, FALSE};
     STARTUPINFOW si;
@@ -55,7 +57,7 @@ static int spawn(struct run *r, const char *host, const char *command)
     }
     SetHandleInformation(in, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
     SetHandleInformation(out, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
-    snprintf(text, sizeof text, "\"%s\" lock ports \"%s\" 2 %s", etude, dir, command);
+    snprintf(text, sizeof text, "\"%s\" %s", etude, args);
     MultiByteToWideChar(CP_UTF8, 0, text, -1, line, sizeof line / sizeof line[0]);
     memset(&si, 0, sizeof si);
     si.cb = sizeof si;
@@ -73,6 +75,15 @@ static int spawn(struct run *r, const char *host, const char *command)
     CloseHandle(pi.hThread);
     r->process = pi.hProcess;
     return 0;
+}
+
+/** Start `etude lock ports` on two blocks, to run `command`. */
+static int spawn(struct run *r, const char *host, const char *command)
+{
+    char args[4096];
+
+    snprintf(args, sizeof args, "lock ports \"%s\" 2 %s", dir, command);
+    return start(r, host, args);
 }
 
 /** Read the run's output until it has `n` lines, within the bound. */
@@ -111,6 +122,19 @@ static long finish(struct run *r)
         !GetExitCodeProcess(r->process, &code))
         return -1;
     return (long)code;
+}
+
+/** Read what an ended run wrote and left in its pipe. */
+static void drain(struct run *r)
+{
+    DWORD avail, got;
+
+    while (PeekNamedPipe(r->out, NULL, 0, NULL, &avail, NULL) && avail > 0 &&
+           r->len + 1 < sizeof r->text &&
+           ReadFile(r->out, r->text + r->len, sizeof r->text - r->len - 1, &got, NULL)) {
+        r->len += got;
+        r->text[r->len] = '\0';
+    }
 }
 
 /** Whether the lock file `name` takes a lock now: 1, 0 when another process
@@ -171,15 +195,11 @@ static int check(void)
     return 0;
 }
 
-int fx_ports(void)
+/** End the fixture's runs, whatever their state. */
+static void end_runs(void)
 {
     size_t i;
-    int rc;
 
-    snprintf(etude, sizeof etude, "%s\\etude.exe", binary_dir);
-    snprintf(dir, sizeof dir, "%s\\ports", scratch);
-    CreateDirectoryA(dir, NULL);
-    rc = check();
     for (i = 0; i < sizeof runs / sizeof runs[0]; i++) {
         if (runs[i].in != NULL)
             CloseHandle(runs[i].in);
@@ -191,5 +211,83 @@ int fx_ports(void)
             CloseHandle(runs[i].out);
         memset(&runs[i], 0, sizeof runs[i]);
     }
+}
+
+int fx_ports(void)
+{
+    int rc;
+
+    snprintf(etude, sizeof etude, "%s\\etude.exe", binary_dir);
+    snprintf(dir, sizeof dir, "%s\\ports", scratch);
+    CreateDirectoryA(dir, NULL);
+    rc = check();
+    end_runs();
+    return rc;
+}
+
+/**
+ * Start `etude admit` of a shared claim ID that waits at most `wait`
+ * seconds, to run wintarget.exe's `exit 7`.
+ */
+static int admit(struct run *r, const char *id, const char *wait)
+{
+    char args[4096];
+
+    snprintf(args, sizeof args,
+             "admit -d \"%s\" -w %s \"%s\" %s fixture shared 1000,1048576,1048576 "
+             "4000,4294967296,4294967296 60 \"%s\" exit 7",
+             dir, wait, ledger, id, target);
+    return start(r, NULL, args);
+}
+
+/** The checks of the admission fixture, with the host lock held by `old`. */
+static int admit_check(HANDLE old)
+{
+    struct run *a = &runs[0], *b = &runs[1];
+    OVERLAPPED ov;
+    long status;
+
+    memset(&ov, 0, sizeof ov);
+    CHECK(LockFileEx(old, LOCKFILE_EXCLUSIVE_LOCK, 0, MAXDWORD, MAXDWORD, &ov),
+          "the old run's host lock cannot be taken: %lu", (unsigned long)GetLastError());
+    CHECK(admit(a, "fixture:wait", "30") == 0, "etude admit cannot be started: %lu",
+          (unsigned long)GetLastError());
+    CHECK(WaitForSingleObject(a->process, 1500) == WAIT_TIMEOUT,
+          "a launch did not wait for the host lock: %ld", finish(a));
+    CHECK(admit(b, "fixture:late", "1") == 0, "etude admit cannot be started again");
+    status = finish(b);
+    drain(b);
+    CHECK(status == 2 && strstr(b->text, "refused: locks: held by other runs for 1 s") != NULL,
+          "a launch past its wait ended with %ld: %s", status, b->text);
+    memset(&ov, 0, sizeof ov);
+    CHECK(UnlockFileEx(old, 0, MAXDWORD, MAXDWORD, &ov), "the old run's host lock stayed");
+    status = finish(a);
+    drain(a);
+    CHECK(status == 7, "the waiting launch ended with %ld, not its command's 7: %s", status,
+          a->text);
+    CHECK(lockable("rach2-host.gate", 1) == 1 && lockable("rach2-host.lock", 1) == 1,
+          "a lock outlived its launch");
+    return 0;
+}
+
+int fx_admit_locks(void)
+{
+    char path[MAX_PATH * 4 + 64];
+    HANDLE old;
+    int rc;
+
+    snprintf(etude, sizeof etude, "%s\\etude.exe", binary_dir);
+    snprintf(dir, sizeof dir, "%s\\admit-locks", scratch);
+    snprintf(ledger, sizeof ledger, "%s\\admit-ledger", scratch);
+    CreateDirectoryA(dir, NULL);
+    snprintf(path, sizeof path, "%s\\rach2-host.lock", dir);
+    old = CreateFileA(path, GENERIC_READ | GENERIC_WRITE,
+                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_ALWAYS,
+                      FILE_ATTRIBUTE_NORMAL, NULL);
+    if (old == INVALID_HANDLE_VALUE)
+        return failed("the host lock file cannot be made: %lu", (unsigned long)GetLastError());
+    rc = admit_check(old);
+    CloseHandle(old);
+    end_runs();
     return rc;
 }

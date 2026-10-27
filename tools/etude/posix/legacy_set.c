@@ -4269,7 +4269,7 @@ static int collection_locks(struct set *x)
         x->collection_bridge = etude_bridge_collection_start(&spec, x->run_id);
         if (x->collection_bridge)
             break;
-        if (errno != EAGAIN && errno != EINTR && errno != ECANCELED)
+        if (errno != EAGAIN && errno != ETIMEDOUT && errno != EINTR && errno != ECANCELED)
             return -1;
 #ifdef _WIN32
         Sleep(200);

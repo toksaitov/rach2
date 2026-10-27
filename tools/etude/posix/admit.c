@@ -387,7 +387,11 @@ static struct etude_bridge *take(struct etude_ledger *l, const struct request *q
     }
     b = etude_bridge_start(&bs);
     if (b == NULL) {
-        fprintf(stderr, "etude admit: result: refused: locks: %s\n", strerror(errno));
+        if (errno == ETIMEDOUT)
+            fprintf(stderr, "etude admit: result: refused: locks: held by other runs for %u s\n",
+                    (bs.wait_ms + 999) / 1000);
+        else
+            fprintf(stderr, "etude admit: result: refused: locks: %s\n", strerror(errno));
         etude_ledger_finish(l, q->id, ETUDE_CLEANUP_CONFIRMED);
         return NULL;
     }

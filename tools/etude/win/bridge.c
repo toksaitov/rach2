@@ -53,20 +53,41 @@ static int collection_gone(struct etude_ledger *l, const char *prefix)
     return prefix == NULL || (etude_ledger_list(l, collection_claim, &q) == 0 && !q.found);
 }
 
-/** Retry a compatibility lock within this acquisition's bound. */
+/* The bound of a holder's waits, and its owner, whose end ends them. */
+struct bound {
+    HANDLE owner; /* NULL when the owner cannot be opened */
+    uint64_t until;
+    unsigned wait_ms;
+};
+
+/** Wait for another try, within the bound and while the owner runs. */
 static int retry(void *ctx, const struct etude_portlock_wait *wait)
 {
-    const uint64_t *until = ctx;
+    const struct bound *b = ctx;
+    uint64_t now = etude_win_mono_us();
+    DWORD ms;
     (void)wait;
-    if (etude_win_mono_us() >= *until) {
-        errno = EAGAIN;
+    if (b->wait_ms == 0 || now >= b->until) {
+        errno = b->wait_ms == 0 ? EAGAIN : ETIMEDOUT;
         return -1;
     }
-    Sleep(10);
+    ms = b->until - now > 10000 ? 10 : (DWORD)((b->until - now + 999) / 1000);
+    if (b->owner == NULL)
+        Sleep(ms);
+    else if (WaitForSingleObject(b->owner, ms) == WAIT_OBJECT_0) {
+        errno = ECANCELED;
+        return -1;
+    }
     return 0;
 }
 
-static int bridge_result(const char *path, int error, int offset)
+/**
+ * Write the holder's result to `path`: the error, the port offset, and the
+ * Windows error behind an EIO, or 0.
+ *
+ * @return `error`, or EIO when the result cannot be written.
+ */
+static int bridge_result(const char *path, int error, int offset, unsigned long code)
 {
     char tmp[4096];
     FILE *f;
@@ -75,7 +96,7 @@ static int bridge_result(const char *path, int error, int offset)
     if (f == NULL)
         error = EIO;
     else {
-        int ok = fprintf(f, "%d %d\n", error, offset) > 0;
+        int ok = fprintf(f, "%d %d %lu\n", error, offset, code) > 0;
         if (fclose(f) != 0)
             ok = 0;
         if (!ok || rename(tmp, path) != 0)
@@ -84,21 +105,30 @@ static int bridge_result(const char *path, int error, int offset)
     return error;
 }
 
-/** Run the independent lock holder in its controller's executable. */
+/**
+ * Run the independent lock holder in its controller's executable.
+ *
+ * The holder waits for the locks within the caller's bound, and stops when
+ * the caller ends; it then writes no result, since nobody would read or
+ * remove it.
+ */
 int etude_win_bridge_main(int argc, char **argv)
 {
     struct etude_ledger *l;
     struct lookup q;
-    uint64_t until;
+    struct bound b;
     struct etude_portlock locks;
     struct etude_portlock_spec spec;
+    unsigned long code = 0;
     int taken = 0, offset = -1, error = 0;
     if (argc != 10 && argc != 11)
         return 2;
     q.id = argv[3];
     q.owner = strtol(argv[8], NULL, 10);
     q.found = q.error = 0;
-    until = etude_win_mono_us() + strtoull(argv[7], NULL, 10) * 1000u;
+    b.wait_ms = (unsigned)strtoul(argv[7], NULL, 10);
+    b.until = etude_win_mono_us() + (uint64_t)b.wait_ms * 1000u;
+    b.owner = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)q.owner);
     l = etude_ledger_open(argv[2]);
     if (l == NULL || etude_ledger_list(l, visit, &q) != 0)
         error = errno;
@@ -109,17 +139,20 @@ int etude_win_bridge_main(int argc, char **argv)
     spec.host = atoi(argv[5]) ? ETUDE_PORTLOCK_ALONE : ETUDE_PORTLOCK_SHARED;
     spec.blocks = atoi(argv[6]) ? ETUDE_PORTLOCK_BLOCKS : 0;
     spec.pause = retry;
-    spec.ctx = &until;
+    spec.ctx = &b;
     if (!error) {
-        if (etude_portlock_take(&locks, &spec) != 0)
+        if (etude_portlock_take(&locks, &spec) != 0) {
             error = errno;
-        else {
+            if (error == EIO)
+                code = etude_portlock_win_error();
+        } else {
             taken = 1;
             if (locks.block >= 0)
                 offset = locks.block * 1000;
         }
     }
-    error = bridge_result(argv[9], error, offset);
+    if (error != ECANCELED)
+        error = bridge_result(argv[9], error, offset, code);
     if (!error)
         for (;;) {
             q.owner = q.found = q.error = 0;
@@ -132,7 +165,58 @@ int etude_win_bridge_main(int argc, char **argv)
         etude_ledger_close(l);
     if (taken)
         etude_portlock_release(&locks);
+    if (b.owner != NULL)
+        CloseHandle(b.owner);
     return error ? 1 : 0;
+}
+
+/**
+ * Wait for the result that holder `process` writes to `path`, within
+ * `wait_ms` and ten seconds more, and remove the file.
+ *
+ * A holder that fails writes its result and exits, perhaps within one wait
+ * for its end, so the file is read once more after the holder has ended. A
+ * holder that ends with no result is reported with its exit status, and a
+ * Windows error that has no errno with its number, on standard error.
+ *
+ * @return the holder's error, with its port offset in `*offset`; EIO for a
+ *         holder that ended with no result, or ETIMEDOUT for one that gave
+ *         none in time.
+ */
+static int bridge_wait(HANDLE process, const char *path, unsigned wait_ms, int *offset)
+{
+    uint64_t until = etude_win_mono_us() + ((uint64_t)wait_ms + 10000u) * 1000u;
+    unsigned long code = 0;
+    DWORD status;
+    FILE *f;
+    int error, ended = 0;
+
+    for (;;) {
+        f = fopen(path, "r");
+        if (f != NULL) {
+            if (fscanf(f, "%d %d %lu", &error, offset, &code) != 3)
+                error = EIO;
+            fclose(f);
+            break;
+        }
+        if (ended) {
+            if (!GetExitCodeProcess(process, &status))
+                status = GetLastError();
+            fprintf(stderr, "etude bridge: lock holder exited with status %lu and no result\n",
+                    (unsigned long)status);
+            error = EIO;
+            break;
+        }
+        if (etude_win_mono_us() >= until) {
+            error = ETIMEDOUT;
+            break;
+        }
+        ended = WaitForSingleObject(process, 10) == WAIT_OBJECT_0;
+    }
+    unlink(path);
+    if (error == EIO && code != 0)
+        fprintf(stderr, "etude bridge: locks: Windows error %lu\n", code);
+    return error;
 }
 
 /** Start a holder and wait for its atomic acquisition result. */
@@ -145,9 +229,7 @@ struct etude_bridge *etude_bridge_collection_start(const struct etude_bridge_spe
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
     struct etude_bridge *b;
-    uint64_t until;
-    FILE *f;
-    int fd, error = EIO, offset = -1;
+    int fd, error, offset = -1;
     if (s == NULL || s->ledger == NULL || s->dir == NULL || s->id == NULL) {
         errno = EINVAL;
         return NULL;
@@ -165,7 +247,7 @@ struct etude_bridge *etude_bridge_collection_start(const struct etude_bridge_spe
     unlink(path);
     snprintf(alone, sizeof alone, "%d", !!s->alone);
     snprintf(legacy, sizeof legacy, "%d", !!s->legacy);
-    snprintf(wait, sizeof wait, "%u", s->wait_ms > 100 ? 100 : s->wait_ms);
+    snprintf(wait, sizeof wait, "%u", s->wait_ms);
     snprintf(owner, sizeof owner, "%lu", (unsigned long)GetCurrentProcessId());
     args[0] = "--bridge-holder";
     args[1] = s->ledger;
@@ -205,19 +287,7 @@ struct etude_bridge *etude_bridge_collection_start(const struct etude_bridge_spe
     CloseHandle(pi.hThread);
     b->process = pi.hProcess;
     b->pid = pi.dwProcessId;
-    until = etude_win_mono_us() + ((uint64_t)s->wait_ms + 10000u) * 1000u;
-    do {
-        f = fopen(path, "r");
-        if (f != NULL) {
-            if (fscanf(f, "%d %d", &error, &offset) != 2)
-                error = EIO;
-            fclose(f);
-            break;
-        }
-        if (WaitForSingleObject(b->process, 10) == WAIT_OBJECT_0)
-            break;
-    } while (etude_win_mono_us() < until);
-    unlink(path);
+    error = bridge_wait(b->process, path, s->wait_ms, &offset);
     if (error != 0) {
         /* A failed acquisition owns no case processes or reservation locks. */
         TerminateProcess(b->process, 1);

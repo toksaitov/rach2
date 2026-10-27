@@ -128,6 +128,13 @@ int fx_hold_unicode(void);
 int fx_ports(void);
 
 /**
+ * The fixture of the host lock of `etude admit`: while an old run holds the
+ * host lock alone, a shared launch waits for it within its bound and runs
+ * once it is free, and one whose bound passes is refused for the wait.
+ */
+int fx_admit_locks(void);
+
+/**
  * Native artifact publication keeps bytes, file identities and large offsets.
  */
 int fx_collection_files(void);

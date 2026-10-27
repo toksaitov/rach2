@@ -7,8 +7,8 @@
  * controller, output, arguments, paths, the environment, sockets and clocks.
  * Others run the executor of etude/exec.h, the ledger, the supervisor with
  * both, and etude.exe, which must also be beside this program: `etude
- * provision tooling` with winstand.exe, `etude lock tree` and `etude lock
- * ports`.
+ * provision tooling` with winstand.exe, `etude lock tree`, `etude lock
+ * ports` and the host lock of `etude admit`.
  *
  * Usage: winfixture [NAME...] runs the fixtures named, or all of them, and
  * prints `winfixture: result: pass: NAME` or `winfixture: result: fail: NAME:
@@ -1173,6 +1173,7 @@ static const struct {
     {"hold-killed", fx_hold_killed},
     {"hold-unicode", fx_hold_unicode},
     {"ports", fx_ports},
+    {"admit-locks", fx_admit_locks},
 };
 
 /** Find this program's path and directory, and the target's path beside it. */

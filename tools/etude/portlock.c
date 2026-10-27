@@ -21,7 +21,10 @@
 typedef HANDLE lockfile;
 #define NO_FILE INVALID_HANDLE_VALUE
 
-/** Give the errno value nearest the Win32 error `err`. */
+/* The Win32 error of the last take that gave EIO, or 0. */
+static DWORD unmapped;
+
+/** Give the errno value nearest the Win32 error `err`, keeping one of EIO. */
 static int win_errno(DWORD err)
 {
     switch (err) {
@@ -37,8 +40,14 @@ static int win_errno(DWORD err)
     case ERROR_OUTOFMEMORY:
         return ENOMEM;
     default:
+        unmapped = err;
         return EIO;
     }
+}
+
+unsigned long etude_portlock_win_error(void)
+{
+    return unmapped;
 }
 
 /** Open the lock file `path`, creating it when it is not there. */
@@ -250,6 +259,9 @@ int etude_portlock_take(struct etude_portlock *l, const struct etude_portlock_sp
     for (i = 0; i < 3; i++)
         l->file[i] = NO_FILE;
     l->block = -1;
+#ifdef _WIN32
+    unmapped = 0;
+#endif
     if (s->blocks < 0 || s->blocks > ETUDE_PORTLOCK_BLOCKS) {
         errno = EINVAL;
         return -1;

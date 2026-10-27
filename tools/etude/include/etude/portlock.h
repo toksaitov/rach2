@@ -79,4 +79,12 @@ int etude_portlock_take(struct etude_portlock *l, const struct etude_portlock_sp
 /** Give back every lock of `l`. */
 void etude_portlock_release(struct etude_portlock *l);
 
+#ifdef _WIN32
+/**
+ * Give the Windows error that made the last etude_portlock_take fail with
+ * EIO, the errno of an error that has no nearer one, or 0 for none.
+ */
+unsigned long etude_portlock_win_error(void);
+#endif
+
 #endif
