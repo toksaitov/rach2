@@ -778,6 +778,29 @@ static void test_expire_locks_link(void)
     remove_tree(victim);
 }
 
+/** Expiry run as the store's owner removes nothing that a link put in place
+ * of the store's stamps/ points to. */
+static void test_expire_stamps_link(void)
+{
+    char p[1200], buf[1200], victim[1200], old[1300];
+    struct ran r;
+    struct stat st;
+
+    fix_format(p, sizeof p, "%s/stamps", shelf);
+    fix_format(victim, sizeof victim, "%s/outside", fix_dir());
+    fix_format(buf, sizeof buf, "%s/stamps.real", shelf);
+    fix_format(old, sizeof old, "%s/%s.%s", victim,
+               "5555555555555555555555555555555555555555555555555555555555555555", "stamp");
+    mkdir(victim, 0700);
+    CHECK(symlink("/nonexistent/stamp", old) == 0 && rename(p, buf) == 0 && symlink(victim, p) == 0,
+          "expire: the test puts a link in place of stamps");
+    run(copy_a, ex_go, &r);
+    CHECK(lstat(old, &st) == 0, "expire: a link in place of stamps leaves what it points to");
+    unlink(p);
+    rename(buf, p);
+    remove_tree(victim);
+}
+
 /** The removal of entries, what goes: -p removes nothing; an entry that no
  * stamp names goes with its lock file and is built again; an entry that is a
  * link stays, with its target untouched; and the refusals. */
@@ -831,6 +854,7 @@ static void test_expire_removal(void)
     test_expire_tmp_link();
     test_expire_entries_link();
     test_expire_locks_link();
+    test_expire_stamps_link();
 
     run(copy_a, ex_named, &r);
     CHECK(r.status == 2, "expire: -e takes no option of a step");

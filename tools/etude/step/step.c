@@ -1083,7 +1083,7 @@ static int store_dir(const char *dir)
 }
 
 /**
- * Open the store's directory `part`, tmp, entries or locks, without following
+ * Open the store's directory `part`, such as tmp or locks, without following
  * a symbolic link, since any account of the store's group may put a link in
  * its place and `etude build -e` runs as root: its descriptor, or -1.
  */
@@ -1515,7 +1515,7 @@ static int named_key(const char *path, char key[65])
 }
 
 /**
- * Remove the link `link` of stamps/, named `name` for its key, whose stamp
+ * Remove the link `name` of the store's stamps/, open as `dir`, whose stamp
  * was gone or named another key, holding the key's lock without waiting and
  * reading the stamp again under it. A step holds that lock while it writes
  * its stamp and records it, and keeps a link already there, so the link
@@ -1523,55 +1523,58 @@ static int named_key(const char *path, char key[65])
  * stamp now names the key, or cannot be read, and the key stays; 0 when the
  * link stays for a later run.
  */
-static int drop_link(const struct step *s, const char *name, const char *link)
+static int drop_link(const struct step *s, int dir, const char *name)
 {
     char key[65], now[65], to[PATH_LEN];
     ssize_t n;
-    int fd, made, got, rc = 0;
+    int fd, made, got, locks, rc = 0;
 
     memcpy(key, name, 64);
     key[64] = '\0';
     if ((fd = lock_key(s, key, 0, &made)) < 0)
         return 0;
-    if ((n = readlink(link, to, sizeof(to) - 1)) >= 0) {
+    if ((n = readlinkat(dir, name, to, sizeof(to) - 1)) >= 0) {
         to[n] = '\0';
         got = named_key(to, now);
         if ((got == 1 && strcmp(now, key) == 0) || (got < 0 && errno != ENOENT && errno != ENOTDIR))
             rc = 2;
-        else if (unlink(link) == 0)
+        else if (unlinkat(dir, name, 0) == 0)
             rc = 1;
     }
-    if (made && path_fmt(to, "%s/locks/%s", s->shelf, key) == 0)
-        unlink(to);
+    if (made && (locks = open_part(s, "locks")) >= 0) {
+        unlinkat(locks, key, 0);
+        close(locks);
+    }
     close(fd);
     return rc;
 }
 
 /**
- * Add to `live` the key of each link of the store's stamps/ whose stamp still
- * names it, and remove each link whose stamp is gone or names another key,
- * as drop_link does, counting them in `dropped`. A stamp that cannot be read
- * for another reason, such as a home directory this account may not search,
- * keeps its key.
+ * Add to `live` the key of each link of the store's stamps/, refusing a link
+ * in its place, whose stamp still names it, and remove each link whose stamp
+ * is gone or names another key, as drop_link does, counting them in
+ * `dropped`. A stamp that cannot be read for another reason, such as a home
+ * directory this account may not search, keeps its key.
  */
 static int read_stamps(const struct step *s, struct lines *live, int *dropped)
 {
-    char dir[PATH_LEN], link[PATH_LEN], to[PATH_LEN], key[65];
+    char to[PATH_LEN], key[65];
     DIR *d;
     struct dirent *e;
-    int rc = 0;
+    int rc = 0, dir = open_part(s, "stamps");
 
-    if (path_fmt(dir, "%s/stamps", s->shelf) != 0)
-        return -1;
-    if ((d = opendir(dir)) == NULL)
+    if (dir < 0)
         return errno == ENOENT ? 0 : -1;
+    if ((d = fdopendir(dir)) == NULL) {
+        close(dir);
+        return -1;
+    }
     while (rc == 0 && (e = readdir(d)) != NULL) {
         ssize_t n;
         int got;
 
         if (!keyed_name(e->d_name) || e->d_name[64] != '.' ||
-            path_fmt(link, "%s/%s", dir, e->d_name) != 0 ||
-            (n = readlink(link, to, sizeof(to) - 1)) < 0)
+            (n = readlinkat(dir, e->d_name, to, sizeof(to) - 1)) < 0)
             continue;
         to[n] = '\0';
         got = named_key(to, key);
@@ -1580,7 +1583,7 @@ static int read_stamps(const struct step *s, struct lines *live, int *dropped)
             rc = keep_key(live, e->d_name);
         } else if (s->print) {
             (*dropped)++;
-        } else if ((got = drop_link(s, e->d_name, link)) == 1) {
+        } else if ((got = drop_link(s, dir, e->d_name)) == 1) {
             (*dropped)++;
         } else if (got == 2) {
             rc = keep_key(live, e->d_name);
