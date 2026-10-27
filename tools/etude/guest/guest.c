@@ -58,8 +58,8 @@
 #define QUEUE_FRAMES 32
 #define QUEUE_BYTES  (1u << 20)
 
-/* How long a finished attempt's pipes may stay open, and its processes stay,
- * when its grace period is shorter. */
+/* How long a finished attempt's pipes may give nothing, and its processes
+ * stay, when its grace period is shorter. */
 #define DRAIN_US 2000000
 
 /* How long the processes of an orphaned attempt may take to end once they
@@ -113,8 +113,9 @@ struct attempt {
     int exited;
     int status;
     struct rusage ru;
-    int64_t drain_until;  /* the end of the wait for the pipes and the processes */
-    int64_t drain_paused; /* only transport backpressure after owned processes end */
+    int64_t drain_until;           /* the end of the wait for the pipes and the processes */
+    int64_t drain_paused;          /* only transport backpressure after owned processes end */
+    unsigned long long drain_read; /* both pipes' bytes read as the allowance began */
     struct fixtures fx;
     struct attempt *next;
 };
@@ -1857,6 +1858,13 @@ static void finish(struct attempt *a)
     drop_attempt(a);
 }
 
+/** Give how long an exited attempt's pipes may give nothing: its grace
+ * period, and at least DRAIN_US. */
+static int64_t drain_allowance(const struct attempt *a)
+{
+    return a->grace_us > DRAIN_US ? a->grace_us : DRAIN_US;
+}
+
 /** Take the end of every child that has ended: an attempt's, or an orphan's
  * when this process is the init they were given to. */
 static void reap(void)
@@ -1883,23 +1891,37 @@ static void reap(void)
                 /* What the program left in its group, and the children it
                  * reported, end with it. */
                 signal_attempt(a, SIGKILL);
-                a->drain_until = now_us() + (a->grace_us > DRAIN_US ? a->grace_us : DRAIN_US);
+                a->drain_until = now_us() + drain_allowance(a);
+                a->drain_read = a->total[1] + a->total[2];
             }
 }
 
-/* A full wire queue prevents the reader from reaching pipe EOF. Charge
- * the existing drain allowance only while that reading can proceed. */
+/**
+ * Say whether an exited attempt `a` is done draining its pipes at time `t`:
+ * both pipes are at EOF and its processes gone, or its drain allowance has
+ * run out. Once its processes are gone no writer is left, so what its pipes
+ * hold is finite. Then the allowance runs only while reading could proceed
+ * and gives nothing: a full wire queue pauses it, and each read that takes
+ * bytes begins it again. The serial console transmits a frame before its
+ * write returns, so the time to send what a read took is not charged.
+ */
 static int drain_ready(struct attempt *a, int64_t t)
 {
     int closed = a->fd[1] < 0 && a->fd[2] < 0;
     int gone = attempt_gone(a);
-    if (!closed && gone && !a->stopped && !input_closed && !output_broken && !queue_room()) {
+    int reading = gone && !a->stopped && !input_closed && !output_broken;
+    unsigned long long taken = a->total[1] + a->total[2];
+    if (reading && taken != a->drain_read) {
+        a->drain_read = taken;
+        a->drain_until = t + drain_allowance(a);
+    }
+    if (!closed && reading && !queue_room()) {
         if (!a->drain_paused)
             a->drain_paused = t;
         return 0;
     }
     if (a->drain_paused) {
-        if (gone && !a->stopped && !input_closed && !output_broken)
+        if (reading)
             a->drain_until += t - a->drain_paused;
         a->drain_paused = 0;
     }

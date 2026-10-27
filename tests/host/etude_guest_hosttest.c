@@ -11,6 +11,9 @@
  * host-cflags: -I tools/etude/include -I tools/etude -I tools/etude/guest
  * host-cflags: -I utils
  */
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE /* F_SETPIPE_SZ */
+#endif
 #include "wire.h"
 #include "sha256.h"
 #include <etude/frame.h>

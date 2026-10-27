@@ -117,9 +117,59 @@ static void check_backpressure_row(int stop)
     serial_acks = 0;
 }
 
+#if defined(F_SETPIPE_SZ)
+/** Read the console through a pipe of one page, a frame every 40 ms, as
+ * slowly as a loaded host's polled UART sends it. Each write of a frame then
+ * waits for the reader, as Rach2's serial console does, and sending what
+ * the child left after its exit takes longer than the drain allowance. */
+static void check_slow_console(void)
+{
+    const char *token = "000000000000f0b4";
+    struct pressure_result result = {0};
+    struct got frame;
+    char invocation[65], command[24], witness;
+    int fd = watch("marks.pressure"), status = 0, prefix = 0;
+    CHECK(fd >= 0, "the child-exit witness FIFO is open before launch");
+    start_guest(NULL, "--resend-ms", "60000", (char *)NULL);
+    CHECK(fcntl(from_guest, F_SETPIPE_SZ, 4096) == 4096, "the console pipe holds one page");
+    serial_acks = 1;
+    seen = 0;
+    hello(ETUDE_FRAME_SERIAL_MAX);
+    put_case("slowconsole", "guest-backpressure", token, "ordinary", 30000, invocation);
+    send_cmd(ETUDE_CMD_RUN, new_cmd(command), token, invocation, (char *)NULL);
+    while (!prefix && next_frame(&frame, -1) == 0) {
+        status = pressure_frame(&result, &frame, command, token);
+        if (status)
+            break;
+        prefix = strlen(result.out) > 0;
+    }
+    CHECK(prefix && !status, "the responder sent the first output");
+    CHECK(fd >= 0 && read(fd, &witness, 1) == 1 && witness == 'r',
+          "the actual child opened and wrote its native exit witness");
+    CHECK(all_gone(fd), "the child closed its witness at process exit");
+    while (!status && next_frame(&frame, -1) == 0) {
+        status = pressure_frame(&result, &frame, command, token);
+        /* interval: the pace of a slow serial line, one frame per 40 ms. */
+        poll(NULL, 0, 40);
+    }
+    CHECK(status == 1, "the complete streams precede confirmed cleanup on a slow console");
+    CHECK(strlen(result.out) == 8206 && strspn(result.out, "0") == 8192 &&
+              !strcmp(result.out + 8192, "\nFINAL OUTPUT\n") &&
+              !strcmp(result.err, "FINAL ERROR\n"),
+          "every final byte arrives over a console slower than the drain allowance");
+    send_cmd(ETUDE_CMD_BYE, new_cmd(command), (char *)NULL);
+    CHECK(expect(&frame, ETUDE_CMD_BYE) == 0, "the serial session accepts bye");
+    end_guest();
+    serial_acks = 0;
+}
+#endif
+
 static void check_backpressure(void)
 {
     check_backpressure_row(0);
     check_backpressure_row(1);
     check_backpressure_row(2);
+#if defined(F_SETPIPE_SZ)
+    check_slow_console();
+#endif
 }
