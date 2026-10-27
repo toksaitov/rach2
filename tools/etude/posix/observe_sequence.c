@@ -17,6 +17,12 @@
 extern char **environ;
 static volatile sig_atomic_t stopped;
 
+/* From a phase's cancellation to its keeper's kill. Preparation and
+ * collection first cancel their own steps and cases, each with a grace of its
+ * own, and then release the tree's run lock, which a kill leaves in place. */
+#define OBSERVER_GRACE_US UINT64_C(2000000)
+#define PHASE_GRACE_US    UINT64_C(600000000)
+
 int etude_sequence_caller_identity(struct etude_pid *identity)
 {
     return etude_sequence_parent_identity(getppid(), identity);
@@ -162,7 +168,7 @@ static int begin(struct sequence *s, unsigned index, char **argv, int observer)
     spec.envp = environ;
     spec.stdin_path = observer ? "-" : NULL;
     spec.output_max = 64u << 20;
-    spec.grace_us = 2000000;
+    spec.grace_us = observer ? OBSERVER_GRACE_US : PHASE_GRACE_US;
     spec.reg = registered;
     spec.reg_ctx = s;
     if (fprintf(s->record, "phase-begin %s %s %llu\n", s->run, p->name,

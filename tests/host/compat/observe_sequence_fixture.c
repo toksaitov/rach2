@@ -4,10 +4,42 @@
 #include "win/winexec.h"
 #else
 #include <poll.h>
+#include <signal.h>
 #include "etude/exec.h"
 extern char **environ;
 #endif
 static const char *sequence_program;
+#ifndef _WIN32
+static volatile sig_atomic_t sequence_terminated;
+
+static void sequence_terminate(int sig)
+{
+    (void)sig;
+    sequence_terminated = 1;
+}
+
+/* A collection that outlasts the observer's grace: it holds the lock file
+ * `lock` and, at the owner's cancellation, takes three seconds to end and
+ * remove it, as one that cancels its cases and releases the tree does. */
+static int sequence_fixture_slow_stop(const char *lock)
+{
+    FILE *f;
+    int i;
+
+    signal(SIGTERM, sequence_terminate);
+    if ((f = fopen(lock, "wb")) == NULL || fclose(f) != 0)
+        return 2;
+    puts("collection: started");
+    fflush(stdout);
+    for (i = 0; i < 6000 && !sequence_terminated; i++)
+        poll(NULL, 0, 10); /* interval: wait for the cancellation */
+    if (!sequence_terminated)
+        return 2;
+    for (i = 0; i < 30; i++)
+        poll(NULL, 0, 100); /* interval: the collection's own cleanup */
+    return remove(lock) == 0 ? 3 : 2;
+}
+#endif
 
 static int sequence_input_gone(void)
 {
@@ -116,6 +148,13 @@ static int sequence_fixture_role(int argc, char **argv)
     if (!strcmp(argv[1], "admit"))
         return !strcmp(getenv("SEQUENCE_FIXTURE_MODE"), "preparation-failure") ? 7 : 0;
     if (!strcmp(argv[1], "run") && argc == 4) {
+#ifndef _WIN32
+        if (!strcmp(getenv("SEQUENCE_FIXTURE_MODE"), "stopped-collection")) {
+            char lock[1200];
+            snprintf(lock, sizeof(lock), "%s.lock", argv[2]);
+            return sequence_fixture_slow_stop(lock);
+        }
+#endif
         FILE *f = fopen(argv[2], "wb");
         if (!f)
             return 2;
@@ -145,9 +184,11 @@ static char *sequence_fixture_read(const char *path)
     return bytes;
 }
 
-static void sequence_fixture_row(const char *mode, unsigned expected)
+/* Run the owner in `mode`, cancelling it once its collection has started
+ * when `cancel` is set, and check that it ends with `expected`. */
+static void sequence_fixture_row(const char *mode, unsigned expected, int cancel)
 {
-    char self[32768], receipt[1200], trace_path[1200], stop[1200];
+    char self[32768], receipt[1200], trace_path[1200], stop[1200], lock[1200];
 #ifdef _WIN32
     CHECK(GetModuleFileNameA(NULL, self, sizeof(self)) > 0);
 #else
@@ -156,6 +197,7 @@ static void sequence_fixture_row(const char *mode, unsigned expected)
     snprintf(receipt, sizeof(receipt), "%s/%s.receipt", fix_dir(), mode);
     snprintf(trace_path, sizeof(trace_path), "%s/%s.trace", fix_dir(), mode);
     snprintf(stop, sizeof(stop), "%s/%s.stop", fix_dir(), mode);
+    snprintf(lock, sizeof(lock), "%s/%s.stop.lock", fix_dir(), mode);
     CHECK(sequence_environment("SEQUENCE_FIXTURE_MODE", mode) == 0);
     /* This owner watches our identity; its executor gives it /dev/null,
      * not the enclosing sequence owner's cancellation pipe. */
@@ -192,16 +234,18 @@ static void sequence_fixture_row(const char *mode, unsigned expected)
     spec.argv = (char *const *)args;
     spec.envp = environ;
     spec.output_max = 65536;
-    spec.grace_us = 2000000;
+    spec.grace_us = 30000000;
     CHECK(ex != NULL);
     int error = ex ? etude_exec_start(ex, &spec, &child) : -1;
     CHECK(error == 0);
     if (!error) {
         while (etude_exec_wait(ex, 100) != child)
-            ;
+            if (cancel && strstr(etude_proc_result(child)->out.data, "collection: started\n"))
+                etude_exec_cancel(child);
         const struct etude_exec_result *r = etude_proc_result(child);
-        CHECK(r->end == ETUDE_END_EXITED && r->value == (int)expected);
+        CHECK(r->exit_end == ETUDE_END_EXITED && r->exit_value == (int)expected);
         CHECK(r->cleanup == ETUDE_CLEANUP_CONFIRMED);
+        CHECK(access(lock, F_OK) != 0);
     }
     if (ex)
         etude_exec_free(ex);
@@ -210,19 +254,24 @@ static void sequence_fixture_row(const char *mode, unsigned expected)
     CHECK(text && strstr(text, "\nactive 0\ncleanup confirmed\n"));
     if (text) {
         CHECK(strstr(text, "\nrun fixture\n") != NULL);
-        CHECK((strstr(text, "phase-begin fixture collection ") != NULL) == (expected == 0));
+        CHECK((strstr(text, "phase-begin fixture collection ") != NULL) ==
+              (expected == 0 || cancel));
         free(text);
     }
     text = sequence_fixture_read(trace_path);
-    CHECK(text && (!strcmp(mode, "observer-failure") || strstr(text, "start\nend\n")));
+    CHECK(text &&
+          (!strcmp(mode, "observer-failure") || strstr(text, cancel ? "start\n" : "start\nend\n")));
     free(text);
 }
 
 static void sequence_fixture(void)
 {
-    sequence_fixture_row("pass", 0);
-    sequence_fixture_row("preparation-failure", 7);
-    sequence_fixture_row("observer-failure", 125);
+    sequence_fixture_row("pass", 0, 0);
+    sequence_fixture_row("preparation-failure", 7, 0);
+    sequence_fixture_row("observer-failure", 125, 0);
+#ifndef _WIN32
+    sequence_fixture_row("stopped-collection", 130, 1);
+#endif
     CHECK(sequence_environment("SEQUENCE_FIXTURE_MODE", NULL) == 0);
     CHECK(sequence_environment("ETUDE_SEQUENCE_PARENT", NULL) == 0);
     CHECK(sequence_environment("ETUDE_SEQUENCE_LOG", NULL) == 0);
