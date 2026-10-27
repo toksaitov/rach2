@@ -1282,7 +1282,7 @@ static pid_t blocker(uint64_t cpu)
         if (write(fds[1], "r", 1) != 1)
             _exit(255);
         for (i = 0; i < 10; i++) {
-            usleep(100 * 1000);
+            usleep(100 * 1000); /* interval: the ledger is read again every 100 ms */
             held = 0;
             if (etude_ledger_list(l, held_visit, &held) != 0)
                 _exit(255);
