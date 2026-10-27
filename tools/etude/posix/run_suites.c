@@ -18,6 +18,9 @@
 
 #ifdef _WIN32
 #include "../win/files.h"
+#include "../win/winexec.h"
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
 #endif
 
 #include "etude/legacy.h"
@@ -158,6 +161,32 @@ static int prepare_form(int argc, char **argv, int *matched)
     return 0;
 }
 
+/**
+ * Give the path of the running etude in `out`, of PATH_MAX bytes: `argv0`
+ * resolved when it has a directory, and otherwise the platform's record of
+ * the executable, since a shell that found etude through PATH passes its name
+ * alone; NULL when neither can be read.
+ */
+static char *self_path(const char *argv0, char *out)
+{
+    if (strchr(argv0, '/') || strchr(argv0, '\\'))
+        return realpath(argv0, out);
+#ifdef _WIN32
+    wchar_t wide[32768];
+    DWORD n = GetModuleFileNameW(NULL, wide, sizeof wide / sizeof *wide);
+    char *path = n && n < sizeof wide / sizeof *wide ? etude_win_utf8(wide) : NULL;
+    char *resolved = path ? realpath(path, out) : NULL;
+    free(path);
+    return resolved;
+#elif defined(__APPLE__)
+    char path[PATH_MAX];
+    uint32_t size = sizeof path;
+    return _NSGetExecutablePath(path, &size) ? NULL : realpath(path, out);
+#else
+    return realpath("/proc/self/exe", out);
+#endif
+}
+
 /** Run `etude prepare` with the arguments after it. */
 int etude_prepare_main(int argc, char **argv)
 {
@@ -199,7 +228,7 @@ int etude_prepare_main(int argc, char **argv)
         return usage(prepare_usage);
     setvbuf(stdout, NULL, _IOLBF, 0);
     catch_stops();
-    o.program = realpath(argv[0], program);
+    o.program = self_path(argv[0], program);
     return etude_legacy_prepare(&o);
 }
 
