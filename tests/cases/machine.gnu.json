@@ -433,7 +433,7 @@
     },
     {
       "case_id": "machine.gnu.coreutils",
-      "behavior": "version 9.12; seq, sort -rn and head give 10; sha256sum of abc; `date -d @0` is 1970-01-01; Europe/Berlin at 0 is 01:00 CET and US/Eastern 19 EST; `who -b` equals the btime of /proc/stat formatted by date.",
+      "behavior": "version 9.12; seq, sort -rn and head give 10; sha256sum of abc; `date -d @0` is 1970-01-01; Europe/Berlin at 0 is 01:00 CET and US/Eastern 19 EST; `who -b` gives init's boot record, the first of utmp, whose second is the clock the kernel read at boot, as its log gives it, less the uptime it read it at.",
       "units": ["gnu_rows.sh row_coreutils"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],

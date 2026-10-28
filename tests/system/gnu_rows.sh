@@ -275,16 +275,29 @@ row_git() {
 }
 
 # coreutils: its version, a pipeline, a digest, dates in the zones of the
-# database, and the boot time `who -b` takes from init's record in utmp.
+# database, and the boot time `who -b` takes from init's record in utmp. The
+# record, the first of utmp, is the second the kernel started: the clock the
+# kernel read at boot, as its log gives it, less the uptime it read it at.
+# The btime of /proc/stat is not the reference, since each step ntpd makes
+# moves it.
 row_coreutils() {
+    local record rtc
     has "the version" "$(cat --version | head -n 1)" "(GNU coreutils) 9.12"
     same "seq, sort and head" "$(seq 1 10 | sort -rn | head -n 1)" "10"
     same "sha256sum" "$(printf abc | sha256sum)" "$ABC  -"
     same "date" "$(date -u -d @0 +%Y-%m-%d)" "1970-01-01"
     same "a zone of the database" "$(TZ=Europe/Berlin date -d @0 +%H:%M:%Z)" "01:00:CET"
     same "a zone's old name" "$(TZ=US/Eastern date -d @0 +%H:%Z)" "19:EST"
+    same "the boot record" "$(od -An -t d2 -N 2 /var/run/utmp | tr -d ' ')" "2"
+    record=$(od -An -t u4 -j 340 -N 4 /var/run/utmp | tr -d ' ')
     same "who -b" "$(LC_ALL=C who -b | sed 's/^ *system boot *//')" \
-        "$(LC_ALL=C date -d @"$(awk '/^btime/ {print $2}' /proc/stat)" '+%b %e %H:%M')"
+        "$(LC_ALL=C date -d @"$record" '+%b %e %H:%M')"
+    rtc=$(dmesg | sed -n 's/^[^[]*\[ *\([0-9]*\)\.[0-9]*\] rtc: \(.*\) UTC$/\2|\1/p' | head -n 1)
+    if [ -z "$rtc" ]; then
+        fail "the kernel's log has no reading of the clock"
+        return
+    fi
+    same "the boot record's second" "$record" "$(($(date -u -d "${rtc%|*}" +%s) - ${rtc#*|}))"
 }
 
 # bash with the answers its configure could not find in a cross build:
