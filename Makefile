@@ -1655,10 +1655,19 @@ include tests/native/native.mk
 # stand: the stamp of each step whose outputs came from the store, or are
 # links into it, is removed as make reads this file, so that the step is
 # built again in this copy before anything uses it. With the store, so is the
-# stamp of such a step whose entry `etude build -e` has removed.
+# stamp of such a step whose entry `etude build -e` has removed. Either way,
+# a stamp whose product is gone is removed too: an i686 stamp is under
+# vendor/ and its product under build/, so removing build/ alone would leave
+# the step taken as done.
 STEP_STAMPS = $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) $(PDPMAKE_STAMP) \
-              $(E2FSPROGS_STAMP) $(GNU_STEP_STAMPS)
+              $(E2FSPROGS_STAMP) $(MTOOLS_STAMP) $(GNU_STEP_STAMPS)
+STEP_PRODUCTS = $(LIBC_STAMP):$(LIBC_A) $(BUSYBOX_STAMP):$(BUSYBOX_BIN) \
+                $(DROPBEAR_STAMP):$(DROPBEAR_BIN) $(TCC_STAMP):$(TCC_BIN) \
+                $(PDPMAKE_STAMP):$(PDPMAKE_BIN) $(E2FSPROGS_STAMP):$(E2FSCK_BIN) \
+                $(MTOOLS_STAMP):$(MTOOLS_BIN)
 ifeq ($(DRY_RUN),)
+_ := $(shell $(foreach p,$(STEP_PRODUCTS),[ -s "$(lastword $(subst :, ,$(p)))" ] || \
+        rm -f "$(firstword $(subst :, ,$(p)))";) :)
 ifeq ($(RACH2_STORE),)
 _ := $(shell for f in $(STEP_STAMPS); do \
         grep -qs '^etude-step 1 [0-9a-f]* store$$' "$$f" && rm -f "$$f"; done; :)
