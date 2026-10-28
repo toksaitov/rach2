@@ -1,5 +1,6 @@
 /* Source-check evidence is produced and checked by native Etude code. */
 #include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -335,7 +336,7 @@ static void show_failures(const struct hp_context *c, const char *log)
 static int run_style(struct hp_context *c, const char *prefix, const char *id, const char *arch,
                      const char *source, const struct json *actual_judges)
 {
-    char log[4096], after[65];
+    char log[4096], kept[4096], after[65];
     struct json *record = hp_value(JSON_OBJECT);
     struct jbuf path = {0};
     jbuf_puts(&path, prefix);
@@ -346,9 +347,10 @@ static int run_style(struct hp_context *c, const char *prefix, const char *id, c
     jbuf_puts(&path, ":");
 #endif
     jbuf_puts(&path, getenv("PATH") ? getenv("PATH") : "");
-    int bad = setenv("PATH", path.data, 1) || setenv("PYTHONDONTWRITEBYTECODE", "1", 1);
+    int bad = setenv("PATH", path.data, 1) || setenv("PYTHONDONTWRITEBYTECODE", "1", 1) ||
+              hp_path(log, sizeof(log), "%s/%s.log", c->work, c->only) ||
+              hp_path(kept, sizeof(kept), "%s.log", c->output);
     jbuf_free(&path);
-    snprintf(log, sizeof(log), "%s.log", c->output);
     char *argv[] = {"sh", "tests/cases/host/style.sh", (char *)c->only, NULL};
     if (!bad && (hp_run(c, argv, log, log) || collect(c, id, arch, log, record))) {
         show_failures(c, log);
@@ -359,10 +361,23 @@ static int run_style(struct hp_context *c, const char *prefix, const char *id, c
         bad = 1;
     }
     struct json *final_judges = judges(c, prefix);
-    bad = bad || !final_judges || !json_equal(actual_judges, final_judges);
+    if (!bad && !final_judges) {
+        fprintf(stderr, "host preparation: style %s: the judges cannot be read after the run\n",
+                c->only);
+        bad = 1;
+    } else if (!bad && !json_equal(actual_judges, final_judges)) {
+        fprintf(stderr, "host preparation: style %s: the judges changed while it ran\n", c->only);
+        bad = 1;
+    }
     json_free(final_judges);
-    if (!bad) {
-        bad = write_style(c, record, id, arch, source, actual_judges);
+    if (!bad && write_style(c, record, id, arch, source, actual_judges)) {
+        fprintf(stderr, "host preparation: style %s: cannot write %s\n", c->only, c->output);
+        bad = 1;
+    }
+    if (!bad && rename(log, kept)) {
+        fprintf(stderr, "host preparation: style %s: cannot move %s to %s: %s\n", c->only, log,
+                kept, strerror(errno));
+        bad = 1;
     }
     json_free(record);
     return bad;
@@ -390,12 +405,32 @@ static int style_name(const char *name)
            strspn(name, "abcdefghijklmnopqrstuvwxyz-") == strlen(name);
 }
 
+/**
+ * Whether the style check `id` can start: its case `definition` is in the
+ * manifest, its judges `actual` were read, and its sources hash into
+ * `source`. Return 0 when it can, and -1 with the reason on stderr when not.
+ */
+static int style_ready(struct hp_context *c, const char *id, const struct json *definition,
+                       const struct json *actual, char source[65])
+{
+    if (!definition)
+        fprintf(stderr, "host preparation: style %s: no case %s in tests/cases/host.style.json\n",
+                c->only, id);
+    else if (!actual)
+        fprintf(stderr, "host preparation: style %s: the judges cannot be read\n", c->only);
+    else if (fingerprint(c, source))
+        fprintf(stderr, "host preparation: style %s: the sources cannot be hashed\n", c->only);
+    else
+        return 0;
+    return -1;
+}
+
 int hp_style(struct hp_context *c)
 {
     if (!style_name(c->only))
         return -1;
     char *prefix = source_tool_prefix(c);
-    char id[128], source[65];
+    char id[128], source[65] = "";
     snprintf(id, sizeof(id), "host.style.%s", c->only);
     struct json *manifest = hp_document("tests/cases/host.style.json");
     const struct json *cases = json_member(manifest, "cases"), *definition = NULL;
@@ -403,7 +438,7 @@ int hp_style(struct hp_context *c)
         if (same(json_text(cases->item[i], "case_id"), id))
             definition = cases->item[i];
     struct json *actual_judges = prefix ? judges(c, prefix) : NULL;
-    int bad = !definition || !actual_judges || fingerprint(c, source);
+    int bad = style_ready(c, id, definition, actual_judges, source);
     const struct json *architecture = json_member(definition, "architectures");
     const char *arch = architecture && architecture->type == JSON_STRING ? "none" : c->arch;
     struct json *old = hp_document(c->output);
