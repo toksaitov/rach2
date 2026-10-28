@@ -126,6 +126,21 @@ static int append(struct inventory *v, const char *path)
     return 0;
 }
 
+/** Print why the file or directory `path` could not be read, from errno. */
+static int unreadable(const char *path)
+{
+    fprintf(stderr, "style: fingerprint: %s: %s\n", path, strerror(errno));
+    return -1;
+}
+
+/**
+ * Add the checked files under the directory `relative` of the tree to `v`.
+ *
+ * Another program may remove a file while the walk runs, as a build step
+ * removes its temporary files. An entry that is gone when the walk reaches
+ * it is not part of the tree and is skipped. Return 0, or -1 with the reason
+ * on stderr.
+ */
 static int scan(struct inventory *v, const char *relative)
 {
     char directory[4096], child[4096], path[4096];
@@ -133,18 +148,25 @@ static int scan(struct inventory *v, const char *relative)
     struct stat st;
     DIR *dir;
     int bad = 0;
-    if (join(directory, v->tree, relative) || !(dir = opendir(directory)))
+    if (join(directory, v->tree, relative))
         return -1;
+    if (!(dir = opendir(directory)))
+        return *relative && errno == ENOENT ? 0 : unreadable(directory);
     errno = 0;
     while ((entry = readdir(dir))) {
         const char *name = entry->d_name;
         if (!strcmp(name, ".") || !strcmp(name, ".."))
             continue;
-        if (join(child, relative, name) || join(path, v->tree, child) || lstat(path, &st)) {
+        if (join(child, relative, name) || join(path, v->tree, child)) {
             bad = 1;
             break;
         }
-        if (S_ISDIR(st.st_mode)) {
+        if (lstat(path, &st)) {
+            if (errno != ENOENT) {
+                bad = unreadable(path);
+                break;
+            }
+        } else if (S_ISDIR(st.st_mode)) {
             if (!skip_directory(relative, name) && scan(v, child)) {
                 bad = 1;
                 break;
@@ -157,8 +179,8 @@ static int scan(struct inventory *v, const char *relative)
         }
         errno = 0;
     }
-    if (errno)
-        bad = 1;
+    if (!bad && errno)
+        bad = unreadable(directory);
     closedir(dir);
     return bad ? -1 : 0;
 }
@@ -168,6 +190,8 @@ static int order(const void *a, const void *b)
     return strcmp(*(const char *const *)a, *(const char *const *)b);
 }
 
+/** Hash the file at `path` into `digest`. Return 0, 1 when the file is
+ * gone, or -1 with the reason on stderr. */
 static int file_hash(const char *path, unsigned char digest[32])
 {
     struct sha256 h;
@@ -175,7 +199,7 @@ static int file_hash(const char *path, unsigned char digest[32])
     size_t n;
     FILE *f = fopen(path, "rb");
     if (!f)
-        return -1;
+        return errno == ENOENT ? 1 : unreadable(path);
     sha256_init(&h);
     while ((n = fread(block, 1, sizeof(block), f)))
         sha256_update(&h, block, n);
@@ -183,7 +207,7 @@ static int file_hash(const char *path, unsigned char digest[32])
     if (fclose(f))
         bad = 1;
     sha256_final(&h, digest);
-    return bad ? -1 : 0;
+    return bad ? unreadable(path) : 0;
 }
 
 int source_snapshot(const char *tree, char hex[65])
@@ -197,9 +221,10 @@ int source_snapshot(const char *tree, char hex[65])
     if (v.count > 1)
         qsort(v.paths, v.count, sizeof(*v.paths), order);
     for (size_t i = 0; i < v.count; i++) {
-        if (!bad && (join(path, tree, v.paths[i]) || file_hash(path, file)))
+        int gone = 0;
+        if (!bad && (join(path, tree, v.paths[i]) || (gone = file_hash(path, file)) < 0))
             bad = 1;
-        if (!bad) {
+        if (!bad && !gone) {
             sha256_update(&h, (const unsigned char *)v.paths[i], strlen(v.paths[i]) + 1);
             sha256_update(&h, file, sizeof(file));
         }
