@@ -3099,51 +3099,134 @@ static uint64_t command_memory(const struct command *c)
     return 0;
 }
 
+/** Say whether member `i` has a place in the pool: it is active, or ready. */
+static int holds(const struct set *x, size_t i)
+{
+    return active(&x->mem[i].c) || x->jobs[i].ready;
+}
+
 /**
- * Mark the members that may be admitted now. The order is kept: a member
- * that runs alone, as one larger than the pool's memory does, waits until
- * nothing of the run is active, and a member whose memory does not fit in
- * the pool beside the active members waits until it does; either keeps the
- * members after it waiting, so that smaller members do not fill the pool
- * ahead of it. The others are ready while fewer than the width are active
- * or ready.
+ * The time, on the clock of `posix_now_us`, at which member `i` is expected
+ * to end: its start, or `now` when it has not started, plus its median elapsed
+ * time from the history. A member that has run longer than that, or that has
+ * no expected time, is taken to end at `now`.
  */
-static void mark_ready(struct set *x)
+static uint64_t expected_end(const struct set *x, size_t i, uint64_t now)
+{
+    const struct command *c = &x->mem[i].c;
+    uint64_t from = c->state == RUNNING && c->started_us ? c->started_us : now;
+    uint64_t span = x->mem[i].cost.elapsed_us;
+
+    return span && from + span > now ? from + span : now;
+}
+
+/* The pool's reservation for the first member that does not fit in it. */
+struct reservation {
+    uint64_t at;    /* when it is expected to fit, on the clock of posix_now_us */
+    uint64_t spare; /* the memory that will still be free beside it then */
+    size_t places;  /* the places that will still be free beside it then */
+};
+
+/**
+ * Reserve the pool for member `h`, which does not fit in it now. The members
+ * that have places are taken to end at their expected ends, earliest first,
+ * until `h` has its memory and a place, or, when it runs alone, until none is
+ * left. `free` and `room` are the memory and the places free now.
+ */
+static void reserve(const struct set *x, size_t h, uint64_t now, uint64_t free, size_t room,
+                    struct reservation *r)
+{
+    const struct command *c = &x->mem[h].c;
+    uint64_t need = command_memory(c), at = 0, next, gained;
+    size_t i, freed, left;
+
+    for (;;) {
+        gained = 0, freed = 0, left = 0, next = UINT64_MAX;
+        for (i = 0; i < x->n; i++) {
+            if (!holds(x, i))
+                continue;
+            uint64_t end = expected_end(x, i, now);
+            if (end <= at) {
+                gained += command_memory(&x->mem[i].c);
+                freed++;
+            } else {
+                left++;
+                next = end < next ? end : next;
+            }
+        }
+        if (left == 0 || (!c->exclusive && free + gained >= need && room + freed > 0))
+            break;
+        at = next;
+    }
+    r->at = at > now ? at : now;
+    r->spare = c->exclusive || free + gained < need ? 0 : free + gained - need;
+    r->places = c->exclusive || room + freed == 0 ? 0 : room + freed - 1;
+}
+
+/**
+ * Mark the members that may be admitted now, in order, at time `now`. A
+ * member is ready while fewer than the width are active or ready and its
+ * memory fits in the pool beside theirs. A member that runs alone, as one
+ * larger than the pool's memory does, fits only when nothing of the run is
+ * active or ready, and nothing after it is ready beside it.
+ *
+ * The first member that does not fit is given the time at which it is
+ * expected to fit. A member after it is ready only when it fits now and
+ * either is expected to end by that time or fits in the memory and the places
+ * that will still be free beside the first then, so that it does not delay
+ * it; this is backfill, with one reservation. A member with no expected time
+ * is admitted only by the second rule.
+ */
+static void mark_ready_at(struct set *x, uint64_t now)
 {
     size_t i, busy = 0, room, marked = 0;
-    int exclusive = 0, barrier = 0;
+    int exclusive = 0, reserved = 0;
     uint64_t memory = 0, budget = x->o->pool_memory_bytes;
+    struct reservation r = {0, 0, 0};
 
-    for (i = 0; i < x->n; i++)
+    for (i = 0; i < x->n; i++) {
+        x->jobs[i].ready = 0;
         if (active(&x->mem[i].c)) {
             busy++;
             memory += command_memory(&x->mem[i].c);
             exclusive |= x->mem[i].c.exclusive;
         }
+    }
     room = x->o->width == 0 ? x->n : x->o->width > busy ? x->o->width - busy : 0;
-    for (i = 0; i < x->n; i++) {
+    for (i = 0; i < x->n && room > 0 && !exclusive && !x->stopping; i++) {
         struct command *c = &x->mem[i].c;
+        uint64_t amount = command_memory(c), span = x->mem[i].cost.elapsed_us;
 
-        x->jobs[i].ready = 0;
-        if (c->state != QUEUED || x->stopping || exclusive || barrier)
+        if (c->state != QUEUED)
             continue;
-        uint64_t amount = command_memory(c);
         if (budget && amount > budget)
             c->exclusive = 1;
-        if (c->exclusive || (budget && (busy || marked) && memory > budget - amount)) {
-            barrier = 1;
-            if (busy > 0 || marked > 0)
-                continue;
-        } else if (room == 0) {
+        if (c->exclusive ? busy || marked : budget && memory > budget - amount) {
+            if (!reserved)
+                reserve(x, i, now, budget > memory ? budget - memory : 0, room, &r);
+            reserved = 1;
             continue;
-        } else {
-            room--;
+        }
+        if (reserved && !(span && now + span <= r.at)) {
+            if (amount > r.spare || r.places == 0)
+                continue;
+            r.spare -= amount;
+            r.places--;
         }
         x->jobs[i].ready = 1;
         memory += amount;
         marked++;
+        room--;
         asked(c);
+        if (c->exclusive)
+            break;
     }
+}
+
+/** Mark the members that may be admitted now; see `mark_ready_at`. */
+static void mark_ready(struct set *x)
+{
+    mark_ready_at(x, posix_now_us());
 }
 
 /** Collect into `out` the names of the members in state `s`. */

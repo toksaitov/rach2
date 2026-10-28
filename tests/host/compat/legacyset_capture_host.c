@@ -180,13 +180,16 @@ int etude_test_legacy_captures(void)
     return capture_failures != 0;
 }
 
-/* Run mark_ready over the members that `states` gives, one letter each: `r`
- * running, `q` queued or `d` done, asking `gib[i]` GiB of memory, under a
- * pool of `pool` GiB and a width of eight. Give the ready flags, a digit
- * each. */
-static const char *pool_ready(unsigned pool, const char *states, const unsigned *gib)
+/* Run mark_ready_at over the members that `states` gives, one letter each:
+ * `r` running, `q` queued or `d` done, asking `gib[i]` GiB of memory and
+ * expected to take `minutes[i]` minutes (0 for no expected time), under a pool
+ * of `pool` GiB and a width of eight. The running members start now. Give the
+ * ready flags, a digit each. */
+static const char *pool_ready(unsigned pool, const char *states, const unsigned *gib,
+                              const unsigned *minutes)
 {
     static char flags[9];
+    const uint64_t now = 3600000000u;
     struct etude_legacy_set_opts o = {0};
     struct etude_job jobs[8] = {{0}};
     struct set x = {0};
@@ -208,8 +211,10 @@ static const char *pool_ready(unsigned pool, const char *states, const unsigned 
         c->res[0].name = "memory_bytes";
         c->res[0].amount = (uint64_t)gib[i] << 30;
         c->nres = 1;
+        c->started_us = c->state == RUNNING ? now : 0;
+        x.mem[i].cost.elapsed_us = (uint64_t)minutes[i] * 60000000u;
     }
-    mark_ready(&x);
+    mark_ready_at(&x, now);
     for (i = 0; i < n; i++)
         flags[i] = jobs[i].ready ? '1' : '0';
     flags[n] = '\0';
@@ -218,19 +223,28 @@ static const char *pool_ready(unsigned pool, const char *states, const unsigned 
 }
 
 /**
- * Check that a member whose memory does not fit in the pool beside the
- * running members, or that is larger than the pool, keeps the members after
- * it waiting. Return 0 when every row passes.
+ * Check the pool's order of admission: a member that does not fit is given
+ * the time at which it will, and a member after it is admitted only when it
+ * ends by then or fits beside it; one larger than the pool runs alone. Return
+ * 0 when every row passes.
  */
 int etude_test_legacy_pool(void)
 {
-    const unsigned large[] = {4, 4, 6, 1, 1, 3}, alone[] = {1, 12, 1}, small[] = {1, 1, 1};
+    const unsigned large[] = {4, 4, 6, 1, 1, 3}, large_min[] = {10, 20, 30, 5, 30, 5};
+    const unsigned tight[] = {4, 4, 7, 1, 1}, tight_min[] = {10, 20, 30, 5, 30};
+    const unsigned unknown_min[] = {10, 20, 30, 0}, overdue_min[] = {0, 20, 30, 5};
+    const unsigned alone[] = {1, 12, 1}, short_min[] = {10, 60, 5}, long_min[] = {10, 60, 20};
+    const unsigned small[] = {1, 1, 1}, small_min[] = {10, 10, 10};
     int before = capture_failures;
 
-    CAPTURE_CHECK(!strcmp(pool_ready(11, "rrqqqq", large), "000000"));
-    CAPTURE_CHECK(!strcmp(pool_ready(11, "rdqqqq", large), "001100"));
-    CAPTURE_CHECK(!strcmp(pool_ready(11, "rqq", alone), "000"));
-    CAPTURE_CHECK(!strcmp(pool_ready(11, "dqq", alone), "010"));
-    CAPTURE_CHECK(!strcmp(pool_ready(11, "rqq", small), "011"));
+    CAPTURE_CHECK(!strcmp(pool_ready(11, "rrqqqq", large, large_min), "000110"));
+    CAPTURE_CHECK(!strcmp(pool_ready(11, "rrqqq", tight, tight_min), "00010"));
+    CAPTURE_CHECK(!strcmp(pool_ready(11, "rrqq", tight, unknown_min), "0000"));
+    CAPTURE_CHECK(!strcmp(pool_ready(11, "rrqq", tight, overdue_min), "0000"));
+    CAPTURE_CHECK(!strcmp(pool_ready(11, "rdqqqq", large, large_min), "001100"));
+    CAPTURE_CHECK(!strcmp(pool_ready(11, "rqq", alone, short_min), "001"));
+    CAPTURE_CHECK(!strcmp(pool_ready(11, "rqq", alone, long_min), "000"));
+    CAPTURE_CHECK(!strcmp(pool_ready(11, "dqq", alone, short_min), "010"));
+    CAPTURE_CHECK(!strcmp(pool_ready(11, "rqq", small, small_min), "011"));
     return capture_failures != before;
 }
