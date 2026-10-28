@@ -3101,9 +3101,12 @@ static uint64_t command_memory(const struct command *c)
 
 /**
  * Mark the members that may be admitted now. The order is kept: a member
- * that runs alone waits until nothing of the run is active and keeps the
- * members after it waiting, and the others are ready while fewer than the
- * width are active or ready.
+ * that runs alone, as one larger than the pool's memory does, waits until
+ * nothing of the run is active, and a member whose memory does not fit in
+ * the pool beside the active members waits until it does; either keeps the
+ * members after it waiting, so that smaller members do not fill the pool
+ * ahead of it. The others are ready while fewer than the width are active
+ * or ready.
  */
 static void mark_ready(struct set *x)
 {
@@ -3127,9 +3130,7 @@ static void mark_ready(struct set *x)
         uint64_t amount = command_memory(c);
         if (budget && amount > budget)
             c->exclusive = 1;
-        if (budget && (busy || marked) && (amount > budget || memory > budget - amount))
-            continue;
-        if (c->exclusive) {
+        if (c->exclusive || (budget && (busy || marked) && memory > budget - amount)) {
             barrier = 1;
             if (busy > 0 || marked > 0)
                 continue;

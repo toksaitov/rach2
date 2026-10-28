@@ -1,4 +1,5 @@
-/* Exercise the real collection result writer without starting a machine. */
+/* Exercise the real collection result writer and the pool's order of
+ * admission without starting a machine. */
 #include "../../../tools/etude/posix/legacy_set.c"
 #define fix_dir    capture_fix_dir
 #define fix_path   capture_fix_path
@@ -177,4 +178,59 @@ int etude_test_legacy_captures(void)
     if (!capture_failures)
         capture_fix_passed();
     return capture_failures != 0;
+}
+
+/* Run mark_ready over the members that `states` gives, one letter each: `r`
+ * running, `q` queued or `d` done, asking `gib[i]` GiB of memory, under a
+ * pool of `pool` GiB and a width of eight. Give the ready flags, a digit
+ * each. */
+static const char *pool_ready(unsigned pool, const char *states, const unsigned *gib)
+{
+    static char flags[9];
+    struct etude_legacy_set_opts o = {0};
+    struct etude_job jobs[8] = {{0}};
+    struct set x = {0};
+    size_t i, n = strlen(states);
+
+    if (n >= sizeof(flags) || (x.mem = calloc(n, sizeof(*x.mem))) == NULL) {
+        CAPTURE_CHECK(0);
+        return "";
+    }
+    o.width = 8;
+    o.pool_memory_bytes = (uint64_t)pool << 30;
+    x.o = &o;
+    x.n = n;
+    x.jobs = jobs;
+    for (i = 0; i < n; i++) {
+        struct command *c = &x.mem[i].c;
+
+        c->state = states[i] == 'r' ? RUNNING : states[i] == 'q' ? QUEUED : DONE;
+        c->res[0].name = "memory_bytes";
+        c->res[0].amount = (uint64_t)gib[i] << 30;
+        c->nres = 1;
+    }
+    mark_ready(&x);
+    for (i = 0; i < n; i++)
+        flags[i] = jobs[i].ready ? '1' : '0';
+    flags[n] = '\0';
+    free(x.mem);
+    return flags;
+}
+
+/**
+ * Check that a member whose memory does not fit in the pool beside the
+ * running members, or that is larger than the pool, keeps the members after
+ * it waiting. Return 0 when every row passes.
+ */
+int etude_test_legacy_pool(void)
+{
+    const unsigned large[] = {4, 4, 6, 1, 1, 3}, alone[] = {1, 12, 1}, small[] = {1, 1, 1};
+    int before = capture_failures;
+
+    CAPTURE_CHECK(!strcmp(pool_ready(11, "rrqqqq", large), "000000"));
+    CAPTURE_CHECK(!strcmp(pool_ready(11, "rdqqqq", large), "001100"));
+    CAPTURE_CHECK(!strcmp(pool_ready(11, "rqq", alone), "000"));
+    CAPTURE_CHECK(!strcmp(pool_ready(11, "dqq", alone), "010"));
+    CAPTURE_CHECK(!strcmp(pool_ready(11, "rqq", small), "011"));
+    return capture_failures != before;
 }

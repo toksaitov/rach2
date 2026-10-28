@@ -11,7 +11,8 @@
  * the tree's build/tests. --context-only runs the native measurement rows
  * without QEMU or guest artifacts. --stop-only runs the first-failure rows.
  * --streams-only checks separate reports and diagnostics without QEMU.
- * --capture-only checks retained watchdog evidence without starting a case.
+ * --capture-only checks retained watchdog evidence and the order in which
+ * the pool admits members without starting a case.
  * --children-only checks the statuses of controllers whose cases pass, fail
  * and run side by side, and on Windows the status of a controller that
  * leaves a process in its Job, without QEMU or guest artifacts.
@@ -3182,12 +3183,13 @@ static int native_selection(const char *argument)
 }
 
 int etude_test_legacy_captures(void);
+int etude_test_legacy_pool(void);
 
 /* Keep the native capture row beside the fixture's other compiled roles. */
 static int fixture_role(int argc, char **argv)
 {
     if (argc == 2 && !strcmp(argv[1], "--capture-only"))
-        return etude_test_legacy_captures();
+        return etude_test_legacy_captures() | etude_test_legacy_pool();
     return legacy_fixture_role(argc, argv);
 }
 
@@ -3246,6 +3248,7 @@ int main(int argc, char **argv)
     test_hosts();
     test_contexts();
     CHECK(etude_test_legacy_captures() == 0, "watchdog capture evidence");
+    CHECK(etude_test_legacy_pool() == 0, "the pool's order of admission");
     if (context_only) {
         if (fails)
             return 1;
