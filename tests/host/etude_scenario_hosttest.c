@@ -2827,7 +2827,8 @@ static void attempt_start(struct attempt *a, const struct row *r, const char *in
 /**
  * Read the attempt's output until it has `want`, which gives 1, or ends,
  * which gives 0; when `stop_at` is not NULL, send the row's stop signal once
- * the output has it.
+ * the output has it, before the next read, since an earlier call may have read
+ * it and the attempt may print nothing more until its stop ends.
  */
 static int attempt_read(struct attempt *a, const char *want, const char *stop_at)
 {
@@ -2838,6 +2839,10 @@ static int attempt_read(struct attempt *a, const char *want, const char *stop_at
     while (a->fd >= 0) {
         if (want != NULL && strstr(o->out, want) != NULL)
             return 1;
+        if (stop_at != NULL && !a->stopped && strstr(o->out, stop_at) != NULL) {
+            a->stopped = 1;
+            sh_signal(a->pid, a->r->stop_sig != 0 ? a->r->stop_sig : SIGTERM);
+        }
 #ifdef _WIN32
         p[0].fd = a->peer->handoff;
         p[0].events = SH_POLLIN;
@@ -2864,10 +2869,6 @@ static int attempt_read(struct attempt *a, const char *want, const char *stop_at
             break;
         o->len += (size_t)n;
         o->out[o->len] = '\0';
-        if (stop_at != NULL && !a->stopped && strstr(o->out, stop_at) != NULL) {
-            a->stopped = 1;
-            sh_signal(a->pid, a->r->stop_sig != 0 ? a->r->stop_sig : SIGTERM);
-        }
     }
     return 0;
 }
