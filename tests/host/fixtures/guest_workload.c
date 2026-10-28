@@ -8,6 +8,7 @@ int etude_workload_guest(int argc, char **argv, const char *role)
     return 125; /* POSIX guest fixtures execute in the declared GNU helper. */
 }
 #else
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -209,6 +210,56 @@ static int guest_terminal(void)
     return 0;
 }
 
+/** Whether a command's record in the session directory `dir` has this
+ * process's `started` event, `started CMD TOKEN PID START`. */
+static int guest_started_in(const char *dir)
+{
+    char path[4096], line[512];
+    struct dirent *c;
+    DIR *cmds = opendir(dir);
+    FILE *f;
+    long pid;
+    int found = 0;
+
+    if (cmds == NULL)
+        return 0;
+    while (!found && (c = readdir(cmds)) != NULL) {
+        if (c->d_name[0] == '.' ||
+            snprintf(path, sizeof(path), "%s/%s", dir, c->d_name) >= (int)sizeof(path) ||
+            (f = fopen(path, "r")) == NULL)
+            continue;
+        while (!found && fgets(line, sizeof(line), f))
+            found = sscanf(line, "started %*s %*s %ld", &pid) == 1 && pid == (long)getpid();
+        fclose(f);
+    }
+    closedir(cmds);
+    return found;
+}
+
+/** Print `recorded` when a session of the state directory beside `MARKS`
+ * has this process's `started` event, and `unrecorded` otherwise. */
+static int guest_recorded(void)
+{
+    const char *marks = getenv("MARKS");
+    size_t len = marks ? strlen(marks) : 0;
+    char base[4096], dir[4096];
+    struct dirent *s;
+    DIR *sessions;
+    int found = 0;
+
+    if (len < 6 || strcmp(marks + len - 6, "/marks") != 0 ||
+        snprintf(base, sizeof(base), "%.*s/state/s", (int)(len - 6), marks) >= (int)sizeof(base) ||
+        (sessions = opendir(base)) == NULL)
+        return 125;
+    while (!found && (s = readdir(sessions)) != NULL)
+        found = s->d_name[0] != '.' &&
+                snprintf(dir, sizeof(dir), "%s/%s", base, s->d_name) < (int)sizeof(dir) &&
+                guest_started_in(dir);
+    closedir(sessions);
+    puts(found ? "recorded" : "unrecorded");
+    return 0;
+}
+
 /** Observe the executable path and all arguments supplied by the fixtures. */
 static int guest_arguments(int argc, char **argv)
 {
@@ -249,6 +300,8 @@ int etude_workload_guest(int argc, char **argv, const char *role)
         return 125;
     } else if (!strcmp(role, "guest-quick")) {
         puts("quick");
+    } else if (!strcmp(role, "guest-recorded")) {
+        return guest_recorded();
     } else if (!strcmp(role, "guest-args")) {
         return guest_arguments(argc, argv);
     } else if (!strcmp(role, "guest-term")) {

@@ -721,22 +721,36 @@ static void fault_point(const char *line)
 #endif
 
 /**
+ * Append the event `line` of command `cmd` to its record and return the
+ * line to send: `line`, or `error CMD limit` in `err`, of 64 bytes, when
+ * `line` cannot be sent, so that the record keeps one form of it.
+ */
+static const char *cmd_keep(const char *cmd, const char *line, char *err)
+{
+    if (!event_fits(line, 0)) {
+        snprintf(err, 64, "%s %s %s", ETUDE_EV_ERROR, cmd, ETUDE_ERR_LIMIT);
+        line = err;
+    }
+    cmd_append(cmd, line);
+    return line;
+}
+
+/** Send the event `line` once `cmd_keep` has recorded it. */
+static void cmd_send(const char *line)
+{
+    fault_point(line);
+    send_line(line);
+}
+
+/**
  * Record the event `line` of command `cmd` and then send it, so that a
- * repeat of the command is answered with every event that was sent. An
- * event that cannot be sent is recorded and sent as `error CMD limit` in its
- * place, so that the record keeps one form of it.
+ * repeat of the command is answered with every event that was sent.
  */
 static void cmd_event(const char *cmd, const char *line)
 {
     char err[64];
 
-    if (!event_fits(line, 0)) {
-        snprintf(err, sizeof(err), "%s %s %s", ETUDE_EV_ERROR, cmd, ETUDE_ERR_LIMIT);
-        line = err;
-    }
-    cmd_append(cmd, line);
-    fault_point(line);
-    send_line(line);
+    cmd_send(cmd_keep(cmd, line, err));
 }
 
 /** Send `error CMD CODE` for command `cmd`, kept in its record. */
@@ -1746,25 +1760,57 @@ static int spawn_paths(const struct attempt *a, const struct invocation *inv, ch
     return 0;
 }
 
+/** The length of the record of command `cmd`, or -1 when it has none. */
+static off_t cmd_length(const char *cmd)
+{
+    char path[PATH_CAP];
+    struct stat st;
+
+    return cmd_path(path, cmd) == 0 && stat(path, &st) == 0 ? st.st_size : -1;
+}
+
+/** Cut the record of command `cmd` back to `length`, taking back the events
+ * recorded after it and never sent. */
+static void cmd_cut(const char *cmd, off_t length)
+{
+    char path[PATH_CAP];
+    int fd;
+
+    if (length < 0 || cmd_path(path, cmd) < 0)
+        return;
+    fd = open(path, O_WRONLY | O_CLOEXEC);
+    if (fd < 0 || ftruncate(fd, length) < 0 || fsync(fd) < 0)
+        note("record: %s: %s", path, strerror(errno));
+    if (fd >= 0)
+        close(fd);
+}
+
 /**
  * Start the child of attempt `a` from `inv`. The child leads a session and
  * a group of its own and waits until its identity is in the attempt's
- * record, so that no process of the attempt runs unregistered; then it
- * takes its descriptors, workspace, umask and signal state and executes the
- * program. When the record cannot be written, the start pipe is closed
- * unwritten, and the child exits without executing the program for the
- * caller to reap.
+ * record and `started` is in the command's, so that no process of the
+ * attempt runs unregistered and etude-guest writes nothing in its state
+ * directory from the program's start to its first output or its end; then
+ * the child takes its descriptors, workspace, umask and signal state and
+ * executes the program. When the record cannot be written, the start pipe
+ * is closed unwritten, and the child exits without executing the program
+ * for the caller to reap. An exec that fails takes `started` back out of
+ * the command's record.
  *
+ * @param started of LINE_CAP bytes, the recorded event to send once the
+ *        program runs.
  * @return NULL once the program runs, or the error code.
  */
-static const char *spawn(struct attempt *a, const struct invocation *inv)
+static const char *spawn(struct attempt *a, const struct invocation *inv, char *started)
 {
     char *argv[ARGS_MAX + 1];
     char *envp[ARGS_MAX + 1];
     char work[PATH_CAP];
     char prog[PATH_CAP];
     char input[PATH_CAP];
+    char err[64];
     struct pipes pp = {{-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}};
+    off_t length;
     int code = 0;
     int n;
     ssize_t r;
@@ -1807,6 +1853,11 @@ static const char *spawn(struct attempt *a, const struct invocation *inv)
         free_vectors(argv, envp);
         return ETUDE_ERR_FAILED;
     }
+    snprintf(started, LINE_CAP, "%s %s %s %ld %llu", ETUDE_EV_STARTED, a->cmd, a->token,
+             (long)a->pid, a->start);
+    length = cmd_length(a->cmd);
+    if (cmd_keep(a->cmd, started, err) == err)
+        snprintf(started, LINE_CAP, "%s", err);
     if (write(pp.sync[1], "x", 1) != 1)
         note("spawn: the child did not take its start");
     close(pp.sync[1]);
@@ -1823,6 +1874,7 @@ static const char *spawn(struct attempt *a, const struct invocation *inv)
     fcntl(pp.err[0], F_SETFD, FD_CLOEXEC);
     if (r == (ssize_t)sizeof(code)) {
         note("spawn: %s: %s", prog, strerror(code));
+        cmd_cut(a->cmd, length);
         return ETUDE_ERR_FAILED;
     }
     if (a->fx.pty)
@@ -2096,7 +2148,7 @@ static void do_run(const struct wire_frame *f, const char *text)
         a->next = attempts;
         attempts = a;
         a->deadline = now_us() + inv.deadline_us;
-        code = spawn(a, &inv);
+        code = spawn(a, &inv, line);
         if (code) {
             attempts = a->next;
             settled = abort_spawn(a);
@@ -2113,9 +2165,7 @@ static void do_run(const struct wire_frame *f, const char *text)
         cmd_error(cmd, code);
         return;
     }
-    snprintf(line, sizeof(line), "%s %s %s %ld %llu", ETUDE_EV_STARTED, cmd, a->token, (long)a->pid,
-             a->start);
-    cmd_event(cmd, line);
+    cmd_send(line);
 }
 
 /** Put the console back as it was found. */

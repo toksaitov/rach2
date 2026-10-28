@@ -1348,6 +1348,25 @@ static void check_record_first(void)
     bye(0);
 }
 
+/** An attempt's program starts with its `started` event in its command's
+ * record already, so that etude-guest writes nothing in its state
+ * directory while a program that prints nothing runs. */
+static void check_started_first(void)
+{
+    struct ending e;
+    char inv[65];
+    char c[24];
+
+    start_guest("--stdio", (char *)NULL);
+    hello(ETUDE_FRAME_STDIO_MAX);
+    put_case("recorded", "guest-recorded", "00000000000000d7", "ordinary", 30000, inv);
+    send_cmd(ETUDE_CMD_RUN, new_cmd(c), "00000000000000d7", inv, (char *)NULL);
+    CHECK(collect(&e, c, "00000000000000d7") == 0 && strcmp(e.kind, "exited") == 0 &&
+              strcmp(e.value, "0") == 0 && strcmp(e.out, "recorded\n") == 0,
+          "an attempt's program starts with its started event recorded");
+    bye(0);
+}
+
 /** The status of etude-guest started with `--state DIR` and nothing on its
  * input, or -1 when it did not exit. */
 static int state_status(const char *dir)
@@ -1796,6 +1815,7 @@ int main(int argc, char **argv)
         check_group_records();
         check_unfinished_end();
         check_record_first();
+        check_started_first();
         check_state_refused();
         check_stdio_damage();
         check_fixtures();
