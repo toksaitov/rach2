@@ -237,6 +237,16 @@ static unsigned long freeblocks(void)
     return st.f_bfree;
 }
 
+/** Require the free blocks to be `before` again; name both counts if not. */
+static void restored(unsigned long before, const char *what)
+{
+    char why[96];
+    unsigned long now = freeblocks();
+
+    snprintf(why, sizeof(why), "%s: %lu free blocks before, %lu after", what, before, now);
+    check(now == before, why);
+}
+
 /** Remove the original name, directly or by replacing it with another file. */
 static void remove_name(int rename_over)
 {
@@ -294,7 +304,7 @@ static void descriptor(int rename_over)
     check(freeblocks() > held, "last descriptor reclaims orphan");
     unlink(program);
     unlink(churn);
-    check(freeblocks() == before, "descriptor space restored");
+    restored(before, "descriptor space restored");
 }
 
 /** A mapping keeps the removed file after its descriptor closes. */
@@ -333,7 +343,7 @@ static void mapping(int rename_over)
     check(freeblocks() > held, "last mapping reclaims orphan");
     unlink(program);
     unlink(churn);
-    check(freeblocks() == before, "mapping space restored");
+    restored(before, "mapping space restored");
 }
 
 /** A descriptor in flight keeps the file until receipt and last close. */
@@ -384,7 +394,7 @@ static void flight(int rename_over)
     close(pair[1]);
     unlink(program);
     unlink(churn);
-    check(freeblocks() == before, "flight space restored");
+    restored(before, "flight space restored");
 }
 
 /** Start an executable through the bind, optionally keeping its forked
@@ -445,7 +455,7 @@ static void image(int rename_over, int forked)
     check(freeblocks() > held, "last image reclaims orphan");
     unlink(program);
     unlink(churn);
-    check(freeblocks() == before, "image space restored");
+    restored(before, "image space restored");
 }
 
 /** Wait on a pipe after exec, or after exec and fork, without a time delay. */
