@@ -725,7 +725,7 @@ static int refuse_output(void)
  */
 int np_output_path(const struct np_context *c, const char *given, char out[4096])
 {
-    char build[4096], prefix[4096], real_build[PATH_MAX], real[PATH_MAX];
+    char build[4096], prefix[4096], real_build[4096], real[4096];
     struct stat st;
 
     if (snprintf(out, 4096, "%s%s%s", given[0] == '/' ? "" : c->tree, given[0] == '/' ? "" : "/",
