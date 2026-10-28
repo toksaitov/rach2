@@ -134,11 +134,14 @@ receiver=$!
 ready=0
 attempt=0
 while [ "$attempt" -lt 15 ]; do
+    # Read the log after the state, so an ended receiver's lines are all in it.
+    ended=0
+    kill -0 "$receiver" 2>/dev/null || ended=1
     if grep -q "^machine-net: listening: port $port$" "$work/receive.log"; then
         ready=1
         break
     fi
-    kill -0 "$receiver" 2>/dev/null || break
+    [ "$ended" -eq 0 ] || break
     attempt=$((attempt + 1))
     sleep 1
 done
