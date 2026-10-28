@@ -1,7 +1,8 @@
 /*
  * winledgerfix.c: the fixture of etude's ledger on Windows, ledger.c, which
- * registers attempts of wintarget.exe through etude/exec.h and judges claims
- * written by hand about real processes.
+ * registers attempts of wintarget.exe through etude/exec.h, reserves a claim
+ * while another handle holds the ledger file open, and judges claims written
+ * by hand about real processes.
  */
 #include <errno.h>
 #include <stdio.h>
@@ -145,6 +146,55 @@ static int registered_run(struct etude_ledger *l, struct etude_pid *dead)
     return 0;
 }
 
+/* The ledger file held open, and for how long. */
+struct holder {
+    HANDLE h;
+    DWORD ms;
+};
+
+/** Close the holder's handle once its time has passed. */
+static DWORD WINAPI release(void *arg)
+{
+    struct holder *k = arg;
+
+    Sleep(k->ms);
+    CloseHandle(k->h);
+    return 0;
+}
+
+/**
+ * Hold the ledger file CLAIMS open without sharing its deletion for a third
+ * of a second, as a virus scanner may, while a claim is reserved: the ledger
+ * must wait for it, and the reservation succeed.
+ */
+static int held_claims(struct etude_ledger *l, const char *claims)
+{
+    wchar_t *w = etude_win_long_path(claims);
+    struct holder k = {INVALID_HANDLE_VALUE, 300};
+    HANDLE t;
+    int rc;
+
+    if (w != NULL)
+        k.h = CreateFileW(w, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                          FILE_ATTRIBUTE_NORMAL, NULL);
+    free(w);
+    CHECK(k.h != INVALID_HANDLE_VALUE, "cannot hold %s", claims);
+    t = CreateThread(NULL, 0, release, &k, 0, NULL);
+    if (t == NULL) {
+        CloseHandle(k.h);
+        return failed("cannot start the thread that releases %s", claims);
+    }
+    rc = etude_ledger_reserve(l, "held", NULL, 0, NULL, 0);
+    WaitForSingleObject(t, INFINITE);
+    CloseHandle(t);
+    CHECK(rc == 0, "reserve while the ledger file is held: %s", strerror(errno));
+    CHECK(status_of(l, "held", NULL) == ETUDE_CLAIM_OWNED, "the reserved claim is not owned");
+    CHECK(etude_ledger_finish(l, "held", ETUDE_CLEANUP_CONFIRMED) == 0 &&
+              status_of(l, "held", NULL) == -1,
+          "the claim reserved while the file was held stays");
+    return 0;
+}
+
 int fx_ledger(void)
 {
     char *argv[] = {target, "hang", NULL};
@@ -166,7 +216,7 @@ int fx_ledger(void)
     snprintf(claims, sizeof claims, "%s\\claims", dir);
     l = etude_ledger_open(dir);
     CHECK(l != NULL, "open: %s", strerror(errno));
-    if (registered_run(l, &dead) != 0) {
+    if (registered_run(l, &dead) != 0 || held_claims(l, claims) != 0) {
         etude_ledger_close(l);
         return 1;
     }

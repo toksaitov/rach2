@@ -202,17 +202,42 @@ static int win_errno(DWORD err)
     }
 }
 
+/* How long a file that another process holds open is tried again, in ms. */
+#define HELD_MS 5000
+
+/**
+ * Wait before another try at a file that Windows refused with `err`, after
+ * `*waited` milliseconds of waiting. Another process, such as a virus scanner,
+ * an indexer or a reader, may hold a ledger file open for a moment without
+ * sharing it, and Windows then refuses to open, replace or remove it with
+ * ERROR_ACCESS_DENIED or ERROR_SHARING_VIOLATION. Return 1 after the wait,
+ * or 0 for another error or once HELD_MS have passed.
+ */
+static int held_wait(DWORD err, DWORD *waited)
+{
+    DWORD step = *waited < 10 ? 10 : *waited > 250 ? 250 : *waited;
+
+    if ((err != ERROR_ACCESS_DENIED && err != ERROR_SHARING_VIOLATION) || *waited >= HELD_MS)
+        return 0;
+    Sleep(step);
+    *waited += step;
+    return 1;
+}
+
 /** Open `path` as CreateFileW does; the error is in errno. */
 static HANDLE open_file(const char *path, DWORD access, DWORD share, DWORD how)
 {
     wchar_t *w = etude_win_long_path(path);
+    DWORD waited = 0;
     HANDLE h;
 
     if (w == NULL) {
         errno = ENOMEM;
         return INVALID_HANDLE_VALUE;
     }
-    h = CreateFileW(w, access, share, NULL, how, FILE_ATTRIBUTE_NORMAL, NULL);
+    do
+        h = CreateFileW(w, access, share, NULL, how, FILE_ATTRIBUTE_NORMAL, NULL);
+    while (h == INVALID_HANDLE_VALUE && held_wait(GetLastError(), &waited));
     if (h == INVALID_HANDLE_VALUE)
         errno = win_errno(GetLastError());
     free(w);
@@ -275,7 +300,7 @@ static int file_replace(const char *path, const char *data, size_t len)
     size_t np = strlen(path);
     char *tmp = malloc(np + 5);
     wchar_t *wt = NULL, *wp = NULL;
-    DWORD put, err = 0;
+    DWORD put, err = 0, waited = 0;
     HANDLE h;
     size_t n = 0;
 
@@ -300,8 +325,11 @@ static int file_replace(const char *path, const char *data, size_t len)
     wp = etude_win_long_path(path);
     if (err == 0 && (wt == NULL || wp == NULL))
         err = ERROR_NOT_ENOUGH_MEMORY;
-    if (err == 0 && !MoveFileExW(wt, wp, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+    while (err == 0 && !MoveFileExW(wt, wp, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
         err = GetLastError();
+        if (held_wait(err, &waited))
+            err = 0;
+    }
     free(wt);
     free(wp);
     free(tmp);
@@ -312,12 +340,17 @@ static int file_replace(const char *path, const char *data, size_t len)
 static int file_remove(const char *path)
 {
     wchar_t *w = etude_win_long_path(path);
-    DWORD err = 0;
+    DWORD err = 0, waited = 0;
 
     if (w == NULL)
         return ENOMEM;
-    if (!DeleteFileW(w) && GetLastError() != ERROR_FILE_NOT_FOUND)
-        err = GetLastError();
+    while (!DeleteFileW(w) && (err = GetLastError()) != ERROR_FILE_NOT_FOUND) {
+        if (!held_wait(err, &waited))
+            break;
+        err = 0;
+    }
+    if (err == ERROR_FILE_NOT_FOUND)
+        err = 0;
     free(w);
     return err == 0 ? 0 : win_errno(err);
 }
