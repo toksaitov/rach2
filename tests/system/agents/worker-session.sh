@@ -54,10 +54,15 @@ EOF
 }
 
 # until_log TEXT: wait until the loop's log has a line matching the extended
-# regular expression TEXT, while the loop runs.
+# regular expression TEXT, while the loop runs. The loop's state is read before
+# the log, so that a line the loop wrote just before it ended is seen.
 until_log() {
-    until grep -Eq "$1" "$WORK/state/loop.log" 2> /dev/null; do
-        kill -0 "$LOOP" 2> /dev/null || { fail "the loop ended before [$1] in its log"; return 1; }
+    local ended
+    while :; do
+        ended=0
+        kill -0 "$LOOP" 2> /dev/null || ended=1
+        grep -Eq "$1" "$WORK/state/loop.log" 2> /dev/null && return 0
+        [ "$ended" -eq 0 ] || { fail "the loop ended before [$1] in its log"; return 1; }
         sleep 1
     done
 }
