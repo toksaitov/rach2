@@ -268,8 +268,9 @@
         {"assertion_id": "solo-sentinels", "checks": "the sentinels read through %gs stay unchanged through system calls and spins, until the user time has risen at the number of looks the probe requires", "source": "program"},
         {"assertion_id": "bind-processor0", "checks": "sched_setaffinity binds the probe to processor 0", "source": "program"},
         {"assertion_id": "pipes", "checks": "the two pipes are made", "source": "program"},
+        {"assertion_id": "shared-count", "checks": "mmap makes the anonymous shared page in which the child counts its rounds", "source": "program"},
         {"assertion_id": "fork", "checks": "fork makes the child", "source": "program"},
-        {"assertion_id": "child-runs", "checks": "the child's processor time, user and system, read from /proc, rises at the number of looks the probe requires before the child ends", "source": "program"},
+        {"assertion_id": "child-runs", "checks": "the child's count of its rounds, in the page it shares with the parent, changes at the number of looks the probe requires before the child ends", "source": "program"},
         {"assertion_id": "parent-switch-sentinels", "checks": "the parent's sentinels read through %gs stay unchanged across those switches", "source": "program"},
         {"assertion_id": "ping-returns", "checks": "the byte comes back from the child in every round", "source": "program"},
         {"assertion_id": "ping-sentinels", "checks": "the parent's sentinels stay unchanged after every round", "source": "program"},
@@ -282,7 +283,7 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [
         {"witness_id": "solo-rises", "kind": "counter", "means": "the probe's own user time has risen at one more of its looks in the solo phase", "limit": 10},
-        {"witness_id": "child-rises", "kind": "counter", "means": "the child's processor time has risen at one more of the parent's looks during the spin beside it", "limit": 20}
+        {"witness_id": "child-rises", "kind": "counter", "means": "the child's count of its rounds has changed at one more of the parent's looks during the spin beside it", "limit": 20}
       ],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},

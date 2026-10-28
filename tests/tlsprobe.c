@@ -16,13 +16,13 @@
  *      saved %ds fails at once.
  *
  *   2. Isolation phase: fork a child that points its own TLS descriptor at a
- *      different TCB with different sentinels. Parent and child then spin
- *      until the parent has seen the child's processor time, user and system
- *      (/proc/PID/stat), rise at ISO_SWITCHES of its looks: on one processor,
- *      each rise is a switch from the parent to the child and one back, both
- *      made by the scheduler while neither process waited. The system time
- *      counts too, since under a hypervisor such as WHPX most ticks can land
- *      in the kernel rather than in the spin.
+ *      different TCB with different sentinels, and counts its rounds in a
+ *      word of a page the two share. Parent and child then spin until the
+ *      parent has seen that count change at ISO_SWITCHES of its looks: on
+ *      one processor, each change is a switch from the parent to the child
+ *      and one back, both made by the scheduler while neither process
+ *      waited. The count is the child's own, so it does not depend on which
+ *      process the timer charges a tick to, nor on reading /proc.
  *      Then they hand a byte back and forth over two pipes, so that each
  *      round takes one switch to the child and one back; each must always
  *      read back its own sentinels. This holds only if the context switch
@@ -30,15 +30,15 @@
  *      bound to processor 0 first: on two processors each could keep one to
  *      itself, and no switch would go from one to the other.
  *
- * The counts are of events the kernel records, so a slow or loaded machine
- * spins longer and a fast one shorter, and the number of rounds decides
- * nothing beyond the least each side makes. The case's watchdog ends a
- * run in which the counts never rise.
+ * The counts are of events, the ticks the kernel charges and the child's
+ * rounds, so a slow or loaded machine spins longer and a fast one shorter, and
+ * the number of rounds decides nothing beyond the least each side makes. The
+ * case's watchdog ends a run in which the counts never rise.
  *
  * Prints "All TLS checks passed!" and exits 0 when every check passes.
  * Otherwise it prints a line that begins "FAIL: " and exits 1, printing
  * "tlsprobe: FAILED" before the exit unless the TLS, the binding to
- * processor 0, a pipe or the fork could not be set up.
+ * processor 0, a pipe, the shared page or the fork could not be set up.
  *
  * On Linux the same interface is set_thread_area(2) and the i386 %gs thread
  * pointer that glibc and musl, the stack-protector canary and
@@ -81,11 +81,18 @@ typedef unsigned char u8;
 
 /* The witnessed events each phase waits for: looks at which the probe's own
  * user time had risen, each a timer interrupt from user mode, and looks at
- * which the child's processor time had, each a switch to the child and back. */
+ * which the child's count of its rounds had, each a switch to the child and
+ * back. */
 #define SOLO_INTERRUPTS 10
 #define ISO_SWITCHES    20
 
 #define POLLIN 0x001
+
+#define PROT_READ     0x1
+#define PROT_WRITE    0x2
+#define MAP_SHARED    0x01
+#define MAP_ANONYMOUS 0x20
+#define WNOHANG       1
 
 struct pollfd {
     int fd;
@@ -225,15 +232,36 @@ static void put_u32(u32 v)
 static u32 tcb_parent[NUM_SLOTS];
 static u32 tcb_child[NUM_SLOTS];
 
+/* The child's count of its rounds, in a page it shares with the parent. */
+static volatile u32 *child_rounds;
+
 /* The assertions, a check each, in the order the probe makes them. */
-static const char *const assertion_id[] = {
-    "set-thread-area", "gs-aliases-tcb", "solo-sentinels", "bind-processor0",
-    "pipes",           "fork",           "child-runs",     "parent-switch-sentinels",
-    "ping-returns",    "ping-sentinels", "child-reaped",   "child-inherits-base",
-    "child-sets-tls",  "child-sentinels"};
+static const char *const assertion_id[] = {"set-thread-area",
+                                           "gs-aliases-tcb",
+                                           "solo-sentinels",
+                                           "bind-processor0",
+                                           "pipes",
+                                           "shared-count",
+                                           "fork",
+                                           "child-runs",
+                                           "parent-switch-sentinels",
+                                           "ping-returns",
+                                           "ping-sentinels",
+                                           "child-reaped",
+                                           "child-inherits-base",
+                                           "child-sets-tls",
+                                           "child-sentinels"};
 
 /* The index in `assertion_id` of each assertion the probe reports by name. */
-enum { A_SET_THREAD_AREA, A_BIND = 3, A_PIPES, A_FORK, A_CHILD_REAPED = 10, A_COUNT = 14 };
+enum {
+    A_SET_THREAD_AREA,
+    A_BIND = 3,
+    A_PIPES,
+    A_SHARED,
+    A_FORK,
+    A_CHILD_REAPED = 11,
+    A_COUNT = 15
+};
 
 /**
  * Report the assertion at index `at` failed with `why`, those after it not
@@ -307,70 +335,6 @@ static u32 own_user_ticks(void)
     tms[0] = 0;
     sys_times(tms);
     return (u32)tms[0];
-}
-
-/**
- * The state letter of the child `pid` from /proc/PID/stat, with its user and
- * system ticks, fields 14 and 15, summed in `*ticks`; 0 when the file cannot
- * be read or is short.
- */
-static char child_ticks(int pid, u32 *ticks)
-{
-    char path[32], text[256];
-    char digits[12];
-    int n = 0, at = 0, fd, len, i, state, field;
-    u32 v = (u32)pid, sum = 0;
-    const char *p;
-
-    for (p = "/proc/"; *p; p++) {
-        path[at++] = *p;
-    }
-    do {
-        digits[n++] = (char)('0' + v % 10);
-        v /= 10;
-    } while (v);
-    while (n) {
-        path[at++] = digits[--n];
-    }
-    for (p = "/stat"; *p; p++) {
-        path[at++] = *p;
-    }
-    path[at] = 0;
-    fd = syscall3(SYS_OPEN, (long)path, 0, 0);
-    if (fd < 0) {
-        return 0;
-    }
-    len = sys_read(fd, text, sizeof(text) - 1);
-    sys_close(fd);
-    if (len <= 0) {
-        return 0;
-    }
-    text[len] = 0;
-    for (i = len - 2; i >= 0 && !(text[i] == ')' && text[i + 1] == ' '); i--) {
-    }
-    if (i < 0) {
-        return 0;
-    }
-    state = i + 2; /* field 3 */
-    for (i = state, field = 3; field < 14 && text[i]; i++) {
-        if (text[i] == ' ') {
-            field++;
-        }
-    }
-    for (; field <= 15; field++) {
-        if (text[i] < '0' || text[i] > '9') {
-            return 0;
-        }
-        for (v = 0; text[i] >= '0' && text[i] <= '9'; i++) {
-            v = v * 10 + (u32)(text[i] - '0');
-        }
-        sum += v;
-        if (text[i] == ' ') {
-            i++;
-        }
-    }
-    *ticks = sum;
-    return text[state];
 }
 
 /**
@@ -468,6 +432,7 @@ static void iso_child(const int to_child[2], const int to_parent[2])
             cbad++;
             break;
         }
+        ++*child_rounds;
         ready.revents = 0;
         if (i + 1 >= ISO_ITERS) {
             int polled = syscall3(SYS_POLL, (long)&ready, 1, 0);
@@ -514,15 +479,15 @@ static void report_rounds(int ran, int returned, int kept)
 
 /**
  * Report the assertions of the spin beside the child: `clobbered` is 1 when
- * a sentinel of the parent changed, and `ended` 1 when the child's processor
- * time could not be read or the child ended first. Either stops the spin, which
+ * a sentinel of the parent changed, and `ended` 1 when the child ended first
+ * or waitpid could not look at it. Either stops the spin, which
  * leaves the other assertion not run.
  */
 static void report_spin(int clobbered, int ended)
 {
     if (ended) {
         report_fail("child-runs",
-                    "the child's processor time could not be read, or it ended first");
+                    "the child ended, or waitpid failed, before the parent saw it run");
         report_notrun("parent-switch-sentinels", "the spin stopped when the child ended");
     } else if (clobbered) {
         report_notrun("child-runs", "the spin stopped at a changed sentinel");
@@ -539,28 +504,26 @@ static void report_spin(int clobbered, int ended)
  * checks its sentinels across switches to the child, then across each
  * round of the byte it sends the child and gets back.
  *
- * The parent spins ISO_ITERS rounds, and on until the processor time of the
- * child `pid` has risen at ISO_SWITCHES of the looks it takes after each
- * round. Both are on processor 0 and the parent waits for nothing while it
- * spins, so a rise between two of its looks is the child having run between
- * them: a switch away from the parent and one back, after which the parent
- * checks. A child that has ended, or whose stat cannot be read, ends
- * the spin as a failure, since it can no longer run. `fails` is the count
- * of failures so far, and the new count is returned.
+ * The parent spins ISO_ITERS rounds, and on until the count of rounds that
+ * the child `pid` keeps in `child_rounds` has changed at ISO_SWITCHES of the
+ * looks it takes after each round. Both are on processor 0 and the parent
+ * waits for nothing while it spins, so a change between two of its looks is
+ * the child having run between them: a switch away from the parent and one
+ * back, after which the parent checks. A child that has ended, or that
+ * waitpid cannot look at, ends the spin as a failure, since it can no
+ * longer run; when the look reaped it, its status is in `*status` and
+ * `*reaped` is 1. `fails` is the count of failures so far, and the new count
+ * is returned.
  */
-static int iso_switches(int pid, const int to_child[2], const int to_parent[2], int fails)
+static int iso_switches(int pid, const int to_child[2], const int to_parent[2], int fails,
+                        int *status, int *reaped)
 {
     long tv2[2];
-    char token, state;
-    u32 last = 0, now = 0;
-    int i, rises = 0, clobbered = 0, ended = 0, returned = 1, kept = 1, ran;
+    char token;
+    u32 last, now;
+    int i, rises = 0, clobbered = 0, ended = 0, returned = 1, kept = 1, ran, got;
 
-    if (child_ticks(pid, &last) == 0) {
-        puts_("FAIL: the child's processor time cannot be read\n");
-        report_spin(0, 1);
-        report_rounds(0, 1, 1);
-        return fails + 1;
-    }
+    last = *child_rounds;
     for (i = 0; i < ISO_ITERS || rises < ISO_SWITCHES; i++) {
         sys_gettimeofday(tv2);
         busy(BUSY_SPIN);
@@ -574,13 +537,15 @@ static int iso_switches(int pid, const int to_child[2], const int to_parent[2], 
             }
             break;
         }
-        state = child_ticks(pid, &now);
-        if (state == 0 || state == 'Z') {
+        got = sys_waitpid(pid, status, WNOHANG);
+        if (got != 0) {
             puts_("FAIL: the child ended before it ran beside the parent\n");
             fails++;
             ended = 1;
+            *reaped = got == pid;
             break;
         }
+        now = *child_rounds;
         if (now != last) {
             rises++;
             last = now;
@@ -656,13 +621,14 @@ static void report_child(int got, int pid, int status)
 static int iso_parent(int pid, const int to_child[2], const int to_parent[2], int fails)
 {
     int status = -1;
+    int reaped = 0;
     int got;
 
     sys_close(to_child[0]);
     sys_close(to_parent[1]);
-    fails = iso_switches(pid, to_child, to_parent, fails);
+    fails = iso_switches(pid, to_child, to_parent, fails, &status, &reaped);
     sys_close(to_child[1]);
-    got = sys_waitpid(pid, &status, 0);
+    got = reaped ? pid : sys_waitpid(pid, &status, 0);
     report_child(got, pid, status);
     if (got != pid) {
         puts_("FAIL: waitpid\n");
@@ -690,6 +656,7 @@ void probe_main(unsigned long *sp)
     int pid;
     int fails = 0;
     int to_child[2], to_parent[2];
+    long shared;
 
     report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.tlsprobe"));
     puts_("tlsprobe: starting\n");
@@ -730,6 +697,14 @@ void probe_main(unsigned long *sp)
         sys_exit(1);
     }
     report_pass(assertion_id[A_PIPES]);
+    shared = probe_mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if ((unsigned long)shared >= (unsigned long)-4095L) {
+        puts_("FAIL: mmap of the shared page\n");
+        report_setup_failed(A_SHARED, "mmap of a shared anonymous page failed");
+        sys_exit(1);
+    }
+    child_rounds = (volatile u32 *)shared;
+    report_pass(assertion_id[A_SHARED]);
     pid = sys_fork();
     if (pid < 0) {
         puts_("FAIL: fork\n");
