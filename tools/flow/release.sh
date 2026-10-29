@@ -6,8 +6,8 @@
 # Usage: release.sh [-r] [-s STATE] M SHA
 #
 # M is the number of a GitHub milestone, whose description names its branch
-# in a line `Branch: NAME`, and SHA a commit already pushed to that branch
-# that contains origin/master, so that master can move to it by
+# as `board.sh milestone M` reads it, and SHA a commit already pushed to
+# that branch that contains origin/master, so that master can move to it by
 # fast-forward. The manager starts the script detached in the tmux session
 # `rach2-release`, and starts it again with the same arguments when it ended
 # without finishing; it then resumes from its record. It runs on the owner's
@@ -720,7 +720,7 @@ windows()
         # shellcheck disable=SC2086 # the suites are words
         {
             echo "cd $wtree || { echo 'status 1'; exit; }"
-            echo "git fetch -q $out/release.bundle refs/remotes/origin/$branch && git checkout -q -f --detach $sha || { echo 'status 1'; exit; }"
+            echo "git fetch -q $out/release.bundle 'refs/remotes/origin/$branch' && git checkout -q -f --detach $sha || { echo 'status 1'; exit; }"
             environment windows
             echo "MSYS_NO_PATHCONV=1 wsl.exe -u root -e sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches' < /dev/null"
             echo "ETUDE_SITE=$wsite make build/tools/etude/etude > $out/$id.make.log 2>&1 || { tail -n 20 $out/$id.make.log; echo 'status 1'; exit; }"
@@ -798,11 +798,12 @@ lenovo_run()
 check()
 {
     git -C "$repo" fetch -q origin || later "the fetch failed"
-    description=$(gh api "repos/$REPO/milestones/$milestone" \
-        --jq 'select(.state == "open") | .description') ||
-        later "milestone $milestone cannot be read"
-    branch=$(printf '%s\n' "$description" | sed -n 's/^Branch: *\([^ ]*\) *$/\1/p' | head -n 1)
-    [ -n "$branch" ] || refuse "milestone $milestone is not open or names no branch"
+    branch=$(sh "$repo/tools/flow/board.sh" milestone "$milestone")
+    case $? in
+        0) ;;
+        3) refuse "milestone $milestone is not open or names no branch" ;;
+        *) later "milestone $milestone cannot be read" ;;
+    esac
     git -C "$repo" merge-base --is-ancestor "$sha" "refs/remotes/origin/$branch" 2> /dev/null ||
         refuse "$sha is not on $branch"
     git -C "$repo" merge-base --is-ancestor refs/remotes/origin/master "$sha" 2> /dev/null ||

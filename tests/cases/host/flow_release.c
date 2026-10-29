@@ -73,6 +73,13 @@ static int sh_mock(int argc, char **argv)
     name = name ? name + 1 : argc > 1 ? argv[1] : "";
     if (!strcmp(name, "board.sh")) {
         call("board ", argc, argv, 2);
+        if (argc > 2 && !strcmp(argv[2], "milestone")) {
+            if (!strcmp(ev("RELEASE_TEST_MILESTONE"), "lost"))
+                return 1;
+            if (!strcmp(ev("RELEASE_TEST_MILESTONE"), "closed"))
+                return 3;
+            puts(BRANCH);
+        }
         return 0;
     }
     if (!strcmp(name, "testing.sh")) {
@@ -95,16 +102,11 @@ static int sh_mock(int argc, char **argv)
     execv(argv[0], argv);
     return 127;
 }
-/** Answer `gh api`: the milestone's description, or its closing. */
+/** Answer `gh api -X`, the milestone's closing. */
 static int gh_api(int argc, char **argv)
 {
     if (argc > 3 && !strcmp(argv[2], "-X"))
         return strcmp(ev("RELEASE_TEST_CLOSE"), "fail") == 0;
-    if (argc > 2 && !strcmp(argv[2], "repos/toksaitov/rach2/milestones/7")) {
-        if (strcmp(ev("RELEASE_TEST_MILESTONE"), "closed"))
-            puts("The goal of the milestone.\nBranch: " BRANCH);
-        return 0;
-    }
     return 1;
 }
 /** Answer `gh run download ID ... --dir DIR` with RELEASE_TEST_FAILURES. */
@@ -252,7 +254,7 @@ static int git_mock(int argc, char **argv)
     }
     if (argc < 2)
         return 1;
-    if (!strcmp(argv[1], "fetch") || !strcmp(argv[1], "bundle"))
+    if (!strcmp(argv[1], "fetch") || !strcmp(argv[1], "bundle") || !strcmp(argv[1], "checkout"))
         return 0;
     if (!strcmp(argv[1], "push"))
         return !strcmp(ev("RELEASE_TEST_PUSH"), "fail");
@@ -293,6 +295,13 @@ int flow_release_mock(int argc, char **argv)
         return git_mock(argc, argv);
     if (!strcmp(name, "make") || !strcmp(name, "scp")) {
         call(!strcmp(name, "make") ? "make " : "scp ", argc, argv, 1);
+        return 0;
+    }
+    if (!strcmp(name, "etude")) {
+        char prefix[9000];
+        snprintf(prefix, sizeof(prefix), "etude site=%s clean=%s export=%s ", ev("ETUDE_SITE"),
+                 ev("ETUDE_PREPARATION_CLEAN"), ev("ETUDE_PHASE_SELECTION_EXPORT"));
+        call(prefix, argc, argv, 1);
         return 0;
     }
     if (!strcmp(name, "native-deploy")) {
@@ -578,8 +587,14 @@ static int argument_rows(struct release *r)
                "a commit that lacks master is refused") &&
          ok;
     run(r, &(struct release_row){.git = "yes", .milestone = "closed"});
-    ok = check(r, f->status == 2 && !fx_exists(record(r)) && strstr(f->err, "names no branch"),
+    ok = check(r,
+               f->status == 2 && !fx_exists(record(r)) && strstr(f->err, "names no branch") &&
+                   called(r, "^board milestone 7$"),
                "a closed milestone is refused") &&
+         ok;
+    run(r, &(struct release_row){.git = "yes", .milestone = "lost"});
+    ok = check(r, f->status == 75 && !fx_exists(record(r)) && !called(r, "^(machine|dispatch)"),
+               "a milestone that cannot be read waits") &&
          ok;
     run(r, &(struct release_row){.sha = "1111", .git = "yes"});
     ok = check(r, f->status == 2 && !fx_exists(record(r)) && fx_equal(flow_path(f, "calls"), ""),
@@ -719,6 +734,17 @@ static int mac_ran(struct release *r, char *id, size_t size)
     }
     return 0;
 }
+/** Make the Mac's copy and admission site, with etude's build in the copy. */
+static int mac_tree(struct release *r)
+{
+    struct fixture *f = r->f;
+    fx_remove(flow_path(f, "tree/build/machines"));
+    return flow_put(f, "tree/build/machines/mac/tree/Readme.md", "") &&
+           flow_put(f, "tree/build/machines/mac/site/etude-site", "etude-site 2\n") &&
+           flow_put(f, "tree/build/machines/mac/site/bin/Readme.md", "") &&
+           flow_put(f, "tree/build/machines/mac/tree/build/tools/etude/etude-volume", "") &&
+           fx_copy(f->self, flow_path(f, "tree/build/machines/mac/tree/build/tools/etude/etude"));
+}
 static int rerun_rows(struct release *r)
 {
     struct fixture *f = r->f;
@@ -773,9 +799,8 @@ static int machine_rerun_rows(struct release *r)
     struct fixture *f = r->f;
     char old[4000], id[200];
     int ok = 1;
-    fx_remove(flow_path(f, "tree/build/machines"));
-    flow_put(f, "tree/build/machines/mac/tree/Readme.md", "");
-    flow_put(f, "tree/build/machines/mac/site/etude-site", "etude-site 2\n");
+    if (!mac_tree(r))
+        return 0;
     snprintf(old, sizeof(old),
              "%smac started %s\nfailure mac %s i686:gnu x86_64:gnu\nfailed tests: mac run %s: "
              "i686:gnu x86_64:gnu\n",
@@ -787,6 +812,8 @@ static int machine_rerun_rows(struct release *r)
                    count(record(r), "^full done ") == 1 &&
                    count(record(r), "^run 101 success$") == 1 && mac_ran(r, id, sizeof(id)) &&
                    !strncmp(id, "milestone7-222222222222-mac-", 28) && !called(r, "^dispatch ") &&
+                   called(r, "^etude .* run routine-sequence phase_first_run .* tcg i686:gnu "
+                             "x86_64:gnu$") &&
                    called(r, "^testing "),
                "-r runs again only the Mac's failures and keeps the full pass") &&
          ok;
@@ -848,6 +875,10 @@ static int acceptance_rows(struct release *r)
     free(line);
     return ok;
 }
+static int failed_mac(struct release *r)
+{
+    return fx_has(record(r), "\nfailure mac ");
+}
 static const char *mac_failed(struct release *r, char *text, size_t size)
 {
     char path[4200];
@@ -858,15 +889,39 @@ static const char *mac_failed(struct release *r, char *text, size_t size)
     snprintf(text, size, "%smac started %s\n", r->built, MAC_FAILED);
     return MAC_FAILED;
 }
+/**
+ * Succeed when the Mac's run ID ended with status 0 after it checked out C,
+ * built etude, allocated the selection of every case and ran the phase on
+ * it from clean, in that order.
+ */
+static int mac_passed(struct release *r, const char *id)
+{
+    char times[4200], selection[2000], phase[2000];
+    snprintf(times, sizeof(times), "%s/tree/build/machines/mac/runs/%s.times", r->f->work, id);
+    snprintf(selection, sizeof(selection),
+             "^etude site=.*/mac/site/etude-site clean= export= run -N -t .*/mac/tree -a both -A "
+             "tcg -J .*/mac/runs/%s\\.selection\\.json all$",
+             id);
+    snprintf(phase, sizeof(phase),
+             "^etude site= clean=1 export=.*/mac/runs/%s\\.selection\\.json run routine-sequence "
+             "phase_first_run .*/mac/tree .*/mac/runs/%s both %s .*/mac/site/etude-site "
+             ".*/mac/site/bin/etude tcg all$",
+             id, id, id);
+    return fx_has(times, "\nrc=0\n") && called(r, selection) && called(r, phase) &&
+           before(r, "\ngit checkout -q -f --detach " C "\n",
+                  "\nmake build/tools/etude/etude build/tools/etude/etude-volume\n") &&
+           before(r, "\nmake build/tools/etude/etude build/tools/etude/etude-volume\n",
+                  " run -N -t ") &&
+           before(r, " run -N -t ", " run routine-sequence phase_first_run ");
+}
 static int mac_rows(struct release *r)
 {
     struct fixture *f = r->f;
     char text[9000], id[200], last[400];
     const char *failed;
     int ok = 1;
-    fx_remove(flow_path(f, "tree/build/machines"));
-    flow_put(f, "tree/build/machines/mac/tree/Readme.md", "");
-    flow_put(f, "tree/build/machines/mac/site/etude-site", "etude-site 2\n");
+    if (!mac_tree(r))
+        return 0;
     snprintf(text, sizeof(text), "milestone 7\nsha %s\nbranch %s\nchosen %s\ntouched %s\n", C,
              BRANCH, T, T);
     run(r, &(struct release_row){
@@ -875,8 +930,14 @@ static int mac_rows(struct release *r)
                f->status == 75 && count(record(r), "^mac started ") == 1 &&
                    mac_ran(r, id, sizeof(id)) && !strncmp(id, "milestone7-222222222222-mac-", 28) &&
                    fx_has(flow_path(f, "tree/build/machines/mac/run"), id) &&
-                   count(flow_path(f, "calls"), "^dispatch ") == 1,
-               "mac run starts beside the full run") &&
+                   count(flow_path(f, "calls"), "^dispatch ") == 1 && mac_passed(r, id),
+               "mac run starts beside the full run and passes") &&
+         ok;
+    snprintf(text, sizeof(text), "%smac started %s\n", r->built, id);
+    snprintf(last, sizeof(last), "^mac done .* run %s$", id);
+    run(r, &(struct release_row){.record = text, .machines = MAC});
+    ok = check(r, f->status == 1 && count(record(r), last) == 1 && !failed_mac(r),
+               "a passed mac run is marked done") &&
          ok;
     failed = mac_failed(r, text, sizeof(text));
     run(r, &(struct release_row){.record = text, .machines = MAC});
@@ -897,27 +958,28 @@ static int windows_rows(struct release *r)
     int ok = 1;
     run(r, &(struct release_row){
                .record = r->head, .git = "yes", .machines = WINDOWS, .windows = "status 0"});
-    ok = check(r,
-               f->status == 75 &&
-                   before(r, "\nwsl test -e /mnt/d/o/milestone7-111111111111-windows-",
-                          "\nwindows cd D:/w || ") &&
-                   before(r, "\nwindows cd D:/w || ",
-                          "\nwsl touch /mnt/d/o/milestone7-111111111111-windows-") &&
-                   called(r, "^wsl exec /usr/local/libexec/rach2/etude-launch alone sh -c ") &&
-                   called(r, "^git -C .* bundle create .*/state/windows.bundle "
-                             "refs/remotes/origin/" BRANCH "$") &&
-                   called(r, "^windows git fetch -q D:/o/release.bundle refs/remotes/origin/" BRANCH
-                             " && git checkout -q -f --detach " H " ") &&
-                   called(r, "^scp -q -o BatchMode=yes .*/state/windows.bundle "
-                             "testing:D:/o/release.bundle$") &&
-                   called(r, "^windows export JOBS='30'$") &&
-                   called(r, "^windows .* run routine-sequence phase_first_run D:/w "
-                             "D:/o/milestone7-111111111111-windows-[0-9-]+ both "
-                             "milestone7-111111111111-windows-[0-9-]+ C:/s .* whpx all > ") &&
-                   count(record(r), "^windows done .* run milestone7-111111111111-windows-") == 1 &&
-                   called(r, "^testing "),
-               "windows runs at the commit while WSL is held, then the build") &&
-         ok;
+    ok =
+        check(r,
+              f->status == 75 &&
+                  before(r, "\nwsl test -e /mnt/d/o/milestone7-111111111111-windows-",
+                         "\nwindows cd D:/w || ") &&
+                  before(r, "\nwindows cd D:/w || ",
+                         "\nwsl touch /mnt/d/o/milestone7-111111111111-windows-") &&
+                  called(r, "^wsl exec /usr/local/libexec/rach2/etude-launch alone sh -c ") &&
+                  called(r, "^git -C .* bundle create .*/state/windows.bundle "
+                            "refs/remotes/origin/" BRANCH "$") &&
+                  called(r, "^windows git fetch -q D:/o/release.bundle 'refs/remotes/origin/" BRANCH
+                            "' && git checkout -q -f --detach " H " ") &&
+                  called(r, "^scp -q -o BatchMode=yes .*/state/windows.bundle "
+                            "testing:D:/o/release.bundle$") &&
+                  called(r, "^windows export JOBS='30'$") &&
+                  called(r, "^windows .* run routine-sequence phase_first_run D:/w "
+                            "D:/o/milestone7-111111111111-windows-[0-9-]+ both "
+                            "milestone7-111111111111-windows-[0-9-]+ C:/s .* whpx all > ") &&
+                  count(record(r), "^windows done .* run milestone7-111111111111-windows-") == 1 &&
+                  called(r, "^testing "),
+              "windows runs at the commit while WSL is held, then the build") &&
+        ok;
     run(r, &(struct release_row){.record = r->head,
                                  .git = "yes",
                                  .machines = WINDOWS,
