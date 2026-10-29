@@ -8,7 +8,9 @@
 # It prints master's newest commit; the open milestones, with their branches,
 # their counts of tasks and the tasks In progress with their assignees, as
 # `board.sh milestones` gives them; a line for each worker loop that
-# `workers` lists; the release; and the resources.
+# `workers` lists, and then for each other state directory under build/flow
+# of this clone's main working tree that has a `loop.log`, as the manager's
+# own loops have; the release; and the resources.
 #
 # A loop's line says whether the loop runs, has been asked to stop, or is
 # stopped; the task in its STATE/issue; whether its account is out of its
@@ -166,6 +168,14 @@ grep -v '^#' "$(dirname "$0")/workers" | while read -r name host st; do
     else
         printf '%s' "$probe" | ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" sh -s "$st" 2>&1
     fi
+done
+listed=$(grep -v '^#' "$(dirname "$0")/workers" |
+    awk -v h="$here" '$2 == "-" { print ($3 ~ /^\// ? $3 : h "/" $3) }')
+for st in "$here"/build/flow/*; do
+    [ -f "$st/loop.log" ] || continue
+    printf '%s\n' "$listed" | grep -q -F -x "$st" && continue
+    printf '%s: ' "${st##*/}"
+    printf '%s' "$probe" | sh -s "$st" 2>&1
 done
 echo "== release"
 if env -u TMUX tmux has-session -t rach2-release 2> /dev/null; then echo "release.sh runs"; else echo "release.sh is not running"; fi
