@@ -18,9 +18,9 @@
 # its first line that begins `Branch:`, as `Branch: NAME`; backquotes and
 # blanks around NAME are not part of it, and a NAME with a character other
 # than a letter, a digit, `.`, `_`, `/` or `-` is no branch, so that NAME can
-# go into a command line as it is. A task is an issue in a milestone with no parent
-# issue, and a subtask is a sub-issue of a task. Workers take tasks; a subtask
-# is closed by the worker of its task and is never taken by itself.
+# go into a command line as it is. A task is an issue in a milestone with no
+# parent issue, and a subtask is a sub-issue of a task. Workers take tasks; a
+# subtask is closed by the worker of its task and is never taken by itself.
 # An issue labelled `owner-only` has work that only the owner's accounts can
 # do, such as a step on the Lenovo, which only the owner's computer reaches;
 # `next` and `take` offer it only to the account OWNER below.
