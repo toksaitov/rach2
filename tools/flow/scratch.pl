@@ -5,10 +5,10 @@
 #
 # Usage: perl scratch.pl DIR SECONDS STEM...
 #
-# The manager loop runs this before each check, as root in WSL on the testing
-# host, for /tmp, whose tmpfs is the host's memory, with the stems that
-# `stems` in lib.sh reads from master's tests and tools. An entry of DIR is
-# removed when all of these hold:
+# sweep.sh runs this as root in WSL on the testing host, for /tmp, whose
+# tmpfs is the host's memory, with the stems that `stems` in lib.sh reads
+# from master's tests and tools. An entry of DIR is removed when all of
+# these hold:
 #
 # * its name is one of the STEMs that begin with `rach2`, a dot and six to
 #   eight letters, digits or underscores, as mktemp(1) makes from a template
@@ -19,7 +19,7 @@
 #   program, an open file or a mapped file in it, as /proc shows where it
 #   exists.
 #
-# It stops itself after nine minutes, within the manager's limit of ten, and
+# It stops itself after nine minutes, within sweep.sh's limit of ten, and
 # prints one line: how many entries it removed and their size.
 
 use strict;

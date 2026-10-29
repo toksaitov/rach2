@@ -10,8 +10,8 @@
 #
 # The program comes on standard input, followed by a line `__END__` and TEXT,
 # the titles, bodies and comments of the open issues, which it reads as its
-# DATA; without that line it removes nothing and fails. The manager's loop
-# runs it before each check, as root in WSL on the testing host for the
+# DATA; without that line it removes nothing and fails. sweep.sh runs it,
+# through `leftovers` in lib.sh, as root in WSL on the testing host for the
 # accounts' home directories, with -l, and on the owner's computer for the
 # Desktop, which has the owner's checkout `rach2` and its worktrees. SHA is
 # master's commit, and each GITDIR a repository that may have it, as each
@@ -65,7 +65,7 @@
 # for each entry it removes or keeps, but not for a failed test or a loose
 # entry kept only because it changed within SECONDS, and a last line with how
 # many it removed and their size. It stops itself after nine minutes, within
-# the manager's limit of ten.
+# sweep.sh's limit of ten.
 
 use strict;
 use warnings;
