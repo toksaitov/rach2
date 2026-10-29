@@ -394,11 +394,12 @@ items()
 #
 # Bodies are the slow part of the answer, some seconds for each hundred, and
 # most issues are closed, so the closed issues are read without them. The
-# numbers that a closed issue's body gives are kept in the account's cache,
-# `$XDG_CACHE_HOME/rach2/issue-parts` or `~/.cache/rach2/issue-parts`, one
-# line each with the issue's number and the time it last changed, which an
-# edit of its body moves; only the bodies of the closed issues the cache lacks
-# at that time are read, a hundred to a query. An issue that changed in the
+# numbers that a closed issue's body gives are kept in a cache,
+# `$XDG_CACHE_HOME/rach2/issue-parts` or else `build/cache/issue-parts` of the
+# tree this script is in, or of the one it runs in, one line each with the
+# issue's number and the time it last changed, which an edit of its body
+# moves; only the bodies of the closed issues the cache lacks at that time are
+# read, a hundred to a query. An issue that changed in the
 # last minute is not kept, since two edits within one second leave that time
 # as it was. The open issues are read first, so that an issue closed between
 # the two reads is printed once, as closed.
@@ -436,7 +437,12 @@ issues()
                     nodes { number updatedAt closedAt title
                         labels(first: 20) { nodes { name } }
                         parent { number } } } } }') || return 1
-    cache=${XDG_CACHE_HOME:-$HOME/.cache}/rach2/issue-parts
+    cache=${XDG_CACHE_HOME:+$XDG_CACHE_HOME/rach2/issue-parts}
+    if [ -z "$cache" ]; then
+        tree=$(cd "$(dirname "$0")" && git rev-parse --show-toplevel 2> /dev/null) ||
+            tree=$(git rev-parse --show-toplevel 2> /dev/null) || tree=
+        [ -z "$tree" ] || cache=$tree/build/cache/issue-parts
+    fi
     missing=$(printf '%s\n' "$closed" | awk -F '\t' -v cache="$cache" '
         BEGIN {
             while ((getline line < cache) > 0) {

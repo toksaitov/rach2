@@ -7,7 +7,15 @@
 # and a loop restarts as master's version when master changes it. When the
 # copy fails, STATE/run stays as it was, and the loop logs the failure and
 # tries again a minute later. While a session runs, STATE/session has the id
-# of its process group.
+# of its process group. STATE is under `build/flow` of the clone's main
+# working tree unless the loop is given another.
+
+# primary REPO: print the main working tree of the clone REPO, the one whose
+# `.git` the clone's worktrees share, or REPO itself when it is that tree.
+primary()
+{
+    (cd "$1" && cd "$(git rev-parse --git-common-dir)/.." && pwd)
+}
 
 # log TEXT: append TEXT to STATE/loop.log with the time in UTC.
 log()

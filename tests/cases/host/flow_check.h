@@ -2,6 +2,10 @@
 #ifndef HOST_FLOW_CHECK_H
 #define HOST_FLOW_CHECK_H
 #include "fixture.h"
+/* The owner's home on the testing host, where the owner's copy is `rach2`.
+ * Pass it to printf apart from that name: the step store refuses a product
+ * that has the path of the copy that built it. */
+#define FLOW_OWNER_HOME "/home/testing"
 const char *flow_path(struct fixture *f, const char *name);
 const char *flow_source(struct fixture *f, const char *name);
 int flow_put(struct fixture *f, const char *name, const char *text);

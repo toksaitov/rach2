@@ -38,15 +38,15 @@
 # line `NAME KIND: did not answer`; the verdict is then `resources: unknown`,
 # or a low or critical one that ends `; unknown: NAME KIND ... did not answer`.
 #
-# `sizes` prints the sizes of the build trees, the GNU caches, the store of
-# step outputs that the copies share, the ci checkouts, the loops' state and
-# /tmp on the testing host, and of the loops' state and build trees here,
-# largest first, for the manager to choose what to remove when space is low.
-# It then lists, through `leftovers -n` in lib.sh, the failed tests'
-# directories, loose files and copies that the manager's loop would remove
-# before its next check, and the copies and old entries it keeps, with why. It
-# reads every file of those trees, which takes minutes, so the manager's check
-# runs it only then.
+# `sizes` prints the sizes of the build trees, the GNU caches, the ci checkouts,
+# the loops' state, the copies under `build/worktrees` and /tmp on the testing
+# host, and of the loops' state, the worktrees and the build tree of this
+# clone's main working tree here, largest first, for the manager to choose what
+# to remove when space is low. It then lists, through `leftovers -n` in lib.sh,
+# the failed tests' directories, loose files and copies that the manager's loop
+# would remove before its next check, and the copies and old entries it keeps,
+# with why. It reads every file of those trees, which takes minutes, so the
+# manager's check runs it only then.
 #
 # `day DATE` prints the facts of one day, DATE as YYYY-MM-DD, counted at the
 # owner's UTC+6, for the manager's day report: the commits that reached
@@ -59,6 +59,7 @@ REPO=toksaitov/rach2
 TESTING=testing
 # shellcheck source=tools/flow/lib.sh
 . "$(dirname "$0")/lib.sh"
+here=$(primary "$(dirname "$0")")
 
 probe='
 st=$1
@@ -186,13 +187,13 @@ sizes()
 {
     echo "== sizes on the testing host, in GiB"
     printf '%s\n' 'du -sxk /home/*/rach2*/build /home/*/rach2*/build/vendor/gnu \
-        /home/*/rach2*/build/x86_64/vendor/gnu /var/cache/rach2-store \
-        /home/ghrunner/rach2-ci-*/_work /home/*/flow /tmp 2> /dev/null | sort -rn |
+        /home/*/rach2*/build/x86_64/vendor/gnu /home/*/rach2/build/flow \
+        /home/*/rach2/build/worktrees/* /home/ghrunner/rach2-ci-*/_work /tmp 2> /dev/null | sort -rn |
         awk '"'"'{ printf "%7.1f %s\n", $1 / 1048576, $2 }'"'" |
         ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" 'wsl.exe -u root -- sh -s' 2>&1
     echo "== sizes here, in GiB"
-    du -sxk "$HOME"/flow/* "$HOME"/flow/*/rach2/build "$HOME"/Desktop/rach2/build \
-        "$HOME"/Desktop/rach2/.claude/worktrees 2> /dev/null | sort -rn |
+    du -sxk "$here"/build/flow/* "$here"/build/worktrees/* "$here"/build \
+        "$here"/.claude/worktrees 2> /dev/null | sort -rn |
         awk '{ printf "%7.1f %s\n", $1 / 1048576, $2 }'
     echo "== leftovers that the manager's loop removes, and the old ones it keeps"
     leftovers -n
@@ -243,7 +244,7 @@ echo "== progress"
 python3 -B "$(dirname "$0")/progress.py" 2>&1 || echo "status: progress could not be read; investigate before acting"
 echo "== release"
 if env -u TMUX tmux has-session -t rach2-release 2> /dev/null; then echo "release.sh runs"; else echo "release.sh is not running"; fi
-r=$HOME/flow/manager/release/record
+r=$here/build/flow/release/record
 if [ -f "$r" ]; then
     echo "record $r:"
     tail -n 6 "$r"
@@ -291,6 +292,7 @@ grep -v '^#' "$(dirname "$0")/workers" | while read -r name host st; do
     [ -n "$name" ] || continue
     printf '%s: ' "$name"
     if [ "$host" = - ]; then
+        case $st in /*|"~"*) ;; *) st=$here/$st ;; esac
         report=$(printf '%s' "$probe" | sh -s "$st" 2>&1)
     else
         report=$(printf '%s' "$probe" | ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" sh -s "$st" 2>&1)
@@ -306,7 +308,7 @@ grep -v '^#' "$(dirname "$0")/workers" | while read -r name host st; do
     esac
 done
 echo "== reviewer"
-st=$HOME/flow/reviewer
+st=$here/build/flow/reviewer
 if [ ! -d "$st" ]; then
     echo "no reviewer loop has run here: no $st"
 else

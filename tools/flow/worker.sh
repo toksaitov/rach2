@@ -20,17 +20,17 @@
 # waits for its helpers however long they run, which print mode does not do
 # unless CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS is 0, and cannot schedule a wakeup
 # or start a Monitor, since print mode keeps a finished session open until a
-# pending wakeup fires or a monitor's command ends. STATE, `~/flow` unless
-# given, holds the issue file, the log `loop.log`, each session's output as
-# `s-TIME.jsonl` and `s-TIME.err`, the process group of the session that is
-# running in `session`, the clone's path in `repo`, and in `copy` the copy on
-# the testing host that RACH2_TESTING_COPY names for testing.sh, if any; `touch
-# STATE/stop` ends the loop after the session that is running. Sessions run with
-# RACH2_MIN_FREE_GIB at 40 unless the environment gives another, so that a build
-# they start stops before it fills the disk, and with RACH2_STYLE_GATE=strict,
-# so that the git hooks refuse a commit whose style they cannot check. Codex
-# reads at most DOC_BYTES of AGENTS.md, since its own limit, 32 KiB, cuts the
-# file short.
+# pending wakeup fires or a monitor's command ends. STATE, `build/flow/AGENT` of
+# the clone's main working tree unless given, holds the issue file, the log
+# `loop.log`, each session's output as `s-TIME.jsonl` and `s-TIME.err`, the
+# process group of the session that is running in `session`, the clone's path in
+# `repo`, and in `copy` the copy on the testing host that RACH2_TESTING_COPY
+# names for testing.sh, if any; `touch STATE/stop` ends the loop after the
+# session that is running. Sessions run with RACH2_MIN_FREE_GIB at 40 unless the
+# environment gives another, so that a build they start stops before it fills
+# the disk, and with RACH2_STYLE_GATE=strict, so that the git hooks refuse a
+# commit whose style they cannot check. Codex reads at most DOC_BYTES of
+# AGENTS.md, since its own limit, 32 KiB, cuts the file short.
 #
 # A session that ends on the account's usage limit makes the loop wait fifteen
 # minutes. One shorter than two minutes for another reason, such as a lost
@@ -77,7 +77,8 @@ REST=86400
 # write its number to STATE/issue; with `repair`, take only a repair of core,
 # as `repair` decides. Pass by an issue that `rests`. Write nothing when none
 # is waiting, and fail, taking nothing, when the lock cannot be taken or the
-# board cannot be read. The lock is perl's flock on ~/.rach2-claim.lock,
+# board cannot be read. The lock is perl's flock on `build/flow/claim.lock`
+# of the clone's main working tree, which the loops of its worktrees share and
 # which the redirection after the body opens on descriptor 9 for the length of
 # the call. A flock belongs to the open file description, not to the process
 # that took it, so the lock is held until the descriptor is closed: by the
@@ -110,7 +111,7 @@ claim()
             break
         fi
     done
-} 9>> "$HOME/.rach2-claim.lock"
+} 9>> "$flowdir/claim.lock"
 
 # waiting N: print the number of the open `hold` issue and succeed when the
 # work on issue N is committed and only its push waits for that hold: a local
@@ -239,7 +240,7 @@ session()
 
 main()
 {
-    agent=claude state=$HOME/flow repo=
+    agent=claude state='' repo=
     while getopts a:s:r: o; do
         case $o in
             a) agent=$OPTARG ;;
@@ -253,7 +254,9 @@ main()
         *) echo "worker: no agent named $agent" >&2; exit 2 ;;
     esac
     [ -n "$repo" ] || repo=$(cd "$(dirname "$0")/../.." && pwd)
-    mkdir -p "$state"
+    flowdir=$(primary "$repo")/build/flow || exit 1
+    [ -n "$state" ] || state=$flowdir/$agent
+    mkdir -p "$state" "$flowdir"
     state=$(cd "$state" && pwd)
     cd "$repo" || exit 1
     echo "$repo" > "$state/repo"

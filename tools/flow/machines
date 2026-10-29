@@ -14,12 +14,14 @@ mac env JOBS=8
 
 # Windows on the testing host, through `ssh testing` and MSYS2's bash: QEMU
 # under WHPX, with the copy `tree`, the runs' directory `out` and the
-# protected admission site `site`.
+# protected admission site `site`. The corrected QEMU of
+# tools/setup/qemu-whpx is in the copy's build/qemu, and its tooling machine
+# in build/tooling, etude's default there.
 windows accel whpx
-windows tree D:/diadochi/681-windows
-windows out D:/diadochi/681-measured
+windows tree D:/rach2
+windows out D:/rach2/build/release
 windows site C:/ProgramData/rach2/etude-site
-windows path /d/rach2-services/build/tests/qemu-build-11.1.2-whpx-01/libslirp-1147/runtime-pipes
+windows path /d/rach2/build/qemu
 windows path /ucrt64/bin
 windows path /usr/bin
 windows env JOBS=30
@@ -27,11 +29,10 @@ windows env HOSTCC=/ucrt64/bin/gcc
 windows env RACH2_WORKERS=16
 windows env RACH2_MEMORY_MIB=122880
 windows env RACH2_CPUS=2
-windows env RACH2_OVMF_CODE=/d/rach2-services/build/tests/qemu-build-11.1.2-whpx-01/libslirp-1147/runtime-pipes/share/edk2-x86_64-code.fd
-windows env ETUDE_TOOLING_CACHE=D:/diadochi/926-tooling/build/tooling
-windows env USERCHECK_CLANG=D:/diadochi/681-windows/build/host-tools/llvm-21.1.8/bin/clang.exe
+windows env RACH2_OVMF_CODE=/d/rach2/build/qemu/share/edk2-x86_64-code.fd
+windows env USERCHECK_CLANG=D:/rach2/build/host-tools/llvm-21.1.8/bin/clang.exe
 windows env USERCHECK_SYSTEM_PATH=C:/Windows/System32
-windows env TMPDIR=D:/diadochi/681-measured/tmp
+windows env TMPDIR=D:/rach2/build/release/tmp
 
 # The Lenovo: the native cases on its trial boot, which native-deploy starts
 # from the Mac at `peer` on the machine's network; the other values are the

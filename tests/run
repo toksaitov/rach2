@@ -12,9 +12,13 @@
 # The run is `etude run -B`, which takes the tree, prepares the artifacts of
 # the cases chosen and runs them (tools/etude/Readme.md, Native collection
 # execution). This file builds etude and starts it; ARCH, RACH2_CASES and the
-# other variables are etude's to read.
+# other variables are etude's to read. The run's scratch goes under the tree's
+# `build/tmp`, which it sets as TMPDIR.
 #
 repo=$(cd "$(dirname "$0")/.." && pwd) || exit 2
+TMPDIR=$repo/build/tmp
+export TMPDIR
+mkdir -p "$TMPDIR" || exit 2
 make -s -C "$repo" ARCH=i686 build/tools/etude/etude >&2 || {
     echo 'run: result: refused: etude did not build' >&2
     exit 1

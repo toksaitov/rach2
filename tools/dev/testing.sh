@@ -36,41 +36,45 @@
 # is sparse on the host is not sparse here. `sh` opens an interactive shell in
 # the copy.
 #
-# The copy is `/home/testing/rach2`, or the path RACH2_TESTING_COPY names, so
-# that callers on this machine that must not wait for each other, such as the
-# owner's worker loops, each have a copy of their own. The check that the copy
-# is free and the sync are one step, under a lock on the host beside the copy,
-# `COPY.sync.lock`; two callers started at once would otherwise both find the
-# copy free, and the later sync would land under the other's run. A caller
-# takes the lock before it checks, keeps it until its sync ends, or for `run`
-# until the command ends, and records itself in `COPY.sync.owner`. A second
-# caller is refused, not made to wait, as a busy copy refuses it, and prints
-# that record: the first may hold the copy for a run of hours, and the second
-# learns at once that its tree did not reach the host. The lock is flock(1)'s,
-# taken by a shell in WSL whose input comes from this script, so it ends when
-# this script ends, however it ends, or when the connection closes, and a
-# caller that is gone holds nothing. That shell writes to the connection every
-# ten seconds, so that a connection whose other end is gone without having
-# closed it, as when this machine loses power, fails when TCP gives up on the
-# data nobody acknowledges, not after the hours the host's TCP keepalive
-# takes, and the shell ends with it. A lost connection frees the lock while
-# this caller still works in the copy, so the caller watches it: a sync whose
-# holder has ended fails and says so, `run` starts its command only while the
-# holder lives, and a command whose holder ends first is stopped here and the
-# run fails and says so. The command's side on the host is not stopped with
-# it.
+# The copy is the owner's, `/home/testing/rach2`, or the path RACH2_TESTING_COPY
+# names, so that callers on this machine that must not wait for each other, such
+# as the owner's worker loops, each have a copy of their own, under the owner's
+# `build/worktrees`. No tracked file writes out a path under the owner's copy
+# whole: the GNU host checks copy every tracked file into the step store, which
+# refuses a product that has the path of the copy that built it. A process in
+# such a copy does not make the copy around it busy. The check that the copy is
+# free and the sync are one step, under a lock in the copy,
+# `COPY/build/.sync.lock`, which the sync leaves alone; two callers started at
+# once would otherwise both find the copy free, and the later sync would land
+# under the other's run. A caller takes the lock before it checks, keeps it
+# until its sync ends, or for `run` until the command ends, and records itself
+# in `COPY/build/.sync.owner`. A second caller is refused, not made to wait, as
+# a busy copy refuses it, and prints that record: the first may hold the copy
+# for a run of hours, and the second learns at once that its tree did not reach
+# the host. The lock is flock(1)'s, taken by a shell in WSL whose input comes
+# from this script, so it ends when this script ends, however it ends, or when
+# the connection closes, and a caller that is gone holds nothing. That shell
+# writes to the connection every ten seconds, so that a connection whose other
+# end is gone without having closed it, as when this machine loses power, fails
+# when TCP gives up on the data nobody acknowledges, not after the hours the
+# host's TCP keepalive takes, and the shell ends with it. A lost connection
+# frees the lock while this caller still works in the copy, so the caller
+# watches it: a sync whose holder has ended fails and says so, `run` starts its
+# command only while the holder lives, and a command whose holder ends first is
+# stopped here and the run fails and says so. The command's side on the host is
+# not stopped with it.
 #
-# `wait` watches a run started on the host as `/home/testing/NAME.sh`, which
-# writes its results as lines beginning `NAME: ` to `/home/testing/NAME.out`
-# and its work under `/home/testing/NAME/`, and returns as soon as there is
-# something to act on: more than SEEN result lines (0 unless given), the run
-# ended, nothing under its work directory changed for 15 minutes, which is a
-# step stuck, or 100 minutes gone, which is before the two hours a background
-# command of an agent may last. It prints the new lines and the reason, so
-# that the caller reads each result when it lands and waits again with the
-# new count. The probe it sends ends with a command that succeeds, whether
-# or not NAME.out exists yet, so a status other than 0 means that ssh or the
-# copy's shell failed; `wait` then exits 1 and says so, since it cannot tell
+# `wait` watches a run started on the host as RUNS/NAME.sh, RUNS being the
+# owner's copy's `build/runs`, which writes its results as lines beginning
+# `NAME: ` to RUNS/NAME.out and its work under RUNS/NAME/, and returns as soon
+# as there is something to act on: more than SEEN result lines (0 unless given),
+# the run ended, nothing under its work directory changed for 15 minutes, which
+# is a step stuck, or 100 minutes gone, which is before the two hours a
+# background command of an agent may last. It prints the new lines and the
+# reason, so that the caller reads each result when it lands and waits again
+# with the new count. The probe it sends ends with a command that succeeds,
+# whether or not NAME.out exists yet, so a status other than 0 means that ssh or
+# the copy's shell failed; `wait` then exits 1 and says so, since it cannot tell
 # whether the run has ended.
 #
 # The host is reached as `ssh testing`. Its ssh server is Windows's OpenSSH,
@@ -101,7 +105,8 @@ set -e
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 HOST=testing
-DEST=${RACH2_TESTING_COPY:-/home/testing/rach2}
+OWNER=/home/testing/rach2
+DEST=${RACH2_TESTING_COPY:-$OWNER}
 case $DEST in
     /*[!A-Za-z0-9/._-]*|*/..*|/) echo "testing: not a copy's path: $DEST" >&2; exit 2 ;;
     /*) ;;
@@ -155,6 +160,7 @@ probe()
     fi
     for d in /proc/[0-9]*; do
         case "$(readlink "$d/cwd" 2>/dev/null)" in
+            "$1"/build/worktrees/*) continue ;;
             "$1"|"$1"/*) ;;
             *) continue ;;
         esac
@@ -172,13 +178,14 @@ probe()
 # describes.
 hold()
 {
-    exec 8>> "$1.sync.owner" 9>> "$1.sync.lock" || exit 1
+    mkdir -p "$1/build" || exit 1
+    exec 8>> "$1/build/.sync.owner" 9>> "$1/build/.sync.lock" || exit 1
     flock 8 || exit 1
     flock -n 9 || {
-        [ $? -eq 1 ] && echo "the sync lock, held by $(cat "$1.sync.owner")"
+        [ $? -eq 1 ] && echo "the sync lock, held by $(cat "$1/build/.sync.owner")"
         exit 0
     }
-    echo "pid $$ since $(date '+%Y-%m-%d %H:%M:%S'): $who" > "$1.sync.owner"
+    echo "pid $$ since $(date '+%Y-%m-%d %H:%M:%S'): $who" > "$1/build/.sync.owner"
     exec 8>&-
     probe "$1"
     echo held
@@ -390,10 +397,11 @@ case "${1:-}" in
             ''|*[!A-Za-z0-9_-]*) echo "testing: wait needs a run's name" >&2; exit 2 ;;
         esac
         end=$(( $(date +%s) + 6000 ))
+        runs=$OWNER/build/runs
         while :; do
             status=0
-            out=$(printf 'pgrep -f /home/testing/%s.sh > /dev/null || pgrep -f "sh %s.sh" > /dev/null && echo RUNNING; find /home/testing/%s -type f -mmin -15 2>/dev/null | head -1 | grep -q . && echo FRESH; cat /home/testing/%s.out 2>/dev/null || :\n' \
-                "$name" "$name" "$name" "$name" | "$0" sh 2>/dev/null) || status=$?
+            out=$(printf 'pgrep -f %s/%s.sh > /dev/null || pgrep -f "sh %s.sh" > /dev/null && echo RUNNING; find %s/%s -type f -mmin -15 2>/dev/null | head -1 | grep -q . && echo FRESH; cat %s/%s.out 2>/dev/null || :\n' \
+                "$runs" "$name" "$name" "$runs" "$name" "$runs" "$name" | "$0" sh 2>/dev/null) || status=$?
             if [ "$status" -ne 0 ]; then
                 echo "testing: $name: the host did not answer, status $status; its run may still go on" >&2
                 exit 1
@@ -409,7 +417,7 @@ case "${1:-}" in
             fi
             case "$out" in
                 *FRESH*) ;;
-                *) echo "testing: $name: stalled, nothing under /home/testing/$name changed for 15 minutes, $lines lines"; exit 0 ;;
+                *) echo "testing: $name: stalled, nothing under $runs/$name changed for 15 minutes, $lines lines"; exit 0 ;;
             esac
             if [ "$(date +%s)" -ge "$end" ]; then
                 echo "testing: $name: still running after 100 minutes, $lines lines; wait again"

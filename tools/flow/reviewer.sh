@@ -50,14 +50,14 @@
 # and is not counted. No push and no issue waits for a review; the release of
 # the phase does.
 #
-# STATE, `~/flow/reviewer` unless given, holds the log `loop.log`, the runs of
-# the range being reviewed in `tries` as `P BASE HEAD N`, `until`, the
-# worktree `wt`, the process group of the review that is running in
-# `session`, the review whose findings are being filed in `pending`, the
-# failure not yet on the phase in `failure`, and each review's issue texts
-# and output as `r-P-TIME.issues`, `.jsonl`, `.err` and `.json`, with the
-# findings filed in `.filed`, one `I N` a line for finding I filed as issue
-# N, and `.commented` once the summary is on the phase.
+# STATE, `build/flow/reviewer` of the clone's main working tree unless given,
+# holds the log `loop.log`, the runs of the range being reviewed in `tries` as
+# `P BASE HEAD N`, `until`, the worktree `wt`, the process group of the review
+# that is running in `session`, the review whose findings are being filed in
+# `pending`, the failure not yet on the phase in `failure`, and each review's
+# issue texts and output as `r-P-TIME.issues`, `.jsonl`, `.err` and `.json`,
+# with the findings filed in `.filed`, one `I N` a line for finding I filed as
+# issue N, and `.commented` once the summary is on the phase.
 # Between reviews, while no filing or failure waits, the loop prunes these
 # files as `prune_logs` in lib.sh says.
 # Removing `pending` abandons the filing. `touch STATE/stop` ends the loop
@@ -277,7 +277,7 @@ runs()
 
 main()
 {
-    agent=codex state=$HOME/flow/reviewer repo=
+    agent=codex state='' repo=
     while getopts a:m:e:s:r: o; do
         case $o in
             a) agent=$OPTARG ;;
@@ -300,6 +300,7 @@ main()
         *) echo 'reviewer: invalid lead effort' >&2; exit 2 ;;
     esac
     [ -n "$repo" ] || repo=$(cd "$(dirname "$0")/../.." && pwd)
+    [ -n "$state" ] || state=$(primary "$repo")/build/flow/reviewer || exit 1
     mkdir -p "$state"
     state=$(cd "$state" && pwd)
     cd "$repo" || exit 1

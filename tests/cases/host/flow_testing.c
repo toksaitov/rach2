@@ -139,7 +139,8 @@ int flow_testing_mock(int argc, char **argv)
     if (!strcmp(name, "sleep")) {
         char path[4096];
         FILE *f;
-        snprintf(path, sizeof(path), "%s/%s.out", ev("HOSTHOME"), ev("FLOW_WAIT_NAME"));
+        snprintf(path, sizeof(path), "%s/rach2/build/runs/%s.out", ev("HOSTHOME"),
+                 ev("FLOW_WAIT_NAME"));
         f = fopen(path, "ab");
         if (!f)
             return 1;
@@ -298,9 +299,9 @@ static int wait_row(struct testing *t, const struct waiting *spec)
     char path[4096], env[5000], *script;
     int ok;
     struct fx_child process;
-    snprintf(path, sizeof(path), "%s/%s", t->host, t->name);
+    snprintf(path, sizeof(path), "%s/rach2/build/runs/%s", t->host, t->name);
     fx_remove(path);
-    snprintf(path, sizeof(path), "%s/%s.out", t->host, t->name);
+    snprintf(path, sizeof(path), "%s/rach2/build/runs/%s.out", t->host, t->name);
     fx_remove(path);
     if (running) {
         char file[200];
@@ -314,11 +315,11 @@ static int wait_row(struct testing *t, const struct waiting *spec)
             return 0;
     }
     if (fresh) {
-        snprintf(path, sizeof(path), "%s/%s/log", t->host, t->name);
+        snprintf(path, sizeof(path), "%s/rach2/build/runs/%s/log", t->host, t->name);
         fx_text(path, "");
     }
     if (results) {
-        snprintf(path, sizeof(path), "%s/%s.out", t->host, t->name);
+        snprintf(path, sizeof(path), "%s/rach2/build/runs/%s.out", t->host, t->name);
         fx_text(path, results);
     }
     {
@@ -348,10 +349,10 @@ static int waits(struct testing *t)
     snprintf(expected, sizeof(expected), "%s: first\ntesting: %s: running, 1 lines\n", t->name,
              t->name);
     ok = wait_row(t, &(struct waiting){"wait first result", expected, NULL, NULL, 0, 1, 1}) && ok;
-    snprintf(
-        expected, sizeof(expected),
-        "testing: %s: stalled, nothing under /home/testing/%s changed for 15 minutes, 0 lines\n",
-        t->name, t->name);
+    snprintf(expected, sizeof(expected),
+             "testing: %s: stalled, nothing under %s/rach2/build/runs/%s "
+             "changed for 15 minutes, 0 lines\n",
+             t->name, FLOW_OWNER_HOME, t->name);
     ok = wait_row(t, &(struct waiting){"wait stalled", expected, NULL, NULL, 0, 1, 0}) && ok;
     snprintf(expected, sizeof(expected), "%s: two\ntesting: %s: ended, 2 lines\n", t->name,
              t->name);
@@ -367,14 +368,16 @@ static int waits(struct testing *t)
 int flow_testing(struct fixture *f)
 {
     struct testing t;
+    char runs[4200];
     int ok = 1;
     memset(&t, 0, sizeof(t));
     t.f = f;
     snprintf(t.script, sizeof(t.script), "%s/tree/tools/dev/testing.sh", f->work);
     snprintf(t.host, sizeof(t.host), "%s/host/home", f->work);
+    snprintf(runs, sizeof(runs), "%s/rach2/build/runs", t.host);
     snprintf(t.name, sizeof(t.name), "testingwait%ld", (long)getpid());
     if (!fx_copy(flow_source(f, "tools/dev/testing.sh"), t.script) || !fx_mock(f, "ssh") ||
-        !fx_mock(f, "rsync") || !fx_mock(f, "wsl.exe") || !fx_mkdir(t.host) ||
+        !fx_mock(f, "rsync") || !fx_mock(f, "wsl.exe") || !fx_mkdir(runs) ||
         !fx_mkdir(flow_path(f, "copy")))
         return 0;
     fx_env("FLOW_TESTING", "1");

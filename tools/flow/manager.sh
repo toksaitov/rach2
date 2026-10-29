@@ -15,12 +15,13 @@
 # incident waits, is stopped with every process in its group, and the log
 # says so.
 #
-# STATE, `~/flow/manager` unless given, holds the log `loop.log`, the
-# manager's log `manager.log`, with the time and the last line of each check,
-# each check's output as `c-TIME.jsonl` and `c-TIME.err`, the process group of
-# the check that is running in `session`, and `last`, the time of the last
-# check that ended by itself. `touch STATE/stop` ends the loop after the check
-# that is running. The checks run at high effort, as a worker's sessions do.
+# STATE, `build/flow/manager` of the clone's main working tree unless given,
+# holds the log `loop.log`, the manager's log `manager.log`, with the time and
+# the last line of each check, each check's output as `c-TIME.jsonl` and
+# `c-TIME.err`, the process group of the check that is running in `session`, and
+# `last`, the time of the last check that ended by itself. `touch STATE/stop`
+# ends the loop after the check that is running. The checks run at high effort,
+# as a worker's sessions do.
 #
 # Before each check the loop prunes the checks' output, as `prune_logs` in
 # lib.sh says, and runs `scratch.pl` on the testing host with the stems of
@@ -41,7 +42,7 @@ DEADLINE=2400
 
 main()
 {
-    state=$HOME/flow/manager repo=
+    state='' repo=
     while getopts s:r: o; do
         case $o in
             s) state=$OPTARG ;;
@@ -50,6 +51,7 @@ main()
         esac
     done
     [ -n "$repo" ] || repo=$(cd "$(dirname "$0")/../.." && pwd)
+    [ -n "$state" ] || state=$(primary "$repo")/build/flow/manager || exit 1
     mkdir -p "$state"
     state=$(cd "$state" && pwd)
     cd "$repo" || exit 1

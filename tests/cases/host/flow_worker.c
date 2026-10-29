@@ -356,6 +356,8 @@ static int worker_setup(struct fixture *f)
         return 0;
     snprintf(target, sizeof(target), "%s/tools/flow/worker.txt", cwd);
     fx_text(target, "Work on issue @ISSUE@.\n");
+    snprintf(target, sizeof(target), "%s/.gitignore", cwd);
+    fx_text(target, "/build/\n");
     G("add", "-A");
     G("commit", "-q", "-m", "Add the flow scripts");
     G("push", "-q", origin, "master");

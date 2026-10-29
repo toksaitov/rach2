@@ -68,12 +68,12 @@
 #   a `ci` issue or a hold means that SHA is not the phase's finished work.
 #   A board that cannot be read is waited on.
 # * build: SHA is built from clean for the Lenovo on the testing host, in
-#   the copy /home/testing/rach2-clean, with `ARCH=x86_64 make clean` and
-#   `make machine GNU_AGENTS=all`, whose GNU root has every package of the
-#   agents layer, and `make native-assets` when the machines file names the
-#   Lenovo, and the kernel, the recovery kernel and image, the GNU root,
-#   compressed, and the native cases' payload are fetched with their SHA-256
-#   into a worktree of SHA, STATE/wt.
+#   the copy `build/worktrees/release` of the owner's, /home/testing/rach2, with
+#   `ARCH=x86_64 make clean` and `make machine GNU_AGENTS=all`, whose GNU
+#   root has every package of the agents layer, and `make native-assets` when
+#   the machines file names the Lenovo, and the kernel, the recovery kernel
+#   and image, the GNU root, compressed, and the native cases' payload are
+#   fetched with their SHA-256 into a worktree of SHA, STATE/wt.
 # * recovery: the Lenovo boots its recovery system from its recovery
 #   partition; the recovery kernel and image on that partition are replaced
 #   when they differ from the build's, keeping the partition's recovery key
@@ -121,30 +121,29 @@
 # recovery system makes new ones at every boot; the address and the serial
 # identify the machine.
 #
-# STATE, `~/flow/manager/release` unless given, holds `record`, the record
-# of the release under way, one line per fact: `phase P`, `sha SHA`,
-# `chosen TIME`, `rerun R O ARCH:SUITE...` when run R at commit O failed and
-# only those suites run again, `again MACHINE WORD...` when only those run
-# again on MACHINE, `dispatched TIME`, `run ID RESULT`, `filed ID #N...` for
-# the issues that report a run that failed, `MACHINE started RUN`, `result
-# MACHINE RUN failure WORD...` and `filed MACHINE #N WORD...` for a run on
-# another machine, `STEP done TIME DETAIL`,
-# `touched TIME` before the first change to the machine, `install started
-# TIME`, `reported TIME` once the phase has the report, `closing TIME`, and
-# last `failed STEP: WHY`, `void: WHY` or `closed TIME`; `log`, everything
-# the script prints; `wt`, the worktree; and the records of releases that
-# ended, as `P-SHA-TIME`, with the build's digests beside each closed one as
-# `P-SHA-TIME.sha256`. A release that closes its phase copies the digests out of
-# `wt` and then removes `wt`, with the build's products in it, last. A
-# record that ended, or that belongs to another phase, is copied aside once the
-# board has given a new candidate, and the new record then replaces it in one
-# rename. The new record keeps the old one's `touched` line unless the old
-# release closed, since the machine may still run what that release left. A done
-# step is skipped when the script runs again, a transfer whose files still hash
-# right on the machine is kept, and a step that writes the machine first asks it
-# what it runs and which disk has the serial. A reboot counts as done when a
-# boot younger than the request answers, by /proc/uptime. One release runs at a
-# time, under a lock on STATE/lock.
+# STATE, `build/flow/release` of the clone's main working tree unless given,
+# holds `record`, the record of the release under way, one line per fact: `phase
+# P`, `sha SHA`, `chosen TIME`, `rerun R O ARCH:SUITE...` when run R at commit O
+# failed and only those suites run again, `again MACHINE WORD...` when only
+# those run again on MACHINE, `dispatched TIME`, `run ID RESULT`, `filed ID
+# #N...` for the issues that report a run that failed, `MACHINE started RUN`,
+# `result MACHINE RUN failure WORD...` and `filed MACHINE #N WORD...` for a run
+# on another machine, `STEP done TIME DETAIL`, `touched TIME` before the first
+# change to the machine, `install started TIME`, `reported TIME` once the phase
+# has the report, `closing TIME`, and last `failed STEP: WHY`, `void: WHY` or
+# `closed TIME`; `log`, everything the script prints; `wt`, the worktree; and
+# the records of releases that ended, as `P-SHA-TIME`, with the build's digests
+# beside each closed one as `P-SHA-TIME.sha256`. A release that closes its phase
+# copies the digests out of `wt` and then removes `wt`, with the build's
+# products in it, last. A record that ended, or that belongs to another phase,
+# is copied aside once the board has given a new candidate, and the new record
+# then replaces it in one rename. The new record keeps the old one's `touched`
+# line unless the old release closed, since the machine may still run what that
+# release left. A done step is skipped when the script runs again, a transfer
+# whose files still hash right on the machine is kept, and a step that writes
+# the machine first asks it what it runs and which disk has the serial. A reboot
+# counts as done when a boot younger than the request answers, by /proc/uptime.
+# One release runs at a time, under a lock on STATE/lock.
 #
 # The exit status is 0 when the phase was released and closed, or released
 # and kept open; 75 when it could not start or go on for a reason that
@@ -153,7 +152,8 @@
 # says, and the manager reads why.
 
 REPO=toksaitov/rach2
-COPY=/home/testing/rach2-clean
+OWNER=/home/testing/rach2
+COPY=$OWNER/build/worktrees/release
 ARCH_DIR=build/x86_64
 RECOVERY_IMAGE=images/rach2-recovery-with-key.krffs
 WSL='MSYS_NO_PATHCONV=1 wsl.exe -- bash -s'
@@ -902,7 +902,7 @@ again_machine()
 
 main()
 {
-    state=$HOME/flow/manager/release
+    state=
     macrun=
     while getopts m:s: o; do
         case $o in
@@ -917,6 +917,9 @@ main()
     esac
     phase=$1
     repo=$(cd "$(dirname "$0")/../.." && pwd)
+    [ -n "$state" ] ||
+        state=$(cd "$repo" && cd "$(git rev-parse --git-common-dir)/.." && pwd)/build/flow/release ||
+        exit 1
     address=${RACH2_MACHINE_ADDRESS:-192.168.0.106}
     mac=${RACH2_MACHINE_MAC:-28:d2:44:7e:e0:af}
     serial=${RACH2_MACHINE_SERIAL:-S6P2NX0T381638Z}

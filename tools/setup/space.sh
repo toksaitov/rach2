@@ -15,12 +15,12 @@
 # reports without starting a Windows program. Starting one through WSL's
 # interop can stall for many minutes at a time, so PowerShell is asked only
 # for the disk file's Windows path, from the registry, when none is known.
-# The path is kept in the account's cache, and asked for again when the
-# mount has no file at the kept path. PowerShell is started from /: Windows
-# opens its working directory through WSL as the distribution's default
-# user, who cannot enter another user's home of mode 750, and fails to start
-# it there. A missing path or reading, including a query or a df that does
-# not finish within a minute, refuses the work. tests/run and
+# The path is kept in `$XDG_CACHE_HOME/rach2` or else in DIR's `build/cache`,
+# and asked for again when the mount has no file at the kept path. PowerShell is
+# started from /: Windows opens its working directory through WSL as the
+# distribution's default user, who cannot enter another user's home of mode 750,
+# and fails to start it there. A missing path or reading, including a query or a
+# df that does not finish within a minute, refuses the work. tests/run and
 # tools/setup/preflight.sh call it with the floor RACH2_MIN_FREE_GIB gives.
 #
 set -u
@@ -39,11 +39,10 @@ if [ -z "$free" ] || [ "$free" -lt "$floor" ]; then
 fi
 [ -n "${WSL_DISTRO_NAME:-}" ] || exit 0
 mounts=${RACH2_WSL_MOUNTS:-/mnt}
-cache=
 if [ -n "${XDG_CACHE_HOME:-}" ]; then
     cache=$XDG_CACHE_HOME/rach2
-elif [ -n "${HOME:-}" ]; then
-    cache=$HOME/.cache/rach2
+else
+    cache=$dir/build/cache
 fi
 
 # drive_free DISK: print the drive of the Windows path DISK and its free GiB,

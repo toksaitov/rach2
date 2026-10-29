@@ -779,10 +779,13 @@ static int intermittent_build_rows(struct release *r)
                "intermittent failure repeats full run without changing issue") &&
          ok;
     run(r, &(struct release_row){.record = r->head, .board = "ready: yes " H, .git = "yes"});
+    snprintf(expected, sizeof(expected),
+             "^testing %s/rach2/build/worktrees/release run ARCH=x86_64 make clean && "
+             "ARCH=x86_64 make machine GNU_AGENTS=all && ",
+             FLOW_OWNER_HOME);
     return check(r,
                  f->status == 75 && !fx_has(flow_path(f, "state/record"), "build done ") &&
-                     called(r, "^testing /home/testing/rach2-clean run ARCH=x86_64 make clean && "
-                               "ARCH=x86_64 make machine GNU_AGENTS=all && "),
+                     called(r, expected),
                  "machine build starts clean") &&
            ok;
 }
