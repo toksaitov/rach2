@@ -20,7 +20,7 @@ A `struct block_device` (`block.h`) has a sector size, always `BLOCK_SECTOR_SIZE
 | --- | --- | --- |
 | `BLOCK_FAULT_SAFE` | ATA always; AHCI and NVMe until `ahci_start` and `nvme_start` | `read` and `write` complete in the call from any context, polling with interrupts off |
 | `BLOCK_POLLABLE` | AHCI, NVMe | `read` and `write` still poll from any context once the device uses `submit` |
-| `BLOCK_WRITE_THROUGH` | AHCI, NVMe | a write is on the medium when answered, unless its request has `BLOCK_REQ_NOFLUSH`; `unflushed` records one answered without |
+| `BLOCK_WRITE_THROUGH` | AHCI, NVMe, loop devices | a write is on the medium when answered, unless its request has `BLOCK_REQ_NOFLUSH`; `unflushed` records one answered without |
 | `BLOCK_CALLER_SYNC` | loop devices | the device sleeps its caller and answers in the same call |
 | `BLOCK_READ_ONLY` | a write-protected stick, a loop device attached read-only | every mount of the device is read-only (`vfs.c`) |
 | `BLOCK_STALLED` | `request.c` | every request of the device passed its deadlines; new requests fail with `EIO` until a late completion |
@@ -81,7 +81,7 @@ Kernel test fixtures can call `block_lag_hold(1)` after installing the wrapper. 
 
 ### Loop devices
 
-`loop.c` has `LOOP_DEVICES`, 4, `BLOCK_CALLER_SYNC` devices over regular files. `read` is `vfs_read` of the file, `write` is `vfs_write` followed by `vfs_fsync`, so a block the buffer cache has written is in the file, and `flush` is `vfs_fsync`. `backing` is the device of the mount the file is on, and an attachment deeper than `BLOCK_MAX_DEPTH` fails with `ELOOP`. The file's length, a positive whole number of sectors, fixes the sector count, so a short read or write is a device error.
+`loop.c` has `LOOP_DEVICES`, 4, `BLOCK_CALLER_SYNC` and `BLOCK_WRITE_THROUGH` devices over regular files. `read` is `vfs_read` of the file, `write` is `vfs_write` and marks the device `unflushed`, and `flush` is `vfs_fsync`, which clears the mark when no write was answered while it slept. The block layer follows a write without `BLOCK_REQ_NOFLUSH` with the flush in the same call, so such a write, and every durable sync of the buffer cache, leaves the blocks in the file on its medium; the cache's other writes wait for the next flush, which lets a stream of writes into an image run at the speed of the file system under it. `backing` is the device of the mount the file is on, and an attachment deeper than `BLOCK_MAX_DEPTH` fails with `ELOOP`. The file's length, a positive whole number of sectors, fixes the sector count, so a short read or write is a device error.
 
 An attachment identifies its file by mount and node, so a hard link is the same file and a second attachment of it fails with `EBUSY`. `loop_attach` claims the slot before anything that can sleep, resolves the path, takes the mount's namespace lock and resolves it again, so a file a KRFFS relocation moved meanwhile is found where it is now; it opens and syncs the file and checks its length and that it is not busy, attached or mapped, under the lock, before publishing the device. The attachment's open description keeps the volume the file is on from being unmounted, and a write, truncation or length change of the file fails with `EBUSY` (`loop_backs`), as do an unlink of it and a rename over it on the KRFFS root. `loop_repoint` follows a node a relocation moves.
 

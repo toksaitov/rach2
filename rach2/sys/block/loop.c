@@ -2,10 +2,12 @@
  * loop.c: block devices over regular files.
  *
  * A device's read is a read of the file through the file system it is on,
- * and its write is a write followed by a sync of that file, so a block the
- * buffer cache has written is in the file. That is what lets a file system
- * be in a file: an image on a disk, on a stick, or on a root that is only
- * memory.
+ * and its write is a write of that file. The device is write-through
+ * (`BLOCK_WRITE_THROUGH`) and its flush is a sync of the file, so a write
+ * the buffer cache sends without `BLOCK_REQ_NOFLUSH`, and every durable sync
+ * of the cache, ends with the file synced, while the cache's other writes
+ * leave the sync to the next flush. That is what lets a file system be in a
+ * file: an image on a disk, on a stick, or on a root that is only memory.
  *
  * The device sleeps its caller and answers in the same call
  * (`BLOCK_CALLER_SYNC`): it takes no request of the pool, because the device
@@ -42,8 +44,9 @@ struct loop_device {
     void *handle;
     int writable;
     int in_flight; /* transfers inside the file system the file is on */
-    /* Every write is a write of the file and a sync of it, and /proc/loop
-     * reports both counts so a test can see that the sync happened. */
+    /* The writes of the file and its syncs by the flush, which /proc/loop
+     * reports so a test can see that a sync happened; the flush reads
+     * `writes` to tell whether one was answered while it synced. */
     uint32_t writes;
     uint32_t syncs;
     int release_due;          /* the medium went during a transfer: the last one out releases */
@@ -133,13 +136,7 @@ static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, cons
     loop->in_flight++;
     wrote = vfs_write(loop->mnt, loop->handle, buffer, bytes, lba * BLOCK_SECTOR_SIZE);
     loop->writes++;
-    if (wrote >= 0 && (uint32_t)wrote == bytes) {
-        if (vfs_fsync(loop->mnt, loop->handle) != 0) {
-            loop_transfer_ended(loop);
-            return -EIO;
-        }
-        loop->syncs++;
-    }
+    loop->dev.unflushed = 1;
     loop_transfer_ended(loop);
     if (wrote < 0 || (uint32_t)wrote != bytes) {
         klog(KLOG_WARN, "loop", "write: loop%d: sector %d: short by %d", loop->index, (int)lba,
@@ -149,10 +146,15 @@ static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, cons
     return 0;
 }
 
-/** Sync the file, in the call; `request` is always NULL for this device. */
+/**
+ * Sync the file, in the call; `request` is always NULL for this device. The
+ * device is marked flushed only when no write was answered while the sync
+ * slept, since the sync may not have covered it.
+ */
 static int loop_flush(block_device_t *device, struct block_request *request)
 {
     struct loop_device *loop = loop_of(device);
+    uint32_t writes = loop->writes;
     int rc;
 
     (void)request;
@@ -161,6 +163,12 @@ static int loop_flush(block_device_t *device, struct block_request *request)
     }
     loop->in_flight++;
     rc = vfs_fsync(loop->mnt, loop->handle);
+    if (rc == 0) {
+        loop->syncs++;
+        if (loop->writes == writes) {
+            loop->dev.unflushed = 0;
+        }
+    }
     loop_transfer_ended(loop);
     return rc == 0 ? 0 : -EIO;
 }
@@ -562,7 +570,8 @@ int loop_attach(int index, const char *path, int writable)
 
     loop->dev.sector_size = BLOCK_SECTOR_SIZE;
     loop->dev.sector_count = st.size / BLOCK_SECTOR_SIZE;
-    loop->dev.flags = BLOCK_CALLER_SYNC | (writable ? 0u : BLOCK_READ_ONLY);
+    loop->dev.flags = BLOCK_CALLER_SYNC | BLOCK_WRITE_THROUGH | (writable ? 0u : BLOCK_READ_ONLY);
+    loop->dev.unflushed = 0;
     loop->dev.deadline_ticks = 0;
     loop->dev.read = loop_read;
     loop->dev.write = loop_write;

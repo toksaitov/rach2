@@ -530,13 +530,37 @@ int block_request_flags(block_device_t *device, int write, uint64_t lba, uint32_
 }
 
 /**
+ * The transfer of a device that sleeps its caller and answers in the same
+ * call, `BLOCK_CALLER_SYNC`, which is called directly and takes no request.
+ * On a `BLOCK_WRITE_THROUGH` one, a write without `BLOCK_REQ_NOFLUSH` is
+ * followed by the device's flush in the same call.
+ */
+static int transfer_caller_sync(block_device_t *device, int write, uint64_t lba, uint32_t count,
+                                void *buffer, uint32_t req_flags)
+{
+    int rc;
+
+    if (!kirq_enabled() || !current_proc || !current_proc->in_syscall) {
+        k_panic("block: a sleeping device was reached outside syscall context");
+    }
+    if (!write) {
+        return device->read ? device->read(device, lba, count, buffer) : -EIO;
+    }
+    rc = device->write ? device->write(device, lba, count, buffer) : -EIO;
+    if (rc == 0 && (device->flags & BLOCK_WRITE_THROUGH) && !(req_flags & BLOCK_REQ_NOFLUSH)) {
+        rc = device->flush(device, 0);
+    }
+    return rc;
+}
+
+/**
  * `block_request_flags` without the counting: choose the path by the
  * device's flags. A device that sleeps its caller and answers in the same
- * call is called directly and takes no request, since the device under it
- * takes one while it waits, and two requests for one transfer can fill the
- * pool with callers waiting on each other. A caller outside a system call,
- * such as a page fault with interrupts off, polls a `BLOCK_POLLABLE` device;
- * any other sleeping device reached there stops the kernel.
+ * call takes no request, since the device under it takes one while it
+ * waits, and two requests for one transfer can fill the pool with callers
+ * waiting on each other. A caller outside a system call, such as a page
+ * fault with interrupts off, polls a `BLOCK_POLLABLE` device; any other
+ * sleeping device reached there stops the kernel.
  */
 static int transfer(block_device_t *device, int write, uint64_t lba, uint32_t count, void *buffer,
                     uint32_t req_flags)
@@ -565,13 +589,7 @@ static int transfer(block_device_t *device, int write, uint64_t lba, uint32_t co
         return 0;
     }
     if (device->flags & BLOCK_CALLER_SYNC) {
-        if (!kirq_enabled() || !current_proc || !current_proc->in_syscall) {
-            k_panic("block: a sleeping device was reached outside syscall context");
-        }
-        if (write) {
-            return device->write ? device->write(device, lba, count, buffer) : -EIO;
-        }
-        return device->read ? device->read(device, lba, count, buffer) : -EIO;
+        return transfer_caller_sync(device, write, lba, count, buffer, req_flags);
     }
     if (!device->submit) {
         return -EIO;

@@ -62,7 +62,7 @@
       "execution": {"program": "loopdev_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["loopdev-disk"]}, {"fixture": "disk", "names": ["image-disk", "image-transfer"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure; the scenario removes the images it takes out of the copy after a pass"},
       "steps": [
         {"step_id": "krffs", "stage": "execute", "machine": "volume", "does": "boot the copy, run loopdevprobe krffs at the debug shell: an image of type KRFFS on the disk's FAT32 volume attached to loop0, mounted, read, written, unmounted, detached, attached again and read back, everything an attachment refuses, and Linux's loop ioctls, and end the machine with QMP's quit"},
-        {"step_id": "durable", "stage": "execute", "machine": "volume", "does": "boot the copy again, run loopdevprobe durable, 128 writes to a file of the KRFFS image through loop0, each counted written and synced in /proc/loop, and end the machine with QMP's quit"},
+        {"step_id": "durable", "stage": "execute", "machine": "volume", "does": "boot the copy again, run loopdevprobe durable, 128 writes to a file of the KRFFS image through loop0, each a sync point that /proc/loop counts as at least one write and one sync of the backing file, and end the machine with QMP's quit"},
         {"step_id": "image", "stage": "execute", "does": "take krffs.img out of the copy's volume with mcopy, check it with fsck.krffs --strict and read its /made.txt with readfile.krffs"}
       ],
       "machines": [
@@ -72,7 +72,7 @@
       "assertions": [
         {"assertion_id": "probe-ok", "checks": "loopdevprobe's line says LOOPPROBE OK (krffs), never LOOPPROBE FAIL", "source": "scenario"},
         {"assertion_id": "attach-said", "checks": "the kernel says loop: loop0: /m/ for the image the probe attached on the volume", "source": "scenario"},
-        {"assertion_id": "durable-ok", "checks": "loopdevprobe's line says LOOPPROBE OK (durable), never LOOPPROBE FAIL: the device's syncs grow with its writes, at least one a write", "source": "scenario"},
+        {"assertion_id": "durable-ok", "checks": "loopdevprobe's line says LOOPPROBE OK (durable), never LOOPPROBE FAIL: the device's writes and its syncs of the backing file each grow by at least one a write", "source": "scenario"},
         {"assertion_id": "fsck-strict", "checks": "mcopy takes krffs.img out of the volume the machine wrote, and fsck.krffs --strict exits 0 on it", "source": "scenario"},
         {"assertion_id": "made-in-image", "checks": "readfile.krffs reads /made.txt out of the KRFFS image, and it says 'written through a loop device'", "source": "scenario"}
       ],
