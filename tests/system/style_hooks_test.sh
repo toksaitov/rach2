@@ -3,9 +3,10 @@
 # tools/verify/hookcheck.sh runs, in a scratch repository whose
 # core.hooksPath names this tree's hooks. A commit of a misformatted C file
 # must commit it formatted and leave it staged as committed; a misformatted C
-# file with unstaged changes must be committed as staged, with a warning; and
-# a commit of other files must pass untouched. Without the recorded
-# clang-format the hook formats nothing, and the first check fails.
+# file with unstaged changes, or one whose formatting cannot be set up, must
+# be committed as staged, with a warning; and a commit of other files must
+# pass untouched. Without the recorded clang-format the hook formats nothing,
+# and the first check fails.
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 WORK=
@@ -54,10 +55,19 @@ git show HEAD:tools/b.c | cmp -s - "$WORK/b.c" || fail "the C file with unstaged
 cmp -s tools/b.c "$WORK/b-work.c" || fail "the hook changed the working copy of a file with unstaged changes"
 grep -q 'tools/b.c is not formatted and has unstaged changes' "$WORK/unstaged.err" || { cat "$WORK/unstaged.err" >&2; fail "the hook did not warn about tools/b.c"; }
 
+# A C file whose formatting cannot be set up, here for want of a scratch
+# directory, is committed as staged, with a warning.
+printf '/* c.c: a fixture. */\nint  h( void ){return 2;}\n' >tools/c.c
+cp tools/c.c "$WORK/c.c"
+git add tools/c.c
+: >"$WORK/plain"
+TMPDIR=$WORK/plain/tmp git commit -q -m 'Add a third C file' 2>"$WORK/unready.err" || { cat "$WORK/unready.err" >&2; fail "the commit was refused when the formatting could not be set up"; }
+git show HEAD:tools/c.c | cmp -s - "$WORK/c.c" || fail "the C file was not committed as staged when the formatting could not be set up"
+grep -q 'hookcheck: warning: no scratch directory' "$WORK/unready.err" || { cat "$WORK/unready.err" >&2; fail "the hook did not warn that it could not set up the formatting"; }
 # A commit of other files passes, and the hook leaves them as they are.
 printf '# Notes\n\nA claim \342\200\224 and its reason.\n' >tools/notes.md
 cp tools/notes.md "$WORK/notes.md"
 git add tools/notes.md
 git commit -q -m 'Add the notes' 2>"$WORK/notes.err" || { cat "$WORK/notes.err" >&2; fail "a commit of a Markdown file was refused"; }
 git show HEAD:tools/notes.md | cmp -s - "$WORK/notes.md" || fail "the hook changed a Markdown file"
-echo "style-hooks-test: passed: formatted and staged a C file, kept a file with unstaged changes, passed a Markdown file"
+echo "style-hooks-test: passed: formatted and staged a C file, kept a file with unstaged changes, committed a file it could not format, passed a Markdown file"

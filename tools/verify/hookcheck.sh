@@ -8,15 +8,17 @@
 # with the clang-format version tools/setup/judges records, writes the result
 # over the file and stages it. A file whose staged text needs formatting and
 # that also has unstaged changes is left as it is, with a warning, since
-# formatting it would overwrite those changes. The hook refuses nothing: the
-# rest of `tests/run style` runs at the end of a milestone.
+# formatting it would overwrite those changes. The hook refuses nothing: when
+# the formatting cannot be set up, as on a full disk, the commit goes on
+# unformatted with a warning, and the rest of `tests/run style` runs at the
+# end of a milestone.
 #
 # `format FILE ...` formats the files, relative to the root of the tree, in
 # place with the recorded version.
 #
 # The formatting reads the staged files, with the tree's .clang-format, from
-# a private directory under TMPDIR, so that it judges what is committed and
-# not the working files.
+# a private directory under TMPDIR, or the tree's build/tmp when TMPDIR is
+# unset, so that it judges what is committed and not the working files.
 #
 # The recorded clang-format is `clang-format` or `clang-format-N` on PATH, N
 # its major version, whose first line of `--version` is the record's. When
@@ -37,7 +39,17 @@ case $MODE in
     format) [ "$#" -gt 0 ] ;;
     *) false ;;
 esac || { echo 'hookcheck: usage: hookcheck.sh commit | format FILE ...' >&2; exit 2; }
-TOP=$(git rev-parse --show-toplevel) && cd "$TOP" || exit 2
+
+# unready TEXT: say that the formatting cannot be set up, for TEXT; a commit
+# goes on unformatted, and `format` fails.
+unready() {
+    echo "hookcheck: warning: $1; the files were not formatted" >&2
+    [ "$MODE" = commit ] && exit 0
+    exit 2
+}
+
+TOP=$(git rev-parse --show-toplevel) || unready 'no work tree'
+cd "$TOP" || unready "cannot enter $TOP"
 JUDGED=$(sed -n 's/^clang-format: //p' "$REPO/tools/setup/judges")
 HOST=${RACH2_STYLE_HOST-testing}
 
@@ -46,7 +58,9 @@ trap 'rm -rf ${WORK:+"$WORK"}' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-WORK=$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/rach2-hookcheck.XXXXXX") || exit 2
+SCRATCH=${TMPDIR:-$TOP/build/tmp}
+WORK=$(mkdir -p "$SCRATCH" && umask 077 && mktemp -d "$SCRATCH/rach2-hookcheck.XXXXXX") ||
+    unready "no scratch directory in $SCRATCH"
 
 # c_files TREE LIST: print the in-house C files and headers of TREE that the
 # file LIST names, by the function inhouse_ch of the style cases' program,
@@ -93,7 +107,7 @@ for c in clang-format "clang-format-$major"; do
     [ "$("$c" --version </dev/null 2>/dev/null | head -n 1)" = "$want" ] && fmt=$c && break
 done
 [ -n "$fmt" ] || { echo "hookcheck: no $want on $(hostname)" >&2; exit 1; }
-d=$(mktemp -d) || exit 3
+d=$(mktemp -d /tmp/rach2-hookcheck.XXXXXX) || exit 3
 trap 'rm -rf "$d"' EXIT
 base64 -d <<'HOOKCHECK-TAR-END' | tar -x -f - -C "$d" || exit 3
 EOF
@@ -153,9 +167,10 @@ formatted() {
 
 case $MODE in
     commit)
-        git diff --cached --name-only --diff-filter=d >"$WORK/files" || exit 2
-        [ -s "$WORK/files" ] || exit 0
-        git checkout-index -a --prefix="$WORK/tree/" || exit 2
+        git diff --cached --name-only --diff-filter=d >"$WORK/files" ||
+            unready 'the staged files cannot be listed'
+        grep -q '\.[ch]$' "$WORK/files" || exit 0
+        git checkout-index -a --prefix="$WORK/tree/" || unready 'the index cannot be copied'
         c_files "$WORK/tree" "$WORK/files" >"$WORK/cfiles" || exit 0
         [ -s "$WORK/cfiles" ] || exit 0
         copy_out "$WORK/tree" "$WORK/cfiles" || { echo 'hookcheck: warning: cannot copy the staged C files; they were not formatted' >&2; exit 0; }
@@ -175,7 +190,7 @@ case $MODE in
         ;;
     format)
         printf '%s\n' "$@" >"$WORK/files"
-        copy_out . "$WORK/files" || exit 2
+        copy_out . "$WORK/files" || unready 'the files cannot be copied'
         formatted || exit 1
         for f; do
             cmp -s "$f" "$WORK/fmt/$f" && continue
