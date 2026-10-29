@@ -153,40 +153,69 @@ landed()
 }
 
 # tidy: remove what finished work left in the clone. A worktree under the
-# clone's .claude/worktrees or build/worktrees goes when its HEAD has landed
-# and `git worktree remove` takes it without force, which it refuses for a
-# worktree with changes, untracked files or a lock, as Claude Code keeps on a
-# helper's worktree while the helper runs, and only when `disposable` finds
-# nothing ignored in it but build output, which goes with it. A branch goes
-# when it has landed, unless it is master or a branch checked out here or in
-# a worktree, which git refuses to delete. Each removal is logged.
+# clone's .claude/worktrees or build/worktrees goes when its HEAD has landed,
+# no process has its working directory in it, as a loop has in the worktree
+# it runs in, and `git worktree remove` takes it without force, which it
+# refuses for a worktree with changes, untracked files or a lock, as Claude
+# Code keeps on a helper's worktree while the helper runs, and only when
+# `disposable` finds nothing ignored in it but build output, which goes with
+# it. A branch goes when it has landed, unless it is master or a branch
+# checked out here or in a worktree, which git refuses to delete. Each
+# removal is logged.
 tidy()
 {
     top=$(git rev-parse --show-toplevel) || return 1
+    busy=$(cwds)
     git worktree list --porcelain | sed -n 's/^worktree //p' | while read -r w; do
         case $w in "$top"/.claude/worktrees/*|"$top"/build/worktrees/*) ;; *) continue ;; esac
         head=$(git -C "$w" rev-parse -q --verify HEAD) && landed "$head" && disposable "$w" &&
+            ! inside "$w" "$busy" &&
             git worktree remove "$w" 2> /dev/null && log "tidy: removed the worktree $w"
     done
     git worktree prune
     git for-each-ref --format='%(refname:short)' refs/heads | while read -r b; do
         [ "$b" != master ] || continue
-        landed "refs/heads/$b" && git branch -q -D "$b" 2> /dev/null &&
+        if landed "refs/heads/$b" && git branch -q -D "$b" 2> /dev/null; then
             log "tidy: deleted the branch $b"
+        fi
     done
 }
 
 # disposable W: succeed when every ignored file of the worktree W is output
-# that a build makes again: build/, the compilation database and clangd's
+# that a build makes again: build/ but for build/runs and build/flow, which
+# hold run evidence and loop state, the compilation database and clangd's
 # cache, the vendored projects' trees and stamps (not the GNU downloads), and
-# Finder's .DS_Store files. A key, a password, the Doom WAD or a person's
-# notes keep the worktree.
+# Finder's .DS_Store files. A key, a password, the Doom WAD, a person's notes
+# or any file under build/runs or build/flow keeps the worktree.
 disposable()
 {
     ignored=$(git -C "$1" ls-files --others --ignored --exclude-standard --directory) || return 1
     ! printf '%s\n' "$ignored" |
         grep -v -E '^(build/|\.cache/|compile_commands\.json$|vendor/)|(^|/)\.DS_Store$' | grep -q . &&
-        ! printf '%s\n' "$ignored" | grep -q '^vendor/gnu/downloads'
+        ! printf '%s\n' "$ignored" | grep -q '^vendor/gnu/downloads' &&
+        ! find "$1/build/runs" "$1/build/flow" ! -type d 2> /dev/null | grep -q .
+}
+
+# cwds: print the working directory of each process that this user may read,
+# one to a line, from /proc where there is one and from lsof(8) elsewhere, as
+# on macOS.
+cwds()
+{
+    if [ -d /proc/self ]; then
+        for p in /proc/[0-9]*/cwd; do
+            readlink "$p" 2> /dev/null
+        done
+    else
+        lsof -w -n -a -d cwd -Fn 2> /dev/null | sed -n 's/^n//p'
+    fi
+}
+
+# inside DIR LIST: succeed when a line of LIST, a path as `cwds` prints it, is
+# DIR or under it, or when DIR cannot be resolved.
+inside()
+{
+    printf '%s\n' "$2" | D=$(cd "$1" 2> /dev/null && pwd -P) \
+        awk 'index($0 "/", ENVIRON["D"] "/") == 1 { f = 1 } END { exit !f }'
 }
 
 # stems REF: print, one to a line, the stems of the scratch names that the
