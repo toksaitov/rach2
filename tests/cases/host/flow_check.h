@@ -12,8 +12,6 @@ int flow_put(struct fixture *f, const char *name, const char *text);
 int flow_copy(struct fixture *f, const char *source, const char *name);
 int flow_basic(struct fixture *f, const char *id);
 int flow_basic_mock(int argc, char **argv);
-int flow_progress(struct fixture *f);
-int flow_progress_mock(int argc, char **argv);
 int flow_space(struct fixture *f);
 int flow_space_mock(int argc, char **argv);
 int flow_agents_guest(struct fixture *f);

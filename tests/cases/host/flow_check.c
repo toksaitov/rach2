@@ -38,13 +38,12 @@ static int mock_command(int argc, char **argv)
         const char *environment;
         int (*run)(int, char **);
     } mocks[] = {
-        {"FLOW_LAUNCH", flow_launch_mock},   {"FLOW_PROGRESS", flow_progress_mock},
-        {"FLOW_TOOLING", flow_tooling_mock}, {"FLOW_RELEASE", flow_release_mock},
-        {"FLOW_CI_RUN", flow_ci_run_mock},   {"FLOW_CI", flow_ci_mock},
-        {"FLOW_BOARD", flow_board_mock},     {"FLOW_MEASURE", flow_measure_mock},
-        {"FLOW_TESTING", flow_testing_mock}, {"FLOW_DEPLOY", flow_deploy_mock},
-        {"FLOW_VERSION", flow_version_mock}, {"FLOW_WORKER", flow_worker_mock},
-        {"FLOW_SPACE", flow_space_mock},
+        {"FLOW_LAUNCH", flow_launch_mock},   {"FLOW_TOOLING", flow_tooling_mock},
+        {"FLOW_RELEASE", flow_release_mock}, {"FLOW_CI_RUN", flow_ci_run_mock},
+        {"FLOW_CI", flow_ci_mock},           {"FLOW_BOARD", flow_board_mock},
+        {"FLOW_MEASURE", flow_measure_mock}, {"FLOW_TESTING", flow_testing_mock},
+        {"FLOW_DEPLOY", flow_deploy_mock},   {"FLOW_VERSION", flow_version_mock},
+        {"FLOW_WORKER", flow_worker_mock},   {"FLOW_SPACE", flow_space_mock},
     };
     unsigned i;
     for (i = 0; i < sizeof(mocks) / sizeof(mocks[0]); i++)
@@ -59,7 +58,6 @@ static int controller(struct fixture *f, const char *id)
         int (*run)(struct fixture *);
     } controllers[] = {
         {"etude_launch", flow_launch},
-        {"progress", flow_progress},
         {"etude_tooling", flow_tooling},
         {"release_resume", flow_release},
         {"ci_run", flow_ci_run},

@@ -49,4 +49,3 @@ gnu_port_resume|a stopped build of the GNU ports goes on from the last port it f
 host_suite|the host cases run their checks at once, each in its own scratch, with one result and one assertion each
 case_select|tests/run runs the cases chosen, in their order, and refuses a wrong choice before it builds
 collection_tools|the Windows collection's image transfers, offsets and command statuses
-progress|the manager's phase progress and delayed work

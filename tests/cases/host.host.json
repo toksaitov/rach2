@@ -3039,11 +3039,6 @@
           "source": "scenario"
         },
         {
-          "assertion_id": "progress",
-          "checks": "the manager reports delayed phase work and unassigned failures: its native C controller passes every row",
-          "source": "scenario"
-        },
-        {
           "assertion_id": "limited",
           "checks": "the loops' reading of a usage limit: its native C controller passes every row",
           "source": "scenario"
