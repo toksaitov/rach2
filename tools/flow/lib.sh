@@ -210,10 +210,11 @@ HOMES='/home/testing /home/toksaitov-a /home/toksaitov-d /home/toksaitov-m /home
 # and here for the Desktop, which has the owner's checkout and the worktrees
 # and copies made beside it. Each run gets the text of the open issues,
 # master's commit from this clone, and the copies to keep: the default copy
-# of testing.sh, the release's, each loop's that STATE/copy of a loop here
-# names, and each home's `flow`. Print the lines of each run with its
-# machine's name first; fail, and run neither, when master or the issues
-# cannot be read. -n removes nothing and lists what would go.
+# of testing.sh, the release's, and each loop's that the file `copy` of a
+# state directory under build/flow of this clone's main working tree names.
+# Print the lines of each run with its machine's name first; fail, and run
+# neither, when master or the issues cannot be read. -n removes nothing and
+# lists what would go.
 leftovers()
 {
     here=$(dirname "$0")
@@ -223,9 +224,9 @@ leftovers()
         --json title,body,comments --jq '.[] | .title, .body, .comments[].body') ||
         { echo "leftovers: the open issues cannot be read"; return 1; }
     keep=
-    # shellcheck disable=SC2046,SC2086 # the copies and HOMES are a path a word
+    # shellcheck disable=SC2046 # the copies are a path a word
     for c in /home/testing/rach2 "$(sed -n 's/^COPY=//p' "$here/release.sh")" \
-        $(cat "$HOME"/flow/*/copy 2> /dev/null) $(printf '%s/flow ' $HOMES); do
+        $(cat "$(primary .)"/build/flow/*/copy 2> /dev/null); do
         case $c in ''|/*[!A-Za-z0-9/._-]*|*/..*|[!/]*) continue ;; esac
         keep="$keep -k $c"
     done

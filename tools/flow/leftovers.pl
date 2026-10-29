@@ -44,7 +44,7 @@
 #   for an open issue or a process, git status finds nothing uncommitted or
 #   untracked in it, every file git ignores in it is build output that the
 #   build makes again, and a merge of its HEAD into SHA would leave SHA's tree
-#   as it is, as `merged` in lib.sh decides for a branch;
+#   as it is;
 # * a copy with a repository of its own, which goes with it, has no stash and
 #   no linked worktree, and a merge of each of its refs into SHA, but the
 #   remote-tracking ones, whose work the remote has, would leave SHA's tree
