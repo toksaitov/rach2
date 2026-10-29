@@ -21,7 +21,7 @@ description: Run suites, full sets or analyses on the testing host, or write a s
 * Read a run's rate at its first stage. A step running at a small fraction of a similar step's earlier rate has a cause; stop the run and remove it before starting again.
 * Keep the whole output of a long run in a file and read all of it; never cut it with `tail` or `head`.
 * Stop a run with SIGTERM, wait until every process of it has exited, and confirm that its claim has left the ledger before starting another.
-* Resume a failed run at the failing step: rebuild what changed and run again only what failed, and what the change could have touched.
+* Resume a failed run at the failing step: rebuild what changed and run again only what failed.
 * Believe a number only with the binary that produced it: `make` does not rebuild the recovery kernel or the install stick.
 * On Windows, keep shell paths in POSIX form and convert them explicitly for native programs, and set C runtime streams to binary mode before writing framed bytes; text mode turns LF into CRLF.
 
@@ -31,4 +31,4 @@ description: Run suites, full sets or analyses on the testing host, or write a s
 * A suite judges what the kernel counts, never the clock, and sets no time limit of its own. Etude stops a case only when it has made no progress for longer than the case's history on that machine allows. A time is printed for the record, not judged.
 * What would make a row slow (a spin, a wait, a walk over a list, a call per page) is counted by the kernel, and the row checks each count against a bound that is the same on every machine. Where the kernel has no counter for it yet, a multiple of a baseline measured in the same boot is the last resort, and each such row is listed with its reason.
 * A script removes its scratch on every exit path. Install the exit trap before the first `mktemp`, with the variable empty until then; in the trap stop and wait for the children, restore the sources, and only then remove the scratch, guarding each removal, as `[ -z "$work" ] || rm -rf "$work"`. Never put a variable that may be empty in front of a path or a glob in an `rm`. Name scratch `${TMPDIR:-/tmp}/rach2-NAME.XXXXXX`.
-* Try a new row, suite or tool small first, on the smallest inputs that exercise every step, and at full size only after it passes there.
+* A new row, suite or tool first runs at the end of its milestone, with the others. Give it a small form, on the smallest inputs that exercise every step, and run the full size only after the small one passes.
