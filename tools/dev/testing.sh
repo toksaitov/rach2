@@ -39,30 +39,30 @@
 # The copy is the owner's, `/home/testing/rach2`, or the path RACH2_TESTING_COPY
 # names, so that callers on this machine that must not wait for each other, such
 # as the owner's Codex loop and the manager's loops, each have a copy of their
-# own, under the owner's `build/worktrees`. No tracked file writes out a path under the owner's copy
-# whole: the GNU host checks copy every tracked file into the step store, which
-# refuses a product that has the path of the copy that built it. A process in
-# such a copy does not make the copy around it busy. The check that the copy is
-# free and the sync are one step, under a lock in the copy,
-# `COPY/build/.sync.lock`, which the sync leaves alone; two callers started at
-# once would otherwise both find the copy free, and the later sync would land
-# under the other's run. A caller takes the lock before it checks, keeps it
-# until its sync ends, or for `run` until the command ends, and records itself
-# in `COPY/build/.sync.owner`. A second caller is refused, not made to wait, as
-# a busy copy refuses it, and prints that record: the first may hold the copy
-# for a run of hours, and the second learns at once that its tree did not reach
-# the host. The lock is flock(1)'s, taken by a shell in WSL whose input comes
-# from this script, so it ends when this script ends, however it ends, or when
-# the connection closes, and a caller that is gone holds nothing. That shell
-# writes to the connection every ten seconds, so that a connection whose other
-# end is gone without having closed it, as when this machine loses power, fails
-# when TCP gives up on the data nobody acknowledges, not after the hours the
-# host's TCP keepalive takes, and the shell ends with it. A lost connection
-# frees the lock while this caller still works in the copy, so the caller
-# watches it: a sync whose holder has ended fails and says so, `run` starts its
-# command only while the holder lives, and a command whose holder ends first is
-# stopped here and the run fails and says so. The command's side on the host is
-# not stopped with it.
+# own, under the owner's `build/worktrees`. No tracked file writes out a path
+# under the owner's copy whole: the GNU host checks copy every tracked file into
+# the step store, which refuses a product that has the path of the copy that
+# built it. A process in such a copy does not make the copy around it busy. The
+# check that the copy is free and the sync are one step, under a lock in the
+# copy, `COPY/build/.sync.lock`, which the sync leaves alone; two callers
+# started at once would otherwise both find the copy free, and the later sync
+# would land under the other's run. A caller takes the lock before it checks,
+# keeps it until its sync ends, or for `run` until the command ends, and records
+# itself in `COPY/build/.sync.owner`. A second caller is refused, not made to
+# wait, as a busy copy refuses it, and prints that record: the first may hold
+# the copy for a run of hours, and the second learns at once that its tree did
+# not reach the host. The lock is flock(1)'s, taken by a shell in WSL whose
+# input comes from this script, so it ends when this script ends, however it
+# ends, or when the connection closes, and a caller that is gone holds nothing.
+# That shell writes to the connection every ten seconds, so that a connection
+# whose other end is gone without having closed it, as when this machine loses
+# power, fails when TCP gives up on the data nobody acknowledges, not after the
+# hours the host's TCP keepalive takes, and the shell ends with it. A lost
+# connection frees the lock while this caller still works in the copy, so the
+# caller watches it: a sync whose holder has ended fails and says so, `run`
+# starts its command only while the holder lives, and a command whose holder
+# ends first is stopped here and the run fails and says so. The command's side
+# on the host is not stopped with it.
 #
 # `wait` watches a run started on the host as RUNS/NAME.sh, RUNS being the
 # owner's copy's `build/runs`, which writes its results as lines beginning
