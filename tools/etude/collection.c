@@ -1381,22 +1381,31 @@ static const char *collection_accel(const char *accel)
     return accel;
 }
 
+/**
+ * Run the collection again under `etude lock tree` with a run's hold, which
+ * a later run takes over once nothing of this one runs, so that a cancelled
+ * or killed run leaves no lock for a person to remove.
+ *
+ * @return the collection's status; -1 when the tree is already held for an
+ *         ancestor and the caller goes on in this process; 2 without memory.
+ */
 static int hold_collection(struct collection *c, int argc, char **argv, int production)
 {
     char *query[] = {c->program, "-q", c->tree, NULL};
     if (etude_lock_tree_main(3, query) == 0)
         return -1;
-    size_t offset = production ? 5 : 4;
+    size_t offset = production ? 6 : 5;
     char **command = calloc((size_t)argc + 7, sizeof(*command));
     if (!command)
         return 2;
     command[0] = c->program;
-    command[1] = c->tree;
-    command[2] = "run";
-    command[3] = c->program;
-    command[4] = production ? "prepare" : "run";
+    command[1] = "-r";
+    command[2] = c->tree;
+    command[3] = "run";
+    command[4] = c->program;
+    command[5] = production ? "prepare" : "run";
     if (production)
-        command[5] = "collection";
+        command[6] = "collection";
     for (int i = 1; i < argc; i++)
         command[i + offset] = argv[i];
     int rc = etude_lock_tree_main(argc + (int)offset, command);

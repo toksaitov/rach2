@@ -579,10 +579,46 @@ static void run_entry(char *out, size_t size)
           "the inventory gives each suite's tier, tools, memory and architectures");
     CHECK(mkdir(fix_path("tmp"), 0700) == 0, "the preparation's temporary directory is made");
     temporary = fix_path("tmp");
+    CHECK(mkdir(fix_path("bin"), 0700) == 0 && symlink(self, fix_path("bin/make")) == 0,
+          "the stand-in make is made");
+    static char saved[8192], first[8192 + PATH_MAX];
+    const char *path = getenv("PATH");
+    CHECK(snprintf(saved, sizeof(saved), "%s", path ? path : "/usr/bin:/bin") < (int)sizeof(saved),
+          "the search path is saved");
+    snprintf(first, sizeof(first), "%s:%s", fix_path("bin"), saved);
+    setenv("PATH", first, 1);
     CHECK(run(prepared, NULL, NULL, NULL, out, size) == 1 &&
               strstr(out, "run: result: refused: preparation failed"),
           "a preparation that fails ends the run before any case");
+    setenv("PATH", saved, 1);
     temporary = NULL;
+    FILE *f = fopen(fix_path("hold.owner"), "rb");
+    size_t got = f ? fread(out, 1, size - 1, f) : 0;
+    if (f)
+        fclose(f);
+    out[got] = 0;
+    CHECK(strstr(out, "\nargs run ") && !strstr(out, "\nheld script\n"),
+          "the run holds the tree with a run's hold, which a later run takes over");
+}
+
+/**
+ * Stand in for make in a preparation, the tree being the working directory:
+ * copy the owner record of the tree's run lock to `hold.owner`, and fail.
+ */
+static int hold_record_make(void)
+{
+    char bytes[4096];
+    size_t n = 0;
+    FILE *in = fopen("build/.run.lock/owner", "rb"), *out = fopen("hold.owner", "wb");
+    if (in)
+        n = fread(bytes, 1, sizeof(bytes), in);
+    if (out) {
+        fwrite(bytes, 1, n, out);
+        fclose(out);
+    }
+    if (in)
+        fclose(in);
+    return 2;
 }
 
 static int collection_main(int argc, char **argv)
@@ -680,6 +716,9 @@ static int collection_main(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
+    const char *base = strrchr(argv[0], '/');
+    if (!strcmp(base ? base + 1 : argv[0], "make"))
+        return hold_record_make();
     if (argc == 2 && !strcmp(argv[1], "--scripts-only")) {
         host_scripts_order();
         host_scripts_dispatch();
