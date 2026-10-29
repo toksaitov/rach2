@@ -153,7 +153,7 @@ The owner's computer runs the Codex loop, with tmux from Homebrew, in a worktree
 
     git -C CHECKOUT worktree add --detach build/worktrees/codex origin/master
     tmux new-session -d -s codex -c CHECKOUT/build/worktrees/codex \
-        "RACH2_TESTING_COPY=/home/testing/rach2/build/worktrees/codex sh tools/flow/worker.sh -a codex"
+        "RACH2_TESTING_COPY=/home/testing/rach2-codex sh tools/flow/worker.sh -a codex"
 
 On macOS a program in a tmux session reaches an address on the local network, such as the Lenovo's, only when the application that started the tmux server has Local Network access (System Settings, Privacy & Security, Local Network). Apple's own programs, such as `ssh` and `nc`, are exempt; any other, such as `native-deploy` or `python3`, gets `No route to host` for every local address. Start the server that runs the loops and the release from a shell of the Claude app, which has that access, and check it from the server itself:
 
