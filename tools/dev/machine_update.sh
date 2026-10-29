@@ -1,7 +1,7 @@
 #!/bin/sh
 #
 # machine_update.sh: install a kernel on the installed Lenovo over SSH, boot
-# it once as a trial, and commit it. A phase's release installs the whole
+# it once as a trial, and commit it. A milestone's release installs the whole
 # system with tools/flow/release.sh; this is for a kernel alone, by hand.
 #
 # Usage: machine_update.sh KERNEL [ADDRESS]

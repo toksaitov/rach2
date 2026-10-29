@@ -38,8 +38,8 @@
 #
 # The copy is the owner's, `/home/testing/rach2`, or the path RACH2_TESTING_COPY
 # names, so that callers on this machine that must not wait for each other, such
-# as the owner's worker loops, each have a copy of their own, under the owner's
-# `build/worktrees`. No tracked file writes out a path under the owner's copy
+# as the owner's Codex loop and the manager's loops, each have a copy of their
+# own, under the owner's `build/worktrees`. No tracked file writes out a path under the owner's copy
 # whole: the GNU host checks copy every tracked file into the step store, which
 # refuses a product that has the path of the copy that built it. A process in
 # such a copy does not make the copy around it busy. The check that the copy is

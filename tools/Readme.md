@@ -149,11 +149,11 @@ The workers run as loops: [worker.sh](flow/worker.sh) starts one agent session a
 
     tmux new-session -d -s worker 'sh ~/rach2/tools/flow/worker.sh'
 
-The owner's computer runs the Codex loop, with tmux from Homebrew, in a worktree of the owner's checkout, CHECKOUT below, since it writes code:
+The owner's computer runs the Codex loop, with tmux from Homebrew, in a worktree of the owner's checkout, CHECKOUT below, since it writes code, with a copy of its own on the testing host under the owner's copy there, COPY below, `/home/testing/rach2`:
 
     git -C CHECKOUT worktree add --detach build/worktrees/codex origin/master
     tmux new-session -d -s codex -c CHECKOUT/build/worktrees/codex \
-        "RACH2_TESTING_COPY=/home/testing/rach2-codex sh tools/flow/worker.sh -a codex"
+        "RACH2_TESTING_COPY=COPY/build/worktrees/codex sh tools/flow/worker.sh -a codex"
 
 On macOS a program in a tmux session reaches an address on the local network, such as the Lenovo's, only when the application that started the tmux server has Local Network access (System Settings, Privacy & Security, Local Network). Apple's own programs, such as `ssh` and `nc`, are exempt; any other, such as `native-deploy` or `python3`, gets `No route to host` for every local address. Start the server that runs the loops and the release from a shell of the Claude app, which has that access, and check it from the server itself:
 
@@ -362,7 +362,7 @@ With `rach2.netconsole` on the boot line, the kernel broadcasts its log in Ether
 
 These scripts update and measure an installed machine over SSH and run the recovery grow. Each script's header states its contract.
 
-* [machine_update.sh](dev/machine_update.sh) `KERNEL [ADDRESS]` installs KERNEL on the installed Lenovo with `bootctl kernel`, boots it once as a trial and commits it once machine_identity.sh finds it running from the candidate slot. Before it writes, the machine must report the Lenovo's station address, a boot from a slot and no trial armed. A person runs it to try a kernel alone; a phase's release installs the whole system with `flow/release.sh`.
+* [machine_update.sh](dev/machine_update.sh) `KERNEL [ADDRESS]` installs KERNEL on the installed Lenovo with `bootctl kernel`, boots it once as a trial and commits it once machine_identity.sh finds it running from the candidate slot. Before it writes, the machine must report the Lenovo's station address, a boot from a slot and no trial armed. A person runs it to try a kernel alone; a milestone's release installs the whole system with `flow/release.sh`.
 * [machine_identity.sh](dev/machine_identity.sh) runs before every measurement, as `RACH2_MEASURE_USER`, root by default. It lets the measurement go on only when the machine booted the slot `RACH2_MEASURE_SLOT` gives, `candidate` or `fallback`, has no trial armed, and has the host file `RACH2_MEASURE_KERNEL` in that slot by SHA-256, and logs what the machine reported.
 * `machine_load.sh KEY ADDRESS SESSIONS SECONDS [DIR]` starts SESSIONS sessions a second apart, since Dropbear admits five unauthenticated connections from one address at a time. Each runs [machine_load_session.sh](dev/machine_load_session.sh): it copies `/src/rach2` under `/tmp`, builds it with the staged TinyCC and pdpmake for SECONDS of the machine's clock, removes the copy, and prints `SESSION N builds B failed F before-deadline W late L`. `RACH2_LOAD_USER` selects the account.
 * [machine_net.c](dev/machine_net.c) times a TCP transfer with the same code on the host, where `make` builds `build/tools/dev/machine_net`, and on Rach2, where `tcc -static` builds it: `local MIB WRITE-BYTES TIMEOUT` on loopback port 27157, or `receive PORT MIB TIMEOUT` and `send ADDRESS PORT MIB WRITE-BYTES` on two machines, each stopped at 180 seconds.
