@@ -112,7 +112,7 @@ The `agents` suite's `agy-print` row plays `fakeapi/agy-session.json` with Antig
 
 These are tests of scripts, build rules and host helpers, run against private copies and fixtures:
 
-* Run by `tests/run style`: `build_rules_test.sh` (the build's rules, read from `make -pn` of private trees), `build_inputs_test.sh`, `dryrun_test.sh` (the vendor stamps' dry-run guard), `recovery_key_test.sh` (the recovery image's key list), `style_scope_test.sh`, `style_cases_test.sh` (a fault planted in the sources or in the style cases' manifest fails its case), `verify_temp_test.sh`, `style_hooks_test.sh` (the git hooks in a scratch repository), `probecheck_test.sh` and `nativecheck_test.sh`.
+* Run by `tests/run style`: `build_rules_test.sh` (the build's rules, read from `make -pn` of private trees), `build_inputs_test.sh`, `dryrun_test.sh` (the vendor stamps' dry-run guard), `recovery_key_test.sh` (the recovery image's key list), `style_scope_test.sh`, `style_cases_test.sh` (a fault planted in the sources or in the style cases' manifest fails its case), `verify_temp_test.sh`, `style_hooks_test.sh` (the commit hook in a scratch repository), `probecheck_test.sh` and `nativecheck_test.sh`.
 * The checks of the loops, ci, the build tools and the image tools that `tests/run host` runs are the rows of [`host.list`](../cases/host/host.list), judged by the C controllers of [`tests/cases/host`](../cases/host/Readme.md).
 
 ### Acceptance

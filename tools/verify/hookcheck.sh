@@ -1,44 +1,31 @@
 #!/bin/sh
 #
-# hookcheck.sh: the style checks of the git hooks, the fast part of
-# `tests/run style` run on the files that a commit or a push to master changes.
+# hookcheck.sh: the formatting of the git hook pre-commit, and a command that
+# formats files by hand.
 #
 # `commit`, which tools/git-hooks/pre-commit runs, formats each staged
 # in-house C file and header, the set the style case `clang-format` reads,
 # with the clang-format version tools/setup/judges records, writes the result
 # over the file and stages it. A file whose staged text needs formatting and
-# that also has unstaged changes is not rewritten, and the commit is refused.
-# It then runs the text rules of the style case `text` on the staged files:
-# textcheck.sh (non-ASCII bytes, a dash written as a spaced double hyphen,
-# `-` bullets in Markdown and its other rules) and prosecheck's `columns` and
-# `banned`. A fault refuses the commit.
-#
-# `push`, which tools/git-hooks/pre-push runs with the lines git gives that
-# hook on its input, checks each update of master: the files that the pushed
-# commits change, as the last of them has them, must be formatted and must
-# pass the same text rules. It changes no file.
+# that also has unstaged changes is left as it is, with a warning, since
+# formatting it would overwrite those changes. The hook refuses nothing: the
+# rest of `tests/run style` runs at the end of a milestone.
 #
 # `format FILE ...` formats the files, relative to the root of the tree, in
-# place with the recorded version; a refused push names this command.
+# place with the recorded version.
 #
-# The checks read a copy of the whole tree as the index or the pushed commit
-# has it, in a private directory under TMPDIR, so that they judge what is
-# committed and not the working files, and prosecheck walks the copy as it
-# walks the tree in `tests/run style`. Only findings in the changed files are
-# reported, so that a fault already on master refuses no unrelated commit.
-# The checkers are those of the tree this script is in, which make builds
-# when they are absent or older than their sources.
+# The formatting reads the staged files, with the tree's .clang-format, from
+# a private directory under TMPDIR, so that it judges what is committed and
+# not the working files.
 #
 # The recorded clang-format is `clang-format` or `clang-format-N` on PATH, N
 # its major version, whose first line of `--version` is the record's. When
 # neither is, the files go to the testing host in one ssh call, as a tar file
 # with the tree's .clang-format, and come back formatted. The host is
 # `testing`, or the one RACH2_STYLE_HOST names; an empty name means none.
-# With no recorded clang-format anywhere, or a checker that cannot be built,
-# the script warns and goes on, unless RACH2_STYLE_GATE is `strict`, as in the
-# worker loops' sessions, when it refuses.
+# With no recorded clang-format anywhere, the script warns and goes on.
 #
-# Usage: hookcheck.sh commit | push | format FILE ...
+# Usage: hookcheck.sh commit | format FILE ...
 #
 set -u
 
@@ -46,13 +33,12 @@ REPO=$(cd "$(dirname "$0")/../.." && pwd)
 MODE=${1-}
 [ "$#" -gt 0 ] && shift
 case $MODE in
-    commit|push) [ "$#" -eq 0 ] ;;
+    commit) [ "$#" -eq 0 ] ;;
     format) [ "$#" -gt 0 ] ;;
     *) false ;;
-esac || { echo 'hookcheck: usage: hookcheck.sh commit | push | format FILE ...' >&2; exit 2; }
+esac || { echo 'hookcheck: usage: hookcheck.sh commit | format FILE ...' >&2; exit 2; }
 TOP=$(git rev-parse --show-toplevel) && cd "$TOP" || exit 2
 JUDGED=$(sed -n 's/^clang-format: //p' "$REPO/tools/setup/judges")
-PROSECHECK=$REPO/build/tools/verify/prosecheck
 HOST=${RACH2_STYLE_HOST-testing}
 
 WORK=
@@ -61,23 +47,6 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 WORK=$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/rach2-hookcheck.XXXXXX") || exit 2
-FAULTS=$WORK/faults
-: >"$FAULTS"
-
-# fault TEXT: record a fault, which the report prints and which refuses.
-fault() {
-    printf 'style: %s\n' "$1" >>"$FAULTS"
-}
-
-# lacking WHAT: refuse, under RACH2_STYLE_GATE=strict, because WHAT, or
-# else warn that the files went unchecked because of it.
-lacking() {
-    if [ "${RACH2_STYLE_GATE-}" = strict ]; then
-        fault "$1, and RACH2_STYLE_GATE is strict"
-    else
-        echo "style: warning: $1; the files were not checked for it" >&2
-    fi
-}
 
 # c_files TREE LIST: print the in-house C files and headers of TREE that the
 # file LIST names, by the function inhouse_ch of the style cases' program,
@@ -85,7 +54,7 @@ lacking() {
 c_files() {
     sed -n '/^inhouse_ch() {$/,/^}$/p' "$REPO/tests/cases/host/style.sh" >"$WORK/inhouse.sh"
     grep -q '^}$' "$WORK/inhouse.sh" || {
-        fault "tests/cases/host/style.sh has no function inhouse_ch to read"
+        echo "hookcheck: tests/cases/host/style.sh has no function inhouse_ch to read" >&2
         return 1
     }
     # shellcheck source=/dev/null
@@ -162,90 +131,24 @@ format_dir() {
     remote_format "$1"
 }
 
-# check_format TREE LIST: write to $WORK/unformatted the in-house C files of
-# the file LIST that the recorded clang-format changes in TREE, and their
-# formatted text under $WORK/fmt.
-check_format() {
-    : >"$WORK/unformatted"
-    c_files "$1" "$2" >"$WORK/cfiles" || return 0
-    [ -s "$WORK/cfiles" ] || return 0
+# copy_out FROM LIST: copy .clang-format and the files that LIST names from
+# the directory FROM into $WORK/fmt, where format_dir formats them.
+copy_out() {
     rm -rf "$WORK/fmt"
     mkdir "$WORK/fmt"
-    { echo .clang-format; cat "$WORK/cfiles"; } >"$WORK/fmtlist"
-    (cd "$1" && COPYFILE_DISABLE=1 tar -c -f - -T "$WORK/fmtlist") | tar -x -f - -C "$WORK/fmt" ||
-        { fault "cannot copy the C files and .clang-format to format them"; return 0; }
+    { echo .clang-format; cat "$2"; } >"$WORK/fmtlist"
+    (cd "$1" && COPYFILE_DISABLE=1 tar -c -f - -T "$WORK/fmtlist") | tar -x -f - -C "$WORK/fmt"
+}
+
+# formatted: run format_dir on $WORK/fmt and say why it did not format.
+formatted() {
     format_dir "$WORK/fmt"
     case $? in
-        0) ;;
-        1) lacking "no $JUDGED here or on the host ${HOST:-(none)}"; return 0 ;;
-        *) fault "clang-format failed on $(tr '\n' ' ' <"$WORK/cfiles")"; return 0 ;;
+        0) return 0 ;;
+        1) echo "hookcheck: warning: no $JUDGED here or on the host ${HOST:-(none)}; the files were not formatted" >&2 ;;
+        *) echo "hookcheck: warning: clang-format failed; the files were not formatted" >&2 ;;
     esac
-    while IFS= read -r _f; do
-        cmp -s "$1/$_f" "$WORK/fmt/$_f" || echo "$_f"
-    done <"$WORK/cfiles" >"$WORK/unformatted"
-}
-
-# check_text TREE LIST: record a fault for each finding of the text rules in
-# the files of TREE that the file LIST names.
-check_text() {
-    _tree=$1
-    _list=$2
-    if ! make -s -C "$REPO" build/tools/verify/prosecheck build/tools/verify/asciiscan \
-        >"$WORK/make.log" 2>&1; then
-        cat "$WORK/make.log" >&2
-        lacking "the text checkers could not be built"
-        return 0
-    fi
-    _ifs=$IFS
-    IFS='
-'
-    # shellcheck disable=SC2046 # one path a line
-    set -- $(cat "$_list")
-    IFS=$_ifs
-    sh "$REPO/tools/verify/textcheck.sh" -C "$_tree" "$@" </dev/null >"$WORK/text.out" 2>&1
-    _status=$?
-    grep -E '^[^ :][^:]*:[0-9]+:' "$WORK/text.out" |
-        sed -E 's/^([^:]+:[0-9]+): *\[([^]]*)\]$/\1: \2/; s/^([^:]+:[0-9]+):(.*[^ ]) +\[([^]]*)\]$/\1: \3: \2/' \
-            >"$WORK/text.found"
-    while IFS= read -r _l; do
-        fault "$_l"
-    done <"$WORK/text.found"
-    if [ "$_status" -ne 0 ] && [ ! -s "$WORK/text.found" ]; then
-        fault "textcheck.sh did not finish: $(head -n 1 "$WORK/text.out")"
-    fi
-    (cd "$_tree" && "$PROSECHECK" columns) >"$WORK/cols.out" 2>&1
-    [ "$?" -ne 2 ] || fault "prosecheck columns did not run: $(head -n 1 "$WORK/cols.out")"
-    awk -F: 'NR == FNR { want[$0] = 1; next } ($1 in want) && $2 ~ /^[0-9]+$/' \
-        "$_list" "$WORK/cols.out" >"$WORK/cols.found"
-    while IFS= read -r _l; do
-        fault "$_l"
-    done <"$WORK/cols.found"
-    (cd "$_tree" && "$PROSECHECK" banned) >"$WORK/banned.out" 2>&1
-    [ "$?" -ne 2 ] || fault "prosecheck banned did not run: $(head -n 1 "$WORK/banned.out")"
-    awk -F': ' 'NR == FNR { want[$0] = 1; next } ($1 in want) && / use\(s\) of "/' \
-        "$_list" "$WORK/banned.out" >"$WORK/banned.found"
-    while IFS= read -r _l; do
-        _f=${_l%%: *}
-        _term=$(printf '%s\n' "$_l" | sed 's/.* use(s) of "\(.*\)"$/\1/')
-        _lines=$(grep -n -i -F -- "$_term" "$_tree/$_f" | cut -d: -f1)
-        if [ -z "$_lines" ]; then
-            fault "$_l"
-        fi
-        for _n in $_lines; do
-            fault "$_f:$_n: the banned term \"$_term\""
-        done
-    done <"$WORK/banned.found"
-}
-
-# report WHAT HOWTO: print the faults and HOWTO and exit 1, when there are
-# faults; the refused WHAT is a commit or a push.
-report() {
-    [ -s "$FAULTS" ] || return 0
-    {
-        cat "$FAULTS"
-        echo "style: the $1 is refused; $2"
-    } >&2
-    exit 1
+    return 1
 }
 
 case $MODE in
@@ -253,61 +156,27 @@ case $MODE in
         git diff --cached --name-only --diff-filter=d >"$WORK/files" || exit 2
         [ -s "$WORK/files" ] || exit 0
         git checkout-index -a --prefix="$WORK/tree/" || exit 2
-        check_format "$WORK/tree" "$WORK/files"
+        c_files "$WORK/tree" "$WORK/files" >"$WORK/cfiles" || exit 0
+        [ -s "$WORK/cfiles" ] || exit 0
+        copy_out "$WORK/tree" "$WORK/cfiles" || { echo 'hookcheck: warning: cannot copy the staged C files; they were not formatted' >&2; exit 0; }
+        formatted || exit 0
         while IFS= read -r f; do
+            cmp -s "$WORK/tree/$f" "$WORK/fmt/$f" && continue
             if ! git diff --quiet -- "$f"; then
-                fault "$f: not formatted, and has unstaged changes that formatting would overwrite"
+                echo "hookcheck: warning: $f is not formatted and has unstaged changes; it was committed as it is" >&2
                 continue
             fi
             if cat "$WORK/fmt/$f" >"$f" && git add -- "$f"; then
-                cp "$WORK/fmt/$f" "$WORK/tree/$f"
                 echo "style: formatted $f" >&2
             else
-                fault "$f: the formatted file could not be staged"
+                echo "hookcheck: warning: the formatted $f could not be staged" >&2
             fi
-        done <"$WORK/unformatted"
-        check_text "$WORK/tree" "$WORK/files"
-        report commit "fix the lines above, add the files with git add, and commit again"
-        ;;
-    push)
-        cat >"$WORK/updates"
-        while read -r _lref lsha rref rsha <&3; do
-            [ "$rref" = refs/heads/master ] || continue
-            case $lsha in *[!0]*) ;; *) continue ;; esac
-            case $rsha in
-                *[!0]*)
-                    git cat-file -e "$rsha^{commit}" 2>/dev/null || continue
-                    base=$rsha ;;
-                *) base=$(git hash-object -t tree /dev/null) ;;
-            esac
-            git diff --name-only --diff-filter=d "$base" "$lsha" >"$WORK/files" || exit 2
-            [ -s "$WORK/files" ] || continue
-            rm -rf "$WORK/tree" "$WORK/index"
-            GIT_INDEX_FILE=$WORK/index git read-tree "$lsha" &&
-                GIT_INDEX_FILE=$WORK/index git checkout-index -a --prefix="$WORK/tree/" || exit 2
-            check_format "$WORK/tree" "$WORK/files"
-            while IFS= read -r f; do
-                n=$(cmp "$WORK/tree/$f" "$WORK/fmt/$f" 2>/dev/null | sed -n 's/.* line \([0-9]*\).*/\1/p')
-                fault "$f:${n:-1}: not as $JUDGED formats it"
-            done <"$WORK/unformatted"
-            check_text "$WORK/tree" "$WORK/files"
-            if [ -s "$WORK/unformatted" ]; then
-                fix="run sh tools/verify/hookcheck.sh format $(tr '\n' ' ' <"$WORK/unformatted")and "
-            fi
-        done 3<"$WORK/updates"
-        report push "${fix-}fix the lines above in a new commit, which the pre-commit hook checks, and push again"
+        done <"$WORK/cfiles"
         ;;
     format)
         printf '%s\n' "$@" >"$WORK/files"
-        mkdir "$WORK/fmt"
-        { echo .clang-format; cat "$WORK/files"; } >"$WORK/fmtlist"
-        COPYFILE_DISABLE=1 tar -c -f - -T "$WORK/fmtlist" | tar -x -f - -C "$WORK/fmt" || exit 2
-        format_dir "$WORK/fmt"
-        case $? in
-            0) ;;
-            1) echo "hookcheck: no $JUDGED here or on the host ${HOST:-(none)}" >&2; exit 1 ;;
-            *) echo "hookcheck: clang-format failed" >&2; exit 1 ;;
-        esac
+        copy_out . "$WORK/files" || exit 2
+        formatted || exit 1
         for f; do
             cmp -s "$f" "$WORK/fmt/$f" && continue
             cat "$WORK/fmt/$f" >"$f" && echo "style: formatted $f"

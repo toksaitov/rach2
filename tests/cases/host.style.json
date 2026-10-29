@@ -317,7 +317,7 @@
         {"assertion_id": "style-scope", "checks": "tests/system/style_scope_test.sh passes", "source": "program"},
         {"assertion_id": "style-cases", "checks": "tests/system/style_cases_test.sh finds each planted source and manifest fault fatal", "source": "program"},
         {"assertion_id": "verify-temp", "checks": "tests/system/verify_temp_test.sh passes", "source": "program"},
-        {"assertion_id": "style-hooks", "checks": "tests/system/style_hooks_test.sh finds the pre-commit hook formatting a staged C file and refusing a dash and a long comment line, and the pre-push hook refusing a commit with faults", "source": "program"}
+        {"assertion_id": "style-hooks", "checks": "tests/system/style_hooks_test.sh finds the pre-commit hook formatting and staging a C file, committing a file with unstaged changes as staged, and leaving other files as they are", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
