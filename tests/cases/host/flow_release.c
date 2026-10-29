@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 #define H "1111111111111111111111111111111111111111"
 #define C "2222222222222222222222222222222222222222"
@@ -98,6 +100,30 @@ static int sh_mock(int argc, char **argv)
     execv(argv[0], argv);
     return 127;
 }
+/**
+ * Answer `gh issue view N` with the arguments `all`: the state and title that
+ * RELEASE_TEST_ISSUES gives issue N, or the state RELEASE_TEST_STATE.
+ */
+static int gh_view(const char *number, const char *all)
+{
+    if (!strstr(all, "--json state,title")) {
+        if (!strstr(all, "--json state"))
+            return 1;
+        puts(ev("RELEASE_TEST_STATE"));
+        return 0;
+    }
+    char *data = strdup(ev("RELEASE_TEST_ISSUES")), *line, *save = NULL;
+    for (line = strtok_r(data, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+        char *end = strchr(line, ' ');
+        if (end) {
+            *end = 0;
+            if (!strcmp(line, number))
+                puts(end + 1);
+        }
+    }
+    free(data);
+    return 0;
+}
 static int gh_mock(int argc, char **argv)
 {
     char log[10000], *all = joined(argc, argv, 1);
@@ -110,24 +136,13 @@ static int gh_mock(int argc, char **argv)
     append(ev("RELEASE_TEST_CALLS"), log);
     if (!strcmp(argv[1], "issue") && !strcmp(argv[2], "comment"))
         append(rp(".comments"), all);
-    else if (!strcmp(argv[1], "issue") && !strcmp(argv[2], "close")) {
-    } else if (!strcmp(argv[1], "issue") && !strcmp(argv[2], "view")) {
-        if (strstr(all, "--json state,title")) {
-            char *data = strdup(ev("RELEASE_TEST_ISSUES")), *line, *save = NULL;
-            for (line = strtok_r(data, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
-                char *end = strchr(line, ' ');
-                if (end) {
-                    *end = 0;
-                    if (argc > 3 && !strcmp(line, argv[3]))
-                        puts(end + 1);
-                }
-            }
-            free(data);
-        } else if (strstr(all, "--json state"))
-            puts(ev("RELEASE_TEST_STATE"));
-        else
-            status = 1;
-    } else if (!strcmp(argv[1], "api") && strstr(argv[2], "/statuses"))
+    else if (!strcmp(argv[1], "issue") && !strcmp(argv[2], "create")) {
+        append(rp(".created"), all);
+        puts("https://github.com/toksaitov/rach2/issues/40");
+    } else if (!strcmp(argv[1], "issue") && !strcmp(argv[2], "close")) {
+    } else if (!strcmp(argv[1], "issue") && !strcmp(argv[2], "view"))
+        status = gh_view(argc > 3 ? argv[3] : "", all);
+    else if (!strcmp(argv[1], "api") && strstr(argv[2], "/statuses"))
         puts(ev("RELEASE_TEST_STATUSES"));
     else if (!strcmp(argv[1], "run") && !strcmp(argv[2], "list"))
         status = strcmp(ev("RELEASE_TEST_RUNS"), "none") ||
@@ -151,6 +166,17 @@ static int ssh_mock(int argc, char **argv)
     const char *host = argc > 2 ? argv[argc - 2] : "", *command = argc > 1 ? argv[argc - 1] : "";
     char line[20000];
     if (!strcmp(host, "testing")) {
+        int windows = strstr(command, "bash.exe -l -s") != NULL;
+        if (windows || strstr(command, "wsl.exe -- bash -s")) {
+            char b[4096];
+            while (fgets(b, sizeof(b), stdin)) {
+                snprintf(line, sizeof(line), "%s %s", windows ? "windows" : "wsl", b);
+                append(ev("RELEASE_TEST_CALLS"), line);
+            }
+            if (windows)
+                puts(ev("RELEASE_TEST_WINDOWS"));
+            return 0;
+        }
         snprintf(line, sizeof(line), "ssh testing %s\n", command);
         append(ev("RELEASE_TEST_CALLS"), line);
         return 0;
@@ -209,6 +235,33 @@ static int ssh_mock(int argc, char **argv)
     append(ev("RELEASE_TEST_CALLS"), line);
     return 1;
 }
+/**
+ * Answer `git show OBJECT`: the registry of three suites, or the site that
+ * RELEASE_TEST_SITES gives OBJECT's commit.
+ */
+static int git_show(const char *object)
+{
+    if (strstr(object, ":tests/registry")) {
+        puts("# the "
+             "suites\nagents|qemu|full||4096|x86_64\nfs|qemu|full\nbigmem|qemu|full||73728|x86_"
+             "64");
+        return 0;
+    }
+    if (!strstr(object, ":tools/ci/site"))
+        return 1;
+    char *data = strdup(ev("RELEASE_TEST_SITES")), *line, *save = NULL;
+    int found = 0;
+    for (line = strtok_r(data, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+        char commit[100], label[100], accel[100];
+        if (sscanf(line, "%99s %99s %99s", commit, label, accel) == 3 &&
+            !strncmp(object, commit, strlen(commit)) && object[strlen(commit)] == ':') {
+            printf("runner %s\naccelerator %s\n", label, accel);
+            found = 1;
+        }
+    }
+    free(data);
+    return found ? 0 : 1;
+}
 static int git_mock(int argc, char **argv)
 {
     call("git ", argc, argv, 1);
@@ -220,7 +273,7 @@ static int git_mock(int argc, char **argv)
     }
     if (argc < 2)
         return 1;
-    if (!strcmp(argv[1], "fetch") || !strcmp(argv[1], "merge-base"))
+    if (!strcmp(argv[1], "fetch") || !strcmp(argv[1], "merge-base") || !strcmp(argv[1], "bundle"))
         return 0;
     if (!strcmp(argv[1], "rev-list")) {
         char *range = argc > 3 ? strstr(argv[3], "..") : NULL;
@@ -232,29 +285,8 @@ static int git_mock(int argc, char **argv)
         puts(ev("RELEASE_TEST_LOG"));
         return 0;
     }
-    if (!strcmp(argv[1], "show") && argc > 2) {
-        if (strstr(argv[2], ":tests/registry")) {
-            puts("# the "
-                 "suites\nagents|qemu|full||4096|x86_64\nfs|qemu|full\nbigmem|qemu|full||73728|x86_"
-                 "64");
-            return 0;
-        }
-        if (strstr(argv[2], ":tools/ci/site")) {
-            char *data = strdup(ev("RELEASE_TEST_SITES")), *line, *save = NULL;
-            int found = 0;
-            for (line = strtok_r(data, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
-                char commit[100], label[100], accel[100];
-                if (sscanf(line, "%99s %99s %99s", commit, label, accel) == 3 &&
-                    !strncmp(argv[2], commit, strlen(commit)) && argv[2][strlen(commit)] == ':') {
-                    printf("runner %s\naccelerator %s\n", label, accel);
-                    found = 1;
-                }
-            }
-            free(data);
-            return found ? 0 : 1;
-        }
-        return 1;
-    }
+    if (!strcmp(argv[1], "show") && argc > 2)
+        return git_show(argv[2]);
     if (!strcmp(argv[1], "worktree")) {
         if (argc > 5 && !strcmp(argv[2], "add")) {
             char path[4096];
@@ -277,9 +309,23 @@ int flow_release_mock(int argc, char **argv)
         return ssh_mock(argc, argv);
     if (!strcmp(name, "git"))
         return git_mock(argc, argv);
-    if (!strcmp(name, "make")) {
-        call("make ", argc, argv, 1);
+    if (!strcmp(name, "make") || !strcmp(name, "scp")) {
+        call(!strcmp(name, "make") ? "make " : "scp ", argc, argv, 1);
         return 0;
+    }
+    if (!strcmp(name, "native-deploy")) {
+        char logs[4200];
+        call("native-deploy ", argc, argv, 1);
+        if (!strcmp(ev("RELEASE_TEST_NATIVE"), "pass"))
+            return 0;
+        if (argc > 9) {
+            snprintf(logs, sizeof(logs), "%s/collection-2.out", argv[9]);
+            mkdir(argv[9], 0700);
+            fx_text(logs,
+                    "native: credprobe: pass; evidence e\nnative: dirprobe.ext2: failed: exited "
+                    "1\nnative: result: 2 cases, 1 failed or incomplete\n");
+        }
+        return 1;
     }
     if (!strcmp(name, "sleep")) {
         char *line = joined(argc, argv, 1), *s, *p;
@@ -307,14 +353,14 @@ struct release {
 };
 struct release_row {
     const char *record, *board, *state, *writes, *issues, *statuses, *runs, *log, *git, *sites,
-        *accept;
+        *accept, *machines, *windows, *native;
 };
 
 static int setup(struct release *r, struct fixture *f)
 {
     char path[4096];
     unsigned i;
-    const char *mock[] = {"sh", "gh", "ssh", "git", "make", "sleep"};
+    const char *mock[] = {"sh", "gh", "ssh", "git", "make", "sleep", "scp"};
     memset(r, 0, sizeof(*r));
     r->f = f;
     snprintf(r->tree, sizeof(r->tree), "%s/tree", f->work);
@@ -327,7 +373,7 @@ static int setup(struct release *r, struct fixture *f)
     flow_put(f, "tree/krffs/rach2_demo_ed25519", "");
     flow_put(f, "tree/tools/flow/board.sh", "# native board fixture\n");
     flow_put(f, "tree/tools/flow/notify.sh", "# native notification fixture\n");
-    for (i = 0; i < 6; i++)
+    for (i = 0; i < 7; i++)
         if (!fx_mock(f, mock[i]))
             return 0;
     fx_env("FLOW_RELEASE", "1");
@@ -356,16 +402,18 @@ static void run(struct release *r, const struct release_row *spec)
 {
     struct fixture *f = r->f;
     char board[1000];
-    const char *files[] = {"calls", "calls.sleeps", "calls.release", "calls.comments"};
+    const char *files[] = {"calls", "calls.sleeps", "calls.release", "calls.comments",
+                           "calls.created"};
     unsigned i;
     fx_remove(flow_path(f, "state"));
-    for (i = 0; i < 4; i++)
+    for (i = 0; i < 5; i++)
         fx_remove(flow_path(f, files[i]));
     flow_put(f, "state/wt/krffs/rach2_demo_ed25519", "");
     flow_put(f, "state/wt/build/x86_64/images/release.sha256", "");
     flow_put(f, "state/wt/tests/system/accept/metal_accept.sh", "# native acceptance fixture\n");
     flow_put(f, "state/wt/tools/ci/site", "runner rach2\naccelerator tcg\n");
     flow_put(f, "calls", "");
+    flow_put(f, "tree/tools/flow/machines", spec->machines ? spec->machines : "# none\n");
     flow_put(f, "state/record", spec->record);
     flow_put(f, "before", spec->record);
     snprintf(board, sizeof(board), "phase: #7 phase: seven\n%s", spec->board);
@@ -380,6 +428,12 @@ static void run(struct release *r, const struct release_row *spec)
     fx_env("RELEASE_TEST_GIT", spec->git ? spec->git : "");
     fx_env("RELEASE_TEST_SITES", spec->sites ? spec->sites : H " rach2 tcg\n" C " rach2 tcg\n");
     fx_env("RELEASE_TEST_ACCEPT", spec->accept ? spec->accept : "");
+    fx_env("RELEASE_TEST_WINDOWS", spec->windows ? spec->windows : "");
+    fx_env("RELEASE_TEST_NATIVE", spec->native ? spec->native : "");
+    if (spec->native) {
+        flow_put(f, "state/wt/build/tools/dev/native-hostpeer", "");
+        fx_copy(f->self, flow_path(f, "state/wt/build/tools/dev/native-deploy"));
+    }
     {
         const char *a[] = {"/bin/sh", r->script, "-s", flow_path(f, "state"), "7", NULL};
         fx_run(f, a, r->tree, NULL, NULL);
@@ -770,6 +824,243 @@ static int acceptance_rows(struct release *r)
     free(calls);
     return ok;
 }
+#define MAC "mac accel tcg\nmac env JOBS=8\n"
+#define WINDOWS                                                                                \
+    "windows accel whpx\nwindows tree D:/w\nwindows out D:/o\nwindows site C:/s\nwindows env " \
+    "JOBS=30\nwindows path /ucrt64/bin\n"
+#define LENOVO                                                                              \
+    "lenovo target /var/native\nlenovo peer 192.168.0.100\nlenovo echo-port 55090\nlenovo " \
+    "network "                                                                              \
+    "192.168.0.106/24\nlenovo interface eth0\nlenovo gateway 192.168.0.1\nlenovo far "      \
+    "1.1.1.1\nlenovo empty 192.168.0.250\nlenovo silent 192.168.0.252\n"
+static int machine_line(struct release *r, const char *prefix, char *rest, size_t size)
+{
+    char *s = fx_read(flow_path(r->f, "state/record")), *line, *save = NULL;
+    int found = 0;
+    for (line = strtok_r(s, "\n", &save); line; line = strtok_r(NULL, "\n", &save))
+        if (!strncmp(line, prefix, strlen(prefix))) {
+            snprintf(rest, size, "%s", line + strlen(prefix));
+            found = 1;
+        }
+    free(s);
+    return found;
+}
+/**
+ * Find the Mac run that the record says started, copy its identity to `id`,
+ * and wait up to ten seconds for its times file to record its end, since the
+ * release starts the run detached.
+ */
+static int mac_ran(struct release *r, char *id, size_t size)
+{
+    char path[4200];
+    struct timespec pause = {0, 50000000};
+    unsigned i;
+    if (!machine_line(r, "mac started ", id, size))
+        return 0;
+    snprintf(path, sizeof(path), "%s/tree/build/machines/mac/runs/%s.times", r->f->work, id);
+    for (i = 0; i < 200; i++) {
+        if (fx_exists(path) && fx_has(path, "\nend "))
+            return 1;
+        /* interval: poll the Mac run's times file every 50 ms */
+        nanosleep(&pause, NULL);
+    }
+    return 0;
+}
+static const char *mac_failed(struct release *r, char *record, size_t size)
+{
+    char path[4200];
+    const char *id = "phase7-111111111111-mac-1029-000000";
+    snprintf(path, sizeof(path), "tree/build/machines/mac/runs/%s.times", id);
+    flow_put(r->f, path, "start 2026-10-29T00:00:00+0600\nrc=1\nend 2026-10-29T02:00:00+0600\n");
+    snprintf(path, sizeof(path), "tree/build/machines/mac/runs/%s.console", id);
+    flow_put(r->f, path, "run: result: failed\nrun: result: failed: i686:gnu x86_64:gnu\n");
+    snprintf(record, size, "%smac started %s\n", r->built, id);
+    return id;
+}
+static int mac_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    char record[9000], id[200], last[400];
+    const char *failed;
+    int ok = 1;
+    fx_remove(flow_path(f, "tree/build/machines"));
+    flow_put(f, "tree/build/machines/mac/tree/Readme.md", "");
+    flow_put(f, "tree/build/machines/mac/site/etude-site", "etude-site 2\n");
+    snprintf(record, sizeof(record), "phase 7\nsha %s\nchosen %s\ntouched %s\n", C, T, T);
+    run(r, &(struct release_row){.record = record,
+                                 .board = "ready: yes " C,
+                                 .runs = "none",
+                                 .git = "yes",
+                                 .machines = MAC});
+    ok = check(r,
+               f->status == 75 && count(flow_path(f, "state/record"), "^mac started ") == 1 &&
+                   mac_ran(r, id, sizeof(id)) && !strncmp(id, "phase7-222222222222-mac-", 24) &&
+                   fx_has(flow_path(f, "tree/build/machines/mac/run"), id) &&
+                   count(flow_path(f, "calls"), "^dispatch ") == 1,
+               "mac run starts beside the full run") &&
+         ok;
+    failed = mac_failed(r, record, sizeof(record));
+    run(r, &(struct release_row){.record = record, .board = "ready: yes " H, .machines = MAC});
+    snprintf(last, sizeof(last), "failed mac: run %s failed: i686:gnu, x86_64:gnu; filed as #40",
+             failed);
+    ok = check(r,
+               f->status == 1 && last_is(flow_path(f, "state/record"), last) &&
+                   fx_has(flow_path(f, "state/record"), "\nfiled mac #40 i686:gnu x86_64:gnu\n") &&
+                   fx_has(flow_path(f, "calls.created"),
+                          "--title Release tests fail on the Mac: i686:gnu, x86_64:gnu ") &&
+                   !called(r, "^(machine write|testing )"),
+               "mac failure is filed and ends the release") &&
+         ok;
+    snprintf(record + strlen(record), sizeof(record) - strlen(record),
+             "result mac %s failure i686:gnu x86_64:gnu\nfiled mac #40 i686:gnu x86_64:gnu\n%s\n",
+             failed, last);
+    run(r, &(struct release_row){
+               .record = record,
+               .board = "ready: yes " C,
+               .issues = "40 CLOSED Release tests fail on the Mac: i686:gnu, x86_64:gnu",
+               .log = "Fix gnu\n\nCloses #40",
+               .git = "yes",
+               .machines = MAC});
+    ok = check(r,
+               f->status == 75 &&
+                   fourth_is(flow_path(f, "state/record"), "again mac i686:gnu x86_64:gnu") &&
+                   count(flow_path(f, "state/record"), "^full done ") == 1 &&
+                   !fx_has(flow_path(f, "state/record"), "build done ") &&
+                   mac_ran(r, id, sizeof(id)) && !called(r, "^dispatch ") &&
+                   fx_has(flow_path(f, "calls.comments"),
+                          "only these run again there: i686:gnu, x86_64:gnu"),
+               "fixed mac failure runs only it again") &&
+         ok;
+    run(r, &(struct release_row){.record = record,
+                                 .board = "ready: yes " C,
+                                 .issues =
+                                     "40 OPEN Release tests fail on the Mac: i686:gnu, x86_64:gnu",
+                                 .log = "Fix gnu\n\nCloses #40",
+                                 .git = "yes",
+                                 .runs = "none",
+                                 .machines = MAC});
+    return check(r,
+                 f->status == 75 && !fx_has(flow_path(f, "state/record"), "again ") &&
+                     !fx_has(flow_path(f, "state/record"), "full done ") &&
+                     mac_ran(r, id, sizeof(id)) && count(flow_path(f, "calls"), "^dispatch ") == 1,
+                 "open mac failure runs every machine again") &&
+           ok;
+}
+static int windows_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    char *calls, *test, *start, *end;
+    char last[400], id[200];
+    int ok = 1;
+    run(r, &(struct release_row){.record = r->head,
+                                 .board = "ready: yes " H,
+                                 .git = "yes",
+                                 .machines = WINDOWS,
+                                 .windows = "status 0"});
+    calls = fx_read(flow_path(f, "calls"));
+    test = strstr(calls, "\nwsl test -e /mnt/d/o/phase7-111111111111-windows-");
+    start = strstr(calls, "\nwindows cd D:/w || ");
+    end = strstr(calls, "\nwsl touch /mnt/d/o/phase7-111111111111-windows-");
+    ok = check(r,
+               f->status == 75 && test && start && end && test < start && start < end &&
+                   called(r, "^wsl exec /usr/local/libexec/rach2/etude-launch alone sh -c ") &&
+                   called(r, "^scp -q -o BatchMode=yes .*/state/windows.bundle "
+                             "testing:D:/o/release.bundle$") &&
+                   called(r, "^windows export JOBS='30'$") &&
+                   called(r, "^windows .* run routine-sequence phase_first_run D:/w "
+                             "D:/o/phase7-111111111111-windows-[0-9-]+ both "
+                             "phase7-111111111111-windows-[0-9-]+ C:/s .* whpx all > ") &&
+                   count(flow_path(f, "state/record"),
+                         "^windows done .* run phase7-111111111111-windows-") == 1 &&
+                   called(r, "^testing "),
+               "windows runs while WSL is held, then the build") &&
+         ok;
+    free(calls);
+    run(r, &(struct release_row){.record = r->head,
+                                 .board = "ready: yes " H,
+                                 .git = "yes",
+                                 .machines = WINDOWS,
+                                 .windows = "run: result: failed: x86_64:agents\nstatus 1"});
+    machine_line(r, "windows started ", id, sizeof(id));
+    snprintf(last, sizeof(last), "failed windows: run %s failed: x86_64:agents; filed as #40", id);
+    ok = check(r,
+               f->status == 1 && last_is(flow_path(f, "state/record"), last) &&
+                   fx_has(flow_path(f, "state/record"), "\nfiled windows #40 x86_64:agents\n") &&
+                   called(r, "^wsl touch ") && !called(r, "^testing "),
+               "windows failure is filed and ends the release") &&
+         ok;
+    run(r, &(struct release_row){
+               .record = r->head, .board = "ready: yes " H, .git = "yes", .machines = WINDOWS});
+    return check(r,
+                 f->status == 1 && count(flow_path(f, "calls"), "^windows cd ") == 3 &&
+                     last_is(flow_path(f, "state/record"),
+                             "failed windows: three runs on Windows ended without a status"),
+                 "windows run without status runs three times") &&
+           ok;
+}
+static int lenovo_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    char *calls, *deploy, *accept, *commit, record[9000], last[400], id[200];
+    int ok = 1;
+    run(r, &(struct release_row){.record = r->tried,
+                                 .board = "ready: yes " H,
+                                 .writes = "yes",
+                                 .accept = "pass",
+                                 .machines = LENOVO,
+                                 .native = "pass"});
+    calls = fx_read(flow_path(f, "calls"));
+    deploy = strstr(calls, "native-deploy run ");
+    accept = strstr(calls, "accept 192.168.0.106\n");
+    commit = strstr(calls, "machine write bootctl commit\n");
+    ok = check(r,
+               !f->status && archived(r, "7-11111111-") && deploy && accept && commit &&
+                   deploy < accept && accept < commit &&
+                   called(r, "^native-deploy run .*/state/wt/build/x86_64/images/../tests/native/"
+                             "prepared 192.168.0.106 candidate .*/rach2/kernel .* /var/native "
+                             "phase7-111111111111-lenovo-[0-9-]+ .* --hostpeer "
+                             "build/tools/dev/native-hostpeer --peer 192.168.0.100 .* --purpose "
+                             "phase_first_run --$") &&
+                   count(r->retired, "^lenovo done ") == 1 &&
+                   fx_has(flow_path(f, "calls.comments"),
+                          "The release tests passed as well on the Lenovo, in the run "
+                          "`phase7-111111111111-lenovo-"),
+               "native cases run on the trial boot before acceptance") &&
+         ok;
+    free(calls);
+    run(r, &(struct release_row){.record = r->tried,
+                                 .board = "ready: yes " H,
+                                 .accept = "pass",
+                                 .machines = LENOVO,
+                                 .native = "fail"});
+    machine_line(r, "lenovo started ", id, sizeof(id));
+    snprintf(last, sizeof(last), "failed lenovo: run %s failed: dirprobe.ext2; filed as #40", id);
+    ok = check(r,
+               f->status == 1 && last_is(flow_path(f, "state/record"), last) &&
+                   fx_has(flow_path(f, "state/record"), "\nfiled lenovo #40 dirprobe.ext2\n") &&
+                   !called(r, "^(accept|machine write)"),
+               "native failure is filed and keeps the trial uncommitted") &&
+         ok;
+    snprintf(record, sizeof(record),
+             "%slenovo started %s\nresult lenovo %s failure dirprobe.ext2\nfiled lenovo #40 "
+             "dirprobe.ext2\n%s\n",
+             r->tried, id, id, last);
+    run(r,
+        &(struct release_row){.record = record,
+                              .board = "ready: yes " C,
+                              .issues = "40 CLOSED Release tests fail on the Lenovo: dirprobe.ext2",
+                              .log = "Fix dirprobe\n\nCloses #40",
+                              .git = "yes",
+                              .machines = LENOVO});
+    return check(r,
+                 f->status == 75 &&
+                     fourth_is(flow_path(f, "state/record"), "again lenovo dirprobe.ext2") &&
+                     count(flow_path(f, "state/record"), "^full done ") == 1 &&
+                     !fx_has(flow_path(f, "state/record"), "trial done ") &&
+                     called(r, "^testing .* ARCH=x86_64 make native-assets && "),
+                 "fixed native failure runs only it again on the new install") &&
+           ok;
+}
 int flow_release(struct fixture *f)
 {
     struct release r;
@@ -782,6 +1073,9 @@ int flow_release(struct fixture *f)
     ok = rerun_rows(&r) && ok;
     ok = intermittent_build_rows(&r) && ok;
     ok = acceptance_rows(&r) && ok;
+    ok = windows_rows(&r) && ok;
+    ok = lenovo_rows(&r) && ok;
+    ok = mac_rows(&r) && ok;
     fx_env("FLOW_RELEASE", NULL);
     return ok;
 }

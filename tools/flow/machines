@@ -1,0 +1,47 @@
+# machines: the settings of the whole runs that a release makes besides the
+# run of full.yml on Ubuntu in WSL, read by tools/flow/release.sh. A line is
+# MACHINE NAME VALUE. An `env` line sets a variable of the run, and a `path`
+# line puts a directory before the run's PATH, in the order of the lines.
+
+# The Mac, which runs release.sh: QEMU under TCG, in the copy and the
+# admission site under build/machines/mac of the clone that runs it.
+mac accel tcg
+mac path /opt/homebrew/bin
+mac env RACH2_WORKERS=8
+mac env RACH2_MEMORY_MIB=10240
+mac env RACH2_CPUS=2
+mac env JOBS=8
+
+# Windows on the testing host, through `ssh testing` and MSYS2's bash: QEMU
+# under WHPX, with the copy `tree`, the runs' directory `out` and the
+# protected admission site `site`.
+windows accel whpx
+windows tree D:/diadochi/681-windows
+windows out D:/diadochi/681-measured
+windows site C:/ProgramData/rach2/etude-site
+windows path /d/rach2-services/build/tests/qemu-build-11.1.2-whpx-01/libslirp-1147/runtime-pipes
+windows path /ucrt64/bin
+windows path /usr/bin
+windows env JOBS=30
+windows env HOSTCC=/ucrt64/bin/gcc
+windows env RACH2_WORKERS=16
+windows env RACH2_MEMORY_MIB=122880
+windows env RACH2_CPUS=2
+windows env RACH2_OVMF_CODE=/d/rach2-services/build/tests/qemu-build-11.1.2-whpx-01/libslirp-1147/runtime-pipes/share/edk2-x86_64-code.fd
+windows env ETUDE_TOOLING_CACHE=D:/diadochi/926-tooling/build/tooling
+windows env USERCHECK_CLANG=D:/diadochi/681-windows/build/host-tools/llvm-21.1.8/bin/clang.exe
+windows env USERCHECK_SYSTEM_PATH=C:/Windows/System32
+windows env TMPDIR=D:/diadochi/681-measured/tmp
+
+# The Lenovo: the native cases on its trial boot, which native-deploy starts
+# from the Mac at `peer` on the machine's network; the other values are the
+# options of `native-deploy run` of the same names (tests/native/Readme.md).
+lenovo target /var/native
+lenovo peer 192.168.0.100
+lenovo echo-port 55090
+lenovo network 192.168.0.106/24
+lenovo interface eth0
+lenovo gateway 192.168.0.1
+lenovo far 1.1.1.1
+lenovo empty 192.168.0.250
+lenovo silent 192.168.0.252
