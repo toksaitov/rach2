@@ -1,7 +1,7 @@
 /*
  * lines.c: the compatible formatter. It reads a run's history and prints the
- * lines tests/run printed, so that ci, bisection and the release tell a
- * suite's failure from a failure of the runner itself.
+ * lines tests/run printed, so that the release tests tell a suite's failure
+ * from a failure of the runner itself.
  */
 #include "lines.h"
 #include "history_json.h"

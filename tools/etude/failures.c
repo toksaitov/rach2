@@ -1,6 +1,6 @@
 /*
  * failures.c: the attempts of a run that did not pass, read from the run's
- * history, as tools/ci/report.sh gives them in ci's issues.
+ * history, for a person who reads why a run failed.
  */
 #include "failures.h"
 #include "history_json.h"

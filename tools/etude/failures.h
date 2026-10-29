@@ -1,6 +1,6 @@
 /*
  * failures.h: the attempts of a run that did not pass, read from the run's
- * history, as tools/ci/report.sh gives them in ci's issues.
+ * history, for a person who reads why a run failed.
  */
 #ifndef ETUDE_FAILURES_H
 #define ETUDE_FAILURES_H

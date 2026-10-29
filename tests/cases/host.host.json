@@ -3025,12 +3025,12 @@
         },
         {
           "assertion_id": "ci",
-          "checks": "ci reports and bisection: its native C controller passes every row",
+          "checks": "the release tests' report of what failed: its native C controller passes every row",
           "source": "scenario"
         },
         {
           "assertion_id": "ci_run",
-          "checks": "ci's reading of the runner's lines and of etude's history, and its stop after a killed step: its native C controller passes every row",
+          "checks": "the release tests' reading of the runner's lines and their stop after a killed step: its native C controller passes every row",
           "source": "scenario"
         },
         {
@@ -3050,7 +3050,7 @@
         },
         {
           "assertion_id": "release_resume",
-          "checks": "a release resumed from its record, with its runs, reruns and acceptance: its native C controller passes every row",
+          "checks": "a release resumed from its record, with its runs, its reruns of failures and acceptance: its native C controller passes every row",
           "source": "scenario"
         },
         {

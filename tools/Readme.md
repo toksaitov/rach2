@@ -4,7 +4,7 @@ The programs and scripts under `tools/` prepare a machine to build Rach2 and che
 
 ## Use
 
-On an enrolled testing endpoint, builds, worker checks, owner commands, CI and bisection use the [installed launch policy](etude/Readme.md#installed-launch-admission). The policy supplies one shared ledger and capacity before each build or test step; old checkouts use its installed external launcher.
+On an enrolled testing endpoint, builds, owner commands and the release tests use the [installed launch policy](etude/Readme.md#installed-launch-admission). The policy supplies one shared ledger and capacity before each build or test step; old checkouts use its installed external launcher.
 
 ### Setting up a machine
 
@@ -177,15 +177,7 @@ The worker loops remove what finished work leaves in their clones, as the Resour
 
 ### ci: `ci/`
 
-[The routine entry contract](ci/Readme.md) gives focused push selection, clean release preparation, measured reference inputs and the shared native evidence used across workflow jobs.
-
-[run.sh](ci/run.sh) uses the native collection entry for routine checks. `core DIR` selects style, host and the core tier; `full DIR` selects every suite, including bigmem. `ARCH='i686 x86_64'` gives both architectures one preparation record, plan and schedule. A full rerun may name `ARCH:SUITE` words in `SUITES`. [ci.yml](../.github/workflows/ci.yml) and [full.yml](../.github/workflows/full.yml) read the tested commit's [site](ci/site) through [site.sh](ci/site.sh), then use that machine's labels and requested accelerator for the complete collection. Changing or accepting the selected site is separate from implementing this entry.
-
-Routine entry requires an installed immutable native etude and a version-two admission policy, supplied by `ETUDE` and `ETUDE_SITE` or the policy's installed etude. It compiles no replacement runner before measurement. `etude run routine-sequence` starts the existing native phase owner and observer before admitted ordinary preparation. `etude prepare routine` builds and validates the selected artifacts, captures their source inputs and composes the same-run measurement context. The route, preparation, import, retention and reporting commands are native Etude entries; actual build and test tools remain declared preparation inputs. The phase owner confirms preparation cleanup, runs the native collection with that context and keeps observation active through collection cleanup. Routine purposes are `ci` for core and `release` for full; `ETUDE_PURPOSE=push` uses the push budget. They have charged ceilings of 600, 14400 and 300 seconds respectively, including ordinary preparation and cleanup. The native deadline reserves cleanup time; no shell timeout controls this path.
-
-DIR contains one `history/` and `store/` for the collection. Its `KIND-i686` and `KIND-x86_64` directories contain a native-format marker, the selected suites, verdict, `failed`, logs and `done`. [report.sh](ci/report.sh) validates the complete shared history with `etude check verdict --project-architecture --require-budget` for each architecture. An ordinary assertion failure affects its own architecture and a case of no architecture affects both. Missing work, corrupt evidence, unconfirmed cleanup or an unknown or failed charged budget affects both. A missing native history cannot pass through an old result-lines fallback. A cancelled owner leaves no completed result.
-
-Reporting keeps the existing commit statuses and failure issues, including every failed attempt that a retry later passed. A build, style, runner or default-suite failure in core opens the issue that holds unrelated pushes until both architectures pass. A job that no runner accepted is retried once as a lost job; a second loss on the same commit is reported as unfinished. [bisect.sh](ci/bisect.sh) repeats native commits through their public preparation and collection entry, with the original purpose budget and strict history verdict. A failed native history or budget leaves the range unresolved. Historical commits retain their own result-line or structured-history protocols and legacy admission bounds. Bisection names a failing commit only after it and its passing parent repeat; it labels a failure intermittent only if no newer run has reported it. [AGENTS.md](../AGENTS.md) gives the response to each result.
+[ci/Readme.md](ci/Readme.md) describes the release tests, the only tests GitHub Actions runs; no run starts on a push. [full.yml](../.github/workflows/full.yml), which `release.sh` starts on a milestone's branch, runs [run.sh](ci/run.sh) `full` for both architectures on the machine that the tested commit's [site](ci/site) selects through [site.sh](ci/site.sh). [report.sh](ci/report.sh) checks the run's native history with `etude check verdict` and writes what failed, as `ARCH:ITEM` words, to the artifact `failures`, which the release reads.
 
 ### The style check: `verify/`
 
