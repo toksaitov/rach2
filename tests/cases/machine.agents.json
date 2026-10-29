@@ -836,11 +836,11 @@
         {"assertion_id": "fixture", "checks": "the private CA and row script are prepared", "source": "scenario"},
         {"assertion_id": "boot", "checks": "the private GNU root mounts and init starts sshd", "source": "scenario"},
         {"assertion_id": "ssh", "checks": "the test account reaches the private machine over SSH and receives the CA, fixtures and row files", "source": "scenario"},
-        {"assertion_id": "application", "checks": "the worker-session row exits 0 over SSH and reports AGENTROW OK worker-session", "source": "scenario"},
+        {"assertion_id": "application", "checks": "the worker-session row exits 0 over SSH and reports AGENTROW OK worker-session: board.sh next lists tasks #901 and #902 of milestone 1 and not their subtask #903, and the worker loop runs a session on each and stops at its stop file", "source": "scenario"},
         {"assertion_id": "server-verdict", "checks": "the row script played every required step without any unexpected request", "source": "scenario"},
         {
           "assertion_id": "record",
-          "checks": "the host verifier, when the row has one, accepts the returned repository, processes, executable digests and recorded API requests",
+          "checks": "the host verifier accepts the recorded API requests, the program's digests, each session's result, the loop's log and the board: #901 and its subtask #903 closed with comments that name the commit on milestone/01-worker, #902 Ready and unassigned with its comment, no unexpected gh call; the origin's master is unchanged, milestone/01-worker has the commit of #901, whose message closes no issue, task/902 has the commit of #902 on it, and task/901 is gone",
           "source": "scenario"
         }
       ],

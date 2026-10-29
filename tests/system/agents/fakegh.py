@@ -5,26 +5,34 @@ Usage: fakegh.py STATE ARGS...
 
 STATE is a JSON file with the board: `login`, the account `gh api user`
 names; `origin`, a bare git repository that stands for the repository on
-GitHub; and `issues`, each an object with `number`, `title`, `state`,
-`body`, `labels`, `assignees`, `status`, the Status on the board, and
-`comments`. The worker-session row of the agents suite runs tools/flow/
+GitHub; `milestones`, each an object with `number`, `title`, `state` and
+`description`, whose line `Branch: NAME` names the milestone's branch; and
+`issues`, each an object with `number`, `title`, `state`, `labels`,
+`assignees`, `status`, the Status on the board, `milestone`, the number of
+its milestone or null, `parent`, the number of the task a subtask is under
+or null, and `comments`. The issues are on the board in the order STATE
+lists them. The worker-session row of the agents suite runs tools/flow/
 worker.sh, board.sh among it, with a program `gh` on the path that runs
 this with its STATE and the arguments it was given.
 
 ARGS are those of the calls tools/flow/worker.sh and board.sh make for
-next, take, mine and release, and of `gh issue comment`. For each the
-program builds the JSON that GitHub's API answers and prints what the call's
---jq filter makes of it, through the jq program, as gh does: a string bare,
-anything else as compact JSON. A call that changes the board writes STATE
-again. Each call is appended to STATE.calls as a JSON array of its
-arguments. A call this program does not know is appended to STATE.calls
-with the prefix `unexpected`, and the program says so on stderr and exits
-1, so that a test which reads that file finds it.
+next, take, mine, release and branch, and of `gh issue comment` and
+`gh issue close`. For each the program builds the JSON that GitHub's API
+answers and prints what the call's --jq filter makes of it, through the jq
+program, as gh does: a string bare, anything else as compact JSON. A call
+that changes the board writes STATE again. Each call is appended to
+STATE.calls as a JSON array of its arguments. A call this program does not
+know is appended to STATE.calls with the prefix `unexpected`, and the
+program says so on stderr and exits 1, so that a test which reads that file
+finds it.
 
-Before each call the program does what GitHub does when a commit reaches
-the default branch: an open issue that a message on the origin's master
-closes, with `Closes #N` or another closing keyword, is closed and set
-Done, as the board's workflow sets a closed item.
+An issue that is closed, by `gh issue close` or by a commit, is set Done,
+as the board's workflow sets a closed item. Before each call the program
+does what GitHub does when a commit reaches the default branch: an open
+issue that a message on the origin's master closes, with `Closes #N` or
+another closing keyword, is closed. A worker closes its task with
+`gh issue close`, and the row's commits reach no master, so the rule is
+there only for a session that does what it should not.
 """
 
 import fcntl
@@ -97,13 +105,26 @@ def find(board, number):
     raise Unexpected(f"no issue #{number}")
 
 
-def node(issue):
+def milestone(board, issue):
+    """Return ISSUE's milestone as an object of STATE, or None."""
+    for m in board["milestones"]:
+        if m["number"] == issue["milestone"]:
+            return m
+    if issue["milestone"] is None:
+        return None
+    raise Unexpected(f"no milestone {issue['milestone']}")
+
+
+def node(board, issue):
     """Return ISSUE as GitHub's GraphQL Issue node for the board's queries."""
+    m = milestone(board, issue)
     return {"number": issue["number"], "title": issue["title"], "state": issue["state"],
-            "body": issue["body"], "closedAt": None,
-            "assignees": {"totalCount": len(issue["assignees"])},
+            "assignees": {"nodes": [{"login": a} for a in issue["assignees"]]},
             "labels": {"nodes": [{"name": n} for n in issue["labels"]]},
-            "parent": None, "issueDependenciesSummary": {"blockedBy": 0}}
+            "parent": None if issue["parent"] is None else {"number": issue["parent"]},
+            "milestone": None if m is None else {
+                "number": m["number"], "state": m["state"], "description": m["description"]},
+            "issueDependenciesSummary": {"blockedBy": 0}}
 
 
 def graphql(board, flags):
@@ -113,11 +134,11 @@ def graphql(board, flags):
     if "items(first: 100" in query:
         nodes = [{"id": item_id(i), "isArchived": False,
                   "fieldValueByName": {"name": i["status"]} if i["status"] else None,
-                  "content": node(i)} for i in board["issues"]]
+                  "content": node(board, i)} for i in board["issues"]]
         return {"data": {"user": {"projectV2": {"items": {"pageInfo": page, "nodes": nodes}}}}}
     if "issues(first: 100" in query:
         states = re.search(r"states: \[([A-Z, ]*)\]", query).group(1).split(", ")
-        nodes = [dict(node(i), projectItems={"nodes": [
+        nodes = [dict(node(board, i), projectItems={"nodes": [
                      {"id": item_id(i), "project": {"number": BOARD, "owner": {"login": OWNER}},
                       "fieldValueByName": {"name": i["status"]} if i["status"] else None}]})
                  for i in board["issues"] if i["state"] in states]
@@ -133,15 +154,24 @@ def graphql(board, flags):
 
 
 def rest(board, flags, words):
-    """Answer `gh api PATH` for the user, assignees and timeline."""
+    """Answer `gh api PATH` for the user, an issue, its assignees and timeline."""
     path = words[0]
     method = flags.get("-X", "GET")
     if path == "user" and method == "GET":
         return {"login": board["login"]}
-    match = re.fullmatch(r"repos/[^/]+/[^/]+/issues/([0-9]+)/(assignees|timeline)", path)
+    match = re.fullmatch(r"repos/[^/]+/[^/]+/issues/([0-9]+)(?:/(assignees|timeline))?", path)
     if not match:
         raise Unexpected(f"the REST path {path}")
     issue = find(board, match.group(1))
+    if match.group(2) is None and method == "GET":
+        m = milestone(board, issue)
+        return {"number": issue["number"], "title": issue["title"],
+                "state": issue["state"].lower(),
+                "assignees": [{"login": a} for a in issue["assignees"]],
+                "labels": [{"name": n} for n in issue["labels"]],
+                "milestone": None if m is None else {
+                    "number": m["number"], "title": m["title"], "state": m["state"].lower(),
+                    "description": m["description"]}}
     if match.group(2) == "timeline" and method == "GET":
         return issue.setdefault("timeline", [])
     login = fields(flags).get("assignees[]")
@@ -163,7 +193,6 @@ def rest(board, flags, words):
 def view(issue, names):
     """Return the fields NAMES of ISSUE as `gh issue view --json` gives them."""
     known = {"number": issue["number"], "title": issue["title"], "state": issue["state"],
-             "body": issue["body"],
              "assignees": [{"login": a} for a in issue["assignees"]],
              "labels": [{"name": n} for n in issue["labels"]]}
     if any(n not in known for n in names):
@@ -171,8 +200,14 @@ def view(issue, names):
     return {n: known[n] for n in names}
 
 
+def close(issue):
+    """Close ISSUE and set it Done, as GitHub and the board's workflow do."""
+    issue["state"] = "CLOSED"
+    issue["status"] = "Done"
+
+
 def issue_command(board, flags, words):
-    """Answer `gh issue view`, `list`, `edit` and `comment`."""
+    """Answer `gh issue view`, `list`, `edit`, `comment` and `close`."""
     verb = words[0]
     if verb == "view":
         return view(find(board, words[1]), flags["--json"].split(","))
@@ -192,6 +227,15 @@ def issue_command(board, flags, words):
         return None
     if verb == "comment" and "--body" in flags:
         find(board, words[1])["comments"].append(flags["--body"])
+        return None
+    if verb == "close" and not set(flags) - {"-f", "-F", "--repo", "--comment"}:
+        issue = find(board, words[1])
+        if issue["state"] != "OPEN":
+            print(f"! Issue #{issue['number']} is already closed", file=sys.stderr)
+            return None
+        if "--comment" in flags:
+            issue["comments"].append(flags["--comment"])
+        close(issue)
         return None
     raise Unexpected(f"gh issue {verb}")
 
@@ -216,8 +260,7 @@ def close_pushed(board):
     for number in CLOSING.findall(log):
         for issue in board["issues"]:
             if issue["number"] == int(number) and issue["state"] == "OPEN":
-                issue["state"] = "CLOSED"
-                issue["status"] = "Done"
+                close(issue)
 
 
 def answer(board, args):

@@ -382,10 +382,9 @@ static int closing_word(const char *word)
             return 1;
     return 0;
 }
-static int closing(const char *message, unsigned wanted)
+static int closing(const char *message)
 {
     const char *p = message;
-    unsigned found = 0;
     while (*p) {
         char word[32];
         unsigned n = 0;
@@ -399,29 +398,81 @@ static int closing(const char *message, unsigned wanted)
         word[n] = 0;
         if (closing_word(word)) {
             const char *q = p;
-            char *end;
-            unsigned long issue;
             while (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n')
                 q++;
-            if (*q != '#')
-                continue;
-            issue = strtoul(q + 1, &end, 10);
-            if (end == q + 1)
-                continue;
-            if (!wanted || issue != wanted || found++)
-                return 0;
+            if (*q == '#' && q[1] >= '0' && q[1] <= '9')
+                return 1;
         }
     }
-    return found == (wanted ? 1U : 0U);
+    return 0;
 }
-static int verify_worker(struct row *s)
+static unsigned worker_history(struct row *s, const char *ref, char commits[][80], unsigned max)
 {
-    char directory[4096], archive_path[4096];
+    const char *args[] = {"/usr/bin/git",
+                          "--git-dir=/tmp/agents/verify/origin.git",
+                          "rev-list",
+                          "--reverse",
+                          ref,
+                          NULL};
     struct net_run r;
     char *history, *save = NULL, *hash;
     unsigned n = 0;
-    char commits[3][80];
+    if (!command(s, args, "worker-commits", &r))
+        return 0;
+    if (!net_exited0(&r)) {
+        net_run_free(&r);
+        return 0;
+    }
+    history = strdup(r.out);
+    net_run_free(&r);
+    if (!history)
+        return 0;
+    for (hash = strtok_r(history, "\n", &save); hash; hash = strtok_r(NULL, "\n", &save)) {
+        if (n == max || strlen(hash) >= 80) {
+            free(history);
+            return 0;
+        }
+        strcpy(commits[n++], hash);
+    }
+    free(history);
+    return n;
+}
+static int worker_commit(struct row *s, const char *commit, unsigned issue)
+{
+    char object[128], expected[100], filename[80];
+    struct net_run r;
+    const char *message[] = {"/usr/bin/git",
+                             "--git-dir=/tmp/agents/verify/origin.git",
+                             "log",
+                             "-1",
+                             "--format=%B",
+                             commit,
+                             NULL};
+    const char *files[] = {"/usr/bin/git", "--git-dir=/tmp/agents/verify/origin.git",
+                           "diff-tree",    "--no-commit-id",
+                           "--name-only",  "-r",
+                           commit,         NULL};
+    if (!command(s, message, "worker-commit-message", &r))
+        return 0;
+    if (!net_exited0(&r) || closing(r.out)) {
+        net_run_free(&r);
+        return 0;
+    }
+    net_run_free(&r);
+    snprintf(filename, sizeof(filename), "worker-%u.txt\n", issue);
+    if (!guest_expect(s, files, filename, "worker-committed-path"))
+        return 0;
+    snprintf(object, sizeof(object), "%s:worker-%u.txt", commit, issue);
+    snprintf(expected, sizeof(expected), "worker fixture %u\n", issue);
+    return worker_git(s, "show", object, expected, "worker-committed-file");
+}
+static int verify_worker(struct row *s)
+{
+    char directory[4096], archive_path[4096], said[2][120];
+    char master[2][80], milestone[3][80], task[4][80];
     const char *archive;
+    char *board;
+    int ok;
     if (etude_guest_get(s->b->m, "/tmp/agents/results/worker-session.tar", "worker-result.tar") !=
         ETUDE_OK)
         return 0;
@@ -434,61 +485,31 @@ static int verify_worker(struct row *s)
         if (!host(s, args, "worker-proof"))
             return 0;
     }
+    if (worker_history(s, "master", master, 2) != 1 ||
+        worker_history(s, "milestone/01-worker", milestone, 3) != 2 ||
+        worker_history(s, "task/902", task, 4) != 3 || strcmp(milestone[0], master[0]) ||
+        strcmp(task[0], master[0]) || strcmp(task[1], milestone[1]))
+        return 0;
+    if (!worker_commit(s, milestone[1], 901U) || !worker_commit(s, task[2], 902U))
+        return 0;
     {
         const char *args[] = {"/usr/bin/git", "--git-dir=/tmp/agents/verify/origin.git",
-                              "rev-list",     "--reverse",
-                              "master",       NULL};
-        if (!command(s, args, "worker-commits", &r))
+                              "for-each-ref", "--format=%(refname)", NULL};
+        if (!guest_expect(s, args,
+                          "refs/heads/master\nrefs/heads/milestone/01-worker\n"
+                          "refs/heads/task/902\n",
+                          "worker-branches"))
             return 0;
     }
-    if (!net_exited0(&r)) {
-        net_run_free(&r);
-        return 0;
-    }
-    history = strdup(r.out);
-    net_run_free(&r);
-    for (hash = strtok_r(history, "\n", &save); hash; hash = strtok_r(NULL, "\n", &save)) {
-        if (n == 3 || strlen(hash) >= sizeof(commits[0])) {
-            free(history);
-            return 0;
-        }
-        strcpy(commits[n++], hash);
-    }
-    free(history);
-    if (n != 3)
-        return 0;
-    for (n = 1; n < 3; n++) {
-        char object[128], expected[100], filename[80];
-        unsigned issue = n == 1 ? 901U : 902U;
-        const char *args[] = {"/usr/bin/git",
-                              "--git-dir=/tmp/agents/verify/origin.git",
-                              "log",
-                              "-1",
-                              "--format=%B",
-                              commits[n],
-                              NULL};
-        if (!command(s, args, "worker-commit-message", &r))
-            return 0;
-        if (!net_exited0(&r) || !closing(r.out, n == 1 ? 901U : 0U)) {
-            net_run_free(&r);
-            return 0;
-        }
-        net_run_free(&r);
-        snprintf(filename, sizeof(filename), "worker-%u.txt\n", issue);
-        {
-            const char *files[] = {"/usr/bin/git", "--git-dir=/tmp/agents/verify/origin.git",
-                                   "diff-tree",    "--no-commit-id",
-                                   "--name-only",  "-r",
-                                   commits[n],     NULL};
-            if (!guest_expect(s, files, filename, "worker-committed-path"))
-                return 0;
-        }
-        snprintf(object, sizeof(object), "%s:worker-%u.txt", commits[n], issue);
-        snprintf(expected, sizeof(expected), "worker fixture %u\n", issue);
-        if (!worker_git(s, "show", object, expected, "worker-committed-file"))
-            return 0;
-    }
-    return 1;
+    board = fetch(s, "/tmp/agents/verify/board.json", "worker-board");
+    snprintf(said[0], sizeof(said[0]), "\"Done in %s\"", milestone[1]);
+    snprintf(said[1], sizeof(said[1]), "\"Merged in %s\"", milestone[1]);
+    ok = board && strstr(board, said[0]) && strstr(board, said[1]);
+    if (!ok)
+        fprintf(stderr, "agents: worker-comments: the board has no comment [%s] or [%s]\n", said[0],
+                said[1]);
+    free(board);
+    return ok;
 }
 static int verify_runtime(struct row *s)
 {

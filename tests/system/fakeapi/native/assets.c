@@ -238,6 +238,7 @@ static int worker_prompt(const char *script_path, const struct value *steps,
     clear(&prompt);
     snprintf(issue, sizeof(issue), "%u", session == 1 ? 901U : 902U);
     replace(expected, "@ISSUE@", issue);
+    replace(expected, "@BRANCH@", "milestone/01-worker");
     content = get(messages->child, "content");
     if (content && content->type == 's')
         putsb(&actual, text(content));

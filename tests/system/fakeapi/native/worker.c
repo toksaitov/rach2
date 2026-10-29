@@ -46,36 +46,50 @@ static char *at_text(const char *dir, const char *name)
     clear(&path);
     return v;
 }
+/*
+ * The board the row leaves: #901 merged and closed by its worker, who stays
+ * assigned, with a comment that names the commit; #902 handed back, Ready and
+ * unassigned, with the session's comment; and #903, the subtask of #901,
+ * closed by that worker with a comment that names the commit and never taken.
+ * The machine's git checks that both comments name the milestone's head. The
+ * session deletes task/901 itself, so the loop's log has no line of `tidy`.
+ */
+static const struct {
+    long long number;
+    const char *state, *status, *assignee, *comment;
+    int whole; /* the comment is all of `comment`, not a prefix of it */
+} wanted[] = {
+    {901, "CLOSED", "Done", "rach2-test", "Merged in ", 0},
+    {902, "OPEN", "Ready", NULL, "The first part is on task/902; the rest waits for its blocker.",
+     1},
+    {903, "CLOSED", "Done", NULL, "Done in ", 0},
+};
 static int board(const char *dir)
 {
     struct value *b = at_json(dir, "board.json"), *calls;
     const struct value *issue, *entry;
-    unsigned seen = 0;
+    unsigned seen = 0, i;
     struct buffer path = {0};
     int ok = 0;
     if (!b)
         return 0;
     for (issue = get(b, "issues") ? get(b, "issues")->child : NULL; issue; issue = issue->next) {
         long long n = number(issue, "number", 0);
-        const struct value *assignees = get(issue, "assignees");
-        if (n < 900 || n > 902)
+        const struct value *assignees = get(issue, "assignees"), *comments = get(issue, "comments");
+        for (i = 0; i < sizeof(wanted) / sizeof(wanted[0]) && wanted[i].number != n; i++)
+            ;
+        if (i == sizeof(wanted) / sizeof(wanted[0]))
             continue;
-        if (strcmp(field(issue, "state"), n == 901 ? "CLOSED" : "OPEN") ||
-            strcmp(field(issue, "status"), n == 900   ? "In progress"
-                                           : n == 901 ? "Done"
-                                                      : "Ready") ||
-            count(assignees) != (size_t)(n == 901))
+        if (strcmp(field(issue, "state"), wanted[i].state) ||
+            strcmp(field(issue, "status"), wanted[i].status) ||
+            count(assignees) != (size_t)(wanted[i].assignee != NULL) ||
+            (wanted[i].assignee && strcmp(text(assignees->child), wanted[i].assignee)) ||
+            count(comments) != 1 ||
+            (wanted[i].whole
+                 ? strcmp(text(comments->child), wanted[i].comment)
+                 : strncmp(text(comments->child), wanted[i].comment, strlen(wanted[i].comment))))
             goto done;
-        if (n == 901 && strcmp(text(assignees->child), "rach2-test"))
-            goto done;
-        if (n == 902) {
-            const struct value *comments = get(issue, "comments");
-            if (count(comments) != 1 ||
-                strcmp(text(comments->child),
-                       "The first part is on master; the rest waits for its blocker."))
-                goto done;
-        }
-        seen |= 1U << (unsigned)(n - 900);
+        seen |= 1U << i;
     }
     if (seen != 7)
         goto done;
@@ -102,17 +116,10 @@ done:
 static int log_proof(const char *dir)
 {
     char *log = at_text(dir, "state/loop.log"), *line, *save = NULL;
-    unsigned at = 0, starts = 0, took = 0;
-    const char *fixed[] = {NULL,
-                           "took #901",
-                           NULL,
-                           NULL,
-                           "#901 is closed or no longer this account's",
-                           "tidy: deleted the branch 901-worker-fixture",
-                           "took #902",
-                           NULL,
-                           NULL,
-                           "stopped"};
+    unsigned at = 0, starts = 0, took = 0, tidied = 0;
+    const char *fixed[] = {
+        NULL,        "took #901", NULL, NULL,     "#901 is closed or no longer this account's",
+        "took #902", NULL,        NULL, "stopped"};
     if (!log)
         return 0;
     for (line = strtok_r(log, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
@@ -130,24 +137,26 @@ static int log_proof(const char *dir)
             starts++;
         if (!strncmp(body, "took #", 6))
             took++;
+        if (!strncmp(body, "tidy: ", 6))
+            tidied++;
         if (at == 0) {
             size_t n = strlen(body);
             match = !strncmp(body, "loop starts: claude in ", strlen("loop starts: claude in ")) &&
                     n >= 6 && !strcmp(body + n - 6, "/clone");
-        } else if (at == 2 || at == 7)
+        } else if (at == 2 || at == 6)
             match = sscanf(body, "session %127[0-9-] on #%u starts%c", token, &issue, &tail) == 2 &&
                     issue == (at == 2 ? 901U : 902U);
-        else if (at == 3 || at == 8)
+        else if (at == 3 || at == 7)
             match =
                 sscanf(body, "session %127[0-9-] ended 0 after %us%c", token, &seconds, &tail) == 2;
-        else if (at < 10)
+        else if (at < 9)
             match = !strcmp(body, fixed[at]);
         if (match)
             at++;
         log_line("worker: loop: %s", body);
     }
     free(log);
-    return at == 10 && starts == 2 && took == 2;
+    return at == 9 && starts == 2 && took == 2 && !tidied;
 }
 static int sessions(const char *dir)
 {

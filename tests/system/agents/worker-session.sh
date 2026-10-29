@@ -1,22 +1,26 @@
 # shellcheck shell=bash
 # worker-session: the project's worker loop, tools/flow/worker.sh, runs a
-# session of Claude Code on each of two issues, as the test account, and
+# session of Claude Code on each of two tasks, as the test account, and
 # Claude Code plays tests/system/agents/worker-session.json against the fake
-# server. The row makes a git repository of the agent fixtures and flow tools, a
-# bare copy of it as the loop's `origin`, and a clone of that, whose
+# server. The row makes a git repository of the agent fixtures and flow
+# tools, with the branches master and milestone/01-worker at its one commit,
+# a bare copy of it as the loop's `origin`, and a clone of that, whose
 # worker.sh the loop runs. `gh` on the path is fakegh.py, which serves a
-# board of one phase In progress, #900, and two of its tasks, #901 and #902,
-# Ready, and closes an issue when a commit that closes it reaches the
-# origin's master, as GitHub does. Told to by the script, the session on
-# #901 commits on the issue's branch with `Closes #901` and pushes, and the
-# session on #902 commits, pushes, comments and hands the issue back with
-# `board.sh release`. Once the second session has started, the row writes
-# the loop's stop file and waits for the loop to exit. It returns in
+# board of one open milestone, number 1, whose description names the branch
+# milestone/01-worker, with two tasks of it Ready, #901 and #902, and #903, a
+# subtask of #901, Ready and first on the board, which `board.sh next` must
+# not list. Told to by the script, the session on #901 commits on task/901
+# and pushes it, closes #903 with a comment that names the commit, rebases
+# onto the milestone's branch, pushes HEAD to it, closes #901 with a comment
+# that names the commit, and deletes task/901 here and on the origin; the
+# session on #902 commits on task/902, pushes it, comments and hands the task
+# back with `board.sh release`. Once the second session has started, the row
+# writes the loop's stop file and waits for the loop to exit. It returns in
 # /tmp/agents/results/worker-session.tar the loop's state directory, the
 # board, the calls made to gh, the origin and the program's digest before
 # and after the loop; the case judges them on the host with every recorded
-# request. The loop's environment has the settings of the
-# claude-print row and the model, which worker.sh does not choose.
+# request. The loop's environment has the settings of the claude-print row
+# and the model, which worker.sh does not choose.
 # hosts: fakeapi.test api.anthropic.com platform.claude.com claude.com
 # hosts: downloads.claude.ai raw.githubusercontent.com
 # hosts: http-intake.logs.us5.datadoghq.com
@@ -40,16 +44,19 @@ row_cleanup() {
 # board: write the board fakegh.py serves, with the origin at WORK/origin.git.
 board() {
     cat > "$WORK/board.json" << EOF
-{"login": "rach2-test", "origin": "$WORK/origin.git", "issues": [
- {"number": 900, "title": "tests: the worker loop on Rach2", "state": "OPEN",
-  "body": "The phase of the worker-session row.", "labels": ["phase"], "assignees": [],
-  "status": "In progress", "comments": []},
- {"number": 901, "title": "tests: a task the session closes", "state": "OPEN",
-  "body": "Part of #900.", "labels": ["enhancement"], "assignees": [], "status": "Ready",
+{"login": "rach2-test", "origin": "$WORK/origin.git", "milestones": [
+ {"number": 1, "title": "The worker loop on Rach2", "state": "OPEN",
+  "description": "The milestone of the worker-session row.\n\nBranch: milestone/01-worker"}],
+ "issues": [
+ {"number": 903, "title": "tests: a subtask the session closes", "state": "OPEN",
+  "labels": [], "assignees": [], "status": "Ready", "milestone": 1, "parent": 901,
   "comments": []},
+ {"number": 901, "title": "tests: a task the session merges", "state": "OPEN",
+  "labels": ["enhancement"], "assignees": [], "status": "Ready", "milestone": 1,
+  "parent": null, "comments": []},
  {"number": 902, "title": "tests: a task the session hands back", "state": "OPEN",
-  "body": "Part of #900.", "labels": ["enhancement"], "assignees": [], "status": "Ready",
-  "comments": []}]}
+  "labels": ["enhancement"], "assignees": [], "status": "Ready", "milestone": 1,
+  "parent": null, "comments": []}]}
 EOF
 }
 
@@ -72,6 +79,7 @@ row() {
     tree || return
     mkdir -p "$WORK/home" "$WORK/tmp" "$WORK/bin" "$WORK/state" /tmp/agents/results
     output "the tree's branch" git -C tree branch -M master
+    output "the milestone's branch" git -C tree branch milestone/01-worker
     output "the origin" git clone -q --bare tree "$WORK/origin.git"
     output "the loop's clone" git clone -q "$WORK/origin.git" "$WORK/clone"
     HOME=$WORK/home git config --global user.name "Rach2 test"
@@ -80,6 +88,9 @@ row() {
     printf '#!/bin/sh\nexec python3 -B %s %s "$@"\n' "$WORK/tree/tests/system/agents/fakegh.py" \
         "$WORK/board.json" > "$WORK/bin/gh"
     chmod +x "$WORK/bin/gh"
+    output "the tasks on the board" env PATH="$WORK/bin:$PATH" sh "$WORK/clone/tools/flow/board.sh" next
+    same "the tasks on the board" "$OUT" \
+        "$(printf '901\ttests: a task the session merges\n902\ttests: a task the session hands back')"
     output "the program's digest before the loop" sha256sum /opt/claude/bin/claude
     printf '%s\n' "$OUT" > "$WORK/binary.before"
     [ -z "$FAILED" ] || return

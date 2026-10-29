@@ -3,39 +3,47 @@
   "steps": [
     {
       "tools": ["Read", "Bash", "Edit"],
-      "reply": [{"type": "tool_use", "id": "toolu_look_901", "name": "Bash", "input": {"command": "sh tools/flow/board.sh mine 901 && git status --porcelain && printf 'CLONE_OK_901\\n'", "description": "Check that the loop gave this account the issue"}}]
+      "reply": [{"type": "tool_use", "id": "toolu_look_901", "name": "Bash", "input": {"command": "sh tools/flow/board.sh mine 901 && sh tools/flow/board.sh branch 901 && git status --porcelain && printf 'CLONE_OK_901\\n'", "description": "Check that the loop gave this account the task"}}]
     },
     {
-      "results": [{"id": "toolu_look_901", "contains": ["yes", "CLONE_OK_901"]}],
-      "reply": [{"type": "tool_use", "id": "toolu_commit_901", "name": "Bash", "input": {"command": "git switch -q -c 901-worker-fixture origin/master && printf 'worker fixture 901\\n' > worker-901.txt && git add worker-901.txt && git commit -q -m 'Add the worker fixture of issue 901' -m 'Closes #901' && printf 'COMMIT_OK_901\\n'", "description": "Commit the change on the issue's branch"}}]
+      "results": [{"id": "toolu_look_901", "contains": ["yes", "milestone/01-worker", "CLONE_OK_901"]}],
+      "reply": [{"type": "tool_use", "id": "toolu_commit_901", "name": "Bash", "input": {"command": "git switch -q -c task/901 origin/milestone/01-worker && printf 'worker fixture 901\\n' > worker-901.txt && git add worker-901.txt && git commit -q -m 'Add the worker fixture of task 901' && git push -q origin task/901 && printf 'COMMIT_OK_901\\n'", "description": "Commit the change on the task's branch and push it"}}]
     },
     {
       "results": [{"id": "toolu_commit_901", "contains": ["COMMIT_OK_901"]}],
-      "reply": [{"type": "tool_use", "id": "toolu_push_901", "name": "Bash", "input": {"command": "git push -q origin HEAD:master && printf 'PUSH_OK_901\\n'", "description": "Push the commit to master"}}]
+      "reply": [{"type": "tool_use", "id": "toolu_subtask_901", "name": "Bash", "input": {"command": "gh issue close 903 --comment \"Done in $(git rev-parse HEAD)\" && printf 'SUBTASK_OK_901\\n'", "description": "Close the finished subtask"}}]
     },
     {
-      "results": [{"id": "toolu_look_901", "contains": ["yes", "CLONE_OK_901"]}, {"id": "toolu_commit_901", "contains": ["COMMIT_OK_901"]}, {"id": "toolu_push_901", "contains": ["PUSH_OK_901"]}],
-      "reply": [{"type": "text", "text": "#901: closed by the pushed commit."}]
+      "results": [{"id": "toolu_subtask_901", "contains": ["SUBTASK_OK_901"]}],
+      "reply": [{"type": "tool_use", "id": "toolu_merge_901", "name": "Bash", "input": {"command": "git fetch -q origin && git rebase -q origin/milestone/01-worker && git push -q origin HEAD:milestone/01-worker && printf 'MERGE_OK_901\\n'", "description": "Merge the task into the milestone's branch"}}]
+    },
+    {
+      "results": [{"id": "toolu_merge_901", "contains": ["MERGE_OK_901"]}],
+      "reply": [{"type": "tool_use", "id": "toolu_close_901", "name": "Bash", "input": {"command": "gh issue close 901 --comment \"Merged in $(git rev-parse HEAD)\" && git switch -q master && git branch -q -D task/901 && git push -q origin --delete task/901 && printf 'CLOSE_OK_901\\n'", "description": "Close the task and delete its branch"}}]
+    },
+    {
+      "results": [{"id": "toolu_look_901", "contains": ["yes", "milestone/01-worker", "CLONE_OK_901"]}, {"id": "toolu_commit_901", "contains": ["COMMIT_OK_901"]}, {"id": "toolu_subtask_901", "contains": ["SUBTASK_OK_901"]}, {"id": "toolu_merge_901", "contains": ["MERGE_OK_901"]}, {"id": "toolu_close_901", "contains": ["CLOSE_OK_901"]}],
+      "reply": [{"type": "text", "text": "#901: merged into milestone/01-worker and closed."}]
     },
     {
       "tools": ["Read", "Bash", "Edit"],
-      "reply": [{"type": "tool_use", "id": "toolu_look_902", "name": "Bash", "input": {"command": "sh tools/flow/board.sh mine 902 && git status --porcelain && printf 'CLONE_OK_902\\n'", "description": "Check that the loop gave this account the issue"}}]
+      "reply": [{"type": "tool_use", "id": "toolu_look_902", "name": "Bash", "input": {"command": "sh tools/flow/board.sh mine 902 && git status --porcelain && printf 'CLONE_OK_902\\n'", "description": "Check that the loop gave this account the task"}}]
     },
     {
       "results": [{"id": "toolu_look_902", "contains": ["yes", "CLONE_OK_902"]}],
-      "reply": [{"type": "tool_use", "id": "toolu_commit_902", "name": "Bash", "input": {"command": "git switch -q -c 902-worker-fixture origin/master && printf 'worker fixture 902\\n' > worker-902.txt && git add worker-902.txt && git commit -q -m 'Add the first part of the worker fixture of issue 902' && printf 'COMMIT_OK_902\\n'", "description": "Commit the first part on the issue's branch"}}]
+      "reply": [{"type": "tool_use", "id": "toolu_commit_902", "name": "Bash", "input": {"command": "git switch -q -c task/902 origin/milestone/01-worker && printf 'worker fixture 902\\n' > worker-902.txt && git add worker-902.txt && git commit -q -m 'Add the first part of the worker fixture of task 902' && printf 'COMMIT_OK_902\\n'", "description": "Commit the first part on the task's branch"}}]
     },
     {
       "results": [{"id": "toolu_commit_902", "contains": ["COMMIT_OK_902"]}],
-      "reply": [{"type": "tool_use", "id": "toolu_push_902", "name": "Bash", "input": {"command": "git push -q origin HEAD:master && printf 'PUSH_OK_902\\n'", "description": "Push the first part to master"}}]
+      "reply": [{"type": "tool_use", "id": "toolu_push_902", "name": "Bash", "input": {"command": "git push -q origin task/902 && printf 'PUSH_OK_902\\n'", "description": "Push the task's branch"}}]
     },
     {
       "results": [{"id": "toolu_push_902", "contains": ["PUSH_OK_902"]}],
-      "reply": [{"type": "tool_use", "id": "toolu_release_902", "name": "Bash", "input": {"command": "gh issue comment 902 --repo toksaitov/rach2 --body 'The first part is on master; the rest waits for its blocker.' && sh tools/flow/board.sh release 902 && printf 'RELEASE_OK_902\\n'", "description": "Say why and hand the issue back"}}]
+      "reply": [{"type": "tool_use", "id": "toolu_release_902", "name": "Bash", "input": {"command": "gh issue comment 902 --body 'The first part is on task/902; the rest waits for its blocker.' && sh tools/flow/board.sh release 902 && printf 'RELEASE_OK_902\\n'", "description": "Say why and hand the task back"}}]
     },
     {
       "results": [{"id": "toolu_look_902", "contains": ["yes", "CLONE_OK_902"]}, {"id": "toolu_commit_902", "contains": ["COMMIT_OK_902"]}, {"id": "toolu_push_902", "contains": ["PUSH_OK_902"]}, {"id": "toolu_release_902", "contains": ["RELEASE_OK_902"]}],
-      "reply": [{"type": "text", "text": "#902: not closed; the first part is pushed and the issue is handed back."}]
+      "reply": [{"type": "text", "text": "#902: not merged; the first part is on task/902 and the task is handed back."}]
     }
   ]
 }
