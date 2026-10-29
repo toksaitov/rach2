@@ -24,8 +24,8 @@ The rules are kept short on purpose; their history is in commit messages and `de
 
 * The owner sets the goals, approves each milestone's plan and makes the owner's decisions: a choice of taste or scope between outcomes that are each correct, the owner's hardware, repository settings, spending, and deleting what Resources does not allow.
 * The chat is the owner's own Claude Code session on the Mac. It answers the owner and carries out the owner's orders, and does no long work. It starts the manager, passes the owner's orders on, and tells the owner of big incidents in the chat and on the owner's phone.
-* The manager is a Claude Code session on the Mac that the chat starts. It plans each milestone, watches the workers, writes its share of the code through up to three worker sessions of its own, and integrates, tests and releases. It reports to the chat by message.
-* The workers are the worker loops, `tools/flow/worker.sh`: one in each of the five research assistants' accounts on the testing host and the owner's Codex loop on the Mac. They take tasks from the board by themselves.
+* The manager is a Claude Code session on the Mac that the chat starts. It plans each milestone, watches the workers, writes its share of the code through up to three worker loops of its own, and integrates, tests and releases. It reports to the chat by message.
+* The workers are the worker loops, `tools/flow/worker.sh`: one in each of the five research assistants' accounts on the testing host, and on the Mac the owner's Codex loop and the manager's own. They take tasks from the board by themselves.
 * Codex and a Claude Fable subagent review each milestone's plan; Codex reviews the whole milestone at its end.
 
 ## Milestones
@@ -45,11 +45,11 @@ The rules are kept short on purpose; their history is in commit messages and `de
 ## Work
 
 * A worker loop takes the top Ready task with `sh tools/flow/board.sh next` and `take`, which keep one writer on each task. An issue labelled `owner-only` needs the owner's accounts, such as a step on the Lenovo, and goes to them alone.
-* The worker writes the whole task on its task branch, compiles what it changed and commits; the commit hook formats the code. It pushes the task branch as it goes, closes each subtask when it is done, and fixes a bug it meets on the spot, naming it in the commit message instead of filing it.
-* When the task is done, the worker rebases it onto the milestone branch, compiles, pushes with `git push origin HEAD:milestone/NN-name` (rebasing again if the branch moved), closes the task and deletes its branch. A task that needs another task's code waits until that code is on the milestone branch.
+* The worker writes the whole task on its task branch, compiles what it changed and commits; the commit hook formats the code. It pushes the task branch as it goes, merging in what reaches the milestone branch meanwhile so that the task branch only grows, closes each subtask when it is done, and fixes a bug it meets on the spot, naming it in the commit message instead of filing it.
+* When the task is done, the worker rebases it onto the milestone branch, compiles, pushes with `git push origin HEAD:milestone/NN-name` (rebasing again if the branch moved), closes the task and deletes its branch; the rebased task goes only to the milestone branch. A task that needs another task's code is marked on GitHub as blocked by that task, and `next` offers it once the blocker is closed.
 * During a milestone nothing else is checked: no suites, no host tests, no style or document checks and no CI. A worker builds and boots the whole system only to see behaviour that reading the code cannot settle: in QEMU, and on the Lenovo through the owner's accounts.
 * Wait for a long command in the foreground, or in the background with the tool's own notice. Never by polling the process table.
-* The manager reads every account's state at least every half hour, with `sh tools/flow/status.sh`. When an account runs out of its limit or stalls, the manager commits its unfinished work to the task branch, pushes it, and gives the task to a free account; the closed subtasks show where to go on. It restarts a stopped loop, folds the owner's new requests into tasks, and keeps every account busy.
+* The manager reads every account's state at least every half hour, with `sh tools/flow/status.sh`. When an account runs out of its limit or stalls, the manager stops its loop, commits its unfinished work to the task branch, pushes it, and gives the task to a free account; the closed subtasks show where to go on. It restarts a stopped loop, folds the owner's new requests into tasks, and keeps every account busy.
 * At the end of a milestone the manager rebases its branch onto master if master moved, builds it after `make clean`, which keeps the vendor and GNU builds, and runs `tests/run style`, the host tests and every suite on both architectures, while Codex reviews the whole diff. The failures and findings go in one list, fixed in one batch; then only the failed cases run again.
 * `tools/flow/release.sh M SHA` then runs every suite on Ubuntu in WSL, on Windows and on the Mac, installs SHA on the Lenovo and runs its native cases and acceptance on a trial boot. On a pass it moves master to SHA, closes the milestone and archives its cards; `-r` runs again only the last release's failures. The Lenovo takes no commit that has not passed everywhere.
 * If the owner's limit runs out, the chat, the manager and its worker sessions stop together and start again when it is back.
@@ -65,7 +65,7 @@ The rules are kept short on purpose; their history is in commit messages and `de
 
 ## Testing
 
-* Tests run at the end of a milestone and in its release, on the testing host (each person's clone there, and the owner's copy that `tools/dev/testing.sh` syncs) and in the release on Windows and the Mac too. The `testing` skill describes the machines.
+* Tests run at the end of a milestone and in its release, on the testing host, in the owner's copy that `tools/dev/testing.sh` syncs, and in the release on Windows and the Mac too. The `testing` skill describes the machines.
 * Whoever stops a run on the testing host confirms that its claim has left the admission ledger, `/var/lib/rach2-etude/ledger/claims`, before going on.
 * A suite judges what the kernel counts, never the clock, and sets no time limit of its own.
 * A test removes what it makes on every exit path, from an exit trap installed first, unless its output names a directory it keeps as evidence. Scratch goes under `TMPDIR`, which `tests/run` sets to `build/tmp`.
@@ -74,7 +74,7 @@ The rules are kept short on purpose; their history is in commit messages and `de
 
 * Everything the tools, tests and agents write stays under the `build/` of the clone they work in: scratch in `build/tmp`, runs in `build/runs`, caches in `build/cache`, the state of the loops and sessions in `build/flow`, and further copies of the tree in `build/worktrees`. Nothing goes in a home directory, a drive's root, a system directory or another project's. The machine-wide setup that `tools/Readme.md` lists, the test runner's site, ledger, locks and the testing host's shared caches, stays where it is.
 * `sh tools/flow/status.sh` reads every disk and says low below 20% free, critical below 10% or 40 GiB. A full disk stops everyone.
-* Each machine has one build copy for the end runs and the release, kept between milestones. The end runs and the release rebuild its in-house code after `make clean`, and take unchanged vendor and GNU builds from the machine's cache, so that no milestone builds everything from nothing. A worker builds in its own clone, and only what its task needs.
+* Each machine has one build copy for the end runs and the release, kept between milestones, whose unchanged vendor and GNU builds come from the machine's cache, so that no milestone builds everything from nothing. A worker builds in its own clone, and only what its task needs.
 * Whoever makes something removes it: a worker its task's worktree and branch once merged, a test its scratch, the release its own. At the end of each milestone, and whenever space runs low, the manager sweeps every machine, the testing host and the Mac with `sh tools/flow/sweep.sh` and Windows by hand: merged branches, worktrees and copies whose work is on master or a milestone branch, scratch older than a day, logs older than two weeks. It keeps the build copies, the caches and the evidence of anything open.
 * Never delete source that is on no branch, a stash, a credential or key, the Doom WAD, a pinned tarball, the GRUB images, a release's record, or anything a process uses. Do not run `git clean -fdx` or `make distclean` as cleanup.
 
