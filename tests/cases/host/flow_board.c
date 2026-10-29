@@ -536,6 +536,8 @@ static int api(struct board *b, int argc, char **argv, const struct request *r)
         puts(env("BOARD_TEST_HEAD"));
     else if (strstr(target, "/status"))
         puts(env("BOARD_TEST_CORE"));
+    else if (strstr(target, "/actions/workflows/ci.yml"))
+        puts(env("BOARD_TEST_WORKFLOW"));
     else if (strstr(target, "/issues/")) {
         const char *last = strrchr(target, '/');
         printf("%ld\n", 1000 + strtol(last ? last + 1 : "0", NULL, 10));
@@ -1325,7 +1327,9 @@ static int phase_rows(struct fixture *f)
                 {"phase-failed", "", NULL, "ready: no: review failed"},
                 {"phase-review", "", "review: " BOARD_BASE ".." BOARD_LATER, "ready: no: review"},
                 {"phase-core", "", "core: failure", "ready: no: core failure"},
-                {"phase-lost", "", NULL, "ready: no: unreadable: issues"}};
+                {"phase-lost", "", NULL, "ready: no: unreadable: issues"},
+                {"phase-core-none", "", "core: none", "ready: no: core none"},
+                {"phase-core-off", "", "core: off", "ready: yes " BOARD_HEAD}};
     unsigned i;
     int ok = 1;
     for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
@@ -1345,6 +1349,11 @@ static int phase_rows(struct fixture *f)
             fx_env("BOARD_TEST_CORE", "failure");
         if (i == 8)
             fx_env("BOARD_TEST_LOST", "issues");
+        if (i >= 9) {
+            fx_env("BOARD_TEST_LOST", NULL);
+            fx_env("BOARD_TEST_CORE", "none");
+            fx_env("BOARD_TEST_WORKFLOW", i == 9 ? "active" : "disabled_manually");
+        }
         call(f, "phase", NULL, NULL, NULL);
         held = f->status == (i == 8 ? 1 : 0) && tail(f, rows[i].last) &&
                (!rows[i].line || said(f, rows[i].line));
@@ -1360,6 +1369,7 @@ static int phase_rows(struct fixture *f)
             held = held && said(f, "members: 1 open, 2 closed");
         ok = fx_check(f, held, rows[i].name) && ok;
     }
+    fx_env("BOARD_TEST_WORKFLOW", NULL);
     return ok;
 }
 

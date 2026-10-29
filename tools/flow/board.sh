@@ -170,7 +170,9 @@
 #    intermittent: #N...  those of them labelled `intermittent`
 #    hold: #N...          open issues labelled `hold`
 #    review: BASE..HEAD   from P's newest line `review: BASE..HEAD complete`
-#    core: STATE          the commit status `ci/core` on master's head
+#    core: STATE          the commit status `ci/core` on master's head, or
+#                         `off` when it has none and the core workflow is
+#                         turned off
 #    ready: yes HEAD      or `ready: no: REASON`
 #
 # `work` leaves out the issues labelled `intermittent`. An empty list, a
@@ -178,8 +180,9 @@
 # `unknown`. The reason is the first of these that applies: `no phase is In
 # progress`; `work: #N...`; `hold #N...`; `review failed`, when P has the label
 # `review-failed`; `review`, when the newest review did not end at head; and
-# `core STATE`. When something cannot be read, the last line is `ready: no:
-# unreadable: WHAT` and the exit status is 1; otherwise it is 0.
+# `core STATE`, unless STATE is `success` or `off`. When something cannot be
+# read, the last line is `ready: no: unreadable: WHAT` and the exit status is
+# 1; otherwise it is 0.
 #
 # The repository and the board's owner and number are below. The board's
 # owner is the owner's account, the one that may take an issue labelled
@@ -1130,6 +1133,11 @@ phase()
     core=$(gh api "repos/$REPO/commits/$head/status" --jq '
         [.statuses[] | select(.context == "ci/core") | .state][0] // "none"') ||
         unreadable "the state of ci/core"
+    if [ "$core" = none ]; then
+        workflow=$(gh api "repos/$REPO/actions/workflows/ci.yml" --jq .state) ||
+            unreadable "the state of the core workflow"
+        case $workflow in disabled*) core=off ;; esac
+    fi
     echo "core: $core"
     work=$(printf '%s\n' "$lists" | sed -n 's/^work: //p')
     hold=$(printf '%s\n' "$lists" | sed -n 's/^hold: //p')
@@ -1143,7 +1151,7 @@ phase()
         echo 'ready: no: review failed'
     elif [ -z "$review" ] || [ "${review#*..}" != "$head" ]; then
         echo 'ready: no: review'
-    elif [ "$core" != success ]; then
+    elif [ "$core" != success ] && [ "$core" != off ]; then
         echo "ready: no: core $core"
     else
         echo "ready: yes $head"
