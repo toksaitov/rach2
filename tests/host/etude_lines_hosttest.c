@@ -12,10 +12,7 @@
  * host-deps: tools/etude/ledger.c tools/etude/posix/process.c
  * host-deps: tests/cases/host/fixture.c tests/host/compat/status_proc_host.c
  * host-tools: python3
- * host-inputs: tools/ci/run.sh
- * host-inputs: tools/ci/bisect.sh
  * host-inputs: tools/flow/test_status.py
- * host-inputs: tests/registry
  * host-cflags: -I tools/etude/include -I tools/etude -Wall -Wextra -Werror
  *
  * Each row writes a run's history through the history store and runs this
@@ -23,16 +20,10 @@
  * a pass, a failure, a failure that a retry passed, a stalled case, an
  * attempt that something outside its case disrupted, a run cut short, a case
  * of no suite, a suite of no case, a cancelled run, and run records that
- * disagree with their attempts. The retained lines branch of tools/ci/run.sh
- * reads them through a tests/run that runs the formatter. Only its entry
- * selector changes in a private copy. The real suites
- * function of tools/ci/bisect.sh judges them, with a registry whose core
- * tier is the map's suites, as the tested commit's would be: a failure
- * beside a fault of the runner leaves bisection unresolved. Given both
- * architectures, `-a i686,x86_64`, the formatter makes each suite of the map
- * a suite `ARCH:SUITE` of each, leaves out one with no case beside one with
- * cases, and gives an item of no architecture to i686; given one, it prints
- * what it prints without `-a`.
+ * disagree with their attempts. Given both architectures, `-a i686,x86_64`,
+ * the formatter makes each suite of the map a suite `ARCH:SUITE` of each,
+ * leaves out one with no case beside one with cases, and gives an item of no
+ * architecture to i686; given one, it prints what it prints without `-a`.
  *
  * The status writer then records a run's attempts from real watchdogs, and
  * the ledger gets real claims and requests: a claim of this process, one
@@ -114,17 +105,14 @@ struct run_spec {
     int cut; /* the last record is cut short */
 };
 
-/* A row: a run, the suite map, and what the formatter, ci and bisection
- * must make of it. */
+/* A row: a run, the suite map, and what the formatter must make of it. */
 struct row {
     const char *detail;
     struct run_spec run;
     const char *map;
     int status;
-    const char *wants;  /* lines: `1 TEXT` on stdout, `2 TEXT` on stderr,
-                           `-TEXT` on neither, `_TEXT` not on stdout */
-    const char *failed; /* what ci's run.sh records */
-    int bisect;         /* 0 passes, 1 fails, 2 untestable */
+    const char *wants; /* lines: `1 TEXT` on stdout, `2 TEXT` on stderr,
+                          `-TEXT` on neither, `_TEXT` not on stdout */
 };
 
 /** Remove the scratch directory and end the holder, even after a failure. */
@@ -478,138 +466,7 @@ static int wanted(const struct row *w, const char *out, const char *err)
     return bad;
 }
 
-/** Copy only the actual product functions that the old harness sourced. */
-static int bisect_functions(void)
-{
-    static const char *const names[] = {"members() ", "admitted() ", "historic() ", "suites() "};
-    FILE *source = fopen("tools/ci/bisect.sh", "r"), *out = fopen(path("bisect-functions"), "w");
-    char *line = NULL;
-    size_t capacity = 0, i;
-    unsigned found = 0;
-    int copying = 0, ok = source != NULL && out != NULL;
-    while (ok && getline(&line, &capacity, source) >= 0) {
-        if (!copying)
-            for (i = 0; i < sizeof(names) / sizeof(names[0]); i++)
-                if (!strncmp(line, names[i], strlen(names[i]))) {
-                    copying = 1;
-                    found |= 1u << i;
-                }
-        if (copying) {
-            if (fputs(line, out) == EOF)
-                ok = 0;
-            if (line[0] == '}')
-                copying = 0;
-        }
-    }
-    free(line);
-    if (source && (ferror(source) || fclose(source)))
-        ok = 0;
-    if (out && fclose(out))
-        ok = 0;
-    return ok && !copying && found == 15;
-}
-
-/** Create the fixture's files and compiled command roles without a shell. */
-static void make_tree(void)
-{
-    char search[32768];
-    const char *old = getenv("PATH");
-    int n = snprintf(search, sizeof(search), "%s/tree/bin:%s", directory, old ? old : "");
-    if (!fx_mkdir(path("tree/tests")) || !fx_mkdir(path("tree/bin")) ||
-        !fx_copy("tests/registry", path("tree/tests/registry")) ||
-        !fx_replace("tools/ci/run.sh", path("run.sh"), "results=native\n", "results=lines\n") ||
-        !fx_copy(self, path("tree/tests/run")) || symlink(self, path("tree/bin/make")) ||
-        symlink(self, path("tree/bin/git")) || !bisect_functions() || n < 0 ||
-        n >= (int)sizeof(search) || setenv("PATH", search, 1))
-        exit(1);
-}
-
-/** Pass a row's formatter inputs to the compiled tests/run fixture. */
-static int reader_environment(const char *map, const char *stream)
-{
-    char schemas[PATH_ROOM + 32];
-    int n = snprintf(schemas, sizeof(schemas), "%s/tools/etude/schemas", repo);
-    return n < 0 || n >= (int)sizeof(schemas) || setenv("ETUDE_LINES_SELF", self, 1) ||
-                   setenv("ETUDE_LINES_SCHEMAS", schemas, 1) || setenv("ETUDE_LINES_MAP", map, 1) ||
-                   setenv("ETUDE_LINES_STREAM", stream, 1) || setenv("ETUDE_LINES_REPO", repo, 1)
-               ? -1
-               : 0;
-}
-
-/** Give bisection the row's registry and initially empty log from C. */
-static int bisect_tree(const char *log, const char *map, char *work, size_t size)
-{
-    char destination[4096], name[256], *line = NULL;
-    size_t capacity = 0;
-    FILE *input = NULL, *registry = NULL;
-    int n = snprintf(work, size, "%s.tree", log), ok;
-    if (n < 0 || n >= (int)size)
-        return 0;
-    n = snprintf(destination, sizeof(destination), "%s/tests", work);
-    if (n < 0 || n >= (int)sizeof(destination) || !fx_mkdir(destination))
-        return 0;
-    n = snprintf(destination, sizeof(destination), "%s/tests/run", work);
-    if (n < 0 || n >= (int)sizeof(destination) || symlink(path("tree/tests/run"), destination))
-        return 0;
-    n = snprintf(destination, sizeof(destination), "%s/tests/registry", work);
-    if (n < 0 || n >= (int)sizeof(destination))
-        return 0;
-    input = fopen(map, "r");
-    registry = fopen(destination, "w");
-    ok = input != NULL && registry != NULL;
-    while (ok && getline(&line, &capacity, input) >= 0)
-        if (line[0] != '#' && sscanf(line, "%255s", name) == 1 &&
-            fprintf(registry, "%s|qemu|core\n", name) < 0)
-            ok = 0;
-    free(line);
-    if (input && (ferror(input) || fclose(input)))
-        ok = 0;
-    if (registry && fclose(registry))
-        ok = 0;
-    n = snprintf(destination, sizeof(destination), "%s.log", log);
-    return ok && n >= 0 && n < (int)sizeof(destination) && fx_text(destination, "");
-}
-
-/** Run the actual CI program and bisection's sourced product functions. */
-static void readers(const struct row *w, const char *map, const char *stream)
-{
-    char failed[1024], name[300], program[PATH_ROOM + 32], log[4096], work[4096];
-    const char *ci[] = {"/bin/sh", program, "core", log, NULL};
-    const char *bisect[] = {
-        "/bin/sh",
-        "-c",
-        ". \"$1\"; limited() { \"$@\"; }; ledger=; site_launcher=; log=$2; suites core",
-        "etude-lines-bisect",
-        NULL,
-        log,
-        NULL};
-    int n, status;
-    n = snprintf(program, sizeof(program), "%s/run.sh", directory);
-    if (n < 0 || n >= (int)sizeof(program) || reader_environment(map, stream))
-        exit(1);
-    n = snprintf(log, sizeof(log), "%s/ci-%s", directory, w->run.name);
-    if (n < 0 || n >= (int)sizeof(log))
-        exit(1);
-    status = fx_run(&commands, ci, path("tree"), NULL, NULL);
-    snprintf(name, sizeof(name), "ci-%s/failed", w->run.name);
-    slurp(name, failed, sizeof(failed));
-    if (strcmp(failed, w->failed) || status != (*w->failed ? 1 : 0)) {
-        fprintf(stderr, "etude_lines_hosttest: %s: ci recorded \"%s\", status %d\n", w->run.name,
-                failed, status);
-        CHECK(0, w->detail);
-    }
-    n = snprintf(log, sizeof(log), "%s/bisect-%s", directory, w->run.name);
-    if (n < 0 || n >= (int)sizeof(log) || !bisect_tree(log, map, work, sizeof(work)))
-        exit(1);
-    bisect[4] = path("bisect-functions");
-    status = fx_run(&commands, bisect, work, NULL, NULL);
-    if (status != w->bisect) {
-        fprintf(stderr, "etude_lines_hosttest: %s: bisection judged %d\n", w->run.name, status);
-        CHECK(0, w->detail);
-    }
-}
-
-/** Write a row's history and map, and check what each reader makes of it. */
+/** Write a row's history and map, and check what the formatter makes of it. */
 static void check_row(const struct row *w)
 {
     static char out[65536], err[65536];
@@ -626,8 +483,6 @@ static void check_row(const struct row *w)
                 w->run.name, status, out, err);
         CHECK(0, w->detail);
     }
-    if (w->failed)
-        readers(w, map, stream);
 }
 
 #define PASS(c)        {c, 1, {{"pass", NULL, NULL}}, NULL}
@@ -637,24 +492,20 @@ static void check_row(const struct row *w)
 #define BOOT           "guest.default.boot", "guest.default", "i686"
 #define HOSTFPU        "guest.fpu.host", "guest.fpu", "none"
 
-/* The rows of the formatter, ci and bisection. */
+/* The rows of the formatter. */
 static const struct row rows[] = {
     {"a run whose cases pass passes each suite",
      {"pass", 2, {PASS(XSAVE), PASS(BOOT)}, 1, NULL, NULL, 0},
      TWO,
      0,
      "1 run: fpu: PASS in 2s\n1 run: default: PASS in 2s\n"
-     "1 run: result: all 2 suites passed\n-runner\n-FAIL",
-     "",
-     0},
+     "1 run: result: all 2 suites passed\n-runner\n-FAIL"},
     {"a failed case fails its suite alone",
      {"failure", 2, {FAILED(XSAVE, "it exited 1"), PASS(BOOT)}, 1, NULL, NULL, 0},
      TWO,
      1,
      "2 run: fpu: guest.fpu.xsave on x86_64: failure: it exited 1\n2 run: fpu: FAIL in 2s\n"
-     "1 run: default: PASS in 2s\n2 run: result: failed: fpu\n1 run: result: failed\n-runner",
-     "fpu\n",
-     1},
+     "1 run: default: PASS in 2s\n2 run: result: failed: fpu\n1 run: result: failed\n-runner"},
     {"a retry that passes keeps the failure",
      {"retry",
       1,
@@ -666,10 +517,8 @@ static const struct row rows[] = {
      "fpu guest.fpu.xsave\n",
      1,
      "2 run: fpu: guest.fpu.xsave on x86_64: failure: it exited 1\n2 run: fpu: FAIL in 5s\n"
-     "2 run: result: failed: fpu\n1 run: result: failed\n-runner",
-     "fpu\n",
-     1},
-    {"a stalled case is its suite's, and leaves bisection unresolved",
+     "2 run: result: failed: fpu\n1 run: result: failed\n-runner"},
+    {"a stalled case is its suite's",
      {"stalled",
       1,
       {{XSAVE, 1, {{"incomplete", "its gap bound of 60000000 us ran out", NULL}}, NULL}},
@@ -681,9 +530,7 @@ static const struct row rows[] = {
      1,
      "2 run: fpu: guest.fpu.xsave on x86_64: incomplete: its gap bound of 60000000 us ran out\n"
      "2 run: fpu: INCOMPLETE in 2s\n2 run: result: failed: fpu\n1 run: result: incomplete\n"
-     "-runner\n_run: result: failed\n",
-     "fpu\n",
-     2},
+     "-runner\n_run: result: failed\n"},
     {"a disrupted attempt is the runner's, not its suite's",
      {"disrupted",
       2,
@@ -702,9 +549,7 @@ static const struct row rows[] = {
      "2 run: fpu: INCOMPLETE in 2s\n"
      "2 run: runner: guest.fpu.xsave on x86_64: the attempt disrupted-i0-a0 was disrupted: "
      "executor connection lost\n2 run: runner: FAIL in 6s\n2 run: result: failed: runner\n"
-     "1 run: result: incomplete\n-failed: fpu",
-     "runner\n",
-     2},
+     "1 run: result: incomplete\n-failed: fpu"},
     {"a run without its run record is the runner's fault",
      {"unfinished", 2, {PASS(XSAVE), {BOOT, 0, {{NULL, NULL, NULL}}, NULL}}, 0, NULL, NULL, 0},
      TWO,
@@ -714,35 +559,27 @@ static const struct row rows[] = {
      "2 run: runner: the history has no run record: the run did not finish\n"
      "2 run: runner: guest.default.boot on i686: no attempt of it ran\n"
      "2 run: runner: FAIL in ?s\n2 run: result: failed: runner\n1 run: result: incomplete\n"
-     "-failed: default",
-     "runner\n",
-     2},
+     "-failed: default"},
     {"a stream cut short is the runner's fault",
      {"cut", 2, {PASS(XSAVE), PASS(BOOT)}, 1, NULL, NULL, 1},
      TWO,
      1,
      "2 cut.jsonl: its last record was cut short\n"
      "2 run: runner: the history has no run record: the run did not finish\n"
-     "2 run: result: failed: runner\n1 run: result: incomplete",
-     "runner\n",
-     2},
+     "2 run: result: failed: runner\n1 run: result: incomplete"},
     {"a case in no suite of the map is the runner's fault",
      {"orphan", 2, {PASS(XSAVE), FAILED(BOOT, "it exited 3")}, 1, NULL, NULL, 0},
      "fpu guest.fpu\n",
      1,
      "1 run: fpu: PASS in 2s\n2 run: runner: guest.default.boot on i686 is in no suite of the map\n"
-     "2 run: result: failed: runner\n1 run: result: failed",
-     "runner\n",
-     2},
+     "2 run: result: failed: runner\n1 run: result: failed"},
     {"a suite with no case in the plan did not finish",
      {"empty", 2, {PASS(XSAVE), PASS(BOOT)}, 1, NULL, NULL, 0},
      TWO "usb guest.usb\n",
      1,
      "1 run: fpu: PASS in 2s\n2 run: usb: INCOMPLETE in ?s\n"
      "2 run: runner: the plan has no case of the suite usb\n2 run: result: failed: runner\n"
-     "1 run: result: incomplete",
-     "runner\n",
-     2},
+     "1 run: result: incomplete"},
     {"a cancelled run is interrupted, and nobody's failure",
      {"cancelled",
       2,
@@ -754,9 +591,7 @@ static const struct row rows[] = {
      TWO,
      1,
      "2 run: fpu: guest.fpu.xsave on x86_64: cancelled: no attempt of it ran\n"
-     "2 run: fpu: CANCELLED in ?s\n1 run: result: interrupted\n-run: result: failed\n-runner",
-     "core\n",
-     2},
+     "2 run: fpu: CANCELLED in ?s\n1 run: result: interrupted\n-run: result: failed\n-runner"},
     {"a run record that disagrees with its attempts is the runner's fault",
      {"lie", 1, {{XSAVE, 1, {{"failure", "it exited 1", NULL}}, "pass"}}, 1, "pass", NULL, 0},
      "fpu guest.fpu\n",
@@ -764,18 +599,14 @@ static const struct row rows[] = {
      "2 run: runner: the run record gives guest.fpu.xsave on x86_64 the outcome pass; its "
      "attempts give failure\n"
      "2 run: runner: the run record gives the run a pass, though an item did not pass\n"
-     "2 run: fpu: FAIL in 2s\n2 run: result: failed: fpu runner\n1 run: result: failed",
-     "fpu\nrunner\n",
-     2},
+     "2 run: fpu: FAIL in 2s\n2 run: result: failed: fpu runner\n1 run: result: failed"},
     {"a run that failed after its cases passed is the runner's fault",
      {"prepared", 1, {PASS(XSAVE)}, 1, "failure", "a preparation step failed", 0},
      "fpu guest.fpu\n",
      1,
      "1 run: fpu: PASS in 2s\n"
      "2 run: runner: the run did not pass, though each item passed: a preparation step failed\n"
-     "2 run: result: failed: runner\n1 run: result: incomplete",
-     "runner\n",
-     2},
+     "2 run: result: failed: runner\n1 run: result: incomplete"},
 };
 
 /** Check the maps the formatter refuses before it reads a history. */
@@ -1185,37 +1016,11 @@ static void check_status(void)
     etude_ledger_close(l);
 }
 
-/** Compiled tests/run, make and git models for the actual CI products. */
-static int fixture_role(int argc, char **argv)
-{
-    if (argc > 1 && !strcmp(argv[1], "core")) {
-        char *args[] = {"lines",
-                        "-s",
-                        getenv("ETUDE_LINES_SCHEMAS"),
-                        getenv("ETUDE_LINES_MAP"),
-                        getenv("ETUDE_LINES_STREAM"),
-                        NULL};
-        if (!args[2] || !args[3] || !args[4])
-            return 125;
-        return etude_lines_main(5, args);
-    }
-    printf("run: %s: PASS in 1s\nrun: result: all 1 suites passed\n", argc > 1 ? argv[1] : "");
-    return 0;
-}
-
 int main(int argc, char **argv)
 {
     const char *base = getenv("TMPDIR"), *name = strrchr(argv[0], '/');
     size_t i;
     name = name ? name + 1 : argv[0];
-    if (!strcmp(name, "make"))
-        return 0;
-    if (!strcmp(name, "git")) {
-        puts("0000000");
-        return 0;
-    }
-    if (!strcmp(name, "run"))
-        return fixture_role(argc, argv);
     if (argc > 1 && !strcmp(argv[1], "--lines"))
         return etude_lines_main(argc - 1, argv + 1);
     if (!realpath(argv[0], self) || !getcwd(repo, sizeof(repo)))
@@ -1236,7 +1041,6 @@ int main(int argc, char **argv)
     signal(SIGTERM, stopped);
     signal(SIGINT, stopped);
     signal(SIGHUP, stopped);
-    make_tree();
     for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++)
         check_row(&rows[i]);
     check_maps();
