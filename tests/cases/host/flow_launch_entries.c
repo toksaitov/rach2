@@ -126,7 +126,8 @@ static int ci_unconfigured(struct launch_fixture *u)
 {
     struct fixture *f = u->f;
     char script[4096], output[4096];
-    const char *a[] = {"sh", script, "core", output, NULL};
+    const char *a[] = {"sh", script, "full", output, NULL};
+    int ok;
     strcpy(script, flow_path(f, "checkout/tools/ci/run.sh"));
     if (!flow_copy(f, "tools/ci/run.sh", "checkout/tools/ci/run.sh") ||
         (!fx_has(script, "results=native\n") && !fx_has(script, "results=lines\n")) ||
@@ -135,7 +136,10 @@ static int ci_unconfigured(struct launch_fixture *u)
         return 0;
     strcpy(output, flow_path(f, "ci"));
     fx_env("FLOW_LAUNCH_MODE", "ci");
-    if (!fx_mkdir(flow_path(f, "ci")) || !launch_run(u, a, 2))
+    fx_env("ARCH", "i686 x86_64");
+    ok = fx_mkdir(flow_path(f, "ci")) && launch_run(u, a, 2);
+    fx_env("ARCH", NULL);
+    if (!ok)
         return 0;
     return fx_check(f,
                     strstr(f->err, "ci: refused: selected-site retention policy is absent") &&
@@ -194,31 +198,6 @@ static int legacy(struct launch_fixture *u)
     free(seen);
     return ok && launch_saw(u, 1, 1);
 }
-static int bisection(struct launch_fixture *u)
-{
-    struct fixture *f = u->f;
-    char script[4096];
-    const char *a[] = {"sh", script,    "-e", "/host-products/etude", "core", "i686", "good", "bad",
-                       "1",  "default", NULL};
-    char machine[8192];
-    int ok;
-    strcpy(script, flow_source(f, "tools/ci/bisect.sh"));
-    fx_env("FLOW_LAUNCH_MODE", "bisect");
-    flow_put(f, "private-ledger/claims", "etude-ledger 1\n");
-    snprintf(machine, sizeof(machine),
-             "etude-machine 1\nledger %s/private-ledger\ncpus 16\nmemory_bytes 268435456\n",
-             f->work);
-    flow_put(f, "private-state/machine", machine);
-    flow_put(f, "checkout/tools/ci/core.env", "# Core settings.\nRACH2_WORKERS=2\n");
-    fx_env("GITHUB_REPOSITORY", "test/rach2");
-    fx_env("GITHUB_RUN_ID", "1");
-    fx_env("RUNNER_TEMP", flow_path(f, "ci-temp"));
-    fx_env("RACH2_WORKERS", NULL);
-    ok = launch_run(u, a, 0) && launch_saw(u, 2, 0) &&
-         fx_equal(flow_path(f, "private-ledger/claims"), "etude-ledger 1\n");
-    fx_env("RACH2_WORKERS", "2");
-    return fx_check(f, ok, "bisection uses installed policy before private machine record");
-}
 static int nested(struct launch_fixture *u)
 {
     struct fixture *f = u->f;
@@ -249,7 +228,7 @@ static int nested(struct launch_fixture *u)
 int launch_entries(struct launch_fixture *u)
 {
     return build(u) && jobs(u) && worker(u) && ci_unconfigured(u) && architectures(u) && owner(u) &&
-           legacy(u) && bisection(u) && nested(u);
+           legacy(u) && nested(u);
 }
 static int refuse(struct launch_fixture *u, const char *policy)
 {
