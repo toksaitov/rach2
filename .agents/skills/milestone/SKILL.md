@@ -1,33 +1,32 @@
 ---
 name: milestone
-description: Work through a milestone of dev-log/ and close it. Use when a task runs from a dev-log plan.md, before a milestone's closing runs, Codex review or machine sitting, and before calling a milestone or plan done. Not for a small change outside a milestone.
+description: The manager's procedure for a milestone, from its plan and the plan's review to its release. Use when planning a milestone, while one runs, and at its end.
 ---
 
 # Milestone
 
-A milestone runs from its `plan.md` under `dev-log/`. Its phases are issues on the board and their tasks are sub-issues, each landed by a push to `master`, as the Work section of `AGENTS.md` says. This skill has the details a milestone adds.
+The manager runs a milestone as the Milestones and Work sections of `AGENTS.md` say. This skill has the steps.
 
-## While a task is built
+## The plan
 
-* Check a task once, at its end, as the Work section of `AGENTS.md` gives for what it touches.
-* A Readme whose contract a commit changes is rewritten in that commit.
-* A problem found along the way that the milestone did not set out to fix becomes an issue with the label `bug` the same day, with its severity, how to reproduce it, the contract it breaks, what it depends on, and the test that will show it fixed. The issue is a sub-issue of the milestone's phase, so the milestone that found it fixes it, and the commit that fixes it closes it. Nothing is reported at the end as found and unfixed. `dev-log/50-shortcomings/plan.md` is the record of the problems found before 2026-10-13, and takes no new entries.
-* A step that costs the owner time or a device is checked before it starts: a build from clean, a full set, a Codex round, a hardware sitting, or any run a person waits for. Read what would stop it: `dev-log/50-shortcomings/plan.md`, the milestone's notes and the code the step depends on. Where a form is known to work, use it. A step whose conditions were not checked is not started.
+* Read the owner's goal, the code it touches and what earlier milestones in `dev-log/` found. Research the owner asked for goes to the owner whole.
+* Measure what the plan needs from a machine before relying on it: that a tool, an accelerator or a device exists and works there.
+* Write `dev-log/NN-name/plan.md`: the goal as a user sees it, the owner's decisions, and a few large tasks. Each task has its subtasks, its tests and documents among them, the files it owns and what done means. Split so that tasks rarely wait on each other and never share files; order the ones that must wait.
+* Review it twice at once, each reviewer on its own. Codex: `codex exec -s read-only` in the checkout, as the `codex-exec` skill says, asked whether the goal can be reached this way, whether workers would wait on each other or collide, and what is missing. Fable: a subagent on `claude-fable-5-1` with the same questions. Check each point against the code, revise the plan, and give it to the owner with what was raised and what was changed or set aside.
+* On the owner's approval: make the GitHub milestone, `gh api repos/toksaitov/rach2/milestones -f title="NN name" -f description="Branch: milestone/NN-name"`; cut and push the branch from master; file each task as an issue in the milestone, and each subtask as an issue in the milestone linked under its task (`gh api repos/toksaitov/rach2/issues/TASK/sub_issues -F sub_issue_id=ID`, ID being the subtask's `id`, not its number); then `sh tools/flow/board.sh ready N...` for the tasks.
 
-## The close
+## While it runs
 
-* Once a phase's work is done, the reviewer loop reviews the commits since the phase started, and then each round of fixes, and each finding becomes a `bug` issue of the phase. The phase's release runs the full set from clean on the reviewed commit, on the one machine that `tools/ci/site` names, and installs it on the Lenovo, as the Work section of `AGENTS.md` says, and closes the phase. The owner closes a milestone once its last phase is released.
-* The build from clean empties `build/` of everything but `build/vendor/`, and removes the vendor outputs as well only when a port or its toolchain changed.
-* The style suite runs `prosecheck`, the mechanical half of the register rule; the review covers its contextual half.
-* The reviewer's lead divides the diff by contract among its subagents and checks each finding they return against the code before it keeps it. A review that reaches its three hours is incomplete, not clean, and says so on the phase.
-* Fix every finding, or reject it in the milestone's `notes.md` with the source that shows it wrong.
+* Start what is not running: the team's worker loops (`tools/Readme.md` says how), the owner's Codex loop, and the manager's own worker sessions on the tasks it keeps.
+* Check every half hour with `sh tools/flow/status.sh` and act at once: hand a task over from an account out of its limit or stalled, restart a stopped loop, free disk space, clear a stuck run or machine.
+* A handover: in the stalled account's clone, commit what is uncommitted on `task/N` with the message `Save unfinished work of task #N`, push it, release the task from that account (`sh tools/flow/board.sh release N`, run there), and comment on the task where the next worker should go on.
+* Fold new requests from the owner into an open task, or file a new task with its subtasks.
+* Send the chat a message at each step a person would want to know of, and at once for a big incident.
 
-## The machine sitting
+## The end
 
-* Only a milestone whose plan has a machine phase works on the machine; the others test their work in QEMU and do not touch it. A kernel installed through `bootctl` over SSH when the machine happens to be on is permitted, never required.
-* The machine phases are gathered so that the owner is needed for one sitting. Every step is prepared before the owner is called, the steps run one after another, and the sitting ends with the owner free.
-
-## Done
-
-* Before a milestone or a plan is called done, or nearly done, audit its whole scope: every phase of its plan, every open issue with the label `bug`, and every record, read for what is still owed. Report the list of open items the audit gives; nothing is called done that the audit has not shown done.
-* The milestone's Readme records what was accepted: the commit, the build options, the image hashes, the test command and its result, the hardware arrangement, and the versions of the testing host's compilers, analysers, formatter and QEMU.
+* When every task is closed and on the milestone branch, rebase the branch onto master if master moved, and push it with `git push --force-with-lease origin milestone/NN-name`, the one force push `AGENTS.md` allows.
+* In the owner's build copy on the testing host, build after `make clean`, which keeps the vendor and GNU builds, and run `tests/run style`, the host tests and every suite on both architectures, as the `testing` skill says. Start Codex's review of the whole diff at the same time, with `tools/flow/reviewer.txt` and its placeholders filled.
+* Put every failure and finding in one list in the milestone's `plan.md`, fix them in one batch with the worker sessions, push, and run again only the failed cases.
+* Start the release detached: `env -u TMUX tmux new-session -d -s rach2-release "sh tools/flow/release.sh M SHA >> build/flow/release/out 2>&1"`. Read its record when it ends. On failures, fix them and run it again with `-r`; on a pass it has moved master, closed the milestone and archived its cards.
+* Sweep every machine as the Resources section of `AGENTS.md` says, and record in the milestone's `plan.md` what was accepted: the commit, the runs and their results.
