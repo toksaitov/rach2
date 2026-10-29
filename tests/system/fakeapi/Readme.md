@@ -14,7 +14,7 @@ The service accepts these commands:
 * `agent_server render SOURCE DESTINATION ROW` makes the selected row's script, including its repository paths, unordered service calls, screen requests and held final answer.
 * `agent_server accept-prepare AGENTJSON GHJSON DIR AGENT` creates the acceptance scripts and authority for both programs' declared hosts.
 * `agent_server verify SCRIPT RECORD ROW VERSION` checks each recorded request against its step, the required credentials and user agent, and the row's WebSocket exchanges. Repeated steps are optional and every other step must occur once.
-* `agent_server unpack ARCHIVE DIR` reads the immutable source assets with etude's tar reader. `worker-proof ARCHIVE DIR` checks the returned worker board, log and transcripts; the C scenario separately checks the origin's commits with the guest's Git.
+* `agent_server unpack ARCHIVE DIR` reads the immutable source assets with etude's tar reader. `worker-proof ARCHIVE DIR` checks the returned worker board, log and transcripts; the C scenario separately checks the origin's branches and commits with the guest's Git.
 * `agent_server remove DIR` removes private fixture files after their processes have ended.
 
 Certificate serial numbers use OpenSSL's integer encoder, which removes leading zero bytes and inserts only the padding the value needs. An all-zero random value becomes one. The native fixture checks six fixed serials through the production certificate generator and OpenSSL's DER reader.
