@@ -143,7 +143,7 @@ static int result(struct fixture *f, const char *arch, const char *state, const 
     if (strcmp(state, "unlisted") &&
         !flow_put(f, file, !strcmp(state, "fail") || !strcmp(state, "unfinished") ? failed : ""))
         return 0;
-    snprintf(file, sizeof(file), "%s/skipped", dir);
+    snprintf(file, sizeof(file), "%s/%s", dir, state);
     return strcmp(state, "skipped") || flow_put(f, file, "");
 }
 

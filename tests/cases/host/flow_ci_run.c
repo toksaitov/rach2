@@ -564,11 +564,14 @@ static int both_rows(struct run_fixture *r)
                       fx_has(output_path(r, "full-x86_64/err"), "x86_64:fpu: FAIL"),
                   "an architecture keeps only its own stderr") &&
          ok;
-    c.name = "both: one build failed";
-    c.set = "none";
-    c.err = NULL;
-    c.failed = "x86_64:build";
-    c.status = 0;
+    return ok;
+}
+
+static int both_chosen_rows(struct run_fixture *r)
+{
+    struct run_case c = {"both: one build failed", "none", "x86_64:build", 0, 0, NULL, NULL, NULL};
+    int ok = 1;
+    r->suites = "";
     r->broken = "x86_64";
     ok = row(r, &c) && ok;
     r->broken = "";
@@ -622,5 +625,6 @@ int flow_ci_run(struct fixture *f)
     ok = refused_rows(&r) && ok;
     ok = cut_rows(&r) && ok;
     ok = both_rows(&r) && ok;
+    ok = both_chosen_rows(&r) && ok;
     return ok;
 }

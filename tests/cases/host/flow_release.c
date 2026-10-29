@@ -501,10 +501,10 @@ static const char *record(struct release *r)
 {
     return flow_path(r->f, "state/record");
 }
-static int closing_rows(struct release *r)
+static int finished_rows(struct release *r)
 {
     struct fixture *f = r->f;
-    char closing[9000], *line;
+    char *line;
     int ok = 1, held;
     run(r, &(struct release_row){.record = r->finished, .git = "yes"});
     {
@@ -524,9 +524,15 @@ static int closing_rows(struct release *r)
         ok = check(r, held, "a finished release pushes master, closes and archives") && ok;
     }
     run(r, &(struct release_row){.record = r->finished, .git = "yes", .master = H});
-    ok = check(r, !f->status && !called(r, " push ") && called(r, "^board archive 7$"),
-               "master already at the commit is not pushed again") &&
-         ok;
+    return check(r, !f->status && !called(r, " push ") && called(r, "^board archive 7$"),
+                 "master already at the commit is not pushed again") &&
+           ok;
+}
+static int closing_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    char closing[9000], *line;
+    int ok = 1, held;
     snprintf(closing, sizeof(closing), "%sclosing %s\n", r->finished, T);
     run(r, &(struct release_row){.record = closing, .git = "yes", .push = "fail"});
     ok = check(r,
@@ -716,7 +722,7 @@ static int mac_ran(struct release *r, char *id, size_t size)
 static int rerun_rows(struct release *r)
 {
     struct fixture *f = r->f;
-    char old[4000], expected[1000], id[200];
+    char old[4000], expected[1000];
     int ok = 1;
     snprintf(old, sizeof(old),
              "milestone 7\nsha %s\nbranch %s\nchosen %s\ntouched %s\ndispatched 1760054400\nrun "
@@ -760,6 +766,13 @@ static int rerun_rows(struct release *r)
                    called(r, "-f title=Release tests of 22222222 for milestone 7$"),
                "without -r everything runs again") &&
          ok;
+    return ok;
+}
+static int machine_rerun_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    char old[4000], id[200];
+    int ok = 1;
     fx_remove(flow_path(f, "tree/build/machines"));
     flow_put(f, "tree/build/machines/mac/tree/Readme.md", "");
     flow_put(f, "tree/build/machines/mac/site/etude-site", "etude-site 2\n");
@@ -984,11 +997,13 @@ int flow_release(struct fixture *f)
     int ok = 1;
     if (!setup(&r, f))
         return 0;
+    ok = finished_rows(&r) && ok;
     ok = closing_rows(&r) && ok;
     ok = argument_rows(&r) && ok;
     ok = new_record_rows(&r) && ok;
     ok = machine_record_rows(&r) && ok;
     ok = rerun_rows(&r) && ok;
+    ok = machine_rerun_rows(&r) && ok;
     ok = build_rows(&r) && ok;
     ok = acceptance_rows(&r) && ok;
     ok = windows_rows(&r) && ok;

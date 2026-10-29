@@ -54,16 +54,18 @@ static char *at_text(const char *dir, const char *name)
  * The machine's git checks that both comments name the milestone's head. The
  * session deletes task/901 itself, so the loop's log has no line of `tidy`.
  */
-static const struct {
+struct wanted_issue {
     long long number;
     const char *state, *status, *assignee, *comment;
     int whole; /* the comment is all of `comment`, not a prefix of it */
-} wanted[] = {
+};
+static const struct wanted_issue wanted[] = {
     {901, "CLOSED", "Done", "rach2-test", "Merged in ", 0},
     {902, "OPEN", "Ready", NULL, "The first part is on task/902; the rest waits for its blocker.",
      1},
     {903, "CLOSED", "Done", NULL, "Done in ", 0},
 };
+
 static int board(const char *dir)
 {
     struct value *b = at_json(dir, "board.json"), *calls;
