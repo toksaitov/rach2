@@ -67,13 +67,18 @@ update()
 # refresh: fetch, and bring a clone with nothing uncommitted and no commit
 # that origin lacks to `origin/master`, so that a finished task's branch is
 # checked out nowhere and `tidy` can delete it; leave a clone with work in it
-# as it is.
+# as it is. A linked worktree cannot check out master while another working
+# tree has it, so there the clone is detached at `origin/master` instead.
 refresh()
 {
     git fetch -q origin || return 1
     if [ -z "$(git status --porcelain)" ] &&
         [ -z "$(git rev-list -n 1 HEAD --not --remotes=origin --)" ]; then
-        git switch -q master 2> /dev/null && git merge -q --ff-only origin/master
+        if git switch -q master 2> /dev/null; then
+            git merge -q --ff-only origin/master
+        else
+            git switch -q --detach origin/master
+        fi
     fi
     return 0
 }

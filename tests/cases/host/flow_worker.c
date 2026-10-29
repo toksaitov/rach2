@@ -319,6 +319,36 @@ static int worker_row(struct fixture *f, const struct worker_test *t)
         held = held && !fx_has(flow_path(f, "calls"), "board take 50");
     return fx_check(f, held, t->name);
 }
+/**
+ * Check that `refresh` in a linked worktree on a finished task's branch,
+ * while the main working tree has master checked out, detaches it at the new
+ * `origin/master`.
+ */
+static int worker_refresh(struct fixture *f)
+{
+    char cwd[4096], origin[4096], command[5000], master[100];
+    const char *run[] = {"/bin/sh", "-c", command, NULL};
+    snprintf(origin, sizeof(origin), "%s/origin.git", f->work);
+    snprintf(cwd, sizeof(cwd), "%s", f->work);
+    G("clone", "-q", origin, flow_path(f, "main"));
+    snprintf(cwd, sizeof(cwd), "%s/main", f->work);
+    G("worktree", "add", "-q", "-b", "task/1", flow_path(f, "linked"));
+    G("commit", "-q", "--allow-empty", "-m", "Move master");
+    G("push", "-q", "origin", "master");
+    G("rev-parse", "HEAD");
+    snprintf(master, sizeof(master), "%s", f->out);
+    snprintf(command, sizeof(command), ". '%s'; refresh", flow_source(f, "tools/flow/lib.sh"));
+    snprintf(cwd, sizeof(cwd), "%s/linked", f->work);
+    if (fx_run(f, run, cwd, NULL, NULL))
+        return fx_check(f, 0, "refresh");
+    G("rev-parse", "HEAD");
+    if (strcmp(f->out, master))
+        return fx_check(f, 0, "refresh detaches at origin/master");
+    {
+        const char *b[] = {"symbolic-ref", "-q", "HEAD", NULL};
+        return fx_check(f, !git(f, b, cwd), "refresh detaches at origin/master");
+    }
+}
 int flow_worker(struct fixture *f)
 {
     unsigned i;
@@ -328,5 +358,5 @@ int flow_worker(struct fixture *f)
     for (i = 0; i < sizeof(tests) / sizeof(tests[0]); i++)
         ok = worker_row(f, &tests[i]) && ok;
     fx_env("FLOW_WORKER", NULL);
-    return ok;
+    return worker_refresh(f) && ok;
 }
