@@ -244,6 +244,10 @@ int flow_ci_run_mock(int argc, char **argv)
         return 2;
     }
     if (!strcmp(name, "make")) {
+        char line[256];
+        snprintf(line, sizeof(line), "%s %s", argc == 1 ? "build" : argv[1], env("ARCH"));
+        if (!append(path("calls.make"), line))
+            return 2;
         if (argc == 1)
             cut("make");
         if (!strcmp(env("ARCH"), env("CI_RUN_TEST_BROKEN")))
@@ -332,7 +336,8 @@ static int start(struct run_fixture *r, const struct run_case *c, const char *ki
     char *got;
     int ok;
     snprintf(r->output, sizeof(r->output), "%s/out.%u", f->work, ++r->rows);
-    if (!flow_put(f, "calls", "") || !flow_put(f, "calls.arch", ""))
+    if (!flow_put(f, "calls", "") || !flow_put(f, "calls.arch", "") ||
+        !flow_put(f, "calls.make", ""))
         return 0;
     settings(r, c);
     fx_run(f, argv, path("tree"), NULL, NULL);
@@ -425,7 +430,8 @@ static int cut_row(struct run_fixture *r, const struct cut_case *test)
     char names[1024] = "";
     int ok;
     snprintf(r->output, sizeof(r->output), "%s/out.%u", f->work, ++r->rows);
-    if (!flow_put(f, "calls", "") || !flow_put(f, "calls.arch", ""))
+    if (!flow_put(f, "calls", "") || !flow_put(f, "calls.arch", "") ||
+        !flow_put(f, "calls.make", ""))
         return 0;
     unlink(path("status"));
     settings(r, &c);
@@ -477,7 +483,7 @@ static int cut_rows(struct run_fixture *r)
          ok;
     ok = cut_row(r, &(const struct cut_case){"killed build shell after clean", "make step", "",
                                              "143"}) &&
-         ok;
+         words(r, path("calls.make"), "clean i686 clean x86_64 build i686") && ok;
     return ok;
 }
 
@@ -543,7 +549,8 @@ static int both_rows(struct run_fixture *r)
     ok = row(r, &c) && ok;
     ok =
         words(r, path("calls"), "tests/run style host default shutdown tcp fpu tests/run bigmem") &&
-        words(r, path("calls.arch"), "i686 x86_64 x86_64") && ok;
+        words(r, path("calls.arch"), "i686 x86_64 x86_64") &&
+        words(r, path("calls.make"), "clean i686 clean x86_64 build i686 build x86_64") && ok;
     ok = words(r, output_path(r, "full-i686/failed"), "") &&
          fx_exists(output_path(r, "full-i686/done")) &&
          !fx_exists(output_path(r, "full-i686/skipped")) && ok;
@@ -577,6 +584,7 @@ static int both_chosen_rows(struct run_fixture *r)
     r->broken = "";
     ok = words(r, path("calls"), "tests/run style host default shutdown tcp") &&
          words(r, path("calls.arch"), "i686") &&
+         words(r, path("calls.make"), "clean i686 clean x86_64 build i686") &&
          words(r, output_path(r, "full-x86_64/failed"), "build") &&
          words(r, output_path(r, "full-i686/failed"), "") && ok;
     c.name = "both: chosen suites of each";
@@ -592,7 +600,9 @@ static int both_chosen_rows(struct run_fixture *r)
     r->suites = "i686:default";
     ok = row(r, &c) && ok;
     ok = words(r, path("calls"), "tests/run i686:default") &&
-         words(r, path("calls.arch"), "i686") && fx_exists(output_path(r, "full-x86_64/skipped")) &&
+         words(r, path("calls.arch"), "i686") &&
+         words(r, path("calls.make"), "clean i686 build i686") &&
+         fx_exists(output_path(r, "full-x86_64/skipped")) &&
          !fx_exists(output_path(r, "full-i686/skipped")) && ok;
     r->suites = "";
     return ok;
