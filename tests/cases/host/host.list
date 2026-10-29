@@ -23,7 +23,7 @@ ci_run|the release tests' reading of the runner's lines and their stop after a k
 board|board.sh's next, take, release, branch, archive and milestones on the board and its milestones
 limited|the loops' reading of a usage limit
 worker_park|the worker loop's claims, resumes, milestone branches and tasks given away during a usage limit
-release_resume|a release resumed from its record, with its runs, reruns and acceptance
+release_resume|a release resumed from its record, with its runs, its reruns of failures and acceptance
 tidy|the loops' cleanup of finished work
 leftovers|the manager's removal of failed tests, home files and landed copies
 agents_guest|the agents guest's scratch removed on every exit

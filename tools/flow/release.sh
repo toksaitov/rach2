@@ -1,79 +1,67 @@
 #!/bin/sh
 #
-# release.sh: release the phase In progress: test its candidate commit with a
-# full run on each machine, install that commit on the installed Lenovo, and
-# close the phase.
+# release.sh: release milestone M at commit SHA: test SHA with a full run on
+# each machine, install it on the Lenovo, move master to it and close M.
 #
-# Usage: release.sh [-s STATE] P
+# Usage: release.sh [-r] [-s STATE] M SHA
 #
-# The manager starts it, detached in the tmux session `rach2-release`, when
-# `board.sh phase` says `ready: yes SHA` for phase P, and starts it again,
-# with the same arguments, when it ended without finishing. It runs on the
-# owner's computer, which reaches the testing host as `ssh testing` and the
-# Lenovo on its network. A release has these steps, each of which the record
-# below lists once it is done:
+# M is the number of a GitHub milestone, whose description names its branch
+# in a line `Branch: NAME`, and SHA a commit already pushed to that branch
+# that contains origin/master, so that master can move to it by
+# fast-forward. The manager starts the script detached in the tmux session
+# `rach2-release`, and starts it again with the same arguments when it ended
+# without finishing; it then resumes from its record. It runs on the owner's
+# computer, which reaches the testing host as `ssh testing` and the Lenovo on
+# its network. A release has these steps, each of which the record below
+# lists once it is done:
 #
-# * The candidate: SHA, the commit `board.sh phase` gave, is written to the
-#   record with the time it was chosen, and commented on the phase.
-# * full: `full.yml` runs every suite on both architectures from clean at SHA,
-#   on a runner of the one machine that SHA's `tools/ci/site` selects, which
-#   asks QEMU for the accelerator the file names and no other.
-#   The run is found by its title, `Release tests of SHORT for phase #P`
-#   with SHORT the first eight digits of SHA, and a start after the
-#   candidate was chosen, before another is started, so a release started
-#   again does not start a second, and a new candidate of the same commit
-#   gets a run of its own. A run that fails ends the release, naming the `ci`
-#   issues that report it, or saying that none does when its report filed
-#   nothing. A run that is cancelled or does not finish is started again, at
-#   most three runs in all.
-# * A rerun: a candidate that differs from the last candidate of the same
-#   phase only by the fixes of its full run's failures is tested by a run of
-#   only the suites that failed, titled `Release tests of SHORT for phase #P:
-#   again only SUITE on ARCH, ...`. That holds when the last record failed at
-#   `full` with ci's issues for its failures; every one of those issues is
-#   closed and titled `Release tests fail on ARCH: SUITE, ...` with suites the
-#   registry has for ARCH at SHA; every architecture that the run did not pass
-#   has one; every first-parent commit since the last candidate closes one
-#   of them, with a `Closes #N` line, and closes no other issue; and SHA's
-#   `tools/ci/site` selects the machine and the accelerator that the last
-#   candidate's did, so that the rerun and the suites the failed run passed
-#   were tested on one machine. Anything else, or anything that cannot be read,
-#   gives the candidate a full run. An issue of the failed run that is still
-#   open, such as one that bisection labelled `intermittent`, has no fix, so
-#   the next candidate, the same commit included, gets a full run; the release
-#   changes no issue but its phase.
+# * full: `full.yml` of M's branch runs every suite on both architectures
+#   from clean at SHA, on a runner of the one machine that SHA's
+#   `tools/ci/site` selects. The run is found by its title, `Release tests
+#   of SHORT for milestone M` with SHORT the first eight digits of SHA, and a
+#   start after the record was made, so a release started again does not
+#   start a second. A run that fails gives the failures of its artifact
+#   `failures`, `ARCH:ITEM` words, or `runner` when it has none. A run that
+#   is cancelled or does not finish is started again, at most three runs in
+#   all.
 # * The other machines: tools/flow/machines names them and gives each run's
 #   settings. Each runs `etude run routine-sequence phase_first_run` of every
 #   case of both architectures, prepared from clean, with the selection that
 #   `etude run -N` allocates in the same copy just before. The Mac's run, mac,
-#   starts with the full run, detached as `release.sh -m ID P`, in the copy and
-#   the admission site under build/machines/mac of this clone, and the release
-#   waits for it before the install. Windows' run, windows, starts once the full
-#   run has passed, on the same testing host, in the copy the machines file
-#   names, which a bundle of `origin/master` updates; while it runs, a claim of
-#   the whole host in WSL's admission, `etude-launch alone`, keeps WSL's tests
-#   from starting. The Lenovo's run, lenovo, is the native cases of
-#   tests/native on the trial boot, which `native-deploy run` starts from here
-#   with the payload the build makes, before the acceptance. A run that ends
-#   without a status runs again, at most three runs in all. A run that fails
-#   files a `ci` issue titled `Release tests fail on MACHINE: WORD, ...` with
-#   the suites, `ARCH:SUITE`, or the native cases that failed, and ends the
-#   release. The next candidate of the same phase runs again only those, on
-#   that machine, and keeps the runs that passed on the others, when that issue
-#   is closed and every first-parent commit since the failed candidate closes
-#   it and no other; anything else gives it every run.
-# * The candidate is checked again, here, before the build, before the
-#   install, and before the phase is closed: it is void unless `board.sh
-#   phase` still says `ready: yes SHA`, since a later commit, an open member,
-#   a `ci` issue or a hold means that SHA is not the phase's finished work.
-#   A board that cannot be read is waited on.
+#   starts with the full run, detached as `release.sh -m ID M SHA`, in the
+#   copy and the admission site under build/machines/mac of this clone.
+#   Windows' run, windows, starts once the full run has ended, on the same
+#   testing host, in the copy the machines file names, which a bundle of M's
+#   branch updates to SHA; while it runs, a claim of the whole host in WSL's
+#   admission, `etude-launch alone`, keeps WSL's tests from starting. The
+#   Lenovo's run, lenovo, is the native cases of tests/native on the trial
+#   boot, which `native-deploy run` starts from here with the payload the
+#   build makes, before the acceptance. A run that ends without a status runs
+#   again, at most three runs in all.
+# * A failed run adds a line `failure MACHINE RUN WORD...` to the record, the
+#   WORDs being the failed `ARCH:SUITE`s or native cases, or `runner` when
+#   the run named none, and the release goes on with the other machines'
+#   runs. Once the runs of WSL, the Mac and Windows have ended, a failure of
+#   any of them ends the release before the install, and a failure of the
+#   Lenovo's ends it with the trial uncommitted. The last line printed is
+#   then `release: failed: MACHINE run RUN: WORD...; ...`.
+# * -r: the new record keeps the passes of WSL, the Mac and Windows that the
+#   last record of M has, and runs again on each machine only what failed
+#   there, from clean, at SHA: the record says `again MACHINE WORD...`. A
+#   machine whose failures are not all `ARCH:SUITE`s of suites that SHA's
+#   tests/registry has for ARCH, or native cases, runs everything again, as
+#   does a machine that has neither a pass nor a failure in that record. The
+#   native cases run on every install, so the Lenovo's pass is not kept.
+#   Without -r everything runs.
 # * build: SHA is built from clean for the Lenovo on the testing host, in
 #   the copy `build/worktrees/release` of the owner's, /home/testing/rach2, with
 #   `ARCH=x86_64 make clean` and `make machine GNU_AGENTS=all`, whose GNU
 #   root has every package of the agents layer, and `make native-assets` when
 #   the machines file names the Lenovo, and the kernel, the recovery kernel
 #   and image, the GNU root, compressed, and the native cases' payload are
-#   fetched with their SHA-256 into a worktree of SHA, STATE/wt.
+#   fetched with their SHA-256 into a worktree of SHA, STATE/wt. The build
+#   starts while the Mac's run goes on, once the runs on the testing host
+#   have passed.
 # * recovery: the Lenovo boots its recovery system from its recovery
 #   partition; the recovery kernel and image on that partition are replaced
 #   when they differ from the build's, keeping the partition's recovery key
@@ -100,18 +88,16 @@
 #   pass on the trial boot. Only then `bootctl commit` makes the candidate the
 #   saved default.
 # * record: /etc/rach2/release on the machine, which runs the committed
-#   candidate, is written with SHA, the phase, the full run and the root's
-#   digest, flushed to the disk with the directories that hold it, and read
-#   back. A flush that fails fails the step, since the read-back may come
-#   from the buffer cache; the phase is not closed until the file names SHA.
-# * close: the phase gets a comment with the commit, the run, the machine and
-#   the accelerator it tested on, the digests and the verdicts; when the
-#   candidate is still ready, the record says
-#   `closing`, the phase is closed, its cards are archived with `board.sh
-#   archive`, and the owner's phone gets one push. Otherwise the phase stays
-#   In progress for its next release. Only a phase already closed skips the
-#   check. A start of the script that finds a record with `closing` that did
-#   not end finishes that release first, whatever P it was given.
+#   candidate, is written with SHA, the milestone, the full run and the
+#   root's digest, flushed to the disk with the directories that hold it, and
+#   read back. A flush that fails fails the step, since the read-back may
+#   come from the buffer cache.
+# * close: the record says `closing`; SHA is pushed to master by
+#   fast-forward, `git push origin SHA:refs/heads/master`, milestone M is
+#   closed, its cards are archived with `board.sh archive M`, and the last
+#   line printed is `release: passed SHA`. A start of the script that finds
+#   a record with `closing` that did not end finishes that release first,
+#   whatever M and SHA it was given.
 #
 # The machine must report the station address RACH2_MACHINE_MAC,
 # 28:d2:44:7e:e0:af by default, and its disk the serial RACH2_MACHINE_SERIAL,
@@ -122,34 +108,33 @@
 # identify the machine.
 #
 # STATE, `build/flow/release` of the clone's main working tree unless given,
-# holds `record`, the record of the release under way, one line per fact: `phase
-# P`, `sha SHA`, `chosen TIME`, `rerun R O ARCH:SUITE...` when run R at commit O
-# failed and only those suites run again, `again MACHINE WORD...` when only
-# those run again on MACHINE, `dispatched TIME`, `run ID RESULT`, `filed ID
-# #N...` for the issues that report a run that failed, `MACHINE started RUN`,
-# `result MACHINE RUN failure WORD...` and `filed MACHINE #N WORD...` for a run
-# on another machine, `STEP done TIME DETAIL`, `touched TIME` before the first
-# change to the machine, `install started TIME`, `reported TIME` once the phase
-# has the report, `closing TIME`, and last `failed STEP: WHY`, `void: WHY` or
-# `closed TIME`; `log`, everything the script prints; `wt`, the worktree; and
-# the records of releases that ended, as `P-SHA-TIME`, with the build's digests
-# beside each closed one as `P-SHA-TIME.sha256`. A release that closes its phase
-# copies the digests out of `wt` and then removes `wt`, with the build's
-# products in it, last. A record that ended, or that belongs to another phase,
-# is copied aside once the board has given a new candidate, and the new record
-# then replaces it in one rename. The new record keeps the old one's `touched`
-# line unless the old release closed, since the machine may still run what that
-# release left. A done step is skipped when the script runs again, a transfer
-# whose files still hash right on the machine is kept, and a step that writes
-# the machine first asks it what it runs and which disk has the serial. A reboot
-# counts as done when a boot younger than the request answers, by /proc/uptime.
-# One release runs at a time, under a lock on STATE/lock.
+# holds `record`, the record of the release under way, one line per fact:
+# `milestone M`, `sha SHA`, `branch NAME`, `chosen TIME`, `again MACHINE
+# WORD...` when only those run again on MACHINE, `dispatched TIME`, `run ID
+# RESULT` for a full run, `MACHINE started RUN` for a run on another machine,
+# `failure MACHINE RUN WORD...`, `STEP done TIME DETAIL`, `touched TIME`
+# before the first change to the machine, `install started TIME`, `closing
+# TIME`, and last `failed STEP: WHY` or `closed TIME`; `log`, everything the
+# script prints; `wt`, the worktree; and the records of releases that ended,
+# as `M-SHA-TIME`, with the build's digests beside each closed one as
+# `M-SHA-TIME.sha256`. A release that closes its milestone copies the digests
+# out of `wt` and then removes `wt`, with the build's products in it, last. A
+# record that ended, or that belongs to another milestone or commit, is copied
+# aside when the script starts on new arguments, and the new record then
+# replaces it in one rename. The new record keeps the old one's `touched`
+# line unless the old release closed, since the machine may still run what
+# that release left. A done step is skipped when the script runs again, a
+# transfer whose files still hash right on the machine is kept, and a step
+# that writes the machine first asks it what it runs and which disk has the
+# serial. A reboot counts as done when a boot younger than the request
+# answers, by /proc/uptime. One release runs at a time, under a lock on
+# STATE/lock.
 #
-# The exit status is 0 when the phase was released and closed, or released
-# and kept open; 75 when it could not start or go on for a reason that
-# passes, such as an unreachable host or a busy build copy, and the manager
-# starts it again later; and 1 when a step failed, as the record's last line
-# says, and the manager reads why.
+# The exit status is 0 when the milestone was released; 1 when a step or a
+# run failed, as the record's last line says; 2 when the arguments are
+# refused, such as a SHA that is not on M's branch; and 75 when the release
+# could not start or go on for a reason that passes, such as an unreachable
+# host or a busy build copy, and the manager starts it again later.
 
 REPO=toksaitov/rach2
 OWNER=/home/testing/rach2
@@ -157,11 +142,19 @@ COPY=$OWNER/build/worktrees/release
 ARCH_DIR=build/x86_64
 RECOVERY_IMAGE=images/rach2-recovery-with-key.krffs
 WSL='MSYS_NO_PATHCONV=1 wsl.exe -- bash -s'
+USAGE='usage: release.sh [-r] [-s STATE] M SHA'
 
 # say TEXT: print TEXT and append it to the log, with the time in UTC.
 say()
 {
     echo "$(date -u '+%F %T') release: $*" | tee -a "$state/log"
+}
+
+# finish TEXT: print the release's last line, `release: TEXT`, and log it.
+finish()
+{
+    echo "release: $*"
+    echo "$(date -u '+%F %T') release: $*" >> "$state/log"
 }
 
 # note LINE: append LINE to the record.
@@ -176,6 +169,12 @@ done_()
     grep -q "^$1 done " "$state/record"
 }
 
+# failed_ MACHINE: succeed when the record has a failure of MACHINE's run.
+failed_()
+{
+    grep -q "^failure $1 " "$state/record"
+}
+
 # mark STEP DETAIL: record STEP as done now.
 mark()
 {
@@ -183,29 +182,11 @@ mark()
     say "$1: done: $2"
 }
 
-# fail STEP WHY: record that STEP failed, say so on the phase, and exit 1.
+# fail STEP WHY: record that STEP failed, and exit 1.
 fail()
 {
     note "failed $1: $2"
-    say "$1: failed: $2"
-    case $1 in
-        preflight) what="the check of the Lenovo before the release changes it" ;;
-        full) what="the run of the release tests on both architectures" ;;
-        mac) what="the whole run of the release tests on the Mac" ;;
-        windows) what="the whole run of the release tests on Windows on the testing host" ;;
-        lenovo) what="the native cases on the Lenovo's trial boot" ;;
-        build) what="the build for the Lenovo on the testing host" ;;
-        recovery) what="the update of the Lenovo's recovery system" ;;
-        transfer) what="the copy of the kernel and the root to the Lenovo" ;;
-        kernel) what="the write of the kernel to the candidate slot" ;;
-        install) what="the install of the root" ;;
-        trial) what="the trial boot of the new system" ;;
-        accept) what="the acceptance tests on the trial boot" ;;
-        record) what="the write of /etc/rach2/release on the Lenovo" ;;
-        *) what="a step of the release" ;;
-    esac
-    gh issue comment "$phase" --repo "$REPO" --body "The release of commit $sha failed at the step \`$1\`, $what: $2. The phase stays In progress. The release's record is \`$state/record\` on the manager's computer." > /dev/null ||
-        say "the comment on #$phase failed"
+    finish "failed: $1: $2"
     exit 1
 }
 
@@ -214,6 +195,33 @@ later()
 {
     say "waiting: $1"
     exit 75
+}
+
+# refuse WHY: refuse the arguments for WHY, and exit 2.
+refuse()
+{
+    echo "release: refused: $1" >&2
+    exit 2
+}
+
+# failure MACHINE RUN WORD...: record that the run RUN on MACHINE failed the
+# WORDs, once.
+failure()
+{
+    grep -q "^failure $1 $2 " "$state/record" || note "failure $*"
+    m=$1 id=$2
+    shift 2
+    say "$m: run $id failed: $*"
+}
+
+# tests_failed: end the release on the failures of the record.
+tests_failed()
+{
+    what=$(sed -n 's/^failure \([a-z]*\) \([^ ]*\) /\1 run \2: /p' "$state/record" |
+        awk '{ printf "%s%s", (NR > 1 ? "; " : ""), $0 }')
+    note "failed tests: $what"
+    finish "failed: $what"
+    exit 1
 }
 
 # lenovo COMMAND: run COMMAND on the machine as root.
@@ -280,139 +288,77 @@ digest()
     awk -v f="$1" '$2 == f { print $1 }' "$files/release.sha256"
 }
 
-# still_ready: succeed when `board.sh phase` still says `ready: yes SHA` for
-# the phase: SHA is master's head, reviewed through, with no work, hold or
-# core failure; otherwise print why and fail, with status 2 when the board
-# cannot be read.
-still_ready()
-{
-    report=$(sh "$repo/tools/flow/board.sh" phase) || {
-        echo "the board cannot be read"
-        return 2
-    }
-    printf '%s\n' "$report" | grep -q "^phase: #$phase " || {
-        echo "#$phase is not the phase In progress"
-        return 1
-    }
-    last=$(printf '%s\n' "$report" | tail -n 1)
-    [ "$last" = "ready: yes $sha" ] || {
-        echo "$last"
-        return 1
-    }
-}
-
-# void WHY: record that the candidate is void for WHY, and exit 0.
-void()
-{
-    note "void: $1"
-    say "the candidate is void: $1"
-    exit 0
-}
-
-# failed_run ID: end the release on the full run ID that failed, naming the
-# `ci` issues that report it, or saying that none does, since then its report
-# did not file its failures.
-failed_run()
-{
-    filed=$(gh issue list --repo "$REPO" --label ci --state open --limit 200 \
-        --json number,body,comments --jq "[.[] |
-            select((.body + ([.comments[].body] | join(\" \"))) |
-                contains(\"/actions/runs/$1\")) | \"#\\(.number)\"] | join(\" \")") ||
-        later "the ci issues cannot be listed"
-    if [ -n "$filed" ]; then
-        note "filed $1 $filed"
-        fail full "run $1 failed; ci filed its failures as $filed"
-    fi
-    fail full "run $1 failed and no open ci issue names it, so its report filed nothing; read the run's log"
-}
-
-# site REV: print the machine and the accelerator of the release tests that
-# REV's tools/ci/site selects, as tools/ci/site.sh reads them; fail when the
-# file cannot be read or the script refuses it.
-site()
-{
-    git -C "$repo" show "$1:tools/ci/site" 2> /dev/null | sh "$repo/tools/ci/site.sh" 2> /dev/null
-}
-
 # plain ARCH:SUITE...: print the suites as `SUITE on ARCH, ...`.
 plain()
 {
     printf '%s\n' "$@" | awk -F: '{ printf "%s%s on %s", (NR > 1 ? ", " : ""), $2, $1 }'
 }
 
-# again: print `R O ARCH:SUITE...` when SHA may be tested by a run of only
-# the suites that failed in run R at commit O, as the rerun above says; the
-# record is the last release's, which ended. Print nothing otherwise.
-again()
+# suites WORD...: succeed when each WORD is `ARCH:SUITE` of a suite that SHA's
+# tests/registry has for ARCH.
+suites()
 {
-    grep -qx "phase $phase" "$state/record" && grep -q '^failed full: ' "$state/record" ||
-        return 0
-    # shellcheck disable=SC2046 # the line is words
-    set -- $(grep '^filed ' "$state/record" | tail -n 1)
-    [ $# -ge 3 ] || return 0
-    r=$2 o=$(sed -n 's/^sha //p' "$state/record")
-    shift 2
-    issues=$(echo "$*" | tr -d '#')
-    git -C "$repo" fetch -q origin 2> /dev/null &&
-        git -C "$repo" merge-base --is-ancestor "$o" "$sha" 2> /dev/null &&
-        commits=$(git -C "$repo" rev-list --first-parent "$o..$sha" 2> /dev/null) &&
-        [ -n "$commits" ] &&
-        registry=$(git -C "$repo" show "$sha:tests/registry" 2> /dev/null) &&
-        here=$(site "$sha") && [ "$(site "$o")" = "$here" ] || return 0
-    for c in $commits; do
-        closes=$(git -C "$repo" log -1 --format=%B "$c" 2> /dev/null |
-            sed -n 's/^Closes #\([0-9][0-9]*\)$/\1/p')
-        [ -n "$closes" ] || return 0
-        for n in $closes; do
-            case " $issues " in *" $n "*) ;; *) return 0 ;; esac
-        done
+    registry=$(git -C "$repo" show "$sha:tests/registry" 2> /dev/null) || return 1
+    for w in "$@"; do
+        case $w in
+            i686:?*|x86_64:?*) ;;
+            *) return 1 ;;
+        esac
+        printf '%s\n' "$registry" | awk -F'|' -v a="${w%%:*}" -v s="${w#*:}" '
+            /^[a-z]/ && $1 == s && ($6 == "" || index("," $6 ",", "," a ",")) { found = 1 }
+            END { exit !found }' || return 1
     done
-    words='' arches=''
-    for n in $issues; do
-        line=$(gh issue view "$n" --repo "$REPO" --json state,title --jq '"\(.state) \(.title)"' 2> /dev/null) ||
-            return 0
-        # shellcheck disable=SC2046 # the title's suites are words
-        set -- $(printf '%s\n' "$line" |
-            sed -nE 's/^CLOSED Release tests fail on (i686|x86_64): (.*)$/\1 \2/p' | sed 's/,/ /g')
-        [ $# -ge 2 ] || return 0
-        a=$1
-        shift
-        suites=$(printf '%s\n' "$registry" | awk -F'|' -v a="$a" '
-            /^[a-z]/ && ($6 == "" || index("," $6 ",", "," a ",")) { print $1 }')
-        for t in "$@"; do
-            printf '%s\n' "$suites" | grep -qx "$t" || return 0
-            words="$words $a:$t"
-        done
-        arches="$arches $a"
-    done
-    ctx=ci/full need='i686 x86_64'
-    if grep -q '^rerun ' "$state/record"; then
-        ctx=ci/rerun
-        need=$(sed -n 's/^rerun [0-9]* [0-9a-f]* //p' "$state/record" | tr ' ' '\n' | sed 's/:.*//' | sort -u)
-    fi
-    states=$(gh api "repos/$REPO/commits/$o/statuses?per_page=100" \
-        --jq ".[] | select(.target_url | endswith(\"/actions/runs/$r\")) | \"\(.context) \(.state)\"" 2> /dev/null) ||
-        return 0
-    for a in $need; do
-        [ "$(printf '%s\n' "$states" | sed -n "s|^$ctx/$a ||p" | head -n 1)" != success ] || continue
-        case " $arches " in *" $a "*) ;; *) return 0 ;; esac
-    done
-    echo "$r $o$words"
 }
 
-# full: find or start the full run of SHA, or the rerun the record gives, and
-# wait for it to end, first applying a result the record has and has not
-# acted on.
+# again: print the lines that make the new record of -r run again only what
+# failed in the last record, as the header says: `again MACHINE WORD...` for
+# each machine whose failures can run alone, and the passes the new record
+# keeps.
+again()
+{
+    for m in full mac windows lenovo; do
+        # shellcheck disable=SC2046 # the line is words
+        set -- $(grep "^failure $m " "$state/record" | tail -n 1)
+        if [ $# -ge 4 ]; then
+            shift 3
+            case $m in
+                lenovo) case " $* " in *" runner "*) continue ;; esac ;;
+                *) suites "$@" || continue ;;
+            esac
+            echo "again $m $*"
+        elif [ "$m" != lenovo ] && done_ "$m"; then
+            grep "^$m done " "$state/record" | tail -n 1
+            [ "$m" != full ] || grep -E '^run [0-9]+ success$' "$state/record" | tail -n 1
+        fi
+    done
+}
+
+# full_failed ID: record the failures of the full run ID, as its artifact
+# `failures` gives them.
+full_failed()
+{
+    rm -rf "$state/full-$1"
+    words=
+    if gh run download "$1" --repo "$REPO" --name failures --dir "$state/full-$1" > /dev/null 2>&1; then
+        words=$(grep . "$state/full-$1/failures" 2> /dev/null | tr '\n' ' ' | sed 's/ $//')
+    fi
+    # shellcheck disable=SC2086 # the failures are words
+    failure full "$1" ${words:-runner}
+}
+
+# full: find or start the full run of SHA, or of the suites of the record's
+# `again full` line, and wait for it to end, first applying a result the
+# record has and has not acted on.
 full()
 {
-    only=$(sed -n 's/^rerun [0-9]* [0-9a-f]* //p' "$state/record")
+    only=$(sed -n 's/^again full //p' "$state/record")
     # shellcheck disable=SC2046 # the result is two words
     set -- $(grep -E '^run [0-9]+ (success|failure)$' "$state/record" | tail -n 1)
     case ${3-} in
         success) mark full "run $2${only:+, of $only only}"; return 0 ;;
-        failure) failed_run "$2" ;;
+        failure) full_failed "$2"; return 0 ;;
     esac
-    title="Release tests of $(echo "$sha" | cut -c 1-8) for phase #$phase"
+    title="Release tests of $(echo "$sha" | cut -c 1-8) for milestone $milestone"
     # shellcheck disable=SC2086 # the suites are words
     [ -z "$only" ] || title="$title: again only $(plain $only)"
     while :; do
@@ -433,7 +379,7 @@ full()
             note "run $1 $3"
             case $3 in
                 success) mark full "run $1${only:+, of $only only}"; return 0 ;;
-                failure) failed_run "$1" ;;
+                failure) full_failed "$1"; return 0 ;;
             esac
             say "full: run $1 ended $3"
             continue
@@ -443,12 +389,14 @@ full()
             sleep 30
             continue
         fi
-        [ "$(grep -c '^dispatched ' "$state/record")" -lt 3 ] ||
-            fail full "three full runs of $sha ended without a result"
+        if [ "$(grep -c '^dispatched ' "$state/record")" -ge 3 ]; then
+            failure full none runner
+            return 0
+        fi
         note "dispatched $(date +%s)"
         set -- -f sha="$sha" -f title="$title"
         [ -z "$only" ] || set -- "$@" -f suites="$only"
-        gh workflow run full.yml --repo "$REPO" --ref master "$@" ||
+        gh workflow run full.yml --repo "$REPO" --ref "$branch" "$@" ||
             later "the full run could not be started"
         say "full: started a run of $sha${only:+ for $only only}"
         sleep 30
@@ -459,6 +407,8 @@ full()
 build()
 {
     git -C "$repo" fetch -q origin || later "the fetch failed"
+    git -C "$repo" merge-base --is-ancestor refs/remotes/origin/master "$sha" ||
+        fail build "$sha does not contain origin/master, so master cannot move to it"
     git -C "$repo" worktree remove --force "$state/wt" 2> /dev/null
     rm -rf "$state/wt"
     git -C "$repo" worktree prune
@@ -626,37 +576,6 @@ environment()
     [ -z "$p" ] || echo "export PATH='$p'\"\$PATH\""
 }
 
-# who MACHINE: print MACHINE as the reports name it.
-who()
-{
-    case $1 in
-        mac) echo "the Mac" ;;
-        windows) echo "Windows on the testing host" ;;
-        lenovo) echo "the Lenovo" ;;
-    esac
-}
-
-# machine_failed MACHINE RUN LOG WORD...: file a `ci` issue for the run RUN on
-# MACHINE, in which the WORDs failed, `ARCH:SUITE` words or the names of
-# native cases, or `runner` for a run that named none, with the end of LOG,
-# and end the release. A release started again files it once.
-machine_failed()
-{
-    m=$1 id=$2 log=$3
-    shift 3
-    grep -q "^result $m $id " "$state/record" || note "result $m $id failure $*"
-    what=$(echo "$*" | sed 's/ /, /g')
-    url=$(gh issue create --repo "$REPO" --label ci \
-        --title "Release tests fail on $(who "$m"): $what" \
-        --body "The release of phase #$phase ran the release tests on $(who "$m") at commit $sha, in the run \`$id\`, and these failed: $what. The run's log is \`$log\` on the manager's computer; its end is below. When every commit since $(echo "$sha" | cut -c 1-8) closes this issue and no other, the next release runs only these again on $(who "$m"), and the runs that passed on the other machines stand.
-
-\`\`\`
-$(tail -n 40 "$log" 2> /dev/null)
-\`\`\`") || later "the ci issue of the failure on $m could not be filed"
-    note "filed $m #${url##*/} $*"
-    fail "$m" "run $id failed: $what; filed as #${url##*/}"
-}
-
 # mac_run ID: make the run ID of the release tests on the Mac, of every suite,
 # or of the words of the record's `again mac` line only, in the copy TREE with
 # the admission site SITE, with its output in RUNS/ID.console and its status
@@ -664,7 +583,6 @@ $(tail -n 40 "$log" 2> /dev/null)
 mac_run()
 {
     id=$1
-    sha=$(sed -n 's/^sha //p' "$state/record")
     words=$(sed -n 's/^again mac //p' "$state/record")
     accel=$(setting mac accel)
     date '+start %FT%T%z' > "$runs/$id.times"
@@ -707,24 +625,24 @@ mac_stop()
 }
 
 # mac_start: start the run of the release tests on the Mac, detached, as
-# `release.sh -m ID P`, after stopping a run of an earlier record.
+# `release.sh -m ID M SHA`, after stopping a run of an earlier record.
 mac_start()
 {
     [ -d "$tree" ] && [ -f "$site/etude-site" ] ||
         fail mac "the Mac has no copy at $tree or no admission site at $site"
     mac_stop
     git -C "$repo" fetch -q origin || later "the fetch failed"
-    id=phase$phase-$(echo "$sha" | cut -c 1-12)-mac-$(date -u '+%m%d-%H%M%S')
+    id=milestone$milestone-$(echo "$sha" | cut -c 1-12)-mac-$(date -u '+%m%d-%H%M%S')
     mkdir -p "$runs/$id"
     note "mac started $id"
     nohup perl -e 'setpgrp(0, 0); exec @ARGV' sh "$repo/tools/flow/release.sh" -s "$state" \
-        -m "$id" "$phase" > /dev/null 2>&1 < /dev/null &
+        -m "$id" "$milestone" "$sha" > /dev/null 2>&1 < /dev/null &
     echo "$! $id" > "$macdir/run"
     say "mac: started the run $id"
 }
 
 # mac_wait: wait for the Mac's run of the record to end, start it again when
-# it ended without a status, three runs in all, and mark it done or file its
+# it ended without a status, three runs in all, and mark it done or record its
 # failure.
 mac_wait()
 {
@@ -736,8 +654,10 @@ mac_wait()
         pg=$(cut -d ' ' -f 1 "$macdir/run" 2> /dev/null)
         if [ -z "$pg" ] || ! kill -0 -"$pg" 2> /dev/null; then
             rm -f "$macdir/run"
-            [ "$(grep -c '^mac started ' "$state/record")" -lt 3 ] ||
-                fail mac "three runs on the Mac ended without a status"
+            if [ "$(grep -c '^mac started ' "$state/record")" -ge 3 ]; then
+                failure mac "$id" runner
+                return 0
+            fi
             say "mac: the run $id ended without a status; starting another"
             mac_start
             continue
@@ -751,7 +671,7 @@ mac_wait()
         return 0
     fi
     # shellcheck disable=SC2046 # the suites are words
-    machine_failed mac "$id" "$runs/$id.console" $(grep '^run: result: failed: ' "$runs/$id.console" |
+    failure mac "$id" $(grep '^run: result: failed: ' "$runs/$id.console" |
         tail -n 1 | sed 's/^run: result: failed: //' | grep . || echo runner)
 }
 
@@ -764,7 +684,7 @@ wsl()
 # windows: make the run of the release tests on Windows on the testing host,
 # of every suite or of the words of the record's `again windows` line only,
 # while a claim of the whole host in WSL's admission keeps WSL's tests from
-# starting, and mark it done or file its failure; a run that ends without a
+# starting, and mark it done or record its failure; a run that ends without a
 # status runs again, three runs in all.
 windows()
 {
@@ -774,11 +694,13 @@ windows()
     words=$(sed -n 's/^again windows //p' "$state/record")
     held=/mnt/$(echo "$out" | cut -c 1 | tr '[:upper:]' '[:lower:]')$(echo "$out" | cut -c 3-)
     while :; do
-        [ "$(grep -c '^windows started ' "$state/record")" -lt 3 ] ||
-            fail windows "three runs on Windows ended without a status"
-        id=phase$phase-$(echo "$sha" | cut -c 1-12)-windows-$(date -u '+%m%d-%H%M%S')
+        if [ "$(grep -c '^windows started ' "$state/record")" -ge 3 ]; then
+            failure windows "$(sed -n 's/^windows started //p' "$state/record" | tail -n 1)" runner
+            return 0
+        fi
+        id=milestone$milestone-$(echo "$sha" | cut -c 1-12)-windows-$(date -u '+%m%d-%H%M%S')
         if ! git -C "$repo" fetch -q origin ||
-            ! git -C "$repo" bundle create "$state/windows.bundle" refs/remotes/origin/master > /dev/null 2>&1; then
+            ! git -C "$repo" bundle create "$state/windows.bundle" "refs/remotes/origin/$branch" > /dev/null 2>&1; then
             later "the bundle for Windows could not be made"
         fi
         scp -q -o BatchMode=yes "$state/windows.bundle" "testing:$out/release.bundle" ||
@@ -798,7 +720,7 @@ windows()
         # shellcheck disable=SC2086 # the suites are words
         {
             echo "cd $wtree || { echo 'status 1'; exit; }"
-            echo "git fetch -q $out/release.bundle refs/remotes/origin/master && git checkout -q -f --detach $sha || { echo 'status 1'; exit; }"
+            echo "git fetch -q $out/release.bundle refs/remotes/origin/$branch && git checkout -q -f --detach $sha || { echo 'status 1'; exit; }"
             environment windows
             echo "MSYS_NO_PATHCONV=1 wsl.exe -u root -e sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches' < /dev/null"
             echo "ETUDE_SITE=$wsite make build/tools/etude/etude > $out/$id.make.log 2>&1 || { tail -n 20 $out/$id.make.log; echo 'status 1'; exit; }"
@@ -831,13 +753,13 @@ windows()
         return 0
     fi
     # shellcheck disable=SC2046 # the suites are words
-    machine_failed windows "$id" "$state/$id.log" $(grep '^run: result: failed: ' "$state/$id.log" |
+    failure windows "$id" $(grep '^run: result: failed: ' "$state/$id.log" |
         tail -n 1 | sed 's/^run: result: failed: //' | grep . || echo runner)
 }
 
 # lenovo_run: run the native cases on the trial boot, every case or those of
 # the record's `again lenovo` line, with native-deploy from this computer, and
-# mark it done or file its failure.
+# mark it done or end the release on its failure.
 lenovo_run()
 {
     step=lenovo
@@ -846,7 +768,7 @@ lenovo_run()
         fail lenovo "native-deploy did not build: $(tail -n 3 "$state/native.log" | tr '\n' ' ')"
     [ "$(grep -c '^lenovo started ' "$state/record")" -lt 3 ] ||
         fail lenovo "three runs of the native cases ended without a status"
-    id=phase$phase-$(echo "$sha" | cut -c 1-12)-lenovo-$(date -u '+%m%d-%H%M%S')
+    id=milestone$milestone-$(echo "$sha" | cut -c 1-12)-lenovo-$(date -u '+%m%d-%H%M%S')
     note "lenovo started $id"
     # shellcheck disable=SC2086 # the cases are words
     if build/tools/dev/native-deploy run "$files/../tests/native/prepared" "$address" candidate \
@@ -865,57 +787,65 @@ lenovo_run()
         [ ! -f "$f" ] || log=$f
     done
     # shellcheck disable=SC2046 # the cases are words
-    machine_failed lenovo "$id" "${log:-$state/$id.out}" $({ [ -z "$log" ] ||
+    failure lenovo "$id" $({ [ -z "$log" ] ||
         sed -n 's/^native: \([^:]*\): \([a-z]*\).*/\1 \2/p' "$log"; } |
         awk '$1 != "result" && $2 != "pass" { print $1 }' | grep . || echo runner)
 }
 
-# again_machine: print the lines that make SHA's release run again only what
-# failed on the Mac, Windows or the Lenovo in the last release, `again MACHINE
-# WORD...`, followed by the lines of the runs that passed on the other machines,
-# when that release filed the failure as an issue, the issue is closed, and
-# every first-parent commit since its candidate closes that issue and no other.
-# Print nothing otherwise.
-again_machine()
+# check: fetch, and refuse SHA unless milestone M is open, its description
+# names its branch, and SHA is on that branch and contains origin/master; set
+# `branch`.
+check()
 {
-    grep -qx "phase $phase" "$state/record" || return 0
-    # shellcheck disable=SC2046 # the line is words
-    set -- $(grep -E '^filed (mac|windows|lenovo) #' "$state/record" | tail -n 1)
-    [ $# -ge 4 ] && grep -q "^failed $2: " "$state/record" || return 0
-    m=$2 n=${3#\#}
-    shift 3
-    o=$(sed -n 's/^sha //p' "$state/record")
-    git -C "$repo" fetch -q origin 2> /dev/null &&
-        git -C "$repo" merge-base --is-ancestor "$o" "$sha" 2> /dev/null &&
-        commits=$(git -C "$repo" rev-list --first-parent "$o..$sha" 2> /dev/null) &&
-        [ -n "$commits" ] || return 0
-    for c in $commits; do
-        [ "$(git -C "$repo" log -1 --format=%B "$c" 2> /dev/null |
-            sed -n 's/^Closes #\([0-9][0-9]*\)$/\1/p')" = "$n" ] || return 0
-    done
-    gh issue view "$n" --repo "$REPO" --json state,title --jq '"\(.state) \(.title)"' 2> /dev/null |
-        grep -q '^CLOSED ' || return 0
-    echo "again $m $*"
-    grep -E '^(dispatched [0-9]+|run [0-9]+ success|rerun .*|(full|mac|windows) done .*)$' "$state/record" |
-        grep -v "^$m done "
+    git -C "$repo" fetch -q origin || later "the fetch failed"
+    description=$(gh api "repos/$REPO/milestones/$milestone" \
+        --jq 'select(.state == "open") | .description') ||
+        later "milestone $milestone cannot be read"
+    branch=$(printf '%s\n' "$description" | sed -n 's/^Branch: *\([^ ]*\) *$/\1/p' | head -n 1)
+    [ -n "$branch" ] || refuse "milestone $milestone is not open or names no branch"
+    git -C "$repo" merge-base --is-ancestor "$sha" "refs/remotes/origin/$branch" 2> /dev/null ||
+        refuse "$sha is not on $branch"
+    git -C "$repo" merge-base --is-ancestor refs/remotes/origin/master "$sha" 2> /dev/null ||
+        refuse "$sha does not contain origin/master"
+}
+
+# close: move master to SHA, close milestone M and archive its cards.
+close()
+{
+    git -C "$repo" fetch -q origin || later "the fetch failed"
+    if [ "$(git -C "$repo" rev-parse refs/remotes/origin/master)" != "$sha" ]; then
+        git -C "$repo" push origin "$sha:refs/heads/master" ||
+            later "the push of $sha to master failed"
+    fi
+    gh api -X PATCH "repos/$REPO/milestones/$milestone" -f state=closed > /dev/null ||
+        later "milestone $milestone could not be closed"
+    sh "$repo/tools/flow/board.sh" archive "$milestone" > /dev/null ||
+        later "board.sh archive $milestone failed"
 }
 
 main()
 {
     state=
     macrun=
-    while getopts m:s: o; do
+    rerun=
+    while getopts m:rs: o; do
         case $o in
             m) macrun=$OPTARG ;;
+            r) rerun=1 ;;
             s) state=$OPTARG ;;
-            *) echo "usage: release.sh [-s STATE] P" >&2; exit 2 ;;
+            *) echo "$USAGE" >&2; exit 2 ;;
         esac
     done
     shift $((OPTIND - 1))
-    case ${1-} in
-        ''|*[!0-9]*) echo "usage: release.sh [-s STATE] P" >&2; exit 2 ;;
+    [ $# -eq 2 ] || { echo "$USAGE" >&2; exit 2; }
+    milestone=$1 sha=$2
+    case $milestone in
+        ''|*[!0-9]*) echo "$USAGE" >&2; exit 2 ;;
     esac
-    phase=$1
+    case $sha in
+        *[!0-9a-f]*) refuse "'$sha' is not a commit's whole hash" ;;
+    esac
+    [ "${#sha}" -eq 40 ] || refuse "'$sha' is not a commit's whole hash"
     repo=$(cd "$(dirname "$0")/../.." && pwd)
     [ -n "$state" ] ||
         state=$(cd "$repo" && cd "$(git rev-parse --git-common-dir)/.." && pwd)/build/flow/release ||
@@ -932,42 +862,39 @@ main()
         mac_run "$macrun"
         exit 0
     fi
-    [ -f "$repo/tools/flow/machines" ] || {
-        echo "release: refused: $repo/tools/flow/machines is missing" >&2
-        exit 2
-    }
+    [ -f "$repo/tools/flow/machines" ] || refuse "$repo/tools/flow/machines is missing"
     exec 9>> "$state/lock"
     perl -MFcntl=:flock -e 'open(L, ">&=9") && flock(L, LOCK_EX | LOCK_NB) or exit 1' ||
         later "another release runs"
     chmod 600 "$repo/krffs/rach2_demo_ed25519"
 
     if [ -f "$state/record" ] && grep -q '^closing ' "$state/record" &&
-        ! grep -q '^closed \|^void\|^failed ' "$state/record"; then
-        phase=$(sed -n 's/^phase //p' "$state/record")
-        say "#$phase: its release closed the phase and has not finished; finishing it"
+        ! grep -q '^closed \|^failed ' "$state/record"; then
+        milestone=$(sed -n 's/^milestone //p' "$state/record")
+        sha=$(sed -n 's/^sha //p' "$state/record")
+        rerun=
+        say "milestone $milestone: its release of $sha began to close and has not finished; finishing it"
     fi
     old=
-    if [ -f "$state/record" ] && { ! grep -qx "phase $phase" "$state/record" ||
-        grep -q '^failed \|^void\|^closed ' "$state/record"; }; then
+    if [ -f "$state/record" ] && { ! grep -qx "milestone $milestone" "$state/record" ||
+        ! grep -qx "sha $sha" "$state/record" || grep -q '^failed \|^closed ' "$state/record"; }; then
         if grep -q '^install started ' "$state/record" &&
             ! grep -q '^install done ' "$state/record"; then
             say "the record has an installer that was started and whose success no release saw; check the machine's root by hand, then delete the record's \`install started\` line"
             exit 1
         fi
-        old=$(sed -n 's/^phase //p' "$state/record")-$(sed -n 's/^sha //p' "$state/record" | cut -c 1-8)
+        old=$(sed -n 's/^milestone //p' "$state/record")-$(sed -n 's/^sha //p' "$state/record" | cut -c 1-8)
     fi
     if [ -n "$old" ] || [ ! -f "$state/record" ]; then
-        report=$(sh "$repo/tools/flow/board.sh" phase) || later "the board cannot be read"
-        printf '%s\n' "$report" | grep -q "^phase: #$phase " ||
-            later "#$phase is not the phase In progress"
-        sha=$(printf '%s\n' "$report" | sed -n 's/^ready: yes \([0-9a-f]\{40\}\)$/\1/p')
-        [ -n "$sha" ] || later "#$phase is not ready: $(printf '%s\n' "$report" | tail -n 1)"
-        rerun='' kept=''
-        [ -z "$old" ] || rerun=$(again)
-        [ -z "$old" ] || [ -n "$rerun" ] || kept=$(again_machine)
+        if [ -n "$rerun" ] && { [ -z "$old" ] || ! grep -qx "milestone $milestone" "$state/record"; }; then
+            refuse "-r: the record has no earlier release of milestone $milestone"
+        fi
+        check
+        kept=''
+        [ -z "$rerun" ] || kept=$(again)
         {
-            printf 'phase %s\nsha %s\nchosen %s\n' "$phase" "$sha" "$(date -u '+%FT%TZ')"
-            [ -z "$rerun" ] || echo "rerun $rerun"
+            printf 'milestone %s\nsha %s\nbranch %s\nchosen %s\n' "$milestone" "$sha" "$branch" \
+                "$(date -u '+%FT%TZ')"
             [ -z "$kept" ] || printf '%s\n' "$kept"
             [ -z "$old" ] || grep -q '^closed ' "$state/record" ||
                 grep '^touched ' "$state/record" | tail -n 1
@@ -975,21 +902,11 @@ main()
         [ -z "$old" ] || cp "$state/record" "$state/$old-$(date -u '+%m%d-%H%M%S')" ||
             later "the old record could not be kept"
         mv "$state/record.new" "$state/record"
-        again=$(printf '%s\n' "$kept" | sed -n 's/^again //p')
-        say "#$phase: the candidate is $sha${rerun:+, for a rerun of $rerun}${again:+, for a rerun of $again}"
-        tests="Every suite now runs on it on both architectures from a clean build, on Ubuntu in WSL and on each machine that tools/flow/machines names, and the native cases run on the Lenovo's trial boot"
-        # shellcheck disable=SC2086 # the rerun is words
-        [ -z "$rerun" ] || tests=$(set -- $rerun
-            echo "Every commit since $(echo "$2" | cut -c 1-8) fixes a failure of the release tests in https://github.com/$REPO/actions/runs/$1, so only the suites that failed run again on it, from a clean build: $(shift 2; plain "$@")")
-        # shellcheck disable=SC2086 # the line is words
-        [ -z "$again" ] || tests=$(set -- $again
-            m=$1
-            shift
-            echo "Every commit since the last candidate fixes the failure of the release tests on $(who "$m"), so only these run again there: $(echo "$*" | sed 's/ /, /g'). The runs that passed on the other machines stand")
-        gh issue comment "$phase" --repo "$REPO" --body "The release of this phase has started with commit $sha. $tests. The phase closes when that commit has passed them and runs on the Lenovo." > /dev/null ||
-            say "the comment on #$phase failed"
+        again=$(sed -n 's/^again //p' "$state/record" | awk '{ printf "%s%s", (NR > 1 ? "; " : ""), $0 }')
+        say "milestone $milestone: releasing $sha${again:+, running again only $again}"
     fi
     sha=$(sed -n 's/^sha //p' "$state/record")
+    branch=$(sed -n 's/^branch //p' "$state/record")
     chosen=$(sed -n 's/^chosen //p' "$state/record")
 
     if ! done_ accept; then
@@ -1005,40 +922,27 @@ main()
         fi
     fi
 
-    if has mac && ! done_ mac && ! grep -q '^mac started ' "$state/record"; then
+    if has mac && ! done_ mac && ! failed_ mac && ! grep -q '^mac started ' "$state/record"; then
         mac_start
     fi
-    done_ full || full
-    if has windows && ! done_ windows; then
+    done_ full || failed_ full || full
+    if has windows && ! done_ windows && ! failed_ windows; then
         windows
     fi
-    if ! done_ build; then
-        why=$(still_ready)
-        case $? in
-            0) ;;
-            2) later "$why" ;;
-            *) void "$why" ;;
-        esac
+    if ! grep -q '^failure ' "$state/record" && ! done_ build; then
         ssh -o BatchMode=yes -o ConnectTimeout=10 testing true 2> /dev/null ||
             later "the testing host does not answer"
         build
     fi
-    cd "$state/wt" || fail build "no worktree"
-    chmod 600 krffs/rach2_demo_ed25519
-    if has mac && ! done_ mac; then
+    if has mac && ! done_ mac && ! failed_ mac; then
         mac_wait
     fi
+    ! grep -q '^failure ' "$state/record" || tests_failed
+    cd "$state/wt" || fail build "no worktree"
+    chmod 600 krffs/rach2_demo_ed25519
 
     if ! done_ install; then
         step=recovery
-        if ! grep -q '^install started ' "$state/record"; then
-            why=$(still_ready)
-            case $? in
-                0) ;;
-                2) later "$why" ;;
-                *) void "$why" ;;
-            esac
-        fi
         where || fail recovery "the machine answered as another machine"
         case $now in
             recovery) ;;
@@ -1077,7 +981,8 @@ main()
         where || fail lenovo "the machine answered as another machine"
         [ -n "$now" ] || later "the machine does not answer"
         [ "$now" = "system candidate" ] || fail lenovo "the machine runs $now, not the trial boot"
-        lenovo_run
+        failed_ lenovo || lenovo_run
+        ! failed_ lenovo || tests_failed
     fi
 
     if ! done_ accept; then
@@ -1092,17 +997,15 @@ main()
         mark accept "metal-accept: PASS; committed"
     fi
 
-    run=$(sed -n 's/^run \([0-9]*\) success$/\1/p' "$state/record" | tail -n 1)
-    rerun=$(sed -n 's/^rerun //p' "$state/record")
     if ! done_ record; then
         step=record
         where || fail record "the machine answered as another machine"
         [ -n "$now" ] || later "the machine does not answer"
         [ "$now" = "system candidate" ] ||
             fail record "the machine runs $now, not the committed candidate"
-        want=$(printf 'commit %s\nphase %s\nfull %s\n' "$sha" "$phase" "$run"
-            [ -z "$rerun" ] || echo "rerun of ${rerun%% *}"
-            printf 'root %s' "$(digest images/os-real-gnu.ext2)")
+        run=$(sed -n 's/^run \([0-9]*\) success$/\1/p' "$state/record" | tail -n 1)
+        want=$(printf 'commit %s\nmilestone %s\nfull %s\nroot %s' "$sha" "$milestone" "$run" \
+            "$(digest images/os-real-gnu.ext2)")
         wrote=$(printf '%s\n' "$want" | lenovo '{ mkdir -p /etc/rach2 && cat > /etc/rach2/release.new &&
             sync /etc/rach2/release.new && mv /etc/rach2/release.new /etc/rach2/release &&
             sync /etc/rach2/release /etc/rach2 /etc; } 2>&1; echo "status $?"') ||
@@ -1120,62 +1023,17 @@ main()
         mark record "/etc/rach2/release names $sha"
     fi
 
-    if ! grep -q '^reported ' "$state/record"; then
-        tests="Every suite passed on both architectures in the run https://github.com/$REPO/actions/runs/$run."
-        # shellcheck disable=SC2086 # the rerun is words
-        [ -z "$rerun" ] || tests=$(set -- $rerun
-            echo "The run https://github.com/$REPO/actions/runs/$run tested again only the suites that failed in https://github.com/$REPO/actions/runs/$1 at commit $(echo "$2" | cut -c 1-8), $(shift 2; plain "$@"), and they passed. Every commit since $(echo "$2" | cut -c 1-8) fixes one of those failures, and the earlier run passed every other suite it ran.")
-        on="the one machine that the commit's \`tools/ci/site\` selects"
-        if machine=$(sh "$repo/tools/ci/site.sh" "$state/wt/tools/ci/site" 2> /dev/null); then
-            on="$on, whose runners have the label \`$(printf '%s\n' "$machine" | sed -n 's/^runner=//p')\`, with QEMU's accelerator \`$(printf '%s\n' "$machine" | sed -n 's/^accelerator=//p')\`"
-        fi
-        others=$(grep -E '^(mac|windows|lenovo) done ' "$state/record" | while read -r m _ _ _ id; do
-            # shellcheck disable=SC2016 # the backquotes are Markdown
-            printf '%s, in the run `%s`; ' "$(who "$m")" "$id"
-        done | sed 's/; $//')
-        again=$(sed -n 's/^again //p' "$state/record")
-        # shellcheck disable=SC2086 # the line is words
-        [ -z "$again" ] || again=" Only $(set -- $again; shift; echo "$*" | sed 's/ /, /g') ran again on $(who "${again%% *}"), since every commit since the last candidate fixes their failure there."
-        [ -z "$others" ] || others="
-* The release tests passed as well on $others.$again"
-        gh issue comment "$phase" --repo "$REPO" --body "Commit $sha is released: the Lenovo runs it as its default system.
-
-* $tests
-* The release tests ran on $on.$others
-* The commit was built in $COPY on the testing host with \`ARCH=x86_64 make clean && ARCH=x86_64 make machine GNU_AGENTS=all\`.
-* The SHA-256 digests are $(digest rach2/kernel) for the kernel, $(digest rach2-recovery/kernel) for the recovery kernel, $(digest "$RECOVERY_IMAGE") for the recovery image and $(digest images/os-real-gnu.ext2) for the GNU root.
-* The release updated the recovery partition and installed the kernel and the root from the recovery system. On the trial boot, machine_identity.sh and metal_accept.sh passed; \`bootctl commit\` then made the new system the saved default, and /etc/rach2/release on the machine names $sha." > /dev/null ||
-            later "the report could not be commented"
-        note "reported $(date -u '+%FT%TZ')"
-    fi
-    issue_state=$(gh issue view "$phase" --repo "$REPO" --json state --jq .state) ||
-        later "#$phase cannot be read"
-    if [ "$issue_state" != CLOSED ]; then
-        why=$(still_ready)
-        case $? in
-            0) ;;
-            2) later "$why" ;;
-            *)
-                gh issue comment "$phase" --repo "$REPO" --body "This phase stays In progress, since commit $sha is no longer its finished work: the board reports \`$why\`. The Lenovo runs $sha; the next release takes the rest." > /dev/null ||
-                    later "the comment on #$phase failed"
-                void "$why" ;;
-        esac
-        note "closing $(date -u '+%FT%TZ')"
-        gh issue close "$phase" --repo "$REPO" > /dev/null || later "#$phase could not be closed"
-    fi
-    sh "$repo/tools/flow/board.sh" 'done' > /dev/null || later "board.sh done failed"
-    sh "$repo/tools/flow/board.sh" archive "$phase" > /dev/null || later "board.sh archive $phase failed"
-    sh "$repo/tools/flow/notify.sh" "rach2: phase #$phase is finished and installed on the Lenovo, which now runs $(echo "$sha" | cut -c 1-8)" ||
-        say "the push to the owner's phone failed"
+    grep -q '^closing ' "$state/record" || note "closing $(date -u '+%FT%TZ')"
+    close
     note "closed $(date -u '+%FT%TZ')"
-    say "#$phase is released and closed"
-    old=$phase-$(echo "$sha" | cut -c 1-8)-$(date -u '+%m%d-%H%M%S')
+    old=$milestone-$(echo "$sha" | cut -c 1-8)-$(date -u '+%m%d-%H%M%S')
     mv "$state/record" "$state/$old"
     if ! cp "$files/release.sha256" "$state/$old.sha256"; then
         say "the digests could not be copied, so the worktree $state/wt stays"
     elif ! { cd "$repo" && git worktree remove --force "$state/wt" && git worktree prune; }; then
         say "the worktree $state/wt could not be removed"
     fi
+    finish "passed $sha"
 }
 
 main "$@"
