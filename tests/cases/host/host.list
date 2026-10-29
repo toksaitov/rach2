@@ -20,7 +20,7 @@ run_scripts|run scripts' command lines
 commit_msg|commit-msg hook's refusals
 ci|ci reports and bisection
 ci_run|ci's reading of the runner's lines and of etude's history, and its stop after a killed step
-board|board groups, take and the phase in progress
+board|board.sh's next, take, release, branch, archive and milestones on the board and its milestones
 limited|the loops' reading of a usage limit
 worker_park|the worker loop's parking during a hold and rest of a handed-back intermittent issue
 release_resume|a release resumed from its record, with its runs, reruns and acceptance

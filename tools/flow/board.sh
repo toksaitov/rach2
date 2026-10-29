@@ -1,188 +1,90 @@
 #!/bin/sh
 #
-# board.sh: the operations the worker, manager and reviewer loops make on the
-# board and on the phase in progress.
+# board.sh: the operations the worker loops, the manager and the release make
+# on the board and on the milestones.
 #
 # Usage: board.sh next
-#        board.sh take N [GROUP]
+#        board.sh take N
 #        board.sh mine N
-#        board.sh release N [STATUS|owner|owner-only]
-#        board.sh ready AFTER N...
-#        board.sh order N...
-#        board.sh group TITLE N...
+#        board.sh release N [owner|owner-only]
+#        board.sh branch N
+#        board.sh ready N...
 #        board.sh done
-#        board.sh current
-#        board.sh members P [open]
-#        board.sh link N...
-#        board.sh start [P]
-#        board.sh archive P
-#        board.sh phase
+#        board.sh archive M
+#        board.sh milestones
 #
-# A phase is an issue with the label `phase`, and at most one phase has the
-# Status In progress. The members of phase P are its sub-issues and the
-# issues whose body says `Part of #P` with no digit after P, since GitHub links
-# at most a hundred sub-issues to one parent. Workers take only the issues
-# labelled `ci`, which ci files, and the members of the phase In progress,
-# except an incident, a hold and a day report, which are no work even when
-# their bodies name the phase.
+# A milestone is a GitHub milestone, and its description names its branch on
+# a line `Branch: NAME`. A task is an issue in a milestone with no parent
+# issue, and a subtask is a sub-issue of a task. Workers take tasks; a subtask
+# is closed by the worker of its task and is never taken by itself.
 # An issue labelled `owner-only` has work that only the owner's accounts can
 # do, such as a step on the testing host through `ssh testing` from the
 # owner's computer; `next` and `take` offer it only to the account OWNER below.
-# Each subcommand that reads the board or the issues fails, with a diagnostic
-# on stderr and nothing on stdout, when a page of the answer is lost five
-# times, as `ask` below says, so that a caller does not take a part of the
-# board for the whole.
+# Each subcommand that reads the board fails, with a diagnostic on stderr and
+# nothing on stdout, when a page of the answer is lost five times, as `ask`
+# below says, so that a caller does not take a part of the board for the
+# whole.
 # Assignees are added and removed with the REST calls that change only the
 # login given. `gh issue edit` writes back the whole list it read, and so puts
 # back an account that another `take` removed in the meantime.
 #
-# `next` prints the issues a worker may take, one line each with the number,
-# a tab and the title. Each is open, unassigned, with no open blocker and
-# without the labels `grouped`, `owner`, `phase`, `incident`, `hold` and
-# `day-report`, and without `owner-only` unless this account is OWNER. First
-# come the issues labelled `ci` and not `intermittent`, whatever their Status;
-# then the members of the phase In progress whose Status is Ready; then,
-# while that phase has an open member not labelled `intermittent`, the issues
-# labelled both `ci` and `intermittent`. Each tier is in the board's order.
-# `gh project item-list` does not return that order, so the query asks for the
-# items by position. With no phase In progress, `next` lists only the first
-# tier.
+# `next` prints the tasks a worker may take, one line each with the number, a
+# tab and the title. Each is open, Ready, unassigned, in an open milestone
+# whose description names a branch, with no parent and no open blocker, not
+# labelled `owner`, and labelled `owner-only` only when this account is OWNER.
+# They are ordered by milestone number, lowest first, and then in the board's
+# order. `gh project item-list` does not return that order, so the query asks
+# for the items by position.
 #
-# `take N [GROUP]` refuses a closed issue, setting it Done and changing
-# nothing else, since a close between `next` and `take` would otherwise leave
-# it In progress. Before it assigns anything, it also refuses a phase, an
-# incident, a hold, a day report, an issue with an open blocker, one labelled
-# `owner`, one labelled `owner-only` when this account is not OWNER and,
-# without GROUP, an issue that is neither labelled `ci` nor a member of the
-# phase In progress, and a member whose Status is neither Ready nor In
-# progress.
-# Otherwise it assigns N to this account and reads the issue's timeline.
-# Of the accounts assigned now, the one whose latest assignment is the
-# earliest keeps the issue. When that is another account, `take` unassigns
-# this one and exits 1, so that no issue has two writers; otherwise it sets N
-# In progress. A step that fails after the assignment unassigns this account
-# again, unless N was this account's before, so that a failed take leaves the
-# issue as it found it. Without GROUP, `take` refuses a member of a group,
-# before the assignment and again after it, since `group` may label N while
-# a loop holds a listing of `next` that has N in it. With GROUP, it takes N
-# only as a member of that group: N has the label `grouped` and is listed in
-# GROUP's body, and GROUP is open and assigned to this account. A member that
-# is this account's already is taken again, for a session that resumes the
-# group; no other path assigns a member, so it is this group worker's.
+# `take N` refuses a closed issue, setting it Done and changing nothing else,
+# since a close between `next` and `take` would otherwise leave it In
+# progress. Before it assigns anything, it also refuses an issue that is not
+# on the board, a subtask, an issue in no open milestone or in one that names
+# no branch, one with an open blocker, one labelled `owner`, one labelled
+# `owner-only` when this account is not OWNER, and one whose Status is
+# neither Ready nor In progress. Otherwise it assigns N to this account and
+# reads the issue's timeline. Of the accounts assigned now, the one whose
+# latest assignment is the earliest keeps the issue. When that is another
+# account, `take` unassigns this one and exits 1, so that no issue has two
+# writers; otherwise it sets N In progress. A step that fails after the
+# assignment unassigns this account again, unless N was this account's
+# before, so that a failed take leaves the issue as it found it.
 #
 # `mine N` prints `yes` while N is open and assigned to this account and `no`
 # otherwise; it prints nothing and fails when GitHub cannot be reached, so
 # that a caller does not take a lost connection for a closed issue. It makes
-# none of the checks of `take`: an issue a worker holds is resumed after it
-# gains a blocker or the label `owner`, since its work may be committed only
-# in that worker's clone, and the session that reads the issue hands it back
-# with `release` when it cannot go on.
+# none of the checks of `take`: a task a worker holds is resumed after it
+# gains a blocker or the label `owner`, since its work may be only in that
+# worker's clone, and the session that reads the issue hands it back with
+# `release` when it cannot go on.
 #
-# `release N [STATUS]` hands N back: it sets STATUS, Ready unless given, then
-# removes the label `grouped` and unassigns this account, so that N returns to
-# the queue as an issue of its own. `release N owner` sets Backlog and adds
-# the label `owner`, which marks a decision that AGENTS.md gives the owner and
-# that the manager sends to the owner's phone. `release N owner-only` sets
-# Ready and adds the label `owner-only`, for work that is no decision but that
-# only the owner's accounts can do, so that the owner's worker loops take it
-# and the others pass it by. A step that fails exits 1 with
-# N still assigned to this account, so that its worker keeps it and can
-# release it again. A closed issue is set Done and nothing else is changed,
-# since its commit may have closed it before its worker hands it back.
+# `release N` hands N back: it sets it Ready and unassigns this account.
+# `release N owner` sets Backlog and adds the label `owner`, which marks a
+# decision that AGENTS.md gives the owner. `release N owner-only` sets Ready
+# and adds the label `owner-only`, for work that is no decision but that only
+# the owner's accounts can do. A step that fails exits 1 with N still
+# assigned to this account, so that its worker keeps it and can release it
+# again. A closed issue is set Done and nothing else is changed, since its
+# commit may have closed it before its worker hands it back.
 #
-# `ready AFTER N...` moves each N after AFTER on the board, the first N after
-# AFTER and each later one after the one before, and then sets it Ready, so
-# that no worker finds it Ready in its old place. `order N...` does the same
-# with the first N moved to the top of the board, ahead of every issue it does
-# not name.
+# `branch N` prints the branch that the description of N's milestone names,
+# and fails when N has no milestone or the milestone names no branch.
 #
-# `group TITLE N...` makes a group, one issue that a worker takes in place of
-# its members N..., at most eight of them, each open, unassigned, in no other
-# group, not labelled `owner-only`, and labelled `ci` or a member of the phase
-# In progress. The group is
-# an issue titled TITLE with the label `group`, and `ci` as well when
-# a member has it, whose body lists the members one a line as `* #N`. While a
-# phase P is In progress, the body ends with the line `Part of #P.` and the
-# group is linked to P as a sub-issue; a link that GitHub refuses is no
-# failure, since the line makes the group a member. Each member gets the
-# label `grouped`, which keeps it out of `next` and `take`, and the group is
-# set Ready, for `ready` or `order` to place. It prints the group's number.
-# `group` labels the members before it reads their assignees again, as `take`
-# assigns before it reads the label, so that of a take and a grouping that
-# overlap, at least one sees the other and fails; when a member was taken,
-# `group` removes the labels and makes no group. The board adds each new
-# issue itself, and `gh project item-add` fails when the board was first;
-# `group` then reads the board and fails only when the group is not on it.
-# A failure removes the labels attempted by this call and closes any group
-# it created. If cleanup fails, stderr gives the steps left to do.
+# `ready N...` sets each N Ready.
 #
 # `done` sets Done on every closed issue whose Status is not, and fails when
-# the listing of the board fails. The manager runs it at each check, for an
-# issue that closes while a `take` or a `release` of it runs.
+# the listing of the board fails.
 #
-# `current` prints the number of the phase In progress, prints nothing when
-# there is none, and fails when two or more are.
+# `archive M` archives the cards of the closed issues of milestone M and of
+# their closed subtasks, and prints the numbers it archived; release.sh runs
+# it once it has closed M. An open issue keeps its card. A card that cannot be
+# archived is reported on stderr and the rest go on, and the exit status is
+# then 1.
 #
-# `members P [open]` prints the members of P, or only the open ones, sorted by
-# number, one a line: the number, the state, the time it closed or `-`, the
-# labels joined by commas, and the title, separated by tabs. It reads the
-# repository's issues through GraphQL, every page, and not through the search
-# API, whose index lags behind the issues; the closed issues' bodies come from
-# a cache, as `issues` below says.
-#
-# `link N...` makes each N a sub-issue of the phase In progress P. When GitHub
-# refuses, as it does past a hundred sub-issues, it adds the line `Part of
-# #P.` to N's body instead. A member of P is left as it is. It fails when no
-# phase is In progress or when an N got neither the link nor the line.
-#
-# `start [P]` starts a phase. With none In progress, it starts P, or without P
-# the top open phase whose Status is Ready, and prints nothing and succeeds when
-# no phase is Ready. With a phase In progress, it completes that phase's start,
-# and refuses any other P. It comments on the phase a sentence and the line
-# `phase: started at SHA`, SHA being master's head, unless a comment has that
-# line already, and only
-# then sets the phase In progress, so that SHA comes before every commit a
-# worker makes for the phase's members, and a run that fails after the comment
-# leaves SHA for the next run to keep. For the phase In progress, it then links,
-# as `link` does, each open issue labelled `triaged` that has no parent, whose
-# body says no `Part of #N`, and that has none of the labels `phase`, `group`,
-# `grouped`, `ci`, `owner`, `intermittent`, `day-report`, `incident` and
-# `hold`, since a report, an incident and a hold are no work; and it sets
-# Ready each open member whose Status is Backlog or empty and that is not
-# labelled `owner`, `grouped` or `phase`. It prints the phase's number. Each
-# step skips what an earlier run did, so a second run changes nothing, and a
-# run that failed part way is completed by the next.
-#
-# `archive P` archives the card of every closed issue on the board, except a
-# closed member of an open phase other than P, which stays on the board until
-# that phase is archived. P's own card is archived once P is closed. It prints
-# the numbers it archived. A card that cannot be archived is reported on
-# stderr and the rest go on, and the exit status is then 1.
-#
-# `phase` reports on the phase In progress, for the manager and the reviewer,
-# in ten lines, in this order:
-#
-#    phase: #P TITLE      or `phase: none`
-#    base: SHA            from P's first comment `phase: started at SHA`
-#    head: SHA            master's head
-#    members: O open, C closed
-#    work: #N...          open members and open issues labelled `ci`
-#    intermittent: #N...  those of them labelled `intermittent`
-#    hold: #N...          open issues labelled `hold`
-#    review: BASE..HEAD   from P's newest line `review: BASE..HEAD complete`
-#    core: STATE          the commit status `ci/core` on master's head, or
-#                         `off` when it has none and the core workflow is
-#                         turned off
-#    ready: yes HEAD      or `ready: no: REASON`
-#
-# `work` leaves out the issues labelled `intermittent`. An empty list, a
-# review not found and a missing status are `none`, and a base not found is
-# `unknown`. The reason is the first of these that applies: `no phase is In
-# progress`; `work: #N...`; `hold #N...`; `review failed`, when P has the label
-# `review-failed`; `review`, when the newest review did not end at head; and
-# `core STATE`, unless STATE is `success` or `off`. When something cannot be
-# read, the last line is `ready: no: unreadable: WHAT` and the exit status is
-# 1; otherwise it is 0.
+# `milestones` prints each open milestone, lowest number first, as a line
+# `milestone M: TITLE`, the line `  branch: NAME`, or `  branch: none`, the
+# line `  tasks: O open, C closed`, and a line `  #N In progress: LOGINS:
+# TITLE` for each task In progress, LOGINS being its assignees or `nobody`.
 #
 # The repository and the board's owner and number are below. The board's
 # owner is the owner's account, the one that may take an issue labelled
@@ -197,13 +99,8 @@ REPO=toksaitov/rach2
 OWNER=toksaitov
 BOARD=6
 
-# The awk functions that read the lists below: has(L, X) is true when the
-# comma-joined list L has X, and in_phase(N, PARENT, PARTOF, P) is true when
-# issue N is a member of phase P, which is not empty, PARENT being N's parent
-# and PARTOF the numbers M for which N's body says `Part of #M`.
-LIB='function has(l, x) { return index("," l ",", "," x ",") > 0 }
-    function in_phase(n, parent, partof, p) {
-        return p != "" && n != p && (parent == p || has(partof, p)) }'
+# The awk function has(L, X) is true when the comma-joined list L has X.
+LIB='function has(l, x) { return index("," l ",", "," x ",") > 0 }'
 
 # ask ARGS...: print the answer of the read `gh api graphql ARGS...`. GitHub
 # at times answers a query with an error page, for minutes at a time, so a
@@ -283,48 +180,44 @@ set_status()
         --single-select-option-id "$(id_of "$(echo "$2" | tr ' ' _)")" > /dev/null
 }
 
-# move ITEM [AFTER]: put the board's item ITEM after the item AFTER, or at the
-# top of the board when AFTER is empty.
-move()
-{
-    if [ -n "$2" ]; then
-        gh api graphql -f p="$(id_of project)" -f i="$1" -f a="$2" -f query='
-            mutation($p: ID!, $i: ID!, $a: ID!) {
-                updateProjectV2ItemPosition(input: {projectId: $p, itemId: $i,
-                    afterId: $a}) { clientMutationId } }' > /dev/null
-    else
-        gh api graphql -f p="$(id_of project)" -f i="$1" -f query='
-            mutation($p: ID!, $i: ID!) {
-                updateProjectV2ItemPosition(input: {projectId: $p,
-                    itemId: $i}) { clientMutationId } }' > /dev/null
-    fi
-}
+# BRANCH is the jq filter that prints the branch that the description of the
+# milestone `.milestone` names on its first line `Branch: NAME`, without the
+# backquotes and spaces that a person may write around NAME, or nothing.
+BRANCH='([.milestone.description // "" | split("\n")[] |
+        select(startswith("Branch:")) | ltrimstr("Branch:") |
+        gsub("[\\s`]"; "")] | map(select(. != "")) | first // "")'
 
-# FIELDS is the jq filter that prints the ten fields of `items` from an
+# FIELDS is the jq filter that prints the twelve fields of `items` from an
 # object with the item's id and Status as `id` and `status` and the issue as
-# `issue`, with the ninth, which comes from the body, left empty.
+# `issue`.
 FIELDS='[.id, .status, (.issue.number | tostring), .issue.state,
     ([.issue.labels.nodes[].name] | join(",")),
-    (.issue.assignees.totalCount | tostring),
+    ([.issue.assignees.nodes[].login] | join(",")),
     (.issue.issueDependenciesSummary.blockedBy | tostring),
-    (.issue.parent.number // "" | tostring), "",
+    (.issue.parent.number // "" | tostring),
+    (.issue.milestone.number // "" | tostring),
+    (.issue.milestone.state // ""),
+    (.issue | '"$BRANCH"'),
     (.issue.title | gsub("\t"; " "))] | join("\t")'
 
+# ISSUE is the part of a query that asks for the fields FIELDS reads.
+ISSUE='number title state
+    assignees(first: 10) { nodes { login } }
+    labels(first: 20) { nodes { name } }
+    parent { number }
+    milestone { number state description }
+    issueDependenciesSummary { blockedBy }'
+
 # items [all]: print the issues on the board in the board's order, one a
-# line, as ten fields separated by tabs: the item's id, the Status or nothing,
-# the number, the state, the labels joined by commas, the number of
-# assignees, the number of open blockers, the parent's number or nothing, the
-# numbers that `Part of #N` gives in the body joined by commas, and the title.
-# GitHub's list of the board's items can lack an item that the issue's own
-# `projectItems` gives, so the repository's open issues, or with `all` every
-# issue, are read as well, and an issue whose item the list lacks follows the
-# others, in the order the issues were opened. Fail when any page of either
-# answer is lost.
-#
-# Neither list asks for the bodies, since a page of a hundred of them takes
-# GitHub long enough that it answers with an error page instead. The `Part
-# of #N` numbers come from `issues`, of the open issues, or with `all` of
-# every issue; a closed issue has none without `all`.
+# line, as twelve fields separated by tabs: the item's id, the Status or
+# nothing, the number, the state, the labels joined by commas, the assignees'
+# logins joined by commas, the number of open blockers, the parent's number
+# or nothing, the milestone's number, its state and the branch it names, each
+# or nothing, and the title. GitHub's list of the board's items can lack an
+# item that the issue's own `projectItems` gives, so the repository's open
+# issues, or with `all` every issue, are read as well, and an issue whose
+# item the list lacks follows the others, in the order the issues were
+# opened. Fail when any page of either answer is lost.
 items()
 {
     states=OPEN
@@ -341,11 +234,7 @@ items()
                     nodes { id isArchived
                         fieldValueByName(name: "Status") {
                             ... on ProjectV2ItemFieldSingleSelectValue { name } }
-                        content { ... on Issue { number title state
-                            assignees(first: 1) { totalCount }
-                            labels(first: 20) { nodes { name } }
-                            parent { number }
-                            issueDependenciesSummary { blockedBy } } } } } } } }') ||
+                        content { ... on Issue { '"$ISSUE"' } } } } } } }') ||
         return 1
     found=$(pages .data.repository.issues '. as $issue |
             .projectItems.nodes[] |
@@ -358,164 +247,14 @@ items()
                 issues(first: 100, after: $endCursor, states: ['"$states"'],
                        orderBy: {field: CREATED_AT, direction: ASC}) {
                     pageInfo { hasNextPage endCursor }
-                    nodes { number title state
-                        assignees(first: 1) { totalCount }
-                        labels(first: 20) { nodes { name } }
-                        parent { number }
-                        issueDependenciesSummary { blockedBy }
+                    nodes { '"$ISSUE"'
                         projectItems(first: 10, includeArchived: false) {
                             nodes { id project { number
                                     owner { ... on User { login } } }
                                 fieldValueByName(name: "Status") {
                                     ... on ProjectV2ItemFieldSingleSelectValue {
                                         name } } } } } } } }') || return 1
-    if [ "$1" = all ]; then
-        parts=$(issues) || return 1
-    else
-        parts=$(issues open) || return 1
-    fi
-    {
-        printf '%s\n' "$parts" | awk '{ print "P\t" $0 }'
-        printf '%s\n' "$listed" "$found"
-    } | awk -F '\t' -v OFS='\t' '
-        $1 == "P" {
-            if (NF >= 7)
-                part[$2] = $7
-            next
-        }
-        NF > 0 && !seen[$1]++ { $9 = part[$3]; print }'
-}
-
-# issues [open]: print the repository's issues, or only the open ones, one a
-# line, as seven fields separated by tabs: the number, the state, the time it
-# closed or `-`, the labels joined by commas, the parent's number or nothing,
-# the numbers that `Part of #N` gives in the body joined by commas, and the
-# title. Fail when any page of the answer is lost.
-#
-# Bodies are the slow part of the answer, some seconds for each hundred, and
-# most issues are closed, so the closed issues are read without them. The
-# numbers that a closed issue's body gives are kept in a cache,
-# `$XDG_CACHE_HOME/rach2/issue-parts` or else `build/cache/issue-parts` of the
-# tree this script is in, or of the one it runs in, one line each with the
-# issue's number and the time it last changed, which an edit of its body
-# moves; only the bodies of the closed issues the cache lacks at that time are
-# read, a hundred to a query. An issue that changed in the
-# last minute is not kept, since two edits within one second leave that time
-# as it was. The open issues are read first, so that an issue closed between
-# the two reads is printed once, as closed.
-issues()
-{
-    open=$(pages .data.repository.issues '
-            [(.number | tostring), .state, (.closedAt // "-"),
-             ([.labels.nodes[].name] | join(",")),
-             (.parent.number // "" | tostring),
-             ([.body // "" | scan("Part of #([0-9]+)") | .[0]] |
-              unique | join(",")),
-             (.title | gsub("\t"; " "))] | join("\t")' \
-        -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='
-        query($o: String!, $r: String!, $endCursor: String) {
-            repository(owner: $o, name: $r) {
-                issues(first: 100, after: $endCursor, states: [OPEN]) {
-                    pageInfo { hasNextPage endCursor }
-                    nodes { number state closedAt title body
-                        labels(first: 20) { nodes { name } }
-                        parent { number } } } } }') || return 1
-    if [ "$1" = open ]; then
-        [ -z "$open" ] || printf '%s\n' "$open"
-        return 0
-    fi
-    closed=$(pages .data.repository.issues '
-            [(.number | tostring), .updatedAt, (.closedAt // "-"),
-             ([.labels.nodes[].name] | join(",")),
-             (.parent.number // "" | tostring),
-             (.title | gsub("\t"; " "))] | join("\t")' \
-        -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='
-        query($o: String!, $r: String!, $endCursor: String) {
-            repository(owner: $o, name: $r) {
-                issues(first: 100, after: $endCursor, states: [CLOSED]) {
-                    pageInfo { hasNextPage endCursor }
-                    nodes { number updatedAt closedAt title
-                        labels(first: 20) { nodes { name } }
-                        parent { number } } } } }') || return 1
-    cache=${XDG_CACHE_HOME:+$XDG_CACHE_HOME/rach2/issue-parts}
-    if [ -z "$cache" ]; then
-        tree=$(cd "$(dirname "$0")" && git rev-parse --show-toplevel 2> /dev/null) ||
-            tree=$(git rev-parse --show-toplevel 2> /dev/null) || tree=
-        [ -z "$tree" ] || cache=$tree/build/cache/issue-parts
-    fi
-    missing=$(printf '%s\n' "$closed" | awk -F '\t' -v cache="$cache" '
-        BEGIN {
-            while ((getline line < cache) > 0) {
-                split(line, f, "\t")
-                at[f[1]] = f[2]
-            }
-        }
-        NF > 0 && at[$1] != $2 { print $1 }')
-    fetched=
-    while [ -n "$missing" ]; do
-        lookups=$(printf '%s\n' "$missing" | head -n 100 | awk '
-            { printf "i%s: issue(number: %s) { number updatedAt body } ", $1, $1 }')
-        missing=$(printf '%s\n' "$missing" | sed '1,100d')
-        got=$(ask -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='
-            query($o: String!, $r: String!) {
-                repository(owner: $o, name: $r) { '"$lookups"'} }' \
-            --jq '.data.repository[] |
-                [(.number | tostring), .updatedAt,
-                 ([.body // "" | scan("Part of #([0-9]+)") | .[0]] |
-                  unique | join(",")),
-                 (if (.updatedAt | fromdateiso8601) < now - 60
-                  then "kept" else "new" end)] | join("\t")') || return 1
-        fetched="$fetched$got
-"
-    done
-    merged=$({
-        printf '%s' "$fetched" | awk '{ print "F\t" $0 }'
-        printf '%s\n' "$closed"
-        printf '%s\n' "$open" | awk '{ print "O\t" $0 }'
-    } | awk -F '\t' -v cache="$cache" '
-        BEGIN {
-            while ((getline line < cache) > 0) {
-                split(line, f, "\t")
-                at[f[1]] = f[2]
-                parts[f[1]] = f[3]
-            }
-        }
-        $1 == "F" {
-            if (NF == 5) {
-                got[$2] = 1
-                at[$2] = $3
-                parts[$2] = $4
-                fresh[$2] = $5 == "new"
-            }
-            next
-        }
-        $1 == "O" {
-            if (NF > 1)
-                open[++opened] = substr($0, 3)
-            next
-        }
-        NF == 0 { next }
-        !got[$1] && at[$1] != $2 { lost = 1; exit }
-        {
-            seen[$1] = 1
-            print "L\t" $1 "\tCLOSED\t" $3 "\t" $4 "\t" $5 "\t" parts[$1] "\t" $6
-            if (!fresh[$1])
-                print "C\t" $1 "\t" at[$1] "\t" parts[$1]
-        }
-        END {
-            if (lost)
-                exit 1
-            for (i = 1; i <= opened; i++)
-                if (split(open[i], f, "\t") > 0 && !(f[1] in seen))
-                    print "L\t" open[i]
-        }') || return 1
-    if mkdir -p "${cache%/*}" 2> /dev/null &&
-        printf '%s\n' "$merged" | sed -n 's/^C.//p' > "$cache.$$" 2> /dev/null; then
-        mv -f "$cache.$$" "$cache" 2> /dev/null || rm -f "$cache.$$"
-    else
-        rm -f "$cache.$$"
-    fi
-    printf '%s\n' "$merged" | sed -n 's/^L.//p'
+    printf '%s\n' "$listed" "$found" | awk -F '\t' 'NF > 0 && !seen[$1]++'
 }
 
 # read_board [all]: read the board into `board`, as `items` prints it, or say
@@ -528,42 +267,25 @@ read_board()
     }
 }
 
-# in_progress: print the number of the open phase whose Status is In progress
-# on the board read into `board`, or nothing when there is none; say so and
-# fail when there are two or more.
-in_progress()
+# login: set `me` to this account's login, or say that it cannot and exit 1.
+login()
 {
-    ps=$(printf '%s\n' "$board" | awk -F '\t' "$LIB"'
-        $4 == "OPEN" && $2 == "In progress" && has($5, "phase") {
-            s = s (s == "" ? "" : " #") $3 }
-        END { print s }')
-    case $ps in
-        *' '*)
-            echo "board: #$ps are In progress, and at most one phase may be" >&2
-            return 1 ;;
-    esac
-    [ -z "$ps" ] || echo "$ps"
+    me=$(gh api user --jq .login) && [ -n "$me" ] || {
+        echo "board: cannot read this account's login" >&2
+        exit 1
+    }
 }
 
 next()
 {
-    me=$(gh api user --jq .login) || {
-        echo "board: cannot read this account's login" >&2
-        exit 1
-    }
+    login
     read_board
-    p=$(in_progress) || exit 1
-    printf '%s\n' "$board" | awk -F '\t' -v p="$p" -v me="$me" -v owner="$OWNER" "$LIB"'
-        { member = in_phase($3, $8, $9, p) }
-        $4 == "OPEN" && member && !has($5, "intermittent") { work = 1 }
-        $4 != "OPEN" || $6 > 0 || $7 > 0 { next }
-        has($5, "grouped") || has($5, "owner") || has($5, "phase") { next }
-        has($5, "incident") || has($5, "hold") || has($5, "day-report") { next }
+    printf '%s\n' "$board" | awk -F '\t' -v me="$me" -v owner="$OWNER" "$LIB"'
+        $4 != "OPEN" || $2 != "Ready" || $6 != "" || $7 > 0 || $8 != "" { next }
+        $10 != "OPEN" || $11 == "" || has($5, "owner") { next }
         has($5, "owner-only") && me != owner { next }
-        has($5, "ci") && !has($5, "intermittent") { ci = ci $3 "\t" $10 "\n"; next }
-        has($5, "ci") { flaky = flaky $3 "\t" $10 "\n"; next }
-        member && $2 == "Ready" { ready = ready $3 "\t" $10 "\n" }
-        END { printf "%s%s%s", ci, ready, (work ? flaky : "") }'
+        { print $9 "\t" NR "\t" $3 "\t" $12 }' |
+        sort -n -k 1,1 -k 2,2 | cut -f 3-
 }
 
 # finished N: when issue N is closed, set it Done, say so and succeed;
@@ -619,27 +341,6 @@ first()
         }'
 }
 
-# member N G: print why N cannot be taken as a member of group G, or nothing
-# when it can.
-member()
-{
-    gh issue view "$2" --repo "$REPO" --json state,labels,assignees,body --jq '
-        if .state != "OPEN" then "#'"$2"' is closed"
-        elif any(.labels[]; .name == "group") | not then "#'"$2"' is not a group"
-        elif any(.assignees[]; .login == "'"$me"'") | not then
-            "#'"$2"' is not this account'"'"'s"
-        elif any(.body | split("\n")[]; . == "* #'"$1"'") | not then
-            "#'"$2"' does not list it"
-        else empty end'
-}
-
-# labelled N: print `yes` when N has the label `grouped` and `no` otherwise.
-labelled()
-{
-    gh issue view "$1" --repo "$REPO" --json labels \
-        --jq 'if any(.labels[]; .name == "grouped") then "yes" else "no" end'
-}
-
 # refuse N WHY: say WHY on stderr and exit 1, first unassigning this account
 # from N when this take assigned it.
 refuse()
@@ -650,27 +351,20 @@ refuse()
     exit 1
 }
 
-# kind N [GROUP]: print what keeps N from a worker on the board read into
-# `board`, `p` being the phase In progress, `me` this account and GROUP, when
-# given, the group N is taken for; print nothing when nothing does.
+# kind N: print what keeps N from a worker on the board read into `board`,
+# `me` being this account; print nothing when nothing does.
 kind()
 {
-    printf '%s\n' "$board" | awk -F '\t' -v n="$1" -v p="$p" -v g="$2" \
-        -v me="$me" -v owner="$OWNER" "$LIB"'
+    printf '%s\n' "$board" | awk -F '\t' -v n="$1" -v me="$me" -v owner="$OWNER" "$LIB"'
         $3 != n { next }
         { found = 1 }
-        has($5, "phase") { print "it is a phase"; exit }
-        has($5, "incident") || has($5, "hold") || has($5, "day-report") {
-            print "it is an incident, a hold or a day report, which is no work"
-            exit }
+        $8 != "" { print "it is a subtask of #" $8 "; take its task"; exit }
+        $10 != "OPEN" { print "it is in no open milestone"; exit }
+        $11 == "" { print "its milestone names no branch"; exit }
         $7 > 0 { print "it has an open blocker"; exit }
         has($5, "owner") { print "it waits for the owner"; exit }
         has($5, "owner-only") && me != owner {
             print "only the owner'"'"'s accounts can do its work"; exit }
-        g != "" || has($5, "ci") { exit }
-        p == "" { print "it is not labelled ci, and no phase is In progress"; exit }
-        !in_phase($3, $8, $9, p) {
-            print "it is neither labelled ci nor a member of #" p; exit }
         $2 != "Ready" && $2 != "In progress" {
             print "its Status is " ($2 == "" ? "empty" : $2) ", not Ready"; exit }
         END { if (!found) print "it is not on the board" }'
@@ -681,30 +375,18 @@ take()
     if finished "$1"; then
         exit 1
     fi
-    me=$(gh api user --jq .login) added=no
+    added=no
+    login
     board=$(items) || refuse "$1" "cannot read the board"
-    p=$(in_progress) || exit 1
-    reason=$(kind "$1" "$2")
+    reason=$(kind "$1")
     [ -z "$reason" ] || refuse "$1" "$reason"
     had=$(gh issue view "$1" --repo "$REPO" --json assignees \
-        --jq 'if any(.assignees[]; .login == "'"$me"'") then "yes" else "no" end')
-    grouped=$(labelled "$1")
-    if [ -z "$2" ] && [ "$grouped" = yes ]; then
-        refuse "$1" "it is a member of a group; take it with board.sh take $1 GROUP"
-    fi
-    if [ -n "$2" ]; then
-        [ "$grouped" = yes ] || refuse "$1" "it is in no group"
-        reason=$(member "$1" "$2")
-        [ -z "$reason" ] || refuse "$1" "$reason"
-    fi
-    assign "$1" "$me"
+        --jq 'if any(.assignees[]; .login == "'"$me"'") then "yes" else "no" end') ||
+        refuse "$1" "cannot read its assignees"
+    assign "$1" "$me" || refuse "$1" "cannot assign it to $me"
     [ "$had" = yes ] || added=yes
     who=$(first "$1") || refuse "$1" "cannot read who was assigned first"
     [ "$who" = "$me" ] || refuse "$1" "taken by $who first"
-    if [ -z "$2" ]; then
-        grouped=$(labelled "$1") || refuse "$1" "cannot read its labels"
-        [ "$grouped" = no ] || refuse "$1" "it joined a group while it was taken"
-    fi
     set_status "$1" "In progress" || refuse "$1" "cannot set it In progress"
 }
 
@@ -722,18 +404,17 @@ release()
         return 0
     fi
     me=$(gh api user --jq .login)
-    status=$2 label=
-    case $status in
+    status=Ready label=
+    case $2 in
         owner) status=Backlog label=owner ;;
-        owner-only) status=Ready label=owner-only ;;
+        owner-only) label=owner-only ;;
     esac
     if ! set_status "$1" "$status"; then
         echo "board: #$1: cannot set it $status; it is still assigned to $me" >&2
         exit 1
     fi
-    if ! gh issue edit "$1" --repo "$REPO" --remove-label grouped \
-        ${label:+--add-label "$label"} > /dev/null; then
-        echo "board: #$1: set $status, but cannot change its labels; release it again" >&2
+    if [ -n "$label" ] && ! gh issue edit "$1" --repo "$REPO" --add-label "$label" > /dev/null; then
+        echo "board: #$1: set $status, but cannot label it $label; release it again" >&2
         exit 1
     fi
     if ! unassign "$1" "$me"; then
@@ -742,146 +423,27 @@ release()
     fi
 }
 
+branch()
+{
+    name=$(gh api "repos/$REPO/issues/$1" --jq "$BRANCH") || {
+        echo "board: #$1: cannot read its milestone" >&2
+        exit 1
+    }
+    if [ -z "$name" ]; then
+        echo "board: #$1: it has no milestone, or its milestone names no branch" >&2
+        exit 1
+    fi
+    echo "$name"
+}
+
 ready()
 {
-    prev=$(item "$1")
-    shift
     for n; do
-        i=$(item "$n")
-        move "$i" "$prev"
         set_status "$n" Ready
-        prev=$i
         printf '%s ' "$n"
     done
     echo
 }
-
-order()
-{
-    prev=
-    for n; do
-        i=$(item "$n")
-        move "$i" "$prev"
-        set_status "$n" Ready
-        prev=$i
-        printf '%s ' "$n"
-    done
-    echo
-}
-
-# why N: print why N cannot join a group, or nothing when it can. An issue
-# labelled `grouped` is in another group, unless `grouping` is set, when the
-# label is this grouping's own.
-why()
-{
-    gh issue view "$1" --repo "$REPO" --json state,assignees,labels --jq '
-        if .state != "OPEN" then "closed"
-        elif (.assignees | length) > 0 then "assigned"
-        elif "'"$grouping"'" == "" and any(.labels[]; .name == "grouped") then
-            "in a group"
-        else empty end'
-}
-
-# group_rollback: undo an incomplete group, keeping its issue open when a
-# member's label could not be removed, and report any cleanup left to do.
-group_rollback()
-{
-    [ "$group_done" = no ] || return 0
-    group_ref=${group_url:-group: $title}
-    clean=yes
-    for n in $group_members; do
-        if ! gh issue edit "$n" --repo "$REPO" --remove-label grouped > /dev/null; then
-            echo "board: $group_ref: could not remove grouped from #$n; remove it by hand" >&2
-            clean=no
-        fi
-    done
-    [ -n "$group_url" ] || return 0
-    if [ "$clean" = yes ]; then
-        gh issue close "$group_url" --repo "$REPO" --reason 'not planned' > /dev/null ||
-            echo "board: $group_url: could not close the incomplete group; close it by hand" >&2
-    else
-        echo "board: $group_url: incomplete group kept open; remove its members' grouped labels and close it" >&2
-    fi
-}
-
-group()
-(
-    title=$1
-    shift
-    if [ $# -gt 8 ]; then
-        echo "board: a group has at most 8 members, not $#" >&2
-        exit 2
-    fi
-    read_board
-    p=$(in_progress) || exit 1
-    body="One worker fixes the issues below together, each in a commit of its own, as the Work section of AGENTS.md says:
-"
-    labels=group
-    grouping=
-    for n; do
-        reason=$(why "$n")
-        if [ -n "$reason" ]; then
-            echo "board: #$n is $reason, so it cannot join a group" >&2
-            exit 1
-        fi
-        case $(printf '%s\n' "$board" | awk -F '\t' -v n="$n" -v p="$p" "$LIB"'
-                $3 == n && has($5, "owner-only") { print "owner-only"; exit }
-                $3 == n && has($5, "ci") { print "ci"; exit }
-                $3 == n && in_phase($3, $8, $9, p) { print "member" }') in
-            ci) labels=group,ci ;;
-            member) ;;
-            owner-only)
-                echo "board: #$n is labelled owner-only, so it cannot join a group" >&2
-                exit 1 ;;
-            *)
-                echo "board: #$n is neither labelled ci nor a member of the phase In progress, so it cannot join a group" >&2
-                exit 1 ;;
-        esac
-        body="$body
-* #$n"
-    done
-    [ -z "$p" ] || body="$body
-
-Part of #$p."
-    group_url=
-    group_members=
-    group_done=no
-    group_status=0
-    trap 'group_status=$?; trap - EXIT; group_rollback; exit "$group_status"' EXIT
-    trap 'exit 129' HUP
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
-    for n; do
-        group_members="$group_members $n"
-        if ! gh issue edit "$n" --repo "$REPO" --add-label grouped > /dev/null; then
-            echo "board: #$n: cannot label it grouped" >&2
-            exit 1
-        fi
-    done
-    grouping=yes
-    for n; do
-        if ! reason=$(why "$n") || [ -n "$reason" ]; then
-            echo "board: #$n is ${reason:-unreadable} now, so no group was made" >&2
-            exit 1
-        fi
-    done
-    if ! group_url=$(gh issue create --repo "$REPO" --title "$title" --label "$labels" --body "$body"); then
-        echo "board: cannot create the group" >&2
-        exit 1
-    fi
-    if ! added=$(gh project item-add "$BOARD" --owner "$OWNER" --url "$group_url" 2>&1 > /dev/null) &&
-        [ -z "$(item "${group_url##*/}")" ]; then
-        printf '%s\n' "$added" >&2
-        echo "board: $group_url: cannot add it to the board" >&2
-        exit 1
-    fi
-    set_status "${group_url##*/}" Ready
-    group_done=yes
-    if [ -n "$p" ]; then
-        sub_issue "${group_url##*/}" "$p" > /dev/null 2>&1 || :
-    fi
-    echo "${group_url##*/}"
-)
 
 done_()
 {
@@ -895,182 +457,16 @@ done_()
     echo
 }
 
-current()
-{
-    read_board
-    in_progress || exit 1
-}
-
-members()
-{
-    list=$(issues "$2") || {
-        echo "board: cannot read the issues" >&2
-        exit 1
-    }
-    printf '%s\n' "$list" | awk -F '\t' -v p="$1" "$LIB"'
-        in_phase($1, $5, $6, p) {
-            print $1 "\t" $2 "\t" $3 "\t" $4 "\t" $7 }' | sort -n
-}
-
-# sub_issue N P: make N a sub-issue of P; fail, with GitHub's answer on
-# stderr, when GitHub refuses.
-sub_issue()
-{
-    id=$(gh api "repos/$REPO/issues/$1" --jq .id) || return 1
-    gh api -X POST "repos/$REPO/issues/$2/sub_issues" -F sub_issue_id="$id" > /dev/null
-}
-
-# attach N P: make N a sub-issue of P or, when GitHub refuses, add the line
-# `Part of #P.` to N's body; say which on stderr when it is the line. Fail
-# when neither is done.
-attach()
-{
-    if refused=$(sub_issue "$1" "$2" 2>&1); then
-        return 0
-    fi
-    if text=$(gh issue view "$1" --repo "$REPO" --json body --jq .body) &&
-        gh issue edit "$1" --repo "$REPO" --body "${text:+$text
-
-}Part of #$2." > /dev/null; then
-        echo "board: #$1: not linked to #$2: its body says Part of #$2" >&2
-        return 0
-    fi
-    printf '%s\n' "$refused" >&2
-    echo "board: #$1: cannot link it to #$2 or add Part of #$2 to its body" >&2
-    return 1
-}
-
-# named N P: succeed when N's body says `Part of #P`, which the board read
-# into `board` does not give for a closed issue.
-named()
-{
-    gh issue view "$1" --repo "$REPO" --json state,body --jq '
-        select(.state != "OPEN") | .body' 2> /dev/null |
-        grep -Eq "Part of #$2([^0-9]|\$)"
-}
-
-link()
-{
-    read_board
-    p=$(in_progress) || exit 1
-    if [ -z "$p" ]; then
-        echo "board: no phase is In progress" >&2
-        exit 1
-    fi
-    status=0
-    for n; do
-        linked=$(printf '%s\n' "$board" | awk -F '\t' -v n="$n" -v p="$p" "$LIB"'
-            $3 == n && in_phase($3, $8, $9, p) { print "yes" }')
-        [ -n "$linked" ] || named "$n" "$p" || attach "$n" "$p" || status=1
-    done
-    return "$status"
-}
-
-# master: print master's head, 40 hex digits; fail when it cannot be read.
-master()
-{
-    sha=$(gh api "repos/$REPO/commits/master" --jq .sha) || return 1
-    printf '%s\n' "$sha" | grep -Ex '[0-9a-f]{40}'
-}
-
-# comments N: print the bodies of N's comments, oldest first.
-comments()
-{
-    gh api --paginate "repos/$REPO/issues/$1/comments" --jq '.[].body'
-}
-
-start()
-{
-    read_board
-    p=$(in_progress) || exit 1
-    started=$p
-    if [ -n "$p" ]; then
-        if [ -n "$1" ] && [ "$1" != "$p" ]; then
-            echo "board: #$p is In progress, so #$1 cannot start" >&2
-            exit 1
-        fi
-    else
-        p=$(printf '%s\n' "$board" | awk -F '\t' -v p="$1" "$LIB"'
-            $4 != "OPEN" || !has($5, "phase") { next }
-            p == "" && $2 == "Ready" || $3 == p { print $3; exit }')
-        if [ -z "$p" ]; then
-            [ -z "$1" ] || {
-                echo "board: #$1 is not an open phase on the board" >&2
-                exit 1
-            }
-            return 0
-        fi
-    fi
-    said=$(comments "$p") || {
-        echo "board: #$p: cannot read its comments" >&2
-        exit 1
-    }
-    if ! printf '%s\n' "$said" | grep -Eqx 'phase: started at [0-9a-f]{40}'; then
-        head=$(master) || {
-            echo "board: cannot read master's head" >&2
-            exit 1
-        }
-        gh issue comment "$p" --repo "$REPO" --body "This phase starts at master's head. The line below records that commit for \`board.sh phase\`, and the phase's first review reads the commits after it.
-
-phase: started at $head" > /dev/null || {
-            echo "board: #$p: cannot comment on it" >&2
-            exit 1
-        }
-    fi
-    if [ -z "$started" ]; then
-        set_status "$p" "In progress" || {
-            echo "board: #$p: cannot set it In progress" >&2
-            exit 1
-        }
-    fi
-    orphans=$(printf '%s\n' "$board" | awk -F '\t' "$LIB"'
-        $4 == "OPEN" && has($5, "triaged") && $8 == "" && $9 == "" &&
-        !has($5, "phase") && !has($5, "group") && !has($5, "grouped") &&
-        !has($5, "ci") && !has($5, "owner") && !has($5, "intermittent") &&
-        !has($5, "day-report") && !has($5, "incident") && !has($5, "hold") {
-            print $3 }')
-    status=0 attached=
-    for n in $orphans; do
-        if attach "$n" "$p"; then
-            attached="$attached,$n"
-        else
-            status=1
-        fi
-    done
-    promote=$(printf '%s\n' "$board" | awk -F '\t' -v p="$p" -v o="$attached" "$LIB"'
-        $4 != "OPEN" || $3 == p { next }
-        !in_phase($3, $8, $9, p) && !has(o, $3) { next }
-        $2 != "" && $2 != "Backlog" { next }
-        !has($5, "owner") && !has($5, "grouped") && !has($5, "phase") { print $3 }')
-    for n in $promote; do
-        set_status "$n" Ready || {
-            echo "board: #$n: cannot set it Ready" >&2
-            status=1
-        }
-    done
-    [ "$status" -eq 0 ] || exit 1
-    echo "$p"
-}
-
 archive()
 {
     read_board all
-    cards=$(printf '%s\n' "$board" | awk -F '\t' -v p="$1" "$LIB"'
-        { line[NR] = $0 }
-        $4 == "OPEN" && has($5, "phase") && $3 != p { open[$3] = 1 }
+    cards=$(printf '%s\n' "$board" | awk -F '\t' -v m="$1" '
+        { id[NR] = $1; n[NR] = $3; closed[NR] = $4 == "CLOSED"; parent[NR] = $8
+          if ($9 == m) task[$3] = 1 }
         END {
-            for (i = 1; i <= NR; i++) {
-                split(line[i], f, "\t")
-                if (f[4] != "CLOSED" || f[8] in open)
-                    continue
-                kept = 0
-                m = split(f[9], q, ",")
-                for (j = 1; j <= m; j++)
-                    if (q[j] in open)
-                        kept = 1
-                if (!kept)
-                    print f[1] " " f[3]
-            }
+            for (i = 1; i <= NR; i++)
+                if (closed[i] && (n[i] in task || parent[i] in task))
+                    print id[i] " " n[i]
         }')
     status=0
     printf '%s\n' "$cards" | {
@@ -1088,99 +484,47 @@ archive()
     }
 }
 
-# unreadable WHAT: end the report of `phase` with the line that says that
-# WHAT cannot be read, and exit 1.
-unreadable()
+milestones()
 {
-    echo "board: phase: cannot read $1" >&2
-    echo "ready: no: unreadable: $1"
-    exit 1
-}
-
-phase()
-{
-    board=$(items) || unreadable board
-    p=$(in_progress) || unreadable 'the phase In progress'
-    base='' review=''
-    if [ -n "$p" ]; then
-        echo "phase: #$p $(printf '%s\n' "$board" |
-            awk -F '\t' -v p="$p" '$3 == p { print $10; exit }')"
-        said=$(comments "$p") || unreadable "the comments on #$p"
-        base=$(printf '%s\n' "$said" |
-            sed -n 's/^phase: started at \([0-9a-f]\{40\}\)$/\1/p' | head -n 1)
-        review=$(printf '%s\n' "$said" |
-            sed -n 's/^review: \([0-9a-f]\{40\}\.\.[0-9a-f]\{40\}\) complete$/\1/p' |
-            tail -n 1)
-    else
-        echo 'phase: none'
-    fi
-    echo "base: ${base:-unknown}"
-    head=$(master) || unreadable "master's head"
-    echo "head: $head"
-    list=$(issues) || unreadable issues
-    lists=$(printf '%s\n' "$list" | sort -n | awk -F '\t' -v p="$p" "$LIB"'
-        { member = in_phase($1, $5, $6, p) }
-        member && $2 == "OPEN" { open++ }
-        member && $2 == "CLOSED" { closed++ }
-        $1 == p && has($4, "review-failed") { failed = "yes" }
-        $2 != "OPEN" { next }
-        (member || has($4, "ci")) && !has($4, "intermittent") { work = work " #" $1 }
-        (member || has($4, "ci")) && has($4, "intermittent") { flaky = flaky " #" $1 }
-        has($4, "hold") { hold = hold " #" $1 }
+    open=$(gh api --paginate "repos/$REPO/milestones?state=open&per_page=100" \
+        --jq '.[] | [(.number | tostring), ({milestone: .} | '"$BRANCH"'),
+            (.title | gsub("\t"; " "))] | join("\t")') || {
+        echo "board: cannot read the milestones" >&2
+        exit 1
+    }
+    read_board all
+    {
+        printf '%s\n' "$open" | sort -n | awk '{ print "M\t" $0 }'
+        printf '%s\n' "$board"
+    } | awk -F '\t' '
+        $1 == "M" { if (NF >= 4) { m[++ms] = $2; branch[$2] = $3; title[$2] = $4 }; next }
+        NF < 12 || $8 != "" || !($9 in title) { next }
+        $4 == "OPEN" { open[$9]++ }
+        $4 == "CLOSED" { closed[$9]++ }
+        $4 == "OPEN" && $2 == "In progress" {
+            busy[$9] = busy[$9] "  #" $3 " In progress: " ($6 == "" ? "nobody" : $6) ": " $12 "\n" }
         END {
-            printf "members: %d open, %d closed\n", open, closed
-            printf "work:%s\n", (work == "" ? " none" : work)
-            printf "intermittent:%s\n", (flaky == "" ? " none" : flaky)
-            printf "hold:%s\n", (hold == "" ? " none" : hold)
-            printf "failed: %s\n", (failed == "" ? "no" : failed)
-        }')
-    printf '%s\n' "$lists" | grep -v '^failed: '
-    echo "review: ${review:-none}"
-    core=$(gh api "repos/$REPO/commits/$head/status" --jq '
-        [.statuses[] | select(.context == "ci/core") | .state][0] // "none"') ||
-        unreadable "the state of ci/core"
-    if [ "$core" = none ]; then
-        workflow=$(gh api "repos/$REPO/actions/workflows/ci.yml" --jq .state) ||
-            unreadable "the state of the core workflow"
-        case $workflow in disabled*) core=off ;; esac
-    fi
-    echo "core: $core"
-    work=$(printf '%s\n' "$lists" | sed -n 's/^work: //p')
-    hold=$(printf '%s\n' "$lists" | sed -n 's/^hold: //p')
-    if [ -z "$p" ]; then
-        echo 'ready: no: no phase is In progress'
-    elif [ "$work" != none ]; then
-        echo "ready: no: work: $work"
-    elif [ "$hold" != none ]; then
-        echo "ready: no: hold $hold"
-    elif printf '%s\n' "$lists" | grep -qx 'failed: yes'; then
-        echo 'ready: no: review failed'
-    elif [ -z "$review" ] || [ "${review#*..}" != "$head" ]; then
-        echo 'ready: no: review'
-    elif [ "$core" != success ] && [ "$core" != off ]; then
-        echo "ready: no: core $core"
-    else
-        echo "ready: yes $head"
-    fi
+            for (i = 1; i <= ms; i++) {
+                k = m[i]
+                printf "milestone %s: %s\n  branch: %s\n  tasks: %d open, %d closed\n%s",
+                    k, title[k], (branch[k] == "" ? "none" : branch[k]),
+                    open[k], closed[k], busy[k]
+            }
+        }'
 }
 
 case "$1" in
     next) next ;;
-    take) [ -n "$2" ] || exit 2; board_ids=$(ids); take "$2" "$3" ;;
-    mine) [ -n "$2" ] || exit 2; board_ids=$(ids); mine "$2" ;;
-    release) [ -n "$2" ] || exit 2; board_ids=$(ids); release "$2" "${3:-Ready}" ;;
-    ready) [ -n "$3" ] || exit 2; board_ids=$(ids); shift; ready "$@" ;;
-    order) [ -n "$2" ] || exit 2; board_ids=$(ids); shift; order "$@" ;;
-    group) [ -n "$3" ] || exit 2; board_ids=$(ids); shift; group "$@" ;;
-    done) board_ids=$(ids); done_ ;;
-    current) current ;;
-    members)
+    take) [ -n "$2" ] || exit 2; board_ids=$(ids); take "$2" ;;
+    mine) [ -n "$2" ] || exit 2; mine "$2" ;;
+    release)
         [ -n "$2" ] || exit 2
-        [ -z "$3" ] || [ "$3" = open ] || exit 2
-        members "$2" "$3" ;;
-    link) [ -n "$2" ] || exit 2; shift; link "$@" ;;
-    start) board_ids=$(ids); start "$2" ;;
+        case $3 in ''|owner|owner-only) ;; *) exit 2 ;; esac
+        board_ids=$(ids); release "$2" "$3" ;;
+    branch) [ -n "$2" ] || exit 2; branch "$2" ;;
+    ready) [ -n "$2" ] || exit 2; board_ids=$(ids); shift; ready "$@" ;;
+    done) board_ids=$(ids); done_ ;;
     archive) [ -n "$2" ] || exit 2; archive "$2" ;;
-    phase) phase ;;
+    milestones) milestones ;;
     *) sed -n 's/^# Usage: /usage: /p; s/^#        /       /p' "$0" >&2; exit 2 ;;
 esac
