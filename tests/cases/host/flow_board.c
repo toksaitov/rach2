@@ -1052,19 +1052,21 @@ static int milestones_rows(struct fixture *f)
         return 0;
     call(f, "milestones", NULL, NULL);
     ok = fx_check(f,
-                  !f->status && !strcmp(f->out, "milestone 1: First\n"
-                                                "  branch: milestone/01-a\n"
-                                                "  tasks: 9 open, 1 closed\n"
-                                                "  #49 In progress: alpha: In progress\n"
-                                                "milestone 2: Second\n"
-                                                "  branch: milestone/02-b\n"
-                                                "  tasks: 2 open, 1 closed\n"
-                                                "milestone 3: Third\n"
-                                                "  branch: none\n"
-                                                "  tasks: 1 open, 0 closed\n"
-                                                "milestone 5: Fifth\n"
-                                                "  branch: none\n"
-                                                "  tasks: 0 open, 0 closed\n"),
+                  !f->status &&
+                      !strcmp(f->out, "milestone 1: First\n"
+                                      "  branch: milestone/01-a\n"
+                                      "  tasks: 9 open, 1 closed\n"
+                                      "  #49 In progress: alpha: In progress\n"
+                                      "milestone 2: Second\n"
+                                      "  branch: milestone/02-b\n"
+                                      "  tasks: 2 open, 1 closed\n"
+                                      "milestone 3: Third\n"
+                                      "  branch: none\n"
+                                      "  tasks: 1 open, 0 closed\n"
+                                      "milestone 5: Fifth\n"
+                                      "  branch: none\n"
+                                      "  tasks: 0 open, 0 closed\n") &&
+                      !calls("states: [OPEN, CLOSED]"),
                   "milestones") &&
          ok;
     fx_env("BOARD_TEST_FAIL", "milestones");

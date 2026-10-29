@@ -93,6 +93,9 @@
 # `milestone M: TITLE`, the line `  branch: NAME`, or `  branch: none`, the
 # line `  tasks: O open, C closed`, and a line `  #N In progress: LOGINS:
 # TITLE` for each task In progress, LOGINS being its assignees or `nobody`.
+# The closed tasks it counts are those on the board, which keeps them until
+# the release archives them, so that it reads no closed issue that the board
+# does not hold.
 #
 # The repository and the board's owner and number are below. The board's
 # owner is the owner's account, the one that may take an issue labelled
@@ -514,7 +517,7 @@ milestones()
         echo "board: cannot read the milestones" >&2
         exit 1
     }
-    read_board all
+    read_board
     {
         printf '%s\n' "$open" | sort -n | awk '{ print "M\t" $0 }'
         printf '%s\n' "$board"
