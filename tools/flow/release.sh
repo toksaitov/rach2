@@ -61,7 +61,9 @@
 #   and image, the GNU root, compressed, and the native cases' payload are
 #   fetched with their SHA-256 into a worktree of SHA, STATE/wt. The build
 #   starts while the Mac's run goes on, once the runs on the testing host
-#   have passed.
+#   have passed and the Lenovo has answered as itself and, before the
+#   release has touched it, as running its system with no trial armed, so
+#   that a Lenovo that does not answer holds up no machine's run.
 # * recovery: the Lenovo boots its recovery system from its recovery
 #   partition; the recovery kernel and image on that partition are replaced
 #   when they differ from the build's, keeping the partition's recovery key
@@ -810,6 +812,22 @@ check()
         refuse "$sha does not contain origin/master"
 }
 
+# preflight: refuse a machine that answers as another machine, wait for one
+# that does not answer, and, before the release has touched it, refuse one
+# that does not run its system or has a trial armed.
+preflight()
+{
+    where || fail preflight "the machine at $address is not the Lenovo"
+    [ -n "$now" ] || later "the machine at $address does not answer"
+    grep -q '^touched ' "$state/record" && return 0
+    case $now in
+        "system candidate"|"system fallback") ;;
+        *) fail preflight "the machine runs $now before the release has touched it" ;;
+    esac
+    lenovo 'bootctl status' | grep -Eq '^bootctl: next_entry: (empty|absent)' ||
+        fail preflight "a trial is armed on the machine"
+}
+
 # close: move master to SHA, close milestone M and archive its cards.
 close()
 {
@@ -910,25 +928,15 @@ main()
     branch=$(sed -n 's/^branch //p' "$state/record")
     chosen=$(sed -n 's/^chosen //p' "$state/record")
 
-    if ! done_ accept; then
-        where || fail preflight "the machine at $address is not the Lenovo"
-        [ -n "$now" ] || later "the machine at $address does not answer"
-        if ! grep -q '^touched ' "$state/record"; then
-            case $now in
-                "system candidate"|"system fallback") ;;
-                *) fail preflight "the machine runs $now before the release has touched it" ;;
-            esac
-            lenovo 'bootctl status' | grep -Eq '^bootctl: next_entry: (empty|absent)' ||
-                fail preflight "a trial is armed on the machine"
-        fi
-    fi
-
     if has mac && ! done_ mac && ! failed_ mac && ! grep -q '^mac started ' "$state/record"; then
         mac_start
     fi
     done_ full || failed_ full || full
     if has windows && ! done_ windows && ! failed_ windows; then
         windows
+    fi
+    if ! grep -q '^failure ' "$state/record" && ! done_ accept; then
+        preflight
     fi
     if ! grep -q '^failure ' "$state/record" && ! done_ build; then
         ssh -o BatchMode=yes -o ConnectTimeout=10 testing true 2> /dev/null ||

@@ -177,6 +177,8 @@ static int ssh_mock(int argc, char **argv)
     if (!strncmp(command, "cat /sys/class/net/eth0/address;",
                  strlen("cat /sys/class/net/eth0/address;"))) {
         append(ev("RELEASE_TEST_CALLS"), "machine read\n");
+        if (!strcmp(ev("RELEASE_TEST_LENOVO"), "off"))
+            return 255;
         puts("28:d2:44:7e:e0:af\nroot=/dev/disk0p3 rach2.slot=candidate\n5000.00 9000.00\nidentity "
              "0 nvme S6P2NX0T381638Z");
         return 0;
@@ -344,7 +346,7 @@ struct release {
 };
 struct release_row {
     const char *record, *sha, *writes, *runs, *git, *accept, *machines, *windows, *native,
-        *failures, *milestone, *ancestor, *master, *push;
+        *failures, *milestone, *ancestor, *master, *push, *lenovo;
     int rerun;
 };
 
@@ -420,6 +422,7 @@ static void run(struct release *r, const struct release_row *spec)
     fx_env("RELEASE_TEST_ANCESTOR", spec->ancestor ? spec->ancestor : "");
     fx_env("RELEASE_TEST_MASTER", spec->master ? spec->master : "");
     fx_env("RELEASE_TEST_PUSH", spec->push ? spec->push : "");
+    fx_env("RELEASE_TEST_LENOVO", spec->lenovo ? spec->lenovo : "");
     if (spec->native) {
         flow_put(f, "state/wt/build/tools/dev/native-hostpeer", "");
         fx_copy(f->self, flow_path(f, "state/wt/build/tools/dev/native-deploy"));
@@ -1019,6 +1022,22 @@ static int windows_rows(struct release *r)
          ok;
     return ok;
 }
+/** The Lenovo's preflight comes after the runs on the other machines, and
+ * before the build. */
+static int lenovo_off_row(struct release *r)
+{
+    struct fixture *f = r->f;
+    run(r, &(struct release_row){.record = r->head,
+                                 .git = "yes",
+                                 .machines = WINDOWS,
+                                 .windows = "status 0",
+                                 .lenovo = "off"});
+    return check(r,
+                 f->status == 75 && count(record(r), "^windows done ") == 1 &&
+                     before(r, "\nwindows cd D:/w || ", "\nmachine read\n") &&
+                     !called(r, "^testing ") && strstr(f->out, "does not answer"),
+                 "a Lenovo that does not answer holds up the build, not the Windows run");
+}
 static int lenovo_rows(struct release *r)
 {
     struct fixture *f = r->f;
@@ -1069,6 +1088,7 @@ int flow_release(struct fixture *f)
     ok = build_rows(&r) && ok;
     ok = acceptance_rows(&r) && ok;
     ok = windows_rows(&r) && ok;
+    ok = lenovo_off_row(&r) && ok;
     ok = lenovo_rows(&r) && ok;
     ok = mac_rows(&r) && ok;
     fx_env("FLOW_RELEASE", NULL);
