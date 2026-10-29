@@ -478,6 +478,7 @@ static int tidy_files(struct fixture *f, const char *base)
     }
     snprintf(target, sizeof(target), "%s/outside", f->work);
     G("worktree", "add", "-q", "-b", "outside", target, base);
+    G("worktree", "add", "-q", "-b", "worktree-helper", "build/worktrees/helper", base);
     flow_put(f, "clone/.claude/worktrees/clean/build/out", "");
     flow_put(f, "clone/.claude/worktrees/dirty/untracked", "");
     flow_put(f, "clone/.claude/worktrees/ignored/game.wad", "");
@@ -488,16 +489,6 @@ static int tidy_files(struct fixture *f, const char *base)
     G("commit", "-q", "-m", "Add u");
     snprintf(cwd, sizeof(cwd), "%s/clone", f->work);
     G("switch", "-q", "7-current");
-    flow_put(f, "clone/build/vendor/gnu/toolchain.stamp", "");
-    fx_mkdir(flow_path(f, "clone/build/vendor/gnu/cross/bin"));
-    flow_put(f, "clone/build/vendor/gnu/work/ro/f", "");
-    chmod(flow_path(f, "clone/build/vendor/gnu/work/ro"), 0500);
-    fx_mkdir(flow_path(f, "clone/build/x86_64/vendor/gnu"));
-    fx_mkdir(flow_path(f, "store/entries/k/tree/cross"));
-    symlink(flow_path(f, "store/entries/k/tree/cross"),
-            flow_path(f, "clone/build/x86_64/vendor/gnu/cross"));
-    flow_put(f, "stateA/issue", "5\n");
-    flow_put(f, "stateA/parked", "6\n");
     flow_put(f, "stateA/s-old.jsonl", "");
     flow_put(f, "stateA/s-mid.jsonl", "");
     flow_put(f, "stateA/c-old.jsonl", "");
@@ -608,32 +599,42 @@ static int tidy_setup(struct fixture *f)
     file_at(cwd, "k", "k2\n");
     G("commit", "-q", "-a", "-m", "Edit k");
     G("push", "-q", "origin", "master");
+    G("switch", "-q", "-c", "13-milestone", base);
+    file_at(cwd, "m", "m\n");
+    G("add", "m");
+    G("commit", "-q", "-m", "Add m");
+    G("push", "-q", "origin", "13-milestone:milestone/01-a");
+    G("switch", "-q", "-c", "14-other", base);
+    file_at(cwd, "o", "o\n");
+    G("add", "o");
+    G("commit", "-q", "-m", "Add o");
+    G("push", "-q", "origin", "14-other:feature/x");
+    G("switch", "-q", "master");
     G("fetch", "-q", "origin");
     return tidy_files(f, base);
 }
 
-static int lib_command(struct fixture *f, const char *cwd, const char *function, const char *state,
-                       const char *store)
+static int lib_command(struct fixture *f, const char *cwd, const char *function, const char *state)
 {
     char command[14000];
     const char *a[] = {"/bin/sh", "-c", command, NULL};
-    snprintf(command, sizeof(command), "state='%s'; . '%s'; RACH2_STORE='%s' %s",
-             flow_path(f, state), flow_source(f, "tools/flow/lib.sh"), store, function);
+    snprintf(command, sizeof(command), "state='%s'; . '%s'; %s", flow_path(f, state),
+             flow_source(f, "tools/flow/lib.sh"), function);
     return !fx_run(f, a, cwd, NULL, NULL);
 }
 static int tidy_checks(struct fixture *f)
 {
     const char *keep_branches[] = {
-        "3-subject",        "4-unpushed",      "5-held",          "6-parked", "7-current",
-        "8-merge",          "12-delete",       "9-space",         "10-place", "worktree-dirty",
-        "worktree-ignored", "worktree-locked", "worktree-unique", "outside"};
-    const char *gone_branches[] = {"1-merged", "2-rebased", "11-pure", "worktree-clean"};
+        "2-rebased",      "3-subject",        "4-unpushed",      "7-current",       "8-merge",
+        "12-delete",      "9-space",          "10-place",        "11-pure",         "14-other",
+        "worktree-dirty", "worktree-ignored", "worktree-locked", "worktree-unique", "outside"};
+    const char *gone_branches[] = {"1-merged",     "5-held",         "6-parked",
+                                   "13-milestone", "worktree-clean", "worktree-helper"};
     const char *kept[] = {"clone/.claude/worktrees/dirty/untracked",
                           "clone/.claude/worktrees/ignored/game.wad",
                           "clone/.claude/worktrees/locked",
                           "clone/.claude/worktrees/unique/u",
                           "outside",
-                          "clone/build/x86_64/vendor/gnu/cross",
                           "stateA/s-mid.jsonl",
                           "stateA/c-old.jsonl",
                           "stateA/loop.log",
@@ -650,34 +651,30 @@ static int tidy_checks(struct fixture *f)
                           "tmp/rach2-busy.Bu5yBu",
                           "tmp/rach2-prog.Pr0gPr/sleep"};
     const char *gone[] = {
-        "clone/.claude/worktrees/clean", "clone/build/vendor/gnu", "stateA/s-old.jsonl",
-        "stateB/s-big1.jsonl",           "stateB/s-big2.jsonl",    "tmp/rach2-old.Ab3dEf",
+        "clone/.claude/worktrees/clean", "clone/build/worktrees/helper", "stateA/s-old.jsonl",
+        "stateB/s-big1.jsonl",           "stateB/s-big2.jsonl",          "tmp/rach2-old.Ab3dEf",
         "tmp/rach2-py.ab_12cde",         "tmp/rach2-file.Fi1eFi"};
     char cwd[4096], branch[200];
     unsigned i;
     int ok = 1;
     snprintf(cwd, sizeof(cwd), "%s/clone", f->work);
-    for (i = 0; i < 14; i++) {
+    for (i = 0; i < 15; i++) {
         snprintf(branch, sizeof(branch), "refs/heads/%s", keep_branches[i]);
         ok =
             fx_check(f, g(f, cwd, "rev-parse", "-q", "--verify", branch, NULL), keep_branches[i]) &&
             ok;
     }
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < 6; i++) {
         snprintf(branch, sizeof(branch), "refs/heads/%s", gone_branches[i]);
         ok = fx_check(f, !g(f, cwd, "rev-parse", "-q", "--verify", branch, NULL),
                       gone_branches[i]) &&
              ok;
     }
-    for (i = 0; i < 21; i++)
+    for (i = 0; i < 20; i++)
         ok = fx_check(f, exists(f, kept[i]), kept[i]) && ok;
     for (i = 0; i < 8; i++)
         ok = fx_check(f, !exists(f, gone[i]), gone[i]) && ok;
-    return fx_check(f,
-                    is_link(f, "clone/build/x86_64/vendor/gnu/cross") &&
-                        is_link(f, "tmp/rach2-link.Li9kLi"),
-                    "store and scratch links kept as links") &&
-           ok;
+    return fx_check(f, is_link(f, "tmp/rach2-link.Li9kLi"), "scratch link kept as a link") && ok;
 }
 static int tidy_stems(struct fixture *f)
 {
@@ -692,7 +689,7 @@ static int tidy_stems(struct fixture *f)
         !g(f, cwd, "init", "-q", NULL) || !g(f, cwd, "add", "tools", "tests", NULL) ||
         !g(f, cwd, "commit", "-q", "-m", "Prepared source fixtures", NULL))
         return 0;
-    if (!lib_command(f, cwd, "stems HEAD", "stateA", ""))
+    if (!lib_command(f, cwd, "stems HEAD", "stateA"))
         return 0;
     stems = f->out;
     ok = fx_check(f,
@@ -735,13 +732,9 @@ int flow_tidy(struct fixture *f)
             return 0;
     }
     snprintf(cwd, sizeof(cwd), "%s/clone", f->work);
-    if (!lib_command(f, cwd, "tidy", "stateA", ""))
-        return 0;
-    ok =
-        fx_check(f, exists(f, "clone/build/vendor/gnu/cross"), "GNU copy kept without store") && ok;
-    if (!lib_command(f, cwd, "tidy", "stateA", flow_path(f, "store")) ||
-        !lib_command(f, f->work, "prune_logs 's-*'", "stateA", "") ||
-        !lib_command(f, f->work, "prune_logs 's-*'", "stateB", ""))
+    if (!lib_command(f, cwd, "tidy", "stateA") ||
+        !lib_command(f, f->work, "prune_logs 's-*'", "stateA") ||
+        !lib_command(f, f->work, "prune_logs 's-*'", "stateB"))
         return 0;
     {
         const char *a[] = {"/usr/bin/perl",

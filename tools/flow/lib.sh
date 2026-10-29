@@ -64,12 +64,15 @@ update()
     return "$restart"
 }
 
-# refresh: bring a clone with nothing uncommitted or unpushed to
-# `origin/master`; leave a clone with work in it as it is.
+# refresh: fetch, and bring a clone with nothing uncommitted and no commit
+# that origin lacks to `origin/master`, so that a finished task's branch is
+# checked out nowhere and `tidy` can delete it; leave a clone with work in it
+# as it is.
 refresh()
 {
     git fetch -q origin || return 1
-    if [ -z "$(git status --porcelain)" ] && [ -z "$(git rev-list origin/master..HEAD)" ]; then
+    if [ -z "$(git status --porcelain)" ] &&
+        [ -z "$(git rev-list -n 1 HEAD --not --remotes=origin --)" ]; then
         git switch -q master 2> /dev/null && git merge -q --ff-only origin/master
     fi
     return 0
@@ -132,57 +135,39 @@ wait_session()
     rm -f "$state/session"
 }
 
-# merged REF: succeed when `origin/master` has everything REF has: a merge of
-# REF into it, which `git merge-tree` makes without touching a checkout, would
-# leave its tree as it is. That holds for a branch master contains and for one
-# rebased or cherry-picked before its push, and fails for any change master
-# lacks, whitespace and a change in another place included, and for a merge
-# that conflicts, even one whose tree is master's, as when REF deletes a file
-# that master changed. A commit message proves nothing.
-merged()
+# landed REF: succeed when `origin/master` or a branch `origin/milestone/*`
+# has the commit REF, as a milestone's branch has a task's once its worker has
+# pushed it there by fast-forward. A commit message proves nothing.
+landed()
 {
-    master=$(git rev-parse -q --verify 'origin/master^{tree}') || return 1
-    merge=$(git merge-tree --write-tree --no-messages origin/master "$1" 2> /dev/null) || return 1
-    [ "$(printf '%s\n' "$merge" | sed -n 1p)" = "$master" ]
+    for r in $(git for-each-ref --format='%(refname)' refs/remotes/origin/master \
+        refs/remotes/origin/milestone/); do
+        git merge-base --is-ancestor "$1" "$r" 2> /dev/null && return 0
+    done
+    return 1
 }
 
-# tidy: remove what finished work left in the clone. A helper's worktree under
-# .claude/worktrees goes when its HEAD is merged and `git worktree remove` takes
-# it without force, which it refuses for a worktree with changes, untracked
-# files or a lock, as Claude Code keeps on a helper's worktree while the helper
-# runs, and only when `disposable` finds nothing ignored in it but build output,
-# which goes with it. A branch goes when it is merged, unless it is master, the
-# branch checked out, one checked out in a worktree, which git refuses to
-# delete, or one named for the issue in STATE/issue or STATE/parked. Where
-# the host has the store of step outputs, RACH2_STORE or else
-# /var/cache/rach2-store (tools/etude/Readme.md, The step store), a GNU layer
-# built in the clone goes, one whose cross/ is a directory and not a link
-# into the store, so that its next use takes the layer from the store. Each
-# removal is logged.
+# tidy: remove what finished work left in the clone. A worktree under the
+# clone's .claude/worktrees or build/worktrees goes when its HEAD has landed
+# and `git worktree remove` takes it without force, which it refuses for a
+# worktree with changes, untracked files or a lock, as Claude Code keeps on a
+# helper's worktree while the helper runs, and only when `disposable` finds
+# nothing ignored in it but build output, which goes with it. A branch goes
+# when it has landed, unless it is master or a branch checked out here or in
+# a worktree, which git refuses to delete. Each removal is logged.
 tidy()
 {
-    keep=$(cat "$state/issue" "$state/parked" 2> /dev/null)
     top=$(git rev-parse --show-toplevel) || return 1
     git worktree list --porcelain | sed -n 's/^worktree //p' | while read -r w; do
-        case $w in "$top"/.claude/worktrees/*) ;; *) continue ;; esac
-        head=$(git -C "$w" rev-parse -q --verify HEAD) && merged "$head" && disposable "$w" &&
+        case $w in "$top"/.claude/worktrees/*|"$top"/build/worktrees/*) ;; *) continue ;; esac
+        head=$(git -C "$w" rev-parse -q --verify HEAD) && landed "$head" && disposable "$w" &&
             git worktree remove "$w" 2> /dev/null && log "tidy: removed the worktree $w"
     done
     git worktree prune
-    current=$(git symbolic-ref -q --short HEAD)
     git for-each-ref --format='%(refname:short)' refs/heads | while read -r b; do
-        case $b in master|"$current") continue ;; esac
-        for n in $keep; do
-            case $b in "$n"-*) continue 2 ;; esac
-        done
-        merged "refs/heads/$b" && git branch -q -D "$b" 2> /dev/null &&
+        [ "$b" != master ] || continue
+        landed "refs/heads/$b" && git branch -q -D "$b" 2> /dev/null &&
             log "tidy: deleted the branch $b"
-    done
-    store=${RACH2_STORE-/var/cache/rach2-store}
-    [ -n "$store" ] && [ -d "$store" ] || return 0
-    for g in "$top"/build/vendor/gnu "$top"/build/*/vendor/gnu; do
-        [ -d "$g/cross" ] && [ ! -L "$g/cross" ] || continue
-        chmod -R u+w "$g" && rm -rf "$g" && log "tidy: removed the GNU layer built in $g"
     done
 }
 
@@ -210,7 +195,7 @@ stems()
         sed -E "s/^[/\"']//; s/\.(XXXXXX|[\"'])\$//" | sort -u
 }
 
-# The home directories on the testing host whose leftovers the manager's loop
+# The home directories on the testing host whose leftovers `leftovers`
 # removes: the owner's account's, which has the copies that testing.sh makes,
 # and those of the five accounts with worker loops.
 HOMES='/home/testing /home/toksaitov-a /home/toksaitov-d /home/toksaitov-m /home/toksaitov-s /home/toksaitov-v'
