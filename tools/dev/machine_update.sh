@@ -15,9 +15,12 @@
 # trial armed. The kernel goes to /dev/shm, a tmpfs, and is compared there by
 # SHA-256. `bootctl kernel` then sets the fallback as the saved default,
 # writes the candidate slot and arms one trial of it, and the machine
-# reboots. When SSH answers again, machine_identity.sh must find the
-# candidate slot booted and holding KERNEL, and `bootctl commit` makes the
-# candidate the saved default.
+# reboots two seconds after the SSH command that asks for it has returned,
+# since a reboot does not always close the connection, and a client that
+# waits on it waits for good. Each SSH command also ends after a minute
+# without an answer from the server. When SSH answers again,
+# machine_identity.sh must find the candidate slot booted and holding KERNEL,
+# and `bootctl commit` makes the candidate the saved default.
 #
 # A kernel that never answers leaves the machine in its trial boot, and a
 # power cycle returns it to the fallback kernel; that needs a person at the
@@ -44,6 +47,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-machine-update.XXXXXX") || exit 1
 set -- ssh -i "$key" -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR \
+    -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
     -o UserKnownHostsFile="$work/known" -o StrictHostKeyChecking=accept-new \
     "root@$address"
 
@@ -72,7 +76,7 @@ got=$("$@" 'sha256sum /dev/shm/kernel' | cut -d ' ' -f 1)
 echo "machine-update: installing it in the candidate slot"
 "$@" 'bootctl kernel /dev/shm/kernel' > "$work/install" 2>&1
 grep -q '^bootctl: installed:' "$work/install" || fail "$(cat "$work/install")"
-"$@" 'reboot' > /dev/null 2>&1
+"$@" 'setsid sh -c "sleep 2; reboot" > /dev/null 2>&1 < /dev/null &' > /dev/null 2>&1
 
 echo "machine-update: waiting for the trial boot"
 sleep 15
