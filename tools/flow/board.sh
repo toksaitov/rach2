@@ -18,8 +18,8 @@
 # issue, and a subtask is a sub-issue of a task. Workers take tasks; a subtask
 # is closed by the worker of its task and is never taken by itself.
 # An issue labelled `owner-only` has work that only the owner's accounts can
-# do, such as a step on the testing host through `ssh testing` from the
-# owner's computer; `next` and `take` offer it only to the account OWNER below.
+# do, such as a step on the Lenovo, which only the owner's computer reaches;
+# `next` and `take` offer it only to the account OWNER below.
 # Each subcommand that reads the board fails, with a diagnostic on stderr and
 # nothing on stdout, when a page of the answer is lost five times, as `ask`
 # below says, so that a caller does not take a part of the board for the

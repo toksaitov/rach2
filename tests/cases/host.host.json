@@ -3035,7 +3035,7 @@
         },
         {
           "assertion_id": "board",
-          "checks": "board groups, take and the phase in progress: its native C controller passes every row",
+          "checks": "board.sh's next, take, release, branch, archive and milestones on the board and its milestones: its native C controller passes every row",
           "source": "scenario"
         },
         {
@@ -3045,7 +3045,7 @@
         },
         {
           "assertion_id": "worker_park",
-          "checks": "the worker loop's parking during a hold and rest of a handed-back intermittent issue: its native C controller passes every row",
+          "checks": "the worker loop's claims, resumes, milestone branches and tasks given away during a usage limit: its native C controller passes every row",
           "source": "scenario"
         },
         {
