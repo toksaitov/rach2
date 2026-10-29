@@ -8,13 +8,17 @@
 #        board.sh mine N
 #        board.sh release N [owner|owner-only]
 #        board.sh branch N
+#        board.sh milestone M
 #        board.sh ready N...
 #        board.sh done
 #        board.sh archive M
 #        board.sh milestones
 #
 # A milestone is a GitHub milestone, and its description names its branch on
-# a line `Branch: NAME`. A task is an issue in a milestone with no parent
+# its first line that begins `Branch:`, as `Branch: NAME`; backquotes and
+# blanks around NAME are not part of it, and a NAME with a character other
+# than a letter, a digit, `.`, `_`, `/` or `-` is no branch, so that NAME can
+# go into a command line as it is. A task is an issue in a milestone with no parent
 # issue, and a subtask is a sub-issue of a task. Workers take tasks; a subtask
 # is closed by the worker of its task and is never taken by itself.
 # An issue labelled `owner-only` has work that only the owner's accounts can
@@ -69,6 +73,10 @@
 #
 # `branch N` prints the branch that the description of N's milestone names,
 # and fails when N has no milestone or the milestone names no branch.
+#
+# `milestone M` prints the branch that the description of milestone M names,
+# for release.sh. It exits 1 when M cannot be read, and 3 when M is closed or
+# names no branch.
 #
 # `ready N...` sets each N Ready.
 #
@@ -181,11 +189,11 @@ set_status()
 }
 
 # BRANCH is the jq filter that prints the branch that the description of the
-# milestone `.milestone` names on its first line `Branch: NAME`, without the
-# backquotes and spaces that a person may write around NAME, or nothing.
+# milestone `.milestone` names, as the header says, or nothing.
 BRANCH='([.milestone.description // "" | split("\n")[] |
-        select(startswith("Branch:")) | ltrimstr("Branch:") |
-        gsub("[\\s`]"; "")] | map(select(. != "")) | first // "")'
+        select(startswith("Branch:"))] | first // "" | ltrimstr("Branch:") |
+        gsub("^[\\s`]+|[\\s`]+$"; "") |
+        if test("^[A-Za-z0-9._/-]+$") then . else "" end)'
 
 # FIELDS is the jq filter that prints the twelve fields of `items` from an
 # object with the item's id and Status as `id` and `status` and the issue as
@@ -436,6 +444,20 @@ branch()
     echo "$name"
 }
 
+milestone()
+{
+    name=$(gh api "repos/$REPO/milestones/$1" \
+        --jq 'if .state == "open" then {milestone: .} | '"$BRANCH"' else "" end') || {
+        echo "board: milestone $1: cannot read it" >&2
+        exit 1
+    }
+    if [ -z "$name" ]; then
+        echo "board: milestone $1: it is closed or names no branch" >&2
+        exit 3
+    fi
+    echo "$name"
+}
+
 ready()
 {
     for n; do
@@ -522,6 +544,7 @@ case "$1" in
         case $3 in ''|owner|owner-only) ;; *) exit 2 ;; esac
         board_ids=$(ids); release "$2" "$3" ;;
     branch) [ -n "$2" ] || exit 2; branch "$2" ;;
+    milestone) [ -n "$2" ] || exit 2; milestone "$2" ;;
     ready) [ -n "$2" ] || exit 2; board_ids=$(ids); shift; ready "$@" ;;
     done) board_ids=$(ids); done_ ;;
     archive) [ -n "$2" ] || exit 2; archive "$2" ;;
