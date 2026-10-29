@@ -143,7 +143,7 @@ sizes()
     du -sxk "$here"/build/flow/* "$here"/build/worktrees/* "$here"/build \
         "$here"/.claude/worktrees 2> /dev/null | sort -rn |
         awk '{ printf "%7.1f %s\n", $1 / 1048576, $2 }'
-    echo "== leftovers that the manager's loop removes, and the old ones it keeps"
+    echo "== leftovers that sweep.sh removes, and the old ones it keeps"
     leftovers -n
 }
 
