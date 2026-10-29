@@ -5,15 +5,20 @@
 # Usage: worker.sh [-a claude|codex] [-s STATE]
 #
 # The loop works in the clone this script is in, as the account `gh` and git
-# are signed in to there. Each session works on one issue, which the loop, not
+# are signed in to there. Each session works on one task, which the loop, not
 # the session, claims: under a lock shared by the loops of this user on this
-# machine, it takes the first issue `board.sh next` lists that `board.sh take`
-# gives this account, and writes its number to STATE/issue. While that issue
-# is open and assigned to this account, each new session resumes it. The
-# number is kept in a file, not read from the board, because two loops of one
-# account, such as the owner's Claude Code and Codex loops, cannot tell their
-# issues apart by assignee. Write a number to STATE/issue to give a loop an
-# issue to resume.
+# machine, it takes the first task `board.sh next` lists that `board.sh take`
+# gives this account, and writes its number to STATE/issue. While that task
+# is open and assigned to this account, each new session resumes it; when it
+# is closed or no longer this account's, as when the manager gave it to
+# another account while this one waited for its usage limit, the loop drops
+# it and claims another. The number is kept in a file, not read from the
+# board, because two loops of one account cannot tell their tasks apart by
+# assignee. Write a number to STATE/issue to give a loop a task to resume.
+#
+# The session's prompt is `worker.txt`, with @ISSUE@ replaced by the task's
+# number and @BRANCH@ by its milestone's branch, which `board.sh branch`
+# reads before each session.
 #
 # AGENT is the program a session runs: Claude Code, `claude`, the default, or
 # the Codex CLI, `codex`, at the model and effort below. A Claude Code session
@@ -28,61 +33,36 @@
 # names for testing.sh, if any; `touch STATE/stop` ends the loop after the
 # session that is running. Sessions run with RACH2_MIN_FREE_GIB at 40 unless the
 # environment gives another, so that a build they start stops before it fills
-# the disk, and with RACH2_STYLE_GATE=strict, so that the git hooks refuse a
-# commit whose style they cannot check. Codex reads at most DOC_BYTES of
-# AGENTS.md, since its own limit, 32 KiB, cuts the file short.
+# the disk. Codex reads at most DOC_BYTES of AGENTS.md, since its own limit,
+# 32 KiB, cuts the file short.
 #
 # A session that ends on the account's usage limit makes the loop wait fifteen
 # minutes. One shorter than two minutes for another reason, such as a lost
 # network or a lapsed login, doubles the wait before the next, from one minute
 # up to thirty. A session still running after six hours is stopped, with
-# every process in its group; a long suite is not a stuck session, and the
-# manager stops one that is stuck sooner. After three sessions on one issue
-# that leave it open, the loop waits thirty minutes before each further one
-# and says so in its log, for the manager to see, unless another open issue
-# waits on it, since that wait delays every issue behind it. A session that
-# hands its issue back escapes that wait, so a claim passes by an issue
-# labelled `intermittent` that was handed back after ci last reported on it,
-# for a day after the hand-back, as `rests` says. A loop that starts while a
-# session of the loop before it still runs, as one does after that loop's
-# tmux session is killed, waits for the session to end before it does
-# anything in the clone.
+# every process in its group. A loop that starts while a session of the loop
+# before it still runs, as one does after that loop's tmux session is killed,
+# waits for the session to end before it does anything in the clone.
 #
-# While it holds no issue, before it claims one, the loop removes what
+# While it holds no task, before it claims one, the loop removes what
 # finished work left in its clone, as `tidy` in lib.sh says, and prunes its
 # sessions' output, as `prune_logs` says.
-#
-# While a `hold` issue is open, the loop starts no session on an issue whose
-# work is committed on a branch named for it and waits only for the push,
-# unless the issue is labelled `ci`, whose repair the hold lets through.
-# Such a loop, its tree clean, parks the issue: it keeps it assigned, writes
-# its number to STATE/parked, puts the clone on master and claims a `ci`
-# issue of core, titled `Core tests fail on ...` or `Core tests did not
-# finish on ...`, the kind of failure a hold stands for, or a group that lists
-# one, so that no loop waits while a repair the hold lets through waits for a
-# worker.
-# When that issue is closed or no longer this account's, the loop takes the
-# parked issue back. With none to claim, it puts the clone back on the
-# issue's branch and looks again every five minutes, and the next session
-# after the hold pushes.
 
 REPO=toksaitov/rach2
 REASONING=high
 CODEX_MODEL=gpt-6.1-sol
 DOC_BYTES=65536
 DEADLINE=21600
-REST=86400
 
-# claim [repair]: take an issue for this account, as the header says, and
-# write its number to STATE/issue; with `repair`, take only a repair of core,
-# as `repair` decides. Pass by an issue that `rests`. Write nothing when none
-# is waiting, and fail, taking nothing, when the lock cannot be taken or the
-# board cannot be read. The lock is perl's flock on `build/flow/claim.lock`
-# of the clone's main working tree, which the loops of its worktrees share and
-# which the redirection after the body opens on descriptor 9 for the length of
-# the call. A flock belongs to the open file description, not to the process
-# that took it, so the lock is held until the descriptor is closed: by the
-# shell when the call ends, or by the kernel when the loop dies.
+# claim: take a task for this account, as the header says, and write its
+# number to STATE/issue. Write nothing when none is waiting, and fail, taking
+# nothing, when the lock cannot be taken or the board cannot be read. The lock
+# is perl's flock on `build/flow/claim.lock` of the clone's main working tree,
+# which the loops of its worktrees share and which the redirection after the
+# body opens on descriptor 9 for the length of the call. A flock belongs to
+# the open file description, not to the process that took it, so the lock is
+# held until the descriptor is closed: by the shell when the call ends, or by
+# the kernel when the loop dies.
 claim()
 {
     if ! perl -MFcntl=:flock -e 'open(L, ">&=9") && flock(L, LOCK_EX) or
@@ -96,13 +76,6 @@ claim()
     fi
     tries=0
     for n in $(printf '%s\n' "$listed" | cut -f 1); do
-        if [ "${1-}" = repair ] && ! repair "$n"; then
-            continue
-        fi
-        if rests "$n"; then
-            log "#$n rests: handed back with nothing new from ci"
-            continue
-        fi
         tries=$((tries + 1))
         [ "$tries" -le 5 ] || break
         if sh "$state/run/board.sh" take "$n" 2>> "$state/loop.log"; then
@@ -113,106 +86,12 @@ claim()
     done
 } 9>> "$flowdir/claim.lock"
 
-# waiting N: print the number of the open `hold` issue and succeed when the
-# work on issue N is committed and only its push waits for that hold: a local
-# branch named for N has commits that master lacks, and N is not labelled
-# `ci`, whose repair the hold lets through. Fail when nothing waits or GitHub
-# cannot be reached, so the loop goes on to the session.
-waiting()
-{
-    unpushed=
-    for b in $(git for-each-ref --format='%(refname:short)' "refs/heads/$1-*"); do
-        [ -z "$(git rev-list -n 1 "origin/master..$b" --)" ] || unpushed=$b
-    done
-    [ -n "$unpushed" ] || return 1
-    hold=$(gh issue list --repo "$REPO" --label hold --state open \
-        --json number --jq '.[0].number // empty') && [ -n "$hold" ] || return 1
-    ci=$(gh issue view "$1" --repo "$REPO" --json labels \
-        --jq 'any(.labels[]; .name == "ci")') || return 1
-    [ "$ci" = false ] || return 1
-    echo "$hold"
-}
-
-# repair N: succeed when issue N is labelled `ci` and is a failure of core,
-# titled `Core tests fail on ...` or `Core tests did not finish on ...`, or a
-# group that lists one, which the manager fills while a hold is open only with
-# what repairs the same failure.
-repair()
-{
-    members=$(gh issue view "$1" --repo "$REPO" --json title,labels,body --jq '
-        if any(.labels[]; .name == "ci") | not then empty
-        elif .title | startswith("Core tests fail on ") or
-            startswith("Core tests did not finish on ") then "core"
-        elif any(.labels[]; .name == "group") then
-            .body | split("\n")[] | select(test("^\\* #[0-9]+$")) | ltrimstr("* #")
-        else empty end') || return 1
-    [ "$members" != core ] || return 0
-    for m in $members; do
-        [ "$(gh issue view "$m" --repo "$REPO" --json title,labels --jq '
-            any(.labels[]; .name == "ci") and
-            (.title | startswith("Core tests fail on ") or
-                startswith("Core tests did not finish on "))')" != true ] || return 0
-    done
-    return 1
-}
-
-# waited_on N: succeed when another open issue waits on issue N, by GitHub's
-# count of the open issues N blocks. A count that cannot be read is none.
-waited_on()
-{
-    [ "$(gh api "repos/$REPO/issues/$1" --jq .issue_dependencies_summary.blocking \
-        2> /dev/null)" -gt 0 ] 2> /dev/null
-}
-
-# rests N: succeed when a claim should pass issue N by: N is labelled
-# `intermittent`, the last time an account was unassigned from it came after
-# the last comment or label change of ci's, `github-actions[bot]`, and less
-# than REST seconds ago. Succeed too when the labels or the timeline cannot be
-# read. A session finds nothing new in an intermittent failure until ci
-# reports on it again, and the timeline, unlike the loop's state, keeps a
-# hand-back for every account's next claim.
-rests()
-{
-    flaky=$(gh issue view "$1" --repo "$REPO" --json labels \
-        --jq 'any(.labels[]; .name == "intermittent")') || return 0
-    [ "$flaky" = true ] || return 1
-    marks=$(gh api --paginate "repos/$REPO/issues/$1/timeline" --jq '.[] |
-        select(.created_at != null) |
-        if .event == "unassigned" then "back \(.created_at | fromdate)"
-        elif .actor.login == "github-actions[bot]" then "ci \(.created_at | fromdate)"
-        else empty end') || return 0
-    printf '%s\n' "$marks" | awk -v now="$(date +%s)" -v rest="$REST" '
-        $1 == "back" && $2 > back { back = $2 }
-        $1 == "ci" && $2 > ci { ci = $2 }
-        END { exit !(back > ci && now - back < rest) }'
-}
-
-# park N: when the clone has nothing uncommitted, keep issue N in STATE/parked,
-# put the clone on master, and claim a repair of core; succeed when one was
-# claimed. Otherwise put N back in STATE/issue and the clone back on the branch
-# or commit it was on, and fail.
-park()
-{
-    [ -z "$(git status --porcelain)" ] || return 1
-    was=$(git symbolic-ref -q --short HEAD || git rev-parse HEAD) || return 1
-    if git switch -q master 2> /dev/null && git merge -q --ff-only origin/master; then
-        echo "$1" > "$state/parked"
-        rm -f "$state/issue"
-        if claim repair && [ -s "$state/issue" ]; then
-            log "#$1 parked for #$(cat "$state/issue")"
-            return 0
-        fi
-        mv "$state/parked" "$state/issue"
-    fi
-    git checkout -q "$was" -- 2> /dev/null
-    return 1
-}
-
-# session ISSUE: run one session on ISSUE with the agent's command.
+# session ISSUE BRANCH: run one session on task ISSUE, whose milestone's
+# branch is BRANCH, with the agent's command.
 session()
 {
     t=$(date -u '+%m%d-%H%M%S')
-    prompt=$(sed "s/@ISSUE@/$1/g" "$state/run/worker.txt")
+    prompt=$(sed "s|@ISSUE@|$1|g; s|@BRANCH@|$2|g" "$state/run/worker.txt")
     log "session $t on #$1 starts"
     started=$(date +%s)
     case $agent in
@@ -262,8 +141,7 @@ main()
     echo "$repo" > "$state/repo"
     echo "${RACH2_TESTING_COPY:-}" > "$state/copy"
     RACH2_MIN_FREE_GIB=${RACH2_MIN_FREE_GIB:-40}
-    RACH2_STYLE_GATE=strict
-    export RACH2_MIN_FREE_GIB RACH2_STYLE_GATE
+    export RACH2_MIN_FREE_GIB
     wait_session
     git config core.hooksPath tools/git-hooks
     if [ "$0" != "$state/run/worker.sh" ]; then
@@ -275,7 +153,7 @@ main()
         log "loop starts: $agent in $repo"
         exec sh "$state/run/worker.sh" -a "$agent" -s "$state" -r "$repo"
     fi
-    fails=0 runs=0 ran=
+    fails=0
     while [ ! -e "$state/stop" ]; do
         if ! refresh; then
             log "fetch failed"
@@ -305,12 +183,6 @@ main()
                 issue=
             fi
         fi
-        if [ -z "$issue" ] && [ -s "$state/parked" ]; then
-            mv "$state/parked" "$state/issue"
-            issue=$(cat "$state/issue")
-            log "#$issue taken back from parking"
-            continue
-        fi
         if [ -z "$issue" ]; then
             tidy
             prune_logs 's-*'
@@ -325,17 +197,14 @@ main()
             sleep 300
             continue
         fi
-        if hold=$(waiting "$issue"); then
-            if [ ! -s "$state/parked" ] && park "$issue"; then
-                continue
-            fi
-            log "#$issue is committed and waits for hold #$hold"
-            sleep 300
-            continue
-        fi
-        [ "$issue" = "$ran" ] || runs=0
-        ran=$issue
-        session "$issue"
+        branch=$(sh "$state/run/board.sh" branch "$issue" 2>> "$state/loop.log")
+        case $branch in
+            ''|*[!A-Za-z0-9._/-]*)
+                log "#$issue: no usable milestone branch"
+                sleep 300
+                continue ;;
+        esac
+        session "$issue" "$branch"
         if why=$(limited "$last.jsonl" "$last.err"); then
             log "limit: $why"
             sleep 900
@@ -356,12 +225,6 @@ main()
             continue
         fi
         fails=0
-        runs=$((runs + 1))
-        if [ "$runs" -ge 3 ] && [ "$(sh "$state/run/board.sh" mine "$issue")" = yes ] &&
-            ! waited_on "$issue"; then
-            log "#$issue still open after $runs sessions; waiting 30 minutes"
-            sleep 1800
-        fi
         sleep 20
     done
     log stopped

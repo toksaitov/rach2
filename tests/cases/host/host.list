@@ -22,7 +22,7 @@ ci|ci reports and bisection
 ci_run|ci's reading of the runner's lines and of etude's history, and its stop after a killed step
 board|board.sh's next, take, release, branch, archive and milestones on the board and its milestones
 limited|the loops' reading of a usage limit
-worker_park|the worker loop's parking during a hold and rest of a handed-back intermittent issue
+worker_park|the worker loop's claims, resumes, milestone branches and tasks given away during a usage limit
 release_resume|a release resumed from its record, with its runs, reruns and acceptance
 tidy|the loops' cleanup of finished work
 leftovers|the manager's removal of failed tests, home files and landed copies
