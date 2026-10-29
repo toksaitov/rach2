@@ -1,469 +1,138 @@
 #!/bin/sh
 #
-# tools/ci/report.sh: record a ci run's result on GitHub.
+# tools/ci/report.sh: write down what a full run of the release tests failed.
 #
-#   tools/ci/report.sh core|full SHA DIR
+#   tools/ci/report.sh SHA DIR FILE
 #
-# DIR has one directory for each architecture, `KIND-ARCH`, written by
-# tools/ci/run.sh. An architecture passed only when its directory has
-# `done` and an empty `failed`; a missing or unfinished one is a failure of
-# the runner, named `unfinished-core` or `unfinished-full` so that bisection
-# repeats that kind of run. An architecture whose directory lacks `done`,
-# as when the upload of a core run's result was lost, takes its result from
-# the variable VERDICT_ARCH, which ci.yml sets from the core job's outputs,
-# when that begins with the word `done`; the words after it are the lines of
-# `failed`. For each architecture the commit SHA gets the status
-# `ci/KIND/ARCH`, and once everything below has been done, `ci/KIND`, which
-# tells a later run that this commit has been tested and reported. A full run
-# of the suites that SUITES names, as `ARCH:SUITE` words, sets `ci/rerun/ARCH`
-# and `ci/rerun` instead, since it did not test every suite, and an
-# architecture whose directory has `skipped`, where it had nothing to run,
-# gets no status and counts as passed.
+# DIR has one directory for each architecture, `full-ARCH`, written by
+# tools/ci/run.sh at the commit SHA. An architecture passed when its
+# directory has `done` and an empty `failed`, or `done` and `skipped`, where
+# it had nothing to run. FILE gets one line for each failure, `ARCH:ITEM`,
+# ITEM being a suite, `build`, `runner` or the name of the step that failed
+# without naming a suite, as run.sh writes them, or `unfinished` for an
+# architecture whose directory has no `done`. full.yml uploads FILE as the
+# artifact `failures`, which tools/flow/release.sh reads.
 #
 # Native result directories have `native` and `suites`; their shared parent
 # has one history and store. The strict C verdict validates that complete
 # history and its charged budget before projecting this architecture's result.
-# Missing native history cannot use the old result-lines fallback.
-# An older architecture directory may also have `history/`, etude's history
-# streams, and `store/`, the blobs they refer to, each named by its SHA-256.
-# The script reads them with `etude show failures`, of build/tools/etude/etude,
-# which it asks make for, or of the program that ETUDE names. An architecture
-# passes only when that reader finds that every attempt of the run passed as
-# well; when it finds one that did not, or cannot read the history, and `failed`
-# is empty, the failure is the test runner's, `runner`. The attempts that did
-# not pass go into the issue, its comment and the summary, a failure that a
-# later attempt of its case passed among them, so that a passing retry does not
-# hide the failure it followed. A directory without `history/`, as from every
-# run before etude's, is reported as before.
+# Missing native history cannot use the old result-lines fallback. The
+# reporting host supplies its installed reader, ETUDE_REPORT_READER or ETUDE,
+# and its record, ETUDE_REPORT_READER_RECORD. An architecture whose verdict
+# fails, or cannot be read, while `failed` is empty, failed with `runner`.
 #
-# A failure is filed as an issue with the labels `bug` and `ci`, titled
-# `Core tests fail on ARCH: ITEMS` or `Release tests fail on ARCH: ITEMS`,
-# ITEMS being what failed, sorted and joined by commas, or `Core tests did
-# not finish on ARCH` or `Release tests did not finish on ARCH` for an
-# unfinished run. The issue says in a sentence what failed, where and at
-# which commit, and gives the first lines that name a failure in `err`, the
-# standard error of the run's own tests/run: its items and suites that did
-# not pass, the incomplete ones among them, and its result, and none of the
-# lines of the runs that the runner suite starts. It then gives the command
-# that fetches the kept logs, the run, its attempt, the commit, the end of
-# the log, and last the commits since the last pass: the newest first-parent
-# ancestor of SHA, within 50 for core and 500 for full, whose status
-# `ci/core/ARCH` is success, or for full `ci/full/ARCH` or `ci/night/ARCH`,
-# which the nightly runs before full runs set. An issue
-# already open under that title gets a comment instead; when it has the label
-# `intermittent`, the label is removed. The labels are read again after the
-# comment, since a bisection that ends meanwhile may add the label after the
-# first read. A new issue, and an open one that was intermittent, starts
-# `bisect.yml` when the last pass is known, and gives it this run's ID, so
-# that bisection does not call the failure intermittent once a later run has
-# reported it again. The script closes no issue but the hold and edits no
-# issue's body, so an issue whose failure did not repeat stays open with the
-# label `intermittent` that bisection gives it, and every report of the
-# failure stays on it.
-#
-# A core job that GitHub gave to no runner, so that none of its steps ran,
-# is not a failure of the commit: its architecture gets the status `error`,
-# as does `ci/lost/ARCH`, nothing is filed, `ci/core` is left unset, and
-# ci.yml is started again on the newest master. Nothing sets `ci/lost/ARCH`
-# again, so a commit that has it, from a run whose job on ARCH was lost
-# before, keeps it whatever later runs report, and its next lost job on ARCH
-# is reported as unfinished. A runner that keeps losing jobs is thus filed
-# and does not start run after run. When that status cannot be read or set,
-# the lost job is reported as unfinished at once.
-#
-# A core failure of the build, style or the runner, or of the `default`
-# suite, which boots the test image, opens the issue labelled `hold`, or
-# comments on the oldest one open, and a core run that passes on both
-# architectures closes every open one, whoever opened it and whatever its
-# title. A GitHub call that fails is named, the rest are still made, and the
-# exit status is 1. Each architecture's result, with the first lines that
-# name a failure, the issue and the command that fetches the logs, also goes
-# to the job's summary, GITHUB_STEP_SUMMARY, which GitHub shows on the run's
-# page. GH_TOKEN, GITHUB_REPOSITORY, GITHUB_SERVER_URL, GITHUB_RUN_ID and
-# GITHUB_RUN_ATTEMPT come from the job.
+# Each architecture's result, with the first lines of `err` that name a
+# failure and the command that fetches the logs, also goes to the job's
+# summary, GITHUB_STEP_SUMMARY. The exit status is 0 when both architectures
+# passed and 1 otherwise.
 #
 set -u
 
-kind=${1-}
-sha=${2-}
-dir=${3-}
-case "$kind" in
-    core) depth=50 contexts=ci/core what="Core tests" ;;
-    full) depth=500 contexts="ci/full ci/night" what="Release tests" ;;
-    *) echo "usage: tools/ci/report.sh core|full SHA DIR" >&2; exit 2 ;;
-esac
-[ -n "$sha" ] || { echo "usage: tools/ci/report.sh core|full SHA DIR" >&2; exit 2; }
-ctx=ci/$kind
-[ "$kind" != full ] || [ -z "${SUITES:-}" ] || ctx=ci/rerun
-repo=$GITHUB_REPOSITORY
-run_url="$GITHUB_SERVER_URL/$repo/actions/runs/$GITHUB_RUN_ID"
-attempt=${GITHUB_RUN_ATTEMPT:-1}
-short=$(git rev-parse --short "$sha")
-hold_title="Pushes are held: master does not build, pass style or boot"
+sha=${1-}
+dir=${2-}
+file=${3-}
+[ -n "$sha" ] && [ -n "$dir" ] && [ -n "$file" ] ||
+    { echo "usage: tools/ci/report.sh SHA DIR FILE" >&2; exit 2; }
+short=$(echo "$sha" | cut -c 1-8)
 # The lines of tests/run's results that name an item or a suite that did not
 # pass, a change that voided the run, or the run's result when it failed.
 failing='^run: (result: (failed|incomplete|refused|interrupted)|voided: )|: (FAIL|INCOMPLETE|CANCELLED) in |: (failure|incomplete|cancelled): '
-statuses=
-trap 'rm -f ${statuses:+"$statuses"}' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
-statuses=$(mktemp "${TMPDIR:-/tmp}/rach2-report.XXXXXX") || exit 1
-rc=0
 native_expected=
 grep -qx 'results=native' tools/ci/run.sh 2> /dev/null && native_expected=1
+: > "$file" || exit 2
 
 # Append each LINE to the job's summary.
 summarize() { # summarize LINE...
     [ -z "${GITHUB_STEP_SUMMARY:-}" ] || printf '%s\n' "$@" >> "$GITHUB_STEP_SUMMARY"
 }
 
-lost() { # lost WHAT: name a GitHub call that failed
-    echo "ci: report: failed: $1" >&2
-    rc=1
-}
-
-# Set the status CONTEXT of SHA to STATE, linked to this run; the status is
-# 1 when GitHub refused it.
-set_status() { # set_status CONTEXT STATE
-    gh api "repos/$repo/statuses/$sha" -f state="$2" -f context="$1" \
-        -f target_url="$run_url" -f description="$what of $short" > /dev/null ||
-        { lost "status $1"; return 1; }
-}
-
-# The newest first-parent ancestor of SHA, within DEPTH, with a success
-# status of one of CONTEXTS on ARCH; nothing when none has one, and status 1
-# when a commit's statuses could not be read. Each commit's successes are
-# read once, into the file STATUSES as `COMMIT CONTEXT` lines, for both
-# architectures.
-last_pass() { # last_pass ARCH
-    for c in $(git rev-list --first-parent --max-count="$depth" "$sha^" 2> /dev/null); do
-        if ! grep -q "^$c " "$statuses"; then
-            passes=$(gh api "repos/$repo/commits/$c/status" \
-                --jq '.statuses[] | select(.state == "success") | .context') ||
-                return 1
-            { echo "$c -"; for p in $passes; do echo "$c $p"; done; } >> "$statuses"
-        fi
-        for context in $contexts; do
-            grep -qx "$c $context/$1" "$statuses" && { echo "$c"; return 0; }
-        done
-    done
-    return 0
-}
-
-# The open issue with the label LABEL and the title TITLE, as its number
-# followed by its labels, or nothing; the status is 1 when the listing could
-# not be read. The listing is read rather than searched, since the search
-# index lags.
-open_issue() { # open_issue LABEL TITLE
-    list=$(gh issue list --repo "$repo" --state open --label "$1" --limit 500 \
-        --json number,title,labels \
-        --jq ".[] | select(.title == \"$2\") | [.number, .labels[].name] | map(tostring) | join(\" \")") ||
-        return 1
-    echo "$list" | head -n 1
-}
-
-# Set `now` to the labels of the issue NUMBER, separated by spaces. When they
-# cannot be read the failure is named and `now` is `intermittent`, so that a
-# repeated failure loses that label and starts a bisection in any case.
-labels_now() { # labels_now NUMBER
-    now=$(gh issue view "$1" --repo "$repo" --json labels \
-        --jq '[.labels[].name] | join(" ")') ||
-        { lost "the labels of #$1"; now=intermittent; }
-}
-
-# The numbers of the open issues with the label `hold`, oldest first; the
-# status is 1 when the listing could not be read.
-open_holds() {
-    gh issue list --repo "$repo" --state open --label hold --limit 500 \
-        --json number --jq 'sort_by(.number) | .[].number'
-}
-
-# Start bisect.yml for the issue NUMBER on the range GOOD..SHA and the items
-# that failed on ARCH, or say on the issue that it could not be started.
-start_bisect() { # start_bisect NUMBER
-    if gh workflow run bisect.yml --repo "$repo" --ref master -f kind="$kind" \
-        -f arch="$arch" -f good="$good" -f bad="$sha" -f items="$items" \
-        -f issue="$1" -f run="$GITHUB_RUN_ID" > /dev/null; then
-        echo "ci: report: $arch: bisect started for #$1"
-    else
-        lost "the bisect for #$1"
-        gh issue comment "$1" --repo "$repo" --body "ci could not start the bisection that would find the commit that caused this failure. Narrow the commits since the last pass by hand." > /dev/null
-    fi
-}
-
-# Whether the core job of ARCH ran no step on any runner, and SHA has no
-# status `ci/lost/ARCH` from an earlier run whose job on ARCH was lost.
-unrun_once() { # unrun_once ARCH
-    case "$unrun" in *"Test on $1"*) ;; *) return 1 ;; esac
-    case " $errors " in *" ci/lost/$1 "*) return 1 ;; esac
-}
-
-# Set `history` to what etude's history of the run in RESULT says of the
-# attempts that did not pass, and `hstatus` to the reader's status: 0 when
-# every attempt passed, 1 when one did not, and 2 when the history could not
-# be read, `history` then saying why. A RESULT without `history/` gives 0 and
-# nothing. A backquote becomes a quote, so that the text stays in its fence.
+# Set `history` to what the native verdict of the run in RESULT says, and
+# `hstatus` to its status: 0 when it passed, 1 when it failed, and 2 when the
+# history could not be read, `history` then saying why. A RESULT that is not
+# native gives 0 and nothing. A backquote becomes a quote, so that the text
+# stays in its fence.
 read_history() { # read_history RESULT
     history=
     hstatus=0
-    common=$1
-    native=
-    if [ -n "$native_expected" ] || [ -f "$1/native" ]; then
-        native=1
-        common=$1/..
-        if ! grep -qx 'etude-native-1' "$1/native" || [ ! -s "$1/suites" ] ||
-            [ ! -d "$common/history" ] || [ ! -d "$common/store" ]; then
-            history='ci: report: native collection history or selection is missing'
-            hstatus=2
-            return 0
-        fi
-    else
-        [ -d "$1/history" ] || return 0
-    fi
-    reader=${ETUDE_REPORT_READER:-${ETUDE:-build/tools/etude/etude}}
-    if [ -n "$native" ]; then
-        native_site=${ETUDE_SITE:-}
-        if [ -z "$native_site" ]; then
-            case $(uname -s) in
-                MINGW*|MSYS*|UCRT*|CLANG*|CYGWIN*) native_site=C:/ProgramData/rach2/etude-site ;;
-                *) native_site=/etc/rach2/etude-site ;;
-            esac
-        fi
-        native_program=${ETUDE:-$(sed -n 's/^etude //p' "$native_site")}
-        if [ -z "${ETUDE_REPORT_READER_RECORD:-}" ] ||
-            ! reader=$("$native_program" prepare reader "$reader" "$ETUDE_REPORT_READER_RECORD") ||
-            ! "$reader" check record -d "$ETUDE_REPORT_READER_RECORD" >&2; then
-            history='ci: report: installed native reader did not verify'
-            hstatus=2
-            return 0
-        fi
-    elif [ -z "${ETUDE:-}" ] && ! make -s "$reader" >&2; then
-        history="ci: report: $reader could not be built"
+    [ -n "$native_expected" ] || [ -f "$1/native" ] || return 0
+    common=$1/..
+    if ! grep -qx 'etude-native-1' "$1/native" 2> /dev/null || [ ! -s "$1/suites" ] ||
+        [ ! -d "$common/history" ] || [ ! -d "$common/store" ]; then
+        history='ci: report: native collection history or selection is missing'
         hstatus=2
         return 0
     fi
-    if [ -n "$native" ]; then
-        native_suites=$(cat "$1/suites")
-        if [ -f "$common/routine-completion.path" ]; then
-            set -- --routine-completion "$common/routine.completion.json" \
-                --routine-proofs "$common/routine-proofs"
-        else
-            set --
-        fi
-        history=$("$reader" check verdict "$@" --project-architecture --require-budget \
-            -b "$common/store" -c "$sha" "$arch" "$kind" "$native_suites" \
-            "$common/history" 2>&1) || hstatus=$?
-    elif [ -d "$1/store" ]; then
-        history=$("$reader" show failures -b "$1/store" "$1"/history/* 2>&1) || hstatus=$?
-    else
-        history=$("$reader" show failures "$1"/history/* 2>&1) || hstatus=$?
+    reader=${ETUDE_REPORT_READER:-${ETUDE:-build/tools/etude/etude}}
+    native_site=${ETUDE_SITE:-}
+    if [ -z "$native_site" ]; then
+        case $(uname -s) in
+            MINGW*|MSYS*|UCRT*|CLANG*|CYGWIN*) native_site=C:/ProgramData/rach2/etude-site ;;
+            *) native_site=/etc/rach2/etude-site ;;
+        esac
     fi
+    native_program=${ETUDE:-$(sed -n 's/^etude //p' "$native_site")}
+    if [ -z "${ETUDE_REPORT_READER_RECORD:-}" ] ||
+        ! reader=$("$native_program" prepare reader "$reader" "$ETUDE_REPORT_READER_RECORD") ||
+        ! "$reader" check record -d "$ETUDE_REPORT_READER_RECORD" >&2; then
+        history='ci: report: installed native reader did not verify'
+        hstatus=2
+        return 0
+    fi
+    native_suites=$(cat "$1/suites")
+    if [ -f "$common/routine-completion.path" ]; then
+        set -- --routine-completion "$common/routine.completion.json" \
+            --routine-proofs "$common/routine-proofs"
+    else
+        set --
+    fi
+    history=$("$reader" check verdict "$@" --project-architecture --require-budget \
+        -b "$common/store" -c "$sha" "$arch" full "$native_suites" \
+        "$common/history" 2>&1) || hstatus=$?
     [ "$hstatus" -le 1 ] || hstatus=2
     history=$(printf '%s\n' "$history" | tr '\140' "'")
 }
 
-unrun=""
-errors=""
-if [ "$kind" = core ]; then
-    unrun=$(gh api "repos/$repo/actions/runs/$GITHUB_RUN_ID/attempts/$attempt/jobs" \
-        --jq '[.jobs[] | select((.runner_id // 0) == 0 and (.steps | length) == 0) | .name] | join(",")') ||
-        { lost "the jobs of the run"; unrun=""; }
-    errors=$(gh api "repos/$repo/commits/$sha/status" \
-        --jq '[.statuses[] | select(.state == "error") | .context] | join(" ")') ||
-        { lost "the statuses of $short"; errors="ci/lost/i686 ci/lost/x86_64"; }
-fi
-passed=""
-held=""
-rerun=""
-summarize "## $what of $short" ""
-[ "$ctx" != ci/rerun ] || summarize "This run tested only these suites: $SUITES." ""
+rc=0
+summarize "## Release tests of $short" ""
+[ -z "${SUITES:-}" ] || summarize "This run tested only these suites: $SUITES." ""
 for arch in i686 x86_64; do
-    result="$dir/$kind-$arch"
-    case $arch in
-        i686) verdict=${VERDICT_i686-} ;;
-        x86_64) verdict=${VERDICT_x86_64-} ;;
-    esac
-    if [ -z "$native_expected" ] && [ ! -f "$result/native" ] && [ ! -f "$result/done" ] && [ "${verdict%% *}" = "done" ]; then
-        mkdir -p "$result"
-        echo "${verdict#done}" | tr ' ' '\n' | sed '/^$/d' > "$result/failed"
-        : > "$result/done"
-    fi
+    result="$dir/full-$arch"
     if [ -f "$result/done" ] && [ -f "$result/skipped" ]; then
-        passed="$passed $arch"
         summarize "$arch had no suite to test." ""
         continue
     fi
     read_history "$result"
     if [ -f "$result/done" ] && [ -f "$result/failed" ] && [ ! -s "$result/failed" ] &&
         [ "$hstatus" = 0 ]; then
-        set_status "$ctx/$arch" success
-        passed="$passed $arch"
         summarize "$arch passed." ""
         continue
     fi
-    if [ ! -f "$result/done" ] && unrun_once "$arch" &&
-        set_status "ci/lost/$arch" error; then
-        set_status "$ctx/$arch" error
-        rerun="$rerun $arch"
-        summarize "$arch: no runner took the job, so the core tests start again." ""
-        continue
-    fi
-    set_status "$ctx/$arch" failure
+    rc=1
     if [ -f "$result/done" ] && [ -s "$result/failed" ]; then
         items=$(sort -u "$result/failed" | tr '\n' ' ' | sed 's/ $//')
     elif [ -f "$result/done" ] && [ -f "$result/failed" ]; then
         items=runner
     else
-        items=unfinished-$kind
+        items=unfinished
     fi
-    tests=$(echo "$what" | tr '[:upper:]' '[:lower:]')
-    case $items in
-        unfinished-*)
-            title="$what did not finish on $arch"
-            failed="did not finish"
-            first="The $tests of commit $short did not finish on $arch: the run left no result, as when it reaches its time limit or loses its runner." ;;
-        *)
-            title="$what fail on $arch: $(echo "$items" | sed 's/ /, /g')"
-            failed=$(echo "$items" | sed "s/^/\`/; s/ /\`, \`/g; s/\$/\`/")
-            first="The $tests of commit $short failed on $arch: $failed." ;;
-    esac
-    if [ -f "$result/done" ] && [ -f "$result/failed" ] && [ ! -s "$result/failed" ]; then
-        case $hstatus in
-            1) first="$first The run listed no failure, but etude's history of the run has attempts that did not pass, so the failure is the test runner's." ;;
-            2) first="$first The run listed no failure, but etude's history of the run could not be read, so the failure is the test runner's." ;;
-        esac
-    fi
-    case " $items " in
-        *" build "*|*" style "*|*" runner "*|*" core "*|*" default "*|*" unfinished-core "*)
-            [ "$kind" = core ] && held="$held
-* $arch: $failed" ;;
-    esac
-    good=$(last_pass "$arch") || { lost "the last pass on $arch"; good=""; }
-    if [ -n "$good" ]; then
-        range="Commits since the last pass on $arch, $(git rev-parse --short "$good")..$short, $(git rev-list --count "$good..$sha") in all:
-
-$(git log --format='* %h %s' "$good..$sha")"
-    else
-        range="The commits since the last pass are unknown: no commit in the $depth before $short is known to have passed the $tests on $arch."
-    fi
+    for i in $items; do
+        echo "$arch:$i"
+    done >> "$file"
     summarize "$arch failed: $items." ""
-    lines=
     if [ -f "$result/err" ]; then
         lines=$(grep -E "$failing" "$result/err" | head -n 8)
         [ -z "$lines" ] || summarize '```' "$lines" '```' ""
     fi
     case $hstatus in
-        1) said="The attempts that did not pass, from etude's history of the run; a failure stays listed when a later attempt of its case passed:" ;;
-        2) said="Etude's history of the run could not be read:" ;;
+        1) summarize "The native verdict of the run:" '```' "$history" '```' "" ;;
+        2) summarize "The native history of the run could not be read:" '```' "$history" '```' "" ;;
     esac
-    [ "$hstatus" = 0 ] || summarize "$said" '```' "$history" '```' ""
-    summarize "Logs: \`gh run download $GITHUB_RUN_ID --repo $repo --name $kind-$arch\`" ""
-    body=$first
-    [ -z "$lines" ] || body="$body
-
-The first lines of tests/run's standard error that name a failure:
-
-\`\`\`
-$lines
-\`\`\`"
-    [ "$hstatus" = 0 ] || body="$body
-
-$said
-
-\`\`\`
-$history
-\`\`\`"
-    body="$body
-
-Logs: \`gh run download $GITHUB_RUN_ID --repo $repo --name $kind-$arch\`
-Run: $run_url
-Attempt: $attempt
-Commit: $sha"
-    if [ -f "$result/log" ]; then
-        body="$body
-
-<details><summary>The last 40 lines of the log</summary>
-
-\`\`\`
-$(tail -n 40 "$result/log")
-\`\`\`
-
-</details>"
-    else
-        body="$body
-
-The run's output was not kept; \`gh run view $GITHUB_RUN_ID --repo $repo --log\` prints the log of each job."
-    fi
-    body="$body
-
-$range"
-    if ! found=$(open_issue bug "$title"); then
-        lost "the issue list for $arch"
-        continue
-    fi
-    number=${found%% *}
-    if [ -n "$number" ]; then
-        gh issue comment "$number" --repo "$repo" --body "$body" > /dev/null ||
-            lost "the comment on #$number"
-        echo "ci: report: $arch: failure added to #$number"
-        summarize "Added to issue #$number." ""
-        labels_now "$number"
-        case " $found $now " in
-            *" intermittent "*)
-                gh issue edit "$number" --repo "$repo" --remove-label intermittent > /dev/null ||
-                    lost "the label of #$number"
-                echo "ci: report: $arch: #$number is no longer intermittent"
-                [ -z "$good" ] || start_bisect "$number" ;;
-        esac
-        continue
-    fi
-    if ! url=$(gh issue create --repo "$repo" --title "$title" --label bug --label ci --body "$body"); then
-        lost "the issue for $arch"
-        continue
-    fi
-    number=${url##*/}
-    echo "ci: report: $arch: filed #$number"
-    summarize "Filed as issue #$number." ""
-    [ -z "$good" ] || start_bisect "$number"
+    [ -z "${GITHUB_RUN_ID:-}" ] ||
+        summarize "Logs: \`gh run download $GITHUB_RUN_ID --repo ${GITHUB_REPOSITORY:-} --name full-$arch\`" ""
 done
-
-if [ "$kind" = core ]; then
-    if ! holds=$(open_holds); then
-        lost "the hold issue's list"
-    elif [ -n "$held" ]; then
-        body="The core tests of commit $short on master failed in a way that stops every check: the build, the style checks, the test runner or the boot of the test image.
-$held
-
-Run: $run_url
-
-While this issue is open, push to master only a repair toward a passing core run, and name it here. The push that repairs its last cause closes the issue, with the check that shows the repair; a core run that passes on both architectures also closes it."
-        hold=$(echo "$holds" | head -n 1)
-        if [ -n "$hold" ]; then
-            gh issue comment "$hold" --repo "$repo" --body "$body" > /dev/null || lost "the comment on #$hold"
-        else
-            gh issue create --repo "$repo" --title "$hold_title" --label hold --body "$body" > /dev/null ||
-                lost "the hold issue"
-        fi
-        echo "ci: report: hold opened"
-    elif [ "$passed" = " i686 x86_64" ]; then
-        for hold in $holds; do
-            gh issue close "$hold" --repo "$repo" --comment "The core tests of commit $short passed on both architectures, so pushes to master may go on: $run_url" > /dev/null ||
-                lost "the close of #$hold"
-            echo "ci: report: hold #$hold closed"
-        done
-    fi
-fi
-if [ -n "$rerun" ]; then
-    gh workflow run ci.yml --repo "$repo" --ref master > /dev/null ||
-        lost "the core run started again"
-    echo "ci: report:$rerun: no runner took the job; core started again"
-fi
-if [ "$rc" = 0 ] && [ -z "$rerun" ]; then
-    if [ "$passed" = " i686 x86_64" ]; then
-        set_status "$ctx" success
-    else
-        set_status "$ctx" failure
-    fi
+if [ "$rc" = 1 ]; then
+    echo "ci: report: result: failed: $(tr '\n' ' ' < "$file" | sed 's/ $//')"
+else
+    echo "ci: report: result: passed on i686 and x86_64"
 fi
 exit "$rc"

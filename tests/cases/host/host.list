@@ -18,8 +18,8 @@ doom_libc|Doom C library on both architectures
 krffs_tools|krffs host tools' refusals, replace and edits
 run_scripts|run scripts' command lines
 commit_msg|commit-msg hook's refusals
-ci|ci reports and bisection
-ci_run|ci's reading of the runner's lines and of etude's history, and its stop after a killed step
+ci|the release tests' report of what failed
+ci_run|the release tests' reading of the runner's lines and their stop after a killed step
 board|board.sh's next, take, release, branch, archive and milestones on the board and its milestones
 limited|the loops' reading of a usage limit
 worker_park|the worker loop's claims, resumes, milestone branches and tasks given away during a usage limit

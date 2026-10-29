@@ -1,4 +1,4 @@
-/* flow_ci_run.c: C fixtures for the actual CI run product and killed steps. */
+/* flow_ci_run.c: C fixtures for the release tests' run.sh and killed steps. */
 #define _POSIX_C_SOURCE 200809L
 #include "flow_check.h"
 #include <dirent.h>
@@ -153,28 +153,6 @@ static int monitor(int argc, char **argv)
     return 0;
 }
 
-static int copy_history(const char *streams)
-{
-    char *s = strdup(streams), *p = strtok(s ? s : "", " ");
-    int ok = s != NULL;
-    while (ok && p) {
-        char from[8192], to[8192];
-        const char *base = strrchr(p, '/');
-        snprintf(from, sizeof(from), "%s/%s", env("CI_RUN_TEST_FIXTURES"), p);
-        snprintf(to, sizeof(to), "%s/history/%s", env("RACH2_RESULTS"), base ? base + 1 : p);
-        ok = fx_copy(from, to);
-        p = strtok(NULL, " ");
-    }
-    free(s);
-    if (ok && *streams) {
-        char from[8192], to[8192];
-        snprintf(from, sizeof(from), "%s/store", env("CI_RUN_TEST_FIXTURES"));
-        snprintf(to, sizeof(to), "%s/store", env("RACH2_RESULTS"));
-        ok = fx_tree(from, to);
-    }
-    return ok;
-}
-
 static void escaped(FILE *f, const char *text)
 {
     while (*text) {
@@ -235,7 +213,7 @@ static int tests(int argc, char **argv)
     escaped(stderr, env("CI_RUN_TEST_ERR"));
     fflush(stderr);
     escaped(stdout, env("CI_RUN_TEST_LATE"));
-    return copy_history(env("CI_RUN_TEST_STREAMS")) ? atoi(env("CI_RUN_TEST_STATUS")) : 3;
+    return atoi(env("CI_RUN_TEST_STATUS"));
 }
 
 int flow_ci_run_mock(int argc, char **argv)
@@ -279,9 +257,9 @@ int flow_ci_run_mock(int argc, char **argv)
     return 2;
 }
 struct run_case {
-    const char *name, *mode, *kind, *set, *failed;
+    const char *name, *set, *failed;
     int status, make_status;
-    const char *streams, *out, *err, *late;
+    const char *out, *err, *late;
 };
 struct run_fixture {
     struct fixture *f;
@@ -289,30 +267,6 @@ struct run_fixture {
     char output[8192];
     const char *arch, *suites, *keep, *broken;
 };
-
-static const char pass[] =
-    "pass/plan.jsonl pass/item-d0.jsonl pass/item-d1.jsonl pass/item-h.jsonl pass/run.jsonl";
-
-static const char failure[] =
-    "pass/plan.jsonl item-d0-failure.jsonl pass/item-d1.jsonl pass/item-h.jsonl run-failure.jsonl";
-
-static const char retry[] =
-    "pass/plan.jsonl item-d0-retry.jsonl pass/item-d1.jsonl pass/item-h.jsonl run-retry.jsonl";
-
-static const char unfinished[] = "pass/plan.jsonl item-d0-unfinished.jsonl pass/item-d1.jsonl "
-                                 "pass/item-h.jsonl run-unfinished.jsonl";
-
-static const char lost[] =
-    "pass/plan.jsonl pass/item-d0.jsonl item-d1-lost.jsonl pass/item-h.jsonl pass/run.jsonl";
-
-static int install(const char *mode)
-{
-    const char *replacement = !strcmp(mode, "lines") ? "results=lines\n" : "results=history\n";
-    const char *previous =
-        fx_has(path("run.sh"), "results=native\n") ? "results=native\n" : "results=lines\n";
-    return fx_replace(path("run.sh"), path("tree/tools/ci/run.sh"), previous, replacement) &&
-           fx_has(path("tree/tools/ci/run.sh"), replacement);
-}
 
 static void settings(struct run_fixture *r, const struct run_case *c)
 {
@@ -327,7 +281,6 @@ static void settings(struct run_fixture *r, const struct run_case *c)
     fx_env("CI_RUN_TEST_PRINT", c->out ? c->out : "");
     fx_env("CI_RUN_TEST_ERR", c->err ? c->err : "");
     fx_env("CI_RUN_TEST_LATE", c->late ? c->late : "");
-    fx_env("CI_RUN_TEST_STREAMS", c->streams ? c->streams : "");
     fx_env("CI_RUN_TEST_KEEP", r->keep);
     fx_env("CI_RUN_TEST_BROKEN", r->broken);
     fx_env("CI_RUN_TEST_CUT", "");
@@ -370,17 +323,21 @@ static const char *output_path(struct run_fixture *r, const char *name)
     return s;
 }
 
-static int row(struct run_fixture *r, const struct run_case *c)
+/** Run run.sh with KIND and check its status, and what it failed unless
+ * `failed` is NULL, for a refusal that writes no result. */
+static int start(struct run_fixture *r, const struct run_case *c, const char *kind)
 {
     struct fixture *f = r->f;
-    const char *argv[] = {"/bin/sh", "tools/ci/run.sh", c->kind, r->output, NULL};
+    const char *argv[] = {"/bin/sh", "tools/ci/run.sh", kind, r->output, NULL};
     char *got;
     int ok;
     snprintf(r->output, sizeof(r->output), "%s/out.%u", f->work, ++r->rows);
-    if (!install(c->mode) || !flow_put(f, "calls", "") || !flow_put(f, "calls.arch", ""))
+    if (!flow_put(f, "calls", "") || !flow_put(f, "calls.arch", ""))
         return 0;
     settings(r, c);
     fx_run(f, argv, path("tree"), NULL, NULL);
+    if (!c->failed)
+        return fx_check(f, f->status == c->status && !fx_exists(output_path(r, "done")), c->name);
     got = flat(output_path(r, "failed"), 0);
     ok = got && !strcmp(got, c->failed) && fx_exists(output_path(r, "done")) &&
          f->status == (*c->failed ? 1 : 0);
@@ -389,6 +346,11 @@ static int row(struct run_fixture *r, const struct run_case *c)
                 got ? got : "(missing)", f->status, c->failed);
     free(got);
     return fx_check(f, ok, c->name);
+}
+
+static int row(struct run_fixture *r, const struct run_case *c)
+{
+    return start(r, c, "full");
 }
 
 static int words(struct run_fixture *r, const char *file, const char *wanted)
@@ -405,58 +367,24 @@ static int kept(struct run_fixture *r, const char *err)
                     "keeps only tests/run standard error");
 }
 
-static int agrees(struct run_fixture *r, int wanted)
-{
-    const char *argv[40] = {"/host-products/etude",
-                            "show",
-                            "failures",
-                            "-s",
-                            flow_source(r->f, "tools/etude/schemas"),
-                            "-b",
-                            output_path(r, "store")};
-    const char *history = output_path(r, "history");
-    DIR *dir = opendir(history);
-    struct dirent *e;
-    char files[32][8192];
-    unsigned n = 0;
-    if (!dir)
-        return 0;
-    while ((e = readdir(dir)) != NULL) {
-        if (e->d_name[0] == '.')
-            continue;
-        if (n >= 32) {
-            closedir(dir);
-            return 0;
-        }
-        snprintf(files[n], sizeof(files[n]), "%s/%s", history, e->d_name);
-        argv[7 + n] = files[n];
-        n++;
-    }
-    closedir(dir);
-    argv[7 + n] = NULL;
-    fx_run(r->f, argv, path("tree"), NULL, NULL);
-    return fx_check(r->f, r->f->status == wanted,
-                    "report reader agrees with kept structured history");
-}
-
 static int lines_rows(struct run_fixture *r)
 {
     static const struct run_case rows[] = {
-        {"lines: pass", "lines", "core", "core", "", 0, 0, NULL, NULL, NULL, NULL},
-        {"lines: failed suite", "lines", "core", "core", "default", 1, 0, NULL,
-         "run: style: PASS in 3s\n", "run: default: FAIL in 3s\nrun: result: failed: default\n",
-         NULL},
-        {"lines: no suite named", "lines", "core", "core", "core", 1, 0, NULL,
+        {"lines: pass", "none", "", 0, 0, NULL, NULL, NULL},
+        {"lines: failed suite", "style", "i686:default", 1, 0, "run: style: PASS in 3s\n",
+         "run: i686:default: FAIL in 3s\nrun: result: failed: i686:default\n", NULL},
+        {"lines: no suite named", "style", "i686:all x86_64:all", 1, 0,
          "run: default: PASS in 3s\n", "run: result: failed: nothing-such\n", NULL},
-        {"lines: runner's own lines", "lines", "core", "core", "core", 1, 0, NULL,
+        {"lines: runner's own lines", "style", "i686:all x86_64:all", 1, 0,
          "run: runner: PASS in 9s\n",
-         "run: result: failed: default\nrun: shutdown: INCOMPLETE in ?s\n", NULL},
-        {"lines: stderr before stdout", "lines", "core", "core", "default shutdown", 1, 0, NULL,
-         NULL,
-         "run: default: INCOMPLETE in 121s\nrun: shutdown: INCOMPLETE in 301s\nrun: result: "
-         "failed: default shutdown\n",
+         "run: result: failed: i686:default\nrun: shutdown: INCOMPLETE in ?s\n", NULL},
+        {"lines: stderr before stdout", "style", "i686:default x86_64:shutdown", 1, 0, NULL,
+         "run: i686:default: INCOMPLETE in 121s\nrun: x86_64:shutdown: INCOMPLETE in 301s\nrun: "
+         "result: failed: i686:default x86_64:shutdown\n",
          "run: runner: PASS in 9s\nrun: result: incomplete\n"},
-        {"lines: build", "lines", "core", "core", "build", 0, 1, NULL, NULL, NULL, NULL}};
+        {"lines: bigmem alone", "bigmem", "x86_64:bigmem", 1, 0, NULL,
+         "run: result: failed: bigmem\n", NULL},
+        {"lines: build", "none", "i686:build x86_64:build", 0, 1, NULL, NULL, NULL}};
     unsigned i;
     int ok = 1;
     r->suites = "";
@@ -468,85 +396,40 @@ static int lines_rows(struct run_fixture *r)
     return ok;
 }
 
-static int history_rows(struct run_fixture *r)
+static int refused_rows(struct run_fixture *r)
 {
-    static const struct run_case rows[] = {
-        {"history: pass", "history", "full", "default", "", 0, 0, pass, NULL, NULL, NULL},
-        {"history: pass with failed status", "history", "full", "default", "runner", 1, 0, pass,
-         NULL, NULL, NULL},
-        {"history: missing", "history", "full", "default", "runner", 0, 0, NULL, NULL, NULL, NULL},
-        {"history: failed item", "history", "full", "default", "default", 1, 0, failure,
-         "run: failing: FAIL in 1s\nrun: result: failed: failing\n",
-         "run: default: FAIL in 3s\nrun: result: failed: default\n", NULL},
-        {"history: failure with passed status", "history", "full", "default", "runner default", 0,
-         0, failure, NULL, NULL, NULL},
-        {"history: failed retry", "history", "full", "default", "default", 1, 0, retry, NULL, NULL,
-         NULL},
-        {"history: unfinished retry", "history", "full", "default", "default", 1, 0, unfinished,
-         NULL, NULL, NULL},
-        {"history: cut-off stream", "history", "full", "default", "runner default", 1, 0, lost,
-         NULL, NULL, NULL},
-        {"history: suite omitted", "history", "full", "default", "runner shutdown", 0, 0, pass,
-         NULL, NULL, NULL},
-        {"history: no verdict", "history", "full", "default", "runner", 0, 0, pass, NULL, NULL,
-         NULL},
-        {"history: one core run", "history", "core", "style", "runner style shutdown", 0, 0, pass,
-         NULL, NULL, NULL}};
-    unsigned i;
-    int ok = 1;
-    for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
-        r->suites = i == 8    ? "i686:default i686:host i686:shutdown"
-                    : i == 10 ? ""
-                              : "i686:default i686:host";
-        if (i == 9 && unlink(path("tree/build/tools/etude/etude")))
-            return 0;
-        ok = row(r, &rows[i]) && ok;
-        if (i == 0) {
-            ok = fx_check(r->f,
-                          fx_has(path("calls"), "tests/run default host with ") &&
-                              fx_has(path("calls"), r->output),
-                          "history receives DIR as RACH2_RESULTS") &&
-                 ok;
-            ok = agrees(r, 0) && ok;
-        }
-        if (i == 3 || i == 5 || i == 6)
-            ok = agrees(r, 1) && ok;
-        if (i == 3)
-            ok = kept(r, rows[i].err) && ok;
-        if (i == 9 && !fx_copy("/host-products/etude", path("tree/build/tools/etude/etude")))
-            return 0;
-        if (i == 10)
-            ok = fx_check(r->f,
-                          fx_has(path("calls"), "tests/run style host core with ") &&
-                              fx_has(path("calls"), r->output),
-                          "core runs style host and core together") &&
-                 ok;
-    }
+    struct run_case c = {"refused: core", "none", NULL, 2, 0, NULL, NULL, NULL};
+    int ok = start(r, &c, "core");
+    c.name = "refused: one architecture";
+    r->arch = "i686";
+    ok = row(r, &c) && ok;
+    r->arch = "i686 x86_64";
+    c.name = "refused: a suite the architecture does not run";
+    r->suites = "i686:fpu";
+    ok = row(r, &c) && ok;
     r->suites = "";
     return ok;
 }
 
 struct cut_case {
-    const char *name, *mode, *kind, *request, *sets, *wanted;
+    const char *name, *request, *sets, *wanted;
 };
 
 static int cut_row(struct run_fixture *r, const struct cut_case *test)
 {
-    const char *name = test->name, *mode = test->mode, *kind = test->kind, *request = test->request,
-               *sets = test->sets, *wanted = test->wanted;
-    const struct run_case c = {name, mode, kind, "none", "", 0, 0, NULL, NULL, NULL, NULL};
-    const char *args[] = {path("bin/ci-run-watch"), path("tree"), kind, r->output,
+    const struct run_case c = {test->name, "none", "", 0, 0, NULL, NULL, NULL};
+    const char *args[] = {path("bin/ci-run-watch"), path("tree"), "full", r->output,
                           path("status"),           NULL};
     struct fixture *f = r->f;
     char *got, *status, *calls, *p, *next;
     char names[1024] = "";
     int ok;
     snprintf(r->output, sizeof(r->output), "%s/out.%u", f->work, ++r->rows);
-    if (!install(mode) || !flow_put(f, "calls", "") || !flow_put(f, "calls.arch", ""))
+    if (!flow_put(f, "calls", "") || !flow_put(f, "calls.arch", ""))
         return 0;
     unlink(path("status"));
     settings(r, &c);
-    fx_env("CI_RUN_TEST_CUT", request);
+    fx_env("CI_RUN_TEST_CUT", test->request);
     fx_run(f, args, path("tree"), NULL, NULL);
     calls = fx_read(path("calls"));
     p = calls;
@@ -573,35 +456,28 @@ static int cut_row(struct run_fixture *r, const struct cut_case *test)
             status[--n] = 0;
     }
     got = fx_read(output_path(r, "log"));
-    {
-        char stopped[200];
-        snprintf(stopped, sizeof(stopped), "ci: %s: stopped on %s\n", kind, r->arch);
-        ok = !strcmp(names, sets) && !fx_exists(output_path(r, "done")) && status &&
-             !strcmp(status, wanted) && got && strstr(got, stopped);
-    }
+    ok = !strcmp(names, test->sets) && !fx_exists(output_path(r, "done")) && status &&
+         !strcmp(status, test->wanted) && got && strstr(got, "ci: full: stopped on i686 x86_64\n");
     free(status);
     free(got);
-    return fx_check(f, ok, name);
+    return fx_check(f, ok, test->name);
 }
 
 static int cut_rows(struct run_fixture *r)
 {
     int ok = 1;
     r->suites = "";
-    ok = cut_row(r, &(const struct cut_case){"killed set shells", "lines", "core", "host step",
-                                             "style host", "143"}) &&
+    ok = cut_row(r, &(const struct cut_case){"killed set shells", "style step", "style", "143"}) &&
          ok;
-    ok = cut_row(r, &(const struct cut_case){"killed set alone", "lines", "core", "host self",
-                                             "style host", "143"}) &&
+    ok = cut_row(r, &(const struct cut_case){"killed set alone", "style self", "style", "143"}) &&
+         fx_exists(output_path(r, "full-i686/log")) &&
+         !fx_exists(output_path(r, "full-i686/done")) && ok;
+    ok = cut_row(r,
+                 &(const struct cut_case){"killed run parent", "style parent", "style", "none"}) &&
          ok;
-    ok = cut_row(r, &(const struct cut_case){"killed run parent", "lines", "core", "host parent",
-                                             "style host", "none"}) &&
+    ok = cut_row(r, &(const struct cut_case){"killed build shell after clean", "make step", "",
+                                             "143"}) &&
          ok;
-    r->suites = "i686:default i686:host";
-    ok = cut_row(r, &(const struct cut_case){"killed build shell after clean", "history", "full",
-                                             "make step", "", "143"}) &&
-         ok;
-    r->suites = "";
     return ok;
 }
 
@@ -644,24 +520,6 @@ static int directory_words(struct run_fixture *r, const char *directory, const c
     return fx_check(r->f, ok && !strcmp(got, wanted), wanted);
 }
 
-static int both_pass(struct run_fixture *r)
-{
-    struct run_case c = {"both: pass", "lines", "core", "core", "", 0, 0, NULL, NULL, NULL, NULL};
-    int ok = 1;
-    r->arch = "i686 x86_64";
-    r->suites = "";
-    ok = row(r, &c) && ok;
-    ok = words(r, path("calls"), "tests/run style tests/run host tests/run core") && ok;
-    ok = words(r, path("calls.arch"), "i686 x86_64 i686 x86_64 i686 x86_64") && ok;
-    ok = words(r, output_path(r, "core-i686/failed"), "") &&
-         fx_exists(output_path(r, "core-i686/done")) &&
-         !fx_exists(output_path(r, "core-i686/skipped")) && ok;
-    ok = words(r, output_path(r, "core-x86_64/failed"), "") &&
-         fx_exists(output_path(r, "core-x86_64/done")) &&
-         !fx_exists(output_path(r, "core-x86_64/skipped")) && ok;
-    return ok;
-}
-
 static int both_kept(struct run_fixture *r)
 {
     int ok = 1;
@@ -677,52 +535,48 @@ static int both_kept(struct run_fixture *r)
     return ok;
 }
 
-static int both_stopped(struct run_fixture *r)
-{
-    int ok = 1;
-    ok = cut_row(r, &(const struct cut_case){"killed run of both", "lines", "core", "host self",
-                                             "style host", "143"}) &&
-         fx_exists(output_path(r, "core-i686/log")) &&
-         !fx_exists(output_path(r, "core-i686/done")) && ok;
-    return ok;
-}
-
 static int both_rows(struct run_fixture *r)
 {
-    struct run_case c = {"both: pass", "lines", "core", "core", "", 0, 0, NULL, NULL, NULL, NULL};
+    struct run_case c = {"both: every suite", "none", "", 0, 0, NULL, NULL, NULL};
     int ok = 1;
-    ok = both_pass(r) && ok;
+    r->suites = "";
+    ok = row(r, &c) && ok;
+    ok =
+        words(r, path("calls"), "tests/run style host default shutdown tcp fpu tests/run bigmem") &&
+        words(r, path("calls.arch"), "i686 x86_64 x86_64") && ok;
+    ok = words(r, output_path(r, "full-i686/failed"), "") &&
+         fx_exists(output_path(r, "full-i686/done")) &&
+         !fx_exists(output_path(r, "full-i686/skipped")) && ok;
+    ok = words(r, output_path(r, "full-x86_64/failed"), "") &&
+         fx_exists(output_path(r, "full-x86_64/done")) && ok;
     c.name = "both: failed suite of each";
+    c.set = "style";
     c.err =
         "run: i686:default: FAIL in 3s\nrun: x86_64:fpu: guest.fpu.xsave on x86_64: failure: it "
         "exited 1\nrun: x86_64:fpu: FAIL in 3s\nrun: result: failed: i686:default x86_64:fpu\n";
     c.status = 1;
     c.failed = "i686:default x86_64:fpu";
     ok = row(r, &c) && ok;
-    ok = words(r, output_path(r, "core-i686/failed"), "default") &&
-         words(r, output_path(r, "core-x86_64/failed"), "fpu") && ok;
+    ok = words(r, output_path(r, "full-i686/failed"), "default") &&
+         words(r, output_path(r, "full-x86_64/failed"), "fpu") && ok;
     ok = fx_check(r->f,
-                  !fx_has(output_path(r, "core-i686/err"), "x86_64:fpu: FAIL") &&
-                      fx_has(output_path(r, "core-x86_64/err"), "x86_64:fpu: FAIL"),
+                  !fx_has(output_path(r, "full-i686/err"), "x86_64:fpu: FAIL") &&
+                      fx_has(output_path(r, "full-x86_64/err"), "x86_64:fpu: FAIL"),
                   "an architecture keeps only its own stderr") &&
          ok;
-    c.name = "both: no suite named";
-    c.err = "run: result: failed: nothing-such\n";
-    c.failed = "i686:core x86_64:core";
-    ok = row(r, &c) && ok;
     c.name = "both: one build failed";
+    c.set = "none";
     c.err = NULL;
     c.failed = "x86_64:build";
     c.status = 0;
     r->broken = "x86_64";
     ok = row(r, &c) && ok;
     r->broken = "";
-    ok = words(r, path("calls.arch"), "i686 i686 i686") &&
-         words(r, output_path(r, "core-x86_64/failed"), "build") &&
-         words(r, output_path(r, "core-i686/failed"), "") && ok;
+    ok = words(r, path("calls"), "tests/run style host default shutdown tcp") &&
+         words(r, path("calls.arch"), "i686") &&
+         words(r, output_path(r, "full-x86_64/failed"), "build") &&
+         words(r, output_path(r, "full-i686/failed"), "") && ok;
     c.name = "both: chosen suites of each";
-    c.kind = "full";
-    c.set = "none";
     c.failed = "";
     r->suites = "i686:default x86_64:fpu";
     r->keep = "tests.i686-x86_64.T.1.guest.default.boot.i686.r0 "
@@ -737,40 +591,17 @@ static int both_rows(struct run_fixture *r)
     ok = words(r, path("calls"), "tests/run i686:default") &&
          words(r, path("calls.arch"), "i686") && fx_exists(output_path(r, "full-x86_64/skipped")) &&
          !fx_exists(output_path(r, "full-i686/skipped")) && ok;
-    c.name = "both: every suite";
     r->suites = "";
-    ok = row(r, &c) && ok;
-    ok =
-        words(r, path("calls"), "tests/run style host default shutdown tcp fpu tests/run bigmem") &&
-        words(r, path("calls.arch"), "i686 x86_64 x86_64") && ok;
-    ok = both_stopped(r) && ok;
-    r->arch = "i686";
     return ok;
 }
 
 static int prepare(struct fixture *f)
 {
-    const char *schemas[] = {"case", "results", "history"};
-    char source[160], target[160];
-    unsigned i;
     fx_env("FLOW_CI_RUN", "1");
     fx_env("CI_RUN_WORK", f->work);
-    fx_env("CI_RUN_TEST_FIXTURES", flow_source(f, "tools/etude/fixtures/verdict"));
-    if (!flow_copy(f, "tools/ci/run.sh", "run.sh") ||
-        !fx_copy("/host-products/etude", path("tree/build/tools/etude/etude")) ||
-        !fx_mock(f, "git") || !fx_mock(f, "make") || !fx_mock(f, "ci-run-watch") ||
-        !fx_copy(f->self, path("tree/tests/run")) || !fx_mkdir(path("tree/tools/ci")))
-        return 0;
-    for (i = 0; i < 3; i++) {
-        snprintf(source, sizeof(source), "tools/etude/schemas/%s.schema.json", schemas[i]);
-        snprintf(target, sizeof(target), "tree/tools/etude/schemas/%s.schema.json", schemas[i]);
-        if (!flow_copy(f, source, target))
-            return 0;
-    }
-    if (!flow_copy(f, "tools/etude/fixtures/verdict/cases/fixture.default.json",
-                   "tree/tests/cases/fixture.default.json") ||
-        !flow_copy(f, "tools/etude/fixtures/verdict/cases/fixture.host.json",
-                   "tree/tests/cases/fixture.host.json"))
+    if (!flow_copy(f, "tools/ci/run.sh", "tree/tools/ci/run.sh") || !fx_mock(f, "git") ||
+        !fx_mock(f, "make") || !fx_mock(f, "ci-run-watch") ||
+        !fx_copy(f->self, path("tree/tests/run")))
         return 0;
     return flow_put(f, "tree/tests/registry",
                     "style|-|full\nhost|-|full\ndefault|qemu|core\nshutdown|qemu|core\ntcp|qemu|"
@@ -783,12 +614,12 @@ int flow_ci_run(struct fixture *f)
     int ok = 1;
     memset(&r, 0, sizeof(r));
     r.f = f;
-    r.arch = "i686";
+    r.arch = "i686 x86_64";
     r.suites = r.keep = r.broken = "";
     if (!prepare(f))
         return 0;
     ok = lines_rows(&r) && ok;
-    ok = history_rows(&r) && ok;
+    ok = refused_rows(&r) && ok;
     ok = cut_rows(&r) && ok;
     ok = both_rows(&r) && ok;
     return ok;

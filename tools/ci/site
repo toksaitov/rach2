@@ -1,5 +1,5 @@
-# site: the machine and accelerator for routine checks. The core and release
-# workflows read this file at the commit they test, through tools/ci/site.sh.
-# Bisection uses the failing commit's site.
+# site: the machine and accelerator for routine checks. The release tests,
+# full.yml, read this file at the commit they test, through tools/ci/site.sh,
+# and so does etude's routine entry.
 runner rach2
 accelerator tcg

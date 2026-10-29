@@ -9,7 +9,7 @@
 # line `accelerator NAME`; empty lines and lines that begin with `#` are
 # comments. LABEL is the label of the self-hosted GitHub Actions runners of
 # the machine that runs the checks, lowercase letters, digits and
-# hyphens; the core and release workflows select a runner that has it. NAME
+# hyphens; the release workflow, full.yml, selects a runner that has it. NAME
 # is the accelerator, lowercase letters, which the workflow puts in
 # RACH2_QEMU_ACCEL. The native runner checks it. The script prints
 #
