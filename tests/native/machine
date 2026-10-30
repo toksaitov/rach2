@@ -1,6 +1,7 @@
 # The guest programs that have no native case, each with the reason its
 # checks need a machine of QEMU's (Readme.md).
 ahciprobe two disposable AHCI disks, and a KRFFS root on AHCI port 0 by rach2.root=disk
+blankprobe the console blanked and shown again, judged by QEMU's screen dumps
 blockprobe a root mounted by rach2.fsdisk or rach2.root=disk, and the IDE controller
 bootlogprobe a boot line of its own, and the kernel's ring holding every record since that boot
 busprobe the IDE driver's two channels and its 48-bit commands
