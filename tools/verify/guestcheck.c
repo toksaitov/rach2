@@ -14,10 +14,11 @@
  *      the host build includes, object for object, loader.o first, no
  *      duplicates, for each architecture, ACPICA's core last, under
  *      vendor/acpica, where the kernel's first prerequisite unpacks the
- *      archive the image stages; the kernel.objs recipe writes $(OBJS) whole, and the link reads
- * @kernel.objs and the tcc runtime with the architecture's flags: for i686 the pinned text address,
- * and for x86-64 the kernel's own linker script, 4 KiB segment alignment and a compile with
- * -mno-sse.
+ *      archive the image stages; the kernel.objs recipe writes $(OBJS)
+ *      whole, and the link reads @kernel.objs and the tcc runtime with the
+ *      architecture's flags: for i686 the pinned text address, and for
+ *      x86-64 the kernel's own linker script, 4 KiB segment alignment and a
+ *      compile with -mno-sse.
  *   2. utils/guest.mk's per-program source map equals the host
  *      utils/Makefile map, including the companion sources (pwauth.c,
  *      resolv.c) and the two -D builds (init-login, adduser-crash), and
