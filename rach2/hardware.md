@@ -62,7 +62,7 @@ There are no isochronous transfers, so no USB audio or video, and no class drive
 * The PS/2 mouse on the 8042's auxiliary port: three buttons and no wheel.
 * USB boot keyboards and mice, as under USB.
 
-Every keyboard feeds one input layer, with one US English keymap; a held USB key does not repeat. [Terminals](sys/tty/Readme.md) follows a keystroke from the driver to a program.
+Every keyboard feeds one input layer, with one US English keymap, and is an event device of its own, as on Linux ([input(4)](../man/man4/input.4)); a held USB key does not repeat. [Terminals](sys/tty/Readme.md) follows a keystroke from the driver to a program.
 
 ## Display
 

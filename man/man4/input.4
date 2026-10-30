@@ -1,0 +1,154 @@
+.Dd October 30, 2026
+.Dt INPUT 4
+.Os
+.Sh NAME
+.Nm input
+.Nd the event devices of the keyboards and buttons
+.Sh SYNOPSIS
+.In linux/input.h
+.Pp
+.Pa /dev/input/event0
+to
+.Pa /dev/input/event31
+.Sh DESCRIPTION
+Each input device the kernel drives is a node of
+.Pa /dev/input ,
+with Linux's evdev interface: major 13, minor 64 and up.
+A node is listed only while its device is there, and a device takes the
+lowest free node when it is found.
+The PS/2 keyboard is
+.Dq AT Translated Set 2 keyboard
+and each USB keyboard
+.Dq USB keyboard N ,
+N being its place in the USB stack's table, as
+.Dv EVIOCGNAME
+gives them.
+A keyboard's keys reach its node beside the console, which every keyboard
+shares; see
+.Xr console 4 .
+.Pp
+A
+.Xr read 2
+gives whole
+.Vt struct input_event
+records, as many as fit in its count: the time of the event, its type, its
+code and its value.
+The time is two
+.Vt long Ns s ,
+the seconds and microseconds of the real time, so a record is 16 bytes on
+i686 and 24 on x86-64, as
+.In linux/input.h
+lays it out under the C library's 64-bit
+.Vt time_t .
+.Pp
+A key is reported as one packet of three records:
+.Dv EV_MSC
+.Dv MSC_SCAN
+with the code the keyboard sent,
+.Dv EV_KEY
+with Linux's key code,
+.Dv KEY_A
+to
+.Dv KEY_MAX ,
+and the value 1 for a press, 0 for a release and 2 for a repeat, and
+.Dv EV_SYN
+.Dv SYN_REPORT ,
+which ends the packet.
+The PS/2 keyboard's
+.Dv MSC_SCAN
+is its set-1 code with the release bit clear and 0x80 set after an E0
+prefix, as Linux's keyboard driver gives a translated keyboard's: 0x1e for
+A, 0xb0 for Volume Up.
+A USB keyboard's is the key's usage in the keyboard page, 0x70004 for A.
+A key with no key code gives the
+.Dv MSC_SCAN
+alone.
+.Pp
+Each open has a queue of its own, of 64 records, and a read takes only
+whole packets.
+A reader that falls so far behind that its queue fills loses what it had:
+the queue keeps an
+.Dv EV_SYN
+.Dv SYN_DROPPED
+and the newest record, and the reader should drop what it reads up to the
+next
+.Dv SYN_REPORT
+and ask for the keys held with
+.Dv EVIOCGKEY .
+A read waits for a packet unless the descriptor is nonblocking;
+.Xr poll 2
+reports
+.Dv POLLIN
+while one is queued, and
+.Dv POLLHUP
+once the device has gone.
+.Pp
+The ioctls are Linux's:
+.Bl -tag -width EVIOCGBIT
+.It Dv EVIOCGVERSION
+The interface's version, 0x010001.
+.It Dv EVIOCGID
+A
+.Vt struct input_id :
+the bus, 0x11 for the PS/2 controller and 0x03 for USB, the vendor, the
+product and the version, 0.
+.It Dv EVIOCGNAME , EVIOCGPHYS
+The device's name and its place,
+.Dq isa0060/serio0/input0
+for the PS/2 keyboard and
+.Dq usb-N/input0
+for a USB keyboard, cut to the length the request gives, as Linux cuts
+them; the answer is the bytes copied.
+.It Dv EVIOCGUNIQ
+.Er ENOENT :
+no device has a serial number.
+.It Dv EVIOCGBIT
+The bits of the event types the device reports,
+.Dv EV_SYN ,
+.Dv EV_KEY
+and, for a keyboard,
+.Dv EV_MSC ;
+of the keys it can report; and of its
+.Dv EV_MSC
+codes,
+.Dv MSC_SCAN .
+The other types answer no bits.
+.It Dv EVIOCGKEY
+The bits of the keys down now.
+.It Dv EVIOCGPROP , EVIOCGLED , EVIOCGSND , EVIOCGSW
+No bits: no device here has properties, LEDs, sounds or switches.
+.It Dv EVIOCGRAB
+With a nonzero argument, take the device for this open alone, so that no
+other open reads its events until it gives it back, with 0, or closes.
+The console still reads the keys.
+.El
+.Pp
+The nodes are root's, mode 0600, as Linux's are.
+BusyBox's
+.Cm acpid
+reads them; see
+.Xr busybox-util-linux 1 .
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er EAGAIN
+A nonblocking read with no packet queued.
+.It Bq Er EBUSY
+.Dv EVIOCGRAB
+of a device another open holds.
+.It Bq Er EINVAL
+A read smaller than one record;
+.Dv EVIOCGRAB
+with 0 by an open that does not hold the device; or
+.Dv EVIOCGBIT
+of a type Linux does not answer.
+.It Bq Er ENODEV
+An open of a node with no device, or any call on an open whose device has
+gone, such as a USB keyboard unplugged.
+.It Bq Er ENOTTY
+Another ioctl.
+.El
+.Sh SEE ALSO
+.Xr busybox-util-linux 1 ,
+.Xr poll 2 ,
+.Xr console 4 ,
+.Xr mixer 4

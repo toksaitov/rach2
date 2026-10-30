@@ -1,0 +1,64 @@
+.Dd October 30, 2026
+.Dt MIXER 4
+.Os
+.Sh NAME
+.Nm mixer
+.Nd the master volume, as OSS's mixer
+.Sh SYNOPSIS
+.In sys/soundcard.h
+.Pp
+.Pa /dev/mixer
+.Sh DESCRIPTION
+The device reads and sets the master volume of the audio driver in use,
+Intel HD Audio or the Sound Blaster 16, through OSS's ioctls with Linux's
+numbers: major 14, minor 0.
+It is there only while one of those two drivers is; the PC speaker has no
+volume.
+The node is mode 0666, so that the console's user sets the volume.
+.Pp
+The mixer has one channel, the volume, which the driver applies to every
+amplifier of its output path.
+A level is OSS's int: the left side's percentage, 0 to 100, in the low byte
+and the right's in the next.
+The driver keeps the level set and applies it again each time a stream
+starts, and the console's own
+.Dv AUDIO_SET_VOLUME
+request sets the same level.
+It is 100 at boot.
+A level of 0 mutes HD Audio's amplifiers.
+.Bl -tag -width SOUND_MIXER_WRITE_VOLUME
+.It Dv SOUND_MIXER_READ_VOLUME
+The level, the same on both sides.
+.It Dv SOUND_MIXER_WRITE_VOLUME
+Set the level to the louder of the two sides, and give back the level set.
+.It Dv SOUND_MIXER_READ_DEVMASK
+.Dv SOUND_MASK_VOLUME
+alone.
+.It Dv SOUND_MIXER_READ_RECMASK , SOUND_MIXER_READ_RECSRC
+0: the mixer records nothing.
+.It Dv SOUND_MIXER_READ_STEREODEVS , SOUND_MIXER_READ_CAPS
+0: the volume is one channel.
+.It Dv SOUND_MIXER_INFO
+A
+.Vt mixer_info :
+the id,
+.Dq HDA
+or
+.Dq SB16 ,
+the driver's name, and the count of the volume's writes since boot.
+.It Dv OSS_GETVERSION
+0x030802, the version Linux gives.
+.El
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er EINVAL
+A read or write of another of OSS's channels, such as
+.Dv SOUND_MIXER_PCM .
+.It Bq Er ENOTTY
+Another ioctl.
+.It Bq Er ENODEV
+No driver with a volume is in use.
+.El
+.Sh SEE ALSO
+.Xr console 4 ,
+.Xr input 4
