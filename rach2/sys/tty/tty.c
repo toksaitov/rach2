@@ -18,6 +18,7 @@
 #include "../io/poll.h"
 #include "../serial.h"
 #include "../kio.h"
+#include "../display/blank.h"
 #include "../klog.h"
 #include "../lib/kirq.h"
 #include "../lib/kstring.h"
@@ -506,14 +507,16 @@ static void console_pump_irq(struct tty *t)
     }
 }
 
+static void console_service(void);
+
 /** The serial driver's receive notify, run from the port's interrupt with
- * interrupts off once bytes are in the ring. It does what the tick does
- * (tty_console_poll), so a parked reader learns of input at once and a
+ * interrupts off once bytes are in the ring. It services the port as the
+ * tick does (tty_console_poll), so a parked reader learns of input at once and a
  * session nobody reads for has its bytes moved into the discipline at once;
  * the tick remains for a port whose interrupt is not enabled. */
 static void console_rx_notify(void)
 {
-    tty_console_poll();
+    console_service();
 }
 
 void tty_console_init(void)
@@ -526,6 +529,7 @@ void tty_console_init(void)
     console_tty.winsize.ws_row = (uint16_t)rows;
     console_tty.pump = console_pump;
     serial_set_rx_notify(console_rx_notify);
+    blank_init();
 }
 
 void tty_console_counters(struct console_counters *out)
@@ -561,6 +565,14 @@ void tty_console_counters(struct console_counters *out)
  * regains control.
  */
 void tty_console_poll(void)
+{
+    blank_tick();
+    console_service();
+}
+
+/** Service the console's serial port, as `tty_console_poll` describes; the
+ * port's interrupt runs this alone, without the blanking's countdown. */
+static void console_service(void)
 {
     serial_rx_service(TTY_PUMP_BUDGET);
     if (!serial_data_available()) {

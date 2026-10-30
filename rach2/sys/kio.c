@@ -20,6 +20,7 @@
 #include "kio.h"
 #include "klog.h"
 #include "panic.h"
+#include "display/blank.h"
 #include "arch/arch.h"
 #include "lib/kirq.h"
 #include "lib/spinlock.h"
@@ -423,9 +424,13 @@ unsigned int k_take_answer(char *buf, unsigned int size)
  * `X`), color (`m`), and cursor save/restore (`s`, `u`) are handled. The
  * device attributes (`c`) and the status reports (`n`) are answered by
  * `vt_answer_query`; a program such as a browser waits for those answers
- * before it reads the keyboard. A scroll-region set (`r`), mode toggles
- * (`h`, `l`), and anything else are ignored. Coordinates are one-based on
- * the wire and clamped to the screen.
+ * before it reads the keyboard. Linux's private `ESC [ 9 ; N ]` sets the
+ * time without input after which the console blanks to N minutes, at most
+ * 60, and 0 for never, as util-linux's `setterm -blank` writes it
+ * (display/blank.h); Linux's other sequences with the final `]` are
+ * ignored. A scroll-region set (`r`), mode toggles (`h`, `l`), and anything
+ * else are ignored. Coordinates are one-based on the wire and clamped to
+ * the screen.
  */
 static void vt_dispatch_csi(char c)
 {
@@ -522,6 +527,13 @@ static void vt_dispatch_csi(char c)
     case 'c':
     case 'n':
         vt_answer_query(c);
+        break;
+
+    case ']':
+        if (vt_arg(0, 0) == 9) {
+            n = vt_arg(1, 0);
+            console_set_blank_time((n < 60 ? n : 60) * 60);
+        }
         break;
 
     default:

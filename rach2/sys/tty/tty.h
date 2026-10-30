@@ -76,7 +76,8 @@ void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx);
 /**
  * Initialize console_tty, once at boot: output to the screen and the serial
  * port, the serial ring as its pump, the text console's size as its window,
- * and its receive notify registered with the serial driver.
+ * and its receive notify registered with the serial driver; then the
+ * screen's blanking and backlights (`blank_init`).
  */
 void tty_console_init(void);
 
@@ -111,11 +112,12 @@ int tty_console_owned_by_leader(int sid, int pid);
 int tty_is_background(struct tty *t, int sid, int pgid);
 
 /**
- * Service the console's serial port, from the timer tick and from the port's
- * interrupt, with interrupts off: move the UART's bytes to the ring, then
- * wake a reader or poller waiting on the console, or, with none waiting and a
- * session owning the console, drain the ring into the discipline without
- * echo.
+ * Run the screen's blanking countdown (`blank_tick`) and service the
+ * console's serial port, from the boot processor's timer tick with
+ * interrupts off; the port's interrupt services the port alone. Servicing
+ * it moves the UART's bytes to the ring, then wakes a reader or poller
+ * waiting on the console, or, with none waiting and a session owning the
+ * console, drains the ring into the discipline without echo.
  */
 void tty_console_poll(void);
 

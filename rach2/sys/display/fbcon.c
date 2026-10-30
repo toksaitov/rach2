@@ -80,6 +80,7 @@ static struct boot_framebuffer fb_desc;
 #define GFX_HEIGHT     200u
 #define GFX_LINE_BYTES 16384u
 static int gfx_on;
+static int blank_on; /* the console is blank: no cell is drawn */
 static uint32_t gfx_pixel[256];
 static uint32_t gfx_scale;
 static uint32_t gfx_left;
@@ -274,7 +275,7 @@ void fbcon_stored(uint32_t at)
 {
     volatile uint8_t *base;
 
-    if (!fbcon_active || gfx_on || at < start || at >= start + SCREEN_CELLS) {
+    if (!fbcon_active || gfx_on || blank_on || at < start || at >= start + SCREEN_CELLS) {
         return;
     }
     base = fbcon_window();
@@ -290,7 +291,7 @@ void fbcon_set_start(uint32_t cell)
 
     start = cell;
     base = fbcon_window();
-    if (!fbcon_active || gfx_on || base == NULL) {
+    if (!fbcon_active || gfx_on || blank_on || base == NULL) {
         return;
     }
     for (i = 0; i < SCREEN_CELLS; i++) {
@@ -305,7 +306,7 @@ void fbcon_set_cursor(uint32_t cell)
 
     cursor = cell;
     base = fbcon_window();
-    if (!fbcon_active || gfx_on || base == NULL) {
+    if (!fbcon_active || gfx_on || blank_on || base == NULL) {
         return;
     }
     if (was != NO_CELL) {
@@ -428,6 +429,26 @@ void fbcon_gfx_end(void)
     gfx_on = 0;
     if (base != NULL) {
         clear_screen(base);
+        for (i = 0; i < SCREEN_CELLS; i++) {
+            refresh(base, i);
+        }
+    }
+}
+
+void fbcon_blank(int blank)
+{
+    volatile uint8_t *base = fbcon_window();
+    uint32_t i;
+
+    if (!fbcon_active || (blank != 0) == blank_on) {
+        return;
+    }
+    blank_on = blank != 0;
+    if (gfx_on || base == NULL) {
+        return;
+    }
+    clear_screen(base);
+    if (!blank_on) {
         for (i = 0; i < SCREEN_CELLS; i++) {
             refresh(base, i);
         }

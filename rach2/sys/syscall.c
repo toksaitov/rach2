@@ -57,6 +57,7 @@
 #include "lib/kuser.h"
 #include "lib/kstring.h"
 #include "display/fb.h"
+#include "display/blank.h"
 #include "speaker.h"
 #include "audio/audio.h"
 #include "network/socket/socket.h"
@@ -91,6 +92,12 @@ volatile uint32_t fb_owner_pid = 0;
  * ioctl request codes (Linux compatible subset)
  */
 #define KIOCSOUND 0x4B2F /* Set PC speaker frequency (0 = off) */
+
+#define TIOCLINUX 0x541C /* The Linux console's subcodes, in the byte at arg */
+
+#define TIOCL_UNBLANKSCREEN 4  /* Unblank the console */
+#define TIOCL_BLANKSCREEN   14 /* Blank it until it is unblanked */
+#define TIOCL_BLANKEDSCREEN 15 /* Whether it is blank */
 
 #define TCGETS 0x5401 /* Get terminal attributes (termios) */
 
@@ -2034,15 +2041,52 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uintptr_t arg, 
 }
 
 /**
- * Answer the console's sound requests: KIOCSOUND on the PC speaker, and the
- * AUDIO_* requests on the active driver. The AUDIO_* requests other than
- * AUDIO_GET_INFO are -ENODEV with no driver, and AUDIO_START and AUDIO_WRITE
- * return the driver's -errno. AUDIO_WRITE checks the caller's samples with
- * `user_buffer_ok`, and the driver reads them in place. Any other request is
- * -ENOTTY.
+ * TIOCLINUX, the Linux console's requests, whose subcode is the byte at
+ * `arg`: TIOCL_BLANKSCREEN blanks the console until TIOCL_UNBLANKSCREEN,
+ * which a key does not undo, TIOCL_UNBLANKSCREEN unblanks it, and
+ * TIOCL_BLANKEDSCREEN returns 1 while it is blank and 0 otherwise, as
+ * Linux's first console would (display/blank.h). The caller's session must
+ * control the console, or the caller be privileged, as on Linux (-EPERM).
+ * Another subcode is -EINVAL.
+ */
+static int32_t console_tioclinux(uintptr_t arg)
+{
+    unsigned char sub;
+
+    if (copy_from_user(&sub, (const void __user *)arg, 1) != 0) {
+        return -EFAULT;
+    }
+    if ((console_tty.sid == 0 || console_tty.sid != (int)current_proc->sid) &&
+        !proc_privileged(current_proc)) {
+        return -EPERM;
+    }
+    switch (sub) {
+    case TIOCL_BLANKSCREEN:
+        console_blank_now();
+        return 0;
+    case TIOCL_UNBLANKSCREEN:
+        console_unblank_now();
+        return 0;
+    case TIOCL_BLANKEDSCREEN:
+        return console_is_blank();
+    default:
+        return -EINVAL;
+    }
+}
+
+/**
+ * Answer the console's requests: TIOCLINUX (`console_tioclinux`), KIOCSOUND
+ * on the PC speaker, and the AUDIO_* requests on the active driver. The
+ * AUDIO_* requests other than AUDIO_GET_INFO are -ENODEV with no driver, and
+ * AUDIO_START and AUDIO_WRITE return the driver's -errno. AUDIO_WRITE checks
+ * the caller's samples with `user_buffer_ok`, and the driver reads them in
+ * place. Any other request is -ENOTTY.
  */
 static int32_t console_ioctl(uint32_t request, uintptr_t arg)
 {
+    if (request == TIOCLINUX) {
+        return console_tioclinux(arg);
+    }
     if (request == KIOCSOUND) {
         if (arg == 0) {
             speaker_off();
@@ -2133,6 +2177,7 @@ static int32_t framebuffer_ioctl(uint32_t request, uintptr_t arg)
     switch (request) {
     case FB_MODE_13H:
         if (!gfx_is_active()) {
+            console_unblank_now();
             fb_enter();
         }
         fb_owner_pid = current_proc->tgid;

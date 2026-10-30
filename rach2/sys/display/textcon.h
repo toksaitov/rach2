@@ -100,6 +100,14 @@ uint8_t get_curr_color_attr(void);
  */
 const uint16_t *textcon_load_font(void);
 
+/**
+ * Paint the screen black while `blank` is set, keeping what it shows, and
+ * show it again when it is clear: the console's blanking (blank.h). Output
+ * written meanwhile is shown at the unblank. The caller holds the console's
+ * lock.
+ */
+void textcon_blank(int blank);
+
 /** Whether the console draws its font on a framebuffer rather than in a
  * text adapter. */
 bool textcon_on_framebuffer(void);

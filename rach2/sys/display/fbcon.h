@@ -79,6 +79,10 @@ void fbcon_gfx_frame(const uint8_t *pixels);
  * again, those written while the picture had the screen among them. */
 void fbcon_gfx_end(void);
 
+/** Paint the screen black and draw no cell while `blank` is set; when it
+ * is clear, draw every cell again, as `fbcon_gfx_end` does. */
+void fbcon_blank(int blank);
+
 /**
  * The kernel's address of the framebuffer's first byte now, or NULL when
  * the framebuffer cannot be reached. The platform defines it

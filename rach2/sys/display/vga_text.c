@@ -514,6 +514,28 @@ const uint16_t *textcon_load_font(void)
     return vga_font_load() ? vga_font_map : NULL;
 }
 
+/*
+ * On the VGA the sequencer's screen-off bit blanks the display and leaves
+ * its memory, its start address and its cursor as they are, so output goes
+ * on as ever while it is set.
+ */
+#define VGA_SEQ_CLOCKING   0x01
+#define VGA_SEQ_SCREEN_OFF 0x20
+
+void textcon_blank(int blank)
+{
+    uint8_t v;
+
+    if (fbcon_active) {
+        fbcon_blank(blank);
+        return;
+    }
+    outb(VGA_SEQ_INDEX, VGA_SEQ_CLOCKING);
+    v = inb(VGA_SEQ_DATA);
+    outb(VGA_SEQ_DATA,
+         blank ? (uint8_t)(v | VGA_SEQ_SCREEN_OFF) : (uint8_t)(v & ~VGA_SEQ_SCREEN_OFF));
+}
+
 bool textcon_on_framebuffer(void)
 {
     return fbcon_active;
