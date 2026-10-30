@@ -362,6 +362,65 @@ static int unexpected(void)
     return -EIO;
 }
 
+/** No input device is registered. */
+int evdev_present(int n)
+{
+    (void)n;
+    return 0;
+}
+
+/** No audio driver offers its volume. */
+int mixer_present(void)
+{
+    return 0;
+}
+
+/** The operations of an event device and the mixer, which no row opens. */
+int32_t evdev_open(fd_entry_t *e, int n)
+{
+    (void)e;
+    (void)n;
+    return unexpected();
+}
+
+int32_t evdev_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    (void)e;
+    (void)buf;
+    (void)count;
+    return unexpected();
+}
+
+short evdev_poll(fd_entry_t *e, short events, struct wait_queue **wq)
+{
+    (void)e;
+    (void)events;
+    (void)wq;
+    return (short)unexpected();
+}
+
+int32_t evdev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
+{
+    (void)e;
+    (void)request;
+    (void)arg;
+    return unexpected();
+}
+
+void evdev_close(fd_entry_t *e)
+{
+    (void)e;
+    unexpected();
+}
+
+int32_t mixer_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
+{
+    (void)e;
+    (void)request;
+    (void)arg;
+    return unexpected();
+}
+
 /** The transfer limit of a block device, which no row reads. */
 uint32_t block_max_sectors(block_device_t *dev)
 {

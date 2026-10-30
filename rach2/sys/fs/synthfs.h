@@ -9,10 +9,10 @@
  * synthetic mount types (vfs.c) classify the spelling of a path inside the
  * mount, the namespace's name first, and devfs, procfs and the system calls
  * act on the kind and the coordinates it gives. The classifier is string
- * logic; what it asks of the machine, whether an interface or a disk node
- * of a name exists, it asks of procfs.c, for which
- * tests/host/synthfs_hosttest.c has stand-ins, so that the test runs it on
- * the host under ASan and UBSan.
+ * logic; what it asks of the machine, whether an interface, a disk node or
+ * a backlight of a name exists, it asks of procfs.c and
+ * display/backlight.c, for which tests/host/synthfs_hosttest.c has
+ * stand-ins, so that the test runs it on the host under ASan and UBSan.
  */
 
 /* What a path is: one outside the three namespaces, or a node of one. */
@@ -71,6 +71,9 @@ enum vnode_kind {
     VNODE_PROC_NS_LINK,      /* /proc/<pid>/ns/<kind>, by `procfd` (proc/ns.h's NS_) */
     VNODE_PROC_FDINFO_DIR,   /* /proc/<pid>/fdinfo: a file for each descriptor */
     VNODE_PROC_FDINFO,       /* /proc/<pid>/fdinfo/<n>: its offset and flags, by `procfd` */
+    VNODE_INPUT_DIR,         /* /dev/input: the event devices, each a VNODE_DEV */
+    VNODE_PROC_ACPI_DIR,     /* /proc/acpi: the directory of call */
+    VNODE_PROC_ACPI_CALL,    /* /proc/acpi/call: an ACPI method evaluated by its path */
     VNODE_ENOENT,            /* under a synthetic mount, but no such entry */
     VNODE_ENOTDIR            /* under a synthetic mount, a non-dir used as a directory */
 };
@@ -144,6 +147,8 @@ const char *synth_ns_name(int kind);
 /* /proc/<pid>/task/<tid>/children, which a thread's directory alone has. */
 #define SYNTH_PROC_CHILDREN    55
 #define SYNTH_PROC_NETPACKET   56
+/* /proc/acpi/call, read and written as the ACPI method calls it makes. */
+#define SYNTH_PROC_ACPI_CALL   57
 
 /* The pid of /proc/self and /dev/fd, which procfs takes as the caller's
  * (`procfs_resolve_pid`). */
@@ -158,7 +163,7 @@ const char *synth_ns_name(int kind);
  */
 struct vpath {
     int kind;
-    char name[64]; /* VNODE_DEV: device leaf name */
+    char name[64]; /* VNODE_DEV: device name, "input/eventN" below /dev/input */
     int pid;       /* VNODE_PROC_*: SYNTH_PID_SELF for /proc/self */
     int procfd;    /* PROC_FD_LINK, PROC_FDINFO: the descriptor number; NS_LINK: the kind */
     int procfile;  /* PROC_FILE, NET_FILE, SYSVIPC: SYNTH_PROC_*; SYS_FILE: the attribute */
@@ -173,13 +178,15 @@ struct vpath {
  * resolved, into `vp`, and return its kind. Empty components are skipped. A
  * path outside /dev, /proc and /sys is VNODE_KRFFS. A name of /dev that is
  * not a special one is VNODE_DEV whether or not the device exists, which
- * devfs decides; whether a process, a descriptor, a processor or a PCI or
- * USB device exists is for the caller to ask, while an interface and a disk
- * node are looked up (`sysfs_net_index`, `sysfs_block_find`). A path that
- * goes on past a file is VNODE_ENOTDIR, and the caller asks in the same way
- * whether that file exists, since a path past a missing one is ENOENT. Past
- * /proc/<pid>/cwd, root or fd/<n>, which may lead to a directory, a path is
- * VNODE_ENOENT, as is any other path that names nothing.
+ * devfs decides, and so is a name of /dev/input, as "input/" and the name.
+ * Whether a process, a descriptor, a processor or a PCI or USB device
+ * exists is for the caller to ask, while an interface, a disk node and a
+ * backlight are looked up (`sysfs_net_index`, `sysfs_block_find`,
+ * `backlight_find`). A path that goes on past a file is VNODE_ENOTDIR, and
+ * the caller asks in the same way whether that file exists, since a path
+ * past a missing one is ENOENT. Past /proc/<pid>/cwd, root or fd/<n>,
+ * which may lead to a directory, a path is VNODE_ENOENT, as is any other
+ * path that names nothing.
  */
 int synth_classify(const char *path, struct vpath *vp);
 
@@ -250,56 +257,60 @@ const char *synth_sysvipc_name(int origin);
 /*
  * /sys: the parts of Linux's sysfs that programs here read: the PCI
  * functions and USB devices with their uevent files, the network interfaces
- * and their statistics, the clock and its wake alarm, the sleep states, the
- * disk nodes, the processors and the memory block. Each directory is a
- * numbered node, below; a node of which there is one for each device,
- * interface, processor or disk node has a `syskey` that says which. A PCI
+ * and their statistics, the clock and its wake alarm, the backlights, the
+ * sleep states, the disk nodes, the processors and the memory block. Each
+ * directory is a numbered node, below; a node of which there is one for each
+ * device, interface, backlight, processor or disk node has a `syskey` that
+ * says which. A backlight's key is its index (display/backlight.h). A PCI
  * function's key is its bus, device and function as the configuration
  * address has them, below 2^16; a USB device's is its controller's number
  * less 1 in bits 28 and 29, its root port in the eight below, and the ports
  * of up to five hubs below it in four bits each, as its name gives them, at
  * least 2^20.
  */
-#define SYSFS_ROOT        0  /* /sys */
-#define SYSFS_BUS         1  /* /sys/bus */
-#define SYSFS_BUS_PCI     2  /* /sys/bus/pci */
-#define SYSFS_BUS_USB     3  /* /sys/bus/usb */
-#define SYSFS_PCI_LINKS   4  /* /sys/bus/pci/devices */
-#define SYSFS_USB_LINKS   5  /* /sys/bus/usb/devices */
-#define SYSFS_DEVICES     6  /* /sys/devices */
-#define SYSFS_PCI_ROOT    7  /* /sys/devices/pci0000:00 */
-#define SYSFS_USB_ROOT    8  /* /sys/devices/usb */
-#define SYSFS_PCI_DEVICE  9  /* /sys/devices/pci0000:00/0000:BB:DD.F */
-#define SYSFS_USB_DEVICE  10 /* /sys/devices/usb/B-P[.P...] */
-#define SYSFS_CLASS       11 /* /sys/class */
-#define SYSFS_CLASS_NET   12 /* /sys/class/net */
-#define SYSFS_NET_IF      13 /* /sys/class/net/IF, whose key is its index */
-#define SYSFS_NET_STATS   14 /* /sys/class/net/IF/statistics */
-#define SYSFS_CLASS_RTC   15 /* /sys/class/rtc */
-#define SYSFS_RTC0        16 /* /sys/class/rtc/rtc0, the CMOS clock */
-#define SYSFS_RTC_DEVICE  17 /* /sys/class/rtc/rtc0/device */
-#define SYSFS_RTC_POWER   18 /* /sys/class/rtc/rtc0/device/power */
-#define SYSFS_POWER       19 /* /sys/power, the sleep states */
-#define SYSFS_BLOCK       20 /* /sys/block */
-#define SYSFS_BLOCK_DISK  21 /* /sys/block/DISK, whose key is its disk node's index */
-#define SYSFS_BLOCK_PART  22 /* /sys/block/DISK/PART, the same of the partition */
-#define SYSFS_BLOCK_QUEUE 23 /* /sys/block/DISK/queue */
-#define SYSFS_BLOCK_DEV   24 /* /sys/block/DISK/device */
-#define SYSFS_DEV         25 /* /sys/dev */
-#define SYSFS_DEV_BLOCK   26 /* /sys/dev/block, a link for each disk node */
-#define SYSFS_SYSTEM      27 /* /sys/devices/system */
-#define SYSFS_CPU         28 /* /sys/devices/system/cpu, the processors */
-#define SYSFS_CPUN        29 /* /sys/devices/system/cpu/cpuN, whose key is N */
-#define SYSFS_MEMORY      30 /* /sys/devices/system/memory, the memory blocks */
-#define SYSFS_MEMORY0     31 /* /sys/devices/system/memory/memory0 */
-#define SYSFS_BLOCK_LOOP  32 /* /sys/block/loopN/loop, while a file backs it */
+#define SYSFS_ROOT            0  /* /sys */
+#define SYSFS_BUS             1  /* /sys/bus */
+#define SYSFS_BUS_PCI         2  /* /sys/bus/pci */
+#define SYSFS_BUS_USB         3  /* /sys/bus/usb */
+#define SYSFS_PCI_LINKS       4  /* /sys/bus/pci/devices */
+#define SYSFS_USB_LINKS       5  /* /sys/bus/usb/devices */
+#define SYSFS_DEVICES         6  /* /sys/devices */
+#define SYSFS_PCI_ROOT        7  /* /sys/devices/pci0000:00 */
+#define SYSFS_USB_ROOT        8  /* /sys/devices/usb */
+#define SYSFS_PCI_DEVICE      9  /* /sys/devices/pci0000:00/0000:BB:DD.F */
+#define SYSFS_USB_DEVICE      10 /* /sys/devices/usb/B-P[.P...] */
+#define SYSFS_CLASS           11 /* /sys/class */
+#define SYSFS_CLASS_NET       12 /* /sys/class/net */
+#define SYSFS_NET_IF          13 /* /sys/class/net/IF, whose key is its index */
+#define SYSFS_NET_STATS       14 /* /sys/class/net/IF/statistics */
+#define SYSFS_CLASS_RTC       15 /* /sys/class/rtc */
+#define SYSFS_RTC0            16 /* /sys/class/rtc/rtc0, the CMOS clock */
+#define SYSFS_RTC_DEVICE      17 /* /sys/class/rtc/rtc0/device */
+#define SYSFS_RTC_POWER       18 /* /sys/class/rtc/rtc0/device/power */
+#define SYSFS_POWER           19 /* /sys/power, the sleep states */
+#define SYSFS_BLOCK           20 /* /sys/block */
+#define SYSFS_BLOCK_DISK      21 /* /sys/block/DISK, whose key is its disk node's index */
+#define SYSFS_BLOCK_PART      22 /* /sys/block/DISK/PART, the same of the partition */
+#define SYSFS_BLOCK_QUEUE     23 /* /sys/block/DISK/queue */
+#define SYSFS_BLOCK_DEV       24 /* /sys/block/DISK/device */
+#define SYSFS_DEV             25 /* /sys/dev */
+#define SYSFS_DEV_BLOCK       26 /* /sys/dev/block, a link for each disk node */
+#define SYSFS_SYSTEM          27 /* /sys/devices/system */
+#define SYSFS_CPU             28 /* /sys/devices/system/cpu, the processors */
+#define SYSFS_CPUN            29 /* /sys/devices/system/cpu/cpuN, whose key is N */
+#define SYSFS_MEMORY          30 /* /sys/devices/system/memory, the memory blocks */
+#define SYSFS_MEMORY0         31 /* /sys/devices/system/memory/memory0 */
+#define SYSFS_BLOCK_LOOP      32 /* /sys/block/loopN/loop, while a file backs it */
+#define SYSFS_CLASS_BACKLIGHT 33 /* /sys/class/backlight */
+#define SYSFS_BACKLIGHT       34 /* /sys/class/backlight/NAME, whose key is its index */
 
 /** Whether the /sys directory `node` is one of a device, an interface, a
  * processor or a disk node, which `syskey` says, and which exists only while
  * that does. */
 #define SYSFS_KEYED(node)                                                                  \
     ((node) == SYSFS_PCI_DEVICE || (node) == SYSFS_USB_DEVICE || (node) == SYSFS_NET_IF || \
-     (node) == SYSFS_NET_STATS || (node) == SYSFS_CPUN || SYSFS_IS_BLOCK(node))
+     (node) == SYSFS_NET_STATS || (node) == SYSFS_CPUN || (node) == SYSFS_BACKLIGHT ||     \
+     SYSFS_IS_BLOCK(node))
 
 /** Whether `node` is a directory of a disk node: its own, its queue's, its
  * device's or a loop device's `loop`. */
@@ -312,7 +323,8 @@ const char *synth_sysvipc_name(int origin);
 const char *sysfs_attr(int node, int n);
 
 /** Whether the attribute `attr` of `node` takes a privileged write:
- * rtc0's wakealarm and /sys/power's state. */
+ * rtc0's wakealarm, /sys/power's state, and a backlight's brightness and
+ * bl_power. */
 int sysfs_attr_writable(int node, int attr);
 
 /** The interfaces' part, in procfs.c: the index of the interface named by

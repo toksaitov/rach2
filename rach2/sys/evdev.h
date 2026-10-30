@@ -58,9 +58,10 @@ void evdev_report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value
 int evdev_present(int n);
 
 /**
- * Open device `n` on the new descriptor `e`, which devfs has bound to the
- * operations below: give it a queue of its own, from the heap, in
- * `e->priv`. Returns 0, -ENODEV for a device that is not registered, or
+ * Open device `n` on the new descriptor `e`: give it a queue of its own,
+ * from the heap, in `e->priv`. devfs calls it before it binds the
+ * descriptor to the operations below, and frees the descriptor when it
+ * fails. Returns 0, -ENODEV for a device that is not registered, or
  * -ENOMEM.
  */
 int32_t evdev_open(fd_entry_t *e, int n);

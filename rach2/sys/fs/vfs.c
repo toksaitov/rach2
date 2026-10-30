@@ -2782,7 +2782,8 @@ static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
                  kind == VNODE_PROC_FD_DIR || kind == VNODE_PROC_TASK_DIR ||
                  kind == VNODE_SYS_DIR || kind == VNODE_SYS_LINK ||
                  kind == VNODE_PROC_SYSVIPC_DIR || kind == VNODE_PROC_NET_STAT_DIR ||
-                 kind == VNODE_PROC_NS_DIR || kind == VNODE_PROC_FDINFO_DIR;
+                 kind == VNODE_PROC_NS_DIR || kind == VNODE_PROC_FDINFO_DIR ||
+                 kind == VNODE_INPUT_DIR || kind == VNODE_PROC_ACPI_DIR;
 
     k_memset(st, 0, sizeof(*st));
     if (is_dir) {

@@ -8,7 +8,9 @@
  * device with file operations and a major and minor number, and the nodes
  * of the disks join it as the disks are registered. An open of a device
  * binds its operations to the descriptor, as a pipe's are, and stat and the
- * listing of /dev are made from the table. "console" and "tty" open the
+ * listing of /dev are made from the table. The event devices of /dev/input
+ * are in the table by the name "input/eventN", which the classifier gives
+ * a path below /dev/input (synthfs.h). "console" and "tty" open the
  * kernel console as FD_TYPE_CONSOLE, "tty" a pty instead when the caller's
  * session is on one, and "ptmx" opens a new pty pair.
  */
@@ -238,9 +240,17 @@ int devfs_lseek_zero(struct fd_entry *e);
  * bootpart, grubcore and the disk nodes come and go, and a machine can have
  * a later one without an earlier. The inode is the device's place in the
  * table and not in the listing, so it is the number `stat` reports whatever
- * else is present. Returns 1 when `n` names a device, 0 past the last.
+ * else is present. Returns 1 when `n` names a device, 0 past the last. The
+ * event devices are not among them: they are in /dev/input.
  */
 int devfs_dirent(int n, const char **name, uint32_t *ino);
+
+/**
+ * The `n`th event device present now in /dev/input, from 0, as
+ * `devfs_dirent` gives the devices of /dev: its name in the directory,
+ * eventN, and its inode. Returns 1, or 0 past the last.
+ */
+int devfs_input_dirent(int n, const char **name, uint32_t *ino);
 
 struct block_device;
 

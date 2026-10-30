@@ -33,6 +33,8 @@
 #include "../irq.h"
 #include "../proc/suspend.h"
 #include "../proc/wait_queue.h"
+#include "../evdev.h"
+#include "../audio/mixer.h"
 
 /* The open flags `devfs_open` acts on, at Linux's values. */
 #define DEVFS_O_CLOEXEC   02000000
@@ -1493,6 +1495,10 @@ static int32_t dev_rtc_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 static const struct file_ops rtc_ops = {dev_rtc_read, dev_rtc_write, dev_rtc_poll, dev_rtc_ioctl,
                                         NULL};
 
+/* The event devices' operations are evdev.c's and the mixer's mixer.c's. */
+static const struct file_ops evdev_ops = {evdev_read, NULL, evdev_poll, evdev_ioctl, evdev_close};
+static const struct file_ops mixer_ops = {NULL, NULL, dev_poll, mixer_ioctl, NULL};
+
 static const struct file_ops grubcore_ops = {dev_grubcore_read, dev_grubcore_write, dev_poll,
                                              dev_ioctl, dev_grubcore_close};
 static const struct file_ops bootpart_ops = {dev_bootpart_read, dev_bootpart_write, dev_poll,
@@ -1559,8 +1565,12 @@ static struct disk *window_disk(const struct devfs_entry *dev)
  * the owner of every device being root:root: /dev/null, /dev/zero,
  * /dev/full, the random devices and the terminals are 0666, as on Linux, and
  * every other device is root's, with group access to /dev/mem and the loop
- * devices. `bootpart` and `grubcore` are present only while published, as
- * the disk nodes after the table are, which is why the listing goes through
+ * devices. /dev/mixer is 0666 so that the console's user sets the volume,
+ * as a desktop's ACL gives it on Linux, and the event devices of
+ * /dev/input are root's. `bootpart` and `grubcore` are present only while
+ * published, the mixer while an audio driver offers its volume and an event
+ * device while its input device is registered, as the disk nodes after the
+ * table are, which is why the listing goes through
  * `devfs_dirent` and skips an absent device instead of stopping at it: a
  * machine that has a later one and not an earlier one would otherwise have
  * a device it could open and could not list.
@@ -1588,7 +1598,40 @@ static const struct devfs_entry dev_table[] = {{"mem", 1, 1, 0, 0640, &mem_ops},
                                                {"loop-control", 240, 36, 0, 0600, &loopctl_ops},
                                                {"framefail", 240, 37, 0, 0600, &framefail_ops},
                                                {"screenlog", 240, 38, 0, 0600, &screenlog_ops},
-                                               {"rtc0", 254, 0, 0, 0600, &rtc_ops}};
+                                               {"rtc0", 254, 0, 0, 0600, &rtc_ops},
+                                               {"mixer", 14, 0, 0, 0666, &mixer_ops},
+                                               {"input/event0", 13, 64, 0, 0600, &evdev_ops},
+                                               {"input/event1", 13, 65, 0, 0600, &evdev_ops},
+                                               {"input/event2", 13, 66, 0, 0600, &evdev_ops},
+                                               {"input/event3", 13, 67, 0, 0600, &evdev_ops},
+                                               {"input/event4", 13, 68, 0, 0600, &evdev_ops},
+                                               {"input/event5", 13, 69, 0, 0600, &evdev_ops},
+                                               {"input/event6", 13, 70, 0, 0600, &evdev_ops},
+                                               {"input/event7", 13, 71, 0, 0600, &evdev_ops},
+                                               {"input/event8", 13, 72, 0, 0600, &evdev_ops},
+                                               {"input/event9", 13, 73, 0, 0600, &evdev_ops},
+                                               {"input/event10", 13, 74, 0, 0600, &evdev_ops},
+                                               {"input/event11", 13, 75, 0, 0600, &evdev_ops},
+                                               {"input/event12", 13, 76, 0, 0600, &evdev_ops},
+                                               {"input/event13", 13, 77, 0, 0600, &evdev_ops},
+                                               {"input/event14", 13, 78, 0, 0600, &evdev_ops},
+                                               {"input/event15", 13, 79, 0, 0600, &evdev_ops},
+                                               {"input/event16", 13, 80, 0, 0600, &evdev_ops},
+                                               {"input/event17", 13, 81, 0, 0600, &evdev_ops},
+                                               {"input/event18", 13, 82, 0, 0600, &evdev_ops},
+                                               {"input/event19", 13, 83, 0, 0600, &evdev_ops},
+                                               {"input/event20", 13, 84, 0, 0600, &evdev_ops},
+                                               {"input/event21", 13, 85, 0, 0600, &evdev_ops},
+                                               {"input/event22", 13, 86, 0, 0600, &evdev_ops},
+                                               {"input/event23", 13, 87, 0, 0600, &evdev_ops},
+                                               {"input/event24", 13, 88, 0, 0600, &evdev_ops},
+                                               {"input/event25", 13, 89, 0, 0600, &evdev_ops},
+                                               {"input/event26", 13, 90, 0, 0600, &evdev_ops},
+                                               {"input/event27", 13, 91, 0, 0600, &evdev_ops},
+                                               {"input/event28", 13, 92, 0, 0600, &evdev_ops},
+                                               {"input/event29", 13, 93, 0, 0600, &evdev_ops},
+                                               {"input/event30", 13, 94, 0, 0600, &evdev_ops},
+                                               {"input/event31", 13, 95, 0, 0600, &evdev_ops}};
 
 #define DEVFS_NDEV ((int)(sizeof(dev_table) / sizeof(dev_table[0])))
 
@@ -1602,9 +1645,16 @@ static int devfs_loop_index(const struct devfs_entry *dev)
 }
 
 /** Whether table entry `i` is present now: bootpart and grubcore only while
- * published, and every other entry always. */
+ * published, the mixer and an event device only while `mixer_present` and
+ * `evdev_present` say, and every other entry always. */
 static int devfs_entry_present(int i)
 {
+    if (dev_table[i].ops == &evdev_ops) {
+        return evdev_present(dev_table[i].minor - EVDEV_MINOR_BASE);
+    }
+    if (dev_table[i].ops == &mixer_ops) {
+        return mixer_present();
+    }
     if (dev_table[i].ops == &bootpart_ops) {
         return bootpart.present;
     }
@@ -2082,6 +2132,14 @@ int devfs_open(const char *name, int flags)
     e->node = NULL;
     e->sock = NULL;
     e->ofd->offset = 0;
+    if (dev->ops == &evdev_ops) {
+        int32_t rc = evdev_open(e, dev->minor - EVDEV_MINOR_BASE);
+
+        if (rc != 0) {
+            fd_free(current_proc->fds, fd);
+            return rc;
+        }
+    }
     if (dev->ops) {
         e->type = FD_TYPE_DEVICE;
         e->ops = dev->ops;
@@ -2234,7 +2292,7 @@ int devfs_dirent(int n, const char **name, uint32_t *ino)
         return 0;
     }
     for (i = 0; i < DEVFS_NDEV; i++) {
-        if (!devfs_entry_present(i)) {
+        if (!devfs_entry_present(i) || dev_table[i].ops == &evdev_ops) {
             continue;
         }
         if (n == 0) {
@@ -2255,6 +2313,20 @@ int devfs_dirent(int n, const char **name, uint32_t *ino)
             return 1;
         }
         n--;
+    }
+    return 0;
+}
+
+int devfs_input_dirent(int n, const char **name, uint32_t *ino)
+{
+    int i;
+
+    for (i = 0; i < DEVFS_NDEV && n >= 0; i++) {
+        if (dev_table[i].ops == &evdev_ops && devfs_entry_present(i) && n-- == 0) {
+            *name = dev_table[i].name + 6; /* past "input/" */
+            *ino = DEVFS_INO(i);
+            return 1;
+        }
     }
     return 0;
 }

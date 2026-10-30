@@ -6,6 +6,8 @@
 
 #include "synthfs.h"
 
+#include "../display/backlight.h"
+
 /* A path component as a (pointer, length) slice; the path is not modified. */
 struct comp {
     const char *s;
@@ -99,6 +101,29 @@ static void synth_copy_name(struct vpath *vp, struct comp c)
         vp->name[i] = c.s[i];
     }
     vp->name[n] = '\0';
+}
+
+/** Classify the components `c` of `n` below /dev/input: the directory, and
+ * an event device as the device of /dev named "input/" and its name, which
+ * devfs decides whether it exists. */
+static int synth_classify_input(const struct comp *c, int n, struct vpath *vp)
+{
+    static const char prefix[] = "input/";
+    int i, k;
+
+    if (n == 0) {
+        vp->kind = VNODE_INPUT_DIR;
+        return vp->kind;
+    }
+    for (i = 0; prefix[i] != '\0'; i++) {
+        vp->name[i] = prefix[i];
+    }
+    for (k = 0; k < c[0].len && i < (int)sizeof(vp->name) - 1; k++) {
+        vp->name[i++] = c[0].s[k];
+    }
+    vp->name[i] = '\0';
+    vp->kind = n == 1 ? VNODE_DEV : VNODE_ENOTDIR;
+    return vp->kind;
 }
 
 /** Append the string `s` to `out` at `*pos`, as far as `cap` bytes leave
@@ -291,6 +316,10 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
         synth_put(out, cap, &pos, "/dev");
     } else if (kind == VNODE_PTS_DIR) {
         synth_put(out, cap, &pos, "/dev/pts");
+    } else if (kind == VNODE_INPUT_DIR) {
+        synth_put(out, cap, &pos, "/dev/input");
+    } else if (kind == VNODE_PROC_ACPI_DIR) {
+        synth_put(out, cap, &pos, "/proc/acpi");
     } else if (kind == VNODE_PROC_DIR) {
         synth_put(out, cap, &pos, "/proc");
     } else if (kind == VNODE_PROC_NET_DIR) {
@@ -700,6 +729,9 @@ const char *sysfs_attr(int node, int n)
     static const char *const device[] = {"model", "rev", "serial", "vendor", 0};
     static const char *const loop[] = {"autoclear", "backing_file", "dio", "offset",
                                        "partscan",  "sizelimit",    0};
+    /* In the order of backlight.h's BACKLIGHT_ attributes. */
+    static const char *const backlight[] = {"actual_brightness", "bl_power", "brightness",
+                                            "max_brightness",    "type",     0};
     const char *const *list = node == SYSFS_NET_IF        ? attrs
                               : node == SYSFS_NET_STATS   ? stats
                               : node == SYSFS_RTC0        ? rtc
@@ -713,6 +745,7 @@ const char *sysfs_attr(int node, int n)
                               : node == SYSFS_BLOCK_QUEUE ? queue
                               : node == SYSFS_BLOCK_DEV   ? device
                               : node == SYSFS_BLOCK_LOOP  ? loop
+                              : node == SYSFS_BACKLIGHT   ? backlight
                                                           : 0;
     int i;
 
@@ -723,7 +756,8 @@ const char *sysfs_attr(int node, int n)
 
 int sysfs_attr_writable(int node, int attr)
 {
-    return (node == SYSFS_RTC0 && attr == 5) || (node == SYSFS_POWER && attr == 1);
+    return (node == SYSFS_RTC0 && attr == 5) || (node == SYSFS_POWER && attr == 1) ||
+           (node == SYSFS_BACKLIGHT && (attr == BACKLIGHT_POWER || attr == BACKLIGHT_BRIGHTNESS));
 }
 
 /** The part of a disk node's /sys path below the disk's directory: its
@@ -768,6 +802,15 @@ void synth_sys_path(int node, int key, char *out, int cap)
             }
         }
         synth_put(out, cap, &pos, block_subdir(node));
+        out[pos] = '\0';
+        return;
+    }
+    if (node == SYSFS_CLASS_BACKLIGHT || node == SYSFS_BACKLIGHT) {
+        synth_put(out, cap, &pos, "/sys/class/backlight");
+        if (node == SYSFS_BACKLIGHT && backlight_name(key)) {
+            synth_put(out, cap, &pos, "/");
+            synth_put(out, cap, &pos, backlight_name(key));
+        }
         out[pos] = '\0';
         return;
     }
@@ -1051,7 +1094,7 @@ static int synth_classify_sys_block(const struct comp *c, int n, int dev, struct
 }
 
 /** Classify the components `c` of `n` below /sys/class: the network
- * interfaces' class and the clock's. */
+ * interfaces' class, the clock's and the backlights'. */
 static int synth_classify_sys_class(const struct comp *c, int n, struct vpath *vp)
 {
     vp->kind = VNODE_SYS_DIR;
@@ -1063,6 +1106,11 @@ static int synth_classify_sys_class(const struct comp *c, int n, struct vpath *v
         return synth_classify_sys_net(c + 1, n - 1, vp);
     } else if (comp_eq(c[0], "rtc")) {
         return synth_classify_sys_fixed(c + 1, n - 1, SYSFS_CLASS_RTC, vp);
+    } else if (comp_eq(c[0], "backlight") && n == 1) {
+        vp->sysent = SYSFS_CLASS_BACKLIGHT;
+    } else if (comp_eq(c[0], "backlight") && backlight_find(c[1].s, c[1].len) >= 0) {
+        return synth_classify_sys_attr(c + 2, n - 2, SYSFS_BACKLIGHT,
+                                       backlight_find(c[1].s, c[1].len), vp);
     } else {
         vp->kind = VNODE_ENOENT;
     }
@@ -1244,6 +1292,9 @@ int synth_classify(const char *path, struct vpath *vp)
             }
             return vp->kind;
         }
+        if (comp_eq(c[1], "input")) {
+            return synth_classify_input(c + 2, n - 2, vp);
+        }
         if (synth_classify_dev_fd(c, n, vp)) {
             return vp->kind;
         }
@@ -1289,6 +1340,13 @@ int synth_classify(const char *path, struct vpath *vp)
         }
         if (comp_eq(c[1], "sysvipc")) {
             return synth_classify_sysvipc(c + 2, n - 2, vp);
+        }
+        if (comp_eq(c[1], "acpi")) {
+            vp->kind = n == 2                   ? VNODE_PROC_ACPI_DIR
+                       : !comp_eq(c[2], "call") ? VNODE_ENOENT
+                       : n == 3                 ? VNODE_PROC_ACPI_CALL
+                                                : VNODE_ENOTDIR;
+            return vp->kind;
         }
         if (comp_eq(c[1], "self")) {
             pid = SYNTH_PID_SELF;

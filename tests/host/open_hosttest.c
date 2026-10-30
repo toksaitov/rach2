@@ -1083,6 +1083,8 @@ NO_PROC_INO(procfs_ino_swaps)
 NO_PROC_INO(procfs_ino_locks)
 NO_PROC_INO(procfs_ino_netstatdir)
 NO_PROC_INO(procfs_ino_sysvipcdir)
+NO_PROC_INO(procfs_ino_acpidir)
+NO_PROC_INO(procfs_ino_acpicall)
 
 /** Fail the row: no row stats a file of /proc. */
 uint32_t procfs_ino_sysvipc(int origin)

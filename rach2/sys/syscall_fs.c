@@ -56,6 +56,7 @@
 #include "mm/vm.h"
 #include "lib/kuser.h"
 #include "lib/kstring.h"
+#include "display/backlight.h"
 #include "display/fb.h"
 #include "speaker.h"
 #include "audio/audio.h"
@@ -2215,9 +2216,22 @@ static int32_t synth_open(const struct vpath *vp, int flags)
             }
         }
         return procfs_open(vp, flags);
+    case VNODE_PROC_ACPI_CALL:
+        /* Root's alone, checked as a mode of 0600 that root owns. */
+        {
+            unsigned acc = (unsigned)flags & 3u;
+            int want = (acc == 0) ? CRED_R : (acc == 1) ? CRED_W : (CRED_R | CRED_W);
+            int32_t rc = cred_access_bits(0, 0, 0600u, want, 0);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+        return procfs_open(vp, flags);
     case VNODE_DEV_DIR:
     case VNODE_PTS_DIR:
+    case VNODE_INPUT_DIR:
     case VNODE_PROC_DIR:
+    case VNODE_PROC_ACPI_DIR:
     case VNODE_PROC_NET_DIR:
     case VNODE_PROC_NET_STAT_DIR:
     case VNODE_PROC_SYSVIPC_DIR:
@@ -5011,7 +5025,7 @@ static int synth_kind_is_dir(int kind)
            kind == VNODE_PROC_TASK_DIR || kind == VNODE_PROC_SYS_DIR || kind == VNODE_SYS_DIR ||
            kind == VNODE_SYS_LINK || kind == VNODE_PROC_SYSVIPC_DIR ||
            kind == VNODE_PROC_NET_STAT_DIR || kind == VNODE_PROC_NS_DIR ||
-           kind == VNODE_PROC_FDINFO_DIR;
+           kind == VNODE_PROC_FDINFO_DIR || kind == VNODE_INPUT_DIR || kind == VNODE_PROC_ACPI_DIR;
 }
 
 /**
@@ -5801,9 +5815,11 @@ static int32_t synth_fd_stat(int pid, int fd, struct kstat *kst)
 }
 
 /* The inode of /dev/pts, apart from devfs's numbers. */
-#define PTS_INO_DIR 3u
+#define PTS_INO_DIR   3u
 /* /dev/log's inode, below the slaves' and above the directory's. */
-#define DEV_LOG_INO 4u
+#define DEV_LOG_INO   4u
+/* The inode of /dev/input; its devices have devfs's numbers. */
+#define INPUT_INO_DIR 5u
 
 /* Slave N's inode is PTS_INO_BASE + N at every stat, so that the
  * comparison of (st_dev, st_ino) ttyname makes matches. */
@@ -6004,6 +6020,16 @@ static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
         return synth_proc_stat(kst, procfs_ino_net(vp->procfile));
     case VNODE_PROC_SYSVIPC:
         return synth_proc_stat(kst, procfs_ino_sysvipc(vp->procfile));
+    case VNODE_PROC_ACPI_DIR:
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFDIR | 0555;
+        kst->st_ino = procfs_ino_acpidir();
+        return 0;
+    case VNODE_PROC_ACPI_CALL:
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFREG | 0600;
+        kst->st_ino = procfs_ino_acpicall();
+        return 0;
     case VNODE_SYS_DIR:
     case VNODE_SYS_LINK:
     case VNODE_SYS_FILE:
@@ -6126,6 +6152,11 @@ static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
         kst->st_dev = DEVFS_FSID;
         kst->st_mode = S_IFDIR | 0755;
         kst->st_ino = PTS_INO_DIR;
+        return 0;
+    case VNODE_INPUT_DIR:
+        kst->st_dev = DEVFS_FSID;
+        kst->st_mode = S_IFDIR | 0755;
+        kst->st_ino = INPUT_INO_DIR;
         return 0;
     case VNODE_PTS: {
         /* Linux's major for a Unix98 pty slave is 136. */
@@ -6854,7 +6885,7 @@ static int32_t statfs_fill_mount(struct user_statfs __user *out, struct vfs_moun
 static uint32_t statfs_magic_for_kind(int kind)
 {
     if (kind == VNODE_DEV_DIR || kind == VNODE_DEV || kind == VNODE_PTS_DIR || kind == VNODE_PTS ||
-        kind == VNODE_DEV_LINK) {
+        kind == VNODE_DEV_LINK || kind == VNODE_INPUT_DIR) {
         return STATFS_MAGIC_DEVFS;
     }
     if (kind == VNODE_KRFFS) {
@@ -11883,7 +11914,8 @@ static int synth_sys_block_dirent(int node, int key, int n, char *name, uint64_t
  * name, inode and type, and 1, or 0 past the last. The fixed directories
  * hold the next ones down, a bus's `devices` a link for each device, the
  * directory the links lead to a directory for each, a device's directory
- * its uevent, and /sys/class/net its interfaces.
+ * its uevent, /sys/class/net its interfaces and /sys/class/backlight its
+ * backlights, each with its attributes.
  */
 static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino, uint8_t *dtype)
 {
@@ -11905,6 +11937,7 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
                  {SYSFS_MEMORY, "memory0", SYSFS_MEMORY0},
                  {SYSFS_ROOT, "class", SYSFS_CLASS},
                  {SYSFS_ROOT, "power", SYSFS_POWER},
+                 {SYSFS_CLASS, "backlight", SYSFS_CLASS_BACKLIGHT},
                  {SYSFS_CLASS, "net", SYSFS_CLASS_NET},
                  {SYSFS_CLASS, "rtc", SYSFS_CLASS_RTC},
                  {SYSFS_CLASS_RTC, "rtc0", SYSFS_RTC0},
@@ -11926,6 +11959,26 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
     }
     if (node == SYSFS_CLASS_NET || node == SYSFS_NET_IF || node == SYSFS_NET_STATS) {
         return synth_sys_net_dirent(node, key, n, name, ino, dtype);
+    }
+    if (node == SYSFS_CLASS_BACKLIGHT) {
+        if (!backlight_name(n)) {
+            return 0;
+        }
+        k_strncpy(name, backlight_name(n), 31);
+        name[31] = '\0';
+        *ino = sysfs_ino(SYSFS_BACKLIGHT, n, 0);
+        *dtype = DT_DIR;
+        return 1;
+    }
+    if (node == SYSFS_BACKLIGHT) {
+        if (!sysfs_attr(node, n)) {
+            return 0;
+        }
+        k_strncpy(name, sysfs_attr(node, n), 31);
+        name[31] = '\0';
+        *ino = sysfs_ino(node, key, 1 + n);
+        *dtype = DT_REG;
+        return 1;
     }
     if (node == SYSFS_BLOCK || node == SYSFS_DEV_BLOCK || SYSFS_IS_BLOCK(node)) {
         return synth_sys_block_dirent(node, key, n, name, ino, dtype);
@@ -12050,10 +12103,12 @@ static int synth_sysvipc_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype
  * /dev lists first the mounts that stand in it by name, /dev/shm; then
  * `log`, the link to the syslog daemon's socket; then the caller's
  * descriptors, `fd` and the three standard ones (`synth_classify`), each
- * with the inode lstat reports for it; then the devices `devfs_dirent`
- * gives, with the registry's inodes. `devfs_dirent` skips a device that is
- * absent, so a device after an absent one is still listed. /dev/pts has an
- * entry for each allocated pseudoterminal, named by its index; a directory
+ * with the inode lstat reports for it; then the directory `input`; then the
+ * devices `devfs_dirent` gives, with the registry's inodes. `devfs_dirent`
+ * skips a device that is absent, so a device after an absent one is still
+ * listed, and /dev/input lists the event devices present in the same way.
+ * /dev/pts has an entry for each allocated pseudoterminal, named by its
+ * index; /proc/acpi has `call`; a directory
  * of /proc/sys has the entries of the table under it; and /proc has its
  * files, then a directory for each process. The other directories have
  * functions of their own.
@@ -12125,6 +12180,13 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
             return 1;
         }
         n -= 4;
+        if (n == 0) {
+            k_strncpy(name, "input", 31);
+            *ino = INPUT_INO_DIR;
+            *dtype = DT_DIR;
+            return 1;
+        }
+        n--;
         if (!devfs_dirent(n, &dn, &dino) || !dn) {
             return 0;
         }
@@ -12135,6 +12197,28 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
         *ino = dino;
         (void)devfs_stat(dn, &dmode, NULL, NULL);
         *dtype = (uint8_t)VFS_DT_OF(dmode);
+        return 1;
+    }
+    if (kind == VNODE_INPUT_DIR) {
+        const char *dn = NULL;
+        uint32_t dino = 0;
+
+        if (!devfs_input_dirent(n, &dn, &dino)) {
+            return 0;
+        }
+        k_strncpy(name, dn, 31);
+        name[31] = '\0';
+        *ino = dino;
+        *dtype = DT_CHR;
+        return 1;
+    }
+    if (kind == VNODE_PROC_ACPI_DIR) {
+        if (n != 0) {
+            return 0;
+        }
+        k_strncpy(name, "call", 31);
+        *ino = procfs_ino_acpicall();
+        *dtype = DT_REG;
         return 1;
     }
     if (kind == VNODE_PTS_DIR) {
@@ -12202,6 +12286,7 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
                        {"mounts", procfs_ino_mounts, DT_REG},
                        {"net", procfs_ino_netdir, DT_DIR},
                        {"sysvipc", procfs_ino_sysvipcdir, DT_DIR},
+                       {"acpi", procfs_ino_acpidir, DT_DIR},
                        {"sys", procfs_ino_sysdir, DT_DIR},
                        {"self", procfs_ino_dir, DT_LNK},
                        {"usb", procfs_ino_usb, DT_REG},

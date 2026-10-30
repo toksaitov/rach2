@@ -70,6 +70,8 @@
 #include "../mm/paging.h"
 #include "../io/anon.h"
 #include "../ipc/unix.h"
+#include "../acpi/call.h"
+#include "../display/backlight.h"
 
 /* O_CLOEXEC, Linux's value on i386 and x86-64. */
 #define PROCFS_O_CLOEXEC 02000000
@@ -106,6 +108,8 @@
 #define PROCFS_INO_SWAPS       0x11Eu
 #define PROCFS_INO_LOCKS       0x11Fu
 #define PROCFS_INO_NET         0x120u /* and the other files of /proc/net after it */
+#define PROCFS_INO_ACPI        0x1F0u /* /proc/acpi */
+#define PROCFS_INO_ACPI_CALL   0x1F1u
 
 /* Inode namespace for /sys: a fixed directory by its node, with its
  * attribute files 256 apart above it; a PCI function's directory by its
@@ -121,6 +125,7 @@
 #define SYSFS_INO_NET       0x03000000u
 #define SYSFS_INO_BLOCK     0x04000000u
 #define SYSFS_INO_CPU       0x05000000u
+#define SYSFS_INO_BACKLIGHT 0x06000000u
 #define SYSFS_INO_USB       0x80000000u
 #define SYSFS_INO_FILE      0x40000000u
 #define PROCFS_INO_SYS      0x140u /* and the entries of /proc/sys after it */
@@ -1707,6 +1712,8 @@ static const char *procfs_global_fd_path(int origin)
         return "/proc/loadavg";
     case SYNTH_PROC_DISKSTATS:
         return "/proc/diskstats";
+    case SYNTH_PROC_ACPI_CALL:
+        return "/proc/acpi/call";
     case SYNTH_PROC_VERSION:
         return "/proc/version";
     case SYNTH_PROC_PARTITIONS:
@@ -2136,6 +2143,16 @@ uint32_t procfs_ino_sysvipc(int origin)
     return PROCFS_INO_SYSVIPC + 1u + (uint32_t)(origin - SYNTH_PROC_SYSVIPC);
 }
 
+uint32_t procfs_ino_acpidir(void)
+{
+    return PROCFS_INO_ACPI;
+}
+
+uint32_t procfs_ino_acpicall(void)
+{
+    return PROCFS_INO_ACPI_CALL;
+}
+
 uint32_t procfs_fd_ino(struct fd_entry *e)
 {
     struct procfs_file *pf;
@@ -2170,6 +2187,9 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     }
     if (pf->origin_file == SYNTH_SYS_UEVENT) {
         return sysfs_ino(pf->origin_task >> 8, pf->origin_pid, 1 + (pf->origin_task & 255));
+    }
+    if (pf->origin_file == SYNTH_PROC_ACPI_CALL) {
+        return PROCFS_INO_ACPI_CALL;
     }
     if (pf->origin_file == SYNTH_PROC_UPTIME) {
         return PROCFS_INO_UPTIME;
@@ -3883,6 +3903,9 @@ uint32_t sysfs_ino(int node, int key, int file)
     if (node == SYSFS_CPUN) {
         return SYSFS_INO_CPU | ((uint32_t)key & 0xFFFFu) << 8 | ((uint32_t)file & 0xFFu);
     }
+    if (node == SYSFS_BACKLIGHT) {
+        return SYSFS_INO_BACKLIGHT | ((uint32_t)key & 0xFFFFu) << 8 | ((uint32_t)file & 0xFFu);
+    }
     if (node == SYSFS_PCI_DEVICE && file == 2) {
         return SYSFS_INO_PCI_LINK + (uint32_t)key;
     }
@@ -4209,6 +4232,9 @@ int sysfs_device_exists(int node, int key)
     }
     if (node == SYSFS_CPUN) {
         return key >= 0 && key < NR_CPUS && cpu_table[key].online;
+    }
+    if (node == SYSFS_BACKLIGHT) {
+        return key >= 0 && key < backlight_count();
     }
     return node == SYSFS_PCI_DEVICE ? sysfs_pci_present(key) : sysfs_usb_find(key, &r) >= 0;
 }
@@ -4546,14 +4572,32 @@ static int procfs_gen_uevent(struct procfs_text *t, int node, int key)
     return t->len;
 }
 
+/** Append attribute `attr` of backlight `key` (display/backlight.h): its
+ * length, or -ENODEV for a backlight that is gone. */
+static int procfs_gen_backlight(struct procfs_text *t, int key, int attr)
+{
+    char text[32];
+    int rc = backlight_show(key, attr, text, (int)sizeof(text));
+
+    if (rc < 0) {
+        return rc;
+    }
+    ap_str(t, text);
+    return t->len;
+}
+
 /**
- * Render the /sys file at the path `vp`: an attribute of a disk node, of an
- * interface or of a fixed directory, or a device's uevent. `*key` gets the
- * disk node, the interface or the device the file is for, which its
- * descriptor keeps.
+ * Render the /sys file at the path `vp`: an attribute of a backlight, of a
+ * disk node, of an interface or of a fixed directory, or a device's uevent.
+ * `*key` gets the backlight, the disk node, the interface or the device the
+ * file is for, which its descriptor keeps.
  */
 static int procfs_gen_sysfile(struct procfs_text *t, const struct vpath *vp, int *key)
 {
+    if (vp->sysent == SYSFS_BACKLIGHT) {
+        *key = vp->syskey;
+        return procfs_gen_backlight(t, vp->syskey, vp->procfile);
+    }
     if (SYSFS_IS_BLOCK(vp->sysent)) {
         *key = vp->syskey;
         return procfs_gen_blockattr(t, vp->sysent, vp->syskey, vp->procfile);
@@ -4909,6 +4953,9 @@ int procfs_fd_writable(struct fd_entry *e)
     f = (const struct procfs_file *)e->priv;
     if (f->origin_file == SYNTH_SYS_UEVENT) {
         return sysfs_attr_writable(f->origin_task >> 8, f->origin_task & 255);
+    }
+    if (f->origin_file == SYNTH_PROC_ACPI_CALL) {
+        return 1;
     }
     return f->origin_file == SYNTH_PROC_SYSCTL && synth_sys_writable(f->origin_pid);
 }
@@ -5343,7 +5390,9 @@ static int32_t procfs_sysattr_read(fd_entry_t *e, char __user *buf, uint32_t cou
     int len;
 
     procfs_text_init(&t);
-    len = procfs_gen_sysattr(&t, f->origin_task >> 8, f->origin_task & 255);
+    len = f->origin_task >> 8 == SYSFS_BACKLIGHT
+              ? procfs_gen_backlight(&t, f->origin_pid, f->origin_task & 255)
+              : procfs_gen_sysattr(&t, f->origin_task >> 8, f->origin_task & 255);
     if (len < 0 || t.nomem) {
         kfree(t.buf);
         return len < 0 ? len : -ENOMEM;
@@ -5399,7 +5448,8 @@ static int64_t sysattr_number(const char *s, uint32_t len, int *relative)
  * write waits in until a wake event, or has the error of `suspend_to_idle`;
  * another state is -EINVAL. The whole count is taken, or the write fails
  * with -EFAULT, -EIO for a clock that cannot be read or cleared, or one of
- * the errors above.
+ * the errors above. A backlight's brightness and bl_power take what
+ * `backlight_store` takes, and have its errors.
  */
 static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
@@ -5417,6 +5467,10 @@ static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint3
     }
     while (n > 0 && (text[n - 1] == '\n' || text[n - 1] == ' ')) {
         text[--n] = '\0';
+    }
+    if (f->origin_task >> 8 == SYSFS_BACKLIGHT) {
+        rc = backlight_store(f->origin_pid, f->origin_task & 255, text, (int)n);
+        return rc != 0 ? rc : (int32_t)count;
     }
     if (f->origin_task >> 8 == SYSFS_POWER) {
         if (!sysattr_is(text, n, "freeze") && !sysattr_is(text, n, "mem")) {
@@ -5449,13 +5503,14 @@ static const struct file_ops procfs_sysattr_ops = {procfs_sysattr_read, procfs_s
                                                    procfs_poll, procfs_ioctl, procfs_close};
 
 /**
- * Open the writable attribute `attr` of the /sys directory `node` for
- * writing, or for reading and writing, which needs a privileged caller, as
- * its mode, 0644 and owned by root, says. Each read and write reaches the
- * value as it is then. The descriptor is a sysfs one, with the node and the
- * attribute in `origin_task`, as a snapshot of a /sys file has them.
+ * Open the writable attribute `attr` of the /sys directory `node` of the
+ * device `key` for writing, or for reading and writing, which needs a
+ * privileged caller, as its mode, 0644 and owned by root, says. Each read
+ * and write reaches the value as it is then. The descriptor is a sysfs one,
+ * with the node and the attribute in `origin_task` and the key in
+ * `origin_pid`, as a snapshot of a /sys file has them.
  */
-static int procfs_open_sysattr(int node, int attr, int flags)
+static int procfs_open_sysattr(int node, int key, int attr, int flags)
 {
     struct procfs_file *f;
     fd_entry_t *e;
@@ -5471,6 +5526,7 @@ static int procfs_open_sysattr(int node, int attr, int flags)
     }
     f->origin_file = SYNTH_SYS_UEVENT;
     f->origin_task = node << 8 | attr;
+    f->origin_pid = key;
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         kfree(f);
@@ -5484,6 +5540,89 @@ static int procfs_open_sysattr(int node, int attr, int flags)
     e->priv = f;
     e->ofd->offset = 0;
     e->flags = acc == 1 ? FD_FLAG_WRITE : (FD_FLAG_READ | FD_FLAG_WRITE);
+    if (flags & PROCFS_O_CLOEXEC) {
+        e->flags |= FD_FLAG_CLOEXEC;
+    }
+    return fd;
+}
+
+/** Read the result of the last ACPI call (`acpi_call_result`) and its NUL,
+ * as Linux's acpi_call gives them, from the description's offset, which
+ * moves past what is read: the bytes read, 0 at the end, or -EFAULT. */
+static int32_t procfs_acpicall_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    char text[ACPI_CALL_MAX];
+    uint32_t off = e->ofd->offset > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)e->ofd->offset;
+    uint32_t len = (uint32_t)acpi_call_result(text, (int)sizeof(text)) + 1;
+    uint32_t n = 0;
+
+    if (off < len) {
+        n = len - off < count ? len - off : count;
+        if (copy_to_user(buf, text + off, n) != 0) {
+            return -EFAULT;
+        }
+    }
+    e->ofd->offset = off + n;
+    return (int32_t)n;
+}
+
+/** Evaluate the method a write names (`acpi_call_write`), the whole count
+ * taken: the count, -EINVAL for a request of ACPI_CALL_MAX bytes or more,
+ * -EFAULT, or the call's error. */
+static int32_t procfs_acpicall_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    char text[ACPI_CALL_MAX];
+    int rc;
+
+    (void)e;
+    if (count >= sizeof(text)) {
+        return -EINVAL;
+    }
+    if (copy_from_user(text, buf, count) != 0) {
+        return -EFAULT;
+    }
+    text[count] = '\0';
+    rc = acpi_call_write(text, count);
+    return rc != 0 ? rc : (int32_t)count;
+}
+
+static const struct file_ops procfs_acpicall_ops = {procfs_acpicall_read, procfs_acpicall_write,
+                                                    procfs_poll, procfs_ioctl, procfs_close};
+
+/**
+ * Open /proc/acpi/call, which needs a privileged caller, as its mode, 0600
+ * and owned by root, says. O_CREAT and O_TRUNC are taken as they are for a
+ * file that exists, which a shell's redirection asks for. A write evaluates
+ * a method and a read gives the result of the last.
+ */
+static int procfs_open_acpicall(int flags)
+{
+    struct procfs_file *f;
+    fd_entry_t *e;
+    int acc = flags & 3;
+    int fd;
+
+    if (acc == 3 || !proc_privileged(current_proc)) {
+        return -EACCES;
+    }
+    f = kzalloc(sizeof(*f));
+    if (!f) {
+        return -ENOMEM;
+    }
+    f->origin_file = SYNTH_PROC_ACPI_CALL;
+    fd = fd_alloc(current_proc->fds);
+    if (fd < 0) {
+        kfree(f);
+        return fd;
+    }
+    e = &current_proc->fds->entries[fd];
+    e->type = FD_TYPE_PROC;
+    e->node = NULL;
+    e->sock = NULL;
+    e->ops = &procfs_acpicall_ops;
+    e->priv = f;
+    e->ofd->offset = 0;
+    e->flags = acc == 0 ? FD_FLAG_READ : acc == 1 ? FD_FLAG_WRITE : (FD_FLAG_READ | FD_FLAG_WRITE);
     if (flags & PROCFS_O_CLOEXEC) {
         e->flags |= FD_FLAG_CLOEXEC;
     }
@@ -5627,7 +5766,7 @@ static int procfs_needs_pid(int kind)
         VNODE_PROC_MOUNTS,    VNODE_PROC_USB,        VNODE_PROC_AUDIO,      VNODE_PROC_FILESYSTEMS,
         VNODE_PROC_LOOP,      VNODE_PROC_INTERRUPTS, VNODE_PROC_CONSOLE,    VNODE_PROC_NET_ROUTE,
         VNODE_PROC_NET_ARP,   VNODE_PROC_NET_TCP,    VNODE_PROC_NET_FILE,   VNODE_SYS_FILE,
-        VNODE_PROC_SYSVIPC};
+        VNODE_PROC_SYSVIPC,   VNODE_PROC_ACPI_CALL};
     uint32_t i;
 
     for (i = 0; i < sizeof(global) / sizeof(global[0]); i++) {
@@ -5643,8 +5782,8 @@ static int procfs_needs_pid(int kind)
  * regular file that exists: O_CREAT with O_EXCL is -EEXIST first, then
  * O_DIRECTORY -ENOTDIR. The files a write reaches then go to opens of their
  * own (`procfs_open_oom`, `procfs_open_idmap`, `procfs_open_mem`,
- * `procfs_open_sysctl`, `procfs_open_sysattr`), and any other write or
- * create is -EACCES.
+ * `procfs_open_sysctl`, `procfs_open_sysattr`, `procfs_open_acpicall`), and
+ * any other write or create is -EACCES.
  *
  * `/proc/disk` is rendered from the record taken at boot, so opening it
  * issues no command to the device. `diskinfo_format` truncates to the size
@@ -5682,9 +5821,12 @@ int procfs_open(const struct vpath *vp, int flags)
     if (vp->kind == VNODE_PROC_SYS_FILE && synth_sys_writable(vp->sysent) && (flags & 3) != 0) {
         return procfs_open_sysctl(vp->sysent, flags);
     }
+    if (vp->kind == VNODE_PROC_ACPI_CALL) {
+        return procfs_open_acpicall(flags);
+    }
     if (vp->kind == VNODE_SYS_FILE && sysfs_attr_writable(vp->sysent, vp->procfile) &&
         (flags & 3) != 0) {
-        return procfs_open_sysattr(vp->sysent, vp->procfile, flags);
+        return procfs_open_sysattr(vp->sysent, vp->syskey, vp->procfile, flags);
     }
     if ((flags & 3) != 0 || (flags & 0100 /* O_CREAT */)) {
         return -EACCES;

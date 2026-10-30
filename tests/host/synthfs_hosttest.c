@@ -84,6 +84,30 @@ int sysfs_block_loop(int key)
     return -1;
 }
 
+/** The backlight named by the `len` bytes at `name`: 0 for
+ *  intel_backlight, the one backlight of the model, and -1 for any other. */
+int backlight_find(const char *name, int len)
+{
+    static const char one[] = "intel_backlight";
+    int i;
+
+    if (len != (int)sizeof(one) - 1) {
+        return -1;
+    }
+    for (i = 0; i < len; i++) {
+        if (name[i] != one[i]) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/** The name of backlight `i`: intel_backlight for 0, NULL past it. */
+const char *backlight_name(int i)
+{
+    return i == 0 ? "intel_backlight" : 0;
+}
+
 #define CHECK(cond)    \
     do {               \
         if (!(cond)) { \
@@ -156,6 +180,19 @@ static void sys_tree(void)
     CHECK(synth_classify("sys/class/net/eth9", &vp) == VNODE_ENOENT);
     synth_sys_path(SYSFS_NET_STATS, 2, path, (int)sizeof(path));
     CHECK(eq(path, "/sys/class/net/eth0/statistics"));
+    CHECK(synth_classify("sys/class/backlight", &vp) == VNODE_SYS_DIR &&
+          vp.sysent == SYSFS_CLASS_BACKLIGHT);
+    CHECK(synth_classify("sys/class/backlight/intel_backlight", &vp) == VNODE_SYS_DIR &&
+          vp.sysent == SYSFS_BACKLIGHT && vp.syskey == 0);
+    CHECK(synth_classify("sys/class/backlight/intel_backlight/brightness", &vp) == VNODE_SYS_FILE &&
+          vp.sysent == SYSFS_BACKLIGHT && sysfs_attr_writable(vp.sysent, vp.procfile));
+    CHECK(synth_classify("sys/class/backlight/intel_backlight/max_brightness", &vp) ==
+              VNODE_SYS_FILE &&
+          !sysfs_attr_writable(vp.sysent, vp.procfile));
+    CHECK(synth_classify("sys/class/backlight/intel_backlight/type/x", &vp) == VNODE_ENOTDIR);
+    CHECK(synth_classify("sys/class/backlight/acpi_video0", &vp) == VNODE_ENOENT);
+    synth_sys_path(SYSFS_BACKLIGHT, 0, path, (int)sizeof(path));
+    CHECK(eq(path, "/sys/class/backlight/intel_backlight"));
     CHECK(synth_classify("sys/devices/system/cpu/online", &vp) == VNODE_SYS_FILE &&
           vp.sysent == SYSFS_CPU && vp.procfile == 2);
     CHECK(synth_classify("sys/devices/system/cpu/cpu0", &vp) == VNODE_SYS_DIR &&
@@ -220,6 +257,14 @@ static void past_a_file(void)
     CHECK(synth_classify("dev/pts/3", &vp) == VNODE_PTS && vp.pts_index == 3);
     CHECK(synth_classify("dev/pts/3/x", &vp) == VNODE_ENOTDIR && vp.pts_index == 3);
     CHECK(synth_classify("dev/pts/x/y", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("dev/input", &vp) == VNODE_INPUT_DIR);
+    CHECK(synth_classify("dev/input/event3", &vp) == VNODE_DEV && eq(vp.name, "input/event3"));
+    CHECK(synth_classify("dev/input/event3/x", &vp) == VNODE_ENOTDIR &&
+          eq(vp.name, "input/event3"));
+    CHECK(synth_classify("proc/acpi", &vp) == VNODE_PROC_ACPI_DIR);
+    CHECK(synth_classify("proc/acpi/call", &vp) == VNODE_PROC_ACPI_CALL);
+    CHECK(synth_classify("proc/acpi/call/x", &vp) == VNODE_ENOTDIR);
+    CHECK(synth_classify("proc/acpi/wakeup", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("proc/5/maps/x", &vp) == VNODE_ENOTDIR && vp.pid == 5);
     CHECK(synth_classify("proc/5/stat/x", &vp) == VNODE_ENOTDIR && vp.pid == 5);
     CHECK(synth_classify("proc/self/cmdline/x", &vp) == VNODE_ENOTDIR && vp.pid == SYNTH_PID_SELF);

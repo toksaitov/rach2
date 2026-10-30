@@ -209,6 +209,9 @@ uint32_t procfs_ino_netstatdir(void);
 /** The inodes of /proc/sysvipc and of its file of origin `origin`. */
 uint32_t procfs_ino_sysvipcdir(void);
 uint32_t procfs_ino_sysvipc(int origin);
+/** The inodes of /proc/acpi and of /proc/acpi/call. */
+uint32_t procfs_ino_acpidir(void);
+uint32_t procfs_ino_acpicall(void);
 
 /** Whether `e`, a descriptor of type FD_TYPE_PROC, is open on a file of
  * /sys, which fstat and fstatfs report as sysfs's. */
@@ -251,8 +254,8 @@ int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid);
  * is no such descriptor or its process is gone. */
 int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid);
 
-/** Whether `e` is open on a /proc/sys or /sys file a privileged caller may
- * write. */
+/** Whether `e` is open on a /proc/sys or /sys file, or /proc/acpi/call, a
+ * privileged caller may write. */
 int procfs_fd_writable(struct fd_entry *e);
 
 #endif /* _PROCFS_H_ */

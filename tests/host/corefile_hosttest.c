@@ -1123,6 +1123,17 @@ uint32_t procfs_ino_sysvipcdir(void)
     return 0;
 }
 
+/** The inode numbers of /proc/acpi and its call, which no row reads: 0. */
+uint32_t procfs_ino_acpidir(void)
+{
+    return 0;
+}
+
+uint32_t procfs_ino_acpicall(void)
+{
+    return 0;
+}
+
 /** The inode number of a /proc/sysvipc file, which no row reads: 0. */
 uint32_t procfs_ino_sysvipc(int origin)
 {
