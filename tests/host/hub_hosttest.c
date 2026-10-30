@@ -212,6 +212,10 @@ static struct {
     /* Disable Slot fails. */
     int close_refuse;
     int hold_commands; /* no command answers while set */
+    /* That many Address Device commands for devices below the hub fail, as
+     * an aborted one does; `addresses` counts those issued for them. */
+    int address_refusals;
+    int addresses;
     int slot_cap;      /* the slots the controller has, 0 for fifteen */
     int long_config;   /* a device whose configuration is 115 bytes */
     int config_claims; /* what its header claims, 0 for the truth */
@@ -508,10 +512,19 @@ int xhci_device_open(struct xhci_ctrl *hc, const struct usb_location *where, int
     return 0;
 }
 
-/** Issue Address Device, which succeeds. */
+/** Issue Address Device, which succeeds unless the row has refusals left
+ * for a device below the hub. */
 int xhci_device_address(struct xhci_ctrl *hc, int device)
 {
     command_ok(device);
+    if (slot_of[device].where.depth >= 1) {
+        model.addresses++;
+        if (model.address_refusals > 0) {
+            model.address_refusals--;
+            command_result_pending.status = USB_XFER_FAILED;
+            command_result_pending.code = 25; /* Command Aborted */
+        }
+    }
     return 0;
 }
 
@@ -1547,6 +1560,35 @@ static void power_on_unqueued(void)
  * cleared and the hub leaves the port out of its bitmap, so nothing would
  * ask again; the hub is closed instead.
  */
+/**
+ * Check that an Address Device that fails is tried again after a port reset,
+ * on the same slot, four times in all, and that the port is refused only
+ * after the fourth.
+ */
+static void address_retries(void)
+{
+    int kbd;
+
+    model_reset();
+    model.port_kind[1] = KIND_KBD;
+    model.address_refusals = 3;
+    pump(3000);
+    kbd = slot_of_kind(KIND_KBD);
+    CHECK("a keyboard refused its address three times is running at the fourth try",
+          kbd != 0 && running_count() == 2 && model.addresses == 4);
+    CHECK("its port reset before each try", model.reset_requests == 4);
+    CHECK("on the one slot it was given", slots_given == 2 && closes == 0);
+
+    model_reset();
+    model.port_kind[1] = KIND_KBD;
+    model.address_refusals = 4;
+    pump(3000);
+    CHECK("a keyboard refused four times is not tried a fifth",
+          model.addresses == 4 && model.reset_requests == 4);
+    CHECK("and its slot is given back with the hub alone running",
+          closes == 1 && running_count() == 1);
+}
+
 int main(void)
 {
     int hub;
@@ -1579,6 +1621,7 @@ int main(void)
     CHECK("and both are running", running_count() == 2);
     proc_usb_lines();
     busy_until_settled();
+    address_retries();
 
     /* Power: one request per port, ganged or not, then the power-good wait. */
     model_reset();
