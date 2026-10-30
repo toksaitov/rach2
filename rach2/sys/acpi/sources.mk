@@ -15,6 +15,7 @@ ACPI_C_SRC = sys/acpi/boot.c \
     sys/acpi/osl.c \
     sys/acpi/clib.c \
     sys/acpi/mapcache.c \
+    sys/acpi/sleep.c \
     sys/acpi/video.c
 
 ACPICA_C_SRC = $(ACPICA)/dispatcher/dsargs.c \

@@ -11,6 +11,7 @@
 
 #include "acpi.h"
 #include "portio.h"
+#include "../../acpi/acpica.h"
 #include "../../klog.h"
 #include "../../power.h"
 #include "../../proc/smp.h"
@@ -269,9 +270,34 @@ static void power_reset(void)
     klog(KLOG_ERR, "reboot", "the platform did not reset; halting instead");
 }
 
-/* A host test runs the requests above without the stop, whose `cli` and `hlt`
- * it can neither assemble on every host nor run. */
+/* A host test runs the requests above without ACPICA and the stop, whose
+ * `cli` and `hlt` it can neither assemble on every host nor run. */
 #ifndef RACH2_HOSTTEST
+
+void power_prepare(int how)
+{
+    if (how == POWER_OFF) {
+        (void)acpica_power_off_prepare();
+    }
+}
+
+/**
+ * Ask for the soft-off state through ACPICA, where `power_prepare` ran the
+ * firmware's \_PTS(5). Returns only if the machine is still running, or
+ * ACPICA did not write SLP_EN.
+ *
+ * ACPICA clears every status and disables every GPE before the write, as
+ * Linux's acpi_power_off does, since a chipset wakes at once from a status
+ * left set and enabled, as a press of the power button leaves PWRBTN_STS.
+ */
+static void power_acpica_s5(void)
+{
+    if (acpica_power_off() != 0) {
+        return;
+    }
+    power_settle();
+    klog(KLOG_ERR, "poweroff", "acpica: the platform did not power off; trying \\_S5 itself");
+}
 
 /**
  * Park the CPU for good. Does not return.
@@ -305,6 +331,7 @@ void power_stop(int how)
     smp_stop_others();
 
     if (how == POWER_OFF) {
+        power_acpica_s5();
         power_acpi_s5();
         power_board_off();
     } else if (how == POWER_RESTART) {

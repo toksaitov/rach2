@@ -918,12 +918,3 @@ ACPI_STATUS AcpiOsSignal(UINT32 function, void *info)
     }
     return AE_OK;
 }
-
-/** Nothing: the kernel enters no sleep state through ACPICA. */
-ACPI_STATUS AcpiOsEnterSleep(UINT8 state, UINT32 rega, UINT32 regb)
-{
-    (void)state;
-    (void)rega;
-    (void)regb;
-    return AE_OK;
-}

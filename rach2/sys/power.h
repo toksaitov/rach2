@@ -11,12 +11,21 @@
 #define POWER_RESTART 2
 
 /**
+ * Prepare to stop in the way `how` gives, while processes still run: on a
+ * PC with ACPICA up, a power off runs the firmware's `\_PTS(5)`, whose
+ * methods may wait. The caller then stops the machine with `power_stop`.
+ */
+void power_prepare(int how);
+
+/**
  * Stop the machine in the way `how` gives. Does not return.
  *
  * Interrupts go off and the other processors are stopped first, and the
  * screen is set to show the records from `KLOG_INFO` up. A power off
- * requests the soft-off state: on a PC by ACPI's \_S5 sleep type, then
- * through the power controller the board profile found (arch/x86/board.c).
+ * requests the soft-off state: on a PC through ACPICA where
+ * `power_prepare` prepared it, then by writing ACPI's \_S5 sleep type
+ * itself, then through the power controller the board profile found
+ * (arch/x86/board.c).
  * A restart requests a reset: on a PC by the FADT's reset register, the
  * Insyde firmware's own command, the chipset's reset port 0xCF9 and the
  * keyboard controller's pulse, in that order, where `rach2.resetskip=N`

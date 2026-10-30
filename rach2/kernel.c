@@ -1734,6 +1734,10 @@ static int krffs_disk_mark_clean(void)
  * The one way out of a running Rach2, from the debug shell or from
  * reboot(2).
  *
+ * `power_prepare` runs first, while the caller may still sleep: a power off
+ * runs the firmware's `\_PTS(5)` there, whose methods may wait on the
+ * embedded controller.
+ *
  * A root of a type other than KRFFS is unmounted first, as mount(2)'s are:
  * its namespace lock taken, its buffers written and its valid bit set, so
  * that the next mount does not check it. This is done with scheduling still
@@ -1777,6 +1781,7 @@ void kernel_shutdown(int how)
     struct vfs_mount *root = 0;
     int unmounted = 0;
 
+    power_prepare(how);
     if (!_krffs_on_disk && vfs_root_mounted() && vfs_root_mount()->type != &vfs_krffs_type) {
         root = vfs_root_mount();
         vfs_ns_lock(root);

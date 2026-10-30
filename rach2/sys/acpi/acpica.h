@@ -29,6 +29,27 @@ int acpica_up(void);
  */
 void acpica_thread_start(void);
 
+/**
+ * Prepare the soft-off state, as Linux's acpi_power_off_prepare does: run
+ * the firmware's `\_PTS(5)` and `_SST`, which load the sleep types, then
+ * disable every GPE and wait for the work already queued. Called by the
+ * power off while processes still run, since the firmware's methods may
+ * wait on the embedded controller. Returns 0, or -1 when ACPICA is down or
+ * refused, with a record why.
+ */
+int acpica_power_off_prepare(void);
+
+/**
+ * Enter the soft-off state through ACPICA, with interrupts off and the
+ * other processors stopped: clear WAK_STS, disable every GPE, clear every
+ * fixed event's and GPE's status, and write the sleep types and then
+ * SLP_EN. A status left set, as a press of the power button leaves
+ * PWRBTN_STS, may wake the machine at once.
+ * Returns 0 once SLP_EN is written, and the caller waits for the machine to
+ * stop; -1 when acpica_power_off_prepare did not run or ACPICA refused.
+ */
+int acpica_power_off(void);
+
 /** The errors and the warnings ACPICA has reported since the boot. */
 uint32_t acpica_errors(void);
 uint32_t acpica_warnings(void);
