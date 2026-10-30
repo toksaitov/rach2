@@ -464,7 +464,7 @@
         },
         {
           "assertion_id": "df-size",
-          "checks": "df reports the root as 20480 KiB, the independently known size of os-real",
+          "checks": "df reports the root as os-real's independently known size, 20480 KiB on i686 and 22528 KiB on x86-64",
           "source": "scenario"
         },
         {
