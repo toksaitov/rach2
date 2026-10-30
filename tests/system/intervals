@@ -23,6 +23,7 @@ tests/cases/host/host_products_drive.c: poll the readiness file every 100 ms
 tests/cases/host/host_products_drive.c: poll the process group every 100 ms
 tests/cases/machine/agent_accept.c: poll the agent pane every two seconds
 tests/cases/machine/sshpeer.c: poll SSH identification without unbounded connection retries
+tests/cases/machine/acpid_scenario.c: poll mixer's reading every second
 tests/cases/host/fixture.c: poll the fixture state every 20 ms
 tests/cases/host/flow_release.c: poll the Mac run's times file every 50 ms
 tests/cases/host/host_suite_probe.c: poll the meeting directory every millisecond
