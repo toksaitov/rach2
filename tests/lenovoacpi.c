@@ -7,6 +7,10 @@
 
 #define BACKLIGHT     "/sys/class/backlight/intel_backlight/"
 #define EVIOCGNAME(n) (0x80004506L | (long)(n) << 16)
+/* The lock acpid's brightness action holds while it runs (init(8)). */
+#define ACTION_LOCK   "/var/run/acpi.lock"
+#define O_CREAT       0100
+#define LOCK_EX       2
 
 struct input_event {
     unsigned long sec, usec;
@@ -21,18 +25,23 @@ struct k_sigaction {
     unsigned mask[2];
 };
 
+/* The stop requests received. */
 static volatile int stopped;
 static int saved = -1;
 static int changed;
+/* The level an action acpid was given a key for will step from, or -1 when
+ * no such action is outstanding. */
+static int pending = -1;
 static char ring[KLOG_RING_SIZE + 1];
 
 void signal_return(void);
 PROBE_RT_RESTORER(signal_return);
 
-/** Record a stop request; the main path restores the level before exit. */
+/** Count a stop request; the main path restores the level before exit. */
 static void stop(int signal)
 {
-    stopped = signal;
+    (void)signal;
+    stopped++;
 }
 
 /** Return the length of the NUL-terminated string s. */
@@ -134,15 +143,46 @@ static void diagnostic(const char *text)
     syscall3(SYS_WRITE, 2, (long)"\n", 1);
 }
 
-/** Restore the original requested level, reporting a failed restoration. */
+/**
+ * Restore the original requested level, reporting a failed restoration.
+ * acpid's action for a key the probe pressed must not overwrite it, so the
+ * probe first waits for the level an outstanding action writes, and then
+ * takes the actions' lock, which a running action holds until it ends,
+ * and restores under it. A stop request that arrives meanwhile ends the
+ * wait, and the level is restored at once.
+ */
 static int restore(void)
 {
-    if (changed && (!set_level(saved) || level(BACKLIGHT "brightness") != saved)) {
-        diagnostic("cannot restore the original brightness");
-        return 0;
+    int first = stopped;
+    long lock;
+
+    if (!changed) {
+        return 1;
     }
-    changed = 0;
-    return 1;
+    while (pending >= 0 && stopped == first && level(BACKLIGHT "brightness") == pending) {
+        struct {
+            long sec, nsec;
+        } delay;
+
+        delay.sec = 0;
+        delay.nsec = 10000000;
+        /* interval: poll the backlight every 10 ms */
+        syscall2(SYS_NANOSLEEP, (long)&delay, 0);
+    }
+    pending = -1;
+    lock = syscall3(SYS_OPEN, (long)ACTION_LOCK, O_CREAT, 0644);
+    if (lock >= 0) {
+        syscall2(SYS_FLOCK, lock, LOCK_EX);
+    }
+    if (set_level(saved) && level(BACKLIGHT "brightness") == saved) {
+        changed = 0;
+    } else {
+        diagnostic("cannot restore the original brightness");
+    }
+    if (lock >= 0) {
+        syscall1(SYS_CLOSE, lock);
+    }
+    return !changed;
 }
 
 /** Restore the level, report why the current assertion failed, and exit 1. */
@@ -212,7 +252,8 @@ static void boot(void)
     report_held();
 }
 
-/** Open the device named name without grabbing it from acpid; fail if absent. */
+/** Open the device named name without grabbing it from acpid; fail if it is
+ * absent. */
 static int device(const char *name)
 {
     char path[32], text[64], number[12];
@@ -261,10 +302,14 @@ static void pause_observing(void)
     }
     delay.sec = 0;
     delay.nsec = 10000000;
+    /* interval: poll the event device and the backlight every 10 ms */
     syscall2(SYS_NANOSLEEP, (long)&delay, 0);
 }
 
-/** Fire method and require key pressed and released, then acpid's level want. */
+/**
+ * Fire method and require key pressed and released, then acpid's level
+ * want, stepped from before.
+ */
 static void brightness(int fd, const char *method, int key, int before, int want)
 {
     struct input_event event;
@@ -288,11 +333,15 @@ static void brightness(int fd, const char *method, int key, int before, int want
                    : event.type != 1 || event.code != key || event.value != (i == 0))) {
             fail("the video bus did not give the expected press and release");
         }
+        if (i == 0) {
+            pending = before;
+        }
     }
     report_held();
     while ((now = level(BACKLIGHT "brightness")) == before) {
         pause_observing();
     }
+    pending = -1;
     if (stopped || now != want || level(BACKLIGHT "actual_brightness") != want) {
         fail("acpid did not set the expected backlight level");
     }
@@ -302,7 +351,8 @@ static void brightness(int fd, const char *method, int key, int before, int want
 void probe_main(unsigned long *sp);
 PROBE_SP_ENTRY;
 
-/** Run the Lenovo's native acceptance with no private root or replacement daemon. */
+/** Run the Lenovo's native acceptance with no private root or replacement
+ * daemon. */
 void probe_main(unsigned long *sp)
 {
     char **argv = (char **)(sp + 1);
