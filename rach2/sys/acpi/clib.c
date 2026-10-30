@@ -1,5 +1,6 @@
 /* clib.c: the C library functions ACPICA calls that the kernel's sys/lib
- * does not have, as clib.h declares them. */
+ * does not have, as clib.h declares them, and i686's 64-bit division, as
+ * acrach2.h declares it. */
 
 #include "clib.h"
 
@@ -94,3 +95,34 @@ int isxdigit(int c)
 {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }
+
+#if !defined(__x86_64__)
+/**
+ * Divide the 64-bit n_hi:n_lo by `d`, for ACPICA's ACPI_DIV_64_BY_32 on
+ * i686, where the kernel links no libgcc: long division, one bit of the
+ * quotient a step, in 32-bit arithmetic alone. `n_hi` must be below `d`, so
+ * that the quotient, stored at `q`, fits; the remainder is stored at `r`. A
+ * bit carried out of the partial remainder makes it 2^32 more than `rem`,
+ * above `d`, and the difference, below `d`, is `rem - d` modulo 2^32.
+ */
+void acpi_div_64_by_32(unsigned int n_hi, unsigned int n_lo, unsigned int d, unsigned int *q,
+                       unsigned int *r)
+{
+    unsigned int rem = n_hi;
+    unsigned int quo = 0;
+    unsigned int out;
+    int i;
+
+    for (i = 31; i >= 0; i--) {
+        out = rem >> 31;
+        rem = (rem << 1) | ((n_lo >> i) & 1u);
+        quo <<= 1;
+        if (out != 0 || rem >= d) {
+            rem -= d;
+            quo |= 1u;
+        }
+    }
+    *q = quo;
+    *r = rem;
+}
+#endif

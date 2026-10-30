@@ -36,7 +36,7 @@ ACPICA's core is vendored under [`vendor/acpica/`](../../../vendor/acpica/Readme
 ### Sources
 
 * `sources.mk` lists the kernel's files of this directory, `ACPI_C_SRC`, and ACPICA's 163, `ACPICA_C_SRC`, under `$(ACPICA)`. `sys/arch/x86/sources.mk` includes it, so only the PC compiles them.
-* `acrach2.h` is ACPICA's platform header, which `acenv.h` includes when `__RACH2__` is defined. It gives the integer widths, i686's 64-bit division by `divl` (the kernel has no libgcc), the use of the kernel's C functions, and the global lock.
+* `acrach2.h` is ACPICA's platform header, which `acenv.h` includes when `__RACH2__` is defined. It gives the integer widths, i686's 64-bit division in C, by shifts and subtractions in `clib.c` (the kernel has no libgcc, and shared code no assembly), the use of the kernel's C functions, and the global lock.
 * `clib.h` and `clib.c` give the C functions ACPICA calls that the kernel lacks, with `vsnprintf` from ACPICA's own `utprint.c`.
 * `mapcache.c` keeps the windows of physical memory ACPICA has mapped.
 * `osl.c` is the OS layer, every `AcpiOs` function.

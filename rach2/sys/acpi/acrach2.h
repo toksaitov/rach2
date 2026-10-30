@@ -14,9 +14,9 @@
 /*
  * The widths. On x86-64 a 64-bit integer is a long, as `__SIZE_TYPE__` is,
  * so ACPI_SIZE and the size of the C library's declarations below agree. On
- * i686 the 64-bit division is ACPICA's own, through `divl`, since the kernel
- * links no libgcc; the shifts GCC emits inline, and TinyCC's helpers come
- * from libtcc1.a.
+ * i686 the 64-bit division is ACPICA's own, through the two macros here in
+ * plain C, since the kernel links no libgcc; the shifts GCC emits inline,
+ * and TinyCC's helpers come from libtcc1.a.
  */
 #if defined(__x86_64__)
 #define ACPI_MACHINE_WIDTH        64
@@ -29,11 +29,15 @@
 #define COMPILER_DEPENDENT_UINT64 unsigned long long
 #define ACPI_32BIT_PHYSICAL_ADDRESS
 /* The 64-bit dividend n_hi:n_lo over d32, with n_hi below d32, which the
- * callers in utmath.c see to, so the quotient fits and `divl` cannot fault. */
+ * callers in utmath.c see to, so the quotient fits in 32 bits (clib.h). */
 #define ACPI_DIV_64_BY_32(n_hi, n_lo, d32, q32, r32) \
-    __asm__("divl %2" : "=a"(q32), "=d"(r32) : "r"(d32), "0"(n_lo), "1"(n_hi))
-#define ACPI_SHIFT_RIGHT_64(n_hi, n_lo) \
-    __asm__("shrl $1, %2\n\trcrl $1, %3" : "=r"(n_hi), "=r"(n_lo) : "0"(n_hi), "1"(n_lo))
+    acpi_div_64_by_32((n_hi), (n_lo), (d32), &(q32), &(r32))
+/* n_hi:n_lo shifted right by one, the low bit of n_hi moving into n_lo. */
+#define ACPI_SHIFT_RIGHT_64(n_hi, n_lo)          \
+    do {                                         \
+        (n_lo) = ((n_lo) >> 1) | ((n_hi) << 31); \
+        (n_hi) >>= 1;                            \
+    } while (0)
 #endif
 
 #ifndef ACPI_USE_NATIVE_MATH64
