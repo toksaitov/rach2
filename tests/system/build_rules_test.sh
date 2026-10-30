@@ -96,8 +96,9 @@ S="$WORK/sources"
 mkdir -p "$S/tools/verify" "$S/rach2"
 cp tools/verify/check_sources.sh "$S/tools/verify/"
 cp rach2/Makefile rach2/sources.mk "$S/rach2/"
-# An architecture is a directory with a cpu.h and a sources.mk.
-for f in rach2/sys/arch/*/sources.mk rach2/sys/arch/*/cpu.h; do
+# An architecture is a directory with a cpu.h and a sources.mk; the lists
+# they include, such as sys/acpi/sources.mk, come with them.
+for f in $(find rach2/sys -name sources.mk) rach2/sys/arch/*/cpu.h; do
     mkdir -p "$S/$(dirname "$f")"
     cp "$f" "$S/$f"
 done
