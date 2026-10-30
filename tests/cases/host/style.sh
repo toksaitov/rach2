@@ -655,7 +655,8 @@ case_clang() {
     _res=$(clang -print-resource-dir 2>/dev/null)
     _bad=0
     _files=$(make -s -C "$REPO/rach2" print-c-src)
-    make -s -C "$REPO/rach2" acpica >>"$VDIR/verify_clang.log" 2>&1 || _bad=1
+    [ -n "${STYLE_IN_TOOLING:-}" ] ||
+        make -s -C "$REPO/rach2" acpica >>"$VDIR/verify_clang.log" 2>&1 || _bad=1
     _acpi=$(make -s -C "$REPO/rach2" print-acpi-cflags)
     for f in $_files; do
         case $f in
@@ -694,7 +695,8 @@ case_sparse() {
     _bad=0
     python3 "$REPO/tests/system/usercheck_test.py" >>"$VDIR/verify_sparse.log" 2>&1 || _bad=1
     _files=$(make -s -C "$REPO/rach2" print-c-src)
-    make -s -C "$REPO/rach2" acpica >>"$VDIR/verify_sparse.log" 2>&1 || _bad=1
+    [ -n "${STYLE_IN_TOOLING:-}" ] ||
+        make -s -C "$REPO/rach2" acpica >>"$VDIR/verify_sparse.log" 2>&1 || _bad=1
     _acpi=$(make -s -C "$REPO/rach2" print-acpi-cflags)
     # The ACPI files, sys/acpi/, take the build's flags for ACPICA's headers.
     # shellcheck disable=SC2086
@@ -794,6 +796,12 @@ in_tooling() {
         tests tools vendor/musl | while IFS= read -r f; do
         [ ! -f "$REPO/$f" ] || printf '%s\n' "$f"
     done >"$VDIR/files"
+    # The machine's tree cannot unpack ACPICA, so its headers go with it.
+    if [ "$CASE" = clang ] || [ "$CASE" = sparse ]; then
+        make -s -C "$REPO/rach2" acpica >&2 || unrun "ACPICA could not be unpacked"
+        _inc=$(make -s -C "$REPO/rach2" print-acpi-cflags | sed -n 's#.*-isystem \.\./\([^ ]*\).*#\1#p')
+        (cd "$REPO" && find "$_inc" -type f) >>"$VDIR/files"
+    fi
     if ! grep -q . "$VDIR/files" ||
         ! COPYFILE_DISABLE=1 tar -c --format ustar -f "$VDIR/tree.tar" -C "$REPO" -T "$VDIR/files"; then
         unrun "the job's files could not be packed"
