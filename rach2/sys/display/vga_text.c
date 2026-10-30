@@ -515,25 +515,25 @@ const uint16_t *textcon_load_font(void)
 }
 
 /*
- * On the VGA the sequencer's screen-off bit blanks the display and leaves
- * its memory, its start address and its cursor as they are, so output goes
- * on as ever while it is set.
+ * On the VGA, bit 5 of the attribute controller's index, the palette address
+ * source, gives the display the palette while set; written clear, the
+ * screen shows the overscan color, black, and the adapter's memory, start
+ * address and cursor stay as they are, so output goes on while it is
+ * blank. A read of the input status register first puts the controller's
+ * flip-flop at the index, and a second one leaves it there for the next
+ * writer.
  */
-#define VGA_SEQ_CLOCKING   0x01
-#define VGA_SEQ_SCREEN_OFF 0x20
+#define VGA_AC_PALETTE_SOURCE 0x20
 
 void textcon_blank(int blank)
 {
-    uint8_t v;
-
     if (fbcon_active) {
         fbcon_blank(blank);
         return;
     }
-    outb(VGA_SEQ_INDEX, VGA_SEQ_CLOCKING);
-    v = inb(VGA_SEQ_DATA);
-    outb(VGA_SEQ_DATA,
-         blank ? (uint8_t)(v | VGA_SEQ_SCREEN_OFF) : (uint8_t)(v & ~VGA_SEQ_SCREEN_OFF));
+    (void)inb(VGA_INSTAT_READ);
+    outb(VGA_AC_INDEX, blank ? 0 : VGA_AC_PALETTE_SOURCE);
+    (void)inb(VGA_INSTAT_READ);
 }
 
 bool textcon_on_framebuffer(void)
