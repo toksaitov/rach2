@@ -511,9 +511,9 @@ static void console_service(void);
 
 /** The serial driver's receive notify, run from the port's interrupt with
  * interrupts off once bytes are in the ring. It services the port as the
- * tick does (tty_console_poll), so a parked reader learns of input at once and a
- * session nobody reads for has its bytes moved into the discipline at once;
- * the tick remains for a port whose interrupt is not enabled. */
+ * tick does (tty_console_poll), so a parked reader learns of input at once
+ * and a session nobody reads for has its bytes moved into the discipline at
+ * once; the tick remains for a port whose interrupt is not enabled. */
 static void console_rx_notify(void)
 {
     console_service();

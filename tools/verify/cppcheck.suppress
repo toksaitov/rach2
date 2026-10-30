@@ -80,6 +80,10 @@ unusedStructMember:*sys/syscall_proc.c
 unusedStructMember:*sys/network/netif.c
 unusedStructMember:*sys/proc/coredump.c
 
+# `struct mixer_info` is OSS's, which SOUND_MIXER_INFO copies to the user
+# whole; its `fillers` are the layout's reserved words, zero on the way out.
+unusedStructMember:*sys/audio/mixer.c
+
 # k_itoa gives a base other than ten the int's 32 bits as unsigned: on
 # x86-64 that is a different long, and on i686, where a long is an int's
 # width, the same one, which cppcheck reports as a redundant assignment.

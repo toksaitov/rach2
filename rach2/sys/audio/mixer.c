@@ -28,7 +28,8 @@
 #define MIXER_MASK_VOLUME     0x1
 #define OSS_VERSION           0x030802 /* SOUND_VERSION, as Linux gives it */
 
-/* SOUND_MIXER_INFO's answer, OSS's `mixer_info`. */
+/* SOUND_MIXER_INFO's answer, OSS's `mixer_info`, copied out whole; the
+ * fillers are the layout's reserved words. */
 struct mixer_info {
     char id[16];
     char name[32];
