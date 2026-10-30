@@ -86,6 +86,10 @@ diskctl: $(SRC_diskctl) $(HDR_diskctl)
 	$(UCC) $(UFLAGS) -o diskctl.new $(SRC_diskctl)
 	mv diskctl.new diskctl
 
+mixer: mixer.c
+	$(UCC) $(UFLAGS) -o mixer.new mixer.c
+	mv mixer.new mixer
+
 update: update.c
 	$(UCC) $(UFLAGS) -o update.new update.c
 	mv update.new update
