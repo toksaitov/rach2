@@ -228,7 +228,8 @@ struct process {
      * process or the process blocks again. */
     uint32_t woken;
     /* Whether its sleep is one no signal ends (`wq_wait_event_nointr`),
-     * which /proc reports as the state D and counts as blocked. */
+     * which /proc reports as the state D and counts as blocked; a kernel
+     * thread's idle wait (`wq_wait_event_idle`) is not marked. */
     uint32_t uninterruptible;
     /* The frame allocator refused this thread a user page since its last
      * page fault began: the fault is one of memory, not of the address. */

@@ -6,6 +6,12 @@
 #include "sched.h"
 #include "../lib/kerrno.h"
 
+/* The kinds of wait: one a signal ends, one it does not, and one it does not
+ * that /proc counts as idle rather than blocked. */
+#define WQ_SIGNAL   0
+#define WQ_NOSIGNAL 1
+#define WQ_IDLE     2
+
 /*
  * Save the interrupt flag and disable interrupts; restore puts it back. With
  * the big lock held, which keeps every other processor's kernel code out,
@@ -108,7 +114,9 @@ static void wq_dequeue(wait_queue_t *wq, struct wq_waiter *w)
 }
 
 /**
- * The wait behind `wq_wait_event` and `wq_wait_event_nointr`.
+ * The wait behind `wq_wait_event`, `wq_wait_event_nointr` and
+ * `wq_wait_event_idle`: a pending signal ends a wait of kind WQ_SIGNAL, and
+ * a sleeper of kind WQ_NOSIGNAL is marked uninterruptible.
  *
  * The condition and the signal are tested, and the process queued and
  * marked BLOCKED, with interrupts off, and interrupts come back on only for
@@ -127,7 +135,7 @@ static void wq_dequeue(wait_queue_t *wq, struct wq_waiter *w)
  * send the wait back to sleep with no timer to end it. The caller's condition
  * must be true once its deadline has passed.
  */
-static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int interruptible)
+static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int kind)
 {
     uint32_t flags;
     uint32_t deadline;
@@ -144,7 +152,7 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int interruptib
             rc = 0;
             break;
         }
-        if (interruptible && signal_pending()) {
+        if (kind == WQ_SIGNAL && signal_pending()) {
             rc = -EINTR;
             break;
         }
@@ -154,7 +162,7 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int interruptib
         wq_unlock();
         current_proc->wakeup_tick = deadline;
         current_proc->state = PROC_BLOCKED;
-        current_proc->uninterruptible = !interruptible;
+        current_proc->uninterruptible = kind == WQ_NOSIGNAL;
         irq_restore(flags);
 
         schedule();
@@ -250,10 +258,15 @@ uint32_t wq_wakes(const wait_queue_t *wq, uint32_t kinds)
 
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
-    return wq_wait(wq, cond, arg, 1);
+    return wq_wait(wq, cond, arg, WQ_SIGNAL);
 }
 
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
-    return wq_wait(wq, cond, arg, 0);
+    return wq_wait(wq, cond, arg, WQ_NOSIGNAL);
+}
+
+int wq_wait_event_idle(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    return wq_wait(wq, cond, arg, WQ_IDLE);
 }

@@ -711,12 +711,14 @@ void AcpiOsWaitEventsComplete(void)
 }
 
 /** ACPICA's thread, kacpid: run the queue's work as it comes, holding the
- * big lock as kernel code does, and sleep when there is none. */
+ * big lock as kernel code does, and sleep when there is none in an idle
+ * wait, which /proc/stat does not count as blocked; a wait inside a method
+ * still counts. */
 static void osl_thread(void)
 {
     arch_irq_enable();
     for (;;) {
-        (void)wq_wait_event_nointr(&queue_work, queue_has_work, NULL);
+        (void)wq_wait_event_idle(&queue_work, queue_has_work, NULL);
         osl_drain();
     }
 }

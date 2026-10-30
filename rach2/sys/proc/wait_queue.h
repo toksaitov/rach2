@@ -85,6 +85,15 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg);
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg);
 
 /**
+ * The same wait as `wq_wait_event_nointr` for a kernel thread that has no
+ * work: /proc reports the sleeper in the state S and does not count it in
+ * `procs_blocked`, as Linux does not count a thread in TASK_IDLE. A kernel
+ * thread never returns to user mode to take a signal, so a wait a signal
+ * ends would return at once without end once one was pending.
+ */
+int wq_wait_event_idle(wait_queue_t *wq, wq_cond_fn cond, void *arg);
+
+/**
  * Make every process currently blocked on `wq` runnable, with one preferred
  * selection by the scheduler, empty the queue, and count the wake for each
  * kind of change among `kinds`. The kinds are those the change can bring to
