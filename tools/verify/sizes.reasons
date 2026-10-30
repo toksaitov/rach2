@@ -33,8 +33,8 @@ krffs/stageimage.krffs.c:stage_node params 8 one procedure over a file format, i
 krffs/stageimage.krffs.c:stage_tree lines 120 one procedure over a file format, in the order the format is read
 
 rach2/kernel.c:check_strings nesting 6 a parser over an external format, one check per field in the format's order
-rach2/kernel.c:kernel_main complexity 57 the boot sequence, in the order the hardware requires
-rach2/kernel.c:kernel_main lines 332 the boot sequence, in the order the hardware requires
+rach2/kernel.c:kernel_main complexity 55 the boot sequence, in the order the hardware requires
+rach2/kernel.c:kernel_main lines 324 the boot sequence, in the order the hardware requires
 rach2/kernel.c:process_command complexity 122 a dispatcher, one arm per command, read as a table
 rach2/kernel.c:process_command lines 408 a dispatcher, one arm per command, read as a table
 rach2/kernel.c:process_command nesting 6 a dispatcher, one arm per command, read as a table
@@ -139,10 +139,9 @@ rach2/sys/fs/krffs.c:krffs_repair_at nesting 5 one file system operation over th
 rach2/sys/fs/krffs.c:krffs_resize_at complexity 27 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over the on-disk format, each step a rule of the format
 
-rach2/sys/fs/procfs.c:procfs_fd_ino complexity 33 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_kind_name complexity 31 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_open complexity 87 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_open lines 220 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_open complexity 64 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_open lines 177 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_readlink_fd lines 137 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/synthfs.c:synth_classify complexity 26 a dispatcher, one arm per command, read as a table

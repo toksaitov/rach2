@@ -3488,6 +3488,23 @@ static void capture_cmdline(const char *cmdline)
          given + 1 >= BOOT_CMDLINE_MAX ? " or more" : "");
 }
 
+/** Start the sound card, unless `rach2.noaudio` says not to, and record
+ * which, or that there is none. */
+static void start_audio(void)
+{
+    if (kcmdline_has("rach2.noaudio")) {
+        klog(KLOG_INFO, "audio", "skipped: rach2.noaudio");
+    } else {
+        klog(KLOG_DEBUG, "audio", "started");
+        init_audio();
+        if (audio) {
+            klog(KLOG_INFO, "audio", "ready: %s", audio_get_boot_status());
+        } else {
+            klog(KLOG_WARN, "audio", "absent: no supported card");
+        }
+    }
+}
+
 /**
  * The order of the boot is the hardware's and the allocator's.
  *
@@ -3736,17 +3753,7 @@ void kernel_main(const struct boot_info *boot)
 
     kstack_overrun_test();
 
-    if (kcmdline_has("rach2.noaudio")) {
-        klog(KLOG_INFO, "audio", "skipped: rach2.noaudio");
-    } else {
-        klog(KLOG_DEBUG, "audio", "started");
-        init_audio();
-        if (audio) {
-            klog(KLOG_INFO, "audio", "ready: %s", audio_get_boot_status());
-        } else {
-            klog(KLOG_WARN, "audio", "absent: no supported card");
-        }
-    }
+    start_audio();
 
     klog(diskcmd_policy() == DISKCMD_READ_WRITE ? KLOG_INFO : KLOG_WARN, "disk", "policy: %s",
          diskcmd_policy() == DISKCMD_READ_WRITE ? "read-write" : "read-only");

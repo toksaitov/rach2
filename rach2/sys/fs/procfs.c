@@ -131,6 +131,56 @@
 #define PROCFS_INO_SYS      0x140u /* and the entries of /proc/sys after it */
 #define PROCFS_INO_PID_BASE 0x200u
 
+/* A file of /proc that is one text for the whole system: the kind of its
+ * node, the origin its descriptor records, and its inode number. */
+struct procfs_global {
+    int kind;
+    int origin;
+    uint32_t ino;
+};
+
+static const struct procfs_global procfs_globals[] = {
+    {VNODE_PROC_CMDLINE, SYNTH_PROC_BOOTLINE, PROCFS_INO_CMDLINE},
+    {VNODE_PROC_DISK, SYNTH_PROC_DISKINFO, PROCFS_INO_DISK},
+    {VNODE_PROC_NET_DEV, SYNTH_PROC_NETDEV, PROCFS_INO_NETDEV},
+    {VNODE_PROC_NET_ROUTE, SYNTH_PROC_NETROUTE, PROCFS_INO_NETROUTE},
+    {VNODE_PROC_NET_ARP, SYNTH_PROC_NETARP, PROCFS_INO_NETARP},
+    {VNODE_PROC_NET_TCP, SYNTH_PROC_NETTCP, PROCFS_INO_NETTCP},
+    {VNODE_PROC_ACPI_CALL, SYNTH_PROC_ACPI_CALL, PROCFS_INO_ACPI_CALL},
+    {VNODE_PROC_UPTIME, SYNTH_PROC_UPTIME, PROCFS_INO_UPTIME},
+    {VNODE_PROC_STAT_SYS, SYNTH_PROC_STATSYS, PROCFS_INO_STATSYS},
+    {VNODE_PROC_MEMINFO, SYNTH_PROC_MEMINFO, PROCFS_INO_MEMINFO},
+    {VNODE_PROC_CPUINFO, SYNTH_PROC_CPUINFO, PROCFS_INO_CPUINFO},
+    {VNODE_PROC_LOADAVG, SYNTH_PROC_LOADAVG, PROCFS_INO_LOADAVG},
+    {VNODE_PROC_DISKSTATS, SYNTH_PROC_DISKSTATS, PROCFS_INO_DISKSTATS},
+    {VNODE_PROC_VERSION, SYNTH_PROC_VERSION, PROCFS_INO_VERSION},
+    {VNODE_PROC_PARTITIONS, SYNTH_PROC_PARTITIONS, PROCFS_INO_PARTITIONS},
+    {VNODE_PROC_VMSTAT, SYNTH_PROC_VMSTAT, PROCFS_INO_VMSTAT},
+    {VNODE_PROC_SLABINFO, SYNTH_PROC_SLABINFO, PROCFS_INO_SLABINFO},
+    {VNODE_PROC_SWAPS, SYNTH_PROC_SWAPS, PROCFS_INO_SWAPS},
+    {VNODE_PROC_LOCKS, SYNTH_PROC_LOCKS, PROCFS_INO_LOCKS},
+    {VNODE_PROC_MOUNTS, SYNTH_PROC_MOUNTS, PROCFS_INO_MOUNTS},
+    {VNODE_PROC_AUDIO, SYNTH_PROC_AUDIO, PROCFS_INO_AUDIO},
+    {VNODE_PROC_USB, SYNTH_PROC_USB, PROCFS_INO_USB},
+    {VNODE_PROC_FILESYSTEMS, SYNTH_PROC_FILESYSTEMS, PROCFS_INO_FILESYSTEMS},
+    {VNODE_PROC_LOOP, SYNTH_PROC_LOOP, PROCFS_INO_LOOP},
+    {VNODE_PROC_INTERRUPTS, SYNTH_PROC_INTERRUPTS, PROCFS_INO_INTERRUPTS},
+    {VNODE_PROC_CONSOLE, SYNTH_PROC_CONSOLE, PROCFS_INO_CONSOLE}};
+
+/** The system-wide file whose node is of `kind`, or whose descriptor
+ * records `origin` when `kind` is -1; NULL for none. */
+static const struct procfs_global *procfs_global_find(int kind, int origin)
+{
+    unsigned i;
+
+    for (i = 0; i < sizeof(procfs_globals) / sizeof(procfs_globals[0]); i++) {
+        if (kind >= 0 ? procfs_globals[i].kind == kind : procfs_globals[i].origin == origin) {
+            return &procfs_globals[i];
+        }
+    }
+    return NULL;
+}
+
 /*
  * A text is built in the heap and grows as it is appended to, so a report
  * lists what there is: every mount, every connection, every vector. The one
@@ -2156,28 +2206,15 @@ uint32_t procfs_ino_acpicall(void)
 uint32_t procfs_fd_ino(struct fd_entry *e)
 {
     struct procfs_file *pf;
+    const struct procfs_global *g;
 
     if (!e || e->type != FD_TYPE_PROC || !e->priv) {
         return 0;
     }
     pf = (struct procfs_file *)e->priv;
-    if (pf->origin_file == SYNTH_PROC_BOOTLINE) {
-        return PROCFS_INO_CMDLINE;
-    }
-    if (pf->origin_file == SYNTH_PROC_DISKINFO) {
-        return PROCFS_INO_DISK;
-    }
-    if (pf->origin_file == SYNTH_PROC_NETDEV) {
-        return PROCFS_INO_NETDEV;
-    }
-    if (pf->origin_file == SYNTH_PROC_NETROUTE) {
-        return PROCFS_INO_NETROUTE;
-    }
-    if (pf->origin_file == SYNTH_PROC_NETARP) {
-        return PROCFS_INO_NETARP;
-    }
-    if (pf->origin_file == SYNTH_PROC_NETTCP) {
-        return PROCFS_INO_NETTCP;
+    g = procfs_global_find(-1, pf->origin_file);
+    if (g) {
+        return g->ino;
     }
     if (synth_net_name(pf->origin_file)) {
         return procfs_ino_net(pf->origin_file);
@@ -2188,68 +2225,8 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     if (pf->origin_file == SYNTH_SYS_UEVENT) {
         return sysfs_ino(pf->origin_task >> 8, pf->origin_pid, 1 + (pf->origin_task & 255));
     }
-    if (pf->origin_file == SYNTH_PROC_ACPI_CALL) {
-        return PROCFS_INO_ACPI_CALL;
-    }
-    if (pf->origin_file == SYNTH_PROC_UPTIME) {
-        return PROCFS_INO_UPTIME;
-    }
-    if (pf->origin_file == SYNTH_PROC_STATSYS) {
-        return PROCFS_INO_STATSYS;
-    }
-    if (pf->origin_file == SYNTH_PROC_MEMINFO) {
-        return PROCFS_INO_MEMINFO;
-    }
-    if (pf->origin_file == SYNTH_PROC_CPUINFO) {
-        return PROCFS_INO_CPUINFO;
-    }
-    if (pf->origin_file == SYNTH_PROC_LOADAVG) {
-        return PROCFS_INO_LOADAVG;
-    }
-    if (pf->origin_file == SYNTH_PROC_DISKSTATS) {
-        return PROCFS_INO_DISKSTATS;
-    }
-    if (pf->origin_file == SYNTH_PROC_VERSION) {
-        return PROCFS_INO_VERSION;
-    }
-    if (pf->origin_file == SYNTH_PROC_PARTITIONS) {
-        return PROCFS_INO_PARTITIONS;
-    }
-    if (pf->origin_file == SYNTH_PROC_VMSTAT) {
-        return PROCFS_INO_VMSTAT;
-    }
-    if (pf->origin_file == SYNTH_PROC_SLABINFO) {
-        return PROCFS_INO_SLABINFO;
-    }
-    if (pf->origin_file == SYNTH_PROC_SWAPS) {
-        return PROCFS_INO_SWAPS;
-    }
-    if (pf->origin_file == SYNTH_PROC_LOCKS) {
-        return PROCFS_INO_LOCKS;
-    }
     if (pf->origin_file == SYNTH_PROC_SYSCTL) {
         return PROCFS_INO_SYS + (uint32_t)pf->origin_pid;
-    }
-    if (pf->origin_file == SYNTH_PROC_MOUNTS) {
-        return PROCFS_INO_MOUNTS;
-    }
-    if (pf->origin_file == SYNTH_PROC_AUDIO) {
-        return PROCFS_INO_AUDIO;
-    }
-    if (pf->origin_file == SYNTH_PROC_USB) {
-        return PROCFS_INO_USB;
-    }
-    if (pf->origin_file == SYNTH_PROC_FILESYSTEMS) {
-        return PROCFS_INO_FILESYSTEMS;
-    }
-    if (pf->origin_file == SYNTH_PROC_LOOP) {
-        return PROCFS_INO_LOOP;
-    }
-    if (pf->origin_file == SYNTH_PROC_INTERRUPTS) {
-        return PROCFS_INO_INTERRUPTS;
-    }
-    if (pf->origin_file == SYNTH_PROC_CONSOLE) {
-        return PROCFS_INO_CONSOLE;
     }
     return procfs_ino_pid(pf->origin_pid);
 }
@@ -5797,6 +5774,7 @@ int procfs_open(const struct vpath *vp, int flags)
 {
     int pid = 0;
     struct procfs_file *f = NULL;
+    const struct procfs_global *g;
     struct procfs_text text;
     fd_entry_t *e;
     int fd, len;
@@ -5941,58 +5919,11 @@ int procfs_open(const struct vpath *vp, int flags)
     f->len = len;
     f->origin_pid = pid;
     f->origin_task = vp->tid != 0 ? procfs_resolve_pid(vp->pid) : 0;
-    if (vp->kind == VNODE_PROC_CMDLINE) {
-        f->origin_file = SYNTH_PROC_BOOTLINE;
-    } else if (vp->kind == VNODE_PROC_DISK) {
-        f->origin_file = SYNTH_PROC_DISKINFO;
-    } else if (vp->kind == VNODE_PROC_NET_DEV) {
-        f->origin_file = SYNTH_PROC_NETDEV;
-    } else if (vp->kind == VNODE_PROC_UPTIME) {
-        f->origin_file = SYNTH_PROC_UPTIME;
-    } else if (vp->kind == VNODE_PROC_STAT_SYS) {
-        f->origin_file = SYNTH_PROC_STATSYS;
-    } else if (vp->kind == VNODE_PROC_MEMINFO) {
-        f->origin_file = SYNTH_PROC_MEMINFO;
-    } else if (vp->kind == VNODE_PROC_CPUINFO) {
-        f->origin_file = SYNTH_PROC_CPUINFO;
-    } else if (vp->kind == VNODE_PROC_LOADAVG) {
-        f->origin_file = SYNTH_PROC_LOADAVG;
-    } else if (vp->kind == VNODE_PROC_DISKSTATS) {
-        f->origin_file = SYNTH_PROC_DISKSTATS;
-    } else if (vp->kind == VNODE_PROC_VERSION) {
-        f->origin_file = SYNTH_PROC_VERSION;
-    } else if (vp->kind == VNODE_PROC_PARTITIONS) {
-        f->origin_file = SYNTH_PROC_PARTITIONS;
-    } else if (vp->kind == VNODE_PROC_VMSTAT) {
-        f->origin_file = SYNTH_PROC_VMSTAT;
-    } else if (vp->kind == VNODE_PROC_SLABINFO) {
-        f->origin_file = SYNTH_PROC_SLABINFO;
-    } else if (vp->kind == VNODE_PROC_SWAPS) {
-        f->origin_file = SYNTH_PROC_SWAPS;
-    } else if (vp->kind == VNODE_PROC_LOCKS) {
-        f->origin_file = SYNTH_PROC_LOCKS;
+    g = procfs_global_find(vp->kind, 0);
+    if (g) {
+        f->origin_file = g->origin;
     } else if (vp->kind == VNODE_PROC_SYS_FILE) {
         f->origin_file = SYNTH_PROC_SYSCTL;
-    } else if (vp->kind == VNODE_PROC_MOUNTS) {
-        f->origin_file = SYNTH_PROC_MOUNTS;
-    } else if (vp->kind == VNODE_PROC_AUDIO) {
-        f->origin_file = SYNTH_PROC_AUDIO;
-    } else if (vp->kind == VNODE_PROC_USB) {
-        f->origin_file = SYNTH_PROC_USB;
-    } else if (vp->kind == VNODE_PROC_INTERRUPTS) {
-        f->origin_file = SYNTH_PROC_INTERRUPTS;
-    } else if (vp->kind == VNODE_PROC_CONSOLE) {
-        f->origin_file = SYNTH_PROC_CONSOLE;
-    } else if (vp->kind == VNODE_PROC_FILESYSTEMS) {
-        f->origin_file = SYNTH_PROC_FILESYSTEMS;
-    } else if (vp->kind == VNODE_PROC_LOOP) {
-        f->origin_file = SYNTH_PROC_LOOP;
-    } else if (vp->kind == VNODE_PROC_NET_ROUTE) {
-        f->origin_file = SYNTH_PROC_NETROUTE;
-    } else if (vp->kind == VNODE_PROC_NET_ARP) {
-        f->origin_file = SYNTH_PROC_NETARP;
-    } else if (vp->kind == VNODE_PROC_NET_TCP) {
-        f->origin_file = SYNTH_PROC_NETTCP;
     } else if (vp->kind == VNODE_SYS_FILE) {
         f->origin_file = SYNTH_SYS_UEVENT;
         f->origin_task = vp->sysent << 8 | vp->procfile;
