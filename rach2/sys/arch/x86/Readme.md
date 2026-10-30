@@ -15,7 +15,7 @@ The platform defines what these shared headers declare. Each header states its c
 | `sys/udelay.h` | `k_udelay`, a bounded busy wait | `udelay.c` |
 | `sys/serial.h` | the serial console | `serial.c` |
 | `sys/speaker.h` | the speaker's tone | `speaker.c` |
-| `sys/power.h` | `power_stop` | `power.c` |
+| `sys/power.h` | `power_prepare`, `power_stop` | `power.c` |
 | `sys/acpicall.h` | `/proc/acpi/call`'s method calls | `sys/acpi/call.c` |
 | `sys/module.h` | the boot modules | `module.c` |
 | `sys/fpu.h` | a process's floating-point save area | `fpu.c` |
@@ -147,10 +147,10 @@ A chipset that matches a row is used only when its ACPI range decodes, its base 
 `power_stop` (`power.c`) shows records of level `INFO` on the screen again, turns interrupts off, stops the other processors, and does what it is given. A request is a write with no answer, so each is followed by a loop of a fixed count before the next is tried:
 
 * `POWER_HALT` parks the processor in a loop of `cli; hlt`, since an NMI or an SMI wakes a halted processor.
-* `POWER_OFF` first writes `\_S5`'s sleep types with `SLP_EN`, when the FADT and `\_S5` were found: to the sleep control register on a hardware-reduced machine, and otherwise to PM1a and PM1b, once with `SLP_EN` clear and once with it set, as ACPI orders the writes. Where `SCI_EN` is clear, the FADT's ACPI enable goes to its SMI command port first. Then it writes the profile's sleep word to its `PM1_CNT`, where a profile passed its checks. Then it halts.
+* `POWER_OFF` first enters the soft-off state through ACPICA, where `power_prepare` ran the firmware's `\_PTS(5)` ([ACPI](../../acpi/Readme.md)). On a machine still running it writes `\_S5`'s sleep types with `SLP_EN`, when the FADT and `\_S5` were found: to the sleep control register on a hardware-reduced machine, and otherwise to PM1a and PM1b, once with `SLP_EN` clear and once with it set, as ACPI orders the writes. Where `SCI_EN` is clear, the FADT's ACPI enable goes to its SMI command port first. Then it writes the profile's sleep word to its `PM1_CNT`, where a profile passed its checks. Then it halts.
 * `POWER_RESTART` writes the FADT's reset value to its reset register, where the FADT has one; 0xFB to port 0xB2, the reset command of an Insyde firmware's SMI handler, only when the SMBIOS vendor begins with `Insyde`, since on another firmware the byte reaches a handler written for something else; 0x02 and then 0x06 to port 0xCF9, the chipset's reset control; and 0xFE to the 8042's command port 0x64, once its input buffer is empty. The three fixed ports come in order of how much of the machine each resets. `rach2.resetskip=N` leaves out the first `N` of the first three, the FADT's register counted only where it exists. Then it halts.
 
-`kernel_shutdown` in `kernel.c`, which `reboot(2)` and the debug shell's `halt`, `poweroff` and `reboot` call, writes the disk root's dirty pages and stops the USB and network cards before it calls `power_stop`.
+`kernel_shutdown` in `kernel.c`, which `reboot(2)` and the debug shell's `halt`, `poweroff` and `reboot` call, calls `power_prepare` first, while the caller may still sleep, then writes the disk root's dirty pages and stops the USB and network cards before it calls `power_stop`.
 
 ### The devices
 

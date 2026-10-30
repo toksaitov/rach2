@@ -167,9 +167,16 @@ A power off, by
 .Xr reboot 2
 or
 .Xr halt 8 ,
-writes the sleep types of
+goes through ACPICA where it is up, as Linux's does: the firmware's
+.Ql \e_PTS(5)
+runs while processes still run, then every general-purpose event is
+disabled and the status of every fixed event and general-purpose event
+cleared, and the sleep types of
 .Ql \e_S5
-with the sleep enable bit to the FADT's PM1a and PM1b control registers.
+are written with the sleep enable bit to the FADT's PM1a and PM1b control
+registers.
+Without ACPICA, or on a machine still running after that, the kernel
+writes them itself.
 Where the tables give no
 .Ql \e_S5 ,
 or the machine is still running after the write, the kernel tries the
@@ -260,10 +267,14 @@ A video bus's Notify reported as key K.
 A write of
 .Pa /proc/acpi/call
 evaluated PATH.
+.It Ql poweroff: acpica: \e_PTS(5) run, gpes disabled
+The power off ran the firmware's preparation through ACPICA.
+.It Ql poweroff: acpica: status cleared
+ACPICA cleared every status and is writing the sleep enable bit.
 .It Ql poweroff: acpi: sleep types A and B
 The power off writes
 .Ql \e_S5 's
-types.
+types itself, without ACPICA.
 .It Ql reboot: acpi: writing 0xV to the reset register
 The restart writes the FADT's reset register.
 .El

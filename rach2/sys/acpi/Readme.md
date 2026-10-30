@@ -6,7 +6,7 @@
 
 ACPICA comes up on every PC boot that has an RSDP. Two options of the boot line ([cmdline.md](../../cmdline.md)) change that:
 
-* `rach2.noacpica`: ACPICA is left out. No method runs, the SCI's line stays masked, and the power off goes through the `\_S5` that `acpi.c` found, as it always does.
+* `rach2.noacpica`: ACPICA is left out. No method runs, the SCI's line stays masked, and the power off writes the `\_S5` that `acpi.c` found itself.
 * `rach2.nosci`: ACPICA comes up, but its handler of the SCI is not installed and the line stays masked, so no fixed event or GPE is seen, and the embedded controller runs no query.
 
 The buttons and the video bus are the event devices "Power Button", "Sleep Button" and "Video Bus" of [input(4)](../../../man/man4/input.4). A method is evaluated through `/proc/acpi/call` ([proc(5)](../../../man/man5/proc.5)), as with Linux's `acpi_call` module:
@@ -23,6 +23,7 @@ The kernel's records of ACPICA and of the devices, `acpi: acpica: N objects, E e
 
 * `acpica_boot(rsdp)` brings ACPICA up. `platform_firmware_start` (`sys/arch/x86/platform.c`) calls it once from `kernel.c`, after the heap, PCI, the tick and the scheduler, with the RSDP `acpi.c` found.
 * `acpica_thread_start()` makes the kernel thread `kacpid`. `platform_threads_start` calls it from `enter_program` when the first program starts, so that the thread takes its pid after init's 1, which BusyBox's `poweroff` signals.
+* `acpica_power_off_prepare()` and `acpica_power_off()` enter the soft-off state. `power_prepare` and `power_stop` (`sys/arch/x86/power.c`) call them from `kernel_shutdown`.
 * `acpica_up()`, and the counts `acpica_errors()`, `acpica_warnings()`, `acpica_sci_count()` and `acpica_sci_handled()`, read the state.
 
 [`sys/acpicall.h`](../acpicall.h), a shared header that `call.c` defines, is `/proc/acpi/call` ([proc(5)](../../../man/man5/proc.5)), which `procfs.c` reads and writes. [`devices.h`](devices.h) is what `boot.c` calls of the devices, and [`ecio.h`](ecio.h) the embedded controller's protocol, which names nothing of ACPICA's so that a host test drives it. The other files include ACPICA's `acpi.h` and serve ACPICA alone.
@@ -44,6 +45,7 @@ ACPICA's core is vendored under [`vendor/acpica/`](../../../vendor/acpica/Readme
 * `ecio.c` is the embedded controller's command protocol over its two ports, and `ec.c` the controller on ACPICA: its address space and its queries.
 * `button.c` is the power and sleep buttons, and `video.c` the video buses.
 * `call.c` is `/proc/acpi/call`.
+* `sleep.c` is the power off.
 
 ### The bring-up
 
@@ -77,6 +79,10 @@ The bring-up takes about 30 ms on QEMU's machines. It runs after the scheduler i
 ### /proc/acpi/call
 
 `acpi_call_write` copies the request, splits it into its path and up to seven integer or string arguments, and evaluates the path with `AcpiEvaluateObject` in the writer's process, where a method may sleep. The result is kept as text, under a spinlock, for the next read by anyone: an integer, a string, a buffer, a package of them up to four deep, nothing as `0x0`, or the error, as Linux's `acpi_call` spells them. Each call is logged as `acpi: call: PATH: RESULT`. A Notify the method gives runs after it, on `kacpid`.
+
+### The power off
+
+The power off goes through ACPICA as Linux's `acpi_power_off` does. `acpica_power_off_prepare`, from `kernel_shutdown` while the caller may still sleep, runs `AcpiEnterSleepStatePrep(5)`, which reads `\_S5` and runs the firmware's `\_PTS(5)` and `_SST`; then it disables every GPE and waits for the work queued on `kacpid`. `acpica_power_off`, from `power_stop` with interrupts off and the other processors stopped, runs `AcpiEnterSleepState(5)`: ACPICA clears WAK_STS, disables every GPE, clears the status of every fixed event and GPE and enables the wake GPEs, of which the kernel sets none, then writes the sleep types. A status left set, as a press of the power button leaves PWRBTN_STS, may wake the machine as soon as it is off. `AcpiOsEnterSleep` then writes the sleep types with SLP_EN to the PM1 control registers, or to the sleep control register of a hardware-reduced machine, and returns `AE_CTRL_TERMINATE`, so that ACPICA returns at once instead of waiting ten seconds and spinning for good; `power_stop` waits, and on a machine still running writes `\_S5` itself and then tries the board's power controller ([the PC platform](../arch/x86/Readme.md)). The records are `poweroff: acpica: \_PTS(5) run, gpes disabled`, which netconsole still sends, then `poweroff: acpica: status cleared` and `poweroff: powering off`.
 
 ## Building
 
