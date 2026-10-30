@@ -75,6 +75,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `doom` (full tier; needs qemu; 128 MiB): the Doom port on a disk root, refused without its WAD, drawing with a zone sized from the machine's free memory, playing a demo to its end and recording one through fopen.
 * `diskpolicy` (full tier; needs qemu; 128 MiB): the read-only kernel does not write the disk, shown on the bytes rather than on a return value.
 * `console` (core tier; needs qemu; 128 MiB): the two probes that read from the console, which the shared probe boot cannot run because they block until something is typed.
+* `screen` (core tier; needs qemu; 128 MiB): the console blanked and shown again, by TIOCLINUX, by the escape that sets the blank time and by consoleblank=.
 * `fpu` (core tier; needs qemu; 128 MiB): the floating-point state of a process is its own, by each path the kernel saves it with: XSAVE under QEMU's `max`, FXSAVE under `rach2.noxsave`, where `xsaveprobe` must find OSXSAVE clear and no NT_X86_XSTATE, and on `qemu64`, and the x87 state alone by `fnsave` under `rach2.nofxsr`, which only the i686 kernel takes, since every x86-64 processor has FXSR.
 * `socket` (core tier; needs qemu; 128 MiB): the guest opening connections of its own, checked by a host that answers (see tests/cases/machine.socket.json).
 * `bootorder` (full tier; needs qemu, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the GRUB disk on the second AHCI port behind a disk holding nothing, booted by the firmware, its root found as disk 1.

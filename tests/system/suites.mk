@@ -216,6 +216,12 @@ $(IMAGES_DIR)/memory-test.recovery.krffs: $(RECOVERY_IMAGE)
 # takes a cooked line with two erases in it, a raw byte with no newline, the
 # screen's answers to its queries, and Alt with x pressed on the machine's
 # keyboard.
+# `tests/run screen`: the console blanked and shown again, by TIOCLINUX, by
+# the escape that sets the blank time and by consoleblank=. They are the cases
+# of tests/cases/machine.screen.json, which etude runs, each in a boot of its
+# own, and have no target here: each is judged by the kernel's records of its
+# blanks and unblanks and by QMP's screen dumps, black while the console is
+# blank and showing its text before and after.
 # `tests/run audio`: what the machine actually played. Its cases
 # (tests/cases/machine.audio.json) play the debug shell's scale on an Intel
 # HDA controller and on a Sound Blaster 16, and wavcheck measures the notes in

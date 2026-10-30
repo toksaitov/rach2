@@ -111,6 +111,7 @@ disk-q35|qemu|full|disk-q35-test*,disk-q35.*,disk-q35/*
 doom|qemu|full
 diskpolicy|qemu|full
 console|qemu|core
+screen|qemu|core
 fpu|qemu|core
 socket|qemu|core
 bootorder|qemu,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
