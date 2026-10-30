@@ -819,7 +819,7 @@ void AcpiOsVprintf(const char *format, va_list args)
     spin_unlock_irqrestore(&line_lock, flags);
 }
 
-void ACPI_INTERNAL_VAR_XFACE AcpiOsPrintf(const char *format, ...)
+void AcpiOsPrintf(const char *format, ...)
 {
     va_list args;
 
