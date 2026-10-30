@@ -187,15 +187,17 @@ static void boot(void)
     while (at) {
         at += length("acpi: acpica: ");
         if (*at >= '1' && *at <= '9') {
-            break;
+            while (*at >= '0' && *at <= '9') {
+                at++;
+            }
+            if (find(at, " objects, ") == at) {
+                break;
+            }
         }
         at = find(at, "acpi: acpica: ");
     }
     if (!at) {
         fail("ACPICA has no initialization record");
-    }
-    while (*at >= '0' && *at <= '9') {
-        at++;
     }
     if (find(at, " objects, 0 errors\n") != at || find(ring, "ACPI Error") ||
         find(ring, "ACPI BIOS Error") || find(ring, "ACPI Exception")) {
