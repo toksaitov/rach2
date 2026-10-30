@@ -17,8 +17,9 @@
  * it shows. The 320x200 picture of Mode 13h must be drawn at the largest whole
  * scale that fits, in the middle, with no cell over it until the console takes
  * the screen back, and a blank console must be black until its unblank draws
- * every cell again. The text console's driver, the console and the framebuffer's
- * drawing are included whole, as vga_text_hosttest.c includes them.
+ * every cell again. The text console's driver, the console and the
+ * framebuffer's drawing are included whole, as vga_text_hosttest.c includes
+ * them.
  */
 #include "lib/kint.h"
 

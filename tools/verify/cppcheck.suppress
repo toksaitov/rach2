@@ -60,6 +60,12 @@ unusedStructMember:*tests/musl/ptracemusl.c
 # time, and the members after them are the layout.
 unusedStructMember:*tests/musl/callsmusl.c
 
+# `struct input_event` and `struct mixer_info` in the event probe are Linux's,
+# which a read of an event device and SOUND_MIXER_INFO fill whole; the probe
+# reads an event's type, code and value and the info's id and name, and the
+# members around them are the layout.
+unusedStructMember:*tests/evprobe.c
+
 # The kernel's copies of Linux's structures.
 
 # The i386 and x86-64 signal frames, statx, the rusage, the siginfo a wait

@@ -74,7 +74,8 @@
 #define PRODUCT_POWER      0x01
 #define PRODUCT_VIDEO      0x06
 
-/* OSS's mixer ioctls, and the console's audio requests (rach2/sys/syscall.c). */
+/* OSS's mixer ioctls, and the console's audio requests
+ * (rach2/sys/syscall.c). */
 #define MIXER_READ_VOLUME     0x80044D00L
 #define MIXER_WRITE_VOLUME    0xC0044D00L
 #define MIXER_READ_PCM        0x80044D04L
@@ -153,6 +154,20 @@ static size_t strlen(const char *s)
         n++;
     }
     return n;
+}
+
+/**
+ * Set the `n` bytes at `p` to zero, before a system call fills them. The
+ * stores are volatile, so that the compiler does not make them a call of
+ * memset, which a probe without a C library lacks.
+ */
+static void clear(void *p, unsigned long n)
+{
+    volatile unsigned char *b = (volatile unsigned char *)p;
+
+    while (n-- > 0) {
+        *b++ = 0;
+    }
 }
 
 /** Whether `s` begins with `prefix`. */
@@ -288,6 +303,7 @@ static void check_ids(int fd, int bus)
     long version = 0;
     long len;
 
+    clear(id, sizeof(id));
     if (ioctl(fd, EVIOCGVERSION, (long)&version) != 0 || (int)version != 0x010001) {
         fail_with("EVIOCGVERSION is not 0x010001", 1, version);
     }
@@ -350,6 +366,7 @@ static int read_keys(int fd, struct key_packet *out, int max, int releases)
     struct key_packet p;
     int n = 0, seen = 0;
 
+    clear(ev, sizeof(ev));
     p.scan = -1;
     p.code = -1;
     p.value = -1;
@@ -463,6 +480,9 @@ static void keyboard(int usb)
     int a, b, lag, idle;
     long rc;
 
+    clear(first, sizeof(first));
+    clear(second, sizeof(second));
+    clear(&ev, sizeof(ev));
     a = open_or_fail(path, O_RDONLY, "the event device did not open");
     b = open_or_fail(path, O_RDONLY, "the event device did not open twice");
     lag = open_or_fail(path, O_RDONLY | O_NONBLOCK, "the event device did not open thrice");
@@ -605,6 +625,7 @@ static void check_acpi_device(int fd, int product, const char *phys, int key)
     char text[64];
     long len;
 
+    clear(id, sizeof(id));
     if (ioctl(fd, EVIOCGID, (long)id) != 0 || id[0] != BUS_HOST || id[2] != product) {
         fail_with("EVIOCGID gives another bus or product", 1, (long)id[0] << 16 | id[2]);
     }
@@ -694,6 +715,7 @@ static void call(const char *request, const char *want)
     long n = syscall3(SYS_WRITE, fd, (long)request, (long)strlen(request));
 
     syscall3(SYS_CLOSE, fd, 0, 0);
+    clear(got, sizeof(got));
     if (n != (long)strlen(request)) {
         puts(request);
         fail_with(": the write of the call was refused", 1, -n);
