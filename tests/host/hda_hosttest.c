@@ -115,15 +115,17 @@ extern char *strstr(const char *text, const char *needle);
 static int failures;
 static const char *row; /* the row under way, named in a failure */
 /* The model: the controller's registers, and for each node its parameters,
- * connection list, selected input, converter format and pin configuration;
- * the connection-list reads, the verbs, and the list reads at an offset
- * that is not the start of a response. */
+ * connection list, selected input, converter format, pin configuration and
+ * the payload of the last verb that set its output amplifier; the
+ * connection-list reads, the verbs, and the list reads at an offset that is
+ * not the start of a response. */
 static uint8_t mmio[HDA_MMIO_SIZE];
 static uint32_t params[128][32];
 static uint16_t connections[128][127];
 static uint8_t selected[128];
 static uint16_t converter_format[128];
 static uint32_t configurations[128];
+static uint16_t out_amp[128];
 static unsigned conn_reads, verbs, bad_offsets;
 static int refuse_alloc; /* kmalloc fails */
 extern void *malloc(unsigned long size);
@@ -172,6 +174,8 @@ static uint32_t model_verb(uint32_t command)
         selected[nid] = offset;
     if ((verb & 0xF0000) == HDA_VERB_SET_CONV_FMT)
         converter_format[nid] = (uint16_t)verb;
+    if ((verb & 0xF0000) == HDA_VERB_SET_AMP_GAIN && (verb & 0x8000))
+        out_amp[nid] = (uint16_t)verb;
     if (verb == 0xA0000)
         return converter_format[nid];
     return 0;
@@ -222,6 +226,7 @@ static void reset_model(void)
     k_memset(selected, 0, sizeof(selected));
     k_memset(converter_format, 0, sizeof(converter_format));
     k_memset(configurations, 0, sizeof(configurations));
+    k_memset(out_amp, 0, sizeof(out_amp));
     conn_reads = verbs = bad_offsets = 0;
     playing = stream_started = false;
     user_callback = NULL;
@@ -465,6 +470,41 @@ static void row_route(void)
     check(!hda_find_output(), "invalid list cannot fall back to an unrelated dac");
 }
 
+/**
+ * A start sets the DAC's and the pin's output amplifiers at full gain and
+ * then applies the level set before it again: the gain scaled to each
+ * node's steps, and the mute bit at 0. The DAC has 87 steps and the pin 31.
+ */
+static void row_volume(void)
+{
+    row = "volume";
+    reset_model();
+    params[2][HDA_PARAM_AUDIO_CAPS] = 1 | 0x04;
+    params[2][HDA_PARAM_OUTPUT_AMP] = 87 << 8;
+    params[10][HDA_PARAM_AUDIO_CAPS] |= 0x04;
+    params[10][HDA_PARAM_OUTPUT_AMP] = 31 << 8;
+    check(hda_find_output(), "enumeration succeeds");
+    check(dac_nid == 2 && pin_nid == 10, "the amplified DAC and pin are the path");
+    check(hda_start(48000, AUDIO_S16LE, 2) == 0, "start at the full level");
+    check((out_amp[2] & 0xF0FF) == (0xB000 | 87), "the DAC starts at full gain");
+    check((out_amp[10] & 0xF0FF) == (0xB000 | 31), "the pin starts at full gain");
+    hda_stop();
+    hda_set_volume(40);
+    out_amp[2] = out_amp[10] = 0;
+    check(hda_start(48000, AUDIO_S16LE, 2) == 0, "start at a level of 40");
+    check((out_amp[2] & 0xF0FF) == (0xB000 | 34), "the DAC's gain is 40% of 87 after a start");
+    check((out_amp[10] & 0xF0FF) == (0xB000 | 12), "the pin's gain is 40% of 31 after a start");
+    check(hda_get_volume() == 40, "the level is kept across the start");
+    hda_stop();
+    hda_set_volume(0);
+    out_amp[2] = out_amp[10] = 0;
+    check(hda_start(48000, AUDIO_S16LE, 2) == 0, "start at a level of 0");
+    check((out_amp[2] & 0xF0FF) == (0xB000 | 0x80), "the DAC is muted after a start");
+    check((out_amp[10] & 0xF0FF) == (0xB000 | 0x80), "the pin is muted after a start");
+    hda_stop();
+    hda_set_volume(100);
+}
+
 /** Tell display-only controllers and codecs from those that drive speakers. */
 static void row_hdmi(void)
 {
@@ -591,6 +631,7 @@ int main(void)
     row_underrun();
     row_connections();
     row_route();
+    row_volume();
     row_hdmi();
     row_report();
     row_dma_check();
