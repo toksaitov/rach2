@@ -191,6 +191,10 @@ static audio_callback_t user_callback = NULL;
 
 /* Requested format/rate from AUDIO_START (userspace). */
 static uint32_t current_sample_rate = 0;
+
+/* The master volume, 0 to 100, that `hda_set_volume` last set; a stream's
+ * start applies it again. */
+static int hda_volume = 100;
 static audio_format_t current_format = AUDIO_S16LE;
 static int current_channels = 2;
 
@@ -464,6 +468,7 @@ static uint8_t hda_amp_steps(uint32_t amp_caps);
 static uint8_t hda_get_out_amp_max(uint8_t nid);
 static uint8_t hda_get_in_amp_max(uint8_t nid);
 static uint8_t hda_clamp_gain(uint8_t gain, uint8_t max);
+static void hda_set_volume(int volume);
 
 /**
  * Refill the DMA period the engine is about to play, if it has advanced.
@@ -2645,6 +2650,12 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
         }
     }
 
+    /* The amplifiers above are at full gain; the level set is applied over
+     * them. */
+    if (hda_volume != 100) {
+        hda_set_volume(hda_volume);
+    }
+
     /* Re-enable GPIO after all configuration (some codecs reset GPIO state). */
     hda_enable_gpio();
     hda_enable_eapd_all();
@@ -2755,7 +2766,8 @@ static int hda_write(const uint8_t *buffer, size_t size)
  *
  * Scales the percentage to each widget's amp step range and writes it to the
  * DAC, any mixer, the output pin, and the headphone DAC/pin. A volume of 0
- * sets the amp mute bit (0x80).
+ * sets the amp mute bit (0x80). The level is kept in `hda_volume`, which
+ * `hda_start` applies again after it sets the amplifiers afresh.
  */
 static void hda_set_volume(int volume)
 {
@@ -2766,6 +2778,7 @@ static void hda_set_volume(int volume)
         volume = 0;
     if (volume > 100)
         volume = 100;
+    hda_volume = volume;
 
     mute = (volume == 0) ? 0x80 : 0x00;
 
@@ -2843,9 +2856,15 @@ static void hda_set_volume(int volume)
     }
 }
 
+/** The level `hda_set_volume` last set; 100 until one is. */
+static int hda_get_volume(void)
+{
+    return hda_volume;
+}
+
 /* The audio_driver_t fields, in the order audio.h declares them: name,
    type, init, shutdown, start, stop, is_playing, set_callback, write,
-   set_volume. */
+   set_volume, get_volume. */
 audio_driver_t hda_driver = {"Intel HD Audio", AUDIO_DRIVER_HDA, hda_init,       hda_shutdown,
                              hda_start,        hda_stop,         hda_is_playing, hda_set_callback,
-                             hda_write,        hda_set_volume};
+                             hda_write,        hda_set_volume,   hda_get_volume};

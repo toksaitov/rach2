@@ -603,6 +603,9 @@ static int sb16_write(const uint8_t *buffer, size_t size)
     return (int)written;
 }
 
+/* The level last set, 0 to 100; init opens the mixer fully. */
+static int sb16_volume = 100;
+
 /**
  * Set output volume from a 0..100 percentage.
  *
@@ -620,6 +623,7 @@ static void sb16_set_volume(int volume)
     if (volume > 100)
         volume = 100;
 
+    sb16_volume = volume;
     val = (uint8_t)((volume * 255) / 100);
 
     val = (uint8_t)((val & 0xF0) | ((val >> 4) & 0x0F));
@@ -627,9 +631,16 @@ static void sb16_set_volume(int volume)
     mixer_write(MIXER_VOICE_VOL, val);
 }
 
+/** The level `sb16_set_volume` last set, which the mixer keeps across a
+ * stream's start; 100 until one is. */
+static int sb16_get_volume(void)
+{
+    return sb16_volume;
+}
+
 /* The audio_driver_t fields, in the order audio.h declares them: name,
    type, init, shutdown, start, stop, is_playing, set_callback, write,
-   set_volume. */
+   set_volume, get_volume. */
 audio_driver_t sb16_driver = {
-    "Sound Blaster 16", AUDIO_DRIVER_SB16, sb16_init,         sb16_shutdown, sb16_start,
-    sb16_stop,          sb16_is_playing,   sb16_set_callback, sb16_write,    sb16_set_volume};
+    "Sound Blaster 16", AUDIO_DRIVER_SB16, sb16_init,  sb16_shutdown,   sb16_start,     sb16_stop,
+    sb16_is_playing,    sb16_set_callback, sb16_write, sb16_set_volume, sb16_get_volume};

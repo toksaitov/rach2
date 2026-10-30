@@ -73,8 +73,13 @@ typedef struct audio_driver {
      */
     int (*write)(const uint8_t *buffer, size_t size);
 
-    /* Set master volume, 0 to 100; not every driver honors it. */
+    /* Set master volume, 0 to 100; not every driver honors it. A driver
+     * that does keeps the level and applies it again when a stream starts. */
     void (*set_volume)(int volume);
+
+    /* The master volume last set, 0 to 100, 100 until one is; NULL for a
+     * driver with no volume, the PC speaker. */
+    int (*get_volume)(void);
 
 } audio_driver_t;
 
