@@ -2,6 +2,7 @@
 # use. tools/verify/probecheck.sh reads this file.
 hello program that other probes, suites and host tests run or open
 idreport identity and environment fixture for account probes
+lenovoacpi Lenovo ACPI acceptance run by the native collection on each release
 musl/budgetmusl manual resource budget diagnostic
 musl/catfile manual file reader
 musl/cowfork manual copy-on-write diagnostic

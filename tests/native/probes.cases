@@ -1,4 +1,6 @@
 # The native cases of the freestanding probes (Readme.md).
+# Read the boot log before other cases can evict its records.
+case lenovoacpi console log -- lenovoacpi
 case auxvprobe -- auxvprobe
 case bigfileprobe.exfat volume:exfat:big-exfat:attached mountns log -- \
     bigfileprobe write-verify - exfat 256 dir=big

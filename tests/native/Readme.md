@@ -4,6 +4,8 @@ This directory says how each guest program runs on a Rach2 that is already up, s
 
 ## Interfaces
 
+The first case, `lenovoacpi`, accepts the Lenovo G50-70's ACPI initialization, embedded controller and its enabled GPE, and the named keyboard, power button and video bus. It runs before other cases can evict the boot records. With the panel unblanked and powered on, it sets a middle brightness, calls `\_SB.PCI0.LPCB.EC0._Q11` and `_Q12` through `/proc/acpi/call`, reads their brightness keys without grabbing the video device from the installed `acpid`, and requires the requested and actual backlight levels to follow each action. It restores the original requested level on success, failure and an ordinary stop signal. The collection's progress bound ends a missing event or action; the probe sets no deadline. Physical keys, screen sleep, poweroff and persistence across a reboot still need the sitting with the owner.
+
 `probes.cases` has the cases of the freestanding probes and `musl.cases` those of the musl programs. Each case is one line:
 
     case NAME FIXTURE... -- PROGRAM [ARGUMENT...]
