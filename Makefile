@@ -620,6 +620,14 @@ build/x86_64/tests/style/%.json: tests/cases/host/style.sh \
 build/tests/style/abi.json: $(LIBC_STAMP)
 build/x86_64/tests/style/abi.json: $(LIBC_STAMP)
 build/tests/style/sizes.json build/x86_64/tests/style/sizes.json: host-pmccabe
+# The clang and sparse cases read ACPICA's headers in the extracted core.
+.PHONY: style-acpica style-acpica-x86_64
+style-acpica:
+	@$(MAKE) --no-print-directory -C rach2 acpica
+style-acpica-x86_64:
+	@$(MAKE) --no-print-directory -C rach2 ARCH=x86_64 acpica
+build/tests/style/clang.json build/tests/style/sparse.json: style-acpica
+build/x86_64/tests/style/clang.json build/x86_64/tests/style/sparse.json: style-acpica-x86_64
 build/tests/style/manual.json build/x86_64/tests/style/manual.json: host-mandoc
 ifneq ($(OS),Windows_NT)
 build/tests/style/manual.json build/x86_64/tests/style/manual.json: $(BUSYBOX_STAMP)
