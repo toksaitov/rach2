@@ -532,6 +532,15 @@ void msc_slot_closed(struct xhci_ctrl *hc, int device)
 }
 
 /** Do nothing: the HID driver has its own test, hid_hosttest.c. */
+void hid_attach(int device, int kind, uint16_t vendor, uint16_t product)
+{
+    (void)device;
+    (void)kind;
+    (void)vendor;
+    (void)product;
+}
+
+/** Do nothing: the HID driver has its own test, hid_hosttest.c. */
 void hid_report(int slot, int kind, const uint8_t *report, int length)
 {
     (void)slot;

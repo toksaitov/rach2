@@ -91,6 +91,15 @@ void *k_memset(void *ptr, int c, size_t n)
 static int hid_gone_slot[16];
 static int hid_gone_count;
 
+/** Do nothing: no row checks a device that starts in the boot protocol. */
+void hid_attach(int device, int kind, uint16_t vendor, uint16_t product)
+{
+    (void)device;
+    (void)kind;
+    (void)vendor;
+    (void)product;
+}
+
 /** Do nothing: no row checks a report. */
 void hid_report(int slot, int kind, const uint8_t *report, int length)
 {
