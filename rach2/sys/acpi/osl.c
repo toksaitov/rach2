@@ -323,6 +323,13 @@ static int osl_can_block(void)
            current_proc != proc_idle && current_proc != this_cpu()->idle;
 }
 
+/** The wake tick a sleep to `deadline` arms: the deadline, or 1 when the
+ * sum that gave it wrapped to 0, which means no deadline. */
+static uint32_t osl_wake_tick(uint32_t deadline)
+{
+    return deadline != 0 ? deadline : 1u;
+}
+
 /* What a waiter on a semaphore waits for: its units, or its deadline. */
 struct sem_wait {
     struct osl_sem *sem;
@@ -402,7 +409,7 @@ ACPI_STATUS AcpiOsWaitSemaphore(ACPI_SEMAPHORE handle, UINT32 units, UINT16 time
             if (w.timed && (int32_t)(kernel_ticks - w.deadline) >= 0) {
                 return AE_TIME;
             }
-            current_proc->wakeup_tick = w.timed ? (w.deadline != 0 ? w.deadline : 1u) : 0;
+            current_proc->wakeup_tick = w.timed ? osl_wake_tick(w.deadline) : 0;
             (void)wq_wait_event_nointr(&s->waiters, sem_ready, &w);
             current_proc->wakeup_tick = 0;
         } else {
@@ -491,7 +498,7 @@ void AcpiOsSleep(UINT64 milliseconds)
         uint32_t target = kernel_ticks + (ms + OSL_TICK_MS - 1) / OSL_TICK_MS + 1;
 
         wait_queue_init(&wq);
-        current_proc->wakeup_tick = target != 0 ? target : 1u;
+        current_proc->wakeup_tick = osl_wake_tick(target);
         (void)wq_wait_event_nointr(&wq, tick_reached, &target);
         current_proc->wakeup_tick = 0;
         return;
