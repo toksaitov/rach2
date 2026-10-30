@@ -943,78 +943,89 @@ static void check_arch_flags(const char *text)
     list_free(&ld);
 }
 
-/** Check the first contract for the guest architecture: OBJS against the
-   host's lists, the kernel.objs rule, the link line and the flags. Returns
-   the number of kernel sources. */
-static int check_kernel_lists(void)
+/** Collect the host's kernel sources, assembly, C and ACPICA's under
+   vendor/acpica/, into sources, and the object each compiles to, in the same
+   order, into expected. */
+static void host_kernel_objects(struct list *sources, struct list *expected)
 {
-    struct list sources = {NULL, 0, 0};
-    struct list expected = {NULL, 0, 0};
+    struct list acpica = {NULL, 0, 0};
+    int i;
+
+    make_list("print-asm-src", sources);
+    make_list("print-c-src", sources);
+    make_list("print-acpica-src", &acpica);
+    if (acpica.n == 0)
+        fail("the host build lists none of ACPICA's sources");
+    for (i = 0; i < acpica.n; i++) {
+        char path[512];
+
+        snprintf(path, sizeof(path), "vendor/acpica/%s", acpica.item[i]);
+        push(sources, path);
+    }
+    list_free(&acpica);
+    for (i = 0; i < sources->n; i++) {
+        char obj[512];
+        size_t len = strlen(sources->item[i]);
+
+        if (len > 2 && (strcmp(sources->item[i] + len - 2, ".c") == 0 ||
+                        strcmp(sources->item[i] + len - 2, ".s") == 0))
+            snprintf(obj, sizeof(obj), "%.*s.o", (int)(len - 2), sources->item[i]);
+        else
+            snprintf(obj, sizeof(obj), "%s", sources->item[i]);
+        push(expected, obj);
+    }
+}
+
+/** Check that guest.mk's OBJS, expanded, is the host's object list in the
+   host's order, starts with the architecture's loader.o and repeats no
+   object. */
+static void check_guest_objs(const char *text, const struct list *expected)
+{
     struct list objs_raw = {NULL, 0, 0};
     struct list objs = {NULL, 0, 0};
+    int i, j;
+
+    need_macro(text, "OBJS", &objs_raw);
+    expand_tokens(text, &objs_raw, &objs);
+    if (objs.n != expected->n) {
+        fail("rach2/guest.mk OBJS differs from the host list (the host has "
+             "%d objects and the guest has %d)",
+             expected->n, objs.n);
+    }
+    for (i = 0; i < objs.n; i++)
+        if (strcmp(objs.item[i], expected->item[i]) != 0)
+            fail("rach2/guest.mk OBJS differs from the host list (entry %d "
+                 "is %s and the host has %s; or the order differs)",
+                 i + 1, objs.item[i], expected->item[i]);
+    if (objs.n == 0 || strlen(objs.item[0]) < strlen("/loader.o") ||
+        strcmp(objs.item[0] + strlen(objs.item[0]) - strlen("/loader.o"), "/loader.o") != 0)
+        fail("OBJS does not start with the architecture's loader.o");
+    for (i = 0; i < objs.n; i++)
+        for (j = 0; j < i; j++)
+            if (strcmp(objs.item[i], objs.item[j]) == 0)
+                fail("OBJS contains a duplicate object");
+    list_free(&objs_raw);
+    list_free(&objs);
+}
+
+/** Check guest.mk's rules that build the kernel: ACPICA's unpacking from its
+   archive, the kernel.objs response file and the kernel's link. */
+static void check_kernel_rules(const char *text)
+{
+    struct list dir = {NULL, 0, 0};
     struct rules rules;
     struct rule *r;
-    char *text;
     char link[MAX_LINE];
-    int i, count;
+    int i;
     static const char *const link_needs[] = {
         "@kernel.objs", "$(ARCH_TCC_LDFLAGS)", "/lib/tcc/libtcc1.a",  "-nostdlib",
         "-static",      "-o kernel.new",       "mv kernel.new kernel"};
 
-    make_list("print-asm-src", &sources);
-    make_list("print-c-src", &sources);
-    {
-        struct list acpica = {NULL, 0, 0};
-
-        make_list("print-acpica-src", &acpica);
-        if (acpica.n == 0)
-            fail("the host build lists none of ACPICA's sources");
-        for (i = 0; i < acpica.n; i++) {
-            char path[512];
-
-            snprintf(path, sizeof(path), "vendor/acpica/%s", acpica.item[i]);
-            push(&sources, path);
-        }
-        list_free(&acpica);
-    }
-    for (i = 0; i < sources.n; i++) {
-        char obj[512];
-        size_t len = strlen(sources.item[i]);
-
-        if (len > 2 && (strcmp(sources.item[i] + len - 2, ".c") == 0 ||
-                        strcmp(sources.item[i] + len - 2, ".s") == 0))
-            snprintf(obj, sizeof(obj), "%.*s.o", (int)(len - 2), sources.item[i]);
-        else
-            snprintf(obj, sizeof(obj), "%s", sources.item[i]);
-        push(&expected, obj);
-    }
-
-    if (!file_has_line("rach2/Makefile", "include sources.mk"))
-        fail("rach2/Makefile does not include sources.mk, so the host build "
-             "no longer reads the shared kernel source list");
-
-    text = guest_text("rach2/guest.mk");
-    {
-        struct list dir = {NULL, 0, 0};
-
-        if (!read_macro(text, "ACPICA", &dir) || dir.n != 1 ||
-            strcmp(dir.item[0], "vendor/acpica") != 0)
-            fail("rach2/guest.mk's ACPICA is not vendor/acpica, beside the "
-                 "kernel's sources, where the image stages ACPICA's archive");
-        list_free(&dir);
-    }
-    need_macro(text, "OBJS", &objs_raw);
-    expand_tokens(text, &objs_raw, &objs);
-    if (objs.n != expected.n) {
-        fail("rach2/guest.mk OBJS differs from the host list (the host has "
-             "%d objects and the guest has %d)",
-             expected.n, objs.n);
-    }
-    for (i = 0; i < objs.n; i++)
-        if (strcmp(objs.item[i], expected.item[i]) != 0)
-            fail("rach2/guest.mk OBJS differs from the host list (entry %d "
-                 "is %s and the host has %s; or the order differs)",
-                 i + 1, objs.item[i], expected.item[i]);
+    if (!read_macro(text, "ACPICA", &dir) || dir.n != 1 ||
+        strcmp(dir.item[0], "vendor/acpica") != 0)
+        fail("rach2/guest.mk's ACPICA is not vendor/acpica, beside the "
+             "kernel's sources, where the image stages ACPICA's archive");
+    list_free(&dir);
 
     rules_of(text, &rules);
     r = rule_find(&rules, "$(ACPICA)/.unpacked");
@@ -1032,16 +1043,6 @@ static int check_kernel_lists(void)
         strcmp(r->recipe.item[1], "mv kernel.objs.new kernel.objs") != 0)
         fail("kernel.objs must write $(OBJS) whole through the temporary "
              "file and publish it by rename");
-    if (objs.n == 0 || strlen(objs.item[0]) < strlen("/loader.o") ||
-        strcmp(objs.item[0] + strlen(objs.item[0]) - strlen("/loader.o"), "/loader.o") != 0)
-        fail("OBJS does not start with the architecture's loader.o");
-    for (i = 0; i < objs.n; i++) {
-        int j;
-
-        for (j = 0; j < i; j++)
-            if (strcmp(objs.item[i], objs.item[j]) == 0)
-                fail("OBJS contains a duplicate object");
-    }
 
     r = rule_find(&rules, "kernel");
     if (r == NULL || r->prereqs.n == 0 || strcmp(r->prereqs.item[0], "$(ACPICA)/.unpacked") != 0)
@@ -1053,15 +1054,32 @@ static int check_kernel_lists(void)
     for (i = 0; i < (int)(sizeof(link_needs) / sizeof(link_needs[0])); i++)
         if (strstr(link, link_needs[i]) == NULL)
             fail("the kernel link line lacks %s", link_needs[i]);
+    rules_free(&rules);
+}
 
+/** Check the first contract for the guest architecture: OBJS against the
+   host's lists, the kernel.objs rule, the link line and the flags. Returns
+   the number of kernel sources. */
+static int check_kernel_lists(void)
+{
+    struct list sources = {NULL, 0, 0};
+    struct list expected = {NULL, 0, 0};
+    char *text;
+    int count;
+
+    host_kernel_objects(&sources, &expected);
+    if (!file_has_line("rach2/Makefile", "include sources.mk"))
+        fail("rach2/Makefile does not include sources.mk, so the host build "
+             "no longer reads the shared kernel source list");
+
+    text = guest_text("rach2/guest.mk");
+    check_guest_objs(text, &expected);
+    check_kernel_rules(text);
     check_arch_flags(text);
 
     count = sources.n;
-    rules_free(&rules);
     list_free(&sources);
     list_free(&expected);
-    list_free(&objs_raw);
-    list_free(&objs);
     free(text);
     return count;
 }
