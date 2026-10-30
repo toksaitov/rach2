@@ -37,7 +37,8 @@ void acpi_buttons_start(void);
 void acpi_video_start(void);
 
 /** Report `code` pressed and then released on `dev`, each in a packet of
- * its own, as Linux's ACPI drivers report a button. Any context. */
+ * its own, as Linux's ACPI drivers report a button, and poke the console's
+ * blanking as a keystroke does (`console_poke`). Any context. */
 void acpi_report_key(struct evdev *dev, uint16_t code);
 
 #endif /* _ACPI_DEVICES_H_ */

@@ -4,6 +4,7 @@
  * the SCI, and the devices PNP0C0C and PNP0C0E, whose Notify 0x80 is a press.
  */
 
+#include "../display/blank.h"
 #include "../evdev.h"
 #include "../klog.h"
 #include "../lib/kstring.h"
@@ -30,11 +31,22 @@ struct button {
     const char *what; /* "power button" or "sleep button", for the record */
 };
 
+/* What a button of a kind registers: its device's name, phys and product,
+ * its key and its name in the record. */
+struct button_kind {
+    const char *name;
+    const char *phys;
+    uint16_t product;
+    uint16_t key;
+    const char *what;
+};
+
 static struct button buttons[BUTTONS];
 static int nbuttons;
 
 void acpi_report_key(struct evdev *dev, uint16_t code)
 {
+    console_poke();
     evdev_report(dev, EV_KEY, code, 1);
     evdev_report(dev, EV_SYN, SYN_REPORT, 0);
     evdev_report(dev, EV_KEY, code, 0);
@@ -42,12 +54,11 @@ void acpi_report_key(struct evdev *dev, uint16_t code)
 }
 
 /**
- * A new button with its event device, named `name`, which reports `key`,
- * at `phys`; NULL when the table is full. The device is NULL, and its keys
- * are dropped, when every event node is taken.
+ * A new button of kind `k` with its event device; NULL when the table is
+ * full. The device is NULL, and its keys are dropped, when every event node
+ * is taken.
  */
-static struct button *button_new(const char *name, const char *phys, uint16_t product, uint16_t key,
-                                 const char *what)
+static struct button *button_new(const struct button_kind *k)
 {
     uint8_t keys[EVDEV_KEY_BYTES];
     struct button *b;
@@ -57,11 +68,11 @@ static struct button *button_new(const char *name, const char *phys, uint16_t pr
     }
     b = &buttons[nbuttons++];
     k_memset(keys, 0, sizeof(keys));
-    keys[key / 8] |= (uint8_t)(1u << (key % 8));
-    b->dev = evdev_register(name, EVDEV_BUS_HOST, 0, product, keys);
-    evdev_describe(b->dev, phys, 0);
-    b->key = key;
-    b->what = what;
+    keys[k->key / 8] |= (uint8_t)(1u << (k->key % 8));
+    b->dev = evdev_register(k->name, EVDEV_BUS_HOST, 0, k->product, keys);
+    evdev_describe(b->dev, k->phys, 0);
+    b->key = k->key;
+    b->what = k->what;
     return b;
 }
 
@@ -89,9 +100,8 @@ static void button_notify(ACPI_HANDLE device, UINT32 value, void *context)
 }
 
 /** Take the fixed button `event` when the FADT has it, which a clear
- * `method_flag` in its flags says, on a device of its own. */
-static void fixed_button(UINT32 event, UINT32 method_flag, const char *name, const char *phys,
-                         uint16_t product, uint16_t key, const char *what)
+ * `method_flag` in its flags says, on a device of its own of kind `k`. */
+static void fixed_button(UINT32 event, UINT32 method_flag, const struct button_kind *k)
 {
     struct button *b;
     ACPI_STATUS status;
@@ -99,24 +109,15 @@ static void fixed_button(UINT32 event, UINT32 method_flag, const char *name, con
     if (AcpiGbl_FADT.Flags & method_flag) {
         return;
     }
-    b = button_new(name, phys, product, key, what);
+    b = button_new(k);
     if (b == NULL) {
         return;
     }
     status = AcpiInstallFixedEventHandler(event, button_fixed, b);
     if (ACPI_FAILURE(status)) {
-        klog(KLOG_WARN, "acpi", "button: fixed %s: %s", what, AcpiFormatException(status));
+        klog(KLOG_WARN, "acpi", "button: fixed %s: %s", k->what, AcpiFormatException(status));
     }
 }
-
-/* What a walk of button devices registers: the kind's name, phys and key. */
-struct button_kind {
-    const char *name;
-    const char *phys;
-    uint16_t product;
-    uint16_t key;
-    const char *what;
-};
 
 /** A present device of a button's kind: a device of its own, and its
  * Notify taken. */
@@ -128,7 +129,7 @@ static ACPI_STATUS button_found(ACPI_HANDLE handle, UINT32 depth, void *context,
 
     (void)depth;
     (void)ret;
-    b = button_new(k->name, k->phys, k->product, k->key, k->what);
+    b = button_new(k);
     if (b == NULL) {
         return AE_CTRL_TERMINATE;
     }
@@ -153,11 +154,13 @@ void acpi_buttons_start(void)
                                        KEY_POWER, "power button"};
     static struct button_kind sleep = {"Sleep Button", "PNP0C0E/button/input0", BUTTON_SLEEP,
                                        KEY_SLEEP, "sleep button"};
+    static const struct button_kind fixed_power = {"Power Button", "LNXPWRBN/button/input0",
+                                                   BUTTON_POWER, KEY_POWER, "power button"};
+    static const struct button_kind fixed_sleep = {"Sleep Button", "LNXSLPBN/button/input0",
+                                                   BUTTON_SLEEP, KEY_SLEEP, "sleep button"};
 
-    fixed_button(ACPI_EVENT_POWER_BUTTON, ACPI_FADT_POWER_BUTTON, "Power Button",
-                 "LNXPWRBN/button/input0", BUTTON_POWER, KEY_POWER, "power button");
-    fixed_button(ACPI_EVENT_SLEEP_BUTTON, ACPI_FADT_SLEEP_BUTTON, "Sleep Button",
-                 "LNXSLPBN/button/input0", BUTTON_SLEEP, KEY_SLEEP, "sleep button");
+    fixed_button(ACPI_EVENT_POWER_BUTTON, ACPI_FADT_POWER_BUTTON, &fixed_power);
+    fixed_button(ACPI_EVENT_SLEEP_BUTTON, ACPI_FADT_SLEEP_BUTTON, &fixed_sleep);
     (void)AcpiGetDevices(power_hid, button_found, &power, NULL);
     (void)AcpiGetDevices(sleep_hid, button_found, &sleep, NULL);
 }
