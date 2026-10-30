@@ -42,11 +42,21 @@ decimal or in hexadecimal after
 or a string in double quotes; a newline may end it.
 A read gives the result of the last call and a NUL byte: an integer as
 .Ql 0x
-and its hexadecimal digits, a string in double quotes, an error as
+and its hexadecimal digits, a string in double quotes, a buffer as
+.Ql {0x01, 0x02} ,
+a package as
+.Ql [A, B]
+of its elements,
+.Ql 0x0
+for a method that returns nothing, an error as
 .Ql Error:
-and ACPICA's name for it, and
+and ACPICA's name for it, such as
+.Ql Error: AE_NOT_FOUND
+for a method that is not there, and
 .Ql not called
 before the first call.
+A write that names a method takes the whole request, whatever the method
+gave, as Linux's module does, and the result says how it went.
 A request of 512 bytes or more is
 .Er EINVAL ,
 and a write while the kernel runs no ACPI interpreter is

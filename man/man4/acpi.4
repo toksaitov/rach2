@@ -3,9 +3,10 @@
 .Os
 .Sh NAME
 .Nm acpi
-.Nd the firmware's tables, the interrupt controllers, the tick and the processors
+.Nd the firmware's tables and methods, the interrupt controllers, the tick and the processors
 .Sh SYNOPSIS
-.Pa /proc/interrupts
+.Pa /proc/interrupts ,
+.Pa /proc/acpi/call
 .Pp
 Kernel command line:
 .Ql maxcpus=N ,
@@ -35,10 +36,71 @@ methods, tells the firmware the interrupt controller in use through
 .Ql \e_PIC ,
 and enables the general-purpose events that have methods.
 It takes the system control interrupt, the SCI, whose line the kernel
-keeps masked until then; the fixed power button's press is logged.
+keeps masked until then.
 Work ACPICA defers, such as a notify, runs on the kernel thread
 .Ql kacpid ,
 made once init has pid 1.
+.Pp
+The embedded controller, the device
+.Ql PNP0C09
+that a laptop's firmware reaches its keys, battery and fans through, is
+driven as the ACPI specification gives it: its two ports from its
+.Ql _CRS ,
+its address space for the firmware's methods, installed before the
+objects'
+.Ql _INI
+run, and its general-purpose event from its
+.Ql _GPE ,
+on which the kernel asks the controller for its event and runs the
+method
+.Ql _Qxx
+it names.
+.Pp
+The power and sleep buttons and the video bus are input devices, as
+.Xr input 4
+describes, named as Linux names them.
+The FADT's fixed power button and each device
+.Ql PNP0C0C
+are
+.Dq Power Button ,
+which reports
+.Dv KEY_POWER
+for a press or a Notify 0x80; the fixed sleep button and each
+.Ql PNP0C0E
+are
+.Dq Sleep Button ,
+with
+.Dv KEY_SLEEP .
+A firmware may report one press both ways, as two keys.
+Each device that has
+.Ql _DOD
+or
+.Ql _DOS ,
+such as the graphics device, is a
+.Dq Video Bus ,
+whose
+.Ql _DOS
+the kernel calls to keep the firmware from switching outputs, and from
+changing the brightness itself when the firmware took Windows 8's path.
+A Notify on one of its outputs is a brightness key: 0x85
+.Dv KEY_BRIGHTNESS_CYCLE ,
+0x86
+.Dv KEY_BRIGHTNESSUP ,
+0x87
+.Dv KEY_BRIGHTNESSDOWN ,
+0x88
+.Dv KEY_BRIGHTNESS_ZERO
+and 0x89
+.Dv KEY_DISPLAY_OFF ;
+0x80 on the bus itself is
+.Dv KEY_SWITCHVIDEOMODE .
+The kernel changes no brightness for these keys; user space does, through
+.Xr backlight 4 .
+.Pp
+.Pa /proc/acpi/call
+evaluates a method by its path for root, as
+.Xr proc 5
+describes.
 .Ql rach2.noacpica
 leaves ACPICA out, and
 .Ql rach2.nosci
@@ -126,6 +188,8 @@ through ports 0xCF8 and 0xCFC elsewhere.
 the vectors that have taken interrupts, as
 .Xr proc 5
 describes
+.It Pa /proc/acpi/call
+a method of the firmware's evaluated by root
 .El
 .Sh DIAGNOSTICS
 The kernel writes these lines to its log, which
@@ -167,8 +231,30 @@ ACPICA was left out.
 A line of ACPICA's own log; an error or exception counts in E.
 .It Ql acpi: sci: line N
 ACPICA's handler took the SCI on line N.
+.It Ql acpi: ec: PATH at ports 0xD and 0xC, gpe 0xN
+The embedded controller at PATH, with its data and command ports and its
+event; its address space handler is in.
+.It Ql acpi: ec: gpe 0xN enabled, status 0xS
+The controller's event is taken.
+.It Ql acpi: ec: timeout: read 0xA, status 0xS
+The controller did not answer a read, a write or a query within 500 ms;
+the method that asked fails with
+.Ql AE_TIME .
+The first four are logged.
+.It Ql acpi: video: bus PATH, outputs N
+A video bus, with the N outputs whose Notify is taken.
 .It Ql acpi: event: power button
-The fixed power button was pressed.
+The fixed power button was pressed;
+.Ql acpi: event: power button: notify
+is a Notify 0x80 on a power button device, and
+.Ql sleep button
+the same of a sleep button.
+.It Ql acpi: event: video bus: output notify 0xV: key K
+A video bus's Notify reported as key K.
+.It Ql acpi: call: PATH: RESULT
+A write of
+.Pa /proc/acpi/call
+evaluated PATH.
 .It Ql poweroff: acpi: sleep types A and B
 The power off writes
 .Ql \e_S5 's
@@ -178,7 +264,9 @@ The restart writes the FADT's reset register.
 .El
 .Sh SEE ALSO
 .Xr reboot 2 ,
+.Xr backlight 4 ,
 .Xr bootlog 4 ,
+.Xr input 4 ,
 .Xr nvme 4 ,
 .Xr rtc 4 ,
 .Xr proc 5 ,
@@ -189,6 +277,13 @@ The kernel does not ask ACPICA for a PCI device's interrupt routing,
 A device without MSI is served on the ISA line its interrupt line
 register gives; one whose interrupt reaches only the I/O APIC's inputs
 above 15 takes no interrupts, and only its driver's polling serves it.
+.Pp
+Of the general-purpose events, only the embedded controller's and those
+the firmware gave a method are enabled.
+An embedded controller whose
+.Ql _GPE
+is a package, naming a GPE block device, takes no events, and only the
+first controller is driven.
 .Pp
 The other processors the MADT lists enabled are started and take work, up
 to the kernel's 64 and the
