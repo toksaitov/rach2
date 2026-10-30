@@ -201,10 +201,9 @@ rach2/sys/syscall_fs.c:fstat_fill lines 125 one system call's contract, its chec
 rach2/sys/syscall_fs.c:read_fd complexity 39 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:read_fd lines 112 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:readv_dgram params 7 the parameters are the parts of one receive's answer; a struct for them would be filled and unpacked once
-rach2/sys/syscall_fs.c:synth_dirent_at complexity 47 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:synth_dirent_at lines 176 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:synth_open lines 113 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:synth_stat lines 276 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:synth_dirent_at complexity 31 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:synth_dirent_at lines 134 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:synth_stat lines 261 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:sys__llseek complexity 35 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys__llseek lines 118 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys_fcntl64 lines 111 a dispatcher, one arm per command, read as a table
@@ -213,7 +212,7 @@ rach2/sys/syscall_fs.c:utimes_node complexity 42 one system call's contract, its
 rach2/sys/syscall_fs.c:write_fd complexity 41 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:write_fd lines 101 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:synth_stat complexity 32 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:synth_sys_dirent complexity 33 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:synth_sys_dirent complexity 30 a dispatcher, one arm per command, read as a table
 
 rach2/sys/syscall_net.c:do_connect complexity 30 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_connect lines 103 one system call's contract, its checks in the order the manual page lists the errors

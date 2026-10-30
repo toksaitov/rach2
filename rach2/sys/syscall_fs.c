@@ -2109,6 +2109,30 @@ int32_t proc_fd_file(const struct vpath *vp, struct vfs_ref *ref, struct open_fi
     return 0;
 }
 
+/** The access an open with `flags` asks for: CRED_R, CRED_W or both, as
+ * its access mode says. */
+static int open_want(int flags)
+{
+    switch (flags & 3) {
+    case 1:
+        return CRED_W;
+    case 2:
+        return CRED_R | CRED_W;
+    default:
+        return CRED_R;
+    }
+}
+
+/** Open the file of /proc at `vp` that is root's alone, checked for the
+ * access `want` as a file of `mode` that root owns: /proc/disk for reading
+ * as 0400, whatever `flags` ask, and /proc/acpi/call as 0600. */
+static int32_t synth_open_root(const struct vpath *vp, int flags, uint32_t mode, int want)
+{
+    int32_t rc = cred_access_bits(0, 0, mode, want, 0);
+
+    return rc != 0 ? rc : procfs_open(vp, flags);
+}
+
 /**
  * Open with `flags` the node of /dev, /proc or /sys that a path classified
  * as `vp`, and return the descriptor or a negative errno. Nothing is created
@@ -2137,29 +2161,13 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     switch (vp->kind) {
     case VNODE_DEV: {
         uint32_t dmode;
-        int want;
+        int32_t rc;
 
         if (devfs_stat(vp->name, &dmode, NULL, NULL) != 0) {
             return -ENOENT;
         }
-        switch (flags & 3) {
-        case 1:
-            want = CRED_W;
-            break;
-        case 2:
-            want = CRED_R | CRED_W;
-            break;
-        default:
-            want = CRED_R;
-            break;
-        }
-        {
-            int32_t rc = cred_access_bits(0, 0, dmode & 0777u, want, 0);
-            if (rc != 0) {
-                return rc;
-            }
-        }
-        return devfs_open(vp->name, flags);
+        rc = cred_access_bits(0, 0, dmode & 0777u, open_want(flags), 0);
+        return rc != 0 ? rc : devfs_open(vp->name, flags);
     }
     case VNODE_PTS:
         if (flags & O_DIRECTORY) {
@@ -2168,10 +2176,8 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         {
             struct pty *pt = pty_get(vp->pts_index);
             if (pt) {
-                unsigned acc = (unsigned)flags & 3u;
-                int want = (acc == 0) ? CRED_R : (acc == 1) ? CRED_W : (CRED_R | CRED_W);
-                int32_t rc =
-                    cred_access_bits(pt->uid, pt->gid, (uint32_t)(pt->mode & 0777u), want, 0);
+                int32_t rc = cred_access_bits(pt->uid, pt->gid, (uint32_t)(pt->mode & 0777u),
+                                              open_want(flags), 0);
                 if (rc != 0) {
                     return rc;
                 }
@@ -2209,25 +2215,9 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_SYS_FILE:
         return procfs_open(vp, flags);
     case VNODE_PROC_DISK:
-        /* Root only, checked as a mode of 0400 that root owns. */
-        {
-            int32_t rc = cred_access_bits(0, 0, 0400u, CRED_R, 0);
-            if (rc != 0) {
-                return rc;
-            }
-        }
-        return procfs_open(vp, flags);
+        return synth_open_root(vp, flags, 0400u, CRED_R);
     case VNODE_PROC_ACPI_CALL:
-        /* Root's alone, checked as a mode of 0600 that root owns. */
-        {
-            unsigned acc = (unsigned)flags & 3u;
-            int want = (acc == 0) ? CRED_R : (acc == 1) ? CRED_W : (CRED_R | CRED_W);
-            int32_t rc = cred_access_bits(0, 0, 0600u, want, 0);
-            if (rc != 0) {
-                return rc;
-            }
-        }
-        return procfs_open(vp, flags);
+        return synth_open_root(vp, flags, 0600u, open_want(flags));
     case VNODE_DEV_DIR:
     case VNODE_PTS_DIR:
     case VNODE_INPUT_DIR:
@@ -5921,10 +5911,7 @@ static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
         kst->st_ino = procfs_ino_dir();
         return 0;
     case VNODE_PROC_CMDLINE:
-        kst->st_dev = PROCFS_FSID;
-        kst->st_mode = S_IFREG | 0444;
-        kst->st_ino = procfs_ino_cmdline();
-        return 0;
+        return synth_proc_stat(kst, procfs_ino_cmdline());
     case VNODE_PROC_NET_DIR:
     case VNODE_PROC_NET_STAT_DIR:
     case VNODE_PROC_SYSVIPC_DIR:
@@ -5935,20 +5922,11 @@ static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
                                                             : procfs_ino_sysvipcdir();
         return 0;
     case VNODE_PROC_NET_DEV:
-        kst->st_dev = PROCFS_FSID;
-        kst->st_mode = S_IFREG | 0444;
-        kst->st_ino = procfs_ino_netdev();
-        return 0;
+        return synth_proc_stat(kst, procfs_ino_netdev());
     case VNODE_PROC_UPTIME:
-        kst->st_dev = PROCFS_FSID;
-        kst->st_mode = S_IFREG | 0444;
-        kst->st_ino = procfs_ino_uptime();
-        return 0;
+        return synth_proc_stat(kst, procfs_ino_uptime());
     case VNODE_PROC_STAT_SYS:
-        kst->st_dev = PROCFS_FSID;
-        kst->st_mode = S_IFREG | 0444;
-        kst->st_ino = procfs_ino_statsys();
-        return 0;
+        return synth_proc_stat(kst, procfs_ino_statsys());
     case VNODE_PROC_MEMINFO:
         return synth_proc_stat(kst, procfs_ino_meminfo());
     case VNODE_PROC_CPUINFO:
@@ -5991,35 +5969,17 @@ static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
     case VNODE_PROC_LOOP:
         return synth_proc_stat(kst, procfs_ino_loop());
     case VNODE_PROC_FILESYSTEMS:
-        kst->st_dev = PROCFS_FSID;
-        kst->st_mode = S_IFREG | 0444;
-        kst->st_ino = procfs_ino_filesystems();
-        return 0;
+        return synth_proc_stat(kst, procfs_ino_filesystems());
     case VNODE_PROC_INTERRUPTS:
-        kst->st_dev = PROCFS_FSID;
-        kst->st_mode = S_IFREG | 0444;
-        kst->st_ino = procfs_ino_interrupts();
-        return 0;
+        return synth_proc_stat(kst, procfs_ino_interrupts());
     case VNODE_PROC_CONSOLE:
-        kst->st_dev = PROCFS_FSID;
-        kst->st_mode = S_IFREG | 0444;
-        kst->st_ino = procfs_ino_console();
-        return 0;
+        return synth_proc_stat(kst, procfs_ino_console());
     case VNODE_PROC_NET_ROUTE:
-        kst->st_dev = PROCFS_FSID;
-        kst->st_mode = S_IFREG | 0444;
-        kst->st_ino = procfs_ino_netroute();
-        return 0;
+        return synth_proc_stat(kst, procfs_ino_netroute());
     case VNODE_PROC_NET_ARP:
-        kst->st_dev = PROCFS_FSID;
-        kst->st_mode = S_IFREG | 0444;
-        kst->st_ino = procfs_ino_netarp();
-        return 0;
+        return synth_proc_stat(kst, procfs_ino_netarp());
     case VNODE_PROC_NET_TCP:
-        kst->st_dev = PROCFS_FSID;
-        kst->st_mode = S_IFREG | 0444;
-        kst->st_ino = procfs_ino_nettcp();
-        return 0;
+        return synth_proc_stat(kst, procfs_ino_nettcp());
     case VNODE_PROC_NET_FILE:
         return synth_proc_stat(kst, procfs_ino_net(vp->procfile));
     case VNODE_PROC_SYSVIPC:
@@ -11916,6 +11876,44 @@ static int synth_sys_block_dirent(int node, int key, int n, char *name, uint64_t
     return 1;
 }
 
+/** Give a listing the entry `what` with the inode `inode` and the type
+ * `type`, its name cut at 31 bytes, and 1; or 0 when `what` is NULL, past
+ * the directory's last. */
+static int synth_entry(const char *what, uint32_t inode, uint8_t type, char *name, uint64_t *ino,
+                       uint8_t *dtype)
+{
+    if (what == NULL) {
+        return 0;
+    }
+    k_strncpy(name, what, 31);
+    name[31] = '\0';
+    *ino = inode;
+    *dtype = type;
+    return 1;
+}
+
+/** The `n`th entry of /sys/devices/system/cpu, as `synth_sys_dirent`
+ * gives it: a directory for each processor, then the attributes. */
+static int synth_sys_cpu_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype)
+{
+    int key = sysfs_device_key(SYSFS_CPUN, n), dev;
+
+    if (key >= 0) {
+        name[0] = 'c';
+        name[1] = 'p';
+        name[2] = 'u';
+        k_itoa(key, name + 3, 28, 10, false);
+        *ino = sysfs_ino(SYSFS_CPUN, key, 0);
+        *dtype = DT_DIR;
+        return 1;
+    }
+    for (dev = 0; sysfs_device_key(SYSFS_CPUN, dev) >= 0; dev++) {
+    }
+    n -= dev;
+    return synth_entry(sysfs_attr(SYSFS_CPU, n), sysfs_ino(SYSFS_CPU, 0, 1 + n), DT_REG, name, ino,
+                       dtype);
+}
+
 /**
  * The `n`th entry of the /sys directory `node`, whose device is `key`: its
  * name, inode and type, and 1, or 0 past the last. The fixed directories
@@ -11957,72 +11955,35 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
 
     for (i = 0; i < (int)(sizeof(fixed) / sizeof(fixed[0])); i++) {
         if (fixed[i].node == node && n-- == 0) {
-            k_strncpy(name, fixed[i].name, 31);
-            name[31] = '\0';
-            *ino = sysfs_ino(fixed[i].child, 0, 0);
-            *dtype = DT_DIR;
-            return 1;
+            return synth_entry(fixed[i].name, sysfs_ino(fixed[i].child, 0, 0), DT_DIR, name, ino,
+                               dtype);
         }
     }
     if (node == SYSFS_CLASS_NET || node == SYSFS_NET_IF || node == SYSFS_NET_STATS) {
         return synth_sys_net_dirent(node, key, n, name, ino, dtype);
     }
     if (node == SYSFS_CLASS_BACKLIGHT) {
-        if (!backlight_name(n)) {
-            return 0;
-        }
-        k_strncpy(name, backlight_name(n), 31);
-        name[31] = '\0';
-        *ino = sysfs_ino(SYSFS_BACKLIGHT, n, 0);
-        *dtype = DT_DIR;
-        return 1;
+        return synth_entry(backlight_name(n), sysfs_ino(SYSFS_BACKLIGHT, n, 0), DT_DIR, name, ino,
+                           dtype);
     }
     if (node == SYSFS_BACKLIGHT) {
-        if (!sysfs_attr(node, n)) {
-            return 0;
-        }
-        k_strncpy(name, sysfs_attr(node, n), 31);
-        name[31] = '\0';
-        *ino = sysfs_ino(node, key, 1 + n);
-        *dtype = DT_REG;
-        return 1;
+        return synth_entry(sysfs_attr(node, n), sysfs_ino(node, key, 1 + n), DT_REG, name, ino,
+                           dtype);
     }
     if (node == SYSFS_BLOCK || node == SYSFS_DEV_BLOCK || SYSFS_IS_BLOCK(node)) {
         return synth_sys_block_dirent(node, key, n, name, ino, dtype);
     }
-    if (node == SYSFS_CPU && (key = sysfs_device_key(SYSFS_CPUN, n)) >= 0) {
-        name[0] = 'c';
-        name[1] = 'p';
-        name[2] = 'u';
-        k_itoa(key, name + 3, 28, 10, false);
-        *ino = sysfs_ino(SYSFS_CPUN, key, 0);
-        *dtype = DT_DIR;
-        return 1;
-    }
     if (node == SYSFS_CPU) {
-        for (dev = 0; sysfs_device_key(SYSFS_CPUN, dev) >= 0; dev++) {
-        }
-        n -= dev;
+        return synth_sys_cpu_dirent(n, name, ino, dtype);
     }
-    if (node == SYSFS_RTC0 || node == SYSFS_RTC_POWER || node == SYSFS_POWER || node == SYSFS_CPU ||
+    if (node == SYSFS_RTC0 || node == SYSFS_RTC_POWER || node == SYSFS_POWER ||
         node == SYSFS_MEMORY || node == SYSFS_MEMORY0) {
-        if (!sysfs_attr(node, n)) {
-            return 0;
-        }
-        k_strncpy(name, sysfs_attr(node, n), 31);
-        name[31] = '\0';
-        *ino = sysfs_ino(node, 0, 1 + n);
-        *dtype = DT_REG;
-        return 1;
+        return synth_entry(sysfs_attr(node, n), sysfs_ino(node, 0, 1 + n), DT_REG, name, ino,
+                           dtype);
     }
     if (node == SYSFS_PCI_DEVICE || node == SYSFS_USB_DEVICE) {
-        if (n != 0) {
-            return 0;
-        }
-        k_strncpy(name, "uevent", 31);
-        *ino = sysfs_ino(node, key, 1);
-        *dtype = DT_REG;
-        return 1;
+        return synth_entry(n == 0 ? "uevent" : NULL, sysfs_ino(node, key, 1), DT_REG, name, ino,
+                           dtype);
     }
     links = node == SYSFS_PCI_LINKS || node == SYSFS_USB_LINKS;
     if (!links && node != SYSFS_PCI_ROOT && node != SYSFS_USB_ROOT) {
@@ -12102,6 +12063,75 @@ static int synth_sysvipc_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype
     return 1;
 }
 
+/** The `n`th entry of /dev past "." and "..", as `synth_dirent_at` lists
+ * it: the named mounts, `log`, the descriptors' links, `input` and the
+ * devices of devfs. */
+static int synth_dev_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype)
+{
+    const char *dn = NULL;
+    uint32_t dino = 0;
+    uint32_t dmode = 0;
+    uint64_t mino = 0;
+    int i, named = 0;
+
+    while (vfs_named_mount(vfs_mount_at(1), named, &dn, &mino)) {
+        named++;
+    }
+    if (n < named && vfs_named_mount(vfs_mount_at(1), n, &dn, &mino)) {
+        for (i = 0; i < 30 && dn[i]; i++) {
+            name[i] = dn[i];
+        }
+        name[i] = '\0';
+        *ino = mino;
+        *dtype = DT_DIR;
+        return 1;
+    }
+    n -= named;
+    if (n == 0) {
+        k_strncpy(name, "log", 31);
+        *ino = DEV_LOG_INO;
+        *dtype = DT_LNK;
+        return 1;
+    }
+    n--;
+    if (n < 4) {
+        static const char *const fdnames[] = {"fd", "stdin", "stdout", "stderr"};
+        struct kstat fst;
+        struct vpath fvp;
+
+        k_memset(&fvp, 0, sizeof(fvp));
+        fvp.pid = SYNTH_PID_SELF;
+        fvp.kind = n == 0 ? VNODE_PROC_FD_DIR : VNODE_PROC_FD_LINK;
+        fvp.procfd = n - 1;
+        for (i = 0; fdnames[n][i]; i++) {
+            name[i] = fdnames[n][i];
+        }
+        name[i] = '\0';
+        *ino = synth_stat(&fvp, &fst, 0) == 0 ? fst.st_ino : 1u;
+        *dtype = n == 0 ? DT_DIR : DT_LNK;
+        return 1;
+    }
+    n -= 4;
+    if (n == 0) {
+        k_strncpy(name, "input", 31);
+        *ino = INPUT_INO_DIR;
+        *dtype = DT_DIR;
+        return 1;
+    }
+    n--;
+    if (!devfs_dirent(n, &dn, &dino) || !dn) {
+        return 0;
+    }
+    for (i = 0; i < 30 && dn[i]; i++) {
+        name[i] = dn[i];
+    }
+    name[i] = '\0';
+    *ino = dino;
+    (void)devfs_stat(dn, &dmode, NULL, NULL);
+    *dtype = (uint8_t)VFS_DT_OF(dmode);
+    return 1;
+}
+
 /**
  * The n-th entry of a synthetic directory, from the directory descriptor's
  * record `sd`, its kind, pid and tid: fills name/ino/dtype and returns 1, or
@@ -12143,90 +12173,17 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
     n -= 2;
 
     if (kind == VNODE_DEV_DIR) {
-        const char *dn = NULL;
-        uint32_t dino = 0;
-        uint32_t dmode = 0;
-        uint64_t mino = 0;
-        int i, named = 0;
-
-        while (vfs_named_mount(vfs_mount_at(1), named, &dn, &mino)) {
-            named++;
-        }
-        if (n < named && vfs_named_mount(vfs_mount_at(1), n, &dn, &mino)) {
-            for (i = 0; i < 30 && dn[i]; i++) {
-                name[i] = dn[i];
-            }
-            name[i] = '\0';
-            *ino = mino;
-            *dtype = DT_DIR;
-            return 1;
-        }
-        n -= named;
-        if (n == 0) {
-            k_strncpy(name, "log", 31);
-            *ino = DEV_LOG_INO;
-            *dtype = DT_LNK;
-            return 1;
-        }
-        n--;
-        if (n < 4) {
-            static const char *const fdnames[] = {"fd", "stdin", "stdout", "stderr"};
-            struct kstat fst;
-            struct vpath fvp;
-
-            k_memset(&fvp, 0, sizeof(fvp));
-            fvp.pid = SYNTH_PID_SELF;
-            fvp.kind = n == 0 ? VNODE_PROC_FD_DIR : VNODE_PROC_FD_LINK;
-            fvp.procfd = n - 1;
-            for (i = 0; fdnames[n][i]; i++) {
-                name[i] = fdnames[n][i];
-            }
-            name[i] = '\0';
-            *ino = synth_stat(&fvp, &fst, 0) == 0 ? fst.st_ino : 1u;
-            *dtype = n == 0 ? DT_DIR : DT_LNK;
-            return 1;
-        }
-        n -= 4;
-        if (n == 0) {
-            k_strncpy(name, "input", 31);
-            *ino = INPUT_INO_DIR;
-            *dtype = DT_DIR;
-            return 1;
-        }
-        n--;
-        if (!devfs_dirent(n, &dn, &dino) || !dn) {
-            return 0;
-        }
-        for (i = 0; i < 30 && dn[i]; i++) {
-            name[i] = dn[i];
-        }
-        name[i] = '\0';
-        *ino = dino;
-        (void)devfs_stat(dn, &dmode, NULL, NULL);
-        *dtype = (uint8_t)VFS_DT_OF(dmode);
-        return 1;
+        return synth_dev_dirent(n, name, ino, dtype);
     }
     if (kind == VNODE_INPUT_DIR) {
         const char *dn = NULL;
         uint32_t dino = 0;
 
-        if (!devfs_input_dirent(n, &dn, &dino)) {
-            return 0;
-        }
-        k_strncpy(name, dn, 31);
-        name[31] = '\0';
-        *ino = dino;
-        *dtype = DT_CHR;
-        return 1;
+        return synth_entry(devfs_input_dirent(n, &dn, &dino) ? dn : NULL, dino, DT_CHR, name, ino,
+                           dtype);
     }
     if (kind == VNODE_PROC_ACPI_DIR) {
-        if (n != 0) {
-            return 0;
-        }
-        k_strncpy(name, "call", 31);
-        *ino = procfs_ino_acpicall();
-        *dtype = DT_REG;
-        return 1;
+        return synth_entry(n == 0 ? "call" : NULL, procfs_ino_acpicall(), DT_REG, name, ino, dtype);
     }
     if (kind == VNODE_PTS_DIR) {
         int i, c = 0;
