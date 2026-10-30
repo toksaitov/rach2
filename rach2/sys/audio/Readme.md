@@ -40,7 +40,7 @@ The kernel debug shell, described in [run.Readme.md](../../run.Readme.md), passe
 
 ## Design
 
-`audio.c`, `audio_debug.c` and `hda.c` are shared code, listed in `rach2/sources.mk`; `dma.c`, `sb16.c` and `sys/arch/x86/speaker.c` are the PC's, listed in `sys/arch/x86/sources.mk`. The i686 and x86-64 kernels build all of them.
+`audio.c`, `audio_debug.c`, `hda.c` and `mixer.c`, `/dev/mixer`'s ioctls ([`mixer.h`](mixer.h)), are shared code, listed in `rach2/sources.mk`; `dma.c`, `sb16.c` and `sys/arch/x86/speaker.c` are the PC's, listed in `sys/arch/x86/sources.mk`. The i686 and x86-64 kernels build all of them.
 
 ### The test scale
 
