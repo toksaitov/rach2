@@ -1555,10 +1555,16 @@ $(LOGIN_TEST_STRICT): $(DEMO_CREDS) $(ARCH_BUILD)/utils/sbin/init-login krffs/ma
 $(LOGIN_TEST_SHELL): $(DEMO_CREDS) $(ARCH_BUILD)/utils/sbin/init-shell krffs/manifests/login-test-shell.manifest $(IMAGE_TOOLS) | preflight utils busybox krffs
 	$(MKIMAGE) krffs/manifests/login-test-shell.manifest $@ 10
 
-$(IMAGES_DIR)/procfiles-real.krffs: $(ARCH_BUILD)/tests/musl/procfilesmusl $(OS_REAL_IMAGE) krffs/manifests/procfiles-extra.manifest | preflight musl-programs krffs
-	@set -e; temp=$@.new.$$$$; trap 'rm -f "$$temp"' EXIT; \
-	    cp $(OS_REAL_IMAGE) "$$temp"; \
-	    build/krffs/stageimage.krffs krffs/manifests/procfiles-extra.manifest "$$temp"; \
-	    mv "$$temp" $@
+# os-real with the applet probe of machine.procfiles, in os-real's size: its
+# manifest without Doom's WAD, which the case never reads, and with the probe,
+# since os-real on x86-64 has too little room left to take the probe as well.
+# The copy keeps the manifest's name, by which tools/inspect/setid.allow
+# knows it.
+$(IMAGES_DIR)/procfiles-real.krffs: $(ARCH_BUILD)/tests/musl/procfilesmusl $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) krffs/manifests/procfiles-extra.manifest $(IMAGE_TOOLS) $(MAN_ALL) | preflight musl-programs krffs rach2 $(MANIFEST_PARTS_os_real)
+	@mkdir -p $(@D)/procfiles
+	{ sed '/^optional-file .* \/demo\/doom1\.wad /d' krffs/manifests/os-real.manifest; \
+	    cat krffs/manifests/procfiles-extra.manifest; } > $(@D)/procfiles/os-real.manifest
+	! grep -q 'doom1\.wad' $(@D)/procfiles/os-real.manifest
+	$(MKIMAGE) $(@D)/procfiles/os-real.manifest $@ $(OS_REAL_MIB)
 
 $(ARCH_BUILD)/tests/musl/creddisk $(ARCH_BUILD)/tests/musl/procfilesmusl: musl-programs
