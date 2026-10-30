@@ -78,8 +78,10 @@ A key with no key code gives the
 .Dv MSC_SCAN
 alone.
 .Pp
-Each open has a queue of its own, of 64 records, and a read takes only
-whole packets.
+Each open has a queue of its own, of 64 records.
+A read waits until a whole packet is queued and then returns as many whole
+records as its buffer holds, so a buffer smaller than the packet splits it
+and the next read returns the rest, as on Linux.
 A reader that falls so far behind that its queue fills loses what it had:
 the queue keeps an
 .Dv EV_SYN
