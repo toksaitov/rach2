@@ -27,9 +27,15 @@ int isprint(int c);
 int isspace(int c);
 int isxdigit(int c);
 
-/* utprint.c's, with ACPI_SIZE, which is `__SIZE_TYPE__` (acrach2.h). */
-int vsnprintf(char *s, __SIZE_TYPE__ n, const char *format, va_list args);
-int snprintf(char *s, __SIZE_TYPE__ n, const char *format, ...);
+/* utprint.c's, with ACPI_SIZE: UINT64 on x86-64 and UINT32 on i686, which
+ * is not `__SIZE_TYPE__` under a compiler whose i686 size_t is a long. */
+#if defined(__x86_64__)
+#define CLIB_ACPI_SIZE unsigned long
+#else
+#define CLIB_ACPI_SIZE unsigned int
+#endif
+int vsnprintf(char *s, CLIB_ACPI_SIZE n, const char *format, va_list args);
+int snprintf(char *s, CLIB_ACPI_SIZE n, const char *format, ...);
 int sprintf(char *s, const char *format, ...);
 
 #endif /* _ACPI_CLIB_H_ */
