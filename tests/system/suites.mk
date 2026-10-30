@@ -1205,18 +1205,17 @@ $(IMAGES_DIR)/smp-test.disk: $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MA
 # of an installed root on an ext2 root of the test manifest; and root's build
 # of /src/ish in place.
 #
-# SELFBUILD_DISK is a disk of os-real, of which each KRFFS case boots a
-# private copy, and SELFBUILD_EXT2_DISK the same system as an ext2 volume of
-# 64 MiB on a partition at LBA 2048, where the KRFFS disk has its 48 MiB. The
-# kernel the machine builds is no artifact, so it boots from a disk that GRUB
-# starts, whose kernel the scenario writes. SELFBUILD_GRUB has a placeholder that
-# cannot boot in the slots of its candidate and recovery entries: the
-# candidate entry boots os-simple's ext2 root to a login prompt, and the
-# recovery entry the test image from RAM, at whose debug shell the scenario
-# runs the probes of SELFBUILD_PROBES, the list of tests/default-probes less
-# the probes this architecture does not build. SELFBUILD_ROOTS has the same
-# placeholder, and its candidate entry boots an ext2 root of the test manifest
-# to the debug shell.
+# SELFBUILD_DISK is a disk of os-real, of which each KRFFS case boots a private
+# copy, and SELFBUILD_EXT2_DISK the same system as an ext2 volume of 64 MiB on a
+# partition at LBA 2048, where the KRFFS disk has its 48 MiB. The kernel the
+# machine builds is no artifact, so it boots from a disk that GRUB starts, whose
+# kernel the scenario writes. SELFBUILD_GRUB has a placeholder that cannot boot
+# in the slots of its candidate and recovery entries: the candidate entry boots
+# os-simple's ext2 root to a login prompt, and the recovery entry the test image
+# from RAM, at whose debug shell the scenario runs the probes of
+# SELFBUILD_PROBES, the list of tests/default-probes less the probes this
+# architecture does not build. SELFBUILD_ROOTS has the same placeholder, and its
+# candidate entry boots an ext2 root of the test manifest to the debug shell.
 SELFBUILD_DISK = $(IMAGES_DIR)/selfbuild-test.disk
 SELFBUILD_EXT2_VOL = $(IMAGES_DIR)/selfbuild-ext2.vol
 SELFBUILD_EXT2_DISK = $(IMAGES_DIR)/selfbuild-ext2-test.disk
