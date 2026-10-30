@@ -11,7 +11,14 @@
 # twentieth, which root may write, is left by a step down. The backlights
 # are the directories of BACKLIGHT_CLASS, /sys/class/backlight unless it is
 # set, which is how the host test runs the script over a directory of its
-# own. The exit status is 1 when a backlight could not be read or written.
+# own. The exit status is 1 when a backlight could not be read or written
+# or the lock could not be taken.
+#
+# The action holds the lock ACPI_LOCK, /var/run/acpi.lock unless it is set,
+# from its start to its end, as the volume action does. acpid starts an
+# action for each key without waiting for the one before, and two steps
+# that read the same level would write the same step from it. An empty
+# ACPI_LOCK takes no lock, which is how the host test runs the script.
 
 class=${BACKLIGHT_CLASS:-/sys/class/backlight}
 way=${1:-${0##*/}}
@@ -22,6 +29,11 @@ up | down) ;;
     exit 2
     ;;
 esac
+
+lock=${ACPI_LOCK-/var/run/acpi.lock}
+if [ -n "$lock" ]; then
+    exec 9>>"$lock" && flock 9 || exit 1
+fi
 
 # number WORD: whether WORD is a decimal number.
 number() {

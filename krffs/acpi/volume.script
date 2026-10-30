@@ -6,6 +6,18 @@
 #
 # A step is 5 of mixer's 100. The mute key mutes, or unmutes when the volume
 # is muted, and a step up from a mute starts from 0.
+#
+# The action holds the lock ACPI_LOCK, /var/run/acpi.lock unless it is set,
+# from its start to its end, as the brightness action does; mixer, which
+# the action ends by, keeps it until it exits. acpid starts an action for
+# each key without waiting for the one before, and two steps that read the
+# same level would write the same step from it. An empty ACPI_LOCK takes
+# no lock.
+
+lock=${ACPI_LOCK-/var/run/acpi.lock}
+if [ -n "$lock" ]; then
+    exec 9>>"$lock" && flock 9 || exit 1
+fi
 
 case ${1:-${0##*/}} in
 up)

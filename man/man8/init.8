@@ -200,6 +200,17 @@ The script reads the backlights from the directory
 names, when it is set.
 .El
 .Pp
+acpid starts an action for each key without waiting for the one before.
+The volume and brightness actions each hold an exclusive
+.Xr flock 2
+lock on
+.Pa /var/run/acpi.lock ,
+or on the file
+.Ev ACPI_LOCK
+names when it is set and not empty, from their start to their end, so
+that they run one at a time and each step starts from the level the one
+before it left.
+.Pp
 Every build keeps each backlight's level across a reboot, as
 systemd-backlight does on Linux.
 At boot it writes the level kept in
@@ -290,6 +301,8 @@ never answered.
 acpid's map and actions, whose presence starts it.
 .It Pa /etc/acpi
 The actions acpid runs.
+.It Pa /var/run/acpi.lock
+The lock the volume and brightness actions hold while they run.
 .It Pa /var/lib/backlight
 Each backlight's level, saved when the machine stops and written back at
 boot.

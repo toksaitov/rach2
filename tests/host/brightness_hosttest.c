@@ -6,7 +6,8 @@
  * host-deps: tests/host/compat/fixdir_host.c
  * host-inputs: krffs/acpi/brightness.script
  *
- * The script reads the backlights from the directory BACKLIGHT_CLASS names.
+ * The script reads the backlights from the directory BACKLIGHT_CLASS names,
+ * and takes no lock with ACPI_LOCK empty, since a host may lack flock(1).
  * Each row makes that directory in the test's fixture directory
  * (compat/fixdir_host.c), which is kept when a row fails, with backlights
  * that have the files of /sys/class/backlight, runs the script, and reads
@@ -126,7 +127,7 @@ static int run(const char *script, const char *way)
     int status;
 
     if (pid == 0) {
-        if (setenv("BACKLIGHT_CLASS", class_dir, 1) != 0) {
+        if (setenv("BACKLIGHT_CLASS", class_dir, 1) != 0 || setenv("ACPI_LOCK", "", 1) != 0) {
             _exit(126);
         }
         (void)dup2(2, 1);
