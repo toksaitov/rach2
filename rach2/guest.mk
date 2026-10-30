@@ -25,7 +25,15 @@
 # Run from a writable copy of this tree: make -f guest.mk
 
 KCC = /bin/cc
-KCFLAGS = -Wall -Wunsupported -nostdlib $(ARCH_TCC_CFLAGS)
+KCFLAGS = -Wall -Wunsupported -nostdlib $(ACPI_TCC_CFLAGS) $(ARCH_TCC_CFLAGS)
+
+# ACPICA's core, which the image stages beside the kernel's sources as
+# vendor/acpica (sys/acpi/sources.mk). A POSIX makefile has one rule for
+# every .c, so the flags ACPICA needs, __RACH2__ for its platform header and
+# the two directories of headers, are every file's; the kernel's own files
+# include no header by those names.
+ACPICA = vendor/acpica
+ACPI_TCC_CFLAGS = -D__RACH2__ -Isys/acpi -I$(ACPICA)/include
 
 # The machine's own architecture, whose directory under sys/arch/ sources.mk
 # takes the processor's files from.
@@ -33,7 +41,7 @@ ARCH != uname -m
 
 include sources.mk
 
-OBJS = $(ASM_SRC:.s=.o) $(C_SRC:.c=.o)
+OBJS = $(ASM_SRC:.s=.o) $(C_SRC:.c=.o) $(ACPICA_C_SRC:.c=.o)
 
 # The link lands in kernel.new and is renamed only on success, so a failed
 # link cannot leave a newer partial kernel that the next make treats as
@@ -42,7 +50,8 @@ kernel: $(OBJS) kernel.objs
 	$(KCC) -static -nostdlib -o kernel.new @kernel.objs $(ARCH_TCC_LDFLAGS) /lib/tcc/libtcc1.a
 	mv kernel.new kernel
 
-kernel.objs: guest.mk sources.mk sys/arch/$(ARCH)/sources.mk sys/arch/x86/sources.mk
+kernel.objs: guest.mk sources.mk sys/arch/$(ARCH)/sources.mk sys/arch/x86/sources.mk \
+    sys/acpi/sources.mk
 	printf '%s\n' $(OBJS) > kernel.objs.new
 	mv kernel.objs.new kernel.objs
 
