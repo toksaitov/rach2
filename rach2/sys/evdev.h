@@ -33,26 +33,76 @@
 
 struct evdev;
 
+/* The event types, codes and keys the kernel's drivers report, with
+ * Linux's numbers (<linux/input-event-codes.h>). */
+#define EV_SYN      0x00
+#define EV_KEY      0x01
+#define EV_MSC      0x04
+#define SYN_REPORT  0
+#define SYN_DROPPED 3
+#define MSC_SCAN    4
+
+#define KEY_MUTE             113
+#define KEY_VOLUMEDOWN       114
+#define KEY_VOLUMEUP         115
+#define KEY_POWER            116
+#define KEY_PAUSE            119
+#define KEY_SLEEP            142
+#define KEY_WAKEUP           143
+#define KEY_BRIGHTNESSDOWN   224
+#define KEY_BRIGHTNESSUP     225
+#define KEY_SWITCHVIDEOMODE  227
+#define KEY_BRIGHTNESS_CYCLE 243
+#define KEY_BRIGHTNESS_ZERO  244
+#define KEY_DISPLAY_OFF      245
+#define KEY_MAX              0x2ff
+
 /**
  * Register an input device and give it the lowest free node. `name` is the
  * text EVIOCGNAME gives, such as "AT Translated Set 2 keyboard", kept by
  * its pointer; `bustype`, `vendor` and `product` are what EVIOCGID gives;
  * `keys`, of EVDEV_KEY_BYTES bytes, has a bit set for each key code the
- * device can report, and is copied. Called in process context or at boot,
- * not from an interrupt. Returns the device, or NULL when all EVDEV_MAX
- * nodes are taken or the heap is out.
+ * device can report, and is copied. Any context: the devices are a static
+ * table, under a spinlock taken with interrupts off. Returns the device, or
+ * NULL when all EVDEV_MAX nodes are taken.
  */
 struct evdev *evdev_register(const char *name, uint16_t bustype, uint16_t vendor, uint16_t product,
                              const uint8_t *keys);
 
 /**
+ * Give `dev` the text EVIOCGPHYS gives, such as "isa0060/serio0/input0",
+ * kept by its pointer, and when `scan` is nonzero say that it reports
+ * MSC_SCAN, as a keyboard does. Called once, after `evdev_register`. A NULL
+ * `dev` is ignored.
+ */
+void evdev_describe(struct evdev *dev, const char *phys, int scan);
+
+/**
+ * Take `dev` away: its node goes from /dev/input, a reader of an open of it
+ * is woken and gets -ENODEV, and its slot is free for another device once
+ * the last open closes. Any context. A NULL `dev` is ignored.
+ */
+void evdev_unregister(struct evdev *dev);
+
+/**
  * Report one event of `dev`: its type, code and value as Linux's
- * `struct input_event` has them, stamped with the time now and queued for
- * every open of the device; an EV_SYN SYN_REPORT ends a packet and wakes
- * the readers. Any context, an interrupt handler among them; it does not
- * sleep. A NULL `dev`, a device whose registration failed, is ignored.
+ * `struct input_event` has them, stamped with the real time now and queued
+ * for every open of the device, or only for the open that holds the grab;
+ * an EV_SYN SYN_REPORT ends a packet and wakes the readers. An EV_KEY of a
+ * key the device did not register is dropped, as is a release of a key that
+ * is up; a press of a key that is down becomes a repeat, value 2. Any
+ * context, an interrupt handler among them; it does not sleep. A NULL
+ * `dev`, a device whose registration failed, is ignored.
  */
 void evdev_report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value);
+
+/**
+ * Report a keyboard's key as one packet: MSC_SCAN with `scan`, the code the
+ * keyboard sent, then the key `code` down (`down` nonzero) or up, then
+ * SYN_REPORT. A `code` of 0, a key the driver's table does not name, gives
+ * the MSC_SCAN alone, so that a user can name the key from its code.
+ */
+void evdev_report_key(struct evdev *dev, uint32_t scan, uint16_t code, int down);
 
 /** Whether device `n`, from 0, is registered now: 1 or 0. */
 int evdev_present(int n);
