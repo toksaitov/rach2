@@ -116,6 +116,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "brightness",
+          "checks": "tests/host/brightness_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "clockref",
           "checks": "tests/host/clockref_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
