@@ -81,6 +81,16 @@ void backlight_console_blank(int blank)
     spin_unlock_irqrestore(&lock, flags);
 }
 
+void backlight_panic_unblank(void)
+{
+    int i;
+
+    console_blank = 0;
+    for (i = 0; i < nlights; i++) {
+        apply(&lights[i]);
+    }
+}
+
 int backlight_count(void)
 {
     return nlights;

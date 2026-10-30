@@ -155,6 +155,15 @@ void console_unblank_now(void)
     do_unblank("on request");
 }
 
+void console_panic_unblank(void)
+{
+    textcon_blank(0);
+    blanked = 0;
+    forced = 0;
+    unblank_asked = 0;
+    backlight_panic_unblank();
+}
+
 int console_is_blank(void)
 {
     return blanked;

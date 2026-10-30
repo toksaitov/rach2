@@ -14,7 +14,7 @@
  * backlight off (backlight.h); the next key or mouse move restores both,
  * except after a blank that `console_blank_now` forced, which only
  * `console_unblank_now` undoes. While a program holds /fb the console does
- * not blank, and taking /fb unblanks it. Output goes on while it is blank
+ * not blank, and taking /fb unblanks it; a panic unblanks it too. Output goes on while it is blank
  * and is shown at the unblank.
  */
 
@@ -48,6 +48,15 @@ void console_blank_now(void);
 /** Unblank the console now, if it is blank (TIOCLINUX 4), and restart the
  * countdown, as a poke does; under the same rule as `console_blank_now`. */
 void console_unblank_now(void);
+
+/**
+ * Show the console and give the backlights their levels again, blank or
+ * not, for a panic, without the console's lock or the backlights' (`lock`
+ * in backlight.c), which the interrupted code may hold, and without a
+ * record. Only the processor that panics calls it, with the others stopped
+ * and interrupts off (`k_panic_begin`).
+ */
+void console_panic_unblank(void);
 
 /** Whether the console is blank (TIOCLINUX 15). */
 int console_is_blank(void);

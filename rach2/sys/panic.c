@@ -5,6 +5,7 @@
 #include "panic.h"
 
 #include "arch/arch.h"
+#include "display/blank.h"
 #include "klog.h"
 #include "proc/smp.h"
 
@@ -113,7 +114,8 @@ static volatile int others_stopped;
  * be printed over each other, and neither holds a lock. The one that
  * reports writes the console without its lock (`console_lock`), which the
  * code it interrupted may hold, or be between taking and marking as its
- * own.
+ * own, and unblanks it first (`console_panic_unblank`), since a blank
+ * console draws nothing.
  *
  * The owner is claimed with its number in one compare-and-exchange, since an
  * NMI that no masking keeps out can panic the owner again between any two of
@@ -134,6 +136,7 @@ void k_panic_begin(void)
         smp_stop_others();
         others_stopped = 1;
     }
+    console_panic_unblank();
 }
 
 int k_panicking(void)

@@ -70,6 +70,11 @@ void intelbl_init(void);
  */
 void backlight_console_blank(int blank);
 
+/** Give every backlight its own level again, as `backlight_console_blank(0)`
+ * does but without the class's lock, which the code a panic interrupted may
+ * hold; for `console_panic_unblank` alone. */
+void backlight_panic_unblank(void);
+
 /** The number of backlights registered. */
 int backlight_count(void);
 
