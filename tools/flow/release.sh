@@ -88,7 +88,9 @@
 #   new kernel running from the candidate slot.
 # * accept: the native cases and `tests/system/accept/metal_accept.sh` must
 #   pass on the trial boot. Only then `bootctl commit` makes the candidate the
-#   saved default.
+#   saved default, and `bootctl fallback` copies it into the fallback slot, so
+#   that a later trial, which overwrites the candidate, falls back to this
+#   release and not to an older kernel.
 # * record: /etc/rach2/release on the machine, which runs the committed
 #   candidate, is written with SHA, the milestone, the full run and the
 #   root's digest, flushed to the disk with the directories that hold it, and
@@ -1003,7 +1005,10 @@ main()
         lenovo 'bootctl commit' > "$state/commit.log" 2>&1
         grep -q '^bootctl: committed:' "$state/commit.log" ||
             fail accept "bootctl commit: $(tr '\n' ' ' < "$state/commit.log")"
-        mark accept "metal-accept: PASS; committed"
+        lenovo 'bootctl fallback' > "$state/fallback.log" 2>&1
+        grep -q '^bootctl: fallback: .* read back' "$state/fallback.log" ||
+            fail accept "bootctl fallback: $(tr '\n' ' ' < "$state/fallback.log")"
+        mark accept "metal-accept: PASS; committed and copied to the fallback slot"
     fi
 
     if ! done_ record; then

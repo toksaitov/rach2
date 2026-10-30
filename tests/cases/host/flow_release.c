@@ -193,6 +193,11 @@ static int ssh_mock(int argc, char **argv)
         puts("bootctl: committed: candidate");
         return 0;
     }
+    if (!strcmp(command, "bootctl fallback")) {
+        append(ev("RELEASE_TEST_CALLS"), "machine write bootctl fallback\n");
+        puts("bootctl: fallback: 4194304 bytes written from the committed candidate and read back");
+        return 0;
+    }
     if (!strcmp(command, "cat /etc/rach2/release 2> /dev/null; echo answered")) {
         char *s = fx_read(rp(".release"));
         append(ev("RELEASE_TEST_CALLS"), "machine read\n");
@@ -383,7 +388,8 @@ static int setup(struct release *r, struct fixture *f)
         r->tried, sizeof(r->tried),
         "%sinstall done %s root r\ntrial done %s the new kernel runs from the candidate slot\n",
         r->installing, T, T);
-    snprintf(r->accepted, sizeof(r->accepted), "%saccept done %s metal-accept: PASS; committed\n",
+    snprintf(r->accepted, sizeof(r->accepted),
+             "%saccept done %s metal-accept: PASS; committed and copied to the fallback slot\n",
              r->tried, T);
     snprintf(r->finished, sizeof(r->finished), "%srecord done %s /etc/rach2/release names %s\n",
              r->accepted, T, H);
@@ -853,16 +859,20 @@ static int acceptance_rows(struct release *r)
     char *line;
     run(r,
         &(struct release_row){.record = r->tried, .git = "yes", .writes = "yes", .accept = "pass"});
-    ok = check(r,
-               !f->status && archived(r, "7-11111111-") &&
-                   before(r, "accept 192.168.0.106\n", "machine write bootctl commit\n") &&
-                   before(r, "machine write bootctl commit\n", "machine write release\n") &&
-                   before(r, "machine write release\n", " push origin ") &&
-                   count(flow_path(f, "calls"), "^(accept|machine write)") == 3 &&
-                   count(r->retired, "^accept done .* metal-accept: PASS; committed$") == 1 &&
-                   !called(r, "^gh issue"),
-               "acceptance commits trial, then records and releases") &&
-         ok;
+    ok =
+        check(r,
+              !f->status && archived(r, "7-11111111-") &&
+                  before(r, "accept 192.168.0.106\n", "machine write bootctl commit\n") &&
+                  before(r, "machine write bootctl commit\n", "machine write bootctl fallback\n") &&
+                  before(r, "machine write bootctl fallback\n", "machine write release\n") &&
+                  before(r, "machine write release\n", " push origin ") &&
+                  count(flow_path(f, "calls"), "^(accept|machine write)") == 4 &&
+                  count(r->retired, "^accept done .* metal-accept: PASS; committed and copied to "
+                                    "the fallback slot$") == 1 &&
+                  !called(r, "^gh issue"),
+              "acceptance commits trial, copies it to the fallback slot, then records and "
+              "releases") &&
+        ok;
     run(r,
         &(struct release_row){.record = r->tried, .git = "yes", .writes = "yes", .accept = "fail"});
     line = last_line(record(r));
