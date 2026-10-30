@@ -1,9 +1,9 @@
-.Dd October 3, 2026
+.Dd October 30, 2026
 .Dt SYSFS 5
 .Os
 .Sh NAME
 .Nm sysfs
-.Nd the devices, network interfaces, clock and sleep states under /sys
+.Nd the devices, network interfaces, clock, backlights and sleep states under /sys
 .Sh DESCRIPTION
 The kernel mounts a synthetic, read-only file system at
 .Pa /sys ,
@@ -20,9 +20,11 @@ the network interfaces under
 which scripts read for an interface's address, state and counters, the
 real-time clock under
 .Pa /sys/class/rtc ,
+the panel's backlights under
+.Pa /sys/class/backlight ,
 and the sleep states under
 .Pa /sys/power .
-Any user may read it; root writes the two files of mode 0644.
+Any user may read it; root writes the files of mode 0644.
 .Bl -tag -width Ds
 .It Pa /sys/bus/pci/devices/0000:BB:DD.F
 A symbolic link for each PCI function, named by its bus, device and
@@ -146,6 +148,25 @@ as on Linux.
 .It Pa /sys/class/rtc/rtc0/device/power/wakeup
 .Ql enabled :
 the clock's alarm may wake the machine.
+.It Pa /sys/class/backlight/NAME
+A backlight of the panel, named by its driver, such as
+.Pa intel_backlight ,
+one for each backlight a driver registered:
+.Pa max_brightness ,
+the highest level;
+.Pa brightness ,
+the level set, which takes a write of a level from 0 to
+.Pa max_brightness ;
+.Pa actual_brightness ,
+the level the hardware has;
+.Pa bl_power ,
+0 while the backlight is on and 4 while it is off, which takes a write of
+either; and
+.Pa type ,
+.Ql raw ,
+a level of the hardware's own.
+Another value is
+.Er EINVAL .
 .It Pa /sys/power/state
 The sleep states,
 .Ql freeze mem .
@@ -327,6 +348,8 @@ The USB devices.
 The network interfaces.
 .It Pa /sys/class/rtc/rtc0
 The real-time clock.
+.It Pa /sys/class/backlight
+The backlights.
 .It Pa /sys/power/state
 The sleep states.
 .It Pa /sys/devices/system/cpu

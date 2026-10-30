@@ -1,4 +1,4 @@
-.Dd October 20, 2026
+.Dd October 30, 2026
 .Dt PROC 5
 .Os
 .Sh NAME
@@ -9,9 +9,10 @@
 .Sh DESCRIPTION
 Each file is generated into a buffer when opened, and every read through
 that descriptor uses the same snapshot, except
-.Pa /proc/PID/oom_score_adj
+.Pa /proc/PID/oom_score_adj ,
+.Pa /proc/PID/mem
 and
-.Pa /proc/PID/mem ,
+.Pa /proc/acpi/call ,
 which each read reaches as they are then.
 A read or a write holds the descriptor's open file description for its
 length, as
@@ -29,6 +30,27 @@ when it fills; a USB record longer than its 96-byte buffer is cut short,
 its newline possibly with it.
 .Sh FILES
 .Bl -ohang
+.It Pa /proc/acpi/call
+An ACPI method of the firmware evaluated by its path, as Linux's
+.Ql acpi_call
+module offers, for root alone: the file's mode is 0600.
+A write names the method by its absolute path, such as
+.Ql \e_SB.PCI0.LPCB.EC0._Q11 ,
+and up to seven arguments after it, each after a space, a number in
+decimal or in hexadecimal after
+.Ql 0x ,
+or a string in double quotes; a newline may end it.
+A read gives the result of the last call and a NUL byte: an integer as
+.Ql 0x
+and its hexadecimal digits, a string in double quotes, an error as
+.Ql Error:
+and ACPICA's name for it, and
+.Ql not called
+before the first call.
+A request of 512 bytes or more is
+.Er EINVAL ,
+and a write while the kernel runs no ACPI interpreter is
+.Er ENODEV .
 .It Pa /proc/audio
 The active audio driver and cached HDA enumeration and stream state.
 The file exists when audio is disabled; then
