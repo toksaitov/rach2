@@ -19,7 +19,8 @@ struct mouse_packet {
 
 /**
  * Put one packet in the queue, from whichever mouse produced it, in
- * interrupt context; a full queue of 63 packets drops it.
+ * interrupt context; a full queue of 63 packets drops it. Each packet puts
+ * off the console's blanking (`console_poke`).
  *
  * The PS/2 driver calls this when it has assembled three bytes; the USB class
  * driver calls it with a report it decoded. One queue, because a program

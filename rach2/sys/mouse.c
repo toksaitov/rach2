@@ -7,6 +7,8 @@
 #include "mouse.h"
 #include "platform.h"
 
+#include "display/blank.h"
+
 /* The queue: the mouse drivers its one producer, at `mouse_tail`, from
  * interrupt context, and `mouse_read_packets` its one consumer, at
  * `mouse_head`; a slot stays empty to tell a full queue from an empty one. */
@@ -18,6 +20,8 @@ static volatile int mouse_tail = 0;
 void mouse_push_packet(uint8_t buttons, int dx, int dy)
 {
     int next = (mouse_tail + 1) % MOUSE_BUF_SIZE;
+
+    console_poke();
     if (next != mouse_head) {
         if (dx > 127)
             dx = 127;

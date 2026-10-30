@@ -29,7 +29,8 @@
  * Route one set-1 scancode from whichever keyboard produced it, in interrupt
  * context: from the PS/2 keyboard's interrupt, or from the USB stack's
  * service of a keyboard's report, which runs from the controller's interrupt
- * or the tick. A code ends a suspend in force (`suspend_wake`).
+ * or the tick. A code ends a suspend in force (`suspend_wake`) and puts off the
+ * console's blanking (`console_poke`).
  *
  * Every code, including the ones consumed here, goes first to the ring a
  * graphics-mode reader drains, since a game needs the modifiers and the

@@ -12,6 +12,7 @@
 #include "proc/suspend.h"
 #include "input.h"
 
+#include "display/blank.h"
 #include "display/textcon.h"
 #include "kbd.h"
 #include "mouse.h"
@@ -147,6 +148,7 @@ void input_key(uint8_t scancode)
     int was_e0 = saw_e0;
 
     suspend_wake();
+    console_poke();
     kbd_push_scancode(scancode);
 
     saw_e0 = 0;
