@@ -7158,7 +7158,7 @@ static int32_t fstat_fill(fd_entry_t *entry, struct kstat *kst)
         kst->st_ino = devfs_fd_ino(entry);
     } else if (entry->type == FD_TYPE_PROC) {
         uint32_t uid, gid;
-        int owned;
+        int owned, perm;
 
         kst->st_mode = 0100444; /* S_IFREG | 0444 */
         kst->st_nlink = 1;
@@ -7171,7 +7171,10 @@ static int32_t fstat_fill(fd_entry_t *entry, struct kstat *kst)
             kst->st_uid = uid;
             kst->st_gid = gid;
         }
-        if (owned == 1 || procfs_fd_writable(entry)) {
+        perm = procfs_fd_writable(entry);
+        if (perm != 0) {
+            kst->st_mode = 0100000 | (uint32_t)perm; /* S_IFREG */
+        } else if (owned == 1) {
             kst->st_mode = 0100644; /* S_IFREG | 0644 */
         }
     } else if (entry->type == FD_TYPE_CONSOLE) {

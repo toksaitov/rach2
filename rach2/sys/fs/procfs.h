@@ -254,8 +254,10 @@ int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid);
  * is no such descriptor or its process is gone. */
 int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid);
 
-/** Whether `e` is open on a /proc/sys or /sys file, or /proc/acpi/call, a
- * privileged caller may write. */
+/** The permission bits of `e` when it is open on a /proc/sys or /sys file,
+ * or /proc/acpi/call, a privileged caller may write: 0600 for
+ * /proc/acpi/call, which root alone reads, and 0644 for the others; 0 when
+ * `e` is no such descriptor. */
 int procfs_fd_writable(struct fd_entry *e);
 
 #endif /* _PROCFS_H_ */

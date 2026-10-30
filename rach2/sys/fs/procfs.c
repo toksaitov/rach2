@@ -4952,12 +4952,12 @@ int procfs_fd_writable(struct fd_entry *e)
     }
     f = (const struct procfs_file *)e->priv;
     if (f->origin_file == SYNTH_SYS_UEVENT) {
-        return sysfs_attr_writable(f->origin_task >> 8, f->origin_task & 255);
+        return sysfs_attr_writable(f->origin_task >> 8, f->origin_task & 255) ? 0644 : 0;
     }
     if (f->origin_file == SYNTH_PROC_ACPI_CALL) {
-        return 1;
+        return 0600;
     }
-    return f->origin_file == SYNTH_PROC_SYSCTL && synth_sys_writable(f->origin_pid);
+    return f->origin_file == SYNTH_PROC_SYSCTL && synth_sys_writable(f->origin_pid) ? 0644 : 0;
 }
 
 /** Whether `c` is a space as Linux's `isspace` has it: a space, a tab, a
