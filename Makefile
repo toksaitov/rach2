@@ -739,7 +739,8 @@ ASCIISCAN  = build/tools/verify/asciiscan
 # audio, Doom, krffsmount, loop device, mount, partition, disk arrangement,
 # console, boot line, selfbuild and etude cases, also link
 # tests/cases/machine/lifecycle.c, which they share.
-LIFECYCLE_SCENARIOS = build/tests/cases/machine/audio_scenario \
+LIFECYCLE_SCENARIOS = build/tests/cases/machine/acpid_scenario \
+                      build/tests/cases/machine/audio_scenario \
                       build/tests/cases/machine/bootline_scenario \
                       build/tests/cases/machine/bootorder_scenario \
                       build/tests/cases/machine/bus_scenario \

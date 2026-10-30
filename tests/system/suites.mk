@@ -543,6 +543,12 @@ $(SERVICELOG_ROOT_DISK): tests/system/mkrootdisk.sh tools/setup/e2fsprogs_path.s
 	@mkdir -p $(@D)
 	sh tests/system/mkrootdisk.sh servicelog $@ $(MKMBR) $(ARCH_BUILD)/utils/sbin/init-shell \
 	    $(ARCH_BUILD)/utils/update $(BUSYBOX_BIN)
+# `tests/run acpid`: BusyBox's acpid on os-real acting on the volume keys and
+# the power button. On an Intel HDA controller, logged in as root, the volume
+# keys QMP presses on the PS/2 keyboard move mixer's reading and the mute key
+# mutes and unmutes, and QMP's system_powerdown powers the machine off through
+# init. They are the cases of tests/cases/machine.acpid.json, which etude
+# runs, and have no target here.
 # `tests/run raw`: the raw ICMP socket, which is what `ping` and `traceroute`
 # are. Its cases, each in a boot of its own, are in
 # tests/cases/machine.raw.json, which etude runs, and have no target here.

@@ -100,6 +100,7 @@ man|qemu|core
 metal|qemu,ssh,mformat,mcopy,mmd,mke2fs,debugfs,e2fsck,python3|core
 bootline|qemu,mke2fs|full
 servicelog|qemu,mke2fs|full
+acpid|qemu|full
 persist|qemu|core|persist-test.*,persist.*,persist/*
 style|cppcheck,shellcheck,clang,clang-format,python3|full
 dgram|qemu|core

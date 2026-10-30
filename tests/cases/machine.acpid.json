@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.acpid",
+  "summary": "BusyBox's acpid on os-real acting on the keys the kernel reports; the scenario is machine/acpid_scenario.c, the actions are under krffs/acpi and init starts acpid (utils/init.c)",
+  "cases": [
+    {
+      "case_id": "machine.acpid.real",
+      "behavior": "on os-real with an Intel HDA controller, logged in as root, init runs one acpid; with the volume at 50, the volume keys pressed on the PS/2 keyboard step mixer's reading to 55 and back to 50, the mute key mutes and then unmutes it, and the ACPI power button that QMP's system_powerdown presses powers the machine off through init and the kernel's orderly stop",
+      "units": ["acpid", "mixer", "init-login"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"volume": 50, "step": 5, "keys": "volumeup volumedown audiomute audiomute", "button": "system_powerdown"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "acpid_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "real", "does": "boot os-real and log in as root at the console"},
+        {"step_id": "volume", "stage": "execute", "machine": "real", "does": "count acpid's processes, set the volume to 50, and press the volume keys and the mute key twice through QMP, reading mixer after each"},
+        {"step_id": "power", "stage": "execute", "machine": "real", "does": "press the power button with QMP's system_powerdown and wait for the machine's end"}
+      ],
+      "machines": [
+        {"machine_id": "real", "qemu": {"kernel": "kernel", "initrd": "real", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": [], "audio": "hda"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "running", "checks": "pidof finds one acpid", "source": "scenario"},
+        {"assertion_id": "set", "checks": "mixer vol 50 leaves mixer reading vol 50:50", "source": "scenario"},
+        {"assertion_id": "up", "checks": "the volume-up key moves mixer's reading to vol 55:55", "source": "scenario"},
+        {"assertion_id": "down", "checks": "the volume-down key moves it back to vol 50:50", "source": "scenario"},
+        {"assertion_id": "mute", "checks": "the mute key moves it to vol 0:0 muted", "source": "scenario"},
+        {"assertion_id": "unmute", "checks": "the mute key again moves it back to vol 50:50", "source": "scenario"},
+        {"assertion_id": "powered-off", "checks": "after system_powerdown the machine ends by QEMU's SHUTDOWN event", "source": "scenario"},
+        {"assertion_id": "in-order", "checks": "before the end the kernel says shutdown: Stopping the system, which only reboot(2) through init says", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "real", "node": "images/os-real.krffs", "per_architecture": true},
+        {"name": "password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "acpid_scenario", "node": "tests/cases/machine/acpid_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "input", "reason": "the case presses keys and the power button through QMP, which a native run has not"}
+    }
+  ]
+}

@@ -64,6 +64,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `metal` (core tier; needs qemu, ssh, mformat, mcopy, mmd, mke2fs, debugfs, e2fsck, python3; 128 MiB): unattended SSH on the metal image, the acceptance script rehearsed on it, and the script's installed-root rows, the cases of tests/cases/machine.metal.json.
 * `bootline` (full tier; needs qemu, mke2fs; 128 MiB): the boot line that contradicts itself.
 * `servicelog` (full tier; needs qemu, mke2fs; 128 MiB): the log init's services write to is bounded within a boot, and a log a boot left full is removed at the next.
+* `acpid` (full tier; needs qemu; 128 MiB): BusyBox's acpid on os-real acting on the volume keys and the power button.
 * `persist` (core tier; needs qemu; 128 MiB): fsync durability across a power cut.
 * `style` (full tier; needs cppcheck, shellcheck, clang, clang-format, python3; no machine): the source checks over the tree, booting nothing.
 * `dgram` (core tier; needs qemu; 128 MiB): a connected datagram socket and the permission to broadcast, which is how a DHCP client renews a lease and how it asks for one.
