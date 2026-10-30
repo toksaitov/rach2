@@ -1,6 +1,6 @@
 /*
- * boot.c: bring ACPICA up at boot, as acpica.h describes, and log the fixed
- * power button's press.
+ * boot.c: bring ACPICA up at boot, as acpica.h describes, with the ACPI
+ * devices of the kernel's own (devices.h) in their places among its steps.
  */
 
 #include "../cmdline.h"
@@ -10,6 +10,7 @@
 #include "acpi.h"
 
 #include "acpica.h"
+#include "devices.h"
 #include "osl.h"
 
 /* The tables ACPICA's root table array starts with; it grows past them. */
@@ -20,15 +21,6 @@ static int up;
 int acpica_up(void)
 {
     return up;
-}
-
-/** The fixed power button's event, from the SCI: logged, and cleared by
- * ACPICA when this returns. */
-static UINT32 power_button(void *context)
-{
-    (void)context;
-    klog(KLOG_INFO, "acpi", "event: power button");
-    return ACPI_INTERRUPT_HANDLED;
 }
 
 /** A node of the namespace, counted into the `uint32_t` at `context`. */
@@ -75,11 +67,13 @@ static void pic_model(void)
 }
 
 /**
- * The order is ACPICA's: the tables and then the namespace they define;
- * ACPI mode and the SCI; the objects' `_STA` and `_INI`, which run methods;
- * and last the GPEs that have methods. The SCI's line is held until
- * `AcpiEnableSubsystem` registers its handler (osl.c). The work an SCI
- * queued meanwhile runs here, outside ACPICA, before the thread is made.
+ * The order is ACPICA's: the tables and then the namespace they define; the
+ * embedded controller's address space, which methods from here on may
+ * reach; ACPI mode and the SCI; the objects' `_STA` and `_INI`, which run
+ * methods; the devices' handlers; and last the GPEs that have methods. The
+ * SCI's line is held until `AcpiEnableSubsystem` registers its handler
+ * (osl.c). The work an SCI queued meanwhile runs here, outside ACPICA,
+ * before the thread is made.
  */
 void acpica_boot(uint64_t rsdp)
 {
@@ -97,16 +91,18 @@ void acpica_boot(uint64_t rsdp)
     osl_set_root(rsdp);
     if (!step(AcpiInitializeSubsystem(), "subsystem") ||
         !step(AcpiInitializeTables(NULL, BOOT_TABLES, TRUE), "tables") ||
-        !step(AcpiLoadTables(), "namespace") ||
-        !step(AcpiEnableSubsystem(ACPI_FULL_INITIALIZATION), "acpi mode") ||
+        !step(AcpiLoadTables(), "namespace")) {
+        return;
+    }
+    acpi_ec_probe();
+    if (!step(AcpiEnableSubsystem(ACPI_FULL_INITIALIZATION), "acpi mode") ||
         !step(AcpiInitializeObjects(ACPI_FULL_INITIALIZATION), "objects")) {
         return;
     }
     pic_model();
-    status = AcpiInstallFixedEventHandler(ACPI_EVENT_POWER_BUTTON, power_button, NULL);
-    if (ACPI_FAILURE(status)) {
-        klog(KLOG_INFO, "acpi", "acpica: no fixed power button: %s", AcpiFormatException(status));
-    }
+    acpi_ec_start();
+    acpi_buttons_start();
+    acpi_video_start();
     status = AcpiUpdateAllGpes();
     if (ACPI_FAILURE(status)) {
         klog(KLOG_WARN, "acpi", "acpica: gpes: %s", AcpiFormatException(status));
