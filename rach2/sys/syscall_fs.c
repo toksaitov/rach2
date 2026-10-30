@@ -2373,8 +2373,8 @@ static int name_is(const char *name, const char *lit)
  * the last close compare too, so any of its threads may use it. The open
  * unblanks the console (`console_unblank_now`), whose backlight would stay
  * off under the picture, switches the display to its graphics mode
- * (`fb_enter`, VGA mode 13h on a PC) and drops the scancodes the keyboard queued for the shell
- * before it.
+ * (`fb_enter`, VGA mode 13h on a PC) and drops the scancodes the keyboard
+ * queued for the shell before it.
  */
 static int32_t open_framebuffer(void)
 {

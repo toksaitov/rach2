@@ -14,8 +14,8 @@
  * backlight off (backlight.h); the next key or mouse move restores both,
  * except after a blank that `console_blank_now` forced, which only
  * `console_unblank_now` undoes. While a program holds /fb the console does
- * not blank, and taking /fb unblanks it; a panic unblanks it too. Output goes on while it is blank
- * and is shown at the unblank.
+ * not blank, and taking /fb unblanks it; a panic unblanks it too. Output
+ * goes on while it is blank and is shown at the unblank.
  */
 
 /**
