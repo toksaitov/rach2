@@ -35,7 +35,8 @@ void blank_init(void);
 void blank_tick(void);
 
 /** Set the time without input after which the console blanks, in seconds,
- * 0 for never, and restart the countdown, as a poke does. Any context. */
+ * 0 for never, and restart the countdown and unblank, as a poke does, with
+ * the cause "by the escape". Any context. */
 void console_set_blank_time(unsigned int seconds);
 
 /** Blank the console now, to stay blank until `console_unblank_now`

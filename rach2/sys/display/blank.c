@@ -26,13 +26,15 @@
 
 /* The seconds without input before a blank, 0 for never; the tick of the
  * last poke; whether the console is blank, and whether only
- * `console_unblank_now` may unblank it; whether a poke asked for an unblank;
- * and the blanks and unblanks since boot. */
+ * `console_unblank_now` may unblank it; whether a poke or the escape asked
+ * for an unblank, and the cause it gives; and the blanks and unblanks since
+ * boot. */
 static volatile unsigned int blank_secs = 600;
 static volatile uint32_t last_poke;
 static volatile int blanked;
 static volatile int forced;
 static volatile int unblank_asked;
+static const char *volatile unblank_why = "by a key or a mouse move";
 static unsigned int nblanks;
 static unsigned int nunblanks;
 
@@ -40,6 +42,7 @@ void console_poke(void)
 {
     last_poke = kernel_ticks;
     if (blanked && !forced) {
+        unblank_why = "by a key or a mouse move";
         unblank_asked = 1;
     }
 }
@@ -124,7 +127,7 @@ void blank_init(void)
 void blank_tick(void)
 {
     if (unblank_asked) {
-        do_unblank("by a key or a mouse move");
+        do_unblank(unblank_why);
     } else if (!blanked && blank_secs != 0 &&
                kernel_ticks - last_poke >= (uint32_t)blank_secs * BLANK_HZ) {
         do_blank(0, "after the time without input");
@@ -134,7 +137,11 @@ void blank_tick(void)
 void console_set_blank_time(unsigned int seconds)
 {
     blank_secs = seconds < BLANK_MAX_SECS ? seconds : BLANK_MAX_SECS;
-    console_poke();
+    last_poke = kernel_ticks;
+    if (blanked && !forced) {
+        unblank_why = "by the escape";
+        unblank_asked = 1;
+    }
 }
 
 void console_blank_now(void)

@@ -158,13 +158,17 @@ The escape
 which
 .Ql setterm -blank N
 writes on Linux, sets it to N minutes, at most 60, and 0 for never,
-and counts the time from then.
+counts the time from then and shows a screen it blanked.
 .Pp
 Each blank and its end are recorded in the kernel's log, with their count
 since boot and their cause:
 .Ql console: blanked: 1, after the time without input
 and
-.Ql console: unblanked: 1, by a key or a mouse move .
+.Ql console: unblanked: 1, by a key or a mouse move ,
+or
+.Ql by the escape
+or
+.Ql on request .
 .Ss Terminal requests
 The console and pseudoterminal slaves answer these
 .Xr ioctl 2
