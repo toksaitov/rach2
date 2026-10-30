@@ -49,7 +49,9 @@ driven as the ACPI specification gives it: its two ports from its
 its address space for the firmware's methods, installed before the
 objects'
 .Ql _INI
-run, and its general-purpose event from its
+run, with its
+.Ql _REG
+run after them, and its general-purpose event from its
 .Ql _GPE ,
 on which the kernel asks the controller for its event and runs the
 method

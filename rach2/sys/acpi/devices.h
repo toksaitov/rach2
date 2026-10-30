@@ -11,15 +11,18 @@ struct evdev;
 
 /**
  * Find the embedded controller, PNP0C09, and install the handler of its
- * address space, which runs the firmware's _REG for it. Called once the
- * namespace is loaded and before AcpiEnableSubsystem and the objects' _INI,
- * which may read the EC's fields. Logs the EC found, or nothing when there
- * is none.
+ * address space, without running the firmware's _REG for it. Called once
+ * the namespace is loaded and before AcpiEnableSubsystem and the objects'
+ * _INI, which may read the EC's fields. Logs the EC found, or nothing when
+ * there is none.
  */
 void acpi_ec_probe(void);
 
-/** Take the EC's GPE, whose SCI_EVT runs its queries, once the GPEs are
- * made (AcpiEnableSubsystem) and before AcpiUpdateAllGpes. */
+/**
+ * Run the EC's _REG and take its GPE, whose SCI_EVT runs its queries. Called
+ * after the objects' _INI, since a firmware's _REG may read what _INI set,
+ * as the Lenovo G50-70's reads OSYS, and before AcpiUpdateAllGpes.
+ */
 void acpi_ec_start(void);
 
 /**

@@ -70,7 +70,8 @@ static void pic_model(void)
  * The order is ACPICA's: the tables and then the namespace they define; the
  * embedded controller's address space, which methods from here on may
  * reach; ACPI mode and the SCI; the objects' `_STA` and `_INI`, which run
- * methods; the devices' handlers; and last the GPEs that have methods. The
+ * methods; the EC's `_REG`, which may read what `_INI` set, and the
+ * devices' handlers; and last the GPEs that have methods. The
  * SCI's line is held until `AcpiEnableSubsystem` registers its handler
  * (osl.c). The work an SCI queued meanwhile runs here, outside ACPICA,
  * before the thread is made.

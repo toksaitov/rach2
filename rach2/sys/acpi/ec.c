@@ -246,7 +246,8 @@ void acpi_ec_probe(void)
         return;
     }
     ec_read_gpe();
-    status = AcpiInstallAddressSpaceHandler(ec.handle, ACPI_ADR_SPACE_EC, ec_space, NULL, NULL);
+    status =
+        AcpiInstallAddressSpaceHandlerNo_Reg(ec.handle, ACPI_ADR_SPACE_EC, ec_space, NULL, NULL);
     if (ACPI_FAILURE(status)) {
         klog(KLOG_ERR, "acpi", "ec: refused: %s: address space: %s", ec.path,
              AcpiFormatException(status));
@@ -263,16 +264,23 @@ void acpi_ec_probe(void)
 }
 
 /**
- * Take the GPE and enable it, and run the queries once at once when the EC
- * already has SCI_EVT set, whose edge came before the handler, as Linux
- * does at its start.
+ * Run _REG, then take the GPE and enable it, and run the queries once at
+ * once when the EC already has SCI_EVT set, whose edge came before the
+ * handler, as Linux does at its start.
  */
 void acpi_ec_start(void)
 {
     ACPI_STATUS status;
     uint32_t flags;
 
-    if (ec.handle == NULL || !ec.has_gpe) {
+    if (ec.handle == NULL) {
+        return;
+    }
+    status = AcpiExecuteRegMethods(ec.handle, ACPI_ADR_SPACE_EC);
+    if (ACPI_FAILURE(status)) {
+        klog(KLOG_WARN, "acpi", "ec: %s: _REG: %s", ec.path, AcpiFormatException(status));
+    }
+    if (!ec.has_gpe) {
         return;
     }
     status = AcpiInstallGpeHandler(NULL, ec.gpe, ACPI_GPE_EDGE_TRIGGERED, ec_gpe, NULL);
