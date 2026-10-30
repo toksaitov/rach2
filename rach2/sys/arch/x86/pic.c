@@ -41,12 +41,16 @@ void pic_unmask_irq(uint8_t irq)
 {
     uint8_t mask;
 
-    if (irq > 7 || retired) {
+    if (irq > 15 || retired) {
         return;
     }
-    mask = inb(0x21);
-    mask = (uint8_t)(mask & ~(1u << irq));
-    outb(0x21, mask);
+    if (irq < 8) {
+        mask = inb(0x21);
+        outb(0x21, (uint8_t)(mask & ~(1u << irq)));
+    } else {
+        mask = inb(0xA1);
+        outb(0xA1, (uint8_t)(mask & ~(1u << (irq - 8))));
+    }
 }
 
 void pic_retire(void)

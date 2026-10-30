@@ -116,8 +116,9 @@ int board_needs_acpi_enable(const board_profile_t *p, uint16_t pm1_cnt_value);
  * writes the sleep word to; BOARD_REFUSED, with `*why` the reason for the
  * boot line, when the identified chipset fails a check or `rach2.board`
  * names a profile this kernel does not have or a chipset this machine does
- * not have; or BOARD_ABSENT. `*why` is "" except on a refusal. `rach2.nosci`
- * leaves the SCI unmasked. Called once, at boot, from `platform_board_init`.
+ * not have; or BOARD_ABSENT. `*why` is "" except on a refusal. The SCI
+ * stays masked until ACPICA takes it. Called once, at boot, from
+ * `platform_board_init`.
  */
 int board_init(const char **why);
 

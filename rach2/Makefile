@@ -21,6 +21,14 @@ include sources.mk
 ASM_OBJECTS = $(ASM_SRC:%.s=$(BUILD)/%.o)
 C_OBJECTS   = $(C_SRC:%.c=$(BUILD)/%.o)
 
+# ACPICA's core (sys/acpi/sources.mk), which vendor/acpica/build_acpica.sh
+# extracts under this architecture's build tree, and its objects, under
+# $(BUILD)/acpica/ by their paths in the core.
+ACPICA          = $(BUILDROOT)/vendor/acpica
+ACPICA_STAMP    = $(ACPICA)/.stamp
+ACPICA_OBJECTS  = $(ACPICA_C_SRC:$(ACPICA)/%.c=$(BUILD)/acpica/%.o)
+ACPI_OBJECTS    = $(ACPI_C_SRC:%.c=$(BUILD)/%.o)
+
 # The cross toolchain, the header dependencies and the build directory, which
 # every component shares (../mk/).
 include ../mk/toolchain.mk
@@ -58,6 +66,19 @@ CFLAGS  = $(ARCH_KFLAGS) -g -Wall -Wextra -Wdeclaration-after-statement $(KWARN)
 LDFLAGS = $(ARCH_KLDFLAGS) -z noseparate-code -T $(LINKER_SCRIPT).ld $(LDEXTRA)
 # Linker flags an analysis adds from the command line (tools/verify/analyze.sh).
 LDEXTRA ?=
+
+# ACPICA is compiled as C89 with the architecture's flags and -Wall, not the
+# kernel's whole warning set, under which its flexible array members, unnamed
+# unions and unused parameters give thousands of warnings. __RACH2__ makes
+# its acenv.h take the kernel's platform header, sys/acpi/acrach2.h. A
+# sanitizer the caller asks for is the kernel's, and ACPICA, whose unaligned
+# reads of the tables x86 permits, is left out of it. The kernel's own ACPI
+# files include ACPICA's headers as system headers, so that its warnings stay
+# out of the kernel's.
+ACPICA_CFLAGS = $(ARCH_KFLAGS) -g -Wall $(WERROR) -ansi -nostdlib -nostartfiles -nodefaultlibs \
+                $(DEPFLAGS) -D__RACH2__ -Isys/acpi -I$(ACPICA)/include \
+                $(filter-out -fsanitize%,$(KEXTRA))
+$(ACPI_OBJECTS) : CFLAGS += -D__RACH2__ -Isys/acpi -isystem $(ACPICA)/include
 
 # Harness build (`make HARNESS=1`): when the init process, the probe a test
 # harness runs, exits, the kernel writes its exit status to QEMU's
@@ -109,12 +130,12 @@ ELFCHECK = ../build/tools/inspect/elfcheck
 # kludge, whose copy must put every byte where the kernel is linked.
 KERNEL_CHECK = $(ELFCHECK) --kernel
 
-$(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS) $(LINKER_SCRIPT).ld Makefile
+$(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS) $(ACPICA_OBJECTS) $(LINKER_SCRIPT).ld Makefile
 	@mkdir -p $(dir $@)
 	@$(MAKE) --no-print-directory -C .. build/tools/inspect/elfcheck
 	@tmp="$@.tmp.$$$$"; trap 'rm -f "$$tmp" "$$tmp.debug"' EXIT; \
 	echo '$(LD) $(LDFLAGS) -o $@.debug ...'; \
-	$(LD) $(LDFLAGS) -o "$$tmp.debug" $(ASM_OBJECTS) $(C_OBJECTS) && \
+	$(LD) $(LDFLAGS) -o "$$tmp.debug" $(ASM_OBJECTS) $(C_OBJECTS) $(ACPICA_OBJECTS) && \
 	$(CROSS_OBJCOPY) --strip-debug "$$tmp.debug" "$$tmp" && \
 	$(KERNEL_CHECK) "$$tmp" && \
 	mv "$$tmp.debug" $@.debug && \
@@ -129,9 +150,9 @@ $(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS) $(LINKER_SCRIPT).ld Makefile
 # rebuilt from nothing and never mixes two option sets. The kernels of the two
 # policies are built in two trees (COMPONENT=rach2-metal for the read-only
 # one).
-CONFIG_TEXT = $(CC) $(CFLAGS) $(LD) $(LDFLAGS)
+CONFIG_TEXT = $(CC) $(CFLAGS) $(ACPICA_CFLAGS) $(LD) $(LDFLAGS)
 include ../mk/fingerprint.mk
-$(ASM_OBJECTS) $(C_OBJECTS): $(CONFIG)
+$(ASM_OBJECTS) $(C_OBJECTS) $(ACPICA_OBJECTS): $(CONFIG)
 
 
 $(ASM_OBJECTS) : $(BUILD)/%.o : %.s
@@ -142,11 +163,28 @@ $(C_OBJECTS) : $(BUILD)/%.o : %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -o $@ -c $<
 
+# The extraction runs when the tarball, the patch or the script is newer than
+# its stamp, and leaves the tree alone when its stamp names the same three;
+# the sources are made by it, and wait for it, but are not remade each time
+# the stamp moves, so an object is recompiled only for a source extracted
+# anew.
+$(ACPICA_STAMP) : ../vendor/acpica/build_acpica.sh ../vendor/acpica/rach2-acenv.patch \
+                  ../vendor/acpica/acpica-unix-20260930.tar.gz ../mk/arch.sh
+	@cd .. && RACH2_ARCH=$(ARCH) sh vendor/acpica/build_acpica.sh
+
+$(ACPICA_C_SRC) : | $(ACPICA_STAMP) ;
+
+$(ACPI_OBJECTS) : | $(ACPICA_STAMP)
+
+$(ACPICA_OBJECTS) : $(BUILD)/acpica/%.o : $(ACPICA)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(ACPICA_CFLAGS) -o $@ -c $<
+
 # Pull in the per-object header dependencies GCC wrote (-MMD), so editing a
 # header rebuilds exactly the objects that include it. Missing on a first build
 # (no .d yet): the leading '-' makes that silent. They are beside the objects
 # in $(BUILD).
--include $(C_OBJECTS:.o=.d)
+-include $(C_OBJECTS:.o=.d) $(ACPICA_OBJECTS:.o=.d)
 
 # The shared code held to what every architecture can build
 # (tools/verify/archcheck.sh): compiled for 32-bit and 64-bit ARM by clang's
@@ -162,6 +200,11 @@ check-arch :
 .PHONY : print-c-src
 print-c-src :
 	@echo $(C_SRC)
+
+# ACPICA's list, by its paths in the core, for the same guard.
+.PHONY : print-acpica-src
+print-acpica-src :
+	@echo $(ACPICA_C_SRC:$(ACPICA)/%=%)
 
 # The assembly list too, for tools/verify/guestcheck.c (the guest build's list
 # guard): the guest makefile must name exactly these sources.

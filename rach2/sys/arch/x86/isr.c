@@ -66,8 +66,9 @@ static const char *_isr_names[256][ISR_MAX_VECTOR_HANDLERS];
  * the I/O APIC once `isr_lines_to_apic` has run. With the I/O APIC a line is
  * routed when a handler is registered on its vector, unless a local source
  * raises that vector itself (`lines_local`, the APIC timer on line 0's) or
- * the line is held masked (`lines_held`, the SCI). `lines_pci` are the lines
- * a PCI device's interrupt line register gives, which are level-triggered.
+ * the line is held masked (`lines_held`, the SCI until ACPICA takes it).
+ * `lines_pci` are the lines a PCI device's interrupt line register gives and
+ * the SCI's, which are level-triggered.
  */
 static int lines_apic;
 static uint16_t lines_local;
@@ -456,6 +457,25 @@ void isr_line_hold(int line)
     }
     lines_held |= (uint16_t)(1u << line);
     ioapic_mask_line(line);
+}
+
+void isr_line_release(int line, int level)
+{
+    uint16_t bit;
+
+    if (line < 0 || line > 15) {
+        return;
+    }
+    bit = (uint16_t)(1u << line);
+    lines_held &= (uint16_t)~bit;
+    if (level) {
+        lines_pci |= bit;
+    }
+    if (!lines_apic) {
+        pic_unmask_irq((uint8_t)line);
+    } else if (_isr_handlers[IRQ_VECTOR(line)][0] != 0) {
+        line_route(line);
+    }
 }
 
 /**

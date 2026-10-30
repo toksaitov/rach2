@@ -3,7 +3,9 @@
 # controllers, the timers, the firmware's tables, PCI configuration, the
 # serial port and the PS/2 devices; and the files outside arch/ that only a
 # PC build compiles: ATA, VGA, the framebuffer console, and the Sound
-# Blaster 16 with its DMA controller.
+# Blaster 16 with its DMA controller. ACPI's files are sys/acpi/sources.mk's.
+
+include sys/acpi/sources.mk
 
 PC_C_SRC = sys/arch/x86/boot.c \
     sys/arch/x86/mbinfo.c \
@@ -45,4 +47,5 @@ PC_C_SRC = sys/arch/x86/boot.c \
     sys/display/fbcon.c \
     sys/display/intelbl.c \
     sys/audio/dma.c \
-    sys/audio/sb16.c
+    sys/audio/sb16.c \
+    $(ACPI_C_SRC)

@@ -193,10 +193,12 @@ static int board_acpi_enable(const board_profile_t *p, uint16_t port)
  * the next row.
  *
  * With ACPI enabled, a power button or a thermal event raises the SCI,
- * level-triggered, and no handler here clears it, so the processor would
- * take it for good once interrupts are on. It is masked on the line the
- * chipset's own selection gives, not on an assumed 9, since masking a line
- * the firmware gave a device would take that device away.
+ * level-triggered, and until ACPICA's handler is in nothing clears it, so
+ * the processor would take it for good once interrupts are on. It is held
+ * masked on the line the chipset's own selection gives, not on an assumed
+ * 9, since masking a line the firmware gave a device would take that device
+ * away; ACPICA lets it go when it takes the SCI (sys/acpi/osl.c), and a
+ * machine without ACPICA keeps it held.
  *
  * When nothing matches, the identity of 0:31.0, where the ICH and PCH
  * profiles look, goes to the log: on a machine whose only output is its
@@ -278,7 +280,7 @@ int board_init(const char **why)
             pm1 = inw(board_port);
         }
 
-        if ((pm1 & BOARD_PM1_CNT_SCI_EN) != 0 && !kcmdline_has("rach2.nosci")) {
+        if ((pm1 & BOARD_PM1_CNT_SCI_EN) != 0) {
             board_sci =
                 board_sci_irq(p, pci_read_config8(p->bus, p->device, p->function, p->sci_reg));
             if (board_sci >= 0) {

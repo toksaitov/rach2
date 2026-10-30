@@ -17,8 +17,8 @@
 void init_pic(void);
 
 /**
- * Unmask master IRQ line `irq` (0..7) once its handler is installed; a
- * larger `irq` is ignored.
+ * Unmask IRQ line `irq` (0..15), master or slave, once its handler is
+ * installed; a larger `irq` is ignored.
  *
  * The 8259 latches a masked line's request, so a request that came while
  * the line was masked is delivered once it is unmasked. Nothing after
@@ -49,9 +49,10 @@ int pic_irq_pending(uint8_t irq);
  *
  * For a line this kernel has no handler for and that a device may assert
  * anyway, such as the SCI: with ACPI enabled, a power button or a thermal
- * event raises it, level-triggered, nothing here clears it, and an unmasked
- * one would be taken forever. Once the I/O APIC has the lines, the line is
- * held masked there instead (`isr_line_hold`).
+ * event raises it, level-triggered, nothing clears it until ACPICA's handler
+ * is in, and an unmasked one would be taken forever. Once the I/O APIC has
+ * the lines, the line is held masked there instead (`isr_line_hold`).
+ * `isr_line_release` lets either go.
  */
 void pic_mask_irq(uint8_t irq);
 

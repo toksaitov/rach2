@@ -127,9 +127,18 @@ int isr_lines_apic(void);
 /**
  * Hold line `line` masked at the I/O APIC whatever is registered on its
  * vector: `pic_mask_irq` once the 8259 is retired, for a line a device
- * asserts that no handler here clears, the SCI's.
+ * asserts that no handler here clears yet, the SCI's before ACPICA's.
  */
 void isr_line_hold(int line);
+
+/**
+ * Let go of line `line`, which `isr_line_hold` or `pic_mask_irq` held, once
+ * a handler that quiets its device is on its vector: route it through the
+ * I/O APIC, level-triggered when `level` is nonzero, as the SCI is, with the
+ * polarity of the MADT's override, or unmask it at the 8259. A line with no
+ * handler is only marked, and is routed when one is registered.
+ */
+void isr_line_release(int line, int level);
 
 /**
  * The double fault's task: report the fault, and the kernel stack that ran

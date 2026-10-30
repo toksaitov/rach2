@@ -72,6 +72,18 @@ struct audio_driver *platform_audio_driver(const char **name);
 /** Find the machine's power controller, for the power off. */
 void platform_board_init(void);
 
+/**
+ * Bring up the firmware's interpreter, on a PC ACPICA (sys/acpi), once the
+ * heap, PCI, the tick and the scheduler are up.
+ */
+void platform_firmware_start(void);
+
+/**
+ * Make the platform's kernel threads, on a PC ACPICA's, once the first
+ * program has its pid, so that init is process 1.
+ */
+void platform_threads_start(void);
+
 /** Take keystrokes from the platform's own keyboard, which a USB keyboard
  * joins later. */
 void platform_keyboard_init(void);

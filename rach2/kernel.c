@@ -1233,7 +1233,8 @@ static uintptr_t boot_stack(struct mm *mm, int argc, char *argv[], char *envp[],
  * its thread pointer are loaded here: the program before it may have left
  * its own in them, and `switch_context`, which loads them for every other
  * process, is not on this path. A new process's TLS base is 0. The first
- * program while no init runs becomes init.
+ * program while no init runs becomes init, and the platform's kernel
+ * threads are made then, so that they take pids after its.
  *
  * Every program but a real /sbin/init is made the console's foreground
  * group, the debug shell's `exec` included, for as long as it runs: a
@@ -1279,6 +1280,7 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
 
     if (init_pid == 0) {
         init_pid = user_proc->pid;
+        platform_threads_start();
     }
 
     if (!init_is_starting) {
@@ -3729,6 +3731,8 @@ void kernel_main(const struct boot_info *boot)
 
     init_sched();
     klog(KLOG_DEBUG, "boot", "scheduler: ready");
+
+    platform_firmware_start();
 
     kstack_overrun_test();
 

@@ -39,6 +39,7 @@
 #include "../i686/tss.h"
 #endif
 
+#include "../../acpi/acpica.h"
 #include "../../audio/sb16.h"
 #include "../../block/ata.h"
 #include "../../boot.h"
@@ -402,7 +403,7 @@ uint32_t platform_timer_hz(void)
 }
 
 /** `board_init` also masks the SCI's line: with ACPI on, an unhandled SCI is
- * level-triggered and would be taken forever. */
+ * level-triggered and would be taken forever, until ACPICA takes it. */
 void platform_board_init(void)
 {
     const char *why = "";
@@ -415,6 +416,16 @@ void platform_board_init(void)
     } else {
         klog(KLOG_WARN, "board", "none: no profile matched; poweroff will halt");
     }
+}
+
+void platform_firmware_start(void)
+{
+    acpica_boot(acpi_get()->found ? acpi_get()->rsdp : 0);
+}
+
+void platform_threads_start(void)
+{
+    acpica_thread_start();
 }
 
 /**
