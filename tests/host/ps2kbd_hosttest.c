@@ -65,6 +65,25 @@ void input_key(uint8_t scancode)
     last_key = scancode;
 }
 
+/** Do nothing: the rows check what reaches the console's path. */
+void input_set1_event(struct input_set1 *kb, uint8_t code)
+{
+    (void)kb;
+    (void)code;
+}
+
+/** `kbd_init` is not run. */
+struct evdev *input_keyboard_register(const char *name, const char *phys, uint16_t bustype,
+                                      uint16_t vendor, uint16_t product)
+{
+    (void)name;
+    (void)phys;
+    (void)bustype;
+    (void)vendor;
+    (void)product;
+    return 0;
+}
+
 /** The kernel's translation is the only one here. */
 uintptr_t paging_enter_kernel(void)
 {

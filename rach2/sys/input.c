@@ -14,6 +14,8 @@
 
 #include "display/blank.h"
 #include "display/textcon.h"
+#include "evdev.h"
+#include "lib/kstring.h"
 #include "kbd.h"
 #include "mouse.h"
 #include "kio.h"
@@ -213,11 +215,55 @@ void input_key(uint8_t scancode)
         }
     }
 
-    c = (char)(shift_held ? EN_us_shift[scancode & 0x7F] : EN_us[scancode & 0x7F]);
+    /* Of the extended keys only the keypad's Enter and slash have a
+     * character, their twins'; Mute, E0 20, is not a D. */
+    if (was_e0 && scancode != 0x1C && scancode != 0x35) {
+        c = 0;
+    } else {
+        c = (char)(shift_held ? EN_us_shift[scancode & 0x7F] : EN_us[scancode & 0x7F]);
+    }
 
     if (wq_active(&console_tty.input_wq) || console_tty.sid != 0) {
         session_key(scancode, c, was_e0);
     } else if (c != 0 && shell_reads_input()) {
         shell_input_char(c);
     }
+}
+
+struct evdev *input_keyboard_register(const char *name, const char *phys, uint16_t bustype,
+                                      uint16_t vendor, uint16_t product)
+{
+    uint8_t keys[EVDEV_KEY_BYTES];
+    struct evdev *dev;
+
+    k_memset(keys, 0, sizeof(keys));
+    set1_keys(keys);
+    dev = evdev_register(name, bustype, vendor, product, keys);
+    evdev_describe(dev, phys, 1);
+    return dev;
+}
+
+void input_set1_event(struct input_set1 *kb, uint8_t code)
+{
+    unsigned scan;
+
+    if (code == 0xE0 || code == 0xE1) {
+        kb->prefix = code;
+        kb->skip = code == 0xE1;
+        return;
+    }
+    if (kb->skip) {
+        kb->skip = 0;
+        return;
+    }
+    if (code == 0x00 || code == 0xFA || code == 0xFE || code == 0xFF) {
+        kb->prefix = 0;
+        return;
+    }
+    scan = (code & 0x7Fu) | (kb->prefix ? 0x80u : 0u);
+    kb->prefix = 0;
+    if (scan == 0xAA || scan == 0xB6) {
+        return;
+    }
+    evdev_report_key(kb->dev, scan, (uint16_t)set1_keycode(scan), !(code & 0x80));
 }

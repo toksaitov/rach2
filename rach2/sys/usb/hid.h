@@ -20,6 +20,14 @@
 #define HID_MOUSE 2
 
 /**
+ * Say that a device runs in the boot protocol, `device` numbered as for
+ * `hid_report`: a keyboard is registered as the event device "USB keyboard
+ * N", N being `device`, with its `vendor` and `product`. Nothing for a
+ * mouse, or for a keyboard registered already.
+ */
+void hid_attach(int device, int kind, uint16_t vendor, uint16_t product);
+
+/**
  * Take one report from a device, in the USB pump.
  *
  * `device` is the core's table entry for the device plus one, 1 to
@@ -35,10 +43,11 @@ void hid_report(int device, int kind, const uint8_t *report, int length);
 /**
  * Say that a device has gone, `device` numbered as for `hid_report`.
  *
- * Everything it was holding down is released. Without this a key held while
- * the keyboard is unplugged stays down for ever, because the release that
- * would have lifted it is on a device that is no longer there. Nothing is
- * done for a device that has not reported since it last went.
+ * Its event device is taken away, and everything it was holding down is
+ * released on the console's path. Without this a key held while the
+ * keyboard is unplugged stays down for ever, because the release that would
+ * have lifted it is on a device that is no longer there. No key is released
+ * for a device that has not reported since it last went.
  */
 void hid_gone(int device);
 

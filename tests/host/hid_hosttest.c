@@ -65,6 +65,40 @@ int input_mouse_present(void)
 void input_mouse_found(void)
 {}
 
+/** Register no event device: the rows check the console's path alone. */
+struct evdev *input_keyboard_register(const char *name, const char *phys, uint16_t bustype,
+                                      uint16_t vendor, uint16_t product)
+{
+    (void)name;
+    (void)phys;
+    (void)bustype;
+    (void)vendor;
+    (void)product;
+    return 0;
+}
+
+/** Do nothing: there is no event device. */
+void evdev_report_key(struct evdev *dev, uint32_t scan, uint16_t code, int down)
+{
+    (void)dev;
+    (void)scan;
+    (void)code;
+    (void)down;
+}
+
+/** Do nothing: there is no event device. */
+void evdev_unregister(struct evdev *dev)
+{
+    (void)dev;
+}
+
+/** Name no key. */
+int set1_keycode(unsigned scan)
+{
+    (void)scan;
+    return 0;
+}
+
 /** Discard the message: no row checks the log. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {

@@ -1337,6 +1337,9 @@ static void step_device(struct usb_device_state *d)
             /* An open of `mouse` fails until a mouse of any kind is found. */
             input_mouse_found();
         }
+        hid_attach(d->index + 1,
+                   d->interface.protocol == USB_PROTOCOL_KBD ? HID_KEYBOARD : HID_MOUSE, d->vendor,
+                   d->product);
         klog(KLOG_INFO, "usb", "device: port %s: %x:%x, class %d protocol %d, endpoint %d",
              path_of(d), (int)d->vendor, (int)d->product, d->interface.class_code,
              d->interface.protocol, d->interface.ep_number);

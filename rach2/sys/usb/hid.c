@@ -11,13 +11,19 @@
  * with the one before it, and the difference is what the input layer is given,
  * in the set-1 codes the PS/2 keyboard produces. No code downstream has to
  * tell the two kinds of keyboard apart.
+ *
+ * Each keyboard is an event device of its own too, "USB keyboard N", whose
+ * keys are reported with the usage as MSC_SCAN, in the keyboard page 7, as
+ * Linux's HID driver reports them.
  */
 
 #include "hid.h"
 
 #include "usb.h"
 
+#include "../evdev.h"
 #include "../input.h"
+#include "../kbd.h"
 #include "../klog.h"
 #include "core.h"
 
@@ -29,14 +35,20 @@
 #define KEYS_IN_REPORT  6
 
 /*
- * The usages this kernel has a scancode for. A value of zero is a key it does
- * not name; a value with 0xE000 set is one whose scancode is the two-byte
- * extended form, which is how the arrows and the keypad's twins are told
- * apart from the keys they share a code with.
+ * The usages this kernel has a scancode for, from 0 to USAGES - 1. A value of
+ * zero is a key it does not name; a value with 0xE000 set is one whose
+ * scancode is the two-byte extended form, which is how the arrows and the
+ * keypad's twins are told apart from the keys they share a code with. The
+ * last three are Mute, Volume Up and Volume Down, as a PS/2 keyboard sends
+ * them.
  */
-#define EXT 0xE000u
+#define EXT    0xE000u
+#define USAGES 0x82u
 
-static const uint16_t usage_to_scancode[0x66] = {
+/* The keyboard page's usages, the high half of an MSC_SCAN. */
+#define KEYBOARD_PAGE 0x70000u
+
+static const uint16_t usage_to_scancode[USAGES] = {
     0,          0,          0,          0,          0x1E,       0x30,       0x2E,       0x20,
     0x12,       0x21,       0x22,       0x23,       0x17,       0x24,       0x25,       0x26,
     0x32,       0x31,       0x18,       0x19,       0x10,       0x13,       0x1F,       0x14,
@@ -49,7 +61,11 @@ static const uint16_t usage_to_scancode[0x66] = {
     0,          EXT | 0x52, EXT | 0x47, EXT | 0x49, EXT | 0x53, EXT | 0x4F, EXT | 0x51, EXT | 0x4D,
     EXT | 0x4B, EXT | 0x50, EXT | 0x48, 0x45,       EXT | 0x35, 0x37,       0x4A,       0x4E,
     EXT | 0x1C, 0x4F,       0x50,       0x51,       0x4B,       0x4C,       0x4D,       0x47,
-    0x48,       0x49,       0x52,       0x53,       0x56,       EXT | 0x5D};
+    0x48,       0x49,       0x52,       0x53,       0x56,       EXT | 0x5D, 0,          0,
+    0,          0,          0,          0,          0,          0,          0,          0,
+    0,          0,          0,          0,          0,          0,          0,          0,
+    0,          0,          0,          0,          0,          0,          0,          EXT | 0x20,
+    EXT | 0x30, EXT | 0x2E};
 
 /* The modifier byte's bits, in order, and the scancode each sends. Right Ctrl
  * and right Alt are the extended form of the left-hand codes; right Shift and
@@ -63,9 +79,78 @@ struct hid_state {
     int used; /* it has reported since it last went */
     uint8_t modifiers;
     uint8_t keys[KEYS_IN_REPORT];
+    struct evdev *events; /* a keyboard's event device, or NULL */
+    char name[24];        /* its name, "USB keyboard N" */
+    char phys[24];        /* its EVIOCGPHYS, "usb-N/input0" */
 };
 
 static struct hid_state states[USB_MAX_DEVICES + 1];
+
+/** Append the text `text` to the string in `out`, of `size` bytes. */
+static void append(char *out, size_t size, const char *text)
+{
+    size_t i = 0;
+
+    while (out[i]) {
+        i++;
+    }
+    while (*text && i + 1 < size) {
+        out[i++] = *text++;
+    }
+    out[i] = 0;
+}
+
+/** Append `n`, from 0 to 99, in decimal to the string in `out`. */
+static void append_number(char *out, size_t size, int n)
+{
+    char digits[3];
+
+    digits[0] = (char)(n >= 10 ? '0' + n / 10 % 10 : '0' + n);
+    digits[1] = (char)(n >= 10 ? '0' + n % 10 : 0);
+    digits[2] = 0;
+    append(out, size, digits);
+}
+
+void hid_attach(int device, int kind, uint16_t vendor, uint16_t product)
+{
+    struct hid_state *state;
+
+    if (device <= 0 || device > USB_MAX_DEVICES || kind != HID_KEYBOARD) {
+        return;
+    }
+    state = &states[device];
+    if (state->events) {
+        return;
+    }
+    state->name[0] = 0;
+    append(state->name, sizeof(state->name), "USB keyboard ");
+    append_number(state->name, sizeof(state->name), device);
+    state->phys[0] = 0;
+    append(state->phys, sizeof(state->phys), "usb-");
+    append_number(state->phys, sizeof(state->phys), device);
+    append(state->phys, sizeof(state->phys), "/input0");
+    state->events =
+        input_keyboard_register(state->name, state->phys, EVDEV_BUS_USB, vendor, product);
+}
+
+/**
+ * Report the key of `usage` to the keyboard's event device, pressed or
+ * `released`, with the usage in the keyboard page as its MSC_SCAN and the
+ * key of its scancode in the table, if it has one, as its code.
+ */
+static void send_event(struct hid_state *state, uint8_t usage, uint16_t code, int released)
+{
+    unsigned scan = (code & 0x7Fu) | ((code & EXT) ? 0x80u : 0u);
+    uint16_t key = (code & 0xFFu) ? (uint16_t)set1_keycode(scan) : 0;
+
+    evdev_report_key(state->events, KEYBOARD_PAGE | usage, key, !released);
+}
+
+/** The scancode of `usage`, 0 for one the table does not name. */
+static uint16_t scancode_of(uint8_t usage)
+{
+    return usage < USAGES ? usage_to_scancode[usage] : 0;
+}
 
 /**
  * Send a scancode, pressed or `released`, in the two-byte form when `code`
@@ -123,8 +208,10 @@ static void keyboard_report(struct hid_state *state, const uint8_t *report)
         uint8_t bit = (uint8_t)(1u << i);
 
         if ((modifiers & bit) && !(state->modifiers & bit)) {
+            send_event(state, (uint8_t)(0xE0 + i), modifier_scancode[i], 0);
             send_code(modifier_scancode[i], 0);
         } else if (!(modifiers & bit) && (state->modifiers & bit)) {
+            send_event(state, (uint8_t)(0xE0 + i), modifier_scancode[i], 1);
             send_code(modifier_scancode[i], 1);
         }
     }
@@ -139,15 +226,17 @@ static void keyboard_report(struct hid_state *state, const uint8_t *report)
     for (i = 0; i < KEYS_IN_REPORT; i++) {
         uint8_t usage = keys[i];
 
-        if (usage > 0x03u && usage < 0x66u && !held(state->keys, usage)) {
-            send_code(usage_to_scancode[usage], 0);
+        if (usage > 0x03u && !held(state->keys, usage)) {
+            send_event(state, usage, scancode_of(usage), 0);
+            send_code(scancode_of(usage), 0);
         }
     }
     for (i = 0; i < KEYS_IN_REPORT; i++) {
         uint8_t usage = state->keys[i];
 
-        if (usage > 0x03u && usage < 0x66u && !held(keys, usage)) {
-            send_code(usage_to_scancode[usage], 1);
+        if (usage > 0x03u && !held(keys, usage)) {
+            send_event(state, usage, scancode_of(usage), 1);
+            send_code(scancode_of(usage), 1);
         }
     }
 
@@ -193,6 +282,8 @@ void hid_gone(int device)
         return;
     }
     state = &states[device];
+    evdev_unregister(state->events);
+    state->events = NULL;
     if (!state->used) {
         return;
     }
@@ -205,8 +296,8 @@ void hid_gone(int device)
     for (i = 0; i < KEYS_IN_REPORT; i++) {
         uint8_t usage = state->keys[i];
 
-        if (usage > 0x03u && usage < 0x66u) {
-            send_code(usage_to_scancode[usage], 1);
+        if (usage > 0x03u) {
+            send_code(scancode_of(usage), 1);
         }
     }
 

@@ -56,6 +56,43 @@
  */
 void input_key(uint8_t scancode);
 
+struct evdev;
+
+/*
+ * Each keyboard is an event device of its own as well (evdev.h): its keys
+ * go to /dev/input/eventN as Linux's KEY_* codes, `set1_keycode`'s, each
+ * with the code it came from as MSC_SCAN, beside the console's path above,
+ * which every keyboard shares.
+ */
+
+/**
+ * Register a keyboard as an event device that can report every key
+ * `set1_keycode` names, with MSC_SCAN. `name` and `phys` are kept by their
+ * pointers, and `bustype`, `vendor` and `product` are what EVIOCGID gives.
+ * Any context. Returns the device, or NULL when every node is taken.
+ */
+struct evdev *input_keyboard_register(const char *name, const char *phys, uint16_t bustype,
+                                      uint16_t vendor, uint16_t product);
+
+/* The decoder of a keyboard that sends set-1 codes, as the 8042 gives a
+ * translated keyboard's, and its event device. */
+struct input_set1 {
+    struct evdev *dev;
+    uint8_t prefix; /* 0xE0 or 0xE1 when that prefix came last, else 0 */
+    uint8_t skip;   /* the byte of Pause's sequence after E1 is still to come */
+};
+
+/**
+ * Give the event device of `kb` one set-1 code, in interrupt context: a
+ * prefix is kept for the code after it, and a key's code is reported as
+ * `evdev_report_key` does, with MSC_SCAN the code with its release bit
+ * clear and 0x80 set after E0, as Linux's keyboard driver reports it.
+ * Pause's E1 1D 45 is the extended 0x45, KEY_PAUSE. The shifts a keyboard
+ * wraps a cursor key in, E0 2A and E0 36, and the controller's own bytes,
+ * 0x00, 0xFA, 0xFE and 0xFF, are not keys.
+ */
+void input_set1_event(struct input_set1 *kb, uint8_t code);
+
 /**
  * Put one mouse report in the mouse queue (`mouse_push_packet`), for the USB
  * mouse driver; the platform's mouse fills the queue itself.

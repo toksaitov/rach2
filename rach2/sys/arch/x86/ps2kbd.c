@@ -10,6 +10,7 @@
 #include "portio.h"
 #include "ps2kbd.h"
 
+#include "../../evdev.h"
 #include "../../input.h"
 #include "../../mm/paging.h"
 
@@ -20,6 +21,9 @@
 #define PS2_STATUS_OUTPUT_FULL 0x01
 #define PS2_STATUS_MOUSE_DATA  0x20
 
+/* The keyboard's event device, named as Linux names a translated one. */
+static struct input_set1 ps2_keyboard;
+
 /**
  * Handle the PS/2 keyboard interrupt: read the port and hand on the code,
  * when the controller has one of the keyboard's waiting. A second interrupt
@@ -28,7 +32,8 @@
  * platform.c), finds the output buffer empty and reads nothing: the data
  * port would give the last byte again. A byte the status marks as the
  * mouse's is left unread for the mouse's IRQ 12 handler: read here, it would
- * be taken for a key and lost from the mouse's packet.
+ * be taken for a key and lost from the mouse's packet. The code goes to the
+ * keyboard's event device and then to the console.
  *
  * Runs in interrupt context with an arbitrary process's page directory
  * loaded, so it translates through the kernel's own directory around the
@@ -47,12 +52,15 @@ static void kbd_irq(isr_params_t *params)
     }
     scancode = inb(PS2_DATA_PORT);
     saved = paging_enter_kernel();
+    input_set1_event(&ps2_keyboard, scancode);
     input_key(scancode);
     paging_leave_kernel(saved);
 }
 
 void kbd_init(void)
 {
+    ps2_keyboard.dev = input_keyboard_register(
+        "AT Translated Set 2 keyboard", "isa0060/serio0/input0", EVDEV_BUS_I8042, 0x0001, 0x0001);
     set_isr_handler(33, &kbd_irq, "kbd");
     pic_unmask_irq(1);
 }
