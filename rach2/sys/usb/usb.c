@@ -115,10 +115,11 @@ void usb_report_controllers(void)
 
 /* How long the boot waits for what is already plugged in to be enumerated.
  * The timer steps each device once a tick, every 10 ms, and a device takes a
- * dozen steps, so this is enough for a few devices and short enough not to be
- * noticed; the timer finishes a device still being enumerated after it, and a
- * hub's scan or a stick's units still coming up. */
-#define USB_ENUMERATE_MS 400u
+ * dozen steps and 50 ms of reset recovery, one device at a time, so this is
+ * enough for several devices; the wait ends as soon as none is left, and the
+ * timer finishes a device still being enumerated after it, and a hub's scan
+ * or a stick's units still coming up. */
+#define USB_ENUMERATE_MS 1000u
 
 /*
  * Whether the stack is up. The timer calls `usb_poll` from the first tick of
