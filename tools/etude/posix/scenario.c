@@ -1919,28 +1919,18 @@ refused:
 }
 
 /**
- * Make the launcher's profile of boot `m` with the disks `disks`, names of
- * the profile's own disks, or all of them for NULL. A CD's medium is the
+ * Give boot `m` the disks `disks`, names of its profile's own disks, or all
+ * of them for NULL, ending the list with a NULL path. A CD's medium is the
  * artifact's object in the store; any other disk is the attempt's own file.
  */
-static enum etude_status make_profile(struct etude_case_machine *m, const char *const disks[])
+static enum etude_status make_disks(struct etude_case_machine *m, const char *const disks[])
 {
     struct etude_case *c = m->c;
     const struct eh_json *qp = m->decl->qemu, *v = eh_json_get(qp, "disks");
-    const char *name, *firmware = jtext(qp, "firmware");
-    struct etude_qemu_profile *p = &m->profile;
+    const char *name;
     struct disk_decl d;
     size_t i;
 
-    if (devices_of(eh_json_get(qp, "devices"), m->devices, DEVICES_MAX, m->properties,
-                   PROPERTIES_MAX) != 0 ||
-        strings(eh_json_get(qp, "boot_options"), m->options, OPTIONS_MAX) != 0) {
-        diag("machine %s: a profile of more devices or options than the launcher takes",
-             m->decl->id);
-        return ETUDE_REFUSED;
-    }
-    if (make_networks(m, eh_json_get(qp, "devices")) != ETUDE_OK)
-        return ETUDE_REFUSED;
     v = v != NULL && v->type == 'a' ? v->child : NULL;
     for (i = 0; disks != NULL ? disks[i] != NULL : v != NULL; i++) {
         if (disks != NULL)
@@ -1969,6 +1959,30 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
         m->disks[i].unsafe = d.unsafe;
     }
     m->disks[i].path = NULL;
+    return ETUDE_OK;
+}
+
+/**
+ * Make the launcher's profile of boot `m` with the disks `disks`, as
+ * make_disks takes them.
+ */
+static enum etude_status make_profile(struct etude_case_machine *m, const char *const disks[])
+{
+    struct etude_case *c = m->c;
+    const struct eh_json *qp = m->decl->qemu;
+    const char *firmware = jtext(qp, "firmware");
+    struct etude_qemu_profile *p = &m->profile;
+
+    if (devices_of(eh_json_get(qp, "devices"), m->devices, DEVICES_MAX, m->properties,
+                   PROPERTIES_MAX) != 0 ||
+        strings(eh_json_get(qp, "boot_options"), m->options, OPTIONS_MAX) != 0) {
+        diag("machine %s: a profile of more devices or options than the launcher takes",
+             m->decl->id);
+        return ETUDE_REFUSED;
+    }
+    if (make_networks(m, eh_json_get(qp, "devices")) != ETUDE_OK ||
+        make_disks(m, disks) != ETUDE_OK)
+        return ETUDE_REFUSED;
     p->architecture = machine_architecture(c, m->decl);
     p->kernel = jtext(qp, "kernel") != NULL ? etude_artifact(c, jtext(qp, "kernel")) : NULL;
     p->initrd = jtext(qp, "initrd") != NULL ? etude_artifact(c, jtext(qp, "initrd")) : NULL;
