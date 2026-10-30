@@ -6,11 +6,13 @@
 
 #include "backlight.h"
 
-#include "../klog.h"
 #include "../lib/kdef.h"
+#ifndef RACH2_HOSTTEST
+#include "../klog.h"
 #include "../pci.h"
 #include "../arch/x86/board.h"
 #include "../mm/paging.h"
+#endif
 
 /*
  * The registers, in the graphics device's BAR 0, as i915 names them. The
