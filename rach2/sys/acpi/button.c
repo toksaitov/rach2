@@ -81,7 +81,7 @@ static UINT32 button_fixed(void *context)
 {
     struct button *b = (struct button *)context;
 
-    klog(KLOG_INFO, "acpi", "event: %s", b->what);
+    klog(KLOG_DEBUG, "acpi", "event: %s", b->what);
     acpi_report_key(b->dev, b->key);
     return ACPI_INTERRUPT_HANDLED;
 }
@@ -94,7 +94,7 @@ static void button_notify(ACPI_HANDLE device, UINT32 value, void *context)
 
     (void)device;
     if (value == BUTTON_NOTIFY_STATUS) {
-        klog(KLOG_INFO, "acpi", "event: %s: notify", b->what);
+        klog(KLOG_DEBUG, "acpi", "event: %s: notify", b->what);
         acpi_report_key(b->dev, b->key);
     }
 }

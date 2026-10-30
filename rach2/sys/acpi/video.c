@@ -48,7 +48,7 @@ static int nbuses;
 /** Report `key`, which the Notify `value` on `what` gave, with a record. */
 static void video_key(struct video_bus *bus, const char *what, UINT32 value, uint16_t key)
 {
-    klog(KLOG_INFO, "acpi", "event: video bus: %s notify 0x%x: key %u", what, (unsigned)value,
+    klog(KLOG_DEBUG, "acpi", "event: video bus: %s notify 0x%x: key %u", what, (unsigned)value,
          (unsigned)key);
     acpi_report_key(bus->dev, key);
 }
@@ -153,7 +153,7 @@ static ACPI_STATUS video_found(ACPI_HANDLE handle, UINT32 depth, void *context, 
         }
     }
     video_dos(handle, bus->path);
-    klog(KLOG_INFO, "acpi", "video: bus %s, outputs %d", bus->path, outputs);
+    klog(KLOG_DEBUG, "acpi", "video: bus %s, outputs %d", bus->path, outputs);
     return AE_OK;
 }
 

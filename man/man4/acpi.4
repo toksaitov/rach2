@@ -197,6 +197,9 @@ a method of the firmware's evaluated by root
 The kernel writes these lines to its log, which
 .Xr bootlog 4
 keeps.
+ACPICA's own lines other than its errors and warnings, and the lines of
+the SCI, the embedded controller, the video buses and the events, are at
+the debug level, which the screen does not show; the serial port has them.
 .Bl -tag -width Ds
 .It Ql acpi: tables: rsdt at ADDR, revision N, OEM: SIG ...
 The root table and the tables that passed their checks.

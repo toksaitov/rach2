@@ -306,10 +306,10 @@ void acpi_ec_probe(void)
         return;
     }
     if (ec.has_gpe) {
-        klog(KLOG_INFO, "acpi", "ec: %s at ports 0x%x and 0x%x, gpe 0x%x", ec.path,
+        klog(KLOG_DEBUG, "acpi", "ec: %s at ports 0x%x and 0x%x, gpe 0x%x", ec.path,
              (unsigned)ec.io.data, (unsigned)ec.io.command, (unsigned)ec.gpe);
     } else {
-        klog(KLOG_INFO, "acpi", "ec: %s at ports 0x%x and 0x%x, no gpe", ec.path,
+        klog(KLOG_DEBUG, "acpi", "ec: %s at ports 0x%x and 0x%x, no gpe", ec.path,
              (unsigned)ec.io.data, (unsigned)ec.io.command);
     }
 }
@@ -343,7 +343,7 @@ void acpi_ec_start(void)
              AcpiFormatException(status));
         return;
     }
-    klog(KLOG_INFO, "acpi", "ec: gpe 0x%x enabled, status 0x%02x", (unsigned)ec.gpe,
+    klog(KLOG_DEBUG, "acpi", "ec: gpe 0x%x enabled, status 0x%02x", (unsigned)ec.gpe,
          (unsigned)ec_status(&ec.io));
     flags = kirq_save();
     ec_queue();

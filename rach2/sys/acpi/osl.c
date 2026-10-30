@@ -579,7 +579,7 @@ ACPI_STATUS AcpiOsInstallInterruptHandler(UINT32 irq, ACPI_OSD_HANDLER routine, 
     isr_line_release((int)irq, 1);
     register_isr_handler((uint8_t)IRQ_VECTOR(irq), &osl_sci, "acpi");
     kirq_restore(flags);
-    klog(KLOG_INFO, "acpi", "sci: line %u", irq);
+    klog(KLOG_DEBUG, "acpi", "sci: line %u", irq);
     return AE_OK;
 }
 
@@ -751,7 +751,7 @@ void acpica_thread_start(void)
     setup_process_stack(p, osl_thread);
     thread = p;
     kirq_restore(flags);
-    klog(KLOG_INFO, "acpi", "thread: kacpid is pid %d", (int)p->pid);
+    klog(KLOG_DEBUG, "acpi", "thread: kacpid is pid %d", (int)p->pid);
 }
 
 /* ---- the log ---- */
@@ -774,13 +774,14 @@ static int starts(const char *s, const char *prefix)
 
 /**
  * Log the line gathered so far as `acpi: acpica: TEXT`, at the level its
- * prefix gives, and count it when it is an error or a warning. ACPICA's
- * prefix of an ordinary message, "ACPI: ", is left out.
+ * prefix gives, and count it when it is an error or a warning. An ordinary
+ * message, such as a line of the table list, is `KLOG_DEBUG`, kept in the
+ * log but not shown on the screen, and its prefix "ACPI: " is left out.
  */
 static void flush_line(void)
 {
     const char *text = line;
-    int level = KLOG_INFO;
+    int level = KLOG_DEBUG;
 
     line[line_len] = '\0';
     line_len = 0;
