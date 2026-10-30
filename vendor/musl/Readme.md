@@ -38,11 +38,15 @@ The source is the release tarball from <https://musl.libc.org/releases/>, kept b
 
 ## Local changes
 
-[`patches/series`](patches/series) names the patches `build_libc.sh` applies, in order. There is one.
+[`patches/series`](patches/series) names the patches `build_libc.sh` applies, in order. There are two.
 
 ### posix_spawn forks
 
 [`0001-posix-spawn-forks.patch`](patches/0001-posix-spawn-forks.patch) makes `posix_spawn` start its child with the raw `fork` system call in place of `__clone` with `CLONE_VM|CLONE_VFORK`, so the child runs in a copy of the parent's memory rather than in the parent's own. The child function execs, or writes its `errno` to the pipe and exits, so it works the same either way. The raw call keeps the negative error return that the code after it expects, and runs no `pthread_atfork` handlers. `system(3)` and `popen(3)` spawn through `posix_spawn`, and pdpmake runs its recipes through `system`. See [fork(2)](../../man/man2/fork.2).
+
+### Linux's input headers
+
+[`0002-linux-input-headers.patch`](patches/0002-linux-input-headers.patch) adds `<linux/input.h>` and `<linux/input-event-codes.h>`, the user headers of the kernel's input event interface, `/dev/input/eventN`, and the headers they include under `linux/`, `asm/` and `asm-generic/`. They are the files `make headers_install ARCH=x86` installs from Linux 6.18.54, the release the GNU root pins, unchanged; musl's `make install` installs them with its own. BusyBox's `acpid` includes `<linux/input.h>`. Under musl's 64-bit `time_t` the header gives `struct input_event` 16 bytes on i386 and 24 on x86-64, the layouts the kernel writes for each. To update them, run `headers_install` on the new release and make the patch again from the same files.
 
 ## Building
 
