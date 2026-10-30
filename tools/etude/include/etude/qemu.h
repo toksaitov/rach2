@@ -172,6 +172,9 @@ struct etude_qemu_profile {
     const char *smbios_vendor;                 /* the BIOS vendor the SMBIOS
                                                   tables name, printable ASCII,
                                                   or NULL for the firmware's own */
+    const char *acpi_table;                    /* a file of an ACPI table, such
+                                                  as an SSDT, that the firmware
+                                                  adds to QEMU's; NULL for none */
 };
 
 /* The longest SMBIOS vendor a profile may name. */

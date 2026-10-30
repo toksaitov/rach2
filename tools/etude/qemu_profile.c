@@ -1150,6 +1150,10 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
         add(&l, 0, "-smbios");
         add(&l, 1, "type=0,vendor=%s", p->smbios_vendor);
     }
+    if (p->acpi_table != NULL) {
+        add(&l, 0, "-acpitable");
+        add(&l, QUOTE_COMMAS, "file=%s", p->acpi_table);
+    }
     if (p->firmware == ETUDE_FIRMWARE_DIRECT) {
         add(&l, 0, "-kernel");
         add(&l, 0, "%s", p->kernel);

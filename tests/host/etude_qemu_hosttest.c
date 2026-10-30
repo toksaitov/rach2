@@ -1488,6 +1488,19 @@ static void test_smbios(const struct etude_qemu_profile *p, const struct etude_q
     CHECK(make(&b, site, argv, buf, sizeof(buf)) == 0, "an smbios vendor of 64 bytes");
 }
 
+/** Check an ACPI table's argument, its path's commas doubled. `p` has the
+ * direct firmware and no table. */
+static void test_acpi_table(const struct etude_qemu_profile *p, const struct etude_qemu_site *site)
+{
+    struct etude_qemu_profile b = *p;
+    char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096];
+
+    b.acpi_table = "/a/test,ssdt.aml";
+    CHECK(make(&b, site, argv, buf, sizeof(buf)) == 0 && strcmp(argv[14], "-acpitable") == 0 &&
+              strcmp(argv[15], "file=/a/test,,ssdt.aml") == 0 && strcmp(argv[16], "-kernel") == 0,
+          "an acpi table");
+}
+
 /** Check the command lines of profiles, and the profiles that are refused. */
 static void test_argv(void)
 {
@@ -1567,6 +1580,7 @@ static void test_argv(void)
     REFUSED(firmware, (enum etude_firmware)7, "an unknown firmware");
     test_accel_names();
     test_smbios(&p, &site);
+    test_acpi_table(&p, &site);
     test_disks(&p, &site);
     test_disk_lines(&p, &site);
 }

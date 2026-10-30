@@ -343,6 +343,7 @@ static void prepared_qemu(const struct rule *r, const struct json *qemu)
     }
     prepared(r, json_member(qemu, "kernel"), "the kernel");
     prepared(r, json_member(qemu, "initrd"), "the initial RAM image");
+    prepared(r, json_member(qemu, "acpi_table"), "the ACPI table");
     for (i = 0; disks != NULL && i < disks->count; i++) {
         if (json_member(disks->item[i], "base") != NULL) {
             prepared(r, json_member(disks->item[i], "base"), "the overlay's base");

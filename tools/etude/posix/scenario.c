@@ -1981,11 +1981,15 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
     p->devices = m->devices;
     p->boot_options = m->options;
     p->smbios_vendor = jtext(qp, "smbios_vendor");
+    p->acpi_table =
+        jtext(qp, "acpi_table") != NULL ? etude_artifact(c, jtext(qp, "acpi_table")) : NULL;
     p->firmware = firmware_of(firmware);
     p->no_i8042 = jbool(qp, "i8042") == 0;
     p->q35 = jtext(qp, "machine") != NULL && strcmp(jtext(qp, "machine"), "q35") == 0;
-    if (p->kernel == NULL || (jtext(qp, "initrd") != NULL && p->initrd == NULL)) {
-        diag("machine %s: its kernel or RAM image is not an artifact that checks", m->decl->id);
+    if (p->kernel == NULL || (jtext(qp, "initrd") != NULL && p->initrd == NULL) ||
+        (jtext(qp, "acpi_table") != NULL && p->acpi_table == NULL)) {
+        diag("machine %s: its kernel, RAM image or ACPI table is not an artifact that checks",
+             m->decl->id);
         return ETUDE_REFUSED;
     }
     return ETUDE_OK;
