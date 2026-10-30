@@ -18,6 +18,15 @@
  * require the level to stay set across a stream's start and to follow the
  * console's own AUDIO_SET_VOLUME.
  *
+ * `evprobe button` finds the ACPI power button's event device, the FADT's
+ * fixed button, prints "EVPROBE: press the button", and must read
+ * KEY_POWER pressed and released once the suite presses it through the
+ * emulator's monitor. `evprobe video` finds the ACPI video bus of the
+ * suite's SSDT (tests/cases/machine/acpi_video.asl), calls its methods
+ * through /proc/acpi/call, with integer and string arguments and a method
+ * that is not there among them, and must read KEY_BRIGHTNESSDOWN and
+ * KEY_BRIGHTNESSUP from the Notify of its \RTST.
+ *
  * Prints "EVPROBE OK" and exits 0. Freestanding; direct system calls
  * (probe.h).
  */
@@ -55,6 +64,15 @@
 #define KEY_A       30
 #define BUS_USB     0x03
 #define BUS_I8042   0x11
+#define BUS_HOST    0x19
+
+/* The keys of the ACPI devices, and Linux's product numbers of the power
+ * button's and the video bus's event devices. */
+#define KEY_POWER          116
+#define KEY_BRIGHTNESSDOWN 224
+#define KEY_BRIGHTNESSUP   225
+#define PRODUCT_POWER      0x01
+#define PRODUCT_VIDEO      0x06
 
 /* OSS's mixer ioctls, and the console's audio requests (rach2/sys/syscall.c). */
 #define MIXER_READ_VOLUME     0x80044D00L
@@ -251,7 +269,7 @@ static const char *find_device(const char *name)
             }
         }
     }
-    fail("no event device has the keyboard's name");
+    fail("no event device has the name");
     return 0;
 }
 
@@ -575,9 +593,148 @@ static void mixer(const char *id)
     syscall3(SYS_CLOSE, fd, 0, 0);
 }
 
+/**
+ * Check what the ioctls of `fd`, an ACPI device's event device, answer:
+ * the host's bus, Linux's product number `product`, the place `phys`, and
+ * keys alone, with `key` among them.
+ */
+static void check_acpi_device(int fd, int product, const char *phys, int key)
+{
+    unsigned short id[4];
+    unsigned char bits[96];
+    char text[64];
+    long len;
+
+    if (ioctl(fd, EVIOCGID, (long)id) != 0 || id[0] != BUS_HOST || id[2] != product) {
+        fail_with("EVIOCGID gives another bus or product", 1, (long)id[0] << 16 | id[2]);
+    }
+    len = ioctl(fd, EVIOCGPHYS(sizeof(text) - 1), (long)text);
+    if (len <= 0) {
+        fail_with("EVIOCGPHYS gives nothing", 1, -len);
+    }
+    text[len] = 0;
+    if (!begins(text, phys)) {
+        fail("EVIOCGPHYS gives another place");
+    }
+    bits[0] = 0xFF;
+    if (ioctl(fd, EVIOCGBIT(0, 4), (long)bits) <= 0 || bits[0] != (1 << EV_SYN | 1 << EV_KEY)) {
+        fail_with("EVIOCGBIT(0) is not EV_SYN and EV_KEY", 1, bits[0]);
+    }
+    if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(bits)), (long)bits) != (long)sizeof(bits) ||
+        !bit_on(bits, key)) {
+        fail_with("EVIOCGBIT(EV_KEY) lacks a key", 1, key);
+    }
+}
+
+/**
+ * Read `n` keys from `fd`, each as Linux's ACPI drivers report one: the key
+ * pressed, SYN_REPORT, the key released, SYN_REPORT, with no MSC_SCAN; the
+ * codes go in `codes`.
+ */
+static void read_acpi_keys(int fd, int *codes, int n)
+{
+    struct input_event ev;
+    int k, step;
+
+    for (k = 0; k < n; k++) {
+        for (step = 0; step < 4; step++) {
+            long got = syscall3(SYS_READ, fd, (long)&ev, (long)sizeof(ev));
+
+            if (got != (long)sizeof(ev)) {
+                fail_with("a read of the event device did not give a record", 1, got);
+            }
+            if (step % 2 == 1) {
+                if (ev.type != EV_SYN || ev.code != SYN_REPORT) {
+                    fail_with("a key's record came without its SYN_REPORT", 1, ev.type);
+                }
+            } else if (ev.type != EV_KEY || ev.value != (step == 0) ||
+                       (step == 2 && ev.code != codes[k])) {
+                fail_with("a record came that is not a key pressed and released", 1,
+                          (long)ev.type << 16 | ev.code);
+            } else {
+                codes[k] = ev.code;
+            }
+        }
+    }
+}
+
+/** The run of `evprobe button`. */
+static void button(void)
+{
+    int fd = open_or_fail(find_device("Power Button"), O_RDONLY, "the button did not open");
+    int code = -1;
+
+    check_acpi_device(fd, PRODUCT_POWER, "LNXPWRBN/button/input0", KEY_POWER);
+    puts("EVPROBE: press the button\n");
+    read_acpi_keys(fd, &code, 1);
+    if (code != KEY_POWER) {
+        fail_with("the power button gave another key", 1, code);
+    }
+    syscall3(SYS_CLOSE, fd, 0, 0);
+}
+
+/** Whether the NUL-terminated `a` and `b` are the same. */
+static int same(const char *a, const char *b)
+{
+    while (*a && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+/**
+ * Write `request` to /proc/acpi/call, which must take it whole, and read the
+ * result back from a second open: `want` and its NUL.
+ */
+static void call(const char *request, const char *want)
+{
+    char got[128];
+    int fd = open_or_fail("/proc/acpi/call", O_WRONLY, "/proc/acpi/call did not open to write");
+    long n = syscall3(SYS_WRITE, fd, (long)request, (long)strlen(request));
+
+    syscall3(SYS_CLOSE, fd, 0, 0);
+    if (n != (long)strlen(request)) {
+        puts(request);
+        fail_with(": the write of the call was refused", 1, -n);
+    }
+    fd = open_or_fail("/proc/acpi/call", O_RDONLY, "/proc/acpi/call did not open to read");
+    n = syscall3(SYS_READ, fd, (long)got, (long)sizeof(got) - 1);
+    syscall3(SYS_CLOSE, fd, 0, 0);
+    if (n <= 0 || got[n - 1] != 0 || !same(got, want)) {
+        puts(request);
+        puts(": the call's result is not ");
+        puts(want);
+        fail_with(", read", 1, n);
+    }
+    puts("EVPROBE: a call gave ");
+    puts(want);
+    puts("\n");
+}
+
+/** The run of `evprobe video`. */
+static void video(void)
+{
+    int fd = open_or_fail(find_device("Video Bus"), O_RDONLY, "the video bus did not open");
+    int codes[2] = {-1, -1};
+
+    check_acpi_device(fd, PRODUCT_VIDEO, "LNXVIDEO/video/input0", KEY_BRIGHTNESSUP);
+    call("\\RDOS", "0x0");
+    call("\\RADD 2 0x28\n", "0x2a");
+    call("\\RCAT \"ab\"", "\"abcd\"");
+    call("\\RNON", "Error: AE_NOT_FOUND");
+    call("\\RTST\n", "0x0");
+    read_acpi_keys(fd, codes, 2);
+    if (codes[0] != KEY_BRIGHTNESSDOWN || codes[1] != KEY_BRIGHTNESSUP) {
+        fail_with("the video bus gave other keys", 1, (long)codes[0] << 16 | codes[1]);
+    }
+    syscall3(SYS_CLOSE, fd, 0, 0);
+}
+
 PROBE_SP_ENTRY;
 
-/** Run the keyboard's or the mixer's checks, as the argument says. */
+/** Run the keyboard's, the mixer's or an ACPI device's checks, as the
+ * argument says. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
@@ -589,8 +746,12 @@ void probe_main(unsigned long *sp)
         keyboard(1);
     } else if (argc >= 3 && begins(argv[1], "mixer")) {
         mixer(argv[2]);
+    } else if (argc >= 2 && begins(argv[1], "button")) {
+        button();
+    } else if (argc >= 2 && begins(argv[1], "video")) {
+        video();
     } else {
-        fail("usage: evprobe ps2 | usb | mixer ID");
+        fail("usage: evprobe ps2 | usb | mixer ID | button | video");
     }
     puts("EVPROBE OK\n");
     sys_exit(0);

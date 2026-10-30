@@ -726,6 +726,13 @@ build/tests/cases/machine/test-password: krffs/shadow
 	@mkdir -p $(@D)
 	cp krffs/rach2_test_password $@
 
+# The SSDT that the acpi suite's video case gives QEMU, compiled from
+# tests/cases/machine/acpi_video.asl by the pinned ACPICA's iasl and kept
+# beside it, since the build has no iasl of its own.
+build/tests/cases/machine/acpi_video.aml: tests/cases/machine/acpi_video.aml
+	@mkdir -p $(@D)
+	cp $< $@
+
 # The byte scanner (tools/verify/asciiscan.c) the text checks run and the TCP
 # transfer measurer (tools/dev/machine_net.c). They are built here so that
 # `make` compiles them under the host flags and the compilation database lists

@@ -153,7 +153,7 @@ static ACPI_STATUS video_found(ACPI_HANDLE handle, UINT32 depth, void *context, 
         }
     }
     video_dos(handle, bus->path);
-    klog(KLOG_INFO, "acpi", "video: bus %s, %d outputs", bus->path, outputs);
+    klog(KLOG_INFO, "acpi", "video: bus %s, outputs %d", bus->path, outputs);
     return AE_OK;
 }
 

@@ -1,9 +1,12 @@
 /*
  * acpi_scenario.c: the scenario of the acpi cases (../machine.acpi.json).
  * ACPICA loads the firmware's namespace at boot with no error counted, and
- * the power button's press reaches it through the SCI; with rach2.noacpica
- * the kernel leaves it out and powers off through the \_S5 its own reader of
- * the tables found. One boot of each case.
+ * the power button's press reaches it through the SCI and comes out as
+ * KEY_POWER on the event device "Power Button"; a video bus of an SSDT of
+ * the suite's own, fired through /proc/acpi/call, gives the brightness keys
+ * on "Video Bus"; and with rach2.noacpica the kernel leaves ACPICA out and
+ * powers off through the \_S5 its own reader of the tables found. One boot
+ * of each case.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,14 +60,15 @@ static int whole_line(const char *w, const char *pattern)
 /**
  * Boot the test image to the debug shell, which the kernel starts after
  * ACPICA, and read the boot's records: ACPICA's count with no error, and the
- * SCI's line taken. Then press the power button through QMP's
- * system_powerdown and wait for the kernel's record of its event.
+ * SCI's line taken. Then start evprobe on the power button's event device,
+ * press the button through QMP's system_powerdown once it asks, and wait
+ * for the kernel's record of the event and for evprobe to read the key.
  */
 static void up_case(struct lc *l)
 {
     struct etude_case_machine *m;
     enum etude_status st;
-    uint64_t at = 0;
+    uint64_t at = 0, from;
     char *w, *reply = NULL;
 
     if ((m = lc_shell(l, "boot", "guest", &at)) == NULL ||
@@ -77,13 +81,53 @@ static void up_case(struct lc *l)
     free(w);
     if (!lc_step(l, "button"))
         return;
+    from = at;
+    if (!lc_type(l, m, "exec /evprobe button\n") ||
+        !lc_wait(l, m, "EVPROBE: press the button", &at, NULL))
+        return;
     st = etude_qmp(m, "system_powerdown", NULL, &reply);
     free(reply);
     if (st != ETUDE_OK) {
         lc_halt(l, st, "QMP's system_powerdown");
         return;
     }
-    lc_wait(l, m, "acpi: event: power button", &at, "button");
+    if (!lc_wait(l, m, "acpi: event: power button", &at, "button"))
+        return;
+    if ((w = lc_handback(l, m, "guest", from, &at, "key")) != NULL) {
+        lc_assert(l, "key", strstr(w, "EVPROBE OK") != NULL,
+                  "evprobe did not read KEY_POWER on the power button's event device");
+        free(w);
+    }
+    lc_quit(l, m, NULL);
+}
+
+/**
+ * Boot the test image with the suite's SSDT, a video bus of one output, and
+ * read the records of ACPICA with no error and of the bus found. Then run
+ * evprobe, which calls the SSDT's methods through /proc/acpi/call and must
+ * read the brightness keys that \RTST's Notify gives on "Video Bus".
+ */
+static void video_case(struct lc *l)
+{
+    struct etude_case_machine *m;
+    uint64_t at = 0;
+    char *w;
+
+    if ((m = lc_shell(l, "boot", "guest", &at)) == NULL ||
+        (w = lc_console(l, "guest", 0, at)) == NULL)
+        return;
+    lc_assert(l, "up", whole_line(w, "acpi: acpica: # objects, 0 errors"),
+              "no whole record says that ACPICA loaded the namespace with no error counted");
+    lc_assert(l, "bus", whole_line(w, "acpi: video: bus \\_SB.RVID, outputs 1"),
+              "no whole record says that the SSDT's video bus was found with its output");
+    free(w);
+    if (!lc_step(l, "video"))
+        return;
+    if ((w = lc_run(l, m, "guest", "exec /evprobe video\n", &at, "keys")) != NULL) {
+        lc_assert(l, "keys", strstr(w, "EVPROBE OK") != NULL,
+                  "evprobe did not read the brightness keys or a call's result");
+        free(w);
+    }
     lc_quit(l, m, NULL);
 }
 
@@ -125,13 +169,17 @@ static void noacpica_case(struct lc *l)
 
 int etude_scenario(struct etude_case *c)
 {
-    static const char *const up_ids[] = {"up", "sci", "button", NULL};
+    static const char *const up_ids[] = {"up", "sci", "button", "key", NULL};
     static const char *const noacpica_ids[] = {"skipped", "off", "s5", NULL};
+    static const char *const video_ids[] = {"up", "bus", "keys", NULL};
     struct lc l;
 
     if (strcmp(case_name(c), "noacpica") == 0) {
         lc_begin(&l, c, noacpica_ids);
         noacpica_case(&l);
+    } else if (strcmp(case_name(c), "video") == 0) {
+        lc_begin(&l, c, video_ids);
+        video_case(&l);
     } else {
         lc_begin(&l, c, up_ids);
         up_case(&l);

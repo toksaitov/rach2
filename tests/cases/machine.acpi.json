@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "family_id": "machine.acpi",
-  "summary": "ACPICA in the kernel on QEMU's pc and q35 machines: the namespace loaded with no error counted, the SCI taken and the power button's event; and the kernel without it under rach2.noacpica; the scenario is machine/acpi_scenario.c",
+  "summary": "ACPICA in the kernel on QEMU's pc and q35 machines: the namespace loaded with no error counted, the SCI taken and the power button's event as KEY_POWER on its event device; a video bus of the suite's SSDT whose methods /proc/acpi/call fires, giving the brightness keys; and the kernel without ACPICA under rach2.noacpica; the scenario is machine/acpi_scenario.c",
   "cases": [
     {
       "case_id": "machine.acpi.pc",
-      "behavior": "on the pc machine ACPICA loads the firmware's namespace with no error counted, takes the SCI, and the power button's press reaches it",
+      "behavior": "on the pc machine ACPICA loads the firmware's namespace with no error counted, takes the SCI, and the power button's press reaches it and comes out as KEY_POWER on the event device Power Button",
       "units": ["acpi"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
@@ -14,7 +14,7 @@
       "execution": {"program": "acpi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
       "steps": [
         {"step_id": "boot", "stage": "boot", "machine": "guest", "does": "boot the test image to the debug shell and read the boot's records"},
-        {"step_id": "button", "stage": "execute", "machine": "guest", "does": "press the power button with QMP's system_powerdown, wait for the event's record and end the machine with QMP's quit"}
+        {"step_id": "button", "stage": "execute", "machine": "guest", "does": "run evprobe on the power button's event device, press the button with QMP's system_powerdown once it asks, wait for the event's record and for evprobe's end, and end the machine with QMP's quit"}
       ],
       "machines": [
         {"machine_id": "guest", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
@@ -22,7 +22,8 @@
       "assertions": [
         {"assertion_id": "up", "checks": "a whole record says acpi: acpica: N objects, 0 errors: ACPICA loaded the namespace and counted no error", "source": "scenario"},
         {"assertion_id": "sci", "checks": "a whole record says acpi: sci: line N: ACPICA's handler took the SCI's line", "source": "scenario"},
-        {"assertion_id": "button", "checks": "after QMP's system_powerdown the kernel records acpi: event: power button, the fixed event ACPICA took from the SCI", "source": "scenario"}
+        {"assertion_id": "button", "checks": "after QMP's system_powerdown the kernel records acpi: event: power button, the fixed event ACPICA took from the SCI", "source": "scenario"},
+        {"assertion_id": "key", "checks": "evprobe finds the event device Power Button, of the host's bus with phys LNXPWRBN/button/input0, reads KEY_POWER pressed and released after the press, prints EVPROBE OK and exits 0", "source": "scenario"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
@@ -41,7 +42,7 @@
     },
     {
       "case_id": "machine.acpi.q35",
-      "behavior": "on the q35 machine, whose ACPI is the ICH9's as on the Lenovo, ACPICA loads the namespace with no error counted, takes the SCI, and the power button's press reaches it",
+      "behavior": "on the q35 machine, whose ACPI is the ICH9's as on the Lenovo, ACPICA loads the namespace with no error counted, takes the SCI, and the power button's press reaches it and comes out as KEY_POWER on the event device Power Button",
       "units": ["acpi"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
@@ -50,7 +51,7 @@
       "execution": {"program": "acpi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
       "steps": [
         {"step_id": "boot", "stage": "boot", "machine": "guest", "does": "boot the test image to the debug shell and read the boot's records"},
-        {"step_id": "button", "stage": "execute", "machine": "guest", "does": "press the power button with QMP's system_powerdown, wait for the event's record and end the machine with QMP's quit"}
+        {"step_id": "button", "stage": "execute", "machine": "guest", "does": "run evprobe on the power button's event device, press the button with QMP's system_powerdown once it asks, wait for the event's record and for evprobe's end, and end the machine with QMP's quit"}
       ],
       "machines": [
         {"machine_id": "guest", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": [], "machine": "q35"}, "console": "serial", "qmp": true, "helper": false}
@@ -58,7 +59,8 @@
       "assertions": [
         {"assertion_id": "up", "checks": "a whole record says acpi: acpica: N objects, 0 errors: ACPICA loaded the namespace and counted no error", "source": "scenario"},
         {"assertion_id": "sci", "checks": "a whole record says acpi: sci: line N: ACPICA's handler took the SCI's line", "source": "scenario"},
-        {"assertion_id": "button", "checks": "after QMP's system_powerdown the kernel records acpi: event: power button, the fixed event ACPICA took from the SCI", "source": "scenario"}
+        {"assertion_id": "button", "checks": "after QMP's system_powerdown the kernel records acpi: event: power button, the fixed event ACPICA took from the SCI", "source": "scenario"},
+        {"assertion_id": "key", "checks": "evprobe finds the event device Power Button, of the host's bus with phys LNXPWRBN/button/input0, reads KEY_POWER pressed and released after the press, prints EVPROBE OK and exits 0", "source": "scenario"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
@@ -74,6 +76,43 @@
       ],
       "timing": [],
       "native": {"plan": "none", "class": "firmware", "reason": "the case reads what ACPICA makes of QEMU's own tables and presses the power button through QMP; the Lenovo's acceptance checks ACPICA on its firmware"}
+    },
+    {
+      "case_id": "machine.acpi.video",
+      "behavior": "on the pc machine with the suite's SSDT, a video bus of one output, the kernel finds the bus, /proc/acpi/call evaluates the SSDT's methods with their arguments and results, and the Notify of \\RTST on the output comes out as KEY_BRIGHTNESSDOWN and KEY_BRIGHTNESSUP on the event device Video Bus",
+      "units": ["acpi"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "acpi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "guest", "does": "boot the test image with the SSDT acpi_video.aml to the debug shell and read the boot's records"},
+        {"step_id": "video", "stage": "execute", "machine": "guest", "does": "run evprobe on the video bus's event device, which calls the SSDT's methods through /proc/acpi/call and reads the keys of \\RTST, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "guest", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": [], "acpi_table": "acpi-video"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "up", "checks": "a whole record says acpi: acpica: N objects, 0 errors: ACPICA loaded the namespace with the SSDT and counted no error", "source": "scenario"},
+        {"assertion_id": "bus", "checks": "a whole record says acpi: video: bus \\_SB.RVID, outputs 1: the SSDT's device with _DOS and _DOD was taken as a video bus with its output", "source": "scenario"},
+        {"assertion_id": "keys", "checks": "evprobe finds the event device Video Bus, of the host's bus with phys LNXVIDEO/video/input0; /proc/acpi/call gives 0x0 for \\RDOS, the _DOS the kernel called, 0x2a for \\RADD 2 0x28, \"abcd\" for \\RCAT \"ab\", Error: AE_NOT_FOUND for \\RNON and 0x0 for \\RTST; evprobe then reads KEY_BRIGHTNESSDOWN and KEY_BRIGHTNESSUP, each pressed and released, prints EVPROBE OK and exits 0", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "acpi-video", "node": "tests/cases/machine/acpi_video.aml", "per_architecture": false},
+        {"name": "acpi_scenario", "node": "tests/cases/machine/acpi_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "firmware", "reason": "the case reads a video bus of the suite's own SSDT, which only QEMU's -acpitable adds; the Lenovo's acceptance fires its own firmware's _Q11 and _Q12"}
     },
     {
       "case_id": "machine.acpi.noacpica",
