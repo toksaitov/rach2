@@ -112,6 +112,19 @@ static int failures;
         }                                                \
     } while (0)
 
+/** A read of the adapter's ports, which reach no device here. */
+uint8_t inb(uint16_t port)
+{
+    (void)port;
+    return 0;
+}
+
+/** The blank time the escape sets, which no row reads. */
+void console_set_blank_time(unsigned int seconds)
+{
+    (void)seconds;
+}
+
 /** The CRTC as the driver sees it: an index port and a data port, of which
  * the start address and the cursor location are kept. Selecting the cursor's
  * high byte raises the echo `inject_echo` asks for. */

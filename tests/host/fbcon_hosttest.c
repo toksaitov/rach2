@@ -16,7 +16,8 @@
  * cursor's lines from the cell it left; and the scrollback must draw the lines
  * it shows. The 320x200 picture of Mode 13h must be drawn at the largest whole
  * scale that fits, in the middle, with no cell over it until the console takes
- * the screen back. The text console's driver, the console and the framebuffer's
+ * the screen back, and a blank console must be black until its unblank draws
+ * every cell again. The text console's driver, the console and the framebuffer's
  * drawing are included whole, as vga_text_hosttest.c includes them.
  */
 #include "lib/kint.h"
@@ -81,6 +82,19 @@ void outb(uint16_t port, uint8_t val)
     (void)port;
     (void)val;
     port_writes++;
+}
+
+/** A read of the adapter's ports, which reach no device here. */
+uint8_t inb(uint16_t port)
+{
+    (void)port;
+    return 0;
+}
+
+/** The blank time the escape sets, which no row reads. */
+void console_set_blank_time(unsigned int seconds)
+{
+    (void)seconds;
 }
 
 /* The framebuffer: room for 2560x1600 at 32 bits, with the 64 bytes past
@@ -497,6 +511,29 @@ static void row_picture(void)
           "and the cells are drawn again, one written while the picture had the screen too");
 }
 
+/**
+ * The console's blank: the whole screen black, no cell drawn while it lasts,
+ * and every cell drawn again at the unblank, one written meanwhile too.
+ */
+static void row_blank(void)
+{
+    uint32_t px, py, black = 1;
+
+    use_rgb(1280, 800, 32);
+    put("text");
+    textcon_blank(1);
+    put("more");
+    for (py = 0; py < 800; py++) {
+        for (px = 0; px < 1280; px++) {
+            black = black && pixel_at(px, py) == BLACK;
+        }
+    }
+    CHECK(black, "the blank screen is black, with the cells written meanwhile not drawn");
+    textcon_blank(0);
+    CHECK(cell_shows(0, 0, 't', GREY, BLACK, 0) && cell_shows(4, 0, 'm', GREY, BLACK, 0),
+          "the unblank draws the cells again, one written while blank too");
+}
+
 /** Run the rows: 0 when every check passes, 1 otherwise. */
 int main(void)
 {
@@ -508,6 +545,7 @@ int main(void)
     row_cursor_redraw();
     row_panic_colors();
     row_picture();
+    row_blank();
     if (failures) {
         printf("fbcon-test: %d failure(s)\n", failures);
         return 1;

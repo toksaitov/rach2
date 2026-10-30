@@ -335,6 +335,14 @@ void serial_set_rx_notify(void (*notify)(void))
     (void)notify;
 }
 
+/** The screen's blanking, which no row reaches. */
+void blank_init(void)
+{}
+
+/** The blanking's countdown, which `tty_console_poll` runs first. */
+void blank_tick(void)
+{}
+
 /** Reset the consumer, current and running, the producer, ready, and the
  * poller, and allocate the pair with both ends open in raw mode without
  * echo or signals. */

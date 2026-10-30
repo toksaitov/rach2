@@ -279,6 +279,21 @@ void fb_exit(void)
     gfx_current.mode = GFX_MODE_NONE;
 }
 
+/** TIOCLINUX's blank, which no row reaches. */
+void console_blank_now(void)
+{}
+
+/** The unblank of TIOCLINUX and of the framebuffer's mode, which no row
+ * checks. */
+void console_unblank_now(void)
+{}
+
+/** TIOCLINUX's question, which no row asks: never blank. */
+int console_is_blank(void)
+{
+    return 0;
+}
+
 /** Count a write of the palette. */
 void fb_set_palette(const uint8_t *data)
 {
