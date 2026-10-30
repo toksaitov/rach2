@@ -18,17 +18,20 @@
 # The images take the archive and not the tree. os-real's RAM root is a
 # module that ends below 32 MiB, where the DMA pool and i686's frame table
 # are carved; the tree would add 4 MiB to it and the archive adds 0.45 MiB,
-# which its 20 MiB hold. bzip2, which every host has, packs it smallest. The archive lists the files in name order, without
-# the directories, the stamp or itself. The times and owners in it are this
-# host's, which guest.mk does not restore (tar -xmo).
+# which its 20 MiB hold. bzip2, which every host has, packs it smallest. The
+# archive lists the files in name order, without the directories, the stamp
+# or itself. The times and owners in it are this host's, which guest.mk does
+# not restore (tar -xmo).
 #
 # The stamp, .stamp in the tree, holds the SHA-256 of the tarball, the patch
 # and this script. When the tree's stamp already says so, the tree is left as
 # it is and only the stamp's time moves, so a make that saw a newer tarball
-# from a fresh checkout recompiles nothing. Two kernels built at once may both
-# run this on a missing tree: each extracts into a directory of its own and
-# renames it into place, and the second, finding the first's tree with the
-# same stamp, throws its own away.
+# from a fresh checkout recompiles nothing. Two kernels built at once, such
+# as the ordinary and the recovery kernel's sub-makes, may both run this: the
+# lock, acpica.lock beside the tree, holds the second from the check of the
+# stamp until the first has put its tree in place, so that neither removes a
+# tree the other compiles, and the second then finds the stamp it wants. A
+# lock whose holder has died, killed with its make, is taken over.
 #
 # The architecture is RACH2_ARCH's (mk/arch.sh); an x86-64 build extracts
 # into build/x86_64/vendor/acpica/, where the stager's path map looks.
@@ -79,6 +82,25 @@ if [ "$GOT" != "$TARBALL_SHA256" ]; then
 fi
 WANT="$GOT $(sha256_of "$PATCH") $(sha256_of build_acpica.sh)"
 
+# mkdir is the portable atomic test-and-set; the holder's pid is in the lock.
+mkdir -p "$ARCH_BUILD/vendor"
+LOCK="$ARCH_BUILD/vendor/acpica.lock"
+WORK=
+until mkdir "$LOCK" 2>/dev/null; do
+    holder=$(cat "$LOCK/pid" 2>/dev/null) || holder=
+    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+        echo "acpica: taking over the lock of $holder, which has ended"
+        rm -rf "$LOCK"
+        continue
+    fi
+    sleep 1
+done
+trap 'rm -rf ${WORK:+"$WORK"} "$LOCK"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+echo $$ >"$LOCK/pid"
+
 if [ -f "$STAGE/.stamp" ] && [ "$(cat "$STAGE/.stamp")" = "$WANT" ] &&
     [ -f "$STAGE/acpica.tar.bz2" ]; then
     touch "$STAGE/.stamp"
@@ -86,9 +108,7 @@ if [ -f "$STAGE/.stamp" ] && [ "$(cat "$STAGE/.stamp")" = "$WANT" ] &&
 fi
 
 echo "acpica: extracting $VERSION into $STAGE"
-mkdir -p "$ARCH_BUILD/vendor"
 WORK="$(mktemp -d "$ARCH_BUILD/vendor/acpica.new.XXXXXX")"
-trap 'rm -rf "$WORK"' EXIT
 tar xmzf "$TARBALL" -C "$WORK"
 SRC="$WORK/acpica-unix-$VERSION/source"
 mkdir "$WORK/acpica"
@@ -119,10 +139,6 @@ bzip2 -9 "$WORK/acpica.tar"
 mv "$WORK/acpica.tar.bz2" "$WORK/acpica/acpica.tar.bz2"
 printf '%s\n' "$WANT" > "$WORK/acpica/.stamp"
 
-if [ -f "$STAGE/.stamp" ] && [ "$(cat "$STAGE/.stamp")" = "$WANT" ] &&
-    [ -f "$STAGE/acpica.tar.bz2" ]; then
-    exit 0
-fi
 rm -rf "$STAGE"
 mv "$WORK/acpica" "$STAGE"
 echo "acpica: extracted $VERSION ($(find "$STAGE" -name '*.c' | wc -l | tr -d ' ') C files)"
