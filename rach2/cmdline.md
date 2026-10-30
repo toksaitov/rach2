@@ -22,6 +22,7 @@ The line is a list of words separated by spaces and tabs (`sys/cmdline.c`). A fl
 | `rach2.ip=A.B.C.D/PREFIX`, `rach2.ip=none`, `rach2.gateway=A.B.C.D`, `rach2.ifaddr=MAC,ADDR/PREFIX[,GATEWAY]` | The interfaces' addresses ([the network Readme](sys/network/Readme.md)). Without them the first interface takes QEMU's user-network defaults. |
 | `rach2.netconsole` | Broadcast the log in Ethernet frames once a card is up. |
 | `rach2.loglevel=N` | Show records of level `N`, one digit, and more urgent on the screen, in place of `INFO` and more urgent during the boot and `CRIT` alone once init starts. |
+| `consoleblank=N` | Blank the screen and turn its backlights off after `N` seconds without a key or a mouse move, 600 when it is not given and never for 0, as on Linux ([console(4)](../man/man4/console.4)). A value that is not a number of seconds is refused and logged. |
 | `rach2.diag` | Print the boot's diagnostic report again before the first program, and wait for a key. |
 | `rach2.apicdiag` | Print what the firmware left in the local APIC and the MSI capabilities of the xHCI and HDA controllers. |
 | `rach2.nomsi`, `noapic`, `maxcpus=N` | Take every interrupt through the 8259 pair; keep the 8259 pair and the 8254's tick where there is an I/O APIC; start at most `N` processors, the boot processor counted ([the PC platform](sys/arch/x86/Readme.md)). |

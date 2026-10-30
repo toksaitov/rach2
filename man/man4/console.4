@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd October 30, 2026
 .Dt CONSOLE 4
 .Os
 .Sh NAME
@@ -135,6 +135,36 @@ Operating system commands, device control strings and application
 strings, which a program sends to learn a terminal's features, are
 read to their end and not drawn.
 A terminal on the serial port gives its own answers too.
+.Ss Blanking
+The screen goes dark after ten minutes without a key pressed or the mouse
+moved, and the next key or move shows it again with what it showed.
+Output written meanwhile is drawn when it comes back; the serial port
+is not blanked.
+Blanking paints the screen black, through the VGA's palette in text mode
+and with black pixels on a framebuffer, and turns every backlight off;
+see
+.Xr backlight 4 .
+While a program draws through
+.Pa /fb
+the screen does not blank.
+.Pp
+The kernel command line's
+.Ql consoleblank=N
+sets the time to N seconds, and
+.Ql consoleblank=0
+keeps the screen from blanking, as on Linux.
+The escape
+.Ql "ESC [ 9 ; N ]" ,
+which
+.Ql setterm -blank N
+writes on Linux, sets it to N minutes, at most 60, and 0 for never,
+and counts the time from then.
+.Pp
+Each blank and its end are recorded in the kernel's log, with their count
+since boot and their cause:
+.Ql console: blanked: 1, after the time without input
+and
+.Ql console: unblanked: 1, by a key or a mouse move .
 .Ss Terminal requests
 The console and pseudoterminal slaves answer these
 .Xr ioctl 2
@@ -174,6 +204,24 @@ Read the terminal window size.
 .It Dv TIOCNOTTY
 Detach the terminal from the caller's session if that session controls it.
 .El
+.Pp
+The console also answers Linux's
+.Dv TIOCLINUX ,
+whose argument points to a byte, the subcode, from a process whose
+session the console controls or from root:
+.Bl -tag -width TIOCSPGRP
+.It 14
+Blank the screen now, until subcode 4; a key does not show it.
+.It 4
+Show the screen if it is blank.
+.It 15
+Return 1 while the screen is blank and 0 otherwise.
+.El
+.Pp
+Another subcode fails with
+.Er EINVAL ,
+and a caller that is neither fails with
+.Er EPERM .
 .Sh FILES
 .Bl -tag -width /dev/console
 .It Pa /dev/console
@@ -200,4 +248,5 @@ may refuse them.
 .Xr login 1 ,
 .Xr getpid 2 ,
 .Xr ioctl 2 ,
+.Xr backlight 4 ,
 .Xr bootlog 4

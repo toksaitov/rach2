@@ -1,6 +1,6 @@
 # Display
 
-`sys/display/` draws the console's text and the 320x200 picture a program shows through `/fb`. The text console, `vga_text.c` behind `textcon.h`, keeps the screen's cells, a scrollback and the cursor, and writes them to the VGA's text memory or, when the loader left a framebuffer, to `fbcon.c`, which draws them in pixels. `vga_gfx.c` puts the VGA in mode 13h for `/fb`, or on a framebuffer console keeps the picture in memory for `fbcon.c` to draw. `vga_font.c` is the console's font. The interpreter of the console's escape sequences is `sys/kio.c`, and what is typed at the console is described in [the terminal Readme](../tty/Readme.md).
+`sys/display/` draws the console's text and the 320x200 picture a program shows through `/fb`. The text console, `vga_text.c` behind `textcon.h`, keeps the screen's cells, a scrollback and the cursor, and writes them to the VGA's text memory or, when the loader left a framebuffer, to `fbcon.c`, which draws them in pixels. `vga_gfx.c` puts the VGA in mode 13h for `/fb`, or on a framebuffer console keeps the picture in memory for `fbcon.c` to draw. `vga_font.c` is the console's font. `blank.c` blanks the screen after a time without input, and `backlight.c` is the backlight class of `/sys/class/backlight`, which `intelbl.c` registers the Intel chipset's backlight with. The interpreter of the console's escape sequences is `sys/kio.c`, and what is typed at the console is described in [the terminal Readme](../tty/Readme.md).
 
 ## Interfaces
 
@@ -11,12 +11,16 @@ Inside the kernel:
 * `textcon.h`, defined by `vga_text.c`: the grid of `textcon_cols` by `textcon_rows` cells, `textcon_write_cell`, `k_scroll_down`, `k_cls`, the cursor (`textcon_place_cursor`, with `textcon_hold` and `textcon_release` around a write of many bytes), the colors, the scrollback (`k_scrollback_page_up`, `k_scrollback_page_down`, `k_scrollback_home`, `k_scrollback_end`) and the font (`textcon_load_font`).
 * `fbcon.h`: `fbcon_init`, which the platform calls with the loader's framebuffer, and `fbcon_window`, which the platform defines in `sys/arch/x86/boot.c`.
 * `fb.h`, defined by `vga_gfx.c`: the graphics mode of `/fb`, `fb_enter`, `fb_exit`, `fb_set_palette` and `fb_present`, and `gfx_current`, the mode in force.
+* `blank.h`, defined by `blank.c`: `console_poke`, which the key and mouse paths call; `blank_init` and `blank_tick`, which `sys/tty/tty.c` calls at boot and on the tick; `console_set_blank_time`, which the escape calls; and `console_blank_now`, `console_unblank_now` and `console_is_blank`, which TIOCLINUX calls (`sys/syscall.c`). `textcon_blank` in `textcon.h` paints the screen black and back.
+* `backlight.h`, defined by `backlight.c`: `backlight_register` for a driver, with its `get` and `set`; `backlight_init`, which probes the drivers; `backlight_console_blank`; and the attributes' show and store, which `sys/fs/procfs.c` calls for `/sys/class/backlight`. `intelbl_init` is the PC's driver.
 
 The boot log records the console's choices:
 
 * `console: framebuffer: 1366x768, 32 bits a pixel; the font at 2x, 85x24 cells`, or `console: framebuffer: not one this console draws; the screen stays as the loader left it`.
 * `vga: font: loaded: code page 437 box drawing with Cyrillic` or `vga: font: kept: the adapter's code page 437`, and on a framebuffer `console: font: drawn: code page 437 box drawing with Cyrillic`.
 * `cpu: page attributes: 0x0007040600070106; the framebuffer is mapped write-combining`, or the same line ending in `uncached`, or `cpu: page attributes: none; the framebuffer is mapped uncached`.
+* `console: blank: after 600 seconds without input`, or `console: blank: never` under `consoleblank=0`; then `console: blanked: N, CAUSE` and `console: unblanked: N, CAUSE` at each blank and its end, N the count since boot.
+* On a machine with Intel graphics at 0:2.0, `backlight: intel_backlight: lynxpoint-lp PWM, levels 0 to 937, at 937`, or `backlight: intel: none: REASON`.
 
 ## Design
 
@@ -87,6 +91,20 @@ On the VGA, `fb_enter` saves the text font from plane 2, programs mode 13h's reg
 
 On a framebuffer console there may be no VGA, as on a machine booted by UEFI, and the VGA's aperture at 0xA0000 may alias the screen the console draws on, so `vga_gfx.c` leaves the hardware alone and the picture is memory of its own (`gfx_shadow`, 64000 bytes). `fbcon_gfx_begin` paints the screen black and centers the picture at the largest whole scale at which 320x200 fits, 3 on a 1366x768 screen, lowered if need be until a scaled line fits its line buffer of 16384 bytes. Until the first palette the picture's first sixteen colors are the console's and the rest black; `fbcon_gfx_palette` converts a palette to the screen's pixels. Each write is drawn by `fbcon_gfx_frame`, which builds each scaled line once and copies it as many times as the scale. No cell is drawn while the picture has the screen; `fbcon_gfx_end` paints the screen black and draws every cell again, and `fb_exit` then clears the text screen.
 
+### Blanking
+
+`blank.c` keeps the time without input after which the screen blanks, 600 seconds unless `consoleblank=` says otherwise and 0 for never, and the tick of the last key or mouse move, which `console_poke` records from `input_key` and `mouse_push_packet`. The boot processor's tick calls `blank_tick` through `tty_console_poll`: it blanks the screen once that time has passed since the last poke, and unblanks it when a poke asked for that since. A poke only asks, since it comes from an interrupt handler and a repaint of a framebuffer is a store for each of its million or so pixels; the tick does the work under the console's lock, as a byte written to the screen is, at most 10 ms later. A blank and an unblank each give every backlight its new state (`backlight_console_blank`) and write a record to the log with their count.
+
+On the VGA's text mode `textcon_blank` clears bit 5 of the attribute controller's index, the palette address source: the screen shows the overscan color, black, and the adapter's memory, start address and cursor are untouched, so output goes on and shows at the unblank; setting the bit again shows it. QEMU draws a blank screen for this bit and not for the sequencer's screen-off bit. On a framebuffer `fbcon_blank` paints the screen black and draws no cell until the unblank, which draws every cell again, as the end of the `/fb` picture does. The screen does not blank while a program owns `/fb`, and taking `/fb` unblanks it first.
+
+`ESC [ 9 ; N ]` sets the time to N minutes, at most 60, and restarts the count, as on Linux. TIOCLINUX's subcode 14 blanks the screen until subcode 4, and a key does not end that blank, as Linux's `ignore_poke` does; subcode 15 says whether it is blank.
+
+### The backlight
+
+`backlight.c` keeps, for each backlight, the level root set and `bl_power` as root wrote it, and gives the driver the level the panel is to have: the level set, or 0 while `bl_power` is 4 or the console is blank. A driver gives `get`, which reads the hardware's level for `actual_brightness` and for the level at registration, and `set`; both run with the class's spinlock held and interrupts off.
+
+`intelbl.c` drives the PWM of an Intel PCH as Linux's i915 does in `lpt_setup_backlight`, for the Lynx Point and Wildcat Point that `board.c` identifies, the PCH of Haswell and Broadwell laptops. `BLC_PWM_PCH_CTL2`, at 0xC8254 of the graphics device's BAR 0, has the period in its high half, which is `max_brightness`, and the duty cycle in its low half, which is the level; with the polarity bit of `BLC_PWM_PCH_CTL1` the duty cycle is the dark part, and the driver inverts it. The driver registers `intel_backlight` only when the graphics device at 0:2.0 is Intel's and the firmware left the PCH's PWM on with a period, so on any other machine it writes nothing. When the processor's own PWM still drives the panel, which the PCH's override bit clear and `BLC_PWM_CPU_CTL2`'s enable bit set show, its duty cycle goes to the PCH's, the override is set and the processor's PWM turned off, as i915 does. It maps the two pages of BAR 0 that hold the registers, at 0x48000 and 0xC8000. A write changes the duty cycle alone; on the Lenovo G50-70 the firmware leaves 0x03A903A9, a period of 937 at full duty.
+
 ## Limits
 
 * `/fb` has one mode, 320x200 at a byte a pixel through a palette of 256 colors.
@@ -96,17 +114,21 @@ On a framebuffer console there may be no VGA, as on a machine booted by UEFI, an
 * The background has eight colors.
 * The scrollback is 512 lines, the screen's own included, and a clear empties it. Output written while the screen is scrolled back shows when it returns to the live area.
 * The window size is set once at boot. TIOCSWINSZ on the console changes what TIOCGWINSZ reports and leaves the screen as it is.
+* The backlight is driven only through an Intel PCH's PWM, Lynx Point or Wildcat Point; the ACPI video bus's `_BCM`, which on the Lenovo asks the graphics driver through its OpRegion, is not used.
+* Only the console blanks; the serial port and a program's picture through `/fb` do not.
 
 ## Tests
 
 The host tests run with `tests/run host`:
 
 * `tests/host/vga_text_hosttest.c`: the driver against a model adapter whose stores and port writes are counted: a byte as one cell, a scroll as one line and the start address, the copy once in 180 scrolls, the redraw by a scroll back and a clear, the held cursor placed once, and the pending wrap.
-* `tests/host/fbcon_hosttest.c`: the console drawn into a framebuffer in memory: glyphs in their colors, the cursor's two lines, a Cyrillic letter reached through UTF-8, the scale and the cells within 240 by 64, pixels of 32, 24, 16 and 8 bits, the centering, what a scroll and a clear draw, the scrollback, and the mode 13h picture's scale and place.
+* `tests/host/fbcon_hosttest.c`: the console drawn into a framebuffer in memory: glyphs in their colors, the cursor's two lines, a Cyrillic letter reached through UTF-8, the scale and the cells within 240 by 64, pixels of 32, 24, 16 and 8 bits, the centering, what a scroll and a clear draw, the scrollback, the mode 13h picture's scale and place, and the blank screen black until the unblank draws every cell again.
 * `tests/host/vga_gfx_hosttest.c`: the mode changes with a keyboard interrupt pending at each port access, and the font loaded into the character memory, read back, and not loaded in a graphics mode.
+* `tests/host/intelbl_hosttest.c`: the Intel PCH backlight against a model of its PWM registers: the Lenovo's PWM taken without a write, a level written as the duty cycle with the period kept, the polarity bit, a PWM left off or with no period refused, and a PWM the processor drives handed to the PCH's.
 
 The suites, each run with `tests/run NAME`:
 
 * `console`: the screen's answers to ttyprobe's queries.
 * `uefi`: a machine booted by OVMF, with the console on its framebuffer. A dump of the screen must show the login prompt in the kernel's font, the page attribute table must read back with entry 1 write-combining, and Doom's picture must be on the screen in its palette's colors while it runs, and the console's colors again after it ends.
 * `doom`: the game, which draws through `/fb`, on the VGA; it judges the game's memory and exit status and not the picture.
+* `screen`: the screen blanked by TIOCLINUX, by the escape and by `consoleblank=`, each judged by the kernel's records of its blanks and by QMP's screen dumps, black while it is blank and showing the console before and after; a key does not end TIOCLINUX's blank and does end the others.

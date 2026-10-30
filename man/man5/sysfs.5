@@ -160,13 +160,18 @@ the level set, which takes a write of a level from 0 to
 .Pa actual_brightness ,
 the level the hardware has;
 .Pa bl_power ,
-0 while the backlight is on and 4 while it is off, which takes a write of
-either; and
+0 while root leaves the backlight on and 4 once root turns it off, which
+takes a write of either; the backlight is off while the console is blank
+too, and
+.Pa bl_power
+still says what root wrote; and
 .Pa type ,
 .Ql raw ,
 a level of the hardware's own.
 Another value is
 .Er EINVAL .
+See
+.Xr backlight 4 .
 .It Pa /sys/power/state
 The sleep states,
 .Ql freeze mem .
@@ -372,4 +377,5 @@ MODALIAS=pci:v00008086d00000A04sv000017AAsd00003978bc06sc00i00
 .Ed
 .Sh SEE ALSO
 .Xr busybox-util-linux 1 ,
+.Xr backlight 4 ,
 .Xr proc 5

@@ -1,0 +1,94 @@
+.Dd October 30, 2026
+.Dt BACKLIGHT 4
+.Os
+.Sh NAME
+.Nm backlight
+.Nd the panel's backlight
+.Sh SYNOPSIS
+.Pa /sys/class/backlight/NAME/brightness
+.Pp
+.Pa /sys/class/backlight/NAME/bl_power
+.Sh DESCRIPTION
+A backlight lights a laptop's panel, and its level sets how bright the
+screen is.
+The kernel gives each backlight a driver found at boot as a directory of
+.Pa /sys/class/backlight ,
+named by the driver, as Linux does, so that a program written for Linux's
+backlight class works unchanged:
+.Bl -tag -width actual_brightness
+.It Pa max_brightness
+The highest level.
+.It Pa brightness
+The level set, from 0 to
+.Pa max_brightness ;
+root sets it with a write of a decimal number.
+0 is as dark as the hardware goes, which may be dark enough to read
+nothing on the screen.
+.It Pa actual_brightness
+The level the hardware has: the level set, or 0 while the backlight is
+off.
+.It Pa bl_power
+0 while root leaves the backlight on and 4 once root turns it off, as
+Linux's
+.Dv FB_BLANK_UNBLANK
+and
+.Dv FB_BLANK_POWERDOWN ;
+root writes either.
+.It Pa type
+.Ql raw :
+the levels are the hardware's own, not a scale of perceived brightness.
+.El
+.Pp
+The backlight is also off while the console is blank, whatever
+.Pa bl_power
+says, and comes back at the level set when the console is shown again;
+see
+.Xr console 4 .
+The level is not kept across a reboot by the kernel; the system's init
+saves it at shutdown and writes it back at boot.
+.Ss intel_backlight
+On a laptop whose Intel graphics and chipset are of the Haswell and
+Broadwell generation, the chipset a Lynx Point or Wildcat Point, the
+kernel drives the chipset's pulse-width modulator, which lights the panel,
+as Linux's i915 driver does, without a graphics driver.
+The backlight is
+.Pa intel_backlight ,
+and its levels are the modulator's period, the duty cycle being the level.
+The kernel takes the modulator only when the graphics device at 0:2.0 is
+Intel's and the firmware left the modulator on with a period, as it does
+to light its own picture; on another machine nothing is written.
+A modulator that the processor still drives in place of the chipset is
+handed to the chipset's at the processor's level first.
+On the Lenovo G50-70 the levels run from 0 to 937.
+.Sh FILES
+.Bl -tag -width /sys/class/backlight/NAME
+.It Pa /sys/class/backlight/NAME
+The backlight's attributes; see
+.Xr sysfs 5 .
+.El
+.Sh DIAGNOSTICS
+The boot log names the backlight and its levels:
+.Bd -literal -offset indent
+backlight: intel_backlight: lynxpoint-lp PWM, levels 0 to 937, at 937
+.Ed
+.Pp
+or, on an Intel machine whose modulator the kernel does not take, why:
+.Bd -literal -offset indent
+backlight: intel: none: the firmware left the PWM off
+.Ed
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er EINVAL
+A write of
+.Pa brightness
+that is not a level from 0 to
+.Pa max_brightness ,
+or of
+.Pa bl_power
+that is not 0 or 4.
+.It Bq Er EACCES
+A write by a user other than root.
+.El
+.Sh SEE ALSO
+.Xr console 4 ,
+.Xr sysfs 5
