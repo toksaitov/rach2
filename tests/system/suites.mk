@@ -1557,7 +1557,7 @@ $(LOGIN_TEST_SHELL): $(DEMO_CREDS) $(ARCH_BUILD)/utils/sbin/init-shell krffs/man
 
 # os-real with the applet probe of machine.procfiles, in os-real's size: its
 # manifest without Doom's WAD, which the case never reads, and with the probe,
-# since os-real on x86-64 has too little room left to take the probe as well.
+# so that the probe takes none of the room os-real keeps free (Makefile).
 # The copy keeps the manifest's name, by which tools/inspect/setid.allow
 # knows it.
 $(IMAGES_DIR)/procfiles-real.krffs: $(ARCH_BUILD)/tests/musl/procfilesmusl $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) krffs/manifests/procfiles-extra.manifest $(IMAGE_TOOLS) $(MAN_ALL) | preflight musl-programs krffs rach2 $(MANIFEST_PARTS_os_real)

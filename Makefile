@@ -1234,24 +1234,40 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 
 # The os-real image: the BusyBox shell and tools, the Dropbear SSH server and
 # client, TinyCC and pdpmake, Doom, the manual, the sources under /src, and an
-# /etc and /root tree. 20 MiB on both architectures: with Doom's WAD the tree
-# takes 19.1 MiB on i686 and 19.9 MiB on x86-64, whose programs are larger.
-# ACPICA's core is staged as an archive of 0.45 MiB for that reason
-# (vendor/acpica/build_acpica.sh).
-# The WAD is not in the repository. A build without it, as in a fresh clone,
-# must leave OS_REAL_WAD_KIB free for it, so a tree that outgrows the image
-# fails there too and not only where the WAD is present.
-# The module sits in the kernel's 32 MiB window, where the DMA buffers and the
-# kernel stacks are carved, so it is kept small; and the manual's aliases are
-# a table and not files, since the RAM root and a KRFFS disk walk every node
-# on a lookup and hundreds of alias files would make the self-build suite
-# five times slower. gen_demo_key.sh provisions the SSH login keys and
+# /etc and /root tree. With Doom's WAD the tree takes 19.2 MiB on i686 and
+# 20.0 MiB on x86-64, whose programs are larger, so the image is 20 MiB on
+# i686 and 22 on x86-64. ACPICA's core is staged as an archive of 0.45 MiB to
+# keep the tree small (vendor/acpica/build_acpica.sh).
+# The image is the root the running system writes, /tmp among it, so the build
+# refuses one with less than OS_REAL_FREE_KIB free; the man case alone keeps
+# two of the manual's pages there at once, the largest 48 KiB. The WAD is not
+# in the repository. A build without it, as in a fresh clone, must leave
+# OS_REAL_WAD_KIB more free for it, so a tree that outgrows the image fails
+# there too and not only where the WAD is present.
+# The module sits in the kernel's 32 MiB window, below the boot's page tables
+# and the frames whose address a device is given, which alloc_kernel_frame
+# takes from the window's top for the block requests, the page cache and the
+# drivers' buffers; the kernel stacks and the heap come from above the window
+# first. Booted by QEMU with 128 MiB, the kernel ends at 5.9 MiB on i686 and
+# 6.4 MiB on x86-64, the module follows it, the boot's tables take 1.2 MiB and
+# 0.45 MiB, and 4.9 MiB and 3.1 MiB are left for those frames. On i686 the
+# frame table, 4 bytes for each 4 KiB frame below the top of usable memory, is
+# among the boot's tables, so a machine with 4 GiB leaves it about 1 MiB; the
+# module is kept small for that reason. The manual's aliases are a table and
+# not files, since the RAM root and a KRFFS disk walk every node on a lookup
+# and hundreds of alias files would make the self-build suite five times
+# slower. gen_demo_key.sh provisions the SSH login keys and
 # gen_demo_password.sh the account passwords and /etc/shadow, each when
 # absent; the check targets require each vendored binary it stages.
+ifeq ($(ARCH),x86_64)
+OS_REAL_MIB = 22
+else
 OS_REAL_MIB = 20
+endif
+OS_REAL_FREE_KIB = 512
 OS_REAL_WAD_KIB = 4100
 $(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
-	$(MKIMAGE) krffs/manifests/os-real.manifest $@ $(OS_REAL_MIB) $(if $(wildcard ports/doom/doom1.wad),,$(OS_REAL_WAD_KIB))
+	$(MKIMAGE) krffs/manifests/os-real.manifest $@ $(OS_REAL_MIB) $$(($(OS_REAL_FREE_KIB)$(if $(wildcard ports/doom/doom1.wad),, + $(OS_REAL_WAD_KIB))))
 
 # The same manifest as an ext2 volume, which `rach2.root=ext2` mounts as the
 # root: 1 GiB, sparse on the host. tools/image/mkext2.sh stages it through
