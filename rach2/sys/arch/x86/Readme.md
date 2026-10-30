@@ -37,7 +37,7 @@ The platform reads these words of the kernel command line, which [cmdline.md](..
 * `rach2.nofxsr` (`fpu.c`): on i686, `fnsave` saves the x87 state and SSE is off. The x86-64 kernel ignores it.
 * `rach2.noxsave` (`fpu.c`): `fxsave` saves the state on a processor that has XSAVE, and a program sees no AVX.
 * `rach2.board=NAME` (`board.c`): only the power profile `NAME` is tried, and the chipset must still match it; an unknown name, or a chipset that does not match, leaves the machine with no profile.
-* `rach2.nosci` (`board.c`): the system control interrupt's line is left unmasked.
+* `rach2.nosci` and `rach2.noacpica` ([ACPI](../../acpi/Readme.md)): ACPICA takes no system control interrupt, whose line then stays masked, or is left out.
 * `rach2.resetskip=N` (`power.c`): one digit; a restart leaves out its first `N` methods before the keyboard controller's pulse, which it never leaves out.
 * `rach2.nomouse` (`platform.c`): the PS/2 mouse is not probed.
 * `rach2.diag` and `rach2.apicdiag` (`diag.c`, `apicdiag.c`): the boot reports described below. Neither is a command of the debug shell.
@@ -80,7 +80,7 @@ An exception in user mode becomes a signal ([signals](../../proc/signal.Readme.m
 
 `acpi_init` (`acpi.c`) takes the RSDP from the boot record, or searches the first KiB of the extended BIOS data area and then 0xE0000 to 0xFFFFF. It walks the XSDT, or the RSDT where there is no good XSDT, and reads the first MADT, FADT, HPET table and MCFG, and the DSDT the FADT gives. A table is read only after its length and checksum pass, and one that fails is logged and left out. `struct acpi_info` (`acpi.h`) keeps the result: the processors, I/O APICs, interrupt source overrides and NMI wiring of the MADT; the PM1 control registers, the PM timer, the reset register, the SMI command and the sleep control register of the FADT; the HPET's address; and the MCFG's windows.
 
-The two sleep types of `\_S5` come from the DSDT without an interpreter: `acpi_s5_find` searches its bytes for the name `_S5_` after NameOp, followed by a package whose first two elements are integer constants of at most 7. `acpi_isa_route` gives each ISA line its global system interrupt, trigger and polarity from the MADT's overrides, a line a PCI device uses being level-triggered and active low unless an override gives the polarity.
+ACPICA, in [`sys/acpi/`](../../acpi/Readme.md), interprets the DSDT and the SSDTs once the scheduler runs, from the RSDP `acpi_init` found. The two sleep types of `\_S5` come from the DSDT without it, so that the power off works with ACPICA left out or refused: `acpi_s5_find` searches its bytes for the name `_S5_` after NameOp, followed by a package whose first two elements are integer constants of at most 7. `acpi_isa_route` gives each ISA line its global system interrupt, trigger and polarity from the MADT's overrides, a line a PCI device uses being level-triggered and active low unless an override gives the polarity.
 
 `smbios.c` reads the BIOS vendor's string, through the UEFI configuration table's entry point or by a search of 0xF0000 to 0xFFFFF, for the restart below.
 
@@ -141,7 +141,7 @@ x86-64 uses the 64-bit forms of the instructions. `fpu_cpu_setup` writes CR0, CR
 | `lynxpoint-lp` | 00:1f.0 | 8086:9C40 to 9C4F | 7 |
 | `wildcatpoint-lp` | 00:1f.0 | 8086:9CC0 to 9CCF | 7 |
 
-A chipset that matches a row is used only when its ACPI range decodes, its base register is not zero, and `PM1_CNT`, four bytes past the base, does not read all ones; otherwise the log gives the reason. Where `PM1_CNT`'s `SCI_EN` is clear and the profile has an SMI command, the profile's ACPI enable is written to port 0xB2 and `SCI_EN` is awaited, with a bound. With `SCI_EN` set, the SCI's line, 9 on the PIIX4 and the one register 0x44 selects on the others, is masked unless `rach2.nosci` is given, since no handler clears it and a level-triggered line left asserted would be taken for ever. When no row matches, the log gives the identity of 00:1f.0, so that a row can be added.
+A chipset that matches a row is used only when its ACPI range decodes, its base register is not zero, and `PM1_CNT`, four bytes past the base, does not read all ones; otherwise the log gives the reason. Where `PM1_CNT`'s `SCI_EN` is clear and the profile has an SMI command, the profile's ACPI enable is written to port 0xB2 and `SCI_EN` is awaited, with a bound. With `SCI_EN` set, the SCI's line, 9 on the PIIX4 and the one register 0x44 selects on the others, is masked, and held masked once the I/O APIC takes the lines (`isr_line_hold`), since until a handler clears it a level-triggered line left asserted would be taken for ever. ACPICA's OS layer releases it when it installs its handler (`isr_line_release`, which routes it level-triggered); under `rach2.noacpica` or `rach2.nosci` it stays masked. When no row matches, the log gives the identity of 00:1f.0, so that a row can be added.
 
 `power_stop` (`power.c`) shows records of level `INFO` on the screen again, turns interrupts off, stops the other processors, and does what it is given. A request is a write with no answer, so each is followed by a loop of a fixed count before the next is tried:
 
@@ -170,7 +170,7 @@ Both boot reports read and print and configure nothing. `platform_report` runs t
 
 ## Limits
 
-* There is no AML interpreter, and of the DSDT only `\_S5` is read. Without `_PRT` a device without MSI is served on the ISA line its interrupt line register gives, and one whose interrupt reaches only an I/O APIC input above 15 takes none. No handler takes the SCI, so the power button and thermal events are not handled.
+* `acpi.c` reads only `\_S5` of the DSDT, and the kernel asks ACPICA for no `_PRT`: a device without MSI is served on the ISA line its interrupt line register gives, and one whose interrupt reaches only an I/O APIC input above 15 takes none.
 * The local APIC is used in xAPIC mode alone, so a processor the firmware left in x2APIC mode runs on the 8259 pair, without messages, on one processor.
 * Every line and every message goes to the boot processor.
 * The ACPI record keeps 64 processors, 8 I/O APICs, 16 overrides, 8 NMI inputs and 8 NMI sources, 32 tables and 4 MCFG windows; the rest are counted and left out. A table longer than 4 MiB is not read.

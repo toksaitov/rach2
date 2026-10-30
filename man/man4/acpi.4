@@ -1,4 +1,4 @@
-.Dd October 4, 2026
+.Dd October 30, 2026
 .Dt ACPI 4
 .Os
 .Sh NAME
@@ -10,7 +10,9 @@
 Kernel command line:
 .Ql maxcpus=N ,
 .Ql noapic ,
+.Ql rach2.noacpica ,
 .Ql rach2.nomsi ,
+.Ql rach2.nosci ,
 .Ql rach2.resetskip=N
 .Sh DESCRIPTION
 At boot the kernel reads the machine's ACPI tables: the root system
@@ -18,11 +20,29 @@ description pointer that the boot loader gives or that the BIOS left in
 its data area, the RSDT or the XSDT it leads to, and from that the MADT,
 the FADT, the HPET table, the MCFG and the FADT's DSDT.
 A table whose length or checksum fails is left out and logged.
-There is no AML interpreter.
-The one value read from the DSDT is the sleep type pair of the soft-off
-state,
+The one value this reader takes from the DSDT is the sleep type pair of
+the soft-off state,
 .Ql \e_S5 ,
 found by a search of its bytes.
+.Pp
+Once the scheduler runs, ACPICA, Intel's interpreter of ACPI, loads the
+DSDT and the SSDTs into its namespace, puts the machine in ACPI mode, runs
+the objects'
+.Ql _STA
+and
+.Ql _INI
+methods, tells the firmware the interrupt controller in use through
+.Ql \e_PIC ,
+and enables the general-purpose events that have methods.
+It takes the system control interrupt, the SCI, whose line the kernel
+keeps masked until then; the fixed power button's press is logged.
+Work ACPICA defers, such as a notify, runs on the kernel thread
+.Ql kacpid ,
+made once init has pid 1.
+.Ql rach2.noacpica
+leaves ACPICA out, and
+.Ql rach2.nosci
+brings it up without a handler for the SCI, whose line then stays masked.
 .Pp
 Where the MADT lists an I/O APIC, the I/O APIC takes the machine's
 interrupt lines 0 to 15 and the 8259 pair is masked.
@@ -136,6 +156,19 @@ I/O APIC.
 .It Ql pit: none: channel 0 does not count
 The machine has no 8254; short waits are measured by the HPET or the PM
 timer.
+.It Ql acpi: acpica: N objects, E errors
+ACPICA is up, with N objects in its namespace; E counts the errors it
+logged on the way.
+.It Ql acpi: acpica: refused: STEP: EXCEPTION
+A step of ACPICA's start failed, and ACPICA stays down.
+.It Ql acpi: acpica: skipped: rach2.noacpica
+ACPICA was left out.
+.It Ql acpi: acpica: TEXT
+A line of ACPICA's own log; an error or exception counts in E.
+.It Ql acpi: sci: line N
+ACPICA's handler took the SCI on line N.
+.It Ql acpi: event: power button
+The fixed power button was pressed.
 .It Ql poweroff: acpi: sleep types A and B
 The power off writes
 .Ql \e_S5 's
@@ -151,8 +184,7 @@ The restart writes the FADT's reset register.
 .Xr proc 5 ,
 .Xr halt 8
 .Sh CAVEATS
-Without an AML interpreter the kernel does not read a PCI device's
-interrupt routing,
+The kernel does not ask ACPICA for a PCI device's interrupt routing,
 .Ql _PRT .
 A device without MSI is served on the ISA line its interrupt line
 register gives; one whose interrupt reaches only the I/O APIC's inputs

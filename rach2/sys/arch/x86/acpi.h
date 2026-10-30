@@ -9,9 +9,9 @@
  * overrides and NMI wiring of the MADT; the power registers, the PM timer,
  * the reset register and the boot flags of the FADT; the HPET's address; the
  * PCI configuration windows of the MCFG; and the sleep type of the soft-off
- * state, \_S5, found by a search of the DSDT's bytes. There is no AML
- * interpreter, so nothing else the DSDT says is known: no _PRT, no _CRS, no
- * methods.
+ * state, \_S5, found by a search of the DSDT's bytes, so that the power off
+ * needs no interpreter. ACPICA (sys/acpi/) interprets the rest of the DSDT
+ * once the scheduler runs, from the RSDP this record keeps.
  *
  * Every table is reached through the kernel's MMIO mapping and checked
  * before a field of it is read: its length against its header and against

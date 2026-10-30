@@ -73,7 +73,7 @@ Each thread is a `struct process` (`sys/proc/process.h`), and the threads of one
 
 ### Devices
 
-The PC platform, `sys/arch/x86/`, drives what every PC has around the processor: ACPI, the interrupt controllers, the timers and clocks, PCI configuration, the other processors, COM1, and the power off and restart. Shared code reaches it only through headers, so that another machine would replace that directory alone ([the PC platform](sys/arch/x86/Readme.md)). `sys/pci.c` finds the drivers' devices on the buses.
+The PC platform, `sys/arch/x86/`, drives what every PC has around the processor: ACPI, the interrupt controllers, the timers and clocks, PCI configuration, the other processors, COM1, and the power off and restart. Shared code reaches it only through headers, so that another machine would replace that directory alone ([the PC platform](sys/arch/x86/Readme.md)). ACPICA, Intel's interpreter of ACPI, runs the firmware's methods and takes the SCI once the scheduler is up ([ACPI](sys/acpi/Readme.md)). `sys/pci.c` finds the drivers' devices on the buses.
 
 Every disk is a `struct block_device`, a sector count and a table of functions. The ATA, AHCI and NVMe drivers publish one for each disk, the USB mass-storage driver one for each stick, and a partition is a view over its disk ([block storage](sys/block/Readme.md)). The USB stack drives keyboards, mice, flash drives and hubs on xHCI controllers ([USB](sys/usb/Readme.md)). Keystrokes and COM1's bytes reach the terminal layer, whose line discipline edits and echoes a line and turns the signal characters into signals ([terminals](sys/tty/Readme.md)). The console is drawn in VGA text or on the loader's framebuffer ([display](sys/display/Readme.md)), and sound is HDA, the Sound Blaster 16 or the PC speaker ([audio](sys/audio/Readme.md)).
 
@@ -100,7 +100,7 @@ The cross compiler of `mk/arch.mk` compiles the kernel with `-ansi -nostdlib -no
 
 ## Limits
 
-* The kernel calls no UEFI service, since GRUB leaves the firmware's boot services first, and has no AML interpreter ([the PC platform](sys/arch/x86/Readme.md)).
+* The kernel calls no UEFI service, since GRUB leaves the firmware's boot services first ([the PC platform](sys/arch/x86/Readme.md)).
 * It has no swap, no IPv6 and no loadable modules.
 * One lock covers the kernel, so kernel code runs on one processor at a time.
 * The scheduler has one policy and reads no nice value or I/O priority.

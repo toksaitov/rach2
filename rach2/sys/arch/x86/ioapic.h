@@ -15,8 +15,8 @@
  * the MADT's overrides give it, with their polarity and trigger; a line a
  * PCI device's interrupt line register gives is level-triggered, since
  * SeaBIOS and OVMF route a device's PIRQ to that ISA line and set the
- * register to it. Without an AML interpreter the _PRT is not read, so a
- * device whose PIRQ reaches only the inputs above 15 is not routed.
+ * register to it. The _PRT is not read, so a device whose PIRQ reaches only
+ * the inputs above 15 is not routed.
  *
  * Every input starts masked. A line is unmasked when a handler is
  * registered on its vector (isr.c), and goes to the processor this kernel
