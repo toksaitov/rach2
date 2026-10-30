@@ -5449,18 +5449,22 @@ static int64_t sysattr_number(const char *s, uint32_t len, int *relative)
  * another state is -EINVAL. The whole count is taken, or the write fails
  * with -EFAULT, -EIO for a clock that cannot be read or cleared, or one of
  * the errors above. A backlight's brightness and bl_power take what
- * `backlight_store` takes, and have its errors.
+ * `backlight_store` takes, and have its errors. A write of more than 31
+ * bytes, which would be read in part, is -EINVAL and changes nothing.
  */
 static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
     char text[32];
-    uint32_t n = count < sizeof(text) - 1 ? count : (uint32_t)sizeof(text) - 1;
+    uint32_t n = count;
     rtc_time_t now;
     int64_t v;
     int relative;
     int32_t rc;
 
+    if (count > sizeof(text) - 1) {
+        return -EINVAL;
+    }
     k_memset(text, 0, sizeof(text));
     if (copy_from_user(text, buf, n) != 0) {
         return -EFAULT;

@@ -25,6 +25,9 @@ the panel's backlights under
 and the sleep states under
 .Pa /sys/power .
 Any user may read it; root writes the files of mode 0644.
+A write of more than 31 bytes to one of them is
+.Er EINVAL
+and changes nothing.
 .Bl -tag -width Ds
 .It Pa /sys/bus/pci/devices/0000:BB:DD.F
 A symbolic link for each PCI function, named by its bus, device and
