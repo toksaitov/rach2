@@ -872,6 +872,53 @@ static void address_begin(struct usb_device_state *d)
 }
 
 /**
+ * The step of ST_RECOVERY: once `d`'s reset recovery has ended, address it
+ * again on the slot a failed try was given, or ask for its first slot.
+ */
+static void recovery_step(struct usb_device_state *d)
+{
+    if ((int32_t)(core_ms - d->ready_at) < 0) {
+        return;
+    }
+    if (d->slot > 0) {
+        address_begin(d);
+        return;
+    }
+    if (location_of(d, &d->where) != 0) {
+        fail(d, "it is deeper in the tree than a route string can say");
+        return;
+    }
+    if (xhci_device_open(d->hc, &d->where, d->speed) != 0) {
+        if (expired(d)) {
+            fail(d, "no slot could be asked for");
+        }
+        return;
+    }
+    d->state = ST_SLOT;
+    arm(d);
+}
+
+/**
+ * The step of ST_READDRESS: once the command ring is free of the failed
+ * Address Device and its abort, reset `d`'s port again for another try.
+ */
+static void readdress_step(struct usb_device_state *d)
+{
+    if (!xhci_command_free(d->hc)) {
+        if (expired(d)) {
+            fail(d, "the controller would not address the device");
+        }
+        return;
+    }
+    if (d->ops->reset_begin(d->hc, d->owner, d->port) != 0) {
+        fail(d, "the port would not begin a reset");
+        return;
+    }
+    d->state = ST_RESETTING;
+    arm(d);
+}
+
+/**
  * One step of a running device: a keyboard's or mouse's report handed on and
  * the next one asked for.
  *
@@ -1061,41 +1108,11 @@ static void step_device(struct usb_device_state *d)
         return;
 
     case ST_RECOVERY:
-        if ((int32_t)(core_ms - d->ready_at) < 0) {
-            return;
-        }
-        if (d->slot > 0) {
-            address_begin(d); /* a retry, on the slot the first try was given */
-            return;
-        }
-        if (location_of(d, &d->where) != 0) {
-            fail(d, "it is deeper in the tree than a route string can say");
-            return;
-        }
-        if (xhci_device_open(d->hc, &d->where, d->speed) != 0) {
-            if (!expired(d)) {
-                return;
-            }
-            fail(d, "no slot could be asked for");
-            return;
-        }
-        d->state = ST_SLOT;
-        arm(d);
+        recovery_step(d);
         return;
 
     case ST_READDRESS:
-        if (!xhci_command_free(d->hc)) {
-            if (expired(d)) {
-                fail(d, "the controller would not address the device");
-            }
-            return; /* the abort of the last try has not ended */
-        }
-        if (d->ops->reset_begin(d->hc, d->owner, d->port) != 0) {
-            fail(d, "the port would not begin a reset");
-            return;
-        }
-        d->state = ST_RESETTING;
-        arm(d);
+        readdress_step(d);
         return;
 
     case ST_SLOTWAIT:
