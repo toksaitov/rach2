@@ -24,6 +24,7 @@ The programs of os-real, as [its manifest](../krffs/manifests/os-real.manifest) 
 | `loopctl` | [loopctl(8)](man8/loopctl.8) | in-house | yes |  |
 | `make` | [make(1)](man1/make.1) | pdpmake |  |  |
 | `man` | [man(1)](man1/man.1) | in-house (`man.script`) |  | yes |
+| `mixer` | [mixer(1)](man1/mixer.1) | in-house | yes | yes |
 | `mke2fs` | [mke2fs(8)](man8/mke2fs.8) | e2fsprogs |  |  |
 | `passwd` | [passwd(1)](man1/passwd.1) | BusyBox (`busybox-suid`) | in-house | yes |
 | `ping` | [ping(1)](man1/ping.1) | in-house | yes | yes |
@@ -72,7 +73,7 @@ The programs os-simple or the recovery image stages that os-real does not, with 
 
 ### BusyBox applets
 
-The `/bin/busybox` of os-real, the recovery image and the GNU root has 320 applets. Its ash finds an applet before it searches `PATH`, so a KRFFS image, which has no symbolic links, needs no file for each applet ([BusyBox](../vendor/busybox/Readme.md)); on the GNU root, where `/bin/sh` is bash, each applet that no port provides is a link to `/bin/busybox`. Each row is a page and the applets it covers.
+The `/bin/busybox` of os-real, the recovery image and the GNU root has 321 applets. Its ash finds an applet before it searches `PATH`, so a KRFFS image, which has no symbolic links, needs no file for each applet ([BusyBox](../vendor/busybox/Readme.md)); on the GNU root, where `/bin/sh` is bash, each applet that no port provides is a link to `/bin/busybox`. Each row is a page and the applets it covers.
 
 | Page | Applets |
 | --- | --- |
@@ -96,7 +97,7 @@ The `/bin/busybox` of os-real, the recovery image and the GNU root has 320 apple
 | [busybox-runit(8)](man8/busybox-runit.8) | `chpst`, `envdir`, `envuidgid`, `runsv`, `runsvdir`, `setuidgid`, `softlimit`, `sv`, `svc`, `svlogd`, `svok` |
 | [busybox-shell(1)](man1/busybox-shell.1) | `ash`, `cttyhack`, `hush` |
 | [busybox-sysklogd(8)](man8/busybox-sysklogd.8) | `klogd`, `logger`, `logread`, `syslogd` |
-| [busybox-util-linux(1)](man1/busybox-util-linux.1) | `blkid`, `cal`, `chrt`, `fallocate`, `fatattr`, `fbset`, `fdflush`, `fdformat`, `fdisk`, `findfs`, `flock`, `freeramdisk`, `fsck.minix`, `getopt`, `hd`, `hexdump`, `hwclock`, `ipcrm`, `ipcs`, `last`, `linux32`, `linux64`, `lspci`, `lsusb`, `mesg`, `mkdosfs`, `mkfs.minix`, `mkfs.vfat`, `mkswap`, `more`, `mountpoint`, `nologin`, `nsenter`, `pivot_root`, `rdate`, `rdev`, `readprofile`, `renice`, `rev`, `rtcwake`, `script`, `scriptreplay`, `setarch`, `setsid`, `swapoff`, `swapon`, `taskset`, `unshare`, `xxd` |
+| [busybox-util-linux(1)](man1/busybox-util-linux.1) | `acpid`, `blkid`, `cal`, `chrt`, `fallocate`, `fatattr`, `fbset`, `fdflush`, `fdformat`, `fdisk`, `findfs`, `flock`, `freeramdisk`, `fsck.minix`, `getopt`, `hd`, `hexdump`, `hwclock`, `ipcrm`, `ipcs`, `last`, `linux32`, `linux64`, `lspci`, `lsusb`, `mesg`, `mkdosfs`, `mkfs.minix`, `mkfs.vfat`, `mkswap`, `more`, `mountpoint`, `nologin`, `nsenter`, `pivot_root`, `rdate`, `rdev`, `readprofile`, `renice`, `rev`, `rtcwake`, `script`, `scriptreplay`, `setarch`, `setsid`, `swapoff`, `swapon`, `taskset`, `unshare`, `xxd` |
 | [halt(8)](man8/halt.8) | `halt` |
 | [httpd(8)](man8/httpd.8) | `httpd` |
 | [init(8)](man8/init.8) | `init` |

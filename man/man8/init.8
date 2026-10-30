@@ -1,4 +1,4 @@
-.Dd October 1, 2026
+.Dd October 30, 2026
 .Dt INIT 8
 .Os
 .Sh NAME
@@ -158,6 +158,62 @@ It starts
 .Pa /bin/update
 and keeps it running.
 .Pp
+Every build keeps BusyBox's
+.Xr acpid 1
+running, as
+.Ql acpid -d ,
+on an image that has
+.Pa /etc/acpid.conf ,
+while the kernel has
+.Pa /dev/input/event0 ;
+acpid opens the event devices there are when it starts.
+It writes each action it runs, and what the action prints, to the service
+log.
+.Pa /etc/acpi.map
+names the keys acpid acts on and replaces its built-in map whole, and
+.Pa /etc/acpid.conf
+names each key's action, a file under
+.Pa /etc/acpi
+that acpid runs with no argument.
+A script staged under several names takes its direction from the name it
+is run by.
+The images that have a console user stage these actions:
+.Bl -tag -width brightness/down
+.It Pa power
+The power button: runs BusyBox's
+.Ic poweroff ,
+which asks init to power off.
+.It Pa volume/up , Pa volume/down
+The volume keys: move the volume by 5 of 100; see
+.Xr mixer 1 .
+.It Pa volume/mute
+The mute key: mutes the volume, or unmutes it when it is muted.
+.It Pa brightness/up , Pa brightness/down
+The brightness keys: step the level of every backlight of
+.Pa /sys/class/backlight
+by a tenth of its
+.Pa max_brightness .
+A step down stops at a twentieth, so that the key never turns the screen
+black, and a step up at the maximum; both are at least 1.
+The script reads the backlights from the directory
+.Ev BACKLIGHT_CLASS
+names, when it is set.
+.El
+.Pp
+Every build keeps each backlight's level across a reboot, as
+systemd-backlight does on Linux.
+At boot it writes the level kept in
+.Pa /var/lib/backlight/ Ns Ar NAME
+back to the backlight
+.Ar NAME ,
+kept between a twentieth of its
+.Pa max_brightness ,
+and at least 1, and that maximum, so that a level saved at 0 does not
+start the machine with its screen dark.
+When it stops the machine, it saves each backlight's level there, under a
+temporary name renamed into place.
+It keeps at most four backlights, those present at boot.
+.Pp
 Services receive
 .Pa /dev/null
 as standard input.
@@ -212,7 +268,8 @@ Each start of either server is reported on the console as
 .Ql init: sshd: started as pid N .
 .Pp
 .Nm
-handles the signals sent by the BusyBox shutdown applets:
+handles the signals sent by the BusyBox shutdown applets, each by saving
+the backlights' levels and stopping the machine:
 .Bl -tag -width SIGUSR1
 .It Dv SIGUSR1
 Halt the machine.
@@ -221,8 +278,21 @@ Power off the machine.
 .It Dv SIGTERM
 Restart the machine.
 .El
+.Pp
+The three are blocked while one is handled, so a second request, such as
+the second
+.Ic poweroff
+of a power button the firmware reports twice for one press, waits and is
+never answered.
 .Sh FILES
 .Bl -tag -width /etc/rach2/sshd.conf
+.It Pa /etc/acpi.map , Pa /etc/acpid.conf
+acpid's map and actions, whose presence starts it.
+.It Pa /etc/acpi
+The actions acpid runs.
+.It Pa /var/lib/backlight
+Each backlight's level, saved when the machine stops and written back at
+boot.
 .It Pa /etc/rach2/limits
 Initial resource limits.
 .It Pa /etc/rach2/sshd.conf
@@ -271,10 +341,13 @@ to the first.
 The recovery file system check reports its status as:
 .Dl init: e2fsck: /dev/diskNpM: status S
 .Sh SEE ALSO
+.Xr acpid 1 ,
 .Xr login 1 ,
+.Xr mixer 1 ,
 .Xr ntpd 1 ,
 .Xr bootlog 4 ,
 .Xr sshd.conf 5 ,
+.Xr sysfs 5 ,
 .Xr limits 7 ,
 .Xr recovery 7 ,
 .Xr dropbear 8 ,

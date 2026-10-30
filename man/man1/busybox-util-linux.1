@@ -1,8 +1,9 @@
-.Dd October 2, 2026
+.Dd October 30, 2026
 .Dt BUSYBOX-UTIL-LINUX 1
 .Os
 .Sh NAME
 .Nm busybox-util-linux ,
+.Nm acpid ,
 .Nm blkid ,
 .Nm cal ,
 .Nm chrt ,
@@ -56,6 +57,14 @@
 .Nm xxd
 .Nd BusyBox system utilities
 .Sh SYNOPSIS
+.Nm acpid
+.Op Fl df
+.Op Fl c Ar CONFDIR
+.Op Fl l Ar LOGFILE
+.Op Fl a Ar ACTIONFILE
+.Op Fl M Ar MAPFILE
+.Op Fl e Ar PROC_EVENT_FILE
+.Op Fl p Ar PIDFILE
 .Nm blkid
 .Op Ar BLOCKDEV
 .Ar ...
@@ -250,6 +259,26 @@
 .Sh DESCRIPTION
 These are the util-linux applets of BusyBox 1.36.1 as built for Rach2.
 .Bl -tag -width scriptreplay
+.It Nm acpid
+Run an action for each input event that a map names.
+It opens
+.Pa /dev/input/event0 ,
+.Pa event1
+and on until an open fails, so it reads the event devices there are when
+it starts; see
+.Xr input 4 .
+A press, an event of value 1, or a release, of value 0, that a line of
+the map matches by its type, code and value gives that line's
+description; the first line of the action file whose word the
+description contains gives the action, a path under the configuration
+directory, which acpid runs with no argument, or runs every file of with
+.Nm run-parts
+when it is a directory.
+A map file replaces the built-in map, which has the power key alone,
+whole.
+.Xr init 8
+starts it on an image that has
+.Pa /etc/acpid.conf .
 .It Nm blkid
 Print file system UUIDs.
 Read volumes through the disk nodes described in
@@ -479,6 +508,42 @@ Use
 .Xr loopctl 8
 to configure Rach2 loop devices.
 .Sh OPTIONS
+.Ss acpid
+.Bl -tag -width "-e FILE"
+.It Fl d
+Write the actions and errors to standard error, not the log file, and
+stay in the foreground.
+.It Fl f
+Stay in the foreground.
+.It Fl c Ar DIR
+Run actions from
+.Ar DIR ,
+.Pa /etc/acpi
+by default.
+.It Fl e Ar FILE
+Read text events from
+.Ar FILE
+instead of the event devices.
+.It Fl l Ar FILE
+Append to the log file
+.Ar FILE ,
+.Pa /var/log/acpid.log
+by default.
+.It Fl a Ar FILE
+Read the action file
+.Ar FILE ,
+.Pa /etc/acpid.conf
+by default: a line is a word of a description and an action.
+.It Fl M Ar FILE
+Read the map
+.Ar FILE ,
+.Pa /etc/acpi.map
+by default: a line is an event's type by name and in hexadecimal, its
+code by name and in decimal, its value, and its description.
+.It Fl p Ar FILE
+Write the process ID to
+.Ar FILE .
+.El
 .Ss cal
 .Bl -tag -width "-j"
 .It Fl j
@@ -903,6 +968,15 @@ Use C include file format.
 .El
 .Sh FILES
 .Bl -tag -width /boot/System.map
+.It Pa /etc/acpi.map
+Default map of
+.Nm acpid .
+.It Pa /etc/acpid.conf
+Default action file of
+.Nm acpid .
+.It Pa /etc/acpi
+Default directory of the actions of
+.Nm acpid .
 .It Pa /boot/System.map
 Default map file for
 .Nm readprofile .
@@ -923,7 +997,10 @@ Read kernel messages one screen at a time:
 Find a device by its file system label:
 .Dl findfs LABEL=MyDevice
 .Sh SEE ALSO
+.Xr mixer 1 ,
 .Xr disk 4 ,
+.Xr input 4 ,
+.Xr init 8 ,
 .Xr loopctl 8 ,
 .Xr mount 8
 .Sh HISTORY

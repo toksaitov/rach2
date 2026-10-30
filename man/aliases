@@ -9,6 +9,7 @@
 # it, and TARGET to be a page of that section; a program, applet or call
 # with an alias counts as having a page.
 accept4 2 accept
+acpid 1 busybox-util-linux
 add-shell 8 busybox-loginutils
 addgroup 8 busybox-loginutils
 adjtimex 1 busybox-miscutils

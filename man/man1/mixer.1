@@ -1,0 +1,93 @@
+.Dd October 30, 2026
+.Dt MIXER 1
+.Os
+.Sh NAME
+.Nm mixer
+.Nd read or set the volume
+.Sh SYNOPSIS
+.Nm
+.Nm
+.Cm vol
+.Ar N | L : Ns Ar R | Cm + Ns Ar N | Cm - Ns Ar N
+.Nm
+.Cm mute | unmute
+.Sh DESCRIPTION
+.Nm
+reads and sets the master volume of the audio driver in use, Intel HDA or
+the Sound Blaster 16, through
+.Pa /dev/mixer ,
+OSS's mixer device; see
+.Xr mixer 4 .
+A level is a percentage for each of the left and the right channel.
+.Pp
+With no argument,
+.Nm
+prints the level as
+.Ql vol Ar L : Ns Ar R ,
+followed by
+.Ql \ muted
+while the volume is muted.
+.Bl -tag -width "vol L:R"
+.It Cm vol Ar N
+Set both channels to
+.Ar N ,
+0 through 100.
+.It Cm vol Ar L : Ns Ar R
+Set the left channel to
+.Ar L
+and the right to
+.Ar R .
+.It Cm vol + Ns Ar N , Cm vol - Ns Ar N
+Move both channels up or down by
+.Ar N ,
+keeping each between 0 and 100.
+.It Cm mute
+Record the level in
+.Pa /var/run/mixer.mute
+and set it to 0.
+Muting a muted volume changes nothing.
+.It Cm unmute
+Set the recorded level back and remove the record.
+Unmuting a volume that is not muted changes nothing.
+.El
+.Pp
+OSS has no mute of its own, so the record is the mute: the volume is
+muted while the record is there and the level is 0.
+A level set with
+.Cm vol
+removes the record, so that a step up from a mute starts from 0, and a
+later
+.Cm mute
+records the new level.
+.Pp
+acpid's volume actions run
+.Nm
+for the volume keys and the mute key; see
+.Xr init 8 .
+The device is open to every account, as a desktop's access list opens it
+on Linux, but only root can write the record, so another account can set
+the level and cannot mute.
+.Sh FILES
+.Bl -tag -width /var/run/mixer.mute
+.It Pa /dev/mixer
+The mixer device, present while an audio driver with a volume is in use.
+.It Pa /var/run/mixer.mute
+The level before a mute, as
+.Ar L : Ns Ar R .
+It is removed at boot, when the driver's level is set afresh.
+.El
+.Sh EXIT STATUS
+.Nm
+exits 0 on success, 1 when the device or the record cannot be used, and
+2 for a wrong usage or a level that is not one.
+.Sh EXAMPLES
+.Bd -literal -offset indent
+mixer vol 50
+mixer vol +5
+mixer mute
+mixer
+.Ed
+.Sh SEE ALSO
+.Xr ioctl 2 ,
+.Xr mixer 4 ,
+.Xr init 8

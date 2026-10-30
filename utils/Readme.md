@@ -22,7 +22,7 @@ A program's options and behavior are in its manual page, linked below. This sect
 
 ### init
 
-[init(8)](../man/man8/init.8) is process 1: it reaps orphans, keeps a console session running, and keeps [update(8)](../man/man8/update.8) running, the program that calls sync(2) every thirty seconds. `init.c` builds four programs, and an image stages one of them as `/sbin/init`:
+[init(8)](../man/man8/init.8) is process 1: it reaps orphans, keeps a console session running, and keeps [update(8)](../man/man8/update.8) running, the program that calls sync(2) every thirty seconds. On an image that has `/etc/acpid.conf` it keeps BusyBox's `acpid` running, which runs the actions under `/etc/acpi` for the power, volume and brightness keys, and it keeps each backlight's level across a reboot in `/var/lib/backlight`. `init.c` builds four programs, and an image stages one of them as `/sbin/init`:
 
 * `init-shell` starts a shell on the console with no login. Only test images stage it.
 * `init-login` starts `/bin/login` and nothing else. os-simple and os-real use it.
@@ -55,16 +55,17 @@ The BusyBox images take `su`, `passwd` and `login` from BusyBox's set-id build i
 * [halt(8)](../man/man8/halt.8) powers the machine off or restarts it. On the BusyBox images the shell runs BusyBox's `halt`, `poweroff` and `reboot` applets instead.
 * [loopctl(8)](../man/man8/loopctl.8) attaches a file to a loop device, so that a file system in a file can be mounted, detaches one, or lists them.
 * [audiotest(1)](../man/man1/audiotest.1) plays a test tone through the console's audio interface, on HDA or SB16.
+* [mixer(1)](../man/man1/mixer.1) reads and sets the volume through `/dev/mixer`, and mutes and unmutes it; acpid's volume actions run it for the volume keys.
 
 ### Which images stage them
 
 The manifests in `krffs/manifests/` choose. They give the i686 paths under `build/`; for x86-64 the stager reads the same files from `build/x86_64/` (`RACH2_PATH_MAP` in the root `Makefile`).
 
 * `os-simple.manifest`: every program of `UTILITIES` into `/bin`, by one `exec-dir` line; `login` and `adduser`; `su` and `passwd` set-uid root, mode 04755; `init-login` as `/sbin/init`.
-* `os-real.manifest` (os-real in RAM, as an ext2 root and on its disks) and `grub-test.manifest`: `audiotest`, `ping`, `loopctl`, `update`, `bootctl` and `init-login`, and this directory's source at `/src/utils`.
+* `os-real.manifest` (os-real in RAM, as an ext2 root and on its disks) and `grub-test.manifest`: `audiotest`, `ping`, `loopctl`, `mixer`, `update`, `bootctl` and `init-login`, and this directory's source at `/src/utils`.
 * `rach2-metal-disk.manifest` (the sealed disk's root) and `os-real-gnu.manifest` (the GNU root): the same, with `init-metal`.
-* `rach2-metal.manifest`: `audiotest`, `ping`, `loopctl`, `update` and `init-metal`.
-* `rach2-recovery.manifest`: `ping`, `reflash`, `bootctl`, `growroot`, `growset`, `growboot`, `diskctl`, `update`, `init-recovery`, `rach2-install` and `rach2-recover`.
+* `rach2-metal.manifest`: `audiotest`, `ping`, `loopctl`, `mixer`, `update` and `init-metal`.
+* `rach2-recovery.manifest`: `ping`, `reflash`, `bootctl`, `growroot`, `growset`, `growboot`, `diskctl`, `mixer`, `update`, `init-recovery`, `rach2-install` and `rach2-recover`.
 * `test.manifest`: `echo`, and at the root of the image `sudo`, `su` and `passwd` set-uid root, `adduser`, `adduser-crash` and `login`.
 * `login-test-strict.manifest`, `login-test-shell.manifest` and `shutdown-test.manifest`: `init-login`, `init-shell`, and `init-shell` with `su`.
 
@@ -162,4 +163,5 @@ A suite below runs as `tests/run NAME`.
 * `install`, `menu` and `grub` drive `bootctl`'s kernel, menu and GRUB verbs. `grow` runs `growroot` and `diskctl shrink` on the recovery system and checks its writes with the host build of `growset`, and runs `growboot` on the host.
 * `installer`, `sealed`, `drill` and `uefi` install and repair disks with `rach2-install`, `reflash`, `diskctl` and `init-recovery`.
 * `selfbuild` builds this directory on Rach2 with `guest.mk` and runs the `httpd` and `nc` it built.
+* `acpid` presses the volume keys on os-real and reads `mixer`, and powers the machine off through acpid and init.
 * No suite runs `audiotest`.
