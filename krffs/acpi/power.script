@@ -1,0 +1,12 @@
+#!/bin/sh
+#
+# power: power the machine off, for the power key. acpid runs this file as
+# /etc/acpi/power.
+#
+# poweroff syncs and asks init, which saves the backlights' levels and powers
+# the machine off. The firmware may report one press twice, as the fixed
+# power button and as a notification of the button device, and the second
+# run asks again while init is stopping the machine, which blocks the
+# request and never answers it, so a second press does no harm.
+
+exec /bin/busybox poweroff

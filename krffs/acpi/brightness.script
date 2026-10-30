@@ -1,0 +1,59 @@
+#!/bin/sh
+#
+# brightness: step every backlight's level up or down, for the brightness
+# keys. acpid runs this file as /etc/acpi/brightness/up or down, with no
+# argument, so the direction is the name it is run by, or the first
+# argument when there is one.
+#
+# A step is a tenth of the backlight's max_brightness, and a step down stops
+# at a twentieth of it, so that the key never turns the screen black; a step
+# up stops at the maximum. Both are at least 1. A level already below the
+# twentieth, which root may write, is left by a step down. The backlights
+# are the directories of BACKLIGHT_CLASS, /sys/class/backlight unless it is
+# set, which is how the host test runs the script over a directory of its
+# own. The exit status is 1 when a backlight could not be read or written.
+
+class=${BACKLIGHT_CLASS:-/sys/class/backlight}
+way=${1:-${0##*/}}
+case $way in
+up | down) ;;
+*)
+    echo "brightness: usage: brightness up|down" >&2
+    exit 2
+    ;;
+esac
+
+# number WORD: whether WORD is a decimal number.
+number() {
+    case $1 in
+    '' | *[!0-9]*) return 1 ;;
+    esac
+    return 0
+}
+
+status=0
+for dir in "$class"/*; do
+    [ -f "$dir/brightness" ] || continue
+    max=$(cat "$dir/max_brightness" 2>/dev/null)
+    now=$(cat "$dir/brightness" 2>/dev/null)
+    if ! number "$max" || ! number "$now"; then
+        echo "brightness: ${dir##*/}: cannot read the level" >&2
+        status=1
+        continue
+    fi
+    [ "$max" -gt 0 ] || continue
+    step=$((max / 10))
+    [ "$step" -gt 0 ] || step=1
+    least=$((max / 20))
+    [ "$least" -gt 0 ] || least=1
+    if [ "$way" = up ]; then
+        new=$((now + step))
+        [ "$new" -le "$max" ] || new=$max
+    else
+        [ "$now" -gt "$least" ] || continue
+        new=$((now - step))
+        [ "$new" -ge "$least" ] || new=$least
+    fi
+    echo "$new" >"$dir/brightness" || status=1
+done
+exit $status

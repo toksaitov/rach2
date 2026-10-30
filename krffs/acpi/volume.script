@@ -1,0 +1,27 @@
+#!/bin/sh
+#
+# volume: raise, lower or mute the volume, for the volume keys. acpid runs
+# this file as /etc/acpi/volume/up, down or mute, with no argument, so the
+# key is the name it is run by, or the first argument when there is one.
+#
+# A step is 5 of mixer's 100. The mute key mutes, or unmutes when the volume
+# is muted, and a step up from a mute starts from 0.
+
+case ${1:-${0##*/}} in
+up)
+    exec /bin/mixer vol +5
+    ;;
+down)
+    exec /bin/mixer vol -5
+    ;;
+mute)
+    case $(/bin/mixer) in
+    *' muted') exec /bin/mixer unmute ;;
+    *) exec /bin/mixer mute ;;
+    esac
+    ;;
+*)
+    echo "volume: usage: volume up|down|mute" >&2
+    exit 2
+    ;;
+esac

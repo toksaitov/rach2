@@ -1,0 +1,12 @@
+# /etc/acpi.map: the input events BusyBox's acpid acts on, one to a line:
+# the event's type by name and in hexadecimal, its code by name and in
+# decimal, its value, and the event's description, which /etc/acpid.conf
+# matches. A value of 1 is a press. The file replaces acpid's built-in map
+# whole, so the power key is here too. The descriptions are those Linux's
+# acpid gives the same keys.
+EV_KEY 0x01 KEY_POWER          116 1 button/power PBTN 00000080
+EV_KEY 0x01 KEY_MUTE           113 1 button/mute MUTE 00000080
+EV_KEY 0x01 KEY_VOLUMEDOWN     114 1 button/volumedown VOLDN 00000080
+EV_KEY 0x01 KEY_VOLUMEUP       115 1 button/volumeup VOLUP 00000080
+EV_KEY 0x01 KEY_BRIGHTNESSDOWN 224 1 video/brightnessdown BRTDN 00000087
+EV_KEY 0x01 KEY_BRIGHTNESSUP   225 1 video/brightnessup BRTUP 00000086
