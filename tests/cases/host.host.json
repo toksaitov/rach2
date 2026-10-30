@@ -3089,13 +3089,13 @@
           "witness_id": "stage",
           "kind": "step",
           "means": "a declared scenario step has ended",
-          "limit": 16
+          "limit": 15
         },
         {
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 14
+          "limit": 13
         }
       ],
       "bounds": {
@@ -3240,11 +3240,6 @@
           "step_id": "space",
           "stage": "execute",
           "does": "run every native regression row of space"
-        },
-        {
-          "step_id": "progress",
-          "stage": "execute",
-          "does": "run every native regression row of progress"
         }
       ],
       "machines": [
