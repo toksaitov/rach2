@@ -66,6 +66,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "acpi_mapcache",
+          "checks": "tests/host/acpi_mapcache_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "ahci",
           "checks": "tests/host/ahci_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
