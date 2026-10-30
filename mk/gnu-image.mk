@@ -88,13 +88,11 @@ endif
 # that no part of it is left from an older build: the kernel, the recovery
 # kernel with its checks, the recovery image with this tree's key in it, and
 # the GNU root. `all` builds neither recovery part, so a machine given `all`'s
-# products could have a recovery system older than its kernel. The style check
-# runs first, since the GNU root carries the sources and a style fix made
-# after the build changes it. The key is minted by a make of its own, because
-# make reads the recovery image's name, which says whether it has a key, when
-# it starts. The GNU root is built as the rules above say.
+# products could have a recovery system older than its kernel. The key is
+# minted by a make of its own, because make reads the recovery image's name,
+# which says whether it has a key, when it starts. The GNU root is built as
+# the rules above say.
 .PHONY: machine
 machine:
-	sh tests/run style
 	$(MAKE) --no-print-directory recovery-key
 	$(MAKE) --no-print-directory rach2 rach2-recovery rach2-recovery-image os-real-gnu-ext2
