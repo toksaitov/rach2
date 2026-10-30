@@ -129,12 +129,7 @@ static int eq(const char *a, const char *b)
  * /sys: the fixed directories, a device's link and directory and uevent by
  * its name, and the names written back from the keys as they were read; a
  * name not of a device's form, or a hub port that four bits cannot hold, is
- * ENOENT, and a path through a uevent is ENOTDIR. Under /sys/class/net an
- * interface's directory, an attribute, a counter of its statistics and its
- * device link are found by name, and an interface or attribute it does not
- * have is ENOENT. A processor's directory `cpuN` is found by its number,
- * written without a leading zero, and has no attribute; whether the
- * processor is started is for the caller to ask.
+ * ENOENT, and a path through a uevent is ENOTDIR.
  */
 static void sys_tree(void)
 {
@@ -166,6 +161,20 @@ static void sys_tree(void)
     CHECK(synth_classify("sys/bus/pci/devices/0000:00:20.0", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("sys/bus/pci/devices/0000:00:1F.2", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("sys/bus/pci/devices/0000:00:1f.2/vendor", &vp) == VNODE_ENOENT);
+}
+
+/**
+ * /sys/class: under /sys/class/net an interface's directory, an attribute, a
+ * counter of its statistics and its device link are found by name, and an
+ * interface or attribute it does not have is ENOENT. Under
+ * /sys/class/backlight the one backlight's directory is found by name, its
+ * brightness is writable and its max_brightness is not.
+ */
+static void sys_class(void)
+{
+    struct vpath vp;
+    char path[64];
+
     CHECK(synth_classify("sys/class", &vp) == VNODE_SYS_DIR && vp.sysent == SYSFS_CLASS);
     CHECK(synth_classify("sys/class/net/eth0", &vp) == VNODE_SYS_DIR && vp.sysent == SYSFS_NET_IF &&
           vp.syskey == 2);
@@ -193,6 +202,18 @@ static void sys_tree(void)
     CHECK(synth_classify("sys/class/backlight/acpi_video0", &vp) == VNODE_ENOENT);
     synth_sys_path(SYSFS_BACKLIGHT, 0, path, (int)sizeof(path));
     CHECK(eq(path, "/sys/class/backlight/intel_backlight"));
+}
+
+/**
+ * The processors under /sys/devices/system/cpu: a processor's directory
+ * `cpuN` is found by its number, written without a leading zero, and has no
+ * attribute; whether the processor is started is for the caller to ask.
+ */
+static void sys_cpus(void)
+{
+    struct vpath vp;
+    char path[64];
+
     CHECK(synth_classify("sys/devices/system/cpu/online", &vp) == VNODE_SYS_FILE &&
           vp.sysent == SYSFS_CPU && vp.procfile == 2);
     CHECK(synth_classify("sys/devices/system/cpu/cpu0", &vp) == VNODE_SYS_DIR &&
@@ -339,7 +360,8 @@ static void paths(void)
 
 /**
  * The rows of the root, /dev and /proc, then those of `bounds`,
- * `past_a_file`, `past_a_name`, `paths` and `sys_tree`:
+ * `past_a_file`, `past_a_name`, `paths`, `sys_tree`, `sys_class` and
+ * `sys_cpus`:
  *
  * - the empty path and ordinary names are the KRFFS root's, "devices" and
  *   "proconsul" among them, which only begin as "dev" and "proc" do;
@@ -447,5 +469,7 @@ int main(void)
     past_a_name();
     paths();
     sys_tree();
+    sys_class();
+    sys_cpus();
     return fails > 255 ? 255 : fails;
 }
