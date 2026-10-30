@@ -1,0 +1,26 @@
+acpid: reap the actions that have ended
+
+acpid sets SIGCHLD to SIG_IGN and never waits for the actions it spawns,
+relying on Linux, where a process that ignores SIGCHLD leaves no zombies.
+Rach2's kernel keeps the zombie until its parent waits
+(rach2/sys/proc/signal.Readme.md), so each key acpid acted on would hold a
+slot of the process table for as long as acpid runs. The loop now reaps
+every ended child each time poll wakes it, which leaves at most the actions
+of the last event unreaped; on Linux the wait finds no child and changes
+nothing.
+
+--- a/util-linux/acpid.c
++++ b/util-linux/acpid.c
+@@ -329,6 +329,12 @@
+ 
+ 	while (safe_poll(pfd, nfd, -1) > 0) {
+ 		int i;
++
++		/* Reap the actions that have ended: a kernel that does not
++		 * reap the children of a process ignoring SIGCHLD would
++		 * otherwise keep each as a zombie. */
++		while (waitpid(-1, NULL, WNOHANG) > 0)
++			continue;
+ 		for (i = 0; i < nfd; i++) {
+ 			const char *event;
+ 
