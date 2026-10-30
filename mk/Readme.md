@@ -32,7 +32,7 @@ The fragments the root Makefile includes:
 
 The shell fragment:
 
-* `arch.sh` is `arch.mk` for the shell. The vendored ports' `build_*.sh` scripts, `vendor/musl/muslgcc`, the image scripts and the test scripts under `tests/` source it with `RACH2_ARCH` set, which the root Makefile sets from `ARCH`, and it sets `CROSS`, `MFLAG`, `MUSL_TARGET`, `HOST_TRIPLE`, `ARCH_SUFFIX`, `ARCH_LDFLAGS`, `ARCH_QEMU`, `ARCH_USER_TEXT`, `ARCH_VENDOR`, `MUSL_PREFIX`, `ARCH_BUILD` and, for x86-64 when the caller has none, `RACH2_PATH_MAP`. It removes `ARCH`, and an `ARCH=` that make passed down in `MAKEFLAGS`, from the environment, since musl, BusyBox and TinyCC each have a make variable of that name with other values. The caller sets `REPO` to the repository's root.
+* `arch.sh` is `arch.mk` for the shell. The vendored ports' `build_*.sh` scripts, `vendor/musl/muslgcc`, the image scripts and the test scripts under `tests/` source it with `RACH2_ARCH` set, which the root Makefile sets from `ARCH`, and it sets `CROSS`, `MFLAG`, `MUSL_TARGET`, `HOST_TRIPLE`, `ARCH_SUFFIX`, `ARCH_LDFLAGS`, `ARCH_QEMU`, `ARCH_USER_TEXT`, `ARCH_VENDOR`, `MUSL_PREFIX`, `ARCH_BUILD` and, for x86-64 when the caller has none, `RACH2_PATH_MAP`. It removes `ARCH`, and an `ARCH=` that make passed down in `MAKEFLAGS`, after ` -- ` or, from GNU Make 3.81 with no flag set, as the whole of `MAKEFLAGS`, from the environment, since musl, BusyBox and TinyCC each have a make variable of that name with other values. The caller sets `REPO` to the repository's root.
 
 ## Design
 

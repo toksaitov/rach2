@@ -30,10 +30,12 @@
 #                already in the x86-64 tree is read as it is
 #
 # ARCH itself is taken out of the environment, and so is a `make ARCH=...`
-# above this script, which GNU Make passes down in MAKEFLAGS after a ` -- `.
-# musl, BusyBox and TinyCC each have a make variable named ARCH of their own,
-# with their own values, and an inherited one would override it. The rest of
-# MAKEFLAGS is kept: it carries the caller's jobserver.
+# above this script, which GNU Make passes down in MAKEFLAGS after a ` -- `,
+# or, from Make 3.81, the Mac's, with no flag beside it, as MAKEFLAGS alone:
+# `ARCH=i686`, its first word a definition. musl, BusyBox and TinyCC each
+# have a make variable named ARCH of their own, with their own values, and an
+# inherited one would override it. The rest of MAKEFLAGS is kept: it carries
+# the caller's jobserver.
 #
 # The caller sets REPO, the repository's root, as an absolute path. The file
 # sets variables and exits on an unknown architecture; it runs nothing else,
@@ -46,6 +48,10 @@ unset MFLAGS
 MAKEFLAGS="${MAKEFLAGS-}"
 case "$MAKEFLAGS" in
     --\ *) MAKEFLAGS= ;;
+esac
+case "${MAKEFLAGS%% *}" in
+    -*) ;;
+    *=*) MAKEFLAGS= ;;
 esac
 MAKEFLAGS="${MAKEFLAGS%% -- *}"
 export MAKEFLAGS
