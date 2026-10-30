@@ -655,10 +655,15 @@ case_clang() {
     _res=$(clang -print-resource-dir 2>/dev/null)
     _bad=0
     _files=$(make -s -C "$REPO/rach2" print-c-src)
+    _acpi=$(make -s -C "$REPO/rach2" print-acpi-cflags)
     for f in $_files; do
+        case $f in
+            sys/acpi/*) _more=$_acpi ;;
+            *) _more= ;;
+        esac
         # shellcheck disable=SC2086
         (cd "$REPO/rach2" && clang --target="$KCHECK_TARGET" "$KCHECK_WIDTH" -ansi -ffreestanding -nostdinc \
-            -isystem "$_res/include" -fsyntax-only $_warn "$f") >>"$VDIR/verify_clang.log" 2>&1 ||
+            -isystem "$_res/include" $_more -fsyntax-only $_warn "$f") >>"$VDIR/verify_clang.log" 2>&1 ||
             _bad=$((_bad + 1))
     done
     _warnings=$(grep -c "warning:" "$VDIR/verify_clang.log")
@@ -688,9 +693,15 @@ case_sparse() {
     _bad=0
     python3 "$REPO/tests/system/usercheck_test.py" >>"$VDIR/verify_sparse.log" 2>&1 || _bad=1
     _files=$(make -s -C "$REPO/rach2" print-c-src)
+    _acpi=$(make -s -C "$REPO/rach2" print-acpi-cflags)
+    # The ACPI files, sys/acpi/, take the build's flags for ACPICA's headers.
     # shellcheck disable=SC2086
-    (cd "$REPO/rach2" && python3 "$REPO/tools/verify/usercheck.py" --arch "${ARCH:-i686}" $_files) \
-        >>"$VDIR/verify_sparse.log" 2>&1 || _bad=1
+    (cd "$REPO/rach2" && python3 "$REPO/tools/verify/usercheck.py" --arch "${ARCH:-i686}" \
+        $(printf '%s\n' $_files | grep -v '^sys/acpi/')) >>"$VDIR/verify_sparse.log" 2>&1 || _bad=1
+    # shellcheck disable=SC2086
+    (cd "$REPO/rach2" && python3 "$REPO/tools/verify/usercheck.py" --arch "${ARCH:-i686}" \
+        --cflags="$_acpi" $(printf '%s\n' $_files | grep '^sys/acpi/')) >>"$VDIR/verify_sparse.log" 2>&1 ||
+        _bad=1
     if [ "$_bad" -eq 0 ]; then
         pass runs
         pass no-findings

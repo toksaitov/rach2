@@ -74,11 +74,13 @@ LDEXTRA ?=
 # sanitizer the caller asks for is the kernel's, and ACPICA, whose unaligned
 # reads of the tables x86 permits, is left out of it. The kernel's own ACPI
 # files include ACPICA's headers as system headers, so that its warnings stay
-# out of the kernel's.
+# out of the kernel's; ACPI_CFLAGS is their share, which the style checks
+# that compile the kernel's files read through print-acpi-cflags.
+ACPI_CFLAGS = -D__RACH2__ -Isys/acpi -isystem $(ACPICA)/include
 ACPICA_CFLAGS = $(ARCH_KFLAGS) -g -Wall $(WERROR) -ansi -nostdlib -nostartfiles -nodefaultlibs \
                 $(DEPFLAGS) -D__RACH2__ -Isys/acpi -I$(ACPICA)/include \
                 $(filter-out -fsanitize%,$(KEXTRA))
-$(ACPI_OBJECTS) : CFLAGS += -D__RACH2__ -Isys/acpi -isystem $(ACPICA)/include
+$(ACPI_OBJECTS) : CFLAGS += $(ACPI_CFLAGS)
 
 # Harness build (`make HARNESS=1`): when the init process, the probe a test
 # harness runs, exits, the kernel writes its exit status to QEMU's
@@ -209,6 +211,13 @@ print-c-src :
 .PHONY : print-acpica-src
 print-acpica-src :
 	@echo $(ACPICA_C_SRC:$(ACPICA)/%=%)
+
+# The flags the kernel's ACPI files take beside the kernel's, for the checks
+# that compile the files of print-c-src (tests/cases/host/style.sh's clang
+# and tools/verify/usercheck.py), relative to this directory.
+.PHONY : print-acpi-cflags
+print-acpi-cflags :
+	@echo $(ACPI_CFLAGS)
 
 # The assembly list too, for tools/verify/guestcheck.c (the guest build's list
 # guard): the guest makefile must name exactly these sources.

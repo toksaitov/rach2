@@ -55,14 +55,15 @@ def audit(node, source):
     return failures
 
 
-def check(path, arch, compiler=None, environment=None):
+def check(path, arch, compiler=None, environment=None, cflags=()):
     compiler = compiler or os.environ.get('USERCHECK_CLANG', 'clang')
     target = 'i686-elf' if arch == 'i686' else 'x86_64-elf'
     resource = subprocess.check_output([compiler, '-print-resource-dir'], text=True,
                                        env=environment).strip()
     command = [compiler, '--target=' + target, '-ansi', '-ffreestanding', '-nostdinc',
                '-isystem', str(Path(resource) / 'include'), '-DRACH2_USERCHECK',
-               '-Werror=noderef', '-fsyntax-only', '-Xclang', '-ast-dump=json', native_path(path)]
+               *cflags, '-Werror=noderef', '-fsyntax-only', '-Xclang', '-ast-dump=json',
+               native_path(path)]
     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment)
     diagnostics = result.stderr.decode(errors='replace')
     if result.returncode:
@@ -75,11 +76,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--arch', choices=('i686', 'x86_64'), required=True)
     parser.add_argument('--clang', default=os.environ.get('USERCHECK_CLANG', 'clang'))
+    parser.add_argument('--cflags', default='',
+                        help="flags every source takes, such as the ACPI files' print-acpi-cflags")
     parser.add_argument('sources', type=Path, nargs='+')
     args = parser.parse_args()
     failed = False
     for path in args.sources:
-        passed, diagnostics = check(path, args.arch, args.clang)
+        passed, diagnostics = check(path, args.arch, args.clang, cflags=args.cflags.split())
         sys.stdout.write(diagnostics)
         failed |= not passed
     return int(failed)
