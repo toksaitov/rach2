@@ -76,6 +76,16 @@
  * entry is a tombstone. */
 #define CLOSE_LIMIT_MS 5000u
 
+/* The reset recovery a device is given after its port's reset ends, before
+ * it is addressed: the USB specification's 10 ms (TRSTRCY) and the 40 more
+ * that Linux adds, since a device that is sent Set Address sooner can leave
+ * the controller's Address Device unanswered. */
+#define RECOVERY_MS 50u
+
+/* How many times a device is reset and addressed before its port is
+ * refused: Linux's four tries of a port. */
+#define ADDRESS_TRIES 4
+
 /* Where a device is in its enumeration. */
 #define ST_FREE       0
 #define ST_SETTLING   1
@@ -102,6 +112,11 @@
 /* Every slot the controller has is taken. The device keeps its entry and its
  * reset, and asks again every STEP_MS until one comes free. */
 #define ST_SLOTWAIT   19
+/* A port's reset has ended and the device is given RECOVERY_MS. */
+#define ST_RECOVERY   20
+/* An Address Device failed; the command ring is waited for before the port
+ * is reset again. */
+#define ST_READDRESS  21
 
 struct usb_device_state {
     int index; /* its entry in the table, which a frame's address does not give */
@@ -127,6 +142,8 @@ struct usb_device_state {
      * what the hub offers, and this says what was accepted. */
     int hub_multi;
     uint32_t deadline; /* the `core_ms` at which the step in progress fails */
+    uint32_t ready_at; /* the `core_ms` at which a reset's recovery ends */
+    int address_tries; /* the Address Device commands that failed */
     /* Disable Slot has been asked for; on a running hub, the command of
      * `usb_core_hub_tell` is in flight. */
     int closing_asked;
@@ -837,6 +854,24 @@ static int command_result(struct usb_device_state *d, struct usb_command_result 
 }
 
 /**
+ * Ask the controller to address `d`'s slot, and wait in ST_ADDRESS for the
+ * answer.
+ *
+ * The step's deadline is the controller's command deadline and a step more,
+ * so that a command left unanswered is aborted, and its slot left usable for
+ * another try, before the device gives up on it.
+ */
+static void address_begin(struct usb_device_state *d)
+{
+    if (xhci_device_address(d->hc, d->slot) != 0) {
+        fail(d, "the device could not be addressed");
+        return;
+    }
+    d->state = ST_ADDRESS;
+    d->deadline = core_ms + XHCI_COMMAND_MS + STEP_MS;
+}
+
+/**
  * One step of a running device: a keyboard's or mouse's report handed on and
  * the next one asked for.
  *
@@ -933,6 +968,12 @@ static void start_running(struct usb_device_state *d)
  * the device keeps its entry and its reset and asks again every STEP_MS: a
  * slot comes free when another device closes.
  *
+ * A port whose reset has ended gives its device RECOVERY_MS before the
+ * device is sent anything (ST_RECOVERY). An Address Device that fails or is
+ * aborted unanswered is tried again after another reset of the port, on the
+ * slot already given, up to ADDRESS_TRIES times in all, as Linux's
+ * `hub_port_init` does; only then is the port refused.
+ *
  * A low- or full-speed device whose control endpoint takes other than the 8
  * bytes it was opened with, as byte 7 of its descriptor says, has the
  * controller's context corrected before its whole descriptor is read.
@@ -1014,20 +1055,46 @@ static void step_device(struct usb_device_state *d)
             }
             d->speed = status.speed;
         }
-        {
-            if (location_of(d, &d->where) != 0) {
-                fail(d, "it is deeper in the tree than a route string can say");
+        d->ready_at = core_ms + RECOVERY_MS;
+        d->deadline = d->ready_at + STEP_MS;
+        d->state = ST_RECOVERY;
+        return;
+
+    case ST_RECOVERY:
+        if ((int32_t)(core_ms - d->ready_at) < 0) {
+            return;
+        }
+        if (d->slot > 0) {
+            address_begin(d); /* a retry, on the slot the first try was given */
+            return;
+        }
+        if (location_of(d, &d->where) != 0) {
+            fail(d, "it is deeper in the tree than a route string can say");
+            return;
+        }
+        if (xhci_device_open(d->hc, &d->where, d->speed) != 0) {
+            if (!expired(d)) {
                 return;
             }
-            if (xhci_device_open(d->hc, &d->where, d->speed) != 0) {
-                if (!expired(d)) {
-                    return;
-                }
-                fail(d, "no slot could be asked for");
-                return;
-            }
+            fail(d, "no slot could be asked for");
+            return;
         }
         d->state = ST_SLOT;
+        arm(d);
+        return;
+
+    case ST_READDRESS:
+        if (!xhci_command_free(d->hc)) {
+            if (expired(d)) {
+                fail(d, "the controller would not address the device");
+            }
+            return; /* the abort of the last try has not ended */
+        }
+        if (d->ops->reset_begin(d->hc, d->owner, d->port) != 0) {
+            fail(d, "the port would not begin a reset");
+            return;
+        }
+        d->state = ST_RESETTING;
         arm(d);
         return;
 
@@ -1069,15 +1136,7 @@ static void step_device(struct usb_device_state *d)
             return;
         }
         d->slot = result.device;
-        if (xhci_device_address(d->hc, d->slot) != 0) {
-            if (!expired(d)) {
-                return;
-            }
-            fail(d, "the device could not be addressed");
-            return;
-        }
-        d->state = ST_ADDRESS;
-        arm(d);
+        address_begin(d);
         return;
 
     case ST_ADDRESS:
@@ -1086,6 +1145,13 @@ static void step_device(struct usb_device_state *d)
             return;
         }
         if (answer < 0) {
+            if (++d->address_tries < ADDRESS_TRIES) {
+                klog(KLOG_INFO, "usb", "device: port %s: not addressed; reset again, try %d of %d",
+                     path_of(d), d->address_tries + 1, ADDRESS_TRIES);
+                d->state = ST_READDRESS;
+                d->deadline = core_ms + CLOSE_LIMIT_MS;
+                return;
+            }
             fail(d, "the controller would not address the device");
             return;
         }
@@ -1386,6 +1452,7 @@ static void device_arrive(struct xhci_ctrl *hc, int owner, int port)
             dev_at(i)->ops = owner < 0 ? &root_ops : &hub_ops;
             dev_at(i)->port = port;
             dev_at(i)->slot = 0;
+            dev_at(i)->address_tries = 0;
             dev_at(i)->ep_dci = 0;
             dev_at(i)->closing_asked = 0;
             dev_at(i)->abandoned = 0;

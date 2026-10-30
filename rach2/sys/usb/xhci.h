@@ -272,6 +272,12 @@ int xhci_port_reset_begin(struct xhci_ctrl *hc, int port);
  * or the port is out of range. A finished reset's change bit is cleared. */
 int xhci_port_reset_done(struct xhci_ctrl *hc, int port);
 
+/* How long a command may take before it is aborted, in milliseconds:
+ * Linux's XHCI_CMD_DEFAULT_TIMEOUT. An Address Device waits on the device's
+ * answer to Set Address, which a device starting up can take seconds to
+ * give. */
+#define XHCI_COMMAND_MS 5000u
+
 /**
  * Put one command on the command ring and ring doorbell 0.
  *
@@ -281,7 +287,7 @@ int xhci_port_reset_done(struct xhci_ctrl *hc, int port);
  * Returns 0 when the command was queued, -1 when one is in flight or an abort
  * has not ended. One command is in flight at a time, which is what lets this
  * driver hold one ring and no queue of its own; a command that has not ended
- * a second later is aborted.
+ * XHCI_COMMAND_MS later is aborted.
  */
 int xhci_command_issue(struct xhci_ctrl *hc, uint32_t type, uint64_t parameter, uint32_t slot);
 

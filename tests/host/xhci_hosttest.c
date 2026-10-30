@@ -1640,7 +1640,7 @@ static void command_deadline_rows(void)
         abort_completes = timing != 1;
         abort_posts_event = timing == 3;
         CHECK("deadline enable slot issued", xhci_device_open(hc, &where, USB_SPEED_HIGH) == 0);
-        xhci_advance(hc, 1000);
+        xhci_advance(hc, XHCI_COMMAND_MS);
         CHECK("deadline retains command before event drain", xhci_command_done(hc, &result) == 0);
         CHECK("deadline retains command turn", xhci_command_free(hc) == 0);
         CHECK("deadline blocks a second command",
@@ -2391,7 +2391,7 @@ int main(void)
     CHECK("started", xhci_start(hc) == 0);
     CHECK("a command is issued", xhci_command_issue(hc, TRB_TYPE_NOOP_COMMAND, 0, 0) == 0);
     CHECK("one that is never answered is still running", xhci_command_done(hc, &result) == 0);
-    xhci_advance(hc, 2000);
+    xhci_advance(hc, XHCI_COMMAND_MS + 1000);
     CHECK("abort waits for its event", xhci_command_done(hc, &result) == 0);
     xhci_events(hc);
     CHECK("stop event resolves the unanswered command", xhci_command_done(hc, &result) == -1);
@@ -2409,7 +2409,7 @@ int main(void)
     CHECK("halted and reset", xhci_halt_reset(hc) == 0);
     CHECK("started", xhci_start(hc) == 0);
     CHECK("a command is issued", xhci_command_issue(hc, TRB_TYPE_NOOP_COMMAND, 0, 0) == 0);
-    xhci_advance(hc, 2000);
+    xhci_advance(hc, XHCI_COMMAND_MS + 1000);
     CHECK("an unresolved abort retains the command", xhci_command_done(hc, &result) == 0);
     CHECK("and while the controller still holds the ring nothing is issued on it",
           xhci_command_issue(hc, TRB_TYPE_NOOP_COMMAND, 0, 0) != 0);
@@ -2422,7 +2422,7 @@ int main(void)
     CHECK("started", xhci_start(hc) == 0);
     CHECK("a command is issued", xhci_command_issue(hc, TRB_TYPE_NOOP_COMMAND, 0, 0) == 0);
     CHECK("and the ring is not free while it runs", xhci_command_free(hc) == 0);
-    xhci_advance(hc, 1100);
+    xhci_advance(hc, XHCI_COMMAND_MS + 100);
     command_completes = 1;
     CHECK("abort retains the ring until events are drained", xhci_command_free(hc) == 0);
     xhci_events(hc);

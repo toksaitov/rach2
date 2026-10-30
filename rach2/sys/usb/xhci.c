@@ -1188,11 +1188,6 @@ int xhci_scratchpads(struct xhci_ctrl *hc)
 #define PORT_DEBOUNCE_MS 100u
 #define PORT_RESET_MS    500u
 
-/* How long a command may take before it is aborted. Nothing this driver
- * issues is slow; a command still running after this is a controller that
- * has stopped answering. */
-#define COMMAND_MS 1000u
-
 /**
  * Whether a moment has passed, in a way that survives the clock wrapping.
  *
@@ -1452,7 +1447,7 @@ int xhci_command_issue(struct xhci_ctrl *hc, uint32_t type, uint64_t parameter, 
     hc->command_running = 1;
     hc->command_finished = 0;
     hc->command_type = type;
-    hc->command_deadline = hc->now_ms + COMMAND_MS;
+    hc->command_deadline = hc->now_ms + XHCI_COMMAND_MS;
     xhci_barrier();             /* the block is written before the controller is told */
     w32(hc, hc->caps.dboff, 0); /* doorbell zero: the command ring */
     return 0;
