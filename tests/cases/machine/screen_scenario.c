@@ -36,9 +36,9 @@ static const char *case_name(struct etude_case *c)
 }
 
 /**
- * Give the colors of the P6 picture at `path`: 1 when every pixel is the
- * first one's, 2 when another differs, and -1 when it is not a picture of
- * 8-bit samples.
+ * Give the colors of the P6 picture at `path`: 0 when every pixel is black,
+ * 0,0,0, 1 when every pixel is the first one's and that is not black, 2 when
+ * another differs, and -1 when it is not a picture of 8-bit samples.
  */
 static int picture_colors(const char *path)
 {
@@ -60,6 +60,8 @@ static int picture_colors(const char *path)
             else if (memcmp(px, first, 3) != 0)
                 colors = 2;
         }
+        if (colors == 1 && first[0] == 0 && first[1] == 0 && first[2] == 0)
+            colors = 0;
     }
     fclose(f);
     return colors;
@@ -67,8 +69,8 @@ static int picture_colors(const char *path)
 
 /**
  * Dump the screen into evidence `name` and report assertion `id`: it holds
- * when the screen is one color, black, if `black` is set, and has more than
- * one, the console's text, if it is clear.
+ * when every pixel is black if `black` is set, and when the screen has more
+ * than one color, the console's text, if it is clear.
  */
 static void screen(struct guest *g, const char *name, int black, const char *id)
 {
@@ -102,10 +104,11 @@ static void screen(struct guest *g, const char *name, int black, const char *id)
     colors = picture_colors(path);
     snprintf(detail, sizeof(detail), "the screen dump %s has %s, not %s", name,
              colors < 0    ? "no picture"
-             : colors == 1 ? "one color"
+             : colors == 0 ? "only black"
+             : colors == 1 ? "one color that is not black"
                            : "several colors",
-             black ? "one color, black" : "the console's text");
-    lc_assert(g->l, id, black ? colors == 1 : colors == 2, detail);
+             black ? "only black" : "the console's text");
+    lc_assert(g->l, id, black ? colors == 0 : colors == 2, detail);
 }
 
 /** Press Shift on the machine's keyboard. */
