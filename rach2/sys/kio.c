@@ -227,6 +227,21 @@ static void vt_erase_row(unsigned int row, unsigned int c0, unsigned int c1)
 }
 
 /**
+ * Erase in line, `CSI n K`: 0 erases from the cursor to the end of its row,
+ * 1 from the row's start to the cursor, and 2 the whole row.
+ */
+static void vt_erase_line(unsigned int n)
+{
+    if (n == 0) {
+        vt_erase_row(y, x, textcon_cols - 1);
+    } else if (n == 1) {
+        vt_erase_row(y, 0, x);
+    } else if (n == 2) {
+        vt_erase_row(y, 0, textcon_cols - 1);
+    }
+}
+
+/**
  * Erase in display, `CSI n J`: 0 erases from the cursor to the end of the
  * screen, 1 from its start to the cursor, and 2 all of it.
  */
@@ -499,13 +514,7 @@ static void vt_dispatch_csi(char c)
         vt_erase_display(vt_arg(0, 0));
         break;
     case 'K':
-        n = vt_arg(0, 0);
-        if (n == 0)
-            vt_erase_row(y, x, textcon_cols - 1);
-        else if (n == 1)
-            vt_erase_row(y, 0, x);
-        else if (n == 2)
-            vt_erase_row(y, 0, textcon_cols - 1);
+        vt_erase_line(vt_arg(0, 0));
         break;
     case 'X':
         n = vt_arg(0, 1);
