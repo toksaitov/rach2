@@ -417,15 +417,86 @@ static int32_t grab(struct evdev_client *c, uintptr_t on)
     return rc;
 }
 
+/**
+ * EVIOCGBIT(type): the bits of the event types `dev` has, of its keys and of
+ * its MSC codes, and none of the other types, each of its own length, cut
+ * to `len`. -EINVAL for a type Linux's evdev does not answer.
+ */
+static int32_t type_bits(const struct evdev *dev, uint32_t type, uintptr_t arg, uint32_t len)
+{
+    uint8_t bits[8];
+
+    k_memset(bits, 0, sizeof(bits));
+    switch (type) {
+    case 0:
+        bits[0] = (uint8_t)(1u << EV_SYN | 1u << EV_KEY | (dev->scan ? 1u << EV_MSC : 0));
+        return bits_out(arg, len, bits, BITS_BYTES(EV_CNT));
+    case EV_KEY:
+        return bits_out(arg, len, dev->keys, EVDEV_KEY_BYTES);
+    case EV_MSC:
+        bits[0] = (uint8_t)(dev->scan ? 1u << MSC_SCAN : 0);
+        return bits_out(arg, len, bits, BITS_BYTES(MSC_CNT));
+    case EV_REL:
+        return bits_out(arg, len, NULL, BITS_BYTES(REL_CNT));
+    case EV_ABS:
+        return bits_out(arg, len, NULL, BITS_BYTES(ABS_CNT));
+    case EV_SW:
+        return bits_out(arg, len, NULL, BITS_BYTES(SW_CNT));
+    case EV_LED:
+        return bits_out(arg, len, NULL, BITS_BYTES(LED_CNT));
+    case EV_SND:
+        return bits_out(arg, len, NULL, BITS_BYTES(SND_CNT));
+    case EV_FF:
+        return bits_out(arg, len, NULL, BITS_BYTES(FF_CNT));
+    default:
+        return -EINVAL;
+    }
+}
+
+/**
+ * The ioctls that read a string or a set of bits, numbered `nr` with the
+ * caller's length `len`: the name, place and serial, the properties, the
+ * keys down, the LEDs, sounds and switches, which no device here has, and
+ * EVIOCGBIT. -ENOTTY for another number.
+ */
+static int32_t read_ioctl(struct evdev *dev, uint32_t nr, uintptr_t arg, uint32_t len)
+{
+    uint8_t down[EVDEV_KEY_BYTES];
+    uint32_t flags;
+
+    if (nr >= NR_GBIT && nr < NR_GBIT + EV_CNT) {
+        return type_bits(dev, nr - NR_GBIT, arg, len);
+    }
+    switch (nr) {
+    case NR_GNAME:
+        return string_out(arg, len, dev->name);
+    case NR_GPHYS:
+        return string_out(arg, len, dev->phys);
+    case NR_GUNIQ:
+        return string_out(arg, len, NULL);
+    case NR_GPROP:
+        return bits_out(arg, len, NULL, BITS_BYTES(PROP_CNT));
+    case NR_GKEY:
+        flags = spin_lock_irqsave(&evdev_lock);
+        k_memcpy(down, dev->down, sizeof(down));
+        spin_unlock_irqrestore(&evdev_lock, flags);
+        return bits_out(arg, len, down, EVDEV_KEY_BYTES);
+    case NR_GLED:
+        return bits_out(arg, len, NULL, BITS_BYTES(LED_CNT));
+    case NR_GSND:
+        return bits_out(arg, len, NULL, BITS_BYTES(SND_CNT));
+    case NR_GSW:
+        return bits_out(arg, len, NULL, BITS_BYTES(SW_CNT));
+    default:
+        return -ENOTTY;
+    }
+}
+
 int32_t evdev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     struct evdev_client *c = (struct evdev_client *)e->priv;
     struct evdev *dev = c->dev;
-    uint32_t len = IOC_SIZE(request);
-    uint32_t nr = IOC_NR(request);
-    uint8_t bits[EVDEV_KEY_BYTES];
     int version = EV_VERSION;
-    uint32_t flags;
 
     if (dev->gone) {
         return -ENODEV;
@@ -442,56 +513,7 @@ int32_t evdev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     if (IOC_TYPE(request) != 'E' || IOC_DIR(request) != IOC_READ) {
         return -ENOTTY;
     }
-    switch (nr) {
-    case NR_GNAME:
-        return string_out(arg, len, dev->name);
-    case NR_GPHYS:
-        return string_out(arg, len, dev->phys);
-    case NR_GUNIQ:
-        return string_out(arg, len, NULL);
-    case NR_GPROP:
-        return bits_out(arg, len, NULL, BITS_BYTES(PROP_CNT));
-    case NR_GKEY:
-        flags = spin_lock_irqsave(&evdev_lock);
-        k_memcpy(bits, dev->down, sizeof(bits));
-        spin_unlock_irqrestore(&evdev_lock, flags);
-        return bits_out(arg, len, bits, EVDEV_KEY_BYTES);
-    case NR_GLED:
-        return bits_out(arg, len, NULL, BITS_BYTES(LED_CNT));
-    case NR_GSND:
-        return bits_out(arg, len, NULL, BITS_BYTES(SND_CNT));
-    case NR_GSW:
-        return bits_out(arg, len, NULL, BITS_BYTES(SW_CNT));
-    case NR_GBIT + 0:
-        k_memset(bits, 0, sizeof(bits));
-        bits[0] = (uint8_t)(1u << EV_SYN | 1u << EV_KEY | (dev->scan ? 1u << EV_MSC : 0));
-        return bits_out(arg, len, bits, BITS_BYTES(EV_CNT));
-    case NR_GBIT + EV_KEY:
-        return bits_out(arg, len, dev->keys, EVDEV_KEY_BYTES);
-    case NR_GBIT + EV_MSC:
-        k_memset(bits, 0, sizeof(bits));
-        bits[0] = (uint8_t)(dev->scan ? 1u << MSC_SCAN : 0);
-        return bits_out(arg, len, bits, BITS_BYTES(MSC_CNT));
-    /* The types a device here never has, each with its own count. */
-    case NR_GBIT + EV_REL:
-        return bits_out(arg, len, NULL, BITS_BYTES(REL_CNT));
-    case NR_GBIT + EV_ABS:
-        return bits_out(arg, len, NULL, BITS_BYTES(ABS_CNT));
-    case NR_GBIT + EV_SW:
-        return bits_out(arg, len, NULL, BITS_BYTES(SW_CNT));
-    case NR_GBIT + EV_LED:
-        return bits_out(arg, len, NULL, BITS_BYTES(LED_CNT));
-    case NR_GBIT + EV_SND:
-        return bits_out(arg, len, NULL, BITS_BYTES(SND_CNT));
-    case NR_GBIT + EV_FF:
-        return bits_out(arg, len, NULL, BITS_BYTES(FF_CNT));
-    default:
-        break;
-    }
-    if (nr > NR_GBIT && nr < NR_GBIT + EV_CNT) {
-        return -EINVAL;
-    }
-    return -ENOTTY;
+    return read_ioctl(dev, IOC_NR(request), arg, IOC_SIZE(request));
 }
 
 void evdev_close(fd_entry_t *e)
