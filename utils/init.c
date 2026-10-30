@@ -417,6 +417,25 @@ static void shutdown_handler(int sig)
     _exit(1);
 }
 
+/**
+ * Install `shutdown_handler` for SIGUSR1, SIGUSR2 and SIGTERM, with all three
+ * blocked while it runs.
+ */
+static void catch_shutdown(void)
+{
+    struct sigaction stop;
+
+    memset(&stop, 0, sizeof(stop));
+    stop.sa_handler = shutdown_handler;
+    sigemptyset(&stop.sa_mask);
+    sigaddset(&stop.sa_mask, SIGUSR1);
+    sigaddset(&stop.sa_mask, SIGUSR2);
+    sigaddset(&stop.sa_mask, SIGTERM);
+    (void)sigaction(SIGUSR1, &stop, NULL);
+    (void)sigaction(SIGUSR2, &stop, NULL);
+    (void)sigaction(SIGTERM, &stop, NULL);
+}
+
 /* Where a service's output goes once the console belongs to the person at it.
  *
  * The kernel stops writing to the screen when init starts, and a service that
@@ -756,6 +775,16 @@ static pid_t spawn_acpid(void)
     }
     _exit(127);
     return -1; /* unreachable; quiets the compiler */
+}
+
+/** Start acpid, the service `s`, when it is not running and `acpid_wanted`.
+ * A failed fork is left for the next turn. */
+static void start_acpid(struct service *s)
+{
+    if (s->pid < 0 && acpid_wanted()) {
+        s->pid = spawn_acpid();
+        s->spawned = time(0);
+    }
 }
 
 #ifdef INIT_METAL
@@ -2213,19 +2242,40 @@ static void apply_limits(void)
 }
 
 /**
- * Set the machine up, then reap, respawn and supervise for as long as it runs.
- *
- * The three shutdown handlers go in before the first child, so a request that
- * arrives early is answered and does not meet a terminating default, which for
- * pid 1 is a panic. Then `/var/run` is emptied and given a `utmp` with only
- * this boot's record, the limits set, the service log opened and the
- * backlights' kept levels written back (`keep_backlights`). The
+ * Set the machine up before the first child: empty `/var/run` and give it a
+ * `utmp` with only this boot's record, set the limits, open the service log
+ * and write the backlights' kept levels back (`keep_backlights`). The
  * recovery build takes the key the installer put on the recovery partition
  * it booted from, says on the console whether a key was built into its image
  * and whether the partition's turned SSH on, since the two kinds of image
  * look identical from outside, and names each disk whose GUID table was read
  * from its backup. A metal boot whose line has `rach2.fsck` then checks its
  * ext2 partitions.
+ */
+static void set_up(void)
+{
+    clear_var_run();
+    make_utmp();
+    apply_limits();
+    open_service_log();
+    keep_backlights();
+#ifdef INIT_RECOVERY
+    report_recovery_keys();
+    report_backup_tables();
+#endif
+#ifdef INIT_METAL
+    if (boot_line_has("rach2.fsck")) {
+        check_ext2_partitions();
+    }
+#endif
+}
+
+/**
+ * Set the machine up, then reap, respawn and supervise for as long as it runs.
+ *
+ * The three shutdown handlers go in before the first child, so a request that
+ * arrives early is answered and does not meet a terminating default, which for
+ * pid 1 is a panic. Then the machine is set up (`set_up`).
  *
  * Each turn respawns what is missing: the console session, whose failed fork
  * (a full process table) is retried after a second so the loop does not spin;
@@ -2263,35 +2313,12 @@ int main(void)
     struct services services;
     int network_done = 0;
 #endif
-    struct service acpid;
-    struct sigaction stop;
+    struct service acpid = {-1, 0};
     unsigned turns = 0;
 
-    memset(&stop, 0, sizeof(stop));
-    stop.sa_handler = shutdown_handler;
-    sigemptyset(&stop.sa_mask);
-    sigaddset(&stop.sa_mask, SIGUSR1);
-    sigaddset(&stop.sa_mask, SIGUSR2);
-    sigaddset(&stop.sa_mask, SIGTERM);
-    sigaction(SIGUSR1, &stop, NULL);
-    sigaction(SIGUSR2, &stop, NULL);
-    sigaction(SIGTERM, &stop, NULL);
-    acpid.pid = -1;
-    acpid.spawned = 0;
-
-    clear_var_run();
-    make_utmp();
-    apply_limits();
-    open_service_log();
-    keep_backlights();
-#ifdef INIT_RECOVERY
-    report_recovery_keys();
-    report_backup_tables();
-#endif
+    catch_shutdown();
+    set_up();
 #ifdef INIT_METAL
-    if (boot_line_has("rach2.fsck")) {
-        check_ext2_partitions();
-    }
     services_found(&services);
 #endif
 
@@ -2310,10 +2337,7 @@ int main(void)
         if (updater < 0) {
             updater = spawn_update();
         }
-        if (acpid.pid < 0 && acpid_wanted()) {
-            acpid.pid = spawn_acpid();
-            acpid.spawned = time(0);
-        }
+        start_acpid(&acpid);
 
 #ifdef INIT_METAL
         if (!network_done) {
