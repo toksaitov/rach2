@@ -5,6 +5,7 @@ usbprobe usb
 mouseprobe usb
 intrprobe usb
 keylatprobe usb
+evprobe input
 stdintest console
 pingtest ping
 packetprobe packet

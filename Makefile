@@ -854,8 +854,9 @@ $(NETPROBE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 
 build/tests/cases/machine/credpersist_scenario: tests/creddisk_rows.h
 
-# The USB scenarios share usbcase.c.
-USB_SCENARIOS = build/tests/cases/machine/usb_scenario build/tests/cases/machine/usbdisk_scenario
+# The USB scenarios, and the input one, share usbcase.c.
+USB_SCENARIOS = build/tests/cases/machine/usb_scenario build/tests/cases/machine/usbdisk_scenario \
+                build/tests/cases/machine/input_scenario
 $(USB_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
                   tests/cases/machine/fileio.c tests/cases/machine/fileio.h \
                   tools/image/host_io.h \

@@ -1,0 +1,627 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.input",
+  "summary": "The keyboards' event devices, /dev/input/eventN, and OSS's mixer, /dev/mixer, each case a boot of its own that tests/cases/machine/input_scenario.c drives",
+  "cases": [
+    {
+      "case_id": "machine.input.ps2",
+      "behavior": "the PS/2 keyboard's keys reach its event device, AT Translated Set 2 keyboard, as Linux's key codes with their set-1 MSC_SCAN",
+      "units": [
+        "evdev",
+        "evprobe"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "input_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the machine to the debug shell",
+          "machine": "input"
+        },
+        {
+          "step_id": "keys",
+          "stage": "execute",
+          "does": "run evprobe, press A, Volume Up, Volume Down and Mute through the monitor, then twelve keys more",
+          "machine": "input"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "input",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "shell",
+          "checks": "the machine boots to the debug shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "keys",
+          "checks": "evprobe finds the PS/2 keyboard's event device by its name, its ioctls answer as Linux's, two readers each read the four keys pressed and released with the MSC_SCAN 0x1e, 0xb0, 0xae and 0xa0, poll wakes for them, the reader that read nothing finds SYN_DROPPED first, and evprobe prints `EVPROBE OK` and exits 0",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 2
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 270000000,
+          "ceiling_us": 810000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 120000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "input_scenario",
+          "node": "tests/cases/machine/input_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the keys are pressed through QEMU's monitor"
+      }
+    },
+    {
+      "case_id": "machine.input.usb",
+      "behavior": "a USB keyboard's keys reach its event device, USB keyboard N, as Linux's key codes with the usage as MSC_SCAN",
+      "units": [
+        "evdev",
+        "evprobe"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "input_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the machine to the debug shell",
+          "machine": "input"
+        },
+        {
+          "step_id": "keys",
+          "stage": "execute",
+          "does": "run evprobe, press A, Volume Up, Volume Down and Mute through the monitor, then twelve keys more",
+          "machine": "input"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "input",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "qemu-xhci",
+                "id": "xhci"
+              },
+              {
+                "model": "usb-kbd",
+                "bus": "xhci.0"
+              }
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "shell",
+          "checks": "the machine boots to the debug shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "keyboard",
+          "checks": "the kernel records the keyboard configured, class 3 protocol 1",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "keys",
+          "checks": "evprobe finds the USB keyboard's event device by its name, its ioctls answer as Linux's, two readers each read the four keys pressed and released with the MSC_SCAN 0x70004, 0x70080, 0x70081 and 0x7007f, poll wakes for them, the reader that read nothing finds SYN_DROPPED first, and evprobe prints `EVPROBE OK` and exits 0",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 2
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 270000000,
+          "ceiling_us": 810000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 120000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "input_scenario",
+          "node": "tests/cases/machine/input_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the keys are pressed through QEMU's monitor on its USB keyboard"
+      }
+    },
+    {
+      "case_id": "machine.input.mixer-hda",
+      "behavior": "/dev/mixer reads and sets the volume of the HDA driver, which a stream's start keeps",
+      "units": [
+        "mixer",
+        "evprobe"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "input_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the machine to the debug shell",
+          "machine": "input"
+        },
+        {
+          "step_id": "mixer",
+          "stage": "execute",
+          "does": "run evprobe mixer HDA",
+          "machine": "input"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "input",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [],
+            "audio": "hda"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "shell",
+          "checks": "the machine boots to the debug shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "mixer",
+          "checks": "evprobe mixer HDA reads 100 at boot, sets 50 and then the louder of 80 and 32, finds the masks, the missing PCM channel and SOUND_MIXER_INFO as OSS gives them, reads 80 after a stream's start and 70 after the console's AUDIO_SET_VOLUME, prints `EVPROBE OK` and exits 0",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 2
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 270000000,
+          "ceiling_us": 810000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 120000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "input_scenario",
+          "node": "tests/cases/machine/input_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the case reads QEMU's HDA model through the driver"
+      }
+    },
+    {
+      "case_id": "machine.input.mixer-sb16",
+      "behavior": "/dev/mixer reads and sets the volume of the SB16 driver, which a stream's start keeps",
+      "units": [
+        "mixer",
+        "evprobe"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "input_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the machine to the debug shell",
+          "machine": "input"
+        },
+        {
+          "step_id": "mixer",
+          "stage": "execute",
+          "does": "run evprobe mixer SB16",
+          "machine": "input"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "input",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [],
+            "audio": "sb16"
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "shell",
+          "checks": "the machine boots to the debug shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "mixer",
+          "checks": "evprobe mixer SB16 reads 100 at boot, sets 50 and then the louder of 80 and 32, finds the masks, the missing PCM channel and SOUND_MIXER_INFO as OSS gives them, reads 80 after a stream's start and 70 after the console's AUDIO_SET_VOLUME, prints `EVPROBE OK` and exits 0",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 2
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 270000000,
+          "ceiling_us": 810000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 120000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "input_scenario",
+          "node": "tests/cases/machine/input_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the case reads QEMU's SB16 model through the driver"
+      }
+    }
+  ]
+}

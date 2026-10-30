@@ -30,7 +30,7 @@ MUSL_POST    = $(MUSL_PREFIX)/lib/libc.a $(MUSL_LIBGCC) $(MUSL_PREFIX)/lib/crtn.
                -Wl,-z,noexecstack $(ARCH_LDFLAGS)
 
 # All test programs
-PROGS = hello forktest shelltest dirtest stattest usbprobe mouseprobe intrprobe keylatprobe \
+PROGS = hello forktest shelltest dirtest stattest usbprobe mouseprobe intrprobe keylatprobe evprobe \
         rmtest mvtest lstest stdintest dup2test \
         pingtest packetprobe rawprobe netifprobe dgramprobe udptest tcptest sockettest dnstest auxvprobe \
         tlsprobe fsbaseprobe errnoprobe vmprobe vmfault forkro cowregrant \

@@ -117,6 +117,7 @@ bootorder|qemu,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 reset|qemu|core
 netconsole-e1000|qemu|full
 audio|qemu|core
+input|qemu|core
 netconsole|qemu|core
 crash|qemu|core
 pools|qemu|core
