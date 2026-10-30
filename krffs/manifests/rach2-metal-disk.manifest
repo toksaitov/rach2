@@ -79,15 +79,14 @@ tree 0644 /include vendor/musl/install/include
 # the machine.
 tree 0644 /src/utils utils
 
-# The kernel's and the shell's sources, each tree with the guest.mk that
-# pdpmake reads, so that the machine can build its own kernel and shell
-# (`tests/run selfbuild` builds both), with ACPICA's core, which the kernel
-# compiles, beside the kernel's sources as vendor/acpica, extracted for the
-# image's architecture. /src is root's and read-only to every
-# other account: root builds in place, and another account copies a tree to
-# its home first. The dir lines give the modes of the directories above the
-# trusted files, which the set-id sweep requires for every path root reads
-# through.
+# The kernel's and the shell's sources, each tree with the guest.mk that pdpmake
+# reads, so that the machine can build its own kernel and shell (`tests/run
+# selfbuild` builds both), with ACPICA's core, which the kernel compiles, beside
+# the kernel's sources as the archive vendor/acpica.tar.bz2, which guest.mk
+# unpacks. /src is root's and read-only to every other account: root builds in
+# place, and another account copies a tree to its home first. The dir lines give
+# the modes of the directories above the trusted files, which the set-id sweep
+# requires for every path root reads through.
 dir 0755 /src
 dir 0755 /src/utils
 dir 0755 /src/rach2
@@ -95,7 +94,7 @@ dir 0755 /src/rach2/sys
 dir 0755 /src/rach2/vendor
 dir 0755 /src/ish
 tree 0644 /src/rach2 rach2
-tree 0644 /src/rach2/vendor/acpica build/vendor/acpica
+file 0644 /src/rach2/vendor/acpica.tar.bz2 build/vendor/acpica/acpica.tar.bz2
 tree 0644 /src/ish ish
 
 # /sbin/init, process 1, which the kernel starts: it forks a session child

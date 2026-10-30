@@ -3,7 +3,8 @@
 #
 # build_acpica.sh: extract the core of ACPICA, the ACPI interpreter the kernel
 # carries, from the pinned tarball into build/vendor/acpica/, where the kernel's
-# build compiles it and the images stage it as /src/rach2/vendor/acpica.
+# build compiles it, and pack it as acpica.tar.bz2 there, which the images
+# stage as /src/rach2/vendor/acpica.tar.bz2 for guest.mk to unpack.
 #
 # Nothing is compiled here. The kernel's Makefile and guest.mk compile the
 # files, with flags of their own (rach2/sys/acpi/sources.mk). The tree holds
@@ -13,6 +14,13 @@
 # time of the extraction, not the tarball's, so that a tree extracted again
 # after the patch changed is newer than every object compiled from the old
 # one.
+#
+# The images take the archive and not the tree. os-real's RAM root is a
+# module that ends below 32 MiB, where the DMA pool and i686's frame table
+# are carved; the tree would add 4 MiB to it and the archive adds 0.45 MiB,
+# which its 20 MiB hold. bzip2, which every host has, packs it smallest. The archive lists the files in name order, without
+# the directories, the stamp or itself. The times and owners in it are this
+# host's, which guest.mk does not restore (tar -xmo).
 #
 # The stamp, .stamp in the tree, holds the SHA-256 of the tarball, the patch
 # and this script. When the tree's stamp already says so, the tree is left as
@@ -71,7 +79,8 @@ if [ "$GOT" != "$TARBALL_SHA256" ]; then
 fi
 WANT="$GOT $(sha256_of "$PATCH") $(sha256_of build_acpica.sh)"
 
-if [ -f "$STAGE/.stamp" ] && [ "$(cat "$STAGE/.stamp")" = "$WANT" ]; then
+if [ -f "$STAGE/.stamp" ] && [ "$(cat "$STAGE/.stamp")" = "$WANT" ] &&
+    [ -f "$STAGE/acpica.tar.bz2" ]; then
     touch "$STAGE/.stamp"
     exit 0
 fi
@@ -99,9 +108,19 @@ if ! grep -q '__RACH2__' "$WORK/acpica/include/platform/acenv.h"; then
     exit 1
 fi
 rm -f "$WORK/acpica/include/platform/acenv.h.orig"
+
+(cd "$WORK/acpica" && find . -type f | sed 's|^\./||' | LC_ALL=C sort) > "$WORK/list"
+case "$(tar --version 2>/dev/null)" in
+    *bsdtar*) set -- --no-xattrs --no-mac-metadata ;;
+    *) set -- ;;
+esac
+COPYFILE_DISABLE=1 tar -c -f "$WORK/acpica.tar" "$@" -C "$WORK/acpica" -T "$WORK/list"
+bzip2 -9 "$WORK/acpica.tar"
+mv "$WORK/acpica.tar.bz2" "$WORK/acpica/acpica.tar.bz2"
 printf '%s\n' "$WANT" > "$WORK/acpica/.stamp"
 
-if [ -f "$STAGE/.stamp" ] && [ "$(cat "$STAGE/.stamp")" = "$WANT" ]; then
+if [ -f "$STAGE/.stamp" ] && [ "$(cat "$STAGE/.stamp")" = "$WANT" ] &&
+    [ -f "$STAGE/acpica.tar.bz2" ]; then
     exit 0
 fi
 rm -rf "$STAGE"

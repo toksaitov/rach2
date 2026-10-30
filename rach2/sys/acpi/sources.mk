@@ -3,8 +3,9 @@
 # core, which is compiled with flags of its own (the host Makefile and
 # guest.mk). ACPICA is where the core is extracted: build/vendor/acpica/,
 # or build/x86_64/vendor/acpica/, for the host build, and vendor/acpica/ in
-# the source tree a Rach2 machine has under /src/rach2. resources/rsdump.c,
-# which serves ACPICA's debugger, is left out, as the debugger is.
+# the source tree a Rach2 machine has under /src/rach2, where guest.mk
+# unpacks the archive the image stages. resources/rsdump.c, which serves
+# ACPICA's debugger, is left out, as the debugger is.
 
 ACPI_C_SRC = sys/acpi/boot.c \
     sys/acpi/call.c \

@@ -27,8 +27,12 @@
 KCC = /bin/cc
 KCFLAGS = -Wall -Wunsupported -nostdlib $(ACPI_TCC_CFLAGS) $(ARCH_TCC_CFLAGS)
 
-# ACPICA's core, which the image stages beside the kernel's sources as
-# vendor/acpica (sys/acpi/sources.mk). A POSIX makefile has one rule for
+# ACPICA's core (sys/acpi/sources.mk), which the image stages beside the
+# kernel's sources as the archive vendor/acpica.tar.bz2, made by
+# vendor/acpica/build_acpica.sh. The kernel's first prerequisite unpacks it
+# into vendor/acpica, with the time of unpacking and the user's ownership, so
+# that pdpmake, which takes its prerequisites in order, finds every source
+# before it infers how to make an object. A POSIX makefile has one rule for
 # every .c, so the flags ACPICA needs, __RACH2__ for its platform header and
 # the two directories of headers, are every file's; the kernel's own files
 # include no header by those names.
@@ -46,9 +50,15 @@ OBJS = $(ASM_SRC:.s=.o) $(C_SRC:.c=.o) $(ACPICA_C_SRC:.c=.o)
 # The link lands in kernel.new and is renamed only on success, so a failed
 # link cannot leave a newer partial kernel that the next make treats as
 # current. The structural check runs on the host, after extraction.
-kernel: $(OBJS) kernel.objs
+kernel: $(ACPICA)/.unpacked $(OBJS) kernel.objs
 	$(KCC) -static -nostdlib -o kernel.new @kernel.objs $(ARCH_TCC_LDFLAGS) /lib/tcc/libtcc1.a
 	mv kernel.new kernel
+
+$(ACPICA)/.unpacked: $(ACPICA).tar.bz2
+	rm -rf $(ACPICA)
+	mkdir $(ACPICA)
+	tar -xmojf $(ACPICA).tar.bz2 -C $(ACPICA)
+	touch $@
 
 kernel.objs: guest.mk sources.mk sys/arch/$(ARCH)/sources.mk sys/arch/x86/sources.mk sys/acpi/sources.mk
 	printf '%s\n' $(OBJS) > kernel.objs.new
@@ -64,3 +74,4 @@ kernel.objs: guest.mk sources.mk sys/arch/$(ARCH)/sources.mk sys/arch/x86/source
 
 clean:
 	rm -f $(OBJS) kernel.objs kernel.objs.new kernel.new kernel
+	rm -rf $(ACPICA)

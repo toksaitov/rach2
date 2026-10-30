@@ -84,7 +84,7 @@ dir 0755 /src/rach2/sys
 dir 0755 /src/rach2/vendor
 dir 0755 /src/ish
 tree 0644 /src/rach2 rach2
-tree 0644 /src/rach2/vendor/acpica build/vendor/acpica
+file 0644 /src/rach2/vendor/acpica.tar.bz2 build/vendor/acpica/acpica.tar.bz2
 tree 0644 /src/ish ish
 
 # init-metal: init-login's strict console with the network and a supervised

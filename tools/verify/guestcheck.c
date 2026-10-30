@@ -13,11 +13,11 @@
  *   1. rach2/guest.mk derives OBJS from the shared rach2/sources.mk lists
  *      the host build includes, object for object, loader.o first, no
  *      duplicates, for each architecture, ACPICA's core last, under
- *      vendor/acpica, where the image stages it; the kernel.objs recipe writes
- *      $(OBJS) whole, and the link reads @kernel.objs and the tcc runtime
- *      with the architecture's flags: for i686 the pinned text address, and
- *      for x86-64 the kernel's own linker script, 4 KiB segment alignment
- *      and a compile with -mno-sse.
+ *      vendor/acpica, where the kernel's first prerequisite unpacks the
+ *      archive the image stages; the kernel.objs recipe writes $(OBJS) whole, and the link reads
+ * @kernel.objs and the tcc runtime with the architecture's flags: for i686 the pinned text address,
+ * and for x86-64 the kernel's own linker script, 4 KiB segment alignment and a compile with
+ * -mno-sse.
  *   2. utils/guest.mk's per-program source map equals the host
  *      utils/Makefile map, including the companion sources (pwauth.c,
  *      resolv.c) and the two -D builds (init-login, adduser-crash), and
@@ -29,9 +29,9 @@
  *      descriptors, and no guest recipe line, expanded, comes near the exec
  *      string budget.
  *   5. The os-real manifest stages the three source trees at /src and
- *      ACPICA's core at /src/rach2/vendor/acpica, root-owned and read-only,
- *      and nothing else there, so the machine has what the makefiles build,
- *      and each staged tree has its guest.mk.
+ *      ACPICA's core as /src/rach2/vendor/acpica.tar.bz2, root-owned and
+ *      read-only, and nothing else there, so the machine has what the
+ *      makefiles build, and each staged tree has its guest.mk.
  *
  * Usage: guestcheck [REPO_ROOT]; REPO_ROOT is the working directory unless
  * given. The first failure is printed and ends the run with status 1.
@@ -998,8 +998,8 @@ static int check_kernel_lists(void)
 
         if (!read_macro(text, "ACPICA", &dir) || dir.n != 1 ||
             strcmp(dir.item[0], "vendor/acpica") != 0)
-            fail("rach2/guest.mk's ACPICA is not vendor/acpica, where the "
-                 "image stages ACPICA's core beside the kernel's sources");
+            fail("rach2/guest.mk's ACPICA is not vendor/acpica, beside the "
+                 "kernel's sources, where the image stages ACPICA's archive");
         list_free(&dir);
     }
     need_macro(text, "OBJS", &objs_raw);
@@ -1016,6 +1016,10 @@ static int check_kernel_lists(void)
                  i + 1, objs.item[i], expected.item[i]);
 
     rules_of(text, &rules);
+    r = rule_find(&rules, "$(ACPICA)/.unpacked");
+    if (r == NULL || r->prereqs.n != 1 || strcmp(r->prereqs.item[0], "$(ACPICA).tar.bz2") != 0)
+        fail("rach2/guest.mk does not unpack $(ACPICA).tar.bz2, the archive "
+             "of ACPICA's core the image stages, into $(ACPICA)");
     r = rule_find(&rules, "kernel.objs");
     if (r == NULL)
         fail("rach2/guest.mk has no kernel.objs rule");
@@ -1039,9 +1043,12 @@ static int check_kernel_lists(void)
     }
 
     r = rule_find(&rules, "kernel");
+    if (r == NULL || r->prereqs.n == 0 || strcmp(r->prereqs.item[0], "$(ACPICA)/.unpacked") != 0)
+        fail("the kernel's first prerequisite is not $(ACPICA)/.unpacked, so "
+             "pdpmake could infer an object of ACPICA's before its source "
+             "is unpacked");
     link[0] = '\0';
-    if (r != NULL)
-        join_into(link, sizeof(link), &r->recipe);
+    join_into(link, sizeof(link), &r->recipe);
     for (i = 0; i < (int)(sizeof(link_needs) / sizeof(link_needs[0])); i++)
         if (strstr(link, link_needs[i]) == NULL)
             fail("the kernel link line lacks %s", link_needs[i]);
@@ -1627,7 +1634,7 @@ static int check_limits(void)
 }
 
 /** Check the fifth contract: os-real.manifest stages the three trees at /src
-   and ACPICA's core in the kernel's as `tree 0644`, and has no other line
+   as `tree 0644` and ACPICA's archive in the kernel's, and has no other line
    under /src but the directories above them, since a later line could give
    the source to another owner; and each tree has a regular guest.mk. */
 static void check_staging(void)
@@ -1635,9 +1642,9 @@ static void check_staging(void)
     char path[1200];
     char *text;
     const char *p;
-    static const char *const want[] = {"tree 0644 /src/rach2 rach2", "tree 0644 /src/utils utils",
-                                       "tree 0644 /src/ish ish",
-                                       "tree 0644 /src/rach2/vendor/acpica build/vendor/acpica"};
+    static const char *const want[] = {
+        "tree 0644 /src/rach2 rach2", "tree 0644 /src/utils utils", "tree 0644 /src/ish ish",
+        "file 0644 /src/rach2/vendor/acpica.tar.bz2 build/vendor/acpica/acpica.tar.bz2"};
     static const char *const dirs_ok[] = {
         "dir 0755 /src",           "dir 0755 /src/utils",        "dir 0755 /src/rach2",
         "dir 0755 /src/rach2/sys", "dir 0755 /src/rach2/vendor", "dir 0755 /src/ish"};
@@ -1732,7 +1739,7 @@ int main(int argc, char **argv)
     ish_objects = check_ish();
     check_staging();
     printf("check-guest: ok: %d i686 and %d x86_64 kernel sources, %d programs, "
-           "%d ish objects, include depth %d, four /src trees staged\n",
+           "%d ish objects, include depth %d, three /src trees and ACPICA's archive staged\n",
            sources, sources64, programs, ish_objects, depth);
     return 0;
 }
