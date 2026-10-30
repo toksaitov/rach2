@@ -80,7 +80,6 @@ rach2/sys/fs/bcache.c:sync_batches nesting 5 one file system operation over the 
 rach2/sys/fs/bcache.c:get complexity 35 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/bcache.c:get lines 101 one file system operation over the on-disk format, each step a rule of the format
 
-rach2/sys/fs/devfs.c:devfs_open complexity 34 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/exfat.c:chain_at params 7 the parameters are one level's cursor in a recursive walk
 rach2/sys/fs/exfat.c:check_dir complexity 44 one file system operation over the on-disk format, each step a rule of the format

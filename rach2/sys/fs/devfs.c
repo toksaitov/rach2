@@ -2068,6 +2068,57 @@ int devfs_window_of(const char *path, block_device_t **view, block_device_t **ba
 }
 
 /**
+ * Whether an open of `dev` with `flags` must wait for another's close: the
+ * GRUB core image while it is open, and a raw window opened for writing
+ * while its disk has a writer or a mounted volume claims its range.
+ */
+static int devfs_open_busy(const struct devfs_entry *dev, int flags)
+{
+    struct disk *d;
+    block_device_t *backing;
+    uint64_t first, last;
+
+    if (dev->ops == &grubcore_ops && grubcore_held) {
+        return 1;
+    }
+    if ((flags & 3) == 0 || !raw_write_window(dev)) {
+        return 0;
+    }
+    d = window_disk(dev);
+    if (d && d->writer_held) {
+        return 1;
+    }
+    return window_range(dev, &backing, &first, &last) == 0 && claimed(backing, first, last);
+}
+
+/**
+ * Record the open of `dev` on the descriptor `e`, whose flags are set: hold
+ * the GRUB core image, make a raw window opened for writing its disk's
+ * writer, and count the open of a disk node and of a loop device, which
+ * their last close undoes.
+ */
+static void devfs_note_open(const struct devfs_entry *dev, fd_entry_t *e)
+{
+    if (dev->ops == &grubcore_ops) {
+        grubcore_held = 1;
+    }
+    if ((e->flags & FD_FLAG_WRITE) && raw_write_window(dev)) {
+        struct disk *d = window_disk(dev);
+        block_device_t *backing;
+
+        if (d && window_range(dev, &backing, &d->writer_first, &d->writer_last) == 0) {
+            d->writer_held = 1;
+        }
+    }
+    if (disk_node_of(dev)) {
+        disk_node_of(dev)->disk->opens++;
+    }
+    if (dev->ops == &loop_ops) {
+        loop_node_opened(devfs_loop_index(dev));
+    }
+}
+
+/**
  * /dev/tty follows POSIX: the console when the caller is in the console's
  * session, else the pty slave that has the caller's session, else ENXIO,
  * which is also what dropbear's probe after setsid expects. A job-control
@@ -2107,20 +2158,8 @@ int devfs_open(const char *name, int flags)
         }
     }
 
-    if (dev->ops == &grubcore_ops && grubcore_held) {
+    if (devfs_open_busy(dev, flags)) {
         return -EBUSY;
-    }
-    if ((flags & 3) != 0 && raw_write_window(dev)) {
-        struct disk *d = window_disk(dev);
-        block_device_t *backing;
-        uint64_t first, last;
-
-        if (d && d->writer_held) {
-            return -EBUSY;
-        }
-        if (window_range(dev, &backing, &first, &last) == 0 && claimed(backing, first, last)) {
-            return -EBUSY;
-        }
     }
 
     fd = fd_alloc(current_proc->fds);
@@ -2163,24 +2202,7 @@ int devfs_open(const char *name, int flags)
     if ((flags & DEVFS_O_NONBLOCK) && e->ofd) {
         e->ofd->status_flags |= OFD_NONBLOCK;
     }
-    if (dev->ops == &grubcore_ops) {
-        grubcore_held = 1;
-    }
-    if ((e->flags & FD_FLAG_WRITE) && raw_write_window(dev)) {
-        struct disk *d = window_disk(dev);
-        block_device_t *backing;
-
-        if (d && window_range(dev, &backing, &d->writer_first, &d->writer_last) == 0) {
-            d->writer_held = 1;
-        }
-    }
-    if (disk_node_of(dev)) {
-        disk_node_of(dev)->disk->opens++;
-    }
-    if (dev->ops == &loop_ops) {
-        loop_node_opened(devfs_loop_index(dev));
-    }
-
+    devfs_note_open(dev, e);
     return fd;
 }
 
