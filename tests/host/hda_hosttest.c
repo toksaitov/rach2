@@ -75,6 +75,21 @@ int devfs_numbers(const char *path, uint32_t *major, uint32_t *minor)
 /* The types a mount's device number is chosen by (`procfs_mount_dev`). */
 const struct vfs_type vfs_devfs_type, vfs_procfs_type, vfs_sysfs_type, vfs_krffs_type;
 
+/** No backlight here, so /sys/class/backlight is empty: -1. */
+int backlight_find(const char *name, int len)
+{
+    (void)name;
+    (void)len;
+    return -1;
+}
+
+/** No backlight at any index: NULL. */
+const char *backlight_name(int i)
+{
+    (void)i;
+    return 0;
+}
+
 /* The counters /proc/net/snmp reports, which net_core.c defines. */
 struct net_mib net_mib;
 
