@@ -64,18 +64,19 @@
 # ends first is stopped here and the run fails and says so. The command's side
 # on the host is not stopped with it.
 #
-# `wait` watches a run started on the host as RUNS/NAME.sh, RUNS being the
-# owner's copy's `build/runs`, which writes its results as lines beginning
-# `NAME: ` to RUNS/NAME.out and its work under RUNS/NAME/, and returns as soon
-# as there is something to act on: more than SEEN result lines (0 unless given),
-# the run ended, nothing under its work directory changed for 15 minutes, which
-# is a step stuck, or 100 minutes gone, which is before the two hours a
-# background command of an agent may last. It prints the new lines and the
-# reason, so that the caller reads each result when it lands and waits again
-# with the new count. The probe it sends ends with a command that succeeds,
-# whether or not NAME.out exists yet, so a status other than 0 means that ssh or
-# the copy's shell failed; `wait` then exits 1 and says so, since it cannot tell
-# whether the run has ended.
+# `wait` watches a run started on the host as RUNS/NAME.sh, by any path to
+# it, such as `sh build/runs/NAME.sh` from the copy or `sh NAME.sh` in RUNS,
+# RUNS being the owner's copy's `build/runs`. The run writes its results as
+# lines beginning `NAME: ` to RUNS/NAME.out and its work under RUNS/NAME/.
+# `wait` returns as soon as there is something to act on: more than SEEN
+# result lines (0 unless given), the run ended, nothing under its work
+# directory changed for 15 minutes, which is a step stuck, or 100 minutes
+# gone, which is before the two hours a background command of an agent may
+# last. It prints the new lines and the reason, so that the caller reads each
+# result when it lands and waits again with the new count. The probe it sends
+# ends with a command that succeeds, whether or not NAME.out exists yet, so a
+# status other than 0 means that ssh or the copy's shell failed; `wait` then
+# exits 1 and says so, since it cannot tell whether the run has ended.
 #
 # The host is reached as `ssh testing`. Its ssh server is Windows's OpenSSH,
 # whose default shell, `C:\msys64\sshd_default_shell.cmd`, is a batch file
@@ -400,8 +401,8 @@ case "${1:-}" in
         runs=$OWNER/build/runs
         while :; do
             status=0
-            out=$(printf 'pgrep -f %s/%s.sh > /dev/null || pgrep -f "sh %s.sh" > /dev/null && echo RUNNING; find %s/%s -type f -mmin -15 2>/dev/null | head -1 | grep -q . && echo FRESH; cat %s/%s.out 2>/dev/null || :\n' \
-                "$runs" "$name" "$name" "$runs" "$name" "$runs" "$name" | "$0" sh 2>/dev/null) || status=$?
+            out=$(printf 'pgrep -f %s > /dev/null && echo RUNNING; find %s/%s -type f -mmin -15 2>/dev/null | head -1 | grep -q . && echo FRESH; cat %s/%s.out 2>/dev/null || :\n' \
+                "'[ /]$name\\.sh( |\$)'" "$runs" "$name" "$runs" "$name" | "$0" sh 2>/dev/null) || status=$?
             if [ "$status" -ne 0 ]; then
                 echo "testing: $name: the host did not answer, status $status; its run may still go on" >&2
                 exit 1
