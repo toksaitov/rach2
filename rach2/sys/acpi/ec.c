@@ -9,7 +9,6 @@
 #include "../udelay.h"
 #include "../arch/x86/portio.h"
 #include "../lib/kirq.h"
-#include "../lib/spinlock.h"
 
 #include "acpi.h"
 
@@ -50,10 +49,25 @@ static struct {
 } ec;
 
 /* One transaction at a time: the address space's handler runs outside
- * ACPICA's interpreter lock, and a query beside it. Both are in a process,
- * and the GPE's handler only reads the status, so interrupts stay on while
- * a slow EC is waited for. */
-static struct spinlock ec_lock = SPINLOCK_INIT;
+ * ACPICA's interpreter lock, and a query beside it. A semaphore of one unit,
+ * on which a process sleeps and the boot spins (AcpiOsWaitSemaphore): a
+ * process that met a spin lock taken by kacpid would spin in its system
+ * call, which nothing preempts, and kacpid would never run to give it
+ * back. The GPE's handler only reads the status, so interrupts stay on
+ * while a slow EC is waited for. */
+static ACPI_SEMAPHORE ec_lock;
+
+/** Take the EC for one transaction. */
+static void ec_take(void)
+{
+    (void)AcpiOsWaitSemaphore(ec_lock, 1, ACPI_WAIT_FOREVER);
+}
+
+/** Give the EC back. */
+static void ec_give(void)
+{
+    (void)AcpiOsSignalSemaphore(ec_lock, 1);
+}
 
 /** Log a transaction that timed out, the first four times. */
 static void ec_timed_out(const char *what, unsigned address)
@@ -85,7 +99,7 @@ static ACPI_STATUS ec_space(UINT32 function, ACPI_PHYSICAL_ADDRESS address, UINT
     if (function == ACPI_READ) {
         *value = 0;
     }
-    spin_lock(&ec_lock);
+    ec_take();
     for (i = 0; i < bytes && rc == 0; i++) {
         if (function == ACPI_READ) {
             rc = ec_read(&ec.io, (uint8_t)(address + i), &byte);
@@ -96,7 +110,7 @@ static ACPI_STATUS ec_space(UINT32 function, ACPI_PHYSICAL_ADDRESS address, UINT
             rc = ec_write(&ec.io, (uint8_t)(address + i), (uint8_t)(*value >> (8 * i)));
         }
     }
-    spin_unlock(&ec_lock);
+    ec_give();
     if (rc != 0) {
         ec_timed_out(function == ACPI_READ ? "read" : "write", (unsigned)(address + i - 1));
         return AE_TIME;
@@ -104,36 +118,51 @@ static ACPI_STATUS ec_space(UINT32 function, ACPI_PHYSICAL_ADDRESS address, UINT
     return AE_OK;
 }
 
+static void ec_queries(void *context);
+
 /**
- * Run the EC's queries, in ACPICA's thread: ask which event it has and run
- * its _Qxx, while SCI_EVT stays set, EC_QUERIES at most. The flag `queued`
- * is cleared before the last look at SCI_EVT, so an event that comes after
- * it queues the work again.
+ * Queue the queries when the EC has SCI_EVT set and none are queued, with
+ * interrupts off, as the SCI has them, so that the GPE's handler and the
+ * end of the work do not both queue it.
  */
-static void ec_queries(void *context)
+static void ec_queue(void)
+{
+    if (!ec.queued && (ec_status(&ec.io) & EC_SCI_EVT)) {
+        ec.queued = 1;
+        if (ACPI_FAILURE(AcpiOsExecute(OSL_EC_POLL_HANDLER, ec_queries, NULL))) {
+            ec.queued = 0;
+        }
+    }
+}
+
+/**
+ * Ask the EC which events it has and run each one's _Qxx, while SCI_EVT
+ * stays set, EC_QUERIES at most. 1 when the EC may have more, 0 when it
+ * timed out or answered that it has none, which a look again would only
+ * repeat.
+ */
+static int ec_run_queries(void)
 {
     static char name[] = "_Q00";
     static const char hex[] = "0123456789ABCDEF";
-    uint32_t flags;
     uint8_t query;
     ACPI_STATUS status;
     int n, rc;
 
-    (void)context;
     for (n = 0; n < EC_QUERIES; n++) {
-        spin_lock(&ec_lock);
+        ec_take();
         if (!(ec_status(&ec.io) & EC_SCI_EVT)) {
-            spin_unlock(&ec_lock);
-            break;
+            ec_give();
+            return 1;
         }
         rc = ec_query(&ec.io, &query);
-        spin_unlock(&ec_lock);
+        ec_give();
         if (rc != 0) {
             ec_timed_out("query", EC_QUERY);
-            break;
+            return 0;
         }
         if (query == 0) {
-            break;
+            return 0;
         }
         name[2] = hex[query >> 4];
         name[3] = hex[query & 0xF];
@@ -144,28 +173,44 @@ static void ec_queries(void *context)
                  AcpiFormatException(status));
         }
     }
+    return 1;
+}
+
+/**
+ * Run the EC's queries, in ACPICA's thread. The flag `queued` is cleared
+ * and SCI_EVT looked at once more, with interrupts off: an edge that came
+ * after the queries' last look found the flag set and queued nothing, so
+ * the work queues itself again, behind what else is queued. After a
+ * timeout or a query of none it is not, and the EC is asked again on its
+ * next GPE.
+ */
+static void ec_queries(void *context)
+{
+    uint32_t flags;
+    int more;
+
+    (void)context;
+    more = ec_run_queries();
     flags = kirq_save();
     ec.queued = 0;
+    if (more) {
+        ec_queue();
+    }
     kirq_restore(flags);
 }
 
 /**
- * The EC's GPE, in the SCI: queue the queries when the EC has SCI_EVT set
- * and none are queued. The EC raises its GPE too for each byte of a
- * transaction, which needs nothing here. Edge-triggered, as Linux takes it,
- * so ACPICA cleared it and enables it again.
+ * The EC's GPE, in the SCI: queue the queries when the EC has SCI_EVT set.
+ * The EC raises its GPE too for each byte of a transaction, which needs
+ * nothing here. Edge-triggered, as Linux takes it, so ACPICA cleared it and
+ * enables it again.
  */
 static UINT32 ec_gpe(ACPI_HANDLE device, UINT32 number, void *context)
 {
     (void)device;
     (void)number;
     (void)context;
-    if (!ec.queued && (ec_status(&ec.io) & EC_SCI_EVT)) {
-        ec.queued = 1;
-        if (ACPI_FAILURE(AcpiOsExecute(OSL_EC_POLL_HANDLER, ec_queries, NULL))) {
-            ec.queued = 0;
-        }
-    }
+    ec_queue();
     return ACPI_INTERRUPT_HANDLED | ACPI_REENABLE_GPE;
 }
 
@@ -246,11 +291,17 @@ void acpi_ec_probe(void)
         return;
     }
     ec_read_gpe();
+    if (ACPI_FAILURE(AcpiOsCreateSemaphore(1, 1, &ec_lock))) {
+        klog(KLOG_ERR, "acpi", "ec: refused: %s: no lock", ec.path);
+        ec.handle = NULL;
+        return;
+    }
     status =
         AcpiInstallAddressSpaceHandlerNo_Reg(ec.handle, ACPI_ADR_SPACE_EC, ec_space, NULL, NULL);
     if (ACPI_FAILURE(status)) {
         klog(KLOG_ERR, "acpi", "ec: refused: %s: address space: %s", ec.path,
              AcpiFormatException(status));
+        (void)AcpiOsDeleteSemaphore(ec_lock);
         ec.handle = NULL;
         return;
     }
@@ -295,11 +346,6 @@ void acpi_ec_start(void)
     klog(KLOG_INFO, "acpi", "ec: gpe 0x%x enabled, status 0x%02x", (unsigned)ec.gpe,
          (unsigned)ec_status(&ec.io));
     flags = kirq_save();
-    if (!ec.queued && (ec_status(&ec.io) & EC_SCI_EVT)) {
-        ec.queued = 1;
-        if (ACPI_FAILURE(AcpiOsExecute(OSL_EC_POLL_HANDLER, ec_queries, NULL))) {
-            ec.queued = 0;
-        }
-    }
+    ec_queue();
     kirq_restore(flags);
 }
