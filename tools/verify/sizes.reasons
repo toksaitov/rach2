@@ -227,8 +227,8 @@ rach2/sys/syscall_proc.c:exec_shebang complexity 30 one system call's contract, 
 
 rach2/sys/tty/n_tty.c:n_tty_receive complexity 33 a state machine, one arm per state, read as a table
 
-rach2/sys/usb/core.c:step_device complexity 79 a state machine, one arm per state, read as a table
-rach2/sys/usb/core.c:step_device lines 413 a state machine, one arm per state, read as a table
+rach2/sys/usb/core.c:step_device complexity 78 a state machine, one arm per state, read as a table
+rach2/sys/usb/core.c:step_device lines 404 a state machine, one arm per state, read as a table
 rach2/sys/usb/core.c:usb_core_step complexity 49 a state machine, one arm per state, read as a table
 rach2/sys/usb/core.c:usb_core_step lines 126 a state machine, one arm per state, read as a table
 rach2/sys/usb/core.c:usb_parse_config complexity 47 a parser over an external format, one check per field in the format's order

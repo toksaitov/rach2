@@ -900,6 +900,26 @@ static void step_running(struct usb_device_state *d)
 }
 
 /**
+ * Put the keyboard or mouse `d`, in boot protocol now, to work: end its
+ * bus's enumeration, register it with the input layer and record it.
+ */
+static void start_running(struct usb_device_state *d)
+{
+    d->state = ST_RUNNING;
+    d->reporting = 0;
+    enumerating[bus_of(d)] = -1;
+    if (d->interface.protocol == USB_PROTOCOL_MOUSE) {
+        /* An open of `mouse` fails until a mouse of any kind is found. */
+        input_mouse_found();
+    }
+    hid_attach(d->index + 1, d->interface.protocol == USB_PROTOCOL_KBD ? HID_KEYBOARD : HID_MOUSE,
+               d->vendor, d->product);
+    klog(KLOG_INFO, "usb", "device: port %s: %x:%x, class %d protocol %d, endpoint %d", path_of(d),
+         (int)d->vendor, (int)d->product, d->interface.class_code, d->interface.protocol,
+         d->interface.ep_number);
+}
+
+/**
  * One step of one device that is not running: one arm per state, each
  * reading the answer to the request the state before sent and sending the
  * next.
@@ -1330,19 +1350,7 @@ static void step_device(struct usb_device_state *d)
             fail(d, "it refused the boot protocol");
             return;
         }
-        d->state = ST_RUNNING;
-        d->reporting = 0;
-        enumerating[bus_of(d)] = -1;
-        if (d->interface.protocol == USB_PROTOCOL_MOUSE) {
-            /* An open of `mouse` fails until a mouse of any kind is found. */
-            input_mouse_found();
-        }
-        hid_attach(d->index + 1,
-                   d->interface.protocol == USB_PROTOCOL_KBD ? HID_KEYBOARD : HID_MOUSE, d->vendor,
-                   d->product);
-        klog(KLOG_INFO, "usb", "device: port %s: %x:%x, class %d protocol %d, endpoint %d",
-             path_of(d), (int)d->vendor, (int)d->product, d->interface.class_code,
-             d->interface.protocol, d->interface.ep_number);
+        start_running(d);
         return;
 
     default:
