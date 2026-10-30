@@ -770,6 +770,31 @@ static const char *block_subdir(int node)
                                       : "";
 }
 
+/** Move `*pos` past the name a writer put at `out[*pos]`, as far as `cap`
+ * bytes leave room for a NUL. */
+static void synth_skip_name(const char *out, int cap, int *pos)
+{
+    while (*pos < cap - 1 && out[*pos] != '\0') {
+        (*pos)++;
+    }
+}
+
+/** Append the /sys path of the disk node `node` with `key` to `out` at
+ * `*pos`, as `synth_put` appends: its disk's directory below /sys/block, a
+ * partition's below that, and the part `block_subdir` names. */
+static void synth_sys_block_path(int node, int key, char *out, int cap, int *pos)
+{
+    synth_put(out, cap, pos, "/sys/block/");
+    sysfs_block_name(sysfs_block_whole(key), out + *pos, cap - *pos);
+    synth_skip_name(out, cap, pos);
+    if (node == SYSFS_BLOCK_PART) {
+        synth_put(out, cap, pos, "/");
+        sysfs_block_name(key, out + *pos, cap - *pos);
+        synth_skip_name(out, cap, pos);
+    }
+    synth_put(out, cap, pos, block_subdir(node));
+}
+
 void synth_sys_path(int node, int key, char *out, int cap)
 {
     static const char *const paths[] = {"/sys",
@@ -787,21 +812,7 @@ void synth_sys_path(int node, int key, char *out, int cap)
         return;
     }
     if (SYSFS_IS_BLOCK(node)) {
-        int whole = sysfs_block_whole(key);
-
-        synth_put(out, cap, &pos, "/sys/block/");
-        sysfs_block_name(whole, out + pos, cap - pos);
-        while (pos < cap - 1 && out[pos] != '\0') {
-            pos++;
-        }
-        if (node == SYSFS_BLOCK_PART) {
-            synth_put(out, cap, &pos, "/");
-            sysfs_block_name(key, out + pos, cap - pos);
-            while (pos < cap - 1 && out[pos] != '\0') {
-                pos++;
-            }
-        }
-        synth_put(out, cap, &pos, block_subdir(node));
+        synth_sys_block_path(node, key, out, cap, &pos);
         out[pos] = '\0';
         return;
     }
@@ -855,9 +866,7 @@ void synth_sys_path(int node, int key, char *out, int cap)
     if (node == SYSFS_NET_IF || node == SYSFS_NET_STATS) {
         synth_put(out, cap, &pos, "/sys/class/net/");
         sysfs_net_name(key, out + pos, cap - pos);
-        while (pos < cap - 1 && out[pos] != '\0') {
-            pos++;
-        }
+        synth_skip_name(out, cap, &pos);
         synth_put(out, cap, &pos, node == SYSFS_NET_STATS ? "/statistics" : "");
         out[pos] = '\0';
         return;
@@ -1252,11 +1261,93 @@ static int synth_classify_sysvipc(const struct comp *c, int n, struct vpath *vp)
     return vp->kind;
 }
 
-/**
- * The fixed names of /proc are tried before its pid component, since
- * `cmdline`, `self` and the rest are not numbers; a pid of 0, the kernel's
- * idle context, is no process's.
- */
+/** Classify the components `c` of `n` from "dev": the directory, the
+ * terminals of /dev/pts, the event devices of /dev/input, the descriptor
+ * links and the devices of /dev, whose presence devfs decides. */
+static int synth_classify_dev(const struct comp *c, int n, struct vpath *vp)
+{
+    if (n == 1) {
+        vp->kind = VNODE_DEV_DIR;
+        return vp->kind;
+    }
+    if (comp_eq(c[1], "pts")) {
+        if (n == 2) {
+            vp->kind = VNODE_PTS_DIR;
+        } else {
+            vp->pts_index = comp_uint(c[2]);
+            vp->kind = vp->pts_index < 0 ? VNODE_ENOENT : n == 3 ? VNODE_PTS : VNODE_ENOTDIR;
+        }
+        return vp->kind;
+    }
+    if (comp_eq(c[1], "input")) {
+        return synth_classify_input(c + 2, n - 2, vp);
+    }
+    if (synth_classify_dev_fd(c, n, vp)) {
+        return vp->kind;
+    }
+    if (comp_eq(c[1], "log")) {
+        vp->kind = n == 2 ? VNODE_DEV_LINK : VNODE_ENOTDIR;
+        return vp->kind;
+    }
+    vp->kind = n == 2 ? VNODE_DEV : VNODE_ENOTDIR;
+    synth_copy_name(vp, c[1]);
+    return vp->kind;
+}
+
+/** Classify the components `c` of `n` from "proc": its fixed names first,
+ * since `cmdline`, `self` and the rest are not numbers, then a process by
+ * its pid; a pid of 0, the kernel's idle context, is no process's. */
+static int synth_classify_proc(const struct comp *c, int n, struct vpath *vp)
+{
+    int pid;
+
+    if (n == 1) {
+        vp->kind = VNODE_PROC_DIR;
+        return vp->kind;
+    }
+    if (comp_eq(c[1], "cmdline")) {
+        vp->kind = (n == 2) ? VNODE_PROC_CMDLINE : VNODE_ENOTDIR;
+        return vp->kind;
+    }
+    if (comp_eq(c[1], "disk")) {
+        vp->kind = (n == 2) ? VNODE_PROC_DISK : VNODE_ENOTDIR;
+        return vp->kind;
+    }
+    vp->kind = synth_global_file(c[1]);
+    if (vp->kind != VNODE_ENOENT) {
+        if (n != 2)
+            vp->kind = VNODE_ENOTDIR;
+        return vp->kind;
+    }
+    if (comp_eq(c[1], "sys")) {
+        return synth_classify_sys(c + 2, n - 2, vp);
+    }
+    if (comp_eq(c[1], "net")) {
+        return synth_classify_net(c + 2, n - 2, vp);
+    }
+    if (comp_eq(c[1], "sysvipc")) {
+        return synth_classify_sysvipc(c + 2, n - 2, vp);
+    }
+    if (comp_eq(c[1], "acpi")) {
+        vp->kind = n == 2                   ? VNODE_PROC_ACPI_DIR
+                   : !comp_eq(c[2], "call") ? VNODE_ENOENT
+                   : n == 3                 ? VNODE_PROC_ACPI_CALL
+                                            : VNODE_ENOTDIR;
+        return vp->kind;
+    }
+    if (comp_eq(c[1], "self")) {
+        pid = SYNTH_PID_SELF;
+    } else {
+        pid = comp_uint(c[1]);
+        if (pid <= 0) {
+            vp->kind = VNODE_ENOENT;
+            return vp->kind;
+        }
+    }
+    vp->pid = pid;
+    return synth_classify_pid(c + 1, n - 1, vp, 1);
+}
+
 int synth_classify(const char *path, struct vpath *vp)
 {
     struct comp c[SYNTH_MAXC + 1];
@@ -1279,88 +1370,14 @@ int synth_classify(const char *path, struct vpath *vp)
     }
 
     if (comp_eq(c[0], "dev")) {
-        if (n == 1) {
-            vp->kind = VNODE_DEV_DIR;
-            return vp->kind;
-        }
-        if (comp_eq(c[1], "pts")) {
-            if (n == 2) {
-                vp->kind = VNODE_PTS_DIR;
-            } else {
-                vp->pts_index = comp_uint(c[2]);
-                vp->kind = vp->pts_index < 0 ? VNODE_ENOENT : n == 3 ? VNODE_PTS : VNODE_ENOTDIR;
-            }
-            return vp->kind;
-        }
-        if (comp_eq(c[1], "input")) {
-            return synth_classify_input(c + 2, n - 2, vp);
-        }
-        if (synth_classify_dev_fd(c, n, vp)) {
-            return vp->kind;
-        }
-        if (comp_eq(c[1], "log")) {
-            vp->kind = n == 2 ? VNODE_DEV_LINK : VNODE_ENOTDIR;
-            return vp->kind;
-        }
-        vp->kind = n == 2 ? VNODE_DEV : VNODE_ENOTDIR;
-        synth_copy_name(vp, c[1]);
-        return vp->kind;
+        return synth_classify_dev(c, n, vp);
     }
-
     if (comp_eq(c[0], "sys")) {
         return synth_classify_sysfs(c + 1, n - 1, vp);
     }
-
     if (comp_eq(c[0], "proc")) {
-        int pid;
-
-        if (n == 1) {
-            vp->kind = VNODE_PROC_DIR;
-            return vp->kind;
-        }
-        if (comp_eq(c[1], "cmdline")) {
-            vp->kind = (n == 2) ? VNODE_PROC_CMDLINE : VNODE_ENOTDIR;
-            return vp->kind;
-        }
-        if (comp_eq(c[1], "disk")) {
-            vp->kind = (n == 2) ? VNODE_PROC_DISK : VNODE_ENOTDIR;
-            return vp->kind;
-        }
-        vp->kind = synth_global_file(c[1]);
-        if (vp->kind != VNODE_ENOENT) {
-            if (n != 2)
-                vp->kind = VNODE_ENOTDIR;
-            return vp->kind;
-        }
-        if (comp_eq(c[1], "sys")) {
-            return synth_classify_sys(c + 2, n - 2, vp);
-        }
-        if (comp_eq(c[1], "net")) {
-            return synth_classify_net(c + 2, n - 2, vp);
-        }
-        if (comp_eq(c[1], "sysvipc")) {
-            return synth_classify_sysvipc(c + 2, n - 2, vp);
-        }
-        if (comp_eq(c[1], "acpi")) {
-            vp->kind = n == 2                   ? VNODE_PROC_ACPI_DIR
-                       : !comp_eq(c[2], "call") ? VNODE_ENOENT
-                       : n == 3                 ? VNODE_PROC_ACPI_CALL
-                                                : VNODE_ENOTDIR;
-            return vp->kind;
-        }
-        if (comp_eq(c[1], "self")) {
-            pid = SYNTH_PID_SELF;
-        } else {
-            pid = comp_uint(c[1]);
-            if (pid <= 0) {
-                vp->kind = VNODE_ENOENT;
-                return vp->kind;
-            }
-        }
-        vp->pid = pid;
-        return synth_classify_pid(c + 1, n - 1, vp, 1);
+        return synth_classify_proc(c, n, vp);
     }
-
     vp->kind = VNODE_KRFFS;
     return vp->kind;
 }
