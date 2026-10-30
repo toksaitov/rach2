@@ -144,6 +144,28 @@ static void session_key(uint8_t scancode, char c, int was_e0)
     tty_input_char(&console_tty, tc);
 }
 
+/** Scroll the kernel shell's console back for the extended key `scancode`
+ * pressed, Page Up, Page Down, Home or End, and say whether it was one. */
+static int shell_scroll_key(uint8_t scancode)
+{
+    switch (scancode) {
+    case 0x49:
+        k_scrollback_page_up();
+        return 1;
+    case 0x51:
+        k_scrollback_page_down();
+        return 1;
+    case 0x47:
+        k_scrollback_home();
+        return 1;
+    case 0x4F:
+        k_scrollback_end();
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 void input_key(uint8_t scancode)
 {
     char c;
@@ -196,23 +218,8 @@ void input_key(uint8_t scancode)
         return;
     }
 
-    if (was_e0 && shell_reads_input()) {
-        if (scancode == 0x49) {
-            k_scrollback_page_up();
-            return;
-        }
-        if (scancode == 0x51) {
-            k_scrollback_page_down();
-            return;
-        }
-        if (scancode == 0x47) {
-            k_scrollback_home();
-            return;
-        }
-        if (scancode == 0x4F) {
-            k_scrollback_end();
-            return;
-        }
+    if (was_e0 && shell_reads_input() && shell_scroll_key(scancode)) {
+        return;
     }
 
     /* Of the extended keys only the keypad's Enter and slash have a
