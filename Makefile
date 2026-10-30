@@ -1228,7 +1228,7 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # The os-real image: the BusyBox shell and tools, the Dropbear SSH server and
 # client, TinyCC and pdpmake, Doom, the manual, the sources under /src, and an
 # /etc and /root tree. 20 MiB on both architectures: with Doom's WAD the tree
-# takes 19.0 MiB on i686 and 19.7 MiB on x86-64, whose programs are larger.
+# takes 19.1 MiB on i686 and 19.9 MiB on x86-64, whose programs are larger.
 # ACPICA's core is staged as an archive of 0.45 MiB for that reason
 # (vendor/acpica/build_acpica.sh).
 # The WAD is not in the repository. A build without it, as in a fresh clone,
