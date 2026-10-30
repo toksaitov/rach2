@@ -49,10 +49,10 @@
       "termination": {"end": "exited", "value": 0},
       "progress": [
         {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 10},
-        {"witness_id": "build", "kind": "quiet", "means": "a build of the machine's own sources has ended", "limit": null, "bound": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 3600000000}},
+        {"witness_id": "build", "kind": "quiet", "means": "a build of the machine's own sources has ended", "limit": null, "bound": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}},
         {"witness_id": "probe", "kind": "counter", "means": "a probe has handed the debug shell back", "limit": 256}
       ],
-      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 10800000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 3600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 5400000000, "ceiling_us": 10800000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
       "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1207959552, "disk_bytes": 335544320, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
