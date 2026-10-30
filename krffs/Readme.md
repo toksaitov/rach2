@@ -136,6 +136,7 @@ The driver checks the whole ring first, backward links included, and runs FUSE s
 * `man.script` is `/bin/man` ([man(1)](../man/man1/man.1)).
 * `udhcpc-default.script` is `/usr/share/udhcpc/default.script`, which BusyBox's `udhcpc` runs when a lease arrives, is renewed or ends, to set the address, the route and `/etc/resolv.conf` ([busybox-networking(1)](../man/man1/busybox-networking.1)).
 * `rescue-static.script` is the recovery image's `/bin/rescue-static`, which takes the sealed disk's fixed address when no lease arrives ([rescue-static(8)](../man/man8/rescue-static.8)).
+* `acpi/` has BusyBox acpid's map and action file, `/etc/acpi.map` and `/etc/acpid.conf`, and its three actions: `power.script`, `/etc/acpi/power`; `volume.script`, `/etc/acpi/volume/up`, `down` and `mute`; and `brightness.script`, `/etc/acpi/brightness/up` and `down`. A script staged under several names takes its direction from the name it is run by ([init(8)](../man/man8/init.8)).
 
 `demo/hello.txt` is the file in the FAT32, ext2 and KRFFS demonstration images that the sealed disk has in `/demo`, and on its two FAT partitions; `demo/Readme.txt` is the disk's `/demo/Readme.txt`.
 
