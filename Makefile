@@ -736,10 +736,11 @@ ASCIISCAN  = build/tools/verify/asciiscan
 # with libetude-case, the library that gives it its `main`. They are host
 # programs, the same for both architectures, which a case's `prepare` names
 # as tests/cases/machine/NAME. The lifecycle scenarios, and those of the
-# audio, Doom, krffsmount, loop device, mount, partition, disk arrangement,
-# console, boot line, selfbuild and etude cases, also link
+# ACPI, audio, Doom, krffsmount, loop device, mount, partition, disk
+# arrangement, console, boot line, selfbuild and etude cases, also link
 # tests/cases/machine/lifecycle.c, which they share.
-LIFECYCLE_SCENARIOS = build/tests/cases/machine/acpid_scenario \
+LIFECYCLE_SCENARIOS = build/tests/cases/machine/acpi_scenario \
+                      build/tests/cases/machine/acpid_scenario \
                       build/tests/cases/machine/audio_scenario \
                       build/tests/cases/machine/bootline_scenario \
                       build/tests/cases/machine/bootorder_scenario \

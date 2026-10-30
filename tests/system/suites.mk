@@ -1318,6 +1318,13 @@ $(MAN_SUMMARY): $(MAN_ALL) man/aliases man/recovery
 # `uptime` on the real image, each of which fails when a /proc file it reads is
 # missing.
 # Its cases are tests/cases/machine.procfiles.json, with no target here.
+# `tests/run acpi`: ACPICA in the kernel. On QEMU's pc and q35 machines, the
+# test image's boot records that ACPICA loaded the namespace with no error
+# counted and took the SCI, and QMP's system_powerdown gives the power
+# button's event; a boot with rach2.noacpica leaves ACPICA out and powers off
+# through \_S5. They are the cases of tests/cases/machine.acpi.json, which
+# etude runs, and have no target here.
+
 # `tests/run exitline`: the plain process-exit line is printed under the debug
 # shell and nowhere else. Four boots: os-real, which must stay quiet while a
 # forked program runs, the test image that must still print it for a child and

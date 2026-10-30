@@ -58,6 +58,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `subset` (core tier; needs qemu; 128 MiB): each optional device probe left out, and proved left out.
 * `bus` (full tier; needs qemu, mformat, mtype; 128 MiB): four IDE drives on both channels, an AHCI and an IDE disk together with the root on each in turn, and a disk past 128 GiB.
 * `exitline` (full tier; needs qemu; 128 MiB): the plain process-exit line is printed under the debug shell and nowhere else.
+* `acpi` (full tier; needs qemu; 128 MiB): ACPICA in the kernel.
 * `etudeexec` (full tier; needs qemu; 512 MiB): Rach2 builds etude by its TinyCC recipe, and the POSIX executor, built the same way, passes its test there.
 * `login` (core tier; needs qemu; 128 MiB): prove the console cannot fall back to an unauthenticated shell.
 * `man` (core tier; needs qemu; 128 MiB): the manual pages on the machine.

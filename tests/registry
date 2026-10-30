@@ -94,6 +94,7 @@ queue|qemu,mformat|core
 subset|qemu|core
 bus|qemu,mformat,mtype|full
 exitline|qemu|full
+acpi|qemu|full
 etudeexec|qemu|full||512
 login|qemu|core
 man|qemu|core

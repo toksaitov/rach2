@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.acpi",
+  "summary": "ACPICA in the kernel on QEMU's pc and q35 machines: the namespace loaded with no error counted, the SCI taken and the power button's event; and the kernel without it under rach2.noacpica; the scenario is machine/acpi_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.acpi.pc",
+      "behavior": "on the pc machine ACPICA loads the firmware's namespace with no error counted, takes the SCI, and the power button's press reaches it",
+      "units": ["acpi"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "acpi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "guest", "does": "boot the test image to the debug shell and read the boot's records"},
+        {"step_id": "button", "stage": "execute", "machine": "guest", "does": "press the power button with QMP's system_powerdown, wait for the event's record and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "guest", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "up", "checks": "a whole record says acpi: acpica: N objects, 0 errors: ACPICA loaded the namespace and counted no error", "source": "scenario"},
+        {"assertion_id": "sci", "checks": "a whole record says acpi: sci: line N: ACPICA's handler took the SCI's line", "source": "scenario"},
+        {"assertion_id": "button", "checks": "after QMP's system_powerdown the kernel records acpi: event: power button, the fixed event ACPICA took from the SCI", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "acpi_scenario", "node": "tests/cases/machine/acpi_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "firmware", "reason": "the case reads what ACPICA makes of QEMU's own tables and presses the power button through QMP; the Lenovo's acceptance checks ACPICA on its firmware"}
+    },
+    {
+      "case_id": "machine.acpi.q35",
+      "behavior": "on the q35 machine, whose ACPI is the ICH9's as on the Lenovo, ACPICA loads the namespace with no error counted, takes the SCI, and the power button's press reaches it",
+      "units": ["acpi"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "acpi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "guest", "does": "boot the test image to the debug shell and read the boot's records"},
+        {"step_id": "button", "stage": "execute", "machine": "guest", "does": "press the power button with QMP's system_powerdown, wait for the event's record and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "guest", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": [], "machine": "q35"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "up", "checks": "a whole record says acpi: acpica: N objects, 0 errors: ACPICA loaded the namespace and counted no error", "source": "scenario"},
+        {"assertion_id": "sci", "checks": "a whole record says acpi: sci: line N: ACPICA's handler took the SCI's line", "source": "scenario"},
+        {"assertion_id": "button", "checks": "after QMP's system_powerdown the kernel records acpi: event: power button, the fixed event ACPICA took from the SCI", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "acpi_scenario", "node": "tests/cases/machine/acpi_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "firmware", "reason": "the case reads what ACPICA makes of QEMU's own tables and presses the power button through QMP; the Lenovo's acceptance checks ACPICA on its firmware"}
+    },
+    {
+      "case_id": "machine.acpi.noacpica",
+      "behavior": "with rach2.noacpica the kernel leaves ACPICA out, and poweroff at the debug shell still stops the machine through the sleep types of \\_S5 that acpi.c read from the DSDT",
+      "units": ["acpi"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "acpi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "guest", "does": "boot the test image with rach2.noacpica to the debug shell and read the boot's records"},
+        {"step_id": "poweroff", "stage": "execute", "machine": "guest", "does": "type poweroff at the debug shell and wait for the machine to end"}
+      ],
+      "machines": [
+        {"machine_id": "guest", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.noacpica"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "skipped", "checks": "a whole record says acpi: acpica: skipped: rach2.noacpica, and none gives a count of ACPICA's objects", "source": "scenario"},
+        {"assertion_id": "off", "checks": "the machine ends with a shutdown, as QEMU reports a write of SLP_EN", "source": "scenario"},
+        {"assertion_id": "s5", "checks": "a whole record says poweroff: acpi: sleep types N and N, the power-off through \\_S5", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "acpi_scenario", "node": "tests/cases/machine/acpi_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "firmware", "reason": "the case reads what ACPICA makes of QEMU's own tables and presses the power button through QMP; the Lenovo's acceptance checks ACPICA on its firmware"}
+    }
+  ]
+}
