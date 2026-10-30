@@ -7,9 +7,11 @@
  * (the console session and every orphan the kernel hands over), respawn that
  * session when it exits, so the console is never left without one, and
  * continue a child that is stopped, since nothing else can. Beside that it
- * clears `/var/run`, writes the boot's utmp record, sets the resource limits
- * and keeps `/bin/update` running. It never exits; if it did, the kernel
- * would have no reaper, so the kernel panics if init dies.
+ * clears `/var/run`, writes the boot's utmp record, sets the resource limits,
+ * keeps each backlight's level across a reboot, and keeps `/bin/update`
+ * running and, on an image with its configuration, BusyBox's acpid, which
+ * acts on the power, volume and brightness keys. It never exits; if it did,
+ * the kernel would have no reaper, so the kernel panics if init dies.
  *
  * Four artifacts are built from this one source, and none of them is named
  * plain `init`: `init-shell` runs a shell on the console, `init-login` puts
@@ -109,13 +111,6 @@ static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
 #define OPENSSH_PROGRAM "/usr/sbin/sshd"
 #define OPENSSH_KEYGEN  "/usr/bin/ssh-keygen"
 
-/* The pause, in seconds, after a service that died almost at once, the SSH
- * server among them (`service_ended`). Long enough that a server failing for
- * a permanent reason (no entropy, no network, a port already taken) does not
- * respawn at full speed, and short enough that a machine reachable only over
- * the network is reachable again quickly. */
-#define SSHD_RESPAWN_PAUSE 5
-
 /*
  * D-Bus's system bus, which the GNU system's root has: init runs it where
  * the image has `DBUS_PROGRAM` and the user `DBUS_USER`, and no other image
@@ -136,8 +131,7 @@ static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
  * and syslog(3) send to `SYSLOG_FILE`, kept under 200 KiB with one older
  * file beside it.
  */
-#define BUSYBOX_PROGRAM "/bin/busybox"
-#define SYSLOG_FILE     "/var/log/messages"
+#define SYSLOG_FILE "/var/log/messages"
 
 /*
  * cronie's cron daemon, which the GNU system's root has and no other image:
@@ -157,6 +151,45 @@ static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
  */
 #define NTP_CONF "/etc/ntp.conf"
 #endif
+
+/* BusyBox, whose applets init runs by the name in argv[0]: the system log,
+ * ntpd and acpid. */
+#define BUSYBOX_PROGRAM "/bin/busybox"
+
+/*
+ * BusyBox's acpid, which runs the actions under /etc/acpi for the keys the
+ * kernel reports on /dev/input/eventN: the power button, the volume keys
+ * and the brightness keys. init runs it in the foreground, as an applet of
+ * `BUSYBOX_PROGRAM`, in every build, on an image that has `ACPID_CONF` and
+ * while the kernel has `ACPID_INPUT`: acpid opens the event devices there
+ * are when it starts, and exits at once when there is none.
+ */
+#define ACPID_CONF  "/etc/acpid.conf"
+#define ACPID_INPUT "/dev/input/event0"
+
+/*
+ * Each backlight's level is kept across a reboot, as systemd-backlight keeps
+ * it on Linux: init writes it back from `BACKLIGHT_KEPT`/NAME at boot and
+ * saves it there when it stops the machine. The backlights are found at
+ * boot, at most `BACKLIGHT_MAX` of them, since the kernel registers its
+ * backlights before it starts init.
+ */
+#define BACKLIGHT_CLASS "/sys/class/backlight"
+#define BACKLIGHT_KEPT  "/var/lib/backlight"
+#define BACKLIGHT_MAX   4
+
+/* A backlight whose level init keeps: the paths of the level, of the file
+ * that keeps it, and of that file's replacement while it is written. They
+ * are made at boot, so that the shutdown handler only opens, reads, writes
+ * and renames, which a signal handler may. */
+struct backlight {
+    char level[128];
+    char kept[128];
+    char fresh[128];
+};
+
+static struct backlight backlights[BACKLIGHT_MAX];
+static int backlight_count;
 
 #ifdef INIT_CONSOLE_LOGIN
 /* Whether a session child has already failed to exec the login program in
@@ -203,6 +236,153 @@ static void session_ended(int status, time_t lived)
 #endif
 
 /**
+ * Read at most `size` - 1 bytes of the file `path` into `text` and end them
+ * with a terminator. Returns the count, or -1 when the file cannot be read.
+ * Uses only open, read and close, so the shutdown handler may call it.
+ */
+static int read_text(const char *path, char *text, int size)
+{
+    int fd = open(path, O_RDONLY);
+    int n;
+
+    if (fd < 0) {
+        return -1;
+    }
+    n = (int)read(fd, text, (size_t)(size - 1));
+    close(fd);
+    if (n < 0) {
+        return -1;
+    }
+    text[n] = '\0';
+    return n;
+}
+
+/**
+ * Read the decimal number in the file `path` into `*value`. Returns 0, or -1
+ * when the file cannot be read or does not hold a number and a newline.
+ */
+static int read_number(const char *path, long *value)
+{
+    char text[24];
+    char *end;
+
+    if (read_text(path, text, sizeof(text)) <= 0) {
+        return -1;
+    }
+    errno = 0;
+    *value = strtol(text, &end, 10);
+    if (end == text || (*end != '\0' && *end != '\n') || errno == ERANGE || *value < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+/**
+ * Write the level kept for the backlight `b`, named `name`, back to it. The
+ * level is kept between a twentieth of the backlight's `max_brightness`, and
+ * at least 1, and that maximum, as systemd-backlight keeps it, so that a
+ * level saved at 0 does not start the machine with its screen dark. A
+ * backlight with no level kept is left as the kernel found it.
+ */
+static void restore_backlight(const struct backlight *b, const char *name)
+{
+    char path[sizeof(BACKLIGHT_CLASS) + NAME_MAX + sizeof("/max_brightness")];
+    long level, max, least;
+    FILE *f;
+    int ok = 0;
+
+    if (read_number(b->kept, &level) != 0) {
+        return;
+    }
+    snprintf(path, sizeof(path), BACKLIGHT_CLASS "/%s/max_brightness", name);
+    if (read_number(path, &max) != 0 || max <= 0) {
+        return;
+    }
+    least = max / 20 > 0 ? max / 20 : 1;
+    level = level < least ? least : level > max ? max : level;
+    f = fopen(b->level, "w");
+    if (f) {
+        ok = fprintf(f, "%ld\n", level) >= 0;
+        ok = fclose(f) == 0 && ok;
+    }
+    if (!f || !ok) {
+        fprintf(stderr, "init: backlight: %s: cannot restore: %s\n", name, strerror(errno));
+    }
+}
+
+/**
+ * Find the backlights in `BACKLIGHT_CLASS`, make each one's paths in
+ * `backlights` and write its kept level back (`restore_backlight`). A
+ * backlight whose name makes a path too long for `struct backlight` is not
+ * kept.
+ */
+static void keep_backlights(void)
+{
+    DIR *d = opendir(BACKLIGHT_CLASS);
+    struct dirent *e;
+
+    if (!d) {
+        return;
+    }
+    while (backlight_count < BACKLIGHT_MAX && (e = readdir(d)) != NULL) {
+        struct backlight *b = &backlights[backlight_count];
+
+        if (e->d_name[0] == '.') {
+            continue;
+        }
+        if (snprintf(b->level, sizeof(b->level), BACKLIGHT_CLASS "/%s/brightness", e->d_name) >=
+                (int)sizeof(b->level) ||
+            snprintf(b->kept, sizeof(b->kept), BACKLIGHT_KEPT "/%s", e->d_name) >=
+                (int)sizeof(b->kept) ||
+            snprintf(b->fresh, sizeof(b->fresh), BACKLIGHT_KEPT "/%s.new", e->d_name) >=
+                (int)sizeof(b->fresh)) {
+            continue;
+        }
+        backlight_count++;
+        restore_backlight(b, e->d_name);
+    }
+    closedir(d);
+}
+
+/**
+ * Save each kept backlight's level to its file under `BACKLIGHT_KEPT`,
+ * making the directory when it is missing. Each file is written under a
+ * temporary name and renamed into place, so that a power loss leaves the
+ * old level or the new one. Called from the shutdown handler, so it makes
+ * only system calls a handler may make; a backlight whose level cannot be
+ * read or saved keeps the file it had.
+ */
+static void save_backlights(void)
+{
+    int i;
+
+    if (backlight_count == 0) {
+        return;
+    }
+    (void)mkdir("/var/lib", 0755);
+    (void)mkdir(BACKLIGHT_KEPT, 0755);
+    for (i = 0; i < backlight_count; i++) {
+        const struct backlight *b = &backlights[i];
+        char text[24];
+        int n = read_text(b->level, text, sizeof(text));
+        int fd, ok;
+
+        if (n <= 0) {
+            continue;
+        }
+        fd = open(b->fresh, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) {
+            continue;
+        }
+        ok = write(fd, text, (size_t)n) == n && fsync(fd) == 0;
+        close(fd);
+        if (!ok || rename(b->fresh, b->kept) != 0) {
+            (void)unlink(b->fresh);
+        }
+    }
+}
+
+/**
  * Stop the machine as the signal `sig` selects. Does not return.
  *
  * Installed for the three signals busybox's `halt`, `poweroff` and `reboot`
@@ -211,10 +391,13 @@ static void session_ended(int status, time_t lived)
  *
  * The work is done in the handler and not left to the loop through a flag, the
  * usual rule for a handler. That rule keeps a handler from doing what the
- * interrupted code was in the middle of; this one makes a single system call,
- * `reboot`, which is async-signal-safe and does not return when it succeeds,
- * so there is nothing to return to. A failed `reboot` falls to `_exit`, and
- * the kernel panics when init dies.
+ * interrupted code was in the middle of; this one saves the backlights'
+ * levels (`save_backlights`) with system calls alone and then calls `reboot`,
+ * which is async-signal-safe and does not return when it succeeds, so there
+ * is nothing to return to. A failed `reboot` falls to `_exit`, and the kernel
+ * panics when init dies. The handler is installed with all three signals
+ * blocked while it runs, so a second request, such as the second `poweroff`
+ * of a power button the firmware reports twice, waits and is never answered.
  *
  * The kernel disables scheduling and writes out the root file system before
  * it stops the machine, and stops it even when that write fails. init does
@@ -229,6 +412,7 @@ static void shutdown_handler(int sig)
     } else if (sig == SIGUSR2) {
         command = RB_POWER_OFF;
     }
+    save_backlights();
     reboot(command);
     _exit(1);
 }
@@ -457,6 +641,120 @@ static pid_t spawn_shell(void)
     }
     _exit(127);
 #endif
+    return -1; /* unreachable; quiets the compiler */
+}
+
+/**
+ * Block init's shutdown signals, SIGUSR1, SIGUSR2 and SIGTERM, before a fork,
+ * and store the mask as it was in `saved`. Returns 0, or -1 when the mask
+ * cannot be changed. A child forked with them blocked cannot run init's
+ * handlers, which would shut the machine down, before `shutdown_defaults`.
+ */
+static int shutdown_block(sigset_t *saved)
+{
+    sigset_t shutdown;
+
+    sigemptyset(&shutdown);
+    sigaddset(&shutdown, SIGUSR1);
+    sigaddset(&shutdown, SIGUSR2);
+    sigaddset(&shutdown, SIGTERM);
+    return sigprocmask(SIG_BLOCK, &shutdown, saved);
+}
+
+/**
+ * In a child forked under `shutdown_block`, give the shutdown signals their
+ * default actions and put back the mask `saved`, so that one sent to the
+ * child ends it. Returns 0, or -1 on failure.
+ */
+static int shutdown_defaults(const sigset_t *saved)
+{
+    struct sigaction action;
+
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = SIG_DFL;
+    sigemptyset(&action.sa_mask);
+    if (sigaction(SIGUSR1, &action, NULL) != 0 || sigaction(SIGUSR2, &action, NULL) != 0 ||
+        sigaction(SIGTERM, &action, NULL) != 0 || sigprocmask(SIG_SETMASK, saved, NULL) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+/* The pause, in seconds, after a service that died almost at once, the SSH
+ * server among them (`service_ended`). Long enough that a server failing for
+ * a permanent reason (no entropy, no network, a port already taken) does not
+ * respawn at full speed, and short enough that a machine reachable only over
+ * the network is reachable again quickly. */
+#define SERVICE_RESPAWN_PAUSE 5
+
+/* A service init keeps running: its pid, -1 while it is not running, and
+ * when it was last started. */
+struct service {
+    pid_t pid;
+    time_t spawned;
+};
+
+/**
+ * Whether `reaped`, what `waitpid` returned, is the pid of the service `s`.
+ * When it is, the service is marked not running, and when it ended within
+ * two seconds of its start, the call first sleeps `SERVICE_RESPAWN_PAUSE`
+ * seconds. A `reaped` of 0 or less never matches, since -1 is both a failed
+ * wait and the pid of a service not running.
+ */
+static int service_ended(struct service *s, pid_t reaped)
+{
+    if (reaped <= 0 || reaped != s->pid) {
+        return 0;
+    }
+    s->pid = -1;
+    if (time(0) - s->spawned < 2) {
+        sleep(SERVICE_RESPAWN_PAUSE);
+    }
+    return 1;
+}
+
+/** Whether to run acpid now: the image has `ACPID_CONF` and the kernel has
+ * an event device. Asked on each turn that finds acpid not running. */
+static int acpid_wanted(void)
+{
+    return access(ACPID_CONF, R_OK) == 0 && access(ACPID_INPUT, F_OK) == 0;
+}
+
+/**
+ * Fork BusyBox's acpid and return its pid (-1 on failure), with the shutdown
+ * signals blocked across the fork as for the SSH server. `-d` keeps it in
+ * the foreground and writes each action it runs to standard error, the
+ * service log, where what the action prints goes too. acpid reads its map
+ * and its actions, /etc/acpi.map and `ACPID_CONF`, when it starts.
+ */
+static pid_t spawn_acpid(void)
+{
+    sigset_t saved;
+    pid_t pid;
+
+    if (shutdown_block(&saved) != 0) {
+        return -1;
+    }
+    pid = fork();
+    if (pid != 0) {
+        (void)sigprocmask(SIG_SETMASK, &saved, NULL);
+        return pid;
+    }
+    if (shutdown_defaults(&saved) != 0) {
+        _exit(126);
+    }
+    service_output();
+    {
+        static const char msg[] = "init: cannot exec " BUSYBOX_PROGRAM " acpid\n";
+        char *argv[3];
+
+        argv[0] = (char *)"acpid";
+        argv[1] = (char *)"-d";
+        argv[2] = 0;
+        execve(BUSYBOX_PROGRAM, argv, environ);
+        (void)write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    }
+    _exit(127);
     return -1; /* unreachable; quiets the compiler */
 }
 
@@ -1130,42 +1428,6 @@ static void configure_network(void)
 }
 
 /**
- * Block init's shutdown signals, SIGUSR1, SIGUSR2 and SIGTERM, before a fork,
- * and store the mask as it was in `saved`. Returns 0, or -1 when the mask
- * cannot be changed. A child forked with them blocked cannot run init's
- * handlers, which would shut the machine down, before `shutdown_defaults`.
- */
-static int shutdown_block(sigset_t *saved)
-{
-    sigset_t shutdown;
-
-    sigemptyset(&shutdown);
-    sigaddset(&shutdown, SIGUSR1);
-    sigaddset(&shutdown, SIGUSR2);
-    sigaddset(&shutdown, SIGTERM);
-    return sigprocmask(SIG_BLOCK, &shutdown, saved);
-}
-
-/**
- * In a child forked under `shutdown_block`, give the shutdown signals their
- * default actions and put back the mask `saved`, so that one sent to the
- * child ends it. Returns 0, or -1 on failure.
- */
-static int shutdown_defaults(const sigset_t *saved)
-{
-    struct sigaction action;
-
-    memset(&action, 0, sizeof(action));
-    action.sa_handler = SIG_DFL;
-    sigemptyset(&action.sa_mask);
-    if (sigaction(SIGUSR1, &action, NULL) != 0 || sigaction(SIGUSR2, &action, NULL) != 0 ||
-        sigaction(SIGTERM, &action, NULL) != 0 || sigprocmask(SIG_SETMASK, saved, NULL) != 0) {
-        return -1;
-    }
-    return 0;
-}
-
-/**
  * Run `configure_network` in a child whose output goes to the service log,
  * and wait for the child. A failed fork or a failure to block the shutdown
  * signals skips the configuration.
@@ -1623,13 +1885,6 @@ static int bus_user(void)
     return 1;
 }
 
-/* A service the metal build keeps running: its pid, -1 while it is not
- * running, and when it was last started. */
-struct service {
-    pid_t pid;
-    time_t spawned;
-};
-
 /* The services, and whether the image has the bus and the cron daemon,
  * which `services_found` decides at boot. */
 struct services {
@@ -1688,24 +1943,6 @@ static void start_services(struct services *s)
     }
 }
 
-/**
- * Whether `reaped`, what `waitpid` returned, is the pid of the service `s`.
- * When it is, the service is marked not running, and when it ended within
- * two seconds of its start, the call first sleeps `SSHD_RESPAWN_PAUSE`
- * seconds. A `reaped` of 0 or less never matches, since -1 is both a failed
- * wait and the pid of a service not running.
- */
-static int service_ended(struct service *s, pid_t reaped)
-{
-    if (reaped <= 0 || reaped != s->pid) {
-        return 0;
-    }
-    s->pid = -1;
-    if (time(0) - s->spawned < 2) {
-        sleep(SSHD_RESPAWN_PAUSE);
-    }
-    return 1;
-}
 #endif
 
 /**
@@ -1981,7 +2218,8 @@ static void apply_limits(void)
  * The three shutdown handlers go in before the first child, so a request that
  * arrives early is answered and does not meet a terminating default, which for
  * pid 1 is a panic. Then `/var/run` is emptied and given a `utmp` with only
- * this boot's record, the limits set and the service log opened. The
+ * this boot's record, the limits set, the service log opened and the
+ * backlights' kept levels written back (`keep_backlights`). The
  * recovery build takes the key the installer put on the recovery partition
  * it booted from, says on the console whether a key was built into its image
  * and whether the partition's turned SSH on, since the two kinds of image
@@ -1991,7 +2229,8 @@ static void apply_limits(void)
  *
  * Each turn respawns what is missing: the console session, whose failed fork
  * (a full process table) is retried after a second so the loop does not spin;
- * `/bin/update`; and on the metal builds the network, once, after the console
+ * `/bin/update`; acpid while `acpid_wanted`; and on the metal builds the
+ * network, once, after the console
  * session and before the SSH server that needs it, then the server wherever
  * `anyone_to_let_in` allows one, D-Bus's system bus and the cron daemon
  * where the image has them (`services_found`), and ntpd while
@@ -2024,16 +2263,27 @@ int main(void)
     struct services services;
     int network_done = 0;
 #endif
+    struct service acpid;
+    struct sigaction stop;
     unsigned turns = 0;
 
-    signal(SIGUSR1, shutdown_handler);
-    signal(SIGUSR2, shutdown_handler);
-    signal(SIGTERM, shutdown_handler);
+    memset(&stop, 0, sizeof(stop));
+    stop.sa_handler = shutdown_handler;
+    sigemptyset(&stop.sa_mask);
+    sigaddset(&stop.sa_mask, SIGUSR1);
+    sigaddset(&stop.sa_mask, SIGUSR2);
+    sigaddset(&stop.sa_mask, SIGTERM);
+    sigaction(SIGUSR1, &stop, NULL);
+    sigaction(SIGUSR2, &stop, NULL);
+    sigaction(SIGTERM, &stop, NULL);
+    acpid.pid = -1;
+    acpid.spawned = 0;
 
     clear_var_run();
     make_utmp();
     apply_limits();
     open_service_log();
+    keep_backlights();
 #ifdef INIT_RECOVERY
     report_recovery_keys();
     report_backup_tables();
@@ -2059,6 +2309,10 @@ int main(void)
         }
         if (updater < 0) {
             updater = spawn_update();
+        }
+        if (acpid.pid < 0 && acpid_wanted()) {
+            acpid.pid = spawn_acpid();
+            acpid.spawned = time(0);
         }
 
 #ifdef INIT_METAL
@@ -2091,6 +2345,9 @@ int main(void)
         if (reaped > 0 && reaped == updater) {
             updater = -1;
             sleep(1);
+            continue;
+        }
+        if (service_ended(&acpid, reaped)) {
             continue;
         }
 #ifdef INIT_METAL
