@@ -13,6 +13,7 @@
 #include "power.h"
 #include "serial.h"
 #include "panic.h"
+#include "display/blank.h"
 #include "kio.h"
 #include "kbd.h"
 #include "input.h"
@@ -2380,8 +2381,10 @@ static int name_is(const char *name, const char *lit)
  * errno: -EBUSY while another process owns the framebuffer. One process at a
  * time owns it, by its thread group id, which the ioctl, the console read and
  * the last close compare too, so any of its threads may use it. The open
- * switches the display to its graphics mode (`fb_enter`, VGA mode 13h on a
- * PC) and drops the scancodes the keyboard queued for the shell before it.
+ * unblanks the console (`console_unblank_now`), whose backlight would stay
+ * off under the picture, switches the display to its graphics mode
+ * (`fb_enter`, VGA mode 13h on a PC) and drops the scancodes the keyboard queued for the shell
+ * before it.
  */
 static int32_t open_framebuffer(void)
 {
@@ -2403,6 +2406,7 @@ static int32_t open_framebuffer(void)
     entry->ofd->offset = 0;
     entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
 
+    console_unblank_now();
     fb_enter();
     fb_owner_pid = current_proc->tgid;
 
