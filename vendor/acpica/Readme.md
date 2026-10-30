@@ -22,7 +22,7 @@ The kernel's build runs the script; `make -C rach2 acpica` runs it alone. `build
 4. Packs the core, its files in name order, as `acpica.tar.bz2` in the same directory.
 5. Writes `.stamp`, the SHA-256 of the tarball, the patch and the script, and renames the directory into place.
 
-When the stamp already names the same three and the archive is there, the script only touches the stamp, so a fresh checkout's newer tarball recompiles nothing. Two kernels built at once each extract into a directory of their own, and the second throws its own away when it finds the first's.
+When the stamp already names the same three and the archive is there, the script only touches the stamp, so a fresh checkout's newer tarball recompiles nothing. Two kernels built at once, such as the ordinary and the recovery kernel, take turns: the script holds `acpica.lock`, beside the tree, from its check of the stamp until the tree is in place, so neither removes a tree the other compiles, and the second finds the first's stamp. A lock whose holder has died is taken over.
 
 `rach2/sys/acpi/sources.mk` lists the files under `$(ACPICA)`, which the host `Makefile` sets to the extracted core and `guest.mk` to `vendor/acpica`. The host build compiles them into `build/rach2/acpica/` with flags of their own: the architecture's, `-ansi -Wall -Werror`, `-D__RACH2__` and the include directories of the core and of `sys/acpi`.
 
