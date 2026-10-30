@@ -1,10 +1,10 @@
 /*
- * call.c: /proc/acpi/call (call.h), which evaluates a method of the
+ * call.c: /proc/acpi/call (sys/acpicall.h), which evaluates a method of the
  * firmware's namespace through ACPICA and keeps its result as text, as
  * Linux's acpi_call module words it.
  */
 
-#include "call.h"
+#include "../acpicall.h"
 
 #include "../klog.h"
 #include "../lib/kerrno.h"

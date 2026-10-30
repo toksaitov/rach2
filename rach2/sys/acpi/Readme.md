@@ -25,7 +25,7 @@ The kernel's records of ACPICA and of the devices, `acpi: acpica: N objects, E e
 * `acpica_thread_start()` makes the kernel thread `kacpid`. `platform_threads_start` calls it from `enter_program` when the first program starts, so that the thread takes its pid after init's 1, which BusyBox's `poweroff` signals.
 * `acpica_up()`, and the counts `acpica_errors()`, `acpica_warnings()`, `acpica_sci_count()` and `acpica_sci_handled()`, read the state.
 
-[`call.h`](call.h) is `/proc/acpi/call` ([proc(5)](../../../man/man5/proc.5)), which `procfs.c` reads and writes. [`devices.h`](devices.h) is what `boot.c` calls of the devices, and [`ecio.h`](ecio.h) the embedded controller's protocol, which names nothing of ACPICA's so that a host test drives it. The other files include ACPICA's `acpi.h` and serve ACPICA alone.
+[`sys/acpicall.h`](../acpicall.h), a shared header that `call.c` defines, is `/proc/acpi/call` ([proc(5)](../../../man/man5/proc.5)), which `procfs.c` reads and writes. [`devices.h`](devices.h) is what `boot.c` calls of the devices, and [`ecio.h`](ecio.h) the embedded controller's protocol, which names nothing of ACPICA's so that a host test drives it. The other files include ACPICA's `acpi.h` and serve ACPICA alone.
 
 ## Sources and license
 

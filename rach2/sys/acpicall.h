@@ -1,11 +1,12 @@
 /*
- * call.h: /proc/acpi/call, through which root evaluates an ACPI method of
- * the firmware by its path, as Linux's acpi_call module offers.
+ * acpicall.h: /proc/acpi/call, through which root evaluates an ACPI method
+ * of the firmware by its path, as Linux's acpi_call module offers. Shared
+ * code calls it; a PC defines it, in sys/acpi/call.c.
  */
-#ifndef _ACPI_CALL_H_
-#define _ACPI_CALL_H_
+#ifndef _ACPICALL_H_
+#define _ACPICALL_H_
 
-#include "../lib/kint.h"
+#include "lib/kint.h"
 
 /* The longest request a write of /proc/acpi/call takes, in bytes. */
 #define ACPI_CALL_MAX 512
@@ -34,4 +35,4 @@ int acpi_call_write(const char *text, uint32_t len);
  */
 int acpi_call_result(char *out, int cap);
 
-#endif /* _ACPI_CALL_H_ */
+#endif /* _ACPICALL_H_ */

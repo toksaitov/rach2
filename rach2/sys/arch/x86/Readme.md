@@ -16,6 +16,7 @@ The platform defines what these shared headers declare. Each header states its c
 | `sys/serial.h` | the serial console | `serial.c` |
 | `sys/speaker.h` | the speaker's tone | `speaker.c` |
 | `sys/power.h` | `power_stop` | `power.c` |
+| `sys/acpicall.h` | `/proc/acpi/call`'s method calls | `sys/acpi/call.c` |
 | `sys/module.h` | the boot modules | `module.c` |
 | `sys/fpu.h` | a process's floating-point save area | `fpu.c` |
 | `sys/pci.h` | configuration space, I/O BAR ports, the MSI message | `pciconf.c` |

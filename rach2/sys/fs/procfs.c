@@ -70,7 +70,7 @@
 #include "../mm/paging.h"
 #include "../io/anon.h"
 #include "../ipc/unix.h"
-#include "../acpi/call.h"
+#include "../acpicall.h"
 #include "../display/backlight.h"
 
 /* O_CLOEXEC, Linux's value on i386 and x86-64. */

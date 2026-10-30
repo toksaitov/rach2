@@ -45,7 +45,7 @@ These headers belong to their subsystems, and the architecture defines what they
 
 * `mm/paging.h`: the page tables, in each `mmu.c`: the reach of physical memory (`mmu_phys_reach`), the frame table's place (`mmu_frame_table`), the steps of `init_paging` (`mmu_init`, `mmu_start`, `mmu_heap_ready`), a process's directory (`clone_page_directory`, `switch_page_directory`, `get_page_dir_phys`, `free_user_pages`, `free_page_directory`), the leaf tables the shared code writes (`mmu_user_table`, `mmu_user_skip`, `mmu_kernel_table`), `paging_virt_to_phys`, `premap_kernel_window` and `paging_set_user`. A directory's layout is in `mmu.h`.
 * `proc/sigframe.h`: the signal frames and the layout of `siginfo_t`, in each `sigframe.c`.
-* The platform's, in `x86/` on a PC ([the PC platform](x86/Readme.md)): `fpu.h`, `lib/kirq.h`, `irq.h`, the `timer_` functions of `timer.h`, the clock's reading, setting and alarm of `rtc.h`, `udelay.h`, the configuration space and port I/O of `pci.h`, `serial.h`, `speaker.h`, `power.h`, `module.h`, `fs/cpuinfo.h`, the boot record of `boot.h`, which `x86/boot.c` fills, and `platform.h`, the machine's devices and the start of the other processors.
+* The platform's, in `x86/` on a PC ([the PC platform](x86/Readme.md)): `fpu.h`, `lib/kirq.h`, `irq.h`, the `timer_` functions of `timer.h`, the clock's reading, setting and alarm of `rtc.h`, `udelay.h`, the configuration space and port I/O of `pci.h`, `serial.h`, `speaker.h`, `power.h`, `acpicall.h`, which `sys/acpi/call.c` defines, `module.h`, `fs/cpuinfo.h`, the boot record of `boot.h`, which `x86/boot.c` fills, and `platform.h`, the machine's devices and the start of the other processors.
 
 ### The two architectures compared
 
