@@ -31,7 +31,7 @@
         {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}, {"name": "image-transfer", "bus": "ide", "size_bytes": 67108864}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
-        {"assertion_id": "room", "checks": "the root has the 16 MiB a build needs free before the machine starts", "source": "scenario"},
+        {"assertion_id": "room", "checks": "the root has the 24 MiB a build needs free before the machine starts", "source": "scenario"},
         {"assertion_id": "login", "checks": "the test account logs in at the console and its shell prompts", "source": "scenario"},
         {"assertion_id": "build-one", "checks": "make -f guest.mk in a copy of /src/rach2 exits 0", "source": "scenario"},
         {"assertion_id": "size", "checks": "the kernel the build made is at least 200000 bytes", "source": "scenario"},

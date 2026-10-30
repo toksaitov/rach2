@@ -33,7 +33,7 @@
         {"machine_id": "image-helper", "qemu": {"kernel": "image-kernel", "initrd": "image-tools", "disks": [{"name": "image-disk", "bus": "ide", "size_bytes": 512}, {"name": "image-transfer", "bus": "ide", "size_bytes": 67108864}], "cpu": "max", "processors": 1, "memory_bytes": 268435456, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": true}
       ],
       "assertions": [
-        {"assertion_id": "room", "checks": "the root has the 16 MiB a build needs free before the machine starts", "source": "scenario"},
+        {"assertion_id": "room", "checks": "the root has the 24 MiB a build needs free before the machine starts", "source": "scenario"},
         {"assertion_id": "login", "checks": "the test account logs in at the console and its shell prompts", "source": "scenario"},
         {"assertion_id": "build-one", "checks": "make -f guest.mk in a copy of /src/rach2 exits 0", "source": "scenario"},
         {"assertion_id": "size", "checks": "the kernel the build made is at least 200000 bytes", "source": "scenario"},
@@ -55,7 +55,7 @@
         {"witness_id": "probe", "kind": "counter", "means": "a probe has handed the debug shell back", "limit": 256}
       ],
       "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 10800000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 3600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
-      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1476395008, "disk_bytes": 469762048, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1476395008, "disk_bytes": 503316480, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "selfbuild-ext2-disk", "node": "images/selfbuild-ext2-test.disk", "per_architecture": true},

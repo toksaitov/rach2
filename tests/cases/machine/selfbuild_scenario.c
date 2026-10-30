@@ -17,14 +17,15 @@
 
 #include "lifecycle.h"
 
-/* The root's partition on the disks of both families: 48 MiB at LBA 2048. */
+/* The root's partition on the ext2 disk: 64 MiB at LBA 2048. The KRFFS
+ * disk's is LC_PART_SIZE. */
 #define PART_OFFSET 1048576L
-#define PART_SIZE   50331648L
+#define PART_SIZE   67108864L
 
 /* The free bytes a build needs on the root: the copied source tree, the
  * objects, the response file and the kernel set aside, with margin. The
- * x86-64 build and its kernel take about 13 MiB. */
-#define NEED_BYTES 16777216L
+ * x86-64 build with ACPICA and its kernel take about 22 MiB. */
+#define NEED_BYTES 25165824L
 
 /* The least a kernel can be: the tcc-linked kernel is about 1.7 MB on i686
  * and 2.0 MB on x86-64, and a smaller file is a build that stopped short. */

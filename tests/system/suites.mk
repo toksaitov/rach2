@@ -1207,9 +1207,9 @@ $(IMAGES_DIR)/smp-test.disk: $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MA
 #
 # SELFBUILD_DISK is a disk of os-real, of which each KRFFS case boots a
 # private copy, and SELFBUILD_EXT2_DISK the same system as an ext2 volume of
-# 48 MiB on a partition at LBA 2048, as the KRFFS disk has it. The kernel the
-# machine builds is no artifact, so it boots from a disk that GRUB starts,
-# whose kernel the scenario writes. SELFBUILD_GRUB has a placeholder that
+# 64 MiB on a partition at LBA 2048, where the KRFFS disk has its 48 MiB. The
+# kernel the machine builds is no artifact, so it boots from a disk that GRUB
+# starts, whose kernel the scenario writes. SELFBUILD_GRUB has a placeholder that
 # cannot boot in the slots of its candidate and recovery entries: the
 # candidate entry boots os-simple's ext2 root to a login prompt, and the
 # recovery entry the test image from RAM, at whose debug shell the scenario
@@ -1230,11 +1230,11 @@ $(SELFBUILD_DISK): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEP
 $(SELFBUILD_EXT2_VOL): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) \
                        tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 \
                        $(MANIFEST_PARTS_os_real)
-	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 48
+	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 64
 $(SELFBUILD_EXT2_DISK): $(SELFBUILD_EXT2_VOL) $(MKMBR)
 	{ dd if=/dev/zero bs=1048576 count=1 2>/dev/null; cat $(SELFBUILD_EXT2_VOL); \
 	  dd if=/dev/zero bs=1048576 count=15 2>/dev/null; } > $@.tmp
-	$(MKMBR) --lba $@.tmp 2048:98304:83 > /dev/null
+	$(MKMBR) --lba $@.tmp 2048:131072:83 > /dev/null
 	mv $@.tmp $@
 $(SELFBUILD_GRUB): tools/image/mkdisk_grub.sh $(OS_SIMPLE_EXT2) $(TEST_IMAGE) $(DISK_TOOLS) \
                    $(GRUB_FILES)
