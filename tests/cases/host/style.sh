@@ -696,12 +696,15 @@ case_sparse() {
     _acpi=$(make -s -C "$REPO/rach2" print-acpi-cflags)
     # The ACPI files, sys/acpi/, take the build's flags for ACPICA's headers.
     # shellcheck disable=SC2086
-    (cd "$REPO/rach2" && python3 "$REPO/tools/verify/usercheck.py" --arch "${ARCH:-i686}" \
-        $(printf '%s\n' $_files | grep -v '^sys/acpi/')) >>"$VDIR/verify_sparse.log" 2>&1 || _bad=1
+    _plain=$(printf '%s\n' $_files | grep -v '^sys/acpi/')
+    # shellcheck disable=SC2086
+    _acpifiles=$(printf '%s\n' $_files | grep '^sys/acpi/')
     # shellcheck disable=SC2086
     (cd "$REPO/rach2" && python3 "$REPO/tools/verify/usercheck.py" --arch "${ARCH:-i686}" \
-        --cflags="$_acpi" $(printf '%s\n' $_files | grep '^sys/acpi/')) >>"$VDIR/verify_sparse.log" 2>&1 ||
-        _bad=1
+        $_plain) >>"$VDIR/verify_sparse.log" 2>&1 || _bad=1
+    # shellcheck disable=SC2086
+    (cd "$REPO/rach2" && python3 "$REPO/tools/verify/usercheck.py" --arch "${ARCH:-i686}" \
+        --cflags="$_acpi" $_acpifiles) >>"$VDIR/verify_sparse.log" 2>&1 || _bad=1
     if [ "$_bad" -eq 0 ]; then
         pass runs
         pass no-findings
