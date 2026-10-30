@@ -12,7 +12,8 @@
  *
  *   1. rach2/guest.mk derives OBJS from the shared rach2/sources.mk lists
  *      the host build includes, object for object, loader.o first, no
- *      duplicates, for each architecture; the kernel.objs recipe writes
+ *      duplicates, for each architecture, ACPICA's core last, under
+ *      vendor/acpica, where the image stages it; the kernel.objs recipe writes
  *      $(OBJS) whole, and the link reads @kernel.objs and the tcc runtime
  *      with the architecture's flags: for i686 the pinned text address, and
  *      for x86-64 the kernel's own linker script, 4 KiB segment alignment
@@ -23,12 +24,14 @@
  *      each program links to a temporary file and renames it.
  *   3. ish/guest.mk's object list equals the host ish/Makefile's OBJECTS,
  *      and ish links through a temporary file too.
- *   4. The build fits the machine: the deepest kernel include chain and the
- *      compiler's own files stay within FD_LIMIT descriptors, and no guest
- *      recipe line, expanded, comes near the exec string budget.
- *   5. The os-real manifest stages the three source trees at /src,
- *      root-owned and read-only, and nothing else there, so the machine has
- *      what the makefiles build, and each staged tree has its guest.mk.
+ *   4. The build fits the machine: the deepest kernel include chain, ACPICA's
+ *      among them, and the compiler's own files stay within FD_LIMIT
+ *      descriptors, and no guest recipe line, expanded, comes near the exec
+ *      string budget.
+ *   5. The os-real manifest stages the three source trees at /src and
+ *      ACPICA's core at /src/rach2/vendor/acpica, root-owned and read-only,
+ *      and nothing else there, so the machine has what the makefiles build,
+ *      and each staged tree has its guest.mk.
  *
  * Usage: guestcheck [REPO_ROOT]; REPO_ROOT is the working directory unless
  * given. The first failure is printed and ends the run with status 1.
@@ -58,9 +61,18 @@
 #define ENV_ALLOWANCE 500
 
 #define MAX_TEXT (1024 * 1024)
-#define MAX_LINE 8192
+/* A line, room enough for the kernel's object list of some 11 KiB that the
+   kernel.objs and clean recipes expand to. */
+#define MAX_LINE 32768
 
 static char repo[1024];
+
+/* Where the guest's kernel compile looks for a quoted include its own
+   directory does not have, by guest.mk's -I flags: the kernel's ACPI
+   headers and ACPICA's, the latter as this architecture's build extracted
+   them. */
+static char search_dirs[2][1200];
+static int nsearch;
 
 /** Prints a failure, formatted as printf does, and exits with status 1. */
 static void fail(const char *fmt, ...)
@@ -543,9 +555,37 @@ static int plain_ref(const char *word, char *name, size_t cap)
     return 1;
 }
 
+/** `word` with each reference inside it, such as the `$(ACPICA)` of
+   `$(ACPICA)/x.c`, replaced by its macro's one word, written to `out`. A
+   reference to a macro of other than one word fails the run. */
+static void embedded_refs(const char *text, const char *word, char *out, size_t out_len)
+{
+    size_t used = 0;
+    const char *p = word;
+
+    out[0] = '\0';
+    while (*p != '\0') {
+        const char *end = p[0] == '$' && p[1] == '(' ? strchr(p, ')') : NULL;
+        char name[64];
+        struct list value = {NULL, 0, 0};
+
+        if (end == NULL || (size_t)(end - p - 2) >= sizeof(name)) {
+            appendf(out, out_len, &used, "an expanded word", "%c", *p++);
+            continue;
+        }
+        memcpy(name, p + 2, (size_t)(end - p - 2));
+        name[end - p - 2] = '\0';
+        if (!read_macro(text, name, &value) || value.n != 1)
+            fail("the reference $(%s) in %s is not a macro of one word", name, word);
+        appendf(out, out_len, &used, "an expanded word", "%s", value.item[0]);
+        list_free(&value);
+        p = end + 1;
+    }
+}
+
 /** The words of macro `name`, with each plain reference in its value
-   replaced by that macro's words in turn, as make expands them, appended to
-   `out`. */
+   replaced by that macro's words in turn, and each reference inside a word
+   by its macro's one word, as make expands them, appended to `out`. */
 static void macro_words(const char *text, const char *name, struct list *out, int depth)
 {
     struct list value = {NULL, 0, 0};
@@ -555,12 +595,14 @@ static void macro_words(const char *text, const char *name, struct list *out, in
         fail("the macro %s refers through more than eight levels", name);
     read_macro(text, name, &value);
     for (j = 0; j < value.n; j++) {
-        char inner[64];
+        char inner[64], word[512];
 
-        if (plain_ref(value.item[j], inner, sizeof(inner)))
+        if (plain_ref(value.item[j], inner, sizeof(inner))) {
             macro_words(text, inner, out, depth + 1);
-        else
-            push(out, value.item[j]);
+        } else {
+            embedded_refs(text, value.item[j], word, sizeof(word));
+            push(out, word);
+        }
     }
     list_free(&value);
 }
@@ -920,6 +962,20 @@ static int check_kernel_lists(void)
 
     make_list("print-asm-src", &sources);
     make_list("print-c-src", &sources);
+    {
+        struct list acpica = {NULL, 0, 0};
+
+        make_list("print-acpica-src", &acpica);
+        if (acpica.n == 0)
+            fail("the host build lists none of ACPICA's sources");
+        for (i = 0; i < acpica.n; i++) {
+            char path[512];
+
+            snprintf(path, sizeof(path), "vendor/acpica/%s", acpica.item[i]);
+            push(&sources, path);
+        }
+        list_free(&acpica);
+    }
     for (i = 0; i < sources.n; i++) {
         char obj[512];
         size_t len = strlen(sources.item[i]);
@@ -937,6 +993,15 @@ static int check_kernel_lists(void)
              "no longer reads the shared kernel source list");
 
     text = guest_text("rach2/guest.mk");
+    {
+        struct list dir = {NULL, 0, 0};
+
+        if (!read_macro(text, "ACPICA", &dir) || dir.n != 1 ||
+            strcmp(dir.item[0], "vendor/acpica") != 0)
+            fail("rach2/guest.mk's ACPICA is not vendor/acpica, where the "
+                 "image stages ACPICA's core beside the kernel's sources");
+        list_free(&dir);
+    }
     need_macro(text, "OBJS", &objs_raw);
     expand_tokens(text, &objs_raw, &objs);
     if (objs.n != expected.n) {
@@ -1320,6 +1385,28 @@ static const char *skip_blanks(const char *p, const char *e)
     return p;
 }
 
+/** The path, normalised, in `out` of 1024 bytes, of the file a quoted
+   include of `rel` in a file under `dir` reads: `dir`'s own when it is
+   there, otherwise the first of the search directories that has it, and
+   `dir`'s when none does. */
+static void resolve_include(char *out, const char *dir, const char *rel)
+{
+    struct stat st;
+    int k;
+
+    for (k = -1; k < nsearch; k++) {
+        const char *base = k < 0 ? dir : search_dirs[k];
+
+        if (snprintf(out, 1024, "%s/%s", base, rel) >= 1024)
+            fail("the path of %s under %s is longer than this reads", rel, base);
+        if (stat(out, &st) == 0)
+            break;
+    }
+    if (k == nsearch && snprintf(out, 1024, "%s/%s", dir, rel) >= 1024)
+        fail("the path of %s under %s is longer than this reads", rel, dir);
+    normalize_path(out);
+}
+
 /** Add a node to `g` for every C file and header under `dir`, but those in
    hidden directories and `build`, with the quoted includes each names.
 
@@ -1384,12 +1471,7 @@ static void scan_includes(struct graph *g, const char *dir)
                                 close++;
                             if (close < e) {
                                 snprintf(rel, sizeof(rel), "%.*s", (int)(close - q), q);
-                                if (snprintf(resolved, sizeof(resolved), "%s/%s", dir, rel) >=
-                                    (int)sizeof(resolved))
-                                    fail("the path of %s under %s is longer "
-                                         "than this reads",
-                                         rel, dir);
-                                normalize_path(resolved);
+                                resolve_include(resolved, dir, rel);
                                 push(&node.includes, resolved);
                             }
                         }
@@ -1438,15 +1520,29 @@ static int depth_of(struct graph *g, struct node *n)
     return n->depth;
 }
 
-/** The deepest quoted-include chain of any kernel C file under rach2/. */
+/** The deepest quoted-include chain of any kernel C file under rach2/ and
+   of ACPICA's core, which the build extracts for the guest architecture
+   first (`make -C rach2 acpica`), since a core not there would read as no
+   chain at all. */
 static int include_depth(void)
 {
     struct graph g;
-    char root[1200];
+    char root[1200], cmd[1400];
     int best = 0, i;
 
+    snprintf(cmd, sizeof(cmd), "make -s -C '%s/rach2' ARCH=%s CROSS_CC=true acpica >/dev/null",
+             repo, guest_arch);
+    if (system(cmd) != 0)
+        fail("make -C rach2 acpica failed, so ACPICA's include chains cannot be read");
+    snprintf(search_dirs[0], sizeof(search_dirs[0]), "%s/rach2/sys/acpi", repo);
+    snprintf(search_dirs[1], sizeof(search_dirs[1]), "%s/build%s/vendor/acpica/include", repo,
+             strcmp(guest_arch, "x86_64") == 0 ? "/x86_64" : "");
+    nsearch = 2;
     memset(&g, 0, sizeof(g));
     snprintf(root, sizeof(root), "%s/rach2", repo);
+    scan_includes(&g, root);
+    snprintf(root, sizeof(root), "%s/build%s/vendor/acpica", repo,
+             strcmp(guest_arch, "x86_64") == 0 ? "/x86_64" : "");
     scan_includes(&g, root);
     for (i = 0; i < g.n; i++)
         if (g.item[i].is_c) {
@@ -1458,6 +1554,7 @@ static int include_depth(void)
     for (i = 0; i < g.n; i++)
         list_free(&g.item[i].includes);
     free(g.item);
+    nsearch = 0;
     return best;
 }
 
@@ -1530,20 +1627,21 @@ static int check_limits(void)
 }
 
 /** Check the fifth contract: os-real.manifest stages the three trees at /src
-   as `tree 0644`, and has no other line under /src but the directories
-   above them, since a later line could give the source to another owner;
-   and each tree has a regular guest.mk. */
+   and ACPICA's core in the kernel's as `tree 0644`, and has no other line
+   under /src but the directories above them, since a later line could give
+   the source to another owner; and each tree has a regular guest.mk. */
 static void check_staging(void)
 {
     char path[1200];
     char *text;
     const char *p;
     static const char *const want[] = {"tree 0644 /src/rach2 rach2", "tree 0644 /src/utils utils",
-                                       "tree 0644 /src/ish ish"};
-    static const char *const dirs_ok[] = {"dir 0755 /src", "dir 0755 /src/utils",
-                                          "dir 0755 /src/rach2", "dir 0755 /src/rach2/sys",
-                                          "dir 0755 /src/ish"};
-    int seen[3] = {0, 0, 0};
+                                       "tree 0644 /src/ish ish",
+                                       "tree 0644 /src/rach2/vendor/acpica build/vendor/acpica"};
+    static const char *const dirs_ok[] = {
+        "dir 0755 /src",           "dir 0755 /src/utils",        "dir 0755 /src/rach2",
+        "dir 0755 /src/rach2/sys", "dir 0755 /src/rach2/vendor", "dir 0755 /src/ish"};
+    int seen[4] = {0, 0, 0, 0};
     int i;
 
     snprintf(path, sizeof(path), "%s/krffs/manifests/os-real.manifest", repo);
@@ -1578,17 +1676,17 @@ static void check_staging(void)
             (strcmp(fields.item[2], "/src") == 0 || strncmp(fields.item[2], "/src/", 5) == 0)) {
             int known = 0;
 
-            for (i = 0; i < 3; i++)
+            for (i = 0; i < 4; i++)
                 if (strcmp(line, want[i]) == 0) {
                     seen[i] = 1;
                     known = 1;
                 }
-            for (i = 0; i < 5; i++)
+            for (i = 0; i < 6; i++)
                 if (strcmp(line, dirs_ok[i]) == 0)
                     known = 1;
             if (!known)
                 fail("os-real.manifest directive '%s' touches /src; only "
-                     "the three root-owned read-only source trees may live "
+                     "the root-owned read-only source trees may live "
                      "there, or a later line could hand the shared source "
                      "to another owner",
                      line);
@@ -1599,7 +1697,7 @@ static void check_staging(void)
         p = end + 1;
     }
     free(text);
-    for (i = 0; i < 3; i++)
+    for (i = 0; i < 4; i++)
         if (!seen[i])
             fail("os-real.manifest does not stage '%s' (root-owned, 0644)", want[i]);
     for (i = 0; i < 3; i++) {
@@ -1634,7 +1732,7 @@ int main(int argc, char **argv)
     ish_objects = check_ish();
     check_staging();
     printf("check-guest: ok: %d i686 and %d x86_64 kernel sources, %d programs, "
-           "%d ish objects, include depth %d, three /src trees staged\n",
+           "%d ish objects, include depth %d, four /src trees staged\n",
            sources, sources64, programs, ish_objects, depth);
     return 0;
 }

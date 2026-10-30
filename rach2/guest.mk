@@ -50,8 +50,7 @@ kernel: $(OBJS) kernel.objs
 	$(KCC) -static -nostdlib -o kernel.new @kernel.objs $(ARCH_TCC_LDFLAGS) /lib/tcc/libtcc1.a
 	mv kernel.new kernel
 
-kernel.objs: guest.mk sources.mk sys/arch/$(ARCH)/sources.mk sys/arch/x86/sources.mk \
-    sys/acpi/sources.mk
+kernel.objs: guest.mk sources.mk sys/arch/$(ARCH)/sources.mk sys/arch/x86/sources.mk sys/acpi/sources.mk
 	printf '%s\n' $(OBJS) > kernel.objs.new
 	mv kernel.objs.new kernel.objs
 

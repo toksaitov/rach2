@@ -174,6 +174,10 @@ $(ACPICA_STAMP) : ../vendor/acpica/build_acpica.sh ../vendor/acpica/rach2-acenv.
 
 $(ACPICA_C_SRC) : | $(ACPICA_STAMP) ;
 
+# The extracted core alone, for tools/verify/guestcheck.c.
+.PHONY : acpica
+acpica : $(ACPICA_STAMP)
+
 $(ACPI_OBJECTS) : | $(ACPICA_STAMP)
 
 $(ACPICA_OBJECTS) : $(BUILD)/acpica/%.o : $(ACPICA)/%.c
