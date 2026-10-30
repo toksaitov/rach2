@@ -151,6 +151,7 @@ void console_blank_now(void)
 
 void console_unblank_now(void)
 {
+    last_poke = kernel_ticks;
     do_unblank("on request");
 }
 

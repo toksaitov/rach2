@@ -14,7 +14,8 @@
  * backlight off (backlight.h); the next key or mouse move restores both,
  * except after a blank that `console_blank_now` forced, which only
  * `console_unblank_now` undoes. While a program holds /fb the console does
- * not blank. Output goes on while it is blank and is shown at the unblank.
+ * not blank, and taking /fb unblanks it. Output goes on while it is blank
+ * and is shown at the unblank.
  */
 
 /**
@@ -44,8 +45,8 @@ void console_set_blank_time(unsigned int seconds);
  * with the console's lock held. */
 void console_blank_now(void);
 
-/** Unblank the console now, if it is blank (TIOCLINUX 4), under the same
- * rule as `console_blank_now`. */
+/** Unblank the console now, if it is blank (TIOCLINUX 4), and restart the
+ * countdown, as a poke does; under the same rule as `console_blank_now`. */
 void console_unblank_now(void);
 
 /** Whether the console is blank (TIOCLINUX 15). */
