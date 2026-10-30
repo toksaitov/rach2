@@ -15,9 +15,11 @@
  * by its index from 0 in the order of registration.
  *
  * The class keeps the level root set and whether root turned the backlight
- * off, and gives the driver the level the panel is to have: the one set, or
- * 0 while bl_power is off or the console is blank (blank.h). bl_power shows
- * what root wrote, whatever the console does.
+ * off, and gives the driver the level set and whether the backlight is on:
+ * off while bl_power is off or the console is blank (blank.h). A driver with
+ * a switch turns the backlight off by it and keeps the level; one without
+ * is given the level 0. bl_power shows what root wrote, whatever the
+ * console does.
  */
 
 /* The most backlights. */
@@ -45,6 +47,9 @@ struct backlight_ops {
     /** Give the panel `level`, 0 to the backlight's highest; 0 is as dark
      * as the hardware goes. */
     void (*set)(void *ctx, int level);
+    /** Turn the backlight on or off and leave its level as it is, or NULL
+     * for a driver with no switch. */
+    void (*power)(void *ctx, int on);
 };
 
 /**
@@ -64,15 +69,15 @@ void backlight_init(void);
 void intelbl_init(void);
 
 /**
- * Turn every backlight off while `blank` is set, and give each its own
- * level again when it is clear; the console's blanking calls it. Any
- * context; it does not sleep.
+ * Turn every backlight off while `blank` is set, and on at its own level
+ * again when it is clear; the console's blanking calls it. Any context; it
+ * does not sleep.
  */
 void backlight_console_blank(int blank);
 
-/** Give every backlight its own level again, as `backlight_console_blank(0)`
- * does but without the class's lock, which the code a panic interrupted may
- * hold; for `console_panic_unblank` alone. */
+/** Turn every backlight on at its own level again, as
+ * `backlight_console_blank(0)` does but without the class's lock, which the
+ * code a panic interrupted may hold; for `console_panic_unblank` alone. */
 void backlight_panic_unblank(void);
 
 /** The number of backlights registered. */

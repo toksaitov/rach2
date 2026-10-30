@@ -25,8 +25,8 @@ root sets it with a write of a decimal number.
 0 is as dark as the hardware goes, which may be dark enough to read
 nothing on the screen.
 .It Pa actual_brightness
-The level the hardware has: the level set, or 0 while the backlight is
-off.
+The level the hardware has: the level set, or, while the backlight is off,
+0 on a backlight that has no switch of its own.
 .It Pa bl_power
 0 while root leaves the backlight on and 4 once root turns it off, as
 Linux's
@@ -59,6 +59,12 @@ Intel's and the firmware left the modulator on with a period, as it does
 to light its own picture; on another machine nothing is written.
 A modulator that the processor still drives in place of the chipset is
 handed to the chipset's at the processor's level first.
+When the firmware left the panel lit through the chipset's panel power
+sequencer, the backlight is turned off and on by the sequencer's backlight
+enable, as Linux's
+.Pa bl_power
+does, and keeps its level while it is off; otherwise it is off at a level
+of 0.
 On the Lenovo G50-70 the levels run from 0 to 937.
 .Sh FILES
 .Bl -tag -width /sys/class/backlight/NAME
@@ -67,12 +73,14 @@ The backlight's attributes; see
 .Xr sysfs 5 .
 .El
 .Sh DIAGNOSTICS
-The boot log names the backlight and its levels:
+The boot log names the backlight, its levels and how it is turned off:
 .Bd -literal -offset indent
-backlight: intel_backlight: lynxpoint-lp PWM, levels 0 to 937, at 937
+backlight: intel_backlight: lynxpoint-lp PWM, levels 0 to 937, at 937, off by the panel's enable
 .Ed
 .Pp
-or, on an Intel machine whose modulator the kernel does not take, why:
+with
+.Ql off by a level of 0
+in place of the last part for a backlight with no switch, or, on an Intel machine whose modulator the kernel does not take, why:
 .Bd -literal -offset indent
 backlight: intel: none: the firmware left the PWM off
 .Ed

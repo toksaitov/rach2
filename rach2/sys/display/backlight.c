@@ -27,10 +27,18 @@ static int nlights;
 static int console_blank;
 static struct spinlock lock = SPINLOCK_INIT;
 
-/** Give backlight `b` the level it is to have, with `lock` held. */
+/** Give backlight `b` its level and turn it on or off, by its driver's
+ * switch or else by the level 0, with `lock` held. */
 static void apply(struct backlight *b)
 {
-    b->ops->set(b->ctx, b->power == BACKLIGHT_ON && !console_blank ? b->level : 0);
+    int on = b->power == BACKLIGHT_ON && !console_blank;
+
+    if (b->ops->power != NULL) {
+        b->ops->set(b->ctx, b->level);
+        b->ops->power(b->ctx, on);
+    } else {
+        b->ops->set(b->ctx, on ? b->level : 0);
+    }
 }
 
 int backlight_register(const char *name, int max, const struct backlight_ops *ops, void *ctx)

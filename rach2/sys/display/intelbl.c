@@ -21,6 +21,9 @@
  * With the polarity bit the duty cycle counts the dark part of the period.
  * The processor's own PWM may drive the panel in place of the PCH's until
  * the PCH's override bit is set, as on a Lynx Point the firmware left so.
+ * The PCH's panel power sequencer drives the panel's backlight enable line
+ * by a bit of PP_CONTROL, which takes a write only with the unlock key in
+ * its high half.
  */
 #define BLC_PWM_CPU_CTL2 0x48250u
 #define BLC_PWM_CPU_CTL  0x48254u
@@ -31,9 +34,16 @@
 #define BLM_PCH_OVERRIDE 0x40000000u /* PCH_CTL1: the PCH's PWM drives the panel */
 #define BLM_PCH_POLARITY 0x20000000u /* PCH_CTL1: the duty cycle is the dark part */
 #define BLC_DUTY_MASK    0xFFFFu
+#define PP_CONTROL       0xC7204u
+#define PANEL_POWER_ON   0x00000001u /* PP_CONTROL: the panel's power is on */
+#define EDP_BLC_ENABLE   0x00000004u /* PP_CONTROL: the backlight enable line is on */
+#define PANEL_UNLOCK     0xABCD0000u /* PP_CONTROL: the key a write carries */
+#define PANEL_KEY_MASK   0xFFFF0000u
 
-/* The pages of BAR 0 that hold the two pairs of registers. */
+/* The pages of BAR 0 that hold the two pairs of registers and the panel
+ * power sequencer's. */
 #define CPU_PAGE 0x48000u
+#define PPS_PAGE 0xC7000u
 #define PCH_PAGE 0xC8000u
 
 /*
@@ -47,6 +57,7 @@ struct intelbl {
     void *io;
     int max;      /* the period, the highest level */
     int inverted; /* the polarity bit was set */
+    int switched; /* the sequencer's backlight enable turns the panel off */
 };
 
 /**
@@ -116,17 +127,50 @@ static void intelbl_set(void *ctx, int level)
     bl->wr(bl->io, BLC_PWM_PCH_CTL2, (ctl2 & ~BLC_DUTY_MASK) | (uint32_t)level);
 }
 
+/**
+ * Whether the panel power sequencer lit the panel, its power and its
+ * backlight enable both on, as the firmware leaves an eDP panel it drew
+ * on: `switched`, and then `intelbl_power` turns the backlight off and on.
+ * Nothing is written.
+ */
+static void intelbl_attach_switch(struct intelbl *bl)
+{
+    uint32_t pp = bl->rd(bl->io, PP_CONTROL);
+
+    bl->switched = (pp & (PANEL_POWER_ON | EDP_BLC_ENABLE)) == (PANEL_POWER_ON | EDP_BLC_ENABLE);
+}
+
+/**
+ * Turn the panel's backlight on or off by the sequencer's enable line,
+ * leaving the duty cycle as it is: the backlight class's `power`, as
+ * i915's bl_power does. The firmware's brightness keys, and the EC that
+ * raises them, see the level they saw before, which a duty cycle of 0
+ * would change under them. The other bits are written back as read, with
+ * the unlock key.
+ */
+static void intelbl_power(void *ctx, int on)
+{
+    struct intelbl *bl = (struct intelbl *)ctx;
+    uint32_t pp = bl->rd(bl->io, PP_CONTROL) & ~PANEL_KEY_MASK;
+
+    pp = on ? pp | EDP_BLC_ENABLE : pp & ~EDP_BLC_ENABLE;
+    bl->wr(bl->io, PP_CONTROL, pp | PANEL_UNLOCK);
+}
+
 #ifndef RACH2_HOSTTEST
 
-/* The two pages of BAR 0 as `map_mmio` mapped them. */
+/* The three pages of BAR 0 as `map_mmio` mapped them. */
 static uintptr_t cpu_regs;
+static uintptr_t pps_regs;
 static uintptr_t pch_regs;
 static struct intelbl the_pwm;
 
 /** Read register `reg` of the mapped pages. */
 static uint32_t mmio_rd(void *io, uint32_t reg)
 {
-    uintptr_t at = reg >= PCH_PAGE ? pch_regs + (reg - PCH_PAGE) : cpu_regs + (reg - CPU_PAGE);
+    uintptr_t at = reg >= PCH_PAGE   ? pch_regs + (reg - PCH_PAGE)
+                   : reg >= PPS_PAGE ? pps_regs + (reg - PPS_PAGE)
+                                     : cpu_regs + (reg - CPU_PAGE);
 
     (void)io;
     return *(volatile uint32_t *)at;
@@ -135,7 +179,9 @@ static uint32_t mmio_rd(void *io, uint32_t reg)
 /** Write register `reg` of the mapped pages. */
 static void mmio_wr(void *io, uint32_t reg, uint32_t value)
 {
-    uintptr_t at = reg >= PCH_PAGE ? pch_regs + (reg - PCH_PAGE) : cpu_regs + (reg - CPU_PAGE);
+    uintptr_t at = reg >= PCH_PAGE   ? pch_regs + (reg - PCH_PAGE)
+                   : reg >= PPS_PAGE ? pps_regs + (reg - PPS_PAGE)
+                                     : cpu_regs + (reg - CPU_PAGE);
 
     (void)io;
     *(volatile uint32_t *)at = value;
@@ -158,7 +204,10 @@ static int pch_is_lpt(const char *name)
     return 0;
 }
 
-static const struct backlight_ops intelbl_ops = {intelbl_get, intelbl_set};
+/* The ops with the sequencer's switch, and without it, where off is a
+ * duty cycle of 0. */
+static const struct backlight_ops intelbl_ops = {intelbl_get, intelbl_set, intelbl_power};
+static const struct backlight_ops intelbl_ops_noswitch = {intelbl_get, intelbl_set, NULL};
 
 /**
  * Register "intel_backlight" when the graphics device at 0:2.0 is Intel's,
@@ -199,8 +248,9 @@ void intelbl_init(void)
         return;
     }
     cpu_regs = map_mmio((uintptr_t)bar0 + CPU_PAGE, 4096);
+    pps_regs = map_mmio((uintptr_t)bar0 + PPS_PAGE, 4096);
     pch_regs = map_mmio((uintptr_t)bar0 + PCH_PAGE, 4096);
-    if (cpu_regs == 0 || pch_regs == 0) {
+    if (cpu_regs == 0 || pps_regs == 0 || pch_regs == 0) {
         return;
     }
     the_pwm.rd = mmio_rd;
@@ -210,11 +260,14 @@ void intelbl_init(void)
         klog(KLOG_INFO, "backlight", "intel: none: %s", why);
         return;
     }
-    if (backlight_register("intel_backlight", the_pwm.max, &intelbl_ops, &the_pwm) < 0) {
+    intelbl_attach_switch(&the_pwm);
+    if (backlight_register("intel_backlight", the_pwm.max,
+                           the_pwm.switched ? &intelbl_ops : &intelbl_ops_noswitch, &the_pwm) < 0) {
         return;
     }
-    klog(KLOG_INFO, "backlight", "intel_backlight: %s PWM, levels 0 to %d, at %d%s", board_name(),
-         the_pwm.max, intelbl_get(&the_pwm), the_pwm.inverted ? ", inverted" : "");
+    klog(KLOG_INFO, "backlight", "intel_backlight: %s PWM, levels 0 to %d, at %d%s%s", board_name(),
+         the_pwm.max, intelbl_get(&the_pwm), the_pwm.inverted ? ", inverted" : "",
+         the_pwm.switched ? ", off by the panel's enable" : ", off by a level of 0");
 }
 
 #endif /* RACH2_HOSTTEST */

@@ -1,6 +1,6 @@
 /*
  * intelbl_hosttest.c: the Intel PCH backlight's register arithmetic, against
- * a model of the four PWM registers.
+ * a model of the four PWM registers and the panel power sequencer's.
  *
  * intelbl.c is included whole, so that its static attach, get and set are
  * reached; the boot's probe, which maps BAR 0, is left out by
@@ -9,7 +9,9 @@
  * polarity bit; one the firmware left off or without a period, which must
  * be refused untouched; and one the processor's PWM still drives, whose
  * level must pass to the PCH's before the processor's is turned off, as
- * i915 does.
+ * i915 does. The sequencer's switch is taken only when the firmware left
+ * the panel lit by it, and turns the backlight off and on by its enable
+ * bit alone, the duty cycle kept.
  */
 extern int printf(const char *fmt, ...);
 
@@ -19,6 +21,7 @@ extern int printf(const char *fmt, ...);
 struct regs {
     uint32_t cpu_ctl2, cpu_ctl, pch_ctl1, pch_ctl2;
     int writes;
+    uint32_t pp_control; /* as the hardware reads it back, without the key */
 };
 
 static int fails;
@@ -43,6 +46,8 @@ static uint32_t *reg_of(struct regs *r, uint32_t reg)
         return &r->pch_ctl1;
     case BLC_PWM_PCH_CTL2:
         return &r->pch_ctl2;
+    case PP_CONTROL:
+        return &r->pp_control;
     default:
         return 0;
     }
@@ -64,6 +69,10 @@ static void model_wr(void *io, uint32_t reg, uint32_t value)
     uint32_t *p = reg_of(r, reg);
 
     CHECK(p != 0, "a write of a register the PWM does not have");
+    if (reg == PP_CONTROL) {
+        CHECK((value & PANEL_KEY_MASK) == PANEL_UNLOCK, "PP_CONTROL is written with its key");
+        value &= ~PANEL_KEY_MASK;
+    }
     if (p != 0) {
         *p = value;
     }
@@ -82,7 +91,7 @@ static int attach(struct intelbl *bl, struct regs *r, const char **why)
 /** The Lenovo's PWM: a period of 937, full, no polarity, no override. */
 static void check_lenovo(void)
 {
-    struct regs r = {0, 0, 0x80000000u, 0x03A903A9u, 0};
+    struct regs r = {0, 0, 0x80000000u, 0x03A903A9u, 0, 0};
     struct intelbl bl;
     const char *why;
 
@@ -106,7 +115,7 @@ static void check_lenovo(void)
 /** The polarity bit: the duty cycle is the dark part of the period. */
 static void check_inverted(void)
 {
-    struct regs r = {0, 0, 0xA0000000u, 0x03A90064u, 0};
+    struct regs r = {0, 0, 0xA0000000u, 0x03A90064u, 0, 0};
     struct intelbl bl;
     const char *why;
 
@@ -122,8 +131,8 @@ static void check_inverted(void)
 /** A PWM the firmware left off, or with no period, is refused untouched. */
 static void check_refused(void)
 {
-    struct regs off = {0, 0, 0x00000000u, 0x03A903A9u, 0};
-    struct regs none = {0, 0, 0x80000000u, 0x000003A9u, 0};
+    struct regs off = {0, 0, 0x00000000u, 0x03A903A9u, 0, 0};
+    struct regs none = {0, 0, 0x80000000u, 0x000003A9u, 0, 0};
     struct intelbl bl;
     const char *why = "";
 
@@ -141,9 +150,9 @@ static void check_refused(void)
  */
 static void check_cpu_mode(void)
 {
-    struct regs r = {0x80000000u, 0x12340200u, 0x80000000u, 0x03A903A9u, 0};
-    struct regs big = {0x80000000u, 0x0000FFFFu, 0x80000000u, 0x03A903A9u, 0};
-    struct regs set = {0x80000000u, 0x00000200u, 0xC0000000u, 0x03A903A9u, 0};
+    struct regs r = {0x80000000u, 0x12340200u, 0x80000000u, 0x03A903A9u, 0, 0};
+    struct regs big = {0x80000000u, 0x0000FFFFu, 0x80000000u, 0x03A903A9u, 0, 0};
+    struct regs set = {0x80000000u, 0x00000200u, 0xC0000000u, 0x03A903A9u, 0, 0};
     struct intelbl bl;
     const char *why;
 
@@ -158,12 +167,42 @@ static void check_cpu_mode(void)
           "with the override set already nothing is written");
 }
 
+/**
+ * The sequencer's switch: taken when the firmware left the panel's power
+ * and backlight enable on, as the Lenovo's PP_CONTROL of 7, and not
+ * otherwise; off and on change the enable bit alone and keep the duty.
+ */
+static void check_switch(void)
+{
+    struct regs r = {0, 0, 0x80000000u, 0x03A903A9u, 0, 7};
+    struct regs dark = {0, 0, 0x80000000u, 0x03A903A9u, 0, 3};
+    struct regs unpowered = {0, 0, 0x80000000u, 0x03A903A9u, 0, 4};
+    struct intelbl bl;
+    const char *why;
+
+    CHECK(attach(&bl, &r, &why) == 0, "the Lenovo's PWM is taken");
+    intelbl_attach_switch(&bl);
+    CHECK(bl.switched && r.writes == 0, "a panel lit by the sequencer is switched, unwritten");
+    intelbl_power(&bl, 0);
+    CHECK(r.pp_control == 3, "off clears the backlight enable alone");
+    CHECK(r.pch_ctl2 == 0x03A903A9u && intelbl_get(&bl) == 937, "off keeps the duty cycle");
+    intelbl_power(&bl, 1);
+    CHECK(r.pp_control == 7, "on sets the backlight enable again");
+    CHECK(attach(&bl, &dark, &why) == 0, "a PWM beside a dark enable is taken");
+    intelbl_attach_switch(&bl);
+    CHECK(!bl.switched, "a backlight enable left off is no switch");
+    CHECK(attach(&bl, &unpowered, &why) == 0, "a PWM beside an unpowered panel is taken");
+    intelbl_attach_switch(&bl);
+    CHECK(!bl.switched, "a panel the sequencer did not power is no switch");
+}
+
 int main(void)
 {
     check_lenovo();
     check_inverted();
     check_refused();
     check_cpu_mode();
+    check_switch();
     if (fails != 0) {
         printf("intelbl_hosttest: %d failed\n", fails);
         return 1;
