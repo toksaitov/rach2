@@ -655,6 +655,7 @@ case_clang() {
     _res=$(clang -print-resource-dir 2>/dev/null)
     _bad=0
     _files=$(make -s -C "$REPO/rach2" print-c-src)
+    make -s -C "$REPO/rach2" acpica >>"$VDIR/verify_clang.log" 2>&1 || _bad=1
     _acpi=$(make -s -C "$REPO/rach2" print-acpi-cflags)
     for f in $_files; do
         case $f in
@@ -693,6 +694,7 @@ case_sparse() {
     _bad=0
     python3 "$REPO/tests/system/usercheck_test.py" >>"$VDIR/verify_sparse.log" 2>&1 || _bad=1
     _files=$(make -s -C "$REPO/rach2" print-c-src)
+    make -s -C "$REPO/rach2" acpica >>"$VDIR/verify_sparse.log" 2>&1 || _bad=1
     _acpi=$(make -s -C "$REPO/rach2" print-acpi-cflags)
     # The ACPI files, sys/acpi/, take the build's flags for ACPICA's headers.
     # shellcheck disable=SC2086
