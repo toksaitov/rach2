@@ -478,6 +478,13 @@ uint8_t *fb_enter(void)
     return 0;
 }
 
+/** Fail the row: no row opens the framebuffer, whose open unblanks the
+ * console. */
+void console_unblank_now(void)
+{
+    check(0, "unexpected framebuffer open");
+}
+
 /** Fail the row: no row opens the framebuffer. */
 void kbd_clear_scancodes(void)
 {

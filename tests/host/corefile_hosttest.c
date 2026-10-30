@@ -640,6 +640,10 @@ uint8_t *fb_enter(void)
 void fb_exit(void)
 {}
 
+/** No row opens the framebuffer, whose open unblanks the console. */
+void console_unblank_now(void)
+{}
+
 /** No row reads the keyboard. */
 void kbd_clear_scancodes(void)
 {}
