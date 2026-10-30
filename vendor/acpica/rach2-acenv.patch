@@ -1,0 +1,20 @@
+Pick Rach2's platform header when the kernel's build defines __RACH2__.
+
+acenv.h chooses the host's header from the compiler's macros. TinyCC defines
+__linux__ on Rach2, so the test for Rach2 comes before the Linux one, which
+would include aclinux.h and the C library's headers.
+
+--- a/include/platform/acenv.h
++++ b/include/platform/acenv.h
+@@ -167,7 +167,10 @@
+ 
+ #endif
+ 
+-#if defined(_LINUX) || defined(__linux__)
++#if defined(__RACH2__)
++#include "acrach2.h"
++
++#elif defined(_LINUX) || defined(__linux__)
+ #include "aclinux.h"
+ 
+ #elif defined(_APPLE) || defined(__APPLE__)
