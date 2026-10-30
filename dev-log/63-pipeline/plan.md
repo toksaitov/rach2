@@ -12,7 +12,7 @@ The owner approves a milestone's plan after Codex and a Claude Fable subagent ha
 
 ## The cutover
 
-Every loop runs the `tools/flow` of `origin/master`, and its sessions follow master's `AGENTS.md`, so the new process starts only when master has it. Since only a release moves master, and the release is one of the scripts this branch rewrites, the owner moves master to this branch once by hand, after its style check and host tests pass on the testing host. The old loops stay stopped until then; afterwards each team clone is brought to master, its stop note is removed, and its loop is started with the command in `tools/Readme.md`. No issue or milestone is open, so the board starts empty, and milestone 64 is the first that runs this way.
+Every loop runs the `tools/flow` of `origin/master`, and its sessions follow master's `AGENTS.md`, so the new process starts only when master has it. As a fix to the process itself, this branch goes straight to master by fast-forward, after its style check and host tests pass on the testing host. The old loops stay stopped until then; afterwards each team clone is brought to master, its stop note is removed, and its loop is started with the command in `tools/Readme.md`. No issue or milestone is open, so the board starts empty, and milestone 64 is the first that runs this way.
 
 ## What changed
 

@@ -40,7 +40,7 @@ The rules are kept short on purpose; their history is in commit messages and `de
 * Codex and a Claude Fable subagent each review the plan on its own: whether the goal can be reached this way, whether workers would wait on each other or collide in the same files, and what is missing. The manager checks what they raise against the code, revises the plan, and gives it to the owner with what was raised and what was changed or set aside.
 * Once the owner approves, the manager makes the GitHub milestone, whose description says `Branch: milestone/NN-name`, cuts that branch from master, files the tasks and subtasks, and sets the tasks Ready.
 * The board is the GitHub project "Rach2" of `toksaitov/rach2`, with the Status Backlog, Ready, In progress or Done. It holds the open milestones' tasks and subtasks, the owner's decisions (label `owner`) and bugs reported from outside (label `bug`), and nothing else.
-* Master moves only when a milestone is released. Several milestones may be open at once: when one has nothing left to take, workers take the next one's tasks, on its branch.
+* Master moves when a milestone is released, and for a fix to the process itself (`AGENTS.md`, `CLAUDE.md`, `.agents` and `tools/flow`), which goes straight to master by fast-forward once it works, since every loop runs master's. Several milestones may be open at once: when one has nothing left to take, workers take the next one's tasks, on its branch.
 
 ## Work
 
@@ -51,7 +51,7 @@ The rules are kept short on purpose; their history is in commit messages and `de
 * Wait for a long command in the foreground, or in the background with the tool's own notice. Never by polling the process table.
 * The manager reads every account's state at least every half hour, with `sh tools/flow/status.sh`. When an account runs out of its limit or stalls, the manager stops its loop, commits its unfinished work to the task branch, pushes it, and gives the task to a free account; the closed subtasks show where to go on. It restarts a stopped loop, folds the owner's new requests into tasks, and keeps every account busy.
 * At the end of a milestone the manager rebases its branch onto master if master moved, builds it after `make clean`, which keeps the vendor and GNU builds, and runs `tests/run style`, the host tests and every suite on both architectures, while Codex reviews the whole diff. The failures and findings go in one list, fixed in one batch; then only the failed cases run again.
-* `tools/flow/release.sh M SHA` then runs every suite on Ubuntu in WSL, on Windows and on the Mac, installs SHA on the Lenovo and runs its native cases and acceptance on a trial boot. On a pass it moves master to SHA, closes the milestone and archives its cards; `-r` runs again only the last release's failures. The Lenovo takes no commit that has not passed everywhere.
+* `tools/flow/release.sh M SHA` then runs every suite on Ubuntu in WSL, on Windows and on the Mac, installs SHA on the Lenovo and runs its native cases and acceptance on a trial boot. On a pass it moves master to SHA, closes the milestone and archives its cards; `-r` runs again only the last release's failures. The Lenovo's installed system takes no commit that has not passed everywhere; a worker tries its own build there only on a trial boot, as the `machine` skill says.
 * If the owner's limit runs out, the chat, the manager and its worker sessions stop together and start again when it is back.
 
 ## Build
@@ -114,5 +114,5 @@ The rules are kept short on purpose; their history is in commit messages and `de
 ## Git
 
 * Commit in scoped units with no attribution of any kind. The message is one line, with no trailing period, that begins with a verb in the imperative and says what the commit does.
-* Workers push their task branches, and the milestone branch by fast-forward; only the release moves master. Never force-push, with one exception: at a milestone's end, once its tasks are closed and nobody writes its branch, the manager rebases that branch onto a master that moved and pushes it with `--force-with-lease`, since master takes only linear history. Never pass `--no-verify`.
+* Workers push their task branches, and the milestone branch by fast-forward; master moves only as the Milestones section says. Never force-push, with one exception: at a milestone's end, once its tasks are closed and nobody writes its branch, the manager rebases that branch onto a master that moved and pushes it with `--force-with-lease`, since master takes only linear history. Never pass `--no-verify`.
 * The hooks in `tools/git-hooks` run on every commit: `commit-msg` refuses an attribution line and `pre-commit` formats the staged C files. `.claude/settings.json` turns them on for Claude Code; `git config core.hooksPath tools/git-hooks` does in any other clone.
