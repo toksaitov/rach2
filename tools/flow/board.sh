@@ -97,7 +97,8 @@
 #
 # `step N progress|pass|fail TEXT` reports a release step on its card N:
 # `progress` sets it In progress, `pass` closes it with TEXT and sets it Done,
-# and `fail` comments TEXT and leaves it In progress.
+# and `fail` comments TEXT and leaves it In progress; `progress` and `fail`
+# reopen a closed card first, for a step that runs again.
 #
 # `check [HELD...]` prints a line `board: LINE` for each inconsistency of
 # the board it can see: an open task whose branch `task/N` its milestone's
@@ -513,12 +514,12 @@ done_()
 finish()
 {
     login
-    assign "$1" "$me" &&
-        gh issue close "$1" --repo "$REPO" --comment "$2" > /dev/null &&
-        set_status "$1" Done || {
+    if ! assign "$1" "$me" ||
+        ! gh issue close "$1" --repo "$REPO" --comment "$2" > /dev/null ||
+        ! set_status "$1" Done; then
         echo "board: #$1: cannot finish it" >&2
         exit 1
-    }
+    fi
 }
 
 card()
@@ -539,15 +540,23 @@ card()
     echo "$n"
 }
 
+# reopen N: reopen issue N if it is closed.
+reopen()
+{
+    [ "$(gh issue view "$1" --repo "$REPO" --json state --jq .state)" != CLOSED ] ||
+        gh issue reopen "$1" --repo "$REPO" > /dev/null
+}
+
 step()
 {
     case $2 in
-        progress) set_status "$1" "In progress" ;;
+        progress)
+            reopen "$1" && set_status "$1" "In progress" ;;
         pass)
             gh issue close "$1" --repo "$REPO" --comment "$3" > /dev/null &&
                 set_status "$1" Done ;;
         fail)
-            gh issue comment "$1" --repo "$REPO" --body "$3" > /dev/null &&
+            reopen "$1" && gh issue comment "$1" --repo "$REPO" --body "$3" > /dev/null &&
                 set_status "$1" "In progress" ;;
         *) exit 2 ;;
     esac || {

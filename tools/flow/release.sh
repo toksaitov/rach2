@@ -125,7 +125,9 @@
 # `milestone M`, `sha SHA`, `branch NAME`, `chosen TIME`, `again MACHINE
 # WORD...` when only those run again on MACHINE, `dispatched TIME`, `run ID
 # RESULT` for a full run, `MACHINE started RUN` for a run on another machine,
-# `failure MACHINE RUN WORD...`, `STEP done TIME DETAIL`, `touched TIME`
+# `failure MACHINE RUN WORD...`, `card STEP N` for the card of each step
+# on the board, and `card release N` for the release's, `STEP done TIME
+# DETAIL`, `touched TIME`
 # before the first change to the machine, `install started TIME`, `closing
 # TIME`, and last `failed STEP: WHY` or `closed TIME`; `log`, everything the
 # script prints; `wt`, the worktree; and the records of releases that ended,
@@ -136,7 +138,8 @@
 # aside when the script starts on new arguments, and the new record then
 # replaces it in one rename. The new record keeps the old one's `touched`
 # line unless the old release closed, since the machine may still run what
-# that release left. A done step is skipped when the script runs again, a
+# that release left, and its `card` lines when it is of the same milestone
+# and did not close, so that the steps keep their cards. A done step is skipped when the script runs again, a
 # transfer whose files still hash right on the machine is kept, and a step
 # that writes the machine first asks it what it runs and which disk has the
 # serial. A reboot counts as done when a boot younger than the request
@@ -170,10 +173,77 @@ finish()
     echo "$(date -u '+%F %T') release: $*" >> "$state/log"
 }
 
-# note LINE: append LINE to the record.
+# note LINE: append LINE to the record, and report what it says of a step
+# to that step's card.
 note()
 {
     echo "$*" >> "$state/record"
+    line=$*
+    case $line in
+        'dispatched '*) report full progress "The run on Ubuntu in WSL started." ;;
+        'mac started '*|'windows started '*) report "${line%% *}" progress "The run ${line##* } started." ;;
+        'lenovo started '*) report accept progress "The native cases' run ${line##* } started." ;;
+        'build done '*) report trial progress "The build is done: $(echo "$line" | cut -d ' ' -f 4-)." ;;
+        'full done '*|'mac done '*|'windows done '*|'trial done '*|'accept done '*)
+            report "${line%% *}" pass "Passed: $(echo "$line" | cut -d ' ' -f 4-)." ;;
+        'failure '*)
+            m=$(echo "$line" | cut -d ' ' -f 2)
+            [ "$m" != lenovo ] || m=accept
+            report "$m" fail "The run $(echo "$line" | cut -d ' ' -f 3) failed: $(echo "$line" | cut -d ' ' -f 4-)." ;;
+        'failed tests: '*) ;;
+        'failed '*)
+            m=$(echo "$line" | sed 's/^failed \([a-z]*\):.*/\1/')
+            case $m in
+                build|recovery|transfer|install|trial) m=trial ;;
+                lenovo|accept|record) m=accept ;;
+                full|mac|windows) ;;
+                *) m=release ;;
+            esac
+            report "$m" fail "Failed: ${line#failed }." ;;
+        'closing '*) report close progress "Moving master to $sha." ;;
+    esac
+}
+
+# report STEP STATE TEXT: report STEP to its card, the record's `card STEP N`,
+# as `board.sh step N STATE TEXT` does. A card that cannot be reported is
+# logged and does not stop the release.
+report()
+{
+    n=$(sed -n "s/^card $1 //p" "$state/record" | tail -n 1)
+    [ -n "$n" ] || return 0
+    sh "$repo/tools/flow/board.sh" step "$n" "$2" "$3" > /dev/null 2>&1 ||
+        echo "$(date -u '+%F %T') release: board: #$n: the $1 step could not be reported" >> "$state/log"
+}
+
+# cards: file on the board, in the milestone, the release's card and a card
+# under it for each of its steps that the record has no card for, and pass
+# each step the record has done.
+cards()
+{
+    board=$repo/tools/flow/board.sh
+    if ! grep -q '^card release ' "$state/record"; then
+        n=$(sh "$board" card "$milestone" - \
+            "Release milestone $milestone on every machine and move master to it" 2>> "$state/log")
+        [ -n "$n" ] || { say "board: the release's card could not be filed"; return 0; }
+        note "card release $n"
+    fi
+    report release progress "Releasing $sha."
+    parent=$(sed -n 's/^card release //p' "$state/record" | tail -n 1)
+    for s in full mac windows trial accept close; do
+        case $s in
+            full) t="Run every suite on Ubuntu in WSL" ;;
+            mac) has mac || continue; t="Run every suite but style on the Mac" ;;
+            windows) has windows || continue; t="Run every suite but style on Windows" ;;
+            trial) t="Install the release on the Lenovo and start it on a trial boot" ;;
+            accept) t="Run the Lenovo's native cases and acceptance on the trial boot" ;;
+            close) t="Move master to the release and close the milestone" ;;
+        esac
+        grep -q "^card $s " "$state/record" && continue
+        n=$(sh "$board" card "$milestone" "$parent" "$t" 2>> "$state/log")
+        [ -n "$n" ] || { say "board: the card \"$t\" could not be filed"; continue; }
+        note "card $s $n"
+        ! done_ "$s" || report "$s" pass "Passed in an earlier run of this release."
+    done
 }
 
 # done_ STEP: succeed when the record says STEP is done.
@@ -1052,6 +1122,8 @@ close()
     fi
     gh api -X PATCH "repos/$REPO/milestones/$milestone" -f state=closed > /dev/null ||
         later "milestone $milestone could not be closed"
+    report close pass "Master is at $sha, and milestone $milestone is closed."
+    report release pass "Released $sha on every machine."
     sh "$repo/tools/flow/board.sh" archive "$milestone" > /dev/null ||
         later "board.sh archive $milestone failed"
 }
@@ -1129,12 +1201,15 @@ main()
             printf 'milestone %s\nsha %s\nbranch %s\nchosen %s\n' "$milestone" "$sha" "$branch" \
                 "$(date -u '+%FT%TZ')"
             [ -z "$kept" ] || printf '%s\n' "$kept"
+            [ -z "$old" ] || ! grep -qx "milestone $milestone" "$state/record" ||
+                grep -q '^closed ' "$state/record" || grep '^card ' "$state/record"
             [ -z "$old" ] || grep -q '^closed ' "$state/record" ||
                 grep '^touched ' "$state/record" | tail -n 1
         } > "$state/record.new"
         [ -z "$old" ] || cp "$state/record" "$state/$old-$(date -u '+%m%d-%H%M%S')" ||
             later "the old record could not be kept"
         mv "$state/record.new" "$state/record"
+        cards
         again=$(sed -n 's/^again //p' "$state/record" | awk '{ printf "%s%s", (NR > 1 ? "; " : ""), $0 }')
         say "milestone $milestone: releasing $sha${again:+, running again only $again}"
     fi
