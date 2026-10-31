@@ -527,6 +527,11 @@ out_pty:
     if (h->pty.child > 0)
         kill(h->pty.child, SIGHUP);
     term_pty_close(&h->pty);
+    if (h->pty.child > 0) {
+        while (waitpid(h->pty.child, &h->status, 0) < 0 && errno == EINTR)
+            ;
+        h->pty.child = -1;
+    }
 out_screen:
     term_screen_free(&h->screen);
 out_signals:

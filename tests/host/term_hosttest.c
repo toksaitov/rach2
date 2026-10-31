@@ -3,7 +3,7 @@
  * round trip from its output on a host pty, through libtsm's screen, to the
  * commands that read the screen back, and from the commands to its input.
  *
- * host-deps: term/pty.c term/screen.c term/host.c term/draw.c term/font.c
+ * host-deps: term/pty.c term/screen.c term/host.c term/draw.c term/font.c term/unifont.c
  * host-deps: term/keys.c term/select.c tests/host/compat/fixdir_host.c
  * host-deps: vendor/libtsm/libtsm-4.8.0/src/tsm/tsm-render.c
  * host-deps: vendor/libtsm/libtsm-4.8.0/src/tsm/tsm-screen.c
@@ -258,6 +258,30 @@ static void test_hangup(const char *conf)
     CHECK(finish(&r) == 5, "the hung-up child's status");
 }
 
+/** A signal that ends term also reaps the program that owned its slave pty. */
+static void test_terminate(const char *conf)
+{
+    static const char script[] = "printf 'child:%s\\n' $$; read line";
+    char *argv[] = {"term", "-H", "-c", (char *)conf, "/bin/sh", "-c", (char *)script, NULL};
+    struct run r;
+    char text[4096];
+    long child = -1;
+
+    start(&r, argv);
+    ask(&r, "wait child:", "found 0");
+    say(&r, "dump");
+    hear(&r, text, sizeof(text));
+    for (unsigned y = 0; y < 24; y++) {
+        hear(&r, text, sizeof(text));
+        if (y == 0)
+            CHECK(sscanf(text, "child:%ld", &child) == 1 && child > 1, "the child's pid");
+    }
+    CHECK(kill(r.pid, SIGTERM) == 0, "terminate term");
+    CHECK(finish(&r) == 1, "term reports its interruption");
+    if (child > 1)
+        CHECK(kill((pid_t)child, 0) < 0 && errno == ESRCH, "term reaped its pty child");
+}
+
 /** A program that cannot be run fails term, which answers nothing. */
 static void test_no_program(const char *conf)
 {
@@ -327,6 +351,7 @@ int main(void)
     test_conf();
     test_round_trip(conf);
     test_hangup(conf);
+    test_terminate(conf);
     test_no_program(conf);
 
     if (fails) {
