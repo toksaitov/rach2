@@ -149,6 +149,41 @@ as on Linux.
 Detach the terminal if it belongs to the caller's session.
 Otherwise succeed without action.
 .El
+.Pp
+The console alone also answers Linux's keyboard requests of
+.In linux/kd.h ,
+.Dv KDGKBTYPE ,
+.Dv KDGKBMODE
+and
+.Dv KDSKBMODE ,
+.Dv KDGKBMETA
+and
+.Dv KDSKBMETA ,
+.Dv KDGKBLED
+and
+.Dv KDSKBLED ,
+.Dv KDGETLED
+and
+.Dv KDSETLED ,
+.Dv KDGKBENT
+and
+.Dv KDSKBENT ,
+.Dv KDGKBSENT
+and
+.Dv KDSKBSENT ,
+.Dv KDGKBDIACR ,
+.Dv KDSKBDIACR ,
+.Dv KDGKBDIACRUC
+and
+.Dv KDSKBDIACRUC ,
+.Dv KDKBDREP
+and
+.Dv KDGETMODE ,
+as
+.Xr console 4
+describes them, with who may set what; a pseudo-terminal slave answers
+them with
+.Er ENOTTY .
 .Ss Pipes and pseudo-terminals
 Pipes and pseudo-terminal masters accept
 .Dv FIONREAD
@@ -512,6 +547,8 @@ Sound Blaster 16 refuses only a rate outside 5000 through 44100;
 the PC speaker refuses nothing.
 .Dv AUDIO_WRITE
 was given a zero size, or no stream is playing.
+A keyboard request's mode, flag, keymap entry, string or accent count is
+out of range.
 .It Bq Er EIO
 The partition rescan could not read the disk's first sector, or the
 sound device failed to start the stream of
@@ -541,7 +578,9 @@ was requested without effective user ID 0, or
 .Dv FS_IOC_SETFLAGS
 came from a caller that neither owns the file nor is privileged, or
 asked an unprivileged caller's change of the immutable or append-only
-flag.
+flag, or a keyboard request came from a caller
+.Xr console 4
+does not let set it.
 .It Bq Er ESRCH
 There is no current process, or the default route to remove is absent
 or has a different nonzero gateway from the one supplied.

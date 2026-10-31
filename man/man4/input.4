@@ -177,6 +177,19 @@ No bits: no device here has properties, sounds or switches.
 With a nonzero argument, take the device for this open alone, so that no
 other open reads its events until it gives it back, with 0, or closes.
 The console still reads the keys.
+.It Dv EVIOCGREP , EVIOCSREP
+Read into, or set from, two unsigned ints a keyboard's repeat: the delay
+before a held key's first repeat and the period between repeats, in
+milliseconds.
+Every keyboard shares one repeat, which the console's
+.Dv KDKBDREP
+also sets; see
+.Xr console 4 .
+A time above
+.Dv INT_MAX
+is left as it is, and a period of 0 turns repeat off.
+A device that is no keyboard answers
+.Er ENOSYS .
 .El
 .Pp
 The nodes are root's, mode 0600, as Linux's are.
@@ -200,6 +213,11 @@ of a type Linux does not answer.
 .It Bq Er ENODEV
 An open of a node with no device, or any call on an open whose device has
 gone, such as a USB keyboard unplugged.
+.It Bq Er ENOSYS
+.Dv EVIOCGREP
+or
+.Dv EVIOCSREP
+on a device that is no keyboard.
 .It Bq Er ENOTTY
 Another ioctl.
 .El
