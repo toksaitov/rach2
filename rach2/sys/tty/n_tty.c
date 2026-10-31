@@ -13,6 +13,7 @@
  */
 
 #include "n_tty.h"
+#include "../wcwidth.h"
 
 /* the readable-byte ring (monotonic head/tail, slot = pos & (SIZE-1)) */
 
@@ -140,13 +141,74 @@ static void echo(struct n_tty *t, n_tty_out_fn out, void *ctx, unsigned char c)
 
 /* canonical-mode line editing */
 
-/** Erase the last byte of the line under edit; under ECHO and ECHOE, rub it
- * out on the terminal with backspace, space, backspace. */
+/**
+ * The index in the line under edit, which must not be empty, of the first
+ * byte of its last character: under IUTF8 the lead byte of a whole UTF-8
+ * sequence that ends the line, and otherwise, or when the bytes at the end
+ * are no such sequence, the last byte.
+ */
+static int last_char_start(const struct n_tty *t)
+{
+    int last = t->line_len - 1, start = last, len;
+    unsigned char lead;
+
+    if (!(t->tio.c_iflag & IUTF8)) {
+        return last;
+    }
+    while (start > 0 && last - start < 3 && (t->line[start] & 0xC0) == 0x80) {
+        start--;
+    }
+    lead = t->line[start];
+    len = lead >= 0xF0 && lead < 0xF8 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+    if (lead < 0xC0 || lead >= 0xF8 || len != last - start + 1) {
+        return last;
+    }
+    return start;
+}
+
+/**
+ * The cells the echo of the line's bytes from `start` to its end took on the
+ * terminal: a control character's `^X` under ECHOCTL two, and a UTF-8
+ * character under IUTF8 the width the console draws it at (`k_wcwidth`),
+ * none for a combining mark and two for a wide one; any other byte one.
+ */
+static int echo_width(const struct n_tty *t, int start)
+{
+    unsigned char c = t->line[start];
+    uint32_t code;
+    int i, width;
+
+    if (c < 0x20 && c != '\t' && (t->tio.c_lflag & ECHOCTL)) {
+        return 2;
+    }
+    if (start == t->line_len - 1) {
+        return 1;
+    }
+    code = c & (c >= 0xF0 ? 0x07u : c >= 0xE0 ? 0x0Fu : 0x1Fu);
+    for (i = start + 1; i < t->line_len; i++) {
+        code = (code << 6) | (t->line[i] & 0x3Fu);
+    }
+    width = k_wcwidth(code);
+    return width < 0 ? 1 : width;
+}
+
+/**
+ * Erase the last character of the line under edit: a whole UTF-8 character
+ * under IUTF8, and one byte otherwise. Under ECHO and ECHOE, rub it out on
+ * the terminal with backspace, space, backspace for each cell its echo took.
+ */
 static void erase_one(struct n_tty *t, n_tty_out_fn out, void *ctx)
 {
-    if (t->line_len > 0) {
-        t->line_len--;
-        if ((t->tio.c_lflag & ECHO) && (t->tio.c_lflag & ECHOE)) {
+    int start, cells;
+
+    if (t->line_len == 0) {
+        return;
+    }
+    start = last_char_start(t);
+    cells = echo_width(t, start);
+    t->line_len = start;
+    if ((t->tio.c_lflag & ECHO) && (t->tio.c_lflag & ECHOE)) {
+        while (cells-- > 0) {
             out(ctx, '\b');
             out(ctx, ' ');
             out(ctx, '\b');
@@ -197,7 +259,7 @@ void n_tty_init(struct n_tty *t)
 {
     int i;
 
-    t->tio.c_iflag = ICRNL;
+    t->tio.c_iflag = ICRNL | IUTF8;
     t->tio.c_oflag = OPOST | ONLCR;
     t->tio.c_cflag = B38400 | CS8 | CREAD | HUPCL;
     t->tio.c_lflag = ISIG | ICANON | ECHO | ECHOE | ECHOK | ECHOCTL;
