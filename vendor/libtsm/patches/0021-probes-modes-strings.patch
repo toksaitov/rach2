@@ -1,0 +1,584 @@
+Answer the probes, add focus events and synchronized output, and consume strings
+
+Fill in the calls of mode 2026, synchronized output, and mode 1004, focus
+events: CSI ? 2026 h holds the screen's updates until CSI ? 2026 l, a reset
+or tsm_vte_end_sync_hold(), which a renderer calls when the hold outlasts
+its bound; tsm_vte_handle_focus() sends CSI I or CSI O while mode 1004 is set.
+
+Answer the probes an application sends to learn the terminal, each in the
+order it came, so that an application that ends a group of probes with DA1
+knows that a probe answered before DA1 is supported:
+* DA1 reports a VT220 with ANSI color, CSI ? 62 ; 22 c, and no longer the
+  options the parser does not implement;
+* CPR and DECXCPR, CSI 6 n and CSI ? 6 n, count the row from the top margin
+  in origin mode and report the last column for a cursor waiting to wrap;
+* XTVERSION, CSI > q and CSI > 0 q, answers DCS > | libtsm(VERSION) ST,
+  where it set the LEDs as DECLL;
+* DECRQM, CSI Ps $ p and CSI ? Ps $ p, answers CSI Ps ; Pm $ y for every
+  mode the parser takes, the modes it ignores as fixed, and mode 2027,
+  grapheme clustering, as not recognized;
+* OSC 10 and 11 answer only the exact queries "10;?" and "11;?".
+DECLL now takes only CSI Ps q and DECSCUSR only CSI Ps SP q, and CSI > p,
+xterm's pointer mode, is ignored instead of resetting the terminal.
+
+The OSC buffer, 128 bytes, grows as a string needs up to 2 MiB, which holds
+OSC 52 with 1 MiB of text in base64, and is freed after a long string. OSC 52
+goes to the clipboard callback when one is set, with its targets and its
+payload. A string longer than the buffer is consumed and dropped, where before
+it was cut short and dispatched; one that CAN, SUB or a C1 control other than
+ST ends is cancelled. Clearing a sequence's state no longer clears the buffer.
+DCS, SOS, PM and APC strings are consumed without effect, as before.
+
+--- a/src/tsm/libtsm.h
++++ b/src/tsm/libtsm.h
+@@ -679,8 +679,10 @@ bool tsm_vte_handle_focus(struct tsm_vte
+  *
+  * \c targets is the OSC's first parameter, the selections named by letters
+  * such as "c" and "p", NUL-terminated and possibly empty. \c payload and
+- * \c len are its second, the new contents in base64 as the application sent
+- * them, not NUL-terminated. Both are valid only during the call.
++ * \c len are the rest of the string, the new contents in base64 as the
++ * application sent them, or "?" for a query, not NUL-terminated. Both are
++ * valid only during the call. An OSC 52 with no second parameter, or longer
++ * than the parser holds, 2 MiB, is dropped without a call.
+  */
+ typedef void (*tsm_vte_clipboard_cb) (struct tsm_vte *vte,
+ 				      const char *targets,
+@@ -692,7 +694,8 @@ typedef void (*tsm_vte_clipboard_cb) (st
+  * @brief Set the callback that receives OSC 52.
+  *
+  * @param vte The vte object
+- * @param clipboard_cb The callback, or NULL to ignore OSC 52
++ * @param clipboard_cb The callback, or NULL to give OSC 52 to the OSC callback
++ * as any other OSC
+  * @param clipboard_data The callback's last argument
+  */
+ void tsm_vte_set_clipboard_cb(struct tsm_vte *vte,
+--- a/src/tsm/tsm-vte.c
++++ b/src/tsm/tsm-vte.c
+@@ -126,8 +126,26 @@ enum parser_action {
+ #define KITTY_KBD_SUPPORTED		0x07
+ #define KITTY_KBD_STACK_MAX		8
+ 
+-/* max length of an OSC code */
+-#define OSC_MAX_LEN 128
++/*
++ * The OSC buffer starts at OSC_MIN_LEN bytes and doubles as a string needs,
++ * up to OSC_MAX_LEN, which holds OSC 52 with 1 MiB of text in base64. A
++ * buffer grown past OSC_KEEP_LEN is freed when its string ends.
++ */
++#define OSC_MIN_LEN	128
++#define OSC_KEEP_LEN	4096
++#define OSC_MAX_LEN	(2 * 1024 * 1024)
++
++/* the private modes of this file's own: focus events and synchronized output */
++#define MODE_FOCUS_EVENTS	1004
++#define MODE_SYNC_OUTPUT	2026
++#define MODE_GRAPHEME_CLUSTERS	2027
++
++/* DECRQM's answers: the mode is not recognized, set, reset, or fixed */
++#define DECRQM_UNKNOWN		0
++#define DECRQM_SET		1
++#define DECRQM_RESET		2
++#define DECRQM_ALWAYS_SET	3
++#define DECRQM_ALWAYS_RESET	4
+ 
+ /* terminal flags */
+ #define FLAG_CURSOR_KEY_MODE			0x00000001 /* DEC cursor key mode */
+@@ -180,8 +198,13 @@ struct tsm_vte {
+ 
+ 	tsm_vte_osc_cb osc_cb;
+ 	void *osc_data;
+-	unsigned int osc_len;
+-	char osc_arg[OSC_MAX_LEN];
++	/* the OSC string so far, osc_len bytes of a buffer of osc_size;
++	 * osc_arg is NULL until a string has a byte. osc_overflow is set when
++	 * the string outgrew OSC_MAX_LEN or the memory, and drops it. */
++	char *osc_arg;
++	size_t osc_size;
++	size_t osc_len;
++	bool osc_overflow;
+ 
+ 	tsm_vte_mouse_cb mouse_cb;
+ 	void *mouse_data;
+@@ -201,6 +224,10 @@ struct tsm_vte {
+ 	tsm_vte_clipboard_cb clipboard_cb;
+ 	void *clipboard_data;
+ 
++	bool focus_events;	/* mode 1004 */
++	bool sync_hold;		/* mode 2026 */
++	bool alt_cursor_saved;	/* mode 1048 has saved the cursor */
++
+ 	uint8_t (*custom_palette_storage)[3];
+ 	uint8_t (*palette)[3];
+ 	struct tsm_screen_attr def_attr;
+@@ -584,6 +611,7 @@ void tsm_vte_unref(struct tsm_vte *vte)
+ 	tsm_screen_unref(vte->con);
+ 	tsm_utf8_mach_free(vte->mach);
+ 	free(vte->custom_palette_storage);
++	free(vte->osc_arg);
+ 	free(vte);
+ }
+ 
+@@ -898,6 +926,9 @@ void tsm_vte_reset(struct tsm_vte *vte)
+ 	vte->mouse_last_row = 0;
+ 
+ 	memset(vte->kitty_kbd, 0, sizeof(vte->kitty_kbd));
++	vte->focus_events = false;
++	vte->sync_hold = false;
++	vte->alt_cursor_saved = false;
+ 
+ 	memcpy(&vte->cattr, &vte->def_attr, sizeof(vte->cattr));
+ 	to_rgb(vte, &vte->cattr);
+@@ -984,9 +1015,14 @@ static void csi_kitty_kbd(struct tsm_vte
+ 	}
+ }
+ 
++/*
++ * DA1: a VT220-class terminal (62) with ANSI color (22). The options of 132
++ * columns, selective erase, national charsets and technical characters are
++ * not claimed, since the parser does not implement them.
++ */
+ static void send_primary_da(struct tsm_vte *vte)
+ {
+-	const static char str[] = "\e[?60;1;6;9;15c";
++	const static char str[] = "\e[?62;22c";
+ 	vte_write(vte, str, sizeof(str) - 1);
+ }
+ 
+@@ -1105,7 +1141,7 @@ static void do_clear(struct tsm_vte *vte
+ 	vte->csi_flags = 0;
+ 
+ 	vte->osc_len = 0;
+-	memset(vte->osc_arg, 0, sizeof(vte->osc_arg));
++	vte->osc_overflow = false;
+ }
+ 
+ static void do_collect(struct tsm_vte *vte, uint32_t data)
+@@ -1863,6 +1899,7 @@ static void csi_mode(struct tsm_vte *vte
+ 				continue;
+ 
+ 			if (set) {
++				vte->alt_cursor_saved = true;
+ 				vte->alt_cursor_x =
+ 					tsm_screen_get_cursor_x(vte->con);
+ 				vte->alt_cursor_y =
+@@ -1877,6 +1914,7 @@ static void csi_mode(struct tsm_vte *vte
+ 				continue;
+ 
+ 			if (set) {
++				vte->alt_cursor_saved = true;
+ 				vte->alt_cursor_x =
+ 					tsm_screen_get_cursor_x(vte->con);
+ 				vte->alt_cursor_y =
+@@ -1930,6 +1968,12 @@ static void csi_mode(struct tsm_vte *vte
+ 		case TSM_VTE_BRACKETED_PASTE:
+ 			vte->bracketed_paste = set;
+ 			continue;
++		case MODE_FOCUS_EVENTS:
++			vte->focus_events = set;
++			continue;
++		case MODE_SYNC_OUTPUT:
++			vte->sync_hold = set;
++			continue;
+ 		default:
+ 			llog_debug(vte, "unknown DEC %set-Mode %d",
+ 				   set?"S":"Res", vte->csi_argv[i]);
+@@ -1954,24 +1998,167 @@ static void csi_dev_attr(struct tsm_vte
+ 		   vte->csi_argv[0], vte->csi_argv[1], vte->csi_argv[2]);
+ }
+ 
++/*
++ * DSR: CSI 5 n reports the terminal sound, CSI 6 n the cursor's position (CPR)
++ * and CSI ? 6 n the same in DEC's form (DECXCPR). The row counts from the top
++ * margin in origin mode, and a cursor past the last column, waiting to wrap,
++ * reports the last column, as xterm's does.
++ */
+ static void csi_dsr(struct tsm_vte *vte)
+ {
+ 	char buf[64];
+-	unsigned int x, y, len;
++	unsigned int x, y;
++	int len;
++
++	if (vte->csi_flags & ~CSI_WHAT)
++		return;
+ 
+-	if (vte->csi_argv[0] == 5) {
++	if (vte->csi_argv[0] == 5 && !vte->csi_flags) {
+ 		vte_write(vte, "\e[0n", 4);
+ 	} else if (vte->csi_argv[0] == 6) {
+ 		x = tsm_screen_get_cursor_x(vte->con);
+ 		y = tsm_screen_get_cursor_y(vte->con);
+-		len = snprintf(buf, sizeof(buf), "\e[%u;%uR", y + 1, x + 1);
+-		if (len >= sizeof(buf))
+-			vte_write(vte, "\e[0;0R", 6);
+-		else
++		if (x >= vte->con->size_x && vte->con->size_x > 0)
++			x = vte->con->size_x - 1;
++		if ((vte->flags & TSM_VTE_FLAG_ORIGIN_MODE) &&
++		    y >= vte->con->margin_top)
++			y -= vte->con->margin_top;
++		len = snprintf(buf, sizeof(buf), "\e[%s%u;%uR",
++			       vte->csi_flags ? "?" : "", y + 1, x + 1);
++		if (len > 0 && (size_t)len < sizeof(buf))
+ 			vte_write(vte, buf, len);
+ 	}
+ }
+ 
++/* XTVERSION, CSI > q or CSI > 0 q: the library's name and version in a DCS */
++static void csi_xtversion(struct tsm_vte *vte)
++{
++	static const char str[] = "\eP>|libtsm(" TSM_VERSION ")\e\\";
++
++	if (vte->csi_argc <= 1 && vte->csi_argv[0] <= 0)
++		vte_write(vte, str, sizeof(str) - 1);
++}
++
++/* the state of the ANSI mode \mode, as DECRQM reports it */
++static int ansi_mode_state(struct tsm_vte *vte, int mode)
++{
++	unsigned int flag;
++
++	switch (mode) {
++	case 2: /* KAM */
++		flag = TSM_VTE_FLAG_KEYBOARD_ACTION_MODE;
++		break;
++	case 4: /* IRM */
++		flag = TSM_VTE_FLAG_INSERT_REPLACE_MODE;
++		break;
++	case 12: /* SRM */
++		flag = TSM_VTE_FLAG_SEND_RECEIVE_MODE;
++		break;
++	case 20: /* LNM */
++		flag = TSM_VTE_FLAG_LINE_FEED_NEW_LINE_MODE;
++		break;
++	default:
++		return DECRQM_UNKNOWN;
++	}
++
++	return (vte->flags & flag) ? DECRQM_SET : DECRQM_RESET;
++}
++
++/*
++ * The state of the DEC private mode \mode, as DECRQM reports it: every mode
++ * csi_mode() takes. Modes it accepts and ignores are fixed, DECANM set and
++ * the others reset; the blinking cursor's mode 12, which it does not track,
++ * and mode 2027, grapheme clustering, which it does not implement, are not
++ * recognized, so that an application does not rely on them.
++ */
++static int dec_mode_state(struct tsm_vte *vte, int mode)
++{
++	unsigned int flag;
++	bool alt;
++
++	switch (mode) {
++	case 1: /* DECCKM */
++		flag = TSM_VTE_FLAG_CURSOR_KEY_MODE;
++		break;
++	case 2: /* DECANM */
++		return DECRQM_ALWAYS_SET;
++	case 3: /* DECCOLM */
++	case 4: /* DECSCLM */
++	case 18: /* DECPFF */
++	case 19: /* DECPEX */
++		return DECRQM_ALWAYS_RESET;
++	case 5: /* DECSCNM */
++		flag = TSM_VTE_FLAG_INVERSE_SCREEN_MODE;
++		break;
++	case 6: /* DECOM */
++		flag = TSM_VTE_FLAG_ORIGIN_MODE;
++		break;
++	case 7: /* DECAWM */
++		flag = TSM_VTE_FLAG_AUTO_WRAP_MODE;
++		break;
++	case 8: /* DECARM */
++		flag = TSM_VTE_FLAG_AUTO_REPEAT_MODE;
++		break;
++	case 25: /* DECTCEM */
++		flag = TSM_VTE_FLAG_TEXT_CURSOR_MODE;
++		break;
++	case 42: /* DECNRCM */
++		flag = TSM_VTE_FLAG_NATIONAL_CHARSET_MODE;
++		break;
++	case TSM_VTE_MOUSE_MODE_X10:
++	case TSM_VTE_MOUSE_MODE_VT200:
++	case TSM_VTE_MOUSE_MODE_SGR:
++	case TSM_VTE_MOUSE_MODE_PIXEL:
++		return (int)vte->mouse_mode == mode ? DECRQM_SET :
++						      DECRQM_RESET;
++	case TSM_VTE_MOUSE_EVENT_BTN:
++	case TSM_VTE_MOUSE_EVENT_ANY:
++		return (int)vte->mouse_event == mode ? DECRQM_SET :
++						       DECRQM_RESET;
++	case 47:
++	case 1047:
++	case 1049:
++		alt = tsm_screen_get_flags(vte->con) & TSM_SCREEN_ALTERNATE;
++		return alt ? DECRQM_SET : DECRQM_RESET;
++	case 1048:
++		return vte->alt_cursor_saved ? DECRQM_SET : DECRQM_RESET;
++	case MODE_FOCUS_EVENTS:
++		return vte->focus_events ? DECRQM_SET : DECRQM_RESET;
++	case TSM_VTE_BRACKETED_PASTE:
++		return vte->bracketed_paste ? DECRQM_SET : DECRQM_RESET;
++	case MODE_SYNC_OUTPUT:
++		return vte->sync_hold ? DECRQM_SET : DECRQM_RESET;
++	case MODE_GRAPHEME_CLUSTERS:
++	default:
++		return DECRQM_UNKNOWN;
++	}
++
++	return (vte->flags & flag) ? DECRQM_SET : DECRQM_RESET;
++}
++
++/*
++ * DECRQM, CSI Ps $ p for an ANSI mode and CSI ? Ps $ p for a DEC private
++ * one: answer CSI Ps ; Pm $ y, or CSI ? Ps ; Pm $ y, with the mode's state.
++ */
++static void csi_decrqm(struct tsm_vte *vte)
++{
++	char buf[64];
++	bool dec = vte->csi_flags & CSI_WHAT;
++	int mode = vte->csi_argv[0];
++	int state, len;
++
++	if (vte->csi_flags & ~(CSI_WHAT | CSI_CASH))
++		return;
++
++	if (mode < 0)
++		mode = 0;
++	state = dec ? dec_mode_state(vte, mode) : ansi_mode_state(vte, mode);
++	len = snprintf(buf, sizeof(buf), "\e[%s%d;%d$y", dec ? "?" : "",
++		       mode, state);
++	if (len > 0 && (size_t)len < sizeof(buf))
++		vte_write(vte, buf, len);
++}
++
+ static void csi_report_window_size(struct tsm_vte *vte)
+ {
+ 	char buf[64];
+@@ -2134,19 +2321,13 @@ static void do_csi(struct tsm_vte *vte,
+ 		break;
+ 	case 'p':
+ 		if (vte->csi_flags & CSI_GT) {
+-			/* xterm: select X11 visual cursor mode */
+-			csi_soft_reset(vte);
++			/* XTSMPOINTER, xterm's pointer mode: ignored */
+ 		} else if (vte->csi_flags & CSI_BANG) {
+ 			/* DECSTR: Soft Reset */
+ 			csi_soft_reset(vte);
+ 		} else if (vte->csi_flags & CSI_CASH) {
+-			/* DECRQM: Request DEC Private Mode */
+-			/* If CSI_WHAT is set, then enable,
+-			 * otherwise disable */
+-
+-			/* Ignore */
+-
+-			/* FIXME: Implement DECRQM */
++			/* DECRQM: Request Mode */
++			csi_decrqm(vte);
+ 		} else {
+ 			/* DECSCL: Compatibility Level */
+ 			/* Sometimes CSI_DQUOTE is set here, too */
+@@ -2253,13 +2434,17 @@ static void do_csi(struct tsm_vte *vte,
+ 		num = vte->csi_argv[0];
+ 		tsm_screen_repeat_char(vte->con, num);
+ 		break;
+-	case 'q': /* DECLL - Load LEDs / DECSCUSR - Set Cursor Style */
+-		if (vte->csi_flags & CSI_SPACE) {
++	case 'q': /* DECLL, DECSCUSR and XTVERSION */
++		if (vte->csi_flags == CSI_GT) {
++			csi_xtversion(vte);
++		} else if (vte->csi_flags == CSI_SPACE) {
++			/* DECSCUSR - Set Cursor Style */
+ 			num = vte->csi_argv[0];
+ 			if (num < 0)
+ 				num = 0;
+ 			tsm_screen_set_cursor_style(vte->con, num);
+-		} else {
++		} else if (vte->csi_flags == 0) {
++			/* DECLL - Load LEDs */
+ 			num = vte->csi_argv[0];
+ 			if (num <= 0) {
+ 				vte->led_state = 0;
+@@ -2326,11 +2511,37 @@ static uint32_t vte_map(struct tsm_vte *
+ 	return val;
+ }
+ 
+-static void do_osc_collect(struct tsm_vte *vte, uint32_t val) {
++/*
++ * Add the code point \val to the OSC string, in UTF-8, growing the buffer as
++ * it needs. A string that outgrows OSC_MAX_LEN, or a buffer that cannot grow,
++ * sets osc_overflow, and the string is consumed and dropped.
++ */
++static void do_osc_collect(struct tsm_vte *vte, uint32_t val)
++{
+ 	char buf[4];
+-	int len = tsm_ucs4_to_utf8(val, buf);
+-	if (vte->osc_len + len > sizeof(vte->osc_arg) - 1) {
++	char *arg;
++	size_t size;
++	int len;
++
++	if (vte->osc_overflow)
+ 		return;
++
++	len = tsm_ucs4_to_utf8(val, buf);
++	if (vte->osc_len + len + 1 > vte->osc_size) {
++		size = vte->osc_size ? vte->osc_size : OSC_MIN_LEN;
++		while (size < vte->osc_len + len + 1)
++			size *= 2;
++		if (size > OSC_MAX_LEN) {
++			vte->osc_overflow = true;
++			return;
++		}
++		arg = realloc(vte->osc_arg, size);
++		if (!arg) {
++			vte->osc_overflow = true;
++			return;
++		}
++		vte->osc_arg = arg;
++		vte->osc_size = size;
+ 	}
+ 
+ 	memcpy(vte->osc_arg + vte->osc_len, buf, len);
+@@ -2383,29 +2594,54 @@ static void do_osc_4(struct tsm_vte *vte
+ 	}
+ }
+ 
+-static bool do_osc_internal(struct tsm_vte *vte, const char *end_seq)
++/*
++ * OSC 52, \arg being "52;targets;payload": hand the targets and the payload,
++ * in base64 or "?" for a query, to the clipboard callback. Returns false when
++ * no callback is set, so that the OSC callback has the string.
++ */
++static bool do_osc_52(struct tsm_vte *vte, char *arg, size_t len)
++{
++	char *payload;
++
++	if (!vte->clipboard_cb)
++		return false;
++
++	payload = memchr(arg + 3, ';', len - 3);
++	if (!payload)
++		return true;
++
++	*payload++ = '\0';
++	vte->clipboard_cb(vte, arg + 3, payload, arg + len - payload,
++			  vte->clipboard_data);
++	return true;
++}
++
++static bool do_osc_internal(struct tsm_vte *vte, char *arg,
++			    const char *end_seq)
+ {
+ 	// OSC 4, 10, and 11 query or change the RGB values of color numbers in
+ 	// the foreground/background (SGR 38 & 48), 3-bit (SGR 30-37 & 40-47),
+ 	// 4-bit (SGR 90-97 & 100-107), and 256-color (SGR 38;5 & 48;5) indexed
+ 	// color tables. We don't support changing the tables, but we do support
+ 	// querying them.
+-	if (!strncmp(vte->osc_arg, "4;", 2)) {
+-		do_osc_4(vte, vte->osc_arg + 2, end_seq);
++	if (!strncmp(arg, "4;", 2)) {
++		do_osc_4(vte, arg + 2, end_seq);
+ 		return true;
+ 	}
+-	if (!strncmp(vte->osc_arg, "10;?", 4)) {
++	if (!strcmp(arg, "10;?")) {
+ 		vte_write_xcolor(vte, "10", end_seq,
+ 				 vte->def_attr.fr, vte->def_attr.fg,
+ 				 vte->def_attr.fb);
+ 		return true;
+ 	}
+-	if (!strncmp(vte->osc_arg, "11;?", 4)) {
++	if (!strcmp(arg, "11;?")) {
+ 		vte_write_xcolor(vte, "11", end_seq,
+ 				 vte->def_attr.br, vte->def_attr.bg,
+ 				 vte->def_attr.bb);
+ 		return true;
+ 	}
++	if (!strncmp(arg, "52;", 3))
++		return do_osc_52(vte, arg, vte->osc_len);
+ 	return false;
+ }
+ 
+@@ -2418,17 +2654,34 @@ static const char *osc_end_seq(uint32_t
+ 	return "\x1b\x5c";
+ }
+ 
+-static void do_osc_end(struct tsm_vte *vte, uint32_t val) {
++/*
++ * End the OSC string. BEL, ST and the ESC of ESC \\ end it and dispatch it;
++ * CAN, SUB and the other C1 controls cancel it, and a string that overflowed
++ * is dropped. The buffer is freed when a long string made it large.
++ */
++static void do_osc_end(struct tsm_vte *vte, uint32_t val)
++{
+ 	const char *end_seq = osc_end_seq(val);
+-	vte->osc_arg[vte->osc_len] = 0;
+-
+-	if (do_osc_internal(vte, end_seq)) {
+-		return;
++	static char empty[1];
++	char *arg;
++	bool dispatch;
++
++	dispatch = (val == 0x07 || val == 0x1b || val == 0x9c) &&
++		   !vte->osc_overflow;
++	if (dispatch) {
++		arg = vte->osc_arg ? vte->osc_arg : empty;
++		arg[vte->osc_len] = 0;
++		if (!do_osc_internal(vte, arg, end_seq) && vte->osc_cb)
++			vte->osc_cb(vte, arg, vte->osc_len, vte->osc_data);
+ 	}
+-	if (!vte->osc_cb) {
+-		return;
++
++	vte->osc_len = 0;
++	vte->osc_overflow = false;
++	if (vte->osc_size > OSC_KEEP_LEN) {
++		free(vte->osc_arg);
++		vte->osc_arg = NULL;
++		vte->osc_size = 0;
+ 	}
+-	vte->osc_cb(vte, vte->osc_arg, vte->osc_len, vte->osc_data);
+ }
+ 
+ /* perform parser action */
+@@ -3707,22 +3960,29 @@ void tsm_vte_paste(struct tsm_vte *vte,
+ SHL_EXPORT
+ bool tsm_vte_get_sync_hold(struct tsm_vte *vte)
+ {
+-	(void)vte;
+-	return false;
++	if (!vte)
++		return false;
++
++	return vte->sync_hold;
+ }
+ 
+ SHL_EXPORT
+ void tsm_vte_end_sync_hold(struct tsm_vte *vte)
+ {
+-	(void)vte;
++	if (!vte)
++		return;
++
++	vte->sync_hold = false;
+ }
+ 
+ SHL_EXPORT
+ bool tsm_vte_handle_focus(struct tsm_vte *vte, bool focused)
+ {
+-	(void)vte;
+-	(void)focused;
+-	return false;
++	if (!vte || !vte->focus_events)
++		return false;
++
++	vte_write(vte, focused ? "\e[I" : "\e[O", 3);
++	return true;
+ }
+ 
+ SHL_EXPORT
