@@ -11,19 +11,24 @@
  *
  * Text other than ASCII arrives as UTF-8 and is drawn from the console's
  * font: code page 437, or the one `k_font_init` loads, which keeps its box
- * drawing and has the Cyrillic letters. A query for the device's attributes
+ * drawing and has the Cyrillic letters, or as a stand-in the font has, in
+ * the cells the width table (wcwidth.c) gives it, the same as term's. The
+ * cursor and keypad modes a program sets are kept for the keyboard, which
+ * encodes keys under them. A query for the device's attributes
  * or the cursor's position is answered as a VT102 answers it; the console's
  * tty takes the answer with `k_take_answer` and gives it to the program as
  * input.
  */
 
 #include "kio.h"
+#include "keymap.h"
 #include "klog.h"
 #include "panic.h"
 #include "display/blank.h"
 #include "arch/arch.h"
 #include "lib/kirq.h"
 #include "lib/spinlock.h"
+#include "wcwidth.h"
 
 /* The interpreter's state: where it is in a sequence; a CSI's parameters,
  * the one being read (`vt_cur`), and whether the CSI is private or has an
@@ -46,6 +51,7 @@ static unsigned int vt_params[VT_MAX_PARAMS];
 static unsigned int vt_nparams;
 static unsigned int vt_cur;
 static bool vt_private;
+static unsigned char vt_private_byte; /* the private marker: `?`, `>`, `<` or `=` */
 static bool vt_interm;
 static unsigned int vt_string_len;
 static unsigned int vt_saved_x;
@@ -56,6 +62,8 @@ static uint32_t vt_utf_code;
 
 static char vt_answer[K_ANSWER_MAX];
 static unsigned int vt_answer_len;
+
+static unsigned int vt_key_modes; /* KM_MODE_CURSOR and KM_MODE_KEYPAD */
 
 /*
  * The characters of code page 437 from 0x80 to 0xFF, by their Unicode
@@ -88,24 +96,133 @@ static const char vt_latin_a[] = "AaAaAaCcCcCcCcDdDdEeEeEeEeEeGgGgGgGgHhHhIiIiIi
 
 /*
  * Characters drawn as another when the font lacks them: punctuation as its
- * ASCII likeness, and box glyphs that join a single line to a double one,
- * or heavy and rounded ones, as the glyph of their vertical line's kind.
+ * ASCII likeness; box glyphs that join a single line to a double one, or
+ * heavy and rounded ones, as the glyph of their vertical line's kind; and the
+ * glyphs coding agents draw their screens with as the nearest the font has.
+ * A target the font lacks is looked up again (`vt_glyph`): the bullet
+ * U+2022 is the loaded font's, U+2219 code page 437's.
  */
 static const struct {
-    uint16_t first, last, to;
-} vt_near_table[] = {{0x00A0, 0x00A0, ' '},    {0x00AD, 0x00AD, '-'},    {0x00B4, 0x00B4, '\''},
-                     {0x2010, 0x2015, '-'},    {0x2018, 0x201B, '\''},   {0x201C, 0x201F, '"'},
-                     {0x2026, 0x2026, '.'},    {0x2039, 0x2039, '<'},    {0x203A, 0x203A, '>'},
-                     {0x2212, 0x2212, '-'},    {0x2501, 0x2501, 0x2500}, {0x2503, 0x2503, 0x2502},
-                     {0x250F, 0x250F, 0x250C}, {0x2513, 0x2513, 0x2510}, {0x2517, 0x2517, 0x2514},
-                     {0x251B, 0x251B, 0x2518}, {0x2552, 0x2552, 0x250C}, {0x2553, 0x2553, 0x2554},
-                     {0x2555, 0x2555, 0x2510}, {0x2556, 0x2556, 0x2557}, {0x2558, 0x2558, 0x2514},
-                     {0x2559, 0x2559, 0x255A}, {0x255B, 0x255B, 0x2518}, {0x255C, 0x255C, 0x255D},
-                     {0x255E, 0x255E, 0x251C}, {0x255F, 0x255F, 0x2560}, {0x2561, 0x2561, 0x2524},
-                     {0x2562, 0x2562, 0x2563}, {0x2564, 0x2564, 0x252C}, {0x2565, 0x2565, 0x2566},
-                     {0x2567, 0x2567, 0x2534}, {0x2568, 0x2568, 0x2569}, {0x256A, 0x256A, 0x253C},
-                     {0x256B, 0x256B, 0x256C}, {0x256D, 0x256D, 0x250C}, {0x256E, 0x256E, 0x2510},
-                     {0x256F, 0x256F, 0x2518}, {0x2570, 0x2570, 0x2514}};
+    uint32_t first, last, to;
+} vt_near_table[] = {{0x00A0, 0x00A0, ' '},
+                     {0x00AD, 0x00AD, '-'},
+                     {0x00B4, 0x00B4, '\''},
+                     {0x2010, 0x2015, '-'},
+                     {0x2018, 0x201B, '\''},
+                     {0x201C, 0x201F, '"'},
+                     {0x2022, 0x2022, 0x2219}, /* bullet, as code page 437's */
+                     {0x2026, 0x2026, '.'},
+                     {0x2039, 0x2039, '<'},
+                     {0x203A, 0x203A, '>'},
+                     {0x2190, 0x2190, '<'}, /* the arrows */
+                     {0x2191, 0x2191, '^'},
+                     {0x2192, 0x2192, '>'},
+                     {0x2193, 0x2193, 'v'},
+                     {0x2194, 0x2194, '-'},
+                     {0x2195, 0x2195, '|'},
+                     {0x21B5, 0x21B5, '<'},
+                     {0x21D0, 0x21D0, '<'},
+                     {0x21D2, 0x21D2, '>'},
+                     {0x2212, 0x2212, '-'},
+                     {0x2219, 0x2219, 0x00B7}, /* bullet operator, as the loaded font's dot */
+                     {0x2261, 0x2261, '='},
+                     {0x23BF, 0x23BF, 0x2514}, /* the corner under a tool's call */
+                     {0x23F4, 0x23F4, '<'},    /* the media triangles */
+                     {0x23F5, 0x23F5, '>'},
+                     {0x23F6, 0x23F6, '^'},
+                     {0x23F7, 0x23F7, 'v'},
+                     {0x23F8, 0x23F8, '|'},
+                     {0x23F9, 0x23F9, 0x2588},
+                     {0x23FA, 0x23FA, 0x2022},
+                     {0x2501, 0x2501, 0x2500},
+                     {0x2503, 0x2503, 0x2502},
+                     {0x2504, 0x2505, '-'}, /* dashed lines */
+                     {0x2506, 0x2507, 0x2502},
+                     {0x2508, 0x2509, '-'},
+                     {0x250A, 0x250B, 0x2502},
+                     {0x250F, 0x250F, 0x250C},
+                     {0x2513, 0x2513, 0x2510},
+                     {0x2517, 0x2517, 0x2514},
+                     {0x251B, 0x251B, 0x2518},
+                     {0x2552, 0x2552, 0x250C},
+                     {0x2553, 0x2553, 0x2554},
+                     {0x2555, 0x2555, 0x2510},
+                     {0x2556, 0x2556, 0x2557},
+                     {0x2558, 0x2558, 0x2514},
+                     {0x2559, 0x2559, 0x255A},
+                     {0x255B, 0x255B, 0x2518},
+                     {0x255C, 0x255C, 0x255D},
+                     {0x255E, 0x255E, 0x251C},
+                     {0x255F, 0x255F, 0x2560},
+                     {0x2561, 0x2561, 0x2524},
+                     {0x2562, 0x2562, 0x2563},
+                     {0x2564, 0x2564, 0x252C},
+                     {0x2565, 0x2565, 0x2566},
+                     {0x2567, 0x2567, 0x2534},
+                     {0x2568, 0x2568, 0x2569},
+                     {0x256A, 0x256A, 0x253C},
+                     {0x256B, 0x256B, 0x256C},
+                     {0x256D, 0x256D, 0x250C},
+                     {0x256E, 0x256E, 0x2510},
+                     {0x256F, 0x256F, 0x2518},
+                     {0x2570, 0x2570, 0x2514},
+                     {0x2574, 0x2574, 0x2500}, /* half lines */
+                     {0x2575, 0x2575, 0x2502},
+                     {0x2576, 0x2576, 0x2500},
+                     {0x2577, 0x2577, 0x2502},
+                     {0x2578, 0x2578, 0x2500},
+                     {0x2579, 0x2579, 0x2502},
+                     {0x257A, 0x257A, 0x2500},
+                     {0x257B, 0x257B, 0x2502},
+                     {0x2581, 0x2581, '_'}, /* the blocks, by the half they fill most */
+                     {0x2582, 0x2585, 0x2584},
+                     {0x2586, 0x2587, 0x2588},
+                     {0x2589, 0x2589, 0x2588},
+                     {0x258A, 0x258B, 0x258C},
+                     {0x258D, 0x258F, 0x258C},
+                     {0x2594, 0x2594, 0x2500},
+                     {0x2595, 0x2595, 0x2590},
+                     {0x2596, 0x2597, 0x2584}, /* the quadrants */
+                     {0x2598, 0x2598, 0x2580},
+                     {0x2599, 0x2599, 0x2588},
+                     {0x259A, 0x259A, 0x2592},
+                     {0x259B, 0x259C, 0x2588},
+                     {0x259D, 0x259D, 0x2580},
+                     {0x259E, 0x259E, 0x2592},
+                     {0x259F, 0x259F, 0x2588},
+                     {0x25A0, 0x25A1, 0x2588}, /* squares */
+                     {0x25AA, 0x25AB, 0x2022},
+                     {0x25B2, 0x25B5, '^'}, /* triangles */
+                     {0x25B6, 0x25BB, '>'},
+                     {0x25BC, 0x25BF, 'v'},
+                     {0x25C0, 0x25C5, '<'},
+                     {0x25C6, 0x25C7, '*'},
+                     {0x25C9, 0x25D3, 0x2022}, /* circles */
+                     {0x25E6, 0x25E6, 0x00B0},
+                     {0x25EF, 0x25EF, 'O'},
+                     {0x2605, 0x2606, '*'},
+                     {0x2610, 0x2610, '['},
+                     {0x2611, 0x2611, 'v'},
+                     {0x2612, 0x2612, 'x'},
+                     {0x26A0, 0x26A0, '!'},
+                     {0x26AA, 0x26AB, 0x2022},
+                     {0x2705, 0x2705, 'v'}, /* check marks and crosses */
+                     {0x2713, 0x2714, 'v'},
+                     {0x2715, 0x2718, 'x'},
+                     {0x2722, 0x273D, '*'}, /* the spinners' stars */
+                     {0x274C, 0x274C, 'x'},
+                     {0x274E, 0x274E, 'x'},
+                     {0x2753, 0x2755, '?'},
+                     {0x2757, 0x2757, '!'},
+                     {0x276E, 0x276E, '<'},
+                     {0x276F, 0x276F, '>'},
+                     {0x27E8, 0x27E8, '<'},
+                     {0x27E9, 0x27E9, '>'},
+                     {0x2800, 0x2800, ' '}, /* braille, the spinners' dots */
+                     {0x2801, 0x28FF, '.'},
+                     {0x2B24, 0x2B24, 0x2022},
+                     {0x1F534, 0x1F535, 0x2022},
+                     {0x1F7E0, 0x1F7EB, 0x2022}};
 
 static unsigned int vt_fg = DEFAULT_FORECOLOR;
 static unsigned int vt_bg = DEFAULT_BACKCOLOR;
@@ -124,11 +241,24 @@ static const uint8_t vt_ansi_color[8] = {black, red, green, brown, blue, magenta
 static bool vt_wrap_pending;
 static unsigned int vt_wrap_x, vt_wrap_y;
 
+/** Begin the next line at its first column, scrolling at the bottom. */
+static void vt_next_line(void)
+{
+    x = 0;
+    ++y;
+    if (y >= textcon_rows) {
+        k_scroll_down();
+        y = textcon_rows - 1;
+    }
+}
+
 /**
  * Draw one byte at the cursor with no escape interpretation.
  *
  * BS, HT, LF, and CR move the cursor; NUL and BEL draw nothing, since a
- * program sends them to a terminal as padding and as a warning; any other
+ * program sends them to a terminal as padding and as a warning, and nor do
+ * SO and SI, which switch to the G1 and G0 character sets, here both the
+ * font, as Claude Code's `ESC ( B SI` does; any other
  * control byte is shown as `CHAR_NON_PRINTABLE`; a printable byte, or a byte
  * from 0x80 up, which is a character of the font's upper half, is written
  * with the current color and the cursor advances, scrolling at the bottom.
@@ -148,6 +278,8 @@ static void vga_putc_raw(char c)
         switch (c) {
         case CHAR_NULL:
         case CHAR_BEL:
+        case CHAR_SO:
+        case CHAR_SI:
             vt_wrap_pending = pending;
             break;
 
@@ -187,14 +319,8 @@ static void vga_putc_raw(char c)
             c = CHAR_NULL;
     }
 
-    if (c && pending) {
-        x = 0;
-        ++y;
-        if (y >= textcon_rows) {
-            k_scroll_down();
-            y = textcon_rows - 1;
-        }
-    }
+    if (c && pending)
+        vt_next_line();
     if (c) {
         textcon_write_cell(x, y, c, get_curr_color_attr());
         if (x + 1 < textcon_cols) {
@@ -434,7 +560,29 @@ unsigned int k_take_answer(char *buf, unsigned int size)
 
 unsigned int kio_key_modes(void)
 {
-    return 0;
+    return vt_key_modes;
+}
+
+/**
+ * Execute a private CSI whose marker is `?`, a DEC private mode, with final
+ * byte `c`: `h` sets the modes its parameters name and `l` resets them. Of
+ * the modes only DECCKM, 1, is kept, since it changes the bytes the cursor
+ * keys send (`kio_key_modes`); the others are ignored.
+ */
+static void vt_dec_mode(char c)
+{
+    unsigned int i;
+
+    if (c != 'h' && c != 'l')
+        return;
+    for (i = 0; i < vt_nparams; ++i) {
+        if (vt_params[i] != 1)
+            continue;
+        if (c == 'h')
+            vt_key_modes |= KM_MODE_CURSOR;
+        else
+            vt_key_modes &= ~(unsigned int)KM_MODE_CURSOR;
+    }
 }
 
 /**
@@ -571,8 +719,8 @@ static unsigned char vt_font_char(uint32_t code)
 
 /**
  * The character to draw for Unicode value `code` when the font lacks it: a
- * letter without its accent, an ASCII likeness, or another Unicode value;
- * `CHAR_NON_PRINTABLE` when there is none.
+ * letter without its accent, an ASCII likeness, or another Unicode value,
+ * which the font may lack too; `CHAR_NON_PRINTABLE` when there is none.
  */
 static uint32_t vt_near(uint32_t code)
 {
@@ -589,16 +737,61 @@ static uint32_t vt_near(uint32_t code)
     return CHAR_NON_PRINTABLE;
 }
 
-/** The font's character for Unicode value `code`, or a stand-in for it. */
+/**
+ * The font's character for Unicode value `code`, or a stand-in for it, or
+ * for the stand-in, at most three deep; `CHAR_NON_PRINTABLE` for a control
+ * character or one with none.
+ */
 static char vt_glyph(uint32_t code)
 {
-    unsigned char ch = vt_font_char(code);
+    unsigned int depth;
+    unsigned char ch;
 
-    if (ch == 0) {
+    if (code < 0xA0)
+        return CHAR_NON_PRINTABLE;
+    for (depth = 0; depth < 3; ++depth) {
+        if (code < 0x80)
+            return (char)code;
+        ch = vt_font_char(code);
+        if (ch != 0)
+            return (char)ch;
         code = vt_near(code);
-        ch = code < 0x80 ? (unsigned char)code : vt_font_char(code);
     }
-    return ch != 0 ? (char)ch : CHAR_NON_PRINTABLE;
+    return CHAR_NON_PRINTABLE;
+}
+
+/**
+ * Draw a character of width 2 as `glyph` and a blank after it, as two cells.
+ * One that would start in the last column begins the next line instead and
+ * leaves that column as it was, as xterm does.
+ */
+static void vt_put_wide(char glyph)
+{
+    bool pending = vt_wrap_pending && x == vt_wrap_x && y == vt_wrap_y;
+
+    if (!pending && x + 1 >= textcon_cols && textcon_cols > 1) {
+        vt_wrap_pending = false;
+        vt_next_line();
+    }
+    vga_putc_raw(glyph);
+    vga_putc_raw(' ');
+}
+
+/**
+ * Draw the character of Unicode value `code` in as many cells as `k_wcwidth`
+ * gives it: none for a combining mark, which the font cannot put over the
+ * character before it, two for a wide one, and one for any other.
+ */
+static void vt_put_char(uint32_t code)
+{
+    int width = k_wcwidth(code);
+
+    if (width == 0)
+        return;
+    if (width == 2)
+        vt_put_wide(vt_glyph(code));
+    else
+        vga_putc_raw(vt_glyph(code));
 }
 
 void k_font_init(void)
@@ -618,7 +811,7 @@ void k_font_init(void)
 
 /**
  * Take `uc`, a byte from 0x80 up, as part of a UTF-8 sequence, and draw the
- * character when its sequence is complete.
+ * character when its sequence is complete (`vt_put_char`).
  *
  * The font is the one `k_font_init` loaded, code page 437's box drawing and
  * blocks with the Cyrillic letters, or the adapter's code page 437 when the
@@ -636,7 +829,7 @@ static void vt_utf8(unsigned char uc)
         }
         vt_utf_code = (vt_utf_code << 6) | (uc & 0x3Fu);
         if (--vt_utf_left == 0)
-            vga_putc_raw(vt_glyph(vt_utf_code));
+            vt_put_char(vt_utf_code);
     } else if (uc < 0xE0) {
         vt_utf_code = uc & 0x1Fu;
         vt_utf_left = 1;
@@ -664,6 +857,7 @@ static void vt_escape(unsigned char uc)
         vt_nparams = 0;
         vt_cur = 0;
         vt_private = false;
+        vt_private_byte = 0;
         vt_interm = false;
         break;
     case ']':
@@ -693,7 +887,16 @@ static void vt_escape(unsigned char uc)
         vt_wrap_pending = false;
         vt_state = VT_NORMAL;
         break;
+    case '=':
+        vt_key_modes |= KM_MODE_KEYPAD;
+        vt_state = VT_NORMAL;
+        break;
+    case '>':
+        vt_key_modes &= ~(unsigned int)KM_MODE_KEYPAD;
+        vt_state = VT_NORMAL;
+        break;
     case 'c':
+        vt_key_modes = 0;
         vt_fg = DEFAULT_FORECOLOR;
         vt_bg = DEFAULT_BACKCOLOR;
         vt_bold = false;
@@ -730,8 +933,10 @@ static void vt_csi_byte(char c)
             vt_params[vt_nparams++] = vt_cur;
         vt_cur = 0;
     } else if (uc >= 0x3c && uc <= 0x3f) {
-        if (vt_nparams == 0 && vt_cur == 0)
+        if (vt_nparams == 0 && vt_cur == 0) {
             vt_private = true;
+            vt_private_byte = uc;
+        }
     } else if (uc >= 0x20 && uc <= 0x2f) {
         vt_interm = true; /* intermediate byte, as in `ESC [ SP q` */
     } else if (uc >= 0x40 && uc <= 0x7e) {
@@ -741,6 +946,8 @@ static void vt_csi_byte(char c)
             /* Only color and the queries keep a pending wrap. */
             vt_wrap_pending = vt_wrap_pending && (c == 'm' || c == 'c' || c == 'n');
             vt_dispatch_csi(c);
+        } else if (vt_private_byte == '?' && !vt_interm) {
+            vt_dec_mode(c);
         }
         vt_state = VT_NORMAL;
     } else if (uc == 0x1b) {
