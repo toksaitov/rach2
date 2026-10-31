@@ -11,6 +11,10 @@
  *
  * None of those can be produced from outside a machine. They are produced here
  * by handing the driver reports and reading what it gave the input layer.
+ * The model's `set1_keycode` gives each scancode a key code of its own, the
+ * scancode plus 0x100, so that the input layer's model can record each key
+ * event as the set-1 bytes of its key, as the raw view gives them, and keep
+ * each keyboard's held keys as the real one does.
  */
 
 extern int printf(const char *fmt, ...);
@@ -22,23 +26,69 @@ extern int printf(const char *fmt, ...);
 #include "../../rach2/sys/input.h"
 
 /* Every code the driver sent since the last report, in order; codes past
- * MAX_CODES are dropped. */
+ * MAX_CODES are dropped. The MSC_SCAN of the last key event. */
 #define MAX_CODES 64
 static unsigned char codes[MAX_CODES];
 static int n_codes;
+static uint32_t last_scan;
+
+/* The model's key codes: the scancode plus KEY_BASE. */
+#define KEY_BASE 0x100u
 
 /** Do nothing: hid.c stamps each code for the latency record, which this test
  * does not check. */
 void usb_stamp_wake(void)
 {}
 
-/** Record a scancode in `codes`, as the input layer would queue it. */
-void input_key(uint8_t scancode)
+/** Record a code in `codes`. */
+static void record(unsigned char code)
 {
     if (n_codes < MAX_CODES) {
-        codes[n_codes] = scancode;
+        codes[n_codes] = code;
         n_codes++;
     }
+}
+
+/**
+ * Take a key event as the input layer does: drop a press of a key `kb`
+ * holds and a release of one it does not, keep the held keys, and record
+ * the event as its set-1 bytes, E0 before an extended key.
+ */
+void input_key_event(struct input_keyboard *kb, uint32_t scan, unsigned int keycode, int down)
+{
+    unsigned code = keycode - KEY_BASE;
+    uint8_t bit = (uint8_t)(1u << (keycode & 7));
+
+    last_scan = scan;
+    if (keycode == 0) {
+        return;
+    }
+    if (down ? (kb->down[keycode >> 3] & bit) != 0 : (kb->down[keycode >> 3] & bit) == 0) {
+        return;
+    }
+    if (down) {
+        kb->down[keycode >> 3] |= bit;
+    } else {
+        kb->down[keycode >> 3] &= (uint8_t)~bit;
+    }
+    if (code & 0x80u) {
+        record(0xE0);
+    }
+    record((unsigned char)((code & 0x7Fu) | (down ? 0u : 0x80u)));
+}
+
+/** Release every key `kb` holds, from the lowest key code up, as the input
+ * layer does when a keyboard goes. */
+void input_keyboard_detach(struct input_keyboard *kb)
+{
+    unsigned code;
+
+    for (code = 1; code < INPUT_KEY_BYTES * 8; code++) {
+        if (kb->down[code >> 3] & (1u << (code & 7))) {
+            input_key_event(kb, 0, code, 0);
+        }
+    }
+    kb->dev = 0;
 }
 
 static int mouse_dx;
@@ -65,38 +115,22 @@ int input_mouse_present(void)
 void input_mouse_found(void)
 {}
 
-/** Register no event device: the rows check the console's path alone. */
-struct evdev *input_keyboard_register(const char *name, const char *phys, uint16_t bustype,
-                                      uint16_t vendor, uint16_t product)
+/** Register no event device: the rows check the key events alone. */
+void input_keyboard_attach(struct input_keyboard *kb, const char *name, const char *phys,
+                           uint16_t bustype, uint16_t vendor, uint16_t product)
 {
+    (void)kb;
     (void)name;
     (void)phys;
     (void)bustype;
     (void)vendor;
     (void)product;
-    return 0;
 }
 
-/** Do nothing: there is no event device. */
-void evdev_report_key(struct evdev *dev, uint32_t scan, uint16_t code, int down)
-{
-    (void)dev;
-    (void)scan;
-    (void)code;
-    (void)down;
-}
-
-/** Do nothing: there is no event device. */
-void evdev_unregister(struct evdev *dev)
-{
-    (void)dev;
-}
-
-/** Name no key. */
+/** The model's key code of `scan`: the scancode plus KEY_BASE. */
 int set1_keycode(unsigned scan)
 {
-    (void)scan;
-    return 0;
+    return (int)(scan + KEY_BASE);
 }
 
 #include "../../rach2/sys/klog.h"
@@ -268,6 +302,14 @@ int main(void)
     /* An arrow, which is extended too. */
     keys(1, 0, 0x52, 0, 0); /* up arrow */
     CHECK("an arrow is sent in its two-byte form", sent(2, 0xE0, 0x48, 0, 0));
+    keys(1, 0, 0, 0, 0);
+
+    /* Print Screen and Pause, which have extended codes of their own. */
+    keys(1, 0, 0x46, 0, 0);
+    CHECK("Print Screen is E0 37", sent(2, 0xE0, 0x37, 0, 0));
+    CHECK("with its usage as MSC_SCAN", last_scan == 0x70046u);
+    keys(1, 0, 0x48, 0, 0);
+    CHECK("Pause pressed is E0 45, then Print Screen released", sent(4, 0xE0, 0x45, 0xE0, 0xB7));
     keys(1, 0, 0, 0, 0);
 
     /* ErrorRollOver: more keys are down than the keyboard can tell apart. */
