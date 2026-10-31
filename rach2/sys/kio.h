@@ -27,6 +27,10 @@
 /** Horizontal tab. */
 #define CHAR_HT '\t'
 
+/** Shift out and shift in: the G1 and G0 character sets. */
+#define CHAR_SO 0x0E
+#define CHAR_SI 0x0F
+
 /** Tab width in spaces, a terminal's. */
 #define TAB_SIZE 8
 
@@ -36,21 +40,25 @@
 /** Carriage return. */
 #define CHAR_CR 0x0D
 
-/** Stand-in glyph for any non-printable character. */
+/** Stand-in glyph for a control character and for a character the font has
+ * no glyph or stand-in for. */
 #define CHAR_NON_PRINTABLE '?'
 
 /**
  * Write the byte `c` to the console's screen, as a terminal takes it.
  *
  * A plain byte is drawn at the cursor; BS, HT, LF (which also returns the
- * carriage) and CR move the cursor; NUL and BEL draw nothing; any other
+ * carriage) and CR move the cursor; NUL, BEL, SO and SI draw nothing; any other
  * control byte is drawn as `CHAR_NON_PRINTABLE`. A byte from 0x80 up is part
- * of a UTF-8 character, drawn from the console's font or as a stand-in.
- * `ESC` begins an escape sequence: a CSI (`ESC [`) moves the cursor, erases,
- * sets the colors, saves and restores the cursor, or answers a query
- * (`k_take_answer`); a private CSI, one with an intermediate byte, a charset
- * selector and an OSC, DCS, APC, PM or SOS string are read and not drawn.
- * display/Readme.md lists the sequences.
+ * of a UTF-8 character, drawn from the console's font or as a stand-in in
+ * the cells `k_wcwidth` gives it: none for a combining mark, two for a wide
+ * character, the second blank. `ESC` begins an escape sequence: a CSI
+ * (`ESC [`) moves the cursor, erases, sets the colors, saves and restores
+ * the cursor, or answers a query (`k_take_answer`); `CSI ? 1 h` and `l`,
+ * `ESC =` and `ESC >` set the key modes (`kio_key_modes`); any other private
+ * CSI, one with an intermediate byte, a charset selector and an OSC, DCS,
+ * APC, PM or SOS string are read and not drawn. display/Readme.md lists the
+ * sequences.
  *
  * The byte's work runs under the console's lock (`console_lock`), so an
  * interrupt handler and another processor may write too, and the hardware
@@ -96,8 +104,8 @@ unsigned int k_take_answer(char *buf, unsigned int size);
 /**
  * The modes the console's terminal encodes keys under, KM_MODE_* of keymap.h:
  * KM_MODE_CURSOR while DECCKM (`CSI ? 1 h`) is set, and KM_MODE_KEYPAD after
- * DECKPAM (`ESC =`) until DECKPNM (`ESC >`); 0 after `ESC c`. Any context.
- * The console keeps neither mode yet, and it returns 0.
+ * DECKPAM (`ESC =`) until DECKPNM (`ESC >`); 0 at boot and after `ESC c`.
+ * Any context.
  */
 unsigned int kio_key_modes(void);
 
