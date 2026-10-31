@@ -943,7 +943,7 @@ static const char *mac_failed(struct release *r, char *text, size_t size)
 /**
  * Succeed when the Mac's run ID ended with status 0 after it checked out C,
  * built etude, allocated the selection of every case and ran the phase on
- * it from clean, in that order.
+ * it with the build its copy kept, in that order.
  */
 static int mac_passed(struct release *r, const char *id)
 {
@@ -954,7 +954,7 @@ static int mac_passed(struct release *r, const char *id)
              "tcg -J .*/mac/runs/%s\\.selection\\.json all$",
              id);
     snprintf(phase, sizeof(phase),
-             "^etude site= clean=1 export=.*/mac/runs/%s\\.selection\\.json run routine-sequence "
+             "^etude site= clean= export=.*/mac/runs/%s\\.selection\\.json run routine-sequence "
              "phase_first_run .*/mac/tree .*/mac/runs/%s both %s .*/mac/site/etude-site "
              ".*/mac/site/bin/etude tcg all$",
              id, id, id);
