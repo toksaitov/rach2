@@ -36,15 +36,18 @@ The patches, which [`patches/series`](patches/series) names in the order they ap
 | x86-64 | `build/x86_64/vendor-work/libtsm/` | `build/x86_64/vendor/libtsm/` |
 | host | `build/host/vendor-work/libtsm/` | `build/host/vendor/libtsm/` |
 
-Each stage has `lib/libtsm.a` and `include/libtsm.h`, the patched header. `build_libtsm.sh`, run as `RACH2_ARCH=ARCH ./build_libtsm.sh` or `./build_libtsm.sh --host`:
+Each stage has `lib/libtsm.a` and `include/libtsm.h`, the patched header; an architecture's has `libtsm.tar.bz2` too, the patched sources that [`term`'s guest build](../../term/Readme.md#on-rach2) compiles on Rach2. `build_libtsm.sh`, run as `RACH2_ARCH=ARCH ./build_libtsm.sh` or `./build_libtsm.sh --host`:
 
 1. Checks the tarball's SHA-256, deletes the extracted tree and its objects and extracts it again.
 2. Puts Rach2's hash table in place of libtsm's and stops if a file still carries the LGPL's notice.
 3. Applies the series, and stops on a patch that is missing, does not apply or is not named, and on a `TSM_VERSION` that is not `VERSION`.
-4. Compiles the six files of `src/tsm/`, the hash table and `wcwidth.c` one by one, with Meson's flags for the project less its `-Werror`, and `-Dwcwidth=tsm_wcwidth`: through the `muslgcc` wrapper for Rach2, and with `HOSTCC`, `cc` unless set, for the host. libtsm's `config.h` is not made: its one setting, `BUILD_ENABLE_DEBUG`, is off when undefined.
+4. Compiles the files [`sources.mk`](sources.mk) lists, the six of `src/tsm/`, the hash table and `wcwidth.c`, one by one, with Meson's flags for the project less its `-Werror`, and `-Dwcwidth=tsm_wcwidth`: through the `muslgcc` wrapper for Rach2, and with `HOSTCC`, `cc` unless set, for the host. libtsm's `config.h` is not made: its one setting, `BUILD_ENABLE_DEBUG`, is off when undefined.
 5. Puts the objects in `libtsm.a` with the architecture's `ar` and copies `libtsm.h` beside it.
+6. For an architecture, packs the files compiled, every header of `src/tsm/`, `src/shared/`, `external/wcwidth/` and `external/xkbcommon/`, `COPYING` and `external/wcwidth/LICENSE.txt` in name order as `libtsm.tar.bz2`, some 90 KiB, which the images that stage the kernel's sources stage as `/src/term/vendor/libtsm.tar.bz2`, with `sources.mk` as `/src/term/vendor/libtsm.mk`.
 
-The stamp of either depends on the script, the tarball, the series, each patch and the hash table; the architecture's also on `muslgcc`, `mk/arch.sh` and musl's stamp. The architecture's step is keyed by its cross compiler, the host's by the host compiler.
+`sources.mk` is the one list of the files compiled, each under `$(LIBTSM)`, the top of the extracted tree, which the includer sets; the script reads it without the prefix.
+
+The stamp of either depends on the script, `sources.mk`, the tarball, the series, each patch and the hash table; the architecture's also on `muslgcc`, `mk/arch.sh` and musl's stamp. The architecture's step is keyed by its cross compiler, the host's by the host compiler.
 
 ## Updating
 
