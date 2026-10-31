@@ -18,7 +18,7 @@ cd "$repo"
 PATHS='AGENTS.md CLAUDE.md Readme.md mk/host-check.mk mk/host-fixtures.mk
     tests/host tests/fuzz tests/native tests/cases tests/system/checkers
     tests/system/fakeapi tests/musl tests/clockref.h tests/registry
-    tools/etude tools/inspect tools/verify tools/image tools/ci
+    tools/etude tools/inspect tools/verify tools/image tools/ci tools/font
     tools/flow/test_status.py tools/setup/e2fsprogs_path.sh tools/host_files.h
     rach2/sys rach2/kernel.h rach2/vendor rach2/include krffs utils ish term ports/doom
     vendor/gnu/fstools/positional_io.c'
