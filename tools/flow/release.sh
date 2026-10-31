@@ -25,20 +25,28 @@
 #   is cancelled or does not finish is started again, at most three runs in
 #   all.
 # * The other machines: tools/flow/machines names them and gives each run's
-#   settings. Each runs `etude run routine-sequence phase_first_run` of every
-#   case of both architectures but those of the style suite, which the full
-#   run checks once, prepared from clean, with the selection that
-#   `etude run -N` allocates in the same copy just before. The Mac's run, mac,
-#   starts with the full run, detached as `release.sh -m ID M SHA`, in the
-#   copy and the admission site under build/machines/mac of this clone.
-#   Windows' run, windows, starts once the full run has ended, on the same
-#   testing host, in the copy the machines file names, which a bundle of M's
-#   branch updates to SHA; while it runs, a claim of the whole host in WSL's
-#   admission, `etude-launch alone`, keeps WSL's tests from starting. The
-#   Lenovo's run, lenovo, is the native cases of tests/native on the trial
-#   boot, which `native-deploy run` starts from here with the payload the
-#   build makes, before the acceptance. A run that ends without a status runs
-#   again, at most three runs in all.
+#   settings. Each runs every case of both architectures but those of the
+#   style suite, which the full run checks once, with the selection that
+#   `etude run -N` allocates in the same copy just before, on the in-house
+#   build that the copy keeps between releases. The Mac's run, mac, is `etude
+#   run routine-sequence phase_first_run`, started with the full run,
+#   detached as `release.sh -m ID M SHA`, in the copy and the admission site
+#   under build/machines/mac of this clone. Windows' run, windows, is on the
+#   same testing host, in the copy the machines file names, which a bundle of
+#   M's branch updates to SHA, and has two parts. `etude run routine-prepare
+#   phase_first_run` builds its preparation from the start of the full run,
+#   under a claim in WSL's admission, `etude-launch build` with Windows'
+#   JOBS, of the memory and the block of ports that WSL's tests then leave to
+#   it. Once the full run has ended and the preparation has passed, `etude
+#   run routine-collect phase_first_run` runs its cases while a claim of the
+#   whole host in WSL's admission, `etude-launch alone`, keeps WSL's tests
+#   from starting; WSL refusing either claim ends the release. A release
+#   that exits or is stopped stops Windows' preparation and ends both claims.
+#   The Lenovo's run, lenovo, is the native cases of tests/native on the
+#   trial boot, which `native-deploy run` starts from here with the payload
+#   the build makes, before the acceptance. A run that ends without a status,
+#   in Windows' preparation or its cases, runs again, at most three runs in
+#   all.
 # * A failed run adds a line `failure MACHINE RUN WORD...` to the record, the
 #   WORDs being the failed `ARCH:SUITE`s or native cases, or `runner` when
 #   the run named none, and the release goes on with the other machines'
@@ -48,7 +56,7 @@
 #   then `release: failed: MACHINE run RUN: WORD...; ...`.
 # * -r: the new record keeps the passes of WSL, the Mac and Windows that the
 #   last record of M has, and runs again on each machine only what failed
-#   there, from clean, at SHA: the record says `again MACHINE WORD...`. A
+#   there, at SHA: the record says `again MACHINE WORD...`. A
 #   machine whose failures are not all `ARCH:SUITE`s of suites that SHA's
 #   tests/registry has for ARCH, or native cases, runs everything again, as
 #   does a machine that has neither a pass nor a failure in that record. The
@@ -626,7 +634,7 @@ mac_run()
             cp build/tools/etude/etude build/tools/etude/etude-volume "$site/bin/" &&
             ETUDE_SITE=$site/etude-site "$site/bin/etude" run -N -t "$tree" -a both -A "$accel" \
                 -J "$runs/$id.selection.json" $words &&
-            ETUDE_PHASE_SELECTION_EXPORT=$runs/$id.selection.json ETUDE_PREPARATION_CLEAN=1 \
+            ETUDE_PHASE_SELECTION_EXPORT=$runs/$id.selection.json \
                 "$site/bin/etude" run routine-sequence phase_first_run "$tree" "$runs/$id" both \
                 "$id" "$site/etude-site" "$site/bin/etude" "$accel" $words
     ) > "$runs/$id.console" 2>&1
@@ -729,78 +737,190 @@ wsl()
     echo "$1" | ssh -o BatchMode=yes testing "$WSL"
 }
 
-# windows: make the run of the release tests on Windows on the testing host,
-# of the words that `selection windows` prints,
-# while a claim of the whole host in WSL's admission keeps WSL's tests from
-# starting, and mark it done or record its failure; a run that ends without a
-# status runs again, three runs in all.
-windows()
+# windows_settings: read Windows' settings from the machines file: its copy,
+# output directory, admission site and accelerator, its job count, and the
+# output directory as WSL sees it.
+windows_settings()
 {
-    step=windows
-    wtree=$(setting windows tree) out=$(setting windows out) wsite=$(setting windows site)
-    accel=$(setting windows accel)
-    words=$(selection windows)
-    if [ -z "$words" ]; then
+    wtree=$(setting windows tree) wout=$(setting windows out) wsite=$(setting windows site)
+    waccel=$(setting windows accel)
+    wjobs=$(setting windows env | sed -n 's/^JOBS=//p')
+    wjobs=${wjobs:-4}
+    wheld=/mnt/$(echo "$wout" | cut -c 1 | tr '[:upper:]' '[:lower:]')$(echo "$wout" | cut -c 3-)
+}
+
+# windows_stop: stop Windows' preparation that runs in the background and end
+# the hold of WSL's whole host, so that a release that exits or is stopped
+# leaves neither behind; nothing of Windows' run is left running between its
+# preparation and its cases.
+windows_stop()
+{
+    if [ -n "$wprep" ]; then
+        kill "$wprep" 2> /dev/null
+        wait "$wprep"
+        wprep=
+    fi
+    if [ -n "$wholder" ]; then
+        wsl "touch $wheld/$wid.end" > /dev/null 2>&1
+        kill "$wholder" 2> /dev/null
+        wholder=
+    fi
+}
+
+# windows_prepare ID: build the preparation of Windows' run ID with `etude run
+# routine-prepare`, its output in STATE/ID.prepare, while a claim in WSL's
+# admission, `etude-launch build` with Windows' JOBS, holds the memory that the
+# preparation's own claim on Windows takes, JOBS GiB and one more, and the
+# block of ports that WSL's launcher gives each claim, so that WSL's tests
+# leave both to Windows; the tooling machine forwards no port. The claim ends
+# with the preparation, and a stop ends both. Run in the background.
+windows_prepare()
+{
+    id=$1 claimer='' session=''
+    trap 'kill $session $claimer 2> /dev/null; wsl "touch $wheld/$id.prepared" > /dev/null 2>&1; exit 143' TERM
+    wsl "cd /tmp && JOBS=$wjobs exec /usr/local/libexec/rach2/etude-launch build env sh -c 'touch $wheld/$id.claimed; n=0
+        while [ ! -e $wheld/$id.prepared ] && [ \$n -lt 1200 ]; do sleep 15; n=\$((n + 1)); done'" \
+        > "$state/$id.claim" 2>&1 &
+    claimer=$!
+    until wsl "test -e $wheld/$id.claimed" 2> /dev/null; do
+        if ! kill -0 "$claimer" 2> /dev/null; then
+            echo "claim refused: $(tail -n 3 "$state/$id.claim" | tr '\n' ' ')" > "$state/$id.prepare"
+            return 1
+        fi
+        sleep 30 &
+        wait $!
+    done
+    # shellcheck disable=SC2086 # the suites are words
+    {
+        echo "cd $wtree || { echo 'status 1'; exit; }"
+        echo "git fetch -q $wout/release.bundle 'refs/remotes/origin/$branch' && git checkout -q -f --detach $sha || { echo 'status 1'; exit; }"
+        environment windows
+        echo "ETUDE_SITE=$wsite make build/tools/etude/etude > $wout/$id.make.log 2>&1 || { tail -n 20 $wout/$id.make.log; echo 'status 1'; exit; }"
+        echo "e=$wout/etude-$id.exe"
+        echo "cp build/tools/etude/etude \"\$e\" || { echo 'status 1'; exit; }"
+        echo "unset ETUDE_SITE ETUDE_ADMITTED ETUDE_PREPARATION_CLEAN"
+        echo "mkdir -p $wout/$id $wout/tmp"
+        echo "ETUDE_SITE=$wsite \"\$e\" run -N -t $wtree -a $warch -A $waccel -J $wout/$id.selection.json $wwords > $wout/$id.selection.log 2>&1 || { tail -n 20 $wout/$id.selection.log; echo 'status 1'; exit; }"
+        echo "ETUDE_PHASE_SELECTION_EXPORT=$wout/$id.selection.json \"\$e\" run routine-prepare phase_first_run $wtree $wout/$id $warch $id $wsite \"\$e\" $waccel $wwords > $wout/$id.prepare.console 2>&1"
+        # shellcheck disable=SC2016 # the remote shell expands these
+        echo 'rc=$?'
+        echo "tail -n 40 $wout/$id.prepare.console"
+        # shellcheck disable=SC2016 # the remote shell expands these
+        echo 'echo "status $rc"'
+    } | ssh -o BatchMode=yes testing 'C:/msys64/usr/bin/bash.exe -l -s' > "$state/$id.prepare" 2>&1 &
+    session=$!
+    wait "$session"
+    session=
+    wsl "touch $wheld/$id.prepared" > /dev/null 2>&1
+    i=0
+    while kill -0 "$claimer" 2> /dev/null && [ "$i" -lt 12 ]; do
+        i=$((i + 1))
+        sleep 5
+    done
+    kill "$claimer" 2> /dev/null
+    wait "$claimer"
+}
+
+# windows_start: start Windows' run of the words that `selection windows`
+# prints, its preparation in the background, which windows_stop stops when the
+# release exits first. Mark the run done when only style failed, and record
+# its failure when three runs have started; return 1 in both cases.
+windows_start()
+{
+    windows_settings
+    wwords=$(selection windows)
+    if [ -z "$wwords" ]; then
         mark windows "only style failed, which the full run checks"
-        return 0
+        return 1
     fi
     # Prepare only the architectures the words name, so that a rerun of one
     # architecture's suites does not build the other's collection.
     warch=both
-    case " $words" in *" x86_64:"*) ;; *) warch=i686 ;; esac
-    case " $words" in *" i686:"*) ;; *) warch=x86_64 ;; esac
-    held=/mnt/$(echo "$out" | cut -c 1 | tr '[:upper:]' '[:lower:]')$(echo "$out" | cut -c 3-)
+    case " $wwords" in *" x86_64:"*) ;; *) warch=i686 ;; esac
+    case " $wwords" in *" i686:"*) ;; *) warch=x86_64 ;; esac
+    if [ "$(grep -c '^windows started ' "$state/record")" -ge 3 ]; then
+        failure windows "$(sed -n 's/^windows started //p' "$state/record" | tail -n 1)" runner
+        return 1
+    fi
+    wid=milestone$milestone-$(echo "$sha" | cut -c 1-12)-windows-$(date -u '+%m%d-%H%M%S')
+    if ! git -C "$repo" fetch -q origin ||
+        ! git -C "$repo" bundle create "$state/windows.bundle" "refs/remotes/origin/$branch" > /dev/null 2>&1; then
+        later "the bundle for Windows could not be made"
+    fi
+    scp -q -o BatchMode=yes "$state/windows.bundle" "testing:$wout/release.bundle" ||
+        later "the bundle could not be copied to the testing host"
+    note "windows started $wid"
+    trap windows_stop EXIT
+    trap 'windows_stop; trap - EXIT TERM; kill -TERM $$' TERM
+    trap 'windows_stop; trap - EXIT INT; kill -INT $$' INT
+    trap 'windows_stop; trap - EXIT HUP; kill -HUP $$' HUP
+    windows_prepare "$wid" > /dev/null 2>&1 9>&- &
+    wprep=$!
+    say "windows: preparing the run $wid"
+}
+
+# windows: finish Windows' run on the testing host, which windows_start began:
+# once its preparation has passed, run its cases with `etude run
+# routine-collect` while a claim of the whole host in WSL's admission keeps
+# WSL's tests from starting, and mark it done or record its failure. A run
+# whose preparation or cases end without a status runs again, three runs in
+# all.
+windows()
+{
+    step=windows
+    windows_settings
     while :; do
-        if [ "$(grep -c '^windows started ' "$state/record")" -ge 3 ]; then
-            failure windows "$(sed -n 's/^windows started //p' "$state/record" | tail -n 1)" runner
+        if [ -z "$wprep" ]; then
+            windows_start || return 0
+        fi
+        say "windows: waiting for the preparation of $wid"
+        wait "$wprep"
+        wprep='' id=$wid
+        grep -q '^claim refused: ' "$state/$id.prepare" 2> /dev/null &&
+            fail windows "WSL's admission did not give the preparation's claim: $(sed -n 's/^claim refused: //p' "$state/$id.prepare")"
+        rc=$(tr -d '\r' < "$state/$id.prepare" 2> /dev/null | sed -n 's/^status //p' | tail -n 1)
+        if [ -z "$rc" ]; then
+            say "windows: the preparation of $id ended without a status"
+            continue
+        fi
+        if [ "$rc" != 0 ]; then
+            failure windows "$id" runner
             return 0
         fi
-        id=milestone$milestone-$(echo "$sha" | cut -c 1-12)-windows-$(date -u '+%m%d-%H%M%S')
-        if ! git -C "$repo" fetch -q origin ||
-            ! git -C "$repo" bundle create "$state/windows.bundle" "refs/remotes/origin/$branch" > /dev/null 2>&1; then
-            later "the bundle for Windows could not be made"
-        fi
-        scp -q -o BatchMode=yes "$state/windows.bundle" "testing:$out/release.bundle" ||
-            later "the bundle could not be copied to the testing host"
-        note "windows started $id"
-        wsl "exec /usr/local/libexec/rach2/etude-launch alone sh -c 'touch $held/$id.held; n=0
-            while [ ! -e $held/$id.end ] && [ \$n -lt 720 ]; do sleep 15; n=\$((n + 1)); done'" \
-            > "$state/$id.hold" 2>&1 &
-        holder=$!
-        until wsl "test -e $held/$id.held" 2> /dev/null; do
-            kill -0 "$holder" 2> /dev/null ||
+        wsl "exec /usr/local/libexec/rach2/etude-launch alone sh -c 'touch $wheld/$id.held; n=0
+            while [ ! -e $wheld/$id.end ] && [ \$n -lt 720 ]; do sleep 15; n=\$((n + 1)); done'" \
+            > "$state/$id.hold" 2>&1 9>&- &
+        wholder=$!
+        until wsl "test -e $wheld/$id.held" 2> /dev/null; do
+            kill -0 "$wholder" 2> /dev/null ||
                 fail windows "WSL's admission did not give the whole host: $(tail -n 3 "$state/$id.hold" | tr '\n' ' ')"
-            say "windows: waiting for WSL's tests to end"
+            say "windows: prepared; waiting for WSL's tests to end"
             sleep 30
         done
-        say "windows: the run $id starts"
+        say "windows: the cases of the run $id start"
         # shellcheck disable=SC2086 # the suites are words
         {
             echo "cd $wtree || { echo 'status 1'; exit; }"
-            echo "git fetch -q $out/release.bundle 'refs/remotes/origin/$branch' && git checkout -q -f --detach $sha || { echo 'status 1'; exit; }"
             environment windows
             echo "MSYS_NO_PATHCONV=1 wsl.exe -u root -e sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches' < /dev/null"
-            echo "ETUDE_SITE=$wsite make build/tools/etude/etude > $out/$id.make.log 2>&1 || { tail -n 20 $out/$id.make.log; echo 'status 1'; exit; }"
-            echo "e=$out/etude-$id.exe"
-            echo "cp build/tools/etude/etude \"\$e\" || { echo 'status 1'; exit; }"
+            echo "e=$wout/etude-$id.exe"
             echo "unset ETUDE_SITE ETUDE_ADMITTED ETUDE_PREPARATION_CLEAN"
-            echo "mkdir -p $out/$id $out/tmp"
-            echo "ETUDE_SITE=$wsite \"\$e\" run -N -t $wtree -a $warch -A $accel -J $out/$id.selection.json $words > $out/$id.selection.log 2>&1 || { tail -n 20 $out/$id.selection.log; echo 'status 1'; exit; }"
-            echo "ETUDE_PHASE_SELECTION_EXPORT=$out/$id.selection.json ETUDE_PREPARATION_CLEAN=1 \"\$e\" run routine-sequence phase_first_run $wtree $out/$id $warch $id $wsite \"\$e\" $accel $words > $out/$id.console 2>&1"
+            echo "ETUDE_PHASE_SELECTION_EXPORT=$wout/$id.selection.json \"\$e\" run routine-collect phase_first_run $wtree $wout/$id $warch $id $wsite \"\$e\" $waccel $wwords > $wout/$id.console 2>&1"
             # shellcheck disable=SC2016 # the remote shell expands these
             echo 'rc=$?'
-            echo "tail -n 40 $out/$id.console"
+            echo "tail -n 40 $wout/$id.console"
             # shellcheck disable=SC2016 # the remote shell expands these
             echo 'echo "status $rc"'
         } | ssh -o BatchMode=yes testing 'C:/msys64/usr/bin/bash.exe -l -s' > "$state/$id.log" 2>&1
-        wsl "touch $held/$id.end" > /dev/null 2>&1
+        wsl "touch $wheld/$id.end" > /dev/null 2>&1
         i=0
-        while kill -0 "$holder" 2> /dev/null && [ "$i" -lt 12 ]; do
+        while kill -0 "$wholder" 2> /dev/null && [ "$i" -lt 12 ]; do
             i=$((i + 1))
             sleep 5
         done
-        kill "$holder" 2> /dev/null
-        wait "$holder"
+        kill "$wholder" 2> /dev/null
+        wait "$wholder"
+        wholder=
         rc=$(tr -d '\r' < "$state/$id.log" | sed -n 's/^status //p' | tail -n 1)
         [ -z "$rc" ] || break
         say "windows: the run $id ended without a status"
@@ -995,6 +1115,10 @@ main()
 
     if has mac && ! done_ mac && ! failed_ mac && ! grep -q '^mac started ' "$state/record"; then
         mac_start
+    fi
+    wprep='' wholder=''
+    if has windows && ! done_ windows && ! failed_ windows; then
+        windows_start
     fi
     done_ full || failed_ full || full
     if has windows && ! done_ windows && ! failed_ windows; then
