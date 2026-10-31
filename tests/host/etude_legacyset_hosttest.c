@@ -118,7 +118,9 @@
  * `qemu`; rngprobe passes on `qemu64` with its branch `fail-closed`; a boot
  * past its stage's bound is stopped and incomplete;
  * each machine is given its profile's processor, which a wrapper of QEMU
- * records; and the run's store of artifacts is removed at its end. The set
+ * records; and the objects of the record's artifacts are kept in the tree's
+ * store, build/tests/objects, after the run, which makes no store of its
+ * own under the evidence. The set
  * runs with `-n fixture`: the case whose profile boots the node
  * `rach2/kernel`, which the fixture makes a file that does not boot, boots
  * `rach2-fixture/kernel` in its place and passes, and the cases that boot
@@ -128,7 +130,7 @@
  * A suite of machine cases runs a compiled scenario of the tree's that
  * keeps a console in its workspace as the case's identity says, with one
  * argument, its invocation. The invocation gives each artifact's digest in the
- * run's store under the evidence, which the run removes at its end, the case's
+ * tree's store, build/tests/objects, which keeps them after the run, the case's
  * tool and the stand-in for QEMU found on the path, the accelerator, the
  * x86-64 firmware that `RACH2_OVMF_CODE` names, each step's bound and the
  * cleanup's, and the workspace as its scratch. A clean
@@ -149,7 +151,11 @@
  * copy of its own in the driver's place, `legacy_set_put`, with the
  * store's settling time made zero so that a digest is kept as soon as it is
  * read, and every case is given the digest of each and the tree's digests
- * file. A disk changed after its first copy is copied again for the next
+ * file. A second run at the same tree copies nothing to the store, and a
+ * run whose disk changed copies the disk alone, and the store then keeps the
+ * object of the changed disk and not that of the disk the preparation's
+ * record no longer names. With the store emptied, a disk changed after its
+ * first copy is copied again for the next
  * case: the first case is given its first digest, and the next and those
  * after it the changed disk's. When the disk's first copy fails, its case
  * ends incomplete with the reason and no invocation, the next case copies
@@ -2325,6 +2331,29 @@ static void digest_text(char *out, size_t size, const char *name, const char *te
     fix_format(out, size, "\"%s\":\"%s\"", name, hex);
 }
 
+/** Write in `out` the path of object `hex` in the tree's store of the guest
+ * and machine cases' artifacts, and give `out`. */
+static const char *object_of(char *out, size_t size, const char *hex)
+{
+    fix_format(out, size, "%s/build/tests/objects/objects/%s", tree, hex);
+    return out;
+}
+
+/** Say whether the tree's store has the object of a file whose content is
+ * `text`. */
+static int stored_text(const char *text)
+{
+    unsigned char sum[32];
+    char hex[65], path[PATH_LEN + 80];
+    struct sha256 h;
+
+    sha256_init(&h);
+    sha256_update(&h, (const unsigned char *)text, strlen(text));
+    sha256_final(&h, sum);
+    sha256_hex(sum, hex);
+    return exists(object_of(path, sizeof(path), hex));
+}
+
 /** Write in `out` the member `"NAME":"DIGEST"` of an invocation's artifacts
  * for the file `file` of the tree. */
 static void digest_member(char *out, size_t size, const char *name, const char *file)
@@ -2507,13 +2536,14 @@ static void test_machine(void)
     digest_member(text, sizeof(text), "disk", DISK);
     given &= invocations_have(&r, NULL, text);
     CHECK(given, "publish: each case is given each artifact's digest");
-    fix_format(text, sizeof(text), "\"store\":\"%s/%s.store\"", r.evidence, r.run_id);
-    CHECK(invocation_has(&r, "fixture.machine.clean.r0", text), "invocation: the store");
+    fix_format(text, sizeof(text), "\"store\":\"%s/build/tests/objects\"", tree);
+    CHECK(invocation_has(&r, "fixture.machine.clean.r0", text), "invocation: the tree's store");
     fix_format(text, sizeof(text), "\"digests\":\"%s/build/tests/digests\"", tree);
     CHECK(invocation_has(&r, "fixture.machine.clean.r0", text),
           "invocation: the tree's digests file");
     fix_format(text, sizeof(text), "%s/%s.store", r.evidence, r.run_id);
-    CHECK(!exists(text), "machine: the store of the artifacts is removed at the end");
+    CHECK(!exists(text) && stored_text(disk_text),
+          "machine: the tree's store keeps the artifacts, and the evidence has none");
     fix_format(text, sizeof(text), "\"qemu_i686\":\"%s/qemu/qemu-system-i386" LEGACY_EXE "\"",
                tree);
     CHECK(invocation_has(&r, "fixture.machine.clean.r0", text),
@@ -2547,6 +2577,57 @@ static void test_machine(void)
     CHECK(r.claims == 0, "machine: the ledger has no claim");
     CHECK(!r.leaks, "machine: the driver leaks nothing");
     show(&r, before);
+}
+
+/**
+ * The tree's store kept between runs: a second run at one commit stores
+ * nothing, and a run whose disk changed stores the disk alone and removes
+ * the object of the disk the preparation's record no longer names. The store
+ * is then removed, so that the rows after it copy each artifact anew.
+ */
+static void test_objects(void)
+{
+    static const struct etude_legacy_member m[] = {
+        {"machine", 0, 0, "cases/machine/machine.json", NULL}};
+    static struct run again, changed;
+    char disk[PATH_LEN], store[PATH_LEN];
+    int before = fails;
+
+    again.name = "objects-again";
+    again.members = m;
+    again.n = 1;
+    set_run(&again);
+    CHECK(again.status == 1, "objects-again: a case did not pass");
+    CHECK(again.read == 0, "objects-again: the history is whole");
+    CHECK(copies_of(&again, "build/rach2/kernel") == 0 && copies_of(&again, DISK) == 0 &&
+              copies_of(&again, "build/cases/scenario") == 0,
+          "objects-again: a second run at one commit stores nothing");
+    CHECK(stored_text(disk_text), "objects-again: the disk's object is kept");
+    CHECK(again.claims == 0, "objects-again: the ledger has no claim");
+    CHECK(!again.leaks, "objects-again: the driver leaks nothing");
+    show(&again, before);
+
+    before = fails;
+    changed.name = "objects-changed";
+    changed.members = m;
+    changed.n = 1;
+    CHECK(write_text(in(disk, sizeof(disk), DISK), disk_changed, 0644) == 0,
+          "objects-changed: the disk changed");
+    set_run(&changed);
+    CHECK(write_text(disk, disk_text, 0644) == 0, "objects-changed: the disk restored");
+    CHECK(changed.status == 1, "objects-changed: a case did not pass");
+    CHECK(changed.read == 0, "objects-changed: the history is whole");
+    CHECK(copies_of(&changed, "build/rach2/kernel") == 0 && copies_of(&changed, DISK) == 1 &&
+              copies_of(&changed, "build/cases/scenario") == 0,
+          "objects-changed: the changed disk alone is stored again, once");
+    CHECK(stored_text(disk_changed) && !stored_text(disk_text),
+          "objects-changed: the store keeps the changed disk, and not the disk the record no "
+          "longer names");
+    CHECK(changed.claims == 0, "objects-changed: the ledger has no claim");
+    CHECK(!changed.leaks, "objects-changed: the driver leaks nothing");
+    show(&changed, before);
+    fix_format(store, sizeof(store), "%s/build/tests/objects", tree);
+    CHECK(fix_remove_tree(store) == 0, "objects: the store removed for the rows after");
 }
 
 /**
@@ -2839,8 +2920,8 @@ static void test_tooling(void)
           "tooling: a guest case's tooling memory is refused");
 }
 
-/** Give the store of guest artifacts that run `r` left under its evidence,
- * `RUN.store`, in `out`. */
+/** Give the path of the store under the evidence of run `r`, `RUN.store`,
+ * which a run no longer makes, in `out`. */
 static const char *guest_store(const struct run *r, char *out, size_t size)
 {
     fix_format(out, size, "%s/%s.store", r->evidence, r->run_id);
@@ -2979,7 +3060,9 @@ static void test_guest(void)
     fix_format(path, sizeof(path), "%s/%s.fixture.guest.boot.r0/console", r.evidence, r.run_id);
     CHECK(exists(path), "guest: the console kept when the case did not pass");
     CHECK(!kept(&r, "fixture.guest.rng.r0"), "guest: the workspace removed after a pass");
-    CHECK(!exists(guest_store(&r, path, sizeof(path))), "guest: the store removed at the end");
+    CHECK(!exists(guest_store(&r, path, sizeof(path))) && record_digest(&r, other, hex2) == 0 &&
+              exists(object_of(path, sizeof(path), hex2)),
+          "guest: the tree's store keeps the kernel's object, and the evidence has no store");
     CHECK(plan_has(&r, "\"domain\":\"qemu\"") && !plan_has(&r, "\"domain\":\"host\""),
           "guest: the plan's items are of the domain qemu");
     CHECK(recorded(&r, strcmp(guest_arch, "x86_64") == 0 ? "build/x86_64/guest/test.krffs"
@@ -3279,6 +3362,7 @@ int main(int argc, char **argv)
     test_streams();
     test_cases_stops();
     test_machine();
+    test_objects();
     test_publish();
     test_boundary();
     test_tooling();
