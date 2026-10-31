@@ -21,6 +21,7 @@ C_SRC_SHARED = kernel.c \
     sys/mouse.c \
     sys/pci.c \
     sys/kio.c \
+    sys/wcwidth.c \
     sys/klog.c \
     sys/syscall.c \
     sys/syscall_proc.c \
