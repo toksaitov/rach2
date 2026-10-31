@@ -120,7 +120,8 @@
  * each machine is given its profile's processor, which a wrapper of QEMU
  * records; and the objects of the record's artifacts are kept in the tree's
  * store, build/tests/objects, after the run, which makes no store of its
- * own under the evidence. The set
+ * own under the evidence and keeps the object an earlier failure's overlay
+ * names. The set
  * runs with `-n fixture`: the case whose profile boots the node
  * `rach2/kernel`, which the fixture makes a file that does not boot, boots
  * `rach2-fixture/kernel` in its place and passes, and the cases that boot
@@ -2339,19 +2340,64 @@ static const char *object_of(char *out, size_t size, const char *hex)
     return out;
 }
 
-/** Say whether the tree's store has the object of a file whose content is
- * `text`. */
-static int stored_text(const char *text)
+/** Write in `out` the path of the object of a file whose content is `text`
+ * in the tree's store, and give `out`. */
+static const char *text_object(char *out, size_t size, const char *text)
 {
     unsigned char sum[32];
-    char hex[65], path[PATH_LEN + 80];
+    char hex[65];
     struct sha256 h;
 
     sha256_init(&h);
     sha256_update(&h, (const unsigned char *)text, strlen(text));
     sha256_final(&h, sum);
     sha256_hex(sum, hex);
-    return exists(object_of(path, sizeof(path), hex));
+    return object_of(out, size, hex);
+}
+
+/** Say whether the tree's store has the object of a file whose content is
+ * `text`. */
+static int stored_text(const char *text)
+{
+    char path[PATH_LEN + 80];
+
+    return exists(text_object(path, sizeof(path), text));
+}
+
+/**
+ * Keep in `evidence`, as an earlier run's failed member would, the overlay
+ * `copies/disk` whose backing file is the store's object of `based`, and put
+ * in the store that object and the object of `orphan`, which nothing names.
+ * The overlay is a qcow2 header alone: the magic, version 3, and the backing
+ * file's name at byte 128, as etude_store_overlay writes its offset and
+ * length; 0 or -1.
+ */
+static int plant_evidence(const char *evidence, const char *based, const char *orphan)
+{
+    unsigned char head[128] = {'Q', 'F', 'I', 0xfb, 0, 0, 0, 3};
+    char dir[PATH_LEN], base[PATH_LEN + 80], path[PATH_LEN + 80];
+    size_t n;
+    FILE *f;
+    int ok;
+
+    text_object(base, sizeof(base), based);
+    n = strlen(base);
+    head[15] = 128;
+    head[18] = (unsigned char)(n >> 8);
+    head[19] = (unsigned char)n;
+    fix_format(dir, sizeof(dir), "%s/earlier.fixture.machine.panic.r0", evidence);
+    if (mkdir(evidence, 0755) != 0 || mkdir(dir, 0755) != 0)
+        return -1;
+    fix_format(dir, sizeof(dir), "%s/earlier.fixture.machine.panic.r0/copies", evidence);
+    fix_format(path, sizeof(path), "%s/disk", dir);
+    if (mkdir(dir, 0755) != 0 || (f = fopen(path, "wb")) == NULL)
+        return -1;
+    ok = fwrite(head, 1, sizeof(head), f) == sizeof(head) && fwrite(base, 1, n, f) == n;
+    ok = fclose(f) == 0 && ok;
+    return ok && write_text(base, based, 0444) == 0 &&
+                   write_text(text_object(path, sizeof(path), orphan), orphan, 0444) == 0
+               ? 0
+               : -1;
 }
 
 /** Write in `out` the member `"NAME":"DIGEST"` of an invocation's artifacts
@@ -2582,15 +2628,18 @@ static void test_machine(void)
 /**
  * The tree's store kept between runs: a second run at one commit stores
  * nothing, and a run whose disk changed stores the disk alone and removes
- * the object of the disk the preparation's record no longer names. The store
- * is then removed, so that the rows after it copy each artifact anew.
+ * the object of the disk the preparation's record no longer names, but keeps
+ * an object that an overlay kept as an earlier failure's evidence names. The
+ * store is then removed, so that the rows after it copy each artifact anew.
  */
 static void test_objects(void)
 {
     static const struct etude_legacy_member m[] = {
         {"machine", 0, 0, "cases/machine/machine.json", NULL}};
     static struct run again, changed;
-    char disk[PATH_LEN], store[PATH_LEN];
+    static const char based[] = "the base of a failure's overlay\n",
+                      orphan[] = "an object nothing names\n";
+    char disk[PATH_LEN], store[PATH_LEN], evidence[PATH_LEN];
     int before = fails;
 
     again.name = "objects-again";
@@ -2613,6 +2662,9 @@ static void test_objects(void)
     changed.n = 1;
     CHECK(write_text(in(disk, sizeof(disk), DISK), disk_changed, 0644) == 0,
           "objects-changed: the disk changed");
+    fix_format(evidence, sizeof(evidence), "%s/%s.evidence", fix_dir(), changed.name);
+    CHECK(plant_evidence(evidence, based, orphan) == 0,
+          "objects-changed: an earlier failure's overlay kept as evidence");
     set_run(&changed);
     CHECK(write_text(disk, disk_text, 0644) == 0, "objects-changed: the disk restored");
     CHECK(changed.status == 1, "objects-changed: a case did not pass");
@@ -2623,6 +2675,9 @@ static void test_objects(void)
     CHECK(stored_text(disk_changed) && !stored_text(disk_text),
           "objects-changed: the store keeps the changed disk, and not the disk the record no "
           "longer names");
+    CHECK(stored_text(based) && !stored_text(orphan),
+          "objects-changed: the store keeps the base of a kept overlay, and not an object "
+          "nothing names");
     CHECK(changed.claims == 0, "objects-changed: the ledger has no claim");
     CHECK(!changed.leaks, "objects-changed: the driver leaks nothing");
     show(&changed, before);

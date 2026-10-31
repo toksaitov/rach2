@@ -29,7 +29,8 @@
  * each cluster size QEMU opens, and one QEMU cannot open is refused. A
  * digest taken on the processor's SHA instructions is the portable code's,
  * a table of digests is written once, and a digest kept by the writer of a
- * file is used until the file changes.
+ * file is used until the file changes; two writers of one file at once keep
+ * the digest of the bytes there.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -943,6 +944,82 @@ static void test_digests_write(void)
               etude_store_hashed == hashed + 1,
           "write: a file written since is read again");
     free(buf);
+}
+
+/** Start a child that writes what pipe `in` gives to `dst` with
+ * etude_digest_write and exits 0 when the digest is `want`; its pid. */
+static pid_t digest_writer(const char *cache, int in[2], int other, const char *dst,
+                           const char *want)
+{
+    char d[ETUDE_DIGEST_HEX + 1];
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        close(in[1]);
+        close(other);
+        _exit(etude_digest_write(cache, in[0], dst, d) == 0 && strcmp(d, want) == 0 ? 0 : 1);
+    }
+    close(in[0]);
+    return pid;
+}
+
+/**
+ * Write one file with two etude_digest_write calls at once, fed in turn
+ * through pipes larger than a pipe holds, so that each has its scratch file
+ * before either renames: both succeed, the file has the bytes of the writer
+ * that renamed last and the digests file gives that writer's digest, and no
+ * scratch file is left.
+ */
+static void test_digests_two_writers(void)
+{
+    const char *cache = fix_path("two-digests"), *dst = fix_path("two-image");
+    char want[2][ETUDE_DIGEST_HEX + 1], d[ETUDE_DIGEST_HEX + 1];
+    size_t n[2] = {1048576, 1048576 + 7}, half = 262144, k = strlen("two-image.");
+    unsigned char *buf[2];
+    unsigned long hashed;
+    int fds[2][2], status[2] = {-1, -1}, i, left = 0;
+    struct dirent *e;
+    struct stat st;
+    pid_t pid[2];
+    DIR *dir;
+
+    buf[0] = malloc(n[0]);
+    buf[1] = malloc(n[1]);
+    CHECK(buf[0] != NULL && buf[1] != NULL && pipe(fds[0]) == 0 && pipe(fds[1]) == 0,
+          "two writers: pipes");
+    if (buf[0] == NULL || buf[1] == NULL) {
+        free(buf[0]);
+        free(buf[1]);
+        return;
+    }
+    fill(buf[0], n[0]);
+    memset(buf[1], 'b', n[1]);
+    for (i = 0; i < 2; i++)
+        sha_hex(buf[i], n[i], want[i]);
+    pid[0] = digest_writer(cache, fds[0], fds[1][1], dst, want[0]);
+    pid[1] = digest_writer(cache, fds[1], fds[0][1], dst, want[1]);
+    CHECK(pid[0] > 0 && pid[1] > 0 && put_all(fds[0][1], buf[0], half) == 0 &&
+              put_all(fds[1][1], buf[1], half) == 0,
+          "two writers: both under way");
+    for (i = 0; i < 2; i++) {
+        CHECK(put_all(fds[i][1], buf[i] + half, n[i] - half) == 0, "two writers: the rest");
+        close(fds[i][1]);
+        CHECK(pid[i] > 0 && waitpid(pid[i], &status[i], 0) == pid[i] && status[i] == 0,
+              "two writers: each writes its file and gives its digest");
+    }
+    hashed = etude_store_hashed;
+    CHECK(stat(dst, &st) == 0 && (size_t)st.st_size == n[1] &&
+              etude_digest_file(cache, dst, &st, d) == 0 && strcmp(d, want[1]) == 0 &&
+              etude_store_hashed == hashed,
+          "two writers: the file and the digest kept are the last writer's");
+    if ((dir = opendir(fix_dir())) != NULL) {
+        while ((e = readdir(dir)) != NULL)
+            left |= strncmp(e->d_name, "two-image.", k) == 0;
+        closedir(dir);
+    }
+    CHECK(dir != NULL && !left, "two writers: no scratch file is left");
+    free(buf[0]);
+    free(buf[1]);
 }
 
 /** Give the allocation of `path`, requiring its expected length; 0 or -1. */
@@ -1935,6 +2012,7 @@ int main(int argc, char **argv)
     test_digests_portable();
     test_digests_table();
     test_digests_write();
+    test_digests_two_writers();
     test_sparse();
     test_range();
     test_overlay();
