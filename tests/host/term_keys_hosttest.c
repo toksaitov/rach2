@@ -17,6 +17,7 @@
  * host-cflags: -I vendor/libtsm/libtsm-4.8.0/src/tsm -I vendor/libtsm/libtsm-4.8.0/src/shared
  * host-cflags: -I vendor/libtsm/libtsm-4.8.0/external -I rach2/include
  * host-cflags: -I vendor/libtsm/libtsm-4.8.0/external/wcwidth
+ * host-cflags: -include vendor/libtsm/libtsm-4.8.0/external/wcwidth/wcwidth.h
  * host-cflags: -Dwcwidth=tsm_wcwidth -Dtypeof=__typeof__
  * host-inputs: tests/host/keytable.txt
  *
