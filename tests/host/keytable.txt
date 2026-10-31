@@ -1,0 +1,381 @@
+# keytable.txt: the bytes each key of a 105-key PC keyboard sends, as xterm
+# sends them, which the kernel console and term both send.
+#
+# The bytes are xterm's, patch 412 (2026-10-11), from its input.c and
+# ctlseqs.txt. X has xkeyboard-config's pc105 model with the us layout and no
+# options, so Right Alt is Alt_R and the keypad's Shift inverts Num Lock, and
+# without the levels that give the X server Ctrl+Alt with F1 to F12, Backspace
+# and the keypad's operators, so those keys keep their keysyms. xterm runs in a
+# UTF-8 locale with these resources and every other at its default:
+#
+#   XTerm*metaSendsEscape: true
+#   XTerm*backarrowKey: false
+#   XTerm*backarrowKeyIsErase: false
+#   XTerm*omitTranslation: fullscreen,scroll-lock,select,shift-fonts
+#   XTerm*openIm: false
+#
+# So Alt sends ESC before a key's character, Backspace sends DEL and
+# Ctrl+Backspace BS, and of xterm's own uses of keys only Shift with Page Up
+# and Page Down remain, which scroll the screen back. The defaults that matter
+# are keyboardType unknown, deleteIsDEL maybe (Delete sends CSI 3 ~),
+# modifyCursorKeys and modifyFunctionKeys 2, modifyKeypadKeys and
+# modifyOtherKeys 0, and numLock true. The modifier parameter of a sequence is
+# 1 plus 1 for Shift, 2 for Alt and 4 for Ctrl.
+#
+# A line is a mode line, a key line or a press line, and # starts a comment:
+#
+#   modes MODE[,MODE]...      the modes of the lines below; "modes -" for none
+#   KEY C1 C2 C3 C4 C5 C6 C7 C8
+#   press EVENT... = RESULT
+#
+# A key line gives what KEY sends under the modifiers of each column: none,
+# Shift, Ctrl, Ctrl+Shift, Alt, Alt+Shift, Ctrl+Alt and Ctrl+Alt+Shift. Each
+# modifier is held on the left, on the right and on both sides, so a cell is
+# 1, 3, 9 or 27 cases: the modifiers are pressed in the order Shift, Ctrl and
+# Alt, KEY is pressed and released, and the modifiers are released in the
+# reverse order.
+#
+# A press line gives what a sequence of events sends in all: +KEY presses a
+# key, -KEY releases it and KEY presses and releases it. The names shift, ctrl
+# and alt stand for the left key, the right key and both, as in a key line.
+#
+# KEY is the key's name in <linux/input-event-codes.h>, lowercased without its
+# KEY_ prefix: leftshift, kp7, 102nd. A cell or RESULT is one of
+#
+#   "..."     the bytes, with \e for ESC, \r, \n, \t, \b, \\, \" and \xHH
+#   local     the terminal acts on the key and sends nothing
+#   SIGINT, SIGQUIT, SIGTSTP
+#             the signal the tty sends its foreground process group
+#
+# and a MODE one of
+#
+#   ckm       DECCKM set (CSI ? 1 h): the cursor keys in application mode
+#   kpam      DECKPAM set (ESC =): the keypad in application mode
+#   num       Num Lock on before the first event; off without it
+#   caps      Caps Lock on before the first event; off without it
+#   tty       the result is what a process reading the tty receives, with the
+#             termios that cfmakeraw() leaves but for the flags named below,
+#             Linux's default c_cc, and the terminal's bytes as above
+#   icanon, icrnl, isig
+#             that flag set, with tty
+#
+# tests/host/keytable.c reads the table; tests/host/Readme.md says who runs it.
+
+# The letters, digits and punctuation, and Space.
+modes -
+#key        none      Shift     Ctrl      CtrlShift Alt       AltShift  CtrlAlt   CtrlAltShift
+grave       "`"       "~"       "\x00"    "\x1e"    "\e`"     "\e~"     "\e\x00"  "\e\x1e"
+1           "1"       "!"       "1"       "!"       "\e1"     "\e!"     "\e1"     "\e!"
+2           "2"       "@"       "\x00"    "\x00"    "\e2"     "\e@"     "\e\x00"  "\e\x00"
+3           "3"       "#"       "\e"      "#"       "\e3"     "\e#"     "\e\e"    "\e#"
+4           "4"       "$"       "\x1c"    "$"       "\e4"     "\e$"     "\e\x1c"  "\e$"
+5           "5"       "%"       "\x1d"    "%"       "\e5"     "\e%"     "\e\x1d"  "\e%"
+6           "6"       "^"       "\x1e"    "\x1e"    "\e6"     "\e^"     "\e\x1e"  "\e\x1e"
+7           "7"       "&"       "\x1f"    "&"       "\e7"     "\e&"     "\e\x1f"  "\e&"
+8           "8"       "*"       "\x7f"    "*"       "\e8"     "\e*"     "\e\x7f"  "\e*"
+9           "9"       "("       "9"       "("       "\e9"     "\e("     "\e9"     "\e("
+0           "0"       ")"       "0"       ")"       "\e0"     "\e)"     "\e0"     "\e)"
+minus       "-"       "_"       "-"       "\x1f"    "\e-"     "\e_"     "\e-"     "\e\x1f"
+equal       "="       "+"       "="       "+"       "\e="     "\e+"     "\e="     "\e+"
+q           "q"       "Q"       "\x11"    "\x11"    "\eq"     "\eQ"     "\e\x11"  "\e\x11"
+w           "w"       "W"       "\x17"    "\x17"    "\ew"     "\eW"     "\e\x17"  "\e\x17"
+e           "e"       "E"       "\x05"    "\x05"    "\ee"     "\eE"     "\e\x05"  "\e\x05"
+r           "r"       "R"       "\x12"    "\x12"    "\er"     "\eR"     "\e\x12"  "\e\x12"
+t           "t"       "T"       "\x14"    "\x14"    "\et"     "\eT"     "\e\x14"  "\e\x14"
+y           "y"       "Y"       "\x19"    "\x19"    "\ey"     "\eY"     "\e\x19"  "\e\x19"
+u           "u"       "U"       "\x15"    "\x15"    "\eu"     "\eU"     "\e\x15"  "\e\x15"
+i           "i"       "I"       "\t"      "\t"      "\ei"     "\eI"     "\e\t"    "\e\t"
+o           "o"       "O"       "\x0f"    "\x0f"    "\eo"     "\eO"     "\e\x0f"  "\e\x0f"
+p           "p"       "P"       "\x10"    "\x10"    "\ep"     "\eP"     "\e\x10"  "\e\x10"
+leftbrace   "["       "{"       "\e"      "\e"      "\e["     "\e{"     "\e\e"    "\e\e"
+rightbrace  "]"       "}"       "\x1d"    "\x1d"    "\e]"     "\e}"     "\e\x1d"  "\e\x1d"
+backslash   "\\"      "|"       "\x1c"    "\x1c"    "\e\\"    "\e|"     "\e\x1c"  "\e\x1c"
+a           "a"       "A"       "\x01"    "\x01"    "\ea"     "\eA"     "\e\x01"  "\e\x01"
+s           "s"       "S"       "\x13"    "\x13"    "\es"     "\eS"     "\e\x13"  "\e\x13"
+d           "d"       "D"       "\x04"    "\x04"    "\ed"     "\eD"     "\e\x04"  "\e\x04"
+f           "f"       "F"       "\x06"    "\x06"    "\ef"     "\eF"     "\e\x06"  "\e\x06"
+g           "g"       "G"       "\x07"    "\x07"    "\eg"     "\eG"     "\e\x07"  "\e\x07"
+h           "h"       "H"       "\b"      "\b"      "\eh"     "\eH"     "\e\b"    "\e\b"
+j           "j"       "J"       "\n"      "\n"      "\ej"     "\eJ"     "\e\n"    "\e\n"
+k           "k"       "K"       "\x0b"    "\x0b"    "\ek"     "\eK"     "\e\x0b"  "\e\x0b"
+l           "l"       "L"       "\x0c"    "\x0c"    "\el"     "\eL"     "\e\x0c"  "\e\x0c"
+semicolon   ";"       ":"       ";"       ":"       "\e;"     "\e:"     "\e;"     "\e:"
+apostrophe  "'"       "\""      "'"       "\""      "\e'"     "\e\""    "\e'"     "\e\""
+102nd       "<"       ">"       "<"       ">"       "\e<"     "\e>"     "\e<"     "\e>"
+z           "z"       "Z"       "\x1a"    "\x1a"    "\ez"     "\eZ"     "\e\x1a"  "\e\x1a"
+x           "x"       "X"       "\x18"    "\x18"    "\ex"     "\eX"     "\e\x18"  "\e\x18"
+c           "c"       "C"       "\x03"    "\x03"    "\ec"     "\eC"     "\e\x03"  "\e\x03"
+v           "v"       "V"       "\x16"    "\x16"    "\ev"     "\eV"     "\e\x16"  "\e\x16"
+b           "b"       "B"       "\x02"    "\x02"    "\eb"     "\eB"     "\e\x02"  "\e\x02"
+n           "n"       "N"       "\x0e"    "\x0e"    "\en"     "\eN"     "\e\x0e"  "\e\x0e"
+m           "m"       "M"       "\r"      "\r"      "\em"     "\eM"     "\e\r"    "\e\r"
+comma       ","       "<"       ","       "<"       "\e,"     "\e<"     "\e,"     "\e<"
+dot         "."       ">"       "."       ">"       "\e."     "\e>"     "\e."     "\e>"
+slash       "/"       "?"       "\x1f"    "\x7f"    "\e/"     "\e?"     "\e\x1f"  "\e\x7f"
+space       " "       " "       "\x00"    "\x00"    "\e "     "\e "     "\e\x00"  "\e\x00"
+
+# The modifiers held on both sides and released one at a time.
+press +leftshift +rightshift -leftshift a -rightshift = "A"
+press +rightshift +leftshift -rightshift a -leftshift = "A"
+press +leftshift +rightshift -leftshift -rightshift a = "a"
+press +shift -shift a = "a"
+press +leftctrl +rightctrl -leftctrl c -rightctrl = "\x03"
+press +rightctrl +leftctrl -rightctrl c -leftctrl = "\x03"
+press +leftctrl +rightctrl -leftctrl -rightctrl c = "c"
+press +ctrl -ctrl c = "c"
+press +leftalt +rightalt -leftalt x -rightalt = "\ex"
+press +rightalt +leftalt -rightalt x -leftalt = "\ex"
+press +leftalt +rightalt -leftalt -rightalt x = "x"
+press +alt -alt x = "x"
+
+# The modifiers and locks alone send nothing; the locks toggle.
+press leftshift = ""
+press rightshift = ""
+press leftctrl = ""
+press rightctrl = ""
+press leftalt = ""
+press rightalt = ""
+press leftmeta = ""
+press rightmeta = ""
+press +leftmeta a -leftmeta = "a"
+press capslock = ""
+press numlock = ""
+press capslock a capslock a = "Aa"
+press numlock kp7 numlock kp7 = "7\e[H"
+
+# The letters with Caps Lock on, which Shift undoes.
+modes caps
+#key        none      Shift     Ctrl      CtrlShift Alt       AltShift  CtrlAlt   CtrlAltShift
+q           "Q"       "q"       "\x11"    "\x11"    "\eQ"     "\eq"     "\e\x11"  "\e\x11"
+w           "W"       "w"       "\x17"    "\x17"    "\eW"     "\ew"     "\e\x17"  "\e\x17"
+e           "E"       "e"       "\x05"    "\x05"    "\eE"     "\ee"     "\e\x05"  "\e\x05"
+r           "R"       "r"       "\x12"    "\x12"    "\eR"     "\er"     "\e\x12"  "\e\x12"
+t           "T"       "t"       "\x14"    "\x14"    "\eT"     "\et"     "\e\x14"  "\e\x14"
+y           "Y"       "y"       "\x19"    "\x19"    "\eY"     "\ey"     "\e\x19"  "\e\x19"
+u           "U"       "u"       "\x15"    "\x15"    "\eU"     "\eu"     "\e\x15"  "\e\x15"
+i           "I"       "i"       "\t"      "\t"      "\eI"     "\ei"     "\e\t"    "\e\t"
+o           "O"       "o"       "\x0f"    "\x0f"    "\eO"     "\eo"     "\e\x0f"  "\e\x0f"
+p           "P"       "p"       "\x10"    "\x10"    "\eP"     "\ep"     "\e\x10"  "\e\x10"
+a           "A"       "a"       "\x01"    "\x01"    "\eA"     "\ea"     "\e\x01"  "\e\x01"
+s           "S"       "s"       "\x13"    "\x13"    "\eS"     "\es"     "\e\x13"  "\e\x13"
+d           "D"       "d"       "\x04"    "\x04"    "\eD"     "\ed"     "\e\x04"  "\e\x04"
+f           "F"       "f"       "\x06"    "\x06"    "\eF"     "\ef"     "\e\x06"  "\e\x06"
+g           "G"       "g"       "\x07"    "\x07"    "\eG"     "\eg"     "\e\x07"  "\e\x07"
+h           "H"       "h"       "\b"      "\b"      "\eH"     "\eh"     "\e\b"    "\e\b"
+j           "J"       "j"       "\n"      "\n"      "\eJ"     "\ej"     "\e\n"    "\e\n"
+k           "K"       "k"       "\x0b"    "\x0b"    "\eK"     "\ek"     "\e\x0b"  "\e\x0b"
+l           "L"       "l"       "\x0c"    "\x0c"    "\eL"     "\el"     "\e\x0c"  "\e\x0c"
+z           "Z"       "z"       "\x1a"    "\x1a"    "\eZ"     "\ez"     "\e\x1a"  "\e\x1a"
+x           "X"       "x"       "\x18"    "\x18"    "\eX"     "\ex"     "\e\x18"  "\e\x18"
+c           "C"       "c"       "\x03"    "\x03"    "\eC"     "\ec"     "\e\x03"  "\e\x03"
+v           "V"       "v"       "\x16"    "\x16"    "\eV"     "\ev"     "\e\x16"  "\e\x16"
+b           "B"       "b"       "\x02"    "\x02"    "\eB"     "\eb"     "\e\x02"  "\e\x02"
+n           "N"       "n"       "\x0e"    "\x0e"    "\eN"     "\en"     "\e\x0e"  "\e\x0e"
+m           "M"       "m"       "\r"      "\r"      "\eM"     "\em"     "\e\r"    "\e\r"
+press capslock a = "a"
+press +shift capslock -shift a = "a"
+press 1 = "1"
+press +shift 1 -shift = "!"
+
+# Escape, Tab, Enter, Backspace, the function keys and the editing keys.
+modes -
+#key        none      Shift     Ctrl      CtrlShift Alt       AltShift  CtrlAlt   CtrlAltShift
+esc         "\e"      "\e"      "\e"      "\e"      "\e\e"    "\e\e"    "\e\e"    "\e\e"
+tab         "\t"      "\e[Z"    "\t"      "\e[Z"    "\e\t"    "\e[Z"    "\e\t"    "\e[Z"
+enter       "\r"      "\r"      "\r"      "\r"      "\e\r"    "\e\r"    "\e\r"    "\e\r"
+backspace   "\x7f"    "\x7f"    "\b"      "\b"      "\e\x7f"  "\e\x7f"  "\e\b"    "\e\b"
+f1          "\eOP"    "\e[1;2P" "\e[1;5P" "\e[1;6P" "\e[1;3P" "\e[1;4P" "\e[1;7P" "\e[1;8P"
+f2          "\eOQ"    "\e[1;2Q" "\e[1;5Q" "\e[1;6Q" "\e[1;3Q" "\e[1;4Q" "\e[1;7Q" "\e[1;8Q"
+f3          "\eOR"    "\e[1;2R" "\e[1;5R" "\e[1;6R" "\e[1;3R" "\e[1;4R" "\e[1;7R" "\e[1;8R"
+f4          "\eOS"    "\e[1;2S" "\e[1;5S" "\e[1;6S" "\e[1;3S" "\e[1;4S" "\e[1;7S" "\e[1;8S"
+f5          "\e[15~"  "\e[15;2~" "\e[15;5~" "\e[15;6~" "\e[15;3~" "\e[15;4~" "\e[15;7~" "\e[15;8~"
+f6          "\e[17~"  "\e[17;2~" "\e[17;5~" "\e[17;6~" "\e[17;3~" "\e[17;4~" "\e[17;7~" "\e[17;8~"
+f7          "\e[18~"  "\e[18;2~" "\e[18;5~" "\e[18;6~" "\e[18;3~" "\e[18;4~" "\e[18;7~" "\e[18;8~"
+f8          "\e[19~"  "\e[19;2~" "\e[19;5~" "\e[19;6~" "\e[19;3~" "\e[19;4~" "\e[19;7~" "\e[19;8~"
+f9          "\e[20~"  "\e[20;2~" "\e[20;5~" "\e[20;6~" "\e[20;3~" "\e[20;4~" "\e[20;7~" "\e[20;8~"
+f10         "\e[21~"  "\e[21;2~" "\e[21;5~" "\e[21;6~" "\e[21;3~" "\e[21;4~" "\e[21;7~" "\e[21;8~"
+f11         "\e[23~"  "\e[23;2~" "\e[23;5~" "\e[23;6~" "\e[23;3~" "\e[23;4~" "\e[23;7~" "\e[23;8~"
+f12         "\e[24~"  "\e[24;2~" "\e[24;5~" "\e[24;6~" "\e[24;3~" "\e[24;4~" "\e[24;7~" "\e[24;8~"
+insert      "\e[2~"   "\e[2;2~" "\e[2;5~" "\e[2;6~" "\e[2;3~" "\e[2;4~" "\e[2;7~" "\e[2;8~"
+delete      "\e[3~"   "\e[3;2~" "\e[3;5~" "\e[3;6~" "\e[3;3~" "\e[3;4~" "\e[3;7~" "\e[3;8~"
+pageup      "\e[5~"   local     "\e[5;5~" local     "\e[5;3~" local     "\e[5;7~" local
+pagedown    "\e[6~"   local     "\e[6;5~" local     "\e[6;3~" local     "\e[6;7~" local
+compose     "\e[29~"  "\e[29;2~" "\e[29;5~" "\e[29;6~" "\e[29;3~" "\e[29;4~" "\e[29;7~" "\e[29;8~"
+sysrq       ""        ""        ""        ""        ""        ""        ""        ""
+scrolllock  ""        ""        ""        ""        ""        ""        ""        ""
+pause       ""        ""        ""        ""        ""        ""        ""        ""
+
+# The cursor keys, Home and End, which DECCKM changes and Num Lock does not.
+modes -
+#key        none      Shift     Ctrl      CtrlShift Alt       AltShift  CtrlAlt   CtrlAltShift
+up          "\e[A"    "\e[1;2A" "\e[1;5A" "\e[1;6A" "\e[1;3A" "\e[1;4A" "\e[1;7A" "\e[1;8A"
+down        "\e[B"    "\e[1;2B" "\e[1;5B" "\e[1;6B" "\e[1;3B" "\e[1;4B" "\e[1;7B" "\e[1;8B"
+right       "\e[C"    "\e[1;2C" "\e[1;5C" "\e[1;6C" "\e[1;3C" "\e[1;4C" "\e[1;7C" "\e[1;8C"
+left        "\e[D"    "\e[1;2D" "\e[1;5D" "\e[1;6D" "\e[1;3D" "\e[1;4D" "\e[1;7D" "\e[1;8D"
+home        "\e[H"    "\e[1;2H" "\e[1;5H" "\e[1;6H" "\e[1;3H" "\e[1;4H" "\e[1;7H" "\e[1;8H"
+end         "\e[F"    "\e[1;2F" "\e[1;5F" "\e[1;6F" "\e[1;3F" "\e[1;4F" "\e[1;7F" "\e[1;8F"
+
+modes ckm
+up          "\eOA"    "\e[1;2A" "\e[1;5A" "\e[1;6A" "\e[1;3A" "\e[1;4A" "\e[1;7A" "\e[1;8A"
+down        "\eOB"    "\e[1;2B" "\e[1;5B" "\e[1;6B" "\e[1;3B" "\e[1;4B" "\e[1;7B" "\e[1;8B"
+right       "\eOC"    "\e[1;2C" "\e[1;5C" "\e[1;6C" "\e[1;3C" "\e[1;4C" "\e[1;7C" "\e[1;8C"
+left        "\eOD"    "\e[1;2D" "\e[1;5D" "\e[1;6D" "\e[1;3D" "\e[1;4D" "\e[1;7D" "\e[1;8D"
+home        "\eOH"    "\e[1;2H" "\e[1;5H" "\e[1;6H" "\e[1;3H" "\e[1;4H" "\e[1;7H" "\e[1;8H"
+end         "\eOF"    "\e[1;2F" "\e[1;5F" "\e[1;6F" "\e[1;3F" "\e[1;4F" "\e[1;7F" "\e[1;8F"
+
+modes num
+up          "\e[A"    "\e[1;2A" "\e[1;5A" "\e[1;6A" "\e[1;3A" "\e[1;4A" "\e[1;7A" "\e[1;8A"
+down        "\e[B"    "\e[1;2B" "\e[1;5B" "\e[1;6B" "\e[1;3B" "\e[1;4B" "\e[1;7B" "\e[1;8B"
+right       "\e[C"    "\e[1;2C" "\e[1;5C" "\e[1;6C" "\e[1;3C" "\e[1;4C" "\e[1;7C" "\e[1;8C"
+left        "\e[D"    "\e[1;2D" "\e[1;5D" "\e[1;6D" "\e[1;3D" "\e[1;4D" "\e[1;7D" "\e[1;8D"
+home        "\e[H"    "\e[1;2H" "\e[1;5H" "\e[1;6H" "\e[1;3H" "\e[1;4H" "\e[1;7H" "\e[1;8H"
+end         "\e[F"    "\e[1;2F" "\e[1;5F" "\e[1;6F" "\e[1;3F" "\e[1;4F" "\e[1;7F" "\e[1;8F"
+
+# The keypad: Num Lock off, with the cursor keys normal and in application
+# mode and the keypad in application mode, and Num Lock on, which keeps the
+# keypad numeric in both modes. Num Lock itself is a press line above.
+modes -
+#key        none      Shift     Ctrl      CtrlShift Alt       AltShift  CtrlAlt   CtrlAltShift
+kpslash     "/"       "/"       "/"       "/"       "/"       "/"       "/"       "/"
+kpasterisk  "*"       "*"       "*"       "*"       "*"       "*"       "*"       "*"
+kpminus     "-"       "-"       "-"       "-"       "-"       "-"       "-"       "-"
+kpplus      "+"       "+"       "+"       "+"       "+"       "+"       "+"       "+"
+kpenter     "\r"      "\r"      "\r"      "\r"      "\r"      "\r"      "\r"      "\r"
+kp7         "\e[H"    "7"       "\e[1;5H" "7"       "\e[1;3H" "7"       "\e[1;7H" "7"
+kp8         "\e[A"    "8"       "\e[1;5A" "8"       "\e[1;3A" "8"       "\e[1;7A" "8"
+kp9         "\e[5~"   "9"       "\e[5;5~" "9"       "\e[5;3~" "9"       "\e[5;7~" "9"
+kp4         "\e[D"    "4"       "\e[1;5D" "4"       "\e[1;3D" "4"       "\e[1;7D" "4"
+kp5         "\e[E"    "5"       "\e[1;5E" "5"       "\e[1;3E" "5"       "\e[1;7E" "5"
+kp6         "\e[C"    "6"       "\e[1;5C" "6"       "\e[1;3C" "6"       "\e[1;7C" "6"
+kp1         "\e[F"    "1"       "\e[1;5F" "1"       "\e[1;3F" "1"       "\e[1;7F" "1"
+kp2         "\e[B"    "2"       "\e[1;5B" "2"       "\e[1;3B" "2"       "\e[1;7B" "2"
+kp3         "\e[6~"   "3"       "\e[6;5~" "3"       "\e[6;3~" "3"       "\e[6;7~" "3"
+kp0         "\e[2~"   "0"       "\e[2;5~" "0"       "\e[2;3~" "0"       "\e[2;7~" "0"
+kpdot       "\e[3~"   "."       "\e[3;5~" "."       "\e[3;3~" "."       "\e[3;7~" "."
+
+modes ckm
+kpslash     "/"       "/"       "/"       "/"       "/"       "/"       "/"       "/"
+kpasterisk  "*"       "*"       "*"       "*"       "*"       "*"       "*"       "*"
+kpminus     "-"       "-"       "-"       "-"       "-"       "-"       "-"       "-"
+kpplus      "+"       "+"       "+"       "+"       "+"       "+"       "+"       "+"
+kpenter     "\r"      "\r"      "\r"      "\r"      "\r"      "\r"      "\r"      "\r"
+kp7         "\eOH"    "7"       "\e[1;5H" "7"       "\e[1;3H" "7"       "\e[1;7H" "7"
+kp8         "\eOA"    "8"       "\e[1;5A" "8"       "\e[1;3A" "8"       "\e[1;7A" "8"
+kp9         "\e[5~"   "9"       "\e[5;5~" "9"       "\e[5;3~" "9"       "\e[5;7~" "9"
+kp4         "\eOD"    "4"       "\e[1;5D" "4"       "\e[1;3D" "4"       "\e[1;7D" "4"
+kp5         "\eOE"    "5"       "\e[1;5E" "5"       "\e[1;3E" "5"       "\e[1;7E" "5"
+kp6         "\eOC"    "6"       "\e[1;5C" "6"       "\e[1;3C" "6"       "\e[1;7C" "6"
+kp1         "\eOF"    "1"       "\e[1;5F" "1"       "\e[1;3F" "1"       "\e[1;7F" "1"
+kp2         "\eOB"    "2"       "\e[1;5B" "2"       "\e[1;3B" "2"       "\e[1;7B" "2"
+kp3         "\e[6~"   "3"       "\e[6;5~" "3"       "\e[6;3~" "3"       "\e[6;7~" "3"
+kp0         "\e[2~"   "0"       "\e[2;5~" "0"       "\e[2;3~" "0"       "\e[2;7~" "0"
+kpdot       "\e[3~"   "."       "\e[3;5~" "."       "\e[3;3~" "."       "\e[3;7~" "."
+
+modes kpam
+kpslash     "\eOo"    "\eO2o"   "\eO5o"   "\eO6o"   "\eO3o"   "\eO4o"   "\eO7o"   "\eO8o"
+kpasterisk  "\eOj"    "\eO2j"   "\eO5j"   "\eO6j"   "\eO3j"   "\eO4j"   "\eO7j"   "\eO8j"
+kpminus     "\eOm"    "\eO2m"   "\eO5m"   "\eO6m"   "\eO3m"   "\eO4m"   "\eO7m"   "\eO8m"
+kpplus      "\eOk"    "\eO2k"   "\eO5k"   "\eO6k"   "\eO3k"   "\eO4k"   "\eO7k"   "\eO8k"
+kpenter     "\eOM"    "\eO2M"   "\eO5M"   "\eO6M"   "\eO3M"   "\eO4M"   "\eO7M"   "\eO8M"
+kp7         "\e[H"    "\eO2w"   "\e[1;5H" "\eO6w"   "\e[1;3H" "\eO4w"   "\e[1;7H" "\eO8w"
+kp8         "\e[A"    "\eO2x"   "\e[1;5A" "\eO6x"   "\e[1;3A" "\eO4x"   "\e[1;7A" "\eO8x"
+kp9         "\e[5~"   "\eO2y"   "\e[5;5~" "\eO6y"   "\e[5;3~" "\eO4y"   "\e[5;7~" "\eO8y"
+kp4         "\e[D"    "\eO2t"   "\e[1;5D" "\eO6t"   "\e[1;3D" "\eO4t"   "\e[1;7D" "\eO8t"
+kp5         "\e[E"    "\eO2u"   "\e[1;5E" "\eO6u"   "\e[1;3E" "\eO4u"   "\e[1;7E" "\eO8u"
+kp6         "\e[C"    "\eO2v"   "\e[1;5C" "\eO6v"   "\e[1;3C" "\eO4v"   "\e[1;7C" "\eO8v"
+kp1         "\e[F"    "\eO2q"   "\e[1;5F" "\eO6q"   "\e[1;3F" "\eO4q"   "\e[1;7F" "\eO8q"
+kp2         "\e[B"    "\eO2r"   "\e[1;5B" "\eO6r"   "\e[1;3B" "\eO4r"   "\e[1;7B" "\eO8r"
+kp3         "\e[6~"   "\eO2s"   "\e[6;5~" "\eO6s"   "\e[6;3~" "\eO4s"   "\e[6;7~" "\eO8s"
+kp0         "\e[2~"   "\eO2p"   "\e[2;5~" "\eO6p"   "\e[2;3~" "\eO4p"   "\e[2;7~" "\eO8p"
+kpdot       "\e[3~"   "\eO2n"   "\e[3;5~" "\eO6n"   "\e[3;3~" "\eO4n"   "\e[3;7~" "\eO8n"
+
+modes num
+kpslash     "/"       "/"       "/"       "/"       "/"       "/"       "/"       "/"
+kpasterisk  "*"       "*"       "*"       "*"       "*"       "*"       "*"       "*"
+kpminus     "-"       "-"       "-"       "-"       "-"       "-"       "-"       "-"
+kpplus      "+"       "+"       "+"       "+"       "+"       "+"       "+"       "+"
+kpenter     "\r"      "\r"      "\r"      "\r"      "\r"      "\r"      "\r"      "\r"
+kp7         "7"       "\e[1;2H" "7"       "\e[1;6H" "7"       "\e[1;4H" "7"       "\e[1;8H"
+kp8         "8"       "\e[1;2A" "8"       "\e[1;6A" "8"       "\e[1;4A" "8"       "\e[1;8A"
+kp9         "9"       "\e[5;2~" "9"       "\e[5;6~" "9"       "\e[5;4~" "9"       "\e[5;8~"
+kp4         "4"       "\e[1;2D" "4"       "\e[1;6D" "4"       "\e[1;4D" "4"       "\e[1;8D"
+kp5         "5"       "\e[1;2E" "5"       "\e[1;6E" "5"       "\e[1;4E" "5"       "\e[1;8E"
+kp6         "6"       "\e[1;2C" "6"       "\e[1;6C" "6"       "\e[1;4C" "6"       "\e[1;8C"
+kp1         "1"       "\e[1;2F" "1"       "\e[1;6F" "1"       "\e[1;4F" "1"       "\e[1;8F"
+kp2         "2"       "\e[1;2B" "2"       "\e[1;6B" "2"       "\e[1;4B" "2"       "\e[1;8B"
+kp3         "3"       "\e[6;2~" "3"       "\e[6;6~" "3"       "\e[6;4~" "3"       "\e[6;8~"
+kp0         "0"       "\e[2;2~" "0"       "\e[2;6~" "0"       "\e[2;4~" "0"       "\e[2;8~"
+kpdot       "."       "\e[3;2~" "."       "\e[3;6~" "."       "\e[3;4~" "."       "\e[3;8~"
+
+modes num,kpam
+kpslash     "/"       "/"       "/"       "/"       "/"       "/"       "/"       "/"
+kpasterisk  "*"       "*"       "*"       "*"       "*"       "*"       "*"       "*"
+kpminus     "-"       "-"       "-"       "-"       "-"       "-"       "-"       "-"
+kpplus      "+"       "+"       "+"       "+"       "+"       "+"       "+"       "+"
+kpenter     "\r"      "\r"      "\r"      "\r"      "\r"      "\r"      "\r"      "\r"
+kp7         "7"       "\e[1;2H" "7"       "\e[1;6H" "7"       "\e[1;4H" "7"       "\e[1;8H"
+kp8         "8"       "\e[1;2A" "8"       "\e[1;6A" "8"       "\e[1;4A" "8"       "\e[1;8A"
+kp9         "9"       "\e[5;2~" "9"       "\e[5;6~" "9"       "\e[5;4~" "9"       "\e[5;8~"
+kp4         "4"       "\e[1;2D" "4"       "\e[1;6D" "4"       "\e[1;4D" "4"       "\e[1;8D"
+kp5         "5"       "\e[1;2E" "5"       "\e[1;6E" "5"       "\e[1;4E" "5"       "\e[1;8E"
+kp6         "6"       "\e[1;2C" "6"       "\e[1;6C" "6"       "\e[1;4C" "6"       "\e[1;8C"
+kp1         "1"       "\e[1;2F" "1"       "\e[1;6F" "1"       "\e[1;4F" "1"       "\e[1;8F"
+kp2         "2"       "\e[1;2B" "2"       "\e[1;6B" "2"       "\e[1;4B" "2"       "\e[1;8B"
+kp3         "3"       "\e[6;2~" "3"       "\e[6;6~" "3"       "\e[6;4~" "3"       "\e[6;8~"
+kp0         "0"       "\e[2;2~" "0"       "\e[2;6~" "0"       "\e[2;4~" "0"       "\e[2;8~"
+kpdot       "."       "\e[3;2~" "."       "\e[3;6~" "."       "\e[3;4~" "."       "\e[3;8~"
+
+modes num
+press numlock kp7 = "\e[H"
+press numlock kpenter = "\r"
+
+modes kpam
+press numlock kpslash numlock kpslash = "/\eOo"
+press numlock kp7 numlock kp7 = "7\e[H"
+
+# The line discipline: Enter and the signal keys through the tty, raw, with
+# ICRNL, and cooked, each with ISIG on and off.
+modes tty
+press enter = "\r"
+press kpenter = "\r"
+press +ctrl m -ctrl = "\r"
+press +ctrl j -ctrl = "\n"
+press +alt enter -alt = "\e\r"
+press +ctrl c -ctrl = "\x03"
+press +ctrl backslash -ctrl = "\x1c"
+press +ctrl z -ctrl = "\x1a"
+press +ctrl d -ctrl = "\x04"
+press backspace = "\x7f"
+
+modes tty,isig
+press enter = "\r"
+press +ctrl c -ctrl = SIGINT
+press +ctrl backslash -ctrl = SIGQUIT
+press +ctrl z -ctrl = SIGTSTP
+press +ctrl d -ctrl = "\x04"
+
+modes tty,icrnl
+press enter = "\n"
+press kpenter = "\n"
+press +ctrl m -ctrl = "\n"
+press +ctrl j -ctrl = "\n"
+press +alt enter -alt = "\e\n"
+
+modes tty,icanon,icrnl,isig
+press a b enter = "ab\n"
+press enter = "\n"
+press kpenter = "\n"
+press a b backspace enter = "a\n"
+press a +ctrl m -ctrl = "a\n"
+press a +ctrl j -ctrl = "a\n"
+press +ctrl c -ctrl = SIGINT
+press +ctrl backslash -ctrl = SIGQUIT
+press +ctrl z -ctrl = SIGTSTP
+
+modes tty,icanon,icrnl
+press +ctrl c -ctrl enter = "\x03\n"
+press +ctrl backslash -ctrl enter = "\x1c\n"
+press +ctrl z -ctrl enter = "\x1a\n"
+
+modes tty,icanon
+press a enter +ctrl j -ctrl = "a\r\n"
