@@ -156,33 +156,60 @@ static int gh_mock(int argc, char **argv)
     free(all);
     return status;
 }
-/** Succeed once the release has touched the whole host's hold's end. */
-static int hold_ended(void)
+/**
+ * Succeed once `end` appears at or after the claim's `since` byte offset in
+ * the call log, so an earlier attempt cannot end this claim.
+ */
+static int hold_ended(const char *end, size_t since)
 {
     char *calls = fx_read(ev("RELEASE_TEST_CALLS"));
-    int ended = calls && fx_regex(calls, "^wsl touch .*\\.end$");
+    int ended = calls && strlen(calls) >= since && strstr(calls + since, end) != NULL;
     free(calls);
     return ended;
 }
 /**
  * Succeed when the WSL line `test -e PATH` probes a file that a claim or hold
- * has touched, as the calls so far record, since the release starts those in
- * the background and probes for the file they make.
+ * has touched and has not ended, as the calls so far record. Repeated run
+ * identifiers must not let a probe use a claim from an earlier attempt.
+ * In `probe` mode, reject the first probe after each grant is recorded.
  */
 static int touched(const char *probe)
 {
-    char touch[4200], *calls = fx_read(ev("RELEASE_TEST_CALLS"));
+    char touch[4200], end[4200], *calls = fx_read(ev("RELEASE_TEST_CALLS"));
+    const char *suffix = strrchr(probe, '.'), *last = NULL, *at = calls;
     int made;
     snprintf(touch, sizeof(touch), "touch %.*s ", (int)strcspn(probe + 8, "\n"), probe + 8);
-    made = calls && strstr(calls, touch) != NULL;
+    snprintf(end, sizeof(end), "wsl touch %.*s.%s\n", (int)(suffix - probe - 8), probe + 8,
+             !strncmp(suffix, ".claimed", 8) ? "prepared" : "end");
+    while (at && (at = strstr(at, touch)) != NULL)
+        last = at++;
+    made = last && !strstr(last, end);
+    if (made && !strcmp(ev("RELEASE_TEST_HOLD"), "probe")) {
+        snprintf(touch, sizeof(touch), "wsl %s", probe);
+        at = strstr(last, touch);
+        made = at && strstr(at + strlen(touch), touch) != NULL;
+    }
     free(calls);
     return made;
 }
 /**
+ * Keep a granted claim alive until `end` appears after its starting byte
+ * offset `since` in the call log, or until its parent exits.
+ */
+static int hold_wait(const char *end, size_t since)
+{
+    pid_t release = getppid();
+    if (!*end)
+        return 1;
+    while (!hold_ended(end, since) && getppid() == release)
+        fx_pause();
+    return 0;
+}
+/**
  * Answer a WSL command as RELEASE_TEST_HOLD says: `refused`, WSL's admission
  * refuses the whole host; `claim`, it refuses the preparation's claim; and
- * `wait`, the whole host's hold runs until the release ends it or is gone,
- * while no hold reports itself held.
+ * `wait`, the whole host's hold never reports itself held. Granted claims
+ * stay alive in hold_wait until the release ends them or is gone.
  */
 static int wsl_answer(int alone, int claim, int held, int claimed)
 {
@@ -190,12 +217,6 @@ static int wsl_answer(int alone, int claim, int held, int claimed)
     if ((alone && !strcmp(how, "refused")) || (claim && !strcmp(how, "claim"))) {
         puts("etude-launch: result: refused: admission: no room in 20400 seconds");
         return 2;
-    }
-    if (alone && !strcmp(how, "wait")) {
-        pid_t release = getppid();
-        while (!hold_ended() && getppid() == release)
-            fx_pause();
-        return 0;
     }
     return (held && (!strcmp(how, "refused") || !strcmp(how, "wait"))) ||
            (claimed && !strcmp(how, "claim"));
@@ -207,7 +228,9 @@ static int wsl_answer(int alone, int claim, int held, int claimed)
  */
 static int testing_mock(const char *command)
 {
-    char line[20000], b[4096];
+    char line[20000], b[4096], end[4200] = "";
+    struct stat st;
+    size_t since = !stat(ev("RELEASE_TEST_CALLS"), &st) ? (size_t)st.st_size : 0;
     int windows = strstr(command, "bash.exe -l -s") != NULL;
     int prepare = 0, alone = 0, claim = 0, held = 0, claimed = 0, made = 0;
     if (!windows && !strstr(command, "wsl.exe -- bash -s")) {
@@ -223,10 +246,16 @@ static int testing_mock(const char *command)
         claim |= strstr(b, "etude-launch build ") != NULL;
         held |= !strncmp(b, "test -e ", 8) && strstr(b, ".held") != NULL;
         claimed |= !strncmp(b, "test -e ", 8) && strstr(b, ".claimed") != NULL;
-        made |= !strncmp(b, "test -e ", 8) && touched(b);
+        made |= (held || claimed) && !strncmp(b, "test -e ", 8) && touched(b);
+        if (!windows && strstr(b, "while [ ! -e ")) {
+            const char *path = strstr(b, "while [ ! -e ") + 13;
+            snprintf(end, sizeof(end), "wsl touch %.*s\n", (int)strcspn(path, " "), path);
+        }
     }
-    if (!windows)
-        return (held || claimed) && !made ? 1 : wsl_answer(alone, claim, held, claimed);
+    if (!windows) {
+        int status = (held || claimed) && !made ? 1 : wsl_answer(alone, claim, held, claimed);
+        return !status && (alone || claim) ? hold_wait(end, since) : status;
+    }
     puts(prepare && !*ev("RELEASE_TEST_PREPARE") ? "status 0"
          : prepare                               ? ev("RELEASE_TEST_PREPARE")
                                                  : ev("RELEASE_TEST_WINDOWS"));
@@ -400,18 +429,9 @@ int flow_release_mock(int argc, char **argv)
         return 1;
     }
     if (!strcmp(name, "sleep")) {
-        char *line = joined(argc, argv, 1), *s, *p;
-        unsigned n = 0;
-        if (!line)
-            return 1;
-        append(rp(".sleeps"), line);
-        free(line);
-        s = fx_read(rp(".sleeps"));
-        for (p = s; *p; p++)
-            if (*p == '\n')
-                n++;
-        free(s);
-        if (n > 20)
+        call("sleep ", argc, argv, 1);
+        if (argc > 1 && !strcmp(argv[1], "30") && !strcmp(ev("RELEASE_TEST_HOLD"), "wait") &&
+            fx_has(ev("RELEASE_TEST_CALLS"), "etude-launch alone "))
             kill(getppid(), SIGTERM);
         return 0;
     }
@@ -476,11 +496,11 @@ static int setup(struct release *r, struct fixture *f)
 static void run(struct release *r, const struct release_row *spec)
 {
     struct fixture *f = r->f;
-    const char *files[] = {"calls", "calls.sleeps", "calls.release"};
+    const char *files[] = {"calls", "calls.release"};
     const char *a[8] = {"/bin/sh", r->script, "-s", flow_path(f, "state")};
     unsigned i, n = 4;
     fx_remove(flow_path(f, "state"));
-    for (i = 0; i < 3; i++)
+    for (i = 0; i < sizeof(files) / sizeof(files[0]); i++)
         fx_remove(flow_path(f, files[i]));
     flow_put(f, "state/wt/krffs/rach2_demo_ed25519", "");
     flow_put(f, "state/wt/build/x86_64/images/release.sha256", "");
@@ -1114,14 +1134,15 @@ static int windows_failure_rows(struct release *r)
                    !called(r, "^testing "),
                "windows failure is recorded and ends the release before the build") &&
          ok;
-    run(r, &(struct release_row){.record = r->head, .git = "yes", .machines = WINDOWS});
+    run(r, &(struct release_row){
+               .record = r->head, .git = "yes", .machines = WINDOWS, .hold = "probe"});
     machine_line(r, "windows started ", id, sizeof(id));
     snprintf(last, sizeof(last), "failure windows %s runner", id);
     ok = check(r,
                f->status == 1 && count(flow_path(f, "calls"), " run routine-collect ") == 3 &&
                    count(flow_path(f, "calls"), " run routine-prepare ") == 3 &&
-                   fx_has(record(r), last),
-               "windows run without status runs three times") &&
+                   count(flow_path(f, "calls"), "^sleep 30$") >= 6 && fx_has(record(r), last),
+               "windows run without status runs three times after missed claim probes") &&
          ok;
     run(r, &(struct release_row){.record = r->head,
                                  .git = "yes",
