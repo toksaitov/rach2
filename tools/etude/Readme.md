@@ -699,7 +699,7 @@ Versions of different keys live side by side, and a published version is never c
 
 ### The step store
 
-The store is one directory on a host, `/var/cache/rach2-store` on the testing host. The root Makefile gives it to `etude build` as `RACH2_STORE` where the directory exists, and `RACH2_STORE` set empty turns it off, as a release's full run sets it ([`tools/ci/run.sh`](../ci/run.sh)): the Makefile then removes, as it starts, the stamp of each step whose outputs came from the store, and builds the step again in the copy. The directory belongs to root and the group `users`, of which every account of the host and `ghrunner` are members, and has the set-group-ID bit, so that what `etude build` adds there is the group's:
+The store is one directory on a host, `/var/cache/rach2-store` on the testing host. The root Makefile gives it to `etude build` as `RACH2_STORE` where the directory exists, and `RACH2_STORE` set empty turns it off: the Makefile then removes, as it starts, the stamp of each step whose outputs came from the store, and builds the step again in the copy. The directory belongs to root and the group `users`, of which every account of the host and `ghrunner` are members, and has the set-group-ID bit, so that what `etude build` adds there is the group's:
 
 | Path | Contents |
 | --- | --- |

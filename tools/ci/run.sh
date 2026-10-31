@@ -11,8 +11,7 @@ out=${2-}
 [ "$kind" = full ] && [ -n "$out" ] || { echo "usage: tools/ci/run.sh full DIR" >&2; exit 2; }
 ARCH=${ARCH:-i686 x86_64}
 RACH2_MIN_FREE_GIB=${RACH2_MIN_FREE_GIB:-40}
-RACH2_STORE=
-export ARCH RACH2_MIN_FREE_GIB RACH2_STORE
+export ARCH RACH2_MIN_FREE_GIB
 # Keep the existing entry until selected-site activation supplies the native
 # policy, measured reference and retention root. Activation changes this one
 # value to native; missing native configuration never selects a fallback.

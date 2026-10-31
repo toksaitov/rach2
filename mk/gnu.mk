@@ -55,7 +55,7 @@ $(GNU_TOOLCHAIN_PINS): vendor/gnu/sources.txt
 # makes the toolchain's stamp run again when something uses it, and its rule
 # first removes the layer's directories and stamps, so that each step takes
 # its outputs from the store, or builds them there. A copy that uses no GNU
-# target keeps its layer, as a ci runner keeps the one a full run builds.
+# target keeps its layer.
 GNU_IN_COPY := $(if $(RACH2_STORE),$(if $(DRY_RUN),,$(shell [ -d $(GNU_OUT)/cross ] && \
                    [ ! -L $(GNU_OUT)/cross ] && echo yes)))
 .PHONY: gnu-in-copy

@@ -152,8 +152,8 @@ MKDISK          = krffs/mkdisk.sh
 # The store of step outputs that every copy on the host shares
 # (tools/etude/Readme.md, The step store): /var/cache/rach2-store where that
 # directory exists, and none where it does not or where RACH2_STORE is set
-# empty, as a release's full run sets it. Each stamped step runs through
-# `etude build`: the vendored projects here, and the GNU layer in mk/gnu*.mk.
+# empty. Each stamped step runs through `etude build`: the vendored projects
+# here, and the GNU layer in mk/gnu*.mk.
 # STEP_INPUTS gives it the rule's prerequisites, a stamp of another step with
 # -d and every other file with -i; order-only prerequisites are not inputs,
 # nor is gnu-in-copy, the phony target mk/gnu.mk gives to rebuild a step.
