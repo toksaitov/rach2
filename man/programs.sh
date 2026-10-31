@@ -37,6 +37,8 @@ TinyCC|vendor/tcc/Readme.md|LGPL 2.1
 pdpmake|vendor/pdpmake/Readme.md|public domain
 e2fsprogs|vendor/e2fsprogs/Readme.md|GPL 2; its libraries LGPL 2, BSD-style and MIT-style
 GRUB|vendor/grub/Readme.md|GPL 3 or later
+libtsm|vendor/libtsm/Readme.md|MIT
+wcwidth|vendor/libtsm/Readme.md|MIT, with parts under Markus Kuhn'"'"'s permissive notice
 doomgeneric|ports/doom/Readme.md|GPL 2 or later, with Nuked OPL3 under LGPL 2.1 or later
 GNU ports|vendor/gnu/Readme.md|each port its own, which its tarball has
 binutils, GCC, GDB|vendor/gnu/native/Readme.md|GPL 3 or later
@@ -524,6 +526,8 @@ BEGIN {
     version["pdpmake"] = var("vendor/pdpmake/build_pdpmake.sh", "VERSION")
     version["e2fsprogs"] = var("vendor/e2fsprogs/build_e2fsprogs.sh", "VERSION")
     version["GRUB"] = grab("vendor/grub/manifest.txt", "^tool grub-mkimage \\(GRUB\\) ", "")
+    version["libtsm"] = var("vendor/libtsm/build_libtsm.sh", "VERSION")
+    version["wcwidth"] = "libtsm " version["libtsm"] "'"'"'s copy"
     version["doomgeneric"] = "commit " grab("ports/doom/Readme.md", ".* at commit `", "`.*")
     version["GNU ports"] = "[each its own](#the-ports)"
     version["binutils, GCC, GDB"] = grab("vendor/gnu/sources.txt", "^binutils ", " .*") ", " \
