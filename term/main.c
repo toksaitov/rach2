@@ -221,7 +221,8 @@ struct term {
     struct term_select sel;
     struct term_screen screen;
     struct term_pty pty;
-    unsigned cols; /* the screen's size in cells */
+    const char *conf; /* the settings file, where a change of scale is kept */
+    unsigned cols;    /* the screen's size in cells */
     unsigned rows;
     bool suspended;    /* a descendant has the screen and the keyboard */
     bool dirty;        /* the screen changed since the last frame */
@@ -357,6 +358,12 @@ static int loop(struct term *t, int sigfd)
                 fprintf(stderr, "term: keys: %s\n", strerror(-r));
                 return 1;
             }
+            /* The scrollback and the selection change what is shown. */
+            t->dirty = true;
+            if (t->keys.scale) {
+                term_draw_rescale(&t->draw, t->keys.scale, t->conf);
+                t->keys.scale = 0;
+            }
         }
         if (p[P_MASTER].revents & POLLOUT)
             term_pty_flush(&t->pty);
@@ -402,6 +409,7 @@ static int run(const struct term_options *o, const struct term_conf *conf)
     t.keys.saved_mode = -1;
     t.pty.master = -1;
     t.pty.child = -1;
+    t.conf = o->conf;
 
     sigfd = term_signals_open();
     if (sigfd < 0) {

@@ -10,11 +10,13 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
+#include <termios.h>
 
 #include <libtsm.h>
 #include <rach2/fb.h>
 
 #include "unifont.h"
+#include "../rach2/sys/keymap.h"
 
 /*
  * Every call that can fail returns 0 or a negative errno value, as libtsm's
@@ -198,6 +200,10 @@ struct term_screen {
     bool bell;            /* the bell rang; the loop shows it and clears this */
     char *clipboard;      /* the clipboard's text, from a selection or OSC 52 */
     size_t clipboard_len; /* its bytes; the text is also NUL-terminated */
+    /* Called with every byte written for the child, before the pty takes
+     * it, when not NULL; term -H answers its `key` command with them. */
+    void (*tap)(void *data, const char *buf, size_t len);
+    void *tap_data;
 };
 
 /**
@@ -236,6 +242,63 @@ void term_screen_focus(struct term_screen *s, bool focused);
  */
 int term_screen_set_clipboard(struct term_screen *s, const char *text, size_t len);
 
+/*
+ * A key for the child, in the terms of libtsm's tsm_vte_handle_key(): the
+ * keysym and the characters the Kitty keyboard protocol reports. A character
+ * that does not apply is TSM_VTE_INVALID; an absent keysym is 0, XKB's
+ * NoSymbol.
+ */
+struct term_key {
+    uint32_t keysym;    /* XKB's keysym of the key under its modifiers */
+    uint32_t ascii;     /* the key's ASCII keysym in the base layout, for Ctrl, or 0 */
+    unsigned mods;      /* TSM_SHIFT_MASK and the others */
+    uint32_t unicode;   /* the character the key gives, before Ctrl and Alt */
+    uint32_t unshifted; /* the character with no modifier, in the layout in use */
+    uint32_t base;      /* the character with no modifier, in the base layout */
+};
+
+/**
+ * Send `key` to the child, as a press, a repeat or a release, TSM_VTE_KEY_*,
+ * in xterm's encoding or the Kitty protocol's under the flags the child set.
+ * A key that sends something shows the screen again below its scrollback.
+ * Returns whether bytes were sent.
+ */
+bool term_screen_key(struct term_screen *s, const struct term_key *key, unsigned event);
+
+/** Send `len` bytes to the child as they are, as a function string is sent. */
+void term_screen_send(struct term_screen *s, const char *buf, size_t len);
+
+/** Paste `text`, between mode 2004's brackets when the child set it. */
+void term_screen_paste(struct term_screen *s, const char *text);
+
+/** Whether the alternate screen is in use, which keeps no scrollback. */
+bool term_screen_alternate(struct term_screen *s);
+
+/** Show `lines` lines further back in the scrollback, or forward if negative. */
+void term_screen_scroll(struct term_screen *s, int lines);
+
+/** Show the screen itself, below its scrollback. */
+void term_screen_scroll_reset(struct term_screen *s);
+
+/** The screen's size in cells. */
+void term_screen_size(struct term_screen *s, unsigned *cols, unsigned *rows);
+
+/** The cursor's cell. */
+void term_screen_cursor(struct term_screen *s, unsigned *x, unsigned *y);
+
+/**
+ * Begin the selection at cell `x`, `y` of the screen as it is shown, the
+ * scrollback's lines among them, or with `extend` move its end there.
+ * libtsm draws the selected cells in inverse colors.
+ */
+void term_screen_select(struct term_screen *s, bool extend, unsigned x, unsigned y);
+
+/** Forget the selection. */
+void term_screen_select_reset(struct term_screen *s);
+
+/** Copy the selected text into the clipboard. Returns 0 or -ENOMEM. */
+int term_screen_select_copy(struct term_screen *s);
+
 /* Code points a cell keeps in a snapshot: its character and the marks on it. */
 #define TERM_CELL_CHARS 8
 
@@ -270,7 +333,7 @@ int term_screen_snapshot(struct term_screen *s, struct term_snapshot *snap);
 /** Free a snapshot's cells. */
 void term_snapshot_free(struct term_snapshot *snap);
 
-/** Free the screen, the parser and the clipboard. */
+/** Free the screen and the parser, and empty and free the clipboard. */
 void term_screen_free(struct term_screen *s);
 
 /* ---- The font (font.c) ---- */
@@ -448,7 +511,14 @@ void term_draw_close(struct term_draw *d);
 
 /* ---- Selection (select.c) ---- */
 
-/* The selection made from the keyboard, in cells of the screen. */
+/*
+ * The selection made from the keyboard, in cells of the screen as it is
+ * shown. While the mode is on, it takes every key: the cursor keys, Home,
+ * End, Page Up and Page Down move its cursor, and past the top or the bottom
+ * row scroll the scrollback; Space or `v` marks the start; Enter or `y`
+ * copies what lies between the mark and the cursor and leaves; Escape or `q`
+ * leaves.
+ */
 struct term_select {
     bool active;     /* the selection mode is on and takes the keys */
     bool marked;     /* the start has been marked */
@@ -457,8 +527,11 @@ struct term_select {
     unsigned mark_y; /* the start's row */
 };
 
+/** Turn the selection mode on, its cursor on the screen's cursor. */
+void term_select_start(struct term_select *sel, struct term_screen *s);
+
 /**
- * Give a key to the selection mode.
+ * Give a key to the selection mode: `keysym` is XKB's, `mods` TSM_*_MASK.
  *
  * Returns true if the mode took the key; false if it is off, and the key
  * goes to the child.
@@ -466,36 +539,106 @@ struct term_select {
 bool term_select_key(struct term_select *sel, struct term_screen *s, uint32_t keysym,
                      unsigned mods);
 
-/** Paste the clipboard into the child, bracketed when mode 2004 is set. */
+/**
+ * Paste the clipboard into the child, bracketed when mode 2004 is set. Line
+ * ends become CR, as Enter sends, and ESC is left out, so that pasted text
+ * cannot end the brackets or send a sequence of its own.
+ */
 void term_select_paste(struct term_select *sel, struct term_screen *s);
 
-/** Leave the selection mode and forget the selection. */
+/** Leave the selection mode, forget the selection and show the screen. */
 void term_select_clear(struct term_select *sel, struct term_screen *s);
 
 /* ---- Keys (keys.c) ---- */
 
-/* The console's keyboard, read in K_MEDIUMRAW through the console's keymap. */
-struct term_keys {
-    int fd;                 /* the console, or -1 */
-    int saved_mode;         /* the keyboard's mode before term took it, or -1 */
-    unsigned char down[32]; /* a bit for each keycode held down */
+/* The highest key code a K_MEDIUMRAW byte sequence gives that the keymap's
+ * tables hold; codes above it are read and dropped. */
+#define TERM_KEYS_MAX (KM_NR_KEYS - 1)
+
+/* What a key sent at its press, kept for its repeats' and its release's
+ * events, which the Kitty protocol reports with the same key. */
+struct term_key_sent {
+    bool valid;          /* the press went to the child */
+    struct term_key key; /* what it sent */
 };
 
-/** Open the console `path` and take its keyboard. */
-int term_keys_open(struct term_keys *k, const char *path);
+/*
+ * The console's keyboard, read in K_MEDIUMRAW and translated by the kernel's
+ * translator, keymap.c, through the console's keymap: each entry is read
+ * with KDGKBENT as its key is pressed, a function key's string with
+ * KDGKBSENT and the accents with KDGKBDIACRUC while an accent is pending, so
+ * a map that `loadkeys` loads while term runs takes effect at the next key.
+ * term -H has no console: its keymap is the built-in US one, in tables of
+ * its own that its `keymap` command changes.
+ */
+struct term_keys {
+    int fd;                                  /* the console, or -1 for term -H's own keymap */
+    int saved_mode;                          /* the keyboard's mode before term took it, or -1 */
+    bool saved_termios;                      /* `termios` holds the console's settings */
+    struct termios termios;                  /* the console's settings before term set raw ones */
+    unsigned char down[32];                  /* a bit for each key code held down */
+    unsigned char raw[3];                    /* the bytes read so far of a three-byte code */
+    unsigned nraw;                           /* their count */
+    struct keymap_state state;               /* the translator's modifiers, locks and accent */
+    unsigned kbled;                          /* KDGKBLED's byte: the locks and their defaults */
+    struct keymap_diacr diacr[KM_MAX_DIACR]; /* the accent table */
+    unsigned ndiacr;
+    unsigned short *tables[KM_MAX_TABLES]; /* term -H's tables; NULL is built in */
+    bool freed[KM_MAX_TABLES];             /* term -H's table removed */
+    char *func[KM_MAX_FUNC];               /* term -H's strings; NULL is built in */
+    struct term_key_sent sent[KM_NR_KEYS]; /* what each key held sent */
+    unsigned scale;                        /* a font scale asked for, 1 or 2; 0 none */
+};
 
 /**
- * Read the keys that are waiting and give each to the selection mode or to
- * the child.
+ * Open the console `path` and take its keyboard: K_MEDIUMRAW, and raw
+ * terminal settings, so that every byte of a key code reaches term. The
+ * locks start as the console has them.
+ */
+int term_keys_open(struct term_keys *k, const char *path);
+
+/** Set up term -H's keys, with no console and the built-in US keymap. */
+void term_keys_init_host(struct term_keys *k);
+
+/**
+ * Read the keys that are waiting and give each to term_keys_event().
  *
  * Returns 0 when nothing more is waiting, or a negative errno value.
  */
 int term_keys_read(struct term_keys *k, struct term_screen *s, struct term_select *sel);
 
-/** Forget which keys are down, as when the screen comes back to term. */
+/**
+ * Take one key: `code` is Linux's KEY_* code and `press` whether it went
+ * down. A press of a key already down is a repeat, since K_MEDIUMRAW gives a
+ * repeat as another press.
+ *
+ * term's own keys act here: Shift with Page Up and Page Down scroll the
+ * scrollback a page, but on the alternate screen, which has none and gets
+ * them; Ctrl and Shift with them ask for the font at 2x and 1x, in `scale`;
+ * Print Screen turns the selection mode on and off, and Shift with it
+ * pastes. While the selection mode is on, it takes every key. Every other key
+ * goes to the child through term_screen_key().
+ */
+void term_keys_event(struct term_keys *k, struct term_screen *s, struct term_select *sel,
+                     unsigned code, bool press);
+
+/**
+ * Set term -H's entry of key `code` in table `table` to `value`, as KDSKBENT
+ * sets the console's: KM_NOSUCHMAP at key 0 removes a table but table 0.
+ * Returns 0, -EINVAL for a table or key out of range, or -ENOMEM.
+ */
+int term_keys_set_entry(struct term_keys *k, unsigned table, unsigned code, unsigned value);
+
+/** Set term -H's function string `n`, as KDSKBSENT does. */
+int term_keys_set_string(struct term_keys *k, unsigned n, const char *text);
+
+/**
+ * Forget which keys are down and which modifiers are held, as when the
+ * screen comes back to term; the locks are read from the console again.
+ */
 void term_keys_reset(struct term_keys *k);
 
-/** Give the keyboard its mode back and close the console. */
+/** Give the keyboard its mode and the console its settings back, and close it. */
 void term_keys_close(struct term_keys *k);
 
 /* ---- Host mode (host.c) ---- */

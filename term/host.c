@@ -1,7 +1,7 @@
 /*
  * host.c: term -H, the child on a host pty with no screen, driven by
- * commands on standard input that send it bytes, wait for text on its
- * screen and dump the screen's cells, for tests.
+ * commands on standard input that send it bytes or keys, wait for text on
+ * its screen and dump the screen's cells, for tests.
  */
 
 #ifndef _XOPEN_SOURCE
@@ -36,6 +36,11 @@ enum host_block {
 struct host {
     struct term_screen screen;
     struct term_pty pty;
+    struct term_keys keys;         /* the keys, through term -H's own keymap */
+    struct term_select sel;        /* the selection made with them */
+    char *tapped;                  /* the bytes the last `key` sent the child */
+    size_t tapped_len;             /* bytes at `tapped` */
+    size_t tapped_size;            /* bytes allocated */
     char *in;                      /* standard input not yet taken as commands */
     size_t in_len;                 /* bytes at `in` */
     size_t in_size;                /* bytes allocated */
@@ -46,6 +51,27 @@ struct host {
     enum host_block block;         /* the command that waits, or BLOCK_NONE */
     char wait_text[HOST_LINE_MAX]; /* what BLOCK_WAIT waits for */
 };
+
+/** The screen's tap: keep a copy of what the keys send the child. */
+static void tap(void *data, const char *buf, size_t len)
+{
+    struct host *h = data;
+    size_t size;
+    char *p;
+
+    if (h->tapped_len + len > h->tapped_size) {
+        size = h->tapped_size ? h->tapped_size : 256;
+        while (size < h->tapped_len + len)
+            size *= 2;
+        p = realloc(h->tapped, size);
+        if (!p)
+            return;
+        h->tapped = p;
+        h->tapped_size = size;
+    }
+    memcpy(h->tapped + h->tapped_len, buf, len);
+    h->tapped_len += len;
+}
 
 /** Write `ucs4` in UTF-8 to `out`, which has room for 4 bytes. */
 static size_t utf8_put(uint32_t c, char *out)
@@ -280,6 +306,107 @@ static void cmd_cell(struct host *h, const char *args)
 }
 
 /**
+ * `key EVENT...`: give term's keys each event, `+CODE` a press, `-CODE` a
+ * release and `CODE` both, with Linux's KEY_* codes, and answer with what
+ * they sent the child.
+ */
+static void cmd_key(struct host *h, char *args)
+{
+    unsigned long code;
+    char *word;
+    char *end;
+    char what;
+
+    h->tapped_len = 0;
+    h->screen.tap = tap;
+    h->screen.tap_data = h;
+    for (word = strtok(args, " "); word; word = strtok(NULL, " ")) {
+        what = *word == '+' || *word == '-' ? *word++ : 't';
+        code = strtoul(word, &end, 10);
+        if (*word == '\0' || *end != '\0' || code > TERM_KEYS_MAX) {
+            h->screen.tap = NULL;
+            puts("error key: needs events +CODE, -CODE or CODE");
+            return;
+        }
+        if (what != '-')
+            term_keys_event(&h->keys, &h->screen, &h->sel, (unsigned)code, true);
+        if (what != '+')
+            term_keys_event(&h->keys, &h->screen, &h->sel, (unsigned)code, false);
+    }
+    h->screen.tap = NULL;
+    fputs("sent ", stdout);
+    print_escaped(h->tapped ? h->tapped : "", h->tapped_len);
+    putchar('\n');
+}
+
+/** `keymap TABLE CODE VALUE`: set an entry of the keymap, as KDSKBENT does. */
+static void cmd_keymap(struct host *h, const char *args)
+{
+    unsigned long table;
+    unsigned long code;
+    unsigned long value;
+    char *end;
+    int r;
+
+    table = strtoul(args, &end, 0);
+    code = strtoul(end, &end, 0);
+    value = strtoul(end, &end, 0);
+    if (*end != '\0' || table >= KM_MAX_TABLES || code >= KM_NR_KEYS || value > 0xFFFF) {
+        puts("error keymap: needs a table, a key code and an entry");
+        return;
+    }
+    r = term_keys_set_entry(&h->keys, (unsigned)table, (unsigned)code, (unsigned)value);
+    if (r < 0)
+        printf("error keymap: %s\n", strerror(-r));
+    else
+        puts("ok");
+}
+
+/** `string N TEXT`: set function string N, as KDSKBSENT does. */
+static void cmd_string(struct host *h, char *args)
+{
+    unsigned long n;
+    char *end;
+    long len;
+    int r;
+
+    n = strtoul(args, &end, 10);
+    if (end == args || (*end != ' ' && *end != '\0')) {
+        puts("error string: needs a number and text");
+        return;
+    }
+    if (*end == ' ')
+        end++;
+    len = unescape(end);
+    if (len < 0 || (size_t)len != strlen(end) || n >= KM_MAX_FUNC) {
+        puts("error string: needs a number below 256 and text with no NUL");
+        return;
+    }
+    r = term_keys_set_string(&h->keys, (unsigned)n, end);
+    if (r < 0)
+        printf("error string: %s\n", strerror(-r));
+    else
+        puts("ok");
+}
+
+/** `locks [N]`: set the locks, KDSKBLED's bits, and answer with them. */
+static void cmd_locks(struct host *h, const char *args)
+{
+    unsigned long v;
+    char *end;
+
+    if (*args) {
+        v = strtoul(args, &end, 0);
+        if (*end != '\0' || v > 7) {
+            puts("error locks: needs a value from 0 to 7");
+            return;
+        }
+        h->keys.state.ledflags = (unsigned)v;
+    }
+    printf("locks %u\n", h->keys.state.ledflags);
+}
+
+/**
  * Answer the command that waits, if what it waits for has come. Returns
  * true when it was answered.
  */
@@ -357,6 +484,14 @@ static void command(struct host *h, char *line)
             printf("error resize: %s\n", strerror(-r));
         else
             puts("ok");
+    } else if (strcmp(line, "key") == 0) {
+        cmd_key(h, args);
+    } else if (strcmp(line, "keymap") == 0) {
+        cmd_keymap(h, args);
+    } else if (strcmp(line, "string") == 0) {
+        cmd_string(h, args);
+    } else if (strcmp(line, "locks") == 0) {
+        cmd_locks(h, args);
     } else if (strcmp(line, "clipboard") == 0) {
         fputs("clipboard ", stdout);
         print_escaped(h->screen.clipboard ? h->screen.clipboard : "", h->screen.clipboard_len);
@@ -472,6 +607,7 @@ int term_host_run(const struct term_options *o, const struct term_conf *conf)
         goto out_signals;
     }
     term_screen_scrollback(&h->screen, conf->scrollback);
+    term_keys_init_host(&h->keys);
     r = term_pty_open(&h->pty, HOST_COLS, HOST_ROWS, o->argv, false);
     if (r < 0) {
         fprintf(stderr, "term: %s: %s\n", o->argv ? o->argv[0] : "shell", strerror(-r));
@@ -533,9 +669,11 @@ out_pty:
         h->pty.child = -1;
     }
 out_screen:
+    term_keys_close(&h->keys);
     term_screen_free(&h->screen);
 out_signals:
     term_signals_close();
+    free(h->tapped);
     free(h->in);
     free(h);
     return ret;

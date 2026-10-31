@@ -3,8 +3,9 @@
  * round trip from its output on a host pty, through libtsm's screen, to the
  * commands that read the screen back, and from the commands to its input.
  *
- * host-deps: term/pty.c term/screen.c term/host.c term/draw.c term/font.c term/unifont.c
- * host-deps: term/keys.c term/select.c tests/host/compat/fixdir_host.c
+ * host-deps: term/pty.c term/screen.c term/host.c term/draw.c term/font.c
+ * host-deps: term/unifont.c term/keys.c term/keymap.c term/select.c
+ * host-deps: tests/host/compat/fixdir_host.c
  * host-deps: vendor/libtsm/libtsm-4.8.0/src/tsm/tsm-render.c
  * host-deps: vendor/libtsm/libtsm-4.8.0/src/tsm/tsm-screen.c
  * host-deps: vendor/libtsm/libtsm-4.8.0/src/tsm/tsm-selection.c
