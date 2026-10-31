@@ -35,10 +35,14 @@ Rach2 boots through Multiboot, using QEMU's
 .Fl kernel
 option, or through multiboot2 or Multiboot, using GRUB from a disk or USB
 stick by BIOS or UEFI firmware.
-GRUB starts it by multiboot2 from a GPT disk and from an ISO under UEFI,
-and by Multiboot from an MBR disk and from an ISO by BIOS.
+GRUB starts it by multiboot2 from a disk and from an ISO under UEFI,
+and by Multiboot from an ISO by BIOS.
 The kernel calls no UEFI service: it takes the firmware's framebuffer and
 memory map from GRUB, which leaves the firmware's boot services first.
+A disk booted by BIOS gives the kernel a framebuffer in the mode the video
+BIOS prefers, and its menu entry
+.Dq Start Rach2 in text mode
+gives it the VGA's text mode instead.
 The test, os-simple, os-real, and recovery images use a KRFFS root in memory.
 A disk root is a KRFFS or ext2 partition, selected by identity with
 .Ql rach2.root=

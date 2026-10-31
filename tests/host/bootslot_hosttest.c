@@ -91,7 +91,7 @@ static void put32(uint8_t *out, uint32_t value)
  * Build in `kernel` an i386 kernel the checks take: an ELF32 executable
  * with one load of the whole file at 1 MiB, entered at 1 MiB; a Multiboot
  * header at offset 96 with the flags ALIGN|MEMINFO; the multiboot2 header
- * the GPT menu loads by at offset 112, with only its end tag; a pattern in
+ * the disk menus load by at offset 112, with only its end tag; a pattern in
  * the rest; and the read-write policy banner at offset 200. An image
  * without a banner names no policy, and the check refuses it.
  */
@@ -234,7 +234,7 @@ static void check_kludge(void)
           "a Multiboot header that ends past the 8192 bytes the slot checks read is refused");
 }
 
-/** Check that the multiboot2 header the GPT menu loads by is required and
+/** Check that the multiboot2 header the disk menus load by is required and
  * judged: its tags, and an x86-64 kernel's load from them. */
 static void check_multiboot2(void)
 {

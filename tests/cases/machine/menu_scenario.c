@@ -43,8 +43,11 @@
 
 /* The titles of the whole menu in the order of their numbers: the stub's
  * three, then the two staged. */
-static const char *const titles[] = {"Start Rach2", "Start Rach2 with the previous kernel",
-                                     "Start the Rach2 recovery system (not yet built)", "stagedone",
+static const char *const titles[] = {"Start Rach2",
+                                     "Start Rach2 with the previous kernel",
+                                     "Start the Rach2 recovery system (not yet built)",
+                                     "Start Rach2 in text mode",
+                                     "stagedone",
                                      "stagedtwo"};
 
 /* What one attempt shares among its steps. */

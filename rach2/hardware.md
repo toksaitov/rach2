@@ -24,7 +24,7 @@ The interrupt controllers are the 8259 pair and, where the MADT lists one, the I
 ## Firmware and loaders
 
 * BIOS, and 64-bit UEFI firmware. GRUB's UEFI image is `x86_64-efi`, and it loads either kernel; the kernel calls no UEFI service ([GRUB boot images](../vendor/grub/Readme.md)).
-* Multiboot, from QEMU's `-kernel` and from GRUB on an MBR disk or an ISO's El Torito image; multiboot2, from GRUB on a GPT disk and under UEFI ([the kernel's Readme](Readme.md)).
+* Multiboot, from QEMU's `-kernel` and from GRUB on an ISO's El Torito image; multiboot2, from GRUB on a disk and under UEFI ([the kernel's Readme](Readme.md)).
 * ACPI: the MADT, FADT, HPET table, MCFG and the DSDT's `\_S5`, which the kernel reads itself, and the whole namespace through ACPICA, which takes the SCI and logs the power button; the lid and thermal events are not handled. SMBIOS: the BIOS vendor alone. They are described in [the PC platform](sys/arch/x86/Readme.md), [ACPI](sys/acpi/Readme.md) and [acpi(4)](../man/man4/acpi.4).
 * Power off writes ACPI's `\_S5` sleep type where the firmware's tables give it, then the chipset's own register on the chipsets below. Restart tries the FADT's reset register, the reset command of an Insyde firmware at port 0xB2, port 0xCF9 and the 8042's reset line, in that order.
 

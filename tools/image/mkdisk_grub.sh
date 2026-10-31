@@ -35,10 +35,9 @@
 # BIOS -> MBR -> GRUB -> the kernel; UEFI firmware boots
 # BOOTX64.EFI -> GRUB -> the kernel from the same disk.
 #
-# GRUB starts the kernel by multiboot2 on a GPT disk, whose BIOS core and
-# EFI image both have that loader, so that the kernel gets the firmware's
-# framebuffer and, under UEFI, its memory map. The core of an MBR disk has
-# only the Multiboot loader, and its menu uses that.
+# GRUB starts the kernel by multiboot2 on either table, since every core and
+# the EFI image have that loader, so that the kernel gets a framebuffer and,
+# under UEFI, the firmware's memory map.
 #
 # The boot partition is what an install rewrites (dev-log/23-install/plan.md):
 # /boot/kernel is the candidate, the kernel padded with zeros to a fixed
@@ -271,25 +270,28 @@ load_env
 # missing, truncated mid-write or wrong leaves these standing and the machine
 # still boots.
 #
-#   0 candidate   1 fallback   2 recovery
+#   0 candidate   1 fallback   2 recovery   3 text
 #
-# The kernel draws its console on the VGA's text mode or on a framebuffer.
-# GRUB's multiboot2 gives it a framebuffer unless `gfxpayload` says text after
-# the command that loads it: a machine booted by BIOS keeps the text mode,
-# which fills its screen, and one booted by UEFI, which has no text mode,
-# takes the firmware's framebuffer.
+# The kernel draws its console on a framebuffer when the loader gives one,
+# and on the VGA's text mode when it does not. GRUB sets the mode that
+# `gfxpayload` names when it boots the entry, and the multiboot2 command
+# rewrites that variable, so each entry sets it after the command. On BIOS,
+# `auto` asks the video BIOS (VBE) for the screen's preferred mode, which it
+# reads from the display's EDID, and GRUB falls back to text when no mode is
+# set; the text entry asks for text. A machine booted by UEFI, which has no
+# text mode, takes the firmware's framebuffer whatever the variable says.
 
 menuentry "Start Rach2" --id candidate {
     search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
     RACH2_MULTIBOOT /boot/kernel rach2.root=RACH2_CANDIDATE_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
-    if [ "$grub_platform" = pc ]; then set gfxpayload=text; fi
+    if [ "$grub_platform" = pc ]; then set gfxpayload=auto; fi
     boot
 }
 
 menuentry "Start Rach2 with the previous kernel" --id fallback {
     search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
     RACH2_MULTIBOOT /boot/fallback rach2.root=RACH2_FALLBACK_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=fallback RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
-    if [ "$grub_platform" = pc ]; then set gfxpayload=text; fi
+    if [ "$grub_platform" = pc ]; then set gfxpayload=auto; fi
     boot
 }
 
@@ -309,6 +311,16 @@ menuentry "RACH2_RECOVERY_TITLE" --id recovery {
     search --no-floppy --fs-uuid --set=root RACH2_RECOVERY_SERIAL
     RACH2_MULTIBOOT /boot/recovery rach2.root=ram rach2.boot=RACH2_BOOT_PART rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     RACH2_MODULE /boot/recovery.krffs
+    if [ "$grub_platform" = pc ]; then set gfxpayload=auto; fi
+    boot
+}
+
+# The candidate's kernel on the VGA's text mode, for a screen the graphics
+# mode does not suit and for the programs that draw in mode 13h. UEFI has no
+# text mode, so there it starts the kernel as the first entry does.
+menuentry "Start Rach2 in text mode" --id text {
+    search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
+    RACH2_MULTIBOOT /boot/kernel rach2.root=RACH2_CANDIDATE_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     if [ "$grub_platform" = pc ]; then set gfxpayload=text; fi
     boot
 }
@@ -400,13 +412,8 @@ done
 sedq() { printf '%s' "$1" | sed 's/[\\&|]/\\&/g'; }
 # A FAT serial as GRUB's `search --fs-uuid` names it: XXXX-XXXX, upper case.
 fat_uuid() { printf '%s' "$1" | tr 'a-f' 'A-F' | sed 's/^\(....\)\(....\)$/\1-\2/'; }
-if [ "$TABLE" = gpt ]; then
-    MULTIBOOT=multiboot2
-    MODULE=module2
-else
-    MULTIBOOT=multiboot
-    MODULE=module
-fi
+MULTIBOOT=multiboot2
+MODULE=module2
 RECOVERY_TITLE="Start the Rach2 recovery system (not yet built)"
 if [ -n "$RECOVERY_KERNEL" ] && [ -n "$RECOVERY_IMAGE" ]; then
     RECOVERY_TITLE="Start the Rach2 recovery system"
@@ -437,7 +444,7 @@ set default=0
 menuentry "Start the Rach2 recovery system (the boot partition does not read)" --id recovery {
     RACH2_MULTIBOOT /boot/recovery rach2.root=ram rach2.boot=RACH2_BOOT_PART rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     RACH2_MODULE /boot/recovery.krffs
-    if [ "$grub_platform" = pc ]; then set gfxpayload=text; fi
+    if [ "$grub_platform" = pc ]; then set gfxpayload=auto; fi
     boot
 }
 
