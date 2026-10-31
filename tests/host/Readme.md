@@ -40,6 +40,8 @@ Each test is one compile and one program:
 
 A test reaches the code under test in one of two ways. It names separately compiled sources on `host-deps:` lines, or it includes a `.c` file whole, which reaches the file's `static` functions and needs no `host-deps:` line for that file. Most tests do both.
 
+`libtsm_width_hosttest.c` compiles the patched libtsm sources, its replacement hash table and its wcwidth. It checks CJK and emoji at the right margin, exact fit, scrolling and scrollback, a scroll region, disabled autowrap and a one-column screen; decomposed accents on narrow and wide bases, pending wrap, attributes, redraw ages and the ten-code-point symbol limit; byte-at-a-time UTF-8 input through the VTE and alternate-screen isolation. Allocation faults cover symbol creation, hash insertion and index growth, with the base retained and a successful retry on the same table. It makes no files and starts no processes.
+
 ### The header lines
 
 A test's opening comment may have five kinds of line, which the preparation tool reads:

@@ -381,6 +381,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "libtsm_width",
+          "checks": "tests/host/libtsm_width_hosttest.c checks wide glyph wrapping, combining symbols, UTF-8 input, damage ages and allocation failures under the sanitizers",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "keymap",
           "checks": "tests/host/keymap_hosttest.c checks text-loaded layouts, compose, modifiers, locks, UTF-8 and xterm key bytes under the sanitizers",
           "source": "scenario"

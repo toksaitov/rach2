@@ -49,3 +49,7 @@ The stamp of either depends on the script, the tarball, the series, each patch a
 4. Check that `tsm-unicode.c` uses no call of the hash table that `shl-htable.h` here lacks, and that the new tree carries the LGPL nowhere else.
 5. Rebuild `term` for both architectures and the host.
 
+
+## Tests
+
+`tests/host/libtsm_width_hosttest.c`, listed as `libtsm_width` in the host suite, compiles the patched sources with the sanitizers. It checks wide wrapping, scroll regions, scrollback, combining marks and cursor positions through the public draw and VTE interfaces, and injects allocation failures while creating combined symbols. The host-test Readme describes the cases.
