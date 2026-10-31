@@ -44,14 +44,16 @@ command -v docker >/dev/null 2>&1 || {
 EMBED="$REPO/tools/image/grub-embed.cfg"
 EFI_EMBED="$REPO/tools/image/grub-efi-embed.cfg"
 # Every BIOS core can start a kernel by Multiboot and by Multiboot 2, and has
-# the video drivers that set a graphics mode through the video BIOS (VBE) or
-# a known adapter, so that a menu entry can hand the kernel a framebuffer, as
-# the EFI image does from the firmware's GOP and UGA drivers. The core for a
-# GUID-partitioned disk's BIOS boot partition reads the GUID table; the EFI
-# image reads an ISO, for a CD.
-DISK_MODULES="biosdisk part_msdos fat normal multiboot multiboot2 configfile loadenv echo test serial terminal search search_label search_fs_uuid search_fs_file vbe video video_fb all_video"
-ISO_MODULES="biosdisk iso9660 part_msdos fat normal multiboot multiboot2 configfile loadenv echo test serial terminal vbe video video_fb all_video"
-GPT_MODULES="biosdisk part_gpt part_msdos fat normal multiboot multiboot2 configfile loadenv echo test serial terminal search search_label search_fs_uuid search_fs_file vbe video video_fb all_video"
+# the driver that sets a graphics mode through the video BIOS (VBE), so that a
+# menu entry can hand the kernel a framebuffer, as the EFI image does from the
+# firmware's GOP and UGA drivers. `vbe` asks for the display's preferred mode
+# by its EDID. `all_video` is left out: its native drivers for QEMU's Bochs
+# and Cirrus adapters take precedence over `vbe` there and set 800x600 whatever
+# the display prefers. The core for a GUID-partitioned disk's BIOS boot
+# partition reads the GUID table; the EFI image reads an ISO, for a CD.
+DISK_MODULES="biosdisk part_msdos fat normal multiboot multiboot2 configfile loadenv echo test serial terminal search search_label search_fs_uuid search_fs_file vbe video video_fb"
+ISO_MODULES="biosdisk iso9660 part_msdos fat normal multiboot multiboot2 configfile loadenv echo test serial terminal vbe video video_fb"
+GPT_MODULES="biosdisk part_gpt part_msdos fat normal multiboot multiboot2 configfile loadenv echo test serial terminal search search_label search_fs_uuid search_fs_file vbe video video_fb"
 EFI_MODULES="part_gpt part_msdos fat iso9660 normal multiboot multiboot2 configfile loadenv echo test serial terminal search search_label search_fs_uuid search_fs_file efi_gop efi_uga"
 ARTIFACTS="bios-boot.img boot-hybrid.img disk-core.img disk-core-a.img disk-core-b.img eltorito.img gpt-core.img bootx64.efi"
 GRUB_PACKAGES="grub-pc-bin grub-efi-amd64-bin grub-common"

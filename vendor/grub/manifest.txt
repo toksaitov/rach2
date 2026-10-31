@@ -49,17 +49,17 @@ installed secureboot-db 1.9build1
 installed tzdata 2026c-0ubuntu0.24.04.1
 installed ucf 3.0043+nmu1
 tool grub-mkimage (GRUB) 2.12-1ubuntu7.3
-disk-modules biosdisk part_msdos fat normal multiboot multiboot2 configfile loadenv echo test serial terminal search search_label search_fs_uuid search_fs_file vbe video video_fb all_video
-iso-modules biosdisk iso9660 part_msdos fat normal multiboot multiboot2 configfile loadenv echo test serial terminal vbe video video_fb all_video
-gpt-modules biosdisk part_gpt part_msdos fat normal multiboot multiboot2 configfile loadenv echo test serial terminal search search_label search_fs_uuid search_fs_file vbe video video_fb all_video
+disk-modules biosdisk part_msdos fat normal multiboot multiboot2 configfile loadenv echo test serial terminal search search_label search_fs_uuid search_fs_file vbe video video_fb
+iso-modules biosdisk iso9660 part_msdos fat normal multiboot multiboot2 configfile loadenv echo test serial terminal vbe video video_fb
+gpt-modules biosdisk part_gpt part_msdos fat normal multiboot multiboot2 configfile loadenv echo test serial terminal search search_label search_fs_uuid search_fs_file vbe video video_fb
 efi-modules part_gpt part_msdos fat iso9660 normal multiboot multiboot2 configfile loadenv echo test serial terminal search search_label search_fs_uuid search_fs_file efi_gop efi_uga
 embed-cfg d2ff648232cad6a3a64361fb6fbed01177c93ca65d439b53d8f5edc5a79508b7
 efi-embed-cfg 0a685c968b0987d1faa634a10465993f33b808c616f10cae8bd73b9d169e0471
 artifact bios-boot.img 512 7720690bdaf25fd7e3ade7e01b8d0de91e0991653e2a6900011ab23daf6e6032
 artifact boot-hybrid.img 512 2d3027be0a695db635d0bdccaf0a5184636956a0769bb634f26429908c9cfd1d
-artifact disk-core.img 172380 38374105c70b4aa6d1843e4f5436390e11408bc24bdb1edf9b800ba30cff93e6
-artifact disk-core-a.img 172512 659c4358e7961d2eb91bbacd3222ab922acf660e16f68212f4ff359c89acb7f2
-artifact disk-core-b.img 172512 132fad45289c9852be0c0263cfbac38d3367eb2ac4aeb6b46ffabd3527beb3bd
-artifact eltorito.img 174438 113032f62faa46c185d911180190c16a8a7120a58f8c39b31935e1289ed325d2
-artifact gpt-core.img 173099 8661e726802af08d831a6ac27c028308bf39ba6fb3e13a5f5284785cbc438930
+artifact disk-core.img 168095 cab9930d3b3830e0e6a6989d1d84cde523485a7be0c28a39fb8e31e273a7abf5
+artifact disk-core-a.img 168475 5ca227794e4fffcc0bce1a4623f15f32584780b81dd4ebac7699fba11a3f4dfa
+artifact disk-core-b.img 168475 7dcf6fbe85aaa447a0c2339463dfe077d107121906c2dcf70c2ac106df509d81
+artifact eltorito.img 170464 723e1403cbe20c3a85d090dbd826462e363d1f7da9f53033e478c499b8351c60
+artifact gpt-core.img 169097 d3d0420038ea322510a0325b5c724583f51ba9cb69d13b1e663a5e8a1209c560
 artifact bootx64.efi 802816 de5fed49544290b38f07286d2f1202d5fb02e529a0fb815c216d325a99363ad0
