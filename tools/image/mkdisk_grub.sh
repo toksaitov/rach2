@@ -389,6 +389,13 @@ if [ "${next_entry}" = "recovery" ]; then
     set next_entry=
     save_env next_entry
 fi
+# One boot of the text entry, which only a host that edits the block arms;
+# bootctl does not, and nothing saves it as the default.
+if [ "${next_entry}" = "text" ]; then
+    set default=text
+    set next_entry=
+    save_env next_entry
+fi
 
 set timeout=3
 CFG
