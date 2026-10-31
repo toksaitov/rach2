@@ -1,0 +1,8 @@
+# caps-toggle.map: loaded on top of a layout of this directory: loadkeys -u LAYOUT caps-toggle.
+# Made by vendor/keymaps/regen_keymaps.sh; do not edit.
+#
+# Caps Lock switches to the other layout, and Shift+Caps Lock is Caps Lock.
+plain keycode 58 = ShiftL_Lock
+shiftl keycode 58 = ShiftL_Lock
+shift keycode 58 = Caps_Lock
+shift shiftl keycode 58 = Caps_Lock

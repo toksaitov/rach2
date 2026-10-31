@@ -1,0 +1,85 @@
+# vendor/keymaps/manifest.txt: provenance of the generated keymaps.
+# Regenerated only by regen_keymaps.sh; see vendor/keymaps/Readme.md.
+container ubuntu@sha256:d78ab76437b1afc5f01e223d6bf0172763f404bb166441328845adbef44518cb
+snapshot https://snapshot.ubuntu.com/ubuntu/20260825T013635Z
+package keyboard-configuration 1.226ubuntu1.1 deb-sha256 efd41eab2266789a7b43b2f36516860c28f19920d0c656b3cdc2647547f61330
+package xkb-data 2.41-2ubuntu1.1 deb-sha256 e99f2a0b4c56cdf35dec489e56b6a8418826cab8ce6306ec6d0bd98e2cd0014a
+package kbd 2.6.4-2ubuntu2 deb-sha256 ed05cafcbedae499a4a12ed492cc935611b8e76e0c291df3a2228b92a55a124c
+package libxkbcommon-tools 1.6.0-1build1 deb-sha256 b4e4967e04d2211149fcdd0cbf1de8326932a68ba3220a39e6b331055978186d
+package x11proto-dev 2023.2-1 deb-sha256 3bf13a2ffb79ecd4014d438936014e5863f79eb59ebf76e8f43356271c90e7ce
+installed ca-certificates 20260816ubuntu0.24.04.1
+installed console-setup 1.226ubuntu1.1
+installed console-setup-linux 1.226ubuntu1.1
+installed kbd 2.6.4-2ubuntu2
+installed keyboard-configuration 1.226ubuntu1.1
+installed libbsd0 0.12.1-1build1.1
+installed libicu74 74.2-1ubuntu3.1
+installed liblocale-gettext-perl 1.07-6ubuntu5
+installed libssl3t64 3.0.13-0ubuntu3.16
+installed libwayland-client0 1.22.0-2.1build1
+installed libxau6 1:1.0.9-1build6
+installed libxcb-xkb1 1.15-1ubuntu2
+installed libxcb1 1.15-1ubuntu2
+installed libxdmcp6 1:1.1.3-0ubuntu6
+installed libxkbcommon-tools 1.6.0-1build1
+installed libxkbcommon-x11-0 1.6.0-1build1
+installed libxkbcommon0 1.6.0-1build1
+installed libxkbregistry0 1.6.0-1build1
+installed libxml2 2.9.14+dfsg-1.3ubuntu3.8
+installed openssl 3.0.13-0ubuntu3.16
+installed x11proto-dev 2023.2-1
+installed xkb-data 2.41-2ubuntu1.1
+installed xorg-sgml-doctools 1:1.11-1.1
+layout kg us,kg -
+layout kz us,kz -
+layout ru us,ru -
+layout ua us,ua -
+layout by us,by -
+layout uz us,uz -
+layout uz-latin us,uz ,latin
+layout tj us,tj -
+layout ru-tt us,ru ,tt
+layout ru-bak us,ru ,bak
+layout az us,az -
+layout tm us,tm -
+layout md us,md -
+layout am us,am -
+layout ge us,ge -
+layout us us -
+layout gb gb -
+layout de de -
+layout fr fr -
+layout us-intl us intl
+layout us-dvorak us dvorak
+layout us-colemak us colemak
+addons alt-shift ctrl-shift caps-toggle ralt-toggle super-space caps-ctrl caps-escape
+map alt-shift.map 494 8a049b002b0232bd1cb7efb126d1b8aaabca5f8e82526d4310dcad46e375a4d8
+map am.map 6531 edbcf24ca283e1b0cd2c5521091895e6992fa7c362c59818c251a55bb44cd54b
+map az.map 1953 dab34ca744af4194a950e895ca88ee30b0178b5b09a6b3ff120c89c972af6d7e
+map by.map 5595 19bf250f5dc0fe93961075ae13c27585cd7825eae661a9eaa58f6d5e751fe9c1
+map caps-ctrl.map 1354 0cb00135c590fe035b86f2f5b2da75aad3da2dfac6e48bccd9817d25b7339886
+map caps-escape.map 1443 19246bc1b1cae0680d9234c0545bfba911f73559572558596a5930e289dd5f47
+map caps-toggle.map 358 8c71bfb5ab80b182d439d0927632ca5b582274f4d85e264ff8c8136122a48caf
+map ctrl-shift.map 584 ad83f7972ba937359f02cb875fb2da2ca6129b7b7fa54a7ab0db5e75aad0c382
+map de.map 12654 face3efaa8812fe49cfd66360bc11ff6392bde04e31a690fcf1dd987f1368832
+map fr.map 13402 3ede9139c5e985e2a45d24ac92deb682dd72e159734b4e36046f19e93e8e0270
+map gb.map 11715 c69527211b795a80c674c5e2313a6d4565105abe7f07ade0961807add77b8efd
+map ge.map 4020 7329622d4bf9bdaee5d589bd5eabced08a0214fd6b7bf843ed37541276edd7b6
+map kg.map 5725 0ad470ec0cebff34111cfd44ebf7dd54e8f7a40ddc9719fe302ae7c77847b23a
+map kz.map 6351 b547676a6c4a0ad57e28f95d8ef356ee70de154fcab945035953fb5f01e545f5
+map md.map 2639 7ee96b0cfbb489fe8dc46c7fc4f51e6ba3eaecfad827ba538cbd4a094f1b35c5
+map ralt-toggle.map 1565 d39612879fd731ff67ecd896a43078dd9cc1ceab6c42b2a2e261cbbcb8b133d3
+map ru-bak.map 6366 a1b77419bceb77d43ab6bffa72618924abbb441de21f354f0428a076802bbdca
+map ru-tt.map 5748 9f11af07a1708e6c963bd56254d4afcda836c2dd1ef1280c65be20028906cb87
+map ru.map 5599 0c14ca641f7fdb9fc67b9489f7d35bae4e70bcb9a5827057c94172e561b3e56b
+map super-space.map 667 af2251a3d970a945ff6e18541836bbc04cba1f0a48eeabff0561b8d43628ff60
+map tj.map 5985 61cb9cb42015e2c56c810b5aed908af336b7204b8c19b0858590901cbf706b73
+map tm.map 843 deb08f4167ed75e337afbe964f751930a307aa581593bd59a59c8cb71a7a95b0
+map ua.map 6084 ce929f98859b5aef8badd740e184ee69cc0fa34e4721f69fd74d82ba90d37f78
+map us-colemak.map 16091 97fed9b6c1ce554824bcd03478d3a6e340e4bdf999672505e6fe6f31a4fc00bf
+map us-dvorak.map 12384 cb6176529317d6e0bf24dbdae41c8a6fd23a628c6d81f24ae10498f953575c14
+map us-intl.map 9355 325f4f4d99dd7e8cc37b3c2289f526e4ef23449e58ba23fe4164715b6011717e
+map us.map 212 b882bdfc9b1a18f1486666f978667f7ab5433cc7167da99cf79b7b820030648e
+map uz-latin.map 300 73885a84895b9d2fa2a0cd1a09f1a6d22f184afe846a7bfcb8b5bb583932705f
+map uz.map 5589 90cbdd55fb4baa9209533e818a98a87e583f918445386c1ef568c4669a1a396b
+map common.inc 31457 c66d535472aea6de0e67bd121b7ca972feb3cb86e6aec002cb6aee5498cb2a83

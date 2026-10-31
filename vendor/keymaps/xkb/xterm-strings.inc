@@ -1,0 +1,66 @@
+# xterm-strings.inc: the function keys' strings, in xterm's sequences, which
+# every map here includes in place of Linux's console strings.
+#
+# Written by hand; regen_keymaps.sh does not change this file. ckbcomp puts
+# Shift+F1 on F13, Ctrl+F1 on F25 and Ctrl+Shift+F1 on F37, so those keys
+# send xterm's sequences with the modifier parameters 2, 5 and 6. ckbcomp
+# writes Home as Find and End as Select.
+
+string F1 = "\033OP"
+string F2 = "\033OQ"
+string F3 = "\033OR"
+string F4 = "\033OS"
+string F5 = "\033[15~"
+string F6 = "\033[17~"
+string F7 = "\033[18~"
+string F8 = "\033[19~"
+string F9 = "\033[20~"
+string F10 = "\033[21~"
+string F11 = "\033[23~"
+string F12 = "\033[24~"
+
+string F13 = "\033[1;2P"
+string F14 = "\033[1;2Q"
+string F15 = "\033[1;2R"
+string F16 = "\033[1;2S"
+string F17 = "\033[15;2~"
+string F18 = "\033[17;2~"
+string F19 = "\033[18;2~"
+string F20 = "\033[19;2~"
+string F21 = "\033[20;2~"
+string F22 = "\033[21;2~"
+string F23 = "\033[23;2~"
+string F24 = "\033[24;2~"
+
+string F25 = "\033[1;5P"
+string F26 = "\033[1;5Q"
+string F27 = "\033[1;5R"
+string F28 = "\033[1;5S"
+string F29 = "\033[15;5~"
+string F30 = "\033[17;5~"
+string F31 = "\033[18;5~"
+string F32 = "\033[19;5~"
+string F33 = "\033[20;5~"
+string F34 = "\033[21;5~"
+string F35 = "\033[23;5~"
+string F36 = "\033[24;5~"
+
+string F37 = "\033[1;6P"
+string F38 = "\033[1;6Q"
+string F39 = "\033[1;6R"
+string F40 = "\033[1;6S"
+string F41 = "\033[15;6~"
+string F42 = "\033[17;6~"
+string F43 = "\033[18;6~"
+string F44 = "\033[19;6~"
+string F45 = "\033[20;6~"
+string F46 = "\033[21;6~"
+string F47 = "\033[23;6~"
+string F48 = "\033[24;6~"
+
+string Find = "\033[H"
+string Insert = "\033[2~"
+string Remove = "\033[3~"
+string Select = "\033[F"
+string Prior = "\033[5~"
+string Next = "\033[6~"

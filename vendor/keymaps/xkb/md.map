@@ -1,0 +1,70 @@
+# md.map: XKB us,md, from xkeyboard-config 2.41-2ubuntu1.1 by ckbcomp
+# of console-setup 1.226ubuntu1.1.
+# Made by vendor/keymaps/regen_keymaps.sh; do not edit.
+keymaps 0-31
+include "common"
+altgr shiftl keycode 2 = dead_tilde
+shift altgr shiftl keycode 2 = dead_tilde
+altgr shiftl keycode 3 = dead_kcaron
+shift altgr shiftl keycode 3 = dead_kcaron
+altgr shiftl keycode 4 = dead_circumflex
+shift altgr shiftl keycode 4 = dead_circumflex
+altgr shiftl keycode 5 = dead_kbreve
+shift altgr shiftl keycode 5 = dead_kbreve
+altgr shiftl keycode 6 = dead_abovering
+shift altgr shiftl keycode 6 = dead_abovering
+altgr shiftl keycode 7 = dead_kogonek
+shift altgr shiftl keycode 7 = dead_kogonek
+altgr shiftl keycode 8 = dead_grave
+shift altgr shiftl keycode 8 = dead_grave
+altgr shiftl keycode 9 = dead_abovedot
+shift altgr shiftl keycode 9 = dead_abovedot
+altgr shiftl keycode 10 = dead_acute
+shift altgr shiftl keycode 10 = dead_acute
+altgr shiftl keycode 11 = dead_kdoubleacute
+shift altgr shiftl keycode 11 = dead_kdoubleacute
+altgr shiftl keycode 12 = dead_diaeresis
+shift altgr shiftl keycode 12 = U+2013
+altgr shiftl keycode 13 = dead_cedilla
+shift altgr shiftl keycode 13 = U+00b1
+altgr shiftl keycode 16 = +U+00e2
+shift altgr shiftl keycode 16 = +U+00c2
+altgr shiftl keycode 17 = +U+00df
+shift altgr shiftl keycode 17 = +U+1e9e
+altgr shiftl keycode 18 = U+20ac
+shift altgr shiftl keycode 18 = U+20ac
+altgr shiftl keycode 20 = +U+021b
+shift altgr shiftl keycode 20 = +U+021a
+altgr shiftl keycode 23 = +U+00ee
+shift altgr shiftl keycode 23 = +U+00ce
+altgr shiftl keycode 25 = U+00a7
+shift altgr shiftl keycode 25 = U+00a7
+altgr shiftl keycode 26 = U+201e
+shift altgr shiftl keycode 26 = U+201e
+altgr shiftl keycode 27 = U+201d
+shift altgr shiftl keycode 27 = U+201d
+altgr shiftl keycode 30 = +U+0103
+shift altgr shiftl keycode 30 = +U+0102
+altgr shiftl keycode 31 = +U+0219
+shift altgr shiftl keycode 31 = +U+0218
+altgr shiftl keycode 32 = +U+0111
+shift altgr shiftl keycode 32 = +U+0110
+altgr shiftl keycode 38 = +U+0142
+shift altgr shiftl keycode 38 = +U+0141
+altgr shiftl keycode 46 = U+00a9
+shift altgr shiftl keycode 46 = U+00a9
+altgr shiftl keycode 51 = U+00ab
+shift altgr shiftl keycode 51 = U+00ab
+altgr shiftl keycode 52 = U+00bb
+shift altgr shiftl keycode 52 = U+00bb
+altgr shiftl keycode 83 = KP_Comma
+shift altgr shiftl keycode 83 = KP_Comma
+shiftl keycode 86 = U+005c
+shift shiftl keycode 86 = U+007c
+altgr shiftl keycode 86 = U+005c
+shift altgr shiftl keycode 86 = U+007c
+shiftl keycode 100 = AltGr
+shift shiftl keycode 100 = AltGr
+altgr shiftl keycode 100 = AltGr
+shift altgr shiftl keycode 100 = AltGr
+include "xterm-strings"

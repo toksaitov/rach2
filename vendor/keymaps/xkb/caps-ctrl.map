@@ -1,0 +1,36 @@
+# caps-ctrl.map: loaded on top of a layout of this directory: loadkeys -u LAYOUT caps-ctrl.
+# Made by vendor/keymaps/regen_keymaps.sh; do not edit.
+#
+# Caps Lock is a Control key.
+plain keycode 58 = Control
+shift keycode 58 = Control
+altgr keycode 58 = Control
+shift altgr keycode 58 = Control
+control keycode 58 = Control
+shift control keycode 58 = Control
+altgr control keycode 58 = Control
+shift altgr control keycode 58 = Control
+alt keycode 58 = Control
+shift alt keycode 58 = Control
+altgr alt keycode 58 = Control
+shift altgr alt keycode 58 = Control
+control alt keycode 58 = Control
+shift control alt keycode 58 = Control
+altgr control alt keycode 58 = Control
+shift altgr control alt keycode 58 = Control
+shiftl keycode 58 = Control
+shift shiftl keycode 58 = Control
+altgr shiftl keycode 58 = Control
+shift altgr shiftl keycode 58 = Control
+control shiftl keycode 58 = Control
+shift control shiftl keycode 58 = Control
+altgr control shiftl keycode 58 = Control
+shift altgr control shiftl keycode 58 = Control
+alt shiftl keycode 58 = Control
+shift alt shiftl keycode 58 = Control
+altgr alt shiftl keycode 58 = Control
+shift altgr alt shiftl keycode 58 = Control
+control alt shiftl keycode 58 = Control
+shift control alt shiftl keycode 58 = Control
+altgr control alt shiftl keycode 58 = Control
+shift altgr control alt shiftl keycode 58 = Control

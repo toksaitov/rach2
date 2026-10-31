@@ -1,0 +1,6 @@
+# us.map: XKB us, from xkeyboard-config 2.41-2ubuntu1.1 by ckbcomp
+# of console-setup 1.226ubuntu1.1.
+# Made by vendor/keymaps/regen_keymaps.sh; do not edit.
+keymaps 0-31
+include "common"
+include "xterm-strings"

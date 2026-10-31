@@ -1,0 +1,36 @@
+# caps-escape.map: loaded on top of a layout of this directory: loadkeys -u LAYOUT caps-escape.
+# Made by vendor/keymaps/regen_keymaps.sh; do not edit.
+#
+# Caps Lock is an Escape key, Meta_Escape under Alt, as Escape is.
+plain keycode 58 = Escape
+shift keycode 58 = Escape
+altgr keycode 58 = Escape
+shift altgr keycode 58 = Escape
+control keycode 58 = Escape
+shift control keycode 58 = Escape
+altgr control keycode 58 = Escape
+shift altgr control keycode 58 = Escape
+alt keycode 58 = Meta_Escape
+shift alt keycode 58 = Meta_Escape
+altgr alt keycode 58 = Meta_Escape
+shift altgr alt keycode 58 = Meta_Escape
+control alt keycode 58 = Meta_Escape
+shift control alt keycode 58 = Meta_Escape
+altgr control alt keycode 58 = Meta_Escape
+shift altgr control alt keycode 58 = Meta_Escape
+shiftl keycode 58 = Escape
+shift shiftl keycode 58 = Escape
+altgr shiftl keycode 58 = Escape
+shift altgr shiftl keycode 58 = Escape
+control shiftl keycode 58 = Escape
+shift control shiftl keycode 58 = Escape
+altgr control shiftl keycode 58 = Escape
+shift altgr control shiftl keycode 58 = Escape
+alt shiftl keycode 58 = Meta_Escape
+shift alt shiftl keycode 58 = Meta_Escape
+altgr alt shiftl keycode 58 = Meta_Escape
+shift altgr alt shiftl keycode 58 = Meta_Escape
+control alt shiftl keycode 58 = Meta_Escape
+shift control alt shiftl keycode 58 = Meta_Escape
+altgr control alt shiftl keycode 58 = Meta_Escape
+shift altgr control alt shiftl keycode 58 = Meta_Escape

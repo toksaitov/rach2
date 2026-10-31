@@ -1,0 +1,26 @@
+# tm.map: XKB us,tm, from xkeyboard-config 2.41-2ubuntu1.1 by ckbcomp
+# of console-setup 1.226ubuntu1.1.
+# Made by vendor/keymaps/regen_keymaps.sh; do not edit.
+keymaps 0-31
+include "common"
+shiftl keycode 16 = +U+00e4
+shift shiftl keycode 16 = +U+00c4
+shiftl keycode 26 = +U+0148
+shift shiftl keycode 26 = +U+0147
+shiftl keycode 27 = +U+00f6
+shift shiftl keycode 27 = +U+00d6
+shiftl keycode 41 = +U+017e
+shift shiftl keycode 41 = +U+017d
+shiftl keycode 43 = +U+015f
+shift shiftl keycode 43 = +U+015e
+shiftl keycode 45 = +U+00fc
+shift shiftl keycode 45 = +U+00dc
+shiftl keycode 46 = +U+00e7
+shift shiftl keycode 46 = +U+00c7
+shiftl keycode 47 = +U+00fd
+shift shiftl keycode 47 = +U+00dd
+shiftl keycode 100 = AltGr
+shift shiftl keycode 100 = AltGr
+altgr shiftl keycode 100 = AltGr
+shift altgr shiftl keycode 100 = AltGr
+include "xterm-strings"

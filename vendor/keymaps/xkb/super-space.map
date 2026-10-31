@@ -1,0 +1,17 @@
+# super-space.map: loaded on top of a layout of this directory: loadkeys -u LAYOUT super-space.
+# Made by vendor/keymaps/regen_keymaps.sh; do not edit.
+#
+# Either Super, pressed first, holds CtrlL, which no other key uses, and
+# Space under it switches to the other layout. Super with any other key
+# types nothing, and Super after another modifier stays Alt.
+keymaps 64,80
+plain keycode 125 = CtrlL
+plain keycode 126 = CtrlL
+shiftl keycode 125 = CtrlL
+shiftl keycode 126 = CtrlL
+ctrll keycode 125 = CtrlL
+ctrll keycode 126 = CtrlL
+shiftl ctrll keycode 125 = CtrlL
+shiftl ctrll keycode 126 = CtrlL
+ctrll keycode 57 = ShiftL_Lock
+shiftl ctrll keycode 57 = ShiftL_Lock
