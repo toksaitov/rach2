@@ -2,7 +2,7 @@
  * Host test of a terminal's waits and wakeups, in tty/tty.c, tty/pty.c and
  * proc/wait_queue.c, over the kernel's line discipline.
  *
- * host-deps: rach2/sys/tty/n_tty.c
+ * host-deps: rach2/sys/tty/n_tty.c rach2/sys/wcwidth.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * The test's `schedule` runs a producer only after the consumer has blocked,

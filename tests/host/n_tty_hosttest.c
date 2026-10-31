@@ -1,9 +1,10 @@
 /**
  * n_tty_hosttest.c: the N_TTY line discipline (`tty/n_tty.c`).
  *
- * host-deps: rach2/sys/tty/n_tty.c
+ * host-deps: rach2/sys/tty/n_tty.c rach2/sys/wcwidth.c
  *
- * The cooked line editor (ERASE, WERASE and KILL with ECHOE's rub-out, and
+ * The cooked line editor (ERASE, WERASE and KILL with ECHOE's rub-out, a
+ * whole UTF-8 character under IUTF8 rubbed out by its width, and
  * the rules by which VEOF and a newline end a line), raw mode's VMIN and
  * VTIME, the
  * recognition of ISIG's control characters, and the OPOST and ONLCR mapping
@@ -190,6 +191,119 @@ static void default_cflag(void)
     }
 }
 
+/** Whether the line under edit is the `n` bytes of `want`. */
+static int line_is(const struct n_tty *t, const char *want, int n)
+{
+    int i;
+
+    if (t->line_len != n) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        if (t->line[i] != (unsigned char)want[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** Report a failed erase check `what` on stderr and count it. */
+static void erase_fail(const char *what)
+{
+    dprintf(2, "n-tty-test: fail: %s\n", what);
+    fails++;
+}
+
+/**
+ * Under IUTF8, which a new terminal has, ERASE removes a whole UTF-8
+ * character and rubs out as many cells as the console drew it in: one for a
+ * Cyrillic letter, two for a CJK character or an emoji, and none for a
+ * combining mark, which leaves its base. Without IUTF8 it removes one byte.
+ * Bytes that end in no whole sequence go one at a time. A control character
+ * echoed as `^X` under ECHOCTL takes two cells. WERASE and KILL remove whole
+ * characters too.
+ */
+static void utf8_erase(void)
+{
+    struct n_tty t;
+    struct cap cp;
+    unsigned char erase;
+
+    n_tty_init(&t);
+    if (!(t.tio.c_iflag & IUTF8)) {
+        erase_fail("a new terminal lacks IUTF8");
+    }
+    erase = t.tio.c_cc[VERASE];
+
+    cap_reset(&cp);
+    feed_str(&t, &cp, "a\320\264");
+    cap_reset(&cp);
+    feed(&t, &cp, erase);
+    if (!line_is(&t, "a", 1) || !cap_is(&cp, "\b \b", 3)) {
+        erase_fail("a Cyrillic letter is not erased whole in one cell");
+    }
+
+    cap_reset(&cp);
+    feed_str(&t, &cp, "\344\275\240");
+    cap_reset(&cp);
+    feed(&t, &cp, erase);
+    if (!line_is(&t, "a", 1) || !cap_is(&cp, "\b \b\b \b", 6)) {
+        erase_fail("a CJK character is not erased whole in two cells");
+    }
+
+    cap_reset(&cp);
+    feed_str(&t, &cp, "\360\237\232\200");
+    cap_reset(&cp);
+    feed(&t, &cp, erase);
+    if (!line_is(&t, "a", 1) || !cap_is(&cp, "\b \b\b \b", 6)) {
+        erase_fail("an emoji is not erased whole in two cells");
+    }
+
+    cap_reset(&cp);
+    feed_str(&t, &cp, "e\314\201");
+    cap_reset(&cp);
+    feed(&t, &cp, erase);
+    if (!line_is(&t, "ae", 2) || cp.len != 0) {
+        erase_fail("a combining mark is not erased alone with no rub-out");
+    }
+
+    n_tty_init(&t);
+    cap_reset(&cp);
+    feed_str(&t, &cp, "a\240\240");
+    feed(&t, &cp, erase);
+    if (!line_is(&t, "a\240", 2)) {
+        erase_fail("a stray continuation byte is not erased alone");
+    }
+
+    n_tty_init(&t);
+    t.tio.c_iflag &= ~(unsigned int)IUTF8;
+    feed_str(&t, &cp, "a\320\264");
+    feed(&t, &cp, erase);
+    if (!line_is(&t, "a\320", 2)) {
+        erase_fail("without IUTF8 an erase does not remove one byte");
+    }
+
+    n_tty_init(&t);
+    feed(&t, &cp, 'a');
+    feed(&t, &cp, 0x01);
+    cap_reset(&cp);
+    feed(&t, &cp, erase);
+    if (!line_is(&t, "a", 1) || !cap_is(&cp, "\b \b\b \b", 6)) {
+        erase_fail("a control character's ^A is not rubbed out in two cells");
+    }
+
+    n_tty_init(&t);
+    feed_str(&t, &cp, "\320\264\320\260 \344\275\240\345\245\275");
+    feed(&t, &cp, t.tio.c_cc[VWERASE]);
+    if (!line_is(&t, "\320\264\320\260 ", 5)) {
+        erase_fail("WERASE does not remove a word of CJK characters");
+    }
+    feed(&t, &cp, t.tio.c_cc[VKILL]);
+    if (t.line_len != 0) {
+        erase_fail("KILL does not remove a line of Cyrillic letters");
+    }
+}
+
 /**
  * Run the rows; the count of failures, at most 255.
  *
@@ -227,6 +341,7 @@ int main(void)
     int n, i;
 
     default_cflag();
+    utf8_erase();
     veol_lines();
     eof_lines();
     reused_markers();

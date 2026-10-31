@@ -3,7 +3,7 @@
  *
  * host-deps: rach2/sys/lib/kfmt.c rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
- * host-deps: tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/spinlock_host.c rach2/sys/wcwidth.c
  *
  * The adapter's memory is an array here, every store to it is counted, and its
  * ports are recorded, so the rows count what each operation costs. A byte is
@@ -16,7 +16,10 @@
  * And the console's own byte path, `k_putc` and the writers over it, costs the
  * same. A byte in the last column leaves the wrap pending, as the terminfo's
  * xenl says: a full last row does not scroll, which tmux's status line needs.
- * The driver and the console are included whole to reach their state.
+ * Every glyph of the coding agents' recorded interfaces has a stand-in, a
+ * wide character takes two cells and a combining mark none, and the console
+ * keeps the cursor and keypad modes. The driver and the console are included
+ * whole to reach their state.
  */
 #include "lib/kint.h"
 
@@ -544,6 +547,186 @@ static void row_wrap(void)
           "a cursor move cancels the wrap");
 }
 
+/** Write Unicode value `code` through the console as UTF-8. */
+static void put_code(uint32_t code)
+{
+    if (code < 0x80) {
+        k_putc((char)code);
+    } else if (code < 0x800) {
+        k_putc((char)(0xC0 | (code >> 6)));
+        k_putc((char)(0x80 | (code & 0x3F)));
+    } else if (code < 0x10000) {
+        k_putc((char)(0xE0 | (code >> 12)));
+        k_putc((char)(0x80 | ((code >> 6) & 0x3F)));
+        k_putc((char)(0x80 | (code & 0x3F)));
+    } else {
+        k_putc((char)(0xF0 | (code >> 18)));
+        k_putc((char)(0x80 | ((code >> 12) & 0x3F)));
+        k_putc((char)(0x80 | ((code >> 6) & 0x3F)));
+        k_putc((char)(0x80 | (code & 0x3F)));
+    }
+}
+
+/** The character of the font in use that draws Unicode value `code`, 0 when
+ * it has none. */
+static unsigned int font_char(uint32_t code)
+{
+    unsigned int i;
+
+    for (i = 0; i < 128; i++) {
+        if (vt_font[i] == code) {
+            return 0x80 + i;
+        }
+    }
+    return 0;
+}
+
+/* The glyphs of Claude Code's interface in tests/fixtures/agents/, with
+ * those the plan names for the other agents: their marks, spinners, menus'
+ * pointers, the corner under a tool's call and the logo's blocks. */
+static const uint32_t agent_glyphs[] = {
+    0x00A0, 0x00B7, 0x2022, 0x2026, 0x203A, 0x2190, 0x2192, 0x2193, 0x23BF, 0x23F5, 0x23FA,
+    0x2500, 0x2580, 0x2588, 0x2590, 0x2594, 0x259B, 0x259C, 0x259D, 0x25CB, 0x25CF, 0x25D0,
+    0x25D1, 0x2705, 0x2713, 0x2714, 0x2717, 0x2718, 0x2722, 0x2733, 0x2736, 0x273B, 0x273D,
+    0x276F, 0x2800, 0x2807, 0x280B, 0x2819, 0x28FF, 0x2581, 0x2596, 0x2597, 0x2598, 0x2599,
+    0x259A, 0x259E, 0x259F, 0x256D, 0x256E, 0x256F, 0x2570};
+
+/**
+ * Every glyph the agents draw their own interfaces with has a stand-in in
+ * both fonts, so none is `CHAR_NON_PRINTABLE`: a bullet as the font's bullet,
+ * the spinners' stars as `*` and braille dots as `.`, the menus' pointer as
+ * `>`, the corner under a tool's call as a box corner, the logo's quadrants
+ * as the nearest half or full block, and check marks as `v`.
+ */
+static void row_stand_ins(void)
+{
+    unsigned int i, f;
+
+    font_reads_back = 1;
+    for (f = 0; f < 2; f++) {
+        k_font_init();
+        if (f == 1) {
+            vt_font = vt_cp437;
+        }
+        for (i = 0; i < sizeof agent_glyphs / sizeof agent_glyphs[0]; i++) {
+            k_cls();
+            put_code(agent_glyphs[i]);
+            if ((vram[0] & 0xFF) == '?') {
+                printf("vga-text-test: fail: U+%04X has no stand-in in font %u\n",
+                       (unsigned)agent_glyphs[i], f);
+                failures++;
+            }
+        }
+        k_cls();
+        put_code(0x25CF);
+        CHECK((vram[0] & 0xFF) == font_char(f == 0 ? 0x2022 : 0x2219),
+              "a black circle is the font's bullet");
+        put_code(0x273B);
+        put_code(0x280B);
+        put_code(0x276F);
+        CHECK((vram[1] & 0xFF) == '*' && (vram[2] & 0xFF) == '.' && (vram[3] & 0xFF) == '>',
+              "a spinner's star, a braille dot and the menus' pointer are ASCII's");
+        put_code(0x23BF);
+        put_code(0x259B);
+        put_code(0x259D);
+        put_code(0x2596);
+        CHECK((vram[4] & 0xFF) == font_char(0x2514), "the corner under a call is a box corner");
+        CHECK((vram[5] & 0xFF) == font_char(0x2588) && (vram[6] & 0xFF) == font_char(0x2580) &&
+                  (vram[7] & 0xFF) == font_char(0x2584),
+              "three quadrants are a full block and one an upper or lower half");
+        put_code(0x2714);
+        put_code(0x2718);
+        CHECK((vram[8] & 0xFF) == 'v' && (vram[9] & 0xFF) == 'x',
+              "a check mark is v and a cross x");
+        put_code(0x1F680);
+        CHECK((vram[10] & 0xFF) == '?' && (vram[11] & 0xFF) == ' ' && x == 12,
+              "an emoji with no stand-in is a '?' and a blank");
+    }
+    vt_font = vt_cp437;
+}
+
+/**
+ * The cells a character takes are the width table's: 1 for a letter, a
+ * box glyph and the agents' marks, 2 for CJK and emoji, 0 for a combining
+ * mark, a variation selector and a zero-width joiner, -1 for a control. On
+ * the screen a wide character is its glyph or a stand-in and a blank; one
+ * that would start in the last column begins the next line and leaves that
+ * column alone; one that ends in the last column leaves the wrap pending;
+ * and a combining mark draws nothing, so the row does not shift.
+ */
+static void row_widths(void)
+{
+    CHECK(k_wcwidth('a') == 1 && k_wcwidth(0x0434) == 1 && k_wcwidth(0x2500) == 1,
+          "a letter and a box glyph take one cell");
+    CHECK(k_wcwidth(0x25CF) == 1 && k_wcwidth(0x276F) == 1 && k_wcwidth(0x273B) == 1 &&
+              k_wcwidth(0x23BF) == 1 && k_wcwidth(0x2819) == 1,
+          "the agents' marks, pointer, stars, corner and braille take one cell");
+    CHECK(k_wcwidth(0x4F60) == 2 && k_wcwidth(0xAC00) == 2 && k_wcwidth(0xFF21) == 2,
+          "CJK, Hangul and full-width letters take two cells");
+    CHECK(k_wcwidth(0x1F680) == 2 && k_wcwidth(0x2705) == 2 && k_wcwidth(0x23FA) == 1,
+          "emoji take two cells, a record button one");
+    CHECK(k_wcwidth(0x0301) == 0 && k_wcwidth(0xFE0F) == 0 && k_wcwidth(0x200D) == 0 &&
+              k_wcwidth(0) == 0,
+          "a combining mark, a variation selector, a joiner and NUL take none");
+    CHECK(k_wcwidth(0x07) == -1 && k_wcwidth(0x9B) == -1, "a C0 or C1 control is -1");
+
+    k_cls();
+    put_str("a\344\275\240b");
+    CHECK((vram[0] & 0xFF) == 'a' && (vram[1] & 0xFF) == '?' && (vram[2] & 0xFF) == ' ' &&
+              (vram[3] & 0xFF) == 'b' && x == 4,
+          "a CJK character is a '?' and a blank, and what follows it is not shifted");
+    k_cls();
+    put_str("e\314\201x\342\234\205\357\270\217y");
+    CHECK((vram[0] & 0xFF) == 'e' && (vram[1] & 0xFF) == 'x' && (vram[2] & 0xFF) == 'v' &&
+              (vram[3] & 0xFF) == ' ' && (vram[4] & 0xFF) == 'y' && x == 5,
+          "a combining mark and a variation selector take no cell");
+
+    k_cls();
+    put_str("\033[1;80H#\033[1;80H");
+    put_code(0x4F60);
+    CHECK(live_cell(VGA_TEXT_COLS - 1, 0) == vga_text_make_cell('#', get_curr_color_attr()),
+          "a wide character in the last column leaves it alone");
+    CHECK(y == 1 && x == 2 && (live_cell(0, 1) & 0xFF) == '?' && (live_cell(1, 1) & 0xFF) == ' ',
+          "and begins the next line in two cells");
+    k_cls();
+    put_str("\033[1;79H");
+    put_code(0x1F680);
+    CHECK(y == 0 && x == VGA_TEXT_COLS - 1 && vt_wrap_pending,
+          "a wide character that ends in the last column leaves the wrap pending");
+    k_putc('z');
+    CHECK(y == 1 && (live_cell(0, 1) & 0xFF) == 'z', "and the next character wraps");
+}
+
+/**
+ * DECCKM, `CSI ? 1 h` and `l`, and DECKPAM and DECKPNM, `ESC =` and
+ * `ESC >`, set and reset the key modes `kio_key_modes` gives, among other
+ * private modes in one sequence too; `ESC c` resets both; none draws a cell,
+ * and a private sequence with another marker changes no mode. SO and SI,
+ * which Claude Code writes after `ESC ( B`, draw nothing either.
+ */
+static void row_modes(void)
+{
+    put_str("\033c");
+    CHECK(kio_key_modes() == 0, "the modes are off after a reset");
+    stores = 0;
+    put_str("\033[?1h");
+    CHECK(kio_key_modes() == KM_MODE_CURSOR, "CSI ? 1 h sets the cursor mode");
+    put_str("\033=");
+    CHECK(kio_key_modes() == (KM_MODE_CURSOR | KM_MODE_KEYPAD), "ESC = sets the keypad mode");
+    put_str("\033[?1l");
+    CHECK(kio_key_modes() == KM_MODE_KEYPAD, "CSI ? 1 l resets the cursor mode");
+    put_str("\033>");
+    CHECK(kio_key_modes() == 0, "ESC > resets the keypad mode");
+    put_str("\033[?25;1;2004h");
+    CHECK(kio_key_modes() == KM_MODE_CURSOR, "the cursor mode is set among other modes");
+    put_str("\033[>1l\033[1l");
+    CHECK(kio_key_modes() == KM_MODE_CURSOR, "another marker, or none, changes no mode");
+    put_str("\033(B\017\016");
+    CHECK(stores == 0, "the modes, SO and SI draw nothing");
+    put_str("\033=\033c");
+    CHECK(kio_key_modes() == 0, "ESC c resets both modes");
+}
+
 /** Run the rows: 0 when every check passes, 1 otherwise. */
 int main(void)
 {
@@ -559,6 +742,9 @@ int main(void)
     row_graphics();
     row_release_echo();
     row_wrap();
+    row_stand_ins();
+    row_widths();
+    row_modes();
     if (failures) {
         printf("vga-text-test: %d failure(s)\n", failures);
         return 1;
