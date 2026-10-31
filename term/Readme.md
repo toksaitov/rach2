@@ -58,7 +58,7 @@ A command that fails answers `error` and what went wrong. `wait` and `exit` hold
 | Keys | `keys.c` | the console's keyboard through its keymap |
 | Host mode | `host.c` | `term -H` |
 
-`draw.c`, `font.c` and `keys.c` are stubs whose calls fail with ENOSYS, and `select.c`'s selection mode is never on.
+`keys.c` is a stub whose calls fail with ENOSYS, and `select.c`'s selection mode is never on.
 
 ## Design
 
@@ -76,7 +76,15 @@ The screen. `screen.c` makes every call into libtsm but drawing's `tsm_screen_dr
 
 ### Drawing
 
-Task 17 writes this section.
+`font.c` reads the packed Unifont of [`unifont.h`](unifont.h), installed as `/usr/share/term/unifont.font` (`TERM_FONT_PATH`), whole into memory, about 3.7 MB, and checks it with `unifont_open`. The font is drawn at a scale of 1 or 2: a cell is 8 by 16 pixels or 16 by 32, so the Lenovo's 1366 by 768 screen has 170 by 48 cells or 85 by 24, and the pixels left past the last cell are black. `/etc/term.conf` keeps the scale on a line `font-scale=1` or `font-scale=2`. `term_draw_rescale` changes it: it gives libtsm and the pty the new size in cells, which sends the child SIGWINCH, draws every cell again, and rewrites the line, keeping the file's other lines, through a file `/etc/term.conf.new` renamed over it.
+
+`term_draw_open` opens `/fb` close-on-exec, reads the framebuffer with FB_GETINFO and enters its native mode with FB_MODE_NATIVE ([`<rach2/fb.h>`](../rach2/include/rach2/fb.h)); it takes RGB at 15, 16, 24 or 32 bits a pixel, with each channel where FB_GETINFO puts it, and refuses anything else with ENODEV. Frames are drawn into a back buffer in RAM of the framebuffer's own layout, so that a byte's offset in it is its offset for `pwrite`. `term_draw_init` does the same on any descriptor, which is how the host test draws into a file.
+
+`term_draw_frame` calls `tsm_screen_draw`, which reports every cell with the age of its last change, and draws only the cells newer than the last frame, the cursor's old and new cells, and every cell after a redraw, a change of scale, the bell, or a write that failed. It marks, for each row of cells, the first and last pixel column it drew. A row whose change is narrower than a quarter of the screen is written a pixel row at a time; a wider one is written as one range from its first changed byte to its last, joined with the rows beside it, since the bytes between are already on the screen; a whole frame is one `pwrite`.
+
+A cell's glyph is rendered at scale 1 and kept in a cache of 1024 glyphs, found by its code points and shape, and scaled as its pixels are written. The glyphs of the base and of each combining mark are put over each other, since `tsm_screen_draw` gives a cell all its code points; a character the font lacks is drawn as U+FFFD. Bold widens each stroke by a pixel, italic slants the rows by up to 3 pixels at the top, underline fills the glyph's last row, dim draws the foreground halfway to the background, and inverse swaps the two; blink is drawn steady. The colors are libtsm's 24-bit ones, with the palette and bold's bright colors already applied. A wide character's glyph spans its two cells: the second cell, of width 0, is drawn by drawing the first again, and a width-0 cell that a narrow character left behind is drawn empty. A glyph 16 pixels wide in a cell libtsm gives a width of 1 is cut to its left half, and so is a wide character in the last column.
+
+libtsm marks the cursor by inverting its cell; drawing undoes that and draws the shape the child chose with DECSCUSR: a block, which inverts the cell, an underline of two rows, or a bar of two columns, each doubled at 2x. The blinking shapes are drawn steady. A hidden cursor (DECTCEM) is not drawn, and while scrollback is shown the cursor moves down with the screen's rows. The bell shows every cell in inverse colors for 100 ms (`TERM_DRAW_BELL_MS`). While the child holds the screen with mode 2026 the last frame stays; after 250 ms (`TERM_DRAW_HOLD_MS`) drawing ends the hold with `term_screen_release` and draws, so a child that dies holding it does not freeze the screen. `term_draw_timeout` gives the loop the milliseconds until the bell's end or the hold's bound, when a frame is due although the child wrote nothing.
 
 ### Keys, scrollback and selection
 
@@ -84,7 +92,7 @@ Task 22 writes this section.
 
 ## Building
 
-`make term` builds `term` for the architecture `ARCH` selects, into `build/term/term` or `build/x86_64/term/term`, and the root `make` builds it too; `make term-host` builds it for the host, into `build/host/term/term`. [`mk/term.mk`](../mk/term.mk) has the rules, and [`sources.mk`](sources.mk) the one list of sources. The dialect is C99, as `libtsm.h`'s is. The Rach2 build compiles with the musl wrapper, links the architecture's `libtsm.a` before musl's `libc.a` and runs `elfcheck` on the program; the host build compiles with `HOSTCC` and `HOSTCFLAGS` and links the host's `libtsm.a`. Each object depends on the headers it includes and on its libtsm's stamp, which stages the patched `libtsm.h`.
+`make term` builds `term` for the architecture `ARCH` selects, into `build/term/term` or `build/x86_64/term/term`, and the root `make` builds it too; `make term-host` builds it for the host, into `build/host/term/term`. [`mk/term.mk`](../mk/term.mk) has the rules, and [`sources.mk`](sources.mk) the one list of sources. The dialect is C99, as `libtsm.h`'s is, and both builds find `<rach2/fb.h>` in `rach2/include`, as Doom's port does. The Rach2 build compiles with the musl wrapper, links the architecture's `libtsm.a` before musl's `libc.a` and runs `elfcheck` on the program; the host build compiles with `HOSTCC` and `HOSTCFLAGS` and links the host's `libtsm.a`. Each object depends on the headers it includes and on its libtsm's stamp, which stages the patched `libtsm.h`.
 
 ### On Rach2
 
@@ -93,6 +101,10 @@ Tasks 20 and 27 write this section.
 ## Tests
 
 [`tests/host/term_hosttest.c`](../tests/host/term_hosttest.c) runs `term -H` in a child with pipes on its standard input and output, with `sh -c` and a script as the program: the program's environment, a line sent to it, its output's colors, cursor and wide characters on the screen, the parser's reply to a cursor position report, a resize seen by `stty size`, its exit status, the hang-up at the end of standard input, a program that cannot be run, and `/etc/term.conf` with each kind of bad line. It compiles libtsm from the extracted i686 tree, as `build_libtsm.sh` does.
+
+### Drawing
+
+[`tests/host/term_draw_hosttest.c`](../tests/host/term_draw_hosttest.c) draws into a file of a framebuffer's layout, at 32, 24, 16 and 15 bits a pixel, and checks each pixel against a value it works out from the format. In place of libtsm's screen it has a model that reports its cells as `tsm_screen_draw` does, with ages, so it can check that a frame writes the cells that changed and leaves the others alone. It checks the margins, bold, italic, underline, dim and inverse, a wide character and the cell it leaves when replaced, a combining mark, U+FFFD for a missing glyph, the three cursor shapes, a hidden cursor and one moved by scrollback, the bell, mode 2026's hold and its bound, and a change of scale with the configuration file it rewrites.
 
 ### esctest2 and the Unicode tests
 
