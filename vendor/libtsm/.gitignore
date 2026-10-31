@@ -1,0 +1,7 @@
+# The extracted upstream tree and the objects: rebuildable from the pinned
+# tarball beside them.
+libtsm-*/
+obj/
+
+# The build stamp: state, not source.
+.stamp

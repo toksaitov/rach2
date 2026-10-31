@@ -71,6 +71,10 @@ DROPBEAR_STAMP = $(ARCH_VENDOR)/dropbear/.stamp
 TCC_STAMP      = $(ARCH_VENDOR)/tcc/.stamp
 PDPMAKE_STAMP  = $(ARCH_VENDOR)/pdpmake/.stamp
 E2FSPROGS_STAMP = $(ARCH_VENDOR)/e2fsprogs/.stamp
+LIBTSM_STAMP   = $(ARCH_VENDOR)/libtsm/.stamp
+# libtsm is built for the host too, for term -H (mk/term.mk); its tree and
+# stage are under build/host/, which serves both architectures.
+LIBTSM_HOST_STAMP = build/host/vendor-work/libtsm/.stamp
 LIBC_OUTPUTS_LIST = $(ARCH_VENDOR)/musl/.outputs
 TCC_OUTPUTS_LIST  = $(ARCH_VENDOR)/tcc/.outputs
 TCC_VALIDATED     = $(ARCH_VENDOR)/tcc/.validated
@@ -90,6 +94,8 @@ TCC_STAGE    = $(VENDOR_STAGE)/tcc
 DROPBEAR_STAGE = $(VENDOR_STAGE)/dropbear
 PDPMAKE_STAGE = $(VENDOR_STAGE)/pdpmake
 E2FSPROGS_STAGE = $(VENDOR_STAGE)/e2fsprogs
+LIBTSM_STAGE = $(VENDOR_STAGE)/libtsm
+LIBTSM_HOST_STAGE = build/host/vendor/libtsm
 BUSYBOX_BIN  = $(BUSYBOX_STAGE)/busybox
 BUSYBOX_SUID_BIN = $(BUSYBOX_STAGE)/busybox-suid
 DROPBEAR_BIN = $(VENDOR_STAGE)/dropbear/dropbearmulti
@@ -101,6 +107,8 @@ MKE2FS_BIN   = $(VENDOR_STAGE)/e2fsprogs/mke2fs
 TUNE2FS_BIN  = $(VENDOR_STAGE)/e2fsprogs/tune2fs
 DUMPE2FS_BIN = $(VENDOR_STAGE)/e2fsprogs/dumpe2fs
 DEBUGFS_BIN = $(VENDOR_STAGE)/e2fsprogs/debugfs
+LIBTSM_A     = $(LIBTSM_STAGE)/lib/libtsm.a
+LIBTSM_HOST_A = $(LIBTSM_HOST_STAGE)/lib/libtsm.a
 
 # The pinned source tarballs, by the names the build_*.sh scripts check by
 # SHA-256. They are named here and not found with $(wildcard), which would drop
@@ -114,6 +122,8 @@ PDPMAKE_TARBALL  = vendor/pdpmake/pdpmake-2.0.4.tgz
 PDPMAKE_PATCHES  = vendor/pdpmake/patches/0001-platform-macros.patch
 E2FSPROGS_TARBALL = vendor/e2fsprogs/e2fsprogs-1.47.4.tar.gz
 E2FSPROGS_PATCHES = vendor/e2fsprogs/patches/series $(wildcard vendor/e2fsprogs/patches/*.patch)
+LIBTSM_TARBALL   = vendor/libtsm/libtsm-4.8.0.tar.gz
+LIBTSM_PATCHES   = vendor/libtsm/patches/series $(wildcard vendor/libtsm/patches/*.patch)
 
 # The two musl artifacts consumers depend on: the installed static libc the
 # cross-compiled userland links against, at a fixed path under the install
@@ -168,7 +178,7 @@ STEP_INPUTS     = $(foreach f,$(filter-out gnu-in-copy,$^),$(if $(filter %.stamp
         isos test-iso os-simple-iso os-real-iso rach2-metal-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
         check-pdpmake check-e2fsck \
-        musl busybox dropbear tcc pdpmake e2fsprogs $(BASE_DIRS) $(FULL_DIRS)
+        musl busybox dropbear tcc pdpmake e2fsprogs libtsm libtsm-host $(BASE_DIRS) $(FULL_DIRS)
 
 # The default goal: the images, which bring in the kernel, the guest programs,
 # the vendored userland and Doom through their prerequisites, and the host
@@ -188,7 +198,7 @@ preflight:
 
 all images $(BASE_DIRS) $(FULL_DIRS): | preflight
 $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) $(PDPMAKE_STAMP) \
-    $(E2FSPROGS_STAMP): | preflight
+    $(E2FSPROGS_STAMP) $(LIBTSM_STAMP): | preflight
 
 # A name for each vendored project's stamp.
 musl: $(LIBC_STAMP)
@@ -197,6 +207,8 @@ dropbear: $(DROPBEAR_STAMP)
 tcc: $(TCC_STAMP)
 pdpmake: $(PDPMAKE_STAMP)
 e2fsprogs: $(E2FSPROGS_STAMP)
+libtsm: $(LIBTSM_STAMP)
+libtsm-host: $(LIBTSM_HOST_STAMP)
 
 include mk/dryrun.mk
 
@@ -299,6 +311,30 @@ $(E2FSPROGS_STAMP): vendor/e2fsprogs/build_e2fsprogs.sh $(VENDOR_COMMON) \
 	@test -s $(TUNE2FS_BIN) || { echo "e2fsprogs: build produced no $(TUNE2FS_BIN)" >&2; exit 1; }
 	@test -s $(DUMPE2FS_BIN) || { echo "e2fsprogs: build produced no $(DUMPE2FS_BIN)" >&2; exit 1; }
 
+# libtsm, the terminal's state machine that term links, as a static library
+# and its header, for the architecture and, by `build_libtsm.sh --host`, for
+# the host. The series and the patches are prerequisites for the reason
+# musl's are, and so is Rach2's hash table, which the script puts in place of
+# libtsm's. The host's step is keyed by the host compiler alone.
+LIBTSM_INPUTS = vendor/libtsm/build_libtsm.sh vendor/libtsm/shl-htable.c \
+                vendor/libtsm/shl-htable.h $(LIBTSM_PATCHES) $(LIBTSM_TARBALL)
+$(LIBTSM_STAMP): $(LIBTSM_INPUTS) $(VENDOR_COMMON) $(LIBC_STAMP) | $(SHA256TOOL) $(ETUDE)
+	@rm -f $@ $(LIBTSM_A)
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); \
+	    $(STEP) -n libtsm -t $@ -c $(CROSS_PREFIX)gcc $(STEP_INPUTS) -o $(LIBTSM_STAGE) \
+	        -- sh -c 'RACH2_ARCH=$(ARCH) ./vendor/libtsm/build_libtsm.sh && test -s $(LIBTSM_A)' && \
+	    echo "libtsm: result: done in $$(($$(date +%s)-t0))s"; fi
+	@test -s $(LIBTSM_A) || { echo "libtsm: build produced no $(LIBTSM_A)" >&2; exit 1; }
+
+$(LIBTSM_HOST_STAMP): $(LIBTSM_INPUTS) | $(SHA256TOOL) $(ETUDE)
+	@rm -f $@ $(LIBTSM_HOST_A)
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); \
+	    $(ETUDE) build -s '$(RACH2_STORE)' -a host -n libtsm-host -t $@ -c $(HOSTCC) \
+	        $(STEP_INPUTS) -o $(LIBTSM_HOST_STAGE) \
+	        -- sh -c 'HOSTCC=$(HOSTCC) ./vendor/libtsm/build_libtsm.sh --host && test -s $(LIBTSM_HOST_A)' && \
+	    echo "libtsm-host: result: done in $$(($$(date +%s)-t0))s"; fi
+	@test -s $(LIBTSM_HOST_A) || { echo "libtsm-host: build produced no $(LIBTSM_HOST_A)" >&2; exit 1; }
+
 # The patch manifest is a prerequisite for the reason musl's is: the script
 # applies what patches/series names, so a series edit or a patch edit makes
 # the stamp out of date.
@@ -340,6 +376,8 @@ _ := $(shell [ ! -f $(BUSYBOX_STAMP) ] || \
         for f in $(BUSYBOX_OUTPUTS); do [ -e "$$f" ] || { rm -f $(BUSYBOX_STAMP); break; }; done)
 _ := $(shell [ ! -f $(DROPBEAR_STAMP) ] || [ -s $(DROPBEAR_BIN) ] || rm -f $(DROPBEAR_STAMP))
 _ := $(shell [ ! -f $(PDPMAKE_STAMP) ] || [ -s $(PDPMAKE_BIN) ] || rm -f $(PDPMAKE_STAMP))
+_ := $(shell [ ! -f $(LIBTSM_STAMP) ] || [ -s $(LIBTSM_A) ] || rm -f $(LIBTSM_STAMP))
+_ := $(shell [ ! -f $(LIBTSM_HOST_STAMP) ] || [ -s $(LIBTSM_HOST_A) ] || rm -f $(LIBTSM_HOST_STAMP))
 _ := $(shell [ ! -f $(E2FSPROGS_STAMP) ] || { [ -s $(E2FSCK_BIN) ] && [ -s $(RESIZE2FS_BIN) ] && [ -s $(MKE2FS_BIN) ] && [ -s $(TUNE2FS_BIN) ] && [ -s $(DUMPE2FS_BIN) ]; } || rm -f $(E2FSPROGS_STAMP))
 
 # The tree lists above are tested for existence only, since musl installs
@@ -417,6 +455,8 @@ endif
 $(BUSYBOX_OUTPUTS): $(BUSYBOX_STAMP)
 $(DROPBEAR_BIN): $(DROPBEAR_STAMP)
 $(PDPMAKE_BIN): $(PDPMAKE_STAMP)
+$(LIBTSM_A): $(LIBTSM_STAMP)
+$(LIBTSM_HOST_A): $(LIBTSM_HOST_STAMP)
 $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(TUNE2FS_BIN) $(DUMPE2FS_BIN) $(DEBUGFS_BIN): $(E2FSPROGS_STAMP)
 
 # --- The component files the root rules name. Each has a rule that runs its
@@ -1692,10 +1732,12 @@ include tests/native/native.mk
 # vendor/ and its product under build/, so removing build/ alone would leave
 # the step taken as done.
 STEP_STAMPS = $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) $(PDPMAKE_STAMP) \
-              $(E2FSPROGS_STAMP) $(MTOOLS_STAMP) $(GNU_STEP_STAMPS)
+              $(E2FSPROGS_STAMP) $(LIBTSM_STAMP) $(LIBTSM_HOST_STAMP) $(MTOOLS_STAMP) \
+              $(GNU_STEP_STAMPS)
 STEP_PRODUCTS = $(LIBC_STAMP):$(LIBC_A) $(BUSYBOX_STAMP):$(BUSYBOX_BIN) \
                 $(DROPBEAR_STAMP):$(DROPBEAR_BIN) $(TCC_STAMP):$(TCC_BIN) \
                 $(PDPMAKE_STAMP):$(PDPMAKE_BIN) $(E2FSPROGS_STAMP):$(E2FSCK_BIN) \
+                $(LIBTSM_STAMP):$(LIBTSM_A) $(LIBTSM_HOST_STAMP):$(LIBTSM_HOST_A) \
                 $(MTOOLS_STAMP):$(MTOOLS_BIN)
 ifeq ($(DRY_RUN),)
 _ := $(shell $(foreach p,$(STEP_PRODUCTS),[ -s "$(lastword $(subst :, ,$(p)))" ] || \
@@ -1777,12 +1819,14 @@ clean:
 # so the two agree.
 distclean: clean
 	rm -f vendor/musl/.stamp vendor/busybox/.stamp vendor/dropbear/.stamp vendor/tcc/.stamp \
-	      vendor/pdpmake/.stamp vendor/e2fsprogs/.stamp vendor/musl/.outputs vendor/tcc/.outputs \
+	      vendor/pdpmake/.stamp vendor/e2fsprogs/.stamp vendor/libtsm/.stamp \
+	      vendor/musl/.outputs vendor/tcc/.outputs \
 	      vendor/tcc/.validated vendor/pdpmake/.validated
 	rm -rf vendor/musl/install \
 	       $(LIBC_TARBALL:.tar.gz=) $(BUSYBOX_TARBALL:.tar.bz2=) \
 	       $(DROPBEAR_TARBALL:.tar.bz2=) $(TCC_TARBALL:.tar.bz2=) \
-	       $(PDPMAKE_TARBALL:.tgz=) $(E2FSPROGS_TARBALL:.tar.gz=)
+	       $(PDPMAKE_TARBALL:.tgz=) $(E2FSPROGS_TARBALL:.tar.gz=) \
+	       $(LIBTSM_TARBALL:.tar.gz=) vendor/libtsm/obj
 	rm -rf build
 
 
