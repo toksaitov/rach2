@@ -1,4 +1,4 @@
-.Dd October 30, 2026
+.Dd November 1, 2026
 .Dt INPUT 4
 .Os
 .Sh NAME
@@ -64,7 +64,7 @@ with Linux's key code,
 .Dv KEY_A
 to
 .Dv KEY_MAX ,
-and the value 1 for a press, 0 for a release and 2 for a repeat, and
+and the value 1 for a press and 0 for a release, and
 .Dv EV_SYN
 .Dv SYN_REPORT ,
 which ends the packet.
@@ -77,6 +77,32 @@ A USB keyboard's is the key's usage in the keyboard page, 0x70004 for A.
 A key with no key code gives the
 .Dv MSC_SCAN
 alone.
+.Pp
+The keyboards repeat in software, every keyboard alike: the last key
+pressed that is not a modifier or a lock repeats 250 ms after its press and
+then every 33 ms, Linux's times, until it is released.
+A repeat is a packet of two records,
+.Dv EV_KEY
+with the value 2 and
+.Dv EV_SYN
+.Dv SYN_REPORT .
+A press of a key that is down already, which a PS/2 keyboard sends while
+the key is held, is dropped.
+When the repeat's times change, each keyboard reports the ones that
+changed as
+.Dv EV_REP
+.Dv REP_DELAY
+and
+.Dv REP_PERIOD ,
+in milliseconds; when the console's LEDs change, each keyboard reports
+those that changed as
+.Dv EV_LED
+.Dv LED_NUML ,
+.Dv LED_CAPSL
+and
+.Dv LED_SCROLLL ,
+1 for lit; each change ends with
+.Dv SYN_REPORT .
 .Pp
 Each open has a queue of its own, of 64 records.
 A read waits until a whole packet is queued and then returns as many whole
@@ -123,16 +149,30 @@ The bits of the event types the device reports,
 .Dv EV_SYN ,
 .Dv EV_KEY
 and, for a keyboard,
-.Dv EV_MSC ;
-of the keys it can report; and of its
+.Dv EV_MSC ,
+.Dv EV_LED
+and
+.Dv EV_REP ;
+of the keys it can report; of its
 .Dv EV_MSC
 codes,
-.Dv MSC_SCAN .
-The other types answer no bits.
+.Dv MSC_SCAN ;
+and of a keyboard's LEDs,
+.Dv LED_NUML ,
+.Dv LED_CAPSL
+and
+.Dv LED_SCROLLL .
+The other types answer no bits, and
+.Dv EV_REP
+answers
+.Er EINVAL ,
+as on Linux.
 .It Dv EVIOCGKEY
 The bits of the keys down now.
-.It Dv EVIOCGPROP , EVIOCGLED , EVIOCGSND , EVIOCGSW
-No bits: no device here has properties, LEDs, sounds or switches.
+.It Dv EVIOCGLED
+The bits of a keyboard's LEDs lit; none for another device.
+.It Dv EVIOCGPROP , EVIOCGSND , EVIOCGSW
+No bits: no device here has properties, sounds or switches.
 .It Dv EVIOCGRAB
 With a nonzero argument, take the device for this open alone, so that no
 other open reads its events until it gives it back, with 0, or closes.

@@ -8,7 +8,7 @@ The USB stack drives keyboards, mice, flash drives and hubs attached to xHCI hos
 
 The stack delivers:
 
-* Keystrokes as set-1 scancodes through `input_key`, the call the PS/2 keyboard driver makes, and mouse reports through `input_mouse`, into the queue the PS/2 mouse fills ([`input.h`](../input.h)). `input_mouse_found`, called when a boot mouse is configured, lets `/mouse` be opened ([`synthfs.Readme.md`](../fs/synthfs.Readme.md)).
+* Keystrokes as Linux's key codes through `input_key_event`, with each key's usage as its `MSC_SCAN`, into the input layer that the PS/2 keyboard feeds too and that repeats a held key in software, and mouse reports through `input_mouse`, into the queue the PS/2 mouse fills ([`input.h`](../input.h)). `input_mouse_found`, called when a boot mouse is configured, lets `/mouse` be opened ([`synthfs.Readme.md`](../fs/synthfs.Readme.md)).
 * A block device for each logical unit of a flash drive, with `submit` and `flush` and no `read` or `write`, since a transfer completes later, in the pump. `block/usbdisk.c` registers it as a removable disk and publishes its nodes; [`block/Readme.md`](../block/Readme.md) describes that side.
 * `/proc/usb` and the `FBK` line of `/proc/interrupts` ([`proc(5)`](../../../man/man5/proc.5)), and a link and a `uevent` per device under `/sys/bus/usb/devices`, which BusyBox's `lsusb` reads ([`sysfs(5)`](../../../man/man5/sysfs.5), [`busybox-util-linux(1)`](../../../man/man1/busybox-util-linux.1)).
 
@@ -101,7 +101,7 @@ A low- or full-speed device's translator is the nearest high-speed hub above it,
 
 A keyboard or mouse has one interrupt IN transfer outstanding, of the endpoint's packet size up to 8 bytes; each completion goes to `hid_report`, is counted in the device's record as the `reports` field of its `/proc/usb` line, and the next is queued. After a failed transfer the core quiesces the endpoint and resumes.
 
-A boot keyboard's report is 8 bytes: modifier bits, a reserved byte and six key usages. `hid.c` keeps each device's previous report and sends the difference as set-1 make and break codes, with the 0xE0 prefix for the right Ctrl and Alt, the GUI and Application keys, the arrows, the editing keys, and the keypad's Enter and slash. The table covers usages 0x04 to 0x65 and Mute, Volume Up and Volume Down, 0x7F to 0x81, which become a PS/2 keyboard's E0 20, E0 30 and E0 2E, and a usage without a code sends nothing to the console. Each keyboard is also the event device "USB keyboard N" ([input(4)](../../../man/man4/input.4)), which `hid_attach` registers when the core puts it in boot protocol and `hid_gone` takes away; every key that goes down or up, a usage without a code among them, is reported there with its usage in the keyboard page, 0x70000 and up, as its `MSC_SCAN`. A report whose key slots hold an error usage, 0x01 to 0x03, which a keyboard sends when it cannot tell which keys are down, has its modifiers read and its keys ignored, so the held keys stay down. When a keyboard goes, `hid_gone` releases every key it had down on the console's path.
+A boot keyboard's report is 8 bytes: modifier bits, a reserved byte and six key usages. `hid.c` keeps each device's previous report and sends the difference to the input layer as presses and releases of Linux's key codes, each the code `set1_keycode` gives for the usage's set-1 code, the extended form with the 0xE0 prefix for the right Ctrl and Alt, the GUI and Application keys, Print Screen and Pause, the arrows, the editing keys, and the keypad's Enter and slash. The table covers usages 0x04 to 0x65 and Mute, Volume Up and Volume Down, 0x7F to 0x81, which become a PS/2 keyboard's E0 20, E0 30 and E0 2E, and a usage without a code reaches only the event device. The input layer repeats a held key, so a USB keyboard repeats as a PS/2 one does. Each keyboard is also the event device "USB keyboard N" ([input(4)](../../../man/man4/input.4)), which `hid_attach` registers when the core puts it in boot protocol and `hid_gone` takes away; every key that goes down or up, a usage without a code among them, is reported there with its usage in the keyboard page, 0x70000 and up, as its `MSC_SCAN`. A report whose key slots hold an error usage, 0x01 to 0x03, which a keyboard sends when it cannot tell which keys are down, has its modifiers read and its keys ignored, so the held keys stay down. When a keyboard goes, `hid_gone` has the input layer release every key it had down (`input_keyboard_detach`).
 
 A keyboard's LEDs are its one output report, a byte with Num Lock in bit 0, Caps Lock in bit 1 and Scroll Lock in bit 2. At each pass the core asks `hid_led_report` whether a running keyboard's byte differs from what the input layer wants (`input_leds`); a keyboard just attached has shown nothing, so it is sent its LEDs at once. The byte goes as `SET_REPORT` (request 0x09, value 0x0200 for the Output report with ID 0, the interface's number as index) in a control transfer with a one-byte OUT data stage, one at a time on the control endpoint, which nothing else uses on a running keyboard, and `hid_led_sent` hears its outcome. A report that fails, or has not completed in 500 ms, is logged once and none is sent to that keyboard again until it is attached again, since a stall leaves the control endpoint halted and a keyboard without LEDs may refuse the request for good.
 
@@ -161,8 +161,6 @@ The disk side's limits are in [`block/Readme.md`](../block/Readme.md).
 
 * Only xHCI controllers are driven.
 * Keyboards and mice are driven through the boot protocol alone. Report descriptors are not read, so a device without a boot interface is not driven and a mouse wheel is ignored.
-* A held key does not repeat.
-* All keyboards share the input layer's one modifier state ([terminals](../tty/Readme.md)).
 * Mass storage is SCSI over Bulk-Only Transport, with 512-byte blocks. A drive that offers only UAS is not driven.
 * There are no isochronous transfers, so no USB audio or video.
 * A controller has one interrupter and one command in flight, so its devices are enumerated one at a time.
@@ -176,7 +174,7 @@ The disk side's limits are in [`block/Readme.md`](../block/Readme.md).
 
 * `usb_hosttest.c`: the core without a controller, given descriptors no device would send in buffers of exactly their length, the endpoint quiesce over a controller stub, and a keyboard's LED report.
 * `xhci_hosttest.c`: the controller driver against a model controller reached through `struct xhci_io`, from discovery and the firmware handoff to commands, transfers, interrupts and the 32-bit address path.
-* `hid_hosttest.c`: reports in, scancodes out, and the LED report.
+* `hid_hosttest.c`: reports in, key events out, and the LED report.
 * `hub_hosttest.c`: the core and the hub driver over a model of a tree of hubs.
 * `msc_hosttest.c`: the storage driver against a model stick that fails at any stage or is pulled.
 * `usb_interrupt_hosttest.c`: interrupt setup and the fallback count across controllers.
