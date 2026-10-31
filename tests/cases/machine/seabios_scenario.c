@@ -6,11 +6,11 @@
  * The first boot takes the default entry, on which GRUB sets the mode the
  * video BIOS prefers; the scenario reads the login prompt off a screen dump
  * with screentext and shows Doom's 320x200 picture scaled onto the whole
- * framebuffer. The host then arms the text entry for one boot in the copy's
- * GRUB environment block, as grub-editenv would, and the second boot shows
- * the console in 80 by 25 cells and Doom in the VGA's mode 13h. Each boot is
- * driven at the serial console as root, and every screen is judged by QMP's
- * screen dump: its size, and how many colors it has.
+ * framebuffer, and the console drawing again once the game has gone. The host then arms the text
+ * entry for one boot in the copy's GRUB environment block, as grub-editenv would, and the second
+ * boot shows the console in 80 by 25 cells and Doom in the VGA's mode 13h. Each boot is driven at
+ * the serial console as root, and every screen is judged by QMP's screen dump: its size, and how
+ * many colors it has.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,10 +38,15 @@
 #define PICTURE_COLORS 64
 
 /* The sizes in pixels of the VGA's text mode of 80 by 25 cells of 16 rows,
- * at 9 or 8 pixels a column, and of its mode 13h. */
+ * at 9 or 8 pixels a column, and of its mode 13h, whose 320x200 QEMU dumps
+ * with each pixel doubled both ways. */
 #define TEXT_HEIGHT 400
-#define MODE13_W    320
-#define MODE13_H    200
+#define MODE13_W    640
+#define MODE13_H    400
+
+/* What the line that kills the game prints at its end, the first line the
+ * console draws once the game has gone. */
+#define GONE "DOOMGONE"
 
 /* The lines typed at the root shell. Each prints a marker written with an
  * empty pair of quotes inside it, so that the line's echo is not taken for
@@ -131,11 +136,10 @@ static int line_begins(const char *text, const char *start)
     return 0;
 }
 
-/** Say whether screentext's run `r` read a line that begins with the login
- * prompt. */
-static int shows_login(const struct net_run *r)
+/** Say whether screentext's run `r` read a line that begins with `start`. */
+static int shows(const struct net_run *r, const char *start)
 {
-    return net_exited0(r) && line_begins(r->out, LOGIN);
+    return net_exited0(r) && line_begins(r->out, start);
 }
 
 /** Give the console of boot `b` from its start, from malloc. */
@@ -163,7 +167,7 @@ static void play(struct seabios *s, struct net_boot *b, const char *name, struct
     if (net_line(b, START_LINE) != ETUDE_OK || net_wait(b, FIRST_FRAME) != ETUDE_OK)
         return;
     screen(s, b, name, game, NULL);
-    net_command(b, KILL_LINE, "DOOMGONE", &gone);
+    net_command(b, KILL_LINE, GONE, &gone);
     free(gone);
     screen(s, b, after, back, text);
 }
@@ -315,7 +319,7 @@ static void framebuffer(struct seabios *s)
     net_assert(&s->u, "fb-screen", shown.width == w && shown.height == h,
                "the screen dump is %lux%lu, not the framebuffer's %lux%lu", shown.width,
                shown.height, w, h);
-    net_assert(&s->u, "fb-login", shows_login(&text),
+    net_assert(&s->u, "fb-login", shows(&text, LOGIN),
                "no line of the framebuffer console, as screentext reads it, begins %s", LOGIN);
     net_assert(&s->u, "fb-doom",
                game.width == w && game.height == h && game.colors > PICTURE_COLORS,
@@ -324,10 +328,10 @@ static void framebuffer(struct seabios *s)
                game.width, game.height, game.colors, w, h, PICTURE_COLORS);
     net_assert(&s->u, "fb-back",
                back.width == w && back.height == h && back.colors >= 0 &&
-                   back.colors <= CONSOLE_COLORS && shows_login(&after),
-               "once the game had gone the screen was %lux%lu with %ld colors, and the login"
-               " prompt was%s on it",
-               back.width, back.height, back.colors, shows_login(&after) ? "" : " not");
+                   back.colors <= CONSOLE_COLORS && shows(&after, GONE),
+               "once the game had gone the screen was %lux%lu with %ld colors, and %s line of"
+               " it began %s",
+               back.width, back.height, back.colors, shows(&after, GONE) ? "a" : "no", GONE);
     net_run_free(&text);
     net_run_free(&after);
     free(log);
@@ -378,11 +382,12 @@ static void text(struct seabios *s)
                "the screen dump is %lux%lu with %ld colors, not the text mode's 720x400 or"
                " 640x400 with at most %d",
                shown.width, shown.height, shown.colors, CONSOLE_COLORS);
-    net_assert(&s->u, "text-doom",
-               game.width == MODE13_W && game.height == MODE13_H && game.colors > PICTURE_COLORS,
-               "the screen was %lux%lu with %ld colors while the game ran, not mode 13h's %dx%d"
-               " with more than %d",
-               game.width, game.height, game.colors, MODE13_W, MODE13_H, PICTURE_COLORS);
+    net_assert(
+        &s->u, "text-doom",
+        game.width == MODE13_W && game.height == MODE13_H && game.colors > PICTURE_COLORS,
+        "the screen was %lux%lu with %ld colors while the game ran, not mode 13h's doubled %dx%d"
+        " with more than %d",
+        game.width, game.height, game.colors, MODE13_W, MODE13_H, PICTURE_COLORS);
     net_assert(&s->u, "text-back", text_screen(&back),
                "once the game had gone the screen was %lux%lu with %ld colors, not the text"
                " mode's",
