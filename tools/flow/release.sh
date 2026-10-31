@@ -800,7 +800,9 @@ windows_prepare()
         > "$state/$id.claim" 2>&1 &
     claimer=$!
     until wsl "test -e $wheld/$id.claimed" 2> /dev/null; do
+        # A claimer may touch the file and end between the two tests.
         if ! kill -0 "$claimer" 2> /dev/null; then
+            wsl "test -e $wheld/$id.claimed" 2> /dev/null && break
             echo "claim refused: $(tail -n 3 "$state/$id.claim" | tr '\n' ' ')" > "$state/$id.prepare"
             return 1
         fi
@@ -912,8 +914,11 @@ windows()
             > "$state/$id.hold" 2>&1 9>&- &
         wholder=$!
         until wsl "test -e $wheld/$id.held" 2> /dev/null; do
-            kill -0 "$wholder" 2> /dev/null ||
+            # A holder may touch the file and end between the two tests.
+            if ! kill -0 "$wholder" 2> /dev/null; then
+                wsl "test -e $wheld/$id.held" 2> /dev/null && break
                 fail windows "WSL's admission did not give the whole host: $(tail -n 3 "$state/$id.hold" | tr '\n' ' ')"
+            fi
             say "windows: prepared; waiting for WSL's tests to end"
             sleep 30
         done
