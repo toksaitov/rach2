@@ -28,6 +28,10 @@ static const char *const outside[] = {"Makefile",
 static const char *const scripts[] = {"vendor/gnu/build_host_inventory.sh",
                                       "vendor/gnu/host_checks_files.sh", NULL};
 
+/**
+ * Write each file of `names` under `repo`, its own name and then `extra`.
+ * Return 1, or 0 when a file cannot be written.
+ */
 static int write_files(const char *repo, const char *const names[], const char *extra)
 {
     for (size_t i = 0; names[i]; i++) {
@@ -62,6 +66,11 @@ static int files_under(const char *path)
     return n;
 }
 
+/**
+ * Lay out the fixture's tree in `repo`: the step's make file and scripts from
+ * the source tree, the carried and outside files, and print.mk, which prints
+ * GNU_HOST_CHECKS_SOURCES. Return 1, or 0 when a file cannot be written.
+ */
 static int repo_tree(struct fixture *f, const char *repo)
 {
     static const char *const copied[] = {"mk/gnu-host-checks.mk",
@@ -204,6 +213,12 @@ static int source_files(const char *repo)
            fx_write(bp(repo, "build/gnu-source-files"), list, used, 0644);
 }
 
+/**
+ * Check the GNU host checks' step in a fixture tree, with git and without:
+ * make's sources are the list and its scripts, the tree carries the listed
+ * files alone, and the key follows those files and no others.
+ * Return 1 when every row passes.
+ */
 int build_host_checks(struct fixture *f)
 {
     char repo[4096];
