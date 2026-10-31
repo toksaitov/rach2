@@ -11,6 +11,10 @@
 #        board.sh milestone M
 #        board.sh ready N...
 #        board.sh done
+#        board.sh finish N COMMENT
+#        board.sh card M PARENT TITLE
+#        board.sh step N progress|pass|fail TEXT
+#        board.sh check [HELD...]
 #        board.sh archive M
 #        board.sh milestones
 #
@@ -80,8 +84,27 @@
 #
 # `ready N...` sets each N Ready.
 #
-# `done` sets Done on every closed issue whose Status is not, and fails when
-# the listing of the board fails.
+# `done` sets Done on every closed issue whose Status is not, assigns every
+# closed issue that has no assignee to the account that closed it, and fails
+# when the listing of the board fails.
+#
+# `finish N COMMENT` is how a worker closes a subtask: it assigns N to this
+# account, closes N with COMMENT and sets it Done.
+#
+# `card M PARENT TITLE` files an issue TITLE in milestone M, a sub-issue of
+# PARENT unless PARENT is `-`, assigned to OWNER and put on the board in
+# Backlog, and prints its number; release.sh files the release's cards so.
+#
+# `step N progress|pass|fail TEXT` reports a release step on its card N:
+# `progress` sets it In progress, `pass` closes it with TEXT and sets it Done,
+# and `fail` comments TEXT and leaves it In progress.
+#
+# `check [HELD...]` prints a line `board: LINE` for each inconsistency of
+# the board it can see: an open task whose branch `task/N` its milestone's
+# branch already contains, an open card In progress with no assignee, or one
+# that no worker loop holds when HELD lists the issues the loops hold, a card
+# Done or closed whose state or Status disagrees, and an open milestone whose
+# cards are all closed. status.sh runs it on every check.
 #
 # `archive M` archives the cards of the closed issues of milestone M and of
 # their closed subtasks, and prints the numbers it archived; release.sh runs
@@ -479,7 +502,77 @@ done_()
         set_status "$n" Done
         printf '%s ' "$n"
     done
+    alone=$(printf '%s\n' "$board" | awk -F '\t' '$4 == "CLOSED" && $6 == "" { print $3 }')
+    for n in $alone; do
+        who=$(gh api "repos/$REPO/issues/$n" --jq '.closed_by.login // ""') || continue
+        [ -z "$who" ] || assign "$n" "$who" || echo "board: #$n: cannot assign it to $who" >&2
+    done
     echo
+}
+
+finish()
+{
+    login
+    assign "$1" "$me" &&
+        gh issue close "$1" --repo "$REPO" --comment "$2" > /dev/null &&
+        set_status "$1" Done || {
+        echo "board: #$1: cannot finish it" >&2
+        exit 1
+    }
+}
+
+card()
+{
+    n=$(gh api "repos/$REPO/issues" -f title="$3" -F milestone="$1" -f "assignees[]=$OWNER" \
+        -f body="A step of the release of milestone $1, kept by release.sh." --jq .number) || {
+        echo "board: cannot file \"$3\"" >&2
+        exit 1
+    }
+    if [ "$2" != - ]; then
+        id=$(gh api "repos/$REPO/issues/$n" --jq .id) &&
+            gh api -X POST "repos/$REPO/issues/$2/sub_issues" -F sub_issue_id="$id" > /dev/null ||
+            echo "board: #$n: cannot put it under #$2" >&2
+    fi
+    url=$(gh api "repos/$REPO/issues/$n" --jq .html_url) &&
+        gh project item-add "$BOARD" --owner "$OWNER" --url "$url" > /dev/null &&
+        set_status "$n" Backlog || echo "board: #$n: cannot put it on the board" >&2
+    echo "$n"
+}
+
+step()
+{
+    case $2 in
+        progress) set_status "$1" "In progress" ;;
+        pass)
+            gh issue close "$1" --repo "$REPO" --comment "$3" > /dev/null &&
+                set_status "$1" Done ;;
+        fail)
+            gh issue comment "$1" --repo "$REPO" --body "$3" > /dev/null &&
+                set_status "$1" "In progress" ;;
+        *) exit 2 ;;
+    esac || {
+        echo "board: #$1: cannot report the step" >&2
+        exit 1
+    }
+}
+
+check()
+{
+    read_board all
+    printf '%s\n' "$board" | awk -F '\t' -v held=" $* " '
+        NF < 12 { next }
+        $4 == "OPEN" && $2 == "Done" { print "board: #" $3 " is open but Done" }
+        $4 == "CLOSED" && $2 != "Done" { print "board: #" $3 " is closed but " ($2 == "" ? "has no Status" : $2) }
+        $4 == "OPEN" && $2 == "In progress" && $6 == "" { print "board: #" $3 " is In progress with no assignee" }
+        $4 == "OPEN" && $2 == "In progress" && held != "  " && $8 == "" && index(held, " " $3 " ") == 0 &&
+            $12 !~ /^Release milestone / { print "board: #" $3 " is In progress but no loop holds it" }
+        $8 == "" && $9 != "" && $10 == "OPEN" { cards[$9]++; if ($4 == "OPEN") open[$9]++ }
+        END { for (m in cards) if (!open[m]) print "board: milestone " m " is open but all its tasks are closed" }'
+    printf '%s\n' "$board" | awk -F '\t' '$4 == "OPEN" && $8 == "" && $11 != "" { print $3 " " $11 }' |
+        while read -r n b; do
+            s=$(gh api "repos/$REPO/compare/$b...task/$n" --jq .status 2> /dev/null) || continue
+            case $s in identical|behind) echo "board: #$n is open but $b contains task/$n" ;; esac
+        done
 }
 
 archive()
@@ -550,6 +643,10 @@ case "$1" in
     milestone) [ -n "$2" ] || exit 2; milestone "$2" ;;
     ready) [ -n "$2" ] || exit 2; board_ids=$(ids); shift; ready "$@" ;;
     done) board_ids=$(ids); done_ ;;
+    finish) [ -n "$3" ] || exit 2; board_ids=$(ids); finish "$2" "$3" ;;
+    card) [ -n "$4" ] || exit 2; board_ids=$(ids); card "$2" "$3" "$4" ;;
+    step) [ -n "$3" ] || exit 2; board_ids=$(ids); step "$2" "$3" "$4" ;;
+    check) shift; check "$@" ;;
     archive) [ -n "$2" ] || exit 2; archive "$2" ;;
     milestones) milestones ;;
     *) sed -n 's/^# Usage: /usage: /p; s/^#        /       /p' "$0" >&2; exit 2 ;;
