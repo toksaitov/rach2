@@ -232,7 +232,9 @@ static int testing_mock(const char *command)
                                                  : ev("RELEASE_TEST_WINDOWS"));
     return 0;
 }
-/** Answer the write of the Lenovo's release record as RELEASE_TEST_WRITES says. */
+
+/** Answer the write of the Lenovo's release record as RELEASE_TEST_WRITES
+ * says. */
 static int release_write(void)
 {
     FILE *f;
