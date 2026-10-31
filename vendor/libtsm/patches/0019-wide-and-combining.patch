@@ -1,0 +1,83 @@
+Wrap wide characters before the last column and retain combining marks
+
+When autowrap is enabled, wrap a character that fits the screen but not
+the remaining columns before writing it. A one-column screen retains
+the existing clipping policy, as does a screen with autowrap disabled.
+
+Append a zero-width Unicode code point to the preceding occupied cell
+in the same row through tsm_symbol_append. Follow a wide character's
+continuation cells back to its base, retain its attributes and width,
+and update its age without moving the cursor or consuming pending wrap.
+Ignore controls, invalid code points and marks with no preceding base.
+
+--- a/src/tsm/tsm-screen.c
++++ b/src/tsm/tsm-screen.c
+@@ -1095,6 +1095,44 @@
+ 		con->tab_ruler[i] = false;
+ }
+ 
++/**
++ * Append a zero-width code point to the preceding occupied cell in this row.
++ *
++ * Skip the continuation cells of a wide character and retain the base cell's
++ * attributes, width and cursor position, including a pending wrap. Ignore a
++ * mark at column zero or after an empty cell, and ignore control characters.
++ */
++static void screen_append_combining(struct tsm_screen *con, tsm_symbol_t ch)
++{
++	struct cell *cell;
++	tsm_symbol_t combined;
++	unsigned int x;
++
++	if (!con->cursor_x || con->cursor_y >= con->size_y ||
++	    ch < 0x20 || (ch >= 0x7f && ch < 0xa0) || ch > 0x10ffff ||
++	    (ch >= 0xd800 && ch <= 0xdfff))
++		return;
++
++	x = con->cursor_x;
++	if (x > con->size_x)
++		x = con->size_x;
++	--x;
++	cell = con->lines[con->cursor_y]->cells;
++	while (x && !cell[x].width)
++		--x;
++	cell += x;
++	if (!cell->width || !cell->ch)
++		return;
++
++	combined = tsm_symbol_append(con->sym_table, cell->ch, ch);
++	if (combined == cell->ch)
++		return;
++
++	screen_inc_age(con);
++	cell->ch = combined;
++	cell->age = con->age_cnt;
++}
++
+ SHL_EXPORT
+ void tsm_screen_write(struct tsm_screen *con, tsm_symbol_t ch,
+ 			  const struct tsm_screen_attr *attr)
+@@ -1105,8 +1143,10 @@
+ 		return;
+ 
+ 	len = tsm_symbol_get_width(con->sym_table, ch);
+-	if (!len)
+-		return;
++	if (!len) {
++		screen_append_combining(con, ch);
++		return;
++	}
+ 
+ 	screen_inc_age(con);
+ 
+@@ -1116,7 +1156,9 @@
+ 	else
+ 		last = con->size_y - 1;
+ 
+-	if (con->cursor_x >= con->size_x) {
++	if (con->cursor_x >= con->size_x ||
++	    ((con->flags & TSM_SCREEN_AUTO_WRAP) && len <= con->size_x &&
++	     len > con->size_x - con->cursor_x)) {
+ 		if (con->flags & TSM_SCREEN_AUTO_WRAP)
+ 			move_cursor(con, 0, con->cursor_y + 1);
+ 		else
