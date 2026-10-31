@@ -656,7 +656,7 @@ static void evdev_repeat(void)
 
     k_memset(keys, 0, sizeof(keys));
     kb = evdev_register("kb", EVDEV_BUS_I8042, 1, 1, keys);
-    evdev_describe(kb, "isa0060/serio0/input0", 1);
+    evdev_describe(kb, "isa0060/serio0/input0", EVDEV_SCAN | EVDEV_KEYBOARD);
     button = evdev_register("button", EVDEV_BUS_HOST, 0, 1, keys);
     evdev_describe(button, "LNXPWRBN/button/input0", 0);
     k_memset(&e, 0, sizeof(e));
