@@ -135,7 +135,7 @@ static void put32(uint8_t *p, uint32_t v)
  * differently from the fixture's, so an install changes the slot. It is an
  * ELF32 i386 executable with one load of the whole file at 1 MiB, entered at
  * 1 MiB; a Multiboot header at offset 96 with the flags ALIGN|MEMINFO; the
- * multiboot2 header the GPT menu loads by at offset 112, with only its end
+ * multiboot2 header the disk menus load by at offset 112, with only its end
  * tag; and, when `size` is at least 231, the read-write policy banner at
  * offset 200, without which an image names no policy and is refused.
  */

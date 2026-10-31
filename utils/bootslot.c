@@ -775,8 +775,8 @@ static int kernel_elf_class(const uint8_t *image, uint32_t present, char *err, s
 /**
  * The headers must be in the first 8192 bytes because those are what the
  * checks of an installed slot read. The Multiboot header is QEMU's and an
- * MBR menu's; flags other than the ones required change how the loader
- * reads the image. The multiboot2 header is the GPT menu's.
+ * ISO's; flags other than the ones required change how the loader reads
+ * the image. The multiboot2 header is the disk menus'.
  */
 int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t size, char *err,
                              size_t errlen)

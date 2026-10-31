@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "machine.menu.staged",
-      "behavior": "a menu staged through bootctl config adds its entries after the stub's three, a grubenv key round-trips through bootctl env and bootctl cancel removes it, the fallback number still selects the stub's own fallback entry once the candidate kernel is destroyed, a staged file torn from the host leaves the machine booting through the stub with GRUB's parse error, and the slot's extent does not move across the write",
+      "behavior": "a menu staged through bootctl config adds its entries after the stub's four, a grubenv key round-trips through bootctl env and bootctl cancel removes it, the fallback number still selects the stub's own fallback entry once the candidate kernel is destroyed, a staged file torn from the host leaves the machine booting through the stub with GRUB's parse error, and the slot's extent does not move across the write",
       "units": ["menu"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
@@ -40,7 +40,7 @@
         {"assertion_id": "corrupted", "checks": "the candidate kernel's first sector, at the extent bootctl status names, is zeroed through /dev/bootpart", "source": "scenario"},
         {"assertion_id": "staged-entries", "checks": "GRUB's menu on the next boot has both staged entries, stagedone and stagedtwo", "source": "scenario"},
         {"assertion_id": "fallback-stub", "checks": "GRUB says Falling back to 'Start Rach2 with the previous kernel', the stub's own fallback entry, with the closing quote", "source": "scenario"},
-        {"assertion_id": "menu-order", "checks": "the titles GRUB draws, each kept once in the order drawn, are the stub's three entries in the order their numbers assume and then the two staged ones", "source": "scenario"},
+        {"assertion_id": "menu-order", "checks": "the titles GRUB draws, each kept once in the order drawn, are the stub's four entries in the order their numbers assume and then the two staged ones", "source": "scenario"},
         {"assertion_id": "fallback-not-staged", "checks": "no Falling back to line of that boot names a staged entry", "source": "scenario"},
         {"assertion_id": "slot-found", "checks": "the staged menu's first entry is on the disk's copy, with the slot's 8192 bytes inside the image", "source": "scenario"},
         {"assertion_id": "torn-boots", "checks": "with the staged slot torn, the machine boots to the login prompt", "source": "scenario"},
