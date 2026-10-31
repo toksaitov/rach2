@@ -511,16 +511,17 @@ void shell_interrupt(void)
 }
 
 /**
- * Enter ends the line and Backspace erases a character, each echoed; a
- * character past the buffer's room is dropped. Before it takes a key, the
- * shell returns a scrolled-back screen to the live one.
+ * Enter, LF or CR as on serial, ends the line and Backspace erases a
+ * character, each echoed; a character past the buffer's room is dropped.
+ * Before it takes a key, the shell returns a scrolled-back screen to the
+ * live one.
  */
 void shell_input_char(char c)
 {
     if (!kernel_shell_active) {
         return;
     }
-    if (c == '\n') {
+    if (c == '\n' || c == '\r') {
         if (k_scrollback_is_active()) {
             k_scrollback_end();
         }
