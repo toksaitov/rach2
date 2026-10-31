@@ -137,7 +137,12 @@ The end run at 816f50dfe, on the testing host on 31 October, built after `make c
 * `write_files`, `repo_tree` and `build_host_checks` in build_host_checks.c have no `/**` block. Codex.
 * Files: `tests/cases/host/build_host_checks.c`, `tests/cases/machine/rehearse_fixture.sh`, `vendor/gnu/host_checks_files.sh`.
 
+### 12. The etude host tests fit the new sizing and the stored disks
+
+* collection_tools_host.c:725-727 fail: `etude prepare tools` refuses a claim under three jobs, and the expected processors and memory in collection_prepare_row predate the sizing of a GiB for each job (collection_tools.c, about line 1495). Host tests; Codex raised it.
+* etude_legacyset_hosttest.c:2691, row publish-failed, expects the next case to copy the disk again, which predates booting guests on overlays of stored objects. Host tests.
+* Files: `tests/host/compat/collection_tools_host.c`, `tests/host/etude_legacyset_hosttest.c`, and the code under test only where it is wrong.
+
 ### Set aside
 
 * Codex: `run routine-prepare` runs unobserved, so the collection's observer would not cover the preparation and observe_import.c:178 would reject its coverage. `run routine-collect` runs the preparation's vector again under its own observer before the collection (routine_sequence.c:196-206), so the coverage it imports begins before both.
-* Codex: the new sizes break collection_tools_host.c:641 and 709. The host tests' run decides it; a failure there joins this list.
