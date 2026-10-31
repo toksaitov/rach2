@@ -1,0 +1,36 @@
+# ralt-toggle.map: loaded on top of a layout of this directory: loadkeys -u LAYOUT ralt-toggle.
+# Made by vendor/keymaps/regen_keymaps.sh; do not edit.
+#
+# Right Alt switches to the other layout in every table, so it is not AltGr.
+plain keycode 100 = ShiftL_Lock
+shift keycode 100 = ShiftL_Lock
+altgr keycode 100 = ShiftL_Lock
+shift altgr keycode 100 = ShiftL_Lock
+control keycode 100 = ShiftL_Lock
+shift control keycode 100 = ShiftL_Lock
+altgr control keycode 100 = ShiftL_Lock
+shift altgr control keycode 100 = ShiftL_Lock
+alt keycode 100 = ShiftL_Lock
+shift alt keycode 100 = ShiftL_Lock
+altgr alt keycode 100 = ShiftL_Lock
+shift altgr alt keycode 100 = ShiftL_Lock
+control alt keycode 100 = ShiftL_Lock
+shift control alt keycode 100 = ShiftL_Lock
+altgr control alt keycode 100 = ShiftL_Lock
+shift altgr control alt keycode 100 = ShiftL_Lock
+shiftl keycode 100 = ShiftL_Lock
+shift shiftl keycode 100 = ShiftL_Lock
+altgr shiftl keycode 100 = ShiftL_Lock
+shift altgr shiftl keycode 100 = ShiftL_Lock
+control shiftl keycode 100 = ShiftL_Lock
+shift control shiftl keycode 100 = ShiftL_Lock
+altgr control shiftl keycode 100 = ShiftL_Lock
+shift altgr control shiftl keycode 100 = ShiftL_Lock
+alt shiftl keycode 100 = ShiftL_Lock
+shift alt shiftl keycode 100 = ShiftL_Lock
+altgr alt shiftl keycode 100 = ShiftL_Lock
+shift altgr alt shiftl keycode 100 = ShiftL_Lock
+control alt shiftl keycode 100 = ShiftL_Lock
+shift control alt shiftl keycode 100 = ShiftL_Lock
+altgr control alt shiftl keycode 100 = ShiftL_Lock
+shift altgr control alt shiftl keycode 100 = ShiftL_Lock

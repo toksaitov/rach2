@@ -1,0 +1,11 @@
+# alt-shift.map: loaded on top of a layout of this directory: loadkeys -u LAYOUT alt-shift.
+# Made by vendor/keymaps/regen_keymaps.sh; do not edit.
+#
+# Left Alt with either Shift, pressed in either order, switches to the
+# other layout; the second key toggles ShiftL_Lock and does nothing else.
+alt keycode 42 = ShiftL_Lock
+alt keycode 54 = ShiftL_Lock
+alt shiftl keycode 42 = ShiftL_Lock
+alt shiftl keycode 54 = ShiftL_Lock
+shift keycode 56 = ShiftL_Lock
+shift shiftl keycode 56 = ShiftL_Lock
