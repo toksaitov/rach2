@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -730,6 +731,46 @@ static int standin_windows_cc(int argc, char **argv)
     return status;
 }
 
+/*
+ * A compiler that watches a slot file, started as `--slot-cc PID SLOTS LOG
+ * CC ARGS`: a call for its version sends SIGUSR1 to PID, and a call that
+ * writes a file appends to LOG the process ID that holds the first slot of
+ * SLOTS, or "free". Either then runs CC with ARGS.
+ */
+static int standin_slot_cc(int argc, char **argv)
+{
+    struct flock lock;
+    char line[64];
+    int fd;
+
+    if (argc < 6)
+        return 91;
+    if (occurrences(argc, argv, "--version")) {
+        if (kill((pid_t)atol(argv[2]), SIGUSR1))
+            return 91;
+    } else if (occurrences(argc, argv, "-o")) {
+        memset(&lock, 0, sizeof(lock));
+        lock.l_type = F_WRLCK;
+        lock.l_whence = SEEK_SET;
+        lock.l_len = 1;
+        fd = open(argv[3], O_RDWR);
+        if (fd < 0 || fcntl(fd, F_GETLK, &lock)) {
+            if (fd >= 0)
+                close(fd);
+            return 91;
+        }
+        close(fd);
+        if (lock.l_type == F_UNLCK)
+            fix_format(line, sizeof(line), "free\n");
+        else
+            fix_format(line, sizeof(line), "%ld\n", (long)lock.l_pid);
+        if (pf_append_text(argv[4], line))
+            return 91;
+    }
+    execv(argv[5], argv + 5);
+    return 127;
+}
+
 /**
  * Play the command this program was started as, when it was started as one
  * of the stand-ins, and give its exit status; -1 when it was not.
@@ -744,6 +785,8 @@ int pf_standin(int argc, char **argv)
     base = base ? base + 1 : argv[0];
     if (argc >= 4 && !strcmp(argv[1], "--windows-cc"))
         return standin_windows_cc(argc, argv);
+    if (argc >= 2 && !strcmp(argv[1], "--slot-cc"))
+        return standin_slot_cc(argc, argv);
     if (!strcmp(base, "uname")) {
         if (argc == 2 && !strcmp(argv[1], "-s"))
             return puts("Linux") < 0;

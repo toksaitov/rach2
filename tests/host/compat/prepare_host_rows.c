@@ -2,14 +2,19 @@
  * The rows of etude_legacy_hosttest.c that run etude's host preparation,
  * `etude prepare -H`, on fixture trees: how it partitions the etude checks
  * and the scripts cases, how it reuses a predecessor's programs and tools,
- * how it records inputs and prepared external tools, and how it builds and
- * reuses the Windows companion programs.
+ * how it records inputs and prepared external tools, how it builds and
+ * reuses the Windows companion programs, and how it shares the slots of
+ * --slots.
  */
+#include <ctype.h>
 #include <dirent.h>
+#include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "fixdir_host.h"
@@ -870,6 +875,93 @@ static void windows_companion_reuse(void)
     pf_cleanup(work);
 }
 
+/* Set when the slot row receives SIGUSR1 or SIGCHLD. */
+static volatile sig_atomic_t slot_woken;
+
+/** Note a signal of the slot row. */
+static void slot_wake(int signal)
+{
+    (void)signal;
+    slot_woken = 1;
+}
+
+/**
+ * Check that a preparation of one job builds only while it holds a slot of
+ * --slots. This program holds the one slot until the preparation asks its
+ * compiler's version, which comes before any build, and the stand-in
+ * compiler records who holds the slot at each build: a preparation that did
+ * not wait for the slot would find it this program's or free.
+ */
+static void one_job_slot(void)
+{
+    char work[PF_PATH], tree[PF_PATH], slots[PF_PATH], builds[PF_PATH], cc[5 * PF_PATH];
+    const char *args[] = {"--jobs", "1", "--slots", slots, NULL};
+    const char *env[] = {cc, NULL};
+    struct sigaction wake, old_usr1, old_chld;
+    sigset_t block, old_mask;
+    struct flock lock;
+    char *text, *line, *end;
+    size_t count = 0, held = 0;
+    pid_t child;
+    int fd, status = -1, fails = pf_fails;
+
+    pf_scratch("slot", work);
+    fix_format(tree, sizeof(tree), "%s/tree", work);
+    fix_format(slots, sizeof(slots), "%s/slots", work);
+    fix_format(builds, sizeof(builds), "%s/builds", work);
+    pf_native_tree(tree);
+    pf_native_source(tree, "slot_hosttest.c", NULL, NULL);
+    fix_format(cc, sizeof(cc), "CC=%s --slot-cc %ld %s %s %s", pf_self, (long)getpid(), slots,
+               builds, pf_cc);
+    memset(&lock, 0, sizeof(lock));
+    lock.l_type = F_WRLCK;
+    lock.l_whence = SEEK_SET;
+    lock.l_len = 1;
+    fd = open(slots, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    PF_CHECK(fd >= 0 && !fcntl(fd, F_SETLK, &lock), "slot: this program holds the slot");
+    memset(&wake, 0, sizeof(wake));
+    wake.sa_handler = slot_wake;
+    sigemptyset(&wake.sa_mask);
+    sigemptyset(&block);
+    sigaddset(&block, SIGUSR1);
+    sigaddset(&block, SIGCHLD);
+    sigprocmask(SIG_BLOCK, &block, &old_mask);
+    sigaction(SIGUSR1, &wake, &old_usr1);
+    sigaction(SIGCHLD, &wake, &old_chld);
+    slot_woken = 0;
+    fflush(stdout);
+    child = fork();
+    if (child == 0) {
+        sigaction(SIGUSR1, &old_usr1, NULL);
+        sigaction(SIGCHLD, &old_chld, NULL);
+        sigprocmask(SIG_SETMASK, &old_mask, NULL);
+        json_free(pf_native_prepare(tree, "tests", args, env, 0, NULL));
+        fflush(stdout);
+        _exit(pf_fails != fails);
+    }
+    while (child > 0 && !slot_woken)
+        sigsuspend(&old_mask);
+    if (fd >= 0)
+        close(fd);
+    if (child > 0 && waitpid(child, &status, 0) != child)
+        status = -1;
+    sigaction(SIGUSR1, &old_usr1, NULL);
+    sigaction(SIGCHLD, &old_chld, NULL);
+    sigprocmask(SIG_SETMASK, &old_mask, NULL);
+    PF_CHECK(status == 0, "slot: the preparation passed");
+    text = pf_read(builds, NULL);
+    for (line = text; line && *line; line = *end ? end + 1 : end) {
+        end = line + strcspn(line, "\n");
+        count++;
+        held += isdigit((unsigned char)*line) && atol(line) != (long)getpid();
+    }
+    PF_CHECK(count > 0 && held == count, "slot: every build held the slot");
+    if (held != count)
+        printf("etude-prepare-test: the slot's holders at each build:\n%s", text ? text : "");
+    free(text);
+    pf_cleanup(work);
+}
+
 /** Run the host preparation rows. */
 void pf_host_rows(void)
 {
@@ -883,4 +975,5 @@ void pf_host_rows(void)
     external_git_preparation();
     shared_native_tool_reuse();
     windows_companion_reuse();
+    one_job_slot();
 }
