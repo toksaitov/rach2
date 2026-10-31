@@ -120,18 +120,24 @@ void input_cancel_repeat(void);
 
 /**
  * Light the LEDs of every keyboard, `mask` LED_SCR, LED_NUM and LED_CAP of
- * kd.h, and of a keyboard connected later. Any context: the keyboards'
- * requests go out later, from a context that may wait. It lights nothing yet.
+ * kd.h, and of a keyboard connected later. Any context: it only records the
+ * mask, and each keyboard's driver sends it from its own periodic work, the
+ * PS/2 keyboard's from the tick (`ps2kbd_tick`) and a USB keyboard's from
+ * the USB stack's step, so a change reaches the keyboards within a few ticks.
  */
 void input_set_leds(unsigned int mask);
+
+/** The LEDs every keyboard is to show, as `input_set_leds` last set them:
+ * 0, all dark, until it is called. Any context. */
+unsigned int input_leds(void);
 
 /**
  * Offer `code`, a byte the PS/2 keyboard sent, to the command waiting for the
  * keyboard's reply, such as the LEDs': ACK, 0xFA, or RESEND, 0xFE. Returns 1
  * when the byte was the reply and is consumed, and 0 when it goes on to the
  * key stream. Called by the keyboard's interrupt before the byte reaches
- * `input_set1_event`, in interrupt context. No command waits yet: it returns
- * 0.
+ * `input_set1_event`, in interrupt context. Defined by the PS/2 keyboard's
+ * driver (arch/x86/ps2kbd.c), whose commands they are.
  */
 int input_ps2_reply(uint8_t code);
 
