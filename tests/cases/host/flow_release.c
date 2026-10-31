@@ -154,6 +154,34 @@ static int gh_mock(int argc, char **argv)
     free(all);
     return status;
 }
+/**
+ * Answer a WSL command as RELEASE_TEST_HOLD says: `refused`, WSL's admission
+ * refuses the whole host; `claim`, it refuses the preparation's claim; and
+ * `wait`, the whole host's hold runs until the release ends it, or for 30 s,
+ * while no hold reports itself held.
+ */
+static int wsl_answer(int alone, int claim, int held, int claimed)
+{
+    const char *how = ev("RELEASE_TEST_HOLD");
+    if ((alone && !strcmp(how, "refused")) || (claim && !strcmp(how, "claim"))) {
+        puts("etude-launch: result: refused: admission: no room in 20400 seconds");
+        return 2;
+    }
+    if (alone && !strcmp(how, "wait")) {
+        struct timespec pause = {0, 100000000};
+        for (unsigned i = 0; i < 300; i++) {
+            char *calls = fx_read(ev("RELEASE_TEST_CALLS"));
+            int ended = calls && fx_regex(calls, "^wsl touch .*\\.end$");
+            free(calls);
+            if (ended)
+                break;
+            nanosleep(&pause, NULL);
+        }
+        return 0;
+    }
+    return (held && (!strcmp(how, "refused") || !strcmp(how, "wait"))) ||
+           (claimed && !strcmp(how, "claim"));
+}
 static int ssh_mock(int argc, char **argv)
 {
     const char *host = argc > 2 ? argv[argc - 2] : "", *command = argc > 1 ? argv[argc - 1] : "";
@@ -162,13 +190,21 @@ static int ssh_mock(int argc, char **argv)
         int windows = strstr(command, "bash.exe -l -s") != NULL;
         if (windows || strstr(command, "wsl.exe -- bash -s")) {
             char b[4096];
+            int prepare = 0, alone = 0, claim = 0, held = 0, claimed = 0;
             while (fgets(b, sizeof(b), stdin)) {
                 snprintf(line, sizeof(line), "%s %s", windows ? "windows" : "wsl", b);
                 append(ev("RELEASE_TEST_CALLS"), line);
+                prepare |= strstr(b, " run routine-prepare ") != NULL;
+                alone |= strstr(b, "etude-launch alone ") != NULL;
+                claim |= strstr(b, "etude-launch build ") != NULL;
+                held |= !strncmp(b, "test -e ", 8) && strstr(b, ".held") != NULL;
+                claimed |= !strncmp(b, "test -e ", 8) && strstr(b, ".claimed") != NULL;
             }
             if (windows)
-                puts(ev("RELEASE_TEST_WINDOWS"));
-            return 0;
+                puts(prepare && !*ev("RELEASE_TEST_PREPARE") ? "status 0"
+                     : prepare                               ? ev("RELEASE_TEST_PREPARE")
+                                                             : ev("RELEASE_TEST_WINDOWS"));
+            return windows ? 0 : wsl_answer(alone, claim, held, claimed);
         }
         snprintf(line, sizeof(line), "ssh testing %s\n", command);
         append(ev("RELEASE_TEST_CALLS"), line);
@@ -351,7 +387,7 @@ struct release {
 };
 struct release_row {
     const char *record, *sha, *writes, *runs, *git, *accept, *machines, *windows, *native,
-        *failures, *milestone, *ancestor, *master, *push, *lenovo;
+        *failures, *milestone, *ancestor, *master, *push, *lenovo, *prepare, *hold;
     int rerun;
 };
 
@@ -429,6 +465,8 @@ static void run(struct release *r, const struct release_row *spec)
     fx_env("RELEASE_TEST_MASTER", spec->master ? spec->master : "");
     fx_env("RELEASE_TEST_PUSH", spec->push ? spec->push : "");
     fx_env("RELEASE_TEST_LENOVO", spec->lenovo ? spec->lenovo : "");
+    fx_env("RELEASE_TEST_PREPARE", spec->prepare ? spec->prepare : "");
+    fx_env("RELEASE_TEST_HOLD", spec->hold ? spec->hold : "");
     if (spec->native) {
         flow_put(f, "state/wt/build/tools/dev/native-hostpeer", "");
         fx_copy(f->self, flow_path(f, "state/wt/build/tools/dev/native-deploy"));
@@ -964,6 +1002,8 @@ static int mac_rows(struct release *r)
          ok;
     return ok;
 }
+#define WINDOWS_ID   "milestone7-111111111111-windows-"
+#define WINDOWS_HELD "/mnt/d/o/" WINDOWS_ID
 static int windows_rows(struct release *r)
 {
     struct fixture *f = r->f;
@@ -974,11 +1014,25 @@ static int windows_rows(struct release *r)
     ok =
         check(r,
               f->status == 75 &&
-                  before(r, "\nwsl test -e /mnt/d/o/milestone7-111111111111-windows-",
-                         "\nwindows cd D:/w || ") &&
-                  before(r, "\nwindows cd D:/w || ",
-                         "\nwsl touch /mnt/d/o/milestone7-111111111111-windows-") &&
-                  called(r, "^wsl exec /usr/local/libexec/rach2/etude-launch alone sh -c ") &&
+                  before(r,
+                         "\nwsl cd /tmp && JOBS=30 exec /usr/local/libexec/rach2/etude-launch "
+                         "build env sh -c 'touch " WINDOWS_HELD,
+                         "\nwsl test -e " WINDOWS_HELD) &&
+                  before(r, "\nwsl test -e " WINDOWS_HELD, "\nwindows cd D:/w || ") &&
+                  called(r, "^windows .* run routine-prepare phase_first_run D:/w "
+                            "D:/o/" WINDOWS_ID "[0-9-]+ both " WINDOWS_ID "[0-9-]+ C:/s .* whpx "
+                            "all > ") &&
+                  before(r, " run routine-prepare ", "\nwsl touch " WINDOWS_HELD) &&
+                  called(r, "^wsl touch " WINDOWS_HELD "[0-9-]+\\.prepared$") &&
+                  before(r, "\nwsl touch " WINDOWS_HELD,
+                         "\nwsl exec /usr/local/libexec/rach2/etude-launch alone sh -c ") &&
+                  before(r, "\nwsl exec /usr/local/libexec/rach2/etude-launch alone sh -c ",
+                         " run routine-collect ") &&
+                  called(r, "^windows .* run routine-collect phase_first_run D:/w "
+                            "D:/o/" WINDOWS_ID "[0-9-]+ both " WINDOWS_ID "[0-9-]+ C:/s .* whpx "
+                            "all > ") &&
+                  called(r, "^wsl touch " WINDOWS_HELD "[0-9-]+\\.end$") &&
+                  !called(r, "PREPARATION_CLEAN=1") &&
                   called(r, "^git -C .* bundle create .*/state/windows.bundle "
                             "refs/remotes/origin/" BRANCH "$") &&
                   called(r, "^windows git fetch -q D:/o/release.bundle 'refs/remotes/origin/" BRANCH
@@ -986,12 +1040,9 @@ static int windows_rows(struct release *r)
                   called(r, "^scp -q -o BatchMode=yes .*/state/windows.bundle "
                             "testing:D:/o/release.bundle$") &&
                   called(r, "^windows export JOBS='30'$") &&
-                  called(r, "^windows .* run routine-sequence phase_first_run D:/w "
-                            "D:/o/milestone7-111111111111-windows-[0-9-]+ both "
-                            "milestone7-111111111111-windows-[0-9-]+ C:/s .* whpx all > ") &&
-                  count(record(r), "^windows done .* run milestone7-111111111111-windows-") == 1 &&
+                  count(record(r), "^windows done .* run " WINDOWS_ID) == 1 &&
                   called(r, "^testing "),
-              "windows runs at the commit while WSL is held, then the build") &&
+              "windows prepares under its own claim, then runs its cases while WSL is held") &&
         ok;
     run(r, &(struct release_row){.record = r->head,
                                  .git = "yes",
@@ -1008,9 +1059,58 @@ static int windows_rows(struct release *r)
     machine_line(r, "windows started ", id, sizeof(id));
     snprintf(last, sizeof(last), "failure windows %s runner", id);
     ok = check(r,
-               f->status == 1 && count(flow_path(f, "calls"), "^windows cd ") == 3 &&
+               f->status == 1 && count(flow_path(f, "calls"), " run routine-collect ") == 3 &&
+                   count(flow_path(f, "calls"), " run routine-prepare ") == 3 &&
                    fx_has(record(r), last),
                "windows run without status runs three times") &&
+         ok;
+    run(r, &(struct release_row){.record = r->head,
+                                 .git = "yes",
+                                 .machines = WINDOWS,
+                                 .prepare = "etude prepare: routine preparation failed\nstatus 2",
+                                 .windows = "status 0"});
+    machine_line(r, "windows started ", id, sizeof(id));
+    snprintf(last, sizeof(last), "failed tests: windows run %s: runner", id);
+    ok = check(r,
+               f->status == 1 && last_is(record(r), last) &&
+                   called(r, "^wsl touch " WINDOWS_HELD "[0-9-]+\\.prepared$") &&
+                   !called(r, "etude-launch alone") && !called(r, " run routine-collect "),
+               "a failed preparation ends its claim and takes no whole host") &&
+         ok;
+    run(r, &(struct release_row){.record = r->head,
+                                 .git = "yes",
+                                 .machines = WINDOWS,
+                                 .hold = "refused",
+                                 .windows = "status 0"});
+    ok = check(r,
+               f->status == 1 &&
+                   fx_has(record(r), "\nfailed windows: WSL's admission did not "
+                                     "give the whole host: etude-launch: result: "
+                                     "refused: ") &&
+                   before(r, "\nwsl touch " WINDOWS_HELD,
+                          "\nwsl exec /usr/local/libexec/rach2/etude-launch alone ") &&
+                   called(r, "^wsl touch " WINDOWS_HELD "[0-9-]+\\.end$") &&
+                   !called(r, " run routine-collect "),
+               "a whole host that WSL refuses ends the release with nothing left on Windows") &&
+         ok;
+    run(r, &(struct release_row){
+               .record = r->head, .git = "yes", .machines = WINDOWS, .hold = "claim"});
+    ok = check(r,
+               f->status == 1 &&
+                   fx_has(record(r), "\nfailed windows: WSL's admission did not give the "
+                                     "preparation's claim: etude-launch: result: refused: ") &&
+                   !called(r, "^windows ") && !called(r, "etude-launch alone"),
+               "a preparation claim that WSL refuses ends the release before Windows starts") &&
+         ok;
+    run(r, &(struct release_row){
+               .record = r->head, .git = "yes", .machines = WINDOWS, .hold = "wait"});
+    ok = check(r,
+               f->status != 0 && f->status != 1 && f->status != 75 &&
+                   called(r, "^wsl touch " WINDOWS_HELD "[0-9-]+\\.prepared$") &&
+                   called(r, "^wsl touch " WINDOWS_HELD "[0-9-]+\\.end$") &&
+                   !called(r, " run routine-collect ") && !fx_has(record(r), "\nfailed ") &&
+                   !fx_has(record(r), "\nwindows done "),
+               "a release stopped while it waits for the whole host ends its hold") &&
          ok;
     snprintf(text, sizeof(text),
              "milestone 7\nsha %s\nbranch %s\nchosen %s\ntouched %s\ndispatched "
