@@ -1201,7 +1201,7 @@ static const char col_sync[] =
     "cd /mnt/collection/tree\n"
     "if [ -f .etude-sources ]; then\n"
     "    comm -23 .etude-sources \"$ETUDE_WORK/source.list\" | while IFS= read -r name; do\n"
-    "        rm -f \"./$name\"\n"
+    "        case $name in */) ;; *) rm -f \"./$name\" ;; esac\n"
     "    done\n"
     "fi\n"
     "rsync -rc \"$ETUDE_WORK/source/\" ./\n"
