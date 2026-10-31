@@ -74,52 +74,55 @@ static int take_entry(char *line, struct entry *e)
     return 0;
 }
 
+/* A reading of a record. */
+struct reading {
+    char *tree;              /* the tree's root, from the `tree` line */
+    char *arch;              /* the `arch` line's architecture */
+    char *kernel;            /* the `kernel` line's path */
+    size_t files;            /* the artifacts compared */
+    size_t changed;          /* those changed or missing */
+    int digests;             /* compare by digest */
+    struct etude_digests *d; /* the tree's digests, once one is compared */
+    const char *override_tree;
+    FILE *out;
+};
+
 /**
  * Compare artifact `e` of the tree `tree` with the file there now, by its
- * digest when `digests` is set, taken from the tree's digests file when it
- * keeps one.
+ * digest when `rd` says so, taken from the tree's digests file when it keeps
+ * one, which `rd` reads once.
  *
  * @return 0 when it is unchanged, 1 when it changed or is missing.
  */
-static int compare(const char *tree, const struct entry *e, int digests, FILE *out)
+static int compare(struct reading *rd, const char *tree, const struct entry *e)
 {
-    char *path = etude_record_artifact_path(tree, e->path);
-    char *cache = etude_record_digests_path(tree), hex[65];
+    char *path = etude_record_artifact_path(tree, e->path), *cache, hex[65];
     struct stat st;
-    int r = path == NULL || cache == NULL ? -1
-            : digests                     ? etude_digest_file(cache, path, &st, hex)
-                                          : stat(path, &st);
-    int changed;
+    int r, changed;
 
+    if (rd->digests && rd->d == NULL && (cache = etude_record_digests_path(tree)) != NULL) {
+        rd->d = etude_digests_open(cache);
+        free(cache);
+    }
+    r = path == NULL || (rd->digests && rd->d == NULL) ? -1
+        : rd->digests                                  ? etude_digests_file(rd->d, path, &st, hex)
+                                                       : stat(path, &st);
     free(path);
-    free(cache);
     if (r != 0) {
-        fprintf(out, "etude check: missing: %s: %s\n", e->path,
+        fprintf(rd->out, "etude check: missing: %s: %s\n", e->path,
                 errno == EINVAL || errno == EISDIR ? "not a regular file" : strerror(errno));
         return 1;
     }
     changed = !S_ISREG(st.st_mode) || (unsigned long long)st.st_size != e->size;
-    if (digests)
+    if (rd->digests)
         changed = changed || strcmp(hex, e->digest) != 0;
     else
         changed = changed || (unsigned long long)st.st_ino != e->inode ||
                   etude_record_mtime_ns(&st) != e->mtime;
     if (changed)
-        fprintf(out, "etude check: changed: %s\n", e->path);
+        fprintf(rd->out, "etude check: changed: %s\n", e->path);
     return changed;
 }
-
-/* A reading of a record. */
-struct reading {
-    char *tree;     /* the tree's root, from the `tree` line */
-    char *arch;     /* the `arch` line's architecture */
-    char *kernel;   /* the `kernel` line's path */
-    size_t files;   /* the artifacts compared */
-    size_t changed; /* those changed or missing */
-    int digests;
-    const char *override_tree;
-    FILE *out;
-};
 
 /** Take line `lineno` of a record; NULL, or why the record is malformed. */
 static const char *check_line(struct reading *rd, char *line, size_t lineno)
@@ -133,8 +136,8 @@ static const char *check_line(struct reading *rd, char *line, size_t lineno)
     if (strncmp(line, "file ", 5) == 0) {
         if (rd->tree == NULL || take_entry(line, &e) != 0)
             return "a malformed file line";
-        rd->changed += (size_t)compare(rd->override_tree != NULL ? rd->override_tree : rd->tree, &e,
-                                       rd->digests, rd->out);
+        rd->changed +=
+            (size_t)compare(rd, rd->override_tree != NULL ? rd->override_tree : rd->tree, &e);
         rd->files++;
         return NULL;
     }
@@ -187,6 +190,7 @@ int etude_legacy_check_tree(const char *record, const char *tree, int digests, F
     }
     status = check_lines(f, record, &rd);
     fclose(f);
+    etude_digests_close(rd.d);
     free(rd.tree);
     free(rd.arch);
     free(rd.kernel);

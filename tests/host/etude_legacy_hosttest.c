@@ -23,7 +23,7 @@
  * host-deps: tests/host/compat/prepare_fixture.c
  * host-deps: tests/host/compat/prepare_host_rows.c
  * host-deps: tests/host/compat/prepare_import_rows.c
- * host-cflags: -I tools/etude/include -I tools/etude/posix
+ * host-cflags: -I tools/etude/include -I tools/etude/posix -pthread
  * host-cflags: -Wall -Wextra -Werror
  * host-inputs: tools/etude/host_prepare.c tools/etude/host_prepare.h
  * host-inputs: tools/etude/host_prepare_io.c tools/etude/host_prepare_build.c

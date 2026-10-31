@@ -18,6 +18,7 @@
 #ifdef _WIN32
 #include "../win/files.h"
 #else
+#include <pthread.h>
 #define ETUDE_SHELL "/bin/sh"
 #endif
 
@@ -45,6 +46,9 @@ extern char **environ;
  * of the log's end read to find them. */
 #define TAIL_LINES 20
 #define TAIL_BYTES 8192
+
+/* The most threads that read the artifacts to hash them. */
+#define HASH_THREADS 64
 
 /* A build step's output, and its errors, go to the log $1. */
 static const char script_log[] = "exec >\"$1\" 2>&1; shift; exec \"$@\"";
@@ -911,37 +915,189 @@ static void record_head(const struct prep *p, FILE *f)
         fprintf(f, "arch %s\nkernel %s\n", p->t[i].arch, p->t[i].kernel);
 }
 
+/* An artifact of the record. */
+struct artifact {
+    char *path;     /* its path, from malloc */
+    struct stat st; /* its status */
+    char hex[ETUDE_DIGEST_HEX + 1];
+    int err;  /* 0 once its digest is known, or why it is not */
+    int keep; /* its digest was read and may be kept */
+};
+
+/* The artifacts that a pool of threads reads, each thread taking the next. */
+struct pool {
+    struct artifact **order; /* the largest first */
+    size_t n, next;
+    volatile sig_atomic_t *stop;
+#ifdef _WIN32
+    CRITICAL_SECTION lock;
+#else
+    pthread_mutex_t lock;
+#endif
+};
+
+/** Give the next artifact of `q` to read, or NULL when none is left or a
+ * stop signal has come. */
+static struct artifact *pool_next(struct pool *q)
+{
+    struct artifact *a = NULL;
+
+#ifdef _WIN32
+    EnterCriticalSection(&q->lock);
+#else
+    pthread_mutex_lock(&q->lock);
+#endif
+    if (q->next < q->n && (q->stop == NULL || *q->stop == 0))
+        a = q->order[q->next++];
+#ifdef _WIN32
+    LeaveCriticalSection(&q->lock);
+#else
+    pthread_mutex_unlock(&q->lock);
+#endif
+    return a;
+}
+
+/** Read and hash the artifacts of pool `arg` until none is left. */
+#ifdef _WIN32
+static DWORD WINAPI pool_run(LPVOID arg)
+#else
+static void *pool_run(void *arg)
+#endif
+{
+    struct artifact *a;
+
+    while ((a = pool_next(arg)) != NULL)
+        a->err = etude_digest_read(a->path, &a->st, a->hex, &a->keep) == 0 ? 0 : errno;
+    return 0;
+}
+
+/** Give the processors online, at least 1 and at most HASH_THREADS. */
+static size_t processors(void)
+{
+#ifdef _WIN32
+    long n = (long)GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+#else
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+#endif
+
+    return n < 1 ? 1 : n > HASH_THREADS ? HASH_THREADS : (size_t)n;
+}
+
+/** Order artifacts by size, the largest first, so that the longest read
+ * does not begin last. */
+static int larger_first(const void *a, const void *b)
+{
+    const struct artifact *x = *(struct artifact *const *)a, *y = *(struct artifact *const *)b;
+
+    return x->st.st_size < y->st.st_size ? 1 : x->st.st_size > y->st.st_size ? -1 : 0;
+}
+
+/**
+ * Read and hash the `n` artifacts of `order` on a thread for each processor,
+ * this one among them, and return once every thread has ended. A thread that
+ * cannot be started leaves its share to the others; an artifact not read
+ * for a stop signal keeps its error.
+ */
+static void pool_read(struct artifact **order, size_t n, volatile sig_atomic_t *stop)
+{
+#ifdef _WIN32
+    HANDLE threads[HASH_THREADS];
+#else
+    pthread_t threads[HASH_THREADS];
+#endif
+    struct pool q;
+    size_t want = processors(), started = 0, i;
+
+    qsort(order, n, sizeof(*order), larger_first);
+    q.order = order;
+    q.n = n;
+    q.next = 0;
+    q.stop = stop;
+    if (want > n)
+        want = n;
+#ifdef _WIN32
+    InitializeCriticalSection(&q.lock);
+    for (i = 1; i < want; i++)
+        if ((threads[started] = CreateThread(NULL, 0, pool_run, &q, 0, NULL)) != NULL)
+            started++;
+    pool_run(&q);
+    for (i = 0; i < started; i++) {
+        WaitForSingleObject(threads[i], INFINITE);
+        CloseHandle(threads[i]);
+    }
+    DeleteCriticalSection(&q.lock);
+#else
+    pthread_mutex_init(&q.lock, NULL);
+    for (i = 1; i < want; i++)
+        if (pthread_create(&threads[started], NULL, pool_run, &q) == 0)
+            started++;
+    pool_run(&q);
+    for (i = 0; i < started; i++)
+        pthread_join(threads[i], NULL);
+    pthread_mutex_destroy(&q.lock);
+#endif
+}
+
+/** Free the paths of the `n` artifacts `a`, and `a`. */
+static void artifacts_free(struct artifact *a, size_t n)
+{
+    size_t i;
+
+    for (i = 0; a != NULL && i < n; i++)
+        free(a[i].path);
+    free(a);
+}
+
 /**
  * Check that every artifact required exists, and write the record of each
  * regular file to `f`: `file DIGEST SIZE INODE MTIME PATH`, its time in
  * nanoseconds. A directory is accepted and not recorded. A file's digest is
- * taken from the tree's digests file when it keeps one.
+ * taken from the tree's digests file when it keeps one; the files it keeps
+ * none for are read on a pool of threads, and their digests written to the
+ * digests file at once.
  */
 static int hash_artifacts(struct prep *p, FILE *f)
 {
-    struct stat st;
-    char hex[65], *path, *cache = etude_record_digests_path(p->tree);
-    size_t i, missing = 0;
+    char *cache = etude_record_digests_path(p->tree);
+    struct etude_digests *d = cache != NULL ? etude_digests_open(cache) : NULL;
+    size_t i, n = 0, missing = 0, count = p->required.n;
+    struct artifact *a = calloc(count + 1, sizeof(*a));
+    struct artifact **order = calloc(count + 1, sizeof(*order));
+    int r;
 
-    if (cache == NULL)
+    free(cache);
+    for (i = 0; d != NULL && a != NULL && order != NULL && i < count; i++) {
+        if ((a[i].path = etude_record_artifact_path(p->tree, p->required.v[i])) == NULL)
+            break;
+        r = etude_digests_find(d, a[i].path, &a[i].st, a[i].hex);
+        a[i].err = r < 0 ? errno : r > 0 ? EINTR : 0;
+        if (r > 0)
+            order[n++] = &a[i];
+    }
+    if (d == NULL || a == NULL || order == NULL || i < count) {
+        etude_digests_close(d);
+        artifacts_free(a, count);
+        free(order);
         return failed(p, "artifacts: memory ran out");
-    for (i = 0; i < p->required.n && !stopped(p); i++) {
-        if ((path = etude_record_artifact_path(p->tree, p->required.v[i])) == NULL) {
-            free(cache);
-            return failed(p, "artifacts: memory ran out");
-        }
-        if (etude_digest_file(cache, path, &st, hex) == 0) {
+    }
+    pool_read(order, n, p->o->stop);
+    free(order);
+    for (i = 0; i < count && !stopped(p); i++) {
+        if (a[i].err == 0) {
+            if (a[i].keep)
+                etude_digests_keep(d, a[i].path, &a[i].st, a[i].hex);
             p->files++;
-            fprintf(f, "file %s %llu %llu %lld %s\n", hex, (unsigned long long)st.st_size,
-                    (unsigned long long)st.st_ino, etude_record_mtime_ns(&st), p->required.v[i]);
-        } else if (errno != EISDIR) {
+            fprintf(f, "file %s %llu %llu %lld %s\n", a[i].hex, (unsigned long long)a[i].st.st_size,
+                    (unsigned long long)a[i].st.st_ino, etude_record_mtime_ns(&a[i].st),
+                    p->required.v[i]);
+        } else if (a[i].err != EISDIR) {
             fprintf(p->out, "etude prepare: missing: %s: %s\n", p->required.v[i],
-                    errno == EINVAL ? "not a regular file" : strerror(errno));
+                    a[i].err == EINVAL ? "not a regular file" : strerror(a[i].err));
             missing++;
         }
-        free(path);
     }
-    free(cache);
+    etude_digests_close(d);
+    artifacts_free(a, count);
     if (stopped(p)) {
         fprintf(p->out, "etude prepare: artifacts: stopped by signal %d\n", (int)*p->o->stop);
         return 128 + (int)*p->o->stop;
