@@ -330,9 +330,9 @@ A stick image is a hybrid ISO from `mkiso.sh`, padded to a 1 MiB boundary and fo
 
 ### The console's font: `font/`
 
-    sh tools/font/mkfont.sh unifont_all-18.0.01.hex.gz > rach2/sys/display/vga_font.c
+    sh tools/font/mkfont.sh vendor/unifont/unifont_all-18.0.01.hex.gz > rach2/sys/display/vga_font.c
 
-[mkfont.sh](font/mkfont.sh) writes the console's font from GNU Unifont 18.0.01. It refuses any file but `unifont_all-18.0.01.hex.gz`, by its SHA-256, whose signature was checked with `gpgv` and the GNU keyring; the script's opening comment gives where to fetch it and the signing key. The output is committed, since a build on Rach2 has no network to fetch the font from, and no build step runs the script. [rach2/sys/display/Readme.md](../rach2/sys/display/Readme.md) describes the tables it writes, and [console(4)](../man/man4/console.4) the characters the console shows.
+[mkfont.sh](font/mkfont.sh) writes the console's font from GNU Unifont 18.0.01. It refuses any file but `unifont_all-18.0.01.hex.gz`, by its SHA-256, whose signature was checked with `gpgv` and the GNU keyring; [vendor/unifont/](../vendor/unifont/Readme.md) has the file and says where it comes from. The output is committed, since a build on Rach2 has no network to fetch the font from, and no build step runs the script. [rach2/sys/display/Readme.md](../rach2/sys/display/Readme.md) describes the tables it writes, and [console(4)](../man/man4/console.4) the characters the console shows.
 
 ### Working an installed machine from the host
 
