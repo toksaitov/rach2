@@ -169,24 +169,6 @@ void term_screen_release(struct term_screen *s)
     s->screen->released = true;
 }
 
-int term_screen_resize(struct term_screen *s, unsigned cols, unsigned rows)
-{
-    s->screen->cols = cols;
-    s->screen->rows = rows;
-    return 0;
-}
-
-static struct term_pty pty;
-static unsigned pty_cols, pty_rows;
-
-int term_pty_resize(struct term_pty *pty, unsigned cols, unsigned rows)
-{
-    (void)pty;
-    pty_cols = cols;
-    pty_rows = rows;
-    return 0;
-}
-
 /* ---- Colors and the model's cells ---- */
 
 struct rgb {
@@ -466,6 +448,21 @@ static void test_damage(void)
     term_draw_redraw(&draw);
     frame();
     CHECK(cell_shows(4, 1, NULL, orange, blue), "a redraw writes every cell");
+
+    /* The loop sets the age to 0 when the screen comes back. */
+    scribble(2, 1);
+    {
+        unsigned char junk[WIDTH * 4 + 4];
+
+        memset(junk, 0x55, sizeof junk);
+        CHECK(pwrite(fb_fd, junk, fb_pitch, (off_t)(HEIGHT - 1) * fb_pitch) == (ssize_t)fb_pitch,
+              "the margin is scribbled");
+    }
+    draw.age = 0;
+    frame();
+    CHECK(cell_shows(2, 1, NULL, orange, blue), "an age of 0 writes every cell");
+    CHECK(at(0, HEIGHT - 1) == expect(black) && at(WIDTH - 1, HEIGHT - 1) == expect(black),
+          "and the margins");
 }
 
 /** Bold, italic, underline, dim and inverse, each drawn apart. */
@@ -613,9 +610,9 @@ static void test_bell(void)
     begin();
     frame();
     CHECK(term_draw_timeout(&draw) == -1, "no frame is due after the screen is drawn");
-    screen.bell = true;
+    term_draw_bell(&draw);
+    CHECK(term_draw_timeout(&draw) == 0, "the bell's frame is due at once");
     frame();
-    CHECK(!screen.bell, "drawing takes the bell");
     CHECK(cell_shows(1, 1, NULL, blue, orange), "the bell inverts every cell");
     CHECK(term_draw_timeout(&draw) == TERM_DRAW_BELL_MS, "a frame is due when the bell ends");
     clock_ms += TERM_DRAW_BELL_MS;
@@ -639,7 +636,7 @@ static void test_hold(void)
     CHECK(model.draws == draws, "a held screen is not drawn");
     CHECK(cell_shows(1, 1, NULL, orange, blue), "the last frame stays while the hold lasts");
     clock_ms += 100;
-    screen.bell = true;
+    term_draw_bell(&draw);
     CHECK(term_draw_frame(&draw, &screen) == 0 && model.draws == draws,
           "the hold keeps the bell's frame back");
     CHECK(term_draw_timeout(&draw) == TERM_DRAW_HOLD_MS - 100, "a frame is due at the bound");
@@ -652,13 +649,22 @@ static void test_hold(void)
     frame();
 }
 
-/** Changing the scale resizes the screen and the pty and keeps the scale. */
+/** Read the file `path` into `text`, of `size` bytes, NUL-terminated. */
+static void read_text(const char *path, char *text, size_t size)
+{
+    FILE *f = fopen(path, "r");
+    size_t n = f ? fread(text, 1, size - 1, f) : 0;
+
+    if (f)
+        fclose(f);
+    text[n] = '\0';
+}
+
+/** Changing the scale changes the cells and keeps the scale in the file. */
 static void test_scale(const char *dir)
 {
-    char conf[4096];
+    char conf[4096], text[256];
     FILE *f;
-    char text[256];
-    size_t n;
 
     begin();
     snprintf(conf, sizeof conf, "%s/term.conf", dir);
@@ -666,35 +672,30 @@ static void test_scale(const char *dir)
     CHECK(f != NULL, "the configuration file is made");
     if (!f)
         return;
-    fputs("# term's settings\nfont-scale=1\nother=x", f);
+    fputs("# term's settings\n  scale\t= 1\nscrollback = 5", f);
     fclose(f);
-    CHECK(term_font_conf_scale(conf) == 1, "the configuration reads font-scale=1");
 
     put_char(0, 0, 'A', colors(orange, blue));
-    screen.pty = &pty; /* the model of term_pty_resize() reads nothing of it */
-    CHECK(term_draw_rescale(&draw, &screen, 2, conf) == 0, "the scale changes to 2");
+    frame();
+    CHECK(term_draw_rescale(&draw, 2, conf) == 0, "the scale changes to 2");
     CHECK(draw.cols == 3 && draw.rows == 1, "at 2x the screen is 3 by 1 cells");
-    CHECK(model.cols == 3 && model.rows == 1, "libtsm's screen is told the new size");
-    CHECK(pty_cols == 3 && pty_rows == 1, "the pty is told the new size");
+    /* The loop gives libtsm the new size, and libtsm resets the ages. */
+    model.cols = draw.cols;
+    model.rows = draw.rows;
     frame();
     CHECK(shows(0, 0, 16, glyph_a, 8, 2, orange, blue), "A is drawn at 2x");
-    CHECK(term_font_conf_scale(conf) == 2, "the configuration keeps font-scale=2");
-    f = fopen(conf, "r");
-    n = f ? fread(text, 1, sizeof text - 1, f) : 0;
-    if (f)
-        fclose(f);
-    text[n] = '\0';
-    CHECK(strcmp(text, "# term's settings\nfont-scale=2\nother=x") == 0,
-          "the other lines of the configuration are kept");
-    CHECK(term_draw_rescale(&draw, &screen, 3, NULL) == -EINVAL, "a scale of 3 is refused");
-    CHECK(draw.cols == 3, "and leaves the screen as it was");
+    CHECK(shows(0, 32, 16, NULL, 8, 1, black, black), "below the cells is black");
+    read_text(conf, text, sizeof text);
+    CHECK(strcmp(text, "# term's settings\nscale = 2\nscrollback = 5") == 0,
+          "the scale line is rewritten and the others kept");
+    CHECK(term_draw_rescale(&draw, 3, NULL) == -EINVAL, "a scale of 3 is refused");
+    CHECK(draw.cols == 3 && draw.font->scale == 2, "and leaves the screen as it was");
     unlink(conf);
 
     CHECK(term_font_conf_save(conf, 1) == 0, "a missing configuration is made");
-    CHECK(term_font_conf_scale(conf) == 1, "with the scale");
+    read_text(conf, text, sizeof text);
+    CHECK(strcmp(text, "scale = 1\n") == 0, "with the scale line alone");
     unlink(conf);
-    CHECK(term_font_conf_scale(conf) == 0, "a missing configuration names no scale");
-    screen.pty = NULL;
 }
 
 /** term_draw_init refuses what it cannot draw on. */
