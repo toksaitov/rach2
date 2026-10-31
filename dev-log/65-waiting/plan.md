@@ -83,6 +83,7 @@ The owner allowed it on 31 October. `tools/ci/run.sh` no longer empties `RACH2_S
 * Subtasks: the line removed; `tools/ci/Readme.md` says what a release then proves and what it takes as built; the first run after the change replaces each runner copy's in-tree GNU layers with the store's links (mk/gnu.mk:55-71), measured.
 * Files: `tools/ci/run.sh`, `tools/ci/Readme.md`.
 * Done: a full run reuses every vendor and GNU step whose keyed inputs and compiler identity are unchanged and whose entry is in the store.
+* Measured on 31 October, before the change: run 41112961670 spent 55 min on the GNU toolchain, and run 41124008517 built i686's 56 ports again in its runner copy, 844 s by the ports' own counts. At 716db0df5 the keys that `etude build -p` gives for the toolchain and the ports of both architectures have entries in the testing host's store, so the first full run after the change removes each runner copy's own GNU layer and links those entries, building neither. The time that run takes is read from this milestone's release full run, which is the first.
 
 ## Set aside
 
