@@ -120,15 +120,17 @@ struct keymap {
 
 /* What one keyboard's translation remembers between keys. */
 struct keymap_state {
-    unsigned char down[KM_NR_SHIFT]; /* the keys holding each modifier down */
-    unsigned int shift;              /* the held modifiers, a bit for each KM_G_* */
-    unsigned int locks;              /* the KM_T_LOCK modifiers on, likewise */
-    unsigned int slocks;             /* the KM_T_SLOCK modifiers on for the next key */
-    unsigned int ledflags;           /* Caps, Num and Scroll Lock, KM_LED_* */
-    unsigned long diacr;             /* the pending accent's code point, 0 for none */
-    int compose;                     /* Compose was pressed: the next key is an accent */
-    unsigned long npad;              /* a code typed with Alt on the keypad so far */
-    int npad_on;                     /* `npad` holds digits */
+    unsigned short down[KM_NR_SHIFT];      /* the keys holding each modifier down */
+    unsigned char key_shift[KM_NR_KEYS];   /* modifier + 1 at press, 0 otherwise */
+    unsigned char pressed[KM_NR_KEYS / 8]; /* physical keys, for duplicate presses */
+    unsigned int shift;                    /* the held modifiers, a bit for each KM_G_* */
+    unsigned int locks;                    /* the KM_T_LOCK modifiers on, likewise */
+    unsigned int slocks;                   /* the KM_T_SLOCK modifiers on for the next key */
+    unsigned int ledflags;                 /* Caps, Num and Scroll Lock, KM_LED_* */
+    unsigned long diacr;                   /* the pending accent's code point, 0 for none */
+    int compose;                           /* Compose was pressed: the next key is an accent */
+    unsigned long npad;                    /* a code typed with Alt on the keypad so far */
+    int npad_on;                           /* `npad` holds digits */
 };
 
 /* What a key gives, `kind` of a struct keymap_result. */
@@ -162,8 +164,13 @@ void keymap_state_init(struct keymap_state *st, unsigned int ledflags);
  * Fills `res` and returns its kind, KM_RESULT_NONE when the key gives nothing
  * to send.
  *
- * Any context; it calls only `map->entry`. It translates nothing yet, and
- * returns KM_RESULT_NONE.
+ * Any context; it calls only `map->entry`. The caller serializes access to
+ * `st`, and keeps the strings and accents valid during the call. Absent
+ * tables suppress keys but still recognize base-table modifiers. A release
+ * uses the modifier recorded at press, even after a map or lock change.
+ * Escape cancels Compose or an accent and sends ESC; Backspace cancels
+ * either without sending. Other failed compositions send both code points.
+ * Caps Lock inverts Shift for KT_LETTER and Unicode simple case pairs.
  */
 int keymap_key(struct keymap_state *st, const struct keymap *map, unsigned int keycode, int value,
                struct keymap_result *res);
@@ -175,7 +182,12 @@ int keymap_key(struct keymap_state *st, const struct keymap *map, unsigned int k
  * the keypad with `CSI 1;m` for their modifiers. Returns the bytes written,
  * 0 for a result that sends nothing or does not fit.
  *
- * It encodes nothing yet, and returns 0.
+ * No terminator is written, and a result that does not fit leaves `buf`
+ * unchanged. UTF-8 accepts scalar values through U+10FFFF. Unknown keysyms
+ * send nothing. A function string of at most KM_FUNC_BYTES - 1 bytes is
+ * copied; a single CSI or SS3 key sequence receives xterm's modifier
+ * parameter, and other strings are copied literally. Num Lock overrides
+ * application keypad mode; Shift reverses Num Lock in numeric mode.
  */
 unsigned int keymap_encode(const struct keymap *map, const struct keymap_result *res,
                            unsigned int modes, char *buf, unsigned int size);
