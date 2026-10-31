@@ -98,6 +98,13 @@ dir 0755 /src/ish
 tree 0644 /src/rach2 rach2
 file 0644 /src/rach2/vendor/acpica.tar.bz2 build/vendor/acpica/acpica.tar.bz2
 tree 0644 /src/ish ish
+# term's sources with libtsm's patched ones beside them as an archive and
+# their list, which term/guest.mk unpacks and includes.
+dir 0755 /src/term
+dir 0755 /src/term/vendor
+tree 0644 /src/term term
+file 0644 /src/term/vendor/libtsm.tar.bz2 build/vendor/libtsm/libtsm.tar.bz2
+file 0644 /src/term/vendor/libtsm.mk vendor/libtsm/sources.mk
 
 # /sbin/init, process 1, which the kernel starts: it forks a session child
 # that runs /bin/login and nothing else, so the console is behind a password.

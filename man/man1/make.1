@@ -40,11 +40,12 @@ or
 .Nm c17 .
 Every program must be linked statically.
 .Pp
-The staged kernel, utility and ISH sources are under
+The staged kernel, utility, ISH and terminal sources are under
 .Pa /src/rach2 ,
-.Pa /src/utils
+.Pa /src/utils ,
+.Pa /src/ish
 and
-.Pa /src/ish .
+.Pa /src/term .
 Each has a
 .Pa guest.mk
 written for pdpmake.
@@ -191,6 +192,8 @@ Kernel makefile.
 Utility makefile.
 .It Pa /src/ish/guest.mk
 ISH makefile.
+.It Pa /src/term/guest.mk
+Makefile of term and libtsm.
 .El
 .Sh EXAMPLES
 .Dl cd /src/rach2 && make -f guest.mk
