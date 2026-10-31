@@ -373,8 +373,8 @@ static void fd_close_locks(const fd_entry_t *e)
  * file description, which dup, dup2 and fork share by its reference count,
  * so each is released once, when the description's last descriptor closes
  * (`refcount` 1 here, before `fd_free` drops it). The framebuffer's close
- * gives the display back only when the caller's process owns it
- * (display/fbdev.c). The socket reference is counted
+ * drops one open description's ownership reference (display/fbdev.c). The
+ * socket reference is counted
  * for each descriptor (`socket_ref` on dup and fork) and is dropped every
  * time. No descriptor is both an object with operations and a socket.
  *
@@ -2344,12 +2344,14 @@ static int name_is(const char *name, const char *lit)
 
 /**
  * The framebuffer descriptor, for an open of the name "fb" with the open's
- * `flags`, or a negative errno: -EBUSY while another process owns the
- * framebuffer. One process at a time owns it, by its thread group id, which
+ * `flags`, or a negative errno: -EBUSY unless the caller owns the
+ * framebuffer or descends from its owner, and -ENOMEM. One process at a
+ * time owns it, by its thread group id, which
  * the descriptor's operations (display/fbdev.c), the console read and the
  * last close compare too, so any of its threads may use it. The open takes
- * the display at mode 13h (`fb_take`), unblanking the console first, whose
- * backlight would stay off under the picture, and drops the scancodes the
+ * the display at mode 13h for a new owner (`fb_take`), unblanking it first;
+ * a second open by the same owner keeps its mode. The console's
+ * backlight would stay off under the picture. It drops the scancodes the
  * keyboard queued for the shell before it. O_CLOEXEC and O_NONBLOCK are
  * kept; the access mode is not, since the descriptor reads and writes.
  */
@@ -2359,15 +2361,12 @@ static int32_t open_framebuffer(int flags)
     int fd;
     int32_t rc;
 
-    if (fb_owner_pid != 0 && fb_owner_pid != current_proc->tgid) {
-        return -EBUSY;
-    }
-
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         return fd;
     }
-    rc = fb_take();
+    entry = &current_proc->fds->entries[fd];
+    rc = fb_take(entry);
     if (rc != 0) {
         fd_free(current_proc->fds, fd);
         return rc;
@@ -2377,7 +2376,6 @@ static int32_t open_framebuffer(int flags)
     entry->type = FD_TYPE_FRAMEBUFFER;
     entry->node = NULL;
     entry->ops = &fb_file_ops;
-    entry->priv = NULL;
     entry->ofd->offset = 0;
     entry->ofd->status_flags = (flags & O_NONBLOCK) ? OFD_NONBLOCK : 0u;
     entry->flags = FD_FLAG_READ | FD_FLAG_WRITE | ((flags & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0u);

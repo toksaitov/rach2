@@ -176,7 +176,7 @@ void kirq_restore(uint32_t flags)
     CHECK(gfx_current.mode == (expected_mode ? GFX_MODE_VGA_13H : GFX_MODE_NONE),
           "framebuffer state published before restore");
     if (!expected_mode) {
-        CHECK(clears == 1, "text cleared before restore");
+        CHECK(clears == 1, "text redrawn before restore");
         for (i = 0; i < 256; i++)
             for (j = 0; j < 16; j++)
                 CHECK(aperture[i * 32 + j] == (uint8_t)(i + j), "font restored before interrupts");
@@ -189,11 +189,11 @@ void kirq_restore(uint32_t flags)
     deliver_echo();
 }
 
-/** Count a clear of the text display, which must run with interrupts
+/** Count a redraw of the text display, which must run with interrupts
  * masked. */
-void k_cls(void)
+void textcon_sync(void)
 {
-    CHECK(masked, "text clear excludes interrupts");
+    CHECK(masked, "text redraw excludes interrupts");
     clears++;
 }
 

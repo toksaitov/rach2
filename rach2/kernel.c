@@ -10,6 +10,7 @@
 #include "sys/klog.h"
 #include "sys/serial.h"
 #include "sys/syscall.h"
+#include "sys/display/fb.h"
 #include "sys/module.h"
 #include "sys/cmdline.h"
 #include "sys/irq.h"

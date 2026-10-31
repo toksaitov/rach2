@@ -7,10 +7,11 @@
 
 /*
  * A program takes the screen by opening /fb, which enters mode 13h, and is
- * then its owner: the console draws nothing until the owner leaves the
- * mode, closes /fb or exits. Every request but FB_MODE_13H, which may take a
- * screen nobody owns, and every write are refused with EBUSY to any process
- * but the owner, a child that inherited the descriptor among them.
+ * then its owner: the console draws nothing until the last owner leaves
+ * the mode, closes its open descriptions or exits. A descendant may open
+ * /fb to suspend the current owner and take the screen in turn. Every
+ * request but FB_MODE_13H, which may take a screen nobody owns, and every write are refused with
+ * EBUSY to any process but the owner, a child that inherited the descriptor among them.
  *
  * Mode 13h is 320 by 200 pixels of one byte, an index into a palette of 256
  * colors, written whole with write(2) at 64000 bytes; there the offset does
@@ -36,7 +37,7 @@
 /* FB_GETINFO, which reports the framebuffer whatever the mode, is refused
  * with ENODEV on a text console; FB_MODE_NATIVE is refused with ENODEV there
  * and on a framebuffer that is not RGB at 15, 16, 24 or 32 bits a pixel. The
- * kernel does not send the events below yet. */
+ * events below report changes of ownership. */
 
 #define FB_KIND_RGB     1 /* each pixel holds its red, green and blue */
 #define FB_KIND_INDEXED 2 /* each pixel is an index into a palette */
@@ -65,9 +66,17 @@ struct fb_screen {
  * suspended, and has the screen back when that program leaves the mode,
  * closes /fb or exits. Each change is an event, which read(2) on the owner's
  * /fb descriptor gives whole, and which poll(2) reports as POLLIN while one
- * waits. Between FB_EVENT_LOST and FB_EVENT_REGAINED the owner's writes and
+ * waits. Events are shared by all of that owner's open descriptions; a
+ * read returns one event, waits when none is queued, or gives EAGAIN with
+ * O_NONBLOCK. A short buffer gives EINVAL; a failed copy gives EFAULT and
+ * consumes the event. After release, queued events drain before EOF and
+ * poll reports POLLHUP. An inherited descriptor gives EBUSY on read and
+ * POLLERR on poll. Between FB_EVENT_LOST and FB_EVENT_REGAINED the owner's
+ * writes and
  * requests are refused with EBUSY; at FB_EVENT_REGAINED it draws its whole
- * screen again.
+ * screen again. Its mode, palette, keyboard settings and console termios
+ * are restored first. Dead suspended owners are skipped. The last return
+ * restores the console's original settings, flushes input and redraws text.
  */
 #define FB_EVENT_LOST     1 /* another program has the screen and the keyboard */
 #define FB_EVENT_REGAINED 2 /* they are back, as the owner left them */

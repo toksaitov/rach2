@@ -102,7 +102,7 @@ Closing the master posts SIGHUP to the slave's foreground group and hangs the sl
 
 * The keyboard feeds the console's discipline without testing for room, so a key typed into a full queue or a full canonical line is dropped and counted (`queue-drops`, `line-drops`).
 * The keymap is US English. Caps Lock, Num Lock, the function keys and the keypad's digit keys produce no byte. The keymap, strings, accents, lock flags and meta setting the KD* requests keep are answered but do not yet translate keys.
-* While a program owns `/fb` and the keyboard is in a translating mode, each key also reaches the console's discipline when a session owns the console, and waits there as type-ahead for the next reader.
+* While a program owns `/fb` and the keyboard is in a translating mode, each key also reaches the console's discipline when a session owns the console. Each return of the screen restores the receiving owner's keyboard and terminal settings and flushes that input, so it cannot become type-ahead for the next owner or login.
 * TIOCSWINSZ on the console or a slave stores the size and posts no SIGWINCH; only the master's posts it.
 * Packet mode sends only TIOCPKT_DATA, never the status bytes for a flush or a stop of output.
 

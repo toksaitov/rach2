@@ -10,10 +10,6 @@
  * `rach2.trace=enosys` from the command line. */
 void init_syscall(void);
 
-/** Give up the framebuffer and restore text mode if the thread group `pid`
- * owns it, as the end of the process does. */
-void fb_release_if_owner(uint32_t pid);
-
 struct krffs_node;
 
 /**
