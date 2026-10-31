@@ -696,7 +696,7 @@ static int whpx_line(char *script, char *disk, const char *args)
     ran_free(&r);
     if (!has_line(args, "whpx") || !has_line(args, "user,model=e1000") ||
         has_line(args, "user,model=virtio-net-pci") ||
-        !has_line(args, "virtio-blk-pci,drive=d1,serial=etude-d1"))
+        !has_line(args, "virtio-blk-pci,drive=d1,num-queues=1,serial=etude-d1"))
         return failed("WHPX did not select e1000 with the attached disk");
     tooling_accel = "whpx";
     rc = tooling(&r, NULL, "run", script, END);
@@ -720,9 +720,9 @@ static int row_line(void)
         "1024",
         "user,model=virtio-net-pci",
         "virtio-rng-pci",
-        "virtio-blk-pci,drive=root,bootindex=0",
-        "virtio-blk-pci,drive=job,serial=etude-job",
-        "virtio-blk-pci,drive=d1,serial=etude-d1",
+        "virtio-blk-pci,drive=root,num-queues=1,bootindex=0",
+        "virtio-blk-pci,drive=job,num-queues=1,serial=etude-job",
+        "virtio-blk-pci,drive=d1,num-queues=1,serial=etude-d1",
     };
     char script[PATH], disk[PATH], args[PATH];
     struct ran r;
