@@ -21,10 +21,13 @@ SRC_netup = netup.c netcfg.c ipcheck.c
 HDR_netup = netcfg.h ipcheck.h
 SRC_reflash = reflash.c sectorcopy.c sha256.c
 HDR_reflash = sectorcopy.h sha256.h
-SRC_init_shell = init.c
-SRC_init_login = init.c
+HDR_init_shell = vconsole.h
+SRC_init_shell = init.c vconsole.c
+HDR_init_login = vconsole.h
+SRC_init_login = init.c vconsole.c
 DEF_init_login = -DINIT_CONSOLE_LOGIN
-SRC_init_metal = init.c
+HDR_init_metal = vconsole.h
+SRC_init_metal = init.c vconsole.c
 DEF_init_metal = -DINIT_CONSOLE_LOGIN -DINIT_METAL
 # The recovery system's init: a shell at the console, and the rest of the metal
 # init beside it, which is the network and the optional SSH server. Neither of
@@ -32,8 +35,8 @@ DEF_init_metal = -DINIT_CONSOLE_LOGIN -DINIT_METAL
 # `init-metal` supervises everything and demands a login that a system with no
 # passwords cannot answer, so with it nobody could enter the recovery system
 # by any route.
-SRC_init_recovery = init.c gptdisk.c
-HDR_init_recovery = gptdisk.h
+SRC_init_recovery = init.c vconsole.c gptdisk.c
+HDR_init_recovery = gptdisk.h vconsole.h
 DEF_init_recovery = -DINIT_METAL -DINIT_RECOVERY
 SRC_login = login.c pwauth.c
 HDR_login = pwauth.h

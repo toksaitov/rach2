@@ -29,6 +29,8 @@ A program's options and behavior are in its manual page, linked below. This sect
 * `init-metal` is `init-login` with the network, the system log and an SSH server that it supervises, for a machine with nobody at its console: the metal kernel's RAM root, the root of the sealed disk that the installer writes ([disk(7)](../man/man7/disk.7)), and the GNU root ([`vendor/gnu/`](../vendor/gnu/Readme.md)) use it.
 * `init-recovery` starts a shell on the console with `init-metal`'s services beside it, for the recovery system, whose accounts have no passwords.
 
+`init` reads optional `/etc/vconsole.conf` once before the first console session. It applies the keymaps, repeat and Num Lock settings with kbd's tools, with their standard input on `/dev/console`; after a failed command it tries the US map, since a failed map load can leave partial changes. A missing file keeps the kernel's defaults. The assignments and limits are in [vconsole.conf(5)](../man/man5/vconsole.conf.5); `vconsole.c` reads them without a shell and forms the argument vectors.
+
 ### Accounts
 
 * [login(1)](../man/man1/login.1) asks for a name and a password at the console and starts the account's shell.

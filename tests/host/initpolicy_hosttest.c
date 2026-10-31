@@ -1,4 +1,6 @@
 /**
+ * host-deps: utils/vconsole.c
+ *
  * initpolicy_hosttest.c: init's redirection of its services' output, its
  * SSH policy lines and server arguments, and the environment it starts the
  * console's login with.

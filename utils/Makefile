@@ -146,16 +146,16 @@ $(BUILD)/sbin/passwd: $(SRC_passwd) $(HDR_passwd)
 # string that names a shell; init-metal is init-login with a supervised SSH
 # server, for a machine nobody is standing in front of; init-recovery is the
 # recovery system's, described in programs.mk.
-$(BUILD)/sbin/init-shell: $(SRC_init_shell)
+$(BUILD)/sbin/init-shell: $(SRC_init_shell) $(HDR_init_shell)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/init-shell.d -o $@ $(LINK_PRE) $(SRC_init_shell) $(LINK_POST)
 
-$(BUILD)/sbin/init-login: $(SRC_init_login)
+$(BUILD)/sbin/init-login: $(SRC_init_login) $(HDR_init_login)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(DEF_init_login) -MF $(BUILD)/sbin/init-login.d -o $@ \
 	    $(LINK_PRE) $(SRC_init_login) $(LINK_POST)
 
-$(BUILD)/sbin/init-metal: $(SRC_init_metal)
+$(BUILD)/sbin/init-metal: $(SRC_init_metal) $(HDR_init_metal)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(DEF_init_metal) -MF $(BUILD)/sbin/init-metal.d -o $@ \
 	    $(LINK_PRE) $(SRC_init_metal) $(LINK_POST)
