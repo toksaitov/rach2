@@ -1,8 +1,9 @@
 /*
  * doomgeneric_rach2.c: the platform layer of Doom on Rach2, the functions
  * doomgeneric asks of a platform. It draws through /fb, reads the
- * keyboard's scan codes from the console and the mouse's packets from
- * /mouse, keeps time with gettimeofday, and reports where the time went.
+ * keyboard's scan codes from the console in K_RAW and the mouse's packets
+ * from /mouse, keeps time with gettimeofday, and reports where the time
+ * went.
  */
 
 #include "doomgeneric.h"
@@ -16,12 +17,15 @@
 extern int printf(const char *fmt, ...);
 #include <stddef.h>
 
+#include <rach2/fb.h>
+
 /* The system calls of crt0.c. */
 extern int open(const char *path, int flags, ...);
 extern int close(int fd);
 extern int read(int fd, void *buf, size_t count);
 extern int write(int fd, const void *buf, size_t count);
 extern int ioctl(int fd, unsigned long request, ...);
+extern int getpgrp(void);
 extern void _exit(int status);
 
 struct timeval {
@@ -32,21 +36,49 @@ extern int gettimeofday(struct timeval *tv, void *tz);
 extern void *memset(void *s, int c, size_t n);
 
 /* The open flags, with Linux's values. */
-#define O_RDONLY  0
-#define O_WRONLY  1
-#define O_RDWR    2
+#define O_RDONLY   0
+#define O_WRONLY   1
+#define O_RDWR     2
+#define O_NONBLOCK 04000
 
-/* The requests of the console and the framebuffer (rach2/sys/syscall.c). */
-#define KIOCSOUND     0x4B2F
-#define FB_SETPALETTE 0x4603
+/* The console's requests, with Linux's numbers (<linux/kd.h>, <asm/ioctls.h>):
+ * the keyboard's mode, the terminal's settings and its foreground group. */
+#define KDGKBMODE  0x4B44
+#define KDSKBMODE  0x4B45
+#define K_RAW      0x00
+#define TCGETS     0x5401
+#define TCSETS     0x5402
+#define TIOCGPGRP  0x540F
+
+/* The terminal's settings as TCGETS gives them: Linux's struct termios of
+ * i386 and x86-64, with the flags this file clears. */
+struct kernel_termios {
+    unsigned int c_iflag;
+    unsigned int c_oflag;
+    unsigned int c_cflag;
+    unsigned int c_lflag;
+    unsigned char c_line;
+    unsigned char c_cc[19];
+};
+#define ISIG   0000001
+#define ICANON 0000002
+#define ECHO   0000010
+#define IEXTEN 0100000
+#define VTIME  5
+#define VMIN   6
 
 /* The frame the engine draws, mode 13h's 320 by 200. */
 #define SCREEN_WIDTH  320
 #define SCREEN_HEIGHT 200
 
-static int fb_fd = -1;     /* /fb, or -1 when it is not open */
-static int console_fd = 0; /* standard input, the console's scan codes */
-static int mouse_fd = -1;  /* /mouse, or -1 when the machine has none */
+static int fb_fd = -1;      /* /fb, or -1 when it is not open */
+static int console_fd = -1; /* /dev/console in K_RAW, or -1 without the keyboard */
+static int mouse_fd = -1;   /* /mouse, or -1 when the machine has none */
+
+/* The console's keyboard mode and terminal settings before the game took
+ * them, which `release_keyboard` puts back. */
+static int saved_kbmode;
+static struct kernel_termios saved_termios;
 
 /* A packet of /mouse, as rach2/sys/mouse.h defines it. */
 struct mouse_packet {
@@ -180,15 +212,77 @@ static void queue_key_event(int pressed, unsigned char doomkey)
 }
 
 /**
+ * Take the console's keyboard for the game, when its standard input is a
+ * terminal and the game is in that terminal's foreground: open /dev/console,
+ * which is the keyboard's even when standard input is a pty, as inside
+ * `term`, without waiting for its reads; keep its keyboard mode and terminal
+ * settings; then put its terminal in raw mode, so that no scan code is
+ * edited, echoed, mapped or taken as a signal, and its keyboard in K_RAW,
+ * which gives the set-1 scan codes of every key. The game must own /fb
+ * first, since the console lets the screen's owner set the mode. Without a
+ * terminal, as when the game is started in the background with input from
+ * /dev/null, or when a step fails, the game runs without keys and the
+ * console is left as it was.
+ */
+static void take_keyboard(void)
+{
+    struct kernel_termios raw;
+    int fg = -1;
+
+    if (ioctl(0, TCGETS, (unsigned long)&raw) != 0 ||
+        ioctl(0, TIOCGPGRP, (unsigned long)&fg) != 0 || fg != getpgrp()) {
+        return;
+    }
+    console_fd = open("/dev/console", O_RDWR | O_NONBLOCK);
+    if (console_fd < 0) {
+        console_fd = -1;
+        return;
+    }
+    if (ioctl(console_fd, KDGKBMODE, (unsigned long)&saved_kbmode) != 0 ||
+        ioctl(console_fd, TCGETS, (unsigned long)&saved_termios) != 0) {
+        close(console_fd);
+        console_fd = -1;
+        return;
+    }
+    raw = saved_termios;
+    raw.c_iflag = 0;
+    raw.c_lflag &= ~(unsigned int)(ISIG | ICANON | ECHO | IEXTEN);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    if (ioctl(console_fd, TCSETS, (unsigned long)&raw) != 0 ||
+        ioctl(console_fd, KDSKBMODE, K_RAW) != 0) {
+        ioctl(console_fd, TCSETS, (unsigned long)&saved_termios);
+        close(console_fd);
+        console_fd = -1;
+    }
+}
+
+/** Give the console back its keyboard mode and terminal settings, and close
+ * it; nothing when the game did not take the keyboard. */
+static void release_keyboard(void)
+{
+    if (console_fd < 0) {
+        return;
+    }
+    ioctl(console_fd, KDSKBMODE, (unsigned long)saved_kbmode);
+    ioctl(console_fd, TCSETS, (unsigned long)&saved_termios);
+    close(console_fd);
+    console_fd = -1;
+}
+
+/**
  * Read the console's scan codes a byte at a time until a read gives none,
- * and queue each that has a key. While the game owns /fb, the console gives
- * the raw codes and does not wait when it has none.
+ * and queue each that has a key. The console does not wait when it has
+ * none, and does nothing when the game did not take the keyboard.
  */
 static void poll_keyboard(void)
 {
     uint8_t scancode;
     int ret;
 
+    if (console_fd < 0) {
+        return;
+    }
     while ((ret = read(console_fd, &scancode, 1)) > 0) {
         unsigned char doomkey = scancode_to_doomkey(scancode);
         if (doomkey != 0) {
@@ -335,11 +429,12 @@ static void count_frame(void)
 
 /**
  * Set the platform up: suggest the zone's size, open /fb for reading and
- * writing, which puts the display in mode 13h, and /mouse for reading, and
- * start the clock. The names are absolute, since the game may be started
- * from any directory. Without /fb it writes `Failed to open framebuffer` to
- * standard error and returns before it starts the clock, and the game runs
- * without drawing; without /mouse it goes on with the keyboard alone.
+ * writing, which puts the display in mode 13h, take the console's keyboard
+ * (`take_keyboard`), open /mouse for reading, and start the clock. The
+ * names are absolute, since the game may be started from any directory.
+ * Without /fb it writes `Failed to open framebuffer` to standard error and
+ * returns before it starts the clock, and the game runs without drawing or
+ * keys; without /mouse it goes on with the keyboard alone.
  */
 void DG_Init(void)
 {
@@ -353,6 +448,7 @@ void DG_Init(void)
         return;
     }
 
+    take_keyboard();
     mouse_fd = open("/mouse", O_RDONLY);
 
     memset(screen_buffer, 0, sizeof(screen_buffer));
@@ -465,12 +561,13 @@ void DG_SetWindowTitle(const char *title)
 }
 
 /**
- * Close the mouse and /fb, and then print the report. The last close of /fb
- * by its owner puts the display back in text mode, so the report appears on
- * the text screen.
+ * Give the keyboard back, close the mouse and /fb, and then print the
+ * report. The last close of /fb by its owner puts the display back in text
+ * mode, so the report appears on the text screen.
  */
 void DG_Shutdown(void)
 {
+    release_keyboard();
     if (mouse_fd >= 0) {
         close(mouse_fd);
         mouse_fd = -1;
