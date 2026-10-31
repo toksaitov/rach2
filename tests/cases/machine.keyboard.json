@@ -1,0 +1,432 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.keyboard",
+  "summary": "The console's keyboard through the keymap, on QEMU's PS/2 keyboard and on its USB keyboard, with kbd's tools at os-real's root shell, each case a boot of its own that tests/cases/machine/keyboard_scenario.c drives",
+  "cases": [
+    {
+      "case_id": "machine.keyboard.ps2",
+      "behavior": "keys pressed on QEMU's PS/2 keyboard reach a program at os-real's console through the Kyrgyz keymap that loadkeys loads, with its Alt+Shift switch, Caps Lock on Cyrillic letters, Ctrl+C on the Cyrillic layer, Enter as CR, the kernel's own repeats of a held key, Caps Lock's LED as KDGETLED and the keyboard see it, showkey's key codes and kbdrate's repeat",
+      "units": [
+        "rach2/sys/kd.c",
+        "rach2/sys/keymap.c",
+        "rach2/sys/input.c",
+        "rach2/sys/kbd.c",
+        "loadkeys",
+        "showkey",
+        "setleds",
+        "kbdrate"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "posix",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "keyboard_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine if it still runs, and removes the evidence after a pass"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "guest",
+          "does": "boot os-real, send QEMU's trace event ps2_set_ledstate to a log in the evidence, and log in as root at the serial console"
+        },
+        {
+          "step_id": "load",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "run loadkeys -u kg alt-shift"
+        },
+        {
+          "step_id": "keys",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "run showkey -a, press A, Shift+A, the switch, the Cyrillic letter in both cases and under Caps Lock, Ctrl+C, the switch back, A and Enter with QMP's send-key, hold A down until six repeats have shown, and end with Ctrl+D"
+        },
+        {
+          "step_id": "leds",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "press Caps Lock, run setleds, press Caps Lock again, run setleds, and read QEMU's record of the keyboard's LEDs"
+        },
+        {
+          "step_id": "tools",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "run showkey -t 2 and press B, then kbdrate -d 500 -r 20 and kbdrate -d 250 -r 30"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "guest",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "os-real",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "shell",
+          "checks": "root's shell answers at the console",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "loaded",
+          "checks": "loadkeys -u kg alt-shift exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "layout",
+          "checks": "showkey -a reads 61, 41, d1 84, d0 a4, d0 a4, 03, 61 and 0d: a, A, the Cyrillic ef in both cases and under Caps Lock in UTF-8, Ctrl+C as ETX, a after the switch back, and Enter as CR",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "repeat",
+          "checks": "the held A gives its press and at least six repeats, and Ctrl+D gives 04 last",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "leds-read",
+          "checks": "setleds reports `CapsLock on` among the current LEDs after the first Caps Lock and `CapsLock off` after the second",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "leds-seen",
+          "checks": "QEMU's trace event ps2_set_ledstate records the LED state 4 and then 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "showkey",
+          "checks": "showkey -t 2 says `kb mode was UNICODE` and `keycode  48 press` and `release` for B, and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "kbdrate",
+          "checks": "kbdrate sets 20.0 cps with a delay of 500 ms, the second run reports the old delay 500 and period 50, and both exit 0",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1800000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 180000000,
+          "ceiling_us": 540000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 120000000,
+            "ceiling_us": 360000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 33554432,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "os-real",
+          "node": "images/os-real.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "keyboard_scenario",
+          "node": "tests/cases/machine/keyboard_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the case presses keys through QMP and reads QEMU's own record of the keyboard's LEDs; the Lenovo's keyboard is checked by hand at its console"
+      }
+    },
+    {
+      "case_id": "machine.keyboard.usb",
+      "behavior": "keys pressed on QEMU's USB keyboard reach a program at os-real's console through the Kyrgyz keymap that loadkeys loads, with its Alt+Shift switch, Caps Lock on Cyrillic letters, Ctrl+C on the Cyrillic layer, Enter as CR, the kernel's own repeats of a held key, Caps Lock's LED as KDGETLED and the keyboard see it, showkey's key codes and kbdrate's repeat",
+      "units": [
+        "rach2/sys/kd.c",
+        "rach2/sys/keymap.c",
+        "rach2/sys/input.c",
+        "rach2/sys/usb/hid.c",
+        "loadkeys",
+        "showkey",
+        "setleds",
+        "kbdrate"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "posix",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "keyboard_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine if it still runs, and removes the evidence after a pass"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "guest",
+          "does": "boot os-real on a qemu-xhci with no keyboard on it, log in as root at the serial console, plug in a usb-kbd with QEMU's capture of its packets, and wait for the kernel's `class 3 protocol 1`"
+        },
+        {
+          "step_id": "load",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "run loadkeys -u kg alt-shift"
+        },
+        {
+          "step_id": "keys",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "run showkey -a, press A, Shift+A, the switch, the Cyrillic letter in both cases and under Caps Lock, Ctrl+C, the switch back, A and Enter with QMP's send-key, hold A down until six repeats have shown, and end with Ctrl+D"
+        },
+        {
+          "step_id": "leds",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "press Caps Lock, run setleds, press Caps Lock again, run setleds, and read QEMU's record of the keyboard's LEDs"
+        },
+        {
+          "step_id": "tools",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "run showkey -t 2 and press B, then kbdrate -d 500 -r 20 and kbdrate -d 250 -r 30"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "guest",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "os-real",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "qemu-xhci",
+                "id": "xhci"
+              }
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "shell",
+          "checks": "root's shell answers at the console and the kernel configures the plugged keyboard",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "loaded",
+          "checks": "loadkeys -u kg alt-shift exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "layout",
+          "checks": "showkey -a reads 61, 41, d1 84, d0 a4, d0 a4, 03, 61 and 0d: a, A, the Cyrillic ef in both cases and under Caps Lock in UTF-8, Ctrl+C as ETX, a after the switch back, and Enter as CR",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "repeat",
+          "checks": "the held A gives its press and at least six repeats, and Ctrl+D gives 04 last",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "leds-read",
+          "checks": "setleds reports `CapsLock on` among the current LEDs after the first Caps Lock and `CapsLock off` after the second",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "leds-seen",
+          "checks": "QEMU's capture of the USB keyboard's packets has SET_REPORT requests of the LED report 02 and then 00",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "showkey",
+          "checks": "showkey -t 2 says `kb mode was UNICODE` and `keycode  48 press` and `release` for B, and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "kbdrate",
+          "checks": "kbdrate sets 20.0 cps with a delay of 500 ms, the second run reports the old delay 500 and period 50, and both exit 0",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 5
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1800000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 180000000,
+          "ceiling_us": 540000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 120000000,
+            "ceiling_us": 360000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 33554432,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "os-real",
+          "node": "images/os-real.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "keyboard_scenario",
+          "node": "tests/cases/machine/keyboard_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the case presses keys through QMP and reads QEMU's own record of the keyboard's LEDs; the Lenovo's keyboard is checked by hand at its console"
+      }
+    }
+  ]
+}

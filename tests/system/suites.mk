@@ -576,6 +576,9 @@ $(SERVICELOG_ROOT_DISK): tests/system/mkrootdisk.sh tools/setup/e2fsprogs_path.s
 # its clients: BusyBox's `udhcpc`, which `ifup` runs, and os-simple's own
 # `dhcpc`, which its `netup` runs. Its cases are in
 # tests/cases/machine.dhcp.json, which etude runs, and have no target here.
+# `tests/run keyboard`: the console's keyboard through the keymap, with kbd's
+# tools, on QEMU's PS/2 keyboard and on its USB keyboard. Its cases are in
+# tests/cases/machine.keyboard.json, which etude runs, and have no target here.
 # `tests/run netconsole`: the kernel log on the wire, the cases of
 # tests/cases/machine.netconsole.json.
 # `tests/run e1000`: the network path on the other emulated card, and the probe

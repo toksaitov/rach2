@@ -61,6 +61,7 @@ drill|qemu,ssh,gzip,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 account|qemu|full
 large|qemu,mke2fs,e2fsck,mformat,hdiutil+newfs_exfat/mkfs.exfat+fsck.exfat|full
 usb|qemu|core
+keyboard|qemu|full
 raw|qemu|full
 krffsmount|qemu,python3|full
 diskrate|qemu,mformat|full||512
