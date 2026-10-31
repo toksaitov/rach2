@@ -73,6 +73,44 @@ The pair is freed after both ends close, and its index may be reused.
 .Ss Line discipline and job control
 Canonical mode collects input into lines; raw mode permits input without
 waiting for a complete line.
+In raw mode a read waits as
+.Dv VMIN
+and
+.Dv VTIME
+say,
+.Dv VTIME
+in tenths of a second.
+With both 0 it returns at once with what is there.
+With
+.Dv VMIN
+above 0 and
+.Dv VTIME
+0 it waits for
+.Dv VMIN
+bytes.
+With
+.Dv VMIN
+0 and
+.Dv VTIME
+above 0 it returns with the first byte, or returns 0 once
+.Dv VTIME
+has passed since the read began.
+With both above 0 it waits for a first byte, then returns when
+.Dv VMIN
+bytes have come or
+.Dv VTIME
+has passed since the last of them.
+A read for fewer bytes than
+.Dv VMIN
+waits only for as many.
+.Xr poll 2
+does not wait for
+.Dv VTIME :
+it reports the terminal readable with
+.Dv VMIN
+bytes, or always when
+.Dv VMIN
+is 0.
 Echo and signal generation are controlled by the terminal settings.
 With signal generation enabled, the interrupt and suspend characters,
 normally Ctrl-C and Ctrl-Z, send
