@@ -46,8 +46,9 @@
 /*
  * The keys pressed under showkey -a, as send-key's words, and the bytes the
  * Kyrgyz layout gives for them: A and Shift+A on the US layout, the switch
- * to Kyrgyz, its Ф's lower and upper case in UTF-8, Ф again under Caps Lock,
- * Ctrl+C on the Cyrillic layer, the switch back to A, and Enter.
+ * to Kyrgyz, its ef, U+0444, in lower and upper case in UTF-8, the capital
+ * again under Caps Lock, Ctrl+C on the Cyrillic layer, the switch back to A,
+ * and Enter.
  */
 #define LAYOUT_KEYS "a shift-a alt-shift_r a shift-a caps_lock a caps_lock ctrl-c alt-shift_r a ret"
 static const unsigned char layout_bytes[] = {0x61, 0x41, 0xD1, 0x84, 0xD0, 0xA4,
@@ -257,7 +258,8 @@ static void keys(struct kb_case *s)
     free(text);
     net_assert(&s->u, "layout",
                n >= sizeof(layout_bytes) && memcmp(got, layout_bytes, sizeof(layout_bytes)) == 0,
-               "showkey -a read %u bytes, not a, A, ф, Ф, Ф, ETX, a and CR from the keys",
+               "showkey -a read %u bytes, not a, A, the Cyrillic ef, its capital twice, ETX, a "
+               "and CR from the keys",
                (unsigned)n);
     for (i = sizeof(layout_bytes); i < n && got[i] == 0x61; i++)
         repeats++;
