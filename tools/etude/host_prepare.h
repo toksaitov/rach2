@@ -12,6 +12,8 @@ struct hp_words {
 struct hp_context {
     char tree[4096], work[4096];
     const char *arch, *group, *output, *only, *previous, *origin;
+    const char *slots; /* the file of the job slots shared with other preparations, or NULL */
+    size_t jobs;       /* the checks built at once, 1 or more */
     int gnu, print;
     volatile sig_atomic_t *stop;
     char *const *environment;

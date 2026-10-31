@@ -1,5 +1,6 @@
 /* Native preparation of the tools declared by host checks. */
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -673,8 +674,43 @@ static int native_tool(struct hp_context *c, const char *name, struct json *inpu
     return bad ? -1 : 0;
 }
 
+/**
+ * Lock build/tests/host-suite/tools.lock, which serializes the preparations
+ * that build, copy and record the tools there, the same for every group and
+ * architecture. Return the lock's descriptor, which closing releases, or -1.
+ */
+static int tools_lock(struct hp_context *c)
+{
+    const char *path = "build/tests/host-suite/tools.lock";
+    int fd = hp_mkdir("build/tests/host-suite") ? -1 : open(path, O_RDWR | O_CREAT, 0644);
+#ifdef _WIN32
+    while (fd >= 0 && etude_win_file_lock(fd, F_WRLCK, 1)) {
+#else
+    struct flock lock;
+    memset(&lock, 0, sizeof lock);
+    lock.l_type = F_WRLCK;
+    lock.l_whence = SEEK_SET;
+    while (fd >= 0 && fcntl(fd, F_SETLKW, &lock)) {
+#endif
+        if (errno != EINTR || (c->stop && *c->stop)) {
+            close(fd);
+            fd = -1;
+        }
+    }
+    if (fd < 0)
+        fprintf(stderr, "host preparation: cannot lock %s: %s\n", path, strerror(errno));
+    return fd;
+}
+
 int hp_tools(struct hp_context *c, struct hp_check *check)
 {
+    /* A check with no tools takes no lock; its inputs stay as they are. */
+    if (!check->tools.n &&
+        !(hp_windows_host() && same(json_text(check->entry, "assertion_id"), "etude_platform")))
+        return 0;
+    int lock = c->print ? 0 : tools_lock(c);
+    if (lock < 0)
+        return -1;
     struct json *inputs = hp_value(JSON_ARRAY);
     struct hp_words common = {0};
     hp_common_flags(&common);
@@ -697,6 +733,8 @@ int hp_tools(struct hp_context *c, struct hp_check *check)
     }
     if (!bad && !c->print)
         bad = merge_inputs(check->entry, inputs);
+    if (!c->print)
+        close(lock);
     json_free(inputs);
     hp_words_free(&common);
     return bad ? -1 : 0;

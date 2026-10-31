@@ -91,13 +91,44 @@ set --
 if [ -n "${RACH2_HOST_CHECKS_PREVIOUS:-}" ]; then
     set -- --previous "$RACH2_HOST_CHECKS_PREVIOUS/tree"
 fi
+# The five preparations run at once and build their checks in JOBS slots that
+# they share: make's -j, else the launcher's JOBS, else one.
+jobs=
+set -f
+for word in ${MAKEFLAGS:-}; do
+    case $word in -j[1-9]*) jobs=${word#-j} ;; esac
+done
+set +f
+jobs=${jobs:-${JOBS:-1}}
+SLOTS=$OUT/slots
+: > "$SLOTS"
+pids=
+trap '[ -z "$pids" ] || kill $pids 2> /dev/null' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+prepare()
+{
+    "$REPO/build/tools/etude/etude" prepare -H --gnu --jobs "$jobs" --slots "$SLOTS" "$@" &
+    pids="$pids $!"
+}
 for arch in i686 x86_64; do
     case $arch in i686) base=build ;; *) base=build/x86_64 ;; esac
-    "$REPO/build/tools/etude/etude" prepare -H --gnu "$@" --arch "$arch" tests "$base/tests/host-suite/tests.inventory.json"
+    prepare "$@" --arch "$arch" tests "$base/tests/host-suite/tests.inventory.json"
 done
 for group in etude checkers fuzz; do
-    "$REPO/build/tools/etude/etude" prepare -H --gnu "$@" "$group" "build/tests/host-suite/$group.inventory.json"
+    prepare "$@" "$group" "build/tests/host-suite/$group.inventory.json"
 done
+failed=0
+for pid in $pids; do
+    wait "$pid" || failed=1
+done
+pids=
+[ "$failed" = 0 ] || {
+    echo 'host inventory: a preparation failed' >&2
+    exit 1
+}
+rm -f "$SLOTS" build/tests/host-suite/tools.lock
 make --no-print-directory -C "$REPO" -f tests/cases/host/products.mk \
     CC="$GNU_OUT/cross/bin/$GNU_TARGET-gcc --sysroot=$GNU_OUT/root" \
     PREFIX="$OUT" "$OUT/driver"

@@ -2,6 +2,8 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +11,9 @@
 #include <unistd.h>
 #ifdef _WIN32
 #include "win/files.h"
+#else
+#include <signal.h>
+#include <sys/wait.h>
 #endif
 #include "host_prepare.h"
 #include "posix/legacy_cases.h"
@@ -760,6 +765,181 @@ static int instrumentation(struct hp_check *check)
     return instrumented;
 }
 
+/**
+ * Build one check of the inventory and its tools, filling check->entry.
+ *
+ * Return 0, or -1 when the check cannot be prepared.
+ */
+static int prepare_check(struct hp_context *c, struct hp_check *check)
+{
+    int skip = inactive(c, check, backend(c, check));
+    if (skip)
+        return skip < 0 ? -1 : 0;
+    int instrumented = instrumentation(check);
+#ifdef __APPLE__
+    if (instrumented) {
+        hp_add(&check->tools, "atos");
+        hp_member(check->entry, "sanitizer_symbolizer",
+                  hp_string("build/tests/host-suite/sanitizer/atos"));
+    }
+#else
+    (void)instrumented;
+#endif
+    const char *program = json_text(check->entry, "program");
+    return !program || hp_build(c, check, program, 0) || hp_tools(c, check) ||
+                   native_guard(c, check, program)
+               ? -1
+               : 0;
+}
+
+#ifndef _WIN32
+/**
+ * Take one of `slots` slots, each a byte of the file `fd` write-locked with
+ * fcntl(2), trying them all from `hint` and then waiting for that one.
+ *
+ * A slot is released by take_slot's caller or when its process ends, however
+ * it ends. Return the slot, or -1 when the wait is stopped or fails.
+ */
+static long take_slot(struct hp_context *c, int fd, size_t hint)
+{
+    struct flock lock;
+    memset(&lock, 0, sizeof lock);
+    lock.l_type = F_WRLCK;
+    lock.l_whence = SEEK_SET;
+    lock.l_len = 1;
+    for (size_t i = 0; i < c->jobs; i++) {
+        lock.l_start = (off_t)((hint + i) % c->jobs);
+        if (!fcntl(fd, F_SETLK, &lock))
+            return (long)lock.l_start;
+    }
+    lock.l_start = (off_t)(hint % c->jobs);
+    while (fcntl(fd, F_SETLKW, &lock))
+        if (errno != EINTR || (c->stop && *c->stop))
+            return -1;
+    return (long)lock.l_start;
+}
+
+static void give_slot(int fd, long slot)
+{
+    struct flock lock;
+    memset(&lock, 0, sizeof lock);
+    lock.l_type = F_UNLCK;
+    lock.l_whence = SEEK_SET;
+    lock.l_start = (off_t)slot;
+    lock.l_len = 1;
+    fcntl(fd, F_SETLK, &lock);
+}
+
+/**
+ * Prepare the checks whose indices the pipe `queue` gives, as worker `job`:
+ * each in a slot of c->slots when that is set, its entry published as
+ * WORK/check.INDEX.json. Run in a child process; return its exit status.
+ */
+static int prepare_worker(struct hp_context *c, struct inventory *inventory, int queue, size_t job)
+{
+    int fd = c->slots ? open(c->slots, O_RDWR | O_CREAT, 0600) : -1;
+    char work[4096];
+    if ((c->slots && fd < 0) || hp_path(work, sizeof work, "%s/job.%zu", c->work, job) ||
+        hp_mkdir(work))
+        return 1;
+    /* A worker keeps make's output and its scans apart from the others'. */
+    snprintf(c->work, sizeof c->work, "%s", work);
+    uint32_t index;
+    ssize_t n;
+    while ((n = read(queue, &index, sizeof index)) == (ssize_t)sizeof index) {
+        if ((c->stop && *c->stop) || index >= inventory->count)
+            return 1;
+        long slot = fd >= 0 ? take_slot(c, fd, job) : 0;
+        if (slot < 0)
+            return 1;
+        struct hp_check *check = &inventory->checks[index];
+        char path[4096];
+        int bad = prepare_check(c, check) ||
+                  hp_path(path, sizeof path, "%s/../check.%u.json", c->work, (unsigned)index) ||
+                  hp_publish(path, check->entry);
+        if (fd >= 0)
+            give_slot(fd, slot);
+        if (bad)
+            return 1;
+    }
+    return n == 0 ? 0 : 1;
+}
+
+/**
+ * Prepare the checks of `inventory` in up to c->jobs child processes, which
+ * take the checks' indices from one pipe in order, and replace each check's
+ * entry with the one its worker published. The first worker to fail stops the
+ * others. Return 0, or -1.
+ */
+static int prepare_parallel(struct hp_context *c, struct inventory *inventory)
+{
+    size_t jobs = c->jobs < inventory->count ? c->jobs : inventory->count, started = 0;
+    pid_t *workers = calloc(jobs, sizeof *workers);
+    int queue[2], bad = !workers || pipe(queue);
+    if (bad) {
+        free(workers);
+        return -1;
+    }
+    fflush(NULL);
+    for (; !bad && started < jobs; started++) {
+        workers[started] = fork();
+        if (workers[started] == 0) {
+            close(queue[1]);
+            int status = prepare_worker(c, inventory, queue[0], started);
+            fflush(NULL);
+            _exit(status);
+        }
+        bad = workers[started] < 0;
+    }
+    if (bad)
+        started--;
+    close(queue[0]);
+    /* Each index is one write of fewer than PIPE_BUF bytes, read whole. */
+    for (uint32_t i = 0; !bad && i < inventory->count; i++) {
+        const char *id = json_text(inventory->checks[i].entry, "assertion_id");
+        if ((!c->only || !strcmp(c->only, id)) && write(queue[1], &i, sizeof i) != sizeof i)
+            bad = 1;
+    }
+    close(queue[1]);
+    for (size_t left = started, stopped = 0; left;) {
+        int status;
+        pid_t pid = waitpid(-1, &status, 0);
+        if (pid < 0 && errno != EINTR) {
+            bad = 1;
+            break;
+        }
+        for (size_t i = 0; pid > 0 && i < started; i++)
+            if (workers[i] == pid) {
+                workers[i] = 0;
+                left--;
+                if (!WIFEXITED(status) || WEXITSTATUS(status))
+                    bad = 1;
+            }
+        if (!stopped && (bad || (c->stop && *c->stop))) {
+            for (size_t i = 0; i < started; i++)
+                if (workers[i] > 0)
+                    kill(workers[i], SIGTERM);
+            stopped = 1;
+        }
+    }
+    free(workers);
+    for (size_t i = 0; !bad && i < inventory->count; i++) {
+        struct hp_check *check = &inventory->checks[i];
+        const char *id = json_text(check->entry, "assertion_id");
+        char path[4096];
+        if (c->only && strcmp(c->only, id))
+            continue;
+        struct json *entry =
+            !hp_path(path, sizeof path, "%s/check.%zu.json", c->work, i) ? hp_document(path) : NULL;
+        if (!entry)
+            bad = 1;
+        json_free(check->entry);
+        check->entry = entry;
+    }
+    return bad || (c->stop && *c->stop) ? -1 : 0;
+}
+#endif
+
 static int inventories(struct hp_context *c, const char *base)
 {
     struct inventory inventory = {0};
@@ -769,31 +949,19 @@ static int inventories(struct hp_context *c, const char *base)
                                                       : extra_checks(c, &inventory, base);
     if (inventory.count > 1)
         qsort(inventory.checks, inventory.count, sizeof(*inventory.checks), check_order);
+    int parallel = 0;
+#ifndef _WIN32
+    parallel = c->jobs > 1 && !c->print && inventory.count > 1;
+    if (!bad && parallel)
+        bad = prepare_parallel(c, &inventory);
+#endif
     for (size_t i = 0; !bad && i < inventory.count; i++) {
         struct hp_check *check = &inventory.checks[i];
         const char *id = json_text(check->entry, "assertion_id");
         if (c->only && strcmp(c->only, id))
             continue;
-        int skip = inactive(c, check, backend(c, check));
-        if (skip < 0) {
-            bad = 1;
-            break;
-        }
-        if (!skip) {
-            int instrumented = instrumentation(check);
-#ifdef __APPLE__
-            if (instrumented) {
-                hp_add(&check->tools, "atos");
-                hp_member(check->entry, "sanitizer_symbolizer",
-                          hp_string("build/tests/host-suite/sanitizer/atos"));
-            }
-#else
-            (void)instrumented;
-#endif
-            const char *program = json_text(check->entry, "program");
-            bad = !program || hp_build(c, check, program, 0) || hp_tools(c, check) ||
-                  native_guard(c, check, program);
-        }
+        if (!parallel)
+            bad = prepare_check(c, check);
         if (!bad) {
             hp_item(checks, check->entry);
             check->entry = NULL;
@@ -828,19 +996,28 @@ static int options(struct hp_context *c, int argc, char **argv)
 {
     int rest = 0;
     c->arch = getenv("ARCH") ? getenv("ARCH") : "i686";
+    c->jobs = 1;
     for (int i = 1; i < argc; i++) {
         const char *word = argv[i];
         if (!strcmp(word, "--gnu"))
             c->gnu = 1;
         else if (!strcmp(word, "--print-commands"))
             c->print = 1;
-        else if (member("--arch --only --previous", word)) {
+        else if (member("--arch --jobs --only --previous --slots", word)) {
             if (++i == argc)
                 return -1;
             if (!strcmp(word, "--arch"))
                 c->arch = argv[i];
-            else if (!strcmp(word, "--only"))
+            else if (!strcmp(word, "--jobs")) {
+                char *end;
+                unsigned long jobs = strtoul(argv[i], &end, 10);
+                if (*argv[i] < '1' || *argv[i] > '9' || *end || jobs > 1024)
+                    return -1;
+                c->jobs = jobs;
+            } else if (!strcmp(word, "--only"))
                 c->only = argv[i];
+            else if (!strcmp(word, "--slots"))
+                c->slots = argv[i];
             else
                 c->previous = argv[i];
         } else if (*word == '-' || rest == 2)
@@ -886,8 +1063,8 @@ int etude_host_prepare_main(int argc, char **argv, volatile sig_atomic_t *stop)
     memset(&c, 0, sizeof(c));
     c.stop = stop;
     if (options(&c, argc, argv) || strlen(c.output) > 1024 || !realpath(".", c.tree)) {
-        fprintf(stderr, "usage: etude prepare -H [--arch ARCH] [--gnu] [--only ID] "
-                        "[--previous TREE] [--print-commands] GROUP OUTPUT\n");
+        fprintf(stderr, "usage: etude prepare -H [--arch ARCH] [--gnu] [--jobs N] [--only ID] "
+                        "[--previous TREE] [--print-commands] [--slots FILE] GROUP OUTPUT\n");
         return 2;
     }
     snprintf(parent, sizeof(parent), "%s", c.output);
