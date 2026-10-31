@@ -386,6 +386,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "kd",
+          "checks": "tests/host/kd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "keymap",
           "checks": "tests/host/keymap_hosttest.c checks text-loaded layouts, compose, modifiers, locks, UTF-8 and xterm key bytes under the sanitizers",
           "source": "scenario"
