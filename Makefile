@@ -1709,6 +1709,7 @@ check-libc: $(LIBC_STAMP) $(MUSL_OUTPUTS)
 # are included so that one dependency graph covers the product and the
 # variants only a suite needs.
 include mk/host.mk
+include mk/term.mk
 include mk/images.mk
 include mk/unifont.mk
 include mk/etude-image.mk

@@ -183,7 +183,7 @@ inhouse_ch() {
     find rach2 \( -name '*.c' -o -name '*.h' \) 2>/dev/null
     find vendor/musl -path '*/install' -prune -o -path '*/musl-*' -prune -o \
          \( -name '*.c' -o -name '*.h' \) -print 2>/dev/null
-    find krffs utils ish tests -path '*/vendor' -prune -o -path '*/vs-dokany' -prune \
+    find krffs utils ish term tests -path '*/vendor' -prune -o -path '*/vs-dokany' -prune \
          -o \( -name '*.c' -o -name '*.h' \) -print 2>/dev/null
     find tools \( -name '*.c' -o -name '*.h' \) 2>/dev/null
 }
@@ -792,7 +792,7 @@ in_tooling() {
         return 0
     fi
     echo "style: $CASE: the case runs in etude's tooling machine"
-    git -C "$REPO" ls-files -co --exclude-standard -- .clang-format mk rach2 krffs utils ish \
+    git -C "$REPO" ls-files -co --exclude-standard -- .clang-format mk rach2 krffs utils ish term \
         tests tools vendor/musl | while IFS= read -r f; do
         [ ! -f "$REPO/$f" ] || printf '%s\n' "$f"
     done >"$VDIR/files"
