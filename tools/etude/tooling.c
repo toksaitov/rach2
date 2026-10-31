@@ -838,8 +838,14 @@ static void disk(struct line *l, const char *id, const char *file, const char *f
     arg(l, "-drive");
     arg(l, "if=none,id=%s,file=%s,format=%s", id, v, format);
     arg(l, "-device");
+#ifdef _WIN32
+    /* Per-processor disk queues exceed Windows' 64-handle I/O wait set. */
+    arg(l, "virtio-blk-pci,drive=%s,num-queues=1%s%s%s", id, serial != NULL ? ",serial=" : "",
+        serial != NULL ? serial : "", extra);
+#else
     arg(l, "virtio-blk-pci,drive=%s%s%s%s", id, serial != NULL ? ",serial=" : "",
         serial != NULL ? serial : "", extra);
+#endif
 }
 
 /* A boot's processors, its memory in MiB, and whether it has a network. */
