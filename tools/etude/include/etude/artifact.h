@@ -42,6 +42,77 @@ int etude_digest_file(const char *cache, const char *path, struct stat *st,
                       char digest[ETUDE_DIGEST_HEX + 1]);
 
 /**
+ * Give the SHA-256 of the regular file at `path` in `digest`, read whole,
+ * and its status as it was opened in `*st`, as etude_digest_file does with
+ * no digests file; `*keep` says whether the digest may be kept, by the rule
+ * etude_digest_file keeps one by. It may be called from several threads.
+ *
+ * @return 0, or -1 with errno set as etude_digest_file sets it.
+ */
+int etude_digest_read(const char *path, struct stat *st, char digest[ETUDE_DIGEST_HEX + 1],
+                      int *keep);
+
+/*
+ * The digests of one digests file, read once and written once, for a
+ * process that takes many: each etude_digest_file reads the whole file, and
+ * each digest it keeps writes the whole file again. A table is used from one
+ * thread at a time.
+ */
+struct etude_digests;
+
+/**
+ * Read digests file `cache` into a table; a file that is not there gives an
+ * empty one.
+ *
+ * @return the table, or NULL with errno ENOMEM.
+ */
+struct etude_digests *etude_digests_open(const char *cache);
+
+/**
+ * Give the digest that table `d` keeps for the regular file at `path`, and
+ * the file's status in `*st`.
+ *
+ * @return 0 with the digest, 1 when `d` keeps none, or -1 with errno set as
+ *         etude_digest_file sets it.
+ */
+int etude_digests_find(const struct etude_digests *d, const char *path, struct stat *st,
+                       char digest[ETUDE_DIGEST_HEX + 1]);
+
+/** Keep in table `d` `digest` as the digest of the file at `path`, an
+ * absolute path, of status `*st`, replacing a digest of the same file. */
+void etude_digests_keep(struct etude_digests *d, const char *path, const struct stat *st,
+                        const char *digest);
+
+/** Give the digest of the file at `path` as etude_digest_file does, with
+ * table `d` for its digests file. */
+int etude_digests_file(struct etude_digests *d, const char *path, struct stat *st,
+                       char digest[ETUDE_DIGEST_HEX + 1]);
+
+/**
+ * Write the digests that table `d` kept to its digests file, as one write
+ * under the file's lock that keeps the lines other processes wrote
+ * meanwhile, and free the table. A digest that cannot be written is read
+ * again the next time, so nothing here fails; NULL is ignored.
+ */
+void etude_digests_close(struct etude_digests *d);
+
+/**
+ * Write what descriptor `from` gives to its end to a new file at `path`,
+ * which takes the place of a file there only once it is whole, and keep its
+ * digest in digests file `cache` unless that is NULL, so that the step that
+ * makes an image gives its digest without the image being read back.
+ *
+ * The digest is kept without the settling of a read, since it is the digest
+ * of what this call wrote, and no other writer has the file's name until the
+ * rename. A chunk of zeros is left a hole.
+ *
+ * @return 0 with the digest, or -1 with errno set and nothing at `path`
+ *         changed.
+ */
+int etude_digest_write(const char *cache, int from, const char *path,
+                       char digest[ETUDE_DIGEST_HEX + 1]);
+
+/**
  * Open the store in directory `dir`, made with its subdirectories if they
  * are missing, and remove the partial files of writers that have ended.
  *

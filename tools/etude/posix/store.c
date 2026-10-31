@@ -194,6 +194,169 @@ static int all_zero(const unsigned char *buf, size_t n)
     return n == 0 || (buf[0] == 0 && memcmp(buf, buf + 1, n - 1) == 0);
 }
 
+/* ---- The digest on the processor's SHA instructions. ---- */
+
+/*
+ * etude hashes every byte of every artifact it records, and SHA-256 in
+ * portable C takes some 280 MB/s, so the blocks of a long input are
+ * compressed by the processor's SHA-256 instructions where it has them: the
+ * SHA extensions of x86, which CPUID reports, and the SHA2 instructions of
+ * Armv8, which the compiler reports when its target has them. The portable
+ * code of utils/sha256.c, which the guest program reflash also links, stays
+ * the reference: it takes the bytes that do not fill a block and the padding,
+ * and the whole input on any other processor. The host tests compare the two.
+ */
+#if (defined(__x86_64__) || defined(__i386__)) && defined(__GNUC__)
+#include <cpuid.h>
+#include <immintrin.h>
+#define SHA_X86 1
+#elif defined(__aarch64__) && defined(__ARM_FEATURE_SHA2)
+#include <arm_neon.h>
+#define SHA_ARM 1
+#endif
+
+#ifdef RACH2_HOSTTEST
+/* In a host test, nonzero keeps the portable code, to compare with. */
+int etude_store_portable;
+#define SHA_PORTABLE etude_store_portable
+#else
+#define SHA_PORTABLE 0
+#endif
+
+#if defined(SHA_X86) || defined(SHA_ARM)
+/* The round constants of FIPS 180-4, section 4.2.2. */
+static const uint32_t sha_k[64] = {
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
+#endif
+
+#ifdef SHA_X86
+/** Say whether the processor has the SHA extensions and SSE4.1. */
+static int sha_have(void)
+{
+    unsigned a, b, c, d;
+
+    if (SHA_PORTABLE || !__get_cpuid(1, &a, &b, &c, &d) || !(c & bit_SSE4_1))
+        return 0;
+    return __get_cpuid_count(7, 0, &a, &b, &c, &d) && (b & bit_SHA);
+}
+
+/**
+ * Compress the `n` blocks at `p` into the hash words `w`. The instructions
+ * keep the words as ABEF and CDGH, and take two rounds each.
+ */
+__attribute__((target("sha,sse4.1"))) static void sha_blocks(uint32_t w[8], const unsigned char *p,
+                                                             size_t n)
+{
+    const __m128i swap = _mm_set_epi64x(0x0c0d0e0f08090a0bLL, 0x0405060700010203LL);
+    __m128i abef, cdgh, t, m[4], k, abef0, cdgh0;
+    int i;
+
+    t = _mm_shuffle_epi32(_mm_loadu_si128((const __m128i *)&w[0]), 0xb1);
+    cdgh = _mm_shuffle_epi32(_mm_loadu_si128((const __m128i *)&w[4]), 0x1b);
+    abef = _mm_alignr_epi8(t, cdgh, 8);
+    cdgh = _mm_blend_epi16(cdgh, t, 0xf0);
+    for (; n > 0; n--, p += 64) {
+        abef0 = abef;
+        cdgh0 = cdgh;
+        for (i = 0; i < 16; i++) {
+            if (i < 4)
+                m[i] = _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *)(p + 16 * i)), swap);
+            else
+                m[i % 4] = _mm_sha256msg2_epu32(
+                    _mm_add_epi32(_mm_sha256msg1_epu32(m[i % 4], m[(i + 1) % 4]),
+                                  _mm_alignr_epi8(m[(i + 3) % 4], m[(i + 2) % 4], 4)),
+                    m[(i + 3) % 4]);
+            k = _mm_add_epi32(m[i % 4], _mm_loadu_si128((const __m128i *)&sha_k[4 * i]));
+            cdgh = _mm_sha256rnds2_epu32(cdgh, abef, k);
+            abef = _mm_sha256rnds2_epu32(abef, cdgh, _mm_shuffle_epi32(k, 0x0e));
+        }
+        abef = _mm_add_epi32(abef, abef0);
+        cdgh = _mm_add_epi32(cdgh, cdgh0);
+    }
+    t = _mm_shuffle_epi32(abef, 0x1b);
+    cdgh = _mm_shuffle_epi32(cdgh, 0xb1);
+    _mm_storeu_si128((__m128i *)&w[0], _mm_blend_epi16(t, cdgh, 0xf0));
+    _mm_storeu_si128((__m128i *)&w[4], _mm_alignr_epi8(cdgh, t, 8));
+}
+#endif
+
+#ifdef SHA_ARM
+/** Say whether the processor has the SHA2 instructions, as every target
+ * that defines __ARM_FEATURE_SHA2 does. */
+static int sha_have(void)
+{
+    return !SHA_PORTABLE;
+}
+
+/** Compress the `n` blocks at `p` into the hash words `w`, ABCD and EFGH. */
+static void sha_blocks(uint32_t w[8], const unsigned char *p, size_t n)
+{
+    uint32x4_t abcd = vld1q_u32(&w[0]), efgh = vld1q_u32(&w[4]), abcd0, efgh0, m[4], k, t;
+    int i;
+
+    for (; n > 0; n--, p += 64) {
+        abcd0 = abcd;
+        efgh0 = efgh;
+        for (i = 0; i < 16; i++) {
+            if (i < 4)
+                m[i] = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(p + 16 * i)));
+            else
+                m[i % 4] = vsha256su1q_u32(vsha256su0q_u32(m[i % 4], m[(i + 1) % 4]),
+                                           m[(i + 2) % 4], m[(i + 3) % 4]);
+            k = vaddq_u32(m[i % 4], vld1q_u32(&sha_k[4 * i]));
+            t = abcd;
+            abcd = vsha256hq_u32(abcd, efgh, k);
+            efgh = vsha256h2q_u32(efgh, t, k);
+        }
+        abcd = vaddq_u32(abcd, abcd0);
+        efgh = vaddq_u32(efgh, efgh0);
+    }
+    vst1q_u32(&w[0], abcd);
+    vst1q_u32(&w[4], efgh);
+}
+#endif
+
+/**
+ * Take the `n` bytes at `p` into the digest `h`, as sha256_update does: the
+ * whole blocks by the processor's instructions where it has them.
+ */
+static void hash_update(struct sha256 *h, const unsigned char *p, size_t n)
+{
+#if defined(SHA_X86) || defined(SHA_ARM)
+    uint32_t w[8];
+    size_t take, blocks;
+    int i;
+
+    if (!sha_have() || n < 64) {
+        sha256_update(h, p, n);
+        return;
+    }
+    if (h->fill != 0) {
+        take = 64 - h->fill;
+        sha256_update(h, p, take);
+        p += take;
+        n -= take;
+    }
+    blocks = n / 64;
+    for (i = 0; i < 8; i++)
+        w[i] = (uint32_t)h->h[i];
+    sha_blocks(w, p, blocks);
+    for (i = 0; i < 8; i++)
+        h->h[i] = w[i];
+    h->bytes += (unsigned long long)blocks * 64;
+    sha256_update(h, p + blocks * 64, n - blocks * 64);
+#else
+    sha256_update(h, p, n);
+#endif
+}
+
 /**
  * Read `from` to its end or `limit`, hashing it unless `hex` is NULL, and
  * write it to `to` unless `to` is negative; 0 with the digest and size, or
@@ -245,7 +408,7 @@ static int copy_stream(int from, int to, char hex[ETUDE_DIGEST_HEX + 1], uint64_
             break;
         }
         if (hex != NULL)
-            sha256_update(&h, buf, (size_t)r);
+            hash_update(&h, buf, (size_t)r);
         total += (uint64_t)r;
         if (to < 0)
             continue;
@@ -581,40 +744,76 @@ static void parent_make(const char *path)
     free(dir);
 }
 
+/* A line of a digests file in memory. */
+struct digest_line {
+    struct status k;
+    char hex[ETUDE_DIGEST_HEX + 1];
+    char *path; /* absolute */
+};
+
+/* The digests of one digests file, read once: its lines as they were read,
+ * then those kept since, which etude_digests_close writes. */
+struct etude_digests {
+    char *cache;
+    struct digest_line *v;
+    size_t n, cap;
+    size_t read; /* the first `read` of `v` are the file's */
+};
+
+/** Say whether a line of the file at `path` can be kept: an absolute path,
+ * one line long, that leaves room in a line for the rest. */
+static int digests_keepable(const char *path)
+{
+    return digests_absolute(path) && strchr(path, '\n') == NULL &&
+           strlen(path) + 6 * 21 + ETUDE_DIGEST_HEX < DIGESTS_LINE;
+}
+
+/** Say whether the file of status `k` is one of the `n` files of `mine`. */
+static int digests_mine(const struct digest_line *mine, size_t n, const struct status *k)
+{
+    size_t i;
+
+    for (i = 0; i < n; i++)
+        if (mine[i].k.dev == k->dev && mine[i].k.ino == k->ino)
+            return 1;
+    return 0;
+}
+
 /**
- * Keep `hex` in digests file `cache` as the digest of the file at `path`,
- * an absolute path, whose status is `k`.
+ * Keep the `n` lines `mine`, of distinct files, in digests file `cache`.
  *
  * The file is written whole as `CACHE.new` and renamed to its name, under
  * the lock of `CACHE.lock`, so that a reader finds it whole and two writers
- * do not lose each other's lines. The line of the same file is replaced,
- * and a line whose file is gone or has changed is dropped, so that the file
- * keeps no more lines than there are files unchanged. A digest that cannot
- * be kept is only read again the next time, so nothing here fails, and
- * errno is kept.
+ * do not lose each other's lines. The lines of `mine` come first, and then
+ * each line of the file as it is now whose file is none of them and is still
+ * there unchanged, so that the file keeps no more lines than there are files
+ * unchanged. A digest that cannot be kept is only read again the next time,
+ * so nothing here fails, and errno is kept.
  */
-static void digests_keep(const char *cache, const char *path, const struct status *k,
-                         const char *hex)
+static void digests_write(const char *cache, const struct digest_line *mine, size_t n)
 {
     char line[DIGESTS_LINE], old[ETUDE_DIGEST_HEX + 1], *other;
     char *lock = suffixed(cache, ".lock"), *next = suffixed(cache, ".new");
     struct status e, now;
     struct stat st;
-    size_t kept = 1;
+    size_t i, kept = 0;
     FILE *in, *out = NULL;
-    int fd = -1, ok, saved = errno;
+    int fd = -1, ok = 1, saved = errno;
 
-    if (lock == NULL || next == NULL || !digests_absolute(path) || strchr(path, '\n') != NULL ||
-        strlen(path) + 6 * 21 + ETUDE_DIGEST_HEX >= DIGESTS_LINE)
+    if (lock == NULL || next == NULL)
         goto done;
     parent_make(cache);
     if ((fd = open(lock, O_RDWR | O_CREAT | O_CLOEXEC, 0644)) < 0 || store_wait_lock(fd) != 0 ||
         (out = fopen(next, "w")) == NULL)
         goto done;
-    ok = digests_put(out, k, hex, path) == 0;
+    for (i = 0; ok && i < n && kept < DIGESTS_MAX; i++)
+        if (digests_keepable(mine[i].path)) {
+            ok = digests_put(out, &mine[i].k, mine[i].hex, mine[i].path) == 0;
+            kept++;
+        }
     if ((in = fopen(cache, "r")) != NULL) {
         while (ok && kept < DIGESTS_MAX && next_line(in, line, sizeof(line))) {
-            if (digests_line(line, &e, old, &other) != 0 || (e.dev == k->dev && e.ino == k->ino) ||
+            if (digests_line(line, &e, old, &other) != 0 || digests_mine(mine, n, &e) ||
                 stat(other, &st) != 0)
                 continue;
             status_of(&st, &now);
@@ -636,21 +835,153 @@ done:
     errno = saved;
 }
 
+/** Keep `hex` in digests file `cache` as the digest of the file at `path`,
+ * an absolute path, whose status is `k`, as digests_write does. */
+static void digests_keep(const char *cache, const char *path, const struct status *k,
+                         const char *hex)
+{
+    struct digest_line l;
+
+    l.k = *k;
+    memcpy(l.hex, hex, sizeof(l.hex));
+    l.path = (char *)path;
+    digests_write(cache, &l, 1);
+}
+
+/** Say whether the read `r` may be kept: the file did not change while it
+ * was read, nor so shortly before the read began that a write after the
+ * read could leave its status as it was. */
+static int digests_settled(const struct reading *r)
+{
+    return status_same(&r->before, &r->after) && r->before.ctime + SETTLE <= r->began;
+}
+
 /**
  * Keep the digest `hex` of the file at `path` in digests file `cache`, when
- * there is one, after the whole read `r`. A file that changed while it was
- * read is not kept, nor one that changed so shortly before the read began
- * that a write after the read could leave its status as it was.
+ * there is one, after the whole read `r`, if the read may be kept.
  */
 static void digests_read(const char *cache, const char *path, const struct reading *r,
                          const char *hex)
 {
-    if (cache != NULL && status_same(&r->before, &r->after) && r->before.ctime + SETTLE <= r->began)
+    if (cache != NULL && digests_settled(r))
         digests_keep(cache, path, &r->before, hex);
 }
 
-int etude_digest_file(const char *cache, const char *path, struct stat *st,
-                      char digest[ETUDE_DIGEST_HEX + 1])
+/** Add to `d` the line of the file at `path` of status `k` and digest
+ * `hex`; 0, or -1 with errno ENOMEM. */
+static int digests_add(struct etude_digests *d, const struct status *k, const char *hex,
+                       const char *path)
+{
+    struct digest_line *v;
+    size_t cap;
+
+    if (d->n == d->cap) {
+        cap = d->cap != 0 ? 2 * d->cap : 256;
+        if ((v = realloc(d->v, cap * sizeof(*v))) == NULL) {
+            errno = ENOMEM;
+            return -1;
+        }
+        d->v = v;
+        d->cap = cap;
+    }
+    if ((d->v[d->n].path = strdup(path)) == NULL) {
+        errno = ENOMEM;
+        return -1;
+    }
+    d->v[d->n].k = *k;
+    memcpy(d->v[d->n].hex, hex, sizeof(d->v[d->n].hex));
+    d->n++;
+    return 0;
+}
+
+struct etude_digests *etude_digests_open(const char *cache)
+{
+    struct etude_digests *d = calloc(1, sizeof(*d));
+    char line[DIGESTS_LINE], hex[ETUDE_DIGEST_HEX + 1], *path;
+    struct status k;
+    FILE *f;
+
+    if (d == NULL || (d->cache = strdup(cache)) == NULL) {
+        free(d);
+        errno = ENOMEM;
+        return NULL;
+    }
+    if ((f = fopen(cache, "r")) != NULL) {
+        while (d->n < DIGESTS_MAX && next_line(f, line, sizeof(line)))
+            if (digests_line(line, &k, hex, &path) == 0 && digests_add(d, &k, hex, path) != 0) {
+                fclose(f);
+                d->read = d->n;
+                etude_digests_close(d);
+                errno = ENOMEM;
+                return NULL;
+            }
+        fclose(f);
+    }
+    d->read = d->n;
+    return d;
+}
+
+int etude_digests_find(const struct etude_digests *d, const char *path, struct stat *st,
+                       char digest[ETUDE_DIGEST_HEX + 1])
+{
+    struct status k;
+    size_t i;
+
+    if (stat(path, st) != 0)
+        return -1;
+    if (!S_ISREG(st->st_mode)) {
+        errno = S_ISDIR(st->st_mode) ? EISDIR : EINVAL;
+        return -1;
+    }
+    status_of(st, &k);
+    for (i = d->n; i-- > 0;)
+        if (status_same(&d->v[i].k, &k)) {
+            memcpy(digest, d->v[i].hex, sizeof(d->v[i].hex));
+            return 0;
+        }
+    return 1;
+}
+
+void etude_digests_keep(struct etude_digests *d, const char *path, const struct stat *st,
+                        const char *digest)
+{
+    struct status k;
+    size_t i;
+    char *copy;
+
+    status_of(st, &k);
+    for (i = d->read; i < d->n; i++)
+        if (d->v[i].k.dev == k.dev && d->v[i].k.ino == k.ino) {
+            if ((copy = strdup(path)) == NULL)
+                return;
+            free(d->v[i].path);
+            d->v[i].path = copy;
+            d->v[i].k = k;
+            memcpy(d->v[i].hex, digest, sizeof(d->v[i].hex));
+            return;
+        }
+    (void)digests_add(d, &k, digest, path);
+}
+
+void etude_digests_close(struct etude_digests *d)
+{
+    size_t i;
+    int saved = errno;
+
+    if (d == NULL)
+        return;
+    if (d->n > d->read)
+        digests_write(d->cache, d->v + d->read, d->n - d->read);
+    for (i = 0; i < d->n; i++)
+        free(d->v[i].path);
+    free(d->v);
+    free(d->cache);
+    free(d);
+    errno = saved;
+}
+
+int etude_digest_read(const char *path, struct stat *st, char digest[ETUDE_DIGEST_HEX + 1],
+                      int *keep)
 {
     struct reading r;
     struct stat now;
@@ -658,7 +989,6 @@ int etude_digest_file(const char *cache, const char *path, struct stat *st,
 
     r.began = now_ns();
     fd = open(path, O_RDONLY | O_CLOEXEC);
-
     if (fd < 0)
         return -1;
     if (fstat(fd, st) != 0)
@@ -667,22 +997,86 @@ int etude_digest_file(const char *cache, const char *path, struct stat *st,
         errno = S_ISDIR(st->st_mode) ? EISDIR : EINVAL;
         goto fail;
     }
-    status_of(st, &r.before);
-    if (cache != NULL && digests_find(cache, &r.before, digest) == 0) {
-        close(fd);
-        return 0;
-    }
     if (copy_hash(fd, -1, digest, NULL) != 0 || fstat(fd, &now) != 0)
         goto fail;
     close(fd);
+    status_of(st, &r.before);
     status_of(&now, &r.after);
-    digests_read(cache, path, &r, digest);
+    *keep = digests_settled(&r);
     return 0;
 fail:
     e = errno;
     close(fd);
     errno = e;
     return -1;
+}
+
+int etude_digests_file(struct etude_digests *d, const char *path, struct stat *st,
+                       char digest[ETUDE_DIGEST_HEX + 1])
+{
+    int r = etude_digests_find(d, path, st, digest), keep;
+
+    if (r <= 0)
+        return r;
+    if (etude_digest_read(path, st, digest, &keep) != 0)
+        return -1;
+    if (keep)
+        etude_digests_keep(d, path, st, digest);
+    return 0;
+}
+
+int etude_digest_file(const char *cache, const char *path, struct stat *st,
+                      char digest[ETUDE_DIGEST_HEX + 1])
+{
+    struct etude_digests *d;
+    int r, keep;
+
+    if (cache == NULL)
+        return etude_digest_read(path, st, digest, &keep);
+    if ((d = etude_digests_open(cache)) == NULL)
+        return -1;
+    r = etude_digests_file(d, path, st, digest);
+    etude_digests_close(d);
+    return r;
+}
+
+int etude_digest_write(const char *cache, int from, const char *path,
+                       char digest[ETUDE_DIGEST_HEX + 1])
+{
+    char *part = suffixed(path, ".part"), *whole = NULL;
+    struct digest_line l;
+    struct stat st;
+    int fd = -1, ok = 0, e;
+
+    if (part == NULL) {
+        errno = ENOMEM;
+        return -1;
+    }
+    (void)unlink(part);
+    if ((fd = open(part, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644)) < 0 ||
+        copy_stream(from, fd, digest, NULL, UINT64_MAX, NULL) != 0 || fsync(fd) != 0)
+        goto done;
+    e = close(fd);
+    fd = -1;
+    if (e != 0 || rename(part, path) != 0 || stat(path, &st) != 0)
+        goto done;
+    ok = 1;
+    if (cache != NULL && (whole = realpath(path, NULL)) != NULL) {
+        status_of(&st, &l.k);
+        memcpy(l.hex, digest, sizeof(l.hex));
+        l.path = whole;
+        digests_write(cache, &l, 1);
+    }
+done:
+    e = errno;
+    if (fd >= 0)
+        close(fd);
+    if (!ok)
+        unlink(part);
+    free(part);
+    free(whole);
+    errno = e;
+    return ok ? 0 : -1;
 }
 
 /** Say whether the store's digests file keeps `digest` as the digest of a
