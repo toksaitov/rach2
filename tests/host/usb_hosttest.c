@@ -1,7 +1,7 @@
 /*
  * usb_hosttest.c: the USB core, usb/core.c, with no controller: its walk of a
- * configuration's descriptors, the quiesce of an endpoint and the slot given
- * back.
+ * configuration's descriptors, the quiesce of an endpoint, the slot given
+ * back, and a keyboard's LED report.
  *
  * What a device says about itself arrives as a string of descriptors, each
  * giving its own length, and the walk has nothing but those lengths to go
@@ -219,6 +219,15 @@ static struct {
     /* The calls of `xhci_endpoint_retire_all`. */
     int retired_all;
     int submits; /* transfers the core tried to submit */
+
+    /* The transfers submitted on the control endpoint, and the last of
+     * them: its setup packet, its data stage's length and direction, and
+     * the first byte of its data. */
+    int control_submits;
+    uint8_t setup[8];
+    uint32_t length;
+    int direction;
+    int data;
 } ring;
 
 /*
@@ -273,6 +282,13 @@ static void ring_reset(void)
     }
     ring.retired_all = 0;
     ring.submits = 0;
+    ring.control_submits = 0;
+    for (i = 0; i < 8; i++) {
+        ring.setup[i] = 0;
+    }
+    ring.length = 0;
+    ring.direction = -1;
+    ring.data = -1;
 }
 
 /** Issue Disable Slot for `device`, recorded as `CMD_DISABLE`. */
@@ -328,16 +344,26 @@ int xhci_command_done(struct xhci_ctrl *hc, struct usb_command_result *out)
     return ring.status == USB_XFER_OK ? 1 : -1;
 }
 
-/** Count a transfer, or return -1 on an endpoint marked quiescing, as the
- * driver does. */
+/** Count a transfer, and record one on the control endpoint, or return -1
+ * on an endpoint marked quiescing, as the driver does. */
 int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb_transfer *transfer)
 {
+    int i;
+
     (void)device;
-    (void)transfer;
     if (ring.quiescing[endpoint & 31]) {
         return -1; /* what the driver does while the core quiesces the endpoint */
     }
     ring.submits++;
+    if (endpoint == 1 && transfer->setup != 0) {
+        ring.control_submits++;
+        for (i = 0; i < 8; i++) {
+            ring.setup[i] = transfer->setup[i];
+        }
+        ring.length = transfer->length;
+        ring.direction = transfer->direction;
+        ring.data = transfer->length != 0 ? transfer->buffer[0] : -1;
+    }
     return 0;
 }
 
@@ -553,6 +579,28 @@ void hid_report(int slot, int kind, const uint8_t *report, int length)
 void hid_gone(int slot)
 {
     (void)slot;
+}
+
+/* The LED report the rows have the HID driver ask for, -1 for none, and the
+ * last report the core said it sent: its device, byte and outcome, and how
+ * many it said it sent. */
+static int led_wanted = -1;
+static int led_sent_device, led_sent_report, led_sent_ok, led_sent_count;
+
+/** Return `led_wanted`. */
+int hid_led_report(int device)
+{
+    (void)device;
+    return led_wanted;
+}
+
+/** Record what the core sent. */
+void hid_led_sent(int device, int report, int ok)
+{
+    led_sent_device = device;
+    led_sent_report = report;
+    led_sent_ok = ok;
+    led_sent_count++;
 }
 
 /** Do nothing: no row checks the announcement of a mouse. */
@@ -1061,6 +1109,108 @@ static void interface_rows(void)
           info.found && info.kind == USB_KIND_HID && info.number == 0 && info.ep_number == 4);
 }
 
+/* ---- a keyboard's LEDs ---- */
+
+/**
+ * Put a running boot keyboard in entry `i`, on `slot`, with its interface
+ * number 2 and its reports on DCI 3; with `protocol` USB_PROTOCOL_MOUSE, a
+ * mouse. Return the entry.
+ */
+static struct usb_device_state *hid_at(int i, int slot, int protocol)
+{
+    struct usb_device_state *d = stick_at(i, ST_RUNNING, slot);
+
+    d->interface.kind = USB_KIND_HID;
+    d->interface.protocol = protocol;
+    d->interface.number = 2;
+    d->interface.ep_max_packet = 8;
+    d->ep_out_dci = 0;
+    return d;
+}
+
+/** Complete the control transfer outstanding on `d` with `status`. */
+static void control_done(struct usb_device_state *d, int status)
+{
+    d->control.status = status;
+    d->control.endpoint = 1;
+    d->have_control = 1;
+}
+
+/**
+ * Check a running keyboard's LED report: SET_REPORT of the Output report to
+ * its interface, a one-byte OUT data stage with the byte the HID driver
+ * asks for, one at a time, its outcome told to the HID driver on its
+ * completion, as a failure on a stall and after STEP_MS with none, and not
+ * sent to a mouse or while the control endpoint refuses transfers.
+ */
+static void leds_rows(void)
+{
+    static const uint8_t set_report[8] = {0x21, 0x09, 0x00, 0x02, 0x02, 0x00, 0x01, 0x00};
+    struct usb_device_state *d;
+    int i;
+    int same = 1;
+
+    usb_core_reset();
+    ring_reset();
+    d = hid_at(0, 1, USB_PROTOCOL_KBD);
+    led_wanted = 0x02;
+    led_sent_count = 0;
+    step_running(d);
+    for (i = 0; i < 8; i++) {
+        same = same && ring.setup[i] == set_report[i];
+    }
+    CHECK("leds: one control transfer", ring.control_submits == 1);
+    CHECK("leds: SET_REPORT Output to the interface", same);
+    CHECK("leds: one byte out, the report",
+          ring.length == 1 && ring.direction == USB_DIR_OUT && ring.data == 0x02);
+    step_running(d);
+    CHECK("leds: none while one is out", ring.control_submits == 1 && led_sent_count == 0);
+    control_done(d, USB_XFER_OK);
+    led_wanted = -1;
+    step_running(d);
+    CHECK("leds: the completion is told",
+          led_sent_count == 1 && led_sent_device == 1 && led_sent_report == 0x02 && led_sent_ok);
+    CHECK("leds: none when the driver asks for none", ring.control_submits == 1);
+
+    led_wanted = 0x05;
+    step_running(d);
+    CHECK("leds: a change is sent", ring.control_submits == 2 && ring.data == 0x05);
+    control_done(d, USB_XFER_STALLED);
+    led_wanted = -1;
+    step_running(d);
+    CHECK("leds: a stall is a failure",
+          led_sent_count == 2 && led_sent_report == 0x05 && !led_sent_ok);
+
+    led_wanted = 0x01;
+    step_running(d);
+    CHECK("leds: sent again", ring.control_submits == 3 && ring.data == 0x01);
+    core_ms += STEP_MS - 1;
+    step_running(d);
+    CHECK("leds: still out within STEP_MS", led_sent_count == 2 && ring.control_submits == 3);
+    core_ms += 1;
+    led_wanted = -1;
+    step_running(d);
+    CHECK("leds: no completion in STEP_MS is a failure", led_sent_count == 3 && !led_sent_ok);
+    CHECK("leds: and the transfer is no longer out", d->leds_out == 0);
+
+    led_wanted = 0x04;
+    ring.quiescing[1] = 1;
+    step_running(d);
+    CHECK("leds: a refused transfer is not out", d->leds_out == 0 && led_sent_count == 3);
+    ring.quiescing[1] = 0;
+    step_running(d);
+    CHECK("leds: and is tried at the next step", ring.control_submits == 4 && ring.data == 0x04);
+
+    usb_core_reset();
+    ring_reset();
+    d = hid_at(0, 1, USB_PROTOCOL_MOUSE);
+    led_wanted = 0x02;
+    step_running(d);
+    CHECK("leds: none to a mouse", ring.control_submits == 0 && ring.submits == 1);
+    led_wanted = -1;
+    usb_core_reset();
+}
+
 /**
  * Run the rows and print the result; return 1 when a row failed.
  *
@@ -1078,6 +1228,7 @@ int main(void)
 
     quiesce_rows();
     slot_timeout_rows();
+    leds_rows();
     interface_rows();
 
     /* A configuration as a device sends it. */

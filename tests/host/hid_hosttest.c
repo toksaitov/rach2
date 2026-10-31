@@ -99,12 +99,26 @@ int set1_keycode(unsigned scan)
     return 0;
 }
 
-/** Discard the message: no row checks the log. */
+#include "../../rach2/sys/klog.h"
+
+/* The LEDs the input layer wants, LED_* of kd.h, and the warnings logged. */
+static unsigned int wanted_leds;
+static int warnings;
+
+/** Return `wanted_leds`. */
+unsigned int input_leds(void)
+{
+    return wanted_leds;
+}
+
+/** Count a warning; the text is not checked. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
-    (void)level;
     (void)subsystem;
     (void)format;
+    if (level == KLOG_WARN) {
+        warnings++;
+    }
 }
 
 #include "../../rach2/sys/usb/hid.c"
@@ -161,6 +175,50 @@ static int sent(int n, int c0, int c1, int c2, int c3)
         }
     }
     return 1;
+}
+
+/**
+ * Check the LED report: each lock at its bit of the boot keyboard's output
+ * report, asked for once for a keyboard just attached and again only when
+ * the LEDs wanted change, never after a failure until the keyboard is
+ * attached again, and never for a mouse or a device not attached.
+ */
+static void leds_rows(void)
+{
+    hid_attach(5, HID_KEYBOARD, 0x0627, 0x0001);
+    wanted_leds = 0;
+    CHECK("leds: a keyboard just attached is sent its LEDs", hid_led_report(5) == 0x00);
+    hid_led_sent(5, 0x00, 1);
+    CHECK("leds: and not again while they stay", hid_led_report(5) == -1);
+    wanted_leds = LED_NUM;
+    CHECK("leds: Num Lock is bit 0", hid_led_report(5) == 0x01);
+    wanted_leds = LED_CAP;
+    CHECK("leds: Caps Lock is bit 1", hid_led_report(5) == 0x02);
+    wanted_leds = LED_SCR;
+    CHECK("leds: Scroll Lock is bit 2", hid_led_report(5) == 0x04);
+    wanted_leds = LED_SCR | LED_NUM | LED_CAP;
+    CHECK("leds: all three", hid_led_report(5) == 0x07);
+    hid_led_sent(5, 0x07, 1);
+    CHECK("leds: taken", hid_led_report(5) == -1);
+
+    wanted_leds = LED_CAP;
+    warnings = 0;
+    hid_led_sent(5, 0x02, 0);
+    CHECK("leds: a failure is logged", warnings == 1);
+    CHECK("leds: nothing is sent after a failure", hid_led_report(5) == -1);
+    hid_led_sent(5, 0x02, 0);
+    CHECK("leds: and logged once", warnings == 1);
+    hid_gone(5);
+    CHECK("leds: nothing to a keyboard gone", hid_led_report(5) == -1);
+    hid_attach(5, HID_KEYBOARD, 0x0627, 0x0001);
+    CHECK("leds: a keyboard attached again is sent them", hid_led_report(5) == 0x02);
+    hid_gone(5);
+
+    hid_attach(6, HID_MOUSE, 0x0627, 0x0001);
+    CHECK("leds: nothing to a mouse", hid_led_report(6) == -1);
+    CHECK("leds: nothing to a device never attached", hid_led_report(7) == -1);
+    CHECK("leds: nothing to a device out of range",
+          hid_led_report(0) == -1 && hid_led_report(USB_MAX_DEVICES + 1) == -1);
 }
 
 /**
@@ -292,6 +350,8 @@ int main(void)
     mouse_reports = 0;
     hid_report(3, HID_MOUSE, mouse, 2);
     CHECK("a short mouse report is dropped", mouse_reports == 0);
+
+    leds_rows();
 
     if (fails == 0) {
         printf("hid_hosttest: OK\n");
