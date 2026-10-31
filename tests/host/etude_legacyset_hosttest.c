@@ -156,11 +156,11 @@
  * run whose disk changed copies the disk alone, and the store then keeps the
  * object of the changed disk and not that of the disk the preparation's
  * record no longer names. With the store emptied, a disk changed after its
- * first copy is copied again for the next
- * case: the first case is given its first digest, and the next and those
- * after it the changed disk's. When the disk's first copy fails, its case
- * ends incomplete with the reason and no invocation, the next case copies
- * the disk again, and the cases after it are given that copy's digest.
+ * first copy is copied again for the next case: the first case is given its
+ * first digest, and the next and those after it the changed disk's. With the
+ * store emptied again, when the disk's first copy fails, its case ends
+ * incomplete with the reason and no invocation, the next case copies the
+ * disk again, and the cases after it are given that copy's digest.
  *
  * A suite of one machine case, on x86_64, whose machine is of the lazy 72 GiB
  * boundary profile with the case's 4 GiB reservation: given a site policy
@@ -2691,14 +2691,15 @@ static void test_objects(void)
  * are the cases after it, and the first case its old one. When its first
  * copy fails, that case ends incomplete with the reason, before its scenario
  * starts, and the next case copies the disk again and gives its copy to the
- * cases after it.
+ * cases after it. Each run starts from an empty store, which the tree
+ * otherwise keeps between runs, so that its copies can be counted.
  */
 static void test_publish(void)
 {
     static const struct etude_legacy_member m[] = {
         {"machine", 0, 0, "cases/machine/machine.json", NULL}};
     static struct run changed, failed;
-    char text[PATH_LEN * 2], disk[PATH_LEN], order[MACHINE_COUNT][64] = {{0}};
+    char text[PATH_LEN * 2], disk[PATH_LEN], store[PATH_LEN], order[MACHINE_COUNT][64] = {{0}};
     int before = fails;
 
     changed.name = "publish-changed";
@@ -2725,6 +2726,8 @@ static void test_publish(void)
     CHECK(changed.claims == 0, "publish-changed: the ledger has no claim");
     CHECK(!changed.leaks, "publish-changed: the driver leaks nothing");
     show(&changed, before);
+    fix_format(store, sizeof(store), "%s/build/tests/objects", tree);
+    CHECK(fix_remove_tree(store) == 0, "publish: the store removed for the next run");
 
     before = fails;
     failed.name = "publish-failed";
