@@ -1,4 +1,4 @@
-.Dd October 30, 2026
+.Dd November 1, 2026
 .Dt CONSOLE 4
 .Os
 .Sh NAME
@@ -73,6 +73,11 @@ The pair is freed after both ends close, and its index may be reused.
 .Ss Line discipline and job control
 Canonical mode collects input into lines; raw mode permits input without
 waiting for a complete line.
+With
+.Dv IUTF8 ,
+which a new terminal has, the erase character removes a whole UTF-8
+character and rubs out as many cells as the screen drew it in: two for a
+CJK character or an emoji, and none for a combining mark.
 In raw mode a read waits as
 .Dv VMIN
 and
@@ -152,9 +157,35 @@ the font is a sharp square, and as many characters as fit: 85 columns and
 size on a 1280 by 800 one.
 The cursor is two lines at the foot of its cell.
 A Latin letter with an accent that the font lacks is drawn without it,
-punctuation as its ASCII likeness, and any other character the font lacks
-as one
+punctuation as its ASCII likeness, and the glyphs coding agents draw
+their screens with as the nearest the font has: a bullet as a bullet,
+a spinner's star as
+.Ql * ,
+braille as
+.Ql \&. ,
+a pointer as
+.Ql > ,
+the blocks and quadrants as a half or full block, a check mark as
+.Ql v
+and a cross as
+.Ql x .
+Any other character the font lacks is drawn as one
 .Ql \&? .
+A wide character, CJK or an emoji, takes two cells, its glyph or
+.Ql \&?
+and a blank, and begins the next line rather than start in the last
+column; a combining mark takes none, and the letter under it is drawn
+alone.
+.Ql "ESC [ ? 1 h"
+and
+.Ql "ESC [ ? 1 l"
+set and reset the cursor keys' application mode, and
+.Ql "ESC ="
+and
+.Ql "ESC >"
+the keypad's;
+.Ql "ESC c"
+resets both and clears the screen.
 Alt with a key sends ESC before the key's character, as Meta does on
 Linux's console.
 The screen answers the queries a VT102 answers, and the answer is the
