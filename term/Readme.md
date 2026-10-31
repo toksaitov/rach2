@@ -9,7 +9,7 @@
 
 `term` runs PROGRAM, found on `PATH`, or with no PROGRAM the shell `SHELL` names, `/bin/sh` when it is unset, on a pty the size of the screen, with `TERM=xterm-256color` and `COLORTERM=truecolor`. `-l` runs `/bin/login` instead and takes no PROGRAM. It takes the framebuffer and the console's keyboard, and gives both back when the program exits. Its own keys are below, under Keys, scrollback and selection. `-H` runs the program on a host pty with no screen, for tests, as below. `-c FILE` reads FILE in place of `/etc/term.conf`, and `-V` prints `libtsm` and its version.
 
-`term` exits with the program's status, or 128 and the number of the signal that ended it, as a shell reports it; with 1 when it cannot start, or when SIGTERM, SIGHUP, SIGINT or SIGQUIT ends it, which hangs the program up; with 2 for a wrong usage; and with 0 after `-V` and `-h`.
+`term` exits with the program's status, or 128 and the number of the signal that ended it, as a shell reports it; under `-l` with 0 once the login session has ended, however it ended, since its status is the last command's of the shell and says nothing of `term`, and init reads a status other than 0 as `term`'s failure ([`init(8)`](../man/man8/init.8)); with 1 when it cannot start, or when SIGTERM, SIGHUP, SIGINT or SIGQUIT ends it, which hangs the program up; with 2 for a wrong usage; and with 0 after `-V` and `-h`.
 
 ### /etc/term.conf
 

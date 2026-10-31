@@ -227,6 +227,7 @@ struct term {
     bool suspended;    /* a descendant has the screen and the keyboard */
     bool dirty;        /* the screen changed since the last frame */
     bool output_ended; /* the master read end of file */
+    bool ended;        /* the child has exited and been reaped */
 };
 
 /**
@@ -346,8 +347,10 @@ static int loop(struct term *t, int sigfd)
             return 1;
         if (bits & TERM_SIG_CHILD) {
             r = term_pty_reap(&t->pty, &status);
-            if (r > 0)
+            if (r > 0) {
+                t->ended = true;
                 return term_status(status);
+            }
         }
 
         if (p[P_FB].revents & POLLIN)
@@ -394,7 +397,8 @@ static int loop(struct term *t, int sigfd)
  * everything back.
  *
  * Returns the exit status term exits with: the child's, as term_status()
- * gives it, or 1 when term failed or a signal ended it.
+ * gives it, or 0 under -l once the child has exited; 1 when term failed or
+ * a signal ended it.
  */
 static int run(const struct term_options *o, const struct term_conf *conf)
 {
@@ -453,6 +457,10 @@ static int run(const struct term_options *o, const struct term_conf *conf)
     }
     t.dirty = true;
     status = loop(&t, sigfd);
+    /* A login session's status is its shell's last command's, which says
+     * nothing of term; init reads 0 as a session that ended. */
+    if (o->login && t.ended)
+        status = 0;
     if (t.pty.child > 0)
         kill(t.pty.child, SIGHUP);
 
