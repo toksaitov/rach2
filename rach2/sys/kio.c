@@ -432,6 +432,11 @@ unsigned int k_take_answer(char *buf, unsigned int size)
     return n;
 }
 
+unsigned int kio_key_modes(void)
+{
+    return 0;
+}
+
 /**
  * Execute a completed CSI sequence whose final byte is `c`.
  *

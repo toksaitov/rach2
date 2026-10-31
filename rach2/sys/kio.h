@@ -94,6 +94,14 @@ void k_font_init(void);
 unsigned int k_take_answer(char *buf, unsigned int size);
 
 /**
+ * The modes the console's terminal encodes keys under, KM_MODE_* of keymap.h:
+ * KM_MODE_CURSOR while DECCKM (`CSI ? 1 h`) is set, and KM_MODE_KEYPAD after
+ * DECKPAM (`ESC =`) until DECKPNM (`ESC >`); 0 after `ESC c`. Any context.
+ * The console keeps neither mode yet, and it returns 0.
+ */
+unsigned int kio_key_modes(void);
+
+/**
  * Write a null-terminated string to the screen, then a newline, with the
  * cursor placed once at the end.
  *
