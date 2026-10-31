@@ -4,7 +4,9 @@
  */
 
 /* POSIX's calls, which -std=c99 hides. */
+#ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
+#endif
 
 #include <errno.h>
 #include <fcntl.h>
