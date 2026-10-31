@@ -470,7 +470,7 @@ void fb_exit(void)
     gfx_current.framebuffer = NULL;
     gfx_current.size = 0;
 
-    k_cls();
+    textcon_sync();
     kirq_restore(flags);
 }
 

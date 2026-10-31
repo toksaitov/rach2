@@ -423,7 +423,10 @@ owner, enters mode 13h and gives the program the screen, as
 .Xr console 4
 describes, and returns
 .Er EBUSY
-while another process owns it.
+unless the caller is its current owner or a descendant of that owner.
+A descendant suspends the old owner until it releases the screen; see
+.Xr console 4 .
+Another open by the same owner preserves its mode.
 A child that inherits the descriptor does not own the screen and can
 neither write nor change it.
 The mouse opens for reading and requires an available mouse device.
@@ -599,7 +602,7 @@ path uses an invalid directory descriptor.
 .It Bq Er EBUSY
 Path resolution entered a mount being mounted or unmounted;
 truncation was requested on a file backing a loop device;
-the framebuffer belongs to another process; or a raw device's
+the framebuffer belongs to a process other than the caller or its ancestor; or a raw device's
 exclusive-open or sector-claim rules prevent the open.
 .It Bq Er EEXIST
 Exclusive creation found an existing name, or a path whose last

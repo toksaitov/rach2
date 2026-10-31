@@ -42,6 +42,8 @@ A test reaches the code under test in one of two ways. It names separately compi
 
 `libtsm_width_hosttest.c` compiles the patched libtsm sources, its replacement hash table and its wcwidth. It checks CJK and emoji at the right margin, exact fit, scrolling and scrollback, a scroll region, disabled autowrap and a one-column screen; decomposed accents on narrow and wide bases, pending wrap, attributes, redraw ages and the ten-code-point symbol limit; byte-at-a-time UTF-8 input through the VTE and alternate-screen isolation. Allocation faults cover symbol creation, hash insertion and index growth, with the base retained and a successful retry on the same table. It makes no files and starts no processes.
 
+`fbdev_hosttest.c` also checks nested screen owners, event reads and polling, separate opens and inherited handles, a dead suspended owner and a dead bottom owner, allocation failure, and mode and keyboard restoration at each return. Its keyboard model is checked against the real save and restore operations by `kd_hosttest.c`. `vga_gfx_hosttest.c` requires the console to be redrawn with interrupts masked when graphics ends.
+
 ### The header lines
 
 A test's opening comment may have five kinds of line, which the preparation tool reads:

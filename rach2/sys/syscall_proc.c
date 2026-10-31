@@ -81,18 +81,6 @@
 #include "timer.h"
 #include "syscall_internal.h"
 
-/**
- * Called as a process ends, by exit or by a signal, so that an owner that
- * has ended does not leave the screen in graphics mode.
- */
-void fb_release_if_owner(uint32_t pid)
-{
-    if (fb_owner_pid == pid && fb_owner_pid != 0) {
-        fb_exit();
-        fb_owner_pid = 0;
-    }
-}
-
 /* The boot stack, from loader.s, which process 0, the first program and the
  * programs the debug shell starts run on. */
 extern char stack[];

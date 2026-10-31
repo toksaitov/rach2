@@ -311,8 +311,13 @@ Acquire an unowned display and enter mode 13h.
 If the caller already owns the display in mode 13h, preserve its
 contents and palette; from the native mode, go straight to mode 13h.
 .It Dv FB_MODE_TEXT No (0x4602)
-Return to text mode and clear framebuffer ownership; the console draws
-its text again.
+Release the calling owner and return to the suspended owner, if any.
+Restore its mode, palette, keyboard settings and console termios, flush
+unread input, and queue
+.Dv FB_EVENT_REGAINED .
+The receiving owner redraws its whole screen.
+With no suspended owner, restore the original console settings and
+redraw its saved text.
 An unowned display gives
 .Er EBUSY .
 .It Dv FB_SETPALETTE No (0x4603)

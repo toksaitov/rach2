@@ -15,6 +15,7 @@
 #include "../../include/rach2/fb.h"
 
 struct file_ops;
+struct fd_entry;
 
 /* Graphics mode identifiers. */
 typedef enum {
@@ -72,7 +73,7 @@ uint8_t *fb_enter_native(void);
 int fb_screen(struct fb_screen *s);
 
 /** Leave the graphics mode, either, and return to the text console,
- * cleared: on a VGA mode 3, with its palette and the saved font loaded
+ * redrawn: on a VGA mode 3, with its palette and the saved font loaded
  * again. Out of the modes, it does nothing. */
 void fb_exit(void);
 
@@ -93,12 +94,14 @@ void fb_present(void);
  * (syscall_internal.h), 0 for none.
  */
 
-/** The operations of a /fb descriptor: write, ioctl and close. */
+/** The operations of a /fb descriptor: event reads, writes, poll, ioctl
+ * and the last close. */
 extern const struct file_ops fb_file_ops;
 
-/** Make the calling process the display's owner, at mode 13h, the console
- * unblanked first; 0, or -EBUSY when another process owns it. */
-int32_t fb_take(void);
+/** Attach the open description `e` and make the calling process the
+ * display's owner, at mode 13h, the console unblanked first; 0, -ENOMEM, or -EBUSY for a caller
+ * outside the current owner's descendants. Same-owner opens share its ownership. */
+int32_t fb_take(struct fd_entry *e);
 
 /**
  * The size in bytes of the mode in force, which an lseek(2) of /fb with
@@ -106,5 +109,9 @@ int32_t fb_take(void);
  * the pitch times the height at the native mode, and 0 in text mode.
  */
 uint32_t fb_size(void);
+
+/** Release the stack entry for thread group `pid`, active or suspended,
+ * before its process record can be reaped. Process context, big lock held. */
+void fb_release_if_owner(uint32_t pid);
 
 #endif /* _FB_H_ */

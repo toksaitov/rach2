@@ -242,8 +242,28 @@ as
 .Xr open 2
 describes, and owns it until it asks for text mode, closes
 .Pa /fb
-or exits; then the console draws its text again, that written meanwhile
-among it.
+or exits.
+A descendant may open its own descriptor to take the screen in turn.
+The former owner receives a
+.Dv FB_EVENT_LOST
+event and cannot draw until
+.Dv FB_EVENT_REGAINED
+reports its return.
+Events are read as one whole
+.Vt struct fb_event
+and make
+.Xr poll 2
+report
+.Dv POLLIN ;
+O_NONBLOCK gives EAGAIN when none waits.
+Events are shared by the owner's open descriptions.
+Its mode, palette, keyboard settings and console termios are restored
+before return, and it redraws its whole screen.
+Dead suspended owners are skipped.
+The last owner's return restores the console's original settings, flushes
+unread input and redraws its saved text.
+Fork and dup share an open description; only its last close releases it.
+Separate opens by the same owner keep it until all close.
 While a program owns the screen the console draws nothing on it, the
 screen does not blank, and the owner's reads of the console give the
 keyboard's raw scancodes.

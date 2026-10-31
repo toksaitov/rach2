@@ -113,8 +113,11 @@ immediately.
 Files under
 .Pa /proc
 report read readiness even at end of file.
-Character devices, the framebuffer, and the mouse report requested read
-and write readiness immediately.
+Character devices and the mouse report requested read and write
+readiness immediately.
+The framebuffer reports read readiness for ownership events and write
+readiness only for its active owner; see
+.Xr console 4 .
 Mouse readiness does not indicate that a packet is available.
 .Pp
 For

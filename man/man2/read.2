@@ -71,6 +71,12 @@ If that signal is blocked or ignored, the read fails with
 .Er EIO .
 When the caller owns the framebuffer, a console read instead returns
 raw keyboard scancodes without waiting.
+A read of
+.Pa /fb
+returns one ownership event, waiting interruptibly unless O_NONBLOCK
+is set, and returns EOF after the owner releases it and its events drain.
+See
+.Xr console 4 .
 .Pp
 A stream socket returns buffered bytes and returns zero after the peer's
 FIN once its buffered data is exhausted.
