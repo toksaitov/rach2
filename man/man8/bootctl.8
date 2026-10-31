@@ -157,6 +157,10 @@ Arm one boot of
 or
 .Ql recovery .
 Other entry names are refused.
+The menu also consumes
+.Ql next_entry=text ,
+one boot of the candidate in the VGA's text mode, which only a host that
+edits the block arms.
 .It Cm cancel
 Remove
 .Ql next_entry
