@@ -73,11 +73,12 @@ static int repo_tree(struct fixture *f, const char *repo)
            fx_text(bp(repo, "print.mk"), "print:\n\t@printf '%s\\n' $(GNU_HOST_CHECKS_SOURCES)\n");
 }
 
-/** Whether make's GNU_HOST_CHECKS_SOURCES in `repo` is the list and the scripts. */
+/** Whether GNU make's GNU_HOST_CHECKS_SOURCES in `repo` is the list and the scripts;
+ * the make first on the helper's PATH is pdpmake, which has no $(shell). */
 static int sources_are_list(struct fixture *f, const char *repo)
 {
-    const char *make[] = {"make", "-s",       "-f",    "mk/gnu-host-checks.mk",
-                          "-f",   "print.mk", "print", NULL};
+    const char *make[] = {"/usr/bin/make", "-s",    "-f", "mk/gnu-host-checks.mk", "-f",
+                          "print.mk",      "print", NULL};
     if (fx_run(f, make, repo, NULL, NULL) || !f->out)
         return 0;
     int n = 0, found = 1;
@@ -109,8 +110,8 @@ static int tree_is_list(struct fixture *f, const char *repo)
 /** The step's key in `repo` over make's sources, in `key`, 65 bytes; 0 on failure. */
 static int step_key(struct fixture *f, const char *repo, char key[65])
 {
-    const char *make[] = {"make", "-s",       "-f",    "mk/gnu-host-checks.mk",
-                          "-f",   "print.mk", "print", NULL};
+    const char *make[] = {"/usr/bin/make", "-s",    "-f", "mk/gnu-host-checks.mk", "-f",
+                          "print.mk",      "print", NULL};
     if (fx_run(f, make, repo, NULL, NULL) || !f->out)
         return 0;
     char *names = strdup(f->out), *save = NULL;
@@ -158,10 +159,11 @@ static int changes_key(struct fixture *f, const char *repo, const char *const na
         char *changed = text ? malloc(n + 9) : NULL;
         if (changed)
             snprintf(changed, n + 9, "%schanged\n", text);
-        ok = changed && fx_write(bp(repo, names[i]), changed, n + 8, 0644) &&
-             step_key(f, repo, key) && (strcmp(key, base) != 0) == changes &&
-             fx_write(bp(repo, names[i]), text, n, 0644) && step_key(f, repo, again) &&
-             !strcmp(again, base);
+        int moved = changed && fx_write(bp(repo, names[i]), changed, n + 8, 0644) &&
+                    step_key(f, repo, key) && (strcmp(key, base) != 0) == changes;
+        int back = text && fx_write(bp(repo, names[i]), text, n, 0644) &&
+                   step_key(f, repo, again) && !strcmp(again, base);
+        ok = moved && back;
         if (!ok)
             fprintf(stderr, "host-build-check: key row: %s\n", names[i]);
         free(changed);
