@@ -192,20 +192,16 @@ dir 1777 /tmp
 dir 0755 /home
 dir 0700:1000:1000 /home/test
 
-# kbd console keyboard tools (vendor/kbd/Readme.md).
+# The kbd tools that init's console settings run (vendor/kbd/Readme.md).
+# dumpkeys, showkey and kbd_mode, which only inspect the keyboard, stay off
+# this root, whose 5 MiB must keep 512 KiB free.
 file 0755 /bin/loadkeys build/vendor/kbd/loadkeys
-file 0755 /bin/dumpkeys build/vendor/kbd/dumpkeys
 file 0755 /bin/setleds build/vendor/kbd/setleds
 file 0755 /bin/kbdrate build/vendor/kbd/kbdrate
-file 0755 /bin/showkey build/vendor/kbd/showkey
-file 0755 /bin/kbd_mode build/vendor/kbd/kbd_mode
 
 # The keyboard tools and boot settings are documented in the recovery root.
 dir 0755 /usr/share/man/cat5
 file 0644 /usr/share/man/cat1/loadkeys.1 build/man/cat1/loadkeys.1
-file 0644 /usr/share/man/cat1/dumpkeys.1 build/man/cat1/dumpkeys.1
-file 0644 /usr/share/man/cat1/kbd_mode.1 build/man/cat1/kbd_mode.1
 file 0644 /usr/share/man/cat1/setleds.1 build/man/cat1/setleds.1
-file 0644 /usr/share/man/cat1/showkey.1 build/man/cat1/showkey.1
 file 0644 /usr/share/man/cat8/kbdrate.8 build/man/cat8/kbdrate.8
 file 0644 /usr/share/man/cat5/vconsole.conf.5 build/man/cat5/vconsole.conf.5
