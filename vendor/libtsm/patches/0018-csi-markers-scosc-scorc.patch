@@ -1,0 +1,74 @@
+Collect CSI's < and = markers, and add SCOSC and SCORC
+
+The CSI collector dropped < and =, so the Kitty keyboard protocol's pop,
+CSI < u, and set, CSI = flags u, reached do_csi as a plain CSI u. Collect
+them as CSI_LT and CSI_EQUAL, and ignore a sequence that carries either
+unless its final byte is u, so that no other sequence is taken for the plain
+one with its final byte.
+
+Add SCOSC, CSI s, and SCORC, CSI u, which save and restore the cursor as
+DECSC and DECRC do. Each is taken only without a private marker and without
+parameters, so that CSI ? s (XTSAVE), DECSLRM's CSI Pl ; Pr s and the
+keyboard protocol's CSI ? u, CSI > u, CSI < u and CSI = u are not.
+
+--- a/src/tsm/tsm-vte.c
++++ b/src/tsm/tsm-vte.c
+@@ -110,6 +110,11 @@ enum parser_action {
+ #define CSI_PLUS	0x0100		/* CSI: + */
+ #define CSI_POPEN	0x0200		/* CSI: ( */
+ #define CSI_PCLOSE	0x0400		/* CSI: ) */
++#define CSI_LT		0x0800		/* CSI: < */
++#define CSI_EQUAL	0x1000		/* CSI: = */
++
++/* the private markers that open a sequence: CSI ?, >, < and = */
++#define CSI_PRIVATE	(CSI_WHAT | CSI_GT | CSI_LT | CSI_EQUAL)
+ 
+ /* max CSI arguments */
+ #define CSI_ARG_MAX 16
+@@ -1035,6 +1040,12 @@ static void do_collect(struct tsm_vte *vte, uint32_t data)
+ 	case '>':
+ 		vte->csi_flags |= CSI_GT;
+ 		break;
++	case '<':
++		vte->csi_flags |= CSI_LT;
++		break;
++	case '=':
++		vte->csi_flags |= CSI_EQUAL;
++		break;
+ 	case ' ':
+ 		vte->csi_flags |= CSI_SPACE;
+ 		break;
+@@ -1901,6 +1912,14 @@ static void do_csi(struct tsm_vte *vte, uint32_t data)
+ 	if (vte->csi_argc < CSI_ARG_MAX)
+ 		vte->csi_argc++;
+ 
++	/* Of the sequences that open with < or =, only the keyboard
++	 * protocol's CSI < u and CSI = u are known; the others must not be
++	 * taken for the plain sequence of the same final byte. */
++	if ((vte->csi_flags & (CSI_LT | CSI_EQUAL)) && data != 'u') {
++		llog_debug(vte, "unhandled private CSI sequence %c", data);
++		return;
++	}
++
+ 	switch (data) {
+ 	case 'A': /* CUU */
+ 		/* move cursor up */
+@@ -2174,6 +2193,18 @@ static void do_csi(struct tsm_vte *vte, uint32_t data)
+ 				vte->led_cb(vte, vte->led_state, vte->led_data);
+ 		}
+ 		break;
++	case 's':
++		/* SCOSC: save the cursor as DECSC does. CSI ? s, xterm's
++		 * XTSAVE, and the other private forms are not it. */
++		if (!(vte->csi_flags & CSI_PRIVATE) && vte->csi_argv[0] <= 0)
++			save_state(vte);
++		break;
++	case 'u':
++		/* SCORC: restore the cursor as DECRC does. CSI ? u, > u,
++		 * < u and = u are the keyboard protocol's, not it. */
++		if (!(vte->csi_flags & CSI_PRIVATE) && vte->csi_argv[0] <= 0)
++			restore_state(vte);
++		break;
+ 	case ']': /* Cursor blinking rate */
+ 		/* This behavior is similar to agetty */
+ 		if (vte->csi_argv[0] == 16 && vte->csi_argc >= 2)
