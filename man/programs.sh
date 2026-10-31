@@ -38,7 +38,7 @@ TinyCC|vendor/tcc/Readme.md|LGPL 2.1
 pdpmake|vendor/pdpmake/Readme.md|public domain
 e2fsprogs|vendor/e2fsprogs/Readme.md|GPL 2; its libraries LGPL 2, BSD-style and MIT-style
 GRUB|vendor/grub/Readme.md|GPL 3 or later
-libtsm|vendor/libtsm/Readme.md|MIT
+libtsm|vendor/libtsm/Readme.md|MIT, with a key encoder from foot under its MIT notice
 wcwidth|vendor/libtsm/Readme.md|MIT, with parts under Markus Kuhn'"'"'s permissive notice
 xkeyboard-config|vendor/keymaps/Readme.md|MIT
 doomgeneric|ports/doom/Readme.md|GPL 2 or later, with Nuked OPL3 under LGPL 2.1 or later

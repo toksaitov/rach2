@@ -251,7 +251,7 @@ The third-party code of the repository, each with the version the build pins, it
 | pdpmake | 2.0.4 | public domain | [vendor/pdpmake/Readme.md](../vendor/pdpmake/Readme.md) |
 | e2fsprogs | 1.47.4 | GPL 2; its libraries LGPL 2, BSD-style and MIT-style | [vendor/e2fsprogs/Readme.md](../vendor/e2fsprogs/Readme.md) |
 | GRUB | 2.12-1ubuntu7.3 | GPL 3 or later | [vendor/grub/Readme.md](../vendor/grub/Readme.md) |
-| libtsm | 4.8.0 | MIT | [vendor/libtsm/Readme.md](../vendor/libtsm/Readme.md) |
+| libtsm | 4.8.0 | MIT, with a key encoder from foot under its MIT notice | [vendor/libtsm/Readme.md](../vendor/libtsm/Readme.md) |
 | wcwidth | libtsm 4.8.0's copy | MIT, with parts under Markus Kuhn's permissive notice | [vendor/libtsm/Readme.md](../vendor/libtsm/Readme.md) |
 | xkeyboard-config | Ubuntu 2.41-2ubuntu1.1 | MIT | [vendor/keymaps/Readme.md](../vendor/keymaps/Readme.md) |
 | doomgeneric | commit fc601639494e | GPL 2 or later, with Nuked OPL3 under LGPL 2.1 or later | [ports/doom/Readme.md](../ports/doom/Readme.md) |

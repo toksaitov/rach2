@@ -8,6 +8,8 @@ The source is GitHub's archive of the tag `v4.8.0` of [github.com/kmscon/libtsm]
 
 libtsm is under the MIT license, which its `COPYING` gives with the names of its authors. The library compiles one file from outside its own sources, `external/wcwidth/wcwidth.c`, Fredrik Fornwall's port of Jeff Quast's wcwidth, under the MIT license, with parts from Markus Kuhn's wcwidth under a permissive notice; `external/wcwidth/LICENSE.txt` has both. The tarball also has a hash table, `src/shared/shl-htable.c` and `shl-htable.h`, under the LGPL 2.1 or later, with code inline in the header; neither is compiled, as Local changes says. The tarball's other files under `src/shared/` are MIT or public domain, and `external/xkbcommon/xkbcommon-keysyms.h`, the key names, is MIT.
 
+The Kitty keyboard protocol's key encoder, which [`0018-kitty-keyboard-protocol.patch`](patches/0018-kitty-keyboard-protocol.patch) adds to `tsm-vte.c`, is ported from `kitty_kbd_protocol()` in `input.c` and the table of `kitty-keymap.h` of [foot](https://codeberg.org/dnkl/foot), under foot's MIT license; the patch puts foot's copyright notice and license above the code.
+
 ## Local changes
 
 The hash table. `build_libtsm.sh` removes `shl-htable.c`, `shl-htable.h` and `LICENSE_htable` from the extracted tree and copies [`shl-htable.c`](shl-htable.c) and [`shl-htable.h`](shl-htable.h) from this directory in their place: a table of Rach2's own, with the part of the interface libtsm uses, `shl_htable_init`, `_clear`, `_visit`, `_lookup`, `_insert` and `_remove`, by separate chaining over buckets that double when the table holds more elements than buckets. Only `tsm-unicode.c` uses it, for the symbols of several code points, a character and its combining marks. The script then stops if any file of the tree still carries the LGPL's notice.
@@ -22,6 +24,7 @@ The patches, which [`patches/series`](patches/series) names in the order they ap
 * [`0019-symbol-indices.patch`](patches/0019-symbol-indices.patch) fixes the combined symbols' IDs to match their index entries and frees the allocation from its prefix on an insertion or index growth failure. Both are needed by the screen's combining path.
 * [`0018-csi-markers-scosc-scorc.patch`](patches/0018-csi-markers-scosc-scorc.patch) makes the CSI collector keep the private markers `<` and `=`, which it dropped, so that the Kitty keyboard protocol's `CSI < u` and `CSI = flags u` are not read as a plain `CSI u`; a sequence with either marker and a final byte other than `u` is ignored. It adds SCOSC, `CSI s`, and SCORC, `CSI u`, which save and restore the cursor as DECSC and DECRC do, taken only without a private marker and without parameters.
 * [`0018-xterm-keys.patch`](patches/0018-xterm-keys.patch) makes the key encoder send what xterm sends, the bytes of [`tests/host/keytable.txt`](../../tests/host/keytable.txt) for each keysym: F1 to F12, the editing keys and the cursor keys carry xterm's modifier parameter for Shift, Alt and Control, so that Shift+F1 is `CSI 1 ; 2 P` and no longer F11's `CSI 23 ~`; the application keypad's divide is `SS3 o` and multiply `SS3 j`, which were swapped, and a keypad key with modifiers is `SS3 m final`; with Num Lock on, which the new `TSM_NUM_LOCK_MASK` reports, the keypad sends its text in application mode too, as xterm's numLock resource does; Control makes control characters as Xlib does. The patch's description lists the rest.
+* [`0018-kitty-keyboard-protocol.patch`](patches/0018-kitty-keyboard-protocol.patch) adds the [Kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) with its flags 1 (disambiguate), 2 (repeat and release events) and 4 (alternate keys): the query `CSI ? u`, the push `CSI > flags u`, the pop `CSI < n u` and the set `CSI = flags ; mode u`, with a stack of eight entries for each of the main and the alternate screen, emptied by a reset. A set or a push drops flags 8 and 16, so that a query reports what took effect. `tsm_vte_handle_key()` takes a key's press, repeat or release and, for flag 4, the character the key gives unshifted and the one it gives in the base layout; `tsm_vte_handle_keyboard()` is a press through it, and `tsm_vte_get_key_flags()` returns the flags in effect. The encoder is ported from foot's, as Sources and license says.
 
 ## Building
 
@@ -51,6 +54,9 @@ The stamp of either depends on the script, the tarball, the series, each patch a
 4. Check that `tsm-unicode.c` uses no call of the hash table that `shl-htable.h` here lacks, and that the new tree carries the LGPL nowhere else.
 5. Rebuild `term` for both architectures and the host.
 
+## Limits
+
+The Kitty keyboard protocol has flags 1, 2 and 4 and not 8 (report all keys as escape codes) or 16 (report associated text): a set or a push drops them, and a query does not report them. Modifier keys are therefore never reported. The protocol's hyper and meta modifiers have no `TSM_*_MASK` and are not sent.
 
 ## Tests
 
