@@ -31,10 +31,12 @@
 # The section ends with the verdict `resources: ok`, `resources: low: WHAT` or
 # `resources: critical: WHAT`, WHAT naming each reading below its threshold:
 # low is under 20% free, and critical under 10%, or under 40 GiB on a disk,
-# the floor that tests/run keeps. Memory is reported and not judged, since a
-# suite takes it for minutes. A reading that is missing or malformed has a
-# line `NAME KIND: did not answer`; the verdict is then `resources: unknown`,
-# or a low or critical one that ends `; unknown: NAME KIND ... did not answer`.
+# the floor that tests/run keeps; the Mac's disk, which the owner lets fill
+# to 5 GiB, is only critical, under 5 GiB. Memory is reported and not
+# judged, since a suite takes it for minutes. A reading that is missing or
+# malformed has a line `NAME KIND: did not answer`; the verdict is then
+# `resources: unknown`, or a low or critical one that ends `; unknown: NAME
+# KIND ... did not answer`.
 #
 # `sizes` prints the sizes of the build trees, the GNU caches, the ci checkouts,
 # the loops' state, the copies under `build/worktrees` and /tmp on the testing
@@ -114,6 +116,10 @@ resources()
             else if ($1 == "mac:memory") printf "%s: %d%% free\n", $1, pct
             else printf "%s: %.0f GiB free of %.0f (%d%%)\n", $1, $3 / 1048576, $4 / 1048576, pct
             if ($2 == "memory") next
+            if ($1 " " $2 == "mac:disk disk") {
+                if ($3 < 5 * 1048576) critical = critical " " $1 " " $2
+                next
+            }
             if (pct < 10 || ($2 == "disk" && $3 < 40 * 1048576)) critical = critical " " $1 " " $2
             else if (pct < 20) low = low " " $1 " " $2
         }

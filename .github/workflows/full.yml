@@ -118,10 +118,23 @@ jobs:
               echo "ETUDE_RESULTS=$out" >> "$GITHUB_ENV"
           fi
 
+      - name: Put the Doom WAD in the copy
+        run: |
+          # Git keeps no WAD; the runner's site keeps the shareware one.
+          [ -f ports/doom/doom1.wad ] || cp /etc/rach2/doom1.wad ports/doom/doom1.wad || {
+              echo 'full: the copy has no ports/doom/doom1.wad and the runner no /etc/rach2/doom1.wad' >&2
+              exit 1
+          }
+          sh ports/doom/fetch_wad.sh
+
       - name: Build and test both architectures
         env:
           ARCH: i686 x86_64
           SUITES: ${{ inputs.suites }}
+          # The testing host's 32 threads and 125 GiB; the defaults are 8
+          # workers and 16 GiB.
+          RACH2_WORKERS: 20
+          RACH2_MEMORY_MIB: 65536
         run: sh tools/ci/run.sh full "$ETUDE_RESULTS"
 
       - name: Stage the shared native evidence

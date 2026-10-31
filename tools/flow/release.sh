@@ -26,7 +26,8 @@
 #   all.
 # * The other machines: tools/flow/machines names them and gives each run's
 #   settings. Each runs `etude run routine-sequence phase_first_run` of every
-#   case of both architectures, prepared from clean, with the selection that
+#   case of both architectures but those of the style suite, which the full
+#   run checks once, prepared from clean, with the selection that
 #   `etude run -N` allocates in the same copy just before. The Mac's run, mac,
 #   starts with the full run, detached as `release.sh -m ID M SHA`, in the
 #   copy and the admission site under build/machines/mac of this clone.
@@ -377,7 +378,8 @@ full()
         if [ -n "$run" ] && ! grep -q "^run $1 " "$state/record"; then
             if [ "$2" != completed ]; then
                 say "full: run $1 is $2"
-                sleep 300
+                mac_told
+                sleep 60
                 continue
             fi
             note "run $1 $3"
@@ -453,6 +455,17 @@ build()
         if ! mkdir -p "$files/../tests/native/prepared" ||
             ! tar -xzf "$files/../$payload" -C "$files/../tests/native/prepared"; then
             fail build "the native cases' payload could not be unpacked"
+        fi
+        # The archive's own prepared.json lacks the archive's digest, which
+        # the preparation adds after it makes the archive; native-deploy
+        # needs both it and the digest file.
+        RACH2_TESTING_COPY=$COPY sh tools/dev/testing.sh get "$ARCH_DIR/$payload.sha256" \
+            "$ARCH_DIR/tests/native/prepared/prepared.json" >> "$state/build.log" 2>&1 ||
+            later "the build's results could not be fetched"
+        if [ "$(cat "$files/../$payload.sha256")" != "$(digest "$payload")" ] ||
+            ! grep -q "\"archive_sha256\":\"$(digest "$payload")\"" \
+                "$files/../tests/native/prepared/prepared.json"; then
+            fail build "the native cases' payload has no matching digest"
         fi
     fi
     mark build "kernel $(digest rach2/kernel) root $(digest images/os-real-gnu.ext2)"
@@ -543,7 +556,7 @@ install()
     fi
     i=0
     while :; do
-        status=$(lenovo 'cat /dev/shm/install.status 2> /dev/null') ||
+        status=$(lenovo 'cat /dev/shm/install.status 2> /dev/null; true') ||
             say "install: the machine did not answer; waiting"
         case $status in
             0) break ;;
@@ -580,14 +593,28 @@ environment()
     [ -z "$p" ] || echo "export PATH='$p'\"\$PATH\""
 }
 
-# mac_run ID: make the run ID of the release tests on the Mac, of every suite,
-# or of the words of the record's `again mac` line only, in the copy TREE with
+# selection MACHINE: print the ARCH:SUITE words of MACHINE's run, those of the
+# record's `again MACHINE` line or every suite of both architectures that SHA's
+# tests/registry has, less the style suite, which the full run checks once for
+# the release.
+selection()
+{
+    words=$(sed -n "s/^again $1 //p" "$state/record")
+    [ -n "$words" ] || words=$(git -C "$repo" show "$sha:tests/registry" | awk -F'|' '
+        /^[a-z]/ { for (i = 0; i < 2; i++) { a = i ? "x86_64" : "i686"
+            if ($6 == "" || index("," $6 ",", "," a ",")) print a ":" $1 } }')
+    # shellcheck disable=SC2086 # the suites are words
+    printf '%s\n' $words | grep -v ':style$' | tr '\n' ' '
+}
+
+# mac_run ID: make the run ID of the release tests on the Mac, of the words
+# that `selection mac` prints, in the copy TREE with
 # the admission site SITE, with its output in RUNS/ID.console and its status
 # appended to RUNS/ID.times as `rc=N`.
 mac_run()
 {
     id=$1
-    words=$(sed -n 's/^again mac //p' "$state/record")
+    words=$(selection mac)
     accel=$(setting mac accel)
     date '+start %FT%T%z' > "$runs/$id.times"
     # shellcheck disable=SC2086 # the suites are words
@@ -598,10 +625,10 @@ mac_run()
             make build/tools/etude/etude build/tools/etude/etude-volume &&
             cp build/tools/etude/etude build/tools/etude/etude-volume "$site/bin/" &&
             ETUDE_SITE=$site/etude-site "$site/bin/etude" run -N -t "$tree" -a both -A "$accel" \
-                -J "$runs/$id.selection.json" ${words:-all} &&
+                -J "$runs/$id.selection.json" $words &&
             ETUDE_PHASE_SELECTION_EXPORT=$runs/$id.selection.json ETUDE_PREPARATION_CLEAN=1 \
                 "$site/bin/etude" run routine-sequence phase_first_run "$tree" "$runs/$id" both \
-                "$id" "$site/etude-site" "$site/bin/etude" "$accel" ${words:-all}
+                "$id" "$site/etude-site" "$site/bin/etude" "$accel" $words
     ) > "$runs/$id.console" 2>&1
     echo "rc=$?" >> "$runs/$id.times"
     date '+end %FT%T%z' >> "$runs/$id.times"
@@ -635,14 +662,31 @@ mac_start()
     [ -d "$tree" ] && [ -f "$site/etude-site" ] ||
         fail mac "the Mac has no copy at $tree or no admission site at $site"
     mac_stop
+    if [ -z "$(selection mac)" ]; then
+        mark mac "only style failed, which the full run checks"
+        return 0
+    fi
     git -C "$repo" fetch -q origin || later "the fetch failed"
     id=milestone$milestone-$(echo "$sha" | cut -c 1-12)-mac-$(date -u '+%m%d-%H%M%S')
     mkdir -p "$runs/$id"
     note "mac started $id"
     nohup perl -e 'setpgrp(0, 0); exec @ARGV' sh "$repo/tools/flow/release.sh" -s "$state" \
-        -m "$id" "$milestone" "$sha" > /dev/null 2>&1 < /dev/null &
+        -m "$id" "$milestone" "$sha" > /dev/null 2>&1 < /dev/null 9>&- &
     echo "$! $id" > "$macdir/run"
     say "mac: started the run $id"
+}
+
+# mac_told: say once, while the release waits for another machine, that the
+# Mac's run of the record has failed, before mac_wait records it.
+mac_told()
+{
+    id=$(sed -n 's/^mac started //p' "$state/record" | tail -n 1)
+    [ -n "$id" ] && [ ! -e "$runs/$id.told" ] || return 0
+    rc=$(sed -n 's/^rc=//p' "$runs/$id.times" 2> /dev/null)
+    [ -n "$rc" ] && [ "$rc" != 0 ] || return 0
+    say "mac: the run $id failed: $(grep '^run: result: failed: ' "$runs/$id.console" |
+        tail -n 1 | sed 's/^run: result: failed: //')"
+    : > "$runs/$id.told"
 }
 
 # mac_wait: wait for the Mac's run of the record to end, start it again when
@@ -667,7 +711,7 @@ mac_wait()
             continue
         fi
         say "mac: the run $id runs"
-        sleep 300
+        sleep 60
     done
     rm -f "$macdir/run"
     if [ "$rc" = 0 ]; then
@@ -686,7 +730,7 @@ wsl()
 }
 
 # windows: make the run of the release tests on Windows on the testing host,
-# of every suite or of the words of the record's `again windows` line only,
+# of the words that `selection windows` prints,
 # while a claim of the whole host in WSL's admission keeps WSL's tests from
 # starting, and mark it done or record its failure; a run that ends without a
 # status runs again, three runs in all.
@@ -695,7 +739,11 @@ windows()
     step=windows
     wtree=$(setting windows tree) out=$(setting windows out) wsite=$(setting windows site)
     accel=$(setting windows accel)
-    words=$(sed -n 's/^again windows //p' "$state/record")
+    words=$(selection windows)
+    if [ -z "$words" ]; then
+        mark windows "only style failed, which the full run checks"
+        return 0
+    fi
     held=/mnt/$(echo "$out" | cut -c 1 | tr '[:upper:]' '[:lower:]')$(echo "$out" | cut -c 3-)
     while :; do
         if [ "$(grep -c '^windows started ' "$state/record")" -ge 3 ]; then
@@ -732,8 +780,8 @@ windows()
             echo "cp build/tools/etude/etude \"\$e\" || { echo 'status 1'; exit; }"
             echo "unset ETUDE_SITE ETUDE_ADMITTED ETUDE_PREPARATION_CLEAN"
             echo "mkdir -p $out/$id $out/tmp"
-            echo "ETUDE_SITE=$wsite \"\$e\" run -N -t $wtree -a both -A $accel -J $out/$id.selection.json ${words:-all} > $out/$id.selection.log 2>&1 || { tail -n 20 $out/$id.selection.log; echo 'status 1'; exit; }"
-            echo "ETUDE_PHASE_SELECTION_EXPORT=$out/$id.selection.json ETUDE_PREPARATION_CLEAN=1 \"\$e\" run routine-sequence phase_first_run $wtree $out/$id both $id $wsite \"\$e\" $accel ${words:-all} > $out/$id.console 2>&1"
+            echo "ETUDE_SITE=$wsite \"\$e\" run -N -t $wtree -a both -A $accel -J $out/$id.selection.json $words > $out/$id.selection.log 2>&1 || { tail -n 20 $out/$id.selection.log; echo 'status 1'; exit; }"
+            echo "ETUDE_PHASE_SELECTION_EXPORT=$out/$id.selection.json ETUDE_PREPARATION_CLEAN=1 \"\$e\" run routine-sequence phase_first_run $wtree $out/$id both $id $wsite \"\$e\" $accel $words > $out/$id.console 2>&1"
             # shellcheck disable=SC2016 # the remote shell expands these
             echo 'rc=$?'
             echo "tail -n 40 $out/$id.console"
@@ -748,7 +796,7 @@ windows()
         done
         kill "$holder" 2> /dev/null
         wait "$holder"
-        rc=$(sed -n 's/^status //p' "$state/$id.log" | tail -n 1)
+        rc=$(tr -d '\r' < "$state/$id.log" | sed -n 's/^status //p' | tail -n 1)
         [ -z "$rc" ] || break
         say "windows: the run $id ended without a status"
     done
@@ -757,7 +805,7 @@ windows()
         return 0
     fi
     # shellcheck disable=SC2046 # the suites are words
-    failure windows "$id" $(grep '^run: result: failed: ' "$state/$id.log" |
+    failure windows "$id" $(tr -d '\r' < "$state/$id.log" | grep '^run: result: failed: ' |
         tail -n 1 | sed 's/^run: result: failed: //' | grep . || echo runner)
 }
 
@@ -772,11 +820,21 @@ lenovo_run()
         fail lenovo "native-deploy did not build: $(tail -n 3 "$state/native.log" | tr '\n' ' ')"
     [ "$(grep -c '^lenovo started ' "$state/record")" -lt 3 ] ||
         fail lenovo "three runs of the native cases ended without a status"
+    target=$(setting lenovo target)
+    staged=$target/p-$(digest tests/native/prepared.tar.gz | cut -c 1-16)
+    if ! lenovo "test -f $staged/archive.sha256" > /dev/null 2>&1; then
+        id=milestone$milestone-$(echo "$sha" | cut -c 1-12)-lenovo-stage-$(date -u '+%m%d-%H%M%S')
+        build/tools/dev/native-deploy stage "$files/../tests/native/prepared" "$address" candidate \
+            "$files/../rach2/kernel" "$repo/krffs/rach2_demo_ed25519" "$target" "$id" \
+            "$state/$id" > "$state/$id.out" 2>&1 ||
+            fail lenovo "the native cases' payload could not be staged: $(tail -n 3 "$state/$id.out" | tr '\n' ' ')"
+        say "lenovo: staged $staged"
+    fi
     id=milestone$milestone-$(echo "$sha" | cut -c 1-12)-lenovo-$(date -u '+%m%d-%H%M%S')
     note "lenovo started $id"
     # shellcheck disable=SC2086 # the cases are words
     if build/tools/dev/native-deploy run "$files/../tests/native/prepared" "$address" candidate \
-        "$files/../rach2/kernel" "$repo/krffs/rach2_demo_ed25519" "$(setting lenovo target)" "$id" \
+        "$files/../rach2/kernel" "$repo/krffs/rach2_demo_ed25519" "$target" "$id" \
         "$state/$id" --hostpeer build/tools/dev/native-hostpeer --peer "$(setting lenovo peer)" \
         --echo-port "$(setting lenovo echo-port)" --network "$(setting lenovo network)" \
         --interface "$(setting lenovo interface)" --gateway "$(setting lenovo gateway)" \
