@@ -21,7 +21,8 @@
 #define HELP_KEYS   "h e l p ret"
 #define HELP_ANSWER "Available commands"
 
-/* The keys each latency case types, one for each of keylatprobe's reads. */
+/* The Enters each latency case presses, one for each of keylatprobe's reads,
+ * which must each read one carriage return. */
 #define LATENCY_KEYS 8
 
 /* The longest path of an artifact or of evidence a scenario keeps. */
@@ -336,9 +337,9 @@ static void judge_latency(struct usb_case *u, struct usb_boot *b, int random)
 }
 
 /**
- * Eight keys typed to keylatprobe under `rach2.usblatency`, each once
- * the kernel says the reader waits, beside a spinning child or, with
- * `random`, a child inside getrandom.
+ * Eight Enters pressed for keylatprobe under `rach2.usblatency`, each once
+ * the kernel says the reader waits, and each read as one carriage return, beside a spinning child
+ * or, with `random`, a child inside getrandom.
  */
 static int latency(struct usb_case *u, int random)
 {

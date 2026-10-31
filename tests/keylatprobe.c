@@ -1,7 +1,12 @@
 /**
- * Reads lines from the terminal, one key typed for each, and exits, so the
- * kernel's record of each keystroke's path holds nothing but the kernel's own
- * work.
+ * Reads Enter from the terminal, one key typed for each read, and exits, so
+ * the kernel's record of each keystroke's path holds nothing but the
+ * kernel's own work.
+ *
+ * The terminal is put in noncanonical mode without ICRNL or echo for the
+ * reads, and put back after them, so that each read returns the bytes of one
+ * key as the console's keymap sends them: Enter must be one carriage
+ * return, as on a terminal, and any other byte fails the probe.
  *
  * The stages the kernel stamps end at the reader's read. A program that
  * writes between its reads puts its own time into that number: the key
@@ -26,7 +31,7 @@
  * Usage: keylatprobe [spin | random] [LINES]. With `random` the child is
  * inside a large `getrandom` instead of spinning, which is the loop inside
  * one system call that the scheduler's service point must break. LINES, 1
- * to 99 and 1 when not given, is how many lines are read, each in a read of
+ * to 99 and 1 when not given, is how many keys are read, each in a read of
  * its own; the kernel prints a record for each.
  *
  * Prints "KEYLAT OK" and exits 0. Freestanding; direct system calls (probe.h).
@@ -40,6 +45,25 @@
 #define GRND_INSECURE 0x0004u
 
 #define SIGKILL 9
+
+/* The terminal's requests and the flags the reads clear (<asm/termbits.h>). */
+#define TCGETS 0x5401
+#define TCSETS 0x5402
+#define ICRNL  0000400
+#define ICANON 0000002
+#define ECHO   0000010
+#define VTIME  5
+#define VMIN   6
+
+/* Linux's struct termios of i386 and x86-64, as TCGETS gives it. */
+struct kernel_termios {
+    unsigned int c_iflag;
+    unsigned int c_oflag;
+    unsigned int c_cflag;
+    unsigned int c_lflag;
+    unsigned char c_line;
+    unsigned char c_cc[19];
+};
 
 static char line[64];
 
@@ -85,8 +109,9 @@ static unsigned char random_buf[8u << 20];
 PROBE_SP_ENTRY;
 
 /**
- * Bind to processor 0, fork the child that keeps the processor, print
- * KEYLAT READING and read the lines; then kill the child and report.
+ * Bind to processor 0, fork the child that keeps the processor, put the
+ * terminal in noncanonical mode, print KEYLAT READING and read the keys;
+ * then put the terminal back, kill the child and report.
  *
  * The child never sleeps, so the reader runs only if something takes the
  * processor from it. In the `random` mode the child is inside a system call
@@ -105,6 +130,8 @@ void probe_main(unsigned long *sp)
     int random_mode = argc > 1 && argv[1][0] == 'r';
     int lines = argc > 2 ? lines_wanted(argv[2]) : 1;
     static const unsigned long processor0 = 1;
+    struct kernel_termios saved, raw;
+    int not_cr = 0;
     int child;
     int n;
     int i;
@@ -144,11 +171,27 @@ void probe_main(unsigned long *sp)
         }
     }
 
+    if (syscall3(SYS_IOCTL, STDIN_FILENO, TCGETS, (long)&saved) != 0) {
+        syscall3(SYS_KILL, child, SIGKILL, 0);
+        puts("KEYLAT FAIL: standard input is not a terminal\n");
+        sys_exit(1);
+    }
+    raw = saved;
+    raw.c_iflag &= ~(unsigned int)ICRNL;
+    raw.c_lflag &= ~(unsigned int)(ICANON | ECHO);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    syscall3(SYS_IOCTL, STDIN_FILENO, TCSETS, (long)&raw);
+
     puts("KEYLAT READING\n");
     n = 1;
     for (i = 0; i < lines && n > 0; i++) {
         n = syscall3(SYS_READ, STDIN_FILENO, (long)line, (int)sizeof(line));
+        if (n > 0 && (n != 1 || line[0] != '\r')) {
+            not_cr = 1;
+        }
     }
+    syscall3(SYS_IOCTL, STDIN_FILENO, TCSETS, (long)&saved);
     if (syscall3(SYS_KILL, child, SIGKILL, 0) != 0) {
         puts("KEYLAT FAIL: the child would not be killed\n");
         sys_exit(1);
@@ -156,6 +199,10 @@ void probe_main(unsigned long *sp)
 
     if (n <= 0) {
         puts("KEYLAT FAIL: the read returned nothing\n");
+        sys_exit(1);
+    }
+    if (not_cr) {
+        puts("KEYLAT FAIL: a key read was not one carriage return\n");
         sys_exit(1);
     }
     puts("KEYLAT OK\n");
