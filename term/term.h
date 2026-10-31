@@ -275,9 +275,6 @@ void term_screen_free(struct term_screen *s);
 
 /* ---- The font (font.c) ---- */
 
-/* Where the packed Unifont is installed, in the format unifont.h describes. */
-#define TERM_FONT_PATH "/usr/share/term/unifont.font"
-
 /* The packed Unifont at the scale in use. */
 struct term_font {
     unsigned char *data;  /* the packed font, read whole, or NULL */
@@ -311,17 +308,9 @@ int term_font_scale(struct term_font *f, unsigned scale);
 void term_font_free(struct term_font *f);
 
 /**
- * The font's scale that the configuration file `conf` keeps, from its line
- * `font-scale=N`.
- *
- * Returns 1 or 2; 0 when the file or the line is missing or names another
- * scale, so that the caller keeps its default.
- */
-unsigned term_font_conf_scale(const char *conf);
-
-/**
- * Keep `scale` in the configuration file `conf`: its `font-scale` line is
- * replaced, or added when it has none, and every other line is kept.
+ * Keep `scale` in the configuration file `conf`, as the line `scale = N`
+ * that term_conf_read() reads: the file's `scale` line is replaced, or the
+ * line added when it has none, and every other line is kept.
  *
  * The file is written as `conf` with ".new" appended and renamed over
  * `conf`, so that a failed write leaves the old file whole.
@@ -385,9 +374,11 @@ struct term_draw {
      * the two are equal when none changed. */
     unsigned *damage;
     struct term_glyph *glyphs; /* TERM_DRAW_GLYPHS rendered glyphs */
-    tsm_age_t age;             /* the screen's age at the last frame; 0 draws every cell */
-    bool full;                 /* the next frame draws every cell */
-    bool cursor_shown;         /* the cursor as the last frame drew it */
+    /* The screen's age at the last frame; 0 draws every cell and the
+     * margins, as after the screen comes back. */
+    tsm_age_t age;
+    bool full;         /* the next frame draws every cell */
+    bool cursor_shown; /* the cursor as the last frame drew it */
     unsigned cursor_x, cursor_y;
     int cursor_style;      /* an enum tsm_screen_cursor_style */
     uint64_t bell_until;   /* when the visible bell ends, or 0 */
@@ -423,8 +414,7 @@ void term_draw_cells(const struct term_draw *d, unsigned *cols, unsigned *rows);
 
 /**
  * Draw what changed on `s` since the last frame, unless the child holds the
- * screen with mode 2026 for less than TERM_DRAW_HOLD_MS, and show the bell
- * if it rang.
+ * screen with mode 2026 for less than TERM_DRAW_HOLD_MS.
  *
  * Returns 0, or the errno value of the write that failed, after which the
  * next frame draws every cell.
@@ -444,13 +434,14 @@ void term_draw_bell(struct term_draw *d);
 void term_draw_redraw(struct term_draw *d);
 
 /**
- * Change the font's scale to `scale`, 1 or 2, give `s` and its pty the new
- * size in cells, and keep the scale in `conf` unless it is NULL.
+ * Change the font's scale to `scale`, 1 or 2, and with it the screen's size
+ * in cells, and keep the scale in `conf` unless it is NULL. The loop sees
+ * the new size in term_draw_cells() and gives it to libtsm and the pty.
  *
  * A failure to keep the scale does not undo the change; its errno value is
  * returned.
  */
-int term_draw_rescale(struct term_draw *d, struct term_screen *s, unsigned scale, const char *conf);
+int term_draw_rescale(struct term_draw *d, unsigned scale, const char *conf);
 
 /** Close the framebuffer and free the back buffer. */
 void term_draw_close(struct term_draw *d);
