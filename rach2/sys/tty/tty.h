@@ -40,6 +40,7 @@ struct tty {
     void (*pump)(struct tty *t); /* optional polled input drain (NULL = none) */
     int sid;                     /* the session whose controlling terminal this is; 0 = none */
     int fg_pgid;                 /* foreground process group (ISIG target); 0 = none */
+    int hungup;                  /* tty_hangup ran: a read with nothing to take returns 0 */
 };
 
 /* The system console: the screen and COM1, the tty behind every console
@@ -136,10 +137,14 @@ void tty_input_char(struct tty *t, unsigned char c);
  * Wait until `t` has input a read can take, then copy up to `count` bytes of
  * it into `kbuf`.
  *
- * Returns the byte count, 0 at end of file, or -EINTR when a signal ends the
- * wait. With `nonblock` set it does not wait: it drains the pump and returns
- * -EAGAIN when nothing is ready (a pending end of file counts as ready).
- * Thread context; it takes interrupts off itself.
+ * Returns the byte count, 0 at end of file, after a hangup with nothing
+ * queued and when a noncanonical read's VTIME timer runs out with no byte,
+ * or -EINTR when a signal ends the wait. The wait is `n_tty_read_ready`'s,
+ * with the VTIME timer `n_tty_read_timer` describes armed in the process's
+ * `wakeup_tick` and cleared before the return. With `nonblock` set it does
+ * not wait: it drains the pump and returns -EAGAIN when nothing is ready (a
+ * pending end of file counts as ready) and the terminal has not hung up.
+ * Thread context, with a current process; it takes interrupts off itself.
  */
 int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock);
 
@@ -184,10 +189,11 @@ int tty_inq(struct tty *t);
 void tty_flush_input(struct tty *t);
 
 /**
- * Set an EOF marker after queued input and wake every reader.
+ * Set an EOF marker after queued input, mark `t` hung up and wake every
+ * reader.
  *
- * A canonical read consumes the marker once, so the endpoint keeps its own
- * record of the hangup for later reads and for other waiting readers.
+ * A canonical read consumes the marker once; `hungup` stays, so the later
+ * reads and the other waiting readers return 0 once the queue is empty.
  */
 void tty_hangup(struct tty *t);
 

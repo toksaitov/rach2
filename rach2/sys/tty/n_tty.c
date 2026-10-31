@@ -4,7 +4,8 @@
  *
  * Input is cooked (ICANON: a line is assembled with ERASE/WERASE/KILL
  * editing and ECHO, and only becomes readable when terminated) or raw (each
- * byte is readable at once, a read waiting for VMIN of them); ISIG control
+ * byte is readable at once, a read waiting for VMIN of them or for VTIME's
+ * timer); ISIG control
  * chars are recognized for signal delivery. Output is post-processed
  * (OPOST/ONLCR). Echo and output bytes leave through a caller sink, so
  * nothing here touches kernel I/O; the kernel points the sink at the console
@@ -321,6 +322,34 @@ int n_tty_readable(const struct n_tty *t)
         }
         return raw_pending(t) >= vmin ? (int)raw_pending(t) : 0;
     }
+}
+
+int n_tty_read_ready(const struct n_tty *t, int count, int expired)
+{
+    unsigned int need = t->tio.c_cc[VMIN];
+    unsigned int n = raw_pending(t);
+
+    if ((t->tio.c_lflag & ICANON) || t->eof) {
+        return n_tty_readable(t);
+    }
+    if (count > 0 && need > (unsigned int)count) {
+        need = (unsigned int)count;
+    }
+    if (t->tio.c_cc[VTIME] == 0) {
+        return need == 0 || n >= need;
+    }
+    if (need == 0) {
+        return n > 0 || expired;
+    }
+    return n >= need || (n > 0 && expired);
+}
+
+int n_tty_read_timer(const struct n_tty *t)
+{
+    if ((t->tio.c_lflag & ICANON) || t->tio.c_cc[VTIME] == 0) {
+        return N_TTY_TIMER_NONE;
+    }
+    return t->tio.c_cc[VMIN] == 0 ? N_TTY_TIMER_READ : N_TTY_TIMER_BYTE;
 }
 
 int n_tty_inq(const struct n_tty *t)

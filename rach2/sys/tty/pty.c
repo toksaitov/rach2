@@ -490,25 +490,16 @@ static const struct file_ops ptm_ops = {ptm_read, ptm_write, ptm_poll, ptm_ioctl
 
 /* the slave end */
 
-/** The slave reader's wait condition: the master has closed, which stays
- * true, or the discipline has input to read. */
-static int pts_read_ready(void *arg)
-{
-    struct pty *p = (struct pty *)arg;
-
-    return !p->master_open || n_tty_readable(&p->slave.ldisc);
-}
-
 /**
  * Read slave input, draining queued bytes before the master's closing EOF.
  *
  * A session leader claims an unowned slave as its sole controlling terminal.
  * A background reader takes SIGTTIN, or EIO when SIGTTIN is blocked or
  * ignored.
- * The endpoint owns the wait so each wake rechecks master closure even after
- * another reader consumes the discipline's single canonical EOF marker. A
- * read returns at most N_TTY_READ_CHUNK bytes and wakes a master writer
- * waiting for room.
+ * The wait is `tty_read`'s, which honours VMIN and VTIME and ends at the
+ * master's close (`tty_hangup`), even after another reader consumed the
+ * discipline's single canonical EOF marker. A read returns at most
+ * N_TTY_READ_CHUNK bytes and wakes a master writer waiting for room.
  */
 static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -538,22 +529,7 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
         tty_signal_group((int)current_proc->pgid, SIGTTIN);
         return -EINTR;
     }
-    for (;;) {
-        n = tty_read(&p->slave, kbuf, (int)want, 1);
-        if (n != -EAGAIN) {
-            break;
-        }
-        if (!p->master_open) {
-            return 0;
-        }
-        if (e->ofd && (e->ofd->status_flags & OFD_NONBLOCK)) {
-            return -EAGAIN;
-        }
-        n = wq_wait_event(&p->slave.input_wq, pts_read_ready, p);
-        if (n != 0) {
-            return n;
-        }
-    }
+    n = tty_read(&p->slave, kbuf, (int)want, e->ofd && (e->ofd->status_flags & OFD_NONBLOCK));
     if (n > 0) {
         wq_wake(&p->m_read_wq, WQ_ROOM);
     }
