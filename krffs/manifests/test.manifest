@@ -30,6 +30,9 @@ file 0755 /bin/echo build/utils/echo
 # Dropbear's program, at os-real's path, whose key generator keygennoent
 # runs on a processor without hardware entropy.
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
+# The keymaps, which loadkeys finds by name, as in `loadkeys -u kg alt-shift`
+# (vendor/keymaps/Readme.md).
+tree 0644 /usr/share/kbd/keymaps/xkb vendor/keymaps/xkb
 
 # suidprobe's fixtures: the one helper program at several modes and owners.
 # The exec-dir line above stages a plain 0755 /suidhelper, the control;
