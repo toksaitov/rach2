@@ -10,6 +10,8 @@
 #   the console to attach, mount and write.
 # * /etc/resolv.conf and /etc/hosts have no address of QEMU's.
 # * /root is 0755.
+# * /bin/term and its font, which take 3.8 MiB: os-real's RAM image would
+#   outgrow the room the kernel's 32 MiB window leaves it.
 #
 # tools/inspect/setidcheck.c checks its set-id entries against setid.allow
 # as it does os-real's.
@@ -208,6 +210,12 @@ file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
 # The keymaps, which loadkeys finds by name, as in `loadkeys -u kg alt-shift`
 # (vendor/keymaps/Readme.md).
 tree 0644 /usr/share/kbd/keymaps/xkb vendor/keymaps/xkb
+# term, the terminal on the whole framebuffer, which init starts as the
+# console session on a boot with rach2.console=term (init(8)), and the
+# packed Unifont it draws with (vendor/unifont/Readme.md).
+file 0755 /bin/term build/term/term
+dir 0755 /usr/share/term
+file 0644 /usr/share/term/unifont.font build/unifont/unifont.font
 dir 0755 /usr/share/man
 file 0644 /usr/share/man/aliases man/aliases
 tree 0644 /usr/share/man/cat1 build/man/cat1

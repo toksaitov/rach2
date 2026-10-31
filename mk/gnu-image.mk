@@ -33,7 +33,7 @@ GNU_IMAGE_DEPS = $(DEMO_CREDS) krffs/manifests/os-real-gnu.manifest $(MANIFEST_D
                  tests/system/fakeapi/native/wsclient.c tests/cases/host/products.mk \
                  vendor/gnu/sources-extra.txt $(GNU_IMAGE_STAMPS) $(IMAGE_TOOLS) $(MAN_ALL)
 GNU_IMAGE_ORDER = kbd preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid \
-                  check-e2fsck tools/etude/guest ports/doom
+                  check-e2fsck tools/etude/guest ports/doom term unifont
 
 # A layer built in this copy is removed before any of its stamps is built
 # (mk/gnu.mk); every fragment has added its stamps by now.

@@ -93,6 +93,7 @@ MUSL_PREFIX="$ARCH_VENDOR/musl/install"
 if [ -n "$ARCH_SUFFIX" ] && [ -z "${RACH2_PATH_MAP-}" ]; then
     RACH2_PATH_MAP="build$ARCH_SUFFIX/=build$ARCH_SUFFIX/ build/man/=build/man/"
     RACH2_PATH_MAP="$RACH2_PATH_MAP build/tests/system/=build/tests/system/"
+    RACH2_PATH_MAP="$RACH2_PATH_MAP build/unifont/=build/unifont/"
     RACH2_PATH_MAP="$RACH2_PATH_MAP build/=build$ARCH_SUFFIX/"
     RACH2_PATH_MAP="$RACH2_PATH_MAP vendor/musl/install/=build$ARCH_SUFFIX/vendor-work/musl/install/"
     export RACH2_PATH_MAP

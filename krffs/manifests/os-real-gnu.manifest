@@ -46,6 +46,9 @@
 #   one of its own, and ldconfig passes over the other.
 # * /etc/ntp.conf names the servers of the NTP pool, by which BusyBox's
 #   ntpd keeps the clock; init starts ntpd while the file names a server.
+# * /bin/term and its font, as the metal disk has them; os-real's RAM image
+#   has no room for them. install_root.sh checks that ncurses's database
+#   has xterm-256color, the terminal term names.
 
 dir 0755 /bin
 file 0755 /bin/audiotest build/utils/audiotest
@@ -220,6 +223,12 @@ file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
 # The keymaps, which loadkeys finds by name, as in `loadkeys -u kg alt-shift`
 # (vendor/keymaps/Readme.md).
 tree 0644 /usr/share/kbd/keymaps/xkb vendor/keymaps/xkb
+# term, the terminal on the whole framebuffer, which init starts as the
+# console session on a boot with rach2.console=term (init(8)), and the
+# packed Unifont it draws with (vendor/unifont/Readme.md).
+file 0755 /bin/term build/term/term
+dir 0755 /usr/share/term
+file 0644 /usr/share/term/unifont.font build/unifont/unifont.font
 dir 0755 /usr/share/man
 file 0644 /usr/share/man/aliases man/aliases
 tree 0644 /usr/share/man/cat1 build/man/cat1
