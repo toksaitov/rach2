@@ -304,7 +304,7 @@ The other GRUB files:
 * [grub-embed.cfg](image/grub-embed.cfg) and [grub-efi-embed.cfg](image/grub-efi-embed.cfg) are the configurations built into the BIOS cores and the EFI image, which [vendor/grub/Readme.md](../vendor/grub/Readme.md) describes. A build fails when either differs from the one the pinned images were made with.
 * [mkgrubcore.sh](image/mkgrubcore.sh) `A|B OUTPUT` copies and verifies one of two pinned cores that print `GRUBCORE=A` or `GRUBCORE=B` on the serial line; the `grub` suite installs them in turn.
 * [fatchains.c](image/fatchains.c) `IMAGE PATH...` prints the runs of clusters of files on a FAT16 or FAT32 image, as `mshowfat` does.
-* [ubuntu-image.txt](image/ubuntu-image.txt) gives by digest the Ubuntu container in which `vendor/grub/regen_grub.sh` makes the GRUB images; no build or suite uses a container.
+* [ubuntu-image.txt](image/ubuntu-image.txt) gives by digest the Ubuntu container in which `vendor/grub/regen_grub.sh` makes the GRUB images and `vendor/keymaps/regen_keymaps.sh` the keymaps; no build or suite uses a container.
 
 #### Partition tables
 

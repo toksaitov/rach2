@@ -1,7 +1,8 @@
 # ubuntu-image.txt: the Ubuntu container image, pinned by digest, in which
-# vendor/grub/regen_grub.sh makes the GRUB images.
+# vendor/grub/regen_grub.sh makes the GRUB images and
+# vendor/keymaps/regen_keymaps.sh the keymaps.
 #
-# regen_grub.sh reads the first line of the form `ubuntu@sha256:DIGEST`. A
+# Both scripts read the first line of the form `ubuntu@sha256:DIGEST`. A
 # tag moves: ubuntu:24.04 six months later is a different image, and a GRUB
 # built from a different grub-pc would be a change nobody chose. Change the
 # digest only on purpose, and say why in the commit.
