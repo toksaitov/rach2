@@ -134,12 +134,6 @@ volatile uint32_t fb_owner_pid = 0;
 
 #define TIOCNOTTY 0x5422 /* Detach from the controlling terminal */
 
-#define FB_MODE_13H 0x4601 /* Switch to VGA Mode 13h */
-
-#define FB_MODE_TEXT 0x4602 /* Switch back to text mode */
-
-#define FB_SETPALETTE 0x4603 /* Set 256-color palette (768 bytes) */
-
 /*
  * Audio ioctl request codes
  */

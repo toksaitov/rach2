@@ -18,6 +18,8 @@ DOOMGENERIC_DIR = src
 CFLAGS = $(ARCH_CFLAGS) -nostdlib -static -ffreestanding -Wl,-Ttext=$(ARCH_USER_TEXT) -Wl,--build-id=none $(ARCH_LDFLAGS)
 # The headers of include/ come first, in place of a C library's.
 CFLAGS += -I./include -I$(DOOMGENERIC_DIR) -I.
+# Rach2's own headers for programs, <rach2/fb.h> among them.
+CFLAGS += -I$(TOP)/rach2/include
 CFLAGS += -DNORMALUNIX -DCMAP256 -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200
 CFLAGS += -Os -fomit-frame-pointer -fno-strict-aliasing
 CFLAGS += -Wno-unused-parameter -Wno-sign-compare -Wno-implicit-function-declaration
