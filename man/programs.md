@@ -130,6 +130,7 @@ Besides the ports, [the root's manifest](../krffs/manifests/os-real-gnu.manifest
 | `newgrp` | `/usr/bin/newgrp` | on the machine | [util-linux](../vendor/gnu/ports/util-linux.sh) |
 | `resize2fs` | `/sbin/resize2fs` | [resize2fs(8)](man8/resize2fs.8) | e2fsprogs |
 | `sudo` | `/usr/bin/sudo` | on the machine | [sudo](../vendor/gnu/ports/sudo.sh) |
+| `term` | `/bin/term` | [term(1)](man1/term.1) | in-house |
 | `tune2fs` | `/sbin/tune2fs` | [tune2fs(8)](man8/tune2fs.8) | e2fsprogs |
 | `wall` | `/usr/bin/wall` | on the machine | [util-linux](../vendor/gnu/ports/util-linux.sh) |
 | `write` | `/usr/bin/write` | on the machine | [util-linux](../vendor/gnu/ports/util-linux.sh) |
