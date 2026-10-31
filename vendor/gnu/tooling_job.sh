@@ -71,7 +71,8 @@ fail()
 builder()
 {
     setpriv --reuid=$BUILDER_ID --regid=$BUILDER_ID --clear-groups \
-        env -i HOME=$MNT/home LANG=C.UTF-8 TMPDIR=$MNT/tmp ${LD_PREFIX:+QEMU_LD_PREFIX="$LD_PREFIX"} \
+        env -i HOME=$MNT/home LANG=C.UTF-8 TMPDIR=$MNT/tmp RACH2_STORE=/var/cache/rach2-store \
+        ${LD_PREFIX:+QEMU_LD_PREFIX="$LD_PREFIX"} \
         PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin "$@"
 }
 
@@ -131,6 +132,12 @@ sync_tree()
 build_layer()
 {
     cd $TREE || exit 1
+    js_jobs=$(((JOBS - 1) * 2 / 3))
+    [ "$js_jobs" -gt 0 ] || js_jobs=1
+    # mach has its own pool, with compilers of up to 1.5 GiB each.
+    # shellcheck disable=SC2086 # DRY_RUN is empty or -n
+    make --no-print-directory -j"$JOBS" $DRY_RUN ARCH="$RACH2_ARCH" \
+        GNU_JOBS="$js_jobs" gnu-js || exit 1
     set --
     if [ "${GNU_TEST_PRODUCTS:-}" = 1 ]; then
         # The product fixtures build against ported musl and e2fsprogs.
@@ -185,6 +192,9 @@ getent passwd $BUILDER > /dev/null ||
     useradd -u $BUILDER_ID -U -M -d $MNT/home -s /bin/sh $BUILDER || fail 'useradd failed'
 mkdir -p $MNT/home $TREE $MNT/log $MNT/tmp $MNT/out || fail 'the directories of the build disk'
 chown $BUILDER_ID:$BUILDER_ID $MNT/home $TREE $MNT/log $MNT/tmp $MNT/out || fail 'chown failed'
+mkdir -p $MNT/store /var/cache/rach2-store || fail 'the step store directories'
+chown $BUILDER_ID:$BUILDER_ID $MNT/store || fail 'the step store owner'
+mount --bind $MNT/store /var/cache/rach2-store || fail 'the step store does not mount'
 find $MNT/tmp $MNT/out -mindepth 1 -delete
 if [ ! -f $SWAP ]; then
     { fallocate -l 8G $SWAP.new && chmod 600 $SWAP.new && mkswap $SWAP.new > /dev/null &&
@@ -222,6 +232,7 @@ fi
 find $MNT/tmp -mindepth 1 -delete
 swapoff $SWAP
 sync
+umount /var/cache/rach2-store || { echo "gnu: job: the step store does not unmount" >&2; status=1; }
 fstrim $MNT > /dev/null 2>&1
 umount $MNT || { echo "gnu: job: the build disk does not unmount" >&2; status=1; }
 exit $status

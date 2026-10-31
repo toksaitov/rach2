@@ -1370,6 +1370,11 @@ static int col_prepare_script(struct col_job *job, struct jbuf *script, const ch
     jbuf_puts(script, "set -eu\nblkid -s TYPE -o value \"$ETUDE_DISK1\" | "
                       "grep -qx ext4 || mkfs.ext4 -q -F \"$ETUDE_DISK1\"\n");
     jbuf_puts(script, col_mount);
+    jbuf_puts(script, "mkdir -p /mnt/collection/store /var/cache/rach2-store\n"
+                      "mount --bind /mnt/collection/store /var/cache/rach2-store\n"
+                      "trap 'cd /; umount /var/cache/rach2-store; "
+                      "fstrim /mnt/collection; umount /mnt/collection' EXIT\n"
+                      "export RACH2_STORE=/var/cache/rach2-store\n");
     jbuf_puts(script, col_sync);
     jbuf_puts(script, col_compilers);
     int rc = col_add(&components, "components");
@@ -1380,6 +1385,22 @@ static int col_prepare_script(struct col_job *job, struct jbuf *script, const ch
         char *goal = col_format("%s-kernel", kernel);
         rc = !goal || col_add(&components, goal);
         free(goal);
+        if (!rc)
+            col_make_line(job, script, arch, &components);
+        col_free(&components);
+    }
+    int gnu = 0;
+    for (size_t i = 0; i < guest->n; i++) {
+        const char *base = strrchr(guest->v[i], '/');
+        base = base ? base + 1 : guest->v[i];
+        gnu |= !strncmp(base, "gnu-test.", 9) || !strncmp(base, "os-real-gnu", 11);
+    }
+    if (!rc && gnu) {
+        char line[128];
+        unsigned js_jobs = (job->cpus - 1) * 2 / 3;
+        snprintf(line, sizeof line, "export GNU_JOBS=%u\n", js_jobs ? js_jobs : 1);
+        jbuf_puts(script, line);
+        rc = col_add(&components, "gnu-js");
         if (!rc)
             col_make_line(job, script, arch, &components);
         col_free(&components);
@@ -1451,33 +1472,35 @@ static int col_products(struct col_job *job, char *products, const struct col_li
  *
  * A preparation that a claim admitted has the build jobs that the claim
  * covers, `ETUDE_BUILD_JOBS`, and the claim has a GiB of memory for each job
- * and one more, which QEMU and the controller take. The machine has a third of
- * the jobs as processors and a GiB for each job, so 3 GiB for each processor,
- * since the GNU layer's SpiderMonkey build runs a pool of its own beside the
- * outer make and so two compilers of up to 1.5 GiB each run on a processor.
+ * and one more, which QEMU and the controller take. The machine has one
+ * processor and a GiB for each job. SpiderMonkey is built before the other
+ * GNU layers, with at most two jobs per 3 GiB, since mach has its own pool.
  * A claim of fewer than three jobs is refused. A preparation that no claim
  * admitted has the processors the collection gives one machine, `RACH2_CPUS`,
- * 2 by default, and 3 GiB for each. A machine has at most 64 processors.
+ * 2 by default, and at least 3 GiB. A machine has at most 64 processors.
  *
  * @return 0, or -1 after a refusal.
  */
 static int col_preparation_machine(unsigned *cpus, unsigned *memory)
 {
     static const char *const names[] = {"ETUDE_BUILD_JOBS", "RACH2_CPUS"};
-    unsigned jobs = 6;
+    unsigned jobs = 3, processors = 2;
     for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
         const char *text = getenv(names[i]);
         if (text && col_decimal(text) && *text != '0' && strlen(text) <= 4) {
-            jobs = (unsigned)atoi(text) * (i ? 3 : 1);
+            jobs = (unsigned)atoi(text);
+            processors = jobs;
+            if (i && jobs < 3)
+                jobs = 3;
             break;
         }
     }
     if (jobs < 3)
         return col_error("a claim of fewer than three build jobs leaves the preparation's "
                          "machine less than 3 GiB; claim three jobs at least");
-    if (jobs > 192)
-        jobs = 192;
-    *cpus = jobs / 3;
+    if (jobs > 64)
+        jobs = 64;
+    *cpus = processors > 64 ? 64 : processors;
     *memory = jobs * 1024;
     return 0;
 }

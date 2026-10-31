@@ -37,8 +37,8 @@
 #
 # The environment sets the machine's shape:
 #
-#   GNU_TOOLING_CPUS     processors, and make's jobs in the machine; 8
-#   GNU_TOOLING_MIB      memory in MiB; 12288
+#   GNU_TOOLING_CPUS     processors and make's jobs; ETUDE_BUILD_JOBS, or 8
+#   GNU_TOOLING_MIB      memory in MiB; 1024 for each processor
 #   GNU_TOOLING_DISK_GIB the build disk's size in GiB, 80; a disk smaller than
 #                        this is grown, and its volume with it
 #   GNU_TOOLING_SECONDS  the job's deadline, after which the machine is
@@ -73,8 +73,30 @@ case "$SIZE" in
         exit 2
         ;;
 esac
-CPUS="${GNU_TOOLING_CPUS:-8}"
-MIB="${GNU_TOOLING_MIB:-12288}"
+CPUS="${GNU_TOOLING_CPUS:-${ETUDE_BUILD_JOBS:-8}}"
+case "$CPUS" in
+    '' | *[!0-9]* | 0 | 0*) echo 'gnu: tooling: invalid processor count' >&2; exit 2 ;;
+esac
+if [ "$CPUS" -gt 64 ]; then CPUS=64; fi
+minimum=$((CPUS * 1024))
+[ "$minimum" -ge 3072 ] || minimum=3072
+MIB="${GNU_TOOLING_MIB:-$minimum}"
+case "$MIB" in
+    '' | *[!0-9]* | 0 | 0*) echo 'gnu: tooling: invalid memory size' >&2; exit 2 ;;
+esac
+if [ "$MIB" -lt "$minimum" ] || [ "$MIB" -gt 1048576 ]; then
+    echo 'gnu: tooling: memory must cover a GiB per processor and at least 3 GiB' >&2
+    exit 2
+fi
+if [ -n "${ETUDE_BUILD_JOBS:-}" ]; then
+    case "$ETUDE_BUILD_JOBS" in
+        *[!0-9]* | 0 | 0*) echo 'gnu: tooling: invalid build grant' >&2; exit 2 ;;
+    esac
+    if [ "$CPUS" -gt "$ETUDE_BUILD_JOBS" ] || [ "$MIB" -gt "$((ETUDE_BUILD_JOBS * 1024))" ]; then
+        echo 'gnu: tooling: the machine exceeds the build grant' >&2
+        exit 2
+    fi
+fi
 DISK_GIB="${GNU_TOOLING_DISK_GIB:-80}"
 DEADLINE="${GNU_TOOLING_SECONDS:-345600}"
 DRY="${GNU_TOOLING_DRY_RUN:-}"
