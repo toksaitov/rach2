@@ -786,6 +786,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "term",
+          "checks": "tests/host/term_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "timercal",
           "checks": "tests/host/timercal_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
