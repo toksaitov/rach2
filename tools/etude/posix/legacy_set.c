@@ -62,6 +62,10 @@ extern char **environ;
 #define ASK_MS  200
 #define LOCK_US UINT64_C(1000000)
 
+/* The store of the guest and machine cases' artifacts, under the tree, which
+ * the tree's runs share and keep. */
+#define OBJECTS "build/tests/objects"
+
 /* The longest the status record goes unwritten while the run goes on. */
 #define STATUS_US UINT64_C(5000000)
 
@@ -258,7 +262,7 @@ struct set {
     char tree[PATH_LEN];               /* the tree's absolute path */
     struct etude_store *objects;       /* the guest and machine cases' artifacts,
                                           or NULL */
-    char objects_dir[PATH_LEN];        /* their store, under the evidence */
+    char objects_dir[PATH_LEN];        /* their store, the tree's OBJECTS */
     unsigned port_base;                /* the machine cases' first local port */
     unsigned ports;                    /* the local ports given out so far */
     struct legacy_manifest *manifests; /* by the request's members */
@@ -2819,21 +2823,80 @@ static int prepare(struct set *x)
 
 /* ---- The machine cases. ---- */
 
-/** Open the store of the guest and machine cases' artifacts, under the
- * evidence, once; 0, or -1 with why in `why`. */
+/** Compare two digests for qsort and bsearch. */
+static int by_digest(const void *a, const void *b)
+{
+    return strcmp((const char *)a, (const char *)b);
+}
+
+/**
+ * Remove from the run's store each object whose digest no `file` line of the
+ * preparation's record gives, so that the store keeps the artifacts of the
+ * tree's last preparation and not those of every commit it held. The run
+ * holds the tree, so no other run uses an object meanwhile. An object that
+ * cannot be removed is kept, and the run says so.
+ */
+static void prune_objects(struct set *x)
+{
+    char line[PATH_LEN + 200], dir[PATH_LEN], path[PATH_LEN + 80];
+    char (*keep)[ETUDE_DIGEST_HEX + 1] = NULL, (*more)[ETUDE_DIGEST_HEX + 1];
+    size_t n = 0, room = 0;
+    struct dirent *e;
+    FILE *f;
+    DIR *d;
+
+    if ((f = fopen(x->record, "r")) == NULL)
+        return;
+    while (fgets(line, sizeof(line), f) != NULL) {
+        if (strncmp(line, "file ", 5) != 0 || strspn(line + 5, "0123456789abcdef") != 64 ||
+            line[5 + 64] != ' ')
+            continue;
+        if (n == room) {
+            room = room ? 2 * room : 256;
+            if ((more = realloc(keep, room * sizeof(*keep))) == NULL) {
+                fclose(f);
+                free(keep);
+                return;
+            }
+            keep = more;
+        }
+        memcpy(keep[n], line + 5, 64);
+        keep[n++][64] = '\0';
+    }
+    fclose(f);
+    qsort(keep, n, sizeof(*keep), by_digest);
+    if (fit(dir, sizeof(dir), "%s/objects", x->objects_dir) == 0 && (d = opendir(dir)) != NULL) {
+        while ((e = readdir(d)) != NULL) {
+            if (strlen(e->d_name) != 64 || strspn(e->d_name, "0123456789abcdef") != 64 ||
+                (n > 0 && bsearch(e->d_name, keep, n, sizeof(*keep), by_digest) != NULL))
+                continue;
+            if (fit(path, sizeof(path), "%s/%s", dir, e->d_name) == 0 && unlink(path) != 0)
+                say(x, "etude run: %s: not removed: %s", path, strerror(errno));
+        }
+        closedir(d);
+    }
+    free(keep);
+}
+
+/** Open the store of the guest and machine cases' artifacts, the tree's
+ * OBJECTS, once, and remove the objects that the preparation's record does
+ * not name; 0, or -1 with why in `why`. */
 static int open_objects(struct set *x, char *why, size_t size)
 {
+    char tests[PATH_LEN];
+
     if (x->objects != NULL)
         return 0;
-    if (fit(x->objects_dir, sizeof(x->objects_dir), "%s/%s.store", x->o->evidence, x->run_id) !=
-            0 ||
+    if (fit(x->objects_dir, sizeof(x->objects_dir), "%s/%s", x->tree, OBJECTS) != 0 ||
+        fit(tests, sizeof(tests), "%s/build/tests", x->tree) != 0 ||
         fit(x->digests, sizeof(x->digests), "%s/%s", x->tree, ETUDE_LEGACY_DIGESTS) != 0 ||
-        (x->objects = etude_store_open(x->objects_dir)) == NULL ||
+        make_dir(tests) != 0 || (x->objects = etude_store_open(x->objects_dir)) == NULL ||
         etude_store_digests(x->objects, x->digests) != 0) {
         (void)fit(why, size, "the store of its artifacts, %s, cannot be opened: %s", x->objects_dir,
                   strerror(errno));
         return -1;
     }
+    prune_objects(x);
     return 0;
 }
 
@@ -3012,13 +3075,16 @@ int (*legacy_set_put)(struct etude_store *s, const char *path, const char *expec
 #endif
 
 /** Publish the artifacts of machine case member `m` to the run's store, and
- * write its invocation; 0, or -1 with the reason in `why`. */
+ * write its invocation; 0, or -1 with the reason in `why`. An object the
+ * store has already is checked first, so that a good one is not copied
+ * again and a damaged one is replaced. */
 static int publish_member(struct set *x, struct member *m, char qemu[2][PATH_LEN], char *why,
                           size_t size)
 {
     const struct legacy_case *k = m->k;
     const char *emulator = qemu[strcmp(k->arch, "x86_64") == 0];
-    char path[PATH_LEN];
+    char path[PATH_LEN], hex[ETUDE_DIGEST_HEX + 1];
+    struct stat st;
     size_t g;
 
     if (boundary_admits(x, m, why, size) != 0)
@@ -3031,13 +3097,17 @@ static int publish_member(struct set *x, struct member *m, char qemu[2][PATH_LEN
         fit(why, size, "memory ran out");
         return -1;
     }
-    for (g = 0; g < k->ngoals; g++)
-        if (fit(path, sizeof(path), "%s/%s", x->tree, k->goals[g]) != 0 ||
-            legacy_set_put(x->objects, path, NULL, m->digests[g], NULL) != 0) {
+    for (g = 0; g < k->ngoals; g++) {
+        int long_path = fit(path, sizeof(path), "%s/%s", x->tree, k->goals[g]) != 0;
+
+        if (!long_path && etude_digest_file(x->digests, path, &st, hex) == 0)
+            (void)etude_store_check(x->objects, hex, NULL);
+        if (long_path || legacy_set_put(x->objects, path, NULL, m->digests[g], NULL) != 0) {
             fit(why, size, "its artifact %s, %s, could not be published: %s", k->names[g],
                 k->goals[g], strerror(errno));
             return -1;
         }
+    }
     return write_invocation(x, m, qemu, why, size);
 }
 
@@ -4557,10 +4627,6 @@ static void cleanup_owned(struct set *x)
     if (x->objects) {
         etude_store_close(x->objects);
         x->objects = NULL;
-        if (legacy_remove_tree(x->objects_dir)) {
-            say(x, "etude run: %s: not removed: %s", x->objects_dir, strerror(errno));
-            x->cleanup_failed = 1;
-        }
     }
     if (x->l && x->collection_claim[0]) {
         enum etude_cleanup cleanup =

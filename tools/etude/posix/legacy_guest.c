@@ -140,7 +140,9 @@ static int recorded(const char *record, const char *goal, char hex[65])
 /**
  * Put the artifact `name` of the attempt's case in the store, with the
  * digest the record gives it, and give its digest, its object's path and its
- * size; 0, or -1 with why in `g->why`.
+ * size; 0, or -1 with why in `g->why`. An object the store has already is
+ * checked against the digest first, so that a good one is not copied again
+ * and a damaged one is replaced.
  */
 static int stock(struct legacy_guest *g, const char *name, char hex[65], char *path, uint64_t *size)
 {
@@ -153,6 +155,7 @@ static int stock(struct legacy_guest *g, const char *name, char hex[65], char *p
         return failed(g->why, sizeof(g->why), "the artifact %s, %s, is not in the record %s", name,
                       goal, g->spec.record);
     snprintf(src, sizeof(src), "%s/%s", g->spec.tree, goal);
+    (void)etude_store_check(g->spec.store, hex, NULL);
     if (etude_store_put(g->spec.store, src, hex, got, size) != 0)
         return failed(g->why, sizeof(g->why), "the artifact %s cannot be stored: %s", goal,
                       errno == EBADMSG ? "it changed after the preparation" : strerror(errno));
