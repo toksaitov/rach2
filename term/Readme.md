@@ -1,13 +1,13 @@
 # term
 
-`term` is the terminal that runs in user space on the whole framebuffer, where coding agents and other full-screen programs draw in color as they do on a desktop terminal. It runs a login or a shell on a pty, parses what the program writes with [libtsm](../vendor/libtsm/Readme.md) into a screen of cells, draws the cells with Unifont, and gives the program the keys of the console's keymap in xterm's and Kitty's encodings, under `TERM=xterm-256color`. The kernel console, `TERM=rach2`, stays beneath it and comes back when `term` exits. Today its pty, its screen, its loop, its drawing and `term -H` are written; the keys, the part below that says so, are being written, and until they are `term` on a screen fails at its start.
+`term` is the terminal that runs in user space on the whole framebuffer, where coding agents and other full-screen programs draw in color as they do on a desktop terminal. It runs a login or a shell on a pty, parses what the program writes with [libtsm](../vendor/libtsm/Readme.md) into a screen of cells, draws the cells with Unifont, and gives the program the keys of the console's keymap in xterm's and Kitty's encodings, under `TERM=xterm-256color`. The kernel console, `TERM=rach2`, stays beneath it and comes back when `term` exits.
 
 ## Running
 
     term [-l | -H] [-c FILE] [PROGRAM [ARG...]]
     term -V
 
-`term` runs PROGRAM, found on `PATH`, or with no PROGRAM the shell `SHELL` names, `/bin/sh` when it is unset, on a pty the size of the screen, with `TERM=xterm-256color` and `COLORTERM=truecolor`. `-l` runs `/bin/login` instead and takes no PROGRAM. It takes the framebuffer and the console's keyboard, and gives both back when the program exits. `-H` runs the program on a host pty with no screen, for tests, as below. `-c FILE` reads FILE in place of `/etc/term.conf`, and `-V` prints `libtsm` and its version.
+`term` runs PROGRAM, found on `PATH`, or with no PROGRAM the shell `SHELL` names, `/bin/sh` when it is unset, on a pty the size of the screen, with `TERM=xterm-256color` and `COLORTERM=truecolor`. `-l` runs `/bin/login` instead and takes no PROGRAM. It takes the framebuffer and the console's keyboard, and gives both back when the program exits. Its own keys are below, under Keys, scrollback and selection. `-H` runs the program on a host pty with no screen, for tests, as below. `-c FILE` reads FILE in place of `/etc/term.conf`, and `-V` prints `libtsm` and its version.
 
 `term` exits with the program's status, or 128 and the number of the signal that ended it, as a shell reports it; with 1 when it cannot start, or when SIGTERM, SIGHUP, SIGINT or SIGQUIT ends it, which hangs the program up; with 2 for a wrong usage; and with 0 after `-V` and `-h`.
 
@@ -32,7 +32,11 @@ Each line is `NAME = VALUE`, blank, or a comment that begins with `#`; blanks ar
 | `dump` | `screen COLS ROWS X Y VISIBLE`, the cursor's column, row and whether it shows, then each row's text in UTF-8 without its trailing blanks |
 | `cell X Y` | `cell X Y WIDTH CHARS fg=RRGGBB bg=RRGGBB` and the attributes set of `bold dim italic underline blink inverse protect`; CHARS is `-` for a blank cell or the code points as `U+XXXX` joined by `+`, and WIDTH is 0 for a wide character's right half |
 | `resize COLS ROWS` | `ok` once the screen and the pty have the size, which sends SIGWINCH |
-| `clipboard` | `clipboard TEXT`, what OSC 52 set, escaped |
+| `key EVENT...` | `sent TEXT`, escaped, the bytes the events sent the program; `+CODE` presses a key, `-CODE` releases it and `CODE` does both, with Linux's `KEY_*` codes |
+| `keymap TABLE CODE VALUE` | `ok` once the keymap's entry is set, as KDSKBENT sets the console's; numbers in C's notation |
+| `string N TEXT` | `ok` once function string N is TEXT, as KDSKBSENT sets the console's |
+| `locks [N]` | `locks N`, the locks' KDGKBLED bits, after setting them to N when it is given |
+| `clipboard` | `clipboard TEXT`, what a selection or OSC 52 put there, escaped |
 | `exit` | `exit STATUS` once the program has exited and its output has ended |
 
 A command that fails answers `error` and what went wrong. `wait` and `exit` hold the commands after them until they answer. At the end of standard input `term -H` closes the master, which hangs the program up, sends it SIGHUP, reaps it and exits with its status.
@@ -56,9 +60,8 @@ A command that fails answers `error` and what went wrong. `wait` and `exit` hold
 | Drawing | `draw.c` | the framebuffer and the back buffer |
 | Selection | `select.c` | the selection from the keyboard, the clipboard and paste |
 | Keys | `keys.c` | the console's keyboard through its keymap |
+| The translator | `keymap.c` | the kernel's `rach2/sys/keymap.c`, compiled into `term` |
 | Host mode | `host.c` | `term -H` |
-
-`keys.c` is a stub whose calls fail with ENOSYS, and `select.c`'s selection mode is never on.
 
 ## Design
 
@@ -88,7 +91,28 @@ libtsm marks the cursor by inverting its cell; drawing undoes that and draws the
 
 ### Keys, scrollback and selection
 
-Task 22 writes this section.
+`keys.c` opens `/dev/console`, puts its keyboard in K_MEDIUMRAW with KDSKBMODE and its terminal settings in raw mode, so that every byte of a key code reaches `term` as it is typed, and gives both back at the end. K_MEDIUMRAW sends a key code below 128 as one byte, with 0x80 set on release, and a higher one as three; a repeat comes as another press, so `term` keeps a bit for each key held and takes a press of a key already down as a repeat. The set is cleared when the screen comes back from a program `term` started, which may have taken keys up that `term` never saw.
+
+Each key goes through the console's own translator, [`rach2/sys/keymap.c`](../rach2/sys/keymap.c), which `keymap.c` compiles into `term`, so the console and `term` give a key the same character from the same keymap. The translator reads the tables through a callback, which asks the console for the key's entry with KDGKBENT as the key is pressed; a key's function string is read with KDGKBSENT when it is pressed, and the accents with KDGKBDIACRUC while a dead key waits. A map that `loadkeys` loads while `term` runs therefore takes effect at the next key. KDGKBENT gives K_HOLE, not K_NOSUCHMAP, for a key of a table that does not exist, so a hole is checked against the table's key 0. The locks are read with KDGKBLED before each key and written back with KDSKBLED when a key changes them, with the default flags kept, so that `setleds` and `term` agree and the LEDs follow.
+
+A key becomes libtsm's key event, `tsm_vte_handle_key`, which encodes it as xterm does or by the Kitty protocol under the flags the program set. The keysym is XKB's: a character's own, the cursor and editing keys', the function keys' for each string that is the built-in one, Menu for the Compose key, and the keypad's, which with Num Lock on, reversed by Shift, are its digits and point, and libtsm also gets Num Lock itself, which keeps the keypad numeric in application mode. A function string that a map changed is sent as it is. The characters libtsm needs besides the key's own come from the same translator run on a copy of the state through a view of the tables: the character before Ctrl and Alt, which xterm sends after ESC for Alt; the character with no modifier in the layout in use, Kitty's key code; that in the base layout, table 0 with no lock, Kitty's base layout key, which on every generated map is US; and the base layout's character with Shift alone, from which Ctrl makes its control code. So Ctrl+C sends ETX on a Cyrillic layout, and the Kitty protocol reports it as `CSI 1089::99;5u` with flags 1 and 4. Kitty's flag 2 reports a key's repeats and its release with the key its press sent. Backspace sends DEL and Ctrl+Backspace BS.
+
+`term` keeps a few keys of its own, all of them keys the key table ([`tests/host/keytable.txt`](../tests/host/keytable.txt)) has send nothing or act locally, so that every other key reaches the program as xterm sends it:
+
+| Keys | What `term` does |
+| --- | --- |
+| Shift+Page Up, Shift+Page Down | show the scrollback a page further back or forward; on the alternate screen, which keeps none, the program gets them |
+| Ctrl+Shift+Page Up, Ctrl+Shift+Page Down | draw the font at 2x or at 1x, and keep the scale in `/etc/term.conf` |
+| Print Screen | turn the selection mode on, and off again |
+| Shift+Print Screen | paste the clipboard |
+
+The scrollback holds the lines that scroll off the top of the main screen, as many as `scrollback` says; libtsm keeps none for the alternate screen, and shows the screen again when a program switches to it. Any key that sends the program something shows the screen itself again.
+
+The selection mode, in `select.c`, takes every key while it is on. Its cursor starts on the screen's and is drawn as a selected cell: the cursor keys and `h`, `j`, `k` and `l` move it, Home and `0` and End and `$` take it to a row's ends, Page Up and Page Down move it a page, and moving past the top or the bottom row scrolls the scrollback. Space or `v` marks the start, after which libtsm shows the cells from the mark to the cursor in inverse colors; Enter or `y` copies them and leaves, and Escape or `q` leaves without a copy. Leaving shows the screen again.
+
+There is one clipboard, the screen's, which a selection and OSC 52 both replace. A paste sends it to the program with each LF as CR, as Enter sends, and with ESC left out, so that pasted text can neither end mode 2004's brackets nor send a sequence; under mode 2004 libtsm puts it between `CSI 200 ~` and `CSI 201 ~`. The clipboard's bytes are overwritten before they are freed, and they are freed when `term` exits, at the end of the session it ran.
+
+`showkey` reads the console's keyboard in a mode of its own, so it is run on the kernel console, with `term` not running: under `term` the two would read the same keys. `setleds` and `kbdrate` act on the console that is their standard input, so under `term`, whose program has a pty, they are run as `setleds +num < /dev/console`; `term` takes the locks they set at the next key.
 
 ## Building
 
@@ -98,11 +122,17 @@ Task 22 writes this section.
 
 On Rach2, `make -f guest.mk` in a writable copy of `/src/term`, or in `/src/term` itself as root, builds `term` with pdpmake and the staged TinyCC through `/bin/cc`, on either architecture. The images that stage the kernel's sources (`os-real`, `os-real-gnu`, `grub-test` and `rach2-metal-disk`) stage this directory as `/src/term`, with libtsm's patched sources beside it as `vendor/libtsm.tar.bz2`, which `build_libtsm.sh` packs, and their list as `vendor/libtsm.mk`, a copy of [`vendor/libtsm/sources.mk`](../vendor/libtsm/sources.mk).
 
+`keymap.c` includes the kernel's translator by its path from this directory, `../rach2/sys/keymap.c`, so the build needs `/src/rach2` beside this tree, as every image that stages one stages the other; a writable copy is made of both.
+
 [`guest.mk`](guest.mk) unpacks the archive into `vendor/libtsm` as its first prerequisite, compiles the files of `sources.mk` and of libtsm's list with one set of flags, and links the objects with musl's `libc.a` to `term.new`, which it renames to `term`. A POSIX makefile has one rule for every `.c`, so term's files take libtsm's flags, `-Dwcwidth=tsm_wcwidth` among them. TinyCC does not define `__SIZEOF_POINTER__`, which libtsm's `shl-macro.h` tests, so the makefile gives it from `uname -m`. TinyCC 0.9.27 compiles every file without a warning on both architectures. `tests/run style` checks with `tools/verify/guestcheck.c` that the object list is the two lists, that the archive is unpacked first and that the link goes through `term.new`.
 
 ## Tests
 
 [`tests/host/term_hosttest.c`](../tests/host/term_hosttest.c) runs `term -H` in a child with pipes on its standard input and output, with `sh -c` and a script as the program: the program's environment, a line sent to it, its output's colors, cursor and wide characters on the screen, the parser's reply to a cursor position report, a resize seen by `stty size`, its exit status, the hang-up at the end of standard input, a program that cannot be run, and `/etc/term.conf` with each kind of bad line. It compiles libtsm from the extracted i686 tree, as `build_libtsm.sh` does.
+
+### Keys
+
+[`tests/host/term_keys_hosttest.c`](../tests/host/term_keys_hosttest.c) runs `term -H` as `term_hosttest.c` does, on a shell script that puts its pty in raw mode, writes the modes a group of cases needs and reads its input away, and gives `term` keys with the `key` command, which answers with the bytes `term` wrote to the pty. It runs every case of the key table but those of its `tty` modes, which are the kernel's line discipline's, under DECCKM and DECKPAM as each case's modes say and with Num Lock and Caps Lock set first by `locks`; the Kitty protocol's cases: Shift+Enter with flag 1, Russian Ctrl+C on a two-layout map, made with `keymap` as ckbcomp writes one, with flag 1 and with flags 1 and 4, Ctrl+Shift+C there with its shifted key, and the repeat and release events of flag 2; a map's entries and strings changed while `term` runs, a press of a key already down taken as a repeat, and Caps Lock's lock; a child that reads the bytes of a Cyrillic letter and of Shift+Enter from its pty and prints them; the scrollback a page at a time, shown again by a key for the program and left to the program on the alternate screen; and the selection of one line and of two, the keys the mode takes, and paste, bracketed under mode 2004.
 
 ### Drawing
 
