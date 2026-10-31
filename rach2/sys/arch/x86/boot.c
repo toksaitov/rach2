@@ -53,9 +53,10 @@ static const void *loader_reach(uint64_t phys, uint32_t len)
 }
 
 /** What the loader said, in the log: who it was, the firmware where its
- * form says, the screen, and what the record could not keep. Multiboot's
- * structure does not say which firmware ran; multiboot2's lists the EFI
- * tables under UEFI. */
+ * form says, the screen mode it left, and what the record could not keep.
+ * Multiboot's structure does not say which firmware ran; multiboot2's lists
+ * the EFI tables under UEFI. A loader that describes no screen left the
+ * VGA's text mode, which QEMU's -kernel and GRUB's Multiboot do. */
 static void boot_report(const char *form, int says_firmware)
 {
     static const char *const kinds[] = {"none", "rgb", "indexed", "text"};
@@ -65,10 +66,15 @@ static void boot_report(const char *form, int says_firmware)
          !says_firmware ? ""
          : boot.uefi    ? " on UEFI"
                         : " on BIOS");
-    if (fb->type != BOOT_FB_NONE) {
-        klog(KLOG_DEBUG, "boot", "framebuffer: %s, %dx%d, %d bits, pitch %d, at 0x%x",
+    if (fb->type == BOOT_FB_RGB || fb->type == BOOT_FB_INDEXED) {
+        klog(KLOG_INFO, "boot", "screen: framebuffer, %s, %dx%d, %d bits, pitch %d, at 0x%x",
              kinds[fb->type], (int)fb->width, (int)fb->height, (int)fb->bpp, (int)fb->pitch,
              (uint32_t)fb->addr);
+    } else if (fb->type == BOOT_FB_TEXT) {
+        klog(KLOG_INFO, "boot", "screen: text, %dx%d cells, at 0x%x", (int)fb->width,
+             (int)fb->height, (uint32_t)fb->addr);
+    } else {
+        klog(KLOG_INFO, "boot", "screen: text; the loader described none");
     }
     if (store.mmap_cut > 0) {
         klog(KLOG_WARN, "boot", "memory map: %d entries past the %d the record keeps, ignored",

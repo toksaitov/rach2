@@ -16,6 +16,7 @@ Inside the kernel:
 
 The boot log records the console's choices:
 
+* `boot: screen: framebuffer, rgb, 1280x800, 32 bits, pitch 5120, at 0xfd000000`, the mode the loader left, or `boot: screen: text, 80x25 cells, at 0xb8000` when it described the VGA's text mode, or `boot: screen: text; the loader described none`, as QEMU's `-kernel` and GRUB's Multiboot leave it.
 * `console: framebuffer: 1366x768, 32 bits a pixel; the font at 2x, 85x24 cells`, or `console: framebuffer: not one this console draws; the screen stays as the loader left it`.
 * `vga: font: loaded: code page 437 box drawing with Cyrillic` or `vga: font: kept: the adapter's code page 437`, and on a framebuffer `console: font: drawn: code page 437 box drawing with Cyrillic`.
 * `cpu: page attributes: 0x0007040600070106; the framebuffer is mapped write-combining`, or the same line ending in `uncached`, or `cpu: page attributes: none; the framebuffer is mapped uncached`.
@@ -62,7 +63,7 @@ The keys come from `sys/input.c`. While the debug shell reads input, Page Up and
 
 ### The framebuffer console
 
-`k_main` in `sys/arch/x86/boot.c` calls `fbcon_init` before the shared boot when the boot record, Multiboot's or multiboot2's, describes a framebuffer of direct color at 8 to 32 bits a pixel or of 8-bit indexed color, as GRUB leaves one under UEFI. `fbcon_init` returns -1, and the console stays on the VGA, when the screen has fewer than 640x384 pixels (80 columns and 24 rows of the font at scale 1), when its pitch is shorter than a row of pixels, or when `fbcon_window` cannot reach it.
+`k_main` in `sys/arch/x86/boot.c` calls `fbcon_init` before the shared boot when the boot record, Multiboot's or multiboot2's, describes a framebuffer of direct color at 8 to 32 bits a pixel or of 8-bit indexed color. GRUB leaves the firmware's under UEFI, and on a disk booted by BIOS it sets the mode the video BIOS (VBE) prefers for the display, by the display's EDID, unless the menu entry "Start Rach2 in text mode" asks for text or no graphics mode can be set (`tools/image/mkdisk_grub.sh`). QEMU's `-kernel` and an ISO booted by BIOS start the kernel by Multiboot in the text mode. `fbcon_init` returns -1, and the console stays on the VGA, when the screen has fewer than 640x384 pixels (80 columns and 24 rows of the font at scale 1), when its pitch is shorter than a row of pixels, or when `fbcon_window` cannot reach it.
 
 The glyph, 8 pixels by 16, is drawn at the largest whole scale at which 80 columns and 24 rows still fit on the screen, so each pixel of the font is a square of whole pixels, and the console has as many cells as fit at that scale, at most 240 by 64 (`TEXTCON_COLS_MAX`, `TEXTCON_ROWS_MAX`), centered. A 1366x768 screen has scale 2 and 85x24 cells, and a 1280x800 one scale 2 and 80x25. A cell's sixteen colors are the VGA's text palette, converted to the screen's pixel fields, or on an indexed screen the nearest entries of the loader's palette.
 
