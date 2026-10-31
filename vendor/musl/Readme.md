@@ -38,7 +38,7 @@ The source is the release tarball from <https://musl.libc.org/releases/>, kept b
 
 ## Local changes
 
-[`patches/series`](patches/series) names the patches `build_libc.sh` applies, in order. There are two.
+[`patches/series`](patches/series) names the patches `build_libc.sh` applies, in order. There are three.
 
 ### posix_spawn forks
 
@@ -47,6 +47,10 @@ The source is the release tarball from <https://musl.libc.org/releases/>, kept b
 ### Linux's input headers
 
 [`0002-linux-input-headers.patch`](patches/0002-linux-input-headers.patch) adds `<linux/input.h>` and `<linux/input-event-codes.h>`, the user headers of the kernel's input event interface, `/dev/input/eventN`, and the headers they include under `linux/`, `asm/` and `asm-generic/`. They are the files `make headers_install ARCH=x86` installs from Linux 6.18.54, the release the GNU root pins, unchanged; musl's `make install` installs them with its own. BusyBox's `acpid` includes `<linux/input.h>`. Under musl's 64-bit `time_t` the header gives `struct input_event` 16 bytes on i386 and 24 on x86-64, the layouts the kernel writes for each. To update them, run `headers_install` on the new release and make the patch again from the same files.
+
+### Linux's keyboard headers
+
+`0003-linux-keyboard-headers.patch` adds `<linux/kd.h>`, `<linux/keyboard.h>` and `<linux/wait.h>` from Linux 6.18.54's user headers. As `headers_install` does, it removes the kernel-only compiler include and `__user` annotations. kbd uses these numbers and structures to configure the console's keyboard. The headers retain Linux's syscall-note license exception.
 
 ## Building
 

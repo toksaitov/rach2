@@ -1,0 +1,49 @@
+.\" Adapted from kbd 2.10.0 docs/man/man8/kbdrate.8, GPL-2.0-or-later.
+.Dd November 1, 2026
+.Dt KBDRATE 8
+.Os
+.Sh NAME
+.Nm kbdrate
+.Nd set the keyboard repeat rate and delay
+.Sh SYNOPSIS
+.Nm
+.Op Fl s
+.Op Fl d Ar milliseconds
+.Op Fl r Ar rate
+.Op Fl h | V
+.Sh DESCRIPTION
+.Nm
+sets the delay before a held key repeats and the repeat rate in characters
+per second.
+It first uses KDKBDREP on descriptor 0.
+On Rach2, redirect input from
+.Pa /dev/console
+when running it through SSH or a terminal emulator.
+.Pp
+The default delay is 250 milliseconds and the default rate is 10.9
+characters per second.
+A successful KDKBDREP request reports the actual delay and rate.
+If the console refuses KDKBDREP, the upstream program attempts other
+hardware interfaces, including
+.Pa /dev/port ,
+which Rach2 does not provide.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl d Ar milliseconds
+Set the delay before repeats start.
+.It Fl r Ar rate
+Set the repeats per second.
+.It Fl s
+Suppress the result message.
+.It Fl h
+Print help.
+.It Fl V
+Print the version.
+.El
+.Sh EXAMPLES
+.Bd -literal -offset indent
+kbdrate -d 250 -r 30 < /dev/console
+.Ed
+.Sh SEE ALSO
+.Xr setleds 1 ,
+.Xr vconsole.conf 5

@@ -1,0 +1,52 @@
+.\" Adapted from kbd 2.10.0 docs/man/man1/dumpkeys.1, GPL-2.0-or-later.
+.Dd November 1, 2026
+.Dt DUMPKEYS 1
+.Os
+.Sh NAME
+.Nm dumpkeys
+.Nd print console keyboard maps
+.Sh SYNOPSIS
+.Nm
+.Op Fl h i l n V
+.Op Fl C Ar console
+.Op Fl c Ar charset
+.Op Fl S Ar shape
+.Op Fl Fl keys-only
+.Op Fl Fl funcs-only
+.Op Fl Fl compose-only
+.Sh DESCRIPTION
+.Nm
+prints the console's key definitions, function strings and compose table
+in the text format read by
+.Xr loadkeys 1 .
+With no options it prints all three.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl C Ar console
+Read this console device.
+.It Fl c Ar charset
+Interpret action codes in the named character set.
+.It Fl i
+Print a summary of the kernel's keyboard capabilities.
+.It Fl l
+List the known action names and values.
+Repeated, include their synonyms.
+.It Fl n
+Print action values numerically.
+.It Fl S Ar shape
+Select output shape 2 (compact), 4 (one line per keycode),
+8 (one line per modifier and keycode), or 16 (stop at the first hole).
+.It Fl Fl keys-only
+Print only key bindings.
+.It Fl Fl funcs-only
+Print only function strings.
+.It Fl Fl compose-only
+Print only compose definitions.
+.It Fl h
+Print help without opening the console.
+.It Fl V
+Print the version.
+.El
+.Sh SEE ALSO
+.Xr loadkeys 1 ,
+.Xr kbd_mode 1

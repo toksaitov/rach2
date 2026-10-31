@@ -33,6 +33,7 @@ fi
 LICENSES='musl|vendor/musl/Readme.md|MIT
 BusyBox|vendor/busybox/Readme.md|GPL 2 only
 Dropbear|vendor/dropbear/Readme.md|MIT-style
+kbd|vendor/kbd/Readme.md|GPL-2.0-or-later
 TinyCC|vendor/tcc/Readme.md|LGPL 2.1
 pdpmake|vendor/pdpmake/Readme.md|public domain
 e2fsprogs|vendor/e2fsprogs/Readme.md|GPL 2; its libraries LGPL 2, BSD-style and MIT-style
@@ -92,6 +93,7 @@ function base(path,   b) {
 }
 function project(host) {
     if (host ~ /^build\/vendor\/busybox\//) return "BusyBox"
+    if (host ~ /^build\/vendor\/kbd\//) return "kbd"
     if (host ~ /^build\/vendor\/dropbear\//) return "Dropbear"
     if (host ~ /^build\/vendor\/tcc\//) return "TinyCC"
     if (host ~ /^build\/vendor\/pdpmake\//) return "pdpmake"
@@ -521,6 +523,7 @@ LICENSES="$LICENSES" awk '
 BEGIN {
     version["musl"] = var("vendor/musl/build_libc.sh", "MUSL_VERSION")
     version["BusyBox"] = var("vendor/busybox/build_busybox.sh", "VERSION")
+    version["kbd"] = var("vendor/kbd/build_kbd.sh", "VERSION")
     version["Dropbear"] = var("vendor/dropbear/build_dropbear.sh", "VERSION")
     version["TinyCC"] = var("vendor/tcc/build_tcc.sh", "VERSION")
     version["pdpmake"] = var("vendor/pdpmake/build_pdpmake.sh", "VERSION")

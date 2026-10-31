@@ -70,6 +70,7 @@ BUSYBOX_STAMP  = $(ARCH_VENDOR)/busybox/.stamp
 DROPBEAR_STAMP = $(ARCH_VENDOR)/dropbear/.stamp
 TCC_STAMP      = $(ARCH_VENDOR)/tcc/.stamp
 PDPMAKE_STAMP  = $(ARCH_VENDOR)/pdpmake/.stamp
+KBD_STAMP = $(ARCH_BUILD)/vendor-work/kbd/.stamp
 E2FSPROGS_STAMP = $(ARCH_VENDOR)/e2fsprogs/.stamp
 LIBTSM_STAMP   = $(ARCH_VENDOR)/libtsm/.stamp
 # libtsm is built for the host too, for term -H (mk/term.mk); its tree and
@@ -93,6 +94,9 @@ BUSYBOX_STAGE = $(VENDOR_STAGE)/busybox
 TCC_STAGE    = $(VENDOR_STAGE)/tcc
 DROPBEAR_STAGE = $(VENDOR_STAGE)/dropbear
 PDPMAKE_STAGE = $(VENDOR_STAGE)/pdpmake
+KBD_STAGE = $(VENDOR_STAGE)/kbd
+KBD_PROGRAMS = loadkeys dumpkeys setleds kbdrate showkey kbd_mode
+KBD_BINS = $(addprefix $(KBD_STAGE)/,$(KBD_PROGRAMS))
 E2FSPROGS_STAGE = $(VENDOR_STAGE)/e2fsprogs
 LIBTSM_STAGE = $(VENDOR_STAGE)/libtsm
 LIBTSM_HOST_STAGE = build/host/vendor/libtsm
@@ -114,6 +118,8 @@ LIBTSM_HOST_A = $(LIBTSM_HOST_STAGE)/lib/libtsm.a
 # SHA-256. They are named here and not found with $(wildcard), which would drop
 # a deleted tarball from the prerequisites and leave its stamp up to date; and
 # `distclean` derives the extracted source directories from them.
+KBD_TARBALL = vendor/kbd/kbd-2.10.0.tar.xz
+KBD_PATCHES = vendor/kbd/patches/series $(wildcard vendor/kbd/patches/*.patch)
 LIBC_TARBALL     = vendor/musl/musl-1.2.5.tar.gz
 BUSYBOX_TARBALL  = vendor/busybox/busybox-1.36.1.tar.bz2
 DROPBEAR_TARBALL = vendor/dropbear/dropbear-2022.83.tar.bz2
@@ -178,7 +184,7 @@ STEP_INPUTS     = $(foreach f,$(filter-out gnu-in-copy,$^),$(if $(filter %.stamp
         isos test-iso os-simple-iso os-real-iso rach2-metal-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
         check-pdpmake check-e2fsck \
-        musl busybox dropbear tcc pdpmake e2fsprogs libtsm libtsm-host $(BASE_DIRS) $(FULL_DIRS)
+        musl busybox dropbear tcc pdpmake kbd e2fsprogs libtsm libtsm-host $(BASE_DIRS) $(FULL_DIRS)
 
 # The default goal: the images, which bring in the kernel, the guest programs,
 # the vendored userland and Doom through their prerequisites, and the host
@@ -206,6 +212,7 @@ busybox: $(BUSYBOX_STAMP)
 dropbear: $(DROPBEAR_STAMP)
 tcc: $(TCC_STAMP)
 pdpmake: $(PDPMAKE_STAMP)
+kbd: $(KBD_STAMP)
 e2fsprogs: $(E2FSPROGS_STAMP)
 libtsm: $(LIBTSM_STAMP)
 libtsm-host: $(LIBTSM_HOST_STAMP)
@@ -289,6 +296,13 @@ $(PDPMAKE_STAMP): vendor/pdpmake/build_pdpmake.sh $(PDPMAKE_PATCHES) \
 	    echo "pdpmake: result: done in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(PDPMAKE_BIN) || { echo "pdpmake: build produced no $(PDPMAKE_BIN)" >&2; exit 1; }
 
+# kbd's six console keyboard tools, built with the same musl as init.
+$(KBD_STAMP): vendor/kbd/build_kbd.sh $(KBD_TARBALL) $(KBD_PATCHES) $(VENDOR_COMMON) $(LIBC_STAMP) | $(SHA256TOOL) $(ETUDE)
+	@rm -f $@ $(KBD_BINS)
+	+@$(STEP) -n kbd -t $@ -c $(CROSS_PREFIX)gcc -c cc $(STEP_INPUTS) -o $(KBD_STAGE) \
+	    -- sh -c 'RACH2_ARCH=$(ARCH) ./vendor/kbd/build_kbd.sh'
+	@for f in $(KBD_BINS); do test -s $$f || exit 1; done
+
 # e2fsprogs, of which the images stage e2fsck, resize2fs, mke2fs, tune2fs
 # and dumpe2fs. The patch manifest is a prerequisite as Dropbear's is below,
 # and mke2fs.conf is one because mke2fs compiles it in as its defaults. The
@@ -348,6 +362,8 @@ $(DROPBEAR_STAMP): vendor/dropbear/build_dropbear.sh vendor/dropbear/localoption
 	        -- sh -c 'RACH2_ARCH=$(ARCH) ./vendor/dropbear/build_dropbear.sh && test -s $(DROPBEAR_BIN)' && \
 	    echo "dropbear: result: done in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(DROPBEAR_BIN) || { echo "dropbear: build produced no $(DROPBEAR_BIN)" >&2; exit 1; }
+
+_ := $(shell [ ! -f $(KBD_STAMP) ] || { for f in $(KBD_BINS); do [ -s "$$f" ] || { rm -f $(KBD_STAMP); break; }; done; })
 
 # --- Missing vendored outputs. A stamp says its script ran; the rules use
 #     the files the script staged. When one of those files is gone, the
@@ -436,7 +452,7 @@ MANIFEST_DEPS_doom_test := $(shell $(MANIFEST_DEPS) krffs/manifests/doom-test.ma
 # which is os-real's with two more files. Every rule that stages either names
 # them as prerequisites, order-only in the rule of a file, so that a tree with
 # nothing built yet can stage it.
-MANIFEST_PARTS_os_real = utils check-busybox check-tcc check-pdpmake check-setid \
+MANIFEST_PARTS_os_real = kbd utils check-busybox check-tcc check-pdpmake check-setid \
                          check-dropbearmulti check-e2fsck tools/etude/guest ports/doom $(MAN_ALL)
 MANIFEST_INPUTS = $(sort $(MANIFEST_DEPS_test) $(MANIFEST_DEPS_os_simple) \
     $(MANIFEST_DEPS_os_real) $(MANIFEST_DEPS_os_real_gnu) $(MANIFEST_DEPS_rach2_metal) \
@@ -453,6 +469,7 @@ ifneq ($(TCC_KNOWN),)
 $(TCC_KNOWN): $(TCC_STAMP)
 endif
 $(BUSYBOX_OUTPUTS): $(BUSYBOX_STAMP)
+$(KBD_BINS): $(KBD_STAMP)
 $(DROPBEAR_BIN): $(DROPBEAR_STAMP)
 $(PDPMAKE_BIN): $(PDPMAKE_STAMP)
 $(LIBTSM_A): $(LIBTSM_STAMP)
@@ -1255,7 +1272,7 @@ musl-programs: $(LIBC_STAMP)
 # it, and loopdevprobe copies a 4 MiB image onto it, so it keeps 5 MiB free:
 # 13 MiB, of which the programs take 7.1 on i686 and 7.2 on x86-64.
 $(TEST_IMAGE): $(DEMO_CREDS) krffs/manifests/test.manifest $(MANIFEST_DEPS_test) $(IMAGE_TOOLS) | preflight krffs rach2 tests musl-programs utils ish tools/etude/guest \
-              check-dropbearmulti
+              check-dropbearmulti kbd
 	$(MKIMAGE) krffs/manifests/test.manifest $@ 13 5120
 
 # The disk of etude's cases that boot a KRFFS root on disk, such as those of
@@ -1364,7 +1381,7 @@ rach2-recovery: krffs rach2 $(RECOVERY_KERNEL) $(BINFIND) $(CHECKRECOVERY)
 # $(TEST_IMAGE) above is. A phony target would restage the image on every
 # invocation, so each suite that boots it would restage it, and two running at
 # once would restage it under each other.
-$(METAL_IMAGE): Makefile $(DEMO_CREDS) krffs/manifests/rach2-metal.manifest $(MANIFEST_DEPS_rach2_metal) $(IMAGE_TOOLS) | preflight krffs rach2 rach2-metal utils check-busybox check-setid check-dropbearmulti
+$(METAL_IMAGE): Makefile $(DEMO_CREDS) krffs/manifests/rach2-metal.manifest $(MANIFEST_DEPS_rach2_metal) $(IMAGE_TOOLS) | kbd preflight krffs rach2 rach2-metal utils check-busybox check-setid check-dropbearmulti
 	$(MKIMAGE) krffs/manifests/rach2-metal.manifest $@ 8
 
 rach2-metal-image: $(METAL_IMAGE)
@@ -1394,7 +1411,7 @@ RECOVERY_ISO = $(IMAGES_DIR)/$(RECOVERY_NAME).iso
 # The installer test disk's 8 MiB recovery partition holds it and its kernel.
 # The installer case's keyless copy takes the same size.
 RECOVERY_MIB = 5
-$(RECOVERY_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-recovery.manifest $(MANIFEST_DEPS_rach2_recovery) $(IMAGE_TOOLS) $(MAN_ALL) tools/image/keyname.sh | preflight krffs rach2 rach2-recovery utils check-busybox check-setid check-dropbearmulti check-e2fsck
+$(RECOVERY_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-recovery.manifest $(MANIFEST_DEPS_rach2_recovery) $(IMAGE_TOOLS) $(MAN_ALL) tools/image/keyname.sh | kbd preflight krffs rach2 rach2-recovery utils check-busybox check-setid check-dropbearmulti check-e2fsck
 	@sh tools/image/keyname.sh $@
 	$(MKIMAGE) krffs/manifests/rach2-recovery.manifest $@ $(RECOVERY_MIB) 512
 
@@ -1502,13 +1519,13 @@ GRUB_FILES      = $(wildcard vendor/grub/*.img) vendor/grub/bootx64.efi \
 MKEXFATFIXTURE  = build/tests/host/mkexfatfixture
 
 SEALED_EXT2 = $(IMAGES_DIR)/rach2-metal-disk.ext2
-$(SEALED_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest $(MANIFEST_DEPS_rach2_metal_disk) $(MAN_ALL) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti check-e2fsck ports/doom
+$(SEALED_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest $(MANIFEST_DEPS_rach2_metal_disk) $(MAN_ALL) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti check-e2fsck kbd ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 1024
 # The alias builds everything the disk is made of, then asks for the disk
 # itself. The two are separate because the components are phony targets,
 # which are always out of date, and a disk that named them directly would be
 # rebuilt on every invocation, half a minute each time.
-rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(CFGCHECK)
+rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti kbd ports/doom $(CFGCHECK)
 	@$(MAKE) --no-print-directory $(SEALED_DISK)
 
 $(SEALED_DISK): $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED_EXT2) \
@@ -1733,13 +1750,13 @@ include tests/native/native.mk
 # vendor/ and its product under build/, so removing build/ alone would leave
 # the step taken as done.
 STEP_STAMPS = $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) $(PDPMAKE_STAMP) \
-              $(E2FSPROGS_STAMP) $(LIBTSM_STAMP) $(LIBTSM_HOST_STAMP) $(MTOOLS_STAMP) \
+              $(E2FSPROGS_STAMP) $(KBD_STAMP) $(LIBTSM_STAMP) $(LIBTSM_HOST_STAMP) $(MTOOLS_STAMP) \
               $(GNU_STEP_STAMPS)
 STEP_PRODUCTS = $(LIBC_STAMP):$(LIBC_A) $(BUSYBOX_STAMP):$(BUSYBOX_BIN) \
                 $(DROPBEAR_STAMP):$(DROPBEAR_BIN) $(TCC_STAMP):$(TCC_BIN) \
                 $(PDPMAKE_STAMP):$(PDPMAKE_BIN) $(E2FSPROGS_STAMP):$(E2FSCK_BIN) \
                 $(LIBTSM_STAMP):$(LIBTSM_A) $(LIBTSM_HOST_STAMP):$(LIBTSM_HOST_A) \
-                $(MTOOLS_STAMP):$(MTOOLS_BIN)
+                $(KBD_STAMP):$(KBD_STAGE)/loadkeys $(MTOOLS_STAMP):$(MTOOLS_BIN)
 ifeq ($(DRY_RUN),)
 _ := $(shell $(foreach p,$(STEP_PRODUCTS),[ -s "$(lastword $(subst :, ,$(p)))" ] || \
         rm -f "$(firstword $(subst :, ,$(p)))";) :)

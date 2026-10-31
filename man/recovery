@@ -13,3 +13,10 @@ e2fsck 8
 mount 8
 netup 8
 man 1
+loadkeys 1
+dumpkeys 1
+kbd_mode 1
+setleds 1
+showkey 1
+kbdrate 8
+vconsole.conf 5

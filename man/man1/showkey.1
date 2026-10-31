@@ -1,0 +1,37 @@
+.\" Adapted from kbd 2.10.0 docs/man/man1/showkey.1, GPL-2.0-or-later.
+.Dd November 1, 2026
+.Dt SHOWKEY 1
+.Os
+.Sh NAME
+.Nm showkey
+.Nd print keyboard scan codes, keycodes or translated bytes
+.Sh SYNOPSIS
+.Nm
+.Op Fl a | k | s
+.Op Fl h | V
+.Sh DESCRIPTION
+.Nm
+prints the keys read from the kernel console.
+Run it there with no other keyboard reader.
+It cannot examine the keyboard through a terminal emulator's pseudo-terminal.
+In keycode or scan-code mode it exits after ten seconds without a key event,
+or on a termination signal, and restores the keyboard's previous mode.
+In translated mode Control-D ends input.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl a
+Print translated bytes in decimal, octal and hexadecimal.
+.It Fl k
+Print keycodes and whether each key was pressed or released.
+This is the default.
+.It Fl s
+Print scan-code bytes in hexadecimal.
+.It Fl h
+Print help.
+.It Fl V
+Print the version.
+.El
+.Sh SEE ALSO
+.Xr dumpkeys 1 ,
+.Xr kbd_mode 1 ,
+.Xr loadkeys 1

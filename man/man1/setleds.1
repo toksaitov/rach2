@@ -1,0 +1,38 @@
+.\" Adapted from kbd 2.10.0 docs/man/man1/setleds.1, GPL-2.0-or-later.
+.Dd November 1, 2026
+.Dt SETLEDS 1
+.Os
+.Sh NAME
+.Nm setleds
+.Nd report or change console keyboard locks and LEDs
+.Sh SYNOPSIS
+.Nm
+.Op Fl v
+.Op Fl D | F | L
+.Op Cm +num | -num
+.Op Cm +caps | -caps
+.Op Cm +scroll | -scroll
+.Sh DESCRIPTION
+.Nm
+operates on the console connected to standard input.
+With no operands it prints Num Lock, Caps Lock and Scroll Lock settings.
+A plus operand sets its flag; a minus operand clears it.
+Other flags stay unchanged.
+.Pp
+.Fl F ,
+the default, changes the console's lock flags.
+.Fl D
+changes those flags and their defaults.
+.Fl L
+changes only the physical LEDs, independently of the lock flags;
+.Fl L
+alone restores LEDs that follow the lock flags.
+.Fl v
+reports the settings before and after a change.
+.Sh EXAMPLES
+.Bd -literal -offset indent
+setleds -D +num < /dev/console
+.Ed
+.Sh SEE ALSO
+.Xr loadkeys 1 ,
+.Xr vconsole.conf 5

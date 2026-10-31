@@ -1,0 +1,35 @@
+--- a/src/libkeymap/loadkeys.c
++++ b/src/libkeymap/loadkeys.c
+@@ -112,7 +112,8 @@
+ {
+ 	int count = 0;
+ 
+-	if (ctx->flags & LK_FLAG_UNICODE_MODE) {
++	if ((ctx->flags & LK_FLAG_UNICODE_MODE) &&
++	    kbd_mode != K_RAW && kbd_mode != K_MEDIUMRAW) {
+ 		/* temporarily switch to K_UNICODE while defining keys */
+ 		if (lk_ioctl_int(ctx, fd, KDSKBMODE, K_UNICODE)) {
+ 			ERR(ctx, _("KDSKBMODE: %s: could not switch to Unicode mode"),
+@@ -140,6 +141,7 @@
+ 	}
+ 
+ 	if ((ctx->flags & LK_FLAG_UNICODE_MODE) &&
++	    kbd_mode != K_RAW && kbd_mode != K_MEDIUMRAW &&
+ 	    lk_ioctl_int(ctx, fd, KDSKBMODE, kbd_mode)) {
+ 		ERR(ctx, _("KDSKBMODE: %sr could not return to original keyboard mode"),
+ 				strerror(errno));
+--- a/src/kbd_mode.c
++++ b/src/kbd_mode.c
+@@ -16,11 +16,10 @@
+ #include <sysexits.h>
+ #include <sys/ioctl.h>
+ #include <linux/kd.h>
+-#include <linux/version.h>
+ 
+ #include "libcommon.h"
+ 
+-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 39)
++#ifdef K_OFF
+ #define HAS_K_OFF
+ #endif
+ 

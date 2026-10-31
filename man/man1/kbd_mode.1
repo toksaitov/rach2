@@ -1,0 +1,43 @@
+.\" Adapted from kbd 2.10.0 docs/man/man1/kbd_mode.1, GPL-2.0-or-later.
+.Dd November 1, 2026
+.Dt KBD_MODE 1
+.Os
+.Sh NAME
+.Nm kbd_mode
+.Nd report or set the console keyboard mode
+.Sh SYNOPSIS
+.Nm
+.Op Fl a | u | k | s | d
+.Op Fl f
+.Op Fl C Ar console
+.Sh DESCRIPTION
+.Nm
+with no mode option reports the keyboard mode.
+It uses the console on standard input unless
+.Fl C
+names a device.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl a
+Select translated 8-bit input, K_XLATE.
+.It Fl u
+Select translated UTF-8 input, K_UNICODE.
+.It Fl k
+Select keycodes, K_MEDIUMRAW.
+.It Fl s
+Select scan codes, K_RAW.
+.It Fl d
+Disable console keyboard input, K_OFF.
+.It Fl f
+Force a change to or from a raw mode.
+.It Fl C Ar console
+Use this console device.
+.El
+.Sh EXAMPLES
+Restore translated input after a program left the console in raw mode:
+.Bd -literal -offset indent
+kbd_mode -f -u -C /dev/console
+.Ed
+.Sh SEE ALSO
+.Xr loadkeys 1 ,
+.Xr showkey 1

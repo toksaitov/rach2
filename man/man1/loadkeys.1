@@ -1,0 +1,73 @@
+.\" Adapted from kbd 2.10.0 docs/man/man1/loadkeys.1, GPL-2.0-or-later.
+.Dd November 1, 2026
+.Dt LOADKEYS 1
+.Os
+.Sh NAME
+.Nm loadkeys
+.Nd load console keyboard maps
+.Sh SYNOPSIS
+.Nm
+.Op Fl a b c d h m p q s u v V
+.Op Fl Fl tkeymap Ns Op = Ns Ar shape
+.Op Fl C Ar console
+.Op Ar map ...
+.Sh DESCRIPTION
+.Nm
+loads text keymaps, function strings and compose definitions into the
+console keyboard.
+Maps are read in order, so an overlay can change selected entries of a layout.
+With no map operand, input comes from standard input.
+Named maps are sought under
+.Pa /usr/share/kbd/keymaps ;
+the suffix
+.Pa .map
+may be omitted.
+.Pp
+.Fl u
+loads Unicode entries.
+On Rach2 it leaves raw and mediumraw keyboard modes unchanged, so a running
+terminal can continue reading keycodes during a load.
+A failed load can leave part of the map changed; reload a known map to recover.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl a
+Force conversion to the current 8-bit character set.
+.It Fl b
+Write a binary keymap to standard output instead of changing the keyboard.
+This form omits function strings and compose definitions.
+.It Fl c
+Clear the compose table before loading the definitions.
+.It Fl C Ar console
+Use this console device.
+.It Fl d
+Load the default map.
+.It Fl m
+Write C source describing the map instead of changing the keyboard.
+.It Fl p
+Find and parse the maps without applying them.
+.It Fl Fl tkeymap Ns Op = Ns Ar shape
+Write the combined text keymap to standard output instead of applying it.
+The output shapes are those of
+.Xr dumpkeys 1 .
+.It Fl q
+Suppress progress output.
+.It Fl s
+Clear the function strings before loading the definitions.
+.It Fl u
+Force Unicode conversion.
+.It Fl v
+Print more detail; may be repeated.
+.It Fl h
+Print help.
+.It Fl V
+Print the version.
+.El
+.Sh EXAMPLES
+.Bd -literal -offset indent
+loadkeys -u kg alt-shift caps-ctrl
+loadkeys -u us
+.Ed
+.Sh SEE ALSO
+.Xr dumpkeys 1 ,
+.Xr kbd_mode 1 ,
+.Xr vconsole.conf 5
