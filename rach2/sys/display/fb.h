@@ -9,6 +9,10 @@
 #include "../lib/kint.h"
 #include "../lib/kdef.h"
 
+/* The requests, structures and events programs use, which they include as
+ * <rach2/fb.h>. */
+#include "../../include/rach2/fb.h"
+
 /* Graphics mode identifiers. */
 typedef enum {
     GFX_MODE_NONE = 0, /* No graphics mode active (text mode) */

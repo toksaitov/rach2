@@ -4,7 +4,7 @@
 
 ## Interfaces
 
-Programs see the screen as [console(4)](../../../man/man4/console.4) describes it: the escape sequences of the `rach2` terminfo entry ([`vendor/gnu/rach2.ti`](../../../vendor/gnu/rach2.ti)), the font and its stand-ins, the answers to queries, and the window size. `/fb` is described in [open(2)](../../../man/man2/open.2), [read(2)](../../../man/man2/read.2), [write(2)](../../../man/man2/write.2) and [ioctl(2)](../../../man/man2/ioctl.2).
+Programs see the screen as [console(4)](../../../man/man4/console.4) describes it: the escape sequences of the `rach2` terminfo entry ([`vendor/gnu/rach2.ti`](../../../vendor/gnu/rach2.ti)), the font and its stand-ins, the answers to queries, and the window size. `/fb` is described in [open(2)](../../../man/man2/open.2), [read(2)](../../../man/man2/read.2), [write(2)](../../../man/man2/write.2) and [ioctl(2)](../../../man/man2/ioctl.2). A program takes `/fb`'s requests, structures and events from `<rach2/fb.h>`, which is [`rach2/include/rach2/fb.h`](../../include/rach2/fb.h), staged as `/include/rach2/fb.h` beside musl's headers and included by the kernel's `fb.h`; the native mode's requests, `FB_GETINFO` and `FB_MODE_NATIVE`, and the events it declares are not answered yet.
 
 Inside the kernel:
 

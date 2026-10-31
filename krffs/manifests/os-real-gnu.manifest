@@ -75,6 +75,8 @@ file 0644 /lib/crt1.o vendor/musl/install/lib/crt1.o
 file 0644 /lib/crti.o vendor/musl/install/lib/crti.o
 file 0644 /lib/crtn.o vendor/musl/install/lib/crtn.o
 tree 0644 /include vendor/musl/install/include
+# Rach2's own header for programs that use /fb, <rach2/fb.h>.
+file 0644 /include/rach2/fb.h rach2/include/rach2/fb.h
 
 tree 0644 /src/utils utils
 dir 0755 /src
