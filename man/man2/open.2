@@ -398,8 +398,12 @@ The special paths
 and
 .Pa /mouse
 open the framebuffer and mouse directly.
-The kernel open handler ignores flags and mode for these paths, except
-that neither device is a directory:
+The kernel open handler keeps
+.Dv O_CLOEXEC
+and
+.Dv O_NONBLOCK
+for these paths and ignores the other flags and the mode, except that
+neither device is a directory:
 .Dv O_DIRECTORY
 returns
 .Er ENOTDIR ,
@@ -413,9 +417,16 @@ With
 such a path follows the rule for
 .Dv O_CREAT
 above.
-The framebuffer opens for reading and writing and is owned by one
-process at a time; the mouse opens for reading and requires an
-available mouse device.
+The framebuffer opens for reading and writing, whatever the access mode,
+and is owned by one process at a time: the open makes the caller the
+owner, enters mode 13h and gives the program the screen, as
+.Xr console 4
+describes, and returns
+.Er EBUSY
+while another process owns it.
+A child that inherits the descriptor does not own the screen and can
+neither write nor change it.
+The mouse opens for reading and requires an available mouse device.
 .Ss Path descriptors
 With
 .Dv O_PATH
