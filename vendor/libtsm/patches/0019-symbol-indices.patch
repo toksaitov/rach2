@@ -1,0 +1,29 @@
+Fix combined symbol indices and the allocation failure cleanup
+
+The first index entry is a dummy, so the first combined symbol must
+resolve to index 1. Initialize next_id to the invalid-code-point sentinel
+so that incrementing it yields the symbol for that entry.
+
+An allocated string is prefixed by its symbol ID. Release the allocation
+from that prefix on an insert or index growth failure, as free_ucs4 does.
+
+--- a/src/tsm/tsm-unicode.c
++++ b/src/tsm/tsm-unicode.c
+@@ -155,7 +155,7 @@
+ 		return -ENOMEM;
+ 	memset(tbl, 0, sizeof(*tbl));
+ 	tbl->ref = 1;
+-	tbl->next_id = TSM_UCS4_MAX + 2;
++	tbl->next_id = TSM_UCS4_MAX + 1;
+ 	shl_htable_init(&tbl->symbols, cmp_ucs4, hash_ucs4, NULL);
+ 
+ 	ret = shl_array_new(&tbl->index, sizeof(uint32_t*), 4);
+@@ -307,7 +307,7 @@
+ 	shl_htable_remove(&tbl->symbols, nval, hash_ucs4(nval, NULL), NULL);
+ err_id:
+ 	--tbl->next_id;
+-	free(nval);
++	free(nval - 1);
+ 	return sym;
+ }
+ 

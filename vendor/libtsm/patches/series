@@ -4,3 +4,5 @@
 # on the tree the ones before it leave.
 0001-declare-sync-focus-clipboard.patch
 0002-version-macros.patch
+0019-wide-and-combining.patch
+0019-symbol-indices.patch

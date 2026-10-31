@@ -18,6 +18,8 @@ The patches, which [`patches/series`](patches/series) names in the order they ap
 
 * [`0001-declare-sync-focus-clipboard.patch`](patches/0001-declare-sync-focus-clipboard.patch) declares, in `libtsm.h`, `tsm_vte_get_sync_hold()` and `tsm_vte_end_sync_hold()` for synchronized output, mode 2026; `tsm_vte_handle_focus()` for focus events, mode 1004; and `tsm_vte_set_clipboard_cb()` with its callback type for OSC 52. In `tsm-vte.c` they are stubs: the hold is never on, no focus report is sent, and the callback is kept but never called. `term` is written against them before the parser implements the modes.
 * [`0002-version-macros.patch`](patches/0002-version-macros.patch) defines `TSM_VERSION_MAJOR`, `TSM_VERSION_MINOR`, `TSM_VERSION_MICRO` and `TSM_VERSION`, `"4.8.0"`, in `libtsm.h`, which `term -V` prints. The script stops when the patched header's `TSM_VERSION` is not `VERSION`.
+* [`0019-wide-and-combining.patch`](patches/0019-wide-and-combining.patch) wraps a wide character before writing it when autowrap is on and the remaining columns cannot hold it. A character wider than the screen, or one at the edge with autowrap off, keeps the clipping behavior. Zero-width Unicode code points join the preceding occupied cell in the same row through `tsm_symbol_append`, including a wide base or one awaiting wrap; the base keeps its width and attributes, its age changes, and the cursor stays put. Marks at column zero or after an empty cell, controls and invalid code points are ignored.
+* [`0019-symbol-indices.patch`](patches/0019-symbol-indices.patch) fixes the combined symbols' IDs to match their index entries and frees the allocation from its prefix on an insertion or index growth failure. Both are needed by the screen's combining path.
 
 ## Building
 
@@ -46,3 +48,4 @@ The stamp of either depends on the script, the tarball, the series, each patch a
 3. Remake each patch on the new tree in the series' order, and the version in `0002-version-macros.patch`; a patch that applies only with fuzz is refused.
 4. Check that `tsm-unicode.c` uses no call of the hash table that `shl-htable.h` here lacks, and that the new tree carries the LGPL nowhere else.
 5. Rebuild `term` for both architectures and the host.
+
