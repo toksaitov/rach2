@@ -14,7 +14,7 @@ Seven images boot by BIOS (GRUB's `i386-pc` platform) and one by UEFI:
 * `boot-hybrid.img`: GRUB's hybrid MBR, which `xorriso` writes into an ISO so that it also boots from a USB device.
 * `bootx64.efi`: GRUB's `x86_64-efi` image, installed as `\EFI\BOOT\BOOTX64.EFI` on a GPT disk's EFI system partition, in an ISO's EFI boot image and on the install stick. Its prefix is `/boot/grub` on the device the firmware loaded it from, and its embedded configuration is `tools/image/grub-efi-embed.cfg`.
 
-`manifest.txt` lists each image's modules, under `disk-modules`, `gpt-modules`, `iso-modules` and `efi-modules`. Every image has the `multiboot` and `multiboot2` loaders. The BIOS images have `vbe`, `video`, `video_fb` and `all_video`, with which GRUB sets a graphics mode through the video BIOS or a known adapter's registers when a menu entry's `gfxpayload` asks for one, and the EFI image has `efi_gop` and `efi_uga`, which pass on the firmware's framebuffer. What the two embedded configurations do, and how the builders lay out a disk or an ISO, is in [`tools/Readme.md`](../../tools/Readme.md). The images are written by `tools/image/mkdisk_grub.sh`, `mkiso.sh`, `mkinstallstick.sh` and `mkgrubcore.sh`, and by the `sealed` and `uefi` suites, which install `gpt-core.img` on a running machine.
+`manifest.txt` lists each image's modules, under `disk-modules`, `gpt-modules`, `iso-modules` and `efi-modules`. Every image has the `multiboot` and `multiboot2` loaders. The BIOS images have `vbe`, `video` and `video_fb`, with which GRUB sets a graphics mode through the video BIOS when a menu entry's `gfxpayload` asks for one, and the EFI image has `efi_gop` and `efi_uga`, which pass on the firmware's framebuffer. The BIOS images leave out `all_video`, whose drivers for QEMU's Bochs and Cirrus adapters would take precedence over `vbe` and set 800x600 whatever the display prefers. What the two embedded configurations do, and how the builders lay out a disk or an ISO, is in [`tools/Readme.md`](../../tools/Readme.md). The images are written by `tools/image/mkdisk_grub.sh`, `mkiso.sh`, `mkinstallstick.sh` and `mkgrubcore.sh`, and by the `sealed` and `uefi` suites, which install `gpt-core.img` on a running machine.
 
 [`verify_grub.sh`](verify_grub.sh) checks images against the manifest:
 
@@ -49,7 +49,7 @@ A new set of images is chosen on purpose and reviewed as a vendored source updat
 ## Limits
 
 * `bootx64.efi` is not signed, so a machine boots it only with Secure Boot turned off.
-* The BIOS images set only the modes the video BIOS lists. A panel whose native size is not among them, as on many laptops, gets the largest listed mode no larger than the size its EDID prefers, and one without an EDID gets 640x480.
+* The BIOS images set only the modes the video BIOS lists. For `gfxpayload=auto`, `vbe` takes the size the display's EDID prefers, or the video BIOS's flat panel size, and sets the listed mode no larger than it with the most bits in all; a panel whose own size is not listed, as on many laptops, gets a smaller one, and a display that names no size gets 640x480 or text.
 
 ## Tests
 
