@@ -744,6 +744,11 @@ windows()
         mark windows "only style failed, which the full run checks"
         return 0
     fi
+    # Prepare only the architectures the words name, so that a rerun of one
+    # architecture's suites does not build the other's collection.
+    warch=both
+    case " $words" in *" x86_64:"*) ;; *) warch=i686 ;; esac
+    case " $words" in *" i686:"*) ;; *) warch=x86_64 ;; esac
     held=/mnt/$(echo "$out" | cut -c 1 | tr '[:upper:]' '[:lower:]')$(echo "$out" | cut -c 3-)
     while :; do
         if [ "$(grep -c '^windows started ' "$state/record")" -ge 3 ]; then
@@ -780,8 +785,8 @@ windows()
             echo "cp build/tools/etude/etude \"\$e\" || { echo 'status 1'; exit; }"
             echo "unset ETUDE_SITE ETUDE_ADMITTED ETUDE_PREPARATION_CLEAN"
             echo "mkdir -p $out/$id $out/tmp"
-            echo "ETUDE_SITE=$wsite \"\$e\" run -N -t $wtree -a both -A $accel -J $out/$id.selection.json $words > $out/$id.selection.log 2>&1 || { tail -n 20 $out/$id.selection.log; echo 'status 1'; exit; }"
-            echo "ETUDE_PHASE_SELECTION_EXPORT=$out/$id.selection.json ETUDE_PREPARATION_CLEAN=1 \"\$e\" run routine-sequence phase_first_run $wtree $out/$id both $id $wsite \"\$e\" $accel $words > $out/$id.console 2>&1"
+            echo "ETUDE_SITE=$wsite \"\$e\" run -N -t $wtree -a $warch -A $accel -J $out/$id.selection.json $words > $out/$id.selection.log 2>&1 || { tail -n 20 $out/$id.selection.log; echo 'status 1'; exit; }"
+            echo "ETUDE_PHASE_SELECTION_EXPORT=$out/$id.selection.json ETUDE_PREPARATION_CLEAN=1 \"\$e\" run routine-sequence phase_first_run $wtree $out/$id $warch $id $wsite \"\$e\" $accel $words > $out/$id.console 2>&1"
             # shellcheck disable=SC2016 # the remote shell expands these
             echo 'rc=$?'
             echo "tail -n 40 $out/$id.console"
