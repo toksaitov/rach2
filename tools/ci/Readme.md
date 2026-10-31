@@ -1,6 +1,6 @@
 # Release tests
 
-`tools/ci/` runs the release tests on GitHub Actions: every suite of both architectures, built from clean, at the commit that a release names, on the self-hosted runner of the one machine that the commit's `site` selects. [`tools/flow/release.sh`](../flow/release.sh) starts the workflow, [`full.yml`](../../.github/workflows/full.yml), as one step of a release and reads its failures. Nothing runs on a push.
+`tools/ci/` runs the release tests on GitHub Actions: every suite of both architectures, with the in-house code built from clean and the vendored and GNU builds taken from the host's store where it has them, at the commit that a release names, on the self-hosted runner of the one machine that the commit's `site` selects. [`tools/flow/release.sh`](../flow/release.sh) starts the workflow, [`full.yml`](../../.github/workflows/full.yml), as one step of a release and reads its failures. Nothing runs on a push.
 
 ## Use
 
@@ -16,6 +16,12 @@
 A run keeps, for 14 days, the artifacts `failures` (FILE above, which release.sh fetches with `gh run download ID --name failures`), `full-i686` and `full-x86_64` (each architecture's directory), and with the native entry `full-native-evidence`. The run's conclusion is `success` only when both architectures passed. The workflow files no issue and sets no commit status.
 
 ## Design
+
+### What a release builds
+
+`run.sh` runs `make clean` and then `make` for each architecture with the host's store of step outputs ([etude's Readme](../etude/Readme.md#the-step-store)), `/var/cache/rach2-store` on the testing host, as every other copy there builds. `make clean` removes the kernel, the guest programs, the host tools and the images, so a full run builds them from the commit's sources. The vendored projects and the GNU layer are steps of the store: a step whose key, the SHA-256 of its record, has an entry takes that entry's outputs, made by the first copy that built the key, and runs no recipe; a step with a new key is built into the store, where the copies after it find it. A runner copy whose GNU layer was built in the copy, without the store, loses it to the first make that uses a GNU target, which then takes each step's links from the store ([vendor/gnu/Readme.md](../../vendor/gnu/Readme.md)).
+
+A release therefore proves that the commit's in-house code builds and that every suite passes on the outputs the store gives. It takes as built each vendor and GNU step whose architecture, platform, compiler identities, input files and used steps' keys are those of an entry: that the recipe builds from its tarballs was shown by the build that made the entry, not by the release. What the key does not count, such as a host program the recipe runs that is not one of its compilers, or the environment, may differ between that build and a fresh one without the release seeing it. A changed recipe, pinned tarball or host compiler, or a used step built again, changes the key, and the release builds the step. `RACH2_STORE= sh tools/ci/run.sh full OUT` builds every step in the copy instead.
 
 ### The native routine entry
 
