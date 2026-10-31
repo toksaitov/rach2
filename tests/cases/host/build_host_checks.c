@@ -13,7 +13,8 @@ static const char *const carried[] = {"AGENTS.md",
                                       "ports/doom/a.c",
                                       NULL};
 
-/* Files outside them, and a compressed file inside them, which no check reads. */
+/* Files outside them, and a compressed file inside them, which no check
+ * reads. */
 static const char *const outside[] = {"Makefile",
                                       "dev-log/a.md",
                                       "man/man1/a.1",
@@ -73,8 +74,11 @@ static int repo_tree(struct fixture *f, const char *repo)
            fx_text(bp(repo, "print.mk"), "print:\n\t@printf '%s\\n' $(GNU_HOST_CHECKS_SOURCES)\n");
 }
 
-/** Whether GNU make's GNU_HOST_CHECKS_SOURCES in `repo` is the list and the scripts;
- * the make first on the helper's PATH is pdpmake, which has no $(shell). */
+/**
+ * Whether GNU make's GNU_HOST_CHECKS_SOURCES in `repo` is the list and the
+ * scripts; the make first on the helper's PATH is pdpmake, which has no
+ * $(shell).
+ */
 static int sources_are_list(struct fixture *f, const char *repo)
 {
     const char *make[] = {"/usr/bin/make", "-s",    "-f", "mk/gnu-host-checks.mk", "-f",
@@ -93,7 +97,10 @@ static int sources_are_list(struct fixture *f, const char *repo)
     return found && n == 11;
 }
 
-/** Copy the list into a new tree; whether the tree has the carried files alone. */
+/**
+ * Copy the list into a new tree; whether the tree has the carried files
+ * alone.
+ */
 static int tree_is_list(struct fixture *f, const char *repo)
 {
     char tree[4096];
@@ -107,7 +114,10 @@ static int tree_is_list(struct fixture *f, const char *repo)
     return ok;
 }
 
-/** The step's key in `repo` over make's sources, in `key`, 65 bytes; 0 on failure. */
+/**
+ * Put the step's key in `repo` over make's sources in `key`, 65 bytes.
+ * Return 1, or 0 on failure.
+ */
 static int step_key(struct fixture *f, const char *repo, char key[65])
 {
     const char *make[] = {"/usr/bin/make", "-s",    "-f", "mk/gnu-host-checks.mk", "-f",
@@ -172,7 +182,11 @@ static int changes_key(struct fixture *f, const char *repo, const char *const na
     return ok;
 }
 
-/* Without git, as in the tooling machine, the list comes from gnu-source-files. */
+/**
+ * Remove the fixture's git checkout and list its files in
+ * build/gnu-source-files, as in the tooling machine, which has no git.
+ * Return 1, or 0 on failure.
+ */
 static int source_files(const char *repo)
 {
     char list[8192];

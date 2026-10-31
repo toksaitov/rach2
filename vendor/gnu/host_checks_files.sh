@@ -3,8 +3,8 @@
 # checks compile, read and run, which are both the inputs of the
 # gnu-host-checks step's key and the files its tree carries.
 #
-#   host_checks_files.sh          print them, one to a line
-#   host_checks_files.sh TREE     copy them into TREE, with their modes and times
+#   host_checks_files.sh         print them, one to a line
+#   host_checks_files.sh TREE    copy them into TREE, with their modes and times
 #
 # They are the files under PATHS that git tracks or, where the tree is not a
 # git checkout, as in the tooling machine, that build/gnu-source-files lists,

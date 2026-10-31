@@ -3,7 +3,8 @@
 # machine.installer-rehearse, the rehearsals of the Lenovo's install sitting
 # on a disk of their own.
 #
-# Usage: rehearse_fixture.sh DISK SECTORS GROWSET MKEXFATFIXTURE MKMBR MKGPT ETUDE DIR
+# Usage: rehearse_fixture.sh DISK SECTORS GROWSET MKEXFATFIXTURE MKMBR MKGPT
+#            ETUDE DIR
 #
 # DISK is the image the stick installs and SECTORS the target disk's length.
 # Run from the root of the tree, it writes into DIR:
