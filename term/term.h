@@ -12,6 +12,9 @@
 #include <sys/types.h>
 
 #include <libtsm.h>
+#include <rach2/fb.h>
+
+#include "unifont.h"
 
 /*
  * Every call that can fail returns 0 or a negative errno value, as libtsm's
@@ -185,7 +188,8 @@ void term_pty_close(struct term_pty *pty);
 
 /*
  * libtsm's screen and parser, and what they report. Every call into libtsm
- * but drawing's tsm_screen_draw() is made from screen.c.
+ * is made from screen.c but drawing's, which reads the screen it draws:
+ * tsm_screen_draw(), the cursor and the scrollback's position.
  */
 struct term_screen {
     struct tsm_screen *screen;
@@ -271,66 +275,182 @@ void term_screen_free(struct term_screen *s);
 
 /* ---- The font (font.c) ---- */
 
+/* Where the packed Unifont is installed, in the format unifont.h describes. */
+#define TERM_FONT_PATH "/usr/share/term/unifont.font"
+
 /* The packed Unifont at the scale in use. */
 struct term_font {
-    const unsigned char *data; /* the packed font, or NULL before loading */
-    size_t size;               /* bytes at `data` */
-    unsigned scale;            /* 1 or 2 */
-    unsigned cell_width;       /* a cell's width in pixels, at the scale */
-    unsigned cell_height;      /* a cell's height in pixels, at the scale */
+    unsigned char *data;  /* the packed font, read whole, or NULL */
+    size_t size;          /* bytes at `data` */
+    struct unifont index; /* the font as unifont_open() checked it */
+    unsigned scale;       /* 1 or 2: each pixel of a glyph is scale by scale */
+    unsigned cell_width;  /* a cell's width in pixels, 8 * scale */
+    unsigned cell_height; /* a cell's height in pixels, 16 * scale */
 };
 
-/** Load the packed font from `path` at `scale`, 1 or 2. */
+/**
+ * Read the packed font from `path` and check it, at `scale`, 1 or 2.
+ *
+ * Returns -EINVAL for a scale other than 1 or 2 and for a file that is not a
+ * packed font, or the errno value of the open or read that failed.
+ */
 int term_font_load(struct term_font *f, const char *path, unsigned scale);
 
 /**
- * The glyph of `ucs4` at scale 1, one bit a pixel, rows of whole bytes.
+ * The glyph of `ucs4` at scale 1, one bit a pixel, 16 rows of whole bytes.
  *
- * Stores its width in pixels, 8 or 16, in `*width`. Returns NULL when the
- * font has no glyph for the character.
+ * Stores its width in pixels, 8 or 16, in `*width`. Returns NULL, with
+ * `*width` untouched, when the font has no glyph for the character.
  */
 const unsigned char *term_font_glyph(const struct term_font *f, uint32_t ucs4, unsigned *width);
 
 /** Change the scale to `scale`, 1 or 2, which changes the cell's size. */
 int term_font_scale(struct term_font *f, unsigned scale);
 
-/** Release the font. */
+/** Free the font's bytes. */
 void term_font_free(struct term_font *f);
+
+/**
+ * The font's scale that the configuration file `conf` keeps, from its line
+ * `font-scale=N`.
+ *
+ * Returns 1 or 2; 0 when the file or the line is missing or names another
+ * scale, so that the caller keeps its default.
+ */
+unsigned term_font_conf_scale(const char *conf);
+
+/**
+ * Keep `scale` in the configuration file `conf`: its `font-scale` line is
+ * replaced, or added when it has none, and every other line is kept.
+ *
+ * The file is written as `conf` with ".new" appended and renamed over
+ * `conf`, so that a failed write leaves the old file whole.
+ */
+int term_font_conf_save(const char *conf, unsigned scale);
 
 /* ---- Drawing (draw.c) ---- */
 
+/* How long mode 2026 may hold the screen before a frame is drawn anyway. */
+#define TERM_DRAW_HOLD_MS 250
+/* How long the visible bell shows the screen in inverse colors. */
+#define TERM_DRAW_BELL_MS 100
+/* Glyphs kept rendered, a power of two. */
+#define TERM_DRAW_GLYPHS  1024
+
+/* The code points of a glyph that the cache keeps; longer ones are not kept. */
+#define TERM_GLYPH_POINTS 4
+
 /*
- * The framebuffer and the back buffer in RAM that frames are drawn into
- * before the rows that changed are written to it.
+ * A glyph as drawing renders it at scale 1: the cell's glyphs, its combining
+ * marks among them, put over each other, made bold, slanted or underlined.
+ * It is found by its code points and shape, not by libtsm's id of the cell,
+ * since libtsm gives a combined character's id the bit it gives bold.
+ */
+struct term_glyph {
+    uint32_t ch[TERM_GLYPH_POINTS]; /* the code points, the base first */
+    unsigned char len;              /* their count; 0 for an empty cell */
+    /* 1 bold, 2 italic, 4 underline, 8 two cells wide; 0x80 when in use */
+    unsigned char shape;
+    uint32_t rows[16]; /* the rows, top first; bit 31 is the leftmost pixel */
+};
+
+/*
+ * The cell that tsm_screen_draw() reported before the one being drawn, kept
+ * so that the second column of a wide character can draw the first again.
+ */
+struct term_draw_cell {
+    bool valid;                  /* a cell of the row before this one */
+    bool drawn;                  /* it was drawn in this frame */
+    const uint32_t *ch;          /* its code points, valid during the frame */
+    size_t len;                  /* their count; 0 for an empty cell */
+    unsigned width;              /* its width in cells, 0, 1 or 2 */
+    unsigned x, y;               /* its column and row */
+    struct tsm_screen_attr attr; /* its attributes as libtsm gave them */
+};
+
+/*
+ * The framebuffer, at its native mode, and the back buffer in RAM that
+ * frames are drawn into before the bytes that changed are written to it.
+ * The back buffer has the framebuffer's layout, so a byte's offset in it is
+ * its offset for pwrite(2), and it holds what the screen shows.
  */
 struct term_draw {
-    int fd;                 /* /fb, or -1 */
-    unsigned width;         /* the framebuffer's width in pixels */
-    unsigned height;        /* its height in pixels */
-    unsigned pitch;         /* bytes from one row to the next */
-    unsigned bpp;           /* bits a pixel */
-    unsigned char *back;    /* the back buffer, `pitch` * `height` bytes */
+    int fd;                 /* /fb, or a file of the same layout; -1 */
+    struct fb_screen info;  /* the framebuffer, as FB_GETINFO reports it */
+    unsigned bytes;         /* bytes a pixel: 2, 3 or 4 */
+    unsigned char *back;    /* the back buffer, info.pitch * info.height */
     struct term_font *font; /* the font cells are drawn with */
-    tsm_age_t age;          /* the screen's age at the last frame; 0 draws all */
+    unsigned cols, rows;    /* the screen in cells, at the font's scale */
+    /* Per cell row, the first pixel column changed and the last plus one;
+     * the two are equal when none changed. */
+    unsigned *damage;
+    struct term_glyph *glyphs; /* TERM_DRAW_GLYPHS rendered glyphs */
+    tsm_age_t age;             /* the screen's age at the last frame; 0 draws every cell */
+    bool full;                 /* the next frame draws every cell */
+    bool cursor_shown;         /* the cursor as the last frame drew it */
+    unsigned cursor_x, cursor_y;
+    int cursor_style;      /* an enum tsm_screen_cursor_style */
+    uint64_t bell_until;   /* when the visible bell ends, or 0 */
+    uint64_t held_since;   /* when mode 2026's hold began, or 0 */
+    uint64_t (*now)(void); /* milliseconds of a monotonic clock, never 0 */
+    /* The frame being drawn. */
+    bool frame_cursor;          /* the cursor shows in this frame */
+    unsigned frame_x, frame_y;  /* where tsm_screen_draw() puts it */
+    struct term_draw_cell prev; /* the cell drawn before the current one */
 };
 
 /**
- * Open the framebuffer, at its native mode, and the back buffer, and draw
- * with `font`.
+ * Open /fb, enter its native mode and draw on it with `font`.
+ *
+ * Returns -ENODEV for a framebuffer whose format drawing cannot write, an
+ * indexed one or a text console, or the errno value of the call that failed.
  */
 int term_draw_open(struct term_draw *d, struct term_font *font);
+
+/**
+ * Draw with `font` on `fd`, a framebuffer that `info` describes, already in
+ * its native mode, or a file of `info->pitch` times `info->height` bytes.
+ *
+ * `info` must be RGB at 15, 16, 24 or 32 bits a pixel, else -ENODEV. The
+ * first frame draws every cell, and the margins past the last cell in the
+ * default background. `d` closes `fd` at term_draw_close().
+ */
+int term_draw_init(struct term_draw *d, struct term_font *font, int fd,
+                   const struct fb_screen *info);
 
 /** The screen's size in cells with the font in use. */
 void term_draw_cells(const struct term_draw *d, unsigned *cols, unsigned *rows);
 
 /**
- * Draw what changed on `s` since the last frame, unless the child holds
- * the screen.
+ * Draw what changed on `s` since the last frame, unless the child holds the
+ * screen with mode 2026 for less than TERM_DRAW_HOLD_MS, and show the bell
+ * if it rang.
+ *
+ * Returns 0, or the errno value of the write that failed, after which the
+ * next frame draws every cell.
  */
 int term_draw_frame(struct term_draw *d, struct term_screen *s);
 
-/** Show the bell. */
+/**
+ * The milliseconds until term_draw_frame() must be called again although
+ * nothing changed, for the bell's end or the hold's bound; -1 when none.
+ */
+int term_draw_timeout(const struct term_draw *d);
+
+/** Show the bell at the next frame. */
 void term_draw_bell(struct term_draw *d);
+
+/** Draw every cell at the next frame, as when the screen comes back. */
+void term_draw_redraw(struct term_draw *d);
+
+/**
+ * Change the font's scale to `scale`, 1 or 2, give `s` and its pty the new
+ * size in cells, and keep the scale in `conf` unless it is NULL.
+ *
+ * A failure to keep the scale does not undo the change; its errno value is
+ * returned.
+ */
+int term_draw_rescale(struct term_draw *d, struct term_screen *s, unsigned scale, const char *conf);
 
 /** Close the framebuffer and free the back buffer. */
 void term_draw_close(struct term_draw *d);
