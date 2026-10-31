@@ -68,7 +68,7 @@
 #define KM_ENTER       KM_K(KM_T_SPEC, 1) /* Enter */
 #define KM_BREAK       KM_K(KM_T_SPEC, 5)
 #define KM_CAPS        KM_K(KM_T_SPEC, 7)   /* Caps Lock */
-#define KM_NUM         KM_K(KM_T_SPEC, 8)   /* Num Lock, or the application keypad's PF1 */
+#define KM_NUM         KM_K(KM_T_SPEC, 8)   /* Num Lock */
 #define KM_HOLD        KM_K(KM_T_SPEC, 9)   /* Scroll Lock */
 #define KM_SCROLLFORW  KM_K(KM_T_SPEC, 10)  /* the console's scrollback, down */
 #define KM_SCROLLBACK  KM_K(KM_T_SPEC, 11)  /* and up */
@@ -145,7 +145,7 @@ struct keymap_result {
     unsigned long text[2]; /* an accent that composed nothing comes before the key */
     unsigned int ntext;
     unsigned int func;     /* KM_RESULT_FUNC: the string's number */
-    unsigned int key;      /* KM_RESULT_SPECIAL: the entry */
+    unsigned int key;      /* SPECIAL: keysym; TEXT: source Linux keycode */
     unsigned int mods;     /* the modifiers held, KM_MOD_*, for every kind */
     unsigned int ledflags; /* the locks after the key, KM_LED_* */
     int repeat;            /* the key was a repeat */
@@ -187,7 +187,10 @@ int keymap_key(struct keymap_state *st, const struct keymap *map, unsigned int k
  * send nothing. A function string of at most KM_FUNC_BYTES - 1 bytes is
  * copied; a single CSI or SS3 key sequence receives xterm's modifier
  * parameter, and other strings are copied literally. Num Lock overrides
- * application keypad mode; Shift reverses Num Lock in numeric mode.
+ * application keypad mode; Shift reverses Num Lock. Application keypad
+ * modifiers use SS3 followed by the modifier parameter, as xterm does.
+ * Numeric keypad characters ignore Ctrl and Alt. Shift+Page Up and Down
+ * return the scrollback actions and send nothing.
  */
 unsigned int keymap_encode(const struct keymap *map, const struct keymap_result *res,
                            unsigned int modes, char *buf, unsigned int size);
