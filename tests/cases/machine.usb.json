@@ -1431,7 +1431,7 @@
         {
           "step_id": "read",
           "stage": "execute",
-          "does": "run `keylatprobe spin 8` and type a key each time the kernel says the reader waits",
+          "does": "run `keylatprobe spin 8` and press Enter each time the kernel says the reader waits",
           "machine": "usb"
         },
         {"step_id": "judge", "stage": "execute", "does": "judge the console with check_usb_records"}
@@ -1467,7 +1467,7 @@
           "checks": "after `KEYLAT READING` and `usb: latency: reader waiting`, each of the eight keys is followed by a record `usb: latency: msi`, and each of the first seven by the next `usb: latency: reader waiting`",
           "source": "scenario"
         },
-        {"assertion_id": "read", "checks": "keylatprobe prints `KEYLAT OK` and exits 0", "source": "scenario"},
+        {"assertion_id": "read", "checks": "keylatprobe reads each Enter as one carriage return, prints `KEYLAT OK` and exits 0", "source": "scenario"},
         {
           "assertion_id": "no-failure",
           "checks": "the console up to the probe's end has no line with `KEYLAT FAIL`",
@@ -1543,7 +1543,7 @@
         {
           "step_id": "read",
           "stage": "execute",
-          "does": "run `keylatprobe random 8` and type a key each time the kernel says the reader waits",
+          "does": "run `keylatprobe random 8` and press Enter each time the kernel says the reader waits",
           "machine": "usb"
         },
         {"step_id": "judge", "stage": "execute", "does": "judge the console with check_usb_records"}
@@ -1579,7 +1579,7 @@
           "checks": "after `KEYLAT HOG` and `usb: latency: reader waiting`, each of the eight keys is followed by a record `usb: latency: msi`, and each of the first seven by the next `usb: latency: reader waiting`",
           "source": "scenario"
         },
-        {"assertion_id": "read", "checks": "keylatprobe prints `KEYLAT OK` and exits 0", "source": "scenario"},
+        {"assertion_id": "read", "checks": "keylatprobe reads each Enter as one carriage return, prints `KEYLAT OK` and exits 0", "source": "scenario"},
         {
           "assertion_id": "no-failure",
           "checks": "the console up to the probe's end has no line with `KEYLAT FAIL`",
