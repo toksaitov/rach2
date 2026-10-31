@@ -137,7 +137,7 @@ build_layer()
     # mach has its own pool, with compilers of up to 1.5 GiB each.
     # shellcheck disable=SC2086 # DRY_RUN is empty or -n
     make --no-print-directory -j"$JOBS" $DRY_RUN ARCH="$RACH2_ARCH" \
-        GNU_JOBS="$js_jobs" gnu-js || exit 1
+        DRY_RUN="$DRY_RUN" GNU_JOBS="$js_jobs" gnu-js || exit 1
     set --
     if [ "${GNU_TEST_PRODUCTS:-}" = 1 ]; then
         # The product fixtures build against ported musl and e2fsprogs.
@@ -151,7 +151,8 @@ build_layer()
     fi
     # shellcheck disable=SC2086 # DRY_RUN is empty or -n
     exec make --no-print-directory -j"$JOBS" $DRY_RUN ARCH="$RACH2_ARCH" GNU_AGENTS="$GNU_AGENTS" \
-        GNU_LINK="$GNU_LINK" gnu-ports gnu-native gnu-gdb gnu-js gnu-chromium gnu-agents "$@"
+        DRY_RUN="$DRY_RUN" GNU_LINK="$GNU_LINK" \
+        gnu-ports gnu-native gnu-gdb gnu-js gnu-chromium gnu-agents "$@"
 }
 
 # build_image: as the build's account, make the image as mk/gnu-image.mk's
