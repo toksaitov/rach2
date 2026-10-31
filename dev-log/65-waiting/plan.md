@@ -109,7 +109,7 @@ Tasks 1, 3, 4, 5 and 6 start at once. Task 2 starts at once and waits on task 1 
 
 ## The end's findings
 
-The end run at 816f50dfe, on the testing host on 31 October, built after `make clean` on both architectures; `tests/run -a both style host` stopped in the preparation on the style findings below, so the host tests run again alone. Codex reviewed 047d1e74c..816f50dfe. Each finding was checked against the code; they are fixed in one batch, as four tasks with no file in common.
+The end run at 816f50dfe, on the testing host on 31 October, built after `make clean` on both architectures; `tests/run -a both style host` stopped in the preparation on the style findings below, so the host tests ran again alone and failed in the groups etude_quiet, boots and scripts on both architectures, as tasks 12 and 13 say. Codex reviewed 047d1e74c..816f50dfe. Each finding was checked against the code; they are fixed in one batch, as four tasks with no file in common.
 
 ### 8. The store keeps its digests and evidence whole
 
@@ -142,6 +142,11 @@ The end run at 816f50dfe, on the testing host on 31 October, built after `make c
 * collection_tools_host.c:725-727 fail: `etude prepare tools` refuses a claim under three jobs, and the expected processors and memory in collection_prepare_row predate the sizing of a GiB for each job (collection_tools.c, about line 1495). Host tests; Codex raised it.
 * etude_legacyset_hosttest.c:2691, row publish-failed, expects the next case to copy the disk again, which predates booting guests on overlays of stored objects. Host tests.
 * Files: `tests/host/compat/collection_tools_host.c`, `tests/host/etude_legacyset_hosttest.c`, and the code under test only where it is wrong.
+
+### 13. The release test's Windows, native and Mac rows pass
+
+* `release_resume` (tests/cases/host/flow_release.c) fails on both architectures in the rows on Windows preparing under its own claim, on a native failure keeping the trial uncommitted, and on the Mac's run beside the full run. Host tests; #1589.
+* Files: `tests/cases/host/flow_release.c`, and `tools/flow/release.sh` only where it is wrong.
 
 ### Set aside
 
