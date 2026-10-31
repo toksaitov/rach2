@@ -51,24 +51,22 @@ $(GNU_TOOLCHAIN_PINS): vendor/gnu/sources.txt
 	    if cmp -s $$t $@; then rm -f $$t; else mv $$t $@; fi
 
 # With the store, a layer built in this copy, whose cross/ is a directory
-# here and not a link into the store, is out of date: the phony gnu-in-copy
-# makes the toolchain's stamp run again when something uses it, and its rule
-# first removes the layer's directories and stamps, so that each step takes
-# its outputs from the store, or builds them there. A copy that uses no GNU
-# target keeps its layer.
+# here and not a link into the store, is out of date. The phony gnu-in-copy
+# removes the layer's directories and stamps, and every stamp of the layer
+# depends on it (mk/gnu-image.mk, which is read after the last fragment adds
+# its stamps), so that the removal runs before make builds any of them and
+# each step then takes its outputs from the store, or builds them there. A
+# copy that uses no GNU target keeps its layer.
 GNU_IN_COPY := $(if $(RACH2_STORE),$(if $(DRY_RUN),,$(shell [ -d $(GNU_OUT)/cross ] && \
                    [ ! -L $(GNU_OUT)/cross ] && echo yes)))
 .PHONY: gnu-in-copy
-ifneq ($(GNU_IN_COPY),)
-$(GNU_TOOLCHAIN_STAMP): gnu-in-copy
-endif
+gnu-in-copy:
+	@echo "gnu: removing the layer built in $(GNU_OUT), which the store replaces"
+	@find $(GNU_OUT) -mindepth 1 -maxdepth 1 \( -type d -o -name '*.stamp' \) \
+	    -exec chmod -R u+w {} + -exec rm -rf {} +
 
 $(GNU_TOOLCHAIN_STAMP): $(GNU_TOOLCHAIN_SOURCES) $(GNU_TOOLCHAIN_PINS) | $(SHA256TOOL) $(ETUDE)
 	@rm -f $@
-	@if [ -n "$(GNU_IN_COPY)" ]; then \
-	    echo "gnu: removing the layer built in $(GNU_OUT), which the store replaces"; \
-	    find $(GNU_OUT) -mindepth 1 -maxdepth 1 \( -type d -o -name '*.stamp' \) \
-	        -exec chmod -R u+w {} + -exec rm -rf {} +; fi
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else \
 	    $(GNU_STEP) -n gnu-toolchain -t $@ $(STEP_INPUTS) -o cross -o sysroot \
 	        -- sh -c 'RACH2_ARCH=$(ARCH) RACH2_GNU_OUT="$$ETUDE_STEP_ROOT" ./vendor/gnu/build_toolchain.sh && \

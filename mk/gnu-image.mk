@@ -35,6 +35,12 @@ GNU_IMAGE_DEPS = $(DEMO_CREDS) krffs/manifests/os-real-gnu.manifest $(MANIFEST_D
 GNU_IMAGE_ORDER = preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid \
                   check-e2fsck tools/etude/guest ports/doom
 
+# A layer built in this copy is removed before any of its stamps is built
+# (mk/gnu.mk); every fragment has added its stamps by now.
+ifneq ($(GNU_IN_COPY),)
+$(GNU_STEP_STAMPS) $(GNU_AGENTS_ALL_STAMPS): gnu-in-copy
+endif
+
 .PHONY: os-real-gnu-ext2 os-real-gnu-agents-ext2
 os-real-gnu-ext2: $(OS_REAL_GNU_EXT2)
 os-real-gnu-agents-ext2: $(OS_REAL_GNU_AGENTS_EXT2)
