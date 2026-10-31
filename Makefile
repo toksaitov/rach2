@@ -1731,6 +1731,7 @@ check-libc: $(LIBC_STAMP) $(MUSL_OUTPUTS)
 # variants only a suite needs.
 include mk/host.mk
 include mk/term.mk
+include mk/esctest2.mk
 include mk/images.mk
 include mk/unifont.mk
 include mk/etude-image.mk
@@ -1796,7 +1797,7 @@ print-host-tools:
 COLLECTION_TOOLS = build/tests/cases/host/host_checks_scenario \
     build/tests/cases/host/host_scripts_scenario build/tests/cases/host/family_scenario \
     build/tests/cases/host/style build/tests/cases/host/usbchecks \
-    build/tests/cases/host/krffscheck build/tests/cases/machine/agent_server \
+    build/tests/cases/host/krffscheck build/tests/cases/host/esctest2 build/tests/cases/machine/agent_server \
     build/tests/cases/gnu/sntpserver build/tests/system/fakeapi_test \
     build/tools/dev/native-deploy $(ARCH_BUILD)/tests/cases/host/image-channel-fixture \
     $(ARCH_BUILD)/tests/cases/machine/installer-repair-fixture

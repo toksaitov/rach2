@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "family_id": "host.esctest2",
+  "summary": "The pinned esctest2 driver runs on term -H and its real pty; snapshots inspect the parsed screen and exact exceptions account for every result",
+  "cases": [
+    {
+      "case_id": "host.esctest2.conformance",
+      "behavior": "all upstream methods run through the driver, with screen inspection over a separate socket, and every reported result agrees with the exact known-failure list",
+      "units": [
+        "esctest2",
+        "the complete upstream escape sequence inventory under term -H"
+      ],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "esctest2",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "reported",
+        "cleanup": "the controller stops the driver before closing its pipes, reaps term and retains named scratch on failure"
+      },
+      "assertions": [
+        {
+          "assertion_id": "policy",
+          "checks": "exact sorted exception names have nonempty reasons and no required-feature prefix",
+          "source": "program"
+        },
+        {
+          "assertion_id": "driver",
+          "checks": "the upstream driver and term finish with status zero and all children are reaped",
+          "source": "program"
+        },
+        {
+          "assertion_id": "results",
+          "checks": "a nonempty complete result stream has no duplicate, unexpected, passing or unused exception",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "measurements",
+          "kind": "counter",
+          "means": "a requested screen measurement or driver registration finished",
+          "limit": 10000000
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 14400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1200000000
+        },
+        "stages": {}
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 2000,
+        "memory_bytes": 536870912,
+        "disk_bytes": 268435456,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "esctest2",
+          "node": "tests/cases/host/esctest2",
+          "per_architecture": false
+        },
+        {
+          "name": "term-host",
+          "node": "tests/host/esctest2-term",
+          "per_architecture": false
+        },
+        {
+          "name": "driver",
+          "node": "tests/host/esctest2-driver.zip",
+          "per_architecture": false
+        },
+        {
+          "name": "python3",
+          "node": "tests/host/esctest2-python3",
+          "per_architecture": false
+        },
+        {
+          "name": "known",
+          "node": "tests/host/esctest2-known-failures.txt",
+          "per_architecture": false
+        },
+        {
+          "name": "protected",
+          "node": "tests/host/esctest2-protected-prefixes.txt",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "host"
+      }
+    }
+  ]
+}

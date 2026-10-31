@@ -1,0 +1,19 @@
+# Required queries and string handling cannot be accepted as known failures.
+APCTests.
+DATests.
+DCSTests.
+DECDSRTests.test_DECDSR_DECXCPR
+DECRQMTests.test_DECRQM_ANSI_IRM
+DECRQMTests.test_DECRQM_ANSI_KAM
+DECRQMTests.test_DECRQM_ANSI_LNM
+DECRQMTests.test_DECRQM_ANSI_SRM
+DECRQMTests.test_DECRQM_DEC_DECAWM
+DECRQMTests.test_DECRQM_DEC_DECCKM
+DECRQMTests.test_DECRQM_DEC_DECOM
+PMTests.
+SCORCTests.
+SOSTests.
+SaveRestoreCursorTests.
+# Keyboard protocols, Unicode, sync, focus, OSC 10/11 and OSC 52 have their
+# own host tests with no exceptions. Other DECRQM cases test DEC modes the
+# library does not claim to implement.

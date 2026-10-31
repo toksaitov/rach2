@@ -79,6 +79,7 @@ make|qemu|full
 smp|qemu|full||640
 clock|qemu|full||384|x86_64
 host|qemu|full||384
+esctest2|python3|full||512
 noentropy|qemu|full
 shutdown|qemu|full
 fatwrite|qemu,mformat,mcopy,mdir|core
