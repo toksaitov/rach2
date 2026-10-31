@@ -4,7 +4,7 @@ kbd supplies `loadkeys`, `dumpkeys`, `setleds`, `kbdrate`, `showkey` and `kbd_mo
 
 ## Use
 
-The programs are installed in `/bin` on the images that stage Dropbear and on the GNU root. Keymaps are text files under `/usr/share/kbd/keymaps`; `vendor/keymaps/` supplies them. `loadkeys -u kg alt-shift` loads a layout followed by a switch overlay. `setleds` and `kbdrate` use descriptor 0: from a terminal emulator or SSH, redirect their input from `/dev/console`. `showkey` runs on the kernel console, where no other program is reading the keyboard.
+The programs are installed in `/bin` on the images that stage Dropbear and on the GNU root, but for the recovery root, which carries only the three that init runs at boot, `loadkeys`, `setleds` and `kbdrate`. Keymaps are text files under `/usr/share/kbd/keymaps`; `vendor/keymaps/` supplies them. `loadkeys -u kg alt-shift` loads a layout followed by a switch overlay. `setleds` and `kbdrate` use descriptor 0: from a terminal emulator or SSH, redirect their input from `/dev/console`. `showkey` runs on the kernel console, where no other program is reading the keyboard.
 
 The six manual pages under `man/` describe the tools, from the release's pages in `docs/man/man1/` and `docs/man/man8/`.
 
