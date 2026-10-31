@@ -23,6 +23,10 @@ struct inventory {
     size_t count;
 };
 
+/**
+ * Say whether the checks are Windows programs: as HOST_TEST_PLATFORM says when
+ * it is set, else when this is a Windows build.
+ */
 int hp_windows_host(void)
 {
     const char *target = getenv("HOST_TEST_PLATFORM");
@@ -35,6 +39,7 @@ int hp_windows_host(void)
 #endif
 }
 
+/** Say whether `word` is one of the space-separated `words`. */
 static int member(const char *words, const char *word)
 {
     size_t n = strlen(word);
@@ -49,12 +54,14 @@ static int member(const char *words, const char *word)
     return 0;
 }
 
+/** Append each word of `from` to `to`. */
 static void append_words(struct hp_words *to, const struct hp_words *from)
 {
     for (size_t i = 0; i < from->n; i++)
         hp_add(to, from->v[i]);
 }
 
+/** Append each word of `from` that `to` does not have yet. */
 static void append_sources(struct hp_words *to, const struct hp_words *from)
 {
     for (size_t i = 0; i < from->n; i++) {
@@ -67,12 +74,20 @@ static void append_sources(struct hp_words *to, const struct hp_words *from)
     }
 }
 
+/** Say whether `text` ends with `end`. */
 static int suffix(const char *text, const char *end)
 {
     size_t a = strlen(text), b = strlen(end);
     return a >= b && !strcmp(text + a - b, end);
 }
 
+/**
+ * Add to `inventory` the check `id`, labelled `label`, whose program is
+ * `program`, run alone when `alone` is set, with an entry of no arguments,
+ * inputs or digest yet.
+ *
+ * Return the check, which `inventory` owns; exit when memory runs out.
+ */
 static struct hp_check *new_check(struct inventory *inventory, const char *id, const char *label,
                                   const char *program, int alone)
 {
@@ -94,7 +109,13 @@ static struct hp_check *new_check(struct inventory *inventory, const char *id, c
     return check;
 }
 
-/* Source metadata lists its files once, beside the check they belong to. */
+/**
+ * Add to `words` the files that the lines `TAG:` of the source `text` list.
+ * Source metadata lists its files once, beside the check they belong to.
+ *
+ * Return 0, or -1 when memory runs out or the comment line after a list
+ * begins with a C source or header, which the list would leave out.
+ */
 static int metadata(const char *text, const char *tag, struct hp_words *words)
 {
     char key[64];
@@ -132,6 +153,10 @@ static int metadata(const char *text, const char *tag, struct hp_words *words)
     return 0;
 }
 
+/**
+ * Map each vendored path of `words` to the x86-64 build's copy when `arch` is
+ * x86_64, which builds its vendored projects under build/x86_64/vendor-work.
+ */
 static void architecture_words(struct hp_words *words, const char *arch)
 {
     if (strcmp(arch, "x86_64"))
@@ -146,6 +171,7 @@ static void architecture_words(struct hp_words *words, const char *arch)
         }
 }
 
+/** Remove the repeated words of `sources`, keeping the first of each. */
 static void unique_sources(struct hp_words *sources)
 {
     struct hp_words unique = {0};
@@ -154,6 +180,7 @@ static void unique_sources(struct hp_words *sources)
     *sources = unique;
 }
 
+/** Add the compiler options every native check takes, sanitizers and all. */
 void hp_common_flags(struct hp_words *flags)
 {
     hp_split(flags, "-std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0");
@@ -163,6 +190,7 @@ void hp_common_flags(struct hp_words *flags)
         hp_split(flags, "-fsanitize=address,undefined -fno-sanitize-recover=all -g -O1");
 }
 
+/** Add the compiler options of a check built as a Windows program. */
 void hp_windows_flags(struct hp_words *flags)
 {
     hp_split(flags, "-std=c99 -O2 -D_DEFAULT_SOURCE -D_WIN32_WINNT=0x0A00 -static "
@@ -170,6 +198,12 @@ void hp_windows_flags(struct hp_words *flags)
                     "-Itests/host/compat");
 }
 
+/**
+ * Add to `sources` the files of the Make variable `name`, as
+ * mk/host-check.mk prints them.
+ *
+ * Return 0, or -1 when make fails or its output cannot be read.
+ */
 int hp_source_list(struct hp_context *c, struct hp_words *sources, const char *name)
 {
     char option[128], output[4096], error[4096];
@@ -191,6 +225,13 @@ int hp_source_list(struct hp_context *c, struct hp_words *sources, const char *n
     return result;
 }
 
+/**
+ * Make etude's check `id` a Windows program: its sources take the Windows
+ * forms of etude's platform files, and etude_platform becomes the companion
+ * fixture, run alone.
+ *
+ * Return 0, or -1 when the sources' list cannot be had.
+ */
 static int windows_check(struct hp_context *c, struct hp_check *check, const char *id)
 {
     struct hp_words sources = {0}, flags = {0};
@@ -238,11 +279,16 @@ static int windows_check(struct hp_context *c, struct hp_check *check, const cha
     return 0;
 }
 
+/** Order two words for qsort, as strcmp does. */
 static int word_order(const void *a, const void *b)
 {
     return strcmp(*(const char *const *)a, *(const char *const *)b);
 }
 
+/**
+ * Add to `words` the names in `directory` that end with `end`, sorted.
+ * Return 0, or -1 when the directory cannot be read.
+ */
 static int names(struct hp_words *words, const char *directory, const char *end)
 {
     DIR *dir = opendir(directory);
@@ -258,6 +304,12 @@ static int names(struct hp_words *words, const char *directory, const char *end)
     return 0;
 }
 
+/**
+ * Add to the data of the boots check `id` the kernel, images, guest programs
+ * and schemas its boots read, from c->arch's build.
+ *
+ * Return 0, or -1 when the schemas cannot be listed.
+ */
 static int boot_inputs(struct hp_context *c, struct hp_check *check, const char *id)
 {
     char path[4096];
@@ -294,6 +346,14 @@ static int boot_inputs(struct hp_context *c, struct hp_check *check, const char 
     return 0;
 }
 
+/**
+ * Add to `inventory` each host test of group c->group, a file of tests/host
+ * whose name ends _hosttest.c, with the sources, tools, data and options its
+ * metadata names, and its program under `base`.
+ *
+ * Return 0, or -1 when a path is too long, a source cannot be read or its
+ * metadata is malformed.
+ */
 static int host_checks(struct hp_context *c, struct inventory *inventory, const char *base)
 {
     struct hp_words files = {0};
@@ -370,7 +430,10 @@ static int host_checks(struct hp_context *c, struct inventory *inventory, const 
     return bad ? -1 : 0;
 }
 
-/* Ignore comments, retaining strings, as the declared backend checks do. */
+/**
+ * Append to `code` the source `text` with each comment a space and its
+ * strings kept, as the declared backend checks read it.
+ */
 static void uncomment(const char *text, struct jbuf *code)
 {
     int quote = 0;
@@ -397,6 +460,7 @@ static void uncomment(const char *text, struct jbuf *code)
     }
 }
 
+/** Say whether `code` calls system or popen, or names ETUDE_SHELL. */
 static int interpreter_call(const char *code)
 {
     int found = code && strstr(code, "ETUDE_SHELL");
@@ -412,6 +476,10 @@ static int interpreter_call(const char *code)
     return found;
 }
 
+/**
+ * Say whether a string of `code`, the source `path`, names a shell, Python or
+ * Perl, or holds a script's #! line; also when memory runs out.
+ */
 static int interpreter_string(const char *code, const char *path)
 {
     int found = 0;
@@ -456,6 +524,10 @@ static int interpreter_string(const char *code, const char *path)
     "tests/cases/machine/netcase.c " \
     "tests/host/compat/netcase_bulk_host.c"
 
+/**
+ * Say whether the source `text`, of `path`, needs an interpreter on the host,
+ * outside its comments.
+ */
 static int interpreter(const char *text, const char *path)
 {
     struct jbuf code = {0};
@@ -466,6 +538,11 @@ static int interpreter(const char *text, const char *path)
     return found;
 }
 
+/**
+ * Name the backend of `check`: "native" for etude's own native checks, else
+ * "gnu" for the GNU preparation, Windows, the checks that need the GNU root
+ * and those whose sources need an interpreter, else "native".
+ */
 static const char *backend(struct hp_context *c, struct hp_check *check)
 {
     const char *id = json_text(check->entry, "assertion_id");
@@ -489,6 +566,11 @@ static const char *backend(struct hp_context *c, struct hp_check *check)
     return "native";
 }
 
+/**
+ * Read the preprocessor's line marker `line` and give the index in
+ * `resolved` of the file it names; -1 for another file, or -2 when `line` is
+ * not a marker.
+ */
 static int marker_source(const char *line, const struct hp_words *resolved)
 {
     const char *at = line + 1;
@@ -511,6 +593,12 @@ static int marker_source(const char *line, const struct hp_words *resolved)
     return found;
 }
 
+/**
+ * Gather from the preprocessed sources of `program` the lines of each file of
+ * `resolved` into its chunk of `chunks`.
+ *
+ * Return 0, or 1 when a preprocessed source cannot be read.
+ */
 static int source_chunks(struct hp_check *check, const char *program,
                          const struct hp_words *resolved, struct jbuf *chunks)
 {
@@ -545,6 +633,12 @@ static int source_chunks(struct hp_check *check, const char *program,
     return bad;
 }
 
+/**
+ * Mark `check` unsupported when a source it compiles still needs an
+ * interpreter after preprocessing, which a native host cannot give it.
+ *
+ * Return 0, or -1 when the sources cannot be resolved or preprocessed.
+ */
 static int native_guard(struct hp_context *c, struct hp_check *check, const char *program)
 {
     if (c->gnu || c->print ||
@@ -599,6 +693,10 @@ static int native_guard(struct hp_context *c, struct hp_check *check, const char
     return bad == 1 ? -1 : 0;
 }
 
+/**
+ * Order two checks for qsort: shared before alone, then those marked
+ * host-first, then by assertion ID.
+ */
 static int check_order(const void *a, const void *b)
 {
     const struct hp_check *x = a, *y = b;
@@ -611,6 +709,10 @@ static int check_order(const void *a, const void *b)
     return strcmp(json_text(x->entry, "assertion_id"), json_text(y->entry, "assertion_id"));
 }
 
+/**
+ * Add to `files` the path of each regular file under `root`, in readdir's
+ * order. Return 0, or -1 when a directory or a file cannot be read.
+ */
 int hp_files(struct hp_words *files, const char *root)
 {
     DIR *directory = opendir(root);
@@ -637,6 +739,13 @@ int hp_files(struct hp_words *files, const char *root)
     return bad ? -1 : 0;
 }
 
+/**
+ * Add to `inventory` the checks of group c->group, the checkers' self-tests
+ * or each fuzzer with its corpus replayed, their programs under `base`.
+ *
+ * Return 0, or -1 when a path is too long or a fuzzer's source or corpus
+ * cannot be read.
+ */
 static int extra_checks(struct hp_context *c, struct inventory *inventory, const char *base)
 {
     if (!strcmp(c->group, "checkers")) {
@@ -707,6 +816,7 @@ static int extra_checks(struct hp_context *c, struct inventory *inventory, const
     return bad ? -1 : 0;
 }
 
+/** Free what `check` holds, but not `check` itself. */
 static void check_free(struct hp_check *check)
 {
     json_free(check->entry);
@@ -717,6 +827,13 @@ static void check_free(struct hp_check *check)
     hp_words_free(&check->tools);
 }
 
+/**
+ * Record `route` as the backend of `check`, and when this preparation does
+ * not build for that backend, record the check as one the other host runs.
+ *
+ * Return 1 when the check is not built here, 0 when it is, or -1 when its
+ * inputs cannot be recorded.
+ */
 static int inactive(struct hp_context *c, struct hp_check *check, const char *route)
 {
     hp_member(check->entry, "backend", hp_string(route));
@@ -743,6 +860,10 @@ static int inactive(struct hp_context *c, struct hp_check *check, const char *ro
     return 1;
 }
 
+/**
+ * Record the sanitizers of the options of `check` as its instrumentation.
+ * Return whether it has any.
+ */
 static int instrumentation(struct hp_check *check)
 {
     struct json *sanitizers = hp_value(JSON_ARRAY);
@@ -1083,6 +1204,9 @@ static int inventories(struct hp_context *c, const char *base)
     return bad ? -1 : 0;
 }
 
+/**
+ * Read the command line into `c`. Return 0, or -1 for a usage error.
+ */
 static int options(struct hp_context *c, int argc, char **argv)
 {
     int rest = 0;
@@ -1125,6 +1249,13 @@ static int options(struct hp_context *c, int argc, char **argv)
                : 0;
 }
 
+/**
+ * Load into c->old the inventory a build of this group left, when the same
+ * compiler made it, else the one under --previous's tree.
+ *
+ * Return 0, or 1 when --previous is given where it cannot be used: without
+ * --gnu, or with an output path that is not relative.
+ */
 static int previous_inventory(struct hp_context *c)
 {
     int bad = 0;
@@ -1147,6 +1278,13 @@ static int previous_inventory(struct hp_context *c)
     return bad;
 }
 
+/**
+ * Run `etude prepare -H`: prepare the group GROUP of the host checks and write
+ * OUTPUT, building their programs. A set `*stop` asks it to stop.
+ *
+ * Return 0, 1 when the preparation fails, its work directory kept as
+ * evidence, or 2 for a usage error.
+ */
 int etude_host_prepare_main(int argc, char **argv, volatile sig_atomic_t *stop)
 {
     struct hp_context c;
