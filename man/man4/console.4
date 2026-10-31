@@ -264,6 +264,123 @@ Another subcode fails with
 .Er EINVAL ,
 and a caller that is neither fails with
 .Er EPERM .
+.Ss Keyboard
+The console answers Linux's keyboard requests of
+.In linux/kd.h ,
+with Linux's numbers, structures and errors, which the tools of kbd,
+.Xr loadkeys 1 ,
+.Xr dumpkeys 1 ,
+.Xr setleds 1 ,
+.Xr kbd_mode 1 ,
+.Xr showkey 1
+and
+.Xr kbdrate 8 ,
+send.
+A pseudoterminal answers none of them, with
+.Er ENOTTY .
+.Bl -tag -width KDGKBDIACRUC
+.It Dv KDGKBTYPE
+Store
+.Dv KB_101
+in the byte the argument points to.
+.It Dv KDGKBMODE , KDSKBMODE
+Read into an int, or set from the argument's value, the keyboard's mode:
+.Dv K_UNICODE ,
+the mode at boot, and
+.Dv K_XLATE
+translate keys into characters;
+.Dv K_RAW
+gives the keyboards' set-1 scancodes, as a PS/2 keyboard sends them,
+a held key's repeats as make codes;
+.Dv K_MEDIUMRAW
+gives Linux's key codes, a code below 128 as one byte with 0x80 set on
+its release and a higher one as three, 0x00 or 0x80, then the code's
+high and low seven bits each with 0x80 set;
+.Dv K_OFF
+gives nothing.
+In the last three modes the lock keys, the scrollback keys and the
+kernel shell's Ctrl-C do nothing, and bytes received on COM1 are
+discarded; the key bytes pass through the line discipline, whose
+settings the program sets itself.
+Setting a mode discards unread input and stops a held key's repeat.
+.It Dv KDGKBMETA , KDSKBMETA
+Read into an int, or set, how Alt reaches a program:
+.Dv K_ESCPREFIX ,
+ESC before the key, at boot, or
+.Dv K_METABIT .
+.It Dv KDGKBLED , KDSKBLED
+Read into a byte, or set, the lock flags
+.Dv K_SCROLLLOCK ,
+.Dv K_NUMLOCK
+and
+.Dv K_CAPSLOCK ,
+with their defaults in bits 4 to 6.
+.It Dv KDGETLED , KDSETLED
+Read into a byte the LEDs lit,
+.Dv LED_SCR ,
+.Dv LED_NUM
+and
+.Dv LED_CAP ,
+or light them; the LEDs follow the lock flags until
+.Dv KDSETLED
+sets them, and again after a value with a higher bit set.
+.It Dv KDGKBENT , KDSKBENT
+Read or set one entry of the keymap through a
+.Vt struct kbentry .
+The keymap has 256 tables of 256 entries; a table that does not exist
+reads as
+.Dv K_NOSUCHMAP
+at key 0 and
+.Dv K_HOLE
+elsewhere, is made on its first set, and is freed by
+.Dv K_NOSUCHMAP
+set at key 0, except table 0.
+A typed entry beyond its type's range fails with
+.Er EINVAL .
+Unlike Linux, which reads and sets a Unicode entry only in
+.Dv K_UNICODE ,
+the console reads one in every mode but
+.Dv K_XLATE ,
+where it reads as
+.Dv K_HOLE ,
+and sets one in every mode, so that a keymap loads while a terminal
+emulator holds the keyboard in
+.Dv K_MEDIUMRAW .
+.It Dv KDGKBSENT , KDSKBSENT
+Read or set a function key's string through a
+.Vt struct kbsentry ;
+a string set must end within its 512 bytes, else
+.Er EINVAL .
+.It Dv KDGKBDIACR , KDSKBDIACR , KDGKBDIACRUC , KDSKBDIACRUC
+Read or replace the accent table, in 8 bits or in code points; a code
+point above 255 reads in 8 bits as 0xFF.
+A table set has at most 255 entries, else
+.Er EINVAL .
+.It Dv KDKBDREP
+Set the repeat's delay and period in milliseconds from a
+.Vt struct kbd_repeat ,
+leaving a time of 0 or less as it is, and store there the times in
+force; 250 and 33 at boot.
+.It Dv KDGETMODE
+Store in an int
+.Dv KD_GRAPHICS
+while a program draws through
+.Pa /fb ,
+and
+.Dv KD_TEXT
+otherwise.
+.El
+.Pp
+The requests that set the mode, the meta setting, the lock flags and the
+LEDs are open to a process of the session the console controls, the
+process that holds
+.Pa /fb ,
+and root; those that set the keymap, the strings, the accents and the
+repeat to root alone.
+Another caller fails with
+.Er EPERM ,
+and a bad pointer with
+.Er EFAULT .
 .Sh FILES
 .Bl -tag -width /dev/console
 .It Pa /dev/console
@@ -287,6 +404,9 @@ which run as that group, may write to it and
 may refuse them.
 .El
 .Sh SEE ALSO
+.Xr dumpkeys 1 ,
+.Xr kbd_mode 1 ,
+.Xr loadkeys 1 ,
 .Xr login 1 ,
 .Xr getpid 2 ,
 .Xr ioctl 2 ,
