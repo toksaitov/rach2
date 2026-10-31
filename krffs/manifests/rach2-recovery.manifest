@@ -165,6 +165,9 @@ dir 0755 /usr/share/udhcpc
 # The script udhcpc runs when a lease arrives or ends, which turns the lease
 # into an address, a route and a resolver.
 file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
+# The keymaps, which loadkeys finds by name, as in `loadkeys -u kg alt-shift`
+# (vendor/keymaps/Readme.md).
+tree 0644 /usr/share/kbd/keymaps/xkb vendor/keymaps/xkb
 # The pages man/recovery lists: what the installer and the recovery menu direct
 # a person to, readable here with man(1). mancheck requires each.
 dir 0755 /usr/share/man
