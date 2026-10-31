@@ -20,7 +20,9 @@
  *
  * In K_MEDIUMRAW a key event gives the terminal Linux's one or three bytes,
  * in K_RAW a set-1 byte is given as it came, and the console translates in
- * K_XLATE and K_UNICODE alone. The state saved for an owner of the screen
+ * K_XLATE and K_UNICODE alone: the built-in US keymap's keys reach the
+ * terminal, or the debug shell when no session and no reader has the
+ * console, with the LEDs following the locks. The state saved for an owner of the screen
  * is put back whole: mode, meta, locks, LEDs, repeat and termios.
  */
 #include "kd.c"
@@ -202,6 +204,64 @@ void wq_wake_all(wait_queue_t *wq)
     (void)wq;
 }
 
+/* The console's reader, the debug shell and the screen's scrollback, as the
+ * translating rows set and read them. */
+static int reader_parked, shell_on, interrupts, scrolls_up, scrolls_down, scroll_ends;
+static char shell_line[32];
+static int nshell;
+static unsigned int key_modes;
+
+int wq_active(const wait_queue_t *wq)
+{
+    CHECK(wq == &console_tty.input_wq, "the console's readers are asked");
+    return reader_parked;
+}
+
+int shell_reads_input(void)
+{
+    return shell_on;
+}
+
+void shell_input_char(char c)
+{
+    if (nshell < (int)sizeof(shell_line)) {
+        shell_line[nshell++] = c;
+    }
+}
+
+void shell_interrupt(void)
+{
+    interrupts++;
+}
+
+void k_scrollback_page_up(void)
+{
+    scrolls_up++;
+}
+
+void k_scrollback_page_down(void)
+{
+    scrolls_down++;
+}
+
+void k_scrollback_home(void)
+{}
+
+void k_scrollback_end(void)
+{
+    scroll_ends++;
+}
+
+bool k_scrollback_is_active(void)
+{
+    return 0;
+}
+
+unsigned int kio_key_modes(void)
+{
+    return key_modes;
+}
+
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
     *seconds = 0;
@@ -248,6 +308,8 @@ static void be(int who)
     }
     current_proc = &caller;
     ninput = flushes = termios_sets = repeat_sets = repeat_cancels = led_sets = 0;
+    reader_parked = shell_on = interrupts = scrolls_up = scrolls_down = scroll_ends = nshell = 0;
+    key_modes = 0;
     fault_at = NULL;
 }
 
@@ -601,7 +663,136 @@ static void raw_modes(void)
     ninput = 0;
     kd_raw_code(0x1E);
     kd_key_event(&caller, 30, KD_KEY_PRESS);
-    CHECK(ninput == 0, "a translating mode takes no raw byte here");
+    kd_key_event(&caller, 30, KD_KEY_RELEASE);
+    CHECK(ninput == 1 && input[0] == 'a', "a translating mode takes no raw byte, and translates");
+}
+
+/** Press and release the key `code`. */
+static void tap(unsigned int code)
+{
+    kd_key_event(&caller, code, KD_KEY_PRESS);
+    kd_key_event(&caller, code, KD_KEY_RELEASE);
+}
+
+/** Whether the terminal took exactly the `n` bytes of `s`, and forget them. */
+static int typed(const char *s, int n)
+{
+    int same = ninput == n && !differ(input, s, (unsigned int)n);
+
+    ninput = 0;
+    return same;
+}
+
+/**
+ * The translating modes: the built-in US keymap through the translator to
+ * the terminal, with the cursor mode the console gives, the locks lighting
+ * the LEDs, the scrollback's keys spent, K_XLATE's 8 bits and K_METABIT's
+ * top bit; and with no session and no reader, the debug shell's keys and
+ * its Ctrl+C.
+ */
+static void translating(void)
+{
+    unsigned int was;
+
+    mode(K_UNICODE);
+    be(AS_ROOT);
+    tap(30);
+    CHECK(typed("a", 1), "A types a");
+    kd_key_event(&caller, 30, KD_KEY_PRESS);
+    kd_key_event(&caller, 30, KD_KEY_REPEAT);
+    kd_key_event(&caller, 30, KD_KEY_RELEASE);
+    CHECK(typed("aa", 2), "a repeat types the key again");
+    tap(28);
+    CHECK(typed("\r", 1), "Enter sends CR");
+    tap(14);
+    CHECK(typed("\177", 1), "Backspace sends DEL");
+    kd_key_event(&caller, 42, KD_KEY_PRESS);
+    tap(30);
+    kd_key_event(&caller, 42, KD_KEY_RELEASE);
+    CHECK(typed("A", 1), "Shift with A types A");
+    kd_key_event(&caller, 29, KD_KEY_PRESS);
+    tap(46);
+    kd_key_event(&caller, 29, KD_KEY_RELEASE);
+    CHECK(typed("\003", 1) && interrupts == 0, "Ctrl+C in a session is ETX for the terminal");
+    tap(103);
+    CHECK(typed("\033[A", 3), "Up in the normal cursor mode");
+    key_modes = KM_MODE_CURSOR;
+    tap(103);
+    CHECK(typed("\033OA", 3), "Up in DECCKM");
+    key_modes = 0;
+
+    tap(58);
+    CHECK(ninput == 0 && led_sets == 1 && leds_lit == LED_CAP, "Caps Lock lights its LED alone");
+    tap(30);
+    CHECK(typed("A", 1), "Caps Lock shifts a letter");
+    tap(58);
+    CHECK(led_sets == 2 && leds_lit == 0, "Caps Lock again puts the LED out");
+    be(AS_ROOT);
+    CHECK(kd_ioctl(KDSETLED, LED_SCR) == 0, "root lights the LEDs its own way");
+    led_sets = 0;
+    tap(58);
+    CHECK(led_sets == 0, "a lock leaves LEDs that KDSETLED lit");
+    tap(58);
+    CHECK(kd_ioctl(KDSETLED, 0xFF) == 0, "the LEDs follow the flags again");
+
+    kd_key_event(&caller, 42, KD_KEY_PRESS);
+    tap(104);
+    tap(109);
+    kd_key_event(&caller, 42, KD_KEY_RELEASE);
+    CHECK(ninput == 0 && scrolls_up == 1 && scrolls_down == 1,
+          "Shift with Page Up and Page Down scrolls the screen and sends nothing");
+    tap(104);
+    CHECK(typed("\033[5~", 4), "Page Up alone is the terminal's");
+
+    was = get_entry(0, 30);
+    CHECK(set_entry(0, 30, KM_U(0x430)) == 0, "A's plain entry is set to a Cyrillic letter");
+    tap(30);
+    CHECK(typed("\320\260", 2), "K_UNICODE sends it in UTF-8");
+    mode(K_XLATE);
+    tap(30);
+    CHECK(ninput == 0, "K_XLATE sends nothing for a letter past Latin-1");
+    CHECK(set_entry(0, 30, KM_U(0xE9)) == 0, "and a Latin-1 one");
+    tap(30);
+    CHECK(typed("\351", 1), "K_XLATE sends a Latin-1 letter as its byte");
+    mode(K_UNICODE);
+    tap(30);
+    CHECK(typed("\303\251", 2), "which K_UNICODE sends in UTF-8");
+    CHECK(set_entry(0, 30, was) == 0 && get_entry(0, 30) == was, "A's entry is put back");
+
+    kd_key_event(&caller, 56, KD_KEY_PRESS);
+    tap(30);
+    CHECK(typed("\033a", 2), "Alt puts ESC before a character");
+    CHECK(kd_ioctl(KDSKBMETA, K_METABIT) == 0, "root sets K_METABIT");
+    tap(30);
+    CHECK(typed("\341", 1), "K_METABIT sets the character's top bit");
+    kd_key_event(&caller, 56, KD_KEY_RELEASE);
+    CHECK(kd_ioctl(KDSKBMETA, K_ESCPREFIX) == 0, "root puts ESC back");
+
+    console_tty.sid = 0;
+    reader_parked = 1;
+    tap(30);
+    CHECK(typed("a", 1), "a parked reader takes the keys with no session");
+    reader_parked = 0;
+    shell_on = 1;
+    tap(30);
+    tap(14);
+    tap(103);
+    tap(28);
+    CHECK(ninput == 0 && nshell == 3 && shell_line[0] == 'a' && shell_line[1] == '\b' &&
+              shell_line[2] == '\r',
+          "the debug shell takes text, DEL as Backspace and CR, and no sequence");
+    tap(104);
+    CHECK(scrolls_up == 2 && nshell == 3, "Page Up scrolls the debug shell's screen");
+    kd_key_event(&caller, 97, KD_KEY_PRESS);
+    tap(46);
+    shell_on = 0;
+    tap(46);
+    kd_key_event(&caller, 97, KD_KEY_RELEASE);
+    CHECK(interrupts == 2 && nshell == 3, "Ctrl+C is the debug shell's interrupt, reading or not");
+    tap(30);
+    CHECK(ninput == 0 && nshell == 3, "a key nobody reads is dropped");
+    be(AS_ROOT);
+    CHECK(locks_held == 0, "the translating rows give every lock back");
 }
 
 /** `kd_state_save` and `kd_state_restore` keep the mode, meta, locks, LEDs,
@@ -697,6 +888,7 @@ int main(void)
     accents();
     repeat();
     raw_modes();
+    translating();
     save_restore();
     evdev_repeat();
     CHECK(locks_held == 0, "every lock is given back at the end");

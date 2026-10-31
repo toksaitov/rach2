@@ -116,12 +116,25 @@ struct kbd_repeat {
  * the same pointer for as long as the keyboard is connected, so the state of
  * each keyboard stays apart.
  *
+ * In K_XLATE and K_UNICODE the key goes through the keymap's translator
+ * (keymap.h) with the console's locks, and its bytes, as `keymap_encode`
+ * writes them under the cursor and keypad modes of `kio_key_modes`, go to
+ * the console's input while a reader is parked on it or a session owns it,
+ * after the screen comes back from the scrollback; K_XLATE sends a Latin-1
+ * byte for a character, and nothing for one past Latin-1, where K_UNICODE
+ * sends UTF-8, and K_METABIT sets an Alt character's top bit in place of
+ * ESC before it. Otherwise the debug shell takes the key: ETX, Ctrl+C on
+ * any layout, is its interrupt (`shell_interrupt`) whether or not it reads,
+ * and while it reads a key that sends no escape sequence is its input, DEL
+ * as Backspace. The console's own keys are spent before that: Shift with
+ * Page Up or Page Down scrolls the screen back and forth, and while the
+ * debug shell reads, so do Page Up, Page Down, Home and End. A key that
+ * changes the lock flags relights the LEDs while they follow the flags.
+ *
  * In K_MEDIUMRAW the key goes to the console's input as Linux sends it: a
  * code below 128 as one byte, with 0x80 set on release, and a higher one as
  * three, 0x00 or 0x80 on release, then the code's high and low seven bits
- * with 0x80 set; a repeat is a press. In the other modes it does nothing
- * yet: today's keystrokes reach the console through input.c's translation
- * of the raw view.
+ * with 0x80 set; a repeat is a press. In K_RAW and K_OFF it does nothing.
  *
  * Called in interrupt context or from the tick, with interrupts off; it does
  * not sleep.

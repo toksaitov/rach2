@@ -1,6 +1,6 @@
 /*
- * kbd.h: the US keymaps, and the ring of raw scancodes a program that holds
- * /fb reads its keys from.
+ * kbd.h: the ring of raw scancodes a program that holds /fb reads its keys
+ * from, and the map between set-1 codes and Linux's key codes.
  */
 #ifndef _KBD_H_
 #define _KBD_H_
@@ -9,11 +9,6 @@
 
 #include "lib/kint.h"
 #include "lib/kdef.h"
-
-/* US layout, set-1 scancode to ASCII, 0 for a key with no character; the
- * shift table has the shifted glyphs. */
-extern uint8_t EN_us[128];
-extern uint8_t EN_us_shift[128];
 
 /*
  * The ring holds 63 codes, filled by the input layer with every code from
