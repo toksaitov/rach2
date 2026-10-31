@@ -2676,6 +2676,9 @@ static void check_image(const char *image, const char *manifest, int64_t offset,
 
 #define SYSROOT_HEADER_SOURCE "vendor/musl/install/include"
 #define SYSROOT_HEADER_ROOT   "/include"
+/* Rach2's own headers for programs, such as <rach2/fb.h>, staged under
+   SYSROOT_HEADER_ROOT beside musl's. */
+#define RACH2_HEADER_SOURCE   "rach2/include"
 
 /* One staged or host header. */
 struct hfile {
@@ -2866,9 +2869,9 @@ static void compare_headers(const struct hset *staged, const struct hset *wanted
     if (bag.n > 0) {
         some(&bag, sample, sizeof(sample));
         addf(problems,
-             "%s: %d of the %d headers in %s are not staged "
+             "%s: %d of the %d headers in %s and %s are not staged "
              "(%s); the tree was staged short",
-             name, bag.n, wanted->n, SYSROOT_HEADER_SOURCE, sample);
+             name, bag.n, wanted->n, SYSROOT_HEADER_SOURCE, RACH2_HEADER_SOURCE, sample);
     }
     bag.n = 0;
     for (i = 0; i < staged->n; i++)
@@ -2877,9 +2880,9 @@ static void compare_headers(const struct hset *staged, const struct hset *wanted
     if (bag.n > 0) {
         some(&bag, sample, sizeof(sample));
         addf(problems,
-             "%s: %d files under %s are not in %s (%s); the "
+             "%s: %d files under %s are not in %s or %s (%s); the "
              "tree has something it was not staged from",
-             name, bag.n, SYSROOT_HEADER_ROOT, SYSROOT_HEADER_SOURCE, sample);
+             name, bag.n, SYSROOT_HEADER_ROOT, SYSROOT_HEADER_SOURCE, RACH2_HEADER_SOURCE, sample);
     }
     bag.n = 0;
     for (i = 0; i < staged->n; i++) {
@@ -2892,10 +2895,10 @@ static void compare_headers(const struct hset *staged, const struct hset *wanted
     if (bag.n > 0) {
         some(&bag, sample, sizeof(sample));
         addf(problems,
-             "%s: %d staged headers do not hold what %s has "
+             "%s: %d staged headers do not hold what %s or %s has "
              "(%s); a header that is there and wrong is worse than one "
              "that is missing",
-             name, bag.n, SYSROOT_HEADER_SOURCE, sample);
+             name, bag.n, SYSROOT_HEADER_SOURCE, RACH2_HEADER_SOURCE, sample);
     }
     bag.n = 0;
     for (i = 0; i < staged->n; i++)
@@ -3046,6 +3049,11 @@ static void sysroot_checks(const struct allow *allow, const struct image *im, co
              "%s: %s is not there, so the staged headers could "
              "not be compared with it",
              name, headers);
+    } else if (host_headers(RACH2_HEADER_SOURCE, SYSROOT_HEADER_ROOT, &wanted, problems) != 0) {
+        addf(problems,
+             "%s: %s is not there, so the staged headers could "
+             "not be compared with it",
+             name, RACH2_HEADER_SOURCE);
     } else {
         staged_headers(im, &staged, &dirs);
         compare_headers(&staged, &wanted, &dirs, name, problems);
