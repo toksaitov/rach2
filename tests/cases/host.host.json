@@ -366,6 +366,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "input",
+          "checks": "tests/host/input_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "intelbl",
           "checks": "tests/host/intelbl_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"

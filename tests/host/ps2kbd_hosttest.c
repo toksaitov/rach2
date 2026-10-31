@@ -9,7 +9,7 @@
  * buffer full (bit 0) and bit 5 set marks a mouse byte, which the handler
  * must leave unread for the mouse's IRQ 12 handler and give to no one. With
  * bit 5 clear the byte is the keyboard's: the handler reads it and gives it
- * to the input layer, unless it answers the LED command.
+ * to the set-1 decoder, unless it answers the LED command.
  *
  * The LED rows set the LEDs wanted, step the tick with `kernel_ticks` set by
  * hand, answer with ACK or RESEND through the handler or not at all, and
@@ -49,7 +49,7 @@ static int port_writes;
 static uint8_t data_writes[MAX_WRITES];
 static int n_data_writes;
 
-/* The codes the handler gave to the input layer, and the last of them. */
+/* The codes the handler gave to the set-1 decoder, and the last of them. */
 static int keys;
 static uint8_t last_key;
 
@@ -93,29 +93,24 @@ void klog(int level, const char *subsystem, const char *format, ...)
     }
 }
 
-void input_key(uint8_t scancode)
-{
-    keys++;
-    last_key = scancode;
-}
-
-/** Do nothing: the rows check what reaches the console's path. */
-void input_set1_event(struct input_set1 *kb, uint8_t code)
+/** Record the code the decoder was given. */
+void input_set1_event(struct input_keyboard *kb, uint8_t code)
 {
     (void)kb;
-    (void)code;
+    keys++;
+    last_key = code;
 }
 
-/** No event device: `input_set1_event` is a stub. */
-struct evdev *input_keyboard_register(const char *name, const char *phys, uint16_t bustype,
-                                      uint16_t vendor, uint16_t product)
+/** No event device: `input_set1_event` is a model. */
+void input_keyboard_attach(struct input_keyboard *kb, const char *name, const char *phys,
+                           uint16_t bustype, uint16_t vendor, uint16_t product)
 {
+    (void)kb;
     (void)name;
     (void)phys;
     (void)bustype;
     (void)vendor;
     (void)product;
-    return 0;
 }
 
 /** The kernel's translation is the only one here. */
