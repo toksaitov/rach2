@@ -26,6 +26,7 @@ find rach2 krffs utils ish tests tools mk man ports vendor \
     -path 'vendor/dropbear/dropbear-*' -prune -o \
     -path 'vendor/e2fsprogs/e2fsprogs-*' -prune -o \
     -path 'vendor/mtools/mtools-*' -prune -o \
+    -path 'vendor/libtsm/libtsm-*' -prune -o \
     -path ports/doom/src -prune -o \
     -path krffs/vendor -prune -o -path krffs/vs-dokany -prune -o \
     -type f \( -name '*.sh' -o -name '*.script' -o ! -name '*.*' \) -print |
