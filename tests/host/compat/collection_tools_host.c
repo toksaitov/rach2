@@ -638,7 +638,7 @@ static void collection_native_inputs_row(void)
             snprintf(path, sizeof path, "seed/build/inputs/%s/%s", arches[i], tails[j]);
             collection_put(collection_path(path), "prepared bytes");
         }
-        collection_cpus = 4;
+        collection_cpus = 12;
         collection_memory = 12288;
         setenv("ETUDE_BUILD_JOBS", "12", 1);
         setenv("COLLECTION_TEST_ROW", "prepare-inputs", 1);
@@ -676,6 +676,7 @@ static void collection_assets_row(void)
         collection_bytes(collection_path("build/x86_64/images/gnu-test.disk"), "image bytes"));
 }
 
+/** Check a preparation's machine size, its source and products, on i686. */
 static void collection_prepare_row(void)
 {
     const char *directories[] = {"ports",      "ports/doom",        "krffs",           "seed",
@@ -701,12 +702,17 @@ static void collection_prepare_row(void)
     char *jobs = getenv("ETUDE_BUILD_JOBS"), *cpus = getenv("RACH2_CPUS");
     jobs = jobs ? strdup(jobs) : NULL;
     cpus = cpus ? strdup(cpus) : NULL;
-    /* Build jobs, the collection's processors, and the machine expected. */
+    /* Build jobs, the collection's processors, and the machine expected: a
+     * processor and a GiB for each job, at least 3 GiB, and a refusal of a
+     * claim under three jobs. */
     static const struct {
         const char *jobs, *cpus;
         unsigned machine_cpus, memory;
-    } counts[] = {
-        {NULL, "3", 3, 9216}, {"12", "3", 4, 12288}, {"5", "3", 1, 5120}, {"2", "3", 0, 0}};
+    } counts[] = {{NULL, "3", 3, 3072},
+                  {NULL, "2", 2, 3072},
+                  {"12", "3", 12, 12288},
+                  {"5", "3", 5, 5120},
+                  {"2", "3", 0, 0}};
     for (size_t i = 0; i < sizeof counts / sizeof *counts; i++) {
         if (counts[i].jobs)
             setenv("ETUDE_BUILD_JOBS", counts[i].jobs, 1);
