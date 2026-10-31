@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.termconsole",
+  "summary": "term as the console session of a GRUB disk whose menu carries rach2.console=term, under UEFI and under BIOS on a framebuffer: the login typed at term's screen, term's answers to the agents' probes, Doom inside term, and the kernel console's login after term is killed, under tests/cases/machine/termconsole_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.termconsole.uefi",
+      "behavior": "OVMF boots the disk, init starts term -l on the firmware's framebuffer, which draws the login prompt in libtsm's colors and not the kernel console's; root logs in with keys pressed through QMP; a child of the shell sends DA1, XTVERSION, DECRQM 2026 and the Kitty query and writes term's replies to /dev/console; Doom started inside term takes the screen and gives it back to term when killed; term killed with SIGKILL gives the console back to the kernel, whose login init starts at once",
+      "units": ["init", "term", "libtsm", "fbdev", "kd", "doom"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"disk": "a GUID-table GRUB disk with the installer's root, the metal disk's system, which stages term, its font, Doom and the WAD, and rach2.console=term in every entry", "term_foreground": "229,229,229", "least_picture_colors": 65}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "termconsole_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["termconsole-disk"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk's copy, which it keeps after a failure; the scenario removes the screen dumps after a pass"
+      },
+      "steps": [
+        {"step_id": "term", "stage": "execute", "machine": "uefi",
+         "does": "boot the disk through OVMF, wait for init's start of term on COM1, dump the screen through QMP until term's grid shows the login prompt, and log in as root by keys pressed through QMP, each prompt read off the screen"},
+        {"step_id": "probes", "stage": "execute", "machine": "uefi",
+         "does": "type the line that sends the four probes in raw mode, reads the replies up to DA1's and writes them to /dev/console with ESC as E, and read them on COM1"},
+        {"step_id": "doom", "stage": "execute", "machine": "uefi",
+         "does": "type the line that starts Doom in the background, says on COM1 when its first frame is drawn and waits for a key read from /dev/console; dump the screen, press space, wait for the game to be gone, and dump the screen until term has drawn it again"},
+        {"step_id": "fallback", "stage": "execute", "machine": "uefi",
+         "does": "type killall -KILL term, wait for init's report of the signal, dump the screen until the kernel console shows its login prompt, log in as root on COM1 and power off"}
+      ],
+      "machines": [
+        {"machine_id": "uefi",
+         "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "termconsole-disk", "bus": "ide"}], "cpu": "max", "processors": 1,
+                  "memory_bytes": 536870912, "firmware": "ovmf", "devices": [{"model": "vga"}], "boot_options": []},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "framebuffer", "checks": "the kernel's record boot: screen: framebuffer, rgb names a framebuffer of at least 640x384", "source": "scenario"},
+        {"assertion_id": "term-screen", "checks": "a screen dump of the framebuffer's size has libtsm's default foreground, 229,229,229, which none of the kernel console's sixteen colors is, and a line of term's grid at 1x, as screentext --term 1 reads it, that begins rach2 login:", "source": "scenario"},
+        {"assertion_id": "term-login", "checks": "after root and the password are typed by keys, each once its prompt is on term's grid, a line of the grid ends in the root shell's #", "source": "scenario"},
+        {"assertion_id": "xtversion", "checks": "COM1 shows term's XTVERSION reply, DCS > | libtsm(", "source": "scenario"},
+        {"assertion_id": "decrqm", "checks": "COM1 shows term's DECRQM reply for mode 2026, CSI ? 2026 ; a state $ y", "source": "scenario"},
+        {"assertion_id": "kitty", "checks": "COM1 shows term's reply to the Kitty query, CSI ? flags u", "source": "scenario"},
+        {"assertion_id": "da1", "checks": "COM1 shows term's DA1 reply, CSI ? 62 ; 22 c, last of the four", "source": "scenario"},
+        {"assertion_id": "wad", "checks": "the game reported its first frame, so the disk has /demo/doom1.wad, which its root stages from ports/doom/doom1.wad", "source": "scenario"},
+        {"assertion_id": "doom", "checks": "the screen dumped once the game has reported its first frame has the framebuffer's size and more than 64 colors, so the game took the screen from term", "source": "scenario"},
+        {"assertion_id": "doom-back", "checks": "once the game has gone, a screen dump has the framebuffer's size, at most 64 colors and libtsm's default foreground, so term drew its screen again", "source": "scenario"},
+        {"assertion_id": "killed", "checks": "init says on COM1 that term was killed by signal 9 and that the login is on the kernel console", "source": "scenario"},
+        {"assertion_id": "console-login", "checks": "a screen dump shows the kernel console's grid, as screentext reads it, with a line that begins rach2 login:, and root logs in on COM1", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 1200000000, "ceiling_us": 3600000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 1073741824, "disk_bytes": 268435456,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "termconsole-disk", "node": "tests/cases/machine/termconsole/disk.img", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "screentext", "node": "tests/system/screentext", "per_architecture": false},
+        {"name": "termconsole_scenario", "node": "tests/cases/machine/termconsole_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the case boots a disk the firmware starts, presses keys and dumps the screen through QMP, which only QEMU's firmware and monitor give"}
+    },
+    {
+      "case_id": "machine.termconsole.bios",
+      "behavior": "SeaBIOS boots the same disk, GRUB sets the mode the video BIOS prefers, init starts term -l on that framebuffer, root logs in by keys at term's screen, term answers the four probes, and term killed with SIGKILL gives the console back to the kernel, whose login init starts at once",
+      "units": ["init", "term", "libtsm", "fbdev", "kd", "grub"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"disk": "the disk of machine.termconsole.uefi", "term_foreground": "229,229,229"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "termconsole_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["termconsole-disk"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk's copy, which it keeps after a failure; the scenario removes the screen dumps after a pass"
+      },
+      "steps": [
+        {"step_id": "term", "stage": "execute", "machine": "bios",
+         "does": "boot the disk through SeaBIOS and GRUB's default entry, wait for init's start of term on COM1, dump the screen through QMP until term's grid shows the login prompt, and log in as root by keys pressed through QMP, each prompt read off the screen"},
+        {"step_id": "probes", "stage": "execute", "machine": "bios",
+         "does": "type the line that sends the four probes in raw mode, reads the replies up to DA1's and writes them to /dev/console with ESC as E, and read them on COM1"},
+        {"step_id": "fallback", "stage": "execute", "machine": "bios",
+         "does": "type killall -KILL term, wait for init's report of the signal, dump the screen until the kernel console shows its login prompt, log in as root on COM1 and power off"}
+      ],
+      "machines": [
+        {"machine_id": "bios",
+         "qemu": {"kernel": "kernel", "initrd": null, "disks": ["termconsole-disk"], "cpu": "max", "processors": 1,
+                  "memory_bytes": 268435456, "firmware": "seabios", "devices": [{"model": "vga"}], "boot_options": []},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "framebuffer", "checks": "the kernel's record boot: screen: framebuffer, rgb names a framebuffer of at least 640x384, the mode GRUB set for the default entry", "source": "scenario"},
+        {"assertion_id": "term-screen", "checks": "a screen dump of the framebuffer's size has libtsm's default foreground, 229,229,229, which none of the kernel console's sixteen colors is, and a line of term's grid at 1x, as screentext --term 1 reads it, that begins rach2 login:", "source": "scenario"},
+        {"assertion_id": "term-login", "checks": "after root and the password are typed by keys, each once its prompt is on term's grid, a line of the grid ends in the root shell's #", "source": "scenario"},
+        {"assertion_id": "xtversion", "checks": "COM1 shows term's XTVERSION reply, DCS > | libtsm(", "source": "scenario"},
+        {"assertion_id": "decrqm", "checks": "COM1 shows term's DECRQM reply for mode 2026, CSI ? 2026 ; a state $ y", "source": "scenario"},
+        {"assertion_id": "kitty", "checks": "COM1 shows term's reply to the Kitty query, CSI ? flags u", "source": "scenario"},
+        {"assertion_id": "da1", "checks": "COM1 shows term's DA1 reply, CSI ? 62 ; 22 c, last of the four", "source": "scenario"},
+        {"assertion_id": "killed", "checks": "init says on COM1 that term was killed by signal 9 and that the login is on the kernel console", "source": "scenario"},
+        {"assertion_id": "console-login", "checks": "a screen dump shows the kernel console's grid, as screentext reads it, with a line that begins rach2 login:, and root logs in on COM1", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 1200000000, "ceiling_us": 3600000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 536870912, "disk_bytes": 268435456,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "termconsole-disk", "node": "tests/cases/machine/termconsole/disk.img", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "screentext", "node": "tests/system/screentext", "per_architecture": false},
+        {"name": "termconsole_scenario", "node": "tests/cases/machine/termconsole_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the case boots a disk the firmware starts, presses keys and dumps the screen through QMP, which only QEMU's firmware and monitor give"}
+    }
+  ]
+}
