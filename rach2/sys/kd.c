@@ -46,8 +46,8 @@ static const unsigned char max_vals[KD_NR_TYPES] = {255, 255, 19, 19,  26, 255, 
 static struct spinlock kd_lock = SPINLOCK_INIT;
 static volatile int kd_mode = K_UNICODE;
 static int kd_meta = K_ESCPREFIX;
-static unsigned int kd_leds = KD_LEDS_FOLLOW; /* KDSETLED's LEDs, or KD_LEDS_FOLLOW */
-static unsigned int kd_default_flags;         /* KDSKBLED's bits 4-6, shifted down */
+static unsigned int kd_leds = KD_LEDS_FOLLOW; /* KDSETLED's, or KD_LEDS_FOLLOW */
+static unsigned int kd_default_flags;         /* KDSKBLED's bits 4-6 */
 static struct keymap_state kd_kb;             /* the locks and their flags */
 
 /* The keymap: KM_MAX_TABLES tables, a NULL one absent. A table is the
