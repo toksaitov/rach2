@@ -24,6 +24,7 @@
 #define SYS_BRK         12
 #define SYS_IOCTL       16
 #define SYS_GETTIMEOFDAY 96
+#define SYS_GETPGRP     111
 #else
 /* The numbers of rach2/sys/arch/i686/sysnr.h, which are Linux's. */
 #define SYS_EXIT        1
@@ -35,6 +36,7 @@
 #define SYS_BRK         45
 #define SYS_IOCTL       54
 #define SYS_GETTIMEOFDAY 78
+#define SYS_GETPGRP     65
 #endif
 
 /* The open flags, with Linux's values. */
@@ -145,6 +147,12 @@ long lseek(int fd, long offset, int whence)
 {
     return syscall3(SYS_LSEEK, fd, offset, whence);
 }
+
+/** The process group of the caller; it cannot fail. */
+int getpgrp(void)
+{
+    return (int)syscall3(SYS_GETPGRP, 0, 0, 0);
+}
 #else
 void _exit(int status)
 {
@@ -244,6 +252,17 @@ long lseek(int fd, long offset, int whence)
         "int $0x80"
         : "=a"(ret)
         : "a"(SYS_LSEEK), "b"(fd), "c"(offset), "d"(whence)
+    );
+    return ret;
+}
+
+int getpgrp(void)
+{
+    int ret;
+    __asm__ __volatile__ (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_GETPGRP)
     );
     return ret;
 }

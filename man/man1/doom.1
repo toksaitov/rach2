@@ -25,7 +25,18 @@ on the framebuffer at the largest whole scale that fits, three on a 1366 by
 The 256-entry palette is set through
 .Dv FB_SETPALETTE .
 .Pp
-Keyboard input consists of PS/2 set 1 scan codes read from standard input.
+When standard input is a terminal and the game is in its foreground, the
+game opens
+.Pa /dev/console ,
+puts its keyboard in
+.Dv K_RAW
+and its terminal in raw mode without waiting for reads, and reads PS/2
+set 1 scan codes from it; both are restored when the game exits.
+Inside
+.Ic term ,
+whose terminal is a pty, the keys still come from the console.
+Started with standard input from a file or in the background, the game has
+no keys.
 The port maps letters, digits, arrows, modifiers, function keys, Enter,
 Escape, Tab, and the Doom action keys.
 The input queue holds at most 31 unread key transitions.
