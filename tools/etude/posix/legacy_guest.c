@@ -37,6 +37,9 @@
 #define OPTIONS_MAX    32
 #define PROPERTIES_MAX 64
 
+/* The cluster size of a writable disk's overlay, QEMU's default for qcow2. */
+#define OVERLAY_CLUSTER 65536
+
 /* The room for a path, a line of the record and a reason. */
 #define PATH_LEN 4096
 #define LINE_LEN 8192
@@ -167,8 +170,9 @@ static int stock(struct legacy_guest *g, const char *name, char hex[65], char *p
 /**
  * Make disk `i` of the profile from `d`, a name or an object of the
  * profile's `disks`: an empty sparse disk of its size, a CD whose medium is
- * the artifact's object, or a private copy of the artifact; each made under
- * the workspace's `disks`. 0, or -1 with why in `g->why`.
+ * the artifact's object, or a qcow2 overlay over the artifact's object, which
+ * takes the machine's writes; each made under the workspace's `disks`. 0, or
+ * -1 with why in `g->why`.
  */
 static int make_disk(struct legacy_guest *g, size_t i, const struct json *d)
 {
@@ -214,9 +218,10 @@ static int make_disk(struct legacy_guest *g, size_t i, const struct json *d)
         snprintf(g->disk_paths[i], PATH_LEN, "%s", object);
         return 0;
     }
-    if (etude_store_copy(g->spec.store, hex, g->disk_paths[i]) != 0)
-        return failed(g->why, sizeof(g->why), "the disk %s cannot be copied: %s", name,
+    if (etude_store_overlay(g->spec.store, hex, OVERLAY_CLUSTER, g->disk_paths[i]) != 0)
+        return failed(g->why, sizeof(g->why), "the disk %s has no overlay: %s", name,
                       strerror(errno));
+    q->qcow2 = 1;
     return 0;
 }
 
