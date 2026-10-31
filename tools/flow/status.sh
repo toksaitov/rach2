@@ -11,7 +11,8 @@
 # `board.sh milestones` gives them; a line for each worker loop that
 # `workers` lists, and then for each other state directory under build/flow
 # of this clone's main working tree that has a `loop.log`, as the manager's
-# own loops have; the release; and the resources.
+# own loops have; what `board.sh check` finds wrong on the board, given
+# the tasks the loops hold; the release; and the resources.
 #
 # A loop's line says whether the loop runs, has been asked to stop, or is
 # stopped; the task in its STATE/issue; whether its account is out of its
@@ -157,6 +158,30 @@ sizes()
 }
 
 
+# loops: print a line for each loop, as the header says.
+loops()
+{
+    grep -v '^#' "$(dirname "$0")/workers" | while read -r name host st; do
+        [ -n "$name" ] || continue
+        printf '%s: ' "$name"
+        if [ "$host" = - ]; then
+            case $st in /*|"~"*) ;; *) st=$here/$st ;; esac
+            printf '%s' "$probe" | sh -s "$st" 2>&1
+        else
+            printf '%s' "$probe" | ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" sh -s "$st" 2>&1
+        fi
+    done
+    listed=$(grep -v '^#' "$(dirname "$0")/workers" |
+        awk -v h="$here" '$2 == "-" { print ($3 ~ /^\// ? $3 : h "/" $3) }')
+    for st in "$here"/build/flow/*; do
+        [ -f "$st/loop.log" ] || continue
+        printf '%s\n' "$listed" | grep -q -F -x "$st" && continue
+        printf '%s: ' "${st##*/}"
+        printf '%s' "$probe" | sh -s "$st" 2>&1
+    done
+}
+
+
 if [ "$1" = sizes ]; then
     sizes
     exit
@@ -164,27 +189,14 @@ fi
 
 echo "== master $(git ls-remote "https://github.com/$REPO" refs/heads/master | cut -c 1-8)  $(date -u '+%F %T') UTC"
 echo "== milestones"
-sh "$(dirname "$0")/board.sh" done > /dev/null 2>&1 || echo "status: board.sh done failed"
+sh "$(dirname "$0")/board.sh" 'done' > /dev/null 2>&1 || echo "status: board.sh done failed"
 sh "$(dirname "$0")/board.sh" milestones 2>&1
 echo "== workers"
-grep -v '^#' "$(dirname "$0")/workers" | while read -r name host st; do
-    [ -n "$name" ] || continue
-    printf '%s: ' "$name"
-    if [ "$host" = - ]; then
-        case $st in /*|"~"*) ;; *) st=$here/$st ;; esac
-        printf '%s' "$probe" | sh -s "$st" 2>&1
-    else
-        printf '%s' "$probe" | ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" sh -s "$st" 2>&1
-    fi
-done
-listed=$(grep -v '^#' "$(dirname "$0")/workers" |
-    awk -v h="$here" '$2 == "-" { print ($3 ~ /^\// ? $3 : h "/" $3) }')
-for st in "$here"/build/flow/*; do
-    [ -f "$st/loop.log" ] || continue
-    printf '%s\n' "$listed" | grep -q -F -x "$st" && continue
-    printf '%s: ' "${st##*/}"
-    printf '%s' "$probe" | sh -s "$st" 2>&1
-done
+workers=$(loops)
+printf '%s\n' "$workers"
+echo "== board"
+# shellcheck disable=SC2046
+sh "$(dirname "$0")/board.sh" check $(printf '%s\n' "$workers" | sed -n 's/.*| task #\([0-9]*\) |.*/\1/p') 2>&1
 echo "== release"
 if env -u TMUX tmux has-session -t rach2-release 2> /dev/null; then echo "release.sh runs"; else echo "release.sh is not running"; fi
 r=$here/build/flow/release/record
