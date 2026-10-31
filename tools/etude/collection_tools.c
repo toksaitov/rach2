@@ -1512,7 +1512,7 @@ static int col_prepare(struct col_job *job, const char *arch, const char *kernel
     struct col_list native = {0}, guest = {0};
     struct jbuf script = {0};
     char *disk = NULL, *products = NULL;
-    unsigned memory;
+    unsigned memory = 0;
     int rc = 2;
     if (strspn(kernel, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") !=
             strlen(kernel) ||
