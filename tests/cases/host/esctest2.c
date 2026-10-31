@@ -94,13 +94,12 @@ static int policy(const char *name, int exceptions)
             continue;
         reason = strchr(text, '|');
         if (exceptions) {
-            if (!reason || !reason[1] || reason[1] == ' ' || reason[1] == '\t' ||
-                !strstr(text, ".test_")) {
+            if (!reason || !reason[1] || reason[1] == ' ' || reason[1] == '\t') {
                 bad = 1;
                 break;
             }
             *reason = 0;
-            if (strcmp(previous, text) >= 0) {
+            if (!strstr(text, ".test_") || strcmp(previous, text) >= 0) {
                 bad = 1;
                 break;
             }
@@ -176,7 +175,25 @@ static int start(void)
     printf("@etude 1 child %ld\n", (long)terminal);
     commands = fdopen(in[1], "w");
     answers = fdopen(out[0], "r");
-    return commands && answers ? 0 : -1;
+    return commands && answers && fprintf(commands, "wait ESCTEST2_READY\n") > 0 &&
+                   !fflush(commands)
+               ? 0
+               : -1;
+}
+
+/** Write a complete line to the inspection socket, or fail on interruption. */
+static int reply(const char *text)
+{
+    size_t len = strlen(text), used = 0;
+    while (used < len) {
+        ssize_t n = write(peer, text + used, len - used);
+        if (n < 0 && errno == EINTR && !stopped)
+            continue;
+        if (n <= 0 || stopped)
+            return -1;
+        used += (size_t)n;
+    }
+    return 0;
 }
 
 /** Transfer a snapshot command after the driver's CPR has drained its output. */
@@ -197,12 +214,12 @@ static int measurement(char *request)
     if (!strcmp(request, "dump")) {
         if (sscanf(answer, "screen %u %u", &cols, &rows) != 2 || rows > 1000)
             return -1;
-        if (dprintf(peer, "%s\n", answer) < 0)
+        if (reply(answer) || reply("\n"))
             return -1;
         for (unsigned i = 0; i < rows; i++)
             if (line(answers, answer, sizeof(answer)) != 1)
                 return -1;
-    } else if (dprintf(peer, "%s\n", answer) < 0) {
+    } else if (reply(answer) || reply("\n")) {
         return -1;
     }
     return 0;
@@ -218,6 +235,7 @@ static int serve(void)
     char request[4096];
     size_t used = 0;
     unsigned measurements = 0;
+    int ready = 0;
     for (;;) {
         fds[0].fd = peer >= 0 ? peer : listener;
         fds[0].events = POLLIN;
@@ -231,16 +249,21 @@ static int serve(void)
                 continue;
             return -1;
         }
-        if (fds[1].revents)
-            return -1;
-        if (!fds[0].revents)
-            continue;
-        if (peer < 0) {
+        if (peer < 0 && fds[0].revents) {
             peer = accept(listener, NULL, NULL);
             if (peer < 0)
                 return -1;
             continue;
         }
+        if (fds[1].revents) {
+            if (ready || peer < 0 || line(answers, request, sizeof(request)) != 1 ||
+                strcmp(request, "found 0") || reply("ready\n"))
+                return -1;
+            ready = 1;
+            continue;
+        }
+        if (!fds[0].revents)
+            continue;
         char c;
         ssize_t n = read(peer, &c, 1);
         if (n == 0)

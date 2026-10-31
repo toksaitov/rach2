@@ -26,7 +26,15 @@ xterm build options. A final count detects interrupted or empty runs.
  
    open(escargs.args.logfile, "wb")
    global log
-@@ -167,8 +168,15 @@
+@@ -32,6 +33,7 @@
+   esc.vtLevel = escargs.args.max_vt_level
+ 
+   escio.Init()
++  escutil.ReadyHost()
+ 
+ def shutdown():
+   '''Turn off terminal modes used for testing.'''
+@@ -167,8 +169,15 @@
    knownBugs = 0
    failures = []
  
@@ -42,7 +50,7 @@ xterm build options. A final count detects interrupted or empty runs.
      if status is None:
        knownBugs += 1
      elif status:
-@@ -178,6 +186,10 @@
+@@ -178,6 +187,10 @@
        failed += 1
        if escargs.args.stop_on_failure:
          break
@@ -61,7 +69,7 @@ xterm build options. A final count detects interrupted or empty runs.
  import functools
  import traceback
  import re
-@@ -184,11 +186,44 @@
+@@ -184,11 +186,57 @@
    params = escio.ReadCSI("R")
    return Point(int(params[1]), int(params[0]))
  
@@ -74,6 +82,19 @@ xterm build options. A final count detects interrupted or empty runs.
 +    gSnapshot = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 +    gSnapshot.connect(escargs.args.snapshot_socket)
 +    gSnapshot.sendall(("pid %d\n" % os.getpid()).encode("ascii"))
++
++def ReadyHost():
++  """Expose startup on the parsed screen before reset can erase the marker."""
++  if gSnapshot is not None:
++    escio.Write("ESCTEST2_READY")
++    reply = b""
++    while not reply.endswith(b"\n"):
++      part = gSnapshot.recv(1)
++      if not part or len(reply) >= 32:
++        raise esctypes.InternalError("Screen controller did not acknowledge startup")
++      reply += part
++    if reply != b"ready\n":
++      raise esctypes.InternalError("Invalid screen controller acknowledgement")
 +
 +def HostMeasurement(command):
 +  """Measure the parsed screen, after a CPR round trip drains preceding output.
@@ -106,7 +127,7 @@ xterm build options. A final count detects interrupted or empty runs.
    esccmd.XTERM_WINOPS(esccmd.WINOP_REPORT_TEXT_AREA_CHARS)
    params = escio.ReadCSI("t")
    return Size(params[2], params[1])
-@@ -269,12 +304,18 @@
+@@ -269,12 +317,18 @@
  
      expected_checksum = ord(expected_line[x])
  
