@@ -10,7 +10,7 @@
 # applet table of the BusyBox build (build/vendor/busybox/applet_tables-main.h
 # unless named), the pages from man/, the GNU ports and the packages of the
 # agents layer from their recipes, and the versions from the build scripts,
-# the GNU layer's source lists and the GRUB manifest. The licenses and the purposes of the five GNU programs that
+# the GNU layer's source lists and the GRUB and keymap manifests. The licenses and the purposes of the five GNU programs that
 # are not ports, which no file states in a form a script can read, are the
 # tables LICENSES and GNU_TOOLS below, taken from the projects' Readmes.
 # `make programs-md` runs this script into man/programs.md, and `tests/run
@@ -40,6 +40,7 @@ e2fsprogs|vendor/e2fsprogs/Readme.md|GPL 2; its libraries LGPL 2, BSD-style and 
 GRUB|vendor/grub/Readme.md|GPL 3 or later
 libtsm|vendor/libtsm/Readme.md|MIT
 wcwidth|vendor/libtsm/Readme.md|MIT, with parts under Markus Kuhn'"'"'s permissive notice
+xkeyboard-config|vendor/keymaps/Readme.md|MIT
 doomgeneric|ports/doom/Readme.md|GPL 2 or later, with Nuked OPL3 under LGPL 2.1 or later
 GNU ports|vendor/gnu/Readme.md|each port its own, which its tarball has
 binutils, GCC, GDB|vendor/gnu/native/Readme.md|GPL 3 or later
@@ -531,6 +532,7 @@ BEGIN {
     version["GRUB"] = grab("vendor/grub/manifest.txt", "^tool grub-mkimage \\(GRUB\\) ", "")
     version["libtsm"] = var("vendor/libtsm/build_libtsm.sh", "VERSION")
     version["wcwidth"] = "libtsm " version["libtsm"] "'"'"'s copy"
+    version["xkeyboard-config"] = "Ubuntu " grab("vendor/keymaps/manifest.txt", "^package xkb-data ", " deb-sha256.*")
     version["doomgeneric"] = "commit " grab("ports/doom/Readme.md", ".* at commit `", "`.*")
     version["GNU ports"] = "[each its own](#the-ports)"
     version["binutils, GCC, GDB"] = grab("vendor/gnu/sources.txt", "^binutils ", " .*") ", " \
@@ -550,7 +552,7 @@ BEGIN {
     n = split(ENVIRON["LICENSES"], row, "\n")
     for (i = 1; i <= n; i++) {
         split(row[i], f, "|")
-        if (version[f[1]] == "" || version[f[1]] ~ /^(commit |Debian )?$/) {
+        if (version[f[1]] == "" || version[f[1]] ~ /^(commit |Debian |Ubuntu )?$/) {
             print "programs: no version for " f[1] > "/dev/stderr"
             exit 1
         }

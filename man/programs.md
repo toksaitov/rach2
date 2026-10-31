@@ -19,7 +19,11 @@ The programs of os-real, as [its manifest](../krffs/manifests/os-real.manifest) 
 | `dmesg` | [dmesg(1)](man1/dmesg.1) | in-house (`dmesg.script`) |  | yes |
 | `doom` | [doom(1)](man1/doom.1) | Doom |  |  |
 | `dropbearmulti` | [dropbear(8)](man8/dropbear.8) | Dropbear |  | yes |
+| `dumpkeys` | [dumpkeys(1)](man1/dumpkeys.1) | kbd |  | yes |
 | `init` | [init(8)](man8/init.8) | in-house (`init-login`) | yes | in-house (`init-recovery`) |
+| `kbd_mode` | [kbd_mode(1)](man1/kbd_mode.1) | kbd |  | yes |
+| `kbdrate` | [kbdrate(8)](man8/kbdrate.8) | kbd |  | yes |
+| `loadkeys` | [loadkeys(1)](man1/loadkeys.1) | kbd |  | yes |
 | `login` | [login(1)](man1/login.1) | BusyBox (`busybox-suid`) | in-house |  |
 | `loopctl` | [loopctl(8)](man8/loopctl.8) | in-house | yes |  |
 | `make` | [make(1)](man1/make.1) | pdpmake |  |  |
@@ -28,7 +32,9 @@ The programs of os-real, as [its manifest](../krffs/manifests/os-real.manifest) 
 | `mke2fs` | [mke2fs(8)](man8/mke2fs.8) | e2fsprogs |  |  |
 | `passwd` | [passwd(1)](man1/passwd.1) | BusyBox (`busybox-suid`) | in-house | yes |
 | `ping` | [ping(1)](man1/ping.1) | in-house | yes | yes |
+| `setleds` | [setleds(1)](man1/setleds.1) | kbd |  | yes |
 | `sh` | [sh(1)](man1/sh.1) | BusyBox (`busybox`) | in-house (`ish`) | yes |
+| `showkey` | [showkey(1)](man1/showkey.1) | kbd |  | yes |
 | `su` | [su(1)](man1/su.1) | BusyBox (`busybox-suid`) | in-house | yes |
 | `tcc` | [tcc(1)](man1/tcc.1) | TinyCC |  |  |
 | `update` | [update(8)](man8/update.8) | in-house | yes | yes |
@@ -240,12 +246,14 @@ The third-party code of the repository, each with the version the build pins, it
 | musl | 1.2.5 | MIT | [vendor/musl/Readme.md](../vendor/musl/Readme.md) |
 | BusyBox | 1.36.1 | GPL 2 only | [vendor/busybox/Readme.md](../vendor/busybox/Readme.md) |
 | Dropbear | 2022.83 | MIT-style | [vendor/dropbear/Readme.md](../vendor/dropbear/Readme.md) |
+| kbd | 2.10.0 | GPL-2.0-or-later | [vendor/kbd/Readme.md](../vendor/kbd/Readme.md) |
 | TinyCC | 0.9.27 | LGPL 2.1 | [vendor/tcc/Readme.md](../vendor/tcc/Readme.md) |
 | pdpmake | 2.0.4 | public domain | [vendor/pdpmake/Readme.md](../vendor/pdpmake/Readme.md) |
 | e2fsprogs | 1.47.4 | GPL 2; its libraries LGPL 2, BSD-style and MIT-style | [vendor/e2fsprogs/Readme.md](../vendor/e2fsprogs/Readme.md) |
 | GRUB | 2.12-1ubuntu7.3 | GPL 3 or later | [vendor/grub/Readme.md](../vendor/grub/Readme.md) |
 | libtsm | 4.8.0 | MIT | [vendor/libtsm/Readme.md](../vendor/libtsm/Readme.md) |
 | wcwidth | libtsm 4.8.0's copy | MIT, with parts under Markus Kuhn's permissive notice | [vendor/libtsm/Readme.md](../vendor/libtsm/Readme.md) |
+| xkeyboard-config | Ubuntu 2.41-2ubuntu1.1 | MIT | [vendor/keymaps/Readme.md](../vendor/keymaps/Readme.md) |
 | doomgeneric | commit fc601639494e | GPL 2 or later, with Nuked OPL3 under LGPL 2.1 or later | [ports/doom/Readme.md](../ports/doom/Readme.md) |
 | GNU ports | [each its own](#the-ports) | each port its own, which its tarball has | [vendor/gnu/Readme.md](../vendor/gnu/Readme.md) |
 | binutils, GCC, GDB | 2.47, 16.2.0, 18.1 | GPL 3 or later | [vendor/gnu/native/Readme.md](../vendor/gnu/native/Readme.md) |
