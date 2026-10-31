@@ -819,6 +819,7 @@ static long take_slot(struct hp_context *c, int fd, size_t hint)
     return (long)lock.l_start;
 }
 
+/** Release `slot`, which take_slot gave, of the slot file `fd`. */
 static void give_slot(int fd, long slot)
 {
     struct flock lock;
@@ -828,6 +829,24 @@ static void give_slot(int fd, long slot)
     lock.l_start = (off_t)slot;
     lock.l_len = 1;
     fcntl(fd, F_SETLK, &lock);
+}
+
+/**
+ * Prepare `check` while holding a slot of the slot file `fd`, taken from
+ * `hint`, or holding none when `fd` is negative.
+ *
+ * Return 0, or -1 when the check cannot be prepared or the wait for its slot
+ * is stopped.
+ */
+static int prepare_held(struct hp_context *c, struct hp_check *check, int fd, size_t hint)
+{
+    long slot = fd >= 0 ? take_slot(c, fd, hint) : 0;
+    if (slot < 0)
+        return -1;
+    int bad = prepare_check(c, check);
+    if (fd >= 0)
+        give_slot(fd, slot);
+    return bad;
 }
 
 /**
@@ -849,20 +868,105 @@ static int prepare_worker(struct hp_context *c, struct inventory *inventory, int
     while ((n = read(queue, &index, sizeof index)) == (ssize_t)sizeof index) {
         if ((c->stop && *c->stop) || index >= inventory->count)
             return 1;
-        long slot = fd >= 0 ? take_slot(c, fd, job) : 0;
-        if (slot < 0)
-            return 1;
         struct hp_check *check = &inventory->checks[index];
         char path[4096];
-        int bad = prepare_check(c, check) ||
-                  hp_path(path, sizeof path, "%s/../check.%u.json", c->work, (unsigned)index) ||
-                  hp_publish(path, check->entry);
-        if (fd >= 0)
-            give_slot(fd, slot);
-        if (bad)
+        if (prepare_held(c, check, fd, job) ||
+            hp_path(path, sizeof path, "%s/../check.%u.json", c->work, (unsigned)index) ||
+            hp_publish(path, check->entry))
             return 1;
     }
     return n == 0 ? 0 : 1;
+}
+
+/**
+ * Start `jobs` workers of prepare_worker on the read end of the pipe `queue`,
+ * recording their process IDs in `workers`.
+ *
+ * Return how many started; fewer than `jobs` when a fork failed.
+ */
+static size_t start_workers(struct hp_context *c, struct inventory *inventory, const int queue[2],
+                            pid_t *workers, size_t jobs)
+{
+    size_t started;
+    fflush(NULL);
+    for (started = 0; started < jobs; started++) {
+        workers[started] = fork();
+        if (workers[started] == 0) {
+            close(queue[1]);
+            int status = prepare_worker(c, inventory, queue[0], started);
+            fflush(NULL);
+            _exit(status);
+        }
+        if (workers[started] < 0)
+            break;
+    }
+    return started;
+}
+
+/**
+ * Write to the pipe `queue` the index of each check of `inventory` that
+ * c->only selects, in order. Return 0, or -1 when a write fails.
+ */
+static int feed_workers(struct hp_context *c, struct inventory *inventory, int queue)
+{
+    /* Each index is one write of fewer than PIPE_BUF bytes, read whole. */
+    for (uint32_t i = 0; i < inventory->count; i++) {
+        const char *id = json_text(inventory->checks[i].entry, "assertion_id");
+        if ((!c->only || !strcmp(c->only, id)) && write(queue, &i, sizeof i) != sizeof i)
+            return -1;
+    }
+    return 0;
+}
+
+/**
+ * Wait for the `started` workers of `workers`, and stop the others with
+ * SIGTERM once one fails, `bad` is set on entry or a stop is asked for.
+ *
+ * Return 0 when every worker exited with status 0, or -1.
+ */
+static int wait_workers(struct hp_context *c, pid_t *workers, size_t started, int bad)
+{
+    for (size_t left = started, stopped = 0; left;) {
+        int status;
+        pid_t pid = waitpid(-1, &status, 0);
+        if (pid < 0 && errno != EINTR)
+            return -1;
+        for (size_t i = 0; pid > 0 && i < started; i++)
+            if (workers[i] == pid) {
+                workers[i] = 0;
+                left--;
+                bad |= !WIFEXITED(status) || WEXITSTATUS(status);
+            }
+        if (!stopped && (bad || (c->stop && *c->stop))) {
+            for (size_t i = 0; i < started; i++)
+                if (workers[i] > 0)
+                    kill(workers[i], SIGTERM);
+            stopped = 1;
+        }
+    }
+    return bad ? -1 : 0;
+}
+
+/**
+ * Replace the entry of each check of `inventory` that c->only selects with
+ * the one its worker published. Return 0, or -1 when one is missing.
+ */
+static int collect_entries(struct hp_context *c, struct inventory *inventory)
+{
+    for (size_t i = 0; i < inventory->count; i++) {
+        struct hp_check *check = &inventory->checks[i];
+        const char *id = json_text(check->entry, "assertion_id");
+        char path[4096];
+        if (c->only && strcmp(c->only, id))
+            continue;
+        struct json *entry =
+            !hp_path(path, sizeof path, "%s/check.%zu.json", c->work, i) ? hp_document(path) : NULL;
+        json_free(check->entry);
+        check->entry = entry;
+        if (!entry)
+            return -1;
+    }
+    return 0;
 }
 
 /**
@@ -873,73 +977,63 @@ static int prepare_worker(struct hp_context *c, struct inventory *inventory, int
  */
 static int prepare_parallel(struct hp_context *c, struct inventory *inventory)
 {
-    size_t jobs = c->jobs < inventory->count ? c->jobs : inventory->count, started = 0;
+    size_t jobs = c->jobs < inventory->count ? c->jobs : inventory->count;
     pid_t *workers = calloc(jobs, sizeof *workers);
-    int queue[2], bad = !workers || pipe(queue);
-    if (bad) {
+    int queue[2];
+    if (!workers || pipe(queue)) {
         free(workers);
         return -1;
     }
-    fflush(NULL);
-    for (; !bad && started < jobs; started++) {
-        workers[started] = fork();
-        if (workers[started] == 0) {
-            close(queue[1]);
-            int status = prepare_worker(c, inventory, queue[0], started);
-            fflush(NULL);
-            _exit(status);
-        }
-        bad = workers[started] < 0;
-    }
-    if (bad)
-        started--;
+    size_t started = start_workers(c, inventory, queue, workers, jobs);
     close(queue[0]);
-    /* Each index is one write of fewer than PIPE_BUF bytes, read whole. */
-    for (uint32_t i = 0; !bad && i < inventory->count; i++) {
-        const char *id = json_text(inventory->checks[i].entry, "assertion_id");
-        if ((!c->only || !strcmp(c->only, id)) && write(queue[1], &i, sizeof i) != sizeof i)
-            bad = 1;
-    }
+    int bad = started < jobs || feed_workers(c, inventory, queue[1]);
     close(queue[1]);
-    for (size_t left = started, stopped = 0; left;) {
-        int status;
-        pid_t pid = waitpid(-1, &status, 0);
-        if (pid < 0 && errno != EINTR) {
-            bad = 1;
-            break;
-        }
-        for (size_t i = 0; pid > 0 && i < started; i++)
-            if (workers[i] == pid) {
-                workers[i] = 0;
-                left--;
-                if (!WIFEXITED(status) || WEXITSTATUS(status))
-                    bad = 1;
-            }
-        if (!stopped && (bad || (c->stop && *c->stop))) {
-            for (size_t i = 0; i < started; i++)
-                if (workers[i] > 0)
-                    kill(workers[i], SIGTERM);
-            stopped = 1;
-        }
-    }
+    bad = wait_workers(c, workers, started, bad) || collect_entries(c, inventory);
     free(workers);
-    for (size_t i = 0; !bad && i < inventory->count; i++) {
-        struct hp_check *check = &inventory->checks[i];
-        const char *id = json_text(check->entry, "assertion_id");
-        char path[4096];
-        if (c->only && strcmp(c->only, id))
-            continue;
-        struct json *entry =
-            !hp_path(path, sizeof path, "%s/check.%zu.json", c->work, i) ? hp_document(path) : NULL;
-        if (!entry)
-            bad = 1;
-        json_free(check->entry);
-        check->entry = entry;
-    }
     return bad || (c->stop && *c->stop) ? -1 : 0;
 }
 #endif
 
+/**
+ * Prepare the checks of `inventory` that c->only selects one at a time, each
+ * in a slot of c->slots when that is set and commands are not only printed.
+ * Return 0, or -1.
+ */
+static int prepare_serial(struct hp_context *c, struct inventory *inventory)
+{
+    int bad = 0;
+#ifndef _WIN32
+    int held = c->slots && !c->print;
+    int fd = held ? open(c->slots, O_RDWR | O_CREAT, 0600) : -1;
+    if (held && fd < 0)
+        return -1;
+#endif
+    for (size_t i = 0; !bad && i < inventory->count; i++) {
+        struct hp_check *check = &inventory->checks[i];
+        if (c->only && strcmp(c->only, json_text(check->entry, "assertion_id")))
+            continue;
+#ifdef _WIN32
+        bad = prepare_check(c, check);
+#else
+        /* The process ID spreads the preparations' waits over the slots. */
+        bad = prepare_held(c, check, fd, (size_t)getpid());
+#endif
+    }
+#ifndef _WIN32
+    if (fd >= 0)
+        close(fd);
+#endif
+    return bad ? -1 : 0;
+}
+
+/**
+ * Write the inventory of group c->group to c->output, its programs under
+ * `base`: find the group's checks, prepare those that c->only selects, and
+ * record them with the manifest's digest and the compiler.
+ *
+ * With --print-commands, prepare and record nothing but print the commands.
+ * Return 0, or -1.
+ */
 static int inventories(struct hp_context *c, const char *base)
 {
     struct inventory inventory = {0};
@@ -955,17 +1049,14 @@ static int inventories(struct hp_context *c, const char *base)
     if (!bad && parallel)
         bad = prepare_parallel(c, &inventory);
 #endif
+    if (!bad && !parallel)
+        bad = prepare_serial(c, &inventory);
     for (size_t i = 0; !bad && i < inventory.count; i++) {
         struct hp_check *check = &inventory.checks[i];
-        const char *id = json_text(check->entry, "assertion_id");
-        if (c->only && strcmp(c->only, id))
+        if (c->only && strcmp(c->only, json_text(check->entry, "assertion_id")))
             continue;
-        if (!parallel)
-            bad = prepare_check(c, check);
-        if (!bad) {
-            hp_item(checks, check->entry);
-            check->entry = NULL;
-        }
+        hp_item(checks, check->entry);
+        check->entry = NULL;
     }
     for (size_t i = 0; i < inventory.count; i++)
         check_free(&inventory.checks[i]);
