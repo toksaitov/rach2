@@ -96,7 +96,9 @@ Task 22 writes this section.
 
 ### On Rach2
 
-Tasks 20 and 27 write this section.
+On Rach2, `make -f guest.mk` in a writable copy of `/src/term`, or in `/src/term` itself as root, builds `term` with pdpmake and the staged TinyCC through `/bin/cc`, on either architecture. The images that stage the kernel's sources (`os-real`, `os-real-gnu`, `grub-test` and `rach2-metal-disk`) stage this directory as `/src/term`, with libtsm's patched sources beside it as `vendor/libtsm.tar.bz2`, which `build_libtsm.sh` packs, and their list as `vendor/libtsm.mk`, a copy of [`vendor/libtsm/sources.mk`](../vendor/libtsm/sources.mk).
+
+[`guest.mk`](guest.mk) unpacks the archive into `vendor/libtsm` as its first prerequisite, compiles the files of `sources.mk` and of libtsm's list with one set of flags, and links the objects with musl's `libc.a` to `term.new`, which it renames to `term`. A POSIX makefile has one rule for every `.c`, so term's files take libtsm's flags, `-Dwcwidth=tsm_wcwidth` among them. TinyCC does not define `__SIZEOF_POINTER__`, which libtsm's `shl-macro.h` tests, so the makefile gives it from `uname -m`. TinyCC 0.9.27 compiles every file without a warning on both architectures. `tests/run style` checks with `tools/verify/guestcheck.c` that the object list is the two lists, that the archive is unpacked first and that the link goes through `term.new`.
 
 ## Tests
 
