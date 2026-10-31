@@ -1118,6 +1118,81 @@ static const char *acpi_table_path(const char *path)
     return strchr(path, ':') == NULL ? path : NULL;
 }
 
+/**
+ * Check profile `p` against site `s`, the audio file `audio` and the size of
+ * `out`, and write the -cpu value into `cpu`, of `size` bytes.
+ *
+ * @return 0, or the error etude_qemu_argv returns.
+ */
+static int argv_check(const struct etude_qemu_profile *p, const struct etude_qemu_site *s,
+                      const char *audio, const struct etude_qemu_line *out, char *cpu, size_t size)
+{
+    int x86_64 = machine_x86_64(p);
+    int e;
+
+    if ((e = profile_check(p)) != 0)
+        return e;
+    if ((e = audio_check(p->audio, audio)) != 0)
+        return e;
+    if (boundary(p) && !s->boundary_lazy)
+        return ENOTSUP;
+    if (etude_accel_name(s->accel) == NULL || (x86_64 ? s->qemu_x86_64 : s->qemu_i686) == NULL)
+        return EINVAL;
+    if (p->firmware == ETUDE_FIRMWARE_OVMF && (x86_64 ? s->ovmf_x86_64 : s->ovmf_i686) == NULL)
+        return ENOENT;
+    if (out->max < 1 || out->size < 1 ||
+        etude_processor_cpu(etude_processor_find(p->cpu), cpu, size) != 0)
+        return E2BIG;
+    return 0;
+}
+
+/**
+ * Add profile `p`'s machine options: the q35 chipset, no i8042, the SMBIOS
+ * vendor and an ACPI table.
+ *
+ * @return 0, or EINVAL for an ACPI table that -acpitable cannot take.
+ */
+static int add_machine(struct line *l, const struct etude_qemu_profile *p)
+{
+    const char *table;
+
+    if (p->q35) {
+        add(l, 0, "-machine");
+        add(l, 0, "q35");
+    }
+    if (p->no_i8042) {
+        add(l, 0, "-machine");
+        add(l, 0, "i8042=off");
+    }
+    if (p->smbios_vendor != NULL) {
+        add(l, 0, "-smbios");
+        add(l, 1, "type=0,vendor=%s", p->smbios_vendor);
+    }
+    if (p->acpi_table == NULL)
+        return 0;
+    if ((table = acpi_table_path(p->acpi_table)) == NULL)
+        return EINVAL;
+    add(l, 0, "-acpitable");
+    add(l, QUOTE_COMMAS, "file=%s", table);
+    return 0;
+}
+
+/** Add what profile `p`'s firmware boots: the kernel and RAM image, or OVMF. */
+static void add_firmware(struct line *l, const struct etude_qemu_profile *p, const char *ovmf)
+{
+    if (p->firmware == ETUDE_FIRMWARE_DIRECT) {
+        add(l, 0, "-kernel");
+        add(l, 0, "%s", p->kernel);
+        if (p->initrd != NULL) {
+            add(l, 0, "-initrd");
+            add(l, 0, "%s", p->initrd);
+        }
+    } else if (p->firmware == ETUDE_FIRMWARE_OVMF) {
+        add(l, 0, "-drive");
+        add(l, 1, "if=pflash,format=raw,readonly=on,file=%s", ovmf);
+    }
+}
+
 int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_site *s,
                     const char *console, const char *qmp, const char *audio,
                     const struct etude_qemu_line *out)
@@ -1131,19 +1206,8 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     size_t i;
     int e;
 
-    if ((e = profile_check(p)) != 0)
+    if ((e = argv_check(p, s, audio, out, cpu, sizeof cpu)) != 0)
         return e;
-    if ((e = audio_check(p->audio, audio)) != 0)
-        return e;
-    if (boundary(p) && !s->boundary_lazy)
-        return ENOTSUP;
-    if (etude_accel_name(s->accel) == NULL || program == NULL)
-        return EINVAL;
-    if (p->firmware == ETUDE_FIRMWARE_OVMF && ovmf == NULL)
-        return ENOENT;
-    if (out->max < 1 || out->size < 1 ||
-        etude_processor_cpu(etude_processor_find(p->cpu), cpu, sizeof cpu) != 0)
-        return E2BIG;
     out->argv[0] = NULL;
     add(&l, 0, "%s", program);
     add(&l, 0, "-accel");
@@ -1163,37 +1227,9 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     add(&l, 0, "%s", number);
     if (boundary(p))
         add_boundary_memory(&l, number);
-    if (p->q35) {
-        add(&l, 0, "-machine");
-        add(&l, 0, "q35");
-    }
-    if (p->no_i8042) {
-        add(&l, 0, "-machine");
-        add(&l, 0, "i8042=off");
-    }
-    if (p->smbios_vendor != NULL) {
-        add(&l, 0, "-smbios");
-        add(&l, 1, "type=0,vendor=%s", p->smbios_vendor);
-    }
-    if (p->acpi_table != NULL) {
-        const char *table = acpi_table_path(p->acpi_table);
-
-        if (table == NULL)
-            return EINVAL;
-        add(&l, 0, "-acpitable");
-        add(&l, QUOTE_COMMAS, "file=%s", table);
-    }
-    if (p->firmware == ETUDE_FIRMWARE_DIRECT) {
-        add(&l, 0, "-kernel");
-        add(&l, 0, "%s", p->kernel);
-        if (p->initrd != NULL) {
-            add(&l, 0, "-initrd");
-            add(&l, 0, "%s", p->initrd);
-        }
-    } else if (p->firmware == ETUDE_FIRMWARE_OVMF) {
-        add(&l, 0, "-drive");
-        add(&l, 1, "if=pflash,format=raw,readonly=on,file=%s", ovmf);
-    }
+    if ((e = add_machine(&l, p)) != 0)
+        return e;
+    add_firmware(&l, p, ovmf);
     add_ahci(&l, p);
     for (i = 0; i < disk_count(p->disks); i++)
         add_disk(&l, &p->disks[i], i, p->q35, &ide, &ahci);
