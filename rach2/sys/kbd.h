@@ -1,6 +1,6 @@
 /*
- * kbd.h: the ring of raw scancodes a program that holds /fb reads its keys
- * from, and the map between set-1 codes and Linux's key codes.
+ * kbd.h: the map between set-1 codes, which a PS/2 keyboard sends and the
+ * console's raw view gives, and Linux's key codes, which name every key.
  */
 #ifndef _KBD_H_
 #define _KBD_H_
@@ -9,22 +9,6 @@
 
 #include "lib/kint.h"
 #include "lib/kdef.h"
-
-/*
- * The ring holds 63 codes, filled by the input layer with every code from
- * either keyboard, the one on the 8042 and the one on USB, from interrupt
- * context. Its one reader is the process that holds /fb, through read(2) on
- * the console. Neither side takes a lock.
- */
-
-/** Push a scancode to the ring; dropped if the ring is full. */
-void kbd_push_scancode(uint8_t sc);
-
-/** The codes the ring has room for now, from 0 to 63. */
-int kbd_scancode_room(void);
-
-/** Empty the scancode ring, when a process takes /fb. */
-void kbd_clear_scancodes(void);
 
 /**
  * Linux's key code, a KEY_* of <linux/input-event-codes.h>, for the set-1
@@ -45,9 +29,5 @@ unsigned set1_scancode(int keycode);
 /** Set in `keys`, a set of EVDEV_KEY_BYTES bytes, the bit of every key
  * `set1_keycode` names, for a keyboard's registration. */
 void set1_keys(uint8_t *keys);
-
-/** Read up to `max_count` scancodes into `buf` without waiting; returns the
- * count (0 if empty). */
-int kbd_read_scancodes(uint8_t *buf, int max_count);
 
 #endif

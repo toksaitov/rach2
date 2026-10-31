@@ -22,8 +22,7 @@
  * this order, to the keyboard's event device (evdev.h), to the console's
  * keyboard (`kd_key_event`, kd.h), which translates it through the keymap,
  * and as the set-1 bytes of the event, the raw view `input_raw_bytes` gives,
- * to the ring of kbd.h a program holding /fb reads and to the console's raw
- * mode (`kd_raw_code`).
+ * to the console's raw mode (`kd_raw_code`).
  *
  * Every keyboard's interrupt and the tick run on the boot processor with
  * interrupts off, so events reach their consumers one at a time and in
@@ -87,9 +86,7 @@ void input_keyboard_detach(struct input_keyboard *kb);
  * ends a suspend in force (`suspend_wake`) and puts off the console's
  * blanking (`console_poke`). A press starts the repeat of its key, in place
  * of any other's, unless it is a modifier or a lock; a release of the
- * repeating key stops it. A press or a repeat goes to the ring of kbd.h only
- * while it leaves 16 slots free, so that the releases still fit when the
- * ring's reader falls behind.
+ * repeating key stops it.
  */
 void input_key_event(struct input_keyboard *kb, uint32_t scan, unsigned int keycode, int down);
 

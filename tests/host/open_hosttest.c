@@ -472,8 +472,9 @@ int vfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
 }
 
 /** Fail the row: no row opens the framebuffer by name. */
-int32_t fb_take(void)
+int32_t fb_take(struct fd_entry *e)
 {
+    (void)e;
     check(0, "unexpected framebuffer open");
     return -EBUSY;
 }
@@ -487,12 +488,6 @@ uint32_t fb_size(void)
 
 /* The framebuffer's operations, which no row reaches. */
 const struct file_ops fb_file_ops;
-
-/** Fail the row: no row opens the framebuffer. */
-void kbd_clear_scancodes(void)
-{
-    check(0, "unexpected framebuffer open");
-}
 
 /** Fail the row: no row opens the mouse. */
 bool mouse_is_available(void)

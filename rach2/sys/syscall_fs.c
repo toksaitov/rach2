@@ -2351,8 +2351,7 @@ static int name_is(const char *name, const char *lit)
  * last close compare too, so any of its threads may use it. The open takes
  * the display at mode 13h for a new owner (`fb_take`), unblanking it first;
  * a second open by the same owner keeps its mode. The console's
- * backlight would stay off under the picture. It drops the scancodes the
- * keyboard queued for the shell before it. O_CLOEXEC and O_NONBLOCK are
+ * backlight would stay off under the picture. O_CLOEXEC and O_NONBLOCK are
  * kept; the access mode is not, since the descriptor reads and writes.
  */
 static int32_t open_framebuffer(int flags)
@@ -2379,8 +2378,6 @@ static int32_t open_framebuffer(int flags)
     entry->ofd->offset = 0;
     entry->ofd->status_flags = (flags & O_NONBLOCK) ? OFD_NONBLOCK : 0u;
     entry->flags = FD_FLAG_READ | FD_FLAG_WRITE | ((flags & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0u);
-
-    kbd_clear_scancodes();
 
     return fd;
 }
@@ -4468,9 +4465,9 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
  * console, the keyboard interrupt cooks keystrokes into `console_tty` and
  * not into the kernel shell, so the discipline echoes and edits them and
  * turns ^C into SIGINT; `stdin_waiting_proc`, set for the length of the
- * read, keeps the shell's scrollback keys off. A process whose thread group
- * owns the framebuffer reads raw scancodes instead, for a game's controls,
- * past the line discipline and without waiting.
+ * read, keeps the shell's scrollback keys off. A game that owns the
+ * framebuffer reads its keys here too, after it has put the keyboard in
+ * K_RAW or K_MEDIUMRAW and the terminal in raw mode (kd.h).
  *
  * A session leader with no controlling terminal that reads the console
  * takes it as its only one (`tty_make_sole_ctty`), its group the foreground
@@ -4540,13 +4537,6 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
 
         if (!(entry->flags & FD_FLAG_READ)) {
             return -EBADF;
-        }
-
-        if (fb_owner_pid == current_proc->tgid) {
-            if (!user_buffer_ok((__force uintptr_t)buf, count, 1)) {
-                return -EFAULT;
-            }
-            return kbd_read_scancodes((uint8_t __force *)buf, (int)count);
         }
 
         want = count;
