@@ -11,9 +11,10 @@
 
 include term/sources.mk
 
-# The dialect is libtsm.h's, C99.
-TERM_CFLAGS = -std=c99 -O2 -Wall -Wextra -Werror -MMD -MP
-TERM_HOST_CFLAGS = $(HOSTCFLAGS) -std=c99 -MMD -MP
+# The dialect is libtsm.h's, C99. rach2/include has <rach2/fb.h>, which the
+# images stage under /include for the guest build.
+TERM_CFLAGS = -std=c99 -O2 -Wall -Wextra -Werror -MMD -MP -Irach2/include
+TERM_HOST_CFLAGS = $(HOSTCFLAGS) -std=c99 -MMD -MP -Irach2/include
 
 TERM_BIN = $(ARCH_BUILD)/term/term
 TERM_OBJS = $(addprefix $(ARCH_BUILD)/term/,$(TERM_SRC:.c=.o))
