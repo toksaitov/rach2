@@ -1,0 +1,94 @@
+.Dd November 1, 2026
+.Dt VCONSOLE.CONF 5
+.Os
+.Sh NAME
+.Nm vconsole.conf
+.Nd console keyboard settings applied at boot
+.Sh SYNOPSIS
+.Pa /etc/vconsole.conf
+.Sh DESCRIPTION
+.Xr init 8
+reads this optional file once, before starting the first console session.
+Each line is an assignment of the form
+.Li NAME=value .
+Blank lines and lines whose first non-space character is a hash or
+semicolon are ignored.
+Spaces around the name and value are removed.
+A whole value may be enclosed in single or double quotes.
+There is no shell execution, expansion, escaping, or continuation.
+The last assignment of a name wins.
+Unknown names are ignored.
+.Pp
+KEYMAP and KEYMAP_TOGGLE use systemd's variable names.
+KEYMAP_OPTIONS, REPEAT_DELAY, REPEAT_RATE and NUMLOCK are Rach2 extensions.
+.Bl -tag -width KEYMAP_OPTIONS
+.It Va KEYMAP
+The base text keymap, sought under
+.Pa /usr/share/kbd/keymaps .
+An empty value selects
+.Li us .
+.It Va KEYMAP_TOGGLE
+An optional additional map loaded after the base map, for a layout switch.
+For example,
+.Li alt-shift .
+.It Va KEYMAP_OPTIONS
+Up to sixteen space-separated overlay names loaded after KEYMAP_TOGGLE.
+For example,
+.Li caps-ctrl .
+.It Va REPEAT_DELAY
+An integer delay in milliseconds, from 1 through 60000.
+.It Va REPEAT_RATE
+An integer repeat rate per second, from 1 through 1000.
+When both repeat settings are empty, the repeat configuration is unchanged.
+When only one is set,
+.Xr kbdrate 8
+uses its default for the other.
+.It Va NUMLOCK
+.Li yes
+or
+.Li 1
+sets Num Lock and its default;
+.Li no
+or
+.Li 0
+clears them.
+An empty value leaves the setting unchanged.
+.El
+.Pp
+Map names start with an ASCII letter or digit and otherwise contain only
+letters, digits, periods, underscores, plus signs and hyphens.
+Paths and tool options are refused.
+Values are at most 255 bytes and lines at most 1023 bytes.
+.Pp
+Init runs
+.Li loadkeys -u
+with the base map, the toggle map and then the overlays;
+then it runs
+.Li kbdrate
+and
+.Li setleds
+for the settings present.
+Each command has standard input on
+.Pa /dev/console .
+A malformed or unreadable file causes init to load
+.Li us
+instead of applying any partial settings.
+After a command fails, init stops the sequence and tries
+.Li loadkeys -u us ,
+since a failed load may already have changed part of the keyboard map.
+Login still starts after a failure.
+A missing file leaves the kernel's defaults unchanged.
+.Sh EXAMPLES
+.Bd -literal -offset indent
+KEYMAP=kg
+KEYMAP_TOGGLE=alt-shift
+KEYMAP_OPTIONS="caps-ctrl"
+REPEAT_DELAY=250
+REPEAT_RATE=30
+NUMLOCK=yes
+.Ed
+.Sh SEE ALSO
+.Xr loadkeys 1 ,
+.Xr setleds 1 ,
+.Xr init 8 ,
+.Xr kbdrate 8

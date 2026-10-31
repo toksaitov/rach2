@@ -114,13 +114,13 @@ netup: $(SRC_netup) $(HDR_netup)
 reflash: $(SRC_reflash) $(HDR_reflash)
 	$(UCC) $(UFLAGS) -o reflash.new $(SRC_reflash)
 	mv reflash.new reflash
-init-shell: $(SRC_init_shell)
+init-shell: $(SRC_init_shell) $(HDR_init_shell)
 	$(UCC) $(UFLAGS) -o init-shell.new $(SRC_init_shell)
 	mv init-shell.new init-shell
-init-login: $(SRC_init_login)
+init-login: $(SRC_init_login) $(HDR_init_login)
 	$(UCC) $(UFLAGS) $(DEF_init_login) -o init-login.new $(SRC_init_login)
 	mv init-login.new init-login
-init-metal: $(SRC_init_metal)
+init-metal: $(SRC_init_metal) $(HDR_init_metal)
 	$(UCC) $(UFLAGS) $(DEF_init_metal) -o init-metal.new $(SRC_init_metal)
 	mv init-metal.new init-metal
 init-recovery: $(SRC_init_recovery) $(HDR_init_recovery)

@@ -356,6 +356,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "vconsole",
+          "checks": "tests/host/vconsole_hosttest.c checks console assignments, command arguments and US fallback after each failed tool",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "initpolicy",
           "checks": "tests/host/initpolicy_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"

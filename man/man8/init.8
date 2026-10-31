@@ -15,6 +15,13 @@ A pause between attempts prevents a failing login from being retried
 continuously.
 It never exits; the kernel panics if init dies.
 .Pp
+Before the first console session it reads optional
+.Pa /etc/vconsole.conf
+and applies the keyboard settings with kbd's tools.
+See
+.Xr vconsole.conf 5 .
+A failure is reported and does not prevent login.
+.Pp
 One source produces four builds, selected by the image and installed as
 .Pa /sbin/init :
 .Bl -tag -width init-recovery

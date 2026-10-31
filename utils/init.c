@@ -52,6 +52,8 @@
 #include "gptdisk.h"
 #endif
 
+#include "vconsole.h"
+
 extern char **environ;
 
 #ifdef INIT_CONSOLE_LOGIN
@@ -234,6 +236,55 @@ static void session_ended(int status, time_t lived)
     }
 }
 #endif
+
+/**
+ * Run one keyboard tool with standard input on the physical console.
+ * Return 0 only after a successful exit; init keeps its own descriptors.
+ */
+static int console_tool(char **argv, void *data)
+{
+    pid_t child;
+    int status, fd;
+    (void)data;
+    child = fork();
+    if (child < 0)
+        return -1;
+    if (!child) {
+        fd = open("/dev/console", O_RDWR);
+        if (fd < 0 || dup2(fd, STDIN_FILENO) < 0)
+            _exit(126);
+        if (fd > STDERR_FILENO)
+            close(fd);
+        execv(argv[0], argv);
+        _exit(127);
+    }
+    while (waitpid(child, &status, 0) < 0) {
+        if (errno != EINTR)
+            return -1;
+    }
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
+}
+
+/** Read the keyboard settings once, before any console session starts. */
+static void configure_console(void)
+{
+    struct vconsole conf;
+    FILE *stream = fopen("/etc/vconsole.conf", "r");
+    int bad;
+    if (!stream && errno == ENOENT)
+        return;
+    vconsole_defaults(&conf);
+    bad = !stream || vconsole_read(stream, &conf);
+    if (stream && fclose(stream))
+        bad = 1;
+    if (bad) {
+        fprintf(stderr, "init: invalid or unreadable /etc/vconsole.conf; loading us\n");
+        vconsole_defaults(&conf);
+    }
+    if (vconsole_apply(&conf, console_tool, NULL)) {
+        fprintf(stderr, "init: console keyboard setup failed; tried us\n");
+    }
+}
 
 /**
  * Read at most `size` - 1 bytes of the file `path` into `text` and end them
@@ -2318,6 +2369,7 @@ int main(void)
 
     catch_shutdown();
     set_up();
+    configure_console();
 #ifdef INIT_METAL
     services_found(&services);
 #endif
