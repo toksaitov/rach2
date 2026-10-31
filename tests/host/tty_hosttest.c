@@ -21,6 +21,12 @@
  * a master read begins with the status byte, and TCFLSH on the master drops
  * the slave's output. A read that does not wait ends the console latency
  * span, and slave output takes no more of the master's ring than it needs.
+ *
+ * A noncanonical read waits by POSIX's four cases of VMIN and VTIME, on a
+ * slave and on the console, under a model tick: each row's steps give the
+ * tick, the input that arrives then or the timer's wake, and the deadline the
+ * reader must have armed in `wakeup_tick` by then. A slave reader whose
+ * master closes returns 0, and so does each read after it.
  */
 #define WAIT_QUEUE_HOSTTEST
 #define wq_wait_event model_wait_event
@@ -46,6 +52,7 @@ static const char *serial_bytes;
 static void (*scheduled_action)(void);
 static const char *wake_detail;
 static char bytes[512];
+volatile uint32_t kernel_ticks;
 
 #define CHECK(condition, detail)                        \
     do {                                                \
@@ -203,6 +210,12 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
 uint32_t timer_now_us(void)
 {
     return 1;
+}
+
+/** The model's tick, which the rows set. */
+uint32_t rtc_ticks_now(void)
+{
+    return kernel_ticks;
 }
 
 /** 1 s: no row reads a pty's times. */
@@ -682,6 +695,152 @@ static void copy_refit(void)
           "the second newline follows the master's read");
 }
 
+/* The tick at which a timed row's read begins. */
+#define T0 1000u
+
+/* A step of a timed row, run while the reader waits: the tick it runs at,
+ * the bytes that arrive then, or NULL for the timer's wake, and the deadline
+ * the reader has armed, 0 for none. */
+struct timed_step {
+    uint32_t tick;
+    const char *input;
+    uint32_t deadline;
+};
+
+static const struct timed_step *steps;
+static int nsteps, step, timed_console;
+
+/** The length of the string `str`. */
+static int length(const char *str)
+{
+    int n = 0;
+
+    while (str[n]) {
+        n++;
+    }
+    return n;
+}
+
+/** Run the next step: check the reader's deadline, move the tick, and give
+ * the input to the master or the console's serial port, or wake the reader
+ * at its deadline as the tick's `proc_wake_sleepers` does. */
+static void timed_action(void)
+{
+    const struct timed_step *s = &steps[step++];
+
+    CHECK(consumer.wakeup_tick == s->deadline, "a timed read arms the deadline POSIX gives it");
+    kernel_ticks = s->tick;
+    if (s->input && timed_console) {
+        serial_bytes = s->input;
+        serial_pos = 0;
+        serial_len = length(s->input);
+        tty_console_poll();
+    } else if (s->input) {
+        CHECK(ptm_write(&master, s->input, (uint32_t)length(s->input)) == length(s->input),
+              "the master writes a timed row's input");
+    } else if (consumer.wakeup_tick != 0 && (int32_t)(kernel_ticks - consumer.wakeup_tick) >= 0) {
+        consumer.wakeup_tick = 0;
+        consumer.state = PROC_READY;
+    }
+    if (step < nsteps) {
+        scheduled_action = timed_action;
+    }
+}
+
+/**
+ * Read `count` bytes into `out` from the slave, or from the console with
+ * `console`, in raw mode with `vmin` and `vtime`, while the `n` steps at `s`
+ * run one each time the reader blocks; return what the read returns. The
+ * read must block once for each step, run them all and clear its deadline.
+ */
+static int timed_read(int console, int vmin, int vtime, char *out, int count,
+                      const struct timed_step *s, int n)
+{
+    struct tty *t = console ? &console_tty : &pair.slave;
+    int rc;
+
+    setup_pair();
+    consumer.sid = 5;
+    consumer.tgid = consumer.pid = consumer.pgid = 6;
+    if (console) {
+        tty_console_init();
+        tty_set_session(&console_tty, 5, 6);
+        serial_pos = serial_len = 0;
+    }
+    t->ldisc.tio.c_lflag &= ~(ICANON | ECHO | ISIG);
+    t->ldisc.tio.c_cc[VMIN] = (uint8_t)vmin;
+    t->ldisc.tio.c_cc[VTIME] = (uint8_t)vtime;
+    kernel_ticks = T0;
+    steps = s;
+    nsteps = n;
+    step = 0;
+    timed_console = console;
+    scheduled_action = n > 0 ? timed_action : NULL;
+    wake_detail = "a timed reader wakes for its input or its deadline";
+    if (console) {
+        rc = tty_read(&console_tty, (unsigned char *)out, count, 0);
+    } else {
+        rc = pts_read(&slave, out, (uint32_t)count);
+    }
+    CHECK(step == n && switches == n, "a timed read blocks once for each step");
+    CHECK(consumer.wakeup_tick == 0, "a timed read clears its deadline");
+    return rc;
+}
+
+/** POSIX's four cases of VMIN and VTIME in a noncanonical read, by ticks. */
+static void timed_reads(void)
+{
+    static const struct timed_step min_only[] = {{T0 + 5, "ab", 0}, {T0 + 500, "c", 0}};
+    static const struct timed_step one_byte[] = {{T0 + 5, "a", 0}};
+    static const struct timed_step expire[] = {{T0 + 20, NULL, T0 + 20}};
+    static const struct timed_step early[] = {{T0 + 5, "a", T0 + 20}};
+    static const struct timed_step inter[] = {
+        {T0 + 50, "a", 0}, {T0 + 57, "b", T0 + 60}, {T0 + 67, NULL, T0 + 67}};
+    static const struct timed_step full[] = {{T0 + 5, "a", 0}, {T0 + 8, "b", T0 + 15}};
+    static const struct timed_step serial[] = {{T0 + 3, "k", 0}, {T0 + 13, NULL, T0 + 13}};
+    char out[32];
+
+    CHECK(timed_read(0, 0, 0, out, 8, NULL, 0) == 0, "VMIN 0 and VTIME 0 return at once");
+    CHECK(timed_read(0, 3, 0, out, 8, min_only, 2) == 3 && out[0] == 'a' && out[2] == 'c',
+          "VMIN 3 and VTIME 0 wait for three bytes with no deadline");
+    CHECK(timed_read(0, 3, 0, out, 1, one_byte, 1) == 1 && out[0] == 'a',
+          "a read for fewer bytes than VMIN returns with as many");
+    CHECK(timed_read(0, 0, 2, out, 8, expire, 1) == 0,
+          "VMIN 0 and VTIME 2 return none twenty ticks after the read began");
+    CHECK(timed_read(0, 0, 2, out, 8, early, 1) == 1 && out[0] == 'a',
+          "VMIN 0 and VTIME 2 return the first byte before the deadline");
+    CHECK(timed_read(0, 18, 1, out, 18, inter, 3) == 2 && out[0] == 'a' && out[1] == 'b',
+          "VMIN 18 and VTIME 1 wait for a first byte and return short ten ticks after the last");
+    CHECK(timed_read(0, 2, 1, out, 8, full, 2) == 2,
+          "VMIN 2 and VTIME 1 return once two bytes are there");
+    CHECK(timed_read(1, 18, 1, out, 18, serial, 2) == 1 && out[0] == 'k',
+          "the console's VMIN 18 and VTIME 1 return a serial byte ten ticks after it");
+}
+
+/** Close the master while the slave reader waits. */
+static void hangup_action(void)
+{
+    ptm_close(&master);
+}
+
+/** A slave reader whose master closes returns 0, and the reads after it
+ * return 0 without waiting, though the canonical EOF mark was taken. */
+static void hangup_read(void)
+{
+    char out[4];
+
+    setup_pair();
+    consumer.sid = 5;
+    consumer.tgid = consumer.pid = consumer.pgid = 6;
+    pair.slave.ldisc.tio.c_lflag |= ICANON;
+    scheduled_action = hangup_action;
+    wake_detail = "the master's close wakes the slave reader";
+    CHECK(pts_read(&slave, out, sizeof(out)) == 0 && switches == 1,
+          "a slave reader whose master closes reads 0");
+    CHECK(pts_read(&slave, out, sizeof(out)) == 0 && switches == 1,
+          "a slave read after the master's close reads 0 at once");
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {
@@ -697,6 +856,8 @@ int main(void)
     nonblocking_latency();
     output_growth();
     copy_refit();
+    timed_reads();
+    hangup_read();
     printf("tty-test: result: %d failures\n", failures);
     return failures ? 1 : 0;
 }

@@ -4,7 +4,8 @@
  * host-deps: rach2/sys/tty/n_tty.c
  *
  * The cooked line editor (ERASE, WERASE and KILL with ECHOE's rub-out, and
- * the rules by which VEOF and a newline end a line), raw mode's VMIN, the
+ * the rules by which VEOF and a newline end a line), raw mode's VMIN and
+ * VTIME, the
  * recognition of ISIG's control characters, and the OPOST and ONLCR mapping
  * of output have no hardware under them, and every console read goes
  * through them, so they run natively here under ASan and UBSan with the echo
@@ -486,6 +487,55 @@ int main(void)
     t.tio.c_cc[VMIN] = 0;
     CHECK(n_tty_readable(&t) == 1);
     CHECK(n_tty_read(&t, buf, sizeof(buf)) == 0); /* ...but nothing to return */
+
+    /* A read's own test, n_tty_read_ready, in POSIX's four cases of VMIN
+     * and VTIME, with its timer run out or not. VMIN 0, VTIME 0: at once. */
+    n_tty_init(&t);
+    cap_reset(&cp);
+    t.tio.c_lflag &= ~(ICANON | ISIG | ECHO);
+    t.tio.c_cc[VMIN] = 0;
+    CHECK(n_tty_read_timer(&t) == N_TTY_TIMER_NONE);
+    CHECK(n_tty_read_ready(&t, 8, 0) != 0);
+    /* VMIN 3, VTIME 0: three bytes, or the read's count when that is less;
+     * poll still wants VMIN. */
+    t.tio.c_cc[VMIN] = 3;
+    feed(&t, &cp, 'a');
+    CHECK(n_tty_read_timer(&t) == N_TTY_TIMER_NONE);
+    CHECK(n_tty_read_ready(&t, 8, 1) == 0);
+    CHECK(n_tty_read_ready(&t, 1, 0) != 0 && n_tty_readable(&t) == 0);
+    feed_str(&t, &cp, "bc");
+    CHECK(n_tty_read_ready(&t, 8, 0) != 0);
+    /* VMIN 0, VTIME 2: the first byte, or none once the timer runs out. */
+    n_tty_init(&t);
+    t.tio.c_lflag &= ~(ICANON | ISIG | ECHO);
+    t.tio.c_cc[VMIN] = 0;
+    t.tio.c_cc[VTIME] = 2;
+    CHECK(n_tty_read_timer(&t) == N_TTY_TIMER_READ);
+    CHECK(n_tty_read_ready(&t, 8, 0) == 0 && n_tty_readable(&t) != 0);
+    CHECK(n_tty_read_ready(&t, 8, 1) != 0);
+    feed(&t, &cp, 'a');
+    CHECK(n_tty_read_ready(&t, 8, 0) != 0);
+    /* VMIN 18, VTIME 1, as kbd's showkey sets them: 18 bytes, or fewer
+     * once the timer runs out after one; none waits for the first. */
+    n_tty_init(&t);
+    t.tio.c_lflag &= ~(ICANON | ISIG | ECHO);
+    t.tio.c_cc[VMIN] = 18;
+    t.tio.c_cc[VTIME] = 1;
+    CHECK(n_tty_read_timer(&t) == N_TTY_TIMER_BYTE);
+    CHECK(n_tty_read_ready(&t, 18, 1) == 0);
+    feed(&t, &cp, 'a');
+    CHECK(n_tty_read_ready(&t, 18, 0) == 0 && n_tty_read_ready(&t, 18, 1) != 0);
+    for (i = 1; i < 18; i++) {
+        feed(&t, &cp, 'a');
+    }
+    CHECK(n_tty_read_ready(&t, 18, 0) != 0);
+    /* Canonical mode has no timer and waits for a line. */
+    t.tio.c_lflag |= ICANON;
+    CHECK(n_tty_read_timer(&t) == N_TTY_TIMER_NONE);
+    n_tty_init(&t);
+    t.tio.c_cc[VTIME] = 1;
+    feed(&t, &cp, 'a');
+    CHECK(n_tty_read_timer(&t) == N_TTY_TIMER_NONE && n_tty_read_ready(&t, 8, 1) == 0);
 
     /* output processing (OPOST/ONLCR/OCRNL) via n_tty_output */
 
