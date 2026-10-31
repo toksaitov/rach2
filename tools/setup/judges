@@ -11,4 +11,4 @@ clang-format: Ubuntu clang-format version 21.1.8 (6ubuntu1)
 cppcheck: Cppcheck 2.19.0
 shellcheck: version: 0.11.0
 pmccabe: @(#) pmccabe 2.8
-qemu-system-i386: QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.2)
+qemu-system-i386: QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.3)
