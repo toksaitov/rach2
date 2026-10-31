@@ -1,0 +1,4 @@
+# Exact Class.test_name|reason, sorted by name. No wildcards or empty reasons.
+# The end run establishes the list after its fixes. Later changes only remove
+# entries. A passing listed case is an error. Required terminal features are
+# never exempt; protected-prefixes.txt names their upstream classes.

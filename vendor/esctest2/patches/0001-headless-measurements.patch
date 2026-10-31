@@ -1,0 +1,145 @@
+Measure a headless terminal through its snapshot channel and report every result.
+
+The upstream driver and test methods still run on the terminal pty. Only
+screen inspection uses the optional channel; direct protocol queries keep
+their original path. DA1 checks the declared VT220/color profile rather than
+xterm build options. A final count detects interrupted or empty runs.
+
+--- a/esctest/escargs.py
++++ b/esctest/escargs.py
+@@ -67,3 +67,8 @@
+                     help="Timeout for reading reports from terminal.",
+                     default=1,
+                     type=float)
++
++parser.add_argument("--snapshot-socket", default=None,
++                    help="Read screen measurements through a term -H controller.")
++parser.add_argument("--result-file", default=None,
++                    help="Write one tab-separated status per selected test, then END.")
+--- a/esctest/esctest.py
++++ b/esctest/esctest.py
+@@ -22,6 +22,7 @@
+ 
+   parser = escargs.parser
+   escargs.args = parser.parse_args()
++  escutil.InitHost()
+ 
+   open(escargs.args.logfile, "wb")
+   global log
+@@ -167,8 +168,15 @@
+   knownBugs = 0
+   failures = []
+ 
++  results = open(escargs.args.result_file, "w") if escargs.args.result_file else None
++  count = 0
+   for name, method in MatchingNamesAndMethods():
+     status = RunTest(name, method)
++    count += 1
++    if results:
++      results.write(("SKIP" if status is None else "PASS" if status else "FAIL") +
++                    "\t" + name + "\n")
++      results.flush()
+     if status is None:
+       knownBugs += 1
+     elif status:
+@@ -178,6 +186,10 @@
+       failed += 1
+       if escargs.args.stop_on_failure:
+         break
++
++  if results:
++    results.write("END\t%d\n" % count)
++    results.close()
+ 
+   if failed > 0:
+     esclog.LogInfo(
+--- a/esctest/escutil.py
++++ b/esctest/escutil.py
+@@ -1,3 +1,5 @@
++import socket
++import os
+ import functools
+ import traceback
+ import re
+@@ -184,11 +186,44 @@
+   params = escio.ReadCSI("R")
+   return Point(int(params[1]), int(params[0]))
+ 
++gSnapshot = None
++
++def InitHost():
++  """Connect inspection before terminal setup, so a failed setup closes it."""
++  global gSnapshot
++  if escargs.args.snapshot_socket is not None:
++    gSnapshot = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
++    gSnapshot.connect(escargs.args.snapshot_socket)
++    gSnapshot.sendall(("pid %d\n" % os.getpid()).encode("ascii"))
++
++def HostMeasurement(command):
++  """Measure the parsed screen, after a CPR round trip drains preceding output.
++
++  This channel substitutes for inspection only, never a tested terminal reply.
++  Direct DECRQCRA and window-operation tests still use escio's terminal input.
++  """
++  GetCursorPosition()
++  gSnapshot.sendall((command + "\n").encode("ascii"))
++  line = b""
++  while not line.endswith(b"\n"):
++    part = gSnapshot.recv(1)
++    if not part:
++      raise esctypes.InternalError("Screen measurement channel closed")
++    line += part
++    if len(line) > 4096:
++      raise esctypes.InternalError("Screen measurement too long")
++  return line.decode("ascii").split()
++
+ def GetScreenSize():
+   """Return the terminal's screen-size in characters.
+ 
+   The size is reported for the terminal's character-cell window,
+   which is smaller than the shell-window."""
++  if escargs.args.snapshot_socket is not None:
++    fields = HostMeasurement("dump")
++    if fields[0] != "screen":
++      raise esctypes.InternalError("Invalid screen measurement")
++    return Size(int(fields[1]), int(fields[2]))
+   esccmd.XTERM_WINOPS(esccmd.WINOP_REPORT_TEXT_AREA_CHARS)
+   params = escio.ReadCSI("t")
+   return Size(params[2], params[1])
+@@ -269,12 +304,18 @@
+ 
+     expected_checksum = ord(expected_line[x])
+ 
+-    actual_checksum = GetChecksumOfRect(Rect(left=point.x(),
+-                                             top=point.y(),
+-                                             right=point.x(),
+-                                             bottom=point.y()))
++    if escargs.args.snapshot_socket is None:
++      actual_checksum = GetChecksumOfRect(Rect(left=point.x(),
++                                               top=point.y(),
++                                               right=point.x(),
++                                               bottom=point.y()))
++    else:
++      fields = HostMeasurement("cell %d %d" % (point.x() - 1, point.y() - 1))
++      if fields[0] != "cell":
++        raise esctypes.InternalError("Invalid cell measurement")
++      actual_checksum = 0 if fields[4] == "-" else int(fields[4][2:], 16)
+     # esctest is only asking for one cell at a time, which simplifies things.
+-    if escargs.args.expected_terminal == "xterm":
++    if escargs.args.expected_terminal == "xterm" and escargs.args.snapshot_socket is None:
+       if escargs.args.xterm_checksum < 279:
+         actual_checksum = 0x10000 - actual_checksum
+         # DEC terminals trim trailing blanks
+--- a/esctest/tests/da.py
++++ b/esctest/tests/da.py
+@@ -22,7 +22,9 @@
+     # 22 = color
+     # 28 = rectangular editing
+     # 29 = ANSI text locator
+-    if escargs.args.expected_terminal == "xterm":
++    if escargs.args.snapshot_socket is not None:
++      expected = [62, 22]  # term advertises VT220 with ANSI color.
++    elif escargs.args.expected_terminal == "xterm":
+       # This is for a default build. There are various options that could
+       # change this, both compile-time and run-time.  XTerm's control sequences
+       # document lists the ones it may return.  For a more comprehensive list,
