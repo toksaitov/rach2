@@ -154,10 +154,18 @@ static int gh_mock(int argc, char **argv)
     free(all);
     return status;
 }
+/** Succeed once the release has touched the whole host's hold's end. */
+static int hold_ended(void)
+{
+    char *calls = fx_read(ev("RELEASE_TEST_CALLS"));
+    int ended = calls && fx_regex(calls, "^wsl touch .*\\.end$");
+    free(calls);
+    return ended;
+}
 /**
  * Answer a WSL command as RELEASE_TEST_HOLD says: `refused`, WSL's admission
  * refuses the whole host; `claim`, it refuses the preparation's claim; and
- * `wait`, the whole host's hold runs until the release ends it, or for 30 s,
+ * `wait`, the whole host's hold runs until the release ends it or is gone,
  * while no hold reports itself held.
  */
 static int wsl_answer(int alone, int claim, int held, int claimed)
@@ -168,48 +176,77 @@ static int wsl_answer(int alone, int claim, int held, int claimed)
         return 2;
     }
     if (alone && !strcmp(how, "wait")) {
-        struct timespec pause = {0, 100000000};
-        for (unsigned i = 0; i < 300; i++) {
-            char *calls = fx_read(ev("RELEASE_TEST_CALLS"));
-            int ended = calls && fx_regex(calls, "^wsl touch .*\\.end$");
-            free(calls);
-            if (ended)
-                break;
-            nanosleep(&pause, NULL);
-        }
+        pid_t release = getppid();
+        while (!hold_ended() && getppid() == release)
+            fx_pause();
         return 0;
     }
     return (held && (!strcmp(how, "refused") || !strcmp(how, "wait"))) ||
            (claimed && !strcmp(how, "claim"));
 }
-static int ssh_mock(int argc, char **argv)
+/**
+ * Answer a command for the testing host: a script for Windows' shell or for
+ * WSL's, read from stdin and recorded line by line, or any other command,
+ * recorded as given.
+ */
+static int testing_mock(const char *command)
 {
-    const char *host = argc > 2 ? argv[argc - 2] : "", *command = argc > 1 ? argv[argc - 1] : "";
-    char line[20000];
-    if (!strcmp(host, "testing")) {
-        int windows = strstr(command, "bash.exe -l -s") != NULL;
-        if (windows || strstr(command, "wsl.exe -- bash -s")) {
-            char b[4096];
-            int prepare = 0, alone = 0, claim = 0, held = 0, claimed = 0;
-            while (fgets(b, sizeof(b), stdin)) {
-                snprintf(line, sizeof(line), "%s %s", windows ? "windows" : "wsl", b);
-                append(ev("RELEASE_TEST_CALLS"), line);
-                prepare |= strstr(b, " run routine-prepare ") != NULL;
-                alone |= strstr(b, "etude-launch alone ") != NULL;
-                claim |= strstr(b, "etude-launch build ") != NULL;
-                held |= !strncmp(b, "test -e ", 8) && strstr(b, ".held") != NULL;
-                claimed |= !strncmp(b, "test -e ", 8) && strstr(b, ".claimed") != NULL;
-            }
-            if (windows)
-                puts(prepare && !*ev("RELEASE_TEST_PREPARE") ? "status 0"
-                     : prepare                               ? ev("RELEASE_TEST_PREPARE")
-                                                             : ev("RELEASE_TEST_WINDOWS"));
-            return windows ? 0 : wsl_answer(alone, claim, held, claimed);
-        }
+    char line[20000], b[4096];
+    int windows = strstr(command, "bash.exe -l -s") != NULL;
+    int prepare = 0, alone = 0, claim = 0, held = 0, claimed = 0;
+    if (!windows && !strstr(command, "wsl.exe -- bash -s")) {
         snprintf(line, sizeof(line), "ssh testing %s\n", command);
         append(ev("RELEASE_TEST_CALLS"), line);
         return 0;
     }
+    while (fgets(b, sizeof(b), stdin)) {
+        snprintf(line, sizeof(line), "%s %s", windows ? "windows" : "wsl", b);
+        append(ev("RELEASE_TEST_CALLS"), line);
+        prepare |= strstr(b, " run routine-prepare ") != NULL;
+        alone |= strstr(b, "etude-launch alone ") != NULL;
+        claim |= strstr(b, "etude-launch build ") != NULL;
+        held |= !strncmp(b, "test -e ", 8) && strstr(b, ".held") != NULL;
+        claimed |= !strncmp(b, "test -e ", 8) && strstr(b, ".claimed") != NULL;
+    }
+    if (!windows)
+        return wsl_answer(alone, claim, held, claimed);
+    puts(prepare && !*ev("RELEASE_TEST_PREPARE") ? "status 0"
+         : prepare                               ? ev("RELEASE_TEST_PREPARE")
+                                                 : ev("RELEASE_TEST_WINDOWS"));
+    return 0;
+}
+/** Answer the write of the Lenovo's release record as RELEASE_TEST_WRITES says. */
+static int release_write(void)
+{
+    FILE *f;
+    char b[4096];
+    size_t n;
+    const char *how = ev("RELEASE_TEST_WRITES");
+    if (!strcmp(how, "no")) {
+        append(ev("RELEASE_TEST_CALLS"), "machine write refused\n");
+        return 1;
+    }
+    append(ev("RELEASE_TEST_CALLS"), "machine write release\n");
+    f = !strcmp(how, "lost") ? NULL : fopen(rp(".release"), "wb");
+    while ((n = fread(b, 1, sizeof(b), stdin)))
+        if (f && fwrite(b, 1, n, f) != n) {
+            fclose(f);
+            return 1;
+        }
+    if (f)
+        fclose(f);
+    if (!strcmp(how, "unsynced"))
+        puts("sync: error syncing '/etc/rach2/release': Input/output error\nstatus 1");
+    else
+        puts("status 0");
+    return 0;
+}
+static int ssh_mock(int argc, char **argv)
+{
+    const char *host = argc > 2 ? argv[argc - 2] : "", *command = argc > 1 ? argv[argc - 1] : "";
+    char line[20000];
+    if (!strcmp(host, "testing"))
+        return testing_mock(command);
     if (!strncmp(command, "cat /sys/class/net/eth0/address;",
                  strlen("cat /sys/class/net/eth0/address;"))) {
         append(ev("RELEASE_TEST_CALLS"), "machine read\n");
@@ -243,30 +280,8 @@ static int ssh_mock(int argc, char **argv)
         return 0;
     }
     if (!strncmp(command, "{ mkdir -p /etc/rach2 && cat > /etc/rach2/release.new &&",
-                 strlen("{ mkdir -p /etc/rach2 && cat > /etc/rach2/release.new &&"))) {
-        FILE *f;
-        char b[4096];
-        size_t n;
-        const char *how = ev("RELEASE_TEST_WRITES");
-        if (!strcmp(how, "no")) {
-            append(ev("RELEASE_TEST_CALLS"), "machine write refused\n");
-            return 1;
-        }
-        append(ev("RELEASE_TEST_CALLS"), "machine write release\n");
-        f = !strcmp(how, "lost") ? NULL : fopen(rp(".release"), "wb");
-        while ((n = fread(b, 1, sizeof(b), stdin)))
-            if (f && fwrite(b, 1, n, f) != n) {
-                fclose(f);
-                return 1;
-            }
-        if (f)
-            fclose(f);
-        if (!strcmp(how, "unsynced"))
-            puts("sync: error syncing '/etc/rach2/release': Input/output error\nstatus 1");
-        else
-            puts("status 0");
-        return 0;
-    }
+                 strlen("{ mkdir -p /etc/rach2 && cat > /etc/rach2/release.new &&")))
+        return release_write();
     snprintf(line, sizeof(line), "machine write %s\n", command);
     append(ev("RELEASE_TEST_CALLS"), line);
     return 1;
@@ -1004,46 +1019,67 @@ static int mac_rows(struct release *r)
 }
 #define WINDOWS_ID   "milestone7-111111111111-windows-"
 #define WINDOWS_HELD "/mnt/d/o/" WINDOWS_ID
-static int windows_rows(struct release *r)
+/**
+ * Succeed when Windows' preparation ran under its own claim in WSL, which
+ * lasts while the release beats and ends once the preparation does.
+ */
+static int windows_prepared(struct release *r)
+{
+    return before(r,
+                  "\nwsl cd /tmp && JOBS=30 exec /usr/local/libexec/rach2/etude-launch "
+                  "build env sh -c 'touch " WINDOWS_HELD,
+                  "\nwsl test -e " WINDOWS_HELD) &&
+           called(r, "^wsl +while \\[ ! -e " WINDOWS_HELD
+                     "[0-9-]+\\.prepared ] && find " WINDOWS_HELD "[0-9-]+\\.alive -mmin -10 ") &&
+           before(r, "\nwsl test -e " WINDOWS_HELD, "\nwindows cd D:/w || ") &&
+           called(r, "^windows .* run routine-prepare phase_first_run D:/w "
+                     "D:/o/" WINDOWS_ID "[0-9-]+ both " WINDOWS_ID "[0-9-]+ C:/s .* whpx "
+                     "all > ") &&
+           before(r, " run routine-prepare ", ".prepared\n") &&
+           called(r, "^wsl touch " WINDOWS_HELD "[0-9-]+\\.prepared$") &&
+           called(r, "^windows git fetch -q D:/o/release.bundle 'refs/remotes/origin/" BRANCH
+                     "' && git checkout -q -f --detach " H " ") &&
+           called(r, "^windows export JOBS='30'$");
+}
+/**
+ * Succeed when Windows' cases ran while WSL's whole host was held, a hold that
+ * lasts while the release beats and ends once the cases do.
+ */
+static int windows_collected(struct release *r)
+{
+    return before(r, ".prepared\n",
+                  "\nwsl exec /usr/local/libexec/rach2/etude-launch alone sh -c ") &&
+           called(r, "^wsl +while \\[ ! -e " WINDOWS_HELD "[0-9-]+\\.end ] && find " WINDOWS_HELD
+                     "[0-9-]+\\.alive -mmin -10 ") &&
+           before(r, "\nwsl exec /usr/local/libexec/rach2/etude-launch alone sh -c ",
+                  " run routine-collect ") &&
+           called(r, "^windows .* run routine-collect phase_first_run D:/w "
+                     "D:/o/" WINDOWS_ID "[0-9-]+ both " WINDOWS_ID "[0-9-]+ C:/s .* whpx "
+                     "all > ") &&
+           called(r, "^wsl touch " WINDOWS_HELD "[0-9-]+\\.end$") &&
+           !called(r, "PREPARATION_CLEAN=1");
+}
+static int windows_pass_row(struct release *r)
 {
     struct fixture *f = r->f;
-    char last[400], id[200], text[4000];
-    int ok = 1;
     run(r, &(struct release_row){
                .record = r->head, .git = "yes", .machines = WINDOWS, .windows = "status 0"});
-    ok =
-        check(r,
-              f->status == 75 &&
-                  before(r,
-                         "\nwsl cd /tmp && JOBS=30 exec /usr/local/libexec/rach2/etude-launch "
-                         "build env sh -c 'touch " WINDOWS_HELD,
-                         "\nwsl test -e " WINDOWS_HELD) &&
-                  before(r, "\nwsl test -e " WINDOWS_HELD, "\nwindows cd D:/w || ") &&
-                  called(r, "^windows .* run routine-prepare phase_first_run D:/w "
-                            "D:/o/" WINDOWS_ID "[0-9-]+ both " WINDOWS_ID "[0-9-]+ C:/s .* whpx "
-                            "all > ") &&
-                  before(r, " run routine-prepare ", "\nwsl touch " WINDOWS_HELD) &&
-                  called(r, "^wsl touch " WINDOWS_HELD "[0-9-]+\\.prepared$") &&
-                  before(r, "\nwsl touch " WINDOWS_HELD,
-                         "\nwsl exec /usr/local/libexec/rach2/etude-launch alone sh -c ") &&
-                  before(r, "\nwsl exec /usr/local/libexec/rach2/etude-launch alone sh -c ",
-                         " run routine-collect ") &&
-                  called(r, "^windows .* run routine-collect phase_first_run D:/w "
-                            "D:/o/" WINDOWS_ID "[0-9-]+ both " WINDOWS_ID "[0-9-]+ C:/s .* whpx "
-                            "all > ") &&
-                  called(r, "^wsl touch " WINDOWS_HELD "[0-9-]+\\.end$") &&
-                  !called(r, "PREPARATION_CLEAN=1") &&
-                  called(r, "^git -C .* bundle create .*/state/windows.bundle "
-                            "refs/remotes/origin/" BRANCH "$") &&
-                  called(r, "^windows git fetch -q D:/o/release.bundle 'refs/remotes/origin/" BRANCH
-                            "' && git checkout -q -f --detach " H " ") &&
-                  called(r, "^scp -q -o BatchMode=yes .*/state/windows.bundle "
-                            "testing:D:/o/release.bundle$") &&
-                  called(r, "^windows export JOBS='30'$") &&
-                  count(record(r), "^windows done .* run " WINDOWS_ID) == 1 &&
-                  called(r, "^testing "),
-              "windows prepares under its own claim, then runs its cases while WSL is held") &&
-        ok;
+    return check(r,
+                 f->status == 75 && windows_prepared(r) && windows_collected(r) &&
+                     called(r, "^git -C .* bundle create .*/state/windows.bundle "
+                               "refs/remotes/origin/" BRANCH "$") &&
+                     called(r, "^scp -q -o BatchMode=yes .*/state/windows.bundle "
+                               "testing:D:/o/release.bundle$") &&
+                     count(record(r), "^windows done .* run " WINDOWS_ID) == 1 &&
+                     called(r, "^testing "),
+                 "windows prepares under its own claim, then runs its cases while WSL is held");
+}
+/** A failed run, a run without a status and a failed preparation. */
+static int windows_failure_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    char last[400], id[200];
+    int ok = 1;
     run(r, &(struct release_row){.record = r->head,
                                  .git = "yes",
                                  .machines = WINDOWS,
@@ -1077,6 +1113,13 @@ static int windows_rows(struct release *r)
                    !called(r, "etude-launch alone") && !called(r, " run routine-collect "),
                "a failed preparation ends its claim and takes no whole host") &&
          ok;
+    return ok;
+}
+/** WSL's admission refuses either hold, or the release stops in its wait. */
+static int windows_hold_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    int ok = 1;
     run(r, &(struct release_row){.record = r->head,
                                  .git = "yes",
                                  .machines = WINDOWS,
@@ -1087,7 +1130,7 @@ static int windows_rows(struct release *r)
                    fx_has(record(r), "\nfailed windows: WSL's admission did not "
                                      "give the whole host: etude-launch: result: "
                                      "refused: ") &&
-                   before(r, "\nwsl touch " WINDOWS_HELD,
+                   before(r, ".prepared\n",
                           "\nwsl exec /usr/local/libexec/rach2/etude-launch alone ") &&
                    called(r, "^wsl touch " WINDOWS_HELD "[0-9-]+\\.end$") &&
                    !called(r, " run routine-collect "),
@@ -1112,6 +1155,15 @@ static int windows_rows(struct release *r)
                    !fx_has(record(r), "\nwindows done "),
                "a release stopped while it waits for the whole host ends its hold") &&
          ok;
+    return ok;
+}
+static int windows_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    char last[400], id[200], text[4000];
+    int ok = windows_pass_row(r);
+    ok = windows_failure_rows(r) && ok;
+    ok = windows_hold_rows(r) && ok;
     snprintf(text, sizeof(text),
              "milestone 7\nsha %s\nbranch %s\nchosen %s\ntouched %s\ndispatched "
              "1760054400\nrun 101 failure\n",
