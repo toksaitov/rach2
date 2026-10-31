@@ -44,6 +44,8 @@ A test reaches the code under test in one of two ways. It names separately compi
 
 `fbdev_hosttest.c` also checks nested screen owners, event reads and polling, separate opens and inherited handles, a dead suspended owner and a dead bottom owner, allocation failure, and mode and keyboard restoration at each return. Its keyboard model is checked against the real save and restore operations by `kd_hosttest.c`. `vga_gfx_hosttest.c` requires the console to be redrawn with interrupts masked when graphics ends.
 
+`term_unicode_hosttest.c` checks the actual terminal screen layer with the CJK and rocket from the recorded agent output and explicit accent, Cyrillic, variation-selector, emoji-modifier, flag and ZWJ vectors. Every UTF-8 split point preserves each vector's cells and following sentinel. A byte-at-a-time replay observes the recording's check mark, rocket and CJK with their two-cell widths; its final screen, colors and cursor agree with a whole-input replay. The fixture is declared with `host-inputs:` so preparation fingerprints the recording as well as the compiled sources. These checks have no accepted-failure list. [`term/Readme.md`](../../term/Readme.md#esctest2-and-the-unicode-tests) states the limits they preserve.
+
 ### The header lines
 
 A test's opening comment may have five kinds of line, which the preparation tool reads:

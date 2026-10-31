@@ -110,4 +110,8 @@ On Rach2, `make -f guest.mk` in a writable copy of `/src/term`, or in `/src/term
 
 ### esctest2 and the Unicode tests
 
-Task 24 writes this section.
+[`tests/run esctest2`](../vendor/esctest2/Readme.md) runs the pinned upstream Python driver on `term -H`'s pty. The C controller uses `dump` and `cell` for screen inspection after a CPR round trip, while protocol queries keep their real replies. It checks every result against an exact list of known failures with reasons. The list is empty until the milestone's end run has fixed its findings; later changes may only remove entries, and the required terminal features cannot be exempted. No esctest2 run or accepted-failure count has been recorded yet.
+
+[`term_unicode_hosttest.c`](../tests/host/term_unicode_hosttest.c), part of the host suite, feeds the actual screen layer with decomposed accents, Cyrillic, CJK, variation selectors, emoji with modifiers, flags and ZWJ sequences at every UTF-8 split point. It replays task 12's `TERM=xterm-256color` recording of Claude Code, checks the check mark, rocket and CJK cells while they are visible, and compares the final cells, colors and cursor with input fed whole. The recording contains the agent's CJK and rocket; the other vectors are explicit additions, rather than claims about text in the recording.
+
+Combining marks and variation selectors join the preceding cell. There is no grapheme clustering or emoji composition: the skin modifier occupies two cells of its own, a flag is two regional indicators of one cell each, and the woman, ZWJ and laptop sequence occupies four cells, with the ZWJ attached to the woman. Variation selector 16 does not change the base width. Unifont draws monochrome glyphs and substitutes U+FFFD for a glyph it lacks. These limits are checked as the current cell contract; the end run records any further drawing defects here.
