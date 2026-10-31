@@ -210,6 +210,9 @@ file 04755:0:0 /usr/bin/gpasswd build/vendor/gnu/setid/gpasswd
 dir 0755 /usr/share
 dir 0755 /usr/share/udhcpc
 file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
+# The keymaps, which loadkeys finds by name, as in `loadkeys -u kg alt-shift`
+# (vendor/keymaps/Readme.md).
+tree 0644 /usr/share/kbd/keymaps/xkb vendor/keymaps/xkb
 dir 0755 /usr/share/man
 file 0644 /usr/share/man/aliases man/aliases
 tree 0644 /usr/share/man/cat1 build/man/cat1
