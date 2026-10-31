@@ -299,8 +299,9 @@ $(PDPMAKE_STAMP): vendor/pdpmake/build_pdpmake.sh $(PDPMAKE_PATCHES) \
 # kbd's six console keyboard tools, built with the same musl as init.
 $(KBD_STAMP): vendor/kbd/build_kbd.sh $(KBD_TARBALL) $(KBD_PATCHES) $(VENDOR_COMMON) $(LIBC_STAMP) | $(SHA256TOOL) $(ETUDE)
 	@rm -f $@ $(KBD_BINS)
-	+@$(STEP) -n kbd -t $@ -c $(CROSS_PREFIX)gcc -c cc $(STEP_INPUTS) -o $(KBD_STAGE) \
-	    -- sh -c 'RACH2_ARCH=$(ARCH) ./vendor/kbd/build_kbd.sh'
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else \
+	    $(STEP) -n kbd -t $@ -c $(CROSS_PREFIX)gcc -c cc $(STEP_INPUTS) -o $(KBD_STAGE) \
+	        -- sh -c 'RACH2_ARCH=$(ARCH) ./vendor/kbd/build_kbd.sh'; fi
 	@for f in $(KBD_BINS); do test -s $$f || exit 1; done
 
 # e2fsprogs, of which the images stage e2fsck, resize2fs, mke2fs, tune2fs
