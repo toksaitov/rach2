@@ -9,12 +9,12 @@ Seven images boot by BIOS (GRUB's `i386-pc` platform) and one by UEFI:
 * `bios-boot.img`: GRUB's MBR boot sector. `tools/image/grubembed.c` copies its first 440 bytes into a disk's MBR and keeps the disk identifier and partition table.
 * `disk-core.img`: the core image of an MBR disk, which `grubembed` writes into the gap after the MBR. Its prefix is `(hd0,msdos1)/boot/grub` and its embedded configuration is `tools/image/grub-embed.cfg`.
 * `disk-core-a.img` and `disk-core-b.img`: `disk-core.img` with three lines before the embedded configuration, which turn on the serial console and print `GRUBCORE=A` or `GRUBCORE=B`. `tools/image/mkgrubcore.sh` copies one out for the `grub-test` image, and `tests/run grub` installs them in turn and reads the marker to see which core ran.
-* `gpt-core.img`: the core image of a GPT disk, with the same embedded configuration, prefix `(hd0,gpt1)/boot/grub`, and the modules for a GUID partition table and `multiboot2`. `grubembed` writes it at the start of the BIOS boot partition, and `bios-boot.img` in the protective MBR loads it.
+* `gpt-core.img`: the core image of a GPT disk, with the same embedded configuration, prefix `(hd0,gpt1)/boot/grub`, and the module for a GUID partition table. `grubembed` writes it at the start of the BIOS boot partition, and `bios-boot.img` in the protective MBR loads it.
 * `eltorito.img`: the El Torito boot image of an ISO, GRUB's `i386-pc-eltorito` format, with prefix `/boot/grub` and no embedded configuration.
 * `boot-hybrid.img`: GRUB's hybrid MBR, which `xorriso` writes into an ISO so that it also boots from a USB device.
 * `bootx64.efi`: GRUB's `x86_64-efi` image, installed as `\EFI\BOOT\BOOTX64.EFI` on a GPT disk's EFI system partition, in an ISO's EFI boot image and on the install stick. Its prefix is `/boot/grub` on the device the firmware loaded it from, and its embedded configuration is `tools/image/grub-efi-embed.cfg`.
 
-`manifest.txt` lists each image's modules, under `disk-modules`, `gpt-modules`, `iso-modules` and `efi-modules`. What the two embedded configurations do, and how the builders lay out a disk or an ISO, is in [`tools/Readme.md`](../../tools/Readme.md). The images are written by `tools/image/mkdisk_grub.sh`, `mkiso.sh`, `mkinstallstick.sh` and `mkgrubcore.sh`, and by the `sealed` and `uefi` suites, which install `gpt-core.img` on a running machine.
+`manifest.txt` lists each image's modules, under `disk-modules`, `gpt-modules`, `iso-modules` and `efi-modules`. Every image has the `multiboot` and `multiboot2` loaders. The BIOS images have `vbe`, `video`, `video_fb` and `all_video`, with which GRUB sets a graphics mode through the video BIOS or a known adapter's registers when a menu entry's `gfxpayload` asks for one, and the EFI image has `efi_gop` and `efi_uga`, which pass on the firmware's framebuffer. What the two embedded configurations do, and how the builders lay out a disk or an ISO, is in [`tools/Readme.md`](../../tools/Readme.md). The images are written by `tools/image/mkdisk_grub.sh`, `mkiso.sh`, `mkinstallstick.sh` and `mkgrubcore.sh`, and by the `sealed` and `uefi` suites, which install `gpt-core.img` on a running machine.
 
 [`verify_grub.sh`](verify_grub.sh) checks images against the manifest:
 
@@ -49,7 +49,7 @@ A new set of images is chosen on purpose and reviewed as a vendored source updat
 ## Limits
 
 * `bootx64.efi` is not signed, so a machine boots it only with Secure Boot turned off.
-* `disk-core.img`, its two marked copies and `eltorito.img` have only the `multiboot` loader; `gpt-core.img` and `bootx64.efi` have `multiboot2` as well.
+* The BIOS images set only the modes the video BIOS lists. A panel whose native size is not among them, as on many laptops, gets the largest listed mode no larger than the size its EDID prefers, and one without an EDID gets 640x480.
 
 ## Tests
 
