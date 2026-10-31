@@ -13,6 +13,8 @@
 #define C      "2222222222222222222222222222222222222222"
 #define T      "2026-10-10T00:00:00Z"
 #define BRANCH "milestone/07-seven"
+/* The suites of the mock registry that a machine's run takes, less style. */
+#define SUITES "x86_64:agents i686:fs x86_64:fs x86_64:bigmem i686:gnu x86_64:gnu"
 static const char *ev(const char *n)
 {
     const char *v = getenv(n);
@@ -163,6 +165,20 @@ static int hold_ended(void)
     return ended;
 }
 /**
+ * Succeed when the WSL line `test -e PATH` probes a file that a claim or hold
+ * has touched, as the calls so far record, since the release starts those in
+ * the background and probes for the file they make.
+ */
+static int touched(const char *probe)
+{
+    char touch[4200], *calls = fx_read(ev("RELEASE_TEST_CALLS"));
+    int made;
+    snprintf(touch, sizeof(touch), "touch %.*s ", (int)strcspn(probe + 8, "\n"), probe + 8);
+    made = calls && strstr(calls, touch) != NULL;
+    free(calls);
+    return made;
+}
+/**
  * Answer a WSL command as RELEASE_TEST_HOLD says: `refused`, WSL's admission
  * refuses the whole host; `claim`, it refuses the preparation's claim; and
  * `wait`, the whole host's hold runs until the release ends it or is gone,
@@ -193,7 +209,7 @@ static int testing_mock(const char *command)
 {
     char line[20000], b[4096];
     int windows = strstr(command, "bash.exe -l -s") != NULL;
-    int prepare = 0, alone = 0, claim = 0, held = 0, claimed = 0;
+    int prepare = 0, alone = 0, claim = 0, held = 0, claimed = 0, made = 0;
     if (!windows && !strstr(command, "wsl.exe -- bash -s")) {
         snprintf(line, sizeof(line), "ssh testing %s\n", command);
         append(ev("RELEASE_TEST_CALLS"), line);
@@ -207,9 +223,10 @@ static int testing_mock(const char *command)
         claim |= strstr(b, "etude-launch build ") != NULL;
         held |= !strncmp(b, "test -e ", 8) && strstr(b, ".held") != NULL;
         claimed |= !strncmp(b, "test -e ", 8) && strstr(b, ".claimed") != NULL;
+        made |= !strncmp(b, "test -e ", 8) && touched(b);
     }
     if (!windows)
-        return wsl_answer(alone, claim, held, claimed);
+        return (held || claimed) && !made ? 1 : wsl_answer(alone, claim, held, claimed);
     puts(prepare && !*ev("RELEASE_TEST_PREPARE") ? "status 0"
          : prepare                               ? ev("RELEASE_TEST_PREPARE")
                                                  : ev("RELEASE_TEST_WINDOWS"));
@@ -255,6 +272,10 @@ static int ssh_mock(int argc, char **argv)
         puts("28:d2:44:7e:e0:af\nroot=/dev/disk0p3 rach2.slot=candidate\n5000.00 9000.00\nidentity "
              "0 nvme S6P2NX0T381638Z");
         return 0;
+    }
+    if (!strncmp(command, "test -f ", 8)) {
+        append(ev("RELEASE_TEST_CALLS"), "machine read\n");
+        return 1;
     }
     if (!strcmp(command, "bootctl status")) {
         append(ev("RELEASE_TEST_CALLS"), "machine read\n");
@@ -326,7 +347,7 @@ static int git_mock(int argc, char **argv)
     if (!strcmp(argv[1], "show") && argc > 2 && strstr(argv[2], ":tests/registry")) {
         puts("# the "
              "suites\nagents|qemu|full||4096|x86_64\nfs|qemu|full\nbigmem|qemu|full||73728|x86_"
-             "64\ngnu|qemu|full");
+             "64\ngnu|qemu|full\nstyle|cppcheck|full");
         return 0;
     }
     if (!strcmp(argv[1], "worktree")) {
@@ -365,7 +386,7 @@ int flow_release_mock(int argc, char **argv)
     if (!strcmp(name, "native-deploy")) {
         char logs[4200];
         call("native-deploy ", argc, argv, 1);
-        if (!strcmp(ev("RELEASE_TEST_NATIVE"), "pass"))
+        if (argc < 2 || strcmp(argv[1], "run") || !strcmp(ev("RELEASE_TEST_NATIVE"), "pass"))
             return 0;
         if (argc > 9) {
             snprintf(logs, sizeof(logs), "%s/collection-2.out", argv[9]);
@@ -966,12 +987,12 @@ static int mac_passed(struct release *r, const char *id)
     snprintf(times, sizeof(times), "%s/tree/build/machines/mac/runs/%s.times", r->f->work, id);
     snprintf(selection, sizeof(selection),
              "^etude site=.*/mac/site/etude-site clean= export= run -N -t .*/mac/tree -a both -A "
-             "tcg -J .*/mac/runs/%s\\.selection\\.json all$",
+             "tcg -J .*/mac/runs/%s\\.selection\\.json " SUITES "$",
              id);
     snprintf(phase, sizeof(phase),
              "^etude site= clean= export=.*/mac/runs/%s\\.selection\\.json run routine-sequence "
              "phase_first_run .*/mac/tree .*/mac/runs/%s both %s .*/mac/site/etude-site "
-             ".*/mac/site/bin/etude tcg all$",
+             ".*/mac/site/bin/etude tcg " SUITES "$",
              id, id, id);
     return fx_has(times, "\nrc=0\n") && called(r, selection) && called(r, phase) &&
            before(r, "\ngit checkout -q -f --detach " C "\n",
@@ -1028,13 +1049,13 @@ static int windows_prepared(struct release *r)
     return before(r,
                   "\nwsl cd /tmp && JOBS=30 exec /usr/local/libexec/rach2/etude-launch "
                   "build env sh -c 'touch " WINDOWS_HELD,
-                  "\nwsl test -e " WINDOWS_HELD) &&
+                  "\nwindows cd D:/w || ") &&
            called(r, "^wsl +while \\[ ! -e " WINDOWS_HELD
                      "[0-9-]+\\.prepared ] && find " WINDOWS_HELD "[0-9-]+\\.alive -mmin -10 ") &&
            before(r, "\nwsl test -e " WINDOWS_HELD, "\nwindows cd D:/w || ") &&
            called(r, "^windows .* run routine-prepare phase_first_run D:/w "
-                     "D:/o/" WINDOWS_ID "[0-9-]+ both " WINDOWS_ID "[0-9-]+ C:/s .* whpx "
-                     "all > ") &&
+                     "D:/o/" WINDOWS_ID "[0-9-]+ both " WINDOWS_ID "[0-9-]+ C:/s .* whpx " SUITES
+                     "  > ") &&
            before(r, " run routine-prepare ", ".prepared\n") &&
            called(r, "^wsl touch " WINDOWS_HELD "[0-9-]+\\.prepared$") &&
            called(r, "^windows git fetch -q D:/o/release.bundle 'refs/remotes/origin/" BRANCH
@@ -1054,8 +1075,8 @@ static int windows_collected(struct release *r)
            before(r, "\nwsl exec /usr/local/libexec/rach2/etude-launch alone sh -c ",
                   " run routine-collect ") &&
            called(r, "^windows .* run routine-collect phase_first_run D:/w "
-                     "D:/o/" WINDOWS_ID "[0-9-]+ both " WINDOWS_ID "[0-9-]+ C:/s .* whpx "
-                     "all > ") &&
+                     "D:/o/" WINDOWS_ID "[0-9-]+ both " WINDOWS_ID "[0-9-]+ C:/s .* whpx " SUITES
+                     "  > ") &&
            called(r, "^wsl touch " WINDOWS_HELD "[0-9-]+\\.end$") &&
            !called(r, "PREPARATION_CLEAN=1");
 }
@@ -1213,6 +1234,7 @@ static int lenovo_rows(struct release *r)
                                  .native = "pass"});
     ok = check(r,
                !f->status && archived(r, "7-11111111-") &&
+                   before(r, "native-deploy stage ", "native-deploy run ") &&
                    before(r, "native-deploy run ", "accept 192.168.0.106\n") &&
                    before(r, "accept 192.168.0.106\n", "machine write bootctl commit\n") &&
                    called(r, "^native-deploy run .*/state/wt/build/x86_64/images/../tests/native/"
