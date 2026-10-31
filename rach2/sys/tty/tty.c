@@ -13,6 +13,7 @@
 #include "tty.h"
 #include "../latency.h"
 #include "../timer.h"
+#include "../rtc.h"
 
 #include "../usb/usb.h"
 #include "../io/poll.h"
@@ -33,6 +34,9 @@
  * interrupts off, and a flood typed by a harness is not read by a person. */
 #define TTY_PUMP_BUDGET 64
 #define TTY_ECHO_MAX    64
+
+/* The ticks in VTIME's unit, a tenth of a second, at the tick's 100 Hz. */
+#define TTY_TICKS_PER_VTIME 10u
 
 /** A sink that discards: tty_init installs it when the caller gives none, so
  * the discipline's echo and output never call through NULL. */
@@ -56,6 +60,7 @@ void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx)
     t->pump = NULL;
     t->sid = 0;
     t->fg_pgid = 0;
+    t->hungup = 0;
 }
 
 /** A live user process is one that is not a zombie and still has an address
@@ -137,21 +142,76 @@ void tty_input_char(struct tty *t, unsigned char c)
             t->ready_us = timer_now_us();
         }
         wq_wake(&t->input_wq, WQ_DATA);
+    } else if (!(t->ldisc.tio.c_lflag & ICANON) && n_tty_inq(&t->ldisc) > 0) {
+        /* Not readable to poll, but a read for fewer than VMIN bytes, or
+         * one whose VTIME timer starts or restarts, needs to see it. */
+        wq_wake(&t->input_wq, 0);
     }
 }
 
-/** The read-sleep predicate: drain the polled input source (if any) into the
- * discipline, then report whether a read can now proceed. wq_wait_event calls
- * this with interrupts off before each sleep, so the serial drain and the
- * readiness test cannot be split by a waker. */
-static int tty_ready_cond(void *arg)
+/* A blocking read's wait: what it asks for, and its VTIME timer. */
+struct tty_wait {
+    struct tty *t;
+    int count;            /* the bytes the read asks for */
+    unsigned int pending; /* the bytes queued when the timer was last armed */
+    uint32_t deadline;    /* the tick at which the timer runs out, while armed */
+    int armed;            /* the timer runs */
+};
+
+/** Whether the read's VTIME timer has run out. */
+static int tty_wait_expired(const struct tty_wait *w)
 {
-    struct tty *t = (struct tty *)arg;
+    return w->armed && (int32_t)(kernel_ticks - w->deadline) >= 0;
+}
+
+/** Whether the read can take its input, or its 0, now. The caller has
+ * interrupts off. */
+static int tty_wait_ready(const struct tty_wait *w)
+{
+    return n_tty_read_ready(&w->t->ldisc, w->count, tty_wait_expired(w));
+}
+
+/**
+ * The read-sleep predicate: drain the polled input source (if any) into the
+ * discipline, then report whether the wait ends: the read can proceed, the
+ * terminal hung up, or the queue changed under a timer that restarts with
+ * each byte, which the caller arms again. wq_wait_event calls this with
+ * interrupts off before each sleep, so the serial drain and the test cannot
+ * be split by a waker.
+ */
+static int tty_wait_cond(void *arg)
+{
+    struct tty_wait *w = (struct tty_wait *)arg;
+    struct tty *t = w->t;
 
     if (t->pump) {
         t->pump(t);
     }
-    return n_tty_readable(&t->ldisc);
+    return tty_wait_ready(w) || t->hungup ||
+           (n_tty_read_timer(&t->ldisc) == N_TTY_TIMER_BYTE &&
+            (unsigned int)n_tty_inq(&t->ldisc) != w->pending);
+}
+
+/**
+ * Arm the read's VTIME timer as `n_tty_read_timer` says, and the process's
+ * `wakeup_tick` with it: with VMIN 0 once, from the read's start; with VMIN
+ * above 0 from the last change of the queued bytes, while any are queued.
+ * The caller has interrupts off and a current process.
+ */
+static void tty_wait_arm(struct tty_wait *w)
+{
+    struct n_tty *ld = &w->t->ldisc;
+    int timer = n_tty_read_timer(ld);
+    unsigned int n = (unsigned int)n_tty_inq(ld);
+
+    if (timer == N_TTY_TIMER_NONE || (timer == N_TTY_TIMER_BYTE && n == 0)) {
+        w->armed = 0;
+    } else if (!w->armed || (timer == N_TTY_TIMER_BYTE && n != w->pending)) {
+        w->deadline = rtc_ticks_now() + ld->tio.c_cc[VTIME] * TTY_TICKS_PER_VTIME;
+        w->armed = 1;
+    }
+    w->pending = n;
+    current_proc->wakeup_tick = w->armed ? (w->deadline != 0 ? w->deadline : 1u) : 0;
 }
 
 /** Copy up to `count` bytes of readable input to `kbuf`, and record the
@@ -174,6 +234,7 @@ static int tty_take(struct tty *t, unsigned char *kbuf, int count)
  * step, so an input IRQ cannot change the queue mid-read. Another reader
  * woken by the same line may have taken it, and a read of the empty queue
  * would then return 0, which means end of file; such a reader waits again.
+ * A wait that ended for its timer to restart is armed and waits again too.
  * Every read that returns input or end of file, blocking or not, ends the
  * console latency span (`tty_take`).
  *
@@ -186,50 +247,69 @@ static int tty_take(struct tty *t, unsigned char *kbuf, int count)
  */
 int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
 {
+    struct tty_wait w;
     int rc;
     int n;
+    int hungup;
     uint32_t flags;
 
     if (count <= 0) {
         return 0;
     }
+    w.t = t;
+    w.count = count;
+    w.pending = 0;
+    w.deadline = 0;
+    w.armed = 0;
     if (nonblock) {
         flags = kirq_save();
-        if (tty_ready_cond(t)) {
+        if (t->pump) {
+            t->pump(t);
+        }
+        if (tty_wait_ready(&w)) {
             n = tty_take(t, kbuf, count);
             kirq_restore(flags);
             usb_stamp_read();
             return n;
         }
+        hungup = t->hungup;
         kirq_restore(flags);
-        return -EAGAIN;
+        return hungup ? 0 : -EAGAIN;
     }
     for (;;) {
+        flags = kirq_save();
+        tty_wait_arm(&w);
         if (usb_stamp_recording()) {
-            flags = kirq_save();
-            rc = tty_ready_cond(t);
-            if (!rc && t == &console_tty && current_proc) {
+            rc = tty_wait_cond(&w);
+            if (!rc && t == &console_tty) {
                 usb_stamp_wait(current_proc->pid);
             }
             if (!rc) {
                 klog(KLOG_INFO, "usb", "latency: reader waiting");
             }
-            rc = wq_wait_event(&t->input_wq, tty_ready_cond, t);
+            rc = wq_wait_event(&t->input_wq, tty_wait_cond, &w);
             kirq_restore(flags);
         } else {
-            rc = wq_wait_event(&t->input_wq, tty_ready_cond, t);
+            kirq_restore(flags);
+            rc = wq_wait_event(&t->input_wq, tty_wait_cond, &w);
         }
+        current_proc->wakeup_tick = 0;
         if (rc != 0) {
             return rc;
         }
         flags = kirq_save();
-        if (n_tty_readable(&t->ldisc)) {
+        if (tty_wait_ready(&w)) {
             n = tty_take(t, kbuf, count);
             kirq_restore(flags);
             usb_stamp_read();
             return n;
         }
+        hungup = t->hungup;
         kirq_restore(flags);
+        if (hungup) {
+            usb_stamp_read();
+            return 0;
+        }
     }
 }
 
@@ -355,6 +435,7 @@ void tty_hangup(struct tty *t)
     flags = kirq_save();
     t->ldisc.eof = 1;
     t->ldisc.eof_pos = t->ldisc.rq_tail;
+    t->hungup = 1;
     kirq_restore(flags);
     wq_wake_all(&t->input_wq);
 }
@@ -425,7 +506,7 @@ static uint32_t reader_drains, tick_drains;
  * The console's polled input source: drain the serial ring, which the port's
  * interrupt and the tick fill, into the discipline.
  *
- * Runs in thread context with interrupts off, from tty_ready_cond before each
+ * Runs in thread context with interrupts off, from tty_wait_cond before each
  * read-sleep, from tty_poll and from tty_inq; the interrupt and the tick wake
  * a waiter or drain without echo, so the echoing drain happens here and not in
  * an IRQ. It goes on until the ring is empty or the discipline is full; a

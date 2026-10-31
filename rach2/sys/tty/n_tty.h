@@ -142,19 +142,39 @@ void n_tty_init(struct n_tty *t);
 void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx, int *signo);
 
 /**
- * Whether a read would return now: nonzero if so, 0 if it would block.
+ * Whether the terminal is readable to poll(2): nonzero if so, 0 if not.
  *
  * In canonical mode any queued byte is readable, and a pending EOF is too (the
  * read returns 0). In raw mode a pending EOF (a hangup: the master closed) is
  * readable as well, so a blocked reader drains the queue and then returns 0
  * instead of waiting for VMIN bytes that will never arrive; otherwise VMIN 0
- * never blocks and a VMIN > 0 read waits until at least VMIN bytes are there.
- *
- * VTIME is stored (a TCSETS with it does not fail) but not implemented: a
- * program that sets VMIN > 0 with VTIME > 0 gets a plain blocking read for
- * VMIN bytes, without the inter-byte timeout that would let it return short.
+ * is always readable and VMIN > 0 is readable once at least VMIN bytes are
+ * there. VTIME has no part in it; a read's own test is `n_tty_read_ready`.
  */
 int n_tty_readable(const struct n_tty *t);
+
+/**
+ * Whether a read of `count` bytes returns now: nonzero if so, 0 if it waits.
+ * `expired` is nonzero once the read's VTIME timer has run out, as
+ * `n_tty_read_timer` says when it runs.
+ *
+ * Canonical mode and a pending EOF are as `n_tty_readable` has them. A
+ * noncanonical read needs VMIN bytes, or `count` when that is fewer, and its
+ * four cases are POSIX's: VMIN 0 and VTIME 0 returns at once, with what is
+ * there; VMIN > 0 and VTIME 0 waits for the bytes; VMIN 0 and VTIME > 0
+ * returns with the first byte, or with none when the timer runs out; VMIN > 0
+ * and VTIME > 0 waits for the bytes, or returns short when the timer runs out
+ * after a byte.
+ */
+int n_tty_read_ready(const struct n_tty *t, int count, int expired);
+
+/* When a read's VTIME timer runs, from `n_tty_read_timer`. */
+#define N_TTY_TIMER_NONE 0 /* never: canonical mode, or VTIME 0 */
+#define N_TTY_TIMER_READ 1 /* VMIN 0: VTIME tenths of a second from the read's start */
+#define N_TTY_TIMER_BYTE 2 /* VMIN > 0: VTIME tenths from the last byte, once one is queued */
+
+/** When a read's VTIME timer runs, as POSIX has it: one of N_TTY_TIMER_*. */
+int n_tty_read_timer(const struct n_tty *t);
 
 /**
  * Whether the discipline can take a whole line more without dropping: the
