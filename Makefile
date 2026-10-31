@@ -422,9 +422,8 @@ _ := $(shell [ ! -f $(BUSYBOX_STAMP) ] || { [ -s $(BUSYBOX_BIN) ] && [ -s $(BUSY
 # one manifest describes the image of either architecture. For x86-64 the
 # stager, the set-id guard and manifest_deps.sh read each such path from the
 # x86-64 tree instead, by the prefixes RACH2_PATH_MAP lists in order, the
-# first that matches taking the path. The manual's pages, the suites'
-# fixtures under build/tests/system and term's font under build/unifont serve
-# both architectures and stay where they are.
+# first that matches taking the path. The manual's pages and the suites'
+# fixtures under build/tests/system are host files and stay where they are.
 # The map is exported to the recipes and given by name to the parse-time
 # reads below, since whether $(shell) sees an exported variable has differed
 # between versions of GNU Make. An i686 build reads every path as written and
@@ -432,7 +431,6 @@ _ := $(shell [ ! -f $(BUSYBOX_STAMP) ] || { [ -s $(BUSYBOX_BIN) ] && [ -s $(BUSY
 # i686 helper.
 ifneq ($(ARCH_SUFFIX),)
 RACH2_PATH_MAP = build/man/=build/man/ build/tests/system/=build/tests/system/ \
-                 build/unifont/=build/unifont/ \
                  build/=$(ARCH_BUILD)/ vendor/musl/install/=$(ARCH_MUSL)/
 export RACH2_PATH_MAP
 else

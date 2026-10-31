@@ -692,7 +692,6 @@ static char **environment(const struct np_context *c)
     else
         snprintf(map, sizeof(map),
                  "RACH2_PATH_MAP=build/man/=build/man/ build/tests/system/=build/tests/system/ "
-                 "build/unifont/=build/unifont/ "
                  "build/=%s/ vendor/musl/install/=%s/vendor-work/musl/install/",
                  c->build, c->build);
     env[k++] = np_strdup(map);
