@@ -240,9 +240,10 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
  * one that came late, and runs the periodic work of the kernel: the sleepers
  * and timerfds whose time has come, the HDA tick for a controller whose
  * interrupts do not arrive, the network device that is polled, the TCP
- * timers, the loopback delivery, the USB controller's event ring, the block
- * layer's lagged requests and deadlines, the platform's devices, and the
- * console's serial port.
+ * timers, the loopback delivery, the USB controller's event ring, the
+ * keyboards' repeat, after the USB reports that may press or release a key,
+ * the block layer's lagged requests and deadlines, the platform's devices,
+ * and the console's serial port.
  *
  * The tick is accounted as idle or busy first, before anything below can
  * wake a process: the accounting records what the processor was doing when
@@ -300,6 +301,7 @@ static void timer_handler(isr_params_t *params)
     tcp_tick();
     ip_loop_drain();
     usb_poll();
+    input_tick();
     block_lag_tick();
     block_request_tick();
     platform_tick();

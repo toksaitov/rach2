@@ -25,6 +25,9 @@ extern uint8_t EN_us_shift[128];
 /** Push a scancode to the ring; dropped if the ring is full. */
 void kbd_push_scancode(uint8_t sc);
 
+/** The codes the ring has room for now, from 0 to 63. */
+int kbd_scancode_room(void);
+
 /** Empty the scancode ring, when a process takes /fb. */
 void kbd_clear_scancodes(void);
 
@@ -36,6 +39,13 @@ void kbd_clear_scancodes(void);
  * Up. 0 for a code that names no key.
  */
 int set1_keycode(unsigned scan);
+
+/**
+ * The set-1 code of Linux's key `keycode`, as `set1_keycode` takes it: 0x80
+ * set for a key sent after an E0 prefix, and 0 for a key no set-1 code
+ * names. Of the two codes of KEY_SYSRQ it gives Print Screen's, E0 37.
+ */
+unsigned set1_scancode(int keycode);
 
 /** Set in `keys`, a set of EVDEV_KEY_BYTES bytes, the bit of every key
  * `set1_keycode` names, for a keyboard's registration. */
