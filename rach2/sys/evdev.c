@@ -51,9 +51,11 @@ struct evdev_client {
 };
 
 struct evdev {
-    int used; /* the slot is taken, by a device or by the opens of one gone */
-    int gone; /* unregistered: no node, and its opens read -ENODEV */
-    int scan; /* it reports MSC_SCAN */
+    int used;           /* the slot is taken, by a device or by the opens of one gone */
+    int gone;           /* unregistered: no node, and its opens read -ENODEV */
+    unsigned int flags; /* EVDEV_SCAN, EVDEV_KEYBOARD */
+    unsigned int leds;  /* a keyboard's LEDs lit, a bit 1 << LED_* each */
+    int rep[2];         /* a keyboard's REP_DELAY and REP_PERIOD, ms */
     const char *name;
     const char *phys;              /* NULL: EVIOCGPHYS answers -ENOENT */
     uint16_t id[4];                /* bustype, vendor, product, version */
@@ -93,7 +95,6 @@ static struct spinlock evdev_lock = SPINLOCK_INIT;
 #define EV_REL        0x02
 #define EV_ABS        0x03
 #define EV_SW         0x05
-#define EV_LED        0x11
 #define EV_SND        0x12
 #define EV_FF         0x15
 #define EV_CNT        0x20
@@ -142,11 +143,11 @@ struct evdev *evdev_register(const char *name, uint16_t bustype, uint16_t vendor
     return dev;
 }
 
-void evdev_describe(struct evdev *dev, const char *phys, int scan)
+void evdev_describe(struct evdev *dev, const char *phys, unsigned int flags)
 {
     if (dev) {
         dev->phys = phys;
-        dev->scan = scan != 0;
+        dev->flags = flags;
     }
 }
 
@@ -254,6 +255,61 @@ void evdev_report_key(struct evdev *dev, uint32_t scan, uint16_t code, int down)
         evdev_report(dev, EV_KEY, code, down ? 1 : 0);
     }
     evdev_report(dev, EV_SYN, SYN_REPORT, 0);
+}
+
+/**
+ * Report, for the keyboard `dev`, an event of `type` for each code from 0 to
+ * `n` - 1 whose value in `now` differs from `old[code]`, setting `old` to
+ * `now`, then SYN_REPORT when any did.
+ */
+static void report_changes(struct evdev *dev, uint16_t type, int *old, const int *now, int n)
+{
+    int changed[4];
+    uint32_t flags;
+    int i, any = 0;
+
+    flags = spin_lock_irqsave(&evdev_lock);
+    for (i = 0; i < n; i++) {
+        changed[i] = old[i] != now[i];
+        any |= changed[i];
+        old[i] = now[i];
+    }
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    for (i = 0; i < n; i++) {
+        if (changed[i]) {
+            evdev_report(dev, type, (uint16_t)i, now[i]);
+        }
+    }
+    if (any) {
+        evdev_report(dev, EV_SYN, SYN_REPORT, 0);
+    }
+}
+
+void evdev_report_leds(struct evdev *dev, unsigned int mask)
+{
+    int old[3], now[3], i;
+
+    if (!dev || !(dev->flags & EVDEV_KEYBOARD)) {
+        return;
+    }
+    for (i = 0; i < 3; i++) {
+        old[i] = (int)(dev->leds >> i) & 1;
+        now[i] = (int)(mask >> i) & 1;
+    }
+    report_changes(dev, EV_LED, old, now, 3);
+    dev->leds = mask & 7u;
+}
+
+void evdev_report_repeat(struct evdev *dev, int delay_ms, int period_ms)
+{
+    int now[2];
+
+    if (!dev || !(dev->flags & EVDEV_KEYBOARD)) {
+        return;
+    }
+    now[REP_DELAY] = delay_ms;
+    now[REP_PERIOD] = period_ms;
+    report_changes(dev, EV_REP, dev->rep, now, 2);
 }
 
 int evdev_present(int n)
@@ -418,9 +474,10 @@ static int32_t grab(struct evdev_client *c, uintptr_t on)
 }
 
 /**
- * EVIOCGBIT(type): the bits of the event types `dev` has, of its keys and of
- * its MSC codes, and none of the other types, each of its own length, cut
- * to `len`. -EINVAL for a type Linux's evdev does not answer.
+ * EVIOCGBIT(type): the bits of the event types `dev` has, of its keys, of
+ * its MSC codes and of a keyboard's LEDs, and none of the other types, each
+ * of its own length, cut to `len`. -EINVAL for a type Linux's evdev does
+ * not answer, EV_REP among them, whose times EVIOCGREP gives.
  */
 static int32_t type_bits(const struct evdev *dev, uint32_t type, uintptr_t arg, uint32_t len)
 {
@@ -429,12 +486,17 @@ static int32_t type_bits(const struct evdev *dev, uint32_t type, uintptr_t arg, 
     k_memset(bits, 0, sizeof(bits));
     switch (type) {
     case 0:
-        bits[0] = (uint8_t)(1u << EV_SYN | 1u << EV_KEY | (dev->scan ? 1u << EV_MSC : 0));
+        bits[0] =
+            (uint8_t)(1u << EV_SYN | 1u << EV_KEY | ((dev->flags & EVDEV_SCAN) ? 1u << EV_MSC : 0));
+        if (dev->flags & EVDEV_KEYBOARD) {
+            bits[EV_LED >> 3] |= (uint8_t)(1u << (EV_LED & 7));
+            bits[EV_REP >> 3] |= (uint8_t)(1u << (EV_REP & 7));
+        }
         return bits_out(arg, len, bits, BITS_BYTES(EV_CNT));
     case EV_KEY:
         return bits_out(arg, len, dev->keys, EVDEV_KEY_BYTES);
     case EV_MSC:
-        bits[0] = (uint8_t)(dev->scan ? 1u << MSC_SCAN : 0);
+        bits[0] = (uint8_t)((dev->flags & EVDEV_SCAN) ? 1u << MSC_SCAN : 0);
         return bits_out(arg, len, bits, BITS_BYTES(MSC_CNT));
     case EV_REL:
         return bits_out(arg, len, NULL, BITS_BYTES(REL_CNT));
@@ -443,6 +505,10 @@ static int32_t type_bits(const struct evdev *dev, uint32_t type, uintptr_t arg, 
     case EV_SW:
         return bits_out(arg, len, NULL, BITS_BYTES(SW_CNT));
     case EV_LED:
+        if (dev->flags & EVDEV_KEYBOARD) {
+            bits[0] = 1u << LED_NUML | 1u << LED_CAPSL | 1u << LED_SCROLLL;
+            return bits_out(arg, len, bits, BITS_BYTES(LED_CNT));
+        }
         return bits_out(arg, len, NULL, BITS_BYTES(LED_CNT));
     case EV_SND:
         return bits_out(arg, len, NULL, BITS_BYTES(SND_CNT));
@@ -456,12 +522,13 @@ static int32_t type_bits(const struct evdev *dev, uint32_t type, uintptr_t arg, 
 /**
  * The ioctls that read a string or a set of bits, numbered `nr` with the
  * caller's length `len`: the name, place and serial, the properties, the
- * keys down, the LEDs, sounds and switches, which no device here has, and
- * EVIOCGBIT. -ENOTTY for another number.
+ * keys down, a keyboard's LEDs, the sounds and switches, which no device
+ * here has, and EVIOCGBIT. -ENOTTY for another number.
  */
 static int32_t read_ioctl(struct evdev *dev, uint32_t nr, uintptr_t arg, uint32_t len)
 {
     uint8_t down[EVDEV_KEY_BYTES];
+    uint8_t leds[sizeof(long)];
     uint32_t flags;
 
     if (nr >= NR_GBIT && nr < NR_GBIT + EV_CNT) {
@@ -482,7 +549,9 @@ static int32_t read_ioctl(struct evdev *dev, uint32_t nr, uintptr_t arg, uint32_
         spin_unlock_irqrestore(&evdev_lock, flags);
         return bits_out(arg, len, down, EVDEV_KEY_BYTES);
     case NR_GLED:
-        return bits_out(arg, len, NULL, BITS_BYTES(LED_CNT));
+        k_memset(leds, 0, sizeof(leds));
+        leds[0] = (uint8_t)dev->leds;
+        return bits_out(arg, len, leds, BITS_BYTES(LED_CNT));
     case NR_GSND:
         return bits_out(arg, len, NULL, BITS_BYTES(SND_CNT));
     case NR_GSW:

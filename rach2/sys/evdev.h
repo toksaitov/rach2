@@ -38,9 +38,20 @@ struct evdev;
 #define EV_SYN      0x00
 #define EV_KEY      0x01
 #define EV_MSC      0x04
+#define EV_LED      0x11
+#define EV_REP      0x14
 #define SYN_REPORT  0
 #define SYN_DROPPED 3
 #define MSC_SCAN    4
+#define LED_NUML    0 /* the bit numbers of EV_LED's codes */
+#define LED_CAPSL   1
+#define LED_SCROLLL 2
+#define REP_DELAY   0 /* EV_REP's codes, each a time in milliseconds */
+#define REP_PERIOD  1
+
+/* What `evdev_describe` says a device reports beyond its keys. */
+#define EVDEV_SCAN     0x01 /* MSC_SCAN, the code each key came from */
+#define EVDEV_KEYBOARD 0x02 /* a keyboard's EV_REP and its three EV_LED LEDs */
 
 #define KEY_MUTE             113
 #define KEY_VOLUMEDOWN       114
@@ -71,11 +82,11 @@ struct evdev *evdev_register(const char *name, uint16_t bustype, uint16_t vendor
 
 /**
  * Give `dev` the text EVIOCGPHYS gives, such as "isa0060/serio0/input0",
- * kept by its pointer, and when `scan` is nonzero say that it reports
- * MSC_SCAN, as a keyboard does. Called once, after `evdev_register`. A NULL
- * `dev` is ignored.
+ * kept by its pointer, and `flags`, EVDEV_SCAN and EVDEV_KEYBOARD, the
+ * event types beyond EV_KEY that EVIOCGBIT says it reports. Called once,
+ * after `evdev_register`. A NULL `dev` is ignored.
  */
-void evdev_describe(struct evdev *dev, const char *phys, int scan);
+void evdev_describe(struct evdev *dev, const char *phys, unsigned int flags);
 
 /**
  * Take `dev` away: its node goes from /dev/input, a reader of an open of it
@@ -103,6 +114,22 @@ void evdev_report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value
  * the MSC_SCAN alone, so that a user can name the key from its code.
  */
 void evdev_report_key(struct evdev *dev, uint32_t scan, uint16_t code, int down);
+
+/**
+ * Light the LEDs of the keyboard `dev`, `mask` a bit 1 << LED_* for each LED
+ * on: an EV_LED event for each LED that changes, then SYN_REPORT, as Linux's
+ * evdev reports the console's LEDs; EVIOCGLED gives the mask. Any context.
+ * A NULL `dev` or one that is not a keyboard is ignored.
+ */
+void evdev_report_leds(struct evdev *dev, unsigned int mask);
+
+/**
+ * Give the keyboard `dev` the repeat's times in milliseconds: an EV_REP
+ * event, REP_DELAY or REP_PERIOD, for each that changes, then SYN_REPORT, as
+ * Linux's input core reports a change of the repeat. Any context. A NULL
+ * `dev` or one that is not a keyboard is ignored.
+ */
+void evdev_report_repeat(struct evdev *dev, int delay_ms, int period_ms);
 
 /** Whether device `n`, from 0, is registered now: 1 or 0. */
 int evdev_present(int n);
@@ -132,7 +159,7 @@ short evdev_poll(fd_entry_t *e, short events, struct wait_queue **wq);
 
 /**
  * The ioctls of an open device: EVIOCGVERSION, EVIOCGID, EVIOCGNAME,
- * EVIOCGPHYS, EVIOCGBIT, EVIOCGKEY and EVIOCGRAB, with Linux's numbers and
+ * EVIOCGPHYS, EVIOCGBIT, EVIOCGKEY, EVIOCGLED and EVIOCGRAB, with Linux's numbers and
  * answers. -ENOTTY for another request, -EFAULT for a bad pointer.
  */
 int32_t evdev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg);
