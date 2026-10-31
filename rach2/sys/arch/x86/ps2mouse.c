@@ -1,14 +1,15 @@
 /*
  * ps2mouse.c: the PS/2 mouse, on the 8042's auxiliary port, as ps2mouse.h
  * describes it. The mouse shares the controller with the keyboard: both use
- * port 0x60 for data and 0x64 for status and commands. The mouse interrupts
- * on IRQ 12, vector 44.
+ * port 0x60 for data and 0x64 for status and commands, and the waits around a
+ * write are i8042.c's. The mouse interrupts on IRQ 12, vector 44.
  *
  * A packet is three bytes:
  *   Byte 0: [Yovf|Xovf|Ysign|Xsign|1|Middle|Right|Left]
  *   Byte 1: X movement, the low 8 bits of a 9-bit value, Xsign its sign
  *   Byte 2: Y movement, the low 8 bits of a 9-bit value, Ysign its sign
  */
+#include "i8042.h"
 #include "portio.h"
 #include "ps2mouse.h"
 #include "../arch.h"
@@ -18,16 +19,6 @@
 #include "isr.h"
 #include "../../kio.h"
 #include "../../serial.h"
-
-/* 8042 Controller Ports */
-#define PS2_DATA_PORT   0x60
-#define PS2_STATUS_PORT 0x64
-#define PS2_CMD_PORT    0x64
-
-/* Status Register Bits */
-#define PS2_STATUS_OUTPUT_FULL 0x01 /* Output buffer full (data ready) */
-#define PS2_STATUS_INPUT_FULL  0x02 /* Input buffer full (can't write) */
-#define PS2_STATUS_MOUSE_DATA  0x20 /* Data is from mouse, not keyboard */
 
 /* 8042 Controller Commands (write to 0x64) */
 #define PS2_CMD_READ_CONFIG   0x20 /* Read command byte */
@@ -54,9 +45,6 @@
 #define PS2_CONFIG_MOUSE_IRQ 0x02 /* Enable IRQ12 for mouse */
 #define PS2_CONFIG_MOUSE_CLK 0x20 /* Disable mouse clock (set=disabled) */
 
-/* Timeout for waiting on 8042 controller (iterations) */
-#define PS2_TIMEOUT 100000
-
 /* The packet being assembled, and the index of its next byte. */
 static uint8_t packet_bytes[3];
 static int packet_index = 0;
@@ -65,38 +53,6 @@ static int packet_index = 0;
    stuck. A PS/2 output buffer has one byte, so anything past a handful is a
    controller that is not answering. */
 #define PS2_DRAIN_LIMIT 4096
-
-/**
- * Spin until the 8042 input buffer is empty, ready to accept a byte.
- *
- * @return 0 when the buffer drains, -1 on timeout.
- */
-static int ps2_wait_input(void)
-{
-    int timeout = PS2_TIMEOUT;
-    while (timeout-- > 0) {
-        if ((inb(PS2_STATUS_PORT) & PS2_STATUS_INPUT_FULL) == 0) {
-            return 0;
-        }
-    }
-    return -1;
-}
-
-/**
- * Spin until the 8042 output buffer has a byte, ready to read.
- *
- * @return 0 when data is present, -1 on timeout.
- */
-static int ps2_wait_output(void)
-{
-    int timeout = PS2_TIMEOUT;
-    while (timeout-- > 0) {
-        if (inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) {
-            return 0;
-        }
-    }
-    return -1;
-}
 
 /**
  * Spin until the 8042 output buffer has a byte from the mouse, ready to read.
@@ -123,19 +79,6 @@ static int ps2_wait_mouse_output(void)
         inb(PS2_DATA_PORT);
     }
     return -1;
-}
-
-/**
- * Write a command byte to the 8042 controller's command port.
- *
- * @return 0 on success, -1 if the input buffer never drains.
- */
-static int ps2_send_command(uint8_t cmd)
-{
-    if (ps2_wait_input() < 0)
-        return -1;
-    outb(PS2_CMD_PORT, cmd);
-    return 0;
 }
 
 /**
