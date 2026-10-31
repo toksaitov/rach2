@@ -250,4 +250,5 @@ The third-party code of the repository, each with the version the build pins, it
 | SpiderMonkey | 140.16.0esr | MPL 2.0 | [vendor/gnu/spidermonkey/Readme.md](../vendor/gnu/spidermonkey/Readme.md) |
 | chromium-headless-shell | Debian trixie at 20260927T082144Z | BSD 3-clause | [vendor/gnu/chromium/Readme.md](../vendor/gnu/chromium/Readme.md) |
 | termbox2 | 2.7.0-dev | MIT | [krffs/Readme.md](../krffs/Readme.md) |
+| Unifont | 18.0.01 | SIL OFL 1.1, or GPL 2 or later with the font embedding exception | [vendor/unifont/Readme.md](../vendor/unifont/Readme.md) |
 | Multiboot header | none given | MIT-style | [rach2/vendor/multiboot.h](../rach2/vendor/multiboot.h) |

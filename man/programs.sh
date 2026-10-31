@@ -43,6 +43,7 @@ binutils, GCC, GDB|vendor/gnu/native/Readme.md|GPL 3 or later
 SpiderMonkey|vendor/gnu/spidermonkey/Readme.md|MPL 2.0
 chromium-headless-shell|vendor/gnu/chromium/Readme.md|BSD 3-clause
 termbox2|krffs/Readme.md|MIT
+Unifont|vendor/unifont/Readme.md|SIL OFL 1.1, or GPL 2 or later with the font embedding exception
 Multiboot header|rach2/vendor/multiboot.h|MIT-style'
 
 # The GNU programs besides the ports, as NAME|README|PURPOSE.
@@ -531,6 +532,7 @@ BEGIN {
     version["chromium-headless-shell"] = "Debian " grab("vendor/gnu/chromium/fetch_chromium.sh", "^SUITES=\"[a-z-]*:", ":.*") \
         " at " grab("vendor/gnu/chromium/fetch_chromium.sh", "^SNAPSHOT=", "")
     version["termbox2"] = grab("krffs/vendor/termbox2.h", "^#define TB_VERSION_STR \"", "\".*")
+    version["Unifont"] = grab("mk/unifont.mk", "^UNIFONT_HEX *= *vendor/unifont/unifont_all-", "\\.hex\\.gz$")
     version["Multiboot header"] = "none given"
     print "## The vendored projects"
     print ""
