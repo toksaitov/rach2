@@ -28,6 +28,7 @@ C_SRC_SHARED = kernel.c \
     sys/syscall_net.c \
     sys/cmdline.c \
     sys/input.c \
+    sys/kd.c \
     sys/evdev.c \
     sys/panic.c \
     sys/block/block.c \

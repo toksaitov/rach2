@@ -17,6 +17,7 @@
 #include "kio.h"
 #include "kbd.h"
 #include "input.h"
+#include "kd.h"
 #include "mouse.h"
 #include "proc/process.h"
 #include "proc/sched.h"
@@ -2076,14 +2077,17 @@ static int32_t console_tioclinux(uintptr_t arg)
 
 /**
  * Answer the console's requests: TIOCLINUX (`console_tioclinux`), KIOCSOUND
- * on the PC speaker, and the AUDIO_* requests on the active driver. The
- * AUDIO_* requests other than AUDIO_GET_INFO are -ENODEV with no driver, and
- * AUDIO_START and AUDIO_WRITE return the driver's -errno. AUDIO_WRITE checks
- * the caller's samples with `user_buffer_ok`, and the driver reads them in
- * place. Any other request is -ENOTTY.
+ * on the PC speaker, Linux's KD* keyboard requests (`kd_ioctl`), and the
+ * AUDIO_* requests on the active driver. The AUDIO_* requests other than
+ * AUDIO_GET_INFO are -ENODEV with no driver, and AUDIO_START and AUDIO_WRITE
+ * return the driver's -errno. AUDIO_WRITE checks the caller's samples with
+ * `user_buffer_ok`, and the driver reads them in place. Any other request is
+ * -ENOTTY.
  */
 static int32_t console_ioctl(uint32_t request, uintptr_t arg)
 {
+    int32_t rc;
+
     if (request == TIOCLINUX) {
         return console_tioclinux(arg);
     }
@@ -2094,6 +2098,10 @@ static int32_t console_ioctl(uint32_t request, uintptr_t arg)
             speaker_on((uint32_t)arg);
         }
         return 0;
+    }
+    rc = kd_ioctl(request, arg);
+    if (rc != -ENOTTY) {
+        return rc;
     }
 
     switch (request) {
