@@ -1,6 +1,6 @@
 /*
  * legacy_guest.c: the attempts of the set driver's guest cases. Each boots
- * the case's QEMU profile from the run's artifact store under the
+ * the case's QEMU profile from the tree's artifact store under the
  * supervisor, starts etude-guest at the debug shell as libetude-case's
  * helper machines do, and runs the case's invocation through the serial
  * controller, its program staged in the image or sent from the store.

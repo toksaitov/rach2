@@ -1,7 +1,7 @@
 /*
  * legacy_guest.h: one attempt of a guest case as the set driver runs it: a
  * QEMU machine of the case's profile under the supervisor, booted from the
- * run's artifact store, with etude-guest started at its debug shell and the
+ * tree's artifact store, with etude-guest started at its debug shell and the
  * case's invocation run over the serial console.
  */
 #ifndef ETUDE_LEGACY_GUEST_H

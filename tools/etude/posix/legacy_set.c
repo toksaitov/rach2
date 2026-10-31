@@ -2830,7 +2830,7 @@ static int by_digest(const void *a, const void *b)
 }
 
 /**
- * Remove from the run's store each object whose digest no `file` line of the
+ * Remove from the tree's store each object whose digest no `file` line of the
  * preparation's record gives, so that the store keeps the artifacts of the
  * tree's last preparation and not those of every commit it held. The run
  * holds the tree, so no other run uses an object meanwhile. An object that
@@ -3066,7 +3066,7 @@ static int boundary_admits(const struct set *x, const struct member *m, char *wh
 }
 
 #ifdef RACH2_HOSTTEST
-/* In the host test, the copy of a file to the run's store: the test replaces
+/* In the host test, the copy of a file to the tree's store: the test replaces
  * it to count the copies, to fail one and to change a file after one. */
 int (*legacy_set_put)(struct etude_store *s, const char *path, const char *expect,
                       char digest[ETUDE_DIGEST_HEX + 1], uint64_t *size) = etude_store_put;
@@ -3074,7 +3074,7 @@ int (*legacy_set_put)(struct etude_store *s, const char *path, const char *expec
 #define legacy_set_put etude_store_put
 #endif
 
-/** Publish the artifacts of machine case member `m` to the run's store, and
+/** Publish the artifacts of machine case member `m` to the tree's store, and
  * write its invocation; 0, or -1 with the reason in `why`. An object the
  * store has already is checked first, so that a good one is not copied
  * again and a damaged one is replaced. */
@@ -3112,7 +3112,7 @@ static int publish_member(struct set *x, struct member *m, char qemu[2][PATH_LEN
 }
 
 /**
- * Publish the artifacts of each machine case member to the run's store, and
+ * Publish the artifacts of each machine case member to the tree's store, and
  * write its scenario invocation. A member whose artifacts or invocation
  * cannot be made ends before it runs, incomplete, with the reason as a
  * disruption.
