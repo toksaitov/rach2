@@ -381,13 +381,13 @@
           "source": "scenario"
         },
         {
-          "assertion_id": "libtsm_width",
-          "checks": "tests/host/libtsm_width_hosttest.c checks wide glyph wrapping, combining symbols, UTF-8 input, damage ages and allocation failures under the sanitizers",
+          "assertion_id": "kd",
+          "checks": "tests/host/kd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
-          "assertion_id": "kd",
-          "checks": "tests/host/kd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "assertion_id": "libtsm_width",
+          "checks": "tests/host/libtsm_width_hosttest.c checks wide glyph wrapping, combining symbols, UTF-8 input, damage ages and allocation failures under the sanitizers",
           "source": "scenario"
         },
         {
