@@ -32,7 +32,7 @@ GNU_IMAGE_DEPS = $(DEMO_CREDS) krffs/manifests/os-real-gnu.manifest $(MANIFEST_D
                  tools/image/mkext2.sh vendor/gnu/install_root.sh vendor/gnu/fetch.sh \
                  tests/system/fakeapi/native/wsclient.c tests/cases/host/products.mk \
                  vendor/gnu/sources-extra.txt $(GNU_IMAGE_STAMPS) $(IMAGE_TOOLS) $(MAN_ALL)
-GNU_IMAGE_ORDER = preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid \
+GNU_IMAGE_ORDER = kbd preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid \
                   check-e2fsck tools/etude/guest ports/doom
 
 # A layer built in this copy is removed before any of its stamps is built

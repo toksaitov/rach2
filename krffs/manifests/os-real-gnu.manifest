@@ -234,3 +234,11 @@ optional-file 0644 /demo/doom1.wad ports/doom/doom1.wad
 # The test runner controls installed commands through this framed helper.
 file 0755 /etude-guest build/tools/etude/guest/etude-guest
 file 0755 /ptydrive build/tools/etude/guest/ptydrive
+
+# kbd console keyboard tools (vendor/kbd/Readme.md).
+file 0755 /bin/loadkeys build/vendor/kbd/loadkeys
+file 0755 /bin/dumpkeys build/vendor/kbd/dumpkeys
+file 0755 /bin/setleds build/vendor/kbd/setleds
+file 0755 /bin/kbdrate build/vendor/kbd/kbdrate
+file 0755 /bin/showkey build/vendor/kbd/showkey
+file 0755 /bin/kbd_mode build/vendor/kbd/kbd_mode

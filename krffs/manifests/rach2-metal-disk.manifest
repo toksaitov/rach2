@@ -228,3 +228,11 @@ dir 0700:1000:1000 /home/test/.ssh
 file 0600:1000:1000 /home/test/.ssh/authorized_keys krffs/test_authorized_keys
 # Doom's game data, when the tree has it.
 optional-file 0644 /demo/doom1.wad ports/doom/doom1.wad
+
+# kbd console keyboard tools (vendor/kbd/Readme.md).
+file 0755 /bin/loadkeys build/vendor/kbd/loadkeys
+file 0755 /bin/dumpkeys build/vendor/kbd/dumpkeys
+file 0755 /bin/setleds build/vendor/kbd/setleds
+file 0755 /bin/kbdrate build/vendor/kbd/kbdrate
+file 0755 /bin/showkey build/vendor/kbd/showkey
+file 0755 /bin/kbd_mode build/vendor/kbd/kbd_mode
