@@ -119,6 +119,8 @@ Repeat the `host-deps:` prefix rather than wrap a long list. A test may use the 
 
 ## Tests
 
+* `keymap_hosttest.c` links the shared translator and loads keymap entries from text held in memory. It checks US, Dvorak, Colemak, a Russian layer switched by ShiftL locks, Cyrillic and Armenian Caps Lock, German and French dead keys, Compose cancellation, sticky locks, modifier releases after map changes, Alt numeric input, UTF-8 bounds, and xterm cursor, editing, function and keypad bytes.
+
 Each entry names a test, the code it compiles, and its cases. The reasoning of a case is in the test's source.
 
 ### Etude
