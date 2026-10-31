@@ -1295,8 +1295,8 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 
 # The os-real image: the BusyBox shell and tools, the Dropbear SSH server and
 # client, TinyCC and pdpmake, Doom, the manual, the sources under /src, and an
-# /etc and /root tree. With Doom's WAD the tree takes 19.2 MiB on i686 and
-# 20.0 MiB on x86-64, whose programs are larger, so the image is 20 MiB on
+# /etc and /root tree. With Doom's WAD the tree takes 19.9 MiB on i686 and
+# 20.0 MiB on x86-64, whose programs are larger, so the image is 21 MiB on
 # i686 and 22 on x86-64. ACPICA's core is staged as an archive of 0.45 MiB to
 # keep the tree small (vendor/acpica/build_acpica.sh).
 # The image is the root the running system writes, /tmp among it, so the build
@@ -1311,7 +1311,7 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # drivers' buffers; the kernel stacks and the heap come from above the window
 # first. Booted by QEMU with 128 MiB, the kernel ends at 5.9 MiB on i686 and
 # 6.4 MiB on x86-64, the module follows it, the boot's tables take 1.2 MiB and
-# 0.45 MiB, and 4.9 MiB and 3.1 MiB are left for those frames. On i686 the
+# 0.45 MiB, and 3.9 MiB and 3.1 MiB are left for those frames. On i686 the
 # frame table, 4 bytes for each 4 KiB frame below the top of usable memory, is
 # among the boot's tables, so a machine with 4 GiB leaves it about 1 MiB; the
 # module is kept small for that reason. The manual's aliases are a table and
@@ -1323,7 +1323,7 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 ifeq ($(ARCH),x86_64)
 OS_REAL_MIB = 22
 else
-OS_REAL_MIB = 20
+OS_REAL_MIB = 21
 endif
 OS_REAL_FREE_KIB = 512
 OS_REAL_WAD_KIB = 4100
