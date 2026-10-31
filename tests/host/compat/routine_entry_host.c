@@ -28,6 +28,8 @@ static struct hp_words entry_observation;
 static const char *entry_export;
 static int entry_allocations, entry_ensures;
 static unsigned entry_seconds = 86400;
+static struct hp_words entry_authorized;
+static int entry_authority_status = 2;
 #define ENTRY_CHECK(test)                                                     \
     do {                                                                      \
         if (!(test)) {                                                        \
@@ -63,9 +65,11 @@ static int mocked_site(const char *path, const char *route, struct routine_site 
 }
 static int mocked_authority(const struct authority_run *run, struct etude_exec_result *result)
 {
-    (void)run;
     (void)result;
-    return 2;
+    hp_words_free(&entry_authorized);
+    for (size_t i = 0; run->argv[i]; i++)
+        hp_add(&entry_authorized, run->argv[i]);
+    return entry_authority_status;
 }
 static int mocked_command(struct hp_words *args, volatile sig_atomic_t *stop);
 static int mocked_query(const struct routine_input *input, struct hp_words *args, const char *name,
@@ -164,6 +168,12 @@ static int mocked_query(const struct routine_input *input, struct hp_words *args
 {
     (void)stop;
     entry_queries++;
+    if (entry_mode && !strcmp(entry_mode, "stage")) {
+        char *path = ret_format("%s/%s.stdout", input->out, name);
+        entry_put(path, "fixture\n");
+        free(path);
+        return strcmp(name, "selection") ? 2 : 0;
+    }
     if (!strcmp(name, "suites")) {
         ENTRY_CHECK(entry_has(args->v, "inventory"));
         char *path = ret_format("%s/suites.stdout", input->out);
@@ -229,6 +239,10 @@ static int mocked_command(struct hp_words *args, volatile sig_atomic_t *stop)
     (void)stop;
     if (!strcmp(entry_mode, "allocation"))
         return mocked_allocation(args);
+    if (!strcmp(entry_mode, "stage")) {
+        entry_calls++;
+        return 0;
+    }
     if (entry_has(args->v, "retention"))
         return 0;
     if (entry_has(args->v, "pack"))
@@ -649,6 +663,137 @@ static void entry_preallocation_rows(void)
     free(bins);
 }
 
+/*
+ * A sequence in two runs: `run routine-prepare` admits the build alone under
+ * RUN:prepare, unobserved, and gives its status, a cancellation's among them;
+ * `run routine-collect` observes a preparation that composes the context
+ * under RUN:context, with no grant, and then the collection. Neither takes a
+ * route.
+ */
+static void entry_split_rows(void)
+{
+    char *tree = entry_path("tree"), *site = entry_path("site"), *out = entry_output("split");
+    char *argv[] = {"routine-prepare", "ci",  tree,  out, "both", "sample", site,
+                    entry_self,        "tcg", "all", NULL};
+    unsetenv("ETUDE_ADMITTED");
+    unsetenv("ETUDE_PHASE_SELECTION_EXPORT");
+    unsetenv("ETUDE_PREPARATION_CLEAN");
+    unsetenv("ETUDE_ROUTINE_ROUTE");
+    const int statuses[] = {0, 1, 130};
+    for (unsigned i = 0; i < 3; i++) {
+        entry_authority_status = statuses[i];
+        entry_observed = 0;
+        ENTRY_CHECK(etude_routine_prepare_main(10, argv) == statuses[i] && !entry_observed);
+        ENTRY_CHECK(entry_authorized.n > 2 && !strcmp(entry_authorized.v[0], entry_self) &&
+                    !strcmp(entry_authorized.v[1], "admit") &&
+                    entry_has(entry_authorized.v, "sample:prepare") &&
+                    entry_has(entry_authorized.v, "routine-build") &&
+                    !entry_has(entry_authorized.v, "routine") &&
+                    entry_has(entry_authorized.v, "all") && getenv("ETUDE_PREPARATION_GRANT"));
+        hp_words_free(&entry_authorized);
+    }
+    entry_authority_status = 2;
+    argv[0] = "routine-collect";
+    entry_observed = 0;
+    ENTRY_CHECK(!etude_routine_collect_main(10, argv) && entry_observed == 1 &&
+                !entry_authorized.n && !getenv("ETUDE_PREPARATION_GRANT"));
+    char *result = ret_format("%s/context.admit.result", out);
+    ENTRY_CHECK(entry_has(entry_observation.v, "sample:context") &&
+                entry_has(entry_observation.v, "routine-context") &&
+                entry_has(entry_observation.v, result) &&
+                !entry_has(entry_observation.v, "routine-build") &&
+                entry_has(entry_observation.v, "run") && entry_has(entry_observation.v, "-I"));
+    free(result);
+    setenv("ETUDE_ROUTINE_ROUTE", "/fixture-route", 1);
+    entry_observed = 0;
+    ENTRY_CHECK(etude_routine_collect_main(10, argv) == 2);
+    argv[0] = "routine-prepare";
+    ENTRY_CHECK(etude_routine_prepare_main(10, argv) == 2 && !entry_observed &&
+                !entry_authorized.n);
+    unsetenv("ETUDE_ROUTINE_ROUTE");
+    hp_words_free(&entry_observation);
+    free(tree);
+    free(site);
+    free(out);
+}
+
+/*
+ * The stages of `prepare routine`: the build stage refuses a trace or an
+ * import and stops before the source; the context stage needs the build's
+ * outputs, the trace and a receipt that names its conditioning, and goes
+ * straight to the source.
+ */
+static void entry_stage_rows(void)
+{
+    char *tree = entry_path("tree"), *site = entry_path("site"), *bins = entry_path("stage-bin");
+    ENTRY_CHECK(!mkdir(bins, 0700));
+    const char *tools[] = {"qemu-system-i386", "qemu-system-x86_64"};
+    for (unsigned i = 0; i < 2; i++) {
+        char *path = ret_format("%s/%s", bins, tools[i]);
+        ENTRY_CHECK(!routine_copy(entry_self, path) && !chmod(path, 0700));
+        free(path);
+    }
+    char *old_path = getenv("PATH") ? strdup(getenv("PATH")) : NULL;
+    setenv("PATH", bins, 1);
+    setenv("CC", entry_self, 1);
+    setenv("ETUDE_ADMITTED", site, 1);
+    unsetenv("ETUDE_PHASE_SELECTION_EXPORT");
+    unsetenv("ETUDE_PREPARATION_CLEAN");
+    unsetenv("ETUDE_ROUTINE_ENSURE");
+    unsetenv("ETUDE_PREPARATION_IMPORT");
+    unsetenv("ETUDE_PHYSICAL_TRACE");
+    unsetenv("ETUDE_PHYSICAL_STOP_REQUEST");
+    setenv("ETUDE_REFERENCE", "/fixture-reference", 1);
+    entry_mode = "stage";
+    char *out = entry_output("stage");
+    char *argv[] = {"routine-build", "ci",  tree,  out, "both", "sample", site,
+                    entry_self,      "tcg", "all", NULL};
+    char *trace = ret_format("%s/outer-load.jsonl", out);
+    entry_put(trace, "{}\n");
+    entry_calls = entry_queries = 0;
+    ENTRY_CHECK(etude_prepare_routine_build_main(10, argv, NULL) == 2 && !entry_calls &&
+                !entry_queries);
+    ENTRY_CHECK(!unlink(trace));
+    setenv("ETUDE_ROUTINE_ENSURE", "/fixed/route", 1);
+    ENTRY_CHECK(etude_prepare_routine_build_main(10, argv, NULL) == 2 && !entry_calls &&
+                !entry_queries);
+    unsetenv("ETUDE_ROUTINE_ENSURE");
+    ENTRY_CHECK(!etude_prepare_routine_build_main(10, argv, NULL) && entry_calls == 3 &&
+                entry_queries == 1 && entry_exists(out, "selection.list") &&
+                !entry_exists(out, "source.stdout") && !entry_exists(out, "context") &&
+                !getenv("ETUDE_PREPARATION_RECEIPT"));
+    argv[0] = "routine-context";
+    entry_calls = entry_queries = 0;
+    ENTRY_CHECK(etude_prepare_routine_context_main(10, argv, NULL) == 2 && !entry_queries);
+    const char *built[] = {"prepare.record", "selection.export.json", "preparation.receipt.json"};
+    for (unsigned i = 0; i < 3; i++) {
+        char *path = ret_format("%s/%s", out, built[i]);
+        entry_put(path, i < 2 ? "fixture\n" : "{\"conditioning\":{}}\n");
+        free(path);
+    }
+    ENTRY_CHECK(etude_prepare_routine_context_main(10, argv, NULL) == 2 && !entry_queries);
+    entry_put(trace, "{}\n");
+    ENTRY_CHECK(etude_prepare_routine_context_main(10, argv, NULL) == 2 && !entry_queries);
+    char *receipt = ret_format("%s/preparation.receipt.json", out);
+    entry_put(receipt, "{\"conditioning\":{\"inhouse\":\"retained\"}}\n");
+    ENTRY_CHECK(etude_prepare_routine_context_main(10, argv, NULL) == 2 && entry_queries == 1 &&
+                !entry_calls && entry_exists(out, "source.stdout"));
+    if (old_path)
+        setenv("PATH", old_path, 1);
+    else
+        unsetenv("PATH");
+    free(old_path);
+    unsetenv("CC");
+    unsetenv("ETUDE_ADMITTED");
+    unsetenv("ETUDE_REFERENCE");
+    free(receipt);
+    free(trace);
+    free(out);
+    free(tree);
+    free(site);
+    free(bins);
+}
+
 static void entry_request_rows(void)
 {
     struct owner_entry owner = {0};
@@ -756,6 +901,8 @@ int etude_test_routine_entry(const char *self)
                                        "ETUDE_PHYSICAL_TRACE",
                                        "ETUDE_PHYSICAL_STOP_REQUEST",
                                        "ETUDE_ROUTINE_ENSURE",
+                                       "ETUDE_PREPARATION_IMPORT",
+                                       "ETUDE_REFERENCE",
                                        "CC"};
     char *saved[sizeof keys / sizeof *keys];
     for (size_t i = 0; i < sizeof keys / sizeof *keys; i++)
@@ -787,6 +934,8 @@ int etude_test_routine_entry(const char *self)
     entry_refusal_rows();
     entry_request_rows();
     entry_preallocation_rows();
+    entry_split_rows();
+    entry_stage_rows();
     ENTRY_CHECK(!chdir(cwd));
     free(cwd);
     free(tree);
@@ -800,6 +949,7 @@ int etude_test_routine_entry(const char *self)
             unsetenv(keys[i]);
         free(saved[i]);
     }
+    hp_words_free(&entry_authorized);
     if (!entry_failures) {
         entry_fix_passed();
         puts("routine entry: native projection, phase, selection and sequence checks passed");
