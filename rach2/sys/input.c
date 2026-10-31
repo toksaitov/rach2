@@ -15,6 +15,7 @@
 #include "display/blank.h"
 #include "display/textcon.h"
 #include "evdev.h"
+#include "kd.h"
 #include "lib/kstring.h"
 #include "kbd.h"
 #include "mouse.h"
@@ -44,6 +45,11 @@ static int mouse_present;
 static int repeat_delay_ms = 250;
 static int repeat_period_ms = 33;
 
+/* The LEDs every keyboard is to show, LED_* of kd.h. One word, which each
+ * keyboard's driver reads and compares with what its keyboard shows, so a
+ * change needs no lock and reaches a keyboard connected later. */
+static volatile unsigned int leds_wanted;
+
 void input_set_repeat(int delay_ms, int period_ms)
 {
     (void)delay_ms;
@@ -61,13 +67,12 @@ void input_cancel_repeat(void)
 
 void input_set_leds(unsigned int mask)
 {
-    (void)mask;
+    leds_wanted = mask & (LED_SCR | LED_NUM | LED_CAP);
 }
 
-int input_ps2_reply(uint8_t code)
+unsigned int input_leds(void)
 {
-    (void)code;
-    return 0;
+    return leds_wanted;
 }
 
 int input_mouse_present(void)
