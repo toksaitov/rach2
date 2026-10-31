@@ -14,6 +14,7 @@
  * says.
  */
 
+#include "fb.h"
 #include "fbcon.h"
 #include "vga_font.h"
 #include "vga_text.h"
@@ -70,16 +71,19 @@ static uint32_t drawn_cursor = NO_CELL;
 static struct boot_framebuffer fb_desc;
 
 /*
- * The 320x200 picture of the program that holds /fb (vga_gfx.c), which has
- * the screen to itself while `gfx_on`: each of its 256 colors as one of the
- * screen's pixels, the whole number its pixels are drawn at, the place of
- * its top left corner, and one of its lines drawn at that size, which is
- * copied to the screen as many times as the size.
+ * The program that holds /fb (vga_gfx.c) has the screen to itself while
+ * `gfx_on`: at the native mode, which it writes itself, while `native_on`,
+ * and otherwise as the 320x200 picture this file draws. For the picture:
+ * each of its 256 colors as one of the screen's pixels, the whole number its
+ * pixels are drawn at, the place of its top left corner, and one of its
+ * lines drawn at that size, which is copied to the screen as many times as
+ * the size.
  */
 #define GFX_WIDTH      320u
 #define GFX_HEIGHT     200u
 #define GFX_LINE_BYTES 16384u
 static int gfx_on;
+static int native_on;
 static int blank_on; /* the console is blank: no cell is drawn */
 static uint32_t gfx_pixel[256];
 static uint32_t gfx_scale;
@@ -380,7 +384,46 @@ void fbcon_gfx_begin(void)
         gfx_pixel[i] = pixel[i < 16 ? i : 0];
     }
     gfx_on = 1;
+    native_on = 0;
     clear_screen(base);
+}
+
+int fbcon_screen(struct fb_screen *s)
+{
+    if (!fbcon_active) {
+        return -1;
+    }
+    k_memset(s, 0, sizeof(*s));
+    s->width = fb_width;
+    s->height = fb_height;
+    s->pitch = fb_pitch;
+    s->bpp = fb_desc.bpp;
+    if (fb_desc.type == BOOT_FB_RGB) {
+        s->kind = FB_KIND_RGB;
+        s->red.offset = fb_desc.red_shift;
+        s->red.width = fb_desc.red_bits;
+        s->green.offset = fb_desc.green_shift;
+        s->green.width = fb_desc.green_bits;
+        s->blue.offset = fb_desc.blue_shift;
+        s->blue.width = fb_desc.blue_bits;
+    } else {
+        s->kind = FB_KIND_INDEXED;
+    }
+    return 0;
+}
+
+volatile uint8_t *fbcon_native_begin(void)
+{
+    volatile uint8_t *base = fbcon_window();
+
+    if (!fbcon_active || base == NULL || fb_desc.type != BOOT_FB_RGB ||
+        (fb_desc.bpp != 15 && fb_desc.bpp != 16 && fb_desc.bpp != 24 && fb_desc.bpp != 32)) {
+        return NULL;
+    }
+    gfx_on = 1;
+    native_on = 1;
+    clear_screen(base);
+    return base;
 }
 
 void fbcon_gfx_palette(const uint8_t *rgb)
@@ -397,7 +440,7 @@ void fbcon_gfx_frame(const uint8_t *pixels)
     volatile uint8_t *base = fbcon_window();
     uint32_t line, col, t, n = GFX_WIDTH * gfx_scale * fb_bytes;
 
-    if (!gfx_on || base == NULL) {
+    if (!gfx_on || native_on || base == NULL) {
         return;
     }
     for (line = 0; line < GFX_HEIGHT; line++) {
@@ -427,6 +470,7 @@ void fbcon_gfx_end(void)
         return;
     }
     gfx_on = 0;
+    native_on = 0;
     if (base != NULL) {
         clear_screen(base);
         for (i = 0; i < SCREEN_CELLS; i++) {

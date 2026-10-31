@@ -12,7 +12,8 @@
  * whole scale that still gives 80 columns and 24 rows, centered. It draws a
  * cell only when it shows something other than what it showed, since every
  * pixel is a store to the display's memory. It also draws the picture of
- * /fb, which has the screen while a program holds it.
+ * /fb's mode 13h, and gives the screen to a program that writes it at its
+ * native mode, while a program holds /fb.
  */
 
 #ifndef _FBCON_H_
@@ -21,6 +22,8 @@
 #include "../boot.h"
 #include "../lib/kdef.h"
 #include "../lib/kint.h"
+
+struct fb_screen;
 
 /* The cells of a text adapter's memory, 32 KiB, which vga_text.c moves the
  * screen's window through. */
@@ -64,7 +67,8 @@ void fbcon_set_cursor(uint32_t cell);
  * while the picture has it. The picture is drawn at the largest whole
  * number of the screen's pixels to one of its own that fits, three on a
  * 1366x768 screen, in the middle, so that each of its pixels is a sharp
- * square; its colors are the VGA's sixteen until `fbcon_gfx_palette`.
+ * square; its colors are the VGA's sixteen until `fbcon_gfx_palette`. From
+ * the native mode it goes straight to the picture.
  */
 void fbcon_gfx_begin(void);
 
@@ -72,11 +76,27 @@ void fbcon_gfx_begin(void);
  * picture's palette, for the frames drawn after. */
 void fbcon_gfx_palette(const uint8_t *rgb);
 
-/** Draw the picture `pixels`, 320x200 palette indices, on the screen. */
+/** Draw the picture `pixels`, 320x200 palette indices, on the screen;
+ * nothing at the native mode. */
 void fbcon_gfx_frame(const uint8_t *pixels);
 
-/** Give the screen back to the cells: painted black, and every cell drawn
- * again, those written while the picture had the screen among them. */
+/** Describe the screen in `*s`, its size, pitch and pixel format, as
+ * FB_GETINFO reports it; 0, or -1 when the console is on no framebuffer. */
+int fbcon_screen(struct fb_screen *s);
+
+/**
+ * Give the whole screen, painted black, to a program that writes its pixels
+ * at the screen's own format, the native mode of /fb: no cell and no picture
+ * is drawn until `fbcon_gfx_end`. Returns the framebuffer's first byte, as
+ * `fbcon_window` gives it, or NULL, with nothing changed, when the console
+ * is on no framebuffer or on one that is not RGB at 15, 16, 24 or 32 bits a
+ * pixel. From mode 13h's picture it goes straight to the native mode.
+ */
+volatile uint8_t *fbcon_native_begin(void);
+
+/** Give the screen back to the cells, from the picture or the native mode:
+ * painted black, and every cell drawn again, those written while the
+ * program had the screen among them. */
 void fbcon_gfx_end(void);
 
 /** Paint the screen black and draw no cell while `blank` is set; when it

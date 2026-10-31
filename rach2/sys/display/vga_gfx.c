@@ -7,7 +7,8 @@
  * at all, as on a machine booted by UEFI, so entering and leaving the mode
  * and loading its palette leave the hardware alone: the picture is kept in
  * memory (`gfx_shadow`), and the console draws it on the framebuffer, scaled
- * by a whole number, with the palette loaded (`fbcon_gfx_frame`).
+ * by a whole number, with the palette loaded (`fbcon_gfx_frame`). There the
+ * native mode gives the program the framebuffer itself (`fb_enter_native`).
  */
 
 #include "../arch/arch.h"
@@ -316,7 +317,7 @@ uint8_t *fb_enter(void)
     uint32_t flags = kirq_save();
     uint8_t *pixels = fbcon_active ? gfx_shadow : (uint8_t *)VGA_GFX_FRAMEBUFFER;
 
-    if (vga_graphics_mode) {
+    if (vga_graphics_mode && gfx_current.mode != GFX_MODE_NATIVE) {
         kirq_restore(flags);
         return pixels;
     }
@@ -346,6 +347,45 @@ uint8_t *fb_enter(void)
 
     kirq_restore(flags);
     return pixels;
+}
+
+uint8_t *fb_enter_native(void)
+{
+    uint32_t flags = kirq_save();
+    struct fb_screen screen;
+    volatile uint8_t *base;
+
+    if (gfx_current.mode == GFX_MODE_NATIVE) {
+        kirq_restore(flags);
+        return gfx_current.framebuffer;
+    }
+    if (!fbcon_active || fbcon_screen(&screen) != 0) {
+        kirq_restore(flags);
+        return NULL;
+    }
+    base = fbcon_native_begin();
+    if (base == NULL) {
+        kirq_restore(flags);
+        return NULL;
+    }
+
+    vga_graphics_mode = true;
+
+    gfx_current.mode = GFX_MODE_NATIVE;
+    gfx_current.width = screen.width;
+    gfx_current.height = screen.height;
+    gfx_current.bpp = screen.bpp;
+    gfx_current.pitch = screen.pitch;
+    gfx_current.framebuffer = (uint8_t *)(uintptr_t)base;
+    gfx_current.size = screen.pitch * screen.height;
+
+    kirq_restore(flags);
+    return gfx_current.framebuffer;
+}
+
+int fb_screen(struct fb_screen *s)
+{
+    return fbcon_screen(s);
 }
 
 /**
@@ -457,7 +497,7 @@ void fb_set_palette(const uint8_t *data)
 
 void fb_present(void)
 {
-    if (fbcon_active && vga_graphics_mode) {
+    if (fbcon_active && gfx_current.mode == GFX_MODE_VGA_13H) {
         fbcon_gfx_frame(gfx_shadow);
     }
 }

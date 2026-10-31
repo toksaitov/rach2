@@ -32,8 +32,8 @@
 #define VGA_DAC_WRITE_INDEX 0x3C8
 #define VGA_DAC_DATA        0x3C9
 
-/** True while the graphics mode is in force, on the VGA or on a framebuffer
- * console. */
+/** True while a graphics mode is in force: mode 13h on the VGA, or either
+ * mode on a framebuffer console. */
 extern bool vga_graphics_mode;
 
 #endif /* _VGA_GFX_H_ */
