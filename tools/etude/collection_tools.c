@@ -1137,11 +1137,61 @@ static int col_source_extra(struct col_job *job, const struct jbuf *tracked, str
     return rc;
 }
 
+static int col_name_order(const void *a, const void *b)
+{
+    return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
+/* The tree's pinned tarballs go with its source, so the guest downloads none
+   that the host already has; the guest's fetch.sh checks each one's digest. */
+static int col_source_downloads(struct col_job *job, struct jbuf *all)
+{
+    char *path = col_format("%s/vendor/gnu/downloads", job->root);
+    if (!path)
+        return -1;
+    DIR *dir = opendir(path);
+    if (!dir) {
+        int rc = errno == ENOENT ? 0 : -1;
+        free(path);
+        return rc;
+    }
+    struct col_list names = {0};
+    int rc = 0;
+    struct dirent *entry;
+    while (!rc && (entry = readdir(dir)) != NULL) {
+        size_t n = strlen(entry->d_name);
+        if (entry->d_name[0] == '.' || (n > 5 && !strcmp(entry->d_name + n - 5, ".part")))
+            continue;
+        char *file = col_format("%s/%s", path, entry->d_name);
+        struct stat st;
+        if (!file)
+            rc = -1;
+        else if (!lstat(file, &st) && S_ISREG(st.st_mode))
+            rc = col_add(&names, entry->d_name);
+        free(file);
+    }
+    closedir(dir);
+    free(path);
+    if (names.n)
+        qsort(names.v, names.n, sizeof(*names.v), col_name_order);
+    for (size_t i = 0; !rc && i < names.n; i++) {
+        char *name = col_format("vendor/gnu/downloads/%s", names.v[i]);
+        if (!name)
+            rc = -1;
+        else
+            jbuf_put(all, name, strlen(name) + 1);
+        free(name);
+    }
+    col_free(&names);
+    return rc;
+}
+
 /* Git supplies the source list; ignored WAD and recovery keys remain inputs. */
 static int col_source(struct col_job *job)
 {
     struct jbuf tracked = {0}, all = {0};
-    int rc = col_source_index(job, &tracked) || col_source_extra(job, &tracked, &all);
+    int rc = col_source_index(job, &tracked) || col_source_extra(job, &tracked, &all) ||
+             col_source_downloads(job, &all);
     char *index = col_format("%s/source-index", job->work);
     char *archive_index = col_format("%s/archive-index", job->work);
     char *archive = col_format("%s/source.tar", job->work);

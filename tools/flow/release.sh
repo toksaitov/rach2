@@ -861,6 +861,25 @@ beat()
 # leave both to Windows; the tooling machine forwards no port. The claim ends
 # with the preparation, or as beat says once the release is gone, and a stop
 # ends both. Run in the background.
+# downloads: print the Windows shell's lines that copy into the tree, from
+# the owner's clone in WSL, each pinned tarball of the GNU layer that the tree
+# lacks, kept only when it hashes as pinned. The tooling machine takes the
+# tree's tarballs with its source, so it downloads none of them.
+downloads()
+{
+    cat << END
+mkdir -p vendor/gnu/downloads
+awk '\$1 !~ /^#/ && NF >= 4 { n = \$3; sub(/.*\//, "", n); print n, \$4 }' \
+    vendor/gnu/sources.txt vendor/gnu/sources-extra.txt |
+    while read -r n s; do
+        f=vendor/gnu/downloads/\$n
+        [ "\$(sha256sum "\$f" 2> /dev/null | cut -c 1-64)" != "\$s" ] || continue
+        MSYS_NO_PATHCONV=1 wsl.exe -- cat "$OWNER/vendor/gnu/downloads/\$n" < /dev/null > "\$f.part" 2> /dev/null
+        if [ "\$(sha256sum "\$f.part" | cut -c 1-64)" = "\$s" ]; then mv "\$f.part" "\$f"; else rm -f "\$f.part"; fi
+    done
+END
+}
+
 windows_prepare()
 {
     id=$1 claimer='' session='' beater=''
@@ -885,6 +904,7 @@ windows_prepare()
     {
         echo "cd $wtree || { echo 'status 1'; exit; }"
         echo "git fetch -q $wout/release.bundle 'refs/remotes/origin/$branch' && git checkout -q -f --detach $sha || { echo 'status 1'; exit; }"
+        downloads
         environment windows
         echo "ETUDE_SITE=$wsite make build/tools/etude/etude > $wout/$id.make.log 2>&1 || { tail -n 20 $wout/$id.make.log; echo 'status 1'; exit; }"
         echo "e=$wout/etude-$id.exe"
