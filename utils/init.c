@@ -26,6 +26,11 @@
  * machine finishes booting. The console login is the same as `init-login`'s
  * beside it, and is the way back in when the network is what is broken.
  *
+ * On `init-login` and `init-metal`, a boot line with `rach2.console=term`
+ * puts that login inside `term`, the terminal on the whole framebuffer,
+ * where the screen has one; the kernel console's login comes back when
+ * `term` fails (`session_ended`).
+ *
  * Built like the other utils, linked against the ported musl (see
  * utils/Makefile), and staged at /sbin/init by the image manifests.
  */
@@ -70,6 +75,17 @@ extern char **environ;
  * started again. Longer than the shell build's one second, so a permanent
  * failure leaves its reason on the console instead of scrolling it away. */
 #define LOGIN_RESPAWN_PAUSE 5
+
+/* The console session of a boot with `TERM_OPTION` on a framebuffer: the
+ * terminal on the whole screen, whose `-l` runs LOGIN_PROGRAM inside it, so
+ * this path too has no shell without a login. */
+#define TERM_PROGRAM "/bin/term"
+#define TERM_OPTION  "rach2.console=term"
+
+/* FB_GETINFO and the size of the struct fb_screen it fills, eleven 32-bit
+ * numbers, from <rach2/fb.h>, which the utils do not include. */
+#define INIT_FB_GETINFO     0x4604
+#define INIT_FB_SCREEN_INTS 11
 #else
 /* The login shell, tried in order: /bin/sh then /ish. The recovery system's
  * init and the `init-shell` build take this path; the other images put the
@@ -223,17 +239,71 @@ static void report_no_login(void)
     }
 }
 
+/* Whether the console session is `term`: the boot line asked for it and
+ * the screen has a framebuffer, decided once a boot (`want_term`). */
+static int term_wanted;
+
+/* Whether the session now running, or the next one, is `term`. A failed
+ * `term` clears it for one session, the kernel console's login, and the end
+ * of that session sets it again. */
+static int term_now;
+
+/**
+ * Say on the console how the `term` session ended, from its wait status
+ * `status`, `lived` seconds after its fork, when that was a failure: an
+ * exec error, a status other than 0, a signal, or an exit within two
+ * seconds of the start. Returns 1 for a failure, 0 for a clean end.
+ *
+ * `term -l` exits 0 once the login inside it has ended, however it ended,
+ * so a status other than 0 is `term`'s own failure; an exit within two
+ * seconds is one, such as a font that would not load, that would repeat at
+ * once if `term` were started again.
+ */
+static int term_failed(int status, time_t lived)
+{
+    if (WIFSIGNALED(status)) {
+        fprintf(stderr, "init: console: term: killed by signal %d; login on the kernel console\n",
+                WTERMSIG(status));
+    } else if (WIFEXITED(status) && WEXITSTATUS(status) == 127 && lived < 2) {
+        fprintf(stderr, "init: console: term: not run; login on the kernel console\n");
+    } else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+        fprintf(stderr, "init: console: term: status %d; login on the kernel console\n",
+                WEXITSTATUS(status));
+    } else if (lived < 2) {
+        fprintf(stderr, "init: console: term: ended at its start; login on the kernel console\n");
+    } else {
+        return 0;
+    }
+    return 1;
+}
+
 /**
  * Record how the console session ended, from its wait status `status`,
- * `lived` seconds after its fork. A session child that exited with 127 in
- * under two seconds is one whose exec of the login program failed, and it has
- * printed the rescue hint, so the children forked after it leave the hint out.
+ * `lived` seconds after its fork, and choose the next one. A session child
+ * that exited with 127 in under two seconds is one whose exec of the login
+ * program failed, and it has printed the rescue hint, so the children forked
+ * after it leave the hint out.
+ *
+ * Returns 1 when the next session starts at once: the kernel console's
+ * login after a failed `term`, which may have failed at its start and must
+ * not wait out the pause of a failed login. A clean end of `term`, a
+ * logout, starts `term` again, and so does any end of the login that stood
+ * in for a failed one.
  */
-static void session_ended(int status, time_t lived)
+static int session_ended(int status, time_t lived)
 {
+    if (term_now) {
+        if (term_failed(status, lived)) {
+            term_now = 0;
+            return 1;
+        }
+        return 0;
+    }
+    term_now = term_wanted;
     if (lived < 2 && WIFEXITED(status) && WEXITSTATUS(status) == 127) {
         login_hint_given = 1;
     }
+    return 0;
 }
 #endif
 
@@ -660,9 +730,10 @@ static int anyone_to_let_in(void)
 
 /**
  * Fork the console session and return its pid (-1 on failure): `/bin/login`
- * on the login builds, the first of `Shells` that executes on the others. A
- * child that executes nothing exits with status 127, whatever the error, and
- * on the login builds `session_ended` reads that status.
+ * on the login builds, or `term -l` there while `term_now` says so, and the
+ * first of `Shells` that executes on the others. A child that executes
+ * nothing exits with status 127, whatever the error, and on the login builds
+ * `session_ended` reads that status.
  *
  * The child does what getty does before exec: `setsid` makes it a new
  * session's leader (with no controlling terminal), then `ioctl(TIOCSCTTY)`
@@ -678,6 +749,7 @@ static int anyone_to_let_in(void)
  * otherwise gives up after 60 seconds at its prompt and exits, and the login
  * init starts next would draw a new prompt on an idle console every minute.
  * The os-simple image's own login has no timeout and does not read it.
+ * `term` passes the variable on to the login it runs.
  */
 static pid_t spawn_shell(void)
 {
@@ -693,11 +765,22 @@ static pid_t spawn_shell(void)
     setsid();
     ioctl(STDIN_FILENO, TIOCSCTTY, (void *)0);
 #ifdef INIT_CONSOLE_LOGIN
+    (void)setenv("LOGIN_TIMEOUT", "0", 1);
+    if (term_now) {
+        static const char gone[] = "init: cannot exec /bin/term\n";
+        char *argv[3];
+
+        argv[0] = (char *)"term";
+        argv[1] = (char *)"-l";
+        argv[2] = 0;
+        execve(TERM_PROGRAM, argv, environ);
+        (void)write(STDERR_FILENO, gone, sizeof(gone) - 1);
+        _exit(127);
+    }
     {
         char *argv[2];
         argv[0] = (char *)"login";
         argv[1] = 0;
-        (void)setenv("LOGIN_TIMEOUT", "0", 1);
         execve(LOGIN_PROGRAM, argv, environ);
     }
     report_no_login();
@@ -915,13 +998,15 @@ static void check_ext2_partitions(void)
                 WIFEXITED(status) ? WEXITSTATUS(status) : 8);
     }
 }
+#endif /* INIT_METAL */
 
+#if defined(INIT_METAL) || defined(INIT_CONSOLE_LOGIN)
 /**
  * Whether the boot line has `want` as a whole token.
  *
  * A whole token and not a prefix: `rach2.ip=none` and `rach2.ip=none.x` are
  * different things. The first 511 bytes of `/proc/cmdline` are read at each
- * call, of which a boot makes up to three.
+ * call, of which a boot makes up to four.
  */
 static int boot_line_has(const char *want)
 {
@@ -952,7 +1037,47 @@ static int boot_line_has(const char *want)
     }
     return 0;
 }
+#endif
 
+#ifdef INIT_CONSOLE_LOGIN
+/**
+ * Decide whether the console session is `term`: the boot line has
+ * `TERM_OPTION` and /fb answers FB_GETINFO, which it refuses with ENODEV on
+ * the VGA's text mode. A text boot thus starts the kernel console's login
+ * at once and pays no failed start of `term`.
+ *
+ * Opening /fb takes the screen, so init holds it for the one request and
+ * gives it back at the close, before any session starts: the console comes
+ * back as it was, its input flushed, which this early holds nothing. The
+ * screen's kind does not change while the machine runs, so init asks once.
+ */
+static void want_term(void)
+{
+    unsigned int info[INIT_FB_SCREEN_INTS];
+    int fd;
+
+    if (!boot_line_has(TERM_OPTION)) {
+        return;
+    }
+    fd = open("/fb", O_RDWR | O_CLOEXEC);
+    if (fd < 0) {
+        if (errno != ENODEV) {
+            fprintf(stderr, "init: console: /fb: %s; login on the kernel console\n",
+                    strerror(errno));
+        }
+        return;
+    }
+    if (ioctl(fd, INIT_FB_GETINFO, info) == 0) {
+        term_wanted = 1;
+    } else if (errno != ENODEV) {
+        fprintf(stderr, "init: console: /fb: %s; login on the kernel console\n", strerror(errno));
+    }
+    close(fd);
+    term_now = term_wanted;
+}
+#endif
+
+#ifdef INIT_METAL
 /**
  * Whether the boot line handed the network to userland.
  *
@@ -2326,7 +2451,8 @@ static void set_up(void)
  *
  * The three shutdown handlers go in before the first child, so a request that
  * arrives early is answered and does not meet a terminating default, which for
- * pid 1 is a panic. Then the machine is set up (`set_up`).
+ * pid 1 is a panic. Then the machine is set up (`set_up`), the login builds
+ * choose the console session (`want_term`), and the keyboard is set.
  *
  * Each turn respawns what is missing: the console session, whose failed fork
  * (a full process table) is retried after a second so the loop does not spin;
@@ -2353,7 +2479,8 @@ static void set_up(void)
  * entropy for the host key, no network, a port already taken), and is
  * respawned only after a pause, so the loop does not spin; an interactive
  * session outlives that window, so an ordinary `exit` brings the prompt back
- * at once.
+ * at once. A failed `term` is followed at once by the kernel console's
+ * login, which a person needs then, and that login's own failures pause.
  */
 int main(void)
 {
@@ -2369,6 +2496,9 @@ int main(void)
 
     catch_shutdown();
     set_up();
+#ifdef INIT_CONSOLE_LOGIN
+    want_term();
+#endif
     configure_console();
 #ifdef INIT_METAL
     services_found(&services);
@@ -2436,7 +2566,9 @@ int main(void)
         if (reaped > 0 && reaped == shell) {
             shell = -1;
 #ifdef INIT_CONSOLE_LOGIN
-            session_ended(status, time(0) - spawned);
+            if (session_ended(status, time(0) - spawned)) {
+                continue;
+            }
 #endif
             if (time(0) - spawned < 2) {
 #ifdef INIT_CONSOLE_LOGIN
