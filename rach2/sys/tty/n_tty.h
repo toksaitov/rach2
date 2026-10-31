@@ -57,6 +57,7 @@ struct ktermios {
 #define INLCR  0000100
 #define IGNCR  0000200
 #define ICRNL  0000400
+#define IUTF8  0040000 /* the input is UTF-8: an erase removes a whole character */
 
 /* c_cflag bits: the speed code 38400 and the character size, receiver and
  * hang-up bits a new Linux terminal starts with (tty_std_termios). */
@@ -115,7 +116,8 @@ struct n_tty {
 /**
  * Reset `t` to the default canonical termios, empty buffers and zeroed
  * counters. The defaults are a standard tty's: ICRNL input, OPOST and ONLCR
- * output, 38400 baud with eight-bit characters, ISIG and ICANON with ECHO,
+ * output, IUTF8, since Rach2's text is UTF-8, as Linux's console has it in
+ * its UTF-8 mode, 38400 baud with eight-bit characters, ISIG and ICANON with ECHO,
  * ECHOE, ECHOK and ECHOCTL, the conventional control characters (^C, ^\, DEL,
  * ^U, ^D, ^Z, ^W) and VMIN 1.
  */
