@@ -26,7 +26,10 @@
  * others reuse its product, and a reader never sees a partial one. A
  * controller killed while its recipe runs leaves nothing, and its lock
  * goes with it. An overlay of an object is an empty qcow2 file over it, in
- * each cluster size QEMU opens, and one QEMU cannot open is refused.
+ * each cluster size QEMU opens, and one QEMU cannot open is refused. A
+ * digest taken on the processor's SHA instructions is the portable code's,
+ * a table of digests is written once, and a digest kept by the writer of a
+ * file is used until the file changes.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -55,6 +58,10 @@ static int fails;
  * copies it made. */
 extern long long etude_store_settle_ns;
 extern unsigned long etude_store_hashed, etude_store_copied;
+
+/* Nonzero makes store.c hash on the portable code of utils/sha256.c alone,
+ * and not on the processor's SHA instructions. */
+extern int etude_store_portable;
 
 /** Count a failure when `cond` is false, and print its file, line and row. */
 #define CHECK(cond, row)                                                                    \
@@ -765,6 +772,177 @@ static void test_digests_old_format(void)
     CHECK(write_text(cache, line + 2) == 0 && etude_digest_file(cache, src, &st, digest) == 0 &&
               etude_store_hashed == hashed + 1,
           "digests: old entry is read again");
+}
+
+/** Fill the `n` bytes of `buf` with a sequence that repeats no block. */
+static void fill(unsigned char *buf, size_t n)
+{
+    unsigned long x = 12345;
+    size_t i;
+
+    for (i = 0; i < n; i++) {
+        x = x * 1103515245UL + 12345UL;
+        buf[i] = (unsigned char)(x >> 16);
+    }
+}
+
+/**
+ * Hash on the processor's SHA instructions what the portable code hashes
+ * to the same digest: files of lengths at the edges of a block, of the
+ * padding and of a chunk read, each read with the instructions and without.
+ */
+static void test_digests_portable(void)
+{
+    static const size_t lengths[] = {0,
+                                     1,
+                                     55,
+                                     56,
+                                     63,
+                                     64,
+                                     65,
+                                     119,
+                                     120,
+                                     127,
+                                     128,
+                                     129,
+                                     4095,
+                                     65536,
+                                     65537,
+                                     1048575,
+                                     1048576,
+                                     1048641,
+                                     3 * 1048576 + 7};
+    const char *src = fix_path("portable-src");
+    char want[ETUDE_DIGEST_HEX + 1], hw[ETUDE_DIGEST_HEX + 1], sw[ETUDE_DIGEST_HEX + 1];
+    unsigned char *buf = malloc(3 * 1048576 + 7);
+    struct stat st;
+    size_t i;
+    int fd, r;
+
+    CHECK(buf != NULL, "portable: memory");
+    if (buf == NULL)
+        return;
+    fill(buf, 3 * 1048576 + 7);
+    for (i = 0; i < sizeof(lengths) / sizeof(lengths[0]); i++) {
+        sha_hex(buf, lengths[i], want);
+        fd = open(src, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        r = fd >= 0 && put_all(fd, buf, lengths[i]) == 0;
+        if (fd >= 0 && close(fd) != 0)
+            r = 0;
+        etude_store_portable = 0;
+        r = r && etude_digest_file(NULL, src, &st, hw) == 0;
+        etude_store_portable = 1;
+        r = r && etude_digest_file(NULL, src, &st, sw) == 0;
+        etude_store_portable = 0;
+        CHECK(r && strcmp(hw, want) == 0 && strcmp(sw, want) == 0,
+              "portable: a file's digest is the portable one");
+        if (!r || strcmp(hw, want) != 0 || strcmp(sw, want) != 0)
+            printf("etude-artifact-test: length %lu: %s %s %s\n", (unsigned long)lengths[i], want,
+                   hw, sw);
+    }
+    free(buf);
+}
+
+/**
+ * Keep the digests of one process in a table, read once and written once:
+ * a digest it reads is found in the table without another read and is in
+ * the file only once the table is closed, with the line another process
+ * wrote meanwhile, and a file written since keeps no digest.
+ */
+static void test_digests_table(void)
+{
+    const char *cache = fix_path("table-digests"), *a = fix_path("table-a");
+    const char *b = fix_path("table-b"), *other = fix_path("table-other");
+    char d[ETUDE_DIGEST_HEX + 1], ha[ETUDE_DIGEST_HEX + 1], hb[ETUDE_DIGEST_HEX + 1];
+    struct etude_digests *t;
+    unsigned long hashed;
+    struct stat st, was;
+
+    etude_store_settle_ns = 0;
+    sha_hex("table a\n", 8, ha);
+    sha_hex("table b\n", 8, hb);
+    CHECK(write_text(a, "table a\n") == 0 && write_text(b, "table b\n") == 0 &&
+              write_text(other, "other\n") == 0,
+          "table: files");
+    t = etude_digests_open(cache);
+    CHECK(t != NULL, "table: open");
+    if (t == NULL)
+        return;
+    hashed = etude_store_hashed;
+    CHECK(etude_digests_find(t, a, &st, d) == 1, "table: an empty table keeps nothing");
+    CHECK(etude_digests_file(t, a, &st, d) == 0 && strcmp(d, ha) == 0 &&
+              etude_store_hashed == hashed + 1,
+          "table: read");
+    CHECK(etude_digests_file(t, a, &st, d) == 0 && strcmp(d, ha) == 0 &&
+              etude_store_hashed == hashed + 1,
+          "table: a digest it keeps is not read again");
+    CHECK(!has_line(cache, a), "table: the file is not written before the table closes");
+    CHECK(etude_digest_file(cache, other, &st, d) == 0 && has_line(cache, other),
+          "table: another process keeps a digest meanwhile");
+    CHECK(etude_digests_file(t, b, &st, d) == 0 && strcmp(d, hb) == 0, "table: a second file");
+    etude_digests_close(t);
+    CHECK(has_line(cache, a) && has_line(cache, b) && has_line(cache, other),
+          "table: closing writes its digests and keeps the other's");
+    hashed = etude_store_hashed;
+    CHECK(etude_digest_file(cache, b, &st, d) == 0 && strcmp(d, hb) == 0 &&
+              etude_store_hashed == hashed,
+          "table: a digest written is used");
+    CHECK(stat(a, &was) == 0 && overwrite(a, "TABLE A\n", &was) == 0,
+          "table: a write that keeps the size and the time");
+    t = etude_digests_open(cache);
+    CHECK(t != NULL && etude_digests_find(t, a, &st, d) == 1,
+          "table: the digest of a file written since is not used");
+    etude_digests_close(t);
+}
+
+/**
+ * Write a file with etude_digest_write from a pipe, in pieces that leave a
+ * block part filled: the file has what was written, its digest is the
+ * portable one and is kept without the file being read, and a write of the
+ * file since has it read again.
+ */
+static void test_digests_write(void)
+{
+    const char *cache = fix_path("write-digests"), *dst = fix_path("write-image");
+    char want[ETUDE_DIGEST_HEX + 1], d[ETUDE_DIGEST_HEX + 1];
+    size_t n = 3 * 1048576 + 1001, at, k;
+    unsigned char *buf = calloc(1, n);
+    unsigned long hashed;
+    struct stat st, was;
+    int fds[2], status = -1;
+    pid_t pid;
+
+    CHECK(buf != NULL && pipe(fds) == 0, "write: pipe");
+    if (buf == NULL)
+        return;
+    fill(buf, 1048576);
+    fill(buf + 2 * 1048576, 1001);
+    sha_hex(buf, n, want);
+    if ((pid = fork()) == 0) {
+        close(fds[0]);
+        for (at = 0; at < n; at += k) {
+            k = n - at < 1000 ? n - at : 1000;
+            if (put_all(fds[1], buf + at, k) != 0)
+                _exit(1);
+        }
+        _exit(0);
+    }
+    close(fds[1]);
+    CHECK(pid > 0 && etude_digest_write(cache, fds[0], dst, d) == 0 && strcmp(d, want) == 0,
+          "write: the digest of what was written");
+    close(fds[0]);
+    CHECK(pid > 0 && waitpid(pid, &status, 0) == pid && status == 0, "write: the writer");
+    CHECK(stat(dst, &st) == 0 && (size_t)st.st_size == n && has_line(cache, dst),
+          "write: the file and its line");
+    hashed = etude_store_hashed;
+    CHECK(etude_digest_file(cache, dst, &st, d) == 0 && strcmp(d, want) == 0 &&
+              etude_store_hashed == hashed,
+          "write: its digest is used without a read");
+    CHECK(stat(dst, &was) == 0 && overwrite(dst, "changed", &was) == 0 &&
+              etude_digest_file(cache, dst, &st, d) == 0 && strcmp(d, want) != 0 &&
+              etude_store_hashed == hashed + 1,
+          "write: a file written since is read again");
+    free(buf);
 }
 
 /** Give the allocation of `path`, requiring its expected length; 0 or -1. */
@@ -1754,6 +1932,9 @@ int main(int argc, char **argv)
     test_digests_objects();
     test_digests_object_settle();
     test_digests_old_format();
+    test_digests_portable();
+    test_digests_table();
+    test_digests_write();
     test_sparse();
     test_range();
     test_overlay();
