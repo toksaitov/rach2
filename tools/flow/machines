@@ -4,11 +4,12 @@
 # line puts a directory before the run's PATH, in the order of the lines.
 
 # The Mac, which runs release.sh: QEMU under TCG, in the copy and the
-# admission site under build/machines/mac of the clone that runs it.
+# admission site under build/machines/mac of the clone that runs it. Its
+# guests share 14 GiB of its 24.
 mac accel tcg
 mac path /opt/homebrew/bin
 mac env RACH2_WORKERS=8
-mac env RACH2_MEMORY_MIB=10240
+mac env RACH2_MEMORY_MIB=14336
 mac env RACH2_CPUS=2
 mac env JOBS=8
 
