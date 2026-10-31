@@ -6,16 +6,21 @@
 #define _RACH2_FB_H_
 
 /*
- * A program takes the screen by opening /fb and sending a mode request, and
- * is then its owner: the console draws nothing until the owner leaves the
+ * A program takes the screen by opening /fb, which enters mode 13h, and is
+ * then its owner: the console draws nothing until the owner leaves the
  * mode, closes /fb or exits. Every request but FB_MODE_13H, which may take a
- * screen nobody owns, is refused with EBUSY to any process but the owner.
+ * screen nobody owns, and every write are refused with EBUSY to any process
+ * but the owner, a child that inherited the descriptor among them.
  *
  * Mode 13h is 320 by 200 pixels of one byte, an index into a palette of 256
- * colors, written whole with write(2) at 64000 bytes. The native mode is the
- * screen's own framebuffer as FB_GETINFO reports it, written in rows of
- * pixels with pwrite(2) at byte offsets from the top left pixel, `pitch`
- * bytes a row.
+ * colors, written whole with write(2) at 64000 bytes; there the offset does
+ * not move, so each write from 0 is a frame. The native mode is the screen's
+ * own framebuffer as FB_GETINFO reports it, written in rows of pixels with
+ * pwrite(2) at byte offsets from the top left pixel, `pitch` bytes a row, or
+ * with lseek(2) and write(2), which moves the offset as on a file. A write
+ * stops at the mode's end, `pitch` times `height` bytes; one that starts past
+ * it is refused with EFBIG, and one at it with ENOSPC. A mode request that
+ * changes the mode puts the offset back at 0.
  *
  * The header uses no type of a C library, so that the kernel and Doom's
  * freestanding port include it too: an unsigned int has 32 bits on i686 and
@@ -28,10 +33,10 @@
 #define FB_GETINFO     0x4604 /* the framebuffer, into a struct fb_screen */
 #define FB_MODE_NATIVE 0x4605 /* enter the native mode, at FB_GETINFO's format */
 
-/* FB_GETINFO is refused with ENODEV on a text console; FB_MODE_NATIVE is
- * refused with ENODEV there and on an indexed framebuffer. The kernel does
- * not offer the native mode or the events below yet: it refuses both
- * requests with ENOTTY. */
+/* FB_GETINFO, which reports the framebuffer whatever the mode, is refused
+ * with ENODEV on a text console; FB_MODE_NATIVE is refused with ENODEV there
+ * and on a framebuffer that is not RGB at 15, 16, 24 or 32 bits a pixel. The
+ * kernel does not send the events below yet. */
 
 #define FB_KIND_RGB     1 /* each pixel holds its red, green and blue */
 #define FB_KIND_INDEXED 2 /* each pixel is an index into a palette */

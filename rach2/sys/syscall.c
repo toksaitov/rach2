@@ -57,7 +57,6 @@
 #include "mm/vm.h"
 #include "lib/kuser.h"
 #include "lib/kstring.h"
-#include "display/fb.h"
 #include "display/blank.h"
 #include "speaker.h"
 #include "audio/audio.h"
@@ -81,13 +80,6 @@
 #include "ipc/sysv.h"
 #include "ipc/mqueue.h"
 #include "syscall_internal.h"
-
-/* The thread group id of the one process that owns the framebuffer, 0 for
- * none. Text mode is restored when the owner exits, when it switches to text
- * mode and when it closes the last descriptor of its description; a close of
- * one descriptor of a shared description leaves the mode as it is, since the
- * description is still open. */
-volatile uint32_t fb_owner_pid = 0;
 
 /*
  * ioctl request codes (Linux compatible subset)
@@ -2163,44 +2155,6 @@ static int32_t console_ioctl(uint32_t request, uintptr_t arg)
 }
 
 /**
- * Change framebuffer mode or palette only for the process that owns it.
- *
- * A descriptor can survive a return to text mode and another process's open.
- * Mode 13h reacquires an unowned display; other requests require ownership.
- */
-static int32_t framebuffer_ioctl(uint32_t request, uintptr_t arg)
-{
-    if (request != FB_MODE_13H && request != FB_MODE_TEXT && request != FB_SETPALETTE) {
-        return -ENOTTY;
-    }
-    if (fb_owner_pid != current_proc->tgid && (fb_owner_pid != 0 || request != FB_MODE_13H)) {
-        return -EBUSY;
-    }
-    switch (request) {
-    case FB_MODE_13H:
-        if (!gfx_is_active()) {
-            console_unblank_now();
-            fb_enter();
-        }
-        fb_owner_pid = current_proc->tgid;
-        return 0;
-    case FB_MODE_TEXT:
-        fb_exit();
-        fb_owner_pid = 0;
-        return 0;
-    default: {
-        static uint8_t palette[768];
-
-        if (!arg || copy_from_user(palette, (const void __user *)arg, sizeof(palette)) != 0) {
-            return -EFAULT;
-        }
-        fb_set_palette(palette);
-        return 0;
-    }
-    }
-}
-
-/**
  * Device control (ioctl(2)).
  *
  * Its arguments are fd, request and arg. Returns 0, the request's result, or
@@ -2217,9 +2171,9 @@ static int32_t framebuffer_ioctl(uint32_t request, uintptr_t arg)
  * address; the termios and session requests of `tty_common_ioctl` on the
  * console and a pty slave, ahead of the slave's own operations; and the
  * `ioctl` of an object with operations of its own, such as a pipe or a pty
- * master, -ENOTTY when it has none. The framebuffer answers its FB_* requests
- * (`framebuffer_ioctl`), and the console its sound requests
- * (`console_ioctl`); these go by the descriptor's type, so a descriptor 1
+ * master, -ENOTTY when it has none; the framebuffer's operations answer
+ * its FB_* requests (display/fbdev.c). The console answers its sound
+ * requests (`console_ioctl`), by the descriptor's type, so a descriptor 1
  * reopened onto a regular file never reaches the speaker.
  */
 long sys_ioctl(isr_params_t *params)
@@ -2274,10 +2228,6 @@ long sys_ioctl(isr_params_t *params)
     }
     if (tty_request(request)) {
         return -ENOTTY; /* terminal-only requests on a non-terminal fd */
-    }
-
-    if (entry->type == FD_TYPE_FRAMEBUFFER) {
-        return framebuffer_ioctl(request, arg);
     }
 
     if (entry->type == FD_TYPE_CONSOLE) {

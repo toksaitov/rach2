@@ -61,6 +61,7 @@ C_SRC_SHARED = kernel.c \
     sys/audio/mixer.c \
     sys/display/backlight.c \
     sys/display/blank.c \
+    sys/display/fbdev.c \
     sys/mm/heap.c \
     sys/mm/paging.c \
     sys/mm/kheap.c \

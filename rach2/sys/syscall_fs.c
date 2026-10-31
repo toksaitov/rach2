@@ -363,19 +363,18 @@ static void fd_close_locks(const fd_entry_t *e)
  * Release what the descriptor `e` holds besides its slot and the table's
  * record locks: a node of the KRFFS root that lost its name and has `e` as
  * its last holder, the record of a synthetic directory, the classified path
- * an O_PATH descriptor of a /dev or /proc leaf keeps, the framebuffer, the
- * descriptor's socket reference, and an object with operations (a pipe, a
- * terminal, a pty). Every release of a descriptor comes here, most by
+ * an O_PATH descriptor of a /dev or /proc leaf keeps, the descriptor's
+ * socket reference, and an object with operations (a pipe, a terminal, a
+ * pty, the framebuffer). Every release of a descriptor comes here, most by
  * `fd_release_backing`, so none can miss a kind of backing; the caller frees
  * the slot with `fd_free`. May sleep.
  *
- * The record, the path, the framebuffer and an object with operations
- * belong to the open file description, which dup, dup2 and fork share by
- * its reference count, so each is released once, when the description's
- * last descriptor closes (`refcount` 1 here, before `fd_free` drops it).
- * The framebuffer goes back to text mode only when the caller's process
- * owns it, so a child that inherited the descriptor and closes it or exits
- * does not end its parent's graphics mode. The socket reference is counted
+ * The record, the path and an object with operations belong to the open
+ * file description, which dup, dup2 and fork share by its reference count,
+ * so each is released once, when the description's last descriptor closes
+ * (`refcount` 1 here, before `fd_free` drops it). The framebuffer's close
+ * gives the display back only when the caller's process owns it
+ * (display/fbdev.c). The socket reference is counted
  * for each descriptor (`socket_ref` on dup and fork) and is dropped every
  * time. No descriptor is both an object with operations and a socket.
  *
@@ -392,11 +391,6 @@ static void fd_release_objects(fd_entry_t *e)
         e->ofd->refcount == 1) {
         kfree(e->priv);
         e->priv = NULL;
-    }
-    if (e->type == FD_TYPE_FRAMEBUFFER && current_proc && fb_owner_pid == current_proc->tgid &&
-        e->ofd && e->ofd->refcount == 1) {
-        fb_exit();
-        fb_owner_pid = 0;
     }
     if (e->type == FD_TYPE_SOCKET && e->sock) {
         socket_unref(e->sock);
@@ -499,7 +493,8 @@ void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked)
  * transfer uses `raw_offset`; a /proc file's the offset, a byte of its text
  * or an address of /proc/PID/mem; and a log device's the offset, a byte of
  * the kernel log's ring or of the screen log's text
- * (`devfs_fd_moves_offset`). Each may sleep before it sets the offset past
+ * (`devfs_fd_moves_offset`); and the framebuffer's the offset, a byte of
+ * its pixels. Each may sleep before it sets the offset past
  * what it moved, in a disk request, or in a fault on the caller's buffer or
  * in bringing in a page of a process. A seek through a descriptor that
  * shares the description must wait for it or be lost, and a second transfer
@@ -509,7 +504,10 @@ void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked)
  */
 static struct open_file *ops_offset_held(fd_entry_t *entry)
 {
-    return devfs_fd_moves_offset(entry) || entry->type == FD_TYPE_PROC ? entry->ofd : NULL;
+    return devfs_fd_moves_offset(entry) || entry->type == FD_TYPE_PROC ||
+                   entry->type == FD_TYPE_FRAMEBUFFER
+               ? entry->ofd
+               : NULL;
 }
 
 /** Dispatch an ops-backed write, holding the description of one whose write
@@ -669,8 +667,7 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
  * to the peer it connected to, -EDESTADDRREQ without one, and a datagram
  * past 1500 bytes is -EMSGSIZE; a socket of another type is -EOPNOTSUPP.
  * A file of a mount or of the KRFFS root is `file_write`'s. The framebuffer
- * takes at most its size, copied in and shown (`fb_present`), and is -EBADF
- * outside graphics mode.
+ * has operations of its own (display/fbdev.c).
  *
  * The console takes the bytes in pieces through a 256-byte kernel buffer and
  * writes them through the terminal's output processing (OPOST and ONLCR, so
@@ -760,27 +757,6 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
 
     if (entry->type == FD_TYPE_FILE) {
         return file_write(entry, buf, count, NULL);
-    }
-
-    if (entry->type == FD_TYPE_FRAMEBUFFER) {
-        uint32_t to_copy;
-
-        if (!gfx_is_active()) {
-            return -EBADF;
-        }
-
-        to_copy = count;
-        if (to_copy > gfx_current.size) {
-            to_copy = gfx_current.size;
-        }
-
-        if (copy_from_user((void *)gfx_current.framebuffer, (const void __user *)buf, to_copy) !=
-            0) {
-            return -EFAULT;
-        }
-        fb_present();
-
-        return (int32_t)to_copy;
     }
 
     return -EBADF;
@@ -2367,19 +2343,21 @@ static int name_is(const char *name, const char *lit)
 }
 
 /**
- * The framebuffer descriptor, for an open of the name "fb", or a negative
- * errno: -EBUSY while another process owns the framebuffer. One process at a
- * time owns it, by its thread group id, which the ioctl, the console read and
- * the last close compare too, so any of its threads may use it. The open
- * unblanks the console (`console_unblank_now`), whose backlight would stay
- * off under the picture, switches the display to its graphics mode
- * (`fb_enter`, VGA mode 13h on a PC) and drops the scancodes the keyboard
- * queued for the shell before it.
+ * The framebuffer descriptor, for an open of the name "fb" with the open's
+ * `flags`, or a negative errno: -EBUSY while another process owns the
+ * framebuffer. One process at a time owns it, by its thread group id, which
+ * the descriptor's operations (display/fbdev.c), the console read and the
+ * last close compare too, so any of its threads may use it. The open takes
+ * the display at mode 13h (`fb_take`), unblanking the console first, whose
+ * backlight would stay off under the picture, and drops the scancodes the
+ * keyboard queued for the shell before it. O_CLOEXEC and O_NONBLOCK are
+ * kept; the access mode is not, since the descriptor reads and writes.
  */
-static int32_t open_framebuffer(void)
+static int32_t open_framebuffer(int flags)
 {
     fd_entry_t *entry;
     int fd;
+    int32_t rc;
 
     if (fb_owner_pid != 0 && fb_owner_pid != current_proc->tgid) {
         return -EBUSY;
@@ -2389,16 +2367,20 @@ static int32_t open_framebuffer(void)
     if (fd < 0) {
         return fd;
     }
+    rc = fb_take();
+    if (rc != 0) {
+        fd_free(current_proc->fds, fd);
+        return rc;
+    }
 
     entry = &current_proc->fds->entries[fd];
     entry->type = FD_TYPE_FRAMEBUFFER;
     entry->node = NULL;
+    entry->ops = &fb_file_ops;
+    entry->priv = NULL;
     entry->ofd->offset = 0;
-    entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
-
-    console_unblank_now();
-    fb_enter();
-    fb_owner_pid = current_proc->tgid;
+    entry->ofd->status_flags = (flags & O_NONBLOCK) ? OFD_NONBLOCK : 0u;
+    entry->flags = FD_FLAG_READ | FD_FLAG_WRITE | ((flags & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0u);
 
     kbd_clear_scancodes();
 
@@ -2406,11 +2388,11 @@ static int32_t open_framebuffer(void)
 }
 
 /**
- * The mouse descriptor, read-only, for an open of the name "mouse", with the
- * packets queued before the open dropped; -ENODEV when no mouse of any kind
- * was found.
+ * The mouse descriptor, read-only, for an open of the name "mouse" with the
+ * open's `flags`, with the packets queued before the open dropped; -ENODEV
+ * when no mouse of any kind was found. O_CLOEXEC and O_NONBLOCK are kept.
  */
-static int32_t open_mouse(void)
+static int32_t open_mouse(int flags)
 {
     fd_entry_t *entry;
     int fd;
@@ -2428,7 +2410,8 @@ static int32_t open_mouse(void)
     entry->type = FD_TYPE_MOUSE;
     entry->node = NULL;
     entry->ofd->offset = 0;
-    entry->flags = FD_FLAG_READ;
+    entry->ofd->status_flags = (flags & O_NONBLOCK) ? OFD_NONBLOCK : 0u;
+    entry->flags = FD_FLAG_READ | ((flags & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0u);
 
     mouse_clear_packets();
 
@@ -2461,7 +2444,8 @@ static int device_name(const char *name, const char *lit)
  * `name` is one of the two, 0 when it is not. Neither device is a
  * directory, so the name with a last "." or "..", and O_DIRECTORY, which a
  * trailing slash sets (`open_named`), are -ENOTDIR, before the display or
- * the mouse is touched. The other flags are ignored.
+ * the mouse is touched. O_CLOEXEC and O_NONBLOCK are kept, and the other
+ * flags ignored.
  */
 static int open_device_name(const char *name, int flags, int *result)
 {
@@ -2474,7 +2458,7 @@ static int open_device_name(const char *name, int flags, int *result)
     if (fb == 2 || mouse == 2 || (flags & O_DIRECTORY)) {
         *result = -ENOTDIR;
     } else {
-        *result = fb ? open_framebuffer() : open_mouse();
+        *result = fb ? open_framebuffer(flags) : open_mouse(flags);
     }
     return 1;
 }
@@ -4223,6 +4207,44 @@ static int seek_bootlog(fd_entry_t *entry, long long off, int whence, uint64_t l
 }
 
 /**
+ * lseek(2) and _llseek(2) on /fb, whose offset is a byte of the pixels of
+ * the mode in force, counted from the top left one: the offset `whence` and
+ * `off` give, stored in the description under its lock, which a write(2)
+ * holds, and returned in `*out`, or a negative errno with the offset
+ * unchanged. SEEK_END counts from the mode's size (`fb_size`), 0 in text
+ * mode. A place before 0 is -EINVAL, and one past `limit`, the largest
+ * offset the call can return, -EOVERFLOW; a place past the end is kept, as
+ * on a file, and a write there is refused.
+ */
+static int seek_framebuffer(fd_entry_t *entry, long long off, int whence, uint64_t limit,
+                            long long *out)
+{
+    long long at = off;
+    int rc = 0;
+
+    fd_ofd_lock(entry->ofd);
+    if (whence == 1) {
+        rc = seek_add(entry->ofd->offset, off, &at);
+    } else if (whence == 2) {
+        rc = seek_add((uint64_t)fb_size(), off, &at);
+    } else if (whence != 0) {
+        rc = -EINVAL;
+    }
+    if (rc == 0 && at < 0) {
+        rc = -EINVAL;
+    }
+    if (rc == 0 && (uint64_t)at > limit) {
+        rc = -EOVERFLOW;
+    }
+    if (rc == 0) {
+        entry->ofd->offset = (uint64_t)at;
+        *out = at;
+    }
+    fd_ofd_unlock(entry->ofd);
+    return rc;
+}
+
+/**
  * lseek(2): move the offset of the descriptor in argument 0 by the offset
  * in argument 1, a signed register's worth, and the whence in argument 2;
  * the new offset, or a negative errno with the offset unchanged.
@@ -4232,8 +4254,9 @@ static int seek_bootlog(fd_entry_t *entry, long long off, int whence, uint64_t l
  * and a place before 0, is -EINVAL. The description's lock is held from the
  * getattr to the store, so a seek through a shared description waits for a
  * transfer that holds it. A raw disk window, /dev/mem and a loop device seek
- * by `raw_lseek`, /dev/bootlog by `seek_bootlog`, and a directory or a /proc
- * file by `seek_listing`. /dev/null, /dev/zero and /dev/full take any seek
+ * by `raw_lseek`, /dev/bootlog by `seek_bootlog`, /fb by `seek_framebuffer`,
+ * and a directory or a /proc file by `seek_listing`. /dev/null, /dev/zero
+ * and /dev/full take any seek
  * and land at 0. Any other descriptor, among them a pipe, a socket, a
  * terminal, the mouse and any other device, is -ESPIPE, as POSIX has it for
  * what cannot seek; one opened with O_PATH is -EBADF.
@@ -4279,6 +4302,10 @@ long sys_lseek(isr_params_t *params)
     }
     if (entry->type == FD_TYPE_CONSOLE || entry->type == FD_TYPE_MOUSE) {
         return -ESPIPE;
+    }
+    if (entry->type == FD_TYPE_FRAMEBUFFER && entry->ofd) {
+        seek_rc = seek_framebuffer(entry, offset, whence, limit, &at);
+        return seek_rc != 0 ? seek_rc : (long)at;
     }
     if (seeks_listing(entry)) {
         seek_rc = seek_listing(entry, offset, whence, limit, &at);
@@ -8906,6 +8933,27 @@ static int32_t llseek_listing(fd_entry_t *entry, long long off, int whence,
 }
 
 /**
+ * `_llseek` on /fb, by `seek_framebuffer`'s rules, with the new offset
+ * written to the caller's `result`, which must not be NULL. Returns 0 or a
+ * negative errno.
+ */
+static int32_t llseek_framebuffer(fd_entry_t *entry, long long off, int whence,
+                                  long long __user *result)
+{
+    long long at;
+    int rc;
+
+    if (!result) {
+        return -EFAULT;
+    }
+    rc = seek_framebuffer(entry, off, whence, 0x7FFFFFFFFFFFFFFFull, &at);
+    if (rc == 0 && copy_to_user(result, &at, sizeof(at)) != 0) {
+        rc = -EFAULT;
+    }
+    return rc;
+}
+
+/**
  * The current size of the file an ordinary descriptor is open on, into
  * `*out`: a KRFFS root file's from its node, and another type's from its
  * file system.
@@ -8952,7 +9000,8 @@ static int file_size_now(fd_entry_t *entry, uint64_t *out)
  * `result`.
  *
  * A raw disk window moves its own offset (`raw_seek_resolve`), the log seeks
- * by `llseek_bootlog`, a directory or a /proc file by `llseek_listing`, and
+ * by `llseek_bootlog`, /fb by `llseek_framebuffer`, a directory or a /proc
+ * file by `llseek_listing`, and
  * /dev/null, /dev/zero and /dev/full land at 0 and take a NULL `result`. A
  * file's offset moves under the description's lock, as read and write move
  * it: every descriptor a dup or a fork made shares the offset, and a seek
@@ -9030,6 +9079,9 @@ long sys__llseek(isr_params_t *params)
     if (entry->type == FD_TYPE_CONSOLE || entry->type == FD_TYPE_MOUSE) {
         return -ESPIPE;
     }
+    if (entry->type == FD_TYPE_FRAMEBUFFER && entry->ofd) {
+        return llseek_framebuffer(entry, off_from(offset_high, offset_low), whence, result);
+    }
     if (seeks_listing(entry)) {
         return llseek_listing(entry, off_from(offset_high, offset_low), whence, result);
     }
@@ -9092,9 +9144,10 @@ long sys__llseek(isr_params_t *params)
  * end past the signed range is -EINVAL, and a directory is -EISDIR.
  *
  * What cannot seek is a pipe, a socket, a terminal or pseudoterminal, the
- * mouse, the framebuffer, and a device other than a raw disk window, the log
- * and the three whose seek always lands at 0, /dev/null, /dev/zero and
- * /dev/full. A /proc snapshot is read at an offset, as Linux reads one.
+ * mouse, and a device other than a raw disk window, the log and the three
+ * whose seek always lands at 0, /dev/null, /dev/zero and /dev/full. A /proc
+ * snapshot is read at an offset, as Linux reads one, and the framebuffer
+ * written at one.
  * Returns 0 with the descriptor in `*out`, or the errno.
  */
 static int32_t pio_entry(int fd, int write, uint32_t count, long long pos, fd_entry_t **out)
@@ -9117,7 +9170,8 @@ static int32_t pio_entry(int fd, int write, uint32_t count, long long pos, fd_en
             return -ESPIPE;
         }
     } else if (entry->type != FD_TYPE_FILE && entry->type != FD_TYPE_DIR &&
-               entry->type != FD_TYPE_SYNTH_DIR && entry->type != FD_TYPE_PROC) {
+               entry->type != FD_TYPE_SYNTH_DIR && entry->type != FD_TYPE_PROC &&
+               entry->type != FD_TYPE_FRAMEBUFFER) {
         return -ESPIPE;
     }
     if (!(entry->flags & (write ? FD_FLAG_WRITE : FD_FLAG_READ))) {
@@ -9139,8 +9193,8 @@ static int32_t pio_entry(int fd, int write, uint32_t count, long long pos, fd_en
  * for pread64 and pwrite64.
  *
  * A device's read or write moves the offset it uses, a raw window's own or
- * the description's for the log, a /proc snapshot and /proc/PID/mem, and
- * reads nothing else of the description. Given the copy, it uses and moves
+ * the description's for the log, a /proc snapshot, /proc/PID/mem and the
+ * framebuffer, and reads nothing else of the description. Given the copy, it uses and moves
  * the copy's, and the shared description, which a sharer may be reading or
  * seeking at the same time, never changes. The offset is the whole
  * position, since one of /proc/PID/mem is an address, past 4 GiB on x86-64;
