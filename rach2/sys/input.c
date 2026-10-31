@@ -40,6 +40,36 @@ static int saw_e0;
 /* Whether a mouse of any kind was found. */
 static int mouse_present;
 
+/* The repeat's times in milliseconds, as `input_set_repeat` sets them. */
+static int repeat_delay_ms = 250;
+static int repeat_period_ms = 33;
+
+void input_set_repeat(int delay_ms, int period_ms)
+{
+    (void)delay_ms;
+    (void)period_ms;
+}
+
+void input_get_repeat(int *delay_ms, int *period_ms)
+{
+    *delay_ms = repeat_delay_ms;
+    *period_ms = repeat_period_ms;
+}
+
+void input_cancel_repeat(void)
+{}
+
+void input_set_leds(unsigned int mask)
+{
+    (void)mask;
+}
+
+int input_ps2_reply(uint8_t code)
+{
+    (void)code;
+    return 0;
+}
+
 int input_mouse_present(void)
 {
     return mouse_present;

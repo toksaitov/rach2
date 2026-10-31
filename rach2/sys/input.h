@@ -93,6 +93,48 @@ struct input_set1 {
  */
 void input_set1_event(struct input_set1 *kb, uint8_t code);
 
+/*
+ * The repeat and the LEDs of every keyboard, which the console's KD*
+ * requests and evdev's EVIOCSREP set. The keyboards repeat in software, in
+ * one place for all of them, so that a USB keyboard repeats as a PS/2 one
+ * does and both at the same rate.
+ */
+
+/**
+ * Set the repeat of every keyboard: the first repeat of a held key comes
+ * `delay_ms` after its press, and the next ones every `period_ms`. A negative
+ * time leaves that one as it is, and a period of 0 turns repeat off, as
+ * EVIOCSREP's does; KDKBDREP's 0, which leaves a time as it is, is given as
+ * -1. Any context. It sets nothing yet: a PS/2 keyboard repeats by its own
+ * typematic and a USB keyboard not at all.
+ */
+void input_set_repeat(int delay_ms, int period_ms);
+
+/** Store the repeat's times in milliseconds in `*delay_ms` and `*period_ms`:
+ * 250 and 33, Linux's, until `input_set_repeat` changes them. */
+void input_get_repeat(int *delay_ms, int *period_ms);
+
+/** Stop the repeat of whatever key is held, until it is pressed again: for a
+ * change of the keyboard's mode or of the screen's owner. Any context. */
+void input_cancel_repeat(void);
+
+/**
+ * Light the LEDs of every keyboard, `mask` LED_SCR, LED_NUM and LED_CAP of
+ * kd.h, and of a keyboard connected later. Any context: the keyboards'
+ * requests go out later, from a context that may wait. It lights nothing yet.
+ */
+void input_set_leds(unsigned int mask);
+
+/**
+ * Offer `code`, a byte the PS/2 keyboard sent, to the command waiting for the
+ * keyboard's reply, such as the LEDs': ACK, 0xFA, or RESEND, 0xFE. Returns 1
+ * when the byte was the reply and is consumed, and 0 when it goes on to the
+ * key stream. Called by the keyboard's interrupt before the byte reaches
+ * `input_set1_event`, in interrupt context. No command waits yet: it returns
+ * 0.
+ */
+int input_ps2_reply(uint8_t code);
+
 /**
  * Put one mouse report in the mouse queue (`mouse_push_packet`), for the USB
  * mouse driver; the platform's mouse fills the queue itself.
