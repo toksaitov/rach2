@@ -61,3 +61,5 @@ The Kitty keyboard protocol has flags 1, 2 and 4 and not 8 (report all keys as e
 ## Tests
 
 `tests/host/libtsm_width_hosttest.c`, listed as `libtsm_width` in the host suite, compiles the patched sources with the sanitizers. It checks wide wrapping, scroll regions, scrollback, combining marks and cursor positions through the public draw and VTE interfaces, and injects allocation failures while creating combined symbols. The host-test Readme describes the cases.
+
+[`tests/host/libtsm_keys_hosttest.c`](../../tests/host/libtsm_keys_hosttest.c) compiles the patched library with the host test and checks the three `0018-` patches: the protocol's requests and their stacks, SCOSC and SCORC, xterm's bytes for the function, editing, cursor, keypad and control keys, and the protocol's keys, among them its specification's own examples. [`tests/host/Readme.md`](../../tests/host/Readme.md) lists its rows.
