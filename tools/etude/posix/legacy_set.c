@@ -2829,18 +2829,115 @@ static int by_digest(const void *a, const void *b)
     return strcmp((const char *)a, (const char *)b);
 }
 
+/* The digests of the objects a run keeps, in a list that grows. */
+struct kept {
+    char (*hex)[ETUDE_DIGEST_HEX + 1];
+    size_t n, room;
+};
+
+/** Add the 64 hex digits at `hex` to `k`; 0, or -1 when memory runs out. */
+static int kept_add(struct kept *k, const char *hex)
+{
+    char (*more)[ETUDE_DIGEST_HEX + 1];
+
+    if (k->n == k->room) {
+        k->room = k->room ? 2 * k->room : 256;
+        if ((more = realloc(k->hex, k->room * sizeof(*k->hex))) == NULL)
+            return -1;
+        k->hex = more;
+    }
+    memcpy(k->hex[k->n], hex, ETUDE_DIGEST_HEX);
+    k->hex[k->n++][ETUDE_DIGEST_HEX] = '\0';
+    return 0;
+}
+
+/**
+ * Give in `hex` the digest of the object that `path`, a qcow2 overlay,
+ * names as its backing file: the last part of the backing file's name, when
+ * that is a digest. The header gives the name's offset at byte 8 and its
+ * length at byte 16, big-endian, within the first cluster of at most 2 MiB,
+ * as etude_store_overlay writes them.
+ *
+ * @return 1 with the digest, or 0 for a file that is no overlay of an object.
+ */
+static int overlay_base(const char *path, char hex[ETUDE_DIGEST_HEX + 1])
+{
+    unsigned char head[20];
+    char name[PATH_LEN];
+    uint64_t at = 0;
+    size_t size = 0;
+    const char *last;
+    FILE *f = fopen(path, "rb");
+    int i, r = 0;
+
+    if (f == NULL)
+        return 0;
+    if (fread(head, 1, sizeof(head), f) == sizeof(head) && memcmp(head, "QFI\xfb", 4) == 0) {
+        for (i = 8; i < 16; i++)
+            at = at << 8 | head[i];
+        for (i = 16; i < 20; i++)
+            size = size << 8 | head[i];
+        if (at >= sizeof(head) && at < (UINT64_C(1) << 21) && size >= ETUDE_DIGEST_HEX &&
+            size < sizeof(name) && fseek(f, (long)at, SEEK_SET) == 0 &&
+            fread(name, 1, size, f) == size) {
+            name[size] = '\0';
+            last = name + size - ETUDE_DIGEST_HEX;
+            if (strspn(last, "0123456789abcdef") == ETUDE_DIGEST_HEX &&
+                (last == name || last[-1] == '/')) {
+                memcpy(hex, last, ETUDE_DIGEST_HEX + 1);
+                r = 1;
+            }
+        }
+    }
+    fclose(f);
+    return r;
+}
+
+/**
+ * Add to `k` each object that an overlay kept as evidence names as its
+ * backing file: a failed member's disks, `EVIDENCE/WORK/copies/NAME`, which
+ * open only while their bases are in the store.
+ *
+ * @return 0, or -1 with errno set when the evidence cannot be read or memory
+ *         runs out; a run with no evidence directory keeps none.
+ */
+static int keep_evidence(const struct set *x, struct kept *k)
+{
+    char dir[PATH_LEN + 300], path[PATH_LEN + 600], hex[ETUDE_DIGEST_HEX + 1];
+    struct dirent *e, *g;
+    DIR *top, *d;
+    int r = 0;
+
+    if ((top = opendir(x->o->evidence)) == NULL)
+        return errno == ENOENT ? 0 : -1;
+    while (r == 0 && (e = readdir(top)) != NULL) {
+        if (e->d_name[0] == '.' ||
+            fit(dir, sizeof(dir), "%s/%s/copies", x->o->evidence, e->d_name) != 0 ||
+            (d = opendir(dir)) == NULL)
+            continue;
+        while (r == 0 && (g = readdir(d)) != NULL)
+            if (g->d_name[0] != '.' && fit(path, sizeof(path), "%s/%s", dir, g->d_name) == 0 &&
+                overlay_base(path, hex))
+                r = kept_add(k, hex);
+        closedir(d);
+    }
+    closedir(top);
+    return r;
+}
+
 /**
  * Remove from the tree's store each object whose digest no `file` line of the
- * preparation's record gives, so that the store keeps the artifacts of the
- * tree's last preparation and not those of every commit it held. The run
+ * preparation's record gives and no overlay kept as evidence names, so that
+ * the store keeps the artifacts of the tree's last preparation and the bases
+ * of the failures it kept, and not those of every commit it held. The run
  * holds the tree, so no other run uses an object meanwhile. An object that
- * cannot be removed is kept, and the run says so.
+ * cannot be removed is kept, and the run says so; when the record or the
+ * evidence cannot be read, every object is kept.
  */
 static void prune_objects(struct set *x)
 {
     char line[PATH_LEN + 200], dir[PATH_LEN], path[PATH_LEN + 80];
-    char (*keep)[ETUDE_DIGEST_HEX + 1] = NULL, (*more)[ETUDE_DIGEST_HEX + 1];
-    size_t n = 0, room = 0;
+    struct kept k = {NULL, 0, 0};
     struct dirent *e;
     FILE *f;
     DIR *d;
@@ -2851,31 +2948,31 @@ static void prune_objects(struct set *x)
         if (strncmp(line, "file ", 5) != 0 || strspn(line + 5, "0123456789abcdef") != 64 ||
             line[5 + 64] != ' ')
             continue;
-        if (n == room) {
-            room = room ? 2 * room : 256;
-            if ((more = realloc(keep, room * sizeof(*keep))) == NULL) {
-                fclose(f);
-                free(keep);
-                return;
-            }
-            keep = more;
+        if (kept_add(&k, line + 5) != 0) {
+            fclose(f);
+            free(k.hex);
+            return;
         }
-        memcpy(keep[n], line + 5, 64);
-        keep[n++][64] = '\0';
     }
     fclose(f);
-    qsort(keep, n, sizeof(*keep), by_digest);
+    if (keep_evidence(x, &k) != 0) {
+        say(x, "etude run: %s: objects kept: %s", x->o->evidence, strerror(errno));
+        free(k.hex);
+        return;
+    }
+    if (k.n > 0)
+        qsort(k.hex, k.n, sizeof(*k.hex), by_digest);
     if (fit(dir, sizeof(dir), "%s/objects", x->objects_dir) == 0 && (d = opendir(dir)) != NULL) {
         while ((e = readdir(d)) != NULL) {
             if (strlen(e->d_name) != 64 || strspn(e->d_name, "0123456789abcdef") != 64 ||
-                (n > 0 && bsearch(e->d_name, keep, n, sizeof(*keep), by_digest) != NULL))
+                (k.n > 0 && bsearch(e->d_name, k.hex, k.n, sizeof(*k.hex), by_digest) != NULL))
                 continue;
             if (fit(path, sizeof(path), "%s/%s", dir, e->d_name) == 0 && unlink(path) != 0)
                 say(x, "etude run: %s: not removed: %s", path, strerror(errno));
         }
         closedir(d);
     }
-    free(keep);
+    free(k.hex);
 }
 
 /** Open the store of the guest and machine cases' artifacts, the tree's
