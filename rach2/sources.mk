@@ -29,6 +29,7 @@ C_SRC_SHARED = kernel.c \
     sys/cmdline.c \
     sys/input.c \
     sys/kd.c \
+    sys/keymap.c \
     sys/evdev.c \
     sys/panic.c \
     sys/block/block.c \
