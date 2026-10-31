@@ -483,8 +483,9 @@ static int setup(struct release *r, struct fixture *f)
         "%sinstall done %s root r\ntrial done %s the new kernel runs from the candidate slot\n",
         r->installing, T, T);
     snprintf(r->accepted, sizeof(r->accepted),
-             "%saccept done %s metal-accept: PASS; committed and copied to the fallback slot\n",
-             r->tried, T);
+             "%saccept done %s metal-accept: PASS\ncommit done %s committed and copied to the "
+             "fallback slot\n",
+             r->tried, T, T);
     snprintf(r->finished, sizeof(r->finished), "%srecord done %s /etc/rach2/release names %s\n",
              r->accepted, T, H);
     snprintf(r->ended, sizeof(r->ended),
@@ -626,7 +627,7 @@ static int finished_rows(struct release *r)
         held = !f->status && archived(r, "7-11111111-");
         snprintf(sum, sizeof(sum), "%s.sha256", r->retired);
         line = last_line(r->retired);
-        held = held && !strncmp(line, "closed ", 7) && count(r->retired, " done ") == 9 &&
+        held = held && !strncmp(line, "closed ", 7) && count(r->retired, " done ") == 10 &&
                count(r->retired, "^closing ") == 1 &&
                before(r, "push origin " H ":refs/heads/master\n",
                       "gh api -X PATCH repos/toksaitov/rach2/milestones/7 -f state=closed\n") &&
@@ -887,6 +888,18 @@ static int rerun_rows(struct release *r)
                "-r runs every suite again after a failure that is no suite") &&
          ok;
     snprintf(old, sizeof(old),
+             "milestone 7\nsha %s\nbranch %s\nchosen %s\nagain full x86_64:agents\ntouched "
+             "%s\nrun 101 failure\nfailure full 101 runner\nfailed tests: full run 101: "
+             "runner\n",
+             H, BRANCH, T, T);
+    run(r,
+        &(struct release_row){.record = old, .sha = C, .git = "yes", .runs = "none", .rerun = 1});
+    ok = check(r,
+               f->status == 75 && fx_has(record(r), "\nagain full x86_64:agents\n") &&
+                   called(r, " -f suites=x86_64:agents$"),
+               "-r runs again a rerun's suites after a failure that is no suite") &&
+         ok;
+    snprintf(old, sizeof(old),
              "milestone 7\nsha %s\nbranch %s\nchosen %s\ntouched %s\nrun 101 failure\nfailure "
              "full 101 x86_64:agents\nwindows done %s run w\nfailed tests: full run 101: "
              "x86_64:agents\n",
@@ -963,8 +976,9 @@ static int acceptance_rows(struct release *r)
                   before(r, "machine write bootctl fallback\n", "machine write release\n") &&
                   before(r, "machine write release\n", " push origin ") &&
                   count(flow_path(f, "calls"), "^(accept|machine write)") == 4 &&
-                  count(r->retired, "^accept done .* metal-accept: PASS; committed and copied to "
-                                    "the fallback slot$") == 1 &&
+                  count(r->retired, "^accept done .* metal-accept: PASS$") == 1 &&
+                  count(r->retired, "^commit done .* committed and copied to the fallback "
+                                    "slot$") == 1 &&
                   !called(r, "^gh issue"),
               "acceptance commits trial, copies it to the fallback slot, then records and "
               "releases") &&
@@ -1257,24 +1271,25 @@ static int lenovo_rows(struct release *r)
                                  .native = "pass"});
     ok = check(r,
                !f->status && archived(r, "7-11111111-") &&
+                   before(r, "accept 192.168.0.106\n", "native-deploy stage ") &&
                    before(r, "native-deploy stage ", "native-deploy run ") &&
-                   before(r, "native-deploy run ", "accept 192.168.0.106\n") &&
-                   before(r, "accept 192.168.0.106\n", "machine write bootctl commit\n") &&
+                   before(r, "native-deploy run ", "machine write bootctl commit\n") &&
                    called(r, "^native-deploy run .*/state/wt/build/x86_64/images/../tests/native/"
                              "prepared 192.168.0.106 candidate .*/rach2/kernel .* /var/native "
                              "milestone7-111111111111-lenovo-[0-9-]+ .* --hostpeer "
                              "build/tools/dev/native-hostpeer --peer 192.168.0.100 .* --purpose "
                              "phase_first_run --$") &&
                    count(r->retired, "^lenovo done ") == 1,
-               "native cases run on the trial boot before acceptance") &&
+               "acceptance reads the trial boot's log before the native cases run, and the "
+               "trial is committed after both") &&
          ok;
     run(r, &(struct release_row){
                .record = r->tried, .accept = "pass", .machines = LENOVO, .native = "fail"});
     machine_line(r, "lenovo started ", id, sizeof(id));
     snprintf(last, sizeof(last), "failed tests: lenovo run %s: dirprobe.ext2", id);
     ok = check(r,
-               f->status == 1 && last_is(record(r), last) &&
-                   !called(r, "^(accept|machine write|gh issue)"),
+               f->status == 1 && last_is(record(r), last) && called(r, "^accept 192.168.0.106$") &&
+                   !called(r, "^(machine write|gh issue)"),
                "native failure is recorded and keeps the trial uncommitted") &&
          ok;
     return ok;

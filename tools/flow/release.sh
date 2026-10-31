@@ -44,7 +44,7 @@
 #   that exits or is stopped stops Windows' preparation and ends both claims.
 #   The Lenovo's run, lenovo, is the native cases of tests/native on the
 #   trial boot, which `native-deploy run` starts from here with the payload
-#   the build makes, before the acceptance. A run that ends without a status,
+#   the build makes, after the acceptance. A run that ends without a status,
 #   in Windows' preparation or its cases, runs again, at most three runs in
 #   all.
 # * A failed run adds a line `failure MACHINE RUN WORD...` to the record, the
@@ -58,8 +58,9 @@
 #   last record of M has, and runs again on each machine only what failed
 #   there, at SHA: the record says `again MACHINE WORD...`. A
 #   machine whose failures are not all `ARCH:SUITE`s of suites that SHA's
-#   tests/registry has for ARCH, or native cases, runs everything again, as
-#   does a machine that has neither a pass nor a failure in that record. The
+#   tests/registry has for ARCH, or native cases, runs again what its own
+#   `again` line in that record named, or everything when it had none, and a
+#   machine that has neither a pass nor a failure there runs everything. The
 #   native cases run on every install, so the Lenovo's pass is not kept.
 #   Without -r everything runs.
 # * build: SHA is built from clean for the Lenovo on the testing host, in
@@ -95,11 +96,13 @@
 #   person checks the machine's root by hand and then deletes that line.
 # * trial: the machine boots the trial, and machine_identity.sh must find the
 #   new kernel running from the candidate slot.
-# * accept: the native cases and `tests/system/accept/metal_accept.sh` must
-#   pass on the trial boot. Only then `bootctl commit` makes the candidate the
-#   saved default, and `bootctl fallback` copies it into the fallback slot, so
-#   that a later trial, which overwrites the candidate, falls back to this
-#   release and not to an older kernel.
+# * accept: `tests/system/accept/metal_accept.sh` must pass on the trial
+#   boot, before the native cases, since it reads the boot's records out of
+#   /dev/bootlog, a ring that their messages overwrite.
+# * commit: once the acceptance and the native cases have passed, `bootctl
+#   commit` makes the candidate the saved default, and `bootctl fallback`
+#   copies it into the fallback slot, so that a later trial, which overwrites
+#   the candidate, falls back to this release and not to an older kernel.
 # * record: /etc/rach2/release on the machine, which runs the committed
 #   candidate, is written with SHA, the milestone, the full run and the
 #   root's digest, flushed to the disk with the directories that hold it, and
@@ -184,8 +187,10 @@ note()
         'mac started '*|'windows started '*) report "${line%% *}" progress "The run ${line##* } started." ;;
         'lenovo started '*) report accept progress "The native cases' run ${line##* } started." ;;
         'build done '*) report trial progress "The build is done: $(echo "$line" | cut -d ' ' -f 4-)." ;;
-        'full done '*|'mac done '*|'windows done '*|'trial done '*|'accept done '*)
+        'full done '*|'mac done '*|'windows done '*|'trial done '*)
             report "${line%% *}" pass "Passed: $(echo "$line" | cut -d ' ' -f 4-)." ;;
+        'accept done '*) report accept progress "Acceptance passed." ;;
+        'commit done '*) report accept pass "Passed; the trial boot is committed and copied to the fallback slot." ;;
         'failure '*)
             m=$(echo "$line" | cut -d ' ' -f 2)
             [ "$m" != lenovo ] || m=accept
@@ -195,7 +200,7 @@ note()
             m=$(echo "$line" | sed 's/^failed \([a-z]*\):.*/\1/')
             case $m in
                 build|recovery|transfer|install|trial) m=trial ;;
-                lenovo|accept|record) m=accept ;;
+                lenovo|accept|commit|record) m=accept ;;
                 full|mac|windows) ;;
                 *) m=release ;;
             esac
@@ -404,9 +409,14 @@ again()
         set -- $(grep "^failure $m " "$state/record" | tail -n 1)
         if [ $# -ge 4 ]; then
             shift 3
+            # A run that ended without naming failed suites runs again what
+            # the machine's earlier run did.
             case $m in
-                lenovo) case " $* " in *" runner "*) continue ;; esac ;;
-                *) suites "$@" || continue ;;
+                lenovo)
+                    case " $* " in
+                        *" runner "*) grep "^again $m " "$state/record" | tail -n 1; continue ;;
+                    esac ;;
+                *) suites "$@" || { grep "^again $m " "$state/record" | tail -n 1; continue; } ;;
             esac
             echo "again $m $*"
         elif [ "$m" != lenovo ] && done_ "$m"; then
@@ -1299,6 +1309,17 @@ main()
         mark trial "the new kernel runs from the candidate slot"
     fi
 
+    # Acceptance reads the boot's own records out of /dev/bootlog, a ring
+    # that the native cases' messages overwrite, so it runs before them.
+    if ! done_ accept; then
+        step=accept
+        mkdir -p build/images
+        make krffs > "$state/krffs.log" 2>&1 || later "the host KRFFS tools did not build"
+        sh tests/system/accept/metal_accept.sh "$address" > "$state/accept.log" 2>&1 ||
+            fail accept "metal_accept.sh failed: $(grep -i 'fail' "$state/accept.log" | tail -n 3 | tr '\n' ' ')"
+        mark accept "metal-accept: PASS"
+    fi
+
     if has lenovo && ! done_ lenovo; then
         where || fail lenovo "the machine answered as another machine"
         [ -n "$now" ] || later "the machine does not answer"
@@ -1307,19 +1328,15 @@ main()
         ! failed_ lenovo || tests_failed
     fi
 
-    if ! done_ accept; then
-        step=accept
-        mkdir -p build/images
-        make krffs > "$state/krffs.log" 2>&1 || later "the host KRFFS tools did not build"
-        sh tests/system/accept/metal_accept.sh "$address" > "$state/accept.log" 2>&1 ||
-            fail accept "metal_accept.sh failed: $(grep -i 'fail' "$state/accept.log" | tail -n 3 | tr '\n' ' ')"
+    if ! done_ commit; then
+        step=commit
         lenovo 'bootctl commit' > "$state/commit.log" 2>&1
         grep -q '^bootctl: committed:' "$state/commit.log" ||
-            fail accept "bootctl commit: $(tr '\n' ' ' < "$state/commit.log")"
+            fail commit "bootctl commit: $(tr '\n' ' ' < "$state/commit.log")"
         lenovo 'bootctl fallback' > "$state/fallback.log" 2>&1
         grep -q '^bootctl: fallback: .* read back' "$state/fallback.log" ||
-            fail accept "bootctl fallback: $(tr '\n' ' ' < "$state/fallback.log")"
-        mark accept "metal-accept: PASS; committed and copied to the fallback slot"
+            fail commit "bootctl fallback: $(tr '\n' ' ' < "$state/fallback.log")"
+        mark commit "committed and copied to the fallback slot"
     fi
 
     if ! done_ record; then
