@@ -1,0 +1,558 @@
+Add the Kitty keyboard protocol
+
+Implement https://sw.kovidgoyal.net/kitty/keyboard-protocol/ with its flags
+1 (disambiguate), 2 (report repeat and release events) and 4 (report
+alternate keys): the query CSI ? u, which replies CSI ? flags u; the push
+CSI > flags u; the pop CSI < n u; and the set CSI = flags ; mode u. The main
+and the alternate screen have a stack of eight entries each, and a reset
+empties both. A set or a push drops the flags the library does not support,
+so that a query tells the application what took effect.
+
+Add tsm_vte_handle_key(), which takes the key's event, press, repeat or
+release, and for the protocol's alternate keys the character the key gives
+unshifted and the one it gives in the base layout. Without flags it sends a
+press or a repeat as tsm_vte_handle_keyboard() does and a release not at
+all; tsm_vte_handle_keyboard() is now a press through it. Add
+tsm_vte_get_key_flags(), which returns the flags in effect.
+
+The encoder is ported from foot's kitty_kbd_protocol() (MIT), whose notice
+it carries, with kitty's choice of the keys sent as text, those with no
+modifier but Shift and the locks, and of the event field, which a press
+leaves out.
+
+--- a/src/tsm/libtsm.h
++++ b/src/tsm/libtsm.h
+@@ -584,6 +584,54 @@ void tsm_vte_set_backspace_sends_delete(struct tsm_vte *vte, bool enable);
+ bool tsm_vte_handle_keyboard(struct tsm_vte *vte, uint32_t keysym,
+ 			     uint32_t ascii, unsigned int mods,
+ 			     uint32_t unicode);
++
++/* The kind of a key event, as the Kitty keyboard protocol reports it. */
++enum tsm_vte_key_event {
++	TSM_VTE_KEY_PRESS	= 1,
++	TSM_VTE_KEY_REPEAT	= 2,
++	TSM_VTE_KEY_RELEASE	= 3,
++};
++
++/**
++ * @brief Send a key event to the application.
++ *
++ * Without the Kitty keyboard protocol's flags, a press or a repeat is sent as
++ * tsm_vte_handle_keyboard() sends it, in xterm's encoding, and a release
++ * sends nothing. Once the application has set flags with CSI = u or pushed
++ * them with CSI > u, the key is sent as the protocol says for flags 1
++ * (disambiguate), 2 (repeat and release events) and 4 (alternate keys); the
++ * library supports no other flag, and drops them from a set or a push. The
++ * main and the alternate screen each have their own stack of flags.
++ *
++ * @param vte The vte object
++ * @param keysym The key's keysym under the modifiers and the layout in effect
++ * @param ascii The keysym the key has in an ASCII layout, which Control
++ *              combines with, or XKB_KEY_NoSymbol
++ * @param mods The modifiers and locks held, TSM_*_MASK
++ * @param unicode The character the key gives, before Control, or
++ *                TSM_VTE_INVALID; the protocol's shifted key
++ * @param unshifted The character the key gives with no modifier in the
++ *                  layout in effect, or TSM_VTE_INVALID; the protocol's key
++ *                  code, which is the lower case of \c unicode when invalid
++ * @param base The character the key gives with no modifier in the base
++ *             layout, US PC-101, or TSM_VTE_INVALID; the protocol's base
++ *             layout key
++ * @param event TSM_VTE_KEY_PRESS, TSM_VTE_KEY_REPEAT or TSM_VTE_KEY_RELEASE
++ *
++ * @retval true if bytes were sent to the application.
++ */
++bool tsm_vte_handle_key(struct tsm_vte *vte, uint32_t keysym, uint32_t ascii,
++			unsigned int mods, uint32_t unicode,
++			uint32_t unshifted, uint32_t base, unsigned int event);
++
++/**
++ * @brief The Kitty keyboard protocol's flags in effect on the screen in use.
++ *
++ * @param vte The vte object
++ *
++ * @retval 0 without the protocol; else a sum of 1, 2 and 4.
++ */
++unsigned int tsm_vte_get_key_flags(struct tsm_vte *vte);
+ bool tsm_vte_handle_mouse(struct tsm_vte *vte, unsigned int cell_x,
+         unsigned int cell_y, unsigned int pixel_x, unsigned int pixel_y,
+         unsigned int button, unsigned int event, unsigned char flags);
+--- a/src/tsm/libtsm.sym
++++ b/src/tsm/libtsm.sym
+@@ -172,4 +172,6 @@ global:
+ 	tsm_vte_end_sync_hold;
+ 	tsm_vte_handle_focus;
+ 	tsm_vte_set_clipboard_cb;
++	tsm_vte_handle_key;
++	tsm_vte_get_key_flags;
+ } LIBTSM_4_8;
+--- a/src/tsm/tsm-vte.c
++++ b/src/tsm/tsm-vte.c
+@@ -119,6 +119,13 @@ enum parser_action {
+ /* max CSI arguments */
+ #define CSI_ARG_MAX 16
+ 
++/* the Kitty keyboard protocol's flags: those supported, and a stack's depth */
++#define KITTY_KBD_DISAMBIGUATE		0x01
++#define KITTY_KBD_REPORT_EVENTS		0x02
++#define KITTY_KBD_REPORT_ALTERNATES	0x04
++#define KITTY_KBD_SUPPORTED		0x07
++#define KITTY_KBD_STACK_MAX		8
++
+ /* max length of an OSC code */
+ #define OSC_MAX_LEN 128
+ 
+@@ -212,6 +219,14 @@ struct tsm_vte {
+ 	struct vte_saved_state saved_state;
+ 	unsigned int alt_cursor_x;
+ 	unsigned int alt_cursor_y;
++
++	/* The Kitty keyboard protocol's stacks of flags, [0] the main
++	 * screen's and [1] the alternate's. top indexes the flags in effect;
++	 * a push past the depth overwrites the oldest entry. */
++	struct {
++		unsigned int flags[KITTY_KBD_STACK_MAX];
++		unsigned int top;
++	} kitty_kbd[2];
+ };
+ 
+ static uint8_t color_palette_legacy[TSM_COLOR_NUM][3] = {
+@@ -882,6 +897,8 @@ void tsm_vte_reset(struct tsm_vte *vte)
+ 	vte->mouse_last_col = 0;
+ 	vte->mouse_last_row = 0;
+ 
++	memset(vte->kitty_kbd, 0, sizeof(vte->kitty_kbd));
++
+ 	memcpy(&vte->cattr, &vte->def_attr, sizeof(vte->cattr));
+ 	to_rgb(vte, &vte->cattr);
+ 	tsm_screen_set_def_attr(vte->con, &vte->def_attr);
+@@ -901,6 +918,72 @@ void tsm_vte_hard_reset(struct tsm_vte *vte)
+ 	tsm_screen_move_to(vte->con, 0, 0);
+ }
+ 
++/* the Kitty keyboard protocol's stack of the screen in use */
++static unsigned int kitty_kbd_screen(struct tsm_vte *vte)
++{
++	return (tsm_screen_get_flags(vte->con) & TSM_SCREEN_ALTERNATE) ? 1 : 0;
++}
++
++/* the Kitty keyboard protocol's flags in effect on the screen in use */
++static unsigned int kitty_kbd_flags(struct tsm_vte *vte)
++{
++	unsigned int i = kitty_kbd_screen(vte);
++
++	return vte->kitty_kbd[i].flags[vte->kitty_kbd[i].top];
++}
++
++/*
++ * The Kitty keyboard protocol's requests: CSI ? u queries the flags, CSI >
++ * flags u pushes them, CSI < n u pops n entries and CSI = flags ; mode u sets
++ * them. The flags this library does not support are dropped, so that a query
++ * after a set tells the application what took effect.
++ */
++static void csi_kitty_kbd(struct tsm_vte *vte)
++{
++	unsigned int i = kitty_kbd_screen(vte);
++	unsigned int *top = &vte->kitty_kbd[i].top;
++	unsigned int *flags = vte->kitty_kbd[i].flags;
++	int arg = vte->csi_argv[0];
++	char buf[32];
++	int n, len;
++
++	if (vte->csi_flags & CSI_WHAT) {
++		len = snprintf(buf, sizeof(buf), "\e[?%uu", flags[*top]);
++		vte_write(vte, buf, len);
++	} else if (vte->csi_flags & CSI_GT) {
++		*top = (*top + 1) % KITTY_KBD_STACK_MAX;
++		flags[*top] = (arg > 0 ? arg : 0) & KITTY_KBD_SUPPORTED;
++	} else if (vte->csi_flags & CSI_LT) {
++		/* Popping more entries than were pushed leaves no flags. */
++		n = arg > 0 ? arg : 1;
++		if (n > KITTY_KBD_STACK_MAX)
++			n = KITTY_KBD_STACK_MAX;
++		while (n-- > 0) {
++			flags[*top] = 0;
++			*top = (*top + KITTY_KBD_STACK_MAX - 1) %
++			       KITTY_KBD_STACK_MAX;
++		}
++	} else if (vte->csi_flags & CSI_EQUAL) {
++		arg = (arg > 0 ? arg : 0) & KITTY_KBD_SUPPORTED;
++		switch (vte->csi_argc >= 2 ? vte->csi_argv[1] : -1) {
++		case -1:
++		case 0:
++		case 1:
++			flags[*top] = arg;
++			break;
++		case 2:
++			flags[*top] |= arg;
++			break;
++		case 3:
++			flags[*top] &= ~arg;
++			break;
++		default:
++			llog_debug(vte, "unhandled CSI = u mode %d",
++				   vte->csi_argv[1]);
++		}
++	}
++}
++
+ static void send_primary_da(struct tsm_vte *vte)
+ {
+ 	const static char str[] = "\e[?60;1;6;9;15c";
+@@ -2202,7 +2285,9 @@ static void do_csi(struct tsm_vte *vte, uint32_t data)
+ 	case 'u':
+ 		/* SCORC: restore the cursor as DECRC does. CSI ? u, > u,
+ 		 * < u and = u are the keyboard protocol's, not it. */
+-		if (!(vte->csi_flags & CSI_PRIVATE) && vte->csi_argv[0] <= 0)
++		if (vte->csi_flags & CSI_PRIVATE)
++			csi_kitty_kbd(vte);
++		else if (vte->csi_argv[0] <= 0)
+ 			restore_state(vte);
+ 		break;
+ 	case ']': /* Cursor blinking rate */
+@@ -3151,15 +3236,343 @@ static bool vte_legacy_key(struct tsm_vte *vte, uint32_t keysym,
+ 	return false;
+ }
+ 
++/*
++ * The Kitty keyboard protocol's key encoder, ported from foot's
++ * kitty_kbd_protocol() in input.c and its kitty-keymap.h, with kitty's choice
++ * of the text keys and of the event field. foot is
++ *
++ *   Copyright (c) 2019 Daniel Eklöf
++ *
++ *   Permission is hereby granted, free of charge, to any person obtaining a
++ *   copy of this software and associated documentation files (the
++ *   "Software"), to deal in the Software without restriction, including
++ *   without limitation the rights to use, copy, modify, merge, publish,
++ *   distribute, sublicense, and/or sell copies of the Software, and to permit
++ *   persons to whom the Software is furnished to do so, subject to the
++ *   following conditions:
++ *
++ *   The above copyright notice and this permission notice shall be included
++ *   in all copies or substantial portions of the Software.
++ *
++ *   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
++ *   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
++ *   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
++ *   NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
++ *   DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
++ *   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
++ *   USE OR OTHER DEALINGS IN THE SOFTWARE.
++ *
++ * The protocol is https://sw.kovidgoyal.net/kitty/keyboard-protocol/. A key
++ * that is not text is CSI key ; mods : event u, or CSI number ; mods : event ~
++ * or CSI 1 ; mods : event final for the keys the table below gives a number
++ * and final byte, where mods is 1 plus the sum of
++ *
++ *   1  Shift          8  Super (TSM_LOGO_MASK)
++ *   2  Alt           64  Caps Lock (TSM_LOCK_MASK)
++ *   4  Control      128  Num Lock (TSM_NUM_LOCK_MASK)
++ *
++ * and event is 2 for a repeat and 3 for a release. Flag 4 adds the shifted
++ * key and the base layout's key after key, separated by colons.
++ */
++
++/* A key the protocol numbers: its keysym, its number and final byte, and
++ * whether it is a modifier, which flags 1, 2 and 4 do not report. */
++struct kitty_key {
++	uint32_t keysym;
++	uint16_t num;
++	char final;
++	bool modifier;
++};
++
++static const struct kitty_key kitty_keys[] = {
++	{ XKB_KEY_ISO_Level3_Shift, 57453, 'u', true },
++	{ XKB_KEY_ISO_Level5_Shift, 57454, 'u', true },
++	{ XKB_KEY_ISO_Left_Tab,     9,     'u', false },
++	{ XKB_KEY_BackSpace,        127,   'u', false },
++	{ XKB_KEY_Tab,              9,     'u', false },
++	{ XKB_KEY_KP_Tab,           9,     'u', false },
++	{ XKB_KEY_Return,           13,    'u', false },
++	{ XKB_KEY_Pause,            57362, 'u', false },
++	{ XKB_KEY_Scroll_Lock,      57359, 'u', false },
++	{ XKB_KEY_Escape,           27,    'u', false },
++	{ XKB_KEY_Home,             1,     'H', false },
++	{ XKB_KEY_Left,             1,     'D', false },
++	{ XKB_KEY_Up,               1,     'A', false },
++	{ XKB_KEY_Right,            1,     'C', false },
++	{ XKB_KEY_Down,             1,     'B', false },
++	{ XKB_KEY_Page_Up,          5,     '~', false },
++	{ XKB_KEY_Page_Down,        6,     '~', false },
++	{ XKB_KEY_End,              1,     'F', false },
++	{ XKB_KEY_Begin,            1,     'E', false },
++	{ XKB_KEY_Print,            57361, 'u', false },
++	{ XKB_KEY_Insert,           2,     '~', false },
++	{ XKB_KEY_Menu,             57363, 'u', false },
++	{ XKB_KEY_Num_Lock,         57360, 'u', true },
++	{ XKB_KEY_KP_Enter,         57414, 'u', false },
++	{ XKB_KEY_KP_Home,          57423, 'u', false },
++	{ XKB_KEY_KP_Left,          57417, 'u', false },
++	{ XKB_KEY_KP_Up,            57419, 'u', false },
++	{ XKB_KEY_KP_Right,         57418, 'u', false },
++	{ XKB_KEY_KP_Down,          57420, 'u', false },
++	{ XKB_KEY_KP_Page_Up,       57421, 'u', false },
++	{ XKB_KEY_KP_Page_Down,     57422, 'u', false },
++	{ XKB_KEY_KP_End,           57424, 'u', false },
++	{ XKB_KEY_KP_Begin,         1,     'E', false },
++	{ XKB_KEY_KP_Insert,        57425, 'u', false },
++	{ XKB_KEY_KP_Delete,        57426, 'u', false },
++	{ XKB_KEY_KP_Multiply,      57411, 'u', false },
++	{ XKB_KEY_KP_Add,           57413, 'u', false },
++	{ XKB_KEY_KP_Separator,     57416, 'u', false },
++	{ XKB_KEY_KP_Subtract,      57412, 'u', false },
++	{ XKB_KEY_KP_Decimal,       57409, 'u', false },
++	{ XKB_KEY_KP_Divide,        57410, 'u', false },
++	{ XKB_KEY_KP_0,             57399, 'u', false },
++	{ XKB_KEY_KP_1,             57400, 'u', false },
++	{ XKB_KEY_KP_2,             57401, 'u', false },
++	{ XKB_KEY_KP_3,             57402, 'u', false },
++	{ XKB_KEY_KP_4,             57403, 'u', false },
++	{ XKB_KEY_KP_5,             57404, 'u', false },
++	{ XKB_KEY_KP_6,             57405, 'u', false },
++	{ XKB_KEY_KP_7,             57406, 'u', false },
++	{ XKB_KEY_KP_8,             57407, 'u', false },
++	{ XKB_KEY_KP_9,             57408, 'u', false },
++	{ XKB_KEY_KP_Equal,         57415, 'u', false },
++	{ XKB_KEY_F1,               1,     'P', false },
++	{ XKB_KEY_KP_F1,            1,     'P', false },
++	{ XKB_KEY_F2,               1,     'Q', false },
++	{ XKB_KEY_KP_F2,            1,     'Q', false },
++	{ XKB_KEY_F3,               13,    '~', false },
++	{ XKB_KEY_KP_F3,            13,    '~', false },
++	{ XKB_KEY_F4,               1,     'S', false },
++	{ XKB_KEY_KP_F4,            1,     'S', false },
++	{ XKB_KEY_F5,               15,    '~', false },
++	{ XKB_KEY_F6,               17,    '~', false },
++	{ XKB_KEY_F7,               18,    '~', false },
++	{ XKB_KEY_F8,               19,    '~', false },
++	{ XKB_KEY_F9,               20,    '~', false },
++	{ XKB_KEY_F10,              21,    '~', false },
++	{ XKB_KEY_F11,              23,    '~', false },
++	{ XKB_KEY_F12,              24,    '~', false },
++	{ XKB_KEY_F13,              57376, 'u', false },
++	{ XKB_KEY_F14,              57377, 'u', false },
++	{ XKB_KEY_F15,              57378, 'u', false },
++	{ XKB_KEY_F16,              57379, 'u', false },
++	{ XKB_KEY_F17,              57380, 'u', false },
++	{ XKB_KEY_F18,              57381, 'u', false },
++	{ XKB_KEY_F19,              57382, 'u', false },
++	{ XKB_KEY_F20,              57383, 'u', false },
++	{ XKB_KEY_F21,              57384, 'u', false },
++	{ XKB_KEY_F22,              57385, 'u', false },
++	{ XKB_KEY_F23,              57386, 'u', false },
++	{ XKB_KEY_F24,              57387, 'u', false },
++	{ XKB_KEY_F25,              57388, 'u', false },
++	{ XKB_KEY_F26,              57389, 'u', false },
++	{ XKB_KEY_F27,              57390, 'u', false },
++	{ XKB_KEY_F28,              57391, 'u', false },
++	{ XKB_KEY_F29,              57392, 'u', false },
++	{ XKB_KEY_F30,              57393, 'u', false },
++	{ XKB_KEY_F31,              57394, 'u', false },
++	{ XKB_KEY_F32,              57395, 'u', false },
++	{ XKB_KEY_F33,              57396, 'u', false },
++	{ XKB_KEY_F34,              57397, 'u', false },
++	{ XKB_KEY_F35,              57398, 'u', false },
++	{ XKB_KEY_Shift_L,          57441, 'u', true },
++	{ XKB_KEY_Shift_R,          57447, 'u', true },
++	{ XKB_KEY_Control_L,        57442, 'u', true },
++	{ XKB_KEY_Control_R,        57448, 'u', true },
++	{ XKB_KEY_Caps_Lock,        57358, 'u', true },
++	{ XKB_KEY_Meta_L,           57446, 'u', true },
++	{ XKB_KEY_Meta_R,           57452, 'u', true },
++	{ XKB_KEY_Alt_L,            57443, 'u', true },
++	{ XKB_KEY_Alt_R,            57449, 'u', true },
++	{ XKB_KEY_Super_L,          57444, 'u', true },
++	{ XKB_KEY_Super_R,          57450, 'u', true },
++	{ XKB_KEY_Hyper_L,          57445, 'u', true },
++	{ XKB_KEY_Hyper_R,          57451, 'u', true },
++	{ XKB_KEY_Delete,           3,     '~', false },
++};
++
++static const struct kitty_key *kitty_key_find(uint32_t keysym)
++{
++	size_t i;
++
++	for (i = 0; i < sizeof(kitty_keys) / sizeof(kitty_keys[0]); ++i) {
++		if (kitty_keys[i].keysym == keysym)
++			return &kitty_keys[i];
++	}
++	return NULL;
++}
++
++/* whether c is a code point the protocol may report: not a control */
++static bool kitty_printable(uint32_t c)
++{
++	return c != TSM_VTE_INVALID && c >= 0x20 && c != 0x7f &&
++	       !(c >= 0x80 && c <= 0x9f) && c <= 0x10ffff;
++}
++
++/* Send a key under the flags in effect, which are not 0. */
++static bool vte_kitty_key(struct tsm_vte *vte, unsigned int flags,
++			  uint32_t keysym, uint32_t ascii, unsigned int mods,
++			  uint32_t unicode, uint32_t unshifted, uint32_t base,
++			  unsigned int event)
++{
++	const struct kitty_key *info;
++	unsigned int sig, encoded;
++	uint32_t key, shifted;
++	bool text, alt_shifted, alt_base;
++	char buf[128], ev[3];
++	char final;
++	int len;
++
++	if (!(flags & KITTY_KBD_REPORT_EVENTS)) {
++		if (event == TSM_VTE_KEY_RELEASE)
++			return false;
++		event = TSM_VTE_KEY_PRESS;
++	}
++
++	/* Without flag 1, a press is sent as without the protocol. */
++	if (!(flags & KITTY_KBD_DISAMBIGUATE) && event == TSM_VTE_KEY_PRESS)
++		return vte_legacy_key(vte, keysym, ascii, mods, unicode);
++
++	info = kitty_key_find(keysym);
++	if (info && info->modifier)
++		return false;
++
++	sig = mods & (TSM_SHIFT_MASK | TSM_ALT_MASK | TSM_CONTROL_MASK |
++		      TSM_LOGO_MASK);
++
++	/* Enter, Tab and Backspace without modifiers send their legacy
++	 * bytes, and no release, so that a shell stays usable after a
++	 * program that set the flags dies. */
++	if (!sig && (keysym == XKB_KEY_Return || keysym == XKB_KEY_Tab ||
++		     keysym == XKB_KEY_BackSpace)) {
++		if (event == TSM_VTE_KEY_RELEASE)
++			return false;
++		return vte_legacy_key(vte, keysym, ascii, mods, unicode);
++	}
++
++	/* A key that gives text with no modifier but Shift and the locks
++	 * sends the text, as kitty does. */
++	text = kitty_printable(unicode) &&
++	       !(mods & (TSM_ALT_MASK | TSM_CONTROL_MASK | TSM_LOGO_MASK));
++	if (text && event != TSM_VTE_KEY_RELEASE) {
++		vte_write_key_text(vte, unicode);
++		return true;
++	}
++
++	if (info) {
++		key = info->num;
++		final = info->final;
++		shifted = 0;
++		base = 0;
++	} else {
++		if (!kitty_printable(unicode))
++			return false;
++		shifted = unicode;
++		if (kitty_printable(unshifted))
++			key = unshifted;
++		else if (unicode >= 'A' && unicode <= 'Z')
++			key = unicode - 'A' + 'a';
++		else
++			key = unicode;
++		final = 'u';
++	}
++
++	encoded = 1;
++	if (mods & TSM_SHIFT_MASK)
++		encoded += 1;
++	if (mods & TSM_ALT_MASK)
++		encoded += 2;
++	if (mods & TSM_CONTROL_MASK)
++		encoded += 4;
++	if (mods & TSM_LOGO_MASK)
++		encoded += 8;
++	if (mods & TSM_LOCK_MASK)
++		encoded += 64;
++	if (mods & TSM_NUM_LOCK_MASK)
++		encoded += 128;
++
++	/* kitty leaves out the event of a press, which is the default. */
++	ev[0] = '\0';
++	if (event == TSM_VTE_KEY_REPEAT || event == TSM_VTE_KEY_RELEASE) {
++		ev[0] = ':';
++		ev[1] = event == TSM_VTE_KEY_REPEAT ? '2' : '3';
++		ev[2] = '\0';
++	}
++
++	if (final == 'u' || final == '~') {
++		len = snprintf(buf, sizeof(buf), "\e[%u", key);
++
++		/* The shifted key only with Shift; the base layout's key
++		 * when it differs from both. */
++		if (flags & KITTY_KBD_REPORT_ALTERNATES) {
++			alt_shifted = (mods & TSM_SHIFT_MASK) &&
++				      kitty_printable(shifted) &&
++				      shifted != key;
++			alt_base = kitty_printable(base) && base != key &&
++				   (!alt_shifted || base != shifted);
++			if (alt_shifted)
++				len += snprintf(buf + len, sizeof(buf) - len,
++						":%u", shifted);
++			if (alt_base)
++				len += snprintf(buf + len, sizeof(buf) - len,
++						"%s:%u", alt_shifted ? "" : ":",
++						base);
++		}
++
++		if (encoded > 1 || ev[0])
++			len += snprintf(buf + len, sizeof(buf) - len, ";%u%s",
++					encoded, ev);
++		len += snprintf(buf + len, sizeof(buf) - len, "%c", final);
++	} else if (encoded > 1 || ev[0]) {
++		len = snprintf(buf, sizeof(buf), "\e[1;%u%s%c", encoded, ev,
++			       final);
++	} else {
++		len = snprintf(buf, sizeof(buf), "\e[%c", final);
++	}
++
++	vte->flags &= ~TSM_VTE_FLAG_PREPEND_ESCAPE;
++	vte_write(vte, buf, len);
++	return true;
++}
++
++SHL_EXPORT
++bool tsm_vte_handle_key(struct tsm_vte *vte, uint32_t keysym, uint32_t ascii,
++			unsigned int mods, uint32_t unicode,
++			uint32_t unshifted, uint32_t base, unsigned int event)
++{
++	unsigned int flags;
++
++	if (!vte)
++		return false;
++
++	flags = kitty_kbd_flags(vte);
++	if (flags)
++		return vte_kitty_key(vte, flags, keysym, ascii, mods, unicode,
++				     unshifted, base, event);
++
++	if (event == TSM_VTE_KEY_RELEASE)
++		return false;
++	return vte_legacy_key(vte, keysym, ascii, mods, unicode);
++}
++
+ SHL_EXPORT
+ bool tsm_vte_handle_keyboard(struct tsm_vte *vte, uint32_t keysym,
+ 			     uint32_t ascii, unsigned int mods,
+ 			     uint32_t unicode)
++{
++	return tsm_vte_handle_key(vte, keysym, ascii, mods, unicode,
++				  TSM_VTE_INVALID, TSM_VTE_INVALID,
++				  TSM_VTE_KEY_PRESS);
++}
++
++SHL_EXPORT
++unsigned int tsm_vte_get_key_flags(struct tsm_vte *vte)
+ {
+ 	if (!vte)
+-		return false;
++		return 0;
+ 
+-	return vte_legacy_key(vte, keysym, ascii, mods, unicode);
++	return kitty_kbd_flags(vte);
+ }
+ 
+ bool tsm_vte_handle_mouse(struct tsm_vte *vte, unsigned int cell_x,
