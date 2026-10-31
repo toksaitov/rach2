@@ -731,7 +731,7 @@ static int standin_windows_cc(int argc, char **argv)
     return status;
 }
 
-/*
+/**
  * A compiler that watches a slot file, started as `--slot-cc PID SLOTS LOG
  * CC ARGS`: a call for its version sends SIGUSR1 to PID, and a call that
  * writes a file appends to LOG the process ID that holds the first slot of
