@@ -268,7 +268,8 @@ struct etude_qemu_line {
  *         make, among them a forward of a port that is not one of the
  *         profile's `ports`, a local port forwarded twice by one protocol or
  *         both to the guest and from it, a guest forward that QEMU could not
- *         make and a capture of a card the profile lacks; ENOENT for a
+ *         make, a capture of a card the profile lacks and an ACPI table
+ *         whose path keeps a colon; ENOENT for a
  *         firmware the site lacks, E2BIG when `out` is too small; ENOTSUP for
  *         a lazy boundary profile the site has not enabled.
  */

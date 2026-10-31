@@ -78,6 +78,8 @@
  * with its station address on its `-device`.
  */
 #ifdef _WIN32
+#include <direct.h>
+
 #include "win/files.h"
 #endif
 #include <errno.h>
@@ -1488,8 +1490,9 @@ static void test_smbios(const struct etude_qemu_profile *p, const struct etude_q
     CHECK(make(&b, site, argv, buf, sizeof(buf)) == 0, "an smbios vendor of 64 bytes");
 }
 
-/** Check an ACPI table's argument, its path's commas doubled. `p` has the
- * direct firmware and no table. */
+/** Check an ACPI table's argument: its path's commas doubled, a colon refused
+ * and, on Windows, the drive dropped. `p` has the direct firmware and no
+ * table. */
 static void test_acpi_table(const struct etude_qemu_profile *p, const struct etude_qemu_site *site)
 {
     struct etude_qemu_profile b = *p;
@@ -1499,6 +1502,22 @@ static void test_acpi_table(const struct etude_qemu_profile *p, const struct etu
     CHECK(make(&b, site, argv, buf, sizeof(buf)) == 0 && strcmp(argv[14], "-acpitable") == 0 &&
               strcmp(argv[15], "file=/a/test,,ssdt.aml") == 0 && strcmp(argv[16], "-kernel") == 0,
           "an acpi table");
+    b.acpi_table = "/a/test:ssdt.aml";
+    CHECK(make(&b, site, argv, buf, sizeof(buf)) == EINVAL,
+          "an acpi table with a colon is refused");
+#ifdef _WIN32
+    {
+        char cwd[4096], path[4200];
+
+        CHECK(_getcwd(cwd, sizeof(cwd)) != NULL && cwd[1] == ':',
+              "the working directory has a drive");
+        snprintf(path, sizeof(path), "%c:/a/ssdt.aml", cwd[0]);
+        b.acpi_table = path;
+        CHECK(make(&b, site, argv, buf, sizeof(buf)) == 0 &&
+                  strcmp(argv[15], "file=/a/ssdt.aml") == 0,
+              "a Windows acpi table goes without its drive");
+    }
+#endif
 }
 
 /** Check the command lines of profiles, and the profiles that are refused. */

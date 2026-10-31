@@ -3,10 +3,14 @@
  * reading of QEMU's report that it could not start an accelerator. Both are
  * the same on every host.
  */
+#include <ctype.h>
 #include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#ifdef _WIN32
+#include <direct.h>
+#endif
 
 #include "etude/processor.h"
 #include "etude/qemu.h"
@@ -1093,6 +1097,27 @@ static void add_boundary_memory(struct line *l, const char *size)
     add(l, 0, "mem-lock=off");
 }
 
+/**
+ * Give the path of an ACPI table as -acpitable's file= takes it, or NULL for
+ * one it cannot take. QEMU splits that value at each colon, so a Windows path
+ * goes without its drive letter, which must name the drive of the working
+ * directory that QEMU inherits.
+ */
+static const char *acpi_table_path(const char *path)
+{
+#ifdef _WIN32
+    char cwd[4096];
+
+    if (isalpha((unsigned char)path[0]) && path[1] == ':' && (path[2] == '/' || path[2] == '\\')) {
+        if (_getcwd(cwd, sizeof(cwd)) == NULL || cwd[1] != ':' ||
+            toupper((unsigned char)cwd[0]) != toupper((unsigned char)path[0]))
+            return NULL;
+        path += 2;
+    }
+#endif
+    return strchr(path, ':') == NULL ? path : NULL;
+}
+
 int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_site *s,
                     const char *console, const char *qmp, const char *audio,
                     const struct etude_qemu_line *out)
@@ -1151,8 +1176,12 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
         add(&l, 1, "type=0,vendor=%s", p->smbios_vendor);
     }
     if (p->acpi_table != NULL) {
+        const char *table = acpi_table_path(p->acpi_table);
+
+        if (table == NULL)
+            return EINVAL;
         add(&l, 0, "-acpitable");
-        add(&l, QUOTE_COMMAS, "file=%s", p->acpi_table);
+        add(&l, QUOTE_COMMAS, "file=%s", table);
     }
     if (p->firmware == ETUDE_FIRMWARE_DIRECT) {
         add(&l, 0, "-kernel");
