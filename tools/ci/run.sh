@@ -1,6 +1,7 @@
 #!/bin/sh
 # Run every suite of both architectures, or the ARCH:SUITE words of SUITES,
-# from clean, and keep each architecture's results.
+# with the in-house code built from clean and the vendor and GNU builds taken
+# from the host's step store, and keep each architecture's results.
 # Native entry requires an installed immutable ETUDE and version-two site.
 # The lines entry remains active until native activation.
 set -u

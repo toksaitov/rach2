@@ -1,6 +1,6 @@
 # The release tests of tools/flow/release.sh: every suite of both
-# architectures from clean at the commit SHA, or only the ARCH:SUITE words of
-# `suites`. The commit's tools/ci/site selects the runner and accelerator.
+# architectures at the commit SHA, its in-house code built from clean, or only
+# the ARCH:SUITE words of `suites`. The commit's tools/ci/site selects the runner and accelerator.
 # The failures go to the artifact `failures`, one ARCH:ITEM a line, which
 # release.sh downloads. Native preparation, execution and cleanup share the
 # four-hour ceiling.
