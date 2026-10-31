@@ -148,6 +148,11 @@ The end run at 816f50dfe, on the testing host on 31 October, built after `make c
 * `release_resume` (tests/cases/host/flow_release.c) fails on both architectures in the rows on Windows preparing under its own claim, on a native failure keeping the trial uncommitted, and on the Mac's run beside the full run. Host tests; #1589.
 * Files: `tests/cases/host/flow_release.c`, and `tools/flow/release.sh` only where it is wrong.
 
+### 14. The release test's run without status keeps its whole-host claim
+
+* At 6a7d608b5, after the fixes of tasks 8 to 13, style passes and `release_resume` fails in the row "windows run without status runs three times": release.sh reports that WSL's admission did not give the whole host, with no reason, in a row that passed at 816f50dfe. A race between the hold of 9862342ac and the mock of ab7161736. Host tests; #1590.
+* Files: `tests/cases/host/flow_release.c`, and `tools/flow/release.sh` only where it is wrong.
+
 ### Set aside
 
 * Codex: `run routine-prepare` runs unobserved, so the collection's observer would not cover the preparation and observe_import.c:178 would reject its coverage. `run routine-collect` runs the preparation's vector again under its own observer before the collection (routine_sequence.c:196-206), so the coverage it imports begins before both.
