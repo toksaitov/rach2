@@ -6,7 +6,7 @@
 #
 # Usage: mkfont.sh UNIFONT_HEX_GZ > rach2/sys/display/vga_font.c
 #
-# UNIFONT_HEX_GZ is unifont_all-18.0.01.hex.gz from
+# UNIFONT_HEX_GZ is vendor/unifont/unifont_all-18.0.01.hex.gz, from
 # https://ftp.gnu.org/gnu/unifont/unifont-18.0.01/, whose signature gpgv
 # verified with the GNU keyring, made by Paul Hardy's key
 # 95D2E9AB8740D8046387FD151A09227B1F435A33; the script refuses a file with
