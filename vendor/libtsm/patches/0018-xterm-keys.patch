@@ -1,0 +1,962 @@
+Send the keys as xterm does
+
+Make the key encoder send what xterm sends with its default resources and
+numLock true:
+
+* F1 to F12, the editing keys, Home, End and the cursor keys carry xterm's
+  modifier parameter for Shift, Alt and Control alike: CSI 1 ; m P for F1,
+  CSI 15 ; m ~ for F5, where m is 1 plus 1 for Shift, 2 for Alt and 4 for
+  Control. Shift+F1 sent F11's CSI 23 ~, Insert and Home dropped their
+  modifiers, and Alt prepended ESC to them.
+* In application keypad mode, divide sends SS3 o and multiply SS3 j; they
+  were swapped. Equal sends SS3 X. With modifiers, a keypad key sends
+  SS3 m final. With Num Lock on, which the new TSM_NUM_LOCK_MASK reports,
+  the keypad sends its text in application mode too. The keypad's text
+  ignores Alt and Control.
+* KP_Insert and KP_Delete send Insert's and Delete's sequences, not 0 and
+  the decimal point; Begin and KP_Begin send CSI E; Menu sends CSI 29 ~.
+* Shift+Tab sends CSI Z with Alt too, without ESC; Control+Backspace sends
+  the other of DEL and BS; Sys_Req sends nothing.
+* Control turns the ASCII character the key gives into a control character
+  as Xlib does: @ to ~ and space to their low five bits, 2 to NUL, 3 to 7 to
+  ESC to US, 8 and ? to DEL and / to US. Any other character is sent as it
+  is, so Control+1 sends 1.
+
+--- a/src/tsm/libtsm.h
++++ b/src/tsm/libtsm.h
+@@ -366,6 +366,7 @@ enum tsm_vte_modifier {
+ 	TSM_CONTROL_MASK	= (1 << 2),
+ 	TSM_ALT_MASK		= (1 << 3),
+ 	TSM_LOGO_MASK		= (1 << 4),
++	TSM_NUM_LOCK_MASK	= (1 << 5),
+ };
+ 
+ /* keep in sync with TSM_INPUT_INVALID */
+--- a/src/tsm/tsm-vte.c
++++ b/src/tsm/tsm-vte.c
+@@ -2820,84 +2820,304 @@ void tsm_vte_set_backspace_sends_delete(struct tsm_vte *vte, bool enable)
+ }
+ 
+ /*
+-Code     Modifiers
+----------+---------------------------
+-   2     | Shift
+-   3     | Alt
+-   4     | Shift + Alt
+-   5     | Control
+-   6     | Shift + Control
+-   7     | Alt + Control
+-   8     | Shift + Alt + Control
+----------+---------------------------
+-*/
+-
+-static char csi_modifier_from_mask(unsigned int mods)
+-{
+-	mods = mods & (TSM_CONTROL_MASK | TSM_SHIFT_MASK | TSM_ALT_MASK);
+-	switch(mods) {
+-		case TSM_SHIFT_MASK:
+-			return '2';
+-		case TSM_ALT_MASK:
+-			return '3';
+-		case TSM_SHIFT_MASK | TSM_ALT_MASK:
+-			return '4';
+-		case TSM_CONTROL_MASK:
+-			return '5';
+-		case TSM_CONTROL_MASK | TSM_SHIFT_MASK:
+-			return '6';
+-		case TSM_CONTROL_MASK | TSM_ALT_MASK:
+-			return '7';
+-		case TSM_CONTROL_MASK | TSM_ALT_MASK | TSM_SHIFT_MASK:
+-			return '8';
+-		default:
+-			return 0;
+-	}
++ * The legacy key encoding is xterm's, with its default resources and
++ * numLock true. A key that is not text is sent as CSI number ~ or CSI final,
++ * or SS3 final for F1 to F4 and, in cursor key mode, for the cursor keys,
++ * Home and End. With modifiers, every such key is CSI number ; m final, with
++ * number 1 for a key that has none, where m is 1 plus the sum of
++ *
++ *   1  Shift
++ *   2  Alt
++ *   4  Control
++ *
++ * Alt is then part of m and does not prepend ESC. The keypad's keys that give
++ * text send it, whatever the modifiers, unless the keypad is in application
++ * mode with Num Lock off; they then send SS3 final, or SS3 m final with
++ * modifiers.
++ */
++
++/* xterm's modifier parameter for mods, or 0 for none of its modifiers */
++static unsigned int key_mod_param(unsigned int mods)
++{
++	unsigned int m = 0;
++
++	if (mods & TSM_SHIFT_MASK)
++		m |= 1;
++	if (mods & TSM_ALT_MASK)
++		m |= 2;
++	if (mods & TSM_CONTROL_MASK)
++		m |= 4;
++
++	return m ? m + 1 : 0;
+ }
+ 
+-static void vte_write_arrow(struct tsm_vte *vte, char direction, unsigned int mods)
++/*
++ * Write a key that is not text: CSI num ; m final with modifiers; without
++ * them SS3 final when ss3 is set, else CSI num final, with a num of 1 left out
++ * before a final other than ~.
++ */
++static void vte_write_key_seq(struct tsm_vte *vte, unsigned int num,
++			      char final, unsigned int mods, bool ss3)
+ {
+-	char code_with_modifier[6] = {'\e', '[', '1', ';', '0', 'A'};
+-	char code[3] = {'\e', '[',  'A'};
++	char buf[32];
++	unsigned int m = key_mod_param(mods);
++	int len;
+ 
+ 	vte->flags &= ~TSM_VTE_FLAG_PREPEND_ESCAPE;
+ 
+-	int modifier = csi_modifier_from_mask(mods);
+-	if (modifier) {
+-		code_with_modifier[4] = modifier;
+-		code_with_modifier[5] = direction;
+-		vte_write(vte, code_with_modifier, 6);
+-	} else {
+-		if (vte->flags & TSM_VTE_FLAG_CURSOR_KEY_MODE)
+-			code[1] = 'O';
+-		code[2] = direction;
+-		vte_write(vte, code, 3);
+-	}
++	if (m)
++		len = snprintf(buf, sizeof(buf), "\e[%u;%u%c", num, m, final);
++	else if (ss3)
++		len = snprintf(buf, sizeof(buf), "\eO%c", final);
++	else if (num == 1 && final != '~')
++		len = snprintf(buf, sizeof(buf), "\e[%c", final);
++	else
++		len = snprintf(buf, sizeof(buf), "\e[%u%c", num, final);
++
++	vte_write(vte, buf, len);
+ }
+ 
+-SHL_EXPORT
+-bool tsm_vte_handle_keyboard(struct tsm_vte *vte, uint32_t keysym,
+-			     uint32_t ascii, unsigned int mods,
+-			     uint32_t unicode)
++/* A key that is not text: its keysym, CSI's number and final byte, and
++ * whether cursor key mode sends it as SS3 final. */
++struct vte_fkey {
++	uint32_t keysym;
++	uint16_t num;
++	char final;
++	bool ckm;
++};
++
++static const struct vte_fkey vte_fkeys[] = {
++	{ XKB_KEY_Up,           1, 'A', true },
++	{ XKB_KEY_KP_Up,        1, 'A', true },
++	{ XKB_KEY_Down,         1, 'B', true },
++	{ XKB_KEY_KP_Down,      1, 'B', true },
++	{ XKB_KEY_Right,        1, 'C', true },
++	{ XKB_KEY_KP_Right,     1, 'C', true },
++	{ XKB_KEY_Left,         1, 'D', true },
++	{ XKB_KEY_KP_Left,      1, 'D', true },
++	{ XKB_KEY_Begin,        1, 'E', true },
++	{ XKB_KEY_KP_Begin,     1, 'E', true },
++	{ XKB_KEY_End,          1, 'F', true },
++	{ XKB_KEY_KP_End,       1, 'F', true },
++	{ XKB_KEY_Home,         1, 'H', true },
++	{ XKB_KEY_KP_Home,      1, 'H', true },
++	{ XKB_KEY_Find,         1, '~', false },
++	{ XKB_KEY_Insert,       2, '~', false },
++	{ XKB_KEY_KP_Insert,    2, '~', false },
++	{ XKB_KEY_Delete,       3, '~', false },
++	{ XKB_KEY_KP_Delete,    3, '~', false },
++	{ XKB_KEY_Select,       4, '~', false },
++	{ XKB_KEY_Page_Up,      5, '~', false },
++	{ XKB_KEY_KP_Page_Up,   5, '~', false },
++	{ XKB_KEY_Page_Down,    6, '~', false },
++	{ XKB_KEY_KP_Page_Down, 6, '~', false },
++	{ XKB_KEY_F5,          15, '~', false },
++	{ XKB_KEY_F6,          17, '~', false },
++	{ XKB_KEY_F7,          18, '~', false },
++	{ XKB_KEY_F8,          19, '~', false },
++	{ XKB_KEY_F9,          20, '~', false },
++	{ XKB_KEY_F10,         21, '~', false },
++	{ XKB_KEY_F11,         23, '~', false },
++	{ XKB_KEY_F12,         24, '~', false },
++	{ XKB_KEY_F13,         25, '~', false },
++	{ XKB_KEY_F14,         26, '~', false },
++	{ XKB_KEY_F15,         28, '~', false },
++	{ XKB_KEY_F16,         29, '~', false },
++	{ XKB_KEY_Menu,        29, '~', false },
++	{ XKB_KEY_F17,         31, '~', false },
++	{ XKB_KEY_F18,         32, '~', false },
++	{ XKB_KEY_F19,         33, '~', false },
++	{ XKB_KEY_F20,         34, '~', false },
++};
++
++/* A keypad key that gives text: its keysym, the text, and the final byte of
++ * SS3 final in application keypad mode. */
++struct vte_kpkey {
++	uint32_t keysym;
++	char text;
++	char final;
++};
++
++static const struct vte_kpkey vte_kpkeys[] = {
++	{ XKB_KEY_KP_Enter,     '\r', 'M' },
++	{ XKB_KEY_KP_Equal,     '=',  'X' },
++	{ XKB_KEY_KP_Multiply,  '*',  'j' },
++	{ XKB_KEY_KP_Add,       '+',  'k' },
++	{ XKB_KEY_KP_Separator, ',',  'l' },
++	{ XKB_KEY_KP_Subtract,  '-',  'm' },
++	{ XKB_KEY_KP_Decimal,   '.',  'n' },
++	{ XKB_KEY_KP_Divide,    '/',  'o' },
++	{ XKB_KEY_KP_0,         '0',  'p' },
++	{ XKB_KEY_KP_1,         '1',  'q' },
++	{ XKB_KEY_KP_2,         '2',  'r' },
++	{ XKB_KEY_KP_3,         '3',  's' },
++	{ XKB_KEY_KP_4,         '4',  't' },
++	{ XKB_KEY_KP_5,         '5',  'u' },
++	{ XKB_KEY_KP_6,         '6',  'v' },
++	{ XKB_KEY_KP_7,         '7',  'w' },
++	{ XKB_KEY_KP_8,         '8',  'x' },
++	{ XKB_KEY_KP_9,         '9',  'y' },
++};
++
++/*
++ * The control character Control makes of the ASCII character c, as Xlib and
++ * xterm make it, or -1 when Control leaves c as it is.
++ */
++static int key_ctrl_char(uint32_t c)
++{
++	if ((c >= '@' && c <= '~') || c == ' ')
++		return c & 0x1f;
++	if (c == '2')
++		return 0x00;
++	if (c >= '3' && c <= '7')
++		return c - '3' + 0x1b;
++	if (c == '8' || c == '?')
++		return 0x7f;
++	if (c == '/')
++		return 0x1f;
++	return -1;
++}
++
++/* Send unicode as text in the terminal's character set. */
++static void vte_write_key_text(struct tsm_vte *vte, uint32_t unicode)
+ {
+ 	char val, u8[4];
+ 	size_t len;
+-	uint32_t sym;
+ 
+-	if (!vte) {
+-		return false;
++	if (vte->flags & TSM_VTE_FLAG_7BIT_MODE) {
++		val = unicode;
++		if (unicode & 0x80) {
++			llog_debug(vte, "invalid keyboard input in 7bit mode U+%x; mapping to '?'",
++				   unicode);
++			val = '?';
++		}
++		vte_write(vte, &val, 1);
++	} else if (vte->flags & TSM_VTE_FLAG_8BIT_MODE) {
++		val = unicode;
++		if (unicode > 0xff) {
++			llog_debug(vte, "invalid keyboard input in 8bit mode U+%x; mapping to '?'",
++				   unicode);
++			val = '?';
++		}
++		vte_write_raw(vte, &val, 1);
++	} else {
++		len = tsm_ucs4_to_utf8(tsm_symbol_make(unicode), u8);
++		vte_write_raw(vte, u8, len);
+ 	}
++}
+ 
+-	/* MOD1 (mostly labeled 'Alt') prepends an escape character to every
+-	 * input that is sent by a key.
+-	 * TODO: Transform this huge handler into a lookup table to save a lot
+-	 * of code and make such modifiers easier to implement.
+-	 * Also check whether altSendsEscape should be the default (xterm
+-	 * disables this by default, why?) and whether we should implement the
+-	 * fallback shifting that xterm does. */
++/*
++ * Send a key in the legacy encoding. Returns false, having sent nothing, for
++ * a key that has no encoding and gives no text.
++ */
++static bool vte_legacy_key(struct tsm_vte *vte, uint32_t keysym,
++			   uint32_t ascii, unsigned int mods, uint32_t unicode)
++{
++	bool app_keypad;
++	uint32_t sym;
++	size_t i;
++	int c;
++
++	/* Alt prepends ESC to what a key sends, but for the keys sent with
++	 * a modifier parameter, which carries Alt. */
+ 	if (mods & TSM_ALT_MASK)
+ 		vte->flags |= TSM_VTE_FLAG_PREPEND_ESCAPE;
+ 
++	for (i = 0; i < sizeof(vte_fkeys) / sizeof(vte_fkeys[0]); ++i) {
++		if (vte_fkeys[i].keysym == keysym) {
++			vte_write_key_seq(vte, vte_fkeys[i].num,
++					  vte_fkeys[i].final, mods,
++					  vte_fkeys[i].ckm &&
++					  (vte->flags & TSM_VTE_FLAG_CURSOR_KEY_MODE));
++			return true;
++		}
++	}
++
++	/* xterm's numLock: with Num Lock on, the keypad gives its text in
++	 * application keypad mode too. */
++	app_keypad = (vte->flags & TSM_VTE_FLAG_KEYPAD_APPLICATION_MODE) &&
++		     !(mods & TSM_NUM_LOCK_MASK);
++	for (i = 0; i < sizeof(vte_kpkeys) / sizeof(vte_kpkeys[0]); ++i) {
++		if (vte_kpkeys[i].keysym != keysym)
++			continue;
++		vte->flags &= ~TSM_VTE_FLAG_PREPEND_ESCAPE;
++		if (app_keypad) {
++			char buf[16];
++			unsigned int m = key_mod_param(mods);
++			int len;
++
++			if (m)
++				len = snprintf(buf, sizeof(buf), "\eO%u%c", m,
++					       vte_kpkeys[i].final);
++			else
++				len = snprintf(buf, sizeof(buf), "\eO%c",
++					       vte_kpkeys[i].final);
++			vte_write(vte, buf, len);
++		} else if (keysym == XKB_KEY_KP_Enter &&
++			   (vte->flags & TSM_VTE_FLAG_LINE_FEED_NEW_LINE_MODE)) {
++			vte_write(vte, "\r\n", 2);
++		} else {
++			vte_write(vte, &vte_kpkeys[i].text, 1);
++		}
++		return true;
++	}
++
++	switch (keysym) {
++	case XKB_KEY_F1:
++	case XKB_KEY_KP_F1:
++		vte_write_key_seq(vte, 1, 'P', mods, true);
++		return true;
++	case XKB_KEY_F2:
++	case XKB_KEY_KP_F2:
++		vte_write_key_seq(vte, 1, 'Q', mods, true);
++		return true;
++	case XKB_KEY_F3:
++	case XKB_KEY_KP_F3:
++		vte_write_key_seq(vte, 1, 'R', mods, true);
++		return true;
++	case XKB_KEY_F4:
++	case XKB_KEY_KP_F4:
++		vte_write_key_seq(vte, 1, 'S', mods, true);
++		return true;
++	case XKB_KEY_BackSpace:
++		/* Control sends the other of DEL and BS. */
++		if (!vte->backspace_sends_delete != !(mods & TSM_CONTROL_MASK))
++			vte_write(vte, "\x7f", 1);
++		else
++			vte_write(vte, "\x08", 1);
++		return true;
++	case XKB_KEY_Tab:
++	case XKB_KEY_KP_Tab:
++		if (!(mods & TSM_SHIFT_MASK)) {
++			vte_write(vte, "\x09", 1);
++			return true;
++		}
++		/* fallthrough */
++	case XKB_KEY_ISO_Left_Tab:
++		/* CBT; xterm sends it without ESC for Alt. */
++		vte->flags &= ~TSM_VTE_FLAG_PREPEND_ESCAPE;
++		vte_write(vte, "\e[Z", 3);
++		return true;
++	case XKB_KEY_Linefeed:
++		vte_write(vte, "\x0a", 1);
++		return true;
++	case XKB_KEY_Clear:
++		vte_write(vte, "\x0b", 1);
++		return true;
++	case XKB_KEY_Escape:
++		vte_write(vte, "\x1b", 1);
++		return true;
++	case XKB_KEY_Return:
++		if (vte->flags & TSM_VTE_FLAG_LINE_FEED_NEW_LINE_MODE)
++			vte_write(vte, "\x0d\x0a", 2);
++		else
++			vte_write(vte, "\x0d", 1);
++		return true;
++	case XKB_KEY_KP_Space:
++		vte_write(vte, " ", 1);
++		return true;
++	}
++
+ 	/* A user might actually use multiple layouts for keyboard input. The
+ 	 * @keysym variable contains the actual keysym that the user used. But
+ 	 * if this keysym is not in the ascii range, the input handler does
+@@ -2912,534 +3132,18 @@ bool tsm_vte_handle_keyboard(struct tsm_vte *vte, uint32_t keysym,
+ 	if (sym == XKB_KEY_NoSymbol)
+ 		sym = keysym;
+ 
+-	if (mods & TSM_CONTROL_MASK) {
+-		switch (sym) {
+-		case XKB_KEY_2:
+-		case XKB_KEY_space:
+-			vte_write(vte, "\x00", 1);
+-			return true;
+-		case XKB_KEY_a:
+-		case XKB_KEY_A:
+-			vte_write(vte, "\x01", 1);
+-			return true;
+-		case XKB_KEY_b:
+-		case XKB_KEY_B:
+-			vte_write(vte, "\x02", 1);
+-			return true;
+-		case XKB_KEY_c:
+-		case XKB_KEY_C:
+-			vte_write(vte, "\x03", 1);
+-			return true;
+-		case XKB_KEY_d:
+-		case XKB_KEY_D:
+-			vte_write(vte, "\x04", 1);
+-			return true;
+-		case XKB_KEY_e:
+-		case XKB_KEY_E:
+-			vte_write(vte, "\x05", 1);
+-			return true;
+-		case XKB_KEY_f:
+-		case XKB_KEY_F:
+-			vte_write(vte, "\x06", 1);
+-			return true;
+-		case XKB_KEY_g:
+-		case XKB_KEY_G:
+-			vte_write(vte, "\x07", 1);
+-			return true;
+-		case XKB_KEY_h:
+-		case XKB_KEY_H:
+-			vte_write(vte, "\x08", 1);
+-			return true;
+-		case XKB_KEY_i:
+-		case XKB_KEY_I:
+-			vte_write(vte, "\x09", 1);
+-			return true;
+-		case XKB_KEY_j:
+-		case XKB_KEY_J:
+-			vte_write(vte, "\x0a", 1);
+-			return true;
+-		case XKB_KEY_k:
+-		case XKB_KEY_K:
+-			vte_write(vte, "\x0b", 1);
+-			return true;
+-		case XKB_KEY_l:
+-		case XKB_KEY_L:
+-			vte_write(vte, "\x0c", 1);
+-			return true;
+-		case XKB_KEY_m:
+-		case XKB_KEY_M:
+-			vte_write(vte, "\x0d", 1);
+-			return true;
+-		case XKB_KEY_n:
+-		case XKB_KEY_N:
+-			vte_write(vte, "\x0e", 1);
+-			return true;
+-		case XKB_KEY_o:
+-		case XKB_KEY_O:
+-			vte_write(vte, "\x0f", 1);
+-			return true;
+-		case XKB_KEY_p:
+-		case XKB_KEY_P:
+-			vte_write(vte, "\x10", 1);
+-			return true;
+-		case XKB_KEY_q:
+-		case XKB_KEY_Q:
+-			vte_write(vte, "\x11", 1);
+-			return true;
+-		case XKB_KEY_r:
+-		case XKB_KEY_R:
+-			vte_write(vte, "\x12", 1);
+-			return true;
+-		case XKB_KEY_s:
+-		case XKB_KEY_S:
+-			vte_write(vte, "\x13", 1);
+-			return true;
+-		case XKB_KEY_t:
+-		case XKB_KEY_T:
+-			vte_write(vte, "\x14", 1);
+-			return true;
+-		case XKB_KEY_u:
+-		case XKB_KEY_U:
+-			vte_write(vte, "\x15", 1);
+-			return true;
+-		case XKB_KEY_v:
+-		case XKB_KEY_V:
+-			vte_write(vte, "\x16", 1);
+-			return true;
+-		case XKB_KEY_w:
+-		case XKB_KEY_W:
+-			vte_write(vte, "\x17", 1);
+-			return true;
+-		case XKB_KEY_x:
+-		case XKB_KEY_X:
+-			vte_write(vte, "\x18", 1);
+-			return true;
+-		case XKB_KEY_y:
+-		case XKB_KEY_Y:
+-			vte_write(vte, "\x19", 1);
+-			return true;
+-		case XKB_KEY_z:
+-		case XKB_KEY_Z:
+-			vte_write(vte, "\x1a", 1);
+-			return true;
+-		case XKB_KEY_3:
+-		case XKB_KEY_bracketleft:
+-		case XKB_KEY_braceleft:
+-			vte_write(vte, "\x1b", 1);
+-			return true;
+-		case XKB_KEY_4:
+-		case XKB_KEY_backslash:
+-		case XKB_KEY_bar:
+-			vte_write(vte, "\x1c", 1);
+-			return true;
+-		case XKB_KEY_5:
+-		case XKB_KEY_bracketright:
+-		case XKB_KEY_braceright:
+-			vte_write(vte, "\x1d", 1);
+-			return true;
+-		case XKB_KEY_6:
+-		case XKB_KEY_grave:
+-		case XKB_KEY_asciitilde:
+-			vte_write(vte, "\x1e", 1);
+-			return true;
+-		case XKB_KEY_7:
+-		case XKB_KEY_slash:
+-		case XKB_KEY_question:
+-			vte_write(vte, "\x1f", 1);
+-			return true;
+-		case XKB_KEY_8:
+-			vte_write(vte, "\x7f", 1);
+-			return true;
+-		}
+-	}
++	if ((mods & TSM_CONTROL_MASK) && sym >= 0x20 && sym < 0x7f) {
++		c = key_ctrl_char(sym);
++		if (c >= 0) {
++			char val = c;
+ 
+-	switch (keysym) {
+-		case XKB_KEY_BackSpace:
+-			if (vte->backspace_sends_delete)
+-				vte_write(vte, "\x7f", 1);
+-			else
+-				vte_write(vte, "\x08", 1);
+-			return true;
+-		case XKB_KEY_Tab:
+-		case XKB_KEY_KP_Tab:
+-			vte_write(vte, "\x09", 1);
+-			return true;
+-		case XKB_KEY_ISO_Left_Tab:
+-			vte_write(vte, "\e[Z", 3);
+-			return true;
+-		case XKB_KEY_Linefeed:
+-			vte_write(vte, "\x0a", 1);
+-			return true;
+-		case XKB_KEY_Clear:
+-			vte_write(vte, "\x0b", 1);
+-			return true;
+-		/*
+-		 TODO: What should we do with this key? Sending XOFF is awful as
+-		       there is no simple way on modern keyboards to send XON
+-		       again. If someone wants this, we can re-eanble it and set
+-		       some flag.
+-		case XKB_KEY_Pause:
+-			vte_write(vte, "\x13", 1);
+-			return true;
+-		*/
+-		/*
+-		 TODO: What should we do on scroll-lock? Sending 0x14 is what
+-		       the specs say but it is not used today the way most
+-		       users would expect so we disable it. If someone wants
+-		       this, we can re-enable it and set some flag.
+-		case XKB_KEY_Scroll_Lock:
+-			vte_write(vte, "\x14", 1);
+-			return true;
+-		*/
+-		case XKB_KEY_Sys_Req:
+-			vte_write(vte, "\x15", 1);
+-			return true;
+-		case XKB_KEY_Escape:
+-			vte_write(vte, "\x1b", 1);
+-			return true;
+-		case XKB_KEY_KP_Enter:
+-			if (vte->flags & TSM_VTE_FLAG_KEYPAD_APPLICATION_MODE) {
+-				vte_write(vte, "\eOM", 3);
+-				return true;
+-			}
+-			/* fallthrough */
+-		case XKB_KEY_Return:
+-			if (vte->flags & TSM_VTE_FLAG_LINE_FEED_NEW_LINE_MODE)
+-				vte_write(vte, "\x0d\x0a", 2);
+-			else
+-				vte_write(vte, "\x0d", 1);
+-			return true;
+-		case XKB_KEY_Find:
+-			vte_write(vte, "\e[1~", 4);
+-			return true;
+-		case XKB_KEY_Insert:
+-			vte_write(vte, "\e[2~", 4);
+-			return true;
+-		case XKB_KEY_Delete:
+-			vte_write(vte, "\e[3~", 4);
+-			return true;
+-		case XKB_KEY_Select:
+-			vte_write(vte, "\e[4~", 4);
+-			return true;
+-		case XKB_KEY_Page_Up:
+-		case XKB_KEY_KP_Page_Up:
+-			/* Combinations with ALT are handled as TSM_VTE_FLAG_PREPEND_ESCAPE flag */
+-			if ((mods & (TSM_CONTROL_MASK | TSM_SHIFT_MASK)) == (TSM_CONTROL_MASK | TSM_SHIFT_MASK)) {
+-				vte_write(vte, "\e[5;6~", 6);
+-			} else if (mods & TSM_CONTROL_MASK) {
+-				vte_write(vte, "\e[5;5~", 6);
+-			} else if (mods & TSM_SHIFT_MASK) {
+-				vte_write(vte, "\e[5;2~", 6);
+-			} else {
+-				vte_write(vte, "\e[5~", 4);
+-			}
+-			return true;
+-		case XKB_KEY_KP_Page_Down:
+-		case XKB_KEY_Page_Down:
+-			/* Combinations with ALT are handled as TSM_VTE_FLAG_PREPEND_ESCAPE flag */
+-			if ((mods & (TSM_CONTROL_MASK | TSM_SHIFT_MASK)) == (TSM_CONTROL_MASK | TSM_SHIFT_MASK)) {
+-				vte_write(vte, "\e[6;6~", 6);
+-			} else if (mods & TSM_CONTROL_MASK) {
+-				vte_write(vte, "\e[6;5~", 6);
+-			} else if (mods & TSM_SHIFT_MASK) {
+-				vte_write(vte, "\e[6;2~", 6);
+-			} else {
+-				vte_write(vte, "\e[6~", 4);
+-			}
+-			return true;
+-		case XKB_KEY_Up:
+-		case XKB_KEY_KP_Up:
+-			vte_write_arrow(vte, 'A', mods);
+-			return true;
+-		case XKB_KEY_Down:
+-		case XKB_KEY_KP_Down:
+-			vte_write_arrow(vte, 'B', mods);
+-			return true;
+-		case XKB_KEY_Right:
+-		case XKB_KEY_KP_Right:
+-			vte_write_arrow(vte, 'C', mods);
+-			return true;
+-		case XKB_KEY_Left:
+-		case XKB_KEY_KP_Left:
+-			vte_write_arrow(vte, 'D', mods);
+-			return true;
+-		case XKB_KEY_KP_Insert:
+-		case XKB_KEY_KP_0:
+-			if (vte->flags & TSM_VTE_FLAG_KEYPAD_APPLICATION_MODE)
+-				vte_write(vte, "\eOp", 3);
+-			else
+-				vte_write(vte, "0", 1);
+-			return true;
+-		case XKB_KEY_KP_1:
+-			if (vte->flags & TSM_VTE_FLAG_KEYPAD_APPLICATION_MODE)
+-				vte_write(vte, "\eOq", 3);
+-			else
+-				vte_write(vte, "1", 1);
+-			return true;
+-		case XKB_KEY_KP_2:
+-			if (vte->flags & TSM_VTE_FLAG_KEYPAD_APPLICATION_MODE)
+-				vte_write(vte, "\eOr", 3);
+-			else
+-				vte_write(vte, "2", 1);
+-			return true;
+-		case XKB_KEY_KP_3:
+-			if (vte->flags & TSM_VTE_FLAG_KEYPAD_APPLICATION_MODE)
+-				vte_write(vte, "\eOs", 3);
+-			else
+-				vte_write(vte, "3", 1);
+-			return true;
+-		case XKB_KEY_KP_4:
+-			if (vte->flags & TSM_VTE_FLAG_KEYPAD_APPLICATION_MODE)
+-				vte_write(vte, "\eOt", 3);
+-			else
+-				vte_write(vte, "4", 1);
+-			return true;
+-		case XKB_KEY_KP_5:
+-			if (vte->flags & TSM_VTE_FLAG_KEYPAD_APPLICATION_MODE)
+-				vte_write(vte, "\eOu", 3);
+-			else
+-				vte_write(vte, "5", 1);
+-			return true;
+-		case XKB_KEY_KP_6:
+-			if (vte->flags & TSM_VTE_FLAG_KEYPAD_APPLICATION_MODE)
+-				vte_write(vte, "\eOv", 3);
+-			else
+-				vte_write(vte, "6", 1);
+-			return true;
+-		case XKB_KEY_KP_7:
+-			if (vte->flags & TSM_VTE_FLAG_KEYPAD_APPLICATION_MODE)
+-				vte_write(vte, "\eOw", 3);
+-			else
+-				vte_write(vte, "7", 1);
+-			return true;
+-		case XKB_KEY_KP_8:
+-			if (vte->flags & TSM_VTE_FLAG_KEYPAD_APPLICATION_MODE)
+-				vte_write(vte, "\eOx", 3);
+-			else
+-				vte_write(vte, "8", 1);
+-			return true;
+-		case XKB_KEY_KP_9:
+-			if (vte->flags & TSM_VTE_FLAG_KEYPAD_APPLICATION_MODE)
+-				vte_write(vte, "\eOy", 3);
+-			else
+-				vte_write(vte, "9", 1);
+-			return true;
+-		case XKB_KEY_KP_Subtract:
+-			if (vte->flags & TSM_VTE_FLAG_KEYPAD_APPLICATION_MODE)
+-				vte_write(vte, "\eOm", 3);
+-			else
+-				vte_write(vte, "-", 1);
+-			return true;
+-		case XKB_KEY_KP_Separator:
+-			if (vte->flags & TSM_VTE_FLAG_KEYPAD_APPLICATION_MODE)
+-				vte_write(vte, "\eOl", 3);
+-			else
+-				vte_write(vte, ",", 1);
+-			return true;
+-		case XKB_KEY_KP_Delete:
+-		case XKB_KEY_KP_Decimal:
+-			if (vte->flags & TSM_VTE_FLAG_KEYPAD_APPLICATION_MODE)
+-				vte_write(vte, "\eOn", 3);
+-			else
+-				vte_write(vte, ".", 1);
+-			return true;
+-		case XKB_KEY_KP_Equal:
+-		case XKB_KEY_KP_Divide:
+-			if (vte->flags & TSM_VTE_FLAG_KEYPAD_APPLICATION_MODE)
+-				vte_write(vte, "\eOj", 3);
+-			else
+-				vte_write(vte, "/", 1);
+-			return true;
+-		case XKB_KEY_KP_Multiply:
+-			if (vte->flags & TSM_VTE_FLAG_KEYPAD_APPLICATION_MODE)
+-				vte_write(vte, "\eOo", 3);
+-			else
+-				vte_write(vte, "*", 1);
+-			return true;
+-		case XKB_KEY_KP_Add:
+-			if (vte->flags & TSM_VTE_FLAG_KEYPAD_APPLICATION_MODE)
+-				vte_write(vte, "\eOk", 3);
+-			else
+-				vte_write(vte, "+", 1);
+-			return true;
+-		case XKB_KEY_Home:
+-		case XKB_KEY_KP_Home:
+-			if (vte->flags & TSM_VTE_FLAG_CURSOR_KEY_MODE)
+-				vte_write(vte, "\eOH", 3);
+-			else
+-				vte_write(vte, "\e[H", 3);
+-			return true;
+-		case XKB_KEY_End:
+-		case XKB_KEY_KP_End:
+-			if (vte->flags & TSM_VTE_FLAG_CURSOR_KEY_MODE)
+-				vte_write(vte, "\eOF", 3);
+-			else
+-				vte_write(vte, "\e[F", 3);
+-			return true;
+-		case XKB_KEY_KP_Space:
+-			vte_write(vte, " ", 1);
+-			return true;
+-		/* TODO: check what to transmit for functions keys when
+-		 * shift/ctrl etc. are pressed. Every terminal behaves
+-		 * differently here which is really weird.
+-		 * We now map F4 to F14 if shift is pressed and so on for all
+-		 * keys. However, such mappings should rather be done via
+-		 * xkb-configurations and we should instead add a flags argument
+-		 * to the CSIs as some of the keys here already do. */
+-		case XKB_KEY_F1:
+-		case XKB_KEY_KP_F1:
+-			if (mods & TSM_SHIFT_MASK)
+-				vte_write(vte, "\e[23~", 5);
+-			else
+-				vte_write(vte, "\eOP", 3);
+-			return true;
+-		case XKB_KEY_F2:
+-		case XKB_KEY_KP_F2:
+-			if (mods & TSM_SHIFT_MASK)
+-				vte_write(vte, "\e[24~", 5);
+-			else
+-				vte_write(vte, "\eOQ", 3);
+-			return true;
+-		case XKB_KEY_F3:
+-		case XKB_KEY_KP_F3:
+-			if (mods & TSM_SHIFT_MASK)
+-				vte_write(vte, "\e[25~", 5);
+-			else
+-				vte_write(vte, "\eOR", 3);
+-			return true;
+-		case XKB_KEY_F4:
+-		case XKB_KEY_KP_F4:
+-			if (mods & TSM_SHIFT_MASK)
+-				//vte_write(vte, "\e[1;2S", 6);
+-				vte_write(vte, "\e[26~", 5);
+-			else
+-				vte_write(vte, "\eOS", 3);
+-			return true;
+-		case XKB_KEY_F5:
+-			if (mods & TSM_SHIFT_MASK)
+-				//vte_write(vte, "\e[15;2~", 7);
+-				vte_write(vte, "\e[28~", 5);
+-			else
+-				vte_write(vte, "\e[15~", 5);
+-			return true;
+-		case XKB_KEY_F6:
+-			if (mods & TSM_SHIFT_MASK)
+-				//vte_write(vte, "\e[17;2~", 7);
+-				vte_write(vte, "\e[29~", 5);
+-			else
+-				vte_write(vte, "\e[17~", 5);
+-			return true;
+-		case XKB_KEY_F7:
+-			if (mods & TSM_SHIFT_MASK)
+-				//vte_write(vte, "\e[18;2~", 7);
+-				vte_write(vte, "\e[31~", 5);
+-			else
+-				vte_write(vte, "\e[18~", 5);
+-			return true;
+-		case XKB_KEY_F8:
+-			if (mods & TSM_SHIFT_MASK)
+-				//vte_write(vte, "\e[19;2~", 7);
+-				vte_write(vte, "\e[32~", 5);
+-			else
+-				vte_write(vte, "\e[19~", 5);
+-			return true;
+-		case XKB_KEY_F9:
+-			if (mods & TSM_SHIFT_MASK)
+-				//vte_write(vte, "\e[20;2~", 7);
+-				vte_write(vte, "\e[33~", 5);
+-			else
+-				vte_write(vte, "\e[20~", 5);
+-			return true;
+-		case XKB_KEY_F10:
+-			if (mods & TSM_SHIFT_MASK)
+-				//vte_write(vte, "\e[21;2~", 7);
+-				vte_write(vte, "\e[34~", 5);
+-			else
+-				vte_write(vte, "\e[21~", 5);
+-			return true;
+-		case XKB_KEY_F11:
+-			if (mods & TSM_SHIFT_MASK)
+-				vte_write(vte, "\e[23;2~", 7);
+-			else
+-				vte_write(vte, "\e[23~", 5);
+-			return true;
+-		case XKB_KEY_F12:
+-			if (mods & TSM_SHIFT_MASK)
+-				vte_write(vte, "\e[24;2~", 7);
+-			else
+-				vte_write(vte, "\e[24~", 5);
+-			return true;
+-		case XKB_KEY_F13:
+-			if (mods & TSM_SHIFT_MASK)
+-				vte_write(vte, "\e[25;2~", 7);
+-			else
+-				vte_write(vte, "\e[25~", 5);
+-			return true;
+-		case XKB_KEY_F14:
+-			if (mods & TSM_SHIFT_MASK)
+-				vte_write(vte, "\e[26;2~", 7);
+-			else
+-				vte_write(vte, "\e[26~", 5);
+-			return true;
+-		case XKB_KEY_F15:
+-			if (mods & TSM_SHIFT_MASK)
+-				vte_write(vte, "\e[28;2~", 7);
+-			else
+-				vte_write(vte, "\e[28~", 5);
+-			return true;
+-		case XKB_KEY_F16:
+-			if (mods & TSM_SHIFT_MASK)
+-				vte_write(vte, "\e[29;2~", 7);
+-			else
+-				vte_write(vte, "\e[29~", 5);
+-			return true;
+-		case XKB_KEY_F17:
+-			if (mods & TSM_SHIFT_MASK)
+-				vte_write(vte, "\e[31;2~", 7);
+-			else
+-				vte_write(vte, "\e[31~", 5);
+-			return true;
+-		case XKB_KEY_F18:
+-			if (mods & TSM_SHIFT_MASK)
+-				vte_write(vte, "\e[32;2~", 7);
+-			else
+-				vte_write(vte, "\e[32~", 5);
+-			return true;
+-		case XKB_KEY_F19:
+-			if (mods & TSM_SHIFT_MASK)
+-				vte_write(vte, "\e[33;2~", 7);
+-			else
+-				vte_write(vte, "\e[33~", 5);
+-			return true;
+-		case XKB_KEY_F20:
+-			if (mods & TSM_SHIFT_MASK)
+-				vte_write(vte, "\e[34;2~", 7);
+-			else
+-				vte_write(vte, "\e[34~", 5);
++			vte_write(vte, &val, 1);
+ 			return true;
++		}
+ 	}
+ 
+ 	if (unicode != TSM_VTE_INVALID) {
+-		if (vte->flags & TSM_VTE_FLAG_7BIT_MODE) {
+-			val = unicode;
+-			if (unicode & 0x80) {
+-				llog_debug(vte, "invalid keyboard input in 7bit mode U+%x; mapping to '?'",
+-					   unicode);
+-				val = '?';
+-			}
+-			vte_write(vte, &val, 1);
+-		} else if (vte->flags & TSM_VTE_FLAG_8BIT_MODE) {
+-			val = unicode;
+-			if (unicode > 0xff) {
+-				llog_debug(vte, "invalid keyboard input in 8bit mode U+%x; mapping to '?'",
+-					   unicode);
+-				val = '?';
+-			}
+-			vte_write_raw(vte, &val, 1);
+-		} else {
+-			len = tsm_ucs4_to_utf8(tsm_symbol_make(unicode), u8);
+-			vte_write_raw(vte, u8, len);
+-		}
++		vte_write_key_text(vte, unicode);
+ 		return true;
+ 	}
+ 
+@@ -3447,6 +3151,17 @@ bool tsm_vte_handle_keyboard(struct tsm_vte *vte, uint32_t keysym,
+ 	return false;
+ }
+ 
++SHL_EXPORT
++bool tsm_vte_handle_keyboard(struct tsm_vte *vte, uint32_t keysym,
++			     uint32_t ascii, unsigned int mods,
++			     uint32_t unicode)
++{
++	if (!vte)
++		return false;
++
++	return vte_legacy_key(vte, keysym, ascii, mods, unicode);
++}
++
+ bool tsm_vte_handle_mouse(struct tsm_vte *vte, unsigned int cell_x,
+ 		unsigned int cell_y, unsigned int pixel_x, unsigned int pixel_y,
+ 		unsigned int button, unsigned int event, unsigned char modifiers)
