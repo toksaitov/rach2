@@ -122,6 +122,9 @@ static int run_main(int argc, char **argv)
     static const struct verb forms[] = {
         {"routine", etude_routine_entry_main, "prepare and run one installed routine collection"},
         {"routine-sequence", etude_routine_sequence_main, "own routine preparation and collection"},
+        {"routine-prepare", etude_routine_prepare_main, "build a routine sequence's preparation"},
+        {"routine-collect", etude_routine_collect_main,
+         "run the collection of a built preparation"},
         {"suites", etude_suites_main, "run a selection of suites by their cases"},
         {"host", etude_host_main, "run the host checks several at once"},
 #ifndef _WIN32
@@ -130,7 +133,8 @@ static int run_main(int argc, char **argv)
     };
 
     if (argc >= 2 && (strcmp(argv[1], "routine") == 0 || strcmp(argv[1], "routine-sequence") == 0 ||
-                      strcmp(argv[1], "suites") == 0 ||
+                      strcmp(argv[1], "routine-prepare") == 0 ||
+                      strcmp(argv[1], "routine-collect") == 0 || strcmp(argv[1], "suites") == 0 ||
                       (strcmp(argv[1], "host") == 0 && argc > 2) || strcmp(argv[1], "native") == 0))
         return dispatch(forms, COUNT(forms), argc, argv, "etude run");
     return etude_collection_main(argc, argv);

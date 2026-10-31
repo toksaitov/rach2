@@ -122,6 +122,8 @@ static int prepare_native(int argc, char **argv, int *matched)
         int (*main)(int, char **, volatile sig_atomic_t *);
     } forms[] = {{"route", etude_prepare_route_main},
                  {"routine", etude_prepare_routine_main},
+                 {"routine-build", etude_prepare_routine_build_main},
+                 {"routine-context", etude_prepare_routine_context_main},
                  {"evidence", etude_prepare_evidence_main},
                  {"producer", etude_routine_producer_main},
                  {"retention", etude_retention_main},

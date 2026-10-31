@@ -32,8 +32,14 @@ int routine_query(const struct routine_input *input, struct hp_words *args, cons
 int routine_selection(const char *expected, const char *actual);
 int routine_phase_inputs(const char *purpose, struct json **value);
 int etude_prepare_routine_main(int argc, char **argv, volatile sig_atomic_t *stop);
+/* The two stages of etude_prepare_routine_main: the build, then the context. */
+int etude_prepare_routine_build_main(int argc, char **argv, volatile sig_atomic_t *stop);
+int etude_prepare_routine_context_main(int argc, char **argv, volatile sig_atomic_t *stop);
 int etude_routine_entry_main(int argc, char **argv);
 int etude_routine_sequence_main(int argc, char **argv);
+/* A sequence in two runs: its preparation's build, then the collection. */
+int etude_routine_prepare_main(int argc, char **argv);
+int etude_routine_collect_main(int argc, char **argv);
 int etude_routine_owner_main(int argc, char **argv);
 
 /* A route may inspect its disabled endpoint only after fixed-binding checks. */

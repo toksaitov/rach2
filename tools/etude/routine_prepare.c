@@ -1,4 +1,5 @@
-/* Ordinary admitted preparation for the existing native sequence owner. */
+/* Ordinary admitted preparation for the native sequence owner, whole or in
+ * two stages: the build, and then the source and context on that build. */
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,13 +15,20 @@
 #include "measurement_context.h"
 #include "authority_internal.h"
 
+/* The part of a preparation that runs: all of it, the build alone, or the
+ * source capture and context composition on a finished build. */
+enum stage { STAGE_WHOLE, STAGE_BUILD, STAGE_CONTEXT };
+
 struct preparation {
     struct routine_input input;
+    enum stage stage;
     struct json *phase;
     char record[ROUTINE_PATH], receipt[ROUTINE_PATH], selection[ROUTINE_PATH];
     char source[ROUTINE_PATH], context[ROUTINE_PATH];
     struct hp_words tools;
     volatile sig_atomic_t *stop;
+    int argc;
+    char **argv;
 };
 
 static void operands(struct hp_words *args, const struct routine_input *input)
@@ -42,19 +50,30 @@ static int absent(const char *path)
     return lstat(path, &st) && errno == ENOENT;
 }
 
+/**
+ * Check OUT for the stage: the build's outputs absent, or present for the
+ * context stage; the source and context absent; and the observer's trace
+ * present, or absent for the build stage, which runs unobserved and leaves
+ * the trace for the collection's own observer to make.
+ */
 static int preparation_paths(struct preparation *p)
 {
     const struct routine_input *in = &p->input;
-    static const char *const fresh[] = {
-        "prepare.record", "preparation.receipt.json", "selection.list", "selection.export.json",
-        "source.json",    "source.descriptor.json",   "context"};
+    static const char *const built[] = {"prepare.record", "preparation.receipt.json",
+                                        "selection.list", "selection.export.json"};
+    static const char *const composed[] = {"source.json", "source.descriptor.json", "context"};
     char path[ROUTINE_PATH];
-    for (size_t i = 0; i < sizeof fresh / sizeof *fresh; i++)
-        if (routine_path(path, in->out, fresh[i]) || !absent(path))
-            return -1;
     struct stat st;
-    if (routine_path(path, in->out, "outer-load.jsonl") || stat(path, &st) ||
-        !S_ISREG(st.st_mode) || routine_path(path, in->out, "outer-stop.request") || !absent(path))
+    for (size_t i = 0; i < sizeof built / sizeof *built; i++)
+        if (routine_path(path, in->out, built[i]) ||
+            (p->stage == STAGE_CONTEXT ? lstat(path, &st) || !S_ISREG(st.st_mode) : !absent(path)))
+            return -1;
+    for (size_t i = 0; i < sizeof composed / sizeof *composed; i++)
+        if (routine_path(path, in->out, composed[i]) || !absent(path))
+            return -1;
+    if (routine_path(path, in->out, "outer-load.jsonl") ||
+        (p->stage == STAGE_BUILD ? !absent(path) : stat(path, &st) || !S_ISREG(st.st_mode)) ||
+        routine_path(path, in->out, "outer-stop.request") || !absent(path))
         return -1;
     return routine_path(p->record, in->out, "prepare.record") ||
                    routine_path(p->receipt, in->out, "preparation.receipt.json") ||
@@ -63,6 +82,34 @@ static int preparation_paths(struct preparation *p)
                    routine_path(p->context, in->out, "context")
                ? -1
                : 0;
+}
+
+/** Clear the receipt's inputs, which only the build's own command takes. */
+static void receipt_inputs_clear(void)
+{
+    unsetenv("ETUDE_PREPARATION_RUN_ID");
+    unsetenv("ETUDE_PREPARATION_RECEIPT");
+    unsetenv("ETUDE_PREPARATION_COMMIT");
+}
+
+/**
+ * Refuse an import in a staged preparation, which takes the ordinary backend
+ * alone: an import's route and inputs belong to one admission.
+ */
+static int staged(const struct preparation *p)
+{
+    static const char *const names[] = {"ETUDE_ROUTINE_ENSURE", "ETUDE_PREPARATION_IMPORT"};
+    if (p->stage == STAGE_WHOLE)
+        return 0;
+    for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
+        const char *value = getenv(names[i]);
+        if (value && *value) {
+            fprintf(stderr, "etude routine: %s: set; a staged preparation does not import\n",
+                    names[i]);
+            return -1;
+        }
+    }
+    return 0;
 }
 
 static int environment(struct preparation *p)
@@ -172,9 +219,7 @@ static int build(struct preparation *p)
         hp_add(&args, fixed[i]);
     operands(&args, in);
     int result = command(p, &args);
-    unsetenv("ETUDE_PREPARATION_RUN_ID");
-    unsetenv("ETUDE_PREPARATION_RECEIPT");
-    unsetenv("ETUDE_PREPARATION_COMMIT");
+    receipt_inputs_clear();
     return result;
 }
 
@@ -289,18 +334,37 @@ static int import_tools(struct preparation *p)
     return result;
 }
 
+/**
+ * Say whether the build cleaned the in-house tree, as its receipt records,
+ * since the context stage may run in another process than the build.
+ *
+ * @return 1 for clean, 0 for retained, or -1 when the receipt says neither.
+ */
+static int conditioning(const struct preparation *p)
+{
+    struct json *doc = NULL;
+    if (routine_json(p->receipt, &doc))
+        return -1;
+    const char *state = json_text(json_member(doc, "conditioning"), "inhouse");
+    int clean = !state ? -1 : !strcmp(state, "clean") ? 1 : !strcmp(state, "retained") ? 0 : -1;
+    json_free(doc);
+    return clean;
+}
+
 static int compose(struct preparation *p)
 {
     const struct routine_input *in = &p->input;
     char hash[65], trace[ROUTINE_PATH], stop[ROUTINE_PATH], method[512];
-    if (source(p, hash) || import_tools(p) || routine_path(trace, in->out, "outer-load.jsonl") ||
+    int clean = conditioning(p);
+    if (clean < 0 || source(p, hash) || import_tools(p) ||
+        routine_path(trace, in->out, "outer-load.jsonl") ||
         routine_path(stop, in->out, "outer-stop.request"))
         return -1;
-    int n = snprintf(method, sizeof method,
-                     "Public preparation profile %s; clean-inhouse=%s; imported=%s. "
-                     "Artifact hashes are verified; OS cache remains natural.",
-                     in->purpose, getenv("ETUDE_PREPARATION_CLEAN") ? "1" : "0",
-                     getenv("ETUDE_PREPARATION_IMPORT") ? "yes" : "");
+    int n =
+        snprintf(method, sizeof method,
+                 "Public preparation profile %s; clean-inhouse=%s; imported=%s. "
+                 "Artifact hashes are verified; OS cache remains natural.",
+                 in->purpose, clean ? "1" : "0", getenv("ETUDE_PREPARATION_IMPORT") ? "yes" : "");
     if (n < 0 || n >= (int)sizeof method)
         return -1;
     struct hp_words args = {0};
@@ -351,33 +415,63 @@ static int compose(struct preparation *p)
     return result;
 }
 
-int etude_prepare_routine_main(int argc, char **argv, volatile sig_atomic_t *stop)
+/** Run the stage of a routine preparation that `p->stage` names. */
+static int prepare_stage(struct preparation *p)
 {
-    struct preparation p = {.stop = stop};
-    int result = routine_input_read(argc, argv, &p.input) ||
-                         routine_phase_inputs(p.input.purpose, &p.phase) || preparation_paths(&p) ||
-                         preparation_tools(&p) || environment(&p)
+    int result = routine_input_read(p->argc, p->argv, &p->input) ||
+                         routine_phase_inputs(p->input.purpose, &p->phase) || staged(p) ||
+                         preparation_paths(p) || preparation_tools(p) || environment(p)
                      ? 2
                      : 0;
-    if (!result && !strcmp(p.input.purpose, "phase_first_run"))
-        result = allocation(&p, 1);
+    int first = !result && !strcmp(p->input.purpose, "phase_first_run");
+    if (p->stage == STAGE_CONTEXT) {
+        receipt_inputs_clear();
+        if (!result)
+            result = compose(p);
+        return result;
+    }
+    if (!result && first)
+        result = allocation(p, 1);
     if (!result)
-        result = ensure_import(&p);
+        result = ensure_import(p);
     if (!result)
-        result = build(&p);
+        result = build(p);
     if (!result)
-        result = producer_export(&p);
+        result = producer_export(p);
     if (!result)
-        result = reference(&p);
-    if (!result && strcmp(p.input.purpose, "phase_first_run"))
-        result = allocation(&p, 1);
+        result = reference(p);
+    if (!result && !first)
+        result = allocation(p, 1);
     if (!result)
-        result = allocation(&p, 0);
-    if (!result)
-        result = compose(&p);
+        result = allocation(p, 0);
+    if (!result && p->stage == STAGE_WHOLE)
+        result = compose(p);
+    return result;
+}
+
+/** Run a stage, free what it kept and report its failure. */
+static int prepare_main(int argc, char **argv, volatile sig_atomic_t *stop, enum stage stage)
+{
+    struct preparation p = {.stage = stage, .stop = stop, .argc = argc, .argv = argv};
+    int result = prepare_stage(&p);
     hp_words_free(&p.tools);
     json_free(p.phase);
     if (result)
         fputs("etude prepare: routine preparation failed; original output is retained\n", stderr);
     return result < 0 ? 2 : result;
+}
+
+int etude_prepare_routine_main(int argc, char **argv, volatile sig_atomic_t *stop)
+{
+    return prepare_main(argc, argv, stop, STAGE_WHOLE);
+}
+
+int etude_prepare_routine_build_main(int argc, char **argv, volatile sig_atomic_t *stop)
+{
+    return prepare_main(argc, argv, stop, STAGE_BUILD);
+}
+
+int etude_prepare_routine_context_main(int argc, char **argv, volatile sig_atomic_t *stop)
+{
+    return prepare_main(argc, argv, stop, STAGE_CONTEXT);
 }
