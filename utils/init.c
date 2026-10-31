@@ -2455,7 +2455,8 @@ static void set_up(void)
  * choose the console session (`want_term`), and the keyboard is set.
  *
  * Each turn respawns what is missing: the console session, whose failed fork
- * (a full process table) is retried after a second so the loop does not spin;
+ * (a full process table) is retried after a second so the loop does not spin,
+ * and each start of which as `term` is said on the console, which COM1 shows;
  * `/bin/update`; acpid while `acpid_wanted`; and on the metal builds the
  * network, once, after the console
  * session and before the SSH server that needs it, then the server wherever
@@ -2515,6 +2516,11 @@ int main(void)
                 continue;
             }
             spawned = time(0);
+#ifdef INIT_CONSOLE_LOGIN
+            if (term_now) {
+                fprintf(stderr, "init: console: starting term\n");
+            }
+#endif
         }
         if (updater < 0) {
             updater = spawn_update();
