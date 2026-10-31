@@ -4,7 +4,9 @@
  */
 
 /* POSIX's calls, which -std=c99 hides. */
+#ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
+#endif
 
 #include <errno.h>
 #include <fcntl.h>
@@ -254,8 +256,9 @@ static void draw_saved(struct term_draw *d, struct term_draw_cell *c, int cursor
  * A wide character's first cell has width 2 and its second width 0 and no
  * code point. The second is drawn by drawing the first, so that a change of
  * either redraws the whole glyph; a cell of width 0 that no wide character
- * covers, which an overwritten first cell leaves, is drawn empty. A cell
- * drawn after a wide one that covers it is drawn over it again.
+ * covers, which an overwritten first cell leaves, is drawn empty whenever
+ * the cell before it is drawn. A cell drawn after a wide one that covers it
+ * is drawn over it again.
  */
 static int draw_cb(struct tsm_screen *con, uint64_t id, const uint32_t *ch, size_t len,
                    unsigned int width, unsigned int posx, unsigned int posy,
@@ -297,7 +300,9 @@ static int draw_cb(struct tsm_screen *con, uint64_t id, const uint32_t *ch, size
             draw_saved(d, prev, -1);
         return 0;
     }
-    if (covered && prev->drawn)
+    /* Drawn over a wide glyph's right half, or the orphan of a wide
+     * character that a narrow one replaced, whose age libtsm leaves. */
+    if (prev->valid && prev->y == posy && prev->drawn && (covered || width == 0))
         changed = true;
     if (changed) {
         draw_cell(d, ch, width ? len : 0, width, posx, posy, &cur.attr, cursor);
