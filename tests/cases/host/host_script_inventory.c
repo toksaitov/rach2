@@ -10,9 +10,19 @@ static const char *kernel[] = {"chown",     "krffs_open", "krffs_root_lock", "kr
 static const char *image[] = {"mkext2_overlay", "krffs_tools",      "install_accounts",
                               "tooling_image",  "collection_tools", NULL};
 
-static const char *build[] = {"doom_libc",       "run_scripts",    "commit_msg",  "prereq",
-                              "check_asm",       "check_ldscript", "together",    "gnu_cmake_jobs",
-                              "gnu_port_resume", "host_suite",     "case_select", NULL};
+static const char *build[] = {"doom_libc",
+                              "run_scripts",
+                              "commit_msg",
+                              "prereq",
+                              "check_asm",
+                              "check_ldscript",
+                              "together",
+                              "gnu_cmake_jobs",
+                              "gnu_port_resume",
+                              "gnu_host_checks_key",
+                              "host_suite",
+                              "case_select",
+                              NULL};
 
 static const char *flow[] = {"machine_measure",
                              "ci",

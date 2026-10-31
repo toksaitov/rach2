@@ -46,6 +46,7 @@ together|the makers of several fixture files run once for a parallel request of 
 tooling_image|the GNU root's tooling job leaves no stage and no lock when a signal stops it
 gnu_cmake_jobs|the cmake port's bootstrap runs no more jobs at once than its make allows
 gnu_port_resume|a stopped build of the GNU ports goes on from the last port it finished
+gnu_host_checks_key|the GNU host checks' step keys every file its tree carries and no other
 host_suite|the host cases run their checks at once, each in its own scratch, with one result and one assertion each
 case_select|tests/run runs the cases chosen, in their order, and refuses a wrong choice before it builds
 collection_tools|the Windows collection's image transfers, offsets and command statuses

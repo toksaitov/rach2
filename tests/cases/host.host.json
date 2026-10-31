@@ -2744,6 +2744,11 @@
           "assertion_id": "gnu_port_resume",
           "checks": "a stopped build of the GNU ports goes on from the last port it finished: its native C controller passes every row",
           "source": "scenario"
+        },
+        {
+          "assertion_id": "gnu_host_checks_key",
+          "checks": "the GNU host checks' step keys every file its tree carries and no other: its native C controller passes every row",
+          "source": "scenario"
         }
       ],
       "branches": [],
@@ -2756,13 +2761,13 @@
           "witness_id": "stage",
           "kind": "step",
           "means": "a declared scenario step has ended",
-          "limit": 15
+          "limit": 16
         },
         {
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 12
+          "limit": 13
         }
       ],
       "bounds": {
@@ -2932,6 +2937,11 @@
           "step_id": "gnu_port_resume",
           "stage": "execute",
           "does": "run every native regression row of gnu_port_resume"
+        },
+        {
+          "step_id": "gnu_host_checks_key",
+          "stage": "execute",
+          "does": "run every native regression row of gnu_host_checks_key"
         },
         {
           "step_id": "host_suite",

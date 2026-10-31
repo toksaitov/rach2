@@ -55,6 +55,7 @@ int build_run_scripts(struct fixture *f);
 int build_commit_msg(struct fixture *f);
 int build_resume(struct fixture *f);
 int build_jobs(struct fixture *f);
+int build_host_checks(struct fixture *f);
 int build_asm(struct fixture *f);
 int build_ldscript(struct fixture *f);
 int build_prereq(struct fixture *f);
