@@ -103,6 +103,8 @@ A keyboard or mouse has one interrupt IN transfer outstanding, of the endpoint's
 
 A boot keyboard's report is 8 bytes: modifier bits, a reserved byte and six key usages. `hid.c` keeps each device's previous report and sends the difference as set-1 make and break codes, with the 0xE0 prefix for the right Ctrl and Alt, the GUI and Application keys, the arrows, the editing keys, and the keypad's Enter and slash. The table covers usages 0x04 to 0x65 and Mute, Volume Up and Volume Down, 0x7F to 0x81, which become a PS/2 keyboard's E0 20, E0 30 and E0 2E, and a usage without a code sends nothing to the console. Each keyboard is also the event device "USB keyboard N" ([input(4)](../../../man/man4/input.4)), which `hid_attach` registers when the core puts it in boot protocol and `hid_gone` takes away; every key that goes down or up, a usage without a code among them, is reported there with its usage in the keyboard page, 0x70000 and up, as its `MSC_SCAN`. A report whose key slots hold an error usage, 0x01 to 0x03, which a keyboard sends when it cannot tell which keys are down, has its modifiers read and its keys ignored, so the held keys stay down. When a keyboard goes, `hid_gone` releases every key it had down on the console's path.
 
+A keyboard's LEDs are its one output report, a byte with Num Lock in bit 0, Caps Lock in bit 1 and Scroll Lock in bit 2. At each pass the core asks `hid_led_report` whether a running keyboard's byte differs from what the input layer wants (`input_leds`); a keyboard just attached has shown nothing, so it is sent its LEDs at once. The byte goes as `SET_REPORT` (request 0x09, value 0x0200 for the Output report with ID 0, the interface's number as index) in a control transfer with a one-byte OUT data stage, one at a time on the control endpoint, which nothing else uses on a running keyboard, and `hid_led_sent` hears its outcome. A report that fails, or has not completed in 500 ms, is logged once and none is sent to that keyboard again until it is attached again, since a stall leaves the control endpoint halted and a keyboard without LEDs may refuse the request for good.
+
 A boot mouse's report is at least 3 bytes: three buttons and signed X and Y. Y is negated, since a USB report's is positive toward the user and the queue's, like the PS/2 report's, away from the user, so the two mice give the queue the same sign for the same movement ([terminals](../tty/Readme.md)).
 
 ### Hubs
@@ -172,9 +174,9 @@ The disk side's limits are in [`block/Readme.md`](../block/Readme.md).
 
 `tests/run host` runs these under AddressSanitizer and UndefinedBehaviorSanitizer; [`tests/host/Readme.md`](../../../tests/host/Readme.md) lists their rows:
 
-* `usb_hosttest.c`: the core without a controller, given descriptors no device would send in buffers of exactly their length, and the endpoint quiesce over a controller stub.
+* `usb_hosttest.c`: the core without a controller, given descriptors no device would send in buffers of exactly their length, the endpoint quiesce over a controller stub, and a keyboard's LED report.
 * `xhci_hosttest.c`: the controller driver against a model controller reached through `struct xhci_io`, from discovery and the firmware handoff to commands, transfers, interrupts and the 32-bit address path.
-* `hid_hosttest.c`: reports in, scancodes out.
+* `hid_hosttest.c`: reports in, scancodes out, and the LED report.
 * `hub_hosttest.c`: the core and the hub driver over a model of a tree of hubs.
 * `msc_hosttest.c`: the storage driver against a model stick that fails at any stage or is pulled.
 * `usb_interrupt_hosttest.c`: interrupt setup and the fallback count across controllers.
