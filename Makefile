@@ -1670,6 +1670,7 @@ check-libc: $(LIBC_STAMP) $(MUSL_OUTPUTS)
 # variants only a suite needs.
 include mk/host.mk
 include mk/images.mk
+include mk/unifont.mk
 include mk/etude-image.mk
 include mk/gnu.mk
 include mk/gnu-extra.mk
@@ -1718,7 +1719,7 @@ HOST_TOOLS = $(BINFIND) $(CHECKRECOVERY) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $
              $(MKEXFATFIXTURE) $(PCAPCHECK) $(MKFIXTURE) $(MKFATFIXTURE) \
              $(HOSTPEER) $(WAVCHECK) $(PTYDRIVE) \
              $(MKGPT) $(GROWSET) $(ASCIISCAN) $(MACHINENET) $(SCREENTEXT) \
-             $(ETUDEVOLUME) $(PECHECK) \
+             $(ETUDEVOLUME) $(PECHECK) $(MKUNIFONT) \
              $(MACHINE_SCENARIOS) $(PROBE_SCENARIOS) $(NET_SCENARIOS) $(NETPROBE_SCENARIOS) \
              $(USB_SCENARIOS) $(CONSOLE_SCENARIOS) \
              build/tests/cases/machine/sshpeer build/tests/cases/machine/clockpeer
