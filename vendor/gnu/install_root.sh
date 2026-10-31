@@ -30,7 +30,8 @@
 # each program of /bin and /usr/bin its name in the other, and of /sbin and
 # /usr/sbin, puts the CA bundle in /etc/ssl, puts /etc/services,
 # /etc/protocols, /etc/networks, /etc/localtime and /etc/timezone in place,
-# compiles the console's terminfo entry, rach2.ti, renders the ports' manual
+# compiles the console's terminfo entry, rach2.ti, checks that ncurses's
+# database has term's xterm-256color, renders the ports' manual
 # pages with render_man.sh, gives every node its owner's write permission,
 # takes the set-id bit off OpenSSH's ssh-keysign, sets the modes of the ports
 # that are narrower than the store keeps, gives /etc/shadow a locked line for
@@ -337,6 +338,13 @@ printf 'Etc/UTC\n' > "$TREE/etc/timezone"
 # build host runs the root's tic through the root's loader.
 "$TREE$GNU_LOADER" --library-path "$TREE/lib:$TREE/usr/lib" \
     "$TREE/usr/bin/tic" -o "$TREE/usr/share/terminfo" "$DIR/rach2.ti"
+# term gives its sessions TERM=xterm-256color, which ncurses's whole database
+# has; a port that installed less would leave every program in term without
+# its entry.
+if [ ! -f "$TREE/usr/share/terminfo/x/xterm-256color" ]; then
+    echo "gnu: install: refused: ncurses installed no xterm-256color, the terminal term names" >&2
+    exit 1
+fi
 
 # The ports' manual pages, rendered to the plain text the system's man
 # reads, which it looks in after the project's own pages.

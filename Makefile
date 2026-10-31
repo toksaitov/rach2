@@ -422,8 +422,9 @@ _ := $(shell [ ! -f $(BUSYBOX_STAMP) ] || { [ -s $(BUSYBOX_BIN) ] && [ -s $(BUSY
 # one manifest describes the image of either architecture. For x86-64 the
 # stager, the set-id guard and manifest_deps.sh read each such path from the
 # x86-64 tree instead, by the prefixes RACH2_PATH_MAP lists in order, the
-# first that matches taking the path. The manual's pages and the suites'
-# fixtures under build/tests/system are host files and stay where they are.
+# first that matches taking the path. The manual's pages, the suites'
+# fixtures under build/tests/system and term's font under build/unifont serve
+# both architectures and stay where they are.
 # The map is exported to the recipes and given by name to the parse-time
 # reads below, since whether $(shell) sees an exported variable has differed
 # between versions of GNU Make. An i686 build reads every path as written and
@@ -431,6 +432,7 @@ _ := $(shell [ ! -f $(BUSYBOX_STAMP) ] || { [ -s $(BUSYBOX_BIN) ] && [ -s $(BUSY
 # i686 helper.
 ifneq ($(ARCH_SUFFIX),)
 RACH2_PATH_MAP = build/man/=build/man/ build/tests/system/=build/tests/system/ \
+                 build/unifont/=build/unifont/ \
                  build/=$(ARCH_BUILD)/ vendor/musl/install/=$(ARCH_MUSL)/
 export RACH2_PATH_MAP
 else
@@ -1447,6 +1449,10 @@ os-real-disk: krffs rach2 $(MANIFEST_PARTS_os_real)
 # recovery image, so a tree with a recovery key names it
 # `rach2-sealed-with-key.disk`.
 #
+# Its entries carry `rach2.console=term`, so the person at the machine logs in
+# inside term on the framebuffer (init(8)). No test disk carries it, so the
+# machine cases keep their login on COM1.
+#
 # The address is `rach2.ip=none`: this machine is carried between buildings and
 # takes whatever the network there gives it, through `ifup -a` and udhcpc, which
 # init runs before it starts the SSH server. A fixed address on the boot line
@@ -1525,13 +1531,13 @@ GRUB_FILES      = $(wildcard vendor/grub/*.img) vendor/grub/bootx64.efi \
 MKEXFATFIXTURE  = build/tests/host/mkexfatfixture
 
 SEALED_EXT2 = $(IMAGES_DIR)/rach2-metal-disk.ext2
-$(SEALED_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest $(MANIFEST_DEPS_rach2_metal_disk) $(MAN_ALL) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti check-e2fsck kbd libtsm ports/doom
+$(SEALED_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest $(MANIFEST_DEPS_rach2_metal_disk) $(MAN_ALL) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti check-e2fsck kbd libtsm ports/doom term unifont
 	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 1024
 # The alias builds everything the disk is made of, then asks for the disk
 # itself. The two are separate because the components are phony targets,
 # which are always out of date, and a disk that named them directly would be
 # rebuilt on every invocation, half a minute each time.
-rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti kbd ports/doom $(CFGCHECK)
+rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti kbd ports/doom term unifont $(CFGCHECK)
 	@$(MAKE) --no-print-directory $(SEALED_DISK)
 
 $(SEALED_DISK): $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED_EXT2) \
@@ -1544,7 +1550,7 @@ $(SEALED_DISK): $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED_EXT2) \
 	RACH2_DISK_BOOT_MB=64 \
 	RACH2_DISK_CLUSTER=8 \
 	RACH2_DISK_RECOVERY_MB=64 \
-	RACH2_DISK_APPEND="rach2.disk=ahci rach2.netconsole" \
+	RACH2_DISK_APPEND="rach2.disk=ahci rach2.netconsole rach2.console=term" \
 	RACH2_DISK_DHCP_APPEND="rach2.ip=none" \
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
