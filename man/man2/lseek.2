@@ -61,6 +61,16 @@ A read of the log holds the description's lock, which its seek takes, as a
 read of a
 .Pa /proc
 file does, below.
+.Pp
+The framebuffer,
+.Pa /fb ,
+seeks to any position from 0, where
+.Dv SEEK_END
+counts from the end of the mode in force: 64000 bytes in mode 13h, the
+pitch times the height in the native mode, and 0 in text mode.
+A write past the end is refused; see
+.Xr write 2 .
+Its write holds the description's lock, which the seek takes.
 Seeks on
 .Pa /dev/null ,
 .Pa /dev/zero ,
@@ -69,15 +79,15 @@ and
 always return position 0, ignoring the displacement and origin.
 Every other descriptor does not seek and returns
 .Er ESPIPE :
-pipes, sockets, the console, pseudo-terminals, the mouse, the
-framebuffer, event objects such as an eventfd or an epoll instance, and
+pipes, sockets, the console, pseudo-terminals, the mouse, event objects
+such as an eventfd or an epoll instance, and
 the other device nodes, including
 .Pa /dev/random
 and
 .Pa /dev/urandom .
 Linux answers the same for pipes, sockets and terminals, but returns 0
 for an eventfd, epoll, inotify, signalfd or timerfd descriptor, and
-seeks a message queue descriptor and the framebuffer.
+seeks a message queue descriptor.
 .Ss Directories and proc files
 The offset of a directory is the place in its listing that
 .Xr getdents64 2

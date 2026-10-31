@@ -295,25 +295,59 @@ integer through
 .Fa arg .
 .El
 .Ss Framebuffer requests
-A framebuffer descriptor accepts the private requests below.
-Mode and palette changes require ownership by the calling process.
-A stale or inherited descriptor cannot change another process's display;
-the request returns
+A framebuffer descriptor accepts the private requests below, whose
+numbers and structures are in
+.In rach2/fb.h .
+Every request but
+.Dv FB_MODE_13H
+on a display nobody owns requires ownership by the calling process.
+A stale or inherited descriptor, such as one a child got by
+.Xr fork 2 ,
+cannot use another process's display; the request returns
 .Er EBUSY .
-.Bl -tag -width "FB_SETPALETTE"
+.Bl -tag -width "FB_MODE_NATIVE"
 .It Dv FB_MODE_13H No (0x4601)
 Acquire an unowned display and enter mode 13h.
-If the caller already owns the display in graphics mode, preserve its
-contents and palette.
+If the caller already owns the display in mode 13h, preserve its
+contents and palette; from the native mode, go straight to mode 13h.
 .It Dv FB_MODE_TEXT No (0x4602)
-Return to text mode and clear framebuffer ownership.
+Return to text mode and clear framebuffer ownership; the console draws
+its text again.
 An unowned display gives
 .Er EBUSY .
 .It Dv FB_SETPALETTE No (0x4603)
 Read 768 bytes from
 .Fa arg
-as 256 RGB triples and set the palette.
+as 256 RGB triples and set mode 13h's palette, in either mode.
+.It Dv FB_GETINFO No (0x4604)
+Write the framebuffer's
+.Vt struct fb_screen
+through
+.Fa arg ,
+whatever the mode: its width and height in pixels, its pitch, the bytes
+from one row to the next, its bits a pixel, its kind,
+.Dv FB_KIND_RGB
+or
+.Dv FB_KIND_INDEXED ,
+and for RGB each channel's offset and width in bits, in the pixel taken
+as a little-endian number.
+A console on the VGA's text mode, which has no framebuffer, gives
+.Er ENODEV .
+.It Dv FB_MODE_NATIVE No (0x4605)
+Enter the native mode: the whole screen at the size and pixel format
+.Dv FB_GETINFO
+reports, painted black, which the owner writes in rows of pixels at byte
+offsets from the top left pixel, as
+.Xr write 2
+describes.
+The console draws nothing until the owner leaves the mode, closes the
+descriptor or exits.
+A console on the VGA's text mode, and a framebuffer that is not RGB at
+15, 16, 24 or 32 bits a pixel, give
+.Er ENODEV .
 .El
+.Pp
+A request that changes the mode puts the descriptor's offset back at 0.
 .Pp
 On a machine whose console is on a framebuffer, as one booted by UEFI is,
 there is no VGA to put in mode 13h.
@@ -526,8 +560,10 @@ is invalid or was opened with
 .It Bq Er EBUSY
 .Dv BLKRRPART
 found another descriptor open on the disk or a claim on its partitions.
-A framebuffer mode or palette request belongs to another process,
-or a text-mode or palette request has no owner.
+A framebuffer request belongs to another process, or a request other
+than
+.Dv FB_MODE_13H
+has no owner.
 .It Bq Er EFAULT
 A required argument or buffer cannot be read or written in user memory.
 .It Bq Er EFBIG
@@ -559,6 +595,12 @@ The named network interface or index does not exist, or an
 request other than
 .Dv AUDIO_GET_INFO
 has no active driver.
+.Dv FB_GETINFO
+or
+.Dv FB_MODE_NATIVE
+found no framebuffer, or
+.Dv FB_MODE_NATIVE
+a framebuffer without a native mode.
 .It Bq Er ENOPKG
 A bridge or VLAN request was made.
 .It Bq Er ENOTTY

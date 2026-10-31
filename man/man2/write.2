@@ -126,8 +126,23 @@ the bounded boot devices require root and sector alignment.
 See
 .Xr disk 4 .
 .Pp
-A framebuffer write requires graphics mode and copies at most 64000
-bytes to the start of the mode 13h framebuffer.
+A write of the framebuffer,
+.Pa /fb ,
+copies bytes to the pixels of the mode in force at the descriptor's
+offset, counted from the top left pixel in rows of the pitch
+.Dv FB_GETINFO
+reports; see
+.Xr ioctl 2 .
+A write that would pass the mode's end, 64000 bytes in mode 13h and the
+pitch times the height in the native mode, stops at it.
+In the native mode the offset moves past what was written, so
+.Xr lseek 2
+and
+.Fn write
+place rows as
+.Fn pwrite
+does; in mode 13h it stays, so that each write from 0 is a whole frame.
+Only the process that owns the display writes it.
 .Pp
 A write of
 .Pa /proc/ Ns Ar pid Ns Pa /mem
@@ -200,7 +215,8 @@ apply otherwise: a file backing a loop device returns
 and a write of one or more bytes by an unprivileged process clears the
 set-id bits.
 A raw disk window is written at
-.Fa offset .
+.Fa offset ,
+and so is the framebuffer.
 The offset the descriptor shares with its duplicates does not change at
 any point of the call.
 .Pp
@@ -276,10 +292,12 @@ an ephemeral port.
 The descriptor is invalid, is not open for writing, has no write operation,
 or was opened with
 .Dv O_PATH .
-A framebuffer descriptor also gives this error outside graphics mode.
 .It Er EBUSY
 A regular file backs a loop device, or a loop-control command encounters
 an occupied device, an attached file, a mount, a held buffer, or a transfer.
+A framebuffer write comes from a process that does not own the display,
+such as a child that inherited the descriptor, or the display left its
+mode before the first byte.
 .It Er ECONNREFUSED
 A stream connection was refused.
 .It Er ECONNRESET
@@ -289,7 +307,8 @@ A datagram socket has no connected peer.
 .It Er EFAULT
 The buffer or vector list cannot be read as required.
 .It Er EFBIG
-A file write exceeds the file system's size or addressing limit.
+A file write exceeds the file system's size or addressing limit, or a
+framebuffer write starts past the mode's end.
 .It Er EINTR
 A signal interrupted a wait, or a background terminal write posted
 .Dv SIGTTOU .
@@ -328,8 +347,8 @@ A loop-control command names an absent file or an unattached device.
 Resolving or opening a loop-control attachment requires unavailable memory.
 .It Er ENOSPC
 A file system has insufficient space,
-a raw write starts at or crosses the end of its window, or the descriptor
-refers to
+a raw write starts at or crosses the end of its window, a framebuffer
+write starts at the mode's end, or the descriptor refers to
 .Pa /dev/full .
 .It Er ENOTDIR
 A component of a loop-control attachment path is not a directory.

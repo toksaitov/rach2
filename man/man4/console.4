@@ -182,9 +182,6 @@ Blanking paints the screen black, through the VGA's palette in text mode
 and with black pixels on a framebuffer, and turns every backlight off;
 see
 .Xr backlight 4 .
-While a program draws through
-.Pa /fb
-the screen does not blank.
 .Pp
 The kernel command line's
 .Ql consoleblank=N
@@ -207,6 +204,38 @@ or
 .Ql by the escape
 or
 .Ql on request .
+.Ss Drawing through /fb
+A program takes the screen by opening
+.Pa /fb ,
+as
+.Xr open 2
+describes, and owns it until it asks for text mode, closes
+.Pa /fb
+or exits; then the console draws its text again, that written meanwhile
+among it.
+While a program owns the screen the console draws nothing on it, the
+screen does not blank, and the owner's reads of the console give the
+keyboard's raw scancodes.
+The open enters mode 13h, 320 by 200 pixels of a byte each through a
+palette of 256 colors, which a framebuffer shows scaled by a whole number
+and the VGA shows itself.
+On a framebuffer that is RGB at 15, 16, 24 or 32 bits a pixel, the
+request
+.Dv FB_MODE_NATIVE
+gives the owner the whole screen at its own size and pixel format,
+which
+.Dv FB_GETINFO
+reports, and the owner writes rows of pixels at byte offsets from the top
+left pixel with
+.Xr pwrite 2 ,
+or with
+.Xr lseek 2
+and
+.Xr write 2 .
+The requests are in
+.Xr ioctl 2 ,
+and the header for programs is
+.In rach2/fb.h .
 .Ss Terminal requests
 The console and pseudoterminal slaves answer these
 .Xr ioctl 2
@@ -410,5 +439,6 @@ may refuse them.
 .Xr login 1 ,
 .Xr getpid 2 ,
 .Xr ioctl 2 ,
+.Xr open 2 ,
 .Xr backlight 4 ,
 .Xr bootlog 4
