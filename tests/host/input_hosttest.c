@@ -5,11 +5,10 @@
  * host-deps: rach2/sys/kbd.c rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
  *
- * The file is included whole. Its consumers are models: the event devices
- * and the console's keyboard record what they are given, the console's
- * terminal records its bytes, with a session owning it so that today's
- * translation sends every key there, and the tick's count is a variable the
- * rows advance. The scancode ring is kbd.c's own.
+ * The file is included whole. Its consumers are models: the event devices,
+ * the console's keyboard and the console's raw view record what they are
+ * given, and the tick's count is a variable the rows advance. The scancode
+ * ring is kbd.c's own.
  */
 
 #include "input.c"
@@ -27,7 +26,6 @@ static int fails;
     } while (0)
 
 volatile uint32_t kernel_ticks;
-struct tty console_tty;
 
 /** No interrupts to mask on the host: nothing to save. */
 uint32_t kirq_save(void)
@@ -59,9 +57,9 @@ static struct {
 } ev_events[MAX_EVENTS];
 static int n_ev;
 
-/* The bytes the console's terminal took since `clear`. */
-static unsigned char tty_bytes[MAX_EVENTS];
-static int n_tty;
+/* The raw view's bytes the console took since `clear`. */
+static unsigned char raw_bytes[MAX_EVENTS];
+static int n_raw;
 
 /* The event devices handed out, by address, and the last repeat and LEDs
  * each was told; `unregistered` counts the ones taken away. */
@@ -156,20 +154,12 @@ void kd_key_event(const void *device, unsigned int keycode, int value)
     }
 }
 
-/** Record one byte of the console's terminal. */
-void tty_input_char(struct tty *t, unsigned char c)
+/** Record one byte of the console's raw view. */
+void kd_raw_code(uint8_t code)
 {
-    (void)t;
-    if (n_tty < MAX_EVENTS) {
-        tty_bytes[n_tty++] = c;
+    if (n_raw < MAX_EVENTS) {
+        raw_bytes[n_raw++] = code;
     }
-}
-
-/** No reader is parked: the session's id routes the keys. */
-int wq_active(const wait_queue_t *wq)
-{
-    (void)wq;
-    return 0;
 }
 
 /** No suspend is in force. */
@@ -188,55 +178,12 @@ void mouse_push_packet(uint8_t buttons, int dx, int dy)
     (void)dy;
 }
 
-/** The screen has no scrollback here. */
-void k_scrollback_page_up(void)
-{}
-
-/** The screen has no scrollback here. */
-void k_scrollback_page_down(void)
-{}
-
-/** The screen has no scrollback here. */
-void k_scrollback_home(void)
-{}
-
-/** The screen has no scrollback here. */
-void k_scrollback_end(void)
-{}
-
-/** The screen is never scrolled back. */
-bool k_scrollback_is_active(void)
-{
-    return 0;
-}
-
-/** The debug shell does not read: a session owns the console. */
-int shell_reads_input(void)
-{
-    return 0;
-}
-
-/** The debug shell takes no key here. */
-void shell_input_char(char c)
-{
-    (void)c;
-}
-
-/* The out-of-band Ctrl+Cs the debug shell was given. */
-static int interrupts;
-
-/** Count an out-of-band Ctrl+C. */
-void shell_interrupt(void)
-{
-    interrupts++;
-}
-
 /** Forget what the models took. */
 static void clear(void)
 {
     n_kd = 0;
     n_ev = 0;
-    n_tty = 0;
+    n_raw = 0;
 }
 
 /** The console's keyboard's events of `value` since `clear`. */
@@ -265,17 +212,30 @@ static void key(struct input_keyboard *kb, unsigned int keycode, int down)
     input_key_event(kb, set1_scancode((int)keycode), keycode, down);
 }
 
-/** Whether the terminal took exactly the string `s` since `clear`. */
-static int typed(const char *s)
+/** Whether the raw view took exactly the bytes of `s` since `clear`. */
+static int raw_is(const char *s)
 {
     int i;
 
     for (i = 0; s[i]; i++) {
-        if (i >= n_tty || tty_bytes[i] != (unsigned char)s[i]) {
+        if (i >= n_raw || raw_bytes[i] != (unsigned char)s[i]) {
             return 0;
         }
     }
-    return i == n_tty;
+    return i == n_raw;
+}
+
+/** Whether the last press the console's keyboard took was of `keycode`. */
+static int last_press(unsigned int keycode)
+{
+    int i;
+
+    for (i = n_kd - 1; i >= 0; i--) {
+        if (kd_events[i].value == KD_KEY_PRESS) {
+            return kd_events[i].keycode == keycode;
+        }
+    }
+    return 0;
 }
 
 /* Linux's key codes the rows press. */
@@ -296,18 +256,20 @@ static void test_state(struct input_keyboard *kb1, struct input_keyboard *kb2)
           input_modifiers() == INPUT_MOD_SHIFTR);
     key(kb1, KEY_A, 1);
     key(kb1, KEY_A, 0);
-    CHECK("the right shift alone shifts", typed("A"));
+    CHECK("a key pressed under the right shift reaches the console's keyboard",
+          last_press(KEY_A) && raw_is("\x2a\x36\xaa\x1e\x9e"));
     key(kb1, KEY_RIGHTSHIFT, 0);
     clear();
     key(kb1, KEY_A, 1);
     key(kb1, KEY_A, 0);
-    CHECK("no shift after both are released", input_modifiers() == 0 && typed("a"));
+    CHECK("no shift after both are released", input_modifiers() == 0 && raw_is("\x1e\x9e"));
 
     clear();
     key(kb1, KEY_LEFTSHIFT, 1);
     key(kb2, KEY_A, 1);
     key(kb2, KEY_A, 0);
-    CHECK("one keyboard's shift shifts another's key", typed("A"));
+    CHECK("one keyboard's shift is held for another's key",
+          input_modifiers() == INPUT_MOD_SHIFTL && last_press(KEY_A) && kd_events[1].device == kb2);
     key(kb2, KEY_LEFTSHIFT, 1);
     key(kb1, KEY_LEFTSHIFT, 0);
     CHECK("the left shift stays held while another keyboard holds it",
@@ -323,7 +285,8 @@ static void test_state(struct input_keyboard *kb1, struct input_keyboard *kb2)
           input_modifiers() == (INPUT_MOD_CTRLR | INPUT_MOD_ALTGR | INPUT_MOD_METAL));
     key(kb1, KEY_C, 1);
     key(kb1, KEY_C, 0);
-    CHECK("right Ctrl and AltGr give ESC and ^C in a session", typed("\033\003"));
+    CHECK("a key under right Ctrl and AltGr reaches the console's keyboard",
+          last_press(KEY_C) && raw_is("\xe0\x1d\xe0\x38\xe0\x5b\x2e\xae"));
     key(kb1, KEY_RIGHTCTRL, 0);
     key(kb1, KEY_RIGHTALT, 0);
     key(kb1, KEY_LEFTMETA, 0);
@@ -348,7 +311,7 @@ static void test_set1(struct input_keyboard *kb1, struct input_keyboard *kb2)
     CHECK("a prefix is kept for its own keyboard",
           n_kd == 2 && kd_events[0].keycode == 0x48 && kd_events[0].device == kb2 &&
               kd_events[1].keycode == KEY_UP && kd_events[1].device == kb1);
-    CHECK("an extended key goes to today's translation as its sequence", typed("\033[A"));
+    CHECK("an extended key goes to the raw view after E0", raw_is("\x48\xe0\x48"));
     input_set1_event(kb2, 0xC8);
     input_set1_event(kb1, 0xE0);
     input_set1_event(kb1, 0xC8);
@@ -359,7 +322,7 @@ static void test_set1(struct input_keyboard *kb1, struct input_keyboard *kb2)
     input_set1_event(kb1, 0x1E);
     input_set1_event(kb1, 0x9E);
     CHECK("a PS/2 keyboard's own repeat is dropped",
-          n_kd == 2 && kd_count(KD_KEY_PRESS) == 1 && typed("a"));
+          n_kd == 2 && kd_count(KD_KEY_PRESS) == 1 && raw_is("\x1e\x9e"));
 
     clear();
     input_set1_event(kb1, 0xE0);
@@ -427,7 +390,8 @@ static void test_repeat(struct input_keyboard *kb1, struct input_keyboard *kb2)
     /* Due at 250 + 33k ms: 31 by 1250 ms. A deadline taken from the tick
      * that sent the last repeat would give one every 40 ms, 26. */
     CHECK("the deadlines accumulate: 31 repeats in 1250 ms", kd_count(KD_KEY_REPEAT) == 31);
-    CHECK("a repeat reaches the terminal as the key again", n_tty == 32 && tty_bytes[31] == 'a');
+    CHECK("a repeat reaches the raw view as the make code again",
+          n_raw == 32 && raw_bytes[31] == 0x1E);
     CHECK("a repeat is EV_KEY 2 and SYN, without MSC_SCAN",
           ev_events[n_ev - 2].type == EV_KEY && ev_events[n_ev - 2].value == 2 &&
               ev_events[n_ev - 1].type == EV_SYN && ev_events[n_ev - 3].type == EV_SYN);
@@ -435,8 +399,8 @@ static void test_repeat(struct input_keyboard *kb1, struct input_keyboard *kb2)
     clear();
     key(kb1, KEY_LEFTSHIFT, 1);
     tick_to(1135);
-    CHECK("a modifier pressed keeps the key repeating, now shifted",
-          kd_count(KD_KEY_REPEAT) == 3 && tty_bytes[n_tty - 1] == 'A');
+    CHECK("a modifier pressed keeps the key repeating",
+          kd_count(KD_KEY_REPEAT) == 3 && kd_events[n_kd - 1].keycode == KEY_A);
     key(kb1, KEY_LEFTSHIFT, 0);
     key(kb1, KEY_CAPSLOCK, 1);
     tick_to(1145);
@@ -551,7 +515,6 @@ int main(void)
 {
     static struct input_keyboard kb1, kb2;
 
-    console_tty.sid = 1;
     input_keyboard_attach(&kb1, "one", "one/input0", EVDEV_BUS_I8042, 1, 1);
     input_keyboard_attach(&kb2, "two", "two/input0", EVDEV_BUS_USB, 2, 2);
     CHECK("an attached keyboard's event device has the repeat",
@@ -563,7 +526,6 @@ int main(void)
     test_repeat(&kb1, &kb2);
     test_full_ring(&kb1);
     test_detach(&kb1, &kb2);
-    CHECK("no out-of-band Ctrl+C while a session owns the console", interrupts == 0);
 
     if (fails == 0) {
         printf("input-test: pass\n");

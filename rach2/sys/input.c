@@ -1,31 +1,26 @@
 /*
- * input.c: every keyboard's keys, held keys and repeat, today's translation
- * of them for the console, and the mouse's presence and its USB reports.
+ * input.c: every keyboard's keys, held keys and repeat, and the mouse's
+ * presence and its USB reports.
  *
- * Nothing about deciding where a keystroke goes is particular to the 8042:
- * the held keys, the repeat, the Ctrl+C interception, the scrollback keys and
- * the choice between the line discipline and the debug shell are the same
- * whether the key came off a port or out of a USB report. What is particular
- * to the 8042, reading the port, is in its interrupt handler, and what is
- * particular to USB, comparing reports, is in the HID driver.
+ * Nothing about a keystroke's way is particular to the 8042: the held keys,
+ * the repeat and the hand-off to the console's keyboard (kd.c), which
+ * translates it, are the same whether the key came off a port or out of a
+ * USB report. What is particular to the 8042, reading the port, is in its
+ * interrupt handler, and what is particular to USB, comparing reports, is in
+ * the HID driver.
  */
 
 #include "proc/suspend.h"
 #include "input.h"
 
 #include "display/blank.h"
-#include "display/textcon.h"
 #include "evdev.h"
 #include "kd.h"
 #include "lib/kstring.h"
 #include "lib/spinlock.h"
 #include "kbd.h"
 #include "mouse.h"
-#include "kio.h"
-#include "klog.h"
-#include "proc/wait_queue.h"
 #include "timer.h"
-#include "tty/tty.h"
 
 /* The boot processor's tick, 100 a second, in milliseconds. */
 #define TICK_MS 10u
@@ -73,9 +68,6 @@ static uint32_t repeat_due;
  * period of 0 is no repeat. */
 static int repeat_delay_ms = 250;
 static int repeat_period_ms = 33;
-
-/* Whether today's translation saw the extended prefix last. */
-static int saw_e0;
 
 /* Whether a mouse of any kind was found. */
 static int mouse_present;
@@ -169,185 +161,6 @@ void input_mouse(int dx, int dy, int buttons)
     mouse_push_packet((uint8_t)buttons, dx, dy);
 }
 
-/**
- * Send the escape sequence of the extended key `scancode`, the code after an
- * E0 prefix, to the console's line discipline, as the `rach2` terminfo entry
- * lists it: the arrows, Home and End as xterm sends them, and Insert, Delete,
- * Page Up and Page Down as VT220 editing keys.
- *
- * @return 1 when `scancode` is one of those keys, 0 otherwise.
- */
-static int extended_key(uint8_t scancode)
-{
-    const char *seq;
-
-    switch (scancode) {
-    case 0x48:
-        seq = "\033[A";
-        break;
-    case 0x50:
-        seq = "\033[B";
-        break;
-    case 0x4D:
-        seq = "\033[C";
-        break;
-    case 0x4B:
-        seq = "\033[D";
-        break;
-    case 0x47:
-        seq = "\033[H";
-        break;
-    case 0x4F:
-        seq = "\033[F";
-        break;
-    case 0x52:
-        seq = "\033[2~";
-        break;
-    case 0x53:
-        seq = "\033[3~";
-        break;
-    case 0x49:
-        seq = "\033[5~";
-        break;
-    case 0x51:
-        seq = "\033[6~";
-        break;
-    default:
-        return 0;
-    }
-    while (*seq) {
-        tty_input_char(&console_tty, (unsigned char)*seq++);
-    }
-    return 1;
-}
-
-/**
- * Give the key of `scancode`, `c` in the keymap and extended when `was_e0`,
- * to the console's line discipline, for a reader parked on it or the session
- * that owns it, with the modifiers `mods` held. Shift with Page Up or Page
- * Down scrolls the screen back instead, and any other key first returns it
- * to the live screen.
- */
-static void session_key(uint8_t scancode, char c, int was_e0, unsigned int mods)
-{
-    unsigned char tc = (unsigned char)c;
-    int shift_held = (mods & INPUT_MOD_SHIFT) != 0;
-    int ctrl_held = (mods & INPUT_MOD_CTRL) != 0;
-    int alt_held = (mods & (INPUT_MOD_ALT | INPUT_MOD_ALTGR)) != 0;
-
-    if (was_e0 && shift_held && scancode == 0x49) {
-        k_scrollback_page_up();
-        return;
-    }
-    if (was_e0 && shift_held && scancode == 0x51) {
-        k_scrollback_page_down();
-        return;
-    }
-    if (k_scrollback_is_active()) {
-        k_scrollback_end();
-    }
-    if ((was_e0 && extended_key(scancode)) || c == 0) {
-        return;
-    }
-    if (ctrl_held && c >= 'a' && c <= 'z') {
-        tc = (unsigned char)(c - 'a' + 1);
-    } else if (ctrl_held && c >= 'A' && c <= 'Z') {
-        tc = (unsigned char)(c - 'A' + 1);
-    } else if (c == '\b') {
-        tc = 0x7F;
-    }
-    if (alt_held) {
-        tty_input_char(&console_tty, 0x1B);
-    }
-    tty_input_char(&console_tty, tc);
-}
-
-/** Scroll the kernel shell's console back for the extended key `scancode`
- * pressed, Page Up, Page Down, Home or End, and say whether it was one. */
-static int shell_scroll_key(uint8_t scancode)
-{
-    switch (scancode) {
-    case 0x49:
-        k_scrollback_page_up();
-        return 1;
-    case 0x51:
-        k_scrollback_page_down();
-        return 1;
-    case 0x47:
-        k_scrollback_home();
-        return 1;
-    case 0x4F:
-        k_scrollback_end();
-        return 1;
-    default:
-        return 0;
-    }
-}
-
-/**
- * Today's translation of one set-1 byte of the raw view for the console,
- * as input.h describes it: the modifiers are `input_modifiers`', so their
- * own codes, and the Pause sequence's E1 1D, do nothing here. While the
- * console's keyboard does not translate, the byte is `kd_raw_code`'s.
- */
-static void console_key(uint8_t scancode)
-{
-    unsigned int mods = input_modifiers();
-    int was_e0 = saw_e0;
-    char c;
-
-    saw_e0 = 0;
-    if (!kd_translates()) {
-        kd_raw_code(scancode);
-        return;
-    }
-    if (scancode == 0xE0) {
-        saw_e0 = 1;
-        return;
-    }
-    switch (scancode & 0x7F) {
-    case 0x1D:
-    case 0x2A:
-    case 0x36:
-    case 0x38:
-    case 0x61: /* E1 */
-        return;
-    default:
-        break;
-    }
-
-    /* The high bit marks a release. */
-    if (scancode & 0x80) {
-        return;
-    }
-
-    /* 'C' is scancode 0x2E. */
-    if ((mods & INPUT_MOD_CTRL) && scancode == 0x2E &&
-        !(wq_active(&console_tty.input_wq) || console_tty.sid != 0)) {
-        shell_interrupt();
-        return;
-    }
-
-    if (was_e0 && shell_reads_input() && shell_scroll_key(scancode)) {
-        return;
-    }
-
-    /* Of the extended keys only the keypad's Enter and slash have a
-     * character, their twins'; Mute, E0 20, is not a D. */
-    if (was_e0 && scancode != 0x1C && scancode != 0x35) {
-        c = 0;
-    } else {
-        c = (char)((mods & INPUT_MOD_SHIFT) ? EN_us_shift[scancode & 0x7F]
-                                            : EN_us[scancode & 0x7F]);
-    }
-
-    if (wq_active(&console_tty.input_wq) || console_tty.sid != 0) {
-        session_key(scancode, c, was_e0, mods);
-    } else if (c != 0 && shell_reads_input()) {
-        shell_input_char(c);
-    }
-}
-
 unsigned int input_modifiers(void)
 {
     unsigned int mods = 0;
@@ -386,9 +199,10 @@ int input_raw_bytes(unsigned int keycode, int value, uint8_t *out)
 /**
  * Give one accepted event of `kb`, `value` KD_KEY_*, to its consumers in
  * input.h's order: the event device, with MSC_SCAN `scan` first when
- * `has_scan`; the console's keyboard; the scancode ring, where a press or a
- * repeat leaves RING_RESERVE slots free; and today's translation. Every
- * event ends a suspend and puts off the blanking, as a key always has.
+ * `has_scan`; the console's keyboard, which translates it; the scancode
+ * ring, where a press or a repeat leaves RING_RESERVE slots free; and the
+ * console's raw view. Every event ends a suspend and puts off the blanking,
+ * as a key always has.
  */
 static void deliver(struct input_keyboard *kb, unsigned int keycode, int value, uint32_t scan,
                     int has_scan)
@@ -411,7 +225,7 @@ static void deliver(struct input_keyboard *kb, unsigned int keycode, int value, 
         }
     }
     for (i = 0; i < n; i++) {
-        console_key(raw[i]);
+        kd_raw_code(raw[i]);
     }
 }
 

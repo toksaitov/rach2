@@ -20,9 +20,10 @@
  * Here and in one place for every keyboard are the keys each one holds, the
  * modifiers derived from them, and the repeat. Each accepted event goes, in
  * this order, to the keyboard's event device (evdev.h), to the console's
- * keyboard (`kd_key_event`, kd.h), and as the set-1 bytes of the event, the
- * raw view `input_raw_bytes` gives, to the ring of kbd.h a program holding
- * /fb reads and to today's translation for the console, below.
+ * keyboard (`kd_key_event`, kd.h), which translates it through the keymap,
+ * and as the set-1 bytes of the event, the raw view `input_raw_bytes` gives,
+ * to the ring of kbd.h a program holding /fb reads and to the console's raw
+ * mode (`kd_raw_code`).
  *
  * Every keyboard's interrupt and the tick run on the boot processor with
  * interrupts off, so events reach their consumers one at a time and in
@@ -126,33 +127,6 @@ unsigned int input_modifiers(void);
  * and starts the count again from now.
  */
 void input_tick(void);
-
-/*
- * Today's translation for the console, fed the raw view's bytes of every
- * accepted event until the keymap translator replaces it.
- *
- * While the console's keyboard is in K_RAW, K_MEDIUMRAW or K_OFF
- * (`kd_translates`), each byte goes to `kd_raw_code` instead, and none of
- * what follows happens.
- *
- * The extended Page Up, Page Down, Home and End scroll the screen whenever
- * the debug shell reads input, and Shift with Page Up or Page Down scrolls
- * it in a session, where any other key returns it to the live screen before
- * it is sent, as on Linux's console. When a reader is parked on the console
- * or a session owns it, Ctrl+C goes through the line discipline like every
- * other key: its ISIG path posts SIGINT to the foreground group and flushes
- * the pending input, as a serial Ctrl+C does. Otherwise Ctrl+C is
- * `shell_interrupt`, out of band, and other keys go to the debug shell's own
- * buffer when it reads.
- *
- * For the discipline, Backspace, '\b' in the keymap, becomes DEL, its erase
- * character, Ctrl with a letter becomes that letter's control byte, Alt puts
- * ESC before a key's character, as Linux's console sends Meta, and the
- * arrows and editing keys become their escape sequences, so line editing, end
- * of file and cursor keys arrive as they would from a terminal. A key nobody
- * is parked for waits in the discipline as type-ahead. Shift, Ctrl and Alt
- * are `input_modifiers`', of either side and any keyboard.
- */
 
 /*
  * The repeat and the LEDs of every keyboard, which the console's KD*

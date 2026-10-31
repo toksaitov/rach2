@@ -5,8 +5,10 @@
 #include "kd.h"
 
 #include "display/fb.h"
+#include "display/textcon.h"
 #include "input.h"
 #include "keymap.h"
+#include "kio.h"
 #include "lib/kerrno.h"
 #include "lib/kstring.h"
 #include "lib/spinlock.h"
@@ -14,6 +16,7 @@
 #include "mm/usercopy.h"
 #include "proc/percpu.h"
 #include "proc/process.h"
+#include "proc/wait_queue.h"
 #include "tty/tty.h"
 
 /* The process that holds /fb, 0 for none; syscall.c's, declared in
@@ -26,6 +29,12 @@ extern volatile uint32_t fb_owner_pid;
 
 /* Entry 0 of a table this file allocated, as KDGKBENT reads it on Linux. */
 #define KD_ALLOCATED KM_K(KM_T_SPEC, 126)
+
+/* Linux's key codes of the keys that scroll the debug shell's screen. */
+#define KEY_HOME     102
+#define KEY_PAGEUP   104
+#define KEY_END      107
+#define KEY_PAGEDOWN 109
 
 /* KDSETLED's value while the LEDs follow the lock flags. */
 #define KD_LEDS_FOLLOW 0xFFu
@@ -68,7 +77,8 @@ static unsigned int ndiacr;
 static int kd_ready;
 
 /** Fill the keymap, strings and accents from keymap.c's built-in ones, and
- * the locks from nothing, the first time any is needed. Process context. */
+ * the locks from nothing, the first time any is needed: the first request,
+ * or the first key. Any context. */
 static void kd_init(void)
 {
     uint32_t flags;
@@ -534,20 +544,215 @@ void kd_raw_code(uint8_t code)
     }
 }
 
+/** The keymap's entry of key `keycode` in table `table`, for the
+ * translator: KM_NOSUCHMAP for a table that does not exist and KM_HOLE for a
+ * key past the tables. Called with `kd_lock` held. */
+static unsigned int kd_entry(const void *ctx, unsigned int table, unsigned int keycode)
+{
+    (void)ctx;
+    if (keycode >= KM_NR_KEYS) {
+        return KM_HOLE;
+    }
+    if (table >= KM_MAX_TABLES || tables[table] == NULL) {
+        return KM_NOSUCHMAP;
+    }
+    return tables[table][keycode];
+}
+
+/** Whether the console's terminal takes the keys: a reader is parked on it
+ * or a session owns it. Otherwise they are the debug shell's. */
+static int kd_tty_reads(void)
+{
+    return wq_active(&console_tty.input_wq) || console_tty.sid != 0;
+}
+
+/**
+ * The bytes K_XLATE sends for the text of `res` into `buf`, of at least
+ * five bytes: ESC first for Alt, then each code point as one byte, a
+ * control byte for Ctrl with a letter, and nothing for a code point past
+ * Latin-1, which an 8-bit map cannot hold. Returns the bytes written.
+ */
+static unsigned int kd_xlate_text(const struct keymap_result *res, char *buf)
+{
+    unsigned int i, n = 0;
+    unsigned long c;
+
+    if (res->mods & (KM_MOD_ALT | KM_MOD_META)) {
+        buf[n++] = 0x1B;
+    }
+    for (i = 0; i < res->ntext && i < 2; i++) {
+        c = res->text[i];
+        if (c > 0xFF) {
+            continue;
+        }
+        if ((res->mods & KM_MOD_CTRL) && c >= '@' && c <= '~') {
+            c &= 0x1F;
+        }
+        buf[n++] = (char)c;
+    }
+    return n == 1 && buf[0] == 0x1B ? 0 : n;
+}
+
+/**
+ * The bytes the console's terminal gets for the result `res` into `buf`,
+ * of `size` bytes, in the mode `mode`, K_XLATE or K_UNICODE, as keymap.h's
+ * `keymap_encode` writes them under the console's cursor and keypad modes,
+ * with two settings of the console's own: K_XLATE sends Latin-1 bytes in
+ * place of UTF-8, and K_METABIT sets the top bit of an Alt character in
+ * place of sending ESC before it. Called with `kd_lock` held, since the
+ * function strings are read. Returns the bytes written.
+ */
+static unsigned int kd_encode(const struct keymap *map, const struct keymap_result *res, int mode,
+                              char *buf, unsigned int size)
+{
+    struct keymap_result r = *res;
+    unsigned int n;
+    int metabit = 0;
+
+    if (r.kind == KM_RESULT_TEXT && kd_meta == K_METABIT && (r.mods & KM_MOD_ALT) && r.ntext == 1 &&
+        r.text[0] < 0x80) {
+        r.mods &= ~(unsigned int)(KM_MOD_ALT | KM_MOD_META);
+        metabit = 1;
+    }
+    if (r.kind == KM_RESULT_TEXT && mode == K_XLATE &&
+        (r.text[0] > 0x7F || (r.ntext == 2 && r.text[1] > 0x7F))) {
+        n = kd_xlate_text(&r, buf);
+    } else {
+        n = keymap_encode(map, &r, kio_key_modes(), buf, size);
+    }
+    if (metabit && n == 1) {
+        buf[0] = (char)(buf[0] | 0x80);
+    }
+    return n;
+}
+
+/**
+ * Act on the console's own keys among `res`, the result of `keycode`, and
+ * say whether the key is spent: Shift with Page Up or Page Down, which the
+ * translator gives as the scrollback actions, scrolls the screen; while the
+ * debug shell reads, Page Up, Page Down, Home and End scroll it too.
+ */
+static int kd_console_key(unsigned int keycode, const struct keymap_result *res)
+{
+    if (res->kind == KM_RESULT_SPECIAL && res->key == KM_SCROLLBACK) {
+        k_scrollback_page_up();
+        return 1;
+    }
+    if (res->kind == KM_RESULT_SPECIAL && res->key == KM_SCROLLFORW) {
+        k_scrollback_page_down();
+        return 1;
+    }
+    if (kd_tty_reads() || !shell_reads_input()) {
+        return 0;
+    }
+    switch (keycode) {
+    case KEY_PAGEUP:
+        k_scrollback_page_up();
+        return 1;
+    case KEY_PAGEDOWN:
+        k_scrollback_page_down();
+        return 1;
+    case KEY_HOME:
+        k_scrollback_home();
+        return 1;
+    case KEY_END:
+        k_scrollback_end();
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/**
+ * Give the `n` bytes of one key at `buf` to whoever reads the console: its
+ * terminal, when a reader is parked on it or a session owns it, after the
+ * screen comes back from the scrollback; else the debug shell, which takes
+ * ETX as its own Ctrl+C, DEL as Backspace and no escape sequence. A key
+ * nobody reads waits in the terminal as type-ahead once a reader comes.
+ */
+static void kd_send(const char *buf, unsigned int n)
+{
+    unsigned int i;
+
+    if (n == 0) {
+        return;
+    }
+    if (kd_tty_reads()) {
+        if (k_scrollback_is_active()) {
+            k_scrollback_end();
+        }
+        for (i = 0; i < n; i++) {
+            tty_input_char(&console_tty, (unsigned char)buf[i]);
+        }
+        return;
+    }
+    if (n == 1 && buf[0] == 0x03) {
+        shell_interrupt();
+        return;
+    }
+    if (!shell_reads_input()) {
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        if (buf[i] == 0x1B) {
+            return;
+        }
+    }
+    for (i = 0; i < n; i++) {
+        shell_input_char(buf[i] == 0x7F ? '\b' : buf[i]);
+    }
+}
+
 void kd_key_event(const void *device, unsigned int keycode, int value)
 {
+    struct keymap map;
+    struct keymap_result res;
+    char buf[KM_FUNC_BYTES + 16];
+    unsigned int n = 0;
+    unsigned int old_leds;
+    uint32_t flags;
+    int mode = kd_mode;
+
     (void)device;
-    if (kd_mode != K_MEDIUMRAW || keycode > 0x3FFFu) {
+    if (mode == K_MEDIUMRAW) {
+        if (keycode > 0x3FFFu) {
+            return;
+        }
+        if (keycode < 128) {
+            tty_input_char(&console_tty,
+                           (unsigned char)(keycode | (value == KD_KEY_RELEASE ? 0x80u : 0u)));
+            return;
+        }
+        tty_input_char(&console_tty, value == KD_KEY_RELEASE ? 0x80 : 0x00);
+        tty_input_char(&console_tty, (unsigned char)((keycode >> 7) | 0x80u));
+        tty_input_char(&console_tty, (unsigned char)(keycode | 0x80u));
         return;
     }
-    if (keycode < 128) {
-        tty_input_char(&console_tty,
-                       (unsigned char)(keycode | (value == KD_KEY_RELEASE ? 0x80u : 0u)));
+    if (mode != K_XLATE && mode != K_UNICODE) {
         return;
     }
-    tty_input_char(&console_tty, value == KD_KEY_RELEASE ? 0x80 : 0x00);
-    tty_input_char(&console_tty, (unsigned char)((keycode >> 7) | 0x80u));
-    tty_input_char(&console_tty, (unsigned char)(keycode | 0x80u));
+    kd_init();
+    map.entry = kd_entry;
+    map.ctx = NULL;
+    map.func = funcs;
+    map.diacr = diacrs;
+    flags = spin_lock_irqsave(&kd_lock);
+    map.ndiacr = ndiacr;
+    old_leds = kd_kb.ledflags;
+    keymap_key(&kd_kb, &map, keycode, value, &res);
+    if (res.kind != KM_RESULT_NONE && res.kind != KM_RESULT_LOCKS) {
+        n = kd_encode(&map, &res, mode, buf, sizeof(buf));
+    }
+    spin_unlock_irqrestore(&kd_lock, flags);
+    if (res.ledflags != old_leds && kd_leds == KD_LEDS_FOLLOW) {
+        input_set_leds(kd_leds_lit());
+    }
+    if (res.kind == KM_RESULT_NONE || res.kind == KM_RESULT_LOCKS) {
+        return;
+    }
+    if (!kd_console_key(keycode, &res)) {
+        kd_send(buf, n);
+    }
 }
 
 void kd_state_save(struct kd_state *st)
