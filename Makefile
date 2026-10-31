@@ -112,6 +112,8 @@ TUNE2FS_BIN  = $(VENDOR_STAGE)/e2fsprogs/tune2fs
 DUMPE2FS_BIN = $(VENDOR_STAGE)/e2fsprogs/dumpe2fs
 DEBUGFS_BIN = $(VENDOR_STAGE)/e2fsprogs/debugfs
 LIBTSM_A     = $(LIBTSM_STAGE)/lib/libtsm.a
+# The archive of libtsm's patched sources, staged for term's guest build.
+LIBTSM_SRC_ARCHIVE = $(LIBTSM_STAGE)/libtsm.tar.bz2
 LIBTSM_HOST_A = $(LIBTSM_HOST_STAGE)/lib/libtsm.a
 
 # The pinned source tarballs, by the names the build_*.sh scripts check by
@@ -331,7 +333,7 @@ $(E2FSPROGS_STAMP): vendor/e2fsprogs/build_e2fsprogs.sh $(VENDOR_COMMON) \
 # the host. The series and the patches are prerequisites for the reason
 # musl's are, and so is Rach2's hash table, which the script puts in place of
 # libtsm's. The host's step is keyed by the host compiler alone.
-LIBTSM_INPUTS = vendor/libtsm/build_libtsm.sh vendor/libtsm/shl-htable.c \
+LIBTSM_INPUTS = vendor/libtsm/build_libtsm.sh vendor/libtsm/sources.mk vendor/libtsm/shl-htable.c \
                 vendor/libtsm/shl-htable.h $(LIBTSM_PATCHES) $(LIBTSM_TARBALL)
 $(LIBTSM_STAMP): $(LIBTSM_INPUTS) $(VENDOR_COMMON) $(LIBC_STAMP) | $(SHA256TOOL) $(ETUDE)
 	@rm -f $@ $(LIBTSM_A)
@@ -393,7 +395,7 @@ _ := $(shell [ ! -f $(BUSYBOX_STAMP) ] || \
         for f in $(BUSYBOX_OUTPUTS); do [ -e "$$f" ] || { rm -f $(BUSYBOX_STAMP); break; }; done)
 _ := $(shell [ ! -f $(DROPBEAR_STAMP) ] || [ -s $(DROPBEAR_BIN) ] || rm -f $(DROPBEAR_STAMP))
 _ := $(shell [ ! -f $(PDPMAKE_STAMP) ] || [ -s $(PDPMAKE_BIN) ] || rm -f $(PDPMAKE_STAMP))
-_ := $(shell [ ! -f $(LIBTSM_STAMP) ] || [ -s $(LIBTSM_A) ] || rm -f $(LIBTSM_STAMP))
+_ := $(shell [ ! -f $(LIBTSM_STAMP) ] || { [ -s $(LIBTSM_A) ] && [ -s $(LIBTSM_SRC_ARCHIVE) ]; } || rm -f $(LIBTSM_STAMP))
 _ := $(shell [ ! -f $(LIBTSM_HOST_STAMP) ] || [ -s $(LIBTSM_HOST_A) ] || rm -f $(LIBTSM_HOST_STAMP))
 _ := $(shell [ ! -f $(E2FSPROGS_STAMP) ] || { [ -s $(E2FSCK_BIN) ] && [ -s $(RESIZE2FS_BIN) ] && [ -s $(MKE2FS_BIN) ] && [ -s $(TUNE2FS_BIN) ] && [ -s $(DUMPE2FS_BIN) ]; } || rm -f $(E2FSPROGS_STAMP))
 
@@ -473,7 +475,7 @@ $(BUSYBOX_OUTPUTS): $(BUSYBOX_STAMP)
 $(KBD_BINS): $(KBD_STAMP)
 $(DROPBEAR_BIN): $(DROPBEAR_STAMP)
 $(PDPMAKE_BIN): $(PDPMAKE_STAMP)
-$(LIBTSM_A): $(LIBTSM_STAMP)
+$(LIBTSM_A) $(LIBTSM_SRC_ARCHIVE): $(LIBTSM_STAMP)
 $(LIBTSM_HOST_A): $(LIBTSM_HOST_STAMP)
 $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(TUNE2FS_BIN) $(DUMPE2FS_BIN) $(DEBUGFS_BIN): $(E2FSPROGS_STAMP)
 

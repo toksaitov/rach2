@@ -25,7 +25,8 @@
 #
 # A Rach2 build extracts into vendor/libtsm/, or build/x86_64/vendor-work/libtsm/
 # for x86-64 (mk/arch.sh), compiles with the musl wrapper and stages under
-# build/vendor/libtsm/ or build/x86_64/vendor/libtsm/. A host build extracts
+# build/vendor/libtsm/ or build/x86_64/vendor/libtsm/, with the archive of the
+# patched sources that term's guest build compiles. A host build extracts
 # into build/host/vendor-work/libtsm/, compiles with HOSTCC, cc unless set,
 # and stages under build/host/vendor/libtsm/. Each stage has lib/libtsm.a and
 # include/libtsm.h.
@@ -131,9 +132,12 @@ fi
 CFLAGS="-std=gnu99 -O2 -Wall -ffast-math -fno-strict-aliasing -D_GNU_SOURCE \
 -D_POSIX_C_SOURCE=200809L -Dwcwidth=tsm_wcwidth \
 -I$SRC/src/tsm -I$SRC/src/shared -I$SRC/external -I$SRC/external/wcwidth"
-SOURCES="src/tsm/tsm-render.c src/tsm/tsm-screen.c src/tsm/tsm-selection.c \
-src/tsm/tsm-unicode.c src/tsm/tsm-vte-charsets.c src/tsm/tsm-vte.c \
-src/shared/shl-htable.c external/wcwidth/wcwidth.c"
+# The files compiled, from sources.mk, which term's guest build reads too.
+SOURCES="$(sed -n 's/^LIBTSM_SRC = //p' sources.mk | sed 's|\$(LIBTSM)/||g')"
+if [ -z "$SOURCES" ]; then
+    echo "libtsm: sources.mk has no LIBTSM_SRC line" >&2
+    exit 1
+fi
 
 echo "libtsm: building ($WHAT)"
 OBJECTS=
@@ -149,5 +153,23 @@ mkdir -p "$STAGE/lib" "$STAGE/include"
 # shellcheck disable=SC2086 # OBJECTS is a list of paths without spaces
 "$AR" rcs "$STAGE/lib/libtsm.a" $OBJECTS
 cp "$SRC/src/tsm/libtsm.h" "$STAGE/include/libtsm.h"
+
+# For Rach2, the archive of the patched sources that the images stage as
+# /src/term/vendor/libtsm.tar.bz2, which term/guest.mk unpacks and compiles
+# with TinyCC: the files compiled, the headers of the directories they
+# include from, and the two license files, in name order.
+if [ "$WHAT" != host ]; then
+    (cd "$SRC" && {
+        printf '%s\n' $SOURCES COPYING external/wcwidth/LICENSE.txt
+        find src/tsm src/shared external/wcwidth external/xkbcommon -name '*.h'
+    } | LC_ALL=C sort -u) > "$OBJ/list"
+    case "$(tar --version 2>/dev/null)" in
+        *bsdtar*) set -- --no-xattrs --no-mac-metadata ;;
+        *) set -- ;;
+    esac
+    COPYFILE_DISABLE=1 tar -c -f "$OBJ/libtsm.tar" "$@" -C "$SRC" -T "$OBJ/list"
+    bzip2 -9 "$OBJ/libtsm.tar"
+    mv "$OBJ/libtsm.tar.bz2" "$STAGE/libtsm.tar.bz2"
+fi
 
 echo "libtsm: built $VERSION ($(wc -c < "$STAGE/lib/libtsm.a") bytes, $WHAT)"
