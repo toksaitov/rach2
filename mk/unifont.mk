@@ -40,3 +40,12 @@ $(UNIFONT_FONT): $(UNIFONT_STAMP)
 ifeq ($(wildcard $(UNIFONT_FONT)),)
 _ := $(shell rm -f $(UNIFONT_STAMP))
 endif
+
+# The x86-64 images read a manifest's build/ paths from build/x86_64/
+# (krffs/Readme.md), so the font is copied there for them.
+ifneq ($(ARCH_SUFFIX),)
+unifont: $(ARCH_BUILD)/unifont/unifont.font
+$(ARCH_BUILD)/unifont/unifont.font: $(UNIFONT_FONT)
+	@mkdir -p $(@D)
+	cp $(UNIFONT_FONT) $@
+endif
