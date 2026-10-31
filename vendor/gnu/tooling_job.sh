@@ -27,6 +27,12 @@
 # is made. The volume is mounted without delayed allocation, so a stamp that
 # a stopped machine left on the disk follows the files its step wrote.
 #
+# The disk keeps its step store in /gnu/store, bind-mounted at
+# /var/cache/rach2-store because GNU outputs keep absolute build paths. The
+# builder receives that path as RACH2_STORE. SpiderMonkey builds before the
+# other layers, with its separate pool limited to two jobs per 3 GiB after
+# leaving a GiB for the machine's other processes.
+#
 # The build disk also has a swap file of 8 GiB, which the job takes while it
 # runs. Each of gcc's largest files takes nearly 2 GiB to compile, and make
 # runs JOBS of them at once beside the layer's other steps, more than the
