@@ -159,8 +159,11 @@ short evdev_poll(fd_entry_t *e, short events, struct wait_queue **wq);
 
 /**
  * The ioctls of an open device: EVIOCGVERSION, EVIOCGID, EVIOCGNAME,
- * EVIOCGPHYS, EVIOCGBIT, EVIOCGKEY, EVIOCGLED and EVIOCGRAB, with Linux's numbers and
- * answers. -ENOTTY for another request, -EFAULT for a bad pointer.
+ * EVIOCGPHYS, EVIOCGBIT, EVIOCGKEY, EVIOCGLED, EVIOCGRAB, and on a keyboard
+ * EVIOCGREP and EVIOCSREP, which read and set every keyboard's repeat, with
+ * Linux's numbers and answers. -ENOTTY for another request, -EFAULT for a
+ * bad pointer, -ENOSYS for the repeat's requests on a device that is no
+ * keyboard.
  */
 int32_t evdev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg);
 

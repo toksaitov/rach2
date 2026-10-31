@@ -5,6 +5,7 @@
 
 #include "evdev.h"
 
+#include "input.h"
 #include "io/poll.h"
 #include "lib/kdef.h"
 #include "lib/kerrno.h"
@@ -82,6 +83,8 @@ static struct spinlock evdev_lock = SPINLOCK_INIT;
 #define EVIOCGVERSION 0x80044501u
 #define EVIOCGID      0x80084502u
 #define EVIOCGRAB     0x40044590u
+#define EVIOCGREP     0x80084503u /* _IOR('E', 0x03, unsigned int[2]) */
+#define EVIOCSREP     0x40084503u /* _IOW('E', 0x03, unsigned int[2]) */
 #define NR_GNAME      0x06u
 #define NR_GPHYS      0x07u
 #define NR_GUNIQ      0x08u
@@ -561,6 +564,35 @@ static int32_t read_ioctl(struct evdev *dev, uint32_t nr, uintptr_t arg, uint32_
     }
 }
 
+/**
+ * EVIOCGREP and EVIOCSREP: read into, or set from, the two unsigned ints at
+ * `arg` the repeat's delay and period in milliseconds, which every keyboard
+ * shares (`input_set_repeat`). Setting a time above INT_MAX leaves it as it
+ * is, as Linux's input core ignores a negative one, and a period of 0 turns
+ * repeat off. -ENOSYS for a device that does not repeat, which has no
+ * EV_REP: only the keyboards, EVDEV_KEYBOARD, do.
+ */
+static int32_t repeat_ioctl(const struct evdev *dev, uint32_t request, uintptr_t arg)
+{
+    unsigned int rep[2];
+    int delay, period;
+
+    if (!(dev->flags & EVDEV_KEYBOARD)) {
+        return -ENOSYS;
+    }
+    if (request == EVIOCGREP) {
+        input_get_repeat(&delay, &period);
+        rep[0] = (unsigned int)delay;
+        rep[1] = (unsigned int)period;
+        return copy_to_user((void __user *)arg, rep, sizeof(rep)) != 0 ? -EFAULT : 0;
+    }
+    if (copy_from_user(rep, (const void __user *)arg, sizeof(rep)) != 0) {
+        return -EFAULT;
+    }
+    input_set_repeat((int)rep[0], (int)rep[1]);
+    return 0;
+}
+
 int32_t evdev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     struct evdev_client *c = (struct evdev_client *)e->priv;
@@ -578,6 +610,9 @@ int32_t evdev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     }
     if (request == EVIOCGRAB) {
         return grab(c, arg);
+    }
+    if (request == EVIOCGREP || request == EVIOCSREP) {
+        return repeat_ioctl(dev, request, arg);
     }
     if (IOC_TYPE(request) != 'E' || IOC_DIR(request) != IOC_READ) {
         return -ENOTTY;
