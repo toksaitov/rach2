@@ -100,7 +100,7 @@ static const unsigned short us[KM_NR_KEYS] = {
     P(16),
     H,
     H,
-    H,
+    C(0x3C),
     F(10),
     F(11),
     H,
@@ -141,7 +141,7 @@ static const unsigned short us[KM_NR_KEYS] = {
     H,
     H,
     H,
-    KM_COMPOSE,
+    F(15),
     H,
     H,
     H,
@@ -359,7 +359,7 @@ static const unsigned short us_shift[KM_NR_KEYS] = {
     P(16),
     H,
     H,
-    H,
+    C(0x3E),
     F(10),
     F(11),
     H,
@@ -400,7 +400,7 @@ static const unsigned short us_shift[KM_NR_KEYS] = {
     H,
     H,
     H,
-    KM_COMPOSE,
+    F(15),
     H,
     H,
     H,
@@ -573,7 +573,7 @@ static const unsigned short us_ctrl[KM_NR_KEYS] = {
     C(0x0C),
     C(0x3B),
     C(0x27),
-    C(0x60),
+    C(0x00),
     S(KM_G_SHIFT),
     C(0x1C),
     C(0x1A),
@@ -618,7 +618,7 @@ static const unsigned short us_ctrl[KM_NR_KEYS] = {
     P(16),
     H,
     H,
-    H,
+    C(0x3C),
     F(10),
     F(11),
     H,
@@ -659,7 +659,7 @@ static const unsigned short us_ctrl[KM_NR_KEYS] = {
     H,
     H,
     H,
-    KM_COMPOSE,
+    F(15),
     H,
     H,
     H,
@@ -817,8 +817,8 @@ static const unsigned short us_ctrl_shift[KM_NR_KEYS] = {
     C(0x09),
     C(0x0F),
     C(0x10),
-    C(0x7B),
-    C(0x7D),
+    C(0x1B),
+    C(0x1D),
     KM_ENTER,
     S(KM_G_CTRL),
     C(0x01),
@@ -832,9 +832,9 @@ static const unsigned short us_ctrl_shift[KM_NR_KEYS] = {
     C(0x0C),
     C(0x3A),
     C(0x22),
-    C(0x7E),
+    C(0x1E),
     S(KM_G_SHIFT),
-    C(0x7C),
+    C(0x1C),
     C(0x1A),
     C(0x18),
     C(0x03),
@@ -877,7 +877,7 @@ static const unsigned short us_ctrl_shift[KM_NR_KEYS] = {
     P(16),
     H,
     H,
-    H,
+    C(0x3E),
     F(10),
     F(11),
     H,
@@ -918,7 +918,7 @@ static const unsigned short us_ctrl_shift[KM_NR_KEYS] = {
     H,
     H,
     H,
-    KM_COMPOSE,
+    F(15),
     H,
     H,
     H,
@@ -1054,7 +1054,7 @@ const unsigned short *const keymap_default_tables[KM_MAX_TABLES] = {
     us, us_shift, us, us_shift, us_ctrl, us_ctrl_shift, us_ctrl, us_ctrl_shift,
     us, us_shift, us, us_shift, us_ctrl, us_ctrl_shift, us_ctrl, us_ctrl_shift};
 
-/* xterm ctlseqs, patch 411: PC-style function keys, oldXtermFKeys false. */
+/* xterm ctlseqs, patch 412: PC-style function keys, oldXtermFKeys false. */
 const char *const keymap_default_func[KM_MAX_FUNC] = {
     "\033OP",   "\033OQ",   "\033OR",   "\033OS",   "\033[15~", "\033[17~", "\033[18~",
     "\033[19~", "\033[20~", "\033[21~", "\033[23~", "\033[24~", "\033[25~", "\033[26~",
@@ -1391,7 +1391,8 @@ int keymap_key(struct keymap_state *st, const struct keymap *map, unsigned int k
 
     res->kind = KM_RESULT_NONE;
     res->text[0] = res->text[1] = 0;
-    res->ntext = res->func = res->key = 0;
+    res->ntext = res->func = 0;
+    res->key = keycode;
     res->mods = modifiers(st);
     res->ledflags = st->ledflags;
     res->repeat = value == 2;
@@ -1467,8 +1468,9 @@ int keymap_key(struct keymap_state *st, const struct keymap *map, unsigned int k
             base = table < KM_MAX_TABLES ? map->entry(map->ctx, table ^ (1U << KM_G_SHIFT), keycode)
                                          : KM_NOSUCHMAP;
             if (base != KM_NOSUCHMAP &&
-                (type == KM_T_LETTER || (KM_IS_U(base) && KM_U(base) != KM_U(entry) &&
-                                         upper(KM_U(base)) == upper(KM_U(entry))))) {
+                (type == KM_T_LETTER ||
+                 (KM_IS_U(base) && KM_U(base) != KM_U(entry) &&
+                  (upper(KM_U(base)) == KM_U(entry) || upper(KM_U(entry)) == KM_U(base))))) {
                 entry = base;
                 type = KM_TYPE(entry);
                 v = KM_VALUE(entry);
@@ -1498,8 +1500,13 @@ int keymap_key(struct keymap_state *st, const struct keymap *map, unsigned int k
                 st->compose = 0;
             }
         } else if (type == KM_T_FN) {
-            res->kind = KM_RESULT_FUNC;
-            res->func = v;
+            if ((v == 24 || v == 25) && (res->mods & KM_MOD_SHIFT)) {
+                res->kind = KM_RESULT_SPECIAL;
+                res->key = v == 24 ? KM_SCROLLBACK : KM_SCROLLFORW;
+            } else {
+                res->kind = KM_RESULT_FUNC;
+                res->func = v;
+            }
         } else if (type == KM_T_CUR || type == KM_T_PAD) {
             res->kind = KM_RESULT_SPECIAL;
             res->key = entry;
@@ -1524,10 +1531,6 @@ int keymap_key(struct keymap_state *st, const struct keymap *map, unsigned int k
                     st->ledflags |= KM_LED_CAPS;
                 } else if (entry == KM_NUM || entry == KM_BARENUMLOCK) {
                     st->ledflags ^= KM_LED_NUM;
-                    if (entry == KM_NUM) {
-                        res->kind = KM_RESULT_SPECIAL;
-                        res->key = entry;
-                    }
                 } else if (entry == KM_HOLD) {
                     st->ledflags ^= KM_LED_SCROLL;
                 } else if (entry == KM_COMPOSE) {
@@ -1595,7 +1598,7 @@ static unsigned int utf8(unsigned long c, char *buf)
 /** Return xterm's traditional control character for an ASCII key. */
 static unsigned long control(unsigned long c)
 {
-    if ((c >= '@' && c <= '_') || (c >= 'a' && c <= 'z')) {
+    if (c >= '@' && c <= '~') {
         return c & 31;
     }
     switch (c) {
@@ -1703,9 +1706,6 @@ static unsigned int keypad(const struct keymap_result *res, unsigned int modes, 
     if (v >= sizeof(numeric) - 1) {
         return 0;
     }
-    if ((modes & KM_MODE_KEYPAD) && !num && v < sizeof(application) - 1) {
-        return sequence(application[v], 0, 1, mods, buf);
-    }
     if (mods & KM_MOD_SHIFT) {
         num = !num;
     }
@@ -1715,14 +1715,17 @@ static unsigned int keypad(const struct keymap_result *res, unsigned int modes, 
         }
         return sequence(navigation[v], parameter[v], (modes & KM_MODE_CURSOR) != 0, mods, buf);
     }
-    c = v == 17 ? 0xB1 : (unsigned char)numeric[v];
-    if (mods & KM_MOD_CTRL) {
-        c = control(c);
-    }
-    if (mods & (KM_MOD_ALT | KM_MOD_META)) {
+    if ((modes & KM_MODE_KEYPAD) && !(res->ledflags & KM_LED_NUM) && v < sizeof(application) - 1) {
+        unsigned int n = 2;
         buf[0] = 27;
-        return 1 + utf8(c, buf + 1);
+        buf[1] = 'O';
+        if (mods) {
+            n += decimal(mods + 1, buf + n);
+        }
+        buf[n++] = application[v];
+        return n;
     }
+    c = v == 17 ? 0xB1 : (unsigned char)numeric[v];
     return utf8(c, buf);
 }
 
@@ -1741,10 +1744,8 @@ unsigned int keymap_encode(const struct keymap *map, const struct keymap_result 
         if (!res->ntext || res->ntext > 2) {
             return 0;
         }
-        if (res->ntext == 1 && res->text[0] == '\t' && (mods & KM_MOD_SHIFT)) {
-            if (mods & (KM_MOD_ALT | KM_MOD_META)) {
-                tmp[n++] = 27;
-            }
+        if (res->ntext == 1 && res->text[0] == '\t' && (mods & KM_MOD_SHIFT) &&
+            (!(mods & KM_MOD_CTRL) || res->key == 15)) {
             tmp[n++] = 27;
             tmp[n++] = '[';
             tmp[n++] = 'Z';
@@ -1765,6 +1766,9 @@ unsigned int keymap_encode(const struct keymap *map, const struct keymap_result 
             }
         }
     } else if (res->kind == KM_RESULT_FUNC) {
+        if ((res->func == 24 || res->func == 25) && (mods & KM_MOD_SHIFT)) {
+            return 0;
+        }
         if (map && map->func && res->func < KM_MAX_FUNC) {
             n = function_string(map->func[res->func], mods, modes, tmp);
         }
@@ -1778,8 +1782,6 @@ unsigned int keymap_encode(const struct keymap *map, const struct keymap_result 
                 tmp[n++] = 27;
             }
             tmp[n++] = '\r';
-        } else if (res->key == KM_NUM && (modes & KM_MODE_KEYPAD)) {
-            n = sequence('P', 0, 1, mods, tmp);
         }
     }
     if (n > size) {

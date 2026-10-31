@@ -333,6 +333,9 @@ static void caps(void)
     load("0 30 f431\n1 30 f42f\n");
     tap(30);
     point(0x431);
+    load("0 30 f3c2\n1 30 f3c3\n");
+    tap(30);
+    point(0x3C2);
 }
 
 /** Check sticky modifiers, missing tables, reloaded keys and Alt numbers. */
@@ -425,10 +428,37 @@ static void encoding(void)
         }
         bytes(0, plain[i], n);
         result.mods = 7;
+        if (i == 8 || i == 9) {
+            bytes(0, "", 0);
+            continue;
+        }
         for (n = 0; modified[i][n]; n++) {
         }
         bytes(KM_MODE_CURSOR, modified[i], n);
     }
+    event(42, 1);
+    event(29, 1);
+    tap(23);
+    bytes(0, "\t", 1);
+    tap(15);
+    bytes(0, "\033[Z", 3);
+    tap(41);
+    bytes(0, "\036", 1);
+    tap(26);
+    bytes(0, "\033", 1);
+    tap(104);
+    CHECK(result.key == KM_SCROLLBACK);
+    bytes(0, "", 0);
+    event(29, 0);
+    event(56, 1);
+    tap(15);
+    bytes(0, "\033[Z", 3);
+    event(56, 0);
+    event(42, 0);
+    tap(86);
+    bytes(0, "<", 1);
+    tap(127);
+    bytes(0, "\033[29~", 5);
     tap(103);
     bytes(KM_MODE_CURSOR, "\033OA", 3);
     tap(102);
@@ -479,9 +509,13 @@ static void pad(void)
     tap(83);
     bytes(0, "\033[3~", 4);
     tap(79);
-    bytes(KM_MODE_KEYPAD, "\033Oq", 3);
-    result.mods = KM_MOD_CTRL;
-    bytes(KM_MODE_KEYPAD, "\033[1;5q", 6);
+    bytes(KM_MODE_KEYPAD, "\033[F", 3);
+    event(42, 1);
+    tap(79);
+    bytes(KM_MODE_KEYPAD, "\033O2q", 4);
+    result.mods |= KM_MOD_CTRL;
+    bytes(KM_MODE_KEYPAD, "\033O6q", 4);
+    event(42, 0);
     tap(96);
     bytes(KM_MODE_KEYPAD, "\033OM", 3);
     bytes(0, "\r", 1);
@@ -493,6 +527,15 @@ static void pad(void)
     tap(79);
     bytes(0, "1", 1);
     bytes(KM_MODE_KEYPAD, "1", 1);
+    result.mods = KM_MOD_CTRL | KM_MOD_ALT;
+    bytes(KM_MODE_KEYPAD, "1", 1);
+    event(29, 1);
+    event(56, 1);
+    tap(98);
+    bytes(0, "/", 1);
+    bytes(KM_MODE_KEYPAD, "/", 1);
+    event(56, 0);
+    event(29, 0);
     event(42, 1);
     tap(71);
     bytes(0, "\033[1;2H", 6);
