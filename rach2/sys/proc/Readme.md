@@ -212,7 +212,7 @@ A signal whose default action dumps core, a seccomp kill of the process, and a s
 
 ### Suspend to idle
 
-A write of `freeze` or `mem` to `/sys/power/state` (`rach2/sys/fs/procfs.c`) calls `suspend_to_idle` (`suspend.c`), the sleep state Linux calls freeze. The writer sleeps on a wait queue, and until it wakes the scheduler runs no other process (`suspend_lets_run`), so each processor idles. Interrupts are taken and the clocks count, since nothing is powered down. The clock's alarm interrupt (`rach2/sys/fs/devfs.c`) and a key (`input_key` in `rach2/sys/input.c`) are the wake events (`suspend_wake`): the writer runs, its write returns, and the other processes run again. A signal ends the wait with `EINTR`, and a write while another suspend is in force fails with `EBUSY`.
+A write of `freeze` or `mem` to `/sys/power/state` (`rach2/sys/fs/procfs.c`) calls `suspend_to_idle` (`suspend.c`), the sleep state Linux calls freeze. The writer sleeps on a wait queue, and until it wakes the scheduler runs no other process (`suspend_lets_run`), so each processor idles. Interrupts are taken and the clocks count, since nothing is powered down. The clock's alarm interrupt (`rach2/sys/fs/devfs.c`) and a key event (`input_key_event` in `rach2/sys/input.c`) are the wake events (`suspend_wake`): the writer runs, its write returns, and the other processes run again. A signal ends the wait with `EINTR`, and a write while another suspend is in force fails with `EBUSY`.
 
 ## Limits
 

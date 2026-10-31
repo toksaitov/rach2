@@ -118,7 +118,7 @@ struct kbd_repeat {
  *
  * Called in interrupt context or from the tick, with interrupts off; it does
  * not sleep. It does nothing yet: today's keystrokes reach the console
- * through `input_key`.
+ * through input.c's translation of the raw view.
  */
 void kd_key_event(const void *device, unsigned int keycode, int value);
 
