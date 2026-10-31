@@ -18,7 +18,7 @@
 
 #include "term.h"
 
-#define CONF_KEY "font-scale="
+#define CONF_KEY "scale"
 
 /**
  * Read the whole of `fd` into a buffer of malloc(3), storing its length in
@@ -143,9 +143,10 @@ static char *read_conf(const char *conf, size_t *len)
 }
 
 /**
- * The `font-scale=` line of `text`: its start, and in `*end` the byte past
- * its newline or the text's end; NULL when there is none. Blanks before the
- * name are skipped, and a line that begins with `#` is a comment.
+ * The `scale` line of `text`: its start, and in `*end` the byte past its
+ * newline or the text's end; NULL when there is none. As term_conf_read()
+ * reads a line, blanks around the name do not count, and a line that begins
+ * with `#` is a comment.
  */
 static const char *conf_line(const char *text, const char **end)
 {
@@ -158,34 +159,17 @@ static const char *conf_line(const char *text, const char **end)
         while (*q == ' ' || *q == '\t')
             q++;
         if (strncmp(q, CONF_KEY, sizeof CONF_KEY - 1) == 0) {
-            *end = nl;
-            return p;
+            q += sizeof CONF_KEY - 1;
+            while (*q == ' ' || *q == '\t')
+                q++;
+            if (*q == '=') {
+                *end = nl;
+                return p;
+            }
         }
         p = nl;
     }
     return NULL;
-}
-
-unsigned term_font_conf_scale(const char *conf)
-{
-    const char *line, *end, *v;
-    unsigned scale = 0;
-    size_t len;
-    char *text;
-
-    text = read_conf(conf, &len);
-    if (!text)
-        return 0;
-    line = conf_line(text, &end);
-    if (line) {
-        v = strchr(line, '=') + 1;
-        while (*v == ' ' || *v == '\t')
-            v++;
-        if ((*v == '1' || *v == '2') && strchr(" \t\r\n", v[1]))
-            scale = (unsigned)(*v - '0');
-    }
-    free(text);
-    return scale;
 }
 
 int term_font_conf_save(const char *conf, unsigned scale)
@@ -217,7 +201,7 @@ int term_font_conf_save(const char *conf, unsigned scale)
     }
     if (line) {
         fwrite(text, 1, (size_t)(line - text), out);
-        fprintf(out, "%s%u\n", CONF_KEY, scale);
+        fprintf(out, "%s = %u\n", CONF_KEY, scale);
         fputs(end, out);
     } else {
         if (text) {
@@ -225,7 +209,7 @@ int term_font_conf_save(const char *conf, unsigned scale)
             if (len > 0 && text[len - 1] != '\n')
                 fputc('\n', out);
         }
-        fprintf(out, "%s%u\n", CONF_KEY, scale);
+        fprintf(out, "%s = %u\n", CONF_KEY, scale);
     }
     if (ferror(out))
         r = -EIO;

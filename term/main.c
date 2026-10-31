@@ -303,8 +303,8 @@ static void follow_size(struct term *t)
  *
  * The keys are read before the output in each round, and the output a burst
  * at a time, so that typing reaches the child while it floods the screen. A
- * frame is drawn after each round that changed the screen, unless a
- * descendant has it.
+ * frame is drawn after each round that changed the screen, and when the
+ * bell's end or the hold's bound comes, unless a descendant has the screen.
  *
  * Returns the exit status term exits with.
  */
@@ -326,8 +326,11 @@ static int loop(struct term *t, int sigfd)
         p[P_KEYS].events = POLLIN;
         p[P_FB].fd = t->draw.fd;
         p[P_FB].events = POLLIN;
-        timeout =
-            t->dirty && !t->suspended && term_screen_held(&t->screen) ? TERM_HOLD_POLL_MS : -1;
+        /* Drawing's timeout is the bell's end or the hold's bound. */
+        timeout = t->suspended ? -1 : term_draw_timeout(&t->draw);
+        if (t->dirty && !t->suspended && term_screen_held(&t->screen) &&
+            (timeout < 0 || timeout > TERM_HOLD_POLL_MS))
+            timeout = TERM_HOLD_POLL_MS;
         for (r = 0; r < P_COUNT; r++)
             p[r].revents = 0;
 
@@ -372,7 +375,7 @@ static int loop(struct term *t, int sigfd)
             term_draw_bell(&t->draw);
             t->screen.bell = false;
         }
-        if (t->dirty) {
+        if (t->dirty || term_draw_timeout(&t->draw) == 0) {
             term_draw_frame(&t->draw, &t->screen);
             t->dirty = term_screen_held(&t->screen);
         }

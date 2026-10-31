@@ -513,10 +513,6 @@ int term_draw_frame(struct term_draw *d, struct term_screen *s)
     bool full = false;
     int r;
 
-    if (s->bell) {
-        s->bell = false;
-        term_draw_bell(d);
-    }
     if (term_screen_held(s)) {
         if (!d->held_since)
             d->held_since = now;
@@ -550,7 +546,7 @@ int term_draw_frame(struct term_draw *d, struct term_screen *s)
                       d->frame_y < tsm_screen_get_height(con);
     d->cursor_style = (int)tsm_screen_get_cursor_style(con);
 
-    if (d->full) {
+    if (d->full || !d->age) {
         clear(d);
         full = true;
     }
@@ -601,7 +597,7 @@ void term_draw_redraw(struct term_draw *d)
     d->full = true;
 }
 
-int term_draw_rescale(struct term_draw *d, struct term_screen *s, unsigned scale, const char *conf)
+int term_draw_rescale(struct term_draw *d, unsigned scale, const char *conf)
 {
     unsigned old = d->font->scale;
     int r;
@@ -616,11 +612,6 @@ int term_draw_rescale(struct term_draw *d, struct term_screen *s, unsigned scale
         return r;
     }
     d->cursor_shown = false;
-    r = term_screen_resize(s, d->cols, d->rows);
-    if (r < 0)
-        return r;
-    if (s->pty)
-        term_pty_resize(s->pty, d->cols, d->rows);
     return conf ? term_font_conf_save(conf, scale) : 0;
 }
 
