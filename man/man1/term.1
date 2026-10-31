@@ -1,0 +1,160 @@
+.Dd November 1, 2026
+.Dt TERM 1
+.Os
+.Sh NAME
+.Nm term
+.Nd terminal on the whole framebuffer
+.Sh SYNOPSIS
+.Nm
+.Op Fl l | Fl H
+.Op Fl c Ar file
+.Op Ar program Op Ar arg ...
+.Nm
+.Fl V
+.Sh DESCRIPTION
+.Nm
+is a terminal that runs in user space on the whole framebuffer.
+It runs
+.Ar program ,
+found on
+.Ev PATH ,
+or with no
+.Ar program
+the shell
+.Ev SHELL
+names,
+.Pa /bin/sh
+when it is unset, on a pty the size of the screen, with
+.Ev TERM
+set to
+.Ql xterm-256color
+and
+.Ev COLORTERM
+to
+.Ql truecolor .
+It parses what the program writes with libtsm, draws the cells with GNU
+Unifont in 24-bit color, and gives the program the keys of the console's
+keymap as xterm sends them, or by the Kitty keyboard protocol when the
+program asks for it.
+It answers the probes programs send: DA1, the cursor position, XTVERSION,
+DECRQM, the Kitty query, and OSC 10 and 11.
+.Pp
+.Nm
+takes the screen by opening
+.Pa /fb
+and the keyboard by putting
+.Pa /dev/console
+in K_MEDIUMRAW and raw mode, and gives both back when the program exits.
+A program it starts may take the screen in turn, as Doom does; see
+.Xr console 4 .
+The kernel console stays beneath it, with
+.Ql TERM=rach2 ,
+and comes back when
+.Nm
+exits or is killed.
+.Pp
+The options are:
+.Bl -tag -width "-c file"
+.It Fl l
+Run
+.Pa /bin/login
+in place of a program; no
+.Ar program
+is taken.
+.Xr init 8
+starts
+.Nm
+.Fl l
+as the console session on a boot with
+.Ql rach2.console=term .
+.It Fl H
+Run the program on a host pty with no screen, and answer commands read
+from standard input, for tests.
+.Pa term/Readme.md
+in the source tree lists them.
+.It Fl c Ar file
+Read the settings from
+.Ar file
+in place of
+.Pa /etc/term.conf ;
+see
+.Xr term.conf 5 .
+.It Fl V
+Print
+.Ql libtsm
+and its version.
+.El
+.Pp
+Every key but these reaches the program:
+.Bl -tag -width "Ctrl+Shift+Page Up"
+.It Shift+Page Up , Shift+Page Down
+Show the scrollback a page further back or forward.
+On the alternate screen, which keeps none, the program gets the keys.
+.It Ctrl+Shift+Page Up , Ctrl+Shift+Page Down
+Draw the font at 2x or at 1x, and keep the scale in the settings file.
+.It Print Screen
+Turn the selection mode on, and off again.
+.It Shift+Print Screen
+Paste the clipboard.
+.El
+.Pp
+In the selection mode the cursor keys and
+.Ql h ,
+.Ql j ,
+.Ql k
+and
+.Ql l
+move its cursor, Space or
+.Ql v
+marks the start, Enter or
+.Ql y
+copies the cells from the mark to the cursor and leaves, and Escape or
+.Ql q
+leaves.
+A selection and OSC 52 replace the one clipboard, which is emptied when
+.Nm
+exits.
+A paste sends it with each LF as CR and with ESC left out, bracketed
+under mode 2004.
+.Pp
+.Xr showkey 1
+is run on the kernel console, since under
+.Nm
+the two would read the same keys.
+.Xr setleds 1
+and
+.Xr kbdrate 8
+act on the console that is their standard input, so under
+.Nm
+they are run with
+.Ql < /dev/console .
+.Sh ENVIRONMENT
+.Bl -tag -width SHELL
+.It Ev SHELL
+The shell run when no
+.Ar program
+is given.
+.El
+.Sh FILES
+.Bl -tag -width /usr/share/term/unifont.font
+.It Pa /etc/term.conf
+The settings.
+.It Pa /usr/share/term/unifont.font
+The packed font.
+.It Pa /fb
+The framebuffer.
+.It Pa /dev/console
+The keyboard.
+.El
+.Sh EXIT STATUS
+.Nm
+exits with the program's status, or 128 and the number of the signal that
+ended it; with
+.Fl l ,
+with 0 once the login session has ended, however it ended.
+It exits with 1 when it cannot start, or when SIGTERM, SIGHUP, SIGINT or
+SIGQUIT ends it, which hangs the program up, and with 2 for a wrong usage.
+.Sh SEE ALSO
+.Xr console 4 ,
+.Xr term.conf 5 ,
+.Xr init 8

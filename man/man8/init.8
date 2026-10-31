@@ -1,4 +1,4 @@
-.Dd October 30, 2026
+.Dd November 1, 2026
 .Dt INIT 8
 .Os
 .Sh NAME
@@ -132,6 +132,36 @@ on the console give it
 .Ev LOGIN_TIMEOUT
 set to 0, so the console's prompt waits without a limit; see
 .Xr login 1 .
+.Pp
+On a boot with
+.Ql rach2.console=term ,
+.Sy init-login
+and
+.Sy init-metal
+start
+.Ql /bin/term -l
+as the console session in place of
+.Pa /bin/login ,
+and
+.Xr term 1
+runs the login inside itself on the whole framebuffer.
+Before the first session init opens
+.Pa /fb
+and asks it for the framebuffer, and gives the screen back at once; on
+the VGA's text mode, which has none, the session is
+.Pa /bin/login
+for the whole boot, with no failed start of term.
+Each start of term is said on the console.
+A logout, which ends term with status 0, starts term again.
+A failure of term, an exec error, a status other than 0, a signal or an
+end within two seconds of its start, is reported on the console and
+followed at once by
+.Pa /bin/login
+on the kernel console, which the kernel gives back whole when term ends;
+the end of that session starts term again.
+Neither path starts a shell without a login.
+The sealed disk's menu carries the option, and no test image's does, so
+the machine cases keep their login on COM1.
 .Pp
 Every build clears two levels of
 .Pa /var/run
@@ -360,11 +390,25 @@ to the first.
 .Sh DIAGNOSTICS
 The recovery file system check reports its status as:
 .Dl init: e2fsck: /dev/diskNpM: status S
+.Pp
+On a boot with
+.Ql rach2.console=term ,
+each start of term, and each failure, with what failed, are reported as:
+.Bd -literal -offset indent
+init: console: starting term
+init: cannot exec /bin/term
+init: console: term: not run; login on the kernel console
+init: console: term: status N; login on the kernel console
+init: console: term: killed by signal N; login on the kernel console
+init: console: term: ended at its start; login on the kernel console
+init: console: /fb: ERROR; login on the kernel console
+.Ed
 .Sh SEE ALSO
 .Xr acpid 1 ,
 .Xr login 1 ,
 .Xr mixer 1 ,
 .Xr ntpd 1 ,
+.Xr term 1 ,
 .Xr bootlog 4 ,
 .Xr sshd.conf 5 ,
 .Xr sysfs 5 ,

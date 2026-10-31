@@ -19,6 +19,7 @@ The line is a list of words separated by spaces and tabs (`sys/cmdline.c`). A fl
 | `rach2.atapio` | Move ATA transfers through the data port and not through the controller's bus master. |
 | `rach2.diskdiag` | Probe the disks once the root is mounted, when the boot has not, and log whether one answered; the whole-disk nodes are published either way ([disk(7)](../man/man7/disk.7)). |
 | `rach2.fsck` | Read by the recovery image's `init`, not by the kernel: run `e2fsck -p` on every ext2 partition first. The kernel reads it only to keep its records on the screen while that runs. |
+| `rach2.console=term` | Read by `init-login` and `init-metal`, not by the kernel: run the console's login inside `term` on the whole framebuffer, and on the kernel console when the screen has none or `term` fails ([init(8)](../man/man8/init.8)). The sealed disk's menu carries it; no test image does, so the machine cases keep their login on COM1. |
 | `rach2.ip=A.B.C.D/PREFIX`, `rach2.ip=none`, `rach2.gateway=A.B.C.D`, `rach2.ifaddr=MAC,ADDR/PREFIX[,GATEWAY]` | The interfaces' addresses ([the network Readme](sys/network/Readme.md)). Without them the first interface takes QEMU's user-network defaults. |
 | `rach2.netconsole` | Broadcast the log in Ethernet frames once a card is up. |
 | `rach2.loglevel=N` | Show records of level `N`, one digit, and more urgent on the screen, in place of `INFO` and more urgent during the boot and `CRIT` alone once init starts. |

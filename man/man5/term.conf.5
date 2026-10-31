@@ -1,0 +1,50 @@
+.Dd November 1, 2026
+.Dt TERM.CONF 5
+.Os
+.Sh NAME
+.Nm term.conf
+.Nd settings of the terminal on the framebuffer
+.Sh SYNOPSIS
+.Pa /etc/term.conf
+.Sh DESCRIPTION
+.Xr term 1
+reads this optional file at its start, or the file its
+.Fl c
+option names.
+A file that does not exist leaves every setting at its default.
+Each line is
+.Li NAME = VALUE ,
+blank, or a comment that begins with a hash; blanks around the name and
+the value do not count.
+A line with an unknown name or a bad value is reported on standard error,
+as
+.Ql term: FILE:LINE: NAME: what is wrong ,
+and skipped.
+.Bl -tag -width scrollback
+.It Va font
+The packed font's absolute path;
+.Pa /usr/share/term/unifont.font
+by default.
+.It Va scale
+The font's scale, 1 or 2; 1 by default.
+At 1 a cell is 8 by 16 pixels, at 2 it is 16 by 32.
+.It Va scrollback
+The lines of history kept above the screen, 0 to 100000; 1000 by
+default.
+.El
+.Pp
+Ctrl+Shift+Page Up and Ctrl+Shift+Page Down in
+.Xr term 1
+change the scale and write it back as the line
+.Li scale = N ,
+replacing the file's
+.Va scale
+line and keeping its others.
+.Sh EXAMPLES
+.Bd -literal -offset indent
+# The Lenovo's 1366x768 screen at 85x24 cells.
+scale = 2
+scrollback = 5000
+.Ed
+.Sh SEE ALSO
+.Xr term 1
