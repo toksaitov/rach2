@@ -995,17 +995,18 @@ $(CASE_IMAGES)/sealed.name: $(SEALED_DISK)
 # for machine.installer-rehearse.lenovo, is from the sealed disk on a sparse
 # target of the Lenovo's 488397168 sectors. The target is a qcow2 image, which
 # holds only the marks, and is written last, so the other files are there
-# once it is.
+# once it is. Etude writes the save disk and keeps its digest, and a change
+# to etude alone does not make the fixture again.
 REHEARSE_DIR = $(CASE_IMAGES)/rehearse
 REHEARSE_LENOVO_DIR = $(CASE_IMAGES)/rehearse-lenovo
 REHEARSE_FILES = head.vol params ranges save.img
 REHEARSE_TOOLS = tests/cases/machine/rehearse_fixture.sh $(GROWSET) $(MKEXFATFIXTURE) $(MKMBR) $(MKGPT)
-$(REHEARSE_DIR)/base.qcow2: $(INSTALLER_DISK) $(REHEARSE_TOOLS)
+$(REHEARSE_DIR)/base.qcow2: $(INSTALLER_DISK) $(REHEARSE_TOOLS) | $(ETUDE)
 	sh tests/cases/machine/rehearse_fixture.sh $(INSTALLER_DISK) 524288 $(GROWSET) \
-	    $(MKEXFATFIXTURE) $(MKMBR) $(MKGPT) $(REHEARSE_DIR)
-$(REHEARSE_LENOVO_DIR)/base.qcow2: $(SEALED_DISK) $(REHEARSE_TOOLS)
+	    $(MKEXFATFIXTURE) $(MKMBR) $(MKGPT) $(ETUDE) $(REHEARSE_DIR)
+$(REHEARSE_LENOVO_DIR)/base.qcow2: $(SEALED_DISK) $(REHEARSE_TOOLS) | $(ETUDE)
 	sh tests/cases/machine/rehearse_fixture.sh $(SEALED_DISK) 488397168 $(GROWSET) \
-	    $(MKEXFATFIXTURE) $(MKMBR) $(MKGPT) $(REHEARSE_LENOVO_DIR)
+	    $(MKEXFATFIXTURE) $(MKMBR) $(MKGPT) $(ETUDE) $(REHEARSE_LENOVO_DIR)
 $(addprefix $(REHEARSE_DIR)/,$(REHEARSE_FILES)): $(REHEARSE_DIR)/base.qcow2
 $(addprefix $(REHEARSE_LENOVO_DIR)/,$(REHEARSE_FILES)): $(REHEARSE_LENOVO_DIR)/base.qcow2
 $(addprefix $(REHEARSE_DIR)/,$(REHEARSE_FILES)) $(addprefix $(REHEARSE_LENOVO_DIR)/,$(REHEARSE_FILES)):

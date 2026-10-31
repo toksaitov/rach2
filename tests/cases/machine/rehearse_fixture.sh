@@ -3,10 +3,10 @@
 # machine.installer-rehearse, the rehearsals of the Lenovo's install sitting
 # on a disk of their own.
 #
-# Usage: rehearse_fixture.sh DISK SECTORS GROWSET MKEXFATFIXTURE MKMBR MKGPT DIR
+# Usage: rehearse_fixture.sh DISK SECTORS GROWSET MKEXFATFIXTURE MKMBR MKGPT ETUDE DIR
 #
 # DISK is the image the stick installs and SECTORS the target disk's length.
-# Into DIR it writes:
+# Run from the root of the tree, it writes into DIR:
 #
 #   head.vol      the first 128 MiB of the image's root, its third entry, which
 #                 growset reads for the grow's ranges
@@ -19,7 +19,10 @@
 #                 save that read another offset or a restore that put zeros
 #                 back shows in the digests
 #   save.img      the save disk: an MBR and an exFAT volume from sector 2048
-#                 with room for every range, whose one file is the ranges
+#                 with room for every range, whose one file is the ranges,
+#                 written by `ETUDE prepare digest`, which keeps its digest in
+#                 the tree's digests file, so that the preparation, which
+#                 records it, does not read its gigabytes back to hash them
 #
 # The target is a qcow2 image, since etude's store reads and hashes every
 # byte of an artifact, holes included, and the Lenovo's disk is 250 GB. It is
@@ -32,9 +35,10 @@ growset=$3
 mkexfat=$4
 mkmbr=$5
 mkgpt=$6
-dir=$7
+etude=$7
+dir=$8
 mkdir -p "$dir"
-rm -f "$dir/base.qcow2" "$dir/base.qcow2.tmp" "$dir/base.raw" "$dir/base.raw.tmp"
+rm -f "$dir/base.qcow2" "$dir/base.qcow2.tmp" "$dir/base.raw" "$dir/base.raw.tmp" "$dir/save.mbr"
 
 # The root's first sector: the third entry of the image's GUID table, whose
 # extent `mkgpt --list` prints in bytes.
@@ -59,13 +63,19 @@ backup_from=$(( (sectors - 33) / 8 * 8 ))
 rm -f "$dir/save.set"
 
 # The save disk, exFAT and not FAT32, since this kernel writes FAT32 a block
-# at a time.
+# at a time. mkmbr writes only the table of the first sector, so it writes
+# it on an empty disk of the save disk's length, save.mbr, whose first
+# mebibyte then goes before the volume as save.img is written.
 save_sectors=$(( (image_sectors / 2048 + 2048 + 32) * 2048 ))
 "$mkexfat" --make "$dir/save.vol" --sectors "$save_sectors" --offset 2048 \
     --add "ranges=$dir/ranges" > /dev/null
-{ dd if=/dev/zero bs=1048576 count=1 2>/dev/null; cat "$dir/save.vol"; } > "$dir/save.img"
-rm -f "$dir/save.vol"
-"$mkmbr" --lba "$dir/save.img" "2048:$save_sectors:07" > /dev/null
+save_bytes=$((1048576 + $(wc -c < "$dir/save.vol")))
+dd if=/dev/zero of="$dir/save.mbr" bs=512 seek=$((save_bytes / 512 - 1)) count=1 2>/dev/null
+"$mkmbr" --lba "$dir/save.mbr" "2048:$save_sectors:07" > /dev/null
+{ dd if="$dir/save.mbr" bs=1048576 count=1 2>/dev/null; cat "$dir/save.vol"; } |
+    "$etude" prepare digest "$dir/save.img" > /dev/null
+[ "$(wc -c < "$dir/save.img")" -eq "$save_bytes" ]
+rm -f "$dir/save.vol" "$dir/save.mbr"
 
 dd if=/dev/zero of="$dir/base.raw.tmp" bs=512 seek=$((sectors - 1)) count=1 2>/dev/null
 while read -r s c; do

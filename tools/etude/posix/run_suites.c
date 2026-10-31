@@ -17,16 +17,20 @@
 #include <unistd.h>
 
 #ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
 #include "../win/files.h"
 #include "../win/winexec.h"
 #elif defined(__APPLE__)
 #include <mach-o/dyld.h>
 #endif
 
+#include "etude/artifact.h"
 #include "etude/legacy.h"
 #include "measurement_context.h"
 #include "collection_tools.h"
 #include "preparation_import.h"
+#include "preparation_record.h"
 #include "retention.h"
 #include "routine_evidence.h"
 #include "routine_producer.h"
@@ -80,9 +84,10 @@ static void catch_stops(void)
 #endif
 }
 
-/* The usages of the three commands, which `usage` prints. */
+/* The usages of the commands, which `usage` prints. */
 static const char prepare_usage[] = "usage: etude prepare [-t TREE] [-a ARCH] [-n KERNEL] "
                                     "[-w WORK] [-o RECORD] [-s SECONDS] -b GOAL [-b GOAL]...\n";
+static const char digest_usage[] = "usage: etude prepare digest [-t TREE] FILE < CONTENT\n";
 static const char record_usage[] = "usage: etude check record [-d] RECORD\n";
 static const char suites_usage[] =
     "usage: etude run suites -l LEDGER -c CPU,MEMORY,DISK -o RESULTS -e EVIDENCE -S SCHEMAS "
@@ -139,6 +144,42 @@ static int prepare_native(int argc, char **argv, int *matched)
     return 0;
 }
 
+/**
+ * Run `etude prepare digest`: write standard input to FILE, and keep its
+ * digest in the digests file of the tree, the current directory unless -t
+ * names another, so that the preparation does not read FILE back to hash it.
+ * The digest is printed. A build step that makes a large image writes it so.
+ */
+static int prepare_digest_main(int argc, char **argv)
+{
+    const char *tree = ".";
+    char hex[65], *cache;
+    int opt, status;
+
+    while ((opt = getopt(argc, argv, "t:")) != -1) {
+        if (opt != 't')
+            return usage(digest_usage);
+        tree = optarg;
+    }
+    if (optind != argc - 1)
+        return usage(digest_usage);
+    if ((cache = etude_record_digests_path(tree)) == NULL) {
+        fputs("etude prepare digest: memory ran out\n", stderr);
+        return 2;
+    }
+#ifdef _WIN32
+    _setmode(0, _O_BINARY);
+#endif
+    status = etude_digest_write(cache, 0, argv[optind], hex);
+    free(cache);
+    if (status != 0) {
+        fprintf(stderr, "etude prepare digest: %s: %s\n", argv[optind], strerror(errno));
+        return 1;
+    }
+    printf("%s\n", hex);
+    return 0;
+}
+
 static int prepare_form(int argc, char **argv, int *matched)
 {
     int status = prepare_native(argc, argv, matched);
@@ -147,6 +188,8 @@ static int prepare_form(int argc, char **argv, int *matched)
     *matched = 1;
     if (!strcmp(argv[1], "source"))
         return etude_prepare_source_main(argc - 1, argv + 1);
+    if (!strcmp(argv[1], "digest"))
+        return prepare_digest_main(argc - 1, argv + 1);
     if (!strcmp(argv[1], "context"))
         return etude_prepare_context_main(argc - 1, argv + 1);
     if (!strcmp(argv[1], "reader"))
