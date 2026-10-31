@@ -14,27 +14,13 @@ SAN=$GNU_OUT/sanitizers
 rm -rf "$OUT"
 mkdir -p "$TREE"
 cd "$REPO"
-# Tracked sources and the extracted sources the tests compile enter this tree.
-if git rev-parse --git-dir > /dev/null 2>&1; then
-    git ls-files -z -- Makefile CLAUDE.md AGENTS.md Readme.md tests tools mk utils krffs \
-        rach2 ish ports vendor > "$OUT/sources.list"
-else
-    cp build/gnu-source-files "$OUT/sources.list"
-fi
-python3 - "$REPO" "$TREE" "$OUT/sources.list" <<'PY'
+# The tree carries the files of the step's key, and the extracted sources the
+# tests compile, which the key names one by one (mk/gnu-host-checks.mk).
+sh vendor/gnu/host_checks_files.sh "$TREE"
+python3 - "$REPO" "$TREE" <<'PY'
 from pathlib import Path
 import shutil, sys
 repo, tree = map(Path, sys.argv[1:3])
-for name in Path(sys.argv[3]).read_bytes().split(b'\0'):
-    if not name:
-        continue
-    relative = Path(name.decode())
-    source = repo / relative
-    if not source.is_file() or source.suffix in ('.xz', '.gz', '.bz2', '.zst', '.wad', '.img'):
-        continue
-    output = tree / relative
-    output.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, output)
 # These are the only extracted musl bytes the inventories compile. Both
 # paths remain distinct because architecture metadata selects between them.
 for prefix in ('vendor', 'build/x86_64/vendor-work'):
@@ -133,4 +119,4 @@ make --no-print-directory -C "$REPO" -f tests/cases/host/products.mk \
     CC="$GNU_OUT/cross/bin/$GNU_TARGET-gcc --sysroot=$GNU_OUT/root" \
     PREFIX="$OUT" "$OUT/driver"
 chmod -R a+rX "$TREE"
-rm -rf "$TOOLS" "$OUT/sources.list"
+rm -rf "$TOOLS"

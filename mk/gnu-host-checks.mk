@@ -1,9 +1,9 @@
 # Compile POSIX host fixtures once for the declared x86-64 GNU helper.
 GNU_HOST_CHECKS_STAMP = $(GNU_OUT)/host-checks.stamp
-GNU_HOST_CHECKS_SOURCES = vendor/gnu/build_host_inventory.sh \
-    $(wildcard $(shell git ls-files Makefile CLAUDE.md AGENTS.md Readme.md \
-        tests tools mk utils krffs rach2 ish ports vendor \
-        2>/dev/null || tr '\0' '\n' < build/gnu-source-files 2>/dev/null))
+# The step's tree carries the files that host_checks_files.sh lists, and its
+# key covers each of them, so that a commit that changes none reuses the entry.
+GNU_HOST_CHECKS_SOURCES := vendor/gnu/build_host_inventory.sh vendor/gnu/host_checks_files.sh \
+    $(shell sh vendor/gnu/host_checks_files.sh 2>/dev/null)
 GNU_HOST_CHECKS_MUSL = $(notdir $(LIBC_TARBALL:.tar.gz=))
 GNU_HOST_CHECKS_E2FS = $(notdir $(E2FSPROGS_TARBALL:.tar.gz=))
 GNU_HOST_CHECKS_EXTRA = \
