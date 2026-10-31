@@ -1,0 +1,141 @@
+Declare synchronized output, focus events and the OSC 52 callback
+
+Add tsm_vte_get_sync_hold() and tsm_vte_end_sync_hold() for mode 2026,
+tsm_vte_handle_focus() for mode 1004, and tsm_vte_set_clipboard_cb() for
+OSC 52, with stubs: the hold is never on, no focus report is sent, and the
+callback is kept but never called. A terminal can then be written against
+the calls before the parser implements the modes.
+
+--- a/src/tsm/libtsm.h
++++ b/src/tsm/libtsm.h
+@@ -582,6 +582,67 @@
+         unsigned int button, unsigned int event, unsigned char flags);
+ 
+ void tsm_vte_paste(struct tsm_vte *vte, const char *data);
++
++/**
++ * @brief Whether the application holds the screen's updates.
++ *
++ * An application sets mode 2026, synchronized output, before it redraws and
++ * resets it after, so that a renderer shows no half-drawn frame. While the
++ * hold is on, a renderer keeps showing the last frame it drew. An
++ * application that dies holding the screen would freeze it, so the renderer
++ * bounds the hold and calls tsm_vte_end_sync_hold() when the bound passes.
++ *
++ * @param vte The vte object
++ *
++ * @retval true while mode 2026 is set.
++ */
++bool tsm_vte_get_sync_hold(struct tsm_vte *vte);
++
++/**
++ * @brief End the hold of mode 2026 as if the application had reset it.
++ *
++ * @param vte The vte object
++ */
++void tsm_vte_end_sync_hold(struct tsm_vte *vte);
++
++/**
++ * @brief Report that the terminal gained or lost the input focus.
++ *
++ * Sends CSI I when \c focused is true and CSI O when it is false, through the
++ * write callback, when the application has set mode 1004; sends nothing
++ * otherwise.
++ *
++ * @param vte The vte object
++ * @param focused Whether the terminal now has the focus
++ *
++ * @retval true if a report was sent.
++ */
++bool tsm_vte_handle_focus(struct tsm_vte *vte, bool focused);
++
++/**
++ * @brief The callback of OSC 52, which sets the clipboard.
++ *
++ * \c targets is the OSC's first parameter, the selections named by letters
++ * such as "c" and "p", NUL-terminated and possibly empty. \c payload and
++ * \c len are its second, the new contents in base64 as the application sent
++ * them, not NUL-terminated. Both are valid only during the call.
++ */
++typedef void (*tsm_vte_clipboard_cb) (struct tsm_vte *vte,
++				      const char *targets,
++				      const char *payload,
++				      size_t len,
++				      void *data);
++
++/**
++ * @brief Set the callback that receives OSC 52.
++ *
++ * @param vte The vte object
++ * @param clipboard_cb The callback, or NULL to ignore OSC 52
++ * @param clipboard_data The callback's last argument
++ */
++void tsm_vte_set_clipboard_cb(struct tsm_vte *vte,
++			      tsm_vte_clipboard_cb clipboard_cb,
++			      void *clipboard_data);
+ /** @} */
+ 
+ #ifdef __cplusplus
+--- a/src/tsm/libtsm.sym
++++ b/src/tsm/libtsm.sym
+@@ -165,3 +165,11 @@
+ 	tsm_screen_get_cursor_blinking_rate_ms;
+ 	tsm_screen_set_cursor_blinking_rate_ms;
+ } LIBTSM_4_7;
++
++LIBTSM_4_9 {
++global:
++	tsm_vte_get_sync_hold;
++	tsm_vte_end_sync_hold;
++	tsm_vte_handle_focus;
++	tsm_vte_set_clipboard_cb;
++} LIBTSM_4_8;
+--- a/src/tsm/tsm-vte.c
++++ b/src/tsm/tsm-vte.c
+@@ -186,6 +186,9 @@
+ 	void *led_data;
+ 	unsigned int led_state;
+ 
++	tsm_vte_clipboard_cb clipboard_cb;
++	void *clipboard_data;
++
+ 	uint8_t (*custom_palette_storage)[3];
+ 	uint8_t (*palette)[3];
+ 	struct tsm_screen_attr def_attr;
+@@ -3541,3 +3544,36 @@
+ 	} else
+ 		vte_write(vte, data, strlen(data));
+ }
++
++SHL_EXPORT
++bool tsm_vte_get_sync_hold(struct tsm_vte *vte)
++{
++	(void)vte;
++	return false;
++}
++
++SHL_EXPORT
++void tsm_vte_end_sync_hold(struct tsm_vte *vte)
++{
++	(void)vte;
++}
++
++SHL_EXPORT
++bool tsm_vte_handle_focus(struct tsm_vte *vte, bool focused)
++{
++	(void)vte;
++	(void)focused;
++	return false;
++}
++
++SHL_EXPORT
++void tsm_vte_set_clipboard_cb(struct tsm_vte *vte,
++			      tsm_vte_clipboard_cb clipboard_cb,
++			      void *clipboard_data)
++{
++	if (!vte)
++		return;
++
++	vte->clipboard_cb = clipboard_cb;
++	vte->clipboard_data = clipboard_data;
++}

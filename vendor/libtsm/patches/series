@@ -1,0 +1,6 @@
+# The patch series: build_libtsm.sh applies the patches named here, in this
+# order, with patch -F 0 --forward, and fails on a named patch that is
+# missing or on a patches/*.patch file that is not named. Each patch is made
+# on the tree the ones before it leave.
+0001-declare-sync-focus-clipboard.patch
+0002-version-macros.patch

@@ -1,0 +1,21 @@
+Give libtsm.h the library's version
+
+Define TSM_VERSION_MAJOR, TSM_VERSION_MINOR, TSM_VERSION_MICRO and the
+string TSM_VERSION, so that a program built against the header can report
+the version it was built with.
+
+--- a/src/tsm/libtsm.h
++++ b/src/tsm/libtsm.h
+@@ -37,6 +37,12 @@
+ extern "C" {
+ #endif
+ 
++/* The version of the library these declarations belong to. */
++#define TSM_VERSION_MAJOR 4
++#define TSM_VERSION_MINOR 8
++#define TSM_VERSION_MICRO 0
++#define TSM_VERSION "4.8.0"
++
+ /**
+  * @mainpage
+  *
