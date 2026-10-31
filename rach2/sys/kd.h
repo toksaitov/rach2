@@ -116,19 +116,62 @@ struct kbd_repeat {
  * the same pointer for as long as the keyboard is connected, so the state of
  * each keyboard stays apart.
  *
+ * In K_MEDIUMRAW the key goes to the console's input as Linux sends it: a
+ * code below 128 as one byte, with 0x80 set on release, and a higher one as
+ * three, 0x00 or 0x80 on release, then the code's high and low seven bits
+ * with 0x80 set; a repeat is a press. In the other modes it does nothing
+ * yet: today's keystrokes reach the console through input.c's translation
+ * of the raw view.
+ *
  * Called in interrupt context or from the tick, with interrupts off; it does
- * not sleep. It does nothing yet: today's keystrokes reach the console
- * through input.c's translation of the raw view.
+ * not sleep.
  */
 void kd_key_event(const void *device, unsigned int keycode, int value);
 
 /**
+ * Give the console one byte of the keyboards' raw view, the set-1 bytes
+ * `input_raw_bytes` gives for every press, repeat and release of any
+ * keyboard, prefixes among them. In K_RAW the byte goes to the console's
+ * input, as Linux's raw mode sends a PS/2 keyboard's bytes; in every other
+ * mode it is not used. Interrupt context or the tick, interrupts off.
+ */
+void kd_raw_code(uint8_t code);
+
+/**
+ * Whether the console translates keys into characters: the keyboard is in
+ * K_XLATE or K_UNICODE. In K_RAW, K_MEDIUMRAW and K_OFF the translator, the
+ * lock keys, the console's own keys, such as its scrollback and the debug
+ * shell's Ctrl+C, and COM1's input are all off, and the console's input
+ * holds only what `kd_raw_code` and `kd_key_event` give it. Any context.
+ */
+int kd_translates(void);
+
+/**
  * Answer one of Linux's KD* requests on the console, in the calling process's
- * context, with `arg` its user argument. Returns 0, the request's result, or
- * -errno, and -ENOTTY for a request that is not its own, so that the console
- * goes on to its other requests. A pty never reaches it.
+ * context, with `arg` its user argument: a pointer, or the value for
+ * KDSKBMODE, KDSKBMETA, KDSETLED and KDSKBLED. Returns 0 or -errno: -EFAULT
+ * for an argument it cannot read or write, -EINVAL for a value out of range,
+ * -ENOMEM, and -ENOTTY for a request that is not its own, so that the console
+ * goes on to its other requests.
  *
- * It answers none yet, and returns -ENOTTY for every request.
+ * It answers KDGKBTYPE, KDGKBMODE, KDSKBMODE, KDGKBMETA, KDSKBMETA,
+ * KDGETLED, KDSETLED, KDGKBLED, KDSKBLED, KDGETMODE, KDGKBENT, KDSKBENT,
+ * KDGKBSENT, KDSKBSENT, KDGKBDIACR, KDSKBDIACR, KDGKBDIACRUC, KDSKBDIACRUC
+ * and KDKBDREP, with Linux's numbers and structures. KDSETMODE is not among
+ * them: a program takes the screen through /fb.
+ *
+ * The requests that set the mode, the meta setting, the LEDs and the lock
+ * flags are open to a process of the console's session, the process that
+ * holds /fb and a privileged process, as Linux opens them to the terminal's
+ * own processes; the keymap, the strings, the accents and the repeat are the
+ * whole system's, and a privileged process's alone. Others get -EPERM. A pty
+ * never reaches this function, so every KD* request there is -ENOTTY.
+ *
+ * Two answers depart from Linux's, so that `loadkeys` loads a Unicode keymap
+ * while `term` keeps the keyboard in K_MEDIUMRAW and translates its key codes
+ * through the console's keymap: KDGKBENT gives a code point's entry in every
+ * mode but K_XLATE, where Linux gives it only in K_UNICODE, and KDSKBENT
+ * takes one in every mode, where Linux takes it only in K_UNICODE.
  */
 int32_t kd_ioctl(uint32_t request, uintptr_t arg);
 
@@ -136,9 +179,10 @@ int32_t kd_ioctl(uint32_t request, uintptr_t arg);
  * the screen has them, kept when the screen passes to another. */
 struct kd_state {
     int kbmode;              /* K_RAW, K_XLATE, K_MEDIUMRAW, K_UNICODE or K_OFF */
+    int meta;                /* K_METABIT or K_ESCPREFIX */
     unsigned int locks;      /* the KT_LOCK locks in force, a bit for each KG_* */
     unsigned int slocks;     /* the KT_SLOCK sticky locks pending, likewise */
-    unsigned int ledflags;   /* the lock flags, K_*LOCK, KDGKBLED's */
+    unsigned int ledflags;   /* KDGKBLED's lock flags and defaults */
     unsigned int leds;       /* the LEDs set by KDSETLED, 0xFF when they follow the flags */
     int repeat_delay;        /* milliseconds */
     int repeat_period;       /* milliseconds, 0 for no repeat */
@@ -146,16 +190,18 @@ struct kd_state {
 };
 
 /**
- * Store in `st` the console's keyboard mode, locks, LEDs and repeat times and
- * its terminal settings, for an owner of the screen that gives it to another.
- * Process context. It stores nothing yet.
+ * Store in `st` the console's keyboard mode, meta setting, locks, LEDs and
+ * repeat times and its terminal settings, for an owner of the screen that
+ * gives it to another. Process context.
  */
 void kd_state_save(struct kd_state *st);
 
 /**
  * Put back the state `kd_state_save` stored, for an owner of the screen that
- * has it back: the keyboard's mode, locks and repeat, the LEDs lit again and
- * the terminal settings set. Process context. It does nothing yet.
+ * has it back: the terminal settings, then the keyboard's meta setting,
+ * locks and repeat, the LEDs lit again, and last its mode, which as
+ * KDSKBMODE does stops a held key's repeat and discards the console's unread
+ * input. Process context.
  */
 void kd_state_restore(const struct kd_state *st);
 

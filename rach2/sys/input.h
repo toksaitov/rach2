@@ -131,6 +131,10 @@ void input_tick(void);
  * Today's translation for the console, fed the raw view's bytes of every
  * accepted event until the keymap translator replaces it.
  *
+ * While the console's keyboard is in K_RAW, K_MEDIUMRAW or K_OFF
+ * (`kd_translates`), each byte goes to `kd_raw_code` instead, and none of
+ * what follows happens.
+ *
  * The extended Page Up, Page Down, Home and End scroll the screen whenever
  * the debug shell reads input, and Shift with Page Up or Page Down scrolls
  * it in a session, where any other key returns it to the live screen before

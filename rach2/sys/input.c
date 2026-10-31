@@ -287,7 +287,8 @@ static int shell_scroll_key(uint8_t scancode)
 /**
  * Today's translation of one set-1 byte of the raw view for the console,
  * as input.h describes it: the modifiers are `input_modifiers`', so their
- * own codes, and the Pause sequence's E1 1D, do nothing here.
+ * own codes, and the Pause sequence's E1 1D, do nothing here. While the
+ * console's keyboard does not translate, the byte is `kd_raw_code`'s.
  */
 static void console_key(uint8_t scancode)
 {
@@ -296,6 +297,10 @@ static void console_key(uint8_t scancode)
     char c;
 
     saw_e0 = 0;
+    if (!kd_translates()) {
+        kd_raw_code(scancode);
+        return;
+    }
     if (scancode == 0xE0) {
         saw_e0 = 1;
         return;

@@ -22,6 +22,10 @@
  * the slave's output. A read that does not wait ends the console latency
  * span, and slave output takes no more of the master's ring than it needs.
  *
+ * While the console's keyboard is in a raw mode, COM1's bytes are discarded,
+ * by the tick's drain and by a reader's, and none reaches the discipline;
+ * once it translates again, they are read as before.
+ *
  * A noncanonical read waits by POSIX's four cases of VMIN and VTIME, on a
  * slave and on the console, under a model tick: each row's steps give the
  * tick, the input that arrives then or the timer's wake, and the deadline the
@@ -47,6 +51,8 @@ static fd_entry_t master, slave;
 static int failures, irq_enabled = 1, pending_signal, switches;
 static int recording, recorded_waits, read_stamps, serial_pos, serial_len;
 static int copy_calls, copy_failure, spans;
+/* The console's keyboard is in K_RAW, K_MEDIUMRAW or K_OFF (`kd_translates`). */
+static int console_raw;
 static void (*copy_action)(void);
 static const char *serial_bytes;
 static void (*scheduled_action)(void);
@@ -348,6 +354,12 @@ void serial_set_rx_notify(void (*notify)(void))
     (void)notify;
 }
 
+/** Whether the console's keyboard translates keys: not while `console_raw`. */
+int kd_translates(void)
+{
+    return !console_raw;
+}
+
 /** The screen's blanking, which no row reaches. */
 void blank_init(void)
 {}
@@ -541,6 +553,43 @@ static void latency_read(void)
     CHECK(out[0] == 'q' && out[1] == '\n', "console input is intact");
     CHECK(recorded_waits == 1 && read_stamps == 1, "latency path records wait and read");
     CHECK(switches == 1 && irq_enabled, "console read restores interrupt state");
+}
+
+/**
+ * With the console's keyboard in a raw mode, the tick's drain and a reader's
+ * pump discard COM1's bytes, a Ctrl+C among them, and leave the discipline
+ * empty; back in a translating mode, a byte from COM1 is read.
+ */
+static void raw_serial(void)
+{
+    unsigned char out[4];
+
+    setup_pair();
+    tty_console_init();
+    tty_set_session(&console_tty, 1, 1);
+    console_tty.ldisc.tio.c_lflag &= ~(ICANON | ECHO);
+    console_raw = 1;
+    serial_bytes = "ab\003";
+    serial_pos = 0;
+    serial_len = 3;
+    irq_enabled = 0;
+    tty_console_poll();
+    CHECK(serial_pos == serial_len, "a raw console's tick discards COM1's bytes");
+    CHECK(n_tty_inq(&console_tty.ldisc) == 0, "no COM1 byte reaches a raw console");
+    serial_bytes = "cd";
+    serial_pos = 0;
+    serial_len = 2;
+    console_pump(&console_tty);
+    CHECK(serial_pos == serial_len && n_tty_inq(&console_tty.ldisc) == 0,
+          "a raw console's reader discards COM1's bytes");
+    console_raw = 0;
+    serial_bytes = "e";
+    serial_pos = 0;
+    serial_len = 1;
+    tty_console_poll();
+    irq_enabled = 1;
+    CHECK(tty_read(&console_tty, out, sizeof(out), 0) == 1 && out[0] == 'e',
+          "a translating console reads COM1 again");
 }
 
 /** Each wake of a pair names the kind of change it is to the pollers of its
@@ -850,6 +899,7 @@ int main(void)
     partial_wakes_reader(0);
     partial_wakes_reader(1);
     latency_read();
+    raw_serial();
     wake_kinds();
     input_room();
     packet_mode();

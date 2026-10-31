@@ -18,6 +18,7 @@
 #include "../usb/usb.h"
 #include "../io/poll.h"
 #include "../serial.h"
+#include "../kd.h"
 #include "../kio.h"
 #include "../display/blank.h"
 #include "../klog.h"
@@ -503,6 +504,21 @@ struct tty console_tty;
 static uint32_t reader_drains, tick_drains;
 
 /**
+ * Whether COM1's bytes are kept out of the console's input, because its
+ * keyboard is in K_RAW, K_MEDIUMRAW or K_OFF and the input holds key codes
+ * alone (`kd_translates`); the ring is then emptied, its bytes discarded, so
+ * that none waits to be typed after the mode ends. Interrupts off.
+ */
+static int console_serial_closed(void)
+{
+    if (kd_translates()) {
+        return 0;
+    }
+    serial_rx_discard((int)serial_rx_pending());
+    return 1;
+}
+
+/**
  * The console's polled input source: drain the serial ring, which the port's
  * interrupt and the tick fill, into the discipline.
  *
@@ -520,6 +536,9 @@ static void console_pump(struct tty *t)
     int echo = serial_rx_pending() <= TTY_ECHO_MAX;
 
     reader_drains++;
+    if (console_serial_closed()) {
+        return;
+    }
     for (;;) {
         int ch, signo = 0;
 
@@ -567,6 +586,9 @@ static void console_pump_irq(struct tty *t)
     int budget = TTY_PUMP_BUDGET;
 
     tick_drains++;
+    if (console_serial_closed()) {
+        return;
+    }
     while (budget-- > 0 && serial_data_available()) {
         int ch, signo = 0;
 
@@ -656,7 +678,7 @@ void tty_console_poll(void)
 static void console_service(void)
 {
     serial_rx_service(TTY_PUMP_BUDGET);
-    if (!serial_data_available()) {
+    if (!serial_data_available() || console_serial_closed()) {
         return;
     }
     if (wq_active(&console_tty.input_wq)) {
