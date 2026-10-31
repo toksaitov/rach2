@@ -69,8 +69,6 @@ A background process reading its controlling terminal receives
 .Dv SIGTTIN .
 If that signal is blocked or ignored, the read fails with
 .Er EIO .
-When the caller owns the framebuffer, a console read instead returns
-raw keyboard scancodes without waiting.
 A read of
 .Pa /fb
 returns one ownership event, waiting interruptibly unless O_NONBLOCK

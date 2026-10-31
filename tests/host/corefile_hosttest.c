@@ -630,17 +630,14 @@ volatile uint32_t fb_owner_pid;
 struct tty console_tty;
 
 /** No row opens the framebuffer: -EBUSY. */
-int32_t fb_take(void)
+int32_t fb_take(struct fd_entry *e)
 {
+    (void)e;
     return -EBUSY;
 }
 
 /* The framebuffer's operations, which no row reaches. */
 const struct file_ops fb_file_ops;
-
-/** No row reads the keyboard. */
-void kbd_clear_scancodes(void)
-{}
 
 /** No mouse: 0. */
 bool mouse_is_available(void)

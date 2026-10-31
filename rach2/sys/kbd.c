@@ -1,49 +1,8 @@
 /*
- * kbd.c: the ring of raw scancodes and the map between set-1 codes and
- * Linux's key codes, as kbd.h describes them.
+ * kbd.c: the map between set-1 codes and Linux's key codes, as kbd.h
+ * describes it.
  */
 #include "kbd.h"
-
-/*
- * The scancode ring. The input layer is its one producer, at `tail`, and
- * the /fb reader its one consumer, at `head`; a slot stays empty to tell a
- * full ring from an empty one, and a full ring drops the new code rather
- * than overwrite an unread one.
- */
-#define SCANCODE_BUF_SIZE 64
-static uint8_t scancode_buf[SCANCODE_BUF_SIZE];
-static volatile int scancode_head = 0;
-static volatile int scancode_tail = 0;
-
-void kbd_push_scancode(uint8_t sc)
-{
-    int next = (scancode_tail + 1) % SCANCODE_BUF_SIZE;
-    if (next != scancode_head) {
-        scancode_buf[scancode_tail] = sc;
-        scancode_tail = next;
-    }
-}
-
-int kbd_scancode_room(void)
-{
-    return (scancode_head - scancode_tail - 1 + SCANCODE_BUF_SIZE) % SCANCODE_BUF_SIZE;
-}
-
-void kbd_clear_scancodes(void)
-{
-    scancode_head = 0;
-    scancode_tail = 0;
-}
-
-int kbd_read_scancodes(uint8_t *buf, int max_count)
-{
-    int count = 0;
-    while (count < max_count && scancode_head != scancode_tail) {
-        buf[count++] = scancode_buf[scancode_head];
-        scancode_head = (scancode_head + 1) % SCANCODE_BUF_SIZE;
-    }
-    return count;
-}
 
 /*
  * The extended keys' codes, the code after an E0 prefix, and Linux's key

@@ -7,8 +7,7 @@
  *
  * The file is included whole. Its consumers are models: the event devices,
  * the console's keyboard and the console's raw view record what they are
- * given, and the tick's count is a variable the rows advance. The scancode
- * ring is kbd.c's own.
+ * given, and the tick's count is a variable the rows advance.
  */
 
 #include "input.c"
@@ -468,27 +467,6 @@ static void test_repeat(struct input_keyboard *kb1, struct input_keyboard *kb2)
     input_set_repeat(250, 33);
 }
 
-/** The scancode ring with its reader behind: the releases still fit. */
-static void test_full_ring(struct input_keyboard *kb1)
-{
-    uint8_t ring[64];
-    int n;
-
-    (void)kbd_read_scancodes(ring, sizeof(ring));
-    kernel_ticks = 2000;
-    key(kb1, KEY_A, 1);
-    tick_to(2500);
-    CHECK("the repeats leave room for releases", kbd_scancode_room() == RING_RESERVE);
-    key(kb1, KEY_B, 1);
-    CHECK("a press finds no room", kbd_scancode_room() == RING_RESERVE);
-    key(kb1, KEY_B, 0);
-    key(kb1, KEY_A, 0);
-    n = kbd_read_scancodes(ring, sizeof(ring));
-    CHECK("the releases are queued after the repeats", n == 63 - RING_RESERVE + 2 &&
-                                                           ring[0] == 0x1E && ring[n - 2] == 0xB0 &&
-                                                           ring[n - 1] == 0x9E);
-}
-
 /** A keyboard that goes. */
 static void test_detach(struct input_keyboard *kb1, struct input_keyboard *kb2)
 {
@@ -524,7 +502,6 @@ int main(void)
     test_set1(&kb1, &kb2);
     test_raw();
     test_repeat(&kb1, &kb2);
-    test_full_ring(&kb1);
     test_detach(&kb1, &kb2);
 
     if (fails == 0) {

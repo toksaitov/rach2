@@ -25,10 +25,6 @@
 /* The boot processor's tick, 100 a second, in milliseconds. */
 #define TICK_MS 10u
 
-/* The ring's slots a press or a repeat leaves free, so that the releases of
- * the keys held still fit when its reader falls behind. */
-#define RING_RESERVE 16
-
 /* Linux's key codes of the modifiers and locks, which do not repeat. */
 #define KEY_LEFTCTRL   29
 #define KEY_LEFTSHIFT  42
@@ -199,8 +195,7 @@ int input_raw_bytes(unsigned int keycode, int value, uint8_t *out)
 /**
  * Give one accepted event of `kb`, `value` KD_KEY_*, to its consumers in
  * input.h's order: the event device, with MSC_SCAN `scan` first when
- * `has_scan`; the console's keyboard, which translates it; the scancode
- * ring, where a press or a repeat leaves RING_RESERVE slots free; and the
+ * `has_scan`; the console's keyboard, which translates it; and the
  * console's raw view. Every event ends a suspend and puts off the blanking,
  * as a key always has.
  */
@@ -219,11 +214,6 @@ static void deliver(struct input_keyboard *kb, unsigned int keycode, int value, 
     evdev_report(kb->dev, EV_SYN, SYN_REPORT, 0);
     kd_key_event(kb, keycode, value);
     n = input_raw_bytes(keycode, value, raw);
-    if (value == KD_KEY_RELEASE || kbd_scancode_room() >= n + RING_RESERVE) {
-        for (i = 0; i < n; i++) {
-            kbd_push_scancode(raw[i]);
-        }
-    }
     for (i = 0; i < n; i++) {
         kd_raw_code(raw[i]);
     }

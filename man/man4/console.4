@@ -264,9 +264,11 @@ The last owner's return restores the console's original settings, flushes
 unread input and redraws its saved text.
 Fork and dup share an open description; only its last close releases it.
 Separate opens by the same owner keep it until all close.
-While a program owns the screen the console draws nothing on it, the
-screen does not blank, and the owner's reads of the console give the
-keyboard's raw scancodes.
+While a program owns the screen the console draws nothing on it and the
+screen does not blank.
+A game that wants the keyboard's scan codes puts the keyboard in
+.Dv K_RAW
+and the terminal in raw mode, as below, and reads them from the console.
 The open enters mode 13h, 320 by 200 pixels of a byte each through a
 palette of 256 colors, which a framebuffer shows scaled by a whole number
 and the VGA shows itself.
