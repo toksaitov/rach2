@@ -266,6 +266,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "fbdev",
+          "checks": "tests/host/fbdev_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "fd",
           "checks": "tests/host/fd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"

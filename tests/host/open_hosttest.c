@@ -471,19 +471,22 @@ int vfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
     return -EROFS;
 }
 
-/** No row opens the framebuffer or the mouse by name. */
-uint8_t *fb_enter(void)
+/** Fail the row: no row opens the framebuffer by name. */
+int32_t fb_take(void)
 {
     check(0, "unexpected framebuffer open");
+    return -EBUSY;
+}
+
+/** Fail the row: no row seeks the framebuffer. */
+uint32_t fb_size(void)
+{
+    check(0, "unexpected framebuffer seek");
     return 0;
 }
 
-/** Fail the row: no row opens the framebuffer, whose open unblanks the
- * console. */
-void console_unblank_now(void)
-{
-    check(0, "unexpected framebuffer open");
-}
+/* The framebuffer's operations, which no row reaches. */
+const struct file_ops fb_file_ops;
 
 /** Fail the row: no row opens the framebuffer. */
 void kbd_clear_scancodes(void)
@@ -957,12 +960,6 @@ void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node)
         current_proc = self;
         reclaiming = 0;
     }
-}
-
-/** Fail the row: no row owns the display. */
-void fb_exit(void)
-{
-    check(0, "unexpected display release");
 }
 
 /** Fail the row: no row has a socket. */

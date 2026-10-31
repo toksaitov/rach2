@@ -1,8 +1,8 @@
 /**
  * VGA mode transitions with a pending keyboard interrupt at each port access,
- * and the console's font loaded into the adapter's character memory: each
- * glyph at its character's 32 bytes, read back as written, and not loaded in
- * a graphics mode.
+ * the console's font loaded into the adapter's character memory: each glyph
+ * at its character's 32 bytes, read back as written, and not loaded in a
+ * graphics mode; and the native mode's transitions on a framebuffer console.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  */
@@ -44,6 +44,43 @@ void fbcon_gfx_palette(const uint8_t *rgb)
 void fbcon_gfx_frame(const uint8_t *pixels)
 {
     gfx_frame_seen = pixels;
+}
+
+/* The framebuffer console's screen for the native mode: 1366x768 at 32 bits
+ * a pixel, pitch 5504, as the Lenovo's, which `native_refused` makes one the
+ * mode refuses; and the starts of the mode, counted. */
+static uint8_t native_screen[16];
+static int native_begins, native_refused;
+
+/** Describe the model screen: 0, or -1 off a framebuffer console. */
+int fbcon_screen(struct fb_screen *s)
+{
+    if (!fbcon_active) {
+        return -1;
+    }
+    k_memset(s, 0, sizeof(*s));
+    s->width = 1366;
+    s->height = 768;
+    s->pitch = 5504;
+    s->bpp = 32;
+    s->kind = FB_KIND_RGB;
+    s->red.offset = 16;
+    s->red.width = 8;
+    s->green.offset = 8;
+    s->green.width = 8;
+    s->blue.width = 8;
+    return 0;
+}
+
+/** Count a start of the native mode and return the model screen, or NULL
+ * when the model refuses it. */
+volatile uint8_t *fbcon_native_begin(void)
+{
+    if (native_refused) {
+        return NULL;
+    }
+    native_begins++;
+    return native_screen;
 }
 
 extern int printf(const char *format, ...);
@@ -251,6 +288,53 @@ static void row_fbcon(void)
     font_row = 0;
 }
 
+/**
+ * The native mode on a framebuffer console is the screen itself, at its own
+ * size, with no port touched; a second entry changes nothing, a present
+ * draws no picture, and mode 13h and the native mode go straight to each
+ * other. Off a framebuffer console, or on a screen the console refuses, the
+ * entry returns NULL and leaves the mode as it was.
+ */
+static void row_native(void)
+{
+    uint8_t *pixels;
+
+    font_row = 1;
+    fbcon_active = true;
+    vga_graphics_mode = false;
+    gfx_begins = gfx_ends = native_begins = 0;
+    accesses = 0;
+    pixels = fb_enter_native();
+    CHECK(pixels == native_screen && gfx_current.mode == GFX_MODE_NATIVE && vga_graphics_mode,
+          "the native mode is the screen");
+    CHECK(gfx_current.width == 1366 && gfx_current.height == 768 && gfx_current.pitch == 5504 &&
+              gfx_current.bpp == 32 && gfx_current.size == 5504u * 768u,
+          "at the screen's size, pitch and depth");
+    CHECK(fb_enter_native() == pixels && native_begins == 1, "a second entry changes nothing");
+    gfx_frame_seen = NULL;
+    fb_present();
+    CHECK(gfx_frame_seen == NULL, "a present draws no picture at the native mode");
+    pixels = fb_enter();
+    CHECK(gfx_begins == 1 && gfx_ends == 0 && gfx_current.mode == GFX_MODE_VGA_13H &&
+              gfx_current.size == VGA_GFX_SIZE && gfx_current.framebuffer == pixels,
+          "mode 13h follows the native mode at once");
+    CHECK(fb_enter_native() == native_screen && native_begins == 2 && gfx_ends == 0,
+          "and the native mode follows mode 13h");
+    fb_exit();
+    CHECK(gfx_ends == 1 && gfx_current.mode == GFX_MODE_NONE && !vga_graphics_mode &&
+              gfx_current.size == 0,
+          "the exit gives the screen back from the native mode");
+    native_refused = 1;
+    CHECK(fb_enter_native() == NULL && gfx_current.mode == GFX_MODE_NONE && native_begins == 2,
+          "a screen the console refuses leaves the mode");
+    native_refused = 0;
+    fbcon_active = false;
+    CHECK(fb_enter_native() == NULL && gfx_current.mode == GFX_MODE_NONE && native_begins == 2,
+          "the VGA's text mode has no native mode");
+    CHECK(accesses == 0, "and none touches a port");
+    font_row = 0;
+}
+
 /** Try every port boundary, including font mapping and palette restoration:
  * 0 when every check passes, 1 otherwise. */
 int main(void)
@@ -259,6 +343,7 @@ int main(void)
 
     row_font();
     row_fbcon();
+    row_native();
 
     row_transition(INJECT_ENTRY, 0);
     row_transition(INJECT_EXIT, 0);
