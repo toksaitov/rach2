@@ -2,6 +2,7 @@
  * screentext: the text a framebuffer console shows, read off a screen dump.
  *
  * Usage: screentext DUMP
+ *        screentext --term SCALE DUMP
  *        screentext --colors DUMP
  *
  * DUMP is QEMU's screen dump, a binary PPM (P6, 255 levels). The console's
@@ -15,8 +16,12 @@
  * underline rows left out when a cell has them all set, so that the cursor
  * on a blank cell is a space; a cell no glyph matches is printed as '?', and
  * the glyph of a code outside printable ASCII as '#'. Trailing spaces are
- * left off each line. With --colors it prints instead how many colours the
- * screen has, which tells a picture from the console's sixteen. Exits 0, or
+ * left off each line. With --term it reads instead the grid term draws: the
+ * font at SCALE, 1 or 2, from the screen's top left corner, as many whole
+ * cells as fit, within the same 240 by 64. term draws Unifont, whose ASCII
+ * glyphs are the kernel font's. With --colors it prints instead how many
+ * colours the screen has, which tells a picture from the console's sixteen.
+ * Exits 0, or
  * 1 with a diagnostic for a usage error, a file that is no such dump or is
  * too small for the grid, or no memory to count the colours.
  */
@@ -196,17 +201,19 @@ static int read_dump(const char *path)
 
 /**
  * Read the dump, then print its colour count, or find the console's grid as
- * fbcon.c lays it out and print each row of cells as a line.
+ * fbcon.c lays it out, or term's, and print each row of cells as a line.
  */
 int main(int argc, char **argv)
 {
     unsigned long scale, left, top, cols, rows;
     char line[MAX_COLS + 1];
     int row, col, end, count = argc == 3 && strcmp(argv[1], "--colors") == 0;
+    int term = argc == 4 && strcmp(argv[1], "--term") == 0 &&
+               (strcmp(argv[2], "1") == 0 || strcmp(argv[2], "2") == 0);
     const char *path = argv[argc - 1];
 
-    if (argc != 2 && !count) {
-        fprintf(stderr, "usage: screentext [--colors] DUMP\n");
+    if (argc != 2 && !count && !term) {
+        fprintf(stderr, "usage: screentext [--colors | --term 1|2] DUMP\n");
         return 1;
     }
     if (read_dump(path) != 0) {
@@ -223,21 +230,24 @@ int main(int argc, char **argv)
         printf("%lu\n", n);
         return 0;
     }
-    if (width / GLYPH_WIDTH < MIN_COLS || height / GLYPH_HEIGHT < MIN_ROWS) {
+    if (term) {
+        scale = (unsigned long)(argv[2][0] - '0');
+    } else if (width / GLYPH_WIDTH < MIN_COLS || height / GLYPH_HEIGHT < MIN_ROWS) {
         fprintf(stderr, "screentext: %s: %lux%lu is smaller than the console's grid\n", path, width,
                 height);
         return 1;
-    }
-    for (scale = 1; width / (GLYPH_WIDTH * (scale + 1)) >= MIN_COLS &&
-                    height / (GLYPH_HEIGHT * (scale + 1)) >= MIN_ROWS;
-         scale++) {
+    } else {
+        for (scale = 1; width / (GLYPH_WIDTH * (scale + 1)) >= MIN_COLS &&
+                        height / (GLYPH_HEIGHT * (scale + 1)) >= MIN_ROWS;
+             scale++) {
+        }
     }
     cols = width / (GLYPH_WIDTH * scale);
     rows = height / (GLYPH_HEIGHT * scale);
     cols = cols > MAX_COLS ? MAX_COLS : cols;
     rows = rows > MAX_ROWS ? MAX_ROWS : rows;
-    left = (width - cols * GLYPH_WIDTH * scale) / 2u;
-    top = (height - rows * GLYPH_HEIGHT * scale) / 2u;
+    left = term ? 0 : (width - cols * GLYPH_WIDTH * scale) / 2u;
+    top = term ? 0 : (height - rows * GLYPH_HEIGHT * scale) / 2u;
     for (row = 0; row < (int)rows; row++) {
         for (col = 0; col < (int)cols; col++) {
             line[col] = cell_char(left, top, scale, col, row);

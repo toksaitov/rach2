@@ -923,7 +923,7 @@ $(INSTALLER_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-d
                    $(MANIFEST_DEPS_rach2_metal_disk) \
                    tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils \
                    check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti \
-                   check-e2fsck ports/doom term unifont
+                   check-e2fsck kbd libtsm ports/doom term unifont
 	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 64 16384 32768
 INSTALLER_DISK = $(IMAGES_DIR)/installer-test.disk
 $(INSTALLER_DISK): $(DEMO_CREDS) $(KERNEL) $(RECOVERY_KERNEL) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) \
@@ -1094,6 +1094,19 @@ $(ARCH_CASE_DIR)/uefi/disk.img: $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $
 	RACH2_DISK_EXT2_IMAGE=$(INSTALLER_EXT2) \
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
+	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
+# `tests/run termconsole`: term as the console session, the cases of
+# tests/cases/machine.termconsole.json, which etude runs, under OVMF and
+# SeaBIOS. Their disk is a GPT disk as the disk builder makes one for a
+# machine, with the installer's root, the metal system, which stages term,
+# and rach2.console=term in its menu, which no other test disk carries.
+$(ARCH_CASE_DIR)/termconsole/disk.img: $(KERNEL) $(INSTALLER_EXT2) tools/image/mkdisk_grub.sh \
+                                       $(DISK_TOOLS) $(GRUB_FILES) | rach2
+	@mkdir -p $(@D)
+	RACH2_DISK_RECOVERY_MB=8 \
+	RACH2_DISK_EXT2_MB=64 \
+	RACH2_DISK_EXT2_IMAGE=$(INSTALLER_EXT2) \
+	RACH2_DISK_APPEND=rach2.console=term \
 	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
 # `tests/run usbdisk`: a flash drive as a disk, the cases of
 # tests/cases/machine.usbdisk.json: sticks with an MBR, a GUID table and no

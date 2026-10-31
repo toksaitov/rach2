@@ -48,6 +48,7 @@ installer-repair|qemu,qemu-system-x86_64,qemu-img,xorriso,shasum,ssh,ssh-keygen,
 installer|qemu,xorriso,shasum,ssh,ssh-keygen,mformat,mcopy,mtype,mdel|full|installer-test*,installer.*,installer/*|512
 menu|qemu,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 seabios|qemu,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full||256
+termconsole|qemu,qemu-system-x86_64,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full||512
 uefi|qemu,qemu-system-x86_64,xorriso,ssh,mformat,mmd,mcopy,mdel|full||512
 selfbuild-ext2|qemu,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 sealed|qemu,ssh,mformat,mmd,mcopy,debugfs,e2fsck,gzip|full
