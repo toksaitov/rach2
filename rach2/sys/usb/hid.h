@@ -41,6 +41,24 @@ void hid_attach(int device, int kind, uint16_t vendor, uint16_t product);
 void hid_report(int device, int kind, const uint8_t *report, int length);
 
 /**
+ * The output report keyboard `device`, numbered as for `hid_report`, is to
+ * be sent so that its LEDs show what the input layer wants (`input_leds`):
+ * bit 0 Num Lock, bit 1 Caps Lock and bit 2 Scroll Lock, the boot
+ * keyboard's layout. Returns the byte, or -1 when the keyboard shows it
+ * already, has failed a report since it was attached, or is not an
+ * attached keyboard. A keyboard just attached shows nothing known, so it is
+ * sent the LEDs at once. Called from the USB stack's step.
+ */
+int hid_led_report(int device);
+
+/**
+ * Say that the output report `report` was sent to keyboard `device`, `ok`
+ * when the keyboard took it. After a failure the keyboard is sent no report
+ * until it is attached again.
+ */
+void hid_led_sent(int device, int report, int ok);
+
+/**
  * Say that a device has gone, `device` numbered as for `hid_report`.
  *
  * Its event device is taken away, and everything it was holding down is
