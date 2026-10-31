@@ -1,8 +1,8 @@
 /**
  * Host test of system calls of syscall.c and syscall_net.c: a connect whose
- * handshake ended, the framebuffer's owner, the clocks with their wrap and
- * resolutions, and the sleeps and the interval timer, with their deadlines,
- * masks, remainders, clamps and checks of arguments.
+ * handshake ended, the clocks with their wrap and resolutions, and the
+ * sleeps and the interval timer, with their deadlines, masks, remainders,
+ * clamps and checks of arguments.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
@@ -79,14 +79,13 @@ int socket_outside(const struct socket *s)
 volatile uint32_t kernel_ticks;
 volatile uint32_t kernel_uptime_seconds;
 volatile uint32_t kernel_second_ticks;
-gfx_info_t gfx_current;
 uint32_t net_ip_addr = 0x0a00020fu;
 static struct socket sock;
 static struct tcb control;
 static fd_entry_t entry;
 static struct open_file description;
 static uint8_t user[1024];
-static int failures, enters, exits, palettes, masked, saves;
+static int failures, masked, saves;
 static int completion, immediate, waits;
 static int pending, pending_masked, blocked_masked, sleeps, cut_short;
 static uint32_t blocked_until;
@@ -263,28 +262,11 @@ process_t *get_process(uint32_t pid)
     return pid == 9 ? &other : NULL;
 }
 
-/** Count an entry to graphics mode and set mode 13h; NULL, no
- * framebuffer. */
-uint8_t *fb_enter(void)
-{
-    enters++;
-    gfx_current.mode = GFX_MODE_VGA_13H;
-    return NULL;
-}
-
-/** Count an exit to text mode. */
-void fb_exit(void)
-{
-    exits++;
-    gfx_current.mode = GFX_MODE_NONE;
-}
-
 /** TIOCLINUX's blank, which no row reaches. */
 void console_blank_now(void)
 {}
 
-/** The unblank of TIOCLINUX and of the framebuffer's mode, which no row
- * checks. */
+/** The unblank of TIOCLINUX, which no row checks. */
 void console_unblank_now(void)
 {}
 
@@ -292,13 +274,6 @@ void console_unblank_now(void)
 int console_is_blank(void)
 {
     return 0;
-}
-
-/** Count a write of the palette. */
-void fb_set_palette(const uint8_t *data)
-{
-    (void)data;
-    palettes++;
 }
 
 /** The socket's entry for descriptor 3, NULL for any other. */
@@ -386,37 +361,6 @@ static void connects(void)
     CHECK(!connect_done(&sock), "pending handshake stays asleep");
     sock.tcb = NULL;
     CHECK(connect_done(&sock), "removed connection wakes caller");
-}
-
-/**
- * The framebuffer's owner enters graphics mode once however often it asks,
- * and gives it up with a text request. A process that is not the owner gets
- * -EBUSY for every request and changes nothing on the owner's display. A
- * palette not in user memory gives -EFAULT, and an unknown request -ENOTTY.
- */
-static void framebuffer(void)
-{
-    proc.pid = proc.tgid = 1;
-    CHECK(framebuffer_ioctl(FB_MODE_13H, 0) == 0, "acquire framebuffer");
-    CHECK(enters == 1 && fb_owner_pid == 1 && gfx_is_active(), "graphics entered");
-    CHECK(framebuffer_ioctl(FB_MODE_13H, 0) == 0 && enters == 1, "mode request is idempotent");
-    CHECK(framebuffer_ioctl(FB_MODE_TEXT, 0) == 0 && !fb_owner_pid, "release framebuffer");
-    CHECK(framebuffer_ioctl(FB_MODE_13H, 0) == 0, "reacquire framebuffer");
-    CHECK(enters == 2 && gfx_is_active() && fb_owner_pid == 1, "graphics reentered");
-    CHECK(framebuffer_ioctl(FB_MODE_TEXT, 0) == 0, "release before second owner");
-    proc.pid = proc.tgid = 2;
-    CHECK(framebuffer_ioctl(FB_MODE_13H, 0) == 0, "second owner acquires");
-    proc.pid = proc.tgid = 1;
-    CHECK(framebuffer_ioctl(FB_MODE_TEXT, 0) == -EBUSY, "stale text request refused");
-    CHECK(framebuffer_ioctl(FB_MODE_13H, 0) == -EBUSY, "stale graphics request refused");
-    CHECK(framebuffer_ioctl(FB_SETPALETTE, 16) == -EBUSY, "stale palette request refused");
-    CHECK(fb_owner_pid == 2 && gfx_is_active() && enters == 3 && exits == 2 && !palettes,
-          "second owner's display unchanged");
-    proc.pid = proc.tgid = 2;
-    CHECK(framebuffer_ioctl(FB_SETPALETTE, 0) == -EFAULT, "null palette refused");
-    CHECK(framebuffer_ioctl(FB_SETPALETTE, 900) == -EFAULT, "short palette refused");
-    CHECK(framebuffer_ioctl(FB_SETPALETTE, 16) == 0 && palettes == 1, "owner sets palette");
-    CHECK(framebuffer_ioctl(0, 0) == -ENOTTY, "unknown framebuffer request refused");
 }
 
 /**
@@ -1381,7 +1325,6 @@ int main(void)
     other.tg = &other_group;
     other_group.leader = &other;
     connects();
-    framebuffer();
     clocks();
     clock_ids();
     clock_sleeps();
@@ -1392,6 +1335,6 @@ int main(void)
     timer_first_expiry();
     if (failures)
         return 1;
-    printf("syscall-test: pass: connect, framebuffer, clocks, sleeps and timer\n");
+    printf("syscall-test: pass: connect, clocks, sleeps and timer\n");
     return 0;
 }

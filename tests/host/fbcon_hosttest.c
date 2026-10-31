@@ -513,6 +513,71 @@ static void row_picture(void)
 }
 
 /**
+ * The native mode of /fb on a 1366x768 screen of 32 bits: the screen as the
+ * loader described it, its size, pitch, depth and channels; given to the
+ * program black, with no cell and no picture drawn while it has it, from
+ * the picture too; and the cells drawn again once it gives the screen back.
+ * An indexed screen and an RGB one of 8 bits have no native mode, and leave
+ * the cells drawn.
+ */
+static void row_native(void)
+{
+    static uint8_t picture[320 * 200];
+    struct fb_screen info;
+    volatile uint8_t *pixels;
+
+    use_rgb(1366, 768, 32);
+    CHECK(fbcon_screen(&info) == 0 && info.width == 1366 && info.height == 768 &&
+              info.pitch == 1366 * 4 + 64 && info.bpp == 32 && info.kind == FB_KIND_RGB &&
+              info.red.offset == 16 && info.red.width == 8 && info.green.offset == 8 &&
+              info.green.width == 8 && info.blue.offset == 0 && info.blue.width == 8,
+          "the screen is reported as the loader described it");
+    put("text");
+    pixels = fbcon_native_begin();
+    CHECK(pixels == screen && pixel_at(0, 0) == BLACK && !cell_shows(0, 0, 't', GREY, BLACK, 0),
+          "the native mode is the screen itself, given black");
+    pixels[0] = 0x30;
+    pixels[1] = 0x20;
+    pixels[2] = 0x10;
+    put("more");
+    memset(picture, 5, sizeof(picture));
+    fbcon_gfx_frame(picture);
+    CHECK(pixel_at(0, 0) == 0x102030u && pixel_at(203, 84) == BLACK &&
+              !cell_shows(4, 0, 'm', GREY, BLACK, 0),
+          "no cell and no picture is drawn over the program's pixels");
+    fbcon_gfx_end();
+    CHECK(pixel_at(1365, 767) == BLACK && cell_shows(0, 0, 't', GREY, BLACK, 0) &&
+              cell_shows(4, 0, 'm', GREY, BLACK, 0),
+          "the cells are drawn again once the program gives the screen back");
+    fbcon_gfx_begin();
+    CHECK(fbcon_native_begin() == screen && pixel_at(1365, 767) == BLACK, "the picture gives way");
+    fbcon_gfx_frame(picture);
+    CHECK(pixel_at(203, 84) == BLACK, "and draws nothing after");
+    fbcon_gfx_begin();
+    fbcon_gfx_frame(picture);
+    CHECK(pixel_at(203, 84) != BLACK, "until it has the screen again");
+    fbcon_gfx_end();
+
+    use_rgb(1366, 768, 8);
+    CHECK(fbcon_native_begin() == NULL && !gfx_on && !native_on,
+          "an RGB screen of 8 bits has no native mode");
+    fb.type = BOOT_FB_INDEXED;
+    fb.colors = 0;
+    fb.bpp = 8;
+    fb.pitch = 1366;
+    CHECK(fbcon_init(&fb) == 0, "an indexed screen is taken");
+    start_console();
+    CHECK(fbcon_screen(&info) == 0 && info.kind == FB_KIND_INDEXED && info.bpp == 8 &&
+              info.red.width == 0,
+          "and reported indexed, with no channels");
+    CHECK(fbcon_native_begin() == NULL, "and has no native mode");
+    fbcon_active = false;
+    CHECK(fbcon_screen(&info) == -1 && fbcon_native_begin() == NULL,
+          "the text adapter has no screen to report and no native mode");
+    fbcon_active = true;
+}
+
+/**
  * The console's blank: the whole screen black, no cell drawn while it lasts,
  * and every cell drawn again at the unblank, one written meanwhile too.
  */
@@ -546,6 +611,7 @@ int main(void)
     row_cursor_redraw();
     row_panic_colors();
     row_picture();
+    row_native();
     row_blank();
     if (failures) {
         printf("fbcon-test: %d failure(s)\n", failures);

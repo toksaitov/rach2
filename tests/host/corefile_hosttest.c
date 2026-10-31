@@ -627,22 +627,16 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 
 /* The state of the display and the console, which no row reaches. */
 volatile uint32_t fb_owner_pid;
-gfx_info_t gfx_current;
 struct tty console_tty;
 
-/** No row opens the framebuffer: NULL. */
-uint8_t *fb_enter(void)
+/** No row opens the framebuffer: -EBUSY. */
+int32_t fb_take(void)
 {
-    return NULL;
+    return -EBUSY;
 }
 
-/** No row lets go of the framebuffer. */
-void fb_exit(void)
-{}
-
-/** No row opens the framebuffer, whose open unblanks the console. */
-void console_unblank_now(void)
-{}
+/* The framebuffer's operations, which no row reaches. */
+const struct file_ops fb_file_ops;
 
 /** No row reads the keyboard. */
 void kbd_clear_scancodes(void)
