@@ -910,6 +910,7 @@ static void test_digests_write(void)
     unsigned char *buf = calloc(1, n);
     unsigned long hashed;
     struct stat st, was;
+    char *real;
     int fds[2], status = -1;
     pid_t pid;
 
@@ -933,8 +934,11 @@ static void test_digests_write(void)
           "write: the digest of what was written");
     close(fds[0]);
     CHECK(pid > 0 && waitpid(pid, &status, 0) == pid && status == 0, "write: the writer");
-    CHECK(stat(dst, &st) == 0 && (size_t)st.st_size == n && has_line(cache, dst),
+    /* The writer keeps the file under its real path; /tmp is a link on macOS. */
+    real = realpath(dst, NULL);
+    CHECK(stat(dst, &st) == 0 && (size_t)st.st_size == n && real != NULL && has_line(cache, real),
           "write: the file and its line");
+    free(real);
     hashed = etude_store_hashed;
     CHECK(etude_digest_file(cache, dst, &st, d) == 0 && strcmp(d, want) == 0 &&
               etude_store_hashed == hashed,
