@@ -66,7 +66,10 @@
 # * build: SHA is built from clean for the Lenovo on the testing host, in
 #   the copy `build/worktrees/release` of the owner's, /home/testing/rach2, with
 #   `ARCH=x86_64 make clean` and `make machine GNU_AGENTS=all`, whose GNU
-#   root has every package of the agents layer, and `make native-assets` when
+#   root has every package of the agents layer and Doom's WAD, the host's
+#   /etc/rach2/doom1.wad copied into the copy before the build; the build
+#   fails without that file, or when the root's /demo/doom1.wad, read with
+#   debugfs, differs from it. Then `make native-assets` runs when
 #   the machines file names the Lenovo, and the kernel, the recovery kernel
 #   and image, the GNU root, compressed, and the native cases' payload are
 #   fetched with their SHA-256 into a worktree of SHA, STATE/wt. The build
@@ -514,8 +517,19 @@ build()
         native="ARCH=x86_64 make native-assets &&"
         payload=tests/native/prepared.tar.gz
     fi
+    # Git keeps no WAD and a sync from a fresh worktree sends none, so the
+    # copy takes the host's. The manifest stages the WAD as an optional file,
+    # so a root built without it has no game; the root is read to be sure.
+    wad="{ cp /etc/rach2/doom1.wad ports/doom/doom1.wad ||
+            { echo 'release: wad: the testing host has no /etc/rach2/doom1.wad' >&2; false; }; } &&
+        sh ports/doom/fetch_wad.sh"
+    staged="{ ( . tools/setup/e2fsprogs_path.sh &&
+            debugfs -R 'cat /demo/doom1.wad' $ARCH_DIR/images/os-real-gnu.ext2 2> /dev/null |
+                cmp -s - ports/doom/doom1.wad ) ||
+            { echo 'release: wad: the root has no /demo/doom1.wad equal to ports/doom/doom1.wad' >&2; false; }; }"
     if ! RACH2_TESTING_COPY=$COPY sh tools/dev/testing.sh run \
-        "ARCH=x86_64 make clean && ARCH=x86_64 make machine GNU_AGENTS=all && $native cd $ARCH_DIR &&
+        "$wad && ARCH=x86_64 make clean && ARCH=x86_64 make machine GNU_AGENTS=all && $staged &&
+        $native cd $ARCH_DIR &&
         gzip -1 -c images/os-real-gnu.ext2 > images/os-real-gnu.ext2.gz &&
         sha256sum rach2/kernel rach2-recovery/kernel $RECOVERY_IMAGE images/os-real-gnu.ext2 $payload \
             > images/release.sha256" > "$state/build.log" 2>&1; then
@@ -524,6 +538,9 @@ build()
         fi
         if grep -q '^preflight: result: refused: .* GiB the build needs' "$state/build.log"; then
             later "the testing host is short of space"
+        fi
+        if grep -q '^release: wad: ' "$state/build.log"; then
+            fail build "$(sed -n 's/^release: wad: //p' "$state/build.log" | head -n 1)"
         fi
         fail build "the build failed: $(tail -n 3 "$state/build.log" | tr '\n' ' ')"
     fi
