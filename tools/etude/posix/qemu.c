@@ -123,6 +123,7 @@ struct etude_machine {
     size_t console_max;
     uint64_t grace_us;
     uint64_t kill_at;         /* when the executor cancels QEMU; 0 for not due */
+    uint64_t quit_at;         /* when the launcher asks QEMU to quit; 0 for not due */
     int boundary, total_sent; /* restricted lazy boot and its one probe */
     int cancelled;            /* the caller stopped the machine before its end */
     int accel_wrong;          /* QMP reported another accelerator in use */
@@ -760,7 +761,9 @@ static void qmp_reply(struct etude_machine *m, long id, const struct eh_json *re
  * On Windows a process that exits resets its loopback connections, and the
  * reset discards what the launcher has not yet read of them. QEMU runs there
  * with `-no-shutdown`, which stops the guest at its shutdown, reset or panic
- * and keeps QEMU, so the launcher asks it to quit once it has the event.
+ * and keeps QEMU. The console's last bytes may still be on their way when
+ * the event arrives on the other connection, so the launcher goes on reading
+ * the console for the grace period and then asks QEMU to quit.
  */
 static void qmp_event(struct etude_machine *m, const struct eh_json *ev)
 {
@@ -781,7 +784,7 @@ static void qmp_event(struct etude_machine *m, const struct eh_json *ev)
         snprintf(m->r.reason, sizeof(m->r.reason), "%s", reason->string);
 #ifdef _WIN32
     if (m->r.by_guest && m->qmp_state >= QMP_ACCEL && m->qmp_state <= QMP_READY)
-        machine_quit(m);
+        m->quit_at = posix_now_us() + m->grace_us;
 #endif
 }
 
@@ -971,6 +974,10 @@ static void machine_serve(struct etude_machine *m)
     console_read(m, CONSOLE_PASS_MAX);
     console_write(m);
     qmp_read(m);
+    if (m->quit_at != 0 && posix_now_us() >= m->quit_at && !m->proc_done) {
+        m->quit_at = 0;
+        machine_quit(m);
+    }
     if (m->kill_at != 0 && posix_now_us() >= m->kill_at && !m->proc_done) {
         m->kill_at = 0;
         etude_exec_cancel(m->proc);
@@ -1007,7 +1014,7 @@ static struct etude_machine *take_finished(struct etude_qemu *q)
 
 /**
  * Fill `w` with the descriptors of every unfinished machine, and give their
- * count and in `*soonest` the earliest kill that is due, or 0.
+ * count and in `*soonest` the earliest kill or quit that is due, or 0.
  */
 static size_t watch_set(struct etude_qemu *q, struct etude_watch *w, uint64_t *soonest)
 {
@@ -1020,6 +1027,8 @@ static size_t watch_set(struct etude_qemu *q, struct etude_watch *w, uint64_t *s
             continue;
         if (!m->proc_done && m->kill_at != 0 && (*soonest == 0 || m->kill_at < *soonest))
             *soonest = m->kill_at;
+        if (!m->proc_done && m->quit_at != 0 && (*soonest == 0 || m->quit_at < *soonest))
+            *soonest = m->quit_at;
         if (m->drain_until != 0 && (*soonest == 0 || m->drain_until < *soonest))
             *soonest = m->drain_until;
         if (m->console_listen >= 0) {
