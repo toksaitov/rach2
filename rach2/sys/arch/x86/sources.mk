@@ -21,6 +21,7 @@ PC_C_SRC = sys/arch/x86/boot.c \
     sys/arch/x86/smbios.c \
     sys/arch/x86/pit.c \
     sys/arch/x86/cmos.c \
+    sys/arch/x86/i8042.c \
     sys/arch/x86/ps2mouse.c \
     sys/arch/x86/ps2kbd.c \
     sys/arch/x86/platform.c \
