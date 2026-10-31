@@ -2,13 +2,13 @@
  * guestcheck: check that the guest makefiles build what the host build
  * builds.
  *
- * The guest builds (rach2/guest.mk, utils/guest.mk, ish/guest.mk) are
- * written for pdpmake, which reads none of the GNU makefiles of the host
+ * The guest builds (rach2/guest.mk, utils/guest.mk, ish/guest.mk,
+ * term/guest.mk) are written for pdpmake, which reads none of the GNU makefiles of the host
  * build. They share its source manifests, but their rules are their own. A
  * guest list that differs builds a kernel missing a file or a program
  * missing its companion source, and the failure would appear only inside a
  * booted guest, late and hard to read. The check runs on the host, in the
- * style check, and requires five things:
+ * style check, and requires six things:
  *
  *   1. rach2/guest.mk derives OBJS from the shared rach2/sources.mk lists
  *      the host build includes, object for object, loader.o first, no
@@ -29,10 +29,16 @@
  *      among them, and the compiler's own files stay within FD_LIMIT
  *      descriptors, and no guest recipe line, expanded, comes near the exec
  *      string budget.
- *   5. The os-real manifest stages the three source trees at /src and
- *      ACPICA's core as /src/rach2/vendor/acpica.tar.bz2, root-owned and
- *      read-only, and nothing else there, so the machine has what the
- *      makefiles build, and each staged tree has its guest.mk.
+ *   5. The os-real manifest stages the four source trees at /src,
+ *      ACPICA's core as /src/rach2/vendor/acpica.tar.bz2, and libtsm's
+ *      sources as /src/term/vendor/libtsm.tar.bz2 with their list as
+ *      /src/term/vendor/libtsm.mk, root-owned and read-only, and nothing
+ *      else there, so the machine has what the makefiles build, and each
+ *      staged tree has its guest.mk.
+ *   6. term/guest.mk's object list is term's TERM_SRC and libtsm's
+ *      LIBTSM_SRC, the lists mk/term.mk and build_libtsm.sh read, libtsm's
+ *      under vendor/libtsm, where term's first prerequisite unpacks the
+ *      archive the image stages; and term links through a temporary file.
  *
  * Usage: guestcheck [REPO_ROOT]; REPO_ROOT is the working directory unless
  * given. The first failure is printed and ends the run with status 1.
@@ -256,6 +262,28 @@ static char *read_file(const char *path)
    `ARCH != uname -m` gives on a guest of that architecture. */
 static const char *guest_arch = "i686";
 
+/* The includes of a guest makefile that the image stages from elsewhere in
+   the repository: the path the makefile names, relative to the repository
+   as the staged tree has it, and the file staged there. */
+static const char *const staged_includes[][2] = {
+    {"term/vendor/libtsm.mk", "vendor/libtsm/sources.mk"},
+};
+
+/** Replace the path `path`, of `cap` bytes, by the file the image stages
+   there when it is one of staged_includes. */
+static void staged_source(char *path, size_t cap)
+{
+    size_t k;
+
+    for (k = 0; k < sizeof(staged_includes) / sizeof(staged_includes[0]); k++) {
+        char staged[1400];
+
+        snprintf(staged, sizeof(staged), "%s/%s", repo, staged_includes[k][0]);
+        if (strcmp(path, staged) == 0)
+            snprintf(path, cap, "%s/%s", repo, staged_includes[k][1]);
+    }
+}
+
 /** Append `path`'s makefile text to `out`, with each `include` line replaced
    by the text it names, in turn. As make and pdpmake read them, an include
    names a path relative to the top makefile's directory `dir`, and
@@ -328,6 +356,7 @@ static void inline_text(const char *dir, const char *path, const char *name, cha
                 fail("the path of %s, included by %s, is longer than this "
                      "reads",
                      rel, name);
+            staged_source(sub, sizeof(sub));
             inline_text(dir, sub, rel, out, used, depth + 1);
         } else {
             appendf(out, MAX_TEXT, used, "the makefile text", "%s\n", line);
@@ -1340,6 +1369,81 @@ static int check_ish(void)
     return count;
 }
 
+/** Check the sixth contract: term/guest.mk's OBJS is TERM_SRC's objects and
+   then LIBTSM_SRC's, the lists the host build reads, libtsm's under
+   vendor/libtsm; term's first prerequisite unpacks the staged archive
+   there; and term links through a temporary file. Returns the number of
+   objects. */
+static int check_term(void)
+{
+    char *text;
+    struct list src = {NULL, 0, 0};
+    struct list expected = {NULL, 0, 0};
+    struct list objs_raw = {NULL, 0, 0};
+    struct list objs = {NULL, 0, 0};
+    struct list dir = {NULL, 0, 0};
+    struct rules rules = {NULL, 0, 0};
+    struct rule *r;
+    int i, count;
+
+    if (!file_has_line("mk/term.mk", "include term/sources.mk"))
+        fail("mk/term.mk does not include term/sources.mk, so the host build "
+             "no longer reads the shared source list");
+    if (!file_has_line("vendor/libtsm/build_libtsm.sh",
+                       "SOURCES=\"$(sed -n 's/^LIBTSM_SRC = //p' sources.mk | "
+                       "sed 's|\\$(LIBTSM)/||g')\""))
+        fail("vendor/libtsm/build_libtsm.sh does not read its sources from "
+             "vendor/libtsm/sources.mk");
+
+    text = guest_text("term/guest.mk");
+    if (!read_macro(text, "LIBTSM", &dir) || dir.n != 1 ||
+        strcmp(dir.item[0], "vendor/libtsm") != 0)
+        fail("term/guest.mk's LIBTSM is not vendor/libtsm, beside term's "
+             "sources, where the image stages libtsm's archive");
+    need_macro(text, "TERM_SRC", &objs_raw);
+    need_macro(text, "LIBTSM_SRC", &objs_raw);
+    list_free(&objs_raw);
+    macro_words(text, "TERM_SRC", &src, 0);
+    macro_words(text, "LIBTSM_SRC", &src, 0);
+    for (i = 0; i < src.n; i++) {
+        char obj[512];
+
+        swap_suffix(obj, sizeof(obj), src.item[i], ".c", ".o");
+        push(&expected, obj);
+    }
+    need_macro(text, "OBJS", &objs_raw);
+    expand_tokens(text, &objs_raw, &objs);
+    if (objs.n != expected.n)
+        fail("term/guest.mk OBJS does not derive from TERM_SRC and LIBTSM_SRC");
+    for (i = 0; i < objs.n; i++)
+        if (strcmp(objs.item[i], expected.item[i]) != 0)
+            fail("term/guest.mk OBJS does not derive from TERM_SRC and "
+                 "LIBTSM_SRC (entry %d is %s, and %s is wanted)",
+                 i + 1, objs.item[i], expected.item[i]);
+
+    rules_of(text, &rules);
+    r = rule_find(&rules, "$(LIBTSM)/.unpacked");
+    if (r == NULL || r->prereqs.n != 1 || strcmp(r->prereqs.item[0], "$(LIBTSM).tar.bz2") != 0)
+        fail("term/guest.mk does not unpack $(LIBTSM).tar.bz2, the archive "
+             "of libtsm's sources the image stages, into $(LIBTSM)");
+    r = rule_find(&rules, "term");
+    if (r == NULL || r->prereqs.n == 0 || strcmp(r->prereqs.item[0], "$(LIBTSM)/.unpacked") != 0)
+        fail("term's first prerequisite is not $(LIBTSM)/.unpacked, so "
+             "pdpmake could infer an object of libtsm's before its source "
+             "is unpacked");
+    check_links_through_temporary("term/guest.mk", r, "term");
+    rules_free(&rules);
+
+    count = expected.n;
+    list_free(&src);
+    list_free(&expected);
+    list_free(&objs_raw);
+    list_free(&objs);
+    list_free(&dir);
+    free(text);
+    return count;
+}
+
 /* ---- the include graph ---- */
 
 /** A C file or header of the kernel and the quoted includes it names. */
@@ -1591,7 +1695,8 @@ static int check_limits(void)
 {
     int depth = include_depth();
     int f;
-    static const char *const names[] = {"rach2/guest.mk", "utils/guest.mk", "ish/guest.mk"};
+    static const char *const names[] = {"rach2/guest.mk", "utils/guest.mk", "ish/guest.mk",
+                                        "term/guest.mk"};
 
     if (depth + FD_RESERVED > FD_LIMIT)
         fail("the deepest kernel include chain is %d files; with the %d "
@@ -1599,7 +1704,7 @@ static int check_limits(void)
              "the %d a process may hold",
              depth, FD_RESERVED, FD_LIMIT);
 
-    for (f = 0; f < 3; f++) {
+    for (f = 0; f < (int)(sizeof(names) / sizeof(names[0])); f++) {
         char *text = guest_text(names[f]);
         struct macros m;
         struct rules rules;
@@ -1652,9 +1757,10 @@ static int check_limits(void)
     return depth;
 }
 
-/** Check the fifth contract: os-real.manifest stages the three trees at /src
-   as `tree 0644` and ACPICA's archive in the kernel's, and has no other line
-   under /src but the directories above them, since a later line could give
+/** Check the fifth contract: os-real.manifest stages the four trees at /src
+   as `tree 0644`, ACPICA's archive in the kernel's and libtsm's archive and
+   list in term's, and has no other line under /src but the directories
+   above them, since a later line could give
    the source to another owner; and each tree has a regular guest.mk. */
 static void check_staging(void)
 {
@@ -1662,13 +1768,22 @@ static void check_staging(void)
     char *text;
     const char *p;
     static const char *const want[] = {
-        "tree 0644 /src/rach2 rach2", "tree 0644 /src/utils utils", "tree 0644 /src/ish ish",
-        "file 0644 /src/rach2/vendor/acpica.tar.bz2 build/vendor/acpica/acpica.tar.bz2"};
+        "tree 0644 /src/rach2 rach2",
+        "tree 0644 /src/utils utils",
+        "tree 0644 /src/ish ish",
+        "tree 0644 /src/term term",
+        "file 0644 /src/rach2/vendor/acpica.tar.bz2 build/vendor/acpica/acpica.tar.bz2",
+        "file 0644 /src/term/vendor/libtsm.tar.bz2 build/vendor/libtsm/libtsm.tar.bz2",
+        "file 0644 /src/term/vendor/libtsm.mk vendor/libtsm/sources.mk"};
     static const char *const dirs_ok[] = {
         "dir 0755 /src",           "dir 0755 /src/utils",        "dir 0755 /src/rach2",
-        "dir 0755 /src/rach2/sys", "dir 0755 /src/rach2/vendor", "dir 0755 /src/ish"};
-    int seen[4] = {0, 0, 0, 0};
+        "dir 0755 /src/rach2/sys", "dir 0755 /src/rach2/vendor", "dir 0755 /src/ish",
+        "dir 0755 /src/term",      "dir 0755 /src/term/vendor"};
+    enum { NWANT = sizeof(want) / sizeof(want[0]), NDIRS = sizeof(dirs_ok) / sizeof(dirs_ok[0]) };
+    int seen[NWANT];
     int i;
+
+    memset(seen, 0, sizeof(seen));
 
     snprintf(path, sizeof(path), "%s/krffs/manifests/os-real.manifest", repo);
     text = read_file(path);
@@ -1702,12 +1817,12 @@ static void check_staging(void)
             (strcmp(fields.item[2], "/src") == 0 || strncmp(fields.item[2], "/src/", 5) == 0)) {
             int known = 0;
 
-            for (i = 0; i < 4; i++)
+            for (i = 0; i < NWANT; i++)
                 if (strcmp(line, want[i]) == 0) {
                     seen[i] = 1;
                     known = 1;
                 }
-            for (i = 0; i < 6; i++)
+            for (i = 0; i < NDIRS; i++)
                 if (strcmp(line, dirs_ok[i]) == 0)
                     known = 1;
             if (!known)
@@ -1723,11 +1838,11 @@ static void check_staging(void)
         p = end + 1;
     }
     free(text);
-    for (i = 0; i < 4; i++)
+    for (i = 0; i < NWANT; i++)
         if (!seen[i])
             fail("os-real.manifest does not stage '%s' (root-owned, 0644)", want[i]);
-    for (i = 0; i < 3; i++) {
-        static const char *const trees[] = {"rach2", "utils", "ish"};
+    for (i = 0; i < 4; i++) {
+        static const char *const trees[] = {"rach2", "utils", "ish", "term"};
         struct stat st;
 
         snprintf(path, sizeof(path), "%s/%s/guest.mk", repo, trees[i]);
@@ -1738,10 +1853,10 @@ static void check_staging(void)
     }
 }
 
-/** Check the five contracts, the first and fourth for each architecture. */
+/** Check the six contracts, the first and fourth for each architecture. */
 int main(int argc, char **argv)
 {
-    int sources, sources64, programs, ish_objects, depth;
+    int sources, sources64, programs, ish_objects, term_objects, depth;
 
     if (argc > 1) {
         snprintf(repo, sizeof(repo), "%s", argv[1]);
@@ -1756,9 +1871,11 @@ int main(int argc, char **argv)
     check_limits();
     programs = check_utils();
     ish_objects = check_ish();
+    term_objects = check_term();
     check_staging();
     printf("check-guest: ok: %d i686 and %d x86_64 kernel sources, %d programs, "
-           "%d ish objects, include depth %d, three /src trees and ACPICA's archive staged\n",
-           sources, sources64, programs, ish_objects, depth);
+           "%d ish objects, %d term and libtsm objects, include depth %d, four /src trees "
+           "and the archives of ACPICA and libtsm staged\n",
+           sources, sources64, programs, ish_objects, term_objects, depth);
     return 0;
 }
