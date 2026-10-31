@@ -183,7 +183,8 @@ static unsigned int kd_get_entry(unsigned int table, unsigned int index)
  * its type's range; a code point's is taken in every mode, where Linux takes
  * it only in K_UNICODE, so that `loadkeys` loads a Unicode keymap while
  * `term` holds the keyboard in K_MEDIUMRAW. A table that does not exist, or
- * is the built-in one, is first copied into one of this file's.
+ * is the built-in one, is first copied into one of this file's, whose entry
+ * 0 is K_ALLOCATED, as Linux's KDGKBENT reads an allocated table's.
  * Returns 0, -EINVAL for a value out of range, or -ENOMEM.
  */
 static int32_t kd_set_entry(unsigned int table, unsigned int index, unsigned int value)
