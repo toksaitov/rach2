@@ -16,6 +16,7 @@
  * host-cflags: -I vendor/libtsm/libtsm-4.8.0/src/shared
  * host-cflags: -I vendor/libtsm/libtsm-4.8.0/external
  * host-cflags: -I vendor/libtsm/libtsm-4.8.0/external/wcwidth
+ * host-cflags: -include vendor/libtsm/libtsm-4.8.0/external/wcwidth/wcwidth.h
  *
  * Each row writes sequences to a vte over a 80x24 screen, or gives it a key,
  * and compares the bytes the vte sends back with the bytes expected. The
