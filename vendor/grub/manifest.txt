@@ -5,7 +5,7 @@ snapshot https://snapshot.ubuntu.com/ubuntu/20260825T013635Z
 package grub-pc-bin 2.12-1ubuntu7.3 deb-sha256 698d80bc51c0c593fbc829758365a0e4bce96819e2c8c754ae77dfe39b0388df
 package grub-efi-amd64-bin 2.12-1ubuntu7.3 deb-sha256 92ae3a846e799aea52e980e9761ac638ab79fc800e789928e9a6d713067e108e
 package grub-common 2.12-1ubuntu7.3 deb-sha256 464e7c3a9f261b2120a6755fbf753384669c666a5cc7cd571cf836d6da88373f
-installed ca-certificates 20260601~24.04.1
+installed ca-certificates 20260816ubuntu0.24.04.1
 installed distro-info-data 0.72-0ubuntu0.24.04.1
 installed dmsetup 2:1.02.185-3ubuntu3.2
 installed efibootmgr 18-1build2
@@ -49,17 +49,17 @@ installed secureboot-db 1.9build1
 installed tzdata 2026c-0ubuntu0.24.04.1
 installed ucf 3.0043+nmu1
 tool grub-mkimage (GRUB) 2.12-1ubuntu7.3
-disk-modules biosdisk part_msdos fat normal multiboot configfile loadenv echo test serial terminal search search_label search_fs_uuid search_fs_file
-iso-modules biosdisk iso9660 part_msdos fat normal multiboot configfile loadenv echo test serial terminal
-gpt-modules biosdisk part_gpt part_msdos fat normal multiboot multiboot2 configfile loadenv echo test serial terminal search search_label search_fs_uuid search_fs_file
+disk-modules biosdisk part_msdos fat normal multiboot multiboot2 configfile loadenv echo test serial terminal search search_label search_fs_uuid search_fs_file vbe video video_fb all_video
+iso-modules biosdisk iso9660 part_msdos fat normal multiboot multiboot2 configfile loadenv echo test serial terminal vbe video video_fb all_video
+gpt-modules biosdisk part_gpt part_msdos fat normal multiboot multiboot2 configfile loadenv echo test serial terminal search search_label search_fs_uuid search_fs_file vbe video video_fb all_video
 efi-modules part_gpt part_msdos fat iso9660 normal multiboot multiboot2 configfile loadenv echo test serial terminal search search_label search_fs_uuid search_fs_file efi_gop efi_uga
 embed-cfg d2ff648232cad6a3a64361fb6fbed01177c93ca65d439b53d8f5edc5a79508b7
 efi-embed-cfg 0a685c968b0987d1faa634a10465993f33b808c616f10cae8bd73b9d169e0471
 artifact bios-boot.img 512 7720690bdaf25fd7e3ade7e01b8d0de91e0991653e2a6900011ab23daf6e6032
 artifact boot-hybrid.img 512 2d3027be0a695db635d0bdccaf0a5184636956a0769bb634f26429908c9cfd1d
-artifact disk-core.img 161322 be2edd9a86a88497b2cbb90c5e864c0e6b8170c426521108a2961dd3cf941149
-artifact disk-core-a.img 161363 e00a3a1b0f9bcad4252aa3a04cd84e74d0951c659ec4bf597234068760b43c72
-artifact disk-core-b.img 161363 78f921f24e13f725912e8d0558d2148e08f0f5f1ad2f7269c9c2df246c15d3c1
-artifact eltorito.img 163333 9b59c17b4f49bbbd2ffaf606628c5dc422168517e78603d377f799e85d60d924
-artifact gpt-core.img 169097 d3d0420038ea322510a0325b5c724583f51ba9cb69d13b1e663a5e8a1209c560
+artifact disk-core.img 172380 38374105c70b4aa6d1843e4f5436390e11408bc24bdb1edf9b800ba30cff93e6
+artifact disk-core-a.img 172512 659c4358e7961d2eb91bbacd3222ab922acf660e16f68212f4ff359c89acb7f2
+artifact disk-core-b.img 172512 132fad45289c9852be0c0263cfbac38d3367eb2ac4aeb6b46ffabd3527beb3bd
+artifact eltorito.img 174438 113032f62faa46c185d911180190c16a8a7120a58f8c39b31935e1289ed325d2
+artifact gpt-core.img 173099 8661e726802af08d831a6ac27c028308bf39ba6fb3e13a5f5284785cbc438930
 artifact bootx64.efi 802816 de5fed49544290b38f07286d2f1202d5fb02e529a0fb815c216d325a99363ad0
