@@ -293,6 +293,12 @@ row_coreutils() {
     same "who -b" "$(LC_ALL=C who -b | sed 's/^ *system boot *//')" \
         "$(LC_ALL=C date -d @"$record" '+%b %e %H:%M')"
     rtc=$(dmesg | sed -n 's/^[^[]*\[ *\([0-9]*\)\.[0-9]*\] rtc: \(.*\) UTC$/\2|\1/p' | head -n 1)
+    # A machine that has run long may have evicted its boot records from
+    # the ring, and with them the reference.
+    if [ -z "$rtc" ] && [ -n "$NATIVE" ] &&
+        ! dmesg | head -n 1 | grep -q '^[^[]*\[ *0\.'; then
+        return
+    fi
     if [ -z "$rtc" ]; then
         fail "the kernel's log has no reading of the clock"
         return
