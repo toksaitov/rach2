@@ -401,6 +401,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "keymap_keytable",
+          "checks": "tests/host/keymap_keytable_hosttest.c runs every case of tests/host/keytable.txt through the console's translator and its built-in US keymap under the sanitizers and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "keytable",
           "checks": "tests/host/keytable_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
