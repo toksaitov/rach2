@@ -106,3 +106,38 @@ The owner allowed it on 31 October. `tools/ci/run.sh` no longer empties `RACH2_S
 ## Order
 
 Tasks 1, 3, 4, 5 and 6 start at once. Task 2 starts at once and waits on task 1 only for a change to `posix/store.c`. Task 4 measures the host-checks key after task 3. Task 7 starts at once. Several tasks edit `tools/etude/Readme.md`, each its own section; no other file is shared.
+
+## The end's findings
+
+The end run at 816f50dfe, on the testing host on 31 October, built after `make clean` on both architectures; `tests/run -a both style host` stopped in the preparation on the style findings below, so the host tests run again alone. Codex reviewed 047d1e74c..816f50dfe. Each finding was checked against the code; they are fixed in one batch, as four tasks with no file in common.
+
+### 8. The store keeps its digests and evidence whole
+
+* `etude_digest_write` (posix/store.c:1046) names its scratch file `FILE.part` and unlinks it first, so two writers of one FILE remove each other's scratch, and it takes FILE's status by stat after the rename, which can be another writer's file. Codex. Give the scratch a name of its own and take the status by fstat of the written descriptor.
+* `prune_objects` (posix/legacy_set.c:2839) removes an object that a failed member's overlay, kept as evidence, names as its backing file. Codex. Keep every object that an overlay under the run's evidence names.
+* cppcheck: `keep` at posix/legacy_set.c:2842 shadows the function `keep` at :464; the condition `!sha_have()` at posix/store.c:337 is always false where the build has the instructions.
+* Files: `tools/etude/posix/store.c`, `tools/etude/posix/legacy_set.c`, their host tests, the sections on the digests file and the store in `tools/etude/Readme.md`.
+
+### 9. The preparation's workers keep the shared budget
+
+* `prepare_parallel` (host_prepare.c) has complexity 36 and `etude_qemu_argv` (qemu_profile.c) 26, over the limit of 25. Style.
+* A group that runs with one job takes no slot of `--slots` (host_prepare.c:954), so the five groups together can exceed the budget by one job each. Codex.
+* `give_slot` (host_prepare.c:822) has no `/**` block. Codex.
+* Files: `tools/etude/host_prepare.c`, `tools/etude/qemu_profile.c`, their host tests.
+
+### 10. The release's test and its Windows claim
+
+* `ssh_mock` (complexity 29) and `windows_rows` (125 lines, complexity 52) in tests/cases/host/flow_release.c are over the limits, and flow_release.c:178 sleeps for a fixed time that no case declares. Style.
+* The WSL claim that holds Windows' preparation ends after 1200 waits of 15 s, 5 h, even while the preparation goes on (release.sh:781). Codex.
+* Files: `tests/cases/host/flow_release.c`, `tools/flow/release.sh`.
+
+### 11. Comments within 80 columns
+
+* Comment lines over 80 columns: tests/cases/host/build_host_checks.c:16, 76, 96, 110 and 175; tests/cases/machine/rehearse_fixture.sh:6; vendor/gnu/host_checks_files.sh:7. Style.
+* `write_files`, `repo_tree` and `build_host_checks` in build_host_checks.c have no `/**` block. Codex.
+* Files: `tests/cases/host/build_host_checks.c`, `tests/cases/machine/rehearse_fixture.sh`, `vendor/gnu/host_checks_files.sh`.
+
+### Set aside
+
+* Codex: `run routine-prepare` runs unobserved, so the collection's observer would not cover the preparation and observe_import.c:178 would reject its coverage. `run routine-collect` runs the preparation's vector again under its own observer before the collection (routine_sequence.c:196-206), so the coverage it imports begins before both.
+* Codex: the new sizes break collection_tools_host.c:641 and 709. The host tests' run decides it; a failure there joins this list.
