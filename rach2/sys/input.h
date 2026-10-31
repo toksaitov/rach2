@@ -9,38 +9,135 @@
 
 /*
  * Two drivers produce keystrokes: the PS/2 keyboard on the 8042, and a USB
- * keyboard through the HID class driver. They agree on one thing, a set-1
- * scancode, because that is what the PS/2 hardware sends and what the games
- * that read the raw ring expect. The USB side translates its own usage codes
- * into the same codes rather than the rest of the kernel learning a second
- * alphabet.
+ * keyboard through the HID class driver. Each keyboard is a `struct
+ * input_keyboard`, and each gives this module its keys as Linux's key codes,
+ * KEY_* of <linux/input-event-codes.h>: the PS/2 keyboard's set-1 bytes
+ * through `input_set1_event`, which decodes them, and a USB keyboard's
+ * usages through `input_key_event`, which the HID driver calls with the
+ * code `set1_keycode` gives for the usage's set-1 code, so that one table
+ * names every key.
  *
- * What happens after that is here and in one place: the modifier state, the
- * interception of Ctrl+C where the debug shell is the supervisor, the
- * scrollback keys, the translation to a character, and the choice between the
- * terminal's line discipline and the shell's own buffer.
+ * Here and in one place for every keyboard are the keys each one holds, the
+ * modifiers derived from them, and the repeat. Each accepted event goes, in
+ * this order, to the keyboard's event device (evdev.h), to the console's
+ * keyboard (`kd_key_event`, kd.h), and as the set-1 bytes of the event, the
+ * raw view `input_raw_bytes` gives, to the ring of kbd.h a program holding
+ * /fb reads and to today's translation for the console, below.
  *
- * Three things this module needs belong to the debug shell, which is
- * `kernel.c`: whether the shell is the one reading, a character for it, and
- * its Ctrl+C. They are declared here and defined there.
+ * Every keyboard's interrupt and the tick run on the boot processor with
+ * interrupts off, so events reach their consumers one at a time and in
+ * order; a lock keeps the state against the requests of a process on
+ * another processor.
  */
 
+struct evdev;
+
+/* The bytes of a set of Linux's key codes, one bit for each of KEY_CNT,
+ * 0x300: evdev.h's EVDEV_KEY_BYTES. */
+#define INPUT_KEY_BYTES 96
+
+/* A keyboard. Its driver owns the storage, zeroed before
+ * `input_keyboard_attach`; the rest is this module's. */
+struct input_keyboard {
+    struct evdev *dev;             /* its event device, or NULL */
+    uint8_t prefix;                /* set 1: 0xE0 or 0xE1 when that came last, else 0 */
+    uint8_t skip;                  /* set 1: Pause's byte after E1 is still to come */
+    uint8_t down[INPUT_KEY_BYTES]; /* the keys it holds, a bit for each key code */
+    struct input_keyboard *next;   /* the keyboards attached */
+};
+
+/* The modifiers `input_modifiers` gives, a bit for each side. */
+#define INPUT_MOD_SHIFTL 0x01u /* KEY_LEFTSHIFT */
+#define INPUT_MOD_SHIFTR 0x02u /* KEY_RIGHTSHIFT */
+#define INPUT_MOD_CTRLL  0x04u /* KEY_LEFTCTRL */
+#define INPUT_MOD_CTRLR  0x08u /* KEY_RIGHTCTRL */
+#define INPUT_MOD_ALT    0x10u /* KEY_LEFTALT */
+#define INPUT_MOD_ALTGR  0x20u /* KEY_RIGHTALT */
+#define INPUT_MOD_METAL  0x40u /* KEY_LEFTMETA, the left Super */
+#define INPUT_MOD_METAR  0x80u /* KEY_RIGHTMETA */
+#define INPUT_MOD_SHIFT  (INPUT_MOD_SHIFTL | INPUT_MOD_SHIFTR)
+#define INPUT_MOD_CTRL   (INPUT_MOD_CTRLL | INPUT_MOD_CTRLR)
+#define INPUT_MOD_SUPER  (INPUT_MOD_METAL | INPUT_MOD_METAR)
+
 /**
- * Route one set-1 scancode from whichever keyboard produced it, in interrupt
- * context: from the PS/2 keyboard's interrupt, or from the USB stack's
- * service of a keyboard's report, which runs from the controller's interrupt
- * or the tick. A code ends a suspend in force (`suspend_wake`) and puts off the
- * console's blanking (`console_poke`).
+ * Attach the keyboard `kb`, zeroed by its driver: register it as an event
+ * device that can report every key `set1_keycode` names, with MSC_SCAN,
+ * EV_REP and EV_LED. `name` and `phys` are kept by their pointers, and
+ * `bustype`, `vendor` and `product` are what EVIOCGID gives. A keyboard with
+ * no event device, every node being taken, still types. Any context.
+ */
+void input_keyboard_attach(struct input_keyboard *kb, const char *name, const char *phys,
+                           uint16_t bustype, uint16_t vendor, uint16_t product);
+
+/**
+ * Detach `kb`, a keyboard that has gone: release every key it holds, so that
+ * none stays down for ever, stop the repeat of its key, and take its event
+ * device away. Any context. A keyboard not attached is ignored.
+ */
+void input_keyboard_detach(struct input_keyboard *kb);
+
+/**
+ * Take one key of `kb`, in interrupt context or from the tick: `keycode` is
+ * Linux's key code and `down` nonzero for a press, 0 for a release; `scan`
+ * is the code the keyboard sent, which the event device reports as MSC_SCAN.
+ * A `keycode` of 0, a key no table names, reaches the event device as its
+ * MSC_SCAN alone. A press of a key `kb` holds already, a PS/2 keyboard's own
+ * repeat, and a release of a key it does not hold are dropped. Every event
+ * ends a suspend in force (`suspend_wake`) and puts off the console's
+ * blanking (`console_poke`). A press starts the repeat of its key, in place
+ * of any other's, unless it is a modifier or a lock; a release of the
+ * repeating key stops it. A press or a repeat goes to the ring of kbd.h only
+ * while it leaves 16 slots free, so that the releases still fit when the
+ * ring's reader falls behind.
+ */
+void input_key_event(struct input_keyboard *kb, uint32_t scan, unsigned int keycode, int down);
+
+/**
+ * Give the PS/2 keyboard `kb` one set-1 code, in interrupt context: a prefix
+ * is kept for the code after it, and a key's code goes to `input_key_event`
+ * with Linux's key code `set1_keycode` gives and with MSC_SCAN the code with
+ * its release bit clear and 0x80 set after E0, as Linux's keyboard driver
+ * reports it. Pause's E1 1D 45 is the extended 0x45, KEY_PAUSE. The shifts a
+ * keyboard wraps a cursor key in, E0 2A and E0 36, and the controller's own
+ * bytes, 0x00, 0xFA, 0xFE and 0xFF, are not keys.
+ */
+void input_set1_event(struct input_keyboard *kb, uint8_t code);
+
+/**
+ * Store in `out`, of 3 bytes, the set-1 bytes a PS/2 keyboard sends for the
+ * event `value`, KD_KEY_PRESS, KD_KEY_REPEAT or KD_KEY_RELEASE, of Linux's
+ * key `keycode`: the make code for a press or a repeat, the break code for a
+ * release, each after E0 for an extended key, and Pause's E1 1D 45 and E1 9D
+ * C5. This is the raw view of every keyboard, USB ones among them, for K_RAW.
+ * Returns the bytes stored, 0 for a key no set-1 code names.
+ */
+int input_raw_bytes(unsigned int keycode, int value, uint8_t *out);
+
+/** The modifiers some keyboard holds now, INPUT_MOD_*: a side stays held
+ * while any keyboard holds it. */
+unsigned int input_modifiers(void);
+
+/**
+ * Make the repeat of the held key due by now, from the boot processor's
+ * tick with interrupts off: a repeat goes out as `input_key_event`'s events
+ * do, with the value KD_KEY_REPEAT, and the next is due a period after the
+ * last was due, not after the tick that sent it, so that the 10 ms tick
+ * keeps a 33 ms period on average. A tick that comes late sends at most four
+ * and starts the count again from now.
+ */
+void input_tick(void);
+
+/*
+ * Today's translation for the console, fed the raw view's bytes of every
+ * accepted event until the keymap translator replaces it.
  *
- * Every code, including the ones consumed here, goes first to the ring a
- * graphics-mode reader drains, since a game needs the modifiers and the
- * releases too. The extended Page Up, Page Down, Home and End scroll the
- * screen whenever the debug shell reads input, and Shift with Page Up or Page
- * Down scrolls it in a session, where any other key returns it to the live
- * screen before it is sent, as on Linux's console. When a reader is parked on
- * the console or a session owns it, Ctrl+C goes through the line discipline
- * like every other key: its ISIG path posts SIGINT to the foreground group and
- * flushes the pending input, as a serial Ctrl+C does. Otherwise Ctrl+C is
+ * The extended Page Up, Page Down, Home and End scroll the screen whenever
+ * the debug shell reads input, and Shift with Page Up or Page Down scrolls
+ * it in a session, where any other key returns it to the live screen before
+ * it is sent, as on Linux's console. When a reader is parked on the console
+ * or a session owns it, Ctrl+C goes through the line discipline like every
+ * other key: its ISIG path posts SIGINT to the foreground group and flushes
+ * the pending input, as a serial Ctrl+C does. Otherwise Ctrl+C is
  * `shell_interrupt`, out of band, and other keys go to the debug shell's own
  * buffer when it reads.
  *
@@ -49,49 +146,9 @@
  * ESC before a key's character, as Linux's console sends Meta, and the
  * arrows and editing keys become their escape sequences, so line editing, end
  * of file and cursor keys arrive as they would from a terminal. A key nobody
- * is parked for waits in the discipline as type-ahead.
- *
- * The modifier state is one for every keyboard, so a Shift released on one
- * keyboard is released for all.
+ * is parked for waits in the discipline as type-ahead. Shift, Ctrl and Alt
+ * are `input_modifiers`', of either side and any keyboard.
  */
-void input_key(uint8_t scancode);
-
-struct evdev;
-
-/*
- * Each keyboard is an event device of its own as well (evdev.h): its keys
- * go to /dev/input/eventN as Linux's KEY_* codes, `set1_keycode`'s, each
- * with the code it came from as MSC_SCAN, beside the console's path above,
- * which every keyboard shares.
- */
-
-/**
- * Register a keyboard as an event device that can report every key
- * `set1_keycode` names, with MSC_SCAN. `name` and `phys` are kept by their
- * pointers, and `bustype`, `vendor` and `product` are what EVIOCGID gives.
- * Any context. Returns the device, or NULL when every node is taken.
- */
-struct evdev *input_keyboard_register(const char *name, const char *phys, uint16_t bustype,
-                                      uint16_t vendor, uint16_t product);
-
-/* The decoder of a keyboard that sends set-1 codes, as the 8042 gives a
- * translated keyboard's, and its event device. */
-struct input_set1 {
-    struct evdev *dev;
-    uint8_t prefix; /* 0xE0 or 0xE1 when that prefix came last, else 0 */
-    uint8_t skip;   /* the byte of Pause's sequence after E1 is still to come */
-};
-
-/**
- * Give the event device of `kb` one set-1 code, in interrupt context: a
- * prefix is kept for the code after it, and a key's code is reported as
- * `evdev_report_key` does, with MSC_SCAN the code with its release bit
- * clear and 0x80 set after E0, as Linux's keyboard driver reports it.
- * Pause's E1 1D 45 is the extended 0x45, KEY_PAUSE. The shifts a keyboard
- * wraps a cursor key in, E0 2A and E0 36, and the controller's own bytes,
- * 0x00, 0xFA, 0xFE and 0xFF, are not keys.
- */
-void input_set1_event(struct input_set1 *kb, uint8_t code);
 
 /*
  * The repeat and the LEDs of every keyboard, which the console's KD*
@@ -105,8 +162,8 @@ void input_set1_event(struct input_set1 *kb, uint8_t code);
  * `delay_ms` after its press, and the next ones every `period_ms`. A negative
  * time leaves that one as it is, and a period of 0 turns repeat off, as
  * EVIOCSREP's does; KDKBDREP's 0, which leaves a time as it is, is given as
- * -1. Any context. It sets nothing yet: a PS/2 keyboard repeats by its own
- * typematic and a USB keyboard not at all.
+ * -1. Any context. Each keyboard's event device reports the times that
+ * changed as EV_REP events.
  */
 void input_set_repeat(int delay_ms, int period_ms);
 
@@ -114,8 +171,9 @@ void input_set_repeat(int delay_ms, int period_ms);
  * 250 and 33, Linux's, until `input_set_repeat` changes them. */
 void input_get_repeat(int *delay_ms, int *period_ms);
 
-/** Stop the repeat of whatever key is held, until it is pressed again: for a
- * change of the keyboard's mode or of the screen's owner. Any context. */
+/** Stop the repeat of whatever key is held, until a key is pressed again:
+ * for a change of the keyboard's mode or of the screen's owner. Any
+ * context. */
 void input_cancel_repeat(void);
 
 /**
@@ -124,6 +182,8 @@ void input_cancel_repeat(void);
  * mask, and each keyboard's driver sends it from its own periodic work, the
  * PS/2 keyboard's from the tick (`ps2kbd_tick`) and a USB keyboard's from
  * the USB stack's step, so a change reaches the keyboards within a few ticks.
+ * Each keyboard's event device reports the LEDs that changed as EV_LED
+ * events.
  */
 void input_set_leds(unsigned int mask);
 

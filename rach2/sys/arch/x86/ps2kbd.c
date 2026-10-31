@@ -1,8 +1,8 @@
 /*
  * ps2kbd.c: the PS/2 keyboard's interrupt, which reads the 8042's data port
- * and hands the code on, and the command that lights the keyboard's LEDs.
+ * and hands the byte on, and the command that lights the keyboard's LEDs.
  * Everything that is not about the 8042 is in the input layer, which takes a
- * USB keyboard's codes too and treats them the same.
+ * USB keyboard's keys too and treats them the same.
  */
 
 #include "i8042.h"
@@ -39,7 +39,7 @@
 #define LEDS_VALUE   2
 
 /* The keyboard's event device, named as Linux names a translated one. */
-static struct input_set1 ps2_keyboard;
+static struct input_keyboard ps2_keyboard;
 
 /*
  * The LED command's state. The tick (`ps2kbd_tick`) and the interrupt
@@ -144,8 +144,9 @@ void ps2kbd_tick(void)
  * port would give the last byte again. A byte the status marks as the
  * mouse's is left unread for the mouse's IRQ 12 handler: read here, it would
  * be taken for a key and lost from the mouse's packet. The answer to an LED
- * command goes to that command (`input_ps2_reply`); any other code goes to
- * the keyboard's event device and then to the console.
+ * command goes to that command (`input_ps2_reply`); any other byte goes to
+ * the set-1 decoder, whose keys reach the keyboard's event device and the
+ * console.
  *
  * Runs in interrupt context with an arbitrary process's page directory
  * loaded, so it translates through the kernel's own directory around the
@@ -166,15 +167,14 @@ static void kbd_irq(isr_params_t *params)
     saved = paging_enter_kernel();
     if (!input_ps2_reply(scancode)) {
         input_set1_event(&ps2_keyboard, scancode);
-        input_key(scancode);
     }
     paging_leave_kernel(saved);
 }
 
 void kbd_init(void)
 {
-    ps2_keyboard.dev = input_keyboard_register(
-        "AT Translated Set 2 keyboard", "isa0060/serio0/input0", EVDEV_BUS_I8042, 0x0001, 0x0001);
+    input_keyboard_attach(&ps2_keyboard, "AT Translated Set 2 keyboard", "isa0060/serio0/input0",
+                          EVDEV_BUS_I8042, 0x0001, 0x0001);
     set_isr_handler(33, &kbd_irq, "kbd");
     pic_unmask_irq(1);
     leds.shown = -1;

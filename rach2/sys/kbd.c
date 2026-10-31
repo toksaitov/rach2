@@ -24,6 +24,11 @@ void kbd_push_scancode(uint8_t sc)
     }
 }
 
+int kbd_scancode_room(void)
+{
+    return (scancode_head - scancode_tail - 1 + SCANCODE_BUF_SIZE) % SCANCODE_BUF_SIZE;
+}
+
 void kbd_clear_scancodes(void)
 {
     scancode_head = 0;
@@ -185,6 +190,26 @@ int set1_keycode(unsigned scan)
     for (i = 0; i < n; i++) {
         if (table[i][0] == (scan & 0x7F)) {
             return table[i][1];
+        }
+    }
+    return 0;
+}
+
+unsigned set1_scancode(int keycode)
+{
+    size_t i;
+
+    if (keycode >= 0x01 && keycode <= 0x53) {
+        return (unsigned)keycode;
+    }
+    for (i = 0; i < sizeof(extended_keys) / sizeof(extended_keys[0]); i++) {
+        if (extended_keys[i][1] == keycode) {
+            return 0x80u | extended_keys[i][0];
+        }
+    }
+    for (i = 0; i < sizeof(plain_keys) / sizeof(plain_keys[0]); i++) {
+        if (plain_keys[i][1] == keycode) {
+            return plain_keys[i][0];
         }
     }
     return 0;
