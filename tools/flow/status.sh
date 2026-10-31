@@ -5,7 +5,8 @@
 # Usage: status.sh
 #        status.sh sizes
 #
-# It prints master's newest commit; the open milestones, with their branches,
+# It moves every closed card to Done with `board.sh done`, then prints
+# master's newest commit; the open milestones, with their branches,
 # their counts of tasks and the tasks In progress with their assignees, as
 # `board.sh milestones` gives them; a line for each worker loop that
 # `workers` lists, and then for each other state directory under build/flow
@@ -163,6 +164,7 @@ fi
 
 echo "== master $(git ls-remote "https://github.com/$REPO" refs/heads/master | cut -c 1-8)  $(date -u '+%F %T') UTC"
 echo "== milestones"
+sh "$(dirname "$0")/board.sh" done > /dev/null 2>&1 || echo "status: board.sh done failed"
 sh "$(dirname "$0")/board.sh" milestones 2>&1
 echo "== workers"
 grep -v '^#' "$(dirname "$0")/workers" | while read -r name host st; do
