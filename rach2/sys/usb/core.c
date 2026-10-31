@@ -42,6 +42,11 @@
 /* The class request that puts a human-interface device in boot protocol,
  * whose two report layouts are fixed and need no describing. */
 #define REQ_SET_PROTOCOL      11
+/* The class request that sends a report to a human-interface device; its
+ * value is the report's type in the high byte, 2 for Output, and its ID, 0
+ * in the boot protocol. A boot keyboard's one output report is its LEDs. */
+#define REQ_SET_REPORT        9
+#define REPORT_OUTPUT         0x0200
 #define TYPE_TO_INTERFACE     0x21
 #define DESC_DEVICE           1
 #define DESC_CONFIG           2
@@ -168,9 +173,15 @@ struct usb_device_state {
     int have_report;
     struct usb_completion control;
     struct usb_completion report_done;
-    /* What the controller is given the addresses of: the last report, the
-     * setup packet and the descriptor being read. */
+    /* A keyboard's LED report is out on its control endpoint, and the
+     * `core_ms` by which it must have completed. */
+    int leds_out;
+    uint32_t leds_deadline;
+    /* What the controller is given the addresses of: the last report, a
+     * keyboard's LED report, the setup packet and the descriptor being
+     * read. */
     uint8_t report[8];
+    uint8_t leds[1];
     uint8_t setup[8];
     uint8_t buffer[USB_DESC_MAX];
     uint32_t config_length; /* wTotalLength, from the configuration header */
@@ -420,6 +431,27 @@ static int control_in(struct usb_device_state *d, int request, int value, int in
     transfer.buffer = d->buffer;
     transfer.length = (uint32_t)length;
     transfer.direction = USB_DIR_IN;
+    transfer.generation = 0;
+    return xhci_submit(d->hc, d->slot, 1, &transfer);
+}
+
+/**
+ * Queue a request on `d`'s control endpoint whose data stage sends `length`
+ * bytes at `data` to the device, or with no data stage when `length` is 0.
+ * `data` is in `d`'s record, so the controller can be given its address.
+ * Returns 0 when it was queued.
+ */
+static int control_write(struct usb_device_state *d, int type, int request, int value, int index,
+                         uint8_t *data, int length)
+{
+    struct usb_transfer transfer;
+
+    setup_fill(d->setup, type, request, value, index, length);
+    transfer.setup = d->setup;
+    transfer.buffer = length != 0 ? data : 0;
+    transfer.length = (uint32_t)length;
+    transfer.direction = USB_DIR_OUT;
+    transfer.generation = 0;
     return xhci_submit(d->hc, d->slot, 1, &transfer);
 }
 
@@ -427,14 +459,7 @@ static int control_in(struct usb_device_state *d, int request, int value, int in
  * was queued. */
 static int control_out(struct usb_device_state *d, int type, int request, int value, int index)
 {
-    struct usb_transfer transfer;
-
-    setup_fill(d->setup, type, request, value, index, 0);
-    transfer.setup = d->setup;
-    transfer.buffer = 0;
-    transfer.length = 0;
-    transfer.direction = USB_DIR_OUT;
-    return xhci_submit(d->hc, d->slot, 1, &transfer);
+    return control_write(d, type, request, value, index, 0, 0);
 }
 
 /** Give `d`'s next step STEP_MS from now. */
@@ -919,8 +944,50 @@ static void readdress_step(struct usb_device_state *d)
 }
 
 /**
+ * Send the running keyboard `d` its LEDs, as SET_REPORT of its one-byte
+ * output report on its control endpoint, when they differ from what the
+ * input layer wants (`hid_led_report`): one report at a time, the next only
+ * after the last has completed, so a keyboard connected later or a change
+ * made meanwhile is caught up at the next step. The completion is the
+ * control endpoint's, which nothing else uses on a running keyboard. A
+ * report that fails or has not completed in STEP_MS is told to the HID
+ * driver as failed, and the keyboard is sent none again until it is
+ * connected again: a stall leaves the control endpoint halted, and a
+ * keyboard without LEDs may refuse the request for good.
+ */
+static void leds_step(struct usb_device_state *d)
+{
+    int report;
+
+    if (d->have_control) {
+        d->have_control = 0;
+        if (d->leds_out) {
+            d->leds_out = 0;
+            hid_led_sent(d->index + 1, d->leds[0], d->control.status == USB_XFER_OK);
+        }
+    }
+    if (d->leds_out) {
+        if ((int32_t)(core_ms - d->leds_deadline) >= 0) {
+            d->leds_out = 0;
+            hid_led_sent(d->index + 1, d->leds[0], 0);
+        }
+        return;
+    }
+    report = hid_led_report(d->index + 1);
+    if (report < 0) {
+        return;
+    }
+    d->leds[0] = (uint8_t)report;
+    if (control_write(d, TYPE_TO_INTERFACE, REQ_SET_REPORT, REPORT_OUTPUT, d->interface.number,
+                      d->leds, 1) == 0) {
+        d->leds_out = 1;
+        d->leds_deadline = core_ms + STEP_MS;
+    }
+}
+
+/**
  * One step of a running device: a keyboard's or mouse's report handed on and
- * the next one asked for.
+ * the next one asked for, and a keyboard's LEDs sent (`leds_step`).
  *
  * One transfer is outstanding at a time: it is queued, and when the controller
  * says it finished the report is handed to the class driver and another is
@@ -968,6 +1035,10 @@ static void step_running(struct usb_device_state *d)
         }
     }
 
+    if (kind == HID_KEYBOARD) {
+        leds_step(d);
+    }
+
     if (!d->reporting) {
         struct usb_transfer transfer;
 
@@ -975,6 +1046,7 @@ static void step_running(struct usb_device_state *d)
         transfer.buffer = d->report;
         transfer.length = (uint32_t)length;
         transfer.direction = USB_DIR_IN;
+        transfer.generation = 0;
         if (xhci_submit(d->hc, d->slot, d->ep_dci, &transfer) == 0) {
             d->reporting = 1;
         }
@@ -989,6 +1061,7 @@ static void start_running(struct usb_device_state *d)
 {
     d->state = ST_RUNNING;
     d->reporting = 0;
+    d->leds_out = 0;
     enumerating[bus_of(d)] = -1;
     if (d->interface.protocol == USB_PROTOCOL_MOUSE) {
         /* An open of `mouse` fails until a mouse of any kind is found. */

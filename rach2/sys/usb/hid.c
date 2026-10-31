@@ -15,6 +15,9 @@
  * Each keyboard is an event device of its own too, "USB keyboard N", whose
  * keys are reported with the usage as MSC_SCAN, in the keyboard page 7, as
  * Linux's HID driver reports them.
+ *
+ * The other way, a keyboard's LEDs are its one output report, a byte the
+ * core sends when it differs from what the keyboard was last sent.
  */
 
 #include "hid.h"
@@ -24,6 +27,7 @@
 #include "../evdev.h"
 #include "../input.h"
 #include "../kbd.h"
+#include "../kd.h"
 #include "../klog.h"
 #include "core.h"
 
@@ -33,6 +37,11 @@
 #define KEYBOARD_REPORT 8
 #define MOUSE_REPORT    3
 #define KEYS_IN_REPORT  6
+
+/* A boot keyboard's output report: one byte, an LED a bit. */
+#define REPORT_NUM_LOCK    0x01
+#define REPORT_CAPS_LOCK   0x02
+#define REPORT_SCROLL_LOCK 0x04
 
 /*
  * The usages this kernel has a scancode for, from 0 to USAGES - 1. A value of
@@ -80,6 +89,9 @@ struct hid_state {
     uint8_t modifiers;
     uint8_t keys[KEYS_IN_REPORT];
     struct evdev *events; /* a keyboard's event device, or NULL */
+    int keyboard;         /* a keyboard is attached, from `hid_attach` to `hid_gone` */
+    int leds_shown;       /* the output report last taken, -1 before one */
+    int leds_failed;      /* a report failed since the keyboard was attached */
     char name[24];        /* its name, "USB keyboard N" */
     char phys[24];        /* its EVIOCGPHYS, "usb-N/input0" */
 };
@@ -119,6 +131,9 @@ void hid_attach(int device, int kind, uint16_t vendor, uint16_t product)
         return;
     }
     state = &states[device];
+    state->keyboard = 1;
+    state->leds_shown = -1;
+    state->leds_failed = 0;
     if (state->events) {
         return;
     }
@@ -273,6 +288,49 @@ void hid_report(int device, int kind, const uint8_t *report, int length)
     }
 }
 
+int hid_led_report(int device)
+{
+    struct hid_state *state;
+    unsigned int wanted = input_leds();
+    int report = 0;
+
+    if (device <= 0 || device > USB_MAX_DEVICES) {
+        return -1;
+    }
+    state = &states[device];
+    if (!state->keyboard || state->leds_failed) {
+        return -1;
+    }
+    if (wanted & LED_NUM) {
+        report |= REPORT_NUM_LOCK;
+    }
+    if (wanted & LED_CAP) {
+        report |= REPORT_CAPS_LOCK;
+    }
+    if (wanted & LED_SCR) {
+        report |= REPORT_SCROLL_LOCK;
+    }
+    return report == state->leds_shown ? -1 : report;
+}
+
+void hid_led_sent(int device, int report, int ok)
+{
+    struct hid_state *state;
+
+    if (device <= 0 || device > USB_MAX_DEVICES) {
+        return;
+    }
+    state = &states[device];
+    if (!ok) {
+        if (!state->leds_failed) {
+            klog(KLOG_WARN, "usb", "hid: keyboard %d: the LED report failed", device);
+        }
+        state->leds_failed = 1;
+        return;
+    }
+    state->leds_shown = report;
+}
+
 void hid_gone(int device)
 {
     struct hid_state *state;
@@ -284,6 +342,7 @@ void hid_gone(int device)
     state = &states[device];
     evdev_unregister(state->events);
     state->events = NULL;
+    state->keyboard = 0;
     if (!state->used) {
         return;
     }
