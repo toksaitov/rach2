@@ -750,15 +750,19 @@ windows_settings()
 }
 
 # windows_stop: stop Windows' preparation that runs in the background and end
-# the hold of WSL's whole host, so that a release that exits or is stopped
-# leaves neither behind; nothing of Windows' run is left running between its
-# preparation and its cases.
+# the hold of WSL's whole host and its beat, so that a release that exits or is
+# stopped leaves none of them behind; nothing of Windows' run is left running
+# between its preparation and its cases.
 windows_stop()
 {
     if [ -n "$wprep" ]; then
         kill "$wprep" 2> /dev/null
         wait "$wprep"
         wprep=
+    fi
+    if [ -n "$wbeat" ]; then
+        kill "$wbeat" 2> /dev/null
+        wbeat=
     fi
     if [ -n "$wholder" ]; then
         wsl "touch $wheld/$wid.end" > /dev/null 2>&1
@@ -767,19 +771,32 @@ windows_stop()
     fi
 }
 
+# beat ID: touch ID.alive in WSL once a minute while the release runs, the
+# minute passing in WSL. A hold in WSL's admission ends when that file is ten
+# minutes old, so that it lasts as long as the step it holds for and ends soon
+# after a release that is gone. Run in the background, and kill it when the
+# step ends.
+beat()
+{
+    while kill -0 $$ 2> /dev/null; do
+        wsl "touch $wheld/$1.alive; sleep 60" > /dev/null 2>&1 || sleep 60
+    done
+}
+
 # windows_prepare ID: build the preparation of Windows' run ID with `etude run
 # routine-prepare`, its output in STATE/ID.prepare, while a claim in WSL's
 # admission, `etude-launch build` with Windows' JOBS, holds the memory that the
 # preparation's own claim on Windows takes, JOBS GiB and one more, and the
 # block of ports that WSL's launcher gives each claim, so that WSL's tests
 # leave both to Windows; the tooling machine forwards no port. The claim ends
-# with the preparation, and a stop ends both. Run in the background.
+# with the preparation, or as beat says once the release is gone, and a stop
+# ends both. Run in the background.
 windows_prepare()
 {
-    id=$1 claimer='' session=''
-    trap 'kill $session $claimer 2> /dev/null; wsl "touch $wheld/$id.prepared" > /dev/null 2>&1; exit 143' TERM
-    wsl "cd /tmp && JOBS=$wjobs exec /usr/local/libexec/rach2/etude-launch build env sh -c 'touch $wheld/$id.claimed; n=0
-        while [ ! -e $wheld/$id.prepared ] && [ \$n -lt 1200 ]; do sleep 15; n=\$((n + 1)); done'" \
+    id=$1 claimer='' session='' beater=''
+    trap 'kill $session $claimer $beater 2> /dev/null; wsl "touch $wheld/$id.prepared" > /dev/null 2>&1; exit 143' TERM
+    wsl "cd /tmp && JOBS=$wjobs exec /usr/local/libexec/rach2/etude-launch build env sh -c 'touch $wheld/$id.claimed $wheld/$id.alive
+        while [ ! -e $wheld/$id.prepared ] && find $wheld/$id.alive -mmin -10 2> /dev/null | grep -q .; do sleep 15; done'" \
         > "$state/$id.claim" 2>&1 &
     claimer=$!
     until wsl "test -e $wheld/$id.claimed" 2> /dev/null; do
@@ -790,6 +807,8 @@ windows_prepare()
         sleep 30 &
         wait $!
     done
+    beat "$id" &
+    beater=$!
     # shellcheck disable=SC2086 # the suites are words
     {
         echo "cd $wtree || { echo 'status 1'; exit; }"
@@ -811,6 +830,7 @@ windows_prepare()
     session=$!
     wait "$session"
     session=
+    kill "$beater" 2> /dev/null
     wsl "touch $wheld/$id.prepared" > /dev/null 2>&1
     i=0
     while kill -0 "$claimer" 2> /dev/null && [ "$i" -lt 12 ]; do
@@ -887,8 +907,8 @@ windows()
             failure windows "$id" runner
             return 0
         fi
-        wsl "exec /usr/local/libexec/rach2/etude-launch alone sh -c 'touch $wheld/$id.held; n=0
-            while [ ! -e $wheld/$id.end ] && [ \$n -lt 720 ]; do sleep 15; n=\$((n + 1)); done'" \
+        wsl "exec /usr/local/libexec/rach2/etude-launch alone sh -c 'touch $wheld/$id.held $wheld/$id.alive
+            while [ ! -e $wheld/$id.end ] && find $wheld/$id.alive -mmin -10 2> /dev/null | grep -q .; do sleep 15; done'" \
             > "$state/$id.hold" 2>&1 9>&- &
         wholder=$!
         until wsl "test -e $wheld/$id.held" 2> /dev/null; do
@@ -898,6 +918,8 @@ windows()
             sleep 30
         done
         say "windows: the cases of the run $id start"
+        beat "$id" 9>&- &
+        wbeat=$!
         # shellcheck disable=SC2086 # the suites are words
         {
             echo "cd $wtree || { echo 'status 1'; exit; }"
@@ -912,6 +934,8 @@ windows()
             # shellcheck disable=SC2016 # the remote shell expands these
             echo 'echo "status $rc"'
         } | ssh -o BatchMode=yes testing 'C:/msys64/usr/bin/bash.exe -l -s' > "$state/$id.log" 2>&1
+        kill "$wbeat" 2> /dev/null
+        wbeat=
         wsl "touch $wheld/$id.end" > /dev/null 2>&1
         i=0
         while kill -0 "$wholder" 2> /dev/null && [ "$i" -lt 12 ]; do
@@ -1116,7 +1140,7 @@ main()
     if has mac && ! done_ mac && ! failed_ mac && ! grep -q '^mac started ' "$state/record"; then
         mac_start
     fi
-    wprep='' wholder=''
+    wprep='' wholder='' wbeat=''
     if has windows && ! done_ windows && ! failed_ windows; then
         windows_start
     fi
