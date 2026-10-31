@@ -288,12 +288,10 @@ __attribute__((target("sha,sse4.1"))) static void sha_blocks(uint32_t w[8], cons
 #endif
 
 #ifdef SHA_ARM
-/** Say whether the processor has the SHA2 instructions, as every target
- * that defines __ARM_FEATURE_SHA2 does. */
-static int sha_have(void)
-{
-    return !SHA_PORTABLE;
-}
+/* Every target that defines __ARM_FEATURE_SHA2 has the SHA2 instructions.
+ * A macro, since cppcheck judges the test of a constant function always
+ * false. */
+#define sha_have() (!SHA_PORTABLE)
 
 /** Compress the `n` blocks at `p` into the hash words `w`, ABCD and EFGH. */
 static void sha_blocks(uint32_t w[8], const unsigned char *p, size_t n)
@@ -1040,25 +1038,50 @@ int etude_digest_file(const char *cache, const char *path, struct stat *st,
     return r;
 }
 
-int etude_digest_write(const char *cache, int from, const char *path,
-                       char digest[ETUDE_DIGEST_HEX + 1])
+/**
+ * Make a scratch file beside `path`, `PATH.PID.N.part`, open for writing,
+ * and give its name from malloc in `*part`. The name is this call's alone,
+ * so that two writers of one file never remove each other's scratch.
+ *
+ * @return the descriptor, or -1 with errno set.
+ */
+static int scratch_open(const char *path, char **part)
 {
-    char *part = suffixed(path, ".part"), *whole = NULL;
-    struct digest_line l;
-    struct stat st;
-    int fd = -1, ok = 0, e;
+    static unsigned long made;
+    size_t size = strlen(path) + 64;
+    int tries, fd = -1;
 
-    if (part == NULL) {
+    if ((*part = malloc(size)) == NULL) {
         errno = ENOMEM;
         return -1;
     }
-    (void)unlink(part);
-    if ((fd = open(part, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644)) < 0 ||
-        copy_stream(from, fd, digest, NULL, UINT64_MAX, NULL) != 0 || fsync(fd) != 0)
-        goto done;
-    e = close(fd);
-    fd = -1;
-    if (e != 0 || rename(part, path) != 0 || stat(path, &st) != 0)
+    for (tries = 0; tries < PART_TRIES; tries++) {
+        snprintf(*part, size, "%s.%ld.%lu.part", path, (long)getpid(), made++);
+        fd = open(*part, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
+        if (fd >= 0 || errno != EEXIST)
+            break;
+    }
+    if (fd < 0) {
+        free(*part);
+        *part = NULL;
+    }
+    return fd;
+}
+
+int etude_digest_write(const char *cache, int from, const char *path,
+                       char digest[ETUDE_DIGEST_HEX + 1])
+{
+    char *part = NULL, *whole = NULL;
+    struct digest_line l;
+    struct stat st;
+    int fd, ok = 0, e;
+
+    if ((fd = scratch_open(path, &part)) < 0)
+        return -1;
+    /* The descriptor's status after the rename is that of this file at
+     * `path`, whatever another writer renames there afterwards. */
+    if (copy_stream(from, fd, digest, NULL, UINT64_MAX, NULL) != 0 || fsync(fd) != 0 ||
+        rename(part, path) != 0 || fstat(fd, &st) != 0)
         goto done;
     ok = 1;
     if (cache != NULL && (whole = realpath(path, NULL)) != NULL) {
@@ -1069,8 +1092,7 @@ int etude_digest_write(const char *cache, int from, const char *path,
     }
 done:
     e = errno;
-    if (fd >= 0)
-        close(fd);
+    close(fd);
     if (!ok)
         unlink(part);
     free(part);
