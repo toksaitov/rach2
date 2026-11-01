@@ -1,0 +1,246 @@
+.Dd November 2, 2026
+.Dt NL80211 7
+.Os
+.Sh NAME
+.Nm nl80211
+.Nd the generic netlink family that drives a Wi-Fi station
+.Sh SYNOPSIS
+.In sys/socket.h
+.In linux/netlink.h
+.In linux/genetlink.h
+.In linux/nl80211.h
+.Ft int
+.Fn socket "AF_NETLINK" "SOCK_RAW" "NETLINK_GENERIC"
+.Sh DESCRIPTION
+.Nm
+is the generic netlink family through which
+.Xr wpa_supplicant 8
+and
+.Xr iw 8
+scan, join and leave Wi-Fi networks.
+Its commands, attributes and numbers are those of Linux's
+.In linux/nl80211.h ,
+version 1, with no private header.
+Resolve the family and its multicast groups by name through
+.Ql nlctrl ,
+as
+.Xr genetlink 7
+describes.
+.Pp
+Each radio is a wiphy, numbered from 0 and named
+.Ql phyN ,
+with one station interface, such as
+.Ql wlan0 .
+A request names its interface by
+.Dv NL80211_ATTR_IFINDEX
+or by
+.Dv NL80211_ATTR_WDEV ,
+whose value is the wiphy's number shifted left 32 bits, plus one.
+A request that names neither fails with
+.Er EINVAL ;
+one that names an interface or wiphy not present fails with
+.Er ENODEV .
+Commands that change the station need network administration privilege and
+otherwise fail with
+.Er EPERM .
+A request runs on the kernel's wireless worker and its acknowledgement comes
+once the station has taken it; an outcome that comes later, such as the
+access point's answer, comes as an event.
+.Sh GROUPS
+.Bl -tag -width regulatory
+.It Ql config
+Not used; present for programs that join it.
+.It Ql scan
+.Dv TRIGGER_SCAN
+when a scan begins,
+.Dv NEW_SCAN_RESULTS
+when it ends and
+.Dv SCAN_ABORTED
+when it is aborted.
+A scan this family started carries its SSIDs, channels, elements and flags;
+another carries its interface alone.
+.It Ql regulatory
+.Dv REG_CHANGE ,
+with
+.Dv NL80211_ATTR_REG_ALPHA2
+and the domain's type.
+.It Ql mlme
+.Dv AUTHENTICATE ,
+.Dv ASSOCIATE ,
+.Dv DEAUTHENTICATE ,
+.Dv DISASSOCIATE ,
+their
+.Dv UNPROT_
+forms,
+.Dv CONNECT ,
+.Dv DISCONNECT ,
+.Dv MICHAEL_MIC_FAILURE
+and
+.Dv FRAME_TX_STATUS .
+The first two carry the access point's frame in
+.Dv NL80211_ATTR_FRAME ,
+or
+.Dv NL80211_ATTR_TIMED_OUT
+and its address when no answer came.
+.It Ql vendor
+Not used.
+.El
+.Sh COMMANDS
+.Bl -tag -width GET_PROTOCOL_FEATURES
+.It Dv GET_PROTOCOL_FEATURES
+Reports
+.Dv NL80211_PROTOCOL_FEATURE_SPLIT_WIPHY_DUMP .
+.It Dv GET_WIPHY
+Describes a wiphy: the supported interface types (station only), commands,
+cipher suites (TKIP, CCMP and BIP-CMAC-128), the 2.4 GHz band with its
+channels, rates and HT capabilities, the scan limits, the frame types a
+station sends and takes, and
+.Dv NL80211_FEATURE_SAE .
+A request by
+.Dv NL80211_ATTR_WIPHY ,
+.Dv IFINDEX
+or
+.Dv WDEV
+answers in one message.
+A dump lists every wiphy, or the one the request names; with
+.Dv NL80211_ATTR_SPLIT_WIPHY_DUMP
+it sends each in four messages.
+.It Dv GET_INTERFACE
+Describes an interface: its name, type, wiphy, wireless device, address and,
+while associated, its channel and SSID.
+A dump lists every interface, or those of one wiphy.
+.It Dv SET_INTERFACE
+Accepts the station type; another type or four-address mode is
+.Er EOPNOTSUPP .
+.It Dv TRIGGER_SCAN
+Scans for up to 4 SSIDs, an empty one for any, on the channels named, or on
+every enabled channel, with up to 512 bytes of elements for the probe
+requests.
+A disabled channel is left out, and a request left with none is
+.Er EINVAL .
+.Dv NL80211_SCAN_FLAG_FLUSH
+removes, at the end, the entries the scan did not hear; another flag is
+.Er EOPNOTSUPP .
+A scan already running is
+.Er EBUSY .
+.It Dv ABORT_SCAN
+Aborts the running scan;
+.Er ENOENT
+when none runs.
+.It Dv GET_SCAN
+Dumps the BSS table: address, channel, signal in mBm, TSF, beacon interval,
+capability, elements and age, and
+.Dv NL80211_BSS_STATUS
+for the access point the station is with.
+Entries not heard for 30 s leave the table first.
+.It Dv AUTHENTICATE
+Authenticates with a BSS of the table by Open System, or by SAE with the
+frame's fields in
+.Dv NL80211_ATTR_AUTH_DATA .
+Shared Key, FT, FILS, WEP keys and a change of local state alone are
+refused.
+.It Dv ASSOCIATE
+Associates with the BSS authenticated with, or reassociates from
+.Dv NL80211_ATTR_PREV_BSSID ,
+sending the request's elements, of up to 1024 bytes.
+.Dv NL80211_ATTR_CONTROL_PORT
+keeps the port closed to all but EAPOL until
+.Dv SET_STATION
+authorizes it.
+.Dv NL80211_ATTR_USE_MFP
+is either none or required.
+.It Dv DEAUTHENTICATE , Dv DISASSOCIATE
+Leave the access point with a nonzero reason;
+.Dv NL80211_ATTR_LOCAL_STATE_CHANGE
+sends no frame.
+.It Dv CONNECT
+Joins an SSID, at
+.Dv NL80211_ATTR_MAC
+and on
+.Dv NL80211_ATTR_WIPHY_FREQ
+when they are given: it scans when the table has no such BSS, chooses the
+strongest, authenticates by Open System and associates.
+The
+.Dv CONNECT
+event gives the outcome, with
+.Dv NL80211_ATTR_TIMEOUT_REASON
+when no BSS was found or no answer came.
+A connection already under way is
+.Er EALREADY .
+SAE needs
+.Dv AUTHENTICATE .
+.It Dv DISCONNECT
+Ends a connection under way or leaves the network;
+.Er ENOTCONN
+when there is neither.
+.It Dv NEW_KEY , Dv SET_KEY , Dv DEL_KEY
+Install, select or remove a key, nested in
+.Dv NL80211_ATTR_KEY
+or in the older top-level attributes.
+Pairwise keys have index 0 or 1 and name their peer, group keys 0 to 3 and
+integrity keys 4 or 5.
+.Dv NL80211_KEY_SEQ
+gives the receive counter, at most 6 bytes, least significant first.
+.It Dv SET_STATION
+Opens or closes the port to the access point through
+.Dv NL80211_STA_FLAG_AUTHORIZED
+in
+.Dv NL80211_ATTR_STA_FLAGS2 ;
+another flag is
+.Er EINVAL .
+.It Dv GET_STATION
+Describes the access point: signal, byte and packet counts, inactive and
+connected time, beacon loss, rates and flags.
+Another address is
+.Er ENOENT .
+.It Dv GET_SURVEY
+Dumps the operating channel with its noise.
+.It Dv GET_REG
+Gives the world domain,
+.Ql 00 .
+.It Dv REGISTER_FRAME
+Delivers action frames whose body begins with
+.Dv NL80211_ATTR_FRAME_MATCH ,
+of up to 64 bytes, to this socket as
+.Dv FRAME
+messages.
+A match that is a prefix of another's, or that has another's as its prefix,
+is
+.Er EALREADY .
+Registrations end when the socket closes.
+.It Dv FRAME
+Sends an action frame on
+.Dv NL80211_ATTR_WIPHY_FREQ
+or the operating channel.
+The reply carries the
+.Dv NL80211_ATTR_COOKIE
+that its
+.Dv FRAME_TX_STATUS
+event names, unless
+.Dv NL80211_ATTR_DONT_WAIT_FOR_ACK
+asked for neither.
+.It Dv GET_POWER_SAVE , Dv SET_POWER_SAVE
+Power save is always off; turning it on is
+.Er EOPNOTSUPP .
+.El
+.Pp
+Every other command is
+.Er EOPNOTSUPP .
+.Sh LIMITS
+There is no connection-quality monitor, so
+.Dv SET_CQM
+is
+.Er EOPNOTSUPP
+and
+.Xr wpa_supplicant 8 Ns 's
+background scan polls
+.Dv GET_STATION
+instead.
+There is no 5 GHz band, no access-point mode, no off-channel wait for
+.Dv FRAME ,
+no WEP and no extended key ID.
+.Sh SEE ALSO
+.Xr genetlink 7 ,
+.Xr netlink 7 ,
+.Xr iw 8 ,
+.Xr wpa_supplicant 8
