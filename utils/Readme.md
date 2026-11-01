@@ -162,7 +162,7 @@ make -C utils -f Makefile.linux
 A suite below runs as `tests/run NAME`.
 
 * `host` builds 26 host tests from these sources under AddressSanitizer and UndefinedBehaviorSanitizer, each `tests/host/NAME_hosttest.c`: `accounttools`, `bootctl`, `bootslot`, `bootverb`, `dhcpc`, `dhcpmsg`, `diskctl`, `file_read`, `gptdisk`, `growroot`, `grubembed`, `grubslot`, `httpd`, `initpolicy`, `ncport`, `ncwrite`, `netcfg`, `netcfg_io`, `netup`, `pwauth`, `pwauthatexit`, `pwauthfault`, `resolv`, `rm`, `sectorcopy` and `sha256`. Several include a program's whole source and replace the calls that reach the kernel, such as the ioctls of `dhcpc` and `diskctl`.
-* `default` runs the test image's probes of `sudo` (`tests/sudoprobe.c`) and of `su`, `passwd`, `adduser`, `adduser-crash` and `login` (`tests/musl/pwauthmusl.c`, `passwdmusl.c`, `addusermusl.c` and `loginmusl.c`).
+* `default` runs the test image's probes of `sudo` (`tests/sudoprobe.c`) and of `su`, `passwd`, `adduser`, `adduser-crash` and `login` (`tests/musl/pwauthmusl.c`, `passwdmusl.c`, `addusermusl.c` and `loginmusl.c`), and of `ndwatch` (`tests/musl/ndwatchmusl.c`), which requires it to refuse an advertisement whose hop limit is not 255 and to go on after its netlink socket overflows.
 * `login` requires `init-login` on an image without `/bin/login` to refuse the console, and `init-shell` to give a root shell.
 * `account` logs in at os-simple's console with `login`, makes an account with `adduser`, becomes it with `su` and changes a password with `passwd`.
 * `dhcp` brings os-simple up with `netup -a` and `dhcpc`; `raw` runs `ping` as an ordinary account on os-real; `ext2` attaches an ext2 and a FAT32 image with `loopctl`.
