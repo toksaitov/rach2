@@ -58,6 +58,7 @@ typedef __SIZE_TYPE__ size_t;
 #define SYS_RT_SIGPROCMASK    14
 #define SYS_RT_SIGRETURN      15
 #define SYS_IOCTL             16
+#define SYS_PREAD64           17
 #define SYS_READV             19
 #define SYS_WRITEV            20
 #define SYS_ACCESS            21
@@ -366,6 +367,7 @@ static __inline__ long syscall0(long n)
 #define SYS_RT_SIGRETURN      173
 #define SYS_RT_SIGACTION      174
 #define SYS_RT_SIGPROCMASK    175
+#define SYS_PREAD64           180
 #define SYS_GETCWD            183
 #define SYS_SIGALTSTACK       186
 #define SYS_VFORK             190
@@ -647,6 +649,21 @@ static __inline__ long probe_llseek(int fd, long long off, int whence, long long
 #else
     return syscall5(SYS_LLSEEK, fd, (long)((unsigned long long)off >> 32), (long)off, (long)result,
                     whence);
+#endif
+}
+
+/**
+ * pread64(2) of `count` bytes at the offset `off`: on i386 with the offset
+ * in two words, the low first, and on x86-64 in one. The bytes read, or a
+ * negated errno.
+ */
+static __inline__ long probe_pread(int fd, char *buf, long count, long long off)
+{
+#if defined __x86_64__
+    return syscall4(SYS_PREAD64, fd, (long)buf, count, (long)off);
+#else
+    return syscall5(SYS_PREAD64, fd, (long)buf, count, (long)off,
+                    (long)((unsigned long long)off >> 32));
 #endif
 }
 
