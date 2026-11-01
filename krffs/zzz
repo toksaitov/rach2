@@ -1,0 +1,54 @@
+#!/bin/sh
+#
+# zzz: suspend the machine to idle until a key or the clock's alarm wakes
+# it, running the hooks of /etc/zzz.d before and after.
+#
+# `zzz` suspends until a key is pressed, and `zzz SECONDS` sets the clock's
+# wake alarm too, as `rtcwake -m freeze -s SECONDS` does. A suspend to idle
+# holds every process but the one that wrote /sys/power/state, so a service
+# that must act around it, as Wi-Fi must, does so in a hook: each
+# executable file of /etc/zzz.d runs with `suspend` before, in the order of
+# the names, and with `resume` after, in the reverse order. A hook that
+# fails is reported and does not stop the suspend.
+
+PATH=/sbin:/usr/sbin:/bin:/usr/bin
+export PATH
+HOOKS=/etc/zzz.d
+
+case "$#:$1" in
+	0:) seconds= ;;
+	1:*[!0-9]* | 1:) echo "usage: zzz [SECONDS]" >&2; exit 2 ;;
+	1:*) seconds=$1 ;;
+	*) echo "usage: zzz [SECONDS]" >&2; exit 2 ;;
+esac
+if [ "$(id -u)" != 0 ]; then
+	echo "zzz: only root suspends the machine" >&2
+	exit 1
+fi
+
+hooks=
+for h in "$HOOKS"/*; do
+	[ -f "$h" ] && [ -x "$h" ] && hooks="$hooks $h"
+done
+reversed=
+for h in $hooks; do
+	reversed="$h $reversed"
+done
+
+for h in $hooks; do
+	"$h" suspend || echo "zzz: $h suspend failed" >&2
+done
+sync
+if [ -n "$seconds" ]; then
+	rtcwake -m freeze -s "$seconds" > /dev/null
+else
+	echo freeze > /sys/power/state
+fi
+rc=$?
+for h in $reversed; do
+	"$h" resume || echo "zzz: $h resume failed" >&2
+done
+if [ $rc != 0 ]; then
+	echo "zzz: the suspend failed" >&2
+fi
+exit $rc

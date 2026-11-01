@@ -1,0 +1,61 @@
+.Dd November 2, 2026
+.Dt ZZZ 8
+.Os
+.Sh NAME
+.Nm zzz
+.Nd suspend the machine to idle, with hooks before and after
+.Sh SYNOPSIS
+.Nm
+.Op Ar seconds
+.Sh DESCRIPTION
+.Nm
+suspends the machine to idle until a key is pressed or, with
+.Ar seconds ,
+until the clock's wake alarm rings that many seconds later, as
+.Ql rtcwake -m freeze -s Ar seconds
+does; see
+.Xr rtc 4 .
+Only root may run it.
+.Pp
+A suspend to idle holds every process but the one that wrote
+.Pa /sys/power/state ,
+so a service that must act around it does so in a hook.
+Before the suspend, each executable file of
+.Pa /etc/zzz.d
+runs with the argument
+.Cm suspend ,
+in the order of the names, and after it each runs with
+.Cm resume ,
+in the reverse order.
+A hook that fails is reported, and the suspend goes on.
+.Pp
+The images with Wi-Fi have
+.Pa /etc/zzz.d/wifi :
+before the suspend, a station joined to a network leaves it with
+.Ql wpa_cli disconnect ,
+so that the access point and the DHCP client are told at once, since
+wpa_supplicant could not answer the access point's rekeys while it is held;
+after it,
+.Ql wpa_cli reconnect
+lets wpa_supplicant join the best known network in range.
+A station that was not joined is left as it was.
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /etc/zzz.d/
+The hooks.
+.It Pa /var/run/zzz.wifi
+Present while the Wi-Fi hook has left a network that it joins again on
+resume.
+.El
+.Sh EXIT STATUS
+0 after the machine wakes, 1 when the suspend failed or the caller is not
+root, and 2 for a wrong argument.
+.Sh SEE ALSO
+.Xr busybox-util-linux 1 ,
+.Xr wifi 1 ,
+.Xr rtc 4 ,
+.Xr sysfs 5 ,
+.Xr wpa_cli 8
+.Sh HISTORY
+The name and the hook directory follow Void Linux's
+.Nm .

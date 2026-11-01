@@ -1,0 +1,46 @@
+#!/bin/sh
+#
+# The Wi-Fi hook of zzz(8), `/etc/zzz.d/wifi suspend` and `resume`: the
+# station leaves its network before a suspend to idle and joins it again
+# after.
+#
+# While the processes are held wpa_supplicant cannot answer the access
+# point's rekeys, so the station would be dropped with nobody told. Leaving
+# first tells the access point and wpa_action(8)'s DHCP client at once, and
+# `reconnect` after lets wpa_supplicant join the best known network in
+# range, which may be another if the machine was carried away. A station
+# that was not joined is left as it was.
+
+PATH=/sbin:/usr/sbin:/bin:/usr/bin
+export PATH
+CTRL=/var/run/wpa_supplicant
+IFACE=wlan0
+MARK=/var/run/zzz.wifi
+
+[ -S "$CTRL/$IFACE" ] || exit 0
+
+# wpa_supplicant's state of the station, such as COMPLETED.
+state() {
+	wpa_cli -p "$CTRL" -i "$IFACE" status 2> /dev/null | sed -n 's/^wpa_state=//p'
+}
+
+case "$1" in
+	suspend)
+		case "$(state)" in
+			'' | DISCONNECTED | INACTIVE | INTERFACE_DISABLED | SCANNING) exit 0 ;;
+		esac
+		wpa_cli -p "$CTRL" -i "$IFACE" disconnect > /dev/null || exit 1
+		: > "$MARK"
+		# Give the deauthentication two seconds to leave.
+		n=0
+		while [ $n -lt 20 ] && [ "$(state)" != DISCONNECTED ]; do
+			usleep 100000
+			n=$((n + 1))
+		done
+		;;
+	resume)
+		[ -e "$MARK" ] || exit 0
+		rm -f "$MARK"
+		wpa_cli -p "$CTRL" -i "$IFACE" reconnect > /dev/null
+		;;
+esac
