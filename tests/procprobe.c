@@ -1593,19 +1593,19 @@ static void pid_dir_rows(void)
               same_str(got, "user pid mnt net uts ipc "),
           "/proc/self/ns lists its six links");
     {
-        char cwd[256] = {0}, there[256] = {0}, want[40] = "/proc/";
+        char cwd[256] = {0}, there[256] = {0}, ns_dir[40] = "/proc/";
         int k = 6;
 
-        k += dec_of(want + k, (unsigned long)pid);
+        k += dec_of(ns_dir + k, (unsigned long)pid);
         for (i = 0; "/ns"[i]; i++) {
-            want[k++] = "/ns"[i];
+            ns_dir[k++] = "/ns"[i];
         }
-        want[k] = '\0';
+        ns_dir[k] = '\0';
         check("ns-chdir",
               syscall3(SYS_GETCWD, (long)cwd, (int)sizeof(cwd), 0) > 0 &&
                   syscall1(SYS_CHDIR, (long)"/proc/self/ns") == 0 &&
                   syscall3(SYS_GETCWD, (long)there, (int)sizeof(there), 0) > 0 &&
-                  same_str(there, want) && syscall1(SYS_CHDIR, (long)cwd) == 0,
+                  same_str(there, ns_dir) && syscall1(SYS_CHDIR, (long)cwd) == 0,
               "and chdir enters it as /proc/PID/ns");
     }
 }

@@ -1253,12 +1253,13 @@ static int bind_overlap(void)
         data[i] = pattern_byte(i);
     }
     bind_overlap_clean();
-    in = -1;
-    out = -1;
     if (mkdir(OVERLAP_SRC, 0755) != 0 || mkdir(OVERLAP_DST, 0755) != 0 ||
-        mount(OVERLAP_SRC, OVERLAP_DST, NULL, MS_BIND, NULL) != 0 ||
-        (in = open(OVERLAP_SRC "/f", O_CREAT | O_RDWR | O_TRUNC, 0600)) < 0 ||
-        write(in, data, OVERLAP_SIZE) != OVERLAP_SIZE ||
+        mount(OVERLAP_SRC, OVERLAP_DST, NULL, MS_BIND, NULL) != 0) {
+        bind_overlap_clean();
+        return fail("a file of 100 KiB under a directory and a bind of it");
+    }
+    in = open(OVERLAP_SRC "/f", O_CREAT | O_RDWR | O_TRUNC, 0600);
+    if (in < 0 || write(in, data, OVERLAP_SIZE) != OVERLAP_SIZE ||
         (out = open(OVERLAP_DST "/f", O_WRONLY)) < 0) {
         if (in >= 0) {
             close(in);

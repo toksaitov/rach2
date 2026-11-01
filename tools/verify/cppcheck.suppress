@@ -119,6 +119,11 @@ unassignedVariable:*sys/proc/ptrace.c
 # the second test of the generation finds. cppcheck does not know the fault-in
 # sleeps, so it calls the test constant.
 knownConditionTrueFalse:*sys/ipc/unix.c
+# A read of a /proc file notes its snapshot's generation and copies a piece
+# to the user, which may sleep in a fault while a sharer makes the snapshot
+# again; the next test of the generation finds that, and cppcheck, which does
+# not know the copy sleeps, calls it constant.
+knownConditionTrueFalse:*sys/fs/procfs.c
 
 # The guest programs.
 
@@ -141,6 +146,9 @@ unreachableCode:*tests/musl/sigframemusl.c
 
 # ptrace takes the word it stores in its pointer argument.
 intToPointerCast:*tests/musl/ptracemusl.c
+# The pidfd probe passes the address 1 for a siginfo, which no process maps,
+# so that the kernel's copy of it fails with EFAULT.
+intToPointerCast:*tests/musl/pidfdmusl.c
 
 # A fault handler makes a page writable and the store runs again, and a
 # fork's child reads what its parent stored before the fork: each test reads
@@ -162,6 +170,10 @@ knownConditionTrueFalse:*tests/musl/ptracemusl.c
 unusedStructMember:*tests/musl/fdcallmusl.c
 unusedStructMember:*tests/musl/pidfdmusl.c
 unusedStructMember:*tests/musl/waitidmusl.c
+# Linux's struct sockaddr_nl, which bind and getsockname of a netlink socket
+# copy whole; the probe sets the family and the groups, and the members
+# between are the layout.
+unusedStructMember:*tests/musl/ndwatchmusl.c
 
 # The probes reach the kernel through inline assembly, which cppcheck does not
 # read, so an array a system call fills looks to it like one nothing writes.
@@ -193,6 +205,10 @@ constParameter:*tests/xsaveprobe.c
 # freestanding and has no libc, so it clears a structure with a byte loop.
 knownConditionTrueFalse:*tests/netifprobe.c
 useStandardLibrary:*tests/netifprobe.c
+# The raw socket probe likewise reads a socket option the kernel writes
+# through an address it passes as an integer in the socketcall argument
+# block, so cppcheck calls the test of the value read constant.
+knownConditionTrueFalse:*tests/rawprobe.c
 
 # The host programs: tools/, tests/system/ and krffs/.
 

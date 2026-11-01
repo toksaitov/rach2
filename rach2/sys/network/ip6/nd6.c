@@ -221,9 +221,6 @@ static void if_defaults(struct nd6_if *ni)
     ni->mtu = 0;
     ni->reachable_ms = 0;
     ni->retrans = RETRANS_TIMER_MS * TICK_HZ / 1000u;
-    if (ni->retrans == 0) {
-        ni->retrans = 1;
-    }
     draw_reachable(ni);
 }
 

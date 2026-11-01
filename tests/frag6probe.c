@@ -466,7 +466,7 @@ void probe_main(unsigned long *sp)
 
     send_behind(whole, NH_ROUTING, segment, ID_ROUTING);
     error = until_sentinel(icmp, ID_ROUTING, &answered, &pointer);
-    if (answered || error != (ICMP6_PARAM_PROB << 8 | 0) || pointer != 42) {
+    if (answered || error != ICMP6_PARAM_PROB << 8 || pointer != 42) {
         fail("a routing header with a segment left was not refused at its type");
     }
     report_held();

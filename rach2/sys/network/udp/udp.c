@@ -47,7 +47,7 @@ static uint16_t udp4_checksum(uint32_t src, uint32_t dst, const uint8_t *data, u
     while (sum >> 16) {
         sum = (sum & 0xFFFFu) + (sum >> 16);
     }
-    return (uint16_t)~sum;
+    return (uint16_t)(sum ^ 0xFFFFu);
 }
 
 /* Next ephemeral port to try (kept inside the 49152-65535 range). */

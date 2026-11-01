@@ -1,5 +1,6 @@
 /*
- * process.c: indexed process records, user counts, active timers and reparenting.
+ * process.c: indexed process records, user counts, active timers and
+ * reparenting.
  */
 #include "process.h"
 #include "../lib/kstring.h"
@@ -162,7 +163,8 @@ uint32_t proc_user_records(const process_t *p)
     return p->user_count ? p->user_count->records : 0;
 }
 
-/** Keep only records with active timed waits or real alarms on the timer list. */
+/** Keep on the timer list only the records with active timed waits or real
+ * alarms. */
 void proc_timer_update(process_t *p)
 {
     uint32_t flags = kirq_save();
@@ -275,14 +277,15 @@ void process_count_fork(void)
 }
 
 /** Allocate a standalone record or an unfinished child of parent.
- * thread and share_fs reuse the parent's group and directories. The child
- * has no files yet; a standalone record has stdio. NULL on allocation
- * failure, with no record published. The caller holds the big kernel lock.
- * The pid is kept in the positive int range, since the /proc path layer has
- * a pid as an int, and a pid still in use is skipped, so that the pids in
- * use stay unique; the wrap comes only after two thousand million records,
- * and the pid is otherwise `next_pid`. fork gives the child the parent's
- * session and process group in place of its own.
+ * thread and share_fs reuse the parent's group and directories, and are
+ * ignored without a parent. The child has no files yet; a standalone record
+ * has stdio. NULL on allocation failure, with no record published. The
+ * caller holds the big kernel lock. The pid is kept in the positive int
+ * range, since the /proc path layer has a pid as an int, and a pid still in
+ * use is skipped, so that the pids in use stay unique; the wrap comes only
+ * after two thousand million records, and the pid is otherwise `next_pid`.
+ * fork gives the child the parent's session and process group in place of
+ * its own.
  */
 static process_t *process_alloc(const process_t *parent, int thread, int share_fs)
 {
@@ -300,8 +303,8 @@ static process_t *process_alloc(const process_t *parent, int thread, int share_f
         kfree(p);
         return NULL;
     }
-    p->tg = thread ? parent->tg : tgroup_new(p);
-    if (thread) {
+    p->tg = thread && parent ? parent->tg : tgroup_new(p);
+    if (thread && parent) {
         p->tg->refs++;
     }
     if (!p->tg) {
@@ -318,7 +321,7 @@ static process_t *process_alloc(const process_t *parent, int thread, int share_f
     } while (get_process(candidate) != NULL);
     last_pid = candidate;
     p->pid = candidate;
-    p->tgid = thread ? parent->tgid : candidate;
+    p->tgid = thread && parent ? parent->tgid : candidate;
     p->state = parent ? PROC_UNUSED : PROC_READY;
     p->sid = candidate;
     p->pgid = candidate;
@@ -335,8 +338,8 @@ static process_t *process_alloc(const process_t *parent, int thread, int share_f
     p->cpu = (int)arch_cpu_id();
     p->affinity = ~(uint64_t)0;
 
-    p->fs = share_fs ? parent->fs : kzalloc(sizeof(*p->fs));
-    if (share_fs) {
+    p->fs = share_fs && parent ? parent->fs : kzalloc(sizeof(*p->fs));
+    if (share_fs && parent) {
         p->fs->refs++;
     }
     if (!p->fs) {
@@ -345,7 +348,7 @@ static process_t *process_alloc(const process_t *parent, int thread, int share_f
         kfree(p);
         return NULL;
     }
-    if (!share_fs) {
+    if (!(share_fs && parent)) {
         p->fs->refs = 1;
         p->fs->cwd[0] = '/';
         p->fs->umask = 022;
