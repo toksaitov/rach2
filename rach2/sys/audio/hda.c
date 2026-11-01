@@ -577,8 +577,10 @@ static void hda_fill_period(uint32_t index)
  * The wall clock, which counts 24 MHz whatever the stream does, can: when the
  * time since the last call exceeds the bytes the position moved by a
  * revolution, less half a period of tolerance, the revolutions are counted in
- * missed_revolutions, the rest of the period playing is silenced, and every
- * other period is filled afresh, so that no stale period is played again.
+ * missed_revolutions, the rest of the period playing is silenced, the ring is
+ * emptied, since what it holds was due while the stream went round, and
+ * every other period is filled afresh, so that nothing stale is played. The
+ * ring's bytes count as dropped.
  */
 static void hda_service_stream(void)
 {
@@ -602,16 +604,18 @@ static void hda_service_stream(void)
     moved = hda_bytes_us(moved);
     if (elapsed + half >= moved + rev) {
         uint32_t missed = (elapsed + half - moved) / rev;
-        uint32_t from = (pos + 127u) & ~127u;
+        uint32_t from = pos - pos % hda_out_frame();
+        uint8_t *rest = (uint8_t *)audio_buffer + from;
+        uint32_t size = (period + 1) * period_bytes - from;
 
         missed_revolutions += missed;
         lpib_wraps += missed;
-        if (from < (period + 1) * period_bytes) {
-            uint8_t *rest = (uint8_t *)audio_buffer + from;
-            uint32_t size = (period + 1) * period_bytes - from;
-
-            fill_silence(rest, size, current_hw_format == AUDIO_S16LE);
-            hda_dma_sync_range(rest, size);
+        fill_silence(rest, size, current_hw_format == AUDIO_S16LE);
+        hda_dma_sync_range(rest, size);
+        if (!user_callback) {
+            session_bytes_dropped += ring_available();
+            ring_read_ptr = ring_write_ptr;
+            resample_frac_fp = 0;
         }
         first = period + 1;
         count = HDA_PERIODS - 1;
