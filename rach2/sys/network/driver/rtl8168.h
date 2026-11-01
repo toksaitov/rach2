@@ -27,6 +27,10 @@
  * that cannot route them the tick alone serves the card. Not supported:
  * MSI-X, jumbo frames, every offload, RSS, VLAN, Wake-on-LAN and runtime
  * power management.
+ *
+ * This file derives from the Linux kernel's r8169 driver, r8169_main.c and
+ * r8169_phy_config.c of v6.16, which are under the GNU General Public
+ * License, version 2 only, and it keeps that license (COPYING).
  */
 
 /* Register offsets in the memory window (reference: enum rtl_registers). */
