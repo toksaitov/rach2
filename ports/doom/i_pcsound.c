@@ -33,7 +33,6 @@ extern int ioctl(int fd, unsigned long request, ...);
 #define AUDIO_START     0x4102  /* Start audio playback */
 #define AUDIO_STOP      0x4103  /* Stop audio playback */
 #define AUDIO_WRITE     0x4104  /* Write audio samples */
-#define AUDIO_SET_VOLUME 0x4105 /* Set volume (0-100) */
 
 /* The driver types AUDIO_GET_INFO gives. */
 #define AUDIO_DRIVER_NONE    0
@@ -186,11 +185,11 @@ static void stop_tone(void)
 /**
  * Open /dev/console for sound, independently of standard input and the
  * keyboard, and ask for its audio driver. When the driver plays samples,
- * start output of 11,025 Hz unsigned 8-bit mono, set the volume to 80 of
- * 100, since an HDA codec may start muted, and start the music player at
- * 49,716 Hz; otherwise the effects go to the PC speaker. `use_sfx_prefix`
- * is ignored. Returns false when the console cannot be opened, true
- * otherwise. Shutdown closes the descriptor after stopping output.
+ * start output of 11,025 Hz unsigned 8-bit mono and the music player at
+ * 49,716 Hz; otherwise the effects go to the PC speaker. The system volume
+ * is left as /dev/mixer holds it. `use_sfx_prefix` is ignored. Returns
+ * false when the console cannot be opened, true otherwise. Shutdown closes
+ * the descriptor after stopping output.
  */
 static boolean PCSoundInit(boolean use_sfx_prefix)
 {
@@ -222,7 +221,6 @@ static boolean PCSoundInit(boolean use_sfx_prefix)
 
         if (ioctl(audio_fd, AUDIO_START, &params) == 0) {
             use_real_audio = true;
-            ioctl(audio_fd, AUDIO_SET_VOLUME, 80);
 
             if (OPLMusic_Init(OPL_SAMPLE_RATE)) {
                 opl_music_initialized = true;
