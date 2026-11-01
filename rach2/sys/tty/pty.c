@@ -185,8 +185,10 @@ static int ptm_readable(void *arg)
 /**
  * Read the slave's output from the master ring.
  *
- * Blocks until the ring has a byte or every slave description has closed,
- * which reads as end of file; -EAGAIN when non-blocking, -EINTR on a signal.
+ * Blocks until the ring has a byte or no slave description is open. Once
+ * the last slave description has closed and the ring is drained, a read is
+ * -EIO, as Linux's is after the slave hangs up; before any slave has opened
+ * it reads as end of file. -EAGAIN when non-blocking, -EINTR on a signal.
  * The ring is drained into a stack buffer with interrupts off and copied to
  * user memory, which may fault, after they are restored. In packet mode
  * (TIOCPKT) the bytes follow a status byte, TIOCPKT_DATA, 0, as on Linux,
@@ -209,6 +211,9 @@ static int32_t ptm_read(fd_entry_t *e, char __user *buf, uint32_t count)
         return -EFAULT;
     }
     while (pty_m_avail(p) == 0) {
+        if (p->hung_up) {
+            return -EIO;
+        }
         if (p->slave_opens == 0) {
             return 0;
         }
@@ -691,9 +696,9 @@ static short pts_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 }
 
 /**
- * Drop one slave description. When the last one closes, master readers are
- * woken to read end of file, and the pair is freed if the master is closed
- * too.
+ * Drop one slave description. When the last one closes, the pair is hung
+ * up and master readers are woken to read -EIO once the ring drains
+ * (`ptm_read`), and the pair is freed if the master is closed too.
  */
 static void pts_close(fd_entry_t *e)
 {
@@ -706,6 +711,7 @@ static void pts_close(fd_entry_t *e)
         p->slave_opens--;
     }
     if (p->slave_opens == 0) {
+        p->hung_up = 1;
         wq_wake_all(&p->m_read_wq);
         if (!p->master_open) {
             pty_free(p);
@@ -798,6 +804,7 @@ int pty_open_slave(int index, int flags)
         e->ofd->status_flags |= OFD_NONBLOCK;
     }
     p->slave_opens++;
+    p->hung_up = 0;
     if (!(flags & O_NOCTTY_FLAG) && p->slave.sid == 0 && current_proc->sid == current_proc->tgid &&
         !session_has_ctty((int)current_proc->sid)) {
         tty_make_sole_ctty(&p->slave, (int)current_proc->sid, (int)current_proc->pgid);
