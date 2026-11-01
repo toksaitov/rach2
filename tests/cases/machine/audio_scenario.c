@@ -1,7 +1,8 @@
 /*
  * audio_scenario.c: the scenario of machine.audio, in which the kernel's
  * debug shell plays `audio test scale` on an emulated sound card and
- * wavcheck measures the notes in what QEMU recorded the machine playing.
+ * wavcheck measures the notes in what QEMU recorded the machine playing, or
+ * runs `audiotest -s`, which measures the queue across a writer's stall.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -146,11 +147,37 @@ static void sb16(struct lc *l)
     judge(l, m, 1);
 }
 
+/**
+ * Run the queue case: `audiotest -s` from the debug shell writes numbered
+ * blocks for a second, stalls a second and writes for another, reading the
+ * queued delay from /proc/audio after each block, and says that the delay
+ * kept within six periods; then the machine ends with QMP's quit.
+ */
+static void queue(struct lc *l)
+{
+    struct etude_case_machine *m;
+    uint64_t at = 0, from;
+
+    if (!lc_step(l, "play") || (m = lc_boot(l, "fixture")) == NULL ||
+        !lc_wait(l, m, "Type 'help'", &at, NULL) || !lc_wait(l, m, prompt, &at, NULL))
+        return;
+    from = at;
+    if (lc_type(l, m, "exec /bin/audiotest -s\r") && lc_wait(l, m, prompt, &at, NULL))
+        lc_find(l, m, "bounded", "audiotest: result: complete; the delay kept within six periods",
+                from, 1);
+    else if (!l->stopped)
+        lc_assert(l, "bounded", 0, l->why);
+    if (!lc_quit(l, m, NULL))
+        return;
+    lc_find(l, m, "no-stall", "audio: stalled", 0, 0);
+}
+
 int etude_scenario(struct etude_case *c)
 {
     static const char *const hdas[] = {"probe-before", "played", "probe-after", "messages",
                                        "no-stall",     "notes",  NULL};
     static const char *const sb16s[] = {"played", "no-stall", "started", "notes", NULL};
+    static const char *const queues[] = {"bounded", "no-stall", NULL};
     const char *name = case_name(c);
     struct lc l;
 
@@ -160,6 +187,9 @@ int etude_scenario(struct etude_case *c)
     } else if (strcmp(name, "sb16") == 0) {
         lc_begin(&l, c, sb16s);
         sb16(&l);
+    } else if (strcmp(name, "queue") == 0) {
+        lc_begin(&l, c, queues);
+        queue(&l);
     } else {
         return 1;
     }
