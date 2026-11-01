@@ -12,8 +12,8 @@
 static void judge(struct lc *l, struct etude_case_machine *m, int defaults)
 {
     char name[] = "wavcheck", scale[] = "scale", slash[] = "/", path[1024], detail[160];
-    char stereo[][4] = {"262", "294", "330", "349", "392", "523", "587", "659", "698", "784"};
-    char mono[][4] = {"80", "100", "125", "160", "200"};
+    char stereo[][4] = {"262", "294", "330", "349", "392", "131", "147", "165", "175", "196"};
+    char mono[][4] = {"80", "100", "111", "222", "444"};
     char *argv[15] = {name, scale, path};
     struct etude_termination end;
     const char *wav;
@@ -68,8 +68,8 @@ int etude_scenario(struct etude_case *c)
                     defaults ? "exec /bin/audiotest -d\r" : "exec /bin/audiotest -d 44100 16 2\r",
                     &at, "played");
     if (window) {
-        const char *grant = defaults ? "audiotest: dsp: granted 8000 hz, 8-bit, 1 channels"
-                                     : "audiotest: dsp: granted 44100 hz, 16-bit, 2 channels";
+        const char *grant = defaults ? "audiotest: dsp: granted 8000 hz, 8-bit mono"
+                                     : "audiotest: dsp: granted 44100 hz, 16-bit stereo";
 
         lc_assert(&l, "grant", strstr(window, grant) != NULL,
                   "the granted rate, format and channels");
