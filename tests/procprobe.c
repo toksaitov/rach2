@@ -12,7 +12,10 @@
  * forks a child, opens `/proc/<child>/stat`, kills and reaps the child, and
  * only then reads. The pid no longer names a process at all, so a generator
  * asked at that moment could answer nothing; a snapshot answers what it took.
- * Reading twice with nothing changing would prove neither.
+ * Reading twice with nothing changing would prove neither. A read from
+ * offset 0 after the first makes the text again, as Linux's does, so the
+ * same descriptor read there answers ESRCH, and /proc/self/maps read with
+ * pread64 at 0 shows a region mapped since its first read.
  *
  * The rest is completeness. A text is built in the heap and grows as it is
  * written, and one the heap cannot hold is refused whole rather than served
@@ -88,6 +91,7 @@
 #define EINVAL       22
 #define ECONNREFUSED 111
 #define SIGKILL      9
+#define ESRCH        3
 
 /** End the process with `status`; it does not return. */
 static void sys_exit(int status)
@@ -138,6 +142,7 @@ static const struct row {
             {"snapshot-entry-gone", ROW_PLAIN},
             {"snapshot-reads", ROW_PLAIN},
             {"snapshot-starts-with-pid", ROW_PLAIN},
+            {"snapshot-reread-gone", ROW_PLAIN},
             {"cmdline-newline", ROW_PLAIN},
             {"net-dev-newline", ROW_PLAIN},
             {"loop-intr-stat", ROW_PLAIN},
@@ -247,6 +252,8 @@ static const struct row {
             {"maps-anon-line", ROW_PLAIN},
             {"smaps-first-line", ROW_PLAIN},
             {"smaps-sizes-flags", ROW_PLAIN},
+            {"maps-pread-fresh", ROW_PLAIN},
+            {"maps-file-identity", ROW_PLAIN},
             {"smaps-64tib-reserve", ROW_WIDE},
             {"smaps-64tib-size", ROW_WIDE},
             {"smaps-64tib-unmap", ROW_WIDE},
@@ -259,6 +266,9 @@ static const struct row {
             {"cwd-link", ROW_PLAIN},
             {"root-link", ROW_PLAIN},
             {"cwd-walk", ROW_PLAIN},
+            {"status-cpus-allowed", ROW_PLAIN},
+            {"ns-listing", ROW_PLAIN},
+            {"ns-chdir", ROW_PLAIN},
             {"net-class-listed", ROW_PLAIN},
             {"net-class-address", ROW_PLAIN},
             {"net-class-mtu", ROW_PLAIN},
@@ -1328,6 +1338,85 @@ static long map_anonymous(int len)
     return probe_mmap(0, len, 3, 0x22, -1, 0);
 }
 
+/** Write `v` into `out` as lowercase hex digits, at least `width` of them,
+ * as /proc/PID/maps writes numbers; returns the count written. */
+static int hex_of(char *out, unsigned long v, int width)
+{
+    int n = 1, i;
+
+    while (n < (int)sizeof(v) * 2 && (v >> (n * 4)) != 0) {
+        n++;
+    }
+    if (n < width) {
+        n = width;
+    }
+    for (i = n - 1; i >= 0; i--) {
+        out[i] = "0123456789abcdef"[v & 15u];
+        v >>= 4;
+    }
+    return n;
+}
+
+/** Write `v` into `out` in decimal; returns the count written. */
+static int dec_of(char *out, unsigned long v)
+{
+    char tmp[24];
+    int n = 0, i = 0;
+
+    do {
+        tmp[n++] = (char)('0' + v % 10u);
+        v /= 10u;
+    } while (v != 0);
+    while (n > 0) {
+        out[i++] = tmp[--n];
+    }
+    return i;
+}
+
+/**
+ * /proc/self/maps read with pread64 at offset 0 sees the address space as it
+ * is then: the first read gives the text the open made, and a read at 0
+ * after a new region is mapped makes it again, with the region. And the
+ * program's own lines give its file's device and inode, as stat gives them.
+ */
+static void maps_fresh_rows(void)
+{
+    static char before[8192], after[8192];
+    char needle[48], st[KSTAT_SIZE];
+    int fd = syscall3(SYS_OPEN, (long)"/proc/self/maps", O_RDONLY, 0);
+    long addr;
+    int a, b, k;
+    unsigned int dev;
+
+    a = (int)probe_pread(fd, before, (long)sizeof(before), 0);
+    addr = probe_mmap(0, 4096, 1, 0x22, -1, 0);
+    b = (int)probe_pread(fd, after, (long)sizeof(after), 0);
+    k = sys_failed(addr) ? 0 : hex_of(needle, (unsigned long)addr, 8);
+    needle[k++] = '-';
+    needle[k] = '\0';
+    check("maps-pread-fresh",
+          fd >= 0 && !sys_failed(addr) && a > 0 && b > 0 && !contains(before, a, needle) &&
+              contains(after, b, needle),
+          "/proc/self/maps read again at offset 0 has a region mapped since the first read");
+    syscall1(SYS_CLOSE, fd);
+    if (syscall3(SYS_STAT, (long)"/proc/self/exe", (long)st, 0) != 0) {
+        check("maps-file-identity", 0, "stat of /proc/self/exe");
+        return;
+    }
+    dev = *(unsigned int *)(st + KSTAT_DEV);
+    k = 0;
+    needle[k++] = ' ';
+    k += hex_of(needle + k, (dev >> 8) & 0xfffu, 2);
+    needle[k++] = ':';
+    k += hex_of(needle + k, (dev & 0xffu) | ((dev >> 12) & 0xfff00u), 2);
+    needle[k++] = ' ';
+    k += dec_of(needle + k, *(unsigned long *)(st + KSTAT_INO));
+    needle[k++] = ' ';
+    needle[k] = '\0';
+    check("maps-file-identity", contains(after, b, needle),
+          "and the program's lines give its file's device and inode, as stat gives them");
+}
+
 /** /proc/self/smaps as BusyBox's pmap reads it: each region's maps line and
  * Linux's sizes for it. A region with no path ends its maps line at the
  * space after the inode, as on Linux, where pmap looks for that space. */
@@ -1350,6 +1439,7 @@ static void smaps_rows(void)
           "smaps begins with the first region's maps line");
     check("smaps-sizes-flags", contains(buf, n, "\nRss:") && contains(buf, n, "\nVmFlags:"),
           "and gives its sizes and flags");
+    maps_fresh_rows();
 }
 
 #if defined __x86_64__
@@ -1484,6 +1574,39 @@ static void pid_dir_rows(void)
               listing("/proc/self/cwd/", here, (int)sizeof(here)) == 0 &&
                   listing(cwd, there, (int)sizeof(there)) == 0 && same_str(here, there),
               "and the directory reached through cwd is the working directory");
+    }
+    {
+        char line[64] = "\nCpus_allowed_list:\t0";
+        int cpus = processors(), k = 21, n = slurp("/proc/self/status", buf, (int)sizeof(buf));
+
+        if (cpus > 1) {
+            line[k++] = '-';
+            k += dec_of(line + k, (unsigned long)(cpus - 1));
+        }
+        line[k++] = '\n';
+        line[k] = '\0';
+        check("status-cpus-allowed", cpus > 0 && contains(buf, n, line),
+              "/proc/self/status allows every processor /proc/stat lists");
+    }
+    check("ns-listing",
+          listing("/proc/self/ns", got, (int)sizeof(got)) == 0 &&
+              same_str(got, "user pid mnt net uts ipc "),
+          "/proc/self/ns lists its six links");
+    {
+        char cwd[256] = {0}, there[256] = {0}, want[40] = "/proc/";
+        int k = 6;
+
+        k += dec_of(want + k, (unsigned long)pid);
+        for (i = 0; "/ns"[i]; i++) {
+            want[k++] = "/ns"[i];
+        }
+        want[k] = '\0';
+        check("ns-chdir",
+              syscall3(SYS_GETCWD, (long)cwd, (int)sizeof(cwd), 0) > 0 &&
+                  syscall1(SYS_CHDIR, (long)"/proc/self/ns") == 0 &&
+                  syscall3(SYS_GETCWD, (long)there, (int)sizeof(there), 0) > 0 &&
+                  same_str(there, want) && syscall1(SYS_CHDIR, (long)cwd) == 0,
+              "and chdir enters it as /proc/PID/ns");
     }
 }
 
@@ -1932,6 +2055,8 @@ static void snapshot_rows(void)
                 check("snapshot-starts-with-pid", buf[0] >= '0' && buf[0] <= '9',
                       "the snapshot starts with the pid");
             }
+            check("snapshot-reread-gone", probe_pread(fd, buf, 64, 0) == -ESRCH,
+                  "and a read from offset 0, which makes the text again, is ESRCH");
             syscall1(SYS_CLOSE, fd);
         }
     }

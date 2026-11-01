@@ -1,4 +1,4 @@
-.Dd October 30, 2026
+.Dd November 1, 2026
 .Dt PROC 5
 .Os
 .Sh NAME
@@ -8,7 +8,15 @@
 .Pa /proc
 .Sh DESCRIPTION
 Each file is generated into a buffer when opened, and every read through
-that descriptor uses the same snapshot, except
+that descriptor uses the same snapshot until a read from offset 0 after
+the first, through
+.Xr lseek 2
+back to the start or
+.Xr pread64 2
+at 0, which generates it again, as Linux does.
+A process that is gone by then makes that read fail with
+.Er ESRCH .
+The exceptions are
 .Pa /proc/PID/oom_score_adj ,
 .Pa /proc/PID/mem
 and
@@ -1246,7 +1254,7 @@ or
 .Ql ro .
 .It Pa /proc/PID/maps
 A line for each region of the address space:
-.Dl start-end perms offset 00:00 0 path
+.Dl start-end perms offset major:minor inode path
 with the rights as
 .Ql r ,
 .Ql w ,
@@ -1264,7 +1272,12 @@ the program for the segments of its image, or the dynamic linker the
 program names for the segments of the linker's.
 The offset is the file's at the region's first page, and 0 for a region
 that maps no file.
-The device and inode are not kept and read 0.
+The device's major and minor numbers, in hexadecimal, and the inode, in
+decimal, are those
+.Xr stat 2
+gives the file, and read
+.Ql 00:00 0
+for a region of no file.
 A region with no path ends at the space after the inode, as on Linux.
 It and
 .Pa smaps
@@ -1307,7 +1320,11 @@ NoNewPrivs, Seccomp and Seccomp_filters, the thread's seccomp mode and
 the number of its filters
 .Pq see Xr seccomp 2 ,
 NStgid, NSpid, NSpgid and NSsid, the IDs in each PID namespace from
-the reader's down to the process's own, separated by tabs, and
+the reader's down to the process's own, separated by tabs,
+Cpus_allowed and Cpus_allowed_list, the processors the thread may run
+on as
+.Xr sched_getaffinity 2
+reports them, as a mask in words of 32 bits and as a list of ranges, and
 voluntary_ctxt_switches and nonvoluntary_ctxt_switches, the times the
 scheduler switched away from the thread while it slept or was stopped,
 and while it could still run.
@@ -1363,7 +1380,8 @@ A directory of six links,
 .Pa uts
 and
 .Pa ipc ,
-to the process's namespaces, each named
+to the process's namespaces, which a listing of the directory gives,
+each named
 .Ql KIND:[INODE] ,
 the inode number of the namespace; two processes share a namespace when
 the names are the same.
