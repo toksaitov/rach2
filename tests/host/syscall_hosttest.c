@@ -88,6 +88,13 @@ int socket_ns_reaches(const struct socket *s, net_addr_t a, int up)
     return 1;
 }
 
+/** A socket of the first network namespace names every interface there. */
+struct netdev *socket_iface6(const struct socket *s, int ifindex)
+{
+    (void)s;
+    return ifindex > 0 ? netdev_at(ifindex - 1) : NULL;
+}
+
 /** No row sets an option of a netlink socket, which this refuses. */
 int32_t netlink_setsockopt(struct socket *s, int optname, int val, int optlen)
 {
@@ -127,11 +134,11 @@ static uint8_t user[1024];
 static int failures, masked, saves;
 static int completion, immediate, waits;
 static int pending, pending_masked, blocked_masked, sleeps, cut_short;
-static uint32_t blocked_until;
+static uint64_t blocked_until;
 static int post_at_block, wake_at_deadline, tick_signals, wake_unacted;
 static int state_at_unmask = -1, unblocked_unmasks;
 static int halts, unmasked_halts, blocks;
-static uint32_t first_blocked_until, wakeup_at_unmask;
+static uint64_t first_blocked_until, wakeup_at_unmask;
 static int unarmed_unmasks, switch_back, tick_at_save, tick_after_yield, halt_without_tick;
 static int sibling_runs;
 
@@ -252,18 +259,27 @@ void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint64_t *ticks)
 }
 
 /** Coarse real time as the clock keeps it: the boot's epoch plus the uptime
- * at the tick. */
+ * at the tick, read as one reading (`tick_now`). */
 void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
-    *seconds = rtc_boot_epoch() + (int64_t)kernel_uptime_seconds;
-    *nanoseconds = (int64_t)kernel_second_ticks * TICK_NS;
+    uint32_t uptime, ticks;
+    uint64_t total;
+
+    tick_now(&uptime, &ticks, &total);
+    *seconds = rtc_boot_epoch() + (int64_t)uptime;
+    *nanoseconds = (int64_t)ticks * TICK_NS;
 }
 
-/** Coarse time since boot as the clock keeps it: the uptime at the tick. */
+/** Coarse time since boot as the clock keeps it: the uptime at the tick,
+ * read as one reading (`tick_now`). */
 void rtc_coarse_monotonic(int64_t *seconds, int64_t *nanoseconds)
 {
-    *seconds = (int64_t)kernel_uptime_seconds;
-    *nanoseconds = (int64_t)kernel_second_ticks * TICK_NS;
+    uint32_t uptime, ticks;
+    uint64_t total;
+
+    tick_now(&uptime, &ticks, &total);
+    *seconds = (int64_t)uptime;
+    *nanoseconds = (int64_t)ticks * TICK_NS;
 }
 
 /** Report that the model has no vDSO clock, so the timer's resolution
