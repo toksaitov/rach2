@@ -276,43 +276,14 @@ void process_count_fork(void)
     ++_forks_since_boot;
 }
 
-/** Allocate a standalone record or an unfinished child of parent.
- * thread and share_fs reuse the parent's group and directories, and are
- * ignored without a parent. The child has no files yet; a standalone record
- * has stdio. NULL on allocation failure, with no record published. The
- * caller holds the big kernel lock. The pid is kept in the positive int
- * range, since the /proc path layer has a pid as an int, and a pid still in
- * use is skipped, so that the pids in use stay unique; the wrap comes only
- * after two thousand million records, and the pid is otherwise `next_pid`.
- * fork gives the child the parent's session and process group in place of
- * its own.
- */
-static process_t *process_alloc(const process_t *parent, int thread, int share_fs)
+/** The next pid for a new record: `next_pid`, kept in the positive int range,
+ * since the /proc path layer has a pid as an int, and skipping a pid still in
+ * use, so that the pids in use stay unique; the wrap comes only after two
+ * thousand million records. The caller holds the big kernel lock. */
+static uint32_t pid_next(void)
 {
-    process_t *p = kmalloc(sizeof(*p));
     uint32_t candidate;
-    int fd;
 
-    if (!p) {
-        return NULL;
-    }
-    k_memset(p, 0, sizeof(*p));
-    p->start_ticks = tick_count();
-    p->fpu = fpu_area_alloc();
-    if (!p->fpu) {
-        kfree(p);
-        return NULL;
-    }
-    p->tg = thread && parent ? parent->tg : tgroup_new(p);
-    if (thread && parent) {
-        p->tg->refs++;
-    }
-    if (!p->tg) {
-        fpu_area_free(p->fpu);
-        kfree(p);
-        return NULL;
-    }
-    p->sigacts = p->tg->action;
     do {
         if (next_pid >= 2000000000u) {
             next_pid = 1;
@@ -320,11 +291,12 @@ static process_t *process_alloc(const process_t *parent, int thread, int share_f
         candidate = next_pid++;
     } while (get_process(candidate) != NULL);
     last_pid = candidate;
-    p->pid = candidate;
-    p->tgid = thread && parent ? parent->tgid : candidate;
-    p->state = parent ? PROC_UNUSED : PROC_READY;
-    p->sid = candidate;
-    p->pgid = candidate;
+    return candidate;
+}
+
+/** Give a new record the resource limits every process starts with. */
+static void process_limits(process_t *p)
+{
     p->rlim[RLIM_NPROC].cur = p->rlim[RLIM_NPROC].max = PROC_COUNT_POLICY;
     p->rlim[RLIM_NOFILE].cur = FD_TABLE_LIMIT;
     p->rlim[RLIM_NOFILE].max = FD_NOFILE_HARD;
@@ -334,24 +306,81 @@ static process_t *process_alloc(const process_t *parent, int thread, int share_f
     p->rlim[RLIM_CORE].cur = 0;
     p->rlim[RLIM_CORE].max = RLIM_INFINITY;
     p->rlim[RLIM_FSIZE].cur = p->rlim[RLIM_FSIZE].max = RLIM_INFINITY;
+}
+
+/** New directories, at / with umask 022 and one reference, or NULL. */
+static struct fs_struct *fs_new(void)
+{
+    struct fs_struct *fs = kzalloc(sizeof(*fs));
+
+    if (fs) {
+        fs->refs = 1;
+        fs->cwd[0] = '/';
+        fs->umask = 022;
+    }
+    return fs;
+}
+
+/** Allocate a standalone record or an unfinished child of parent.
+ * thread and share_fs reuse the parent's group and directories, and are
+ * ignored without a parent. The child has no files yet; a standalone record
+ * has stdio. NULL on allocation failure, with no record published. The
+ * caller holds the big kernel lock. The pid is `pid_next`'s. fork gives the
+ * child the parent's session and process group in place of its own.
+ */
+static process_t *process_alloc(const process_t *parent, int thread, int share_fs)
+{
+    process_t *p = kmalloc(sizeof(*p));
+    struct tgroup *group = NULL;
+    struct fs_struct *dirs = NULL;
+    uint32_t tgid = 0, ruid = 0;
+    int fd;
+
+    if (!p) {
+        return NULL;
+    }
+    if (parent) {
+        group = thread ? parent->tg : NULL;
+        tgid = parent->tgid;
+        dirs = share_fs ? parent->fs : NULL;
+        ruid = parent->ruid;
+    }
+    k_memset(p, 0, sizeof(*p));
+    p->start_ticks = tick_count();
+    p->fpu = fpu_area_alloc();
+    if (!p->fpu) {
+        kfree(p);
+        return NULL;
+    }
+    p->tg = group ? group : tgroup_new(p);
+    if (!p->tg) {
+        fpu_area_free(p->fpu);
+        kfree(p);
+        return NULL;
+    }
+    if (group) {
+        group->refs++;
+    }
+    p->sigacts = p->tg->action;
+    p->pid = pid_next();
+    p->tgid = group ? tgid : p->pid;
+    p->state = parent ? PROC_UNUSED : PROC_READY;
+    p->sid = p->pid;
+    p->pgid = p->pid;
+    process_limits(p);
     p->waiter.proc = p;
     p->cpu = (int)arch_cpu_id();
     p->affinity = ~(uint64_t)0;
 
-    p->fs = share_fs && parent ? parent->fs : kzalloc(sizeof(*p->fs));
-    if (share_fs && parent) {
-        p->fs->refs++;
-    }
+    p->fs = dirs ? dirs : fs_new();
     if (!p->fs) {
         tgroup_put(p->tg);
         fpu_area_free(p->fpu);
         kfree(p);
         return NULL;
     }
-    if (!(share_fs && parent)) {
-        p->fs->refs = 1;
-        p->fs->cwd[0] = '/';
-        p->fs->umask = 022;
+    if (dirs) {
+        dirs->refs++;
     }
     if (!parent) {
         p->fds = fd_table_new();
@@ -359,7 +388,7 @@ static process_t *process_alloc(const process_t *parent, int thread, int share_f
             goto fail_parts;
         }
     }
-    if (pid_reserve() != 0 || proc_set_ruid(p, parent ? parent->ruid : 0) != 0) {
+    if (pid_reserve() != 0 || proc_set_ruid(p, ruid) != 0) {
         goto fail_parts;
     }
     p->prev = proc_tail;
