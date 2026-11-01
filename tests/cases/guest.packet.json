@@ -21,7 +21,7 @@
       },
       "assertions": [
         {"assertion_id": "stream-refused", "checks": "a stream packet socket is refused with ESOCKTNOSUPPORT", "source": "program"},
-        {"assertion_id": "ipv6-refused", "checks": "a packet socket for IPv6, which this stack has no frames for, is refused with EINVAL", "source": "program"},
+        {"assertion_id": "ipv6-open", "checks": "a packet socket for IPv6 opens", "source": "program"},
         {"assertion_id": "open", "checks": "a packet socket opens with no protocol, as arping opens it, and with IPv4's", "source": "program"},
         {"assertion_id": "auxdata-refused", "checks": "PACKET_AUXDATA is refused with ENOPROTOOPT", "source": "program"},
         {"assertion_id": "bind-missing", "checks": "a bind to an interface that does not exist is refused with ENODEV", "source": "program"},
@@ -56,6 +56,7 @@
         {"assertion_id": "ipv4-only", "checks": "every frame the IPv4 socket receives is IPv4", "source": "program"},
         {"assertion_id": "both-answered", "checks": "the ARP socket receives a reply from the address the request asked about, and the IPv4 socket an IPv4 frame", "source": "program"},
         {"assertion_id": "arp-cache", "checks": "/proc/net/arp has the gateway the machine resolved", "source": "program"},
+        {"assertion_id": "ipv6-frame", "checks": "an IPv6 packet socket bound to the interface sends a neighbour solicitation for fe80::2 and receives a frame of EtherType 0x86DD, the advertisement", "source": "program"},
         {"assertion_id": "reopen", "checks": "four packet sockets in a row each open and bind after the one before closed", "source": "program"},
         {"assertion_id": "table-read", "checks": "/proc/self/fd gives each socket's inode, and /proc/net/packet reads with Linux's heading", "source": "program"},
         {"assertion_id": "bind-listed", "checks": "each bound socket has one row of /proc/net/packet, by its inode", "source": "program"},
@@ -68,7 +69,7 @@
            {"alternative_id": "own", "when": null,
             "assertions": ["discover-sent", "offer-polled", "select-agrees", "offer-ipv4", "no-control", "offer-address", "no-flags",
                            "bootp-broadcast", "empty-eagain", "no-address-written", "second-offer", "true-length", "truncated-address",
-                           "capacity", "third-offer", "rebind-drops"]},
+                           "capacity", "third-offer", "rebind-drops", "ipv6-frame"]},
            {"alternative_id": "shared", "when": null, "assertions": []}
          ]}
       ],
