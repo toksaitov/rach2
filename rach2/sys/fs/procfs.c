@@ -1406,6 +1406,77 @@ static void ap_kb(struct procfs_text *t, const char *name, unsigned long bytes)
     ap_str(t, " kB\n");
 }
 
+/** The processors started, a bit for each. */
+static uint64_t cpu_online_bits(void)
+{
+    uint64_t mask = 0;
+    int c;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        if (cpu_table[c].online) {
+            mask |= (uint64_t)1 << c;
+        }
+    }
+    return mask;
+}
+
+/** Append the processors of `mask` as Linux lists a set of them, ranges
+ * with commas between: 0-3, or 0,2-3. */
+static void ap_cpu_set(struct procfs_text *t, uint64_t mask)
+{
+    int c = 0, first = 1;
+
+    while (c < NR_CPUS) {
+        int end;
+
+        if (!((mask >> c) & 1u)) {
+            c++;
+            continue;
+        }
+        for (end = c; end + 1 < NR_CPUS && ((mask >> (end + 1)) & 1u); end++) {
+        }
+        if (!first) {
+            ap_ch(t, ',');
+        }
+        ap_u32(t, (uint32_t)c);
+        if (end > c) {
+            ap_ch(t, '-');
+            ap_u32(t, (uint32_t)end);
+        }
+        first = 0;
+        c = end + 1;
+    }
+}
+
+/**
+ * Append the processors of `mask` as Linux's `%*pb` writes a mask of
+ * nr_cpu_ids bits, here one past the highest processor started: hex words
+ * of 32 bits, the highest first and as wide as its bits need, the others
+ * eight digits, with commas between, as in "3" for two processors or
+ * "ff,ffffffff" for forty.
+ */
+static void ap_cpu_mask(struct procfs_text *t, uint64_t mask)
+{
+    uint64_t online = cpu_online_bits();
+    int bits = 1, k;
+
+    while (bits < NR_CPUS && (online >> bits) != 0) {
+        bits++;
+    }
+    for (k = (bits - 1) / 32; k >= 0; k--) {
+        int width = k == (bits - 1) / 32 ? bits - 32 * k : 32;
+        uint32_t word = (uint32_t)(mask >> (32 * k));
+
+        if (width < 32) {
+            word &= ((uint32_t)1 << width) - 1u;
+        }
+        ap_xlow(t, word, (width + 3) / 4);
+        if (k > 0) {
+            ap_ch(t, ',');
+        }
+    }
+}
+
 /** Append "Name:\t" and the 64-bit set `set` as sixteen hex digits. */
 static void ap_set(struct procfs_text *t, const char *name, uint64_t set)
 {
@@ -1475,6 +1546,8 @@ static void ap_signal_sets(struct procfs_text *t, const process_t *p)
  * ones. The capability sets are full for a process `proc_privileged` passes
  * and empty otherwise, since the kernel has no capabilities but that test.
  * VmPeak and VmHWM are the present sizes, since the kernel keeps no peak.
+ * Cpus_allowed and its list are the thread's affinity among the processors
+ * started, which sched_getaffinity(2) reports.
  */
 static int procfs_gen_status(struct procfs_text *t, int pid)
 {
@@ -1562,7 +1635,11 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_u32(t, p->seccomp_mode);
     ap_str(t, "\nSeccomp_filters:\t");
     ap_u32(t, seccomp_filter_count(p));
-    ap_str(t, "\nCpus_allowed:\t1\nCpus_allowed_list:\t0\n");
+    ap_str(t, "\nCpus_allowed:\t");
+    ap_cpu_mask(t, p->affinity & cpu_online_bits());
+    ap_str(t, "\nCpus_allowed_list:\t");
+    ap_cpu_set(t, p->affinity & cpu_online_bits());
+    ap_ch(t, '\n');
     ap_str(t, "voluntary_ctxt_switches:\t");
     ap_u32(t, p->nvcsw);
     ap_str(t, "\nnonvoluntary_ctxt_switches:\t");
@@ -4272,34 +4349,6 @@ static void ap_hex_lower(struct procfs_text *t, uint32_t v)
     }
 }
 
-/** Append the processors online as Linux lists a set of them, ranges with
- * commas between: 0-3, or 0,2-3. */
-static void ap_cpu_list(struct procfs_text *t)
-{
-    int c = 0, first = 1;
-
-    while (c < NR_CPUS) {
-        int end;
-
-        if (!cpu_table[c].online) {
-            c++;
-            continue;
-        }
-        for (end = c; end + 1 < NR_CPUS && cpu_table[end + 1].online; end++) {
-        }
-        if (!first) {
-            ap_ch(t, ',');
-        }
-        ap_u32(t, (uint32_t)c);
-        if (end > c) {
-            ap_ch(t, '-');
-            ap_u32(t, (uint32_t)end);
-        }
-        first = 0;
-        c = end + 1;
-    }
-}
-
 /**
  * Render the attribute `attr` of /sys/class/rtc/rtc0, of its device's power
  * directory, of /sys/power, of /sys/devices/system/cpu or of
@@ -4334,7 +4383,7 @@ static int procfs_gen_sysattr(struct procfs_text *t, int node, int attr)
         if (attr == 0) {
             ap_u32(t, NR_CPUS - 1);
         } else if (attr != 1) {
-            ap_cpu_list(t);
+            ap_cpu_set(t, cpu_online_bits());
         }
         ap_ch(t, '\n');
         return t->len;
