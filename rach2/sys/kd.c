@@ -9,6 +9,7 @@
 #include "input.h"
 #include "keymap.h"
 #include "kio.h"
+#include "lib/kdef.h"
 #include "lib/kerrno.h"
 #include "lib/kstring.h"
 #include "lib/spinlock.h"
@@ -317,7 +318,7 @@ static int32_t kd_entry_request(uint32_t request, uintptr_t arg)
         return kd_set_entry(kbe.kb_table, kbe.kb_index, kbe.kb_value);
     }
     v = (unsigned short)kd_get_entry(kbe.kb_table, kbe.kb_index);
-    if (copy_to_user((void __user *)&((struct kbentry __user *)arg)->kb_value, &v, sizeof(v)) !=
+    if (copy_to_user((void __user *)(arg + offsetof(struct kbentry, kb_value)), &v, sizeof(v)) !=
         0) {
         return -EFAULT;
     }
@@ -327,11 +328,13 @@ static int32_t kd_entry_request(uint32_t request, uintptr_t arg)
 /**
  * KDGKBSENT and KDSKBSENT on the struct kbsentry at `arg`. A string read is
  * copied with its null, and an empty one is "". A string set must end within
- * the 512 bytes of `kb_string`, -EINVAL otherwise, as Linux has it.
+ * the 512 bytes of `kb_string`, -EINVAL otherwise, as Linux has it. The
+ * members' addresses are taken by offset, since a member access through a
+ * bad pointer such as NULL is undefined in C.
  */
 static int32_t kd_string_request(uint32_t request, uintptr_t arg)
 {
-    struct kbsentry __user *u = (struct kbsentry __user *)arg;
+    void __user *string = (void __user *)(arg + offsetof(struct kbsentry, kb_string));
     unsigned char func;
     char *buf, *old = NULL;
     const char *s;
@@ -342,7 +345,8 @@ static int32_t kd_string_request(uint32_t request, uintptr_t arg)
     if (request == KDSKBSENT && !kd_may_configure()) {
         return -EPERM;
     }
-    if (copy_from_user(&func, (const void __user *)&u->kb_func, 1) != 0) {
+    if (copy_from_user(&func, (const void __user *)(arg + offsetof(struct kbsentry, kb_func)), 1) !=
+        0) {
         return -EFAULT;
     }
     buf = (char *)kmalloc(KM_FUNC_BYTES);
@@ -355,11 +359,11 @@ static int32_t kd_string_request(uint32_t request, uintptr_t arg)
         n = (int)k_strlen(s);
         k_memcpy(buf, s, (size_t)n + 1);
         spin_unlock_irqrestore(&kd_lock, flags);
-        rc = copy_to_user((void __user *)u->kb_string, buf, (size_t)n + 1) != 0 ? -EFAULT : 0;
+        rc = copy_to_user(string, buf, (size_t)n + 1) != 0 ? -EFAULT : 0;
         kfree(buf);
         return rc;
     }
-    n = strncpy_from_user(buf, (const char __user *)u->kb_string, KM_FUNC_BYTES);
+    n = strncpy_from_user(buf, (const char __user *)string, KM_FUNC_BYTES);
     if (n < 0) {
         kfree(buf);
         return n == -ENAMETOOLONG ? -EINVAL : n;
