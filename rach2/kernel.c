@@ -1329,8 +1329,8 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
  * the address space (`boot_keep_exe`). The initial stack is the one execve
  * builds (`boot_stack`), with the auxiliary vector and its 16 random bytes.
  * The segments are mapped as they are loaded; the regions made after them
- * let the fault handler serve the heap, the stack, the vDSO at the top of
- * the mmap range, as execve places it, and later mappings.
+ * let the fault handler serve the heap, the stack, the vDSO a free page
+ * above the mmap range, as execve places it, and later mappings.
  *
  * Enters user mode through `enter_program` and does not return. A setup
  * failure prints a diagnostic and returns to the caller.
@@ -1343,7 +1343,7 @@ static void exec_program(int argc, char *argv[])
     struct mm *mm;
     uintptr_t user_sp;
     uintptr_t stack_bottom = USER_STACK_BASE;
-    uintptr_t vdso_at = USER_MMAP_BASE - vdso_span();
+    uintptr_t vdso_at = USER_MMAP_BASE + PAGE_SIZE;
     struct exec_krffs_ctx kctx;
     static char env_path[] = "PATH=/bin:/usr/bin:/";
     static char env_home[] = "HOME=/";
@@ -1409,7 +1409,7 @@ static void exec_program(int argc, char *argv[])
     }
 
     if (elf_setup_vmas(&mm->vm, &img, img.image_end, USER_STACK_BASE, VM_STACK_MAX_GROWTH,
-                       vdso_at) != 0 ||
+                       USER_MMAP_BASE) != 0 ||
         vdso_map(&mm->vm, vdso_at) < 0 ||
         (stack_bottom < USER_STACK_BASE && !vm_grow_stack(&mm->vm, stack_bottom, RLIM_INFINITY))) {
         mm_put(mm);

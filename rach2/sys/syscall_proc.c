@@ -1622,14 +1622,13 @@ static int32_t exec_interp(struct exec_state *s, uintptr_t *base)
  * still runs, as Linux's `load_elf_binary` builds one, in the layout
  * `exec_layout` chose: the program, at its base when it is
  * position-independent and linked below ELF_ET_DYN_BASE; the interpreter
- * its PT_INTERP names, below the vDSO, which takes the top of the range
- * mmap places mappings in (`vdso_map`); the regions; and the stack, with
- * the pointers and the auxiliary vector below its strings. Each of the program and the
- * interpreter maps its segments from its file where it can, and the
- * reference to the file's mapping goes from the open file to the image,
- * which keeps it until `exec_release`. The stack may grow to the soft
- * RLIMIT_STACK, lowered to 8 MiB for an image that runs with ids its
- * caller lacks, and the regions may cover no more than RLIMIT_AS. The
+ * its PT_INTERP names; the vDSO, one free page above the range mmap places
+ * mappings in, so that no mapping there ends against it (`vdso_map`); the
+ * regions; and the stack, with the pointers and the auxiliary vector below
+ * its strings. Each of the program and the interpreter maps its segments from its file where it
+ * can, and the reference to the file's mapping goes from the open file to the image, which keeps it
+ * until `exec_release`. The stack may grow to the soft RLIMIT_STACK, lowered to 8 MiB for an image
+ * that runs with ids its caller lacks, and the regions may cover no more than RLIMIT_AS. The
  * caller's image is untouched, so every failure is an error execve
  * returns. 0, -ENOEXEC, -ENOMEM, -EIO, or an error of `exec_interp` or of a
  * mount's read.
@@ -1639,13 +1638,12 @@ static int32_t exec_build(struct exec_state *s)
     struct uimage_aux aux;
     uintptr_t bias = 0;
     uintptr_t bottom = uimage_bottom(&s->args);
-    uintptr_t vdso_at = s->mmap_base - vdso_span();
+    uintptr_t vdso_at = s->mmap_base + PAGE_SIZE;
     unsigned long limit = current_proc->rlim[RLIM_STACK].cur;
     uint8_t random16[16];
     intptr_t ehdr = 0;
     int32_t rc;
 
-    s->mmap_base = vdso_at;
     rc = elf_read_layout(exec_file_read, &s->prog, 1, &s->layout);
     if (rc != 0) {
         return exec_load_err(&s->prog, rc, -ENOEXEC);
