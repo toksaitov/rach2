@@ -28,13 +28,14 @@
 
 #include "ath9k_model.h"
 #include "klog.h"
-#include "cmdline.h"
+#include "timer.h"
 #include "udelay.h"
 #include "mm/paging.h"
 #include "lib/kerrno.h"
 #include "lib/krandom.h"
 #include "lib/kstring.h"
 #include "network/wireless/rc_minstrel.h"
+#include "network/wireless/wiphy.h"
 #include "network/driver/ath9k/ar9003_templates.h"
 
 /* The kernel headers define the integer types themselves, so the test
@@ -131,22 +132,6 @@ static void print_log(void)
 
     for (i = 0; i < n_lines; i++)
         printf("  log: %s\n", lines[i]);
-}
-
-/* The boot command line's rach2.ath9k value, or NULL for none. */
-static const char *option_value;
-
-/** Answer rach2.ath9k from option_value. */
-int kcmdline_value(const char *key, char *out, unsigned int outlen)
-{
-    unsigned i;
-
-    if (!option_value || !streq(key, "rach2.ath9k"))
-        return 0;
-    for (i = 0; option_value[i] && i + 1 < outlen; i++)
-        out[i] = option_value[i];
-    out[i] = 0;
-    return 1;
 }
 
 /** Count nothing: the model's own wait is io.h's. */
@@ -266,16 +251,53 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
 
 /* The station layer's side. */
 static struct wlan_radio *registered;
+static struct wlan the_wlan;
 static int register_rc;
 static unsigned minstrel_calls;
+static struct wlan_work *queued; /* the last work queued */
+static uint64_t queued_due;
+static unsigned n_queued;
 
-/** Keep the radio registered. */
+/** Keep the radio registered, as phy0 of the one station. */
 int wlan_register_radio(struct wlan_radio *radio, struct wlan **out)
 {
     *out = NULL;
-    if (register_rc == 0)
-        registered = radio;
-    return register_rc;
+    if (register_rc != 0)
+        return register_rc;
+    registered = radio;
+    the_wlan.radio = radio;
+    radio->wlan = &the_wlan;
+    *out = &the_wlan;
+    return 0;
+}
+
+/** Keep the last work queued; refuse one already queued, as work.c does. */
+int wlan_queue_work(struct wlan_work *work, uint64_t due)
+{
+    if (work->pending)
+        return -EBUSY;
+    work->pending = 1;
+    work->due = due;
+    queued = work;
+    queued_due = due;
+    n_queued++;
+    return 0;
+}
+
+/** Run the last work queued, as the worker does when it is due. */
+static void run_queued(void)
+{
+    struct wlan_work *w = queued;
+
+    queued = NULL;
+    w->pending = 0;
+    w->run(w);
+}
+
+/** The clock, in milliseconds. */
+uint64_t tick_count(void)
+{
+    return 5000;
 }
 
 void wlan_minstrel_init(struct wlan_radio *radio, struct wlan_minstrel *state)
@@ -353,6 +375,69 @@ void ath9k_phy_process_ini(struct ath9k *ah, const struct wlan_channel *chan)
     (void)ah;
     (void)chan;
     note("phy_process_ini");
+}
+
+/** Mark the baseband inactive, as phy.c does. */
+void ath9k_phy_mark_inactive(struct ath9k *ah)
+{
+    note("phy_mark_inactive");
+    REG_WRITE(ah, AR_PHY_ACTIVE, AR_PHY_ACTIVE_DIS);
+}
+
+void ath9k_phy_set_rfmode(struct ath9k *ah, const struct wlan_channel *chan)
+{
+    (void)ah;
+    (void)chan;
+    note("phy_set_rfmode");
+}
+
+void ath9k_phy_set_delta_slope(struct ath9k *ah, const struct wlan_channel *chan)
+{
+    (void)ah;
+    (void)chan;
+    note("phy_set_delta_slope");
+}
+
+void ath9k_phy_spur_mitigate(struct ath9k *ah, const struct wlan_channel *chan)
+{
+    (void)ah;
+    (void)chan;
+    note("phy_spur_mitigate");
+}
+
+/** Activate the baseband, as phy.c does, without its wait. */
+void ath9k_phy_init_bb(struct ath9k *ah, const struct wlan_channel *chan)
+{
+    (void)chan;
+    note("phy_init_bb");
+    REG_WRITE(ah, AR_PHY_ACTIVE, AR_PHY_ACTIVE_EN);
+}
+
+int ath9k_nf_read(struct ath9k *ah)
+{
+    (void)ah;
+    note("nf_read");
+    return 0;
+}
+
+void ath9k_cal_set_channel(struct ath9k *ah, const struct wlan_channel *chan)
+{
+    (void)ah;
+    (void)chan;
+    note("cal_set_channel");
+}
+
+int ath9k_nf_load(struct ath9k *ah)
+{
+    (void)ah;
+    note("nf_load");
+    return 0;
+}
+
+void ath9k_rfkill_poll(struct ath9k *ah)
+{
+    (void)ah;
+    note("rfkill_poll");
 }
 
 int ath9k_phy_set_channel(struct ath9k *ah, const struct wlan_channel *chan)
@@ -722,7 +807,9 @@ static void bus_ready(void)
     minstrel_calls = 0;
     cal_rc = 0;
     intr_rc = 0;
-    option_value = NULL;
+    queued = NULL;
+    n_queued = 0;
+    k_memset(&the_wlan, 0, sizeof(the_wlan));
     card_io = &ath9k_model_io;
     card_ctx = &model;
     notes_clear();
@@ -742,8 +829,8 @@ static int polled(uint32_t reg)
 /** The recorded card: the trace, the image and the boot line. */
 static void test_recorded(void)
 {
-    static const char *const order[] = {"power_init", "ant_init",    "rx_init",
-                                        "tx_init",    "intr_attach", NULL};
+    static const char *const order[] = {"power_init",  "ant_init",    "rx_init", "tx_init",
+                                        "intr_attach", "rfkill_poll", NULL};
     const struct ath9k_model_access *a;
     unsigned i, k = 0, bad = 0;
     int rc;
@@ -775,6 +862,7 @@ static void test_recorded(void)
     CHECK(logged("ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026"));
     CHECK(n_lines == 1);
     CHECK(registered == &card.radio);
+    CHECK(n_queued == 1 && queued == &card.bus.rfkill_work[0] && queued_due == 5000 + 1000);
     CHECK(card.radio.ops == &ath9k_radio_ops && card.radio.priv == &card);
     CHECK(streq(card.radio.name, "ath9k"));
     CHECK(minstrel_calls == 1);
@@ -813,17 +901,20 @@ static void test_recorded(void)
 /** The radio's operations on the recorded card, after test_recorded. */
 static void test_radio(void)
 {
+    /* A reset's calls, in ath9k_hw_reset's order (from full sleep the
+     * noise floor is not read). */
+#define RESET_CALLS                                                                                \
+    "cal_set_channel", "phy_mark_inactive", "phy_process_ini", "phy_set_rfmode",                   \
+        "phy_set_delta_slope", "phy_spur_mitigate", "ant_set", "mac_set_address", "mac_set_bssid", \
+        "phy_set_channel", "mac_init_queues", "ani_reset", "phy_init_bb", "cal_init", "nf_load",   \
+        "nf_start"
     static const char *const start[] = {
-        "phy_process_ini", "ant_set",         "mac_set_address", "mac_set_bssid",
-        "phy_set_channel", "mac_init_queues", "ani_reset",       "cal_init",
-        "nf_start",        "key_restore",     "mac_set_filter",  "rx_start",
-        "mac_intr_enable", "cal_start",       "recover_start",   NULL};
-    static const char *const retune[] = {"mac_intr_disable", "mac_abort_tx",    "rx_stop",
-                                         "tx_drain",         "phy_process_ini", "ant_set",
-                                         "mac_set_address",  "mac_set_bssid",   "phy_set_channel",
-                                         "mac_init_queues",  "ani_reset",       "cal_init",
-                                         "nf_start",         "key_restore",     "mac_set_filter",
-                                         "rx_start",         "mac_intr_enable", NULL};
+        RESET_CALLS,       "key_restore", "mac_set_filter", "rx_start",
+        "mac_intr_enable", "cal_start",   "recover_start",  NULL};
+    static const char *const retune[] = {
+        "mac_intr_disable", "mac_abort_tx",   "rx_stop",  "tx_drain",        "nf_read", RESET_CALLS,
+        "key_restore",      "mac_set_filter", "rx_start", "mac_intr_enable", NULL};
+#undef RESET_CALLS
     static const char *const stop[] = {
         "recover_stop", "cal_stop", "mac_intr_disable", "mac_abort_tx", "rx_stop",
         "tx_drain",     NULL};
@@ -844,6 +935,21 @@ static void test_radio(void)
     ath9k_model_log_clear(&model);
     notes_clear();
     k_memset(&info, 0, sizeof(info));
+
+    /* The switch is read each second, on the two records in turn. */
+    run_queued();
+    {
+        static const char *const poll[] = {"rfkill_poll", NULL};
+        CHECK(calls_are(poll));
+    }
+    CHECK(n_queued == 2 && queued == &card.bus.rfkill_work[1]);
+    notes_clear();
+
+    /* A suspended card does not start. */
+    card.power.suspended = 1;
+    CHECK(ops->start(radio) == -EBUSY);
+    CHECK(calls_are(none) && !card.bus.started);
+    card.power.suspended = 0;
 
     /* A stopped radio keeps the channel and the filters for its start. */
     CHECK(ops->config(radio, &radio->band.channels[5], 3) == 0);
@@ -866,8 +972,8 @@ static void test_radio(void)
     en = ath9k_model_find(&model, (unsigned)dis + 1, ATH9K_MODEL_WRITE, AR_PHY_ACTIVE);
     CHECK(en > cold && model.log[en].value == AR_PHY_ACTIVE_EN);
     CHECK((unsigned)en < call_index("cal_init"));
-    CHECK(model.log[call_index("nf_start") - 1].op == ATH9K_MODEL_WRITE &&
-          model.log[call_index("nf_start") - 1].reg == AR_CFG_LED);
+    CHECK(model.log[call_index("key_restore") - 1].op == ATH9K_MODEL_WRITE &&
+          model.log[call_index("key_restore") - 1].reg == AR_CFG_LED);
     CHECK(ath9k_model_last_write(&model, AR_CFG_LED, 0) & AR_CFG_SCLK_32KHZ);
 
     /* The values Linux wrote on the card. */
@@ -1122,24 +1228,6 @@ static void test_eeprom(void)
     CHECK(registered == NULL);
 }
 
-/** The rach2.ath9k options, an unknown word among them. */
-static void test_options(void)
-{
-    lenovo_model(1);
-    bus_ready();
-    option_value = "noani,bogus,noampdu";
-    CHECK(ath9k_probe() == 0);
-    CHECK(card.options == (ATH9K_OPT_NO_ANI | ATH9K_OPT_NO_AMPDU));
-    CHECK(logged("ath9k: rach2.ath9k=noani,bogus,noampdu: ignored: an unknown word"));
-
-    lenovo_model(1);
-    bus_ready();
-    option_value = "noaspm";
-    CHECK(ath9k_probe() == 0);
-    CHECK(card.options == ATH9K_OPT_NO_ASPM);
-    CHECK(n_lines == 1);
-}
-
 int main(void)
 {
     test_recorded();
@@ -1147,7 +1235,6 @@ int main(void)
     test_rev11();
     test_refusals();
     test_eeprom();
-    test_options();
     if (failures)
         printf("ath9k_hw_hosttest: %u checks failed\n", failures);
     return failures > 255 ? 255 : (int)failures;

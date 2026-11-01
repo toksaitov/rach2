@@ -15,11 +15,9 @@
 #include "../../../klog.h"
 #include "../../../lib/kerrno.h"
 
-/* hw.h's times in microseconds: the longest the chip takes to wake, the
- * baseband's activation beyond its synthesizer's delay, and the PLL's
- * settling. */
+/* hw.h's times in microseconds: the longest the chip takes to wake, and
+ * the PLL's settling. */
 #define POWER_UP_TIME        10000
-#define BASE_ACTIVATE_DELAY  100
 #define RTC_PLL_SETTLE_DELAY 100
 
 /* hw.h's receive signal threshold at reset. */
@@ -550,24 +548,15 @@ static void set_dma(struct ath9k *ah)
     REG_WRITE(ah, AR_PCU_TXBUF_CTRL, AR_PCU_TXBUF_CTRL_USABLE_SIZE);
 }
 
-/** Turn the baseband and synthesizer on and wait for them to settle
- * (ar9003_hw_init_bb and ath9k_hw_synth_delay). */
-static void init_bb(struct ath9k *ah)
-{
-    uint32_t delay = REG_READ(ah, AR_PHY_RX_DELAY) & AR_PHY_RX_DELAY_DELAY;
-
-    REG_WRITE(ah, AR_PHY_ACTIVE, AR_PHY_ACTIVE_EN);
-    ATH9K_UDELAY(ah, delay / 10 + BASE_ACTIVATE_DELAY);
-}
-
 /**
  * Reset the chip onto `chan` in ath9k_hw_reset's order, with coexistence
- * off and no fast channel change: keep the TSF, the default antenna, the
- * 11b base rate bit and the LED's mode across a full reset; write the
- * tables, the board's and the antenna's settings and the station's
- * identity; tune; set up queues, interrupts, QoS, timings and DMA; turn the
- * baseband on, calibrate and start a noise-floor measurement. Interrupts
- * and receive stay off. Worker. Returns 0 or the failing step's errno.
+ * off and no fast channel change: read the last noise floor, keep the TSF,
+ * the default antenna, the 11b base rate bit and the LED's mode across a
+ * full reset; write the tables, the radio's settings, the board's and the
+ * antenna's settings and the station's identity; tune; set up queues,
+ * interrupts, noise immunity, QoS, timings and DMA; turn the baseband on,
+ * calibrate, load the noise floor and start a measurement. Interrupts and
+ * receive stay off. Worker. Returns 0 or the failing step's errno.
  */
 int ath9k_hw_reset(struct ath9k *ah, const struct wlan_channel *chan)
 {
@@ -577,6 +566,9 @@ int ath9k_hw_reset(struct ath9k *ah, const struct wlan_channel *chan)
 
     if (ath9k_hw_set_power(ah, ATH9K_PM_AWAKE) != 0)
         return -EIO;
+    if (!ah->hw.full_sleep)
+        ath9k_nf_read(ah);
+    ath9k_cal_set_channel(ah, chan);
     def_antenna = REG_READ(ah, AR_DEF_ANTENNA);
     if (def_antenna == 0)
         def_antenna = 1;
@@ -584,14 +576,17 @@ int ath9k_hw_reset(struct ath9k *ah, const struct wlan_channel *chan)
     tsf = get_tsf(ah);
     led = REG_READ(ah, AR_CFG_LED) & (AR_CFG_LED_ASSOC_CTL | AR_CFG_LED_MODE_SEL |
                                       AR_CFG_LED_BLINK_THRESH_SEL | AR_CFG_LED_BLINK_SLOW);
-    REG_WRITE(ah, AR_PHY_ACTIVE, AR_PHY_ACTIVE_DIS);
+    ath9k_phy_mark_inactive(ah);
     if (chip_reset(ah) != 0)
         return -EIO;
     REG_WRITE(ah, AR_TSF_L32, (uint32_t)tsf);
     REG_WRITE(ah, AR_TSF_U32, (uint32_t)(tsf >> 32));
     REG_SET_BIT(ah, AR_GPIO_INPUT_EN_VAL, AR_GPIO_JTAG_DISABLE);
     ath9k_phy_process_ini(ah, chan);
+    ath9k_phy_set_rfmode(ah, chan);
     REG_RMW_FIELD(ah, AR_AES_MUTE_MASK1, AR_AES_MUTE_MASK1_FC_MGMT, 0xc7ff);
+    ath9k_phy_set_delta_slope(ah, chan);
+    ath9k_phy_spur_mitigate(ah, chan);
     ath9k_eeprom_set_board_values(ah, chan);
     ath9k_ant_set(ah);
     reset_opmode(ah, sta_id1, def_antenna);
@@ -609,11 +604,12 @@ int ath9k_hw_reset(struct ath9k *ah, const struct wlan_channel *chan)
     REG_WRITE(ah, AR_OBS, 8);
     REG_RMW_FIELD(ah, AR_RIMT, AR_RIMT_LAST, 500);
     REG_RMW_FIELD(ah, AR_RIMT, AR_RIMT_FIRST, 2000);
-    init_bb(ah);
+    ath9k_phy_init_bb(ah, chan);
     rc = ath9k_cal_init(ah, chan);
     if (rc != 0)
         return rc;
-    REG_WRITE(ah, AR_CFG_LED, led | AR_CFG_SCLK_32KHZ);
+    ath9k_nf_load(ah);
     ath9k_nf_start(ah);
+    REG_WRITE(ah, AR_CFG_LED, led | AR_CFG_SCLK_32KHZ);
     return 0;
 }

@@ -12,16 +12,21 @@
 
 #include "ath9k.h"
 #include "../../../klog.h"
-#include "../../../cmdline.h"
+#include "../../../timer.h"
 #include "../../../udelay.h"
 #include "../../../mm/paging.h"
+#include "../../../lib/kdef.h"
 #include "../../../lib/kerrno.h"
 #include "../../../lib/kstring.h"
 #include "../../wireless/rc_minstrel.h"
+#include "../../wireless/wiphy.h"
 
 /* The bytes of the card's window the driver maps: every register and the
  * OTP lie below it, though the BAR is 512 KiB. */
 #define ATH9K_WINDOW 0x20000
+
+/* How often the radio switch is read, in milliseconds. */
+#define RFKILL_POLL_MS 1000
 
 /* The subsystem IDs' offsets in PCI configuration space. */
 #define PCI_SUBSYS_VENDOR 0x2c
@@ -116,7 +121,8 @@ static void radio_stop(struct wlan_radio *radio)
 }
 
 /** radio.h's start: bring the chip up on its last channel and start the
- * calibration and the hang checks; on failure leave it stopped. */
+ * calibration and the hang checks; on failure leave it stopped. A start
+ * while power.c holds the card suspended is refused with -EBUSY. */
 static int radio_start(struct wlan_radio *radio)
 {
     struct ath9k *ah = radio->priv;
@@ -124,6 +130,8 @@ static int radio_start(struct wlan_radio *radio)
 
     if (ah->bus.started)
         return 0;
+    if (ah->power.suspended)
+        return -EBUSY;
     rc = bring_up(ah, start_channel(ah));
     if (rc != 0) {
         klog(KLOG_ERR, "ath9k", "start: failed: %d", rc);
@@ -245,47 +253,23 @@ const struct wlan_radio_ops ath9k_radio_ops = {
 /* The probe.                                                          */
 /* ------------------------------------------------------------------ */
 
-/** Whether the `n` characters at `p` are `word`. */
-static int word_is(const char *p, size_t n, const char *word)
+/** Queue the switch's next poll on the record not queued last. */
+static void rfkill_queue(struct ath9k *ah, uint64_t due)
 {
-    size_t i;
+    struct wlan_work *w = &ah->bus.rfkill_work[ah->bus.rfkill_next];
 
-    for (i = 0; i < n; i++)
-        if (word[i] != p[i])
-            return 0;
-    return word[n] == 0;
+    ah->bus.rfkill_next ^= 1;
+    (void)wlan_queue_work(w, due);
 }
 
-/**
- * Read the driver's boot options from `rach2.ath9k=`, a comma-separated
- * list of noani, noaspm and noampdu, each setting its ATH9K_OPT_* bit.
- * An unknown word is logged and ignored.
- */
-static unsigned read_options(void)
+/** The switch's poll, on the worker: read it, as power.c asks of the bus
+ * side whether the radio runs or not, and queue the next. */
+static void rfkill_run(struct wlan_work *work)
 {
-    static const struct {
-        const char *word;
-        unsigned bit;
-    } words[] = {{"noani", ATH9K_OPT_NO_ANI},
-                 {"noaspm", ATH9K_OPT_NO_ASPM},
-                 {"noampdu", ATH9K_OPT_NO_AMPDU}};
-    char value[64], *p, *end;
-    unsigned options = 0, i;
+    struct ath9k *ah = work->wlan->radio->priv;
 
-    if (!kcmdline_value("rach2.ath9k", value, sizeof(value)))
-        return 0;
-    for (p = value; *p; p = *end ? end + 1 : end) {
-        for (end = p; *end && *end != ','; end++)
-            ;
-        for (i = 0; i < sizeof(words) / sizeof(words[0]); i++)
-            if (word_is(p, (size_t)(end - p), words[i].word))
-                break;
-        if (i < sizeof(words) / sizeof(words[0]))
-            options |= words[i].bit;
-        else
-            klog(KLOG_WARN, "ath9k", "rach2.ath9k=%s: ignored: an unknown word", value);
-    }
-    return options;
+    ath9k_rfkill_poll(ah);
+    rfkill_queue(ah, tick_count() + RFKILL_POLL_MS);
 }
 
 /** Find the first card of a chip of the table, and its row. */
@@ -349,7 +333,6 @@ static int probe_card(struct ath9k *ah, const struct ath9k_chip *chip, const pci
     k_memset(ah, 0, sizeof(*ah));
     ah->io = card_io;
     ah->io_ctx = card_ctx ? card_ctx : ah;
-    ah->options = read_options();
     ah->bus.dev = *dev;
     ah->bus.subsys_vendor = pci_read_config16(d->bus, d->device, d->function, PCI_SUBSYS_VENDOR);
     ah->bus.subsys_device = pci_read_config16(d->bus, d->device, d->function, PCI_SUBSYS_ID);
@@ -387,9 +370,15 @@ static int probe_card(struct ath9k *ah, const struct ath9k_chip *chip, const pci
          ah->bus.subsys_vendor, ah->bus.subsys_device);
     ath9k_hw_set_power(ah, ATH9K_PM_FULL_SLEEP);
     rc = wlan_register_radio(&ah->radio, &wlan);
-    if (rc != 0)
+    if (rc != 0) {
         klog(KLOG_ERR, "ath9k", "probe: failed: register: %d", rc);
-    return rc;
+        return rc;
+    }
+    ah->bus.rfkill_work[0].wlan = ah->bus.rfkill_work[1].wlan = wlan;
+    ah->bus.rfkill_work[0].run = ah->bus.rfkill_work[1].run = rfkill_run;
+    ath9k_rfkill_poll(ah);
+    rfkill_queue(ah, tick_count() + RFKILL_POLL_MS);
+    return 0;
 }
 
 /**

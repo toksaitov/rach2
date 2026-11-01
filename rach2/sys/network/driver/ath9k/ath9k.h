@@ -586,6 +586,11 @@ struct ath9k_bus {
     unsigned flags;  /* ATH9K_PCI_* */
     uint8_t vector;  /* the MSI vector, 0 when the tick serves the card */
     uint8_t started; /* the radio's start succeeded and no stop followed */
+    /* The radio switch's poll each second while the radio is registered,
+     * taking turns between two records, since a record cannot be queued
+     * while its callback runs. */
+    struct wlan_work rfkill_work[2];
+    uint8_t rfkill_next; /* the record the next poll is queued on */
 };
 
 /* hw.c's: the chip's identity, its power, and the tables its row's ops
