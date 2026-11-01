@@ -1967,8 +1967,9 @@ static unsigned int special(const struct keymap_result *res, unsigned int mods, 
 {
     unsigned int n = 0;
 
+    /* Linux's K_DOWN, K_LEFT, K_RIGHT and K_UP are KT_CUR 0 to 3. */
     if (KM_TYPE(res->key) == KM_T_CUR && KM_VALUE(res->key) < 4) {
-        return sequence("DBCA"[KM_VALUE(res->key)], 0, (modes & KM_MODE_CURSOR) != 0, mods, buf);
+        return sequence("BDCA"[KM_VALUE(res->key)], 0, (modes & KM_MODE_CURSOR) != 0, mods, buf);
     }
     if (KM_TYPE(res->key) == KM_T_PAD) {
         return keypad(res, modes, buf);
