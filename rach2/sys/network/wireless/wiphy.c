@@ -1,6 +1,7 @@
 /* Register radios as Ethernet interfaces and keep station state and carrier. */
 #include "wiphy.h"
 #include "data.h"
+#include "sta.h"
 #include "../ethernet/ethernet.h"
 #include "../net.h"
 #include "../netconf.h"
@@ -248,8 +249,16 @@ int wlan_register_radio(struct wlan_radio *radio, struct wlan **out)
         kfree(wlan);
         return rc;
     }
+    rc = wlan_sta_attach(wlan);
+    if (rc < 0) {
+        wlan_data_detach(wlan);
+        rfkill_unregister(wlan->rfkill);
+        kfree(wlan);
+        return rc;
+    }
     rc = netdev_register(&wlan->netdev);
     if (rc < 0) {
+        wlan_sta_detach(wlan);
         wlan_data_detach(wlan);
         rfkill_unregister(wlan->rfkill);
         kfree(wlan);
@@ -336,6 +345,7 @@ void wlan_unregister_radio(struct wlan *wlan)
     rfkill_unregister(wlan->rfkill);
     wlan_cancel_work(&wlan->rfkill_work[0]);
     wlan_cancel_work(&wlan->rfkill_work[1]);
+    wlan_sta_detach(wlan);
     if (wlan->scan.state == WLAN_SCAN_HARDWARE && wlan->radio->ops->scan_cancel)
         wlan->radio->ops->scan_cancel(wlan->radio);
     wlan_stop(wlan);

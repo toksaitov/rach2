@@ -18,6 +18,7 @@
  */
 #include "network/wireless/wiphy.h"
 #include "network/wireless/data.h"
+#include "network/wireless/sta.h"
 #include "network/net.h"
 #include "network/netconf.h"
 #include "network/ethernet/ethernet.h"
@@ -342,6 +343,19 @@ int wlan_data_attach(struct wlan *wlan, wlan_data_event_fn event)
 
 /** Nothing was attached. */
 void wlan_data_detach(struct wlan *wlan)
+{
+    (void)wlan;
+}
+
+/** The softMAC station and nl80211 are not under test here. */
+int wlan_sta_attach(struct wlan *wlan)
+{
+    (void)wlan;
+    return 0;
+}
+
+/** Nothing was attached. */
+void wlan_sta_detach(struct wlan *wlan)
 {
     (void)wlan;
 }

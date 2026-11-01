@@ -56,7 +56,9 @@ A request handler emits replies through `genl_reply`; dispatch owns ACK and erro
 
 ### nl80211
 
-[`nl80211.h`](nl80211.h) declares what the registry calls to make a station reachable through nl80211, and what nl80211 calls in return. `nl80211_attach` gives nl80211 a station's radio, its band after the regulatory rules, its interface, its BSS table and a `struct nl80211_ops`; the first attachment registers the family. The registry attaches each interface once its station can take work, and calls `nl80211_detach` before it drains the station's work and before `wlan_unregister_radio`; detaching ends the requests still waiting for the worker with `-ENODEV`. Every call of `nl80211_ops` but `status` runs on the worker, may sleep and borrows its arguments; `status` must not sleep. The station reports what follows a call, such as the access point's answer, through `wlan_event`, which nl80211 defines. [nl80211(7)](../../../../man/man7/nl80211.7) gives the commands, attributes and events user space sees.
+[`nl80211.h`](nl80211.h) declares how a station becomes reachable through nl80211, and `struct nl80211_ops`, the calls nl80211 makes into it, in the shape of Linux's `cfg80211_ops`: scan, authentication, association, leaving, the port, the keys, management frames, the station's state, and an optional `connect` and `disconnect` for a station that joins by itself. `nl80211_attach` gives nl80211 a station's radio, its band after the regulatory rules, its interface, its BSS table and its operations; the first attachment registers the family and installs nl80211's event consumer with `wlan_set_event_handler`, through which the registry's `wlan_event` passes each event on. `nl80211_detach` ends the requests still waiting for the worker with `-ENODEV`. Every call of `nl80211_ops` but `status` runs on the worker, may sleep and borrows its arguments; `status` must not sleep. What follows a call, such as the access point's answer, comes back as an event. [nl80211(7)](../../../../man/man7/nl80211.7) gives the commands, attributes and events user space sees.
+
+[`sta.h`](sta.h) declares the softMAC station, the implementation of `nl80211_ops` for a radio of `radio.h`. The registry calls `wlan_sta_attach` at registration, once the data path is attached, and `wlan_sta_detach` first at unregistration, before the radio stops.
 
 ### Software-medium datagrams
 
@@ -93,7 +95,7 @@ A receiver refuses a wrong magic, version, type or header length, nonzero reserv
 
 `../../rfkill.c` gives user space Linux's `/dev/rfkill` events and `/sys/class/rfkill` attributes, from Linux's `include/uapi/linux/rfkill.h` and `net/rfkill/core.c`; the code is Rach2's.
 
-`nl80211.c` follows the design of Linux's `net/wireless/nl80211.c`, and its CONNECT that of `net/wireless/sme.c`; the code is Rach2's. Its command, attribute and constant numbers are those of Linux's `include/uapi/linux/nl80211.h`, the ABI that wpa_supplicant and iw are built to.
+`nl80211.c` follows the design of Linux's `net/wireless/nl80211.c`, and its CONNECT that of `net/wireless/sme.c`; `sta.c` follows `net/mac80211/cfg.c`; the code is Rach2's. Its command, attribute and constant numbers are those of Linux's `include/uapi/linux/nl80211.h`, the ABI that wpa_supplicant and iw are built to.
 
 ## Design
 
@@ -169,7 +171,13 @@ A handler parses and checks its request in the sending process, then carries it 
 
 `REGISTER_FRAME` keeps a list of action-frame matches on each station, each with the port that registered it. A received action frame goes by `genl_unicast` to the first match, and a port that has closed loses its registration then; the family's `release` call drops a socket's registrations as it closes. `FRAME` gives each frame a cookie with `NL80211_COOKIE` set, and `NL80211_COOKIE_NOACK` when no acknowledgement was asked for, so that a transmit status is reported only for nl80211's own frames that asked for one.
 
+`CONNECT` and `DISCONNECT` go to the station's own `connect` and `disconnect` when it has them, as cfg80211 hands them to a fullMAC driver; the station then reports the outcome as an `ASSOCIATE` event, which nl80211 turns into the `CONNECT` event as it does after its own steps.
+
 `GET_REG` reports the world domain, `00`, as two rules: 2402 to 2472 MHz at 40 MHz, and 2457 to 2482 MHz at 20 MHz with no initiation of radiation, both at 20 dBm.
+
+### Station
+
+`sta.c` embeds the MLME in the station record's `mlme_priv` and carries out nl80211's calls with the MLME, the scan, the BSS table and the data path's keys, as mac80211's `cfg.c` does. It installs two hooks of the data path: received management frames go to the MLME first, and transmit completions come back to it. A frame sent for `FRAME` takes the data path's own cookie, so `sta.c` keeps the last four such frames, each with nl80211's cookie and a copy of its bytes, and reports a completion under nl80211's cookie with the frame; a fifth frame takes the oldest entry, whose status is then lost. A robust action frame goes protected once management-frame protection is in use. The MLME's events pass through `sta.c`, which notes the time of an association and, when the association asked for no control port, opens the port on its own work record, since an event may not call back into the MLME. The station has no `connect` of its own, so nl80211 builds CONNECT from authentication and association.
 
 ### Software radio
 
@@ -199,6 +207,7 @@ The registry registers a `wlan` switch named `phyN` with each radio, before its 
 * `GET_REG` reports the world domain only, whatever country the registry has applied.
 * `FRAME` has no off-channel wait, `REMAIN_ON_CHANNEL` is `EOPNOTSUPP`, and only action frames can be registered or sent.
 * WEP, Shared Key, FT and FILS are refused, as are extended key IDs and power save; SAE runs only through `AUTHENTICATE`, not `CONNECT`.
+* Taking an interface down or blocking its radio stops the radio without telling the MLME, which finds the AP gone by beacon loss and then reports the disconnection.
 * The host test replays the requests wpa_supplicant 2.12 and iw 6.17 send, from their sources. Comparing it with the trace of those programs running on Linux, and adding or listing here the commands the trace has and nl80211 lacks, waits for that trace.
 * The station sends no ADDBA request, so it transmits no aggregates, and it advertises no A-MSDU in its ADDBA response; it splits an A-MSDU an AP sends anyway.
 * Management frames are protected in software even when the radio holds the key, and a radio holding a TKIP key gets the Michael MIC from software.
@@ -222,4 +231,4 @@ The registry registers a `wlan` switch named `phyN` with each radio, before its 
 
 `tests/host/rfkill_hosttest.c` includes the rfkill core whole, with two model owners and readers of `/dev/rfkill` over host memory. It checks registration's refusals and the table's limit; the `ADD` events of an open and `EAGAIN` after them; `CHANGE_ALL` by type and for every type, `CHANGE` by index with a matching and a wrong type, a 7-byte write, a 9-byte write cut to 8, and the refusals; an owner's refusal, which changes nothing; the hard block and its attributes; the extended event after `RFKILL_IOCTL_MAX_SIZE` and its refusals; a short read and a faulting one; a blocking read woken by a change; a full queue, which keeps the last 32; a switch that starts blocked after `CHANGE_ALL` and indexes that are not reused; every attribute's text, `uevent` among them; and the writes of `soft` and `state`. The host collection registers it as `rfkill`.
 
-`tests/host/nl80211_hosttest.c` runs nl80211 through the real generic-netlink dispatcher, worker and BSS table against a stub station whose calls it records and whose results it scripts; the stub's wait runs the worker until the request has run. It sends the requests wpa_supplicant 2.12 and iw 6.17 send and checks the attributes of every answer and event: the family's resolution, the split and whole wiphy descriptions, interfaces, a flushing scan and its dump, WPA2-PSK and SAE joins with their keys, port, station and survey reads, leaving and timeouts, CONNECT with its scan, choice, refusals and failures, frame registration, delivery and release, transmission and its status, the regulatory domain, a MIC failure and power save, and a second interface detached while its request waits. Refusals cover privilege, malformed and repeated attributes, ciphers, key indexes and lengths, and unsupported modes. The host collection registers it as `nl80211`.
+`tests/host/nl80211_hosttest.c` runs nl80211 through the real generic-netlink dispatcher, worker and BSS table against a stub station whose calls it records and whose results it scripts; the stub's wait runs the worker until the request has run. It sends the requests wpa_supplicant 2.12 and iw 6.17 send and checks the attributes of every answer and event: the family's resolution, the split and whole wiphy descriptions, interfaces, a flushing scan and its dump, WPA2-PSK and SAE joins with their keys, port, station and survey reads, leaving and timeouts, CONNECT with its scan, choice, refusals and failures, frame registration, delivery and release, transmission and its status, the regulatory domain, a MIC failure and power save, a second interface detached while its request waits, and a station with its own `connect` and `disconnect`. Refusals cover privilege, malformed and repeated attributes, ciphers, key indexes and lengths, and unsupported modes. The host collection registers it as `nl80211`.
