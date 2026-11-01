@@ -5,3 +5,4 @@
 0002-linux-input-headers.patch
 0003-linux-keyboard-headers.patch
 0004-cond-requeue-fallback.patch
+0005-linux-sound-headers.patch

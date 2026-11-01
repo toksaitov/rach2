@@ -38,7 +38,7 @@ The source is the release tarball from <https://musl.libc.org/releases/>, kept b
 
 ## Local changes
 
-[`patches/series`](patches/series) names the patches `build_libc.sh` applies, in order. There are four.
+[`patches/series`](patches/series) names the patches `build_libc.sh` applies, in order. There are five.
 
 ### posix_spawn forks
 
@@ -55,6 +55,10 @@ The source is the release tarball from <https://musl.libc.org/releases/>, kept b
 ### Condition variable wake fallback
 
 `0004-cond-requeue-fallback.patch` wakes the next private condition waiter when both forms of `FUTEX_REQUEUE` return `ENOSYS`. The kernel does not implement requeue; musl's ordinary broadcast otherwise releases its first waiter and leaves the rest blocked on their barriers. The fallback preserves the barrier chain and lets each waiter take the mutex in turn. `threadscaling` exercises it with 16, 64 and 256 waiters.
+
+### Linux's sound headers
+
+[`0005-linux-sound-headers.patch`](patches/0005-linux-sound-headers.patch) adds `<linux/soundcard.h>` and `<linux/patchkey.h>`, the user headers of the OSS sound interface, `/dev/dsp` and `/dev/mixer`, and the ioctl headers they include, `<linux/ioctl.h>`, `<asm/ioctl.h>` and `<asm-generic/ioctl.h>`, as `make headers_install ARCH=x86` installs them from Linux 6.18.54. musl's own `<sys/soundcard.h>` includes `<linux/soundcard.h>`, so an OSS program includes `<sys/soundcard.h>` as it would on Linux. `<sys/ioctl.h>` and `<asm-generic/ioctl.h>` both define `_IOC`, `_IO`, `_IOR`, `_IOW` and `_IOWR`, with the same numbers; the patch makes each header define them only when the other has not, so that a program including both, which TinyCC compiles without treating either as a system header, gets no redefinition warnings. `soundcard.h` is under a BSD license, in its own comment.
 
 ## Building
 
