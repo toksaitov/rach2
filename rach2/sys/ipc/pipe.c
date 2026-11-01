@@ -692,6 +692,7 @@ int32_t fifo_attach(fd_entry_t *e, const void *mnt, uint64_t ino, int flags)
             fifo_unopen(p, reads, writes);
             return -EINTR;
         }
+        e = fd_entry_now(current_proc->fds, e); /* another sharer may have grown the table */
     }
     if (acc == 2) {
         p->rdwr_open++;

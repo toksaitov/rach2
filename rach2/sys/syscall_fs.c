@@ -259,6 +259,7 @@ static void fd_release_orphan(fd_entry_t *e)
     if (!locked) {
         return;
     }
+    e = fd_entry_now(current_proc ? current_proc->fds : NULL, e); /* the lock may sleep */
     if (e->type == FD_TYPE_FILE) {
         node = fd_root_node(e);
         if (node->name[0] == '\0' && fd_node_holders(node, e) == 0) {
@@ -382,11 +383,13 @@ static void fd_close_locks(const fd_entry_t *e)
  * under the root's namespace lock (`fd_release_orphan`). This runs while
  * the closing slot is still populated, which is what the count's `except` is
  * for: the closing descriptor is skipped where it is, so every other release
- * counts it until its own has the lock.
+ * counts it until its own has the lock. The entry is found again after that
+ * lock, whose wait may let another sharer grow the table (`fd_entry_now`).
  */
 static void fd_release_objects(fd_entry_t *e)
 {
     fd_release_orphan(e);
+    e = fd_entry_now(current_proc ? current_proc->fds : NULL, e);
     if ((e->type == FD_TYPE_SYNTH_DIR || e->type == FD_TYPE_SYNTH_PATH) && e->priv && e->ofd &&
         e->ofd->refcount == 1) {
         kfree(e->priv);
@@ -2655,8 +2658,9 @@ static int open_create(const char *name, int flags, uint32_t mode, struct vfs_re
  * whose description holds the file and its mount, as a regular file's does,
  * made an end of the file's pipe. The walk's lock goes before
  * `fifo_attach`, which may wait for the other end, with the slot still a
- * reservation. Returns the descriptor or a negative errno, with `ref`
- * released and the reservation installed or freed either way.
+ * reservation, and finds the entry again after the wait (`fd_entry_now`),
+ * since the open's sleeps let another sharer grow the table. Returns the descriptor or a negative
+ * errno, with `ref` released and the reservation installed or freed either way.
  */
 static int32_t open_fifo(struct vfs_ref *ref, int fd, uint64_t ino, int flags)
 {
@@ -2679,7 +2683,7 @@ static int32_t open_fifo(struct vfs_ref *ref, int fd, uint64_t ino, int flags)
     vfs_leave(mnt);
     rc = fifo_attach(e, vfs_mount_base(mnt), ino, flags);
     if (rc != 0) {
-        fd_release_orphan(e);
+        fd_release_orphan(fd_entry_now(current_proc->fds, e));
         fd_free(current_proc->fds, fd);
         return rc;
     }
@@ -2928,7 +2932,8 @@ static int open_root_node(struct vfs_ref *ref, int flags)
  * The entry gets its type last, which is what publishes it: until then the
  * slot is a reservation, which no other thread's lookup, close or dup2 can
  * take while the file system's open or the truncation sleeps with the
- * description in use.
+ * description in use. The entry is found again after those sleeps, since
+ * another sharer may have grown the table meanwhile (`fd_entry_now`).
  */
 static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int flags)
 {
@@ -2989,6 +2994,7 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
         }
     }
 
+    entry = fd_entry_now(current_proc->fds, entry); /* past the last sleep */
     if ((flags & 3) == 0) {
         entry->ofd->access = 0;
     }
@@ -3805,7 +3811,8 @@ static int fd_held_elsewhere(const fd_table_t *table, int fd)
         return 0;
     }
     for (t = proc_list; t; t = t->next) {
-        if (t != current_proc && t->fds == table && (t->fd_held[fd / 32] & (1u << (fd % 32)))) {
+        if (t != current_proc && t->fds == table && fd / 32 < t->fd_holding &&
+            (t->fd_held[fd / 32] & (1u << (fd % 32)))) {
             return 1;
         }
     }
@@ -3862,18 +3869,21 @@ static int32_t close_fd(int fd)
  * An entry whose release another thread has begun (FD_FLAG_RELEASING) is left
  * to it: two threads whose calls end while one of them sleeps in a release
  * would otherwise both find the entry closing and held by nobody, and release
- * it twice.
+ * it twice. The words up to `fd_holding` are scanned, and it is cleared only
+ * after them, since a release may sleep with the address of its entry and
+ * the arrays a growth replaced must stay until it ends (`fd_table_reap`);
+ * the map is read through the record at each word, since such a growth may
+ * have widened it. Then the replaced arrays go when no other sharer holds.
  */
 void fd_holds_release(void)
 {
     process_t *p = current_proc;
     int w;
 
-    if (!p || !p->fd_holding) {
+    if (!p) {
         return;
     }
-    p->fd_holding = 0;
-    for (w = 0; w < FD_TABLE_LIMIT / 32; w++) {
+    for (w = 0; w < p->fd_holding; w++) {
         uint32_t bits = p->fd_held[w];
         int fd;
 
@@ -3890,6 +3900,10 @@ void fd_holds_release(void)
                 fd_teardown(p->fds, fd);
             }
         }
+    }
+    p->fd_holding = 0;
+    if (p->fds && p->fds->retired) {
+        fd_table_reap(p->fds);
     }
 }
 
@@ -5281,6 +5295,7 @@ static int32_t dup_clear(int fd)
     }
     fd_close_locks(e);
     fd_teardown(table, fd);
+    e = &table->entries[fd]; /* the release may sleep while another sharer grows the table */
     return e->type == FD_TYPE_NONE && !e->ofd ? 0 : -EBUSY;
 }
 
@@ -10079,6 +10094,7 @@ static int32_t fcntl_lock(fd_entry_t *entry, int cmd, uintptr_t arg)
     req.pid = 0;
     fd_lock_key(entry, &key);
     rc = lock_record(&key, by_ofd ? entry->ofd : NULL, op, &req);
+    entry = fd_entry_now(current_proc->fds, entry); /* the wait may let the table grow */
     if (rc == 0 && op != LOCK_GET && req.type != F_UNLCK && !by_ofd &&
         (entry->flags & FD_FLAG_CLOSING)) {
         fd_lock_key(entry, &key);
@@ -11565,7 +11581,7 @@ out:
         }
     }
     kfree(notes);
-    fd_release_backing(entry);
+    fd_release_backing(fd_entry_now(current_proc->fds, entry)); /* the writes sleep */
     fd_free(current_proc->fds, fd);
     return rc;
 }

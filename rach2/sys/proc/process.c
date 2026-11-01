@@ -317,7 +317,8 @@ process_t *alloc_process(void)
     p->sid = candidate;
     p->pgid = candidate;
     p->rlim[RLIM_NPROC].cur = p->rlim[RLIM_NPROC].max = PROC_COUNT_POLICY;
-    p->rlim[RLIM_NOFILE].cur = p->rlim[RLIM_NOFILE].max = FD_TABLE_LIMIT;
+    p->rlim[RLIM_NOFILE].cur = FD_TABLE_LIMIT;
+    p->rlim[RLIM_NOFILE].max = FD_NOFILE_HARD;
     p->rlim[RLIM_AS].cur = p->rlim[RLIM_AS].max = RLIM_INFINITY;
     p->rlim[RLIM_STACK].cur = RLIM_STACK_DEFAULT;
     p->rlim[RLIM_STACK].max = RLIM_INFINITY;
@@ -408,6 +409,9 @@ void free_process(process_t *proc)
     if (proc->fds && --proc->fds->refs == 0) {
         fd_table_delete(proc->fds);
     }
+    kfree(proc->fd_held);
+    proc->fd_held = NULL;
+    proc->fd_held_words = 0;
     if (proc->fs && --proc->fs->refs == 0) {
         kfree(proc->fs->cwd_long);
         kfree(proc->fs);
