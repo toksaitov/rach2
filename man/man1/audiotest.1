@@ -1,4 +1,4 @@
-.Dd September 21, 2026
+.Dd November 1, 2026
 .Dt AUDIOTEST 1
 .Os
 .Sh NAME
@@ -7,6 +7,9 @@
 .Sh SYNOPSIS
 .Nm
 .Op Ar rate Op Ar seconds Op Ar frequency
+.Nm
+.Fl s
+.Op Ar rate
 .Sh DESCRIPTION
 .Nm
 plays a square wave as signed 16-bit stereo PCM.
@@ -39,13 +42,30 @@ Read it after the tone finishes or from another SSH session during playback.
 A successful run means samples were submitted, not that a physical output
 was audible or its clock was measured.
 .Pp
-The metal RAM image, metal disk root and os-real stage this program.
+With
+.Fl s ,
+.Nm
+measures the queue on HDA instead.
+It writes a second of numbered blocks of 10 ms, every sample the block's
+number, as fast as the queue takes them, stalls a second, and writes another
+second, reading the
+.Cm delay-ms
+field of
+.Pa /proc/audio
+after each block.
+It prints the largest delay it read and its bound, six periods of the frame
+count nearest 23 ms at the programmed rate, which is what the driver queues
+at most, and fails when the delay passed the bound.
+.Pp
+The metal RAM image, metal disk root, os-real and the test image stage this
+program.
 .Sh EXIT STATUS
 .Ex -std
 .Sh EXAMPLES
 .Bd -literal -offset indent
 audiotest 32000 2 440
 cat /proc/audio
+audiotest -s 48000
 .Ed
 .Sh SEE ALSO
 .Xr ioctl 2 ,
