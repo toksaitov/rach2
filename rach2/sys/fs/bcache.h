@@ -51,6 +51,7 @@
 
 struct bbuf {
     struct bbuf *next;   /* the cache's list of buffers */
+    struct bbuf *prev;   /* the buffer before it on that list, or NULL */
     struct bbuf *hnext;  /* the next buffer in its hash bucket */
     block_device_t *dev; /* NULL: the buffer is empty */
     uint64_t blk;        /* block index on dev, in 8-sector units */
@@ -195,6 +196,12 @@ uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written);
 
 /** Buffers the cache holds now. */
 uint32_t bcache_resident(void);
+
+/** The most buffers the cache makes now, for /proc/disk. */
+uint32_t bcache_capacity(void);
+
+/** The buckets of the cache's index by device and block, for /proc/disk. */
+uint32_t bcache_buckets(void);
 
 /** Whether the dirty buffers are a quarter of the cache's limit or more,
  * the share at which a file system that writes back writes them in runs

@@ -19,7 +19,7 @@
 #include "../panic.h"
 #include "../proc/process.h"
 
-static struct bbuf *bufs;     /* every buffer, newest first */
+static struct bbuf *bufs;     /* every buffer, newest first, linked both ways */
 static uint32_t nbufs;        /* how many */
 static struct bbuf *lru_head; /* the keyed buffers, least recently released first */
 static struct bbuf *lru_tail;
@@ -67,6 +67,11 @@ uint32_t bcache_resident(void)
     return nbufs;
 }
 
+uint32_t bcache_capacity(void)
+{
+    return bcache_limit();
+}
+
 int bcache_dirty_heavy(void)
 {
     return ndirty >= bcache_limit() / 4u;
@@ -89,6 +94,8 @@ uint64_t bcache_stat_visits(void)
     return stat_visits;
 }
 
+static void index_fit(void);
+
 /** A buffer from the heap, empty and unheld, on the list; NULL when the
  * heap has no room for it. */
 static struct bbuf *buffer_new(void)
@@ -105,30 +112,111 @@ static struct bbuf *buffer_new(void)
     }
     b->holder = -1;
     wait_queue_init(&b->wq);
+    b->prev = 0;
     b->next = bufs;
+    if (bufs) {
+        bufs->prev = b;
+    }
     bufs = b;
     nbufs++;
+    index_fit();
     return b;
 }
 
-/* The index by device and block: a lookup walks one bucket and not the
- * whole list, which runs to thousands of buffers on a machine with memory.
- * A buffer is in the index from the moment it is keyed to a block until it
- * is emptied. */
-#define BHASH 4096
-static struct bbuf *bhash[BHASH];
+/*
+ * The index by device and block: a lookup walks one bucket and not the
+ * whole list, which runs to hundreds of thousands of buffers on a machine
+ * with memory. A buffer is in the index from the moment it is keyed to a
+ * block until it is emptied.
+ *
+ * The index has a bucket for each buffer the cache's limit allows, so that
+ * a bucket holds one buffer on average when the cache is full. It starts
+ * with the BHASH_FIRST buckets of `bhash_first`, which need no heap at
+ * boot, and when the buffers outnumber the buckets `index_fit` moves it to
+ * a table from the heap sized from the limit. A heap that has no run for
+ * the table leaves the index as it is until the buffers have doubled.
+ */
+#define BHASH_FIRST       4096u
+#define BHASH_FIRST_SHIFT 12
+/* The most buckets: the limit of a machine with 64 GiB of memory. */
+#define BHASH_MOST        (1u << 22)
+static struct bbuf *bhash_first[BHASH_FIRST];
+static struct bbuf **bhash = bhash_first;
+static uint32_t bhash_size = BHASH_FIRST; /* a power of two */
+static uint32_t bhash_shift = BHASH_FIRST_SHIFT;
+static uint32_t bhash_retry; /* buffers below which a refused table is not asked again */
 
-/** The bucket of the index for block `blk` of `dev`. */
-static unsigned bucket_of(const block_device_t *dev, uint64_t blk)
+uint32_t bcache_buckets(void)
 {
-    return (unsigned)(((uintptr_t)dev >> 4) ^ (uintptr_t)blk ^ (uintptr_t)(blk >> 12)) &
-           (BHASH - 1);
+    return bhash_size;
+}
+
+/** The bucket of the index for block `blk` of `dev`: the block's bits,
+ * the high ones folded onto the low, and the device's address mixed in by a
+ * multiplication, so that the same block of two partitions falls apart. */
+static uint32_t bucket_of(const block_device_t *dev, uint64_t blk)
+{
+    uint32_t lo = (uint32_t)blk;
+    uint32_t h = lo ^ (lo >> bhash_shift) ^ (uint32_t)(blk >> 32);
+
+    h ^= (uint32_t)((uintptr_t)dev >> 4) * 0x9E3779B1u;
+    return h & (bhash_size - 1u);
+}
+
+/** Give the index a bucket for each buffer the limit allows, once the
+ * buffers outnumber its buckets: a table from the heap, every keyed buffer
+ * moved to it, and the old table given back unless it is the first. */
+static void index_fit(void)
+{
+    uint32_t most = bcache_limit(), size = bhash_size, shift = bhash_shift;
+    uint32_t pages, old_pages = 0;
+    struct bbuf **table, **old = bhash;
+    struct bbuf *b;
+
+    if (nbufs <= bhash_size || nbufs < bhash_retry) {
+        return;
+    }
+    if (most < nbufs) {
+        most = nbufs;
+    }
+    while (size < most && size < BHASH_MOST) {
+        size <<= 1;
+        shift++;
+    }
+    if (size == bhash_size) {
+        return;
+    }
+    pages = (uint32_t)((size * sizeof(*table) + PAGE_SIZE - 1) / PAGE_SIZE);
+    table = kalloc_pages_try(pages, 0);
+    if (!table) {
+        bhash_retry = nbufs * 2u;
+        return;
+    }
+    k_memset(table, 0, (size_t)pages * PAGE_SIZE);
+    if (old != bhash_first) {
+        old_pages = (uint32_t)((bhash_size * sizeof(*table) + PAGE_SIZE - 1) / PAGE_SIZE);
+    }
+    bhash = table;
+    bhash_size = size;
+    bhash_shift = shift;
+    for (b = bufs; b; b = b->next) {
+        stat_visits++;
+        if (b->dev) {
+            uint32_t h = bucket_of(b->dev, b->blk);
+
+            b->hnext = bhash[h];
+            bhash[h] = b;
+        }
+    }
+    if (old_pages) {
+        kfree_pages(old, old_pages);
+    }
 }
 
 /** Put the keyed buffer `b` in its bucket of the index. */
 static void index_add(struct bbuf *b)
 {
-    unsigned h = bucket_of(b->dev, b->blk);
+    uint32_t h = bucket_of(b->dev, b->blk);
 
     b->hnext = bhash[h];
     bhash[h] = b;
@@ -278,22 +366,18 @@ static struct bbuf *take_empty(void)
     return b;
 }
 
-/** An empty, unheld buffer off every list and back to the heap. */
+/** An unheld buffer off the cache's lists and back to the heap: a clean
+ * keyed one, or an empty one the caller has taken off the empties. */
 static void buffer_free(struct bbuf *b)
 {
-    struct bbuf **link;
-
-    for (link = &bufs; *link != b; link = &(*link)->next) {
-        stat_visits++;
-    }
     stat_visits++;
-    *link = b->next;
-    for (link = &empties; *link; link = &(*link)->empty_next) {
-        stat_visits++;
-        if (*link == b) {
-            *link = b->empty_next;
-            break;
-        }
+    if (b->prev) {
+        b->prev->next = b->next;
+    } else {
+        bufs = b->next;
+    }
+    if (b->next) {
+        b->next->prev = b->prev;
     }
     nbufs--;
     index_del(b);
@@ -584,6 +668,57 @@ static uint32_t block_bytes(block_device_t *dev, uint64_t blk)
 
 static struct bbuf *get(block_device_t *dev, uint64_t blk, int blank, int *fresh);
 static int fill_run(block_device_t *dev, uint64_t blk);
+static int firsts_pending(const block_device_t *dev);
+
+/**
+ * The least recently released buffer a miss for a block of `filling` may
+ * take, or NULL when there is none. Not one that is held or kept for a
+ * fill, nor a dirty one whose last write failed, whose write the caller may
+ * not make (`victim_may_be_written`), or an `after` whose device has a
+ * `first` that cannot be written now.
+ *
+ * Each buffer passed over is moved to the tail of the release order, so
+ * that the next search does not read it again before every buffer now
+ * ahead of it has been taken or passed over too. A miss on a full cache
+ * then reads the buffer it takes and those it passes over, and a buffer
+ * that stays unfit, such as one whose device fails its writes, costs a
+ * read for each turn of the whole cache and not one for every miss. The
+ * search stops at the first buffer it moved, which means every buffer was
+ * passed over. Whether a device has a `first` pending is asked once a
+ * device in a search, since the answer cannot change before it ends.
+ */
+static struct bbuf *victim_find(block_device_t *filling)
+{
+    const block_device_t *asked = 0;
+    struct bbuf *b, *moved = 0;
+    int pending = 0;
+
+    while ((b = lru_head) != 0 && b != moved) {
+        int fit = 1;
+
+        stat_visits++;
+        if (b->holder != -1 || b == fill_keep) {
+            fit = 0;
+        } else if (b->dirty && (b->write_failed || !victim_may_be_written(b->dev, filling))) {
+            fit = 0;
+        } else if (b->dirty && b->order == BCACHE_ORDER_AFTER) {
+            if (b->dev != asked) {
+                asked = b->dev;
+                pending = firsts_pending(b->dev);
+            }
+            fit = !pending;
+        }
+        if (fit) {
+            return b;
+        }
+        lru_del(b);
+        lru_add_tail(b);
+        if (!moved) {
+            moved = b;
+        }
+    }
+    return 0;
+}
 
 /**
  * Whether one of `dev`'s dirty `first` buffers cannot be written now, held
@@ -708,20 +843,7 @@ again:
             victim = buffer_new();
         }
         if (!victim) {
-            for (b = lru_head; b; b = b->lru_next) {
-                stat_visits++;
-                if (b->holder != -1 || b == fill_keep) {
-                    continue;
-                }
-                if (b->dirty && (b->write_failed || !victim_may_be_written(b->dev, dev))) {
-                    continue;
-                }
-                if (b->dirty && b->order == BCACHE_ORDER_AFTER && firsts_pending(b->dev)) {
-                    continue;
-                }
-                victim = b;
-                break;
-            }
+            victim = victim_find(dev);
         }
         if (!victim) {
             klog(KLOG_WARN, "bcache", "get: no free buffer");
@@ -1235,60 +1357,87 @@ int bcache_device_holds(block_device_t *dev)
     return held;
 }
 
-/* A buffer a process waits for is left, woken or not, since the waiter has
- * its address; so is one dirtied again or waited for while its write slept.
- * Each pass has a budget, so a buffer dirtied again as fast as it is written
- * cannot keep the shrink here. */
+/** The least recently released dirty buffer the shrink may write and
+ * free, or NULL: unheld, unwaited for, and one the eviction too could
+ * write. */
+static struct bbuf *shrink_dirty(void)
+{
+    struct bbuf *b;
+
+    for (b = lru_head; b; b = b->lru_next) {
+        stat_visits++;
+        if (!b->dirty || b->holder != -1 || b->waiters > 0) {
+            continue;
+        }
+        if (b->write_failed || !victim_may_be_written(b->dev, 0)) {
+            continue;
+        }
+        if (b->order == BCACHE_ORDER_AFTER && firsts_pending(b->dev)) {
+            continue;
+        }
+        return b;
+    }
+    return 0;
+}
+
+/*
+ * Three passes, each a walk of one list: the empties; the release order
+ * for the clean buffers, oldest first, in one walk, since freeing a clean
+ * buffer does not sleep; and with `can_write` the release order again for
+ * the dirty ones, from its head after each write, which sleeps. A buffer a
+ * process waits for is left, woken or not, since the waiter has its
+ * address; so is one dirtied again or waited for while its write slept.
+ * The writing pass has a budget, so a buffer dirtied again as fast as it is
+ * written cannot keep the shrink here.
+ */
 uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written)
 {
+    struct bbuf **link = &empties;
+    struct bbuf *b, *next;
     uint32_t got = 0;
-    int pass;
+    int budget = (int)nbufs * 2;
 
-    for (pass = 0; pass < (can_write ? 3 : 2) && got < want; pass++) {
-        int budget = (int)nbufs * 2;
-
-        while (got < want && budget-- > 0) {
-            struct bbuf *b, *victim = 0;
-
-            for (b = bufs; b; b = b->next) {
-                stat_visits++;
-                if (b->holder != -1 || b->waiters > 0) {
-                    continue;
-                }
-                if (pass == 0 ? b->dev != 0 : (pass == 1 ? b->dirty || !b->dev : !b->dirty)) {
-                    continue;
-                }
-                if (pass == 2 && (b->write_failed || !victim_may_be_written(b->dev, 0))) {
-                    continue;
-                }
-                if (pass == 2 && b->order == BCACHE_ORDER_AFTER && firsts_pending(b->dev)) {
-                    continue;
-                }
-                if (!victim || (int32_t)(b->stamp - victim->stamp) < 0) {
-                    victim = b;
-                }
-            }
-            if (!victim) {
-                break;
-            }
-            if (victim->dirty) {
-                int rc;
-
-                if (victim->order == BCACHE_ORDER_AFTER && write_firsts(victim->dev) != 0) {
-                    continue;
-                }
-                hold(victim);
-                rc = write_buffer(victim);
-                unhold(victim);
-                wq_wake_all(&victim->wq);
-                if (rc != 0 || victim->dirty || victim->waiters > 0) {
-                    continue;
-                }
-                (*written)++;
-            }
-            buffer_free(victim);
-            got++;
+    while (got < want && *link) {
+        b = *link;
+        stat_visits++;
+        if (b->holder != -1 || b->waiters > 0) {
+            link = &b->empty_next;
+            continue;
         }
+        *link = b->empty_next;
+        b->empty_next = 0;
+        buffer_free(b);
+        got++;
+    }
+    for (b = lru_head; b && got < want; b = next) {
+        next = b->lru_next;
+        stat_visits++;
+        if (b->dirty || b->holder != -1 || b->waiters > 0) {
+            continue;
+        }
+        buffer_free(b);
+        got++;
+    }
+    while (can_write && got < want && budget-- > 0) {
+        int rc;
+
+        b = shrink_dirty();
+        if (!b) {
+            break;
+        }
+        if (b->order == BCACHE_ORDER_AFTER && write_firsts(b->dev) != 0) {
+            continue;
+        }
+        hold(b);
+        rc = write_buffer(b);
+        unhold(b);
+        wq_wake_all(&b->wq);
+        if (rc != 0 || b->dirty || b->waiters > 0) {
+            continue;
+        }
+        (*written)++;
+        buffer_free(b);
+        got++;
     }
     return got;
 }
