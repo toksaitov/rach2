@@ -45,14 +45,17 @@ struct audio_write_params {
 #define AFMT_S16_LE         0x10
 
 /* The scales `audiotest -d` plays, five notes of DSP_NOTE_MS each: in stereo
- * one in each channel, an octave apart, and in mono one whose half periods
- * are whole samples at OSS's default 8000 Hz. No note of one is within 3% of
- * a note of another, so that wavcheck tells them apart. */
+ * one in each channel, the second an octave below the first, and in mono one
+ * whose half periods are near whole samples at OSS's default 8000 Hz. No
+ * note of one is within 10% of a note of another, so that wavcheck tells
+ * them apart, and none is above 444 Hz, whose half period is still 50
+ * samples of a recording at 44100 Hz, so that a sample's rounding moves a
+ * measurement by 2% at most. */
 #define DSP_NOTES   5
 #define DSP_NOTE_MS 400u
 static const unsigned dsp_left[DSP_NOTES] = {262, 294, 330, 349, 392};
-static const unsigned dsp_right[DSP_NOTES] = {523, 587, 659, 698, 784};
-static const unsigned dsp_mono[DSP_NOTES] = {80, 100, 125, 160, 200};
+static const unsigned dsp_right[DSP_NOTES] = {131, 147, 165, 175, 196};
+static const unsigned dsp_mono[DSP_NOTES] = {80, 100, 111, 222, 444};
 
 static volatile sig_atomic_t interrupted;
 
