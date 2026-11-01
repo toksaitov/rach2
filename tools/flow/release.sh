@@ -399,6 +399,29 @@ refuse()
 
 # failure MACHINE RUN WORD...: record that the run RUN on MACHINE failed the
 # WORDs, once.
+# failed_in CONSOLE: print the suites that a machine's run in CONSOLE failed,
+# as ARCH:SUITE words, or nothing when it names none. The runner's line
+# `run: result: failed: SUITE...` gives them while each of its words is one.
+# On Windows the processes of a run share the console and can write into one
+# another's lines, so when the line is broken the suites come from the lines
+# that begin with a suite's own failure, `run: ARCH:SUITE: CASE...: failure:`
+# or `run: ARCH:SUITE: FAIL in`, of which every failed suite prints at least
+# two.
+failed_in()
+{
+    words=$(tr -d '\r' < "$1" 2> /dev/null | grep '^run: result: failed: ' |
+        tail -n 1 | sed 's/^run: result: failed: //')
+    # shellcheck disable=SC2086 # the suites are words
+    if [ -n "$words" ] && ! printf '%s\n' $words | grep -qvE '^(i686|x86_64):[a-z0-9-]+$'; then
+        # shellcheck disable=SC2086 # the suites are words
+        echo $words
+        return 0
+    fi
+    tr -d '\r' < "$1" 2> /dev/null |
+        sed -nE 's/^run: ((i686|x86_64):[a-z0-9-]+): (.* failure: |FAIL in ).*/\1/p' |
+        sort -u | tr '\n' ' ' | sed 's/ $//'
+}
+
 failure()
 {
     grep -q "^failure $1 $2 " "$state/record" || note "failure $*"
@@ -579,8 +602,7 @@ adopt()
                     previous mac
                     ! mac_alive "$2" || echo "mac started $2" ;;
                 *)
-                    words=$(grep '^run: result: failed: ' "$runs/$2.console" 2> /dev/null |
-                        tail -n 1 | sed 's/^run: result: failed: //')
+                    words=$(failed_in "$runs/$2.console")
                     # shellcheck disable=SC2086 # the suites are words
                     if [ -n "$words" ] && suites $words; then
                         echo "again mac $words"
@@ -1041,8 +1063,7 @@ mac_wait()
         return 0
     fi
     # shellcheck disable=SC2046 # the suites are words
-    failure mac "$id" $(grep '^run: result: failed: ' "$runs/$id.console" |
-        tail -n 1 | sed 's/^run: result: failed: //' | grep . || echo runner)
+    failure mac "$id" $(failed_in "$runs/$id.console" | grep . || echo runner)
 }
 
 # wsl COMMAND: run COMMAND in Ubuntu in WSL on the testing host.
@@ -1290,6 +1311,8 @@ windows()
             # shellcheck disable=SC2016 # the remote shell expands these
             echo 'rc=$?'
             echo "tail -n 40 $wout/$id.console"
+            # The lines that failed_in reads, wherever they are in the console.
+            echo "grep -aE '^run: (result: failed: |(i686|x86_64):[a-z0-9-]+: (.* failure: |FAIL in ))' $wout/$id.console"
             # shellcheck disable=SC2016 # the remote shell expands these
             echo 'echo "status $rc"'
         } | ssh -o BatchMode=yes testing 'C:/msys64/usr/bin/bash.exe -l -s' > "$state/$id.log" 2>&1
@@ -1313,8 +1336,7 @@ windows()
         return 0
     fi
     # shellcheck disable=SC2046 # the suites are words
-    failure windows "$id" $(tr -d '\r' < "$state/$id.log" | grep '^run: result: failed: ' |
-        tail -n 1 | sed 's/^run: result: failed: //' | grep . || echo runner)
+    failure windows "$id" $(failed_in "$state/$id.log" | grep . || echo runner)
 }
 
 # windows_detached: succeed when the record's last Windows run is one that -a
