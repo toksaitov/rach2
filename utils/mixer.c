@@ -1,12 +1,16 @@
 /**
- * mixer: read or set the master volume through /dev/mixer.
+ * mixer: read or set the levels and the record source of /dev/mixer.
  *
- * `mixer` prints the level as `vol L:R`, the left and the right channel's
- * percentage, with ` muted` after it while muted. `mixer vol N` sets both
- * channels to N, `mixer vol L:R` each its own, and `mixer vol +N` and
- * `mixer vol -N` move both by N, kept between 0 and 100. `mixer mute` sets
- * the level to 0 and records the level it had in `MUTE_RECORD`, and
- * `mixer unmute` sets the recorded level back.
+ * `mixer` prints each channel of the device as `NAME L:R`, the left and the
+ * right channel's percentage, by OSS's names (vol, pcm, line, mic, rec,
+ * igain, monitor), with ` muted` after the volume while it is muted and
+ * ` rec` after the source recorded; `mixer NAME` prints one channel.
+ * `mixer NAME N` sets both channels to N, `mixer NAME L:R` each its own,
+ * and `mixer NAME +N` and `mixer NAME -N` move both by N, kept between 0
+ * and 100. `mixer =rec NAME` records from source NAME, as FreeBSD's
+ * mixer(8) spells it. `mixer mute` sets the volume to 0 and records the
+ * level it had in `MUTE_RECORD`, and `mixer unmute` sets the recorded
+ * level back.
  *
  * The device is OSS's, which has no mute of its own, so the mute is the
  * record: the volume is muted while the record is there and the level is 0.
@@ -23,11 +27,22 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
-/* OSS's requests for the master volume, with Linux's numbers. musl's
- * <sys/soundcard.h> takes them from Linux's <linux/soundcard.h>, which the
- * guest's musl does not install. */
-#define SOUND_MIXER_READ_VOLUME  _IOR('M', 0, int)
-#define SOUND_MIXER_WRITE_VOLUME _IOWR('M', 0, int)
+/* OSS's requests, with Linux's numbers. musl's <sys/soundcard.h> takes
+ * them from Linux's <linux/soundcard.h>, which the guest's musl does not
+ * install. */
+#define MIXER_READ(n)         _IOR('M', n, int)
+#define MIXER_WRITE(n)        _IOWR('M', n, int)
+#define SOUND_MIXER_NRDEVICES 25
+#define SOUND_MIXER_VOLUME    0
+#define SOUND_MIXER_RECSRC    0xFF
+#define SOUND_MIXER_DEVMASK   0xFE
+#define SOUND_MIXER_RECMASK   0xFD
+
+/* OSS's names of its channels, SOUND_DEVICE_NAMES, by number. */
+static const char *const names[SOUND_MIXER_NRDEVICES] = {
+    "vol",  "bass", "treble", "synth", "pcm",   "speaker", "line",   "mic",   "cd",
+    "mix",  "pcm2", "rec",    "igain", "ogain", "line1",   "line2",  "line3", "dig1",
+    "dig2", "dig3", "phin",   "phout", "video", "radio",   "monitor"};
 
 #define MIXER_DEVICE "/dev/mixer"
 
@@ -41,15 +56,26 @@ static int pack(int left, int right)
     return left | right << 8;
 }
 
+/** Read the int of request `request` through the open mixer `fd` into
+ *  `*value`. Returns 0, or 1 after a diagnostic. */
+static int get_int(int fd, unsigned long request, int *value)
+{
+    if (ioctl(fd, request, value) < 0) {
+        perror("mixer: " MIXER_DEVICE);
+        return 1;
+    }
+    return 0;
+}
+
 /**
- * Read the level through the open mixer `fd` into `*left` and `*right`.
- * Returns 0, or 1 after a diagnostic.
+ * Read channel `ch`'s level through the open mixer `fd` into `*left` and
+ * `*right`. Returns 0, or 1 after a diagnostic.
  */
-static int get_level(int fd, int *left, int *right)
+static int get_level(int fd, int ch, int *left, int *right)
 {
     int level;
 
-    if (ioctl(fd, SOUND_MIXER_READ_VOLUME, &level) < 0) {
+    if (ioctl(fd, MIXER_READ(ch), &level) < 0) {
         perror("mixer: " MIXER_DEVICE);
         return 1;
     }
@@ -58,13 +84,13 @@ static int get_level(int fd, int *left, int *right)
     return 0;
 }
 
-/** Set the level through the open mixer `fd`. Returns 0, or 1 after a
- *  diagnostic. */
-static int set_level(int fd, int left, int right)
+/** Set channel `ch`'s level through the open mixer `fd`. Returns 0, or 1
+ *  after a diagnostic. */
+static int set_level(int fd, int ch, int left, int right)
 {
     int level = pack(left, right);
 
-    if (ioctl(fd, SOUND_MIXER_WRITE_VOLUME, &level) < 0) {
+    if (ioctl(fd, MIXER_WRITE(ch), &level) < 0) {
         perror("mixer: " MIXER_DEVICE);
         return 1;
     }
@@ -151,10 +177,26 @@ static int muted(int left, int right)
     return left == 0 && right == 0 && read_record(&l, &r);
 }
 
-/** Print the level, and ` muted` while muted. Returns 0. */
-static int show(int left, int right)
+/**
+ * Print channel `ch` of the open mixer `fd`: its level when the device
+ * mask `devmask` has it, ` muted` after the volume while muted, and ` rec`
+ * when the record source `recsrc` is it. Returns 0, or 1 on a failure.
+ */
+static int show(int fd, int ch, int devmask, int recsrc)
 {
-    printf("vol %d:%d%s\n", left, right, muted(left, right) ? " muted" : "");
+    int left, right;
+
+    printf("%s", names[ch]);
+    if (devmask & 1 << ch) {
+        if (get_level(fd, ch, &left, &right) != 0) {
+            return 1;
+        }
+        printf(" %d:%d", left, right);
+        if (ch == SOUND_MIXER_VOLUME && muted(left, right)) {
+            printf(" muted");
+        }
+    }
+    printf("%s\n", recsrc & 1 << ch ? " rec" : "");
     return 0;
 }
 
@@ -166,15 +208,18 @@ static int step(int level, int delta)
 }
 
 /**
- * Set the level as `arg` says: `N`, `L:R`, `+N` or `-N`, from the level
- * `left`:`right` it has now. Returns 0, 1 on a failure and 2 when `arg` is
- * not a level.
+ * Set channel `ch`'s level as `arg` says: `N`, `L:R`, `+N` or `-N`, from
+ * the level it has now. Setting the volume removes the record of a mute.
+ * Returns 0, 1 on a failure and 2 when `arg` is not a level.
  */
-static int set_vol(int fd, const char *arg, int left, int right)
+static int set_channel(int fd, int ch, const char *arg)
 {
     const char *colon = strchr(arg, ':');
-    int l, r;
+    int l, r, left, right;
 
+    if (get_level(fd, ch, &left, &right) != 0) {
+        return 1;
+    }
     if (arg[0] == '+' || arg[0] == '-') {
         int delta = percentage(arg + 1, NULL);
 
@@ -195,10 +240,12 @@ static int set_vol(int fd, const char *arg, int left, int right)
     if (l < 0 || r < 0) {
         return 2;
     }
-    if (set_level(fd, l, r) != 0) {
+    if (set_level(fd, ch, l, r) != 0) {
         return 1;
     }
-    (void)unlink(MUTE_RECORD);
+    if (ch == SOUND_MIXER_VOLUME) {
+        (void)unlink(MUTE_RECORD);
+    }
     return 0;
 }
 
@@ -212,7 +259,7 @@ static int mute(int fd, int left, int right)
     if (write_record(left, right) != 0) {
         return 1;
     }
-    return set_level(fd, 0, 0);
+    return set_level(fd, SOUND_MIXER_VOLUME, 0, 0);
 }
 
 /** Unmute: set the recorded level back and remove the record. Unmuting
@@ -224,10 +271,45 @@ static int unmute(int fd, int left, int right)
     if (!muted(left, right) || !read_record(&l, &r)) {
         return 0;
     }
-    if (set_level(fd, l, r) != 0) {
+    if (set_level(fd, SOUND_MIXER_VOLUME, l, r) != 0) {
         return 1;
     }
     (void)unlink(MUTE_RECORD);
+    return 0;
+}
+
+/** The channel named `name`, or -1. */
+static int channel(const char *name)
+{
+    int i;
+
+    for (i = 0; i < SOUND_MIXER_NRDEVICES; i++) {
+        if (strcmp(names[i], name) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/** Record from the source named `name`, one of the record mask `recmask`.
+ *  Returns 0, 1 on a failure and 2 when `name` is not a source. */
+static int set_source(int fd, const char *name, int recmask)
+{
+    int ch = channel(name), mask;
+
+    if (ch < 0 || !(recmask & 1 << ch)) {
+        fprintf(stderr, "mixer: %s: not a source\n", name);
+        return 2;
+    }
+    mask = 1 << ch;
+    if (ioctl(fd, MIXER_WRITE(SOUND_MIXER_RECSRC), &mask) < 0) {
+        perror("mixer: " MIXER_DEVICE);
+        return 1;
+    }
+    if (mask != 1 << ch) {
+        fprintf(stderr, "mixer: %s: not taken\n", name);
+        return 1;
+    }
     return 0;
 }
 
@@ -235,12 +317,17 @@ static int unmute(int fd, int left, int right)
  *  usage error. */
 int main(int argc, char **argv)
 {
-    int fd, left, right, status = 2;
+    int fd, left, right, devmask, recmask, recsrc, ch = -1, i, status = 0;
 
-    if (!(argc == 1 || (argc == 2 && strcmp(argv[1], "mute") == 0) ||
-          (argc == 2 && strcmp(argv[1], "unmute") == 0) ||
-          (argc == 3 && strcmp(argv[1], "vol") == 0))) {
-        fputs("usage: mixer [vol N | vol L:R | vol +N | vol -N | mute | unmute]\n", stderr);
+    if (argc == 2 && strcmp(argv[1], "mute") != 0 && strcmp(argv[1], "unmute") != 0) {
+        ch = channel(argv[1]);
+    } else if (argc == 3 && strcmp(argv[1], "=rec") != 0) {
+        ch = channel(argv[1]);
+    }
+    if (!(argc == 1 || (argc == 2 && ch < 0 && strcmp(argv[1], "mute") == 0) ||
+          (argc == 2 && ch < 0 && strcmp(argv[1], "unmute") == 0) ||
+          (argc == 3 && strcmp(argv[1], "=rec") == 0) || ((argc == 2 || argc == 3) && ch >= 0))) {
+        fputs("usage: mixer [NAME [N | L:R | +N | -N] | =rec NAME | mute | unmute]\n", stderr);
         return 2;
     }
     fd = open(MIXER_DEVICE, O_RDWR);
@@ -248,21 +335,40 @@ int main(int argc, char **argv)
         fprintf(stderr, "mixer: " MIXER_DEVICE ": %s\n", strerror(errno));
         return 1;
     }
-    if (get_level(fd, &left, &right) != 0) {
+    if (get_int(fd, MIXER_READ(SOUND_MIXER_DEVMASK), &devmask) != 0 ||
+        get_int(fd, MIXER_READ(SOUND_MIXER_RECMASK), &recmask) != 0 ||
+        get_int(fd, MIXER_READ(SOUND_MIXER_RECSRC), &recsrc) != 0) {
         close(fd);
         return 1;
     }
+    if (ch >= 0 && !((devmask | recmask) & 1 << ch)) {
+        fprintf(stderr, "mixer: %s: no such channel\n", argv[1]);
+        close(fd);
+        return 2;
+    }
     if (argc == 1) {
-        status = show(left, right);
-    } else if (strcmp(argv[1], "mute") == 0) {
-        status = mute(fd, left, right);
-    } else if (strcmp(argv[1], "unmute") == 0) {
-        status = unmute(fd, left, right);
-    } else {
-        status = set_vol(fd, argv[2], left, right);
-        if (status == 2) {
+        for (i = 0; i < SOUND_MIXER_NRDEVICES && status == 0; i++) {
+            if ((devmask | recmask) & 1 << i) {
+                status = show(fd, i, devmask, recsrc);
+            }
+        }
+    } else if (ch >= 0 && argc == 2) {
+        status = show(fd, ch, devmask, recsrc);
+    } else if (ch >= 0) {
+        if (!(devmask & 1 << ch)) {
+            fprintf(stderr, "mixer: %s: has no level\n", argv[1]);
+            status = 2;
+        } else if ((status = set_channel(fd, ch, argv[2])) == 2) {
             fprintf(stderr, "mixer: %s: not a level\n", argv[2]);
         }
+    } else if (strcmp(argv[1], "=rec") == 0) {
+        status = set_source(fd, argv[2], recmask);
+    } else if (get_level(fd, SOUND_MIXER_VOLUME, &left, &right) != 0) {
+        status = 1;
+    } else if (strcmp(argv[1], "mute") == 0) {
+        status = mute(fd, left, right);
+    } else {
+        status = unmute(fd, left, right);
     }
     close(fd);
     return status;

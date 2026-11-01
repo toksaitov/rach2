@@ -27,7 +27,7 @@ down)
     exec /bin/mixer vol -5
     ;;
 mute)
-    case $(/bin/mixer) in
+    case $(/bin/mixer vol) in
     *' muted') exec /bin/mixer unmute ;;
     *) exec /bin/mixer mute ;;
     esac

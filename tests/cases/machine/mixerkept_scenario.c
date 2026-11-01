@@ -85,19 +85,21 @@ static void kept(struct lc *l)
     struct boot b;
     char first[64], got[64], detail[200];
 
-    if (!boot(l, &b, "set", 1) || !ask(&b, "echo VOL\"\"=$(mixer)\r", "VOL", first, sizeof(first)))
+    if (!boot(l, &b, "set", 1) ||
+        !ask(&b, "echo VOL\"\"=$(mixer vol)\r", "VOL", first, sizeof(first)))
         return;
     snprintf(detail, sizeof(detail), "the first boot's mixer reads '%s'", first);
     lc_assert(l, "default", strncmp(first, "vol ", 4) == 0 && strcmp(first, "vol 5:5") != 0,
               detail);
-    if (!ask(&b, "mixer vol 5; echo VOL\"\"=$(mixer)\r", "VOL", got, sizeof(got)))
+    if (!ask(&b, "mixer vol 5; echo VOL\"\"=$(mixer vol)\r", "VOL", got, sizeof(got)))
         return;
     snprintf(detail, sizeof(detail), "mixer vol 5 reads '%s'", got);
     lc_assert(l, "set", strcmp(got, "vol 5:5") == 0, detail);
     if (!restart(&b, "reboot\r", "reset-saved"))
         return;
 
-    if (!boot(l, &b, "restored", 2) || !ask(&b, "echo VOL\"\"=$(mixer)\r", "VOL", got, sizeof(got)))
+    if (!boot(l, &b, "restored", 2) ||
+        !ask(&b, "echo VOL\"\"=$(mixer vol)\r", "VOL", got, sizeof(got)))
         return;
     snprintf(detail, sizeof(detail), "after the reboot mixer reads '%s', not 'vol 5:5'", got);
     lc_assert(l, "restored", strcmp(got, "vol 5:5") == 0, detail);
@@ -111,7 +113,8 @@ static void kept(struct lc *l)
     if (!restart(&b, "reboot -f\r", "reset-unsaved"))
         return;
 
-    if (!boot(l, &b, "default", 3) || !ask(&b, "echo VOL\"\"=$(mixer)\r", "VOL", got, sizeof(got)))
+    if (!boot(l, &b, "default", 3) ||
+        !ask(&b, "echo VOL\"\"=$(mixer vol)\r", "VOL", got, sizeof(got)))
         return;
     snprintf(detail, sizeof(detail), "without the file mixer reads '%s', not the first boot's '%s'",
              got, first);
