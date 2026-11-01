@@ -788,13 +788,14 @@ watch()
     [ -z "$1" ] || echo "$marks" > "$1"
     while :; do
         sleep "$poll"
+        # shellcheck disable=SC2086 # marks is two words, the newest ids
         set -- "$1" $marks
         if ! got=$(news "$2" "$3"); then
             echo "board: watch: cannot read the events; trying again" >&2
             continue
         fi
         e=$2 c=$3
-        while IFS=$US read -r at kind id event who n boarded state what text; do
+        while IFS=$US read -r _ kind id event who n boarded state what text; do
             [ -n "$id" ] || continue
             case $kind in e) e=$id ;; c) c=$id ;; esac
             [ "$kind" = e ] && [ "$boarded" != 1 ] && continue

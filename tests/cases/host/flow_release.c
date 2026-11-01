@@ -508,6 +508,12 @@ static int setup(struct release *r, struct fixture *f)
              H, BRANCH, T, T);
     return 1;
 }
+/** Set the environment variable NAME to VALUE, or to the empty string when
+ * VALUE is NULL. */
+static void spec_env(const char *name, const char *value)
+{
+    fx_env(name, value ? value : "");
+}
 static void run(struct release *r, const struct release_row *spec)
 {
     struct fixture *f = r->f;
@@ -527,21 +533,21 @@ static void run(struct release *r, const struct release_row *spec)
     flow_put(f, "before", spec->record ? spec->record : "");
     fx_env("RELEASE_TEST_CALLS", flow_path(f, "calls"));
     fx_env("RELEASE_TEST_WRITES", spec->writes ? spec->writes : "no");
-    fx_env("RELEASE_TEST_RUNS", spec->runs ? spec->runs : "");
-    fx_env("RELEASE_TEST_GIT", spec->git ? spec->git : "");
-    fx_env("RELEASE_TEST_ACCEPT", spec->accept ? spec->accept : "");
-    fx_env("RELEASE_TEST_WINDOWS", spec->windows ? spec->windows : "");
-    fx_env("RELEASE_TEST_NATIVE", spec->native ? spec->native : "");
-    fx_env("RELEASE_TEST_FAILURES", spec->failures ? spec->failures : "");
-    fx_env("RELEASE_TEST_MILESTONE", spec->milestone ? spec->milestone : "");
-    fx_env("RELEASE_TEST_ANCESTOR", spec->ancestor ? spec->ancestor : "");
-    fx_env("RELEASE_TEST_MASTER", spec->master ? spec->master : "");
-    fx_env("RELEASE_TEST_PUSH", spec->push ? spec->push : "");
-    fx_env("RELEASE_TEST_LENOVO", spec->lenovo ? spec->lenovo : "");
-    fx_env("RELEASE_TEST_PREPARE", spec->prepare ? spec->prepare : "");
-    fx_env("RELEASE_TEST_HOLD", spec->hold ? spec->hold : "");
-    fx_env("RELEASE_TEST_TESTING", spec->testing ? spec->testing : "");
-    fx_env("RELEASE_TEST_CMDLINE", spec->cmdline ? spec->cmdline : "");
+    spec_env("RELEASE_TEST_RUNS", spec->runs);
+    spec_env("RELEASE_TEST_GIT", spec->git);
+    spec_env("RELEASE_TEST_ACCEPT", spec->accept);
+    spec_env("RELEASE_TEST_WINDOWS", spec->windows);
+    spec_env("RELEASE_TEST_NATIVE", spec->native);
+    spec_env("RELEASE_TEST_FAILURES", spec->failures);
+    spec_env("RELEASE_TEST_MILESTONE", spec->milestone);
+    spec_env("RELEASE_TEST_ANCESTOR", spec->ancestor);
+    spec_env("RELEASE_TEST_MASTER", spec->master);
+    spec_env("RELEASE_TEST_PUSH", spec->push);
+    spec_env("RELEASE_TEST_LENOVO", spec->lenovo);
+    spec_env("RELEASE_TEST_PREPARE", spec->prepare);
+    spec_env("RELEASE_TEST_HOLD", spec->hold);
+    spec_env("RELEASE_TEST_TESTING", spec->testing);
+    spec_env("RELEASE_TEST_CMDLINE", spec->cmdline);
     if (spec->native) {
         flow_put(f, "state/wt/build/tools/dev/native-hostpeer", "");
         fx_copy(f->self, flow_path(f, "state/wt/build/tools/dev/native-deploy"));

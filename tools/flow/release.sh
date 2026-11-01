@@ -1404,6 +1404,7 @@ windows_halt()
 # that init starts in its place; leave `login` empty when no `term` runs.
 screen_free()
 {
+    # shellcheck disable=SC2016 # the script expands on the Lenovo
     login=$(lenovo 'kids() { for p in /proc/[0-9]*; do
             read -r pid comm s ppid r < $p/stat 2> /dev/null && [ "$ppid" = 1 ] && echo "$pid $comm"; done; }
         t=$(kids | sed -n "s/ (term)\$//p")
