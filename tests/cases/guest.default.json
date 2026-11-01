@@ -237,7 +237,7 @@
         {"assertion_id": "entry", "checks": "AT_ENTRY is not 0.", "source": "program"},
         {"assertion_id": "minsigstksz", "checks": "AT_MINSIGSTKSZ is present and above 512.", "source": "program"},
         {"assertion_id": "random", "checks": "AT_RANDOM is present and its 16 bytes are not all zero.", "source": "program"},
-        {"assertion_id": "random-page", "checks": "AT_RANDOM lies in the stack pointer's page.", "source": "program"}
+        {"assertion_id": "random-page", "checks": "AT_RANDOM lies just above the auxiliary vector.", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
