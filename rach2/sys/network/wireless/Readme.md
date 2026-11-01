@@ -69,6 +69,10 @@ A transmit-status datagram has no payload, frame length zero, TX set, and the or
 
 A receiver refuses a wrong magic, version, type or header length, nonzero reserved bytes, unknown flags, an impossible length, a truncated or trailing payload, or a status with an invalid outcome. A frame has at least a ten-byte control header and no ACKED or FAILED flag. A receive record has no TX or NO_ACK flag, no cookie and no attempts. Frequency and rate must belong to the selected radio; MCS requires HT support. Status metadata cannot be used to select a different radio or transmission. The two relay directions use configured peer addresses and ports. The relay's transport card is separate from the cable interface whose link the roaming checks change.
 
+## Sources and license
+
+`crypto/aes.c` takes the S-box circuit, the bit transposition, the key schedule and the rounds of BearSSL's `aes_ct` at tag v0.6 (`src/symcipher/aes_ct.c` and `aes_ct_enc.c`), under the MIT license, whose text the file keeps. The rest of `crypto/` is Rach2's, written from IEEE 802.11-2020 12.5 and checked against Linux's `net/mac80211/wpa.c` and `tkip.c` and hostap's `src/common/ccmp.c`, as each file names.
+
 ## Design
 
 ### Registry and regulatory rules
@@ -91,6 +95,14 @@ The data path owns sequence numbers, encryption selection, receive replay and du
 
 The primitives have no device, station or allocator state. The data and key layers own counters and replay policy; cryptographic success alone does not authorize delivery.
 
+`crypto/aes.c` holds the cipher and CMAC. Its S-box is a Boolean circuit over bitsliced words, so the time taken does not depend on the key or the data. `struct wlan_aes128` keeps the schedule compressed to 44 words, and each pass expands it to 88 on the stack and erases it after. A pass carries two blocks, so CCM pairs each CBC-MAC block with the next counter block, which halves the passes. `crypto/wcrypto_int.h` declares what the cipher files and the host test share: the paired pass, CMAC in pieces, Michael over a plain message, a comparison in constant time and an erase the compiler keeps.
+
+`crypto/ccmp.c` masks the MAC header as 802.11-2020 12.5.3.3.3 says: Retry, Power Management and More Data cleared, the subtype bits 4 to 6 of a data frame cleared, Protected set, and in a QoS data frame Order cleared and only the TID kept of QoS Control. The HT Control field is outside the AAD. The nonce's Management bit marks a robust management frame. Decryption authenticates in a pass that writes nothing and then decrypts in place over the CCMP header, so a forged frame comes back unchanged.
+
+`crypto/bip.c` computes the MIC over the masked frame control, the three addresses and every byte after the 24-byte header, the MMIE's MIC field taken as zero, as Linux and hostap do. Sign and check refuse a frame that is not a group-addressed management frame, or that has Protected set.
+
+`crypto/tkip.c` gives Michael, both phases of key mixing and RC4. TKIP's S-box and RC4 index tables by key bytes by design, so their timing is not constant. The caller builds the TKIP header from the phase 2 key's first three bytes and the IV32, and computes the ICV, a CRC-32 of the MSDU and its MIC.
+
 ### nl80211
 
 The server translates generic-netlink attributes into station operations and station events into multicast messages. It advertises only operations and capabilities implemented below it.
@@ -106,3 +118,5 @@ A switch belongs to each radio. Soft and hardware block changes are queued to th
 ## Tests
 
 `tests/host/wlan_elems_hosttest.c` checks fixed wire sizes, empty and maximum-length SSIDs, split rates, optional request elements, truncated headers and payloads, invalid known lengths, singleton and extension duplicates, independent WPA and WMM elements, and bounded builders whose errors preserve their outputs. It allocates no files or processes. Its `host-deps` line compiles the real parser; the host collection registers it as `wlan_elems`.
+
+`tests/host/wcrypto_hosttest.c` checks AES on FIPS-197 and SP 800-38A, CMAC on SP 800-38B, whole and in pieces, and the ciphers on IEEE 802.11-2020 Annex J: CCMP's data vector, BIP's broadcast Deauthentication, TKIP's MPDU with its phase 1 and 2 keys, and the Michael vectors. Three CCMP MPDUs of P802.11i/D7.0 add key indexes 1 to 3, masked CF subtypes, Order in a non-QoS frame and a QoS TID; a management frame, whose Annex J output the test cannot quote, is checked against OpenSSL's AES-CCM. RC4 is checked on RFC 6229. Every byte of a CCMP and a BIP frame is flipped in turn: those outside the MIC are skipped and every other one is refused with the frame and outputs unchanged. Refusals for counters, key indexes, frame types, short buffers and a missing Ext IV keep their inputs as well. The host collection registers it as `wcrypto`.
