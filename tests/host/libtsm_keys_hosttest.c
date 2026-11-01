@@ -1,7 +1,8 @@
 /*
  * libtsm_keys_hosttest.c: libtsm's keyboard protocols, from the three
  * 0018- patches of vendor/libtsm/patches: the CSI collector's < and =, SCOSC
- * and SCORC, xterm's legacy key encoding, and the Kitty keyboard protocol.
+ * and SCORC, xterm's legacy key encoding, and the Kitty keyboard protocol;
+ * and the saved cursor of 0024-saved-cursor.patch.
  *
  * host-deps: build/host/libtsm-4.8.0/src/tsm/tsm-vte.c
  * host-deps: build/host/libtsm-4.8.0/src/tsm/tsm-screen.c
@@ -243,7 +244,10 @@ static void test_requests(void)
     out_len = 0;
 }
 
-/** Plain CSI s and CSI u save and restore the cursor; private forms do not. */
+/**
+ * Plain CSI s and CSI u save and restore the cursor; private forms and CSI s
+ * under DECLRMM do not. Each screen has its own, without autowrap.
+ */
 static void test_scosc(void)
 {
     start();
@@ -267,6 +271,22 @@ static void test_scosc(void)
     put("\033[6;7H\0337\033[1;1H\033[u");
     check(tsm_screen_get_cursor_x(screen) == 6 && tsm_screen_get_cursor_y(screen) == 5,
           "CSI u restores what DECSC saved");
+
+    put("\033[?69h\033[3;4H\033[s\033[1;1H\033[u\033[?69l");
+    check(tsm_screen_get_cursor_x(screen) == 6 && tsm_screen_get_cursor_y(screen) == 5,
+          "CSI s under DECLRMM is DECSLRM, not SCOSC");
+
+    put("\033[2;3H\0337\033[?47h\033[6;7H\0337\033[?47l\0338");
+    check(tsm_screen_get_cursor_x(screen) == 2 && tsm_screen_get_cursor_y(screen) == 1,
+          "the main screen keeps its own saved cursor");
+    put("\033[?47h\0338");
+    check(tsm_screen_get_cursor_x(screen) == 6 && tsm_screen_get_cursor_y(screen) == 5,
+          "the alternate screen keeps its own saved cursor");
+    put("\033[?47l");
+
+    put("\033[?7h\0337\033[?7l\0338\033[1;79Habcd");
+    check(tsm_screen_get_cursor_y(screen) == 0, "DECRC does not restore autowrap");
+    put("\033[?7h");
 }
 
 /* xterm's modifier columns of keytable.txt: none, Shift, Ctrl, Ctrl+Shift,

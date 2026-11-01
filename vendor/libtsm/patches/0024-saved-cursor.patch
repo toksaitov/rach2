@@ -1,0 +1,185 @@
+Keep a saved cursor for each screen, leave autowrap out of it, and add DECLRMM
+
+DECSC and SCOSC saved one cursor for both screens, so that saving on the
+alternate screen lost the main screen's. Keep one for each, as xterm does,
+and save and restore the one of the screen in use.
+
+DECRC and SCORC restored autowrap, which xterm's do not: xterm saves the
+cursor's position, attributes, character sets and origin mode, and leaves
+DECAWM as it is.
+
+Add DECLRMM, CSI ? 69 h and l, as a flag only: while it is set, CSI s is
+xterm's DECSLRM and not SCOSC. There are no left and right margins, so
+DECSLRM does nothing, and DECRQM still reports the mode as not recognized.
+
+--- a/src/tsm/libtsm.h
++++ b/src/tsm/libtsm.h
+@@ -358,6 +358,7 @@
+ #define TSM_VTE_FLAG_BACKGROUND_COLOR_ERASE_MODE	0x00008000 /* Set background color on erase (bce) */
+ #define TSM_VTE_FLAG_PREPEND_ESCAPE			0x00010000 /* Prepend escape character to next output */
+ #define TSM_VTE_FLAG_TITE_INHIBIT_MODE			0x00020000 /* Prevent switching to alternate screen buffer */
++#define TSM_VTE_FLAG_LEFT_RIGHT_MARGIN_MODE		0x00040000 /* DECLRMM: CSI s is DECSLRM, not SCOSC */
+ 
+ /* keep in sync with shl_xkb_mods */
+ enum tsm_vte_modifier {
+--- a/src/tsm/tsm-vte.c
++++ b/src/tsm/tsm-vte.c
+@@ -166,6 +166,7 @@
+ #define FLAG_BACKGROUND_COLOR_ERASE_MODE	0x00008000 /* Set background color on erase (bce) */
+ #define FLAG_PREPEND_ESCAPE			0x00010000 /* Prepend escape character to next output */
+ #define FLAG_TITE_INHIBIT_MODE			0x00020000 /* Prevent switching to alternate screen buffer */
++#define FLAG_LEFT_RIGHT_MARGIN_MODE		0x00040000 /* DECLRMM: CSI s is DECSLRM, not SCOSC */
+ 
+ struct vte_saved_state {
+ 	unsigned int cursor_x;
+@@ -174,7 +175,6 @@
+ 	tsm_vte_charset **gl;
+ 	tsm_vte_charset **gr;
+ 	enum tsm_screen_cursor_style cursor_style;
+-	bool wrap_mode;
+ 	bool origin_mode;
+ };
+ 
+@@ -243,7 +243,9 @@
+ 	tsm_vte_charset *g2;
+ 	tsm_vte_charset *g3;
+ 
+-	struct vte_saved_state saved_state;
++	/* DECSC's saved cursor, [0] the main screen's and [1] the
++	 * alternate screen's, as xterm keeps one for each */
++	struct vte_saved_state saved_state[2];
+ 	unsigned int alt_cursor_x;
+ 	unsigned int alt_cursor_y;
+ 
+@@ -828,58 +830,66 @@
+ 
+ static void reset_state(struct tsm_vte *vte)
+ {
+-	vte->saved_state.cursor_x = 0;
+-	vte->saved_state.cursor_y = 0;
+-	vte->saved_state.origin_mode = false;
+-	vte->saved_state.wrap_mode = true;
+-	vte->saved_state.gl = &vte->g0;
+-	vte->saved_state.gr = &vte->g1;
+-	vte->saved_state.cursor_style = TSM_SCREEN_CURSOR_DEFAULT;
+-
+-	copy_fcolor(&vte->saved_state.cattr, &vte->def_attr);
+-	copy_bcolor(&vte->saved_state.cattr, &vte->def_attr);
+-	vte->saved_state.cattr.bold = 0;
+-	vte->saved_state.cattr.italic = 0;
+-	vte->saved_state.cattr.underline = 0;
+-	vte->saved_state.cattr.inverse = 0;
+-	vte->saved_state.cattr.protect = 0;
+-	vte->saved_state.cattr.blink = 0;
+-	vte->saved_state.cattr.dim = 0;
++	struct vte_saved_state *saved;
++	int i;
++
++	for (i = 0; i < 2; i++) {
++		saved = &vte->saved_state[i];
++		saved->cursor_x = 0;
++		saved->cursor_y = 0;
++		saved->origin_mode = false;
++		saved->gl = &vte->g0;
++		saved->gr = &vte->g1;
++		saved->cursor_style = TSM_SCREEN_CURSOR_DEFAULT;
++
++		copy_fcolor(&saved->cattr, &vte->def_attr);
++		copy_bcolor(&saved->cattr, &vte->def_attr);
++		saved->cattr.bold = 0;
++		saved->cattr.italic = 0;
++		saved->cattr.underline = 0;
++		saved->cattr.inverse = 0;
++		saved->cattr.protect = 0;
++		saved->cattr.blink = 0;
++		saved->cattr.dim = 0;
++	}
+ }
+ 
++/* the saved cursor of the screen in use */
++static struct vte_saved_state *saved_state(struct tsm_vte *vte)
++{
++	bool alt = tsm_screen_get_flags(vte->con) & TSM_SCREEN_ALTERNATE;
++
++	return &vte->saved_state[alt ? 1 : 0];
++}
++
++/* DECSC and SCOSC; as in xterm, autowrap is not saved */
+ static void save_state(struct tsm_vte *vte)
+ {
+-	vte->saved_state.cursor_x = tsm_screen_get_cursor_x(vte->con);
+-	vte->saved_state.cursor_y = tsm_screen_get_cursor_y(vte->con);
+-	vte->saved_state.cattr = vte->cattr;
+-	vte->saved_state.gl = vte->gl;
+-	vte->saved_state.gr = vte->gr;
+-	vte->saved_state.wrap_mode = vte->flags & TSM_VTE_FLAG_AUTO_WRAP_MODE;
+-	vte->saved_state.origin_mode = vte->flags & TSM_VTE_FLAG_ORIGIN_MODE;
+-	vte->saved_state.cursor_style = tsm_screen_get_cursor_style(vte->con);
++	struct vte_saved_state *saved = saved_state(vte);
++
++	saved->cursor_x = tsm_screen_get_cursor_x(vte->con);
++	saved->cursor_y = tsm_screen_get_cursor_y(vte->con);
++	saved->cattr = vte->cattr;
++	saved->gl = vte->gl;
++	saved->gr = vte->gr;
++	saved->origin_mode = vte->flags & TSM_VTE_FLAG_ORIGIN_MODE;
++	saved->cursor_style = tsm_screen_get_cursor_style(vte->con);
+ }
+ 
+ static void restore_state(struct tsm_vte *vte)
+ {
+-	tsm_screen_move_to(vte->con, vte->saved_state.cursor_x,
+-			       vte->saved_state.cursor_y);
+-	vte->cattr = vte->saved_state.cattr;
++	struct vte_saved_state *saved = saved_state(vte);
++
++	tsm_screen_move_to(vte->con, saved->cursor_x, saved->cursor_y);
++	vte->cattr = saved->cattr;
+ 	to_rgb(vte, &vte->cattr);
+ 	if (vte->flags & TSM_VTE_FLAG_BACKGROUND_COLOR_ERASE_MODE)
+ 		tsm_screen_set_def_attr(vte->con, &vte->cattr);
+-	vte->gl = vte->saved_state.gl;
+-	vte->gr = vte->saved_state.gr;
+-	tsm_screen_set_cursor_style(vte->con, vte->saved_state.cursor_style);
+-
+-	if (vte->saved_state.wrap_mode) {
+-		vte->flags |= TSM_VTE_FLAG_AUTO_WRAP_MODE;
+-		tsm_screen_set_flags(vte->con, TSM_SCREEN_AUTO_WRAP);
+-	} else {
+-		vte->flags &= ~TSM_VTE_FLAG_AUTO_WRAP_MODE;
+-		tsm_screen_reset_flags(vte->con, TSM_SCREEN_AUTO_WRAP);
+-	}
++	vte->gl = saved->gl;
++	vte->gr = saved->gr;
++	tsm_screen_set_cursor_style(vte->con, saved->cursor_style);
+ 
+-	if (vte->saved_state.origin_mode) {
++	if (saved->origin_mode) {
+ 		vte->flags |= TSM_VTE_FLAG_ORIGIN_MODE;
+ 		tsm_screen_set_flags(vte->con, TSM_SCREEN_REL_ORIGIN);
+ 	} else {
+@@ -1870,6 +1880,11 @@
+ 		case 42: /* DECNRCM */
+ 			set_reset_flag(vte, set, TSM_VTE_FLAG_NATIONAL_CHARSET_MODE);
+ 			continue;
++		case 69: /* DECLRMM */
++			/* There are no left and right margins; the mode only
++			 * decides whether CSI s is SCOSC or DECSLRM. */
++			set_reset_flag(vte, set, TSM_VTE_FLAG_LEFT_RIGHT_MARGIN_MODE);
++			continue;
+ 		case 47: /* Alternate screen buffer */
+ 			if (vte->flags & TSM_VTE_FLAG_TITE_INHIBIT_MODE)
+ 				continue;
+@@ -2463,8 +2478,10 @@
+ 		break;
+ 	case 's':
+ 		/* SCOSC: save the cursor as DECSC does. CSI ? s, xterm's
+-		 * XTSAVE, and the other private forms are not it. */
+-		if (!(vte->csi_flags & CSI_PRIVATE) && vte->csi_argv[0] <= 0)
++		 * XTSAVE, and the other private forms are not it, nor is
++		 * CSI s while DECLRMM is set, which is DECSLRM. */
++		if (!(vte->csi_flags & CSI_PRIVATE) && vte->csi_argv[0] <= 0 &&
++		    !(vte->flags & TSM_VTE_FLAG_LEFT_RIGHT_MARGIN_MODE))
+ 			save_state(vte);
+ 		break;
+ 	case 'u':
