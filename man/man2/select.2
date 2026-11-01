@@ -96,7 +96,7 @@ it is in seconds and nanoseconds.
 A null pointer waits indefinitely; a zero interval performs one scan
 without waiting.
 With no selected descriptors, a finite interval acts as a sleep.
-A timeout ends at the first 10 ms timer tick at or after its end, measured from
+A timeout ends at the first 1 ms timer tick at or after its end, measured from
 where in the tick in progress the call is, so a timeout never expires
 before the time asked, up to the limits below, and at most a tick after
 it.
@@ -119,9 +119,8 @@ Musl normalizes excess microseconds before issuing the call.
 The raw
 .Nm pselect6
 call requires nonnegative seconds and nanoseconds from 0 through 999999999.
-Its deadline calculation caps seconds at 21474836 and the total interval
-at 2147483646 ticks, and a timeout of 21474836 seconds or more ends at its
-tick without the clock's check.
+Its deadline calculation caps seconds at 2^40, about 34800 years, and a
+timeout of 2^40 seconds or more ends at its tick without the clock's check.
 .Pp
 A non-null
 .Fa sigmask

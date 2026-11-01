@@ -95,7 +95,6 @@ Time since boot, read from uptime seconds, the ticks within the current
 second and the PIT counter's place within the tick, as real time reads it.
 A reading is never earlier than the one before it, and setting the real
 time does not move it.
-The clock continues across the 32-bit tick counter's wrap at about 497 days.
 .It Dv CLOCK_PROCESS_CPUTIME_ID
 ID 2.
 The CPU time the timer has charged to the caller, user and system time
@@ -141,7 +140,7 @@ unless it is null: 1 microsecond for
 .Dv CLOCK_MONOTONIC_RAW
 and
 .Dv CLOCK_BOOTTIME ,
-and the 10 ms tick for every other clock, the coarse and CPU clocks.
+and the 1 ms tick for every other clock, the coarse and CPU clocks.
 Each clock advances in steps of its resolution.
 .Pp
 .Fn times

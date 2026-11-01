@@ -50,7 +50,7 @@ the time between each later one, or zero for a single one.
 A zero
 .Va it_value
 disarms the timer.
-Times are rounded up to whole 10 ms ticks.
+Times are rounded up to whole 1 ms ticks.
 .Dv ITIMER_REAL
 does not count the tick in progress, so the first
 .Dv SIGALRM
@@ -121,7 +121,7 @@ keeps the timers and the pending signals, so a
 posted and not yet delivered, while blocked, comes to the new program
 when it unblocks the signal.
 .Ss Differences from Linux
-The timers count 10 ms ticks, so the signal is posted at a tick, and
+The timers count 1 ms ticks, so the signal is posted at a tick, and
 .Fn getitimer
 reports whole ticks where Linux reports microseconds.
 The raw call refuses a null
@@ -156,10 +156,12 @@ On x86-64 the numbers are 38, 36 and 37, with the same arguments in RDI,
 RSI and RDX.
 The kernel's itimerval is four signed fields, of 32 bits on i386 and 64 on
 x86-64: the interval's seconds and microseconds, then the value's.
-The kernel limits each seconds field to 21474836, as
+The kernel limits each seconds field to 2^40, about 34800 years, as
 .Xr nanosleep 2
-does, keeps its microseconds, rounds each time up to whole ticks, and
-limits the result to 2147483645 ticks, about 248.55 days.
+does, keeps its microseconds and rounds each time up to whole ticks.
+A time that does not fit the structure is reported as the largest
+.Vt long
+of seconds and 999999 microseconds.
 .Pp
 musl passes that form for its 64-bit
 .Vt time_t ;

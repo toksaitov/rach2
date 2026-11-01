@@ -22,11 +22,11 @@ field specifies seconds and
 specifies nanoseconds.
 Seconds must be nonnegative; nanoseconds must be from 0 through 999999999.
 .Pp
-The kernel ends a nonzero interval at the first 10 ms tick at or after its
+The kernel ends a nonzero interval at the first 1 ms tick at or after its
 end, measured from where in the tick in progress the call is, so a sleep
 that no signal ends is never shorter than asked, up to the limit below,
-and at most a tick longer: a sleep of 1 ms lasts up to 10 ms, as Linux's
-does with a 100 Hz tick and no high-resolution timer.
+and at most a tick longer: a sleep of 100 us lasts up to 1 ms, as Linux's
+does with a 1000 Hz tick and no high-resolution timer.
 The process blocks until that deadline tick; other runnable processes
 continue to execute.
 The sleep also lasts until
@@ -114,7 +114,7 @@ returns when the process is continued, so a sleep begun again with it
 ends later than the first deadline by the time the process was stopped.
 Linux resumes the sleep, which still ends at its first deadline.
 Linux's remainder is exact, so a sleep begun again with it does not end
-early; here the remainder counts whole 10 ms ticks, and a sleep begun
+early; here the remainder counts whole 1 ms ticks, and a sleep begun
 again with it can end up to a tick early.
 Linux can also sleep on
 .Dv CLOCK_TAI
@@ -131,9 +131,9 @@ On x86-64 the numbers are 35 and 230, with the same arguments in RDI, RSI,
 RDX and R10.
 The kernel timespec consists of two signed fields, seconds, then
 nanoseconds, of 32 bits on i386 and 64 on x86-64.
-The kernel limits the seconds field to 21474836, keeps the nanoseconds,
-rounds the interval up to whole ticks, and limits the result to
-2147483646 ticks, about 248.55 days.
+The kernel limits the seconds field to 2^40, about 34800 years, keeps the
+nanoseconds and rounds the interval up to whole ticks; a sleep so cut ends
+at its tick without the clock's check.
 .Pp
 The raw
 .Fn nanosleep

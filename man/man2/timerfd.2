@@ -69,7 +69,7 @@ report the descriptor readable while there are expirations to read.
 names it
 .Dq anon_inode:[timerfd] .
 .Pp
-The kernel keeps time in 10 ms ticks: an expiration and an interval are
+The kernel keeps time in 1 ms ticks: an expiration and an interval are
 rounded up to whole ticks, counted from the tick the monotonic clock is
 in, a tick whose interrupt has not yet been taken included, and the tick in
 progress is not counted, so a timer never expires early by that clock.
