@@ -10,9 +10,9 @@
  * from poll.c and uses nothing of the kernel, so that
  * tests/host/poll_select_hosttest.c runs it on the host under ASan and UBSan.
  *
- * A musl fd_set is FD_SETSIZE=1024 bits, which is also the most descriptors
- * a process here may hold; the caller's buffer is that full size, and all of
- * it is copied and cleared.
+ * A musl fd_set is FD_SETSIZE=1024 bits, the width of the sets the host
+ * test passes. The kernel's select passes sets as wide as its `nfds` asks,
+ * in 32-bit words.
  */
 #define FDSET_BITS  1024
 #define FDSET_WORDS (FDSET_BITS / 32) /* 32 x 32-bit words = 128 bytes */

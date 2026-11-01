@@ -84,7 +84,8 @@ int32_t poll_mask_done(int32_t ret);
 
 /** poll(2) takes the user array of struct pollfd, its length and a timeout
  * in milliseconds, negative for none. Returns the count of entries with
- * events, 0 at the timeout, -EINVAL for more entries than FD_TABLE_LIMIT,
+ * events, 0 at the timeout, -EINVAL for more than 1024 entries and more than
+ * the caller's soft RLIMIT_NOFILE,
  * -EFAULT, -EINTR or -ENOMEM. */
 long sys_poll(struct isr_params *params);
 
