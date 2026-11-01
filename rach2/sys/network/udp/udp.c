@@ -152,15 +152,19 @@ void udp_unbind(struct socket *sock)
  * connected to the sender takes the datagram before any other, because it
  * asked for that sender by name, and a renewal's answer must not go to a
  * socket that is merely listening. The payload goes to `socket_udp_deliver`
- * with the sender's address and port.
+ * with the sender's address and port. A datagram is counted in net_mib, or
+ * for IPv6 in net_mib6.
  */
 static int udp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *data, uint16_t len,
                        const struct net_rxinfo *info)
 {
     uint16_t dst_port, udp_len, payload_len;
+    int v6 = dst_ip.family == AF_INET6;
+    uint32_t *in_datagrams = v6 ? &net_mib6.udp6_in_datagrams : &net_mib.udp_in_datagrams;
+    uint32_t *in_errors = v6 ? &net_mib6.udp6_in_errors : &net_mib.udp_in_errors;
 
     if (len < UDP_HDR_SIZE) {
-        net_mib.udp_in_errors++;
+        ++*in_errors;
         return 0;
     }
 
@@ -168,7 +172,7 @@ static int udp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *data
     udp_len = read16be(data + 4);
 
     if (udp_len < UDP_HDR_SIZE || udp_len > len) {
-        net_mib.udp_in_errors++;
+        ++*in_errors;
         return 0;
     }
     payload_len = (uint16_t)(udp_len - UDP_HDR_SIZE);
@@ -186,7 +190,7 @@ static int udp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *data
             }
             if (cand->connected) {
                 if (net_addr_equal(cand->remote_ip, src_ip) && cand->remote_port == src_port) {
-                    net_mib.udp_in_datagrams++;
+                    ++*in_datagrams;
                     socket_udp_deliver_info(cand, src_ip, src_port, data + UDP_HDR_SIZE,
                                             payload_len, info);
                     return 0;
@@ -198,10 +202,14 @@ static int udp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *data
             }
         }
         if (!listener) {
-            net_mib.udp_no_ports++;
+            if (v6) {
+                net_mib6.udp6_no_ports++;
+            } else {
+                net_mib.udp_no_ports++;
+            }
             return -1;
         }
-        net_mib.udp_in_datagrams++;
+        ++*in_datagrams;
         socket_udp_deliver_info(listener, src_ip, src_port, data + UDP_HDR_SIZE, payload_len, info);
     }
     return 0;
@@ -302,7 +310,9 @@ int udp_tx(const struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, cons
     } else {
         r = ip_tx_from(from.v4, dst_ip.v4, IP_PROTO_UDP, udp_tx_buf, udp_len, sock->ip_ttl);
     }
-    if (r == 0) {
+    if (r == 0 && dst_ip.family == AF_INET6) {
+        net_mib6.udp6_out_datagrams++;
+    } else if (r == 0) {
         net_mib.udp_out_datagrams++;
     }
 
@@ -329,12 +339,14 @@ int udp6_rx(int ifindex, const uint8_t *ip6h, const uint8_t *data, uint16_t len)
     struct net_rxinfo info;
     uint16_t size;
 
-    if (len < UDP_HDR_SIZE)
+    if (len < UDP_HDR_SIZE) {
+        net_mib6.udp6_in_errors++;
         return 0;
+    }
     size = read16be(data + 4);
     if (size < UDP_HDR_SIZE || size != len || !read16be(data + 6) ||
         ip6_checksum(src, dst, IP6_NH_UDP, data, size) != 0) {
-        net_mib.udp_in_errors++;
+        net_mib6.udp6_in_errors++;
         return 0;
     }
     info.dst = net_addr6(dst, (uint32_t)ifindex);

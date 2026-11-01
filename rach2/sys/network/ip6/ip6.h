@@ -117,6 +117,11 @@ struct net_mib6 {
     uint32_t icmp6_out_group_memb_responses;
     uint32_t icmp6_out_group_memb_reductions;
     uint32_t icmp6_out_mldv2_reports;
+    /* UDP over IPv6, which net_mib's UDP counts leave out. */
+    uint32_t udp6_in_datagrams;
+    uint32_t udp6_no_ports;  /* no socket has the port */
+    uint32_t udp6_in_errors; /* a bad length or checksum */
+    uint32_t udp6_out_datagrams;
 };
 
 extern struct net_mib6 net_mib6;

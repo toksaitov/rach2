@@ -4046,10 +4046,10 @@ static void ap_mib6(struct procfs_text *t, const char *name, uint32_t v)
 }
 
 /**
- * Render /proc/net/snmp6: of the IPv6 and ICMPv6 counters Linux keeps, the
- * ones this stack has (`net_mib6`), a line each, in Linux's order, which
- * `nstat` reads by name. Ip6OutForwDatagrams is 0, since this machine
- * forwards nothing.
+ * Render /proc/net/snmp6: of the IPv6, ICMPv6 and UDP counters Linux keeps,
+ * the ones this stack has (`net_mib6`), a line each, in Linux's order, which
+ * `nstat` reads by name. Ip6OutForwDatagrams, Icmp6OutPktTooBigs and the
+ * messages only a router sends are 0, since this machine forwards nothing.
  */
 static int procfs_gen_netsnmp6(struct procfs_text *t)
 {
@@ -4083,11 +4083,34 @@ static int procfs_gen_netsnmp6(struct procfs_text *t)
     ap_mib6(t, "Icmp6InParmProblems", m->icmp6_in_parm_problems);
     ap_mib6(t, "Icmp6InEchos", m->icmp6_in_echos);
     ap_mib6(t, "Icmp6InEchoReplies", m->icmp6_in_echo_replies);
+    ap_mib6(t, "Icmp6InGroupMembQueries", m->icmp6_in_group_memb_queries);
+    ap_mib6(t, "Icmp6InGroupMembResponses", m->icmp6_in_group_memb_responses);
+    ap_mib6(t, "Icmp6InGroupMembReductions", m->icmp6_in_group_memb_reductions);
+    ap_mib6(t, "Icmp6InRouterSolicits", m->icmp6_in_router_solicits);
+    ap_mib6(t, "Icmp6InRouterAdvertisements", m->icmp6_in_router_advertisements);
+    ap_mib6(t, "Icmp6InNeighborSolicits", m->icmp6_in_neighbor_solicits);
+    ap_mib6(t, "Icmp6InNeighborAdvertisements", m->icmp6_in_neighbor_advertisements);
+    ap_mib6(t, "Icmp6InRedirects", m->icmp6_in_redirects);
+    ap_mib6(t, "Icmp6InMLDv2Reports", m->icmp6_in_mldv2_reports);
     ap_mib6(t, "Icmp6OutDestUnreachs", m->icmp6_out_dest_unreachs);
+    ap_mib6(t, "Icmp6OutPktTooBigs", 0);
     ap_mib6(t, "Icmp6OutTimeExcds", m->icmp6_out_time_excds);
     ap_mib6(t, "Icmp6OutParmProblems", m->icmp6_out_parm_problems);
     ap_mib6(t, "Icmp6OutEchos", m->icmp6_out_echos);
     ap_mib6(t, "Icmp6OutEchoReplies", m->icmp6_out_echo_replies);
+    ap_mib6(t, "Icmp6OutGroupMembQueries", 0);
+    ap_mib6(t, "Icmp6OutGroupMembResponses", m->icmp6_out_group_memb_responses);
+    ap_mib6(t, "Icmp6OutGroupMembReductions", m->icmp6_out_group_memb_reductions);
+    ap_mib6(t, "Icmp6OutRouterSolicits", m->icmp6_out_router_solicits);
+    ap_mib6(t, "Icmp6OutRouterAdvertisements", 0);
+    ap_mib6(t, "Icmp6OutNeighborSolicits", m->icmp6_out_neighbor_solicits);
+    ap_mib6(t, "Icmp6OutNeighborAdvertisements", m->icmp6_out_neighbor_advertisements);
+    ap_mib6(t, "Icmp6OutRedirects", 0);
+    ap_mib6(t, "Icmp6OutMLDv2Reports", m->icmp6_out_mldv2_reports);
+    ap_mib6(t, "Udp6InDatagrams", m->udp6_in_datagrams);
+    ap_mib6(t, "Udp6NoPorts", m->udp6_no_ports);
+    ap_mib6(t, "Udp6InErrors", m->udp6_in_errors);
+    ap_mib6(t, "Udp6OutDatagrams", m->udp6_out_datagrams);
     return t->len;
 }
 
