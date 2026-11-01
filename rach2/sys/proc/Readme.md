@@ -185,12 +185,12 @@ A thread holds Linux's 41 capabilities, numbered 0 to 40, but those it gave up (
 
 ### Resource limits
 
-A record has six limits, `RLIM_COUNT` in `process.h`, each a soft value that is enforced and a hard value the soft one may be raised to, `RLIM_INFINITY` for none. A limit is a `long`: 32 bits on i686, where a 64-bit value from `prlimit64` past them is kept as no limit, and 64 bits on x86-64. A fork copies the limits and an exec keeps them, but for the lowered stack limit above. `rlimit_set` (`rach2/sys/syscall_proc.c`) writes the limit into every thread of the process; it refuses a soft value above the hard one with `EINVAL`, a raised hard value from a caller that is not privileged with `EPERM`, and a hard `RLIMIT_NOFILE` above `FD_TABLE_LIMIT` with `EPERM`. A resource Linux has and this kernel does not keep reads as unlimited, and a set of one is accepted and changes nothing.
+A record has six limits, `RLIM_COUNT` in `process.h`, each a soft value that is enforced and a hard value the soft one may be raised to, `RLIM_INFINITY` for none. A limit is a `long`: 32 bits on i686, where a 64-bit value from `prlimit64` past them is kept as no limit, and 64 bits on x86-64. A fork copies the limits and an exec keeps them, but for the lowered stack limit above. `rlimit_set` (`rach2/sys/syscall_proc.c`) writes the limit into every thread of the process; it refuses a soft value above the hard one with `EINVAL`, a raised hard value from a caller that is not privileged with `EPERM`, and a hard `RLIMIT_NOFILE` above `fd_nr_open`, fs.nr_open, with `EPERM` even to root, as Linux does. A resource Linux has and this kernel does not keep reads as unlimited, and a set of one is accepted and changes nothing.
 
 | Limit | Default soft, hard | Enforced by |
 | --- | --- | --- |
 | `RLIMIT_NPROC` | 4096, 4096 (`PROC_COUNT_POLICY`) | `fork_nproc`: the records of the caller's real user, each thread and zombie counted; real user id 0 is exempt |
-| `RLIMIT_NOFILE` | 1024, 1024 (`FD_TABLE_LIMIT`) | the descriptor allocator, `rach2/sys/fs/fd.c` |
+| `RLIMIT_NOFILE` | 1024, 524288 (`FD_TABLE_LIMIT`, `FD_NOFILE_HARD`) | the descriptor allocator, `rach2/sys/fs/fd.c` |
 | `RLIMIT_AS` | none, none | `brk`, `mmap`, `mremap`, the growth of the stack at a page fault (`rach2/sys/mm/paging.c`), and the image `execve` builds |
 | `RLIMIT_STACK` | 8 MiB (`RLIM_STACK_DEFAULT`), none | `execve`: the room for the strings and their pointers, and how far the new stack may grow |
 | `RLIMIT_CORE` | 0, none | a core file: none below one page, and the file stops at the soft value |

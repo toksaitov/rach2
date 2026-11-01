@@ -209,8 +209,9 @@ typedef struct fd_entry {
  * call of one sharer may sleep with the address of an entry while another
  * grows the table; the old array then stays on `retired`, unchanged, until
  * no sharer's call holds a descriptor (`fd_table_reap`), so such an address
- * reads what it read before. What a call writes into an entry it writes by
- * number after its last sleep. The table has no limit of its own below
+ * reads what it read before. A call that writes an entry after a sleep, or
+ * reads what another thread may have changed in it since, takes the entry
+ * as it is now first (`fd_entry_now`). The table has no limit of its own below
  * `fd_nr_open`: each sharer is held to its own RLIMIT_NOFILE (`fd_limit`).
  * The table is the owner of its sharers' POSIX record locks (`lock.h`),
  * which its release drops as it closes the descriptors.

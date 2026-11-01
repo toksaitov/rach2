@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd November 1, 2026
 .Dt SELECT 2
 .Os
 .Sh NAME
@@ -21,15 +21,18 @@ The sets select descriptors from 0 through
 minus one.
 The value of
 .Fa nfds
-must be between 0 and
-.Dv FD_SETSIZE
-(1024), inclusive.
+must not be negative; one past the end of the caller's descriptor table
+is taken as that end, since no descriptor past it is open.
 A null set pointer selects no descriptors in that direction.
-Each nonnull pointer must address a complete 128-byte
-.Vt fd_set ,
-even when
+Each nonnull pointer must address the longs that hold the first
 .Fa nfds
-is small or zero.
+bits, and only those are read and written, as on Linux.
+An
+.Vt fd_set
+holds
+.Dv FD_SETSIZE ,
+1024, bits; a program that raised its descriptor limit and selects a
+higher descriptor passes an array of longs as wide as it needs.
 .Pp
 Use
 .Fn FD_ZERO
@@ -43,7 +46,7 @@ to test membership.
 On success, the sets contain only the ready descriptors.
 Bits at or above
 .Fa nfds
-are cleared.
+in the longs written are cleared.
 .Bl -tag -width exceptfds
 .It Fa readfds
 Input is available, or the descriptor reports a hangup or error.
@@ -208,7 +211,8 @@ be read, or the old call's argument array cannot be read.
 No selected descriptor was ready and a signal that is neither blocked nor
 ignored was pending.
 .It Bq Er EINVAL
-The descriptor count or timeout is outside the accepted range.
+The descriptor count is negative, or the timeout is outside the accepted
+range.
 .It Bq Er ENOMEM
 The kernel could not allocate the descriptor or wait arrays.
 .It Bq Er ESRCH

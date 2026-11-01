@@ -1,4 +1,4 @@
-.Dd September 28, 2026
+.Dd November 1, 2026
 .Dt POLL 2
 .Os
 .Sh NAME
@@ -19,7 +19,9 @@ examines the
 entries in
 .Fa fds
 and waits for readiness, a signal, or the timeout.
-At most 1024 entries are accepted.
+At most 1024 entries are accepted, or as many as the soft
+.Dv RLIMIT_NOFILE
+when it is higher.
 Each entry has the following fields:
 .Bd -literal -offset indent
 struct pollfd {
@@ -212,7 +214,9 @@ No entry was ready and a signal that is neither blocked nor ignored was
 pending.
 .It Er EINVAL
 .Fa nfds
-exceeds 1024, or the
+exceeds both 1024 and the soft
+.Dv RLIMIT_NOFILE ,
+or the
 .Fn ppoll
 timeout has invalid seconds or nanoseconds.
 Linux also refuses an
