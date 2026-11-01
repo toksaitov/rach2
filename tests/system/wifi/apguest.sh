@@ -47,7 +47,7 @@ set -e
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$DIR/../../.." && pwd)"
-GUEST="$REPO/build/wifi/guest"
+GUEST="${RACH2_WIFI_GUEST:-$REPO/build/wifi/guest}"
 QEMU="${RACH2_QEMU:-qemu-system-x86_64}"
 ACCEL="${RACH2_QEMU_ACCEL:-}"
 BASE=15550
@@ -115,6 +115,7 @@ native()
 
 work=
 guest=
+rach2=
 trap 'stop' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
@@ -123,6 +124,10 @@ trap 'exit 143' TERM
 stop()
 {
     status=$?
+    if [ -n "$rach2" ]; then
+        kill "$rach2" 2> /dev/null || true
+        wait "$rach2" 2> /dev/null || true
+    fi
     if [ -n "$guest" ]; then
         kill "$guest" 2> /dev/null || true
         wait "$guest" 2> /dev/null || true
@@ -201,8 +206,8 @@ done
 echo "apguest: ready: $PROFILE"
 
 if [ -z "$IMAGE" ]; then
-    wait "$guest"
-    status=$?
+    status=0
+    wait "$guest" || status=$?
     guest=
     exit $status
 fi
@@ -218,11 +223,18 @@ if [ ! -f "$initrd" ]; then
     echo "apguest: no image $initrd; build it with make" >&2
     exit 1
 fi
-status=0
+# The machine runs in the background, so that a signal reaches the trap at
+# once and stops both, on the terminal that the script was given as fd 3,
+# since sh gives a background command /dev/null.
+exec 3<&0
 # shellcheck disable=SC2086 # as for the guest
 "$machine" $accel -cpu max -display none -no-reboot \
     -kernel "$(native "$build/rach2/kernel")" -initrd "$(native "$initrd")" \
     -netdev user,id=n0 -device e1000,netdev=n0 \
     -netdev "user,id=n1,net=10.0.4.0/24,hostfwd=udp:127.0.0.1:$((BASE + 1))-:5550" \
-    -device e1000,netdev=n1 -serial stdio || status=$?
+    -device e1000,netdev=n1 -serial stdio <&3 &
+rach2=$!
+status=0
+wait "$rach2" || status=$?
+rach2=
 exit $status

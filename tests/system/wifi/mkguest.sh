@@ -8,9 +8,10 @@
 # Writes OUTDIR/vmlinuz, linux-lts's kernel, and OUTDIR/initrd, an
 # uncompressed newc archive: the packages' files with their modes, the
 # modules modules.txt names with those they need, decompressed, and the files
-# of root/ and certs/ over them. A built hwsimrelay is staged as /usr/sbin/hwsimrelay when
-# HWSIMRELAY names it. Make runs it through the target `wifi-guest`, with
-# MKCPIO and SHA256 naming the host programs it built.
+# of root/ and certs/ over them. A built hwsimrelay is staged as
+# /usr/sbin/hwsimrelay when HWSIMRELAY names it. Make runs it through the
+# target `wifi-guest`, with MKCPIO and SHA256 naming the host programs it
+# built and HWSIMRELAY the relay that WIFI_HWSIMRELAY names.
 #
 # Each package is downloaded once into the cache, RACH2_WIFI_CACHE or
 # build/cache/wifi-guest, from RACH2_ALPINE_MIRROR or Alpine's CDN, and
@@ -182,6 +183,7 @@ cp -R "$DIR/root/." "$root/"
 mkdir -p "$root/etc/wifiap/certs"
 cp "$DIR"/certs/*.pem "$DIR"/certs/*.key "$root/etc/wifiap/certs/"
 if [ -n "${HWSIMRELAY:-}" ]; then
+    mkdir -p "$root/usr/sbin"
     cp "$HWSIMRELAY" "$root/usr/sbin/hwsimrelay"
 fi
 
