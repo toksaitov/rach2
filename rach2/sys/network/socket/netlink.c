@@ -1367,7 +1367,7 @@ static int diag_tcp(struct nl_build *b, uint32_t wanted, uint8_t ext)
         d.retrans = (uint8_t)(rows[i].retransmits > 255 ? 255 : rows[i].retransmits);
         d.sport = rows[i].local_port;
         d.dport = rows[i].remote_port;
-        if (rows[i].local_ip.family == AF_INET6)
+        if (rows[i].family == AF_INET6)
             continue;
         d.src = rows[i].local_ip.v4;
         d.dst = rows[i].remote_ip.v4;

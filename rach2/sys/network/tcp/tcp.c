@@ -1532,6 +1532,7 @@ int tcp_listen(struct socket *sock, uint16_t port)
         return -ENOBUFS;
     }
 
+    tcb->family = sock->family;
     tcb->local_ip = sock->local_ip;
     tcb->local_port = port;
     tcb->state = TCP_LISTEN;
@@ -1606,6 +1607,7 @@ int tcp_connect(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port)
         return -ENOBUFS;
     }
 
+    tcb->family = sock->family;
     tcb->local_ip = from;
     tcb->local_port = local;
     tcb->remote_ip = dst_ip;
@@ -2377,6 +2379,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
 
         conn_sock->uid = tcb->sock ? tcb->sock->uid : tcb->uid;
 
+        conn_tcb->family = tcb->family;
         conn_tcb->passive = 1;
         conn_tcb->listener = tcb;
         conn_tcb->local_ip = dst_ip;
@@ -2680,6 +2683,7 @@ int tcp_snapshot(struct tcp_row **rows)
     n = 0;
     flags = net_lock();
     for (t = tcbs; t && n < room; t = t->next) {
+        out[n].family = t->family;
         out[n].local_ip = t->local_ip;
         out[n].local_port = t->local_port;
         out[n].remote_ip = t->remote_ip;

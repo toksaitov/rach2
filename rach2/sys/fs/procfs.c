@@ -3608,7 +3608,7 @@ static int procfs_gen_nettcp(struct procfs_text *t)
     for (i = 0; i < n; i++) {
         struct tcp_row row = rows[i];
 
-        if (row.local_ip.family == AF_INET6)
+        if (row.family == AF_INET6)
             continue;
 
         ap_str(t, "   ");

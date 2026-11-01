@@ -131,6 +131,7 @@ struct tcb {
     int passive;
     struct tcb *listener; /* borrowed until a passive handshake completes */
 
+    uint16_t family; /* socket family, including mapped IPv4 on AF_INET6 */
     net_addr_t local_ip;
     uint16_t local_port;
     net_addr_t remote_ip;
@@ -384,6 +385,7 @@ void tcp_local_addr_changed(void);
 
 /* One connection, copied out for a reader of /proc/net/tcp. */
 struct tcp_row {
+    uint16_t family; /* socket family, including mapped IPv4 on AF_INET6 */
     net_addr_t local_ip;
     uint16_t local_port;
     net_addr_t remote_ip;
