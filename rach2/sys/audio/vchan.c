@@ -900,7 +900,7 @@ static void vchan_capture_close(audio_stream_t *s)
 static uint32_t vchan_capture_position(audio_stream_t *s)
 {
     struct vchan_reader *r = vchan_reader_find(s);
-    uint32_t flags, frames = 0, delta, n, frac = 0, position = 0;
+    uint32_t flags, frames = 0, delta, n, frac, position = 0;
 
     if (r && r->running && !input.loopback)
         position = input.hw->stream_position(&input.stream);
