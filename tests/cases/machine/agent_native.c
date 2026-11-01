@@ -285,16 +285,56 @@ static int git_expect(struct row *s, const char *arg, const char *extra, const c
     const char *argv[] = {"/usr/bin/git", "-C", "/tmp/agents/verify/repo", arg, extra, NULL};
     return guest_expect(s, argv, expected, label);
 }
+/* What the host judges of the rows of one agent, which a row's name begins
+ * with. */
+struct agent {
+    const char *prefix;
+    const char *name;     /* the author of the agent's commits, NAME Test */
+    const char *mail;     /* and their address, MAIL@fakeapi.test */
+    const char *script;   /* the API script of tests/system/fakeapi, or NULL */
+    const char *digest;   /* the SHA-256 of the vendor's program, or NULL */
+    const char *artifact; /* the prepared file that holds it when digest is NULL */
+    const char *mode;     /* what the row writes in its result's mode */
+    int fixture;          /* 1 when the row edits fixture.txt, not greeting.txt */
+};
+static const struct agent agents[] = {
+    {"claude", "Claude", "claude", NULL,
+     "24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de", NULL, "print", 1},
+    {"agy", "Antigravity", "agy", NULL,
+     "60e72242f07c131f75afcd9a9e425d6ee097a1a1b3190ea98ae78fa4180bbfa8", NULL, "print", 1},
+    {"muse", "Muse", "muse", "muse",
+     "decefc0fb33c48ee43419c3e72ac2dbc781743868611074c7292807f5960dfcf", NULL, "exec", 0},
+    {"codex", "Codex", "codex", "codex", NULL, "codex-digest", "exec", 0},
+    {"opencode", "OpenCode", "opencode", "opencode", NULL, "opencode-digest", "run", 0},
+};
+
+/**
+ * agent_of() - the agent whose rows begin as the row NAME does.
+ *
+ * Return: the agent's entry of agents[], or NULL for a row of no agent the
+ * host knows, which the caller fails rather than judge as another's.
+ */
+static const struct agent *agent_of(const char *name)
+{
+    unsigned i;
+    for (i = 0; i < sizeof(agents) / sizeof(agents[0]); i++)
+        if (!strncmp(name, agents[i].prefix, strlen(agents[i].prefix)))
+            return &agents[i];
+    return NULL;
+}
 static int verify_repo(struct row *s)
 {
     char expected[600];
-    const char *name = !strncmp(s->name, "codex", 5) ? "Codex" : "Muse";
-    const char *agent = !strncmp(s->name, "codex", 5) ? "codex" : "muse";
-    int fixture = !strncmp(s->name, "claude", 6) || !strncmp(s->name, "agy", 3);
+    const struct agent *a = agent_of(s->name);
+    int fixture = a && a->fixture;
     const char *cat[] = {"/bin/cat",
                          fixture ? "/tmp/agents/verify/repo/fixture.txt"
                                  : "/tmp/agents/verify/repo/greeting.txt",
                          NULL};
+    if (!a) {
+        fprintf(stderr, "agents: %s: no agent of this row is known\n", s->name);
+        return 0;
+    }
     if (fixture) {
         snprintf(expected, sizeof(expected), "rach2 fixture %s\nanswer=after\n",
                  !strncmp(s->name, "claude", 6) ? "489" : "493");
@@ -333,7 +373,7 @@ static int verify_repo(struct row *s)
             return 0;
         snprintf(expected, sizeof(expected),
                  "Greet Rach2|%s Test <%s@fakeapi.test>\nThe fixture|%s Test <%s@fakeapi.test>\n",
-                 name, agent, name, agent);
+                 a->name, a->mail, a->name, a->mail);
         if (!git_expect(s, "log", "--format=%s|%an <%ae>", expected, "commit-authors") ||
             !git_expect(s, "show", "HEAD:greeting.txt", "hello, rach2\n", "committed-greeting") ||
             !git_expect(s, "show", "HEAD~1:greeting.txt", "hello, world\n", "original-greeting"))
@@ -514,18 +554,13 @@ static int verify_worker(struct row *s)
 static int verify_runtime(struct row *s)
 {
     char *before = NULL, *after = NULL, *memory = NULL, *expected = NULL;
-    const char *digest = NULL;
+    const struct agent *a = agent_of(s->name);
+    const char *digest = a ? a->digest : NULL;
     int ok = 0;
     before = fetch(s, "/tmp/agents/verify/binary.before", "binary-before");
     after = fetch(s, "/tmp/agents/verify/binary.after", "binary-after");
-    if (!strncmp(s->name, "claude", 6))
-        digest = "24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de";
-    else if (!strncmp(s->name, "agy", 3))
-        digest = "60e72242f07c131f75afcd9a9e425d6ee097a1a1b3190ea98ae78fa4180bbfa8";
-    else if (!strncmp(s->name, "muse", 4))
-        digest = "decefc0fb33c48ee43419c3e72ac2dbc781743868611074c7292807f5960dfcf";
-    else {
-        const char *file = etude_artifact(s->u->c, "codex-digest");
+    if (a && !digest) {
+        const char *file = etude_artifact(s->u->c, a->artifact);
         if (file)
             expected = net_file(file);
         digest = expected;
@@ -584,8 +619,8 @@ static int verify(struct row *s)
         return verify_worker(s);
     {
         char *mode = fetch(s, "/tmp/agents/verify/mode", "mode");
-        const char *wanted = strstr(s->name, "print") ? "print" : "exec";
-        if (!mode || strcmp(trim(mode), wanted)) {
+        const struct agent *a = agent_of(s->name);
+        if (!a || !mode || strcmp(trim(mode), a->mode)) {
             free(mode);
             return 0;
         }
@@ -720,10 +755,10 @@ static int api_prepare(struct row *s)
     char ca[4096], destination[4096], *names[] = {"agent_server", "ca", ca, "fakeapi.test", NULL};
     char *unpack[] = {"agent_server", "unpack", (char *)assets, s->assets, NULL};
     char *render[] = {"agent_server", "render", s->script, destination, (char *)s->name, NULL};
-    if (!assets || !host(s, unpack, "unpack-api-assets"))
+    const struct agent *a = agent_of(s->name);
+    if (!assets || !a || !a->script || !host(s, unpack, "unpack-api-assets"))
         return 0;
-    path(s->script, sizeof(s->script), "%s/tests/system/fakeapi/%s.json", s->assets,
-         !strncmp(s->name, "codex", 5) ? "codex" : "muse");
+    path(s->script, sizeof(s->script), "%s/tests/system/fakeapi/%s.json", s->assets, a->script);
     path(ca, sizeof(ca), "%s/ca", s->work);
     path(destination, sizeof(destination), "%s/script.json", s->work);
     return host(s, names, "api-authority") && host(s, render, "api-script");
@@ -740,6 +775,10 @@ static int api_setup(struct row *s, int refusal)
     char file[4096], config[5000];
     unsigned i;
     const char *files[] = {"check.sh", "greeting.txt", "notes.txt"};
+    const struct agent *a = agent_of(s->name);
+    /* The API cases are Codex's and Muse's; another agent has no settings here. */
+    if (!a || (strcmp(a->prefix, "codex") && strcmp(a->prefix, "muse")))
+        return 0;
     if (!run(s,
              "mkdir -p /tmp/agentapi/home/.codex /tmp/agentapi/home/.config/muse /tmp/agentapi/tmp "
              "/tmp/agents/verify/repo /tmp/agents/fixture && printf '10.0.2.100 fakeapi.test\n' >> "
@@ -756,9 +795,8 @@ static int api_setup(struct row *s, int refusal)
     path(file, sizeof(file), "%s/ca/ca.pem", s->work);
     if (!put(s, file, "/tmp/agentapi/ca.pem", "0644"))
         return 0;
-    snprintf(config, sizeof(config), "[user]\n name = %s Test\n email = %s@fakeapi.test\n",
-             !strncmp(s->name, "codex", 5) ? "Codex" : "Muse",
-             !strncmp(s->name, "codex", 5) ? "codex" : "muse");
+    snprintf(config, sizeof(config), "[user]\n name = %s Test\n email = %s@fakeapi.test\n", a->name,
+             a->mail);
     if (!api_file(s, "gitconfig", "/tmp/agentapi/home/.gitconfig", config, "0644"))
         return 0;
     if (!strncmp(s->name, "codex", 5)) {
