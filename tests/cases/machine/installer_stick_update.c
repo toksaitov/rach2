@@ -201,6 +201,57 @@ static int boot_usb(struct etude_case *c, struct state *s)
 }
 
 /**
+ * On the disk that `d` booted, put back the menu from before term existed,
+ * with a repeated token on one line, then update twice with term requested:
+ * each update leaves one token on each installed-root line and keeps the
+ * recovery lines, and the second changes nothing.
+ */
+static void console_updates(struct etude_case *c, struct drive *d)
+{
+    int i;
+
+    drive_send(d, "mount -t vfat /dev/disk0p1 /bootcheck && "
+                  "sed '/rach2.slot=recovery/!s| rach2.console=[^ ]*||g' "
+                  "/tmp/menu.old > /bootcheck/boot/grub/grub.cfg && echo MENU\"\"OLD");
+    drive_expect(d, "MENUOLD");
+    drive_send(d,
+               "sed -i '/rach2.slot=fallback/s/$/ rach2.console=term rach2.console=term/' "
+               "/bootcheck/boot/grub/grub.cfg && sync && umount /bootcheck && echo MENU\"\"READY");
+    drive_expect(d, "MENUREADY");
+    drive_send(d, "echo '/rach2.slot=(candidate|fallback)( |$)/ {r++; n=0; "
+                  "for(i=1;i<=NF;i++) if($i==\"rach2.console=term\") n++; if(n!=1) bad=1}' "
+                  "> /tmp/menu.awk; echo AWK\"\"ROOT");
+    drive_expect(d, "AWKROOT");
+    drive_send(d, "echo 'END {if(r!=3 || bad) exit 1}' >> /tmp/menu.awk; echo AWK\"\"DONE");
+    drive_expect(d, "AWKDONE");
+    for (i = 0; i < 2; i++) {
+        drive_send(d, "rach2-install --console term --update /stick/" ROOT_NAME
+                      " /dev/disk0 && echo CONSOLE\"\"UPDATED || "
+                      "{ echo STICK\"\"FAIL: console update; poweroff -f; }");
+        drive_expect(d, "CONSOLEUPDATED");
+        if (!d->failed)
+            etude_progress(c, "update", (uint64_t)i + 2);
+        drive_send(d, "mount -t vfat /dev/disk0p1 /bootcheck && "
+                      "awk -f /tmp/menu.awk /bootcheck/boot/grub/grub.cfg && echo TOKENS\"\"OK || "
+                      "{ echo STICK\"\"FAIL: tokens; poweroff -f; }");
+        drive_expect(d, "TOKENSOK");
+        drive_send(d, "grep rach2.slot=recovery /tmp/menu.old > /tmp/recovery.old; "
+                      "grep rach2.slot=recovery /bootcheck/boot/grub/grub.cfg > /tmp/recovery.new; "
+                      "cmp /tmp/recovery.old /tmp/recovery.new && echo RECOVERY\"\"KEPT");
+        drive_expect(d, "RECOVERYKEPT");
+        if (i == 0) {
+            drive_send(d, "cp /bootcheck/boot/grub/grub.cfg /tmp/menu.once && echo MENU\"\"ONCE");
+            drive_expect(d, "MENUONCE");
+        } else {
+            drive_send(d, "cmp /tmp/menu.once /bootcheck/boot/grub/grub.cfg && echo MENU\"\"SAME");
+            drive_expect(d, "MENUSAME");
+        }
+        drive_send(d, "umount /bootcheck && echo MENU\"\"CLOSED");
+        drive_expect(d, "MENUCLOSED");
+    }
+}
+
+/**
  * Save the partitions and update the root without changing its menu, then
  * update twice with term requested, keeping the recovery lines and leaving
  * one token on each installed-root line and no change on the second run.
@@ -209,7 +260,7 @@ static int boot_update(struct etude_case *c, struct state *s)
 {
     char why[200];
     struct drive d;
-    int saved, updated, armed, menu, i;
+    int saved, updated, armed, menu;
 
     drive_boot(&d, c, "ide", NULL);
     if (!s->ready)
@@ -264,47 +315,7 @@ static int boot_update(struct etude_case *c, struct state *s)
                    "cp /tmp/menu.before /tmp/menu.old && umount /bootcheck && echo MENU\"\"KEPT");
     drive_expect(&d, "MENUKEPT");
     menu = !d.failed;
-    /* A menu from before term existed, with a repeated token on one line. */
-    drive_send(&d, "mount -t vfat /dev/disk0p1 /bootcheck && "
-                   "sed '/rach2.slot=recovery/!s| rach2.console=[^ ]*||g' "
-                   "/tmp/menu.old > /bootcheck/boot/grub/grub.cfg && echo MENU\"\"OLD");
-    drive_expect(&d, "MENUOLD");
-    drive_send(&d,
-               "sed -i '/rach2.slot=fallback/s/$/ rach2.console=term rach2.console=term/' "
-               "/bootcheck/boot/grub/grub.cfg && sync && umount /bootcheck && echo MENU\"\"READY");
-    drive_expect(&d, "MENUREADY");
-    drive_send(&d, "echo '/rach2.slot=(candidate|fallback)( |$)/ {r++; n=0; "
-                   "for(i=1;i<=NF;i++) if($i==\"rach2.console=term\") n++; if(n!=1) bad=1}' "
-                   "> /tmp/menu.awk; echo AWK\"\"ROOT");
-    drive_expect(&d, "AWKROOT");
-    drive_send(&d, "echo 'END {if(r!=3 || bad) exit 1}' >> /tmp/menu.awk; echo AWK\"\"DONE");
-    drive_expect(&d, "AWKDONE");
-    for (i = 0; i < 2; i++) {
-        drive_send(&d, "rach2-install --console term --update /stick/" ROOT_NAME
-                       " /dev/disk0 && echo CONSOLE\"\"UPDATED || "
-                       "{ echo STICK\"\"FAIL: console update; poweroff -f; }");
-        drive_expect(&d, "CONSOLEUPDATED");
-        if (!d.failed)
-            etude_progress(c, "update", (uint64_t)i + 2);
-        drive_send(&d, "mount -t vfat /dev/disk0p1 /bootcheck && "
-                       "awk -f /tmp/menu.awk /bootcheck/boot/grub/grub.cfg && echo TOKENS\"\"OK || "
-                       "{ echo STICK\"\"FAIL: tokens; poweroff -f; }");
-        drive_expect(&d, "TOKENSOK");
-        drive_send(&d,
-                   "grep rach2.slot=recovery /tmp/menu.old > /tmp/recovery.old; "
-                   "grep rach2.slot=recovery /bootcheck/boot/grub/grub.cfg > /tmp/recovery.new; "
-                   "cmp /tmp/recovery.old /tmp/recovery.new && echo RECOVERY\"\"KEPT");
-        drive_expect(&d, "RECOVERYKEPT");
-        if (i == 0) {
-            drive_send(&d, "cp /bootcheck/boot/grub/grub.cfg /tmp/menu.once && echo MENU\"\"ONCE");
-            drive_expect(&d, "MENUONCE");
-        } else {
-            drive_send(&d, "cmp /tmp/menu.once /bootcheck/boot/grub/grub.cfg && echo MENU\"\"SAME");
-            drive_expect(&d, "MENUSAME");
-        }
-        drive_send(&d, "umount /bootcheck && echo MENU\"\"CLOSED");
-        drive_expect(&d, "MENUCLOSED");
-    }
+    console_updates(c, &d);
     drive_send(&d, "umount /stick && echo UPDATE\"\"DONE");
     drive_expect(&d, "UPDATEDONE");
     stick_failure(&d, why, sizeof(why));
