@@ -1,0 +1,480 @@
+/* Transmit: QoS data in the four access categories, sequence numbers per
+ * TID, the PN and encryption in software or by the radio, after Linux's
+ * net/mac80211/tx.c and wpa.c. */
+#include "data.h"
+#include "../../lib/kerrno.h"
+#include "../../lib/kstring.h"
+
+/* RFC 1042's LLC/SNAP header, then EAPOL's EtherType. */
+static const uint8_t eapol_snap[8] = {0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00, 0x88, 0x8e};
+
+/** Whether two n-byte strings are equal. */
+static int same(const uint8_t *a, const uint8_t *b, unsigned n)
+{
+    unsigned i;
+
+    for (i = 0; i < n; ++i)
+        if (a[i] != b[i])
+            return 0;
+    return 1;
+}
+
+/** Read the little-endian frame control. */
+static unsigned frame_control(const uint8_t *frame)
+{
+    return (unsigned)frame[0] | (unsigned)frame[1] << 8;
+}
+
+/** Write the frame control back. */
+static void set_frame_control(uint8_t *frame, unsigned fc)
+{
+    frame[0] = (uint8_t)fc;
+    frame[1] = (uint8_t)(fc >> 8);
+}
+
+/** Give the frame the next sequence number of counter `index`. */
+static void put_seq(struct wlan_data *d, uint8_t *frame, unsigned index)
+{
+    unsigned seq = d->tx_seq[index];
+
+    d->tx_seq[index] = (uint16_t)((seq + 1) & 0xfff);
+    frame[22] = (uint8_t)(seq << 4);
+    frame[23] = (uint8_t)(seq >> 4);
+}
+
+/** A fresh transmit cookie of the data path. */
+static uint64_t next_cookie(struct wlan_data *d)
+{
+    d->next_cookie = (d->next_cookie + 1) & (WLAN_DATA_COOKIE - 1);
+    if (!d->next_cookie)
+        d->next_cookie = 1;
+    return WLAN_DATA_COOKIE | d->next_cookie;
+}
+
+unsigned wlan_data_hdrlen(const uint8_t *frame, unsigned len)
+{
+    unsigned fc, n = IEEE80211_HDRLEN;
+
+    if (len < IEEE80211_HDRLEN)
+        return 0;
+    fc = frame_control(frame);
+    if ((fc & IEEE80211_FCTL_FTYPE) == IEEE80211_FTYPE_MGMT) {
+        if (fc & IEEE80211_FCTL_ORDER)
+            n += IEEE80211_HT_CTL_LEN;
+    } else if ((fc & IEEE80211_FCTL_FTYPE) == IEEE80211_FTYPE_DATA) {
+        if ((fc & (IEEE80211_FCTL_TODS | IEEE80211_FCTL_FROMDS)) ==
+            (IEEE80211_FCTL_TODS | IEEE80211_FCTL_FROMDS))
+            n += IEEE80211_ADDR_LEN;
+        if (fc & IEEE80211_STYPE_QOS_DATA) {
+            n += IEEE80211_QOS_CTL_LEN;
+            if (fc & IEEE80211_FCTL_ORDER)
+                n += IEEE80211_HT_CTL_LEN;
+        }
+    } else {
+        return 0;
+    }
+    return len < n ? 0 : n;
+}
+
+uint32_t wlan_crc32(const uint8_t *data, unsigned len)
+{
+    uint32_t crc = 0xffffffffu;
+    unsigned i, b;
+
+    for (i = 0; i < len; ++i) {
+        crc ^= data[i];
+        for (b = 0; b < 8; ++b)
+            crc = crc >> 1 ^ (0xedb88320u & (0u - (crc & 1)));
+    }
+    return ~crc;
+}
+
+unsigned wlan_data_ac(unsigned tid)
+{
+    switch (tid & 7) {
+    case 1:
+    case 2:
+        return WLAN_AC_BK;
+    case 4:
+    case 5:
+        return WLAN_AC_VI;
+    case 6:
+    case 7:
+        return WLAN_AC_VO;
+    default:
+        return WLAN_AC_BE;
+    }
+}
+
+unsigned wlan_data_priority(const uint8_t *ethernet, unsigned len)
+{
+    unsigned type;
+
+    if (!ethernet || len < 14)
+        return 0;
+    type = (unsigned)ethernet[12] << 8 | ethernet[13];
+    if (type == 0x888e)
+        return 7;
+    if (type == 0x0800 && len >= 16)
+        return ethernet[15] >> 5;
+    if (type == 0x86dd && len >= 16)
+        return (ethernet[14] & 0x0f) >> 1;
+    return 0;
+}
+
+void wlan_data_init(struct wlan_data *d, struct wlan *wlan, struct wlan_radio *radio,
+                    struct wlan_counters *counters, wlan_data_deliver_fn deliver,
+                    wlan_data_event_fn event)
+{
+    unsigned i;
+
+    k_memset(d, 0, sizeof(*d));
+    d->wlan = wlan;
+    d->radio = radio;
+    d->counters = counters;
+    d->deliver = deliver;
+    d->event = event;
+    for (i = 0; i < WLAN_NUM_TIDS; ++i)
+        d->rx_seq[i] = 0xffff;
+    for (i = 0; i < 2; ++i) {
+        d->ba_work[i].work.wlan = wlan;
+        d->ba_work[i].work.run = wlan_ba_rx_timeout;
+        d->ba_work[i].data = d;
+        d->tx_work[i].work.wlan = wlan;
+        d->tx_work[i].data = d;
+    }
+}
+
+int wlan_data_kick(struct wlan_data_work work[2], uint64_t due)
+{
+    if (wlan_queue_work(&work[0].work, due) == 0)
+        return 0;
+    return wlan_queue_work(&work[1].work, due);
+}
+
+int wlan_data_connect(struct wlan_data *d, const struct wlan_bss *bss, int qos, int privacy,
+                      int mfp)
+{
+    unsigned i;
+
+    if (!d || !bss || (bss->bssid[0] & 1))
+        return -EINVAL;
+    if (d->connected)
+        wlan_data_disconnect(d);
+    d->bss = bss;
+    k_memcpy(d->bssid, bss->bssid, 6);
+    d->frequency = bss->frequency;
+    d->qos = qos != 0;
+    d->privacy = privacy != 0;
+    d->mfp = mfp != 0;
+    for (i = 0; i < WLAN_NUM_TIDS; ++i) {
+        d->tx_seq[i] = 0;
+        d->rx_seq[i] = 0xffff;
+    }
+    for (i = 0; i < WLAN_DATA_DEFRAG; ++i)
+        d->defrag[i].len = 0;
+    wlan_rate_connect(d, bss);
+    d->connected = 1;
+    return 0;
+}
+
+void wlan_data_disconnect(struct wlan_data *d)
+{
+    unsigned i;
+    uint32_t flags;
+
+    if (!d)
+        return;
+    for (i = 0; i < 8; ++i)
+        wlan_ba_rx_stop(d, i, 0);
+    for (i = 0; i < WLAN_DATA_DEFRAG; ++i)
+        d->defrag[i].len = 0;
+    flags = spin_lock_irqsave(&d->txq_lock);
+    d->txq_head = 0;
+    d->txq_count = 0;
+    spin_unlock_irqrestore(&d->txq_lock, flags);
+    wlan_data_clear_keys(d);
+    d->connected = 0;
+    d->bss = 0;
+    d->qos = d->privacy = d->mfp = 0;
+    d->rates_basic = d->rates_supported = 0;
+}
+
+/** Make room for `n` bytes at offset `at`, moving what follows. */
+static void open_gap(uint8_t *frame, unsigned len, unsigned at, unsigned n)
+{
+    k_memmove(frame + at + n, frame + at, len - at);
+    k_memset(frame + at, 0, n);
+}
+
+/** Write a CCMP header of `pn` and key `index` at p, as 802.11-2020
+ * Figure 12-16 lays it out: PN0, PN1, reserved, Ext IV and key id, PN2
+ * to PN5. */
+static void put_ccmp_hdr(uint8_t *p, uint64_t pn, unsigned index)
+{
+    p[0] = (uint8_t)pn;
+    p[1] = (uint8_t)(pn >> 8);
+    p[2] = 0;
+    p[3] = (uint8_t)(0x20 | index << 6);
+    p[4] = (uint8_t)(pn >> 16);
+    p[5] = (uint8_t)(pn >> 24);
+    p[6] = (uint8_t)(pn >> 32);
+    p[7] = (uint8_t)(pn >> 40);
+}
+
+/**
+ * Protect a data MPDU with TKIP under `k` at TSC `tsc`: append the Michael
+ * MIC of the MSDU, insert the IV and extended IV, and either leave room for
+ * the ICV, which a radio holding the key computes with RC4, or compute
+ * both here. The caller checked the room: 20 bytes past `*len`.
+ */
+static void tkip_protect(struct wlan_data_key *k, uint8_t *frame, unsigned *len, unsigned hdrlen,
+                         unsigned priority, uint64_t tsc)
+{
+    uint8_t mic[WLAN_TKIP_MIC_LEN], rc4key[16];
+    uint16_t ttak[5];
+    unsigned body = *len - hdrlen, n = *len;
+    uint32_t icv;
+
+    /* The station's MSDU goes to DA, Address 3, from SA, Address 2. */
+    wlan_tkip_michael(k->key.data + 16, frame + 16, frame + 10, priority, frame + hdrlen, body,
+                      mic);
+    k_memcpy(frame + n, mic, WLAN_TKIP_MIC_LEN);
+    n += WLAN_TKIP_MIC_LEN;
+    body += WLAN_TKIP_MIC_LEN;
+    open_gap(frame, n, hdrlen, 8);
+    n += 8;
+    wlan_tkip_mix1(k->key.data, frame + 10, (uint32_t)(tsc >> 16), ttak);
+    wlan_tkip_mix2(k->key.data, ttak, (uint16_t)tsc, rc4key);
+    /* The first three bytes of the RC4 key are the WEP IV, TSC1, a byte
+     * that avoids weak keys, and TSC0. */
+    frame[hdrlen] = rc4key[0];
+    frame[hdrlen + 1] = rc4key[1];
+    frame[hdrlen + 2] = rc4key[2];
+    frame[hdrlen + 3] = (uint8_t)(0x20 | k->key.index << 6);
+    frame[hdrlen + 4] = (uint8_t)(tsc >> 16);
+    frame[hdrlen + 5] = (uint8_t)(tsc >> 24);
+    frame[hdrlen + 6] = (uint8_t)(tsc >> 32);
+    frame[hdrlen + 7] = (uint8_t)(tsc >> 40);
+    if (k->key.hw_slot >= 0) {
+        k_memset(frame + n, 0, 4);
+    } else {
+        icv = wlan_crc32(frame + hdrlen + 8, body);
+        frame[n] = (uint8_t)icv;
+        frame[n + 1] = (uint8_t)(icv >> 8);
+        frame[n + 2] = (uint8_t)(icv >> 16);
+        frame[n + 3] = (uint8_t)(icv >> 24);
+        wlan_tkip_rc4(rc4key, frame + hdrlen + 8, body + 4);
+    }
+    *len = n + 4;
+    k_memset(ttak, 0, sizeof(ttak));
+    k_memset(rc4key, 0, sizeof(rc4key));
+    k_memset(mic, 0, sizeof(mic));
+}
+
+/**
+ * Protect a data MPDU under the pairwise key `k`, taking its next PN, and
+ * fill the transmit info's key fields. Returns 0, -EOVERFLOW when the PN is
+ * spent, or the cipher's error.
+ */
+static int protect_data(struct wlan_data_key *k, uint8_t *frame, unsigned *len, unsigned cap,
+                        unsigned hdrlen, unsigned priority, struct wlan_tx_info *info)
+{
+    uint64_t pn;
+    unsigned fc;
+    int rc;
+
+    if (k->key.tx_pn >= WLAN_PN_MAX)
+        return -EOVERFLOW;
+    pn = ++k->key.tx_pn;
+    if (k->key.hw_slot >= 0) {
+        info->flags |= WLAN_TX_HW_KEY;
+        info->hw_key = k->key.hw_slot;
+    }
+    if (k->key.cipher == WLAN_CIPHER_SUITE_TKIP) {
+        tkip_protect(k, frame, len, hdrlen, priority, pn);
+    } else if (k->key.hw_slot >= 0) {
+        /* The radio encrypts and writes the MIC; the PN is the data path's,
+         * so that a radio's reset cannot make one used twice. */
+        open_gap(frame, *len, hdrlen, WLAN_CCMP_HDR_LEN);
+        put_ccmp_hdr(frame + hdrlen, pn, k->key.index);
+        *len += WLAN_CCMP_HDR_LEN;
+        k_memset(frame + *len, 0, WLAN_CCMP_MIC_LEN);
+        *len += WLAN_CCMP_MIC_LEN;
+    } else {
+        rc = wlan_ccmp_encrypt(&k->aes, frame, len, cap, pn, k->key.index);
+        if (rc)
+            return rc;
+    }
+    fc = frame_control(frame) | IEEE80211_FCTL_PROTECTED;
+    set_frame_control(frame, fc);
+    return 0;
+}
+
+int wlan_data_tx(struct wlan_data *d, uint8_t *frame, unsigned len, unsigned cap, unsigned priority)
+{
+    struct wlan_tx_info info;
+    struct wlan_data_key *k;
+    unsigned fc, hdrlen = IEEE80211_HDRLEN, tid = priority & 7, need;
+    int eapol, rc;
+
+    if (!d || !frame)
+        return -EINVAL;
+    if (!d->connected)
+        return -ENOTCONN;
+    fc = len >= IEEE80211_HDRLEN ? frame_control(frame) : 0;
+    if (len < IEEE80211_HDRLEN || len > IEEE80211_MAX_FRAME_LEN ||
+        (fc & ~(unsigned)IEEE80211_FCTL_PM) != (IEEE80211_FTYPE_DATA | IEEE80211_FCTL_TODS))
+        return -EINVAL;
+    eapol = len >= hdrlen + 8 && same(frame + hdrlen, eapol_snap, 8);
+    k = wlan_data_pairwise_key(d, d->tx_pairwise);
+    need = len + (d->qos ? IEEE80211_QOS_CTL_LEN : 0);
+    if (k)
+        need += k->key.cipher == WLAN_CIPHER_SUITE_TKIP ? 8 + WLAN_TKIP_MIC_LEN + 4
+                                                        : WLAN_CCMP_HDR_LEN + WLAN_CCMP_MIC_LEN;
+    if (need > cap || need > IEEE80211_MAX_FRAME_LEN)
+        return -ENOSPC;
+
+    k_memset(&info, 0, sizeof(info));
+    info.hw_key = -1;
+    if (d->qos) {
+        open_gap(frame, len, hdrlen, IEEE80211_QOS_CTL_LEN);
+        len += IEEE80211_QOS_CTL_LEN;
+        frame[hdrlen] = (uint8_t)tid;
+        hdrlen += IEEE80211_QOS_CTL_LEN;
+        set_frame_control(frame, fc | IEEE80211_STYPE_QOS_DATA);
+        put_seq(d, frame, tid);
+        info.tid = (uint8_t)tid;
+        info.ac = (uint8_t)wlan_data_ac(tid);
+    } else {
+        put_seq(d, frame, WLAN_NON_QOS_TID);
+        info.tid = WLAN_NON_QOS_TID;
+        info.ac = WLAN_AC_BE;
+        tid = 0;
+    }
+    if (k) {
+        rc = protect_data(k, frame, &len, cap, hdrlen, tid, &info);
+        if (rc)
+            return rc;
+    }
+    wlan_rate_select(d, frame, len, eapol, info.rates);
+    info.cookie = next_cookie(d);
+    info.frequency = d->frequency;
+    rc = d->radio->ops->tx(d->radio, frame, len, &info);
+    if (rc)
+        return rc;
+    d->counters->tx_packets++;
+    d->counters->tx_bytes += len;
+    return 0;
+}
+
+int wlan_data_tx_mgmt(struct wlan_data *d, uint8_t *frame, unsigned len, unsigned cap,
+                      unsigned frequency, int protect, uint64_t *cookie)
+{
+    struct wlan_tx_info info;
+    struct wlan_data_key *k;
+    unsigned fc;
+    int group, rc;
+
+    if (!d || !frame || len < IEEE80211_HDRLEN || len > cap || cap > IEEE80211_MAX_FRAME_LEN)
+        return -EINVAL;
+    fc = frame_control(frame);
+    if ((fc & (IEEE80211_FCTL_VERS | IEEE80211_FCTL_FTYPE | IEEE80211_FCTL_PROTECTED)) !=
+        IEEE80211_FTYPE_MGMT)
+        return -EINVAL;
+    if (!frequency)
+        frequency = d->frequency;
+    if (!frequency)
+        return -EINVAL;
+    group = frame[4] & 1;
+    k_memset(&info, 0, sizeof(info));
+    info.hw_key = -1;
+    put_seq(d, frame, WLAN_NON_QOS_TID);
+    if (protect) {
+        k = group ? wlan_data_group_key(d, d->default_igtk)
+                  : wlan_data_pairwise_key(d, d->tx_pairwise);
+        if (!k || (group && k->key.cipher != WLAN_CIPHER_SUITE_AES_CMAC) ||
+            (!group && k->key.cipher != WLAN_CIPHER_SUITE_CCMP))
+            return -ENOKEY;
+        if (k->key.tx_pn >= WLAN_PN_MAX)
+            return -EOVERFLOW;
+        if (group)
+            rc = wlan_bip_sign(&k->aes, frame, &len, cap, k->key.tx_pn + 1, k->key.index);
+        else
+            rc = wlan_ccmp_encrypt(&k->aes, frame, &len, cap, k->key.tx_pn + 1, k->key.index);
+        if (rc)
+            return rc;
+        k->key.tx_pn++;
+    }
+    wlan_rate_select(d, frame, len, 1, info.rates);
+    info.cookie = next_cookie(d);
+    info.frequency = (uint16_t)frequency;
+    info.ac = WLAN_AC_VO;
+    info.tid = WLAN_NON_QOS_TID;
+    if (group)
+        info.flags |= WLAN_TX_NO_ACK;
+    rc = d->radio->ops->tx(d->radio, frame, len, &info);
+    if (rc)
+        return rc;
+    if (cookie)
+        *cookie = info.cookie;
+    return 0;
+}
+
+void wlan_data_tx_status(struct wlan_data *d, const struct wlan_tx_status *status)
+{
+    unsigned i, attempts = 0;
+
+    if (!d || !status || !(status->cookie & WLAN_DATA_COOKIE))
+        return;
+    for (i = 0; i < WLAN_TX_RATE_SERIES && status->rates[i].index >= 0; ++i)
+        attempts += status->rates[i].count;
+    if (attempts > 1)
+        d->counters->tx_retries += attempts - 1;
+    if (!(status->flags & (WLAN_TX_ACKED | WLAN_TX_FILTERED)))
+        d->counters->tx_failed++;
+    wlan_rate_status(d, status);
+}
+
+int wlan_data_queue(struct wlan_data *d, const uint8_t *frame, unsigned len)
+{
+    struct wlan_data_txq *q;
+    uint32_t flags;
+
+    if (!d || !frame || len < 14 || len > WLAN_DATA_ETH_MAX)
+        return -EINVAL;
+    if (!d->connected || !d->tx_work[0].work.run)
+        return -ENOTCONN;
+    flags = spin_lock_irqsave(&d->txq_lock);
+    if (d->txq_count == WLAN_DATA_TX_QUEUE) {
+        spin_unlock_irqrestore(&d->txq_lock, flags);
+        return -ENOBUFS;
+    }
+    q = &d->txq[(d->txq_head + d->txq_count) % WLAN_DATA_TX_QUEUE];
+    k_memcpy(q->frame, frame, len);
+    q->len = len;
+    d->txq_count++;
+    spin_unlock_irqrestore(&d->txq_lock, flags);
+    /* -EBUSY means a drain is queued, which takes this frame. */
+    (void)wlan_data_kick(d->tx_work, 0);
+    return 0;
+}
+
+int wlan_data_dequeue(struct wlan_data *d, uint8_t *out, unsigned *len)
+{
+    struct wlan_data_txq *q;
+    uint32_t flags;
+
+    flags = spin_lock_irqsave(&d->txq_lock);
+    if (!d->txq_count) {
+        spin_unlock_irqrestore(&d->txq_lock, flags);
+        return 0;
+    }
+    q = &d->txq[d->txq_head];
+    k_memcpy(out, q->frame, q->len);
+    *len = q->len;
+    d->txq_head = (d->txq_head + 1) % WLAN_DATA_TX_QUEUE;
+    d->txq_count--;
+    spin_unlock_irqrestore(&d->txq_lock, flags);
+    return 1;
+}

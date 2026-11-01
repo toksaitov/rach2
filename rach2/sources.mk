@@ -133,6 +133,12 @@ C_SRC_SHARED = kernel.c \
     sys/network/wireless/scan.c \
     sys/network/wireless/bss.c \
     sys/network/wireless/mlme.c \
+    sys/network/wireless/data.c \
+    sys/network/wireless/tx.c \
+    sys/network/wireless/rx.c \
+    sys/network/wireless/key.c \
+    sys/network/wireless/agg_rx.c \
+    sys/network/wireless/rate.c \
     sys/network/wireless/crypto/aes.c \
     sys/network/wireless/crypto/bip.c \
     sys/network/wireless/crypto/ccmp.c \
