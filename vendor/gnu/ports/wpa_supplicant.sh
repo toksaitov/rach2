@@ -1,11 +1,12 @@
 # shellcheck shell=sh disable=SC2034 # build_port.sh reads the variables
 # wpa_supplicant, wpa_cli and wpa_passphrase: the station's WPA, WPA2 and
-# WPA3 client, with the musl system's features (dev-log/69-wifi/plan.md, 4c).
-# It drives the card through nl80211 with libnl, keeps the SME in user space,
-# and takes its TLS from the root's OpenSSL, whose TLS backend gives the
-# certificate forms probe:// and hash://server/sha256/. Its build is its
-# Makefile, configured by .config, which this recipe writes; the release's
-# 802.11w is always built, and TKIP is unless CONFIG_NO_TKIP is set. The
+# WPA3 client, with PEAP, TTLS and TLS for enterprise networks, its control
+# socket and bgscan. It drives the card through nl80211 with libnl, keeps the
+# SME in user space, and takes its TLS from the root's OpenSSL, whose TLS
+# backend gives the certificate forms probe:// and hash://server/sha256/. Its
+# build is its Makefile, configured by .config, which this recipe writes; the
+# release's 802.11w is always built, and TKIP is unless CONFIG_NO_TKIP is set.
+# The parallel install races to make its directory, which is made first. The
 # manual pages are the ones the release carries made from DocBook.
 VERSION=2.12
 DEPENDS="libnl openssl"
