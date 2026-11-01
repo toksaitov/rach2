@@ -52,7 +52,7 @@ It is not set-uid, so an ordinary user runs it in a user namespace of its
 own, which Rach2 lets every user make.
 Claude Code's sandboxed shell runs its commands under it, as
 .Xr claude 1
-says; Codex and Muse Code have bubblewrap built in and do not run this one.
+says; Codex and Muse Code carry bubblewrap of their own and do not run this one.
 On the GNU root
 .Ql man bwrap
 shows the release's own page, which describes every option.
@@ -79,10 +79,6 @@ After
 .Fn pivot_root
 the old root's mounts are hidden, not moved: a descriptor or working
 directory left outside the new root still reaches them by their paths.
-.It
-There is no mount propagation, so
-.Fl -bind
-and the other mounts are private whatever the options ask.
 .It
 User namespaces nest at most 7 deep below the first, and a map of one has
 at most 5 extents.
