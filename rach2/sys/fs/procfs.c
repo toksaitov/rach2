@@ -1663,11 +1663,11 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_u32(t, KSIG_MAX);
     ap_ch(t, '\n');
     ap_signal_sets(t, p);
-    caps = proc_privileged(p) ? 0x000001FFFFFFFFFFULL : 0;
+    caps = (uint64_t)cap_word(p, 1) << 32 | cap_word(p, 0);
     ap_set(t, "CapInh", 0);
     ap_set(t, "CapPrm", caps);
     ap_set(t, "CapEff", caps);
-    ap_set(t, "CapBnd", 0x000001FFFFFFFFFFULL);
+    ap_set(t, "CapBnd", (uint64_t)(CAP_HIGH_WORD & ~p->bset_lost[1]) << 32 | ~p->bset_lost[0]);
     ap_set(t, "CapAmb", 0);
     ap_str(t, "NoNewPrivs:\t");
     ap_u32(t, p->no_new_privs);

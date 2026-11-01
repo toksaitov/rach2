@@ -307,11 +307,18 @@ struct process {
      * is dumpable is its address space's (`mm.h`). */
     uint32_t pdeath_signal;
     uint32_t no_new_privs;
-    /* Set when the thread gave up its capabilities with capset. The kernel
-     * keeps every capability or none, so the thread is then not privileged,
-     * whatever its user IDs (`proc_privileged`). A fork passes it on, and an
-     * exec clears it where Linux gives a root image its capabilities again
-     * (`exec_ids`). */
+    /* The capabilities, in capget's two words, numbered 0 to 40 as Linux
+     * numbers them, each stored as the bits lost so that a record of zeros
+     * has them all. `cap_lost` are those the thread does not hold even when
+     * its ids give it privilege, which capset takes away and an exec gives
+     * back up to the bounding set; `bset_lost` are those dropped from the
+     * bounding set with PR_CAPBSET_DROP, which no exec gives back. A fork
+     * passes both on (`fork_ids`). `nocaps` is set while CAP_SYS_ADMIN is
+     * in `cap_lost`: the kernel's checks of privilege are whole, and a
+     * thread without that capability is not privileged, whatever its ids
+     * (`proc_privileged`). `cap_store` keeps the three in step. */
+    uint32_t cap_lost[2];
+    uint32_t bset_lost[2];
     uint32_t nocaps;
     /* Set while a parent that made this process with CLONE_VFORK waits for
      * it to call execve or end; cleared, and the parent woken, at the one or
@@ -367,15 +374,15 @@ struct process {
     /* The namespaces (ns.h): its user namespace and its PID namespace, NULL
      * for the first, its numbers in each PID namespace it is in below the
      * first, by level, and the set of its other namespaces, NULL for the
-     * first set; and the capabilities it holds in its user namespace, in
-     * capget's two words, every one for its creator and a process that
-     * joined it, until an exec, a change of its effective uid or capset
-     * changes them. A fork passes them on (`ns_fork`). */
+     * first set; and whether it holds capabilities in its user namespace
+     * whatever its ids there, as its creator and a process that joined it
+     * do until an exec or a change of its effective uid. A fork passes them
+     * on (`ns_fork`). */
     struct userns *userns;
     struct pidns *pidns;
     uint32_t nspid[NS_LEVELS];
     struct nsset *nsset;
-    uint32_t ns_caps[2];
+    uint32_t ns_granted;
 
     /* The processor whose run queue the process is on, which is the one it
      * runs on while it runs (it is that processor's `current`) and the one
@@ -495,8 +502,8 @@ uint32_t proc_work_count(unsigned int index);
 isr_params_t *proc_user_frame(const process_t *t);
 
 /* Whether thread `p` has privilege, which Linux divides into capabilities
- * and this kernel keeps whole: an effective user ID of 0, with the
- * capabilities not given up (`nocaps`), in the first user namespace; a
+ * and this kernel keeps whole: an effective user ID of 0, with
+ * CAP_SYS_ADMIN not given up (`nocaps`), in the first user namespace; a
  * process of another has privilege only over what its namespace owns
  * (`ns_privileged`). A macro, so that the host tests that compile the
  * callers without this file's functions need no stub of it. */

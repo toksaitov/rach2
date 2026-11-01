@@ -66,6 +66,15 @@ int ns_owner_privileged(const process_t *p, const struct ns_common *c)
     return proc_privileged(p);
 }
 
+/** Word `i` of the capabilities `p` holds in the first user namespace:
+ * those it has not lost for effective uid 0, none for another. */
+uint32_t cap_word(const process_t *p, uint32_t i)
+{
+    uint32_t full = i == 0 ? 0xFFFFFFFFu : CAP_HIGH_WORD;
+
+    return i < 2 && p->euid == 0 ? full & ~p->cap_lost[i] : 0u;
+}
+
 /** The kernel id `kid` itself, which the first user namespace maps. */
 uint32_t ns_uid_from_kernel(const struct userns *ns, uint32_t kid)
 {

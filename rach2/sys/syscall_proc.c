@@ -761,10 +761,11 @@ struct exec_state {
     uint32_t envc;
     uint32_t euid; /* the ids the new image runs with */
     uint32_t egid;
-    uint32_t nocaps; /* whether it has no capabilities (`exec_ids`) */
-    int secure;      /* AT_SECURE */
-    int unreadable;  /* an image loaded is one the caller may not read */
-    uintptr_t entry; /* where the new image starts */
+    uint32_t cap_lost[2]; /* the capabilities it lacks (`exec_ids`) */
+    int regains;          /* whether it holds any its caller lost */
+    int secure;           /* AT_SECURE */
+    int unreadable;       /* an image loaded is one the caller may not read */
+    uintptr_t entry;      /* where the new image starts */
     /* The new image's layout (`exec_layout`): the address just past its
      * stack, its mmap base, a position-independent program's base, and how
      * far above the program's end its heap starts; and the persona it runs
@@ -928,9 +929,9 @@ static int32_t exec_shebang(struct exec_state *s, uint32_t *argc,
  * it: when `p`'s effective uid or gid is no longer `old_euid` or `old_egid`,
  * its address space stops being dumpable, for every thread that shares it,
  * and it loses its parent-death signal, so the parent it had cannot signal
- * the identity it now has. A new effective uid also takes away the
- * capabilities it held in its user namespace, where its privilege is then
- * its uid's.
+ * the identity it now has. A new effective uid also ends the capabilities
+ * it was granted in its user namespace (`ns_granted`), where its privilege
+ * is then its uid's.
  */
 static void cred_moved(process_t *p, uint32_t old_euid, uint32_t old_egid)
 {
@@ -941,7 +942,7 @@ static void cred_moved(process_t *p, uint32_t old_euid, uint32_t old_egid)
         p->pdeath_signal = 0;
     }
     if (p->euid != old_euid) {
-        p->ns_caps[0] = p->ns_caps[1] = 0;
+        p->ns_granted = 0;
     }
 }
 
@@ -1458,26 +1459,37 @@ static int exec_fs_shared(void)
  * (`fork_fs`) until its workspace goes, so the choice made here holds until
  * the image is the process's.
  *
- * A thread that gave up its capabilities has them again after the exec, as
- * Linux gives a root image every capability, except in those three cases,
- * where Linux keeps the new permitted set to the old one; an exec that gives
- * them back holds off CLONE_FS as one that applies set-id bits does.
+ * A thread that gave up capabilities has those of its bounding set again
+ * after the exec, as Linux gives a root image its bounding set, except in
+ * those three cases, where Linux keeps the new permitted set to the old one;
+ * an exec that gives any back holds off CLONE_FS as one that applies set-id
+ * bits does. A capability dropped from the bounding set stays lost.
  */
 static void exec_ids(struct exec_state *s)
 {
     uint32_t mode = current_proc->no_new_privs ? 0u : s->id.mode;
-    int regains = current_proc->nocaps && !current_proc->no_new_privs;
+    uint32_t i;
 
     if (!ns_ids_mapped(proc_userns(current_proc), s->id.uid, s->id.gid)) {
         mode = 0;
     }
 
-    s->nocaps = current_proc->nocaps;
-    if ((mode != 0 && !proc_privileged(current_proc)) || regains) {
+    s->regains = 0;
+    for (i = 0; i < 2; i++) {
+        s->cap_lost[i] = current_proc->cap_lost[i] | current_proc->bset_lost[i];
+        if (current_proc->cap_lost[i] & ~current_proc->bset_lost[i]) {
+            s->regains = !current_proc->no_new_privs;
+        }
+    }
+    if ((mode != 0 && !proc_privileged(current_proc)) || s->regains) {
         if (exec_traced() || exec_fs_shared()) {
             mode = 0;
-        } else {
-            s->nocaps = 0;
+            s->regains = 0;
+        } else if (s->regains) {
+            s->cap_lost[0] = current_proc->bset_lost[0];
+            s->cap_lost[1] = current_proc->bset_lost[1];
+        }
+        if (mode != 0 || s->regains) {
             s->fs_held = current_proc->fs;
             s->fs_held->in_exec++;
         }
@@ -1528,7 +1540,7 @@ static void exec_layout(struct exec_state *s)
     uint32_t pad = 0;
 
     s->persona = current_proc->persona;
-    if (s->secure || (current_proc->nocaps && !s->nocaps)) {
+    if (s->secure || s->regains) {
         s->persona &= ~PER_CLEAR_ON_SETID;
     }
     s->stack_top = USER_ADDR_MAX;
@@ -1840,7 +1852,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     current_proc->egid = s->egid;
     current_proc->suid = s->euid;
     current_proc->sgid = s->egid;
-    current_proc->nocaps = s->nocaps;
+    cap_store(current_proc, s->cap_lost[0], s->cap_lost[1]);
     current_proc->persona = s->persona;
     ns_exec(current_proc);
     exec_privileges(s->mm, s->secure, s->unreadable, old_euid, old_egid, was_privileged);
@@ -2217,7 +2229,9 @@ static void fork_ids(process_t *child, const process_t *parent)
     child->tg->oom_score_adj_min = parent->tg->oom_score_adj_min;
     child->persona = parent->persona;
     child->no_new_privs = parent->no_new_privs;
-    child->nocaps = parent->nocaps;
+    child->bset_lost[0] = parent->bset_lost[0];
+    child->bset_lost[1] = parent->bset_lost[1];
+    cap_store(child, parent->cap_lost[0], parent->cap_lost[1]);
     seccomp_inherit(child, parent);
     k_memcpy(child->rlim, parent->rlim, sizeof(child->rlim));
     child->euid = parent->euid;
@@ -7287,6 +7301,55 @@ long sys_sched_setaffinity(isr_params_t *params)
 
 #define PR_GET_NO_NEW_PRIVS 39
 
+#define PR_CAPBSET_READ 23
+
+#define PR_CAPBSET_DROP 24
+
+#define PR_CAP_AMBIENT 47
+
+/* PR_CAP_AMBIENT's operations, its second argument. */
+#define PR_CAP_AMBIENT_IS_SET    1
+#define PR_CAP_AMBIENT_RAISE     2
+#define PR_CAP_AMBIENT_LOWER     3
+#define PR_CAP_AMBIENT_CLEAR_ALL 4
+
+/**
+ * prctl's PR_CAPBSET_READ, PR_CAPBSET_DROP and PR_CAP_AMBIENT, for the
+ * option `option` with the capability `cap` and the arguments `rest`.
+ * PR_CAPBSET_READ answers whether `cap` is in the bounding set, 1 or 0, and
+ * PR_CAPBSET_DROP takes it out for good, for a thread that holds
+ * CAP_SETPCAP in its user namespace, else -EPERM; an exec then gives the
+ * capability to no image (`exec_ids`). The ambient set is always empty,
+ * since the kernel keeps no inheritable set: IS_SET answers 0, LOWER and
+ * CLEAR_ALL do nothing, and RAISE is -EPERM, as on Linux for a capability
+ * not inheritable. A capability past CAP_LAST_CAP is -EINVAL.
+ */
+static long prctl_caps(unsigned long option, unsigned long cap, unsigned long rest)
+{
+    if (option == PR_CAP_AMBIENT) {
+        if (cap == PR_CAP_AMBIENT_CLEAR_ALL) {
+            return rest != 0 ? -EINVAL : 0;
+        }
+        if ((cap != PR_CAP_AMBIENT_IS_SET && cap != PR_CAP_AMBIENT_RAISE &&
+             cap != PR_CAP_AMBIENT_LOWER) ||
+            rest > CAP_LAST_CAP) {
+            return -EINVAL;
+        }
+        return cap == PR_CAP_AMBIENT_RAISE ? -EPERM : 0;
+    }
+    if (cap > CAP_LAST_CAP) {
+        return -EINVAL;
+    }
+    if (option == PR_CAPBSET_READ) {
+        return (current_proc->bset_lost[cap >> 5] & (1u << (cap & 31u))) ? 0 : 1;
+    }
+    if (!cap_holds(current_proc, CAP_SETPCAP)) {
+        return -EPERM;
+    }
+    current_proc->bset_lost[cap >> 5] |= 1u << (cap & 31u);
+    return 0;
+}
+
 /**
  * Operations on the calling process (prctl).
  *
@@ -7320,6 +7383,10 @@ long sys_sched_setaffinity(isr_params_t *params)
  * PR_GET_SECCOMP returns the thread's seccomp mode, and PR_SET_SECCOMP sets
  * the strict mode, or adds the filter at the third argument, as seccomp(2)
  * does.
+ *
+ * PR_CAPBSET_READ and PR_CAPBSET_DROP read and drop a capability of the
+ * bounding set, and PR_CAP_AMBIENT answers for an empty ambient set
+ * (`prctl_caps`).
  *
  * Returns 0 or the value asked for; -EINVAL for any other option, a signal
  * past 64, a dumpable value other than 0 and 1, or arguments not as above;
@@ -7382,6 +7449,10 @@ long sys_prctl(isr_params_t *params)
         return (int32_t)current_proc->seccomp_mode;
     case PR_SET_SECCOMP:
         return seccomp_prctl_set((uint32_t)arg2, SC_ARG(params, 2));
+    case PR_CAPBSET_READ:
+    case PR_CAPBSET_DROP:
+    case PR_CAP_AMBIENT:
+        return prctl_caps(SC_ARG(params, 0), arg2, SC_ARG(params, 2));
     default:
         return -EINVAL;
     }
@@ -7394,10 +7465,6 @@ long sys_prctl(isr_params_t *params)
 #define CAP_VERSION_2 0x20071026u
 
 #define CAP_VERSION_3 0x20080522u
-
-/* The capabilities Linux names, 0 to 40; the second word of a set has the
- * nine above 31. */
-#define CAP_HIGH_WORD 0x1FFu
 
 struct cap_data {
     uint32_t effective;
@@ -7435,29 +7502,6 @@ static int32_t cap_version_in(uintptr_t uhdr, uint32_t *words)
     return -EINVAL;
 }
 
-/**
- * Word `i` of the capability sets `p` holds, effective and permitted alike:
- * in the first user namespace every capability for a privileged thread and
- * none for another; in another namespace the sets it was given there, or
- * every one for a thread whose effective uid is root there, and none after
- * it gave them up.
- */
-static uint32_t cap_held(const process_t *p, uint32_t i)
-{
-    uint32_t full = i == 0 ? 0xFFFFFFFFu : CAP_HIGH_WORD;
-
-    if (!p->userns) {
-        return proc_privileged(p) ? full : 0u;
-    }
-    if (p->nocaps) {
-        return 0u;
-    }
-    if (ns_caps_held(p)) {
-        return p->ns_caps[i] & full;
-    }
-    return ns_uid_from_kernel(p->userns, p->euid) == 0 ? full : 0u;
-}
-
 /** The pid in the header at `uhdr`, after its version, into `*pid`. */
 static int32_t cap_pid_in(uintptr_t uhdr, int32_t *pid)
 {
@@ -7471,7 +7515,7 @@ static int32_t cap_pid_in(uintptr_t uhdr, int32_t *pid)
  * capget takes header and the sets' words.
  *
  * The sets of the thread the header's pid names, the caller for 0, as
- * `cap_held` gives them; the inheritable set is always empty. With a null
+ * `cap_word` gives them; the inheritable set is always empty. With a null
  * second argument the call is a query of the version alone, and returns 0 even
  * for an unknown version, over which the preferred one is written
  * (`cap_version_in`). -ESRCH for a pid that names no thread, -EINVAL for a
@@ -7503,8 +7547,8 @@ long sys_capget(isr_params_t *params)
         }
     }
     k_memset(d, 0, sizeof(d));
-    d[0].effective = d[0].permitted = cap_held(p, 0);
-    d[1].effective = d[1].permitted = cap_held(p, 1);
+    d[0].effective = d[0].permitted = cap_word(p, 0);
+    d[1].effective = d[1].permitted = cap_word(p, 1);
     if (copy_to_user((void __user *)SC_ARG(params, 1), d, words * sizeof(d[0])) != 0) {
         return -EFAULT;
     }
@@ -7514,24 +7558,22 @@ long sys_capget(isr_params_t *params)
 /**
  * capset takes header and the sets' words.
  *
- * The kernel keeps every capability or none, so the calling thread may give
- * up all its capabilities, with every set empty, after which it is not
- * privileged until an exec gives them back (`exec_ids`), and may ask for all
- * it has, which changes nothing. Chromium's zygote gives them up in each
- * process it forks. In a user namespace other than the first, a thread may
- * keep any part of what it holds there, as Chromium's zygote keeps
- * CAP_SYS_ADMIN: capget reports the part, and the thread stays privileged
- * there while any is left (`ns_caps_held`). A pid other than 0 and the
- * caller's is -EPERM, as is a permitted set wider than the thread's or an
- * effective set wider than the permitted one; in the first namespace a set
- * between none and all, or any inheritable capability, is -EINVAL, where
- * Linux keeps it; an unknown version is -EINVAL, and memory that cannot be
- * read -EFAULT.
+ * The calling thread keeps the capabilities of the permitted set it gives
+ * and loses the rest (`cap_store`), until an exec gives back those of its
+ * bounding set (`exec_ids`). The kernel keeps one set, so the effective set
+ * a thread holds is its permitted one, and it is privileged while that has
+ * CAP_SYS_ADMIN (`nocaps`): Chromium's zygote gives up every capability in
+ * each process it forks, and keeps CAP_SYS_ADMIN alone in a user namespace;
+ * bubblewrap keeps those its caller asks for. A pid other than 0 and the
+ * caller's is -EPERM, as is a permitted set wider than the thread holds or
+ * an effective set wider than the permitted one; any inheritable
+ * capability is -EINVAL, where Linux keeps it; an unknown version is
+ * -EINVAL, and memory that cannot be read -EFAULT.
  */
 long sys_capset(isr_params_t *params)
 {
     struct cap_data d[2];
-    uint32_t words, i, any = 0, whole = 1;
+    uint32_t words, i;
     int32_t pid;
     int32_t rc = cap_version_in(SC_ARG(params, 0), &words);
 
@@ -7551,25 +7593,14 @@ long sys_capset(isr_params_t *params)
         return -EFAULT;
     }
     for (i = 0; i < 2; i++) {
-        uint32_t full = i == 0 ? 0xFFFFFFFFu : CAP_HIGH_WORD;
-
-        if ((d[i].permitted & ~cap_held(current_proc, i)) != 0 ||
+        if ((d[i].permitted & ~cap_word(current_proc, i)) != 0 ||
             (d[i].effective & ~d[i].permitted) != 0) {
             return -EPERM;
         }
-        any |= d[i].effective | d[i].permitted | d[i].inheritable;
-        whole &= d[i].effective == full && d[i].permitted == full && d[i].inheritable == 0;
+        if (d[i].inheritable != 0) {
+            return -EINVAL;
+        }
     }
-    if (any == 0) {
-        current_proc->nocaps = 1;
-        return 0;
-    }
-    if (!current_proc->userns && !whole) {
-        return -EINVAL;
-    }
-    if (current_proc->userns) {
-        current_proc->ns_caps[0] = d[0].permitted;
-        current_proc->ns_caps[1] = d[1].permitted;
-    }
+    cap_store(current_proc, ~d[0].permitted, ~d[1].permitted);
     return 0;
 }
