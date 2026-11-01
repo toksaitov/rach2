@@ -111,6 +111,9 @@ dhcpc: $(SRC_dhcpc) $(HDR_dhcpc)
 netup: $(SRC_netup) $(HDR_netup)
 	$(UCC) $(UFLAGS) -o netup.new $(SRC_netup)
 	mv netup.new netup
+ndwatch: ndwatch.c
+	$(UCC) $(UFLAGS) -o ndwatch.new ndwatch.c
+	mv ndwatch.new ndwatch
 reflash: $(SRC_reflash) $(HDR_reflash)
 	$(UCC) $(UFLAGS) -o reflash.new $(SRC_reflash)
 	mv reflash.new reflash
