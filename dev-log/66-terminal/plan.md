@@ -607,3 +607,12 @@ Batch 6, the other checks (#1781):
 * waits: `tests/lagprobe.c:369` and `tests/musl/clockmusl.c:122` declare a timing assumption at a line with no sleep and no bound, after batch 3 gave them reasons.
 * text: textcheck reads the extracted libtsm tree, `vendor/libtsm/libtsm-4.8.0/`, which `.gitignore` names and which the first run did not report.
 * text: `tools/flow/board.sh:105` was 101 columns; fixed on master in 03c21c78d.
+
+The third run, after batches 5 and 6, passed style on both architectures, and the host groups `host.host.scripts` and `host.host.scripts_build`. The group `host.host.tests` reports only its first failing check, so it ran again after each fix until it passed, on bafd8557d:
+
+* Task 39 (#1782): the kd and `term_keys` host tests, and the host scripts' source archive, which lacked `term/`.
+* A kernel bug: `rach2/sys/keymap.c` sent the Down arrow's sequence for Left and Left's for Down, since its cursor table read `DBCA` for Linux's `KT_CUR` order of Down, Left, Right and Up. It now reads `BDCA`, and `keymap_keytable_hosttest` passes all 12730 cases.
+* `tests/host/keymap_hosttest.c` gave three six-byte sequences a length of 8 and read past them under ASan.
+* `tests/host/unifont_hosttest.c` counted U+1100, a wide glyph, among the narrow ones.
+* The `checks` witness of `host.host.tests` allowed 160 checks, and the group has 175 besides its listing.
+* `tests/host/term_hosttest.c`: the round trip's child turned echo on after printing the line that the test answers with a return, so a return that came first went unechoed and the next line fell one row short. The child now turns echo on first.
