@@ -17,7 +17,7 @@ build/tests/cases/host/host_scripts_scenario: $(HOST_SCRIPT_CASE_SRC) \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils
 
 HOST_SCRIPT_ASSETS = $(wildcard $(shell git ls-files tools tests mk Makefile krffs \
-    utils rach2 ish ports vendor/gnu vendor/tcc/asm-test vendor/tcc/ld-test))
+    utils rach2 ish term ports vendor/gnu vendor/tcc/asm-test vendor/tcc/ld-test))
 build/tests/host-suite/scripts-assets.tar: $(HOST_SCRIPT_ASSETS)
 	@mkdir -p $(@D)
 	COPYFILE_DISABLE=1 tar --format=ustar -czf $@ $(HOST_SCRIPT_ASSETS)
