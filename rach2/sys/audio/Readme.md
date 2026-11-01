@@ -25,7 +25,7 @@ A program drives audio with `ioctl` on a console descriptor: `KIOCSOUND` sounds 
 
 ### /proc/audio
 
-`/proc/audio` (`procfs_gen_audio` in `sys/fs/procfs.c`) has the active driver's name and the report HDA cached at discovery and at the last `start` (`hda_get_report`), so opening it sends no codec verb. [proc(5)](../../../man/man5/proc.5) describes the fields.
+`/proc/audio` (`audio_proc_text` in `sys/audio/audio_proc.c`, which procfs serves) has the active driver's name and the report HDA cached at discovery and at the last `start` (`hda_get_report`), so opening it sends no codec verb. [proc(5)](../../../man/man5/proc.5) describes the fields.
 
 ### The debug shell
 
@@ -93,7 +93,7 @@ Each DAC's capabilities are its Supported PCM Size, Rates and Supported Stream F
 ## Tests
 
 * `tests/run audio`, in the core tier, runs the two cases of [`tests/cases/machine.audio.json`](../../../tests/cases/machine.audio.json) on the run's accelerator, each a boot whose QEMU records what the card played with the `wav` audio backend. The first, of the test image, has QEMU's `intel-hda` and `hda-duplex`; the debug shell runs `audio test scale 2000`, `wavcheck` (`tests/system/checkers/wavcheck.c`) measures the frequency of each 50 ms of the recording from the lengths of the square wave's runs and requires the five notes in order and no other tone, and `intrprobe` reads `/proc/interrupts` before and after, where the count on the `hda` message vector must have grown. The second, of the kernel alone in the debug shell, has QEMU's `sb16`, runs the same command and checks the recording the same way. A stall fails either case.
-* `tests/run host` runs `tests/host/hda_hosttest.c`, which compiles `hda.c` and the procfs formatter against a model codec and model registers and checks every rate bit in both modes, the capability rules, connection list decoding, routing, the `/proc/audio` text, underruns and shutdown with a pending interrupt. It also runs `tests/host/sb16_hosttest.c`, which compiles `sb16.c` and `audio_debug.c` against port stubs and a model of the DMA position and checks partial frames across the ring's wrap, short writes, the period at each rate and format, a failure at each setup step, callback refills into the half the DMA is not reading wherever the interrupts find it, the scale's every frame, note and rest, and its report of a device that stops.
+* `tests/run host` runs `tests/host/hda_hosttest.c`, which compiles `hda.c` and `audio_proc.c` against a model codec and model registers and checks every rate bit in both modes, the capability rules, connection list decoding, routing, the `/proc/audio` text, underruns and shutdown with a pending interrupt. It also runs `tests/host/sb16_hosttest.c`, which compiles `sb16.c` and `audio_debug.c` against port stubs and a model of the DMA position and checks partial frames across the ring's wrap, short writes, the period at each rate and format, a failure at each setup step, callback refills into the half the DMA is not reading wherever the interrupts find it, the scale's every frame, note and rest, and its report of a device that stops.
 * `tests/host/dma_hosttest.c` checks the mask port and value for each transfer channel, the count register read across a borrow in either reading, and requires channel 4 and invalid channels to do no I/O. The speaker and `KIOCSOUND` have no test, and no suite runs `audiotest` or the probe built from `tests/musl/hdaprobe.c`.
 
 Run a suite with `tests/run NAME`.

@@ -28,7 +28,7 @@
 #include "krffs.h"
 #include "../usb/core.h"
 #include "../pci.h"
-#include "../audio/hda.h"
+#include "../audio/audio_proc.h"
 #include "../usb/usb.h"
 #include "../block/usbdisk.h"
 #include "../tty/pty.h"
@@ -4809,78 +4809,17 @@ static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
     return fd;
 }
 
-/** Append `name` and `value` in decimal, one field of /proc/audio. */
-static void audio_field(struct procfs_text *t, const char *name, uint32_t value)
-{
-    ap_str(t, name);
-    ap_u32(t, value);
-}
-
-/** Render /proc/audio: the audio driver's name and the HDA driver's report
- * (`hda_get_report`), the codec and the widgets it chose, the rates and
- * formats of the last stream it programmed, the converters' capabilities and
- * the connection lists it read. */
+/** Render /proc/audio, whose text `audio_proc_text` writes: its length, or
+ * -1 with `nomem` set when the heap has no room. */
 static int procfs_gen_audio(struct procfs_text *t)
 {
-    const hda_report_t *r = hda_get_report();
-    int i, j;
+    int n = audio_proc_text(NULL, 0);
 
-    ap_str(t, "driver ");
-    ap_str(t, audio_get_driver_name());
-    audio_field(t, "\nhda ready ", r->ready);
-    audio_field(t, " playing ", r->playing);
-    audio_field(t, "\ncodec ", r->codec);
-    ap_str(t, " vendor 0x");
-    ap_hex(t, r->vendor, 8);
-    audio_field(t, " afg ", r->afg);
-    audio_field(t, "\nprimary pin ", r->pin);
-    audio_field(t, " index ", r->pin_index);
-    audio_field(t, " mixer ", r->mixer);
-    audio_field(t, " index ", r->mixer_index);
-    audio_field(t, " dac ", r->dac);
-    audio_field(t, " enabled ", r->primary_enabled);
-    audio_field(t, "\nheadphone pin ", r->hp_pin);
-    audio_field(t, " index ", r->hp_index);
-    audio_field(t, " dac ", r->hp_dac);
-    audio_field(t, " enabled ", r->hp_enabled);
-    audio_field(t, "\nstream requested ", r->requested_rate);
-    audio_field(t, " programmed ", r->programmed_rate);
-    ap_str(t, " format 0x");
-    ap_hex(t, r->stream_format, 4);
-    ap_str(t, " dac-format 0x");
-    ap_hex(t, r->dac_format, 4);
-    ap_str(t, " hp-format 0x");
-    ap_hex(t, r->hp_format, 4);
-    ap_ch(t, '\n');
-    for (i = 0; i < 2; i++) {
-        const hda_caps_report_t *c = &r->caps[i];
-        if (!c->nid)
-            continue;
-        audio_field(t, "caps dac ", c->nid);
-        audio_field(t, " source ", c->source);
-        ap_str(t, " pcm 0x");
-        ap_hex(t, c->pcm, 8);
-        ap_str(t, " formats 0x");
-        ap_hex(t, c->formats, 8);
-        ap_ch(t, '\n');
-    }
-    for (i = 0; i < 3; i++) {
-        const hda_connection_report_t *c = &r->connections[i];
-        if (!c->nid)
-            continue;
-        audio_field(t, "connections nid ", c->nid);
-        audio_field(t, " long ", c->long_form);
-        ap_str(t, c->count < 0 ? " invalid raw" : " raw");
-        for (j = 0; j < c->raw_count; j++) {
-            ap_str(t, " 0x");
-            ap_hex(t, c->raw[j], c->long_form ? 4 : 2);
-        }
-        ap_str(t, "\nexpanded");
-        for (j = 0; j < c->count; j++)
-            audio_field(t, " ", c->nodes[j]);
-        ap_ch(t, '\n');
-    }
-    return t->nomem ? -1 : t->len;
+    if (procfs_text_room(t, t->len + n) < 0)
+        return -1;
+    audio_proc_text(t->buf + t->len, n);
+    t->len += n;
+    return t->len;
 }
 
 /* The range of an OOM score adjustment, Linux's OOM_SCORE_ADJ_MIN and

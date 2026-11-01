@@ -54,9 +54,6 @@
 
 #include "../../lib/kirq.h"
 
-/* The kernel's tick rate. */
-#define TICK_HZ 100
-
 /* The most buses of segment 0 mapped for ECAM, a mebibyte each; a bus past
  * them is reached by mechanism #1. */
 #define ECAM_MAX_BUSES 32
