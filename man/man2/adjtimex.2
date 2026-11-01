@@ -57,8 +57,9 @@ choose the unit of
 .Fa offset
 and of
 .Fa time.tv_usec .
-The tick is the timer's 10000 microseconds, the precision 1 microsecond
-and the tolerance Linux's 500 ppm.
+The tick is 10000 microseconds, a tick of USER_HZ as Linux reports it,
+whatever the timer's own rate; the precision is 1 microsecond and the
+tolerance Linux's 500 ppm.
 .Pp
 While
 .Dv STA_UNSYNC

@@ -71,7 +71,7 @@ since the kernel resolves no IPv6 neighbour yet; so does any other
 error of the first request's send.
 .Pp
 The call sends an ICMP echo request and waits for a reply.
-It makes at most four attempts, each with a deadline of 100 ticks
+It makes at most four attempts, each with a deadline of 1000 ticks
 or one second.
 The starting tick includes ticks whose interrupts are still pending;
 delayed timer interrupts do not shorten an attempt's wait.
@@ -95,7 +95,7 @@ argument block's pointer in RSI.
 .Sh RETURN VALUES
 Operation 0x1000 returns the elapsed tick count for the successful
 attempt.
-Each tick is 10 ms; a result of zero is valid.
+Each tick is 1 ms; a result of zero is valid.
 Earlier attempts are not included.
 Operation 0x1001 returns the length of the reply's ICMP message, its
 8-byte header and its data, which a peer may make other than the

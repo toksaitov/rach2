@@ -763,8 +763,9 @@ cpu  USER 0 SYSTEM IDLE 0 0 0 0 0 0
 cpu0 USER 0 SYSTEM IDLE 0 0 0 0 0 0
 .Ed
 .Pp
-The first four columns are user, nice, system, and idle ticks: those that
-found the processor in user mode, none for nice, those that found it in
+The first four columns are user, nice, system, and idle time, in
+hundredths of a second, Linux's USER_HZ, counted from the 1000 Hz ticks:
+those that found the processor in user mode, none for nice, those that found it in
 the kernel, an interrupt handler's included, and those that found it in an
 idle wait.
 A processor counts every tick of the uptime since it started: a tick lost
@@ -849,7 +850,7 @@ as Linux counts them.
 .It Pa /proc/uptime
 Seconds since boot and the seconds the processors spent idle, summed over
 them, separated by a space, each with two decimal places.
-Both count 100 Hz timer ticks: the first the boot processor's, the second
+Both count 1000 Hz timer ticks: the first the boot processor's, the second
 the idle ticks of every processor, as the
 .Li cpu
 lines of
@@ -860,7 +861,7 @@ ACPI PM timer or a time-stamp counter that runs at one rate, so a tick
 interrupt delivered late, or once for several that fell due while
 interrupts were held off or the machine was stopped, counts every tick
 that passed, and one delivered again counts none.
-The idle sum is kept in 64 bits.
+Both counts are kept in 64 bits.
 .It Pa /proc/usb
 One line per configured USB device:
 .Dl port PATH SPEED VENDOR:PRODUCT class CLASS protocol PROTOCOL
@@ -985,7 +986,7 @@ and field 8 that terminal's foreground process group, which
 reads to list a terminal's processes; a session with no terminal has 0
 and -1.
 Field 20 is the number of threads.
-Field 22 is the tick, at 100 a second, the process or thread was made
+Field 22 is the time, in hundredths of a second, the process or thread was made
 at, counted from boot, which
 .Xr ps 1
 subtracts from the uptime for the elapsed time; field 23 is the address

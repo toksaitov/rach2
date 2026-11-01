@@ -72,7 +72,7 @@ The same, waking only waiters whose bits meet the nonzero
 .Fa val3 .
 .El
 .Pp
-A deadline is rounded up to whole 10 ms ticks, counted from the tick the
+A deadline is rounded up to whole 1 ms ticks, counted from the tick the
 monotonic clock is in, a tick whose interrupt has not yet been taken
 included, and the tick in progress is not counted, so a wait never ends
 before the time asked by that clock.

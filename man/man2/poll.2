@@ -126,7 +126,7 @@ For
 is a number of milliseconds.
 A negative value waits indefinitely; zero performs one scan without waiting.
 A positive timeout
-ends at the first 10 ms timer tick at or after its end, measured from
+ends at the first 1 ms timer tick at or after its end, measured from
 where in the tick in progress the call is, so the timeout never expires
 before the time asked and at most a tick after it.
 The wait also lasts until
@@ -145,9 +145,9 @@ Seconds must be nonnegative and nanoseconds must be in the range
 The timeout ends at a tick, as for
 .Fn poll ,
 and is not written back.
-The kernel limits the seconds field to 21474836, keeps the nanoseconds,
-and limits the whole ticks to 2147483646, about 248.55 days; a timeout of
-21474836 seconds or more ends at its tick without the clock's check.
+The kernel limits the seconds field to 2^40, about 34800 years, and keeps
+the nanoseconds; a timeout of 2^40 seconds or more ends at its tick
+without the clock's check.
 .Pp
 A non-null
 .Fa sigmask
