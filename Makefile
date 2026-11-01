@@ -70,6 +70,7 @@ BUSYBOX_STAMP  = $(ARCH_VENDOR)/busybox/.stamp
 DROPBEAR_STAMP = $(ARCH_VENDOR)/dropbear/.stamp
 TCC_STAMP      = $(ARCH_VENDOR)/tcc/.stamp
 PDPMAKE_STAMP  = $(ARCH_VENDOR)/pdpmake/.stamp
+SOX_NG_STAMP = $(ARCH_BUILD)/vendor-work/sox_ng/.stamp
 KBD_STAMP = $(ARCH_BUILD)/vendor-work/kbd/.stamp
 E2FSPROGS_STAMP = $(ARCH_VENDOR)/e2fsprogs/.stamp
 LIBTSM_STAMP   = $(ARCH_VENDOR)/libtsm/.stamp
@@ -94,6 +95,8 @@ BUSYBOX_STAGE = $(VENDOR_STAGE)/busybox
 TCC_STAGE    = $(VENDOR_STAGE)/tcc
 DROPBEAR_STAGE = $(VENDOR_STAGE)/dropbear
 PDPMAKE_STAGE = $(VENDOR_STAGE)/pdpmake
+SOX_NG_STAGE = $(VENDOR_STAGE)/sox_ng
+SOX_NG_OUTPUTS = $(addprefix $(SOX_NG_STAGE)/,sox mode COPYING)
 KBD_STAGE = $(VENDOR_STAGE)/kbd
 KBD_PROGRAMS = loadkeys dumpkeys setleds kbdrate showkey kbd_mode
 KBD_BINS = $(addprefix $(KBD_STAGE)/,$(KBD_PROGRAMS))
@@ -122,6 +125,7 @@ LIBTSM_HOST_A = $(LIBTSM_HOST_STAGE)/lib/libtsm.a
 # SHA-256. They are named here and not found with $(wildcard), which would drop
 # a deleted tarball from the prerequisites and leave its stamp up to date; and
 # `distclean` derives the extracted source directories from them.
+SOX_NG_TARBALL = vendor/sox_ng/sox_ng-14.8.1.tar.gz
 KBD_TARBALL = vendor/kbd/kbd-2.10.0.tar.xz
 KBD_PATCHES = vendor/kbd/patches/series $(wildcard vendor/kbd/patches/*.patch)
 LIBC_TARBALL     = vendor/musl/musl-1.2.5.tar.gz
@@ -189,7 +193,7 @@ STEP_INPUTS     = $(foreach f,$(filter-out gnu-in-copy,$^),$(if $(filter %.stamp
         isos test-iso os-simple-iso os-real-iso rach2-metal-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
         check-pdpmake check-e2fsck \
-        musl busybox dropbear tcc pdpmake kbd e2fsprogs libtsm libtsm-host $(BASE_DIRS) $(FULL_DIRS)
+        musl busybox dropbear sox_ng tcc pdpmake kbd e2fsprogs libtsm libtsm-host $(BASE_DIRS) $(FULL_DIRS)
 
 # The default goal: the images, which bring in the kernel, the guest programs,
 # the vendored userland and Doom through their prerequisites, and the host
@@ -209,12 +213,13 @@ preflight:
 
 all images $(BASE_DIRS) $(FULL_DIRS): | preflight
 $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) $(PDPMAKE_STAMP) \
-    $(E2FSPROGS_STAMP) $(LIBTSM_STAMP): | preflight
+    $(E2FSPROGS_STAMP) $(LIBTSM_STAMP) $(SOX_NG_STAMP): | preflight
 
 # A name for each vendored project's stamp.
 musl: $(LIBC_STAMP)
 busybox: $(BUSYBOX_STAMP)
 dropbear: $(DROPBEAR_STAMP)
+sox_ng: $(SOX_NG_STAMP)
 tcc: $(TCC_STAMP)
 pdpmake: $(PDPMAKE_STAMP)
 kbd: $(KBD_STAMP)
@@ -369,6 +374,20 @@ $(DROPBEAR_STAMP): vendor/dropbear/build_dropbear.sh vendor/dropbear/localoption
 	    echo "dropbear: result: done in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(DROPBEAR_BIN) || { echo "dropbear: build produced no $(DROPBEAR_BIN)" >&2; exit 1; }
 
+# WAV and OSS are built in; the other entry points select modes of sox.
+$(SOX_NG_STAMP): vendor/sox_ng/build_sox_ng.sh $(VENDOR_COMMON) $(SOX_NG_TARBALL) \
+                  vendor/sox_ng/mode.c \
+                  $(LIBC_STAMP) | $(SHA256TOOL) $(ETUDE)
+	@rm -f $@ $(SOX_NG_OUTPUTS)
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); \
+	    $(STEP) -n sox_ng -t $@ -c $(CROSS_PREFIX)gcc -c cc $(STEP_INPUTS) -o $(SOX_NG_STAGE) \
+	        -- sh -c 'RACH2_ARCH=$(ARCH) ./vendor/sox_ng/build_sox_ng.sh && for f in $(SOX_NG_OUTPUTS); do test -s "$$f" || exit 1; done' && \
+	    echo "sox_ng: result: done in $$(($$(date +%s)-t0))s"; fi
+	@for f in $(SOX_NG_OUTPUTS); do test -s "$$f" || { echo "sox_ng: missing output: $$f" >&2; exit 1; }; done
+
+_ := $(shell [ ! -f $(SOX_NG_STAMP) ] || \
+        for f in $(SOX_NG_OUTPUTS); do [ -s "$$f" ] || { rm -f $(SOX_NG_STAMP); break; }; done)
+
 _ := $(shell [ ! -f $(KBD_STAMP) ] || { for f in $(KBD_BINS); do [ -s "$$f" ] || { rm -f $(KBD_STAMP); break; }; done; })
 
 # --- Missing vendored outputs. A stamp says its script ran; the rules use
@@ -459,7 +478,7 @@ MANIFEST_DEPS_doom_test := $(shell $(MANIFEST_DEPS) krffs/manifests/doom-test.ma
 # which is os-real's with two more files. Every rule that stages either names
 # them as prerequisites, order-only in the rule of a file, so that a tree with
 # nothing built yet can stage it.
-MANIFEST_PARTS_os_real = kbd libtsm utils check-busybox check-tcc check-pdpmake check-setid \
+MANIFEST_PARTS_os_real = sox_ng kbd libtsm utils check-busybox check-tcc check-pdpmake check-setid \
                          check-dropbearmulti check-e2fsck tools/etude/guest ports/doom $(MAN_ALL)
 MANIFEST_INPUTS = $(sort $(MANIFEST_DEPS_test) $(MANIFEST_DEPS_os_simple) \
     $(MANIFEST_DEPS_os_real) $(MANIFEST_DEPS_os_real_gnu) $(MANIFEST_DEPS_rach2_metal) \
@@ -477,6 +496,7 @@ $(TCC_KNOWN): $(TCC_STAMP)
 endif
 $(BUSYBOX_OUTPUTS): $(BUSYBOX_STAMP)
 $(KBD_BINS): $(KBD_STAMP)
+$(SOX_NG_OUTPUTS): $(SOX_NG_STAMP)
 $(DROPBEAR_BIN): $(DROPBEAR_STAMP)
 $(PDPMAKE_BIN): $(PDPMAKE_STAMP)
 $(LIBTSM_A) $(LIBTSM_SRC_ARCHIVE): $(LIBTSM_STAMP)
@@ -1293,10 +1313,9 @@ musl-programs: $(LIBC_STAMP)
 # status; `make test` runs the style checks, the host tests and the core
 # tier, which includes that suite. It is the RAM root of the suites that boot
 # it, and loopdevprobe copies a 4 MiB image onto it, so it keeps 5 MiB free:
-# 14 MiB, of which the programs, kbd's tools and the keymaps take 8.2 on i686
-# and 8.4 on x86-64.
+# 14 MiB, including sox_ng, with at least 5 MiB free after staging.
 $(TEST_IMAGE): $(DEMO_CREDS) krffs/manifests/test.manifest $(MANIFEST_DEPS_test) $(IMAGE_TOOLS) | preflight krffs rach2 tests musl-programs utils ish tools/etude/guest \
-              check-dropbearmulti kbd
+              check-dropbearmulti sox_ng kbd
 	$(MKIMAGE) krffs/manifests/test.manifest $@ 14 5120
 
 # The disk of etude's cases that boot a KRFFS root on disk, such as those of
@@ -1314,9 +1333,9 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 	$(MKIMAGE) krffs/manifests/os-simple.manifest $@ 10
 
 # The os-real image: the BusyBox shell and tools, the Dropbear SSH server and
-# client, TinyCC and pdpmake, Doom, the manual, the sources under /src, and an
-# /etc and /root tree. The image is 24 MiB on i686 and 25 on x86-64, of which
-# the tree with Doom's WAD takes 20.8 MiB and 21.5 MiB, since x86-64's
+# client, TinyCC and pdpmake, sox_ng, Doom, the manual, the sources under /src,
+# and an /etc and /root tree. The image is 24 MiB on i686 and 25 on x86-64, of
+# which the tree with Doom's WAD takes 20.8 MiB and 21.5 MiB, since x86-64's
 # programs are larger.
 # ACPICA's core is staged as an archive of 0.45 MiB to keep the tree small
 # (vendor/acpica/build_acpica.sh).
@@ -1407,7 +1426,7 @@ rach2-recovery: krffs rach2 $(RECOVERY_KERNEL) $(BINFIND) $(CHECKRECOVERY)
 # $(TEST_IMAGE) above is. A phony target would restage the image on every
 # invocation, so each suite that boots it would restage it, and two running at
 # once would restage it under each other.
-$(METAL_IMAGE): Makefile $(DEMO_CREDS) krffs/manifests/rach2-metal.manifest $(MANIFEST_DEPS_rach2_metal) $(IMAGE_TOOLS) | kbd preflight krffs rach2 rach2-metal utils check-busybox check-setid check-dropbearmulti
+$(METAL_IMAGE): Makefile $(DEMO_CREDS) krffs/manifests/rach2-metal.manifest $(MANIFEST_DEPS_rach2_metal) $(IMAGE_TOOLS) | kbd preflight krffs rach2 rach2-metal utils sox_ng check-busybox check-setid check-dropbearmulti
 	$(MKIMAGE) krffs/manifests/rach2-metal.manifest $@ 8
 
 rach2-metal-image: $(METAL_IMAGE)
@@ -1416,7 +1435,7 @@ rach2-metal-image: $(METAL_IMAGE)
 # WAD (krffs/manifests/rach2-term.manifest). The WAD is not in Git, so a tree
 # without it stops here with fetch_wad.sh's word on where one is had; the
 # rule runs only when the file is absent.
-$(TERM_IMAGE): Makefile $(DEMO_CREDS) krffs/manifests/rach2-term.manifest $(MANIFEST_DEPS_rach2_term) $(IMAGE_TOOLS) | kbd preflight krffs rach2 rach2-metal utils check-busybox check-setid check-dropbearmulti ports/doom term unifont
+$(TERM_IMAGE): Makefile $(DEMO_CREDS) krffs/manifests/rach2-term.manifest $(MANIFEST_DEPS_rach2_term) $(IMAGE_TOOLS) | kbd preflight krffs rach2 rach2-metal utils check-busybox check-setid check-dropbearmulti sox_ng ports/doom term unifont
 	$(MKIMAGE) krffs/manifests/rach2-term.manifest $@ 16 2048
 ports/doom/doom1.wad:
 	@sh ports/doom/fetch_wad.sh
@@ -1560,13 +1579,13 @@ GRUB_FILES      = $(wildcard vendor/grub/*.img) vendor/grub/bootx64.efi \
 MKEXFATFIXTURE  = build/tests/host/mkexfatfixture
 
 SEALED_EXT2 = $(IMAGES_DIR)/rach2-metal-disk.ext2
-$(SEALED_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest $(MANIFEST_DEPS_rach2_metal_disk) $(MAN_ALL) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti check-e2fsck kbd libtsm ports/doom term unifont
+$(SEALED_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest $(MANIFEST_DEPS_rach2_metal_disk) $(MAN_ALL) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti check-e2fsck kbd libtsm sox_ng ports/doom term unifont
 	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 1024
 # The alias builds everything the disk is made of, then asks for the disk
 # itself. The two are separate because the components are phony targets,
 # which are always out of date, and a disk that named them directly would be
 # rebuilt on every invocation, half a minute each time.
-rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti kbd ports/doom term unifont $(CFGCHECK)
+rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti kbd sox_ng ports/doom term unifont $(CFGCHECK)
 	@$(MAKE) --no-print-directory $(SEALED_DISK)
 
 $(SEALED_DISK): $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED_EXT2) \

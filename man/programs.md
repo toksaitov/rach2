@@ -1,6 +1,6 @@
 # The programs of Rach2
 
-Rach2 has two systems. The musl system is the static programs this repository builds. BusyBox, Dropbear, TinyCC, pdpmake, e2fsprogs and the in-house tools other than `ish` are linked against the ported musl libc; `ish`, the in-house shell, and Doom link no C library and have their own startup code and library routines. `make` builds it on every supported host, and every image stages it or a part of it. The GNU system is a dynamically linked root of glibc and the programs ported to it, installed over the musl system in an ext2 image; it builds on an x86-64 Linux host only.
+Rach2 has two systems. The musl system is the static programs this repository builds. BusyBox, Dropbear, sox_ng, TinyCC, pdpmake, e2fsprogs and the in-house tools other than `ish` are linked against the ported musl libc; `ish`, the in-house shell, and Doom link no C library and have their own startup code and library routines. `make` builds it on every supported host, and every image stages it or a part of it. The GNU system is a dynamically linked root of glibc and the programs ported to it, installed over the musl system in an ext2 image; it builds on an x86-64 Linux host only.
 
 `man/programs.sh` writes this file from the image manifests, the recipes and the build scripts, and `tests/run style` fails when the two differ. `make programs-md` writes it again.
 
@@ -32,9 +32,13 @@ The programs of os-real, as [its manifest](../krffs/manifests/os-real.manifest) 
 | `mke2fs` | [mke2fs(8)](man8/mke2fs.8) | e2fsprogs |  |  |
 | `passwd` | [passwd(1)](man1/passwd.1) | BusyBox (`busybox-suid`) | in-house | yes |
 | `ping` | [ping(1)](man1/ping.1) | in-house | yes | yes |
+| `play` | [play(1)](man1/play.1) | sox_ng (`mode`) |  |  |
+| `rec` | [rec(1)](man1/rec.1) | sox_ng (`mode`) |  |  |
 | `setleds` | [setleds(1)](man1/setleds.1) | kbd |  | yes |
 | `sh` | [sh(1)](man1/sh.1) | BusyBox (`busybox`) | in-house (`ish`) | yes |
 | `showkey` | [showkey(1)](man1/showkey.1) | kbd |  |  |
+| `sox` | [sox(1)](man1/sox.1) | sox_ng |  |  |
+| `soxi` | [soxi(1)](man1/soxi.1) | sox_ng (`mode`) |  |  |
 | `su` | [su(1)](man1/su.1) | BusyBox (`busybox-suid`) | in-house | yes |
 | `tcc` | [tcc(1)](man1/tcc.1) | TinyCC |  |  |
 | `update` | [update(8)](man8/update.8) | in-house | yes | yes |
@@ -258,6 +262,7 @@ The third-party code of the repository, each with the version the build pins, it
 | musl | 1.2.5 | MIT | [vendor/musl/Readme.md](../vendor/musl/Readme.md) |
 | BusyBox | 1.36.1 | GPL 2 only | [vendor/busybox/Readme.md](../vendor/busybox/Readme.md) |
 | Dropbear | 2022.83 | MIT-style | [vendor/dropbear/Readme.md](../vendor/dropbear/Readme.md) |
+| sox_ng | 14.8.1 | GPL 2 only | [vendor/sox_ng/Readme.md](../vendor/sox_ng/Readme.md) |
 | kbd | 2.10.0 | GPL-2.0-or-later | [vendor/kbd/Readme.md](../vendor/kbd/Readme.md) |
 | TinyCC | 0.9.27 | LGPL 2.1 | [vendor/tcc/Readme.md](../vendor/tcc/Readme.md) |
 | pdpmake | 2.0.4 | public domain | [vendor/pdpmake/Readme.md](../vendor/pdpmake/Readme.md) |

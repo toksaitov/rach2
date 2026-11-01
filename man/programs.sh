@@ -33,6 +33,7 @@ fi
 LICENSES='musl|vendor/musl/Readme.md|MIT
 BusyBox|vendor/busybox/Readme.md|GPL 2 only
 Dropbear|vendor/dropbear/Readme.md|MIT-style
+sox_ng|vendor/sox_ng/Readme.md|GPL 2 only
 kbd|vendor/kbd/Readme.md|GPL-2.0-or-later
 TinyCC|vendor/tcc/Readme.md|LGPL 2.1
 pdpmake|vendor/pdpmake/Readme.md|public domain
@@ -96,6 +97,7 @@ function project(host) {
     if (host ~ /^build\/vendor\/busybox\//) return "BusyBox"
     if (host ~ /^build\/vendor\/kbd\//) return "kbd"
     if (host ~ /^build\/vendor\/dropbear\//) return "Dropbear"
+    if (host ~ /^build\/vendor\/sox_ng\//) return "sox_ng"
     if (host ~ /^build\/vendor\/tcc\//) return "TinyCC"
     if (host ~ /^build\/vendor\/pdpmake\//) return "pdpmake"
     if (host ~ /^build\/vendor\/e2fsprogs\//) return "e2fsprogs"
@@ -228,7 +230,7 @@ PAGES=$(cd man && echo man1/*.1 man8/*.8)
 cat <<'EOF'
 # The programs of Rach2
 
-Rach2 has two systems. The musl system is the static programs this repository builds. BusyBox, Dropbear, TinyCC, pdpmake, e2fsprogs and the in-house tools other than `ish` are linked against the ported musl libc; `ish`, the in-house shell, and Doom link no C library and have their own startup code and library routines. `make` builds it on every supported host, and every image stages it or a part of it. The GNU system is a dynamically linked root of glibc and the programs ported to it, installed over the musl system in an ext2 image; it builds on an x86-64 Linux host only.
+Rach2 has two systems. The musl system is the static programs this repository builds. BusyBox, Dropbear, sox_ng, TinyCC, pdpmake, e2fsprogs and the in-house tools other than `ish` are linked against the ported musl libc; `ish`, the in-house shell, and Doom link no C library and have their own startup code and library routines. `make` builds it on every supported host, and every image stages it or a part of it. The GNU system is a dynamically linked root of glibc and the programs ported to it, installed over the musl system in an ext2 image; it builds on an x86-64 Linux host only.
 
 `man/programs.sh` writes this file from the image manifests, the recipes and the build scripts, and `tests/run style` fails when the two differ. `make programs-md` writes it again.
 
@@ -526,6 +528,7 @@ BEGIN {
     version["BusyBox"] = var("vendor/busybox/build_busybox.sh", "VERSION")
     version["kbd"] = var("vendor/kbd/build_kbd.sh", "VERSION")
     version["Dropbear"] = var("vendor/dropbear/build_dropbear.sh", "VERSION")
+    version["sox_ng"] = var("vendor/sox_ng/build_sox_ng.sh", "VERSION")
     version["TinyCC"] = var("vendor/tcc/build_tcc.sh", "VERSION")
     version["pdpmake"] = var("vendor/pdpmake/build_pdpmake.sh", "VERSION")
     version["e2fsprogs"] = var("vendor/e2fsprogs/build_e2fsprogs.sh", "VERSION")

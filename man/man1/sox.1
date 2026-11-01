@@ -1,0 +1,95 @@
+.Dd November 1, 2026
+.Dt SOX 1
+.Os
+.Sh NAME
+.Nm sox
+.Nd convert and process audio files
+.Sh SYNOPSIS
+.Nm
+.Op Ar global-options
+.Op Ar input-options
+.Ar input
+.Op Ar output-options
+.Ar output
+.Op Ar effect Op Ar arguments ...
+.Sh DESCRIPTION
+.Nm
+reads audio, applies effects, and writes the result.
+This system builds sox_ng with static musl, built-in WAV and OSS support,
+and no external codec libraries or FFmpeg decoder.
+Use
+.Xr play 1
+and
+.Xr rec 1
+for the default OSS sound device, or
+.Xr soxi 1
+to inspect a file.
+.Pp
+Options before a file name apply to that file.
+Effects follow the output file name, in the order they should run.
+A file name of
+.Sq -
+uses standard input or output.
+.Fl n
+selects a null input or output, useful with the
+.Cm synth
+and
+.Cm stat
+effects.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl r Ar rate
+Set the sample rate in Hz.
+On an input, this describes raw data; on an output, it resamples.
+.It Fl c Ar channels
+Set the number of channels.
+.It Fl b Ar bits
+Set the number of bits per sample.
+.It Fl e Ar encoding
+Set the encoding, such as
+.Cm signed-integer
+or
+.Cm unsigned-integer .
+.It Fl t Ar type
+Set the format explicitly, such as
+.Cm wav , raw
+or
+.Cm oss .
+.It Fl S
+Show progress and a live level meter on standard error.
+.It Fl q
+Suppress progress.
+.It Fl Fl clobber , Fl Fl no-clobber
+Allow replacement of an output file, or prompt first.
+.It Fl Fl help
+List options, effects, formats and audio drivers in this build.
+.It Fl Fl help-effect Ar name
+Describe an effect.
+.It Fl Fl help-format Ar name
+Describe a format.
+.It Fl Fl version
+Print the version.
+.El
+.Sh EXAMPLES
+Convert a WAV to mono at 44100 Hz:
+.Bd -literal -offset indent
+sox stereo.wav -r 44100 mono.wav channels 1
+.Ed
+.Pp
+Keep the first five seconds at half volume:
+.Bd -literal -offset indent
+sox input.wav output.wav trim 0 5 vol 0.5
+.Ed
+.Sh EXIT STATUS
+.Ex -std
+.Sh SEE ALSO
+.Xr play 1 ,
+.Xr rec 1 ,
+.Xr soxi 1 ,
+.Xr mixer 1 ,
+.Xr dsp 4
+.Sh LIMITS
+External MP3, FLAC, Ogg Vorbis and Opus codecs are disabled.
+Use the GNU root's
+.Xr ffmpeg 1
+for those formats.

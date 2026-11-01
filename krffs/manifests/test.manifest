@@ -30,6 +30,10 @@ file 0755 /bin/echo build/utils/echo
 # The tone and queue program, whose stall mode machine.audio's queue case
 # runs from the debug shell.
 file 0755 /bin/audiotest build/utils/audiotest
+file 0755 /bin/sox build/vendor/sox_ng/sox
+file 0755 /bin/play build/vendor/sox_ng/mode
+file 0755 /bin/rec build/vendor/sox_ng/mode
+file 0755 /bin/soxi build/vendor/sox_ng/mode
 # Dropbear's program, at os-real's path, whose key generator keygennoent
 # runs on a processor without hardware entropy.
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
@@ -130,6 +134,7 @@ file 0111:0:0 /musl/suidmusl.xonly build/tests/musl/suidmusl
 # 1000 with /idreport as its shell and /home/probe as its home; /etc/group
 # has the group of its gid.
 dir 0755 /etc
+file 0644 /etc/sox.COPYING build/vendor/sox_ng/COPYING
 text 0644 /etc/motd Welcome to Rach2 (test image).\n
 text 0644 /etc/hostname rach2\n
 text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\nprobe:x:1000:1000:probe:/home/probe:/idreport\nprobe2:x:1001:1001:probe2:/home/probe:/idreport\n

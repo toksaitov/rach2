@@ -48,7 +48,7 @@ $(GNU_LOGINS_STAMP): gnu-logins-check
 	@mkdir -p $(@D)
 	@sh tools/image/stage_logins.sh --digest "$(LOGINS)" > $@.new
 	@if cmp -s $@.new $@; then rm -f $@.new; else mv $@.new $@; fi
-GNU_IMAGE_ORDER = kbd preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid \
+GNU_IMAGE_ORDER = sox_ng kbd preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid \
                   check-e2fsck tools/etude/guest ports/doom term unifont
 
 # A layer built in this copy is removed before any of its stamps is built

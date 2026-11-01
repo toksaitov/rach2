@@ -18,6 +18,10 @@
 
 dir 0755 /bin
 file 0755 /bin/audiotest build/utils/audiotest
+file 0755 /bin/sox build/vendor/sox_ng/sox
+file 0755 /bin/play build/vendor/sox_ng/mode
+file 0755 /bin/rec build/vendor/sox_ng/mode
+file 0755 /bin/soxi build/vendor/sox_ng/mode
 file 0755 /bin/busybox build/vendor/busybox/busybox
 file 0755 /bin/sh build/vendor/busybox/busybox
 
@@ -48,6 +52,7 @@ file 0755 /sbin/init build/utils/sbin/init-metal
 file 0755 /bin/update build/utils/update
 
 dir 0755 /etc
+file 0644 /etc/sox.COPYING build/vendor/sox_ng/COPYING
 dir 0700 /etc/dropbear
 text 0644 /etc/motd Rach2 on real hardware (term stick). No disk, no compiler: this machine lives in RAM. Run doom to play.\n
 text 0644 /etc/hostname rach2\n
