@@ -11,7 +11,6 @@
 #include "../ip/icmp.h"
 #include "../core/byteorder.h"
 #include "../driver/netdev.h"
-
 #include "../../timer.h"
 
 /* The echo reply being sent: the largest message a 1500-byte datagram
