@@ -3858,12 +3858,12 @@ static uint32_t hda_stream_frames(audio_stream_t *s)
     return s->dir == AUDIO_CAPTURE && s == cap_stream ? hda_capture_position() : 0;
 }
 
-/** The frames given and not yet played: 0, since no playback stream is
- * here yet and capture plays nothing. */
+/** The frames given and not yet played: the write path's (hda_delay_frames)
+ * for `s` NULL, and 0 for a stream, since no playback stream is here yet and
+ * capture plays nothing. */
 static uint32_t hda_stream_delay(audio_stream_t *s)
 {
-    (void)s;
-    return 0;
+    return s ? 0 : hda_delay_frames();
 }
 
 /* The audio_driver_t fields, in the order audio.h declares them: name,
