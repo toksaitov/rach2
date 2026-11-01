@@ -282,6 +282,48 @@ static int serve(void)
     }
 }
 
+/**
+ * Add case `name` to the `*count` names in `*seen`. Returns 0, 1 when the
+ * name was there already, or -1 when memory runs out.
+ */
+static int remember(char ***seen, size_t *count, const char *name)
+{
+    int dup = 0;
+    for (size_t i = 0; i < *count; i++)
+        if (!strcmp((*seen)[i], name))
+            dup = 1;
+    char **more = realloc(*seen, (*count + 1) * sizeof(**seen));
+    if (!more)
+        return -1;
+    *seen = more;
+    more[*count] = strdup(name);
+    if (!more[*count])
+        return -1;
+    (*count)++;
+    return dup;
+}
+
+/**
+ * Count case `name`'s result `text` against the known failures. Returns 1,
+ * after saying so, when a passing case is a known failure or a failing one
+ * is not, and 0 otherwise.
+ */
+static int unexpected(const char *name, const char *text, int pass)
+{
+    struct exception *entry = NULL;
+    for (size_t i = 0; i < nknown; i++)
+        if (!strcmp(known[i].name, name))
+            entry = &known[i];
+    if (entry)
+        entry->seen++;
+    if ((!pass && !entry) || (pass && entry)) {
+        fprintf(stderr, "esctest2: %s: %s%s\n", name, text,
+                pass ? ": remove the known failure" : ": unexpected result");
+        return 1;
+    }
+    return 0;
+}
+
 /** Require a result for each case chosen, END, and each exception used once. */
 static int results(void)
 {
@@ -310,32 +352,12 @@ static int results(void)
             bad = 1;
             break;
         }
-        for (size_t i = 0; i < count; i++)
-            if (!strcmp(seen[i], name))
-                bad = 1;
-        char **more = realloc(seen, (count + 1) * sizeof(*seen));
-        if (!more) {
+        int dup = remember(&seen, &count, name);
+        if (dup < 0) {
             bad = 1;
             break;
         }
-        seen = more;
-        seen[count] = strdup(name);
-        if (!seen[count]) {
-            bad = 1;
-            break;
-        }
-        count++;
-        struct exception *entry = NULL;
-        for (size_t i = 0; i < nknown; i++)
-            if (!strcmp(known[i].name, name))
-                entry = &known[i];
-        if (entry)
-            entry->seen++;
-        if ((!pass && !entry) || (pass && entry)) {
-            fprintf(stderr, "esctest2: %s: %s%s\n", name, text,
-                    pass ? ": remove the known failure" : ": unexpected result");
-            bad = 1;
-        }
+        bad |= dup | unexpected(name, text, pass);
     }
     bad |= r < 0 || !ended;
     for (size_t i = 0; i < nknown; i++)
