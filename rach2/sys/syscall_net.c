@@ -59,6 +59,8 @@
 #include "network/tcp/tcp.h"
 #include "network/ip/ip.h"
 #include "network/ip/icmp.h"
+#include "network/ip6/ip6.h"
+#include "network/ip6/icmp6.h"
 #include "network/net.h"
 #include "network/netconf.h" /* netconf_is_broadcast */
 #include "cmdline.h"         /* kcmdline_has, for the ENOSYS trace flag */
@@ -172,6 +174,9 @@ struct kernel_mmsghdr {
 #define SC_PING      0x1000
 /* The same with the data size and hop limit, for ping's -s and -t. */
 #define SC_PING_DATA 0x1001
+/* An IPv6 echo: the address of the 16-byte destination, its scope, the data
+ * size and the hop limit, for ping's -6. */
+#define SC_PING6     0x1002
 
 /**
  * Send the `len` bytes at `buf` as one UDP datagram from `sock` to `dst_ip`
@@ -249,6 +254,8 @@ static int32_t not_a_socket(const fd_entry_t *entry)
 
 #define IPPROTO_ICMP 1
 
+#define IPPROTO_ICMPV6 58
+
 /* setsockopt(2)/getsockopt(2) at the IP level: the hop limit a socket's
  * datagrams leave with, the option that would hand the caller the header,
  * which this stack does not implement, and the IP options of a socket's
@@ -293,6 +300,59 @@ static int32_t not_a_socket(const fd_entry_t *entry)
 #define SOCKADDR_LL_HALEN 11
 
 #define SOCKADDR_LL_ADDR 12
+
+/* struct sockaddr_in6: family 0 (2 bytes), port 2 (2), flow information 4
+ * (4), address 8 (16) and scope id 24 (4), for 28 in all. A caller may
+ * declare RFC 2133's 24 bytes, without the scope id, as on Linux, and no
+ * fewer. The scope id is an interface index in host order. */
+#define SOCKADDR_IN6_LEN   28
+#define SOCKADDR_IN6_MIN   24
+#define SOCKADDR_IN6_ADDR  8
+#define SOCKADDR_IN6_SCOPE 24
+
+/**
+ * Read the sockaddr_in6 the caller declared `addrlen` bytes of at `sa_ptr`
+ * into `addr` and its scope id into `*scope`, 0 when the caller gave none.
+ * Returns 0, -EINVAL for fewer than 24 bytes, -EAFNOSUPPORT for another
+ * family, or -EFAULT.
+ */
+static int sockaddr_in6_in(uintptr_t sa_ptr, int addrlen, uint8_t *addr, int *scope)
+{
+    uint8_t sa[SOCKADDR_IN6_LEN];
+
+    if (addrlen < SOCKADDR_IN6_MIN) {
+        return -EINVAL;
+    }
+    k_memset(sa, 0, sizeof(sa));
+    if (copy_from_user(sa, (const void __user *)sa_ptr,
+                       addrlen < SOCKADDR_IN6_LEN ? (uint32_t)addrlen : SOCKADDR_IN6_LEN) != 0) {
+        return -EFAULT;
+    }
+    if ((uint16_t)((uint16_t)sa[0] | ((uint16_t)sa[1] << 8)) != AF_INET6) {
+        return -EAFNOSUPPORT;
+    }
+    k_memcpy(addr, sa + SOCKADDR_IN6_ADDR, 16);
+    *scope = (int)((uint32_t)sa[SOCKADDR_IN6_SCOPE] | ((uint32_t)sa[SOCKADDR_IN6_SCOPE + 1] << 8) |
+                   ((uint32_t)sa[SOCKADDR_IN6_SCOPE + 2] << 16) |
+                   ((uint32_t)sa[SOCKADDR_IN6_SCOPE + 3] << 24));
+    return 0;
+}
+
+/** Fill the 28 bytes at `sa` as the sockaddr_in6 of `addr`, with the scope
+ * `ifindex` for a link-local address and 0 for another, as a receive
+ * reports its sender. */
+static void sockaddr_in6_out(uint8_t *sa, const uint8_t *addr, int ifindex)
+{
+    uint32_t scope = ip6_link_scoped(addr) && ifindex > 0 ? (uint32_t)ifindex : 0u;
+
+    k_memset(sa, 0, SOCKADDR_IN6_LEN);
+    sa[0] = (uint8_t)AF_INET6;
+    k_memcpy(sa + SOCKADDR_IN6_ADDR, addr, 16);
+    sa[SOCKADDR_IN6_SCOPE] = (uint8_t)scope;
+    sa[SOCKADDR_IN6_SCOPE + 1] = (uint8_t)(scope >> 8);
+    sa[SOCKADDR_IN6_SCOPE + 2] = (uint8_t)(scope >> 16);
+    sa[SOCKADDR_IN6_SCOPE + 3] = (uint8_t)(scope >> 24);
+}
 
 /**
  * Write an AF_INET source/peer sockaddr back to a caller's (addr, addrlen)
@@ -358,7 +418,8 @@ static void sock_fd_flags(fd_entry_t *entry, uint32_t flags)
 /**
  * Check the kind of socket socket(2) is asked to make, `domain`, `*type` and
  * `protocol`: AF_INET with SOCK_STREAM, SOCK_DGRAM or SOCK_RAW (ICMP, or the
- * ioctl-only descriptor of IPPROTO_RAW), AF_PACKET with SOCK_DGRAM, and
+ * ioctl-only descriptor of IPPROTO_RAW), AF_INET6 with SOCK_RAW and ICMPv6,
+ * AF_PACKET with SOCK_DGRAM, and
  * AF_NETLINK with SOCK_RAW or SOCK_DGRAM, which are one thing, since the
  * kernel's answers are datagrams: `*type` is set to SOCK_DGRAM for it. The
  * raw and packet forms need a privileged caller (-EPERM); a netlink protocol
@@ -366,9 +427,11 @@ static void sock_fd_flags(fd_entry_t *entry, uint32_t flags)
  * family, -EPROTONOSUPPORT, -ESOCKTNOSUPPORT or -EINVAL for a type or a
  * protocol the family does not have.
  *
- * The families are IPv4, the packet family, which the DHCP client needs to
- * see replies that arrive before this machine owns an address, and netlink;
- * another fails here rather than make a socket that cannot work. AF_INET has
+ * The families are IPv4, IPv6 for ICMPv6 alone, the packet family, which the
+ * DHCP client needs to see replies that arrive before this machine owns an
+ * address, and netlink; another fails here rather than make a socket that
+ * cannot work, and an IPv6 stream or datagram socket is -EAFNOSUPPORT, the
+ * answer on which a program falls back to IPv4. AF_INET has
  * two raw sockets, and the protocol tells them apart. IPPROTO_RAW is the
  * query descriptor: a DHCP client opens it and does nothing with it but use
  * the interface ioctls (BusyBox's `udhcp_read_interface`), so here it is a
@@ -377,14 +440,26 @@ static void sock_fd_flags(fd_entry_t *entry, uint32_t flags)
  * `traceroute` send and receive on. A packet socket reads every frame of its
  * protocol the machine receives and sends frames the IP layer never saw,
  * which is why it and the raw sockets need privilege. Its protocol is in
- * network byte order, as Linux takes it: IPv4 or ARP, the two this stack has
- * frames for, or 0 for none yet, as `arping` opens one before its bind gives
- * ARP.
+ * network byte order, as Linux takes it: IPv4, ARP or IPv6, the three this
+ * stack has frames for, or 0 for none yet, as `arping` opens one before its
+ * bind gives ARP.
  */
 static int32_t socket_kind(int domain, int *type, int protocol)
 {
-    if (domain != AF_INET && domain != AF_PACKET && domain != AF_NETLINK) {
+    if (domain != AF_INET && domain != AF_INET6 && domain != AF_PACKET && domain != AF_NETLINK) {
         return -EAFNOSUPPORT;
+    }
+    if (domain == AF_INET6) {
+        if (*type != SOCK_RAW) {
+            return -EAFNOSUPPORT;
+        }
+        if (protocol != IPPROTO_ICMPV6) {
+            return -EPROTONOSUPPORT;
+        }
+        if (!current_proc || !proc_privileged(current_proc)) {
+            return -EPERM;
+        }
+        return 0;
     }
     if (domain == AF_NETLINK) {
         if (*type != SOCK_RAW && *type != SOCK_DGRAM) {
@@ -411,7 +486,7 @@ static int32_t socket_kind(int domain, int *type, int protocol)
             return -ESOCKTNOSUPPORT;
         }
         if ((uint16_t)protocol != 0 && (uint16_t)protocol != PACKET_PROTO_IP &&
-            (uint16_t)protocol != PACKET_PROTO_ARP) {
+            (uint16_t)protocol != PACKET_PROTO_ARP && (uint16_t)protocol != PACKET_PROTO_IPV6) {
             return -EINVAL;
         }
     }
@@ -447,7 +522,7 @@ static int32_t do_socket(int domain, int type, int protocol)
             return opened;
         }
     }
-    if (domain == AF_INET && type == SOCK_RAW && protocol == IPPROTO_ICMP) {
+    if (type == SOCK_RAW && (protocol == IPPROTO_ICMP || domain == AF_INET6)) {
         int reg;
 
         sock->protocol = (uint16_t)protocol;
@@ -604,7 +679,8 @@ static int32_t bind_inet(struct socket *sock, uint32_t ip, uint16_t port)
  * would reach a reader labelled with the new one.
  *
  * A raw socket binds to an address and has no port: the address is the one
- * of the machine's addresses it receives datagrams for. `traceroute` binds its
+ * of the machine's addresses it receives datagrams for, a sockaddr_in6 of at
+ * least 24 bytes for an AF_INET6 one. `traceroute` binds its
  * receive socket to the address its send socket ended up with, and exits if
  * it cannot. The bind is checked against the addresses the machine has and
  * filters nothing afterwards; an address the machine does not have is
@@ -653,7 +729,7 @@ static int32_t do_bind(int fd, uintptr_t sa_ptr, int addrlen)
                             ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 2] << 16) |
                             ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 3] << 24));
         proto = SC_BE16(sll + SOCKADDR_LL_PROTOCOL);
-        if (proto != 0 && proto != ETH_TYPE_IP && proto != ETH_TYPE_ARP) {
+        if (proto != 0 && proto != ETH_TYPE_IP && proto != ETH_TYPE_ARP && proto != ETH_TYPE_IPV6) {
             return -EINVAL;
         }
         r = packet_bind(entry->sock, (int)ifindex);
@@ -667,6 +743,19 @@ static int32_t do_bind(int fd, uintptr_t sa_ptr, int addrlen)
         return 0;
     }
 
+    if (entry->sock->type == SOCK_RAW && entry->sock->family == AF_INET6) {
+        uint8_t want6[16];
+        int scope;
+        int r = sockaddr_in6_in(sa_ptr, addrlen, want6, &scope);
+
+        if (r != 0) {
+            return r;
+        }
+        if (!ip6_is_unspecified(want6) && !ip6_is_loopback(want6) && !netdev_owner6(want6)) {
+            return -EADDRNOTAVAIL;
+        }
+        return 0;
+    }
     if (entry->sock->type == SOCK_RAW) {
         uint32_t want;
 
@@ -681,6 +770,45 @@ static int32_t do_bind(int fd, uintptr_t sa_ptr, int addrlen)
     }
 
     return bind_inet(entry->sock, SC_BE32(sa + 4), SC_BE16(sa + 2));
+}
+
+/**
+ * Send the ICMPv6 message of `len` bytes at `buf_ptr` from the raw socket
+ * `sock` to the sockaddr_in6 at `sa_ptr`, in the scope of its scope id.
+ * The kernel sums the message, as Linux does for ICMPv6 whatever the
+ * caller wrote, since the pseudo-header holds the source it chooses. A
+ * group is sent to with the hop limit 1, Linux's default for multicast, and
+ * any other address with the socket's. Returns `len`, the error of
+ * `sockaddr_in6_in` or `icmp6_send`, -EINVAL for a message too short to
+ * hold its checksum, -EMSGSIZE past one 1500-byte datagram, or -EFAULT.
+ * The copy into `raw_send_buf` runs with interrupts on, and the send under
+ * the network lock, as an IPv4 raw send does.
+ */
+static int32_t raw6_sendto(struct socket *sock, uintptr_t buf_ptr, int len, uintptr_t sa_ptr,
+                           int addrlen)
+{
+    uint8_t dst[16];
+    uint32_t netflags;
+    int scope, r;
+
+    r = sockaddr_in6_in(sa_ptr, addrlen, dst, &scope);
+    if (r != 0) {
+        return r;
+    }
+    if (len < 4) {
+        return -EINVAL;
+    }
+    if (len > (int)(IP6_MTU - IP6_HDR_SIZE)) {
+        return -EMSGSIZE;
+    }
+    if (copy_from_user(raw_send_buf, (const void __user *)buf_ptr, (uint32_t)len) != 0) {
+        return -EFAULT;
+    }
+    netflags = net_lock();
+    r = icmp6_send(0, dst, scope, raw_send_buf, (uint16_t)len,
+                   ip6_is_multicast(dst) ? IP6_HOP_LIMIT_MCAST : sock->ip_ttl);
+    net_unlock(netflags);
+    return r < 0 ? r : (int32_t)len;
 }
 
 /**
@@ -722,6 +850,9 @@ static uint32_t sockaddr_len_of(const struct socket *sock)
     }
     if (sock->family == AF_NETLINK) {
         return (uint32_t)SOCKADDR_NL_LEN;
+    }
+    if (sock->family == AF_INET6) {
+        return (uint32_t)SOCKADDR_IN6_LEN;
     }
     return (uint32_t)SOCKADDR_IN_LEN;
 }
@@ -787,7 +918,8 @@ static int32_t netlink_addr_to_user(const uint8_t *nl, uintptr_t sa_ptr, uintptr
  *
  * A raw socket sends the ICMP message the caller built, checksum included:
  * this layer supplies the IPv4 header and rewrites nothing, since a program
- * sending a wrong checksum on purpose is testing something. The copy into
+ * sending a wrong checksum on purpose is testing something. An AF_INET6 one
+ * sends as `raw6_sendto` says. The copy into
  * `raw_send_buf` runs with interrupts on, since bringing in the caller's
  * pages may sleep; the send then holds the network lock against a receive
  * interrupt that would build a datagram in the same transmit buffers, the
@@ -830,6 +962,9 @@ static int32_t do_sendto(int fd, uintptr_t buf_ptr, int len, int flags, uintptr_
 
         if (!sa_ptr || addrlen < SOCKADDR_MIN) {
             return -EDESTADDRREQ;
+        }
+        if (entry->sock->family == AF_INET6) {
+            return raw6_sendto(entry->sock, buf_ptr, len, sa_ptr, addrlen);
         }
         k_memset(raw_sa, 0, sizeof(raw_sa));
         if (copy_from_user(raw_sa, (const void __user *)sa_ptr, SOCKADDR_MIN) != 0) {
@@ -918,7 +1053,8 @@ static int32_t do_sendto(int fd, uintptr_t buf_ptr, int len, int flags, uintptr_
  * kept, so that a caller whose length word overlaps its own receive buffer
  * cannot change it under the writeback. What is checked is what will be
  * written: twenty bytes for a packet socket's sockaddr_ll, sixteen for an
- * AF_INET sender, twelve for a netlink socket's sockaddr_nl. A receive that
+ * AF_INET sender, twenty-eight for an AF_INET6 one, twelve for a netlink
+ * socket's sockaddr_nl. A receive that
  * fails leaves the address arguments alone, since there is no sender to
  * report. The address is then written truncated to the capacity read before
  * the datagram was taken: for a packet socket the link address the frame came
@@ -995,7 +1131,7 @@ static int32_t do_recvfrom(int fd, uintptr_t buf_ptr, int len, int flags, uintpt
     }
 
     if (want_addr) {
-        uint8_t sa[SOCKADDR_LL_LEN];
+        uint8_t sa[SOCKADDR_IN6_LEN];
 
         k_memset(sa, 0, sizeof(sa));
         if (entry->sock->family == AF_NETLINK) {
@@ -1005,6 +1141,12 @@ static int32_t do_recvfrom(int fd, uintptr_t buf_ptr, int len, int flags, uintpt
                 addr_len = 0;
                 addr_give = 0;
             }
+        } else if (entry->sock->family == AF_INET6) {
+            uint8_t src6[16];
+            int ifindex =
+                peek ? raw_head_src6(entry->sock, src6) : raw_last_src6(entry->sock, src6);
+
+            sockaddr_in6_out(sa, src6, ifindex);
         } else {
             sa[0] = (uint8_t)(AF_INET & 0xff);
             SC_WBE16(sa + 2, src_port);
@@ -1025,6 +1167,37 @@ static int32_t do_recvfrom(int fd, uintptr_t buf_ptr, int len, int flags, uintpt
 static int32_t do_ping(uint32_t dst_ip)
 {
     return (int32_t)icmp_ping(dst_ip);
+}
+
+/**
+ * SC_PING6: an ICMPv6 echo to the 16 bytes at `args[0]`, in the scope of
+ * the interface of index `args[1]`, 0 for none, with `args[2]` bytes of data
+ * and the hop limit `args[3]`. Returns the reply's ICMPv6 length in the low
+ * 16 bits and its hop limit in the 8 above them, or -EINVAL for a hop limit
+ * outside 1 to 255, -ENODEV for an index no interface has, -EMSGSIZE,
+ * -EFAULT, or the error of `icmp_ping6_data`.
+ */
+static int32_t do_ping6(const unsigned long *args)
+{
+    uint8_t dst[16];
+    uint16_t got = 0;
+    uint8_t got_hlim = 0;
+    int rc;
+
+    if (args[3] < 1 || args[3] > 255) {
+        return -EINVAL;
+    }
+    if (args[1] > (unsigned long)netdev_seen_count()) {
+        return -ENODEV;
+    }
+    if (args[2] != (uint32_t)args[2]) {
+        return -EMSGSIZE;
+    }
+    if (copy_from_user(dst, (const void __user *)args[0], sizeof(dst)) != 0) {
+        return -EFAULT;
+    }
+    rc = icmp_ping6_data(dst, (int)args[1], (uint32_t)args[2], (uint8_t)args[3], &got, &got_hlim);
+    return rc < 0 ? rc : (int32_t)((uint32_t)got | (uint32_t)got_hlim << 16);
 }
 
 /** Whether the handshake of `sock` has completed: ESTABLISHED, or
@@ -2117,6 +2290,9 @@ long sys_socketcall(isr_params_t *params)
     case SC_PING_DATA:
         nargs = 3;
         break;
+    case SC_PING6:
+        nargs = 4;
+        break;
     case SC_LISTEN:
     case SC_SHUTDOWN:
         nargs = 2;
@@ -2179,7 +2355,8 @@ static int32_t socket_dispatch(int call, unsigned long *args)
     if (call == SC_SENDMMSG || call == SC_RECVMMSG) {
         return mmsg(call, args);
     }
-    e = (call != SC_SOCKET && call != SC_PING && call != SC_PING_DATA && current_proc)
+    e = (call != SC_SOCKET && call != SC_PING && call != SC_PING_DATA && call != SC_PING6 &&
+         current_proc)
             ? fd_get(current_proc->fds, (int)args[0])
             : (fd_entry_t *)0;
     if (e && e->type == FD_TYPE_UNIX) {
@@ -2213,6 +2390,8 @@ static int32_t socket_dispatch(int call, unsigned long *args)
         rc = icmp_ping_data((uint32_t)args[0], (uint32_t)args[1], (uint8_t)args[2], &got, &got_ttl);
         return rc < 0 ? rc : (int32_t)((uint32_t)got | (uint32_t)got_ttl << 16);
     }
+    case SC_PING6:
+        return do_ping6(args);
     case SC_CONNECT:
         return do_connect((int)args[0], args[1], (int)args[2]);
     case SC_LISTEN:

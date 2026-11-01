@@ -106,12 +106,12 @@ static long sys_accept_noflags(isr_params_t *params)
     return with_arg(params, &params->r10, 0, sys_accept4);
 }
 
-/** Rach2's ping(2): socketcall's operations 0x1000 and 0x1001, the operation
+/** Rach2's ping(2): socketcall's operations 0x1000 to 0x1002, the operation
  * in RDI and a pointer to its arguments, longs here, in RSI. Any other
  * operation is a socket call x86-64 makes directly, and -EINVAL here. */
 static long sys_rach2_ping(isr_params_t *params)
 {
-    if (params->rdi != 0x1000u && params->rdi != 0x1001u) {
+    if (params->rdi != 0x1000u && params->rdi != 0x1001u && params->rdi != 0x1002u) {
         return -EINVAL;
     }
     return sys_socketcall(params);

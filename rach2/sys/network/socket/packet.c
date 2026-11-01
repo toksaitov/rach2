@@ -411,7 +411,7 @@ int packet_send(struct socket *sock, int ifindex, const uint8_t *dst_mac, uint16
     if (len == 0 || len > 1500) {
         return -EMSGSIZE;
     }
-    if (ethertype != ETH_TYPE_IP && ethertype != ETH_TYPE_ARP) {
+    if (ethertype != ETH_TYPE_IP && ethertype != ETH_TYPE_ARP && ethertype != ETH_TYPE_IPV6) {
         return -EINVAL;
     }
     if (ifindex != 0 && (ifindex < 1 || ifindex > netdev_seen_count())) {

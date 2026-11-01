@@ -25,16 +25,16 @@ int packet_ifindex(struct socket *sock);
  * destination MAC in the `sockaddr_ll` and this layer prepends the header.
  *
  * A socket sees one EtherType, its protocol: IPv4 for a DHCP client, ARP for
- * `arping`. Any other is refused at `socket` and `bind` (syscall_net.c)
- * rather than bound to a filter this does not implement, and a socket whose
- * protocol is 0 receives nothing, which is Linux's rule and is what a caller
- * that named no protocol asked for. The kernel's own handlers still see
- * every frame: a packet socket is offered a copy of each before the handler
- * runs, so ARP still answers and still fills its cache while a client
- * watches the same frames.
+ * `arping`, or IPv6. Any other is refused at `socket` and `bind`
+ * (syscall_net.c) rather than bound to a filter this does not implement, and
+ * a socket whose protocol is 0 receives nothing, which is Linux's rule and is
+ * what a caller that named no protocol asked for. The kernel's own handlers
+ * still see every frame: a packet socket is offered a copy of each before
+ * the handler runs, so ARP still answers and still fills its cache while a
+ * client watches the same frames.
  *
  * Opening one is restricted to a privileged process (`proc_privileged`). It
- * reads every IPv4 frame the machine receives, including other people's TCP,
+ * reads every IP frame the machine receives, including other people's TCP,
  * and it sends frames the IP layer never saw.
  */
 
@@ -43,8 +43,9 @@ int packet_ifindex(struct socket *sock);
 /* The protocol argument of `socket(AF_PACKET, ...)` is in network byte order,
  * as Linux specifies, so these are the byte-swapped EtherTypes a little-endian
  * caller passes after `htons`. */
-#define PACKET_PROTO_IP  0x0008u
-#define PACKET_PROTO_ARP 0x0608u
+#define PACKET_PROTO_IP   0x0008u
+#define PACKET_PROTO_ARP  0x0608u
+#define PACKET_PROTO_IPV6 0xDD86u
 
 /* The `sockaddr_ll` a receive reports, and the two fields a reader decides on:
  * `sll_hatype` says the interface is Ethernet, and `sll_pkttype` says who the
@@ -178,8 +179,8 @@ int packet_last_addr(struct socket *sock, uint8_t *sll);
  * There is no address to route on here, since the caller gave a MAC.
  *
  * Returns the bytes sent; -EMSGSIZE for an empty payload or one past 1500
- * bytes, -EINVAL for an EtherType other than IPv4 and ARP, -ENODEV for an
- * index no interface has, or -ENETDOWN with no interface. Takes `net_lock`
+ * bytes, -EINVAL for an EtherType other than IPv4, ARP and IPv6, -ENODEV
+ * for an index no interface has, or -ENETDOWN with no interface. Takes `net_lock`
  * itself, since the Ethernet transmit buffer is shared with the receive
  * interrupt.
  */
