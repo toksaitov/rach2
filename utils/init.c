@@ -17,9 +17,9 @@
  * Four artifacts are built from this one source, and none of them is named
  * plain `init`: `init-shell` runs a shell on the console, `init-login` puts
  * that console behind `/bin/login`, `init-metal` is `init-login` plus the
- * network, ifplugd and ndwatch, which follow its link and its routers, a
- * supervised SSH server, the system log, BusyBox's NTP daemon where
- * /etc/ntp.conf names a server and, on the GNU system's root, D-Bus's
+ * network, ifplugd and ndwatch, which follow its link and its routers,
+ * wpa_supplicant on a machine with a Wi-Fi radio, a supervised SSH server, the system log,
+ * BusyBox's NTP daemon where /etc/ntp.conf names a server and, on the GNU system's root, D-Bus's
  * system bus and the cron daemon, and `init-recovery` is the
  * recovery system's, a shell on the console with the metal build's network,
  * services and file system check beside it. The metal build exists because
@@ -184,6 +184,23 @@ static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
 #define NETWORK_IFACE   "eth0"
 #define IFPLUGD_ACTION  "/etc/ifplugd/ifplugd.action"
 #define NDWATCH_PROGRAM "/sbin/ndwatch"
+
+/*
+ * The Wi-Fi interface, which init follows while it exists, whatever the boot
+ * line says, since the kernel never configures it: wpa_supplicant joins its
+ * networks with `WPA_CONF`, which wifi(1) changes through the control socket
+ * `WPA_CTRL`, and `wpa_cli -a` runs `WPA_ACTION` as it joins and leaves a
+ * network, which starts and stops the DHCP client on it; ndwatch follows its
+ * routers as on `NETWORK_IFACE`. ifplugd is not run on it: the action's
+ * `ifdown` would take down the card wpa_supplicant owns.
+ */
+#define WIFI_IFACE             "wlan0"
+#define WPA_SUPPLICANT_PROGRAM "/usr/sbin/wpa_supplicant"
+#define WPA_CLI_PROGRAM        "/usr/sbin/wpa_cli"
+#define WPA_CONF               "/etc/wpa_supplicant/wlan0.conf"
+#define WPA_ACTION             "/etc/wpa_supplicant/wpa_action"
+#define WPA_CTRL_DIR           "/var/run/wpa_supplicant"
+#define WPA_CTRL               WPA_CTRL_DIR "/" WIFI_IFACE
 #endif
 
 /* BusyBox, whose applets init runs by the name in argv[0]: the system log,
@@ -2393,6 +2410,74 @@ static void start_ndwatch(struct service *s)
     }
 }
 
+/** Whether to follow `WIFI_IFACE`: the image has wpa_supplicant, wpa_cli,
+ * the action and the configuration, and the interface exists. */
+static int wifi_wanted(void)
+{
+    return access(WPA_SUPPLICANT_PROGRAM, X_OK) == 0 && access(WPA_CLI_PROGRAM, X_OK) == 0 &&
+           access(WPA_ACTION, X_OK) == 0 && access(WPA_CONF, R_OK) == 0 &&
+           if_nametoindex(WIFI_IFACE) != 0;
+}
+
+/**
+ * Start wpa_supplicant on `WIFI_IFACE` when `wifi_wanted`, in the foreground
+ * with the nl80211 driver. `-W` holds it until a monitor attaches to its
+ * control socket, which `start_wpa_cli` starts once the socket is there, so
+ * that wpa_cli sees the first connection. It runs with a umask of 077, since
+ * it writes the networks' passphrases into `WPA_CONF` when wifi(1) saves
+ * them.
+ */
+static void start_wpa_supplicant(struct service *s)
+{
+    static char *const argv[] = {(char *)"wpa_supplicant",
+                                 (char *)"-W",
+                                 (char *)"-D",
+                                 (char *)"nl80211",
+                                 (char *)"-i",
+                                 (char *)WIFI_IFACE,
+                                 (char *)"-c",
+                                 (char *)WPA_CONF,
+                                 0};
+    mode_t mask;
+
+    if (s->pid < 0 && wifi_wanted()) {
+        mask = umask(077);
+        s->pid = spawn_service(WPA_SUPPLICANT_PROGRAM, argv);
+        (void)umask(mask);
+        s->spawned = time(0);
+    }
+}
+
+/**
+ * Start `wpa_cli -a WPA_ACTION` on `WIFI_IFACE` while wpa_supplicant runs
+ * and its control socket is there. wpa_cli exits when it loses the
+ * supplicant, and is started again with the next one.
+ */
+static void start_wpa_cli(struct service *s, const struct service *supplicant)
+{
+    static char *const argv[] = {
+        (char *)"wpa_cli",    (char *)"-i", (char *)WIFI_IFACE, (char *)"-p",
+        (char *)WPA_CTRL_DIR, (char *)"-a", (char *)WPA_ACTION, 0};
+
+    if (s->pid < 0 && supplicant->pid >= 0 && access(WPA_CTRL, F_OK) == 0 &&
+        access(WPA_CLI_PROGRAM, X_OK) == 0) {
+        s->pid = spawn_service(WPA_CLI_PROGRAM, argv);
+        s->spawned = time(0);
+    }
+}
+
+/** Start ndwatch(8) for `WIFI_IFACE` when `wifi_wanted` and the image has
+ * ndwatch. */
+static void start_wifi_ndwatch(struct service *s)
+{
+    static char *const argv[] = {(char *)"ndwatch", (char *)WIFI_IFACE, 0};
+
+    if (s->pid < 0 && access(NDWATCH_PROGRAM, X_OK) == 0 && wifi_wanted()) {
+        s->pid = spawn_service(NDWATCH_PROGRAM, argv);
+        s->spawned = time(0);
+    }
+}
+
 /**
  * Whether this image runs D-Bus's system bus: when it has `DBUS_PROGRAM`
  * and the user `DBUS_USER`, whose ids go in `bus_uid` and `bus_gid`. An
@@ -2418,7 +2503,7 @@ static int bus_user(void)
 /* The services, and whether the image has the bus and the cron daemon,
  * which `services_found` decides at boot. */
 struct services {
-    struct service log, sshd, bus, cron, ntp, plug, nd;
+    struct service log, sshd, bus, cron, ntp, plug, nd, wpa, wcli, wnd;
     int bus_wanted, cron_wanted;
 };
 
@@ -2431,7 +2516,7 @@ static void services_found(struct services *s)
 {
     memset(s, 0, sizeof(*s));
     s->log.pid = s->sshd.pid = s->bus.pid = s->cron.pid = s->ntp.pid = -1;
-    s->plug.pid = s->nd.pid = -1;
+    s->plug.pid = s->nd.pid = s->wpa.pid = s->wcli.pid = s->wnd.pid = -1;
     s->bus_wanted = bus_user();
     s->cron_wanted = access(CRON_PROGRAM, X_OK) == 0;
 }
@@ -2440,8 +2525,9 @@ static void services_found(struct services *s)
  * Start each service that is not running: the system log, the SSH server
  * where `anyone_to_let_in` allows one, reported on the console, D-Bus's
  * system bus and the cron daemon where the image has them, ntpd while
- * `NTP_CONF` names a server, and ifplugd and ndwatch where init follows
- * `NETWORK_IFACE`. A failed fork is left for the next turn.
+ * `NTP_CONF` names a server, ifplugd and ndwatch where init follows
+ * `NETWORK_IFACE`, and wpa_supplicant, wpa_cli and ndwatch where it follows
+ * `WIFI_IFACE`. A failed fork is left for the next turn.
  *
  * The NTP configuration is read again on each turn that finds ntpd not
  * running, so a server an administrator writes into the file is used within
@@ -2475,6 +2561,9 @@ static void start_services(struct services *s)
     }
     start_ifplugd(&s->plug);
     start_ndwatch(&s->nd);
+    start_wpa_supplicant(&s->wpa);
+    start_wpa_cli(&s->wcli, &s->wpa);
+    start_wifi_ndwatch(&s->wnd);
 }
 
 /** Whether `reaped` is the pid of one of the services `*s`, as for
@@ -2484,7 +2573,8 @@ static int services_ended(struct services *s, pid_t reaped)
     return service_ended(&s->log, reaped) || service_ended(&s->sshd, reaped) ||
            service_ended(&s->bus, reaped) || service_ended(&s->cron, reaped) ||
            service_ended(&s->ntp, reaped) || service_ended(&s->plug, reaped) ||
-           service_ended(&s->nd, reaped);
+           service_ended(&s->nd, reaped) || service_ended(&s->wpa, reaped) ||
+           service_ended(&s->wcli, reaped) || service_ended(&s->wnd, reaped);
 }
 
 #endif

@@ -127,6 +127,51 @@ for
 .Ql eth0 ,
 which follows the routers' DNS servers and starts DHCPv6 when they ask
 for it.
+.Pp
+On a machine with a Wi-Fi radio, while
+.Ql wlan0
+exists and the image has
+.Pa /usr/sbin/wpa_supplicant ,
+.Pa /usr/sbin/wpa_cli ,
+.Pa /etc/wpa_supplicant/wpa_action
+and
+.Pa /etc/wpa_supplicant/wlan0.conf ,
+whatever the boot line says, it supervises
+.Xr wpa_supplicant 8 ,
+run as
+.Ql wpa_supplicant -W -D nl80211 -i wlan0 -c /etc/wpa_supplicant/wlan0.conf
+with a umask of 077, since it writes the networks' passphrases into its
+configuration;
+.Xr wpa_cli 8 ,
+run as
+.Ql wpa_cli -i wlan0 -p /var/run/wpa_supplicant -a /etc/wpa_supplicant/wpa_action
+once the control socket is there, which
+.Fl W
+makes wpa_supplicant wait for, so that wpa_cli sees the first connection;
+and
+.Xr ndwatch 8
+for
+.Ql wlan0 .
+The action starts BusyBox's
+.Xr udhcpc 1
+on
+.Ql wlan0
+when the station joins a network and stops it, giving the lease up, when
+it leaves one; a roam between the access points of one network keeps the
+lease.
+ifplugd does not follow
+.Ql wlan0 ,
+since its action's
+.Ic ifdown
+would take down the card wpa_supplicant owns.
+.Xr wifi 1
+adds and removes the networks.
+.Pp
+The lease script gives each interface its own default route, at metric 100
+for a cable and 600 for Wi-Fi, and the resolver's file lists the cable's
+servers first, so a machine on both sends by the cable while it is
+plugged in, by Wi-Fi once it is pulled, and by the cable again when it
+returns.
 .It Sy init-recovery
 Provides the network and service functions of the metal build
 and the recovery duties.
@@ -448,6 +493,14 @@ Kernel settings applied at boot.
 The action of
 .Xr ifplugd 1 ,
 whose presence starts it on a boot that hands the network to userland.
+.It Pa /etc/wpa_supplicant/wlan0.conf
+wpa_supplicant's configuration and the known Wi-Fi networks, readable only
+by root.
+.It Pa /etc/wpa_supplicant/wpa_action
+The action of
+.Xr wpa_cli 8 ,
+which starts and stops the DHCP client on
+.Ql wlan0 .
 .It Pa /etc/rach2/sshd.conf
 SSH server policy.
 .It Pa /etc/ssh
@@ -524,6 +577,7 @@ init: ipv6: CARD: cannot restart IPv6 with the stable secret: ERROR
 .Xr mixer 1 ,
 .Xr ntpd 1 ,
 .Xr term 1 ,
+.Xr wifi 1 ,
 .Xr bootlog 4 ,
 .Xr proc 5 ,
 .Xr sshd.conf 5 ,
@@ -535,4 +589,6 @@ init: ipv6: CARD: cannot restart IPv6 with the stable secret: ERROR
 .Xr ndwatch 8 ,
 .Xr netup 8 ,
 .Xr sshd 8 ,
-.Xr update 8
+.Xr update 8 ,
+.Xr wpa_cli 8 ,
+.Xr wpa_supplicant 8

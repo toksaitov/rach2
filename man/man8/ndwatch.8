@@ -15,8 +15,9 @@ for what the kernel leaves to a program, and stays in the foreground.
 .Xr init 8
 runs it for
 .Ql eth0
-where the boot line hands the network to userland, and starts it again
-when it ends.
+where the boot line hands the network to userland, and for
+.Ql wlan0
+where wpa_supplicant runs on it, and starts it again when it ends.
 .Pp
 The kernel passes each RDNSS and DNSSL option of an advertisement
 (RFC 8106) to netlink as
@@ -74,8 +75,13 @@ and
 on its standard input and keeps them in
 .Pa /var/run/resolv/ Ns Ar name ,
 or removes that file for empty input, then writes the resolver's file
-whole from every file there in the order of their names, each server and
-domain once.
+whole from every file there, each server and domain once: first the wired
+interfaces' files, then the wireless ones', those whose interface's name
+begins
+.Ql wl
+or that have
+.Pa /sys/class/net/ Ns Ar interface Ns Pa /phy80211 ,
+each group in the order of the names.
 The IPv4 lease's script gives
 .Ar interface Ns Pa .dhcp ,
 the DHCPv6 lease's
