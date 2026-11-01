@@ -981,6 +981,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "wlan_join",
+          "checks": "tests/host/wlan_join_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "wlan_mlme",
           "checks": "tests/host/wlan_mlme_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"

@@ -113,8 +113,8 @@ static void wireless_stop(void *dev)
     wlan_stop(dev);
 }
 
-/** On the worker, end a scan, leave the network with a deauthentication the
- * AP hears, and stop the radio; then wake the caller. */
+/** On the worker, end a scan, deauthenticate, sending the frame, and stop the
+ * radio; then wake the caller. */
 static void wlan_down_run(struct wlan_work *work)
 {
     struct wlan_down *down = (struct wlan_down *)work;
