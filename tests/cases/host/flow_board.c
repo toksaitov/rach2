@@ -467,8 +467,8 @@ int flow_board_mock(int argc, char **argv)
 
 /* Milestones 1 and 2 are open with a branch, 3 open with none, and 4
  * closed, as milestone_table says. The tasks a worker may take are 30, 31,
- * 33 and 36, and in that order: milestone 1's before milestone 2's, each in
- * the board's order. */
+ * 33 and 36, in the board's order whatever their milestones: 40, 30, 31, 33
+ * and 36. */
 static const char board_main[] = "40|OPEN|Ready|bug|-|0|-|2|second milestone, first\n"
                                  "30|OPEN|Ready|bug|-|0|-|1|first milestone, first\n"
                                  "41|OPEN|Ready|bug|-|0|30|1|subtask of 30\n"
@@ -587,11 +587,11 @@ static int next_rows(struct fixture *f)
 {
     static const struct {
         const char *name, *me, *setup, *words;
-    } rows[] = {{"next-order", "alpha", "", "30 31 36 40 33"},
-                {"next-owner", "toksaitov", "", "30 31 47 36 40 33"},
-                {"next-flaky", "alpha", "flaky", "30 31 36 40 33"},
+    } rows[] = {{"next-order", "alpha", "", "40 30 31 33 36"},
+                {"next-owner", "toksaitov", "", "40 30 31 47 33 36"},
+                {"next-flaky", "alpha", "flaky", "40 30 31 33 36"},
                 {"next-lost", "alpha", "board", NULL},
-                {"next-unlisted", "alpha", "unlisted", "30 36 31 40 33"},
+                {"next-unlisted", "alpha", "unlisted", "40 30 33 36 31"},
                 {"next-unlisted-lost", "alpha", "repo", NULL}};
     unsigned i;
     int ok = 1, held;

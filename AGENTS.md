@@ -41,7 +41,7 @@ The rules are kept short on purpose; their history is in commit messages and `de
 * Codex and a Claude Fable subagent each review the plan on its own: whether the goal can be reached this way, whether workers would wait on each other or collide in the same files, and what is missing. The manager checks what they raise against the code, revises the plan, and gives it to the owner with what was raised and what was changed or set aside.
 * Once the owner approves, the manager makes the GitHub milestone, whose description says `Branch: milestone/NN-name`, cuts that branch from master, files the tasks and subtasks, and sets the tasks Ready.
 * The board is the GitHub project "Rach2" of `toksaitov/rach2`, with the Status Backlog, Ready, In progress or Done. It holds the open milestones' tasks and subtasks, the owner's decisions (label `owner`) and bugs reported from outside (label `bug`), and nothing else.
-* Master moves when a milestone is released, and for a fix to the process itself (`AGENTS.md`, `CLAUDE.md`, `.agents` and `tools/flow`), which goes straight to master by fast-forward once it works, since every loop runs master's. Several milestones may be open at once: when one has nothing left to take, workers take the next one's tasks, on its branch.
+* Master moves when a milestone is released, and for a fix to the process itself (`AGENTS.md`, `CLAUDE.md`, `.agents` and `tools/flow`), which goes straight to master by fast-forward once it works, since every loop runs master's. Several milestones may be open at once; their tasks are one queue, which `next` offers in the board's order, and each task is worked on its own milestone's branch.
 
 ## Work
 

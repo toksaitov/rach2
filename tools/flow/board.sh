@@ -41,9 +41,10 @@
 # tab and the title. Each is open, Ready, unassigned, in an open milestone
 # whose description names a branch, with no parent and no open blocker, not
 # labelled `owner`, and labelled `owner-only` only when this account is OWNER.
-# They are ordered by milestone number, lowest first, and then in the board's
-# order. `gh project item-list` does not return that order, so the query asks
-# for the items by position.
+# They are in the board's order, whatever their milestones, so that the tasks
+# of every open milestone are one queue whose order the manager sets.
+# `gh project item-list` does not return that order, so the query asks for
+# the items by position.
 #
 # `take N` refuses a closed issue, setting it Done and changing nothing else,
 # since a close between `next` and `take` would otherwise leave it In
@@ -339,7 +340,7 @@ next()
         $10 != "OPEN" || $11 == "" || has($5, "owner") { next }
         has($5, "owner-only") && me != owner { next }
         { print $9 "\t" NR "\t" $3 "\t" $12 }' |
-        sort -n -k 1,1 -k 2,2 | cut -f 3-
+        sort -n -k 2,2 | cut -f 3-
 }
 
 # finished N: when issue N is closed, set it Done, say so and succeed;
