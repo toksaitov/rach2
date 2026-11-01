@@ -1,0 +1,35 @@
+Both goals are feasible, but the plans need changes before nine workers start. Code references below are at **9daa19e51**, read with `git show`. No files changed.
+
+1. The kernel has the foundations, but two integration details can stop 69.
+
+   * Generic netlink is absent, as the plan correctly says: [netlink.c:300](https://github.com/toksaitov/rach2/blob/9daa19e51/rach2/sys/network/socket/netlink.c#L300). Task 2 covers it.
+   * Task 6 must also own the EAPOL changes in `syscall_net.c`. Both [socket creation:599](https://github.com/toksaitov/rach2/blob/9daa19e51/rach2/sys/syscall_net.c#L599) and [bind:863](https://github.com/toksaitov/rach2/blob/9daa19e51/rach2/sys/syscall_net.c#L863) reject 0x888e. Changing only Ethernet and packet.c leaves the supplicant unable to open its EAPOL channel.
+   * Separate association, authorization and carrier carefully. The plan makes carrier depend on authorization, but [ethernet_tx:97](https://github.com/toksaitov/rach2/blob/9daa19e51/rach2/sys/network/ethernet/ethernet.c#L97) rejects transmission without carrier. EAPOL needs an explicit exception or the handshake cannot finish.
+   * Threads and timing need no new general facility. There is already a [kernel worker thread](https://github.com/toksaitov/rach2/blob/9daa19e51/rach2/sys/acpi/osl.c#L711), [deadline waits](https://github.com/toksaitov/rach2/blob/9daa19e51/rach2/sys/proc/wait_queue.h#L69), and a **1 ms tick**, not 10 ms: [timer.h:11](https://github.com/toksaitov/rach2/blob/9daa19e51/rach2/sys/timer.h#L11). ACPICA, devfs and sysfs exist. PCI configuration and [MSI](https://github.com/toksaitov/rach2/blob/9daa19e51/rach2/sys/pci.h#L197) exist; `_PRT` routing does not. MSI plus polling is therefore a reasonable first driver.
+
+   The Linux AP guest avoids WSL's missing hwsim module. Nothing identified rules it out on KVM or Windows. On the ARM Mac, choose an ARM64 AP guest for HVF or an x86 guest under TCG; the x86 musl hostapd binary cannot run in an ARM64 guest. The repository already distinguishes [ARM64 and AMD64 tooling guests](https://github.com/toksaitov/rach2/blob/9daa19e51/tools/etude/tooling.c#L870).
+
+   Task 13 also needs DHCP, DNS, IPv6 advertisements and a traffic endpoint or forwarding setup. Hostapd alone supplies none of those. Tasks 10 and 13 need a shared relay protocol, including channel and transmit completion information. Reserve a separate management transport: otherwise cable removal can kill the relay, or routing through `wlan0` can feed the simulated radio through itself.
+
+2. The dependency graph will cause waits, and 70 contains circular waits.
+
+   * Both branches start at 67. Closing 69-1 does not put its headers on 70. Workers import only their own milestone branch: [worker.txt:5](https://github.com/toksaitov/rach2/blob/9daa19e51/tools/flow/worker.txt#L5). Make 70 descend from 69 and explicitly integrate subsequent 69 changes before hardware trials.
+   * In [70:50](</Users/toksaitov/Desktop/rach2/dev-log/70-wifi-chip/plan.md:50>), task 2 needs task 8's Lenovo result to finish; [task 8 waits on 2](</Users/toksaitov/Desktop/rach2/dev-log/70-wifi-chip/plan.md:108>). Tasks 3 to 6 have the same problem with their hardware Done conditions. Let implementation tasks close after compilation; put hardware acceptance wholly in task 8.
+   * Without `home.conf`, 8c waits for the sitting, while task 9 waits for 8. Also, the sitting is both excluded from release waiting and required by the final Done. Resolve both explicitly.
+   * 69-9's Done needs 2, 6, 7, 8, 10 and 13, despite declaring only 1. Task 14 omits dependencies on 4, 5 and 11, although it uses their programs and rfkill. Split early implementation from later integration proof.
+
+   File collisions remain: 69-2/6 in `syscall_net.c`; 69-6/11 in `synthfs.c` and `procfs.c`; 69-10/11 in `devfs.c`; 69-4/12 in image manifests. The plans acknowledge some, but function ownership still leaves rebases to reconcile. Give shared dispatch tables and build integration one owner. In 70, tasks 3 to 5 add model tests to `tests/host/ar9565_hosttest.c`, owned by task 2: split their test files and give the reusable model its own interface.
+
+3. Network movement and certificate acceptance need firmer contracts.
+
+   * Task 12 must own `krffs/udhcpc-default.script`, `krffs/resolv.script` and the IPv6 route policy. DHCP currently installs defaults [without metrics](https://github.com/toksaitov/rach2/blob/9daa19e51/krffs/udhcpc-default.script#L82); DNS is merged [by filename order](https://github.com/toksaitov/rach2/blob/9daa19e51/krffs/resolv.script#L58), not reachability. Merely adding a second ifplugd does not establish cable preference. The existing [action runs ifdown/ifup](https://github.com/toksaitov/rach2/blob/9daa19e51/krffs/ifplugd.action#L22); define wireless lease cleanup without repeatedly disabling the radio during association.
+   * Certificate discovery must use a probe-only connection, then install the accepted pin and authenticate. Listening for a certificate while permitting an unverified login is insufficient. Upstream provides [`ca_cert="probe://"`](https://chromium.googlesource.com/chromiumos/third_party/hostap/+/3ae57aef6d39e0f2b9c7974f0e912bbfdfac5cea/src/crypto/tls_openssl.c). Test refusal before acceptance, cancellation, reboot persistence and changed certificates.
+   * Add group rekey, protected-management rejection, same-SSID roaming and reset recovery with keys and replay counters intact. Define recovery by successful traffic. Existing TCP uses its saved [local address](https://github.com/toksaitov/rach2/blob/9daa19e51/rach2/sys/network/tcp/tcp.c#L675); ordinary route changes cannot preserve a connection across unrelated addresses or NATs.
+   * Make unmodified supplicant and iw an acceptance condition. Task 4 currently permits Rach2-specific source patches. Fix missing kernel ABI behavior instead.
+
+4. For speed, reduce duplicated work and unblock hardware proof.
+
+   * Cut unrequested WEP and SAE-PK. Keep TKIP because WPA is requested. Defer transmit aggregation until single-frame HT20 traffic and recovery work.
+   * Move the ideapad hardware part to 70; retain generic rfkill in 69. Emitting `KEY_WLAN` alone does not toggle anything: the installed [ACPI map](https://github.com/toksaitov/rach2/blob/9daa19e51/krffs/acpi/acpi.map#L7) has no such action.
+   * Put relay framing, receive metadata, buffer ownership and completion rules in task 1. Split 13 into early guest/trace preparation and later relay integration.
+   * Give 70-7 diagnostic code or a proven Linux boot path. Installed sysfs exposes PCI [uevent only](https://github.com/toksaitov/rach2/blob/9daa19e51/rach2/sys/fs/synthfs.c#L1012), so detailed MSI/ASPM measurements are not presently ordinary shell reads. Keep automatic hardware trials separate from the final owner sitting.
