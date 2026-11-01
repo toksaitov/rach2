@@ -296,6 +296,11 @@ struct vfs_type {
      * three synthetic types: mount(2) takes any source string for one and
      * claims no sectors, and /proc/filesystems marks it `nodev`. */
     int nodev;
+    /* Nonzero for a type whose names the name cache keeps (dcache.h): one
+     * whose `hold` keeps a node at one address, whose names compare byte
+     * for byte, and whose namespace changes only through the wrappers of
+     * vfs.c. */
+    int name_cache;
 };
 
 /* One table entry. `covered` is the held node of the directory this mount
@@ -543,6 +548,10 @@ void vfs_leave(struct vfs_mount *mnt);
  * could wait for that lock while its holder waits for the caller's.
  */
 int vfs_ns_held_by_caller(void);
+/** Whether the calling process holds the namespace lock of a mount whose
+ * base is not that of `mnt`; the name cache puts a node of `mnt` only when
+ * it does not (dcache.h). */
+int vfs_ns_held_other(const struct vfs_mount *mnt);
 
 /** Take the namespace lock of `mnt`, which a bind shares with its base,
  * sleeping until it is free; a signal does not end the wait. It is taken by

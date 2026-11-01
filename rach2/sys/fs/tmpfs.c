@@ -1282,4 +1282,4 @@ static const struct vfs_ops tmpfs_ops = {
     tmpfs_fallocate,
 };
 
-const struct vfs_type vfs_tmpfs_type = {"tmpfs", tmpfs_mount, &tmpfs_ops, 1, 1};
+const struct vfs_type vfs_tmpfs_type = {"tmpfs", tmpfs_mount, &tmpfs_ops, 1, 1, 0};

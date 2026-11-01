@@ -5677,4 +5677,4 @@ static const struct vfs_ops ext2_ops = {
     ext2_fallocate,
 };
 
-const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 1, 0};
+const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 1, 0, 1};

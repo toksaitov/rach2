@@ -267,6 +267,12 @@ static void filecache_forget_mount(const struct vfs_mount *m)
     (void)m;
 }
 
+/** Forget the name cache's entries of `m`; the fixture keeps none. */
+static void dcache_forget_mount(struct vfs_mount *m)
+{
+    (void)m;
+}
+
 /** Let a loop device set to clear itself go; no loop device is mounted. */
 static void loop_unmounted(struct block_device *d)
 {
