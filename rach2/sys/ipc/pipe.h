@@ -55,6 +55,12 @@ typedef struct pipe {
      * wakes while there is one. */
     int rdwr_open;
     wait_queue_t rdwr_wq;
+    /* Set while a splice holds the bytes at the front of the ring that it
+     * copied out (`pipe_splice_peek`) and is writing, until it takes them
+     * (`pipe_splice_consume`); every other reader waits on `splice_wq`
+     * meanwhile, so no byte goes to two readers. */
+    int spliced;
+    wait_queue_t splice_wq;
 } pipe_t;
 
 /** Empty the list of live pipes; called once at boot. Each pipe comes from
@@ -102,21 +108,20 @@ int32_t pipe_splice_room(struct fd_entry *e, int nonblock);
 /**
  * Copy up to `n` of the bytes buffered in the read end `e`'s pipe into the
  * kernel buffer `dst`, without taking them, after waiting for one unless
- * `nonblock`; `*mark` is the count the pipe had given out then, for
- * `pipe_splice_consume`. Returns the bytes copied, 0 for an empty pipe with
- * no writer left, or -EAGAIN, -EINTR or -EBADF.
+ * `nonblock`, and for any other splice's hold to end, and hold them: until
+ * the caller's `pipe_splice_consume`, which it must make whenever this
+ * returns above 0, no other reader takes a byte of the pipe. Returns the
+ * bytes copied, 0 for an empty pipe with no writer left, or -EAGAIN, -EINTR
+ * or -EBADF.
  */
-int32_t pipe_splice_peek(struct fd_entry *e, uint8_t *dst, uint32_t n, int nonblock,
-                         uint32_t *mark);
+int32_t pipe_splice_peek(struct fd_entry *e, uint8_t *dst, uint32_t n, int nonblock);
 
 /**
- * Take from the read end `e`'s pipe the first `n` bytes that
- * `pipe_splice_peek` copied at `mark`, less those another reader took
- * meanwhile, and wake the writers for room. Such a reader gets the bytes too,
- * so a byte goes out twice and none is lost; a splice that shares its pipe
- * with another reader has no order Linux promises either.
+ * Take from the read end `e`'s pipe the first `n` of the bytes that
+ * `pipe_splice_peek` held, 0 for none when the write failed, end the hold,
+ * and wake the writers for room and the readers that waited for the hold.
  */
-void pipe_splice_consume(struct fd_entry *e, uint32_t n, uint32_t mark);
+void pipe_splice_consume(struct fd_entry *e, uint32_t n);
 
 /**
  * Copy up to `len` bytes from the pipe of the read end `in` to that of the

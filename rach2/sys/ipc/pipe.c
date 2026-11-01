@@ -77,6 +77,7 @@ static pipe_t *pipe_alloc(void)
     wait_queue_init(&p->read_wq);
     wait_queue_init(&p->write_wq);
     wait_queue_init(&p->rdwr_wq);
+    wait_queue_init(&p->splice_wq);
     p->next = pipes;
     pipes = p;
     return p;
@@ -112,6 +113,27 @@ static int pipe_writable(void *arg)
 {
     pipe_t *p = (pipe_t *)arg;
     return pipe_free_space(p) != 0 || !p->read_open;
+}
+
+/** The wait condition of a reader of the pipe `arg` that a splice's hold
+ * stopped: the hold has ended. */
+static int pipe_unspliced(void *arg)
+{
+    return !((pipe_t *)arg)->spliced;
+}
+
+/** Wait until no splice holds the bytes of `p` (`pipe_splice_peek`): 0, or
+ * -EINTR when a signal ends the wait. A reader waits even with O_NONBLOCK,
+ * as Linux's waits for the pipe's lock, since the hold ends without any
+ * other process acting. */
+static int32_t pipe_wait_unspliced(pipe_t *p)
+{
+    while (p->spliced) {
+        if (wq_wait_event(&p->splice_wq, pipe_unspliced, p) < 0) {
+            return -EINTR;
+        }
+    }
+    return 0;
 }
 
 /** Whether the description of `e` has O_NONBLOCK. */
@@ -196,6 +218,15 @@ static int32_t pipe_read(fd_entry_t *e, char __user *buf, uint32_t count)
 
         if (!vm_prefault_range(addr, page_piece(addr, to_read - done), 1)) {
             return (done > 0) ? (int32_t)done : -EFAULT;
+        }
+        if (p->spliced) {
+            if (done > 0) {
+                break;
+            }
+            if (pipe_wait_unspliced(p) < 0) {
+                return -EINTR;
+            }
+            continue;
         }
         chunk = pipe_ring_read_span(p, &at);
         if (chunk == 0) {
@@ -490,7 +521,7 @@ static int32_t pipe_wait_data(fd_entry_t *e, int nonblock)
     return (int32_t)pipe_available(p);
 }
 
-int32_t pipe_splice_peek(fd_entry_t *e, uint8_t *dst, uint32_t n, int nonblock, uint32_t *mark)
+int32_t pipe_splice_peek(fd_entry_t *e, uint8_t *dst, uint32_t n, int nonblock)
 {
     pipe_t *p = (pipe_t *)e->priv;
     int32_t avail;
@@ -499,9 +530,17 @@ int32_t pipe_splice_peek(fd_entry_t *e, uint8_t *dst, uint32_t n, int nonblock, 
     if (!(e->flags & FD_FLAG_READ)) {
         return -EBADF;
     }
-    avail = pipe_wait_data(e, nonblock);
-    if (avail <= 0) {
-        return avail;
+    for (;;) {
+        avail = pipe_wait_data(e, nonblock);
+        if (avail <= 0) {
+            return avail;
+        }
+        if (!p->spliced) {
+            break;
+        }
+        if (pipe_wait_unspliced(p) < 0) {
+            return -EINTR;
+        }
     }
     if (n > (uint32_t)avail) {
         n = (uint32_t)avail;
@@ -509,24 +548,23 @@ int32_t pipe_splice_peek(fd_entry_t *e, uint8_t *dst, uint32_t n, int nonblock, 
     for (i = 0; i < n; i++) {
         dst[i] = p->buf[(p->head + i) & (PIPE_BUF_SIZE - 1)];
     }
-    *mark = p->head;
+    p->spliced = 1;
     return (int32_t)n;
 }
 
-void pipe_splice_consume(fd_entry_t *e, uint32_t n, uint32_t mark)
+void pipe_splice_consume(fd_entry_t *e, uint32_t n)
 {
     pipe_t *p = (pipe_t *)e->priv;
-    uint32_t gone = p->head - mark;
 
-    if (n <= gone) {
-        return;
-    }
-    n -= gone;
     if (n > pipe_available(p)) {
         n = pipe_available(p);
     }
-    pipe_ring_consume(p, n);
-    pipe_wake(p, &p->write_wq, WQ_ROOM);
+    if (n > 0) {
+        pipe_ring_consume(p, n);
+        pipe_wake(p, &p->write_wq, WQ_ROOM);
+    }
+    p->spliced = 0;
+    wq_wake(&p->splice_wq, WQ_ALL);
 }
 
 int32_t pipe_tee(fd_entry_t *in, fd_entry_t *out, uint32_t len, int nonblock, int move)
@@ -543,6 +581,12 @@ int32_t pipe_tee(fd_entry_t *in, fd_entry_t *out, uint32_t len, int nonblock, in
 
         if (avail <= 0) {
             return avail;
+        }
+        if (a->spliced) {
+            if (pipe_wait_unspliced(a) < 0) {
+                return -EINTR;
+            }
+            continue;
         }
         if (!b->read_open) {
             pipe_sigpipe();
