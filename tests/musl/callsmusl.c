@@ -1384,7 +1384,7 @@ static int spliced_once(void)
     close(res[1]);
     if (!ok || read(res[0], &spliced, sizeof spliced) != (ssize_t)sizeof spliced ||
         read(res[0], &read_n, sizeof read_n) != (ssize_t)sizeof read_n || spliced < 0 ||
-        read_n < 0 || spliced + read_n > SPLICED_SIZE + 1) {
+        read_n < 0) {
         return fail("the splicer's and the reader's counts");
     }
     ok = spliced + read_n == SPLICED_SIZE && read(res[0], got, (size_t)read_n) == (ssize_t)read_n &&
