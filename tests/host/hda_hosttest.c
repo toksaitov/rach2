@@ -1335,6 +1335,67 @@ static void row_capture_overrun(void)
 }
 
 /** Run codec and controller rows: 0 when every check passes, 1 otherwise. */
+/**
+ * The input controls over the G50-70's codec: the two mics are the
+ * sources, with a gain on ADC 19 and a boost on each pin. The gain reads 93
+ * at its 0 dB step, and a level set is its step at the next start. A source
+ * not recorded stays muted; one selected while the stream runs is routed at
+ * once, its gain unmuted, the other connection muted and the jack biased.
+ * A boost is set on the pin, 0 mutes the gain, a line in the codec lacks is
+ * refused, and a source selected while stopped waits for the next start.
+ */
+static void row_input_controls(void)
+{
+    audio_stream_t s;
+    const hda_input_report_t *in = &hda_get_report()->input;
+    unsigned controls = 0;
+
+    row = "input-controls";
+    reset_model();
+    model_lenovo();
+    check(hda_find_output(), "enumeration succeeds");
+    check(hda_driver.input_caps(&controls) == ((1u << AUDIO_SRC_MIC) | (1u << AUDIO_SRC_INT_MIC)) &&
+              controls == ((1u << AUDIO_IN_GAIN) | (1u << AUDIO_IN_BOOST)),
+          "the two mics, a gain and a boost");
+    check(hda_driver.input_select(-1) == AUDIO_SRC_INT_MIC, "the internal mic is recorded");
+    check(hda_driver.input_level(AUDIO_IN_GAIN, AUDIO_SRC_INT_MIC, -1) == 93 &&
+              hda_driver.input_level(AUDIO_IN_BOOST, AUDIO_SRC_INT_MIC, -1) == 0,
+          "0 dB reads 93, the boost 0");
+    check(hda_driver.input_level(AUDIO_IN_GAIN, AUDIO_SRC_INT_MIC, 50) == 50 && in->level == 40,
+          "50 is step 40");
+    check(open_capture(&s, 48000, AUDIO_S16LE, 2, 4096) == 0 && hda_driver.stream_start(&s) == 0,
+          "capture starts");
+    check(in_amp[19][1][0] == (0x100 | 40) && in_amp[19][1][1] == (0x100 | 40),
+          "the start sets step 40");
+    check(hda_driver.input_level(AUDIO_IN_GAIN, AUDIO_SRC_MIC, 100) == 100 &&
+              in_amp[19][2][0] == 0x180,
+          "a source not recorded stays muted");
+    check(hda_driver.input_select(AUDIO_SRC_MIC) == AUDIO_SRC_MIC, "the jack is selected");
+    check(selected[19] == 2 && in->pin == 25 && in->index == 2 && in->level == 80,
+          "the adc reads the jack");
+    check(in_amp[19][2][0] == (0x100 | 80) && in_amp[19][1][0] == 0x180,
+          "the jack at step 80, the internal mic muted");
+    check(pin_ctl[25] == 0x24, "the jack is biased at vref 80%");
+    check(hda_driver.input_level(AUDIO_IN_BOOST, AUDIO_SRC_MIC, 100) == 100 &&
+              in_amp[25][0][0] == (0x100 | 3),
+          "the jack's boost is its last step, 36 dB");
+    check(hda_driver.input_level(AUDIO_IN_GAIN, AUDIO_SRC_MIC, 0) == 0 &&
+              in_amp[19][2][0] == 0x180 && in_amp[19][2][1] == 0x180,
+          "0 mutes the gain");
+    check(hda_driver.input_level(AUDIO_IN_GAIN, AUDIO_SRC_LINE, 50) == -EINVAL &&
+              hda_driver.input_select(AUDIO_SRC_LINE) == AUDIO_SRC_MIC,
+          "no line in");
+    hda_driver.stream_close(&s);
+    check(hda_driver.input_select(AUDIO_SRC_INT_MIC) == AUDIO_SRC_INT_MIC && selected[19] == 2,
+          "a source selected while stopped waits for the start");
+
+    row = "input-controls-none";
+    reset_model();
+    check(hda_find_output() && hda_driver.input_caps(&controls) == 0 && controls == 0 &&
+              hda_driver.input_select(AUDIO_SRC_MIC) == -ENODEV,
+          "a codec with no adc has no sources");
+}
+
 int main(void)
 {
     row_rates();
@@ -1357,6 +1418,7 @@ int main(void)
     row_capture_stream();
     row_capture_duplex();
     row_capture_overrun();
+    row_input_controls();
     printf("hda-test: result: %s\n", failures ? "fail" : "pass");
     return failures ? 1 : 0;
 }
