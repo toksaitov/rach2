@@ -4,6 +4,9 @@
  */
 
 #include "audio.h"
+#include "vchan.h"
+#include "../cmdline.h"
+#include "../proc/process.h"
 #include "../platform.h"
 #include "../speaker.h"
 #include "hda.h"
@@ -107,6 +110,8 @@ static void audio_choose(audio_driver_t *d)
 {
     audio_hw = d;
     audio = d;
+    vchan_set_loopback(kcmdline_has("rach2.audio.loopback"));
+    vchan_dispatch();
 }
 
 void init_audio(void)
@@ -164,4 +169,9 @@ bool audio_has_real_output(void)
     if (!audio_hw)
         return false;
     return (audio_hw->type == AUDIO_DRIVER_SB16 || audio_hw->type == AUDIO_DRIVER_HDA);
+}
+
+uint32_t audio_process_id(void)
+{
+    return current_proc ? current_proc->tgid : 0;
 }

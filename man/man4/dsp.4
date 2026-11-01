@@ -15,7 +15,7 @@ a program reads from it, through OSS's interface with Linux's numbers: major
 It is there only while the audio driver in use has streams.
 The node is mode 0666, so that the console's user plays sound.
 .Pp
-Any number of descriptors play at once, and one at a time records.
+Any number of descriptors play and record at once.
 An open for writing plays, one for reading records, and one for both does
 both at once, full duplex, with one format, channel count, rate and fragment
 size for the two.
@@ -198,14 +198,23 @@ on the descriptor.
 .It Dv OSS_GETVERSION
 0x030802, the version Linux gives.
 .El
+The first capture reader configures the stopped input.
+With several readers open, its settings stay fixed and each reader converts
+from them to its own format, channels and rate, repeating or omitting frames.
+A slow reader loses only its own frames.
+The last running reader stops the input, and the last close releases it.
+.Pp
+With the boot option
+.Cm rach2.audio.loopback ,
+capture reads the clipped playback mix before the hardware master volume.
+A silent playback channel supplies the clock while a reader runs, including
+on a Sound Blaster 16 without a hardware input.
 .Sh ERRORS
 .Bl -tag -width Er
 .It Bq Er EBUSY
 .Xr open 2 :
-for an open for reading, another descriptor records; for any open, the
-console's audio
-.Xr ioctl 2
-calls are playing.
+another kernel caller has taken the hardware stream directly.
+The console's audio calls share the mix and do not prevent an open.
 .It Bq Er ENODEV
 .Xr open 2 :
 the driver has no streams, or none for a direction asked for: the Sound

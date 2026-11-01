@@ -24,15 +24,15 @@ The channels, by OSS's names, are these; the device mask has those the
 driver can set.
 .Bl -tag -width SOUND_MIXER_MONITOR
 .It Dv SOUND_MIXER_VOLUME , SOUND_MIXER_PCM
-The volume and PCM, whose product is the driver's master volume, which it
-applies to every amplifier of its output path.
-Both are 100 when the driver starts.
-The driver keeps the level and applies it again each time a stream
-starts.
-The console's own
+VOLUME is the hardware master volume, applied to its output amplifiers.
+PCM scales only the playback channels opened by the process making the
+request, before they are mixed; it starts at 100.
+An open inherited across fork belongs to the process that opened it.
+A new open takes its process's existing level, or 100 with no existing open.
+With no playback open, PCM reads 100 and a write changes nothing.
+The console's
 .Dv AUDIO_SET_VOLUME
-request sets the driver's level directly; the volume then reads that level
-and PCM returns to 100.
+sets the hardware master too.
 A master volume of 0 mutes HD Audio's amplifiers.
 .It Dv SOUND_MIXER_MIC , SOUND_MIXER_MONITOR , SOUND_MIXER_LINE
 The levels of the microphone jack, the internal microphone and the line

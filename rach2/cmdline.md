@@ -14,6 +14,7 @@ The line is a list of words separated by spaces and tabs (`sys/cmdline.c`). A fl
 | `rach2.rootfstype=TYPE` | With `rach2.root=SPEC`, mount it as `krffs` or `ext2`; another value is refused. Without it the kernel tries KRFFS, then ext2. |
 | `rach2.fswindow` | Mount the boot module through the page cache's window, as a disk root is mounted. |
 | `rach2.boot=SPEC` | Name the boot partition, which must be entry 1 of an MBR or a GUID table, by the forms of `rach2.root=SPEC`. Without it the boot disk is the root's, when the root is named by identity, and disk 0 otherwise. |
+| `rach2.audio.loopback` | Feed capture from the clipped playback mix before the hardware master volume, for audio loopback checks. |
 | `rach2.nodisk`, `rach2.nousb`, `rach2.nonet`, `rach2.noaudio`, `rach2.nomouse` | Skip the probe of the disks, the USB controllers, the network cards, the sound cards or the PS/2 mouse. |
 | `rach2.ahcipoll`, `rach2.nvmepoll` | Keep the AHCI or the NVMe disks polled, with no interrupts and no request queue. |
 | `rach2.atapio` | Move ATA transfers through the data port and not through the controller's bus master. |

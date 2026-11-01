@@ -309,6 +309,19 @@ static audio_driver_t streamless = {.name = "streamless", .type = AUDIO_DRIVER_S
 
 audio_driver_t *audio;
 audio_driver_t *audio_hw;
+static uint32_t caller = 1;
+
+/** The modeled process calling the audio interface. */
+uint32_t audio_process_id(void)
+{
+    return caller;
+}
+
+/** Install the dispatch driver as at boot. */
+void audio_set_dispatch(audio_driver_t *d)
+{
+    audio = d ? d : audio_hw;
+}
 
 /* A second open, for the rows that play two at once. */
 static fd_entry_t other;
@@ -379,6 +392,8 @@ int copy_to_user(void __user *dst, const void *src, size_t len)
 static void begin(const char *name)
 {
     row = name;
+    caller = 1;
+    vchan_set_loopback(0);
     check(m.s == NULL && cap.s == NULL, "no stream open between rows");
     k_memset(&m, 0, sizeof(m));
     k_memset(&cap, 0, sizeof(cap));
@@ -1374,6 +1389,131 @@ static void row_close_while_playing(void)
     check(mixed(wave_a, 1536, a_end, wave_b, 1024, 512), "A until its close, B throughout");
 }
 
+/** Two readers receive the same periods. One falls behind and resets;
+ * neither event stops or discards the other reader's frames. */
+static void row_two_readers(void)
+{
+    uint8_t second[1024];
+    struct wait_queue *wq;
+    uint32_t i;
+
+    begin("two readers");
+    check(open_dsp(0) == 0, "first reader");
+    cd_quality();
+    check(open_other() == 0, "temporary playback open");
+    dspdev_close(&other);
+    check(dspdev_open(&other, 0) == 0, "second reader shares the input");
+    swap_opens();
+    cd_quality();
+    check(dspdev_poll(&entry, POLLIN, &wq) == 0, "second reader started");
+    swap_opens();
+    check(dspdev_poll(&entry, POLLIN, &wq) == 0, "first reader started");
+    check(cap.starts == 1, "one hardware start for both readers");
+    check(take(1024) == 1024, "first reader's first period");
+    check(dspdev_read(&other, (char __user *)second, sizeof(second)) == sizeof(second) &&
+              memcmp(got, second, sizeof(second)) == 0,
+          "identical frames for both readers");
+    for (i = 0; i < 8; i++) {
+        check(take(1024) == 1024, "first reader keeps up while the second overruns");
+    }
+    swap_opens();
+    check(ask(DSP_RESET, 0) == 0 && cap.running && cap.stops == 0,
+          "reset of the second leaves the first running");
+    close_dsp();
+    swap_opens();
+    check(take(1024) == 1024 && recorded(0, 0, got_len), "first reader has no gap");
+    close_dsp();
+    check(cap.stops == 1 && cap.closes == 1, "last reader releases the input");
+}
+
+/** Per-process PCM scales only its opener's samples. A new process writing
+ * an inherited open cannot take ownership of it by setting its own PCM. */
+static void row_process_pcm(void)
+{
+    uint32_t i, join;
+
+    begin("process PCM");
+    check(open_dsp(1) == 0, "process one's channel");
+    cd_quality();
+    check(vchan_pcm(25) == 25, "first process level");
+    caller = 2;
+    check(open_other() == 0, "process two's channel");
+    swap_opens();
+    cd_quality();
+    swap_opens();
+    check(vchan_pcm(-1) == 100, "new process starts at full PCM");
+    check(vchan_pcm(50) == 50, "second process level");
+    caller = 1;
+    check(vchan_pcm(-1) == 25, "first process unchanged");
+    for (i = 0; i < 2 * WAVE; i++) {
+        wave_a[i] = 8000;
+        wave_b[i] = 12000;
+    }
+    check(put_wave(&entry, wave_a, 0, 1024) == 4096, "first player starts");
+    join = mix.made;
+    caller = 3;
+    check(vchan_pcm(0) == 100, "inheritor has no channel of its own");
+    check(put_wave(&other, wave_b, 0, 1024) == 4096, "inherited write keeps opener's PCM");
+    check(ask(DSP_SYNC, 0) == 0, "first player drains");
+    swap_opens();
+    check(ask(DSP_SYNC, 0) == 0, "second player drains");
+    close_dsp();
+    swap_opens();
+    close_dsp();
+    for (i = 0; i < out_frames(); i++) {
+        int want = (i < 1024 ? 2000 : 0) + (i >= join && i < join + 1024 ? 6000 : 0);
+
+        check(out_sample(i, 0) == want && out_sample(i, 1) == want, "scaled sum");
+    }
+}
+
+/** The console starts and stops a channel while a DSP player runs; neither
+ * action restarts or stops the shared hardware. */
+static void row_console_client(void)
+{
+    begin("console client");
+    check(open_dsp(1) == 0, "DSP open");
+    cd_quality();
+    check(put(0, 2048) == 2048, "DSP starts");
+    check(vchan_driver.start(48000, AUDIO_S16LE, 2) == 0, "console joins");
+    check(vchan_driver.write(pattern, 1024) == 1024, "console write");
+    check(vchan_driver.delay(NULL) >= 256, "console delay includes its ring");
+    check(m.starts == 1, "no restart when the console joins");
+    model_tick();
+    vchan_driver.stop();
+    check(m.running && m.stops == 0, "console stop leaves DSP playing");
+    check(ask(DSP_SYNC, 0) == 0, "DSP drains");
+    close_dsp();
+}
+
+/** The clipped mix feeds both loopback readers, including on a device
+ * with no capture stream; the playback clock lives until its last user. */
+static void row_loopback(void)
+{
+    struct wait_queue *wq;
+    uint32_t i;
+
+    begin("loopback");
+    vchan_set_loopback(1);
+    cap.refuse_open = -ENODEV;
+    check(open_dsp(2) == 0, "duplex on playback-only hardware");
+    cd_quality();
+    check(dspdev_poll(&entry, POLLIN, &wq) >= 0, "loopback clock starts");
+    check(cap.s == NULL && m.running, "playback alone clocks loopback");
+    for (i = 0; i < 2 * WAVE; i++)
+        wave_a[i] = 12345;
+    check(put_wave(&entry, wave_a, 0, 1024) == 4096, "known samples queued");
+    check(take(4096) == 4096, "initial clock periods read");
+    check(take(4096) == 4096, "played samples read");
+    for (i = 2048; i < 6144; i += 2)
+        check((int16_t)(uint16_t)(got[i] | got[i + 1] << 8) == 12345,
+              "loopback is the mixed output");
+    check(ask(DSP_NONBLOCK, 0) == 0, "nonblocking close");
+    close_dsp();
+    check(!m.running && m.s == NULL, "last loopback user releases the clock");
+    vchan_set_loopback(0);
+}
+
 int main(void)
 {
     uint32_t i;
@@ -1404,6 +1544,10 @@ int main(void)
     row_clipping();
     row_resampling();
     row_close_while_playing();
+    row_two_readers();
+    row_process_pcm();
+    row_console_client();
+    row_loopback();
     if (failures) {
         printf("dsp-hosttest: %d failures\n", failures);
         return 1;
