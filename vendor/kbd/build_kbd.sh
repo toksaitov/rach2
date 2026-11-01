@@ -31,11 +31,18 @@ for p in "$SCRIPT_DIR"/patches/*.patch; do
     }
 done
 BUILD_TRIPLE=$(sh "$SRC/config/config.guess")
+# configure stops without a pkg-config, though this build asks it for no
+# package; this one passes the version check and finds none, on any host.
+# shellcheck disable=SC2016 # the stand-in's own $1, written literally
+printf '%s\n' '#!/bin/sh' \
+    'case $1 in --version) echo 0.29.2 ;; --atleast-pkgconfig-version) ;; *) exit 1 ;; esac' \
+    > "$WORK/pkg-config"
+chmod 755 "$WORK/pkg-config"
 (
     cd "$SRC"
     # Neither a host pkg-config file nor a host compression library is used.
     CC="$WRAP" AR="${CROSS}ar" RANLIB="${CROSS}ranlib" STRIP="${CROSS}strip" \
-        PKG_CONFIG_LIBDIR="$WORK/pkgconfig" PKG_CONFIG_PATH='' \
+        PKG_CONFIG="$WORK/pkg-config" \
         ac_cv_lib_bz2_BZ2_bzDecompressInit=no \
         ./configure --build="$BUILD_TRIPLE" --host="$HOST_TRIPLE" \
         --prefix=/usr --datadir=/usr/share/kbd --disable-shared --enable-static \
