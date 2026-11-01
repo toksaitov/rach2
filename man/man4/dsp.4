@@ -3,19 +3,22 @@
 .Os
 .Sh NAME
 .Nm dsp
-.Nd OSS's audio device, for playback
+.Nd OSS's audio device
 .Sh SYNOPSIS
 .In sys/soundcard.h
 .Pp
 .Pa /dev/dsp
 .Sh DESCRIPTION
-The device plays the samples a program writes to it, through OSS's
-interface with Linux's numbers: major 14, minor 3.
+The device plays the samples a program writes to it and records the samples
+a program reads from it, through OSS's interface with Linux's numbers: major
+14, minor 3.
 It is there only while the audio driver in use has streams.
 The node is mode 0666, so that the console's user plays sound.
 .Pp
-One descriptor at a time has the device, and it must be opened for writing
-alone: the device does not record.
+One descriptor at a time has the device.
+An open for writing plays, one for reading records, and one for both does
+both at once, full duplex, with one format, channel count, rate and fragment
+size for the two.
 An open sets OSS's defaults, unsigned 8-bit mono at 8000 Hz.
 .Pp
 What is written is queued in a buffer of periods, the fragments of OSS.
@@ -50,8 +53,40 @@ while a whole period of the buffer is free.
 The last close waits for what is queued to play, unless the descriptor is
 nonblocking or a signal comes, and then stops the device.
 .Pp
+Recording starts at the first
+.Xr read 2 ,
+or at a
+.Xr poll 2
+for
+.Dv POLLIN ,
+and goes on until the last close,
+.Dv SNDCTL_DSP_RESET ,
+or a
+.Dv SNDCTL_DSP_SETTRIGGER
+that turns input off.
+What the device records is kept in a buffer of periods laid out as
+playback's, which a read empties.
+A read waits until it has every byte it asked for, and may end within a
+frame; the next read goes on from there.
+A signal ends the wait: the read returns the bytes it took, or fails with
+.Er EINTR
+when it took none.
+With
+.Dv O_NONBLOCK
+the read takes what there is and fails with
+.Er EAGAIN
+when there is nothing.
+.Xr poll 2
+reports
+.Dv POLLIN
+while a whole period has been recorded.
+When the program falls behind by the whole buffer, what the device records
+next is dropped until a read makes room, so the program reads the oldest
+frames in order and then a gap.
+The close drops what was recorded and not read.
+.Pp
 A change of format, channels, rate or fragments stops the device and empties
-the buffer.
+the buffers.
 The requests:
 .Bl -tag -width SNDCTL_DSP_SETFRAGMENT
 .It Dv SNDCTL_DSP_SETFMT , SNDCTL_DSP_SAMPLESIZE
@@ -73,9 +108,13 @@ Set one channel, or two for any larger count, and give back the count in use;
 Set stereo for a nonzero value and mono for 0, and give back 1 or 0.
 .It Dv SNDCTL_DSP_SPEED
 Set the rate nearest the one asked for, between 1000 and 192000 Hz and within
-what the driver plays, and give back the rate set; 0 asks for it.
+what the driver plays or records, and give back the rate set; 0 asks for it.
 HDA plays a rate its codec has exactly, 44100 and 48000 Hz among them, and
 converts another to one it has, up to four times that rate.
+It records at the rate its converter has nearest the one asked for, and
+converts none.
+In an open for both, the rate given back is playback's, and recording's may
+differ where the device has different rates in each direction.
 .It Dv SNDCTL_DSP_SETFRAGMENT
 Ask for periods of 2 to the power of the low 16 bits bytes and for the
 number of them in the high 16 bits.
@@ -90,6 +129,11 @@ An
 .Vt audio_buf_info :
 the whole periods free, the periods of the buffer, the bytes of a period and
 the bytes free.
+.It Dv SNDCTL_DSP_GETISPACE
+An
+.Vt audio_buf_info :
+the whole periods recorded and not read, the periods of the buffer, the bytes
+of a period and the bytes ready to read.
 .It Dv SNDCTL_DSP_GETODELAY
 The bytes queued ahead of the next one written, in the buffer and in the
 driver: how long, at the rate set, before what is written next is heard.
@@ -100,24 +144,37 @@ the bytes played since the open, silence among them, wrapping; the periods
 played since the last
 .Dv SNDCTL_DSP_GETOPTR ;
 and the play position's offset in the buffer.
+.It Dv SNDCTL_DSP_GETIPTR
+The same for recording: the bytes recorded since the open, those dropped
+among them, the periods recorded since the last
+.Dv SNDCTL_DSP_GETIPTR ,
+and the record position's offset in the buffer.
 .It Dv SNDCTL_DSP_GETCAPS
 .Dv DSP_CAP_REALTIME
 and
 .Dv DSP_CAP_TRIGGER ,
-revision 1.
+revision 1, and
+.Dv DSP_CAP_DUPLEX
+in an open for both.
+.It Dv SNDCTL_DSP_SETDUPLEX
+Nothing, in an open for both, where the device is full duplex already.
 .It Dv SNDCTL_DSP_GETTRIGGER , SNDCTL_DSP_SETTRIGGER
-.Dv PCM_ENABLE_OUTPUT ,
-on at open.
-Turning it off stops the device, dropping what the driver's buffer holds and
-keeping the rest; turning it on starts it if anything is queued.
+.Dv PCM_ENABLE_OUTPUT
+and
+.Dv PCM_ENABLE_INPUT ,
+each of the open's directions on at open.
+Turning output off stops playback, dropping what the driver's buffer holds
+and keeping the rest; turning it on starts playback if anything is queued.
+Turning input off stops recording, keeping what was recorded for the reads;
+turning it on starts recording.
 .It Dv SNDCTL_DSP_POST
 Start the device if anything is queued, however little.
 .It Dv SNDCTL_DSP_SYNC
 Start the device, wait for what is queued to play, then stop it and drop a
 partial frame left over.
-With the trigger off it returns at once.
+With the trigger off, or in an open for reading alone, it returns at once.
 .It Dv SNDCTL_DSP_RESET
-Stop the device at once and empty the buffer.
+Stop playback and recording at once and empty both buffers.
 .It Dv SNDCTL_DSP_NONBLOCK
 Set
 .Dv O_NONBLOCK
@@ -129,24 +186,29 @@ on the descriptor.
 .Bl -tag -width Er
 .It Bq Er EBUSY
 .Xr open 2 :
-another descriptor has the device, or the driver's stream is in use.
-.It Bq Er ENXIO
-.Xr open 2
-for reading.
+another descriptor has the device, or one of the driver's streams it needs is in use.
 .It Bq Er ENODEV
 .Xr open 2 :
-the driver has no playback stream.
+the driver has no streams, or none for a direction asked for: the Sound
+Blaster 16's driver records nothing.
+.It Bq Er EBADF
+A write to an open for reading alone, or a read from one for writing alone.
 .It Bq Er EINTR
-A signal ended a write that took nothing, or the wait of
+A signal ended a write or a read that took nothing, or the wait of
 .Dv SNDCTL_DSP_SYNC ,
 which leaves the device playing.
 .It Bq Er EAGAIN
-A nonblocking write found no room.
+A nonblocking write found no room, or a nonblocking read nothing recorded.
 .It Bq Er EIO
 The device failed to start.
 .It Bq Er EINVAL
-Another of OSS's requests, such as
-.Dv SNDCTL_DSP_GETISPACE .
+.Xr open 2
+with an access mode of 3; a request for a direction the open does not have,
+such as
+.Dv SNDCTL_DSP_GETISPACE
+in an open for writing alone, or
+.Dv SNDCTL_DSP_SETDUPLEX
+in an open of one direction; another of OSS's requests.
 .It Bq Er ENOTTY
 Another request.
 .El
