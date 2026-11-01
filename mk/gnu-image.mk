@@ -42,7 +42,9 @@ GNU_IMAGE_DEPS = $(DEMO_CREDS) krffs/manifests/os-real-gnu.manifest $(MANIFEST_D
 LOGINS ?=
 GNU_LOGINS_STAMP = $(IMAGES_DIR)/os-real-gnu.logins
 GNU_STAGE_LOGINS = $(if $(LOGINS),sh tools/image/stage_logins.sh $@ "$(LOGINS)")
-$(GNU_LOGINS_STAMP): FORCE
+# The phony prerequisite runs the comparison at every make.
+.PHONY: gnu-logins-check
+$(GNU_LOGINS_STAMP): gnu-logins-check
 	@mkdir -p $(@D)
 	@sh tools/image/stage_logins.sh --digest "$(LOGINS)" > $@.new
 	@if cmp -s $@.new $@; then rm -f $@.new; else mv $@.new $@; fi
