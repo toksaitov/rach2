@@ -10,7 +10,7 @@ port_build()
         --target-os=linux --arch="$RACH2_ARCH" \
         --cross-prefix="$TARGET-" --sysroot="$ROOT" \
         --pkg-config=false --disable-autodetect --disable-iconv --enable-pthreads \
-        --disable-x86asm --enable-shared --disable-static \
+        --disable-x86asm --enable-shared --enable-pic --disable-static \
         --disable-gpl --disable-nonfree --disable-version3 \
         --disable-doc --disable-debug --disable-ffplay --disable-network \
         --disable-swscale --extra-ldflags=-Wl,-z,noexecstack \
@@ -25,4 +25,11 @@ port_build()
         --enable-filter=aresample,aformat,anull,abuffer,abuffersink,volume \
         --enable-swresample
     make
+}
+
+port_install()
+{
+    make install DESTDIR="$DEST"
+    install -Dm644 "$SRC/COPYING.LGPLv2.1" \
+        "$DEST/usr/share/licenses/ffmpeg/COPYING.LGPLv2.1"
 }
