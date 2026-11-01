@@ -1,7 +1,8 @@
 /**
  * audiotest: play a square-wave PCM tone through the console audio ioctls,
- * measure the queue across a stall of the writer, or play a scale through
- * OSS's /dev/dsp.
+ * measure the queue across a stall of the writer, play a scale through OSS's
+ * /dev/dsp, or record through /dev/dsp and check what was read against the
+ * kernel's count.
  */
 #define _DEFAULT_SOURCE
 #include <errno.h>
@@ -36,13 +37,29 @@ struct audio_write_params {
 };
 
 /* OSS's requests on /dev/dsp, with Linux's numbers (<linux/soundcard.h>). */
-#define SNDCTL_DSP_SYNC     0x00005001u
-#define SNDCTL_DSP_SPEED    0xC0045002u
-#define SNDCTL_DSP_SETFMT   0xC0045005u
-#define SNDCTL_DSP_CHANNELS 0xC0045006u
-#define AFMT_QUERY          0x00
-#define AFMT_U8             0x08
-#define AFMT_S16_LE         0x10
+#define SNDCTL_DSP_SYNC        0x00005001u
+#define SNDCTL_DSP_SPEED       0xC0045002u
+#define SNDCTL_DSP_GETBLKSIZE  0xC0045004u
+#define SNDCTL_DSP_SETFMT      0xC0045005u
+#define SNDCTL_DSP_CHANNELS    0xC0045006u
+#define SNDCTL_DSP_SETFRAGMENT 0xC004500Au
+#define SNDCTL_DSP_GETISPACE   0x8010500Du
+#define SNDCTL_DSP_SETTRIGGER  0x40045010u
+#define SNDCTL_DSP_GETIPTR     0x800C5011u
+#define AFMT_QUERY             0x00
+#define AFMT_U8                0x08
+#define AFMT_S16_LE            0x10
+
+/* The answers of GETISPACE and GETIPTR. */
+struct oss_buf_info {
+    int fragments, fragstotal, fragsize, bytes; /* bytes ready to read */
+};
+struct oss_count_info {
+    int bytes, blocks, ptr; /* bytes recorded since the open */
+};
+
+/* The record mode's buffer: sixteen periods of 2048 bytes, 2^11. */
+#define RECORD_FRAGMENT ((16 << 16) | 11)
 
 /* The scales `audiotest -d` plays, five notes of DSP_NOTE_MS each: in stereo
  * one in each channel, the second an octave below the first, and in mono one
@@ -446,30 +463,213 @@ static int dsp_main(int argc, char **argv)
 }
 
 /**
+ * Find the line of /proc/audio that begins `capture running ` and read the
+ * input stream's granted rate, the frames it handed over and its overruns
+ * from it.
+ *
+ * Returns 0, or -1 with the failure reported on standard error when the file
+ * cannot be read or has no such line.
+ */
+static int proc_capture(unsigned *rate, unsigned *frames, unsigned *overruns)
+{
+    static char text[32768];
+    const char *at;
+    size_t used = 0;
+    ssize_t n;
+    unsigned running, requested, format, period, periods;
+    int fd = open("/proc/audio", O_RDONLY);
+
+    if (fd < 0) {
+        perror("audiotest: /proc/audio");
+        return -1;
+    }
+    while (used < sizeof(text) - 1 && (n = read(fd, text + used, sizeof(text) - 1 - used)) > 0)
+        used += (size_t)n;
+    close(fd);
+    text[used] = 0;
+    at = strstr(text, "capture running ");
+    if (at == NULL ||
+        sscanf(at,
+               "capture running %u requested %u rate %u format 0x%x period %u periods %u "
+               "frames %u overruns %u",
+               &running, &requested, rate, &format, &period, &periods, frames, overruns) != 8) {
+        fprintf(stderr, "audiotest: /proc/audio has no capture line\n");
+        return -1;
+    }
+    return 0;
+}
+
+/**
+ * Print the `n` bytes at `p` as lines `audiotest: data: HEX`, 64 bytes to a
+ * line, for a host that reads the console to rebuild them.
+ */
+static void dump(const unsigned char *p, size_t n)
+{
+    static const char digits[] = "0123456789abcdef";
+    char line[17 + 128 + 2];
+    size_t i, k;
+
+    for (i = 0; i < n; i += 64) {
+        memcpy(line, "audiotest: data: ", 17);
+        for (k = 0; k < 64 && i + k < n; k++) {
+            line[17 + 2 * k] = digits[p[i + k] >> 4];
+            line[18 + 2 * k] = digits[p[i + k] & 15];
+        }
+        line[17 + 2 * k] = '\n';
+        fwrite(line, 1, 18 + 2 * k, stdout);
+    }
+    fflush(stdout);
+}
+
+/**
+ * Record `periods` periods through /dev/dsp, signed 16-bit mono at `rate`
+ * as near as the device has it, in a buffer of RECORD_FRAGMENT, with one
+ * blocking read of a period at a time; then turn input off, which stops the
+ * device, and check the counts. The frames read and those still in the
+ * buffer must be the frames /proc/audio says the input stream handed over,
+ * so that none was dropped, the rate granted must be /proc/audio's, the
+ * frames GETIPTR says were recorded must be at least those, and the stream
+ * must have had no overrun. With `print`, the samples read are printed after
+ * the counts, as `dump` does.
+ *
+ * Returns 0 when the counts agree, -1 otherwise or on a failed call, which
+ * is reported on standard error.
+ */
+static int record(unsigned rate, unsigned periods, int print)
+{
+    struct oss_buf_info left;
+    struct oss_count_info recorded;
+    unsigned char *samples;
+    unsigned proc_rate, handed, overruns;
+    size_t got = 0, want;
+    int fd, value, period, result = 0;
+
+    fd = open("/dev/dsp", O_RDONLY);
+    if (fd < 0) {
+        perror("audiotest: /dev/dsp");
+        return -1;
+    }
+    value = AFMT_S16_LE;
+    if (ioctl(fd, SNDCTL_DSP_SETFMT, &value) < 0 || value != AFMT_S16_LE) {
+        fprintf(stderr, "audiotest: /dev/dsp: no signed 16-bit format\n");
+        close(fd);
+        return -1;
+    }
+    value = 1;
+    if (ioctl(fd, SNDCTL_DSP_CHANNELS, &value) < 0 || value != 1) {
+        fprintf(stderr, "audiotest: /dev/dsp: no mono\n");
+        close(fd);
+        return -1;
+    }
+    value = (int)rate;
+    if (ioctl(fd, SNDCTL_DSP_SPEED, &value) < 0) {
+        perror("audiotest: /dev/dsp: speed");
+        close(fd);
+        return -1;
+    }
+    rate = (unsigned)value;
+    value = RECORD_FRAGMENT;
+    if (ioctl(fd, SNDCTL_DSP_SETFRAGMENT, &value) < 0 ||
+        ioctl(fd, SNDCTL_DSP_GETBLKSIZE, &period) < 0 || period <= 0) {
+        perror("audiotest: /dev/dsp: fragments");
+        close(fd);
+        return -1;
+    }
+    want = (size_t)periods * (size_t)period;
+    samples = malloc(want);
+    if (samples == NULL) {
+        fprintf(stderr, "audiotest: no memory for %lu bytes\n", (unsigned long)want);
+        close(fd);
+        return -1;
+    }
+    printf("audiotest: record: %u periods of %d bytes, 16-bit mono at %u hz\n", periods, period,
+           rate);
+    fflush(stdout);
+    while (got < want && !interrupted) {
+        ssize_t n = read(fd, samples + got, (size_t)period);
+
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0) {
+            perror("audiotest: /dev/dsp: read");
+            result = -1;
+            break;
+        }
+        got += (size_t)n;
+    }
+    value = 0;
+    if (result == 0 && (interrupted || ioctl(fd, SNDCTL_DSP_SETTRIGGER, &value) < 0 ||
+                        ioctl(fd, SNDCTL_DSP_GETISPACE, &left) < 0 ||
+                        ioctl(fd, SNDCTL_DSP_GETIPTR, &recorded) < 0 ||
+                        proc_capture(&proc_rate, &handed, &overruns) < 0)) {
+        if (!interrupted)
+            perror("audiotest: /dev/dsp: counts");
+        result = -1;
+    }
+    close(fd);
+    if (result == 0) {
+        unsigned frames = (unsigned)((got + (size_t)left.bytes) / 2);
+
+        printf("audiotest: record: read %lu bytes, %d left; rate %u, /proc/audio's %u; "
+               "%u frames read and left, %u handed over, %u recorded; %u overruns\n",
+               (unsigned long)got, left.bytes, rate, proc_rate, frames, handed,
+               (unsigned)recorded.bytes / 2, overruns);
+        if (got != want || rate != proc_rate || frames != handed ||
+            (unsigned)recorded.bytes / 2 < handed || overruns != 0)
+            result = -1;
+    }
+    if (result == 0 && print)
+        dump(samples, got);
+    free(samples);
+    return result;
+}
+
+/**
  * `audiotest [rate [seconds [frequency]]]`: play a tone of `frequency` hertz,
  * 440 by default and from 20 to half the rate, for `seconds`, 2 by default
  * and at most 60, at `rate` samples per second, 48000 by default and from
  * 8000 to 384000. `audiotest -s [rate]` instead writes numbered blocks
  * across a stall, as `stall` says, and fails when the queued delay passed six
  * periods, and `audiotest -d` plays a scale through /dev/dsp, as `dsp_main`
- * says.
+ * says. `audiotest -r [rate [periods]]` records `periods` periods, 50 by
+ * default and at most 1000, at `rate`, 48000 by default and from 8000 to
+ * 192000, through /dev/dsp, as `record` says; `-R` does the same and prints
+ * the samples.
  *
  * The kernel takes the audio requests only on a descriptor of the console, so
  * the program opens `/dev/console` rather than using its standard output,
  * which lets it run from an SSH session's pseudo-terminal. It needs a PCM
  * driver; the PC speaker plays no samples. The status is 0 when the tone
- * played to its end, and 1 on a usage error, no PCM driver, a failed request,
- * a clock that cannot be read, a delay past its bound or a signal.
+ * played to its end or the record mode's counts agreed, and 1 on a usage
+ * error, no PCM driver, a failed request, counts that disagree, a clock that
+ * cannot be read, a delay past its bound or a signal.
  */
 int main(int argc, char **argv)
 {
     struct audio_info info;
     struct audio_start_params start;
-    unsigned rate = 48000, seconds = 2, frequency = 440;
+    unsigned rate = 48000, seconds = 2, frequency = 440, periods = 50;
     int fd, result, stalled = argc > 1 && strcmp(argv[1], "-s") == 0;
 
     if (argc > 1 && strcmp(argv[1], "-d") == 0)
         return dsp_main(argc - 2, argv + 2);
+    if (argc > 1 && (strcmp(argv[1], "-r") == 0 || strcmp(argv[1], "-R") == 0)) {
+        if (argc > 2)
+            rate = number(argv[2], 8000, 192000);
+        if (argc > 3)
+            periods = number(argv[3], 1, 1000);
+        if (argc > 4 || !rate || !periods) {
+            fprintf(stderr, "audiotest: usage: audiotest -r|-R [rate [periods]]\n");
+            return 1;
+        }
+        signal(SIGINT, interrupt_tone);
+        signal(SIGTERM, interrupt_tone);
+        signal(SIGHUP, interrupt_tone);
+        if (record(rate, periods, argv[1][1] == 'R') != 0)
+            return 1;
+        puts("audiotest: result: complete; the frames read match the kernel's count");
+        return 0;
+    }
     if (stalled) {
         argv++;
         argc--;
@@ -483,7 +683,8 @@ int main(int argc, char **argv)
     if (argc > (stalled ? 2 : 4) || !rate || !seconds || !frequency) {
         fprintf(stderr, "audiotest: usage: audiotest [rate [seconds [frequency]]]\n"
                         "       audiotest -s [rate]\n"
-                        "       audiotest -d [rate bits channels]\n");
+                        "       audiotest -d [rate bits channels]\n"
+                        "       audiotest -r|-R [rate [periods]]\n");
         return 1;
     }
     signal(SIGINT, interrupt_tone);
