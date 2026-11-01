@@ -146,12 +146,12 @@
 # replaces it in one rename. The new record keeps the old one's `touched`
 # line unless the old release closed, since the machine may still run what
 # that release left, and its `card` lines when it is of the same milestone
-# and did not close, so that the steps keep their cards. A done step is skipped when the script runs again, a
-# transfer whose files still hash right on the machine is kept, and a step
-# that writes the machine first asks it what it runs and which disk has the
-# serial. A reboot counts as done when a boot younger than the request
-# answers, by /proc/uptime. One release runs at a time, under a lock on
-# STATE/lock.
+# and did not close, so that the steps keep their cards. A done step is
+# skipped when the script runs again, a transfer whose files still hash right
+# on the machine is kept, and a step that writes the machine first asks it
+# what it runs and which disk has the serial. A reboot counts as done when a
+# boot younger than the request answers, by /proc/uptime. One release runs at
+# a time, under a lock on STATE/lock.
 #
 # The exit status is 0 when the milestone was released; 1 when a step or a
 # run failed, as the record's last line says; 2 when the arguments are
@@ -919,14 +919,6 @@ beat()
     done
 }
 
-# windows_prepare ID: build the preparation of Windows' run ID with `etude run
-# routine-prepare`, its output in STATE/ID.prepare, while a claim in WSL's
-# admission, `etude-launch build` with Windows' JOBS, holds the memory that the
-# preparation's own claim on Windows takes, JOBS GiB and one more, and the
-# block of ports that WSL's launcher gives each claim, so that WSL's tests
-# leave both to Windows; the tooling machine forwards no port. The claim ends
-# with the preparation, or as beat says once the release is gone, and a stop
-# ends both. Run in the background.
 # downloads: print the Windows shell's lines that copy into the tree, from
 # the owner's clone in WSL, each pinned tarball of the GNU layer that the tree
 # lacks, kept only when it hashes as pinned. The tooling machine takes the
@@ -946,6 +938,14 @@ awk '\$1 !~ /^#/ && NF >= 4 { n = \$3; sub(/.*\//, "", n); print n, \$4 }' \
 END
 }
 
+# windows_prepare ID: build the preparation of Windows' run ID with `etude run
+# routine-prepare`, its output in STATE/ID.prepare, while a claim in WSL's
+# admission, `etude-launch build` with Windows' JOBS, holds the memory that the
+# preparation's own claim on Windows takes, JOBS GiB and one more, and the
+# block of ports that WSL's launcher gives each claim, so that WSL's tests
+# leave both to Windows; the tooling machine forwards no port. The claim ends
+# with the preparation, or as beat says once the release is gone, and a stop
+# ends both. Run in the background.
 windows_prepare()
 {
     id=$1 claimer='' session='' beater=''
