@@ -122,9 +122,9 @@ longer is refused there; Linux reads a vector to its end first, and
 reports
 .Er EFAULT
 for a pointer it cannot read past the budget.
-The initial stack spans as many pages below the top of user space,
+The initial stack spans as many pages below its top,
 .Ad 0xC0000000
-on i686 and
+on i686 and, where addresses are not randomized,
 .Ad 0x00007FFFFFFFF000
 on x86-64, as the strings and the pointers need.
 The copied path, including any current-directory prefix and its null
@@ -387,6 +387,36 @@ the same types, and builds the System V x86-64 initial stack, whose words
 are 64 bits, and
 .Nm execve
 is call 59.
+.Pp
+On x86-64 the new image's addresses are randomized, as on Linux, unless
+.Va kernel.randomize_va_space
+is 0 or the caller's persona has
+.Dv ADDR_NO_RANDOMIZE ,
+which
+.Ql setarch linux64 -R
+and GDB set with
+.Xr personality 2 .
+Each offset is drawn on its own at each exec: the stack's top is lowered
+by a random number of pages under 16 GiB, and the entry stack pointer by
+a random multiple of 16 bytes under 8 KiB; the top of the range
+.Xr mmap 2
+places mappings and the interpreter in,
+.Ad 0x00007F0000000000
+otherwise, is lowered by pages under 1 TiB; a position-independent
+program is raised from
+.Ad 0x0000555555554000
+by pages under 1 TiB; and at 2, the default, the heap's start is raised
+above the program's end by pages under 32 MiB.
+An image that runs with IDs its caller lacks, or with capabilities given
+back, loses
+.Dv ADDR_NO_RANDOMIZE
+and the other flags of Linux's
+.Dv PER_CLEAR_ON_SETID
+from its persona first, so no caller can fix its addresses.
+A child of
+.Xr fork 2
+keeps its parent's addresses.
+i686 places every image at the fixed addresses above.
 .Sh RETURN VALUES
 .Fn execve
 does not return on success.
@@ -532,5 +562,6 @@ duplicate or inherited descriptor or one marked close-on-exec.
 .Xr exit 2 ,
 .Xr fcntl 2 ,
 .Xr fork 2 ,
+.Xr personality 2 ,
 .Xr prlimit64 2 ,
 .Xr wait 2
