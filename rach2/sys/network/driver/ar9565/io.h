@@ -55,8 +55,10 @@ struct ar9565_ini {
 #define REG_RMW(ah, reg, set, clr)   ar9565_rmw((ah), (reg), (set), (clr))
 #define REG_SET_BIT(ah, reg, f)      ar9565_rmw((ah), (reg), (f), 0)
 #define REG_CLR_BIT(ah, reg, f)      ar9565_rmw((ah), (reg), 0, (f))
-#define REG_RMW_FIELD(ah, reg, f, v) ar9565_rmw((ah), (reg), SM((v), f), (f))
-#define REG_READ_FIELD(ah, reg, f)   MS(REG_READ((ah), (reg)), f)
+/* These two paste f##_S themselves: passed on to SM or MS, the field's name
+ * would be replaced by its value before the paste. */
+#define REG_RMW_FIELD(ah, reg, f, v) ar9565_rmw((ah), (reg), ((uint32_t)(v) << f##_S) & (f), (f))
+#define REG_READ_FIELD(ah, reg, f)   ((REG_READ((ah), (reg)) & (f)) >> f##_S)
 #define AR9565_UDELAY(ah, usec)      ((ah)->io->udelay((ah)->io_ctx, (usec)))
 
 /* ath9k's poll interval and its usual bound, in microseconds (hw.h's
