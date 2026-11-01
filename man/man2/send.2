@@ -186,8 +186,8 @@ limit 1 to a group, or the socket's
 .Dv IP_TTL
 to another address.
 The message may contain at most 65535 bytes, and no fewer than the four
-of its header; one past the path MTU, 1500 bytes or less after a Packet
-Too Big, leaves in fragments.
+of its header; one past the path MTU, the link's 1500 bytes or the less
+a router advertises, or less after a Packet Too Big, leaves in fragments.
 A socket of
 .Dv IPPROTO_RAW
 sends instead the IPv6 datagram the caller built, header included, of at
@@ -195,9 +195,13 @@ most 1500 bytes, by the route of the
 .Vt sockaddr_in6
 and unchanged; its payload length must agree with the send's.
 A unicast destination other than ::1 and this machine's own addresses
-gives
-.Er EHOSTUNREACH ,
-since the kernel resolves no IPv6 neighbour yet.
+leaves by the routing table, which holds the prefixes of the
+interfaces' addresses and those routers advertise, and the routers
+themselves as default routes.
+A next hop whose station address the neighbour cache does not hold is
+asked for, and the message held meanwhile; when three solicitations a
+second apart go unanswered, the socket receives an ICMPv6 address
+unreachable, type 1 and code 3, from this machine.
 .Pp
 An
 .Dv AF_PACKET
@@ -282,9 +286,6 @@ The payload or required address cannot be read, the length exceeds
 the signed 32-bit range, or the
 .Fn socketcall
 argument array cannot be read.
-.It Bq Er EHOSTUNREACH
-A raw ICMPv6 datagram is for a unicast address on another host, whose
-station address the kernel cannot resolve.
 .It Bq Er EINTR
 A signal interrupted a stream send waiting for buffer space.
 .It Bq Er EINVAL
