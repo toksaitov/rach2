@@ -1,7 +1,7 @@
 /*
- * dsp.h: /dev/dsp, OSS's audio device, which plays what a program writes and
- * records what it reads through the stream operations of the audio driver in
- * use.
+ * dsp.h: /dev/dsp, OSS's audio device, which plays what a program writes,
+ * mixed with what other opens write, and records what it reads through the
+ * stream operations of the audio driver in use.
  */
 #ifndef _DSP_H_
 #define _DSP_H_
@@ -19,11 +19,12 @@ int dspdev_present(void);
 
 /**
  * Open /dev/dsp for the new descriptor `e`, whose open(2) flags are `flags`:
- * take the driver's playback stream for O_WRONLY, its capture stream for
- * O_RDONLY, and both for O_RDWR, and set OSS's defaults, unsigned 8-bit mono
- * at 8000 Hz. 0; -EBUSY while another open has the device or a stream is
- * taken; -ENODEV when the driver has no streams or lacks a direction asked
- * for; -EINVAL for an access mode of 3; -ENOMEM.
+ * take a virtual channel of the mix (vchan.h) for O_WRONLY, the driver's
+ * capture stream for O_RDONLY, and both for O_RDWR, and set OSS's defaults,
+ * unsigned 8-bit mono at 8000 Hz, each open its own. Any number of opens
+ * play at once, and one records. 0; -EBUSY while another open records or
+ * the write path has the device; -ENODEV when the driver has no streams or
+ * lacks a direction asked for; -EINVAL for an access mode of 3; -ENOMEM.
  */
 int32_t dspdev_open(fd_entry_t *e, int flags);
 
