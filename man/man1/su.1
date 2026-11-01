@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd November 1, 2026
 .Dt SU 1
 .Os
 .Sh NAME
@@ -84,7 +84,7 @@ The program holds no credential lock.
 .Pp
 After authentication,
 .Nm
-closes every descriptor above standard error through 1023, clears supplementary groups,
+closes every descriptor above standard error, clears supplementary groups,
 sets the group ID, and sets the user ID, in that order.
 In login mode it then enters the target's home directory;
 a failure is fatal.

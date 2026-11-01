@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd November 1, 2026
 .Dt SUDO 8
 .Os
 .Sh NAME
@@ -34,7 +34,7 @@ a continuation of a comment cannot authorize a user.
 .Pp
 For a permitted caller,
 .Nm
-closes descriptors 3 through 1023 before changing identity,
+closes every descriptor from 3 up before changing identity,
 assumes full root identity through its saved ID, and executes
 .Ar COMMAND
 by its explicit path, passing the remaining arguments to it.

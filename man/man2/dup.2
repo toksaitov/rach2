@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd November 1, 2026
 .Dt DUP 2
 .Os
 .Sh NAME
@@ -71,7 +71,7 @@ The latter sets
 .Dv FD_CLOEXEC
 on the new descriptor.
 .Pp
-The descriptor table starts with 16 entries and grows to at most 1024.
+The descriptor table starts with 16 entries and doubles as it fills.
 The soft
 .Dv RLIMIT_NOFILE
 limit is one greater than the highest new descriptor allowed.

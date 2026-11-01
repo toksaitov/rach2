@@ -1,4 +1,4 @@
-.Dd October 15, 2026
+.Dd November 1, 2026
 .Dt PRLIMIT64 2
 .Os
 .Sh NAME
@@ -72,8 +72,11 @@ when the caller's soft limit is reached.
 Real user ID 0 is exempt.
 A change of real user ID moves the thread to the new user's count.
 .It Dv RLIMIT_NOFILE
-One greater than the highest descriptor number the process may receive.
-The hard limit cannot exceed 1024, even for root.
+One greater than the highest descriptor number the process may receive;
+1024 soft and 524288 hard when the process starts.
+The hard limit cannot exceed the kernel's
+.Va fs.nr_open ,
+1048576 by default, even for root.
 Open returns
 .Er EMFILE
 when no descriptor below the soft limit is free.
@@ -235,7 +238,8 @@ For a stored resource, the new soft limit exceeds the new hard limit.
 .It Er EPERM
 A caller without effective user ID 0 tries to raise a stored hard limit
 or select a process with a different real user ID.
-The requested descriptor hard limit exceeds 1024.
+The requested descriptor hard limit exceeds
+.Va fs.nr_open .
 .It Er ESRCH
 No process with ID
 .Fa pid
