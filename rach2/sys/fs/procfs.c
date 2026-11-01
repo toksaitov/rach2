@@ -3,10 +3,11 @@
  *
  * Most files are a snapshot: the text is made into a buffer from the heap
  * when the file is opened and served from there, so a read sees one moment,
- * and dup and fork share the snapshot until the open file description's
- * last close. The text is built by append functions that grow the buffer
- * and write numbers themselves, since the kernel has no snprintf and i686
- * has no 64-bit division here.
+ * and made again by a read from offset 0 after the first. Dup and fork share
+ * the snapshot until the open file description's last close. The text is
+ * built by append functions that grow the buffer and write numbers
+ * themselves, since the kernel has no snprintf and i686 has no 64-bit
+ * division here.
  */
 
 #include "../klog.h"
@@ -325,6 +326,14 @@ struct procfs_file {
     int origin_task; /* the process whose task/<origin_pid> it came from, or 0;
                       * for a /sys file, its node << 8 | its attribute */
     struct mm *mm;   /* /proc/<pid>/mem: a hold on the address space it allowed */
+    /* A snapshot's path, with the process or thread `procfs_resolve_id`
+     * gave at the open, by which a read from offset 0 makes it again
+     * (`procfs_read`); `fresh` while no read has used the text since it was
+     * made, and `gen` counts the times it was made. */
+    struct vpath vp;
+    int gen_pid;
+    int fresh;
+    uint32_t gen;
 };
 
 /**
@@ -4705,24 +4714,81 @@ static int procfs_gen_sysfile(struct procfs_text *t, const struct vpath *vp, int
 
 /* The operations of a descriptor of /proc or /sys. */
 
-/** Read the snapshot from the description's offset, which moves past what
- * is read: the bytes read, 0 at its end, or -EFAULT. */
+static int procfs_render(struct procfs_text *t, const struct vpath *vp, int pid, int *key);
+static int procfs_needs_pid(int kind);
+
+/**
+ * Make the snapshot of `f` again, from the path and the process its open
+ * resolved: 0, or the generator's error, -ESRCH for a process that is gone
+ * as Linux answers a read of its file, with the old text kept. Nothing that
+ * sleeps comes between taking the old text and putting the new.
+ */
+static int procfs_regen(struct procfs_file *f)
+{
+    struct procfs_text text;
+    int key = f->gen_pid;
+    int len = procfs_render(&text, &f->vp, f->gen_pid, &key);
+
+    if (len < 0) {
+        return len == -ENOENT && procfs_needs_pid(f->vp.kind) ? -ESRCH : len;
+    }
+    kfree(f->data);
+    f->data = text.buf;
+    f->len = len;
+    f->gen++;
+    return 0;
+}
+
+/**
+ * Read the snapshot from the description's offset, which moves past what
+ * is read: the bytes read, 0 at its end, -EFAULT when none could be copied,
+ * or the error of making it again. A read from offset 0 makes the snapshot
+ * again unless it is the first read of the text an open or a read made, so
+ * a reader that seeks back to the start, or reads with pread64 at 0, sees
+ * the file as it is then, as Linux's seq_file files are made again.
+ *
+ * The text goes out through a buffer on the stack, a piece at a time, since
+ * the copy to the caller may sleep in a fault and pread64 holds no lock: a
+ * sharer may make the snapshot again meanwhile, which frees the old text.
+ * The read then ends short, before a piece of the new.
+ */
 static int32_t procfs_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
-    uint32_t off, avail, n;
+    char piece[256];
+    uint32_t off, n, done = 0, gen;
+    int rc;
 
-    if (!f || e->ofd->offset >= (uint64_t)f->len) {
+    if (!f) {
+        return 0;
+    }
+    if (e->ofd->offset == 0 && !f->fresh) {
+        rc = procfs_regen(f);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    f->fresh = 0;
+    if (e->ofd->offset >= (uint64_t)f->len) {
         return 0;
     }
     off = (uint32_t)e->ofd->offset;
-    avail = (uint32_t)f->len - off;
-    n = count < avail ? count : avail;
-    if (copy_to_user(buf, f->data + off, n) != 0) {
+    n = (uint32_t)f->len - off < count ? (uint32_t)f->len - off : count;
+    gen = f->gen;
+    while (done < n && f->gen == gen) {
+        uint32_t k = n - done < sizeof(piece) ? n - done : (uint32_t)sizeof(piece);
+
+        k_memcpy(piece, f->data + off + done, k);
+        if (copy_to_user(buf + done, piece, k) != 0) {
+            break;
+        }
+        done += k;
+    }
+    if (done == 0) {
         return -EFAULT;
     }
-    e->ofd->offset = off + n;
-    return (int32_t)n;
+    e->ofd->offset = off + done;
+    return (int32_t)done;
 }
 
 /** The write of a snapshot, which takes none: -EBADF. */
@@ -5897,6 +5963,126 @@ static int procfs_needs_pid(int kind)
 }
 
 /**
+ * Write into `t` the text of the /proc or /sys file `vp` names, the process
+ * or thread `pid` as `procfs_resolve_id` gave it for a file of a process.
+ * `*key` gets what the descriptor's `origin_pid` keeps when it is not `pid`:
+ * the entry of a /proc/sys file, or the key of a /sys file. Returns the
+ * text's length, -EOVERFLOW for a /proc/disk past its bound, or a negative
+ * error from the generator; the caller frees the text either way.
+ */
+static int procfs_gen_text(struct procfs_text *t, const struct vpath *vp, int pid, int *key)
+{
+    int len;
+
+    if (vp->kind == VNODE_PROC_CMDLINE) {
+        /* The boot line and a newline, as Linux's /proc/cmdline has it. */
+        const char *line = kcmdline_get();
+        ap_str(t, line);
+        ap_ch(t, '\n');
+        len = t->len;
+    } else if (vp->kind == VNODE_PROC_DISK) {
+        len = 0;
+        if (procfs_text_room(t, PROCFS_MAX_DISK) == 0) {
+            len = diskinfo_format(diskinfo_get(), t->buf, PROCFS_MAX_DISK);
+            len += diskinfo_format_disks(t->buf + len, PROCFS_MAX_DISK - len);
+            if (len >= PROCFS_MAX_DISK - 1) {
+                klog(KLOG_ERR, "procfs", "/proc/disk: text exceeds its %d-byte bound, refusing",
+                     PROCFS_MAX_DISK);
+                return -EOVERFLOW;
+            }
+        }
+    } else if (vp->kind == VNODE_PROC_FDINFO) {
+        len = procfs_gen_fdinfo(t, pid, vp->procfd);
+    } else if (vp->kind == VNODE_PROC_NET_DEV) {
+        len = procfs_gen_netdev(t);
+    } else if (vp->kind == VNODE_PROC_UPTIME) {
+        len = procfs_gen_uptime(t);
+    } else if (vp->kind == VNODE_PROC_STAT_SYS) {
+        len = procfs_gen_statsys(t);
+    } else if (vp->kind == VNODE_PROC_MEMINFO) {
+        len = procfs_gen_meminfo(t);
+    } else if (vp->kind == VNODE_PROC_LOADAVG) {
+        len = procfs_gen_loadavg(t);
+    } else if (vp->kind == VNODE_PROC_DISKSTATS) {
+        len = procfs_gen_diskstats(t);
+    } else if (vp->kind == VNODE_PROC_PARTITIONS) {
+        len = procfs_gen_partitions(t);
+    } else if (vp->kind == VNODE_PROC_VMSTAT) {
+        len = procfs_gen_vmstat(t);
+    } else if (vp->kind == VNODE_PROC_SLABINFO) {
+        len = procfs_gen_slabinfo(t);
+    } else if (vp->kind == VNODE_PROC_LOCKS) {
+        len = procfs_gen_locks(t);
+    } else if (vp->kind == VNODE_PROC_SWAPS) {
+        /* Linux's header, and no area under it, there being no swap. */
+        ap_str(t, "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n");
+        len = t->len;
+    } else if (vp->kind == VNODE_PROC_VERSION) {
+        /* Linux's "Linux version", then uname's release and version. */
+        ap_str(t, UTS_SYSNAME " version " UTS_RELEASE " " UTS_VERSION "\n");
+        len = t->len;
+    } else if (vp->kind == VNODE_PROC_CPUINFO) {
+        len = procfs_gen_cpuinfo(t);
+    } else if (vp->kind == VNODE_PROC_SYS_FILE) {
+        procfs_sysctl_text(t, vp->sysent);
+        len = t->len;
+        *key = vp->sysent;
+    } else if (vp->kind == VNODE_PROC_MOUNTS) {
+        len = procfs_gen_mounts(t);
+    } else if (vp->kind == VNODE_PROC_AUDIO) {
+        len = procfs_gen_audio(t);
+    } else if (vp->kind == VNODE_PROC_USB) {
+        len = procfs_gen_usb(t);
+    } else if (vp->kind == VNODE_PROC_LOOP) {
+        len = procfs_gen_loop(t);
+    } else if (vp->kind == VNODE_PROC_INTERRUPTS) {
+        len = procfs_gen_interrupts(t);
+    } else if (vp->kind == VNODE_PROC_CONSOLE) {
+        len = procfs_gen_console(t);
+    } else if (vp->kind == VNODE_PROC_FILESYSTEMS) {
+        len = procfs_gen_filesystems(t);
+    } else if (vp->kind == VNODE_PROC_NET_ROUTE) {
+        len = procfs_gen_netroute(t);
+    } else if (vp->kind == VNODE_PROC_NET_ARP) {
+        len = procfs_gen_netarp(t);
+    } else if (vp->kind == VNODE_PROC_NET_TCP) {
+        len = procfs_gen_nettcp(t);
+    } else if (vp->kind == VNODE_PROC_NET_FILE) {
+        len = procfs_gen_net(t, vp->procfile);
+    } else if (vp->kind == VNODE_PROC_SYSVIPC) {
+        len = procfs_gen_sysvipc(t, vp->procfile);
+    } else if (vp->kind == VNODE_SYS_FILE) {
+        len = procfs_gen_sysfile(t, vp, key);
+    } else {
+        len = procfs_gen_pid_file(t, pid, vp);
+    }
+    return len;
+}
+
+/**
+ * Render the file `vp` names into `t`, as `procfs_gen_text` does, which this
+ * starts: its length, with the text in `t->buf` for the caller to free, or
+ * a negative error with nothing to free, -ENOMEM when the heap ran out.
+ */
+static int procfs_render(struct procfs_text *t, const struct vpath *vp, int pid, int *key)
+{
+    int len;
+
+    procfs_text_init(t);
+    len = procfs_gen_text(t, vp, pid, key);
+    /* -1 from a generator that ran out of heap is not -EPERM. */
+    if (len < 0 || t->nomem) {
+        kfree(t->buf);
+        t->buf = NULL;
+    }
+    if (t->nomem) {
+        klog(KLOG_ERR, "procfs", "%s: no memory for the text", procfs_kind_name(vp));
+        return -ENOMEM;
+    }
+    return len;
+}
+
+/**
  * The checks of the flags are in the order that gives the errno of a
  * regular file that exists: O_CREAT with O_EXCL is -EEXIST first, then
  * O_DIRECTORY -ENOTDIR. The files a write reaches then go to opens of their
@@ -5915,7 +6101,7 @@ int procfs_open(const struct vpath *vp, int flags)
     const struct procfs_global *g;
     struct procfs_text text;
     fd_entry_t *e;
-    int fd, len;
+    int fd, len, key;
 
     if (procfs_needs_pid(vp->kind)) {
         pid = procfs_resolve_id(vp);
@@ -5956,106 +6142,18 @@ int procfs_open(const struct vpath *vp, int flags)
     if (!f) {
         return -ENOMEM;
     }
-    procfs_text_init(&text);
-    if (vp->kind == VNODE_PROC_CMDLINE) {
-        /* The boot line and a newline, as Linux's /proc/cmdline has it. */
-        const char *line = kcmdline_get();
-        ap_str(&text, line);
-        ap_ch(&text, '\n');
-        len = text.len;
-    } else if (vp->kind == VNODE_PROC_DISK) {
-        len = 0;
-        if (procfs_text_room(&text, PROCFS_MAX_DISK) == 0) {
-            len = diskinfo_format(diskinfo_get(), text.buf, PROCFS_MAX_DISK);
-            len += diskinfo_format_disks(text.buf + len, PROCFS_MAX_DISK - len);
-            if (len >= PROCFS_MAX_DISK - 1) {
-                kfree(text.buf);
-                kfree(f);
-                klog(KLOG_ERR, "procfs", "/proc/disk: text exceeds its %d-byte bound, refusing",
-                     PROCFS_MAX_DISK);
-                return -EOVERFLOW;
-            }
-        }
-    } else if (vp->kind == VNODE_PROC_FDINFO) {
-        len = procfs_gen_fdinfo(&text, pid, vp->procfd);
-    } else if (vp->kind == VNODE_PROC_NET_DEV) {
-        len = procfs_gen_netdev(&text);
-    } else if (vp->kind == VNODE_PROC_UPTIME) {
-        len = procfs_gen_uptime(&text);
-    } else if (vp->kind == VNODE_PROC_STAT_SYS) {
-        len = procfs_gen_statsys(&text);
-    } else if (vp->kind == VNODE_PROC_MEMINFO) {
-        len = procfs_gen_meminfo(&text);
-    } else if (vp->kind == VNODE_PROC_LOADAVG) {
-        len = procfs_gen_loadavg(&text);
-    } else if (vp->kind == VNODE_PROC_DISKSTATS) {
-        len = procfs_gen_diskstats(&text);
-    } else if (vp->kind == VNODE_PROC_PARTITIONS) {
-        len = procfs_gen_partitions(&text);
-    } else if (vp->kind == VNODE_PROC_VMSTAT) {
-        len = procfs_gen_vmstat(&text);
-    } else if (vp->kind == VNODE_PROC_SLABINFO) {
-        len = procfs_gen_slabinfo(&text);
-    } else if (vp->kind == VNODE_PROC_LOCKS) {
-        len = procfs_gen_locks(&text);
-    } else if (vp->kind == VNODE_PROC_SWAPS) {
-        /* Linux's header, and no area under it, there being no swap. */
-        ap_str(&text, "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n");
-        len = text.len;
-    } else if (vp->kind == VNODE_PROC_VERSION) {
-        /* Linux's "Linux version", then uname's release and version. */
-        ap_str(&text, UTS_SYSNAME " version " UTS_RELEASE " " UTS_VERSION "\n");
-        len = text.len;
-    } else if (vp->kind == VNODE_PROC_CPUINFO) {
-        len = procfs_gen_cpuinfo(&text);
-    } else if (vp->kind == VNODE_PROC_SYS_FILE) {
-        procfs_sysctl_text(&text, vp->sysent);
-        len = text.len;
-        pid = vp->sysent;
-    } else if (vp->kind == VNODE_PROC_MOUNTS) {
-        len = procfs_gen_mounts(&text);
-    } else if (vp->kind == VNODE_PROC_AUDIO) {
-        len = procfs_gen_audio(&text);
-    } else if (vp->kind == VNODE_PROC_USB) {
-        len = procfs_gen_usb(&text);
-    } else if (vp->kind == VNODE_PROC_LOOP) {
-        len = procfs_gen_loop(&text);
-    } else if (vp->kind == VNODE_PROC_INTERRUPTS) {
-        len = procfs_gen_interrupts(&text);
-    } else if (vp->kind == VNODE_PROC_CONSOLE) {
-        len = procfs_gen_console(&text);
-    } else if (vp->kind == VNODE_PROC_FILESYSTEMS) {
-        len = procfs_gen_filesystems(&text);
-    } else if (vp->kind == VNODE_PROC_NET_ROUTE) {
-        len = procfs_gen_netroute(&text);
-    } else if (vp->kind == VNODE_PROC_NET_ARP) {
-        len = procfs_gen_netarp(&text);
-    } else if (vp->kind == VNODE_PROC_NET_TCP) {
-        len = procfs_gen_nettcp(&text);
-    } else if (vp->kind == VNODE_PROC_NET_FILE) {
-        len = procfs_gen_net(&text, vp->procfile);
-    } else if (vp->kind == VNODE_PROC_SYSVIPC) {
-        len = procfs_gen_sysvipc(&text, vp->procfile);
-    } else if (vp->kind == VNODE_SYS_FILE) {
-        len = procfs_gen_sysfile(&text, vp, &pid);
-    } else {
-        len = procfs_gen_pid_file(&text, pid, vp);
-    }
-    /* -1 from a generator that ran out of heap is not -EPERM. */
-    if (len < 0 && !text.nomem) {
-        kfree(text.buf);
+    key = pid;
+    len = procfs_render(&text, vp, pid, &key);
+    if (len < 0) {
         kfree(f);
         return len;
     }
-    if (text.nomem) {
-        kfree(text.buf);
-        kfree(f);
-        klog(KLOG_ERR, "procfs", "%s: no memory for the text", procfs_kind_name(vp));
-        return -ENOMEM;
-    }
     f->data = text.buf;
     f->len = len;
-    f->origin_pid = pid;
+    f->fresh = 1;
+    f->vp = *vp;
+    f->gen_pid = pid;
+    f->origin_pid = key;
     f->origin_task = vp->tid != 0 ? procfs_resolve_pid(vp->pid) : 0;
     g = procfs_global_find(vp->kind, 0);
     if (g) {
