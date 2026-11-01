@@ -840,6 +840,18 @@ Blocked threads add no entries to examine.
 .It Li vm_gap_steps
 Candidate gaps examined by the virtual memory free-range search since boot,
 modulo 2^32.
+.It Li clock_calls
+System calls of the clock since boot, modulo 2^32:
+.Fn clock_gettime ,
+.Fn clock_gettime64 ,
+.Fn gettimeofday
+and
+.Fn time .
+A call the vDSO answers is not counted.
+.It Li vdso_tsc
+1 when the vDSO reads the clock from the TSC, so that its clock calls make
+no system call, and 0 when they make one
+.Pq Xr vdso 7 .
 .It Li sleeps_interrupted
 Sleeps in
 .Xr nanosleep 2
@@ -1327,6 +1339,12 @@ for a private region or
 for a shared one, and from column 73 the file the region maps,
 .Ql [heap] ,
 .Ql [stack] ,
+.Ql [vvar]
+and
+.Ql [vdso]
+for the vDSO's data page and library on x86-64, private and never
+writable
+.Pq Xr vdso 7 ,
 the program for the segments of its image, or the dynamic linker the
 program names for the segments of the linker's.
 The offset is the file's at the region's first page, and 0 for a region
@@ -1526,4 +1544,5 @@ process also names a directory, which is not listed.
 .Xr sysfs 5 ,
 .Xr disk 7 ,
 .Xr memory 7 ,
-.Xr rach2 7
+.Xr rach2 7 ,
+.Xr vdso 7

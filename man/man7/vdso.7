@@ -1,0 +1,123 @@
+.Dd November 1, 2026
+.Dt VDSO 7
+.Os
+.Sh NAME
+.Nm vdso
+.Nd the clock calls a program makes without entering the kernel
+.Sh DESCRIPTION
+The x86-64 kernel maps a small shared library, the vDSO, into every image
+that
+.Xr execve 2
+starts, and gives its address as the auxiliary vector's
+.Dv AT_SYSINFO_EHDR .
+It has five functions, each of version
+.Dv LINUX_2.6
+in the library's version tables, with a weak alias of the plain name:
+.Bl -tag -width "__vdso_clock_gettime"
+.It Fn __vdso_clock_gettime
+.Xr clock_gettime 2
+of
+.Dv CLOCK_REALTIME ,
+.Dv CLOCK_MONOTONIC ,
+.Dv CLOCK_MONOTONIC_RAW ,
+.Dv CLOCK_BOOTTIME
+and the two coarse clocks, and the system call for any other clock.
+.It Fn __vdso_gettimeofday
+.Xr gettimeofday 2 ,
+and the system call when the time zone pointer is not null.
+.It Fn __vdso_time
+.Xr time 2 .
+.It Fn __vdso_getcpu
+.Xr getcpu 2 ,
+from
+.Ic rdtscp
+where the processor has it, whose
+.Dv IA32_TSC_AUX
+the kernel sets to each processor's number, and the system call where it
+does not; the node is 0.
+.It Fn __vdso_clock_getres
+.Xr clock_getres 2
+of the same six clocks.
+.El
+.Pp
+Each returns what the system call returns, a negated error number
+included, and is found as musl and glibc find it: through the library's
+.Dv DT_HASH
+table and its version definitions.
+Both libraries call the clock through it on x86-64; the i686 kernel maps no
+vDSO and gives no
+.Dv AT_SYSINFO_EHDR ,
+so every clock call there is a system call.
+.Ss The clock from the TSC
+The clock functions answer without the kernel only where it keeps its clock from
+the processor's time-stamp counter.
+At boot it measures the counter against the reference that keeps the
+clock, the HPET or the PM timer, or the 8254 on a machine with neither,
+where
+.Ic cpuid
+says the counter runs at one rate whatever the processor's clock does, or
+.Cm rach2.tscreliable
+on the command line says to take it as one that does, as QEMU's emulator
+needs; never under
+.Cm rach2.notsc .
+As each further processor starts, it and the boot processor read the
+counter in turn for two ticks, and a reading behind the other's turns the
+TSC clock off.
+The boot log says which clock the vDSO reads:
+.Bd -literal -offset indent
+vdso: clock: the tsc, 4192065 counts a tick
+vdso: clock: the system call; no tsc at one rate was measured
+.Ed
+.Pp
+The kernel keeps the clock's state in a page of its own, mapped read-only
+one page below the library: the counter's value at the last tick, the time
+then and the nanoseconds a count adds, which it changes at each tick under
+a sequence count that a reader reads before and after.
+At each tick it steers the rate toward the reference by at most one part
+in 2000, so that the two never drift apart and no reading is earlier than
+one before it; a clock more than a tick behind is moved forward at once,
+and one ahead is never moved back.
+The kernel's own clock calls read the same clock while it runs, so a
+reading through the vDSO and one by the system call agree.
+.Xr clock_getres 2
+then gives a count of the counter, rounded up to a nanosecond, for the
+four fine clocks.
+.Pp
+Where the clock does not run from the TSC, each clock function makes the
+system call itself.
+.Sh FILES
+.Bl -tag -width "/proc/PID/maps"
+.It Pa /proc/PID/maps
+The data page as
+.Li [vvar] ,
+readable alone, and the library as
+.Li [vdso] ,
+readable and executable, each one page, private, one free page above the
+range
+.Xr mmap 2
+places mappings in.
+.It Pa /proc/stat
+.Li vdso_tsc ,
+1 where the vDSO reads the TSC and 0 where it makes the system call, and
+.Li clock_calls ,
+the system calls of the clock made since boot:
+.Fn clock_gettime ,
+.Fn clock_gettime64 ,
+.Fn gettimeofday
+and
+.Fn time .
+.El
+.Sh EXAMPLES
+Count the system calls a program's clock calls make:
+.Bd -literal -offset indent
+$ grep clock_calls /proc/stat; date; grep clock_calls /proc/stat
+.Ed
+.Sh SEE ALSO
+.Xr execve 2 ,
+.Xr gettimeofday 2 ,
+.Xr sched_setscheduler 2 ,
+.Xr proc 5
+.Sh BUGS
+The library has no unwind tables, so a debugger cannot step out of its
+functions by them.
+A tracer cannot write into its pages, so a breakpoint cannot be set there.

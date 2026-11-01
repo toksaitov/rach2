@@ -113,6 +113,11 @@ A fork passes the set on, and an exec keeps it.
 stores the number of the processor the caller runs on, which may change as
 soon as the call returns, and 0 for the NUMA node, where its non-null
 arguments point.
+On x86-64, musl and glibc call it through the vDSO, which reads the number
+with
+.Ic rdtscp
+and enters the kernel only on a processor without that instruction
+.Pq Xr vdso 7 .
 .Pp
 .Fn sched_yield
 puts the caller behind the other ready processes in the round-robin
@@ -242,4 +247,5 @@ No process has the ID
 .El
 .Sh SEE ALSO
 .Xr getpriority 2 ,
-.Xr proc 5
+.Xr proc 5 ,
+.Xr vdso 7
