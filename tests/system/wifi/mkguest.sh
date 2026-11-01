@@ -32,14 +32,25 @@ if [ $# -ne 1 ]; then
     echo "usage: mkguest.sh OUTDIR" >&2
     exit 2
 fi
-OUT="$1"
+mkdir -p "$1"
+OUT="$(cd "$1" && pwd)"
+# absolute PATH: PATH from the root, for a program run from another directory.
+absolute()
+{
+    case $1 in
+        /*) echo "$1" ;;
+        *) echo "$PWD/$1" ;;
+    esac
+}
+MKCPIO="$(absolute "$MKCPIO")"
+SHA256="$(absolute "$SHA256")"
 
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-mkdir -p "$REPO/build/tmp" "$CACHE" "$OUT"
+mkdir -p "$REPO/build/tmp" "$CACHE"
 work="$(mktemp -d "$REPO/build/tmp/rach2-wifiguest.XXXXXX")"
 root="$work/root"
 mkdir "$root"
@@ -82,21 +93,37 @@ fetch()
 
 # unpack FILE DIR [MEMBER...]: extract an .apk, three gzip members holding
 # one tar stream, into DIR, without the package's own metadata at its top;
-# only the MEMBERs when they are given.
+# only the MEMBERs when they are given. Its symbolic links are not made but
+# added to $work/links, as NAME and TARGET, for the archive's list: MSYS2's
+# tar cannot make a link to an absolute target, which the guest's root has
+# and the host does not.
 unpack()
 {
     file="$1"
     dest="$2"
     shift 2
     mkdir -p "$dest"
-    if ! tar -xzf "$file" -C "$dest" "$@" 2> "$work/tar.err"; then
+    if ! tar -tvzf "$file" "$@" > "$work/listing" 2> "$work/tar.err"; then
+        cat "$work/tar.err" >&2
+        echo "mkguest: ${file##*/}: cannot list" >&2
+        return 1
+    fi
+    awk '/^l/ {
+        i = index($0, " -> ")
+        n = split(substr($0, 1, i - 1), word, " ")
+        print word[n] "\t" substr($0, i + 4)
+    }' "$work/listing" > "$work/links.one"
+    cut -f 1 "$work/links.one" > "$work/exclude"
+    if ! tar -xzf "$file" -C "$dest" -X "$work/exclude" "$@" 2> "$work/tar.err"; then
         cat "$work/tar.err" >&2
         echo "mkguest: ${file##*/}: cannot extract" >&2
         return 1
     fi
+    cat "$work/links.one" >> "$work/links"
     rm -f "$dest"/.PKGINFO "$dest"/.SIGN.* "$dest"/.pre-* "$dest"/.post-* "$dest"/.trigger
 }
 
+: > "$work/links"
 grep -v '^#' "$DIR/packages.txt" | while read -r repo name version digest; do
     [ -n "$name" ] || continue
     file="$(fetch "$repo" "$name" "$version" "$digest")"
@@ -171,26 +198,34 @@ if [ -n "${HWSIMRELAY:-}" ]; then
 fi
 
 # The archive's list: the modes come from where a file is, since a host such
-# as MSYS2 has no executable bit for a program it did not make.
-(cd "$root" && find . | LC_ALL=C sort) | while read -r p; do
-    p="${p#./}"
-    [ "$p" != . ] || continue
-    if [ -L "$root/$p" ]; then
-        printf 'l\t777\t%s\t%s\n' "$p" "$(readlink "$root/$p")"
-    elif [ -d "$root/$p" ]; then
-        printf 'd\t755\t%s\n' "$p"
-    else
-        case $p in
-            init | bin/* | sbin/* | usr/bin/* | usr/sbin/* | usr/libexec/* | *.so | *.so.*)
-                mode=755 ;;
-            etc/wifiap/certs/*.key) mode=600 ;;
-            *) mode=644 ;;
-        esac
-        printf 'f\t%s\t%s\t%s\n' "$mode" "$p" "$root/$p"
-    fi
-done > "$work/list"
+# as MSYS2 has no executable bit for a program it did not make, and a file's
+# source is relative to the root, where mkcpio runs, since a native program
+# on Windows cannot open MSYS2's absolute paths written in a file.
+{
+    (cd "$root" && find .) | while read -r p; do
+        p="${p#./}"
+        [ "$p" != . ] || continue
+        if [ -L "$root/$p" ]; then
+            printf '%s\tl\t777\t%s\t%s\n' "$p" "$p" "$(readlink "$root/$p")"
+        elif [ -d "$root/$p" ]; then
+            printf '%s\td\t755\t%s\n' "$p" "$p"
+        else
+            case $p in
+                init | bin/* | sbin/* | usr/bin/* | usr/sbin/* | usr/libexec/* | *.so | *.so.*)
+                    mode=755 ;;
+                etc/wifiap/certs/*.key) mode=600 ;;
+                *) mode=644 ;;
+            esac
+            printf '%s\tf\t%s\t%s\t%s\n' "$p" "$mode" "$p" "$p"
+        fi
+    done
+    # A file of root/ takes the place of a package's link.
+    while IFS="$(printf '\t')" read -r p target; do
+        [ -e "$root/$p" ] || printf '%s\tl\t777\t%s\t%s\n' "$p" "$p" "$target"
+    done < "$work/links"
+} | LC_ALL=C sort -u | cut -f 2- > "$work/list"
 
-"$MKCPIO" "$OUT/initrd.part" "$work/list"
+(cd "$root" && "$MKCPIO" "$OUT/initrd.part" "$work/list")
 cp "$work/kernel/boot/vmlinuz-lts" "$OUT/vmlinuz.part"
 mv "$OUT/vmlinuz.part" "$OUT/vmlinuz"
 mv "$OUT/initrd.part" "$OUT/initrd"

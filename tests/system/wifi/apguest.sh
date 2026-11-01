@@ -6,8 +6,9 @@
 # Usage: apguest.sh [-a ACCEL] [-b BASE] [-p PROFILE] [-m MODE] [-o DIR]
 #                   [-d | -R IMAGE]
 #
-#   -a ACCEL    QEMU's accelerator: RACH2_QEMU_ACCEL, or kvm where /dev/kvm
-#               opens, whpx on Windows and tcg elsewhere
+#   -a ACCEL    QEMU's accelerator: RACH2_QEMU_ACCEL, or else kvm on Linux and
+#               whpx on Windows, each with tcg after it for QEMU to take when
+#               the first does not start, and tcg elsewhere
 #   -b BASE     the first of the five host ports, 15550 by default:
 #                 BASE    UDP, the AP guest's relay, its port 5550
 #                 BASE+1  UDP, the Rach2 machine's relay, its port 5550
@@ -92,11 +93,15 @@ if [ ! -f "$GUEST/vmlinuz" ] || [ ! -f "$GUEST/initrd" ]; then
 fi
 if [ -z "$ACCEL" ]; then
     case "$(uname -s)" in
-        MINGW* | MSYS*) ACCEL=whpx ;;
-        Linux) if [ -w /dev/kvm ]; then ACCEL=kvm; else ACCEL=tcg; fi ;;
+        MINGW* | MSYS*) ACCEL="whpx tcg" ;;
+        Linux) ACCEL="kvm tcg" ;;
         *) ACCEL=tcg ;;
     esac
 fi
+accel=
+for a in $ACCEL; do
+    accel="$accel -accel $a"
+done
 
 # native PATH: PATH as the native QEMU of Windows reads it.
 native()
@@ -132,7 +137,8 @@ log="$work/apguest.log"
 
 append="console=ttyS0 panic=-1 quiet wifiap.profile=$PROFILE wifiap.run=$MODE"
 [ -z "$PEER" ] || append="$append wifiap.peer=$((BASE + 1))"
-set -- -accel "$ACCEL" -cpu max -m 512 -smp 2 -no-reboot -display none \
+# shellcheck disable=SC2086 # one -accel option for each accelerator
+set -- $accel -cpu max -m 512 -smp 2 -no-reboot -display none \
     -kernel "$(native "$GUEST/vmlinuz")" -initrd "$(native "$GUEST/initrd")" \
     -append "$append" \
     -netdev "user,id=n0,hostfwd=tcp:127.0.0.1:$((BASE + 2))-:2222,hostfwd=tcp:127.0.0.1:$((BASE + 3))-:2223" \
@@ -213,7 +219,8 @@ if [ ! -f "$initrd" ]; then
     exit 1
 fi
 status=0
-"$machine" -accel "$ACCEL" -cpu max -display none -no-reboot \
+# shellcheck disable=SC2086 # as for the guest
+"$machine" $accel -cpu max -display none -no-reboot \
     -kernel "$(native "$build/rach2/kernel")" -initrd "$(native "$initrd")" \
     -netdev user,id=n0 -device e1000,netdev=n0 \
     -netdev "user,id=n1,net=10.0.4.0/24,hostfwd=udp:127.0.0.1:$((BASE + 1))-:5550" \
