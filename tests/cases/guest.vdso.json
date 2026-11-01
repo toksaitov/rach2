@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "family_id": "guest.vdso",
+  "summary": "The vDSO answers the clock calls from the TSC without a system call where the kernel keeps its clock from the TSC, and makes the system call where it does not; each case boots the test image on two processors and runs vdsomusl",
+  "cases": [
+    {
+      "case_id": "guest.vdso.tsc",
+      "behavior": "Under rach2.tscreliable, on two processors, the x86-64 vDSO is mapped where AT_SYSINFO_EHDR says, its functions are found as libc finds them, and the clock calls it answers read the TSC and agree with the system call's, in order on every processor, and make no system call by the kernel's count",
+      "units": ["musl/vdsomusl"],
+      "domain": "guest",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": ["clock=tsc"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.tscreliable"]}},
+      "execution": {"program": "vdsomusl", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "none", "cleanup": "nothing to remove"},
+      "assertions": [
+        {"assertion_id": "absent", "checks": "an i686 image has no AT_SYSINFO_EHDR, and maps names neither [vvar] nor [vdso]", "source": "program"},
+        {"assertion_id": "auxv", "checks": "AT_SYSINFO_EHDR gives an x86-64 ELF header of a shared object", "source": "program"},
+        {"assertion_id": "maps", "checks": "/proc/self/maps has [vvar], one r--p page, just below AT_SYSINFO_EHDR and [vdso], one r-xp page, at it", "source": "program"},
+        {"assertion_id": "symbols", "checks": "the image's hash and version tables give __vdso_clock_gettime, __vdso_gettimeofday, __vdso_time, __vdso_getcpu and __vdso_clock_getres of version LINUX_2.6", "source": "program"},
+        {"assertion_id": "source", "checks": "/proc/stat's vdso_tsc is 1", "source": "program"},
+        {"assertion_id": "agree", "checks": "real time, the monotonic, raw and boot clocks and the two coarse clocks read through the vDSO, and its gettimeofday and time, each lie between two readings by the system call", "source": "program"},
+        {"assertion_id": "resolution", "checks": "the vDSO's clock_getres gives what the system call gives for clocks 0 to 7, and its clock_gettime and clock_getres give -EINVAL for clock 12", "source": "program"},
+        {"assertion_id": "getcpu", "checks": "pinned to each processor in turn, the vDSO's getcpu and sched_getcpu give that processor, on node 0", "source": "program"},
+        {"assertion_id": "ordered", "checks": "a million monotonic readings through the vDSO on one processor, and two thousand on each processor in turn, never go back", "source": "program"},
+        {"assertion_id": "calls", "checks": "100,000 calls of clock_gettime, gettimeofday and time through musl raise /proc/stat's clock_calls by fewer than 1,000", "source": "program"}
+      ],
+      "branches": [
+        {"group_id": "arch", "decided_by": "report", "alternatives": [{"alternative_id": "i686", "when": null, "assertions": ["absent"]}, {"alternative_id": "x86-64", "when": null, "assertions": ["auxv", "maps", "symbols", "agree", "resolution", "getcpu", "ordered"]}]}
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "vdsomusl", "node": "tests/musl/vdsomusl", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
+    },
+    {
+      "case_id": "guest.vdso.syscall",
+      "behavior": "Under rach2.notsc, on two processors, the x86-64 vDSO is mapped and found as with the TSC, and each of its functions makes the system call, so that every clock call through musl is counted; the i686 kernel maps no vDSO and every clock call is a system call",
+      "units": ["musl/vdsomusl"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": ["clock=syscall"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.notsc"]}},
+      "execution": {"program": "vdsomusl", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "none", "cleanup": "nothing to remove"},
+      "assertions": [
+        {"assertion_id": "absent", "checks": "an i686 image has no AT_SYSINFO_EHDR, and maps names neither [vvar] nor [vdso]", "source": "program"},
+        {"assertion_id": "auxv", "checks": "AT_SYSINFO_EHDR gives an x86-64 ELF header of a shared object", "source": "program"},
+        {"assertion_id": "maps", "checks": "/proc/self/maps has [vvar], one r--p page, just below AT_SYSINFO_EHDR and [vdso], one r-xp page, at it", "source": "program"},
+        {"assertion_id": "symbols", "checks": "the image's hash and version tables give __vdso_clock_gettime, __vdso_gettimeofday, __vdso_time, __vdso_getcpu and __vdso_clock_getres of version LINUX_2.6", "source": "program"},
+        {"assertion_id": "source", "checks": "/proc/stat's vdso_tsc is 0", "source": "program"},
+        {"assertion_id": "agree", "checks": "real time, the monotonic, raw and boot clocks and the two coarse clocks read through the vDSO, and its gettimeofday and time, each lie between two readings by the system call", "source": "program"},
+        {"assertion_id": "resolution", "checks": "the vDSO's clock_getres gives what the system call gives for clocks 0 to 7, and its clock_gettime and clock_getres give -EINVAL for clock 12", "source": "program"},
+        {"assertion_id": "getcpu", "checks": "pinned to each processor in turn, the vDSO's getcpu and sched_getcpu give that processor, on node 0", "source": "program"},
+        {"assertion_id": "ordered", "checks": "a million monotonic readings through the vDSO on one processor, and two thousand on each processor in turn, never go back", "source": "program"},
+        {"assertion_id": "calls", "checks": "100,000 calls of clock_gettime, gettimeofday and time through musl raise /proc/stat's clock_calls by at least 100,000", "source": "program"}
+      ],
+      "branches": [
+        {"group_id": "arch", "decided_by": "report", "alternatives": [{"alternative_id": "i686", "when": null, "assertions": ["absent"]}, {"alternative_id": "x86-64", "when": null, "assertions": ["auxv", "maps", "symbols", "agree", "resolution", "getcpu", "ordered"]}]}
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "vdsomusl", "node": "tests/musl/vdsomusl", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the vDSO makes the system call only when the kernel boots with rach2.notsc"}
+    }
+  ]
+}

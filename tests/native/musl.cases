@@ -97,6 +97,8 @@ case musl/tmpfsmusl root:krffs -- musl/tmpfsmusl
 case musl/truncmusl root:krffs ids:1000 -- musl/truncmusl
 case musl/ttymusl pty:ttymusl.in -- musl/ttymusl
 case musl/unixmusl root:krffs ids:1000,65534 -- musl/unixmusl
+# The machine's TSC runs at one rate, so its kernel keeps the clock from it.
+case musl/vdsomusl -- musl/vdsomusl clock=tsc
 case musl/vforkmusl -- musl/vforkmusl
 case musl/vmamusl -- musl/vmamusl
 case musl/waitidmusl -- musl/waitidmusl

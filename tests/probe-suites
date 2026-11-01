@@ -52,3 +52,4 @@ musl/bindholdmusl textbusy
 bootlogprobe subset
 musl/procfilesmusl procfiles
 blankprobe screen
+musl/vdsomusl vdso
