@@ -19,6 +19,7 @@
 #include "../mm/kheap.h"
 #include "../mm/pagecache.h"
 #include "bcache.h"
+#include "dcache.h"
 
 #include "../block/loop.h"
 #include "synthfs.h"
@@ -2546,6 +2547,11 @@ static void ap_cpu_ticks(struct procfs_text *t, uint64_t user, uint64_t busy, ui
  * and `loopback_left_idle` is those a tick found on it while every processor
  * was halted in an idle wait, which waited for the timer.
  *
+ * The `namecache_` counts are the name cache's (dcache.h): the resolver's
+ * lookups it answered and those it passed to the file system, each a read of
+ * a directory, since boot, and the entries it has now, and of those the
+ * negative ones.
+ *
  * The `cpu` line, and the `cpuN` line of each processor online, have user,
  * nice, system and idle in that order, then six columns this kernel does not
  * count, which are zero: a processor's ticks in user mode, in the kernel and
@@ -2561,6 +2567,7 @@ static void ap_cpu_ticks(struct procfs_text *t, uint64_t user, uint64_t busy, ui
  */
 static int procfs_gen_statsys(struct procfs_text *t)
 {
+    struct dcache_counts names;
     uint64_t user = 0, busy = 0, idle = 0;
     const process_t *p;
     uint32_t running = 0;
@@ -2625,6 +2632,15 @@ static int procfs_gen_statsys(struct procfs_text *t)
     ap_u32(t, ip_loop_delivered(IP_LOOP_FROM_CALL));
     ap_str(t, "\nloopback_left_idle ");
     ap_u32(t, ip_loop_left_idle());
+    dcache_counts(&names);
+    ap_str(t, "\nnamecache_hits ");
+    ap_u32(t, names.hits);
+    ap_str(t, "\nnamecache_misses ");
+    ap_u32(t, names.misses);
+    ap_str(t, "\nnamecache_entries ");
+    ap_u32(t, names.entries);
+    ap_str(t, "\nnamecache_negative ");
+    ap_u32(t, names.negative);
     ap_ch(t, '\n');
     for (p = proc_list; p; p = p->next) {
         if (p->state == PROC_RUNNING || p->state == PROC_READY) {

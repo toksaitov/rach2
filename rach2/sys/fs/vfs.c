@@ -17,6 +17,7 @@
 #include "../proc/ns.h"
 #include "../tty/pty.h"
 #include "bcache.h"
+#include "dcache.h"
 #include "devfs.h"
 #include "fat32.h"
 #include "exfat.h"
@@ -222,6 +223,21 @@ int vfs_ns_held_by_caller(void)
     for (i = 0; i < mount_slots; i++) {
         if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->ns_holder == me &&
             mounts[i]->ns_depth > 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int vfs_ns_held_other(const struct vfs_mount *mnt)
+{
+    int me = current_proc ? (int)current_proc->pid : 0;
+    const struct vfs_mount *base = vfs_mount_base(mnt);
+    int i;
+
+    for (i = 0; i < mount_slots; i++) {
+        if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i] != base &&
+            mounts[i]->ns_holder == me && mounts[i]->ns_depth > 0) {
             return 1;
         }
     }
@@ -1313,7 +1329,7 @@ begin:
             continue;
         }
 
-        rc = cur.mnt->type->ops->lookup(mount_base(cur.mnt), cur.node, comp, &found);
+        rc = dcache_lookup(mount_base(cur.mnt), cur.node, comp, &found);
         if (rc != 0) {
             goto out_err;
         }
@@ -1859,6 +1875,7 @@ int vfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
         return -EROFS;
     }
     rc = mnt->type->ops->create(mount_base(mnt), dir, name, mode, node);
+    dcache_forget(mount_base(mnt), dir, name);
     if (rc == 0) {
         watch_made(mnt, dir, name, 0);
     }
@@ -1883,6 +1900,7 @@ int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
     watched = inotify_watches && watched_entry(mnt, dir, name, &was) == 0 &&
               watched_node(mnt, dir, &parent) == 0;
     rc = mnt->type->ops->unlink(mount_base(mnt), dir, name);
+    dcache_forget(mount_base(mnt), dir, name);
     if (rc == 0) {
         vfs_name_unlink(mnt, dir, name);
     }
@@ -1903,6 +1921,7 @@ int vfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
         return -EROFS;
     }
     rc = mnt->type->ops->mkdir(mount_base(mnt), dir, name, mode);
+    dcache_forget(mount_base(mnt), dir, name);
     if (rc == 0) {
         watch_made(mnt, dir, name, IN_ISDIR);
     }
@@ -1912,6 +1931,7 @@ int vfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 int vfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
 {
     struct vfs_stat was, parent;
+    void *victim;
     int watched;
     int rc;
 
@@ -1926,7 +1946,10 @@ int vfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     }
     watched = inotify_watches && watched_entry(mnt, dir, name, &was) == 0 &&
               watched_node(mnt, dir, &parent) == 0;
+    victim = dcache_victim(mount_base(mnt), dir, name);
     rc = mnt->type->ops->rmdir(mount_base(mnt), dir, name);
+    dcache_forget(mount_base(mnt), dir, name);
+    dcache_forget_dir(mount_base(mnt), victim, rc == 0);
     if (rc == 0 && watched) {
         watch_removed(mnt, parent.ino, name, &was);
     }
@@ -1959,6 +1982,7 @@ int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *n
 {
     struct vfs_stat moved, replaced, from, to;
     int watched, had_target = 0, same;
+    void *victim;
     int rc;
 
     if (vfs_mount_gone(mnt)) {
@@ -1977,7 +2001,11 @@ int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *n
             watched_entry(mnt, newdir, newname, &replaced) == 0 && replaced.ino != moved.ino;
     }
     same = vfs_name_same(mnt, olddir, oldname, newdir, newname);
+    victim = dcache_victim(mount_base(mnt), newdir, newname);
     rc = mnt->type->ops->rename(mount_base(mnt), olddir, oldname, newdir, newname);
+    dcache_forget(mount_base(mnt), olddir, oldname);
+    dcache_forget(mount_base(mnt), newdir, newname);
+    dcache_forget_dir(mount_base(mnt), victim, rc == 0);
     if (rc == 0 && !same) {
         vfs_name_rename(mnt, olddir, oldname, newdir, newname);
     }
@@ -2018,6 +2046,7 @@ int vfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
         return -EPERM; /* vfs_link's rule */
     }
     rc = mnt->type->ops->link(mount_base(mnt), dir, name, node);
+    dcache_forget(mount_base(mnt), dir, name);
     if (rc == 0 && inotify_watches && watched_node(mnt, node, &st) == 0) {
         inotify_file(mnt, st.ino, IN_ATTRIB);
         watch_made(mnt, dir, name, 0);
@@ -2039,6 +2068,7 @@ int vfs_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char *
         return -EPERM;
     }
     rc = mnt->type->ops->symlink(mount_base(mnt), dir, name, target);
+    dcache_forget(mount_base(mnt), dir, name);
     if (rc == 0) {
         watch_made(mnt, dir, name, 0);
     }
@@ -2060,6 +2090,7 @@ int vfs_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
         return -EPERM;
     }
     rc = mnt->type->ops->mknod(mount_base(mnt), dir, name, mode, rdev, node);
+    dcache_forget(mount_base(mnt), dir, name);
     if (rc == 0) {
         watch_made(mnt, dir, name, 0);
     }
@@ -2550,7 +2581,7 @@ static int kfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
     return 0;
 }
 
-const struct vfs_type vfs_krffs_type = {"krffs", kfs_mount, &krffs_ops, 1, 0};
+const struct vfs_type vfs_krffs_type = {"krffs", kfs_mount, &krffs_ops, 1, 0, 0};
 
 /* The three synthetic types, of /dev, /proc and /sys. */
 
@@ -2999,9 +3030,9 @@ static int sysfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flag
     return synth_mount_root(mnt, dev, flags, "sys");
 }
 
-const struct vfs_type vfs_devfs_type = {"devfs", devfs_mount, &devfs_vops, 0, 1};
-const struct vfs_type vfs_procfs_type = {"proc", procfs_mount, &procfs_vops, 0, 1};
-const struct vfs_type vfs_sysfs_type = {"sysfs", sysfs_mount, &sysfs_vops, 0, 1};
+const struct vfs_type vfs_devfs_type = {"devfs", devfs_mount, &devfs_vops, 0, 1, 0};
+const struct vfs_type vfs_procfs_type = {"proc", procfs_mount, &procfs_vops, 0, 1, 0};
+const struct vfs_type vfs_sysfs_type = {"sysfs", sysfs_mount, &sysfs_vops, 0, 1, 0};
 
 const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node)
 {
@@ -3940,6 +3971,7 @@ static int unmount_mount(struct vfs_mount *m)
     if (m->bind_of) {
         return unmount_bind(m);
     }
+    dcache_forget_mount(m);
     vfs_ns_lock(m);
     gone = vfs_mount_gone(m);
     if (!gone && m->type->ops->sync) {

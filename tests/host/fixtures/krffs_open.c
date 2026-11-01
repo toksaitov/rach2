@@ -162,6 +162,20 @@ int vfs_mount_seen(const struct vfs_mount *m)
     return 1;
 }
 
+/** The fixture's types keep no name cache: each lookup goes to the type. */
+static int dcache_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
+{
+    return mnt->type->ops->lookup(mnt, dir, name, node);
+}
+
+/** Nothing to forget without a name cache. */
+static void dcache_forget(struct vfs_mount *mnt, void *dir, const char *name)
+{
+    (void)mnt;
+    (void)dir;
+    (void)name;
+}
+
 #include "vfs_open.inc"
 
 /** All fixture files use the mounted KRFFS adapter. */
