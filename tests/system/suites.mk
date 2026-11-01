@@ -944,10 +944,10 @@ endif
 # a small volume would make it.
 INSTALLER_EXT2 = $(IMAGES_DIR)/installer-root.ext2
 $(INSTALLER_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest \
-                   $(MANIFEST_DEPS_rach2_metal_disk) \
+                   $(MANIFEST_DEPS_rach2_metal_disk) $(MAN_ALL) \
                    tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils \
                    check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti \
-                   check-e2fsck kbd libtsm ports/doom term unifont
+                   check-e2fsck kbd libtsm sox_ng ports/doom term unifont
 	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 64 16384 32768
 INSTALLER_DISK = $(IMAGES_DIR)/installer-test.disk
 $(INSTALLER_DISK): $(DEMO_CREDS) $(KERNEL) $(RECOVERY_KERNEL) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) \
