@@ -1775,10 +1775,7 @@ static void watch_removed(struct vfs_mount *mnt, uint64_t dir_ino, const char *n
     }
 }
 
-/** The events of a setattr of `what`, by Linux's `fsnotify_change`: the
- * size and the modification time alone are a change of the data, and both
- * times together are utime's change of the attributes. */
-static uint32_t setattr_events(int what)
+uint32_t vfs_setattr_events(int what)
 {
     uint32_t mask = 0;
 
@@ -1820,7 +1817,7 @@ int vfs_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_st
         filecache_forget(mnt, node);
     }
     if (rc == 0 && inotify_watches && watched_node(mnt, node, &now) == 0) {
-        inotify_file(mnt, now.ino, setattr_events(what));
+        inotify_file(mnt, now.ino, vfs_setattr_events(what));
     }
     return rc;
 }

@@ -3414,38 +3414,104 @@ static int cred_remove_ref(const struct vfs_ref *parent, const char *leaf)
 }
 
 /**
- * Record in `ofd`, for inotify, the directory the open's `name` is in and
- * its last component, when they are the file opened: a name whose last
- * component was a link the open followed records nothing, where Linux
- * would report the target's directory.
+ * Find, for inotify, the directory the path `name` is in and its last
+ * component, when that component names the file `ino` of `mnt`: copy the
+ * component to `leaf`, of VFS_NAME_MAX + 1 bytes, and the directory's inode
+ * number to `*dir_ino`, and return 0; -1 otherwise. A name whose last
+ * component is a link the call followed finds nothing, where Linux would
+ * report to the target's directory.
  */
-static void open_record_parent(struct open_file *ofd, const char *name)
+static int named_parent(const char *name, const struct vfs_mount *mnt, uint64_t ino, char *leaf,
+                        uint64_t *dir_ino)
 {
-    char leaf[VFS_NAME_MAX + 1];
     struct vfs_ref parent;
     struct vfs_stat dir, st;
-    uint32_t len;
+    int rc = -1;
     void *found;
 
-    if (vfs_resolve(0, name, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf)) != 0) {
-        return;
+    if (vfs_resolve(0, name, VFS_WALK_PARENT, &parent, leaf, VFS_NAME_MAX + 1) != 0) {
+        return -1;
     }
-    len = (uint32_t)k_strlen(leaf);
-    if (parent.mnt == ofd->vmnt && len > 0 && !leaf_is_dot(leaf) &&
+    if (parent.mnt == mnt && leaf[0] != '\0' && !leaf_is_dot(leaf) &&
         vfs_getattr(parent.mnt, parent.node, &dir) == 0 && parent.mnt->type->ops->lookup &&
         parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf, &found) == 0) {
-        if (vfs_getattr(parent.mnt, found, &st) == 0 && st.ino == ofd->ino) {
-            ofd->leaf = kmalloc(len + 1);
-            if (ofd->leaf) {
-                k_memcpy(ofd->leaf, leaf, len + 1);
-                ofd->parent_ino = dir.ino;
-            }
+        if (vfs_getattr(parent.mnt, found, &st) == 0 && st.ino == ino) {
+            *dir_ino = dir.ino;
+            rc = 0;
         }
         if (parent.mnt->type->ops->put) {
             parent.mnt->type->ops->put(parent.mnt, found);
         }
     }
     vfs_ref_release(&parent);
+    return rc;
+}
+
+/**
+ * Record in `ofd`, for inotify, the directory the open's `name` is in and
+ * its last component, when they are the file opened (`named_parent`).
+ */
+static void open_record_parent(struct open_file *ofd, const char *name)
+{
+    char leaf[VFS_NAME_MAX + 1];
+    uint64_t dir_ino;
+    uint32_t len;
+
+    if (named_parent(name, ofd->vmnt, ofd->ino, leaf, &dir_ino) != 0) {
+        return;
+    }
+    len = (uint32_t)k_strlen(leaf);
+    ofd->leaf = kmalloc(len + 1);
+    if (ofd->leaf) {
+        k_memcpy(ofd->leaf, leaf, len + 1);
+        ofd->parent_ino = dir_ino;
+    }
+}
+
+/**
+ * Tell inotify of the change `mask` to the attributes of the file (`mnt`,
+ * `node`), which the path `name` named: the watches of its directory hear of
+ * it under its last component, as Linux's `fsnotify_parent` tells them, and
+ * with `self` the file's own watches as well, for a change that did not
+ * pass through `vfs_setattr`, which tells those. Nothing while there is no
+ * watch, or for a mask of no event. The caller holds a reference to the
+ * node and none of the walk's locks.
+ */
+static void attr_told(const char *name, struct vfs_mount *mnt, void *node, uint32_t mask, int self)
+{
+    char leaf[VFS_NAME_MAX + 1];
+    struct vfs_stat st;
+    uint64_t dir_ino;
+
+    if (!inotify_watches || mask == 0 || vfs_getattr(mnt, node, &st) != 0) {
+        return;
+    }
+    if (self) {
+        inotify_file(mnt, st.ino, mask);
+    }
+    if (named_parent(name, mnt, st.ino, leaf, &dir_ino) == 0) {
+        inotify_child(mnt, dir_ino, leaf, mask | ((st.mode & S_IFMT) == S_IFDIR ? IN_ISDIR : 0u),
+                      0);
+    }
+}
+
+/**
+ * `attr_told` for a change made through the description `ofd`: its
+ * directory's watches hear of it when its open recorded the directory and
+ * name (`open_record_parent`), and with `self` its own watches as well.
+ */
+static void attr_told_desc(struct open_file *ofd, uint32_t mask, int self)
+{
+    if (!inotify_watches || mask == 0 || !ofd || !ofd->vmnt) {
+        return;
+    }
+    if (self) {
+        inotify_file(ofd->vmnt, ofd->ino, mask);
+    }
+    if (ofd->leaf) {
+        inotify_child(ofd->vmnt, ofd->parent_ino, ofd->leaf,
+                      mask | ((ofd->watch_flags & OFD_WATCH_DIR) ? IN_ISDIR : 0u), 0);
+    }
 }
 
 /**
@@ -7856,14 +7922,30 @@ static int32_t do_chmod(const char *name, uint32_t mode, int dir)
         }
         vfs_ns_unlock(ref.mnt);
         vfs_walk_unlock(ref.mnt);
+        if (rc == 0) {
+            attr_told(name, ref.mnt, ref.node, IN_ATTRIB, 0);
+        }
         vfs_ref_release(&ref);
         return rc;
     }
     node = ref.node;
     rc = krffs_chmod_node(node, mode);
     vfs_walk_unlock(ref.mnt);
+    if (rc == 0) {
+        attr_told(name, ref.mnt, ref.node, IN_ATTRIB, 1);
+    }
     vfs_ref_release(&ref);
     return rc;
+}
+
+/**
+ * Whether a chown of `uid` and `gid` names an owner or a group, which makes
+ * it a change of the attributes for inotify even when the file has them
+ * already, as Linux's `fsnotify_change` reports it; -1 for both is none.
+ */
+static int chown_asks(uint32_t uid, uint32_t gid)
+{
+    return uid != (uint32_t)-1 || gid != (uint32_t)-1;
 }
 
 /**
@@ -7996,18 +8078,25 @@ static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid, int follow
 
         vfs_ns_lock(ref.mnt);
         rc = vfs_getattr(ref.mnt, ref.node, &vst);
+        what = 0;
         if (rc == 0) {
             what = vfs_chown_plan(&vst, uid, gid);
             rc = what < 0 ? what : (what ? vfs_setattr(ref.mnt, ref.node, what, &vst) : 0);
         }
         vfs_ns_unlock(ref.mnt);
         vfs_walk_unlock(ref.mnt);
+        if (rc == 0 && chown_asks(uid, gid)) {
+            attr_told(name, ref.mnt, ref.node, IN_ATTRIB, what == 0);
+        }
         vfs_ref_release(&ref);
         return rc;
     }
     node = ref.node;
     rc = krffs_chown_node(node, uid, gid);
     vfs_walk_unlock(ref.mnt);
+    if (rc == 0 && chown_asks(uid, gid)) {
+        attr_told(name, ref.mnt, ref.node, IN_ATTRIB, 1);
+    }
     vfs_ref_release(&ref);
     return rc;
 }
@@ -8088,7 +8177,12 @@ long sys_fchmod(isr_params_t *params)
         return -EBADF;
     }
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->node) {
-        return krffs_chmod_node(entry->node, mode);
+        int rc = krffs_chmod_node(entry->node, mode);
+
+        if (rc == 0) {
+            attr_told_desc(entry->ofd, IN_ATTRIB, 1);
+        }
+        return rc;
     }
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->ofd &&
         entry->ofd->vmnt && entry->ofd->vnode) {
@@ -8108,6 +8202,9 @@ long sys_fchmod(isr_params_t *params)
             rc = vfs_setattr(entry->ofd->vmnt, entry->ofd->vnode, VFS_SET_MODE, &vst);
         }
         vfs_ns_unlock(entry->ofd->vmnt);
+        if (rc == 0) {
+            attr_told_desc(entry->ofd, IN_ATTRIB, 0);
+        }
         return rc;
     }
     if (entry->type == FD_TYPE_PTS) {
@@ -8296,12 +8393,17 @@ static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid)
         return entry->priv ? chown_synth((const struct vpath *)entry->priv, uid, gid) : -EBADF;
     }
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->node) {
-        return krffs_chown_node(entry->node, uid, gid);
+        int rc = krffs_chown_node(entry->node, uid, gid);
+
+        if (rc == 0 && chown_asks(uid, gid)) {
+            attr_told_desc(entry->ofd, IN_ATTRIB, 1);
+        }
+        return rc;
     }
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->ofd &&
         entry->ofd->vmnt && entry->ofd->vnode) {
         struct vfs_stat vst;
-        int what;
+        int what = 0;
         int rc;
 
         vfs_ns_lock(entry->ofd->vmnt);
@@ -8313,6 +8415,9 @@ static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid)
                      : (what ? vfs_setattr(entry->ofd->vmnt, entry->ofd->vnode, what, &vst) : 0);
         }
         vfs_ns_unlock(entry->ofd->vmnt);
+        if (rc == 0 && chown_asks(uid, gid)) {
+            attr_told_desc(entry->ofd, IN_ATTRIB, what == 0);
+        }
         return rc;
     }
     if (entry->type == FD_TYPE_PTS) {
@@ -11461,6 +11566,26 @@ static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct utime
 }
 
 /**
+ * The inotify events of a change of the times `times`, which `utimes_node`
+ * takes: both times are IN_ATTRIB, the access time alone IN_ACCESS and the
+ * modification time alone IN_MODIFY, as `vfs_setattr_events` gives them. The
+ * KRFFS root, whose changes do not pass through `vfs_setattr`, and the
+ * directory's watches are told them by the callers.
+ */
+static uint32_t utimes_events(const struct utime_spec *times)
+{
+    int what = 0;
+
+    if (times == NULL || times[0].tv_nsec != UTIME_OMIT) {
+        what |= VFS_SET_ATIME;
+    }
+    if (times == NULL || times[1].tv_nsec != UTIME_OMIT) {
+        what |= VFS_SET_MTIME;
+    }
+    return vfs_setattr_events(what);
+}
+
+/**
  * utimensat on the file descriptor `fd` refers to: a NULL path, which is GNU
  * libc's futimens, and an empty one with AT_EMPTY_PATH, which `empty` says.
  *
@@ -11500,6 +11625,9 @@ static int32_t utimes_fd(int fd, const struct utime_spec *times, int empty)
         rc = utimes_node(mnt, entry->ofd->vnode, times);
     }
     vfs_ns_unlock(mnt);
+    if (rc == 0) {
+        attr_told_desc(entry->ofd, utimes_events(times), mnt_is_root(mnt));
+    }
     return rc;
 }
 
@@ -11524,6 +11652,9 @@ static int32_t utimes_path(const char *path, int flags, int dir, const struct ut
     }
     rc = utimes_node(ref.mnt, ref.node, times);
     vfs_walk_unlock(ref.mnt);
+    if (rc == 0) {
+        attr_told(path, ref.mnt, ref.node, utimes_events(times), mnt_is_root(ref.mnt));
+    }
     vfs_ref_release(&ref);
     return rc;
 }

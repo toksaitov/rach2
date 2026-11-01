@@ -757,8 +757,14 @@ int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st);
 /** The type's setattr of the fields `what` gives: 0, -EBUSY for a size
  * change of a file that backs a loop device, whose length is the device's,
  * -EROFS for a type without `setattr`, -EPERM for a change other than of the
- * flags to an immutable or append-only file, or the type's error. */
+ * flags to an immutable or append-only file, or the type's error. A change
+ * made is told to the file's own inotify watches; the caller, which knows
+ * the name, tells its directory's. */
 int vfs_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st);
+/** The inotify events of a setattr of `what`, by Linux's `fsnotify_change`:
+ * the size and the modification time alone are a change of the data, and
+ * both times together are utime's change of the attributes; 0 for none. */
+uint32_t vfs_setattr_events(int what);
 /** Open `node` for the handle in `*handle`, the node itself on a type
  * without `open`, and count the open: 0 or the type's error. */
 int vfs_open_node(struct vfs_mount *mnt, void *node, int flags, void **handle);
