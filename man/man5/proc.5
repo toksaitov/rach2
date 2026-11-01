@@ -672,6 +672,23 @@ for those this entry says a write sets:
 .Xr inotify_init 2 ,
 which a write sets for the next instance, watch or event; a value below
 what a user or a queue holds takes nothing away;
+.Pa fs/nr_open ,
+1048576, the most descriptors a process may be allowed, the bound of a
+hard
+.Dv RLIMIT_NOFILE
+that
+.Xr prlimit64 2
+checks, which a write from 64 to 16777216 sets;
+.Pa fs/file-max ,
+the open files the machine may have before an open by a caller without
+privilege fails with
+.Er ENFILE ,
+LONG_MAX, 2147483647 on i386 and 9223372036854775807 on x86-64, which a
+write up to that sets;
+.Pa fs/file-nr ,
+the open files, 0 and
+.Pa fs/file-max ,
+separated by tabs;
 .Pa fs/mqueue/msg_default
 and
 .Pa msg_max ,
@@ -729,6 +746,13 @@ and
 .Pa kernel/overflowgid ,
 65534, the ids an id that a user namespace's map does not cover reads
 as, which a write from 0 to 65535 sets;
+.Pa kernel/randomize_va_space ,
+whether
+.Xr execve 2
+places a new image at random addresses: 0 at fixed ones, 1 with its
+stack, mmap base and a position-independent program moved, and 2 with
+its heap moved as well; 2 on x86-64 and 0 on i386, where a value written
+moves nothing; a write from 0 to 2 sets it for the next exec;
 .Pa kernel/random/boot_id ,
 a random UUID drawn at its first read that stays for the boot, and
 .Pa kernel/random/uuid ,
