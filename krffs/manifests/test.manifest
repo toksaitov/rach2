@@ -30,6 +30,8 @@ file 0755 /bin/echo build/utils/echo
 # The tone and queue program, whose stall mode machine.audio's queue case
 # runs from the debug shell.
 file 0755 /bin/audiotest build/utils/audiotest
+# The router advertisement watcher, which ndwatchmusl runs on eth0.
+file 0755 /bin/ndwatch build/utils/ndwatch
 file 0755 /bin/sox build/vendor/sox_ng/sox
 file 0755 /bin/play build/vendor/sox_ng/mode
 file 0755 /bin/rec build/vendor/sox_ng/mode

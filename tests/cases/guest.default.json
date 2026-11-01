@@ -4341,6 +4341,37 @@
       "native": {"plan": "none", "class": "network", "reason": "the probe binds fixed UDP ports and joins and sends to a group on a card named eth0, which a running machine's other programs and its link would share; the Lenovo's IPv6 is proved by its own task, 23b"}
     },
     {
+      "case_id": "guest.default.ndwatchmusl",
+      "behavior": "A raw ICMPv6 socket takes no message whose checksum fails; ndwatch takes a router advertisement only with the hop limit 255, and after its netlink socket overflows it reads the ENOBUFS, solicits the routers again, goes on taking advertisements and sleeps in poll.",
+      "units": ["default", "musl/ndwatchmusl"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "ndwatchmusl", "stdin": null, "role": "ordinary", "privileges": "root, which raw sockets and ndwatch need", "isolation": [], "children": "reaped", "cleanup": "ndwatch, its one child, ends at SIGTERM, or SIGKILL at a failure, and is waited for; its sockets close at exit, which leaves the group"},
+      "assertions": [
+        {"assertion_id": "checksum", "checks": "Over ::1, an echo request with a bad checksum sent through an IPPROTO_RAW socket does not reach a raw ICMPv6 socket, and the one sent after it with a good checksum does.", "source": "program"},
+        {"assertion_id": "started", "checks": "ndwatch starts on eth0 and its router solicitation of 8 bytes comes back to the probe, joined to ff02::2 on eth0.", "source": "program"},
+        {"assertion_id": "hop-limit", "checks": "Of an advertisement with the M flag and hop limit 64 and one after it with the O flag alone and 255, from eth0's link-local address, ndwatch takes the second alone: the first client it reports starting is udhcpc6 -l.", "source": "program"},
+        {"assertion_id": "overflow", "checks": "With ndwatch stopped, 48 advertisements with an RDNSS option of 89 servers of lifetime 0 overflow the probe's netlink socket in RTNLGRP_ND_USEROPT: a receive fails with ENOBUFS.", "source": "program"},
+        {"assertion_id": "recovers", "checks": "Continued, ndwatch sends another router solicitation of 8 bytes, which it does on ENOBUFS, and an advertisement with the M flag then starts udhcpc6 for a lease.", "source": "program"},
+        {"assertion_id": "sleeps", "checks": "ndwatch then sleeps: its state in /proc/PID/stat comes to S within 1000 yields of the probe.", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "ndwatchmusl", "node": "tests/musl/ndwatchmusl", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "network", "reason": "the probe sends router advertisements on a card named eth0 and runs a second ndwatch on it, which a running machine's own ndwatch, its kernel and its link would share"}
+    },
+    {
       "case_id": "guest.default.prctlmusl",
       "behavior": "The attributes prctl sets and reads, the program name, the dumpable flag, the parent-death signal, no_new_privs and the child subreaper mark, behave as Linux's, and /proc/self/exe reaches the program's file.",
       "units": ["default", "musl/prctlmusl"],
