@@ -8,7 +8,9 @@
 # build host or the root by chance, and its test for OSS, which looks for
 # the build host's /usr/include/sys/soundcard.h, compiles the header with the
 # cross compiler instead. Its manual pages are made by Doc/ttman, which must
-# run on the build host and so is built with the host's compiler.
+# run on the build host and so is built with the host's compiler. Its
+# Makefile takes the version from `git describe`, which in a build tree
+# inside a clone describes the clone, so the version is given to make.
 VERSION=2.12.0
 DEPENDS="ncurses ffmpeg"
 DEBIAN=cmus-debian
@@ -29,10 +31,10 @@ port_build()
         CONFIG_SUN=n CONFIG_TREMOR=n CONFIG_VORBIS=n CONFIG_VTX=n \
         CONFIG_WAVEOUT=n CONFIG_WAVPACK=n
     cc -O2 -o Doc/ttman Doc/ttman.c
-    make
+    make VERSION="$VERSION"
 }
 
 port_install()
 {
-    make install DESTDIR="$DEST"
+    make install VERSION="$VERSION" DESTDIR="$DEST"
 }
