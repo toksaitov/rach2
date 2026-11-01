@@ -6,9 +6,9 @@
 # Usage: mkguest.sh OUTDIR
 #
 # Writes OUTDIR/vmlinuz, linux-lts's kernel, and OUTDIR/initrd, an
-# uncompressed newc archive: the packages' files, the modules modules.txt
-# names with those they need, decompressed, and the files of root/ and
-# certs/ over them. A built hwsimrelay is staged as /usr/sbin/hwsimrelay when
+# uncompressed newc archive: the packages' files with their modes, the
+# modules modules.txt names with those they need, decompressed, and the files
+# of root/ and certs/ over them. A built hwsimrelay is staged as /usr/sbin/hwsimrelay when
 # HWSIMRELAY names it. Make runs it through the target `wifi-guest`, with
 # MKCPIO and SHA256 naming the host programs it built.
 #
@@ -91,46 +91,34 @@ fetch()
     echo "$file"
 }
 
-# unpack FILE DIR [MEMBER...]: extract an .apk, three gzip members holding
-# one tar stream, into DIR, without the package's own metadata at its top;
-# only the MEMBERs when they are given. Its symbolic links are not made but
-# added to $work/links, as NAME and TARGET, for the archive's list: MSYS2's
-# tar cannot make a link to an absolute target, which the guest's root has
-# and the host does not.
+# unpack FILE DIR MEMBER...: extract the MEMBERs of an .apk, three gzip
+# members holding one tar stream, into DIR.
 unpack()
 {
     file="$1"
     dest="$2"
     shift 2
     mkdir -p "$dest"
-    if ! tar -tvzf "$file" "$@" > "$work/listing" 2> "$work/tar.err"; then
-        cat "$work/tar.err" >&2
-        echo "mkguest: ${file##*/}: cannot list" >&2
-        return 1
-    fi
-    awk '/^l/ {
-        i = index($0, " -> ")
-        n = split(substr($0, 1, i - 1), word, " ")
-        print word[n] "\t" substr($0, i + 4)
-    }' "$work/listing" > "$work/links.one"
-    cut -f 1 "$work/links.one" > "$work/exclude"
-    if ! tar -xzf "$file" -C "$dest" -X "$work/exclude" "$@" 2> "$work/tar.err"; then
+    if ! tar -xzf "$file" -C "$dest" "$@" 2> "$work/tar.err"; then
         cat "$work/tar.err" >&2
         echo "mkguest: ${file##*/}: cannot extract" >&2
         return 1
     fi
-    cat "$work/links.one" >> "$work/links"
-    rm -f "$dest"/.PKGINFO "$dest"/.SIGN.* "$dest"/.pre-* "$dest"/.post-* "$dest"/.trigger
 }
 
-: > "$work/links"
+# The packages but the kernel go to mkcpio as tar streams, which it copies
+# into the archive without the host's file system, whose names may ignore
+# case: iptables has both libxt_MARK.so and libxt_mark.so.
+mkdir "$work/packages"
+: > "$work/list"
 grep -v '^#' "$DIR/packages.txt" | while read -r repo name version digest; do
     [ -n "$name" ] || continue
     file="$(fetch "$repo" "$name" "$version" "$digest")"
     if [ "$name" = linux-lts ]; then
         echo "$file $version" > "$work/linux"
     else
-        unpack "$file" "$root"
+        gzip -dc "$file" > "$work/packages/$name.tar"
+        printf 't\t../packages/%s.tar\n' "$name" >> "$work/list"
     fi
 done
 
@@ -197,33 +185,27 @@ if [ -n "${HWSIMRELAY:-}" ]; then
     cp "$HWSIMRELAY" "$root/usr/sbin/hwsimrelay"
 fi
 
-# The archive's list: the modes come from where a file is, since a host such
-# as MSYS2 has no executable bit for a program it did not make, and a file's
-# source is relative to the root, where mkcpio runs, since a native program
-# on Windows cannot open MSYS2's absolute paths written in a file.
-{
-    (cd "$root" && find .) | while read -r p; do
-        p="${p#./}"
-        [ "$p" != . ] || continue
-        if [ -L "$root/$p" ]; then
-            printf '%s\tl\t777\t%s\t%s\n' "$p" "$p" "$(readlink "$root/$p")"
-        elif [ -d "$root/$p" ]; then
-            printf '%s\td\t755\t%s\n' "$p" "$p"
-        else
-            case $p in
-                init | bin/* | sbin/* | usr/bin/* | usr/sbin/* | usr/libexec/* | *.so | *.so.*)
-                    mode=755 ;;
-                etc/wifiap/certs/*.key) mode=600 ;;
-                *) mode=644 ;;
-            esac
-            printf '%s\tf\t%s\t%s\t%s\n' "$p" "$mode" "$p" "$p"
-        fi
-    done
-    # A file of root/ takes the place of a package's link.
-    while IFS="$(printf '\t')" read -r p target; do
-        [ -e "$root/$p" ] || printf '%s\tl\t777\t%s\t%s\n' "$p" "$p" "$target"
-    done < "$work/links"
-} | LC_ALL=C sort -u | cut -f 2- > "$work/list"
+# Then the files made here, over the packages': the modes come from where a
+# file is, since a host such as MSYS2 has no executable bit for a program it
+# did not make, and a file's source is relative to the root, where mkcpio
+# runs, since a native program on Windows cannot open MSYS2's absolute paths
+# written in a file.
+(cd "$root" && find .) | LC_ALL=C sort | while read -r p; do
+    p="${p#./}"
+    [ "$p" != . ] || continue
+    if [ -L "$root/$p" ]; then
+        printf 'l\t777\t%s\t%s\n' "$p" "$(readlink "$root/$p")"
+    elif [ -d "$root/$p" ]; then
+        printf 'd\t755\t%s\n' "$p"
+    else
+        case $p in
+            init | bin/* | sbin/* | usr/bin/* | usr/sbin/*) mode=755 ;;
+            etc/wifiap/certs/*.key) mode=600 ;;
+            *) mode=644 ;;
+        esac
+        printf 'f\t%s\t%s\t%s\n' "$mode" "$p" "$p"
+    fi
+done >> "$work/list"
 
 (cd "$root" && "$MKCPIO" "$OUT/initrd.part" "$work/list")
 cp "$work/kernel/boot/vmlinuz-lts" "$OUT/vmlinuz.part"
