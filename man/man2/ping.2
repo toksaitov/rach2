@@ -65,18 +65,19 @@ A request past the path MTU, 1500 bytes or less after a Packet Too Big,
 leaves in fragments.
 ::1 and this machine's own addresses are answered through the loopback
 ring, and a group by its members on the link.
-A unicast address on another host fails at once with
-.Er EHOSTUNREACH ,
-since the kernel resolves no IPv6 neighbour yet; so does any other
-error of the first request's send.
+Another unicast address is reached through the routing table and the
+neighbour cache, as
+.Xr send 2
+describes.
+An error of the first request's send fails the call at once.
 .Pp
 The call sends an ICMP echo request and waits for a reply.
 It makes at most four attempts, each with a deadline of 1000 ticks
 or one second.
 The starting tick includes ticks whose interrupts are still pending;
 delayed timer interrupts do not shorten an attempt's wait.
-A request to a next hop not in the ARP cache waits for the ARP reply
-and is sent when it comes.
+A request to a next hop not in the ARP cache, or for IPv6 the neighbour
+cache, waits for the neighbour's answer and is sent when it comes.
 The caller sleeps while waiting, allowing other processes to run.
 .Pp
 Only one call may be in progress on the machine.
@@ -127,8 +128,6 @@ Another ping call is in progress.
 .It Bq Er EFAULT
 The argument words, or the IPv6 address, cannot be read from user
 memory.
-.It Bq Er EHOSTUNREACH
-The IPv6 address is a unicast address on another host.
 .It Bq Er EINTR
 A signal interrupted the wait.
 .It Bq Er EINVAL
