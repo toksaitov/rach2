@@ -34,8 +34,9 @@ and
 .Ql _ .
 .Pp
 It reads the M and O flags from the advertisements themselves, on a raw
-ICMPv6 socket whose filter passes only router advertisements from a
-link-local source.
+ICMPv6 socket whose filter passes only router advertisements, and takes
+one only from a link-local source with a hop limit of 255, which no router
+beyond the link can send (RFC 4861, 6.1.2).
 The M flag starts
 .Xr udhcpc6 1
 for an address and servers, and the O flag alone starts it with

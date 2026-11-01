@@ -536,15 +536,19 @@ static void link_lost(void)
 }
 
 /**
- * Take a router advertisement of `len` bytes from `from`: start DHCPv6 for
- * its M or O flag. RFC 4861, 6.1.2, has a host take one only from a
- * link-local source; the kernel has checked the rest before the copy.
+ * Take a router advertisement of `len` bytes from `from`, which came with
+ * the hop limit `hlim`, or -1 if none was reported: start DHCPv6 for its M
+ * or O flag. RFC 4861, 6.1.2, has a host take one only with a hop limit of
+ * 255, which no router past the link can send, and from a link-local
+ * source. The kernel has checked the checksum alone, as Linux does for a
+ * raw socket, so the rest is checked here.
  */
-static void take_advert(const unsigned char *ra, ssize_t len, const struct sockaddr_in6 *from)
+static void take_advert(const unsigned char *ra, ssize_t len, const struct sockaddr_in6 *from,
+                        int hlim)
 {
     const unsigned char *src = from->sin6_addr.s6_addr;
 
-    if (len < 16 || ra[0] != ND_ROUTER_ADVERT || ra[1] != 0) {
+    if (len < 16 || ra[0] != ND_ROUTER_ADVERT || ra[1] != 0 || hlim != 255) {
         return;
     }
     if (!(src[0] == 0xfe && (src[1] & 0xc0) == 0x80)) {
@@ -558,6 +562,44 @@ static void take_advert(const unsigned char *ra, ssize_t len, const struct socka
     } else if (ra[5] & ND_RA_FLAG_OTHER) {
         start_dhcp6(DHCP6_INFO);
     }
+}
+
+/** Receive what the raw ICMPv6 socket `raw` has, with its hop limit, and
+ * take it as a router advertisement while the link is up. */
+static void take_raw(int raw)
+{
+    unsigned char ra[1500];
+    union {
+        struct cmsghdr h;
+        unsigned char buf[CMSG_SPACE(sizeof(int))];
+    } control;
+    struct sockaddr_in6 from;
+    struct iovec iov;
+    struct msghdr msg;
+    struct cmsghdr *c;
+    ssize_t got;
+    int hlim = -1;
+
+    iov.iov_base = ra;
+    iov.iov_len = sizeof(ra);
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_name = &from;
+    msg.msg_namelen = sizeof(from);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control.buf;
+    msg.msg_controllen = sizeof(control.buf);
+    got = recvmsg(raw, &msg, MSG_DONTWAIT);
+    if (got <= 0 || !link_up) {
+        return;
+    }
+    for (c = CMSG_FIRSTHDR(&msg); c; c = CMSG_NXTHDR(&msg, c)) {
+        if (c->cmsg_level == IPPROTO_IPV6 && c->cmsg_type == IPV6_HOPLIMIT &&
+            c->cmsg_len >= CMSG_LEN(sizeof(int))) {
+            memcpy(&hlim, CMSG_DATA(c), sizeof(int));
+        }
+    }
+    take_advert(ra, got, &from, hlim);
 }
 
 /** Send a router solicitation to the routers of the link, by the raw
@@ -638,15 +680,16 @@ static void read_netlink(int nl, int fd, int raw)
 
 /**
  * Open the three sockets: netlink joined to the link and router option
- * groups, raw ICMPv6 passing router advertisements alone with a hop limit
- * of 255 for solicitations, and a datagram socket for the flags' ioctl.
+ * groups, raw ICMPv6 passing router advertisements alone, reporting each
+ * one's hop limit and sending with a hop limit of 255 for solicitations,
+ * and a datagram socket for the flags' ioctl.
  * Returns 0, or -1 after a message.
  */
 static int open_sockets(int *nl, int *raw, int *fd)
 {
     struct netlink_address a;
     struct icmp6_filter filter;
-    int hops = 255;
+    int hops = 255, on = 1;
 
     *nl = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
     if (*nl < 0) {
@@ -668,7 +711,8 @@ static int open_sockets(int *nl, int *raw, int *fd)
     ICMP6_FILTER_SETBLOCKALL(&filter);
     ICMP6_FILTER_SETPASS(ND_ROUTER_ADVERT, &filter);
     if (setsockopt(*raw, IPPROTO_ICMPV6, ICMP6_FILTER, &filter, sizeof(filter)) != 0 ||
-        setsockopt(*raw, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, &hops, sizeof(hops)) != 0) {
+        setsockopt(*raw, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, &hops, sizeof(hops)) != 0 ||
+        setsockopt(*raw, IPPROTO_IPV6, IPV6_RECVHOPLIMIT, &on, sizeof(on)) != 0) {
         fprintf(stderr, "ndwatch: icmpv6: setsockopt: %s\n", strerror(errno));
         return -1;
     }
@@ -728,19 +772,12 @@ int main(int argc, char **argv)
             fprintf(stderr, "ndwatch: poll: %s\n", strerror(errno));
             break;
         }
-        if (p[0].revents & POLLIN) {
+        /* POLLERR alone: a lost message left ENOBUFS and nothing queued. */
+        if (p[0].revents & (POLLIN | POLLERR)) {
             read_netlink(nl, fd, raw);
         }
         if (p[1].revents & POLLIN) {
-            unsigned char ra[1500];
-            struct sockaddr_in6 from;
-            socklen_t fl = sizeof(from);
-            ssize_t got =
-                recvfrom(raw, ra, sizeof(ra), MSG_DONTWAIT, (struct sockaddr *)&from, &fl);
-
-            if (got > 0 && link_up) {
-                take_advert(ra, got, &from);
-            }
+            take_raw(raw);
         }
         t0 = now();
         expire(servers, SERVERS, t0);
