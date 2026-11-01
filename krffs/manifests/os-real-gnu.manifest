@@ -147,7 +147,7 @@ dir 0755 /etc/sudoers.d
 dir 0755 /etc/default
 text 0644 /etc/default/useradd CREATE_MAIL_SPOOL=no\n
 dir 0755 /etc/rach2
-text 0644 /etc/rach2/limits # The limits every session starts with: a name, the soft value and the\n# hard one; unlimited for none. Root may raise them.\nnproc 256 512\nnofile 1024 1024\nas unlimited unlimited\n
+text 0644 /etc/rach2/limits # The limits every session starts with: a name, the soft value and the\n# hard one; unlimited for none. Root may raise them.\nnproc 4096 4096\nnofile 1024 524288\nas unlimited unlimited\n
 # The path OpenSSH's server gives a session too, which finds what is
 # installed under /usr/local, then GCC, GNU make and the rest of the GNU
 # system before the musl programs of /bin. The prompt's escapes are bash's,

@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 1, 2026
 .Dt LIMITS 7
 .Os
 .Sh NAME
@@ -31,15 +31,27 @@ A setuid operation that changes the real user ID moves the thread to the
 new user's count.
 .It Dv RLIMIT_NOFILE
 One greater than the highest descriptor number the process may be given,
-at most 1024, in a descriptor table it shares with another process as in
-one of its own.
+in a descriptor table it shares with another process as in one of its own;
+1024 soft and 524288 hard by default.
+No process, root included, may set a hard value above
+.Pa /proc/sys/fs/nr_open ,
+1048576 by default; such a call returns
+.Er EPERM .
 Open returns
 .Er EMFILE
-when no descriptor below the soft limit is free.
+when no descriptor below the soft limit is free, and
+.Er ENFILE
+to a caller other than root when the machine has
+.Pa /proc/sys/fs/file-max
+open files.
 Dup2 returns
 .Er EBADF
 for a destination at or above the soft limit.
-The descriptor table starts at sixteen entries and grows to 1024.
+The descriptor table starts at sixteen entries and doubles as it fills.
+A program that uses
+.Xr select 2
+past descriptor 1023 passes sets wider than
+.Dv FD_SETSIZE .
 .It Dv RLIMIT_AS
 The bytes covered by the process's virtual memory regions.
 Growth past the soft limit makes mmap return
@@ -82,7 +94,14 @@ Address-space values are bytes.
 The os-real image supplies:
 .Bd -literal -offset indent
 nproc 256 512
-nofile 1024 1024
+nofile 1024 524288
+as unlimited unlimited
+.Ed
+.Pp
+The GNU root gives every user the kernel's own thread limit:
+.Bd -literal -offset indent
+nproc 4096 4096
+nofile 1024 524288
 as unlimited unlimited
 .Ed
 .Pp
