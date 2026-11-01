@@ -346,6 +346,9 @@ void netlink_close(struct socket *sock)
     }
     sock->netlink = 0;
     net_unlock(flags);
+    if (st->protocol == NETLINK_GENERIC && st->pid) {
+        genl_release(st->pid);
+    }
     while (st->head) {
         struct nl_dgram *d = st->head;
 
@@ -566,6 +569,40 @@ int netlink_genl_multicast(uint32_t group, const uint8_t *data, unsigned len)
                 wq_wake(&st->sock->waiters, WQ_DATA);
             }
         }
+    }
+    net_unlock(flags);
+    return rc;
+}
+
+/** Queue one generic datagram for the socket bound to `portid`, as a family
+ * sends an event to the one listener that asked for it. Return 0,
+ * -ECONNREFUSED when no generic socket has that port, -EMSGSIZE, or -ENOBUFS
+ * when its queue is full, which is also recorded on the socket. */
+int netlink_genl_unicast(uint32_t portid, const uint8_t *data, unsigned len)
+{
+    struct netlink_state *st;
+    uint32_t flags;
+    int rc = -ECONNREFUSED;
+
+    if (len > NL_DGRAM_MAX) {
+        return -EMSGSIZE;
+    }
+    flags = net_lock();
+    for (st = states; st; st = st->next) {
+        if (st->protocol != NETLINK_GENERIC || !portid || st->pid != portid) {
+            continue;
+        }
+        if (st->queued > NL_NOTIFY_QUEUE_MAX || len > NL_NOTIFY_QUEUE_MAX - st->queued ||
+            enqueue(st, data, len) != 0) {
+            rc = -ENOBUFS;
+            if (!st->no_enobufs) {
+                st->sock->so_error = ENOBUFS;
+                wq_wake(&st->sock->waiters, WQ_DATA);
+            }
+        } else {
+            rc = 0;
+        }
+        break;
     }
     net_unlock(flags);
     return rc;

@@ -88,6 +88,10 @@ struct genl_family {
     struct genl_multicast_group *groups;
     unsigned n_groups;
     void *priv; /* family-owned */
+    /** Optional: forget what the generic socket of portid left behind, such
+     * as its frame registrations, once it closes. Process context, kernel
+     * lock held, no net_lock; must not sleep. */
+    void (*release)(uint32_t portid);
 };
 struct genl_info {
     struct socket *socket; /* borrowed; use portid/seq for the reply */
@@ -152,6 +156,16 @@ int genl_reply(const struct genl_info *info, const struct genl_msg *msg);
  * Kernel lock held, no net_lock; safe on the wireless worker. */
 int genl_multicast(const struct genl_family *family, unsigned group_index,
                    const struct genl_msg *msg);
+
+/** Send msg to the one generic socket of portid, as an event a listener
+ * registered for. Return 0, -ECONNREFUSED when no socket has that port,
+ * -ENOBUFS when its queue is full, or a message error. Borrows msg only
+ * until return. Kernel lock held, no net_lock; safe on the wireless worker. */
+int genl_unicast(const struct genl_family *family, uint32_t portid, const struct genl_msg *msg);
+
+/** Tell every family with a release call that the generic socket of portid
+ * has closed. Process context, kernel lock held, no net_lock. */
+void genl_release(uint32_t portid);
 
 /**
  * Parse len bounded attribute bytes into maxattr+1 table entries.

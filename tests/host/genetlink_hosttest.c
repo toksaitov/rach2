@@ -484,7 +484,7 @@ static const struct genl_ops operations[] = {{1, GENL_ADMIN_PERM, 0, echo, 0, 0}
                                              {4, 0, 0, 0, failed_dump, failed_done},
                                              {5, 0, 0, 0, empty_dump, failed_done}};
 static struct genl_family family = {"test_family", 0, 7,      1,  2, policy,
-                                    operations,    5, groups, 40, 0};
+                                    operations,    5, groups, 40, 0, 0};
 
 /** Build a request independently of generic message encoding. */
 static void make_request(unsigned type, unsigned cmd, unsigned flags, unsigned len)

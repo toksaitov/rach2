@@ -549,7 +549,38 @@ int genl_multicast(const struct genl_family *family, unsigned group_index,
     return rc;
 }
 
-static struct genl_family controller = {"nlctrl", GENL_ID_CTRL, 2, 0, 7, 0, 0, 0, 0, 0, 0};
+int genl_unicast(const struct genl_family *family, uint32_t portid, const struct genl_msg *msg)
+{
+    int rc = complete(msg);
+
+    if (rc) {
+        return rc;
+    }
+    return family && family->id ? netlink_genl_unicast(portid, msg->data, msg->len) : -ENOENT;
+}
+
+void genl_release(uint32_t portid)
+{
+    struct family_entry *e, *next;
+    uint32_t lock = net_lock();
+
+    for (e = families; e; e = next) {
+        void (*release)(uint32_t) = e->retiring ? 0 : e->family->release;
+
+        if (release) {
+            ++e->users;
+            net_unlock(lock);
+            release(portid);
+            lock = net_lock();
+            --e->users;
+            wq_wake_all(&e->waiters);
+        }
+        next = e->next;
+    }
+    net_unlock(lock);
+}
+
+static struct genl_family controller = {"nlctrl", GENL_ID_CTRL, 2, 0, 7, 0, 0, 0, 0, 0, 0, 0};
 
 /** Append a controller description, including operation and group nests. */
 static int describe(struct genl_msg *msg, const struct genl_family *f, uint32_t seq, uint16_t flags)

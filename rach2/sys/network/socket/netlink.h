@@ -147,6 +147,9 @@ void netlink_note_recv(struct socket *sock, uint32_t len);
  * Each takes net_lock; return 0 or negative errno. */
 int netlink_genl_reply(struct socket *sock, uint32_t portid, const uint8_t *data, unsigned len);
 int netlink_genl_multicast(uint32_t group, const uint8_t *data, unsigned len);
+/** Queue one generic datagram for the socket of `portid`; 0, -ECONNREFUSED
+ * when there is none, -EMSGSIZE or -ENOBUFS. Takes net_lock. */
+int netlink_genl_unicast(uint32_t portid, const uint8_t *data, unsigned len);
 /** Queue NLMSG_ERROR for a bounded request, honoring CAP_ACK and EXT_ACK. */
 int netlink_ack(struct socket *sock, const uint8_t *req, int error, const char *detail,
                 unsigned bad_offset);
