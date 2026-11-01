@@ -73,7 +73,7 @@ static long sys_pread64(isr_params_t *params);
 static long sys_pwrite64(isr_params_t *params);
 static long sys_preadv(isr_params_t *params);
 static long sys_pwritev(isr_params_t *params);
-static int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, uint32_t *src_ip,
+static int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_t *src_ip,
                            uint16_t *src_port, int peek, int32_t *whole);
 static long sys_readv(isr_params_t *params);
 static long sys_dup(isr_params_t *params);
@@ -746,7 +746,7 @@ int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblo
 }
 
 /** No row writes to a datagram socket: -EBADF. */
-int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port, const uint8_t *buf,
+int32_t dgram_send(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, const uint8_t *buf,
                    uint16_t len)
 {
     (void)sock;

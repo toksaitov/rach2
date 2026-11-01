@@ -3608,14 +3608,17 @@ static int procfs_gen_nettcp(struct procfs_text *t)
     for (i = 0; i < n; i++) {
         struct tcp_row row = rows[i];
 
+        if (row.local_ip.family == AF_INET6)
+            continue;
+
         ap_str(t, "   ");
         ap_u32(t, (uint32_t)i);
         ap_str(t, ": ");
-        ap_ip_hex(t, row.local_ip);
+        ap_ip_hex(t, row.local_ip.v4);
         ap_ch(t, ':');
         ap_hex(t, row.local_port, 4);
         ap_ch(t, ' ');
-        ap_ip_hex(t, row.remote_ip);
+        ap_ip_hex(t, row.remote_ip.v4);
         ap_ch(t, ':');
         ap_hex(t, row.remote_port, 4);
         ap_ch(t, ' ');
@@ -3680,11 +3683,11 @@ static int procfs_gen_netdgram(struct procfs_text *t, int type)
         ap_str(t, i < 10 ? "    " : i < 100 ? "   " : i < 1000 ? "  " : " ");
         ap_u32(t, (uint32_t)i);
         ap_str(t, ": ");
-        ap_ip_hex(t, rows[i].local_ip);
+        ap_ip_hex(t, rows[i].local_ip.v4);
         ap_ch(t, ':');
         ap_hex(t, port, 4);
         ap_ch(t, ' ');
-        ap_ip_hex(t, rows[i].connected ? rows[i].remote_ip : 0);
+        ap_ip_hex(t, rows[i].connected ? rows[i].remote_ip.v4 : 0);
         ap_ch(t, ':');
         ap_hex(t, rows[i].connected ? rows[i].remote_port : 0, 4);
         ap_str(t, rows[i].connected ? " 01 00000000:" : " 07 00000000:");

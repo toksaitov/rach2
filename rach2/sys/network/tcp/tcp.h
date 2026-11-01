@@ -2,6 +2,7 @@
 #define _TCP_H_
 
 #include "../../lib/kint.h"
+#include "../socket/address.h"
 #include "../../timer.h"
 
 /*
@@ -22,7 +23,7 @@
 #define TCP_URG 0x20
 
 /* The header without options, and the largest segment either side sends,
- * which this side's SYN asks for: a 1500-byte MTU less 40 bytes of headers. */
+ * which IPv4 SYNs ask for: a 1500-byte MTU less 40 bytes of headers. */
 #define TCP_HDR_SIZE        20
 #define TCP_MSS             1460
 #define TCP_INIT_SEGS       4 /* initial congestion window, in segments (RFC 6928) */
@@ -128,10 +129,11 @@ struct tcb {
      * listener's queue, and a reset leaves the socket's reference alone,
      * since the descriptor still has it. */
     int passive;
+    struct tcb *listener; /* borrowed until a passive handshake completes */
 
-    uint32_t local_ip;
+    net_addr_t local_ip;
     uint16_t local_port;
-    uint32_t remote_ip;
+    net_addr_t remote_ip;
     uint16_t remote_port;
 
     /* Send sequence space. */
@@ -292,9 +294,9 @@ void tcb_free(struct tcb *tcb);
  */
 void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len);
 
-/** Whether a listener has `port` at an address that meets `ip`, the same
- * one or any, for `bind`'s advisory refusal. Takes `net_lock` itself. */
-int tcp_port_listening(uint32_t ip, uint16_t port);
+/** Whether a listener has `port` at an address overlapping sock's binding,
+ * including a dual-stack wildcard. Takes net_lock itself. */
+int tcp_port_listening(const struct socket *sock, uint16_t port);
 
 /**
  * A port for a stream socket bound to port 0, which Linux gives at the bind:
@@ -324,7 +326,7 @@ int tcp_listen(struct socket *sock, uint16_t port);
  * free, or -ENOBUFS with no memory for a control block or its receive ring.
  * Takes `net_lock` itself.
  */
-int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port);
+int tcp_connect(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port);
 
 /**
  * Queue up to `len` bytes of `buf` on the send ring of `sock`'s connection,
@@ -382,9 +384,9 @@ void tcp_local_addr_changed(void);
 
 /* One connection, copied out for a reader of /proc/net/tcp. */
 struct tcp_row {
-    uint32_t local_ip;
+    net_addr_t local_ip;
     uint16_t local_port;
-    uint32_t remote_ip;
+    net_addr_t remote_ip;
     uint16_t remote_port;
     int state;
     uint32_t txq;     /* bytes queued to send, sent and unacknowledged included */
@@ -464,4 +466,7 @@ void tcp_count(struct tcp_counts *c);
  */
 int tcp_state_to_linux(int state);
 
+/** Deliver IPv6 TCP with its receiving interface's scope; interrupts off. */
+void tcp6_rx(int ifindex, const uint8_t *src, const uint8_t *dst, const uint8_t *data,
+             uint16_t len);
 #endif /* _TCP_H_ */

@@ -183,7 +183,7 @@ struct kernel_mmsghdr {
  * and `dst_port`, checking the destination first, and binding the socket to
  * an ephemeral port when it has none. Returns `len`, or the socket's pending
  * error, -EACCES for a broadcast address without `SO_BROADCAST`, -EMSGSIZE
- * past 1472 bytes, -EAGAIN when no ephemeral port is free, or the error of
+ * past 1472 IPv4 or 1452 IPv6 bytes, -EAGAIN when no ephemeral port is free, or the error of
  * `udp_tx`, which is reported rather than counted as bytes sent.
  *
  * A datagram to a broadcast address reaches every machine on the wire, so a
@@ -193,7 +193,7 @@ struct kernel_mmsghdr {
  * IP header and the eight of UDP's. The hop limit is the socket's, which
  * IP_TTL sets and traceroute counts up.
  */
-int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port, const uint8_t *buf,
+int32_t dgram_send(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, const uint8_t *buf,
                    uint16_t len)
 {
     int r = socket_dgram_error(sock);
@@ -201,10 +201,10 @@ int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port, cons
     if (r < 0) {
         return r;
     }
-    if (!sock->broadcast && netconf_is_broadcast(dst_ip)) {
+    if (dst_ip.family != AF_INET6 && !sock->broadcast && netconf_is_broadcast(dst_ip.v4)) {
         return -EACCES;
     }
-    if (len > 1472) {
+    if (len > (dst_ip.family == AF_INET6 ? 1452 : 1472)) {
         return -EMSGSIZE;
     }
     if (sock->local_port == 0 && udp_bind_ephemeral(sock) == 0) {
@@ -260,6 +260,9 @@ static int32_t not_a_socket(const fd_entry_t *entry)
  * datagrams leave with, the option that would hand the caller the header,
  * which this stack does not implement, and the IP options of a socket's
  * packets, of which it keeps none. */
+#define SOL_IPV6    41
+#define IPV6_V6ONLY 26
+
 #define SOL_IP 0
 
 #define IP_TTL 2
@@ -354,13 +357,65 @@ static void sockaddr_in6_out(uint8_t *sa, const uint8_t *addr, int ifindex)
     sa[SOCKADDR_IN6_SCOPE + 3] = (uint8_t)(scope >> 24);
 }
 
+/** Read an Internet endpoint and normalize mapped addresses.
+ * Returns zero or a negative errno; checks the socket's family and V6ONLY. */
+static int inet_endpoint_in(const struct socket *sock, uintptr_t ptr, int len, net_addr_t *addr,
+                            uint16_t *port)
+{
+    uint8_t sa[SOCKADDR_MIN], ip[16];
+    int scope, rc;
+    uint16_t family;
+    if (len < SOCKADDR_MIN)
+        return -EINVAL;
+    if (copy_from_user(sa, (const void __user *)ptr, sizeof(sa)))
+        return -EFAULT;
+    family = (uint16_t)(sa[0] | (sa[1] << 8));
+    if (sock->family == AF_INET6 && family == AF_INET6) {
+        rc = sockaddr_in6_in(ptr, len, ip, &scope);
+        if (rc)
+            return rc;
+        *addr = net_addr6(ip, (uint32_t)scope);
+    } else if (family == AF_INET &&
+               (sock->family == AF_INET || (sock->family == AF_INET6 && !sock->v6only))) {
+        *addr = net_addr4(SC_BE32(sa + 4));
+    } else
+        return -EAFNOSUPPORT;
+    if (sock->v6only && addr->family != AF_INET6)
+        return -ENETUNREACH;
+    if (addr->family == AF_INET6 && ip6_link_scoped(addr->v6)) {
+        if (!addr->scope)
+            addr->scope = (uint32_t)sock->bound_device;
+        if (!addr->scope)
+            return -EINVAL;
+        if (!netdev_at((int)(addr->scope - 1u)))
+            return -ENODEV;
+    }
+    *port = SC_BE16(sa + 2);
+    return 0;
+}
+
+/** Build an Internet sockaddr in the family the socket exposes. */
+static void inet_endpoint_out(uint8_t *sa, uint16_t family, net_addr_t addr, uint16_t port)
+{
+    if (family == AF_INET6) {
+        uint8_t ip[16];
+        net_addr_to6(addr, ip);
+        sockaddr_in6_out(sa, ip, (int)addr.scope);
+    } else {
+        k_memset(sa, 0, SOCKADDR_IN_LEN);
+        sa[0] = AF_INET;
+        SC_WBE32(sa + 4, addr.v4);
+    }
+    SC_WBE16(sa + 2, port);
+}
+
 /**
- * Write an AF_INET source/peer sockaddr back to a caller's (addr, addrlen)
+ * Write an Internet source/peer sockaddr back to a caller's (addr, addrlen)
  * pair.
  *
  * Respects the caller's declared buffer capacity: read the in/out socklen,
- * copy at most that many of the 16 sockaddr_in bytes, and report the true
- * length (16), the recvfrom(2)/accept(2) truncation semantics. A null
+ * copy at most that many of the 16 or 28 sockaddr bytes, and report the true
+ * length, the recvfrom(2)/accept(2) truncation semantics. A null
  * address or length pointer writes nothing. Returns 0 or -EFAULT.
  *
  * sin_family is in host byte order, little-endian here, and only sin_port
@@ -368,9 +423,11 @@ static void sockaddr_in6_out(uint8_t *sa, const uint8_t *addr, int ifindex)
  * 0x0200, which a reader of the peer's address, such as dropbear's logging
  * of a connection, takes for an unknown family.
  */
-static int copy_sockaddr_to_user(uintptr_t sa_ptr, uintptr_t salen_ptr, uint16_t port, uint32_t ip)
+static int copy_sockaddr_to_user(uintptr_t sa_ptr, uintptr_t salen_ptr, uint16_t port,
+                                 net_addr_t ip, uint16_t family)
 {
-    uint8_t sa[16];
+    uint8_t sa[SOCKADDR_IN6_LEN];
+    uint32_t width = family == AF_INET6 ? SOCKADDR_IN6_LEN : SOCKADDR_IN_LEN;
     uint32_t caller_len;
     uint32_t copy_len;
 
@@ -382,18 +439,14 @@ static int copy_sockaddr_to_user(uintptr_t sa_ptr, uintptr_t salen_ptr, uint16_t
         return -EFAULT;
     }
 
-    k_memset(sa, 0, sizeof(sa));
-    sa[0] = 2; /* AF_INET, low byte */
-    sa[1] = 0;
-    SC_WBE16(sa + 2, port);
-    SC_WBE32(sa + 4, ip);
+    inet_endpoint_out(sa, family, ip, port);
 
-    copy_len = (caller_len < sizeof(sa)) ? caller_len : (uint32_t)sizeof(sa);
+    copy_len = (caller_len < width) ? caller_len : (uint32_t)width;
     if (copy_len > 0 && copy_to_user((void __user *)sa_ptr, sa, copy_len) != 0) {
         return -EFAULT;
     }
 
-    caller_len = (uint32_t)sizeof(sa);
+    caller_len = (uint32_t)width;
     if (copy_to_user((void __user *)salen_ptr, &caller_len, sizeof(caller_len)) != 0) {
         return -EFAULT;
     }
@@ -418,8 +471,8 @@ static void sock_fd_flags(fd_entry_t *entry, uint32_t flags)
 /**
  * Check the kind of socket socket(2) is asked to make, `domain`, `*type` and
  * `protocol`: AF_INET with SOCK_STREAM, SOCK_DGRAM or SOCK_RAW (ICMP, or the
- * ioctl-only descriptor of IPPROTO_RAW), AF_INET6 with SOCK_RAW and ICMPv6
- * or IPPROTO_RAW, AF_PACKET with SOCK_DGRAM, and
+ * ioctl-only descriptor of IPPROTO_RAW), AF_INET6 with TCP, UDP, raw ICMPv6 or raw IPv6,
+ * AF_PACKET with SOCK_DGRAM, and
  * AF_NETLINK with SOCK_RAW or SOCK_DGRAM, which are one thing, since the
  * kernel's answers are datagrams: `*type` is set to SOCK_DGRAM for it. The
  * raw and packet forms need a privileged caller (-EPERM); a netlink protocol
@@ -427,11 +480,7 @@ static void sock_fd_flags(fd_entry_t *entry, uint32_t flags)
  * family, -EPROTONOSUPPORT, -ESOCKTNOSUPPORT or -EINVAL for a type or a
  * protocol the family does not have.
  *
- * The families are IPv4, IPv6 for its raw sockets alone, the packet family, which the
- * DHCP client needs to see replies that arrive before this machine owns an
- * address, and netlink; another fails here rather than make a socket that
- * cannot work, and an IPv6 stream or datagram socket is -EAFNOSUPPORT, the
- * answer on which a program falls back to IPv4. AF_INET has
+ * The families are IPv4, IPv6, packet and netlink. IPv4 has
  * two raw sockets, and the protocol tells them apart. IPPROTO_RAW is the
  * query descriptor: a DHCP client opens it and does nothing with it but use
  * the interface ioctls (BusyBox's `udhcp_read_interface`), so here it is a
@@ -452,15 +501,19 @@ static int32_t socket_kind(int domain, int *type, int protocol)
         return -EAFNOSUPPORT;
     }
     if (domain == AF_INET6) {
-        if (*type != SOCK_RAW) {
-            return -EAFNOSUPPORT;
-        }
-        if (protocol != IPPROTO_ICMPV6 && protocol != IPPROTO_RAW) {
-            return -EPROTONOSUPPORT;
-        }
-        if (!current_proc || !proc_privileged(current_proc)) {
-            return -EPERM;
-        }
+        if (*type == SOCK_RAW) {
+            if (protocol != IPPROTO_ICMPV6 && protocol != IPPROTO_RAW)
+                return -EPROTONOSUPPORT;
+            if (!current_proc || !proc_privileged(current_proc))
+                return -EPERM;
+        } else if (*type == SOCK_STREAM) {
+            if (protocol != 0 && protocol != 6)
+                return -EPROTONOSUPPORT;
+        } else if (*type == SOCK_DGRAM) {
+            if (protocol != 0 && protocol != 17)
+                return -EPROTONOSUPPORT;
+        } else
+            return -ESOCKTNOSUPPORT;
         return 0;
     }
     if (domain == AF_NETLINK) {
@@ -513,6 +566,9 @@ static int32_t do_socket(int domain, int type, int protocol)
         return -ENOMEM;
     }
     sock->family = (uint16_t)domain;
+    if (domain == AF_INET6) {
+        sock->local_ip = sock->remote_ip = net_addr6(ip6_any, 0);
+    }
     if (domain != AF_NETLINK && proc_netns(current_proc) != &init_netns) {
         sock->ns = proc_netns(current_proc);
     }
@@ -617,11 +673,12 @@ static int32_t netlink_bind_user(struct socket *sock, uintptr_t sa_ptr, int addr
  * are separate calls and a check made only here is bypassed by binding both
  * sockets first.
  */
-static int32_t bind_inet(struct socket *sock, uint32_t ip, uint16_t port)
+static int32_t bind_inet(struct socket *sock, net_addr_t ip, uint16_t port)
 {
     int rc;
 
-    if (ip != 0 && !ip_is_local(ip) && !(sock->type == SOCK_DGRAM && netdev_is_broadcast(ip))) {
+    if (!net_addr_any(ip) && !net_addr_local(ip) &&
+        !(ip.family == AF_INET && sock->type == SOCK_DGRAM && netdev_is_broadcast(ip.v4))) {
         return -EADDRNOTAVAIL;
     }
 
@@ -637,24 +694,29 @@ static int32_t bind_inet(struct socket *sock, uint32_t ip, uint16_t port)
         sock->local_ip = ip;
         if (port == 0) {
             if (udp_bind_ephemeral(sock) == 0) {
-                sock->local_ip = 0;
+                sock->local_ip = sock->family == AF_INET6 ? net_addr6(ip6_any, 0) : net_addr4(0);
                 return -EADDRINUSE;
             }
             return 0;
         }
         rc = udp_bind(port, sock);
         if (rc < 0) {
-            sock->local_ip = 0;
+            sock->local_ip = sock->family == AF_INET6 ? net_addr6(ip6_any, 0) : net_addr4(0);
             return rc == -ENOMEM ? -ENOMEM : -EADDRINUSE;
         }
     }
-    if (sock->type == SOCK_STREAM && port == 0) {
-        port = tcp_bind_ephemeral();
-        if (port == 0) {
+    if (sock->type == SOCK_STREAM) {
+        net_addr_t saved = sock->local_ip;
+        uint32_t held = net_lock();
+        sock->local_ip = ip;
+        if (!port)
+            port = tcp_bind_ephemeral();
+        if (!port || socket_stream_conflict(sock, port) || tcp_port_listening(sock, port)) {
+            sock->local_ip = saved;
+            net_unlock(held);
             return -EADDRINUSE;
         }
-    } else if (sock->type == SOCK_STREAM && tcp_port_listening(ip, port)) {
-        return -EADDRINUSE;
+        net_unlock(held);
     }
     sock->local_ip = ip;
     sock->local_port = port;
@@ -745,33 +807,22 @@ static int32_t do_bind(int fd, uintptr_t sa_ptr, int addrlen)
         return 0;
     }
 
-    if (entry->sock->type == SOCK_RAW && entry->sock->family == AF_INET6) {
-        uint8_t want6[16];
-        int scope;
-        int r = sockaddr_in6_in(sa_ptr, addrlen, want6, &scope);
-
-        if (r != 0) {
-            return r;
-        }
-        if (!ip6_is_unspecified(want6) && !ip6_is_loopback(want6) && !netdev_owner6(want6)) {
-            return -EADDRNOTAVAIL;
-        }
-        return 0;
-    }
-    if (entry->sock->type == SOCK_RAW) {
-        uint32_t want;
-
-        if (sock_is_query(entry->sock)) {
+    {
+        net_addr_t addr;
+        uint16_t port;
+        int rc = inet_endpoint_in(entry->sock, sa_ptr, addrlen, &addr, &port);
+        if (rc)
+            return rc;
+        if (sock_is_query(entry->sock))
             return -EOPNOTSUPP;
+        if (entry->sock->type == SOCK_RAW) {
+            if (!net_addr_any(addr) && !net_addr_local(addr))
+                return -EADDRNOTAVAIL;
+            entry->sock->local_ip = addr;
+            return 0;
         }
-        want = SC_BE32(sa + 4);
-        if (want != 0 && !ip_is_local(want)) {
-            return -EADDRNOTAVAIL;
-        }
-        return 0;
+        return bind_inet(entry->sock, addr, port);
     }
-
-    return bind_inet(entry->sock, SC_BE32(sa + 4), SC_BE16(sa + 2));
 }
 
 /**
@@ -823,7 +874,7 @@ static int32_t raw6_sendto(struct socket *sock, uintptr_t buf_ptr, int len, uint
         if (whole) {
             r = ip6_tx_whole(buf, (uint32_t)len, dst, scope);
         } else {
-            r = icmp6_send(0, dst, scope, buf, (uint16_t)len,
+            r = icmp6_send(sock->local_ip.v6, dst, scope, buf, (uint16_t)len,
                            ip6_is_multicast(dst) ? IP6_HOP_LIMIT_MCAST : sock->ip_ttl);
         }
         net_unlock(netflags);
@@ -847,22 +898,20 @@ static int32_t raw6_sendto(struct socket *sock, uintptr_t buf_ptr, int len, uint
 static int32_t udp_sendto(fd_entry_t *entry, const uint8_t *buf, int len, uintptr_t sa_ptr,
                           int addrlen)
 {
-    uint8_t sa[SOCKADDR_MIN];
-
-    if (sa_ptr == 0 || addrlen == 0) {
-        if (!entry->sock->connected) {
+    net_addr_t dst;
+    uint16_t port;
+    int rc;
+    if (!sa_ptr || !addrlen) {
+        if (!entry->sock->connected)
             return -EDESTADDRREQ;
-        }
-        return dgram_send(entry->sock, entry->sock->remote_ip, entry->sock->remote_port, buf,
-                          (uint16_t)len);
+        dst = entry->sock->remote_ip;
+        port = entry->sock->remote_port;
+    } else {
+        rc = inet_endpoint_in(entry->sock, sa_ptr, addrlen, &dst, &port);
+        if (rc)
+            return rc;
     }
-    if (addrlen < SOCKADDR_MIN) {
-        return -EINVAL; /* declared sockaddr shorter than the 8 bytes read */
-    }
-    if (copy_from_user(sa, (const void __user *)sa_ptr, SOCKADDR_MIN) != 0) {
-        return -EFAULT;
-    }
-    return dgram_send(entry->sock, SC_BE32(sa + 4), SC_BE16(sa + 2), buf, (uint16_t)len);
+    return dgram_send(entry->sock, dst, port, buf, (uint16_t)len);
 }
 
 /** The length of the sockaddr a receive on `sock` reports its sender in. */
@@ -1095,7 +1144,7 @@ static int32_t do_recvfrom(int fd, uintptr_t buf_ptr, int len, int flags, uintpt
                            uintptr_t salen_ptr)
 {
     fd_entry_t *entry;
-    uint32_t src_ip = 0;
+    net_addr_t src_ip = net_addr4(0);
     uint16_t src_port = 0;
     uint32_t addr_len = 0;
     uint32_t addr_give = 0;
@@ -1164,16 +1213,8 @@ static int32_t do_recvfrom(int fd, uintptr_t buf_ptr, int len, int flags, uintpt
                 addr_len = 0;
                 addr_give = 0;
             }
-        } else if (entry->sock->family == AF_INET6) {
-            uint8_t src6[16];
-            int ifindex =
-                peek ? raw_head_src6(entry->sock, src6) : raw_last_src6(entry->sock, src6);
-
-            sockaddr_in6_out(sa, src6, ifindex);
         } else {
-            sa[0] = (uint8_t)(AF_INET & 0xff);
-            SC_WBE16(sa + 2, src_port);
-            SC_WBE32(sa + 4, src_ip);
+            inet_endpoint_out(sa, entry->sock->family, src_ip, src_port);
         }
         if (addr_give > 0 && copy_to_user((void __user *)sa_ptr, sa, addr_give) != 0) {
             return -EFAULT;
@@ -1289,7 +1330,7 @@ static int accept_ready(void *arg)
 static int32_t do_connect(int fd, uintptr_t sa_ptr, int addrlen)
 {
     fd_entry_t *entry;
-    uint32_t dst_ip;
+    net_addr_t dst_ip;
     uint16_t dst_port;
     uint16_t family;
     uint8_t sa[SOCKADDR_MIN];
@@ -1321,38 +1362,31 @@ static int32_t do_connect(int fd, uintptr_t sa_ptr, int addrlen)
     }
     family = (uint16_t)((uint16_t)sa[0] | ((uint16_t)sa[1] << 8));
     if (family == 0) {
-        if (entry->sock->type != SOCK_DGRAM) {
+        if (entry->sock->type != SOCK_DGRAM)
             return -EAFNOSUPPORT;
-        }
-    } else {
-        if (addrlen < SOCKADDR_MIN) {
-            return -EINVAL; /* declared sockaddr shorter than the 8 bytes read */
-        }
-        if (copy_from_user(sa, (const void __user *)sa_ptr, SOCKADDR_MIN) != 0) {
-            return -EFAULT;
-        }
+        entry->sock->connected = 0;
+        entry->sock->remote_ip =
+            entry->sock->family == AF_INET6 ? net_addr6(ip6_any, 0) : net_addr4(0);
+        entry->sock->remote_port = 0;
+        return 0;
     }
+    rc = inet_endpoint_in(entry->sock, sa_ptr, addrlen, &dst_ip, &dst_port);
+    if (rc)
+        return rc;
     if (entry->sock->type == SOCK_DGRAM) {
-        uint32_t held;
-
-        if (family == 0) {
-            held = net_lock();
-            entry->sock->connected = 0;
-            entry->sock->remote_ip = 0;
-            entry->sock->remote_port = 0;
+        net_addr_t from;
+        uint32_t held = net_lock();
+        rc = net_addr_source(entry->sock->local_ip, dst_ip, &from);
+        if (rc < 0) {
             net_unlock(held);
-            return 0;
+            return rc;
         }
-        if (family != AF_INET) {
-            return -EAFNOSUPPORT;
-        }
-        held = net_lock();
-        if (entry->sock->local_port == 0 && udp_bind_ephemeral(entry->sock) == 0) {
+        if (!entry->sock->local_port && !udp_bind_ephemeral(entry->sock)) {
             net_unlock(held);
             return -EAGAIN;
         }
-        entry->sock->remote_port = SC_BE16(sa + 2);
-        entry->sock->remote_ip = SC_BE32(sa + 4);
+        entry->sock->remote_ip = dst_ip;
+        entry->sock->remote_port = dst_port;
         entry->sock->connected = 1;
         net_unlock(held);
         return 0;
@@ -1363,9 +1397,6 @@ static int32_t do_connect(int fd, uintptr_t sa_ptr, int addrlen)
     if (entry->sock->listening || entry->sock->tcb) {
         return (entry->sock->tcb && entry->sock->tcb->state == TCP_SYN_SENT) ? -EALREADY : -EISCONN;
     }
-
-    dst_port = SC_BE16(sa + 2);
-    dst_ip = SC_BE32(sa + 4);
 
     {
         int opened = tcp_connect(entry->sock, dst_ip, dst_port);
@@ -1487,8 +1518,9 @@ static int32_t do_accept(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr, uint32_t
     conn_sock = listen_sock->accept_queue[listen_sock->accept_head];
     listen_sock->accept_head = (listen_sock->accept_head + 1) & (SOCK_ACCEPT_BACKLOG - 1);
 
-    if ((sa_ptr && !salen_ptr) || copy_sockaddr_to_user(sa_ptr, salen_ptr, conn_sock->remote_port,
-                                                        conn_sock->remote_ip) != 0) {
+    if ((sa_ptr && !salen_ptr) ||
+        copy_sockaddr_to_user(sa_ptr, salen_ptr, conn_sock->remote_port, conn_sock->remote_ip,
+                              conn_sock->family) != 0) {
         fd_free(current_proc->fds, new_fd);
         socket_unref(conn_sock);
         return -EFAULT;
@@ -1598,7 +1630,8 @@ static int32_t do_recv(int fd, uintptr_t buf_ptr, int len, int flags)
 static int32_t do_getsockname(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr)
 {
     fd_entry_t *entry = fd_get(current_proc->fds, fd);
-    uint32_t flags, local_ip;
+    uint32_t flags;
+    net_addr_t local_ip;
 
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return not_a_socket(entry);
@@ -1650,13 +1683,18 @@ static int32_t do_getsockname(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr)
     flags = net_lock();
     if (entry->sock->tcb) {
         local_ip = entry->sock->tcb->local_ip;
-    } else if (entry->sock->local_ip == 0 && entry->sock->connected) {
-        local_ip = ip_source(entry->sock->remote_ip);
+    } else if (net_addr_any(entry->sock->local_ip) && entry->sock->connected) {
+        int rc = net_addr_source(entry->sock->local_ip, entry->sock->remote_ip, &local_ip);
+        if (rc < 0) {
+            net_unlock(flags);
+            return rc;
+        }
     } else {
         local_ip = entry->sock->local_ip;
     }
     net_unlock(flags);
-    return copy_sockaddr_to_user(sa_ptr, salen_ptr, entry->sock->local_port, local_ip);
+    return copy_sockaddr_to_user(sa_ptr, salen_ptr, entry->sock->local_port, local_ip,
+                                 entry->sock->family);
 }
 
 /** getpeername: the connected peer's address (an established stream socket
@@ -1696,7 +1734,7 @@ static int32_t do_getpeername(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr)
         return -EFAULT;
     }
     return copy_sockaddr_to_user(sa_ptr, salen_ptr, entry->sock->remote_port,
-                                 entry->sock->remote_ip);
+                                 entry->sock->remote_ip, entry->sock->family);
 }
 
 /* The `how` of shutdown(2), Linux's values. */
@@ -1843,6 +1881,15 @@ static int32_t do_setsockopt(int fd, int level, int optname, uintptr_t optval_pt
         }
     }
 
+    if (level == SOL_IPV6 && optname == IPV6_V6ONLY) {
+        if (entry->sock->family != AF_INET6)
+            return -ENOPROTOOPT;
+        if (optlen < (int)sizeof(int) || entry->sock->local_port || entry->sock->tcb ||
+            !net_addr_any(entry->sock->local_ip))
+            return -EINVAL;
+        entry->sock->v6only = val != 0;
+        return 0;
+    }
     if (level == SOL_IP && optname == IP_TTL) {
         if (optlen < (int)sizeof(int)) {
             return -EINVAL;
@@ -1890,7 +1937,11 @@ static int32_t do_getsockopt(int fd, int level, int optname, uintptr_t optval_pt
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return not_a_socket(entry);
     }
-    if (level == SOL_SOCKET && optname == SO_TYPE) {
+    if (level == SOL_IPV6 && optname == IPV6_V6ONLY) {
+        if (entry->sock->family != AF_INET6)
+            return -ENOPROTOOPT;
+        val = entry->sock->v6only;
+    } else if (level == SOL_SOCKET && optname == SO_TYPE) {
         val = entry->sock->type;
     } else if (level == SOL_SOCKET && optname == SO_ERROR) {
         uint32_t flags = net_lock();
@@ -2004,7 +2055,7 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
     uint32_t namelen;
     uint32_t addr_len, addr_give;
     uint32_t iovlen;
-    uint32_t src_ip = 0;
+    net_addr_t src_ip = net_addr4(0);
     uint16_t src_port = 0;
     uint32_t i;
     int32_t taken;
@@ -2063,7 +2114,7 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
     }
 
     if (name_ptr && addr_len > 0) {
-        uint8_t sa[SOCKADDR_LL_LEN];
+        uint8_t sa[SOCKADDR_IN6_LEN];
 
         k_memset(sa, 0, sizeof(sa));
         if (entry->sock->family == AF_NETLINK) {
@@ -2074,9 +2125,7 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
                 addr_give = 0;
             }
         } else {
-            sa[0] = (uint8_t)(AF_INET & 0xff);
-            SC_WBE16(sa + 2, src_port);
-            SC_WBE32(sa + 4, src_ip);
+            inet_endpoint_out(sa, entry->sock->family, src_ip, src_port);
         }
         if (addr_give > 0 && copy_to_user((void __user *)name_ptr, sa, addr_give) != 0) {
             return -EFAULT;
@@ -2157,7 +2206,8 @@ static int32_t do_sendmsg(int fd, uintptr_t msg_ptr, int flags)
         return -EFAULT;
     }
     if (iovlen == 1 || entry->sock->type != SOCK_DGRAM ||
-        (entry->sock->family != AF_INET && entry->sock->family != AF_NETLINK)) {
+        (entry->sock->family != AF_INET && entry->sock->family != AF_INET6 &&
+         entry->sock->family != AF_NETLINK)) {
         if (iovlen > 1) {
             return -EOPNOTSUPP;
         }

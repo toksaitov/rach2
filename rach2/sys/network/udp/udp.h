@@ -2,12 +2,14 @@
 #define _UDP_H_
 
 #include "../../lib/kint.h"
+#include "../socket/address.h"
 
 /*
  * udp: the User Datagram Protocol. A datagram sent gets an 8-byte header and
  * goes to `ip_tx_from`; one received comes from `ip_rx` and is given to the
- * socket bound to its address and destination port. The checksum is sent as
- * 0, which IPv4 allows to mean none, and a received one is not checked.
+ * socket bound to its address and destination port. IPv4 sends checksum 0
+ * and does not check one received; IPv6 sends and verifies its mandatory
+ * pseudo-header checksum.
  */
 
 #define UDP_HDR_SIZE 8
@@ -46,7 +48,7 @@ void udp_refused(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port);
  * 1500, this layer's buffer, is refused here, and a smaller one by IP. Takes
  * `net_lock` itself.
  */
-int udp_tx(const struct socket *sock, uint32_t dst_ip, uint16_t dst_port, const uint8_t *payload,
+int udp_tx(const struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, const uint8_t *payload,
            uint16_t plen);
 
 /** Bind `sock` to `port` at its `local_ip`, under the caller's effective
@@ -65,4 +67,8 @@ uint16_t udp_bind_ephemeral(struct socket *sock);
  * Takes `net_lock` itself. */
 void udp_unbind(struct socket *sock);
 
+/** Deliver an IPv6 UDP message after verifying its mandatory checksum.
+ * Returns -1 for no binding, zero for delivery or a malformed message.
+ * The caller holds net_lock. */
+int udp6_rx(int ifindex, const uint8_t *src, const uint8_t *dst, const uint8_t *data, uint16_t len);
 #endif /* _UDP_H_ */

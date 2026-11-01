@@ -22,22 +22,19 @@
 #define RAW_QUEUE_SLOTS 8
 #define RAW_SLOT_SIZE   1500
 
-/* Each entry's source is an IPv4 address in `src`, or for an AF_INET6
- * socket an IPv6 one in `src6` with the index of the interface it came in
- * on in `ifindex`; `last_` are those of the entry most recently taken. */
+/* Each entry has a canonical source and its receiving interface;
+ * `last_` describes the entry most recently taken. */
 struct raw_queue {
     uint8_t buf[RAW_QUEUE_SLOTS][RAW_SLOT_SIZE];
     uint16_t len[RAW_QUEUE_SLOTS];
-    uint32_t src[RAW_QUEUE_SLOTS];
-    uint8_t src6[RAW_QUEUE_SLOTS][16];
-    uint8_t ifindex[RAW_QUEUE_SLOTS];
-    int head;  /* the next datagram to be read */
-    int count; /* how many are waiting */
+    net_addr_t src[RAW_QUEUE_SLOTS];
+    uint32_t ifindex[RAW_QUEUE_SLOTS]; /* ingress, including global addresses */
+    int head;                          /* the next datagram to be read */
+    int count;                         /* how many are waiting */
     int dropped;
     int reported; /* whether a drop has been logged */
-    uint32_t last_src;
-    uint8_t last_src6[16];
-    uint8_t last_ifindex;
+    net_addr_t last_src;
+    uint32_t last_ifindex;
 };
 
 /* A registered socket: the socket, its registered protocol, whether it is
@@ -161,7 +158,7 @@ void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len)
         }
         k_memcpy(q->buf[slot], data, copy_len);
         q->len[slot] = copy_len;
-        q->src[slot] = src;
+        q->src[slot] = net_addr4(src);
         q->count++;
         wq_wake(&b->sock->waiters, WQ_DATA);
     }
@@ -183,9 +180,8 @@ void raw6_rx(int ifindex, const uint8_t *src, uint8_t nh, const uint8_t *msg, ui
         }
         k_memcpy(q->buf[slot], msg, copy_len);
         q->len[slot] = copy_len;
-        q->src[slot] = 0;
-        k_memcpy(q->src6[slot], src, 16);
-        q->ifindex[slot] = (uint8_t)ifindex;
+        q->src[slot] = net_addr6(src, (uint32_t)ifindex);
+        q->ifindex[slot] = (uint32_t)ifindex;
         q->count++;
         wq_wake(&b->sock->waiters, WQ_DATA);
     }
@@ -249,7 +245,6 @@ void raw_consume(struct socket *sock)
     q = queue_of(sock);
     if (q && q->count > 0) {
         q->last_src = q->src[q->head];
-        k_memcpy(q->last_src6, q->src6[q->head], 16);
         q->last_ifindex = q->ifindex[q->head];
         q->head = (q->head + 1) % RAW_QUEUE_SLOTS;
         q->count--;
@@ -264,7 +259,7 @@ uint32_t raw_head_src(struct socket *sock)
 
     flags = net_lock();
     q = queue_of(sock);
-    src = q && q->count > 0 ? q->src[q->head] : 0u;
+    src = q && q->count > 0 ? q->src[q->head].v4 : 0u;
     net_unlock(flags);
     return src;
 }
@@ -276,7 +271,7 @@ uint32_t raw_last_src(struct socket *sock)
 
     flags = net_lock();
     q = queue_of(sock);
-    src = q ? q->last_src : 0u;
+    src = q ? q->last_src.v4 : 0u;
     net_unlock(flags);
     return src;
 }
@@ -290,8 +285,8 @@ int raw_head_src6(struct socket *sock, uint8_t *src)
     flags = net_lock();
     q = queue_of(sock);
     if (q && q->count > 0) {
-        k_memcpy(src, q->src6[q->head], 16);
-        ifindex = q->ifindex[q->head];
+        net_addr_to6(q->src[q->head], src);
+        ifindex = (int)q->ifindex[q->head];
     }
     net_unlock(flags);
     return ifindex;
@@ -306,9 +301,26 @@ int raw_last_src6(struct socket *sock, uint8_t *src)
     flags = net_lock();
     q = queue_of(sock);
     if (q) {
-        k_memcpy(src, q->last_src6, 16);
-        ifindex = q->last_ifindex;
+        if (q->last_src.family == AF_INET6)
+            net_addr_to6(q->last_src, src);
+        else
+            k_memset(src, 0, 16);
+        ifindex = (int)q->last_ifindex;
     }
     net_unlock(flags);
     return ifindex;
+}
+
+/** Copy the canonical address of the oldest message, or unspecified. */
+void raw_head_address(struct socket *sock, net_addr_t *src)
+{
+    struct raw_queue *q = queue_of(sock);
+    *src = q && q->count ? q->src[q->head] : net_addr4(0);
+}
+
+/** Copy the canonical address of the message most recently consumed. */
+void raw_last_address(struct socket *sock, net_addr_t *src)
+{
+    struct raw_queue *q = queue_of(sock);
+    *src = q ? q->last_src : net_addr4(0);
 }

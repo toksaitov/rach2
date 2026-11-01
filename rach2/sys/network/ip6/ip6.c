@@ -8,6 +8,8 @@
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 #include "ip6.h"
+#include "../tcp/tcp.h"
+#include "../udp/udp.h"
 #include "icmp6.h"
 #include "frag6.h"
 #include "../ip/ip.h"
@@ -290,6 +292,8 @@ void ip6_walk(struct netdev *nd, const uint8_t *dg, uint32_t len, uint32_t off, 
             net_mib6.ip6_in_delivers++;
             return;
         case IP6_NH_ICMP6:
+        case IP6_NH_TCP:
+        case IP6_NH_UDP:
             if (nd) {
                 ifindex = nd->index;
             } else if (netdev_owner6(dst)) {
@@ -299,7 +303,16 @@ void ip6_walk(struct netdev *nd, const uint8_t *dg, uint32_t len, uint32_t off, 
             }
             net_mib6.ip6_in_delivers++;
             raw6_rx(ifindex, dg + 8, nh, dg + off, (uint16_t)(len - off));
-            icmp6_rx(nd, dg + 8, dst, dg[7], dg + off, (uint16_t)(len - off));
+            if (nh == IP6_NH_TCP) {
+                tcp6_rx(ifindex, dg + 8, dst, dg + off, (uint16_t)(len - off));
+            } else if (nh == IP6_NH_UDP) {
+                if (udp6_rx(ifindex, dg + 8, dst, dg + off, (uint16_t)(len - off)) < 0) {
+                    uint16_t quote = (uint16_t)(len > 1280 ? 1280 : len);
+                    icmp6_error(nd, dg, quote, ICMP6_DST_UNREACH, 4, 0);
+                }
+            } else {
+                icmp6_rx(nd, dg + 8, dst, dg[7], dg + off, (uint16_t)(len - off));
+            }
             return;
         default:
             net_mib6.ip6_in_unknown_protos++;
