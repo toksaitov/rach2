@@ -38,6 +38,7 @@
 #define NLM_F_EXCL    0x200u
 #define NLM_F_DUMP    0x300u
 #define RTM_NEWLINK   16
+#define RTM_DELLINK   17
 #define RTM_GETLINK   18
 #define RTM_SETLINK   19
 #define RTM_NEWADDR   20
@@ -57,6 +58,33 @@
 /* The configuration of an interface, which `ip netconf` asks for. */
 #define RTM_NEWNETCONF 80
 #define RTM_GETNETCONF 82
+
+/* A neighbour discovery option the kernel leaves to a program (RFC 8106's
+ * RDNSS and DNSSL), the `struct nduseroptmsg` before it, and the attribute
+ * that gives the router's address after it. */
+#define RTM_NEWNDUSEROPT  68
+#define NDUSEROPT_MSG_LEN 16
+#define NDUSEROPT_SRCADDR 1
+#define ND_ROUTER_ADVERT  134
+
+/* The multicast groups of NETLINK_ROUTE that notifications go to, Linux's
+ * RTNLGRP_ numbers; a socket is in group N when bit N - 1 of its groups is
+ * set, by bind or by NETLINK_ADD_MEMBERSHIP. */
+#define RTNLGRP_LINK        1
+#define RTNLGRP_IPV4_IFADDR 5
+#define RTNLGRP_IPV4_ROUTE  7
+#define RTNLGRP_IPV6_IFADDR 9
+#define RTNLGRP_IPV6_ROUTE  11
+#define RTNLGRP_ND_USEROPT  20
+#define GROUP_BIT(g)        (1u << ((g) - 1))
+#define WATCH_GROUPS                                                                            \
+    (GROUP_BIT(RTNLGRP_LINK) | GROUP_BIT(RTNLGRP_IPV4_IFADDR) | GROUP_BIT(RTNLGRP_IPV4_ROUTE) | \
+     GROUP_BIT(RTNLGRP_IPV6_IFADDR) | GROUP_BIT(RTNLGRP_IPV6_ROUTE))
+
+/* The options of SOL_NETLINK that change something here. */
+#define NETLINK_ADD_MEMBERSHIP  1
+#define NETLINK_DROP_MEMBERSHIP 2
+#define NETLINK_NO_ENOBUFS      5
 
 /* Attributes of a link, an address and a route. */
 #define IFLA_ADDRESS   1
@@ -168,6 +196,17 @@
 #define NL_DGRAM_MAX  (32768u - 320u)
 #define NL_MSG_MAX    512u
 
+/* Policy: the bytes of notifications a socket may have queued. One that
+ * would pass it is dropped and the socket's next receive fails with ENOBUFS,
+ * as Linux's does when its receive buffer, 208 KiB by default, is full. An
+ * answer to a request is queued whatever is there. */
+#define NL_NOTIFY_QUEUE_MAX 65536u
+
+/* A user option of a router advertisement as a message: the header, the
+ * `nduseroptmsg`, the option, at most 255 units of 8 bytes, and the
+ * router's address as an attribute. */
+#define NL_USEROPT_MAX (NLMSG_HDRLEN + NDUSEROPT_MSG_LEN + 255u * 8u + 4u + 16u)
+
 /* One queued datagram; its bytes follow the record. */
 struct nl_dgram {
     struct nl_dgram *next;
@@ -176,21 +215,37 @@ struct nl_dgram {
 
 struct netlink_state {
     struct netlink_state *next; /* every netlink socket's, for the port ids */
+    struct socket *sock;
     int protocol;
-    /* The port id and the multicast groups the bind set; `bound` is 1 once
-     * there has been one. */
+    /* The port id, and the multicast groups 1 to 32 as bits 0 to 31, which
+     * the bind set and NETLINK_ADD_MEMBERSHIP adds to; `bound` is 1 once
+     * there has been a bind. */
     uint32_t pid;
     uint32_t groups;
     int bound;
-    uint32_t max_recv;            /* the largest read so far, in bytes */
-    struct nl_dgram *head, *tail; /* the answers queued, oldest first */
+    uint32_t max_recv; /* the largest read so far, in bytes */
+    /* Whether the socket was made in the first network namespace, whose
+     * interfaces alone notifications are of. */
+    int seen;
+    /* Whether a notification dropped for room is kept from failing the next
+     * receive, NETLINK_NO_ENOBUFS. */
+    int no_enobufs;
+    /* The datagrams queued, oldest first, answers and notifications, and
+     * their bytes. The queue changes under net_lock, since the timer tick
+     * and the receive path queue notifications. */
+    struct nl_dgram *head, *tail;
+    uint32_t queued;
 };
 
 static struct netlink_state *states;
 
 /* An answer being built: the datagram so far, the request's sequence
  * number and the socket's port id, which every message of the answer
- * repeats, and whether a datagram of it could not be queued. */
+ * repeats, and whether a datagram of it could not be queued. A
+ * notification is built the same way, with `group` the group it goes to,
+ * sequence number and port id 0, and no socket or datagram: each message
+ * goes to the group's sockets as it is made, as a deletion when `del` is
+ * set. */
 struct nl_build {
     struct socket *sock;
     uint8_t buf[NL_DGRAM_MAX];
@@ -199,6 +254,8 @@ struct nl_build {
     uint32_t seq;
     uint32_t pid;
     int failed;
+    uint32_t group;
+    int del;
 };
 
 /* The port ids handed to sockets bound with 0 after their process's first:
@@ -249,6 +306,8 @@ int netlink_open(struct socket *sock, int protocol)
         return -ENOMEM;
     }
     st->protocol = protocol;
+    st->sock = sock;
+    st->seen = net_ns_seen();
     flags = net_lock();
     st->next = states;
     states = st;
@@ -284,6 +343,8 @@ void netlink_close(struct socket *sock)
     kfree(st);
 }
 
+static void watch_start(void);
+
 /** Whether a netlink socket other than `self` is bound to port id `pid`.
  * The caller holds `net_lock`. */
 static int port_taken(const struct netlink_state *self, uint32_t pid)
@@ -315,6 +376,32 @@ int netlink_bind(struct socket *sock, uint32_t pid, uint32_t groups)
     st->pid = pid;
     st->groups = groups;
     st->bound = 1;
+    watch_start();
+    net_unlock(flags);
+    return 0;
+}
+
+int32_t netlink_setsockopt(struct socket *sock, int optname, int val, int optlen)
+{
+    struct netlink_state *st = state_of(sock);
+    uint32_t flags;
+
+    if (optname != NETLINK_ADD_MEMBERSHIP && optname != NETLINK_DROP_MEMBERSHIP &&
+        optname != NETLINK_NO_ENOBUFS) {
+        return 0;
+    }
+    if (optlen < 4 || (optname != NETLINK_NO_ENOBUFS && val <= 0)) {
+        return -EINVAL;
+    }
+    flags = net_lock();
+    if (optname == NETLINK_NO_ENOBUFS) {
+        st->no_enobufs = val != 0;
+    } else if (val <= 32 && optname == NETLINK_ADD_MEMBERSHIP) {
+        st->groups |= GROUP_BIT((uint32_t)val);
+        watch_start();
+    } else if (val <= 32) {
+        st->groups &= ~GROUP_BIT((uint32_t)val);
+    }
     net_unlock(flags);
     return 0;
 }
@@ -332,36 +419,81 @@ void netlink_name(struct socket *sock, uint8_t *sa)
     put32(sa + 8, st->groups);
 }
 
-/** Queue the datagram built so far on the socket, if it has anything, and
- * wake a reader. A datagram that cannot be allocated marks the answer
- * failed. */
-static void nl_flush(struct nl_build *b)
+/** Queue a copy of the `len` bytes at `data` on `st` as one datagram and
+ * wake a reader; 0, or -ENOMEM. The caller holds net_lock. */
+static int enqueue(struct netlink_state *st, const uint8_t *data, uint32_t len)
 {
-    struct netlink_state *st = state_of(b->sock);
-    struct nl_dgram *d;
-    uint32_t flags;
+    struct nl_dgram *d = kmalloc(sizeof(*d) + len);
 
-    if (b->len == 0 || b->failed) {
-        return;
-    }
-    d = kmalloc(sizeof(*d) + b->len);
     if (!d) {
-        b->failed = 1;
-        return;
+        return -ENOMEM;
     }
     d->next = 0;
-    d->len = b->len;
-    k_memcpy(d + 1, b->buf, b->len);
-    flags = net_lock();
+    d->len = len;
+    k_memcpy(d + 1, data, len);
     if (st->tail) {
         st->tail->next = d;
     } else {
         st->head = d;
     }
     st->tail = d;
+    st->queued += len;
+    wq_wake(&st->sock->waiters, WQ_DATA);
+    return 0;
+}
+
+/** Queue the datagram built so far on the socket, if it has anything, and
+ * wake a reader. A datagram that cannot be allocated marks the answer
+ * failed. */
+static void nl_flush(struct nl_build *b)
+{
+    uint32_t flags;
+    int rc;
+
+    if (b->len == 0 || b->failed) {
+        return;
+    }
+    flags = net_lock();
+    rc = enqueue(state_of(b->sock), b->buf, b->len);
     net_unlock(flags);
+    if (rc != 0) {
+        b->failed = 1;
+        return;
+    }
     b->len = 0;
-    wq_wake(&b->sock->waiters, WQ_DATA);
+}
+
+/**
+ * Send the message `msg` to every NETLINK_ROUTE socket of the first
+ * network namespace in group `group`, each in a datagram of its own, as a
+ * notification: with no flags and, for `del`, the type of the deletion,
+ * which is one past the type of the addition for links, addresses, routes
+ * and neighbours. A socket with no room for it, or for which no memory is
+ * left, misses it and has its error set to ENOBUFS, which its next receive
+ * returns, unless it asked for NETLINK_NO_ENOBUFS. Takes net_lock; may run
+ * in an interrupt.
+ */
+static void notify(uint32_t group, int del, uint8_t *msg)
+{
+    struct netlink_state *st;
+    uint32_t len = get32(msg), flags = net_lock();
+
+    put16(msg + 6, 0);
+    if (del) {
+        put16(msg + 4, (uint16_t)(get16(msg + 4) + 1u));
+    }
+    for (st = states; st; st = st->next) {
+        if (st->protocol != NETLINK_ROUTE || !st->seen || !(st->groups & GROUP_BIT(group))) {
+            continue;
+        }
+        if (st->queued + len > NL_NOTIFY_QUEUE_MAX || enqueue(st, msg, len) != 0) {
+            if (!st->no_enobufs) {
+                st->sock->so_error = ENOBUFS;
+                wq_wake(&st->sock->waiters, WQ_DATA);
+            }
+        }
+    }
+    net_unlock(flags);
 }
 
 /** Start a message of `type` and `flags` in `msg`, NL_MSG_MAX bytes that
@@ -417,10 +549,14 @@ static void msg_attr_ip(uint8_t *msg, uint16_t type, uint32_t ip)
  * current one has no room. An answer whose datagram could not be queued
  * takes nothing more: the bytes it holds are still there, with no room
  * after them. */
-static void nl_append(struct nl_build *b, const uint8_t *msg)
+static void nl_append(struct nl_build *b, uint8_t *msg)
 {
     uint32_t len = get32(msg);
 
+    if (b->group != 0) {
+        notify(b->group, b->del, msg);
+        return;
+    }
     if (b->len + len > b->cap) {
         nl_flush(b);
     }
@@ -820,6 +956,276 @@ static void route6_dump(struct nl_build *b)
         }
         route6_msg(b, &r, NLM_F_MULTI);
     }
+}
+
+/*
+ * The notifications of links, addresses and routes. The state they are made
+ * from, each interface's flags and link, its IPv4 and IPv6 addresses and the
+ * two route tables, is compared with what it was at the last comparison,
+ * ten times a second (`netlink_tick`) and after each change a request makes,
+ * and each difference goes to its group: a link whose flags or link state
+ * changed, an address or route that went or came, and an IPv6 address whose
+ * state or lifetimes changed, as Linux announces one when its duplicate
+ * detection ends, it is deprecated or a router renews it. Comparing the
+ * state, rather than calling out from each place that changes it, catches
+ * every change, the timers' and the receive path's among them. A change
+ * undone before the next comparison is not seen. The comparison runs only
+ * while a socket is in one of these groups; the first that joins takes the
+ * state the next comparison starts from. Everything here runs with
+ * interrupts off.
+ */
+
+/* The interfaces, and the routes of each family, the watch keeps. */
+#define WATCH_IFS    (NETDEV_MAX + 1)
+#define WATCH_ROUTES 80
+
+struct watch_link {
+    int index;
+    uint8_t up, running;
+};
+
+struct watch_addr4 {
+    int index;
+    uint32_t ip, mask;
+    int secondary;
+};
+
+struct watch_addr6 {
+    int index;
+    struct netdev_addr6 a;
+};
+
+struct watch_state {
+    int nlink, naddr4, naddr6, nroute4, nroute6;
+    struct watch_link link[WATCH_IFS];
+    struct watch_addr4 addr4[WATCH_IFS * (NETDEV_ADDRS + 1)];
+    struct watch_addr6 addr6[WATCH_IFS * NETDEV_ADDRS6];
+    struct netdev_rt route4[WATCH_ROUTES];
+    struct route6_row route6[WATCH_ROUTES];
+};
+
+/* The state at the last comparison is `watch_buf[watch_cur]`; the other
+ * takes the state now. `watching` is 0 while no socket listens. */
+static struct watch_state watch_buf[2];
+static int watch_cur;
+static int watching;
+static uint32_t watch_next;
+static struct nl_build watch_b;
+
+/** The interface of index `index`, of any namespace's caller, since the
+ * comparison runs in the timer tick; NULL for none. */
+static struct netdev *watch_dev(int index)
+{
+    return index >= 1 && index <= netdev_listed() ? netdev_at(index - 1) : 0;
+}
+
+/** Whether a NETLINK_ROUTE socket of the first namespace is in a group the
+ * comparison sends to. */
+static int listening(void)
+{
+    const struct netlink_state *st;
+
+    for (st = states; st; st = st->next) {
+        if (st->protocol == NETLINK_ROUTE && st->seen && (st->groups & WATCH_GROUPS)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Take the state now into `w`. */
+static void watch_take(struct watch_state *w)
+{
+    int i, j, n = netdev_listed();
+
+    w->nlink = w->naddr4 = w->naddr6 = w->nroute4 = w->nroute6 = 0;
+    for (i = 0; i < n && i < WATCH_IFS; i++) {
+        const struct netdev *nd = netdev_at(i);
+        struct watch_link *l = &w->link[w->nlink++];
+
+        l->index = nd->index;
+        l->up = (uint8_t)(nd->up != 0);
+        l->running = (uint8_t)(nd->up && netdev_running(nd));
+        for (j = -1; j < nd->naddr2; j++) {
+            struct watch_addr4 *a = &w->addr4[w->naddr4];
+
+            a->ip = j < 0 ? nd->ip : nd->ip2[j];
+            a->mask = j < 0 ? nd->mask : nd->mask2[j];
+            if (a->ip != 0) {
+                a->index = nd->index;
+                a->secondary = j >= 0;
+                w->naddr4++;
+            }
+        }
+        for (j = 0; j < nd->naddr6; j++) {
+            w->addr6[w->naddr6].index = nd->index;
+            w->addr6[w->naddr6++].a = nd->addr6[j];
+        }
+    }
+    while (w->nroute4 < WATCH_ROUTES && netdev_route_at(w->nroute4, &w->route4[w->nroute4])) {
+        w->nroute4++;
+    }
+    while (w->nroute6 < WATCH_ROUTES && route6_at(w->nroute6, &w->route6[w->nroute6])) {
+        w->nroute6++;
+    }
+}
+
+static int same_link(const struct watch_link *a, const struct watch_link *b)
+{
+    return a->index == b->index && a->up == b->up && a->running == b->running;
+}
+
+static int same_addr4(const struct watch_addr4 *a, const struct watch_addr4 *b)
+{
+    return a->index == b->index && a->ip == b->ip && a->mask == b->mask;
+}
+
+/** Whether two IPv6 addresses are one, and with `whole`, in the same
+ * state, with the same lifetimes. */
+static int same_addr6(const struct watch_addr6 *a, const struct watch_addr6 *b, int whole)
+{
+    if (a->index != b->index || !ip6_equal(a->a.addr, b->a.addr)) {
+        return 0;
+    }
+    return !whole ||
+           (a->a.prefix == b->a.prefix && a->a.flags == b->a.flags && a->a.valid == b->a.valid &&
+            a->a.preferred == b->a.preferred && a->a.since == b->a.since);
+}
+
+static int same_route4(const struct netdev_rt *a, const struct netdev_rt *b)
+{
+    return a->dst == b->dst && a->mask == b->mask && a->gw == b->gw && a->metric == b->metric &&
+           a->ifindex == b->ifindex && a->kind == b->kind;
+}
+
+static int same_route6(const struct route6_row *a, const struct route6_row *b)
+{
+    return a->ifindex == b->ifindex && a->plen == b->plen && a->metric == b->metric &&
+           a->proto == b->proto && ip6_equal(a->dst, b->dst) && ip6_equal(a->gw, b->gw);
+}
+
+/**
+ * Send what differs between the state `was` and the state `now`: the links
+ * that changed; then, as deletions, the addresses and routes `now` has not;
+ * then, as additions, those `was` had not, and the IPv6 addresses whose
+ * state or lifetimes changed.
+ */
+static void watch_compare(const struct watch_state *was, const struct watch_state *now)
+{
+    struct nl_build *b = &watch_b;
+    struct netdev *nd;
+    int i, j, pass;
+
+    b->sock = 0;
+    b->seq = b->pid = 0;
+    b->del = 0;
+    b->group = RTNLGRP_LINK;
+    for (i = 0; i < now->nlink; i++) {
+        for (j = 0; j < was->nlink && !same_link(&was->link[j], &now->link[i]); j++) {
+        }
+        if (j == was->nlink && (nd = watch_dev(now->link[i].index)) != 0) {
+            link_msg(b, nd, 0);
+        }
+    }
+    for (pass = 0; pass < 2; pass++) {
+        const struct watch_state *from = pass == 0 ? was : now;
+        const struct watch_state *in = pass == 0 ? now : was;
+
+        b->del = pass == 0;
+        b->group = RTNLGRP_IPV4_IFADDR;
+        for (i = 0; i < from->naddr4; i++) {
+            const struct watch_addr4 *a = &from->addr4[i];
+
+            for (j = 0; j < in->naddr4 && !same_addr4(&in->addr4[j], a); j++) {
+            }
+            if (j == in->naddr4 && (nd = watch_dev(a->index)) != 0) {
+                addr_msg(b, nd, a->ip, a->mask, a->secondary);
+            }
+        }
+        b->group = RTNLGRP_IPV6_IFADDR;
+        for (i = 0; i < from->naddr6; i++) {
+            const struct watch_addr6 *a = &from->addr6[i];
+
+            for (j = 0; j < in->naddr6 && !same_addr6(&in->addr6[j], a, pass); j++) {
+            }
+            if (j == in->naddr6 && (nd = watch_dev(a->index)) != 0) {
+                addr6_msg(b, nd, &a->a);
+            }
+        }
+        b->group = RTNLGRP_IPV4_ROUTE;
+        for (i = 0; i < from->nroute4; i++) {
+            for (j = 0; j < in->nroute4 && !same_route4(&in->route4[j], &from->route4[i]); j++) {
+            }
+            if (j == in->nroute4) {
+                route_msg(b, &from->route4[i]);
+            }
+        }
+        b->group = RTNLGRP_IPV6_ROUTE;
+        for (i = 0; i < from->nroute6; i++) {
+            for (j = 0; j < in->nroute6 && !same_route6(&in->route6[j], &from->route6[i]); j++) {
+            }
+            if (j == in->nroute6) {
+                route6_msg(b, &from->route6[i], 0);
+            }
+        }
+    }
+}
+
+/** Start the watch, with the state now, when a socket listens and it has
+ * not started. The caller holds net_lock. */
+static void watch_start(void)
+{
+    if (!watching && listening()) {
+        watch_take(&watch_buf[watch_cur]);
+        watching = 1;
+    }
+}
+
+/** Compare the state now with the last, and send the differences; stop
+ * the watch while nobody listens. The caller holds net_lock. */
+static void watch_run(void)
+{
+    if (!listening()) {
+        watching = 0;
+        return;
+    }
+    if (!watching) {
+        watch_start();
+        return;
+    }
+    watch_take(&watch_buf[!watch_cur]);
+    watch_compare(&watch_buf[watch_cur], &watch_buf[!watch_cur]);
+    watch_cur = !watch_cur;
+}
+
+void netlink_tick(void)
+{
+    if ((int32_t)((uint32_t)kernel_ticks - watch_next) < 0) {
+        return;
+    }
+    watch_next = (uint32_t)kernel_ticks + (TICK_HZ / 10 ? TICK_HZ / 10 : 1);
+    watch_run();
+}
+
+void netlink_nd_useropt(const struct netdev *nd, const uint8_t *src, const uint8_t *opt,
+                        uint32_t len)
+{
+    static uint8_t msg[NL_USEROPT_MAX];
+    uint8_t *m = msg + NLMSG_HDRLEN;
+
+    if (len == 0 || len > 255u * 8u) {
+        return;
+    }
+    k_memset(msg, 0, NLMSG_HDRLEN + NDUSEROPT_MSG_LEN);
+    put32(msg, NLMSG_HDRLEN + NDUSEROPT_MSG_LEN + len);
+    put16(msg + 4, RTM_NEWNDUSEROPT);
+    m[0] = AF_INET6;
+    put16(m + 2, (uint16_t)len);
+    put32(m + 4, (uint32_t)nd->index);
+    m[8] = ND_ROUTER_ADVERT;
+    k_memcpy(m + NDUSEROPT_MSG_LEN, opt, len);
+    msg_attr(msg, NDUSEROPT_SRCADDR, src, IP6_ADDR_LEN);
+    notify(RTNLGRP_ND_USEROPT, 0, msg);
 }
 
 /** The destination of an RTM_GETROUTE request, its RTA_DST, or 0 when it
@@ -1452,7 +1858,10 @@ static void change_answer(struct nl_build *b, const uint8_t *req, uint16_t type,
                           uint32_t body)
 {
     int32_t rc = change(req, type, flags, body);
+    uint32_t lock = net_lock();
 
+    watch_run();
+    net_unlock(lock);
     if (rc != 0 || (flags & NLM_F_ACK)) {
         end_msg(b, req, rc);
     }
@@ -1966,6 +2375,8 @@ int32_t netlink_send(struct socket *sock, const uint8_t *buf, uint32_t len)
     if (b->cap > NL_DGRAM_MAX) {
         b->cap = NL_DGRAM_MAX;
     }
+    b->group = 0;
+    b->del = 0;
     while (at + NLMSG_HDRLEN <= len) {
         uint32_t mlen = get32(buf + at);
 
@@ -1989,19 +2400,24 @@ int32_t netlink_send(struct socket *sock, const uint8_t *buf, uint32_t len)
 int netlink_pending(struct socket *sock)
 {
     struct netlink_state *st = state_of(sock);
+    uint32_t flags = net_lock();
+    int n = st && st->head ? (int)st->head->len : -1;
 
-    return st && st->head ? (int)st->head->len : -1;
+    net_unlock(flags);
+    return n;
 }
 
 int netlink_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len)
 {
     struct netlink_state *st = state_of(sock);
-    uint32_t n;
+    uint32_t n, flags = net_lock();
 
     if (!st || !st->head) {
+        net_unlock(flags);
         return -1;
     }
     if (offset >= st->head->len || len <= 0) {
+        net_unlock(flags);
         return 0;
     }
     n = st->head->len - offset;
@@ -2009,6 +2425,7 @@ int netlink_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len)
         n = (uint32_t)len;
     }
     k_memcpy(buf, (const uint8_t *)(st->head + 1) + offset, n);
+    net_unlock(flags);
     return (int)n;
 }
 
@@ -2016,8 +2433,10 @@ void netlink_consume(struct socket *sock)
 {
     struct netlink_state *st = state_of(sock);
     struct nl_dgram *d;
+    uint32_t flags = net_lock();
 
     if (!st || !st->head) {
+        net_unlock(flags);
         return;
     }
     d = st->head;
@@ -2025,6 +2444,8 @@ void netlink_consume(struct socket *sock)
     if (!st->head) {
         st->tail = 0;
     }
+    st->queued -= d->len;
+    net_unlock(flags);
     kfree(d);
 }
 

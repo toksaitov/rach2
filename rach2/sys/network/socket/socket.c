@@ -338,7 +338,7 @@ static int udp_recv_ready(void *arg)
     socket_t *sock = (socket_t *)arg;
 
     if (sock->family == AF_NETLINK) {
-        return netlink_ready(sock);
+        return netlink_ready(sock) || sock->so_error != 0;
     }
     return sock->rq.count != 0 || sock->so_error != 0;
 }

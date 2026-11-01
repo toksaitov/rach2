@@ -15,7 +15,8 @@ struct socket;
  * `struct nlmsghdr` and a body, sent to the kernel; the answer is queued on
  * the socket as datagrams of netlink messages, which the caller reads as a
  * datagram socket's. The answers come from the interface records the ioctls
- * read and write, the route table and the ARP cache, IPv4 only.
+ * read and write, the IPv4 and IPv6 route tables, and the ARP and neighbour
+ * caches.
  *
  * The socket answers the dump requests RTM_GETLINK, RTM_GETADDR,
  * RTM_GETROUTE, RTM_GETNEIGH, RTM_GETRULE (Linux's three rules),
@@ -29,8 +30,21 @@ struct socket;
  * MTU other than its own or a new name, is refused with EOPNOTSUPP. Another
  * request is answered with an NLMSG_ERROR of EOPNOTSUPP. In a network
  * namespace other than the first, a dump is empty and any other request
- * finds no interface. The socket sends no notifications: a socket bound to
- * multicast groups is taken and hears nothing.
+ * finds no interface.
+ *
+ * A socket joins multicast groups by its bind's `nl_groups`, groups 1 to
+ * 32, and by NETLINK_ADD_MEMBERSHIP, and hears of the first namespace's
+ * changes as Linux tells them, each in a datagram of its own with sequence
+ * number 0: RTM_NEWLINK in RTNLGRP_LINK when an interface's flags or link
+ * change; RTM_NEWADDR and RTM_DELADDR in RTNLGRP_IPV4_IFADDR and
+ * RTNLGRP_IPV6_IFADDR, an IPv6 address's again when its state or lifetimes
+ * change; RTM_NEWROUTE and RTM_DELROUTE in RTNLGRP_IPV4_ROUTE and
+ * RTNLGRP_IPV6_ROUTE; and RTM_NEWNDUSEROPT in RTNLGRP_ND_USEROPT with each
+ * RDNSS and DNSSL option of a router advertisement. No interface is ever
+ * removed, so no RTM_DELLINK is sent, and neighbours are not announced. A
+ * socket whose queue of notifications would pass NL_NOTIFY_QUEUE_MAX bytes
+ * misses the next one and its next receive fails with ENOBUFS, unless it
+ * set NETLINK_NO_ENOBUFS.
  *
  * A socket of NETLINK_SOCK_DIAG answers the dump SOCK_DIAG_BY_FAMILY, which
  * `ss` lists sockets with: for AF_INET the TCP, UDP or raw sockets in the
@@ -65,13 +79,35 @@ int netlink_open(struct socket *sock, int protocol);
 /** Free the state of a netlink socket and what is queued on it. */
 void netlink_close(struct socket *sock);
 
-/** Bind `sock` to the port id `pid` and the multicast `groups`, which are
- * kept and never sent to. With `pid` 0 the kernel picks one: the
+/** Bind `sock` to the port id `pid` and the multicast `groups`, a bit for
+ * each of groups 1 to 32. With `pid` 0 the kernel picks one: the
  * calling process's id when no other netlink socket has it, else the next
  * free one of a count from 2^31, where no process id is. Returns 0, or
  * -EADDRINUSE when another netlink socket has the port id asked for. Takes
  * `net_lock` itself. */
 int netlink_bind(struct socket *sock, uint32_t pid, uint32_t groups);
+
+/** Set the SOL_NETLINK option `optname` of `sock` to `val`, the int the
+ * caller gave in `optlen` bytes: NETLINK_ADD_MEMBERSHIP and
+ * NETLINK_DROP_MEMBERSHIP a group, of which those past 32 are taken and
+ * hear nothing, and NETLINK_NO_ENOBUFS. Another option is accepted with no
+ * effect. Returns 0, or -EINVAL for a value shorter than an int or a group
+ * of 0 or less. Takes net_lock. */
+int32_t netlink_setsockopt(struct socket *sock, int optname, int val, int optlen);
+
+/** Compare the state notifications are made from with the last, ten times
+ * a second, and send the differences. Called every tick from the timer
+ * interrupt. */
+void netlink_tick(void);
+
+struct netdev;
+
+/** Send the option of `len` bytes at `opt`, of a router advertisement from
+ * `src` received on `nd`, to RTNLGRP_ND_USEROPT as RTM_NEWNDUSEROPT, as
+ * Linux sends RDNSS and DNSSL options for a program to take the name
+ * servers from. Interrupts off. */
+void netlink_nd_useropt(const struct netdev *nd, const uint8_t *src, const uint8_t *opt,
+                        uint32_t len);
 
 /** The socket's own sockaddr_nl, SOCKADDR_NL_LEN bytes at `sa`, binding it
  * first when it is not bound, as Linux does. */

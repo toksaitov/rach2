@@ -2,8 +2,9 @@
 .Dt NETLINK 7
 .Os
 .Sh NAME
-.Nm netlink
-.Nd the kernel's answers about interfaces, addresses, routes and sockets
+.Nm netlink ,
+.Nm rtnetlink
+.Nd the kernel's answers and notifications about interfaces, addresses, routes and sockets
 .Sh SYNOPSIS
 .In sys/socket.h
 .In linux/netlink.h
@@ -486,8 +487,71 @@ a port id of 0 has the kernel pick one, the process's ID for its first
 socket and a number above 2^31 for the rest, and another taken by a
 socket already is
 .Er EADDRINUSE .
-The multicast groups are kept, and nothing is sent to them: the kernel
-sends no notifications.
+Its
+.Fa nl_groups
+joins the groups 1 to 32, a bit for each, group N being bit N - 1, and
+.Xr setsockopt 2
+of level
+.Dv SOL_NETLINK
+(270) joins one more by its number with
+.Dv NETLINK_ADD_MEMBERSHIP
+and leaves one with
+.Dv NETLINK_DROP_MEMBERSHIP ;
+a group past 32 is taken and hears nothing, and a group of 0 is
+.Er EINVAL .
+A socket of
+.Dv NETLINK_ROUTE
+hears of the changes to the machine's interfaces, addresses and routes as
+.Ql ip monitor
+shows them on Linux, each a message of its own in a datagram of its own,
+with sequence number and port id 0:
+.Bl -tag -width "RTNLGRP_IPV4_IFADDR"
+.It Dv RTNLGRP_LINK No (1)
+.Dv RTM_NEWLINK
+when an interface goes up or down, or its card's link does.
+No interface is ever removed, so
+.Dv RTM_DELLINK
+is never sent.
+.It Dv RTNLGRP_IPV4_IFADDR No (5) , Dv RTNLGRP_IPV6_IFADDR No (9)
+.Dv RTM_NEWADDR
+and
+.Dv RTM_DELADDR
+when an address comes or goes; an IPv6 address's
+.Dv RTM_NEWADDR
+again when its state or lifetimes change, as when duplicate detection
+ends, it is deprecated or a router renews it.
+.It Dv RTNLGRP_IPV4_ROUTE No (7) , Dv RTNLGRP_IPV6_ROUTE No (11)
+.Dv RTM_NEWROUTE
+and
+.Dv RTM_DELROUTE
+when a route comes or goes, those an address or a router implies among
+them.
+.It Dv RTNLGRP_ND_USEROPT No (20)
+.Dv RTM_NEWNDUSEROPT ,
+68, for each RDNSS (25) and DNSSL (31) option of a router advertisement:
+a
+.Vt struct nduseroptmsg
+with the family
+.Dv AF_INET6 ,
+the option's length in bytes, the interface's index and the ICMPv6 type
+134, then the option as it came, its lifetime and servers or domains
+among it, then the router's address in an
+.Dv NDUSEROPT_SRCADDR
+attribute.
+.El
+.Pp
+The kernel compares the state these are made from with what it was ten
+times a second, and after each change a request makes, so a change is
+heard within a tenth of a second, and one undone within that time is not
+heard.
+Neighbours are not announced.
+A socket with 64 KiB of notifications queued misses the next, and its next
+receive fails with
+.Er ENOBUFS ,
+as Linux's does when its buffer is full, unless it set
+.Dv NETLINK_NO_ENOBUFS ;
+the receives after it go on with what is queued.
+Another option of the level is accepted and changes nothing.
 A socket that sends before it is bound, or whose name
 .Xr getsockname 2
 asks for, is bound then, as on Linux.
@@ -500,6 +564,7 @@ reports the kernel.
 .Xr ioctl 2 ,
 .Xr recv 2 ,
 .Xr send 2 ,
+.Xr setsockopt 2 ,
 .Xr socket 2 ,
 .Xr proc 5 ,
 .Xr ipv6 7

@@ -342,6 +342,7 @@ rt_sigsuspend 2 sigaction
 rt_sigtimedwait 2 sigaction
 rt_tgsigqueueinfo 2 rt_sigqueueinfo
 rtcwake 1 busybox-util-linux
+rtnetlink 7 netlink
 run-parts 1 busybox-debianutils
 runlevel 1 busybox-miscutils
 runsv 8 busybox-runit

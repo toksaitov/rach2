@@ -69,6 +69,7 @@
 #include "sys/network/ip/ip.h"
 #include "sys/network/tcp/tcp.h"
 #include "sys/network/ip6/ip6.h"
+#include "sys/network/socket/netlink.h"
 #include "sys/lib/kint.h"
 #include "sys/lib/kstring.h"
 #include "sys/vdso.h"
@@ -308,6 +309,7 @@ static void timer_handler(isr_params_t *params)
     tcp_tick();
     ip_frag_tick();
     ip6_tick();
+    netlink_tick();
     ip_loop_drain();
     usb_poll();
     input_tick();

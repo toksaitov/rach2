@@ -11,7 +11,7 @@ A program uses Linux's socket calls, each with its page in the manual: [socket(2
 ### Configuration
 
 * The network-interface requests of [ioctl(2)](../../../man/man2/ioctl.2): addresses, masks, flags, routes and ARP entries, and, on an `AF_INET6` socket, IPv6's addresses and routes, as BusyBox's `ifconfig` and `route -A inet6` give them.
-* [netlink(7)](../../../man/man7/netlink.7): the requests of `ip` and `ip -6`, glibc's `getifaddrs` and `ss`.
+* [netlink(7)](../../../man/man7/netlink.7): the requests of `ip` and `ip -6`, glibc's `getifaddrs` and `ss`, and the notifications `ip monitor` and the watchers of a network change hear.
 * `/proc/net/*` and `/proc/sys/net/ipv6/conf` in [proc(5)](../../../man/man5/proc.5) and `/sys/class/net` in [sysfs(5)](../../../man/man5/sysfs.5); [ipv6(7)](../../../man/man7/ipv6.7) and [icmp6(7)](../../../man/man7/icmp6.7) describe the IPv6 stack as a program sees it.
 * The boot line: [cmdline.md](../../cmdline.md) lists `rach2.ip=`, `rach2.gateway=`, `rach2.ifaddr=`, `rach2.netconsole`, `rach2.nonet` and `rach2.nicfail=`.
 
@@ -20,7 +20,7 @@ With no address option the first interface takes QEMU's user network, SLIRP: 10.
 ### Inside the kernel
 
 * `init_network` (`net.h`) brings the stack up at boot, after PCI enumeration and interrupts, unless the boot line has `rach2.nonet`, and returns 1 when a card came up; boot then calls `netconsole_enable` for `rach2.netconsole`.
-* The boot processor's timer tick, 1000 times a second, calls `netdev_poll`, `tcp_tick`, `ip_frag_tick`, `ip6_tick` and `ip_loop_drain`, in that order (`kernel.c`). A system call's exit and the idle wait also drain the loopback ring.
+* The boot processor's timer tick, 1000 times a second, calls `netdev_poll`, `tcp_tick`, `ip_frag_tick`, `ip6_tick`, `netlink_tick` and `ip_loop_drain`, in that order (`kernel.c`). A system call's exit and the idle wait also drain the loopback ring.
 * `kernel_shutdown` stops every card after its last log record, and `klog` gives every record to `netconsole_putc`.
 * `poll`, `ioctl` and `procfs` reach the stack through `socket_poll`, `netif_ioctl`, and copies made under the lock such as `tcp_snapshot`.
 
@@ -140,7 +140,7 @@ A raw socket (`socket/raw.c`), `AF_INET` with `SOCK_RAW` and `IPPROTO_ICMP`, is 
 
 ### Netlink and netconsole
 
-`socket/netlink.c` answers the requests of [netlink(7)](../../../man/man7/netlink.7) from the interface records, routing table, ARP cache and socket lists, in datagrams packed as Linux packs a dump: up to `NL_DGRAM_GOOD` (3776) bytes, or once the socket has read with a larger buffer up to that buffer's size and at most `NL_DGRAM_MAX` (32448), and makes changes as the ioctls do.
+`socket/netlink.c` answers the requests of [netlink(7)](../../../man/man7/netlink.7) from the interface records, routing table, ARP cache and socket lists, in datagrams packed as Linux packs a dump: up to `NL_DGRAM_GOOD` (3776) bytes, or once the socket has read with a larger buffer up to that buffer's size and at most `NL_DGRAM_MAX` (32448), and makes changes as the ioctls do. Its notifications come from a comparison, not from a call in each place that changes the state: ten times a second (`netlink_tick`), and after each change a request makes, it takes the interfaces' flags and links, their IPv4 and IPv6 addresses and the two route tables, and sends what differs from the last time to the groups of Linux's `RTNLGRP_` numbers. One comparison catches every change, those of the timers and the receive path among them, at the cost of a tenth of a second's delay and of a change undone within it. It runs only while a socket is in one of the groups. Each notification is a datagram of its own, queued under `net_lock`, since the tick and the receive path queue them; a socket with `NL_NOTIFY_QUEUE_MAX` (64 KiB) queued misses the next and its receive fails once with `ENOBUFS`.
 
 A request's family chooses the table. A dump of addresses, routes, neighbours, rules or settings for `AF_INET` answers from IPv4's records, for `AF_INET6` from IPv6's, and for `AF_UNSPEC`, where Linux answers both, from both, IPv4's first. An IPv6 address carries its flags, its maker (`IFA_PROTO`) and its lifetimes left (`IFA_CACHEINFO`); a route its table, metric, gateway, interface and, for one a router gave, the seconds it has left in `RTA_CACHEINFO`; a neighbour its `NUD_` state, `NTF_ROUTER` for a router. `RTM_GETROUTE` for one IPv6 destination answers with `ip6_route`'s choice and `ip6_source`'s source, or a local route by `lo` for ::1 and the machine's own addresses. `RTM_NEWADDR` and `RTM_DELADDR` of `AF_INET6` go to `netconf_add_address6` and `netconf_del_address6`, an address with `IFA_F_NODAD` skipping duplicate address detection and one with no `IFA_CACHEINFO` living for ever; `RTM_NEWROUTE` and `RTM_DELROUTE` to `route6_add` and `route6_del`, at metric 1024 by default; `RTM_NEWNEIGH` and `RTM_DELNEIGH` to `nd6_set` and `nd6_forget`.
 
@@ -166,7 +166,7 @@ Every entry to the kernel takes the big lock ([`../proc/smp.h`](../proc/smp.h)),
 * ARP entries do not expire, any host on the link can replace a learned one, and there is no proxy ARP.
 * The ICMP error limit is the machine's, shared by all peers, and one ping runs at a time.
 * One RTL8139, up to four e1000 and one RTL8168GU, four cards in all. The RTL8139 driver does not wait for a transmit to complete, since QEMU completes it as it starts. The RTL8139 and e1000 need a legacy interrupt line from 0 to 15 and have no polled fallback. On i686 an e1000 or RTL8168 whose memory window is above 4 GiB does not start. No driver has offloads, VLAN tags, Wake-on-LAN, MSI-X or runtime power management.
-* Netlink sends no notifications, and netconsole uses the first interface only, unacknowledged.
+* Netlink announces no neighbours, and a change undone within a tenth of a second is not announced. Netconsole uses the first interface only, unacknowledged.
 
 ## Tests
 

@@ -302,6 +302,9 @@ static int32_t not_a_socket(const fd_entry_t *entry)
 #define SOL_ICMPV6   58
 #define ICMP6_FILTER 1
 
+/* Netlink's level, whose options `netlink_setsockopt` takes. */
+#define SOL_NETLINK 270
+
 /* msg_flags: the control messages did not all fit the caller's buffer. */
 #define MSG_CTRUNC 0x8
 
@@ -2215,6 +2218,8 @@ static int32_t icmp6_filter_get(struct socket *sock, uintptr_t optval_ptr, uintp
  * to zero, and an int-sized value at a null pointer is -EFAULT rather than
  * accepted.
  *
+ * A netlink socket's SOL_NETLINK options are `netlink_setsockopt`'s.
+ *
  * An AF_INET6 socket keeps the IPv6 options `ipv6_set` takes, which its
  * UDP and raw datagrams honour, and a raw ICMPv6 one its filter
  * (`icmp6_filter_set`); either level's option on a socket of another
@@ -2267,6 +2272,9 @@ static int32_t do_setsockopt(int fd, int level, int optname, uintptr_t optval_pt
         }
     }
 
+    if (level == SOL_NETLINK && entry->sock->family == AF_NETLINK) {
+        return netlink_setsockopt(entry->sock, optname, val, optlen);
+    }
     if (level == SOL_IPV6 && ipv6_option_known(optname)) {
         if (entry->sock->family != AF_INET6) {
             return -ENOPROTOOPT;
