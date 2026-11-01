@@ -7,7 +7,9 @@
 # runs it as root in the job's working directory, which holds two inputs:
 # tree.tar.gz, the tree the host staged, and job.env, the shell assignments of
 # RACH2_ARCH, GNU_AGENTS, GNU_LINK, RACH2_PATH_MAP, MUSL_CRYPT_SRC, IMAGE (the
-# image's file name), SIZE (its size in MiB), JOBS (make's jobs) and DRY_RUN.
+# image's file name), SIZE (its size in MiB), JOBS (make's jobs), DRY_RUN and
+# IMAGE_TIME, the host's commit date, which the staged tree, not a checkout,
+# does not have and mkext2.sh gives the image's nodes.
 # ETUDE_DISK1 is the layer's build disk, an ext4 volume labelled rach2-gnu
 # that persists between jobs; a disk on which blkid finds no signature, as a
 # new one, is formatted, and a disk with any other volume is refused. The
@@ -170,7 +172,7 @@ build_image()
         exit 1
     [ -z "$RACH2_PATH_MAP" ] || export RACH2_PATH_MAP
     RACH2_ARCH=$RACH2_ARCH GNU_AGENTS="$GNU_AGENTS" GNU_TEST_PRODUCTS=${GNU_TEST_PRODUCTS:-} \
-        exec sh tools/image/mkext2.sh \
+        SOURCE_DATE_EPOCH=${IMAGE_TIME:-1} exec sh tools/image/mkext2.sh \
         --overlay vendor/gnu/install_root.sh krffs/manifests/os-real-gnu.manifest "$MNT/out/$IMAGE" "$SIZE"
 }
 
