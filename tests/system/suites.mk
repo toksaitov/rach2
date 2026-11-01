@@ -179,6 +179,12 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
 # `rach2.nofxsr`, which only the i686 kernel takes, since every x86-64
 # processor has FXSR. They are the cases of tests/cases/guest.fpu.json, which
 # etude runs, and have no target here.
+# `tests/run vdso`: the vDSO, on two processors: under `rach2.tscreliable` the
+# x86-64 kernel keeps its clock from the TSC and vdsomusl's clock calls make
+# no system call by /proc/stat's count, and under `rach2.notsc` each makes
+# one, as every clock call does on i686, which maps no vDSO. They are the
+# cases of tests/cases/guest.vdso.json, which etude runs, and have no target
+# here.
 # `tests/run bigmem`: all of an x86-64 machine's eight gigabytes is counted,
 # and a program's pages fill memory past what lies below 4 GiB and read back
 # as written; without 1 GiB pages, 72 GiB is counted to the direct map's
