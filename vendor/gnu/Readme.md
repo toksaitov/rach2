@@ -1,6 +1,6 @@
 # The GNU layer
 
-The GNU layer builds a GNU system for Rach2: a cross toolchain with glibc, 75 port recipes built with it, a native GCC and GDB, the SpiderMonkey shell, and Debian's chromium-headless-shell, all installed over the os-real system in an ext2 root that the kernel boots. On x86-64 the root can also have the [agents layer](agents/Readme.md), vendors' published builds of coding agents and their tools, such as Anthropic's Claude Code and GitHub's `gh`. It gives Rach2 the dynamically linked programs a person expects of a Linux machine (bash, coreutils, OpenSSH, Python, Git, GCC), which the static musl system does not have. It builds on an x86-64 Linux host; on any other host, such as a Mac, its root images are built in etude's tooling machine, a Linux in QEMU. It is not part of `make`. The targets are `i686-linux-gnu` and `x86_64-rach2-linux-gnu`, as `ARCH` selects.
+The GNU layer builds a GNU system for Rach2: a cross toolchain with glibc, 76 port recipes built with it, a native GCC and GDB, the SpiderMonkey shell, and Debian's chromium-headless-shell, all installed over the os-real system in an ext2 root that the kernel boots. On x86-64 the root can also have the [agents layer](agents/Readme.md), vendors' published builds of coding agents and their tools, such as Anthropic's Claude Code and GitHub's `gh`. It gives Rach2 the dynamically linked programs a person expects of a Linux machine (bash, coreutils, OpenSSH, Python, Git, GCC), which the static musl system does not have. It builds on an x86-64 Linux host; on any other host, such as a Mac, its root images are built in etude's tooling machine, a Linux in QEMU. It is not part of `make`. The targets are `i686-linux-gnu` and `x86_64-rach2-linux-gnu`, as `ARCH` selects.
 
 ## Use
 
@@ -48,9 +48,9 @@ Each port keeps its upstream license, which its tarball has. FFmpeg is LGPL 2.1 
 
 A recipe changes its upstream only where Rach2 or a cross build needs it, and its comment gives the reason:
 
-* bash and Readline take their upstream patch series, pinned in `sources.txt`. zip, unzip and socat take Debian's patch series from Debian's packaging tarballs (`DEBIAN` in [`build_port.sh`](build_port.sh)); socat's makes it build with OpenSSL 4.
+* bash and Readline take their upstream patch series, pinned in `sources.txt`. zip, unzip, socat and cmus take Debian's patch series from Debian's packaging tarballs (`DEBIAN` in [`build_port.sh`](build_port.sh)); socat's makes it build with OpenSSL 4, and cmus's brings its FFmpeg input up to FFmpeg 8's interface.
 * The toolchain and the native GCC point the `m64` line of GCC's `gcc/config/i386/t-linux64` at `lib`, so that x86-64 libraries are in `/lib` and `/usr/lib`, as on i686.
-* [`ports/lsof.sh`](ports/lsof.sh) treats an unknown count of an epoll descriptor's watched descriptors as 0; [`ports/bind9.sh`](ports/bind9.sh) keeps OpenSSL's own allocator; [`ports/chawan.sh`](ports/chawan.sh) adds the Rach2 console, `TERM=rach2`, to Chawan's table of terminals; [`ports/tmux.sh`](ports/tmux.sh) dates tmux's manual page; [`ports/bubblewrap.sh`](ports/bubblewrap.sh) takes bwrap's page from Debian's package of the release, since the build host has no DocBook stylesheets to make it.
+* [`ports/lsof.sh`](ports/lsof.sh) treats an unknown count of an epoll descriptor's watched descriptors as 0; [`ports/bind9.sh`](ports/bind9.sh) keeps OpenSSL's own allocator; [`ports/chawan.sh`](ports/chawan.sh) adds the Rach2 console, `TERM=rach2`, to Chawan's table of terminals; [`ports/tmux.sh`](ports/tmux.sh) dates tmux's manual page; [`ports/bubblewrap.sh`](ports/bubblewrap.sh) takes bwrap's page from Debian's package of the release, since the build host has no DocBook stylesheets to make it; [`ports/cmus.sh`](ports/cmus.sh) makes cmus's configure test for OSS by compiling `<sys/soundcard.h>` with the cross compiler, where it looked for the build host's header, and gives its make the version, which its Makefile would take from `git describe` of the clone around the build tree.
 * A recipe's `CACHE` gives configure the answers a cross build cannot find out. [`ports/openssh.sh`](ports/openssh.sh) edits configure's own cross-build answer instead, so that it accepts the rlimit sandbox.
 
 ## Design
@@ -91,9 +91,12 @@ A port installs into `stage/NAME`. There the target's `strip --strip-debug` runs
 
 FFmpeg provides `ffmpeg` and `ffprobe`, OSS input and output through `/dev/dsp`, WAV and raw PCM output, and built-in MP3, FLAC, Vorbis, Opus, AAC and PCM decoders. Its shared libraries and headers serve cmus. Only the file and pipe protocols are enabled; `aresample`, `aformat` and `volume` are among its audio filters. [`ffmpeg(1)`](../../man/man1/ffmpeg.1) and [`ffprobe(1)`](../../man/man1/ffprobe.1) describe the installed build.
 
+cmus plays music in the terminal and `cmus-remote` controls it. Its one output is OSS: it writes `/dev/dsp` and its volume is the PCM channel of `/dev/mixer`, or its own with `softvol`. Its inputs are its own WAV and CUE readers and FFmpeg's libraries, which decode MP3, FLAC, Ogg Vorbis, Opus and AAC, so the root ports none of the decoder libraries cmus's other inputs would need. [`cmus(1)`](../../man/man1/cmus.1) and [`cmus-remote(1)`](../../man/man1/cmus-remote.1) describe the installed build, and the upstream's pages are the ports' pages on the system.
+
 | Port | Version | License |
 | --- | --- | --- |
 | [FFmpeg](ports/ffmpeg.sh) | 9.0.2 | LGPL 2.1 or later |
+| [cmus](ports/cmus.sh) | 2.12.0 | GPL 2 or later |
 
 ### The root image
 

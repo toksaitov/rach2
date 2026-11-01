@@ -1,0 +1,139 @@
+.Dd November 1, 2026
+.Dt CMUS 1
+.Os
+.Sh NAME
+.Nm cmus
+.Nd play music in the terminal
+.Sh SYNOPSIS
+.Nm
+.Op Fl \-listen Ar socket
+.Op Fl \-show\-cursor
+.Nm
+.Fl \-plugins | \-help | \-version
+.Sh DESCRIPTION
+.Nm
+is a music player for the terminal, with a library, playlists and a play
+queue, which
+.Xr cmus-remote 1
+controls from another shell.
+It is installed in the GNU root.
+.Pp
+It plays through OSS: it writes
+.Pa /dev/dsp
+and sets the PCM channel of
+.Pa /dev/mixer ,
+so that its volume is the system's PCM level, which
+.Xr mixer 1
+shows.
+It reads WAV itself, and MP3, FLAC, Ogg Vorbis, Opus, AAC and the other
+types its FFmpeg input lists through FFmpeg's libraries; CUE sheets name
+tracks in another file.
+.Pp
+Press 1 to 7 to change the view: the library as a tree and as a list, the
+playlists, the play queue, the file browser, the filters and the settings.
+In the browser,
+.Ic a
+adds the file or directory under the cursor to the library and
+.Ic enter
+plays it.
+.Ic c
+pauses,
+.Ic v
+stops,
+.Ic b
+plays the next track,
+.Ic z
+the one before,
+.Ic \-
+and
+.Ic +
+change the volume by 10%, the left and right arrows seek, and
+.Ic q
+quits.
+A colon begins a command, such as
+.Ql :add ~/music
+or
+.Ql :set softvol=true .
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl \-listen Ar socket
+Listen for
+.Xr cmus-remote 1
+on
+.Ar socket
+instead of the default.
+.It Fl \-show\-cursor
+Always show the cursor.
+.It Fl \-plugins
+List the input and output plugins and the file types of each, and exit.
+.It Fl \-help
+Print the usage and exit.
+.It Fl \-version
+Print the version and exit.
+.El
+.Sh ENVIRONMENT
+.Bl -tag -width XDG_RUNTIME_DIR
+.It Ev CMUS_HOME
+The configuration directory, by default
+.Pa ~/.config/cmus .
+.It Ev CMUS_SOCKET
+The socket
+.Xr cmus-remote 1
+connects to, by default
+.Pa $XDG_RUNTIME_DIR/cmus-socket ,
+or
+.Pa socket
+in the configuration directory where
+.Ev XDG_RUNTIME_DIR
+is not set.
+.El
+.Sh FILES
+.Bl -tag -width /usr/share/cmus/rc
+.It Pa /dev/dsp
+The OSS device it plays on.
+.It Pa /dev/mixer
+The mixer whose PCM channel its volume sets.
+.It Pa ~/.config/cmus/autosave
+The settings and key bindings, written on exit.
+.It Pa ~/.config/cmus/rc
+Commands read at start, after the saved settings.
+.It Pa /usr/share/cmus/rc
+The default settings, read when there is no autosave file.
+.It Pa /usr/lib/cmus
+The input plugins, in
+.Pa ip ,
+and the output plugin, in
+.Pa op .
+.El
+.Sh EXAMPLES
+Play the files under
+.Pa ~/music :
+start
+.Nm ,
+type
+.Ql :add ~/music ,
+press 2 and then enter on a track.
+.Pp
+Use the program's own volume instead of the mixer's PCM channel:
+.Bd -literal -offset indent
+:set softvol=true
+.Ed
+.Sh SEE ALSO
+.Xr cmus-remote 1 ,
+.Xr ffmpeg 1 ,
+.Xr mixer 1 ,
+.Xr dsp 4 ,
+.Xr mixer 4 ,
+.Xr cmus-tutorial 7
+.Pp
+.Nm man
+shows the upstream manual of
+.Nm ,
+which lists every command and setting, on the GNU system, where
+.Nm
+is a port's.
+.Sh LIMITS
+OSS is the only output.
+There is no CD input and no MPRIS.
+Tags are read through FFmpeg, which does not read every tag the upstream's
+own decoder plugins do.

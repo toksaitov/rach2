@@ -163,6 +163,7 @@ Each port is a recipe of [`vendor/gnu/ports/`](../vendor/gnu/ports), with the ve
 | [bzip2](../vendor/gnu/ports/bzip2.sh) | 1.0.8 | bzip2 and libbz2, which Python's bz2 module, unzip and tar -j use. |
 | [chawan](../vendor/gnu/ports/chawan.sh) | 0.5~dev1 | Chawan, cha, a web browser for the terminal with an HTML and CSS engine of its own, with flow, table and flex layout, and JavaScript in QuickJS, which its configuration turns on. |
 | [cmake](../vendor/gnu/ports/cmake.sh) | 4.3.4 | CMake, the build system generator, with ccmake on the root's ncurses and the libraries its release carries, curl among them over the root's OpenSSL. |
+| [cmus](../vendor/gnu/ports/cmus.sh) | 2.12.0 | cmus, the music player for the terminal, and cmus-remote. |
 | [coreutils](../vendor/gnu/ports/coreutils.sh) | 9.12 | GNU coreutils. |
 | [cronie](../vendor/gnu/ports/cronie.sh) | 1.7.2 | cronie, the cron daemon Fedora and Debian have, with crontab(1). |
 | [curl](../vendor/gnu/ports/curl.sh) | 8.22.0 | curl and libcurl, with OpenSSL for TLS and zlib for compressed transfers. |
