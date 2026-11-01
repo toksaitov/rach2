@@ -42,6 +42,8 @@ The programs of os-real, as [its manifest](../krffs/manifests/os-real.manifest) 
 | `su` | [su(1)](man1/su.1) | BusyBox (`busybox-suid`) | in-house | yes |
 | `tcc` | [tcc(1)](man1/tcc.1) | TinyCC |  |  |
 | `update` | [update(8)](man8/update.8) | in-house | yes | yes |
+| `wifi` | [wifi(1)](man1/wifi.1) | in-house | yes | yes |
+| `zzz` | [zzz(8)](man8/zzz.8) | in-house |  | yes |
 
 os-real stages `doom` only when the build has made it.
 
