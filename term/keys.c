@@ -398,6 +398,35 @@ static const uint32_t func_keysyms[] = {
     SYM_INSERT,  SYM_DELETE,  SYM_END,     SYM_PAGE_UP, SYM_PAGE_DOWN};
 
 /**
+ * The key of xterm's `ESC [ n ~` for number `n`, F5 to F12 and the editing
+ * keys, into `keysym`. Returns false for a number with no key.
+ */
+static bool tilde_key(unsigned long n, uint32_t *keysym)
+{
+    static const unsigned tilde[] = {15, 17, 18, 19, 20, 21, 23, 24, 2, 3, 5, 6};
+    static const uint32_t tilde_syms[] = {SYM_F1 + 4, SYM_F1 + 5, SYM_F1 + 6,  SYM_F1 + 7,
+                                          SYM_F1 + 8, SYM_F1 + 9, SYM_F1 + 10, SYM_F1 + 11,
+                                          SYM_INSERT, SYM_DELETE, SYM_PAGE_UP, SYM_PAGE_DOWN};
+    unsigned i;
+
+    for (i = 0; i < sizeof(tilde) / sizeof(tilde[0]); i++) {
+        if (tilde[i] == n) {
+            *keysym = tilde_syms[i];
+            return true;
+        }
+    }
+    return false;
+}
+
+/** libtsm's modifiers of xterm's modifier parameter `m`, 1 and the bits. */
+static unsigned xterm_mods(unsigned long m)
+{
+    m -= 1;
+    return ((m & 1) ? TSM_SHIFT_MASK : 0) | ((m & 2) ? TSM_ALT_MASK : 0) |
+           ((m & 4) ? TSM_CONTROL_MASK : 0) | ((m & 8) ? TSM_LOGO_MASK : 0);
+}
+
+/**
  * The key and modifiers, libtsm's, of `str` when it is xterm's sequence of
  * a function or editing key, as the maps' `xterm-strings` give Shift+F1 as
  * F13's `ESC [ 1 ; 2 P`: `ESC O` or `ESC [ 1 ;` m with P to S, or `ESC [`
@@ -406,14 +435,8 @@ static const uint32_t func_keysyms[] = {
  */
 static bool xterm_key(const char *str, uint32_t *keysym, unsigned *mods)
 {
-    /* The numbers of `ESC [ n ~`: F5 to F12, then the editing keys. */
-    static const unsigned tilde[] = {15, 17, 18, 19, 20, 21, 23, 24, 2, 3, 5, 6};
-    static const uint32_t tilde_syms[] = {SYM_F1 + 4, SYM_F1 + 5, SYM_F1 + 6,  SYM_F1 + 7,
-                                          SYM_F1 + 8, SYM_F1 + 9, SYM_F1 + 10, SYM_F1 + 11,
-                                          SYM_INSERT, SYM_DELETE, SYM_PAGE_UP, SYM_PAGE_DOWN};
     unsigned long n = 1;
     unsigned long m = 1;
-    unsigned i;
     char *end;
 
     if (str[0] != '\033')
@@ -439,11 +462,8 @@ static bool xterm_key(const char *str, uint32_t *keysym, unsigned *mods)
     if (str[0] == '\0' || str[1] != '\0')
         return false;
     if (*str == '~') {
-        for (i = 0; i < sizeof(tilde) / sizeof(tilde[0]) && tilde[i] != n; i++)
-            ;
-        if (i == sizeof(tilde) / sizeof(tilde[0]))
+        if (!tilde_key(n, keysym))
             return false;
-        *keysym = tilde_syms[i];
     } else if (n != 1) {
         return false;
     } else if (*str >= 'P' && *str <= 'S' && m > 1) {
@@ -453,9 +473,7 @@ static bool xterm_key(const char *str, uint32_t *keysym, unsigned *mods)
     } else {
         return false;
     }
-    m -= 1;
-    *mods = ((m & 1) ? TSM_SHIFT_MASK : 0) | ((m & 2) ? TSM_ALT_MASK : 0) |
-            ((m & 4) ? TSM_CONTROL_MASK : 0) | ((m & 8) ? TSM_LOGO_MASK : 0);
+    *mods = xterm_mods(m);
     return true;
 }
 
@@ -526,72 +544,98 @@ static bool pad_key(struct term_key *key, unsigned v, unsigned mods)
 }
 
 /**
+ * Turn the translator's text result `res`, or its result of nothing, for key
+ * `code` into `key`, as for make_key. An accent that composed nothing goes
+ * straight to `child` when it is not NULL.
+ */
+static bool text_result(struct term_keys *k, struct term_screen *child,
+                        const struct keymap_state *before, unsigned code,
+                        const struct keymap_result *res, struct term_key *key)
+{
+    struct term_key accent;
+    uint32_t c;
+
+    if (res->mods & (KM_MOD_CTRL | KM_MOD_ALT))
+        c = view_char(k, before, code, VIEW_PLAIN, false);
+    else if (res->kind == KM_RESULT_TEXT)
+        c = (uint32_t)res->text[res->ntext - 1];
+    else
+        return false;
+    if (c == TSM_VTE_INVALID)
+        return false;
+    if (child && res->kind == KM_RESULT_TEXT && res->ntext == 2) {
+        text_key(&accent, (uint32_t)res->text[0], 0);
+        accent.unshifted = accent.base = TSM_VTE_INVALID;
+        term_screen_key(child, &accent, TSM_VTE_KEY_PRESS);
+    }
+    text_key(key, c, tsm_mods(res->mods, res->ledflags));
+    if (key->unicode != TSM_VTE_INVALID) {
+        key->unshifted = view_char(k, before, code, VIEW_BARE, true);
+        key->base = view_char(k, before, code, VIEW_BASE, true);
+    }
+    c = view_char(k, before, code, VIEW_SHIFTED, true);
+    key->ascii = c < 0x80 ? c : SYM_NONE;
+    return true;
+}
+
+/**
+ * Turn function string `func` of key `code` into `key`, whose modifiers are
+ * set: the built-in map's strings and xterm's sequences of keys become their
+ * keys, and any other string goes straight to `child` when it is not NULL.
+ * Returns false when the key sends nothing more.
+ */
+static bool func_result(struct term_keys *k, struct term_screen *child, unsigned code,
+                        unsigned func, struct term_key *key)
+{
+    unsigned mods = key->mods;
+    char str[KM_FUNC_BYTES];
+    size_t n;
+
+    n = read_string(k, func, str);
+    if (code == CODE_COMPOSE && func == 15 && strcmp(str, keymap_default_func[15]) == 0) {
+        key->keysym = SYM_MENU;
+        return true;
+    }
+    if (func < sizeof(func_keysyms) / sizeof(func_keysyms[0]) &&
+        strcmp(str, keymap_default_func[func]) == 0) {
+        key->keysym = func_keysyms[func];
+        return true;
+    }
+    if (xterm_key(str, &key->keysym, &key->mods)) {
+        key->mods |= mods;
+        return true;
+    }
+    if (child && n > 0)
+        term_screen_send(child, str, n);
+    return false;
+}
+
+/**
  * Turn the translator's result `res` for key `code` into `key`, with the
  * characters before Ctrl and Alt and without modifiers read through views
- * of `before`, the state before the key. When `live`, as when the selection
- * mode is off, writes a function string that is neither the built-in one
- * nor xterm's sequence of a key, and an accent that composed nothing,
- * straight to the child. Returns false when the key sends nothing more.
+ * of `before`, the state before the key. When `child` is not NULL, as when
+ * the selection mode is off, writes a function string that is neither the
+ * built-in one nor xterm's sequence of a key, and an accent that composed
+ * nothing, straight to the child through that screen. Returns false when
+ * the key sends nothing more.
  */
-static bool make_key(struct term_keys *k, struct term_screen *s, const struct keymap_state *before,
-                     unsigned code, const struct keymap_result *res, bool live,
-                     struct term_key *key)
+static bool make_key(struct term_keys *k, struct term_screen *child,
+                     const struct keymap_state *before, unsigned code,
+                     const struct keymap_result *res, struct term_key *key)
 {
     unsigned mods = tsm_mods(res->mods, res->ledflags);
     unsigned type = KM_TYPE(res->key);
     unsigned v = KM_VALUE(res->key);
-    char str[KM_FUNC_BYTES];
-    struct term_key accent;
-    uint32_t c;
-    size_t n;
 
     key->unshifted = TSM_VTE_INVALID;
     key->base = TSM_VTE_INVALID;
-    if (res->kind == KM_RESULT_TEXT || res->kind == KM_RESULT_NONE) {
-        if (res->mods & (KM_MOD_CTRL | KM_MOD_ALT))
-            c = view_char(k, before, code, VIEW_PLAIN, false);
-        else if (res->kind == KM_RESULT_TEXT)
-            c = (uint32_t)res->text[res->ntext - 1];
-        else
-            return false;
-        if (c == TSM_VTE_INVALID)
-            return false;
-        if (live && res->kind == KM_RESULT_TEXT && res->ntext == 2) {
-            text_key(&accent, (uint32_t)res->text[0], 0);
-            accent.unshifted = accent.base = TSM_VTE_INVALID;
-            term_screen_key(s, &accent, TSM_VTE_KEY_PRESS);
-        }
-        text_key(key, c, mods);
-        if (key->unicode != TSM_VTE_INVALID) {
-            key->unshifted = view_char(k, before, code, VIEW_BARE, true);
-            key->base = view_char(k, before, code, VIEW_BASE, true);
-        }
-        c = view_char(k, before, code, VIEW_SHIFTED, true);
-        key->ascii = c < 0x80 ? c : SYM_NONE;
-        return true;
-    }
+    if (res->kind == KM_RESULT_TEXT || res->kind == KM_RESULT_NONE)
+        return text_result(k, child, before, code, res, key);
     key->mods = mods;
     key->ascii = SYM_NONE;
     key->unicode = TSM_VTE_INVALID;
-    if (res->kind == KM_RESULT_FUNC) {
-        n = read_string(k, res->func, str);
-        if (code == CODE_COMPOSE && res->func == 15 && strcmp(str, keymap_default_func[15]) == 0) {
-            key->keysym = SYM_MENU;
-            return true;
-        }
-        if (res->func < sizeof(func_keysyms) / sizeof(func_keysyms[0]) &&
-            strcmp(str, keymap_default_func[res->func]) == 0) {
-            key->keysym = func_keysyms[res->func];
-            return true;
-        }
-        if (xterm_key(str, &key->keysym, &key->mods)) {
-            key->mods |= mods;
-            return true;
-        }
-        if (live && n > 0)
-            term_screen_send(s, str, n);
-        return false;
-    }
+    if (res->kind == KM_RESULT_FUNC)
+        return func_result(k, child, code, res->func, key);
     if (res->kind != KM_RESULT_SPECIAL)
         return false;
     if (res->key == KM_ENTER) {
@@ -696,7 +740,7 @@ void term_keys_event(struct term_keys *k, struct term_screen *s, struct term_sel
             sent->valid = false;
             return;
         }
-    } else if (!make_key(k, s, &before, code, &res, !sel->active, &key)) {
+    } else if (!make_key(k, sel->active ? NULL : s, &before, code, &res, &key)) {
         if (value == 1)
             sent->valid = false;
         return;
