@@ -1,0 +1,86 @@
+Save and restore the cursor in modes 1049 and 1048 as DECSC and DECRC do
+
+Mode 1049 saved and restored only the cursor's position, so the attributes
+in use when a program left the alternate screen stayed in use on the main
+screen, and with BCE erased it in the program's colors: vim leaves with its
+color scheme's SGR in effect, and a clear after it painted the main screen
+in the scheme's background. xterm saves the cursor as DECSC does before it
+switches to the alternate screen and restores it as DECRC does after it
+switches back, in the main screen's slot of the saved cursors, and saves and
+restores it in the slot of the screen in use for mode 1048. libtsm now does
+the same.
+
+tsm-screen.c kept the main screen's erase attributes on entering the
+alternate screen and never put them back; leaving it now puts them back.
+
+--- a/src/tsm/tsm-vte.c
++++ b/src/tsm/tsm-vte.c
+@@ -248,8 +248,6 @@
+ 	/* DECSC's saved cursor, [0] the main screen's and [1] the
+ 	 * alternate screen's, as xterm keeps one for each */
+ 	struct vte_saved_state saved_state[2];
+-	unsigned int alt_cursor_x;
+-	unsigned int alt_cursor_y;
+ 
+ 	/* The Kitty keyboard protocol's stacks of flags, [0] the main
+ 	 * screen's and [1] the alternate's. top indexes the flags in effect;
+@@ -1924,35 +1922,35 @@
+ 			if (vte->flags & TSM_VTE_FLAG_TITE_INHIBIT_MODE)
+ 				continue;
+ 
++			/* DECSC and DECRC, as in xterm, in the slot of
++			 * the screen in use */
+ 			if (set) {
+ 				vte->alt_cursor_saved = true;
+-				vte->alt_cursor_x =
+-					tsm_screen_get_cursor_x(vte->con);
+-				vte->alt_cursor_y =
+-					tsm_screen_get_cursor_y(vte->con);
++				save_state(vte);
+ 			} else {
+-				tsm_screen_move_to(vte->con, vte->alt_cursor_x,
+-						   vte->alt_cursor_y);
++				restore_state(vte);
+ 			}
+ 			continue;
+ 		case 1049: /* Alternate screen buffer with pre-erase+cursor */
+ 			if (vte->flags & TSM_VTE_FLAG_TITE_INHIBIT_MODE)
+ 				continue;
+ 
++			/* DECSC before the switch and DECRC after the
++			 * switch back, as in xterm, so that the main
++			 * screen's slot keeps its cursor, attributes,
++			 * character sets and origin mode, and the
++			 * attributes in use on the alternate screen do
++			 * not stay to erase the main screen with */
+ 			if (set) {
+ 				vte->alt_cursor_saved = true;
+-				vte->alt_cursor_x =
+-					tsm_screen_get_cursor_x(vte->con);
+-				vte->alt_cursor_y =
+-					tsm_screen_get_cursor_y(vte->con);
++				save_state(vte);
+ 				tsm_screen_set_flags(vte->con,
+ 						     TSM_SCREEN_ALTERNATE);
+ 				tsm_screen_erase_screen(vte->con, false);
+ 			} else {
+ 				tsm_screen_reset_flags(vte->con,
+ 						       TSM_SCREEN_ALTERNATE);
+-				tsm_screen_move_to(vte->con, vte->alt_cursor_x,
+-						   vte->alt_cursor_y);
++				restore_state(vte);
+ 			}
+ 			continue;
+ 		case TSM_VTE_MOUSE_EVENT_BTN:
+--- a/src/tsm/tsm-screen.c
++++ b/src/tsm/tsm-screen.c
+@@ -1026,6 +1026,9 @@
+ 		con->lines = con->main_lines;
+ 		tsm_screen_selection_reset(con);
+ 		reset_scrollback_position(con);
++
++		/* the main screen erases with its own attributes again */
++		memcpy(&con->def_attr, &con->def_attr_main, sizeof(con->def_attr));
+ 	}
+ 
+ 	if ((old & TSM_SCREEN_HIDE_CURSOR) &&
