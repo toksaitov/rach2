@@ -586,10 +586,8 @@ static int load_steps(struct etude_case *c)
         }
         arch = jtext(c->decls[i].qemu, "architecture");
         if (eh_json_get(c->decls[i].qemu, "architecture") != NULL &&
-            (!c->decls[i].helper || arch == NULL ||
-             (strcmp(arch, "i686") != 0 && strcmp(arch, "x86_64") != 0))) {
-            diag("machine %s: only a helper may select architecture i686 or x86_64",
-                 c->decls[i].id);
+            (arch == NULL || (strcmp(arch, "i686") != 0 && strcmp(arch, "x86_64") != 0))) {
+            diag("machine %s: the architecture is i686 or x86_64", c->decls[i].id);
             return -1;
         }
     }
@@ -1736,10 +1734,10 @@ static enum etude_firmware firmware_of(const char *firmware)
     return ETUDE_FIRMWARE_DIRECT;
 }
 
-/** Resolve a helper's explicit architecture, or the case architecture. */
+/** Resolve a machine's explicit architecture, or the case architecture. */
 static const char *machine_architecture(const struct etude_case *c, const struct machine_decl *d)
 {
-    const char *arch = d->helper ? jtext(d->qemu, "architecture") : NULL;
+    const char *arch = jtext(d->qemu, "architecture");
     return arch != NULL ? arch : c->arch;
 }
 

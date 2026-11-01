@@ -318,11 +318,7 @@
             "records": {"type": "array", "items": {"$ref": "#/$defs/text"}}
           }
         }
-      },
-      "allOf": [{
-        "if": {"properties": {"helper": {"const": false}}},
-        "then": {"properties": {"qemu": {"not": {"required": ["architecture"]}}}}
-      }]
+      }
     },
     "service": {
       "type": "object", "additionalProperties": false,

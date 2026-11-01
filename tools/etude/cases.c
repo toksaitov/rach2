@@ -870,7 +870,31 @@ static int listed(const struct json *list, const char *value)
     return 0;
 }
 
-/** An architecture override belongs only to a declared helper machine. */
+/**
+ * Says whether the kernel of machine `machine` is an artifact that prepare
+ * makes once for both architectures, the kernel of another system.
+ */
+static int fixed_kernel(const struct rule *r, const struct json *machine)
+{
+    const struct json *prepare = json_member(r->c, "prepare");
+    const char *kernel = json_text(json_member(machine, "qemu"), "kernel");
+    const struct json *per;
+    size_t i;
+
+    for (i = 0; kernel != NULL && prepare != NULL && i < prepare->count; i++) {
+        if (same(json_text(prepare->item[i], "name"), kernel)) {
+            per = json_member(prepare->item[i], "per_architecture");
+            return per != NULL && !per->integer;
+        }
+    }
+    return 0;
+}
+
+/**
+ * An architecture override belongs only to a declared helper machine, or to
+ * a machine of another system, whose kernel prepare makes once for both
+ * architectures, such as the Wi-Fi suite's Linux access point.
+ */
 static void rule_helper_architecture(const struct rule *r)
 {
     const struct json *machines = json_member(r->c, "machines");
@@ -885,8 +909,10 @@ static void rule_helper_architecture(const struct rule *r)
         const struct json *machine = machines->item[i];
         const struct json *helper = json_member(machine, "helper");
         arch = json_member(json_member(machine, "qemu"), "architecture");
-        if (arch != NULL && (helper == NULL || !helper->integer))
-            finding(r->file, arch->line, "%s: only a helper machine may override its architecture",
+        if (arch != NULL && (helper == NULL || !helper->integer) && !fixed_kernel(r, machine))
+            finding(r->file, arch->line,
+                    "%s: only a helper machine, or one whose kernel is the same on both "
+                    "architectures, may override its architecture",
                     json_text(r->c, "case_id"));
     }
 }
