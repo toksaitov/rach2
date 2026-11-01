@@ -60,12 +60,16 @@ struct evdev;
 #define KEY_PAUSE            119
 #define KEY_SLEEP            142
 #define KEY_WAKEUP           143
+#define KEY_F16              186
+#define KEY_CAMERA           212
 #define KEY_BRIGHTNESSDOWN   224
 #define KEY_BRIGHTNESSUP     225
 #define KEY_SWITCHVIDEOMODE  227
+#define KEY_WLAN             238
 #define KEY_BRIGHTNESS_CYCLE 243
 #define KEY_BRIGHTNESS_ZERO  244
 #define KEY_DISPLAY_OFF      245
+#define KEY_MICMUTE          248
 #define KEY_MAX              0x2ff
 
 /**
