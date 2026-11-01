@@ -2,7 +2,8 @@
  * dsp.c: /dev/dsp (dsp.h), OSS's audio device: for each direction an open
  * has, a buffer of periods between the program and a stream, and OSS's
  * ioctls. Each open plays on a virtual channel of its own (vchan.h), so
- * that several play at once, and records on a virtual reader of the shared input.
+ * that several play at once, and records on a virtual reader of the shared
+ * input.
  */
 
 #include "dsp.h"

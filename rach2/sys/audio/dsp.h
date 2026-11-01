@@ -19,12 +19,13 @@ int dspdev_present(void);
 
 /**
  * Open /dev/dsp for the new descriptor `e`, whose open(2) flags are `flags`:
- * take a virtual channel of the mix (vchan.h) for O_WRONLY, a virtual reader of the shared
- * capture stream for O_RDONLY, and both for O_RDWR, and set OSS's defaults,
- * unsigned 8-bit mono at 8000 Hz, each open its own. Any number of opens
- * play at once, and any number record. 0; -EBUSY when another kernel
- * caller has taken the hardware stream directly; -ENODEV when the driver has no streams or
- * lacks a direction asked for; -EINVAL for an access mode of 3; -ENOMEM.
+ * take a virtual channel of the mix (vchan.h) for O_WRONLY, a virtual reader
+ * of the shared capture stream for O_RDONLY, and both for O_RDWR, and set
+ * OSS's defaults, unsigned 8-bit mono at 8000 Hz, each open its own. Any
+ * number of opens play at once, and any number record. 0; -EBUSY when
+ * another kernel caller has taken the hardware stream directly; -ENODEV when
+ * the driver has no streams or lacks a direction asked for; -EINVAL for an
+ * access mode of 3; -ENOMEM.
  */
 int32_t dspdev_open(fd_entry_t *e, int flags);
 
