@@ -763,7 +763,7 @@ static __inline__ unsigned probe_meminfo(const char *key)
 }
 
 /* The socket operations of socketcall(2), by its numbers, and Rach2's ICMP
- * echo, SC_PING and SC_PING_DATA, with its call (pingcall.h). */
+ * echo, SC_PING, SC_PING_DATA and SC_PING6, with its call (pingcall.h). */
 #include "../utils/pingcall.h"
 
 #define SC_SOCKET      1
@@ -837,6 +837,7 @@ static __inline__ long sock_call(int call, const unsigned long *args)
         return syscall4(SYS_ACCEPT4, a[0], a[1], a[2], a[3]);
     case SC_PING:
     case SC_PING_DATA:
+    case SC_PING6:
         return syscall2(SYS_PINGCALL, call, (long)args);
     default:
         return -22; /* EINVAL, as socketcall answers an operation it lacks */
