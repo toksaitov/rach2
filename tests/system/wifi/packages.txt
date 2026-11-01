@@ -1,0 +1,32 @@
+# packages.txt: the Alpine Linux 3.24 packages, x86-64, that the Linux AP
+# guest is made of. A line is the repository, the package's name, its version
+# and the SHA-256 of its .apk file, which mkguest.sh downloads from
+# ALPINE/v3.24/REPOSITORY/x86_64/NAME-VERSION.apk once and checks on every
+# build. linux-lts gives the kernel and its modules; the rest is the guest's
+# root with every library its programs need.
+#
+# Alpine keeps only the newest build of each package in a release's
+# repository, so a pinned file can vanish from the mirrors when its package
+# is updated; the machines' caches keep the files they have. A new build is a
+# new line in place of the old one, with the digest of the file downloaded
+# from the release's repository over HTTPS.
+main linux-lts 6.18.60-r0 f205a980e1d683414f5557d26366bee1e52cf128613aa74ef371b3f11b019085
+main musl 1.2.6-r3 e142255d0fa397f14318996bc10378093dcc069dc3dd1b6818c8f28a789c21da
+main libcrypto3 3.5.9-r0 6632d758d8f5e9ea3b650fe966f23bbf9a202f8b8dceecac93da135dec5e3689
+main libssl3 3.5.9-r0 05e3393fb95aa5751ca2f9d242f659f6cff82c1cc7767cc2df4a086f7ad01877
+main busybox-binsh 1.37.0-r31 93f803ae5db6b729c0f66f4afba6e907ccc17d7d5f8b8c3d25bdb4636de2c48a
+main busybox 1.37.0-r31 0e626fa97cf937fda7bba4ed4dde8e2f2dbb5083ac34e02180cec0c4eba9351b
+main hostapd 2.11-r4 7e29b53d79834a3057caffa47d7083a6d3b7babd77a2229840e47adf9f587eb7
+main libnl3 3.11.0-r0 b8c9b0a045b1615027b58618103f3dabeca69aacb80b527ac7b96ba354aba4a4
+main wpa_supplicant 2.11-r4 6b3dc3546634cebd64570162b6b399582a83d6d00635d7436804e39a7850a0ef
+main dbus-libs 1.16.2-r2 105f6ba17454c587ca9345f9deb348012d1950588a22da42120c954d396c99b6
+main pcsc-lite-libs 2.4.0-r4 f01c9af6f32a01dc385e7959dd2215711ab1037afe45f0cbf34efb19c7cb39ac
+main iw 6.17-r0 fa011d7ca3e49b6262a4fda3790cb5fa0c9ff6e3078e7c592798fb049f2c8769
+main dnsmasq 2.92_p2-r0 095f4f59a10275de669137318432de21c1da048bb5d840492a1964f5c3223e0a
+main dnsmasq-common 2.92_p2-r0 59ede554aec5ccf72602456b3a923c52842fd4a1f9114bc088ebef71609e8307
+main tcpdump 4.99.6-r1 14626b75407d65fece45f2e9c66fe127ab0e6fbfe9cdd94d6a093342c20af7d6
+main libpcap 1.10.7-r0 1883aff264d8b5901f6bbc3575929ad01855e24d06557b7d0ad9762241b7e3cf
+main iptables 1.8.13-r0 af3aaf9303c829ccee795725965ee6894816a98f9afa62b5dd52b25e6e62e8f0
+main libmnl 1.0.5-r2 3693162ff7c27998dbbb2da1c4bd9072079cd55af1fa3d6d2ade51d276e20157
+main libnftnl 1.3.1-r0 2f4cf35959fde00fdba0dd35ef12a6739739b504e8319c97e30bd4834f98d924
+main libxtables 1.8.13-r0 4b5c981a77af40f965debe18f06c0c20268956f141a1bfc1c8ff6a406d914465

@@ -1,0 +1,32 @@
+# modules.txt: the modules of linux-lts that the Linux AP guest loads at
+# boot, each with what it needs before it, in the order modules.dep gives.
+# mac80211_hwsim, last, is loaded by wifiap with radios=4.
+#
+# e1000 drives QEMU's cards; af_packet carries the EAPOL and DHCP frames of
+# hostapd, wpa_supplicant and dnsmasq; bridge joins network A's two access
+# points; nlmon captures the netlink of the trace. The kernel asks for the
+# ciphers mac80211 uses by name, and finds them registered: ccm and ctr for
+# CCMP, cmac for BIP, gcm and ghash-generic for the GCMP suites, libarc4 for
+# TKIP's RC4. The netfilter modules are those iptables' NAT rules need,
+# through nf_tables and its compatibility with the xtables targets.
+e1000
+af_packet
+bridge
+nlmon
+ccm
+ctr
+cmac
+gcm
+ghash-generic
+libarc4
+nf_tables
+nft_compat
+nft_chain_nat
+nft_nat
+nft_masq
+nft_ct
+xt_MASQUERADE
+xt_nat
+xt_tcpudp
+xt_conntrack
+mac80211_hwsim

@@ -1,0 +1,384 @@
+#!/bin/sh
+#
+# wifiap: the access points of the Linux AP guest, on mac80211_hwsim's radios.
+#
+# Usage: wifiap boot
+#        wifiap start PROFILE
+#        wifiap stop
+#        wifiap check
+#        wifiap trace
+#
+# `boot` is what init runs: it sets up the cards, makes four radios, starts
+# the profile the kernel's command line names, checks that its beacons are
+# on the air, starts the relay, and then does what wifiap.run says. `start`
+# stops the access points and starts them again with PROFILE; `stop` stops
+# them. `check` scans passively from the guest's own station radio and
+# prints `wifiap: beacon: BSSID SSID` for each network it hears, then
+# `wifiap: check: ok` when all three access points were heard, or
+# `wifiap: check: failed: DETAIL`. `trace` records, while Linux's
+# wpa_supplicant joins under WPA2, SAE and PEAP, every netlink message
+# through nlmon, and prints each capture in base64 between `wifiap: trace:
+# NAME: begin` and `wifiap: trace: NAME: end SHA256`, its SHA-256.
+#
+# The radios: wlan0 on channel 1 and wlan1 on channel 6 are the two access
+# points of network A, rach2-net, bridged in br0; wlan2 on channel 11 is
+# network B, rach2-other, always WPA2; wlan3 is a station for check and
+# trace. The PROFILE gives network A's security:
+#
+#   open         no encryption
+#   tkip         WPA with TKIP
+#   wpa2         WPA2-Personal, CCMP
+#   sae          WPA3-Personal, SAE with management-frame protection required
+#   transition   WPA2 and WPA3 together, management-frame protection optional
+#   enterprise   WPA2-Enterprise: PEAP, TTLS and TLS against server.pem
+#   enterprise2  the same against server2.pem, the changed certificate
+#
+# The kernel's command line, read once at boot:
+#
+#   wifiap.profile=PROFILE  network A's profile, wpa2 by default
+#   wifiap.run=MODE         shell (the default) leaves a root shell on the
+#                           console with the prompt `wifiap# `; check powers
+#                           the machine off after the boot's check; trace
+#                           records the traces and powers it off
+#   wifiap.peer=PORT        the host's UDP port of the Rach2 relay; with it,
+#                           /usr/sbin/hwsimrelay runs as `hwsimrelay 5550
+#                           10.0.3.2 PORT` once the check has passed, and
+#                           carries the radios' frames from then on
+
+set -u
+
+CONF=/etc/wifiap
+RUN=/run/wifiap
+PROFILES="open tkip wpa2 sae transition enterprise enterprise2"
+SSID_A=rach2-net
+PSK_A=rach2-net-psk
+SSID_B=rach2-other
+PSK_B=rach2-other-psk
+
+say()
+{
+    echo "wifiap: $*"
+}
+
+# arg NAME DEFAULT: the value of wifiap.NAME on the kernel's command line.
+arg()
+{
+    for word in $(cat /proc/cmdline); do
+        case $word in
+            "wifiap.$1="*) echo "${word#*=}"; return ;;
+        esac
+    done
+    echo "$2"
+}
+
+# security PROFILE: the lines of hostapd.conf that give network A PROFILE's
+# security.
+security()
+{
+    case $1 in
+        open) ;;
+        tkip)
+            echo "ieee80211n=0"
+            echo "wpa=1"
+            echo "wpa_key_mgmt=WPA-PSK"
+            echo "wpa_pairwise=TKIP"
+            echo "wpa_passphrase=$PSK_A"
+            ;;
+        wpa2)
+            echo "wpa=2"
+            echo "wpa_key_mgmt=WPA-PSK"
+            echo "rsn_pairwise=CCMP"
+            echo "wpa_passphrase=$PSK_A"
+            ;;
+        sae)
+            echo "wpa=2"
+            echo "wpa_key_mgmt=SAE"
+            echo "rsn_pairwise=CCMP"
+            echo "sae_password=$PSK_A"
+            echo "sae_pwe=2"
+            echo "ieee80211w=2"
+            ;;
+        transition)
+            echo "wpa=2"
+            echo "wpa_key_mgmt=WPA-PSK SAE"
+            echo "rsn_pairwise=CCMP"
+            echo "wpa_passphrase=$PSK_A"
+            echo "sae_password=$PSK_A"
+            echo "sae_pwe=2"
+            echo "sae_require_mfp=1"
+            echo "ieee80211w=1"
+            ;;
+        enterprise | enterprise2)
+            cert=server
+            [ "$1" = enterprise ] || cert=server2
+            echo "wpa=2"
+            echo "wpa_key_mgmt=WPA-EAP"
+            echo "rsn_pairwise=CCMP"
+            echo "ieee8021x=1"
+            echo "eap_server=1"
+            echo "eap_user_file=$CONF/eap_users"
+            echo "ca_cert=$CONF/certs/clientca.pem"
+            echo "server_cert=$CONF/certs/$cert.pem"
+            echo "private_key=$CONF/certs/$cert.key"
+            ;;
+    esac
+}
+
+# apconf IFACE CHANNEL SSID BRIDGE: the common lines of an access point's
+# hostapd.conf; BRIDGE is empty for none.
+apconf()
+{
+    echo "interface=$1"
+    echo "driver=nl80211"
+    echo "ctrl_interface=/run/hostapd"
+    echo "ssid=$3"
+    echo "hw_mode=g"
+    echo "channel=$2"
+    echo "ieee80211n=1"
+    echo "wmm_enabled=1"
+    [ -z "$4" ] || echo "bridge=$4"
+}
+
+# hostapd_up NAME: start hostapd on the configuration $RUN/NAME.conf and
+# wait until it has enabled its access point. Returns 1, with its log
+# printed, when it did not.
+hostapd_up()
+{
+    if ! hostapd -B -t -P "$RUN/$1.pid" -f "$RUN/$1.log" "$RUN/$1.conf" \
+        >> "$RUN/$1.log" 2>&1; then
+        say "start: hostapd $1 failed:"
+        cat "$RUN/$1.log"
+        return 1
+    fi
+    if ! hostapd_cli -p /run/hostapd -i "$1" status 2>/dev/null | grep -q '^state=ENABLED'; then
+        say "start: hostapd $1 is not enabled:"
+        cat "$RUN/$1.log"
+        return 1
+    fi
+}
+
+stop()
+{
+    for file in "$RUN"/wlan*.pid; do
+        [ -f "$file" ] || continue
+        pid=$(cat "$file")
+        kill "$pid" 2>/dev/null
+        # hostapd leaves its interface before it exits.
+        while kill -0 "$pid" 2>/dev/null; do
+            sleep 1
+        done
+        rm -f "$file"
+    done
+}
+
+start()
+{
+    case " $PROFILES " in
+        *" $1 "*) ;;
+        *) say "start: no such profile: $1"; return 2 ;;
+    esac
+    stop
+    mkdir -p "$RUN"
+    { apconf wlan0 1 "$SSID_A" br0; security "$1"; } > "$RUN/wlan0.conf"
+    { apconf wlan1 6 "$SSID_A" br0; security "$1"; } > "$RUN/wlan1.conf"
+    { apconf wlan2 11 "$SSID_B" ""; security wpa2 | sed "s/=$PSK_A\$/=$PSK_B/"; } > "$RUN/wlan2.conf"
+    hostapd_up wlan0 && hostapd_up wlan1 && hostapd_up wlan2 || return 1
+    # Setting the card's mode took it down, which dropped any IPv6 address.
+    ip addr replace 192.168.72.1/24 dev wlan2
+    ip -6 addr replace fd72::1/64 dev wlan2
+    echo "$1" > "$RUN/profile"
+    say "start: $1"
+}
+
+# network: the cards, the bridge, forwarding and dnsmasq.
+network()
+{
+    ip link set lo up
+    ip link set eth0 up
+    ip addr add 10.0.2.15/24 dev eth0
+    ip route add default via 10.0.2.2
+    ip link set eth1 up
+    ip addr add 10.0.3.15/24 dev eth1
+    # The access points' addresses are the only ones on their links, and
+    # busybox's ip has no nodad, so every card made from here on skips DAD.
+    echo 0 > /proc/sys/net/ipv6/conf/default/accept_dad
+    brctl addbr br0
+    brctl setfd br0 0
+    ip link set br0 up
+    ip addr add 192.168.71.1/24 dev br0
+    ip -6 addr add fd71::1/64 dev br0
+    echo 1 > /proc/sys/net/ipv4/ip_forward
+    echo 1 > /proc/sys/net/ipv6/conf/all/forwarding
+    iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+    # The host reaches the stations' SSH servers through the guest's card.
+    iptables -t nat -A PREROUTING -i eth0 -p tcp --dport 2222 \
+        -j DNAT --to-destination 192.168.71.50:22
+    iptables -t nat -A PREROUTING -i eth0 -p tcp --dport 2223 \
+        -j DNAT --to-destination 192.168.72.50:22
+}
+
+dnsmasq_up()
+{
+    if ! dnsmasq -C "$CONF/dnsmasq.conf"; then
+        say "boot: dnsmasq failed"
+        return 1
+    fi
+}
+
+check()
+{
+    ip link set wlan3 up
+    out=$(iw dev wlan3 scan freq 2412 2437 2462 passive 2>&1)
+    seen=$(echo "$out" | awk '
+        /^BSS / { bss = substr($2, 1, 17) }
+        /^\tSSID: / { print bss, substr($0, index($0, ":") + 2) }')
+    echo "$seen" | while read -r bssid ssid; do
+        [ -z "$bssid" ] || say "beacon: $bssid $ssid"
+    done
+    missing=
+    for want in "02:00:00:00:00:00 $SSID_A" "02:00:00:00:01:00 $SSID_A" \
+        "02:00:00:00:02:00 $SSID_B"; do
+        echo "$seen" | grep -qx "$want" || missing="$missing, $want"
+    done
+    ip link set wlan3 down
+    if [ -n "$missing" ]; then
+        say "check: failed: not heard: ${missing#, }"
+        echo "$out"
+        return 1
+    fi
+    say "check: ok"
+}
+
+# sta_conf NAME: wpa_supplicant's configuration for the trace NAME.
+sta_conf()
+{
+    echo "ctrl_interface=/run/wpa_supplicant"
+    echo "sae_pwe=2"
+    echo "network={"
+    echo "    ssid=\"$SSID_A\""
+    case $1 in
+        wpa2)
+            echo "    key_mgmt=WPA-PSK"
+            echo "    psk=\"$PSK_A\""
+            ;;
+        sae)
+            echo "    key_mgmt=SAE"
+            echo "    sae_password=\"$PSK_A\""
+            echo "    ieee80211w=2"
+            ;;
+        peap)
+            pin=$(sed -n '/BEGIN/,/END/p' "$CONF/certs/server.pem" | grep -v -- ----- |
+                base64 -d | sha256sum | cut -d ' ' -f 1)
+            echo "    key_mgmt=WPA-EAP"
+            echo "    eap=PEAP"
+            echo "    identity=\"student\""
+            echo "    anonymous_identity=\"anonymous@university.test\""
+            echo "    password=\"rach2-wifi\""
+            echo "    phase2=\"auth=MSCHAPV2\""
+            echo "    ca_cert=\"hash://server/sha256/$pin\""
+            ;;
+    esac
+    echo "}"
+}
+
+# trace_one NAME PROFILE: record the netlink of a join under PROFILE.
+trace_one()
+{
+    dir=/run/trace
+    mkdir -p "$dir"
+    start "$2" || return 1
+    sta_conf "$1" > "$dir/$1.conf"
+    ip link add nlmon0 type nlmon
+    ip link set nlmon0 up
+    tcpdump -Z root -U -s 0 -i nlmon0 -w "$dir/$1.pcap" 2> "$dir/$1.tcpdump" &
+    dump=$!
+    # tcpdump says that it listens once its capture is open.
+    while ! grep -q 'listening on' "$dir/$1.tcpdump"; do
+        sleep 1
+    done
+    wpa_supplicant -i wlan3 -D nl80211 -c "$dir/$1.conf" -d -t > "$dir/$1.log" 2>&1 &
+    supplicant=$!
+    state=
+    tries=0
+    while [ "$state" != COMPLETED ] && [ $tries -lt 60 ]; do
+        sleep 1
+        tries=$((tries + 1))
+        state=$(wpa_cli -p /run/wpa_supplicant -i wlan3 status 2>/dev/null |
+            sed -n 's/^wpa_state=//p')
+    done
+    wpa_cli -p /run/wpa_supplicant -i wlan3 terminate > /dev/null 2>&1
+    wait "$supplicant"
+    kill -INT "$dump"
+    wait "$dump"
+    ip link del nlmon0
+    echo "wpa_supplicant $supplicant" > "$dir/$1.pids"
+    for f in "$RUN"/wlan*.pid; do
+        echo "hostapd $(cat "$f")" >> "$dir/$1.pids"
+    done
+    if [ "$state" != COMPLETED ]; then
+        say "trace: $1: failed: wpa_supplicant ended at ${state:-nothing}:"
+        tail -n 40 "$dir/$1.log"
+        return 1
+    fi
+    for f in pcap pids log; do
+        say "trace: $1.$f: begin"
+        base64 "$dir/$1.$f"
+        say "trace: $1.$f: end $(sha256sum "$dir/$1.$f" | cut -d ' ' -f 1)"
+    done
+}
+
+trace()
+{
+    trace_one wpa2 wpa2 && trace_one sae sae && trace_one peap enterprise
+}
+
+relay()
+{
+    port=$(arg peer "")
+    [ -n "$port" ] || return 0
+    if [ ! -x /usr/sbin/hwsimrelay ]; then
+        say "boot: wifiap.peer=$port, but this guest has no hwsimrelay"
+        return 1
+    fi
+    hwsimrelay 5550 10.0.3.2 "$port" > "$RUN/hwsimrelay.log" 2>&1 &
+    echo $! > "$RUN/hwsimrelay.pid"
+    say "boot: relay to port $port"
+}
+
+boot()
+{
+    mkdir -p "$RUN" /run/hostapd /var/lib/misc
+    network
+    insmod "/lib/modules/$(cat "$CONF/hwsim")" radios=4
+    run=$(arg run shell)
+    status=0
+    start "$(arg profile wpa2)" && dnsmasq_up && check || status=1
+    case $run in
+        check) ;;
+        trace) [ $status -ne 0 ] || trace || status=1 ;;
+        *) [ $status -ne 0 ] || relay || status=1 ;;
+    esac
+    if [ $status -eq 0 ]; then
+        say "ready: $(cat "$RUN/profile") $run, at $(cut -d ' ' -f 1 /proc/uptime) s"
+    else
+        say "failed: $run"
+    fi
+    case $run in
+        check | trace) poweroff -f ;;
+    esac
+    PS1='wifiap# '
+    export PS1
+    exec setsid sh -c 'exec sh -i < /dev/ttyS0 > /dev/ttyS0 2>&1'
+}
+
+case ${1:-} in
+    boot) boot ;;
+    start) start "${2:-}" ;;
+    stop) stop ;;
+    check) check ;;
+    trace) trace ;;
+    *)
+        echo "usage: wifiap boot | start PROFILE | stop | check | trace" >&2
+        exit 2
+        ;;
+esac

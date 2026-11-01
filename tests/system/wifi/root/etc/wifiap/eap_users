@@ -1,0 +1,9 @@
+# eap_users: the users of the guest's EAP server. Phase 1 takes the
+# university's student, eduroam's anonymous outer identity, and the EAP-TLS
+# client, whose certificate clientca.pem signed; phase 2, marked [2], takes
+# the student's password under PEAP's MSCHAPv2 or GTC and TTLS's PAP or
+# MSCHAPv2.
+"student"			PEAP,TTLS
+"anonymous@university.test"	PEAP,TTLS
+"client@wifi.test"		TLS
+"student"	MSCHAPV2,GTC,TTLS-PAP,TTLS-MSCHAPV2	"rach2-wifi"	[2]
