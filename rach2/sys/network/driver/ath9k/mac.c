@@ -29,6 +29,10 @@
 #define MIN_BEACON_TIMEOUT_VAL 1
 #define TSFOOR_THRESHOLD       0x00004240
 
+/* ath9k_hw_init_mfp: the frame control bits of a management frame that
+ * CCMP's AAD keeps; Retry, PwrMgt and MoreData read as zero. */
+#define MFP_FC_MASK 0xc7ff
+
 /* ath9k_cmn_beacon_config_sta: a beacon miss after ten of them, and the
  * two TU ath9k_get_next_tbtt adds before rounding up to the next one. */
 #define BMISS_BEACONS  10
@@ -354,7 +358,10 @@ static uint32_t le16(const uint8_t *p)
 /**
  * Set the station's address from radio.mac, as ath9k_hw_reset_opmode
  * does: AR_STA_ID1 keeps its other bits and takes RTS's default rate,
- * the MIC's new location and the key search of multicast frames.
+ * the MIC's new location and the key search of multicast frames. As
+ * ath9k_hw_init_mfp does for the AR9003, CCMP's AAD of a management frame
+ * masks its Retry, PwrMgt and MoreData bits, so that the key cache
+ * protects unicast management frames as 802.11w defines them.
  */
 void ath9k_mac_set_address(struct ath9k *ah)
 {
@@ -364,6 +371,7 @@ void ath9k_mac_set_address(struct ath9k *ah)
                 AR_STA_ID1_MCAST_KSRCH | AR_STA_ID1_PRESERVE_SEQNUM,
             AR_STA_ID1_SADH_MASK);
     REG_SET_BIT(ah, AR_PCU_MISC, AR_PCU_MIC_NEW_LOC_ENA);
+    REG_RMW_FIELD(ah, AR_AES_MUTE_MASK1, AR_AES_MUTE_MASK1_FC_MGMT, MFP_FC_MASK);
     REG_WRITE(ah, AR_ISR, 0xffffffffu);
     REG_WRITE(ah, AR_RSSI_THR, INIT_RSSI_THR);
 }
