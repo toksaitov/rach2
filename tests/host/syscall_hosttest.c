@@ -78,6 +78,25 @@ int socket_outside(const struct socket *s)
     (void)s;
     return 0;
 }
+
+/** A socket of the first network namespace reaches every address. */
+int socket_ns_reaches(const struct socket *s, net_addr_t a, int up)
+{
+    (void)s;
+    (void)a;
+    (void)up;
+    return 1;
+}
+
+/** No row sets an option of a netlink socket, which this refuses. */
+int32_t netlink_setsockopt(struct socket *s, int optname, int val, int optlen)
+{
+    (void)s;
+    (void)optname;
+    (void)val;
+    (void)optlen;
+    return -ENOPROTOOPT;
+}
 volatile uint64_t kernel_ticks;
 
 /** The tick count as the kernel reads it whole: the model's `kernel_ticks`. */

@@ -32,6 +32,8 @@
 #include "rtc.h"
 #include "pit.h"
 #include "cmos.h"
+#include "cmdline.h"
+#include "vdso.h"
 
 #if TICK_HZ != 1000
 #error "the literal answers are for TICK_HZ 1000"
@@ -202,6 +204,30 @@ void smp_service(void)
 void arch_relax(void)
 {
     CHECK(0);
+}
+
+/** The clock does not run from the TSC here, so clock.c keeps the time. */
+int vclock_read(int real, int coarse, int64_t *sec, int64_t *nsec)
+{
+    (void)real;
+    (void)coarse;
+    (void)sec;
+    (void)nsec;
+    return 0;
+}
+
+/** No vDSO page takes the offset here. */
+void vclock_set_offset(int64_t sec, int32_t nsec)
+{
+    (void)sec;
+    (void)nsec;
+}
+
+/** The command line here is empty. */
+int kcmdline_has(const char *flag)
+{
+    (void)flag;
+    return 0;
 }
 
 /* No row measures the time-stamp counter, which timercal_hosttest.c does;

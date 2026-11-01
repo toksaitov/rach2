@@ -11,6 +11,7 @@ struct ifreq {
     struct sockaddr ifr_addr;
     struct sockaddr ifr_hwaddr;
     int ifr_ifindex;
+    int ifr_mtu;
 };
 
 #ifndef SIOCGIFINDEX
