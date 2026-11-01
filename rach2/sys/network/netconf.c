@@ -16,6 +16,7 @@
 #include "arp/arp.h"
 #include "tcp/tcp.h"
 #include "ip6/ip6.h"
+#include "ip6/nd6.h"
 #include "../cmdline.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
@@ -756,8 +757,10 @@ int netconf_set_gateway(struct netdev *nd, uint32_t gw)
 
 /**
  * A card's address joins its solicited-node group, which neighbour
- * discovery asks for it on; `lo` has no link to be asked on. A preferred
- * lifetime of 0 makes the address deprecated from the start.
+ * discovery asks for it on, and is tentative until duplicate detection
+ * passes (`nd6_dad_start`), unless it is NETDEV_A6_NODAD; `lo` has no link
+ * to be asked on. A preferred lifetime of 0 makes the address deprecated
+ * from the start.
  */
 int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int flags,
                          uint32_t valid, uint32_t preferred)
@@ -770,6 +773,9 @@ int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int
 
     if (!nd) {
         return -ENODEV;
+    }
+    if (nd6_disabled(nd)) {
+        return -EACCES;
     }
     if (prefix < 0 || prefix > 128 || preferred > valid || valid == 0 || ip6_is_unspecified(addr) ||
         ip6_is_multicast(addr) || ip6_is_v4mapped(addr) ||
@@ -793,13 +799,20 @@ int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int
     k_memcpy(a->addr, addr, IP6_ADDR_LEN);
     a->prefix = (uint8_t)prefix;
     a->scope = (uint8_t)ip6_scope(addr);
-    a->flags = (uint8_t)(flags & (NETDEV_A6_NODAD | NETDEV_A6_TENTATIVE | NETDEV_A6_PERMANENT));
+    a->flags = (uint8_t)(flags & (NETDEV_A6_NODAD | NETDEV_A6_PERMANENT));
     if (preferred == 0) {
         a->flags |= NETDEV_A6_DEPRECATED;
     }
+    a->proto = nd->loopback ? NETDEV_PROTO_KERNEL_LO : NETDEV_PROTO_UNSPEC;
     a->valid = valid;
     a->preferred = preferred;
-    a->since = (uint32_t)kernel_ticks;
+    a->since = tick_count();
+    a->dad_count = 0;
+    a->regen = 0;
+    if (!nd->loopback && !(flags & NETDEV_A6_NODAD)) {
+        a->flags |= NETDEV_A6_TENTATIVE;
+        nd6_dad_start(a);
+    }
     net_unlock(lock);
     ip6_format(addr, text);
     klog(KLOG_INFO, "net", "%s: IPv6 %s/%d added", nd->name, text, prefix);
@@ -832,6 +845,7 @@ int netconf_del_address6(struct netdev *nd, const uint8_t *addr)
         nd->addr6[i] = nd->addr6[i + 1];
     }
     nd->naddr6--;
+    tcp_local_addr_changed();
     net_unlock(lock);
     klog(KLOG_INFO, "net", "%s: IPv6 %s removed", nd->name, text);
     return 0;
@@ -841,13 +855,18 @@ int netconf_del_address6(struct netdev *nd, const uint8_t *addr)
  * The interface identifier is the modified EUI-64 of the station address
  * (RFC 4291, appendix A): ff:fe in its middle and the universal bit
  * inverted. The address is kept across a down and up, as an address given
- * by hand is, so only an interface without one gets it.
+ * by hand is, so only an interface without one gets it. An interface with
+ * IPv6 disabled gets nothing.
  */
 static void link_local_up(struct netdev *nd)
 {
     uint8_t ll[IP6_ADDR_LEN];
+    struct netdev_addr6 *a;
     uint32_t lock;
 
+    if (nd6_disabled(nd)) {
+        return;
+    }
     k_memset(ll, 0, sizeof(ll));
     ll[0] = 0xfe;
     ll[1] = 0x80;
@@ -864,15 +883,29 @@ static void link_local_up(struct netdev *nd)
         netdev_join6(nd, ip6_all_nodes);
     }
     net_unlock(lock);
-    if (!netdev_addr6_of(nd, ll)) {
-        netconf_add_address6(nd, ll, 64, 0, NETDEV_LIFETIME_FOREVER, NETDEV_LIFETIME_FOREVER);
+    if (!netdev_addr6_of(nd, ll) &&
+        netconf_add_address6(nd, ll, 64, NETDEV_A6_PERMANENT, NETDEV_LIFETIME_FOREVER,
+                             NETDEV_LIFETIME_FOREVER) == 0) {
+        lock = net_lock();
+        a = netdev_addr6_of(nd, ll);
+        if (a) {
+            a->proto = NETDEV_PROTO_KERNEL_LL;
+        }
+        net_unlock(lock);
     }
 }
 
+/** Neighbour discovery starts on a card that comes up and forgets what it
+ * learned on one that goes down. */
 void netconf_set_up(struct netdev *nd, int up)
 {
+    int was = nd->up;
+
     nd->up = up ? 1 : 0;
     if (nd->up && !nd->loopback) {
         link_local_up(nd);
+        nd6_if_up(nd);
+    } else if (was && !nd->loopback) {
+        nd6_if_down(nd);
     }
 }

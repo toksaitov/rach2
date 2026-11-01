@@ -8,15 +8,12 @@
  * extension headers are processed in the order they come, its fragments
  * are reassembled (frag6.c), and what follows them is given to ICMPv6. A
  * datagram sent has a 40-byte header and no extension header unless it is
- * past its destination's path MTU (pmtu6.c), when it leaves in fragments.
- * It leaves round the loopback ring when it is addressed to this machine,
- * to a multicast group's station address, or to a neighbour whose station
- * address is known. An address is 16 bytes in network order, as on the
- * wire, and is passed as a pointer to its first byte; a scope is an
- * interface index, 0 for none.
- *
- * There is no neighbour cache, so a unicast datagram can leave only for
- * ::1 and this machine's addresses.
+ * past its destination's path MTU (pmtu6.c), when it leaves in fragments,
+ * or is MLD's, which carries a router alert. It leaves round the loopback
+ * ring when it is addressed to this machine, to a multicast group's
+ * station address, or to its next hop by the neighbour cache (nd6.h). An
+ * address is 16 bytes in network order, as on the wire, and is passed as a
+ * pointer to its first byte; a scope is an interface index, 0 for none.
  */
 
 /* The fixed header: version, class and flow label (4), payload length (2),
@@ -104,6 +101,22 @@ struct net_mib6 {
     uint32_t icmp6_out_parm_problems;
     uint32_t icmp6_out_echos;
     uint32_t icmp6_out_echo_replies;
+    /* Neighbour discovery's and MLD's messages, in and out. */
+    uint32_t icmp6_in_router_solicits;
+    uint32_t icmp6_in_router_advertisements;
+    uint32_t icmp6_in_neighbor_solicits;
+    uint32_t icmp6_in_neighbor_advertisements;
+    uint32_t icmp6_in_redirects;
+    uint32_t icmp6_in_group_memb_queries;
+    uint32_t icmp6_in_group_memb_responses;
+    uint32_t icmp6_in_group_memb_reductions;
+    uint32_t icmp6_in_mldv2_reports;
+    uint32_t icmp6_out_router_solicits;
+    uint32_t icmp6_out_neighbor_solicits;
+    uint32_t icmp6_out_neighbor_advertisements;
+    uint32_t icmp6_out_group_memb_responses;
+    uint32_t icmp6_out_group_memb_reductions;
+    uint32_t icmp6_out_mldv2_reports;
 };
 
 extern struct net_mib6 net_mib6;
@@ -187,10 +200,11 @@ int ip6_source(const struct netdev *out, const uint8_t *dst, uint8_t *src);
  * give it to its protocol. `nd` is NULL for a datagram from the loopback
  * ring, which is `lo`'s.
  *
- * A datagram is dropped when its version is not 6, its payload length is 0
- * or runs past `len`, or its source is a multicast group. One from the wire
- * is also dropped when either address is ::1, or its source is an address
- * of this machine. It is this machine's when its destination is an address
+ * A datagram is dropped when `nd` has IPv6 disabled, its version is not 6,
+ * its payload length is 0 or runs past `len`, or its source is a multicast
+ * group. One from the wire is also dropped when either address is ::1, or
+ * its source is an address of this machine. It is this machine's when its
+ * destination is an address
  * an interface holds, a link-local one only on the interface that holds
  * it, ::1 from the ring, or a group `nd` is a member of.
  *
@@ -221,8 +235,10 @@ void ip6_rx(struct netdev *nd, const uint8_t *data, uint16_t len);
  * chooses the source first, with `ip6_route` and `ip6_source`. A datagram
  * to ::1 or to an address an interface holds goes onto the loopback ring.
  * One to a group goes to the group's station address by its interface. One
- * to any other address needs its next hop's station address, which no
- * neighbour cache supplies yet. A datagram past the destination's path MTU
+ * to any other address goes to its next hop by the neighbour cache
+ * (`nd6_output`), which holds it while it asks for the hop's station
+ * address; a failure to learn it is answered later with an ICMPv6 address
+ * unreachable. A datagram past the destination's path MTU
  * (`ip6_path_mtu`) leaves in fragments, as `frag6_output` says.
  *
  * Returns 0 when the datagram left or went onto the loopback ring, or a
@@ -230,8 +246,7 @@ void ip6_rx(struct netdev *nd, const uint8_t *data, uint16_t len);
  * -EINVAL for a link-scoped destination with no interface to leave by
  * where there is more than one card, or for a source that is not this
  * machine's, -ENETUNREACH for a destination no route reaches,
- * -EADDRNOTAVAIL when the interface has no source address to use,
- * -EHOSTUNREACH for a next hop whose station address is not known, or
+ * -EADDRNOTAVAIL when the interface has no source address to use, or
  * -ENOBUFS when the ring is full or the driver did not take a frame.
  *
  * The datagram is built in a buffer of this file's, so the caller has
@@ -239,6 +254,23 @@ void ip6_rx(struct netdev *nd, const uint8_t *data, uint16_t len);
  */
 int ip6_tx(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh, const uint8_t *payload,
            uint16_t plen, uint8_t hlim);
+
+/* What `ip6_tx_opts` may add to a send: the source is :: as given, not
+ * one chosen, for duplicate address detection (RFC 4862, 5.4.2); a
+ * hop-by-hop header with the router alert of MLD (RFC 3810, 5); and the
+ * destination is on the link of the interface `ifindex` names, whatever
+ * the routes say, for neighbour discovery's answers and probes. */
+#define IP6_TXF_UNSPEC  0x1
+#define IP6_TXF_RTALERT 0x2
+#define IP6_TXF_ONLINK  0x4
+
+/**
+ * `ip6_tx` with the IP6_TXF_* of `opts`. IP6_TXF_UNSPEC sends from ::
+ * whatever `src` is, and only by a card; IP6_TXF_ONLINK needs a card that
+ * is up in `ifindex`, -ENETUNREACH otherwise.
+ */
+int ip6_tx_opts(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh,
+                const uint8_t *payload, uint16_t plen, uint8_t hlim, int opts);
 
 /**
  * Send the datagram of `len` bytes at `dg`, header included, which the
@@ -259,7 +291,9 @@ int ip6_tx_whole(const uint8_t *dg, uint32_t len, const uint8_t *dst, int ifinde
  * link-scoped destination (`ip6_link_scoped`) leaves by the interface
  * `ifindex` names, or by the one card when it is 0 and there is one, and
  * its next hop is itself. A group of wider scope leaves by `ifindex`, or
- * the first card. No other destination has a route yet.
+ * the first card. Any other destination is the routing table's
+ * (`route6_lookup`), only `ifindex`'s routes when it is not 0. An interface
+ * that is down or has IPv6 disabled is no route.
  *
  * Counts one that finds no route in `ip6_out_no_routes`.
  *
@@ -270,10 +304,11 @@ struct netdev *ip6_route(const uint8_t *dst, int ifindex, uint8_t *via);
 
 /**
  * The most bytes, IPv6 header included, a datagram to `dst` by `out` may
- * have without being fragmented: the link's MTU, 1500 bytes for a card and
- * for the loopback ring alike, or less when a Packet Too Big has lowered
- * the destination's within the last ten minutes (`ip6_pmtu_lower`); 0 for
- * a NULL `out`. A link-scoped destination is told apart by `out`.
+ * have without being fragmented: the link's MTU, `nd6_link_mtu` for a card
+ * and 1500 bytes for the loopback ring, or less when a Packet Too Big has
+ * lowered the destination's within the last ten minutes
+ * (`ip6_pmtu_lower`); 0 for a NULL `out`. A link-scoped destination is
+ * told apart by `out`.
  */
 uint32_t ip6_path_mtu(const struct netdev *out, const uint8_t *dst);
 
@@ -288,7 +323,8 @@ uint32_t ip6_path_mtu(const struct netdev *out, const uint8_t *dst);
 void ip6_pmtu_lower(const uint8_t *dst, int ifindex, uint32_t mtu);
 
 /** Run the layer's timers, once a tick, from the timer interrupt:
- * reassemblies that ran out of time (`frag6_tick`). */
+ * reassemblies that ran out of time (`frag6_tick`), and neighbour
+ * discovery's and MLD's (`nd6_tick`). */
 void ip6_tick(void);
 
 #endif /* _IP6_H_ */

@@ -151,9 +151,11 @@ struct netdev_ops {
 #define NETDEV_SCOPE_HOST   254
 
 /* An IPv6 address's state, in Linux's `IFA_F_` bits, so that netlink can
- * report them as they are: no duplicate detection is to be done, the
- * detection failed, the preferred lifetime has ended, the detection is
- * still running, and the address was given by hand and never expires. */
+ * report them as they are: a temporary address of RFC 8981, no duplicate
+ * detection is to be done, the detection failed, the preferred lifetime has
+ * ended, the detection is still running, and the address was given by hand
+ * or made at link up and never expires. */
+#define NETDEV_A6_TEMPORARY  0x01
 #define NETDEV_A6_NODAD      0x02
 #define NETDEV_A6_DADFAILED  0x08
 #define NETDEV_A6_DEPRECATED 0x20
@@ -162,6 +164,15 @@ struct netdev_ops {
 
 /* A lifetime that never ends, as RFC 4862 writes infinity. */
 #define NETDEV_LIFETIME_FOREVER 0xFFFFFFFFu
+
+/* Who made an IPv6 address, in Linux's `IFAPROT_` numbers for `IFA_PROTO`:
+ * a program or the boot line, the kernel for `lo`, the kernel from a router
+ * advertisement (SLAAC and its temporary addresses), and the kernel at link
+ * up (the link-local address). */
+#define NETDEV_PROTO_UNSPEC    0
+#define NETDEV_PROTO_KERNEL_LO 1
+#define NETDEV_PROTO_KERNEL_RA 2
+#define NETDEV_PROTO_KERNEL_LL 3
 
 /**
  * One IPv6 address of an interface. An address with `NETDEV_A6_TENTATIVE`
@@ -174,9 +185,20 @@ struct netdev_addr6 {
     uint8_t prefix;     /* the on-link prefix's length, 0 to 128 */
     uint8_t scope;      /* NETDEV_SCOPE_* */
     uint8_t flags;      /* NETDEV_A6_* */
+    uint8_t proto;      /* NETDEV_PROTO_* */
     uint32_t valid;     /* seconds, or NETDEV_LIFETIME_FOREVER */
     uint32_t preferred; /* seconds, at most `valid` */
-    uint32_t since;
+    uint64_t since;     /* the whole tick count, `tick_count` */
+    /* Duplicate address detection (nd6.c): the solicitations still to send
+     * while the address is tentative, 0 to wait for the last one's answer,
+     * and the tick of the next step. */
+    uint8_t dad_left;
+    uint32_t dad_at;
+    /* A SLAAC address of RFC 7217: the DAD_Counter its identifier was made
+     * with, which a duplicate raises. A temporary address: whether its
+     * successor has been made. */
+    uint8_t dad_count;
+    uint8_t regen;
 };
 
 /**

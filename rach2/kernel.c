@@ -242,7 +242,8 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
  * one that came late, and runs the periodic work of the kernel: the sleepers
  * and timerfds whose time has come, the HDA tick for a controller whose
  * interrupts do not arrive, the network device that is polled, the TCP
- * timers, the loopback delivery, the USB controller's event ring, the
+ * timers, IPv6 neighbour discovery's and MLD's timers, the loopback
+ * delivery, the USB controller's event ring, the
  * keyboards' repeat, after the USB reports that may press or release a key,
  * the block layer's lagged requests and deadlines, the platform's devices,
  * and the console's serial port.

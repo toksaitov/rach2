@@ -25,6 +25,7 @@ extern int memcmp(const void *a, const void *b, __SIZE_TYPE__ n);
 #include "../../rach2/sys/network/netconf.h"
 #include "../../rach2/sys/network/net.h"
 #include "../../rach2/sys/network/driver/netdev.h"
+#include "../../rach2/sys/network/ip6/nd6.h"
 #include "../../rach2/sys/cmdline.h"
 #include "../../rach2/sys/lib/kerrno.h"
 #include "../../rach2/sys/lib/kstring.h"
@@ -195,6 +196,12 @@ struct netdev *netdev_at(int n)
 /* The tick an IPv6 address's lifetimes count from. */
 volatile uint64_t kernel_ticks;
 
+/** The whole tick count, which no row moves. */
+uint64_t tick_count(void)
+{
+    return kernel_ticks;
+}
+
 /** No row gives an IPv6 address. */
 struct netdev_addr6 *netdev_addr6_of(struct netdev *nd, const uint8_t *addr)
 {
@@ -228,6 +235,32 @@ int netdev_member6(const struct netdev *nd, const uint8_t *group)
     (void)group;
     CHECK(0, "no row brings an interface up");
     return 0;
+}
+
+/** No row brings an interface up or down, nor gives an IPv6 address, which
+ * would reach neighbour discovery; IPv6 is never disabled here. */
+int nd6_disabled(const struct netdev *nd)
+{
+    (void)nd;
+    return 0;
+}
+
+void nd6_dad_start(struct netdev_addr6 *a)
+{
+    (void)a;
+    CHECK(0, "no row starts duplicate address detection");
+}
+
+void nd6_if_up(struct netdev *nd)
+{
+    (void)nd;
+    CHECK(0, "no row starts neighbour discovery");
+}
+
+void nd6_if_down(struct netdev *nd)
+{
+    (void)nd;
+    CHECK(0, "no row stops neighbour discovery");
 }
 
 /* The ARP cache is not linked in here either, so a per-interface forget is

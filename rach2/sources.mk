@@ -144,6 +144,8 @@ C_SRC_SHARED = kernel.c \
     sys/network/ip6/route6.c \
     sys/network/ip6/frag6.c \
     sys/network/ip6/pmtu6.c \
+    sys/network/ip6/nd6.c \
+    sys/network/ip6/mld6.c \
     sys/network/udp/udp.c \
     sys/network/tcp/tcp.c \
     sys/network/tcp/rcvwnd.c \
@@ -158,4 +160,5 @@ C_SRC_SHARED = kernel.c \
     sys/lib/kstd.c \
     sys/lib/kstring.c \
     sys/lib/spinlock.c \
-    sys/lib/krandom.c
+    sys/lib/krandom.c \
+    sys/lib/ksha256.c

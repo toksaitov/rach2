@@ -1,10 +1,12 @@
 /*
- * pmtu6.c: the IPv6 path MTU, as ip6.h describes it: the link's MTU, lowered
- * for a destination by the Packet Too Big messages that come back from it
+ * pmtu6.c: the IPv6 path MTU, as ip6.h describes it: the link's MTU, which
+ * a router may advertise below 1500 bytes (`nd6_link_mtu`), lowered for a
+ * destination by the Packet Too Big messages that come back from it
  * (RFC 8201).
  */
 
 #include "ip6.h"
+#include "nd6.h"
 #include "../driver/netdev.h"
 #include "../../lib/kstring.h"
 #include "../../timer.h"
@@ -50,17 +52,19 @@ static struct pmtu6 *pmtu6_find(const uint8_t *dst, int ifindex)
 uint32_t ip6_path_mtu(const struct netdev *out, const uint8_t *dst)
 {
     const struct pmtu6 *e;
+    uint32_t link;
 
     if (!out) {
         return 0u;
     }
+    link = out->loopback ? IP6_MTU : nd6_link_mtu(out);
     e = pmtu6_find(dst, ip6_link_scoped(dst) ? out->index : 0);
-    return e && e->mtu < IP6_MTU ? e->mtu : IP6_MTU;
+    return e && e->mtu < link ? e->mtu : link;
 }
 
 /**
- * Every link here has the one MTU, `IP6_MTU`, so a report at or above it
- * lowers nothing and takes no entry.
+ * No link is wider than `IP6_MTU`, so a report at or above it lowers
+ * nothing and takes no entry.
  */
 void ip6_pmtu_lower(const uint8_t *dst, int ifindex, uint32_t mtu)
 {

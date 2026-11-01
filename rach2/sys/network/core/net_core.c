@@ -11,6 +11,7 @@
 #include "../driver/netdev.h"
 #include "../netconsole.h"
 #include "../netconf.h"
+#include "../ip6/nd6.h"
 #include "../tcp/tcp.h"
 #include "../socket/socket.h"
 #include "../../serial.h"
@@ -51,8 +52,10 @@ void write32be(uint8_t *p, uint32_t value)
  * driver table's (`netdev_probe`). The boot line's address was read before
  * there was an interface to put it on, so it is published once the probe
  * has brought one up (`netconf_publish`), and the `rach2.ifaddr=` entries
- * are applied after it (`netconf_apply_by_mac`). Each card the probe left
- * up then takes its IPv6 link-local address (`netconf_set_up`).
+ * are applied after it (`netconf_apply_by_mac`). Neighbour discovery
+ * draws its key before any card comes up (`nd6_init`). Each card the probe
+ * left up then takes its IPv6 link-local address and starts neighbour
+ * discovery (`netconf_set_up`).
  */
 int init_network(void)
 {
@@ -60,6 +63,7 @@ int init_network(void)
 
     tcp_init();
     socket_init();
+    nd6_init();
 
     if (!netdev_probe()) {
         return 0;
