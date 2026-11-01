@@ -128,22 +128,16 @@ static int judge(const char *path, struct dump *d)
 }
 
 /**
- * Dump the screen of boot `b` into the file at `path`, judge it into `d`,
- * and, when `grid` is not NULL, read its text with screentext and those
- * `grid` arguments, `--term 1` for term's grid or "" for the console's, into
- * `text`, which the caller frees with net_run_free.
+ * Dump the screen of boot `b` into the file at `path`, evidence `name`, and
+ * judge it into `d`.
  */
 static void screen(struct tc *s, struct net_boot *b, const char *path, const char *name,
-                   struct dump *d, const char *grid, struct net_run *text)
+                   struct dump *d)
 {
-    char args[4200], output[80];
-    char *term[] = {"screentext", "--term", "1", (char *)path, NULL};
-    char *console[] = {"screentext", (char *)path, NULL};
+    char args[4200];
     char *reply = NULL;
 
     memset(d, 0, sizeof(*d));
-    if (text != NULL)
-        memset(text, 0, sizeof(*text));
     if (!net_ok(&s->u))
         return;
     snprintf(args, sizeof(args), "{\"filename\": \"%s\"}", path);
@@ -154,6 +148,22 @@ static void screen(struct tc *s, struct net_boot *b, const char *path, const cha
         return;
     if (!judge(path, d))
         net_fail(&s->u, "the screen dump %s is no binary PPM", name);
+}
+
+/**
+ * When `grid` is not NULL and the case has not failed, read the text of the
+ * screen dump at `path`, evidence `name`, with screentext and those `grid`
+ * arguments, `--term 1` for term's grid or "" for the console's, into
+ * `text`, which the caller frees with net_run_free.
+ */
+static void grid_text(struct tc *s, const char *path, const char *name, const char *grid,
+                      struct net_run *text)
+{
+    char output[80];
+    char *term[] = {"screentext", "--term", "1", (char *)path, NULL};
+    char *console[] = {"screentext", (char *)path, NULL};
+
+    memset(text, 0, sizeof(*text));
     if (grid != NULL && net_ok(&s->u)) {
         snprintf(output, sizeof(output), "%s.txt", name);
         net_host(&s->u, grid[0] != '\0' ? term : console, output, text);
@@ -226,7 +236,8 @@ static int await(struct tc *s, struct net_boot *b, const char *name, enum shown 
     if (net_path(&s->u, name, path, sizeof(path)) == NULL)
         return 0;
     for (i = 0; i < DUMPS_MAX && !seen && net_ok(&s->u); i++) {
-        screen(s, b, path, name, d, grid, &text);
+        screen(s, b, path, name, d);
+        grid_text(s, path, name, grid, &text);
         seen = net_ok(&s->u) && shows(s, want, d, &text);
         net_run_free(&text);
     }
@@ -349,7 +360,8 @@ static void type_line(struct tc *s, struct net_boot *b, const char *line)
         typed[done + 1] = '\0';
         squeeze(typed, want, sizeof(want));
         for (i = 0, echoed = 0; i < DUMPS_MAX && !echoed && net_ok(&s->u); i++) {
-            screen(s, b, path, "typed.ppm", &d, "--term", &text);
+            screen(s, b, path, "typed.ppm", &d);
+            grid_text(s, path, "typed.ppm", "--term", &text);
             squeeze(net_exited0(&text) ? text.out : NULL, seen, sizeof(seen));
             echoed = strstr(seen, want) != NULL;
             net_run_free(&text);
@@ -455,7 +467,7 @@ static void doom(struct tc *s, struct net_boot *b)
         type_line(s, b, DOOM_LINE);
         frame = net_wait(b, DOOM_FRAME) == ETUDE_OK;
         if (frame && net_path(&s->u, "doom.ppm", path, sizeof(path)) != NULL)
-            screen(s, b, path, "doom.ppm", &game, NULL, NULL);
+            screen(s, b, path, "doom.ppm", &game);
         type(s, b, " ");
         if (net_wait(b, DOOM_GONE) == ETUDE_OK)
             again = await(s, b, "back.ppm", TERM_BACK, &back);

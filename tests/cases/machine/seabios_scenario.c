@@ -151,26 +151,30 @@ static char *console(struct net_boot *b)
 
 /**
  * Start the game in the background at the root shell of `b`, wait for its
- * first frame, and dump the screen into `name`; then kill the game, wait
- * until it has gone, and dump the screen again into `after`, with the
- * console's lines in `text` when it is not NULL.
+ * first frame, and dump the screen into `name`, judged into `game`. Returns
+ * 1 when the game started, and 0 otherwise.
  */
-static void play(struct seabios *s, struct net_boot *b, const char *name, struct dump *game,
-                 const char *after, struct dump *back, struct net_run *text)
+static int play(struct seabios *s, struct net_boot *b, const char *name, struct dump *game)
+{
+    if (net_line(b, START_LINE) != ETUDE_OK || net_wait(b, FIRST_FRAME) != ETUDE_OK)
+        return 0;
+    screen(s, b, name, game, NULL);
+    return 1;
+}
+
+/**
+ * Kill the game that play started on `b`, wait until it has gone, and dump
+ * the screen into `name`, judged into `back`, with the console's lines in
+ * `text` when it is not NULL.
+ */
+static void end_game(struct seabios *s, struct net_boot *b, const char *name, struct dump *back,
+                     struct net_run *text)
 {
     char *gone = NULL;
 
-    memset(game, 0, sizeof(*game));
-    memset(back, 0, sizeof(*back));
-    game->colors = back->colors = -1;
-    if (text != NULL)
-        memset(text, 0, sizeof(*text));
-    if (net_line(b, START_LINE) != ETUDE_OK || net_wait(b, FIRST_FRAME) != ETUDE_OK)
-        return;
-    screen(s, b, name, game, NULL);
     net_command(b, KILL_LINE, GONE, &gone);
     free(gone);
-    screen(s, b, after, back, text);
+    screen(s, b, name, back, text);
 }
 
 /** End boot `b` with `poweroff -f` typed at its shell, and require the
@@ -304,7 +308,8 @@ static void framebuffer(struct seabios *s)
         log = console(&b);
         net_command(&b, WAD_LINE, "WADDONE", &wad);
         screen(s, &b, "framebuffer.ppm", &shown, &text);
-        play(s, &b, "doom.ppm", &game, "after.ppm", &back, &after);
+        if (play(s, &b, "doom.ppm", &game))
+            end_game(s, &b, "after.ppm", &back, &after);
         power_off(&b);
     }
     mode = log != NULL ? net_find(log, FB_MODE) : NULL;
@@ -370,7 +375,8 @@ static void text(struct seabios *s)
         log = console(&b);
         net_command(&b, CONSUMED_LINE, "ENVDONE", &env);
         screen(s, &b, "text.ppm", &shown, NULL);
-        play(s, &b, "mode13h.ppm", &game, "textback.ppm", &back, NULL);
+        if (play(s, &b, "mode13h.ppm", &game))
+            end_game(s, &b, "textback.ppm", &back, NULL);
         quit(&b);
     }
     net_copy_line(log != NULL ? net_find(log, "boot: screen: ") : NULL, line, sizeof(line));
