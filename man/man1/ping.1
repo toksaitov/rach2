@@ -89,9 +89,10 @@ seconds, which may have a fraction, instead of every second.
 .It Fl s Ar size
 Send
 .Ar size
-bytes of data in each request, from 0 to 1472, or 1452 for IPv6: the
-stack does not fragment, so a request is at most one datagram of the
-1500-byte MTU.
+bytes of data in each request, from 0 to 1472, or 65527 for IPv6.
+The IPv4 stack does not fragment, so an IPv4 request is at most one
+datagram of the 1500-byte MTU; an IPv6 request past one datagram leaves
+in fragments, and its reply is reassembled.
 .It Fl t Ar ttl
 Send each request with the hop limit
 .Ar ttl ,

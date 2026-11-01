@@ -56,6 +56,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `addressed` (full tier; needs qemu; 128 MiB): the address named on the boot line, and the proof that it is the one in force.
 * `ping` (full tier; needs qemu; 128 MiB): the ICMP path against the SLIRP gateway, which is why it is a case of its own rather than a probe in the default suite.
 * `packet` (full tier; needs qemu; 128 MiB): the packet socket, which is how a DHCP client sees a reply that arrives before this machine owns an address.
+* `frag6` (full tier; needs qemu; 128 MiB): IPv6 fragments, extension headers and the path MTU over ::1: an echo past one datagram comes back whole, an unknown option and a routing header with a segment left are refused, overlapping fragments are dropped with their datagram, and a Packet Too Big lowers the path's MTU.
 * `load` (full tier; needs qemu, mformat; 128 MiB): the machine under load while six lines are typed at its console: every line read, no request quarantined by its deadline, and the longest delays it saw, from `/proc/stat`, printed.
 * `authority` (core tier; needs qemu; 128 MiB): which kernel may write the whole disk.
 * `queue` (core tier; needs qemu, mformat; 128 MiB): real AHCI reads, interrupts and fallback root faults beside raw reads; controlled host models test deadlines.
