@@ -48,13 +48,13 @@ Time is read with
 Sleep is a busy wait.
 The port plays its effects, and music synthesized with Nuked OPL3, through
 .Pa /dev/dsp
-as unsigned 8-bit mono at 11025 Hz, keeping two of the device's periods
-queued ahead of what its driver holds, so that a sound is heard at most
-about 139 ms after the game makes it.
+as unsigned 8-bit mono at 11025 Hz, keeping two of the device's periods, or
+a tic and a period, queued ahead of what the kernel holds, so that a sound
+is heard at most about 155 ms after the game makes it.
 Where
 .Pa /dev/dsp
-does not open, as with no sound card or while another program has it, the
-effects play on the PC speaker through a
+does not open, as with no sound card, the effects play on the PC speaker
+through a
 .Pa /dev/console
 descriptor of the game's own, and there is no music.
 Either way the sound plays on the machine from the kernel console,
@@ -138,7 +138,7 @@ Its sound cases play
 on QEMU's Intel HDA and Sound Blaster 16, and require the game's last report
 to show samples queued on
 .Pa /dev/dsp ,
-and never more than six periods.
+and never more than a tic and seven periods.
 It does not judge visual or audible quality.
 .Sh SEE ALSO
 .Xr gettimeofday 2 ,
