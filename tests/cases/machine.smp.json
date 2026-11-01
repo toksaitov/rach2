@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "family_id": "machine.smp",
-  "summary": "The kernel on one processor, on four and on two of four, each finding its processors and passing smpmusl's stress across them, the debug shell's preemption test and ring-3 payload on two, an NMI on two that stops the machine as a fault of the machine, and a parallel build on the installed system that runs on every one of four",
+  "summary": "The kernel on one processor, on four and on two of four, each finding its processors, counting user work on each and passing smpmusl's stress across them, the debug shell's preemption test and ring-3 payload on two, an NMI on two that stops the machine as a fault of the machine, and a parallel build on the installed system that runs on every one of four",
   "cases": [
     {
       "case_id": "machine.smp.smpmusl-1",
-      "behavior": "On one processor, smpmusl finds one by every query a program can make, and fork, exec, pipes, futexes, munmap and a sleep run on it",
+      "behavior": "On one processor, smpmusl finds one by every query a program can make, counts user work on it, and fork, exec, pipes, futexes, munmap and a sleep run on it",
       "units": ["smp", "tests/musl/smpmusl.c"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
@@ -40,7 +40,7 @@
     },
     {
       "case_id": "machine.smp.smpmusl-4",
-      "behavior": "On four processors, smpmusl finds four by every query a program can make, and a stress of fork, exec, pipes, futexes and munmap runs across them, with a page unmapped on one processor and read on another and a sleep on the last that does not end early",
+      "behavior": "On four processors, smpmusl finds four by every query a program can make, counts user work on each, and a stress of fork, exec, pipes, futexes and munmap runs across them, with a page unmapped on one processor and read on another and a sleep on the last that does not end early",
       "units": ["smp", "tests/musl/smpmusl.c"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],

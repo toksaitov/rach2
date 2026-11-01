@@ -6234,7 +6234,7 @@
     },
     {
       "case_id": "guest.default.threadscaling",
-      "behavior": "Creating held threads has bounded process-index work per creation; untimed blocked threads add no timer scan work. VMA gap candidates per creation stay bounded.",
+      "behavior": "Creating held threads has bounded process-index work per creation; untimed blocked threads add no timer scan work. VMA gap candidates per creation stay bounded. With two runnable threads, ready entries examined stay within eight per selection plus 64 as blocked threads are added.",
       "units": [
         "default",
         "musl/threadscaling"
@@ -6285,17 +6285,17 @@
         },
         {
           "assertion_id": "threads-16",
-          "checks": "all 16 threads are created and joined, within the process work, VMA gap and active timer bounds",
+          "checks": "all 16 threads are created and joined, within the process work, VMA gap, active timer and ready-list selection bounds",
           "source": "program"
         },
         {
           "assertion_id": "threads-64",
-          "checks": "all 64 threads are created and joined, within the process work, VMA gap and active timer bounds",
+          "checks": "all 64 threads are created and joined, within the process work, VMA gap, active timer and ready-list selection bounds",
           "source": "program"
         },
         {
           "assertion_id": "threads-256",
-          "checks": "all 256 threads are created and joined, within the process work, VMA gap and active timer bounds",
+          "checks": "all 256 threads are created and joined, within the process work, VMA gap, active timer and ready-list selection bounds",
           "source": "program"
         }
       ],

@@ -7,9 +7,8 @@
 
 #include "process.h"
 
-/** Turn the scheduler off, with every processor's round-robin cursor at the
- * start of the list and its next selection one that may prefer a woken
- * process. */
+/** Initialize empty ready lists before any process is made ready, with the
+ * scheduler off and the next selection allowed to prefer a woken process. */
 void init_sched(void);
 
 /** Turn the scheduler on or off; while it is off, schedule() returns at
@@ -22,11 +21,11 @@ int sched_is_enabled(void);
 
 /**
  * Switch this processor to the next process of its run queue that may run,
- * after its round-robin cursor; at most every second selection, a process a
- * wait queue woke is preferred (`wq_wake`). With nothing on its queue, the
- * processor takes a ready process from the busiest other queue, and with
- * nothing there either it goes on with the current process if that can
- * still run, or switches to its idle task.
+ * from its ready-list head; at most every second selection, a process a
+ * wait queue woke is preferred (`wq_wake`). With nothing on its queue, it
+ * continues the current process if that can run; otherwise it tries other
+ * queues by their ready counts, busiest first, and takes an eligible entry
+ * or switches to its idle task.
  *
  * The current process leaves when it is not RUNNING; when its affinity no
  * longer has this processor, made ready on a processor it has; and when a
@@ -85,9 +84,12 @@ void sched_take_preempt(void);
  * exit. The process is still inside its call when it runs again. */
 void sched_service_point(void);
 
-/** Move every processor's round-robin cursor off `p`, which is about to be
- * unlinked and freed, to the record before it. */
+/** Remove `p` from its ready list before it is freed; the big lock is held. */
 void sched_forget(process_t *p);
+
+/** Read selection attempts (index 0) or ready entries examined (1), modulo 2^32.
+ * Other indices return zero. The caller holds the big lock. */
+uint32_t sched_work_count(unsigned int index);
 
 /*
  * The idle wait, and the two counters it feeds.

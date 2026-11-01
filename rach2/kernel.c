@@ -795,6 +795,7 @@ static process_t *test_process(page_dir_t *dir, void (*entry)(void))
     p->page_dir = dir;
     p->parent_pid = current_proc->pid;
     setup_process_stack(p, entry);
+    sched_make_ready(p);
     return p;
 }
 

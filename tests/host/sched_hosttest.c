@@ -6,10 +6,9 @@
  *
  * The interrupt flag, the floating-point saves and the switch of stacks are
  * the test's; the selection, the process states, the wake marks and the
- * scheduler's cursors are the kernel's. The rows judge the order of
+ * ready lists are the kernel's. The rows judge the order of
  * dispatch and the counts, never the host's speed.
  */
-#define WAIT_QUEUE_HOSTTEST
 
 #include "proc/sched.c"
 #include "proc/wait_queue.c"
@@ -213,6 +212,9 @@ static void setup(void)
     switches = 0;
     irq_flags = 0x200;
     init_sched();
+    for (i = 1; i < 7; i++) {
+        sched_make_ready(&procs[i]);
+    }
     sched_enable();
 }
 
@@ -224,6 +226,7 @@ static void wake(process_t *p)
     wait_queue_t queue;
 
     wait_queue_init(&queue);
+    sched_forget(p);
     p->state = PROC_BLOCKED;
     wq_poll_add(&queue, &p->waiter);
     wq_wake_all(&queue);
@@ -331,7 +334,7 @@ static void states(void)
 /**
  * A stopped scheduler selects nothing. In a system call a preemption only
  * marks the process, and the exit from the call takes it with interrupts
- * still off. A cursor whose process was removed resumes at its successor.
+ * still off. A removed ready entry leaves the next entry selectable.
  * A selection over an empty list restores the interrupt flag, and one with
  * no current process returns.
  */
@@ -358,7 +361,7 @@ static void lifecycle(void)
     current_proc = &procs[0];
     current_proc->state = PROC_RUNNING;
     schedule();
-    CHECK(current_proc == &procs[2], "removed cursor resumes at successor");
+    CHECK(current_proc == &procs[2], "ready removal preserves the next entry");
     init_sched();
     sched_enable();
     proc_list = NULL;
@@ -416,6 +419,66 @@ static void all_idle(void)
     cpu_table[1].idle_wait = 0;
 }
 
+/** Blocked records add no selection work, and a repeated wake links once. */
+static void ready_lists(void)
+{
+    static process_t blocked[256];
+    uint32_t before, baseline;
+    unsigned int i;
+
+    setup();
+    before = sched_work_count(1);
+    for (i = 0; i < 140; i++) {
+        schedule();
+    }
+    baseline = sched_work_count(1) - before;
+    for (i = 0; i < 256; i++) {
+        blocked[i].state = PROC_BLOCKED;
+        blocked[i].prev = i ? &blocked[i - 1] : &procs[6];
+        blocked[i].next = i < 255 ? &blocked[i + 1] : NULL;
+    }
+    procs[6].next = blocked;
+    before = sched_work_count(1);
+    for (i = 0; i < 140; i++) {
+        schedule();
+    }
+    CHECK(sched_work_count(1) - before == baseline, "blocked records add no pick entries");
+    sched_make_ready(&procs[3]);
+    sched_make_ready(&procs[3]);
+    CHECK(run_queues[0].count == 6, "repeated wake has one ready entry");
+    CHECK(!current_proc->ready_linked, "current process is off the ready list");
+    sched_forget(&procs[3]);
+    sched_forget(&procs[3]);
+    CHECK(run_queues[0].count == 5, "removal is idempotent");
+}
+
+/** Affinity moves queued work, and an idle processor steals eligible work. */
+static void migration(void)
+{
+    unsigned int i;
+
+    setup();
+    cpu_table[1].online = 1;
+    cpu_table[1].current = cpu_table[1].idle = NULL;
+    for (i = 1; i < 7; i++) {
+        sched_set_affinity(&procs[i], 2);
+    }
+    CHECK(run_queues[0].count == 0 && run_queues[1].count == 6, "affinity transfers queue counts");
+    sched_set_affinity(&procs[4], 3);
+    current_proc->state = PROC_BLOCKED;
+    schedule();
+    CHECK(current_proc == &procs[4], "idle processor steals an allowed donor entry");
+    CHECK(run_queues[1].count == 5 && !procs[4].ready_linked, "steal unlinks before dispatch");
+    sched_make_ready(current_proc);
+    sched_make_ready(current_proc);
+    CHECK(!current_proc->ready_linked, "wake before switching keeps current unqueued");
+    schedule();
+    CHECK(current_proc == &procs[4] && current_proc->state == PROC_RUNNING,
+          "in-place wake continues when no other local process is ready");
+    cpu_table[1].online = 0;
+    init_sched();
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {
@@ -425,11 +488,13 @@ int main(void)
     lifecycle();
     accounting();
     all_idle();
+    ready_lists();
+    migration();
     if (failures) {
         return 1;
     }
     dprintf(1, "sched-hosttest: result: pass: priority, fairness, states, lifecycle, accounting, "
-               "idle machine\n");
+               "idle machine, ready lists, migration\n");
     return 0;
 }
 

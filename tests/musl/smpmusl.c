@@ -6,7 +6,8 @@
  * `sysconf(_SC_NPROCESSORS_ONLN)`, are in /sys/devices/system/cpu/online as
  * `0` or `0-N`, have a `cpuN` directory there, each of its own inode, and a
  * `cpuN` line in /proc/stat, and none past the last has either. A process
- * bound to each processor in turn runs there, as `getcpu` says.
+ * bound to each processor in turn runs there, as `getcpu` says, and runs
+ * user work until that processor's user tick count advances.
  *
  * Then each part of a stress across the processors is counted. On each
  * processor a child bound there forks and execs this program twenty times,
@@ -137,6 +138,50 @@ static int stat_has(const char *name)
     return count_lines("/proc/stat", prefix) == 1;
 }
 
+/** Read processor cpu's user ticks from /proc/stat, or fail with -1. */
+static int user_ticks(int cpu, unsigned long long *ticks)
+{
+    FILE *f = fopen("/proc/stat", "r");
+    char line[256];
+    int c, found = 0;
+    unsigned long long value;
+
+    if (!f) {
+        return -1;
+    }
+    while (fgets(line, sizeof(line), f)) {
+        if (sscanf(line, "cpu%d %llu", &c, &value) == 2 && c == cpu) {
+            *ticks = value;
+            found = 1;
+            break;
+        }
+    }
+    fclose(f);
+    return found ? 0 : -1;
+}
+
+/** Run user work until this CPU's own kernel counter advances. */
+static int counted_work(int cpu)
+{
+    unsigned long long before, after;
+    volatile unsigned int work = 0;
+    unsigned int i;
+
+    if (user_ticks(cpu, &before) != 0) {
+        return fail("read the processor's user ticks");
+    }
+    do {
+        for (i = 0; i < 100000; i++) {
+            work += i;
+        }
+        if (user_ticks(cpu, &after) != 0) {
+            return fail("read user ticks after work");
+        }
+    } while (after == before);
+    printf("smpmusl: cpu %d: user ticks %llu -> %llu\n", cpu, before, after);
+    return 0;
+}
+
 /**
  * Check the processors seen each way a program asks, as the file comment
  * lists, and that a process bound to each runs there; the affinity is then
@@ -189,6 +234,9 @@ static int counts(void)
     for (c = 0; c < cpus; c++) {
         if (bind_to(c) != 0 || running_on() != c) {
             return fail("a process bound to a processor does not run there");
+        }
+        if (counted_work(c) != 0) {
+            return 1;
         }
     }
     CPU_ZERO(&set);
