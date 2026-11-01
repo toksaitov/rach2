@@ -95,10 +95,12 @@ struct ext2_time {
 #define T_MTIME 2
 #define T_CTIME 4
 
-/* An inode in memory, from the heap, on its mount's list. */
+/* An inode in memory, from the heap, on its mount's list and in its hash. */
 struct ext2_node {
-    struct ext2_node *next; /* the mount's list of nodes in memory */
-    uint32_t refs;          /* holds; the last `ext2_put` frees the node */
+    struct ext2_node *next;  /* the mount's list of nodes in memory */
+    struct ext2_node *prev;  /* the node before it on that list, or NULL */
+    struct ext2_node *hnext; /* the next node in its bucket of the mount's hash */
+    uint32_t refs;           /* holds; the last `ext2_put` frees the node */
     uint32_t ino;
     uint32_t mode;
     uint32_t uid, gid;
@@ -177,6 +179,10 @@ struct ext2_writeback {
  * of a path eight directories deep. */
 #define EXT2_LOOKUP_HINTS 8
 
+/* The buckets of a mount's hash of its nodes before it has more nodes than
+ * that, which the mount's record holds; a power of two. */
+#define EXT2_NODE_FIRST 64
+
 /* A mounted volume, from the heap, at `mnt->priv`. */
 struct ext2_mount {
     block_device_t *dev;
@@ -215,7 +221,16 @@ struct ext2_mount {
     int metas;
     uint32_t alloc_hint;     /* the block after the last one given out */
     uint8_t *gd;             /* the group descriptors, `groups * 32` bytes, from the heap */
-    struct ext2_node *nodes; /* the nodes in memory, from the heap */
+    struct ext2_node *nodes; /* the nodes in memory, from the heap, linked both ways */
+    /* The same nodes by inode number: `node_buckets` chains, a power of
+     * two, in `node_first` until the nodes outnumber them and in a table
+     * from the heap after; NULL and 0 before the first node. The name cache
+     * holds a node for each name it keeps, thousands of them, and every
+     * lookup that reaches the driver asks for its node by number. */
+    struct ext2_node **node_hash;
+    uint32_t node_buckets;
+    uint32_t node_count;
+    struct ext2_node *node_first[EXT2_NODE_FIRST];
     /* Where the last lookups found their names, one slot for each of the
      * last EXT2_LOOKUP_HINTS directories, since a path's walk looks up a
      * name in every directory on the way: the directory's inode and the
@@ -227,32 +242,129 @@ struct ext2_mount {
     int lookup_next;
 };
 
-/** A new node from the heap, zeroed, on the mount's list, or NULL when the
- * heap has none. Every node a mount has in memory is on the list, so an
- * unmount frees what is left. */
-static struct ext2_node *node_new(struct ext2_mount *em)
+/* The nodes every mount's hash has read in its searches, for /proc/stat. */
+static uint32_t node_visits;
+
+uint32_t ext2_node_visits(void)
+{
+    return node_visits;
+}
+
+/** The chain of the mount's hash where inode `ino` is, the hash set up
+ * with its first buckets when the mount has none yet. */
+static struct ext2_node **node_chain(struct ext2_mount *em, uint32_t ino)
+{
+    if (!em->node_hash) {
+        em->node_hash = em->node_first;
+        em->node_buckets = EXT2_NODE_FIRST;
+    }
+    return &em->node_hash[ino & (em->node_buckets - 1u)];
+}
+
+/** Double the buckets of the mount's hash once its nodes outnumber them,
+ * every node moved to the new table; a heap with no room for the table
+ * leaves the hash as it is, its chains longer. */
+static void node_hash_grow(struct ext2_mount *em)
+{
+    uint32_t size = em->node_buckets * 2u;
+    struct ext2_node **table, **old = em->node_hash;
+    struct ext2_node *n;
+
+    if (em->node_count <= em->node_buckets || size == 0) {
+        return;
+    }
+    table = kzalloc(size * sizeof(*table));
+    if (!table) {
+        return;
+    }
+    em->node_hash = table;
+    em->node_buckets = size;
+    for (n = em->nodes; n; n = n->next) {
+        struct ext2_node **chain = node_chain(em, n->ino);
+
+        n->hnext = *chain;
+        *chain = n;
+    }
+    if (old != em->node_first) {
+        kfree(old);
+    }
+}
+
+/** The mount's node in memory for inode `ino`, or NULL. */
+static struct ext2_node *node_find(struct ext2_mount *em, uint32_t ino)
+{
+    struct ext2_node *n;
+
+    for (n = *node_chain(em, ino); n; n = n->hnext) {
+        node_visits++;
+        if (n->ino == ino) {
+            return n;
+        }
+    }
+    return 0;
+}
+
+/** A new node for inode `ino` from the heap, zeroed but for its number, on
+ * the mount's list and in its hash, or NULL when the heap has none. Every
+ * node a mount has in memory is on the list, so an unmount frees what is
+ * left. */
+static struct ext2_node *node_new(struct ext2_mount *em, uint32_t ino)
 {
     struct ext2_node *n = kzalloc(sizeof(*n));
+    struct ext2_node **chain;
 
-    if (n) {
-        n->next = em->nodes;
-        em->nodes = n;
+    if (!n) {
+        return 0;
     }
+    n->ino = ino;
+    n->next = em->nodes;
+    if (em->nodes) {
+        em->nodes->prev = n;
+    }
+    em->nodes = n;
+    chain = node_chain(em, ino);
+    n->hnext = *chain;
+    *chain = n;
+    em->node_count++;
+    node_hash_grow(em);
     return n;
 }
 
-/** Take node `n` off the mount's list and free it. */
+/** Take node `n` off the mount's list and hash and free it. */
 static void node_drop(struct ext2_mount *em, struct ext2_node *n)
 {
-    struct ext2_node **link = &em->nodes;
+    struct ext2_node **link;
 
-    while (*link && *link != n) {
-        link = &(*link)->next;
+    for (link = node_chain(em, n->ino); *link; link = &(*link)->hnext) {
+        if (*link == n) {
+            *link = n->hnext;
+            break;
+        }
     }
-    if (*link) {
-        *link = n->next;
+    if (n->prev) {
+        n->prev->next = n->next;
+    } else {
+        em->nodes = n->next;
     }
+    if (n->next) {
+        n->next->prev = n->prev;
+    }
+    em->node_count--;
     kfree(n);
+}
+
+/** Free every node of the mount and its hash's table, at its unmount or a
+ * mount that failed. */
+static void nodes_free(struct ext2_mount *em)
+{
+    while (em->nodes) {
+        node_drop(em, em->nodes);
+    }
+    if (em->node_hash != em->node_first) {
+        kfree(em->node_hash);
+    }
+    em->node_hash = 0;
+    em->node_buckets = 0;
 }
 
 /* ---- little-endian fields ---- */
@@ -549,21 +661,19 @@ static struct ext2_node *node_for(struct ext2_mount *em, uint32_t ino, int *rc)
 
     vfs_ns_lock(em->mnt);
     *rc = 0;
-    for (n = em->nodes; n; n = n->next) {
-        if (n->ino == ino) {
-            n->refs++;
-            vfs_ns_unlock(em->mnt);
-            return n;
-        }
+    n = node_find(em, ino);
+    if (n) {
+        n->refs++;
+        vfs_ns_unlock(em->mnt);
+        return n;
     }
-    n = node_new(em);
+    n = node_new(em, ino);
     if (!n) {
         klog(KLOG_WARN, "ext2", "node: no memory");
         *rc = -ENOMEM;
         vfs_ns_unlock(em->mnt);
         return 0;
     }
-    n->ino = ino;
     *rc = inode_load(em, ino, n);
     if (*rc != 0) {
         node_drop(em, n);
@@ -1375,9 +1485,7 @@ static void ext2_unmount(struct vfs_mount *mnt)
     if ((em->dev->flags & BLOCK_GONE) && em->wb && em->wb->count) {
         (void)writeback_error(em, -EIO);
     }
-    while (em->nodes) {
-        node_drop(em, em->nodes);
-    }
+    nodes_free(em);
     mnt->priv = 0;
     writeback_free(em->wb);
     kfree(em->gd);
@@ -3521,14 +3629,9 @@ static int is_below(struct ext2_mount *em, uint32_t ino, uint32_t ancestor, int 
  * hold is taken. */
 static struct ext2_node *node_held(struct ext2_mount *em, uint32_t ino)
 {
-    struct ext2_node *n;
+    struct ext2_node *n = node_find(em, ino);
 
-    for (n = em->nodes; n; n = n->next) {
-        if (n->ino == ino && n->refs > 0) {
-            return n;
-        }
-    }
-    return 0;
+    return n && n->refs > 0 ? n : 0;
 }
 
 /**
@@ -3593,14 +3696,13 @@ static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_
     if (rc != 0) {
         return rc;
     }
-    n = node_new(em);
+    n = node_new(em, ino);
     if (!n) {
         inode_bit_free(em, ino, (mode & S_IFMT_) == S_IFDIR_);
         klog(KLOG_WARN, "ext2", "node: no memory");
         return -ENOMEM;
     }
     n->refs = 1;
-    n->ino = ino;
     n->uid = current_proc ? current_proc->euid : 0;
     n->gid = current_proc ? current_proc->egid : 0;
     if (dir->mode & S_ISGID_) {
@@ -5808,9 +5910,7 @@ static int ext2_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags
     }
     rc = ext2_mount_on(em, mnt, dev, flags);
     if (rc != 0) {
-        while (em->nodes) {
-            node_drop(em, em->nodes);
-        }
+        nodes_free(em);
         writeback_free(em->wb);
         kfree(em->gd);
         kfree(em);

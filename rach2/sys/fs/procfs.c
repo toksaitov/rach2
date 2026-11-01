@@ -25,6 +25,7 @@
 #include "../mm/pagecache.h"
 #include "bcache.h"
 #include "dcache.h"
+#include "ext2.h"
 
 #include "../block/loop.h"
 #include "synthfs.h"
@@ -2765,6 +2766,8 @@ static int procfs_gen_statsys(struct procfs_text *t)
     ap_u32(t, names.entries);
     ap_str(t, "\nnamecache_negative ");
     ap_u32(t, names.negative);
+    ap_str(t, "\next2_node_visits ");
+    ap_u32(t, ext2_node_visits());
     ap_ch(t, '\n');
     for (p = proc_list; p; p = p->next) {
         if (p->state == PROC_RUNNING || p->state == PROC_READY) {
