@@ -237,6 +237,7 @@ The [agents layer](../vendor/gnu/agents/Readme.md) installs vendors' published b
 | [codex](../vendor/gnu/agents/packages/codex.sh) | 0.162.1 | Apache-2.0 | codex, OpenAI's Codex, a coding agent for the terminal. |
 | [gh](../vendor/gnu/agents/packages/gh.sh) | 2.102.0 | MIT | gh, GitHub's command-line program for repositories, issues, pull requests, releases and the API. |
 | [muse](../vendor/gnu/agents/packages/muse.sh) | 1.4.10-R6427.1 | Meta Model API Terms of Service | muse, Meta's Muse Code, a coding agent for the terminal. |
+| [opencode](../vendor/gnu/agents/packages/opencode.sh) | 2.2.5 | MIT | opencode, OpenCode, a coding agent for the terminal. |
 | [ripgrep](../vendor/gnu/agents/packages/ripgrep.sh) | 15.2.0 | Unlicense OR MIT | rg, ripgrep, which searches a tree of files for lines that match a regular expression and skips what .gitignore names. |
 
 ## The vendored projects
