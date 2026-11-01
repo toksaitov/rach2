@@ -4,7 +4,7 @@ The USB stack drives keyboards, mice, flash drives and hubs attached to xHCI hos
 
 ## Interfaces
 
-`kernel.c` calls the stack through `usb.h`. After the root file system is mounted, unless the command line has `rach2.nousb`, it calls `usb_report_controllers`, which logs each USB controller from PCI configuration space alone, and `usb_init`, which brings up every xHCI controller and waits for the devices present at boot. `usb_poll` runs the stack on each tick of processor 0's 100 Hz timer, and `usb_stop` halts the controllers at shutdown. The terminal's read, the scheduler and `getrandom` call the `usb_stamp_` functions for the latency record.
+`kernel.c` calls the stack through `usb.h`. After the root file system is mounted, unless the command line has `rach2.nousb`, it calls `usb_report_controllers`, which logs each USB controller from PCI configuration space alone, and `usb_init`, which brings up every xHCI controller and waits for the devices present at boot. `usb_poll` runs the stack on each tick of processor 0's 1000 Hz timer, and `usb_stop` halts the controllers at shutdown. The terminal's read, the scheduler and `getrandom` call the `usb_stamp_` functions for the latency record.
 
 The stack delivers:
 
@@ -69,7 +69,7 @@ A transfer is retired, and its buffer free, when an event reports its last TRB, 
 
 ### The pump and its two contexts
 
-`usb_pump` is the only code that drains the event rings. It advances each controller's clock, which aborts a command past its deadline, drains each ring, and calls `usb_core_step`. The timer runs it through `usb_poll`, with 10 ms elapsed. The controller's interrupt runs it through `usb_msi_handler`, which acknowledges the interrupt and drains in one call, `xhci_interrupt_take`, acknowledging first: an event written between a drain and a later acknowledgement would have its pending bit cleared unread and wait for the timer.
+`usb_pump` is the only code that drains the event rings. It advances each controller's clock, which aborts a command past its deadline, drains each ring, and calls `usb_core_step`. The timer runs it through `usb_poll`, with 1 ms elapsed. The controller's interrupt runs it through `usb_msi_handler`, which acknowledges the interrupt and drains in one call, `xhci_interrupt_take`, acknowledging first: an event written between a drain and a later acknowledgement would have its pending bit cleared unread and wait for the timer.
 
 Both contexts run with interrupts off, and the pump restores the interrupt flag it found and never enables interrupts, so the two are never inside a ring at once; the block layer relies on this when a process sleeps on a stick's request. A stick's `submit` and `flush`, the entries from process context, run with interrupts off too, since QEMU completes a transfer inside the doorbell write.
 

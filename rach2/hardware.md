@@ -95,7 +95,7 @@ There is no wireless driver, and the stack is IPv4 alone. On i686 an e1000 or RT
 
 * COM1, the 16550 at 0x3F8, set to 115200 baud, eight bits, no parity, one stop bit. The console writes to it beside the screen and reads from it beside the keyboard, and every log record is written to it. No other serial port is used ([terminals](sys/tty/Readme.md)).
 * The 8254 timer: the tick where the local APIC timer is not used, the short delays, and the speaker.
-* The local APIC timer: the tick, at 100 Hz, once it has been measured against a reference counter.
+* The local APIC timer: the tick, at 1000 Hz, once it has been measured against a reference counter.
 * The HPET's main counter, else the ACPI PM timer, else the 8254: the reference counter, which measures the local APIC timer and, the 8254 aside, keeps the clock, so that a tick delivered late or coalesced counts the time that passed. The HPET raises no interrupt.
 * The time-stamp counter: the clock's reference on a machine with neither the HPET nor the PM timer, where it runs at one rate.
 * The CMOS clock, read at boot as UTC and kept as `/dev/rtc0` ([rtc(4)](../man/man4/rtc.4)). A clock that keeps local time puts every file's time hours out.
