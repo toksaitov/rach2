@@ -7,11 +7,15 @@
 # `resolv.script NAME` takes NAME's lines, `nameserver ADDRESS` and
 # `search DOMAIN ...`, on its standard input and keeps them in
 # /var/run/resolv/NAME, or removes that file when the input is empty. It then
-# writes the resolver's file whole from every source there, in the order of
-# their names, so that one source's change never drops another's servers.
-# The names are IFACE.dhcp, IFACE.dhcp6 and IFACE.ra, so an interface's IPv4
-# servers come first, then DHCPv6's, then the routers'. A server or domain
-# two sources give appears once.
+# writes the resolver's file whole from every source there, so that one
+# source's change never drops another's servers: the wired interfaces' first
+# and the wireless ones' after, as their default routes are preferred
+# (udhcpc-default.script), and each group in the order of the sources'
+# names. The names are IFACE.dhcp, IFACE.dhcp6 and IFACE.ra, so an
+# interface's IPv4 servers come first, then DHCPv6's, then the routers'. A
+# server or domain two sources give appears once. An interface's sources go
+# when it does: the lease scripts empty theirs when the lease ends, and
+# ndwatch its own when the link goes down.
 #
 # A source that never gave anything and gives nothing now changes nothing:
 # the resolver's file the image starts with stands until a source has a
@@ -53,10 +57,19 @@ else
 	$BB rm -f "$DIR/$name" || exit 1
 fi
 
-search=
-servers=
-for f in "$DIR"/*; do
-	[ -f "$f" ] || continue
+# Whether the source file $1 is a wireless interface's: one whose name
+# begins `wl`, as wlan0's does, or that has a phy80211 link in sysfs.
+wireless() {
+	set -- "${1##*/}"
+	set -- "${1%%.*}"
+	case "$1" in
+		wl*) return 0 ;;
+	esac
+	[ -e "/sys/class/net/$1/phy80211" ]
+}
+
+# Take the servers and domains of the source file $1 not taken already.
+take() {
 	while read -r key rest; do
 		case "$key" in
 			nameserver)
@@ -77,7 +90,16 @@ for f in "$DIR"/*; do
 				done
 				;;
 		esac
-	done < "$f"
+	done < "$1"
+}
+
+search=
+servers=
+for f in "$DIR"/*; do
+	[ -f "$f" ] && ! wireless "$f" && take "$f"
+done
+for f in "$DIR"/*; do
+	[ -f "$f" ] && wireless "$f" && take "$f"
 done
 
 # Write the resolver's file, reporting the first line that fails: a disk

@@ -14,6 +14,13 @@
 # lease before it. The interfaces file runs udhcpc with `-O mtu`, so a lease
 # may carry an MTU, which is applied too.
 #
+# A machine may hold a lease on the cable and one on Wi-Fi at once, so each
+# interface's default route is its own: the script adds and removes only the
+# route through $interface, at the metric NetworkManager gives each kind of
+# link, 100 for a cable and 600 for Wi-Fi. The kernel takes the route of the
+# lowest metric, so traffic leaves by the cable while it is plugged in, by
+# Wi-Fi once it is pulled, and by the cable again when it returns.
+#
 # The lease's servers go to the resolver merge, resolv.script, as the source
 # IFACE.dhcp, which writes /etc/resolv.conf from them and from what DHCPv6 and
 # the routers' advertisements give, so that no source drops another's.
@@ -22,6 +29,17 @@
 MERGE=/usr/share/udhcpc/resolv.script
 
 fail=0
+
+# The metric of the default route through $interface: 600 for a wireless
+# interface, which has a phy80211 link in sysfs or a name such as wlan0, and
+# 100 for any other.
+case "$interface" in
+	wl*) metric=600 ;;
+	*) metric=100 ;;
+esac
+if [ -e "/sys/class/net/$interface/phy80211" ]; then
+	metric=600
+fi
 
 # The lease's resolver lines, for the merge.
 resolv_lines() {
@@ -33,8 +51,8 @@ resolv_lines() {
 	done
 }
 
-# Remove the default routes through the interface. The loop ends when a
-# removal fails, as it does once none is left.
+# Remove the default routes through the interface, and no other's. The loop
+# ends when a removal fails, as it does once none is left.
 drop_routes() {
 	while /bin/busybox route del default gw 0.0.0.0 dev "$interface" 2>/dev/null; do
 		:
@@ -81,7 +99,7 @@ case "$1" in
 		# looks like a machine that is down.
 		if [ -n "$router" ]; then
 			for r in $router; do
-				/bin/busybox route add default gw "$r" dev "$interface" || fail=1
+				/bin/busybox route add default gw "$r" dev "$interface" metric "$metric" || fail=1
 				break
 			done
 		else
