@@ -43,13 +43,18 @@ int net_addr_equal(net_addr_t a, net_addr_t b)
     return a.family == AF_INET6 ? a.scope == b.scope && ip6_equal(a.v6, b.v6) : a.v4 == b.v4;
 }
 
-/** Convert a canonical address to the IPv6 socket representation. */
+/** Convert a canonical address to the IPv6 socket representation; IPv4's
+ * unspecified address, which an unbound socket of either family holds,
+ * becomes ::. */
 void net_addr_to6(net_addr_t a, uint8_t *out)
 {
     if (a.family == AF_INET6) {
         k_memcpy(out, a.v6, 16);
     } else {
         k_memset(out, 0, 16);
+        if (a.v4 == 0) {
+            return;
+        }
         out[10] = out[11] = 255;
         out[12] = (uint8_t)(a.v4 >> 24);
         out[13] = (uint8_t)(a.v4 >> 16);

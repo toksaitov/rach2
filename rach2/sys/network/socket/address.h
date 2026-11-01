@@ -21,7 +21,8 @@ net_addr_t net_addr6(const uint8_t *ip, uint32_t scope);
 int net_addr_any(net_addr_t a);
 /** Whether two canonical addresses, including scope, are equal. */
 int net_addr_equal(net_addr_t a, net_addr_t b);
-/** Write an IPv6 address or the mapped form of an IPv4 address. */
+/** Write an IPv6 address or the mapped form of an IPv4 address; IPv4's
+ * unspecified address is written as ::. */
 void net_addr_to6(net_addr_t a, uint8_t *out);
 /** Whether the address belongs to this machine and is usable now. */
 int net_addr_local(net_addr_t a);
