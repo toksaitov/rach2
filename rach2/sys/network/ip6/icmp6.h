@@ -7,9 +7,11 @@
  * icmp6: ICMPv6 (RFC 4443). An echo request is answered with an echo reply
  * of the same identifier, sequence and data, and an echo reply may end the
  * kernel's own ping (`icmp_ping6_data` in icmp.c). This machine sends a
- * parameter problem for a datagram of a protocol it does not have. The
- * errors that come in are counted; the messages of neighbour discovery and
- * multicast listener discovery are counted and otherwise ignored.
+ * parameter problem for a datagram whose headers it refuses, and a time
+ * exceeded for one whose reassembly ran out of time. A Packet Too Big about
+ * a datagram this machine sent lowers its destination's path MTU; the other
+ * errors that come in are counted, and the messages of neighbour discovery
+ * and multicast listener discovery are counted and otherwise ignored.
  *
  * A message is, big-endian, type (1 byte), code (1), checksum (2) and a
  * body; the checksum covers the IPv6 pseudo-header (`ip6_checksum`).
@@ -22,16 +24,23 @@
 #define ICMP6_ECHO_REQUEST   128
 #define ICMP6_ECHO_REPLY     129
 
-/* The codes of a destination unreachable and a parameter problem this
- * machine sends: no route, the port, and a next header it does not
- * recognize. */
+/* The codes of the errors this machine sends. Destination unreachable: no
+ * route, the port. Time exceeded: a reassembly out of time. Parameter
+ * problem: an erroneous header field, a next header it does not recognize,
+ * an option it does not recognize, and a first fragment without the whole
+ * header chain (RFC 7112). */
 #define ICMP6_DST_NOROUTE      0
 #define ICMP6_DST_PORT         4
+#define ICMP6_TIME_REASM       1
+#define ICMP6_PARAM_HEADER     0
 #define ICMP6_PARAM_NEXTHEADER 1
+#define ICMP6_PARAM_OPTION     2
+#define ICMP6_PARAM_CHAIN      3
 
-/* The most data an echo request carries: an unfragmented datagram of the
- * 1500-byte MTU less the IPv6 and ICMPv6 headers. */
-#define ICMP6_PING_DATA_MAX 1452u
+/* The most data an echo request carries: the largest payload a datagram
+ * has, less the ICMPv6 header. Past one 1500-byte datagram it leaves in
+ * fragments. */
+#define ICMP6_PING_DATA_MAX 65527u
 
 struct netdev;
 
@@ -43,8 +52,11 @@ struct netdev;
  * A message shorter than its 4-byte header or with a bad checksum is
  * dropped and counted as an error. An echo request is answered from `dst`,
  * or, when `dst` is a group, from the address `ip6_source` chooses on `nd`;
- * an echo reply is given to `icmp_ping_reply6`. Called with interrupts off,
- * from `ip6_rx`.
+ * an echo reply is given to `icmp_ping_reply6`. A Packet Too Big that quotes
+ * a datagram from this machine gives its MTU to `ip6_pmtu_lower` for the
+ * quoted destination, unless it came from the wire about a destination of
+ * this machine's own, which no link between could have refused. Called with
+ * interrupts off, from `ip6_walk`.
  */
 void icmp6_rx(struct netdev *nd, const uint8_t *src, const uint8_t *dst, uint8_t hlim,
               const uint8_t *data, uint16_t len);
@@ -67,10 +79,11 @@ int icmp6_send(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t *msg
  * field is `param`, quoting as much of the datagram as fits the 1280-byte
  * minimum MTU (RFC 4443, 2.4).
  *
- * No error answers a datagram from :: or a group, one sent to a group, or
- * an ICMPv6 error; and one to another host is held to one a second after a
+ * No error answers a datagram from :: or a group, or an ICMPv6 error, and
+ * none but a parameter problem of code 2 answers one sent to a group (RFC
+ * 4443, 2.4 (e)); one to another host is held to one a second after a
  * burst of six, the machine's limit, as `icmp_unreachable` holds IPv4's.
- * Called with interrupts off, from `ip6_rx`.
+ * Called with interrupts off, from the IPv6 layer.
  */
 void icmp6_error(struct netdev *nd, const uint8_t *dgram, uint16_t len, uint8_t type, uint8_t code,
                  uint32_t param);

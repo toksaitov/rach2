@@ -1,7 +1,7 @@
 /*
  * icmp6.c: ICMPv6, as icmp6.h describes it: echo requests answered, echo
- * replies passed to the kernel's ping, the errors this machine sends, and
- * the counts of what comes in.
+ * replies passed to the kernel's ping, the errors this machine sends, Packet
+ * Too Big taken for the path MTU, and the counts of what comes in.
  */
 
 #include "../../lib/kerrno.h"
@@ -11,10 +11,11 @@
 #include "../ip/icmp.h"
 #include "../core/byteorder.h"
 #include "../driver/netdev.h"
+#include "../../mm/kheap.h"
 #include "../../timer.h"
 
-/* The echo reply being sent: the largest message a 1500-byte datagram
- * holds. */
+/* The echo reply being sent when it fits one 1500-byte datagram; a larger
+ * one is built in a block of the heap. */
 static uint8_t icmp6_reply_buf[IP6_MTU - IP6_HDR_SIZE];
 
 /* An error quotes as much of the datagram it answers as keeps the error
@@ -54,6 +55,8 @@ static void icmp6_count_out(uint8_t type)
     net_mib6.icmp6_out_msgs++;
     if (type == ICMP6_DST_UNREACH) {
         net_mib6.icmp6_out_dest_unreachs++;
+    } else if (type == ICMP6_TIME_EXCEEDED) {
+        net_mib6.icmp6_out_time_excds++;
     } else if (type == ICMP6_PARAM_PROB) {
         net_mib6.icmp6_out_parm_problems++;
     } else if (type == ICMP6_ECHO_REQUEST) {
@@ -100,9 +103,10 @@ int icmp6_send(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t *msg
  * The rules of RFC 4443, 2.4 (e): an error about an error could answer
  * itself without end, and one to a group or for a datagram sent to a group
  * would be answered by every member at once. Parameter problems of code 2
- * and packet too big are the exceptions the RFC allows for a group, and this
- * machine sends neither. A datagram this machine sent itself is answered
- * from the loopback ring without the limit.
+ * and packet too big are the exceptions the RFC allows for a group; this
+ * machine sends the first, from the source `ip6_source` chooses, since a
+ * group is no source. A datagram this machine sent itself is answered from
+ * the loopback ring without the limit.
  */
 void icmp6_error(struct netdev *nd, const uint8_t *dgram, uint16_t len, uint8_t type, uint8_t code,
                  uint32_t param)
@@ -111,7 +115,10 @@ void icmp6_error(struct netdev *nd, const uint8_t *dgram, uint16_t len, uint8_t 
     const uint8_t *dst = dgram + 24;
     uint16_t quote = len < ICMP6_QUOTE_MAX ? len : (uint16_t)ICMP6_QUOTE_MAX;
 
-    if (ip6_is_unspecified(src) || ip6_is_multicast(src) || ip6_is_multicast(dst)) {
+    if (ip6_is_unspecified(src) || ip6_is_multicast(src)) {
+        return;
+    }
+    if (ip6_is_multicast(dst) && (type != ICMP6_PARAM_PROB || code != ICMP6_PARAM_OPTION)) {
         return;
     }
     if (dgram[6] == IP6_NH_ICMP6 && len > IP6_HDR_SIZE &&
@@ -125,8 +132,41 @@ void icmp6_error(struct netdev *nd, const uint8_t *dgram, uint16_t len, uint8_t 
     icmp6_error_buf[1] = code;
     write32be(icmp6_error_buf + 4, param);
     k_memcpy(icmp6_error_buf + 8, dgram, quote);
-    icmp6_send(dst, src, nd ? nd->index : 0, icmp6_error_buf, (uint16_t)(8 + quote),
-               IP6_HOP_LIMIT_DEFAULT);
+    icmp6_send(ip6_is_multicast(dst) ? 0 : dst, src, nd ? nd->index : 0, icmp6_error_buf,
+               (uint16_t)(8 + quote), IP6_HOP_LIMIT_DEFAULT);
+}
+
+/**
+ * Take the Packet Too Big of `len` bytes at `msg`, received on `nd`: its
+ * MTU is the 32-bit field after the checksum, and the datagram it quotes
+ * follows. Only a datagram this machine sent, from ::1 or an address of its
+ * own, has a path whose MTU it may lower. A destination link-scoped is
+ * taken in the scope of the interface the message came by, or for the
+ * loopback ring the one that holds the quoted source.
+ */
+static void icmp6_too_big(struct netdev *nd, const uint8_t *msg, uint16_t len)
+{
+    const uint8_t *q = msg + 8;
+    const uint8_t *qsrc = q + 8, *qdst = q + 24;
+    struct netdev *holder;
+    int ifindex = 0;
+
+    if (len < 8 + IP6_HDR_SIZE || (q[0] >> 4) != 6) {
+        return;
+    }
+    holder = netdev_owner6(qsrc);
+    if (!ip6_is_loopback(qsrc) && !holder) {
+        return;
+    }
+    if (nd && (ip6_is_loopback(qdst) || (!ip6_is_multicast(qdst) && netdev_owner6(qdst)))) {
+        return;
+    }
+    if (nd) {
+        ifindex = nd->index;
+    } else if (holder) {
+        ifindex = holder->index;
+    }
+    ip6_pmtu_lower(qdst, ifindex, read32be(msg + 4));
 }
 
 /**
@@ -137,6 +177,8 @@ void icmp6_error(struct netdev *nd, const uint8_t *dgram, uint16_t len, uint8_t 
 void icmp6_rx(struct netdev *nd, const uint8_t *src, const uint8_t *dst, uint8_t hlim,
               const uint8_t *data, uint16_t len)
 {
+    uint8_t *reply;
+
     net_mib6.icmp6_in_msgs++;
     if (len < 4 || ip6_checksum(src, dst, IP6_NH_ICMP6, data, len) != 0) {
         net_mib6.icmp6_in_errors++;
@@ -148,6 +190,7 @@ void icmp6_rx(struct netdev *nd, const uint8_t *src, const uint8_t *dst, uint8_t
         break;
     case ICMP6_PACKET_TOO_BIG:
         net_mib6.icmp6_in_pkt_too_bigs++;
+        icmp6_too_big(nd, data, len);
         break;
     case ICMP6_TIME_EXCEEDED:
         net_mib6.icmp6_in_time_excds++;
@@ -157,15 +200,22 @@ void icmp6_rx(struct netdev *nd, const uint8_t *src, const uint8_t *dst, uint8_t
         break;
     case ICMP6_ECHO_REQUEST:
         net_mib6.icmp6_in_echos++;
-        if (len < 8 || len > sizeof(icmp6_reply_buf)) {
+        if (len < 8) {
             net_mib6.icmp6_in_errors++;
             break;
         }
-        k_memcpy(icmp6_reply_buf, data, len);
-        icmp6_reply_buf[0] = ICMP6_ECHO_REPLY;
-        icmp6_reply_buf[1] = 0;
-        icmp6_send(ip6_is_multicast(dst) ? 0 : dst, src, nd ? nd->index : 0, icmp6_reply_buf, len,
+        reply = len <= sizeof(icmp6_reply_buf) ? icmp6_reply_buf : kmalloc(len);
+        if (!reply) {
+            break;
+        }
+        k_memcpy(reply, data, len);
+        reply[0] = ICMP6_ECHO_REPLY;
+        reply[1] = 0;
+        icmp6_send(ip6_is_multicast(dst) ? 0 : dst, src, nd ? nd->index : 0, reply, len,
                    IP6_HOP_LIMIT_DEFAULT);
+        if (reply != icmp6_reply_buf) {
+            kfree(reply);
+        }
         break;
     case ICMP6_ECHO_REPLY:
         net_mib6.icmp6_in_echo_replies++;

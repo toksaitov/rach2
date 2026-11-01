@@ -1,7 +1,7 @@
 /*
  * Exercise ping deadlines with timer interrupts still pending at each send.
  * host-deps: rach2/sys/network/ip/icmp.c rach2/sys/network/ip6/addr6.c
- * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c tests/host/compat/kheap_host.c
  */
 #include "network/ip/icmp.h"
 #include "network/ip/ip.h"

@@ -140,6 +140,8 @@ C_SRC_SHARED = kernel.c \
     sys/network/ip6/ip6.c \
     sys/network/ip6/icmp6.c \
     sys/network/ip6/route6.c \
+    sys/network/ip6/frag6.c \
+    sys/network/ip6/pmtu6.c \
     sys/network/udp/udp.c \
     sys/network/tcp/tcp.c \
     sys/network/tcp/rcvwnd.c \

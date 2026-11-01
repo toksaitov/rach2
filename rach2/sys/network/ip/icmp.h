@@ -94,10 +94,12 @@ int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got, u
 /**
  * `icmp_ping_data` for IPv6: echo requests to `dst`, in the scope of the
  * interface of index `ifindex`, 0 for none, each with `size` bytes of data,
- * at most `ICMP6_PING_DATA_MAX`, and the hop limit `hlim`. A reply from
- * `dst`, or from any host when `dst` is a group, ends the wait. Returns as
- * `icmp_ping_data` does, and also the error of `icmp6_send` when the first
- * request cannot be sent. Shares the one ping in flight with IPv4's.
+ * at most `ICMP6_PING_DATA_MAX`, and the hop limit `hlim`; a request past
+ * the path MTU leaves in fragments. A reply from `dst`, or from any host
+ * when `dst` is a group, ends the wait. Returns as `icmp_ping_data` does,
+ * and also the error of `icmp6_send` when the first request cannot be sent,
+ * or -ENOMEM when no block holds a request past `ICMP_PING_DATA_MAX`.
+ * Shares the one ping in flight with IPv4's.
  */
 int icmp_ping6_data(const uint8_t *dst, int ifindex, uint32_t size, uint8_t hlim, uint16_t *got,
                     uint8_t *got_hlim);
