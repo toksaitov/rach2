@@ -28,6 +28,7 @@
 #include "proc/elf.h"
 #include "proc/uimage.h"
 #include "proc/sigframe.h"
+#include "proc/pidfd.h"
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
 #include "lib/kirq.h"
@@ -2108,11 +2109,16 @@ long sys_execve(isr_params_t *params)
 #define CLONE_UNTRACED       0x00800000u
 #define CLONE_CHILD_SETTID   0x01000000u
 
+/* clone3's flags past the 32 bits of clone's. */
+#define CLONE_CLEAR_SIGHAND 0x100000000ull
+
 /* What a fork or a clone gives `do_fork`: the clone flags, the stack
  * pointer the child starts with or 0 for the parent's, the parent's address
  * CLONE_PARENT_SETTID names, the child's addresses CLONE_CHILD_SETTID and
- * CLONE_CHILD_CLEARTID name, each 0 for none, and the TLS base
- * CLONE_SETTLS gives the child. */
+ * CLONE_CHILD_CLEARTID name, each 0 for none, the TLS base CLONE_SETTLS
+ * gives the child, the parent's address CLONE_PIDFD stores the child's pidfd
+ * at, and whether the child's handlers go back to their defaults, clone3's
+ * CLONE_CLEAR_SIGHAND. */
 struct fork_req {
     uint32_t flags;
     uintptr_t newsp;
@@ -2120,6 +2126,8 @@ struct fork_req {
     uintptr_t settid;
     uintptr_t cleartid;
     uintptr_t tls;
+    uintptr_t pidfd;
+    uint32_t clear_sighand;
 };
 
 /* The parents that wait in vfork until their child calls execve or ends. */
@@ -2293,6 +2301,52 @@ static void fork_signals(process_t *child, const process_t *parent, uint32_t fla
     }
 }
 
+/** CLONE_CLEAR_SIGHAND: every handler of `child`'s process goes back to
+ * the default action, and an ignored signal stays ignored, each with no
+ * flags and an empty mask, as Linux's `flush_signal_handlers` leaves them. */
+static void fork_clear_handlers(process_t *child)
+{
+    struct k_sigaction *act = child->tg->action;
+    int sig;
+    int ignored;
+
+    for (sig = 1; sig <= KSIG_MAX; sig++) {
+        ignored = act[sig].handler == KSIG_IGN;
+        k_memset(&act[sig], 0, sizeof(act[sig]));
+        if (ignored) {
+            act[sig].handler = KSIG_IGN;
+        }
+    }
+}
+
+/**
+ * CLONE_PIDFD: a pidfd of `child` in a descriptor of the caller's, reserved
+ * here, with its number stored as an int at `at` in the caller's memory, as
+ * Linux stores it before the child runs. The child, made with a copy of the
+ * table before, has no such descriptor. Returns the descriptor, with the
+ * pidfd in `*pf` for `pidfd_install`; -ENOMEM, -EMFILE, or -EFAULT for a
+ * store that failed, with nothing kept.
+ */
+static int32_t fork_pidfd(process_t *child, uintptr_t at, struct pidfd **pf)
+{
+    int32_t fd;
+
+    *pf = pidfd_new(child);
+    if (!*pf) {
+        return -ENOMEM;
+    }
+    fd = fd_alloc(current_proc->fds);
+    if (fd >= 0 && copy_to_user((void __user *)at, &fd, sizeof(fd)) != 0) {
+        fd_free(current_proc->fds, fd);
+        fd = -EFAULT;
+    }
+    if (fd < 0) {
+        pidfd_free(*pf);
+        *pf = NULL;
+    }
+    return fd;
+}
+
 /** Give `child` the descriptor table of `parent`: the table itself under
  * CLONE_FILES, a copy otherwise. 0, or -ENOMEM. */
 static int32_t fork_files(process_t *child, process_t *parent, uint32_t flags)
@@ -2367,11 +2421,11 @@ static void fork_frame(process_t *child, const isr_params_t *params, const struc
  * child starts with and the addresses of the ids clone stores: the parent's
  * CLONE_PARENT_SETTID word, stored before the child runs, and the child's
  * CLONE_CHILD_SETTID word and the CLONE_CHILD_CLEARTID address its thread end
- * clears. The child has the parent's TLS base, since its frame keeps the
- * parent's %gs selector and its address space has the same addresses,
- * unless CLONE_SETTLS names another, and the floating-point registers as
- * they are now, since the parent's record has only what they were at its
- * last switch away. The parent gets the child's PID in the parent's PID
+ * clears; and the address CLONE_PIDFD stores a pidfd of the child at, made
+ * before the child runs (`fork_pidfd`). The child has the parent's TLS base, since its frame keeps
+ * the parent's %gs selector and its address space has the same addresses, unless CLONE_SETTLS names
+ * another, and the floating-point registers as they are now, since the parent's record has only
+ * what they were at its last switch away. The parent gets the child's PID in the parent's PID
  * namespace; the vfork wait names the child by the kernel's.
  *
  * The child is PROC_UNUSED while it is built, neither runnable nor seen by
@@ -2390,6 +2444,8 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
 {
     process_t *parent = current_proc;
     process_t *child;
+    struct pidfd *pf = NULL;
+    int32_t pidfd = -1;
     uint32_t pid, kid;
     uintptr_t child_kstack_base;
     int32_t rc;
@@ -2446,13 +2502,26 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
         goto fail_built;
     }
     fork_store_ids(child, req);
+    if (req->flags & CLONE_PIDFD) {
+        pidfd = fork_pidfd(child, req->pidfd, &pf);
+        if (pidfd < 0) {
+            rc = pidfd;
+            goto fail_built;
+        }
+    }
     if (((parent->sig_pending | parent->tg->pending) & KSIG_BIT(SIGKILL)) || parent->tg->exiting ||
         parent->tg->exec_task) {
         rc = -EINTR;
-        goto fail_built;
+        goto fail_pidfd;
+    }
+    if (pf) {
+        pidfd_install(pf, pidfd, 0);
     }
 
     fork_signals(child, parent, req->flags);
+    if (req->clear_sighand) {
+        fork_clear_handlers(child);
+    }
     fork_frame(child, params, req);
     kid = child->pid;
     pid = pid_seen(kid);
@@ -2473,6 +2542,11 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     }
     return (int32_t)pid;
 
+fail_pidfd:
+    if (pf) {
+        fd_free(parent->fds, pidfd);
+        pidfd_free(pf);
+    }
 fail_built:
     proc_files_put(child);
     proc_fs_put(child);
@@ -2486,7 +2560,7 @@ fail_built:
  * whose end sends the caller SIGCHLD (`do_fork`). */
 long sys_fork(isr_params_t *params)
 {
-    struct fork_req req = {SIGCHLD, 0, 0, 0, 0, 0};
+    struct fork_req req = {SIGCHLD, 0, 0, 0, 0, 0, 0, 0};
 
     return do_fork(params, &req);
 }
@@ -2499,28 +2573,33 @@ long sys_fork(isr_params_t *params)
  */
 long sys_vfork(isr_params_t *params)
 {
-    struct fork_req req = {CLONE_VM | CLONE_VFORK | SIGCHLD, 0, 0, 0, 0, 0};
+    struct fork_req req = {CLONE_VM | CLONE_VFORK | SIGCHLD, 0, 0, 0, 0, 0, 0, 0};
 
     return do_fork(params, &req);
 }
 
 /** Make the clone `sys_clone` describes, from the arguments of `clone` or of
- * `clone3`; `params` is the caller's frame, which the child's is copied from.
- * The child's id, -EINVAL for a set of flags `sys_clone` does not take, or
- * the error of `arch_clone_tls` or of `do_fork`. */
+ * `clone3`; `params` is the caller's frame, which the child's is copied from,
+ * `pidfd` the address CLONE_PIDFD stores at, and `clear_sighand` clone3's
+ * CLONE_CLEAR_SIGHAND. The child's id, -EINVAL for a set of flags
+ * `sys_clone` does not take, or the error of `arch_clone_tls` or of
+ * `do_fork`. */
 static int32_t clone_with(isr_params_t *params, uint32_t flags, uintptr_t newsp, uintptr_t ptid,
-                          unsigned long tls, uintptr_t ctid)
+                          unsigned long tls, uintptr_t ctid, uintptr_t pidfd, int clear_sighand)
 {
     struct fork_req req;
 
-    if ((flags & ~(CSIGNAL | CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_VFORK |
-                   CLONE_PARENT | CLONE_THREAD | CLONE_SYSVSEM | CLONE_SETTLS |
+    if ((flags & ~(CSIGNAL | CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_PIDFD |
+                   CLONE_VFORK | CLONE_PARENT | CLONE_THREAD | CLONE_SYSVSEM | CLONE_SETTLS |
                    CLONE_PARENT_SETTID | CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID |
                    CLONE_DETACHED | CLONE_UNTRACED | CLONE_NEW_ANY)) != 0 ||
         (!(flags & CLONE_THREAD) && (flags & CSIGNAL) != 0 && (flags & CSIGNAL) != SIGCHLD) ||
         ((flags & CLONE_SIGHAND) && !(flags & CLONE_VM)) ||
         ((flags & CLONE_THREAD) && !(flags & CLONE_SIGHAND)) ||
-        ((flags & CLONE_SIGHAND) && !(flags & CLONE_THREAD))) {
+        ((flags & CLONE_SIGHAND) && !(flags & CLONE_THREAD)) ||
+        ((flags & CLONE_PIDFD) && (flags & (CLONE_THREAD | CLONE_DETACHED))) ||
+        ((flags & CLONE_PIDFD) && (flags & CLONE_PARENT_SETTID) && pidfd == ptid) ||
+        (clear_sighand && (flags & CLONE_SIGHAND))) {
         return -EINVAL;
     }
     req.tls = 0;
@@ -2538,6 +2617,8 @@ static int32_t clone_with(isr_params_t *params, uint32_t flags, uintptr_t newsp,
     req.ptid = (flags & CLONE_PARENT_SETTID) ? ptid : 0;
     req.settid = (flags & CLONE_CHILD_SETTID) ? ctid : 0;
     req.cleartid = (flags & CLONE_CHILD_CLEARTID) ? ctid : 0;
+    req.pidfd = pidfd;
+    req.clear_sighand = clear_sighand != 0;
     return do_fork(params, &req);
 }
 
@@ -2562,18 +2643,23 @@ static int32_t clone_with(isr_params_t *params, uint32_t flags, uintptr_t newsp,
  * parent's memory before the child runs, and a failed store is ignored, as
  * Linux ignores it. CLONE_SYSVSEM and CLONE_DETACHED are ignored: a
  * process's semaphore adjustments are its own, which threads share, and
- * Linux ignores the second. The CLONE_NEW flags give the child new
- * namespaces (`ns_fork`); a cgroup namespace and any other flag are EINVAL.
+ * Linux ignores the second. CLONE_PIDFD stores a pidfd of the child, as
+ * an int, at the parent tid address, so it takes neither CLONE_PARENT_SETTID
+ * nor CLONE_THREAD nor CLONE_DETACHED. The CLONE_NEW flags give the child
+ * new namespaces (`ns_fork`); a cgroup namespace and any other flag are
+ * EINVAL.
  */
 long sys_clone(isr_params_t *params)
 {
     return clone_with(params, (uint32_t)SC_ARG(params, 0), SC_ARG(params, 1), SC_ARG(params, 2),
-                      SC_ARG(params, SC_CLONE_TLS), SC_ARG(params, SC_CLONE_CTID));
+                      SC_ARG(params, SC_CLONE_TLS), SC_ARG(params, SC_CLONE_CTID),
+                      SC_ARG(params, 2), 0);
 }
 
 /* clone3's structure, Linux's struct clone_args as the eight 64-bit fields
  * of its first version, on every architecture. */
 #define CA_FLAGS          0
+#define CA_PIDFD          1
 #define CA_CHILD_TID      2
 #define CA_PARENT_TID     3
 #define CA_EXIT_SIGNAL    4
@@ -2594,11 +2680,16 @@ long sys_clone(isr_params_t *params)
  * sum. A structure shorter than the 64 bytes of Linux's first version is
  * EINVAL; a longer one is read when the fields this kernel does not take,
  * set_tid, set_tid_size and cgroup, are zero, and its bytes past those
- * fields are zero, else E2BIG, as Linux reads it. CLONE_PIDFD is EINVAL,
- * since no descriptor names a process here, and so is a flag past bit 31
- * or a field wider than an address. The caller's registers are left as they
- * were, since a caller may keep the structure's address in one across the
- * call.
+ * fields are zero, else E2BIG, as Linux reads it. CLONE_PIDFD stores the
+ * child's pidfd at the address of its own field, and CLONE_CLEAR_SIGHAND,
+ * which glibc's posix_spawn passes with CLONE_VM and CLONE_VFORK, gives the
+ * child's process the default handlers in place of the caller's
+ * (`fork_clear_handlers`); with CLONE_SIGHAND it is EINVAL. Any other flag
+ * past bit 31, CLONE_INTO_CGROUP among them, a signal in the flags, which
+ * has a field of its own, CLONE_DETACHED and a field other than the flags
+ * wider than an address are EINVAL. The caller's registers are left as
+ * they were, since a caller may keep the structure's address in one across
+ * the call.
  */
 long sys_clone3(isr_params_t *params)
 {
@@ -2634,19 +2725,21 @@ long sys_clone3(isr_params_t *params)
             return -EINVAL;
         }
     }
-    for (i = 0; i < CLONE_ARGS_FIELDS; i++) {
+    for (i = CA_FLAGS + 1; i < CLONE_ARGS_FIELDS; i++) {
         if (a[i] != (uintptr_t)a[i]) {
             return -EINVAL;
         }
     }
-    if ((a[CA_FLAGS] >> 31 >> 1) != 0 || (a[CA_FLAGS] & (CSIGNAL | CLONE_PIDFD)) != 0 ||
-        a[CA_EXIT_SIGNAL] > 64u || (a[CA_STACK] == 0) != (a[CA_STACK_SIZE] == 0)) {
+    if ((a[CA_FLAGS] & ~(0xFFFFFFFFull | CLONE_CLEAR_SIGHAND)) != 0 ||
+        (a[CA_FLAGS] & (CSIGNAL | CLONE_DETACHED)) != 0 || a[CA_EXIT_SIGNAL] > 64u ||
+        (a[CA_STACK] == 0) != (a[CA_STACK_SIZE] == 0)) {
         return -EINVAL;
     }
     return clone_with(params, (uint32_t)(a[CA_FLAGS] | a[CA_EXIT_SIGNAL]),
                       a[CA_STACK] ? (uintptr_t)(a[CA_STACK] + a[CA_STACK_SIZE]) : 0,
                       (uintptr_t)a[CA_PARENT_TID], (unsigned long)a[CA_TLS],
-                      (uintptr_t)a[CA_CHILD_TID]);
+                      (uintptr_t)a[CA_CHILD_TID], (uintptr_t)a[CA_PIDFD],
+                      (a[CA_FLAGS] & CLONE_CLEAR_SIGHAND) != 0);
 }
 
 /* The options of waitpid, wait4 and waitid. */
@@ -2667,8 +2760,8 @@ long sys_clone3(isr_params_t *params)
 #define W_CLONE 0x80000000u /* Linux's __WCLONE */
 
 /* The children a wait selects, as waitid's idtype names them: every child,
- * the child with an id, or the children in a process group. A pidfd names
- * no child here, since no descriptor is one. */
+ * the child with an id, the children in a process group, or the child a
+ * pidfd names. */
 #define P_ALL 0
 
 #define P_PID 1
@@ -3206,8 +3299,10 @@ long sys_wait4(isr_params_t *params)
  *
  * Its arguments are idtype, id, siginfo_t *, options and struct rusage *,
  * Linux's fifth argument. P_ALL selects every child, P_PID the child with a
- * positive id, and P_PGID the group with a nonnegative id, 0 being the
- * caller's. At least one of WEXITED, WSTOPPED and WCONTINUED must be given,
+ * positive id, P_PGID the group with a nonnegative id, 0 being the
+ * caller's, and P_PIDFD the child the pidfd `id` names, which a non-blocking
+ * pidfd waits for as WNOHANG does, with -EAGAIN for no event, as on Linux.
+ * At least one of WEXITED, WSTOPPED and WCONTINUED must be given,
  * beside which WNOHANG, WNOWAIT and Linux's three thread bits are accepted;
  * `wait_find` has what each means.
  *
@@ -3218,7 +3313,8 @@ long sys_wait4(isr_params_t *params)
  * Only the bytes through those fields are written, as the architecture's
  * siginfo_t lays them out. -EINVAL for an unknown option or idtype,
  * no event asked for, or an id that does not suit its idtype; -EBADF for a
- * pidfd, since no descriptor is one; -ECHILD, -EINTR; -EFAULT, found before
+ * descriptor that is not a pidfd; -ECHILD, which a pidfd of a process
+ * already reaped gives, -EINTR, -EAGAIN; -EFAULT, found before
  * the wait or after it with the child's event left in place, as `do_wait`
  * finds it.
  */
@@ -3232,7 +3328,9 @@ long sys_waitid(isr_params_t *params)
     uint8_t info[SIGINFO_SIZE];
     struct k_siginfo ki;
     struct wait_report r;
+    process_t *named;
     uint32_t id = 0;
+    int nonblock = 0;
     int32_t rc;
     int ok;
 
@@ -3259,7 +3357,22 @@ long sys_waitid(isr_params_t *params)
         id = upid != 0 ? pid_named((uint32_t)upid) : current_proc->pgid;
         break;
     case P_PIDFD:
-        return upid < 0 ? -EINVAL : -EBADF;
+        if (upid < 0) {
+            return -EINVAL;
+        }
+        rc = pidfd_lookup((int)upid, &named, &nonblock);
+        if (rc != 0) {
+            return rc;
+        }
+        if (!named) {
+            return -ECHILD;
+        }
+        idtype = P_PID;
+        id = named->pid;
+        if (nonblock) {
+            options |= WNOHANG;
+        }
+        break;
     default:
         return -EINVAL;
     }
@@ -3272,6 +3385,9 @@ long sys_waitid(isr_params_t *params)
     rc = wait_find(idtype, id, options, &r);
     if (rc < 0) {
         return rc;
+    }
+    if (rc == 0 && nonblock) {
+        return -EAGAIN;
     }
     k_memset(info, 0, sizeof(info));
     if (rc > 0) {
@@ -3953,6 +4069,61 @@ long sys_rt_sigqueueinfo(isr_params_t *params)
         signal_post_info(target, signo, &info);
     }
     return rc;
+}
+
+/**
+ * pidfd_send_signal takes a pidfd, a signal, a siginfo or 0, and flags,
+ * which must be 0: the signal posted to the pidfd's process under kill's
+ * permission, with the siginfo given, whose si_signo must be the signal and
+ * whose code `queued_info` checks, or else kill's. A process outside the
+ * caller's PID namespace and those below it is EINVAL. Signal 0, and a signal
+ * to a process whose threads have all ended, are checked and not posted.
+ * -EINVAL, -EBADF for a descriptor that is not a pidfd, -ESRCH for a
+ * process reaped, -EFAULT or -EPERM.
+ */
+long sys_pidfd_send_signal(isr_params_t *params)
+{
+    int signo = (int)SC_ARG(params, 1);
+    uintptr_t uinfo = SC_ARG(params, 2);
+    process_t *target;
+    struct k_siginfo info;
+    int32_t given;
+    int32_t rc;
+
+    if (SC_ARG(params, 3) != 0 || signo < 0 || signo > KSIG_MAX) {
+        return -EINVAL;
+    }
+    rc = pidfd_lookup((int)SC_ARG(params, 0), &target, NULL);
+    if (rc != 0) {
+        return rc;
+    }
+    if (!target) {
+        return -ESRCH;
+    }
+    if (pid_seen(target->tgid) == 0) {
+        return -EINVAL;
+    }
+    if (uinfo) {
+        if (copy_from_user(&given, (const void __user *)uinfo, sizeof(given)) != 0) {
+            return -EFAULT;
+        }
+        if (given != signo) {
+            return -EINVAL;
+        }
+        rc = queued_info(uinfo, target->tg == current_proc->tg, &info);
+        if (rc != 0) {
+            return rc;
+        }
+    } else {
+        sender_info(&info, SI_USER, target);
+    }
+    if (!cred_may_signal(target, signo)) {
+        return -EPERM;
+    }
+    if (signo != 0 && target->tg->live != 0) {
+        signal_post_info(target, signo, &info);
+    }
+    return 0;
 }
 
 /** rt_tgsigqueueinfo takes tgid, tid, signal and the siginfo, posted to the

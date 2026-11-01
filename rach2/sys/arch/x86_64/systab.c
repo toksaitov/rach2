@@ -33,6 +33,7 @@
 #include "../../proc/ptrace.h"
 #include "../../proc/seccomp.h"
 #include "../../proc/ns.h"
+#include "../../proc/pidfd.h"
 #include "../../lib/krandom.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kirq.h"
@@ -383,6 +384,9 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_MLOCK2] = sys_mlock2;
     table[SYS_STATX] = sys_statx;
     table[SYS_CLONE3] = sys_clone3;
+    table[SYS_PIDFD_OPEN] = sys_pidfd_open;
+    table[SYS_PIDFD_SEND_SIGNAL] = sys_pidfd_send_signal;
+    table[SYS_PIDFD_GETFD] = sys_pidfd_getfd;
     table[SYS_CLOSE_RANGE] = sys_close_range;
     table[SYS_EPOLL_PWAIT2] = sys_epoll_pwait2;
     table[SYS_RACH2_PING] = sys_rach2_ping;

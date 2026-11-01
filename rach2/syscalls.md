@@ -1,6 +1,6 @@
 # The system calls
 
-This table lists the calls the two kernels register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. `none` marks a call one kernel does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 288 calls and the x86-64 kernel 264. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
+This table lists the calls the two kernels register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. `none` marks a call one kernel does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 291 calls and the x86-64 kernel 267. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
 
 `make syscalls` writes this file from `rach2/sys/arch/i686/systab.c` and `rach2/sys/arch/x86_64/systab.c`, with the numbers in `rach2/sys/arch/i686/sysnr.h` and `rach2/sys/arch/x86_64/sysnr.h`, and `tests/run style` fails when the file differs from what it writes.
 
@@ -175,6 +175,9 @@ This table lists the calls the two kernels register, one row a call, in name ord
 | `openat` | 295 | 257 | [open(2)](../man/man2/open.2) |
 | `pause` | 29 | 34 | [sigaction(2)](../man/man2/sigaction.2) |
 | `personality` | 136 | 135 | [prctl(2)](../man/man2/prctl.2) |
+| `pidfd_getfd` | 438 | 438 | [pidfd_open(2)](../man/man2/pidfd_open.2) |
+| `pidfd_open` | 434 | 434 | [pidfd_open(2)](../man/man2/pidfd_open.2) |
+| `pidfd_send_signal` | 424 | 424 | [pidfd_open(2)](../man/man2/pidfd_open.2) |
 | `pipe` | 42 | 22 | [pipe(2)](../man/man2/pipe.2) |
 | `pipe2` | 331 | 293 | [pipe(2)](../man/man2/pipe.2) |
 | `pivot_root` | 217 | 155 | [pivot_root(2)](../man/man2/pivot_root.2) |

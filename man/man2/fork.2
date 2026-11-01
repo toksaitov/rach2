@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 1, 2026
 .Dt FORK 2
 .Os
 .Sh NAME
@@ -172,6 +172,18 @@ as the address the child's thread end clears, as
 .Xr set_thread_area 2
 describes for
 .Nm set_tid_address ;
+.Dv CLONE_PIDFD ,
+which stores a pidfd of the child, as an int, at
+.Fa parent_tid
+in the parent's memory before the child runs, a close-on-exec descriptor
+of the parent's that
+.Xr pidfd_open 2
+describes and the child does not have, and which takes neither
+.Dv CLONE_PARENT_SETTID ,
+whose address it uses,
+.Dv CLONE_THREAD
+nor
+.Dv CLONE_DETACHED ;
 and
 .Dv CLONE_DETACHED
 and
@@ -202,9 +214,28 @@ which glibc tries before
 .Fn clone
 for threads and
 .Xr posix_spawn 3 :
-the flags, with the exit signal in a field of its own, the child and
-parent thread ID addresses, the lowest address of the new stack and its
-size, from whose sum the child starts, and the TLS descriptor.
+the flags, with the exit signal in a field of its own, the address
+.Dv CLONE_PIDFD
+stores the pidfd at, the child and parent thread ID addresses, the lowest
+address of the new stack and its size, from whose sum the child starts,
+and the TLS descriptor.
+Beside
+.Fn clone Ns 's
+flags it takes
+.Dv CLONE_CLEAR_SIGHAND ,
+which GNU libc's
+.Xr posix_spawn 3
+passes with
+.Dv CLONE_VM
+and
+.Dv CLONE_VFORK :
+every handler of the child goes back to the default action, a signal the
+parent ignores stays ignored, and each has no flags and an empty mask.
+Here
+.Dv CLONE_PIDFD
+may come with
+.Dv CLONE_PARENT_SETTID
+at another address.
 .Fa size
 is at least 64, the size of the structure's first version; the fields of
 later versions,
@@ -279,17 +310,32 @@ or
 .Dv CLONE_SETTLS
 a descriptor
 .Xr set_thread_area 2
-refuses.
+refuses;
+.Dv CLONE_PIDFD
+with
+.Dv CLONE_THREAD
+or
+.Dv CLONE_DETACHED ,
+or with
+.Dv CLONE_PARENT_SETTID
+at the same address, as
+.Fn clone
+always has it; or
+.Dv CLONE_CLEAR_SIGHAND
+with
+.Dv CLONE_SIGHAND .
 .It Bq Er EINVAL
 .Fn clone3
 was given a
 .Fa size
-below 64, a field of a later version that is not zero, a flag with bits
-past 32, a field wider than an address, which is 32 bits on i686, an exit
-signal in the flags or above 64, a stack
-without a size or a size without a stack, or
-.Dv CLONE_PIDFD ,
-since no descriptor names a process here.
+below 64, a field of a later version that is not zero, a flag past bit
+31 other than
+.Dv CLONE_CLEAR_SIGHAND ,
+.Dv CLONE_INTO_CGROUP
+among them, a field other than the flags wider than an address, which is
+32 bits on i686, an exit signal in the flags or above 64,
+.Dv CLONE_DETACHED ,
+or a stack without a size or a size without a stack.
 .It Bq Er E2BIG
 .Fn clone3
 was given a
@@ -300,7 +346,12 @@ The
 .Dv CLONE_SETTLS
 descriptor or the
 .Fn clone3
-structure cannot be read.
+structure cannot be read, or the
+.Dv CLONE_PIDFD
+address cannot be written.
+.It Bq Er EMFILE
+.Dv CLONE_PIDFD
+found no free descriptor below the caller's limit.
 .It Bq Er EAGAIN
 The number of threads with the parent's real user ID has reached the
 parent's soft
@@ -342,6 +393,7 @@ A user or PID namespace would be nested more than 7 deep.
 .Xr execve 2 ,
 .Xr exit 2 ,
 .Xr getpid 2 ,
+.Xr pidfd_open 2 ,
 .Xr prlimit64 2 ,
 .Xr unshare 2 ,
 .Xr waitpid 2

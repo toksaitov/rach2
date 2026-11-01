@@ -1,0 +1,150 @@
+.Dd November 1, 2026
+.Dt PIDFD_OPEN 2
+.Os
+.Sh NAME
+.Nm pidfd_open ,
+.Nm pidfd_send_signal ,
+.Nm pidfd_getfd
+.Nd descriptors that name a process
+.Sh SYNOPSIS
+.In sys/pidfd.h
+.Ft int
+.Fn pidfd_open "pid_t pid" "unsigned int flags"
+.Ft int
+.Fn pidfd_send_signal "int pidfd" "int sig" "siginfo_t *info" "unsigned int flags"
+.Ft int
+.Fn pidfd_getfd "int pidfd" "int targetfd" "unsigned int flags"
+.Sh DESCRIPTION
+A pidfd is a descriptor that names a process.
+Unlike a process ID, it never comes to name another process: once its own
+has been reaped and its number given to a new one, the pidfd names none.
+.Pp
+.Fn pidfd_open
+returns a new close-on-exec pidfd of the process
+.Fa pid
+leads, which may have ended and not yet been reaped.
+.Fa flags
+is 0 or
+.Dv PIDFD_NONBLOCK ,
+which makes the descriptor non-blocking.
+.Xr fork 2 Ns 's
+.Dv CLONE_PIDFD
+makes one of the child as it is created.
+.Pp
+.Xr poll 2
+and
+.Xr epoll 2
+report a pidfd readable once every thread of its process has ended, and
+hung up as well once the process has been reaped.
+.Xr waitid 2
+with
+.Dv P_PIDFD
+waits for the process, when it is a child of the caller's.
+A
+.Xr read 2
+or
+.Xr write 2
+of a pidfd fails with
+.Er EINVAL .
+.Pa /proc/ Ns Ar pid Ns Pa /fd
+names it
+.Dq anon_inode:[pidfd] .
+.Pp
+.Fn pidfd_send_signal
+sends
+.Fa sig
+to the process, as
+.Xr kill 2
+sends it to a process ID, under the same permission.
+A null
+.Fa info
+gives the receiver
+.Xr kill 2 Ns 's
+siginfo; otherwise
+.Fa info
+is the siginfo, whose
+.Va si_signo
+must be
+.Fa sig ,
+and whose code a process may give another process only when it is
+negative and not
+.Dv SI_TKILL ,
+as
+.Xr rt_sigqueueinfo 2
+has it.
+Signal 0 checks the permission and sends nothing, and a signal to a process
+whose threads have all ended is discarded.
+.Fa flags
+must be 0.
+.Pp
+.Fn pidfd_getfd
+returns a close-on-exec copy, in the caller's table, of the process's
+descriptor
+.Fa targetfd ,
+which shares its open file description, as
+.Xr dup 2
+makes a copy.
+The process must be the caller's own, or the caller must be one that may
+attach to it with
+.Xr ptrace 2 :
+privileged, or with a real user ID and a real group ID equal to each of
+the process's three, while the process is dumpable and not privileged.
+.Fa flags
+must be 0.
+.Ss System call interface
+The calls are numbered the same on i386 and x86-64:
+.Nm pidfd_send_signal
+424,
+.Nm pidfd_open
+434 and
+.Nm pidfd_getfd
+438.
+.Sh RETURN VALUES
+.Fn pidfd_open
+and
+.Fn pidfd_getfd
+return the new descriptor and
+.Fn pidfd_send_signal
+returns 0; each returns -1 with
+.Va errno
+set on failure.
+The kernel returns the negative error number.
+.Sh ERRORS
+.Bl -tag -width "[EMFILE]"
+.It Bq Er EBADF
+.Fa pidfd
+is not an open pidfd, or
+.Fa targetfd
+is not open in the process, which has none once it has ended.
+.It Bq Er EFAULT
+.Fa info
+cannot be read.
+.It Bq Er EINVAL
+.Fa pid
+is not above 0 or names a thread that does not lead its process;
+.Fa flags
+has a bit not described above;
+.Fa sig
+is out of range or is not the
+.Va si_signo
+of
+.Fa info ;
+or the process is outside the caller's PID namespace and those below it.
+.It Bq Er EMFILE
+The caller has no free descriptor below its limit.
+.It Bq Er ENOMEM
+The kernel had no memory for the pidfd, a larger descriptor table or an
+open file description.
+.It Bq Er EPERM
+The caller may not signal the process, give it that siginfo code, or take
+its descriptors.
+.It Bq Er ESRCH
+No process has the ID
+.Fa pid ,
+or the pidfd's process has been reaped.
+.El
+.Sh SEE ALSO
+.Xr fork 2 ,
+.Xr kill 2 ,
+.Xr poll 2 ,
+.Xr wait 2
