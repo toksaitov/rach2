@@ -80,7 +80,35 @@ The codec line identifies the codec address, vendor and audio function group.
 Primary and headphone lines give pin, DAC and expanded connection indices;
 the primary line also gives its optional mixer or selector.
 .Ql enabled
-is the pin enable decision from the last setup.
+is whether the pin plays, as the last start or jack change set it; a stop
+turns both off.
+The headphone line ends with
+.Ql mode ,
+the output routing:
+.Ql auto ,
+the headphones while their jack has a plug and the primary pin otherwise,
+following the jack while a stream plays, or
+.Ql primary ,
+.Ql hp
+or
+.Ql both .
+.Pp
+Each
+.Ql jack
+line, one for the headphone jack and one for the microphone jack, gives
+the pin watched, or 0 when there is none with presence detect; its state,
+.Ql in ,
+.Ql out ,
+or
+.Ql unknown
+before a reading succeeds; and the readings of its sense, those that
+failed or found the command interface busy, and the changes of its state.
+The tick reads each jack every quarter second, and a start reads it once.
+A state changes when two readings in a row differ from it, or at a start's
+reading; a failed reading changes nothing.
+A change of the microphone jack moves capture between the internal and the
+jack microphone.
+.Pp
 The stream line gives the last successful request and programmed rate,
 then controller, primary DAC and headphone DAC format words read back
 at setup.
@@ -181,8 +209,8 @@ its audio widget capabilities, and its input and output amplifier
 capabilities, the widget's own under Amp Param Override and the function
 group's otherwise, or zero where it has no such amplifier.
 A pin adds its pin capabilities and configuration default, and a pin with
-presence detect its Get Pin Sense word, read at the last stream's start,
-whose bit 31 reports a plug.
+presence detect its Get Pin Sense word, read at the last stream's start
+when the read succeeded, whose bit 31 reports a plug.
 .Ql conn
 lists the widget's connections, expanded, in selector order;
 .Ql conn invalid
