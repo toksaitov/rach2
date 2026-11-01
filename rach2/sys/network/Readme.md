@@ -108,7 +108,7 @@ A raw socket (`socket/raw.c`), `AF_INET` with `SOCK_RAW` and `IPPROTO_ICMP`, is 
 
 ### Netlink and netconsole
 
-`socket/netlink.c` answers the requests of [netlink(7)](../../../man/man7/netlink.7) from the interface records, routing table, ARP cache and socket lists, in datagrams of at most 4096 bytes, and makes changes as the ioctls do.
+`socket/netlink.c` answers the requests of [netlink(7)](../../../man/man7/netlink.7) from the interface records, routing table, ARP cache and socket lists, in datagrams of at most `SOCK_RECV_BUF_SIZE` (1500) bytes, the most a `recvmsg` copies whole, and makes changes as the ioctls do.
 
 `netconsole.c` is given every log record from the first, before any card is up, and keeps the characters in an 8192-byte ring, 8191 of them usable; a full ring drops the newest and counts it. After `netconsole_enable`, a newline or 512 waiting characters starts a drain: frames of up to 512 characters behind a 16-byte header, broadcast with EtherType `0x88b5` through the first interface, laid out as [`netconsole.h`](netconsole.h) describes. While that card's link is down, or when it refuses a frame, the characters wait for the next newline. Netconsole works below IP, so it needs no address and continues while the interface is down. A flag keeps a record raised during a send from starting another.
 

@@ -144,10 +144,13 @@
 #define DIAG_CLOSE             7
 #define DIAG_LISTEN            10
 
-/* Policy: an answer datagram is at most a page, which every reader's buffer
- * holds: Chromium reads with 4096 bytes and BusyBox with 8192. A message is
- * at most 512 bytes, a link's with its two sets of counters among them. */
-#define NL_DGRAM_MAX 4096u
+/* An answer datagram is at most SOCK_RECV_BUF_SIZE bytes, since a read
+ * copies one datagram through a kernel buffer of that size (`readv_dgram`),
+ * and a longer one would arrive cut in the middle of a message; every
+ * reader's buffer holds it: Chromium reads with 4096 bytes and BusyBox with
+ * 8192. A message is at most 512 bytes, a link's with its two sets of
+ * counters among them, so a datagram holds two at least. */
+#define NL_DGRAM_MAX SOCK_RECV_BUF_SIZE
 #define NL_MSG_MAX   512u
 
 /* One queued datagram; its bytes follow the record. */
