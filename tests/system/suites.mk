@@ -365,6 +365,13 @@ $(BOOTORDER_CASE_DISK): $(DEMO_CREDS) tools/image/mkdisk_grub.sh tools/image/gru
 # must still boot through the stub with GRUB's parse error in the log; and the
 # slot's extent read back to prove bootctl overwrote bytes in place rather
 # than rewriting a file.
+# `tests/run seabios`: the screen of a GRUB disk that SeaBIOS boots, on a
+# framebuffer by default and in the VGA's text mode from the menu's text entry.
+# It is the case of tests/cases/machine.seabios.json, which etude runs, and has
+# no target here: two boots of the menu case's disk, the first with the login
+# prompt read off a screen dump of the mode the video BIOS prefers and Doom
+# scaled onto the whole framebuffer, the second, with the text entry armed for
+# one boot, in 80 by 25 cells with Doom in mode 13h.
 # `tests/run authority`: which kernel may write the whole disk. The build reads
 # the authority off each kernel (the rach2-recovery target), and each case boots
 # one kernel with the test image and a disk over AHCI: the everyday build must
@@ -1520,6 +1527,11 @@ $(ETUDE_SCENARIO_DISK): krffs/manifests/etude-scenario.manifest $(MKDISK) \
 	rm -f $@.tmp
 	$(MKDISK) krffs/manifests/etude-scenario.manifest $@.tmp 8 6 >/dev/null
 	mv $@.tmp $@
+# `tests/run esctest2`: term's parser against the pinned upstream esctest2
+# driver, every method run on `term -H` and its real pty with the screen
+# inspected over a socket of its own, and each result held to the exact list
+# of known failures. It is the case of tests/cases/host.esctest2.json, which
+# etude runs; mk/esctest2.mk packages the driver.
 
 # `tests/run krffscheck`: what the offline checker says about images broken on
 # purpose. No machine is booted. They are the cases of
