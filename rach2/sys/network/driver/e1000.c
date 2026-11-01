@@ -475,8 +475,9 @@ static int e1000_pages(struct e1000 *e)
  * no frames. VLAN mode is cleared, since nothing above this layer reads a tag
  * and the card would strip four bytes the stack expects to see, and so is
  * the PHY reset bit. The multicast table is undefined after a reset, and is
- * cleared so that a stale entry admits no traffic this machine did not ask
- * for.
+ * cleared so that a stale entry matches nothing. The receiver passes every
+ * multicast frame instead (RCTL.MPE), which IPv6 needs, and ip6.c accepts a
+ * datagram for a group only on an interface that has joined it.
  *
  * `up` is set before the sources are unmasked. The handler passes over a
  * card whose `up` is clear, and the bring-up runs with interrupts enabled, so
@@ -606,7 +607,9 @@ static int e1000_init(struct netdev *nd, int nth)
 
     register_isr_handler((uint8_t)IRQ_VECTOR(e->pci.irq), e1000_irq, "e1000");
 
-    io->w32(e, E1000_RCTL, E1000_RCTL_EN | E1000_RCTL_BAM | E1000_RCTL_SZ_2048 | E1000_RCTL_SECRC);
+    io->w32(e, E1000_RCTL,
+            E1000_RCTL_EN | E1000_RCTL_BAM | E1000_RCTL_MPE | E1000_RCTL_SZ_2048 |
+                E1000_RCTL_SECRC);
     io->w32(e, E1000_TCTL,
             E1000_TCTL_EN | E1000_TCTL_PSP | E1000_TCTL_RTLC |
                 ((uint32_t)E1000_TCTL_CT_DEFAULT << E1000_TCTL_CT_SHIFT) |
