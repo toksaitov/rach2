@@ -44,6 +44,7 @@
 #include "../tcp/tcp.h"
 #include "../driver/netdev.h"
 #include "../udp/udp.h"
+#include "../../timer.h"
 
 /* The echo reply being sent, sized for a full datagram, and the request. */
 static uint8_t icmp_reply_buf[1500];
@@ -85,9 +86,6 @@ static uint16_t ping_seq = 0;
  * first ping. */
 static wait_queue_t ping_wq;
 static int ping_wq_ready = 0;
-
-/* Kernel tick counter, for the timeout. */
-extern volatile uint32_t kernel_ticks;
 
 /**
  * Take a router's report that a datagram from this machine was too big for

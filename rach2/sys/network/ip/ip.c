@@ -21,6 +21,7 @@
 #include "../netconf.h"
 #include "../../serial.h"
 #include "../../lib/kstring.h"
+#include "../../timer.h"
 
 /**
  * The words are summed four bytes a turn into a 32-bit accumulator, which
@@ -161,8 +162,6 @@ static uint16_t ip_id_counter = 0;
 
 /* TX assembly buffer at file scope. */
 static uint8_t ip_tx_buf[IP_HDR_SIZE + 1500];
-
-extern volatile uint32_t kernel_ticks;
 
 /* Datagrams that wait for their next hop's hardware address, as Linux's
  * neighbour queue keeps them, so that the first datagram to a host not yet in
