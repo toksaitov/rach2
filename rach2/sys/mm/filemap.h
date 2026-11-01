@@ -33,6 +33,11 @@ struct vm_file *filemap_shared(const fd_entry_t *e, struct shmem *sh);
  * file, as `filemap_shared` made it; NULL for any other mapped file. */
 struct shmem *filemap_shmem(const struct vm_file *f);
 
+/** The open file description the mapped file `f` keeps, whose mount and
+ * inode number name the file; NULL for shared anonymous memory and for a
+ * region object that is not a mapped file. */
+const struct open_file *filemap_ofd(const struct vm_file *f);
+
 /**
  * The same for a shared mapping of a file on a disk: the mapping maps the
  * file's pages in memory, which every shared mapping of the file maps, read
