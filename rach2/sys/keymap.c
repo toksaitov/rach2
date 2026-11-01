@@ -1068,7 +1068,8 @@ const char *const keymap_default_func[KM_MAX_FUNC] = {
  *
  * Copyright (C) 2003-2006,2008 Jamey Sharp, Josh Triplett
  * Copyright (C) 2009 Red Hat, Inc.
- * Copyright (c) 1990-1992, 1999, 2000, 2004, 2009, 2010, 2015, 2017, Oracle and/or its affiliates.
+ * Copyright (c) 1990-1992, 1999, 2000, 2004, 2009, 2010, 2015, 2017, Oracle
+ * and/or its affiliates.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -1781,10 +1782,10 @@ static unsigned int keypad(const struct keymap_result *res, unsigned int modes, 
     if (mods & KM_MOD_SHIFT) {
         num = !num;
     }
-    if (!num && (v <= 9 || v == 15 || v == 16)) {
-        if (v >= 15) {
-            return sequence('~', 3, 0, mods, buf);
-        }
+    if (!num && (v == 15 || v == 16)) {
+        return sequence('~', 3, 0, mods, buf);
+    }
+    if (!num && v <= 9) {
         return sequence(navigation[v], parameter[v], (modes & KM_MODE_CURSOR) != 0, mods, buf);
     }
     if ((modes & KM_MODE_KEYPAD) && !(res->ledflags & KM_LED_NUM) && v < sizeof(application) - 1) {

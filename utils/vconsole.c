@@ -25,7 +25,8 @@ static char *trim(char *s)
     return s;
 }
 
-/** Accept map names, or a space-separated list, with no tool options or paths. */
+/** Accept map names, or a space-separated list, with no tool options or
+ * paths. */
 static int maps_valid(const char *s, int list)
 {
     int start = 1, count = 0;
@@ -61,7 +62,8 @@ static int number_valid(const char *s, unsigned min, unsigned max)
     return value >= min;
 }
 
-/** Parse one assignment; unknown keys are ignored for file-format compatibility. */
+/** Parse one assignment; unknown keys are ignored for file-format
+ * compatibility. */
 static int assignment(char *line, struct vconsole *conf)
 {
     char *key = trim(line), *value, *end, quote;

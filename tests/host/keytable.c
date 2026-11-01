@@ -455,7 +455,8 @@ static int resolve(struct keytable *t, const struct keytable_template *tp, unsig
     return r;
 }
 
-/** Read and parse lines until one gives templates; return 1, 0 at the end or -1. */
+/** Read and parse lines until one gives templates; return 1, 0 at the end
+ * or -1. */
 static int read_line(struct keytable *t)
 {
     char buf[1024];

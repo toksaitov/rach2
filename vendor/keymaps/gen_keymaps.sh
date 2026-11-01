@@ -60,6 +60,7 @@ sed -i "s|http://archive.ubuntu.com/ubuntu/|$SNAPURL|; s|http://security.ubuntu.
     /etc/apt/sources.list.d/ubuntu.sources
 rm -rf /var/lib/apt/lists/*
 apt-get update -qq -o Acquire::Check-Valid-Until=false >/dev/null
+# shellcheck disable=SC2086 # the list is one package a word
 apt-get install -y -qq --no-install-recommends $PACKAGES >/dev/null 2>&1
 dpkg-query -W -f '${Package} ${Version}\n' > /tmp/pkgs.after
 
@@ -306,10 +307,11 @@ done
     echo '# Regenerated only by regen_keymaps.sh; see vendor/keymaps/Readme.md.'
     echo "snapshot $SNAPURL"
     mkdir -p /tmp/debs
+    # shellcheck disable=SC2086 # the list is one package a word
     ( cd /tmp/debs && apt-get download -qq $PACKAGES >/dev/null 2>&1 )
     for p in $PACKAGES; do
-        deb=$(ls /tmp/debs/${p}_*.deb)
-        echo "package $p $(dpkg-query -W -f '${Version}' $p) deb-sha256 $(sha256sum "$deb" | cut -d' ' -f1)"
+        deb=$(ls /tmp/debs/"${p}"_*.deb)
+        echo "package $p $(dpkg-query -W -f '${Version}' "$p") deb-sha256 $(sha256sum "$deb" | cut -d' ' -f1)"
     done
     # Every package the install added or changed, dependencies included.
     comm -13 /tmp/pkgs.before /tmp/pkgs.after | \

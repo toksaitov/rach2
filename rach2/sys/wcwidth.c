@@ -8,7 +8,7 @@
  *
  * Copyright (C) Fredrik Fornwall 2016.
  * Copyright (c) 2014 Jeff Quast <contact@jeffquast.com>
- * Markus Kuhn -- 2007-05-26 (Unicode 5.0)
+ * Markus Kuhn, 2007-05-26 (Unicode 5.0)
  *
  * The MIT License (MIT)
  *
@@ -454,7 +454,7 @@ static const struct width_interval wide_eastasian[] = {
     {0x0ac00, 0x0d7a3}, /* Hangul Syllable Ga      ..Hangul Syllable Hih */
     {0x0f900, 0x0faff}, /* Cjk Compatibility Ideogr..(nil) */
     {0x0fe10, 0x0fe19}, /* Presentation Form For Ve..Presentation Form For Ve */
-    {0x0fe30, 0x0fe52}, /* Presentation Form For Ve..Small Full Stop */
+    {0x0fe30, 0x0fe52}, /* Presentation Form For Ve..U+FE52 */
     {0x0fe54, 0x0fe66}, /* Small Semicolon         ..Small Equals Sign */
     {0x0fe68, 0x0fe6b}, /* Small Reverse Solidus   ..Small Commercial At */
     {0x0ff01, 0x0ff60}, /* Fullwidth Exclamation Ma..Fullwidth Right White Pa */

@@ -21,9 +21,9 @@
  * In K_MEDIUMRAW a key event gives the terminal Linux's one or three bytes,
  * in K_RAW a set-1 byte is given as it came, and the console translates in
  * K_XLATE and K_UNICODE alone: the built-in US keymap's keys reach the
- * terminal, or the debug shell when no session and no reader has the
- * console, with the LEDs following the locks. The state saved for an owner of the screen
- * is put back whole: mode, meta, locks, LEDs, repeat and termios.
+ * terminal, or the debug shell when no session and no reader has the console,
+ * with the LEDs following the locks. The state saved for an owner of the
+ * screen is put back whole: mode, meta, locks, LEDs, repeat and termios.
  */
 #include "kd.c"
 #include "evdev.c"

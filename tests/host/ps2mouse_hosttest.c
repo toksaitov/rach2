@@ -4,13 +4,15 @@
  * (sys/arch/x86/ps2mouse.c).
  *
  * The file is included whole so that the static functions and the packet
- * state are reachable, with the 8042's waits of i8042.c. The model's output buffer is a queue of
- * bytes, each with its status: the status register reads as the first one's, and a read of the data
- * port is counted and takes it. A status with the output buffer full (bit 0) and bit 5 clear marks
- * a keyboard byte, which the handler must leave unread for the keyboard's IRQ 1 handler, with the
- * packet as it was. With bit 5 set the byte is the mouse's: the handler reads it, and three make a
- * packet. A command to the mouse takes as its reply only a byte marked as the mouse's, and drops a
- * keyboard byte that comes first.
+ * state are reachable, with the 8042's waits of i8042.c. The model's output
+ * buffer is a queue of bytes, each with its status: the status register reads
+ * as the first one's, and a read of the data port is counted and takes it. A
+ * status with the output buffer full (bit 0) and bit 5 clear marks a keyboard
+ * byte, which the handler must leave unread for the keyboard's IRQ 1 handler,
+ * with the packet as it was. With bit 5 set the byte is the mouse's: the
+ * handler reads it, and three make a packet. A command to the mouse takes as
+ * its reply only a byte marked as the mouse's, and drops a keyboard byte that
+ * comes first.
  *
  * Every port write is kept in order. A write to port 0x64 is a command to the
  * controller: 0xA8 and 0xA7 clear and set the configuration byte's

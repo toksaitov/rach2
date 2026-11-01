@@ -1,4 +1,5 @@
-/* Console settings parsing and command ordering, including partial-load recovery.
+/* Console settings parsing and command ordering, including partial-load
+ * recovery.
  * host-deps: utils/vconsole.c tests/host/compat/fixdir_host.c
  */
 #include <stdio.h>
@@ -17,7 +18,8 @@ static char commands[8][1024];
         }                                         \
     } while (0)
 
-/** Read an in-memory fixture through a temporary stream, closed on every path. */
+/** Read an in-memory fixture through a temporary stream, closed on every
+ * path. */
 static int parse(const void *text, size_t length, struct vconsole *conf)
 {
     FILE *stream = fopen(fix_path("input"), "w+b");
@@ -56,7 +58,8 @@ static int record(char **argv, void *data)
     return calls == fail_at ? -1 : 0;
 }
 
-/** Refuse malformed input as a whole, including settings before the bad line. */
+/** Refuse malformed input as a whole, including settings before the bad
+ * line. */
 static void refused(const char *text)
 {
     struct vconsole conf;
@@ -65,7 +68,8 @@ static void refused(const char *text)
           "rejected file left partial settings");
 }
 
-/** Check defaults, quoting, bounds, argument vectors and recovery after each tool. */
+/** Check defaults, quoting, bounds, argument vectors and recovery after each
+ * tool. */
 int main(void)
 {
     struct vconsole conf;

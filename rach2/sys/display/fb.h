@@ -98,9 +98,10 @@ void fb_present(void);
  * and the last close. */
 extern const struct file_ops fb_file_ops;
 
-/** Attach the open description `e` and make the calling process the
- * display's owner, at mode 13h, the console unblanked first; 0, -ENOMEM, or -EBUSY for a caller
- * outside the current owner's descendants. Same-owner opens share its ownership. */
+/** Attach the open description `e` and make the calling process the display's
+ * owner, at mode 13h, the console unblanked first; 0, -ENOMEM, or -EBUSY for
+ * a caller outside the current owner's descendants. Same-owner opens share
+ * its ownership. */
 int32_t fb_take(struct fd_entry *e);
 
 /**

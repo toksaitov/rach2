@@ -35,7 +35,7 @@ BUILD_TRIPLE=$(sh "$SRC/config/config.guess")
     cd "$SRC"
     # Neither a host pkg-config file nor a host compression library is used.
     CC="$WRAP" AR="${CROSS}ar" RANLIB="${CROSS}ranlib" STRIP="${CROSS}strip" \
-        PKG_CONFIG_LIBDIR="$WORK/pkgconfig" PKG_CONFIG_PATH= \
+        PKG_CONFIG_LIBDIR="$WORK/pkgconfig" PKG_CONFIG_PATH='' \
         ac_cv_lib_bz2_BZ2_bzDecompressInit=no \
         ./configure --build="$BUILD_TRIPLE" --host="$HOST_TRIPLE" \
         --prefix=/usr --datadir=/usr/share/kbd --disable-shared --enable-static \
@@ -48,6 +48,7 @@ BUILD_TRIPLE=$(sh "$SRC/config/config.guess")
 make -C "$SRC/src/libcommon" all
 make -C "$SRC/src/libkbdfile" all
 make -C "$SRC/src/libkeymap" all YACC=false LEX=false
+# shellcheck disable=SC2086 # the list is one program a word
 make -C "$SRC/src" $PROGRAMS YACC=false LEX=false
 for p in $PROGRAMS; do
     "${CROSS}strip" "$SRC/src/$p" -o "$STAGE/$p"

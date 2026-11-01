@@ -66,7 +66,8 @@ static int events_are(const struct keytable_case *c, const int *codes, int n)
     return 1;
 }
 
-/** Read the real table: no refusal, every key named, results that quote back. */
+/** Read the real table: no refusal, every key named, results that quote
+ * back. */
 static void check_table(void)
 {
     static unsigned char seen[256];

@@ -66,6 +66,11 @@ unusedStructMember:*tests/musl/callsmusl.c
 # members around them are the layout.
 unusedStructMember:*tests/evprobe.c
 
+# `struct kernel_termios` in the key latency probe is Linux's, which TCGETS
+# and TCSETS copy whole; the probe changes the input and local flags and two
+# control characters, and the members between them are the layout.
+unusedStructMember:*tests/keylatprobe.c
+
 # The kernel's copies of Linux's structures.
 
 # The i386 and x86-64 signal frames, statx, the rusage, the siginfo a wait

@@ -51,7 +51,8 @@ static fd_entry_t master, slave;
 static int failures, irq_enabled = 1, pending_signal, switches;
 static int recording, recorded_waits, read_stamps, serial_pos, serial_len;
 static int copy_calls, copy_failure, spans;
-/* The console's keyboard is in K_RAW, K_MEDIUMRAW or K_OFF (`kd_translates`). */
+/* The console's keyboard is in K_RAW, K_MEDIUMRAW or K_OFF
+ * (`kd_translates`). */
 static int console_raw;
 static void (*copy_action)(void);
 static const char *serial_bytes;

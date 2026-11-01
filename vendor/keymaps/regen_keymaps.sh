@@ -53,7 +53,7 @@ round() {
         sed -n '/^#/p' "$out/manifest.head"
         echo "container $UBUNTU_IMAGE"
         sed '/^#/d' "$out/manifest.head"
-        for f in $(cd "$out" && ls *.map) common.inc; do
+        for f in $(cd "$out" && ls -- *.map) common.inc; do
             printf 'map %s %s %s\n' "$f" "$(wc -c < "$out/$f" | tr -d ' ')" \
                 "$("$SHA" "$out/$f" | awk '{print $1}')"
         done
@@ -69,7 +69,7 @@ round "$R1"
 echo "regen_keymaps: round 2"
 round "$R2"
 
-for f in $(cd "$R1" && ls *.map) common.inc manifest.txt; do
+for f in $(cd "$R1" && ls -- *.map) common.inc manifest.txt; do
     cmp -s "$R1/$f" "$R2/$f" || {
         echo "regen_keymaps: $f differs between the two rounds; not reproducible" >&2
         exit 1
@@ -81,4 +81,5 @@ rm -f "$SCRIPT_DIR"/xkb/*.map
 cp "$R1"/*.map "$R1/common.inc" "$SCRIPT_DIR/xkb/"
 cp "$R1/manifest.txt" "$SCRIPT_DIR/manifest.txt"
 rm -rf "$REPO/build/keymaps-regen"
-echo "regen_keymaps: result: staged $(ls "$SCRIPT_DIR"/xkb/*.map | wc -l | tr -d ' ') maps"
+set -- "$SCRIPT_DIR"/xkb/*.map
+echo "regen_keymaps: result: staged $# maps"

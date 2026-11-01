@@ -117,9 +117,9 @@ struct n_tty {
  * Reset `t` to the default canonical termios, empty buffers and zeroed
  * counters. The defaults are a standard tty's: ICRNL input, OPOST and ONLCR
  * output, IUTF8, since Rach2's text is UTF-8, as Linux's console has it in
- * its UTF-8 mode, 38400 baud with eight-bit characters, ISIG and ICANON with ECHO,
- * ECHOE, ECHOK and ECHOCTL, the conventional control characters (^C, ^\, DEL,
- * ^U, ^D, ^Z, ^W) and VMIN 1.
+ * its UTF-8 mode, 38400 baud with eight-bit characters, ISIG and ICANON with
+ * ECHO, ECHOE, ECHOK and ECHOCTL, the conventional control characters (^C,
+ * ^\, DEL, ^U, ^D, ^Z, ^W) and VMIN 1.
  */
 void n_tty_init(struct n_tty *t);
 
