@@ -529,11 +529,18 @@ static void sock_fd_flags(fd_entry_t *entry, uint32_t flags)
     }
 }
 
+/** Whether `protocol` is 0 or the IP protocol of stream or datagram `type`,
+ * TCP's or UDP's, the two an IPv4 or IPv6 socket of those types may name. */
+static int ip_protocol_ok(int type, int protocol)
+{
+    return protocol == 0 || protocol == (type == SOCK_STREAM ? 6 : 17);
+}
+
 /**
  * Check the kind of socket socket(2) is asked to make, `domain`, `*type` and
- * `protocol`: AF_INET with TCP, UDP or SOCK_RAW (ICMP, or the
- * ioctl-only descriptor of IPPROTO_RAW), AF_INET6 with TCP, UDP, raw ICMPv6 or raw IPv6,
- * AF_PACKET with SOCK_DGRAM, and
+ * `protocol`: AF_INET with TCP, UDP or SOCK_RAW (ICMP, or the ioctl-only
+ * descriptor of IPPROTO_RAW), AF_INET6 with TCP, UDP, raw ICMPv6 or raw
+ * IPv6, AF_PACKET with SOCK_DGRAM, and
  * AF_NETLINK with SOCK_RAW or SOCK_DGRAM, which are one thing, since the
  * kernel's answers are datagrams: `*type` is set to SOCK_DGRAM for it. The
  * raw and packet forms need a privileged caller (-EPERM); a netlink protocol
@@ -567,11 +574,8 @@ static int32_t socket_kind(int domain, int *type, int protocol)
                 return -EPROTONOSUPPORT;
             if (!current_proc || !proc_privileged(current_proc))
                 return -EPERM;
-        } else if (*type == SOCK_STREAM) {
-            if (protocol != 0 && protocol != 6)
-                return -EPROTONOSUPPORT;
-        } else if (*type == SOCK_DGRAM) {
-            if (protocol != 0 && protocol != 17)
+        } else if (*type == SOCK_STREAM || *type == SOCK_DGRAM) {
+            if (!ip_protocol_ok(*type, protocol))
                 return -EPROTONOSUPPORT;
         } else
             return -ESOCKTNOSUPPORT;
@@ -593,7 +597,7 @@ static int32_t socket_kind(int domain, int *type, int protocol)
         }
     } else if (*type != SOCK_DGRAM && *type != SOCK_STREAM) {
         return -EINVAL;
-    } else if (domain == AF_INET && protocol != 0 && protocol != (*type == SOCK_STREAM ? 6 : 17)) {
+    } else if (domain == AF_INET && !ip_protocol_ok(*type, protocol)) {
         return -EPROTONOSUPPORT;
     }
     if (domain == AF_PACKET) {
