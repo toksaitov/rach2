@@ -235,10 +235,15 @@ The [agents layer](../vendor/gnu/agents/Readme.md) installs vendors' published b
 | [agy](../vendor/gnu/agents/packages/agy.sh) | 1.4.0 | Google Antigravity Terms of Service | agy, Google's Antigravity CLI, a coding agent for the terminal. |
 | [claude](../vendor/gnu/agents/packages/claude.sh) | 2.1.296 | Proprietary | claude, Anthropic's Claude Code, a coding agent for the terminal. |
 | [codex](../vendor/gnu/agents/packages/codex.sh) | 0.162.1 | Apache-2.0 | codex, OpenAI's Codex, a coding agent for the terminal. |
+| [fd](../vendor/gnu/agents/packages/fd.sh) | 10.5.0 | MIT OR Apache-2.0 | fd, a search for file names in a tree. |
 | [gh](../vendor/gnu/agents/packages/gh.sh) | 2.102.0 | MIT | gh, GitHub's command-line program for repositories, issues, pull requests, releases and the API. |
+| [git-lfs](../vendor/gnu/agents/packages/git-lfs.sh) | 3.8.1 | MIT | git-lfs, Git's large file storage extension. |
 | [muse](../vendor/gnu/agents/packages/muse.sh) | 1.4.10-R6427.1 | Meta Model API Terms of Service | muse, Meta's Muse Code, a coding agent for the terminal. |
+| [ninja](../vendor/gnu/agents/packages/ninja.sh) | 1.13.2 | Apache-2.0 | ninja, a build tool for generated dependency graphs. |
+| [node](../vendor/gnu/agents/packages/node.sh) | 26.13.0 | MIT AND Artistic-2.0 AND bundled licenses | node, Node.js, the JavaScript runtime with npm and npx. |
 | [opencode](../vendor/gnu/agents/packages/opencode.sh) | 2.2.5 | MIT | opencode, OpenCode, a coding agent for the terminal. |
 | [ripgrep](../vendor/gnu/agents/packages/ripgrep.sh) | 15.2.0 | Unlicense OR MIT | rg, ripgrep, which searches a tree of files for lines that match a regular expression and skips what .gitignore names. |
+| [shellcheck](../vendor/gnu/agents/packages/shellcheck.sh) | 0.11.0 | GPL-3.0-or-later | shellcheck, a static analyzer for shell scripts. |
 
 ## The vendored projects
 

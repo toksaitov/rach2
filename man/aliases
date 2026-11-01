@@ -588,3 +588,5 @@ pwritev 2 write
 rach2_ping 2 ping
 pidfd_send_signal 2 pidfd_open
 pidfd_getfd 2 pidfd_open
+npm 1 node
+npx 1 node

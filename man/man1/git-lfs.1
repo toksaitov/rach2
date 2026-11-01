@@ -1,0 +1,65 @@
+.Dd November 2, 2026
+.Dt GIT-LFS 1
+.Os
+.Sh NAME
+.Nm git-lfs
+.Nd store large Git files outside the repository's objects
+.Sh SYNOPSIS
+.Nm git lfs
+.Ar command
+.Op Ar argument ...
+.Sh DESCRIPTION
+.Nm
+stores small pointer files in Git and transfers the corresponding contents
+to a Git LFS server.
+.Ql git lfs install
+sets up the user's Git filters and the current repository's hook.
+.Ql git lfs track Ar pattern
+records a pattern in
+.Pa .gitattributes ;
+commit that file along with the files it names.
+.Ql git lfs pull
+fetches the current revision's contents and checks them out.
+.Ql git lfs help
+lists commands, and
+.Ql git lfs help Ar command
+describes one.
+.Pp
+The x86-64 GNU root installs the project's static Go build, version 3.8.1,
+under
+.Pa /opt/git-lfs
+when built with
+.Ql GNU_AGENTS=git-lfs
+or
+.Ql GNU_AGENTS=all .
+.Pa /usr/bin/git-lfs
+and
+.Pa /bin/git-lfs
+link to it, so Git finds the
+.Ql lfs
+subcommand.
+Installation of the image does not change any user's Git settings.
+The MIT license is in
+.Pa /opt/git-lfs/LICENSE.md .
+Upstream manual pages remain under
+.Pa /opt/git-lfs/man .
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa .gitattributes
+tracked file patterns and filters
+.It Pa .lfsconfig
+repository LFS settings
+.It Pa .git/lfs
+local LFS objects and transfer state
+.El
+.Sh EXAMPLES
+.Bd -literal -offset indent
+$ git lfs install
+$ git lfs track '*.bin'
+$ git add .gitattributes image.bin
+$ git commit -m 'Add image'
+.Ed
+.Sh SEE ALSO
+.Xr git 1
+.Pp
+.Lk https://github.com/git-lfs/git-lfs/tree/v3.8.1/docs "The Git LFS manual"

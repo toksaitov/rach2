@@ -1,0 +1,87 @@
+.Dd November 2, 2026
+.Dt NODE 1
+.Os
+.Sh NAME
+.Nm node ,
+.Nm npm ,
+.Nm npx
+.Nd run JavaScript and manage its packages
+.Sh SYNOPSIS
+.Nm node
+.Op Ar options
+.Op Ar script Op Ar argument ...
+.Nm npm
+.Ar command
+.Op Ar argument ...
+.Nm npx
+.Op Ar options
+.Ar command
+.Op Ar argument ...
+.Sh DESCRIPTION
+.Nm node
+runs JavaScript with the V8 engine.
+With no script it starts an interactive interpreter;
+.Fl e Ar source
+runs source given on the command line.
+.Nm npm
+installs and manages packages from the npm registry or local files.
+.Nm npx
+runs a package's command, downloading it when it is absent.
+.Ql node --help ,
+.Ql npm help
+and
+.Ql npx --help
+list their options and commands.
+.Pp
+The x86-64 GNU root includes the official Node.js 26.13.0 LTS build with
+npm and npx 11.20.0 when built with
+.Ql GNU_AGENTS=node
+or
+.Ql GNU_AGENTS=all .
+The archive is installed under
+.Pa /opt/node ;
+.Pa /usr/bin
+and
+.Pa /bin
+have links to its three commands.
+Node uses the GNU root's glibc and GCC's C++ and atomic runtime libraries.
+Its MIT license and bundled notices are in
+.Pa /opt/node/LICENSE ;
+npm's Artistic License 2.0 and dependency notices are in
+.Pa /opt/node/lib/node_modules/npm/LICENSE .
+.Pp
+An install without
+.Fl g
+writes packages under the current project's
+.Pa node_modules .
+A global install needs write access to npm's prefix;
+.Ql npm config set prefix ~/.local
+chooses a prefix in the user's home.
+Add that prefix's
+.Pa bin
+to
+.Ev PATH
+to run its commands.
+Package installs and npx may run scripts supplied by those packages.
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa ~/.npmrc
+npm's user settings
+.It Pa ~/.npm
+npm's default cache and logs
+.It Pa package.json
+project metadata and dependencies
+.It Pa package-lock.json
+versions resolved by npm
+.El
+.Sh EXAMPLES
+.Bd -literal -offset indent
+$ node -e 'console.log("hello")'
+$ npm install --prefix ./project ./package.tgz
+$ npx --no -- node --version
+.Ed
+.Sh SEE ALSO
+.Xr sh 1
+.Pp
+.Lk https://nodejs.org/docs/latest-v26.x/api/ "The Node.js API"
+.Lk https://docs.npmjs.com/cli/v11/ "The npm manual"
