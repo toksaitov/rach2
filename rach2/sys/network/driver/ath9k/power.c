@@ -58,31 +58,34 @@ void ath9k_power_init(struct ath9k *ah)
     p->rfkill_polarity = (silent >> 1) & 1;
     p->rfkill_gpio = (silent >> 2) & 0x3f;
     p->rfkill_reported = p->hw_blocked = p->suspended = p->resume = 0;
-    if (p->rfkill_enabled && p->rfkill_gpio >= ah->hw.chip->num_gpio) {
-        /* A malformed GPIO must never cause a shift outside the word. */
-        p->hw_blocked = 1;
-    } else if (p->rfkill_enabled) {
-        REG_CLR_BIT(ah, AR_GPIO_OE_OUT, 3u << (p->rfkill_gpio * 2));
-    }
     ath9k_rfkill_poll(ah);
 }
 
 /** Sample the hard switch and queue a change through the station layer.
  * IRQ-safe under the kernel lock; the host GPIO window remains readable
- * while the radio is stopped. An unreadable card is treated as blocked. */
+ * while the radio is stopped. Restore the input direction after a reset.
+ * An unreadable card is treated as blocked. */
 void ath9k_rfkill_poll(struct ath9k *ah)
 {
     struct ath9k_power_state *p = &ah->power;
-    uint32_t value;
+    uint32_t value, drive, mask;
     unsigned blocked = 0;
 
     if (p->suspended)
         return;
     if (p->rfkill_enabled) {
-        if (p->rfkill_gpio >= ah->hw.chip->num_gpio)
+        if (p->rfkill_gpio >= ah->hw.chip->num_gpio || p->rfkill_gpio >= 16)
             blocked = 1;
         else {
             value = REG_READ(ah, AR_GPIO_IN);
+            if (value != 0xffffffffu) {
+                mask = 3u << (p->rfkill_gpio * 2);
+                drive = REG_READ(ah, AR_GPIO_OE_OUT);
+                if (drive & mask) {
+                    REG_WRITE(ah, AR_GPIO_OE_OUT, drive & ~mask);
+                    value = REG_READ(ah, AR_GPIO_IN);
+                }
+            }
             blocked = value == 0xffffffffu || ((value >> p->rfkill_gpio) & 1) == p->rfkill_polarity;
         }
     }

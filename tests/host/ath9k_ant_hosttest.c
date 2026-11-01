@@ -356,8 +356,10 @@ static void rf_silence(void)
             ah.radio.wlan = &station;
             ath9k_rfkill_poll(&ah);
             CHECK(reports == 1 && last_block);
+            ath9k_model_poke(&model, AR_GPIO_OE_OUT, 0xffffffff);
             ath9k_rfkill_poll(&ah);
             CHECK(reports == 1);
+            CHECK(ath9k_model_peek(&model, AR_GPIO_OE_OUT) == (0xffffffffu & ~(3u << (gpio * 2))));
             ath9k_model_poke(&model, AR_GPIO_IN, (1u - polarity) << gpio);
             ath9k_rfkill_poll(&ah);
             CHECK(reports == 2 && !last_block);
