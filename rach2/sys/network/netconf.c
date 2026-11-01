@@ -1,7 +1,7 @@
 /*
  * netconf.c: each interface's IPv4 configuration, as netconf.h describes it,
  * parsed from the boot line and changed at run time through the interface
- * ioctls and netlink.
+ * ioctls and netlink, and its IPv6 addresses.
  *
  * The parser is strict, so that the address configured is the one the
  * operator wrote: `010.0.0.1` is refused rather than read as 10 or as 8, a
@@ -15,10 +15,13 @@
 #include "driver/netdev.h"
 #include "arp/arp.h"
 #include "tcp/tcp.h"
+#include "ip6/ip6.h"
 #include "../cmdline.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+
+extern volatile uint32_t kernel_ticks;
 
 /* The first interface's configuration, the SLIRP network until the boot line
  * or a program gives another. */
@@ -750,4 +753,127 @@ int netconf_set_gateway(struct netdev *nd, uint32_t gw)
     }
     net_unlock(flags);
     return rc;
+}
+
+/**
+ * A card's address joins its solicited-node group, which neighbour
+ * discovery asks for it on; `lo` has no link to be asked on. A preferred
+ * lifetime of 0 makes the address deprecated from the start.
+ */
+int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int flags,
+                         uint32_t valid, uint32_t preferred)
+{
+    struct netdev_addr6 *a;
+    uint8_t group[IP6_ADDR_LEN];
+    uint32_t lock;
+    char text[40];
+    int rc = 0;
+
+    if (!nd) {
+        return -ENODEV;
+    }
+    if (prefix < 0 || prefix > 128 || preferred > valid || valid == 0 || ip6_is_unspecified(addr) ||
+        ip6_is_multicast(addr) || ip6_is_v4mapped(addr) ||
+        (ip6_is_loopback(addr) && !nd->loopback)) {
+        return -EINVAL;
+    }
+    lock = net_lock();
+    if (netdev_addr6_of(nd, addr)) {
+        rc = -EEXIST;
+    } else if (nd->naddr6 == NETDEV_ADDRS6) {
+        rc = -ENOSPC;
+    } else if (!nd->loopback) {
+        ip6_solicited_node(addr, group);
+        rc = netdev_join6(nd, group);
+    }
+    if (rc != 0) {
+        net_unlock(lock);
+        return rc;
+    }
+    a = &nd->addr6[nd->naddr6++];
+    k_memcpy(a->addr, addr, IP6_ADDR_LEN);
+    a->prefix = (uint8_t)prefix;
+    a->scope = (uint8_t)ip6_scope(addr);
+    a->flags = (uint8_t)(flags & (NETDEV_A6_NODAD | NETDEV_A6_TENTATIVE | NETDEV_A6_PERMANENT));
+    if (preferred == 0) {
+        a->flags |= NETDEV_A6_DEPRECATED;
+    }
+    a->valid = valid;
+    a->preferred = preferred;
+    a->since = kernel_ticks;
+    net_unlock(lock);
+    ip6_format(addr, text);
+    klog(KLOG_INFO, "net", "%s: IPv6 %s/%d added", nd->name, text, prefix);
+    return 0;
+}
+
+int netconf_del_address6(struct netdev *nd, const uint8_t *addr)
+{
+    struct netdev_addr6 *a;
+    uint8_t group[IP6_ADDR_LEN];
+    uint32_t lock;
+    char text[40];
+    int i;
+
+    if (!nd) {
+        return -ENODEV;
+    }
+    lock = net_lock();
+    a = netdev_addr6_of(nd, addr);
+    if (!a) {
+        net_unlock(lock);
+        return -EADDRNOTAVAIL;
+    }
+    if (!nd->loopback) {
+        ip6_solicited_node(addr, group);
+        netdev_leave6(nd, group);
+    }
+    ip6_format(addr, text);
+    for (i = (int)(a - nd->addr6); i + 1 < nd->naddr6; i++) {
+        nd->addr6[i] = nd->addr6[i + 1];
+    }
+    nd->naddr6--;
+    net_unlock(lock);
+    klog(KLOG_INFO, "net", "%s: IPv6 %s removed", nd->name, text);
+    return 0;
+}
+
+/**
+ * The interface identifier is the modified EUI-64 of the station address
+ * (RFC 4291, appendix A): ff:fe in its middle and the universal bit
+ * inverted. The address is kept across a down and up, as an address given
+ * by hand is, so only an interface without one gets it.
+ */
+static void link_local_up(struct netdev *nd)
+{
+    uint8_t ll[IP6_ADDR_LEN];
+    uint32_t lock;
+
+    k_memset(ll, 0, sizeof(ll));
+    ll[0] = 0xfe;
+    ll[1] = 0x80;
+    ll[8] = (uint8_t)(nd->mac[0] ^ 0x02);
+    ll[9] = nd->mac[1];
+    ll[10] = nd->mac[2];
+    ll[11] = 0xff;
+    ll[12] = 0xfe;
+    ll[13] = nd->mac[3];
+    ll[14] = nd->mac[4];
+    ll[15] = nd->mac[5];
+    lock = net_lock();
+    if (!netdev_member6(nd, ip6_all_nodes)) {
+        netdev_join6(nd, ip6_all_nodes);
+    }
+    net_unlock(lock);
+    if (!netdev_addr6_of(nd, ll)) {
+        netconf_add_address6(nd, ll, 64, 0, NETDEV_LIFETIME_FOREVER, NETDEV_LIFETIME_FOREVER);
+    }
+}
+
+void netconf_set_up(struct netdev *nd, int up)
+{
+    nd->up = up ? 1 : 0;
+    if (nd->up && !nd->loopback) {
+        link_local_up(nd);
+    }
 }

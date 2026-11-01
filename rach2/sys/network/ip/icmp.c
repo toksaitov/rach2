@@ -45,6 +45,8 @@
 #include "../driver/netdev.h"
 #include "../udp/udp.h"
 #include "../../timer.h"
+#include "../ip6/ip6.h"
+#include "../ip6/icmp6.h"
 
 /* The echo reply being sent, sized for a full datagram, and the request. */
 static uint8_t icmp_reply_buf[1500];
@@ -71,7 +73,8 @@ static uint32_t icmp_error_last;
 
 /* The one ping in flight, which an echo reply is matched against: whether
  * it is in flight and answered, the answer's length and hop limit, the
- * sequence and peer it waits for, and the tick its wait ends at, never 0;
+ * sequence and peer it waits for, an IPv4 address or, when `ping_v6` is
+ * set, the IPv6 one in `ping_peer6`, and the tick its wait ends at, never 0;
  * `ping_seq` is the sequence of the next request. */
 static volatile int ping_active = 0;
 static volatile int ping_replied = 0;
@@ -79,6 +82,8 @@ static volatile uint16_t ping_reply_len; /* the ICMP bytes of the reply */
 static volatile uint8_t ping_reply_ttl;  /* the hop limit it arrived with */
 static volatile uint16_t ping_seq_wait = 0;
 static volatile uint32_t ping_peer_ip = 0;
+static volatile int ping_v6 = 0;
+static uint8_t ping_peer6[16];
 static volatile uint32_t ping_deadline = 0;
 static uint16_t ping_seq = 0;
 
@@ -222,13 +227,31 @@ void icmp_rx(uint32_t src_ip, uint32_t dst_ip, uint8_t ttl, const uint8_t *data,
         uint16_t seq = read16be(data + 6);
 
         net_mib.icmp_in_echo_reps++;
-        if (ping_active && src_ip == ping_peer_ip && id == ICMP_PING_ID && seq == ping_seq_wait) {
+        if (ping_active && !ping_v6 && src_ip == ping_peer_ip && id == ICMP_PING_ID &&
+            seq == ping_seq_wait) {
             ping_reply_len = len;
             ping_reply_ttl = ttl;
             ping_replied = 1;
             if (ping_wq_ready) {
                 wq_wake_all(&ping_wq);
             }
+        }
+    }
+}
+
+/**
+ * A reply to a request sent to a group may come from any member, so the
+ * peer is matched only when the request went to one host.
+ */
+void icmp_ping_reply6(const uint8_t *src, uint16_t id, uint16_t seq, uint16_t len, uint8_t hlim)
+{
+    if (ping_active && ping_v6 && id == ICMP_PING_ID && seq == ping_seq_wait &&
+        (ip6_is_multicast(ping_peer6) || ip6_equal(src, ping_peer6))) {
+        ping_reply_len = len;
+        ping_reply_ttl = hlim;
+        ping_replied = 1;
+        if (ping_wq_ready) {
+            wq_wake_all(&ping_wq);
         }
     }
 }
@@ -269,6 +292,10 @@ static void ping_release(void)
 }
 
 /**
+ * The echo of `icmp_ping_data` and `icmp_ping6_data`: to the IPv4 address
+ * `dst_ip`, or with `dst6` not NULL to that IPv6 address in the scope of
+ * `ifindex`.
+ *
  * The slot is claimed for the whole call and released as its last act on
  * every path, so a killed pinger cannot strand it: the signal makes the
  * blocked process runnable, the wait breaks with -EINTR, and the release
@@ -279,14 +306,15 @@ static void ping_release(void)
  * reply came is read from `ping_replied`, since a wait that returns does not
  * say whether the reply or the deadline ended it.
  */
-int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got, uint8_t *got_ttl)
+static int ping_run(uint32_t dst_ip, const uint8_t *dst6, int ifindex, uint32_t size, uint8_t ttl,
+                    uint16_t *got, uint8_t *got_ttl)
 {
     uint32_t start, flags, i;
     uint16_t seq;
     int attempt;
     int rc = -ETIMEDOUT;
 
-    if (size > ICMP_PING_DATA_MAX) {
+    if (size > (dst6 ? ICMP6_PING_DATA_MAX : ICMP_PING_DATA_MAX)) {
         return -EMSGSIZE;
     }
 
@@ -303,6 +331,10 @@ int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got, u
     }
     ping_active = 1;
     ping_replied = 0;
+    ping_v6 = dst6 != 0;
+    if (dst6) {
+        k_memcpy(ping_peer6, dst6, sizeof(ping_peer6));
+    }
     net_unlock(flags);
 
     for (attempt = 0; attempt < ICMP_PING_ATTEMPTS; attempt++) {
@@ -310,7 +342,7 @@ int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got, u
 
         flags = net_lock();
 
-        icmp_echo_buf[0] = ICMP_ECHO_REQUEST;
+        icmp_echo_buf[0] = dst6 ? ICMP6_ECHO_REQUEST : ICMP_ECHO_REQUEST;
         icmp_echo_buf[1] = 0;
         write16be(icmp_echo_buf + 2, 0x0000);
         write16be(icmp_echo_buf + 4, ICMP_PING_ID);
@@ -318,7 +350,9 @@ int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got, u
         for (i = 0; i < size; i++) {
             icmp_echo_buf[8 + i] = (uint8_t)i;
         }
-        write16be(icmp_echo_buf + 2, ip_checksum(icmp_echo_buf, (uint16_t)(8 + size)));
+        if (!dst6) {
+            write16be(icmp_echo_buf + 2, ip_checksum(icmp_echo_buf, (uint16_t)(8 + size)));
+        }
 
         ping_peer_ip = dst_ip;
         ping_seq_wait = seq;
@@ -329,7 +363,15 @@ int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got, u
             ping_deadline = 1;
         }
 
-        if (ip_tx(dst_ip, IP_PROTO_ICMP, icmp_echo_buf, (uint16_t)(8 + size), ttl) == 0) {
+        if (dst6) {
+            int sent = icmp6_send(0, dst6, ifindex, icmp_echo_buf, (uint16_t)(8 + size), ttl);
+
+            if (sent < 0 && attempt == 0) {
+                net_unlock(flags);
+                ping_release();
+                return sent;
+            }
+        } else if (ip_tx(dst_ip, IP_PROTO_ICMP, icmp_echo_buf, (uint16_t)(8 + size), ttl) == 0) {
             icmp_count_out(ICMP_ECHO_REQUEST);
         }
 
@@ -368,6 +410,20 @@ int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got, u
     klog(KLOG_INFO, "icmp", "ping: no reply before the timeout");
 
     return rc;
+}
+
+int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got, uint8_t *got_ttl)
+{
+    return ping_run(dst_ip, 0, 0, size, ttl, got, got_ttl);
+}
+
+/** An IPv6 request's first send that fails, for want of a route, a source
+ * or a neighbour, fails the ping at once: no later attempt would fare
+ * better, and a wait would only hide the reason. */
+int icmp_ping6_data(const uint8_t *dst, int ifindex, uint32_t size, uint8_t hlim, uint16_t *got,
+                    uint8_t *got_hlim)
+{
+    return ping_run(0, dst, ifindex, size, hlim, got, got_hlim);
 }
 
 int icmp_ping(uint32_t dst_ip)

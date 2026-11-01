@@ -4,9 +4,9 @@
 #include "../../lib/kint.h"
 
 /*
- * ethernet: the link layer between the drivers and ARP and IP. A received
- * frame is offered to the packet sockets and given to ARP or IP by its
- * EtherType; a frame sent gets its 14-byte header and goes to its
+ * ethernet: the link layer between the drivers and ARP, IPv4 and IPv6. A
+ * received frame is offered to the packet sockets and given to ARP, IPv4 or
+ * IPv6 by its EtherType; a frame sent gets its 14-byte header and goes to its
  * interface's driver.
  *
  * Every frame that arrives or leaves passes `ethernet_rx` or
@@ -23,8 +23,9 @@
 #define ETH_HDR_SIZE 14
 
 /* EtherType values. */
-#define ETH_TYPE_IP  0x0800
-#define ETH_TYPE_ARP 0x0806
+#define ETH_TYPE_IP   0x0800
+#define ETH_TYPE_ARP  0x0806
+#define ETH_TYPE_IPV6 0x86DD
 
 /* The interface a frame arrived on, or whose counters are asked about. */
 struct netdev;
@@ -35,9 +36,9 @@ struct netdev;
  *
  * A frame shorter than the header is dropped, and so is every frame while
  * an administrator has `nd` down; each counts as a receive drop. The rest
- * count as received. An ARP or IPv4 frame is offered whole to the packet
- * sockets (`packet_rx`) and its payload given to `arp_rx` or `ip_rx`; a
- * frame of another EtherType is counted and goes nowhere. Called with
+ * count as received. An ARP, IPv4 or IPv6 frame is offered whole to the
+ * packet sockets (`packet_rx`) and its payload given to `arp_rx`, `ip_rx`
+ * or `ip6_rx`; a frame of another EtherType is counted and goes nowhere. Called with
  * interrupts off, from a driver's interrupt handler or, for a card the tick
  * pumps, from the tick.
  */
@@ -58,7 +59,8 @@ void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len);
  * sent; `ETHERNET_TX_TOOLONG` for a payload past 1500 bytes, which is
  * refused and not cut short; or `NETDEV_TX_DROPPED` when the frame was not
  * sent, which a sender may keep and send again later. That is the answer
- * for an IP or ARP frame on an interface an administrator took down, any
+ * for an IPv4, IPv6 or ARP frame on an interface an administrator took
+ * down, any
  * frame while the card reports its link down (`netdev_running`), and a
  * frame the driver refused. Each refusal counts as a transmit drop on
  * `out`; a NULL `out` is `NETDEV_TX_DROPPED` and counts nowhere.

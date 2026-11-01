@@ -17,6 +17,7 @@
 #include "../../cmdline.h"
 #include "../../klog.h"
 #include "../../lib/kstring.h"
+#include "../../lib/kerrno.h"
 
 /* The interfaces: the `niface` cards the probe brought up, in the order it
  * found them, and `lo` after them. */
@@ -79,10 +80,119 @@ static void loopback_up(void)
     nd->name[1] = 'o';
     nd->ip = 0x7F000001u;
     nd->mask = 0xFF000000u;
+    nd->addr6[0].addr[15] = 1; /* ::1 */
+    nd->addr6[0].prefix = 128;
+    nd->addr6[0].scope = NETDEV_SCOPE_HOST;
+    nd->addr6[0].flags = NETDEV_A6_PERMANENT;
+    nd->addr6[0].valid = NETDEV_LIFETIME_FOREVER;
+    nd->addr6[0].preferred = NETDEV_LIFETIME_FOREVER;
+    nd->naddr6 = 1;
     nd->up = 1;
     nd->pci_key = -1;
     nd->loopback = 1;
     lo_ready = 1;
+}
+
+/** Whether the IPv6 addresses at `a` and `b` are the same. */
+static int same6(const uint8_t *a, const uint8_t *b)
+{
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        if (a[i] != b[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+struct netdev_addr6 *netdev_addr6_of(struct netdev *nd, const uint8_t *addr)
+{
+    int i;
+
+    for (i = 0; nd && i < nd->naddr6; i++) {
+        if (same6(nd->addr6[i].addr, addr)) {
+            return &nd->addr6[i];
+        }
+    }
+    return 0;
+}
+
+int netdev_holds6(struct netdev *nd, const uint8_t *addr)
+{
+    struct netdev_addr6 *a = netdev_addr6_of(nd, addr);
+
+    return a && !(a->flags & (NETDEV_A6_TENTATIVE | NETDEV_A6_DADFAILED));
+}
+
+struct netdev *netdev_owner6(const uint8_t *addr)
+{
+    int i;
+
+    for (i = 0; i < niface + lo_ready; i++) {
+        if (netdev_holds6(&ifaces[i], addr)) {
+            return &ifaces[i];
+        }
+    }
+    return 0;
+}
+
+/** The slot of `group` among `nd`'s groups, or -1. */
+static int group_slot(const struct netdev *nd, const uint8_t *group)
+{
+    int i;
+
+    for (i = 0; i < nd->ngroup6; i++) {
+        if (same6(nd->group6[i], group)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int netdev_join6(struct netdev *nd, const uint8_t *group)
+{
+    int i;
+
+    if (!nd || group[0] != 0xff) {
+        return -EINVAL;
+    }
+    i = group_slot(nd, group);
+    if (i >= 0) {
+        if (nd->group6_refs[i] == 0xff) {
+            return -ENOSPC;
+        }
+        nd->group6_refs[i]++;
+        return 0;
+    }
+    if (nd->ngroup6 == NETDEV_GROUPS6) {
+        return -ENOSPC;
+    }
+    k_memcpy(nd->group6[nd->ngroup6], group, 16);
+    nd->group6_refs[nd->ngroup6] = 1;
+    nd->ngroup6++;
+    return 0;
+}
+
+/** The last slot moves into the one freed, since the order of the groups
+ * means nothing. */
+void netdev_leave6(struct netdev *nd, const uint8_t *group)
+{
+    int i = nd ? group_slot(nd, group) : -1;
+
+    if (i < 0 || --nd->group6_refs[i] != 0) {
+        return;
+    }
+    nd->ngroup6--;
+    if (i != nd->ngroup6) {
+        k_memcpy(nd->group6[i], nd->group6[nd->ngroup6], 16);
+        nd->group6_refs[i] = nd->group6_refs[nd->ngroup6];
+    }
+}
+
+int netdev_member6(const struct netdev *nd, const uint8_t *group)
+{
+    return nd && group_slot(nd, group) >= 0;
 }
 
 struct netdev *netdev_first(void)

@@ -7,16 +7,17 @@ struct socket;
 
 /*
  * raw: AF_INET SOCK_RAW sockets of IPPROTO_ICMP, what `ping` and
- * `traceroute` are built on.
+ * `traceroute` are built on, and AF_INET6 ones of IPPROTO_ICMPV6, which
+ * IPv6's `ping` is.
  *
- * A raw socket receives whole IPv4 datagrams of one protocol, the header
- * included, because that is what the programs parse: busybox `ping` reads the
- * IHL out of the first byte to find its own ICMP message, and `traceroute`
- * reads the source address out of the header of a time-exceeded message to
- * name the hop. `ip_rx` offers each datagram it has accepted to the matching
- * raw sockets on the way past, before its own handler for that protocol runs,
- * and that handler still runs: a program watching ICMP does not stop the
- * machine answering an echo request.
+ * An AF_INET raw socket receives whole IPv4 datagrams of one protocol, the
+ * header included, because that is what the programs parse: busybox `ping`
+ * reads the IHL out of the first byte to find its own ICMP message, and
+ * `traceroute` reads the source address out of the header of a
+ * time-exceeded message to name the hop. `ip_rx` offers each datagram it has
+ * accepted to the matching raw sockets on the way past, before its own
+ * handler for that protocol runs, and that handler still runs: a program
+ * watching ICMP does not stop the machine answering an echo request.
  *
  * Only datagrams this machine is addressed by are offered, which is what a raw
  * socket sees on Linux too without a promiscuous device: `ip_rx` has already
@@ -27,17 +28,23 @@ struct socket;
  * header. The checksum is not recomputed: it is the caller's, and a program
  * that sends a wrong one on purpose is testing something.
  *
+ * An AF_INET6 raw socket receives the ICMPv6 message alone, without the
+ * IPv6 header, as on Linux, with the source address and the interface it
+ * came in on beside it (`raw_last_src6`). Its sends are summed by the
+ * kernel: Linux computes an ICMPv6 checksum whatever the caller wrote,
+ * since its pseudo-header has the source address the kernel chooses.
+ *
  * Opening one is restricted to a privileged process (`proc_privileged`), as
  * on Linux, because it reads every datagram of its protocol the machine
  * receives and sends datagrams no transport layer checked.
  */
 
 /**
- * Register `sock` to receive IPv4 protocol `proto`, with a queue from the
- * heap, or change the protocol of a registration it has. Returns 0, or
- * -ENOBUFS with no memory. Called when the socket is created, since a raw
- * socket's protocol is chosen there and not by a later bind. Takes
- * `net_lock` itself.
+ * Register `sock` to receive protocol `proto` of IPv4, or of IPv6 when
+ * `sock` is an AF_INET6 socket, with a queue from the heap, or change the
+ * protocol of a registration it has. Returns 0, or -ENOBUFS with no memory.
+ * Called when the socket is created, since a raw socket's protocol is
+ * chosen there and not by a later bind. Takes `net_lock` itself.
  */
 int raw_register(struct socket *sock, uint8_t proto);
 
@@ -56,6 +63,15 @@ void raw_unregister(struct socket *sock);
  * and before the kernel's own handler for the protocol.
  */
 void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len);
+
+/**
+ * Offer the message of `len` bytes at `msg`, the payload of an IPv6
+ * datagram of next header `nh` from `src` that came in on the interface of
+ * index `ifindex`, to every AF_INET6 raw socket of that protocol, under the
+ * rules of `raw_rx`. Called with interrupts off, from `ip6_rx`, before the
+ * kernel's own handler.
+ */
+void raw6_rx(int ifindex, const uint8_t *src, uint8_t nh, const uint8_t *msg, uint16_t len);
 
 /* The receive queue, as the three steps `socket_dgram_*` are made of, the same
  * shape the packet socket uses. */
@@ -86,5 +102,16 @@ uint32_t raw_last_src(struct socket *sock);
 
 /** The source address of the oldest waiting datagram, or 0 with none. */
 uint32_t raw_head_src(struct socket *sock);
+
+/** For an AF_INET6 socket: copy the IPv6 source of the oldest waiting
+ * datagram to `src` and return the index of the interface it came in on,
+ * or return -1 with none waiting. */
+int raw_head_src6(struct socket *sock, uint8_t *src);
+
+/** For an AF_INET6 socket: copy the IPv6 source of the datagram most
+ * recently taken to `src`, all zeros when none has been, and return the
+ * index of the interface it came in on, 0 for none; -1 for a socket with
+ * no registration. */
+int raw_last_src6(struct socket *sock, uint8_t *src);
 
 #endif /* _RAW_H_ */

@@ -10,6 +10,7 @@
 #include "../driver/netdev.h"
 #include "../arp/arp.h"
 #include "../ip/ip.h"
+#include "../ip6/ip6.h"
 #include "../socket/packet.h"
 #include "../netif.h"
 #include "../../serial.h"
@@ -22,8 +23,8 @@ static uint8_t eth_tx_frame[ETH_HDR_SIZE + 1500];
  * The EtherType is the big-endian 16-bit field at bytes 12 and 13 of the
  * header. ARP and IP are given the payload alone, the bytes after the
  * header, and the packet sockets the whole frame, since the addresses in
- * the header are part of what they report. The packet sockets see each ARP
- * and IPv4 frame first and whatever its destination, since `ip_rx` drops
+ * the header are part of what they report. The packet sockets see each ARP,
+ * IPv4 and IPv6 frame first and whatever its destination, since `ip_rx` drops
  * what is not addressed to this machine, which is every reply a DHCP client
  * waits for. Every frame on an interface that is down is dropped, since
  * `ethernet_tx` would send no reply.
@@ -55,13 +56,17 @@ void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
         packet_rx(nd, etype, data, len);
         ip_rx(data + ETH_HDR_SIZE, (uint16_t)(len - ETH_HDR_SIZE), 0);
         break;
+    case ETH_TYPE_IPV6:
+        packet_rx(nd, etype, data, len);
+        ip6_rx(nd, data + ETH_HDR_SIZE, (uint16_t)(len - ETH_HDR_SIZE));
+        break;
     default:
         break;
     }
 }
 
 /**
- * An interface an administrator took down sends no IP and no ARP, but a
+ * An interface an administrator took down sends no IPv4, IPv6 or ARP, but a
  * frame of another EtherType, such as netconsole's, still leaves: the log of
  * a machine whose network was just configured wrong is the one most worth
  * having. A card that says its link is down is given nothing, as Linux
@@ -83,7 +88,8 @@ int ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
         out->tx_dropped++;
         return ETHERNET_TX_TOOLONG;
     }
-    if (!out->up && (ethertype == ETH_TYPE_IP || ethertype == ETH_TYPE_ARP)) {
+    if (!out->up &&
+        (ethertype == ETH_TYPE_IP || ethertype == ETH_TYPE_ARP || ethertype == ETH_TYPE_IPV6)) {
         out->tx_dropped++;
         return NETDEV_TX_DROPPED;
     }
