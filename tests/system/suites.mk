@@ -237,7 +237,8 @@ $(IMAGES_DIR)/memory-test.recovery.krffs: $(RECOVERY_IMAGE)
 # `tests/run audio`: what the machine actually played. Its cases
 # (tests/cases/machine.audio.json) play the debug shell's scale on an Intel
 # HDA controller and on a Sound Blaster 16, and wavcheck measures the notes in
-# QEMU's recording of each.
+# QEMU's recording of each; another reboots a copy of the shutdown disk and
+# reads the mixer's level that init kept.
 # `tests/run diskfull`: a file system with no room left. The probe writes until
 # the write is refused, requires `ENOSPC` rather than `EIO`, removes the file
 # and writes again. It is the case of tests/cases/guest.diskfull.json, which

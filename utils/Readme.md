@@ -172,4 +172,5 @@ A suite below runs as `tests/run NAME`.
 * `installer`, `sealed`, `drill` and `uefi` install and repair disks with `rach2-install`, `reflash`, `diskctl` and `init-recovery`. The installer's stick-update case checks that an ordinary update keeps the menu, applies `--console term` twice, checks each installed-root line and the recovery lines, then boots the changed menu and sees init start `term`.
 * `selfbuild` builds this directory on Rach2 with `guest.mk` and runs the `httpd` and `nc` it built.
 * `acpid` presses the volume keys on os-real and reads `mixer`, and powers the machine off through acpid and init.
+* `audio`'s case `kept` sets `mixer vol 5`, reboots and reads `vol 5:5` back from init's kept levels, then reboots past init with the file removed and reads the driver's level.
 * No suite runs `audiotest`.
