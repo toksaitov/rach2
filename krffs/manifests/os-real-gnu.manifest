@@ -67,6 +67,9 @@ file 0755 /bin/dmesg krffs/dmesg.script
 file 0755 /bin/man krffs/man.script
 file 0755 /bin/loopctl build/utils/loopctl
 file 0755 /bin/mixer build/utils/mixer
+# wifi, which scans for Wi-Fi networks and joins, lists and forgets them
+# through wpa_supplicant (wifi(1)).
+file 0755 /bin/wifi build/utils/wifi
 optional-file 0755 /bin/doom build/ports/doom/doom
 
 # TinyCC and pdpmake keep their places, so the musl self-build of /src works
@@ -240,6 +243,19 @@ file 0755 /usr/share/udhcpc/resolv.script krffs/resolv.script
 dir 0755 /etc/ifplugd
 file 0755 /etc/ifplugd/ifplugd.action krffs/ifplugd.action
 file 0755 /sbin/ndwatch build/utils/ndwatch
+# What init runs on a machine with a Wi-Fi radio (init(8)): wpa_supplicant
+# with this configuration, which wifi(1) adds networks to and which then
+# holds their passphrases, so that only root reads it, and wpa_cli, which
+# runs this action as the station joins and leaves a network, to start and
+# stop the DHCP client on wlan0.
+dir 0700 /etc/wpa_supplicant
+file 0600 /etc/wpa_supplicant/wlan0.conf krffs/wpa_supplicant.conf
+file 0755 /etc/wpa_supplicant/wpa_action krffs/wpa_action
+# zzz, which suspends the machine to idle, and its Wi-Fi hook, which
+# leaves the network before the suspend and joins it again after (zzz(8)).
+file 0755 /sbin/zzz krffs/zzz
+dir 0755 /etc/zzz.d
+file 0755 /etc/zzz.d/wifi krffs/zzz-wifi
 # The kernel settings init applies at boot with sysctl -p (init(8)): an
 # outgoing IPv6 connection takes a temporary address, made anew each day
 # (RFC 8981), while the stable address still answers connections from

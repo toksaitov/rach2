@@ -18,7 +18,8 @@ A program's options and behavior are in its manual page, linked below. This sect
 * [dhcpc(8)](../man/man8/dhcpc.8) takes a DHCP lease and keeps it for as long as it runs.
 * [netup(8)](../man/man8/netup.8) brings interfaces up from `/etc/network/interfaces`, the file BusyBox's `ifup` reads, runs `dhcpc -b` for a `dhcp` stanza, and applies `inet6` stanzas.
 
-* [ndwatch(8)](../man/man8/ndwatch.8) follows an interface's routers for the DNS servers their RDNSS and DNSSL options give, which it hands to the resolver merge, `krffs/resolv.script`, and for the M and O flags, for which it starts BusyBox's `udhcpc6`. `init-metal` and `init-recovery` run it; the images that run them stage it.
+* [ndwatch(8)](../man/man8/ndwatch.8) follows an interface's routers for the DNS servers their RDNSS and DNSSL options give, which it hands to the resolver merge, `krffs/resolv.script`, and for the M and O flags, for which it starts BusyBox's `udhcpc6`. `init-metal` and `init-recovery` run it for `eth0` and `wlan0`; the images that run them stage it.
+* [wifi(1)](../man/man1/wifi.1) scans for Wi-Fi networks and joins, lists and forgets them through wpa_supplicant's control socket, and pins an enterprise network's server certificate on the first connection, after showing its fingerprint and before any password is sent.
 
 `dhcpc` and `netup` are os-simple's counterparts of BusyBox's `udhcpc` and `ifup`, so one description of a network serves both images.
 
@@ -153,9 +154,11 @@ make -C utils -f Makefile.linux
 * Every program is linked statically.
 * The file programs are much smaller than POSIX's; [busybox-coreutils(1)](../man/man1/busybox-coreutils.1) says what each does.
 * The network programs but ndwatch, and the resolver, use IPv4 only.
+* The lease script gives the cable's IPv4 default route metric 100 and Wi-Fi's 600, but the IPv6 default routes the routers advertise have the kernel's metric, 1024, on every interface, as on Linux without NetworkManager, so a machine on both may send IPv6 by either.
+* `wifi` adds no hidden network, and no enterprise network that wants a client certificate.
 * `sudo` and `adduser-crash` are staged only in the test image.
 * init empties its service log, `/var/log/services`, in place when it is full and does not rotate it, so what the services wrote before that is lost ([init(8)](../man/man8/init.8)).
-* `init-metal` and `init-recovery` bring the network up with `ifup -a` when the boot line has `rach2.ip=none`, and for a `dhcp` stanza BusyBox's `ifup` starts `udhcpc -R -b` (`vendor/busybox/rach2.config`). They follow only `eth0` with ifplugd and ndwatch, so a second card keeps the lease of the network it was on until its client renews. Once `udhcpc` has a lease it moves to the background and replaces its descriptors with `/dev/null`, so what it prints about renewing or losing the lease reaches neither the service log nor the screen.
+* `init-metal` and `init-recovery` bring the network up with `ifup -a` when the boot line has `rach2.ip=none`, and for a `dhcp` stanza BusyBox's `ifup` starts `udhcpc -R -b` (`vendor/busybox/rach2.config`). They follow `eth0` with ifplugd and ndwatch, and `wlan0` with wpa_supplicant, `wpa_cli -a` and ndwatch, so a third card keeps the lease of the network it was on until its client renews. Once `udhcpc` has a lease it moves to the background and replaces its descriptors with `/dev/null`, so what it prints about renewing or losing the lease reaches neither the service log nor the screen.
 
 ## Tests
 
