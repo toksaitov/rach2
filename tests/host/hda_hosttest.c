@@ -1,132 +1,15 @@
 /**
  * HDA enumeration and stream programming against a model codec and MMIO,
- * and the driver's report as /proc/audio formats it.
+ * and the driver's report as /proc/audio's text (audio_proc.c) gives it.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  */
 #include "audio/hda.c"
-struct vpath;
-struct fd_entry;
-struct vfs_ref;
-struct vfs_name;
-/* The functions procfs.c defines for other files, declared static so that
- * they have internal linkage in this test, which includes procfs.c. */
-static struct vfs_name *procfs_exe_entry(int pid);
-static int procfs_resolve_pid(int pid);
-static int procfs_resolve_id(const struct vpath *vp);
-static int procfs_open(const struct vpath *vp, int flags);
-static int procfs_readlink_fd(int pid, int fd, char *buf, int cap);
-static int procfs_readlink_exe(int pid, char *buf, int cap);
-static int procfs_exe_name(int pid, char *buf, int cap);
-static int procfs_readlink_dir(int pid, int root, char *buf, int cap);
-static int procfs_exe_file(int pid, struct vfs_ref *out);
-static int procfs_link_target(const struct vpath *vp, struct vfs_ref *out, char *buf, int cap);
-static int procfs_nth_pid(int n);
-static uint32_t procfs_ino_dir(void);
-static uint32_t procfs_ino_cmdline(void);
-static uint32_t procfs_ino_netdir(void);
-static uint32_t procfs_ino_netdev(void);
-static uint32_t procfs_ino_disk(void);
-static uint32_t procfs_ino_uptime(void);
-static uint32_t procfs_ino_statsys(void);
-static uint32_t procfs_ino_meminfo(void);
-static uint32_t procfs_ino_mounts(void);
-static uint32_t procfs_ino_usb(void);
-static uint32_t procfs_ino_audio(void);
-static uint32_t procfs_ino_loop(void);
-static uint32_t procfs_ino_interrupts(void);
-static uint32_t procfs_ino_console(void);
-static uint32_t procfs_ino_filesystems(void);
-static uint32_t procfs_ino_netroute(void);
-static uint32_t procfs_ino_netarp(void);
-static uint32_t procfs_ino_nettcp(void);
-static uint32_t procfs_fd_ino(struct fd_entry *e);
-static uint32_t procfs_ino_pid(int pid);
-static uint32_t procfs_task_links(int pid);
-static int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid);
-static int procfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid);
-static int procfs_fd_writable(struct fd_entry *e);
-static uint32_t sysfs_ino(int node, int key, int file);
-static int sysfs_device_key(int node, int n);
-static int sysfs_device_exists(int node, int key);
-static int sysfs_block_find(const char *name, int len, int disk);
-static int sysfs_block_devno(const char *name, int len);
-static void sysfs_block_name(int key, char *out, int cap);
-static int sysfs_block_whole(int key);
-#include "fs/procfs.c"
-
-/** No disks: devfs's table has none of them. */
-int devfs_disk_row(int i, struct devfs_disk_row *row)
-{
-    (void)i;
-    (void)row;
-    return -1;
-}
-
-/** No device node has numbers here. */
-int devfs_numbers(const char *path, uint32_t *major, uint32_t *minor)
-{
-    (void)path;
-    (void)major;
-    (void)minor;
-    return 0;
-}
-
-/* The types a mount's device number is chosen by (`procfs_mount_dev`). */
-const struct vfs_type vfs_devfs_type, vfs_procfs_type, vfs_sysfs_type, vfs_krffs_type;
-
-/** No backlight here, so /sys/class/backlight is empty: -1. */
-int backlight_find(const char *name, int len)
-{
-    (void)name;
-    (void)len;
-    return -1;
-}
-
-/** No backlight at any index: NULL. */
-const char *backlight_name(int i)
-{
-    (void)i;
-    return 0;
-}
-
-/* The counters /proc/net/snmp reports, which net_core.c defines. */
-struct net_mib net_mib;
-
-/** No interface is up here, so /sys/class/net is empty. */
-int netdev_count(void)
-{
-    return 0;
-}
-
-/** Every interface is in the caller's network namespace. */
-int netdev_seen_count(void)
-{
-    return netdev_count();
-}
-
-/** No interface at any index. */
-struct netdev *netdev_at(int n)
-{
-    (void)n;
-    return 0;
-}
-
-/* The running process and the table procfs_may_read reads; none here. */
-struct percpu cpu_table[NR_CPUS];
-
-/** No process has `pid`. */
-process_t *get_process(uint32_t pid)
-{
-    (void)pid;
-    return 0;
-}
-
-#include "fs/synthfs.c"
-#include "ns_first.h"
+#include "audio/audio_proc.c"
 
 extern int printf(const char *format, ...);
 extern char *strstr(const char *text, const char *needle);
+extern int memcmp(const void *a, const void *b, unsigned long n);
 static int failures;
 static const char *row; /* the row under way, named in a failure */
 /* The model: the controller's registers, and for each node its parameters,
@@ -538,11 +421,10 @@ static void row_hdmi(void)
     check(!is_hdmi_codec(0x10ec0269) && !is_hdmi_codec(0x1af40022), "realtek and qemu codecs");
 }
 
-/** Snapshot the real driver report through the procfs formatter. */
+/** Snapshot the real driver report through /proc/audio's text. */
 static void row_report(void)
 {
-    struct procfs_text text;
-    struct vpath path;
+    char text[2048], small[8];
     unsigned before;
     int len;
 
@@ -551,27 +433,20 @@ static void row_report(void)
     check(hda_find_output(), "report enumeration");
     check(hda_start(32000, AUDIO_S16LE, 2) == 0, "report stream start");
     before = verbs;
-    procfs_text_init(&text);
-    len = procfs_gen_audio(&text);
-    if (procfs_text_room(&text, 1) == 0)
-        text.buf[text.len] = 0;
-    check(len > 0 && !text.nomem && verbs == before, "report sends no verbs");
-    check(strstr(text.buf, "stream requested 32000 programmed 32000 format 0x0A11") != NULL,
+    len = audio_proc_text(text, (int)sizeof(text) - 1);
+    check(len > 0 && len < (int)sizeof(text) && verbs == before, "report sends no verbs");
+    text[len < (int)sizeof(text) ? len : (int)sizeof(text) - 1] = 0;
+    check(strstr(text, "stream requested 32000 programmed 32000 format 0x0A11") != NULL,
           "report exposes programmed rate and register");
-    check(strstr(text.buf, "caps dac 2 source 1 pcm 0x00030FFF formats 0x00000001") != NULL,
+    check(strstr(text, "caps dac 2 source 1 pcm 0x00030FFF formats 0x00000001") != NULL,
           "report exposes inherited capabilities");
-    check(strstr(text.buf, "connections nid 10 long 0 raw 0x02\nexpanded 2\n") != NULL,
+    check(strstr(text, "connections nid 10 long 0 raw 0x02\nexpanded 2\n") != NULL,
           "report exposes codec list");
     hda_stop();
-    check(strstr(text.buf, "playing 1") != NULL, "open snapshot survives stop");
-    kfree(text.buf);
-    procfs_text_init(&text);
-    refuse_alloc = 1;
-    check(procfs_gen_audio(&text) < 0 && text.nomem, "allocation failure rejects report");
-    refuse_alloc = 0;
-    check(synth_classify("proc/audio", &path) == VNODE_PROC_AUDIO, "audio path classified");
-    check(synth_classify("proc/audio/child", &path) == VNODE_ENOTDIR, "audio is a file");
-    check(procfs_ino_audio() != procfs_ino_usb(), "audio inode is distinct");
+    check(strstr(text, "playing 1") != NULL, "open snapshot survives stop");
+    check(audio_proc_text(small, (int)sizeof(small)) > (int)sizeof(small) &&
+              !memcmp(small, "driver ", 7),
+          "a short buffer keeps the text's start and learns its length");
 }
 
 /** Allocate a procfs snapshot, or inject allocation failure. */

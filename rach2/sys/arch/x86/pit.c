@@ -151,7 +151,7 @@ struct ref_clock {
 #define REF_COUNTER 1
 #define REF_TSC     2
 
-/* The tick's rate, TICK_HZ in platform.c, and its length. */
+/* The tick's rate, TICK_HZ in timer.h, and its length. */
 #define TICKS_PER_SECOND 100u
 #define US_PER_TICK      10000u
 #define NS_PER_TICK      10000000u

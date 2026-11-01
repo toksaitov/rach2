@@ -7,6 +7,9 @@
 
 #include "lib/kint.h"
 
+/* The kernel's tick rate, in ticks a second. */
+#define TICK_HZ 100
+
 /* The ticks since the timer started, counted by the boot processor's timer
  * handler (kernel.c) at the platform's rate, as many for each interrupt as
  * `timer_tick_clock` says. */

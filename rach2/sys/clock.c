@@ -68,7 +68,7 @@ void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint32_t *ticks)
 #define RTC_SECONDS_PER_MINUTE 60
 #define RTC_EPOCH_YEAR         1970
 
-/* The tick's rate, 100 a second (TICK_HZ in arch/x86/platform.c), and its
+/* The tick's rate, 100 a second (TICK_HZ in timer.h), and its
  * length. */
 #define RTC_TICKS_PER_SECOND     100
 #define RTC_NANOSECONDS_PER_TICK 10000000
