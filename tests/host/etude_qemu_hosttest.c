@@ -310,7 +310,9 @@ static int fake_qemu(const char *mode, int argc, char **argv)
     const char *accel = NULL, *reason = NULL;
     int i, guest = 1, stopped = 0, kept = 0;
     host_socket con, qmp;
-    const char *audio = NULL;
+    const char *audio = NULL, *input = getenv("SDL_DISKAUDIOFILEIN");
+    const char *driver = getenv("SDL_AUDIODRIVER");
+    char said[4200];
     FILE *wav;
 
     for (i = 1; i + 1 < argc; i++) {
@@ -344,6 +346,10 @@ static int fake_qemu(const char *mode, int argc, char **argv)
             return 127;
         fputs("recorded samples", wav);
         fclose(wav);
+    }
+    if (input != NULL) {
+        snprintf(said, sizeof(said), "fake: sdl %s %s\r\n", driver != NULL ? driver : "-", input);
+        put(con, said);
     }
     put(con, "fake: running\r\n");
     if (strcmp(mode, "crash") == 0) {
@@ -1111,7 +1117,7 @@ static void test_audio_argv(void)
               "audio controller");
         if (i == 0)
             CHECK(has_arg(argv, "-device", "hda-output,bus=etude-hda.0,audiodev=etude-audio"),
-                  "audio HDA codec");
+                  "audio HDA output codec on wav");
     }
     CHECK(etude_qemu_argv(&p, &site, "/c", "/q", NULL, &out) == EINVAL,
           "audio needs a launcher path");
@@ -1121,6 +1127,136 @@ static void test_audio_argv(void)
     CHECK(make(&p, &site, argv, buf, sizeof(buf)) == 0 &&
               !has_arg(argv, "-device", "sb16,audiodev=etude-audio"),
           "audio absent by default");
+}
+
+/**
+ * Check each audio backend's command line: `wav` named as the default is,
+ * with the output-only codec, `none` without a path and `sdl` at its input's
+ * format, each with the duplex codec, and the profiles the launcher refuses.
+ */
+static void test_audio_backend_argv(void)
+{
+    struct etude_qemu_profile p = {0};
+    struct etude_qemu_site site = {ETUDE_ACCEL_TCG, "qemu", "qemu", NULL, NULL, 0};
+    char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096];
+    struct etude_qemu_line out = {argv, ETUDE_QEMU_ARGS_MAX, buf, sizeof(buf)};
+
+    p.architecture = "i686";
+    p.kernel = "kernel";
+    p.cpu = "max";
+    p.processors = 1;
+    p.memory_bytes = 128u << 20;
+    p.audio = "hda";
+    p.audio_backend = "wav";
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == 0 &&
+              has_arg(argv, "-audiodev", "wav,id=etude-audio,path=/s/one,,two.wav") &&
+              has_arg(argv, "-device", "hda-output,bus=etude-hda.0,audiodev=etude-audio") &&
+              !has_arg(argv, "-device", "hda-duplex,bus=etude-hda.0,audiodev=etude-audio"),
+          "audio wav backend");
+    p.audio_backend = "none";
+    CHECK(etude_qemu_argv(&p, &site, "/c", "/q", NULL, &out) == 0 &&
+              has_arg(argv, "-audiodev", "none,id=etude-audio") &&
+              has_arg(argv, "-device", "hda-duplex,bus=etude-hda.0,audiodev=etude-audio"),
+          "audio none backend without a path");
+    p.audio = "sb16";
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == 0 &&
+              has_arg(argv, "-audiodev", "none,id=etude-audio") &&
+              has_arg(argv, "-device", "sb16,audiodev=etude-audio"),
+          "audio none backend on the SB16");
+    p.audio = "hda";
+    p.audio_backend = "sdl";
+    p.audio_input = "/f/tone.raw";
+    CHECK(etude_qemu_argv(&p, &site, "/c", "/q", NULL, &out) == 0 &&
+              has_arg(argv, "-audiodev",
+                      "sdl,id=etude-audio,in.frequency=48000,in.channels=2,in.format=s16") &&
+              has_arg(argv, "-device", "hda-duplex,bus=etude-hda.0,audiodev=etude-audio"),
+          "audio sdl backend at its input's format");
+    p.audio_input = NULL;
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == EINVAL, "audio sdl needs an input");
+    p.audio_input = "";
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == EINVAL, "audio sdl needs a named input");
+    p.audio_backend = "none";
+    p.audio_input = "/f/tone.raw";
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == EINVAL, "audio input needs sdl");
+    p.audio_backend = NULL;
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == EINVAL, "audio input needs sdl, not wav");
+    p.audio_input = NULL;
+    p.audio_backend = "pa";
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == EINVAL, "unknown audio backend");
+    p.audio = NULL;
+    p.audio_backend = "none";
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == EINVAL, "audio backend needs a card");
+    p.audio_backend = NULL;
+    p.audio_input = "/f/tone.raw";
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == EINVAL, "audio input needs a card");
+}
+
+/** Say whether environment `envp` has `entry`. */
+static int has_env(char *const envp[], const char *entry)
+{
+    size_t i;
+
+    for (i = 0; envp[i] != NULL; i++)
+        if (strcmp(envp[i], entry) == 0)
+            return 1;
+    return 0;
+}
+
+/** Count the entries of environment `envp` whose names begin `prefix`. */
+static size_t env_count(char *const envp[], const char *prefix)
+{
+    size_t i, n = 0;
+
+    for (i = 0; envp[i] != NULL; i++)
+        n += strncmp(envp[i], prefix, strlen(prefix)) == 0;
+    return n;
+}
+
+/**
+ * Check QEMU's environment for each backend: the caller's kept, SDL's audio
+ * variables dropped, and under `sdl` the disk driver reading the input.
+ */
+static void test_audio_env(void)
+{
+    static char *const caller[] = {"PATH=/bin",
+                                   "SDL_AUDIODRIVER=pulse",
+                                   "SDL_DISKAUDIOFILE=/home/x",
+                                   "SDL_AUDIO_DRIVER=pipewire",
+                                   "SDL_DISKAUDIODELAY=5",
+                                   "HOME=/h",
+                                   NULL};
+    struct etude_qemu_profile p = {0};
+    char *envp[16], buf[512];
+    struct etude_qemu_line out = {envp, 16, buf, sizeof(buf)};
+    struct etude_qemu_line small = {envp, 3, buf, sizeof(buf)};
+    const char *backends[] = {NULL, "wav", "none"};
+    size_t i;
+
+    for (i = 0; i < 3; i++) {
+        p.audio = i == 0 ? NULL : "hda";
+        p.audio_backend = backends[i];
+        CHECK(etude_qemu_env(&p, caller, NULL, &out) == 0 && has_env(envp, "PATH=/bin") &&
+                  has_env(envp, "HOME=/h") && env_count(envp, "SDL_") == 0 &&
+                  env_count(envp, "") == 2,
+              "audio environment without sdl");
+    }
+    p.audio = "hda";
+    p.audio_backend = "sdl";
+    p.audio_input = "/f/tone.raw";
+    CHECK(etude_qemu_env(&p, caller, "/f/tone.raw", &out) == 0 && has_env(envp, "PATH=/bin") &&
+              has_env(envp, "HOME=/h") && has_env(envp, "SDL_AUDIODRIVER=disk") &&
+              has_env(envp, "SDL_DISKAUDIOFILEIN=/f/tone.raw") &&
+              has_env(envp, "SDL_DISKAUDIOFILE=/dev/null") && env_count(envp, "SDL_") == 3 &&
+              env_count(envp, "") == 5,
+          "audio environment of sdl");
+    CHECK(etude_qemu_env(&p, NULL, "/f/tone.raw", &out) == 0 && env_count(envp, "") == 3,
+          "audio environment of sdl alone");
+    CHECK(etude_qemu_env(&p, caller, NULL, &out) == EINVAL, "audio environment needs the input");
+    CHECK(etude_qemu_env(&p, caller, "/f/tone.raw", &small) == E2BIG,
+          "audio environment too large");
+    p.audio_input = NULL;
+    CHECK(etude_qemu_env(&p, caller, "/f/tone.raw", &out) == EINVAL,
+          "audio environment of a refused profile");
 }
 
 /** Check isolated recordings, their lifetime, and refusal to replace a file. */
@@ -1177,6 +1313,52 @@ static void test_audio(void)
     }
     etude_qemu_free(q);
     CHECK(!left_in(fix_dir(), "etude-qemu."), "audio directories removed");
+}
+
+/**
+ * Start the stand-in on the `none` and `sdl` backends: neither has a
+ * recording, and under `sdl` the stand-in sees SDL's disk driver and the
+ * profile's input in its environment.
+ */
+static void test_audio_backends(void)
+{
+    struct row rows[] = {
+        ROW("audio-none", "shutdown", ETUDE_ACCEL_TCG, "i686", ETUDE_END_SHUTDOWN, 'g'),
+        ROW("audio-sdl", "shutdown", ETUDE_ACCEL_TCG, "i686", ETUDE_END_SHUTDOWN, 'g')};
+    struct etude_qemu *q = etude_qemu_new();
+    struct etude_machine_spec spec;
+    const struct etude_machine_result *res;
+    char want[PATH_MAX + 32];
+    int i;
+
+    CHECK(q != NULL, "audio backend launcher");
+    if (q == NULL)
+        return;
+    rows[0].profile.audio = "hda";
+    rows[0].profile.audio_backend = "none";
+    rows[1].profile.audio = "hda";
+    rows[1].profile.audio_backend = "sdl";
+    rows[1].profile.audio_input = fix_path("tone.raw");
+    for (i = 0; i < 2; i++) {
+        row_spec(&rows[i], &spec, self, self, FAKE_GRACE_US);
+        CHECK(etude_qemu_start(q, &spec, &rows[i].m) == 0, "audio backend starts");
+        if (rows[i].m != NULL)
+            etude_machine_type(rows[i].m, "go\r", 3);
+    }
+    run_rows(q, rows, 2);
+    snprintf(want, sizeof(want), "fake: sdl disk %s\r\n", rows[1].profile.audio_input);
+    for (i = 0; i < 2; i++) {
+        row_check(&rows[i]);
+        res = rows[i].m != NULL ? etude_machine_result(rows[i].m) : NULL;
+        CHECK(res != NULL && res->audio_path == NULL, "audio backend without a recording");
+        if (res != NULL && i == 0)
+            CHECK(find(&res->console, "fake: sdl", 0) < 0, "audio none without SDL");
+        if (res != NULL && i == 1)
+            CHECK(find(&res->console, want, 0) >= 0, "audio sdl reads its input");
+        row_free(&rows[i]);
+    }
+    etude_qemu_free(q);
+    CHECK(!left_in(fix_dir(), "etude-qemu."), "audio backend directories removed");
 }
 
 /* The devices of the complete command-line fixture. */
@@ -2480,7 +2662,10 @@ int main(int argc, char **argv)
         test_card();
         test_captures();
         test_audio_argv();
+        test_audio_backend_argv();
+        test_audio_env();
         test_audio();
+        test_audio_backends();
         test_usb();
         test_memory();
         test_host_without_machine();

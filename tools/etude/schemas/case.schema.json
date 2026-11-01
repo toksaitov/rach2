@@ -117,6 +117,8 @@
         "memory_bytes": {"$ref": "#/$defs/positive"},
         "memory_profile": {"enum": ["reserved", "bigmem-boundary-v1"]},
         "audio": {"enum": ["hda", "sb16"]},
+        "audio_backend": {"enum": ["wav", "none", "sdl"]},
+        "audio_input": {"$ref": "#/$defs/name"},
         "firmware": {"enum": ["seabios", "ovmf", "direct"]},
         "devices": {"type": "array", "uniqueItems": true, "items": {"oneOf": [
           {"$ref": "#/$defs/name"}, {"$ref": "#/$defs/device"}

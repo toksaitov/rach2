@@ -854,21 +854,43 @@ static void add_device(struct line *l, const struct etude_qemu_profile *p,
     }
 }
 
-/** Add the selected audio card and its WAV backend at the launcher's path. */
-static void add_audio(struct line *l, const char *card, const char *path)
+/** Give the profile's audio backend, "wav" when it names none. */
+static const char *audio_backend(const struct etude_qemu_profile *p)
 {
-    if (card != NULL) {
-        add(l, 0, "-audiodev");
-        add(l, 1, "wav,id=etude-audio,path=%s", path);
-        if (strcmp(card, "hda") == 0) {
-            add(l, 0, "-device");
-            add(l, 0, "intel-hda,id=etude-hda");
-            add(l, 0, "-device");
-            add(l, 0, "hda-output,bus=etude-hda.0,audiodev=etude-audio");
-        } else {
-            add(l, 0, "-device");
-            add(l, 0, "sb16,audiodev=etude-audio");
-        }
+    return p->audio_backend != NULL ? p->audio_backend : "wav";
+}
+
+/**
+ * Add the selected audio card on the profile's backend: `wav` records the
+ * output to the launcher's file at `path`, `none` discards it, and `sdl`
+ * opens SDL's input at the format of the profile's raw input file, so that
+ * QEMU passes the file's samples to the card unconverted. HDA is the
+ * controller and a codec on its bus: under `wav`, which has no input, the
+ * output-only codec, since QEMU on Windows ends when a codec's ADC finds no
+ * input; under the others the duplex codec, with an ADC and an input pin.
+ */
+static void add_audio(struct line *l, const struct etude_qemu_profile *p, const char *path)
+{
+    const char *backend = audio_backend(p);
+
+    if (p->audio == NULL)
+        return;
+    add(l, 0, "-audiodev");
+    if (strcmp(backend, "wav") == 0)
+        add(l, QUOTE_COMMAS, "wav,id=etude-audio,path=%s", path);
+    else if (strcmp(backend, "sdl") == 0)
+        add(l, 0, "sdl,id=etude-audio,in.frequency=48000,in.channels=2,in.format=s16");
+    else
+        add(l, 0, "none,id=etude-audio");
+    if (strcmp(p->audio, "hda") == 0) {
+        add(l, 0, "-device");
+        add(l, 0, "intel-hda,id=etude-hda");
+        add(l, 0, "-device");
+        add(l, 0, "%s,bus=etude-hda.0,audiodev=etude-audio",
+            strcmp(backend, "wav") == 0 ? "hda-output" : "hda-duplex");
+    } else {
+        add(l, 0, "-device");
+        add(l, 0, "sb16,audiodev=etude-audio");
     }
 }
 
@@ -1056,14 +1078,27 @@ static int profile_check(const struct etude_qemu_profile *p)
     return firmware_check(p);
 }
 
-/** Check the selected audio card and its launcher-made WAV path. */
-static int audio_check(const char *card, const char *path)
+/**
+ * Check the profile's audio: a known card, a known backend, the launcher's
+ * WAV path `path` under `wav`, and an input file under `sdl` and no other.
+ * A profile without a card names no backend and no input.
+ */
+static int audio_check(const struct etude_qemu_profile *p, const char *path)
 {
-    if (card == NULL)
-        return 0;
-    if (strcmp(card, "hda") != 0 && strcmp(card, "sb16") != 0)
+    const char *backend = audio_backend(p);
+    int sdl = strcmp(backend, "sdl") == 0;
+
+    if (p->audio == NULL)
+        return p->audio_backend == NULL && p->audio_input == NULL ? 0 : EINVAL;
+    if (strcmp(p->audio, "hda") != 0 && strcmp(p->audio, "sb16") != 0)
         return EINVAL;
-    return path != NULL && *path != '\0' ? 0 : EINVAL;
+    if (!sdl && strcmp(backend, "wav") != 0 && strcmp(backend, "none") != 0)
+        return EINVAL;
+    if (sdl != (p->audio_input != NULL) || (sdl && *p->audio_input == '\0'))
+        return EINVAL;
+    if (strcmp(backend, "wav") == 0 && (path == NULL || *path == '\0'))
+        return EINVAL;
+    return 0;
 }
 
 /** Return whether the profile needs x86-64 QEMU and firmware. */
@@ -1132,7 +1167,7 @@ static int argv_check(const struct etude_qemu_profile *p, const struct etude_qem
 
     if ((e = profile_check(p)) != 0)
         return e;
-    if ((e = audio_check(p->audio, audio)) != 0)
+    if ((e = audio_check(p, audio)) != 0)
         return e;
     if (boundary(p) && !s->boundary_lazy)
         return ENOTSUP;
@@ -1233,7 +1268,7 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     add_ahci(&l, p);
     for (i = 0; i < disk_count(p->disks); i++)
         add_disk(&l, &p->disks[i], i, p->q35, &ide, &ahci);
-    add_audio(&l, p->audio, audio);
+    add_audio(&l, p, audio);
     for (i = 0; i < device_count(p->devices); i++)
         add_device(&l, p, &p->devices[i], &nics);
     add(&l, 0, "-chardev");
@@ -1259,6 +1294,42 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     if (count(p->boot_options) > 0) {
         add(&l, 0, "-append");
         add_joined(&l, p->boot_options);
+    }
+    return l.error;
+}
+
+/** Say whether `entry` of an environment sets one of SDL's audio variables. */
+static int sdl_audio_variable(const char *entry)
+{
+    return strncmp(entry, "SDL_AUDIO", 9) == 0 || strncmp(entry, "SDL_DISKAUDIO", 13) == 0;
+}
+
+int etude_qemu_env(const struct etude_qemu_profile *p, char *const *envp, const char *input,
+                   const struct etude_qemu_line *out)
+{
+#ifdef _WIN32
+    static const char null_device[] = "NUL";
+#else
+    static const char null_device[] = "/dev/null";
+#endif
+    struct line l = {out->argv, 0, out->max, out->buf, 0, out->size, 0};
+    size_t i;
+    int e;
+
+    if ((e = audio_check(p, "wav")) != 0)
+        return e;
+    if (out->max == 0)
+        return E2BIG;
+    out->argv[0] = NULL;
+    for (i = 0; envp != NULL && envp[i] != NULL; i++)
+        if (!sdl_audio_variable(envp[i]))
+            add(&l, 0, "%s", envp[i]);
+    if (p->audio != NULL && strcmp(audio_backend(p), "sdl") == 0) {
+        if (input == NULL || *input == '\0')
+            return EINVAL;
+        add(&l, 0, "SDL_AUDIODRIVER=disk");
+        add(&l, 0, "SDL_DISKAUDIOFILEIN=%s", input);
+        add(&l, 0, "SDL_DISKAUDIOFILE=%s", null_device);
     }
     return l.error;
 }

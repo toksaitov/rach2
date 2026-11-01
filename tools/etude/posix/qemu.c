@@ -323,7 +323,8 @@ static int machine_audio(struct etude_machine *m, const struct etude_machine_spe
     const char *name = spec->audio_path;
     int fd;
 
-    if (spec->profile->audio == NULL)
+    if (spec->profile->audio == NULL ||
+        (spec->profile->audio_backend != NULL && strcmp(spec->profile->audio_backend, "wav") != 0))
         return 0;
     if (name == NULL) {
         snprintf(path, sizeof(path), "%s/audio.wav", m->dir);
@@ -509,7 +510,54 @@ static int launch_argv(const struct etude_qemu_profile *p, const struct etude_qe
         free(n.owned[i]);
     return e;
 }
-#else
+#endif
+
+/**
+ * Make QEMU's environment for `spec`, as etude_qemu_env makes it, in one
+ * allocation that the caller frees, at `*out`.
+ *
+ * @return 0, or an error number of etude_qemu_env's or ENOMEM.
+ */
+static int launch_env(const struct etude_machine_spec *spec, char ***out)
+{
+    const char *input = spec->profile->audio_input;
+    struct etude_qemu_line line;
+    size_t i, n = 0, size = 128;
+    char **v;
+    int e = 0;
+#ifdef _WIN32
+    struct native_paths native = {0};
+
+    if (input != NULL && (e = native_file(&native, input, &input)) != 0)
+        return e;
+#endif
+    for (i = 0; spec->envp != NULL && spec->envp[i] != NULL; i++, n++)
+        size += strlen(spec->envp[i]) + 1;
+    if (input != NULL)
+        size += strlen(input);
+    v = malloc((n + 4) * sizeof(*v) + size);
+    if (v == NULL)
+        e = ENOMEM;
+    if (e == 0) {
+        line.argv = v;
+        line.max = n + 4;
+        line.buf = (char *)(v + n + 4);
+        line.size = size;
+        e = etude_qemu_env(spec->profile, spec->envp, input, &line);
+    }
+#ifdef _WIN32
+    for (i = 0; i < native.nowned; i++)
+        free(native.owned[i]);
+#endif
+    if (e != 0) {
+        free(v);
+        return e;
+    }
+    *out = v;
+    return 0;
+}
+
+#ifndef _WIN32
 #define launch_argv etude_qemu_argv
 #endif
 
@@ -519,7 +567,7 @@ int etude_qemu_start(struct etude_qemu *q, const struct etude_machine_spec *spec
     struct etude_machine *m = machine_new(spec);
     struct etude_exec_spec es;
     struct etude_qemu_line line;
-    char *argv[ETUDE_QEMU_ARGS_MAX], *buf = NULL;
+    char *argv[ETUDE_QEMU_ARGS_MAX], *buf = NULL, **envp = NULL;
     int e;
 
     if (m == NULL) {
@@ -542,6 +590,8 @@ int etude_qemu_start(struct etude_qemu *q, const struct etude_machine_spec *spec
         (m->qmp_listen = listen_at(m->qmp_path)) < 0)
         goto fail;
     e = launch_argv(spec->profile, spec->site, m->console_path, m->qmp_path, m->audio_path, &line);
+    if (e == 0)
+        e = launch_env(spec, &envp);
     if (e != 0) {
         errno = e;
         goto fail;
@@ -553,7 +603,7 @@ int etude_qemu_start(struct etude_qemu *q, const struct etude_machine_spec *spec
     memset(&es, 0, sizeof(es));
     es.attempt_id = spec->attempt_id;
     es.argv = argv;
-    es.envp = spec->envp;
+    es.envp = envp;
     es.output_max = QEMU_OUTPUT_MAX;
     es.grace_us = spec->grace_us;
     es.reg = spec->reg;
@@ -563,6 +613,7 @@ int etude_qemu_start(struct etude_qemu *q, const struct etude_machine_spec *spec
         goto fail;
     }
     free(buf);
+    free(envp);
     m->r.qemu = etude_proc_result(m->proc);
     m->q = q;
     m->next = q->machines;
@@ -572,6 +623,7 @@ int etude_qemu_start(struct etude_qemu *q, const struct etude_machine_spec *spec
 fail:
     e = errno;
     free(buf);
+    free(envp);
     if (m->console_file >= 0)
         unlink(spec->console_path);
     if (m->audio_created)

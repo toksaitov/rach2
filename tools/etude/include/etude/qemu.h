@@ -155,8 +155,8 @@ struct etude_qemu_profile {
     unsigned processors;                 /* 1 to 64 */
     uint64_t memory_bytes;               /* a whole number of mebibytes */
     const char *memory_profile;          /* NULL or "reserved", or "bigmem-boundary-v1" */
-    const char *audio;                   /* NULL, "hda" or "sb16", recorded
-                                            through the WAV backend */
+    const char *audio;                   /* NULL, "hda" or "sb16", on the
+                                            backend `audio_backend` names */
     enum etude_firmware firmware;
     const struct etude_qemu_device *devices; /* ended by a NULL model */
     const char *const *boot_options;         /* the kernel's command line, ended
@@ -175,6 +175,15 @@ struct etude_qemu_profile {
     const char *acpi_table;                    /* a file of an ACPI table, such
                                                   as an SSDT, that the firmware
                                                   adds to QEMU's; NULL for none */
+    const char *audio_backend;                 /* NULL or "wav", which records the
+                                                  card's output to the launcher's
+                                                  WAV; "none", which discards it
+                                                  and gives silence in; "sdl",
+                                                  SDL's disk driver, which gives
+                                                  `audio_input` in */
+    const char *audio_input;                   /* with "sdl" alone, a file of raw
+                                                  PCM, S16LE, two channels at
+                                                  48000 Hz; NULL otherwise */
 };
 
 /* The longest SMBIOS vendor a profile may name. */
@@ -259,13 +268,16 @@ struct etude_qemu_line {
  * and the launcher starts it once QMP has confirmed the accelerator. argv[0]
  * is the site's program for the kernel architecture, except that OVMF uses
  * qemu_x86_64 and ovmf_x86_64 for either kernel. `audio` is the launcher-made
- * WAV path, required when the profile selects an audio card. Each capture of
+ * WAV path, required when the profile selects an audio card on the `wav`
+ * backend and unused on the others. Each capture of
  * the profile is a `filter-dump` on its card's network, which QEMU creates or
  * truncates before the machine starts and to which it writes each frame the
  * card sends or receives as it passes.
  *
  * @return 0, or an error number: EINVAL for a profile the launcher cannot
- *         make, among them a forward of a port that is not one of the
+ *         make, among them an audio backend that is not `wav`, `none` or
+ *         `sdl`, an input file without `sdl` or `sdl` without one, a forward
+ *         of a port that is not one of the
  *         profile's `ports`, a local port forwarded twice by one protocol or
  *         both to the guest and from it, a guest forward that QEMU could not
  *         make, a capture of a card the profile lacks and an ACPI table
@@ -276,6 +288,21 @@ struct etude_qemu_line {
 int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_site *s,
                     const char *console, const char *qmp, const char *audio,
                     const struct etude_qemu_line *out);
+
+/**
+ * Make QEMU's environment for profile `p` in `out`: the caller's `envp`
+ * without SDL's audio variables, those whose names begin SDL_AUDIO or
+ * SDL_DISKAUDIO, and under the `sdl` backend SDL_AUDIODRIVER=disk,
+ * SDL_DISKAUDIOFILEIN set to `input` and SDL_DISKAUDIOFILE to the null
+ * device, so that SDL's disk driver reads the profile's input file as the
+ * card's input and writes its output nowhere. `input` is the profile's
+ * `audio_input` as the QEMU that runs names it.
+ *
+ * @return 0, or an error number: EINVAL for audio etude_qemu_argv refuses
+ *         or an `sdl` profile without `input`, E2BIG when `out` is too small.
+ */
+int etude_qemu_env(const struct etude_qemu_profile *p, char *const *envp, const char *input,
+                   const struct etude_qemu_line *out);
 
 /**
  * Say whether device `model` of a profile is a network card, which the
@@ -306,7 +333,8 @@ struct etude_machine_spec {
     const char *console_path;       /* a new file that gets every console byte,
                                        or NULL */
     const char *audio_path;         /* new WAV file, or NULL for a private temporary file;
-                                       used only when the profile selects audio */
+                                       used only when the profile selects audio on
+                                       the `wav` backend */
     size_t console_max;             /* console bytes kept in memory */
     uint64_t grace_us;              /* from QMP's quit to a kill, and from the
                                        termination signal to SIGKILL */
@@ -337,7 +365,8 @@ struct etude_machine_result {
     int by_guest;                /* the event's `guest` */
     struct etude_output console; /* what the console wrote; `closed` once QEMU
                                     closed it */
-    const char *audio_path;      /* WAV path, or NULL; complete after QEMU ends;
+    const char *audio_path;      /* WAV path, or NULL without the `wav` backend;
+                                    complete after QEMU ends;
                                     owned until machine_free, which removes a
                                     temporary file but leaves a caller-given file */
     int console_file_error;      /* the error that ended the writes to the
