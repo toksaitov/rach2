@@ -230,6 +230,10 @@ static volatile uint32_t hw_period_last = 0; /* counts HDA_BUFFER_SIZE periods *
 /* Diagnostics: the DMA periods refilled since the stream started. */
 static volatile uint32_t hw_fill_count = 0;
 
+/* Whole revolutions of the DMA buffer that passed between two services.
+ * The service cannot tell one yet, so this stays 0. */
+static volatile uint32_t missed_revolutions = 0;
+
 /* Forward declarations for MMIO helpers (needed for C89 order). */
 static uint32_t hda_read32(uint32_t offset);
 static void hda_write32(uint32_t offset, uint32_t value);
@@ -466,6 +470,7 @@ static uint32_t hda_get_param(uint8_t nid, uint8_t param);
 static int hda_get_connections(uint8_t nid, uint16_t *conn_list, int max_conn);
 static void hda_pci_force_d0(pci_device_t *dev);
 static uint32_t hda_select_hw_rate(uint32_t req_rate);
+static uint32_t hda_stream_position(void);
 static uint8_t hda_amp_steps(uint32_t amp_caps);
 static uint8_t hda_get_out_amp_max(uint8_t nid);
 static uint8_t hda_get_in_amp_max(uint8_t nid);
@@ -497,18 +502,7 @@ static void hda_service_stream(void)
     }
 
     cbl = HDA_BUFFER_SIZE * HDA_NUM_BUFFERS;
-    if (dma_posbuf_use) {
-        uint32_t idx = (uint32_t)output_stream_index * 2u;
-        if (idx < (uint32_t)(HDA_MAX_STREAMS * 2)) {
-            /* DMA writes -> invalidate cached line before reading. */
-            hda_dma_sync_range(&dma_posbuf[idx], (uint32_t)sizeof(uint32_t));
-            lpib = dma_posbuf[idx];
-        } else {
-            lpib = hda_sd_read32(output_stream_index, HDA_SD_LPIB);
-        }
-    } else {
-        lpib = hda_sd_read32(output_stream_index, HDA_SD_LPIB);
-    }
+    lpib = hda_stream_position();
     lpib_mod = (cbl != 0) ? (lpib % cbl) : lpib;
 
     if (!lpib_tracking_valid) {
@@ -1185,7 +1179,74 @@ static void hda_read_caps(uint8_t nid, hda_caps_report_t *caps)
     caps->formats = hda_get_param(caps->source, 0x0B);
 }
 
-/** Cache the selected paths and their codec lists for reads through procfs. */
+/**
+ * Read every widget of the function group into the report: its type, its
+ * capabilities and amplifiers', a pin's capabilities and configuration
+ * default, and its connection list, expanded. The pins' sense words are
+ * read at each start (hda_sense_pins).
+ */
+static void hda_capture_widgets(void)
+{
+    uint32_t afg_in = hda_get_param(audio_fg_nid, HDA_PARAM_INPUT_AMP);
+    uint32_t afg_out = hda_get_param(audio_fg_nid, HDA_PARAM_OUTPUT_AMP);
+    uint16_t conns[HDA_MAX_CONNECTIONS];
+    int i, j, n;
+
+    hda_report.gpio = hda_get_param(audio_fg_nid, HDA_PARAM_GPIO_COUNT);
+    hda_report.widget_count = afg_widget_count;
+    for (i = 0; i < afg_widget_count; i++) {
+        hda_widget_report_t *w = &hda_report.widgets[i];
+        uint8_t nid = (uint8_t)(afg_widget_start + i);
+        bool override;
+
+        k_memset(w, 0, sizeof(*w));
+        w->nid = nid;
+        w->caps = hda_get_param(nid, HDA_PARAM_AUDIO_CAPS);
+        w->type = (uint8_t)((w->caps >> 20) & 0xF);
+        override = (w->caps & (1u << 3)) != 0; /* Amp Param Override */
+        if (w->caps & (1u << 1))               /* In Amp Present */
+            w->amp_in = override ? hda_get_param(nid, HDA_PARAM_INPUT_AMP) : afg_in;
+        if (w->caps & (1u << 2)) /* Out Amp Present */
+            w->amp_out = override ? hda_get_param(nid, HDA_PARAM_OUTPUT_AMP) : afg_out;
+        if (w->type == HDA_WIDGET_PIN) {
+            w->pin_caps = hda_get_param(nid, HDA_PARAM_PIN_CAPS);
+            w->config = hda_send_verb(codec_addr, nid, HDA_VERB_GET_CONFIG_DEF);
+        }
+        n = hda_get_connections(nid, conns, HDA_MAX_CONNECTIONS);
+        if (n > HDA_WIDGET_REPORT_CONNS)
+            n = -1;
+        w->conn_count = n;
+        for (j = 0; j < n; j++)
+            w->conns[j] = conns[j];
+    }
+}
+
+/**
+ * Read Get Pin Sense into the report for every pin with presence detect,
+ * first executing the sense on a pin that needs a trigger. hda_start calls
+ * it once the path is powered; the word of a pin without presence detect
+ * stays 0.
+ */
+static void hda_sense_pins(void)
+{
+    int i;
+
+    for (i = 0; i < hda_report.widget_count; i++) {
+        hda_widget_report_t *w = &hda_report.widgets[i];
+
+        w->sensed = false;
+        w->sense = 0;
+        if (w->type != HDA_WIDGET_PIN || !(w->pin_caps & (1u << 2))) /* Presence Detect */
+            continue;
+        if (w->pin_caps & (1u << 1)) /* Trigger Required */
+            hda_send_verb(codec_addr, w->nid, HDA_VERB_SET_PIN_SENSE);
+        w->sense = hda_send_verb(codec_addr, w->nid, HDA_VERB_GET_PIN_SENSE);
+        w->sensed = true;
+    }
+}
+
+/** Cache the selected paths, their codec lists and every widget of the
+ * function group for reads through procfs. */
 static void hda_capture_report(void)
 {
     int i;
@@ -1213,6 +1274,7 @@ static void hda_capture_report(void)
         if (nodes[i])
             hda_read_connections(nodes[i], c->nodes, HDA_MAX_CONNECTIONS, c);
     }
+    hda_capture_widgets();
 }
 
 const hda_report_t *hda_get_report(void)
@@ -2741,6 +2803,8 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
         }
     }
 
+    hda_sense_pins();
+
     /* The amplifiers above are at full gain; the level set is applied over
      * them. */
     if (hda_volume != 100) {
@@ -2810,6 +2874,58 @@ static void hda_stop(void)
 
     ring_read_ptr = 0;
     ring_write_ptr = 0;
+}
+
+/** The output stream's position in its DMA buffer, in bytes, from the
+ * position buffer when hda_check_dma chose it and from LPIB otherwise. */
+static uint32_t hda_stream_position(void)
+{
+    uint32_t idx = (uint32_t)output_stream_index * 2u;
+
+    if (dma_posbuf_use && idx < (uint32_t)(HDA_MAX_STREAMS * 2)) {
+        /* DMA writes -> invalidate cached line before reading. */
+        hda_dma_sync_range(&dma_posbuf[idx], (uint32_t)sizeof(uint32_t));
+        return dma_posbuf[idx];
+    }
+    return hda_sd_read32(output_stream_index, HDA_SD_LPIB);
+}
+
+/**
+ * The time a sample written now waits to be played, in milliseconds: the
+ * ring's frames at the requested rate, and the DMA buffer's frames ahead of
+ * position `lpib`, at the programmed rate. The service keeps the period
+ * after the one playing filled, so the DMA holds the rest of the period
+ * playing and one more. 0 when no stream plays.
+ */
+static uint32_t hda_queued_ms(uint32_t lpib)
+{
+    uint32_t in_frame = (current_format == AUDIO_S16LE ? 2u : 1u) *
+                        (current_channels > 0 ? (uint32_t)current_channels : 1u);
+    uint32_t out_frame = 2u * (current_hw_channels > 0 ? (uint32_t)current_hw_channels : 1u);
+    uint32_t dma = 2u * HDA_BUFFER_SIZE - lpib % HDA_BUFFER_SIZE;
+    uint32_t ms = 0;
+
+    if (!playing || !current_sample_rate || !current_hw_sample_rate)
+        return 0;
+    if (!user_callback)
+        ms += ring_available() / in_frame * 1000u / current_sample_rate;
+    ms += dma / out_frame * 1000u / current_hw_sample_rate;
+    return ms;
+}
+
+void hda_read_queue(void)
+{
+    hda_queue_report_t *q = &hda_report.queue;
+
+    q->lpib = hda_base && hda_report.ready ? hda_stream_position() : 0;
+    q->fill = ring_available();
+    q->high = ring_high_water;
+    q->delay_ms = hda_base && hda_report.ready ? hda_queued_ms(q->lpib) : 0;
+    q->written = session_bytes_written;
+    q->dropped = session_bytes_dropped;
+    q->periods = hw_fill_count;
+    q->underruns = underrun_count;
+    q->missed = missed_revolutions;
 }
 
 void hda_tick(void)
