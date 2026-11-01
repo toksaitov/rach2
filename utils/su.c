@@ -45,13 +45,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/syscall.h>
 #include <grp.h>
 #include <pwd.h>
 
 #include "pwauth.h"
-
-/* Descriptors on Rach2 are 0 to 1023 (`FD_TABLE_LIMIT`, rach2/sys/fs/fd.h). */
-#define MAX_FD 1024
 
 /** Print the usage line and return the exit status a usage error takes. */
 static int usage(void)
@@ -92,7 +90,7 @@ int main(int argc, char **argv)
     const char *arg0;
     struct passwd *pw;
     int login = 0;
-    int i, fd;
+    int i;
 
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-") == 0 || strcmp(argv[i], "-l") == 0 ||
@@ -129,9 +127,8 @@ int main(int argc, char **argv)
         }
     }
 
-    for (fd = 3; fd < MAX_FD; fd++) {
-        close(fd);
-    }
+    /* Every descriptor past stderr, however high the limit let it be. */
+    syscall(SYS_close_range, 3u, ~0u, 0u);
 
     if (setgroups(0, NULL) != 0 || setgid(pw->pw_gid) != 0 || setuid(pw->pw_uid) != 0) {
         fprintf(stderr, "su: cannot assume the target identity\n");

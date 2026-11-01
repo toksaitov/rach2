@@ -25,12 +25,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/syscall.h>
 #include <errno.h>
 
 #define SUDOERS "/etc/sudoers"
-
-/* Descriptors on Rach2 are 0 to 1023 (`FD_TABLE_LIMIT`, rach2/sys/fs/fd.h). */
-#define MAX_FD 1024
 
 /* A fixed, minimal environment for the command: never the caller's, which a
  * setuid program cannot trust. */
@@ -139,7 +137,6 @@ static int permitted(unsigned long uid)
 int main(int argc, char **argv)
 {
     unsigned long ruid = (unsigned long)getuid();
-    int fd;
 
     if (argc < 2) {
         fprintf(stderr, "usage: sudo <command> [args...]\n");
@@ -151,9 +148,8 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    for (fd = 3; fd < MAX_FD; fd++) {
-        close(fd);
-    }
+    /* Every descriptor past stderr, however high the limit let it be. */
+    syscall(SYS_close_range, 3u, ~0u, 0u);
 
     /* Effective uid 0 may set all three ids, the real one included. */
     if (setresuid(0, 0, 0) != 0 || setresgid(0, 0, 0) != 0) {
