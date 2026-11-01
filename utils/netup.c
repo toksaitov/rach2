@@ -12,6 +12,9 @@
  *         address 192.168.0.105
  *         netmask 255.255.255.0
  *         gateway 192.168.0.1
+ *     iface eth1 inet6 static
+ *         address fd00::105/64
+ *         gateway fd00::1
  *
  * `netup [-a] [INTERFACE ...]`. With `-a`, or with no arguments, it brings up
  * every interface an `auto` or `allow-hotplug` line names. A named interface
@@ -22,6 +25,14 @@
  * first round of discovery and then holds the lease, or goes on requesting
  * one, from the background. A `static` stanza is applied here, through the
  * interface and route ioctls `dhcpc` also uses.
+ *
+ * IPv6 needs no stanza: every card takes its link-local address when it
+ * comes up and the addresses its routers advertise, made with the stable
+ * secret netup puts in force first (ip6secret.h). An `inet6 auto` stanza
+ * turns on `accept_ra` and `autoconf` for the interface, in case they were
+ * turned off; `inet6 static` adds its address and default route through
+ * the AF_INET6 ioctls, beside whatever the routers give; `inet6 manual`
+ * does nothing. This image has no DHCPv6 client.
  */
 
 #include <stdio.h>
@@ -36,8 +47,10 @@
 #include <netinet/in.h>
 #include <net/if.h>
 #include <net/route.h>
+#include <fcntl.h>
 
 #include "netcfg.h"
+#include "ip6secret.h"
 
 #define INTERFACES "/etc/network/interfaces"
 #define RUN_DIR    "/var/run"
@@ -268,6 +281,103 @@ static int apply_static(const struct netcfg_iface *s)
     return 0;
 }
 
+/* Linux's struct in6_ifreq, which the C library does not declare. */
+struct netup_in6_ifreq {
+    struct in6_addr addr;
+    unsigned int prefixlen;
+    int ifindex;
+};
+
+/** Write `value` to the IPv6 setting `key` of the interface `name` under
+ * /proc/sys/net/ipv6/conf: 0, or -1 with errno. */
+static int set_conf6(const char *name, const char *key, const char *value)
+{
+    char path[96];
+    int fd;
+    ssize_t n;
+
+    snprintf(path, sizeof(path), "/proc/sys/net/ipv6/conf/%s/%s", name, key);
+    fd = open(path, O_WRONLY);
+    if (fd < 0) {
+        return -1;
+    }
+    n = write(fd, value, strlen(value));
+    close(fd);
+    return n == (ssize_t)strlen(value) ? 0 : -1;
+}
+
+/**
+ * Apply an inet6 stanza: for `auto`, turn on the interface's `accept_ra`
+ * and `autoconf`; for `static`, check it whole, then add the address and,
+ * with a gateway, a default route through it at metric 1024, as Linux's
+ * `route -A inet6` would. An address or route there already is taken as
+ * applied. Nothing is undone after a failure, since nothing IPv4 has is
+ * touched and an IPv6 address alone takes nothing away.
+ *
+ * @return 0 when the stanza is in force, -1 after a message.
+ */
+static int apply_inet6(const struct netcfg_iface *s)
+{
+    struct netup_in6_ifreq ifr6;
+    struct in6_rtmsg rt;
+    unsigned int index;
+    char err[96];
+    int fd;
+
+    if (s->method6 == NETCFG6_AUTO) {
+        if (set_conf6(s->name, "accept_ra", "1\n") != 0 ||
+            set_conf6(s->name, "autoconf", "1\n") != 0) {
+            fprintf(stderr, "netup: %s: cannot turn on IPv6 autoconfiguration: %s\n", s->name,
+                    strerror(errno));
+            return -1;
+        }
+        return 0;
+    }
+    if (s->method6 != NETCFG6_STATIC) {
+        return 0;
+    }
+    if (netcfg_check_static6(s, err, sizeof(err)) != 0) {
+        fprintf(stderr, "netup: %s: %s\n", s->name, err);
+        return -1;
+    }
+    index = if_nametoindex(s->name);
+    if (index == 0) {
+        fprintf(stderr, "netup: %s: no such interface\n", s->name);
+        return -1;
+    }
+    fd = socket(AF_INET6, SOCK_DGRAM, 0);
+    if (fd < 0) {
+        fprintf(stderr, "netup: %s: no IPv6 socket: %s\n", s->name, strerror(errno));
+        return -1;
+    }
+    memset(&ifr6, 0, sizeof(ifr6));
+    memcpy(&ifr6.addr, s->address6, sizeof(ifr6.addr));
+    ifr6.prefixlen = (unsigned int)s->prefix6;
+    ifr6.ifindex = (int)index;
+    if (ioctl(fd, SIOCSIFADDR, &ifr6) < 0 && errno != EEXIST) {
+        fprintf(stderr, "netup: %s: cannot add the IPv6 address: %s\n", s->name, strerror(errno));
+        close(fd);
+        return -1;
+    }
+    if (s->gateway6[0] != 0 || memcmp(s->gateway6, s->gateway6 + 1, 15) != 0) {
+        memset(&rt, 0, sizeof(rt));
+        memcpy(&rt.rtmsg_gateway, s->gateway6, sizeof(rt.rtmsg_gateway));
+        rt.rtmsg_flags = RTF_UP | RTF_GATEWAY;
+        rt.rtmsg_metric = 1024;
+        rt.rtmsg_ifindex = (int)index;
+        if (ioctl(fd, SIOCADDRT, &rt) < 0 && errno != EEXIST) {
+            fprintf(stderr, "netup: %s: cannot set the IPv6 default route: %s\n", s->name,
+                    strerror(errno));
+            close(fd);
+            return -1;
+        }
+    }
+    close(fd);
+    printf("netup: %s: IPv6 configured from %s\n", s->name, INTERFACES);
+    fflush(stdout);
+    return 0;
+}
+
 /**
  * Run `dhcpc -b` for the interface and wait for its first round of discovery.
  *
@@ -322,10 +432,13 @@ static int run_dhcp(const struct netcfg_iface *s)
  * Bring up each interface named on the command line and, with `-a` or with no
  * operand, each one an `auto` or `allow-hotplug` line declares.
  *
- * Every interface is tried even after one fails. The status is 0 when all of
- * them came up, 1 when any failed or the file could not be used, and 2 for a
- * usage error or a bad list of names: one given twice, one no interface can
- * have, or more than eight.
+ * IPv6's stable secret is put in force before any interface is touched
+ * (`ip6secret_keep`); a failure there is reported and the interfaces are
+ * still brought up. Every interface is tried even after one fails, and its
+ * inet stanza and its inet6 stanza each on its own. The status is 0 when
+ * all of them came up, 1 when any failed or the file could not be used,
+ * and 2 for a usage error or a bad list of names: one given twice, one no
+ * interface can have, or more than eight.
  */
 int main(int argc, char **argv)
 {
@@ -372,10 +485,21 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    (void)ip6secret_keep("netup");
     for (i = 0; i < count; i++) {
-        if (!want[i].found) {
+        if (!want[i].found && want[i].method6 == NETCFG6_NONE) {
             fprintf(stderr, "netup: %s: %s has no stanza for it\n", want[i].name, INTERFACES);
             failures++;
+            continue;
+        }
+        if (want[i].bad6) {
+            fprintf(stderr, "netup: %s: its inet6 stanza has something this cannot use\n",
+                    want[i].name);
+            failures++;
+        } else if (apply_inet6(&want[i]) != 0) {
+            failures++;
+        }
+        if (!want[i].found) {
             continue;
         }
         if (want[i].bad) {

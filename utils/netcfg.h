@@ -23,6 +23,14 @@
  * fit with its newline fails the read; it is not split. */
 #define NETCFG_LINE_MAX 256
 
+/* The methods of an `inet6` stanza: addresses from the routers' prefixes,
+ * which the kernel makes by itself; a fixed address; and nothing done. A
+ * stanza with none has NETCFG6_NONE. */
+#define NETCFG6_NONE   0
+#define NETCFG6_AUTO   1
+#define NETCFG6_STATIC 2
+#define NETCFG6_MANUAL 3
+
 /** One interface, as the file describes it. */
 struct netcfg_iface {
     char name[NETCFG_NAME_MAX];
@@ -33,6 +41,15 @@ struct netcfg_iface {
     unsigned long netmask;
     unsigned long gateway;
     int found; /* the file has an inet stanza for it */
+    /* Its inet6 stanza: the NETCFG6_ method, and for a static one the
+     * address, the prefix's length, -1 for none given, and the gateway, ::
+     * for none, in network order. `bad6` is `bad` for this stanza alone,
+     * which leaves the inet one to be applied. */
+    int method6;
+    int bad6;
+    unsigned char address6[16];
+    int prefix6;
+    unsigned char gateway6[16];
 };
 
 /** Whether `name` fits an interface name field: 1 for a name of 1 to
@@ -53,8 +70,13 @@ void netcfg_set_name(char *dst, const char *src);
  * that is not among them is added. An entry with an `inet` stanza gets
  * `found`, its method and the addresses the stanza gives; a method other
  * than `dhcp` or `static`, or an address that is not a dotted quad, sets
- * `bad` and is reported. Stanzas of other families are skipped. The caller
- * checks `found` and `bad` before it configures an interface.
+ * `bad` and is reported. An `inet6` stanza sets `method6`, from `auto`,
+ * `static`, `manual` or `loopback`, which is taken as `manual`, and for a
+ * static one the address, as `ADDR` or `ADDR/LEN`, the prefix's length,
+ * from `/LEN` or `netmask LEN`, and the gateway; another method, an
+ * address that is not one or a length past 128 sets `bad6` and is
+ * reported. Stanzas of other families are skipped. The caller checks
+ * `found`, `bad` and `bad6` before it configures an interface.
  *
  * The file is read twice through one stream, the names first and the
  * stanzas second, so a stanza may come before or after the line that names
@@ -77,5 +99,14 @@ int netcfg_read(const char *path, struct netcfg_iface *want, int count, int max,
  * prefix and a test to tell one reason from another.
  */
 int netcfg_check_static(const struct netcfg_iface *s, char *err, size_t errlen);
+
+/**
+ * Check the static inet6 stanza of `s` whole, before any of it is applied:
+ * it must give an address and its prefix's length, and the address must
+ * be one an interface can hold, not ::, ::1, a group or an IPv4-mapped
+ * one; a gateway must be a unicast address, not ::1 or mapped. Returns 0,
+ * or -1 with the reason in `err`.
+ */
+int netcfg_check_static6(const struct netcfg_iface *s, char *err, size_t errlen);
 
 #endif /* NETCFG_H */

@@ -144,7 +144,8 @@ static void check_ignored(void)
     }
     n = read_auto(want, 4);
     CHECK(n == 1, "a stanza for an interface nobody asked for is not brought up");
-    CHECK(want[0].dhcp && !want[0].bad, "an inet6 stanza for the same name is stepped over");
+    CHECK(want[0].dhcp && !want[0].bad, "an inet6 stanza leaves the inet one of the same name");
+    CHECK(want[0].method6 == NETCFG6_AUTO && !want[0].bad6, "and is read as inet6 auto");
     CHECK(want[0].address == 0, "and no other stanza's address leaks into it");
 
     if (put("auto eth0\n"
@@ -158,6 +159,86 @@ static void check_ignored(void)
     n = read_auto(want, 4);
     CHECK(n == 1 && want[0].address == IP(10, 1, 1, 1),
           "a later stanza does not overwrite the one before it");
+}
+
+/**
+ * Read inet6 stanzas: a static one with its length after the address, one
+ * with it as `netmask` and a gateway, an interface with an inet6 stanza
+ * alone, and the ones to refuse, a method this does not implement, a text
+ * that is no address and a length past 128, each of which leaves the inet
+ * stanza beside it to be applied. Then judge static ones whole.
+ */
+static void check_inet6(void)
+{
+    static const unsigned char fd00_5[16] = {0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5};
+    static const unsigned char fe80_1[16] = {0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
+    struct netcfg_iface want[4];
+    char err[96];
+    int n;
+
+    if (put("auto eth0 eth1\n"
+            "iface eth0 inet dhcp\n"
+            "iface eth0 inet6 static\n"
+            "    address fd00::5/64\n"
+            "iface eth1 inet6 static\n"
+            "    address fd00::5\n"
+            "    netmask 48\n"
+            "    gateway fe80::1\n") != 0) {
+        return;
+    }
+    n = read_auto(want, 4);
+    CHECK(n == 2, "two interfaces are named");
+    CHECK(want[0].dhcp && want[0].found && want[0].method6 == NETCFG6_STATIC,
+          "an interface has an inet and an inet6 stanza");
+    CHECK(memcmp(want[0].address6, fd00_5, 16) == 0 && want[0].prefix6 == 64,
+          "ADDR/LEN gives the address and its length");
+    CHECK(!want[1].found && want[1].method6 == NETCFG6_STATIC && !want[1].bad6,
+          "an interface may have an inet6 stanza alone");
+    CHECK(want[1].prefix6 == 48 && memcmp(want[1].gateway6, fe80_1, 16) == 0,
+          "netmask gives the length and gateway the router");
+    CHECK(netcfg_check_static6(&want[0], err, sizeof(err)) == 0, "a whole static stanza passes");
+
+    if (put("auto eth0\n"
+            "iface eth0 inet dhcp\n"
+            "iface eth0 inet6 dhcp\n") != 0) {
+        return;
+    }
+    n = read_auto(want, 4);
+    CHECK(n == 1 && want[0].bad6 && !want[0].bad, "an inet6 method this has not is refused alone");
+
+    if (put("auto eth0\n"
+            "iface eth0 inet6 static\n"
+            "    address fd00::zz/64\n") != 0) {
+        return;
+    }
+    n = read_auto(want, 4);
+    CHECK(n == 1 && want[0].bad6, "a text that is no IPv6 address is refused");
+
+    if (put("auto eth0\n"
+            "iface eth0 inet6 static\n"
+            "    address fd00::5/129\n") != 0) {
+        return;
+    }
+    n = read_auto(want, 4);
+    CHECK(n == 1 && want[0].bad6, "a length past 128 is refused");
+
+    if (put("auto eth0\n"
+            "iface eth0 inet6 static\n"
+            "    address fd00::5\n") != 0) {
+        return;
+    }
+    n = read_auto(want, 4);
+    CHECK(n == 1 && !want[0].bad6 && netcfg_check_static6(&want[0], err, sizeof(err)) != 0,
+          "a static stanza with no length is judged incomplete");
+
+    if (put("auto eth0\n"
+            "iface eth0 inet6 static\n"
+            "    address ff02::1/64\n") != 0) {
+        return;
+    }
+    n = read_auto(want, 4);
+    CHECK(n == 1 && netcfg_check_static6(&want[0], err, sizeof(err)) != 0,
+          "a group is no address of an interface");
 }
 
 /**
@@ -363,6 +444,7 @@ int main(void)
 {
     check_ordinary();
     check_ignored();
+    check_inet6();
     check_refusals();
     check_names();
     check_static_judgement();
