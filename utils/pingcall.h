@@ -2,7 +2,7 @@
  * pingcall.h: the numbers of Rach2's ICMP echo, a system call no libc has a
  * wrapper for, shared by ping.c and the test probes.
  *
- * The echo is two sub-calls of socketcall(2), numbered clear of the BSD
+ * The echo is three sub-calls of socketcall(2), numbered clear of the BSD
  * sub-calls. Each argument is an unsigned long in the array whose address is
  * socketcall's second argument. The kernel sends the echo and the caller
  * sleeps until the reply, for up to four attempts of a second each; a signal
@@ -11,8 +11,8 @@
  *
  * i386 has socketcall as call 102. x86-64 has no socketcall: the kernel takes
  * Rach2's at 400, a number Linux x86-64 leaves unassigned below the 424 from
- * which every architecture's numbers agree, and serves only the two sub-calls
- * there.
+ * which every architecture's numbers agree, and serves only the three
+ * sub-calls there.
  */
 #ifndef PINGCALL_H
 #define PINGCALL_H
@@ -24,6 +24,11 @@
  * hop limit, 1 to 255. Returns the reply's ICMP length in the low 16 bits and
  * the hop limit it arrived with in the 8 bits above them. */
 #define SC_PING_DATA 0x1001
+/* An ICMPv6 echo: the address of the destination's 16 bytes in network
+ * order, the index of the interface a link-local destination is reached by
+ * or 0, the data size, at most 1452 bytes, and the hop limit, 1 to 255.
+ * Returns as SC_PING_DATA does. */
+#define SC_PING6     0x1002
 
 #if defined __x86_64__
 #define SYS_PINGCALL 400
