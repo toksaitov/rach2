@@ -79,8 +79,8 @@ int render_script(const char *source, const char *destination, const char *row)
     last = steps ? steps->child : NULL;
     while (last && last->next)
         last = last->next;
-    if (last &&
-        (!strcmp(row, "codex-exec") || !strcmp(row, "claude-print") || !strcmp(row, "agy-print")))
+    if (last && (!strcmp(row, "codex-exec") || !strcmp(row, "claude-print") ||
+                 !strcmp(row, "agy-print") || !strcmp(row, "opencode-run")))
         set(last, "hold", json_boolean(1));
     encoded = encode(script, 0);
     f = fopen(destination, "wb");
@@ -277,6 +277,8 @@ static int audit_metadata(struct audit *a, const char *version)
     }
     if (!strncmp(row, "claude", 6) || !strcmp(row, "worker-session"))
         snprintf(a->agent, sizeof(a->agent), "claude-cli/%s ", version);
+    if (!strncmp(row, "opencode", 8))
+        snprintf(a->agent, sizeof(a->agent), "opencode/latest/%s/cli", version);
     if (!strncmp(row, "muse", 4)) {
         snprintf(a->agent, sizeof(a->agent), "muse-build/%s", version);
         {
