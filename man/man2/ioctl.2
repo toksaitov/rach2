@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd November 1, 2026
 .Dt IOCTL 2
 .Os
 .Sh NAME
@@ -294,6 +294,40 @@ Request 0x80047601 writes the inode's generation number as a 32-bit
 integer through
 .Fa arg .
 .El
+.Ss Clone requests
+.Dv FICLONE ,
+0x40049409, whose
+.Fa arg
+is a source descriptor, and
+.Dv FICLONERANGE ,
+0x4020940d, whose
+.Fa arg
+points to a
+.Vt struct file_clone_range
+that begins with the source descriptor, ask that the destination
+.Fa fd
+share the source's extents, as
+.Ql cp --reflink
+asks.
+Every descriptor takes them, and they fail as Linux's do on a file
+system that shares no extents: with
+.Er EBADF
+for a source not open,
+.Er EXDEV
+for two file systems,
+.Er EISDIR
+for a directory,
+.Er EINVAL
+for anything else that is not a regular file,
+.Er EBADF
+for a source not open for reading or a destination not open for writing
+or with
+.Dv O_APPEND ,
+and otherwise
+.Er EOPNOTSUPP ,
+since no file system here shares extents.
+.Ql cp --reflink=auto
+copies the bytes after that.
 .Ss Framebuffer requests
 A framebuffer descriptor accepts the private requests below, whose
 numbers and structures are in
@@ -616,8 +650,8 @@ raw window, or
 .Dv TIOCSPGRP
 selected a terminal outside the caller's session.
 .It Bq Er EOPNOTSUPP
-A route change other than a default route or addition of the existing
-subnet route was requested, or
+A clone request found nothing else wrong, a route change other than a
+default route or addition of the existing subnet route was requested, or
 .Dv AUDIO_WRITE
 was given to the PC speaker, which cannot play samples.
 .It Bq Er EPERM

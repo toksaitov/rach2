@@ -1,9 +1,10 @@
-.Dd September 28, 2026
+.Dd November 1, 2026
 .Dt ACCESS 2
 .Os
 .Sh NAME
 .Nm access ,
-.Nm faccessat
+.Nm faccessat ,
+.Nm faccessat2
 .Nd check file existence and permissions
 .Sh SYNOPSIS
 .In unistd.h
@@ -12,6 +13,8 @@
 .In fcntl.h
 .Ft int
 .Fn faccessat "int dirfd" "const char *path" "int mode" "int flags"
+.Ft int
+.Fn faccessat2 "int dirfd" "const char *path" "int mode" "int flags"
 .Sh DESCRIPTION
 .Fn access
 checks whether
@@ -31,7 +34,11 @@ Execute permission for a file, or search permission for a directory.
 .El
 .Pp
 The kernel uses the caller's real user and group IDs and supplementary
-groups for both directory search and the target's permissions.
+groups for both directory search and the target's permissions, but for
+.Fn faccessat2
+with
+.Dv AT_EACCESS ,
+below.
 The owner bits apply when the real user ID matches the owner;
 otherwise the group bits apply when a group matches, and the other bits
 apply when none does.
@@ -64,7 +71,10 @@ An absolute path ignores
 .Fa dirfd .
 The descriptor is resolved to a path and does not bypass ancestor
 search permissions.
-Symbolic links are followed.
+Symbolic links are followed, but by
+.Fn faccessat2
+with
+.Dv AT_SYMLINK_NOFOLLOW .
 A path that ends in a slash, or whose last component is
 .Pa \&.
 or
@@ -74,34 +84,53 @@ returns
 .Er ENOTDIR ,
 as on Linux.
 .Pp
+.Fn faccessat2
+is
+.Fn faccessat
+with
+.Fa flags :
+.Dv AT_EACCESS
+judges by the effective user and group IDs instead of the real ones,
+.Dv AT_SYMLINK_NOFOLLOW
+judges a final symbolic link itself, and
+.Dv AT_EMPTY_PATH
+with an empty or null
+.Fa path
+judges what
+.Fa dirfd
+is open on, by the owner, group and mode
+.Xr fstat 2
+reports, or the working directory for
+.Dv AT_FDCWD .
+.Pp
 The kernel calls are 33 for
-.Fn access
-and 307 for
-.Fn faccessat .
-Call 307 takes only
+.Fn access ,
+307 for
+.Fn faccessat ,
+which takes only
 .Fa dirfd ,
 .Fa path
 and
-.Fa mode .
-Pass zero as
+.Fa mode ,
+and 439 for
+.Fn faccessat2 ;
+on x86-64 they are 21, 269 and 439.
+musl's
+.Fn faccessat
+uses call 307 for
 .Fa flags
-to use it directly through musl.
-Musl rejects flags other than
-.Dv AT_EACCESS .
-With that flag and equal real and effective IDs it uses the same call.
-With differing IDs its helper starts a child with
-.Xr clone 2
-and no flags, which this kernel refuses, since a process it makes must
-have
-.Dv SIGCHLD
-as its exit signal, and the call fails with
-.Er EBUSY .
+of zero and call 439 for any other.
 .Sh RETURN VALUES
 These functions return 0 when all requested checks succeed.
 On failure they return -1 and set
 .Va errno .
 The raw kernel calls return negative error numbers on failure.
 .Sh EXAMPLES
+The default suite's
+.Pa tests/musl/callsmusl.c
+calls
+.Fn faccessat2
+with each of its flags.
 The default-suite probe
 .Pa tests/permprobe.c
 checks that an unprivileged caller can read
@@ -118,13 +147,12 @@ checks real-ID permission decisions with unequal real and effective IDs.
 Search permission is denied on a path component, or the target denies a
 requested permission.
 .It Er EBADF
-A relative path uses an invalid or stale
+A relative path, or an empty one with
+.Dv AT_EMPTY_PATH ,
+uses an invalid or stale
 .Fa dirfd .
 .It Er EBUSY
 Path resolution enters a mount being mounted or unmounted.
-Musl also uses this error when its
-.Dv AT_EACCESS
-helper cannot complete.
 .It Er EFAULT
 The path cannot be read from user memory.
 .It Er EINVAL
@@ -134,8 +162,13 @@ has bits other than
 .Dv W_OK
 and
 .Dv X_OK ,
-or musl rejects
-.Fa flags .
+or
+.Fa flags
+has bits other than
+.Dv AT_EACCESS ,
+.Dv AT_SYMLINK_NOFOLLOW
+and
+.Dv AT_EMPTY_PATH .
 .It Er EIO
 Path lookup or metadata access fails, including access to a removed device.
 .It Er ELOOP
@@ -146,8 +179,9 @@ directory descriptor's path cannot be reconstructed within its buffer,
 a component exceeds 255 bytes, or symbolic-link expansion exceeds
 4095 bytes.
 .It Er ENOENT
-The path is empty, a component is missing, or a symbolic link has an
-empty target.
+The path is empty without
+.Dv AT_EMPTY_PATH ,
+a component is missing, or a symbolic link has an empty target.
 .It Er ENOMEM
 Path lookup cannot allocate a file-system node.
 .It Er ENOTDIR

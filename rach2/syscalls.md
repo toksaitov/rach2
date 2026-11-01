@@ -1,6 +1,6 @@
 # The system calls
 
-This table lists the calls the two kernels register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. `none` marks a call one kernel does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 286 calls and the x86-64 kernel 262. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
+This table lists the calls the two kernels register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. `none` marks a call one kernel does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 288 calls and the x86-64 kernel 264. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
 
 `make syscalls` writes this file from `rach2/sys/arch/i686/systab.c` and `rach2/sys/arch/x86_64/systab.c`, with the numbers in `rach2/sys/arch/i686/sysnr.h` and `rach2/sys/arch/x86_64/sysnr.h`, and `tests/run style` fails when the file differs from what it writes.
 
@@ -35,6 +35,7 @@ This table lists the calls the two kernels register, one row a call, in name ord
 | `close` | 6 | 3 | [open(2)](../man/man2/open.2) |
 | `close_range` | 436 | 436 | [open(2)](../man/man2/open.2) |
 | `connect` | 362 | 42 | [connect(2)](../man/man2/connect.2) |
+| `copy_file_range` | 377 | 326 | [splice(2)](../man/man2/splice.2) |
 | `creat` | 8 | 85 | [open(2)](../man/man2/open.2) |
 | `dup` | 41 | 32 | [dup(2)](../man/man2/dup.2) |
 | `dup2` | 63 | 33 | [dup(2)](../man/man2/dup.2) |
@@ -51,6 +52,7 @@ This table lists the calls the two kernels register, one row a call, in name ord
 | `exit` | 1 | 60 | [exit(2)](../man/man2/exit.2) |
 | `exit_group` | 252 | 231 | [exit(2)](../man/man2/exit.2) |
 | `faccessat` | 307 | 269 | [access(2)](../man/man2/access.2) |
+| `faccessat2` | 439 | 439 | [access(2)](../man/man2/access.2) |
 | `fadvise64` | 250 | 221 | [readahead(2)](../man/man2/readahead.2) |
 | `fadvise64_64` | 272 | none | [readahead(2)](../man/man2/readahead.2) |
 | `fallocate` | 324 | 285 | [fallocate(2)](../man/man2/fallocate.2) |
