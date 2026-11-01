@@ -449,6 +449,7 @@ struct release {
 struct release_row {
     const char *record, *sha, *writes, *runs, *git, *accept, *machines, *windows, *native,
         *failures, *milestone, *ancestor, *master, *push, *lenovo, *prepare, *hold, *testing;
+    const char *again; /* the machine of -a, or NULL for a release */
     int rerun, preparing;
 };
 
@@ -501,7 +502,7 @@ static void run(struct release *r, const struct release_row *spec)
 {
     struct fixture *f = r->f;
     const char *files[] = {"calls", "calls.release"};
-    const char *a[8] = {"/bin/sh", r->script, "-s", flow_path(f, "state")};
+    const char *a[10] = {"/bin/sh", r->script, "-s", flow_path(f, "state")};
     unsigned i, n = 4;
     fx_remove(flow_path(f, "state"));
     for (i = 0; i < sizeof(files) / sizeof(files[0]); i++)
@@ -538,6 +539,10 @@ static void run(struct release *r, const struct release_row *spec)
         a[n++] = "-r";
     if (spec->preparing)
         a[n++] = "-p";
+    if (spec->again) {
+        a[n++] = "-a";
+        a[n++] = spec->again;
+    }
     a[n++] = "7";
     a[n++] = spec->sha ? spec->sha : H;
     a[n] = NULL;
@@ -1360,6 +1365,125 @@ static int prepare_rows(struct release *r)
          ok;
     return ok;
 }
+/** Succeed once `path` holds `text`, waiting up to ten seconds for a run that
+ * -a started detached. */
+static int waited(const char *path, const char *text)
+{
+    struct timespec pause = {0, 50000000};
+    unsigned i;
+    for (i = 0; i < 200; i++) {
+        if (fx_has(path, text))
+            return 1;
+        /* interval: poll the detached run's result every 50 ms */
+        nanosleep(&pause, NULL);
+    }
+    return 0;
+}
+/** -a refuses a run that passed and a commit off the branch. */
+static int restart_refusal_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    char text[9000];
+    int ok = 1;
+    snprintf(text, sizeof(text), "%smac started m\nmac done %s run m\n", r->built, T);
+    run(r, &(struct release_row){
+               .record = text, .sha = C, .git = "yes", .machines = MAC, .again = "mac"});
+    ok = check(r,
+               f->status == 2 && fx_equal(record(r), text) &&
+                   strstr(f->err, "release: refused: mac: its run passed"),
+               "-a refuses a machine whose run passed") &&
+         ok;
+    snprintf(text, sizeof(text), "%smac started m\nfailure mac m i686:gnu\n", r->built);
+    run(r, &(struct release_row){.record = text,
+                                 .sha = C,
+                                 .git = "yes",
+                                 .machines = MAC,
+                                 .ancestor = "branch",
+                                 .again = "mac"});
+    ok = check(r,
+               f->status == 2 && fx_equal(record(r), text) &&
+                   strstr(f->err, "release: refused: " C " is not on " BRANCH),
+               "-a refuses a commit that is not on the milestone's branch") &&
+         ok;
+    return ok;
+}
+/**
+ * -a starts the Mac's failed run at a newer commit; the release under way
+ * takes its pass and ends before the build, and -r at that commit keeps it.
+ */
+static int restart_mac_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    char text[9000], id[200], last[600];
+    char *kept;
+    int ok = 1;
+    /* A run of mac_rows in the same second would have this run's name. */
+    if (!mac_tree(r))
+        return 0;
+    mac_failed(r, text, sizeof(text));
+    run(r, &(struct release_row){
+               .record = text, .sha = C, .git = "yes", .machines = MAC, .again = "mac"});
+    ok = check(r,
+               !f->status && mac_ran(r, id, sizeof(id)) &&
+                   !strncmp(id, "milestone7-222222222222-mac-", 28) && mac_passed(r, id) &&
+                   count(record(r), "^failure newer mac milestone7-2") == 1 &&
+                   count(record(r), "^mac started ") == 2 && !called(r, "^(dispatch|testing)"),
+               "-a starts the Mac's failed run again at a newer commit") &&
+         ok;
+    kept = fx_read(record(r));
+    run(r, &(struct release_row){.record = kept, .machines = MAC});
+    free(kept);
+    snprintf(last, sizeof(last),
+             "release: failed: mac run %s: tested " C
+             ", not the release's commit; release that commit with -r",
+             id);
+    ok = check(r,
+               f->status == 1 && count(record(r), "^mac done .* run milestone7-2") == 1 &&
+                   !failed_mac(r) && ended_with(r, last) && !called(r, "^(testing|machine)"),
+               "the release under way takes the run of -a and ends before the build") &&
+         ok;
+    kept = fx_read(record(r));
+    run(r,
+        &(struct release_row){.record = kept, .sha = C, .git = "yes", .machines = MAC, .rerun = 1});
+    ok = check(r,
+               f->status == 75 && count(record(r), "^mac done .* run milestone7-2") == 1 &&
+                   !fx_has(record(r), "mac started") && !fx_has(record(r), "again mac") &&
+                   !fx_has(record(r), "failure newer") && called(r, "^testing "),
+               "-r at the commit of -a keeps the Mac's pass") &&
+         ok;
+    run(r, &(struct release_row){
+               .record = kept, .git = "yes", .runs = "none", .machines = MAC, .rerun = 1});
+    free(kept);
+    ok = check(r,
+               f->status == 75 && !fx_has(record(r), "mac done ") && mac_ran(r, id, sizeof(id)) &&
+                   !strncmp(id, "milestone7-111111111111-mac-", 28),
+               "-r at the release's own commit runs the Mac again") &&
+         ok;
+    return ok;
+}
+/** -a starts Windows' failed run in a process of its own, which records it. */
+static int restart_windows_row(struct release *r)
+{
+    struct fixture *f = r->f;
+    char text[4000];
+    snprintf(text, sizeof(text),
+             "%swindows started w\nfailure windows w runner\nfailed tests: windows run w: "
+             "runner\n",
+             r->head);
+    run(r, &(struct release_row){.record = text,
+                                 .git = "yes",
+                                 .machines = WINDOWS,
+                                 .windows = "status 0",
+                                 .again = "windows"});
+    return check(r,
+                 !f->status && count(record(r), "^windows started " WINDOWS_ID) == 1 &&
+                     waited(record(r), "\nwindows done ") &&
+                     count(record(r), "^windows done .* run " WINDOWS_ID) == 1 &&
+                     !fx_has(record(r), "failure newer") &&
+                     waited(flow_path(f, "calls"), " run routine-collect ") &&
+                     called(r, " run routine-prepare "),
+                 "-a runs Windows' failed run again detached and records its pass");
+}
 int flow_release(struct fixture *f)
 {
     struct release r;
@@ -1380,6 +1504,9 @@ int flow_release(struct fixture *f)
     ok = lenovo_rows(&r) && ok;
     ok = mac_rows(&r) && ok;
     ok = prepare_rows(&r) && ok;
+    ok = restart_refusal_rows(&r) && ok;
+    ok = restart_mac_rows(&r) && ok;
+    ok = restart_windows_row(&r) && ok;
     fx_env("FLOW_RELEASE", NULL);
     return ok;
 }

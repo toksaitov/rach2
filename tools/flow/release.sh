@@ -5,6 +5,7 @@
 #
 # Usage: release.sh [-r] [-s STATE] M SHA
 #        release.sh -p [-s STATE] M SHA
+#        release.sh -a MACHINE [-s STATE] M SHA
 #
 # M is the number of a GitHub milestone, whose description names its branch
 # as `board.sh milestone M` reads it, and SHA a commit already pushed to
@@ -61,10 +62,17 @@
 #   there, at SHA: the record says `again MACHINE WORD...`. A
 #   machine whose failures are not all `ARCH:SUITE`s of suites that SHA's
 #   tests/registry has for ARCH, or native cases, runs again what its own
-#   `again` line in that record named, or everything when it had none, and a
-#   machine that has neither a pass nor a failure there runs everything. The
-#   native cases run on every install, so the Lenovo's pass is not kept.
-#   Without -r everything runs.
+#   `again` line in that record named, or everything when it had none. A Mac
+#   or Windows run that the record started last and that has no result there,
+#   as a run of -a may not, is taken over: the new record keeps a Mac run that
+#   has since passed and runs again only the suites of one that has failed,
+#   and it waits for a run that still runs; one that no longer runs and left
+#   no status runs again what its `again` line named. A machine that has
+#   neither a run nor a result there runs everything. A run that -a started
+#   at a commit of which SHA is an earlier commit is not kept, and its machine
+#   runs again what its `again` line named; a SHA that a rebase onto master
+#   made keeps it, as -r keeps any pass. The native cases run on every
+#   install, so the Lenovo's pass is not kept. Without -r everything runs.
 # * -p: prepare, which the manager runs at the end of a milestone, before the
 #   release, to find what would stop the release at its setup. It reads no
 #   record and writes none, and touches neither GitHub's runners nor the
@@ -84,7 +92,25 @@
 #   exit it stops what still runs and removes the copy on the host, the
 #   worktree, and the runs' directories on Windows and the Mac; the vendor
 #   and GNU builds stay in each machine's step store. It takes the release's
-#   lock, and waits while a release's run on the Mac still runs.
+#   lock and STATE/again.lock, and waits while a release's run on the Mac, or
+#   a Windows run of -a, still runs.
+# * -a MACHINE: while the release of M runs, or after it ended on a failure,
+#   start the failed run of MACHINE, mac or windows, again at SHA, a commit of
+#   M's branch that contains the record's SHA; it need not contain
+#   origin/master, which a release of SHA with -r checks. MACHINE's
+#   last run must have failed, as a failure in the record or as the status of
+#   a Mac run that ended. The record says `MACHINE started ID` of the new run,
+#   as for any run, so that the release under way waits for it as for its own
+#   and records its pass or failure. When SHA is not the record's commit the
+#   record first says `failure newer MACHINE ID SHA`: the release then ends
+#   once its runs are over, before the build, and a release of SHA with -r
+#   keeps the run's pass. The Mac's run starts as the release starts its own.
+#   Windows' run, preparation and cases, runs detached in a process of its
+#   own, `release.sh -w ID M SHA`, whose number STATE/windows.run holds, with
+#   the claims in WSL that the release's own run takes; it writes its result
+#   to the record itself. A release under way that has recorded Windows'
+#   failure waits for it after the Mac's run; a release started on new
+#   arguments that does not take it over stops it.
 # * build: SHA is built from clean for the Lenovo on the testing host, in
 #   the copy `build/worktrees/release` of the owner's, /home/testing/rach2, with
 #   `ARCH=x86_64 make clean` and `make machine GNU_AGENTS=all`, whose GNU
@@ -153,14 +179,15 @@
 # `milestone M`, `sha SHA`, `branch NAME`, `chosen TIME`, `again MACHINE
 # WORD...` when only those run again on MACHINE, `dispatched TIME`, `run ID
 # RESULT` for a full run, `MACHINE started RUN` for a run on another machine,
-# `failure MACHINE RUN WORD...`, `card STEP N` for the card of each step
-# on the board, and `card release N` for the release's, `STEP done TIME
-# DETAIL`, `touched TIME`
+# `failure MACHINE RUN WORD...`, `failure newer MACHINE RUN SHA` for a run of -a
+# at another commit, `card STEP N` for the card of each step on the board, and
+# `card release N` for the release's, `STEP done TIME DETAIL`, `touched TIME`
 # before the first change to the machine, `install started TIME`, `closing
 # TIME`, and last `failed STEP: WHY` or `closed TIME`; `log`, everything the
-# script prints; `wt`, the worktree; and the records of releases that ended,
-# as `M-SHA-TIME`, with the build's digests beside each closed one as
-# `M-SHA-TIME.sha256`. A release that closes its milestone copies the digests
+# script prints; `wt`, the worktree; `windows.run`, the process of a Windows run
+# of -a; `again.lock`, which one -a holds at a time; and the records of releases
+# that ended, as `M-SHA-TIME`, with the build's digests beside each closed one
+# as `M-SHA-TIME.sha256`. A release that closes its milestone copies the digests
 # out of `wt` and then removes `wt`, with the build's products in it, last. A
 # record that ended, or that belongs to another milestone or commit, is copied
 # aside when the script starts on new arguments, and the new record then
@@ -188,7 +215,8 @@ ARCH_DIR=build/x86_64
 RECOVERY_IMAGE=images/rach2-recovery-with-key.krffs
 WSL='MSYS_NO_PATHCONV=1 wsl.exe -- bash -s'
 USAGE='usage: release.sh [-r] [-s STATE] M SHA
-       release.sh -p [-s STATE] M SHA'
+       release.sh -p [-s STATE] M SHA
+       release.sh -a MACHINE [-s STATE] M SHA'
 PREPARE_COPY=$OWNER/build/worktrees/prepare
 # The commands that put the testing host's Doom WAD in a copy there. Git
 # keeps no WAD and a sync from a fresh worktree sends none, so the copy takes
@@ -225,6 +253,9 @@ note()
             report "${line%% *}" pass "Passed: $(echo "$line" | cut -d ' ' -f 4-)." ;;
         'accept done '*) report accept progress "Acceptance passed." ;;
         'commit done '*) report accept pass "Passed; the trial boot is committed and copied to the fallback slot." ;;
+        'failure newer '*)
+            report "$(echo "$line" | cut -d ' ' -f 3)" progress \
+                "The run $(echo "$line" | cut -d ' ' -f 4) tests $(echo "$line" | cut -d ' ' -f 5), not the release's commit, so this release ends before the install; a release of that commit with -r keeps the run." ;;
         'failure '*)
             m=$(echo "$line" | cut -d ' ' -f 2)
             [ "$m" != lenovo ] || m=accept
@@ -291,10 +322,46 @@ done_()
     grep -q "^$1 done " "$state/record"
 }
 
-# failed_ MACHINE: succeed when the record has a failure of MACHINE's run.
+# latest MACHINE: print the last line of the record that starts, passes or
+# fails a run of MACHINE: `MACHINE started ID`, `MACHINE done ...` or `failure
+# MACHINE ...`. The last of them gives the state of MACHINE's run, since -a
+# starts a run again after its failure.
+latest()
+{
+    awk -v m="$1" '($1 == "failure" && $2 == m) ||
+        ($1 == m && ($2 == "done" || $2 == "started")) { l = $0 }
+        END { if (l != "") print l }' "$state/record"
+}
+
+# failed_ MACHINE: succeed when the last run of MACHINE that the record has
+# ended failed, and no run was started after it.
 failed_()
 {
-    grep -q "^failure $1 " "$state/record"
+    case $(latest "$1") in
+        "failure $1 "*) return 0 ;;
+    esac
+    return 1
+}
+
+# runs_failed: succeed when a machine's run has failed, or a run started by
+# -a tested a commit other than the release's, as its `failure newer` line
+# says.
+runs_failed()
+{
+    grep -q '^failure newer ' "$state/record" && return 0
+    for m in full mac windows lenovo; do
+        ! failed_ "$m" || return 0
+    done
+    return 1
+}
+
+# starts MACHINE: print how many runs of MACHINE the record has started since
+# its last pass or failure.
+starts()
+{
+    awk -v m="$1" '($1 == "failure" && $2 == m) || ($1 == m && $2 == "done") { n = 0 }
+        $1 == m && $2 == "started" { n++ }
+        END { print n + 0 }' "$state/record"
 }
 
 # mark STEP DETAIL: record STEP as done now.
@@ -304,17 +371,21 @@ mark()
     say "$1: done: $2"
 }
 
-# fail STEP WHY: record that STEP failed, and exit 1.
+# fail STEP WHY: record that STEP failed, and exit 1. A Windows run that -a
+# started fails as a run, so that the release it belongs to goes on.
 fail()
 {
+    [ -z "$detached" ] || { failure windows "$wid" runner; say "windows: $2"; exit 1; }
     note "failed $1: $2"
     finish "failed: $1: $2"
     exit 1
 }
 
-# later WHY: say why the release cannot go on now, and exit 75.
+# later WHY: say why the release cannot go on now, and exit 75. A Windows run
+# that -a started fails as a run instead, since nobody starts it again.
 later()
 {
+    [ -z "$detached" ] || { failure windows "$wid" runner; say "windows: $1"; exit 1; }
     say "waiting: $1"
     exit 75
 }
@@ -336,10 +407,17 @@ failure()
     say "$m: run $id failed: $*"
 }
 
-# tests_failed: end the release on the failures of the record.
+# tests_failed: end the release on the failures of the record: each machine's
+# run that failed last, and each run that -a started at another commit.
 tests_failed()
 {
-    what=$(sed -n 's/^failure \([a-z]*\) \([^ ]*\) /\1 run \2: /p' "$state/record" |
+    what=$({
+        for m in full mac windows lenovo; do
+            ! failed_ "$m" || latest "$m"
+        done
+        grep '^failure newer ' "$state/record"
+    } | sed -e 's/^failure newer \([a-z]*\) \([^ ]*\) \([^ ]*\)$/\1 run \2: tested \3, not the release'"'"'s commit; release that commit with -r/' \
+        -e 's/^failure \([a-z]*\) \([^ ]*\) /\1 run \2: /' |
         awk '{ printf "%s%s", (NR > 1 ? "; " : ""), $0 }')
     note "failed tests: $what"
     finish "failed: $what"
@@ -434,30 +512,86 @@ suites()
 
 # again: print the lines that make the new record of -r run again only what
 # failed in the last record, as the header says: `again MACHINE WORD...` for
-# each machine whose failures can run alone, and the passes the new record
-# keeps.
+# each machine whose failures can run alone, the passes the new record keeps,
+# and the runs it waits for.
 again()
 {
     for m in full mac windows lenovo; do
-        # shellcheck disable=SC2046 # the line is words
-        set -- $(grep "^failure $m " "$state/record" | tail -n 1)
-        if [ $# -ge 4 ]; then
-            shift 3
-            # A run that ended without naming failed suites runs again what
-            # the machine's earlier run did.
-            case $m in
-                lenovo)
-                    case " $* " in
-                        *" runner "*) grep "^again $m " "$state/record" | tail -n 1; continue ;;
-                    esac ;;
-                *) suites "$@" || { grep "^again $m " "$state/record" | tail -n 1; continue; } ;;
-            esac
-            echo "again $m $*"
-        elif [ "$m" != lenovo ] && done_ "$m"; then
-            grep "^$m done " "$state/record" | tail -n 1
-            [ "$m" != full ] || grep -E '^run [0-9]+ success$' "$state/record" | tail -n 1
-        fi
+        last=$(latest "$m")
+        # shellcheck disable=SC2086 # the line is words
+        set -- $last
+        case $last in
+            "failure $m "*)
+                shift 3
+                # A run that ended without naming failed suites runs again
+                # what the machine's earlier run did.
+                case $m in
+                    lenovo)
+                        case " $* " in
+                            *" runner "*) previous "$m"; continue ;;
+                        esac ;;
+                    *) suites "$@" || { previous "$m"; continue; } ;;
+                esac
+                echo "again $m $*" ;;
+            "$m done "*)
+                [ "$m" != lenovo ] || continue
+                if newer "$m" "$(echo "$last" | awk '{ print $NF }')"; then
+                    previous "$m"
+                    continue
+                fi
+                echo "$last"
+                [ "$m" != full ] || grep -E '^run [0-9]+ success$' "$state/record" | tail -n 1 ;;
+            "$m started "*) adopt "$m" "$3" ;;
+        esac
     done
+}
+
+# previous MACHINE: print the record's last `again MACHINE` line, if any.
+previous()
+{
+    grep "^again $1 " "$state/record" | tail -n 1
+}
+
+# newer MACHINE ID: succeed when -a started MACHINE's run ID at a commit of
+# which SHA is an earlier commit, so that -r at SHA does not keep that run.
+newer()
+{
+    at=$(sed -n "s/^failure newer $1 $2 //p" "$state/record" | tail -n 1)
+    [ -n "$at" ] && [ "$at" != "$sha" ] &&
+        git -C "$repo" merge-base --is-ancestor "$sha" "$at" 2> /dev/null
+}
+
+# adopt MACHINE ID: print the lines that carry into the new record of -r the
+# run ID of MACHINE, which ended neither as a pass nor as a failure in the last
+# record: a pass or the failed suites of a Mac run that has since ended, or
+# the run itself while it runs, which the new release then waits for. A run
+# that no longer runs and left no status runs again what its machine's
+# earlier run did.
+adopt()
+{
+    newer "$1" "$2" && { previous "$1"; return 0; }
+    case $1 in
+        mac)
+            rc=$(sed -n 's/^rc=//p' "$runs/$2.times" 2> /dev/null)
+            case $rc in
+                0) echo "mac done $(date -u '+%FT%TZ') run $2" ;;
+                '')
+                    previous mac
+                    ! mac_alive "$2" || echo "mac started $2" ;;
+                *)
+                    words=$(grep '^run: result: failed: ' "$runs/$2.console" 2> /dev/null |
+                        tail -n 1 | sed 's/^run: result: failed: //')
+                    # shellcheck disable=SC2086 # the suites are words
+                    if [ -n "$words" ] && suites $words; then
+                        echo "again mac $words"
+                    else
+                        previous mac
+                    fi ;;
+            esac ;;
+        windows)
+            previous windows
+            ! windows_detached || echo "windows started $2" ;;
+    esac
 }
 
 # full_failed ID: record the failures of the full run ID, as its artifact
@@ -841,13 +975,27 @@ mac_start()
         return 0
     fi
     git -C "$repo" fetch -q origin || later "the fetch failed"
-    id=milestone$milestone-$(echo "$sha" | cut -c 1-12)-mac-$(date -u '+%m%d-%H%M%S')
-    mkdir -p "$runs/$id"
-    note "mac started $id"
+    mac_launch "milestone$milestone-$(echo "$sha" | cut -c 1-12)-mac-$(date -u '+%m%d-%H%M%S')" "$sha"
+}
+
+# mac_launch ID AT: record that the Mac's run ID started, and start it at the
+# commit AT, detached, as `release.sh -m ID M AT`, in a process group of its
+# own whose number goes in the Mac's `run` file.
+mac_launch()
+{
+    mkdir -p "$runs/$1"
+    note "mac started $1"
     nohup perl -e 'setpgrp(0, 0); exec @ARGV' sh "$repo/tools/flow/release.sh" -s "$state" \
-        -m "$id" "$milestone" "$sha" > /dev/null 2>&1 < /dev/null 9>&- &
-    echo "$! $id" > "$macdir/run"
-    say "mac: started the run $id"
+        -m "$1" "$milestone" "$2" > /dev/null 2>&1 < /dev/null 8>&- 9>&- &
+    echo "$! $1" > "$macdir/run"
+    say "mac: started the run $1"
+}
+
+# mac_alive ID: succeed when the Mac's run ID still runs.
+mac_alive()
+{
+    pg=$(awk -v id="$1" '$2 == id { print $1 }' "$macdir/run" 2> /dev/null)
+    [ -n "$pg" ] && kill -0 -"$pg" 2> /dev/null
 }
 
 # mac_told: say once, while the release waits for another machine, that the
@@ -876,7 +1024,7 @@ mac_wait()
         pg=$(cut -d ' ' -f 1 "$macdir/run" 2> /dev/null)
         if [ -z "$pg" ] || ! kill -0 -"$pg" 2> /dev/null; then
             rm -f "$macdir/run"
-            if [ "$(grep -c '^mac started ' "$state/record")" -ge 3 ]; then
+            if [ "$(starts mac)" -ge 3 ]; then
                 failure mac "$id" runner
                 return 0
             fi
@@ -1064,13 +1212,20 @@ windows_start()
         mark windows "only style failed, which the full run checks"
         return 1
     fi
-    if [ "$(grep -c '^windows started ' "$state/record")" -ge 3 ]; then
-        failure windows "$(sed -n 's/^windows started //p' "$state/record" | tail -n 1)" runner
-        return 1
+    # The first run of a process that -a started is its own, which -a has
+    # recorded.
+    if [ -n "$wgiven" ]; then
+        wid=$wgiven
+    else
+        if [ "$(starts windows)" -ge 3 ]; then
+            failure windows "$(sed -n 's/^windows started //p' "$state/record" | tail -n 1)" runner
+            return 1
+        fi
+        wid=milestone$milestone-$(echo "$sha" | cut -c 1-12)-windows-$(date -u '+%m%d-%H%M%S')
     fi
-    wid=milestone$milestone-$(echo "$sha" | cut -c 1-12)-windows-$(date -u '+%m%d-%H%M%S')
     windows_bundle
-    note "windows started $wid"
+    [ -n "$wgiven" ] || note "windows started $wid"
+    wgiven=
     trap windows_stop EXIT
     trap 'windows_stop; trap - EXIT TERM; kill -TERM $$' TERM
     trap 'windows_stop; trap - EXIT INT; kill -INT $$' INT
@@ -1160,6 +1315,51 @@ windows()
     # shellcheck disable=SC2046 # the suites are words
     failure windows "$id" $(tr -d '\r' < "$state/$id.log" | grep '^run: result: failed: ' |
         tail -n 1 | sed 's/^run: result: failed: //' | grep . || echo runner)
+}
+
+# windows_detached: succeed when the record's last Windows run is one that -a
+# started and its process, the one that STATE/windows.run names, still runs.
+windows_detached()
+{
+    case $(latest windows) in
+        "windows started "*) ;;
+        *) return 1 ;;
+    esac
+    pid=$(cat "$state/windows.run" 2> /dev/null)
+    [ -n "$pid" ] && kill -0 "$pid" 2> /dev/null
+}
+
+# windows_wait: wait for the Windows run that -a started to end, and start
+# Windows' run here when its process ended without recording a result.
+windows_wait()
+{
+    while windows_detached; do
+        say "windows: the run $(sed -n 's/^windows started //p' "$state/record" | tail -n 1) of -a runs"
+        sleep 60
+    done
+    rm -f "$state/windows.run"
+    if ! done_ windows && ! failed_ windows; then
+        say "windows: the run of -a ended without a result; starting another"
+        windows
+    fi
+}
+
+# windows_halt: stop the Windows run that -a started, with its process group,
+# when the record no longer waits for it.
+windows_halt()
+{
+    [ -f "$state/windows.run" ] && ! windows_detached || return 0
+    pid=$(cat "$state/windows.run")
+    if [ -n "$pid" ] && kill -TERM -"$pid" 2> /dev/null; then
+        i=0
+        while kill -0 "$pid" 2> /dev/null; do
+            [ "$i" -lt 30 ] || later "the Windows run of -a, process $pid, did not stop"
+            i=$((i + 1))
+            sleep 10
+        done
+        say "windows: stopped the run of -a, process $pid"
+    fi
+    rm -f "$state/windows.run"
 }
 
 # lenovo_run: run the native cases on the trial boot, every case or those of
@@ -1344,6 +1544,13 @@ prepare_all()
     if [ -f "$macdir/run" ] && kill -0 -"$(cut -d ' ' -f 1 "$macdir/run")" 2> /dev/null; then
         later "a release's run on the Mac, $(cut -d ' ' -f 2 "$macdir/run"), still runs"
     fi
+    # -a starts runs on the machines that -p prepares, in the same copies.
+    exec 8>> "$state/again.lock"
+    perl -MFcntl=:flock -e 'open(L, ">&=8") && flock(L, LOCK_EX | LOCK_NB) or exit 1' ||
+        later "release.sh -a is starting a run"
+    pid=$(cat "$state/windows.run" 2> /dev/null)
+    [ -z "$pid" ] || ! kill -0 "$pid" 2> /dev/null ||
+        later "a Windows run of release.sh -a, process $pid, still runs"
     trap prepare_stop EXIT
     trap 'prepare_stop; trap - EXIT TERM; kill -TERM $$' TERM
     trap 'prepare_stop; trap - EXIT INT; kill -INT $$' INT
@@ -1365,7 +1572,7 @@ prepare_all()
         pmid=milestone$milestone-$short-mac-prepare-$(date -u '+%m%d-%H%M%S')
         mkdir -p "$runs/$pmid"
         perl -e 'setpgrp(0, 0); exec @ARGV' sh "$repo/tools/flow/release.sh" -s "$state" \
-            -p -m "$pmid" "$milestone" "$sha" > /dev/null 2>&1 < /dev/null 9>&- &
+            -p -m "$pmid" "$milestone" "$sha" > /dev/null 2>&1 < /dev/null 8>&- 9>&- &
         pmac=$!
         echo "$pmac $pmid" > "$macdir/run"
         say "prepare: mac: preparing $pmid"
@@ -1434,6 +1641,95 @@ check()
         refuse "$sha does not contain origin/master"
 }
 
+# unfailed MACHINE: print why MACHINE's last run in the record cannot start
+# again with -a, or nothing when it failed: a failure that the record has, or a
+# Mac run that ended with a status other than 0, which the release records
+# only once the full run and the build are over.
+unfailed()
+{
+    last=$(latest "$1")
+    case $last in
+        "failure $1 "*) return 0 ;;
+        "$1 done "*) echo "its run passed"; return 0 ;;
+        '') echo "it has no run in this release"; return 0 ;;
+    esac
+    id=${last##* }
+    free=
+    perl -MFcntl=:flock -e 'open(L, ">>", $ARGV[0]) && flock(L, LOCK_EX | LOCK_NB) or exit 1' \
+        "$state/lock" && free=1
+    case $1 in
+        mac)
+            rc=$(sed -n 's/^rc=//p' "$runs/$id.times" 2> /dev/null)
+            if mac_alive "$id"; then
+                echo "its run $id still runs"
+            elif [ "$rc" = 0 ]; then
+                echo "its run $id passed"
+            elif [ -z "$rc" ] && [ -z "$free" ]; then
+                echo "its run $id ended without a status, and the release starts it again"
+            fi ;;
+        windows)
+            if windows_detached; then
+                echo "its run $id still runs"
+            elif [ -z "$free" ]; then
+                echo "its run $id has not ended"
+            fi ;;
+    esac
+}
+
+# restart MACHINE: start MACHINE's run again at SHA, a commit of the
+# release's branch that contains the release's own, as the record's run of the
+# release under way, as -a does in the header.
+restart()
+{
+    m=$1 at=$sha
+    case $m in
+        mac|windows) ;;
+        *) refuse "-a takes mac or windows, not '$m'" ;;
+    esac
+    has "$m" || refuse "the machines file has no $m"
+    exec 8>> "$state/again.lock"
+    perl -MFcntl=:flock -e 'open(L, ">&=8") && flock(L, LOCK_EX | LOCK_NB) or exit 1' ||
+        later "another -a starts a run, or -p prepares"
+    [ -f "$state/record" ] || refuse "no release is under way in $state"
+    grep -qx "milestone $milestone" "$state/record" ||
+        refuse "the release under way is not of milestone $milestone"
+    ! grep -q '^closing \|^closed ' "$state/record" || refuse "the release under way closes"
+    # Master may have moved since the release began; -r at SHA checks it.
+    git -C "$repo" fetch -q origin || later "the fetch failed"
+    branch=$(sed -n 's/^branch //p' "$state/record")
+    git -C "$repo" merge-base --is-ancestor "$at" "refs/remotes/origin/$branch" 2> /dev/null ||
+        refuse "$at is not on $branch"
+    sha=$(sed -n 's/^sha //p' "$state/record")
+    git -C "$repo" merge-base --is-ancestor "$sha" "$at" 2> /dev/null ||
+        refuse "$at does not contain $sha, the release's commit"
+    why=$(unfailed "$m")
+    [ -z "$why" ] || refuse "$m: $why"
+    if [ "$m" = mac ]; then
+        [ -d "$tree" ] && [ -f "$site/etude-site" ] ||
+            refuse "the Mac has no copy at $tree or no admission site at $site"
+        [ ! -f "$macdir/run" ] || {
+            read -r pg last < "$macdir/run"
+            ! kill -0 -"$pg" 2> /dev/null || refuse "the run $last still runs on the Mac"
+            [ -z "$last" ] || ! grep -qF "$last" "$site/ledger/claims" 2> /dev/null ||
+                refuse "the run $last keeps a claim in $site/ledger/claims; a person checks it and removes it"
+        }
+    fi
+    id=milestone$milestone-$(echo "$at" | cut -c 1-12)-$m-$(date -u '+%m%d-%H%M%S')
+    # The line comes first, so that a release that waits on the run never
+    # takes it for one of its own commit.
+    [ "$at" = "$sha" ] || note "failure newer $m $id $at"
+    case $m in
+        mac) mac_launch "$id" "$at" ;;
+        windows)
+            note "windows started $id"
+            nohup perl -e 'setpgrp(0, 0); exec @ARGV' sh "$repo/tools/flow/release.sh" -s "$state" \
+                -w "$id" "$milestone" "$at" > /dev/null 2>&1 < /dev/null 8>&- 9>&- &
+            echo "$!" > "$state/windows.run"
+            say "windows: started the run $id" ;;
+    esac
+    finish "again: $m: started the run $id at $at"
+}
+
 # preflight: refuse a machine that answers as another machine, wait for one
 # that does not answer, and, before the release has touched it, refuse one
 # that does not run its system or has a trial armed.
@@ -1472,17 +1768,22 @@ main()
     macrun=
     rerun=
     prepare=
-    while getopts m:prs: o; do
+    restart=
+    detached=
+    while getopts a:m:prs:w: o; do
         case $o in
+            a) restart=$OPTARG ;;
             m) macrun=$OPTARG ;;
             p) prepare=1 ;;
             r) rerun=1 ;;
             s) state=$OPTARG ;;
+            w) detached=$OPTARG ;;
             *) echo "$USAGE" >&2; exit 2 ;;
         esac
     done
     shift $((OPTIND - 1))
-    if [ $# -ne 2 ] || { [ -n "$prepare" ] && [ -n "$rerun" ]; }; then
+    if [ $# -ne 2 ] || { [ -n "$prepare" ] && [ -n "$rerun" ]; } ||
+        { [ -n "$restart" ] && [ -n "$prepare$rerun$macrun$detached" ]; }; then
         echo "$USAGE" >&2
         exit 2
     fi
@@ -1513,6 +1814,18 @@ main()
         exit 0
     fi
     [ -f "$repo/tools/flow/machines" ] || refuse "$repo/tools/flow/machines is missing"
+    if [ -n "$restart" ]; then
+        restart "$restart"
+        exit 0
+    fi
+    wprep='' wholder='' wbeat='' wgiven=''
+    if [ -n "$detached" ]; then
+        branch=$(sed -n 's/^branch //p' "$state/record")
+        wgiven=$detached wid=$detached
+        windows
+        [ "$(cat "$state/windows.run" 2> /dev/null)" != $$ ] || rm -f "$state/windows.run"
+        exit 0
+    fi
     exec 9>> "$state/lock"
     perl -MFcntl=:flock -e 'open(L, ">&=9") && flock(L, LOCK_EX | LOCK_NB) or exit 1' ||
         later "another release runs"
@@ -1555,6 +1868,7 @@ main()
         [ -z "$old" ] || cp "$state/record" "$state/$old-$(date -u '+%m%d-%H%M%S')" ||
             later "the old record could not be kept"
         mv "$state/record.new" "$state/record"
+        windows_halt
         cards
         again=$(sed -n 's/^again //p' "$state/record" | awk '{ printf "%s%s", (NR > 1 ? "; " : ""), $0 }')
         say "milestone $milestone: releasing $sha${again:+, running again only $again}"
@@ -1563,21 +1877,20 @@ main()
     branch=$(sed -n 's/^branch //p' "$state/record")
     chosen=$(sed -n 's/^chosen //p' "$state/record")
 
-    if has mac && ! done_ mac && ! failed_ mac && ! grep -q '^mac started ' "$state/record"; then
+    if has mac && ! done_ mac && ! failed_ mac && [ -z "$(latest mac)" ]; then
         mac_start
     fi
-    wprep='' wholder='' wbeat=''
-    if has windows && ! done_ windows && ! failed_ windows; then
+    if has windows && ! done_ windows && ! failed_ windows && ! windows_detached; then
         windows_start
     fi
     done_ full || failed_ full || full
-    if has windows && ! done_ windows && ! failed_ windows; then
+    if has windows && ! done_ windows && ! failed_ windows && ! windows_detached; then
         windows
     fi
-    if ! grep -q '^failure ' "$state/record" && ! done_ accept; then
+    if ! runs_failed && ! done_ accept; then
         preflight
     fi
-    if ! grep -q '^failure ' "$state/record" && ! done_ build; then
+    if ! runs_failed && ! done_ build; then
         ssh -o BatchMode=yes -o ConnectTimeout=10 testing true 2> /dev/null ||
             later "the testing host does not answer"
         build
@@ -1585,7 +1898,10 @@ main()
     if has mac && ! done_ mac && ! failed_ mac; then
         mac_wait
     fi
-    ! grep -q '^failure ' "$state/record" || tests_failed
+    if has windows && windows_detached; then
+        windows_wait
+    fi
+    ! runs_failed || tests_failed
     cd "$state/wt" || fail build "no worktree"
     chmod 600 krffs/rach2_demo_ed25519
 
