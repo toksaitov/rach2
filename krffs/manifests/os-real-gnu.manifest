@@ -192,6 +192,7 @@ file 0755 /etc/acpi/volume/mute krffs/acpi/volume.script
 dir 0755 /etc/acpi/brightness
 file 0755 /etc/acpi/brightness/up krffs/acpi/brightness.script
 file 0755 /etc/acpi/brightness/down krffs/acpi/brightness.script
+file 0755 /etc/acpi/wifi krffs/acpi/wifi.script
 
 # The servers ntpd takes the time from, which an administrator may replace.
 text 0644 /etc/ntp.conf # The servers ntpd keeps the clock by, one line of the form server NAME\n# each: NAME is a host name or an address, with :PORT after it for a port\n# other than 123. init starts ntpd while this file names a server, and\n# ntpd reads it when it starts, so after an edit run killall ntpd, and\n# init starts it again. ntpd writes what it does to /var/log/services.\nserver 0.pool.ntp.org\nserver 1.pool.ntp.org\nserver 2.pool.ntp.org\nserver 3.pool.ntp.org\n

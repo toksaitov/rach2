@@ -1,0 +1,34 @@
+#!/bin/sh
+#
+# wifi: turn the Wi-Fi radios off, or on again, for the airplane key. acpid
+# runs this file as /etc/acpi/wifi with no argument.
+#
+# It is util-linux's `rfkill toggle wifi`, which BusyBox's rfkill does not
+# have, made one way for all the switches: when the soft block of any Wi-Fi
+# switch of RFKILL_CLASS, /sys/class/rfkill unless it is set, is clear,
+# every Wi-Fi switch is blocked, and otherwise every one is unblocked. A
+# hard block is left as it is. With no Wi-Fi switch it does nothing.
+#
+# The action holds the lock ACPI_LOCK, /var/run/acpi.lock unless it is set,
+# from its start to its end, as the volume action does, so that two presses
+# in quick succession block and then unblock instead of reading the same
+# state. An empty ACPI_LOCK takes no lock.
+
+lock=${ACPI_LOCK-/var/run/acpi.lock}
+if [ -n "$lock" ]; then
+    exec 9>>"$lock" && flock 9 || exit 1
+fi
+
+class=${RFKILL_CLASS:-/sys/class/rfkill}
+found=0
+on=0
+for sw in "$class"/rfkill*; do
+    [ -r "$sw/type" ] && [ "$(cat "$sw/type")" = wlan ] || continue
+    found=1
+    [ "$(cat "$sw/soft")" = 0 ] && on=1
+done
+[ $found = 1 ] || exit 0
+if [ $on = 1 ]; then
+    exec rfkill block wifi
+fi
+exec rfkill unblock wifi

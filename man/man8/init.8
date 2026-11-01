@@ -316,18 +316,25 @@ black, and a step up at the maximum; both are at least 1.
 The script reads the backlights from the directory
 .Ev BACKLIGHT_CLASS
 names, when it is set.
+.It Pa wifi
+The airplane key: when any Wi-Fi switch of
+.Pa /sys/class/rfkill
+has its soft block clear, blocks every Wi-Fi switch, and otherwise
+unblocks every one, with
+.Xr rfkill 8 ;
+a hard block stays.
 .El
 .Pp
 acpid starts an action for each key without waiting for the one before.
-The volume and brightness actions each hold an exclusive
+The volume, brightness and wifi actions each hold an exclusive
 .Xr flock 2
 lock on
 .Pa /var/run/acpi.lock ,
 or on the file
 .Ev ACPI_LOCK
 names when it is set and not empty, from their start to their end, so
-that they run one at a time and each step starts from the level the one
-before it left.
+that they run one at a time and each starts from the state the one before
+it left.
 .Pp
 Every build keeps each backlight's level across a reboot, as
 systemd-backlight does on Linux.
@@ -594,6 +601,7 @@ init: ipv6: CARD: cannot restart IPv6 with the stable secret: ERROR
 .Xr term 1 ,
 .Xr wifi 1 ,
 .Xr bootlog 4 ,
+.Xr ideapad 4 ,
 .Xr proc 5 ,
 .Xr sshd.conf 5 ,
 .Xr sysfs 5 ,
@@ -603,6 +611,7 @@ init: ipv6: CARD: cannot restart IPv6 with the stable secret: ERROR
 .Xr halt 8 ,
 .Xr ndwatch 8 ,
 .Xr netup 8 ,
+.Xr rfkill 8 ,
 .Xr sshd 8 ,
 .Xr update 8 ,
 .Xr wpa_cli 8 ,
