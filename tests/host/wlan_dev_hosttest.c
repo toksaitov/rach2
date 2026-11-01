@@ -15,6 +15,7 @@
  * host-deps: tests/host/compat/kheap_host.c
  */
 #include "network/wireless/wiphy.h"
+#include "network/wireless/data.h"
 #include "network/net.h"
 #include "network/netconf.h"
 #include "network/ethernet/ethernet.h"
@@ -227,6 +228,33 @@ void wlan_scan_hw_done(struct wlan_scan *scan, int aborted)
 {
     scan->hw_done = 1;
     scan->hw_aborted = aborted;
+}
+
+/** The model installs its own data worker, so attachment does nothing. */
+int wlan_data_attach(struct wlan *wlan, wlan_data_event_fn event)
+{
+    (void)wlan;
+    (void)event;
+    return 0;
+}
+
+/** Nothing was attached. */
+void wlan_data_detach(struct wlan *wlan)
+{
+    (void)wlan;
+}
+
+/** The model station has no data path record. */
+struct wlan_data *wlan_data_of(const struct wlan *wlan)
+{
+    (void)wlan;
+    return 0;
+}
+
+/** wlan_stop passes the missing record along. */
+void wlan_data_disconnect(struct wlan_data *d)
+{
+    CHECK(d == 0);
 }
 
 /** Initialize the model's empty BSS table. */

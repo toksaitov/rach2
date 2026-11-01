@@ -1,5 +1,6 @@
 /* Register radios as Ethernet interfaces and keep station state and carrier. */
 #include "wiphy.h"
+#include "data.h"
 #include "../ethernet/ethernet.h"
 #include "../net.h"
 #include "../netconf.h"
@@ -159,8 +160,14 @@ int wlan_register_radio(struct wlan_radio *radio, struct wlan **out)
     }
     wlan_bss_init(&wlan->bss_table);
     wlan_scan_attach(&wlan->scan, wlan, wlan_event, radio, &wlan->band, &wlan->bss_table);
+    rc = wlan_data_attach(wlan, wlan_event);
+    if (rc < 0) {
+        kfree(wlan);
+        return rc;
+    }
     rc = netdev_register(&wlan->netdev);
     if (rc < 0) {
+        wlan_data_detach(wlan);
         kfree(wlan);
         return rc;
     }
@@ -206,13 +213,15 @@ int wlan_set_state(struct wlan *wlan, enum wlan_sta_state state, struct wlan_bss
     return 0;
 }
 
-/** Stop the radio and clear carrier and authorization; safe twice. */
+/** Stop the radio and clear carrier, authorization and the data path's
+ * connection and keys; safe twice. */
 void wlan_stop(struct wlan *wlan)
 {
     if (!wlan)
         return;
     wlan->state = WLAN_STA_NONE;
     wlan->bss = 0;
+    wlan_data_disconnect(wlan_data_of(wlan));
     if (wlan->started) {
         wlan->started = 0;
         wlan->radio->ops->stop(wlan->radio);
@@ -239,6 +248,7 @@ void wlan_unregister_radio(struct wlan *wlan)
     wlan_scan_detach(&wlan->scan);
     if (wlan->quiesce)
         wlan->quiesce(wlan);
+    wlan_data_detach(wlan);
     flags = net_lock();
     netconf_set_up(&wlan->netdev, 0);
     nd6_if_down(&wlan->netdev);
