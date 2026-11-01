@@ -26,7 +26,8 @@
 #   all.
 # * The other machines: tools/flow/machines names them and gives each run's
 #   settings. Each runs every case of both architectures but those of the
-#   style suite, which the full run checks once, with the selection that
+#   style suite, which the full run checks once, and those of a suite none of
+#   whose cases runs on the machine's host system, with the selection that
 #   `etude run -N` allocates in the same copy just before, on the in-house
 #   build that the copy keeps between releases. The Mac's run, mac, is `etude
 #   run routine-sequence phase_first_run`, started with the full run,
@@ -701,15 +702,53 @@ environment()
 # selection MACHINE: print the ARCH:SUITE words of MACHINE's run, those of the
 # record's `again MACHINE` line or every suite of both architectures that SHA's
 # tests/registry has, less the style suite, which the full run checks once for
-# the release.
+# the release, and less a suite none of whose cases runs on MACHINE's host
+# system, which etude would refuse; say on stderr which those are.
 selection()
 {
     words=$(sed -n "s/^again $1 //p" "$state/record")
     [ -n "$words" ] || words=$(git -C "$repo" show "$sha:tests/registry" | awk -F'|' '
         /^[a-z]/ { for (i = 0; i < 2; i++) { a = i ? "x86_64" : "i686"
             if ($6 == "" || index("," $6 ",", "," a ",")) print a ":" $1 } }')
+    case $1 in
+        mac) host=macos ;;
+        windows) host=windows ;;
+        *) host=linux ;;
+    esac
+    # Without the manifests etude refuses the suite itself, and says why.
+    unhosted=$(unhosted "$host" | tr '\n' ' ' | sed 's/ $//')
+    [ -z "$unhosted" ] ||
+        say "$1: leaving out $unhosted, whose cases do not run on $host" >&2
     # shellcheck disable=SC2086 # the suites are words
-    printf '%s\n' $words | grep -v ':style$' | tr '\n' ' '
+    printf '%s\n' $words | grep -v ':style$' |
+        awk -v out=" $unhosted " '{ s = $0; sub(/^[^:]*:/, "", s) }
+            index(out, " " s " ") == 0' | tr '\n' ' '
+}
+
+# unhosted HOST: print the suites of SHA's tests/cases none of whose cases runs
+# on the host system HOST, as etude reads a case's `requirements.hosts`: a
+# suite NAME's manifest is the first file in tests/cases whose name ends in
+# `.NAME.json`.
+unhosted()
+{
+    git -C "$repo" ls-tree --name-only "$sha" tests/cases/ |
+        perl -MJSON::PP -e '
+            my ($repo, $sha, $host) = @ARGV;
+            my %seen;
+            while (my $path = <STDIN>) {
+                chomp $path;
+                my ($suite) = $path =~ m{^tests/cases/.+\.([^./]+)\.json$} or next;
+                next if $seen{$suite}++;
+                my $text = `git -C "$repo" show "$sha:$path"`;
+                $? == 0 or exit 1;
+                my $doc = decode_json($text);
+                my $runs = 0;
+                for my $case (@{$doc->{cases} || []}) {
+                    my $hosts = $case->{requirements}{hosts};
+                    $runs = 1 if !defined $hosts || grep { $_ eq $host } @$hosts;
+                }
+                print "$suite\n" unless $runs;
+            }' "$repo" "$sha" "$1"
 }
 
 # mac_run ID: make the run ID of the release tests on the Mac, of the words
