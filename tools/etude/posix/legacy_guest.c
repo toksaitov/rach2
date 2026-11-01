@@ -282,19 +282,12 @@ static long long integer_of(const struct json *q, const char *name)
 }
 
 /**
- * Make the machine's profile from the case's: its kernel and RAM image as
- * the store's objects, its disks, its devices and its kernel options; 0, or
- * -1 with why in `g->why`.
+ * Make each of the profile's `disks`, an array or NULL, in the attempt's
+ * `disks` directory; 0, or -1 with why in `g->why`.
  */
-static int make_profile(struct legacy_guest *g)
+static int make_disks(struct legacy_guest *g, const struct json *disks)
 {
-    const struct json *q = g->k->qemu, *disks = json_member(q, "disks");
-    const struct json *opts = json_member(q, "boot_options"), *i8042 = json_member(q, "i8042");
-    const char *firmware = json_text(q, "firmware"), *initrd = json_text(q, "initrd");
-    const char *audio_input = json_text(q, "audio_input");
-    struct etude_qemu_profile *p = &g->profile;
-    char hex[65], dir[PATH_LEN];
-    uint64_t n;
+    char dir[PATH_LEN];
     size_t i;
 
     snprintf(dir, sizeof(dir), "%s/disks", g->spec.work);
@@ -306,6 +299,27 @@ static int make_profile(struct legacy_guest *g)
     for (i = 0; disks != NULL && i < disks->count; i++)
         if (make_disk(g, i, disks->item[i]) != 0)
             return -1;
+    return 0;
+}
+
+/**
+ * Make the machine's profile from the case's: its kernel and RAM image as
+ * the store's objects, its disks, its devices and its kernel options; 0, or
+ * -1 with why in `g->why`.
+ */
+static int make_profile(struct legacy_guest *g)
+{
+    const struct json *q = g->k->qemu;
+    const struct json *opts = json_member(q, "boot_options"), *i8042 = json_member(q, "i8042");
+    const char *firmware = json_text(q, "firmware"), *initrd = json_text(q, "initrd");
+    const char *audio_input = json_text(q, "audio_input");
+    struct etude_qemu_profile *p = &g->profile;
+    char hex[65];
+    uint64_t n;
+    size_t i;
+
+    if (make_disks(g, json_member(q, "disks")) != 0)
+        return -1;
     if (opts != NULL && opts->count > OPTIONS_MAX)
         return failed(g->why, sizeof(g->why), "the profile has more than %d kernel options",
                       OPTIONS_MAX);
