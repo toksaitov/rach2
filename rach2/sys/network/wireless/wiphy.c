@@ -2,6 +2,7 @@
 #include "wiphy.h"
 #include "data.h"
 #include "sta.h"
+#include "wsim.h"
 #include "../ethernet/ethernet.h"
 #include "../net.h"
 #include "../netconf.h"
@@ -13,10 +14,19 @@
 #include "../../lib/kstring.h"
 #include "../../lib/kstd.h"
 #include "../../mm/kheap.h"
+#include "../../proc/wait_queue.h"
 
 static struct wlan *radios[WLAN_MAX_RADIOS];
 static unsigned next_phy;
 static wlan_event_fn event_handler;
+static wait_queue_t down_wq; /* callers waiting for wlan_down_run */
+
+/* An interface going down, carried to the worker. The record is on the
+ * caller's stack. */
+struct wlan_down {
+    struct wlan_work work; /* first: wlan_down_run finds the record from it */
+    int done;
+};
 
 /** Install the server's event consumer under the kernel lock. */
 void wlan_set_event_handler(wlan_event_fn handler)
@@ -103,8 +113,58 @@ static void wireless_stop(void *dev)
     wlan_stop(dev);
 }
 
+/** On the worker, end a scan, leave the network with a deauthentication the
+ * AP hears, and stop the radio; then wake the caller. */
+static void wlan_down_run(struct wlan_work *work)
+{
+    struct wlan_down *down = (struct wlan_down *)work;
+    struct wlan *wlan = work->wlan;
+
+    if (wlan_scan_running(&wlan->scan))
+        (void)wlan_scan_abort(&wlan->scan);
+    wlan_sta_leave(wlan, 1);
+    wlan_stop(wlan);
+    down->done = 1;
+    wq_wake_all(&down_wq);
+}
+
+/** Whether the wlan_down record arg has run. */
+static int wlan_down_done(void *arg)
+{
+    return ((const struct wlan_down *)arg)->done;
+}
+
+/**
+ * Start the radio as its interface comes up, and leave the network and stop
+ * it as the interface goes down, as cfg80211 does on dev_open and dev_close.
+ * A radio blocked by rfkill lets the interface come up and starts once the
+ * block lifts. Process context without net_lock; the way down waits for the
+ * worker. Returns 0 or the driver's error from its start.
+ */
+static int wireless_set_up(void *dev, int up)
+{
+    struct wlan *wlan = dev;
+    struct wlan_down down;
+    int rc;
+
+    if (wlan->removing)
+        return 0;
+    if (up) {
+        rc = wlan_start(wlan);
+        return rc == -ERFKILL ? 0 : rc;
+    }
+    k_memset(&down, 0, sizeof(down));
+    down.work.wlan = wlan;
+    down.work.run = wlan_down_run;
+    if (wlan_queue_work(&down.work, 0) == 0)
+        (void)wq_wait_event_nointr(&down_wq, wlan_down_done, &down);
+    else
+        wlan_stop(wlan);
+    return 0;
+}
+
 static const struct netdev_ops wireless_ops = {"wireless",    0, wireless_tx, 0, wireless_stop,
-                                               wireless_link, 0, 0,           0};
+                                               wireless_link, 0, 0,           0, wireless_set_up};
 
 /**
  * Apply on the worker the block the switch and the driver ask for. A block
@@ -126,6 +186,7 @@ static void wlan_rfkill_apply(struct wlan_work *work)
             resume = wlan->started || wlan->resume;
             if (wlan_scan_running(&wlan->scan))
                 (void)wlan_scan_abort(&wlan->scan);
+            wlan_sta_leave(wlan, 0);
             wlan_stop(wlan);
             wlan->blocked = 1;
             wlan->resume = resume;
@@ -308,6 +369,7 @@ int wlan_set_state(struct wlan *wlan, enum wlan_sta_state state, struct wlan_bss
     old = wlan->state;
     wlan->bss = bss;
     wlan->state = state;
+    wlan->frequency = bss ? bss->frequency : 0;
     wlan_data_state(wlan, bss, old, state);
     return 0;
 }
@@ -321,6 +383,7 @@ void wlan_stop(struct wlan *wlan)
     wlan->resume = 0;
     wlan->state = WLAN_STA_NONE;
     wlan->bss = 0;
+    wlan->frequency = 0;
     wlan_data_disconnect(wlan_data_of(wlan));
     if (wlan->started) {
         wlan->started = 0;
@@ -388,4 +451,13 @@ void wlan_get_counters(const struct wlan *wlan, struct wlan_counters *out)
 {
     if (wlan && out)
         *out = wlan->counters;
+}
+
+/* The registry's calls the software radio makes. */
+static const struct wsim_station wsim_calls = {wlan_register_radio, wlan_unregister_radio,
+                                               wlan_radio_rx, wlan_radio_tx_status};
+
+int wlan_attach_wsim(void)
+{
+    return wsim_attach(&wsim_calls);
 }

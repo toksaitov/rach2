@@ -95,7 +95,9 @@ A read into a buffer smaller than the next record, which stays; a written
 record that the format refuses, names another radio, or has a frequency,
 rate or MCS the radio lacks.
 .It Bq Er ENODEV
-An open before the station layer is up.
+An open on a kernel booted with
+.Cd rach2.nonet ,
+which starts no station layer.
 .It Bq Er ENOENT
 A status whose cookie names no frame that waits.
 .It Bq Er ENOSPC

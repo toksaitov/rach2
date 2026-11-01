@@ -23,4 +23,14 @@ int wlan_sta_attach(struct wlan *wlan);
  */
 void wlan_sta_detach(struct wlan *wlan);
 
+/**
+ * Leave the network the station is joined to or joining, before its radio
+ * stops: deauthenticate with reason 3, telling the AP when tell_ap is set,
+ * and report it, as cfg80211 does when an interface goes down; nl80211 then
+ * sends DEAUTHENTICATE and, for a CONNECT, DISCONNECT. Nothing happens
+ * when the station is in no BSS or was never attached. Worker only, no
+ * net_lock.
+ */
+void wlan_sta_leave(struct wlan *wlan, int tell_ap);
+
 #endif

@@ -70,6 +70,7 @@
 #include "sys/network/tcp/tcp.h"
 #include "sys/network/ip6/ip6.h"
 #include "sys/network/socket/netlink.h"
+#include "sys/network/wireless/wiphy.h"
 #include "sys/lib/kint.h"
 #include "sys/lib/kstring.h"
 #include "sys/vdso.h"
@@ -3904,6 +3905,13 @@ void kernel_main(const struct boot_info *boot)
             net_print_info();
         } else {
             klog(KLOG_WARN, "net", "absent: %s", net_error());
+        }
+        {
+            int radios = wlan_attach_wsim();
+
+            if (radios > 0) {
+                klog(KLOG_INFO, "wsim", "ready: %d radios", radios);
+            }
         }
     }
 

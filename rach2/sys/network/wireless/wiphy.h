@@ -46,6 +46,12 @@ struct wlan {
  * during the callback. One consumer serves existing and later radios. */
 void wlan_set_event_handler(wlan_event_fn handler);
 
+/** Let the software radio register with the registry, and make the radios
+ * `rach2.wsim=N` asks for; until then /dev/wsim refuses opens. Boot calls
+ * it once the network stack is set up, in process context under the kernel
+ * lock without net_lock. Returns the number of radios made. */
+int wlan_attach_wsim(void);
+
 /** Return registered phy index, or NULL; kernel lock held, borrowed result. */
 struct wlan *wlan_by_index(unsigned index);
 /** Return station of interface, or NULL; kernel lock held, borrowed result. */

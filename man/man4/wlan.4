@@ -10,6 +10,13 @@ A registered radio appears as
 with an Ethernet interface named
 .Li wlanN .
 The interface is initially down.
+Bringing it up starts the radio; taking it down ends a scan, deauthenticates
+from the access point and stops the radio.
+While it is down, a scan, an authentication, an association or a management
+frame asked for through
+.Xr nl80211 7
+fails with
+.Er ENETDOWN .
 It uses the ordinary IP, ARP, DHCP and packet-socket paths.
 Association gives carrier; authorization opens the control port.
 Before authorization only EAPOL, EtherType 0x888e, passes in either direction.
@@ -17,7 +24,8 @@ A stopped, blocked or unassociated radio passes no data.
 Each radio has a switch of
 .Xr rfkill 4 ,
 .Li phyN ,
-whose block stops it.
+whose block leaves the network and stops the radio, and whose release starts
+it again if it ran.
 .Pp
 The station converts Ethernet II frames to three-address 802.11 data frames
 with LLC/SNAP headers.
@@ -58,5 +66,7 @@ A link whose final component is the registered radio driver name.
 .Xr ioctl 2 ,
 .Xr socket 2 ,
 .Xr rfkill 4 ,
+.Xr wsim 4 ,
 .Xr proc 5 ,
-.Xr sysfs 5
+.Xr sysfs 5 ,
+.Xr nl80211 7

@@ -19,6 +19,7 @@
 #include "network/wireless/wiphy.h"
 #include "network/wireless/data.h"
 #include "network/wireless/sta.h"
+#include "network/wireless/wsim.h"
 #include "network/net.h"
 #include "network/netconf.h"
 #include "network/ethernet/ethernet.h"
@@ -44,6 +45,7 @@ static struct wlan_work *work_queue[4]; /* the model worker's queue, in order */
 static unsigned work_count;
 static uint8_t sent[IEEE80211_MAX_FRAME_LEN], queued[ETH_HDR_SIZE + ETH_MTU];
 static unsigned sent_len, queued_len;
+static unsigned run_work(void);
 uint8_t net_mac[6];
 
 #define CHECK(x)                                                                \
@@ -167,6 +169,21 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
     return cond(arg) ? 0 : -EINTR;
+}
+
+/** An interface's way down waits for the model worker, which runs here. */
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    while (!cond(arg) && run_work()) {
+    }
+    return 0;
+}
+
+void wq_wake_all(wait_queue_t *wq)
+{
+    (void)wq;
+    ++wakes;
 }
 
 /** The model has no user memory; no row reaches a copy. */
@@ -359,6 +376,38 @@ int wlan_sta_attach(struct wlan *wlan)
 void wlan_sta_detach(struct wlan *wlan)
 {
     (void)wlan;
+}
+
+/** The model station joins no network, so it has none to leave. */
+void wlan_sta_leave(struct wlan *wlan, int tell_ap)
+{
+    (void)wlan;
+    (void)tell_ap;
+}
+
+/** The software radio is not under test here. */
+int wsim_attach(const struct wsim_station *station)
+{
+    (void)station;
+    return 0;
+}
+
+/** The data path's radio entries, which only the software radio's table
+ * names here. */
+int wlan_radio_rx(struct wlan_radio *radio, const uint8_t *frame, unsigned len,
+                  const struct wlan_rx_status *status)
+{
+    (void)radio;
+    (void)frame;
+    (void)len;
+    (void)status;
+    return -EINVAL;
+}
+
+void wlan_radio_tx_status(struct wlan_radio *radio, const struct wlan_tx_status *status)
+{
+    (void)radio;
+    (void)status;
 }
 
 /** The model station has no data path record. */

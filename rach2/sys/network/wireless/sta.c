@@ -53,9 +53,13 @@ static int same_addr(const uint8_t *a, const uint8_t *b)
     return 1;
 }
 
-/** Start a scan as nl80211 asks. */
+/** Start a scan as nl80211 asks; -ENETDOWN while the radio is stopped, as
+ * cfg80211 answers for an interface that is not running. */
 static int sta_scan(struct wlan *wlan, const struct wlan_scan_request *request)
 {
+    if (!wlan->started) {
+        return -ENETDOWN;
+    }
     return wlan_scan_start(&wlan->scan, request);
 }
 
@@ -71,6 +75,9 @@ static int sta_authenticate(struct wlan *wlan, const struct nl80211_auth *req)
 {
     struct wlan_mlme_auth a;
 
+    if (!wlan->started) {
+        return -ENETDOWN;
+    }
     a.bss = wlan_bss_find(&wlan->bss_table, req->bssid, req->frequency);
     if (!a.bss) {
         return -ENOENT;
@@ -91,6 +98,9 @@ static int sta_associate(struct wlan *wlan, const struct nl80211_assoc *req)
     struct wlan_mlme_assoc a;
     int rc;
 
+    if (!wlan->started) {
+        return -ENETDOWN;
+    }
     a.bss = s->mlme.bss;
     if (!a.bss || !same_addr(a.bss->bssid, req->bssid)) {
         return -ENOLINK;
@@ -153,6 +163,9 @@ static int sta_mgmt_tx(struct wlan *wlan, const uint8_t *frame, unsigned len, un
     uint64_t sent = 0;
     int rc, protect;
 
+    if (!wlan->started) {
+        return -ENETDOWN;
+    }
     if (!d || len > sizeof(s->buf) - WLAN_CCMP_HDR_LEN - WLAN_CCMP_MIC_LEN) {
         return -EINVAL;
     }
@@ -328,4 +341,18 @@ void wlan_sta_detach(struct wlan *wlan)
     wlan_mlme_stop(&s->mlme);
     wlan->mlme_priv = 0;
     kfree(s);
+}
+
+void wlan_sta_leave(struct wlan *wlan, int tell_ap)
+{
+    struct wlan_sta *s = wlan ? sta_of(wlan) : 0;
+
+    if (!s) {
+        return;
+    }
+    wlan_cancel_work(&s->authorize_work);
+    if (s->mlme.state != WLAN_STA_NONE && s->mlme.bss) {
+        (void)wlan_mlme_deauthenticate(&s->mlme, s->mlme.bss->bssid, WLAN_REASON_DEAUTH_LEAVING,
+                                       !tell_ap);
+    }
 }
