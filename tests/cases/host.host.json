@@ -101,6 +101,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "ath9k_mac",
+          "checks": "tests/host/ath9k_mac_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "ath9k_phy",
           "checks": "tests/host/ath9k_phy_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
