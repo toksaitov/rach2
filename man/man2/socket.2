@@ -43,6 +43,13 @@ data operations return
 .Er EOPNOTSUPP .
 Other raw protocols are refused.
 Effective user ID 0 is required for either raw form.
+.It Dv AF_INET6 , SOCK_STREAM
+A TCP stream socket; protocol is zero or IPPROTO_TCP (6).
+.It Dv AF_INET6 , SOCK_DGRAM
+A UDP datagram socket; protocol is zero or IPPROTO_UDP (17).
+IPv6 sockets default to dual stack, with IPv4 peers represented by
+mapped addresses.
+Set IPV6_V6ONLY before binding to restrict one to IPv6.
 .It Dv AF_INET6 , SOCK_RAW
 A raw ICMPv6 socket when
 .Fa protocol
@@ -87,11 +94,9 @@ is taken as
 as in Linux.
 .El
 .Pp
-Other address families, and
-.Dv AF_INET6
-stream and datagram sockets, are not supported; the
-.Er EAFNOSUPPORT
-they fail with is the answer on which a program falls back to IPv4.
+Other address families are not supported and fail with EAFNOSUPPORT.
+An IPv6 connect with no usable route fails at once with ENETUNREACH,
+so a program can fall back to IPv4.
 .Pp
 .Fn socketpair
 makes two

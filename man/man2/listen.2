@@ -25,7 +25,9 @@ A socket with no local port, or one bound to port zero, listens on a free
 port from 49152 through 65535, as on Linux, and
 .Xr getsockname 2
 reports it.
-Only one live listener may use a port.
+Listeners may share a port at disjoint addresses.
+A dual-stack listener on :: covers both IPv4 and IPv6; IPV6_V6ONLY
+allows a separate IPv4 listener on the same port.
 A socket that is already listening or has any attached TCP control block
 cannot be made a listener by another call.
 Datagram and raw sockets do not support this operation.

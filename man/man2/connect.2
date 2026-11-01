@@ -23,6 +23,11 @@ The port and address are in network byte order.
 The operation is subcall 3 of i386
 .Xr socketcall 2 ,
 system call 102.
+For an IPv6 peer, supply a sockaddr_in6 of at least 24 bytes, or 28
+with a scope id for a link-scoped address.
+A dual-stack socket accepts mapped IPv4 peers; IPV6_V6ONLY rejects them.
+Both TCP and UDP check the route and usable source before recording the
+connection; a missing route fails at once with ENETUNREACH.
 .Ss Stream sockets
 On a
 .Dv SOCK_STREAM
@@ -101,7 +106,7 @@ or
 .Fn connect
 after boot.
 .Ss Datagram sockets
-On an IPv4
+On an Internet
 .Dv SOCK_DGRAM
 socket, the call records a destination for sends and restricts received
 datagrams to that peer.
@@ -168,8 +173,7 @@ or
 .Dv AF_UNSPEC ,
 or a stream socket was given
 .Dv AF_UNSPEC .
-The stream handler does not reject other nonzero family values before
-interpreting the address as IPv4.
+Other families must match the socket or select IPv4 on a dual-stack socket.
 .It Bq Er EAGAIN
 An unbound datagram socket could not acquire an ephemeral binding.
 .It Bq Er EALREADY
@@ -195,6 +199,8 @@ one of the machine's addresses.
 The stream socket is listening or already has a TCP control block in
 a state other than
 .Dv SYN_SENT .
+.It Bq Er ENETUNREACH
+No usable route reaches the peer, or IPV6_V6ONLY excludes a mapped peer.
 .It Bq Er ENOBUFS
 A TCP control block could not be allocated.
 .It Bq Er ENOTSOCK

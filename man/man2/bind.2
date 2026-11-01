@@ -23,7 +23,7 @@ operation 2.
 For TCP and UDP, the address and port are read in network byte order from a
 .Vt sockaddr_in .
 At least eight address bytes are required.
-The family field is not checked for these socket types.
+The family must match the socket or select IPv4 on a dual-stack IPv6 socket.
 The address must be zero, for any of the machine's addresses, one in
 .Ql 127/8 ,
 one an interface has, or for UDP a broadcast address; another gives
@@ -73,6 +73,18 @@ interface holds, and gives
 .Er EADDRNOTAVAIL
 for another.
 The raw socket used only for interface queries rejects binding.
+.Ss IPv6 sockets
+TCP and UDP take a sockaddr_in6 of at least 24 bytes.
+The port and sixteen address bytes are in network order; a scope id,
+when supplied in the full 28-byte structure, is an interface index in host order.
+A link-scoped address requires that index or SO_BINDTODEVICE.
+The address must be ::, ::1 or a usable address of this machine.
+Mapped IPv4 addresses select an IPv4 binding.
+A dual-stack wildcard overlaps IPv4 bindings on the same port.
+UDP applies the reuse and owner rules above across both families;
+TCP refuses conflicting cross-family stream bindings.
+IPV6_V6ONLY removes the IPv4 overlap and rejects mapped addresses.
+Both families share each transport's ephemeral port sequence.
 .Ss Packet sockets
 An
 .Dv AF_PACKET

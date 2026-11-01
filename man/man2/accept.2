@@ -81,6 +81,9 @@ A TCP peer is reported as its IPv4 address and port in a 16-byte
 .Vt sockaddr_in ,
 whose family is in host byte order and whose address and port are in
 network byte order.
+An IPv6 listener reports a 28-byte sockaddr_in6, with mapped IPv4
+addresses for IPv4 peers and the scope id for link-scoped IPv6 peers.
+The accepted socket keeps its listener's family and IPV6_V6ONLY setting.
 An
 .Dv AF_UNIX
 peer is reported by the name it was bound to, as
