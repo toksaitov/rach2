@@ -57,6 +57,9 @@ and IGAIN is there only when a source's pin has one.
 .Pp
 The driver records one source at a time: the internal microphone, else
 the microphone jack, else the line in, when it starts.
+While a microphone is the source, a plug in the microphone jack moves
+recording to the jack, and its removal back to the internal microphone;
+a source chosen here stays until the jack next changes.
 A change of a level or of the source takes effect at once while a stream
 records, and at the next start otherwise.
 .Pp
