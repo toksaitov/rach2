@@ -4,6 +4,7 @@
 # each machine, install it on the Lenovo, move master to it and close M.
 #
 # Usage: release.sh [-r] [-s STATE] M SHA
+#        release.sh -p [-s STATE] M SHA
 #
 # M is the number of a GitHub milestone, whose description names its branch
 # as `board.sh milestone M` reads it, and SHA a commit already pushed to
@@ -64,6 +65,26 @@
 #   machine that has neither a pass nor a failure there runs everything. The
 #   native cases run on every install, so the Lenovo's pass is not kept.
 #   Without -r everything runs.
+# * -p: prepare, which the manager runs at the end of a milestone, before the
+#   release, to find what would stop the release at its setup. It reads no
+#   record and writes none, and touches neither GitHub's runners nor the
+#   Lenovo. Three parts run at once. wsl: in a copy on the testing host,
+#   `build/worktrees/prepare` of the owner's, made new from a worktree of SHA
+#   here, it builds both architectures as the full run does and then runs
+#   `tests/run style host` on both. windows: Windows' preparation as the
+#   release makes it, in its copy and under its claim in WSL's admission,
+#   with `routine-prepare`. mac: the Mac's run as the release makes it, with
+#   `routine-prepare` in place of `routine-sequence`, detached as `release.sh
+#   -p -m ID M SHA`. Both select as the release does, from every suite. SHA
+#   must be on M's branch, but need not contain master. A line `release:
+#   prepare: MACHINE: passed` or `failed` reports each part, a failed one
+#   followed by the lines of its output that say what failed, which
+#   STATE/prepare/MACHINE.log keeps whole; the last line is `release:
+#   prepare: passed SHA` or `release: prepare: failed: MACHINE...`. On every
+#   exit it stops what still runs and removes the copy on the host, the
+#   worktree, and the runs' directories on Windows and the Mac; the vendor
+#   and GNU builds stay in each machine's step store. It takes the release's
+#   lock, and waits while a release's run on the Mac still runs.
 # * build: SHA is built from clean for the Lenovo on the testing host, in
 #   the copy `build/worktrees/release` of the owner's, /home/testing/rach2, with
 #   `ARCH=x86_64 make clean` and `make machine GNU_AGENTS=all`, whose GNU
@@ -157,7 +178,8 @@
 # run failed, as the record's last line says; 2 when the arguments are
 # refused, such as a SHA that is not on M's branch; and 75 when the release
 # could not start or go on for a reason that passes, such as an unreachable
-# host or a busy build copy, and the manager starts it again later.
+# host or a busy build copy, and the manager starts it again later. With -p
+# the status is 0 when every part passed and 1 when one failed.
 
 REPO=toksaitov/rach2
 OWNER=/home/testing/rach2
@@ -165,19 +187,27 @@ COPY=$OWNER/build/worktrees/release
 ARCH_DIR=build/x86_64
 RECOVERY_IMAGE=images/rach2-recovery-with-key.krffs
 WSL='MSYS_NO_PATHCONV=1 wsl.exe -- bash -s'
-USAGE='usage: release.sh [-r] [-s STATE] M SHA'
+USAGE='usage: release.sh [-r] [-s STATE] M SHA
+       release.sh -p [-s STATE] M SHA'
+PREPARE_COPY=$OWNER/build/worktrees/prepare
+# The commands that put the testing host's Doom WAD in a copy there. Git
+# keeps no WAD and a sync from a fresh worktree sends none, so the copy takes
+# the host's.
+WAD="{ cp /etc/rach2/doom1.wad ports/doom/doom1.wad ||
+            { echo 'release: wad: the testing host has no /etc/rach2/doom1.wad' >&2; false; }; } &&
+        sh ports/doom/fetch_wad.sh"
 
 # say TEXT: print TEXT and append it to the log, with the time in UTC.
 say()
 {
-    echo "$(date -u '+%F %T') release: $*" | tee -a "$state/log"
+    echo "$(date -u '+%F %T') release: $*" | tee -a "$log"
 }
 
 # finish TEXT: print the release's last line, `release: TEXT`, and log it.
 finish()
 {
     echo "release: $*"
-    echo "$(date -u '+%F %T') release: $*" >> "$state/log"
+    echo "$(date -u '+%F %T') release: $*" >> "$log"
 }
 
 # note LINE: append LINE to the record, and report what it says of a step
@@ -518,18 +548,14 @@ build()
         native="ARCH=x86_64 make native-assets &&"
         payload=tests/native/prepared.tar.gz
     fi
-    # Git keeps no WAD and a sync from a fresh worktree sends none, so the
-    # copy takes the host's. The manifest stages the WAD as an optional file,
-    # so a root built without it has no game; the root is read to be sure.
-    wad="{ cp /etc/rach2/doom1.wad ports/doom/doom1.wad ||
-            { echo 'release: wad: the testing host has no /etc/rach2/doom1.wad' >&2; false; }; } &&
-        sh ports/doom/fetch_wad.sh"
+    # The manifest stages the WAD as an optional file, so a root built
+    # without it has no game; the root is read to be sure.
     staged="{ ( . tools/setup/e2fsprogs_path.sh &&
             debugfs -R 'cat /demo/doom1.wad' $ARCH_DIR/images/os-real-gnu.ext2 2> /dev/null |
                 cmp -s - ports/doom/doom1.wad ) ||
             { echo 'release: wad: the root has no /demo/doom1.wad equal to ports/doom/doom1.wad' >&2; false; }; }"
     if ! RACH2_TESTING_COPY=$COPY sh tools/dev/testing.sh run \
-        "$wad && ARCH=x86_64 make clean && ARCH=x86_64 make machine GNU_AGENTS=all && $staged &&
+        "$WAD && ARCH=x86_64 make clean && ARCH=x86_64 make machine GNU_AGENTS=all && $staged &&
         $native cd $ARCH_DIR &&
         gzip -1 -c images/os-real-gnu.ext2 > images/os-real-gnu.ext2.gz &&
         sha256sum rach2/kernel rach2-recovery/kernel $RECOVERY_IMAGE images/os-real-gnu.ext2 $payload \
@@ -700,13 +726,15 @@ environment()
 }
 
 # selection MACHINE: print the ARCH:SUITE words of MACHINE's run, those of the
-# record's `again MACHINE` line or every suite of both architectures that SHA's
-# tests/registry has, less the style suite, which the full run checks once for
-# the release, and less a suite none of whose cases runs on MACHINE's host
-# system, which etude would refuse; say on stderr which those are.
+# record's `again MACHINE` line, which -p does not read, or every suite of both
+# architectures that SHA's tests/registry has, less the style suite, which the
+# full run checks once for the release, and less a suite none of whose cases
+# runs on MACHINE's host system, which etude would refuse; say on stderr which
+# those are.
 selection()
 {
-    words=$(sed -n "s/^again $1 //p" "$state/record")
+    words=
+    [ -n "$prepare" ] || words=$(sed -n "s/^again $1 //p" "$state/record")
     [ -n "$words" ] || words=$(git -C "$repo" show "$sha:tests/registry" | awk -F'|' '
         /^[a-z]/ { for (i = 0; i < 2; i++) { a = i ? "x86_64" : "i686"
             if ($6 == "" || index("," $6 ",", "," a ",")) print a ":" $1 } }')
@@ -752,12 +780,14 @@ unhosted()
 }
 
 # mac_run ID: make the run ID of the release tests on the Mac, of the words
-# that `selection mac` prints, in the copy TREE with
-# the admission site SITE, with its output in RUNS/ID.console and its status
-# appended to RUNS/ID.times as `rc=N`.
+# that `selection mac` prints, in the copy TREE with the admission site SITE,
+# with its output in RUNS/ID.console and its status appended to RUNS/ID.times
+# as `rc=N`; with -p make only its preparation, with `routine-prepare`.
 mac_run()
 {
     id=$1
+    routine='routine-sequence'
+    [ -z "$prepare" ] || routine='routine-prepare'
     words=$(selection mac)
     accel=$(setting mac accel)
     date '+start %FT%T%z' > "$runs/$id.times"
@@ -771,7 +801,7 @@ mac_run()
             ETUDE_SITE=$site/etude-site "$site/bin/etude" run -N -t "$tree" -a both -A "$accel" \
                 -J "$runs/$id.selection.json" $words &&
             ETUDE_PHASE_SELECTION_EXPORT=$runs/$id.selection.json \
-                "$site/bin/etude" run routine-sequence phase_first_run "$tree" "$runs/$id" both \
+                "$site/bin/etude" run "$routine" phase_first_run "$tree" "$runs/$id" both \
                 "$id" "$site/etude-site" "$site/bin/etude" "$accel" $words
     ) > "$runs/$id.console" 2>&1
     echo "rc=$?" >> "$runs/$id.times"
@@ -999,6 +1029,29 @@ windows_prepare()
     wait "$claimer"
 }
 
+# windows_words: set wwords to the words of Windows' run, as `selection
+# windows` prints them, and warch to the architectures they name, so that a
+# rerun of one architecture's suites does not prepare the other's collection.
+windows_words()
+{
+    wwords=$(selection windows)
+    warch=both
+    case " $wwords" in *" x86_64:"*) ;; *) warch=i686 ;; esac
+    case " $wwords" in *" i686:"*) ;; *) warch=x86_64 ;; esac
+}
+
+# windows_bundle: put a bundle of M's branch on the testing host, where
+# Windows' copy fetches SHA from it.
+windows_bundle()
+{
+    if ! git -C "$repo" fetch -q origin ||
+        ! git -C "$repo" bundle create "$state/windows.bundle" "refs/remotes/origin/$branch" > /dev/null 2>&1; then
+        later "the bundle for Windows could not be made"
+    fi
+    scp -q -o BatchMode=yes "$state/windows.bundle" "testing:$wout/release.bundle" ||
+        later "the bundle could not be copied to the testing host"
+}
+
 # windows_start: start Windows' run of the words that `selection windows`
 # prints, its preparation in the background, which windows_stop stops when the
 # release exits first. Mark the run done when only style failed, and record
@@ -1006,27 +1059,17 @@ windows_prepare()
 windows_start()
 {
     windows_settings
-    wwords=$(selection windows)
+    windows_words
     if [ -z "$wwords" ]; then
         mark windows "only style failed, which the full run checks"
         return 1
     fi
-    # Prepare only the architectures the words name, so that a rerun of one
-    # architecture's suites does not build the other's collection.
-    warch=both
-    case " $wwords" in *" x86_64:"*) ;; *) warch=i686 ;; esac
-    case " $wwords" in *" i686:"*) ;; *) warch=x86_64 ;; esac
     if [ "$(grep -c '^windows started ' "$state/record")" -ge 3 ]; then
         failure windows "$(sed -n 's/^windows started //p' "$state/record" | tail -n 1)" runner
         return 1
     fi
     wid=milestone$milestone-$(echo "$sha" | cut -c 1-12)-windows-$(date -u '+%m%d-%H%M%S')
-    if ! git -C "$repo" fetch -q origin ||
-        ! git -C "$repo" bundle create "$state/windows.bundle" "refs/remotes/origin/$branch" > /dev/null 2>&1; then
-        later "the bundle for Windows could not be made"
-    fi
-    scp -q -o BatchMode=yes "$state/windows.bundle" "testing:$wout/release.bundle" ||
-        later "the bundle could not be copied to the testing host"
+    windows_bundle
     note "windows started $wid"
     trap windows_stop EXIT
     trap 'windows_stop; trap - EXIT TERM; kill -TERM $$' TERM
@@ -1164,9 +1207,217 @@ lenovo_run()
         awk '$1 != "result" && $2 != "pass" { print $1 }' | grep . || echo runner)
 }
 
+# failing FILE: print, indented, the lines of FILE that say what failed, or
+# its last twenty lines when none does.
+failing()
+{
+    { tr -d '\r' < "$1" |
+        grep -E 'error:|Error [0-9]|\*\*\*|FAIL|[Ff]ailed|refused|[Cc]annot|missing|not found|No such' |
+        tail -n 20 | grep . || tr -d '\r' < "$1" | tail -n 20; } 2> /dev/null | sed 's/^/    /'
+}
+
+# prepare_wsl: build SHA for both architectures, as the full run does, and run
+# the style suite and the host tests of both, in a copy on the testing host
+# that the worktree STATE/prepare/wt makes new. Run in the background; it
+# ends as testing.sh, whose status is the command's.
+prepare_wsl()
+{
+    cd "$pdir/wt" || exit 1
+    RACH2_TESTING_COPY=$PREPARE_COPY
+    export RACH2_TESTING_COPY
+    exec sh tools/dev/testing.sh run "$WAD && ARCH=i686 make && ARCH=x86_64 make &&
+        ARCH='i686 x86_64' tests/run style host"
+}
+
+# prepare_host: stop each process on the testing host whose working directory
+# is in the copy of prepare_wsl, which a stopped testing.sh leaves running,
+# and remove the copy; print a line for each stopped process whose claim stays
+# in WSL's admission ledger.
+prepare_host()
+{
+    {
+        echo "copy=$PREPARE_COPY"
+        cat << 'END'
+ledger=/var/lib/rach2-etude/ledger/claims
+[ -d "$copy" ] || exit 0
+pids=
+for p in /proc/[0-9]*; do
+    case $(readlink "$p/cwd" 2> /dev/null) in
+        "$copy" | "$copy"/*) pids="$pids ${p#/proc/}" ;;
+    esac
+done
+alive() { for p in $pids; do kill -0 "$p" 2> /dev/null && return 0; done; return 1; }
+if [ -n "$pids" ]; then
+    kill -TERM $pids 2> /dev/null
+    i=0
+    while alive && [ "$i" -lt 30 ]; do i=$((i + 1)); sleep 2; done
+    for p in $pids; do
+        ! grep -q "^owner $p " "$ledger" 2> /dev/null ||
+            echo "the stopped process $p keeps a claim in $ledger; a person checks it and removes it"
+    done
+fi
+rm -rf "$copy"
+END
+    } | ssh -o BatchMode=yes testing "$WSL"
+}
+
+# prepare_windows_clean: stop Windows' preparation pwid where it still runs on
+# Windows, which a stopped ssh leaves running, and remove its files there.
+prepare_windows_clean()
+{
+    {
+        echo "cd $wout || exit 0"
+        echo "MSYS_NO_PATHCONV=1 taskkill /F /T /IM etude-$pwid.exe > /dev/null 2>&1"
+        echo "rm -rf $pwid $pwid.* etude-$pwid.exe"
+    } | ssh -o BatchMode=yes testing 'C:/msys64/usr/bin/bash.exe -l -s' > /dev/null 2>&1
+}
+
+# prepare_stop: stop each part of -p that still runs, check that none keeps a
+# claim, and remove what the parts made. The EXIT trap of -p, which a signal
+# reaches too.
+prepare_stop()
+{
+    if [ -n "$pwsl" ]; then
+        kill "$pwsl" 2> /dev/null
+        wait "$pwsl"
+        pwsl=
+    fi
+    if [ -n "$pwin" ]; then
+        kill "$pwin" 2> /dev/null
+        wait "$pwin"
+        pwin=
+    fi
+    if [ -n "$pmac" ]; then
+        kill -TERM -"$pmac" 2> /dev/null
+        i=0
+        while kill -0 -"$pmac" 2> /dev/null && [ "$i" -lt 30 ]; do
+            i=$((i + 1))
+            sleep 10
+        done
+        ! kill -0 -"$pmac" 2> /dev/null ||
+            say "prepare: mac: process group $pmac did not stop; a person stops it"
+        pmac=
+    fi
+    if [ -n "$pmid" ]; then
+        ! grep -qF "$pmid" "$site/ledger/claims" 2> /dev/null ||
+            say "prepare: mac: $pmid keeps a claim in $site/ledger/claims; a person checks it and removes it"
+        rm -f "$macdir/run"
+        rm -rf "${runs:?}/$pmid" "$runs/$pmid".*
+        pmid=
+    fi
+    if [ -n "$pwid" ]; then
+        prepare_windows_clean
+        rm -f "$state/$pwid.prepare" "$state/$pwid.claim"
+        pwid=
+    fi
+    if [ -n "$pclean" ]; then
+        prepare_host 2>&1 | while read -r line; do say "prepare: wsl: $line"; done
+        git -C "$repo" worktree remove --force "$pdir/wt" 2> /dev/null
+        rm -rf "$pdir/wt"
+        git -C "$repo" worktree prune
+        pclean=
+    fi
+}
+
+# prepare_report MACHINE STATUS LOG: report the part MACHINE of -p, which
+# ended with STATUS and whose whole output LOG keeps.
+prepare_report()
+{
+    if [ "$2" = 0 ]; then
+        say "prepare: $1: passed"
+        return 0
+    fi
+    say "prepare: $1: failed; $3 has its output:"
+    failing "$3" | tee -a "$log"
+    pfailed="$pfailed $1"
+}
+
+# prepare_all: make the release's preparation of SHA on each machine, and the
+# end checks of the milestone in a clean copy, as the header's -p says.
+prepare_all()
+{
+    pdir=$state/prepare log=$pdir/log
+    pwsl='' pwin='' pmac='' pwid='' pmid='' pclean='' pfailed=''
+    mkdir -p "$pdir"
+    : > "$log"
+    check
+    if [ -f "$macdir/run" ] && kill -0 -"$(cut -d ' ' -f 1 "$macdir/run")" 2> /dev/null; then
+        later "a release's run on the Mac, $(cut -d ' ' -f 2 "$macdir/run"), still runs"
+    fi
+    trap prepare_stop EXIT
+    trap 'prepare_stop; trap - EXIT TERM; kill -TERM $$' TERM
+    trap 'prepare_stop; trap - EXIT INT; kill -INT $$' INT
+    trap 'prepare_stop; trap - EXIT HUP; kill -HUP $$' HUP
+    short=$(echo "$sha" | cut -c 1-12)
+    say "prepare: milestone $milestone: preparing $sha on each machine"
+    if has windows; then
+        windows_settings
+        windows_words
+        windows_bundle
+        pwid=milestone$milestone-$short-windows-prepare-$(date -u '+%m%d-%H%M%S')
+        windows_prepare "$pwid" > /dev/null 2>&1 9>&- &
+        pwin=$!
+        say "prepare: windows: preparing $pwid"
+    fi
+    if has mac; then
+        [ -d "$tree" ] && [ -f "$site/etude-site" ] ||
+            later "the Mac has no copy at $tree or no admission site at $site"
+        pmid=milestone$milestone-$short-mac-prepare-$(date -u '+%m%d-%H%M%S')
+        mkdir -p "$runs/$pmid"
+        perl -e 'setpgrp(0, 0); exec @ARGV' sh "$repo/tools/flow/release.sh" -s "$state" \
+            -p -m "$pmid" "$milestone" "$sha" > /dev/null 2>&1 < /dev/null 9>&- &
+        pmac=$!
+        echo "$pmac $pmid" > "$macdir/run"
+        say "prepare: mac: preparing $pmid"
+    fi
+    pclean=1
+    prepare_host > "$pdir/wsl.log" 2>&1
+    git -C "$repo" worktree remove --force "$pdir/wt" 2> /dev/null
+    rm -rf "$pdir/wt"
+    git -C "$repo" worktree prune
+    if git -C "$repo" worktree add -q --detach "$pdir/wt" "$sha" >> "$pdir/wsl.log" 2>&1; then
+        prepare_wsl >> "$pdir/wsl.log" 2>&1 9>&- &
+        pwsl=$!
+        say "prepare: wsl: building in $PREPARE_COPY"
+        wait "$pwsl"
+        rc=$?
+        pwsl=
+    else
+        rc=1
+    fi
+    prepare_report wsl "$rc" "$pdir/wsl.log"
+    if [ -n "$pwin" ]; then
+        wait "$pwin"
+        pwin=
+        rc=$(tr -d '\r' < "$state/$pwid.prepare" 2> /dev/null | sed -n 's/^status //p' | tail -n 1)
+        {
+            cat "$state/$pwid.claim" "$state/$pwid.prepare"
+            echo "cd $wout && cat $pwid.make.log $pwid.selection.log $pwid.prepare.console" |
+                ssh -o BatchMode=yes testing 'C:/msys64/usr/bin/bash.exe -l -s'
+        } 2> /dev/null | tr -d '\r' > "$pdir/windows.log"
+        rm -f "$state/$pwid.prepare" "$state/$pwid.claim"
+        prepare_report windows "${rc:-1}" "$pdir/windows.log"
+    fi
+    if [ -n "$pmac" ]; then
+        wait "$pmac"
+        pmac=
+        cp "$runs/$pmid.console" "$pdir/mac.log" 2> /dev/null || : > "$pdir/mac.log"
+        rc=$(sed -n 's/^rc=//p' "$runs/$pmid.times" 2> /dev/null)
+        prepare_report mac "${rc:-1}" "$pdir/mac.log"
+    fi
+    prepare_stop
+    trap - EXIT TERM INT HUP
+    if [ -n "$pfailed" ]; then
+        finish "prepare: failed:$pfailed"
+        exit 1
+    fi
+    finish "prepare: passed $sha"
+    exit 0
+}
+
 # check: fetch, and refuse SHA unless milestone M is open, its description
-# names its branch, and SHA is on that branch and contains origin/master; set
-# `branch`.
+# names its branch, and SHA is on that branch and, but with -p, contains
+# origin/master; set `branch`.
 check()
 {
     git -C "$repo" fetch -q origin || later "the fetch failed"
@@ -1178,7 +1429,8 @@ check()
     esac
     git -C "$repo" merge-base --is-ancestor "$sha" "refs/remotes/origin/$branch" 2> /dev/null ||
         refuse "$sha is not on $branch"
-    git -C "$repo" merge-base --is-ancestor refs/remotes/origin/master "$sha" 2> /dev/null ||
+    [ -n "$prepare" ] ||
+        git -C "$repo" merge-base --is-ancestor refs/remotes/origin/master "$sha" 2> /dev/null ||
         refuse "$sha does not contain origin/master"
 }
 
@@ -1219,16 +1471,21 @@ main()
     state=
     macrun=
     rerun=
-    while getopts m:rs: o; do
+    prepare=
+    while getopts m:prs: o; do
         case $o in
             m) macrun=$OPTARG ;;
+            p) prepare=1 ;;
             r) rerun=1 ;;
             s) state=$OPTARG ;;
             *) echo "$USAGE" >&2; exit 2 ;;
         esac
     done
     shift $((OPTIND - 1))
-    [ $# -eq 2 ] || { echo "$USAGE" >&2; exit 2; }
+    if [ $# -ne 2 ] || { [ -n "$prepare" ] && [ -n "$rerun" ]; }; then
+        echo "$USAGE" >&2
+        exit 2
+    fi
     milestone=$1 sha=$2
     case $milestone in
         ''|*[!0-9]*) echo "$USAGE" >&2; exit 2 ;;
@@ -1246,6 +1503,8 @@ main()
     serial=${RACH2_MACHINE_SERIAL:-S6P2NX0T381638Z}
     mkdir -p "$state"
     state=$(cd "$state" && pwd)
+    log=$state/log
+    [ -z "$prepare" ] || log=$state/prepare/log
     files=$state/wt/$ARCH_DIR/images
     macdir=$repo/build/machines/mac
     tree=$macdir/tree site=$macdir/site runs=$macdir/runs
@@ -1257,6 +1516,7 @@ main()
     exec 9>> "$state/lock"
     perl -MFcntl=:flock -e 'open(L, ">&=9") && flock(L, LOCK_EX | LOCK_NB) or exit 1' ||
         later "another release runs"
+    [ -z "$prepare" ] || prepare_all
     chmod 600 "$repo/krffs/rach2_demo_ed25519"
 
     if [ -f "$state/record" ] && grep -q '^closing ' "$state/record" &&

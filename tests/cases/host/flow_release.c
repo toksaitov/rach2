@@ -1,4 +1,5 @@
-/* flow_release.c: resume records, reruns of failures and acceptance order. */
+/* flow_release.c: resume records, reruns of failures, acceptance order and
+ * the preparation of -p. */
 #define _POSIX_C_SOURCE 200809L
 #include "flow_check.h"
 #include <dirent.h>
@@ -88,6 +89,8 @@ static int sh_mock(int argc, char **argv)
         char prefix[5000];
         snprintf(prefix, sizeof(prefix), "testing %s ", ev("RACH2_TESTING_COPY"));
         call(prefix, argc, argv, 2);
+        if (!strcmp(ev("RELEASE_TEST_TESTING"), "pass"))
+            return 0;
         puts("testing: the host did not answer");
         return 1;
     }
@@ -445,8 +448,8 @@ struct release {
 };
 struct release_row {
     const char *record, *sha, *writes, *runs, *git, *accept, *machines, *windows, *native,
-        *failures, *milestone, *ancestor, *master, *push, *lenovo, *prepare, *hold;
-    int rerun;
+        *failures, *milestone, *ancestor, *master, *push, *lenovo, *prepare, *hold, *testing;
+    int rerun, preparing;
 };
 
 static int setup(struct release *r, struct fixture *f)
@@ -526,12 +529,15 @@ static void run(struct release *r, const struct release_row *spec)
     fx_env("RELEASE_TEST_LENOVO", spec->lenovo ? spec->lenovo : "");
     fx_env("RELEASE_TEST_PREPARE", spec->prepare ? spec->prepare : "");
     fx_env("RELEASE_TEST_HOLD", spec->hold ? spec->hold : "");
+    fx_env("RELEASE_TEST_TESTING", spec->testing ? spec->testing : "");
     if (spec->native) {
         flow_put(f, "state/wt/build/tools/dev/native-hostpeer", "");
         fx_copy(f->self, flow_path(f, "state/wt/build/tools/dev/native-deploy"));
     }
     if (spec->rerun)
         a[n++] = "-r";
+    if (spec->preparing)
+        a[n++] = "-p";
     a[n++] = "7";
     a[n++] = spec->sha ? spec->sha : H;
     a[n] = NULL;
@@ -1297,6 +1303,63 @@ static int lenovo_rows(struct release *r)
          ok;
     return ok;
 }
+/** Succeed when directory `dir` has no entry whose name holds `text`. */
+static int none_named(const char *dir, const char *text)
+{
+    DIR *d = opendir(dir);
+    struct dirent *e;
+    int none = 1;
+    if (!d)
+        return 1;
+    while ((e = readdir(d)) != NULL)
+        none = none && !strstr(e->d_name, text);
+    closedir(d);
+    return none;
+}
+#define PREPARED "milestone7-111111111111-"
+/**
+ * -p prepares each machine at once and removes what it made, writing no
+ * record and touching neither the full run nor the Lenovo; a failed part
+ * is named with the lines that say why.
+ */
+static int prepare_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    int ok;
+    if (!mac_tree(r))
+        return 0;
+    run(r, &(struct release_row){
+               .git = "yes", .machines = MAC WINDOWS, .testing = "pass", .preparing = 1});
+    ok = check(r,
+               !f->status && strstr(f->out, "release: prepare: passed " H "\n") &&
+                   strstr(f->out, "release: prepare: wsl: passed\n") &&
+                   strstr(f->out, "release: prepare: windows: passed\n") &&
+                   strstr(f->out, "release: prepare: mac: passed\n") &&
+                   called(r, "^testing " FLOW_OWNER_HOME "/rach2/build/worktrees/prepare run "
+                             "\\{ cp /etc/rach2/doom1.wad ") &&
+                   called(r, "^ +ARCH='i686 x86_64' tests/run style host$") &&
+                   called(r, "^windows .* run routine-prepare phase_first_run D:/w "
+                             "D:/o/" PREPARED "windows-prepare-[0-9-]+ both ") &&
+                   called(r, "^etude .* run routine-prepare phase_first_run .*/mac/tree "
+                             ".*/mac/runs/" PREPARED "mac-prepare-[0-9-]+ both ") &&
+                   !called(r, "routine-(sequence|collect)|^dispatch|^machine |^gh ") &&
+                   called(r, "^windows rm -rf " PREPARED "windows-prepare-") &&
+                   called(r, "^wsl rm -rf \"\\$copy\"$") &&
+                   !fx_exists(flow_path(f, "state/record")) &&
+                   !fx_exists(flow_path(f, "state/prepare/wt")) &&
+                   !fx_exists(flow_path(f, "tree/build/machines/mac/run")) &&
+                   none_named(flow_path(f, "tree/build/machines/mac/runs"), "prepare"),
+               "-p prepares each machine at once and removes what it made");
+    run(r, &(struct release_row){.git = "yes", .preparing = 1});
+    ok = check(r,
+               f->status == 1 && strstr(f->out, "release: prepare: wsl: failed; ") &&
+                   strstr(f->out, "\n    testing: the host did not answer\n") &&
+                   strstr(f->out, "release: prepare: failed: wsl\n") &&
+                   !fx_exists(flow_path(f, "state/record")),
+               "-p names the part that failed and the lines that say why") &&
+         ok;
+    return ok;
+}
 int flow_release(struct fixture *f)
 {
     struct release r;
@@ -1316,6 +1379,7 @@ int flow_release(struct fixture *f)
     ok = lenovo_off_row(&r) && ok;
     ok = lenovo_rows(&r) && ok;
     ok = mac_rows(&r) && ok;
+    ok = prepare_rows(&r) && ok;
     fx_env("FLOW_RELEASE", NULL);
     return ok;
 }
