@@ -573,8 +573,9 @@ since the kernel tracks no connections, so
 .Ic ctstat
 finds nothing to read.
 .It Pa /proc/net/tcp
-A header followed by rows for TCP connections, including listeners
-and connections still closing.
+A header followed by rows for the TCP connections of
+.Dv AF_INET
+sockets, including listeners and connections still closing.
 The kernel counts connections, allocates the snapshot array, then copies
 up to the original count.
 Connections created during allocation may be included and can displace
@@ -624,6 +625,22 @@ raw socket; a raw socket's port is its protocol, 255 for the descriptor that
 takes only configuration ioctls.
 The state is 01 for a connected socket and 07 for the rest, as Linux writes
 them, and only the receive queue is counted.
+.It Pa /proc/net/tcp6 , /proc/net/udp6 , /proc/net/raw6
+The
+.Dv AF_INET6
+sockets, in the columns of
+.Pa /proc/net/tcp ,
+.Pa /proc/net/udp
+and
+.Pa /proc/net/raw ,
+of which the IPv4 files list none.
+An address is 32 hexadecimal digits, its four 32-bit words each in reversed
+byte order, as Linux writes them: ::1 is
+.Ql 00000000000000000000000001000000 .
+An IPv4 peer of an
+.Dv AF_INET6
+socket is written as its mapped address, ::ffff:a.b.c.d, and any address
+as ::.
 .It Pa /proc/net/unix
 A header followed by a row for each
 .Dv AF_UNIX
@@ -685,13 +702,13 @@ open connections a reset or a timeout ended, CurrEstab, the connections
 ESTABLISHED or in CLOSE_WAIT, and the segments received, sent, retransmitted
 and dropped as malformed, and the resets sent.
 .Ql Udp:
-counts the datagrams delivered, those for a port no socket has, the
+counts the IPv4 datagrams delivered, those for a port no socket has, the
 malformed ones and those sent.
 A broadcast for a port no socket has counts as NoPorts, where Linux counts
 it in a field of its own, IgnoredMulti.
 The counters start at zero at boot and wrap at 2^32.
 .It Pa /proc/net/snmp6
-A line for each IPv6 and ICMPv6 counter this kernel keeps, its name in
+A line for each IPv6, ICMPv6 and UDP counter this kernel keeps, its name in
 32 columns, a tab and its value, in Linux's order, which
 .Xr nstat 8
 reads by name: the datagrams received, dropped for a bad header, for
@@ -701,7 +718,14 @@ sent to no route; the reassemblies timed out, the fragments received, the
 datagrams reassembled and given up, the datagrams sent in fragments and
 those of which a fragment could not leave, and the fragments made; the
 multicast datagrams each way; and the ICMPv6 messages received, the
-malformed ones, the messages sent, and those received and sent by type.
+malformed ones, the messages sent, and those received and sent by type,
+neighbour discovery's and MLD's among them, those only a router sends
+always 0; and the UDP datagrams over IPv6 delivered, for a port no socket
+has, malformed and sent, which
+.Ql Udp:
+of
+.Pa /proc/net/snmp
+leaves out.
 The counters start at zero at boot and wrap at 2^32.
 .It Pa /proc/sysvipc/shm , /proc/sysvipc/sem , /proc/sysvipc/msg
 A heading and a line for each System V segment, set or queue, in Linux's
