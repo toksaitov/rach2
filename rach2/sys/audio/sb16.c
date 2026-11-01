@@ -640,7 +640,23 @@ static int sb16_get_volume(void)
 
 /* The audio_driver_t fields, in the order audio.h declares them: name,
    type, init, shutdown, start, stop, is_playing, set_callback, write,
-   set_volume, get_volume. */
-audio_driver_t sb16_driver = {
-    "Sound Blaster 16", AUDIO_DRIVER_SB16, sb16_init,  sb16_shutdown,   sb16_start,     sb16_stop,
-    sb16_is_playing,    sb16_set_callback, sb16_write, sb16_set_volume, sb16_get_volume};
+   set_volume, get_volume, then the seven stream operations, which this
+   driver lacks. */
+audio_driver_t sb16_driver = {"Sound Blaster 16",
+                              AUDIO_DRIVER_SB16,
+                              sb16_init,
+                              sb16_shutdown,
+                              sb16_start,
+                              sb16_stop,
+                              sb16_is_playing,
+                              sb16_set_callback,
+                              sb16_write,
+                              sb16_set_volume,
+                              sb16_get_volume,
+                              NULL,
+                              NULL,
+                              NULL,
+                              NULL,
+                              NULL,
+                              NULL,
+                              NULL};
