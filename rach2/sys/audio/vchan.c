@@ -85,7 +85,7 @@ static struct {
 } mix;
 
 /** The bytes of one frame of `s`. */
-static uint32_t frame_bytes(const audio_stream_t *s)
+static uint32_t vchan_frame_bytes(const audio_stream_t *s)
 {
     return (uint32_t)s->channels * (s->format == AUDIO_S16LE ? 2u : 1u);
 }
@@ -348,7 +348,7 @@ static int vchan_open(audio_stream_t *s)
         }
     }
     c->s = s;
-    c->frame = frame_bytes(s);
+    c->frame = vchan_frame_bytes(s);
     flags = spin_lock_irqsave(&mix.lock);
     c->next = mix.list;
     mix.list = c;
@@ -377,7 +377,7 @@ static int vchan_setup(audio_stream_t *s)
     }
     top = VCHAN_RATIO * mix.rate < VCHAN_RATE_MAX ? VCHAN_RATIO * mix.rate : VCHAN_RATE_MAX;
     rate = s->rate < VCHAN_RATE_MIN ? VCHAN_RATE_MIN : s->rate > top ? top : s->rate;
-    frame = frame_bytes(s);
+    frame = vchan_frame_bytes(s);
     max = mix.period * rate / mix.rate;
     want = s->period_bytes / frame;
     if (want > max) {
@@ -543,8 +543,8 @@ static uint32_t vchan_delay(audio_stream_t *s)
 
 /* The audio_driver_t fields, in the order audio.h declares them: name,
    type, init, shutdown, start, stop, is_playing, set_callback, write,
-   set_volume, get_volume, then the seven stream operations; the channels
-   have the stream operations alone. */
+   set_volume, get_volume, the seven stream operations, then the three
+   input controls; the channels have the stream operations alone. */
 audio_driver_t vchan_driver = {"Virtual channels",
                                AUDIO_DRIVER_NONE,
                                NULL,
@@ -562,4 +562,7 @@ audio_driver_t vchan_driver = {"Virtual channels",
                                vchan_stop,
                                vchan_close,
                                vchan_position,
-                               vchan_delay};
+                               vchan_delay,
+                               NULL,
+                               NULL,
+                               NULL};
