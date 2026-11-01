@@ -23,20 +23,28 @@
 # and ~/.config/gh/hosts.yml, and OpenCode's database,
 # ~/.local/share/opencode/opencode.db, which holds its credentials and which
 # sqlite3's .backup copies whole while OpenCode writes it. Each file and the
-# directories above it keep their modes. The copy is made in a scratch
-# directory on the machine's /dev/shm, sent as one tar archive and checked
-# here by SHA-256 against the machine's; only a pull that has every file it
+# directories above it keep their modes. The copy is made in the machine's
+# scratch directory, below, sent as one tar archive and checked here by
+# SHA-256 against the machine's; only a pull that has every file it
 # found, and at least one, replaces the files of DIR, which are replaced
 # one by one, and DIR's other files are left as they are. A file the machine
 # lacks keeps DIR's copy, and the script names it.
 #
-# push copies every file of DIR/HOME into USER's home: a directory the home
-# lacks is made with its mode in DIR, and a file is written beside its place
-# and renamed over it, owned by USER, with its mode in DIR. Each file
-# written is checked against DIR's by SHA-256. OpenCode's database is
+# push sends the files of DIR/HOME as one tar archive into the machine's
+# scratch directory, where the machine checks the archive by SHA-256 against
+# this host's before it unpacks it, then copies every file into USER's home:
+# a directory the home lacks is made with its mode in DIR, and a file is
+# written beside its place and renamed over it, owned by USER, with its mode
+# in DIR. Each file written is checked against DIR's by SHA-256. OpenCode's
+# database is
 # refused while an opencode process runs, since it keeps its writes in the
 # database's journal, which the push removes with the database it replaces;
 # `opencode service stop` ends its service.
+#
+# The machine's scratch directory is made by root's mktemp -d in /dev/shm,
+# with mode 700, so that no other user of the machine can make, open or
+# replace a file in it; it holds the archive and the tree it is unpacked
+# into, and is removed on every exit.
 #
 # The files' contents are never printed: only their names. Exit 0 when
 # every file was copied and checked, 1 when a step fails, 2 on a usage
@@ -69,11 +77,13 @@ fail()
     exit 1
 }
 
-# The machine's half: run there by `sh -s -- COMMAND USER`, it prints USER's
-# home for `home`; stages USER's login files in /dev/shm/rach2-logins for
+# The machine's half: run there by `sh -s -- COMMAND USER [SCRATCH [HASH]]`,
+# where SCRATCH is the private directory that `mktemp -d` made, it prints
+# USER's home for `home`; stages USER's login files in SCRATCH/tree for
 # `pull` and prints `HASH  ./PATH` for each and `missing PATH` for each the
-# home lacks; and for `push` writes the files of the archive
-# /dev/shm/rach2-logins.tar into the home and prints `HASH  ./PATH` for each.
+# home lacks; and for `push` checks that the archive SCRATCH/logins.tar has
+# the SHA-256 HASH, unpacks it into SCRATCH/tree, writes its files into the
+# home and prints `HASH  ./PATH` for each.
 remote()
 {
     cat << 'EOF'
@@ -82,8 +92,14 @@ FILES=".claude/.credentials.json .codex/auth.json
 .gemini/antigravity-cli/antigravity-oauth-token .config/muse/auth.json
 .config/gh/hosts.yml"
 DB=.local/share/opencode/opencode.db
-stage=/dev/shm/rach2-logins
 fail() { echo "machine-logins: failed: $*" >&2; exit 1; }
+if [ "$1" != home ]; then
+    scratch=$3
+    stage=$scratch/tree
+    [ -d "$scratch" ] && [ ! -L "$scratch" ] &&
+        [ "$(stat -c %u:%a "$scratch")" = 0:700 ] ||
+        fail "$scratch is not a directory of root's with mode 700"
+fi
 line=$(awk -F: -v u="$2" '$1 == u { print; exit }' /etc/passwd)
 [ -n "$line" ] || fail "the machine has no account $2"
 uid=$(echo "$line" | cut -d: -f3)
@@ -113,7 +129,7 @@ home)
     echo "$home"
     ;;
 pull)
-    rm -rf "$stage" "$stage.tar" && mkdir -m 700 "$stage" || fail "$stage could not be made"
+    mkdir -m 700 "$stage" || fail "$stage could not be made"
     for f in $FILES $DB; do
         if [ ! -f "$f" ]; then
             echo "missing $f"
@@ -133,9 +149,11 @@ pull)
     done || fail "the copies could not be hashed"
     ;;
 push)
-    rm -rf "$stage" && mkdir -m 700 "$stage" || fail "$stage could not be made"
-    tar -xof "$stage.tar" -C "$stage" || fail "the archive could not be read"
-    rm -f "$stage.tar"
+    [ "$(sha256sum "$scratch/logins.tar" | cut -d' ' -f1)" = "$4" ] ||
+        fail "the archive differs from the one sent"
+    mkdir -m 700 "$stage" || fail "$stage could not be made"
+    tar -xof "$scratch/logins.tar" -C "$stage" || fail "the archive could not be read"
+    rm -f "$scratch/logins.tar"
     if [ -f "$stage/$DB" ]; then
         command -v pgrep > /dev/null || fail "the machine has no pgrep to look for opencode with"
         ! pgrep -x opencode > /dev/null ||
@@ -156,7 +174,6 @@ push)
         h=$(sha256sum "$t" | cut -d' ' -f1)
         echo "$h  $f"
     done || fail "a file could not be written in $home"
-    cd / && rm -rf "$stage"
     ;;
 esac
 EOF
@@ -189,10 +206,10 @@ check()
 }
 
 work=
-staged=
+scratch=
 cleanup()
 {
-    [ -z "$staged" ] || machine 'rm -rf /dev/shm/rach2-logins /dev/shm/rach2-logins.tar' 2> /dev/null
+    [ -z "$scratch" ] || machine "rm -rf $scratch" 2> /dev/null
     rm -rf ${work:+"$work"}
 }
 trap cleanup EXIT
@@ -216,12 +233,19 @@ got=$(machine 'cat /sys/class/net/eth0/address' 2> "$work/err") || fail "$(tail 
 [ "$got" = "$mac" ] || fail "the machine reports station address $got, not $mac"
 home=$(remote | machine "sh -s -- home $user") || fail "$user's home could not be read"
 here=$dir/${home#/}
+made=$(machine 'mktemp -d /dev/shm/rach2-logins.XXXXXX') ||
+    fail "the machine could not make a scratch directory"
+case $made in
+    /dev/shm/rach2-logins. | /dev/shm/rach2-logins.*[!A-Za-z0-9]*)
+        fail "the machine named $made as its scratch directory" ;;
+    /dev/shm/rach2-logins.*) scratch=$made ;;
+    *) fail "the machine named $made as its scratch directory" ;;
+esac
 
 if [ "$command" = pull ]; then
     echo "machine-logins: pulling $user's logins from $address"
-    staged=yes
-    remote | machine "sh -s -- pull $user" > "$work/list" || fail "the machine could not copy them"
-    machine 'tar -C /dev/shm/rach2-logins -cf - .' > "$work/pull.tar" ||
+    remote | machine "sh -s -- pull $user $scratch" > "$work/list" || fail "the machine could not copy them"
+    machine "tar -C $scratch/tree -cf - ." > "$work/pull.tar" ||
         fail "the copy did not arrive"
     mkdir "$work/new" && tar -xpf "$work/pull.tar" -C "$work/new" ||
         fail "the copy could not be unpacked"
@@ -239,10 +263,11 @@ else
     ! (cd "$here" && find . | LC_ALL=C grep -q '[[:cntrl:]]') ||
         fail "$here has a name with a control character"
     echo "machine-logins: pushing $here to $user on $address"
-    staged=yes
-    (cd "$here" && COPYFILE_DISABLE=1 tar --no-xattrs -cf - .) |
-        machine 'cat > /dev/shm/rach2-logins.tar' || fail "the archive did not arrive"
-    remote | machine "sh -s -- push $user" > "$work/list" || fail "the machine could not write them"
+    (cd "$here" && COPYFILE_DISABLE=1 tar --no-xattrs -cf - .) > "$work/push.tar" ||
+        fail "the archive could not be made"
+    machine "cat > $scratch/logins.tar" < "$work/push.tar" || fail "the archive did not arrive"
+    remote | machine "sh -s -- push $user $scratch $(digest "$work/push.tar")" > "$work/list" ||
+        fail "the machine could not write them"
     n=$(check "$work/list" "$here") || exit 1
     sed -n 's|^[0-9a-f]*  \./|machine-logins: pushed: |p' "$work/list"
     echo "machine-logins: result: $n files in $user's home, $home"
