@@ -125,13 +125,52 @@ static void put_codec(struct audio_text *t, const hda_report_t *r)
     put_ch(t, '\n');
 }
 
+/** Append the input path, the ADC's capabilities and the input stream's
+ * last setup and counters to `t`. */
+static void put_input(struct audio_text *t, const hda_input_report_t *in)
+{
+    put_field(t, "input adc ", in->adc);
+    put_field(t, " index ", in->index);
+    put_field(t, " mid ", in->mid);
+    put_field(t, " index ", in->mid_index);
+    put_field(t, " pin ", in->pin);
+    put_field(t, " int-mic ", in->int_mic);
+    put_field(t, " jack-mic ", in->jack_mic);
+    put_field(t, " inv-dmic ", in->inv_dmic);
+    put_field(t, " level ", in->level);
+    put_str(t, " pin-ctl 0x");
+    put_hex(t, in->pin_ctl, 2);
+    put_ch(t, '\n');
+    if (in->caps.nid) {
+        put_field(t, "caps adc ", in->caps.nid);
+        put_field(t, " source ", in->caps.source);
+        put_str(t, " pcm 0x");
+        put_hex(t, in->caps.pcm, 8);
+        put_str(t, " formats 0x");
+        put_hex(t, in->caps.formats, 8);
+        put_ch(t, '\n');
+    }
+    put_field(t, "capture running ", in->running);
+    put_field(t, " requested ", in->requested_rate);
+    put_field(t, " rate ", in->rate);
+    put_str(t, " format 0x");
+    put_hex(t, in->format, 4);
+    put_field(t, " period ", in->period);
+    put_field(t, " periods ", in->periods);
+    put_field(t, " frames ", in->frames);
+    put_field(t, " overruns ", in->overruns);
+    put_field(t, " lpib ", in->lpib);
+    put_ch(t, '\n');
+}
+
 /**
  * Write /proc/audio's text into `buf`, of `cap` bytes, with no terminator:
  * the audio driver's name and the HDA driver's report (`hda_get_report`),
  * the codec and the widgets it chose, the rates and formats of the last
  * stream it programmed, the converters' capabilities and the connection
- * lists it read, then the stream's queue, and every widget of the codec's
- * function group with its ADCs. It sends no verb.
+ * lists it read; the input path, the ADC's capabilities and the input
+ * stream's counters; then the output stream's queue, and every widget of the
+ * codec's function group with its ADCs. It sends no verb.
  *
  * With `buf` NULL it first reads the queue again (`hda_read_queue`); with a
  * buffer it writes the reading the last call without one took. procfs asks
@@ -192,6 +231,7 @@ int audio_proc_text(char *buf, int cap)
         put_hex(t, c->formats, 8);
         put_ch(t, '\n');
     }
+    put_input(t, &r->input);
     for (i = 0; i < 3; i++) {
         const hda_connection_report_t *c = &r->connections[i];
         if (!c->nid)

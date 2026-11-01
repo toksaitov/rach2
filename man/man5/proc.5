@@ -108,6 +108,27 @@ line lists NIDs in selector-index order, starting at index zero.
 marks a rejected list; its raw entries stop where decoding failed.
 .Pp
 The
+.Ql input
+line gives the input path chosen at discovery: the ADC and its connection
+index toward the pin, a mixer or selector between them and its index, or 0,
+the pin recorded, the internal and jack microphone pins, whether the
+internal mic is the inverted stereo pair whose right channel is muted, the
+ADC's input gain in steps, and the pin widget control the last capture set.
+The
+.Ql caps adc
+line gives the ADC's capabilities as a
+.Ql caps dac
+line does a DAC's.
+The
+.Ql capture
+line gives the input stream: whether it runs, the rate asked for and the
+one programmed, the format word read back, the bytes of one DMA period and
+the periods in the buffer, the frames handed to the reader, the overruns,
+services that found a period overwritten before it was handed over, and the
+position in the DMA buffer at the last service.
+The counters start again at each start.
+.Pp
+The
 .Ql queue
 line is read when the file is opened, from memory and the stream's
 registers.
