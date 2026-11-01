@@ -15,6 +15,8 @@
 #include "../pci.h"
 #include "../udelay.h"
 #include "../lib/kerrno.h"
+#include "../lib/kirq.h"
+#include "../lib/spinlock.h"
 #include "../lib/kstd.h"
 #include "../lib/kstring.h"
 #include "../mm/paging.h"
@@ -929,52 +931,123 @@ static void hda_setup_rirb(void)
 /* The failures of the first three verbs are logged; counts down to 0. */
 static int verb_debug_count = 3;
 
+/* One verb at a time on the immediate command interface: its holder owns
+ * ICW, IRR and ICS from the wait for an idle interface to the response. */
+static struct spinlock verb_lock = SPINLOCK_INIT;
+
+/* The longest a verb waits on the interface, in ticks of the 24 MHz wall
+ * clock: 1 ms. A codec answers in the next link frame, 21 us at 48 kHz. */
+#define HDA_VERB_TICKS 24000u
+
+/* The polls after which a verb gives up when the wall clock does not run;
+ * each waits a microsecond, so they last at least as long as the clock's
+ * limit. */
+#define HDA_VERB_POLLS 1000
+
+/* A verb's wait on the interface: when it began, the polls made, and the
+ * interrupt flags of the caller, which are put back between polls. */
+struct hda_verb_wait {
+    uint32_t start;
+    int polls;
+    uint32_t flags;
+};
+
 /**
- * Send a codec verb over the Immediate Command Interface and return the
- * response.
- *
- * ICI is simpler and more reliable than CORB/RIRB for enumeration. The command
- * packs the codec address, node ID, and verb; the routine waits for the
- * interface to go idle, issues it, then polls ICS for IRV (response valid) or a
- * cleared ICB. Returns 0 on a busy, no-response, or timeout condition.
+ * Wait one poll's interval of a verb, with interrupts as the caller had
+ * them. Return false, without waiting, once the verb has waited 1 ms by the
+ * wall clock or HDA_VERB_POLLS polls. The first call reads the clock to
+ * start the count, so a verb that never waits does not read it.
  */
-static uint32_t hda_send_verb(uint8_t caddr, uint8_t nid, uint32_t verb)
+static bool hda_verb_wait(struct hda_verb_wait *w)
 {
-    uint32_t cmd;
+    uint32_t now = hda_read32(HDA_WALCLK);
+
+    if (w->polls++ == 0)
+        w->start = now;
+    else if ((uint32_t)(now - w->start) >= HDA_VERB_TICKS || w->polls > HDA_VERB_POLLS)
+        return false;
+    kirq_restore(w->flags);
+    hda_delay(1);
+    w->flags = kirq_save();
+    return true;
+}
+
+/* hda_verb's `mode`: wait for the interface, or give up at once when it is
+ * busy, as a caller in the tick must. */
+#define HDA_VERB_WAIT 0
+#define HDA_VERB_TRY  1
+
+/**
+ * Send a codec verb over the Immediate Command Interface and store its
+ * response in `*response`, which may be NULL.
+ *
+ * ICI is simpler than CORB/RIRB, and with one verb at a time it is as fast.
+ * The command packs the codec address, node ID and verb. The verb lock is
+ * held from the wait for an idle interface to the response's read, with
+ * interrupts off only while a register is read or written: the waits between
+ * polls run with the caller's interrupts, so a verb sent from a system call
+ * does not hold off the tick. The tick may stop such a verb half-way, so a
+ * caller in the tick or another interrupt passes HDA_VERB_TRY, which gives up
+ * when the lock is held or the interface is still busy with a command before
+ * it; waiting there would never end, or end too late for the tick.
+ *
+ * Return 0 with the response; -EBUSY in HDA_VERB_TRY mode when the interface
+ * is in use, having sent nothing; -EIO when the controller is not mapped or
+ * the codec completed the command with no response; -ETIMEDOUT when the
+ * interface stayed busy, or no response came, within 1 ms. On an error
+ * `*response` is 0, and the caller treats what it asked as unknown.
+ */
+static int hda_verb(uint8_t caddr, uint8_t nid, uint32_t verb, int mode, uint32_t *response)
+{
+    struct hda_verb_wait w;
+    uint32_t cmd = ((uint32_t)caddr << 28) | ((uint32_t)nid << 20) | (verb & 0xFFFFF);
     uint16_t ics;
-    uint32_t response;
-    int timeout;
+    int err = -ETIMEDOUT;
     bool debug = (verb_debug_count > 0);
 
-    cmd = ((uint32_t)caddr << 28) | ((uint32_t)nid << 20) | (verb & 0xFFFFF);
-
-    timeout = 10000;
-    while ((hda_read16(HDA_ICS) & HDA_ICS_ICB) && timeout-- > 0) {
-        hda_delay(1);
-    }
-    if (timeout <= 0) {
-        if (debug) {
-            klog(KLOG_DEBUG, "hda", "verb: the command interface is busy");
+    if (response)
+        *response = 0;
+    if (!hda_base)
+        return -EIO;
+    w.polls = 0;
+    w.flags = kirq_save();
+    if (mode == HDA_VERB_TRY) {
+        if (!spin_trylock(&verb_lock)) {
+            kirq_restore(w.flags);
+            return -EBUSY;
         }
-        return 0;
+        if (hda_read16(HDA_ICS) & HDA_ICS_ICB) {
+            spin_unlock(&verb_lock);
+            kirq_restore(w.flags);
+            return -EBUSY;
+        }
+    } else {
+        spin_lock(&verb_lock);
+    }
+
+    while (hda_read16(HDA_ICS) & HDA_ICS_ICB) {
+        if (!hda_verb_wait(&w)) {
+            if (debug) {
+                klog(KLOG_DEBUG, "hda", "verb: the command interface is busy");
+                verb_debug_count--;
+            }
+            goto out;
+        }
     }
 
     hda_write16(HDA_ICS, HDA_ICS_IRV); /* IRV is write-1-to-clear */
-
     hda_write32(HDA_ICW, cmd);
-
     hda_write16(HDA_ICS, HDA_ICS_ICB); /* ICB starts the command */
 
-    timeout = 100000;
-    while (timeout-- > 0) {
+    for (;;) {
         ics = hda_read16(HDA_ICS);
         if (ics & HDA_ICS_IRV) {
-            response = hda_read32(HDA_IRR);
+            uint32_t r = hda_read32(HDA_IRR);
             hda_write16(HDA_ICS, HDA_ICS_IRV);
-            if (debug) {
-                verb_debug_count--;
-            }
-            return response;
+            if (response)
+                *response = r;
+            err = 0;
+            break;
         }
         if (!(ics & HDA_ICS_ICB)) {
             /* ICB cleared without IRV: command done, no response. */
@@ -982,16 +1055,34 @@ static uint32_t hda_send_verb(uint8_t caddr, uint8_t nid, uint32_t verb)
                 klog(KLOG_DEBUG, "hda", "verb: no response valid, ics 0x%x", ics);
                 verb_debug_count--;
             }
-            return 0;
+            err = -EIO;
+            break;
         }
-        hda_delay(1);
+        if (!hda_verb_wait(&w)) {
+            if (debug) {
+                klog(KLOG_WARN, "hda", "verb: timed out, ics 0x%x", ics);
+                verb_debug_count--;
+            }
+            break;
+        }
     }
+out:
+    spin_unlock(&verb_lock);
+    kirq_restore(w.flags);
+    return err;
+}
 
-    if (debug) {
-        klog(KLOG_WARN, "hda", "verb: timed out, ics 0x%x", hda_read16(HDA_ICS));
-        verb_debug_count--;
-    }
-    return 0;
+/**
+ * Send a codec verb, waiting for the interface (hda_verb), and return the
+ * response, or 0 when the verb failed. Not for the tick or an interrupt
+ * handler, which use hda_verb with HDA_VERB_TRY.
+ */
+static uint32_t hda_send_verb(uint8_t caddr, uint8_t nid, uint32_t verb)
+{
+    uint32_t response;
+
+    hda_verb(caddr, nid, verb, HDA_VERB_WAIT, &response);
+    return response;
 }
 
 /** Read parameter `param` of node `nid` of the chosen codec. */
