@@ -3739,8 +3739,9 @@ static uint32_t hda_stream_position(void)
  * service has put there, converted from the programmed rate. That end is the
  * start of the period playing at the last service, since every period after
  * it has been filled; a distance of 0 is the whole buffer. For a stream of
- * audio.h, hda_play_delay's count. 0 when no stream plays. The caller keeps interrupts off, so
- * that the service does not move the end between the reads.
+ * audio.h, hda_play_delay's count. 0 when no stream plays. The caller keeps
+ * interrupts off, so that the service does not move the end between the
+ * reads.
  */
 static uint32_t hda_delay_at(uint32_t pos)
 {
