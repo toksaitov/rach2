@@ -1347,7 +1347,7 @@
     },
     {
       "case_id": "guest.default.limitprobe",
-      "behavior": "The resource limits RLIMIT_NOFILE, RLIMIT_AS, RLIMIT_NPROC and RLIMIT_FSIZE are kept, enforced with Linux's errors, inherited across fork and exec, guarded for a user's hard limit, kept by a zombie, and counted per real user, setuid included; OpenSSH's rlimit sandbox still selects and polls. It reads /hello, writes /tmp/limitprobe.f and re-executes itself by argv[0] when that is absolute, else /limitprobe, so it needs no argument.",
+      "behavior": "The resource limits RLIMIT_NOFILE, RLIMIT_AS, RLIMIT_NPROC and RLIMIT_FSIZE are kept, enforced with Linux's errors, inherited across fork and exec, guarded for a user's hard limit and fs.nr_open, raised to high descriptors that select and poll reach, in a table that grows while shared, kept by a zombie, and counted per real user, setuid included; OpenSSH's rlimit sandbox still selects and polls. It reads /hello, writes /tmp/limitprobe.f and re-executes itself by argv[0] when that is absolute, else /limitprobe, so it needs no argument.",
       "units": ["default", "limitprobe"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -1355,9 +1355,11 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
       "execution": {"program": "limitprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
       "assertions": [
-        {"assertion_id": "nofile-table", "checks": "The descriptor limit reads 1024 and 1024.", "source": "program"},
+        {"assertion_id": "nofile-table", "checks": "The descriptor limit reads 1024 and 524288.", "source": "program"},
         {"assertion_id": "as-unlimited", "checks": "The address-space limit reads unlimited.", "source": "program"},
         {"assertion_id": "nofile-eight", "checks": "Under a descriptor limit of eight, the ninth open is EMFILE, a dup2 onto 9 is EBADF, and an exec of limitprobe show reads the limit of eight.", "source": "program"},
+        {"assertion_id": "nofile-high", "checks": "Root is refused a hard descriptor limit of 1048577 with EPERM and given 1048576; under a soft 70000 a dup2 onto 65536 succeeds, an open takes the lowest free descriptor, F_DUPFD from 69999 gives 69999 and then EMFILE, a dup2 onto 70000 is EBADF, and select with a set wider than FD_SETSIZE and poll answer descriptor 65536 writable.", "source": "program"},
+        {"assertion_id": "nofile-shared", "checks": "A process cloned with CLONE_FILES sleeps in a pipe read while its sharer makes 3000 descriptors; the read ends with the byte written, the clone finds and closes descriptor 3006, and the sharer finds it closed.", "source": "program"},
         {"assertion_id": "as-eight", "checks": "Under an address-space limit of eight megabytes, a mapping of sixteen is ENOMEM, one of one is not, and the break does not move past the limit.", "source": "program"},
         {"assertion_id": "hard-limit", "checks": "Root lowers and raises the hard limit; a user lowers it, is refused a raise with EPERM, and a soft value above the hard is EINVAL.", "source": "program"},
         {"assertion_id": "sandbox", "checks": "Under OpenSSH's rlimit sandbox, limits of 0 on file size, descriptors and processes, select and poll answer a descriptor opened before as ready.", "source": "program"},

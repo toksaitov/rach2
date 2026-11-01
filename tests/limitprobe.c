@@ -5,9 +5,14 @@
  * real user (`RLIMIT_NPROC`), a process's open descriptors (`RLIMIT_NOFILE`)
  * and its address space in bytes (`RLIMIT_AS`), each a soft value enforced
  * and a hard value the soft may be raised to. The probe runs as root and
- * proves, in children of its own: the limits read back as the table's; a
- * descriptor limit of eight refuses the ninth open with `EMFILE` and a
- * `dup2` onto a number past it with `EBADF`, a child forked under a limit
+ * proves, in children of its own: the limits read back as the table's, a
+ * soft 1024 and a hard 524288 for descriptors; a descriptor limit of eight
+ * refuses the ninth open with `EMFILE` and a `dup2` onto a number past it
+ * with `EBADF`; root raises the hard descriptor limit to fs.nr_open,
+ * 1048576, and no further, and under a soft 70000 holds, selects and polls
+ * descriptor 65536; a table that a process cloned with `CLONE_FILES` shares
+ * grows while that process sleeps in a read with a descriptor of it, and
+ * the two see each other's descriptors after; a child forked under a limit
  * reads that limit, and an address-space limit of eight megabytes refuses
  * a larger mapping with `ENOMEM` and leaves the break where it was; a hard
  * limit raised by a user is refused with `EPERM` while a lowering and
@@ -27,7 +32,7 @@
  *
  * Needs: root privilege, readable /hello, a writable /tmp, this binary at
  * /limitprobe, and only descriptors 0, 1 and 2 open. Start with
- * RLIMIT_NOFILE at 1024/1024, unlimited RLIMIT_AS, and no other processes
+ * RLIMIT_NOFILE at 1024/524288, unlimited RLIMIT_AS, and no other processes
  * owned by uid 1000 or 1001. Neither path nor limit depends on the root
  * file system's type.
  *
@@ -89,7 +94,12 @@ struct pollfd {
     short events, revents;
 };
 
-#define POLLIN 1
+#define POLLIN  1
+#define POLLOUT 4
+
+#define F_DUPFD     0
+#define F_GETFD     1
+#define CLONE_FILES 0x400
 
 /** An anonymous read-write mapping of `len` bytes; its address, or a negated
  * errno. */
@@ -128,6 +138,8 @@ enum {
     NOFILE_TABLE,
     AS_UNLIMITED,
     NOFILE_EIGHT,
+    NOFILE_HIGH,
+    NOFILE_SHARED,
     AS_EIGHT,
     HARD_LIMIT,
     SANDBOX,
@@ -152,6 +164,8 @@ static const struct {
     {"nofile-table", "the descriptor limit is not the table's"},
     {"as-unlimited", "the address-space limit is not unlimited"},
     {"nofile-eight", "eight descriptors: the ninth open is EMFILE and the exec sees eight"},
+    {"nofile-high", "descriptor 65536 under a hard limit of 1048576"},
+    {"nofile-shared", "a shared table grows while a sharer sleeps holding a descriptor"},
     {"as-eight", "eight megabytes: a larger mapping is ENOMEM and the break stays"},
     {"hard-limit", "the hard limit: a user lowers, root raises"},
     {"sandbox", "select and poll under the limits of 0 of OpenSSH's sandbox"},
@@ -286,6 +300,111 @@ static int body_nofile(void)
     argv[2] = 0;
     syscall3(SYS_EXECVE, (long)argv[0], (long)argv, 0);
     return 4;
+}
+
+/* A select set wide enough for descriptor 65536. */
+static unsigned wide_set[65568 / 32];
+
+/** High descriptors: a hard descriptor limit past fs.nr_open is EPERM even
+ * to root, and nr_open itself is allowed; under a soft limit of 70000 a
+ * dup2 onto 65536 grows the table to it, an open still gets the lowest free
+ * descriptor, F_DUPFD from 69999 gets 69999 and then EMFILE, a dup2 onto
+ * 70000 is EBADF, and select, with a set wider than FD_SETSIZE, and poll
+ * answer the write end of a pipe at 65536 ready. Returns 0, or 2 to 9 for
+ * the step that fails. */
+static int body_high(void)
+{
+    struct rlimit64 rl;
+    struct pollfd pfd;
+    int pipefd[2];
+    long tv[2];
+
+    if (set_limit(RLIMIT_NOFILE, 1024, 1048577) != -EPERM) {
+        return 2;
+    }
+    if (set_limit(RLIMIT_NOFILE, 70000, 1048576) != 0 || get_limit(RLIMIT_NOFILE, &rl) != 0 ||
+        rl.cur_lo != 70000 || rl.max_lo != 1048576) {
+        return 3;
+    }
+    if (syscall1(SYS_PIPE, (long)pipefd) != 0 || syscall2(SYS_DUP2, pipefd[1], 65536) != 65536) {
+        return 4;
+    }
+    if (syscall3(SYS_OPEN, (long)hello_path, O_RDONLY, 0) != pipefd[1] + 1) {
+        return 5; /* the lowest free descriptor, not one past 65536 */
+    }
+    if (syscall3(SYS_FCNTL, 0, F_DUPFD, 69999) != 69999 ||
+        syscall3(SYS_FCNTL, 0, F_DUPFD, 69999) != -EMFILE) {
+        return 6;
+    }
+    if (syscall2(SYS_DUP2, 0, 70000) != -EBADF) {
+        return 7;
+    }
+    wide_set[65536 / 32] = 1u << (65536 % 32);
+    tv[0] = 1;
+    tv[1] = 0;
+    if (syscall5(SYS_SELECT, 65537, 0, (long)wide_set, 0, (long)tv) != 1 ||
+        wide_set[65536 / 32] != 1u << (65536 % 32)) {
+        return 8;
+    }
+    pfd.fd = 65536;
+    pfd.events = POLLOUT;
+    pfd.revents = 0;
+    if (syscall3(SYS_POLL, (long)&pfd, 1, 1000) != 1 || !(pfd.revents & POLLOUT)) {
+        return 9;
+    }
+    return 0;
+}
+
+/** A table shared while it grows: a process cloned with CLONE_FILES sleeps
+ * in a read of a pipe, which holds the pipe's descriptor for the read, while
+ * this one makes 3000 descriptors, which moves the table to larger arrays
+ * eight times; the read then ends with the byte written, the clone finds
+ * descriptor 3006, the last made, and closes it, and this one finds it
+ * closed. Returns 0, or 2 to 8 for the step that fails. */
+static int body_shared(void)
+{
+    static int go[2], back[2];
+    long ts[2];
+    char byte;
+    int i, pid;
+
+    if (set_limit(RLIMIT_NOFILE, 4096, 4096) != 0 || syscall1(SYS_PIPE, (long)go) != 0 ||
+        syscall1(SYS_PIPE, (long)back) != 0 || back[1] != 6) {
+        return 2;
+    }
+    pid = syscall5(SYS_CLONE, CLONE_FILES | SIGCHLD, 0, 0, 0, 0);
+    if (pid < 0) {
+        return 3;
+    }
+    if (pid == 0) {
+        if (syscall3(SYS_WRITE, back[1], (long)"r", 1) != 1 ||
+            syscall3(SYS_READ, go[0], (long)&byte, 1) != 1 || byte != 'g') {
+            sys_exit(2);
+        }
+        if (syscall3(SYS_FCNTL, 3006, F_GETFD, 0) != 0 || syscall1(SYS_CLOSE, 3006) != 0) {
+            sys_exit(3);
+        }
+        sys_exit(syscall3(SYS_WRITE, back[1], (long)"c", 1) == 1 ? 0 : 4);
+    }
+    if (syscall3(SYS_READ, back[0], (long)&byte, 1) != 1 || byte != 'r') {
+        return 4;
+    }
+    ts[0] = 0;
+    ts[1] = 100000000; /* the clone goes to sleep in its read */
+    syscall2(SYS_NANOSLEEP, (long)ts, 0);
+    for (i = 0; i < 3000; i++) {
+        if (syscall1(SYS_DUP, 0) != 7 + i) {
+            return 5;
+        }
+    }
+    if (syscall3(SYS_WRITE, go[1], (long)"g", 1) != 1 ||
+        syscall3(SYS_READ, back[0], (long)&byte, 1) != 1 || byte != 'c') {
+        return 6;
+    }
+    if (syscall3(SYS_FCNTL, 3006, F_GETFD, 0) != -EBADF) {
+        return 7;
+    }
+    return wait_status(pid) == 0 ? 0 : 8;
 }
 
 /** OpenSSH's rlimit sandbox: with limits of 0 on the files it may grow, the
@@ -573,13 +692,15 @@ void probe_main(unsigned long *sp)
     self_path = probe_self("/limitprobe");
     id_1000 = probe_id(1000);
     id_1001 = probe_id(1001);
-    if (get_limit(RLIMIT_NOFILE, &rl) != 0 || rl.cur_lo != 1024 || rl.max_lo != 1024) {
+    if (get_limit(RLIMIT_NOFILE, &rl) != 0 || rl.cur_lo != 1024 || rl.max_lo != 524288) {
         fail(NOFILE_TABLE);
     }
     if (get_limit(RLIMIT_AS, &rl) != 0 || rl.cur_lo != 0xFFFFFFFFu || rl.cur_hi != 0xFFFFFFFFu) {
         fail(AS_UNLIMITED);
     }
     child_must(body_nofile, 0, NOFILE_EIGHT);
+    child_must(body_high, 0, NOFILE_HIGH);
+    child_must(body_shared, 0, NOFILE_SHARED);
     child_must(body_as, 0, AS_EIGHT);
     child_must(body_hard, 0, HARD_LIMIT);
     child_must(body_sandbox, 0, SANDBOX);
