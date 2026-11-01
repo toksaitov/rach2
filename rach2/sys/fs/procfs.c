@@ -2070,7 +2070,9 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
     case FD_TYPE_SYNTH_DIR: {
         struct synth_dir *sd = (struct synth_dir *)e->priv;
         char path[64];
-        if (sd) {
+        if (e->ofd && e->ofd->dirpath) {
+            ap_str(t, e->ofd->dirpath);
+        } else if (sd) {
             synth_dir_path(sd->kind, sd->pid, sd->tid, path, (int)sizeof(path));
             ap_str(t, path);
         }

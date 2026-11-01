@@ -1342,6 +1342,13 @@ static int fd_dir_path(fd_entry_t *entry, char *out, uint32_t cap, int *outside)
         if (!sd) {
             return -EBADF;
         }
+        if (entry->ofd && entry->ofd->dirpath) {
+            if (k_strlen(entry->ofd->dirpath) + 1 > cap) {
+                return -ENAMETOOLONG;
+            }
+            k_memcpy(out, entry->ofd->dirpath, k_strlen(entry->ofd->dirpath) + 1);
+            return 0;
+        }
         synth_dir_path(sd->kind, sd->pid, sd->tid, out, (int)cap);
         return path_in_root_at(out, outside);
     }
@@ -1727,6 +1734,40 @@ static void ofd_record_path(struct open_file *ofd, const char *name)
 }
 
 static int32_t synth_open_dir(const struct vpath *vp, int flags);
+
+/** Whether `m` is one of the permanent mounts (VFS_PERMANENT), the system's
+ * /dev, /proc and /sys among them. */
+static int mount_permanent_at(const struct vfs_mount *m)
+{
+    int i;
+
+    for (i = 0; i < VFS_PERMANENT; i++) {
+        if (vfs_mount_at(i) == m) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Record `name`, a path as `ofd_record_path` takes it, in the description of
+ * `fd`, a descriptor the open of a synthetic node made, when it is open on a
+ * directory that the walk reached through `mnt`, a mount other than the
+ * system's /dev, /proc and /sys: a bind of one of them or a proc mounted
+ * elsewhere, as in a sandbox. Its link in /proc/PID/fd then names it where
+ * the caller reached it, which bubblewrap reads back to find the mount it
+ * made in mountinfo, and a name relative to it stays below that mount
+ * (`fd_dir_path`). A directory of the system's own keeps the path its kind
+ * gives.
+ */
+static void synth_dir_record(int fd, int permanent, const char *name)
+{
+    fd_entry_t *e = fd >= 0 ? &current_proc->fds->entries[fd] : NULL;
+
+    if (e && !permanent && e->type == FD_TYPE_SYNTH_DIR && e->ofd) {
+        ofd_record_path(e->ofd, name);
+    }
+}
 
 /** Whether a synthetic directory of `kind` is one of a process's, whose
  * process must be there and whose record keeps its pid: /proc/<pid> and its
@@ -3151,12 +3192,14 @@ again:
         if (vp) {
             struct vpath vpc = *vp;
             int ro = proc_read_only(&ref, flags, 0);
+            int permanent = mount_permanent_at(ref.mnt);
 
             vfs_walk_unlock(ref.mnt);
             vfs_ref_release(&ref);
             fd_free(current_proc->fds, fd);
             fd = -1;
             rc = ro ? -EROFS : open_synth_node(&vpc, flags);
+            synth_dir_record(rc, permanent, name);
             goto out;
         }
         if (open_special(&ref, fd, flags, &rc)) {
@@ -6881,10 +6924,13 @@ static int32_t open_path(const char *name, int flags)
     vp = vfs_synth_vpath(ref.mnt, ref.node);
     if (vp) {
         struct vpath vpc = *vp;
+        int permanent = mount_permanent_at(ref.mnt);
 
         vfs_walk_unlock(locked);
         vfs_ref_release(&ref);
-        return synth_open_path(&vpc, name, flags);
+        rc = synth_open_path(&vpc, name, flags);
+        synth_dir_record(rc, permanent, name);
+        return rc;
     }
     rc = path_install(&ref, name, flags);
     if (rc >= 0) {
