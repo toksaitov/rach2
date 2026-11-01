@@ -38,7 +38,7 @@ extern uint32_t DG_NowUs(void);
 extern void DG_TimeSpent(int what, uint32_t us);
 extern void DG_SoundQueue(uint32_t frames, uint32_t period);
 
-static int audio_fd = -1; /* owned /dev/console descriptor for the speaker, or -1 */
+static int audio_fd = -1; /* owned /dev/console for the speaker, or -1 */
 static int dsp_fd = -1;   /* owned /dev/dsp descriptor, or -1 */
 static boolean pcsound_initialized = false;
 static int current_sound_channel = -1; /* the speaker effect's, or -1 */
