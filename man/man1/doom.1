@@ -46,15 +46,22 @@ otherwise only keyboard input is used.
 Time is read with
 .Xr gettimeofday 2 .
 Sleep is a busy wait.
-The port provides PCM sound, PC speaker sound, and music synthesized
-with Nuked OPL3.
-Sound uses a separate
+The port plays its effects, and music synthesized with Nuked OPL3, through
+.Pa /dev/dsp
+as unsigned 8-bit mono at 11025 Hz, keeping two of the device's periods
+queued ahead of what its driver holds, so that a sound is heard at most
+about 139 ms after the game makes it.
+Where
+.Pa /dev/dsp
+does not open, as with no sound card or while another program has it, the
+effects play on the PC speaker through a
 .Pa /dev/console
-descriptor, so it plays on the machine from the kernel console,
+descriptor of the game's own, and there is no music.
+Either way the sound plays on the machine from the kernel console,
 .Ic term ,
 an SSH session or with standard input from
 .Pa /dev/null .
-If the console cannot be opened, the game runs without sound.
+If neither device opens, the game runs without sound.
 .Pp
 A WAD game-data file is required.
 Without one the engine prints
@@ -103,8 +110,12 @@ Static game executable.
 Framebuffer device.
 .It Pa /mouse
 Optional mouse device.
+.It Pa /dev/dsp
+Sound and music.
 .It Pa /dev/console
-Sound output and, for a foreground game with terminal input, keyboard input.
+The PC speaker where
+.Pa /dev/dsp
+does not open, and, for a foreground game with terminal input, keyboard input.
 .It Pa /demo/doom1.wad
 Game data, supplied separately.
 .El
@@ -122,10 +133,17 @@ It then plays
 .Ql demo1
 to its end, which must exit with status 0 after the game has reported more
 than one frame, and records a demo, whose file must have mode 644.
+Its sound cases play
+.Ql demo1
+on QEMU's Intel HDA and Sound Blaster 16, and require the game's last report
+to show samples queued on
+.Pa /dev/dsp ,
+and never more than six periods.
 It does not judge visual or audible quality.
 .Sh SEE ALSO
 .Xr gettimeofday 2 ,
 .Xr console 4 ,
+.Xr dsp 4 ,
 .Xr rach2 7
 .Sh HISTORY
 The engine derives from doomgeneric and Doom and is licensed under GPL-2.0.

@@ -1187,8 +1187,9 @@ $(call together,$(METAL_INSTALLED)): tests/system/metal_installed_disks.sh \
 ACCOUNT_TEST_DISK = $(IMAGES_DIR)/account-test.disk
 # `tests/run doom`: the Doom port on a disk root, refused without its WAD,
 # drawing with a zone sized from the machine's free memory, playing a demo
-# to its end and recording one through fopen. Its case
-# (tests/cases/machine.doom.json) boots a copy of this disk.
+# to its end and recording one through fopen, and playing a demo with its
+# sound on /dev/dsp on HDA and on the SB16. Its cases
+# (tests/cases/machine.doom.json) boot copies of this disk.
 DOOM_TEST_DISK = $(IMAGES_DIR)/doom-test.disk
 $(DOOM_TEST_DISK): krffs/manifests/doom-test.manifest $(MANIFEST_DEPS_doom_test) $(MKDISK) \
                    build/krffs/mkfs.krffs build/krffs/stageimage.krffs \
