@@ -266,7 +266,7 @@ static int boot_update(struct etude_case *c, struct state *s)
     menu = !d.failed;
     /* A menu from before term existed, with a repeated token on one line. */
     drive_send(&d, "mount -t vfat /dev/disk0p1 /bootcheck && "
-                   "sed '/rach2.slot=recovery/!s/ rach2.console=[^ ]*//g' "
+                   "sed '/rach2.slot=recovery/!s| rach2.console=[^ ]*||g' "
                    "/tmp/menu.old > /bootcheck/boot/grub/grub.cfg && echo MENU\"\"OLD");
     drive_expect(&d, "MENUOLD");
     drive_send(&d,
