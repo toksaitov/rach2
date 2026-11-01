@@ -196,6 +196,8 @@ The sleep states,
 A write of either suspends to idle: every process but the writer is held,
 the processor idles, and they go on at a wake event, the clock's alarm or
 a key, when the write returns.
+The Atheros Wi-Fi station stops before the freeze and starts again after
+it if it was running and rfkill permits it; its association is cleared.
 Another state is
 .Er EINVAL .
 .It Pa /sys/power/mem_sleep
@@ -369,8 +371,8 @@ and more; here it holds the disk's directory itself, with the files above.
 Linux lists every loop device it has made; here a loop device is listed
 only while a file is attached to it.
 Linux suspends to idle with the devices powered down and its clocks of
-time since boot stopped; here the devices stay up, their interrupts are
-taken, and the clocks count on.
+time since boot stopped; here the Atheros Wi-Fi station stops, the other
+devices stay up, interrupts are taken, and the clocks count on.
 Linux's
 .Pa /sys/class/net
 holds a link for each interface into its device's directory; here it holds

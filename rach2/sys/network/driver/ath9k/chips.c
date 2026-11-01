@@ -11,6 +11,22 @@
  * tests for it in code the family shares.
  */
 
+/*
+ * Copyright (c) 2012 Qualcomm Atheros, Inc.
+ *
+ * Permission to use, copy, modify, and/or distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ */
+
 #include "ath9k.h"
 #include "../../../lib/kdef.h"
 #include "ar9565_1p1_initvals.h"
@@ -184,6 +200,12 @@ static void ar9565_init_gain_tables(struct ath9k *ah, unsigned tx, unsigned rx)
 
 static const struct ath9k_chip_ops ar9565_ops = {ar9565_init_mode_regs, ar9565_init_gain_tables};
 
+/* ath9k's antenna.c, ath_ant_div_conf_fast_divbias, diversity group 3. */
+static const struct ath9k_ant_params ar9565_ant = {
+    {{0, 1, 0x39, 1}, {2, 0, 0x3f, 2}, {3, 3, 0, 3}, {1, 6, 1, 0}},
+    3,
+    AR9300_EEP_ANTDIV_CONTROL_DEFAULT_VALUE};
+
 /* One chain, 2.4 GHz alone, LNA combining, MCI and the AR9462's design
  * (ath9k's ath9k_hw_fill_cap_info), and 14 GPIO lines (AR9565_NUM_GPIO). */
 static const struct ath9k_chip ar9565 = {"AR9565",
@@ -195,7 +217,8 @@ static const struct ath9k_chip ar9565 = {"AR9565",
                                          0x1,
                                          14,
                                          ar9565_subsys,
-                                         &ar9565_ops};
+                                         &ar9565_ops,
+                                         &ar9565_ant};
 
 /* ------------------------------------------------------------------ */
 /* The table and its lookups.                                          */

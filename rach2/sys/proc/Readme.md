@@ -217,7 +217,7 @@ A signal whose default action dumps core, a seccomp kill of the process, and a s
 
 ### Suspend to idle
 
-A write of `freeze` or `mem` to `/sys/power/state` (`rach2/sys/fs/procfs.c`) calls `suspend_to_idle` (`suspend.c`), the sleep state Linux calls freeze. The writer sleeps on a wait queue, and until it wakes the scheduler runs no other process (`suspend_lets_run`), so each processor idles. Interrupts are taken and the clocks count, since nothing is powered down. The clock's alarm interrupt (`rach2/sys/fs/devfs.c`) and a key event (`input_key_event` in `rach2/sys/input.c`) are the wake events (`suspend_wake`): the writer runs, its write returns, and the other processes run again. A signal ends the wait with `EINTR`, and a write while another suspend is in force fails with `EBUSY`.
+A write of `freeze` or `mem` to `/sys/power/state` (`rach2/sys/fs/procfs.c`) calls `suspend_to_idle` (`suspend.c`), the sleep state Linux calls freeze. The writer sleeps on a wait queue, and until it wakes the scheduler runs no other process (`suspend_lets_run`), so each processor idles. Interrupts are taken and the clocks count. The Atheros Wi-Fi station stops before the freeze and restarts after it if it was wanted and rfkill permits it; its association is cleared ([the driver](../network/driver/ath9k/Readme.md)). The clock's alarm interrupt (`rach2/sys/fs/devfs.c`) and a key event (`input_key_event` in `rach2/sys/input.c`) are the wake events (`suspend_wake`): the writer runs, its write returns, and the other processes run again. A signal ends the wait with `EINTR`, and a write while another suspend is in force fails with `EBUSY`.
 
 ## Limits
 
@@ -233,7 +233,7 @@ A write of `freeze` or `mem` to `/sys/power/state` (`rach2/sys/fs/procfs.c`) cal
 * `prctl` takes twelve options, the parent-death signal, the dumpable flag, the name, the child subreaper flag, `no_new_privs` and the seccomp mode, each set and read; any other is `EINVAL`.
 * seccomp has no user notification: a filter cannot be installed with a listener, and `SECCOMP_RET_USER_NOTIF` fails the call with `ENOSYS`. `SECCOMP_RET_LOG` allows the call and logs nothing.
 * `personality` takes only `PER_LINUX` and `PER_LINUX32`, and its flags change nothing; the kernel places no address at random.
-* Suspend to idle powers nothing down. A write of `mem` to `/sys/power/state` suspends to idle as `freeze` does, and the kernel has no suspend to memory or to disk.
+* Suspend to idle stops the Atheros Wi-Fi station; other devices stay up. A write of `mem` to `/sys/power/state` suspends to idle as `freeze` does, and the kernel has no suspend to memory or to disk.
 
 ## Tests
 

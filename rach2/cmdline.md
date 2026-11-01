@@ -54,3 +54,4 @@ These options exist for the suites, which use them to bring about a fault or a b
 | `rach2.msidrop=N` | Silence every USB controller's interrupts at the `N`th, so that the timer's pump alone serves them. |
 | `rach2.hcfail=N`, `rach2.nicfail=N` | Refuse the `N`th xHCI controller or network card, counting from 0. |
 | `rach2.wsim=N` | Make `N` software Wi-Fi radios, 1 to 4, wsim0 onwards, once the wireless station layer is up; a program carries their frames through `/dev/wsim` ([wsim(4)](../man/man4/wsim.4)). |
+| `rach2.ath9k_noaspm` | Disable PCIe L0s and L1 at both ends of the Atheros Wi-Fi card's link; otherwise keep the firmware settings ([ath9k](sys/network/driver/ath9k/Readme.md)). |

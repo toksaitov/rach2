@@ -517,6 +517,13 @@ struct ath9k_chip_ops {
     void (*init_gain_tables)(struct ath9k *ah, unsigned tx, unsigned rx);
 };
 
+/* The LNA configurations are A-B, LNA2, LNA1 and A+B, numbered 0 to 3. */
+struct ath9k_ant_params {
+    uint8_t bias[4][4];   /* fast-diversity bias, indexed by main and alternate */
+    uint8_t switch_delta; /* minimum RSSI advantage to select LNA2 */
+    uint8_t control;      /* nonzero overrides the EEPROM's antenna control byte */
+};
+
 /* A chip of the family: a row of chips.c's table. */
 struct ath9k_chip {
     const char *name;                  /* "AR9565", for the probe's line */
@@ -528,6 +535,7 @@ struct ath9k_chip {
     uint8_t num_gpio;                  /* its GPIO lines */
     const struct ath9k_subsys *subsys; /* ending at vendor 0: any other card */
     const struct ath9k_chip_ops *ops;
+    const struct ath9k_ant_params *ant; /* NULL without LNA combining */
 };
 
 /* ------------------------------------------------------------------ */
@@ -701,6 +709,10 @@ struct ath9k_ant {
     int alt_rssi_sum;
     int main_count;
     int alt_count;
+    uint8_t combining; /* the EEPROM permits LNA combining */
+    uint8_t scanning;
+    uint8_t scan_step; /* alternate under test: LNA2/LNA1, A+B, A-B */
+    int rssi[4];       /* average RSSI of each configuration during a scan */
 };
 
 /* power.c's: the link's ASPM and the radio switch. */
@@ -711,6 +723,8 @@ struct ath9k_power_state {
     uint8_t rfkill_enabled;
     uint8_t hw_blocked; /* the switch's last state */
     uint8_t suspended;
+    uint8_t resume;          /* the station wanted to run before suspend */
+    uint8_t rfkill_reported; /* a switch sample reached the registered radio */
 };
 
 /* One traffic identifier's transmit BlockAck session. */
@@ -1032,9 +1046,16 @@ void ath9k_power_init(struct ath9k *ah);
 /** Read the radio switch and report a change with wlan_radio_rfkill. */
 void ath9k_rfkill_poll(struct ath9k *ah);
 
-/** Stop the radio before suspend to idle; start it after. Worker. */
+/** Stop the station before suspend to idle; start it after if it was wanted.
+ * Process context, no net_lock. Repeated calls are safe. A blocked station
+ * stays stopped until rfkill permits it. A failed resume may be retried. */
 void ath9k_suspend(struct ath9k *ah);
 int ath9k_resume(struct ath9k *ah);
+
+/** Suspend or resume the one attached card, if any. Process context under
+ * the kernel lock, no net_lock; used by suspend_to_idle. */
+void ath9k_suspend_all(void);
+int ath9k_resume_all(void);
 
 /* ampdu.c */
 
