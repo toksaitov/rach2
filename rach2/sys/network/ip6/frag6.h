@@ -48,9 +48,9 @@ void ip6_header(uint8_t *buf, const uint8_t *src, const uint8_t *dst, uint8_t nh
 
 /**
  * Hand the whole datagram of `len` bytes at `buf` to `out`, toward the next
- * hop `via`: onto the loopback ring for `lo`, else to the station address
- * of a group. Returns 0, or -EHOSTUNREACH, -EMSGSIZE or -ENOBUFS as
- * `ip6_tx` says. Called with interrupts off.
+ * hop `via`: onto the loopback ring for `lo`, to the station address of a
+ * group, or to a unicast hop by the neighbour cache (`nd6_output`). Returns
+ * 0, or -EMSGSIZE or -ENOBUFS as `ip6_tx` says. Called with interrupts off.
  */
 int ip6_emit(struct netdev *out, const uint8_t *via, const uint8_t *buf, uint32_t len);
 

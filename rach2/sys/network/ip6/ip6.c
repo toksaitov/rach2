@@ -12,6 +12,7 @@
 #include "../udp/udp.h"
 #include "icmp6.h"
 #include "frag6.h"
+#include "nd6.h"
 #include "../ip/ip.h"
 #include "../core/byteorder.h"
 #include "../ethernet/ethernet.h"
@@ -40,13 +41,16 @@ static int scope_rank(int scope)
  * Whether the address `a` is a better source for `dst`, of scope rank
  * `want`, than `b`: rule 2 of RFC 6724, the smallest scope at least as wide
  * as the destination's, or the widest when none is; then rule 3, an address
- * that is not deprecated; then the longest prefix shared with `dst`.
+ * that is not deprecated; then rule 7, a temporary address when `temp`,
+ * use_tempaddr 2, and a public one otherwise, as Linux has it; then the
+ * longest prefix shared with `dst`.
  */
 static int better_source(const struct netdev_addr6 *a, const struct netdev_addr6 *b,
-                         const uint8_t *dst, int want)
+                         const uint8_t *dst, int want, int temp)
 {
     int ra = scope_rank(a->scope), rb = scope_rank(b->scope);
     int da = (a->flags & NETDEV_A6_DEPRECATED) != 0, db = (b->flags & NETDEV_A6_DEPRECATED) != 0;
+    int ta = (a->flags & NETDEV_A6_TEMPORARY) != 0, tb = (b->flags & NETDEV_A6_TEMPORARY) != 0;
 
     if (ra != rb) {
         if (ra < rb) {
@@ -56,6 +60,9 @@ static int better_source(const struct netdev_addr6 *a, const struct netdev_addr6
     }
     if (da != db) {
         return db;
+    }
+    if (ta != tb) {
+        return temp ? ta : tb;
     }
     return ip6_common_prefix(a->addr, dst) > ip6_common_prefix(b->addr, dst);
 }
@@ -87,7 +94,7 @@ int ip6_source(const struct netdev *out, const uint8_t *dst, uint8_t *src)
         if (a->flags & (NETDEV_A6_TENTATIVE | NETDEV_A6_DADFAILED)) {
             continue;
         }
-        if (!best || better_source(a, best, dst, want)) {
+        if (!best || better_source(a, best, dst, want, nd6_prefer_temp(out))) {
             best = a;
         }
     }
@@ -198,6 +205,9 @@ void ip6_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
     const uint8_t *dst = data + 24;
     uint16_t plen;
 
+    if (nd && nd6_disabled(nd)) {
+        return;
+    }
     net_mib6.ip6_in_receives++;
     if (len < IP6_HDR_SIZE || (data[0] >> 4) != 6) {
         net_mib6.ip6_in_hdr_errors++;
@@ -349,8 +359,7 @@ int ip6_emit(struct netdev *out, const uint8_t *via, const uint8_t *buf, uint32_
         return 0;
     }
     if (!ip6_is_multicast(via)) {
-        /* No neighbour cache: no unicast next hop's station address is known. */
-        return -EHOSTUNREACH;
+        return nd6_output(out, via, buf, (uint16_t)len);
     }
     net_mib6.ip6_out_mcast_pkts++;
     ip6_mcast_mac(via, mac);
@@ -368,23 +377,39 @@ int ip6_emit(struct netdev *out, const uint8_t *via, const uint8_t *buf, uint32_
 void ip6_tick(void)
 {
     frag6_tick();
+    nd6_tick();
 }
 
 /* The datagram being sent. */
 static uint8_t ip6_tx_buf[IP6_MTU];
+
+/* The hop-by-hop options header that carries a router alert for MLD
+ * (RFC 2711): next header, length 0, the alert of value 0, and two bytes of
+ * PadN. The next header is filled in. */
+#define IP6_RTALERT_LEN 8
+
+int ip6_tx(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh, const uint8_t *payload,
+           uint16_t plen, uint8_t hlim)
+{
+    return ip6_tx_opts(src, dst, ifindex, nh, payload, plen, hlim, 0);
+}
 
 /**
  * The route comes first, since the interface decides the source. A
  * datagram for this machine goes round the loopback ring, whose drain gives
  * it to `ip6_rx`, so that a send never runs the receive path inside the
  * sender's own call, as `ip_tx_from` keeps IPv4's. A source of ::1 may
- * reach only this machine, which no card may carry.
+ * reach only this machine, which no card may carry. A unicast next hop is
+ * the neighbour cache's (`nd6_output`), which may hold the datagram while
+ * it asks. A datagram with a router alert is MLD's, small enough never to
+ * be fragmented.
  */
-int ip6_tx(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh, const uint8_t *payload,
-           uint16_t plen, uint8_t hlim)
+int ip6_tx_opts(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh,
+                const uint8_t *payload, uint16_t plen, uint8_t hlim, int opts)
 {
     uint8_t via[IP6_ADDR_LEN], from[IP6_ADDR_LEN];
-    uint32_t total = (uint32_t)IP6_HDR_SIZE + plen;
+    uint32_t ext = (opts & IP6_TXF_RTALERT) ? IP6_RTALERT_LEN : 0;
+    uint32_t total = (uint32_t)IP6_HDR_SIZE + ext + plen;
     uint32_t mtu;
     struct netdev *out;
 
@@ -392,14 +417,27 @@ int ip6_tx(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh, cons
     if (ip6_is_unspecified(dst) || ip6_is_v4mapped(dst)) {
         return -EINVAL;
     }
-    out = ip6_route(dst, ifindex, via);
+    if (opts & IP6_TXF_ONLINK) {
+        out = ifindex >= 1 && ifindex <= netdev_listed() ? netdev_at(ifindex - 1) : 0;
+        if (out && (!out->up || out->loopback || nd6_disabled(out))) {
+            out = 0;
+        }
+        if (!out) {
+            return -ENETUNREACH;
+        }
+        k_memcpy(via, dst, IP6_ADDR_LEN);
+    } else {
+        out = ip6_route(dst, ifindex, via);
+    }
     if (!out) {
         if (ifindex == 0 && ip6_link_scoped(dst) && netdev_count() > 1) {
             return -EINVAL;
         }
         return -ENETUNREACH;
     }
-    if (!src || ip6_is_unspecified(src)) {
+    if ((opts & IP6_TXF_UNSPEC) && !out->loopback) {
+        k_memset(from, 0, IP6_ADDR_LEN);
+    } else if (!src || ip6_is_unspecified(src)) {
         int r = ip6_source(out, dst, from);
 
         if (r != 0) {
@@ -417,10 +455,19 @@ int ip6_tx(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh, cons
 
     mtu = ip6_path_mtu(out, dst);
     if (total > mtu) {
+        if (ext) {
+            return -EMSGSIZE;
+        }
         return frag6_output(out, via, from, dst, nh, payload, plen, hlim, mtu);
     }
-    ip6_header(ip6_tx_buf, from, dst, nh, plen, hlim);
-    k_memcpy(ip6_tx_buf + IP6_HDR_SIZE, payload, plen);
+    ip6_header(ip6_tx_buf, from, dst, ext ? IP6_NH_HOPOPTS : nh, (uint16_t)(ext + plen), hlim);
+    if (ext) {
+        static const uint8_t alert[IP6_RTALERT_LEN] = {0, 0, 5, 2, 0, 0, 1, 0};
+
+        k_memcpy(ip6_tx_buf + IP6_HDR_SIZE, alert, IP6_RTALERT_LEN);
+        ip6_tx_buf[IP6_HDR_SIZE] = nh;
+    }
+    k_memcpy(ip6_tx_buf + IP6_HDR_SIZE + ext, payload, plen);
     return ip6_emit(out, via, ip6_tx_buf, total);
 }
 

@@ -8,6 +8,8 @@
 #include "../../lib/kstring.h"
 #include "icmp6.h"
 #include "ip6.h"
+#include "nd6.h"
+#include "mld6.h"
 #include "../ip/icmp.h"
 #include "../core/byteorder.h"
 #include "../driver/netdev.h"
@@ -64,6 +66,18 @@ static void icmp6_count_out(uint8_t type)
         net_mib6.icmp6_out_echos++;
     } else if (type == ICMP6_ECHO_REPLY) {
         net_mib6.icmp6_out_echo_replies++;
+    } else if (type == ND6_ROUTER_SOLICIT) {
+        net_mib6.icmp6_out_router_solicits++;
+    } else if (type == ND6_NEIGHBOR_SOLICIT) {
+        net_mib6.icmp6_out_neighbor_solicits++;
+    } else if (type == ND6_NEIGHBOR_ADVERT) {
+        net_mib6.icmp6_out_neighbor_advertisements++;
+    } else if (type == ICMP6_MLD_REPORT) {
+        net_mib6.icmp6_out_group_memb_responses++;
+    } else if (type == ICMP6_MLD_DONE) {
+        net_mib6.icmp6_out_group_memb_reductions++;
+    } else if (type == ICMP6_MLD_V2_REPORT) {
+        net_mib6.icmp6_out_mldv2_reports++;
     }
 }
 
@@ -74,10 +88,18 @@ static void icmp6_count_out(uint8_t type)
 int icmp6_send(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t *msg, uint16_t len,
                uint8_t hlim)
 {
+    return icmp6_send_opts(src, dst, ifindex, msg, len, hlim, 0);
+}
+
+int icmp6_send_opts(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t *msg, uint16_t len,
+                    uint8_t hlim, int opts)
+{
     uint8_t from[IP6_ADDR_LEN], via[IP6_ADDR_LEN];
     int r;
 
-    if (!src || ip6_is_unspecified(src)) {
+    if (opts & IP6_TXF_UNSPEC) {
+        src = ip6_any;
+    } else if (!src || ip6_is_unspecified(src)) {
         struct netdev *out = ip6_route(dst, ifindex, via);
 
         if (!out) {
@@ -93,7 +115,7 @@ int icmp6_send(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t *msg
     msg[2] = 0;
     msg[3] = 0;
     write16be(msg + 2, ip6_checksum(src, dst, IP6_NH_ICMP6, msg, len));
-    r = ip6_tx(src, dst, ifindex, IP6_NH_ICMP6, msg, len, hlim);
+    r = ip6_tx_opts(src, dst, ifindex, IP6_NH_ICMP6, msg, len, hlim, opts);
     if (r == 0) {
         icmp6_count_out(msg[0]);
     }
@@ -170,6 +192,25 @@ static void icmp6_too_big(struct netdev *nd, const uint8_t *msg, uint16_t len)
     ip6_pmtu_lower(qdst, ifindex, read32be(msg + 4));
 }
 
+/** The error goes from the sender's own address to itself, so it takes no
+ * share of the limit on errors to other hosts. */
+void icmp6_unreach_local(const uint8_t *dgram, uint16_t len)
+{
+    uint16_t quote = len < ICMP6_QUOTE_MAX ? len : (uint16_t)ICMP6_QUOTE_MAX;
+
+    if (len < IP6_HDR_SIZE || ip6_is_unspecified(dgram + 8) || ip6_is_multicast(dgram + 8)) {
+        return;
+    }
+    if (dgram[6] == IP6_NH_ICMP6 && len > IP6_HDR_SIZE && dgram[IP6_HDR_SIZE] < 128) {
+        return;
+    }
+    icmp6_error_buf[0] = ICMP6_DST_UNREACH;
+    icmp6_error_buf[1] = ICMP6_DST_ADDR;
+    write32be(icmp6_error_buf + 4, 0);
+    k_memcpy(icmp6_error_buf + 8, dgram, quote);
+    icmp6_send(0, dgram + 8, 0, icmp6_error_buf, (uint16_t)(8 + quote), IP6_HOP_LIMIT_DEFAULT);
+}
+
 /**
  * An echo request is copied whole, its type changed to reply; one sent to a
  * group is answered from this machine's own address on the link it came
@@ -223,6 +264,19 @@ void icmp6_rx(struct netdev *nd, const uint8_t *src, const uint8_t *dst, uint8_t
         if (len >= 8) {
             icmp_ping_reply6(src, read16be(data + 4), read16be(data + 6), len, hlim);
         }
+        break;
+    case ND6_ROUTER_SOLICIT:
+    case ND6_ROUTER_ADVERT:
+    case ND6_NEIGHBOR_SOLICIT:
+    case ND6_NEIGHBOR_ADVERT:
+    case ND6_REDIRECT:
+        nd6_rx(nd, src, dst, hlim, data, len);
+        break;
+    case ICMP6_MLD_QUERY:
+    case ICMP6_MLD_REPORT:
+    case ICMP6_MLD_DONE:
+    case ICMP6_MLD_V2_REPORT:
+        mld6_rx(nd, src, dst, hlim, data, len);
         break;
     default:
         break;

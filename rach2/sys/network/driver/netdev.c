@@ -84,6 +84,7 @@ static void loopback_up(void)
     nd->addr6[0].prefix = 128;
     nd->addr6[0].scope = NETDEV_SCOPE_HOST;
     nd->addr6[0].flags = NETDEV_A6_PERMANENT;
+    nd->addr6[0].proto = NETDEV_PROTO_KERNEL_LO;
     nd->addr6[0].valid = NETDEV_LIFETIME_FOREVER;
     nd->addr6[0].preferred = NETDEV_LIFETIME_FOREVER;
     nd->naddr6 = 1;
