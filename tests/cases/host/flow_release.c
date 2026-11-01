@@ -944,8 +944,8 @@ static int machine_rerun_rows(struct release *r)
     return check(r,
                  f->status == 75 && fx_has(record(r), "\nagain lenovo dirprobe.ext2\n") &&
                      count(record(r), "^full done ") == 1 && !fx_has(record(r), "trial done ") &&
-                     !fx_has(record(r), "lenovo done ") &&
-                     called(r, "^testing .* ARCH=x86_64 make native-assets && "),
+                     !fx_has(record(r), "lenovo done ") && called(r, "^testing .* run ") &&
+                     called(r, "^ +ARCH=x86_64 make native-assets && cd "),
                  "-r runs again only the native failure on a new install") &&
            ok;
 }
@@ -955,11 +955,14 @@ static int build_rows(struct release *r)
     char expected[1000];
     run(r, &(struct release_row){.record = r->head, .git = "yes"});
     snprintf(expected, sizeof(expected),
-             "^testing %s/rach2/build/worktrees/release run ARCH=x86_64 make clean && "
-             "ARCH=x86_64 make machine GNU_AGENTS=all && ",
+             "^testing %s/rach2/build/worktrees/release run \\{ cp /etc/rach2/doom1.wad "
+             "ports/doom/doom1.wad \\|\\|$",
              FLOW_OWNER_HOME);
-    return check(r, f->status == 75 && !fx_has(record(r), "build done ") && called(r, expected),
-                 "machine build starts clean");
+    return check(r,
+                 f->status == 75 && !fx_has(record(r), "build done ") && called(r, expected) &&
+                     called(r, "^ +sh ports/doom/fetch_wad.sh && ARCH=x86_64 make clean && "
+                               "ARCH=x86_64 make machine GNU_AGENTS=all && "),
+                 "machine build takes the host's WAD and starts clean");
 }
 static int acceptance_rows(struct release *r)
 {
