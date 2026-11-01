@@ -204,11 +204,12 @@ static int check_map(const char *path)
  * Compute the write ranges for a supported ext2 grow.
  *
  * Require 4096-byte blocks and a resize inode with enough descriptor reserve
- * to avoid moving blocks. Fail for a recorded RAID stride or stripe width,
- * and check each existing group's bitmap positions against the plain layout:
- * the group's start after any superblock, descriptors and reserve. Clearing
- * the recorded stride does not move bitmaps; resize2fs derives its placement
- * from the layout itself.
+ * to avoid moving blocks, and no feature but sparse_super, large_file,
+ * filetype and extra_isize, the last of which moves no block. Fail for a
+ * recorded RAID stride or stripe width, and check each existing group's
+ * bitmap positions against the plain layout: the group's start after any
+ * superblock, descriptors and reserve. Clearing the recorded stride does
+ * not move bitmaps; resize2fs derives its placement from the layout itself.
  *
  * Drop a final partial group when it cannot fit its tables and fifty blocks,
  * as resize2fs does. Sort and merge the computed ranges and express them in
@@ -284,7 +285,7 @@ int main(int argc, char **argv)
     if (first_data != 0 || bpg == 0 || bpg > bs * 8 || ipg == 0 || ipg > bs * 8 || blocks < bpg ||
         inode_size < 128 || inode_size > bs || bs % inode_size != 0 ||
         (rd32(sb + 92) & ~0x10ul) != 0 || (rd32(sb + 96) & ~0x02ul) != 0 ||
-        (rd32(sb + 100) & ~0x03ul) != 0) {
+        (rd32(sb + 100) & ~0x43ul) != 0) {
         fprintf(stderr, "growset: unsupported ext2 geometry or features\n");
         return 1;
     }
