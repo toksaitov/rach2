@@ -447,6 +447,8 @@ static void conversion(void)
     CHECK(wlan_decap(mpdu, n, ap, result, sizeof(result), &got) == 0);
     CHECK(got == sizeof(eth) + 8 && result[12] == 0 && result[13] == 12);
     CHECK(result[14] == 0xaa && result[20] == 0x81 && result[21] == 0x37);
+    CHECK(wlan_encap(result, got, ap, 1, qos, sizeof(qos), &got) == 0);
+    CHECK(got == n && qos[24] == 0xaa && qos[30] == 0x81 && qos[31] == 0x37);
     mpdu[30] = 0x88;
     mpdu[31] = 0x8e;
     k_memcpy(qos, mpdu, 24);
@@ -477,6 +479,19 @@ static void conversion(void)
     CHECK(wlan_encap(eth, sizeof(eth), ap, 0, result, 4, &got) == -EMSGSIZE);
     CHECK(got == 555 && result[0] == 99);
     CHECK(wlan_encap(eth, sizeof(eth), ap, 4096, result, sizeof(result), &got) == -EINVAL);
+    eth[12] = 0;
+    eth[13] = 3;
+    eth[14] = 0x42;
+    eth[15] = 0x42;
+    eth[16] = 3;
+    CHECK(wlan_encap(eth, sizeof(eth), ap, 0, mpdu, sizeof(mpdu), &n) == 0);
+    CHECK(n == 27 && mpdu[24] == 0x42 && mpdu[26] == 3);
+    mpdu[1] = 2;
+    k_memcpy(mpdu + 10, ap, 6);
+    CHECK(wlan_decap(mpdu, n, ap, result, sizeof(result), &got) == 0);
+    CHECK(got == 17 && result[12] == 0 && result[13] == 3 && result[14] == 0x42);
+    eth[13] = 5;
+    CHECK(wlan_encap(eth, sizeof(eth), ap, 0, result, sizeof(result), &got) == -EINVAL);
     eth[12] = eth[13] = 0;
     CHECK(wlan_encap(eth, sizeof(eth), ap, 0, result, sizeof(result), &got) == -EINVAL);
 }

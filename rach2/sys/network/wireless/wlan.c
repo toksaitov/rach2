@@ -33,17 +33,23 @@ int wlan_port_allowed(const struct wlan *wlan, uint16_t protocol)
 int wlan_encap(const uint8_t *ethernet, unsigned len, const uint8_t bssid[6], unsigned seq,
                uint8_t *out, unsigned cap, unsigned *outlen)
 {
-    unsigned total;
+    unsigned total, payload;
     uint16_t type;
+    int snap;
 
     if (!ethernet || !bssid || !out || !outlen || len < ETH_HDR_SIZE || seq > 4095)
         return -EINVAL;
     if (len > ETH_HDR_SIZE + ETH_MTU)
         return -EMSGSIZE;
     type = type_at(ethernet + 12);
-    if (type < 0x0600)
-        return -EINVAL;
-    total = len - ETH_HDR_SIZE + IEEE80211_HDRLEN + 8;
+    snap = type >= 0x0600;
+    payload = len - ETH_HDR_SIZE;
+    if (!snap) {
+        if (type < 3 || type > ETH_MTU || type > payload)
+            return -EINVAL;
+        payload = type;
+    }
+    total = payload + IEEE80211_HDRLEN + (snap ? 8 : 0);
     if (cap < total)
         return -EMSGSIZE;
     k_memset(out, 0, IEEE80211_HDRLEN);
@@ -54,12 +60,16 @@ int wlan_encap(const uint8_t *ethernet, unsigned len, const uint8_t bssid[6], un
     k_memcpy(out + 16, ethernet, 6);
     out[22] = (uint8_t)(seq << 4);
     out[23] = (uint8_t)(seq >> 4);
-    out[24] = out[25] = 0xaa;
-    out[26] = 3;
-    out[27] = out[28] = 0;
-    /* IEEE 802.1H carries IPX and AARP through the bridge-tunnel OUI. */
-    out[29] = type == 0x8137 || type == 0x80f3 ? 0xf8 : 0;
-    k_memcpy(out + 30, ethernet + 12, len - 12);
+    if (snap) {
+        out[24] = out[25] = 0xaa;
+        out[26] = 3;
+        out[27] = out[28] = 0;
+        /* IEEE 802.1H carries IPX and AARP through the bridge-tunnel OUI. */
+        out[29] = type == 0x8137 || type == 0x80f3 ? 0xf8 : 0;
+        k_memcpy(out + 30, ethernet + 12, payload + 2);
+    } else {
+        k_memcpy(out + 24, ethernet + 14, payload);
+    }
     *outlen = total;
     return 0;
 }
@@ -70,6 +80,7 @@ int wlan_decap(const uint8_t *frame, unsigned len, const uint8_t bssid[6], uint8
 {
     unsigned hdr = IEEE80211_HDRLEN, payload, total;
     uint16_t fc, type;
+    int strip = 0;
     const uint8_t *llc;
 
     if (!frame || !bssid || !out || !outlen || len < IEEE80211_HDRLEN)
@@ -87,25 +98,26 @@ int wlan_decap(const uint8_t *frame, unsigned len, const uint8_t bssid[6], uint8
         if (fc & IEEE80211_FCTL_ORDER)
             hdr += 4;
     }
-    if (len < hdr + 8)
+    if (len < hdr + 3)
         return -EINVAL;
     llc = frame + hdr;
-    if (llc[0] != 0xaa || llc[1] != 0xaa || llc[2] != 3 || llc[3] || llc[4] ||
-        (llc[5] != 0 && llc[5] != 0xf8))
-        return -EINVAL;
-    type = type_at(llc + 6);
-    if (type < 0x0600)
-        return -EINVAL;
-    /* RFC 1042's IPX/AARP exception remains an 802.3 LLC payload. */
     payload = len - hdr;
-    if (llc[5] == 0xf8 || (type != 0x8137 && type != 0x80f3))
+    if (llc[0] == 0xaa && llc[1] == 0xaa && llc[2] == 3) {
+        if (payload < 8)
+            return -EINVAL;
+        type = type_at(llc + 6);
+        /* RFC 1042's IPX/AARP exception retains the complete LLC header. */
+        strip = !llc[3] && !llc[4] && type >= 0x0600 &&
+                (llc[5] == 0xf8 || (!llc[5] && type != 0x8137 && type != 0x80f3));
+    }
+    if (strip)
         payload -= 8;
     total = ETH_HDR_SIZE + payload;
     if (payload > ETH_MTU || cap < total)
         return -EMSGSIZE;
     k_memcpy(out, frame + 4, 6);
     k_memcpy(out + 6, frame + 16, 6);
-    if (payload == len - hdr) {
+    if (!strip) {
         out[12] = (uint8_t)(payload >> 8);
         out[13] = (uint8_t)payload;
         k_memcpy(out + 14, llc, payload);
